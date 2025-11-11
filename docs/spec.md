@@ -1,0 +1,292 @@
+# FLang Language Specification (v2-draft)
+
+## 1. Core Philosophy
+
+FLang is a modern systems programming language designed for explicit control, strong inference, and ergonomic syntax.
+All operations have defined semantics and the language avoids undefined behavior.
+
+- Manual memory control.
+- Strong multi-phase type inference and unification.
+- Structural typing.
+- Immutable by default.
+- Binary compatibility for core abstractions.
+
+---
+
+## 2. Syntax and Core Constructs
+
+### 2.1 Variables and Mutability
+
+- `const name = expr` declares an immutable binding.
+- `let name = expr` declares a mutable binding.
+- Variables are block-scoped.
+- Mutability of struct fields is permitted only within the file that defines the struct (file-scope mutability).
+
+### 2.2 References
+
+- `&T` is a non-null reference to `T`.
+- `&T?` is an optional reference.
+- A C pointer corresponds to `&T?`. `void*` has no exact equivalent; `&u8?` is the closest.
+- Reference writes follow file-scope mutability rules.
+
+### 2.3 Structs
+
+```
+struct Name {
+    field1: Type1
+    field2: Type2
+}
+```
+
+Structs may be generic. Generic parameters are introduced by `[T, U, ...]`.
+
+- All fields are public.
+- Field writes are allowed only in the defining file.
+- Layout is optimized; declaration order does not determine memory order.
+- Layout is stable per target/configuration and queryable via introspection.
+- Anonymous structs: `.{ field = value, ... }`.
+- Structural typing allows binding by field name.
+
+### 2.4 Functions
+
+```
+fn name(parameters) ReturnType
+```
+
+- Functions may be generic.
+- `$T` declares and binds a generic parameter at any position (parameter or return).
+- Overloading is supported by name and compatible parameter types.
+- The type system selects the strictest applicable overload; if multiple remain, it is an error.
+- UFCS applies: `object.method(a, b)` desugars to `method(&object, a, b)`.
+
+### 2.5 Expressions and Control Flow
+
+#### If Expression
+
+```
+if (cond) expr1 else expr2
+```
+
+- Yields the anonymous union of the types of `expr1` and `expr2`.
+- If `else` is omitted, result type is `Option` of the type of `expr1`.
+
+#### For Expression
+
+```
+for (pattern in iterable) block
+```
+
+- Only looping construct.
+- Uses the iterator protocol; built-in for ranges, arrays, and slices.
+- Supports `break` and `continue`.
+
+#### Defer
+
+```
+defer expression
+```
+
+- Executes on scope exit in LIFO order.
+
+### 2.6 Arrays, Slices, Lists, Strings
+
+- **Array:** `[T; N]` fixed-size value type with compile-time known size `N`.
+  - Syntax: `let arr: [i32; 5] = [1, 2, 3, 4, 5]`
+  - Repeat syntax: `let zeros: [i32; 10] = [0; 10]`
+- **Slice (`T[]`):** fat pointer view represented as `struct Slice[T] { ptr: &T, len: usize }`; indexable and iterable.
+  - Arrays automatically coerce to slices when needed.
+  - Binary layout: pointer followed by length (platform-specific size).
+- **List:** dynamic container from the standard library; binary-compatible with `T[]` for copy-free conversions.
+- **String:** UTF-8 view represented as `struct String { ptr: &u8, len: usize }`.
+  - Binary-compatible with `u8[]` slice.
+  - Always null-terminated for C FFI compatibility (null byte not counted in `len`).
+  - Literals are static and compiler-guaranteed valid UTF-8.
+- The language guarantees syntax and layout compatibility for slices, lists, and strings.
+
+### 2.7 Modules and Imports
+
+- Each source file is a module.
+- `pub` exposes declarations.
+- `import path` and `pub import path`.
+- Cyclic imports are compile-time errors.
+- Module names map to file paths.
+
+---
+
+## 3. Type System
+
+### 3.1 Generics and Inference
+
+- `$T` introduces a generic parameter and serves as the diagnostic binding site.
+- Inference is multi-phase (constraint collection and resolution).
+- Return positions may bind generics (e.g., `fn new_list(n: usize) List[$T]`).
+
+### 3.2 Structural Typing
+
+- Compatibility is structural; nominal identity is not required.
+- Anonymous structs participate in structural matching.
+
+### 3.3 Complete Inference
+
+- The compiler infers over concrete, anonymous, and generic types.
+- Untyped literals (`comptime_int`, `comptime_float`) unify to concrete types.
+
+### 3.4 Option and Nullability
+
+- `T?` is `Option[T]`.
+- `null` denotes `None`.
+- `&T?` models nullable references.
+
+### 3.5 Strings
+
+- Type: `String` represented as `struct String { ptr: &u8, len: usize }`.
+- Representation: fat pointer `(ptr, len)`, always null-terminated for FFI.
+- Null terminator is not counted in `len` field.
+- Literals are static and compiler-guaranteed valid UTF-8.
+- Binary-compatible with `u8[]` slice type.
+- Mutable variants (e.g., `MutableString`) are binary-compatible with readonly counterparts.
+
+### 3.6 Never Type
+
+- `never` denotes computations that do not return; unifies with all types.
+
+### 3.7 Introspection
+
+```
+#foreign fn size_of($T) usize
+#foreign fn align_of($T) usize
+#foreign fn as_bytes(p: &$T) &u8
+#foreign fn as_ref(p: &u8) &$T
+#foreign fn ref_at(base: &$T, index: usize) &$T
+#foreign fn as_slice(ptr: &$T, len: usize) $T[]
+#foreign fn offset_of($T, field: String) usize
+```
+
+- All are compile-time evaluable and usable in constant expressions.
+- `offset_of` returns the actual compiled byte offset.
+
+---
+
+## 4. Operators
+
+### 4.1 Null-Coalescing
+
+```
+a ?? b
+```
+
+- If `a` is `Option[U]` or `U?` and is present, yields unwrapped `U`; otherwise yields `b`.
+- Result type is the least upper bound of `U` and the type of `b` (via anonymous union if necessary).
+
+### 4.2 Null-Propagation
+
+```
+expr?
+```
+
+- If `expr` has type `U?`/`Option[U]` and is `null`, returns `null` from the enclosing function when that function’s return type is `V?`/`Option[V]`.
+- Otherwise yields unwrapped `U`.
+- May only appear in a function whose return type is optional/`Option`.
+
+### 4.3 Operator-as-Function
+
+- Every operator has a corresponding function name.
+- The compiler rewrites operators to calls to these functions and may inline them.
+- Overload resolution follows standard rules (strictest applicable or error).
+- The standard library supplies operator functions for language primitives (`u8`, `i32`, `usize`, slices).
+- User-defined types (including `List` and `String`) must provide their own operator functions.
+
+**Examples (illustrative names):**
+
+```
+pub fn op_add(lhs: &A, rhs: B) C
+pub fn op_sub(lhs: &A, rhs: B) C
+pub fn op_eq(lhs: &A, rhs: B) bool
+pub fn op_index(base: &A, index: I) R
+pub fn op_index_set(base: &A, index: I, value: V) void
+pub fn op_assign(lhs: &A, rhs: B) void
+pub fn op_add_assign(lhs: &A, rhs: B) void
+```
+
+- The exact set of operator function names corresponds one-to-one with the language’s operators, including indexing and assignment forms.
+
+---
+
+## 5. Memory Model
+
+- The language specifies no intrinsic allocator and no heap management guarantees.
+- Allocation and deallocation are provided by the standard library and may wrap C runtime facilities.
+- The compiler guarantees deterministic type layouts per target/configuration and binary compatibility as stated.
+- Struct layout is optimized; introspection provides actual offsets.
+- We can take an address of a non temporary variable with `&var`, and we can dereference it with `ptr.*`.
+
+---
+
+## 6. Iterator Protocol
+
+A type is iterable if functions exist (or are derivable) matching:
+
+```
+fn iterator(&T) Iterator[E]
+fn next(&Iterator[E]) E?
+```
+
+`for (x in collection)` expands to this protocol until `null` is returned.
+Built-in iterators exist for ranges (`a..b`, `a..`, `..b`), arrays, and slices.
+The language uses standard library definitions for ranges, strings, and lists.
+
+---
+
+## 7. Compilation Model
+
+- Multi-phase inference and semantic validation.
+- AST is data-only; logic resides in analysis passes.
+- FIR is linear SSA; `if` and `for` lower to blocks and branches.
+- The reference compiler emits portable C as a bootstrap target.
+
+---
+
+## 8. Defined Behaviors
+
+- Out-of-bounds access: defined panic.
+- Integer overflow: panic in debug; wraparound in release.
+- Uninitialized memory: compile-time error.
+- Null dereference: defined panic.
+- Struct layout and alignment are guaranteed and discoverable via introspection.
+
+---
+
+## 9. Testing
+
+- `test "name" { ... }` defines an isolated test block.
+- The CLI test harness validates exit code, stdout, and stderr.
+
+---
+
+## 10. Standard Library Overview
+
+```
+core/              runtime bindings and platform integration
+std/               standard modules
+std/collections/   containers (List, Dict)
+std/text/          string and text utilities
+std/io/            input/output and filesystem
+```
+
+- The language relies on standard modules for ranges, strings, lists, and operator implementations for primitives and slices.
+
+---
+
+## 11. Conventions
+
+- Source files use the `.f` extension.
+- Entry points (optional):
+
+```
+pub fn main() i32
+pub fn main(args: String[])
+pub fn main(args: String[], env: String[])
+```
+
+- Exit code `0` indicates success.
+- UTF-8 source encoding.
