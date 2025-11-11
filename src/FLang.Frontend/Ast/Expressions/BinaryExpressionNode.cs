@@ -16,19 +16,20 @@ public enum BinaryOperatorKind
     LessThan,
     GreaterThan,
     LessThanOrEqual,
-    GreaterThanOrEqual,
+    GreaterThanOrEqual
 }
 
 public class BinaryExpressionNode : ExpressionNode
 {
-    public ExpressionNode Left { get; }
-    public BinaryOperatorKind Operator { get; }
-    public ExpressionNode Right { get; }
-
-    public BinaryExpressionNode(SourceSpan span, ExpressionNode left, BinaryOperatorKind op, ExpressionNode right) : base(span)
+    public BinaryExpressionNode(SourceSpan span, ExpressionNode left, BinaryOperatorKind op, ExpressionNode right) :
+        base(span)
     {
         Left = left;
         Operator = op;
         Right = right;
     }
+
+    public ExpressionNode Left { get; }
+    public BinaryOperatorKind Operator { get; }
+    public ExpressionNode Right { get; }
 }

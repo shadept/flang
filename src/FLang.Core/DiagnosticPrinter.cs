@@ -1,4 +1,3 @@
-using System;
 using System.Text;
 
 namespace FLang.Core;
@@ -48,10 +47,7 @@ public static class DiagnosticPrinter
 
         // Header: error[E0001]: message
         sb.Append(Color(severityColor, severityText));
-        if (!string.IsNullOrEmpty(diagnostic.Code))
-        {
-            sb.Append(Color(severityColor, $"[{diagnostic.Code}]"));
-        }
+        if (!string.IsNullOrEmpty(diagnostic.Code)) sb.Append(Color(severityColor, $"[{diagnostic.Code}]"));
         sb.Append(": ");
         sb.Append(Color(Bold, diagnostic.Message));
         sb.AppendLine();
@@ -71,13 +67,9 @@ public static class DiagnosticPrinter
         void PrintGutter(string lineNumber = "")
         {
             if (string.IsNullOrEmpty(lineNumber))
-            {
                 sb.Append(Color(BoldBlue, $" {new string(' ', lineNumberWidth)} | "));
-            }
             else
-            {
                 sb.Append(Color(BoldBlue, $" {lineNumber.PadLeft(lineNumberWidth)} | "));
-            }
         }
 
         // Empty line before context
@@ -111,10 +103,7 @@ public static class DiagnosticPrinter
         PrintGutter();
 
         // Add spaces before the underline
-        for (int i = 0; i < column; i++)
-        {
-            sb.Append(' ');
-        }
+        for (var i = 0; i < column; i++) sb.Append(' ');
 
         // Add the underline (carets)
         var underlineLength = Math.Max(1, diagnostic.Span.Length);
@@ -130,7 +119,8 @@ public static class DiagnosticPrinter
         sb.AppendLine();
 
         // Show context: line after (if exists)
-        if (line + 1 < source.LineEndings.Length || (line + 1 == source.LineEndings.Length && source.Text.Length > source.GetLineEnd(line)))
+        if (line + 1 < source.LineEndings.Length ||
+            (line + 1 == source.LineEndings.Length && source.Text.Length > source.GetLineEnd(line)))
         {
             var nextLine = line + 1;
             var nextLineText = source.GetLineText(nextLine);

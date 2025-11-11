@@ -1,42 +1,27 @@
-using System;
-using System.IO;
+using System.ComponentModel;
 using System.Diagnostics;
 using System.Runtime.InteropServices;
-using System.Linq;
 using System.Text;
 using FLang.CLI;
+using FLang.Codegen.C;
 using FLang.Core;
-using FLang.Frontend;
-using FLang.Frontend.Ast.Declarations;
 using FLang.IR;
 using FLang.Semantics;
-using FLang.Codegen.C;
 
 // Parse command-line arguments
 string? inputFilePath = null;
 string? stdlibPath = null;
 string? emitFir = null;
-bool demoDiagnostics = false;
+var demoDiagnostics = false;
 
-for (int i = 0; i < args.Length; i++)
-{
+for (var i = 0; i < args.Length; i++)
     if (args[i] == "--stdlib-path" && i + 1 < args.Length)
-    {
         stdlibPath = args[++i];
-    }
     else if (args[i] == "--emit-fir" && i + 1 < args.Length)
-    {
         emitFir = args[++i];
-    }
     else if (args[i] == "--demo-diagnostics")
-    {
         demoDiagnostics = true;
-    }
-    else if (!args[i].StartsWith("--"))
-    {
-        inputFilePath = args[i];
-    }
-}
+    else if (!args[i].StartsWith("--")) inputFilePath = args[i];
 
 if (demoDiagnostics)
 {
@@ -55,10 +40,7 @@ if (inputFilePath == null)
 }
 
 // Set default stdlib path if not provided
-if (stdlibPath == null)
-{
-    stdlibPath = Path.Combine(AppContext.BaseDirectory, "stdlib");
-}
+if (stdlibPath == null) stdlibPath = Path.Combine(AppContext.BaseDirectory, "stdlib");
 
 var compilation = new Compilation();
 compilation.StdlibPath = stdlibPath;
@@ -78,18 +60,13 @@ foreach (var module in parsedModules.Values)
 }
 
 // Second pass: type check all function bodies
-foreach (var module in parsedModules.Values)
-{
-    typeSolver.CheckModuleBodies(module);
-}
+foreach (var module in parsedModules.Values) typeSolver.CheckModuleBodies(module);
 
 // Check for type errors
 if (typeSolver.Diagnostics.Any())
 {
-    foreach (var diagnostic in typeSolver.Diagnostics)
-    {
-        DiagnosticPrinter.PrintToConsole(diagnostic, compilation);
-    }
+    foreach (var diagnostic in typeSolver.Diagnostics) DiagnosticPrinter.PrintToConsole(diagnostic, compilation);
+
     Console.Error.WriteLine($"Error: Type checking failed with {typeSolver.Diagnostics.Count} error(s)");
     Environment.Exit(1);
 }
@@ -99,22 +76,18 @@ var allFunctions = new List<Function>();
 var loweringDiagnostics = new List<Diagnostic>();
 
 foreach (var module in parsedModules.Values)
+foreach (var functionNode in module.Functions)
 {
-    foreach (var functionNode in module.Functions)
-    {
-        var (irFunction, diagnostics) = AstLowering.Lower(functionNode, compilation, typeSolver);
-        allFunctions.Add(irFunction);
-        loweringDiagnostics.AddRange(diagnostics);
-    }
+    var (irFunction, diagnostics) = AstLowering.Lower(functionNode, compilation, typeSolver);
+    allFunctions.Add(irFunction);
+    loweringDiagnostics.AddRange(diagnostics);
 }
 
 // Check for lowering errors
 if (loweringDiagnostics.Any())
 {
-    foreach (var diagnostic in loweringDiagnostics)
-    {
-        DiagnosticPrinter.PrintToConsole(diagnostic, compilation);
-    }
+    foreach (var diagnostic in loweringDiagnostics) DiagnosticPrinter.PrintToConsole(diagnostic, compilation);
+
     Console.Error.WriteLine($"Error: FIR lowering failed with {loweringDiagnostics.Count} error(s)");
     Environment.Exit(1);
 }
@@ -129,10 +102,7 @@ if (allFunctions.Count == 0)
 if (emitFir != null)
 {
     var firBuilder = new StringBuilder();
-    foreach (var func in allFunctions)
-    {
-        firBuilder.AppendLine(FirPrinter.Print(func));
-    }
+    foreach (var func in allFunctions) firBuilder.AppendLine(FirPrinter.Print(func));
 
     var firOutput = firBuilder.ToString();
     if (emitFir == "-")
@@ -150,6 +120,7 @@ if (emitFir != null)
 // Generate C code for all functions
 var cCodeBuilder = new StringBuilder();
 cCodeBuilder.AppendLine("#include <stdio.h>");
+cCodeBuilder.AppendLine("struct String {char* ptr; int len;};"); // HACK
 cCodeBuilder.AppendLine();
 
 // Generate code for all functions
@@ -159,12 +130,8 @@ foreach (var func in allFunctions)
     // Skip the #include <stdio.h> line since we already added it
     var lines = funcCode.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries);
     foreach (var line in lines)
-    {
-        if (!line.Contains("#include"))
-        {
+        if (!line.Contains("#include")) // HACK
             cCodeBuilder.AppendLine(line);
-        }
-    }
 }
 
 var cCode = cCodeBuilder.ToString();
@@ -182,19 +149,15 @@ if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
 {
     var (clPath, clEnv) = FindClExeWithEnvironment();
     if (clPath != null)
-    {
         compilersList.Add((clPath, $"/nologo /Fe\"{outputFilePath}\" \"{cFilePath}\"", clEnv));
-    }
     else
-    {
         // Fallback to hoping cl.exe is in PATH with proper environment
         compilersList.Add(("cl.exe", $"/nologo /Fe\"{outputFilePath}\" \"{cFilePath}\"", null));
-    }
 }
 
 var compilers = compilersList.ToArray();
 
-bool compiled = false;
+var compiled = false;
 foreach (var (compiler, arguments, environment) in compilers)
 {
     var startInfo = new ProcessStartInfo
@@ -204,17 +167,13 @@ foreach (var (compiler, arguments, environment) in compilers)
         RedirectStandardOutput = true,
         RedirectStandardError = true,
         UseShellExecute = false,
-        CreateNoWindow = true,
+        CreateNoWindow = true
     };
 
     // Add custom environment variables if provided (needed for cl.exe)
     if (environment != null)
-    {
         foreach (var (key, value) in environment)
-        {
             startInfo.EnvironmentVariables[key] = value;
-        }
-    }
 
     var process = new Process { StartInfo = startInfo };
 
@@ -226,7 +185,8 @@ foreach (var (compiler, arguments, environment) in compilers)
         if (process.ExitCode != 0)
         {
             Console.WriteLine($"C compiler ({compiler}) failed:");
-            Console.WriteLine(process.StandardError.ReadToEnd());
+            var output = process.StandardOutput.ReadToEnd();
+            Console.WriteLine(output);
         }
         else
         {
@@ -236,30 +196,24 @@ foreach (var (compiler, arguments, environment) in compilers)
             // Clean up intermediate files (cl.exe creates .obj files)
             // Check both next to source file and in current directory
             var objFilePath = Path.ChangeExtension(inputFilePath, ".obj");
-            if (File.Exists(objFilePath))
-            {
-                File.Delete(objFilePath);
-            }
+            if (File.Exists(objFilePath)) File.Delete(objFilePath);
 
             var baseNameObj = Path.GetFileNameWithoutExtension(inputFilePath) + ".obj";
-            if (File.Exists(baseNameObj))
-            {
-                File.Delete(baseNameObj);
-            }
+            if (File.Exists(baseNameObj)) File.Delete(baseNameObj);
 
             break;
         }
     }
-    catch (System.ComponentModel.Win32Exception)
+    catch (Win32Exception e)
     {
         // Try next compiler
-        continue;
     }
 }
 
 if (!compiled)
 {
-    Console.Error.WriteLine($"Error: Could not find any C compiler. Tried: {string.Join(", ", compilers.Select(c => c.Item1))}");
+    Console.Error.WriteLine(
+        $"Error: Could not find any C compiler. Tried: {string.Join(", ", compilers.Select(c => c.Item1))}");
     Environment.Exit(1);
 }
 
@@ -273,16 +227,16 @@ static (string?, Dictionary<string, string>?) FindClExeWithEnvironment()
     string? vsInstallPath = null;
 
     if (File.Exists(vswherePath))
-    {
         try
         {
             var process = Process.Start(new ProcessStartInfo
             {
                 FileName = vswherePath,
-                Arguments = "-latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath",
+                Arguments =
+                    "-latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath",
                 RedirectStandardOutput = true,
                 UseShellExecute = false,
-                CreateNoWindow = true,
+                CreateNoWindow = true
             });
 
             if (process != null)
@@ -294,8 +248,9 @@ static (string?, Dictionary<string, string>?) FindClExeWithEnvironment()
                     vsInstallPath = null;
             }
         }
-        catch { }
-    }
+        catch
+        {
+        }
 
     // Fallback: check common installation directories
     if (vsInstallPath == null)
@@ -320,6 +275,7 @@ static (string?, Dictionary<string, string>?) FindClExeWithEnvironment()
                     break;
                 }
             }
+
             if (vsInstallPath != null) break;
         }
     }
@@ -340,7 +296,9 @@ static (string?, Dictionary<string, string>?) FindClExeWithEnvironment()
             .OrderByDescending(v => v)
             .FirstOrDefault();
     }
-    catch { }
+    catch
+    {
+    }
 
     if (toolsetVersion == null)
         return (null, null);
@@ -364,7 +322,6 @@ static (string?, Dictionary<string, string>?) FindClExeWithEnvironment()
     {
         var sdkIncludePath = Path.Combine(windowsSdkDir, "Include");
         if (Directory.Exists(sdkIncludePath))
-        {
             try
             {
                 sdkVersion = Directory.GetDirectories(sdkIncludePath)
@@ -372,8 +329,9 @@ static (string?, Dictionary<string, string>?) FindClExeWithEnvironment()
                     .OrderByDescending(v => v)
                     .FirstOrDefault();
             }
-            catch { }
-        }
+            catch
+            {
+            }
     }
 
     // Build INCLUDE path
@@ -384,6 +342,7 @@ static (string?, Dictionary<string, string>?) FindClExeWithEnvironment()
         includePaths.Add(Path.Combine(windowsSdkDir, "Include", sdkVersion, "um"));
         includePaths.Add(Path.Combine(windowsSdkDir, "Include", sdkVersion, "shared"));
     }
+
     env["INCLUDE"] = string.Join(";", includePaths);
 
     // Build LIB path
@@ -393,14 +352,12 @@ static (string?, Dictionary<string, string>?) FindClExeWithEnvironment()
         libPaths.Add(Path.Combine(windowsSdkDir, "Lib", sdkVersion, "ucrt", "x64"));
         libPaths.Add(Path.Combine(windowsSdkDir, "Lib", sdkVersion, "um", "x64"));
     }
+
     env["LIB"] = string.Join(";", libPaths);
 
     // Add cl.exe directory to PATH
     var binDir = Path.GetDirectoryName(clPath);
-    if (binDir != null)
-    {
-        env["PATH"] = binDir + ";" + Environment.GetEnvironmentVariable("PATH");
-    }
+    if (binDir != null) env["PATH"] = binDir + ";" + Environment.GetEnvironmentVariable("PATH");
 
     return (clPath, env);
 }

@@ -8,10 +8,10 @@ namespace FLang.Frontend.Ast.Expressions;
 /// </summary>
 public class DereferenceExpressionNode : ExpressionNode
 {
-    public ExpressionNode Target { get; }
-
     public DereferenceExpressionNode(SourceSpan span, ExpressionNode target) : base(span)
     {
         Target = target;
     }
+
+    public ExpressionNode Target { get; }
 }

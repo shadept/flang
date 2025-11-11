@@ -1,15 +1,14 @@
 using System.Collections.Concurrent;
-using System.Collections.Generic;
 
 namespace FLang.Core;
 
 public class Compilation
 {
+    private readonly object _lock = new();
+    private readonly ConcurrentDictionary<string, int> _modulePathToFileId = new();
     private readonly ConcurrentBag<Source> _sources = new();
     private readonly List<Source> _sourcesList = new();
-    private readonly ConcurrentDictionary<string, int> _modulePathToFileId = new();
-    private readonly object _lock = new object();
-    private int _fileIdCounter = 0;
+    private int _fileIdCounter;
 
     public string StdlibPath { get; set; } = "";
 
@@ -40,13 +39,10 @@ public class Compilation
     public string? TryResolveImportPath(IReadOnlyList<string> importPath)
     {
         // Convert import path to file path: ["std", "io"] -> "stdlib/std/io.f"
-        var relativePath = string.Join(System.IO.Path.DirectorySeparatorChar, importPath) + ".f";
-        var fullPath = System.IO.Path.Combine(StdlibPath, relativePath);
+        var relativePath = string.Join(Path.DirectorySeparatorChar, importPath) + ".f";
+        var fullPath = Path.Combine(StdlibPath, relativePath);
 
-        if (System.IO.File.Exists(fullPath))
-        {
-            return fullPath;
-        }
+        if (File.Exists(fullPath)) return fullPath;
 
         return null;
     }

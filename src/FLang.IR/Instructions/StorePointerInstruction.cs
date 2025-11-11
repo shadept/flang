@@ -6,12 +6,12 @@ namespace FLang.IR.Instructions;
 /// </summary>
 public class StorePointerInstruction : Instruction
 {
-    public Value Pointer { get; }
-    public Value Value { get; }
-
     public StorePointerInstruction(Value pointer, Value value)
     {
         Pointer = pointer;
         Value = value;
     }
+
+    public Value Pointer { get; }
+    public Value Value { get; }
 }

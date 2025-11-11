@@ -1,9 +1,5 @@
-using System;
-using System.Collections.Generic;
-using System.IO;
 using FLang.Core;
 using FLang.Frontend;
-using FLang.Frontend.Ast;
 using FLang.Frontend.Ast.Declarations;
 
 namespace FLang.CLI;
@@ -11,8 +7,8 @@ namespace FLang.CLI;
 public class ModuleCompiler
 {
     private readonly Compilation _compilation;
-    private readonly Queue<string> _workQueue = new();
     private readonly Dictionary<string, ModuleNode> _parsedModules = new();
+    private readonly Queue<string> _workQueue = new();
 
     public ModuleCompiler(Compilation compilation)
     {
@@ -53,9 +49,7 @@ public class ModuleCompiler
                 var resolvedPath = _compilation.TryResolveImportPath(import.Path);
 
                 if (resolvedPath == null)
-                {
                     throw new Exception($"Could not resolve import: {string.Join(".", import.Path)}");
-                }
 
                 var normalizedImportPath = Path.GetFullPath(resolvedPath);
 

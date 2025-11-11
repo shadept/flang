@@ -14,19 +14,19 @@ public enum BinaryOp
     LessThan,
     GreaterThan,
     LessThanOrEqual,
-    GreaterThanOrEqual,
+    GreaterThanOrEqual
 }
 
 public class BinaryInstruction : Instruction
 {
-    public BinaryOp Operation { get; }
-    public Value Left { get; }
-    public Value Right { get; }
-
     public BinaryInstruction(BinaryOp operation, Value left, Value right)
     {
         Operation = operation;
         Left = left;
         Right = right;
     }
+
+    public BinaryOp Operation { get; }
+    public Value Left { get; }
+    public Value Right { get; }
 }

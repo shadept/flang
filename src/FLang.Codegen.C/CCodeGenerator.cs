@@ -1,5 +1,3 @@
-using System.Collections.Generic;
-using System.Linq;
 using System.Text;
 using FLang.Core;
 using FLang.IR;
@@ -11,6 +9,7 @@ public class CCodeGenerator
 {
     private readonly HashSet<string> _declaredVars = new();
     private readonly HashSet<string> _pointerVars = new(); // Track which variables are pointers
+    private readonly Dictionary<string, string> _stringLiterals = new(); // Track string literals (name -> value)
     private readonly HashSet<StructType> _usedStructs = new(); // Track structs used in this function
 
     public static string Generate(Function function)
@@ -21,8 +20,9 @@ public class CCodeGenerator
 
     private string GenerateFunction(Function function)
     {
-        // First pass: collect all struct types used in this function
+        // First pass: collect all struct types and string literals used in this function
         CollectUsedStructs(function);
+        CollectStringLiterals(function);
 
         var builder = new StringBuilder();
         builder.AppendLine("#include <stdio.h>");
@@ -36,12 +36,14 @@ public class CCodeGenerator
             builder.AppendLine();
         }
 
+        // Generate string literal declarations
+        foreach (var (name, value) in _stringLiterals) GenerateStringLiteral(name, value, builder);
+
+        if (_stringLiterals.Count > 0) builder.AppendLine();
+
         // Generate parameter list
         var paramList = string.Join(", ", function.Parameters.Select(p => $"{p.Type} {p.Name}"));
-        if (function.Parameters.Count == 0)
-        {
-            paramList = "void"; // C convention for no parameters
-        }
+        if (function.Parameters.Count == 0) paramList = "void"; // C convention for no parameters
 
         // Foreign functions are declared as extern
         if (function.IsForeign)
@@ -56,30 +58,21 @@ public class CCodeGenerator
         foreach (var param in function.Parameters)
         {
             _declaredVars.Add(param.Name);
-            if (param.Type.Contains("*"))
-            {
-                _pointerVars.Add(param.Name);
-            }
+            if (param.Type.Contains("*")) _pointerVars.Add(param.Name);
         }
 
         builder.AppendLine($"int {function.Name}({paramList}) {{");
 
         // Generate each basic block
-        for (int i = 0; i < function.BasicBlocks.Count; i++)
+        for (var i = 0; i < function.BasicBlocks.Count; i++)
         {
             var block = function.BasicBlocks[i];
 
             // Emit label for this block (except first block)
-            if (i > 0)
-            {
-                builder.AppendLine($"{block.Label}:");
-            }
+            if (i > 0) builder.AppendLine($"{block.Label}:");
 
             // Emit instructions
-            foreach (var instruction in block.Instructions)
-            {
-                GenerateInstruction(instruction, builder);
-            }
+            foreach (var instruction in block.Instructions) GenerateInstruction(instruction, builder);
         }
 
         builder.AppendLine("}");
@@ -93,22 +86,21 @@ public class CCodeGenerator
         {
             case StoreInstruction store:
                 // Check if the value being stored is a pointer
-                bool isPointer = store.Value is LocalValue local && _pointerVars.Contains(local.Name);
+                var isPointer = (store.Value is LocalValue local && _pointerVars.Contains(local.Name))
+                                || store.Value is StringConstantValue;
 
                 if (!_declaredVars.Contains(store.VariableName))
                 {
                     var typeStr = isPointer ? "int*" : "int";
                     builder.Append($"    {typeStr} {store.VariableName}");
                     _declaredVars.Add(store.VariableName);
-                    if (isPointer)
-                    {
-                        _pointerVars.Add(store.VariableName);
-                    }
+                    if (isPointer) _pointerVars.Add(store.VariableName);
                 }
                 else
                 {
                     builder.Append($"    {store.VariableName}");
                 }
+
                 builder.AppendLine($" = {EmitValue(store.Value)};");
                 break;
 
@@ -126,14 +118,16 @@ public class CCodeGenerator
                     BinaryOp.GreaterThan => ">",
                     BinaryOp.LessThanOrEqual => "<=",
                     BinaryOp.GreaterThanOrEqual => ">=",
-                    _ => throw new System.Exception($"Unknown binary operation: {binary.Operation}")
+                    _ => throw new Exception($"Unknown binary operation: {binary.Operation}")
                 };
 
                 if (binary.Result != null && !_declaredVars.Contains(binary.Result.Name))
                 {
-                    builder.AppendLine($"    int {binary.Result.Name} = {EmitValue(binary.Left)} {opSymbol} {EmitValue(binary.Right)};");
+                    builder.AppendLine(
+                        $"    int {binary.Result.Name} = {EmitValue(binary.Left)} {opSymbol} {EmitValue(binary.Right)};");
                     _declaredVars.Add(binary.Result.Name);
                 }
+
                 break;
 
             case BranchInstruction branch:
@@ -164,6 +158,7 @@ public class CCodeGenerator
                 {
                     builder.AppendLine($"    {call.FunctionName}({argsStr});");
                 }
+
                 break;
 
             case AddressOfInstruction addressOf:
@@ -173,6 +168,7 @@ public class CCodeGenerator
                     _declaredVars.Add(addressOf.Result.Name);
                     _pointerVars.Add(addressOf.Result.Name); // Mark as pointer
                 }
+
                 break;
 
             case LoadInstruction load:
@@ -181,6 +177,7 @@ public class CCodeGenerator
                     builder.AppendLine($"    int {load.Result.Name} = *{EmitValue(load.Pointer)};");
                     _declaredVars.Add(load.Result.Name);
                 }
+
                 break;
 
             case StorePointerInstruction storePtr:
@@ -215,16 +212,19 @@ public class CCodeGenerator
                     _declaredVars.Add(alloca.Result.Name);
                     _pointerVars.Add(alloca.Result.Name);
                 }
+
                 break;
 
             case GetElementPtrInstruction gep:
                 if (gep.Result != null && !_declaredVars.Contains(gep.Result.Name))
                 {
                     // Cast to char* for pointer arithmetic, then calculate offset
-                    builder.AppendLine($"    int* {gep.Result.Name} = (int*)((char*){EmitValue(gep.BasePointer)} + {EmitValue(gep.ByteOffset)});");
+                    builder.AppendLine(
+                        $"    int* {gep.Result.Name} = (int*)((char*){EmitValue(gep.BasePointer)} + {EmitValue(gep.ByteOffset)});");
                     _declaredVars.Add(gep.Result.Name);
                     _pointerVars.Add(gep.Result.Name);
                 }
+
                 break;
         }
     }
@@ -234,40 +234,33 @@ public class CCodeGenerator
         return value switch
         {
             ConstantValue constant => constant.IntValue.ToString(),
+            StringConstantValue stringConst => $"&{stringConst.Name}",
             LocalValue local => local.Name,
-            _ => throw new System.Exception($"Unknown value type: {value.GetType().Name}")
+            _ => throw new Exception($"Unknown value type: {value.GetType().Name}")
         };
     }
 
     private void CollectUsedStructs(Function function)
     {
         foreach (var block in function.BasicBlocks)
-        {
-            foreach (var instruction in block.Instructions)
-            {
-                if (instruction is AllocaInstruction alloca)
+        foreach (var instruction in block.Instructions)
+            if (instruction is AllocaInstruction alloca)
+                if (alloca.AllocatedType is StructType structType)
                 {
-                    if (alloca.AllocatedType is StructType structType)
-                    {
-                        _usedStructs.Add(structType);
-                        // Also collect nested struct types
-                        CollectNestedStructs(structType);
-                    }
+                    _usedStructs.Add(structType);
+                    // Also collect nested struct types
+                    CollectNestedStructs(structType);
                 }
-            }
-        }
     }
 
     private void CollectNestedStructs(StructType structType)
     {
         foreach (var (_, fieldType) in structType.Fields)
-        {
             if (fieldType is StructType nestedStruct && !_usedStructs.Contains(nestedStruct))
             {
                 _usedStructs.Add(nestedStruct);
                 CollectNestedStructs(nestedStruct);
             }
-        }
     }
 
     private void GenerateStructDefinition(StructType structType, StringBuilder builder)
@@ -281,5 +274,93 @@ public class CCodeGenerator
         }
 
         builder.AppendLine("};");
+    }
+
+    private void CollectStringLiterals(Function function)
+    {
+        foreach (var block in function.BasicBlocks)
+        foreach (var instruction in block.Instructions)
+            CollectStringLiteralsFromInstruction(instruction);
+    }
+
+    private void CollectStringLiteralsFromInstruction(Instruction instruction)
+    {
+        // Check all values used in the instruction
+        switch (instruction)
+        {
+            case StoreInstruction store:
+                if (store.Value is StringConstantValue strConst) _stringLiterals[strConst.Name] = strConst.StringValue;
+
+                break;
+            case BinaryInstruction binary:
+                if (binary.Left is StringConstantValue leftStr) _stringLiterals[leftStr.Name] = leftStr.StringValue;
+
+                if (binary.Right is StringConstantValue rightStr) _stringLiterals[rightStr.Name] = rightStr.StringValue;
+
+                break;
+            case ReturnInstruction ret:
+                if (ret.Value is StringConstantValue retStr) _stringLiterals[retStr.Name] = retStr.StringValue;
+
+                break;
+            case CallInstruction call:
+                foreach (var arg in call.Arguments)
+                    if (arg is StringConstantValue argStr)
+                        _stringLiterals[argStr.Name] = argStr.StringValue;
+
+                break;
+            case BranchInstruction branch:
+                if (branch.Condition is StringConstantValue branchStr)
+                    _stringLiterals[branchStr.Name] = branchStr.StringValue;
+
+                break;
+        }
+    }
+
+    private void GenerateStringLiteral(string name, string value, StringBuilder builder)
+    {
+        // Generate a null-terminated string literal as a struct String
+        // String is defined as: struct String { unsigned char* ptr; uintptr_t len; }
+
+        // Escape special characters for C string literal
+        var escapedValue = EscapeStringForC(value);
+
+        // Generate the raw string data with null terminator
+        builder.AppendLine($"static const unsigned char {name}_data[] = \"{escapedValue}\";");
+
+        // Generate the String struct instance with ptr and len
+        // Length does NOT include the null terminator (as per spec)
+        builder.AppendLine($"static const struct String {name} = {{ (unsigned char*){name}_data, {value.Length} }};");
+    }
+
+    private string EscapeStringForC(string value)
+    {
+        var builder = new StringBuilder();
+        foreach (var ch in value)
+            switch (ch)
+            {
+                case '\n':
+                    builder.Append("\\n");
+                    break;
+                case '\t':
+                    builder.Append("\\t");
+                    break;
+                case '\r':
+                    builder.Append("\\r");
+                    break;
+                case '\\':
+                    builder.Append("\\\\");
+                    break;
+                case '"':
+                    builder.Append("\\\"");
+                    break;
+                case '\0':
+                    builder.Append("\\0");
+                    break;
+                default:
+                    builder.Append(ch);
+                    break;
+            }
+
+        return builder.ToString();
     }
 }

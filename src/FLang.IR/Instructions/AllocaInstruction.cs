@@ -1,4 +1,3 @@
-using FLang.Core;
 using FType = FLang.Core.Type;
 
 namespace FLang.IR.Instructions;
@@ -10,6 +9,12 @@ namespace FLang.IR.Instructions;
 /// </summary>
 public class AllocaInstruction : Instruction
 {
+    public AllocaInstruction(FType allocatedType, int sizeInBytes)
+    {
+        AllocatedType = allocatedType;
+        SizeInBytes = sizeInBytes;
+    }
+
     /// <summary>
     /// The type to allocate space for.
     /// </summary>
@@ -19,10 +24,4 @@ public class AllocaInstruction : Instruction
     /// Size in bytes to allocate.
     /// </summary>
     public int SizeInBytes { get; }
-
-    public AllocaInstruction(FType allocatedType, int sizeInBytes)
-    {
-        AllocatedType = allocatedType;
-        SizeInBytes = sizeInBytes;
-    }
 }

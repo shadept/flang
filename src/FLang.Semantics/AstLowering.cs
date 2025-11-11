@@ -1,4 +1,3 @@
-using System.Collections.Generic;
 using FLang.Core;
 using FLang.Frontend.Ast;
 using FLang.Frontend.Ast.Declarations;
@@ -12,29 +11,16 @@ namespace FLang.Semantics;
 
 public class AstLowering
 {
+    private readonly List<BasicBlock> _allBlocks = new();
     private readonly Compilation _compilation;
-    private readonly TypeSolver _typeSolver;
     private readonly List<Diagnostic> _diagnostics = new();
     private readonly Dictionary<string, Value> _locals = new();
-    private int _tempCounter = 0;
-    private int _blockCounter = 0;
-    private BasicBlock _currentBlock = null!;
-    private readonly List<BasicBlock> _allBlocks = new();
     private readonly Stack<LoopContext> _loopStack = new();
-
-    public IReadOnlyList<Diagnostic> Diagnostics => _diagnostics;
-
-    private class LoopContext
-    {
-        public BasicBlock ContinueTarget { get; }
-        public BasicBlock BreakTarget { get; }
-
-        public LoopContext(BasicBlock continueTarget, BasicBlock breakTarget)
-        {
-            ContinueTarget = continueTarget;
-            BreakTarget = breakTarget;
-        }
-    }
+    private readonly TypeSolver _typeSolver;
+    private int _blockCounter;
+    private BasicBlock _currentBlock = null!;
+    private int _stringCounter;
+    private int _tempCounter;
 
     private AstLowering(Compilation compilation, TypeSolver typeSolver)
     {
@@ -42,7 +28,10 @@ public class AstLowering
         _typeSolver = typeSolver;
     }
 
-    public static (Function Function, IReadOnlyList<Diagnostic> Diagnostics) Lower(FunctionDeclarationNode functionNode, Compilation compilation, TypeSolver typeSolver)
+    public IReadOnlyList<Diagnostic> Diagnostics => _diagnostics;
+
+    public static (Function Function, IReadOnlyList<Diagnostic> Diagnostics) Lower(FunctionDeclarationNode functionNode,
+        Compilation compilation, TypeSolver typeSolver)
     {
         var lowering = new AstLowering(compilation, typeSolver);
         var function = lowering.LowerFunction(functionNode);
@@ -59,34 +48,24 @@ public class AstLowering
         {
             var paramType = ResolveTypeFromNode(param.Type);
             var cType = TypeRegistry.ToCType(paramType);
-            function.Parameters.Add(new IR.FunctionParameter(param.Name, cType));
+            function.Parameters.Add(new FunctionParameter(param.Name, cType));
 
             // Add parameter to locals so it can be referenced in the function body
             _locals[param.Name] = new LocalValue(param.Name);
         }
 
         // Foreign functions have no body
-        if (functionNode.IsForeign)
-        {
-            return function;
-        }
+        if (functionNode.IsForeign) return function;
 
         _currentBlock = CreateBlock("entry");
         function.BasicBlocks.Add(_currentBlock);
 
-        foreach (var statement in functionNode.Body)
-        {
-            LowerStatement(statement);
-        }
+        foreach (var statement in functionNode.Body) LowerStatement(statement);
 
         // Add all created blocks to function
         foreach (var block in _allBlocks)
-        {
             if (!function.BasicBlocks.Contains(block))
-            {
                 function.BasicBlocks.Add(block);
-            }
-        }
 
         return function;
     }
@@ -98,10 +77,7 @@ public class AstLowering
             case NamedTypeNode namedType:
             {
                 var type = TypeRegistry.GetTypeByName(namedType.Name);
-                if (type != null)
-                {
-                    return type;
-                }
+                if (type != null) return type;
                 break;
             }
 
@@ -120,10 +96,7 @@ public class AstLowering
             case GenericTypeNode genericType:
             {
                 var typeArgs = new List<Type>();
-                foreach (var argNode in genericType.TypeArguments)
-                {
-                    typeArgs.Add(ResolveTypeFromNode(argNode));
-                }
+                foreach (var argNode in genericType.TypeArguments) typeArgs.Add(ResolveTypeFromNode(argNode));
                 return new GenericType(genericType.Name, typeArgs);
             }
         }
@@ -151,6 +124,7 @@ public class AstLowering
                     _locals[varDecl.Name] = local;
                     _currentBlock.Instructions.Add(new StoreInstruction(varDecl.Name, value));
                 }
+
                 break;
 
             case ReturnStatementNode returnStmt:
@@ -160,34 +134,26 @@ public class AstLowering
 
             case BreakStatementNode breakStmt:
                 if (_loopStack.Count == 0)
-                {
                     _diagnostics.Add(Diagnostic.Error(
                         "`break` statement outside of loop",
                         breakStmt.Span,
-                        hint: "`break` can only be used inside a loop",
-                        code: "E2006"
+                        "`break` can only be used inside a loop",
+                        "E2006"
                     ));
-                }
                 else
-                {
                     _currentBlock.Instructions.Add(new JumpInstruction(_loopStack.Peek().BreakTarget));
-                }
                 break;
 
             case ContinueStatementNode continueStmt:
                 if (_loopStack.Count == 0)
-                {
                     _diagnostics.Add(Diagnostic.Error(
                         "`continue` statement outside of loop",
                         continueStmt.Span,
-                        hint: "`continue` can only be used inside a loop",
-                        code: "E2007"
+                        "`continue` can only be used inside a loop",
+                        "E2007"
                     ));
-                }
                 else
-                {
                     _currentBlock.Instructions.Add(new JumpInstruction(_loopStack.Peek().ContinueTarget));
-                }
                 break;
 
             case ForLoopNode forLoop:
@@ -212,16 +178,18 @@ public class AstLowering
                 // In C, booleans are represented as integers (0 = false, 1 = true)
                 return new ConstantValue(boolLiteral.Value ? 1 : 0);
 
+            case StringLiteralNode stringLiteral:
+                // String literals are represented as global constants
+                var stringName = $"str_{_stringCounter++}";
+                return new StringConstantValue(stringLiteral.Value, stringName);
+
             case IdentifierExpressionNode identifier:
-                if (_locals.TryGetValue(identifier.Name, out var local))
-                {
-                    return local;
-                }
+                if (_locals.TryGetValue(identifier.Name, out var local)) return local;
                 _diagnostics.Add(Diagnostic.Error(
                     $"cannot find value `{identifier.Name}` in this scope",
                     identifier.Span,
-                    hint: "not found in this scope",
-                    code: "E2004"
+                    "not found in this scope",
+                    "E2004"
                 ));
                 // Return a dummy value to avoid cascading errors
                 return new ConstantValue(0);
@@ -243,7 +211,7 @@ public class AstLowering
                     BinaryOperatorKind.GreaterThan => BinaryOp.GreaterThan,
                     BinaryOperatorKind.LessThanOrEqual => BinaryOp.LessThanOrEqual,
                     BinaryOperatorKind.GreaterThanOrEqual => BinaryOp.GreaterThanOrEqual,
-                    _ => throw new System.Exception($"Unknown binary operator: {binary.Operator}")
+                    _ => throw new Exception($"Unknown binary operator: {binary.Operator}")
                 };
 
                 var temp = new LocalValue($"t{_tempCounter++}");
@@ -261,12 +229,13 @@ public class AstLowering
                     _diagnostics.Add(Diagnostic.Error(
                         $"cannot assign to `{assignment.TargetName}` because it is not declared",
                         assignment.Span,
-                        hint: "declare the variable with `let` first",
-                        code: "E2010"
+                        "declare the variable with `let` first",
+                        "E2010"
                     ));
                     // Return the value to avoid cascading errors
                     return assignValue;
                 }
+
                 _currentBlock.Instructions.Add(new StoreInstruction(assignment.TargetName, assignValue));
                 // Assignment expressions return the assigned value
                 return assignValue;
@@ -282,18 +251,15 @@ public class AstLowering
                 _diagnostics.Add(Diagnostic.Error(
                     "range expressions can only be used in `for` loops",
                     rangeExpr.Span,
-                    hint: "use this expression inside a `for (x in range)` loop",
-                    code: "E2008"
+                    "use this expression inside a `for (x in range)` loop",
+                    "E2008"
                 ));
                 // Return a dummy value to avoid cascading errors
                 return new ConstantValue(0);
 
             case CallExpressionNode call:
                 var args = new List<Value>();
-                foreach (var arg in call.Arguments)
-                {
-                    args.Add(LowerExpression(arg));
-                }
+                foreach (var arg in call.Arguments) args.Add(LowerExpression(arg));
                 var callResult = new LocalValue($"call_{_tempCounter++}");
                 var callInst = new CallInstruction(call.FunctionName, args) { Result = callResult };
                 _currentBlock.Instructions.Add(callInst);
@@ -309,16 +275,14 @@ public class AstLowering
                     _currentBlock.Instructions.Add(addrInst);
                     return addrResult;
                 }
-                else
-                {
-                    _diagnostics.Add(Diagnostic.Error(
-                        "can only take address of variables",
-                        addressOf.Span,
-                        hint: "use `&variable_name`",
-                        code: "E2012"
-                    ));
-                    return new ConstantValue(0); // Fallback
-                }
+
+                _diagnostics.Add(Diagnostic.Error(
+                    "can only take address of variables",
+                    addressOf.Span,
+                    "use `&variable_name`",
+                    "E2012"
+                ));
+                return new ConstantValue(0); // Fallback
 
             case DereferenceExpressionNode deref:
                 // Dereference: ptr.*
@@ -336,8 +300,8 @@ public class AstLowering
                     _diagnostics.Add(Diagnostic.Error(
                         "cannot determine struct type",
                         structCtor.Span,
-                        hint: "type checking failed",
-                        code: "E3001"
+                        "type checking failed",
+                        "E3001"
                     ));
                     return new ConstantValue(0);
                 }
@@ -375,8 +339,8 @@ public class AstLowering
                     _diagnostics.Add(Diagnostic.Error(
                         "cannot access field on non-struct type",
                         fieldAccess.Span,
-                        hint: "type checking failed",
-                        code: "E3002"
+                        "type checking failed",
+                        "E3002"
                     ));
                     return new ConstantValue(0);
                 }
@@ -388,8 +352,8 @@ public class AstLowering
                     _diagnostics.Add(Diagnostic.Error(
                         $"field `{fieldAccess.FieldName}` not found",
                         fieldAccess.Span,
-                        hint: "type checking failed",
-                        code: "E3003"
+                        "type checking failed",
+                        "E3003"
                     ));
                     return new ConstantValue(0);
                 }
@@ -414,15 +378,16 @@ public class AstLowering
                     _diagnostics.Add(Diagnostic.Error(
                         "cannot determine array type",
                         arrayLiteral.Span,
-                        hint: "type checking failed",
-                        code: "E3004"
+                        "type checking failed",
+                        "E3004"
                     ));
                     return new ConstantValue(0);
                 }
 
                 // Allocate stack space for the array
                 var arrayAllocaResult = new LocalValue($"array_{_tempCounter++}");
-                var arrayAllocaInst = new AllocaInstruction(arrayType, arrayType.GetSize()) { Result = arrayAllocaResult };
+                var arrayAllocaInst = new AllocaInstruction(arrayType, arrayType.GetSize())
+                    { Result = arrayAllocaResult };
                 _currentBlock.Instructions.Add(arrayAllocaInst);
 
                 // Store each element value
@@ -432,11 +397,12 @@ public class AstLowering
                     var repeatValue = LowerExpression(arrayLiteral.RepeatValue!);
                     var elementSize = GetTypeSize(arrayType.ElementType);
 
-                    for (int i = 0; i < arrayLiteral.RepeatCount!.Value; i++)
+                    for (var i = 0; i < arrayLiteral.RepeatCount!.Value; i++)
                     {
                         // Calculate element address: base + (i * element_size)
                         var elemPtrResult = new LocalValue($"elem_ptr_{_tempCounter++}");
-                        var elemGepInst = new GetElementPtrInstruction(arrayAllocaResult, i * elementSize) { Result = elemPtrResult };
+                        var elemGepInst = new GetElementPtrInstruction(arrayAllocaResult, i * elementSize)
+                            { Result = elemPtrResult };
                         _currentBlock.Instructions.Add(elemGepInst);
 
                         // Store value to element
@@ -449,13 +415,14 @@ public class AstLowering
                     // Regular array literal: [elem1, elem2, ...]
                     var elementSize = GetTypeSize(arrayType.ElementType);
 
-                    for (int i = 0; i < arrayLiteral.Elements!.Count; i++)
+                    for (var i = 0; i < arrayLiteral.Elements!.Count; i++)
                     {
                         var elemValue = LowerExpression(arrayLiteral.Elements[i]);
 
                         // Calculate element address: base + (i * element_size)
                         var elemPtrResult = new LocalValue($"elem_ptr_{_tempCounter++}");
-                        var elemGepInst = new GetElementPtrInstruction(arrayAllocaResult, i * elementSize) { Result = elemPtrResult };
+                        var elemGepInst = new GetElementPtrInstruction(arrayAllocaResult, i * elementSize)
+                            { Result = elemPtrResult };
                         _currentBlock.Instructions.Add(elemGepInst);
 
                         // Store value to element
@@ -480,7 +447,8 @@ public class AstLowering
 
                     // Calculate offset: index * element_size
                     var offsetTemp = new LocalValue($"offset_{_tempCounter++}");
-                    var offsetInst = new BinaryInstruction(BinaryOp.Multiply, indexValue, new ConstantValue(elemSize)) { Result = offsetTemp };
+                    var offsetInst = new BinaryInstruction(BinaryOp.Multiply, indexValue, new ConstantValue(elemSize))
+                        { Result = offsetTemp };
                     _currentBlock.Instructions.Add(offsetInst);
 
                     // Calculate element address: base + offset
@@ -495,35 +463,34 @@ public class AstLowering
 
                     return indexLoadResult;
                 }
-                else if (baseArrayType is SliceType sliceTypeForIndex)
+
+                if (baseArrayType is SliceType sliceTypeForIndex)
                 {
                     // Slice indexing: slice[i]
                     // For now, simplified - full slice support deferred
                     _diagnostics.Add(Diagnostic.Error(
                         "slice indexing not yet implemented",
                         indexExpr.Span,
-                        hint: "use array indexing for now",
-                        code: "E3005"
-                    ));
-                    return new ConstantValue(0);
-                }
-                else
-                {
-                    _diagnostics.Add(Diagnostic.Error(
-                        "cannot index non-array type",
-                        indexExpr.Span,
-                        hint: "type checking failed",
-                        code: "E3006"
+                        "use array indexing for now",
+                        "E3005"
                     ));
                     return new ConstantValue(0);
                 }
 
+                _diagnostics.Add(Diagnostic.Error(
+                    "cannot index non-array type",
+                    indexExpr.Span,
+                    "type checking failed",
+                    "E3006"
+                ));
+                return new ConstantValue(0);
+
             default:
-                throw new System.Exception($"Unknown expression type: {expression.GetType().Name}");
+                throw new Exception($"Unknown expression type: {expression.GetType().Name}");
         }
     }
 
-    private int GetTypeSize(FLang.Core.Type type)
+    private int GetTypeSize(Type type)
     {
         return type switch
         {
@@ -573,15 +540,9 @@ public class AstLowering
 
     private Value LowerBlockExpression(BlockExpressionNode blockExpr)
     {
-        foreach (var stmt in blockExpr.Statements)
-        {
-            LowerStatement(stmt);
-        }
+        foreach (var stmt in blockExpr.Statements) LowerStatement(stmt);
 
-        if (blockExpr.TrailingExpression != null)
-        {
-            return LowerExpression(blockExpr.TrailingExpression);
-        }
+        if (blockExpr.TrailingExpression != null) return LowerExpression(blockExpr.TrailingExpression);
 
         // Block with no trailing expression returns unit/void (use 0 for now)
         return new ConstantValue(0);
@@ -595,8 +556,8 @@ public class AstLowering
             _diagnostics.Add(Diagnostic.Error(
                 "`for` loops currently only support range expressions",
                 forLoop.IterableExpression.Span,
-                hint: "use a range like `0..10` for iteration",
-                code: "E2009"
+                "use a range like `0..10` for iteration",
+                "E2009"
             ));
             return; // Skip lowering this loop
         }
@@ -640,5 +601,17 @@ public class AstLowering
 
         // Exit
         _currentBlock = exitBlock;
+    }
+
+    private class LoopContext
+    {
+        public LoopContext(BasicBlock continueTarget, BasicBlock breakTarget)
+        {
+            ContinueTarget = continueTarget;
+            BreakTarget = breakTarget;
+        }
+
+        public BasicBlock ContinueTarget { get; }
+        public BasicBlock BreakTarget { get; }
     }
 }

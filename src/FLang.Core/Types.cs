@@ -1,7 +1,3 @@
-using System;
-using System.Collections.Generic;
-using System.Linq;
-
 namespace FLang.Core;
 
 /// <summary>
@@ -13,11 +9,20 @@ public abstract class Type
 
     public abstract bool Equals(Type other);
 
-    public override bool Equals(object? obj) => obj is Type other && Equals(other);
+    public override bool Equals(object? obj)
+    {
+        return obj is Type other && Equals(other);
+    }
 
-    public override int GetHashCode() => Name.GetHashCode();
+    public override int GetHashCode()
+    {
+        return Name.GetHashCode();
+    }
 
-    public override string ToString() => Name;
+    public override string ToString()
+    {
+        return Name;
+    }
 }
 
 /// <summary>
@@ -25,10 +30,6 @@ public abstract class Type
 /// </summary>
 public class PrimitiveType : Type
 {
-    public override string Name { get; }
-    public int SizeInBytes { get; }
-    public bool IsSigned { get; }
-
     public PrimitiveType(string name, int sizeInBytes, bool isSigned = true)
     {
         Name = name;
@@ -36,8 +37,14 @@ public class PrimitiveType : Type
         IsSigned = isSigned;
     }
 
-    public override bool Equals(Type other) =>
-        other is PrimitiveType pt && pt.Name == Name;
+    public override string Name { get; }
+    public int SizeInBytes { get; }
+    public bool IsSigned { get; }
+
+    public override bool Equals(Type other)
+    {
+        return other is PrimitiveType pt && pt.Name == Name;
+    }
 }
 
 /// <summary>
@@ -47,11 +54,16 @@ public class ComptimeIntType : Type
 {
     public static readonly ComptimeIntType Instance = new();
 
-    private ComptimeIntType() { }
+    private ComptimeIntType()
+    {
+    }
 
     public override string Name => "comptime_int";
 
-    public override bool Equals(Type other) => other is ComptimeIntType;
+    public override bool Equals(Type other)
+    {
+        return other is ComptimeIntType;
+    }
 }
 
 /// <summary>
@@ -61,11 +73,16 @@ public class ComptimeFloatType : Type
 {
     public static readonly ComptimeFloatType Instance = new();
 
-    private ComptimeFloatType() { }
+    private ComptimeFloatType()
+    {
+    }
 
     public override string Name => "comptime_float";
 
-    public override bool Equals(Type other) => other is ComptimeFloatType;
+    public override bool Equals(Type other)
+    {
+        return other is ComptimeFloatType;
+    }
 }
 
 /// <summary>
@@ -73,20 +90,25 @@ public class ComptimeFloatType : Type
 /// </summary>
 public class TypeVariable : Type
 {
-    private static int _nextId = 0;
-
-    public int Id { get; }
-    public override string Name => $"?T{Id}";
+    private static int _nextId;
 
     public TypeVariable()
     {
         Id = _nextId++;
     }
 
-    public override bool Equals(Type other) =>
-        other is TypeVariable tv && tv.Id == Id;
+    public int Id { get; }
+    public override string Name => $"?T{Id}";
 
-    public override int GetHashCode() => Id;
+    public override bool Equals(Type other)
+    {
+        return other is TypeVariable tv && tv.Id == Id;
+    }
+
+    public override int GetHashCode()
+    {
+        return Id;
+    }
 }
 
 /// <summary>
@@ -94,19 +116,24 @@ public class TypeVariable : Type
 /// </summary>
 public class ReferenceType : Type
 {
-    public Type InnerType { get; }
-
     public ReferenceType(Type innerType)
     {
         InnerType = innerType;
     }
 
+    public Type InnerType { get; }
+
     public override string Name => $"&{InnerType.Name}";
 
-    public override bool Equals(Type other) =>
-        other is ReferenceType rt && InnerType.Equals(rt.InnerType);
+    public override bool Equals(Type other)
+    {
+        return other is ReferenceType rt && InnerType.Equals(rt.InnerType);
+    }
 
-    public override int GetHashCode() => HashCode.Combine(Name, InnerType);
+    public override int GetHashCode()
+    {
+        return HashCode.Combine(Name, InnerType);
+    }
 }
 
 /// <summary>
@@ -115,19 +142,24 @@ public class ReferenceType : Type
 /// </summary>
 public class OptionType : Type
 {
-    public Type InnerType { get; }
-
     public OptionType(Type innerType)
     {
         InnerType = innerType;
     }
 
+    public Type InnerType { get; }
+
     public override string Name => $"{InnerType.Name}?";
 
-    public override bool Equals(Type other) =>
-        other is OptionType ot && InnerType.Equals(ot.InnerType);
+    public override bool Equals(Type other)
+    {
+        return other is OptionType ot && InnerType.Equals(ot.InnerType);
+    }
 
-    public override int GetHashCode() => HashCode.Combine(Name, InnerType);
+    public override int GetHashCode()
+    {
+        return HashCode.Combine(Name, InnerType);
+    }
 }
 
 /// <summary>
@@ -136,14 +168,14 @@ public class OptionType : Type
 /// </summary>
 public class GenericType : Type
 {
-    public string BaseName { get; }
-    public IReadOnlyList<Type> TypeArguments { get; }
-
     public GenericType(string baseName, IReadOnlyList<Type> typeArguments)
     {
         BaseName = baseName;
         TypeArguments = typeArguments;
     }
+
+    public string BaseName { get; }
+    public IReadOnlyList<Type> TypeArguments { get; }
 
     public override string Name => $"{BaseName}[{string.Join(", ", TypeArguments.Select(t => t.Name))}]";
 
@@ -152,10 +184,9 @@ public class GenericType : Type
         if (other is not GenericType gt) return false;
         if (BaseName != gt.BaseName) return false;
         if (TypeArguments.Count != gt.TypeArguments.Count) return false;
-        for (int i = 0; i < TypeArguments.Count; i++)
-        {
-            if (!TypeArguments[i].Equals(gt.TypeArguments[i])) return false;
-        }
+        for (var i = 0; i < TypeArguments.Count; i++)
+            if (!TypeArguments[i].Equals(gt.TypeArguments[i]))
+                return false;
         return true;
     }
 
@@ -163,10 +194,7 @@ public class GenericType : Type
     {
         var hash = new HashCode();
         hash.Add(BaseName);
-        foreach (var arg in TypeArguments)
-        {
-            hash.Add(arg);
-        }
+        foreach (var arg in TypeArguments) hash.Add(arg);
         return hash.ToHashCode();
     }
 }
@@ -176,10 +204,6 @@ public class GenericType : Type
 /// </summary>
 public class StructType : Type
 {
-    public string StructName { get; }
-    public IReadOnlyList<string> TypeParameters { get; }
-    public IReadOnlyList<(string Name, Type Type)> Fields { get; }
-
     public StructType(string structName, IReadOnlyList<string> typeParameters, IReadOnlyList<(string, Type)> fields)
     {
         StructName = structName;
@@ -187,14 +211,15 @@ public class StructType : Type
         Fields = fields;
     }
 
+    public string StructName { get; }
+    public IReadOnlyList<string> TypeParameters { get; }
+    public IReadOnlyList<(string Name, Type Type)> Fields { get; }
+
     public override string Name
     {
         get
         {
-            if (TypeParameters.Count > 0)
-            {
-                return $"{StructName}[{string.Join(", ", TypeParameters)}]";
-            }
+            if (TypeParameters.Count > 0) return $"{StructName}[{string.Join(", ", TypeParameters)}]";
             return StructName;
         }
     }
@@ -204,10 +229,9 @@ public class StructType : Type
         if (other is not StructType st) return false;
         if (StructName != st.StructName) return false;
         if (TypeParameters.Count != st.TypeParameters.Count) return false;
-        for (int i = 0; i < TypeParameters.Count; i++)
-        {
-            if (TypeParameters[i] != st.TypeParameters[i]) return false;
-        }
+        for (var i = 0; i < TypeParameters.Count; i++)
+            if (TypeParameters[i] != st.TypeParameters[i])
+                return false;
         // Note: We don't compare fields for equality to allow structural typing
         return true;
     }
@@ -216,10 +240,7 @@ public class StructType : Type
     {
         var hash = new HashCode();
         hash.Add(StructName);
-        foreach (var param in TypeParameters)
-        {
-            hash.Add(param);
-        }
+        foreach (var param in TypeParameters) hash.Add(param);
         return hash.ToHashCode();
     }
 
@@ -229,10 +250,8 @@ public class StructType : Type
     public Type? GetFieldType(string fieldName)
     {
         foreach (var (name, type) in Fields)
-        {
             if (name == fieldName)
                 return type;
-        }
         return null;
     }
 
@@ -243,7 +262,7 @@ public class StructType : Type
     /// </summary>
     public int GetFieldOffset(string fieldName)
     {
-        int offset = 0;
+        var offset = 0;
         foreach (var (name, type) in Fields)
         {
             // Align offset to field's alignment requirement
@@ -256,6 +275,7 @@ public class StructType : Type
             // Advance offset by field size
             offset += GetTypeSize(type);
         }
+
         return -1; // Field not found
     }
 
@@ -267,8 +287,8 @@ public class StructType : Type
         if (Fields.Count == 0)
             return 0;
 
-        int size = 0;
-        int maxAlignment = 1;
+        var size = 0;
+        var maxAlignment = 1;
 
         foreach (var (_, type) in Fields)
         {
@@ -325,11 +345,8 @@ public class StructType : Type
     /// </summary>
     public int GetAlignment()
     {
-        int maxAlignment = 1;
-        foreach (var (_, type) in Fields)
-        {
-            maxAlignment = Math.Max(maxAlignment, GetTypeAlignment(type));
-        }
+        var maxAlignment = 1;
+        foreach (var (_, type) in Fields) maxAlignment = Math.Max(maxAlignment, GetTypeAlignment(type));
         return maxAlignment;
     }
 
@@ -348,21 +365,26 @@ public class StructType : Type
 /// </summary>
 public class ArrayType : Type
 {
-    public Type ElementType { get; }
-    public int Length { get; }
-
     public ArrayType(Type elementType, int length)
     {
         ElementType = elementType;
         Length = length;
     }
 
+    public Type ElementType { get; }
+    public int Length { get; }
+
     public override string Name => $"[{ElementType.Name}; {Length}]";
 
-    public override bool Equals(Type other) =>
-        other is ArrayType at && ElementType.Equals(at.ElementType) && Length == at.Length;
+    public override bool Equals(Type other)
+    {
+        return other is ArrayType at && ElementType.Equals(at.ElementType) && Length == at.Length;
+    }
 
-    public override int GetHashCode() => HashCode.Combine(ElementType, Length);
+    public override int GetHashCode()
+    {
+        return HashCode.Combine(ElementType, Length);
+    }
 
     /// <summary>
     /// Returns the total size of the array in bytes.
@@ -411,19 +433,24 @@ public class ArrayType : Type
 /// </summary>
 public class SliceType : Type
 {
-    public Type ElementType { get; }
-
     public SliceType(Type elementType)
     {
         ElementType = elementType;
     }
 
+    public Type ElementType { get; }
+
     public override string Name => $"{ElementType.Name}[]";
 
-    public override bool Equals(Type other) =>
-        other is SliceType st && ElementType.Equals(st.ElementType);
+    public override bool Equals(Type other)
+    {
+        return other is SliceType st && ElementType.Equals(st.ElementType);
+    }
 
-    public override int GetHashCode() => HashCode.Combine("slice", ElementType);
+    public override int GetHashCode()
+    {
+        return HashCode.Combine("slice", ElementType);
+    }
 
     /// <summary>
     /// Returns the size of the slice struct (pointer + length).
@@ -451,10 +478,10 @@ public static class TypeRegistry
     public static readonly PrimitiveType Bool = new("bool", 1);
 
     // Signed integer types
-    public static readonly PrimitiveType I8 = new("i8", 1, true);
-    public static readonly PrimitiveType I16 = new("i16", 2, true);
-    public static readonly PrimitiveType I32 = new("i32", 4, true);
-    public static readonly PrimitiveType I64 = new("i64", 8, true);
+    public static readonly PrimitiveType I8 = new("i8", 1);
+    public static readonly PrimitiveType I16 = new("i16", 2);
+    public static readonly PrimitiveType I32 = new("i32", 4);
+    public static readonly PrimitiveType I64 = new("i64", 8);
 
     // Unsigned integer types
     public static readonly PrimitiveType U8 = new("u8", 1, false);
@@ -463,7 +490,7 @@ public static class TypeRegistry
     public static readonly PrimitiveType U64 = new("u64", 8, false);
 
     // Platform-dependent integer types
-    public static readonly PrimitiveType ISize = new("isize", IntPtr.Size, true);
+    public static readonly PrimitiveType ISize = new("isize", IntPtr.Size);
     public static readonly PrimitiveType USize = new("usize", IntPtr.Size, false);
 
     // Compile-time types
@@ -525,7 +552,6 @@ public static class TypeRegistry
     public static string ToCType(Type type)
     {
         if (type is PrimitiveType pt)
-        {
             return pt.Name switch
             {
                 "bool" => "int", // C99 bool (using int for simplicity)
@@ -541,40 +567,26 @@ public static class TypeRegistry
                 "usize" => "uintptr_t",
                 _ => "int" // Fallback
             };
-        }
 
         // Handle reference types: &T becomes T*
-        if (type is ReferenceType refType)
-        {
-            return ToCType(refType.InnerType) + "*";
-        }
+        if (type is ReferenceType refType) return ToCType(refType.InnerType) + "*";
 
         // Handle optional types: T? (not fully implemented yet)
         if (type is OptionType optType)
-        {
             // For now, treat as the inner type
             return ToCType(optType.InnerType);
-        }
 
         // Handle struct types: use struct name
-        if (type is StructType structType)
-        {
-            return $"struct {structType.StructName}";
-        }
+        if (type is StructType structType) return $"struct {structType.StructName}";
 
         // Handle array types: T[N] in C
-        if (type is ArrayType arrayType)
-        {
-            return $"{ToCType(arrayType.ElementType)}[{arrayType.Length}]";
-        }
+        if (type is ArrayType arrayType) return $"{ToCType(arrayType.ElementType)}[{arrayType.Length}]";
 
         // Handle slice types: struct with ptr and len
         if (type is SliceType sliceType)
-        {
             // Slices are represented as fat pointers (struct with ptr and len)
             // We'll generate the struct definition in codegen
             return $"struct Slice_{ToCType(sliceType.ElementType).Replace(" ", "_").Replace("*", "Ptr")}";
-        }
 
         // Comptime types shouldn't reach codegen, but fallback to int
         return "int";

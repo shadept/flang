@@ -8,6 +8,7 @@ public enum TokenKind
 
     // Literals
     Integer,
+    StringLiteral,
     True,
     False,
 
@@ -59,5 +60,5 @@ public enum TokenKind
     Comma,
 
     // Identifier
-    Identifier,
+    Identifier
 }

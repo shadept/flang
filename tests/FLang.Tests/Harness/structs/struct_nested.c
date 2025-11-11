@@ -1,4 +1,5 @@
 #include <stdio.h>
+struct String {char* ptr; int len;};
 
 struct Inner {
     int value;

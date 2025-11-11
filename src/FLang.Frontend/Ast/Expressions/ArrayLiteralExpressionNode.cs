@@ -1,4 +1,3 @@
-using System.Collections.Generic;
 using FLang.Core;
 
 namespace FLang.Frontend.Ast.Expressions;
@@ -8,11 +7,6 @@ namespace FLang.Frontend.Ast.Expressions;
 /// </summary>
 public class ArrayLiteralExpressionNode : ExpressionNode
 {
-    public IReadOnlyList<ExpressionNode>? Elements { get; }
-    public ExpressionNode? RepeatValue { get; }
-    public int? RepeatCount { get; }
-    public bool IsRepeatSyntax { get; }
-
     /// <summary>
     /// Constructor for regular array literal: [1, 2, 3]
     /// </summary>
@@ -31,4 +25,9 @@ public class ArrayLiteralExpressionNode : ExpressionNode
         RepeatCount = repeatCount;
         IsRepeatSyntax = true;
     }
+
+    public IReadOnlyList<ExpressionNode>? Elements { get; }
+    public ExpressionNode? RepeatValue { get; }
+    public int? RepeatCount { get; }
+    public bool IsRepeatSyntax { get; }
 }

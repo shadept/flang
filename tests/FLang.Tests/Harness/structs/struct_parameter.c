@@ -1,4 +1,5 @@
 #include <stdio.h>
+struct String {char* ptr; int len;};
 
 int getX(int p) {
     int* field_ptr_0 = (int*)((char*)p + 0);

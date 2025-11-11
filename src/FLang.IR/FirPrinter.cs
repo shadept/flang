@@ -1,4 +1,3 @@
-using System.Linq;
 using System.Text;
 using FLang.IR.Instructions;
 
@@ -31,12 +30,14 @@ public static class FirPrinter
             BinaryInstruction binary => PrintBinary(binary),
             StoreInstruction store => $"store {store.VariableName} = {PrintValue(store.Value)}",
             ReturnInstruction ret => $"return {PrintValue(ret.Value)}",
-            BranchInstruction branch => $"branch {PrintValue(branch.Condition)} ? {branch.TrueBlock.Label} : {branch.FalseBlock.Label}",
+            BranchInstruction branch =>
+                $"branch {PrintValue(branch.Condition)} ? {branch.TrueBlock.Label} : {branch.FalseBlock.Label}",
             JumpInstruction jump => $"jump {jump.TargetBlock.Label}",
             CallInstruction call => PrintCall(call),
             AddressOfInstruction addressOf => PrintAddressOf(addressOf),
             LoadInstruction load => PrintLoad(load),
-            StorePointerInstruction storePtr => $"store_ptr {PrintValue(storePtr.Pointer)} = {PrintValue(storePtr.Value)}",
+            StorePointerInstruction storePtr =>
+                $"store_ptr {PrintValue(storePtr.Pointer)} = {PrintValue(storePtr.Value)}",
             AllocaInstruction alloca => PrintAlloca(alloca),
             GetElementPtrInstruction gep => PrintGetElementPtr(gep),
             _ => instruction.GetType().Name

@@ -6,10 +6,10 @@ namespace FLang.IR.Instructions;
 /// </summary>
 public class AddressOfInstruction : Instruction
 {
-    public string VariableName { get; }
-
     public AddressOfInstruction(string variableName)
     {
         VariableName = variableName;
     }
+
+    public string VariableName { get; }
 }

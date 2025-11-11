@@ -1,5 +1,3 @@
-using System.Collections.Generic;
-using System.Linq;
 using FLang.Core;
 using FLang.Frontend.Ast;
 using FLang.Frontend.Ast.Declarations;
@@ -17,25 +15,25 @@ public class TypeSolver
     private readonly Compilation _compilation;
     private readonly List<Diagnostic> _diagnostics = new();
 
-    // Maps AST nodes to their inferred/checked types
-    private readonly Dictionary<AstNode, Type> _typeMap = new();
+    // Maps function names to their signatures
+    private readonly Dictionary<string, FunctionSignature> _functions = new();
 
     // Maps variable names to their types (per scope)
     private readonly Stack<Dictionary<string, Type>> _scopes = new();
 
-    // Maps function names to their signatures
-    private readonly Dictionary<string, FunctionSignature> _functions = new();
-
     // Maps struct names to their types
     private readonly Dictionary<string, StructType> _structs = new();
 
-    public IReadOnlyList<Diagnostic> Diagnostics => _diagnostics;
+    // Maps AST nodes to their inferred/checked types
+    private readonly Dictionary<AstNode, Type> _typeMap = new();
 
     public TypeSolver(Compilation compilation)
     {
         _compilation = compilation;
         PushScope(); // Global scope
     }
+
+    public IReadOnlyList<Diagnostic> Diagnostics => _diagnostics;
 
     /// <summary>
     /// Gets the resolved type for an AST node.
@@ -55,10 +53,8 @@ public class TypeSolver
         {
             var returnType = ResolveTypeNode(function.ReturnType);
             if (returnType == null)
-            {
                 // If no return type specified, default to i32 for now
                 returnType = TypeRegistry.I32;
-            }
 
             // Collect parameter types
             var parameterTypes = new List<Type>();
@@ -70,11 +66,12 @@ public class TypeSolver
                     _diagnostics.Add(Diagnostic.Error(
                         $"cannot find type `{(param.Type as NamedTypeNode)?.Name ?? "unknown"}` in this scope",
                         param.Type.Span,
-                        hint: "not found in this scope",
-                        code: "E2003"
+                        "not found in this scope",
+                        "E2003"
                     ));
                     paramType = TypeRegistry.I32; // Fallback
                 }
+
                 parameterTypes.Add(paramType);
             }
 
@@ -99,11 +96,12 @@ public class TypeSolver
                     _diagnostics.Add(Diagnostic.Error(
                         $"cannot find type `{(field.Type as NamedTypeNode)?.Name ?? "unknown"}` in this scope",
                         field.Type.Span,
-                        hint: "not found in this scope",
-                        code: "E2003"
+                        "not found in this scope",
+                        "E2003"
                     ));
                     fieldType = TypeRegistry.I32; // Fallback
                 }
+
                 fields.Add((field.Name, fieldType));
             }
 
@@ -118,13 +116,9 @@ public class TypeSolver
     public void CheckModuleBodies(ModuleNode module)
     {
         foreach (var function in module.Functions)
-        {
             // Skip foreign functions - they have no body
             if (!function.IsForeign)
-            {
                 CheckFunction(function);
-            }
-        }
     }
 
     private void CheckFunction(FunctionDeclarationNode function)
@@ -135,19 +129,13 @@ public class TypeSolver
         foreach (var param in function.Parameters)
         {
             var paramType = ResolveTypeNode(param.Type);
-            if (paramType != null)
-            {
-                DeclareVariable(param.Name, paramType, param.Span);
-            }
+            if (paramType != null) DeclareVariable(param.Name, paramType, param.Span);
         }
 
         var expectedReturnType = ResolveTypeNode(function.ReturnType) ?? TypeRegistry.I32;
 
         // Check function body
-        foreach (var statement in function.Body)
-        {
-            CheckStatement(statement, expectedReturnType);
-        }
+        foreach (var statement in function.Body) CheckStatement(statement, expectedReturnType);
 
         PopScope();
     }
@@ -159,17 +147,14 @@ public class TypeSolver
             case ReturnStatementNode returnStmt:
                 var exprType = CheckExpression(returnStmt.Expression);
                 if (expectedReturnType != null)
-                {
                     if (!IsCompatible(exprType, expectedReturnType))
-                    {
                         _diagnostics.Add(Diagnostic.Error(
-                            $"mismatched types",
+                            "mismatched types",
                             returnStmt.Span,
-                            hint: $"expected `{expectedReturnType}`, found `{exprType}`",
-                            code: "E2002"
+                            $"expected `{expectedReturnType}`, found `{exprType}`",
+                            "E2002"
                         ));
-                    }
-                }
+
                 break;
 
             case VariableDeclarationNode varDecl:
@@ -180,14 +165,12 @@ public class TypeSolver
                 {
                     // User provided explicit type - check compatibility
                     if (!IsCompatible(initType, declaredType))
-                    {
                         _diagnostics.Add(Diagnostic.Error(
-                            $"mismatched types",
+                            "mismatched types",
                             varDecl.Initializer.Span,
-                            hint: $"expected `{declaredType}`, found `{initType}`",
-                            code: "E2002"
+                            $"expected `{declaredType}`, found `{initType}`",
+                            "E2002"
                         ));
-                    }
 
                     // Store the declared type for the variable
                     DeclareVariable(varDecl.Name, declaredType, varDecl.Span);
@@ -199,10 +182,10 @@ public class TypeSolver
                     if (TypeRegistry.IsComptimeType(initType))
                     {
                         _diagnostics.Add(Diagnostic.Error(
-                            $"cannot infer type",
+                            "cannot infer type",
                             varDecl.Span,
-                            hint: $"type annotations needed: variable has comptime type `{initType}`",
-                            code: "E2001"
+                            $"type annotations needed: variable has comptime type `{initType}`",
+                            "E2001"
                         ));
                         // Use i32 as fallback to continue checking
                         DeclareVariable(varDecl.Name, TypeRegistry.I32, varDecl.Span);
@@ -212,6 +195,7 @@ public class TypeSolver
                         DeclareVariable(varDecl.Name, initType, varDecl.Span);
                     }
                 }
+
                 break;
 
             case ExpressionStatementNode exprStmt:
@@ -228,14 +212,12 @@ public class TypeSolver
                     var endType = CheckExpression(rangeExpr.End);
 
                     if (!TypeRegistry.IsIntegerType(startType) || !TypeRegistry.IsIntegerType(endType))
-                    {
                         _diagnostics.Add(Diagnostic.Error(
-                            $"range bounds must be integers",
+                            "range bounds must be integers",
                             forLoop.IterableExpression.Span,
-                            hint: $"found `{startType}..{endType}`",
-                            code: "E2002"
+                            $"found `{startType}..{endType}`",
+                            "E2002"
                         ));
-                    }
 
                     // The loop variable is i32 for now
                     DeclareVariable(forLoop.IteratorVariable, TypeRegistry.I32, forLoop.Span);
@@ -259,7 +241,7 @@ public class TypeSolver
                 break;
 
             default:
-                throw new System.Exception($"Unknown statement type: {statement.GetType().Name}");
+                throw new Exception($"Unknown statement type: {statement.GetType().Name}");
         }
     }
 
@@ -278,6 +260,25 @@ public class TypeSolver
                 type = TypeRegistry.Bool;
                 break;
 
+            case StringLiteralNode:
+                // String literals have type String
+                if (_structs.TryGetValue("String", out var stringType))
+                {
+                    type = stringType;
+                }
+                else
+                {
+                    _diagnostics.Add(Diagnostic.Error(
+                        "String type not found",
+                        expression.Span,
+                        "make sure to import core/string",
+                        "E2013"
+                    ));
+                    type = TypeRegistry.I32; // Fallback
+                }
+
+                break;
+
             case IdentifierExpressionNode identifier:
                 type = LookupVariable(identifier.Name, identifier.Span);
                 break;
@@ -287,18 +288,17 @@ public class TypeSolver
                 var rightType = CheckExpression(binary.Right);
 
                 // Check operator compatibility
-                if (binary.Operator >= BinaryOperatorKind.Equal && binary.Operator <= BinaryOperatorKind.GreaterThanOrEqual)
+                if (binary.Operator >= BinaryOperatorKind.Equal &&
+                    binary.Operator <= BinaryOperatorKind.GreaterThanOrEqual)
                 {
                     // Comparison operators: return bool
                     if (!IsCompatible(leftType, rightType))
-                    {
                         _diagnostics.Add(Diagnostic.Error(
-                            $"mismatched types in comparison",
+                            "mismatched types in comparison",
                             binary.Span,
-                            hint: $"cannot compare `{leftType}` with `{rightType}`",
-                            code: "E2002"
+                            $"cannot compare `{leftType}` with `{rightType}`",
+                            "E2002"
                         ));
-                    }
                     type = TypeRegistry.Bool;
                 }
                 else
@@ -307,10 +307,10 @@ public class TypeSolver
                     if (!IsCompatible(leftType, rightType))
                     {
                         _diagnostics.Add(Diagnostic.Error(
-                            $"mismatched types",
+                            "mismatched types",
                             binary.Span,
-                            hint: $"cannot apply operator to `{leftType}` and `{rightType}`",
-                            code: "E2002"
+                            $"cannot apply operator to `{leftType}` and `{rightType}`",
+                            "E2002"
                         ));
                         type = leftType; // Use left type as fallback
                     }
@@ -320,6 +320,7 @@ public class TypeSolver
                         type = UnifyTypes(leftType, rightType);
                     }
                 }
+
                 break;
 
             case AssignmentExpressionNode assignment:
@@ -327,14 +328,12 @@ public class TypeSolver
                 var valueType = CheckExpression(assignment.Value);
 
                 if (!IsCompatible(valueType, varType))
-                {
                     _diagnostics.Add(Diagnostic.Error(
-                        $"mismatched types",
+                        "mismatched types",
                         assignment.Value.Span,
-                        hint: $"expected `{varType}`, found `{valueType}`",
-                        code: "E2002"
+                        $"expected `{varType}`, found `{valueType}`",
+                        "E2002"
                     ));
-                }
 
                 type = varType;
                 break;
@@ -344,33 +343,27 @@ public class TypeSolver
                 {
                     // Check argument count
                     if (call.Arguments.Count != signature.ParameterTypes.Count)
-                    {
                         _diagnostics.Add(Diagnostic.Error(
                             $"function `{call.FunctionName}` expects {signature.ParameterTypes.Count} argument(s) but {call.Arguments.Count} were provided",
                             call.Span,
-                            hint: $"expected {signature.ParameterTypes.Count} argument(s)",
-                            code: "E2011"
+                            $"expected {signature.ParameterTypes.Count} argument(s)",
+                            "E2011"
                         ));
-                    }
                     else
-                    {
                         // Check argument types
-                        for (int i = 0; i < call.Arguments.Count; i++)
+                        for (var i = 0; i < call.Arguments.Count; i++)
                         {
                             var argType = CheckExpression(call.Arguments[i]);
                             var expectedType = signature.ParameterTypes[i];
 
                             if (!IsCompatible(argType, expectedType))
-                            {
                                 _diagnostics.Add(Diagnostic.Error(
-                                    $"mismatched types",
+                                    "mismatched types",
                                     call.Arguments[i].Span,
-                                    hint: $"expected `{expectedType}`, found `{argType}`",
-                                    code: "E2002"
+                                    $"expected `{expectedType}`, found `{argType}`",
+                                    "E2002"
                                 ));
-                            }
                         }
-                    }
 
                     type = signature.ReturnType;
                 }
@@ -379,37 +372,34 @@ public class TypeSolver
                     _diagnostics.Add(Diagnostic.Error(
                         $"cannot find function `{call.FunctionName}` in this scope",
                         call.Span,
-                        hint: "not found in this scope",
-                        code: "E2004"
+                        "not found in this scope",
+                        "E2004"
                     ));
                     type = TypeRegistry.I32; // Fallback
                 }
+
                 break;
 
             case IfExpressionNode ifExpr:
                 var ifCondType = CheckExpression(ifExpr.Condition);
                 if (!ifCondType.Equals(TypeRegistry.Bool))
-                {
                     _diagnostics.Add(Diagnostic.Error(
-                        $"mismatched types",
+                        "mismatched types",
                         ifExpr.Condition.Span,
-                        hint: $"expected `bool`, found `{ifCondType}`",
-                        code: "E2002"
+                        $"expected `bool`, found `{ifCondType}`",
+                        "E2002"
                     ));
-                }
 
                 var thenType = CheckExpression(ifExpr.ThenBranch);
                 var elseType = ifExpr.ElseBranch != null ? CheckExpression(ifExpr.ElseBranch) : TypeRegistry.I32;
 
                 if (!IsCompatible(thenType, elseType))
-                {
                     _diagnostics.Add(Diagnostic.Error(
-                        $"if and else branches have incompatible types",
+                        "if and else branches have incompatible types",
                         ifExpr.Span,
-                        hint: $"`if` branch: `{thenType}`, `else` branch: `{elseType}`",
-                        code: "E2002"
+                        $"`if` branch: `{thenType}`, `else` branch: `{elseType}`",
+                        "E2002"
                     ));
-                }
 
                 type = UnifyTypes(thenType, elseType);
                 break;
@@ -419,7 +409,6 @@ public class TypeSolver
                 Type? lastType = null;
 
                 foreach (var stmt in block.Statements)
-                {
                     if (stmt is ExpressionStatementNode exprStmt)
                     {
                         lastType = CheckExpression(exprStmt.Expression);
@@ -429,12 +418,8 @@ public class TypeSolver
                         CheckStatement(stmt, null);
                         lastType = null; // Non-expression statements don't contribute to block value
                     }
-                }
 
-                if (block.TrailingExpression != null)
-                {
-                    lastType = CheckExpression(block.TrailingExpression);
-                }
+                if (block.TrailingExpression != null) lastType = CheckExpression(block.TrailingExpression);
 
                 PopScope();
                 type = lastType ?? TypeRegistry.I32; // Blocks without value default to i32(0)
@@ -445,14 +430,12 @@ public class TypeSolver
                 var rangeEndType = CheckExpression(range.End);
 
                 if (!TypeRegistry.IsIntegerType(rangeStartType) || !TypeRegistry.IsIntegerType(rangeEndType))
-                {
                     _diagnostics.Add(Diagnostic.Error(
-                        $"range bounds must be integers",
+                        "range bounds must be integers",
                         range.Span,
-                        hint: $"found `{rangeStartType}..{rangeEndType}`",
-                        code: "E2002"
+                        $"found `{rangeStartType}..{rangeEndType}`",
+                        "E2002"
                     ));
-                }
 
                 // Range expressions don't have a concrete type yet (will be iterator type later)
                 type = TypeRegistry.I32;
@@ -483,13 +466,14 @@ public class TypeSolver
                 else
                 {
                     _diagnostics.Add(Diagnostic.Error(
-                        $"cannot dereference non-reference type",
+                        "cannot dereference non-reference type",
                         deref.Span,
-                        hint: $"expected `&T` or `&T?`, found `{ptrType}`",
-                        code: "E2012"
+                        $"expected `&T` or `&T?`, found `{ptrType}`",
+                        "E2012"
                     ));
                     type = TypeRegistry.I32; // Fallback
                 }
+
                 break;
 
             case FieldAccessExpressionNode fieldAccess:
@@ -504,8 +488,8 @@ public class TypeSolver
                         _diagnostics.Add(Diagnostic.Error(
                             $"no field `{fieldAccess.FieldName}` on type `{structType.Name}`",
                             fieldAccess.Span,
-                            hint: $"struct `{structType.Name}` does not have a field named `{fieldAccess.FieldName}`",
-                            code: "E2013"
+                            $"struct `{structType.Name}` does not have a field named `{fieldAccess.FieldName}`",
+                            "E2013"
                         ));
                         type = TypeRegistry.I32; // Fallback
                     }
@@ -517,13 +501,14 @@ public class TypeSolver
                 else
                 {
                     _diagnostics.Add(Diagnostic.Error(
-                        $"cannot access field on non-struct type",
+                        "cannot access field on non-struct type",
                         fieldAccess.Span,
-                        hint: $"expected struct type, found `{targetObjType}`",
-                        code: "E2013"
+                        $"expected struct type, found `{targetObjType}`",
+                        "E2013"
                     ));
                     type = TypeRegistry.I32; // Fallback
                 }
+
                 break;
 
             case StructConstructionExpressionNode structCtor:
@@ -533,8 +518,8 @@ public class TypeSolver
                     _diagnostics.Add(Diagnostic.Error(
                         $"cannot find type `{(structCtor.TypeName as NamedTypeNode)?.Name ?? "unknown"}`",
                         structCtor.TypeName.Span,
-                        hint: "not found in this scope",
-                        code: "E2003"
+                        "not found in this scope",
+                        "E2003"
                     ));
                     type = TypeRegistry.I32; // Fallback
                 }
@@ -543,8 +528,8 @@ public class TypeSolver
                     _diagnostics.Add(Diagnostic.Error(
                         $"type `{ctorType.Name}` is not a struct",
                         structCtor.TypeName.Span,
-                        hint: "cannot construct non-struct type",
-                        code: "E2014"
+                        "cannot construct non-struct type",
+                        "E2014"
                     ));
                     type = TypeRegistry.I32; // Fallback
                 }
@@ -561,41 +546,36 @@ public class TypeSolver
                             _diagnostics.Add(Diagnostic.Error(
                                 $"struct `{structCtorType.Name}` does not have a field named `{fieldName}`",
                                 fieldValue.Span,
-                                hint: $"unknown field",
-                                code: "E2013"
+                                "unknown field",
+                                "E2013"
                             ));
                         }
                         else
                         {
                             var fieldValueType = CheckExpression(fieldValue);
                             if (!IsCompatible(fieldValueType, fieldType))
-                            {
                                 _diagnostics.Add(Diagnostic.Error(
                                     $"mismatched types for field `{fieldName}`",
                                     fieldValue.Span,
-                                    hint: $"expected `{fieldType}`, found `{fieldValueType}`",
-                                    code: "E2002"
+                                    $"expected `{fieldType}`, found `{fieldValueType}`",
+                                    "E2002"
                                 ));
-                            }
                         }
                     }
 
                     // Check that all required fields are provided
                     foreach (var (fieldName, _) in structCtorType.Fields)
-                    {
                         if (!providedFields.Contains(fieldName))
-                        {
                             _diagnostics.Add(Diagnostic.Error(
                                 $"missing field `{fieldName}` in struct construction",
                                 structCtor.Span,
-                                hint: $"struct `{structCtorType.Name}` requires field `{fieldName}`",
-                                code: "E2015"
+                                $"struct `{structCtorType.Name}` requires field `{fieldName}`",
+                                "E2015"
                             ));
-                        }
-                    }
 
                     type = structCtorType;
                 }
+
                 break;
 
             case ArrayLiteralExpressionNode arrayLiteral:
@@ -611,8 +591,8 @@ public class TypeSolver
                     _diagnostics.Add(Diagnostic.Error(
                         "cannot infer type of empty array literal",
                         arrayLiteral.Span,
-                        hint: "consider adding type annotation",
-                        code: "E2016"
+                        "consider adding type annotation",
+                        "E2016"
                     ));
                     type = new ArrayType(TypeRegistry.I32, 0); // Fallback
                 }
@@ -623,26 +603,23 @@ public class TypeSolver
                     var firstElemType = CheckExpression(arrayLiteral.Elements[0]);
                     var unifiedType = firstElemType;
 
-                    for (int i = 1; i < arrayLiteral.Elements.Count; i++)
+                    for (var i = 1; i < arrayLiteral.Elements.Count; i++)
                     {
                         var elemType = CheckExpression(arrayLiteral.Elements[i]);
                         if (!IsCompatible(elemType, unifiedType))
-                        {
                             _diagnostics.Add(Diagnostic.Error(
                                 "array elements have incompatible types",
                                 arrayLiteral.Elements[i].Span,
-                                hint: $"expected `{unifiedType}`, found `{elemType}`",
-                                code: "E2002"
+                                $"expected `{unifiedType}`, found `{elemType}`",
+                                "E2002"
                             ));
-                        }
                         else
-                        {
                             unifiedType = UnifyTypes(unifiedType, elemType);
-                        }
                     }
 
                     type = new ArrayType(unifiedType, arrayLiteral.Elements.Count);
                 }
+
                 break;
 
             case IndexExpressionNode indexExpr:
@@ -651,14 +628,12 @@ public class TypeSolver
 
                 // Check that index is an integer type
                 if (!TypeRegistry.IsIntegerType(indexType))
-                {
                     _diagnostics.Add(Diagnostic.Error(
                         "array index must be an integer",
                         indexExpr.Index.Span,
-                        hint: $"found `{indexType}`",
-                        code: "E2017"
+                        $"found `{indexType}`",
+                        "E2017"
                     ));
-                }
 
                 // Check that base is an array or slice
                 if (baseType is ArrayType arrayType)
@@ -674,15 +649,16 @@ public class TypeSolver
                     _diagnostics.Add(Diagnostic.Error(
                         $"cannot index into value of type `{baseType}`",
                         indexExpr.Base.Span,
-                        hint: "only arrays and slices can be indexed",
-                        code: "E2018"
+                        "only arrays and slices can be indexed",
+                        "E2018"
                     ));
                     type = TypeRegistry.I32; // Fallback
                 }
+
                 break;
 
             default:
-                throw new System.Exception($"Unknown expression type: {expression.GetType().Name}");
+                throw new Exception($"Unknown expression type: {expression.GetType().Name}");
         }
 
         _typeMap[expression] = type;
@@ -700,23 +676,17 @@ public class TypeSolver
             {
                 // First check built-in types
                 var type = TypeRegistry.GetTypeByName(namedType.Name);
-                if (type != null)
-                {
-                    return type;
-                }
+                if (type != null) return type;
 
                 // Then check struct types
-                if (_structs.TryGetValue(namedType.Name, out var structType))
-                {
-                    return structType;
-                }
+                if (_structs.TryGetValue(namedType.Name, out var structType)) return structType;
 
                 // Type not found
                 _diagnostics.Add(Diagnostic.Error(
                     $"cannot find type `{namedType.Name}` in this scope",
                     namedType.Span,
-                    hint: "not found in this scope",
-                    code: "E2003"
+                    "not found in this scope",
+                    "E2003"
                 ));
                 return null;
             }
@@ -724,20 +694,14 @@ public class TypeSolver
             case ReferenceTypeNode referenceType:
             {
                 var innerType = ResolveTypeNode(referenceType.InnerType);
-                if (innerType == null)
-                {
-                    return null; // Error already reported
-                }
+                if (innerType == null) return null; // Error already reported
                 return new ReferenceType(innerType);
             }
 
             case NullableTypeNode nullableType:
             {
                 var innerType = ResolveTypeNode(nullableType.InnerType);
-                if (innerType == null)
-                {
-                    return null; // Error already reported
-                }
+                if (innerType == null) return null; // Error already reported
                 return new OptionType(innerType);
             }
 
@@ -748,10 +712,7 @@ public class TypeSolver
                 foreach (var argNode in genericType.TypeArguments)
                 {
                     var argType = ResolveTypeNode(argNode);
-                    if (argType == null)
-                    {
-                        return null; // Error already reported
-                    }
+                    if (argType == null) return null; // Error already reported
                     typeArgs.Add(argType);
                 }
 
@@ -761,20 +722,14 @@ public class TypeSolver
             case ArrayTypeNode arrayType:
             {
                 var elementType = ResolveTypeNode(arrayType.ElementType);
-                if (elementType == null)
-                {
-                    return null; // Error already reported
-                }
+                if (elementType == null) return null; // Error already reported
                 return new ArrayType(elementType, arrayType.Length);
             }
 
             case SliceTypeNode sliceType:
             {
                 var elementType = ResolveTypeNode(sliceType.ElementType);
-                if (elementType == null)
-                {
-                    return null; // Error already reported
-                }
+                if (elementType == null) return null; // Error already reported
                 return new SliceType(elementType);
             }
 
@@ -803,17 +758,17 @@ public class TypeSolver
         if (source is ComptimeFloatType || target is ComptimeFloatType)
             return true; // For now, always allow
 
+        // Implicit integer-to-integer conversion
+        if (TypeRegistry.IsIntegerType(source) && TypeRegistry.IsIntegerType(target))
+            return true;
+
         // Array→slice coercion: [T; N] can be used where T[] is expected
         if (source is ArrayType arrayType && target is SliceType sliceType)
-        {
             return IsCompatible(arrayType.ElementType, sliceType.ElementType);
-        }
 
         // Array type compatibility: check element types and lengths
         if (source is ArrayType srcArray && target is ArrayType tgtArray)
-        {
             return srcArray.Length == tgtArray.Length && IsCompatible(srcArray.ElementType, tgtArray.ElementType);
-        }
 
         return false;
     }
@@ -847,35 +802,27 @@ public class TypeSolver
     {
         var currentScope = _scopes.Peek();
         if (currentScope.ContainsKey(name))
-        {
             _diagnostics.Add(Diagnostic.Error(
                 $"variable `{name}` is already declared",
                 span,
-                hint: "variable redeclaration",
-                code: "E2005"
+                "variable redeclaration",
+                "E2005"
             ));
-        }
         else
-        {
             currentScope[name] = type;
-        }
     }
 
     private Type LookupVariable(string name, SourceSpan span)
     {
         foreach (var scope in _scopes)
-        {
             if (scope.TryGetValue(name, out var type))
-            {
                 return type;
-            }
-        }
 
         _diagnostics.Add(Diagnostic.Error(
             $"cannot find value `{name}` in this scope",
             span,
-            hint: "not found in this scope",
-            code: "E2004"
+            "not found in this scope",
+            "E2004"
         ));
 
         return TypeRegistry.I32; // Fallback to prevent cascading errors
@@ -884,14 +831,14 @@ public class TypeSolver
 
 public class FunctionSignature
 {
-    public string Name { get; }
-    public IReadOnlyList<Type> ParameterTypes { get; }
-    public Type ReturnType { get; }
-
     public FunctionSignature(string name, IReadOnlyList<Type> parameterTypes, Type returnType)
     {
         Name = name;
         ParameterTypes = parameterTypes;
         ReturnType = returnType;
     }
+
+    public string Name { get; }
+    public IReadOnlyList<Type> ParameterTypes { get; }
+    public Type ReturnType { get; }
 }

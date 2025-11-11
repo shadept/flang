@@ -1,4 +1,3 @@
-using System;
 using FLang.Core;
 
 namespace FLang.CLI;
@@ -27,8 +26,8 @@ public static class DiagnosticDemo
         var diagnostic1 = Diagnostic.Error(
             "mismatched types",
             errorSpan1,
-            hint: "expected `i32`, found `String`",
-            code: "E2002"
+            "expected `i32`, found `String`",
+            "E2002"
         );
 
         DiagnosticPrinter.PrintToConsole(diagnostic1, compilation1);
@@ -47,8 +46,8 @@ public static class DiagnosticDemo
         var diagnostic2 = Diagnostic.Error(
             "cannot find value `y` in this scope",
             errorSpan2,
-            hint: "not found in this scope",
-            code: "E2004"
+            "not found in this scope",
+            "E2004"
         );
 
         DiagnosticPrinter.PrintToConsole(diagnostic2, compilation2);
@@ -67,8 +66,8 @@ public static class DiagnosticDemo
         var diagnostic3 = Diagnostic.Warning(
             "unused variable: `unused`",
             warnSpan,
-            hint: "prefix with `_` to ignore",
-            code: "W0001"
+            "prefix with `_` to ignore",
+            "W0001"
         );
 
         DiagnosticPrinter.PrintToConsole(diagnostic3, compilation3);
@@ -90,8 +89,8 @@ pub fn main() i32 {
         var diagnostic4 = Diagnostic.Error(
             "mismatched types",
             errorSpan4,
-            hint: "expected `i32`, found `String`",
-            code: "E2002"
+            "expected `i32`, found `String`",
+            "E2002"
         );
 
         DiagnosticPrinter.PrintToConsole(diagnostic4, compilation4);

@@ -1,4 +1,3 @@
-using System.Collections.Generic;
 using FLang.Core;
 
 namespace FLang.Frontend.Ast.Types;
@@ -15,12 +14,12 @@ public abstract class TypeNode : AstNode
 /// </summary>
 public class NamedTypeNode : TypeNode
 {
-    public string Name { get; }
-
     public NamedTypeNode(SourceSpan span, string name) : base(span)
     {
         Name = name;
     }
+
+    public string Name { get; }
 }
 
 /// <summary>
@@ -28,12 +27,12 @@ public class NamedTypeNode : TypeNode
 /// </summary>
 public class ReferenceTypeNode : TypeNode
 {
-    public TypeNode InnerType { get; }
-
     public ReferenceTypeNode(SourceSpan span, TypeNode innerType) : base(span)
     {
         InnerType = innerType;
     }
+
+    public TypeNode InnerType { get; }
 }
 
 /// <summary>
@@ -41,12 +40,12 @@ public class ReferenceTypeNode : TypeNode
 /// </summary>
 public class NullableTypeNode : TypeNode
 {
-    public TypeNode InnerType { get; }
-
     public NullableTypeNode(SourceSpan span, TypeNode innerType) : base(span)
     {
         InnerType = innerType;
     }
+
+    public TypeNode InnerType { get; }
 }
 
 /// <summary>
@@ -54,14 +53,14 @@ public class NullableTypeNode : TypeNode
 /// </summary>
 public class GenericTypeNode : TypeNode
 {
-    public string Name { get; }
-    public IReadOnlyList<TypeNode> TypeArguments { get; }
-
     public GenericTypeNode(SourceSpan span, string name, IReadOnlyList<TypeNode> typeArguments) : base(span)
     {
         Name = name;
         TypeArguments = typeArguments;
     }
+
+    public string Name { get; }
+    public IReadOnlyList<TypeNode> TypeArguments { get; }
 }
 
 /// <summary>
@@ -69,14 +68,14 @@ public class GenericTypeNode : TypeNode
 /// </summary>
 public class ArrayTypeNode : TypeNode
 {
-    public TypeNode ElementType { get; }
-    public int Length { get; }
-
     public ArrayTypeNode(SourceSpan span, TypeNode elementType, int length) : base(span)
     {
         ElementType = elementType;
         Length = length;
     }
+
+    public TypeNode ElementType { get; }
+    public int Length { get; }
 }
 
 /// <summary>
@@ -84,10 +83,10 @@ public class ArrayTypeNode : TypeNode
 /// </summary>
 public class SliceTypeNode : TypeNode
 {
-    public TypeNode ElementType { get; }
-
     public SliceTypeNode(SourceSpan span, TypeNode elementType) : base(span)
     {
         ElementType = elementType;
     }
+
+    public TypeNode ElementType { get; }
 }

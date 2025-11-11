@@ -7,12 +7,6 @@ namespace FLang.IR.Instructions;
 /// </summary>
 public class GetElementPtrInstruction : Instruction
 {
-    public Value BasePointer { get; }
-    /// <summary>
-    /// Byte offset - can be a ConstantValue or a LocalValue for dynamic indexing
-    /// </summary>
-    public Value ByteOffset { get; }
-
     public GetElementPtrInstruction(Value basePointer, Value byteOffset)
     {
         BasePointer = basePointer;
@@ -24,4 +18,11 @@ public class GetElementPtrInstruction : Instruction
         : this(basePointer, new ConstantValue(byteOffset))
     {
     }
+
+    public Value BasePointer { get; }
+
+    /// <summary>
+    /// Byte offset - can be a ConstantValue or a LocalValue for dynamic indexing
+    /// </summary>
+    public Value ByteOffset { get; }
 }

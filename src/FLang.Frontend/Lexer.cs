@@ -1,12 +1,12 @@
-using System;
+using System.Text;
 using FLang.Core;
 
 namespace FLang.Frontend;
 
 public class Lexer
 {
-    private readonly Source _source;
     private readonly int _fileId;
+    private readonly Source _source;
     private int _position;
     private int _start;
 
@@ -28,20 +28,15 @@ public class Lexer
 
         // Skip comments
         if (text[_position] == '/')
-        {
             if (_position + 1 < text.Length && text[_position + 1] == '/')
             {
                 // This is a single-line comment (either // or //!)
                 _position += 2; // Skip the "//"
-                while (_position < text.Length && text[_position] != '\n')
-                {
-                    _position++;
-                }
+                while (_position < text.Length && text[_position] != '\n') _position++;
                 if (_position < text.Length)
                     _position++; // Skip the newline character
                 return NextToken(); // Get the next token after the comment
             }
-        }
 
         var c = text[_position];
 
@@ -51,6 +46,46 @@ public class Lexer
             while (_position < text.Length && char.IsDigit(text[_position]))
                 _position++;
             return CreateToken(TokenKind.Integer);
+        }
+
+        if (c == '"')
+        {
+            _start = _position;
+            _position++; // Skip opening quote
+
+            var stringBuilder = new StringBuilder();
+
+            while (_position < text.Length && text[_position] != '"')
+                if (text[_position] == '\\' && _position + 1 < text.Length)
+                {
+                    // Handle escape sequences
+                    _position++;
+                    var escapeChar = text[_position];
+                    var escaped = escapeChar switch
+                    {
+                        'n' => '\n',
+                        't' => '\t',
+                        'r' => '\r',
+                        '\\' => '\\',
+                        '"' => '"',
+                        '0' => '\0',
+                        _ => escapeChar // Unknown escape, keep as-is
+                    };
+                    stringBuilder.Append(escaped);
+                    _position++;
+                }
+                else
+                {
+                    stringBuilder.Append(text[_position]);
+                    _position++;
+                }
+
+            if (_position >= text.Length)
+                // Unterminated string literal
+                return CreateTokenWithValue(TokenKind.BadToken, "");
+
+            _position++; // Skip closing quote
+            return CreateTokenWithValue(TokenKind.StringLiteral, stringBuilder.ToString());
         }
 
         if (char.IsLetter(c))
@@ -78,7 +113,7 @@ public class Lexer
                 "foreign" => TokenKind.Foreign,
                 "true" => TokenKind.True,
                 "false" => TokenKind.False,
-                _ => TokenKind.Identifier,
+                _ => TokenKind.Identifier
             };
 
             return CreateToken(kind);
@@ -170,5 +205,10 @@ public class Lexer
             ? _source.Text.AsSpan().Slice(_start, _position - _start).ToString()
             : "";
         return new Token(kind, CreateSpan(), text);
+    }
+
+    private Token CreateTokenWithValue(TokenKind kind, string value)
+    {
+        return new Token(kind, CreateSpan(), value);
     }
 }

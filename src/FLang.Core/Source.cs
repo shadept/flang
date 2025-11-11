@@ -4,10 +4,6 @@ namespace FLang.Core;
 
 public sealed class Source
 {
-    public string Text { get; }
-    public string FileName { get; }
-    public ImmutableArray<int> LineEndings { get; }
-
     public Source(string text, string fileName)
     {
         Text = text;
@@ -15,16 +11,17 @@ public sealed class Source
         LineEndings = CalculateLineEndings(text);
     }
 
+    public string Text { get; }
+    public string FileName { get; }
+    public ImmutableArray<int> LineEndings { get; }
+
     private static ImmutableArray<int> CalculateLineEndings(string text)
     {
         var lineEndings = new List<int>();
-        for (int i = 0; i < text.Length; i++)
-        {
+        for (var i = 0; i < text.Length; i++)
             if (text[i] == '\n')
-            {
                 lineEndings.Add(i);
-            }
-        }
+
         return [.. lineEndings];
     }
 

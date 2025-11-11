@@ -6,10 +6,10 @@ namespace FLang.IR.Instructions;
 /// </summary>
 public class LoadInstruction : Instruction
 {
-    public Value Pointer { get; }
-
     public LoadInstruction(Value pointer)
     {
         Pointer = pointer;
     }
+
+    public Value Pointer { get; }
 }

@@ -7,13 +7,24 @@ public abstract class Value
 
 public class ConstantValue : Value
 {
-    public long IntValue { get; }
-
     public ConstantValue(long intValue)
     {
         IntValue = intValue;
         Name = intValue.ToString();
     }
+
+    public long IntValue { get; }
+}
+
+public class StringConstantValue : Value
+{
+    public StringConstantValue(string stringValue, string name)
+    {
+        StringValue = stringValue;
+        Name = name;
+    }
+
+    public string StringValue { get; }
 }
 
 public class LocalValue : Value

@@ -1,4 +1,3 @@
-using System.Collections.Generic;
 using FLang.Core;
 using FLang.Frontend.Ast;
 using FLang.Frontend.Ast.Declarations;
@@ -27,14 +26,10 @@ public class Parser
         var functions = new List<FunctionDeclarationNode>();
 
         // Parse imports
-        while (_currentToken.Kind == TokenKind.Import)
-        {
-            imports.Add(ParseImport());
-        }
+        while (_currentToken.Kind == TokenKind.Import) imports.Add(ParseImport());
 
         // Parse structs and functions
         while (_currentToken.Kind != TokenKind.EndOfFile)
-        {
             if (_currentToken.Kind == TokenKind.Hash)
             {
                 // Foreign function
@@ -53,7 +48,7 @@ public class Parser
                 }
                 else if (nextToken.Kind == TokenKind.Fn)
                 {
-                    functions.Add(ParseFunction(false));
+                    functions.Add(ParseFunction());
                 }
                 else
                 {
@@ -70,7 +65,6 @@ public class Parser
                 // Error: unexpected token
                 throw new Exception($"Unexpected token: {_currentToken.Kind}");
             }
-        }
 
         var endSpan = _currentToken.Span;
         var span = new SourceSpan(startSpan.FileId, startSpan.Index, endSpan.Index + endSpan.Length - startSpan.Index);
@@ -94,7 +88,8 @@ public class Parser
             path.Add(identifier.Text);
         }
 
-        var span = new SourceSpan(importKeyword.Span.FileId, importKeyword.Span.Index, _currentToken.Span.Index - importKeyword.Span.Index);
+        var span = new SourceSpan(importKeyword.Span.FileId, importKeyword.Span.Index,
+            _currentToken.Span.Index - importKeyword.Span.Index);
         return new ImportDeclarationNode(span, path);
     }
 
@@ -115,13 +110,8 @@ public class Parser
                 typeParameters.Add(typeParam.Text);
 
                 if (_currentToken.Kind == TokenKind.Comma)
-                {
                     Eat(TokenKind.Comma);
-                }
-                else if (_currentToken.Kind != TokenKind.CloseBracket)
-                {
-                    break;
-                }
+                else if (_currentToken.Kind != TokenKind.CloseBracket) break;
             }
 
             Eat(TokenKind.CloseBracket);
@@ -137,19 +127,18 @@ public class Parser
             Eat(TokenKind.Colon);
             var fieldType = ParseType();
 
-            var fieldSpan = new SourceSpan(fieldNameToken.Span.FileId, fieldNameToken.Span.Index, fieldType.Span.Index + fieldType.Span.Length - fieldNameToken.Span.Index);
+            var fieldSpan = new SourceSpan(fieldNameToken.Span.FileId, fieldNameToken.Span.Index,
+                fieldType.Span.Index + fieldType.Span.Length - fieldNameToken.Span.Index);
             fields.Add(new StructFieldNode(fieldSpan, fieldNameToken.Text, fieldType));
 
             // Fields can be separated by commas or newlines (optional)
-            if (_currentToken.Kind == TokenKind.Comma)
-            {
-                Eat(TokenKind.Comma);
-            }
+            if (_currentToken.Kind == TokenKind.Comma) Eat(TokenKind.Comma);
         }
 
         var closeBrace = Eat(TokenKind.CloseBrace);
 
-        var span = new SourceSpan(structKeyword.Span.FileId, structKeyword.Span.Index, closeBrace.Span.Index + closeBrace.Span.Length - structKeyword.Span.Index);
+        var span = new SourceSpan(structKeyword.Span.FileId, structKeyword.Span.Index,
+            closeBrace.Span.Index + closeBrace.Span.Length - structKeyword.Span.Index);
         return new StructDeclarationNode(span, nameToken.Text, typeParameters, fields);
     }
 
@@ -168,19 +157,16 @@ public class Parser
             Eat(TokenKind.Colon);
             var paramType = ParseType();
 
-            var paramSpan = new SourceSpan(paramNameToken.Span.FileId, paramNameToken.Span.Index, paramType.Span.Index + paramType.Span.Length - paramNameToken.Span.Index);
+            var paramSpan = new SourceSpan(paramNameToken.Span.FileId, paramNameToken.Span.Index,
+                paramType.Span.Index + paramType.Span.Length - paramNameToken.Span.Index);
             parameters.Add(new FunctionParameterNode(paramSpan, paramNameToken.Text, paramType));
 
             // If there's a comma, consume it and continue parsing parameters
             if (_currentToken.Kind == TokenKind.Comma)
-            {
                 Eat(TokenKind.Comma);
-            }
             else if (_currentToken.Kind != TokenKind.CloseParenthesis)
-            {
                 // Error: expected comma or close parenthesis
                 break;
-            }
         }
 
         Eat(TokenKind.CloseParenthesis);
@@ -188,30 +174,28 @@ public class Parser
         // Parse return type (optional for now, but expected in new syntax)
         TypeNode? returnType = null;
         if (_currentToken.Kind == TokenKind.Identifier || _currentToken.Kind == TokenKind.Ampersand)
-        {
             returnType = ParseType();
-        }
 
         var statements = new List<StatementNode>();
 
         if (isForeign)
         {
             // Foreign functions have no body
-            var span = new SourceSpan(pubKeyword.Span.FileId, pubKeyword.Span.Index, _currentToken.Span.Index - pubKeyword.Span.Index);
-            return new FunctionDeclarationNode(span, identifier.Text, parameters, returnType, statements, isForeign: true);
+            var span = new SourceSpan(pubKeyword.Span.FileId, pubKeyword.Span.Index,
+                _currentToken.Span.Index - pubKeyword.Span.Index);
+            return new FunctionDeclarationNode(span, identifier.Text, parameters, returnType, statements, true);
         }
         else
         {
             Eat(TokenKind.OpenBrace);
 
             while (_currentToken.Kind != TokenKind.CloseBrace && _currentToken.Kind != TokenKind.EndOfFile)
-            {
                 statements.Add(ParseStatement());
-            }
 
             Eat(TokenKind.CloseBrace);
 
-            var span = new SourceSpan(pubKeyword.Span.FileId, pubKeyword.Span.Index, _currentToken.Span.Index + _currentToken.Span.Length - pubKeyword.Span.Index);
+            var span = new SourceSpan(pubKeyword.Span.FileId, pubKeyword.Span.Index,
+                _currentToken.Span.Index + _currentToken.Span.Length - pubKeyword.Span.Index);
             return new FunctionDeclarationNode(span, identifier.Text, parameters, returnType, statements);
         }
     }
@@ -227,7 +211,8 @@ public class Parser
             {
                 var returnKeyword = Eat(TokenKind.Return);
                 var expression = ParseExpression();
-                var span = new SourceSpan(returnKeyword.Span.FileId, returnKeyword.Span.Index, _currentToken.Span.Index - returnKeyword.Span.Index);
+                var span = new SourceSpan(returnKeyword.Span.FileId, returnKeyword.Span.Index,
+                    _currentToken.Span.Index - returnKeyword.Span.Index);
                 return new ReturnStatementNode(span, expression);
             }
 
@@ -270,7 +255,8 @@ public class Parser
             initializer = ParseExpression();
         }
 
-        var span = new SourceSpan(letKeyword.Span.FileId, letKeyword.Span.Index, _currentToken.Span.Index - letKeyword.Span.Index);
+        var span = new SourceSpan(letKeyword.Span.FileId, letKeyword.Span.Index,
+            _currentToken.Span.Index - letKeyword.Span.Index);
         return new VariableDeclarationNode(span, identifier.Text, type, initializer);
     }
 
@@ -293,7 +279,8 @@ public class Parser
             {
                 _currentToken = _lexer.NextToken();
                 var value = ParseExpression(); // Right-associative, so parse full expression
-                var assignSpan = new SourceSpan(left.Span.FileId, left.Span.Index, value.Span.Index + value.Span.Length - left.Span.Index);
+                var assignSpan = new SourceSpan(left.Span.FileId, left.Span.Index,
+                    value.Span.Index + value.Span.Length - left.Span.Index);
                 return new AssignmentExpressionNode(assignSpan, identifier.Name, value);
             }
 
@@ -308,7 +295,8 @@ public class Parser
             {
                 _currentToken = _lexer.NextToken();
                 var rangeEnd = ParseBinaryExpression(precedence);
-                var rangeSpan = new SourceSpan(left.Span.FileId, left.Span.Index, rangeEnd.Span.Index + rangeEnd.Span.Length - left.Span.Index);
+                var rangeSpan = new SourceSpan(left.Span.FileId, left.Span.Index,
+                    rangeEnd.Span.Index + rangeEnd.Span.Length - left.Span.Index);
                 left = new RangeExpressionNode(rangeSpan, left, rangeEnd);
                 continue;
             }
@@ -318,7 +306,8 @@ public class Parser
 
             var right = ParseBinaryExpression(precedence);
 
-            var span = new SourceSpan(left.Span.FileId, left.Span.Index, right.Span.Index + right.Span.Length - left.Span.Index);
+            var span = new SourceSpan(left.Span.FileId, left.Span.Index,
+                right.Span.Index + right.Span.Length - left.Span.Index);
             left = new BinaryExpressionNode(span, left, operatorKind, right);
         }
 
@@ -337,30 +326,33 @@ public class Parser
                 {
                     // Dereference: ptr.*
                     var starToken = Eat(TokenKind.Star);
-                    var span = new SourceSpan(expr.Span.FileId, expr.Span.Index, starToken.Span.Index + starToken.Span.Length - expr.Span.Index);
+                    var span = new SourceSpan(expr.Span.FileId, expr.Span.Index,
+                        starToken.Span.Index + starToken.Span.Length - expr.Span.Index);
                     expr = new DereferenceExpressionNode(span, expr);
                     continue;
                 }
-                else if (_currentToken.Kind == TokenKind.Identifier)
+
+                if (_currentToken.Kind == TokenKind.Identifier)
                 {
                     // Field access: obj.field
                     var fieldToken = Eat(TokenKind.Identifier);
-                    var span = new SourceSpan(expr.Span.FileId, expr.Span.Index, fieldToken.Span.Index + fieldToken.Span.Length - expr.Span.Index);
+                    var span = new SourceSpan(expr.Span.FileId, expr.Span.Index,
+                        fieldToken.Span.Index + fieldToken.Span.Length - expr.Span.Index);
                     expr = new FieldAccessExpressionNode(span, expr, fieldToken.Text);
                     continue;
                 }
-                else
-                {
-                    throw new Exception($"Expected '*' or identifier after '.', got {_currentToken.Kind}");
-                }
+
+                throw new Exception($"Expected '*' or identifier after '.', got {_currentToken.Kind}");
             }
             // Handle index operator: arr[i]
-            else if (_currentToken.Kind == TokenKind.OpenBracket)
+
+            if (_currentToken.Kind == TokenKind.OpenBracket)
             {
                 var openBracket = Eat(TokenKind.OpenBracket);
                 var index = ParseExpression();
                 var closeBracket = Eat(TokenKind.CloseBracket);
-                var span = new SourceSpan(expr.Span.FileId, expr.Span.Index, closeBracket.Span.Index + closeBracket.Span.Length - expr.Span.Index);
+                var span = new SourceSpan(expr.Span.FileId, expr.Span.Index,
+                    closeBracket.Span.Index + closeBracket.Span.Length - expr.Span.Index);
                 expr = new IndexExpressionNode(span, expr, index);
                 continue;
             }
@@ -380,7 +372,8 @@ public class Parser
                 // Address-of operator: &variable
                 var ampToken = Eat(TokenKind.Ampersand);
                 var target = ParsePrimaryExpression(); // Parse the target expression
-                var span = new SourceSpan(ampToken.Span.FileId, ampToken.Span.Index, target.Span.Index + target.Span.Length - ampToken.Span.Index);
+                var span = new SourceSpan(ampToken.Span.FileId, ampToken.Span.Index,
+                    target.Span.Index + target.Span.Length - ampToken.Span.Index);
                 return new AddressOfExpressionNode(span, target);
             }
 
@@ -403,6 +396,12 @@ public class Parser
                 return new BooleanLiteralNode(falseToken.Span, false);
             }
 
+            case TokenKind.StringLiteral:
+            {
+                var stringToken = Eat(TokenKind.StringLiteral);
+                return new StringLiteralNode(stringToken.Span, stringToken.Text);
+            }
+
             case TokenKind.Identifier:
             {
                 var identifierToken = Eat(TokenKind.Identifier);
@@ -422,24 +421,22 @@ public class Parser
                     var arguments = new List<ExpressionNode>();
 
                     // Parse arguments
-                    while (_currentToken.Kind != TokenKind.CloseParenthesis && _currentToken.Kind != TokenKind.EndOfFile)
+                    while (_currentToken.Kind != TokenKind.CloseParenthesis &&
+                           _currentToken.Kind != TokenKind.EndOfFile)
                     {
                         arguments.Add(ParseExpression());
 
                         // If there's a comma, consume it and continue parsing arguments
                         if (_currentToken.Kind == TokenKind.Comma)
-                        {
                             Eat(TokenKind.Comma);
-                        }
                         else if (_currentToken.Kind != TokenKind.CloseParenthesis)
-                        {
                             // Error: expected comma or close parenthesis
                             break;
-                        }
                     }
 
                     var closeParenToken = Eat(TokenKind.CloseParenthesis);
-                    var callSpan = new SourceSpan(identifierToken.Span.FileId, identifierToken.Span.Index, closeParenToken.Span.Index + closeParenToken.Span.Length - identifierToken.Span.Index);
+                    var callSpan = new SourceSpan(identifierToken.Span.FileId, identifierToken.Span.Index,
+                        closeParenToken.Span.Index + closeParenToken.Span.Length - identifierToken.Span.Index);
                     return new CallExpressionNode(callSpan, identifierToken.Text, arguments);
                 }
 
@@ -475,7 +472,8 @@ public class Parser
             TokenKind.Star or TokenKind.Slash or TokenKind.Percent => 5,
             TokenKind.Plus or TokenKind.Minus => 4,
             TokenKind.DotDot => 3,
-            TokenKind.LessThan or TokenKind.GreaterThan or TokenKind.LessThanOrEqual or TokenKind.GreaterThanOrEqual => 2,
+            TokenKind.LessThan or TokenKind.GreaterThan or TokenKind.LessThanOrEqual
+                or TokenKind.GreaterThanOrEqual => 2,
             TokenKind.EqualsEquals or TokenKind.NotEquals => 1,
             _ => 0
         };
@@ -517,7 +515,8 @@ public class Parser
         }
 
         var endPos = elseBranch?.Span ?? thenBranch.Span;
-        var span = new SourceSpan(ifKeyword.Span.FileId, ifKeyword.Span.Index, endPos.Index + endPos.Length - ifKeyword.Span.Index);
+        var span = new SourceSpan(ifKeyword.Span.FileId, ifKeyword.Span.Index,
+            endPos.Index + endPos.Length - ifKeyword.Span.Index);
         return new IfExpressionNode(span, condition, thenBranch, elseBranch);
     }
 
@@ -536,18 +535,15 @@ public class Parser
 
             // Fields can be separated by commas
             if (_currentToken.Kind == TokenKind.Comma)
-            {
                 Eat(TokenKind.Comma);
-            }
             else if (_currentToken.Kind != TokenKind.CloseBrace)
-            {
                 // Allow newlines as separators too
                 break;
-            }
         }
 
         var closeBrace = Eat(TokenKind.CloseBrace);
-        var span = new SourceSpan(typeName.Span.FileId, typeName.Span.Index, closeBrace.Span.Index + closeBrace.Span.Length - typeName.Span.Index);
+        var span = new SourceSpan(typeName.Span.FileId, typeName.Span.Index,
+            closeBrace.Span.Index + closeBrace.Span.Length - typeName.Span.Index);
         return new StructConstructionExpressionNode(span, typeName, fields);
     }
 
@@ -587,14 +583,13 @@ public class Parser
                 // Other expression statements not supported
                 throw new Exception("Expression statements not yet supported (except assignments and if)");
             }
-            else
-            {
-                statements.Add(ParseStatement());
-            }
+
+            statements.Add(ParseStatement());
         }
 
         var closeBrace = Eat(TokenKind.CloseBrace);
-        var span = new SourceSpan(openBrace.Span.FileId, openBrace.Span.Index, closeBrace.Span.Index + closeBrace.Span.Length - openBrace.Span.Index);
+        var span = new SourceSpan(openBrace.Span.FileId, openBrace.Span.Index,
+            closeBrace.Span.Index + closeBrace.Span.Length - openBrace.Span.Index);
         return new BlockExpressionNode(span, statements, trailingExpression);
     }
 
@@ -609,20 +604,21 @@ public class Parser
 
         var body = ParseExpression();
 
-        var span = new SourceSpan(forKeyword.Span.FileId, forKeyword.Span.Index, body.Span.Index + body.Span.Length - forKeyword.Span.Index);
+        var span = new SourceSpan(forKeyword.Span.FileId, forKeyword.Span.Index,
+            body.Span.Index + body.Span.Length - forKeyword.Span.Index);
         return new ForLoopNode(span, iterator.Text, iterable, body);
     }
 
     /// <summary>
     /// Parses a type expression with support for references, generics, and nullable types.
     /// Grammar:
-    ///   type := prefix_type postfix*
-    ///   prefix_type := '&' prefix_type | primary_type
-    ///   primary_type := identifier generic_args?
-    ///   generic_args := '[' type (',' type)* ']'
-    ///   postfix := '?'
+    /// type := prefix_type postfix*
+    /// prefix_type := '&' prefix_type | primary_type
+    /// primary_type := identifier generic_args?
+    /// generic_args := '[' type (',' type)* ']'
+    /// postfix := '?'
     /// Examples:
-    ///   i32, &i32, i32?, &i32?, List[i32], &List[i32]?, Dict[String, i32]
+    /// i32, &i32, i32?, &i32?, List[i32], &List[i32]?, Dict[String, i32]
     /// </summary>
     private TypeNode ParseType()
     {
@@ -645,11 +641,11 @@ public class Parser
 
         // Parse postfix operators (nullable: ?, slice: [])
         while (true)
-        {
             if (_currentToken.Kind == TokenKind.Question)
             {
                 var questionToken = Eat(TokenKind.Question);
-                var span = new SourceSpan(type.Span.FileId, startPos, questionToken.Span.Index + questionToken.Span.Length - startPos);
+                var span = new SourceSpan(type.Span.FileId, startPos,
+                    questionToken.Span.Index + questionToken.Span.Length - startPos);
                 type = new NullableTypeNode(span, type);
             }
             else if (_currentToken.Kind == TokenKind.OpenBracket && PeekNextToken().Kind == TokenKind.CloseBracket)
@@ -657,14 +653,14 @@ public class Parser
                 // T[] - slice type (only if next token is immediately ']')
                 var openBracket = Eat(TokenKind.OpenBracket);
                 var closeBracket = Eat(TokenKind.CloseBracket);
-                var span = new SourceSpan(type.Span.FileId, startPos, closeBracket.Span.Index + closeBracket.Span.Length - startPos);
+                var span = new SourceSpan(type.Span.FileId, startPos,
+                    closeBracket.Span.Index + closeBracket.Span.Length - startPos);
                 type = new SliceTypeNode(span, type);
             }
             else
             {
                 break;
             }
-        }
 
         return type;
     }
@@ -685,11 +681,10 @@ public class Parser
             var closeBracket = Eat(TokenKind.CloseBracket);
 
             if (!int.TryParse(lengthToken.Text, out var length))
-            {
                 throw new Exception($"Invalid array length: {lengthToken.Text}");
-            }
 
-            var span = new SourceSpan(openBracket.Span.FileId, openBracket.Span.Index, closeBracket.Span.Index + closeBracket.Span.Length - openBracket.Span.Index);
+            var span = new SourceSpan(openBracket.Span.FileId, openBracket.Span.Index,
+                closeBracket.Span.Index + closeBracket.Span.Length - openBracket.Span.Index);
             return new ArrayTypeNode(span, elementType, length);
         }
 
@@ -706,17 +701,13 @@ public class Parser
                 typeArgs.Add(ParseType());
 
                 if (_currentToken.Kind == TokenKind.Comma)
-                {
                     Eat(TokenKind.Comma);
-                }
-                else if (_currentToken.Kind != TokenKind.CloseBracket)
-                {
-                    break;
-                }
+                else if (_currentToken.Kind != TokenKind.CloseBracket) break;
             }
 
             var closeBracket = Eat(TokenKind.CloseBracket);
-            var span = new SourceSpan(nameToken.Span.FileId, nameToken.Span.Index, closeBracket.Span.Index + closeBracket.Span.Length - nameToken.Span.Index);
+            var span = new SourceSpan(nameToken.Span.FileId, nameToken.Span.Index,
+                closeBracket.Span.Index + closeBracket.Span.Length - nameToken.Span.Index);
             return new GenericTypeNode(span, nameToken.Text, typeArgs);
         }
 
@@ -737,7 +728,8 @@ public class Parser
         if (_currentToken.Kind == TokenKind.CloseBracket)
         {
             var closeBracket = Eat(TokenKind.CloseBracket);
-            var span = new SourceSpan(openBracket.Span.FileId, openBracket.Span.Index, closeBracket.Span.Index + closeBracket.Span.Length - openBracket.Span.Index);
+            var span = new SourceSpan(openBracket.Span.FileId, openBracket.Span.Index,
+                closeBracket.Span.Index + closeBracket.Span.Length - openBracket.Span.Index);
             return new ArrayLiteralExpressionNode(span, new List<ExpressionNode>());
         }
 
@@ -752,11 +744,10 @@ public class Parser
             var closeBracket = Eat(TokenKind.CloseBracket);
 
             if (!int.TryParse(countToken.Text, out var count))
-            {
                 throw new Exception($"Invalid array repeat count: {countToken.Text}");
-            }
 
-            var span = new SourceSpan(openBracket.Span.FileId, openBracket.Span.Index, closeBracket.Span.Index + closeBracket.Span.Length - openBracket.Span.Index);
+            var span = new SourceSpan(openBracket.Span.FileId, openBracket.Span.Index,
+                closeBracket.Span.Index + closeBracket.Span.Length - openBracket.Span.Index);
             return new ArrayLiteralExpressionNode(span, firstElement, count);
         }
 
@@ -775,7 +766,8 @@ public class Parser
         }
 
         var closeBracketToken = Eat(TokenKind.CloseBracket);
-        var finalSpan = new SourceSpan(openBracket.Span.FileId, openBracket.Span.Index, closeBracketToken.Span.Index + closeBracketToken.Span.Length - openBracket.Span.Index);
+        var finalSpan = new SourceSpan(openBracket.Span.FileId, openBracket.Span.Index,
+            closeBracketToken.Span.Index + closeBracketToken.Span.Length - openBracket.Span.Index);
         return new ArrayLiteralExpressionNode(finalSpan, elements);
     }
 
