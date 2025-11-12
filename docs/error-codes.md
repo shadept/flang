@@ -477,6 +477,214 @@ pub fn main() i32 {
 
 ---
 
+### E2012: Cannot Dereference Non-Reference Type
+
+**Category**: Type Checking / Pointers
+**Severity**: Error
+
+#### Description
+
+An attempt was made to dereference a value that is not a reference type. The dereference operator (`.*`) can only be applied to reference types (`&T` or `&T?`).
+
+#### Example
+
+```flang
+pub fn main() i32 {
+    let x: i32 = 42
+    return x.*  // ERROR: cannot dereference non-reference type, expected `&T` or `&T?`, found `i32`
+}
+```
+
+#### Solution
+
+Only dereference reference types:
+
+```flang
+pub fn main() i32 {
+    let x: i32 = 42
+    let ptr: &i32 = &x
+    return ptr.*  // OK: ptr is a reference type
+}
+```
+
+---
+
+### E2013: Field Access or Type Not Found
+
+**Category**: Type Checking / Structs
+**Severity**: Error
+
+#### Description
+
+This error occurs in two scenarios:
+1. Attempting to access a field that doesn't exist on a struct type
+2. The String type is not found when using string literals
+
+#### Examples
+
+**Non-existent Field:**
+
+```flang
+struct Point {
+    x: i32,
+    y: i32
+}
+
+pub fn main() i32 {
+    let p: Point = Point { x: 10, y: 20 }
+    return p.z  // ERROR: no field `z` on type `Point`
+}
+```
+
+**String Type Not Found:**
+
+```flang
+pub fn main() i32 {
+    let s: String = "hello"  // ERROR: String type not found, make sure to import core/string
+    return 0
+}
+```
+
+#### Solution
+
+**For field access**, use an existing field:
+
+```flang
+struct Point {
+    x: i32,
+    y: i32
+}
+
+pub fn main() i32 {
+    let p: Point = Point { x: 10, y: 20 }
+    return p.x  // OK: field exists
+}
+```
+
+**For string literals**, import the String type:
+
+```flang
+import core.string
+
+pub fn main() i32 {
+    let s: String = "hello"  // OK: String type is imported
+    return s.len
+}
+```
+
+---
+
+### E2014: Intrinsic Requires Exactly One Type Argument
+
+**Category**: Compiler Intrinsics
+**Severity**: Error
+
+#### Description
+
+The `size_of` or `align_of` intrinsic was called with an incorrect number of arguments. These intrinsics require exactly one type argument.
+
+#### Example
+
+```flang
+#foreign fn size_of(t: Type[$T]) usize
+
+pub fn main() i32 {
+    let size: usize = size_of()  // ERROR: `size_of` requires exactly one type argument
+    return size as i32
+}
+```
+
+#### Solution
+
+Pass exactly one type argument:
+
+```flang
+#foreign fn size_of(t: Type[$T]) usize
+
+pub fn main() i32 {
+    let size: usize = size_of(i32)  // OK: one type argument
+    return size as i32
+}
+```
+
+---
+
+### E2015: Intrinsic Argument Must Be Type Name
+
+**Category**: Compiler Intrinsics
+**Severity**: Error
+
+#### Description
+
+The `size_of` or `align_of` intrinsic requires a type name as its argument, not an expression or variable.
+
+#### Example
+
+```flang
+#foreign fn size_of(t: Type[$T]) usize
+
+pub fn main() i32 {
+    let x: i32 = 42
+    let size: usize = size_of(x)  // ERROR: `size_of` argument must be a type name
+    return size as i32
+}
+```
+
+#### Solution
+
+Pass a type name, not a variable or expression:
+
+```flang
+#foreign fn size_of(t: Type[$T]) usize
+
+pub fn main() i32 {
+    let size: usize = size_of(i32)  // OK: i32 is a type name
+    return size as i32
+}
+```
+
+---
+
+### E2016: Unknown Type in Intrinsic
+
+**Category**: Compiler Intrinsics / Name Resolution
+**Severity**: Error
+
+#### Description
+
+The type name passed to `size_of` or `align_of` is not defined or not in scope.
+
+#### Example
+
+```flang
+#foreign fn size_of(t: Type[$T]) usize
+
+pub fn main() i32 {
+    let size: usize = size_of(MyStruct)  // ERROR: unknown type `MyStruct`
+    return size as i32
+}
+```
+
+#### Solution
+
+Define the type before use, or use a built-in type:
+
+```flang
+#foreign fn size_of(t: Type[$T]) usize
+
+struct MyStruct {
+    x: i32,
+    y: i32
+}
+
+pub fn main() i32 {
+    let size: usize = size_of(MyStruct)  // OK: MyStruct is defined
+    return size as i32
+}
+```
+
+---
+
 ## E3XXX: Code Generation Errors
 
 _Currently no errors in this category. Reserved for future codegen errors._
@@ -485,19 +693,24 @@ _Currently no errors in this category. Reserved for future codegen errors._
 
 ## Summary Table
 
-| Code      | Category        | Description                          |
-| --------- | --------------- | ------------------------------------ |
-| **E2001** | Type Inference  | Cannot infer type (needs annotation) |
-| **E2002** | Type Checking   | Mismatched types                     |
-| **E2003** | Name Resolution | Cannot find type in scope            |
-| **E2004** | Name Resolution | Cannot find value in scope           |
-| **E2005** | Name Resolution | Variable already declared            |
-| **E2006** | Control Flow    | Break statement outside loop         |
-| **E2007** | Control Flow    | Continue statement outside loop      |
-| **E2008** | Control Flow    | Range expression outside loop        |
-| **E2009** | Iterators       | For loop only supports ranges        |
-| **E2010** | Name Resolution | Assignment to undeclared variable    |
-| **E2011** | Type Checking   | Function argument count mismatch     |
+| Code      | Category        | Description                               |
+| --------- | --------------- | ----------------------------------------- |
+| **E2001** | Type Inference  | Cannot infer type (needs annotation)      |
+| **E2002** | Type Checking   | Mismatched types                          |
+| **E2003** | Name Resolution | Cannot find type in scope                 |
+| **E2004** | Name Resolution | Cannot find value in scope                |
+| **E2005** | Name Resolution | Variable already declared                 |
+| **E2006** | Control Flow    | Break statement outside loop              |
+| **E2007** | Control Flow    | Continue statement outside loop           |
+| **E2008** | Control Flow    | Range expression outside loop             |
+| **E2009** | Iterators       | For loop only supports ranges             |
+| **E2010** | Name Resolution | Assignment to undeclared variable         |
+| **E2011** | Type Checking   | Function argument count mismatch          |
+| **E2012** | Type Checking   | Cannot dereference non-reference type     |
+| **E2013** | Type Checking   | Field access or type not found (structs)  |
+| **E2014** | Intrinsics      | Intrinsic requires exactly one type argument |
+| **E2015** | Intrinsics      | Intrinsic argument must be type name      |
+| **E2016** | Intrinsics      | Unknown type in intrinsic                 |
 
 ---
 
@@ -515,9 +728,11 @@ As FLang development continues, additional error codes will be added:
 
 ### E2XXX - Semantic Analysis
 
-- E2012: Borrow checking violation
-- E2013: Lifetime error
-- E2014: Trait bound not satisfied
+- E2017: Struct construction errors
+- E2018: Missing fields in struct construction
+- E2019: Array type inference errors
+- E2020: Array indexing errors
+- E2021: Index into non-indexable type
 - And more...
 
 ### E3XXX - Code Generation

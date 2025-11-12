@@ -219,50 +219,82 @@ _Goal: Add the type system and fundamental data structures needed for real progr
 
 ---
 
-### Milestone 9: Strings
+### ✅ Milestone 9: Strings (COMPLETE)
 
 **Scope:** `String` type as struct, string literals, null-termination for C FFI.
 
-**Key Tasks:**
+**Completed:**
 
-- [ ] String literals: `"hello world"`
-- [ ] `String` type as `struct String { ptr: &u8, len: usize }` in stdlib
-- [ ] Null-termination for C FFI (null byte not counted in `len`)
-- [ ] String field access: `str.len`, `str.ptr`
-- [ ] Compiler guarantees: always valid UTF-8, always null-terminated
-- [ ] Binary compatibility with `u8[]` slice
-- [ ] Escape sequences: `\n`, `\t`, `\"`, etc.
-- [ ] For loops over strings (UTF-8 code points or bytes)
+- ✅ String literals: `"hello world"`
+- ✅ `String` type as `struct String { ptr: &u8, len: usize }` in stdlib
+- ✅ Null-termination for C FFI (null byte not counted in `len`)
+- ✅ String field access: `str.len`, `str.ptr`
+- ✅ Compiler guarantees: always null-terminated
+- ✅ Binary compatibility with `u8[]` slice
+- ✅ Escape sequences: `\n`, `\t`, `\r`, `\\`, `\"`, `\0`
+- ✅ `StringConstantValue` in FIR for global string data
+- ✅ C codegen generates `struct String` with null-terminated data arrays
 
-**Tests to Add:**
+**Tests:** 3 new tests passing (string_basic.f, string_escape.f, string_length.f)
 
-- String literals
-- String field access (`.len`, `.ptr`)
-- C FFI with null-terminated strings
-- String iteration
+**Deferred to Later Milestones:**
+
+- [ ] For loops over strings (UTF-8 code points or bytes) - needs M13: Iterator Protocol
+- [ ] UTF-8 validation - assumed valid for now (compiler-generated literals are valid)
 
 ---
 
-### Milestone 10: Memory Management Primitives
+### Milestone 10: Memory Management Primitives (IN PROGRESS)
 
 **Scope:** Core memory operations, allocator interface, manual memory management.
 
-**Key Tasks:**
+**Completed:**
 
-- [ ] Implement `core/mem.f`:
-  - [ ] `#foreign fn memcpy(dst: &u8, src: &u8, len: usize)`
-  - [ ] `#foreign fn memset(ptr: &u8, value: u8, len: usize)`
-  - [ ] `#foreign fn malloc(size: usize) &u8?`
-  - [ ] `#foreign fn free(ptr: &u8?)`
+- ✅ **Compiler intrinsics** (`size_of`, `align_of`):
+  - ✅ Compile-time evaluation (constants, no runtime overhead)
+  - ✅ Support for primitive types and struct types
+  - ✅ Type checking integration
+  - ✅ FIR lowering replaces calls with constant values
+- ✅ **Lexer enhancement**: Underscore support in identifiers (e.g., `size_of`, `align_of`)
+- ✅ Created `stdlib/core/mem.f`:
+  - ✅ `#foreign fn malloc(size: usize) &u8?`
+  - ✅ `#foreign fn free(ptr: &u8?)`
+  - ✅ `#foreign fn memcpy(dst: &u8, src: &u8, len: usize)`
+  - ✅ `#foreign fn memset(ptr: &u8, value: u8, len: usize)`
+  - ✅ `#foreign fn memmove(dst: &u8, src: &u8, len: usize)`
+
+**Pending:**
+
+- [ ] `defer` statement for cleanup:
+  - [ ] Parse `defer` keyword and statement syntax
+  - [ ] FIR lowering: execute deferred statements in LIFO order at scope exit
+  - [ ] C code generation: emit cleanup before returns/scope exits
+- [ ] Foreign function call implementation (C runtime integration)
 - [ ] `Allocator` interface (struct with function pointers)
 - [ ] Basic heap allocator wrapping malloc/free
-- [ ] `size_of` and `align_of` intrinsics
-- [ ] `defer` statement for cleanup
 
-**Tests to Add:**
+**Tests Added:**
 
-- Manual allocation/deallocation
-- Defer execution order
+- ✅ 3 intrinsic tests passing:
+  - `intrinsics/sizeof_basic.f` - Returns 4 for `i32`
+  - `intrinsics/sizeof_struct.f` - Returns 12 for 3-field struct
+  - `intrinsics/alignof_basic.f` - Returns 4 for `i32`
+- 🔧 3 defer tests created (pending implementation):
+  - `defer/defer_basic.f` - Single defer in block scope
+  - `defer/defer_multiple.f` - Multiple defers in LIFO order
+  - `defer/defer_scope.f` - Defer in nested blocks
+- 🔧 3 memory tests created (pending foreign function support):
+  - `memory/malloc_free.f` - Allocate, write, read, free
+  - `memory/memcpy_basic.f` - Copy between buffers
+  - `memory/memset_basic.f` - Fill memory with byte value
+
+**Error Codes Added:**
+
+- E2014: Intrinsic requires exactly one type argument
+- E2015: Intrinsic argument must be type name
+- E2016: Unknown type in intrinsic
+
+**Note:** `Type[$T]` syntax for generic type parameters is recognized in test declarations but full support deferred to M11 (Generics). For now, intrinsics accept type names as identifiers.
 
 ---
 
@@ -465,8 +497,11 @@ _Goal: Rewrite the compiler in FLang._
 ## Current Status
 
 - **Phase:** 2 (Core Type System & Data Structures)
-- **Milestone:** 8 (COMPLETE)
-- **Next Up:** Milestone 9 (Strings)
-- **Tests Passing:** 23/25 (2 pre-existing struct bugs - see `docs/known-issues.md`)
-- **Total Lines of FLang Code:** ~350 (test files + stdlib)
-- **Total Lines of C# Compiler Code:** ~6,000
+- **Milestone:** 10 (IN PROGRESS - Intrinsics complete, defer/foreign pending)
+- **Next Up:** Complete M10, then M11 (Generics Basics)
+- **Tests Passing:** 29/37
+  - 3 intrinsic tests passing (size_of, align_of)
+  - 6 tests pending (3 defer, 3 foreign memory functions)
+  - 2 pre-existing struct bugs (see `docs/known-issues.md`)
+- **Total Lines of FLang Code:** ~420 (test files + stdlib)
+- **Total Lines of C# Compiler Code:** ~6,600

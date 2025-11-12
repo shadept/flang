@@ -45,6 +45,25 @@ public class TypeSolver
     }
 
     /// <summary>
+    /// Resolves a type name to a Type object.
+    /// Checks built-in types first, then struct types.
+    /// Returns null if type not found.
+    /// </summary>
+    public Type? ResolveTypeName(string typeName)
+    {
+        // Check built-in types first
+        var builtInType = TypeRegistry.GetTypeByName(typeName);
+        if (builtInType != null)
+            return builtInType;
+
+        // Check struct types
+        if (_structs.TryGetValue(typeName, out var structType))
+            return structType;
+
+        return null;
+    }
+
+    /// <summary>
     /// Collects function signatures from a module (first pass).
     /// </summary>
     public void CollectFunctionSignatures(ModuleNode module)
@@ -240,6 +259,11 @@ public class TypeSolver
                 // Nothing to check
                 break;
 
+            case DeferStatementNode deferStmt:
+                // Type-check the deferred expression
+                CheckExpression(deferStmt.Expression);
+                break;
+
             default:
                 throw new Exception($"Unknown statement type: {statement.GetType().Name}");
         }
@@ -339,6 +363,15 @@ public class TypeSolver
                 break;
 
             case CallExpressionNode call:
+                // Handle compiler intrinsics (size_of, align_of)
+                if (call.FunctionName == "size_of" || call.FunctionName == "align_of")
+                {
+                    // Intrinsics always return usize
+                    type = TypeRegistry.USize;
+                    // Don't type-check arguments - they'll be validated during FIR lowering
+                    break;
+                }
+
                 if (_functions.TryGetValue(call.FunctionName, out var signature))
                 {
                     // Check argument count

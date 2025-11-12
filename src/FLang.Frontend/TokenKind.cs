@@ -23,6 +23,7 @@ public enum TokenKind
     In,
     Break,
     Continue,
+    Defer,
     Import,
     Struct,
     Foreign,

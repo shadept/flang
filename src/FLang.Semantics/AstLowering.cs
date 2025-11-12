@@ -16,6 +16,7 @@ public class AstLowering
     private readonly List<Diagnostic> _diagnostics = new();
     private readonly Dictionary<string, Value> _locals = new();
     private readonly Stack<LoopContext> _loopStack = new();
+    private readonly Stack<List<ExpressionNode>> _deferStack = new();
     private readonly TypeSolver _typeSolver;
     private int _blockCounter;
     private BasicBlock _currentBlock = null!;
@@ -60,7 +61,16 @@ public class AstLowering
         _currentBlock = CreateBlock("entry");
         function.BasicBlocks.Add(_currentBlock);
 
+        // Push a new defer scope for this function
+        _deferStack.Push(new List<ExpressionNode>());
+
         foreach (var statement in functionNode.Body) LowerStatement(statement);
+
+        // Emit deferred statements at function end (if no explicit return)
+        EmitDeferredStatements();
+
+        // Pop the defer scope
+        _deferStack.Pop();
 
         // Add all created blocks to function
         foreach (var block in _allBlocks)
@@ -129,6 +139,8 @@ public class AstLowering
 
             case ReturnStatementNode returnStmt:
                 var returnValue = LowerExpression(returnStmt.Expression);
+                // Execute deferred statements before returning (in LIFO order)
+                EmitDeferredStatements();
                 _currentBlock.Instructions.Add(new ReturnInstruction(returnValue));
                 break;
 
@@ -160,10 +172,32 @@ public class AstLowering
                 LowerForLoop(forLoop);
                 break;
 
+            case DeferStatementNode deferStmt:
+                // Add the deferred expression to the current scope's defer list
+                if (_deferStack.Count > 0)
+                    _deferStack.Peek().Add(deferStmt.Expression);
+                break;
+
             case ExpressionStatementNode exprStmt:
                 // Just evaluate the expression for its side effects (e.g., assignment)
                 LowerExpression(exprStmt.Expression);
                 break;
+        }
+    }
+
+    /// <summary>
+    /// Emits all deferred statements from the current scope in LIFO order.
+    /// Called before returns and at the end of scopes.
+    /// </summary>
+    private void EmitDeferredStatements()
+    {
+        if (_deferStack.Count == 0) return;
+
+        var deferredExpressions = _deferStack.Peek();
+        // Execute in LIFO order (reverse)
+        for (var i = deferredExpressions.Count - 1; i >= 0; i--)
+        {
+            LowerExpression(deferredExpressions[i]);
         }
     }
 
@@ -258,6 +292,56 @@ public class AstLowering
                 return new ConstantValue(0);
 
             case CallExpressionNode call:
+                // Handle compiler intrinsics (size_of, align_of)
+                if (call.FunctionName == "size_of" || call.FunctionName == "align_of")
+                {
+                    if (call.Arguments.Count != 1)
+                    {
+                        _diagnostics.Add(Diagnostic.Error(
+                            $"`{call.FunctionName}` requires exactly one type argument",
+                            call.Span,
+                            $"usage: {call.FunctionName}(TypeName)",
+                            "E2014"
+                        ));
+                        return new ConstantValue(0);
+                    }
+
+                    // For now, we expect the argument to be an identifier (type name)
+                    // TODO M11: Full Type[$T] support for generic type parameters
+                    if (call.Arguments[0] is not IdentifierExpressionNode typeIdent)
+                    {
+                        _diagnostics.Add(Diagnostic.Error(
+                            $"`{call.FunctionName}` argument must be a type name",
+                            call.Arguments[0].Span,
+                            "pass a type name like `i32` or `Point`",
+                            "E2015"
+                        ));
+                        return new ConstantValue(0);
+                    }
+
+                    // Resolve the type
+                    var type = _typeSolver.ResolveTypeName(typeIdent.Name);
+                    if (type == null)
+                    {
+                        _diagnostics.Add(Diagnostic.Error(
+                            $"unknown type `{typeIdent.Name}`",
+                            typeIdent.Span,
+                            "type must be defined before use",
+                            "E2016"
+                        ));
+                        return new ConstantValue(0);
+                    }
+
+                    // Compute the constant value at compile time
+                    var value = call.FunctionName == "size_of"
+                        ? Type.GetSizeOf(type)
+                        : Type.GetAlignmentOf(type);
+
+                    // Return constant value (no FIR instruction generated)
+                    return new ConstantValue(value);
+                }
+
+                // Regular function call
                 var args = new List<Value>();
                 foreach (var arg in call.Arguments) args.Add(LowerExpression(arg));
                 var callResult = new LocalValue($"call_{_tempCounter++}");
@@ -540,12 +624,25 @@ public class AstLowering
 
     private Value LowerBlockExpression(BlockExpressionNode blockExpr)
     {
+        // Push a new defer scope for this block
+        _deferStack.Push(new List<ExpressionNode>());
+
         foreach (var stmt in blockExpr.Statements) LowerStatement(stmt);
 
-        if (blockExpr.TrailingExpression != null) return LowerExpression(blockExpr.TrailingExpression);
+        Value result;
+        if (blockExpr.TrailingExpression != null)
+            result = LowerExpression(blockExpr.TrailingExpression);
+        else
+            // Block with no trailing expression returns unit/void (use 0 for now)
+            result = new ConstantValue(0);
 
-        // Block with no trailing expression returns unit/void (use 0 for now)
-        return new ConstantValue(0);
+        // Emit deferred statements at block end (in LIFO order)
+        EmitDeferredStatements();
+
+        // Pop the defer scope
+        _deferStack.Pop();
+
+        return result;
     }
 
     private void LowerForLoop(ForLoopNode forLoop)

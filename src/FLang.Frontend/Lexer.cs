@@ -88,10 +88,10 @@ public class Lexer
             return CreateTokenWithValue(TokenKind.StringLiteral, stringBuilder.ToString());
         }
 
-        if (char.IsLetter(c))
+        if (char.IsLetter(c) || c == '_')
         {
             _start = _position;
-            while (_position < text.Length && char.IsLetterOrDigit(text[_position]))
+            while (_position < text.Length && (char.IsLetterOrDigit(text[_position]) || text[_position] == '_'))
                 _position++;
 
             var span = text.Slice(_start, _position - _start);
@@ -108,6 +108,7 @@ public class Lexer
                 "in" => TokenKind.In,
                 "break" => TokenKind.Break,
                 "continue" => TokenKind.Continue,
+                "defer" => TokenKind.Defer,
                 "import" => TokenKind.Import,
                 "struct" => TokenKind.Struct,
                 "foreign" => TokenKind.Foreign,

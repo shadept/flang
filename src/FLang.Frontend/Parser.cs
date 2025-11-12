@@ -228,8 +228,31 @@ public class Parser
                 return new ContinueStatementNode(continueKeyword.Span);
             }
 
+            case TokenKind.Defer:
+            {
+                var deferKeyword = Eat(TokenKind.Defer);
+                var expression = ParseExpression();
+                var span = new SourceSpan(deferKeyword.Span.FileId, deferKeyword.Span.Index,
+                    expression.Span.Index + expression.Span.Length - deferKeyword.Span.Index);
+                return new DeferStatementNode(span, expression);
+            }
+
             case TokenKind.For:
                 return ParseForLoop();
+
+            case TokenKind.OpenBrace:
+            {
+                // Block statement - parse as expression statement
+                var blockExpr = ParseBlockExpression();
+                return new ExpressionStatementNode(blockExpr.Span, blockExpr);
+            }
+
+            case TokenKind.If:
+            {
+                // If statement - parse as expression statement
+                var ifExpr = ParseIfExpression();
+                return new ExpressionStatementNode(ifExpr.Span, ifExpr);
+            }
 
             default:
                 throw new Exception($"Unexpected token in statement: {_currentToken.Kind}");
@@ -560,7 +583,10 @@ public class Parser
                 _currentToken.Kind != TokenKind.Return &&
                 _currentToken.Kind != TokenKind.For &&
                 _currentToken.Kind != TokenKind.Break &&
-                _currentToken.Kind != TokenKind.Continue)
+                _currentToken.Kind != TokenKind.Continue &&
+                _currentToken.Kind != TokenKind.Defer &&
+                _currentToken.Kind != TokenKind.OpenBrace &&
+                _currentToken.Kind != TokenKind.If)
             {
                 // Try to parse as expression
                 var expr = ParseExpression();

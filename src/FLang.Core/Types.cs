@@ -23,6 +23,40 @@ public abstract class Type
     {
         return Name;
     }
+
+    /// <summary>
+    /// Gets the size of a type in bytes.
+    /// Used by size_of intrinsic.
+    /// </summary>
+    public static int GetSizeOf(Type type)
+    {
+        return type switch
+        {
+            PrimitiveType pt => pt.SizeInBytes,
+            ReferenceType => IntPtr.Size, // Pointers are platform-dependent
+            StructType st => st.GetSize(), // Recursive for nested structs
+            ArrayType at => at.GetSize(), // Fixed-size array
+            SliceType st => st.GetSize(), // Slice (fat pointer)
+            _ => 4 // Default fallback (i32 size)
+        };
+    }
+
+    /// <summary>
+    /// Gets the alignment requirement of a type in bytes.
+    /// Used by align_of intrinsic.
+    /// </summary>
+    public static int GetAlignmentOf(Type type)
+    {
+        return type switch
+        {
+            PrimitiveType pt => pt.SizeInBytes, // Primitives align to their size
+            ReferenceType => IntPtr.Size, // Pointers align to pointer size
+            StructType st => st.GetAlignment(), // Struct aligns to largest field
+            ArrayType at => at.GetAlignment(), // Array aligns to element
+            SliceType st => st.GetAlignment(), // Slice aligns to pointer
+            _ => 4 // Default fallback
+        };
+    }
 }
 
 /// <summary>
