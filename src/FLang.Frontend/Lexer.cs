@@ -19,6 +19,32 @@ public class Lexer
     public Token NextToken()
     {
         var text = _source.Text.AsSpan();
+        char ch;
+
+        // Skip all whitespace and single-line comments up-front
+        while (_position < text.Length)
+        {
+            ch = text[_position];
+
+            // Eat whitespace
+            if (char.IsWhiteSpace(ch))
+            {
+                _position++;
+                continue;
+            }
+
+            // Skip single-line comments starting with //
+            if (ch == '/' && _position + 1 < text.Length && text[_position + 1] == '/')
+            {
+                _position += 2; // Skip the "//"
+                while (_position < text.Length && text[_position] != '\n') _position++;
+                if (_position < text.Length)
+                    _position++; // Skip the newline character
+                continue; // Keep scanning for the next meaningful character
+            }
+
+            break; // Non-whitespace, non-comment character found
+        }
 
         if (_position >= text.Length)
         {
@@ -26,21 +52,9 @@ public class Lexer
             return CreateToken(TokenKind.EndOfFile);
         }
 
-        // Skip comments
-        if (text[_position] == '/')
-            if (_position + 1 < text.Length && text[_position + 1] == '/')
-            {
-                // This is a single-line comment (either // or //!)
-                _position += 2; // Skip the "//"
-                while (_position < text.Length && text[_position] != '\n') _position++;
-                if (_position < text.Length)
-                    _position++; // Skip the newline character
-                return NextToken(); // Get the next token after the comment
-            }
+        ch = text[_position];
 
-        var c = text[_position];
-
-        if (char.IsDigit(c))
+        if (char.IsDigit(ch))
         {
             _start = _position;
             while (_position < text.Length && char.IsDigit(text[_position]))
@@ -48,7 +62,7 @@ public class Lexer
             return CreateToken(TokenKind.Integer);
         }
 
-        if (c == '"')
+        if (ch == '"')
         {
             _start = _position;
             _position++; // Skip opening quote
@@ -88,7 +102,7 @@ public class Lexer
             return CreateTokenWithValue(TokenKind.StringLiteral, stringBuilder.ToString());
         }
 
-        if (char.IsLetter(c) || c == '_')
+        if (char.IsLetter(ch) || ch == '_')
         {
             _start = _position;
             while (_position < text.Length && (char.IsLetterOrDigit(text[_position]) || text[_position] == '_'))
@@ -112,6 +126,7 @@ public class Lexer
                 "import" => TokenKind.Import,
                 "struct" => TokenKind.Struct,
                 "foreign" => TokenKind.Foreign,
+                "as" => TokenKind.As,
                 "true" => TokenKind.True,
                 "false" => TokenKind.False,
                 _ => TokenKind.Identifier
@@ -120,11 +135,7 @@ public class Lexer
             return CreateToken(kind);
         }
 
-        if (char.IsWhiteSpace(c))
-        {
-            _position++;
-            return NextToken();
-        }
+        // Whitespace already skipped at the top
 
         // Check for two-character operators
         if (_position + 1 < text.Length)
@@ -132,7 +143,7 @@ public class Lexer
             var next = text[_position + 1];
             _start = _position;
 
-            var twoCharToken = (c, next) switch
+            var twoCharToken = (c: ch, next) switch
             {
                 ('.', '.') => TokenKind.DotDot,
                 ('=', '=') => TokenKind.EqualsEquals,
@@ -152,7 +163,7 @@ public class Lexer
         _start = _position;
         _position++;
 
-        return c switch
+        return ch switch
         {
             '(' => CreateToken(TokenKind.OpenParenthesis),
             ')' => CreateToken(TokenKind.CloseParenthesis),

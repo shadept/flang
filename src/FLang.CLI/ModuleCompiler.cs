@@ -9,11 +9,14 @@ public class ModuleCompiler
     private readonly Compilation _compilation;
     private readonly Dictionary<string, ModuleNode> _parsedModules = new();
     private readonly Queue<string> _workQueue = new();
+    private readonly List<Diagnostic> _diagnostics = new();
 
     public ModuleCompiler(Compilation compilation)
     {
         _compilation = compilation;
     }
+
+    public IReadOnlyList<Diagnostic> Diagnostics => _diagnostics;
 
     public Dictionary<string, ModuleNode> CompileModules(string entryPointPath)
     {
@@ -41,6 +44,10 @@ public class ModuleCompiler
             var parser = new Parser(lexer);
             var moduleNode = parser.ParseModule();
 
+            // Collect parser diagnostics
+            foreach (var d in parser.Diagnostics)
+                _diagnostics.Add(d);
+
             _parsedModules[modulePath] = moduleNode;
 
             // Queue all imports for processing
@@ -49,7 +56,16 @@ public class ModuleCompiler
                 var resolvedPath = _compilation.TryResolveImportPath(import.Path);
 
                 if (resolvedPath == null)
-                    throw new Exception($"Could not resolve import: {string.Join(".", import.Path)}");
+                {
+                    // Report via diagnostics instead of throwing to allow graceful error handling
+                    _diagnostics.Add(Diagnostic.Error(
+                        message: $"Could not resolve import: {string.Join(".", import.Path)}",
+                        span: import.Span,
+                        hint: "Check that the module path is correct and that the file exists under stdlib or the project.",
+                        code: "E0001"));
+                    // Skip enqueueing this unresolved import and continue with others
+                    continue;
+                }
 
                 var normalizedImportPath = Path.GetFullPath(resolvedPath);
 

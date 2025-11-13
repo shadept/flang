@@ -16,9 +16,50 @@ Within each category, error codes are assigned sequentially starting from E1001,
 
 ## E1XXX: Frontend Errors (Lexing & Parsing)
 
-_Currently no errors in this category. Reserved for future parsing errors._
+### E1001: Unexpected Token
+
+Category: Parsing
+Severity: Error
+
+Description:
+An unexpected token was encountered in the current context.
+
+Hint:
+The diagnostic includes the found token and the context when available.
 
 ---
+
+### E1002: Expected Token Mismatch
+
+Category: Parsing
+Severity: Error
+
+Description:
+The parser expected a specific token but found a different one. This commonly occurs with missing delimiters or keywords.
+
+---
+
+### E1004: Invalid Array Length
+
+Category: Parsing / Types
+Severity: Error
+
+Description:
+An array type like `[T; N]` used a non-integer length `N`.
+
+---
+
+### E1005: Invalid Array Repeat Count
+
+Category: Parsing / Literals
+Severity: Error
+
+Description:
+An array repeat literal like `[value; count]` used a non-integer repeat `count`.
+
+---
+
+<!-- E1006 removed: expression statements are now supported generally -->
 
 ## E2XXX: Semantic Analysis Errors
 
@@ -685,7 +726,28 @@ pub fn main() i32 {
 
 ---
 
+### E2020: Invalid Cast
+
+Category: Type Checking / Casts
+Severity: Error
+
+Description:
+An explicit cast `expr as Type` was used where the compiler cannot prove a valid conversion under the language’s casting rules.
+
+Examples:
+
+```flang
+let p: &i32 = &x
+let y: String = p as String  // ERROR: invalid cast `&i32` to `String`
+```
+
+Solution:
+Use a valid cast pair (e.g., integer↔integer, `&T`↔`&U`, `&T`↔`usize`, `String`↔`u8[]`) or change the types/representation to match.
+
+---
+
 ## E3XXX: Code Generation Errors
+
 
 _Currently no errors in this category. Reserved for future codegen errors._
 
@@ -711,6 +773,8 @@ _Currently no errors in this category. Reserved for future codegen errors._
 | **E2014** | Intrinsics      | Intrinsic requires exactly one type argument |
 | **E2015** | Intrinsics      | Intrinsic argument must be type name      |
 | **E2016** | Intrinsics      | Unknown type in intrinsic                 |
+| **E2020** | Type Checking   | Invalid cast                               |
+
 
 ---
 
@@ -731,9 +795,10 @@ As FLang development continues, additional error codes will be added:
 - E2017: Struct construction errors
 - E2018: Missing fields in struct construction
 - E2019: Array type inference errors
-- E2020: Array indexing errors
+- E2020: Invalid cast
 - E2021: Index into non-indexable type
 - And more...
+
 
 ### E3XXX - Code Generation
 

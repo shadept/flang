@@ -29,7 +29,14 @@
 
 ## 3. Key Components
 
+### Diagnostics Across Phases
+
+- All compiler phases (lexer, parser, semantics, lowering) report issues via `FLang.Core.Diagnostic`.
+- Phases should avoid throwing exceptions for user-facing errors; instead, add diagnostics with precise `SourceSpan`s and continue when possible.
+- The CLI aggregates diagnostics from module loading, parsing, type checking, and lowering, then prints them using `DiagnosticPrinter` before exiting.
+
 ### 3.1 `Compilation` (Orchestrator)
+
 
 - Owns the master list of `Source` objects (`List<Source>`) and assigns atomic `FileId`s.
 - Manages the work queue for parsing (handling `import` statements concurrently in the future).

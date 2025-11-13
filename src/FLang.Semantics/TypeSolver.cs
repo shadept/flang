@@ -19,13 +19,13 @@ public class TypeSolver
     private readonly Dictionary<string, FunctionSignature> _functions = new();
 
     // Maps variable names to their types (per scope)
-    private readonly Stack<Dictionary<string, Type>> _scopes = new();
+    private readonly Stack<Dictionary<string, FType>> _scopes = new();
 
     // Maps struct names to their types
     private readonly Dictionary<string, StructType> _structs = new();
 
     // Maps AST nodes to their inferred/checked types
-    private readonly Dictionary<AstNode, Type> _typeMap = new();
+    private readonly Dictionary<AstNode, FType> _typeMap = new();
 
     public TypeSolver(Compilation compilation)
     {
@@ -39,7 +39,7 @@ public class TypeSolver
     /// Gets the resolved type for an AST node.
     /// Returns null if the node hasn't been type-checked yet.
     /// </summary>
-    public Type? GetType(AstNode node)
+    public FType? GetType(AstNode node)
     {
         return _typeMap.GetValueOrDefault(node);
     }
@@ -49,7 +49,7 @@ public class TypeSolver
     /// Checks built-in types first, then struct types.
     /// Returns null if type not found.
     /// </summary>
-    public Type? ResolveTypeName(string typeName)
+    public FType? ResolveTypeName(string typeName)
     {
         // Check built-in types first
         var builtInType = TypeRegistry.GetTypeByName(typeName);
@@ -70,13 +70,17 @@ public class TypeSolver
     {
         foreach (var function in module.Functions)
         {
-            var returnType = ResolveTypeNode(function.ReturnType);
-            if (returnType == null)
-                // If no return type specified, default to i32 for now
-                returnType = TypeRegistry.I32;
+            // Export only public or foreign functions in the global pass
+            var mods = function.Modifiers;
+            var isPublic = (mods & FunctionModifiers.Public) != 0;
+            var isForeign = (mods & FunctionModifiers.Foreign) != 0;
+            if (!(isPublic || isForeign))
+                continue;
+
+            var returnType = ResolveTypeNode(function.ReturnType) ?? TypeRegistry.I32;
 
             // Collect parameter types
-            var parameterTypes = new List<Type>();
+            var parameterTypes = new List<FType>();
             foreach (var param in function.Parameters)
             {
                 var paramType = ResolveTypeNode(param.Type);
@@ -105,7 +109,7 @@ public class TypeSolver
     {
         foreach (var structDecl in module.Structs)
         {
-            var fields = new List<(string, Type)>();
+            var fields = new List<(string, FType)>();
 
             foreach (var field in structDecl.Fields)
             {
@@ -134,10 +138,35 @@ public class TypeSolver
     /// </summary>
     public void CheckModuleBodies(ModuleNode module)
     {
+        // Temporarily register this module's private functions for intra-module lookup
+        var added = new List<string>();
+        foreach (var function in module.Functions)
+        {
+            var mods = function.Modifiers;
+            var isPublic = (mods & FunctionModifiers.Public) != 0;
+            var isForeign = (mods & FunctionModifiers.Foreign) != 0;
+            if (isPublic || isForeign)
+                continue; // already registered in global pass
+
+            var returnType = ResolveTypeNode(function.ReturnType) ?? TypeRegistry.I32;
+            var parameterTypes = new List<FType>();
+            foreach (var param in function.Parameters)
+            {
+                var pt = ResolveTypeNode(param.Type) ?? TypeRegistry.I32;
+                parameterTypes.Add(pt);
+            }
+            _functions[function.Name] = new FunctionSignature(function.Name, parameterTypes, returnType);
+            added.Add(function.Name);
+        }
+
         foreach (var function in module.Functions)
             // Skip foreign functions - they have no body
-            if (!function.IsForeign)
+            if ((function.Modifiers & FunctionModifiers.Foreign) == 0)
                 CheckFunction(function);
+
+        // Remove private registrations to avoid leaking across modules
+        foreach (var name in added)
+            _functions.Remove(name);
     }
 
     private void CheckFunction(FunctionDeclarationNode function)
@@ -159,7 +188,7 @@ public class TypeSolver
         PopScope();
     }
 
-    private void CheckStatement(StatementNode statement, Type? expectedReturnType)
+    private void CheckStatement(StatementNode statement, FType? expectedReturnType)
     {
         switch (statement)
         {
@@ -269,9 +298,9 @@ public class TypeSolver
         }
     }
 
-    private Type CheckExpression(ExpressionNode expression)
+    private FType CheckExpression(ExpressionNode expression)
     {
-        Type type;
+        FType type;
 
         switch (expression)
         {
@@ -439,7 +468,7 @@ public class TypeSolver
 
             case BlockExpressionNode block:
                 PushScope();
-                Type? lastType = null;
+                FType? lastType = null;
 
                 foreach (var stmt in block.Statements)
                     if (stmt is ExpressionStatementNode exprStmt)
@@ -690,6 +719,21 @@ public class TypeSolver
 
                 break;
 
+            case CastExpressionNode cast:
+                var srcType = CheckExpression(cast.Expression);
+                var dstType = ResolveTypeNode(cast.TargetType) ?? TypeRegistry.I32;
+
+                if (!CanExplicitCast(srcType, dstType))
+                    _diagnostics.Add(Diagnostic.Error(
+                        "invalid cast",
+                        cast.Span,
+                        $"cannot cast `{srcType}` to `{dstType}`",
+                        "E2020"
+                    ));
+
+                type = dstType;
+                break;
+
             default:
                 throw new Exception($"Unknown expression type: {expression.GetType().Name}");
         }
@@ -698,7 +742,38 @@ public class TypeSolver
         return type;
     }
 
-    private Type? ResolveTypeNode(TypeNode? typeNode)
+    private bool CanExplicitCast(FType source, FType target)
+    {
+        if (source.Equals(target)) return true;
+
+        // Integer ↔ integer (includes usize/isize)
+        if (TypeRegistry.IsIntegerType(source) && TypeRegistry.IsIntegerType(target))
+            return true;
+
+        // Reference ↔ reference (allow for now; binary-compatibility checks deferred)
+        if (source is ReferenceType && target is ReferenceType)
+            return true;
+
+        // Nullable reference to reference
+        if (source is OptionType opt && opt.InnerType is ReferenceType && target is ReferenceType)
+            return true;
+
+        // Reference ↔ usize/isize
+        if (source is ReferenceType && (target.Equals(TypeRegistry.USize) || target.Equals(TypeRegistry.ISize)))
+            return true;
+        if ((source.Equals(TypeRegistry.USize) || source.Equals(TypeRegistry.ISize)) && target is ReferenceType)
+            return true;
+
+        // String ↔ u8[] (blessed binary-compat)
+        if (source is StructType s && s.Name == "String" && target is SliceType t && t.ElementType.Equals(TypeRegistry.U8))
+            return true;
+        if (target is StructType s2 && s2.Name == "String" && source is SliceType t2 && t2.ElementType.Equals(TypeRegistry.U8))
+            return true;
+
+        return false;
+    }
+
+    private FType? ResolveTypeNode(TypeNode? typeNode)
     {
         if (typeNode == null)
             return null;
@@ -741,7 +816,7 @@ public class TypeSolver
             case GenericTypeNode genericType:
             {
                 // Resolve all type arguments
-                var typeArgs = new List<Type>();
+                var typeArgs = new List<FType>();
                 foreach (var argNode in genericType.TypeArguments)
                 {
                     var argType = ResolveTypeNode(argNode);
@@ -771,7 +846,7 @@ public class TypeSolver
         }
     }
 
-    private bool IsCompatible(Type source, Type target)
+    private bool IsCompatible(FType source, FType target)
     {
         // Same type is always compatible
         if (source.Equals(target))
@@ -806,7 +881,7 @@ public class TypeSolver
         return false;
     }
 
-    private Type UnifyTypes(Type a, Type b)
+    private FType UnifyTypes(FType a, FType b)
     {
         if (a.Equals(b))
             return a;
@@ -823,7 +898,7 @@ public class TypeSolver
 
     private void PushScope()
     {
-        _scopes.Push(new Dictionary<string, Type>());
+        _scopes.Push(new Dictionary<string, FType>());
     }
 
     private void PopScope()
@@ -831,7 +906,7 @@ public class TypeSolver
         _scopes.Pop();
     }
 
-    private void DeclareVariable(string name, Type type, SourceSpan span)
+    private void DeclareVariable(string name, FType type, SourceSpan span)
     {
         var currentScope = _scopes.Peek();
         if (currentScope.ContainsKey(name))
@@ -845,7 +920,7 @@ public class TypeSolver
             currentScope[name] = type;
     }
 
-    private Type LookupVariable(string name, SourceSpan span)
+    private FType LookupVariable(string name, SourceSpan span)
     {
         foreach (var scope in _scopes)
             if (scope.TryGetValue(name, out var type))
@@ -864,7 +939,7 @@ public class TypeSolver
 
 public class FunctionSignature
 {
-    public FunctionSignature(string name, IReadOnlyList<Type> parameterTypes, Type returnType)
+    public FunctionSignature(string name, IReadOnlyList<FType> parameterTypes, FType returnType)
     {
         Name = name;
         ParameterTypes = parameterTypes;
@@ -872,6 +947,6 @@ public class FunctionSignature
     }
 
     public string Name { get; }
-    public IReadOnlyList<Type> ParameterTypes { get; }
-    public Type ReturnType { get; }
+    public IReadOnlyList<FType> ParameterTypes { get; }
+    public FType ReturnType { get; }
 }

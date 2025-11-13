@@ -1,15 +1,17 @@
+using FLang.Core;
+
 namespace FLang.IR;
 
 public class FunctionParameter
 {
-    public FunctionParameter(string name, string type)
+    public FunctionParameter(string name, FType type)
     {
         Name = name;
         Type = type;
     }
 
     public string Name { get; }
-    public string Type { get; } // C type name for now
+    public FType Type { get; } // FLang type
 }
 
 public class Function
@@ -20,7 +22,9 @@ public class Function
     }
 
     public string Name { get; }
+    public FType ReturnType { get; set; } = TypeRegistry.I32; // FLang type
     public List<FunctionParameter> Parameters { get; } = new();
     public List<BasicBlock> BasicBlocks { get; } = new();
     public bool IsForeign { get; set; }
 }
+

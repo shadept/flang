@@ -11,12 +11,15 @@ public class Parser
 {
     private readonly Lexer _lexer;
     private Token _currentToken;
+    private readonly List<Diagnostic> _diagnostics = new();
 
     public Parser(Lexer lexer)
     {
         _lexer = lexer;
         _currentToken = _lexer.NextToken();
     }
+
+    public IReadOnlyList<Diagnostic> Diagnostics => _diagnostics;
 
     public ModuleNode ParseModule()
     {
@@ -30,44 +33,70 @@ public class Parser
 
         // Parse structs and functions
         while (_currentToken.Kind != TokenKind.EndOfFile)
-            if (_currentToken.Kind == TokenKind.Hash)
+        {
+            try
             {
-                // Foreign function
-                Eat(TokenKind.Hash);
-                Eat(TokenKind.Foreign);
-                functions.Add(ParseFunction(true));
-            }
-            else if (_currentToken.Kind == TokenKind.Pub)
-            {
-                // Could be struct or function - peek ahead
-                var nextToken = PeekNextToken();
-                if (nextToken.Kind == TokenKind.Struct)
+                if (_currentToken.Kind == TokenKind.Hash)
                 {
-                    Eat(TokenKind.Pub);
+                    // Directive(s), currently only #foreign
+                    Eat(TokenKind.Hash);
+                    var directive = Eat(TokenKind.Foreign);
+                    functions.Add(ParseFunction(FunctionModifiers.Foreign));
+                }
+                else if (_currentToken.Kind == TokenKind.Pub)
+                {
+                    // Could be struct or function - peek ahead
+                    var nextToken = PeekNextToken();
+                    if (nextToken.Kind == TokenKind.Struct)
+                    {
+                        Eat(TokenKind.Pub);
+                        structs.Add(ParseStruct());
+                    }
+                    else if (nextToken.Kind == TokenKind.Fn)
+                    {
+                        functions.Add(ParseFunction());
+                    }
+                    else
+                    {
+                        _diagnostics.Add(Diagnostic.Error(
+                            $"expected `struct` or `fn` after `pub`",
+                            _currentToken.Span,
+                            $"found '{nextToken.Text}'",
+                            "E1002"));
+                        // Consume `pub` to prevent infinite loop and continue
+                        _currentToken = _lexer.NextToken();
+                    }
+                }
+                else if (_currentToken.Kind == TokenKind.Struct)
+                {
+                    // Struct without pub (allowed for now)
                     structs.Add(ParseStruct());
                 }
-                else if (nextToken.Kind == TokenKind.Fn)
+                else if (_currentToken.Kind == TokenKind.Fn)
                 {
+                    // Non-public function
                     functions.Add(ParseFunction());
                 }
                 else
                 {
-                    throw new Exception($"Expected 'struct' or 'fn' after 'pub', got {nextToken.Kind}");
+                    // Unexpected token: report and attempt to recover by skipping it
+                    _diagnostics.Add(Diagnostic.Error(
+                        $"unexpected token '{_currentToken.Text}'",
+                        _currentToken.Span,
+                        "expected `struct`, `pub fn`, `fn`, or `#foreign fn`",
+                        "E1001"));
+                    _currentToken = _lexer.NextToken();
                 }
             }
-            else if (_currentToken.Kind == TokenKind.Struct)
+            catch (ParserException ex)
             {
-                // Struct without pub (allowed for now)
-                structs.Add(ParseStruct());
+                _diagnostics.Add(ex.Diagnostic);
+                SynchronizeTopLevel();
             }
-            else
-            {
-                // Error: unexpected token
-                throw new Exception($"Unexpected token: {_currentToken.Kind}");
-            }
+        }
 
         var endSpan = _currentToken.Span;
-        var span = new SourceSpan(startSpan.FileId, startSpan.Index, endSpan.Index + endSpan.Length - startSpan.Index);
+        var span = startSpan with { Length = endSpan.Index + endSpan.Length - startSpan.Index };
         return new ModuleNode(span, imports, structs, functions);
     }
 
@@ -142,9 +171,14 @@ public class Parser
         return new StructDeclarationNode(span, nameToken.Text, typeParameters, fields);
     }
 
-    public FunctionDeclarationNode ParseFunction(bool isForeign = false)
+    public FunctionDeclarationNode ParseFunction(FunctionModifiers modifiers = FunctionModifiers.None)
     {
-        var pubKeyword = Eat(TokenKind.Pub);
+        if (_currentToken.Kind == TokenKind.Pub)
+        {
+            Eat(TokenKind.Pub);
+            modifiers |= FunctionModifiers.Public;
+        }
+
         var fnKeyword = Eat(TokenKind.Fn);
         var identifier = Eat(TokenKind.Identifier);
         Eat(TokenKind.OpenParenthesis);
@@ -178,25 +212,46 @@ public class Parser
 
         var statements = new List<StatementNode>();
 
-        if (isForeign)
+        if (modifiers.HasFlag(FunctionModifiers.Foreign))
         {
             // Foreign functions have no body
-            var span = new SourceSpan(pubKeyword.Span.FileId, pubKeyword.Span.Index,
-                _currentToken.Span.Index - pubKeyword.Span.Index);
-            return new FunctionDeclarationNode(span, identifier.Text, parameters, returnType, statements, true);
+            var start = fnKeyword.Span;
+            var span = new SourceSpan(start.FileId, start.Index,
+                _currentToken.Span.Index - start.Index);
+            return new FunctionDeclarationNode(span, identifier.Text, parameters, returnType, statements,
+                modifiers | FunctionModifiers.Foreign);
         }
         else
         {
             Eat(TokenKind.OpenBrace);
 
             while (_currentToken.Kind != TokenKind.CloseBrace && _currentToken.Kind != TokenKind.EndOfFile)
-                statements.Add(ParseStatement());
+            {
+                try
+                {
+                    try
+                    {
+                        statements.Add(ParseStatement());
+                    }
+                    catch (ParserException ex)
+                    {
+                        _diagnostics.Add(ex.Diagnostic);
+                        SynchronizeStatement();
+                    }
+                }
+                catch (ParserException ex)
+                {
+                    _diagnostics.Add(ex.Diagnostic);
+                    SynchronizeStatement();
+                }
+            }
 
             Eat(TokenKind.CloseBrace);
 
-            var span = new SourceSpan(pubKeyword.Span.FileId, pubKeyword.Span.Index,
-                _currentToken.Span.Index + _currentToken.Span.Length - pubKeyword.Span.Index);
-            return new FunctionDeclarationNode(span, identifier.Text, parameters, returnType, statements);
+            var start = fnKeyword.Span;
+            var span = new SourceSpan(start.FileId, start.Index,
+                _currentToken.Span.Index + _currentToken.Span.Length - start.Index);
+            return new FunctionDeclarationNode(span, identifier.Text, parameters, returnType, statements, modifiers);
         }
     }
 
@@ -255,7 +310,9 @@ public class Parser
             }
 
             default:
-                throw new Exception($"Unexpected token in statement: {_currentToken.Kind}");
+                // Default: parse an expression as a statement (e.g., println(s))
+                var expr = ParseExpression();
+                return new ExpressionStatementNode(expr.Span, expr);
         }
     }
 
@@ -295,6 +352,9 @@ public class Parser
         // Handle postfix operators (like .*)
         left = ParsePostfixOperators(left);
 
+        // Handle cast chains: expr as Type as Type
+        left = ParseCastChain(left);
+
         while (true)
         {
             // Check for assignment (special case: identifier = expression)
@@ -324,7 +384,19 @@ public class Parser
                 continue;
             }
 
-            var operatorKind = GetBinaryOperatorKind(operatorToken.Kind);
+            BinaryOperatorKind operatorKind;
+            try
+            {
+                operatorKind = GetBinaryOperatorKind(operatorToken.Kind);
+            }
+            catch (ParserException ex)
+            {
+                _diagnostics.Add(ex.Diagnostic);
+                // Attempt to synchronize expression: skip until likely delimiter and produce dummy
+                SynchronizeExpression();
+                return new IntegerLiteralNode(operatorToken.Span, 0);
+            }
+
             _currentToken = _lexer.NextToken();
 
             var right = ParseBinaryExpression(precedence);
@@ -365,7 +437,12 @@ public class Parser
                     continue;
                 }
 
-                throw new Exception($"Expected '*' or identifier after '.', got {_currentToken.Kind}");
+                _diagnostics.Add(Diagnostic.Error(
+                    $"expected `*` or identifier after `.`",
+                    dotToken.Span,
+                    $"found '{_currentToken.Text}'",
+                    "E1002"));
+                break;
             }
             // Handle index operator: arr[i]
 
@@ -381,6 +458,20 @@ public class Parser
             }
 
             break;
+        }
+
+        return expr;
+    }
+
+    private ExpressionNode ParseCastChain(ExpressionNode expr)
+    {
+        while (_currentToken.Kind == TokenKind.As)
+        {
+            var asToken = Eat(TokenKind.As);
+            var targetType = ParseType();
+            var span = new SourceSpan(expr.Span.FileId, expr.Span.Index,
+                targetType.Span.Index + targetType.Span.Length - expr.Span.Index);
+            expr = new CastExpressionNode(span, expr, targetType);
         }
 
         return expr;
@@ -484,7 +575,13 @@ public class Parser
                 return ParseArrayLiteral();
 
             default:
-                throw new Exception($"Unexpected token in expression: {_currentToken.Kind}");
+                _diagnostics.Add(Diagnostic.Error(
+                    $"unexpected token '{_currentToken.Text}' in expression",
+                    _currentToken.Span,
+                    null,
+                    "E1001"));
+                // Return a dummy literal to allow further parsing
+                return new IntegerLiteralNode(_currentToken.Span, 0);
         }
     }
 
@@ -502,6 +599,16 @@ public class Parser
         };
     }
 
+    private sealed class ParserException : Exception
+    {
+        public ParserException(Diagnostic diagnostic)
+        {
+            Diagnostic = diagnostic;
+        }
+
+        public Diagnostic Diagnostic { get; }
+    }
+
     private BinaryOperatorKind GetBinaryOperatorKind(TokenKind kind)
     {
         return kind switch
@@ -517,7 +624,11 @@ public class Parser
             TokenKind.GreaterThan => BinaryOperatorKind.GreaterThan,
             TokenKind.LessThanOrEqual => BinaryOperatorKind.LessThanOrEqual,
             TokenKind.GreaterThanOrEqual => BinaryOperatorKind.GreaterThanOrEqual,
-            _ => throw new Exception($"Unexpected operator token: {kind}")
+            _ => throw new ParserException(Diagnostic.Error(
+                $"unexpected operator token '{_currentToken.Text}'",
+                _currentToken.Span,
+                null,
+                "E1001"))
         };
     }
 
@@ -598,16 +709,9 @@ public class Parser
                     break;
                 }
 
-                // Assignment and if expressions are allowed as statements
-                if (expr is AssignmentExpressionNode or IfExpressionNode)
-                {
-                    // Wrap in ExpressionStatementNode
-                    statements.Add(new ExpressionStatementNode(expr.Span, expr));
-                    continue;
-                }
-
-                // Other expression statements not supported
-                throw new Exception("Expression statements not yet supported (except assignments and if)");
+                // Treat any expression as a statement (side effects or ignored value)
+                statements.Add(new ExpressionStatementNode(expr.Span, expr));
+                continue;
             }
 
             statements.Add(ParseStatement());
@@ -707,7 +811,14 @@ public class Parser
             var closeBracket = Eat(TokenKind.CloseBracket);
 
             if (!int.TryParse(lengthToken.Text, out var length))
-                throw new Exception($"Invalid array length: {lengthToken.Text}");
+            {
+                _diagnostics.Add(Diagnostic.Error(
+                    $"invalid array length `{lengthToken.Text}`",
+                    lengthToken.Span,
+                    "array length must be an integer",
+                    "E1004"));
+                length = 0;
+            }
 
             var span = new SourceSpan(openBracket.Span.FileId, openBracket.Span.Index,
                 closeBracket.Span.Index + closeBracket.Span.Length - openBracket.Span.Index);
@@ -770,7 +881,14 @@ public class Parser
             var closeBracket = Eat(TokenKind.CloseBracket);
 
             if (!int.TryParse(countToken.Text, out var count))
-                throw new Exception($"Invalid array repeat count: {countToken.Text}");
+            {
+                _diagnostics.Add(Diagnostic.Error(
+                    $"invalid array repeat count `{countToken.Text}`",
+                    countToken.Span,
+                    "repeat count must be an integer",
+                    "E1005"));
+                count = 0;
+            }
 
             var span = new SourceSpan(openBracket.Span.FileId, openBracket.Span.Index,
                 closeBracket.Span.Index + closeBracket.Span.Length - openBracket.Span.Index);
@@ -797,11 +915,64 @@ public class Parser
         return new ArrayLiteralExpressionNode(finalSpan, elements);
     }
 
+    private void SynchronizeTopLevel()
+    {
+        // Skip tokens until we hit a plausible top-level construct
+        while (_currentToken.Kind != TokenKind.EndOfFile &&
+               _currentToken.Kind != TokenKind.Pub &&
+               _currentToken.Kind != TokenKind.Struct &&
+               _currentToken.Kind != TokenKind.Import &&
+               _currentToken.Kind != TokenKind.Hash)
+        {
+            _currentToken = _lexer.NextToken();
+        }
+    }
+
+    private void SynchronizeStatement()
+    {
+        // Skip tokens until we reach a likely statement boundary
+        while (_currentToken.Kind != TokenKind.EndOfFile &&
+               _currentToken.Kind != TokenKind.CloseBrace &&
+               _currentToken.Kind != TokenKind.Let &&
+               _currentToken.Kind != TokenKind.Return &&
+               _currentToken.Kind != TokenKind.For &&
+               _currentToken.Kind != TokenKind.Break &&
+               _currentToken.Kind != TokenKind.Continue &&
+               _currentToken.Kind != TokenKind.Defer &&
+               _currentToken.Kind != TokenKind.If &&
+               _currentToken.Kind != TokenKind.OpenBrace)
+        {
+            _currentToken = _lexer.NextToken();
+        }
+    }
+
+    private void SynchronizeExpression()
+    {
+        // Skip tokens until we hit a delimiter that likely ends an expression
+        while (_currentToken.Kind != TokenKind.EndOfFile &&
+               _currentToken.Kind != TokenKind.CloseParenthesis &&
+               _currentToken.Kind != TokenKind.CloseBracket &&
+               _currentToken.Kind != TokenKind.CloseBrace &&
+               _currentToken.Kind != TokenKind.Comma)
+        {
+            _currentToken = _lexer.NextToken();
+        }
+    }
+
     private Token Eat(TokenKind kind)
     {
         var token = _currentToken;
         if (token.Kind != kind)
-            throw new Exception($"Expected {kind}, but got {token.Kind}");
+        {
+            var diag = Diagnostic.Error(
+                $"expected `{kind}`",
+                token.Span,
+                $"found '{token.Text}'",
+                "E1002");
+            // Signal an error to be caught by a higher-level parse routine
+            throw new ParserException(diag);
+        }
+
         _currentToken = _lexer.NextToken();
         return token;
     }

@@ -262,31 +262,36 @@ _Goal: Add the type system and fundamental data structures needed for real progr
   - ✅ `#foreign fn memcpy(dst: &u8, src: &u8, len: usize)`
   - ✅ `#foreign fn memset(ptr: &u8, value: u8, len: usize)`
   - ✅ `#foreign fn memmove(dst: &u8, src: &u8, len: usize)`
+- ✅ `defer` statement for cleanup:
+  - ✅ Parse `defer` keyword and statement syntax
+  - ✅ FIR lowering: execute deferred statements in LIFO order at scope exit
+  - ✅ C code generation: deferred expressions lowered before returns/scope exits
+- ✅ Foreign function call plumbing:
+  - ✅ Parse `#foreign fn` and mark functions as foreign
+  - ✅ Collect signatures in type solver (parameters + return type)
+  - ✅ C codegen emits proper `extern` prototypes with correct return type
 
 **Pending:**
 
-- [ ] `defer` statement for cleanup:
-  - [ ] Parse `defer` keyword and statement syntax
-  - [ ] FIR lowering: execute deferred statements in LIFO order at scope exit
-  - [ ] C code generation: emit cleanup before returns/scope exits
-- [ ] Foreign function call implementation (C runtime integration)
 - [ ] `Allocator` interface (struct with function pointers)
 - [ ] Basic heap allocator wrapping malloc/free
+- [ ] End-to-end memory tests pending cast support (`as`) and pointer-typed call results
 
-**Tests Added:**
+**Tests Added/Status:**
 
 - ✅ 3 intrinsic tests passing:
   - `intrinsics/sizeof_basic.f` - Returns 4 for `i32`
   - `intrinsics/sizeof_struct.f` - Returns 12 for 3-field struct
   - `intrinsics/alignof_basic.f` - Returns 4 for `i32`
-- 🔧 3 defer tests created (pending implementation):
+- ✅ 3 defer tests passing:
   - `defer/defer_basic.f` - Single defer in block scope
   - `defer/defer_multiple.f` - Multiple defers in LIFO order
   - `defer/defer_scope.f` - Defer in nested blocks
-- 🔧 3 memory tests created (pending foreign function support):
+- 🔧 3 memory tests created (blocked on casts/FFI pointer returns):
   - `memory/malloc_free.f` - Allocate, write, read, free
   - `memory/memcpy_basic.f` - Copy between buffers
   - `memory/memset_basic.f` - Fill memory with byte value
+
 
 **Error Codes Added:**
 
@@ -460,6 +465,8 @@ _Goal: Build a usable standard library._
 - [ ] `std/io/file.f` - File I/O
 - [ ] `std/io/fmt.f` - `println`, `print`, formatting
 
+Note: A minimal stopgap exists now in `core/io.f` providing `print` and `println` via C `printf`/`puts` for test use; this will be replaced by `std/io/fmt.f` in this milestone.
+
 ---
 
 ### Milestone 20: Utilities
@@ -497,11 +504,13 @@ _Goal: Rewrite the compiler in FLang._
 ## Current Status
 
 - **Phase:** 2 (Core Type System & Data Structures)
-- **Milestone:** 10 (IN PROGRESS - Intrinsics complete, defer/foreign pending)
-- **Next Up:** Complete M10, then M11 (Generics Basics)
-- **Tests Passing:** 29/37
+- **Milestone:** 10 (IN PROGRESS - Defer/extern done; allocator pending)
+- **Next Up:** Allocator interface + basic heap wrapper, then M11 (Generics Basics)
+- **Tests Passing:** 32/37
   - 3 intrinsic tests passing (size_of, align_of)
-  - 6 tests pending (3 defer, 3 foreign memory functions)
+  - 3 defer tests passing
+  - 3 memory tests blocked on casts and pointer-typed call results
   - 2 pre-existing struct bugs (see `docs/known-issues.md`)
+
 - **Total Lines of FLang Code:** ~420 (test files + stdlib)
 - **Total Lines of C# Compiler Code:** ~6,600

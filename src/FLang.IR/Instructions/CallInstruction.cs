@@ -11,3 +11,4 @@ public class CallInstruction : Instruction
     public string FunctionName { get; }
     public IReadOnlyList<Value> Arguments { get; }
 }
+

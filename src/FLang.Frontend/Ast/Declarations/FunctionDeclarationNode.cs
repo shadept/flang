@@ -3,21 +3,30 @@ using FLang.Frontend.Ast.Types;
 
 namespace FLang.Frontend.Ast.Declarations;
 
+[Flags]
+public enum FunctionModifiers
+{
+    None = 0,
+    Public = 1 << 0,
+    Foreign = 1 << 1,
+    Inline = 1 << 2,
+}
+
 public class FunctionDeclarationNode : AstNode
 {
     public FunctionDeclarationNode(SourceSpan span, string name, IReadOnlyList<FunctionParameterNode> parameters,
-        TypeNode? returnType, IReadOnlyList<StatementNode> body, bool isForeign = false) : base(span)
+        TypeNode? returnType, IReadOnlyList<StatementNode> body, FunctionModifiers modifiers = FunctionModifiers.None) : base(span)
     {
         Name = name;
         Parameters = parameters;
         ReturnType = returnType;
         Body = body;
-        IsForeign = isForeign;
+        Modifiers = modifiers;
     }
 
     public string Name { get; }
     public IReadOnlyList<FunctionParameterNode> Parameters { get; }
     public TypeNode? ReturnType { get; }
     public IReadOnlyList<StatementNode> Body { get; }
-    public bool IsForeign { get; }
+    public FunctionModifiers Modifiers { get; }
 }

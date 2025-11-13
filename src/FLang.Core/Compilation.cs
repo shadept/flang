@@ -4,10 +4,9 @@ namespace FLang.Core;
 
 public class Compilation
 {
-    private readonly object _lock = new();
+    private readonly Lock _lock = new();
     private readonly ConcurrentDictionary<string, int> _modulePathToFileId = new();
-    private readonly ConcurrentBag<Source> _sources = new();
-    private readonly List<Source> _sourcesList = new();
+    private readonly List<Source> _sourcesList = [];
     private int _fileIdCounter;
 
     public string StdlibPath { get; set; } = "";
@@ -29,7 +28,6 @@ public class Compilation
 
         lock (_lock)
         {
-            _sources.Add(source);
             _sourcesList.Add(source);
         }
 
@@ -38,7 +36,7 @@ public class Compilation
 
     public string? TryResolveImportPath(IReadOnlyList<string> importPath)
     {
-        // Convert import path to file path: ["std", "io"] -> "stdlib/std/io.f"
+        // Convert import path to filepath: ["std", "io"] -> "stdlib/std/io.f"
         var relativePath = string.Join(Path.DirectorySeparatorChar, importPath) + ".f";
         var fullPath = Path.Combine(StdlibPath, relativePath);
 

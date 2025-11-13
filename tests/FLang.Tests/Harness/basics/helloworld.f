@@ -1,5 +1,11 @@
 //! TEST: helloworld_test
-//! EXIT: 42
+//! EXIT: 0
+//! STDOUT: hello world
+
+import core.string
+import core.io
+
 pub fn main() i32 {
-    return 42
+    let _ = println("hello world")
+    return 0
 }

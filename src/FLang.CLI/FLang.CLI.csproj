@@ -13,6 +13,65 @@
         <TargetFramework>net9.0</TargetFramework>
         <ImplicitUsings>enable</ImplicitUsings>
         <Nullable>enable</Nullable>
+        <!-- Configure publish to produce a single, self-contained executable by default -->
+        <PublishSingleFile>true</PublishSingleFile>
+        <SelfContained>true</SelfContained>
+        <!-- Default to Windows x64 self-contained executable. Override with -r <RID> when needed. -->
+        <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+        <!-- Safety: avoid trimming to prevent reflection-related issues in CLI -->
+        <PublishTrimmed>false</PublishTrimmed>
+        <!-- Compress and enable self-extract for native deps to keep single-file simple to distribute -->
+        <EnableCompressionInSingleFile>true</EnableCompressionInSingleFile>
+        <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
     </PropertyGroup>
+
+    <!-- After publish, copy only the essential output (single-file exe) to /dist/<RID>/flang.exe -->
+    <Target Name="CopyEssentialPublishArtifactsToDist" AfterTargets="Publish">
+        <!-- Compute dist directory at repo root: <repo>/dist/<RID>/ -->
+        <PropertyGroup>
+            <RepoRoot>$([System.IO.Path]::GetFullPath('$(MSBuildProjectDirectory)\..\..\'))</RepoRoot>
+            <DistDir>$([System.IO.Path]::Combine('$(RepoRoot)', 'dist', '$(RuntimeIdentifier)'))\</DistDir>
+            <ExeName>$(AssemblyName).exe</ExeName>
+            <FinalExeName>flang.exe</FinalExeName>
+            <!-- Stdlib source and destination -->
+            <StdLibRoot>$([System.IO.Path]::Combine('$(RepoRoot)', 'stdlib'))\</StdLibRoot>
+            <StdLibDestDir>$([System.IO.Path]::Combine('$(DistDir)', 'stdlib'))\</StdLibDestDir>
+        </PropertyGroup>
+
+        <!-- Ensure destination exists -->
+        <MakeDir Directories="$(DistDir)"/>
+        <MakeDir Directories="$(StdLibDestDir)"/>
+
+        <!-- Copy and rename the single-file executable to flang.exe in the shared dist location -->
+        <ItemGroup>
+            <SourceExe Include="$(PublishDir)$(ExeName)"/>
+            <DestExe Include="$([System.IO.Path]::Combine('$(DistDir)', '$(FinalExeName)'))"/>
+        </ItemGroup>
+
+        <Copy SourceFiles="@(SourceExe)"
+              DestinationFiles="@(DestExe)"
+              SkipUnchangedFiles="false"
+              OverwriteReadOnlyFiles="true"/>
+
+        <Message Importance="High" Text="Copied single-file executable to: $(DistDir)$(FinalExeName)"/>
+
+        <!-- Copy stdlib directory next to the executable: dist/<RID>/stdlib/**/* -->
+        <ItemGroup>
+            <!-- Include all files under stdlib, preserving folder structure -->
+            <StdLibFiles Include="$(StdLibRoot)**\*"/>
+            <!-- Compute destination paths preserving RecursiveDir -->
+            <StdLibFilesWithDest Include="@(StdLibFiles)">
+                <RebasedDest>$([System.IO.Path]::Combine('$(StdLibDestDir)', '%(StdLibFiles.RecursiveDir)', '%(StdLibFiles.Filename)%(StdLibFiles.Extension)'))</RebasedDest>
+            </StdLibFilesWithDest>
+        </ItemGroup>
+
+        <Copy SourceFiles="@(StdLibFilesWithDest)"
+              DestinationFiles="%(StdLibFilesWithDest.RebasedDest)"
+              Condition="Exists('$(StdLibRoot)')"
+              SkipUnchangedFiles="false"
+              OverwriteReadOnlyFiles="true"/>
+
+        <Message Importance="High" Text="Copied stdlib to: $(StdLibDestDir)" Condition="Exists('$(StdLibRoot)')"/>
+    </Target>
 
 </Project>

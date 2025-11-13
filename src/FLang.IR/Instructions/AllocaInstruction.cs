@@ -1,4 +1,4 @@
-using FType = FLang.Core.Type;
+using FLang.Core;
 
 namespace FLang.IR.Instructions;
 

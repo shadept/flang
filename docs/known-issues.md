@@ -19,9 +19,10 @@ When you discover a bug or limitation:
 
 ### FIR: Lack of Type Information in Values
 
-**Status:** Known limitation
+**Status:** Partially addressed (IR values now carry FLang types)
 **Affected:** Struct field storage, function parameter codegen
 **Impact:** Causes segfaults in `struct_nested.f` and `struct_parameter.f` tests
+
 
 **Problem:**
 The FIR `Value` type (`LocalValue`, `ConstantValue`) doesn't track type information. This causes issues when:
@@ -49,24 +50,14 @@ memcpy(field_ptr_3, inner, sizeof(struct Inner));
 - C codegen defaults to `int*` for all pointers
 - No way to distinguish `struct Foo*` from `int*` at codegen time
 
-**Solution (requires architectural change):**
-Add type tracking to FIR values:
+**Solution (implemented incrementally):**
+- IR values now carry `FLang.Core.FType? Value.Type`
+- Lowering attaches types for literals, temporaries, addresses, loads, GEPs, calls, and many locals
+- C backend maps FLang types to C types (`TypeRegistry.ToCType`) instead of defaulting to `int`
+- Next step: ensure all value producers set `Value.Type` consistently and teach `StorePointerInstruction` to emit `memcpy` for struct-by-value copies
 
-```csharp
-public class LocalValue : Value
-{
-    public string Name { get; }
-    public Type? Type { get; set; }  // Track the type!
-}
-```
+**Workaround:** None — tracked as ongoing refactor
 
-Then update:
-
-- `AstLowering.cs`: Attach types when creating `LocalValue`
-- `CCodeGenerator.cs`: Use actual types instead of defaulting to `int*`
-- `StorePointerInstruction`: Emit `memcpy` for struct types
-
-**Workaround:** None - requires fixing the FIR design
 
 **Related Tests:**
 
@@ -78,6 +69,28 @@ Then update:
 ---
 
 ## Deferred Features
+
+### FFI Pointer Returns and Casts
+
+**Status:** Not implemented (blocks memory tests)
+**Affected:** Foreign calls returning pointers, explicit casts (`as`)
+
+**Problem:**
+- Codegen now emits correct `extern` prototypes, but call result locals are still typed as `int` in generated C.
+- The language does not yet support `as` casts used by memory tests.
+
+**Solution:**
+1. Add type-carrying FIR values (see Critical Issue: Lack of Type Information) to type call results correctly at codegen time.
+2. Implement cast syntax and semantics (`expr as T`) in parser, type checker, and lowering.
+
+**Related Tests:**
+- `tests/FLang.Tests/Harness/memory/malloc_free.f`
+- `tests/FLang.Tests/Harness/memory/memcpy_basic.f`
+- `tests/FLang.Tests/Harness/memory/memset_basic.f`
+
+**Milestone:** Complete as part of finishing M10 FFI or in M11 if cast syntax lands there.
+
+
 
 ### Bounds Checking with Panic
 
@@ -147,6 +160,26 @@ This was fixed to support dynamic array indexing with runtime index calculations
 **Decision:** Keep current design until self-hosting, then evaluate
 
 ---
+
+## Temporary Limitations
+
+### Minimal I/O (`core/io.f`) uses C printf/puts
+
+Status: Intentional stopgap for tests
+Affected: `print`, `println`
+
+Problem:
+- `print` currently calls C `printf` with the FLang string pointer as the format argument. If the string contains `%` sequences, `printf` will interpret them as format specifiers.
+- `println` uses `puts` and is safe but always appends a newline.
+
+Solution:
+- Replace with proper `std/io/fmt.f` in Milestone 19 that writes bytes using `fwrite` or buffered writers, and supports formatting without abusing `printf`.
+
+Related Tests:
+- `tests/FLang.Tests/Harness/strings/print_basic.f`
+- `tests/FLang.Tests/Harness/strings/println_basic.f`
+
+Milestone: 19 (Text & I/O)
 
 ## Recently Fixed
 

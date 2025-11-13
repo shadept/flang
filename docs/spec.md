@@ -88,6 +88,12 @@ defer expression
 
 - Executes on scope exit in LIFO order.
 
+#### Expression Statements
+
+- A block may contain expression statements. Any expression is allowed as a statement; its value is ignored.
+- The final expression before '}' is a trailing expression and yields the block value.
+
+
 ### 2.6 Arrays, Slices, Lists, Strings
 
 - **Array:** `[T; N]` fixed-size value type with compile-time known size `N`.
@@ -106,10 +112,12 @@ defer expression
 ### 2.7 Modules and Imports
 
 - Each source file is a module.
-- `pub` exposes declarations.
+- `pub` exposes declarations; `fn` without `pub` is module-private (not visible to importers).
+- Function modifiers are flags: `pub` (visibility) and directives like `#foreign` (FFI). Future directives like `#inline` may apply.
 - `import path` and `pub import path`.
 - Cyclic imports are compile-time errors.
 - Module names map to file paths.
+
 
 ---
 
@@ -215,6 +223,17 @@ pub fn op_add_assign(lhs: &A, rhs: B) void
 ## 5. Memory Model
 
 - The language specifies no intrinsic allocator and no heap management guarantees.
+
+### 2.8 Casting
+
+- Syntax: `expr as Type`
+- Semantics:
+  - Numeric casts: any integer ↔ integer. Narrowing truncates; widening sign-extends where applicable.
+  - Pointer/integer: `&T` ↔ `usize|isize`.
+  - Pointer/pointer: `&T` ↔ `&U` allowed as a view cast. Binary compatibility is currently the programmer’s responsibility.
+  - Blessed binary compatibility: `String` ↔ `u8[]` allowed as a zero-copy view.
+- Implicit casts: the type checker may apply the same conversions when a target type is known (e.g., passing `u8` to a `usize` parameter).
+
 - Allocation and deallocation are provided by the standard library and may wrap C runtime facilities.
 - The compiler guarantees deterministic type layouts per target/configuration and binary compatibility as stated.
 - Struct layout is optimized; introspection provides actual offsets.

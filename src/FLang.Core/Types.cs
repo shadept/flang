@@ -3,15 +3,15 @@ namespace FLang.Core;
 /// <summary>
 /// Base class for all types in the FLang type system.
 /// </summary>
-public abstract class Type
+public abstract class FType
 {
     public abstract string Name { get; }
 
-    public abstract bool Equals(Type other);
+    public abstract bool Equals(FType other);
 
     public override bool Equals(object? obj)
     {
-        return obj is Type other && Equals(other);
+        return obj is FType other && Equals(other);
     }
 
     public override int GetHashCode()
@@ -28,7 +28,7 @@ public abstract class Type
     /// Gets the size of a type in bytes.
     /// Used by size_of intrinsic.
     /// </summary>
-    public static int GetSizeOf(Type type)
+    public static int GetSizeOf(FType type)
     {
         return type switch
         {
@@ -45,7 +45,7 @@ public abstract class Type
     /// Gets the alignment requirement of a type in bytes.
     /// Used by align_of intrinsic.
     /// </summary>
-    public static int GetAlignmentOf(Type type)
+    public static int GetAlignmentOf(FType type)
     {
         return type switch
         {
@@ -62,7 +62,7 @@ public abstract class Type
 /// <summary>
 /// Represents primitive types like i32, bool, etc.
 /// </summary>
-public class PrimitiveType : Type
+public class PrimitiveType : FType
 {
     public PrimitiveType(string name, int sizeInBytes, bool isSigned = true)
     {
@@ -75,7 +75,7 @@ public class PrimitiveType : Type
     public int SizeInBytes { get; }
     public bool IsSigned { get; }
 
-    public override bool Equals(Type other)
+    public override bool Equals(FType other)
     {
         return other is PrimitiveType pt && pt.Name == Name;
     }
@@ -84,7 +84,7 @@ public class PrimitiveType : Type
 /// <summary>
 /// Represents compile-time integer type that must be resolved during type inference.
 /// </summary>
-public class ComptimeIntType : Type
+public class ComptimeIntType : FType
 {
     public static readonly ComptimeIntType Instance = new();
 
@@ -94,7 +94,7 @@ public class ComptimeIntType : Type
 
     public override string Name => "comptime_int";
 
-    public override bool Equals(Type other)
+    public override bool Equals(FType other)
     {
         return other is ComptimeIntType;
     }
@@ -103,7 +103,7 @@ public class ComptimeIntType : Type
 /// <summary>
 /// Represents compile-time float type that must be resolved during type inference.
 /// </summary>
-public class ComptimeFloatType : Type
+public class ComptimeFloatType : FType
 {
     public static readonly ComptimeFloatType Instance = new();
 
@@ -113,7 +113,7 @@ public class ComptimeFloatType : Type
 
     public override string Name => "comptime_float";
 
-    public override bool Equals(Type other)
+    public override bool Equals(FType other)
     {
         return other is ComptimeFloatType;
     }
@@ -122,7 +122,7 @@ public class ComptimeFloatType : Type
 /// <summary>
 /// Represents an unknown type during type inference.
 /// </summary>
-public class TypeVariable : Type
+public class TypeVariable : FType
 {
     private static int _nextId;
 
@@ -134,7 +134,7 @@ public class TypeVariable : Type
     public int Id { get; }
     public override string Name => $"?T{Id}";
 
-    public override bool Equals(Type other)
+    public override bool Equals(FType other)
     {
         return other is TypeVariable tv && tv.Id == Id;
     }
@@ -148,18 +148,18 @@ public class TypeVariable : Type
 /// <summary>
 /// Represents a reference type like &T.
 /// </summary>
-public class ReferenceType : Type
+public class ReferenceType : FType
 {
-    public ReferenceType(Type innerType)
+    public ReferenceType(FType innerType)
     {
         InnerType = innerType;
     }
 
-    public Type InnerType { get; }
+    public FType InnerType { get; }
 
     public override string Name => $"&{InnerType.Name}";
 
-    public override bool Equals(Type other)
+    public override bool Equals(FType other)
     {
         return other is ReferenceType rt && InnerType.Equals(rt.InnerType);
     }
@@ -174,18 +174,18 @@ public class ReferenceType : Type
 /// Represents an optional type (nullable) like T? or Option[T].
 /// Placeholder for future milestones.
 /// </summary>
-public class OptionType : Type
+public class OptionType : FType
 {
-    public OptionType(Type innerType)
+    public OptionType(FType innerType)
     {
         InnerType = innerType;
     }
 
-    public Type InnerType { get; }
+    public FType InnerType { get; }
 
     public override string Name => $"{InnerType.Name}?";
 
-    public override bool Equals(Type other)
+    public override bool Equals(FType other)
     {
         return other is OptionType ot && InnerType.Equals(ot.InnerType);
     }
@@ -200,20 +200,20 @@ public class OptionType : Type
 /// Represents a generic type like List[T], Dict[K, V].
 /// Placeholder for future milestones.
 /// </summary>
-public class GenericType : Type
+public class GenericType : FType
 {
-    public GenericType(string baseName, IReadOnlyList<Type> typeArguments)
+    public GenericType(string baseName, IReadOnlyList<FType> typeArguments)
     {
         BaseName = baseName;
         TypeArguments = typeArguments;
     }
 
     public string BaseName { get; }
-    public IReadOnlyList<Type> TypeArguments { get; }
+    public IReadOnlyList<FType> TypeArguments { get; }
 
     public override string Name => $"{BaseName}[{string.Join(", ", TypeArguments.Select(t => t.Name))}]";
 
-    public override bool Equals(Type other)
+    public override bool Equals(FType other)
     {
         if (other is not GenericType gt) return false;
         if (BaseName != gt.BaseName) return false;
@@ -236,9 +236,9 @@ public class GenericType : Type
 /// <summary>
 /// Represents a struct type with fields.
 /// </summary>
-public class StructType : Type
+public class StructType : FType
 {
-    public StructType(string structName, IReadOnlyList<string> typeParameters, IReadOnlyList<(string, Type)> fields)
+    public StructType(string structName, IReadOnlyList<string> typeParameters, IReadOnlyList<(string, FType)> fields)
     {
         StructName = structName;
         TypeParameters = typeParameters;
@@ -247,7 +247,7 @@ public class StructType : Type
 
     public string StructName { get; }
     public IReadOnlyList<string> TypeParameters { get; }
-    public IReadOnlyList<(string Name, Type Type)> Fields { get; }
+    public IReadOnlyList<(string Name, FType Type)> Fields { get; }
 
     public override string Name
     {
@@ -258,7 +258,7 @@ public class StructType : Type
         }
     }
 
-    public override bool Equals(Type other)
+    public override bool Equals(FType other)
     {
         if (other is not StructType st) return false;
         if (StructName != st.StructName) return false;
@@ -281,7 +281,7 @@ public class StructType : Type
     /// <summary>
     /// Looks up a field by name. Returns null if not found.
     /// </summary>
-    public Type? GetFieldType(string fieldName)
+    public FType? GetFieldType(string fieldName)
     {
         foreach (var (name, type) in Fields)
             if (name == fieldName)
@@ -345,7 +345,7 @@ public class StructType : Type
     /// <summary>
     /// Helper to get size of a type in bytes.
     /// </summary>
-    private static int GetTypeSize(Type type)
+    private static int GetTypeSize(FType type)
     {
         return type switch
         {
@@ -361,7 +361,7 @@ public class StructType : Type
     /// <summary>
     /// Helper to get alignment requirement of a type in bytes.
     /// </summary>
-    private static int GetTypeAlignment(Type type)
+    private static int GetTypeAlignment(FType type)
     {
         return type switch
         {
@@ -397,20 +397,20 @@ public class StructType : Type
 /// Represents a fixed-size array type like [T; N].
 /// Arrays are value types with compile-time known size.
 /// </summary>
-public class ArrayType : Type
+public class ArrayType : FType
 {
-    public ArrayType(Type elementType, int length)
+    public ArrayType(FType elementType, int length)
     {
         ElementType = elementType;
         Length = length;
     }
 
-    public Type ElementType { get; }
+    public FType ElementType { get; }
     public int Length { get; }
 
     public override string Name => $"[{ElementType.Name}; {Length}]";
 
-    public override bool Equals(Type other)
+    public override bool Equals(FType other)
     {
         return other is ArrayType at && ElementType.Equals(at.ElementType) && Length == at.Length;
     }
@@ -436,7 +436,7 @@ public class ArrayType : Type
         return GetElementAlignment(ElementType);
     }
 
-    private static int GetElementSize(Type type)
+    private static int GetElementSize(FType type)
     {
         return type switch
         {
@@ -448,7 +448,7 @@ public class ArrayType : Type
         };
     }
 
-    private static int GetElementAlignment(Type type)
+    private static int GetElementAlignment(FType type)
     {
         return type switch
         {
@@ -465,18 +465,18 @@ public class ArrayType : Type
 /// Represents a slice type T[] (fat pointer view).
 /// Implemented as a struct { ptr: &T, len: usize } with guaranteed binary layout.
 /// </summary>
-public class SliceType : Type
+public class SliceType : FType
 {
-    public SliceType(Type elementType)
+    public SliceType(FType elementType)
     {
         ElementType = elementType;
     }
 
-    public Type ElementType { get; }
+    public FType ElementType { get; }
 
     public override string Name => $"{ElementType.Name}[]";
 
-    public override bool Equals(Type other)
+    public override bool Equals(FType other)
     {
         return other is SliceType st && ElementType.Equals(st.ElementType);
     }
@@ -534,7 +534,7 @@ public static class TypeRegistry
     /// <summary>
     /// Looks up a type by name. Returns null if not found.
     /// </summary>
-    public static Type? GetTypeByName(string name)
+    public static FType? GetTypeByName(string name)
     {
         return name switch
         {
@@ -558,7 +558,7 @@ public static class TypeRegistry
     /// <summary>
     /// Returns true if the given type is an integer type (including comptime_int).
     /// </summary>
-    public static bool IsIntegerType(Type type)
+    public static bool IsIntegerType(FType type)
     {
         return type is ComptimeIntType ||
                (type is PrimitiveType pt && pt != Bool);
@@ -567,7 +567,7 @@ public static class TypeRegistry
     /// <summary>
     /// Returns true if the given type is a numeric type (int or float).
     /// </summary>
-    public static bool IsNumericType(Type type)
+    public static bool IsNumericType(FType type)
     {
         return IsIntegerType(type) || type is ComptimeFloatType;
     }
@@ -575,7 +575,7 @@ public static class TypeRegistry
     /// <summary>
     /// Returns true if the given type is a compile-time type that needs resolution.
     /// </summary>
-    public static bool IsComptimeType(Type type)
+    public static bool IsComptimeType(FType type)
     {
         return type is ComptimeIntType or ComptimeFloatType;
     }
@@ -583,7 +583,7 @@ public static class TypeRegistry
     /// <summary>
     /// Converts a FLang type to its C equivalent.
     /// </summary>
-    public static string ToCType(Type type)
+    public static string ToCType(FType type)
     {
         if (type is PrimitiveType pt)
             return pt.Name switch

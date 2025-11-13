@@ -9,6 +9,7 @@ public class CCodeGenerator
 {
     private readonly HashSet<string> _declaredVars = new();
     private readonly HashSet<string> _pointerVars = new(); // Track which variables are pointers
+    private readonly Dictionary<string, string> _varTypes = new(); // Track C type per local variable
     private readonly Dictionary<string, string> _stringLiterals = new(); // Track string literals (name -> value)
     private readonly HashSet<StructType> _usedStructs = new(); // Track structs used in this function
 
@@ -42,13 +43,13 @@ public class CCodeGenerator
         if (_stringLiterals.Count > 0) builder.AppendLine();
 
         // Generate parameter list
-        var paramList = string.Join(", ", function.Parameters.Select(p => $"{p.Type} {p.Name}"));
+        var paramList = string.Join(", ", function.Parameters.Select(p => $"{TypeRegistry.ToCType(p.Type)} {p.Name}"));
         if (function.Parameters.Count == 0) paramList = "void"; // C convention for no parameters
 
         // Foreign functions are declared as extern
         if (function.IsForeign)
         {
-            builder.AppendLine($"extern int {function.Name}({paramList});");
+            builder.AppendLine($"extern {TypeRegistry.ToCType(function.ReturnType)} {function.Name}({paramList});");
             builder.AppendLine();
             return builder.ToString();
         }
@@ -58,10 +59,12 @@ public class CCodeGenerator
         foreach (var param in function.Parameters)
         {
             _declaredVars.Add(param.Name);
-            if (param.Type.Contains("*")) _pointerVars.Add(param.Name);
+            var ctype = TypeRegistry.ToCType(param.Type);
+            _varTypes[param.Name] = ctype;
+            if (param.Type is ReferenceType) _pointerVars.Add(param.Name);
         }
 
-        builder.AppendLine($"int {function.Name}({paramList}) {{");
+        builder.AppendLine($"{TypeRegistry.ToCType(function.ReturnType)} {function.Name}({paramList}) {{");
 
         // Generate each basic block
         for (var i = 0; i < function.BasicBlocks.Count; i++)
@@ -91,9 +94,21 @@ public class CCodeGenerator
 
                 if (!_declaredVars.Contains(store.VariableName))
                 {
-                    var typeStr = isPointer ? "int*" : "int";
+                    // Try to inherit type from the value if known
+                    string typeStr;
+                    if (store.Value is LocalValue v && _varTypes.TryGetValue(v.Name, out var vt))
+                    {
+                        typeStr = vt;
+                        if (vt.Contains("*")) isPointer = true;
+                    }
+                    else
+                    {
+                        typeStr = isPointer ? "int*" : "int";
+                    }
+
                     builder.Append($"    {typeStr} {store.VariableName}");
                     _declaredVars.Add(store.VariableName);
+                    _varTypes[store.VariableName] = typeStr;
                     if (isPointer) _pointerVars.Add(store.VariableName);
                 }
                 else
@@ -123,9 +138,11 @@ public class CCodeGenerator
 
                 if (binary.Result != null && !_declaredVars.Contains(binary.Result.Name))
                 {
+                    var rt = (binary.Result.Type != null) ? TypeRegistry.ToCType(binary.Result.Type) : "int";
                     builder.AppendLine(
-                        $"    int {binary.Result.Name} = {EmitValue(binary.Left)} {opSymbol} {EmitValue(binary.Right)};");
+                        $"    {rt} {binary.Result.Name} = {EmitValue(binary.Left)} {opSymbol} {EmitValue(binary.Right)};");
                     _declaredVars.Add(binary.Result.Name);
+                    _varTypes[binary.Result.Name] = rt;
                 }
 
                 break;
@@ -147,8 +164,11 @@ public class CCodeGenerator
                 var argsStr = string.Join(", ", call.Arguments.Select(EmitValue));
                 if (call.Result != null && !_declaredVars.Contains(call.Result.Name))
                 {
-                    builder.AppendLine($"    int {call.Result.Name} = {call.FunctionName}({argsStr});");
+                    var retType = (call.Result.Type != null) ? TypeRegistry.ToCType(call.Result.Type) : "int";
+                    builder.AppendLine($"    {retType} {call.Result.Name} = {call.FunctionName}({argsStr});");
                     _declaredVars.Add(call.Result.Name);
+                    _varTypes[call.Result.Name] = retType;
+                    if (call.Result.Type is ReferenceType) _pointerVars.Add(call.Result.Name);
                 }
                 else if (call.Result != null)
                 {
@@ -164,9 +184,11 @@ public class CCodeGenerator
             case AddressOfInstruction addressOf:
                 if (addressOf.Result != null && !_declaredVars.Contains(addressOf.Result.Name))
                 {
-                    builder.AppendLine($"    int* {addressOf.Result.Name} = &{addressOf.VariableName};");
+                    var at = (addressOf.Result.Type != null) ? TypeRegistry.ToCType(addressOf.Result.Type) : "int*";
+                    builder.AppendLine($"    {at} {addressOf.Result.Name} = &{addressOf.VariableName};");
                     _declaredVars.Add(addressOf.Result.Name);
                     _pointerVars.Add(addressOf.Result.Name); // Mark as pointer
+                    _varTypes[addressOf.Result.Name] = at;
                 }
 
                 break;
@@ -174,14 +196,32 @@ public class CCodeGenerator
             case LoadInstruction load:
                 if (load.Result != null && !_declaredVars.Contains(load.Result.Name))
                 {
-                    builder.AppendLine($"    int {load.Result.Name} = *{EmitValue(load.Pointer)};");
+                    var lt = (load.Result.Type != null) ? TypeRegistry.ToCType(load.Result.Type) : "int";
+                    builder.AppendLine($"    {lt} {load.Result.Name} = *{EmitValue(load.Pointer)};");
                     _declaredVars.Add(load.Result.Name);
+                    _varTypes[load.Result.Name] = lt;
                 }
 
                 break;
 
             case StorePointerInstruction storePtr:
                 builder.AppendLine($"    *{EmitValue(storePtr.Pointer)} = {EmitValue(storePtr.Value)};");
+                break;
+
+            case CastInstruction cast:
+                if (cast.Result != null && !_declaredVars.Contains(cast.Result.Name))
+                {
+                    var dst = cast.Result.Type != null ? TypeRegistry.ToCType(cast.Result.Type) : "int";
+                    builder.AppendLine($"    {dst} {cast.Result.Name} = ({dst}){EmitValue(cast.Source)};");
+                    _declaredVars.Add(cast.Result.Name);
+                    _varTypes[cast.Result.Name] = dst;
+                    if (cast.Result.Type is ReferenceType) _pointerVars.Add(cast.Result.Name);
+                }
+                else if (cast.Result != null)
+                {
+                    var dst = cast.Result.Type != null ? TypeRegistry.ToCType(cast.Result.Type) : "int";
+                    builder.AppendLine($"    {cast.Result.Name} = ({dst}){EmitValue(cast.Source)};");
+                }
                 break;
 
             case AllocaInstruction alloca:
@@ -200,12 +240,14 @@ public class CCodeGenerator
                         builder.AppendLine($"    {elementType} {tempVarName}[{length}];");
                         // Pointer to array: int (*array_ptr)[3] = &array_val;
                         builder.AppendLine($"    {elementType} (*{alloca.Result.Name})[{length}] = &{tempVarName};");
+                        _varTypes[alloca.Result.Name] = $"{elementType} (*)[{length}]"; // not exact, but tracks 'pointer'
                     }
                     else
                     {
                         var allocType = TypeRegistry.ToCType(alloca.AllocatedType);
                         builder.AppendLine($"    {allocType} {tempVarName};");
                         builder.AppendLine($"    {allocType}* {alloca.Result.Name} = &{tempVarName};");
+                        _varTypes[alloca.Result.Name] = $"{allocType}*";
                     }
 
                     _declaredVars.Add(tempVarName);
@@ -219,10 +261,12 @@ public class CCodeGenerator
                 if (gep.Result != null && !_declaredVars.Contains(gep.Result.Name))
                 {
                     // Cast to char* for pointer arithmetic, then calculate offset
+                    var rt = (gep.Result.Type != null) ? TypeRegistry.ToCType(gep.Result.Type) : "int*";
                     builder.AppendLine(
-                        $"    int* {gep.Result.Name} = (int*)((char*){EmitValue(gep.BasePointer)} + {EmitValue(gep.ByteOffset)});");
+                        $"    {rt} {gep.Result.Name} = ({rt})((char*){EmitValue(gep.BasePointer)} + {EmitValue(gep.ByteOffset)});");
                     _declaredVars.Add(gep.Result.Name);
                     _pointerVars.Add(gep.Result.Name);
+                    _varTypes[gep.Result.Name] = rt;
                 }
 
                 break;

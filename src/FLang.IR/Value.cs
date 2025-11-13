@@ -1,8 +1,11 @@
+using FLang.Core;
+
 namespace FLang.IR;
 
 public abstract class Value
 {
     public string Name { get; set; } = "";
+    public FType? Type { get; set; } // FLang type carried in IR
 }
 
 public class ConstantValue : Value

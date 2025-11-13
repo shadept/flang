@@ -27,6 +27,7 @@ public enum TokenKind
     Import,
     Struct,
     Foreign,
+    As,
 
     // Operators
     Plus,

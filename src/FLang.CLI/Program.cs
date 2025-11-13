@@ -39,7 +39,7 @@ if (inputFilePath == null)
     return;
 }
 
-// Set default stdlib path if not provided
+// Set the default stdlib path if not provided
 if (stdlibPath == null) stdlibPath = Path.Combine(AppContext.BaseDirectory, "stdlib");
 
 var compilation = new Compilation();
@@ -48,6 +48,16 @@ compilation.StdlibPath = stdlibPath;
 // Compile all modules (entry point + imports)
 var moduleCompiler = new ModuleCompiler(compilation);
 var parsedModules = moduleCompiler.CompileModules(inputFilePath);
+
+// Report module loading/import resolution diagnostics (e.g., unresolved imports)
+if (moduleCompiler.Diagnostics.Any())
+{
+    foreach (var diagnostic in moduleCompiler.Diagnostics)
+        DiagnosticPrinter.PrintToConsole(diagnostic, compilation);
+
+    Console.Error.WriteLine($"Error: Module loading failed with {moduleCompiler.Diagnostics.Count} error(s)");
+    Environment.Exit(1);
+}
 
 // Type checking pass
 var typeSolver = new TypeSolver(compilation);
@@ -84,7 +94,7 @@ foreach (var functionNode in module.Functions)
 }
 
 // Check for lowering errors
-if (loweringDiagnostics.Any())
+if (loweringDiagnostics.Count != 0)
 {
     foreach (var diagnostic in loweringDiagnostics) DiagnosticPrinter.PrintToConsole(diagnostic, compilation);
 

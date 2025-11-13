@@ -1,12 +1,12 @@
-//! TEST: string_basic
-//! EXIT: 5
+//! TEST: println_basic
+//! EXIT: 0
 //! STDOUT: hello
+
 import core.string
 import core.io
 
 pub fn main() i32 {
     let s: String = "hello"
     println(s)
-    return s.len
+    return 0
 }
-

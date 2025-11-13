@@ -42,21 +42,26 @@ public class AstLowering
     private Function LowerFunction(FunctionDeclarationNode functionNode)
     {
         var function = new Function(functionNode.Name);
-        function.IsForeign = functionNode.IsForeign;
+        function.IsForeign = (functionNode.Modifiers & FunctionModifiers.Foreign) != 0;
+
+        // Set return type (default to i32)
+        var retTypeNode = functionNode.ReturnType;
+        var retType = retTypeNode != null ? ResolveTypeFromNode(retTypeNode) : TypeRegistry.I32;
+        function.ReturnType = retType;
 
         // Add parameters to function
         foreach (var param in functionNode.Parameters)
         {
             var paramType = ResolveTypeFromNode(param.Type);
-            var cType = TypeRegistry.ToCType(paramType);
-            function.Parameters.Add(new FunctionParameter(param.Name, cType));
+            function.Parameters.Add(new FunctionParameter(param.Name, paramType));
 
-            // Add parameter to locals so it can be referenced in the function body
-            _locals[param.Name] = new LocalValue(param.Name);
+            // Add parameter to locals with type so it can be referenced in the function body
+            var localParam = new LocalValue(param.Name) { Type = paramType };
+            _locals[param.Name] = localParam;
         }
 
         // Foreign functions have no body
-        if (functionNode.IsForeign) return function;
+        if ((functionNode.Modifiers & FunctionModifiers.Foreign) != 0) return function;
 
         _currentBlock = CreateBlock("entry");
         function.BasicBlocks.Add(_currentBlock);
@@ -80,7 +85,7 @@ public class AstLowering
         return function;
     }
 
-    private Type ResolveTypeFromNode(TypeNode typeNode)
+    private FType ResolveTypeFromNode(TypeNode typeNode)
     {
         switch (typeNode)
         {
@@ -105,7 +110,7 @@ public class AstLowering
 
             case GenericTypeNode genericType:
             {
-                var typeArgs = new List<Type>();
+                var typeArgs = new List<FType>();
                 foreach (var argNode in genericType.TypeArguments) typeArgs.Add(ResolveTypeFromNode(argNode));
                 return new GenericType(genericType.Name, typeArgs);
             }
@@ -206,16 +211,16 @@ public class AstLowering
         switch (expression)
         {
             case IntegerLiteralNode intLiteral:
-                return new ConstantValue(intLiteral.Value);
+                return new ConstantValue(intLiteral.Value) { Type = _typeSolver.GetType(expression) ?? TypeRegistry.ComptimeInt };
 
             case BooleanLiteralNode boolLiteral:
                 // In C, booleans are represented as integers (0 = false, 1 = true)
-                return new ConstantValue(boolLiteral.Value ? 1 : 0);
+                return new ConstantValue(boolLiteral.Value ? 1 : 0) { Type = _typeSolver.GetType(expression) ?? TypeRegistry.Bool };
 
             case StringLiteralNode stringLiteral:
                 // String literals are represented as global constants
                 var stringName = $"str_{_stringCounter++}";
-                return new StringConstantValue(stringLiteral.Value, stringName);
+                return new StringConstantValue(stringLiteral.Value, stringName) { Type = _typeSolver.GetType(expression) };
 
             case IdentifierExpressionNode identifier:
                 if (_locals.TryGetValue(identifier.Name, out var local)) return local;
@@ -248,7 +253,7 @@ public class AstLowering
                     _ => throw new Exception($"Unknown binary operator: {binary.Operator}")
                 };
 
-                var temp = new LocalValue($"t{_tempCounter++}");
+                var temp = new LocalValue($"t{_tempCounter++}") { Type = _typeSolver.GetType(binary) };
                 var instruction = new BinaryInstruction(op, left, right)
                 {
                     Result = temp
@@ -333,9 +338,10 @@ public class AstLowering
                     }
 
                     // Compute the constant value at compile time
-                    var value = call.FunctionName == "size_of"
-                        ? Type.GetSizeOf(type)
-                        : Type.GetAlignmentOf(type);
+                     var value = call.FunctionName == "size_of"
+                         ? FType.GetSizeOf(type)
+                         : FType.GetAlignmentOf(type);
+
 
                     // Return constant value (no FIR instruction generated)
                     return new ConstantValue(value);
@@ -344,8 +350,9 @@ public class AstLowering
                 // Regular function call
                 var args = new List<Value>();
                 foreach (var arg in call.Arguments) args.Add(LowerExpression(arg));
-                var callResult = new LocalValue($"call_{_tempCounter++}");
+                var callResult = new LocalValue($"call_{_tempCounter++}") { Type = _typeSolver.GetType(call) };
                 var callInst = new CallInstruction(call.FunctionName, args) { Result = callResult };
+
                 _currentBlock.Instructions.Add(callInst);
                 return callResult;
 
@@ -354,7 +361,7 @@ public class AstLowering
                 // For now, we only support taking address of identifiers
                 if (addressOf.Target is IdentifierExpressionNode addrIdentifier)
                 {
-                    var addrResult = new LocalValue($"addr_{_tempCounter++}");
+                    var addrResult = new LocalValue($"addr_{_tempCounter++}") { Type = _typeSolver.GetType(addressOf) };
                     var addrInst = new AddressOfInstruction(addrIdentifier.Name) { Result = addrResult };
                     _currentBlock.Instructions.Add(addrInst);
                     return addrResult;
@@ -371,7 +378,7 @@ public class AstLowering
             case DereferenceExpressionNode deref:
                 // Dereference: ptr.*
                 var ptrValue = LowerExpression(deref.Target);
-                var loadResult = new LocalValue($"load_{_tempCounter++}");
+                var loadResult = new LocalValue($"load_{_tempCounter++}") { Type = _typeSolver.GetType(deref) };
                 var loadInst = new LoadInstruction(ptrValue) { Result = loadResult };
                 _currentBlock.Instructions.Add(loadInst);
                 return loadResult;
@@ -391,7 +398,7 @@ public class AstLowering
                 }
 
                 // Allocate stack space for the struct
-                var allocaResult = new LocalValue($"alloca_{_tempCounter++}");
+                var allocaResult = new LocalValue($"alloca_{_tempCounter++}") { Type = new ReferenceType(structType) };
                 var allocaInst = new AllocaInstruction(structType, structType.GetSize()) { Result = allocaResult };
                 _currentBlock.Instructions.Add(allocaInst);
 
@@ -400,9 +407,10 @@ public class AstLowering
                 {
                     var fieldValue = LowerExpression(fieldExpr);
                     var fieldOffset = structType.GetFieldOffset(fieldName);
+                    var fieldType = structType.GetFieldType(fieldName) ?? TypeRegistry.I32;
 
                     // Calculate field address: base + offset
-                    var fieldPtrResult = new LocalValue($"field_ptr_{_tempCounter++}");
+                    var fieldPtrResult = new LocalValue($"field_ptr_{_tempCounter++}") { Type = new ReferenceType(fieldType) };
                     var gepInst = new GetElementPtrInstruction(allocaResult, fieldOffset) { Result = fieldPtrResult };
                     _currentBlock.Instructions.Add(gepInst);
 
@@ -413,6 +421,14 @@ public class AstLowering
 
                 // Return pointer to the struct
                 return allocaResult;
+
+            case CastExpressionNode cast:
+                var srcVal = LowerExpression(cast.Expression);
+                var dstType = _typeSolver.GetType(cast) ?? TypeRegistry.I32;
+                var castResult = new LocalValue($"cast_{_tempCounter++}") { Type = dstType };
+                var castInst = new CastInstruction(srcVal, dstType) { Result = castResult };
+                _currentBlock.Instructions.Add(castInst);
+                return castResult;
 
             case FieldAccessExpressionNode fieldAccess:
                 // Get struct type from the target expression
@@ -443,12 +459,13 @@ public class AstLowering
                 }
 
                 // Get pointer to field: targetPtr + offset
-                var fieldPointer = new LocalValue($"field_ptr_{_tempCounter++}");
+                var fieldType2 = targetType.GetFieldType(fieldAccess.FieldName) ?? TypeRegistry.I32;
+                var fieldPointer = new LocalValue($"field_ptr_{_tempCounter++}") { Type = new ReferenceType(fieldType2) };
                 var fieldGepInst = new GetElementPtrInstruction(targetValue, fieldByteOffset) { Result = fieldPointer };
                 _currentBlock.Instructions.Add(fieldGepInst);
 
                 // Load value from field
-                var fieldLoadResult = new LocalValue($"field_load_{_tempCounter++}");
+                var fieldLoadResult = new LocalValue($"field_load_{_tempCounter++}") { Type = targetType.GetFieldType(fieldAccess.FieldName) };
                 var fieldLoadInst = new LoadInstruction(fieldPointer) { Result = fieldLoadResult };
                 _currentBlock.Instructions.Add(fieldLoadInst);
 
@@ -469,7 +486,7 @@ public class AstLowering
                 }
 
                 // Allocate stack space for the array
-                var arrayAllocaResult = new LocalValue($"array_{_tempCounter++}");
+                var arrayAllocaResult = new LocalValue($"array_{_tempCounter++}") { Type = new ReferenceType(arrayType) };
                 var arrayAllocaInst = new AllocaInstruction(arrayType, arrayType.GetSize())
                     { Result = arrayAllocaResult };
                 _currentBlock.Instructions.Add(arrayAllocaInst);
@@ -484,7 +501,7 @@ public class AstLowering
                     for (var i = 0; i < arrayLiteral.RepeatCount!.Value; i++)
                     {
                         // Calculate element address: base + (i * element_size)
-                        var elemPtrResult = new LocalValue($"elem_ptr_{_tempCounter++}");
+                        var elemPtrResult = new LocalValue($"elem_ptr_{_tempCounter++}") { Type = new ReferenceType(arrayType.ElementType) };
                         var elemGepInst = new GetElementPtrInstruction(arrayAllocaResult, i * elementSize)
                             { Result = elemPtrResult };
                         _currentBlock.Instructions.Add(elemGepInst);
@@ -504,7 +521,7 @@ public class AstLowering
                         var elemValue = LowerExpression(arrayLiteral.Elements[i]);
 
                         // Calculate element address: base + (i * element_size)
-                        var elemPtrResult = new LocalValue($"elem_ptr_{_tempCounter++}");
+                        var elemPtrResult = new LocalValue($"elem_ptr_{_tempCounter++}") { Type = new ReferenceType(arrayType.ElementType) };
                         var elemGepInst = new GetElementPtrInstruction(arrayAllocaResult, i * elementSize)
                             { Result = elemPtrResult };
                         _currentBlock.Instructions.Add(elemGepInst);
@@ -530,18 +547,18 @@ public class AstLowering
                     var elemSize = GetTypeSize(arrayTypeForIndex.ElementType);
 
                     // Calculate offset: index * element_size
-                    var offsetTemp = new LocalValue($"offset_{_tempCounter++}");
-                    var offsetInst = new BinaryInstruction(BinaryOp.Multiply, indexValue, new ConstantValue(elemSize))
+                    var offsetTemp = new LocalValue($"offset_{_tempCounter++}") { Type = TypeRegistry.USize };
+                    var offsetInst = new BinaryInstruction(BinaryOp.Multiply, indexValue, new ConstantValue(elemSize) { Type = TypeRegistry.I32 })
                         { Result = offsetTemp };
                     _currentBlock.Instructions.Add(offsetInst);
 
                     // Calculate element address: base + offset
-                    var indexElemPtr = new LocalValue($"index_ptr_{_tempCounter++}");
+                    var indexElemPtr = new LocalValue($"index_ptr_{_tempCounter++}") { Type = new ReferenceType(arrayTypeForIndex.ElementType) };
                     var indexGepInst = new GetElementPtrInstruction(baseValue, offsetTemp) { Result = indexElemPtr };
                     _currentBlock.Instructions.Add(indexGepInst);
 
                     // Load value from element
-                    var indexLoadResult = new LocalValue($"index_load_{_tempCounter++}");
+                    var indexLoadResult = new LocalValue($"index_load_{_tempCounter++}") { Type = arrayTypeForIndex.ElementType };
                     var indexLoadInst = new LoadInstruction(indexElemPtr) { Result = indexLoadResult };
                     _currentBlock.Instructions.Add(indexLoadInst);
 
@@ -574,7 +591,7 @@ public class AstLowering
         }
     }
 
-    private int GetTypeSize(Type type)
+    private int GetTypeSize(FType type)
     {
         return type switch
         {
