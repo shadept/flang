@@ -1,4 +1,4 @@
-﻿### Distribution and publish outputs
+### Distribution and publish outputs
 
 Where is the self‑contained executable?
 
@@ -25,5 +25,6 @@ How to publish
 
 Notes
 
+- Pass `--release` to the `flang` CLI when you want the generated C compilation to use the platform optimizer flags (`-O2` for GCC/Clang, `/O2` for MSVC).
 - The /dist folder contains the final executable (flang.exe) and the stdlib folder. PDBs are not copied there.
 - Trimming is disabled by default to avoid potential reflection issues. You can experiment with -p:PublishTrimmed=true if needed.

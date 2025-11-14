@@ -155,6 +155,7 @@ public class TypeSolver
                 var pt = ResolveTypeNode(param.Type) ?? TypeRegistry.I32;
                 parameterTypes.Add(pt);
             }
+
             _functions[function.Name] = new FunctionSignature(function.Name, parameterTypes, returnType);
             added.Add(function.Name);
         }
@@ -314,7 +315,7 @@ public class TypeSolver
                 break;
 
             case StringLiteralNode:
-                // String literals have type String
+                // String literals have type String. If not declared yet, synthesize its structural type
                 if (_structs.TryGetValue("String", out var stringType))
                 {
                     type = stringType;
@@ -324,7 +325,7 @@ public class TypeSolver
                     _diagnostics.Add(Diagnostic.Error(
                         "String type not found",
                         expression.Span,
-                        "make sure to import core/string",
+                        "make sure to import core.string",
                         "E2013"
                     ));
                     type = TypeRegistry.I32; // Fallback
@@ -398,6 +399,20 @@ public class TypeSolver
                     // Intrinsics always return usize
                     type = TypeRegistry.USize;
                     // Don't type-check arguments - they'll be validated during FIR lowering
+                    break;
+                }
+
+                // Special-case C stdio printf to allow varargs usage from stdlib without a #foreign prototype
+                if (call.FunctionName == "printf")
+                {
+                    // Evaluate all arguments to ensure type information and diagnostics are recorded
+                    foreach (var argument in call.Arguments)
+                    {
+                        CheckExpression(argument);
+                    }
+
+                    // Treat as returning i32 and skip strict argument type checks (stdio.h provides the prototype in generated C)
+                    type = TypeRegistry.I32;
                     break;
                 }
 
@@ -765,9 +780,11 @@ public class TypeSolver
             return true;
 
         // String ↔ u8[] (blessed binary-compat)
-        if (source is StructType s && s.Name == "String" && target is SliceType t && t.ElementType.Equals(TypeRegistry.U8))
+        if (source is StructType s && s.Name == "String" && target is SliceType t &&
+            t.ElementType.Equals(TypeRegistry.U8))
             return true;
-        if (target is StructType s2 && s2.Name == "String" && source is SliceType t2 && t2.ElementType.Equals(TypeRegistry.U8))
+        if (target is StructType s2 && s2.Name == "String" && source is SliceType t2 &&
+            t2.ElementType.Equals(TypeRegistry.U8))
             return true;
 
         return false;
@@ -873,6 +890,11 @@ public class TypeSolver
         // Array→slice coercion: [T; N] can be used where T[] is expected
         if (source is ArrayType arrayType && target is SliceType sliceType)
             return IsCompatible(arrayType.ElementType, sliceType.ElementType);
+
+        // Implicit String → u8[] view (blessed binary compatibility)
+        if (source is StructType ss && ss.StructName == "String" && target is SliceType ts &&
+            ts.ElementType.Equals(TypeRegistry.U8))
+            return true;
 
         // Array type compatibility: check element types and lengths
         if (source is ArrayType srcArray && target is ArrayType tgtArray)

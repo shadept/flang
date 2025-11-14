@@ -27,6 +27,18 @@ public class ModuleCompiler
         _workQueue.Enqueue(normalizedPath);
         _compilation.RegisterModule(normalizedPath, -1); // Reserve entry point
 
+        // Always include core/string for built-in String support, even if not explicitly imported
+        var preludeStringPath = Path.Combine(_compilation.StdlibPath, "core", "string.f");
+        if (File.Exists(preludeStringPath))
+        {
+            var normPrelude = Path.GetFullPath(preludeStringPath);
+            if (!_compilation.IsModuleAlreadyLoaded(normPrelude))
+            {
+                _workQueue.Enqueue(normPrelude);
+                _compilation.RegisterModule(normPrelude, -1);
+            }
+        }
+
         while (_workQueue.Count > 0)
         {
             var modulePath = _workQueue.Dequeue();

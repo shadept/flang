@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Runtime.InteropServices;
 
 namespace FLang.Tests;
 
@@ -24,20 +25,33 @@ public class HarnessTests
         if (string.IsNullOrEmpty(metadata.TestName))
             Assert.Fail($"Test file {testFile} is missing //! TEST: directive");
 
-        // 2. Invoke FLang.CLI to compile the .f file
+        // 2. Invoke FLang.CLI to compile the .f file (build once, run built executable directly)
         var stdlibPath = Path.GetFullPath(Path.Combine(projectRoot, "..", "..", "stdlib"));
+
+#if DEBUG
+        var configuration = "Debug";
+#else
+        var configuration = "Release";
+#endif
+        var cliOutputDir = Path.Combine(solutionRoot, "src", "FLang.CLI", "bin", configuration, "net9.0");
+        var cliExeName = RuntimeInformation.IsOSPlatform(OSPlatform.Windows) ? "FLang.CLI.exe" : "FLang.CLI";
+        var cliExePath = Path.Combine(cliOutputDir, cliExeName);
+
+        if (!File.Exists(cliExePath))
+            Assert.Fail(
+                $"CLI binary not found at {cliExePath}. Ensure the solution is built and FLang.Tests references FLang.CLI.");
+
         var cliProcess = Process.Start(new ProcessStartInfo
         {
-            FileName = "dotnet",
-            Arguments =
-                $"run --project \"src/FLang.CLI/FLang.CLI.csproj\" -- --stdlib-path \"{stdlibPath}\" \"{absoluteTestFile}\"",
+            FileName = cliExePath,
+            Arguments = $"--stdlib-path \"{stdlibPath}\" \"{absoluteTestFile}\"",
             RedirectStandardOutput = true,
             RedirectStandardError = true,
             UseShellExecute = false,
             CreateNoWindow = true,
-            WorkingDirectory = solutionRoot
+            WorkingDirectory = cliOutputDir
         });
-        cliProcess.WaitForExit();
+        cliProcess!.WaitForExit();
 
         if (cliProcess.ExitCode != 0)
         {

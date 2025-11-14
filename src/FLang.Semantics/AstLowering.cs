@@ -91,7 +91,8 @@ public class AstLowering
         {
             case NamedTypeNode namedType:
             {
-                var type = TypeRegistry.GetTypeByName(namedType.Name);
+                // Prefer built-ins, then resolver for user/stdlib types (e.g., String)
+                var type = TypeRegistry.GetTypeByName(namedType.Name) ?? _typeSolver.ResolveTypeName(namedType.Name);
                 if (type != null) return type;
                 break;
             }
@@ -424,11 +425,24 @@ public class AstLowering
 
             case CastExpressionNode cast:
                 var srcVal = LowerExpression(cast.Expression);
+                var srcTypeForCast = _typeSolver.GetType(cast.Expression);
                 var dstType = _typeSolver.GetType(cast) ?? TypeRegistry.I32;
+
+                // No-op for blessed view casts: String ↔ u8[]
+                var isStringToU8Slice = srcTypeForCast is StructType st1 && st1.StructName == "String" && dstType is SliceType sl1 && sl1.ElementType.Equals(TypeRegistry.U8);
+                var isU8SliceToString = dstType is StructType st2 && st2.StructName == "String" && srcTypeForCast is SliceType sl2 && sl2.ElementType.Equals(TypeRegistry.U8);
+                if (isStringToU8Slice || isU8SliceToString)
+                {
+                    // Zero-cost reinterpretation: just change the static type on the value
+                    srcVal.Type = dstType;
+                    return srcVal;
+                }
+
                 var castResult = new LocalValue($"cast_{_tempCounter++}") { Type = dstType };
                 var castInst = new CastInstruction(srcVal, dstType) { Result = castResult };
                 _currentBlock.Instructions.Add(castInst);
                 return castResult;
+
 
             case FieldAccessExpressionNode fieldAccess:
                 // Get struct type from the target expression

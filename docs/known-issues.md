@@ -163,23 +163,27 @@ This was fixed to support dynamic array indexing with runtime index calculations
 
 ## Temporary Limitations
 
-### Minimal I/O (`core/io.f`) uses C printf/puts
+### Minimal I/O (`core/io.f`) uses C stdio printf length specifier
 
 Status: Intentional stopgap for tests
 Affected: `print`, `println`
 
-Problem:
-- `print` currently calls C `printf` with the FLang string pointer as the format argument. If the string contains `%` sequences, `printf` will interpret them as format specifiers.
-- `println` uses `puts` and is safe but always appends a newline.
+Current behavior:
+- `print` and `println` call C `printf` with a literal format `"%.*s"` and pass the FLang string length and pointer. This avoids format-string injection and does not rely on a trailing NUL.
+- `println` appends a newline via the format string.
 
-Solution:
-- Replace with proper `std/io/fmt.f` in Milestone 19 that writes bytes using `fwrite` or buffered writers, and supports formatting without abusing `printf`.
+Remaining limitation:
+- Embedded NUL bytes in the string will truncate output due to `%s` semantics.
+
+Planned fix:
+- Replace with proper `std/io/fmt.f` in Milestone 19 that writes bytes using `fwrite` (or buffered writers) and supports formatting without `%s` truncation.
 
 Related Tests:
 - `tests/FLang.Tests/Harness/strings/print_basic.f`
 - `tests/FLang.Tests/Harness/strings/println_basic.f`
 
 Milestone: 19 (Text & I/O)
+
 
 ## Recently Fixed
 

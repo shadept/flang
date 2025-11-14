@@ -30,12 +30,26 @@ public class CCodeGenerator
         builder.AppendLine("#include <stdint.h>");
         builder.AppendLine();
 
+        // Ensure String struct definition is available when u8[] is used (mapped to struct String)
+        bool needsStringStruct = function.ReturnType is SliceType sret && sret.ElementType.Equals(TypeRegistry.U8) ||
+                                 function.Parameters.Any(p => p.Type is SliceType st && st.ElementType.Equals(TypeRegistry.U8));
+        // Also if a String struct is otherwise used, its definition will be emitted below via _usedStructs.
+        if (needsStringStruct && !_usedStructs.Any(st => st.StructName == "String"))
+        {
+            builder.AppendLine("struct String {");
+            builder.AppendLine("    unsigned char* ptr;");
+            builder.AppendLine("    uintptr_t len;");
+            builder.AppendLine("};");
+            builder.AppendLine();
+        }
+
         // Generate struct definitions
         foreach (var structType in _usedStructs)
         {
             GenerateStructDefinition(structType, builder);
             builder.AppendLine();
         }
+
 
         // Generate string literal declarations
         foreach (var (name, value) in _stringLiterals) GenerateStringLiteral(name, value, builder);
@@ -88,28 +102,33 @@ public class CCodeGenerator
         switch (instruction)
         {
             case StoreInstruction store:
-                // Check if the value being stored is a pointer
-                var isPointer = (store.Value is LocalValue local && _pointerVars.Contains(local.Name))
-                                || store.Value is StringConstantValue;
+                // Determine if the value is a pointer from its FLang type
+                var valType = store.Value.Type;
+                var isPointer = valType is ReferenceType || (store.Value is LocalValue local && _pointerVars.Contains(local.Name));
 
                 if (!_declaredVars.Contains(store.VariableName))
                 {
-                    // Try to inherit type from the value if known
+                    // Prefer declared C type from the value's FLang type
                     string typeStr;
-                    if (store.Value is LocalValue v && _varTypes.TryGetValue(v.Name, out var vt))
+                    if (valType != null)
+                    {
+                        typeStr = TypeRegistry.ToCType(valType);
+                        if (valType is ReferenceType) _pointerVars.Add(store.VariableName);
+                    }
+                    else if (store.Value is LocalValue v && _varTypes.TryGetValue(v.Name, out var vt))
                     {
                         typeStr = vt;
-                        if (vt.Contains("*")) isPointer = true;
+                        if (vt.Contains("*")) _pointerVars.Add(store.VariableName);
                     }
                     else
                     {
                         typeStr = isPointer ? "int*" : "int";
+                        if (isPointer) _pointerVars.Add(store.VariableName);
                     }
 
                     builder.Append($"    {typeStr} {store.VariableName}");
                     _declaredVars.Add(store.VariableName);
                     _varTypes[store.VariableName] = typeStr;
-                    if (isPointer) _pointerVars.Add(store.VariableName);
                 }
                 else
                 {
@@ -262,30 +281,87 @@ public class CCodeGenerator
                 {
                     // Cast to char* for pointer arithmetic, then calculate offset
                     var rt = (gep.Result.Type != null) ? TypeRegistry.ToCType(gep.Result.Type) : "int*";
+                    var baseExpr = EnsurePointerExpression(gep.BasePointer);
+
                     builder.AppendLine(
-                        $"    {rt} {gep.Result.Name} = ({rt})((char*){EmitValue(gep.BasePointer)} + {EmitValue(gep.ByteOffset)});");
+                        $"    {rt} {gep.Result.Name} = ({rt})((char*){baseExpr} + {EmitValue(gep.ByteOffset)});");
                     _declaredVars.Add(gep.Result.Name);
                     _pointerVars.Add(gep.Result.Name);
                     _varTypes[gep.Result.Name] = rt;
                 }
 
                 break;
+
         }
     }
 
     private string EmitValue(Value value)
     {
-        return value switch
+        switch (value)
         {
-            ConstantValue constant => constant.IntValue.ToString(),
-            StringConstantValue stringConst => $"&{stringConst.Name}",
-            LocalValue local => local.Name,
-            _ => throw new Exception($"Unknown value type: {value.GetType().Name}")
-        };
+            case ConstantValue constant:
+                return constant.IntValue.ToString();
+            case StringConstantValue stringConst:
+                // If the expected type is a reference, return &name, otherwise name
+                if (stringConst.Type is ReferenceType)
+                    return $"&{stringConst.Name}";
+                return stringConst.Name;
+            case LocalValue local:
+                return local.Name;
+            default:
+                throw new Exception($"Unknown value type: {value.GetType().Name}");
+        }
+    }
+
+    private string EnsurePointerExpression(Value baseValue)
+    {
+        if (baseValue.Type is ReferenceType)
+            return EmitValue(baseValue);
+
+        if (baseValue is LocalValue local)
+        {
+            if (_varTypes.TryGetValue(local.Name, out var cType) && (cType.Contains("*") || cType.Contains("(*)")))
+                return local.Name;
+
+            return $"&{local.Name}";
+        }
+
+        if (baseValue is StringConstantValue stringConst)
+            return $"&{stringConst.Name}";
+
+        return EmitValue(baseValue);
+    }
+
+    private void CollectStringLiteral(Value? value)
+    {
+        if (value is not StringConstantValue strConst)
+            return;
+
+        _stringLiterals[strConst.Name] = strConst.StringValue;
+        if (strConst.Type is StructType st)
+        {
+            _usedStructs.Add(st);
+            CollectNestedStructs(st);
+        }
     }
 
     private void CollectUsedStructs(Function function)
+
     {
+        // Include structs from parameters and return types
+        foreach (var p in function.Parameters)
+            if (p.Type is StructType st)
+            {
+                _usedStructs.Add(st);
+                CollectNestedStructs(st);
+            }
+        if (function.ReturnType is StructType rst)
+        {
+            _usedStructs.Add(rst);
+            CollectNestedStructs(rst);
+        }
+
+        // Scan instructions for stack allocations of structs
         foreach (var block in function.BasicBlocks)
         foreach (var instruction in block.Instructions)
             if (instruction is AllocaInstruction alloca)
@@ -329,36 +405,42 @@ public class CCodeGenerator
 
     private void CollectStringLiteralsFromInstruction(Instruction instruction)
     {
-        // Check all values used in the instruction
         switch (instruction)
         {
             case StoreInstruction store:
-                if (store.Value is StringConstantValue strConst) _stringLiterals[strConst.Name] = strConst.StringValue;
-
+                CollectStringLiteral(store.Value);
                 break;
             case BinaryInstruction binary:
-                if (binary.Left is StringConstantValue leftStr) _stringLiterals[leftStr.Name] = leftStr.StringValue;
-
-                if (binary.Right is StringConstantValue rightStr) _stringLiterals[rightStr.Name] = rightStr.StringValue;
-
+                CollectStringLiteral(binary.Left);
+                CollectStringLiteral(binary.Right);
                 break;
             case ReturnInstruction ret:
-                if (ret.Value is StringConstantValue retStr) _stringLiterals[retStr.Name] = retStr.StringValue;
-
+                CollectStringLiteral(ret.Value);
                 break;
             case CallInstruction call:
                 foreach (var arg in call.Arguments)
-                    if (arg is StringConstantValue argStr)
-                        _stringLiterals[argStr.Name] = argStr.StringValue;
-
+                    CollectStringLiteral(arg);
                 break;
             case BranchInstruction branch:
-                if (branch.Condition is StringConstantValue branchStr)
-                    _stringLiterals[branchStr.Name] = branchStr.StringValue;
-
+                CollectStringLiteral(branch.Condition);
+                break;
+            case LoadInstruction load:
+                CollectStringLiteral(load.Pointer);
+                break;
+            case StorePointerInstruction storePtr:
+                CollectStringLiteral(storePtr.Pointer);
+                CollectStringLiteral(storePtr.Value);
+                break;
+            case CastInstruction cast:
+                CollectStringLiteral(cast.Source);
+                break;
+            case GetElementPtrInstruction gep:
+                CollectStringLiteral(gep.BasePointer);
+                CollectStringLiteral(gep.ByteOffset);
                 break;
         }
     }
+
 
     private void GenerateStringLiteral(string name, string value, StringBuilder builder)
     {

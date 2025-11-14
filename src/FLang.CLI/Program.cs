@@ -13,6 +13,7 @@ string? inputFilePath = null;
 string? stdlibPath = null;
 string? emitFir = null;
 var demoDiagnostics = false;
+var releaseBuild = false;
 
 for (var i = 0; i < args.Length; i++)
     if (args[i] == "--stdlib-path" && i + 1 < args.Length)
@@ -21,6 +22,8 @@ for (var i = 0; i < args.Length; i++)
         emitFir = args[++i];
     else if (args[i] == "--demo-diagnostics")
         demoDiagnostics = true;
+    else if (args[i] == "--release")
+        releaseBuild = true;
     else if (!args[i].StartsWith("--")) inputFilePath = args[i];
 
 if (demoDiagnostics)
@@ -35,6 +38,7 @@ if (inputFilePath == null)
     Console.WriteLine("Options:");
     Console.WriteLine("  --stdlib-path <path>    Path to standard library directory");
     Console.WriteLine("  --emit-fir <file>       Emit FIR (intermediate representation) to file (use '-' for stdout)");
+    Console.WriteLine("  --release               Enable C backend optimization (passes -O2 /O2)");
     Console.WriteLine("  --demo-diagnostics      Show diagnostic system demo");
     return;
 }
@@ -127,24 +131,93 @@ if (emitFir != null)
     }
 }
 
-// Generate C code for all functions
-var cCodeBuilder = new StringBuilder();
-cCodeBuilder.AppendLine("#include <stdio.h>");
-cCodeBuilder.AppendLine("struct String {char* ptr; int len;};"); // HACK
-cCodeBuilder.AppendLine();
+// Generate C code for all functions with proper hoisting/deduplication
+var headerBuilder = new StringBuilder();
+headerBuilder.AppendLine("#include <stdio.h>");
+headerBuilder.AppendLine("#include <stdint.h>");
+headerBuilder.AppendLine();
 
-// Generate code for all functions
+// Collect struct definitions and extern prototypes uniquely
+var structBlocks = new Dictionary<string, string>(); // name -> block
+var externPrototypes = new HashSet<string>();
+var functionBodies = new StringBuilder();
+
 foreach (var func in allFunctions)
 {
     var funcCode = CCodeGenerator.Generate(func);
-    // Skip the #include <stdio.h> line since we already added it
-    var lines = funcCode.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries);
+    var lines = funcCode.Split(new[] { "\r\n", "\n" }, StringSplitOptions.None);
+
+    bool inStruct = false;
+    string currentStructName = "";
+    var currentStructLines = new List<string>();
+
     foreach (var line in lines)
-        if (!line.Contains("#include")) // HACK
-            cCodeBuilder.AppendLine(line);
+    {
+        if (string.IsNullOrWhiteSpace(line) || line.StartsWith("#include"))
+            continue;
+
+        var trimmed = line.TrimStart();
+        if (!inStruct && trimmed.StartsWith("struct ") && trimmed.Contains("{"))
+        {
+            // Begin struct block
+            var afterStruct = trimmed.Substring("struct ".Length);
+            var name = afterStruct.Split(new[] { ' ', '{' }, StringSplitOptions.RemoveEmptyEntries)[0];
+            inStruct = true;
+            currentStructName = name;
+            currentStructLines.Clear();
+            currentStructLines.Add(line);
+            continue;
+        }
+        if (inStruct)
+        {
+            currentStructLines.Add(line);
+            if (trimmed.StartsWith("};"))
+            {
+                // End of struct block
+                var block = string.Join("\n", currentStructLines);
+                if (!structBlocks.ContainsKey(currentStructName))
+                    structBlocks[currentStructName] = block;
+                inStruct = false;
+                currentStructName = "";
+                currentStructLines.Clear();
+            }
+            continue;
+        }
+
+        if (trimmed.StartsWith("extern "))
+        {
+            externPrototypes.Add(line.Trim());
+            continue;
+        }
+
+        // Otherwise, it's part of a function or static data
+        functionBodies.AppendLine(line);
+    }
 }
 
-var cCode = cCodeBuilder.ToString();
+// Emit unique struct definitions first
+foreach (var block in structBlocks.Values)
+{
+    headerBuilder.AppendLine(block);
+    headerBuilder.AppendLine();
+}
+
+// Emit prototypes for all non-foreign functions to avoid forward-declaration issues
+foreach (var f in allFunctions)
+{
+    if (f.IsForeign) continue;
+    var plist = string.Join(", ", f.Parameters.Select(p => $"{TypeRegistry.ToCType(p.Type)} {p.Name}"));
+    if (f.Parameters.Count == 0) plist = "void";
+    headerBuilder.AppendLine($"{TypeRegistry.ToCType(f.ReturnType)} {f.Name}({plist});");
+}
+
+// Emit unique extern prototypes next
+foreach (var proto in externPrototypes)
+    headerBuilder.AppendLine(proto);
+
+headerBuilder.AppendLine();
+
+var cCode = headerBuilder.ToString() + functionBodies.ToString();
 
 var cFilePath = Path.ChangeExtension(inputFilePath, ".c");
 File.WriteAllText(cFilePath, cCode);
@@ -153,16 +226,26 @@ var outputFilePath = Path.ChangeExtension(inputFilePath, ".exe");
 
 // Build compiler list with cl.exe path resolution on Windows
 var compilersList = new List<(string, string, Dictionary<string, string>?)>();
-compilersList.Add(("gcc", $"-o \"{outputFilePath}\" \"{cFilePath}\"", null));
+
+var gccArgs = new List<string>();
+if (releaseBuild) gccArgs.Add("-O2");
+gccArgs.Add($"-o \"{outputFilePath}\"");
+gccArgs.Add($"\"{cFilePath}\"");
+compilersList.Add(("gcc", string.Join(" ", gccArgs), null));
 
 if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
 {
     var (clPath, clEnv) = FindClExeWithEnvironment();
+    var msvcArgs = new List<string> { "/nologo" };
+    if (releaseBuild) msvcArgs.Add("/O2");
+    msvcArgs.Add($"/Fe\"{outputFilePath}\"");
+    msvcArgs.Add($"\"{cFilePath}\"");
+
     if (clPath != null)
-        compilersList.Add((clPath, $"/nologo /Fe\"{outputFilePath}\" \"{cFilePath}\"", clEnv));
+        compilersList.Add((clPath, string.Join(" ", msvcArgs), clEnv));
     else
         // Fallback to hoping cl.exe is in PATH with proper environment
-        compilersList.Add(("cl.exe", $"/nologo /Fe\"{outputFilePath}\" \"{cFilePath}\"", null));
+        compilersList.Add(("cl.exe", string.Join(" ", msvcArgs), null));
 }
 
 var compilers = compilersList.ToArray();

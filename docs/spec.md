@@ -104,9 +104,9 @@ defer expression
   - Binary layout: pointer followed by length (platform-specific size).
 - **List:** dynamic container from the standard library; binary-compatible with `T[]` for copy-free conversions.
 - **String:** UTF-8 view represented as `struct String { ptr: &u8, len: usize }`.
-  - Binary-compatible with `u8[]` slice.
-  - Always null-terminated for C FFI compatibility (null byte not counted in `len`).
-  - Literals are static and compiler-guaranteed valid UTF-8.
+  - Same binary layout as `u8[]` (struct `{ ptr: &u8, len: usize }`).
+  - All `String` values are null-terminated for C FFI; the null byte is not counted in `len`. The standard library upholds this contract for non-literals (Strings are immutable; file-scope mutability applies).
+  - String literals are static and compiler-guaranteed valid UTF-8 and null-terminated.
 - The language guarantees syntax and layout compatibility for slices, lists, and strings.
 
 ### 2.7 Modules and Imports
@@ -148,10 +148,9 @@ defer expression
 ### 3.5 Strings
 
 - Type: `String` represented as `struct String { ptr: &u8, len: usize }`.
-- Representation: fat pointer `(ptr, len)`, always null-terminated for FFI.
-- Null terminator is not counted in `len` field.
-- Literals are static and compiler-guaranteed valid UTF-8.
-- Binary-compatible with `u8[]` slice type.
+- Representation: fat pointer `(ptr, len)` with the same binary layout as `u8[]`.
+- All `String` values are null-terminated for FFI; the terminator is not counted in `len`.
+- String literals are static and compiler-guaranteed valid UTF-8 and null-terminated.
 - Mutable variants (e.g., `MutableString`) are binary-compatible with readonly counterparts.
 
 ### 3.6 Never Type
@@ -231,8 +230,12 @@ pub fn op_add_assign(lhs: &A, rhs: B) void
   - Numeric casts: any integer ↔ integer. Narrowing truncates; widening sign-extends where applicable.
   - Pointer/integer: `&T` ↔ `usize|isize`.
   - Pointer/pointer: `&T` ↔ `&U` allowed as a view cast. Binary compatibility is currently the programmer’s responsibility.
-  - Blessed binary compatibility: `String` ↔ `u8[]` allowed as a zero-copy view.
-- Implicit casts: the type checker may apply the same conversions when a target type is known (e.g., passing `u8` to a `usize` parameter).
+  - Blessed binary compatibility: `String` ↔ `u8[]` is a zero‑copy view.
+- Implicit casts:
+  - When a `u8[]` is expected, a `String` value is implicitly accepted (safe re‑interpretation; zero‑copy).
+- Explicit casts:
+  - Converting from `u8[]` to `String` requires an explicit `as String`. The compiler does not infer this conversion.
+
 
 - Allocation and deallocation are provided by the standard library and may wrap C runtime facilities.
 - The compiler guarantees deterministic type layouts per target/configuration and binary compatibility as stated.

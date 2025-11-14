@@ -292,7 +292,6 @@ _Goal: Add the type system and fundamental data structures needed for real progr
   - `memory/memcpy_basic.f` - Copy between buffers
   - `memory/memset_basic.f` - Fill memory with byte value
 
-
 **Error Codes Added:**
 
 - E2014: Intrinsic requires exactly one type argument
@@ -330,12 +329,11 @@ _Goal: Generics, inference, and advanced type features._
 
 ### Milestone 12: Generic Structs & Collections
 
-**Scope:** `struct Box[T]`, `Option[T]`, basic generic data structures.
+**Scope:** `Option[T]`, basic generic data structures.
 
 **Key Tasks:**
 
 - [ ] Full generic struct implementation (already parsed in M7, now full monomorphization)
-- [ ] Generic struct instantiation: `Box[i32]`
 - [ ] `Option[T]` enum (placeholder: struct with variants)
 - [ ] `T?` sugar for `Option[T]`
 - [ ] `null` keyword as `None` variant
@@ -460,7 +458,8 @@ _Goal: Build a usable standard library._
 
 **Tasks:**
 
-- [ ] `std/text/string.f` - String utilities
+- [ ] `std/text/string.f` - String utilities (incl. `fn to_cstr(s: &String) &u8` that returns a null-terminated pointer: if `s.ptr[s.len] == 0` return `s.ptr`; otherwise allocate `len+1`, copy, append `\0`).
+
 - [ ] `std/text/string_builder.f` - Efficient string building
 - [ ] `std/io/file.f` - File I/O
 - [ ] `std/io/fmt.f` - `println`, `print`, formatting
@@ -507,6 +506,7 @@ _Goal: Rewrite the compiler in FLang._
 - **Milestone:** 10 (IN PROGRESS - Defer/extern done; allocator pending)
 - **Next Up:** Allocator interface + basic heap wrapper, then M11 (Generics Basics)
 - **Tests Passing:** 32/37
+
   - 3 intrinsic tests passing (size_of, align_of)
   - 3 defer tests passing
   - 3 memory tests blocked on casts and pointer-typed call results

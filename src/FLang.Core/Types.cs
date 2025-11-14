@@ -618,9 +618,15 @@ public static class TypeRegistry
 
         // Handle slice types: struct with ptr and len
         if (type is SliceType sliceType)
-            // Slices are represented as fat pointers (struct with ptr and len)
-            // We'll generate the struct definition in codegen
+        {
+            // For u8[] specifically, use the same C struct name as String to guarantee ABI compatibility
+            if (sliceType.ElementType.Equals(U8))
+                return "struct String";
+
+            // Generic slice layout: struct Slice_<Elem>
             return $"struct Slice_{ToCType(sliceType.ElementType).Replace(" ", "_").Replace("*", "Ptr")}";
+        }
+
 
         // Comptime types shouldn't reach codegen, but fallback to int
         return "int";
