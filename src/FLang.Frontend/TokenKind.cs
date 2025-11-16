@@ -60,6 +60,7 @@ public enum TokenKind
     Semicolon,
     Hash,
     Comma,
+    Dollar,
 
     // Identifier
     Identifier

@@ -8,8 +8,14 @@ public class Compilation
     private readonly ConcurrentDictionary<string, int> _modulePathToFileId = new();
     private readonly List<Source> _sourcesList = [];
     private int _fileIdCounter;
+    private int _stringIdCounter;
 
     public string StdlibPath { get; set; } = "";
+
+    public int AllocateStringId()
+    {
+        return Interlocked.Increment(ref _stringIdCounter) - 1;
+    }
 
     public IReadOnlyList<Source> Sources
     {

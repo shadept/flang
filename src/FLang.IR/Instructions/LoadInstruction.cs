@@ -6,10 +6,19 @@ namespace FLang.IR.Instructions;
 /// </summary>
 public class LoadInstruction : Instruction
 {
-    public LoadInstruction(Value pointer)
+    public LoadInstruction(Value pointer, Value result)
     {
         Pointer = pointer;
+        Result = result;
     }
 
+    /// <summary>
+    /// The pointer to dereference.
+    /// </summary>
     public Value Pointer { get; }
+
+    /// <summary>
+    /// The result value loaded from the pointer.
+    /// </summary>
+    public Value Result { get; }
 }

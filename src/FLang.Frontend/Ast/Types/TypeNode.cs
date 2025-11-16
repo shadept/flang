@@ -55,6 +55,7 @@ public class GenericTypeNode : TypeNode
 {
     public GenericTypeNode(SourceSpan span, string name, IReadOnlyList<TypeNode> typeArguments) : base(span)
     {
+        if (typeArguments.Count == 0) throw new ArgumentException("Generic type must have at least one type argument.");
         Name = name;
         TypeArguments = typeArguments;
     }
@@ -89,4 +90,17 @@ public class SliceTypeNode : TypeNode
     }
 
     public TypeNode ElementType { get; }
+}
+
+/// <summary>
+/// Represents a generic parameter type like `$T`.
+/// </summary>
+public class GenericParameterTypeNode : TypeNode
+{
+    public GenericParameterTypeNode(SourceSpan span, string name) : base(span)
+    {
+        Name = name;
+    }
+
+    public string Name { get; }
 }

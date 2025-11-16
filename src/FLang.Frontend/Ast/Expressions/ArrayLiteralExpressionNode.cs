@@ -13,7 +13,7 @@ public class ArrayLiteralExpressionNode : ExpressionNode
     public ArrayLiteralExpressionNode(SourceSpan span, IReadOnlyList<ExpressionNode> elements) : base(span)
     {
         Elements = elements;
-        IsRepeatSyntax = false;
+        RepeatCount = null;
     }
 
     /// <summary>
@@ -23,11 +23,10 @@ public class ArrayLiteralExpressionNode : ExpressionNode
     {
         RepeatValue = repeatValue;
         RepeatCount = repeatCount;
-        IsRepeatSyntax = true;
     }
 
     public IReadOnlyList<ExpressionNode>? Elements { get; }
     public ExpressionNode? RepeatValue { get; }
     public int? RepeatCount { get; }
-    public bool IsRepeatSyntax { get; }
+    public bool IsRepeatSyntax => RepeatCount.HasValue;
 }

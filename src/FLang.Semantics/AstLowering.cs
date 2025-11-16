@@ -20,7 +20,6 @@ public class AstLowering
     private readonly TypeSolver _typeSolver;
     private int _blockCounter;
     private BasicBlock _currentBlock = null!;
-    private int _stringCounter;
     private int _tempCounter;
 
     private AstLowering(Compilation compilation, TypeSolver typeSolver)
@@ -41,18 +40,25 @@ public class AstLowering
 
     private Function LowerFunction(FunctionDeclarationNode functionNode)
     {
-        var function = new Function(functionNode.Name);
-        function.IsForeign = (functionNode.Modifiers & FunctionModifiers.Foreign) != 0;
+        var isForeign = (functionNode.Modifiers & FunctionModifiers.Foreign) != 0;
 
-        // Set return type (default to i32)
+        // Prepare return type (default to i32)
         var retTypeNode = functionNode.ReturnType;
         var retType = retTypeNode != null ? ResolveTypeFromNode(retTypeNode) : TypeRegistry.I32;
-        function.ReturnType = retType;
+
+        // Resolve parameter types first
+        var resolvedParamTypes = new List<FType>();
+        foreach (var p in functionNode.Parameters)
+            resolvedParamTypes.Add(ResolveTypeFromNode(p.Type));
+
+        // Keep base name in IR; backend will mangle
+        var function = new Function(functionNode.Name) { IsForeign = isForeign, ReturnType = retType };
 
         // Add parameters to function
-        foreach (var param in functionNode.Parameters)
+        for (var i = 0; i < functionNode.Parameters.Count; i++)
         {
-            var paramType = ResolveTypeFromNode(param.Type);
+            var param = functionNode.Parameters[i];
+            var paramType = resolvedParamTypes[i];
             function.Parameters.Add(new FunctionParameter(param.Name, paramType));
 
             // Add parameter to locals with type so it can be referenced in the function body
@@ -61,7 +67,7 @@ public class AstLowering
         }
 
         // Foreign functions have no body
-        if ((functionNode.Modifiers & FunctionModifiers.Foreign) != 0) return function;
+        if (isForeign) return function;
 
         _currentBlock = CreateBlock("entry");
         function.BasicBlocks.Add(_currentBlock);
@@ -115,6 +121,18 @@ public class AstLowering
                 foreach (var argNode in genericType.TypeArguments) typeArgs.Add(ResolveTypeFromNode(argNode));
                 return new GenericType(genericType.Name, typeArgs);
             }
+
+            case ArrayTypeNode arrayType:
+            {
+                var elementType = ResolveTypeFromNode(arrayType.ElementType);
+                return new ArrayType(elementType, arrayType.Length);
+            }
+
+            case SliceTypeNode sliceType:
+            {
+                var elementType = ResolveTypeFromNode(sliceType.ElementType);
+                return TypeRegistry.GetSliceStruct(elementType);
+            }
         }
 
         // Fallback to i32
@@ -133,15 +151,24 @@ public class AstLowering
         switch (statement)
         {
             case VariableDeclarationNode varDecl:
-                if (varDecl.Initializer != null)
                 {
-                    var value = LowerExpression(varDecl.Initializer);
-                    var local = new LocalValue(varDecl.Name);
-                    _locals[varDecl.Name] = local;
-                    _currentBlock.Instructions.Add(new StoreInstruction(varDecl.Name, value));
-                }
+                    // Establish variable type from annotation or initializer
+                    FType varType = TypeRegistry.I32;
+                    if (varDecl.Type != null)
+                        varType = ResolveTypeFromNode(varDecl.Type);
+                    else if (varDecl.Initializer != null)
+                        varType = _typeSolver.GetType(varDecl.Initializer) ?? TypeRegistry.I32;
 
-                break;
+                    var local = new LocalValue(varDecl.Name) { Type = varType };
+                    _locals[varDecl.Name] = local;
+
+                    if (varDecl.Initializer != null)
+                    {
+                        var value = LowerExpression(varDecl.Initializer);
+                        _currentBlock.Instructions.Add(new StoreInstruction(varDecl.Name, value, local));
+                    }
+                    break;
+                }
 
             case ReturnStatementNode returnStmt:
                 var returnValue = LowerExpression(returnStmt.Expression);
@@ -219,8 +246,9 @@ public class AstLowering
                 return new ConstantValue(boolLiteral.Value ? 1 : 0) { Type = _typeSolver.GetType(expression) ?? TypeRegistry.Bool };
 
             case StringLiteralNode stringLiteral:
-                // String literals are represented as global constants
-                var stringName = $"str_{_stringCounter++}";
+                // String literals are represented as global constants; ensure unique name per compilation
+                var sid = _compilation.AllocateStringId();
+                var stringName = $"str_{sid}";
                 return new StringConstantValue(stringLiteral.Value, stringName) { Type = _typeSolver.GetType(expression) };
 
             case IdentifierExpressionNode identifier:
@@ -255,10 +283,7 @@ public class AstLowering
                 };
 
                 var temp = new LocalValue($"t{_tempCounter++}") { Type = _typeSolver.GetType(binary) };
-                var instruction = new BinaryInstruction(op, left, right)
-                {
-                    Result = temp
-                };
+                var instruction = new BinaryInstruction(op, left, right, temp);
                 _currentBlock.Instructions.Add(instruction);
                 return temp;
 
@@ -276,9 +301,12 @@ public class AstLowering
                     return assignValue;
                 }
 
-                _currentBlock.Instructions.Add(new StoreInstruction(assignment.TargetName, assignValue));
-                // Assignment expressions return the assigned value
-                return assignValue;
+                // SSA: Create new version for this assignment
+                var newVersion = new LocalValue($"{assignment.TargetName}_{_tempCounter++}") { Type = assignValue.Type };
+                _locals[assignment.TargetName] = newVersion;
+                _currentBlock.Instructions.Add(new StoreInstruction(assignment.TargetName, assignValue, newVersion));
+                // Assignment expressions return the new version
+                return newVersion;
 
             case IfExpressionNode ifExpr:
                 return LowerIfExpression(ifExpr);
@@ -340,8 +368,8 @@ public class AstLowering
 
                     // Compute the constant value at compile time
                      var value = call.FunctionName == "size_of"
-                         ? FType.GetSizeOf(type)
-                         : FType.GetAlignmentOf(type);
+                         ? type.Size
+                         : type.Alignment;
 
 
                     // Return constant value (no FIR instruction generated)
@@ -349,23 +377,79 @@ public class AstLowering
                 }
 
                 // Regular function call
+                var resolved = _typeSolver.GetResolvedCall(call);
+                var paramTypes = resolved?.ParameterTypes ?? new List<FType>();
+
+                // Lower arguments, inserting implicit casts when needed
                 var args = new List<Value>();
-                foreach (var arg in call.Arguments) args.Add(LowerExpression(arg));
+                for (var i = 0; i < call.Arguments.Count; i++)
+                {
+                    var argVal = LowerExpression(call.Arguments[i]);
+                    var argType = _typeSolver.GetType(call.Arguments[i]);
+
+                    // Insert cast if argument type doesn't match parameter type but can coerce
+                    if (i < paramTypes.Count && argType != null && !argType.Equals(paramTypes[i]))
+                    {
+                        var argCastResult = new LocalValue($"cast_{_tempCounter++}") { Type = paramTypes[i] };
+                        var argCastInst = new CastInstruction(argVal, paramTypes[i], argCastResult);
+                        _currentBlock.Instructions.Add(argCastInst);
+                        args.Add(argCastResult);
+                    }
+                    else
+                    {
+                        args.Add(argVal);
+                    }
+                }
+
                 var callResult = new LocalValue($"call_{_tempCounter++}") { Type = _typeSolver.GetType(call) };
-                var callInst = new CallInstruction(call.FunctionName, args) { Result = callResult };
+                var targetName = resolved?.Name ?? call.FunctionName;
+                var callInst = new CallInstruction(targetName, args, callResult);
+                if (resolved.HasValue)
+                {
+                    callInst.CalleeParamTypes = resolved.Value.ParameterTypes;
+                    callInst.IsForeignCall = resolved.Value.IsForeign;
+                }
 
                 _currentBlock.Instructions.Add(callInst);
                 return callResult;
 
             case AddressOfExpressionNode addressOf:
-                // Address-of: &variable
-                // For now, we only support taking address of identifiers
+                // Address-of: &expr
                 if (addressOf.Target is IdentifierExpressionNode addrIdentifier)
                 {
                     var addrResult = new LocalValue($"addr_{_tempCounter++}") { Type = _typeSolver.GetType(addressOf) };
-                    var addrInst = new AddressOfInstruction(addrIdentifier.Name) { Result = addrResult };
+                    var addrInst = new AddressOfInstruction(addrIdentifier.Name, addrResult);
                     _currentBlock.Instructions.Add(addrInst);
                     return addrResult;
+                }
+                if (addressOf.Target is IndexExpressionNode ixAddr)
+                {
+                    // Compute pointer to array element: &base[index]
+                    var baseType = _typeSolver.GetType(ixAddr.Base);
+                    var addrBaseValue = LowerExpression(ixAddr.Base);
+                    var addrIndexValue = LowerExpression(ixAddr.Index);
+
+                    if (baseType is ArrayType atAddr)
+                    {
+                        var elemSize = GetTypeSize(atAddr.ElementType);
+                        // offset = index * elem_size
+                        var offsetTemp = new LocalValue($"offset_{_tempCounter++}") { Type = TypeRegistry.USize };
+                        var offsetInst = new BinaryInstruction(BinaryOp.Multiply, addrIndexValue, new ConstantValue(elemSize) { Type = TypeRegistry.I32 }, offsetTemp);
+                        _currentBlock.Instructions.Add(offsetInst);
+
+                        // element pointer = base + offset
+                        var elemPtr = new LocalValue($"index_ptr_{_tempCounter++}") { Type = new ReferenceType(atAddr.ElementType) };
+                        var gepInst = new GetElementPtrInstruction(addrBaseValue, offsetTemp, elemPtr);
+                        _currentBlock.Instructions.Add(gepInst);
+                        return elemPtr;
+                    }
+
+                    _diagnostics.Add(Diagnostic.Error(
+                        "cannot take address of indexed non-array value",
+                        addressOf.Span,
+                        null,
+                        "E2012"));
+                    return new ConstantValue(0);
                 }
 
                 _diagnostics.Add(Diagnostic.Error(
@@ -380,7 +464,7 @@ public class AstLowering
                 // Dereference: ptr.*
                 var ptrValue = LowerExpression(deref.Target);
                 var loadResult = new LocalValue($"load_{_tempCounter++}") { Type = _typeSolver.GetType(deref) };
-                var loadInst = new LoadInstruction(ptrValue) { Result = loadResult };
+                var loadInst = new LoadInstruction(ptrValue, loadResult);
                 _currentBlock.Instructions.Add(loadInst);
                 return loadResult;
 
@@ -400,7 +484,7 @@ public class AstLowering
 
                 // Allocate stack space for the struct
                 var allocaResult = new LocalValue($"alloca_{_tempCounter++}") { Type = new ReferenceType(structType) };
-                var allocaInst = new AllocaInstruction(structType, structType.GetSize()) { Result = allocaResult };
+                var allocaInst = new AllocaInstruction(structType, structType.Size, allocaResult);
                 _currentBlock.Instructions.Add(allocaInst);
 
                 // Store each field value at the correct offset
@@ -412,7 +496,7 @@ public class AstLowering
 
                     // Calculate field address: base + offset
                     var fieldPtrResult = new LocalValue($"field_ptr_{_tempCounter++}") { Type = new ReferenceType(fieldType) };
-                    var gepInst = new GetElementPtrInstruction(allocaResult, fieldOffset) { Result = fieldPtrResult };
+                    var gepInst = new GetElementPtrInstruction(allocaResult, fieldOffset, fieldPtrResult);
                     _currentBlock.Instructions.Add(gepInst);
 
                     // Store value to field
@@ -428,18 +512,17 @@ public class AstLowering
                 var srcTypeForCast = _typeSolver.GetType(cast.Expression);
                 var dstType = _typeSolver.GetType(cast) ?? TypeRegistry.I32;
 
-                // No-op for blessed view casts: String ↔ u8[]
-                var isStringToU8Slice = srcTypeForCast is StructType st1 && st1.StructName == "String" && dstType is SliceType sl1 && sl1.ElementType.Equals(TypeRegistry.U8);
-                var isU8SliceToString = dstType is StructType st2 && st2.StructName == "String" && srcTypeForCast is SliceType sl2 && sl2.ElementType.Equals(TypeRegistry.U8);
-                if (isStringToU8Slice || isU8SliceToString)
+                // No-op if types are already identical
+                if (srcTypeForCast != null && srcTypeForCast.Equals(dstType))
                 {
-                    // Zero-cost reinterpretation: just change the static type on the value
                     srcVal.Type = dstType;
                     return srcVal;
                 }
 
+                // Always emit CastInstruction for all other casts (including view casts)
+                // The C codegen will handle zero-cost reinterpret casts appropriately
                 var castResult = new LocalValue($"cast_{_tempCounter++}") { Type = dstType };
-                var castInst = new CastInstruction(srcVal, dstType) { Result = castResult };
+                var castInst = new CastInstruction(srcVal, dstType, castResult);
                 _currentBlock.Instructions.Add(castInst);
                 return castResult;
 
@@ -475,12 +558,12 @@ public class AstLowering
                 // Get pointer to field: targetPtr + offset
                 var fieldType2 = targetType.GetFieldType(fieldAccess.FieldName) ?? TypeRegistry.I32;
                 var fieldPointer = new LocalValue($"field_ptr_{_tempCounter++}") { Type = new ReferenceType(fieldType2) };
-                var fieldGepInst = new GetElementPtrInstruction(targetValue, fieldByteOffset) { Result = fieldPointer };
+                var fieldGepInst = new GetElementPtrInstruction(targetValue, fieldByteOffset, fieldPointer);
                 _currentBlock.Instructions.Add(fieldGepInst);
 
                 // Load value from field
                 var fieldLoadResult = new LocalValue($"field_load_{_tempCounter++}") { Type = targetType.GetFieldType(fieldAccess.FieldName) };
-                var fieldLoadInst = new LoadInstruction(fieldPointer) { Result = fieldLoadResult };
+                var fieldLoadInst = new LoadInstruction(fieldPointer, fieldLoadResult);
                 _currentBlock.Instructions.Add(fieldLoadInst);
 
                 return fieldLoadResult;
@@ -501,8 +584,7 @@ public class AstLowering
 
                 // Allocate stack space for the array
                 var arrayAllocaResult = new LocalValue($"array_{_tempCounter++}") { Type = new ReferenceType(arrayType) };
-                var arrayAllocaInst = new AllocaInstruction(arrayType, arrayType.GetSize())
-                    { Result = arrayAllocaResult };
+                var arrayAllocaInst = new AllocaInstruction(arrayType, arrayType.Size, arrayAllocaResult);
                 _currentBlock.Instructions.Add(arrayAllocaInst);
 
                 // Store each element value
@@ -516,8 +598,7 @@ public class AstLowering
                     {
                         // Calculate element address: base + (i * element_size)
                         var elemPtrResult = new LocalValue($"elem_ptr_{_tempCounter++}") { Type = new ReferenceType(arrayType.ElementType) };
-                        var elemGepInst = new GetElementPtrInstruction(arrayAllocaResult, i * elementSize)
-                            { Result = elemPtrResult };
+                        var elemGepInst = new GetElementPtrInstruction(arrayAllocaResult, i * elementSize, elemPtrResult);
                         _currentBlock.Instructions.Add(elemGepInst);
 
                         // Store value to element
@@ -536,8 +617,7 @@ public class AstLowering
 
                         // Calculate element address: base + (i * element_size)
                         var elemPtrResult = new LocalValue($"elem_ptr_{_tempCounter++}") { Type = new ReferenceType(arrayType.ElementType) };
-                        var elemGepInst = new GetElementPtrInstruction(arrayAllocaResult, i * elementSize)
-                            { Result = elemPtrResult };
+                        var elemGepInst = new GetElementPtrInstruction(arrayAllocaResult, i * elementSize, elemPtrResult);
                         _currentBlock.Instructions.Add(elemGepInst);
 
                         // Store value to element
@@ -562,18 +642,17 @@ public class AstLowering
 
                     // Calculate offset: index * element_size
                     var offsetTemp = new LocalValue($"offset_{_tempCounter++}") { Type = TypeRegistry.USize };
-                    var offsetInst = new BinaryInstruction(BinaryOp.Multiply, indexValue, new ConstantValue(elemSize) { Type = TypeRegistry.I32 })
-                        { Result = offsetTemp };
+                    var offsetInst = new BinaryInstruction(BinaryOp.Multiply, indexValue, new ConstantValue(elemSize) { Type = TypeRegistry.I32 }, offsetTemp);
                     _currentBlock.Instructions.Add(offsetInst);
 
                     // Calculate element address: base + offset
                     var indexElemPtr = new LocalValue($"index_ptr_{_tempCounter++}") { Type = new ReferenceType(arrayTypeForIndex.ElementType) };
-                    var indexGepInst = new GetElementPtrInstruction(baseValue, offsetTemp) { Result = indexElemPtr };
+                    var indexGepInst = new GetElementPtrInstruction(baseValue, offsetTemp, indexElemPtr);
                     _currentBlock.Instructions.Add(indexGepInst);
 
                     // Load value from element
                     var indexLoadResult = new LocalValue($"index_load_{_tempCounter++}") { Type = arrayTypeForIndex.ElementType };
-                    var indexLoadInst = new LoadInstruction(indexElemPtr) { Result = indexLoadResult };
+                    var indexLoadInst = new LoadInstruction(indexElemPtr, indexLoadResult);
                     _currentBlock.Instructions.Add(indexLoadInst);
 
                     return indexLoadResult;
@@ -607,14 +686,7 @@ public class AstLowering
 
     private int GetTypeSize(FType type)
     {
-        return type switch
-        {
-            PrimitiveType pt => pt.SizeInBytes,
-            ReferenceType => IntPtr.Size,
-            StructType st => st.GetSize(),
-            ArrayType at => at.GetSize(),
-            _ => 4 // Default fallback
-        };
+        return type.Size;
     }
 
     private Value LowerIfExpression(IfExpressionNode ifExpr)
@@ -632,7 +704,7 @@ public class AstLowering
         _currentBlock = thenBlock;
         var thenValue = LowerExpression(ifExpr.ThenBranch);
         var thenResult = new LocalValue($"if_result_then_{_tempCounter++}");
-        _currentBlock.Instructions.Add(new StoreInstruction(thenResult.Name, thenValue));
+        _currentBlock.Instructions.Add(new StoreInstruction(thenResult.Name, thenValue, thenResult));
         _currentBlock.Instructions.Add(new JumpInstruction(mergeBlock));
 
         // Lower else branch if it exists
@@ -642,7 +714,7 @@ public class AstLowering
             _currentBlock = elseBlock;
             var elseValue = LowerExpression(ifExpr.ElseBranch);
             elseResult = new LocalValue($"if_result_else_{_tempCounter++}");
-            _currentBlock.Instructions.Add(new StoreInstruction(elseResult.Name, elseValue));
+            _currentBlock.Instructions.Add(new StoreInstruction(elseResult.Name, elseValue, elseResult));
             _currentBlock.Instructions.Add(new JumpInstruction(mergeBlock));
         }
 
@@ -702,13 +774,13 @@ public class AstLowering
         // Initialize iterator
         var iteratorVar = new LocalValue(forLoop.IteratorVariable);
         _locals[forLoop.IteratorVariable] = iteratorVar;
-        _currentBlock.Instructions.Add(new StoreInstruction(iteratorVar.Name, start));
+        _currentBlock.Instructions.Add(new StoreInstruction(iteratorVar.Name, start, iteratorVar));
         _currentBlock.Instructions.Add(new JumpInstruction(condBlock));
 
         // Condition: iterator < end
         _currentBlock = condBlock;
         var lessThan = new LocalValue($"loop_cond_{_tempCounter++}");
-        var cmpInst = new BinaryInstruction(BinaryOp.Subtract, iteratorVar, end) { Result = lessThan };
+        var cmpInst = new BinaryInstruction(BinaryOp.Subtract, iteratorVar, end, lessThan);
         _currentBlock.Instructions.Add(cmpInst);
         _currentBlock.Instructions.Add(new BranchInstruction(lessThan, bodyBlock, exitBlock));
 
@@ -722,9 +794,10 @@ public class AstLowering
         // Continue: increment iterator
         _currentBlock = continueBlock;
         var incremented = new LocalValue($"loop_inc_{_tempCounter++}");
-        var incInst = new BinaryInstruction(BinaryOp.Add, iteratorVar, new ConstantValue(1)) { Result = incremented };
+        var incInst = new BinaryInstruction(BinaryOp.Add, iteratorVar, new ConstantValue(1), incremented);
         _currentBlock.Instructions.Add(incInst);
-        _currentBlock.Instructions.Add(new StoreInstruction(iteratorVar.Name, incremented));
+        var newIteratorVersion = new LocalValue($"{forLoop.IteratorVariable}_{_tempCounter++}");
+        _currentBlock.Instructions.Add(new StoreInstruction(iteratorVar.Name, incremented, newIteratorVersion));
         _currentBlock.Instructions.Add(new JumpInstruction(condBlock));
 
         // Exit

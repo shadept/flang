@@ -9,10 +9,11 @@ namespace FLang.IR.Instructions;
 /// </summary>
 public class AllocaInstruction : Instruction
 {
-    public AllocaInstruction(FType allocatedType, int sizeInBytes)
+    public AllocaInstruction(FType allocatedType, int sizeInBytes, Value result)
     {
         AllocatedType = allocatedType;
         SizeInBytes = sizeInBytes;
+        Result = result;
     }
 
     /// <summary>
@@ -24,4 +25,9 @@ public class AllocaInstruction : Instruction
     /// Size in bytes to allocate.
     /// </summary>
     public int SizeInBytes { get; }
+
+    /// <summary>
+    /// The result value (pointer to allocated space) produced by this operation.
+    /// </summary>
+    public Value Result { get; }
 }

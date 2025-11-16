@@ -92,7 +92,17 @@ var loweringDiagnostics = new List<Diagnostic>();
 foreach (var module in parsedModules.Values)
 foreach (var functionNode in module.Functions)
 {
+    // Skip lowering generic templates; only lower instantiated specializations
+    if (typeSolver.IsGenericFunction(functionNode)) continue;
     var (irFunction, diagnostics) = AstLowering.Lower(functionNode, compilation, typeSolver);
+    allFunctions.Add(irFunction);
+    loweringDiagnostics.AddRange(diagnostics);
+}
+
+// Lower any generic specializations requested by type checking
+foreach (var specFn in typeSolver.GetSpecializedFunctions())
+{
+    var (irFunction, diagnostics) = AstLowering.Lower(specFn, compilation, typeSolver);
     allFunctions.Add(irFunction);
     loweringDiagnostics.AddRange(diagnostics);
 }
@@ -127,7 +137,7 @@ if (emitFir != null)
     else
     {
         File.WriteAllText(emitFir, firOutput);
-        Console.WriteLine($"FIR emitted to {emitFir}");
+        // Console.WriteLine($"FIR emitted to {emitFir}");
     }
 }
 
@@ -135,6 +145,7 @@ if (emitFir != null)
 var headerBuilder = new StringBuilder();
 headerBuilder.AppendLine("#include <stdio.h>");
 headerBuilder.AppendLine("#include <stdint.h>");
+headerBuilder.AppendLine("#include <string.h>");
 headerBuilder.AppendLine();
 
 // Collect struct definitions and extern prototypes uniquely
@@ -145,7 +156,7 @@ var functionBodies = new StringBuilder();
 foreach (var func in allFunctions)
 {
     var funcCode = CCodeGenerator.Generate(func);
-    var lines = funcCode.Split(new[] { "\r\n", "\n" }, StringSplitOptions.None);
+    var lines = funcCode.Split(["\r\n", "\n"], StringSplitOptions.None);
 
     bool inStruct = false;
     string currentStructName = "";
@@ -157,17 +168,19 @@ foreach (var func in allFunctions)
             continue;
 
         var trimmed = line.TrimStart();
-        if (!inStruct && trimmed.StartsWith("struct ") && trimmed.Contains("{"))
+        // Detect struct definition: "struct Name {" but NOT variable declarations like "struct Name var = ..."
+        if (!inStruct && trimmed.StartsWith("struct ") && trimmed.Contains("{") && !trimmed.Contains("="))
         {
             // Begin struct block
             var afterStruct = trimmed.Substring("struct ".Length);
-            var name = afterStruct.Split(new[] { ' ', '{' }, StringSplitOptions.RemoveEmptyEntries)[0];
+            var name = afterStruct.Split([' ', '{'], StringSplitOptions.RemoveEmptyEntries)[0];
             inStruct = true;
             currentStructName = name;
             currentStructLines.Clear();
             currentStructLines.Add(line);
             continue;
         }
+
         if (inStruct)
         {
             currentStructLines.Add(line);
@@ -175,12 +188,12 @@ foreach (var func in allFunctions)
             {
                 // End of struct block
                 var block = string.Join("\n", currentStructLines);
-                if (!structBlocks.ContainsKey(currentStructName))
-                    structBlocks[currentStructName] = block;
+                structBlocks.TryAdd(currentStructName, block);
                 inStruct = false;
                 currentStructName = "";
                 currentStructLines.Clear();
             }
+
             continue;
         }
 
@@ -208,7 +221,10 @@ foreach (var f in allFunctions)
     if (f.IsForeign) continue;
     var plist = string.Join(", ", f.Parameters.Select(p => $"{TypeRegistry.ToCType(p.Type)} {p.Name}"));
     if (f.Parameters.Count == 0) plist = "void";
-    headerBuilder.AppendLine($"{TypeRegistry.ToCType(f.ReturnType)} {f.Name}({plist});");
+    var protoName = f.Name == "main"
+        ? "main"
+        : NameMangler.GenericFunction(f.Name, f.Parameters.Select(p => p.Type).ToList());
+    headerBuilder.AppendLine($"{TypeRegistry.ToCType(f.ReturnType)} {protoName}({plist});");
 }
 
 // Emit unique extern prototypes next
@@ -277,13 +293,12 @@ foreach (var (compiler, arguments, environment) in compilers)
 
         if (process.ExitCode != 0)
         {
-            Console.WriteLine($"C compiler ({compiler}) failed:");
+            Console.Error.WriteLine($"C compiler ({compiler}) failed:");
             var output = process.StandardOutput.ReadToEnd();
-            Console.WriteLine(output);
+            Console.Error.WriteLine(output);
         }
         else
         {
-            Console.WriteLine($"Successfully compiled to {outputFilePath}");
             compiled = true;
 
             // Clean up intermediate files (cl.exe creates .obj files)

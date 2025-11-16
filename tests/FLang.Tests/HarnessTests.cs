@@ -18,7 +18,7 @@ public class HarnessTests
         // Resolve relative path (from Harness dir) to absolute
         var absoluteTestFile = Path.Combine(harnessDir, testFile);
         var testFileName = Path.GetFileNameWithoutExtension(absoluteTestFile);
-        var testDirectory = Path.GetDirectoryName(absoluteTestFile);
+        var testDirectory = Path.GetDirectoryName(absoluteTestFile)!;
 
         // 1. Parse test metadata from //! comments
         var metadata = ParseTestMetadata(absoluteTestFile);
@@ -53,11 +53,23 @@ public class HarnessTests
         });
         cliProcess!.WaitForExit();
 
+        var compileStderr = cliProcess.StandardError.ReadToEnd();
+        var compileStdout = cliProcess.StandardOutput.ReadToEnd();
+
+        if (metadata.ExpectedCompileErrors.Count > 0)
+        {
+            Assert.NotEqual(0, cliProcess.ExitCode);
+            foreach (var code in metadata.ExpectedCompileErrors)
+            {
+                Assert.Contains(code, compileStderr);
+            }
+            return; // Skip running executable on expected compile failures
+        }
+
         if (cliProcess.ExitCode != 0)
         {
-            var error = cliProcess.StandardError.ReadToEnd();
             Assert.Fail(
-                $"FLang.CLI compilation failed for {metadata.TestName} with exit code {cliProcess.ExitCode}:\n{error}");
+                $"FLang.CLI compilation failed for {metadata.TestName} with exit code {cliProcess.ExitCode}:\n{compileStderr}");
         }
 
         // 3. Run the generated executable
@@ -65,7 +77,7 @@ public class HarnessTests
 
         if (!File.Exists(generatedExePath))
             Assert.Fail(
-                $"FLang.CLI did not produce an executable at {generatedExePath}. CLI Output:\n{cliProcess.StandardOutput.ReadToEnd()}\n{cliProcess.StandardError.ReadToEnd()}");
+                $"FLang.CLI did not produce an executable at {generatedExePath}. CLI Output:\n{compileStdout}\n{compileStderr}");
 
         var exeProcess = Process.Start(new ProcessStartInfo
         {
@@ -74,7 +86,7 @@ public class HarnessTests
             RedirectStandardError = true,
             UseShellExecute = false,
             CreateNoWindow = true
-        });
+        })!;
         exeProcess.WaitForExit();
 
         var actualExitCode = exeProcess.ExitCode;
@@ -102,6 +114,7 @@ public class HarnessTests
         int? exitCode = null;
         var stdout = new List<string>();
         var stderr = new List<string>();
+        var compileErrors = new List<string>();
 
         foreach (var line in lines)
         {
@@ -116,10 +129,13 @@ public class HarnessTests
                 exitCode = int.Parse(content.Substring(5).Trim());
             else if (content.StartsWith("STDOUT:"))
                 stdout.Add(content.Substring(7).Trim());
-            else if (content.StartsWith("STDERR:")) stderr.Add(content.Substring(7).Trim());
+            else if (content.StartsWith("STDERR:"))
+                stderr.Add(content.Substring(7).Trim());
+            else if (content.StartsWith("COMPILE-ERROR:"))
+                compileErrors.Add(content.Substring(14).Trim());
         }
 
-        return new TestMetadata(testName, exitCode, stdout, stderr);
+        return new TestMetadata(testName, exitCode, stdout, stderr, compileErrors);
     }
 
     public static IEnumerable<object[]> GetTestFiles()
@@ -136,7 +152,7 @@ public class HarnessTests
         foreach (var file in Directory.GetFiles(harnessDir, "*.f", SearchOption.AllDirectories))
         {
             var relativePath = Path.GetRelativePath(harnessDir, file);
-            yield return new object[] { relativePath };
+            yield return [relativePath];
         }
     }
 
@@ -144,5 +160,9 @@ public class HarnessTests
         string TestName,
         int? ExpectedExitCode,
         List<string> ExpectedStdout,
-        List<string> ExpectedStderr);
+        List<string> ExpectedStderr,
+        List<string> ExpectedCompileErrors)
+    {
+        public List<string> ExpectedCompileErrors { get; } = ExpectedCompileErrors;
+    }
 }

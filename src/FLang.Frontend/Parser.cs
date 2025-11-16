@@ -207,7 +207,8 @@ public class Parser
 
         // Parse return type (optional for now, but expected in new syntax)
         TypeNode? returnType = null;
-        if (_currentToken.Kind == TokenKind.Identifier || _currentToken.Kind == TokenKind.Ampersand)
+        if (_currentToken.Kind == TokenKind.Identifier || _currentToken.Kind == TokenKind.Ampersand ||
+            _currentToken.Kind == TokenKind.Dollar || _currentToken.Kind == TokenKind.OpenBracket)
             returnType = ParseType();
 
         var statements = new List<StatementNode>();
@@ -287,8 +288,10 @@ public class Parser
             {
                 var deferKeyword = Eat(TokenKind.Defer);
                 var expression = ParseExpression();
-                var span = new SourceSpan(deferKeyword.Span.FileId, deferKeyword.Span.Index,
-                    expression.Span.Index + expression.Span.Length - deferKeyword.Span.Index);
+                var span = deferKeyword.Span with
+                {
+                    Length = expression.Span.Index + expression.Span.Length - deferKeyword.Span.Index
+                };
                 return new DeferStatementNode(span, expression);
             }
 
@@ -483,12 +486,13 @@ public class Parser
         {
             case TokenKind.Ampersand:
             {
-                // Address-of operator: &variable
+                // Address-of operator: &expr — binds after postfix (so &arr[0] means address-of (arr[0]))
                 var ampToken = Eat(TokenKind.Ampersand);
-                var target = ParsePrimaryExpression(); // Parse the target expression
+                var targetPrimary = ParsePrimaryExpression();
+                var targetWithPostfix = ParsePostfixOperators(targetPrimary);
                 var span = new SourceSpan(ampToken.Span.FileId, ampToken.Span.Index,
-                    target.Span.Index + target.Span.Length - ampToken.Span.Index);
-                return new AddressOfExpressionNode(span, target);
+                    targetWithPostfix.Span.Index + targetWithPostfix.Span.Length - ampToken.Span.Index);
+                return new AddressOfExpressionNode(span, targetWithPostfix);
             }
 
             case TokenKind.Integer:
@@ -797,7 +801,7 @@ public class Parser
 
     /// <summary>
     /// Parses a primary type (identifier with optional generic arguments, or array type).
-    /// Examples: i32, List[T], Dict[K, V], [i32; 5]
+    /// Examples: i32, List[T], Dict[K, V], [i32; 5], $T
     /// </summary>
     private TypeNode ParsePrimaryType()
     {
@@ -825,10 +829,20 @@ public class Parser
             return new ArrayTypeNode(span, elementType, length);
         }
 
+        // Generic parameter type: $T
+        if (_currentToken.Kind == TokenKind.Dollar)
+        {
+            var dollar = Eat(TokenKind.Dollar);
+            var ident = Eat(TokenKind.Identifier);
+            var span = new SourceSpan(dollar.Span.FileId, dollar.Span.Index,
+                ident.Span.Index + ident.Span.Length - dollar.Span.Index);
+            return new GenericParameterTypeNode(span, ident.Text);
+        }
+
         var nameToken = Eat(TokenKind.Identifier);
 
-        // Check for generic arguments
-        if (_currentToken.Kind == TokenKind.OpenBracket)
+        // Check for generic arguments (dont parse [], this is a slice)
+        if (_currentToken.Kind == TokenKind.OpenBracket && PeekNextToken().Kind != TokenKind.CloseBracket)
         {
             Eat(TokenKind.OpenBracket);
             var typeArgs = new List<TypeNode>();

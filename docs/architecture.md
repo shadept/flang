@@ -62,12 +62,19 @@ A Linear SSA (Static Single Assignment) IR based on Basic Blocks, similar to TAC
 - **Desugaring:** Complex high-level constructs (like `for` loops, `if` expressions, `defer`) are lowered into simple Blocks and Branches during the AST -> FIR translation phase.
 
 ## 4. Bootstrapping Strategy (The C-Transpiler)
-
+ 
 To achieve self-hosting rapidly, v2 will NOT target machine code directly.
-
+ 
 - **Target:** C99 (or similar portable C standard).
 - **Benefit:** Leverages existing mature optimizers (GCC/Clang) and platform support immediately.
 - **Workflow:** `FLang Source` -> `FLang Compiler` -> `FIR` -> `C Source` -> `GCC` -> `Native Executable`.
+
+### Backend Responsibilities
+
+- **Name mangling only in codegen:** TypeSolver and IR lowering must preserve base function names and attach type metadata. The C backend is solely responsible for producing unique C symbols (definitions, prototypes, and calls) by mangling non-foreign/non-intrinsic functions based on parameter types. `main` is not mangled.
+- **Foreign and intrinsic symbols are not mangled:** Calls to `#foreign` and `#intrinsic` functions use their declared names. The backend relies on target headers or builtins for these symbols.
+- **Intrinsics must be declared in stdlib core:** Compiler-recognized intrinsics are declared in `stdlib/core` with `#intrinsic` and may receive special lowering per target when required.
+
 
 ## 5. C# Implementation Guidelines
 

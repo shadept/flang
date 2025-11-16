@@ -58,6 +58,7 @@ fn name(parameters) ReturnType
 - Overloading is supported by name and compatible parameter types.
 - The type system selects the strictest applicable overload; if multiple remain, it is an error.
 - UFCS applies: `object.method(a, b)` desugars to `method(&object, a, b)`.
+- C backend name mangling: all non-foreign functions are emitted with a mangled name derived from the base name and the parameter types (e.g., `name__i32__u64`). This guarantees unique C symbols for overloads. The `main` entrypoint is not mangled. Generic specializations are emitted using the same scheme. Name mangling occurs only during code generation; earlier phases (TypeSolver, FIR) preserve base names and attach type metadata.
 
 ### 2.5 Expressions and Control Flow
 
@@ -117,6 +118,11 @@ defer expression
 - `import path` and `pub import path`.
 - Cyclic imports are compile-time errors.
 - Module names map to file paths.
+
+#### Directives
+
+- `#foreign`: declares a foreign function imported from the target’s C/ABI environment. Bodies are not provided; the backend does not mangle these names and relies on target headers for prototypes.
+- `#intrinsic` (planned): declares a standard-library intrinsic symbol that the compiler may lower specially or map to target builtins. Intrinsics must live in `stdlib/core` and be declared with `#intrinsic` to be used. Like `#foreign`, intrinsic calls are never mangled; the backend provides target-specific support as needed.
 
 
 ---
@@ -263,8 +269,57 @@ The language uses standard library definitions for ranges, strings, and lists.
 
 - Multi-phase inference and semantic validation.
 - AST is data-only; logic resides in analysis passes.
-- FIR is linear SSA; `if` and `for` lower to blocks and branches.
+- FIR uses SSA form with versioned local variables. `if` and `for` lower to blocks and branches. Each assignment creates a new SSA version of the variable.
 - The reference compiler emits portable C as a bootstrap target.
+
+### 7.1 IR Instructions
+
+The FLang intermediate representation (FIR) uses a linear SSA instruction set. Instructions are organized into basic blocks, with control flow managed by terminator instructions. Each value assignment creates a new SSA version.
+
+#### Values
+
+All instructions operate on values. There are three types of values in FIR:
+
+- **`ConstantValue`**: Compile-time integer constants. Used for literal values, array sizes, offsets, etc.
+- **`StringConstantValue`**: Compile-time string constants. String literals from source code. Emitted as static global variables by the backend.
+- **`LocalValue`**: Local SSA values (variables or temporaries). Results of instructions or function parameters. Each has a unique name within its function scope (e.g., `t0`, `x`, `call_42`).
+
+Each value has a name (for debugging/printing) and an optional type. Types may be null during early IR construction before type inference completes.
+
+#### Memory Operations
+
+- **`alloca`**: Allocates stack space for a value of the given type. Returns a pointer to the allocated space. Similar to LLVM's alloca.
+- **`store`**: Creates a new SSA version of a local variable. Each store produces a unique versioned result value. For pointer stores, use `store_ptr`.
+- **`load`**: Loads (dereferences) a value from a pointer: `ptr.*`
+- **`store_ptr`**: Stores a value through a pointer: `ptr.* = value`
+- **`addressof`**: Takes the address of a variable: `&var`
+- **`getelementptr`**: Calculates the address of a struct field or array element. Takes a base pointer and a byte offset (constant or dynamic), returns pointer to the field/element.
+
+#### Arithmetic and Comparison
+
+- **`binary`**: Binary operations on two values. Supports:
+  - Arithmetic: `add`, `subtract`, `multiply`, `divide`, `modulo`
+  - Comparisons: `equal`, `not_equal`, `less_than`, `greater_than`, `less_than_or_equal`, `greater_than_or_equal`
+
+#### Type Conversion
+
+- **`cast`**: Converts a value from one type to another. Supports:
+  - Integer casts (sign extension, truncation, zero extension)
+  - Pointer casts
+  - String to slice conversions
+  - Slice to pointer conversions
+
+#### Control Flow (Terminators)
+
+These instructions must be the last instruction in a basic block:
+
+- **`return`**: Returns from the current function with a value
+- **`jump`**: Unconditional jump to a target basic block
+- **`branch`**: Conditional branch to one of two basic blocks based on a condition
+
+#### Function Calls
+
+- **`call`**: Calls a function with arguments. Supports both FLang functions (with name mangling) and foreign/C functions (without mangling).
 
 ---
 

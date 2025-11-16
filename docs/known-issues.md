@@ -138,6 +138,52 @@ Currently no runtime bounds checking on `arr[i]` - out-of-bounds access causes u
 
 ## Minor Issues
 
+### Generics: Return Type Name Resolution
+
+Status: Open
+Affected: TypeSolver (signature collection, body checking)
+Impact: Public generic functions using a named return type (e.g., `pub fn identity(x: $T) T`) report E2003 at the return type token.
+
+Root cause hypothesis:
+- `ResolveTypeNodeWithGenerics` sometimes fails to treat a named return type as a generic parameter bound in the parameter list.
+- Although `CollectGenericParamNames` walks parameter types, the generic name may not be present in the set at the point we resolve the return type for some modules.
+
+Proposed fix:
+- Use `ResolveTypeNodeWithGenerics` consistently for expected return types during body checking (applied), and audit signature collection to ensure parameter-derived generic names are always present.
+- Add a defensive fallback for single‑letter uppercase names to map to `GenericParameterType` in `ResolveTypeNodeWithGenerics` (applied) while we root-cause the collection path.
+
+Related tests: 
+- tests/FLang.Tests/Harness/generics/identity_basic.f
+- tests/FLang.Tests/Harness/generics/two_params_pick_first.f
+- tests/FLang.Tests/Harness/generics/cannot_infer_from_context.f
+- tests/FLang.Tests/Harness/generics/conflicting_bindings_error.f
+
+### Coercions: Array→Slice and String↔u8[] in declarations/calls
+
+Status: Open (partial)
+Affected: TypeSolver (compatibility checks and variable declarations)
+Impact: Declarations and calls that rely on implicit view conversions still fail in some contexts:
+- `let bytes: u8[] = arr` (where `arr: [u8; N]`) reports E2002
+- `takes_bytes(s)` (where `s: String`, `takes_bytes(b: u8[])`) reports E2011
+- Explicit casts `s as u8[]` and `bytes as String` sometimes report E2020
+
+Root cause hypothesis:
+- The initializer/call argument types are computed correctly, but the compatibility path used in variable declarations and overload resolution isn’t consistently applying the view rules.
+
+Mitigations applied:
+- Extended `IsCompatible` to handle `ref [T;N] -> T[]`, and `String -> T[]` cases.
+- Added additional coercion checks in variable declarations.
+
+Next steps:
+- Audit where `IsCompatible` is called in overload selection; ensure the same rules are used for both declarations and call matching.
+- Add targeted unit tests for coercions in both var binding and call contexts.
+
+Related tests:
+- tests/FLang.Tests/Harness/casts/slice_to_string_explicit.f
+- tests/FLang.Tests/Harness/casts/string_to_slice_implicit.f
+- tests/FLang.Tests/Harness/casts/string_to_slice_view.f
+
+
 ### Dynamic GetElementPtr Offset Type
 
 **Status:** Fixed in M8
@@ -186,6 +232,21 @@ Milestone: 19 (Text & I/O)
 
 
 ## Recently Fixed
+
+### String Literal Naming Collisions
+
+**Fixed:** M8 (2025-11-14)
+**Was:** String literal names were generated per-function using local counters, causing duplicate identifiers (e.g., `str_0`) when compiling multiple modules into one C translation unit.
+**Now:** String literal names are allocated from a compilation-wide counter, ensuring global uniqueness across files.
+
+### Generic Specialization Mangling Order
+
+**Fixed:** M8 (2025-11-14)
+**Was:** Generic mangled names used alphabetical order of generic parameter names, causing collisions when the same concrete types were bound in different parameter positions (e.g., `fn(a: i32, b: u64)` vs `fn(a: u64, b: i32)`).
+**Now:** Mangles type arguments in the order of first appearance across the function’s parameter types, preserving call-site parameter ordering and preventing collisions.
+
+**Related Tests:**
+- `tests/FLang.Tests/Harness/generics/generic_mangling_order.f`
 
 ### Array Type C Code Generation
 

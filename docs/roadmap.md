@@ -306,24 +306,31 @@ _Goal: Add the type system and fundamental data structures needed for real progr
 
 _Goal: Generics, inference, and advanced type features._
 
-### Milestone 11: Generics Basics
+### Milestone 11: Generics Basics (IN PROGRESS)
 
 **Scope:** `$T` syntax, generic functions, basic monomorphization.
 
-**Key Tasks:**
+**Completed:**
 
-- [ ] `$T` parameter binding syntax
-- [ ] Generic function parsing: `fn identity(x: $T) T`
-- [ ] Type parameter inference
-- [ ] Monomorphization (generate specialized versions)
+- ✅ `$T` parameter binding syntax in lexer/parser and AST (`GenericParameterTypeNode`)
+- ✅ Generic function parsing: `fn identity(x: $T) T`
+- ✅ Argument-based type parameter inference (return-type inference deferred)
+- ✅ Monomorphization of generic functions with centralized name mangling
+- ✅ FIR/codegen support via monomorphized specializations
+- ✅ Test harness support for expected compile errors: `//! COMPILE-ERROR: E2101`
+
+**Pending:**
+
+- [ ] Return-type–driven inference (incl. resolving `comptime_*` from expected type)
 - [ ] Generic constraints (structural)
-- [ ] Update FIR to support generics (via monomorphization)
+- [ ] Generic structs monomorphization (tracked for M12)
 
-**Tests to Add:**
+**Tests to Add/Expand:**
 
-- Generic functions
-- Type parameter inference
+- Identity and inference from args
 - Multiple generic parameters
+- Conflicting bindings (expects E2102)
+- Cannot infer from context (expects E2101)
 
 ---
 
@@ -504,7 +511,7 @@ _Goal: Rewrite the compiler in FLang._
 
 - **Phase:** 2 (Core Type System & Data Structures)
 - **Milestone:** 10 (IN PROGRESS - Defer/extern done; allocator pending)
-- **Next Up:** Allocator interface + basic heap wrapper, then M11 (Generics Basics)
+- **Next Up:** Continue M11 (Generics Basics: tests + docs + polish); allocator interface afterwards
 - **Tests Passing:** 32/37
 
   - 3 intrinsic tests passing (size_of, align_of)

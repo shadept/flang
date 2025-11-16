@@ -6,10 +6,19 @@ namespace FLang.IR.Instructions;
 /// </summary>
 public class AddressOfInstruction : Instruction
 {
-    public AddressOfInstruction(string variableName)
+    public AddressOfInstruction(string variableName, Value result)
     {
         VariableName = variableName;
+        Result = result;
     }
 
+    /// <summary>
+    /// The name of the variable to take the address of.
+    /// </summary>
     public string VariableName { get; }
+
+    /// <summary>
+    /// The result value (pointer) produced by this operation.
+    /// </summary>
+    public Value Result { get; }
 }

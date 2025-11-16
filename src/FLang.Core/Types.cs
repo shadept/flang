@@ -7,6 +7,18 @@ public abstract class FType
 {
     public abstract string Name { get; }
 
+    /// <summary>
+    /// Gets the size of this type in bytes.
+    /// Used by size_of intrinsic.
+    /// </summary>
+    public abstract int Size { get; }
+
+    /// <summary>
+    /// Gets the alignment requirement of this type in bytes.
+    /// Used by align_of intrinsic.
+    /// </summary>
+    public abstract int Alignment { get; }
+
     public abstract bool Equals(FType other);
 
     public override bool Equals(object? obj)
@@ -23,39 +35,36 @@ public abstract class FType
     {
         return Name;
     }
+}
 
-    /// <summary>
-    /// Gets the size of a type in bytes.
-    /// Used by size_of intrinsic.
-    /// </summary>
-    public static int GetSizeOf(FType type)
+/// <summary>
+/// Represents a generic parameter type like $T used in generic function signatures.
+/// </summary>
+public class GenericParameterType : FType
+{
+    public GenericParameterType(string name)
     {
-        return type switch
-        {
-            PrimitiveType pt => pt.SizeInBytes,
-            ReferenceType => IntPtr.Size, // Pointers are platform-dependent
-            StructType st => st.GetSize(), // Recursive for nested structs
-            ArrayType at => at.GetSize(), // Fixed-size array
-            SliceType st => st.GetSize(), // Slice (fat pointer)
-            _ => 4 // Default fallback (i32 size)
-        };
+        ParamName = name;
     }
 
-    /// <summary>
-    /// Gets the alignment requirement of a type in bytes.
-    /// Used by align_of intrinsic.
-    /// </summary>
-    public static int GetAlignmentOf(FType type)
+    public string ParamName { get; }
+
+    public override string Name => "$" + ParamName;
+
+    public override int Size =>
+        throw new InvalidOperationException($"Cannot get size of generic parameter type ${ParamName}");
+
+    public override int Alignment =>
+        throw new InvalidOperationException($"Cannot get alignment of generic parameter type ${ParamName}");
+
+    public override bool Equals(FType other)
     {
-        return type switch
-        {
-            PrimitiveType pt => pt.SizeInBytes, // Primitives align to their size
-            ReferenceType => IntPtr.Size, // Pointers align to pointer size
-            StructType st => st.GetAlignment(), // Struct aligns to largest field
-            ArrayType at => at.GetAlignment(), // Array aligns to element
-            SliceType st => st.GetAlignment(), // Slice aligns to pointer
-            _ => 4 // Default fallback
-        };
+        return other is GenericParameterType g && g.ParamName == ParamName;
+    }
+
+    public override int GetHashCode()
+    {
+        return ParamName.GetHashCode();
     }
 }
 
@@ -74,6 +83,10 @@ public class PrimitiveType : FType
     public override string Name { get; }
     public int SizeInBytes { get; }
     public bool IsSigned { get; }
+
+    public override int Size => SizeInBytes;
+
+    public override int Alignment => SizeInBytes; // Primitives align to their size
 
     public override bool Equals(FType other)
     {
@@ -94,6 +107,10 @@ public class ComptimeIntType : FType
 
     public override string Name => "comptime_int";
 
+    public override int Size => 8; // Assume isize (64-bit)
+
+    public override int Alignment => 8;
+
     public override bool Equals(FType other)
     {
         return other is ComptimeIntType;
@@ -113,35 +130,13 @@ public class ComptimeFloatType : FType
 
     public override string Name => "comptime_float";
 
+    public override int Size => 8; // Assume f64
+
+    public override int Alignment => 8;
+
     public override bool Equals(FType other)
     {
         return other is ComptimeFloatType;
-    }
-}
-
-/// <summary>
-/// Represents an unknown type during type inference.
-/// </summary>
-public class TypeVariable : FType
-{
-    private static int _nextId;
-
-    public TypeVariable()
-    {
-        Id = _nextId++;
-    }
-
-    public int Id { get; }
-    public override string Name => $"?T{Id}";
-
-    public override bool Equals(FType other)
-    {
-        return other is TypeVariable tv && tv.Id == Id;
-    }
-
-    public override int GetHashCode()
-    {
-        return Id;
     }
 }
 
@@ -158,6 +153,10 @@ public class ReferenceType : FType
     public FType InnerType { get; }
 
     public override string Name => $"&{InnerType.Name}";
+
+    public override int Size => 8; // 64-bit pointer
+
+    public override int Alignment => 8;
 
     public override bool Equals(FType other)
     {
@@ -184,6 +183,10 @@ public class OptionType : FType
     public FType InnerType { get; }
 
     public override string Name => $"{InnerType.Name}?";
+
+    public override int Size => InnerType.Size; // Same as inner type for now
+
+    public override int Alignment => InnerType.Alignment;
 
     public override bool Equals(FType other)
     {
@@ -213,6 +216,12 @@ public class GenericType : FType
 
     public override string Name => $"{BaseName}[{string.Join(", ", TypeArguments.Select(t => t.Name))}]";
 
+    public override int Size =>
+        throw new InvalidOperationException($"Cannot get size of uninstantiated generic type {Name}");
+
+    public override int Alignment =>
+        throw new InvalidOperationException($"Cannot get alignment of uninstantiated generic type {Name}");
+
     public override bool Equals(FType other)
     {
         if (other is not GenericType gt) return false;
@@ -238,11 +247,39 @@ public class GenericType : FType
 /// </summary>
 public class StructType : FType
 {
+    private readonly int _size;
+    private readonly int _alignment;
+    private readonly Dictionary<string, int> _fieldOffsets;
+
     public StructType(string structName, IReadOnlyList<string> typeParameters, IReadOnlyList<(string, FType)> fields)
     {
         StructName = structName;
         TypeParameters = typeParameters;
         Fields = fields;
+
+        // Precompute layout
+        _fieldOffsets = [];
+        int offset = 0;
+        int maxAlignment = 1;
+
+        foreach (var (name, type) in fields)
+        {
+            var alignment = type.Alignment;
+            maxAlignment = Math.Max(maxAlignment, alignment);
+
+            // Align offset to field's alignment requirement
+            offset = AlignOffset(offset, alignment);
+
+            // Store field offset
+            _fieldOffsets[name] = offset;
+
+            // Advance offset by field size
+            offset += type.Size;
+        }
+
+        // Add trailing padding to align to largest field
+        _size = AlignOffset(offset, maxAlignment);
+        _alignment = maxAlignment;
     }
 
     public string StructName { get; }
@@ -290,99 +327,17 @@ public class StructType : FType
     }
 
     /// <summary>
-    /// Calculates the byte offset of a field within the struct.
+    /// Returns the byte offset of a field within the struct.
     /// Returns -1 if field not found.
-    /// Uses optimized layout with proper alignment to reduce padding.
     /// </summary>
     public int GetFieldOffset(string fieldName)
     {
-        var offset = 0;
-        foreach (var (name, type) in Fields)
-        {
-            // Align offset to field's alignment requirement
-            var alignment = GetTypeAlignment(type);
-            offset = AlignOffset(offset, alignment);
-
-            if (name == fieldName)
-                return offset;
-
-            // Advance offset by field size
-            offset += GetTypeSize(type);
-        }
-
-        return -1; // Field not found
+        return _fieldOffsets.TryGetValue(fieldName, out var offset) ? offset : -1;
     }
 
-    /// <summary>
-    /// Returns the total size of the struct in bytes (including trailing padding).
-    /// </summary>
-    public int GetSize()
-    {
-        if (Fields.Count == 0)
-            return 0;
+    public override int Size => _size;
 
-        var size = 0;
-        var maxAlignment = 1;
-
-        foreach (var (_, type) in Fields)
-        {
-            var alignment = GetTypeAlignment(type);
-            maxAlignment = Math.Max(maxAlignment, alignment);
-
-            // Align current offset
-            size = AlignOffset(size, alignment);
-
-            // Add field size
-            size += GetTypeSize(type);
-        }
-
-        // Add trailing padding to align to largest field
-        size = AlignOffset(size, maxAlignment);
-
-        return size;
-    }
-
-    /// <summary>
-    /// Helper to get size of a type in bytes.
-    /// </summary>
-    private static int GetTypeSize(FType type)
-    {
-        return type switch
-        {
-            PrimitiveType pt => pt.SizeInBytes,
-            ReferenceType => IntPtr.Size, // Pointers are platform-dependent
-            StructType st => st.GetSize(), // Recursive for nested structs
-            ArrayType at => at.GetSize(), // Fixed-size array
-            SliceType st => st.GetSize(), // Slice (fat pointer)
-            _ => 4 // Default fallback (i32 size)
-        };
-    }
-
-    /// <summary>
-    /// Helper to get alignment requirement of a type in bytes.
-    /// </summary>
-    private static int GetTypeAlignment(FType type)
-    {
-        return type switch
-        {
-            PrimitiveType pt => pt.SizeInBytes, // Primitives align to their size
-            ReferenceType => IntPtr.Size, // Pointers align to pointer size
-            StructType st => st.GetAlignment(), // Struct aligns to largest field
-            ArrayType at => at.GetAlignment(), // Array aligns to element
-            SliceType st => st.GetAlignment(), // Slice aligns to pointer
-            _ => 4 // Default fallback
-        };
-    }
-
-    /// <summary>
-    /// Returns the alignment requirement of the struct (largest field alignment).
-    /// </summary>
-    public int GetAlignment()
-    {
-        var maxAlignment = 1;
-        foreach (var (_, type) in Fields) maxAlignment = Math.Max(maxAlignment, GetTypeAlignment(type));
-        return maxAlignment;
-    }
+    public override int Alignment => _alignment;
 
     /// <summary>
     /// Aligns an offset to the specified alignment.
@@ -420,45 +375,9 @@ public class ArrayType : FType
         return HashCode.Combine(ElementType, Length);
     }
 
-    /// <summary>
-    /// Returns the total size of the array in bytes.
-    /// </summary>
-    public int GetSize()
-    {
-        return GetElementSize(ElementType) * Length;
-    }
+    public override int Size => ElementType.Size * Length;
 
-    /// <summary>
-    /// Returns the alignment requirement of the array (same as element alignment).
-    /// </summary>
-    public int GetAlignment()
-    {
-        return GetElementAlignment(ElementType);
-    }
-
-    private static int GetElementSize(FType type)
-    {
-        return type switch
-        {
-            PrimitiveType pt => pt.SizeInBytes,
-            ReferenceType => IntPtr.Size,
-            StructType st => st.GetSize(),
-            ArrayType at => at.GetSize(),
-            _ => 4 // Default fallback
-        };
-    }
-
-    private static int GetElementAlignment(FType type)
-    {
-        return type switch
-        {
-            PrimitiveType pt => pt.SizeInBytes,
-            ReferenceType => IntPtr.Size,
-            StructType st => st.GetAlignment(),
-            ArrayType at => at.GetAlignment(),
-            _ => 4 // Default fallback
-        };
-    }
+    public override int Alignment => ElementType.Alignment;
 }
 
 /// <summary>
@@ -486,21 +405,9 @@ public class SliceType : FType
         return HashCode.Combine("slice", ElementType);
     }
 
-    /// <summary>
-    /// Returns the size of the slice struct (pointer + length).
-    /// </summary>
-    public int GetSize()
-    {
-        return IntPtr.Size + IntPtr.Size; // ptr + len (both platform-dependent)
-    }
+    public override int Size => 16; // ptr (8 bytes) + len (8 bytes) on 64-bit
 
-    /// <summary>
-    /// Returns the alignment requirement of the slice (pointer alignment).
-    /// </summary>
-    public int GetAlignment()
-    {
-        return IntPtr.Size;
-    }
+    public override int Alignment => 8; // Pointer alignment on 64-bit
 }
 
 /// <summary>
@@ -530,6 +437,15 @@ public static class TypeRegistry
     // Compile-time types
     public static readonly ComptimeIntType ComptimeInt = ComptimeIntType.Instance;
     public static readonly ComptimeFloatType ComptimeFloat = ComptimeFloatType.Instance;
+
+    // Canonical struct representation for String (binary layout: ptr + len)
+    public static readonly StructType StringStruct = new("String", [], [
+        ("ptr", new ReferenceType(U8)),
+        ("len", USize)
+    ]);
+
+    // Cache for Slice[$T] struct types - created on demand for each element type
+    private static readonly Dictionary<FType, StructType> _sliceStructCache = new();
 
     /// <summary>
     /// Looks up a type by name. Returns null if not found.
@@ -581,6 +497,25 @@ public static class TypeRegistry
     }
 
     /// <summary>
+    /// Gets the canonical struct representation for a slice of the given element type.
+    /// Returns a cached instance to ensure reference equality.
+    /// </summary>
+    public static StructType GetSliceStruct(FType elementType)
+    {
+        if (_sliceStructCache.TryGetValue(elementType, out var cached))
+            return cached;
+
+        // Create Slice[$T] struct with ptr and len fields
+        var sliceStruct = new StructType("Slice", [elementType.Name], [
+            ("ptr", new ReferenceType(elementType)),
+            ("len", USize)
+        ]);
+
+        _sliceStructCache[elementType] = sliceStruct;
+        return sliceStruct;
+    }
+
+    /// <summary>
     /// Converts a FLang type to its C equivalent.
     /// </summary>
     public static string ToCType(FType type)
@@ -599,7 +534,7 @@ public static class TypeRegistry
                 "u64" => "unsigned long long",
                 "isize" => "intptr_t",
                 "usize" => "uintptr_t",
-                _ => "int" // Fallback
+                _ => throw new Exception($"Unsupported primitive type: {pt.Name}")
             };
 
         // Handle reference types: &T becomes T*
@@ -611,10 +546,30 @@ public static class TypeRegistry
             return ToCType(optType.InnerType);
 
         // Handle struct types: use struct name
-        if (type is StructType structType) return $"struct {structType.StructName}";
+        if (type is StructType structType)
+        {
+            // Generic structs: include type parameters in C name to avoid collisions
+            if (structType.TypeParameters.Count > 0)
+            {
+                var paramSuffix = string.Join("_", structType.TypeParameters.Select(p => p.Replace("*", "Ptr").Replace(" ", "_")));
+                return $"struct {structType.StructName}_{paramSuffix}";
+            }
 
-        // Handle array types: T[N] in C
-        if (type is ArrayType arrayType) return $"{ToCType(arrayType.ElementType)}[{arrayType.Length}]";
+            return $"struct {structType.StructName}";
+        }
+
+        // Handle array types: same struct representation as slices
+        // Arrays and slices have identical binary layout: { ptr, len }
+        // The only difference is ownership semantics (arrays own their data)
+        if (type is ArrayType arrayType)
+        {
+            // For u8 arrays, use the same C struct name as String to guarantee ABI compatibility
+            if (arrayType.ElementType.Equals(U8))
+                return "struct String";
+
+            // Generic array layout: same as slice - struct Slice_<Elem>
+            return $"struct Slice_{ToCType(arrayType.ElementType).Replace(" ", "_").Replace("*", "Ptr")}";
+        }
 
         // Handle slice types: struct with ptr and len
         if (type is SliceType sliceType)
@@ -627,8 +582,6 @@ public static class TypeRegistry
             return $"struct Slice_{ToCType(sliceType.ElementType).Replace(" ", "_").Replace("*", "Ptr")}";
         }
 
-
-        // Comptime types shouldn't reach codegen, but fallback to int
-        return "int";
+        throw new Exception($"Unsupported type: {type.Name}");
     }
 }

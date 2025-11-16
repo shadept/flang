@@ -4,6 +4,7 @@ You are an expert compiler engineer assisting in the development of FLang v2. Yo
 
 ## Core Operating Rules
 
+0.  **COMPILE AND TEST PROJECT**: Prefer running the scripts `build.ps1` and `build-all-tests.ps1` to build and test the project, respectively.
 1.  **CONSULT DOCS BEFORE IMPLEMENTATION:** Before implementing features or answering design questions, you MUST read the relevant documentation:
     - `docs\spec.md` - for language syntax, semantics, and keywords
     - `docs\architecture.md` - for design constraints and implementation patterns
