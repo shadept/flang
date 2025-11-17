@@ -43,22 +43,77 @@ public class ConstantValue : Value
 }
 
 /// <summary>
-/// Represents a compile-time string constant.
-/// Used for string literals in the source code.
-/// The backend will emit these as static global variables.
+/// Represents a compile-time array constant (e.g., byte array for strings).
 /// </summary>
-public class StringConstantValue : Value
+public class ArrayConstantValue : Value
 {
-    public StringConstantValue(string stringValue, string name)
+    public ArrayConstantValue(byte[] data, FType elementType)
     {
-        StringValue = stringValue;
-        Name = name;
+        Data = data;
+        Type = new ArrayType(elementType, data.Length);
+        Elements = null;
+    }
+
+    public ArrayConstantValue(ArrayType arrayType, Value[] elements)
+    {
+        Type = arrayType;
+        Elements = elements;
+        Data = null;
+    }
+
+    public byte[]? Data { get; }
+
+    /// <summary>
+    /// For general array literals, stores the element values.
+    /// </summary>
+    public Value[]? Elements { get; }
+
+    /// <summary>
+    /// For string literals, returns the UTF-8 string with null terminator.
+    /// </summary>
+    public string? StringRepresentation { get; set; }
+}
+
+/// <summary>
+/// Represents a compile-time struct constant with field initializers.
+/// Used for string literals represented as String struct constants.
+/// </summary>
+public class StructConstantValue : Value
+{
+    public StructConstantValue(StructType structType, Dictionary<string, Value> fieldValues)
+    {
+        Type = structType;
+        FieldValues = fieldValues;
     }
 
     /// <summary>
-    /// The string content of this constant.
+    /// Field name -> initializer value mapping.
     /// </summary>
-    public string StringValue { get; }
+    public Dictionary<string, Value> FieldValues { get; }
+}
+
+/// <summary>
+/// Represents a global symbol in memory (static variable, string literal, etc.).
+/// CRITICAL: The Type of a GlobalValue is ALWAYS a pointer to its initializer's type.
+/// This matches LLVM IR semantics where globals are pointer values.
+/// </summary>
+public class GlobalValue : Value
+{
+    public GlobalValue(string name, Value initializer)
+    {
+        Name = name;  // e.g., "LC0", "LC1"
+        Initializer = initializer;
+
+        // Type is a pointer to the initializer's type
+        // Example: initializer is [5 x u8] → Type is &[u8; 5]
+        Type = new ReferenceType(initializer.Type!);
+    }
+
+    /// <summary>
+    /// The data stored at this global address.
+    /// Used by backends to emit .data section.
+    /// </summary>
+    public Value Initializer { get; set; }
 }
 
 /// <summary>

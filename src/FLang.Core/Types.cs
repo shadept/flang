@@ -415,6 +415,9 @@ public class SliceType : FType
 /// </summary>
 public static class TypeRegistry
 {
+    // Void type (for functions with no return value)
+    public static readonly PrimitiveType Void = new("void", 0);
+
     // Boolean type
     public static readonly PrimitiveType Bool = new("bool", 1);
 

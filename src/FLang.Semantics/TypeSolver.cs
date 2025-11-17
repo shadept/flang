@@ -14,7 +14,7 @@ namespace FLang.Semantics;
 public class TypeSolver
 {
     private readonly Compilation _compilation;
-    private readonly List<Diagnostic> _diagnostics = new();
+    private readonly List<Diagnostic> _diagnostics = [];
 
     // Overload-ready function registry
     private readonly Dictionary<string, List<FunctionEntry>> _functions = new();
@@ -32,7 +32,7 @@ public class TypeSolver
     // Resolved call targets (base name + concrete param types + foreign flag)
     private readonly Dictionary<CallExpressionNode, ResolvedCall> _resolvedCalls = new();
 
-    private readonly HashSet<string> _emittedSpecs = new();
+    private readonly HashSet<string> _emittedSpecs = [];
 
     private static string BuildSpecKey(string name, IReadOnlyList<FType> paramTypes)
     {
@@ -63,8 +63,8 @@ public class TypeSolver
     }
 
     // Specializations to emit
-    private readonly List<FunctionDeclarationNode> _specializations = new();
-    private readonly HashSet<string> _emittedMangled = new();
+    private readonly List<FunctionDeclarationNode> _specializations = [];
+    private readonly HashSet<string> _emittedMangled = [];
 
     public TypeSolver(Compilation compilation)
     {
@@ -94,7 +94,7 @@ public class TypeSolver
             if (!(isPublic || isForeign)) continue;
 
             var gnames = CollectGenericParamNames(function);
-            var returnType = ResolveTypeNodeWithGenerics(function.ReturnType, gnames) ?? TypeRegistry.I32;
+            var returnType = ResolveTypeNodeWithGenerics(function.ReturnType, gnames) ?? TypeRegistry.Void;
 
             var parameterTypes = new List<FType>();
             foreach (var param in function.Parameters)
@@ -117,7 +117,7 @@ public class TypeSolver
                 IsGenericSignature(parameterTypes, returnType));
             if (!_functions.TryGetValue(function.Name, out var list))
             {
-                list = new List<FunctionEntry>();
+                list = [];
                 _functions[function.Name] = list;
             }
 
@@ -163,7 +163,7 @@ public class TypeSolver
             if (isPublic || isForeign) continue;
 
             var gnames = CollectGenericParamNames(function);
-            var returnType = ResolveTypeNodeWithGenerics(function.ReturnType, gnames) ?? TypeRegistry.I32;
+            var returnType = ResolveTypeNodeWithGenerics(function.ReturnType, gnames) ?? TypeRegistry.Void;
             var parameterTypes = new List<FType>();
             foreach (var param in function.Parameters)
             {
@@ -175,7 +175,7 @@ public class TypeSolver
                 IsGenericSignature(parameterTypes, returnType));
             if (!_functions.TryGetValue(function.Name, out var list))
             {
-                list = new List<FunctionEntry>();
+                list = [];
                 _functions[function.Name] = list;
             }
 
@@ -213,7 +213,7 @@ public class TypeSolver
         }
 
         var genNames = CollectGenericParamNames(function);
-        var expectedReturn = ResolveTypeNodeWithGenerics(function.ReturnType, genNames) ?? TypeRegistry.I32;
+        var expectedReturn = ResolveTypeNodeWithGenerics(function.ReturnType, genNames) ?? TypeRegistry.Void;
         foreach (var stmt in function.Body) CheckStatement(stmt, expectedReturn);
         PopScope();
     }
@@ -225,7 +225,7 @@ public class TypeSolver
             case ReturnStatementNode ret:
             {
                 var et = CheckExpression(ret.Expression);
-                if (expectedReturnType != null && !IsCompatible(et, expectedReturnType))
+                if (expectedReturnType != null && !CanCoerse(et, expectedReturnType))
                 {
                     _diagnostics.Add(Diagnostic.Error(
                         "mismatched types",
@@ -266,18 +266,31 @@ public class TypeSolver
                 }
                 else
                 {
-                    if (TypeRegistry.IsComptimeType(it))
+                    // Use declared type if available, otherwise inferred type from initializer
+                    var varType = dt ?? it;
+
+                    if (varType == null)
+                    {
+                        // Neither type annotation nor initializer present
+                        _diagnostics.Add(Diagnostic.Error(
+                            "cannot infer type",
+                            v.Span,
+                            "type annotations needed: variable declaration requires either a type annotation or an initializer",
+                            "E2001"));
+                        DeclareVariable(v.Name, TypeRegistry.I32, v.Span); // Default to i32 to avoid cascading errors
+                    }
+                    else if (TypeRegistry.IsComptimeType(varType))
                     {
                         _diagnostics.Add(Diagnostic.Error(
                             "cannot infer type",
                             v.Span,
-                            $"type annotations needed: variable has comptime type `{it}`",
+                            $"type annotations needed: variable has comptime type `{varType}`",
                             "E2001"));
                         DeclareVariable(v.Name, TypeRegistry.ISize, v.Span);
                     }
                     else
                     {
-                        DeclareVariable(v.Name, it, v.Span);
+                        DeclareVariable(v.Name, varType, v.Span);
                     }
                 }
 
@@ -881,6 +894,9 @@ public class TypeSolver
         // Allow comptime int to any integer type
         if (source is ComptimeIntType && TypeRegistry.IsIntegerType(target)) return true;
 
+        // Allow bool to implicitly cast to any integer type (bool -> 0 or 1)
+        if (source.Equals(TypeRegistry.Bool) && TypeRegistry.IsIntegerType(target)) return true;
+
         // Array -> Slice (legacy SliceType)
         if (source is ArrayType arr && target is SliceType sl)
             return IsCompatible(arr.ElementType, sl.ElementType);
@@ -910,6 +926,17 @@ public class TypeSolver
 
         if (source is StructType ss && ss.StructName == "String" && IsU8Slice(target)) return true;
         if (target is StructType ts && ts.StructName == "String" && IsU8Slice(source)) return true;
+
+        // Array decay: [T; N] -> &T (array value to pointer to first element)
+        // This enables passing arrays to C functions expecting pointers (e.g., memset, memcpy)
+        if (source is ArrayType arrValue && target is ReferenceType refTarget)
+            return IsCompatible(arrValue.ElementType, refTarget.InnerType);
+
+        // Pointer conversion: &[T; N] -> &T (pointer to array to pointer to first element)
+        // This handles the case when array variables (stored as &[T; N]) are passed to pointer parameters
+        if (source is ReferenceType { InnerType: ArrayType arrInRef } &&
+            target is ReferenceType { InnerType: var targetInner })
+            return IsCompatible(arrInRef.ElementType, targetInner);
 
         return false;
     }

@@ -11,15 +11,17 @@ namespace FLang.Semantics;
 
 public class AstLowering
 {
-    private readonly List<BasicBlock> _allBlocks = new();
     private readonly Compilation _compilation;
-    private readonly List<Diagnostic> _diagnostics = new();
+    private readonly List<BasicBlock> _allBlocks = [];
+    private readonly List<Diagnostic> _diagnostics = [];
     private readonly Dictionary<string, Value> _locals = new();
+    private readonly HashSet<string> _parameters = new();
     private readonly Stack<LoopContext> _loopStack = new();
     private readonly Stack<List<ExpressionNode>> _deferStack = new();
     private readonly TypeSolver _typeSolver;
     private int _blockCounter;
     private BasicBlock _currentBlock = null!;
+    private Function _currentFunction = null!;
     private int _tempCounter;
 
     private AstLowering(Compilation compilation, TypeSolver typeSolver)
@@ -53,6 +55,10 @@ public class AstLowering
 
         // Keep base name in IR; backend will mangle
         var function = new Function(functionNode.Name) { IsForeign = isForeign, ReturnType = retType };
+        _currentFunction = function;
+
+        // Clear parameter set for new function
+        _parameters.Clear();
 
         // Add parameters to function
         for (var i = 0; i < functionNode.Parameters.Count; i++)
@@ -64,6 +70,7 @@ public class AstLowering
             // Add parameter to locals with type so it can be referenced in the function body
             var localParam = new LocalValue(param.Name) { Type = paramType };
             _locals[param.Name] = localParam;
+            _parameters.Add(param.Name);
         }
 
         // Foreign functions have no body
@@ -73,7 +80,7 @@ public class AstLowering
         function.BasicBlocks.Add(_currentBlock);
 
         // Push a new defer scope for this function
-        _deferStack.Push(new List<ExpressionNode>());
+        _deferStack.Push([]);
 
         foreach (var statement in functionNode.Body) LowerStatement(statement);
 
@@ -151,24 +158,127 @@ public class AstLowering
         switch (statement)
         {
             case VariableDeclarationNode varDecl:
+            {
+                // Establish variable type from annotation or initializer
+                FType varType = TypeRegistry.I32;
+                if (varDecl.Type != null)
+                    varType = ResolveTypeFromNode(varDecl.Type);
+                else if (varDecl.Initializer != null)
+                    varType = _typeSolver.GetType(varDecl.Initializer) ?? TypeRegistry.I32;
+
+                // Check if this is a struct or array type
+                bool isStruct = varType is StructType;
+                bool isArray = varType is ArrayType;
+
+                if (isStruct)
                 {
-                    // Establish variable type from annotation or initializer
-                    FType varType = TypeRegistry.I32;
-                    if (varDecl.Type != null)
-                        varType = ResolveTypeFromNode(varDecl.Type);
-                    else if (varDecl.Initializer != null)
-                        varType = _typeSolver.GetType(varDecl.Initializer) ?? TypeRegistry.I32;
+                    var structType = (StructType)varType;
 
-                    var local = new LocalValue(varDecl.Name) { Type = varType };
-                    _locals[varDecl.Name] = local;
+                    // Allocate stack space for struct
+                    var allocaResult = new LocalValue(varDecl.Name)
+                        { Type = new ReferenceType(varType) };
+                    var allocaInst = new AllocaInstruction(varType, varType.Size, allocaResult);
+                    _currentBlock.Instructions.Add(allocaInst);
 
+                    // Store the POINTER in locals map
+                    _locals[varDecl.Name] = allocaResult;
+
+                    // Handle initialization
                     if (varDecl.Initializer != null)
                     {
-                        var value = LowerExpression(varDecl.Initializer);
-                        _currentBlock.Instructions.Add(new StoreInstruction(varDecl.Name, value, local));
+                        var initValue = LowerExpression(varDecl.Initializer);
+
+                        // Pointer to struct: use memcpy
+                        if (initValue.Type is ReferenceType { InnerType: StructType })
+                        {
+                            // Copy struct fields from initializer
+                            CopyStruct(allocaResult, initValue, structType);
+                        }
+                        // Struct value (e.g., from cast): store it directly
+                        else if (initValue.Type is StructType or SliceType)
+                        {
+                            var storeInst = new StorePointerInstruction(allocaResult, initValue);
+                            _currentBlock.Instructions.Add(storeInst);
+                        }
                     }
-                    break;
+                    else
+                    {
+                        // Zero-initialize struct with memset
+                        ZeroInitialize(allocaResult, structType.Size);
+                    }
                 }
+                else if (isArray)
+                {
+                    var arrayType = (ArrayType)varType;
+
+                    // Allocate stack space for array
+                    var allocaResult = new LocalValue(varDecl.Name)
+                        { Type = new ReferenceType(arrayType) };
+                    var allocaInst = new AllocaInstruction(arrayType, arrayType.Size, allocaResult);
+                    _currentBlock.Instructions.Add(allocaInst);
+
+                    // Store the POINTER in locals map
+                    _locals[varDecl.Name] = allocaResult;
+
+                    // Handle initialization
+                    if (varDecl.Initializer != null)
+                    {
+                        var initValue = LowerExpression(varDecl.Initializer);
+
+                        // Array literals return GlobalValue with &[T; N] type
+                        // We need to memcpy the array data
+                        if (initValue is GlobalValue globalArray)
+                        {
+                            // Use memcpy to copy the array
+                            var memcpyResult = new LocalValue($"memcpy_{_tempCounter++}") { Type = TypeRegistry.Void };
+                            var sizeValue = new ConstantValue(arrayType.Size) { Type = TypeRegistry.USize };
+
+                            var memcpyCall = new CallInstruction(
+                                "memcpy",
+                                new List<Value> { allocaResult, globalArray, sizeValue },
+                                memcpyResult
+                            )
+                            {
+                                IsForeignCall = true // memcpy is a C standard library function
+                            };
+                            _currentBlock.Instructions.Add(memcpyCall);
+                        }
+                    }
+                    else
+                    {
+                        // Zero-initialize array with memset
+                        ZeroInitialize(allocaResult, arrayType.Size);
+                    }
+                }
+                else
+                {
+                    // Scalars: allocate on stack like arrays/structs (memory-based SSA)
+                    var allocaResult = new LocalValue(varDecl.Name)
+                        { Type = new ReferenceType(varType) };
+                    var allocaInst = new AllocaInstruction(varType, varType.Size, allocaResult);
+                    _currentBlock.Instructions.Add(allocaInst);
+
+                    // Store the POINTER in locals map (not the value)
+                    _locals[varDecl.Name] = allocaResult;
+
+                    // Handle initialization
+                    if (varDecl.Initializer != null)
+                    {
+                        var initValue = LowerExpression(varDecl.Initializer);
+                        var initStoreInst = new StorePointerInstruction(allocaResult, initValue);
+                        _currentBlock.Instructions.Add(initStoreInst);
+                    }
+                    else
+                    {
+                        // Zero-initialize scalar with store 0
+                        var zeroValue = new ConstantValue(0) { Type = varType };
+                        var zeroStoreInst = new StorePointerInstruction(allocaResult, zeroValue);
+                        _currentBlock.Instructions.Add(zeroStoreInst);
+                    }
+                }
+
+                break;
+            }
 
             case ReturnStatementNode returnStmt:
                 var returnValue = LowerExpression(returnStmt.Expression);
@@ -239,20 +349,92 @@ public class AstLowering
         switch (expression)
         {
             case IntegerLiteralNode intLiteral:
-                return new ConstantValue(intLiteral.Value) { Type = _typeSolver.GetType(expression) ?? TypeRegistry.ComptimeInt };
+                return new ConstantValue(intLiteral.Value)
+                    { Type = _typeSolver.GetType(expression) ?? TypeRegistry.ComptimeInt };
 
             case BooleanLiteralNode boolLiteral:
-                // In C, booleans are represented as integers (0 = false, 1 = true)
-                return new ConstantValue(boolLiteral.Value ? 1 : 0) { Type = _typeSolver.GetType(expression) ?? TypeRegistry.Bool };
+                return new ConstantValue(boolLiteral.Value ? 1 : 0)
+                    { Type = _typeSolver.GetType(expression) ?? TypeRegistry.Bool };
 
             case StringLiteralNode stringLiteral:
-                // String literals are represented as global constants; ensure unique name per compilation
+            {
+                // String literals are represented as String struct constants
                 var sid = _compilation.AllocateStringId();
-                var stringName = $"str_{sid}";
-                return new StringConstantValue(stringLiteral.Value, stringName) { Type = _typeSolver.GetType(expression) };
+                var globalName = $"LC{sid}"; // Use LC0, LC1, LC2... naming
+
+                // Convert string to byte array (UTF-8 + null terminator for C FFI)
+                var bytes = System.Text.Encoding.UTF8.GetBytes(stringLiteral.Value);
+                var nullTerminated = new byte[bytes.Length + 1];
+                Array.Copy(bytes, nullTerminated, bytes.Length);
+
+                // Create array constant for the raw bytes
+                var arrayConst = new ArrayConstantValue(nullTerminated, TypeRegistry.U8)
+                {
+                    StringRepresentation = stringLiteral.Value
+                };
+
+                // Get String struct type from type solver
+                var stringType = _typeSolver.GetType(stringLiteral) as StructType;
+                if (stringType == null)
+                {
+                    _diagnostics.Add(Diagnostic.Error(
+                        "String type not found for string literal",
+                        stringLiteral.Span,
+                        "import core.string",
+                        "E3010"
+                    ));
+                    return new ConstantValue(0);
+                }
+
+                // Create String struct constant: { ptr: <bytes>, len: <length> }
+                var structConst = new StructConstantValue(stringType, new Dictionary<string, Value>
+                {
+                    ["ptr"] = arrayConst,
+                    ["len"] = new ConstantValue(bytes.Length) { Type = TypeRegistry.USize }
+                });
+
+                // Create global (type will be &String)
+                var global = new GlobalValue(globalName, structConst);
+
+                // Register in function globals
+                _currentFunction.Globals.Add(global);
+
+                // Return the global - it's a pointer to String struct
+                return global;
+            }
 
             case IdentifierExpressionNode identifier:
-                if (_locals.TryGetValue(identifier.Name, out var local)) return local;
+            {
+                if (_locals.TryGetValue(identifier.Name, out var localValue))
+                {
+                    // Parameters are passed by value (even if they're pointers), so use them directly
+                    if (_parameters.Contains(identifier.Name))
+                    {
+                        return localValue;
+                    }
+
+                    // Local variables are now pointers (alloca'd)
+                    if (localValue.Type is ReferenceType refType)
+                    {
+                        // Arrays and structs: return the pointer directly (don't load)
+                        // They are manipulated via pointer in the IR
+                        if (refType.InnerType is ArrayType or StructType)
+                        {
+                            return localValue;
+                        }
+
+                        // Scalars: load the value from memory
+                        var loadedValue = new LocalValue($"{identifier.Name}_load_{_tempCounter++}")
+                            { Type = refType.InnerType };
+                        var loadInstruction = new LoadInstruction(localValue, loadedValue);
+                        _currentBlock.Instructions.Add(loadInstruction);
+                        return loadedValue;
+                    }
+
+                    // Shouldn't happen with new approach, but keep for safety
+                    return localValue;
+                }
+
                 _diagnostics.Add(Diagnostic.Error(
                     $"cannot find value `{identifier.Name}` in this scope",
                     identifier.Span,
@@ -261,6 +443,7 @@ public class AstLowering
                 ));
                 // Return a dummy value to avoid cascading errors
                 return new ConstantValue(0);
+            }
 
             case BinaryExpressionNode binary:
                 var left = LowerExpression(binary.Left);
@@ -289,7 +472,7 @@ public class AstLowering
 
             case AssignmentExpressionNode assignment:
                 var assignValue = LowerExpression(assignment.Value);
-                if (!_locals.ContainsKey(assignment.TargetName))
+                if (!_locals.TryGetValue(assignment.TargetName, out var targetPtr))
                 {
                     _diagnostics.Add(Diagnostic.Error(
                         $"cannot assign to `{assignment.TargetName}` because it is not declared",
@@ -301,12 +484,12 @@ public class AstLowering
                     return assignValue;
                 }
 
-                // SSA: Create new version for this assignment
-                var newVersion = new LocalValue($"{assignment.TargetName}_{_tempCounter++}") { Type = assignValue.Type };
-                _locals[assignment.TargetName] = newVersion;
-                _currentBlock.Instructions.Add(new StoreInstruction(assignment.TargetName, assignValue, newVersion));
-                // Assignment expressions return the new version
-                return newVersion;
+                // Store to the memory location (no versioning needed)
+                var assignStoreInst = new StorePointerInstruction(targetPtr, assignValue);
+                _currentBlock.Instructions.Add(assignStoreInst);
+
+                // Assignment expressions return the assigned value
+                return assignValue;
 
             case IfExpressionNode ifExpr:
                 return LowerIfExpression(ifExpr);
@@ -367,9 +550,9 @@ public class AstLowering
                     }
 
                     // Compute the constant value at compile time
-                     var value = call.FunctionName == "size_of"
-                         ? type.Size
-                         : type.Alignment;
+                    var value = call.FunctionName == "size_of"
+                        ? type.Size
+                        : type.Alignment;
 
 
                     // Return constant value (no FIR instruction generated)
@@ -391,6 +574,7 @@ public class AstLowering
                     if (i < paramTypes.Count && argType != null && !argType.Equals(paramTypes[i]))
                     {
                         var argCastResult = new LocalValue($"cast_{_tempCounter++}") { Type = paramTypes[i] };
+                        // CastInstruction now infers cast kind from source and target types
                         var argCastInst = new CastInstruction(argVal, paramTypes[i], argCastResult);
                         _currentBlock.Instructions.Add(argCastInst);
                         args.Add(argCastResult);
@@ -417,11 +601,24 @@ public class AstLowering
                 // Address-of: &expr
                 if (addressOf.Target is IdentifierExpressionNode addrIdentifier)
                 {
+                    // Check if this is a local variable (stored as pointer via alloca)
+                    if (_locals.TryGetValue(addrIdentifier.Name, out var localValue))
+                    {
+                        // If it's already a pointer (alloca'd variable), return it directly
+                        // This prevents double-pointer issues since all variables are now memory-based
+                        if (localValue.Type is ReferenceType)
+                        {
+                            return localValue;
+                        }
+                    }
+
+                    // For parameters or other non-alloca'd values, emit AddressOfInstruction
                     var addrResult = new LocalValue($"addr_{_tempCounter++}") { Type = _typeSolver.GetType(addressOf) };
                     var addrInst = new AddressOfInstruction(addrIdentifier.Name, addrResult);
                     _currentBlock.Instructions.Add(addrInst);
                     return addrResult;
                 }
+
                 if (addressOf.Target is IndexExpressionNode ixAddr)
                 {
                     // Compute pointer to array element: &base[index]
@@ -434,11 +631,13 @@ public class AstLowering
                         var elemSize = GetTypeSize(atAddr.ElementType);
                         // offset = index * elem_size
                         var offsetTemp = new LocalValue($"offset_{_tempCounter++}") { Type = TypeRegistry.USize };
-                        var offsetInst = new BinaryInstruction(BinaryOp.Multiply, addrIndexValue, new ConstantValue(elemSize) { Type = TypeRegistry.I32 }, offsetTemp);
+                        var offsetInst = new BinaryInstruction(BinaryOp.Multiply, addrIndexValue,
+                            new ConstantValue(elemSize) { Type = TypeRegistry.I32 }, offsetTemp);
                         _currentBlock.Instructions.Add(offsetInst);
 
                         // element pointer = base + offset
-                        var elemPtr = new LocalValue($"index_ptr_{_tempCounter++}") { Type = new ReferenceType(atAddr.ElementType) };
+                        var elemPtr = new LocalValue($"index_ptr_{_tempCounter++}")
+                            { Type = new ReferenceType(atAddr.ElementType) };
                         var gepInst = new GetElementPtrInstruction(addrBaseValue, offsetTemp, elemPtr);
                         _currentBlock.Instructions.Add(gepInst);
                         return elemPtr;
@@ -495,7 +694,8 @@ public class AstLowering
                     var fieldType = structType.GetFieldType(fieldName) ?? TypeRegistry.I32;
 
                     // Calculate field address: base + offset
-                    var fieldPtrResult = new LocalValue($"field_ptr_{_tempCounter++}") { Type = new ReferenceType(fieldType) };
+                    var fieldPtrResult = new LocalValue($"field_ptr_{_tempCounter++}")
+                        { Type = new ReferenceType(fieldType) };
                     var gepInst = new GetElementPtrInstruction(allocaResult, fieldOffset, fieldPtrResult);
                     _currentBlock.Instructions.Add(gepInst);
 
@@ -519,8 +719,8 @@ public class AstLowering
                     return srcVal;
                 }
 
-                // Always emit CastInstruction for all other casts (including view casts)
-                // The C codegen will handle zero-cost reinterpret casts appropriately
+                // Emit CastInstruction for all casts
+                // The backend will determine the appropriate cast implementation by inspecting types
                 var castResult = new LocalValue($"cast_{_tempCounter++}") { Type = dstType };
                 var castInst = new CastInstruction(srcVal, dstType, castResult);
                 _currentBlock.Instructions.Add(castInst);
@@ -557,12 +757,14 @@ public class AstLowering
 
                 // Get pointer to field: targetPtr + offset
                 var fieldType2 = targetType.GetFieldType(fieldAccess.FieldName) ?? TypeRegistry.I32;
-                var fieldPointer = new LocalValue($"field_ptr_{_tempCounter++}") { Type = new ReferenceType(fieldType2) };
+                var fieldPointer = new LocalValue($"field_ptr_{_tempCounter++}")
+                    { Type = new ReferenceType(fieldType2) };
                 var fieldGepInst = new GetElementPtrInstruction(targetValue, fieldByteOffset, fieldPointer);
                 _currentBlock.Instructions.Add(fieldGepInst);
 
                 // Load value from field
-                var fieldLoadResult = new LocalValue($"field_load_{_tempCounter++}") { Type = targetType.GetFieldType(fieldAccess.FieldName) };
+                var fieldLoadResult = new LocalValue($"field_load_{_tempCounter++}")
+                    { Type = targetType.GetFieldType(fieldAccess.FieldName) };
                 var fieldLoadInst = new LoadInstruction(fieldPointer, fieldLoadResult);
                 _currentBlock.Instructions.Add(fieldLoadInst);
 
@@ -570,8 +772,8 @@ public class AstLowering
 
             case ArrayLiteralExpressionNode arrayLiteral:
                 // Get array type from type solver
-                var arrayType = _typeSolver.GetType(arrayLiteral) as ArrayType;
-                if (arrayType == null)
+                var arrayLitType = _typeSolver.GetType(arrayLiteral) as ArrayType;
+                if (arrayLitType == null)
                 {
                     _diagnostics.Add(Diagnostic.Error(
                         "cannot determine array type",
@@ -582,52 +784,73 @@ public class AstLowering
                     return new ConstantValue(0);
                 }
 
-                // Allocate stack space for the array
-                var arrayAllocaResult = new LocalValue($"array_{_tempCounter++}") { Type = new ReferenceType(arrayType) };
-                var arrayAllocaInst = new AllocaInstruction(arrayType, arrayType.Size, arrayAllocaResult);
-                _currentBlock.Instructions.Add(arrayAllocaInst);
+                // Create global constant for array literal (like string literals)
+                var arrayId = _compilation.AllocateStringId(); // Reuse the string ID counter for simplicity
+                var arrayGlobalName = $"LA{arrayId}"; // LA = Literal Array
 
-                // Store each element value
+                // Collect element values
+                Value[] elementValues;
                 if (arrayLiteral.IsRepeatSyntax)
                 {
                     // Repeat syntax: [value; count]
                     var repeatValue = LowerExpression(arrayLiteral.RepeatValue!);
-                    var elementSize = GetTypeSize(arrayType.ElementType);
 
-                    for (var i = 0; i < arrayLiteral.RepeatCount!.Value; i++)
+                    // For constants, we can create the array directly
+                    if (repeatValue is ConstantValue constVal)
                     {
-                        // Calculate element address: base + (i * element_size)
-                        var elemPtrResult = new LocalValue($"elem_ptr_{_tempCounter++}") { Type = new ReferenceType(arrayType.ElementType) };
-                        var elemGepInst = new GetElementPtrInstruction(arrayAllocaResult, i * elementSize, elemPtrResult);
-                        _currentBlock.Instructions.Add(elemGepInst);
-
-                        // Store value to element
-                        var storeElemInst = new StorePointerInstruction(elemPtrResult, repeatValue);
-                        _currentBlock.Instructions.Add(storeElemInst);
+                        elementValues = new Value[arrayLiteral.RepeatCount!.Value];
+                        for (var i = 0; i < arrayLiteral.RepeatCount.Value; i++)
+                        {
+                            elementValues[i] = constVal;
+                        }
+                    }
+                    else
+                    {
+                        // Non-constant repeat values not supported in array literals
+                        _diagnostics.Add(Diagnostic.Error(
+                            "array literal with repeat syntax must have constant value",
+                            arrayLiteral.Span,
+                            "use a constant expression",
+                            "E3005"
+                        ));
+                        return new ConstantValue(0);
                     }
                 }
                 else
                 {
                     // Regular array literal: [elem1, elem2, ...]
-                    var elementSize = GetTypeSize(arrayType.ElementType);
-
-                    for (var i = 0; i < arrayLiteral.Elements!.Count; i++)
+                    elementValues = new Value[arrayLiteral.Elements!.Count];
+                    for (var i = 0; i < arrayLiteral.Elements.Count; i++)
                     {
                         var elemValue = LowerExpression(arrayLiteral.Elements[i]);
 
-                        // Calculate element address: base + (i * element_size)
-                        var elemPtrResult = new LocalValue($"elem_ptr_{_tempCounter++}") { Type = new ReferenceType(arrayType.ElementType) };
-                        var elemGepInst = new GetElementPtrInstruction(arrayAllocaResult, i * elementSize, elemPtrResult);
-                        _currentBlock.Instructions.Add(elemGepInst);
+                        // Array literals must contain constant values
+                        if (elemValue is not ConstantValue)
+                        {
+                            _diagnostics.Add(Diagnostic.Error(
+                                "array literal elements must be constant values",
+                                arrayLiteral.Elements[i].Span,
+                                "use a constant expression",
+                                "E3006"
+                            ));
+                            return new ConstantValue(0);
+                        }
 
-                        // Store value to element
-                        var storeElemInst = new StorePointerInstruction(elemPtrResult, elemValue);
-                        _currentBlock.Instructions.Add(storeElemInst);
+                        elementValues[i] = elemValue;
                     }
                 }
 
-                // Return pointer to the array
-                return arrayAllocaResult;
+                // Create array constant value
+                var arrayLitConst = new ArrayConstantValue(arrayLitType, elementValues);
+
+                // Create global (type will be &[T; N])
+                var arrayGlobal = new GlobalValue(arrayGlobalName, arrayLitConst);
+
+                // Register in function globals
+                _currentFunction.Globals.Add(arrayGlobal);
+
+                // Return the global - it's a pointer to the array
+                return arrayGlobal;
 
             case IndexExpressionNode indexExpr:
                 // Get base array/slice
@@ -642,16 +865,19 @@ public class AstLowering
 
                     // Calculate offset: index * element_size
                     var offsetTemp = new LocalValue($"offset_{_tempCounter++}") { Type = TypeRegistry.USize };
-                    var offsetInst = new BinaryInstruction(BinaryOp.Multiply, indexValue, new ConstantValue(elemSize) { Type = TypeRegistry.I32 }, offsetTemp);
+                    var offsetInst = new BinaryInstruction(BinaryOp.Multiply, indexValue,
+                        new ConstantValue(elemSize) { Type = TypeRegistry.I32 }, offsetTemp);
                     _currentBlock.Instructions.Add(offsetInst);
 
                     // Calculate element address: base + offset
-                    var indexElemPtr = new LocalValue($"index_ptr_{_tempCounter++}") { Type = new ReferenceType(arrayTypeForIndex.ElementType) };
+                    var indexElemPtr = new LocalValue($"index_ptr_{_tempCounter++}")
+                        { Type = new ReferenceType(arrayTypeForIndex.ElementType) };
                     var indexGepInst = new GetElementPtrInstruction(baseValue, offsetTemp, indexElemPtr);
                     _currentBlock.Instructions.Add(indexGepInst);
 
                     // Load value from element
-                    var indexLoadResult = new LocalValue($"index_load_{_tempCounter++}") { Type = arrayTypeForIndex.ElementType };
+                    var indexLoadResult = new LocalValue($"index_load_{_tempCounter++}")
+                        { Type = arrayTypeForIndex.ElementType };
                     var indexLoadInst = new LoadInstruction(indexElemPtr, indexLoadResult);
                     _currentBlock.Instructions.Add(indexLoadInst);
 
@@ -728,7 +954,7 @@ public class AstLowering
     private Value LowerBlockExpression(BlockExpressionNode blockExpr)
     {
         // Push a new defer scope for this block
-        _deferStack.Push(new List<ExpressionNode>());
+        _deferStack.Push([]);
 
         foreach (var stmt in blockExpr.Statements) LowerStatement(stmt);
 
@@ -771,16 +997,22 @@ public class AstLowering
         var continueBlock = CreateBlock("for_continue");
         var exitBlock = CreateBlock("for_exit");
 
-        // Initialize iterator
-        var iteratorVar = new LocalValue(forLoop.IteratorVariable);
-        _locals[forLoop.IteratorVariable] = iteratorVar;
-        _currentBlock.Instructions.Add(new StoreInstruction(iteratorVar.Name, start, iteratorVar));
+        // Initialize iterator - allocate on stack (memory-based like all variables)
+        var iteratorPtr = new LocalValue(forLoop.IteratorVariable)
+            { Type = new ReferenceType(start.Type) };
+        var iteratorAlloca = new AllocaInstruction(start.Type, start.Type.Size, iteratorPtr);
+        _currentBlock.Instructions.Add(iteratorAlloca);
+        _currentBlock.Instructions.Add(new StorePointerInstruction(iteratorPtr, start));
+        _locals[forLoop.IteratorVariable] = iteratorPtr;
         _currentBlock.Instructions.Add(new JumpInstruction(condBlock));
 
-        // Condition: iterator < end
+        // Condition: load iterator, compare with end
         _currentBlock = condBlock;
-        var lessThan = new LocalValue($"loop_cond_{_tempCounter++}");
-        var cmpInst = new BinaryInstruction(BinaryOp.Subtract, iteratorVar, end, lessThan);
+        var iteratorValue = new LocalValue($"{forLoop.IteratorVariable}_load_{_tempCounter++}")
+            { Type = start.Type };
+        _currentBlock.Instructions.Add(new LoadInstruction(iteratorPtr, iteratorValue));
+        var lessThan = new LocalValue($"loop_cond_{_tempCounter++}") { Type = start.Type };
+        var cmpInst = new BinaryInstruction(BinaryOp.Subtract, iteratorValue, end, lessThan);
         _currentBlock.Instructions.Add(cmpInst);
         _currentBlock.Instructions.Add(new BranchInstruction(lessThan, bodyBlock, exitBlock));
 
@@ -791,17 +1023,57 @@ public class AstLowering
         _loopStack.Pop();
         _currentBlock.Instructions.Add(new JumpInstruction(continueBlock));
 
-        // Continue: increment iterator
+        // Continue: load iterator, increment, store back
         _currentBlock = continueBlock;
-        var incremented = new LocalValue($"loop_inc_{_tempCounter++}");
-        var incInst = new BinaryInstruction(BinaryOp.Add, iteratorVar, new ConstantValue(1), incremented);
+        var currentIterator = new LocalValue($"{forLoop.IteratorVariable}_load_{_tempCounter++}")
+            { Type = start.Type };
+        _currentBlock.Instructions.Add(new LoadInstruction(iteratorPtr, currentIterator));
+        var incremented = new LocalValue($"loop_inc_{_tempCounter++}") { Type = start.Type };
+        var incInst = new BinaryInstruction(BinaryOp.Add, currentIterator, new ConstantValue(1) { Type = start.Type }, incremented);
         _currentBlock.Instructions.Add(incInst);
-        var newIteratorVersion = new LocalValue($"{forLoop.IteratorVariable}_{_tempCounter++}");
-        _currentBlock.Instructions.Add(new StoreInstruction(iteratorVar.Name, incremented, newIteratorVersion));
+        _currentBlock.Instructions.Add(new StorePointerInstruction(iteratorPtr, incremented));
         _currentBlock.Instructions.Add(new JumpInstruction(condBlock));
 
-        // Exit
+        // Exit - no need to save/restore locals anymore! Memory persists naturally.
         _currentBlock = exitBlock;
+    }
+
+    /// <summary>
+    /// Copy struct fields from one location to another using memcpy.
+    /// </summary>
+    private void CopyStruct(Value destPtr, Value srcPtr, StructType structType)
+    {
+        // Use memcpy to copy the entire struct
+        var sizeVal = new ConstantValue(structType.Size) { Type = TypeRegistry.USize };
+        var memcpyResult = new LocalValue($"_unused_{_tempCounter++}") { Type = TypeRegistry.Void };
+
+        var memcpyCall = new CallInstruction("memcpy",
+            new List<Value> { destPtr, srcPtr, sizeVal },
+            memcpyResult);
+        memcpyCall.IsForeignCall = true;
+
+        _currentBlock.Instructions.Add(memcpyCall);
+    }
+
+    /// <summary>
+    /// Zero-initialize memory using memset(ptr, 0, size).
+    /// Used for uninitialized arrays and structs.
+    /// </summary>
+    private void ZeroInitialize(Value ptr, int sizeInBytes)
+    {
+        // memset(ptr, 0, size)
+        var zeroValue = new ConstantValue(0) { Type = TypeRegistry.U8 };
+        var sizeValue = new ConstantValue(sizeInBytes) { Type = TypeRegistry.USize };
+        var memsetResult = new LocalValue($"_unused_{_tempCounter++}") { Type = TypeRegistry.Void };
+
+        var memsetCall = new CallInstruction("memset",
+            new List<Value> { ptr, zeroValue, sizeValue },
+            memsetResult)
+        {
+            IsForeignCall = true // memset is a C standard library function
+        };
+
+        _currentBlock.Instructions.Add(memsetCall);
     }
 
     private class LoopContext

@@ -7,6 +7,6 @@ import core.io
 
 pub fn main() i32 {
     let s: String = "hello"
-    print(s)
+    println(s)
     return 0
 }

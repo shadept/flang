@@ -1,0 +1,13 @@
+<Project>
+    <!-- Centralized common build properties for all projects in the repository.
+         MSBuild automatically imports Directory.Build.props from the repo root into
+         each project, so we define shared settings here once. -->
+    <PropertyGroup>
+        <!-- Global target framework for all projects -->
+        <TargetFramework>net9.0</TargetFramework>
+        <!-- Enable C# implicit usings across all projects -->
+        <ImplicitUsings>enable</ImplicitUsings>
+        <!-- Enable nullable reference types globally -->
+        <Nullable>enable</Nullable>
+    </PropertyGroup>
+</Project>

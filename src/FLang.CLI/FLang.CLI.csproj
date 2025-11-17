@@ -10,9 +10,6 @@
 
     <PropertyGroup>
         <OutputType>Exe</OutputType>
-        <TargetFramework>net9.0</TargetFramework>
-        <ImplicitUsings>enable</ImplicitUsings>
-        <Nullable>enable</Nullable>
         <!-- Configure publish to produce a single, self-contained executable by default -->
         <PublishSingleFile>true</PublishSingleFile>
         <SelfContained>true</SelfContained>
@@ -23,6 +20,9 @@
         <!-- Compress and enable self-extract for native deps to keep single-file simple to distribute -->
         <EnableCompressionInSingleFile>true</EnableCompressionInSingleFile>
         <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
+        <!-- Determine executable extension based on RID: .exe for Windows, none otherwise -->
+        <ExeExt Condition="$([System.String]::Copy('$(RuntimeIdentifier)').StartsWith('win'))">.exe</ExeExt>
+        <ExeExt Condition=" '$(ExeExt)' == '' "></ExeExt>
     </PropertyGroup>
 
     <!-- After publish, copy only the essential output (single-file exe) to /dist/<RID>/flang.exe -->
@@ -31,8 +31,8 @@
         <PropertyGroup>
             <RepoRoot>$([System.IO.Path]::GetFullPath('$(MSBuildProjectDirectory)\..\..\'))</RepoRoot>
             <DistDir>$([System.IO.Path]::Combine('$(RepoRoot)', 'dist', '$(RuntimeIdentifier)'))\</DistDir>
-            <ExeName>$(AssemblyName).exe</ExeName>
-            <FinalExeName>flang.exe</FinalExeName>
+            <ExeName>$(AssemblyName)$(ExeExt)</ExeName>
+            <FinalExeName>flang$(ExeExt)</FinalExeName>
             <!-- Stdlib source and destination -->
             <StdLibRoot>$([System.IO.Path]::Combine('$(RepoRoot)', 'stdlib'))\</StdLibRoot>
             <StdLibDestDir>$([System.IO.Path]::Combine('$(DistDir)', 'stdlib'))\</StdLibDestDir>

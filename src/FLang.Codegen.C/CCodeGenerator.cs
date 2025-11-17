@@ -13,7 +13,7 @@ public class CCodeGenerator
 {
     private readonly StringBuilder _output = new();
     private readonly HashSet<string> _emittedStructs = new();
-    private readonly Dictionary<string, string> _stringLiterals = new();
+    private readonly Dictionary<string, string> _parameterRemap = new();
 
     public static string Generate(Function function)
     {
@@ -33,7 +33,7 @@ public class CCodeGenerator
         // Phase 2: Emit headers and type definitions
         EmitHeaders();
         EmitTypeDefinitions(function);
-        EmitStringLiterals();
+        EmitGlobals(function);
 
         // Phase 3: Emit function definition
         EmitFunctionDefinition(function);
@@ -49,6 +49,15 @@ public class CCodeGenerator
         CollectStructType(function.ReturnType);
         foreach (var param in function.Parameters)
             CollectStructType(param.Type);
+
+        // Collect struct types from globals (e.g., String literals)
+        foreach (var global in function.Globals)
+        {
+            CollectStructType(global.Type);
+            // Also collect from the initializer if it's a struct constant
+            if (global.Initializer is StructConstantValue structConst)
+                CollectStructType(structConst.Type);
+        }
 
         // Scan all instructions for struct types and string literals
         foreach (var block in function.BasicBlocks)
@@ -69,27 +78,24 @@ public class CCodeGenerator
                 break;
 
             case StoreInstruction store:
-                CollectStringLiteralFromValue(store.Value);
                 CollectStructType(store.Value.Type);
                 break;
 
             case CallInstruction call:
                 foreach (var arg in call.Arguments)
                 {
-                    CollectStringLiteralFromValue(arg);
                     CollectStructType(arg.Type);
                 }
                 CollectStructType(call.Result.Type);
                 break;
 
             case CastInstruction cast:
-                CollectStringLiteralFromValue(cast.Source);
                 CollectStructType(cast.Source.Type);
                 CollectStructType(cast.TargetType);
                 break;
 
             case ReturnInstruction ret:
-                CollectStringLiteralFromValue(ret.Value);
+                // No collection needed
                 break;
 
             case LoadInstruction load:
@@ -97,19 +103,14 @@ public class CCodeGenerator
                 break;
 
             case StorePointerInstruction storePtr:
-                CollectStringLiteralFromValue(storePtr.Value);
                 CollectStructType(storePtr.Value.Type);
                 break;
 
             case BinaryInstruction binary:
-                CollectStringLiteralFromValue(binary.Left);
-                CollectStringLiteralFromValue(binary.Right);
                 CollectStructType(binary.Result.Type);
                 break;
 
             case GetElementPtrInstruction gep:
-                CollectStringLiteralFromValue(gep.BasePointer);
-                CollectStringLiteralFromValue(gep.ByteOffset);
                 CollectStructType(gep.Result.Type);
                 break;
 
@@ -155,14 +156,6 @@ public class CCodeGenerator
         }
     }
 
-    private void CollectStringLiteralFromValue(Value? value)
-    {
-        if (value is StringConstantValue strConst && !_stringLiterals.ContainsKey(strConst.Name))
-        {
-            _stringLiterals[strConst.Name] = strConst.StringValue;
-            CollectStructType(strConst.Type);
-        }
-    }
 
     #endregion
 
@@ -178,16 +171,6 @@ public class CCodeGenerator
 
     private void EmitTypeDefinitions(Function function)
     {
-        // Always emit FLangString if needed for u8 slices/arrays
-        if (_emittedStructs.Contains("FLangString"))
-        {
-            _output.AppendLine("struct String {");
-            _output.AppendLine("    uint8_t* ptr;");
-            _output.AppendLine("    uintptr_t len;");
-            _output.AppendLine("};");
-            _output.AppendLine();
-        }
-
         // Collect all slice element types that need struct definitions
         var sliceElementTypes = new HashSet<FType>();
         CollectSliceElementTypes(function, sliceElementTypes);
@@ -211,7 +194,8 @@ public class CCodeGenerator
         // For now, emit in the order collected (could topologically sort if needed)
         foreach (var structName in _emittedStructs)
         {
-            if (structName == "FLangString") continue; // Already emitted
+            // Skip String - it's always emitted in the header by Program.cs
+            if (structName == "FLangString" || structName == "String") continue;
 
             // Find the struct type to emit its definition
             var structType = FindStructType(function, structName);
@@ -327,20 +311,56 @@ public class CCodeGenerator
         _output.AppendLine();
     }
 
-    private void EmitStringLiterals()
+    private void EmitGlobals(Function function)
     {
-        foreach (var (name, value) in _stringLiterals)
+        foreach (var global in function.Globals)
         {
-            // Emit string data and String struct
-            // Example:
-            // static const uint8_t str_0_data[] = "hello";
-            // static const struct String str_0 = { (uint8_t*)str_0_data, 5 };
-            var escaped = EscapeStringForC(value);
-            _output.AppendLine($"static const uint8_t {name}_data[] = \"{escaped}\";");
-            _output.AppendLine($"static const struct String {name} = {{ (uint8_t*){name}_data, {value.Length} }};");
+            if (global.Initializer is StructConstantValue structConst &&
+                structConst.Type is StructType st && st.Name == "String")
+            {
+                // Emit String literal as struct constant
+                // Extract the string data from the ptr field initializer
+                var ptrField = structConst.FieldValues["ptr"];
+                var lenField = structConst.FieldValues["len"];
+
+                if (ptrField is ArrayConstantValue arrayConst && arrayConst.StringRepresentation != null)
+                {
+                    var escaped = EscapeStringForC(arrayConst.StringRepresentation);
+                    var length = ((ConstantValue)lenField).IntValue;
+
+                    // Emit: static const struct String LC0 = { .ptr = (uint8_t*)"hello", .len = 5 };
+                    _output.AppendLine($"static const struct String {global.Name} = {{ .ptr = (uint8_t*)\"{escaped}\", .len = {length} }};");
+                }
+            }
+            else if (global.Initializer is ArrayConstantValue arrayConst &&
+                arrayConst.StringRepresentation != null)
+            {
+                // Legacy: Raw string data (if any old code still uses this)
+                var escaped = EscapeStringForC(arrayConst.StringRepresentation);
+                _output.AppendLine($"const uint8_t* {global.Name} = (const uint8_t*)\"{escaped}\";");
+            }
+            else if (global.Initializer is ArrayConstantValue arrayConst2 &&
+                arrayConst2.Elements != null &&
+                arrayConst2.Type is ArrayType arrType)
+            {
+                // Array literal: emit as C array constant
+                var elemType = TypeToCType(arrType.ElementType);
+                var elements = string.Join(", ", arrayConst2.Elements.Select(e =>
+                {
+                    if (e is ConstantValue cv)
+                    {
+                        return cv.IntValue.ToString();
+                    }
+                    throw new InvalidOperationException($"Non-constant value in array literal: {e}");
+                }));
+
+                // Emit: static const elementType LA0[length] = {elem0, elem1, ...};
+                _output.AppendLine($"static const {elemType} {global.Name}[{arrType.Length}] = {{{elements}}};");
+            }
+            // Handle other global types as needed
         }
 
-        if (_stringLiterals.Count > 0)
+        if (function.Globals.Count > 0)
             _output.AppendLine();
     }
 
@@ -355,14 +375,35 @@ public class CCodeGenerator
             ? "main"
             : NameMangler.GenericFunction(function.Name, function.Parameters.Select(p => p.Type).ToList());
 
-        // Build parameter list
+        // Build parameter list - emit struct params as pointers to avoid copies
         var paramList = function.Parameters.Count == 0
             ? "void"
-            : string.Join(", ", function.Parameters.Select(p => $"{TypeToCType(p.Type)} {p.Name}"));
+            : string.Join(", ", function.Parameters.Select(p =>
+            {
+                var paramType = TypeToCType(p.Type);
+                // If parameter is a struct (not a pointer to struct), emit as pointer
+                if (p.Type is StructType)
+                    paramType += "*";
+                return $"{paramType} {p.Name}";
+            }));
 
         // Emit function signature
         var returnType = TypeToCType(function.ReturnType);
         _output.AppendLine($"{returnType} {functionName}({paramList}) {{");
+
+        // Emit defensive copies for by-value struct parameters
+        foreach (var param in function.Parameters)
+        {
+            // If param is a struct (not a reference), create defensive copy
+            if (param.Type is StructType st)
+            {
+                var structType = TypeToCType(st);
+                var copyName = $"{param.Name}_copy";
+                _output.AppendLine($"    {structType} {copyName} = *{param.Name};");
+                // Track that uses of param should be remapped to param_copy
+                _parameterRemap[param.Name] = copyName;
+            }
+        }
 
         // Emit basic blocks
         for (int i = 0; i < function.BasicBlocks.Count; i++)
@@ -444,8 +485,8 @@ public class CCodeGenerator
         // alloca creates a stack variable and returns its address
         // Example: %ptr = alloca i32 -> int tmp; int* ptr = &tmp;
 
-        var allocType = TypeToCType(alloca.AllocatedType);
-        var tempVarName = $"{alloca.Result.Name}_val";
+        var resultName = SanitizeCIdentifier(alloca.Result.Name);
+        var tempVarName = $"{resultName}_val";
 
         if (alloca.AllocatedType is ArrayType arrayType)
         {
@@ -453,47 +494,44 @@ public class CCodeGenerator
             // Example: %arr = alloca [3 x i32] -> int arr_val[3]; int* arr = arr_val;
             var elemType = TypeToCType(arrayType.ElementType);
             _output.AppendLine($"    {elemType} {tempVarName}[{arrayType.Length}];");
-            _output.AppendLine($"    {elemType}* {alloca.Result.Name} = {tempVarName};");
+            _output.AppendLine($"    {elemType}* {resultName} = {tempVarName};");
         }
         else
         {
             // Scalars and structs
+            var allocType = TypeToCType(alloca.AllocatedType);
             _output.AppendLine($"    {allocType} {tempVarName};");
-            _output.AppendLine($"    {allocType}* {alloca.Result.Name} = &{tempVarName};");
+            _output.AppendLine($"    {allocType}* {resultName} = &{tempVarName};");
         }
     }
 
     private void EmitStore(StoreInstruction store)
     {
         // store is SSA assignment: %result = value
-        var resultType = TypeToCType(store.Result.Type ?? TypeRegistry.I32);
+        var resultName = SanitizeCIdentifier(store.Result.Name);
         var valueExpr = ValueToString(store.Value);
-
-        // Handle special case: storing pointer-to-array as struct
-        if (store.Value.Type is ReferenceType { InnerType: ArrayType arrayType })
-        {
-            // Convert array pointer to slice struct
-            var elemCType = TypeToCType(arrayType.ElementType);
-            var structType = arrayType.ElementType.Equals(TypeRegistry.U8)
-                ? "struct String"
-                : $"struct Slice_{elemCType.Replace("*", "Ptr").Replace(" ", "_")}";
-
-            _output.AppendLine($"    {structType} {store.Result.Name};");
-            _output.AppendLine($"    {store.Result.Name}.ptr = {valueExpr};");
-            _output.AppendLine($"    {store.Result.Name}.len = {arrayType.Length};");
-            return;
-        }
 
         // Handle storing dereferenced struct/slice pointers
         if (store.Value.Type is ReferenceType { InnerType: StructType or SliceType })
         {
             var innerType = TypeToCType(((ReferenceType)store.Value.Type).InnerType);
-            _output.AppendLine($"    {innerType} {store.Result.Name} = *{valueExpr};");
+            _output.AppendLine($"    {innerType} {resultName} = *{valueExpr};");
             return;
         }
 
+        // Arrays should not appear here - they should be handled via alloca + memcpy
+        // If we see an array type, it's a codegen error
+        if (store.Result.Type is ArrayType)
+        {
+            throw new InvalidOperationException(
+                $"Cannot emit store for array type {store.Result.Type.Name}. " +
+                "Arrays should be allocated via alloca and copied via memcpy.");
+        }
+
+        var resultType = TypeToCType(store.Result.Type ?? TypeRegistry.I32);
+
         // Normal scalar assignment
-        _output.AppendLine($"    {resultType} {store.Result.Name} = {valueExpr};");
+        _output.AppendLine($"    {resultType} {resultName} = {valueExpr};");
     }
 
     private void EmitStorePointer(StorePointerInstruction storePtr)
@@ -520,23 +558,26 @@ public class CCodeGenerator
     {
         // %result = load %ptr -> type result = *ptr;
         var resultType = TypeToCType(load.Result.Type ?? TypeRegistry.I32);
+        var resultName = SanitizeCIdentifier(load.Result.Name);
         var ptrExpr = ValueToString(load.Pointer);
-        _output.AppendLine($"    {resultType} {load.Result.Name} = *{ptrExpr};");
+        _output.AppendLine($"    {resultType} {resultName} = *{ptrExpr};");
     }
 
     private void EmitAddressOf(AddressOfInstruction addressOf)
     {
         // %result = addr_of var -> type* result = &var;
         var resultType = TypeToCType(addressOf.Result.Type ?? new ReferenceType(TypeRegistry.I32));
-        _output.AppendLine($"    {resultType} {addressOf.Result.Name} = &{addressOf.VariableName};");
+        var resultName = SanitizeCIdentifier(addressOf.Result.Name);
+        _output.AppendLine($"    {resultType} {resultName} = &{addressOf.VariableName};");
     }
 
     private void EmitGetElementPtr(GetElementPtrInstruction gep)
     {
         // %result = getelementptr %base, offset
-        // -> type* result = (type*)((char*)base + offset);
+        // -> type* result = (type*)((uint8_t*)base + offset);
 
         var resultType = TypeToCType(gep.Result.Type ?? new ReferenceType(TypeRegistry.I32));
+        var resultName = SanitizeCIdentifier(gep.Result.Name);
         var baseExpr = ValueToString(gep.BasePointer);
         var offsetExpr = ValueToString(gep.ByteOffset);
 
@@ -544,7 +585,7 @@ public class CCodeGenerator
         if (gep.BasePointer.Type is not ReferenceType)
             baseExpr = $"&{baseExpr}";
 
-        _output.AppendLine($"    {resultType} {gep.Result.Name} = ({resultType})((char*){baseExpr} + {offsetExpr});");
+        _output.AppendLine($"    {resultType} {resultName} = ({resultType})((uint8_t*){baseExpr} + {offsetExpr});");
     }
 
     private void EmitBinary(BinaryInstruction binary)
@@ -566,28 +607,62 @@ public class CCodeGenerator
         };
 
         var resultType = TypeToCType(binary.Result.Type ?? TypeRegistry.I32);
+        var resultName = SanitizeCIdentifier(binary.Result.Name);
         var left = ValueToString(binary.Left);
         var right = ValueToString(binary.Right);
 
-        _output.AppendLine($"    {resultType} {binary.Result.Name} = {left} {opSymbol} {right};");
+        _output.AppendLine($"    {resultType} {resultName} = {left} {opSymbol} {right};");
     }
 
     private void EmitCast(CastInstruction cast)
     {
-        var targetType = TypeToCType(cast.TargetType ?? TypeRegistry.I32);
+        var sourceType = cast.Source.Type;
+        var targetType = cast.TargetType ?? TypeRegistry.I32;
+        var cTargetType = TypeToCType(targetType);
+        var resultName = SanitizeCIdentifier(cast.Result.Name);
         var sourceExpr = ValueToString(cast.Source);
 
-        // Check if this is a struct-to-struct reinterpretation cast
-        if (cast.Source.Type is StructType && cast.TargetType is StructType)
+        // Detect array-to-pointer decay: [T; N] -> &T or &[T; N] -> &T
+        if (IsArrayToPointerCast(sourceType, targetType))
         {
-            // Use pointer reinterpretation: *(TargetType*)&source
-            _output.AppendLine($"    {targetType} {cast.Result.Name} = *({targetType}*)&{sourceExpr};");
+            // Array pointer decays naturally in C - just a simple cast
+            _output.AppendLine($"    {cTargetType} {resultName} = ({cTargetType}){sourceExpr};");
+        }
+        // Check if this is a struct-to-struct reinterpretation cast
+        else if (targetType is StructType or SliceType)
+        {
+            // Reinterpret cast: *(TargetType*)source_ptr
+            // If source is a value, we need &source; if it's already a pointer, use it directly
+            var sourcePtr = sourceType is ReferenceType
+                ? sourceExpr  // Already a pointer
+                : $"&{sourceExpr}";  // Take address of value
+
+            _output.AppendLine($"    {cTargetType} {resultName} = *({cTargetType}*){sourcePtr};");
         }
         else
         {
-            // Regular C cast
-            _output.AppendLine($"    {targetType} {cast.Result.Name} = ({targetType}){sourceExpr};");
+            // Regular C cast (numeric conversions, pointer casts, etc.)
+            _output.AppendLine($"    {cTargetType} {resultName} = ({cTargetType}){sourceExpr};");
         }
+    }
+
+    /// <summary>
+    /// Detects if this is an array-to-pointer decay cast.
+    /// Handles both [T; N] -> &T and &[T; N] -> &T cases.
+    /// </summary>
+    private static bool IsArrayToPointerCast(FType? sourceType, FType targetType)
+    {
+        if (sourceType == null) return false;
+
+        // Case 1: [T; N] -> &T (array value to pointer)
+        if (sourceType is ArrayType && targetType is ReferenceType)
+            return true;
+
+        // Case 2: &[T; N] -> &T (pointer to array to pointer to element)
+        if (sourceType is ReferenceType { InnerType: ArrayType } && targetType is ReferenceType)
+            return true;
+
+        return false;
     }
 
     private void EmitCall(CallInstruction call)
@@ -598,10 +673,28 @@ public class CCodeGenerator
             : NameMangler.GenericFunction(call.FunctionName,
                 call.CalleeParamTypes?.ToList() ?? call.Arguments.Select(a => a.Type ?? TypeRegistry.I32).ToList());
 
-        var args = string.Join(", ", call.Arguments.Select(ValueToString));
-        var resultType = TypeToCType(call.Result.Type ?? TypeRegistry.I32);
+        // Build argument list - take address of struct values since params are pointers
+        var args = string.Join(", ", call.Arguments.Select(arg =>
+        {
+            var argStr = ValueToString(arg);
+            // If argument is a struct value (not a pointer), take its address
+            // GlobalValue with StructConstantValue already returns &LC0, so check for that
+            if (arg.Type is StructType && !argStr.StartsWith("&"))
+                return $"&{argStr}";
+            return argStr;
+        }));
 
-        _output.AppendLine($"    {resultType} {call.Result.Name} = {calleeName}({args});");
+        // Check if function returns void - if so, don't capture result
+        if (call.Result.Type != null && call.Result.Type.Equals(TypeRegistry.Void))
+        {
+            _output.AppendLine($"    {calleeName}({args});");
+        }
+        else
+        {
+            var resultType = TypeToCType(call.Result.Type ?? TypeRegistry.I32);
+            var resultName = SanitizeCIdentifier(call.Result.Name);
+            _output.AppendLine($"    {resultType} {resultName} = {calleeName}({args});");
+        }
     }
 
     private void EmitReturn(ReturnInstruction ret)
@@ -632,13 +725,29 @@ public class CCodeGenerator
         {
             ConstantValue constant => constant.IntValue.ToString(),
 
-            StringConstantValue strConst when strConst.Type is ReferenceType => $"&{strConst.Name}",
-            StringConstantValue strConst => strConst.Name,
+            // Handle GlobalValue
+            // If it's a struct constant (like String literal), take its address
+            // since GlobalValue type is &T (pointer) but C emits it as T (struct)
+            GlobalValue global when global.Initializer is StructConstantValue => $"&{SanitizeCIdentifier(global.Name)}",
 
-            LocalValue local => local.Name,
+            GlobalValue global => SanitizeCIdentifier(global.Name),
+
+            // Handle LocalValue - check if it's a remapped parameter
+            LocalValue local => _parameterRemap.TryGetValue(local.Name, out var remapped)
+                ? remapped
+                : SanitizeCIdentifier(local.Name),
 
             _ => throw new Exception($"Unknown value type: {value.GetType().Name}")
         };
+    }
+
+    /// <summary>
+    /// Sanitize an identifier name to be a valid C identifier.
+    /// Replaces dots and other invalid characters with underscores.
+    /// </summary>
+    private static string SanitizeCIdentifier(string name)
+    {
+        return name.Replace('.', '_');
     }
 
     private string TypeToCType(FType type)
@@ -662,11 +771,12 @@ public class CCodeGenerator
 
             StructType st => $"struct {GetStructCName(st)}",
 
-            ArrayType at when at.ElementType.Equals(TypeRegistry.U8) => "struct String",
-            ArrayType at => $"struct Slice_{TypeToCType(at.ElementType).Replace("*", "Ptr").Replace(" ", "_")}",
-
             SliceType st when st.ElementType.Equals(TypeRegistry.U8) => "struct String",
             SliceType st => $"struct Slice_{TypeToCType(st.ElementType).Replace("*", "Ptr").Replace(" ", "_")}",
+
+            // Arrays are not converted to struct types - they remain as C arrays
+            // Array syntax must be handled specially at declaration sites (see alloca handling)
+            ArrayType => throw new InvalidOperationException("Array types must be handled specially at declaration sites"),
 
             _ => "int" // Fallback
         };

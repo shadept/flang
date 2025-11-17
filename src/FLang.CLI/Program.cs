@@ -14,6 +14,7 @@ string? stdlibPath = null;
 string? emitFir = null;
 var demoDiagnostics = false;
 var releaseBuild = false;
+var findCompilersOnly = false;
 
 for (var i = 0; i < args.Length; i++)
     if (args[i] == "--stdlib-path" && i + 1 < args.Length)
@@ -24,11 +25,20 @@ for (var i = 0; i < args.Length; i++)
         demoDiagnostics = true;
     else if (args[i] == "--release")
         releaseBuild = true;
+    else if (args[i] == "--find-compilers")
+        findCompilersOnly = true;
     else if (!args[i].StartsWith("--")) inputFilePath = args[i];
 
 if (demoDiagnostics)
 {
     DiagnosticDemo.Run();
+    return;
+}
+
+// Handle compiler discovery-only mode regardless of input file presence
+if (findCompilersOnly)
+{
+    PrintAvailableCompilers();
     return;
 }
 
@@ -40,6 +50,7 @@ if (inputFilePath == null)
     Console.WriteLine("  --emit-fir <file>       Emit FIR (intermediate representation) to file (use '-' for stdout)");
     Console.WriteLine("  --release               Enable C backend optimization (passes -O2 /O2)");
     Console.WriteLine("  --demo-diagnostics      Show diagnostic system demo");
+    Console.WriteLine("  --find-compilers        Probe and list available C compilers on this machine, then exit");
     return;
 }
 
@@ -148,6 +159,13 @@ headerBuilder.AppendLine("#include <stdint.h>");
 headerBuilder.AppendLine("#include <string.h>");
 headerBuilder.AppendLine();
 
+// Always emit String struct - it's a core compiler type
+headerBuilder.AppendLine("struct String {");
+headerBuilder.AppendLine("    uint8_t* ptr;");
+headerBuilder.AppendLine("    uintptr_t len;");
+headerBuilder.AppendLine("};");
+headerBuilder.AppendLine();
+
 // Collect struct definitions and extern prototypes uniquely
 var structBlocks = new Dictionary<string, string>(); // name -> block
 var externPrototypes = new HashSet<string>();
@@ -219,7 +237,14 @@ foreach (var block in structBlocks.Values)
 foreach (var f in allFunctions)
 {
     if (f.IsForeign) continue;
-    var plist = string.Join(", ", f.Parameters.Select(p => $"{TypeRegistry.ToCType(p.Type)} {p.Name}"));
+    var plist = string.Join(", ", f.Parameters.Select(p =>
+    {
+        var paramType = TypeRegistry.ToCType(p.Type);
+        // If parameter is a struct (not a pointer to struct), emit as pointer
+        if (p.Type is StructType)
+            paramType += "*";
+        return $"{paramType} {p.Name}";
+    }));
     if (f.Parameters.Count == 0) plist = "void";
     var protoName = f.Name == "main"
         ? "main"
@@ -239,90 +264,289 @@ var cFilePath = Path.ChangeExtension(inputFilePath, ".c");
 File.WriteAllText(cFilePath, cCode);
 
 var outputFilePath = Path.ChangeExtension(inputFilePath, ".exe");
+if (!RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+    outputFilePath = Path.ChangeExtension(outputFilePath, null);
 
-// Build compiler list with cl.exe path resolution on Windows
-var compilersList = new List<(string, string, Dictionary<string, string>?)>();
+// Get compiler configuration for compilation
+var compiler = GetCompilerForCompilation(cFilePath, outputFilePath, releaseBuild);
 
-var gccArgs = new List<string>();
-if (releaseBuild) gccArgs.Add("-O2");
-gccArgs.Add($"-o \"{outputFilePath}\"");
-gccArgs.Add($"\"{cFilePath}\"");
-compilersList.Add(("gcc", string.Join(" ", gccArgs), null));
-
-if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+if (compiler == null)
 {
-    var (clPath, clEnv) = FindClExeWithEnvironment();
-    var msvcArgs = new List<string> { "/nologo" };
-    if (releaseBuild) msvcArgs.Add("/O2");
-    msvcArgs.Add($"/Fe\"{outputFilePath}\"");
-    msvcArgs.Add($"\"{cFilePath}\"");
+    Console.Error.WriteLine("Error: Could not find any C compiler.");
 
-    if (clPath != null)
-        compilersList.Add((clPath, string.Join(" ", msvcArgs), clEnv));
+    if (RuntimeInformation.IsOSPlatform(OSPlatform.OSX))
+    {
+        Console.Error.WriteLine(
+            "Hint (macOS): Install Xcode Command Line Tools with 'xcode-select --install', then try again. You can also verify with 'xcrun --find clang'.");
+        Console.Error.WriteLine(
+            "Alternatively, set the CC environment variable to your compiler, e.g., 'export CC=clang'.");
+    }
+    else if (!RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+    {
+        Console.Error.WriteLine(
+            "Hint (Unix): Install a C compiler (clang or gcc) and ensure it is on your PATH, or set the CC environment variable.");
+    }
     else
-        // Fallback to hoping cl.exe is in PATH with proper environment
-        compilersList.Add(("cl.exe", string.Join(" ", msvcArgs), null));
+    {
+        Console.Error.WriteLine(
+            "Hint (Windows): Install Visual Studio Build Tools (with C++), or install gcc (e.g., via MSYS2/MinGW) and ensure it is on PATH.");
+    }
+
+    Environment.Exit(1);
 }
 
-var compilers = compilersList.ToArray();
-
-var compiled = false;
-foreach (var (compiler, arguments, environment) in compilers)
+// Invoke the C compiler
+var startInfo = new ProcessStartInfo
 {
-    var startInfo = new ProcessStartInfo
+    FileName = compiler.ExecutablePath,
+    Arguments = compiler.Arguments,
+    RedirectStandardOutput = true,
+    RedirectStandardError = true,
+    UseShellExecute = false,
+    CreateNoWindow = true
+};
+
+// Add custom environment variables if provided (needed for cl.exe)
+if (compiler.Environment != null)
+    foreach (var (key, value) in compiler.Environment)
+        startInfo.EnvironmentVariables[key] = value;
+
+var process = new Process { StartInfo = startInfo };
+
+try
+{
+    process.Start();
+    process.WaitForExit();
+
+    if (process.ExitCode != 0)
     {
-        FileName = compiler,
-        Arguments = arguments,
-        RedirectStandardOutput = true,
-        RedirectStandardError = true,
-        UseShellExecute = false,
-        CreateNoWindow = true
-    };
+        Console.Error.WriteLine($"C compiler ({compiler.Name}) failed:");
+        var stdout = process.StandardOutput.ReadToEnd();
+        var stderr = process.StandardError.ReadToEnd();
+        if (!string.IsNullOrWhiteSpace(stdout)) Console.Error.WriteLine(stdout);
+        if (!string.IsNullOrWhiteSpace(stderr)) Console.Error.WriteLine(stderr);
+        Environment.Exit(1);
+    }
 
-    // Add custom environment variables if provided (needed for cl.exe)
-    if (environment != null)
-        foreach (var (key, value) in environment)
-            startInfo.EnvironmentVariables[key] = value;
+    // Clean up intermediate files (cl.exe creates .obj files)
+    var objFilePath = Path.ChangeExtension(inputFilePath, ".obj");
+    if (File.Exists(objFilePath)) File.Delete(objFilePath);
 
-    var process = new Process { StartInfo = startInfo };
+    var baseNameObj = Path.GetFileNameWithoutExtension(inputFilePath) + ".obj";
+    if (File.Exists(baseNameObj)) File.Delete(baseNameObj);
+}
+catch (Exception ex)
+{
+    Console.Error.WriteLine($"Error invoking C compiler ({compiler.ExecutablePath}): {ex.Message}");
+    Environment.Exit(1);
+}
 
-    try
+// --- Utilities: compiler discovery and configuration ---
+
+/// <summary>
+/// Get the first available C compiler configured for compilation.
+/// Returns null if no compiler is found.
+/// </summary>
+static CompilerConfig? GetCompilerForCompilation(string cFilePath, string outputFilePath, bool releaseBuild)
+{
+    var availableCompilers = FindCompilersOrderedByPreference();
+    var selected = availableCompilers.FirstOrDefault(c => c.path != null);
+
+    if (selected.path == null)
+        return null;
+
+    string executablePath = selected.path;
+    string arguments;
+    Dictionary<string, string>? environment = null;
+
+    // Check if this is MSVC (cl.exe)
+    if (selected.name.Contains("cl.exe"))
     {
-        process.Start();
-        process.WaitForExit();
+        var (clPath, clEnv) = FindClExeWithEnvironment();
+        environment = clEnv;
 
-        if (process.ExitCode != 0)
+        var msvcArgs = new List<string> { "/nologo" };
+        if (releaseBuild) msvcArgs.Add("/O2");
+        msvcArgs.Add($"/Fe\"{outputFilePath}\"");
+        msvcArgs.Add($"\"{cFilePath}\"");
+        arguments = string.Join(" ", msvcArgs);
+    }
+    else
+    {
+        // Unix-like compilers (gcc, clang, cc, xcrun)
+        var unixArgs = new List<string>();
+        if (releaseBuild) unixArgs.Add("-O2");
+        unixArgs.Add($"-g -o \"{outputFilePath}\"");
+        unixArgs.Add($"\"{cFilePath}\"");
+
+        // Special handling for xcrun
+        if (selected.name.Contains("xcrun"))
         {
-            Console.Error.WriteLine($"C compiler ({compiler}) failed:");
-            var output = process.StandardOutput.ReadToEnd();
-            Console.Error.WriteLine(output);
+            executablePath = "xcrun";
+            arguments = "clang " + string.Join(" ", unixArgs);
         }
         else
         {
-            compiled = true;
-
-            // Clean up intermediate files (cl.exe creates .obj files)
-            // Check both next to source file and in current directory
-            var objFilePath = Path.ChangeExtension(inputFilePath, ".obj");
-            if (File.Exists(objFilePath)) File.Delete(objFilePath);
-
-            var baseNameObj = Path.GetFileNameWithoutExtension(inputFilePath) + ".obj";
-            if (File.Exists(baseNameObj)) File.Delete(baseNameObj);
-
-            break;
+            arguments = string.Join(" ", unixArgs);
         }
     }
-    catch (Win32Exception e)
+
+    return new CompilerConfig(selected.name, executablePath, arguments, environment);
+}
+
+/// <summary>
+/// Find available C compilers ordered by preference.
+/// Returns a list of (name, path, source) tuples where:
+/// - name: Display name of the compiler
+/// - path: Full path to the compiler (null if not found)
+/// - source: How the compiler was discovered ("env", "xcrun", "vswhere", "path")
+/// </summary>
+static List<(string name, string? path, string source)> FindCompilersOrderedByPreference()
+{
+    var results = new List<(string name, string? path, string source)>();
+
+    if (!RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
     {
-        // Try next compiler
+        // 1) CC environment variable (highest priority)
+        var ccEnv = Environment.GetEnvironmentVariable("CC");
+        if (!string.IsNullOrWhiteSpace(ccEnv))
+        {
+            string? resolved = null;
+            var cc = ccEnv.Trim();
+            if (cc.Contains('/') || cc.Contains(Path.DirectorySeparatorChar) || Path.IsPathRooted(cc))
+            {
+                resolved = File.Exists(cc) ? Path.GetFullPath(cc) : null;
+            }
+            else
+            {
+                resolved = ResolveCommandPath(cc);
+            }
+
+            results.Add(("$CC" + " (" + cc + ")", resolved, "env"));
+        }
+
+        // 2) macOS xcrun --find clang
+        if (RuntimeInformation.IsOSPlatform(OSPlatform.OSX))
+        {
+            var xcrunFound = ResolveCommandPath("xcrun") != null;
+            string? xcrunClang = null;
+            if (xcrunFound)
+                xcrunClang = RunAndCaptureFirstLine("xcrun", "--find clang");
+            results.Add(("xcrun clang", string.IsNullOrWhiteSpace(xcrunClang) ? null : xcrunClang, "xcrun"));
+        }
+
+        // 3) PATH lookups
+        foreach (var name in new[] { "clang", "cc", "gcc" })
+            results.Add((name, ResolveCommandPath(name), "path"));
+    }
+    else
+    {
+        // Windows: MSVC via vswhere/env + PATH fallbacks
+        var (clPath, _) = FindClExeWithEnvironment();
+        if (clPath != null)
+            results.Add(("cl.exe", clPath, "vswhere"));
+        else
+            results.Add(("cl.exe", ResolveCommandPath("cl.exe"), "path"));
+
+        results.Add(("gcc", ResolveCommandPath("gcc"), "path"));
+    }
+
+    return results;
+}
+
+/// <summary>
+/// Print available C compilers to the console.
+/// </summary>
+static void PrintAvailableCompilers()
+{
+    var results = FindCompilersOrderedByPreference();
+
+    Console.WriteLine("Compiler discovery (ordered by preference):");
+    int idx = 1;
+    foreach (var r in results)
+    {
+        var status = r.path != null ? "FOUND" : "not found";
+        var pathText = r.path ?? "<unavailable>";
+        Console.WriteLine($"  {idx}. {r.name,-15} : {status} -> {pathText}");
+        idx++;
+    }
+
+    if (results.All(r => r.path == null))
+    {
+        Console.WriteLine();
+        if (RuntimeInformation.IsOSPlatform(OSPlatform.OSX))
+        {
+            Console.WriteLine(
+                "Hint (macOS): Install Xcode Command Line Tools with 'xcode-select --install'. You can verify with 'xcrun --find clang'.");
+            Console.WriteLine("Alternatively, set the CC environment variable, e.g., 'export CC=clang'.");
+        }
+        else if (!RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+        {
+            Console.WriteLine(
+                "Hint (Unix): Install clang or gcc and ensure it is on your PATH, or set CC to your compiler.");
+        }
+        else
+        {
+            Console.WriteLine(
+                "Hint (Windows): Install Visual Studio Build Tools (with C++), or install gcc (e.g., via MSYS2/MinGW) and ensure it is on PATH.");
+        }
     }
 }
 
-if (!compiled)
+static string? ResolveCommandPath(string command)
 {
-    Console.Error.WriteLine(
-        $"Error: Could not find any C compiler. Tried: {string.Join(", ", compilers.Select(c => c.Item1))}");
-    Environment.Exit(1);
+    try
+    {
+        var isWindows = RuntimeInformation.IsOSPlatform(OSPlatform.Windows);
+        var fileName = isWindows ? "where" : "which";
+        var psi = new ProcessStartInfo
+        {
+            FileName = fileName,
+            Arguments = command,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+            CreateNoWindow = true
+        };
+        using var p = Process.Start(psi);
+        if (p == null) return null;
+        var output = p.StandardOutput.ReadToEnd();
+        p.WaitForExit();
+        var line = output.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries).FirstOrDefault();
+        if (string.IsNullOrWhiteSpace(line)) return null;
+        return line.Trim();
+    }
+    catch
+    {
+        return null;
+    }
+}
+
+static string? RunAndCaptureFirstLine(string fileName, string arguments)
+{
+    try
+    {
+        var psi = new ProcessStartInfo
+        {
+            FileName = fileName,
+            Arguments = arguments,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+            CreateNoWindow = true
+        };
+        using var p = Process.Start(psi);
+        if (p == null) return null;
+        var output = p.StandardOutput.ReadToEnd();
+        p.WaitForExit();
+        var line = output.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries).FirstOrDefault();
+        if (string.IsNullOrWhiteSpace(line)) return null;
+        return line.Trim();
+    }
+    catch
+    {
+        return null;
+    }
 }
 
 static (string?, Dictionary<string, string>?) FindClExeWithEnvironment()
@@ -469,3 +693,8 @@ static (string?, Dictionary<string, string>?) FindClExeWithEnvironment()
 
     return (clPath, env);
 }
+
+/// <summary>
+/// Represents a fully configured C compiler ready for invocation.
+/// </summary>
+record CompilerConfig(string Name, string ExecutablePath, string Arguments, Dictionary<string, string>? Environment);

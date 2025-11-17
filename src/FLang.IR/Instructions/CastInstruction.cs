@@ -7,9 +7,10 @@ namespace FLang.IR.Instructions;
 /// Supports various cast operations including:
 /// - Integer casts (sign extension, truncation, zero extension)
 /// - Pointer casts
+/// - Array decay (array to pointer to first element)
 /// - String to slice conversions
 /// - Slice to pointer conversions
-/// The specific cast behavior depends on the source and target types.
+/// The specific cast behavior is determined by inspecting the source and target types.
 /// </summary>
 public class CastInstruction : Instruction
 {

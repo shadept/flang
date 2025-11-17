@@ -45,9 +45,7 @@ public class Compilation
         // Convert import path to filepath: ["std", "io"] -> "stdlib/std/io.f"
         var relativePath = string.Join(Path.DirectorySeparatorChar, importPath) + ".f";
         var fullPath = Path.Combine(StdlibPath, relativePath);
-
         if (File.Exists(fullPath)) return fullPath;
-
         return null;
     }
 

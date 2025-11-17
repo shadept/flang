@@ -35,12 +35,12 @@ function Fail($msg, [int]$code = 1) {
 }
 
 # Restore solution packages (optional but explicit)
-& dotnet restore "flang.sln"
+& dotnet restore "flang.sln" -nologo -v minimal
 if ($LASTEXITCODE -ne 0) { Fail "Build failed during 'dotnet restore'. See errors above." $LASTEXITCODE }
 
 # Publish FLang.CLI; the .csproj is already configured to produce a single-file, self-contained exe
 # and copy the final artifact to ./dist/<RID>/flang.exe along with ./dist/<RID>/stdlib/**
-& dotnet publish "src\FLang.CLI\FLang.CLI.csproj" -c Release -r $RID -nologo
+& dotnet publish "src\FLang.CLI\FLang.CLI.csproj" -c Release -r $RID -nologo -v minimal
 if ($LASTEXITCODE -ne 0) { Fail "Build failed during 'dotnet publish'. See errors above." $LASTEXITCODE }
 
 $DistDir = Join-Path $RepoRoot (Join-Path 'dist' $RID)

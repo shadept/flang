@@ -26,5 +26,11 @@ public class Function
     public List<FunctionParameter> Parameters { get; } = new();
     public List<BasicBlock> BasicBlocks { get; } = new();
     public bool IsForeign { get; set; }
+
+    /// <summary>
+    /// Track global values referenced/created by this function.
+    /// Later we may want a Module class that owns globals, but for now Function-level is sufficient.
+    /// </summary>
+    public List<GlobalValue> Globals { get; } = new();
 }
 

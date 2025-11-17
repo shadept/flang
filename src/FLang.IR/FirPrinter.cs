@@ -13,6 +13,15 @@ public static class FirPrinter
     {
         var builder = new StringBuilder();
 
+        // Emit globals first
+        foreach (var global in function.Globals)
+        {
+            builder.AppendLine(PrintGlobal(global));
+        }
+
+        if (function.Globals.Count > 0)
+            builder.AppendLine();
+
         // Function signature with type
         var paramTypes = string.Join(", ", function.Parameters.Select(p => TypeToString(p.Type)));
         builder.AppendLine($"define {TypeToString(function.ReturnType)} @{function.Name}({paramTypes}) {{");
@@ -29,6 +38,19 @@ public static class FirPrinter
 
         builder.AppendLine("}");
         return builder.ToString();
+    }
+
+    private static string PrintGlobal(GlobalValue global)
+    {
+        var initType = TypeToString(global.Initializer.Type);
+
+        if (global.Initializer is ArrayConstantValue arrayConst &&
+            arrayConst.StringRepresentation != null)
+        {
+            return $"@{global.Name} = global {initType} \"{arrayConst.StringRepresentation}\"";
+        }
+
+        return $"@{global.Name} = global {initType} <data>";
     }
 
     private static string PrintInstruction(Instruction instruction)
@@ -74,7 +96,8 @@ public static class FirPrinter
     private static string PrintLoad(LoadInstruction load)
     {
         // %result = load <type>, ptr %ptr
-        return $"{PrintTypedValue(load.Result)} = load {TypeToString(load.Result.Type)}, ptr {PrintValue(load.Pointer)}";
+        return
+            $"{PrintTypedValue(load.Result)} = load {TypeToString(load.Result.Type)}, ptr {PrintValue(load.Pointer)}";
     }
 
     private static string PrintAddressOf(AddressOfInstruction addressOf)
@@ -136,23 +159,20 @@ public static class FirPrinter
         // %result = call <ret_type> @func(<args>)
         var argsStr = string.Join(", ", call.Arguments.Select(PrintTypedValue));
         var retType = TypeToString(call.Result.Type);
-
         return $"{PrintTypedValue(call.Result)} = call {retType} @{call.FunctionName}({argsStr})";
     }
 
     private static string PrintReturn(ReturnInstruction ret)
     {
         // ret <type> <value>
-        if (ret.Value == null)
-            return "ret void";
-
         return $"ret {PrintTypedValue(ret.Value)}";
     }
 
     private static string PrintBranch(BranchInstruction branch)
     {
         // br i1 <cond>, label %true_block, label %false_block
-        return $"br i1 {PrintValue(branch.Condition)}, label %{branch.TrueBlock.Label}, label %{branch.FalseBlock.Label}";
+        return
+            $"br i1 {PrintValue(branch.Condition)}, label %{branch.TrueBlock.Label}, label %{branch.FalseBlock.Label}";
     }
 
     private static string PrintJump(JumpInstruction jump)
@@ -185,8 +205,8 @@ public static class FirPrinter
 
         return value switch
         {
+            GlobalValue global => $"@{global.Name}",
             ConstantValue constant => constant.IntValue.ToString(),
-            StringConstantValue strConst => $"@{strConst.Name}", // Global string constant
             LocalValue local => $"%{local.Name}",
             _ => $"%{value.Name}"
         };
@@ -207,22 +227,17 @@ public static class FirPrinter
             PrimitiveType { Name: "i32" } => "i32",
             PrimitiveType { Name: "i64" } => "i64",
             PrimitiveType { Name: "isize" } => "i64",
-            PrimitiveType { Name: "u8" } => "i8",
-            PrimitiveType { Name: "u16" } => "i16",
-            PrimitiveType { Name: "u32" } => "i32",
-            PrimitiveType { Name: "u64" } => "i64",
+            PrimitiveType { Name: "u8" } => "u8",
+            PrimitiveType { Name: "u16" } => "u16",
+            PrimitiveType { Name: "u32" } => "u32",
+            PrimitiveType { Name: "u64" } => "u64",
             PrimitiveType { Name: "usize" } => "u64",
             PrimitiveType { Name: "bool" } => "i1",
             PrimitiveType { Name: "void" } => "void",
-
-            ReferenceType rt => $"ptr", // LLVM opaque pointer style
-
+            ReferenceType rt => $"ptr.{TypeToString(rt.InnerType).Replace("%", "").Replace(" ", "_")}",
             StructType st => $"%struct.{st.StructName}",
-
-            ArrayType at => $"[{at.Length} x {TypeToString(at.ElementType)}]",
-
+            ArrayType at => $"[{at.Length} x {TypeToString(at.ElementType).Replace("%", "").Replace(" ", "_")}]",
             SliceType st => $"%slice.{TypeToString(st.ElementType).Replace("%", "").Replace(" ", "_")}",
-
             _ => type.Name
         };
     }
@@ -232,7 +247,6 @@ public static class FirPrinter
     /// </summary>
     private static bool IsPrimitiveInt(FType? type)
     {
-        return type is PrimitiveType pt &&
-               (pt.Name.StartsWith("i") || pt.Name.StartsWith("u"));
+        return type is PrimitiveType pt && (pt.Name.StartsWith('i') || pt.Name.StartsWith('u'));
     }
 }

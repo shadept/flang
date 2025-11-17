@@ -10,7 +10,7 @@ pub fn main() i32 {
     let arr: [u8; 5] = [0, 0, 0, 0, 0]
 
     // Fill array with value 42
-    memset(&arr[0], 42, 5)
+    memset(arr, 42, 5)
 
-    return arr[0] as i32
+    return arr[0]
 }
