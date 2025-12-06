@@ -2,6 +2,7 @@
 # Builds all FLang test scripts using the final compiler binary.
 # Usage:
 #   ./build-all-tests.sh [--show-progress] [RID]
+#   Shows an inline progress bar by default. Pass --show-progress for per-test logs.
 # Defaults:
 #   RID = osx-x64
 
@@ -24,6 +25,7 @@ for arg in "$@"; do
       ;;
   esac
 done
+
 
 BUILD_SCRIPT="$REPO_ROOT/build.sh"
 if [[ ! -f "$BUILD_SCRIPT" ]]; then
@@ -66,33 +68,85 @@ if [[ ${#TEST_FILES[@]} -eq 0 ]]; then
   exit 0
 fi
 
+TOTAL_TESTS=${#TEST_FILES[@]}
+
 echo "Using compiler: $FLANG"
-echo "Discovered ${#TEST_FILES[@]} test script(s). Starting build..."
+echo "Discovered ${TOTAL_TESTS} test script(s). Starting build..."
+
+render_progress() {
+  local current=$1
+  local total=$2
+  if [[ $total -le 0 ]]; then
+    return
+  fi
+
+  local width=40
+  local percent=$(( current * 100 / total ))
+  if (( percent > 100 )); then
+    percent=100
+  fi
+
+  local filled=$(( current * width / total ))
+  if (( filled > width )); then
+    filled=$width
+  fi
+  local empty=$(( width - filled ))
+
+  local filled_bar empty_bar
+  printf -v filled_bar '%*s' "$filled" ''
+  filled_bar=${filled_bar// /#}
+  printf -v empty_bar '%*s' "$empty" ''
+  empty_bar=${empty_bar// /-}
+
+  printf "\r[%s%s] %d/%d (%3d%%)" "$filled_bar" "$empty_bar" "$current" "$total" "$percent"
+}
+
+clear_progress_line() {
+  printf '\r\033[K'
+}
 
 TOTAL=0
 PASSED=0
 FAILED=0
 FAILED_LIST=()
 
+render_progress 0 "$TOTAL_TESTS"
+
 for file in "${TEST_FILES[@]}"; do
-  TOTAL=$((TOTAL+1))
   rel="${file#$REPO_ROOT/}"
+  tmp_output=$(mktemp -t flang-tests.XXXXXX)
+
   if [[ $SHOW_PROGRESS -eq 1 ]]; then
+    clear_progress_line
     echo "[BUILD] $rel"
   fi
 
   firPath="${file%.*}.fir"
-  if "$FLANG" "$file" --release --emit-fir "$firPath" > >(cat) 2> >(tee /dev/stderr); then
+  if "$FLANG" "$file" --release --emit-fir "$firPath" >"$tmp_output" 2>&1; then
     PASSED=$((PASSED+1))
+    if [[ -s $tmp_output ]]; then
+      clear_progress_line
+      cat "$tmp_output"
+    fi
     if [[ $SHOW_PROGRESS -eq 1 ]]; then
+      clear_progress_line
       echo "[OK]    $rel"
     fi
   else
     FAILED=$((FAILED+1))
     FAILED_LIST+=("$rel")
+    clear_progress_line
+    cat "$tmp_output"
     echo "[FAIL]  $rel" >&2
   fi
+
+  rm -f "$tmp_output"
+
+  TOTAL=$((TOTAL+1))
+  render_progress "$TOTAL" "$TOTAL_TESTS"
 done
+
+printf '\n'
 
 echo "Build summary: $PASSED passed, $FAILED failed, $TOTAL total"
 exit 0
