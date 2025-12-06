@@ -132,7 +132,8 @@ defer expression
 ### 3.1 Generics and Inference
 
 - `$T` introduces a generic parameter and serves as the diagnostic binding site.
-- Inference is multi-phase (constraint collection and resolution).
+- Inference is multi-phase (constraint collection and resolution) and follows a Hindley–Milner discipline: constraints flow bidirectionally so return-position expectations, parameter annotations, and assignment targets all participate in solving.
+- Untyped literals (`comptime_int`, `comptime_float`) are placeholders that must unify with a concrete type before type checking completes; otherwise the compiler emits `E2001` instead of lowering invalid FIR.
 - Return positions may bind generics (e.g., `fn new_list(n: usize) List[$T]`).
 
 ### 3.2 Structural Typing

@@ -321,7 +321,7 @@ _Goal: Generics, inference, and advanced type features._
 
 **Pending:**
 
-- [ ] Return-type–driven inference (incl. resolving `comptime_*` from expected type)
+- [x] Return-type–driven inference (incl. resolving `comptime_*` from expected type)
 - [ ] Generic constraints (structural)
 - [ ] Generic structs monomorphization (tracked for M12)
 

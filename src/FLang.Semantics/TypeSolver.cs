@@ -271,7 +271,7 @@ public class TypeSolver
         {
             case ReturnStatementNode ret:
             {
-                var et = CheckExpression(ret.Expression);
+                var et = CheckExpression(ret.Expression, expectedReturnType);
                 if (expectedReturnType != null && !CanCoerse(et, expectedReturnType))
                 {
                     _diagnostics.Add(Diagnostic.Error(
@@ -291,8 +291,8 @@ public class TypeSolver
             }
             case VariableDeclarationNode v:
             {
-                var it = v.Initializer != null ? CheckExpression(v.Initializer) : null;
                 var dt = ResolveTypeNode(v.Type);
+                var it = v.Initializer != null ? CheckExpression(v.Initializer, dt) : null;
                 if (it != null && dt != null)
                 {
                     // Use general coercion rules
@@ -391,7 +391,7 @@ public class TypeSolver
         }
     }
 
-    private FType CheckExpression(ExpressionNode expression)
+    private FType CheckExpression(ExpressionNode expression, FType? expectedType = null)
     {
         FType type;
         switch (expression)
@@ -420,7 +420,7 @@ public class TypeSolver
             case BinaryExpressionNode be:
             {
                 var lt = CheckExpression(be.Left);
-                var rt = CheckExpression(be.Right);
+                var rt = CheckExpression(be.Right, lt);
                 if (be.Operator >= BinaryOperatorKind.Equal && be.Operator <= BinaryOperatorKind.GreaterThanOrEqual)
                 {
                     if (!IsCompatible(lt, rt))
@@ -429,6 +429,12 @@ public class TypeSolver
                             be.Span,
                             $"cannot compare `{lt}` with `{rt}`",
                             "E2002"));
+                    else
+                    {
+                        var unified = UnifyTypes(lt, rt);
+                        UpdateTypeMapRecursive(be.Left, unified);
+                        UpdateTypeMapRecursive(be.Right, unified);
+                    }
                     type = TypeRegistry.Bool;
                 }
                 else
@@ -442,7 +448,13 @@ public class TypeSolver
                             "E2002"));
                         type = lt;
                     }
-                    else type = UnifyTypes(lt, rt);
+                    else
+                    {
+                        var unified = UnifyTypes(lt, rt);
+                        UpdateTypeMapRecursive(be.Left, unified);
+                        UpdateTypeMapRecursive(be.Right, unified);
+                        type = unified;
+                    }
                 }
 
                 break;
@@ -450,7 +462,7 @@ public class TypeSolver
             case AssignmentExpressionNode ae:
             {
                 var vt = LookupVariable(ae.TargetName, ae.Span);
-                var val = CheckExpression(ae.Value);
+                var val = CheckExpression(ae.Value, vt);
                 if (!CanCoerse(val, vt))
                     _diagnostics.Add(Diagnostic.Error(
                         "mismatched types",
@@ -478,7 +490,7 @@ public class TypeSolver
 
                 if (_functions.TryGetValue(call.FunctionName, out var candidates))
                 {
-                    var argTypes = call.Arguments.Select(CheckExpression).ToList();
+                    var argTypes = call.Arguments.Select(arg => CheckExpression(arg)).ToList();
                     FunctionEntry? chosen = null;
                     Dictionary<string, FType>? chosenBindings = null;
 
@@ -555,6 +567,8 @@ public class TypeSolver
                     else if (!chosen.IsGeneric)
                     {
                         type = chosen.ReturnType;
+                        if (expectedType != null)
+                            type = UnifyTypes(type, expectedType);
                         // Update argument types to match parameter types (resolve comptime_int)
                         for (var i = 0; i < call.Arguments.Count; i++)
                         {
@@ -566,8 +580,10 @@ public class TypeSolver
                     }
                     else
                     {
+                        if (expectedType != null)
+                            RefineBindingsWithExpectedReturn(chosen.ReturnType, expectedType, chosenBindings!);
                         var ret = SubstituteGenerics(chosen.ReturnType, chosenBindings!);
-                        type = ret;
+                        type = expectedType != null ? UnifyTypes(ret, expectedType) : ret;
                         // Compute concrete parameter types for this specialization
                         var concreteParams = new List<FType>();
                         for (var i = 0; i < chosen.ParameterTypes.Count; i++)
@@ -1132,6 +1148,31 @@ public class TypeSolver
         return a;
     }
 
+    private void RefineBindingsWithExpectedReturn(FType template, FType expected, Dictionary<string, FType> bindings)
+    {
+        if (template is GenericParameterType gp)
+        {
+            if (bindings.TryGetValue(gp.ParamName, out var existing))
+                bindings[gp.ParamName] = UnifyTypes(existing, expected);
+            else
+                bindings[gp.ParamName] = expected;
+            return;
+        }
+
+        switch (template)
+        {
+            case ReferenceType rt when expected is ReferenceType expectedRef:
+                RefineBindingsWithExpectedReturn(rt.InnerType, expectedRef.InnerType, bindings);
+                break;
+            case ArrayType at when expected is ArrayType expectedArray && at.Length == expectedArray.Length:
+                RefineBindingsWithExpectedReturn(at.ElementType, expectedArray.ElementType, bindings);
+                break;
+            case SliceType st when expected is SliceType expectedSlice:
+                RefineBindingsWithExpectedReturn(st.ElementType, expectedSlice.ElementType, bindings);
+                break;
+        }
+    }
+
     /// <summary>
     /// Updates the type map for an expression and its sub-expressions when coercing to a target type.
     /// This prevents comptime_int from escaping to later compilation stages.
@@ -1178,10 +1219,35 @@ public class TypeSolver
                 UpdateTypeMapRecursive(block.TrailingExpression, targetType);
             _typeMap[expr] = targetType;
         }
+        else if (expr is CastExpressionNode cast)
+        {
+            if (_typeMap.TryGetValue(cast.Expression, out var sourceType) &&
+                sourceType != null && TypeRegistry.IsComptimeType(sourceType))
+            {
+                UpdateTypeMapRecursive(cast.Expression, targetType);
+            }
+
+            _typeMap[expr] = targetType;
+        }
         else
         {
             // Base case: simple expressions (literals, identifiers) just need their own type updated
             _typeMap[expr] = targetType;
+        }
+    }
+
+    public void EnsureAllTypesResolved()
+    {
+        foreach (var entry in _typeMap)
+        {
+            if (!TypeRegistry.IsComptimeType(entry.Value))
+                continue;
+
+            _diagnostics.Add(Diagnostic.Error(
+                "cannot infer type",
+                entry.Key.Span,
+                $"type annotations needed: expression still has comptime type `{entry.Value}`",
+                "E2001"));
         }
     }
 

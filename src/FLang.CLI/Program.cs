@@ -87,6 +87,8 @@ foreach (var module in parsedModules.Values)
 // Second pass: type check all function bodies
 foreach (var module in parsedModules.Values) typeSolver.CheckModuleBodies(module);
 
+typeSolver.EnsureAllTypesResolved();
+
 // Check for type errors
 if (typeSolver.Diagnostics.Any())
 {
