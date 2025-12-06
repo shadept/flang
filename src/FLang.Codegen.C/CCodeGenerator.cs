@@ -628,6 +628,11 @@ public class CCodeGenerator
             // Array pointer decays naturally in C - just a simple cast
             _output.AppendLine($"    {cTargetType} {resultName} = ({cTargetType}){sourceExpr};");
         }
+        else if (targetType is StructType targetStruct && HasSliceLayout(targetStruct) && TryGetArrayType(sourceType, out var arrayType))
+        {
+            var ptrExpr = sourceType is ReferenceType ? sourceExpr : $"&{sourceExpr}";
+            _output.AppendLine($"    {cTargetType} {resultName} = {{ .ptr = {ptrExpr}, .len = {arrayType!.Length} }};");
+        }
         // Check if this is a struct-to-struct reinterpretation cast
         else if (targetType is StructType or SliceType)
         {
@@ -780,6 +785,31 @@ public class CCodeGenerator
 
             _ => "int" // Fallback
         };
+    }
+
+    private static bool HasSliceLayout(StructType structType)
+    {
+        if (structType.StructName == "String")
+            return true;
+        if (structType.StructName == "Slice" && structType.GetFieldType("ptr") != null && structType.GetFieldType("len") != null)
+            return true;
+        return false;
+    }
+
+    private static bool TryGetArrayType(FType? type, out ArrayType? arrayType)
+    {
+        switch (type)
+        {
+            case ArrayType at:
+                arrayType = at;
+                return true;
+            case ReferenceType { InnerType: ArrayType inner }:
+                arrayType = inner;
+                return true;
+            default:
+                arrayType = null;
+                return false;
+        }
     }
 
     private string GetStructCName(StructType structType)

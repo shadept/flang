@@ -1,4 +1,4 @@
-﻿<Project Sdk="Microsoft.NET.Sdk">
+<Project Sdk="Microsoft.NET.Sdk">
 
     <ItemGroup>
         <ProjectReference Include="..\FLang.Core\FLang.Core.csproj"/>
@@ -10,11 +10,12 @@
 
     <PropertyGroup>
         <OutputType>Exe</OutputType>
-        <!-- Configure publish to produce a single, self-contained executable by default -->
+    </PropertyGroup>
+
+    <PropertyGroup Condition="'$(RuntimeIdentifier)' != ''">
+        <!-- Configure publish to produce a single, self-contained executable when a RID is specified -->
         <PublishSingleFile>true</PublishSingleFile>
         <SelfContained>true</SelfContained>
-        <!-- Default to Windows x64 self-contained executable. Override with -r <RID> when needed. -->
-        <RuntimeIdentifier>win-x64</RuntimeIdentifier>
         <!-- Safety: avoid trimming to prevent reflection-related issues in CLI -->
         <PublishTrimmed>false</PublishTrimmed>
         <!-- Compress and enable self-extract for native deps to keep single-file simple to distribute -->
@@ -26,7 +27,7 @@
     </PropertyGroup>
 
     <!-- After publish, copy only the essential output (single-file exe) to /dist/<RID>/flang.exe -->
-    <Target Name="CopyEssentialPublishArtifactsToDist" AfterTargets="Publish">
+    <Target Name="CopyEssentialPublishArtifactsToDist" AfterTargets="Publish" Condition="'$(RuntimeIdentifier)' != ''">
         <!-- Compute dist directory at repo root: <repo>/dist/<RID>/ -->
         <PropertyGroup>
             <RepoRoot>$([System.IO.Path]::GetFullPath('$(MSBuildProjectDirectory)\..\..\'))</RepoRoot>

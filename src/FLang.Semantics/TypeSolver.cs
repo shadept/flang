@@ -34,7 +34,10 @@ public class TypeSolver
 
     private readonly HashSet<string> _emittedSpecs = [];
 
+    private readonly Stack<HashSet<string>> _genericScopes = new();
+
     private static string BuildSpecKey(string name, IReadOnlyList<FType> paramTypes)
+
     {
         var sb = new System.Text.StringBuilder();
         sb.Append(name);
@@ -84,6 +87,29 @@ public class TypeSolver
         return null;
     }
 
+    private void PushGenericScope(FunctionDeclarationNode function)
+    {
+        _genericScopes.Push(CollectGenericParamNames(function));
+    }
+
+    private void PopGenericScope()
+    {
+        if (_genericScopes.Count > 0)
+            _genericScopes.Pop();
+    }
+
+    private bool IsGenericNameInScope(string name, HashSet<string>? explicitScope = null)
+    {
+        if (explicitScope != null && explicitScope.Contains(name))
+            return true;
+
+        foreach (var scope in _genericScopes)
+            if (scope.Contains(name))
+                return true;
+
+        return false;
+    }
+
     public void CollectFunctionSignatures(ModuleNode module)
     {
         foreach (var function in module.Functions)
@@ -93,35 +119,42 @@ public class TypeSolver
             var isForeign = (mods & FunctionModifiers.Foreign) != 0;
             if (!(isPublic || isForeign)) continue;
 
-            var gnames = CollectGenericParamNames(function);
-            var returnType = ResolveTypeNodeWithGenerics(function.ReturnType, gnames) ?? TypeRegistry.Void;
-
-            var parameterTypes = new List<FType>();
-            foreach (var param in function.Parameters)
+            PushGenericScope(function);
+            try
             {
-                var pt = ResolveTypeNodeWithGenerics(param.Type, gnames);
-                if (pt == null)
+                var returnType = ResolveTypeNode(function.ReturnType) ?? TypeRegistry.Void;
+
+                var parameterTypes = new List<FType>();
+                foreach (var param in function.Parameters)
                 {
-                    _diagnostics.Add(Diagnostic.Error(
-                        $"cannot find type `{(param.Type as NamedTypeNode)?.Name ?? "unknown"}` in this scope",
-                        param.Type.Span,
-                        "not found in this scope",
-                        "E2003"));
-                    pt = TypeRegistry.I32;
+                    var pt = ResolveTypeNode(param.Type);
+                    if (pt == null)
+                    {
+                        _diagnostics.Add(Diagnostic.Error(
+                            $"cannot find type `{(param.Type as NamedTypeNode)?.Name ?? "unknown"}` in this scope",
+                            param.Type.Span,
+                            "not found in this scope",
+                            "E2003"));
+                        pt = TypeRegistry.I32;
+                    }
+
+                    parameterTypes.Add(pt);
                 }
 
-                parameterTypes.Add(pt);
-            }
+                var entry = new FunctionEntry(function.Name, parameterTypes, returnType, function, isForeign,
+                    IsGenericSignature(parameterTypes, returnType));
+                if (!_functions.TryGetValue(function.Name, out var list))
+                {
+                    list = [];
+                    _functions[function.Name] = list;
+                }
 
-            var entry = new FunctionEntry(function.Name, parameterTypes, returnType, function, isForeign,
-                IsGenericSignature(parameterTypes, returnType));
-            if (!_functions.TryGetValue(function.Name, out var list))
+                list.Add(entry);
+            }
+            finally
             {
-                list = [];
-                _functions[function.Name] = list;
+                PopGenericScope();
             }
-
-            list.Add(entry);
         }
     }
 
@@ -162,25 +195,32 @@ public class TypeSolver
             var isForeign = (mods & FunctionModifiers.Foreign) != 0;
             if (isPublic || isForeign) continue;
 
-            var gnames = CollectGenericParamNames(function);
-            var returnType = ResolveTypeNodeWithGenerics(function.ReturnType, gnames) ?? TypeRegistry.Void;
-            var parameterTypes = new List<FType>();
-            foreach (var param in function.Parameters)
+            PushGenericScope(function);
+            try
             {
-                var pt = ResolveTypeNodeWithGenerics(param.Type, gnames) ?? TypeRegistry.I32;
-                parameterTypes.Add(pt);
-            }
+                var returnType = ResolveTypeNode(function.ReturnType) ?? TypeRegistry.Void;
+                var parameterTypes = new List<FType>();
+                foreach (var param in function.Parameters)
+                {
+                    var pt = ResolveTypeNode(param.Type) ?? TypeRegistry.I32;
+                    parameterTypes.Add(pt);
+                }
 
-            var entry = new FunctionEntry(function.Name, parameterTypes, returnType, function, false,
-                IsGenericSignature(parameterTypes, returnType));
-            if (!_functions.TryGetValue(function.Name, out var list))
+                var entry = new FunctionEntry(function.Name, parameterTypes, returnType, function, false,
+                    IsGenericSignature(parameterTypes, returnType));
+                if (!_functions.TryGetValue(function.Name, out var list))
+                {
+                    list = [];
+                    _functions[function.Name] = list;
+                }
+
+                list.Add(entry);
+                added.Add((function.Name, entry));
+            }
+            finally
             {
-                list = [];
-                _functions[function.Name] = list;
+                PopGenericScope();
             }
-
-            list.Add(entry);
-            added.Add((function.Name, entry));
         }
 
         // Check non-generic bodies
@@ -204,18 +244,25 @@ public class TypeSolver
 
     private void CheckFunction(FunctionDeclarationNode function)
     {
+        PushGenericScope(function);
         PushScope();
-        // Params
-        foreach (var p in function.Parameters)
+        try
         {
-            var t = ResolveTypeNode(p.Type);
-            if (t != null) DeclareVariable(p.Name, t, p.Span);
-        }
+            // Params
+            foreach (var p in function.Parameters)
+            {
+                var t = ResolveTypeNode(p.Type);
+                if (t != null) DeclareVariable(p.Name, t, p.Span);
+            }
 
-        var genNames = CollectGenericParamNames(function);
-        var expectedReturn = ResolveTypeNodeWithGenerics(function.ReturnType, genNames) ?? TypeRegistry.Void;
-        foreach (var stmt in function.Body) CheckStatement(stmt, expectedReturn);
-        PopScope();
+            var expectedReturn = ResolveTypeNode(function.ReturnType) ?? TypeRegistry.Void;
+            foreach (var stmt in function.Body) CheckStatement(stmt, expectedReturn);
+        }
+        finally
+        {
+            PopScope();
+            PopGenericScope();
+        }
     }
 
     private void CheckStatement(StatementNode statement, FType? expectedReturnType)
@@ -489,9 +536,9 @@ public class TypeSolver
                         if (conflictName != null && conflictPair.HasValue)
                         {
                             _diagnostics.Add(Diagnostic.Error(
-                                $"conflicting bindings for `$${conflictName}`",
+                                $"conflicting bindings for `{conflictName}`",
                                 call.Span,
-                                $"`$${conflictName}` mapped to `{conflictPair.Value.Existing}` and `{conflictPair.Value.Incoming}`",
+                                $"`{conflictName}` mapped to `{conflictPair.Value.Existing}` and `{conflictPair.Value.Incoming}`",
                                 "E2102"));
                         }
                         else
@@ -948,9 +995,14 @@ public class TypeSolver
         {
             case NamedTypeNode named:
             {
+                if (IsGenericNameInScope(named.Name))
+                    return new GenericParameterType(named.Name);
+
                 var bt = TypeRegistry.GetTypeByName(named.Name);
                 if (bt != null) return bt;
                 if (_structs.TryGetValue(named.Name, out var st)) return st;
+                if (named.Name.Length == 1 && char.IsUpper(named.Name[0]))
+                    return new GenericParameterType(named.Name);
                 _diagnostics.Add(Diagnostic.Error(
                     $"cannot find type `{named.Name}` in this scope",
                     named.Span,
@@ -1030,72 +1082,6 @@ public class TypeSolver
         foreach (var p in fn.Parameters) Visit(p.Type);
         Visit(fn.ReturnType);
         return set;
-    }
-
-    private FType? ResolveTypeNodeWithGenerics(TypeNode? typeNode, HashSet<string> genericNames)
-    {
-        if (typeNode == null) return null;
-        switch (typeNode)
-        {
-            case NamedTypeNode named:
-            {
-                if (genericNames.Contains(named.Name))
-                    return new GenericParameterType(named.Name);
-                var bt = TypeRegistry.GetTypeByName(named.Name);
-                if (bt != null) return bt;
-                if (_structs.TryGetValue(named.Name, out var st)) return st;
-                // Fallback: treat single-letter uppercase names as generic parameters
-                if (named.Name.Length == 1 && char.IsUpper(named.Name[0]))
-                    return new GenericParameterType(named.Name);
-                _diagnostics.Add(Diagnostic.Error(
-                    $"cannot find type `{named.Name}` in this scope",
-                    named.Span,
-                    "not found in this scope",
-                    "E2003"));
-                return null;
-            }
-            case GenericParameterTypeNode gp:
-                return new GenericParameterType(gp.Name);
-            case ReferenceTypeNode rt:
-            {
-                var inner = ResolveTypeNodeWithGenerics(rt.InnerType, genericNames);
-                if (inner == null) return null;
-                return new ReferenceType(inner);
-            }
-            case NullableTypeNode nt:
-            {
-                var inner = ResolveTypeNodeWithGenerics(nt.InnerType, genericNames);
-                if (inner == null) return null;
-                return new OptionType(inner);
-            }
-            case GenericTypeNode gt:
-            {
-                var args = new List<FType>();
-                foreach (var a in gt.TypeArguments)
-                {
-                    var at = ResolveTypeNodeWithGenerics(a, genericNames);
-                    if (at == null) return null;
-                    args.Add(at);
-                }
-
-                return new GenericType(gt.Name, args);
-            }
-            case ArrayTypeNode arr:
-            {
-                var et = ResolveTypeNodeWithGenerics(arr.ElementType, genericNames);
-                if (et == null) return null;
-                return new ArrayType(et, arr.Length);
-            }
-            case SliceTypeNode sl:
-            {
-                var et = ResolveTypeNodeWithGenerics(sl.ElementType, genericNames);
-                if (et == null) return null;
-                // Return canonical struct representation instead of SliceType
-                return TypeRegistry.GetSliceStruct(et);
-            }
-            default:
-                return null;
-        }
     }
 
     private bool IsCompatible(FType source, FType target)
@@ -1398,29 +1384,37 @@ public class TypeSolver
         var key = BuildSpecKey(genericEntry.Name, concreteParamTypes);
         if (_emittedSpecs.Contains(key)) return;
 
-        // Substitute param/return types in the signature
-        var newParams = new List<FunctionParameterNode>();
-        foreach (var p in genericEntry.AstNode.Parameters)
+        PushGenericScope(genericEntry.AstNode);
+        try
         {
-            var t = ResolveTypeNode(p.Type) ?? TypeRegistry.I32;
-            var st = SubstituteGenerics(t, bindings);
-            var tnode = CreateTypeNodeFromFType(p.Span, st);
-            newParams.Add(new FunctionParameterNode(p.Span, p.Name, tnode));
-        }
+            // Substitute param/return types in the signature
+            var newParams = new List<FunctionParameterNode>();
+            foreach (var p in genericEntry.AstNode.Parameters)
+            {
+                var t = ResolveTypeNode(p.Type) ?? TypeRegistry.I32;
+                var st = SubstituteGenerics(t, bindings);
+                var tnode = CreateTypeNodeFromFType(p.Span, st);
+                newParams.Add(new FunctionParameterNode(p.Span, p.Name, tnode));
+            }
 
-        TypeNode? newRetNode = null;
-        if (genericEntry.AstNode.ReturnType != null)
+            TypeNode? newRetNode = null;
+            if (genericEntry.AstNode.ReturnType != null)
+            {
+                var rt = ResolveTypeNode(genericEntry.AstNode.ReturnType) ?? TypeRegistry.I32;
+                var srt = SubstituteGenerics(rt, bindings);
+                newRetNode = CreateTypeNodeFromFType(genericEntry.AstNode.ReturnType.Span, srt);
+            }
+
+            // Keep base name; backend will mangle by parameter types
+            var newFn = new FunctionDeclarationNode(genericEntry.AstNode.Span, genericEntry.Name, newParams, newRetNode,
+                genericEntry.AstNode.Body, genericEntry.IsForeign ? FunctionModifiers.Foreign : FunctionModifiers.None);
+            _specializations.Add(newFn);
+            _emittedSpecs.Add(key);
+        }
+        finally
         {
-            var rt = ResolveTypeNode(genericEntry.AstNode.ReturnType) ?? TypeRegistry.I32;
-            var srt = SubstituteGenerics(rt, bindings);
-            newRetNode = CreateTypeNodeFromFType(genericEntry.AstNode.ReturnType.Span, srt);
+            PopGenericScope();
         }
-
-        // Keep base name; backend will mangle by parameter types
-        var newFn = new FunctionDeclarationNode(genericEntry.AstNode.Span, genericEntry.Name, newParams, newRetNode,
-            genericEntry.AstNode.Body, genericEntry.IsForeign ? FunctionModifiers.Foreign : FunctionModifiers.None);
-        _specializations.Add(newFn);
-        _emittedSpecs.Add(key);
     }
 
     private static TypeNode CreateTypeNodeFromFType(SourceSpan span, FType t) => t switch

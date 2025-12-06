@@ -138,26 +138,6 @@ Currently no runtime bounds checking on `arr[i]` - out-of-bounds access causes u
 
 ## Minor Issues
 
-### Generics: Return Type Name Resolution
-
-Status: Open
-Affected: TypeSolver (signature collection, body checking)
-Impact: Public generic functions using a named return type (e.g., `pub fn identity(x: $T) T`) report E2003 at the return type token.
-
-Root cause hypothesis:
-- `ResolveTypeNodeWithGenerics` sometimes fails to treat a named return type as a generic parameter bound in the parameter list.
-- Although `CollectGenericParamNames` walks parameter types, the generic name may not be present in the set at the point we resolve the return type for some modules.
-
-Proposed fix:
-- Use `ResolveTypeNodeWithGenerics` consistently for expected return types during body checking (applied), and audit signature collection to ensure parameter-derived generic names are always present.
-- Add a defensive fallback for single‑letter uppercase names to map to `GenericParameterType` in `ResolveTypeNodeWithGenerics` (applied) while we root-cause the collection path.
-
-Related tests: 
-- tests/FLang.Tests/Harness/generics/identity_basic.f
-- tests/FLang.Tests/Harness/generics/two_params_pick_first.f
-- tests/FLang.Tests/Harness/generics/cannot_infer_from_context.f
-- tests/FLang.Tests/Harness/generics/conflicting_bindings_error.f
-
 ### Coercions: Array→Slice and String↔u8[] in declarations/calls
 
 Status: Open (partial)
@@ -232,6 +212,18 @@ Milestone: 19 (Text & I/O)
 
 
 ## Recently Fixed
+
+### Generics: Return Type Name Resolution
+
+**Fixed:** 2025-12-06
+**Was:** Generic function signatures failed to recognize return-type identifiers (e.g., `fn identity(x: $T) T`) as parameters, triggering E2003 during signature collection and body checks because the type solver lost track of `$T` outside argument positions.
+**Now:** The type solver maintains an explicit generic-parameter scope per function, so both parameters and return types resolve to `GenericParameterType` values consistently. Specializations reuse the captured scope, preventing regressions in later inference passes.
+
+**Related Tests:**
+- `tests/FLang.Tests/Harness/generics/identity_basic.f`
+- `tests/FLang.Tests/Harness/generics/two_params_pick_first.f`
+- `tests/FLang.Tests/Harness/generics/cannot_infer_from_context.f`
+- `tests/FLang.Tests/Harness/generics/conflicting_bindings_error.f`
 
 ### String Literal Naming Collisions
 

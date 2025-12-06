@@ -33,13 +33,7 @@ public class HarnessTests
 #else
         var configuration = "Release";
 #endif
-        var cliOutputDir = Path.Combine(solutionRoot, "src", "FLang.CLI", "bin", configuration, "net9.0");
-        var cliExeName = RuntimeInformation.IsOSPlatform(OSPlatform.Windows) ? "FLang.CLI.exe" : "FLang.CLI";
-        var cliExePath = Path.Combine(cliOutputDir, cliExeName);
-
-        if (!File.Exists(cliExePath))
-            Assert.Fail(
-                $"CLI binary not found at {cliExePath}. Ensure the solution is built and FLang.Tests references FLang.CLI.");
+        var (cliExePath, cliWorkingDir) = ResolveCliBinary(solutionRoot, configuration);
 
         var cliProcess = Process.Start(new ProcessStartInfo
         {
@@ -49,8 +43,9 @@ public class HarnessTests
             RedirectStandardError = true,
             UseShellExecute = false,
             CreateNoWindow = true,
-            WorkingDirectory = cliOutputDir
+            WorkingDirectory = cliWorkingDir
         });
+
         cliProcess!.WaitForExit();
 
         var compileStderr = cliProcess.StandardError.ReadToEnd();
@@ -73,11 +68,25 @@ public class HarnessTests
         }
 
         // 3. Run the generated executable
-        var generatedExePath = Path.Combine(testDirectory, $"{testFileName}.exe");
+        var generatedExePath = GetGeneratedExecutablePath(testDirectory, testFileName);
 
         if (!File.Exists(generatedExePath))
-            Assert.Fail(
-                $"FLang.CLI did not produce an executable at {generatedExePath}. CLI Output:\n{compileStdout}\n{compileStderr}");
+        {
+            // Fallback: if we're on Windows but running a RID build that emitted without extension (or vice versa)
+            var alternatePath = generatedExePath.EndsWith(".exe", StringComparison.OrdinalIgnoreCase)
+                ? Path.Combine(testDirectory, testFileName)
+                : Path.Combine(testDirectory, $"{testFileName}.exe");
+
+            if (File.Exists(alternatePath))
+            {
+                generatedExePath = alternatePath;
+            }
+            else
+            {
+                Assert.Fail(
+                    $"FLang.CLI did not produce an executable at {generatedExePath}. CLI Output:\n{compileStdout}\n{compileStderr}");
+            }
+        }
 
         var exeProcess = Process.Start(new ProcessStartInfo
         {
@@ -99,7 +108,6 @@ public class HarnessTests
         if (metadata.ExpectedExitCode.HasValue) Assert.Equal(metadata.ExpectedExitCode.Value, actualExitCode);
 
         foreach (var expectedLine in metadata.ExpectedStdout) Assert.Contains(expectedLine, actualStdout);
-
         foreach (var expectedLine in metadata.ExpectedStderr) Assert.Contains(expectedLine, actualStderr);
 
         // 5. Clean up generated files
@@ -138,6 +146,34 @@ public class HarnessTests
         return new TestMetadata(testName, exitCode, stdout, stderr, compileErrors);
     }
 
+    private static (string Path, string WorkingDirectory) ResolveCliBinary(string solutionRoot, string configuration)
+    {
+        var cliOutputDir = Path.Combine(solutionRoot, "src", "FLang.CLI", "bin", configuration, "net9.0");
+        var cliExeName = RuntimeInformation.IsOSPlatform(OSPlatform.Windows) ? "FLang.CLI.exe" : "FLang.CLI";
+        var cliExePath = Path.Combine(cliOutputDir, cliExeName);
+        if (File.Exists(cliExePath))
+            return (cliExePath, cliOutputDir);
+
+        var rid = GetHostRid();
+        var distDir = Path.Combine(solutionRoot, "dist", rid);
+        var distExeName = RuntimeInformation.IsOSPlatform(OSPlatform.Windows) ? "flang.exe" : "flang";
+        var distExePath = Path.Combine(distDir, distExeName);
+        if (File.Exists(distExePath))
+            return (distExePath, distDir);
+
+        Assert.Fail(
+            $"CLI binary not found at {cliExePath} or {distExePath}. Please run ./build.sh {rid} (or equivalent) before dotnet test.");
+        throw new InvalidOperationException("CLI binary required for harness tests");
+    }
+
+    private static string GetHostRid()
+    {
+        if (RuntimeInformation.IsOSPlatform(OSPlatform.OSX)) return "osx-x64";
+        if (RuntimeInformation.IsOSPlatform(OSPlatform.Linux)) return "linux-x64";
+        if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows)) return "win-x64";
+        return "osx-x64";
+    }
+
     public static IEnumerable<object[]> GetTestFiles()
     {
         var currentAssemblyPath = typeof(HarnessTests).Assembly.Location;
@@ -154,6 +190,15 @@ public class HarnessTests
             var relativePath = Path.GetRelativePath(harnessDir, file);
             yield return [relativePath];
         }
+    }
+
+    private static string GetGeneratedExecutablePath(string testDirectory, string testFileName)
+    {
+        if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+            return Path.Combine(testDirectory, $"{testFileName}.exe");
+
+        // Non-Windows: CLI strips extension (Path.ChangeExtension(..., null))
+        return Path.Combine(testDirectory, testFileName);
     }
 
     private record TestMetadata(

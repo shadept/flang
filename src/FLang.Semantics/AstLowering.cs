@@ -194,6 +194,10 @@ public class AstLowering
                             // Copy struct fields from initializer
                             CopyStruct(allocaResult, initValue, structType);
                         }
+                        else if (TryWriteSliceFromArray(allocaResult, structType, initValue))
+                        {
+                            // Slice initialized from array pointer; fields were populated above
+                        }
                         // Struct value (e.g., from cast): store it directly
                         else if (initValue.Type is StructType or SliceType)
                         {
@@ -482,6 +486,18 @@ public class AstLowering
                     ));
                     // Return the value to avoid cascading errors
                     return assignValue;
+                }
+
+                if (targetPtr.Type is ReferenceType { InnerType: StructType targetStruct })
+                {
+                    if (assignValue.Type is ReferenceType { InnerType: StructType sourceStruct } && targetStruct.Equals(sourceStruct))
+                    {
+                        CopyStruct(targetPtr, assignValue, targetStruct);
+                        return assignValue;
+                    }
+
+                    if (TryWriteSliceFromArray(targetPtr, targetStruct, assignValue))
+                        return assignValue;
                 }
 
                 // Store to the memory location (no versioning needed)
@@ -1074,6 +1090,48 @@ public class AstLowering
         };
 
         _currentBlock.Instructions.Add(memsetCall);
+    }
+
+    private bool TryWriteSliceFromArray(Value destinationPtr, StructType structType, Value sourceValue)
+    {
+        if (!IsSliceLikeStruct(structType))
+            return false;
+
+        if (sourceValue.Type is not ReferenceType { InnerType: ArrayType arrayType })
+            return false;
+
+        var elementPtrType = new ReferenceType(arrayType.ElementType);
+        var elementPtrValue = new LocalValue($"slice_ptr_{_tempCounter++}") { Type = elementPtrType };
+        var castInst = new CastInstruction(sourceValue, elementPtrType, elementPtrValue);
+        _currentBlock.Instructions.Add(castInst);
+
+        StoreStructField(destinationPtr, structType, "ptr", elementPtrValue);
+        var lenValue = new ConstantValue(arrayType.Length) { Type = TypeRegistry.USize };
+        StoreStructField(destinationPtr, structType, "len", lenValue);
+        return true;
+    }
+
+    private static bool IsSliceLikeStruct(StructType structType)
+    {
+        return structType.StructName == "Slice" || structType.StructName == "String";
+    }
+
+    private void StoreStructField(Value destinationPtr, StructType structType, string fieldName, Value value)
+    {
+        if (destinationPtr.Type is not ReferenceType)
+            return;
+
+        var fieldType = structType.GetFieldType(fieldName) ?? TypeRegistry.I32;
+        var fieldOffset = structType.GetFieldOffset(fieldName);
+        if (fieldOffset < 0)
+            return;
+
+        var fieldPointer = new LocalValue($"struct_{fieldName}_ptr_{_tempCounter++}")
+            { Type = new ReferenceType(fieldType) };
+        var fieldGep = new GetElementPtrInstruction(destinationPtr, fieldOffset, fieldPointer);
+        _currentBlock.Instructions.Add(fieldGep);
+        var storeInst = new StorePointerInstruction(fieldPointer, value);
+        _currentBlock.Instructions.Add(storeInst);
     }
 
     private class LoopContext

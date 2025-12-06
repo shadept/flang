@@ -1,5 +1,5 @@
 //! TEST: generics_cannot_infer_from_context
-//! COMPILE-ERROR: E2011
+//! COMPILE-ERROR: E2001
 
 pub fn identity(x: $T) T {
     return x
