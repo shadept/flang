@@ -7,7 +7,7 @@
 
 import core.mem
 
-#foreign fn size_of(t: Type[$T]) usize
+#foreign fn size_of(t: Type($T)) usize
 
 pub fn main() i32 {
     // Allocate 4 bytes for an i32

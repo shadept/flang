@@ -1,3 +1,5 @@
+using System;
+using System.Collections.Generic;
 using System.Linq;
 using FLang.Core;
 using FLang.Frontend.Ast;
@@ -25,16 +27,23 @@ public class TypeSolver
     // Struct type cache/registry - prevents duplicate struct instances for same fully qualified name
     // Key: struct name (with type parameters if generic)
     private readonly Dictionary<string, StructType> _structs = new();
+    private readonly Dictionary<string, StructType> _structSpecializations = new();
+
+    // Anonymous struct literal mapping
+    private readonly Dictionary<AnonymousStructExpressionNode, StructType> _anonymousStructTypes = new();
+    private readonly Dictionary<ExpressionNode, OptionType> _optionLifts = new();
 
     // AST type map
     private readonly Dictionary<AstNode, FType> _typeMap = new();
 
-    // Resolved call targets (base name + concrete param types + foreign flag)
-    private readonly Dictionary<CallExpressionNode, ResolvedCall> _resolvedCalls = new();
+
+    // Resolved call targets scoped per function
+    private readonly Dictionary<(FunctionDeclarationNode Function, CallExpressionNode Call), ResolvedCall> _resolvedCalls = new();
 
     private readonly HashSet<string> _emittedSpecs = [];
 
     private readonly Stack<HashSet<string>> _genericScopes = new();
+    private readonly Stack<FunctionDeclarationNode> _functionStack = new();
 
     private static string BuildSpecKey(string name, IReadOnlyList<FType> paramTypes)
 
@@ -48,6 +57,21 @@ public class TypeSolver
             sb.Append(paramTypes[i].Name);
         }
 
+        return sb.ToString();
+    }
+
+    private static string BuildStructSpecKey(string name, IReadOnlyList<FType> typeArgs)
+    {
+        var sb = new System.Text.StringBuilder();
+        sb.Append(name);
+        sb.Append('<');
+        for (var i = 0; i < typeArgs.Count; i++)
+        {
+            if (i > 0) sb.Append(',');
+            sb.Append(typeArgs[i].Name);
+        }
+
+        sb.Append('>');
         return sb.ToString();
     }
 
@@ -78,6 +102,9 @@ public class TypeSolver
     public IReadOnlyList<Diagnostic> Diagnostics => _diagnostics;
 
     public FType? GetType(AstNode node) => _typeMap.GetValueOrDefault(node);
+
+    public StructType? GetAnonymousStructType(AnonymousStructExpressionNode node)
+        => _anonymousStructTypes.GetValueOrDefault(node);
 
     public FType? ResolveTypeName(string typeName)
     {
@@ -246,9 +273,9 @@ public class TypeSolver
     {
         PushGenericScope(function);
         PushScope();
+        _functionStack.Push(function);
         try
         {
-            // Params
             foreach (var p in function.Parameters)
             {
                 var t = ResolveTypeNode(p.Type);
@@ -262,6 +289,7 @@ public class TypeSolver
         {
             PopScope();
             PopGenericScope();
+            _functionStack.Pop();
         }
     }
 
@@ -491,32 +519,35 @@ public class TypeSolver
                 if (_functions.TryGetValue(call.FunctionName, out var candidates))
                 {
                     var argTypes = call.Arguments.Select(arg => CheckExpression(arg)).ToList();
-                    FunctionEntry? chosen = null;
-                    Dictionary<string, FType>? chosenBindings = null;
 
-                    string? conflictName = null;
-                    (FType Existing, FType Incoming)? conflictPair = null;
+                    FunctionEntry? bestNonGeneric = null;
+                    var bestNonGenericCost = int.MaxValue;
+
                     foreach (var cand in candidates)
                     {
+                        if (cand.IsGeneric) continue;
                         if (cand.ParameterTypes.Count != argTypes.Count) continue;
-                        if (!cand.IsGeneric)
-                        {
-                            var ok = true;
-                            for (var i = 0; i < argTypes.Count; i++)
-                                if (!CanCoerse(argTypes[i], cand.ParameterTypes[i]))
-                                {
-                                    ok = false;
-                                    break;
-                                }
-
-                            if (ok)
-                            {
-                                chosen = cand;
-                                break;
-                            }
-
+                        if (!TryComputeCoercionCost(argTypes, cand.ParameterTypes, out var cost))
                             continue;
+
+                        if (cost < bestNonGenericCost)
+                        {
+                            bestNonGeneric = cand;
+                            bestNonGenericCost = cost;
                         }
+                    }
+
+                    FunctionEntry? bestGeneric = null;
+                    Dictionary<string, FType>? bestBindings = null;
+                    List<FType>? bestConcreteParams = null;
+                    var bestGenericCost = int.MaxValue;
+                    string? conflictName = null;
+                    (FType Existing, FType Incoming)? conflictPair = null;
+
+                    foreach (var cand in candidates)
+                    {
+                        if (!cand.IsGeneric) continue;
+                        if (cand.ParameterTypes.Count != argTypes.Count) continue;
 
                         var bindings = new Dictionary<string, FType>();
                         var okGen = true;
@@ -535,12 +566,37 @@ public class TypeSolver
                             }
                         }
 
-                        if (okGen)
+                        if (!okGen) continue;
+
+                        var concreteParams = new List<FType>();
+                        for (var i = 0; i < cand.ParameterTypes.Count; i++)
+                            concreteParams.Add(SubstituteGenerics(cand.ParameterTypes[i], bindings));
+
+                        if (!TryComputeCoercionCost(argTypes, concreteParams, out var genCost))
+                            continue;
+
+                        if (genCost < bestGenericCost)
                         {
-                            chosen = cand;
-                            chosenBindings = bindings;
-                            break;
+                            bestGeneric = cand;
+                            bestBindings = bindings;
+                            bestConcreteParams = concreteParams;
+                            bestGenericCost = genCost;
                         }
+                    }
+
+                    FunctionEntry? chosen;
+                    Dictionary<string, FType>? chosenBindings = null;
+                    List<FType>? chosenConcreteParams = null;
+
+                    if (bestNonGeneric != null && (bestGeneric == null || bestNonGenericCost <= bestGenericCost))
+                    {
+                        chosen = bestNonGeneric;
+                    }
+                    else
+                    {
+                        chosen = bestGeneric;
+                        chosenBindings = bestBindings;
+                        chosenConcreteParams = bestConcreteParams;
                     }
 
                     if (chosen == null)
@@ -569,33 +625,36 @@ public class TypeSolver
                         type = chosen.ReturnType;
                         if (expectedType != null)
                             type = UnifyTypes(type, expectedType);
-                        // Update argument types to match parameter types (resolve comptime_int)
                         for (var i = 0; i < call.Arguments.Count; i++)
                         {
                             var unified = UnifyTypes(argTypes[i], chosen.ParameterTypes[i]);
                             UpdateTypeMapRecursive(call.Arguments[i], unified);
                         }
-                        // Record resolved call with concrete parameter types for backend mangling
-                        _resolvedCalls[call] = new ResolvedCall(chosen.Name, chosen.ParameterTypes, chosen.IsForeign);
+                        if (_functionStack.Count > 0)
+                            _resolvedCalls[(_functionStack.Peek(), call)] =
+                                new ResolvedCall(chosen.Name, chosen.ParameterTypes, chosen.IsForeign);
                     }
                     else
                     {
+                        var bindings = chosenBindings!;
                         if (expectedType != null)
-                            RefineBindingsWithExpectedReturn(chosen.ReturnType, expectedType, chosenBindings!);
-                        var ret = SubstituteGenerics(chosen.ReturnType, chosenBindings!);
+                            RefineBindingsWithExpectedReturn(chosen.ReturnType, expectedType, bindings);
+                        var ret = SubstituteGenerics(chosen.ReturnType, bindings);
                         type = expectedType != null ? UnifyTypes(ret, expectedType) : ret;
-                        // Compute concrete parameter types for this specialization
+
                         var concreteParams = new List<FType>();
                         for (var i = 0; i < chosen.ParameterTypes.Count; i++)
-                            concreteParams.Add(SubstituteGenerics(chosen.ParameterTypes[i], chosenBindings!));
-                        // Update argument types to match resolved parameter types (resolve comptime_int)
+                            concreteParams.Add(SubstituteGenerics(chosen.ParameterTypes[i], bindings));
+
                         for (var i = 0; i < call.Arguments.Count; i++)
                         {
                             var unified = UnifyTypes(argTypes[i], concreteParams[i]);
                             UpdateTypeMapRecursive(call.Arguments[i], unified);
                         }
-                        _resolvedCalls[call] = new ResolvedCall(chosen.Name, concreteParams, chosen.IsForeign);
-                        EnsureSpecialization(chosen, chosenBindings!, concreteParams);
+
+                        _resolvedCalls[(_functionStack.Peek(), call)] =
+                            new ResolvedCall(chosen.Name, concreteParams, chosen.IsForeign);
+                        EnsureSpecialization(chosen, bindings, concreteParams);
                     }
                 }
                 else
@@ -620,7 +679,9 @@ public class TypeSolver
                             }
                         }
                         type = TypeRegistry.I32;
-                        _resolvedCalls[call] = new ResolvedCall("printf", argTypes, true);
+                        if (_functionStack.Count > 0)
+                            _resolvedCalls[(_functionStack.Peek(), call)] =
+                                new ResolvedCall("printf", argTypes, true);
                         break;
                     }
 
@@ -717,6 +778,7 @@ public class TypeSolver
                 var structType = obj switch
                 {
                     StructType st => st,
+                    OptionType opt => TypeRegistry.GetOptionStruct(opt.InnerType),
                     SliceType slice => TypeRegistry.GetSliceStruct(slice.ElementType),
                     ArrayType array => TypeRegistry.GetSliceStruct(array.ElementType),
                     _ => null
@@ -750,8 +812,14 @@ public class TypeSolver
             }
             case StructConstructionExpressionNode sc:
             {
-                var t = ResolveTypeNode(sc.TypeName);
-                if (t == null)
+                var resolvedType = ResolveTypeNode(sc.TypeName);
+                OptionType? optionLiteral = null;
+                if (resolvedType is OptionType optionFromAnnotation)
+                {
+                    optionLiteral = optionFromAnnotation;
+                    resolvedType = TypeRegistry.GetOptionStruct(optionFromAnnotation.InnerType);
+                }
+                if (resolvedType == null)
                 {
                     _diagnostics.Add(Diagnostic.Error(
                         $"cannot find type `{(sc.TypeName as NamedTypeNode)?.Name ?? "unknown"}`",
@@ -762,10 +830,19 @@ public class TypeSolver
                     break;
                 }
 
-                if (t is not StructType st)
+                if (resolvedType is GenericType genericType)
+                    resolvedType = InstantiateStruct(genericType, sc.Span);
+
+                if (resolvedType is OptionType optFromGeneric)
+                {
+                    optionLiteral = optFromGeneric;
+                    resolvedType = TypeRegistry.GetOptionStruct(optFromGeneric.InnerType);
+                }
+
+                if (resolvedType is not StructType st)
                 {
                     _diagnostics.Add(Diagnostic.Error(
-                        $"type `{t.Name}` is not a struct",
+                        $"type `{resolvedType.Name}` is not a struct",
                         sc.TypeName.Span,
                         "cannot construct non-struct type",
                         "E2014"));
@@ -773,43 +850,104 @@ public class TypeSolver
                     break;
                 }
 
+                ValidateStructLiteralFields(st, sc.Fields, sc.Span);
+
+                // Ensure no missing fields
                 var provided = new HashSet<string>();
-                foreach (var (fname, fexpr) in sc.Fields)
+                foreach (var (fieldName, fieldExpr) in sc.Fields)
                 {
-                    provided.Add(fname);
-                    var ft = st.GetFieldType(fname);
-                    if (ft == null)
+                    provided.Add(fieldName);
+                    var fieldType = st.GetFieldType(fieldName);
+                    if (fieldType == null)
+                    {
                         _diagnostics.Add(Diagnostic.Error(
-                            $"struct `{st.Name}` does not have a field named `{fname}`",
-                            fexpr.Span,
+                            $"struct `{st.Name}` does not have a field named `{fieldName}`",
+                            fieldExpr.Span,
                             "unknown field",
                             "E2013"));
+                        continue;
+                    }
+
+                    var valueType = CheckExpression(fieldExpr, fieldType);
+                    if (!CanCoerse(valueType, fieldType))
+                        _diagnostics.Add(Diagnostic.Error(
+                            $"mismatched types for field `{fieldName}`",
+                            fieldExpr.Span,
+                            $"expected `{fieldType}`, found `{valueType}`",
+                            "E2002"));
                     else
                     {
-                        var vt = CheckExpression(fexpr);
-                        if (!CanCoerse(vt, ft))
-                            _diagnostics.Add(Diagnostic.Error(
-                                $"mismatched types for field `{fname}`",
-                                fexpr.Span,
-                                $"expected `{ft}`, found `{vt}`",
-                                "E2002"));
-                        else
-                        {
-                            // Update type map with resolved type to avoid comptime_int escape
-                            var unified = UnifyTypes(vt, ft);
-                            UpdateTypeMapRecursive(fexpr, unified);
-                        }
+                        var unified = UnifyTypes(valueType, fieldType);
+                        UpdateTypeMapRecursive(fieldExpr, unified);
                     }
                 }
 
-                foreach (var (fname, _) in st.Fields)
-                    if (!provided.Contains(fname))
+                foreach (var (fieldName, _) in st.Fields)
+                    if (!provided.Contains(fieldName))
                         _diagnostics.Add(Diagnostic.Error(
-                            $"missing field `{fname}` in struct construction",
+                            $"missing field `{fieldName}` in struct construction",
                             sc.Span,
-                            $"struct `{st.Name}` requires field `{fname}`",
+                            $"struct `{st.Name}` requires field `{fieldName}`",
                             "E2015"));
-                type = st;
+                type = optionLiteral != null ? optionLiteral : st;
+                break;
+            }
+            case AnonymousStructExpressionNode anon:
+            {
+                StructType? structType = expectedType switch
+                {
+                    StructType st => st,
+                    OptionType opt => TypeRegistry.GetOptionStruct(opt.InnerType),
+                    GenericType gt => InstantiateStruct(gt, anon.Span),
+                    _ => null
+                };
+
+                if (structType == null)
+                {
+                    _diagnostics.Add(Diagnostic.Error(
+                        "anonymous struct literal requires a target struct type",
+                        anon.Span,
+                        "add a type annotation",
+                        "E2014"));
+                    type = TypeRegistry.I32;
+                    break;
+                }
+
+                ValidateStructLiteralFields(structType, anon.Fields, anon.Span);
+                _anonymousStructTypes[anon] = structType;
+
+                if (expectedType is OptionType optExpected)
+                    type = optExpected;
+                else
+                    type = structType;
+
+                break;
+            }
+
+            case NullLiteralNode nullLiteral:
+            {
+                var optionType = expectedType switch
+                {
+                    OptionType opt => opt,
+                    StructType st when st.StructName == "Option" && st.Fields.Any(f => f.Name == "value") =>
+                        new OptionType(st.Fields.First(f => f.Name == "value").Type),
+                    _ => null
+                };
+
+                if (optionType == null)
+                {
+                    _diagnostics.Add(Diagnostic.Error(
+                        "cannot infer type of null literal",
+                        nullLiteral.Span,
+                        "add an option type annotation or use an explicit constructor",
+                        "E2001"));
+                    type = TypeRegistry.I32;
+                }
+                else
+                {
+                    type = optionType;
+                }
+
                 break;
             }
             case ArrayLiteralExpressionNode al:
@@ -895,8 +1033,50 @@ public class TypeSolver
                 throw new Exception($"Unknown expression type: {expression.GetType().Name}");
         }
 
+        type = ApplyOptionExpectation(expression, type, expectedType);
         _typeMap[expression] = type;
         return type;
+    }
+
+    private FType ApplyOptionExpectation(ExpressionNode expression, FType type, FType? expectedType)
+    {
+        if (expectedType is OptionType expectedOption)
+        {
+            if (type is OptionType actualOption)
+            {
+                if (!actualOption.InnerType.Equals(expectedOption.InnerType))
+                {
+                    _diagnostics.Add(Diagnostic.Error(
+                        "mismatched option types",
+                        expression.Span,
+                        $"expected `{expectedOption}`, found `{actualOption}`",
+                        "E2002"));
+                }
+                return expectedOption;
+            }
+
+            if (type is StructType structType && IsOptionStruct(structType, expectedOption.InnerType))
+            {
+                return expectedOption;
+            }
+
+            if (type.Equals(expectedOption.InnerType) ||
+                (type is ComptimeIntType && TypeRegistry.IsIntegerType(expectedOption.InnerType)))
+            {
+                _optionLifts[expression] = expectedOption;
+                return expectedOption;
+            }
+        }
+
+        return type;
+    }
+
+    private static bool IsOptionStruct(StructType structType, FType innerType)
+    {
+        if (structType.StructName != "Option")
+            return false;
+        var valueField = structType.Fields.FirstOrDefault(f => f.Name == "value");
+        return valueField.Type != null && valueField.Type.Equals(innerType);
     }
 
     private bool CanExplicitCast(FType source, FType target)
@@ -941,6 +1121,16 @@ public class TypeSolver
         // Trivial and baseline compatibility
         if (source.Equals(target)) return true;
         if (IsCompatible(source, target)) return true;
+
+        if (target is OptionType optionTarget)
+        {
+            if (source is OptionType optionSource)
+                return CanCoerse(optionSource.InnerType, optionTarget.InnerType);
+            if (source is StructType optionStruct && IsOptionStruct(optionStruct, optionTarget.InnerType))
+                return true;
+            if (source.Equals(optionTarget.InnerType))
+                return true;
+        }
 
         // Helper: detect canonical slice struct and compare element by name when possible
         bool IsSliceStructOf(FType t, string elemName)
@@ -1004,7 +1194,7 @@ public class TypeSolver
         return false;
     }
 
-    private FType? ResolveTypeNode(TypeNode? typeNode)
+    public FType? ResolveTypeNode(TypeNode? typeNode)
     {
         if (typeNode == null) return null;
         switch (typeNode)
@@ -1050,7 +1240,32 @@ public class TypeSolver
                     args.Add(at);
                 }
 
-                return new GenericType(gt.Name, args);
+                if (gt.Name == "Option")
+                {
+                    if (args.Count != 1)
+                    {
+                        _diagnostics.Add(Diagnostic.Error(
+                            "`Option` expects exactly one type argument",
+                            gt.Span,
+                            "usage: Option(T)",
+                            "E2006"));
+                        return null;
+                    }
+
+                    return new OptionType(args[0]);
+                }
+
+                if (!_structs.TryGetValue(gt.Name, out var template))
+                {
+                    _diagnostics.Add(Diagnostic.Error(
+                        $"cannot find generic type `{gt.Name}`",
+                        gt.Span,
+                        "not found in this scope",
+                        "E2003"));
+                    return null;
+                }
+
+                return InstantiateStruct(template, args, gt.Span);
             }
             case ArrayTypeNode arr:
             {
@@ -1068,6 +1283,89 @@ public class TypeSolver
             default:
                 return null;
         }
+    }
+
+    public StructType? InstantiateStruct(GenericType genericType, SourceSpan span)
+    {
+        if (!_structs.TryGetValue(genericType.BaseName, out var template))
+            return null;
+        return InstantiateStruct(template, genericType.TypeArguments, span);
+    }
+
+    private StructType InstantiateStruct(StructType template, IReadOnlyList<FType> typeArgs, SourceSpan span)
+    {
+        if (template.TypeParameters.Count != typeArgs.Count)
+        {
+            _diagnostics.Add(Diagnostic.Error(
+                $"struct `{template.StructName}` expects {template.TypeParameters.Count} type parameter(s)",
+                span,
+                $"provided {typeArgs.Count}",
+                "E2006"));
+            return template;
+        }
+
+        var key = BuildStructSpecKey(template.StructName, typeArgs);
+        if (_structSpecializations.TryGetValue(key, out var cached))
+            return cached;
+
+        var bindings = new Dictionary<string, FType>();
+        for (var i = 0; i < template.TypeParameters.Count; i++)
+            bindings[template.TypeParameters[i]] = typeArgs[i];
+
+        var specializedFields = new List<(string Name, FType Type)>();
+        foreach (var (fieldName, fieldType) in template.Fields)
+        {
+            var specializedType = SubstituteGenerics(fieldType, bindings);
+            specializedFields.Add((fieldName, specializedType));
+        }
+
+        var paramNames = typeArgs.Select(t => t.Name).ToList();
+        var specialized = new StructType(template.StructName, paramNames, specializedFields);
+        _structSpecializations[key] = specialized;
+        return specialized;
+    }
+
+    private void ValidateStructLiteralFields(StructType structType,
+        IReadOnlyList<(string FieldName, ExpressionNode Value)> fields, SourceSpan span)
+    {
+        var provided = new HashSet<string>();
+        foreach (var (fieldName, expr) in fields)
+        {
+            provided.Add(fieldName);
+            var fieldType = structType.GetFieldType(fieldName);
+            if (fieldType == null)
+            {
+                _diagnostics.Add(Diagnostic.Error(
+                    $"struct `{structType.Name}` does not have a field named `{fieldName}`",
+                    expr.Span,
+                    "unknown field",
+                    "E2013"));
+                continue;
+            }
+
+            var valueType = CheckExpression(expr, fieldType);
+            if (!CanCoerse(valueType, fieldType))
+            {
+                _diagnostics.Add(Diagnostic.Error(
+                    $"mismatched types for field `{fieldName}`",
+                    expr.Span,
+                    $"expected `{fieldType}`, found `{valueType}`",
+                    "E2002"));
+            }
+            else
+            {
+                var unified = UnifyTypes(valueType, fieldType);
+                UpdateTypeMapRecursive(expr, unified);
+            }
+        }
+
+        foreach (var (fieldName, _) in structType.Fields)
+            if (!provided.Contains(fieldName))
+                _diagnostics.Add(Diagnostic.Error(
+                    $"missing field `{fieldName}` in struct construction",
+                    span,
+                    $"struct `{structType.Name}` requires field `{fieldName}`",
+                    "E2015"));
     }
 
     private HashSet<string> CollectGenericParamNames(FunctionDeclarationNode fn)
@@ -1170,6 +1468,26 @@ public class TypeSolver
             case SliceType st when expected is SliceType expectedSlice:
                 RefineBindingsWithExpectedReturn(st.ElementType, expectedSlice.ElementType, bindings);
                 break;
+            case OptionType ot when expected is OptionType expectedOption:
+                RefineBindingsWithExpectedReturn(ot.InnerType, expectedOption.InnerType, bindings);
+                break;
+            case StructType st when expected is StructType expectedStruct && st.StructName == expectedStruct.StructName:
+                RefineStructBindings(st, expectedStruct, bindings);
+                break;
+        }
+    }
+
+    private void RefineStructBindings(StructType template, StructType expected, Dictionary<string, FType> bindings)
+    {
+        var expectedFields = new Dictionary<string, FType>();
+        foreach (var (name, type) in expected.Fields)
+            expectedFields[name] = type;
+
+        foreach (var (fieldName, fieldType) in template.Fields)
+        {
+            if (!expectedFields.TryGetValue(fieldName, out var expectedFieldType))
+                continue;
+            RefineBindingsWithExpectedReturn(fieldType, expectedFieldType, bindings);
         }
     }
 
@@ -1231,6 +1549,15 @@ public class TypeSolver
         }
         else
         {
+            if (targetType is OptionType optionTarget)
+            {
+                if (_typeMap.TryGetValue(expr, out var originalType) && originalType != null)
+                {
+                    if (originalType.Equals(optionTarget.InnerType))
+                        _optionLifts[expr] = optionTarget;
+                }
+            }
+
             // Base case: simple expressions (literals, identifiers) just need their own type updated
             _typeMap[expr] = targetType;
         }
@@ -1331,10 +1658,25 @@ public class TypeSolver
         OptionType ot => new OptionType(SubstituteGenerics(ot.InnerType, bindings)),
         ArrayType at => new ArrayType(SubstituteGenerics(at.ElementType, bindings), at.Length),
         SliceType st => new SliceType(SubstituteGenerics(st.ElementType, bindings)),
+        StructType st => SubstituteStructType(st, bindings),
         GenericType gt => new GenericType(gt.BaseName,
             gt.TypeArguments.Select(a => SubstituteGenerics(a, bindings)).ToList()),
         _ => type
     };
+
+    private bool TryComputeCoercionCost(IReadOnlyList<FType> sources, IReadOnlyList<FType> targets, out int cost)
+    {
+        cost = 0;
+        if (sources.Count != targets.Count) return false;
+        for (var i = 0; i < sources.Count; i++)
+        {
+            if (sources[i].Equals(targets[i])) continue;
+            if (!CanCoerse(sources[i], targets[i])) return false;
+            cost++;
+        }
+
+        return true;
+    }
 
     private static bool TryBindGeneric(FType param, FType arg, Dictionary<string, FType> bindings,
         out string? conflictParam, out (FType Existing, FType Incoming)? conflictTypes)
@@ -1346,6 +1688,15 @@ public class TypeSolver
             case GenericParameterType gp:
                 if (bindings.TryGetValue(gp.ParamName, out var existing))
                 {
+                    if (existing is ComptimeIntType && TypeRegistry.IsIntegerType(arg))
+                    {
+                        bindings[gp.ParamName] = arg;
+                        return true;
+                    }
+
+                    if (arg is ComptimeIntType && TypeRegistry.IsIntegerType(existing))
+                        return true;
+
                     if (!existing.Equals(arg))
                     {
                         conflictParam = gp.ParamName;
@@ -1353,6 +1704,12 @@ public class TypeSolver
                         return false;
                     }
 
+                    return true;
+                }
+
+                if (arg is ComptimeIntType)
+                {
+                    bindings[gp.ParamName] = arg;
                     return true;
                 }
 
@@ -1377,6 +1734,22 @@ public class TypeSolver
                 }
 
                 return true;
+            case StructType ps when arg is StructType @as && ps.StructName == @as.StructName:
+            {
+                var argFields = new Dictionary<string, FType>();
+                foreach (var (name, type) in @as.Fields)
+                    argFields[name] = type;
+
+                foreach (var (fieldName, fieldType) in ps.Fields)
+                {
+                    if (!argFields.TryGetValue(fieldName, out var argFieldType))
+                        return false;
+                    if (!TryBindGeneric(fieldType, argFieldType, bindings, out conflictParam, out conflictTypes))
+                        return false;
+                }
+
+                return true;
+            }
             default:
                 return arg.Equals(param) || IsConcreteCompatible(arg, param);
         }
@@ -1444,6 +1817,40 @@ public class TypeSolver
         return result;
     }
 
+    private static StructType SubstituteStructType(StructType structType, Dictionary<string, FType> bindings)
+    {
+        var updatedFields = new List<(string Name, FType Type)>(structType.Fields.Count);
+        var changed = false;
+        foreach (var (name, fieldType) in structType.Fields)
+        {
+            var substituted = SubstituteGenerics(fieldType, bindings);
+            if (!ReferenceEquals(substituted, fieldType))
+                changed = true;
+            updatedFields.Add((name, substituted));
+        }
+
+        var updatedParameters = new List<string>(structType.TypeParameters.Count);
+        foreach (var param in structType.TypeParameters)
+        {
+            var key = param.Length > 0 && param[0] == '$' ? param[1..] : param;
+            if (bindings.TryGetValue(key, out var boundType))
+            {
+                var boundName = boundType.Name;
+                if (boundName != param)
+                    changed = true;
+                updatedParameters.Add(boundName);
+                continue;
+            }
+
+            updatedParameters.Add(param);
+        }
+
+        if (!changed)
+            return structType;
+
+        return new StructType(structType.StructName, updatedParameters, updatedFields);
+    }
+
     private void EnsureSpecialization(FunctionEntry genericEntry, Dictionary<string, FType> bindings,
         IReadOnlyList<FType> concreteParamTypes)
     {
@@ -1474,6 +1881,7 @@ public class TypeSolver
             // Keep base name; backend will mangle by parameter types
             var newFn = new FunctionDeclarationNode(genericEntry.AstNode.Span, genericEntry.Name, newParams, newRetNode,
                 genericEntry.AstNode.Body, genericEntry.IsForeign ? FunctionModifiers.Foreign : FunctionModifiers.None);
+            CheckFunction(newFn);
             _specializations.Add(newFn);
             _emittedSpecs.Add(key);
         }
@@ -1486,7 +1894,10 @@ public class TypeSolver
     private static TypeNode CreateTypeNodeFromFType(SourceSpan span, FType t) => t switch
     {
         PrimitiveType pt => new NamedTypeNode(span, pt.Name),
-        StructType st => new NamedTypeNode(span, st.StructName),
+        StructType st => st.TypeParameters.Count == 0
+            ? new NamedTypeNode(span, st.StructName)
+            : new GenericTypeNode(span, st.StructName,
+                st.TypeParameters.Select(p => new NamedTypeNode(span, p)).ToList()),
         ReferenceType rt => new ReferenceTypeNode(span, CreateTypeNodeFromFType(span, rt.InnerType)),
         OptionType ot => new NullableTypeNode(span, CreateTypeNodeFromFType(span, ot.InnerType)),
         ArrayType at => new ArrayTypeNode(span, CreateTypeNodeFromFType(span, at.ElementType), at.Length),
@@ -1497,10 +1908,14 @@ public class TypeSolver
         _ => new NamedTypeNode(span, t.Name)
     };
 
-    public (string Name, IReadOnlyList<FType> ParameterTypes, bool IsForeign)? GetResolvedCall(CallExpressionNode call)
-        => _resolvedCalls.TryGetValue(call, out var info)
+    public (string Name, IReadOnlyList<FType> ParameterTypes, bool IsForeign)? GetResolvedCall(
+        FunctionDeclarationNode function, CallExpressionNode call)
+        => _resolvedCalls.TryGetValue((function, call), out var info)
             ? (info.Name, info.ParameterTypes, info.IsForeign)
             : null;
+
+    public OptionType? GetOptionLift(ExpressionNode expression)
+        => _optionLifts.TryGetValue(expression, out var optionType) ? optionType : null;
 
     public IReadOnlyList<FunctionDeclarationNode> GetSpecializedFunctions() => _specializations;
 

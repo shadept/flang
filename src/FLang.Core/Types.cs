@@ -1,3 +1,5 @@
+using System.Linq;
+
 namespace FLang.Core;
 
 /// <summary>
@@ -170,7 +172,7 @@ public class ReferenceType : FType
 }
 
 /// <summary>
-/// Represents an optional type (nullable) like T? or Option[T].
+/// Represents an optional type (nullable) like T? or Option(T).
 /// Placeholder for future milestones.
 /// </summary>
 public class OptionType : FType
@@ -184,7 +186,7 @@ public class OptionType : FType
 
     public override string Name => $"{InnerType.Name}?";
 
-    public override int Size => InnerType.Size; // Same as inner type for now
+    public override int Size => InnerType.Size;
 
     public override int Alignment => InnerType.Alignment;
 
@@ -197,6 +199,23 @@ public class OptionType : FType
     {
         return HashCode.Combine(Name, InnerType);
     }
+}
+
+public sealed class NullType : FType
+{
+    public static readonly NullType Instance = new();
+
+    private NullType() { }
+
+    public override string Name => "null";
+
+    public override bool Equals(FType other) => ReferenceEquals(this, other);
+
+    public override int GetHashCode() => Name.GetHashCode();
+
+    public override int Size => 0;
+
+    public override int Alignment => 1;
 }
 
 /// <summary>
@@ -259,6 +278,17 @@ public class StructType : FType
 
         // Precompute layout
         _fieldOffsets = [];
+
+        bool containsGeneric = fields.Any(field => ContainsGeneric(field.Item2));
+        if (containsGeneric)
+        {
+            foreach (var (name, _) in fields)
+                _fieldOffsets[name] = 0;
+            _size = 0;
+            _alignment = 1;
+            return;
+        }
+
         int offset = 0;
         int maxAlignment = 1;
 
@@ -346,6 +376,18 @@ public class StructType : FType
     {
         return (offset + alignment - 1) / alignment * alignment;
     }
+
+    private static bool ContainsGeneric(FType type) => type switch
+    {
+        GenericParameterType => true,
+        ReferenceType rt => ContainsGeneric(rt.InnerType),
+        OptionType ot => ContainsGeneric(ot.InnerType),
+        ArrayType at => ContainsGeneric(at.ElementType),
+        SliceType st => ContainsGeneric(st.ElementType),
+        StructType st => st.Fields.Any(f => ContainsGeneric(f.Type)),
+        GenericType => true,
+        _ => false
+    };
 }
 
 /// <summary>
@@ -449,6 +491,7 @@ public static class TypeRegistry
 
     // Cache for Slice[$T] struct types - created on demand for each element type
     private static readonly Dictionary<FType, StructType> _sliceStructCache = new();
+    private static readonly Dictionary<FType, StructType> _optionStructCache = new();
 
     /// <summary>
     /// Looks up a type by name. Returns null if not found.
@@ -518,6 +561,20 @@ public static class TypeRegistry
         return sliceStruct;
     }
 
+    public static StructType GetOptionStruct(FType innerType)
+    {
+        if (_optionStructCache.TryGetValue(innerType, out var cached))
+            return cached;
+
+        var optionStruct = new StructType("Option", [innerType.Name], [
+            ("has_value", Bool),
+            ("value", innerType)
+        ]);
+
+        _optionStructCache[innerType] = optionStruct;
+        return optionStruct;
+    }
+
     /// <summary>
     /// Converts a FLang type to its C equivalent.
     /// </summary>
@@ -545,8 +602,7 @@ public static class TypeRegistry
 
         // Handle optional types: T? (not fully implemented yet)
         if (type is OptionType optType)
-            // For now, treat as the inner type
-            return ToCType(optType.InnerType);
+            return ToCType(GetOptionStruct(optType.InnerType));
 
         // Handle struct types: use struct name
         if (type is StructType structType)

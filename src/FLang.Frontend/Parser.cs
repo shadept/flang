@@ -127,23 +127,23 @@ public class Parser
         var structKeyword = Eat(TokenKind.Struct);
         var nameToken = Eat(TokenKind.Identifier);
 
-        // Parse optional generic type parameters: [T, U, V]
+        // Parse optional generic type parameters: (T, U, V)
         var typeParameters = new List<string>();
-        if (_currentToken.Kind == TokenKind.OpenBracket)
+        if (_currentToken.Kind == TokenKind.OpenParenthesis)
         {
-            Eat(TokenKind.OpenBracket);
+            Eat(TokenKind.OpenParenthesis);
 
-            while (_currentToken.Kind != TokenKind.CloseBracket && _currentToken.Kind != TokenKind.EndOfFile)
+            while (_currentToken.Kind != TokenKind.CloseParenthesis && _currentToken.Kind != TokenKind.EndOfFile)
             {
                 var typeParam = Eat(TokenKind.Identifier);
                 typeParameters.Add(typeParam.Text);
 
                 if (_currentToken.Kind == TokenKind.Comma)
                     Eat(TokenKind.Comma);
-                else if (_currentToken.Kind != TokenKind.CloseBracket) break;
+                else if (_currentToken.Kind != TokenKind.CloseParenthesis) break;
             }
 
-            Eat(TokenKind.CloseBracket);
+            Eat(TokenKind.CloseParenthesis);
         }
 
         // Parse struct body: { field: Type, field2: Type2 }
@@ -208,7 +208,8 @@ public class Parser
         // Parse return type (optional for now, but expected in new syntax)
         TypeNode? returnType = null;
         if (_currentToken.Kind == TokenKind.Identifier || _currentToken.Kind == TokenKind.Ampersand ||
-            _currentToken.Kind == TokenKind.Dollar || _currentToken.Kind == TokenKind.OpenBracket)
+            _currentToken.Kind == TokenKind.Dollar || _currentToken.Kind == TokenKind.OpenBracket ||
+            _currentToken.Kind == TokenKind.OpenParenthesis)
             returnType = ParseType();
 
         var statements = new List<StatementNode>();
@@ -520,6 +521,26 @@ public class Parser
                 return new StringLiteralNode(stringToken.Span, stringToken.Text);
             }
 
+            case TokenKind.Null:
+            {
+                var nullToken = Eat(TokenKind.Null);
+                return new NullLiteralNode(nullToken.Span);
+            }
+
+            case TokenKind.Dot:
+            {
+                var dotToken = Eat(TokenKind.Dot);
+                if (_currentToken.Kind == TokenKind.OpenBrace)
+                    return ParseAnonymousStructConstruction(dotToken);
+
+                _diagnostics.Add(Diagnostic.Error(
+                    "unexpected '.' in expression",
+                    dotToken.Span,
+                    "anonymous struct literals use .{ field = value }",
+                    "E1001"));
+                return new IntegerLiteralNode(dotToken.Span, 0);
+            }
+
             case TokenKind.Identifier:
             {
                 var identifierToken = Eat(TokenKind.Identifier);
@@ -666,7 +687,14 @@ public class Parser
         while (_currentToken.Kind != TokenKind.CloseBrace && _currentToken.Kind != TokenKind.EndOfFile)
         {
             var fieldNameToken = Eat(TokenKind.Identifier);
-            Eat(TokenKind.Colon);
+            if (_currentToken.Kind == TokenKind.Equals)
+                Eat(TokenKind.Equals);
+            else
+                throw new ParserException(Diagnostic.Error(
+                    "expected '=' in struct field",
+                    _currentToken.Span,
+                    "use `field = expr`",
+                    "E1002"));
             var fieldValue = ParseExpression();
 
             fields.Add((fieldNameToken.Text, fieldValue));
@@ -683,6 +711,38 @@ public class Parser
         var span = new SourceSpan(typeName.Span.FileId, typeName.Span.Index,
             closeBrace.Span.Index + closeBrace.Span.Length - typeName.Span.Index);
         return new StructConstructionExpressionNode(span, typeName, fields);
+    }
+
+    private AnonymousStructExpressionNode ParseAnonymousStructConstruction(Token dotToken)
+    {
+        var openBrace = Eat(TokenKind.OpenBrace);
+        var fields = new List<(string, ExpressionNode)>();
+
+        while (_currentToken.Kind != TokenKind.CloseBrace && _currentToken.Kind != TokenKind.EndOfFile)
+        {
+            var fieldNameToken = Eat(TokenKind.Identifier);
+            if (_currentToken.Kind == TokenKind.Equals)
+                Eat(TokenKind.Equals);
+            else
+                throw new ParserException(Diagnostic.Error(
+                    "expected '=' in struct field",
+                    _currentToken.Span,
+                    "use `field = expr`",
+                    "E1002"));
+            var fieldValue = ParseExpression();
+
+            fields.Add((fieldNameToken.Text, fieldValue));
+
+            if (_currentToken.Kind == TokenKind.Comma)
+                Eat(TokenKind.Comma);
+            else if (_currentToken.Kind != TokenKind.CloseBrace)
+                break;
+        }
+
+        var closeBrace = Eat(TokenKind.CloseBrace);
+        var span = new SourceSpan(dotToken.Span.FileId, dotToken.Span.Index,
+            closeBrace.Span.Index + closeBrace.Span.Length - dotToken.Span.Index);
+        return new AnonymousStructExpressionNode(span, fields);
     }
 
     private BlockExpressionNode ParseBlockExpression()
@@ -841,24 +901,24 @@ public class Parser
 
         var nameToken = Eat(TokenKind.Identifier);
 
-        // Check for generic arguments (dont parse [], this is a slice)
-        if (_currentToken.Kind == TokenKind.OpenBracket && PeekNextToken().Kind != TokenKind.CloseBracket)
+        // Check for generic arguments using parentheses syntax: Type(arg1, arg2)
+        if (_currentToken.Kind == TokenKind.OpenParenthesis)
         {
-            Eat(TokenKind.OpenBracket);
+            Eat(TokenKind.OpenParenthesis);
             var typeArgs = new List<TypeNode>();
 
-            while (_currentToken.Kind != TokenKind.CloseBracket && _currentToken.Kind != TokenKind.EndOfFile)
+            while (_currentToken.Kind != TokenKind.CloseParenthesis && _currentToken.Kind != TokenKind.EndOfFile)
             {
                 typeArgs.Add(ParseType());
 
                 if (_currentToken.Kind == TokenKind.Comma)
                     Eat(TokenKind.Comma);
-                else if (_currentToken.Kind != TokenKind.CloseBracket) break;
+                else if (_currentToken.Kind != TokenKind.CloseParenthesis) break;
             }
 
-            var closeBracket = Eat(TokenKind.CloseBracket);
+            var closeParen = Eat(TokenKind.CloseParenthesis);
             var span = new SourceSpan(nameToken.Span.FileId, nameToken.Span.Index,
-                closeBracket.Span.Index + closeBracket.Span.Length - nameToken.Span.Index);
+                closeParen.Span.Index + closeParen.Span.Length - nameToken.Span.Index);
             return new GenericTypeNode(span, nameToken.Text, typeArgs);
         }
 

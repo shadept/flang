@@ -129,6 +129,7 @@ public class Lexer
                 "as" => TokenKind.As,
                 "true" => TokenKind.True,
                 "false" => TokenKind.False,
+                "null" => TokenKind.Null,
                 _ => TokenKind.Identifier
             };
 

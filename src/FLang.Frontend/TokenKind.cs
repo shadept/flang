@@ -11,6 +11,7 @@ public enum TokenKind
     StringLiteral,
     True,
     False,
+    Null,
 
     // Keywords
     Pub,

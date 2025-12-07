@@ -1,4 +1,5 @@
 using System.Text;
+using System.Linq;
 using FLang.Core;
 using FLang.IR;
 using FLang.IR.Instructions;
@@ -12,33 +13,163 @@ namespace FLang.Codegen.C;
 public class CCodeGenerator
 {
     private readonly StringBuilder _output = new();
-    private readonly HashSet<string> _emittedStructs = new();
+    private readonly Dictionary<string, StructType> _structDefinitions = new();
+    private readonly HashSet<FType> _sliceElementTypes = new();
+    private readonly HashSet<string> _emittedGlobals = new();
     private readonly Dictionary<string, string> _parameterRemap = new();
+    private bool _headersEmitted;
 
-    public static string Generate(Function function)
+    public static string GenerateProgram(IEnumerable<Function> functions)
     {
         var generator = new CCodeGenerator();
-        return generator.GenerateFunction(function);
+        var functionList = functions.ToList();
+        generator.AnalyzeFunctions(functionList);
+        generator.EmitProgram(functionList);
+        return generator._output.ToString();
     }
 
-    private string GenerateFunction(Function function)
+    private void AnalyzeFunctions(IEnumerable<Function> functions)
     {
-        // Skip foreign function declarations - they come from headers
-        if (function.IsForeign)
-            return string.Empty;
+        foreach (var function in functions)
+        {
+            AnalyzeFunction(function);
 
-        // Phase 1: Analyze and collect dependencies
-        AnalyzeFunction(function);
+            foreach (var global in function.Globals)
+            {
+                CollectStructType(global.Type);
+                switch (global.Initializer)
+                {
+                    case StructConstantValue structConst:
+                        CollectStructType(structConst.Type);
+                        break;
+                    case ArrayConstantValue arrayConst when arrayConst.Type is ArrayType arrType:
+                        CollectStructType(arrType.ElementType);
+                        break;
+                }
+            }
+        }
+    }
 
-        // Phase 2: Emit headers and type definitions
+    private void EmitProgram(IReadOnlyList<Function> functions)
+    {
         EmitHeaders();
-        EmitTypeDefinitions(function);
-        EmitGlobals(function);
+        EmitSliceStructs();
+        EmitStructDefinitions();
+        EmitForeignPrototypes(functions);
+        EmitFunctionPrototypes(functions);
+        EmitGlobals(functions);
 
-        // Phase 3: Emit function definition
-        EmitFunctionDefinition(function);
+        foreach (var function in functions)
+        {
+            if (function.IsForeign) continue;
+            _parameterRemap.Clear();
+            EmitFunctionDefinition(function);
+            _output.AppendLine();
+        }
+    }
 
-        return _output.ToString();
+    private void EmitSliceStructs()
+    {
+        foreach (var elemType in _sliceElementTypes)
+        {
+            if (elemType.Equals(TypeRegistry.U8)) continue;
+            var elemCType = TypeToCType(elemType);
+            var structName = GetSliceStructName(elemType);
+            _output.AppendLine($"struct {structName} {{");
+            _output.AppendLine($"    {elemCType}* ptr;");
+            _output.AppendLine("    uintptr_t len;");
+            _output.AppendLine("};");
+            _output.AppendLine();
+        }
+    }
+
+    private void EmitStructDefinitions()
+    {
+        foreach (var structType in _structDefinitions.OrderBy(kvp => kvp.Key).Select(kvp => kvp.Value))
+        {
+            if (structType.StructName == "String") continue;
+            EmitStructDefinition(structType);
+        }
+    }
+
+    private void EmitForeignPrototypes(IEnumerable<Function> functions)
+    {
+        var emitted = new HashSet<string>();
+        foreach (var function in functions)
+        {
+            if (!function.IsForeign) continue;
+            if (function.Name == "__flang_unimplemented") continue;
+            var name = GetFunctionCName(function);
+            if (!emitted.Add(name)) continue;
+            var paramList = BuildParameterList(function);
+            _output.AppendLine($"extern {TypeToCType(function.ReturnType)} {name}({paramList});");
+        }
+
+        if (emitted.Count > 0)
+            _output.AppendLine();
+    }
+
+    private void EmitFunctionPrototypes(IEnumerable<Function> functions)
+    {
+        foreach (var function in functions)
+        {
+            if (function.IsForeign) continue;
+            var name = GetFunctionCName(function);
+            var paramList = BuildParameterList(function);
+            _output.AppendLine($"{TypeToCType(function.ReturnType)} {name}({paramList});");
+        }
+
+        if (functions.Any(f => !f.IsForeign))
+            _output.AppendLine();
+    }
+
+    private void EmitGlobals(IEnumerable<Function> functions)
+    {
+        foreach (var function in functions)
+        foreach (var global in function.Globals)
+            EmitGlobal(global);
+
+        if (_emittedGlobals.Count > 0)
+            _output.AppendLine();
+    }
+
+    private void EmitGlobal(GlobalValue global)
+    {
+        if (!_emittedGlobals.Add(global.Name))
+            return;
+
+        if (global.Initializer is StructConstantValue structConst &&
+            structConst.Type is StructType st && st.Name == "String")
+        {
+            var ptrField = structConst.FieldValues["ptr"];
+            var lenField = structConst.FieldValues["len"];
+            if (ptrField is ArrayConstantValue arrayConst && arrayConst.StringRepresentation != null)
+            {
+                var escaped = EscapeStringForC(arrayConst.StringRepresentation);
+                var length = ((ConstantValue)lenField).IntValue;
+                _output.AppendLine($"static const struct String {global.Name} = {{ .ptr = (uint8_t*)\"{escaped}\", .len = {length} }};");
+            }
+            return;
+        }
+
+        if (global.Initializer is ArrayConstantValue arrayConst2 && arrayConst2.StringRepresentation != null)
+        {
+            var escaped = EscapeStringForC(arrayConst2.StringRepresentation);
+            _output.AppendLine($"const uint8_t* {global.Name} = (const uint8_t*)\"{escaped}\";");
+            return;
+        }
+
+        if (global.Initializer is ArrayConstantValue arrayConst3 &&
+            arrayConst3.Elements != null && arrayConst3.Type is ArrayType arrType)
+        {
+            var elemType = TypeToCType(arrType.ElementType);
+            var elements = string.Join(", ", arrayConst3.Elements.Select(e =>
+            {
+                if (e is ConstantValue cv) return cv.IntValue.ToString();
+                throw new InvalidOperationException($"Non-constant value in array literal: {e}");
+            }));
+            _output.AppendLine($"static const {elemType} {global.Name}[{arrType.Length}] = {{{elements}}};");
+        }
     }
 
     #region Phase 1: Analysis
@@ -127,174 +258,63 @@ public class CCodeGenerator
         switch (type)
         {
             case StructType st:
-                if (!_emittedStructs.Contains(GetStructCName(st)))
+            {
+                var cName = GetStructCName(st);
+                if (!_structDefinitions.ContainsKey(cName))
                 {
-                    _emittedStructs.Add(GetStructCName(st));
-                    // Recursively collect nested struct fields
+                    _structDefinitions[cName] = st;
                     foreach (var (_, fieldType) in st.Fields)
                         CollectStructType(fieldType);
                 }
                 break;
+            }
 
             case ReferenceType rt:
                 CollectStructType(rt.InnerType);
                 break;
 
             case ArrayType at:
+                _sliceElementTypes.Add(at.ElementType);
                 CollectStructType(at.ElementType);
-                // Arrays become slices - need String struct for u8 arrays
-                if (at.ElementType.Equals(TypeRegistry.U8))
-                    _emittedStructs.Add("FLangString");
                 break;
 
             case SliceType slt:
+                _sliceElementTypes.Add(slt.ElementType);
                 CollectStructType(slt.ElementType);
-                // Slices need struct definition
-                if (slt.ElementType.Equals(TypeRegistry.U8))
-                    _emittedStructs.Add("FLangString");
+                break;
+
+            case OptionType opt:
+                CollectStructType(TypeRegistry.GetOptionStruct(opt.InnerType));
                 break;
         }
     }
-
-
+    
     #endregion
 
     #region Phase 2: Emit Headers and Declarations
 
     private void EmitHeaders()
     {
+        if (_headersEmitted) return;
+        _headersEmitted = true;
+
         _output.AppendLine("#include <stdint.h>");
         _output.AppendLine("#include <stdio.h>");
         _output.AppendLine("#include <string.h>");
+        _output.AppendLine("#include <stdlib.h>");
+        _output.AppendLine();
+        _output.AppendLine("struct String {");
+        _output.AppendLine("    uint8_t* ptr;");
+        _output.AppendLine("    uintptr_t len;");
+        _output.AppendLine("};");
+        _output.AppendLine();
+        _output.AppendLine("static void __flang_unimplemented(void) {");
+        _output.AppendLine("    fprintf(stderr, \"flang: unimplemented feature invoked\\n\");");
+        _output.AppendLine("    abort();");
+        _output.AppendLine("}");
         _output.AppendLine();
     }
 
-    private void EmitTypeDefinitions(Function function)
-    {
-        // Collect all slice element types that need struct definitions
-        var sliceElementTypes = new HashSet<FType>();
-        CollectSliceElementTypes(function, sliceElementTypes);
-
-        // Emit slice type definitions
-        foreach (var elemType in sliceElementTypes)
-        {
-            if (elemType.Equals(TypeRegistry.U8)) continue; // String struct handles u8
-
-            var elemCType = TypeToCType(elemType);
-            var structName = $"Slice_{elemCType.Replace("*", "Ptr").Replace(" ", "_")}";
-
-            _output.AppendLine($"struct {structName} {{");
-            _output.AppendLine($"    {elemCType}* ptr;");
-            _output.AppendLine("    uintptr_t len;");
-            _output.AppendLine("};");
-            _output.AppendLine();
-        }
-
-        // Emit other struct definitions in dependency order
-        // For now, emit in the order collected (could topologically sort if needed)
-        foreach (var structName in _emittedStructs)
-        {
-            // Skip String - it's always emitted in the header by Program.cs
-            if (structName == "FLangString" || structName == "String") continue;
-
-            // Find the struct type to emit its definition
-            var structType = FindStructType(function, structName);
-            if (structType != null)
-                EmitStructDefinition(structType);
-        }
-    }
-
-    private void CollectSliceElementTypes(Function function, HashSet<FType> sliceElementTypes)
-    {
-        // Check return type
-        if (function.ReturnType is ArrayType rat)
-            sliceElementTypes.Add(rat.ElementType);
-        else if (function.ReturnType is SliceType rslt)
-            sliceElementTypes.Add(rslt.ElementType);
-
-        // Check parameters
-        foreach (var param in function.Parameters)
-        {
-            if (param.Type is ArrayType pat)
-                sliceElementTypes.Add(pat.ElementType);
-            else if (param.Type is SliceType pslt)
-                sliceElementTypes.Add(pslt.ElementType);
-        }
-
-        // Scan instructions
-        foreach (var block in function.BasicBlocks)
-        {
-            foreach (var instruction in block.Instructions)
-            {
-                if (instruction is AllocaInstruction alloca)
-                {
-                    if (alloca.AllocatedType is ArrayType aat)
-                        sliceElementTypes.Add(aat.ElementType);
-                    else if (alloca.AllocatedType is SliceType aslt)
-                        sliceElementTypes.Add(aslt.ElementType);
-                }
-
-                if (instruction is StoreInstruction store && store.Value.Type != null)
-                {
-                    if (store.Value.Type is ArrayType sat)
-                        sliceElementTypes.Add(sat.ElementType);
-                    else if (store.Value.Type is SliceType sslt)
-                        sliceElementTypes.Add(sslt.ElementType);
-                    else if (store.Value.Type is ReferenceType { InnerType: ArrayType iaat })
-                        sliceElementTypes.Add(iaat.ElementType);
-                    else if (store.Value.Type is ReferenceType { InnerType: SliceType iaslt })
-                        sliceElementTypes.Add(iaslt.ElementType);
-                }
-            }
-        }
-    }
-
-    private StructType? FindStructType(Function function, string cName)
-    {
-        // Search function signature and instructions for struct type matching cName
-        if (function.ReturnType is StructType rst && GetStructCName(rst) == cName)
-            return rst;
-
-        foreach (var param in function.Parameters)
-            if (param.Type is StructType pst && GetStructCName(pst) == cName)
-                return pst;
-
-        foreach (var block in function.BasicBlocks)
-        {
-            foreach (var instruction in block.Instructions)
-            {
-                var foundType = FindStructTypeInInstruction(instruction, cName);
-                if (foundType != null) return foundType;
-            }
-        }
-
-        return null;
-    }
-
-    private StructType? FindStructTypeInInstruction(Instruction instruction, string cName)
-    {
-        switch (instruction)
-        {
-            case AllocaInstruction alloca:
-                if (alloca.AllocatedType is StructType st && GetStructCName(st) == cName)
-                    return st;
-                break;
-
-            case StoreInstruction store:
-                if (store.Value.Type is StructType st2 && GetStructCName(st2) == cName)
-                    return st2;
-                break;
-
-            case CastInstruction cast:
-                if (cast.TargetType is StructType st3 && GetStructCName(st3) == cName)
-                    return st3;
-                if (cast.Source.Type is StructType st4 && GetStructCName(st4) == cName)
-                    return st4;
-                break;
-        }
-
-        return null;
-    }
 
     private void EmitStructDefinition(StructType structType)
     {
@@ -311,58 +331,6 @@ public class CCodeGenerator
         _output.AppendLine();
     }
 
-    private void EmitGlobals(Function function)
-    {
-        foreach (var global in function.Globals)
-        {
-            if (global.Initializer is StructConstantValue structConst &&
-                structConst.Type is StructType st && st.Name == "String")
-            {
-                // Emit String literal as struct constant
-                // Extract the string data from the ptr field initializer
-                var ptrField = structConst.FieldValues["ptr"];
-                var lenField = structConst.FieldValues["len"];
-
-                if (ptrField is ArrayConstantValue arrayConst && arrayConst.StringRepresentation != null)
-                {
-                    var escaped = EscapeStringForC(arrayConst.StringRepresentation);
-                    var length = ((ConstantValue)lenField).IntValue;
-
-                    // Emit: static const struct String LC0 = { .ptr = (uint8_t*)"hello", .len = 5 };
-                    _output.AppendLine($"static const struct String {global.Name} = {{ .ptr = (uint8_t*)\"{escaped}\", .len = {length} }};");
-                }
-            }
-            else if (global.Initializer is ArrayConstantValue arrayConst &&
-                arrayConst.StringRepresentation != null)
-            {
-                // Legacy: Raw string data (if any old code still uses this)
-                var escaped = EscapeStringForC(arrayConst.StringRepresentation);
-                _output.AppendLine($"const uint8_t* {global.Name} = (const uint8_t*)\"{escaped}\";");
-            }
-            else if (global.Initializer is ArrayConstantValue arrayConst2 &&
-                arrayConst2.Elements != null &&
-                arrayConst2.Type is ArrayType arrType)
-            {
-                // Array literal: emit as C array constant
-                var elemType = TypeToCType(arrType.ElementType);
-                var elements = string.Join(", ", arrayConst2.Elements.Select(e =>
-                {
-                    if (e is ConstantValue cv)
-                    {
-                        return cv.IntValue.ToString();
-                    }
-                    throw new InvalidOperationException($"Non-constant value in array literal: {e}");
-                }));
-
-                // Emit: static const elementType LA0[length] = {elem0, elem1, ...};
-                _output.AppendLine($"static const {elemType} {global.Name}[{arrType.Length}] = {{{elements}}};");
-            }
-            // Handle other global types as needed
-        }
-
-        if (function.Globals.Count > 0)
-            _output.AppendLine();
-    }
 
     #endregion
 
@@ -370,24 +338,8 @@ public class CCodeGenerator
 
     private void EmitFunctionDefinition(Function function)
     {
-        // Determine function name (mangled unless main or foreign)
-        var functionName = function.Name == "main"
-            ? "main"
-            : NameMangler.GenericFunction(function.Name, function.Parameters.Select(p => p.Type).ToList());
-
-        // Build parameter list - emit struct params as pointers to avoid copies
-        var paramList = function.Parameters.Count == 0
-            ? "void"
-            : string.Join(", ", function.Parameters.Select(p =>
-            {
-                var paramType = TypeToCType(p.Type);
-                // If parameter is a struct (not a pointer to struct), emit as pointer
-                if (p.Type is StructType)
-                    paramType += "*";
-                return $"{paramType} {p.Name}";
-            }));
-
-        // Emit function signature
+        var functionName = GetFunctionCName(function);
+        var paramList = BuildParameterList(function);
         var returnType = TypeToCType(function.ReturnType);
         _output.AppendLine($"{returnType} {functionName}({paramList}) {{");
 
@@ -724,6 +676,31 @@ public class CCodeGenerator
 
     #region Helper Methods
 
+    private string GetSliceStructName(FType elementType)
+    {
+        return $"Slice_{TypeToCType(elementType).Replace("*", "Ptr").Replace(" ", "_")}";
+    }
+
+    private string GetFunctionCName(Function function)
+    {
+        return function.Name == "main"
+            ? "main"
+            : NameMangler.GenericFunction(function.Name, function.Parameters.Select(p => p.Type).ToList());
+    }
+
+    private string BuildParameterList(Function function)
+    {
+        if (function.Parameters.Count == 0) return "void";
+
+        return string.Join(", ", function.Parameters.Select(p =>
+        {
+            var paramType = TypeToCType(p.Type);
+            if (p.Type is StructType)
+                paramType += "*";
+            return $"{paramType} {p.Name}";
+        }));
+    }
+
     private string ValueToString(Value value)
     {
         return value switch
@@ -775,9 +752,10 @@ public class CCodeGenerator
             ReferenceType rt => $"{TypeToCType(rt.InnerType)}*",
 
             StructType st => $"struct {GetStructCName(st)}",
+            OptionType opt => $"struct {GetStructCName(TypeRegistry.GetOptionStruct(opt.InnerType))}",
 
             SliceType st when st.ElementType.Equals(TypeRegistry.U8) => "struct String",
-            SliceType st => $"struct Slice_{TypeToCType(st.ElementType).Replace("*", "Ptr").Replace(" ", "_")}",
+            SliceType st => $"struct {GetSliceStructName(st.ElementType)}",
 
             // Arrays are not converted to struct types - they remain as C arrays
             // Array syntax must be handled specially at declaration sites (see alloca handling)

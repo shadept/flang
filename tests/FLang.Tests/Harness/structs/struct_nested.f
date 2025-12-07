@@ -11,7 +11,7 @@ struct Outer {
 }
 
 pub fn main() i32 {
-    let inner: Inner = Inner { value: 42 }
-    let outer: Outer = Outer { inner: inner, extra: 10 }
+    let inner: Inner = Inner { value = 42 }
+    let outer: Outer = Outer { inner = inner, extra = 10 }
     return outer.inner.value
 }

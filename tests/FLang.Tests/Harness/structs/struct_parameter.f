@@ -11,6 +11,6 @@ pub fn getX(p: Point) i32 {
 }
 
 pub fn main() i32 {
-    let p: Point = Point { x: 15, y: 20 }
+    let p: Point = Point { x = 15, y = 20 }
     return getX(p)
 }

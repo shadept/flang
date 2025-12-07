@@ -1,3 +1,4 @@
+using System;
 using FLang.Core;
 using FLang.Frontend;
 using FLang.Frontend.Ast.Declarations;
@@ -9,7 +10,31 @@ public class ModuleCompiler
     private readonly Compilation _compilation;
     private readonly Dictionary<string, ModuleNode> _parsedModules = new();
     private readonly Queue<string> _workQueue = new();
+    private readonly HashSet<string> _queuedModules = new();
     private readonly List<Diagnostic> _diagnostics = new();
+
+    private void EnqueueModule(string modulePath, SourceSpan? importSpan = null, string? importerPath = null)
+    {
+        var normalizedPath = Path.GetFullPath(modulePath);
+
+        if (importerPath != null && Path.GetFullPath(importerPath) == normalizedPath)
+        {
+            var span = importSpan ?? new SourceSpan(-1, 0, 0);
+            _diagnostics.Add(Diagnostic.Error(
+                "circular import detected",
+                span,
+                "module imports itself",
+                "E0002"));
+            return;
+        }
+
+        if (_parsedModules.ContainsKey(normalizedPath)) return;
+        if (_queuedModules.Contains(normalizedPath)) return;
+
+        _queuedModules.Add(normalizedPath);
+        _workQueue.Enqueue(normalizedPath);
+        _compilation.RegisterModule(normalizedPath, -1);
+    }
 
     public ModuleCompiler(Compilation compilation)
     {
@@ -24,19 +49,21 @@ public class ModuleCompiler
         var normalizedPath = Path.GetFullPath(entryPointPath);
 
         // Queue the entry point for parsing
-        _workQueue.Enqueue(normalizedPath);
-        _compilation.RegisterModule(normalizedPath, -1); // Reserve entry point
+        EnqueueModule(normalizedPath);
 
-        // Always include core/string for built-in String support, even if not explicitly imported
-        var preludeStringPath = Path.Combine(_compilation.StdlibPath, "core", "string.f");
-        if (File.Exists(preludeStringPath))
+        // Always include core prelude modules (String/Option/List/runtime helpers)
+        var preludeModules = new[]
         {
-            var normPrelude = Path.GetFullPath(preludeStringPath);
-            if (!_compilation.IsModuleAlreadyLoaded(normPrelude))
-            {
-                _workQueue.Enqueue(normPrelude);
-                _compilation.RegisterModule(normPrelude, -1);
-            }
+            Path.Combine(_compilation.StdlibPath, "core", "string.f"),
+            Path.Combine(_compilation.StdlibPath, "core", "option.f"),
+            Path.Combine(_compilation.StdlibPath, "core", "list.f"),
+            Path.Combine(_compilation.StdlibPath, "core", "runtime.f")
+        };
+
+        foreach (var preludePath in preludeModules)
+        {
+            if (!File.Exists(preludePath)) continue;
+            EnqueueModule(Path.GetFullPath(preludePath));
         }
 
         while (_workQueue.Count > 0)
@@ -61,6 +88,7 @@ public class ModuleCompiler
                 _diagnostics.Add(d);
 
             _parsedModules[modulePath] = moduleNode;
+            _queuedModules.Remove(modulePath);
 
             // Queue all imports for processing
             foreach (var import in moduleNode.Imports)
@@ -79,13 +107,7 @@ public class ModuleCompiler
                     continue;
                 }
 
-                var normalizedImportPath = Path.GetFullPath(resolvedPath);
-
-                if (!_compilation.IsModuleAlreadyLoaded(normalizedImportPath))
-                {
-                    _workQueue.Enqueue(normalizedImportPath);
-                    _compilation.RegisterModule(normalizedImportPath, -1); // Reserve
-                }
+                EnqueueModule(resolvedPath, import.Span, modulePath);
             }
         }
 

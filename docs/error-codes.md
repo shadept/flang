@@ -627,7 +627,7 @@ The `size_of` or `align_of` intrinsic was called with an incorrect number of arg
 #### Example
 
 ```flang
-#foreign fn size_of(t: Type[$T]) usize
+#foreign fn size_of(t: Type($T)) usize
 
 pub fn main() i32 {
     let size: usize = size_of()  // ERROR: `size_of` requires exactly one type argument
@@ -640,7 +640,7 @@ pub fn main() i32 {
 Pass exactly one type argument:
 
 ```flang
-#foreign fn size_of(t: Type[$T]) usize
+#foreign fn size_of(t: Type($T)) usize
 
 pub fn main() i32 {
     let size: usize = size_of(i32)  // OK: one type argument
@@ -662,7 +662,7 @@ The `size_of` or `align_of` intrinsic requires a type name as its argument, not 
 #### Example
 
 ```flang
-#foreign fn size_of(t: Type[$T]) usize
+#foreign fn size_of(t: Type($T)) usize
 
 pub fn main() i32 {
     let x: i32 = 42
@@ -676,7 +676,7 @@ pub fn main() i32 {
 Pass a type name, not a variable or expression:
 
 ```flang
-#foreign fn size_of(t: Type[$T]) usize
+#foreign fn size_of(t: Type($T)) usize
 
 pub fn main() i32 {
     let size: usize = size_of(i32)  // OK: i32 is a type name
@@ -698,7 +698,7 @@ The type name passed to `size_of` or `align_of` is not defined or not in scope.
 #### Example
 
 ```flang
-#foreign fn size_of(t: Type[$T]) usize
+#foreign fn size_of(t: Type($T)) usize
 
 pub fn main() i32 {
     let size: usize = size_of(MyStruct)  // ERROR: unknown type `MyStruct`
@@ -711,7 +711,7 @@ pub fn main() i32 {
 Define the type before use, or use a built-in type:
 
 ```flang
-#foreign fn size_of(t: Type[$T]) usize
+#foreign fn size_of(t: Type($T)) usize
 
 struct MyStruct {
     x: i32,

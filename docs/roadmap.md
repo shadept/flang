@@ -275,7 +275,7 @@ _Goal: Add the type system and fundamental data structures needed for real progr
 
 - [ ] `Allocator` interface (struct with function pointers)
 - [ ] Basic heap allocator wrapping malloc/free
-- [ ] End-to-end memory tests pending cast support (`as`) and pointer-typed call results
+- [ ] End-to-end memory tests covering pointer casts (`as`) and pointer-typed call results
 
 **Tests Added/Status:**
 
@@ -298,7 +298,7 @@ _Goal: Add the type system and fundamental data structures needed for real progr
 - E2015: Intrinsic argument must be type name
 - E2016: Unknown type in intrinsic
 
-**Note:** `Type[$T]` syntax for generic type parameters is recognized in test declarations but full support deferred to M11 (Generics). For now, intrinsics accept type names as identifiers.
+**Note:** Use `Type($T)` when passing generic type parameters to intrinsics. Square-bracket syntax is reserved for future features and is not accepted by the parser.
 
 ---
 
@@ -306,7 +306,7 @@ _Goal: Add the type system and fundamental data structures needed for real progr
 
 _Goal: Generics, inference, and advanced type features._
 
-### Milestone 11: Generics Basics (IN PROGRESS)
+### Milestone 11: Generics Basics (COMPLETED)
 
 **Scope:** `$T` syntax, generic functions, basic monomorphization.
 
@@ -314,16 +314,17 @@ _Goal: Generics, inference, and advanced type features._
 
 - ✅ `$T` parameter binding syntax in lexer/parser and AST (`GenericParameterTypeNode`)
 - ✅ Generic function parsing: `fn identity(x: $T) T`
-- ✅ Argument-based type parameter inference (return-type inference deferred)
+- ✅ Argument-based type parameter inference (return-type inference deferred, now delivered)
 - ✅ Monomorphization of generic functions with centralized name mangling
 - ✅ FIR/codegen support via monomorphized specializations
 - ✅ Test harness support for expected compile errors: `//! COMPILE-ERROR: E2101`
+- ✅ Return-type–driven inference (incl. resolving `comptime_*` from expected type)
 
-**Pending:**
+**Deferred to Milestone 12:**
 
-- [x] Return-type–driven inference (incl. resolving `comptime_*` from expected type)
-- [ ] Generic constraints (structural)
-- [ ] Generic structs monomorphization (tracked for M12)
+- Generic constraints (structural)
+- Generic struct monomorphization and collections
+
 
 **Tests to Add/Expand:**
 
