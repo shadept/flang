@@ -1,8 +1,8 @@
 //! TEST: list_push_pop
 //! EXIT: 12
 
-import core.list
-import core.option
+import std.list
+import std.option
 
 pub fn main() i32 {
     let list: List(i32) = list_new()

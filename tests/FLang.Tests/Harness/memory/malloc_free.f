@@ -6,8 +6,7 @@
 // TODO fix test is causing the compiler to loop forever and consume all the memory in the world
 
 import core.mem
-
-#foreign fn size_of(t: Type($T)) usize
+import core.intrinsics
 
 pub fn main() i32 {
     // Allocate 4 bytes for an i32

@@ -4,6 +4,8 @@
 // Test size_of intrinsic with basic integer type
 // Expected: sizeof(i32) = 4 bytes
 
+import core.rtti
+
 pub fn main() i32 {
-    return size_of(i32)
+    return size_of(i32) as i32
 }

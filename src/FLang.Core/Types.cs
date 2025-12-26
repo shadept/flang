@@ -51,7 +51,7 @@ public class GenericParameterType : FType
 
     public string ParamName { get; }
 
-    public override string Name => "$" + ParamName;
+    public override string Name => ParamName;
 
     public override int Size =>
         throw new InvalidOperationException($"Cannot get size of generic parameter type ${ParamName}");
@@ -489,9 +489,17 @@ public static class TypeRegistry
         ("len", USize)
     ]);
 
+    // Type struct template for runtime type information (same layout for all Type(T) instantiations)
+    public static readonly StructType TypeStructTemplate = new("Type", [], [
+        ("name", StringStruct),  // String struct (ptr + len)
+        ("size", U8),
+        ("align", U8)  // Note: "align" not "alignment"
+    ]);
+
     // Cache for Slice[$T] struct types - created on demand for each element type
     private static readonly Dictionary<FType, StructType> _sliceStructCache = new();
     private static readonly Dictionary<FType, StructType> _optionStructCache = new();
+    private static readonly Dictionary<FType, StructType> _typeStructCache = new();
 
     /// <summary>
     /// Looks up a type by name. Returns null if not found.
@@ -573,6 +581,25 @@ public static class TypeRegistry
 
         _optionStructCache[innerType] = optionStruct;
         return optionStruct;
+    }
+
+    /// <summary>
+    /// Gets or creates a Type(T) struct instance for the given type parameter.
+    /// All instances have the same layout, differing only in the type parameter.
+    /// </summary>
+    public static StructType GetTypeStruct(FType innerType)
+    {
+        if (_typeStructCache.TryGetValue(innerType, out var cached))
+            return cached;
+
+        var typeStruct = new StructType("Type", [innerType.Name], [
+            ("name", StringStruct),
+            ("size", U8),
+            ("align", U8)
+        ]);
+
+        _typeStructCache[innerType] = typeStruct;
+        return typeStruct;
     }
 
     /// <summary>

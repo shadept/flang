@@ -1,7 +1,7 @@
 //! TEST: option_basic
 //! EXIT: 17
 
-import core.option
+import std.option
 
 fn maybe_add(flag: bool, value: i32) i32? {
     if (flag) {

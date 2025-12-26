@@ -7,6 +7,8 @@ using FLang.Codegen.C;
 using FLang.Core;
 using FLang.IR;
 using FLang.Semantics;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Console;
 
 // Parse command-line arguments
 string? inputFilePath = null;
@@ -15,6 +17,7 @@ string? emitFir = null;
 var demoDiagnostics = false;
 var releaseBuild = false;
 var findCompilersOnly = false;
+var debugLogging = false;
 
 for (var i = 0; i < args.Length; i++)
     if (args[i] == "--stdlib-path" && i + 1 < args.Length)
@@ -27,6 +30,8 @@ for (var i = 0; i < args.Length; i++)
         releaseBuild = true;
     else if (args[i] == "--find-compilers")
         findCompilersOnly = true;
+    else if (args[i] == "--debug-logging")
+        debugLogging = true;
     else if (!args[i].StartsWith("--")) inputFilePath = args[i];
 
 if (demoDiagnostics)
@@ -49,6 +54,7 @@ if (inputFilePath == null)
     Console.WriteLine("  --stdlib-path <path>    Path to standard library directory");
     Console.WriteLine("  --emit-fir <file>       Emit FIR (intermediate representation) to file (use '-' for stdout)");
     Console.WriteLine("  --release               Enable C backend optimization (passes -O2 /O2)");
+    Console.WriteLine("  --debug-logging         Enable detailed logs for the compiler stages");
     Console.WriteLine("  --demo-diagnostics      Show diagnostic system demo");
     Console.WriteLine("  --find-compilers        Probe and list available C compilers on this machine, then exit");
     return;
@@ -74,8 +80,17 @@ if (moduleCompiler.Diagnostics.Any())
     Environment.Exit(1);
 }
 
+// Configure logging
+using var loggerFactory = LoggerFactory.Create(builder =>
+{
+    builder.SetMinimumLevel(debugLogging ? LogLevel.Debug : LogLevel.Warning);
+    builder.AddConsoleFormatter<CustomDebugFormatter, ConsoleFormatterOptions>();
+    builder.AddConsole(options => options.FormatterName = "custom-debug");
+});
+
 // Type checking pass
-var typeSolver = new TypeSolver(compilation);
+var typeSolverLogger = loggerFactory.CreateLogger<TypeSolver>();
+var typeSolver = new TypeSolver(compilation, typeSolverLogger);
 
 // First pass: collect all struct definitions and function signatures from all modules
 foreach (var module in parsedModules.Values)

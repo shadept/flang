@@ -164,11 +164,9 @@ defer expression
 
 - `never` denotes computations that do not return; unifies with all types.
 
-### 3.7 Introspection
+### 3.7 Introspection (Legacy)
 
 ```
-#foreign fn size_of($T) usize
-#foreign fn align_of($T) usize
 #foreign fn as_bytes(p: &$T) &u8
 #foreign fn as_ref(p: &u8) &$T
 #foreign fn ref_at(base: &$T, index: usize) &$T
@@ -178,6 +176,81 @@ defer expression
 
 - All are compile-time evaluable and usable in constant expressions.
 - `offset_of` returns the actual compiled byte offset.
+
+### 3.8 Type Literals and Runtime Type Information
+
+FLang provides runtime type information through the built-in `Type` generic struct:
+
+```flang
+struct Type(T) {
+    name: String  // Type name
+    size: u8      // Size in bytes
+    align: u8     // Alignment requirement
+}
+```
+
+#### Type as a Generic Struct
+
+`Type(T)` is a built-in generic struct that carries runtime metadata about type `T`. When you use a type name like `i32` or `Point` as a value, it becomes an instance of `Type` containing that type's metadata.
+
+```flang
+// Type literals - type names used as values
+let t: Type(i32) = i32  // i32 is a value of type Type(i32)
+
+// Access type metadata
+let size: u8 = t.size      // 4
+let alignment: u8 = t.align  // 4
+let name: String = t.name   // "i32"
+```
+
+#### Type Introspection Functions
+
+Type introspection functions are regular FLang library functions defined in `core.intrinsics`:
+
+```flang
+import core.intrinsics
+
+// Defined in stdlib - these are regular FLang functions, not compiler intrinsics
+pub fn size_of(t: Type($T)) usize {
+    return t.size as usize
+}
+
+pub fn align_of(t: Type($T)) usize {
+    return t.align as usize
+}
+
+// Usage
+pub fn main() i32 {
+    let s = size_of(i32)  // Returns 4
+    let a = align_of(Point)  // Returns alignment of Point struct
+    return s as i32
+}
+```
+
+#### User-Defined Functions with Type Parameters
+
+You can write your own functions that accept `Type($T)` parameters:
+
+```flang
+pub fn allocate_array(t: Type($T), count: usize) &u8? {
+    let size_per_element = t.size as usize
+    let total_size = size_per_element * count
+    return malloc(total_size)
+}
+
+// Usage
+let arr = allocate_array(i32, 10)  // Allocate array of 10 i32s
+```
+
+#### Global Type Metadata
+
+The compiler automatically generates a global type metadata table (`__flang__type_table`) containing all instantiated types used in the program. Type literals are resolved to references into this table at compile-time.
+
+#### Available Type Operations
+
+- `size_of(Type($T)) -> usize`: Returns the size in bytes
+- `align_of(Type($T)) -> usize`: Returns the alignment requirement
+- Field access: `t.name`, `t.size`, `t.align` to access metadata directly
 
 ---
 

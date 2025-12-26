@@ -25,6 +25,10 @@ public class AstLowering
     private FunctionDeclarationNode _currentFunctionNode = null!;
     private int _tempCounter;
 
+    // Track type literal indices for the global type table
+    private readonly Dictionary<FType, int> _typeTableIndices = new();
+    private GlobalValue? _typeTableGlobal = null;
+
     private AstLowering(Compilation compilation, TypeSolver typeSolver)
     {
         _compilation = compilation;
@@ -111,6 +115,84 @@ public class AstLowering
         var block = new BasicBlock($"{hint}_{_blockCounter++}");
         _allBlocks.Add(block);
         return block;
+    }
+
+    private static string SanitizeTypeName(string name)
+    {
+        return name.Replace("&", "ref_")
+                   .Replace("[", "_")
+                   .Replace("]", "_")
+                   .Replace("(", "_")
+                   .Replace(")", "_")
+                   .Replace(" ", "")
+                   .Replace(";", "_");
+    }
+
+    private void EnsureTypeTableExists()
+    {
+        if (_typeTableGlobal != null) return;
+
+        // Build the type table from all instantiated types collected by TypeSolver
+        var types = _typeSolver.InstantiatedTypes.OrderBy(t => t.Name).ToList();
+        var typeStructElements = new List<Value>();
+
+        for (int i = 0; i < types.Count; i++)
+        {
+            var type = types[i];
+            _typeTableIndices[type] = i;
+
+            var typeName = type.Name;
+            var nameBytes = System.Text.Encoding.UTF8.GetBytes(typeName + "\0");
+            var nameArray = new ArrayConstantValue(nameBytes, TypeRegistry.U8)
+            {
+                StringRepresentation = typeName
+            };
+            var nameGlobal = new GlobalValue($"__flang__typename_{i}", nameArray);
+            _currentFunction.Globals.Add(nameGlobal);
+
+            var nameString = new StructConstantValue(TypeRegistry.StringStruct, new Dictionary<string, Value>
+            {
+                ["ptr"] = nameGlobal,
+                ["len"] = new ConstantValue(typeName.Length) { Type = TypeRegistry.USize }
+            });
+
+            var typeStruct = new StructConstantValue(TypeRegistry.TypeStructTemplate, new Dictionary<string, Value>
+            {
+                ["name"] = nameString,
+                ["size"] = new ConstantValue(type.Size) { Type = TypeRegistry.U8 },
+                ["align"] = new ConstantValue(type.Alignment) { Type = TypeRegistry.U8 }
+            });
+
+            typeStructElements.Add(typeStruct);
+        }
+
+        // Create the global type table array
+        var arrayType = new ArrayType(TypeRegistry.TypeStructTemplate, types.Count);
+        var typeTableArray = new ArrayConstantValue(arrayType, typeStructElements.ToArray());
+        _typeTableGlobal = new GlobalValue("__flang__type_table", typeTableArray);
+        _currentFunction.Globals.Add(_typeTableGlobal);
+    }
+
+    private Value GetTypeLiteralValue(FType referencedType, StructType typeStructType)
+    {
+        EnsureTypeTableExists();
+
+        // Get the index for this type in the table
+        if (!_typeTableIndices.TryGetValue(referencedType, out var index))
+        {
+            throw new InvalidOperationException($"Type {referencedType.Name} was not collected during type checking");
+        }
+
+        // Calculate byte offset: index * sizeof(struct Type)
+        var typeSize = TypeRegistry.TypeStructTemplate.Size;
+        var byteOffset = new ConstantValue(index * typeSize) { Type = TypeRegistry.USize };
+
+        // Get pointer to the element: &__flang__type_table[index]
+        var elemPtr = new LocalValue($"type_ptr_{_tempCounter++}");
+        elemPtr.Type = new ReferenceType(typeStructType);
+        _currentBlock.Instructions.Add(new GetElementPtrInstruction(_typeTableGlobal, byteOffset, elemPtr));
+
+        return elemPtr;
     }
 
     private void LowerStatement(StatementNode statement)
@@ -385,6 +467,25 @@ public class AstLowering
 
             case IdentifierExpressionNode identifier:
             {
+                var exprType = _typeSolver.GetType(identifier);
+
+                // Check if this is a type literal
+                if (exprType is StructType st && st.StructName == "Type")
+                {
+                    var referencedType = _typeSolver.ResolveTypeName(identifier.Name);
+                    if (referencedType != null)
+                    {
+                        // Load type metadata from global
+                        var typeGlobal = GetTypeLiteralValue(referencedType, st);
+
+                        // Load the struct value
+                        var loaded = new LocalValue($"type_load_{_tempCounter++}");
+                        loaded.Type = st;
+                        _currentBlock.Instructions.Add(new LoadInstruction(typeGlobal, loaded));
+                        return loaded;
+                    }
+                }
+
                 if (_locals.TryGetValue(identifier.Name, out var localValue))
                 {
                     // Parameters are passed by value (even if they're pointers), so use them directly
@@ -501,55 +602,8 @@ public class AstLowering
                 return new ConstantValue(0);
 
             case CallExpressionNode call:
-                // Handle compiler intrinsics (size_of, align_of)
-                if (call.FunctionName == "size_of" || call.FunctionName == "align_of")
-                {
-                    if (call.Arguments.Count != 1)
-                    {
-                        _diagnostics.Add(Diagnostic.Error(
-                            $"`{call.FunctionName}` requires exactly one type argument",
-                            call.Span,
-                            $"usage: {call.FunctionName}(TypeName)",
-                            "E2014"
-                        ));
-                        return new ConstantValue(0);
-                    }
-
-                    // For now, we expect the argument to be an identifier (type name)
-                    // TODO M11: Full Type[$T] support for generic type parameters
-                    if (call.Arguments[0] is not IdentifierExpressionNode typeIdent)
-                    {
-                        _diagnostics.Add(Diagnostic.Error(
-                            $"`{call.FunctionName}` argument must be a type name",
-                            call.Arguments[0].Span,
-                            "pass a type name like `i32` or `Point`",
-                            "E2015"
-                        ));
-                        return new ConstantValue(0);
-                    }
-
-                    // Resolve the type
-                    var type = _typeSolver.ResolveTypeName(typeIdent.Name);
-                    if (type == null)
-                    {
-                        _diagnostics.Add(Diagnostic.Error(
-                            $"unknown type `{typeIdent.Name}`",
-                            typeIdent.Span,
-                            "type must be defined before use",
-                            "E2016"
-                        ));
-                        return new ConstantValue(0);
-                    }
-
-                    // Compute the constant value at compile time
-                    var value = call.FunctionName == "size_of"
-                        ? type.Size
-                        : type.Alignment;
-
-
-                    // Return constant value (no FIR instruction generated)
-                    return new ConstantValue(value);
-                }
+                // size_of and align_of are now regular library functions defined in core.intrinsics
+                // They accept Type($T) parameters and access struct fields directly
 
                 // Regular function call
                 var resolved = _typeSolver.GetResolvedCall(_currentFunctionNode, call);

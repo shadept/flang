@@ -12,7 +12,6 @@ pub struct List(T) {
 }
 
 pub fn list_new() List($T) {
-    __flang_unimplemented()
     let zero: usize = 0
     return .{ ptr = zero as &T, len = 0, cap = 0 }
 }

@@ -88,6 +88,7 @@ public class CCodeGenerator
         foreach (var structType in _structDefinitions.OrderBy(kvp => kvp.Key).Select(kvp => kvp.Value))
         {
             if (structType.StructName == "String") continue;
+            if (structType.StructName == "Type") continue;
             EmitStructDefinition(structType);
         }
     }
@@ -163,13 +164,62 @@ public class CCodeGenerator
             arrayConst3.Elements != null && arrayConst3.Type is ArrayType arrType)
         {
             var elemType = TypeToCType(arrType.ElementType);
-            var elements = string.Join(", ", arrayConst3.Elements.Select(e =>
+
+            // Handle array of structs (like the type table)
+            if (arrType.ElementType is StructType)
+            {
+                var elements = string.Join(",\n    ", arrayConst3.Elements.Select(e =>
+                {
+                    if (e is StructConstantValue scv)
+                    {
+                        // Emit struct initializer
+                        var fields = scv.FieldValues.Select(kvp =>
+                        {
+                            var value = kvp.Value switch
+                            {
+                                ConstantValue cv => cv.IntValue.ToString(),
+                                GlobalValue gv => $"&{gv.Name}",
+                                StructConstantValue nested => EmitStructConstantInline(nested),
+                                _ => throw new InvalidOperationException($"Unsupported field value type: {kvp.Value}")
+                            };
+                            return $".{kvp.Key} = {value}";
+                        });
+                        return $"{{ {string.Join(", ", fields)} }}";
+                    }
+                    throw new InvalidOperationException($"Expected StructConstantValue in struct array: {e}");
+                }));
+                _output.AppendLine($"static const {elemType} {global.Name}[{arrType.Length}] = {{");
+                _output.AppendLine($"    {elements}");
+                _output.AppendLine("};");
+                return;
+            }
+
+            // Handle array of primitives
+            var primitiveElements = string.Join(", ", arrayConst3.Elements.Select(e =>
             {
                 if (e is ConstantValue cv) return cv.IntValue.ToString();
                 throw new InvalidOperationException($"Non-constant value in array literal: {e}");
             }));
-            _output.AppendLine($"static const {elemType} {global.Name}[{arrType.Length}] = {{{elements}}};");
+            _output.AppendLine($"static const {elemType} {global.Name}[{arrType.Length}] = {{{primitiveElements}}};");
         }
+    }
+
+    private string EmitStructConstantInline(StructConstantValue scv)
+    {
+        var fields = scv.FieldValues.Select(kvp =>
+        {
+            var value = kvp.Value switch
+            {
+                ConstantValue cv => cv.IntValue.ToString(),
+                GlobalValue gv when gv.Initializer is ArrayConstantValue arrayConst && arrayConst.StringRepresentation != null
+                    => $"(const uint8_t*)\"{EscapeStringForC(arrayConst.StringRepresentation)}\"",
+                GlobalValue gv => gv.Name,
+                StructConstantValue nested => EmitStructConstantInline(nested),
+                _ => throw new InvalidOperationException($"Unsupported field value type: {kvp.Value}")
+            };
+            return $".{kvp.Key} = {value}";
+        });
+        return $"{{ {string.Join(", ", fields)} }}";
     }
 
     #region Phase 1: Analysis
@@ -257,6 +307,14 @@ public class CCodeGenerator
 
         switch (type)
         {
+            case StructType st when st.StructName == "String":
+                // String struct is emitted in headers, don't collect
+                return;
+
+            case StructType st when st.StructName == "Type":
+                // Type struct is emitted in headers, don't collect
+                return;
+
             case StructType st:
             {
                 var cName = GetStructCName(st);
@@ -288,7 +346,7 @@ public class CCodeGenerator
                 break;
         }
     }
-    
+
     #endregion
 
     #region Phase 2: Emit Headers and Declarations
@@ -304,8 +362,15 @@ public class CCodeGenerator
         _output.AppendLine("#include <stdlib.h>");
         _output.AppendLine();
         _output.AppendLine("struct String {");
-        _output.AppendLine("    uint8_t* ptr;");
+        _output.AppendLine("    const uint8_t* ptr;");
         _output.AppendLine("    uintptr_t len;");
+        _output.AppendLine("};");
+        _output.AppendLine();
+        _output.AppendLine("// Runtime type information");
+        _output.AppendLine("struct Type {");
+        _output.AppendLine("    struct String name;");
+        _output.AppendLine("    uint8_t size;");
+        _output.AppendLine("    uint8_t align;");
         _output.AppendLine("};");
         _output.AppendLine();
         _output.AppendLine("static void __flang_unimplemented(void) {");
@@ -795,6 +860,10 @@ public class CCodeGenerator
         // Handle builtin String type
         if (structType.StructName == "String")
             return "String";
+
+        // Handle builtin Type(T) - all instantiations use the same C struct
+        if (structType.StructName == "Type")
+            return "Type";
 
         // For generic structs, mangle type parameters into name
         if (structType.TypeParameters.Count > 0)
