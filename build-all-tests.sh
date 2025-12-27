@@ -13,7 +13,7 @@ REPO_ROOT="$SCRIPT_DIR"
 cd "$REPO_ROOT"
 
 SHOW_PROGRESS=0
-RID="osx-x64"
+RID="osx-x64"  # TODO detect current platform
 FILTER=""
 
 IS_WINDOWS=0
