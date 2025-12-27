@@ -1,6 +1,5 @@
 using FLang.Core;
 using FLang.Semantics;
-using Core = FLang.Core;
 
 namespace FLang.Tests;
 
@@ -621,7 +620,7 @@ public class TypeSolverCoreTests
         // Arrange
         var solver = new TypeSolverCore();
         var arrayType = new ArrayType(TypeRegistry.U8, 20);
-        var refArrayType = new ReferenceType(arrayType);
+        var refArrayType = new ReferenceType(arrayType, PointerWidth.Bits64);
         var sliceType = TypeRegistry.MakeSlice(TypeRegistry.U8);
 
         // Act

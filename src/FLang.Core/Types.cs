@@ -1,9 +1,4 @@
-using System.Linq;
 using System.Runtime.CompilerServices;
-
-// Compatibility aliases for gradual migration
-using FType = FLang.Core.TypeBase;
-using ComptimeIntType = FLang.Core.ComptimeInt;
 
 namespace FLang.Core;
 
@@ -211,9 +206,9 @@ public class PrimitiveType : TypeBase
 /// </summary>
 public class ComptimeInt : TypeBase
 {
-    private ComptimeInt() { }
-
     public static readonly ComptimeInt Instance = new();
+
+    private ComptimeInt() { }
 
     public override string Name => "comptime_int";
 
@@ -234,23 +229,25 @@ public class ComptimeInt : TypeBase
 /// <summary>
 /// Represents compile-time float type that must be resolved during type inference.
 /// </summary>
-public class ComptimeFloatType : TypeBase
+public class ComptimeFloat : TypeBase
 {
-    public static readonly ComptimeFloatType Instance = new();
+    public static readonly ComptimeFloat Instance = new();
 
-    private ComptimeFloatType()
-    {
-    }
+    private ComptimeFloat() { }
 
     public override string Name => "comptime_float";
 
-    public override int Size => 8; // Assume f64
+    public override int Size =>
+        throw new InvalidOperationException("Cannot get size of comptime_float (not a concrete type)");
 
-    public override int Alignment => 8;
+    public override int Alignment =>
+        throw new InvalidOperationException("Cannot get alignment of comptime_float (not a concrete type)");
+
+    public override bool IsConcrete => false;
 
     public override bool Equals(TypeBase other)
     {
-        return other is ComptimeFloatType;
+        return other is ComptimeFloat;
     }
 }
 
@@ -259,20 +256,20 @@ public class ComptimeFloatType : TypeBase
 /// </summary>
 public class ReferenceType : TypeBase
 {
-    private const int PointerSize = 8; // 64-bit pointer
-
-    public ReferenceType(TypeBase innerType)
+    public ReferenceType(TypeBase innerType, PointerWidth pointerWidth = PointerWidth.Bits64)
     {
         InnerType = innerType;
+        PointerWidth = pointerWidth;
     }
 
     public TypeBase InnerType { get; }
+    public PointerWidth PointerWidth { get; }
 
     public override string Name => $"&{InnerType}";
 
-    public override int Size => PointerSize;
+    public override int Size => PointerWidth == PointerWidth.Bits64 ? 8 : 4;
 
-    public override int Alignment => PointerSize;
+    public override int Alignment => PointerWidth == PointerWidth.Bits64 ? 8 : 4;
 
     public override bool IsConcrete => InnerType.IsConcrete;
 
@@ -334,7 +331,7 @@ public sealed class NullType : TypeBase
 }
 
 /// <summary>
-/// Represents a generic type like List[T], Dict[K, V].
+/// Represents a generic type like List(T), Dict(K, V).
 /// </summary>
 public class GenericType : TypeBase
 {
@@ -538,7 +535,7 @@ public class StructType : TypeBase
         if (TypeArguments.Count > 0)
         {
             var typeArgs = string.Join(", ", TypeArguments.Select(t => t.ToString()));
-            return $"{StructName}<{typeArgs}>";
+            return $"{StructName}({typeArgs})";
         }
         if (TypeParameters.Count > 0)
         {
@@ -575,6 +572,7 @@ public static class StructTypeExtensions
 {
     public static StructType WithFields(this StructType structType, List<(string Name, TypeBase Type)> fields)
     {
+        // TODO make this part of a StructTypeBuilder
         structType.Fields.Clear();
         structType.Fields.AddRange(fields);
         // Invalidate cached layout
@@ -733,11 +731,11 @@ public static class TypeRegistry
 
     // Compile-time types
     public static readonly ComptimeInt ComptimeInt = ComptimeInt.Instance;
-    public static readonly ComptimeFloatType ComptimeFloat = ComptimeFloatType.Instance;
+    public static readonly ComptimeFloat ComptimeFloat = ComptimeFloat.Instance;
 
     // Canonical struct representation for String (binary layout: ptr + len)
     public static readonly StructType StringStruct = new("String", [], [
-        ("ptr", new ReferenceType(U8)),
+        ("ptr", new ReferenceType(U8, PointerWidth.Bits64)),
         ("len", USize)
     ]);
 
@@ -796,7 +794,7 @@ public static class TypeRegistry
     /// </summary>
     public static bool IsNumericType(TypeBase type)
     {
-        return IsIntegerType(type) || type is ComptimeFloatType;
+        return IsIntegerType(type) || type is ComptimeFloat;
     }
 
     /// <summary>
@@ -804,7 +802,7 @@ public static class TypeRegistry
     /// </summary>
     public static bool IsComptimeType(TypeBase type)
     {
-        return type is ComptimeInt || type is ComptimeFloatType;
+        return type is ComptimeInt || type is ComptimeFloat;
     }
 
     /// <summary>
@@ -816,9 +814,9 @@ public static class TypeRegistry
         if (_sliceStructCache.TryGetValue(elementType, out var cached))
             return cached;
 
-        // Create Slice[$T] struct with ptr and len fields (legacy format)
-        var sliceStruct = new StructType("Slice", [elementType.Name], [
-            ("ptr", new ReferenceType(elementType)),
+        // Create Slice<T> struct with ptr and len fields
+        var sliceStruct = new StructType("Slice", [elementType], [
+            ("ptr", new ReferenceType(elementType, PointerWidth.Bits64)),
             ("len", USize)
         ]);
 
@@ -834,7 +832,7 @@ public static class TypeRegistry
         if (_optionStructCache.TryGetValue(innerType, out var cached))
             return cached;
 
-        var optionStruct = new StructType("Option", [innerType.Name], [
+        var optionStruct = new StructType("Option", [innerType], [
             ("has_value", Bool),
             ("value", innerType)
         ]);
@@ -852,7 +850,7 @@ public static class TypeRegistry
         if (_typeStructCache.TryGetValue(innerType, out var cached))
             return cached;
 
-        var typeStruct = new StructType("Type", [innerType.Name], [
+        var typeStruct = new StructType("Type", [innerType], [
             ("name", StringStruct),
             ("size", U8),
             ("align", U8)
@@ -893,14 +891,13 @@ public static class TypeRegistry
         if (_sliceStructCache.TryGetValue(key, out var cached))
             return cached;
 
-        var sliceType = new StructType(SliceFqn, new List<TypeBase> { elementType });
+        var sliceType = new StructType(SliceFqn, [elementType]);
 
         // Add fields: ptr: &T, len: usize
-        sliceType.WithFields(new List<(string, TypeBase)>
-        {
-            ("ptr", new ReferenceType(elementType)),
+        sliceType.WithFields([
+            ("ptr", new ReferenceType(elementType, PointerWidth.Bits64)),
             ("len", USize)
-        });
+        ]);
 
         _sliceStructCache[key] = sliceType;
         return sliceType;
@@ -941,73 +938,4 @@ public static class TypeRegistry
         return st.StructName == StringFqn || st.StructName == "String";
     }
 
-    /// <summary>
-    /// Converts a FLang type to its C equivalent.
-    /// </summary>
-    public static string ToCType(TypeBase type)
-    {
-        if (type is PrimitiveType pt)
-            return pt.Name switch
-            {
-                "bool" => "int",
-                "i8" => "signed char",
-                "i16" => "short",
-                "i32" => "int",
-                "i64" => "long long",
-                "u8" => "unsigned char",
-                "u16" => "unsigned short",
-                "u32" => "unsigned int",
-                "u64" => "unsigned long long",
-                "isize" => "intptr_t",
-                "usize" => "uintptr_t",
-                _ => throw new Exception($"Unsupported primitive type: {pt.Name}")
-            };
-
-        // Handle reference types: &T becomes T*
-        if (type is ReferenceType refType) return ToCType(refType.InnerType) + "*";
-
-        // Handle optional types: T?
-        if (type is OptionType optType)
-            return ToCType(GetOptionStruct(optType.InnerType));
-
-        // Handle struct types: use struct name
-        if (type is StructType structType)
-        {
-            // Generic structs: include type parameters in C name
-            if (structType.TypeParameters.Count > 0)
-            {
-                var paramSuffix = string.Join("_", structType.TypeParameters.Select(p => p.Replace("*", "Ptr").Replace(" ", "_")));
-                return $"struct {structType.StructName}_{paramSuffix}";
-            }
-
-            // New-style type arguments
-            if (structType.TypeArguments.Count > 0)
-            {
-                var argSuffix = string.Join("_", structType.TypeArguments.Select(a => a.ToString().Replace("*", "Ptr").Replace(" ", "_").Replace("<", "_").Replace(">", "_")));
-                return $"struct {structType.StructName}_{argSuffix}";
-            }
-
-            return $"struct {structType.StructName}";
-        }
-
-        // Handle array types: same struct representation as slices
-        if (type is ArrayType arrayType)
-        {
-            if (arrayType.ElementType.Equals(U8))
-                return "struct String";
-
-            return $"struct Slice_{ToCType(arrayType.ElementType).Replace(" ", "_").Replace("*", "Ptr")}";
-        }
-
-        // Handle slice types: struct with ptr and len
-        if (type is SliceType sliceType)
-        {
-            if (sliceType.ElementType.Equals(U8))
-                return "struct String";
-
-            return $"struct Slice_{ToCType(sliceType.ElementType).Replace(" ", "_").Replace("*", "Ptr")}";
-        }
-
-        throw new Exception($"Unsupported type: {type.Name}");
-    }
 }

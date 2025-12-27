@@ -866,12 +866,12 @@ public class CCodeGenerator
         if (structType.StructName == "Type")
             return "Type";
 
-        // For generic structs, mangle type parameters into name
-        if (structType.TypeParameters.Count > 0)
+        // For generic structs, mangle type arguments into name
+        if (structType.TypeArguments.Count > 0)
         {
-            var typeParams = string.Join("_", structType.TypeParameters.Select(p =>
-                p.Replace("*", "Ptr").Replace(" ", "_").Replace("[", "").Replace("]", "")));
-            return $"{structType.StructName}_{typeParams}";
+            var typeArgs = string.Join("_", structType.TypeArguments.Select(t =>
+                t.Name.Replace("*", "Ptr").Replace(" ", "_").Replace("[", "").Replace("]", "").Replace("<", "_").Replace(">", "_")));
+            return $"{structType.StructName}_{typeArgs}";
         }
 
         return structType.StructName;

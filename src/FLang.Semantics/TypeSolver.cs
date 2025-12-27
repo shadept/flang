@@ -1,12 +1,12 @@
 using FLang.Core;
-using FType = FLang.Core.TypeBase;
-using ComptimeIntType = FLang.Core.ComptimeInt;
 using FLang.Frontend.Ast;
 using FLang.Frontend.Ast.Declarations;
 using FLang.Frontend.Ast.Expressions;
 using FLang.Frontend.Ast.Statements;
 using FLang.Frontend.Ast.Types;
 using Microsoft.Extensions.Logging;
+using ComptimeIntType = FLang.Core.ComptimeInt;
+using FType = FLang.Core.TypeBase;
 
 namespace FLang.Semantics;
 
@@ -215,7 +215,12 @@ public class TypeSolver
                 fields.Add((field.Name, ft));
             }
 
-            var stype = new StructType(structDecl.Name, structDecl.TypeParameters, fields);
+            // Convert string type parameters to GenericParameterType instances
+            var typeArgs = new List<TypeBase>();
+            foreach (var param in structDecl.TypeParameters)
+                typeArgs.Add(new GenericParameterType(param));
+
+            var stype = new StructType(structDecl.Name, typeArgs, fields);
             _structs[structDecl.Name] = stype;
         }
     }
@@ -1164,8 +1169,8 @@ public class TypeSolver
         bool IsU8Slice(FType t) =>
             (t is SliceType st && st.ElementType.Equals(TypeRegistry.U8)) ||
             (t is StructType strt && strt.StructName == "String") ||
-            (t is StructType strt2 && strt2.StructName == "Slice" && strt2.TypeParameters.Count > 0 &&
-             strt2.TypeParameters[0] == "u8");
+            (t is StructType strt2 && strt2.StructName == "Slice" && strt2.TypeArguments.Count > 0 &&
+             strt2.TypeArguments[0].Equals(TypeRegistry.U8));
 
         if (source is StructType ss && ss.StructName == "String" && IsU8Slice(target)) return true;
         if (target is StructType ts && ts.StructName == "String" && IsU8Slice(source)) return true;
@@ -1206,8 +1211,8 @@ public class TypeSolver
         {
             if (t is StructType st && st.StructName == "Slice")
             {
-                // Type parameters are represented as strings (e.g., "u8")
-                return st.TypeParameters.Count > 0 && st.TypeParameters[0] == elemName;
+                // Check if element type matches by name
+                return st.TypeArguments.Count > 0 && st.TypeArguments[0].Name == elemName;
             }
 
             return false;
@@ -1240,8 +1245,8 @@ public class TypeSolver
         bool IsU8Slice(FType t)
         {
             if (t is SliceType st && st.ElementType.Equals(TypeRegistry.U8)) return true;
-            if (t is StructType sst && sst.StructName == "Slice" && sst.TypeParameters.Count > 0 &&
-                sst.TypeParameters[0] == "u8")
+            if (t is StructType sst && sst.StructName == "Slice" && sst.TypeArguments.Count > 0 &&
+                sst.TypeArguments[0].Equals(TypeRegistry.U8))
                 return true;
             return false;
         }
@@ -1404,10 +1409,10 @@ public class TypeSolver
 
     private StructType InstantiateStruct(StructType template, IReadOnlyList<FType> typeArgs, SourceSpan span)
     {
-        if (template.TypeParameters.Count != typeArgs.Count)
+        if (template.TypeArguments.Count != typeArgs.Count)
         {
             _diagnostics.Add(Diagnostic.Error(
-                $"struct `{template.StructName}` expects {template.TypeParameters.Count} type parameter(s)",
+                $"struct `{template.StructName}` expects {template.TypeArguments.Count} type parameter(s)",
                 span,
                 $"provided {typeArgs.Count}",
                 "E2006"));
@@ -1418,9 +1423,13 @@ public class TypeSolver
         if (_structSpecializations.TryGetValue(key, out var cached))
             return cached;
 
+        // Build bindings from GenericParameterType names to concrete types
         var bindings = new Dictionary<string, FType>();
-        for (var i = 0; i < template.TypeParameters.Count; i++)
-            bindings[template.TypeParameters[i]] = typeArgs[i];
+        for (var i = 0; i < template.TypeArguments.Count; i++)
+        {
+            if (template.TypeArguments[i] is GenericParameterType gp)
+                bindings[gp.ParamName] = typeArgs[i];
+        }
 
         var specializedFields = new List<(string Name, FType Type)>();
         foreach (var (fieldName, fieldType) in template.Fields)
@@ -1429,8 +1438,8 @@ public class TypeSolver
             specializedFields.Add((fieldName, specializedType));
         }
 
-        var paramNames = typeArgs.Select(t => t.Name).ToList();
-        var specialized = new StructType(template.StructName, paramNames, specializedFields);
+        // Create specialized struct with concrete type arguments
+        var specialized = new StructType(template.StructName, typeArgs.ToList(), specializedFields);
         _structSpecializations[key] = specialized;
         return specialized;
     }
@@ -1514,7 +1523,7 @@ public class TypeSolver
         if (source is ComptimeIntType && TypeRegistry.IsIntegerType(target)) return true;
         if (target is ComptimeIntType && TypeRegistry.IsIntegerType(source)) return true;
         if (source is ComptimeIntType && target is ComptimeIntType) return true;
-        if (source is ComptimeFloatType || target is ComptimeFloatType) return true; // placeholder
+        if (source is ComptimeFloat || target is ComptimeFloat) return true; // placeholder
         if (TypeRegistry.IsIntegerType(source) && TypeRegistry.IsIntegerType(target)) return true;
 
         // Array -> slice view compatibility (by value or reference)
@@ -1589,20 +1598,16 @@ public class TypeSolver
 
     private void RefineStructBindings(StructType template, StructType expected, Dictionary<string, FType> bindings)
     {
-        // First, match type parameters
-        // e.g., matching Type(i32) with Type($T) should bind $T to i32
-        if (template.TypeParameters.Count == expected.TypeParameters.Count)
+        // First, match type arguments
+        // e.g., matching Type<i32> with Type<$T> should bind $T to i32
+        if (template.TypeArguments.Count == expected.TypeArguments.Count)
         {
-            for (int i = 0; i < template.TypeParameters.Count; i++)
+            for (int i = 0; i < template.TypeArguments.Count; i++)
             {
-                var templateParam = template.TypeParameters[i];
-                var expectedParam = expected.TypeParameters[i];
-
-                // Bind the type variable to the expected type
-                var expectedType = ResolveTypeName(expectedParam);
-                if (expectedType != null)
+                // If template has a generic parameter, bind it to the expected concrete type
+                if (template.TypeArguments[i] is GenericParameterType gp)
                 {
-                    bindings[templateParam] = expectedType;
+                    bindings[gp.ParamName] = expected.TypeArguments[i];
                 }
             }
         }
@@ -1759,7 +1764,7 @@ public class TypeSolver
         ArrayType at => ContainsGeneric(at.ElementType),
         SliceType st => ContainsGeneric(st.ElementType),
         GenericType gt => gt.TypeArguments.Any(ContainsGeneric),
-        StructType strct => strct.TypeParameters.Count > 0,
+        StructType strct => strct.TypeArguments.Any(ContainsGeneric),
         _ => false
     };
 
@@ -1926,56 +1931,44 @@ public class TypeSolver
                 return true;
             case StructType ps when arg is StructType @as && ps.StructName == @as.StructName:
                 {
-                    // First, match type parameters
-                    // e.g., matching Type($T) with Type(i32) should bind $T to i32
-                    if (ps.TypeParameters.Count == @as.TypeParameters.Count)
+                    // First, match type arguments
+                    // e.g., matching Type<$T> with Type<i32> should bind $T to i32
+                    if (ps.TypeArguments.Count == @as.TypeArguments.Count)
                     {
-                        for (var i = 0; i < ps.TypeParameters.Count; i++)
+                        for (var i = 0; i < ps.TypeArguments.Count; i++)
                         {
-                            var paramTypeName = ps.TypeParameters[i];
-                            var argTypeName = @as.TypeParameters[i];
+                            var paramType = ps.TypeArguments[i];
+                            var argType = @as.TypeArguments[i];
 
-                            _logger.LogDebug("{Indent}Struct type param[{Index}]: '{ParamTypeName}' vs '{ArgTypeName}'",
-                                Indent(), i, paramTypeName, argTypeName);
+                            _logger.LogDebug("{Indent}Struct type arg[{Index}]: '{ParamType}' vs '{ArgType}'",
+                                Indent(), i, paramType.Name, argType.Name);
 
-                            // Check if param type is a concrete type or a type variable
-                            // Type variables are NOT concrete types in the registry
-                            var paramAsConcreteType = TypeRegistry.GetTypeByName(paramTypeName);
-
-                            if (paramAsConcreteType == null)
+                            // If param is a generic parameter type, bind it
+                            if (paramType is GenericParameterType gp)
                             {
-                                var varName = paramTypeName;
-                                var argType = ResolveTypeName(argTypeName);
-                                if (argType != null)
+                                var varName = gp.ParamName;
+                                _logger.LogDebug("{Indent}Binding type variable '{VarName}' -> '{ArgType}'", Indent(), varName, argType.Name);
+
+                                if (bindings.TryGetValue(varName, out var existingBinding))
                                 {
-                                    // Bind the type variable (use bare name like "T" for consistency with GenericParameterType bindings)
-                                    _logger.LogDebug("{Indent}Binding type variable '{VarName}' -> '{ArgType}'", Indent(), varName, argType.Name);
-                                    if (bindings.TryGetValue(varName, out var existingBinding))
+                                    if (!existingBinding.Equals(argType))
                                     {
-                                        if (!existingBinding.Equals(argType))
-                                        {
-                                            _logger.LogDebug("{Indent}Conflict: '{VarName}' already bound to '{ExistingType}', cannot rebind to '{NewType}'",
-                                                Indent(), varName, existingBinding.Name, argType.Name);
-                                            conflictParam = varName;
-                                            conflictTypes = (existingBinding, argType);
-                                            return false;
-                                        }
-                                    }
-                                    else
-                                    {
-                                        bindings[varName] = argType;
+                                        _logger.LogDebug("{Indent}Conflict: '{VarName}' already bound to '{ExistingType}', cannot rebind to '{NewType}'",
+                                            Indent(), varName, existingBinding.Name, argType.Name);
+                                        conflictParam = varName;
+                                        conflictTypes = (existingBinding, argType);
+                                        return false;
                                     }
                                 }
                                 else
                                 {
-                                    _logger.LogDebug("{Indent}Failed to resolve type name '{ArgTypeName}'", Indent(), argTypeName);
-                                    return false;
+                                    bindings[varName] = argType;
                                 }
                             }
-                            else if (paramTypeName != argTypeName)
+                            else if (!paramType.Equals(argType))
                             {
-                                // Concrete type parameters must match exactly
-                                _logger.LogDebug("{Indent}Concrete type mismatch: '{ParamTypeName}' != '{ArgTypeName}'", Indent(), paramTypeName, argTypeName);
+                                // Concrete type arguments must match exactly
+                                _logger.LogDebug("{Indent}Concrete type mismatch: '{ParamType}' != '{ArgType}'", Indent(), paramType.Name, argType.Name);
                                 return false;
                             }
                         }
@@ -2080,25 +2073,25 @@ public class TypeSolver
             updatedFields.Add((name, substituted));
         }
 
-        var updatedParameters = new List<string>(structType.TypeParameters.Count);
-        foreach (var param in structType.TypeParameters)
+        // Substitute type arguments
+        var updatedTypeArgs = new List<TypeBase>(structType.TypeArguments.Count);
+        foreach (var typeArg in structType.TypeArguments)
         {
-            if (bindings.TryGetValue(param, out var boundType))
+            if (typeArg is GenericParameterType gp && bindings.TryGetValue(gp.ParamName, out var boundType))
             {
-                var boundName = boundType.Name;
-                if (boundName != param)
-                    changed = true;
-                updatedParameters.Add(boundName);
-                continue;
+                changed = true;
+                updatedTypeArgs.Add(boundType);
             }
-
-            updatedParameters.Add(param);
+            else
+            {
+                updatedTypeArgs.Add(typeArg);
+            }
         }
 
         if (!changed)
             return structType;
 
-        return new StructType(structType.StructName, updatedParameters, updatedFields);
+        return new StructType(structType.StructName, updatedTypeArgs, updatedFields);
     }
 
     private void EnsureSpecialization(FunctionEntry genericEntry, Dictionary<string, FType> bindings,
@@ -2144,10 +2137,10 @@ public class TypeSolver
     private static TypeNode CreateTypeNodeFromFType(SourceSpan span, FType t) => t switch
     {
         PrimitiveType pt => new NamedTypeNode(span, pt.Name),
-        StructType st => st.TypeParameters.Count == 0
+        StructType st => st.TypeArguments.Count == 0
             ? new NamedTypeNode(span, st.StructName)
             : new GenericTypeNode(span, st.StructName,
-                st.TypeParameters.Select(p => new NamedTypeNode(span, p)).ToList()),
+                st.TypeArguments.Select(t => CreateTypeNodeFromFType(span, t)).ToList()),
         ReferenceType rt => new ReferenceTypeNode(span, CreateTypeNodeFromFType(span, rt.InnerType)),
         OptionType ot => new NullableTypeNode(span, CreateTypeNodeFromFType(span, ot.InnerType)),
         ArrayType at => new ArrayTypeNode(span, CreateTypeNodeFromFType(span, at.ElementType), at.Length),

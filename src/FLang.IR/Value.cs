@@ -107,7 +107,7 @@ public class GlobalValue : Value
 
         // Type is a pointer to the initializer's type
         // Example: initializer is [5 x u8] → Type is &[u8; 5]
-        Type = new ReferenceType(initializer.Type!);
+        Type = new ReferenceType(initializer.Type!, PointerWidth.Bits64);
     }
 
     /// <summary>

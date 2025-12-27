@@ -41,11 +41,11 @@ public static class NameMangler
 
     private static string GetStructName(StructType st)
     {
-        // Generic structs: include type parameters
-        if (st.TypeParameters.Count > 0)
+        // Generic structs: include type arguments
+        if (st.TypeArguments.Count > 0)
         {
-            var paramSuffix = string.Join("_", st.TypeParameters.Select(p => p.Replace("*", "Ptr").Replace(" ", "_")));
-            return $"struct_{st.StructName}_{paramSuffix}";
+            var argSuffix = string.Join("_", st.TypeArguments.Select(SanitizeTypeForName));
+            return $"struct_{st.StructName}_{argSuffix}";
         }
 
         return $"struct_{st.StructName}";

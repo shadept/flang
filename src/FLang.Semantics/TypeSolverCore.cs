@@ -1,17 +1,6 @@
-using System;
-using System.Collections.Generic;
 using FLang.Core;
 
 namespace FLang.Semantics;
-
-/// <summary>
-/// Target architecture pointer width for isize/usize coercion rules.
-/// </summary>
-public enum PointerWidth
-{
-    Bits32, // isize=i32, usize=u32
-    Bits64  // isize=i64, usize=u64
-}
 
 public interface ICoercionRule
 {
@@ -25,9 +14,9 @@ public interface ICoercionRule
 public class TypeSolverCore
 {
     public List<ICoercionRule> CoercionRules { get; } = new();
-    private readonly List<Core.Diagnostic> _diagnostics = new();
+    private readonly List<Diagnostic> _diagnostics = new();
 
-    public IReadOnlyList<Core.Diagnostic> Diagnostics => _diagnostics;
+    public IReadOnlyList<Diagnostic> Diagnostics => _diagnostics;
 
     public TypeSolverCore(PointerWidth pointerWidth = PointerWidth.Bits64)
     {
