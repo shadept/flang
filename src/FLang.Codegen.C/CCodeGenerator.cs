@@ -128,8 +128,8 @@ public class CCodeGenerator
     private void EmitGlobals(IEnumerable<Function> functions)
     {
         foreach (var function in functions)
-        foreach (var global in function.Globals)
-            EmitGlobal(global);
+            foreach (var global in function.Globals)
+                EmitGlobal(global);
 
         if (_emittedGlobals.Count > 0)
             _output.AppendLine();
@@ -308,25 +308,33 @@ public class CCodeGenerator
 
         switch (type)
         {
-            case StructType st when st.StructName == "String":
+            case StructType st when TypeRegistry.IsString(st):
                 // String struct is emitted in headers, don't collect
                 return;
 
-            case StructType st when st.StructName == "Type":
+            case StructType st when TypeRegistry.IsType(st):
                 // Type struct is emitted in headers, don't collect
                 return;
 
-            case StructType st:
-            {
-                var cName = GetStructCName(st);
-                if (!_structDefinitions.ContainsKey(cName))
+            case StructType st when TypeRegistry.IsSlice(st):
+                if (st.TypeArguments.Count > 0)
                 {
-                    _structDefinitions[cName] = st;
-                    foreach (var (_, fieldType) in st.Fields)
-                        CollectStructType(fieldType);
+                    _sliceElementTypes.Add(st.TypeArguments[0]);
+                    CollectStructType(st.TypeArguments[0]);
                 }
                 break;
-            }
+
+            case StructType st:
+                {
+                    var cName = GetStructCName(st);
+                    if (!_structDefinitions.ContainsKey(cName))
+                    {
+                        _structDefinitions[cName] = st;
+                        foreach (var (_, fieldType) in st.Fields)
+                            CollectStructType(fieldType);
+                    }
+                    break;
+                }
 
             case ReferenceType rt:
                 CollectStructType(rt.InnerType);
@@ -335,15 +343,6 @@ public class CCodeGenerator
             case ArrayType at:
                 _sliceElementTypes.Add(at.ElementType);
                 CollectStructType(at.ElementType);
-                break;
-
-            case SliceType slt:
-                _sliceElementTypes.Add(slt.ElementType);
-                CollectStructType(slt.ElementType);
-                break;
-
-            case OptionType opt:
-                CollectStructType(TypeRegistry.GetOptionStruct(opt.InnerType));
                 break;
         }
     }
@@ -530,7 +529,7 @@ public class CCodeGenerator
         var valueExpr = ValueToString(store.Value);
 
         // Handle storing dereferenced struct/slice pointers
-        if (store.Value.Type is ReferenceType { InnerType: StructType or SliceType })
+        if (store.Value.Type is ReferenceType { InnerType: StructType })
         {
             var innerType = TypeToCType(((ReferenceType)store.Value.Type).InnerType);
             _output.AppendLine($"    {innerType} {resultName} = *{valueExpr};");
@@ -652,7 +651,7 @@ public class CCodeGenerator
             _output.AppendLine($"    {cTargetType} {resultName} = {{ .ptr = {ptrExpr}, .len = {arrayType!.Length} }};");
         }
         // Check if this is a struct-to-struct reinterpretation cast
-        else if (targetType is StructType or SliceType)
+        else if (targetType is StructType)
         {
             // Reinterpret cast: *(TargetType*)source_ptr
             // If source is a value, we need &source; if it's already a pointer, use it directly
@@ -818,10 +817,6 @@ public class CCodeGenerator
             ReferenceType rt => $"{TypeToCType(rt.InnerType)}*",
 
             StructType st => $"struct {GetStructCName(st)}",
-            OptionType opt => $"struct {GetStructCName(TypeRegistry.GetOptionStruct(opt.InnerType))}",
-
-            SliceType st when st.ElementType.Equals(TypeRegistry.U8) => "struct String",
-            SliceType st => $"struct {GetSliceStructName(st.ElementType)}",
 
             // Arrays are not converted to struct types - they remain as C arrays
             // Array syntax must be handled specially at declaration sites (see alloca handling)

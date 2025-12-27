@@ -236,9 +236,10 @@ public static class FirPrinter
             PrimitiveType { Name: "bool" } => "i1",
             PrimitiveType { Name: "void" } => "void",
             ReferenceType rt => $"ptr.{TypeToString(rt.InnerType).Replace("%", "").Replace(" ", "_")}",
+            StructType st when TypeRegistry.IsSlice(st) && st.TypeArguments.Count > 0 =>
+                $"%slice.{TypeToString(st.TypeArguments[0]).Replace("%", "").Replace(" ", "_")}",
             StructType st => $"%struct.{st.StructName}",
             ArrayType at => $"[{at.Length} x {TypeToString(at.ElementType).Replace("%", "").Replace(" ", "_")}]",
-            SliceType st => $"%slice.{TypeToString(st.ElementType).Replace("%", "").Replace(" ", "_")}",
             _ => type.Name
         };
     }

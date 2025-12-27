@@ -267,9 +267,9 @@ public class ReferenceType : TypeBase
 
     public override string Name => $"&{InnerType}";
 
-    public override int Size => PointerWidth == PointerWidth.Bits64 ? 8 : 4;
+    public override int Size => PointerWidth.Size;
 
-    public override int Alignment => PointerWidth == PointerWidth.Bits64 ? 8 : 4;
+    public override int Alignment => PointerWidth.Size;
 
     public override bool IsConcrete => InnerType.IsConcrete;
 
@@ -282,52 +282,6 @@ public class ReferenceType : TypeBase
     {
         return HashCode.Combine("&", InnerType.GetHashCode());
     }
-}
-
-/// <summary>
-/// Represents an optional type (nullable) like T? or Option(T).
-/// </summary>
-public class OptionType : TypeBase
-{
-    public OptionType(TypeBase innerType)
-    {
-        InnerType = innerType;
-    }
-
-    public TypeBase InnerType { get; }
-
-    public override string Name => $"{InnerType.Name}?";
-
-    public override int Size => InnerType.Size;
-
-    public override int Alignment => InnerType.Alignment;
-
-    public override bool Equals(TypeBase other)
-    {
-        return other is OptionType ot && InnerType.Equals(ot.InnerType);
-    }
-
-    public override int GetHashCode()
-    {
-        return HashCode.Combine(Name, InnerType);
-    }
-}
-
-public sealed class NullType : TypeBase
-{
-    public static readonly NullType Instance = new();
-
-    private NullType() { }
-
-    public override string Name => "null";
-
-    public override bool Equals(TypeBase other) => ReferenceEquals(this, other);
-
-    public override int GetHashCode() => Name.GetHashCode();
-
-    public override int Size => 0;
-
-    public override int Alignment => 1;
 }
 
 /// <summary>
@@ -490,10 +444,8 @@ public class StructType : TypeBase
         GenericParameterType => true,
         TypeVar => true,
         ReferenceType rt => ContainsGeneric(rt.InnerType),
-        OptionType ot => ContainsGeneric(ot.InnerType),
         ArrayType at => ContainsGeneric(at.ElementType),
-        SliceType st => ContainsGeneric(st.ElementType),
-        StructType st => st.Fields.Any(f => ContainsGeneric(f.Type)),
+        StructType st => st.Fields.Any(f => ContainsGeneric(f.Type)) || st.TypeArguments.Any(t => ContainsGeneric(t)),
         GenericType => true,
         _ => false
     };
@@ -618,35 +570,6 @@ public class ArrayType : TypeBase
 }
 
 /// <summary>
-/// Represents a slice type T[] (fat pointer view).
-/// </summary>
-public class SliceType : TypeBase
-{
-    public SliceType(TypeBase elementType)
-    {
-        ElementType = elementType;
-    }
-
-    public TypeBase ElementType { get; }
-
-    public override string Name => $"{ElementType.Name}[]";
-
-    public override bool Equals(TypeBase other)
-    {
-        return other is SliceType st && ElementType.Equals(st.ElementType);
-    }
-
-    public override int GetHashCode()
-    {
-        return HashCode.Combine("slice", ElementType);
-    }
-
-    public override int Size => 16; // ptr (8 bytes) + len (8 bytes) on 64-bit
-
-    public override int Alignment => 8; // Pointer alignment on 64-bit
-}
-
-/// <summary>
 /// Enum type (for tagged unions).
 /// </summary>
 public class EnumType : TypeBase
@@ -750,11 +673,13 @@ public static class TypeRegistry
     private const string OptionFqn = "core.option.Option";
     private const string SliceFqn = "core.slice.Slice";
     private const string StringFqn = "core.string.String";
+    private const string TypeFqn = "core.rtti.Type";
+
 
     // Cache for well-known types to ensure reference equality
-    private static readonly Dictionary<TypeBase, StructType> _sliceStructCache = new();
-    private static readonly Dictionary<TypeBase, StructType> _optionStructCache = new();
-    private static readonly Dictionary<TypeBase, StructType> _typeStructCache = new();
+    private static readonly Dictionary<TypeBase, StructType> _sliceStructCache = [];
+    private static readonly Dictionary<TypeBase, StructType> _optionStructCache = [];
+    private static readonly Dictionary<TypeBase, StructType> _typeStructCache = [];
 
     /// <summary>
     /// Looks up a type by name. Returns null if not found.
@@ -785,8 +710,7 @@ public static class TypeRegistry
     /// </summary>
     public static bool IsIntegerType(TypeBase type)
     {
-        return type is ComptimeInt ||
-               (type is PrimitiveType pt && pt != Bool && pt != Void);
+        return type is ComptimeInt || (type is PrimitiveType pt && pt != Bool && pt != Void);
     }
 
     /// <summary>
@@ -803,42 +727,6 @@ public static class TypeRegistry
     public static bool IsComptimeType(TypeBase type)
     {
         return type is ComptimeInt || type is ComptimeFloat;
-    }
-
-    /// <summary>
-    /// Gets the canonical struct representation for a slice of the given element type.
-    /// Returns a cached instance to ensure reference equality.
-    /// </summary>
-    public static StructType GetSliceStruct(TypeBase elementType)
-    {
-        if (_sliceStructCache.TryGetValue(elementType, out var cached))
-            return cached;
-
-        // Create Slice<T> struct with ptr and len fields
-        var sliceStruct = new StructType("Slice", [elementType], [
-            ("ptr", new ReferenceType(elementType, PointerWidth.Bits64)),
-            ("len", USize)
-        ]);
-
-        _sliceStructCache[elementType] = sliceStruct;
-        return sliceStruct;
-    }
-
-    /// <summary>
-    /// Gets the canonical struct representation for Option&lt;T&gt;.
-    /// </summary>
-    public static StructType GetOptionStruct(TypeBase innerType)
-    {
-        if (_optionStructCache.TryGetValue(innerType, out var cached))
-            return cached;
-
-        var optionStruct = new StructType("Option", [innerType], [
-            ("has_value", Bool),
-            ("value", innerType)
-        ]);
-
-        _optionStructCache[innerType] = optionStruct;
-        return optionStruct;
     }
 
     /// <summary>
@@ -872,11 +760,10 @@ public static class TypeRegistry
         var optionType = new StructType(OptionFqn, new List<TypeBase> { innerType });
 
         // Add fields: has_value: bool, value: T
-        optionType.WithFields(new List<(string, TypeBase)>
-        {
+        optionType.WithFields([
             ("has_value", Bool),
             ("value", innerType)
-        });
+        ]);
 
         _optionStructCache[key] = optionType;
         return optionType;
@@ -912,12 +799,28 @@ public static class TypeRegistry
     }
 
     /// <summary>
+    /// Checks if a TypeBase is Option&lt;T&gt; (convenience overload).
+    /// </summary>
+    public static bool IsOption(TypeBase type)
+    {
+        return type is StructType st && IsOption(st);
+    }
+
+    /// <summary>
     /// Checks if a StructType is Option&lt;T&gt; using fully qualified name.
     /// </summary>
     public static bool IsOption(StructType st)
     {
         // Check fully qualified name first, then short name for compatibility
         return st.StructName == OptionFqn || st.StructName == "Option";
+    }
+
+    /// <summary>
+    /// Checks if a TypeBase is Slice&lt;T&gt; (convenience overload).
+    /// </summary>
+    public static bool IsSlice(TypeBase type)
+    {
+        return type is StructType st && IsSlice(st);
     }
 
     /// <summary>
@@ -930,6 +833,14 @@ public static class TypeRegistry
     }
 
     /// <summary>
+    /// Checks if a TypeBase is String (convenience overload).
+    /// </summary>
+    public static bool IsString(TypeBase type)
+    {
+        return type is StructType st && IsString(st);
+    }
+
+    /// <summary>
     /// Checks if a StructType is String using fully qualified name.
     /// </summary>
     public static bool IsString(StructType st)
@@ -938,4 +849,20 @@ public static class TypeRegistry
         return st.StructName == StringFqn || st.StructName == "String";
     }
 
+    /// <summary>
+    /// Checks if a TypeBase is Type (convenience overload).
+    /// </summary>
+    public static bool IsType(TypeBase type)
+    {
+        return type is StructType st && IsType(st);
+    }
+
+    /// <summary>
+    /// Checks if a StructType is Type using fully qualified name.
+    /// </summary>
+    public static bool IsType(StructType st)
+    {
+        // Check fully qualified name first, then short name for compatibility
+        return st.StructName == TypeFqn || st.StructName == "Type";
+    }
 }

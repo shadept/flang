@@ -23,11 +23,13 @@ public static class NameMangler
         var raw = t switch
         {
             PrimitiveType pt => pt.Name,
+            StructType st when TypeRegistry.IsSlice(st) && st.TypeArguments.Count > 0 =>
+                $"slice_{SanitizeTypeForName(st.TypeArguments[0])}",
+            StructType st when TypeRegistry.IsOption(st) && st.TypeArguments.Count > 0 =>
+                $"opt_{SanitizeTypeForName(st.TypeArguments[0])}",
             StructType st => GetStructName(st),
             ReferenceType rt => $"ref_{SanitizeTypeForName(rt.InnerType)}",
-            OptionType ot => $"opt_{SanitizeTypeForName(ot.InnerType)}",
             ArrayType at => $"arr{at.Length}_{SanitizeTypeForName(at.ElementType)}",
-            SliceType sl => $"slice_{SanitizeTypeForName(sl.ElementType)}",
             GenericType gt => $"{gt.BaseName}_{string.Join("_", gt.TypeArguments.Select(SanitizeTypeForName))}",
             GenericParameterType gp => $"gp_{gp.ParamName}",
             _ => t.Name
