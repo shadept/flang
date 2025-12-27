@@ -393,8 +393,16 @@ public class AstLowering
     private Value LowerExpression(ExpressionNode expression)
     {
         var value = LowerExpressionCore(expression);
-        var optionLift = _typeSolver.GetOptionLift(expression);
-        return optionLift != null ? LowerLiftToOption(value, optionLift) : value;
+        var finalType = _typeSolver.GetType(expression);
+
+        // If final type is Option<T> but value is T, wrap it
+        if (finalType is StructType st && TypeRegistry.IsOption(st) &&
+            st.TypeArguments.Count > 0 && value.Type != null && value.Type.Equals(st.TypeArguments[0]))
+        {
+            return LowerLiftToOption(value, st);
+        }
+
+        return value;
     }
 
     private Value LowerExpressionCore(ExpressionNode expression)
@@ -1010,7 +1018,8 @@ public class AstLowering
         // Lower then branch
         _currentBlock = thenBlock;
         var thenValue = LowerExpression(ifExpr.ThenBranch);
-        var thenResult = new LocalValue($"if_result_then_{_tempCounter++}");
+        // TODO skip next 3 lines if thenbranch is terminal (return, never, etc)
+        var thenResult = new LocalValue($"if_result_then_{_tempCounter++}"); // TODO type
         _currentBlock.Instructions.Add(new StoreInstruction(thenResult.Name, thenValue, thenResult));
         _currentBlock.Instructions.Add(new JumpInstruction(mergeBlock));
 
@@ -1020,7 +1029,7 @@ public class AstLowering
         {
             _currentBlock = elseBlock;
             var elseValue = LowerExpression(ifExpr.ElseBranch);
-            elseResult = new LocalValue($"if_result_else_{_tempCounter++}");
+            elseResult = new LocalValue($"if_result_else_{_tempCounter++}"); // TODO type
             _currentBlock.Instructions.Add(new StoreInstruction(elseResult.Name, elseValue, elseResult));
             _currentBlock.Instructions.Add(new JumpInstruction(mergeBlock));
         }

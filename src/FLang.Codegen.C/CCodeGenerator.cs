@@ -866,10 +866,10 @@ public class CCodeGenerator
         {
             var typeArgs = string.Join("_", structType.TypeArguments.Select(t =>
                 t.Name.Replace("*", "Ptr").Replace(" ", "_").Replace("[", "").Replace("]", "").Replace("<", "_").Replace(">", "_")));
-            return $"{structType.StructName}_{typeArgs}";
+            return $"{structType.StructName.Replace('.', '_')}_{typeArgs}";
         }
 
-        return structType.StructName;
+        return structType.StructName.Replace('.', '_');
     }
 
     private string EscapeStringForC(string value)

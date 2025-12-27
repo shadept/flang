@@ -11,12 +11,12 @@ import core.string
  
  pub fn print(s: String) i32 {
      // printf("%.*s", (int)len, ptr)
-     return printf("%.*s".ptr, s.len, s.ptr)
+     return printf("%.*s".ptr, s.len as i32, s.ptr)
  }
  
  pub fn println(s: String) i32 {
      // printf("%.*s\n", (int)len, ptr)
-     return printf("%.*s\n".ptr, s.len, s.ptr)
+     return printf("%.*s\n".ptr, s.len as i32, s.ptr)
  }
  
  

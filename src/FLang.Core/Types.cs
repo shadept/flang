@@ -333,18 +333,7 @@ public class StructType : TypeBase
 {
     private int? _cachedSize;
     private int? _cachedAlignment;
-    private readonly Dictionary<string, int> _fieldOffsets = new();
-
-    // Legacy constructor (takes string type parameters)
-    public StructType(string structName, IReadOnlyList<string> typeParameters, IReadOnlyList<(string, TypeBase)> fields)
-    {
-        StructName = structName;
-        Name = structName; // Set Name directly for legacy compatibility
-        TypeParameters = typeParameters;
-        TypeArguments = new List<TypeBase>(); // Empty for legacy
-        Fields = fields.ToList();
-        ComputeLayout();
-    }
+    private readonly Dictionary<string, int> _fieldOffsets = [];
 
     // New constructor (takes TypeBase type arguments)
     public StructType(string name, List<TypeBase>? typeArguments = null, List<(string Name, TypeBase Type)>? fields = null)

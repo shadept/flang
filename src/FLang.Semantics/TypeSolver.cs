@@ -25,15 +25,18 @@ public class TypeSolver
         _coercionRules.Add(new OptionWrappingRule());
         _coercionRules.Add(new ArrayToSliceRule());
         _coercionRules.Add(new StringToByteSliceRule());
+        _coercionRules.Add(new SliceToReferenceRule());
     }
+
+    public void ClearDiagnostics() => _diagnostics.Clear();
 
     public TypeBase Unify(TypeBase t1, TypeBase t2, SourceSpan? span = null)
     {
-        var result = UnifyInternal(t1, t2, span);
+        var result = UnifyInternal(t1, t2, span ?? new SourceSpan());
         return result ?? t1; // Return first type on failure (errors recorded)
     }
 
-    private TypeBase? UnifyInternal(TypeBase t1, TypeBase t2, SourceSpan? span)
+    private TypeBase? UnifyInternal(TypeBase t1, TypeBase t2, SourceSpan span)
     {
         var a = t1.Prune();
         var b = t2.Prune();
@@ -59,14 +62,30 @@ public class TypeSolver
         if (a is ComptimeInt && b is PrimitiveType p1 && IsInteger(p1)) return p1;
         if (b is ComptimeInt && a is PrimitiveType p2 && IsInteger(p2)) return p2;
 
-        // 4. Coercion Extension (BEFORE structural checks to allow wrapping/conversions)
-        foreach (var rule in _coercionRules)
+        // 4. Arrays (Recursion) - unify element types
+        if (a is ArrayType arr1 && b is ArrayType arr2)
         {
-            if (rule.TryApply(a, b, this))
-                return b;
+            if (arr1.Length != arr2.Length)
+            {
+                ReportError($"Array length mismatch: expected {arr1.Length}, got {arr2.Length}", span, "E3001");
+                return null;
+            }
+            var unifiedElem = UnifyInternal(arr1.ElementType, arr2.ElementType, span);
+            if (unifiedElem == null)
+                return null;
+            return new ArrayType(unifiedElem, arr1.Length);
         }
 
-        // 5. Structs/Enums (Recursion) - Only if no coercion applied
+        // 5. References (Recursion) - unify inner types
+        if (a is ReferenceType ref1 && b is ReferenceType ref2)
+        {
+            var unifiedInner = UnifyInternal(ref1.InnerType, ref2.InnerType, span);
+            if (unifiedInner == null)
+                return null;
+            return new ReferenceType(unifiedInner, ref1.PointerWidth);
+        }
+
+        // 6. Structs/Enums (Recursion) - Only if no coercion applied
         if (a is StructType s1 && b is StructType s2)
         {
             if (s1.Name != s2.Name)
@@ -88,7 +107,16 @@ public class TypeSolver
             return a;
         }
 
-        // 6. Detailed Failure
+        // 7. Coercion Extension (BEFORE structural checks to allow wrapping/conversions)
+        // TODO either allow coersion rules to compound on each other or suficient to allow converting multiple M(T) -> &T
+        // where M is Array, List, Slice or String
+        foreach (var rule in _coercionRules)
+        {
+            if (rule.TryApply(a, b, this))
+                return b;
+        }
+
+        // 8. Detailed Failure
         var hint = GenerateHint(t1, t2);
         if (IsSkolem(a) || IsSkolem(b))
             ReportError($"Cannot unify rigid generic parameter with concrete type", span, "E3003", hint);
@@ -98,9 +126,9 @@ public class TypeSolver
         return null;
     }
 
-    private void ReportError(string message, SourceSpan? span, string code, string? hint = null)
+    private void ReportError(string message, SourceSpan span, string code, string? hint = null)
     {
-        _diagnostics.Add(Diagnostic.Error(message, span ?? new SourceSpan(0, 0, 0), hint, code));
+        _diagnostics.Add(Diagnostic.Error(message, span, hint, code));
     }
 
     private static bool IsSkolem(TypeBase t) => t is PrimitiveType p && p.Name.StartsWith('$');
@@ -180,11 +208,10 @@ public class IntegerWideningRule : ICoercionRule
 
 public class OptionWrappingRule : ICoercionRule
 {
-    // T -> core.option.Option<T>
+    // T -> core.option.Option(T)
     public bool TryApply(TypeBase from, TypeBase to, TypeSolver solver)
     {
-        if (to is StructType st && TypeRegistry.IsOption(st) &&
-            st.TypeArguments.Count == 1 && from.Equals(st.TypeArguments[0]))
+        if (to is StructType st && TypeRegistry.IsOption(st) && st.TypeArguments.Count == 1 && from.Equals(st.TypeArguments[0]))
             return true;
         return false;
     }
@@ -192,7 +219,7 @@ public class OptionWrappingRule : ICoercionRule
 
 public class ArrayToSliceRule : ICoercionRule
 {
-    // [T; N] -> core.slice.Slice<T>
+    // [T; N] -> core.slice.Slice(T)
     public bool TryApply(TypeBase from, TypeBase to, TypeSolver solver)
     {
         if (to is StructType st && TypeRegistry.IsSlice(st) && st.TypeArguments.Count == 1)
@@ -208,7 +235,7 @@ public class ArrayToSliceRule : ICoercionRule
 
 public class StringToByteSliceRule : ICoercionRule
 {
-    // core.string.String -> core.slice.Slice<u8>
+    // core.string.String -> core.slice.Slice(u8)
     public bool TryApply(TypeBase from, TypeBase to, TypeSolver solver)
     {
         if (from is StructType fs && TypeRegistry.IsString(fs) &&
@@ -217,4 +244,17 @@ public class StringToByteSliceRule : ICoercionRule
             return true;
         return false;
     }
+}
+
+public class SliceToReferenceRule : ICoercionRule
+{
+    // core.slice.Slice(T) -> &T
+    public bool TryApply(TypeBase from, TypeBase to, TypeSolver solver)
+    {
+        if (from is StructType fs && TypeRegistry.IsSlice(fs) &&
+            to is ReferenceType tr && tr.InnerType.Equals(fs.TypeArguments[0]))
+            return true;
+        return false;
+    }
+
 }

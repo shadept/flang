@@ -63,8 +63,7 @@ public class HarnessTests
 
         if (cliProcess.ExitCode != 0)
         {
-            Assert.Fail(
-                $"FLang.CLI compilation failed for {metadata.TestName} with exit code {cliProcess.ExitCode}:\n{compileStderr}");
+            Assert.Fail($"FLang.CLI compilation failed for {metadata.TestName} with exit code {cliProcess.ExitCode}:\n{compileStderr}");
         }
 
         // 3. Run the generated executable
@@ -83,8 +82,7 @@ public class HarnessTests
             }
             else
             {
-                Assert.Fail(
-                    $"FLang.CLI did not produce an executable at {generatedExePath}. CLI Output:\n{compileStdout}\n{compileStderr}");
+                Assert.Fail($"FLang.CLI did not produce an executable at {generatedExePath}. CLI Output:\n{compileStdout}\n{compileStderr}");
             }
         }
 

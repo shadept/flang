@@ -18,6 +18,7 @@ public class TypeChecker
     private readonly ILogger<TypeChecker> _logger;
     private readonly Compilation _compilation;
     private readonly List<Diagnostic> _diagnostics = [];
+    private readonly TypeSolver _unificationEngine;
 
     // Overload-ready function registry
     private readonly Dictionary<string, List<FunctionEntry>> _functions = new();
@@ -32,7 +33,6 @@ public class TypeChecker
 
     // Anonymous struct literal mapping
     private readonly Dictionary<AnonymousStructExpressionNode, StructType> _anonymousStructTypes = new();
-    private readonly Dictionary<ExpressionNode, StructType> _optionLifts = new();
 
     // AST type map
     private readonly Dictionary<AstNode, FType> _typeMap = new();
@@ -103,6 +103,7 @@ public class TypeChecker
     {
         _compilation = compilation;
         _logger = logger;
+        _unificationEngine = new TypeSolver(PointerWidth.Bits64);
         PushScope(); // Global scope
     }
 
@@ -349,7 +350,7 @@ public class TypeChecker
         else if (expectedReturnType != null)
         {
             // Update type map with resolved type to avoid comptime_int escape
-            var unified = UnifyTypes(et, expectedReturnType);
+            var unified = UnifyTypes(et, expectedReturnType, ret.Expression.Span);
             UpdateTypeMapRecursive(ret.Expression, unified);
         }
     }
@@ -371,7 +372,7 @@ public class TypeChecker
             else
             {
                 // Update type map with resolved type to avoid comptime_int escape
-                var unified = UnifyTypes(it, dt);
+                var unified = UnifyTypes(it, dt, v.Initializer!.Span);
                 UpdateTypeMapRecursive(v.Initializer!, unified);
             }
             DeclareVariable(v.Name, dt, v.Span);
@@ -507,7 +508,7 @@ public class TypeChecker
                     "E2002"));
             else
             {
-                var unified = UnifyTypes(lt, rt);
+                var unified = UnifyTypes(lt, rt, be.Span);
                 UpdateTypeMapRecursive(be.Left, unified);
                 UpdateTypeMapRecursive(be.Right, unified);
             }
@@ -526,7 +527,7 @@ public class TypeChecker
             }
             else
             {
-                var unified = UnifyTypes(lt, rt);
+                var unified = UnifyTypes(lt, rt, be.Span);
                 UpdateTypeMapRecursive(be.Left, unified);
                 UpdateTypeMapRecursive(be.Right, unified);
                 return unified;
@@ -547,7 +548,7 @@ public class TypeChecker
         else
         {
             // Update type map with resolved type to avoid comptime_int escape
-            var unified = UnifyTypes(val, vt);
+            var unified = UnifyTypes(val, vt, ae.Value.Span);
             UpdateTypeMapRecursive(ae.Value, unified);
         }
         return vt;
@@ -586,9 +587,8 @@ public class TypeChecker
 
             foreach (var cand in candidates)
             {
-                using var _candScope = new BindingDepthScope(this);
-                _logger.LogDebug("{Indent}Candidate '{Name}': IsGeneric={IsGeneric}, ParamCount={ParamCount}, ArgCount={ArgCount}",
-                    Indent(), cand.Name, cand.IsGeneric, cand.ParameterTypes.Count, argTypes.Count);
+                using var _ = new BindingDepthScope(this);
+                _logger.LogDebug("{Indent}Candidate '{Name}': IsGeneric={IsGeneric}, ParamCount={ParamCount}, ArgCount={ArgCount}", Indent(), cand.Name, cand.IsGeneric, cand.ParameterTypes.Count, argTypes.Count);
                 if (!cand.IsGeneric) continue;
                 if (cand.ParameterTypes.Count != argTypes.Count) continue;
 
@@ -598,9 +598,8 @@ public class TypeChecker
                 for (var i = 0; i < argTypes.Count; i++)
                 {
                     var argType = argTypes[i] ?? throw new NullReferenceException();
-                    using var _paramScope = new BindingDepthScope(this);
-                    _logger.LogDebug("{Indent}Binding param[{Index}] '{ParamName}' with arg '{ArgType}'",
-                        Indent(), i, cand.ParameterTypes[i].Name, argType.Name);
+                    using var __ = new BindingDepthScope(this);
+                    _logger.LogDebug("{Indent}Binding param[{Index}] '{ParamName}' with arg '{ArgType}'", Indent(), i, cand.ParameterTypes[i].Name, argType.Name);
                     if (!TryBindGeneric(cand.ParameterTypes[i], argType, bindings, out var cn, out var ct))
                     {
                         okGen = false;
@@ -672,10 +671,10 @@ public class TypeChecker
             {
                 var type = chosen.ReturnType;
                 if (expectedType != null)
-                    type = UnifyTypes(type, expectedType);
+                    type = UnifyTypes(type, expectedType, call.Span);
                 for (var i = 0; i < call.Arguments.Count; i++)
                 {
-                    var unified = UnifyTypes(argTypes[i], chosen.ParameterTypes[i]);
+                    var unified = UnifyTypes(argTypes[i], chosen.ParameterTypes[i], call.Arguments[i].Span);
                     UpdateTypeMapRecursive(call.Arguments[i], unified);
                 }
                 if (_functionStack.Count > 0)
@@ -687,9 +686,9 @@ public class TypeChecker
             {
                 var bindings = chosenBindings!;
                 if (expectedType != null)
-                    RefineBindingsWithExpectedReturn(chosen.ReturnType, expectedType, bindings);
+                    RefineBindingsWithExpectedReturn(chosen.ReturnType, expectedType, bindings, call.Span);
                 var ret = SubstituteGenerics(chosen.ReturnType, bindings);
-                var type = expectedType != null ? UnifyTypes(ret, expectedType) : ret;
+                var type = expectedType != null ? UnifyTypes(ret, expectedType, call.Span) : ret;
 
                 var concreteParams = new List<FType>();
                 for (var i = 0; i < chosen.ParameterTypes.Count; i++)
@@ -697,7 +696,7 @@ public class TypeChecker
 
                 for (var i = 0; i < call.Arguments.Count; i++)
                 {
-                    var unified = UnifyTypes(argTypes[i], concreteParams[i]);
+                    var unified = UnifyTypes(argTypes[i], concreteParams[i], call.Arguments[i].Span);
                     UpdateTypeMapRecursive(call.Arguments[i], unified);
                 }
 
@@ -786,7 +785,7 @@ public class TypeChecker
                             ie.Span,
                             $"`if` branch: `{tt}`, `else` branch: `{et}`",
                             "E2002"));
-                    type = UnifyTypes(tt, et);
+                    type = UnifyTypes(tt, et, ie.Span);
                     break;
                 }
             case BlockExpressionNode bex:
@@ -949,7 +948,7 @@ public class TypeChecker
                                 "E2002"));
                         else
                         {
-                            var unified = UnifyTypes(valueType, fieldType);
+                            var unified = UnifyTypes(valueType, fieldType, fieldExpr.Span);
                             UpdateTypeMapRecursive(fieldExpr, unified);
                         }
                     }
@@ -1049,7 +1048,7 @@ public class TypeChecker
                                     al.Elements[i].Span,
                                     $"expected `{unified}`, found `{et}`",
                                     "E2002"));
-                            else unified = UnifyTypes(unified, et);
+                            else unified = UnifyTypes(unified, et, al.Elements[i].Span);
                         }
 
                         type = new ArrayType(unified, al.Elements.Count);
@@ -1130,7 +1129,6 @@ public class TypeChecker
                 (type.Equals(expectedOption.TypeArguments[0]) ||
                  (type is ComptimeIntType && TypeRegistry.IsIntegerType(expectedOption.TypeArguments[0]))))
             {
-                _optionLifts[expression] = expectedOption;
                 return expectedOption;
             }
         }
@@ -1142,6 +1140,7 @@ public class TypeChecker
     {
         if (source.Equals(target)) return true;
         if (TypeRegistry.IsIntegerType(source) && TypeRegistry.IsIntegerType(target)) return true;
+        // XXX get rest seems like Unification
         if (source is ReferenceType && target is ReferenceType) return true;
         if (source is StructType opt && TypeRegistry.IsOption(opt) && opt.TypeArguments.Count > 0 && opt.TypeArguments[0] is ReferenceType && target is ReferenceType) return true;
         if (source is ReferenceType &&
@@ -1175,6 +1174,8 @@ public class TypeChecker
     // Intent: collect all special-case coercions in one place so behavior is consistent across the solver.
     private bool CanCoerse(FType source, FType target)
     {
+        // XXX tihs is mostly unification, no?
+
         // Trivial and baseline compatibility
         if (source.Equals(target)) return true;
         if (IsCompatible(source, target)) return true;
@@ -1438,7 +1439,7 @@ public class TypeChecker
             }
             else
             {
-                var unified = UnifyTypes(valueType, fieldType);
+                var unified = UnifyTypes(valueType, fieldType, expr.Span);
                 UpdateTypeMapRecursive(expr, unified);
             }
         }
@@ -1519,33 +1520,26 @@ public class TypeChecker
         return false;
     }
 
-    private FType UnifyTypes(FType a, FType b)
+    private FType UnifyTypes(FType a, FType b, SourceSpan span)
     {
-        if (a.Equals(b)) return a;
+        var result = _unificationEngine.Unify(a, b, span);
 
-        // Primitive comptime_int unification
-        if (a is ComptimeIntType && TypeRegistry.IsIntegerType(b)) return b;
-        if (b is ComptimeIntType && TypeRegistry.IsIntegerType(a)) return a;
+        // Copy diagnostics from unification engine to type checker
+        foreach (var diag in _unificationEngine.Diagnostics)
+            _diagnostics.Add(diag);
 
-        // Array type unification: recursively unify element types
-        if (a is ArrayType aa && b is ArrayType bb && aa.Length == bb.Length)
-        {
-            var unifiedElem = UnifyTypes(aa.ElementType, bb.ElementType);
-            // If element types unified to something different, create new ArrayType
-            if (!unifiedElem.Equals(aa.ElementType))
-                return new ArrayType(unifiedElem, aa.Length);
-            return aa;
-        }
+        // Clear diagnostics in unification engine to avoid duplication
+        _unificationEngine.ClearDiagnostics();
 
-        return a;
+        return result;
     }
 
-    private void RefineBindingsWithExpectedReturn(FType template, FType expected, Dictionary<string, FType> bindings)
+    private void RefineBindingsWithExpectedReturn(FType template, FType expected, Dictionary<string, FType> bindings, SourceSpan span)
     {
         if (template is GenericParameterType gp)
         {
             if (bindings.TryGetValue(gp.ParamName, out var existing))
-                bindings[gp.ParamName] = UnifyTypes(existing, expected);
+                bindings[gp.ParamName] = UnifyTypes(existing, expected, span);
             else
                 bindings[gp.ParamName] = expected;
             return;
@@ -1554,30 +1548,30 @@ public class TypeChecker
         switch (template)
         {
             case ReferenceType rt when expected is ReferenceType expectedRef:
-                RefineBindingsWithExpectedReturn(rt.InnerType, expectedRef.InnerType, bindings);
+                RefineBindingsWithExpectedReturn(rt.InnerType, expectedRef.InnerType, bindings, span);
                 break;
             case ArrayType at when expected is ArrayType expectedArray && at.Length == expectedArray.Length:
-                RefineBindingsWithExpectedReturn(at.ElementType, expectedArray.ElementType, bindings);
+                RefineBindingsWithExpectedReturn(at.ElementType, expectedArray.ElementType, bindings, span);
                 break;
             case StructType st when TypeRegistry.IsSlice(st) &&
                                     expected is StructType expectedSlice &&
                                     TypeRegistry.IsSlice(expectedSlice):
                 if (st.TypeArguments.Count > 0 && expectedSlice.TypeArguments.Count > 0)
-                    RefineBindingsWithExpectedReturn(st.TypeArguments[0], expectedSlice.TypeArguments[0], bindings);
+                    RefineBindingsWithExpectedReturn(st.TypeArguments[0], expectedSlice.TypeArguments[0], bindings, span);
                 break;
             case StructType ot when TypeRegistry.IsOption(ot) &&
                                      expected is StructType expectedOption &&
                                      TypeRegistry.IsOption(expectedOption):
                 if (ot.TypeArguments.Count > 0 && expectedOption.TypeArguments.Count > 0)
-                    RefineBindingsWithExpectedReturn(ot.TypeArguments[0], expectedOption.TypeArguments[0], bindings);
+                    RefineBindingsWithExpectedReturn(ot.TypeArguments[0], expectedOption.TypeArguments[0], bindings, span);
                 break;
             case StructType st when expected is StructType expectedStruct && st.StructName == expectedStruct.StructName:
-                RefineStructBindings(st, expectedStruct, bindings);
+                RefineStructBindings(st, expectedStruct, bindings, span);
                 break;
         }
     }
 
-    private void RefineStructBindings(StructType template, StructType expected, Dictionary<string, FType> bindings)
+    private void RefineStructBindings(StructType template, StructType expected, Dictionary<string, FType> bindings, SourceSpan span)
     {
         // First, match type arguments
         // e.g., matching Type<i32> with Type<$T> should bind $T to i32
@@ -1602,7 +1596,7 @@ public class TypeChecker
         {
             if (!expectedFields.TryGetValue(fieldName, out var expectedFieldType))
                 continue;
-            RefineBindingsWithExpectedReturn(fieldType, expectedFieldType, bindings);
+            RefineBindingsWithExpectedReturn(fieldType, expectedFieldType, bindings, span);
         }
     }
 
@@ -1664,15 +1658,6 @@ public class TypeChecker
         }
         else
         {
-            if (targetType is StructType optionTarget && TypeRegistry.IsOption(optionTarget) && optionTarget.TypeArguments.Count > 0)
-            {
-                if (_typeMap.TryGetValue(expr, out var originalType) && originalType != null)
-                {
-                    if (originalType.Equals(optionTarget.TypeArguments[0]))
-                        _optionLifts[expr] = optionTarget;
-                }
-            }
-
             // Base case: simple expressions (literals, identifiers) just need their own type updated
             _typeMap[expr] = targetType;
         }
@@ -1786,8 +1771,7 @@ public class TypeChecker
         ReferenceType rt => new ReferenceType(SubstituteGenerics(rt.InnerType, bindings)),
         ArrayType at => new ArrayType(SubstituteGenerics(at.ElementType, bindings), at.Length),
         StructType st => SubstituteStructType(st, bindings),
-        GenericType gt => new GenericType(gt.BaseName,
-            gt.TypeArguments.Select(a => SubstituteGenerics(a, bindings)).ToList()),
+        GenericType gt => new GenericType(gt.BaseName, gt.TypeArguments.Select(a => SubstituteGenerics(a, bindings)).ToList()),
         _ => type
     };
 
@@ -1871,50 +1855,38 @@ public class TypeChecker
                 bindings[gp.ParamName] = arg;
                 return true;
             case ReferenceType pr when arg is ReferenceType ar:
-                _logger.LogDebug("{Indent}Recursing into reference types: &{ParamInner} vs &{ArgInner}",
-                    Indent(), pr.InnerType.Name, ar.InnerType.Name);
+                _logger.LogDebug("{Indent}Recursing into reference types: &{ParamInner} vs &{ArgInner}", Indent(), pr.InnerType.Name, ar.InnerType.Name);
                 return TryBindGeneric(pr.InnerType, ar.InnerType, bindings, out conflictParam, out conflictTypes);
-            case StructType po when TypeRegistry.IsOption(po) &&
-                                     arg is StructType ao &&
-                                     TypeRegistry.IsOption(ao):
+            case StructType po when TypeRegistry.IsOption(po) && arg is StructType ao && TypeRegistry.IsOption(ao):
                 if (po.TypeArguments.Count > 0 && ao.TypeArguments.Count > 0)
                 {
-                    _logger.LogDebug("{Indent}Recursing into option types: {ParamInner}? vs {ArgInner}?",
-                        Indent(), po.TypeArguments[0].Name, ao.TypeArguments[0].Name);
+                    _logger.LogDebug("{Indent}Recursing into option types: {ParamInner}? vs {ArgInner}?", Indent(), po.TypeArguments[0].Name, ao.TypeArguments[0].Name);
                     return TryBindGeneric(po.TypeArguments[0], ao.TypeArguments[0], bindings, out conflictParam, out conflictTypes);
                 }
                 return false;
             case ArrayType pa when arg is ArrayType aa:
                 if (pa.Length != aa.Length)
                 {
-                    _logger.LogDebug("{Indent}Array length mismatch: [{ParamLength}]{ParamElem} vs [{ArgLength}]{ArgElem}",
-                        Indent(), pa.Length, pa.ElementType.Name, aa.Length, aa.ElementType.Name);
+                    _logger.LogDebug("{Indent}Array length mismatch: [{ParamLength}]{ParamElem} vs [{ArgLength}]{ArgElem}", Indent(), pa.Length, pa.ElementType.Name, aa.Length, aa.ElementType.Name);
                     return false;
                 }
-                _logger.LogDebug("{Indent}Recursing into array element types: [{Length}]{ParamElem} vs [{Length}]{ArgElem}",
-                    Indent(), pa.Length, pa.ElementType.Name, aa.ElementType.Name);
+                _logger.LogDebug("{Indent}Recursing into array element types: [{Length}]{ParamElem} vs [{Length}]{ArgElem}", Indent(), pa.Length, pa.ElementType.Name, aa.ElementType.Name);
                 return TryBindGeneric(pa.ElementType, aa.ElementType, bindings, out conflictParam, out conflictTypes);
-            case StructType ps when TypeRegistry.IsSlice(ps) &&
-                                    arg is StructType aslice &&
-                                    TypeRegistry.IsSlice(aslice):
+            case StructType ps when TypeRegistry.IsSlice(ps) && arg is StructType aslice && TypeRegistry.IsSlice(aslice):
                 if (ps.TypeArguments.Count > 0 && aslice.TypeArguments.Count > 0)
                 {
-                    _logger.LogDebug("{Indent}Recursing into slice element types: []{ParamElem} vs []{ArgElem}",
-                        Indent(), ps.TypeArguments[0].Name, aslice.TypeArguments[0].Name);
-                    return TryBindGeneric(ps.TypeArguments[0], aslice.TypeArguments[0], bindings, out conflictParam,
-                        out conflictTypes);
+                    _logger.LogDebug("{Indent}Recursing into slice element types: []{ParamElem} vs []{ArgElem}", Indent(), ps.TypeArguments[0].Name, aslice.TypeArguments[0].Name);
+                    return TryBindGeneric(ps.TypeArguments[0], aslice.TypeArguments[0], bindings, out conflictParam, out conflictTypes);
                 }
                 return true;
-            case GenericType pg when arg is GenericType ag && pg.BaseName == ag.BaseName &&
-                                     pg.TypeArguments.Count == ag.TypeArguments.Count:
+            case GenericType pg when arg is GenericType ag && pg.BaseName == ag.BaseName && pg.TypeArguments.Count == ag.TypeArguments.Count:
                 for (var i = 0; i < pg.TypeArguments.Count; i++)
                 {
                     // Recursively match type arguments
                     // This will handle cases like Type($T) matching Type(i32)
-                    _logger.LogDebug("{Indent}Recursing into generic type arg[{Index}]: {ParamArg} vs {ArgArg}",
-                        Indent(), i, pg.TypeArguments[i].Name, ag.TypeArguments[i].Name);
-                    if (!TryBindGeneric(pg.TypeArguments[i], ag.TypeArguments[i], bindings, out conflictParam,
-                            out conflictTypes)) return false;
+                    _logger.LogDebug("{Indent}Recursing into generic type arg[{Index}]: {ParamArg} vs {ArgArg}", Indent(), i, pg.TypeArguments[i].Name, ag.TypeArguments[i].Name);
+                    if (!TryBindGeneric(pg.TypeArguments[i], ag.TypeArguments[i], bindings, out conflictParam, out conflictTypes))
+                        return false;
                 }
 
                 return true;
@@ -1929,8 +1901,7 @@ public class TypeChecker
                             var paramType = ps.TypeArguments[i];
                             var argType = @as.TypeArguments[i];
 
-                            _logger.LogDebug("{Indent}Struct type arg[{Index}]: '{ParamType}' vs '{ArgType}'",
-                                Indent(), i, paramType.Name, argType.Name);
+                            _logger.LogDebug("{Indent}Struct type arg[{Index}]: '{ParamType}' vs '{ArgType}'", Indent(), i, paramType.Name, argType.Name);
 
                             // If param is a generic parameter type, bind it
                             if (paramType is GenericParameterType gp)
@@ -1942,8 +1913,7 @@ public class TypeChecker
                                 {
                                     if (!existingBinding.Equals(argType))
                                     {
-                                        _logger.LogDebug("{Indent}Conflict: '{VarName}' already bound to '{ExistingType}', cannot rebind to '{NewType}'",
-                                            Indent(), varName, existingBinding.Name, argType.Name);
+                                        _logger.LogDebug("{Indent}Conflict: '{VarName}' already bound to '{ExistingType}', cannot rebind to '{NewType}'", Indent(), varName, existingBinding.Name, argType.Name);
                                         conflictParam = varName;
                                         conflictTypes = (existingBinding, argType);
                                         return false;
@@ -2024,31 +1994,6 @@ public class TypeChecker
             default:
                 break;
         }
-    }
-
-    private static List<FType> CollectTypeArgsOrdered(Dictionary<string, FType> bindings,
-        IReadOnlyList<FType> parameterTypes)
-    {
-        var seen = new HashSet<string>();
-        var order = new List<string>();
-        for (var i = 0; i < parameterTypes.Count; i++)
-            CollectGenericParamOrder(parameterTypes[i], seen, order);
-
-        var result = new List<FType>();
-        for (var i = 0; i < order.Count; i++)
-        {
-            var name = order[i];
-            if (bindings.TryGetValue(name, out var t)) result.Add(t);
-        }
-
-        // Add any remaining bindings in deterministic (alphabetical) order
-        var remaining = new List<string>();
-        foreach (var kv in bindings)
-            if (!seen.Contains(kv.Key))
-                remaining.Add(kv.Key);
-        remaining.Sort(StringComparer.Ordinal);
-        for (var i = 0; i < remaining.Count; i++) result.Add(bindings[remaining[i]]);
-        return result;
     }
 
     private static StructType SubstituteStructType(StructType structType, Dictionary<string, FType> bindings)
@@ -2149,8 +2094,6 @@ public class TypeChecker
             ? (info.Name, info.ParameterTypes, info.IsForeign)
             : null;
 
-    public StructType? GetOptionLift(ExpressionNode expression)
-        => _optionLifts.TryGetValue(expression, out var optionType) ? optionType : null;
 
     public IReadOnlyList<FunctionDeclarationNode> GetSpecializedFunctions() => _specializations;
 
