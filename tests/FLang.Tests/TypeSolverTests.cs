@@ -3,7 +3,7 @@ using FLang.Semantics;
 
 namespace FLang.Tests;
 
-public class TypeSolverCoreTests
+public class TypeSolverTests
 {
     #region Basic Unification Tests
 
@@ -11,7 +11,7 @@ public class TypeSolverCoreTests
     public void Unify_IdenticalPrimitives_Succeeds()
     {
         // Arrange
-        var solver = new TypeSolverCore();
+        var solver = new TypeSolver();
         var t1 = TypeRegistry.I32;
         var t2 = TypeRegistry.I32;
 
@@ -27,7 +27,7 @@ public class TypeSolverCoreTests
     public void Unify_DifferentPrimitives_WithNoCoercion_Fails()
     {
         // Arrange
-        var solver = new TypeSolverCore();
+        var solver = new TypeSolver();
         var t1 = TypeRegistry.I32;
         var t2 = TypeRegistry.Bool;
 
@@ -45,7 +45,7 @@ public class TypeSolverCoreTests
     public void Unify_TypeVarWithConcrete_BindsVariable()
     {
         // Arrange
-        var solver = new TypeSolverCore();
+        var solver = new TypeSolver();
         var typeVar = new TypeVar("x", new Core.SourceSpan(0, 0, 0));
         var concrete = TypeRegistry.I32;
 
@@ -62,7 +62,7 @@ public class TypeSolverCoreTests
     public void Unify_ConcreteWithTypeVar_BindsVariable()
     {
         // Arrange
-        var solver = new TypeSolverCore();
+        var solver = new TypeSolver();
         var concrete = TypeRegistry.Bool;
         var typeVar = new TypeVar("y", new Core.SourceSpan(0, 0, 0));
 
@@ -79,7 +79,7 @@ public class TypeSolverCoreTests
     public void Unify_TwoTypeVars_BindsOneToOther()
     {
         // Arrange
-        var solver = new TypeSolverCore();
+        var solver = new TypeSolver();
         var var1 = new TypeVar("a", new Core.SourceSpan(0, 0, 0));
         var var2 = new TypeVar("b", new Core.SourceSpan(0, 0, 0));
 
@@ -101,7 +101,7 @@ public class TypeSolverCoreTests
     public void Unify_IdenticalStructs_Succeeds()
     {
         // Arrange
-        var solver = new TypeSolverCore();
+        var solver = new TypeSolver();
         var struct1 = new StructType("Point").WithFields([
             ("x", TypeRegistry.I32),
             ("y", TypeRegistry.I32)
@@ -123,7 +123,7 @@ public class TypeSolverCoreTests
     public void Unify_DifferentStructNames_Fails()
     {
         // Arrange
-        var solver = new TypeSolverCore();
+        var solver = new TypeSolver();
         var struct1 = new StructType("Point");
         var struct2 = new StructType("Vector");
 
@@ -140,7 +140,7 @@ public class TypeSolverCoreTests
     public void Unify_GenericStructs_WithMatchingTypeArgs_Succeeds()
     {
         // Arrange
-        var solver = new TypeSolverCore();
+        var solver = new TypeSolver();
         var struct1 = new StructType("Option", [TypeRegistry.I32]);
         var struct2 = new StructType("Option", [TypeRegistry.I32]);
 
@@ -155,7 +155,7 @@ public class TypeSolverCoreTests
     public void Unify_GenericStructs_WithDifferentTypeArgs_Fails()
     {
         // Arrange
-        var solver = new TypeSolverCore();
+        var solver = new TypeSolver();
         var struct1 = new StructType("Option", [TypeRegistry.I32]);
         var struct2 = new StructType("Option", [TypeRegistry.Bool]);
 
@@ -175,7 +175,7 @@ public class TypeSolverCoreTests
     public void Unify_ComptimeIntWithI32_HardensToI32()
     {
         // Arrange
-        var solver = new TypeSolverCore();
+        var solver = new TypeSolver();
         var comptimeInt = TypeRegistry.ComptimeInt;
         var i32 = TypeRegistry.I32;
 
@@ -191,7 +191,7 @@ public class TypeSolverCoreTests
     public void Unify_I64WithComptimeInt_HardensToI64()
     {
         // Arrange
-        var solver = new TypeSolverCore();
+        var solver = new TypeSolver();
         var i64 = TypeRegistry.I64;
         var comptimeInt = TypeRegistry.ComptimeInt;
 
@@ -207,7 +207,7 @@ public class TypeSolverCoreTests
     public void Unify_ComptimeIntWithBool_Fails()
     {
         // Arrange
-        var solver = new TypeSolverCore();
+        var solver = new TypeSolver();
         var comptimeInt = TypeRegistry.ComptimeInt;
         var boolean = TypeRegistry.Bool;
 
@@ -226,7 +226,7 @@ public class TypeSolverCoreTests
     public void IntegerWidening_I8ToI16_Succeeds()
     {
         // Arrange
-        var solver = new TypeSolverCore();
+        var solver = new TypeSolver();
         var from = TypeRegistry.I8;
         var to = TypeRegistry.I16;
 
@@ -242,7 +242,7 @@ public class TypeSolverCoreTests
     public void IntegerWidening_I8ToI32_Succeeds()
     {
         // Arrange
-        var solver = new TypeSolverCore();
+        var solver = new TypeSolver();
         var from = TypeRegistry.I8;
         var to = TypeRegistry.I32;
 
@@ -258,7 +258,7 @@ public class TypeSolverCoreTests
     public void IntegerWidening_I32ToI64_Succeeds()
     {
         // Arrange
-        var solver = new TypeSolverCore();
+        var solver = new TypeSolver();
         var from = TypeRegistry.I32;
         var to = TypeRegistry.I64;
 
@@ -274,7 +274,7 @@ public class TypeSolverCoreTests
     public void IntegerWidening_I16ToI8_Fails()
     {
         // Arrange
-        var solver = new TypeSolverCore();
+        var solver = new TypeSolver();
         var from = TypeRegistry.I16;
         var to = TypeRegistry.I8;
 
@@ -290,7 +290,7 @@ public class TypeSolverCoreTests
     public void IntegerWidening_U8ToU16_Succeeds()
     {
         // Arrange
-        var solver = new TypeSolverCore();
+        var solver = new TypeSolver();
         var from = TypeRegistry.U8;
         var to = TypeRegistry.U16;
 
@@ -306,7 +306,7 @@ public class TypeSolverCoreTests
     public void IntegerWidening_U8ToU64_Succeeds()
     {
         // Arrange
-        var solver = new TypeSolverCore();
+        var solver = new TypeSolver();
         var from = TypeRegistry.U8;
         var to = TypeRegistry.U64;
 
@@ -322,7 +322,7 @@ public class TypeSolverCoreTests
     public void IntegerWidening_SignedToUnsigned_Fails()
     {
         // Arrange
-        var solver = new TypeSolverCore();
+        var solver = new TypeSolver();
         var from = TypeRegistry.I8;
         var to = TypeRegistry.U8;
 
@@ -337,7 +337,7 @@ public class TypeSolverCoreTests
     public void IntegerWidening_UnsignedToSigned_Fails()
     {
         // Arrange
-        var solver = new TypeSolverCore();
+        var solver = new TypeSolver();
         var from = TypeRegistry.U8;
         var to = TypeRegistry.I8;
 
@@ -352,7 +352,7 @@ public class TypeSolverCoreTests
     public void PlatformEquivalence_ISize32EqualsI32()
     {
         // Arrange - 32-bit architecture where isize === i32
-        var solver = new TypeSolverCore(PointerWidth.Bits32);
+        var solver = new TypeSolver(PointerWidth.Bits32);
         var from = TypeRegistry.ISize;
         var to = TypeRegistry.I32;
 
@@ -368,7 +368,7 @@ public class TypeSolverCoreTests
     public void PlatformEquivalence_ISize64EqualsI64()
     {
         // Arrange - 64-bit architecture where isize === i64
-        var solver = new TypeSolverCore(PointerWidth.Bits64);
+        var solver = new TypeSolver(PointerWidth.Bits64);
         var from = TypeRegistry.ISize;
         var to = TypeRegistry.I64;
 
@@ -384,7 +384,7 @@ public class TypeSolverCoreTests
     public void PlatformEquivalence_USize32EqualsU32()
     {
         // Arrange - 32-bit architecture where usize === u32
-        var solver = new TypeSolverCore(PointerWidth.Bits32);
+        var solver = new TypeSolver(PointerWidth.Bits32);
         var from = TypeRegistry.USize;
         var to = TypeRegistry.U32;
 
@@ -400,7 +400,7 @@ public class TypeSolverCoreTests
     public void PlatformEquivalence_USize64EqualsU64()
     {
         // Arrange - 64-bit architecture where usize === u64
-        var solver = new TypeSolverCore(PointerWidth.Bits64);
+        var solver = new TypeSolver(PointerWidth.Bits64);
         var from = TypeRegistry.USize;
         var to = TypeRegistry.U64;
 
@@ -416,7 +416,7 @@ public class TypeSolverCoreTests
     public void IntegerWidening_I16ToISize64_Succeeds()
     {
         // Arrange - 64-bit architecture where isize=i64 (rank 4)
-        var solver = new TypeSolverCore(PointerWidth.Bits64);
+        var solver = new TypeSolver(PointerWidth.Bits64);
         var from = TypeRegistry.I16;
         var to = TypeRegistry.ISize;
 
@@ -432,7 +432,7 @@ public class TypeSolverCoreTests
     public void IntegerWidening_U32ToI64_Succeeds()
     {
         // Arrange - unsigned to signed with higher rank is safe
-        var solver = new TypeSolverCore();
+        var solver = new TypeSolver();
         var from = TypeRegistry.U32;
         var to = TypeRegistry.I64;
 
@@ -448,7 +448,7 @@ public class TypeSolverCoreTests
     public void IntegerWidening_U8ToI16_Succeeds()
     {
         // Arrange
-        var solver = new TypeSolverCore();
+        var solver = new TypeSolver();
         var from = TypeRegistry.U8;
         var to = TypeRegistry.I16;
 
@@ -464,7 +464,7 @@ public class TypeSolverCoreTests
     public void IntegerWidening_U32ToI32_Fails()
     {
         // Arrange - same rank, value range doesn't fit
-        var solver = new TypeSolverCore();
+        var solver = new TypeSolver();
         var from = TypeRegistry.U32;
         var to = TypeRegistry.I32;
 
@@ -479,7 +479,7 @@ public class TypeSolverCoreTests
     public void IntegerWidening_I32ToU32_Fails()
     {
         // Arrange - signed to unsigned not allowed (negative values)
-        var solver = new TypeSolverCore();
+        var solver = new TypeSolver();
         var from = TypeRegistry.I32;
         var to = TypeRegistry.U32;
 
@@ -498,7 +498,7 @@ public class TypeSolverCoreTests
     public void OptionWrapping_I32ToOptionI32_Succeeds()
     {
         // Arrange
-        var solver = new TypeSolverCore();
+        var solver = new TypeSolver();
         var innerType = TypeRegistry.I32;
         var from = innerType;
         var to = TypeRegistry.MakeOption(innerType);
@@ -515,7 +515,7 @@ public class TypeSolverCoreTests
     public void OptionWrapping_BoolToOptionBool_Succeeds()
     {
         // Arrange
-        var solver = new TypeSolverCore();
+        var solver = new TypeSolver();
         var innerType = TypeRegistry.Bool;
         var from = innerType;
         var to = TypeRegistry.MakeOption(innerType);
@@ -532,7 +532,7 @@ public class TypeSolverCoreTests
     public void OptionWrapping_I32ToOptionI64_Fails()
     {
         // Arrange
-        var solver = new TypeSolverCore();
+        var solver = new TypeSolver();
         var from = TypeRegistry.I32;
         var to = TypeRegistry.MakeOption(TypeRegistry.I64);
 
@@ -547,7 +547,7 @@ public class TypeSolverCoreTests
     public void OptionWrapping_StructToOptionStruct_Succeeds()
     {
         // Arrange
-        var solver = new TypeSolverCore();
+        var solver = new TypeSolver();
         var pointType = new StructType("Point").WithFields([
             ("x", TypeRegistry.I32),
             ("y", TypeRegistry.I32)
@@ -571,7 +571,7 @@ public class TypeSolverCoreTests
     public void ArrayToSlice_I32Array_ToI32Slice_Succeeds()
     {
         // Arrange
-        var solver = new TypeSolverCore();
+        var solver = new TypeSolver();
         var arrayType = new ArrayType(TypeRegistry.I32, 10);
         var sliceType = TypeRegistry.MakeSlice(TypeRegistry.I32);
 
@@ -587,7 +587,7 @@ public class TypeSolverCoreTests
     public void ArrayToSlice_BoolArray_ToBoolSlice_Succeeds()
     {
         // Arrange
-        var solver = new TypeSolverCore();
+        var solver = new TypeSolver();
         var arrayType = new ArrayType(TypeRegistry.Bool, 5);
         var sliceType = TypeRegistry.MakeSlice(TypeRegistry.Bool);
 
@@ -603,7 +603,7 @@ public class TypeSolverCoreTests
     public void ArrayToSlice_I32Array_ToI64Slice_Fails()
     {
         // Arrange
-        var solver = new TypeSolverCore();
+        var solver = new TypeSolver();
         var arrayType = new ArrayType(TypeRegistry.I32, 10);
         var sliceType = TypeRegistry.MakeSlice(TypeRegistry.I64);
 
@@ -618,7 +618,7 @@ public class TypeSolverCoreTests
     public void ArrayToSlice_RefArray_ToSlice_Succeeds()
     {
         // Arrange
-        var solver = new TypeSolverCore();
+        var solver = new TypeSolver();
         var arrayType = new ArrayType(TypeRegistry.U8, 20);
         var refArrayType = new ReferenceType(arrayType, PointerWidth.Bits64);
         var sliceType = TypeRegistry.MakeSlice(TypeRegistry.U8);
@@ -639,7 +639,7 @@ public class TypeSolverCoreTests
     public void StringToByteSlice_Succeeds()
     {
         // Arrange
-        var solver = new TypeSolverCore();
+        var solver = new TypeSolver();
         var stringType = TypeRegistry.MakeString();
         var byteSliceType = TypeRegistry.MakeSlice(TypeRegistry.U8);
 
@@ -655,7 +655,7 @@ public class TypeSolverCoreTests
     public void StringToByteSlice_ToI8Slice_Fails()
     {
         // Arrange
-        var solver = new TypeSolverCore();
+        var solver = new TypeSolver();
         var stringType = TypeRegistry.MakeString();
         var i8SliceType = TypeRegistry.MakeSlice(TypeRegistry.I8);
 
@@ -670,7 +670,7 @@ public class TypeSolverCoreTests
     public void StringToByteSlice_ToU16Slice_Fails()
     {
         // Arrange
-        var solver = new TypeSolverCore();
+        var solver = new TypeSolver();
         var stringType = TypeRegistry.MakeString();
         var u16SliceType = TypeRegistry.MakeSlice(TypeRegistry.U16);
 
@@ -689,7 +689,7 @@ public class TypeSolverCoreTests
     public void CoercionChain_I8CanWiden_ThenWrapInOption()
     {
         // Arrange
-        var solver = new TypeSolverCore();
+        var solver = new TypeSolver();
         var from = TypeRegistry.I8;
         var to = TypeRegistry.MakeOption(TypeRegistry.I64);
 
@@ -704,8 +704,8 @@ public class TypeSolverCoreTests
     public void CoercionChain_ExplicitSteps_Succeeds()
     {
         // Arrange
-        var solver1 = new TypeSolverCore();
-        var solver2 = new TypeSolverCore();
+        var solver1 = new TypeSolver();
+        var solver2 = new TypeSolver();
         var from = TypeRegistry.I8;
         var intermediate = TypeRegistry.I64;
         var to = TypeRegistry.MakeOption(TypeRegistry.I64);
@@ -723,45 +723,13 @@ public class TypeSolverCoreTests
 
     #endregion
 
-    #region Custom Coercion Rule Tests
-
-    [Fact]
-    public void CustomCoercionRule_CanBeAdded()
-    {
-        // Arrange
-        var solver = new TypeSolverCore();
-        var customRule = new AlwaysTrueCoercionRule();
-        solver.CoercionRules.Add(customRule);
-
-        var from = TypeRegistry.I32;
-        var to = TypeRegistry.Bool;
-
-        // Act
-        var result = solver.Unify(from, to);
-
-        // Assert
-        Assert.Equal(to, result);
-        Assert.Empty(solver.Diagnostics);
-    }
-
-    // Helper test coercion rule
-    private class AlwaysTrueCoercionRule : ICoercionRule
-    {
-        public bool TryApply(TypeBase from, TypeBase to, TypeSolverCore solver)
-        {
-            return true; // Always allow coercion (for testing)
-        }
-    }
-
-    #endregion
-
     #region Error Message Tests
 
     [Fact]
     public void ErrorMessage_IncludesExpectedAndActualTypes()
     {
         // Arrange
-        var solver = new TypeSolverCore();
+        var solver = new TypeSolver();
         var from = TypeRegistry.I32;
         var to = TypeRegistry.Bool;
 
@@ -779,7 +747,7 @@ public class TypeSolverCoreTests
     public void ErrorMessage_SkolemRigidGeneric_HasSpecificCode()
     {
         // Arrange
-        var solver = new TypeSolverCore();
+        var solver = new TypeSolver();
         var skolem = PrimitiveType.CreateSkolem("T");
         var concrete = TypeRegistry.I32;
 

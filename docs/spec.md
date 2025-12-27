@@ -205,10 +205,10 @@ let name: String = t.name   // "i32"
 
 #### Type Introspection Functions
 
-Type introspection functions are regular FLang library functions defined in `core.intrinsics`:
+Type introspection functions are regular FLang library functions defined in `core.rtti`:
 
 ```flang
-import core.intrinsics
+import core.rtti
 
 // Defined in stdlib - these are regular FLang functions, not compiler intrinsics
 pub fn size_of(t: Type($T)) usize {

@@ -6,7 +6,7 @@
 // TODO fix test is causing the compiler to loop forever and consume all the memory in the world
 
 import core.mem
-import core.intrinsics
+import core.rtti
 
 pub fn main() i32 {
     // Allocate 4 bytes for an i32

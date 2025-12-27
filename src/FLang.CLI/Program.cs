@@ -89,8 +89,8 @@ using var loggerFactory = LoggerFactory.Create(builder =>
 });
 
 // Type checking pass
-var typeSolverLogger = loggerFactory.CreateLogger<TypeSolver>();
-var typeSolver = new TypeSolver(compilation, typeSolverLogger);
+var typeSolverLogger = loggerFactory.CreateLogger<TypeChecker>();
+var typeSolver = new TypeChecker(compilation, typeSolverLogger);
 
 // First pass: collect all struct definitions and function signatures from all modules
 foreach (var module in parsedModules.Values)
