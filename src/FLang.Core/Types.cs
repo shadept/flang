@@ -1,31 +1,44 @@
 using System.Linq;
+using System.Runtime.CompilerServices;
+
+// Compatibility aliases for gradual migration
+using FType = FLang.Core.TypeBase;
+using ComptimeIntType = FLang.Core.ComptimeInt;
 
 namespace FLang.Core;
 
 /// <summary>
-/// Base class for all types in the FLang type system.
+/// Base class for all types in the FLang type system (Algorithm W-style).
 /// </summary>
-public abstract class FType
+public abstract class TypeBase
 {
     public abstract string Name { get; }
 
     /// <summary>
-    /// Gets the size of this type in bytes.
-    /// Used by size_of intrinsic.
+    /// Gets the size of this type in bytes. Used by size_of intrinsic.
     /// </summary>
     public abstract int Size { get; }
 
     /// <summary>
-    /// Gets the alignment requirement of this type in bytes.
-    /// Used by align_of intrinsic.
+    /// Gets the alignment requirement of this type in bytes. Used by align_of intrinsic.
     /// </summary>
     public abstract int Alignment { get; }
 
-    public abstract bool Equals(FType other);
+    /// <summary>
+    /// Follow type variable Instance chains to find the concrete type.
+    /// </summary>
+    public virtual TypeBase Prune() => this;
+
+    /// <summary>
+    /// Returns true if this type is fully concrete (no unbound type variables).
+    /// </summary>
+    public virtual bool IsConcrete => true;
+
+    public abstract bool Equals(TypeBase other);
 
     public override bool Equals(object? obj)
     {
-        return obj is FType other && Equals(other);
+        return obj is TypeBase other && Equals(other);
     }
 
     public override int GetHashCode()
@@ -40,9 +53,75 @@ public abstract class FType
 }
 
 /// <summary>
+/// Unification variable with mutable Instance property.
+/// Used for Algorithm W-style type inference.
+/// </summary>
+public class TypeVar : TypeBase
+{
+    public TypeVar(string id, SourceSpan? declarationSpan = null)
+    {
+        Id = id;
+        DeclarationSpan = declarationSpan;
+    }
+
+    public string Id { get; }
+    public SourceSpan? DeclarationSpan { get; }
+
+    /// <summary>
+    /// The type this variable is bound to (null if unbound).
+    /// </summary>
+    public TypeBase? Instance { get; set; }
+
+    public override string Name => Instance?.Name ?? $"'{Id}";
+
+    public override int Size
+    {
+        get
+        {
+            if (Instance == null)
+                throw new InvalidOperationException($"Cannot get size of unbound type variable '{Id}'");
+            return Instance.Size;
+        }
+    }
+
+    public override int Alignment
+    {
+        get
+        {
+            if (Instance == null)
+                throw new InvalidOperationException($"Cannot get alignment of unbound type variable '{Id}'");
+            return Instance.Alignment;
+        }
+    }
+
+    public override TypeBase Prune()
+    {
+        if (Instance == null)
+            return this;
+
+        // Follow the chain and compress the path
+        Instance = Instance.Prune();
+        return Instance;
+    }
+
+    public override bool IsConcrete => Instance != null && Instance.IsConcrete;
+
+    public override bool Equals(TypeBase other)
+    {
+        // Type variables are compared by identity
+        return ReferenceEquals(this, other);
+    }
+
+    public override int GetHashCode()
+    {
+        return RuntimeHelpers.GetHashCode(this);
+    }
+}
+
+/// <summary>
 /// Represents a generic parameter type like $T used in generic function signatures.
 /// </summary>
-public class GenericParameterType : FType
+public class GenericParameterType : TypeBase
 {
     public GenericParameterType(string name)
     {
@@ -59,7 +138,7 @@ public class GenericParameterType : FType
     public override int Alignment =>
         throw new InvalidOperationException($"Cannot get alignment of generic parameter type ${ParamName}");
 
-    public override bool Equals(FType other)
+    public override bool Equals(TypeBase other)
     {
         return other is GenericParameterType g && g.ParamName == ParamName;
     }
@@ -73,56 +152,89 @@ public class GenericParameterType : FType
 /// <summary>
 /// Represents primitive types like i32, bool, etc.
 /// </summary>
-public class PrimitiveType : FType
+public class PrimitiveType : TypeBase
 {
-    public PrimitiveType(string name, int sizeInBytes, bool isSigned = true)
+    public PrimitiveType(string name, int sizeInBytes, int alignmentInBytes)
     {
         Name = name;
         SizeInBytes = sizeInBytes;
+        AlignmentInBytes = alignmentInBytes;
+    }
+
+    // Legacy constructor for compatibility (assumes alignment = size)
+    public PrimitiveType(string name, int sizeInBytes, bool isSigned = true)
+        : this(name, sizeInBytes, sizeInBytes)
+    {
         IsSigned = isSigned;
     }
 
     public override string Name { get; }
     public int SizeInBytes { get; }
-    public bool IsSigned { get; }
+    public int AlignmentInBytes { get; }
+    public bool IsSigned { get; init; } = true;
 
     public override int Size => SizeInBytes;
 
-    public override int Alignment => SizeInBytes; // Primitives align to their size
+    public override int Alignment => AlignmentInBytes;
 
-    public override bool Equals(FType other)
+    public override bool Equals(TypeBase other)
     {
         return other is PrimitiveType pt && pt.Name == Name;
+    }
+
+    /// <summary>
+    /// Creates a skolem (rigid generic parameter) for use in generic function signatures.
+    /// These cannot be unified with concrete types.
+    /// </summary>
+    public static PrimitiveType CreateSkolem(string name)
+    {
+        // Skolems have $ prefix and throw on Size/Alignment access
+        return new SkolemType(name);
+    }
+
+    private class SkolemType : PrimitiveType
+    {
+        public SkolemType(string name) : base($"${name}", 0, 0)
+        {
+        }
+
+        public override int Size =>
+            throw new InvalidOperationException($"Cannot get size of skolem type {Name}");
+
+        public override int Alignment =>
+            throw new InvalidOperationException($"Cannot get alignment of skolem type {Name}");
     }
 }
 
 /// <summary>
-/// Represents compile-time integer type that must be resolved during type inference.
+/// Compile-time integer type that must be resolved during type inference.
 /// </summary>
-public class ComptimeIntType : FType
+public class ComptimeInt : TypeBase
 {
-    public static readonly ComptimeIntType Instance = new();
+    private ComptimeInt() { }
 
-    private ComptimeIntType()
-    {
-    }
+    public static readonly ComptimeInt Instance = new();
 
     public override string Name => "comptime_int";
 
-    public override int Size => 8; // Assume isize (64-bit)
+    public override int Size =>
+        throw new InvalidOperationException("Cannot get size of comptime_int (not a concrete type)");
 
-    public override int Alignment => 8;
+    public override int Alignment =>
+        throw new InvalidOperationException("Cannot get alignment of comptime_int (not a concrete type)");
 
-    public override bool Equals(FType other)
+    public override bool IsConcrete => false;
+
+    public override bool Equals(TypeBase other)
     {
-        return other is ComptimeIntType;
+        return other is ComptimeInt;
     }
 }
 
 /// <summary>
 /// Represents compile-time float type that must be resolved during type inference.
 /// </summary>
-public class ComptimeFloatType : FType
+public class ComptimeFloatType : TypeBase
 {
     public static readonly ComptimeFloatType Instance = new();
 
@@ -136,7 +248,7 @@ public class ComptimeFloatType : FType
 
     public override int Alignment => 8;
 
-    public override bool Equals(FType other)
+    public override bool Equals(TypeBase other)
     {
         return other is ComptimeFloatType;
     }
@@ -145,44 +257,47 @@ public class ComptimeFloatType : FType
 /// <summary>
 /// Represents a reference type like &T.
 /// </summary>
-public class ReferenceType : FType
+public class ReferenceType : TypeBase
 {
-    public ReferenceType(FType innerType)
+    private const int PointerSize = 8; // 64-bit pointer
+
+    public ReferenceType(TypeBase innerType)
     {
         InnerType = innerType;
     }
 
-    public FType InnerType { get; }
+    public TypeBase InnerType { get; }
 
-    public override string Name => $"&{InnerType.Name}";
+    public override string Name => $"&{InnerType}";
 
-    public override int Size => 8; // 64-bit pointer
+    public override int Size => PointerSize;
 
-    public override int Alignment => 8;
+    public override int Alignment => PointerSize;
 
-    public override bool Equals(FType other)
+    public override bool IsConcrete => InnerType.IsConcrete;
+
+    public override bool Equals(TypeBase other)
     {
         return other is ReferenceType rt && InnerType.Equals(rt.InnerType);
     }
 
     public override int GetHashCode()
     {
-        return HashCode.Combine(Name, InnerType);
+        return HashCode.Combine("&", InnerType.GetHashCode());
     }
 }
 
 /// <summary>
 /// Represents an optional type (nullable) like T? or Option(T).
-/// Placeholder for future milestones.
 /// </summary>
-public class OptionType : FType
+public class OptionType : TypeBase
 {
-    public OptionType(FType innerType)
+    public OptionType(TypeBase innerType)
     {
         InnerType = innerType;
     }
 
-    public FType InnerType { get; }
+    public TypeBase InnerType { get; }
 
     public override string Name => $"{InnerType.Name}?";
 
@@ -190,7 +305,7 @@ public class OptionType : FType
 
     public override int Alignment => InnerType.Alignment;
 
-    public override bool Equals(FType other)
+    public override bool Equals(TypeBase other)
     {
         return other is OptionType ot && InnerType.Equals(ot.InnerType);
     }
@@ -201,7 +316,7 @@ public class OptionType : FType
     }
 }
 
-public sealed class NullType : FType
+public sealed class NullType : TypeBase
 {
     public static readonly NullType Instance = new();
 
@@ -209,7 +324,7 @@ public sealed class NullType : FType
 
     public override string Name => "null";
 
-    public override bool Equals(FType other) => ReferenceEquals(this, other);
+    public override bool Equals(TypeBase other) => ReferenceEquals(this, other);
 
     public override int GetHashCode() => Name.GetHashCode();
 
@@ -220,18 +335,17 @@ public sealed class NullType : FType
 
 /// <summary>
 /// Represents a generic type like List[T], Dict[K, V].
-/// Placeholder for future milestones.
 /// </summary>
-public class GenericType : FType
+public class GenericType : TypeBase
 {
-    public GenericType(string baseName, IReadOnlyList<FType> typeArguments)
+    public GenericType(string baseName, IReadOnlyList<TypeBase> typeArguments)
     {
         BaseName = baseName;
         TypeArguments = typeArguments;
     }
 
     public string BaseName { get; }
-    public IReadOnlyList<FType> TypeArguments { get; }
+    public IReadOnlyList<TypeBase> TypeArguments { get; }
 
     public override string Name => $"{BaseName}[{string.Join(", ", TypeArguments.Select(t => t.Name))}]";
 
@@ -241,7 +355,7 @@ public class GenericType : FType
     public override int Alignment =>
         throw new InvalidOperationException($"Cannot get alignment of uninstantiated generic type {Name}");
 
-    public override bool Equals(FType other)
+    public override bool Equals(TypeBase other)
     {
         if (other is not GenericType gt) return false;
         if (BaseName != gt.BaseName) return false;
@@ -262,43 +376,100 @@ public class GenericType : FType
 }
 
 /// <summary>
-/// Represents a struct type with fields.
+/// Represents a struct type with fields and optional type arguments.
 /// </summary>
-public class StructType : FType
+public class StructType : TypeBase
 {
-    private readonly int _size;
-    private readonly int _alignment;
-    private readonly Dictionary<string, int> _fieldOffsets;
+    private int? _cachedSize;
+    private int? _cachedAlignment;
+    private readonly Dictionary<string, int> _fieldOffsets = new();
 
-    public StructType(string structName, IReadOnlyList<string> typeParameters, IReadOnlyList<(string, FType)> fields)
+    // Legacy constructor (takes string type parameters)
+    public StructType(string structName, IReadOnlyList<string> typeParameters, IReadOnlyList<(string, TypeBase)> fields)
     {
         StructName = structName;
+        Name = structName; // Set Name directly for legacy compatibility
         TypeParameters = typeParameters;
-        Fields = fields;
+        TypeArguments = new List<TypeBase>(); // Empty for legacy
+        Fields = fields.ToList();
+        ComputeLayout();
+    }
 
-        // Precompute layout
-        _fieldOffsets = [];
+    // New constructor (takes TypeBase type arguments)
+    public StructType(string name, List<TypeBase>? typeArguments = null, List<(string Name, TypeBase Type)>? fields = null)
+    {
+        StructName = name;
+        Name = name; // Will be overridden in ToString() if type args present
+        TypeArguments = typeArguments ?? new List<TypeBase>();
+        TypeParameters = new List<string>(); // Empty for new style
+        Fields = fields ?? new List<(string Name, TypeBase Type)>();
+        ComputeLayout();
+    }
 
-        bool containsGeneric = fields.Any(field => ContainsGeneric(field.Item2));
+    public string StructName { get; }
+    public override string Name { get; }
+    public List<TypeBase> TypeArguments { get; }
+    public IReadOnlyList<string> TypeParameters { get; } // Legacy
+    public List<(string Name, TypeBase Type)> Fields { get; }
+
+    public override int Size
+    {
+        get
+        {
+            if (_cachedSize.HasValue)
+                return _cachedSize.Value;
+
+            // Recompute if needed
+            ComputeLayout();
+            return _cachedSize ?? 0;
+        }
+    }
+
+    public override int Alignment
+    {
+        get
+        {
+            if (_cachedAlignment.HasValue)
+                return _cachedAlignment.Value;
+
+            // Recompute if needed
+            ComputeLayout();
+            return _cachedAlignment ?? 1;
+        }
+    }
+
+    private void ComputeLayout()
+    {
+        // Check if contains generic parameters
+        bool containsGeneric = Fields.Any(field => ContainsGeneric(field.Type)) ||
+                               TypeArguments.Any(t => !t.IsConcrete);
+
         if (containsGeneric)
         {
-            foreach (var (name, _) in fields)
+            foreach (var (name, _) in Fields)
                 _fieldOffsets[name] = 0;
-            _size = 0;
-            _alignment = 1;
+            _cachedSize = 0;
+            _cachedAlignment = 1;
+            return;
+        }
+
+        if (Fields.Count == 0)
+        {
+            _cachedSize = 0;
+            _cachedAlignment = 1;
             return;
         }
 
         int offset = 0;
         int maxAlignment = 1;
 
-        foreach (var (name, type) in fields)
+        foreach (var (name, type) in Fields)
         {
             var alignment = type.Alignment;
             maxAlignment = Math.Max(maxAlignment, alignment);
 
             // Align offset to field's alignment requirement
-            offset = AlignOffset(offset, alignment);
+            offset = AlignUp(offset, alignment);
 
             // Store field offset
             _fieldOffsets[name] = offset;
@@ -308,47 +479,78 @@ public class StructType : FType
         }
 
         // Add trailing padding to align to largest field
-        _size = AlignOffset(offset, maxAlignment);
-        _alignment = maxAlignment;
+        _cachedSize = AlignUp(offset, maxAlignment);
+        _cachedAlignment = maxAlignment;
     }
 
-    public string StructName { get; }
-    public IReadOnlyList<string> TypeParameters { get; }
-    public IReadOnlyList<(string Name, FType Type)> Fields { get; }
-
-    public override string Name
+    private static int AlignUp(int offset, int alignment)
     {
-        get
-        {
-            if (TypeParameters.Count > 0) return $"{StructName}[{string.Join(", ", TypeParameters)}]";
-            return StructName;
-        }
+        return (offset + alignment - 1) / alignment * alignment;
     }
 
-    public override bool Equals(FType other)
+    private static bool ContainsGeneric(TypeBase type) => type switch
+    {
+        GenericParameterType => true,
+        TypeVar => true,
+        ReferenceType rt => ContainsGeneric(rt.InnerType),
+        OptionType ot => ContainsGeneric(ot.InnerType),
+        ArrayType at => ContainsGeneric(at.ElementType),
+        SliceType st => ContainsGeneric(st.ElementType),
+        StructType st => st.Fields.Any(f => ContainsGeneric(f.Type)),
+        GenericType => true,
+        _ => false
+    };
+
+    public override bool Equals(TypeBase other)
     {
         if (other is not StructType st) return false;
         if (StructName != st.StructName) return false;
+
+        // Compare type arguments (new style)
+        if (TypeArguments.Count != st.TypeArguments.Count) return false;
+        for (int i = 0; i < TypeArguments.Count; i++)
+        {
+            if (!TypeArguments[i].Equals(st.TypeArguments[i]))
+                return false;
+        }
+
+        // Compare type parameters (legacy style)
         if (TypeParameters.Count != st.TypeParameters.Count) return false;
         for (var i = 0; i < TypeParameters.Count; i++)
             if (TypeParameters[i] != st.TypeParameters[i])
                 return false;
-        // Note: We don't compare fields for equality to allow structural typing
+
         return true;
     }
 
     public override int GetHashCode()
     {
-        var hash = new HashCode();
-        hash.Add(StructName);
-        foreach (var param in TypeParameters) hash.Add(param);
-        return hash.ToHashCode();
+        var hash = StructName.GetHashCode();
+        foreach (var arg in TypeArguments)
+            hash = HashCode.Combine(hash, arg.GetHashCode());
+        foreach (var param in TypeParameters)
+            hash = HashCode.Combine(hash, param);
+        return hash;
+    }
+
+    public override string ToString()
+    {
+        if (TypeArguments.Count > 0)
+        {
+            var typeArgs = string.Join(", ", TypeArguments.Select(t => t.ToString()));
+            return $"{StructName}<{typeArgs}>";
+        }
+        if (TypeParameters.Count > 0)
+        {
+            return $"{StructName}[{string.Join(", ", TypeParameters)}]";
+        }
+        return StructName;
     }
 
     /// <summary>
     /// Looks up a field by name. Returns null if not found.
     /// </summary>
-    public FType? GetFieldType(string fieldName)
+    public TypeBase? GetFieldType(string fieldName)
     {
         foreach (var (name, type) in Fields)
             if (name == fieldName)
@@ -364,80 +566,74 @@ public class StructType : FType
     {
         return _fieldOffsets.TryGetValue(fieldName, out var offset) ? offset : -1;
     }
+}
 
-    public override int Size => _size;
-
-    public override int Alignment => _alignment;
-
-    /// <summary>
-    /// Aligns an offset to the specified alignment.
-    /// </summary>
-    private static int AlignOffset(int offset, int alignment)
+/// <summary>
+/// Extension methods for StructType (builder pattern used in tests).
+/// </summary>
+public static class StructTypeExtensions
+{
+    public static StructType WithFields(this StructType structType, List<(string Name, TypeBase Type)> fields)
     {
-        return (offset + alignment - 1) / alignment * alignment;
+        structType.Fields.Clear();
+        structType.Fields.AddRange(fields);
+        // Invalidate cached layout
+        typeof(StructType).GetField("_cachedSize", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)?.SetValue(structType, null);
+        typeof(StructType).GetField("_cachedAlignment", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)?.SetValue(structType, null);
+        return structType;
     }
-
-    private static bool ContainsGeneric(FType type) => type switch
-    {
-        GenericParameterType => true,
-        ReferenceType rt => ContainsGeneric(rt.InnerType),
-        OptionType ot => ContainsGeneric(ot.InnerType),
-        ArrayType at => ContainsGeneric(at.ElementType),
-        SliceType st => ContainsGeneric(st.ElementType),
-        StructType st => st.Fields.Any(f => ContainsGeneric(f.Type)),
-        GenericType => true,
-        _ => false
-    };
 }
 
 /// <summary>
 /// Represents a fixed-size array type like [T; N].
-/// Arrays are value types with compile-time known size.
 /// </summary>
-public class ArrayType : FType
+public class ArrayType : TypeBase
 {
-    public ArrayType(FType elementType, int length)
+    public ArrayType(TypeBase elementType, int length)
     {
         ElementType = elementType;
         Length = length;
     }
 
-    public FType ElementType { get; }
+    public TypeBase ElementType { get; }
     public int Length { get; }
 
-    public override string Name => $"[{ElementType.Name}; {Length}]";
-
-    public override bool Equals(FType other)
-    {
-        return other is ArrayType at && ElementType.Equals(at.ElementType) && Length == at.Length;
-    }
-
-    public override int GetHashCode()
-    {
-        return HashCode.Combine(ElementType, Length);
-    }
+    public override string Name => $"[{ElementType}; {Length}]";
 
     public override int Size => ElementType.Size * Length;
 
     public override int Alignment => ElementType.Alignment;
+
+    public override bool IsConcrete => ElementType.IsConcrete;
+
+    public override bool Equals(TypeBase other)
+    {
+        return other is ArrayType at &&
+               at.Length == Length &&
+               ElementType.Equals(at.ElementType);
+    }
+
+    public override int GetHashCode()
+    {
+        return HashCode.Combine(ElementType.GetHashCode(), Length);
+    }
 }
 
 /// <summary>
 /// Represents a slice type T[] (fat pointer view).
-/// Implemented as a struct { ptr: &T, len: usize } with guaranteed binary layout.
 /// </summary>
-public class SliceType : FType
+public class SliceType : TypeBase
 {
-    public SliceType(FType elementType)
+    public SliceType(TypeBase elementType)
     {
         ElementType = elementType;
     }
 
-    public FType ElementType { get; }
+    public TypeBase ElementType { get; }
 
     public override string Name => $"{ElementType.Name}[]";
 
-    public override bool Equals(FType other)
+    public override bool Equals(TypeBase other)
     {
         return other is SliceType st && ElementType.Equals(st.ElementType);
     }
@@ -453,34 +649,90 @@ public class SliceType : FType
 }
 
 /// <summary>
-/// Registry of all built-in types.
+/// Enum type (for tagged unions).
+/// </summary>
+public class EnumType : TypeBase
+{
+    public EnumType(string name, List<(string VariantName, TypeBase? PayloadType)>? variants = null)
+    {
+        Name = name;
+        Variants = variants ?? new List<(string, TypeBase?)>();
+    }
+
+    public override string Name { get; }
+    public List<(string VariantName, TypeBase? PayloadType)> Variants { get; }
+
+    public override int Size
+    {
+        get
+        {
+            if (Variants.Count == 0)
+                return 4; // Tag only (i32)
+
+            // Tag (4 bytes) + largest variant payload
+            int maxPayloadSize = Variants
+                .Where(v => v.PayloadType != null)
+                .Select(v => v.PayloadType!.Size)
+                .DefaultIfEmpty(0)
+                .Max();
+
+            return 4 + maxPayloadSize;
+        }
+    }
+
+    public override int Alignment
+    {
+        get
+        {
+            if (Variants.Count == 0)
+                return 4; // Tag alignment
+
+            // Max of tag alignment (4) and variant payload alignments
+            int maxPayloadAlignment = Variants
+                .Where(v => v.PayloadType != null)
+                .Select(v => v.PayloadType!.Alignment)
+                .DefaultIfEmpty(1)
+                .Max();
+
+            return Math.Max(4, maxPayloadAlignment);
+        }
+    }
+
+    public override bool Equals(TypeBase other)
+    {
+        return other is EnumType et && et.Name == Name;
+    }
+}
+
+/// <summary>
+/// Registry of all built-in types and well-known composite types.
 /// </summary>
 public static class TypeRegistry
 {
     // Void type (for functions with no return value)
-    public static readonly PrimitiveType Void = new("void", 0);
+    public static readonly PrimitiveType Void = new("void", 0, 0);
 
     // Boolean type
-    public static readonly PrimitiveType Bool = new("bool", 1);
+    public static readonly PrimitiveType Bool = new("bool", 1, 1);
 
     // Signed integer types
-    public static readonly PrimitiveType I8 = new("i8", 1);
-    public static readonly PrimitiveType I16 = new("i16", 2);
-    public static readonly PrimitiveType I32 = new("i32", 4);
-    public static readonly PrimitiveType I64 = new("i64", 8);
+    public static readonly PrimitiveType I8 = new("i8", 1, 1);
+    public static readonly PrimitiveType I16 = new("i16", 2, 2);
+    public static readonly PrimitiveType I32 = new("i32", 4, 4);
+    public static readonly PrimitiveType I64 = new("i64", 8, 8);
 
     // Unsigned integer types
-    public static readonly PrimitiveType U8 = new("u8", 1, false);
-    public static readonly PrimitiveType U16 = new("u16", 2, false);
-    public static readonly PrimitiveType U32 = new("u32", 4, false);
-    public static readonly PrimitiveType U64 = new("u64", 8, false);
+    public static readonly PrimitiveType U8 = new("u8", 1, 1) { IsSigned = false };
+    public static readonly PrimitiveType U16 = new("u16", 2, 2) { IsSigned = false };
+    public static readonly PrimitiveType U32 = new("u32", 4, 4) { IsSigned = false };
+    public static readonly PrimitiveType U64 = new("u64", 8, 8) { IsSigned = false };
 
     // Platform-dependent integer types
-    public static readonly PrimitiveType ISize = new("isize", IntPtr.Size);
-    public static readonly PrimitiveType USize = new("usize", IntPtr.Size, false);
+    public static readonly PrimitiveType ISize = new("isize", IntPtr.Size, IntPtr.Size);
+    public static readonly PrimitiveType USize = new("usize", IntPtr.Size, IntPtr.Size) { IsSigned = false };
 
     // Compile-time types
-    public static readonly ComptimeIntType ComptimeInt = ComptimeIntType.Instance;
+    public static readonly ComptimeInt ComptimeInt = ComptimeInt.Instance;
     public static readonly ComptimeFloatType ComptimeFloat = ComptimeFloatType.Instance;
 
     // Canonical struct representation for String (binary layout: ptr + len)
@@ -489,22 +741,27 @@ public static class TypeRegistry
         ("len", USize)
     ]);
 
-    // Type struct template for runtime type information (same layout for all Type(T) instantiations)
+    // Type struct template for runtime type information
     public static readonly StructType TypeStructTemplate = new("Type", [], [
-        ("name", StringStruct),  // String struct (ptr + len)
+        ("name", StringStruct),
         ("size", U8),
-        ("align", U8)  // Note: "align" not "alignment"
+        ("align", U8)
     ]);
 
-    // Cache for Slice[$T] struct types - created on demand for each element type
-    private static readonly Dictionary<FType, StructType> _sliceStructCache = new();
-    private static readonly Dictionary<FType, StructType> _optionStructCache = new();
-    private static readonly Dictionary<FType, StructType> _typeStructCache = new();
+    // Fully qualified names for well-known types
+    private const string OptionFqn = "core.option.Option";
+    private const string SliceFqn = "core.slice.Slice";
+    private const string StringFqn = "core.string.String";
+
+    // Cache for well-known types to ensure reference equality
+    private static readonly Dictionary<TypeBase, StructType> _sliceStructCache = new();
+    private static readonly Dictionary<TypeBase, StructType> _optionStructCache = new();
+    private static readonly Dictionary<TypeBase, StructType> _typeStructCache = new();
 
     /// <summary>
     /// Looks up a type by name. Returns null if not found.
     /// </summary>
-    public static FType? GetTypeByName(string name)
+    public static TypeBase? GetTypeByName(string name)
     {
         return name switch
         {
@@ -528,16 +785,16 @@ public static class TypeRegistry
     /// <summary>
     /// Returns true if the given type is an integer type (including comptime_int).
     /// </summary>
-    public static bool IsIntegerType(FType type)
+    public static bool IsIntegerType(TypeBase type)
     {
-        return type is ComptimeIntType ||
-               (type is PrimitiveType pt && pt != Bool);
+        return type is ComptimeInt ||
+               (type is PrimitiveType pt && pt != Bool && pt != Void);
     }
 
     /// <summary>
     /// Returns true if the given type is a numeric type (int or float).
     /// </summary>
-    public static bool IsNumericType(FType type)
+    public static bool IsNumericType(TypeBase type)
     {
         return IsIntegerType(type) || type is ComptimeFloatType;
     }
@@ -545,21 +802,21 @@ public static class TypeRegistry
     /// <summary>
     /// Returns true if the given type is a compile-time type that needs resolution.
     /// </summary>
-    public static bool IsComptimeType(FType type)
+    public static bool IsComptimeType(TypeBase type)
     {
-        return type is ComptimeIntType or ComptimeFloatType;
+        return type is ComptimeInt || type is ComptimeFloatType;
     }
 
     /// <summary>
     /// Gets the canonical struct representation for a slice of the given element type.
     /// Returns a cached instance to ensure reference equality.
     /// </summary>
-    public static StructType GetSliceStruct(FType elementType)
+    public static StructType GetSliceStruct(TypeBase elementType)
     {
         if (_sliceStructCache.TryGetValue(elementType, out var cached))
             return cached;
 
-        // Create Slice[$T] struct with ptr and len fields
+        // Create Slice[$T] struct with ptr and len fields (legacy format)
         var sliceStruct = new StructType("Slice", [elementType.Name], [
             ("ptr", new ReferenceType(elementType)),
             ("len", USize)
@@ -569,7 +826,10 @@ public static class TypeRegistry
         return sliceStruct;
     }
 
-    public static StructType GetOptionStruct(FType innerType)
+    /// <summary>
+    /// Gets the canonical struct representation for Option&lt;T&gt;.
+    /// </summary>
+    public static StructType GetOptionStruct(TypeBase innerType)
     {
         if (_optionStructCache.TryGetValue(innerType, out var cached))
             return cached;
@@ -587,7 +847,7 @@ public static class TypeRegistry
     /// Gets or creates a Type(T) struct instance for the given type parameter.
     /// All instances have the same layout, differing only in the type parameter.
     /// </summary>
-    public static StructType GetTypeStruct(FType innerType)
+    public static StructType GetTypeStruct(TypeBase innerType)
     {
         if (_typeStructCache.TryGetValue(innerType, out var cached))
             return cached;
@@ -603,14 +863,93 @@ public static class TypeRegistry
     }
 
     /// <summary>
+    /// Creates an Option&lt;T&gt; type with fully qualified name (Algorithm W style).
+    /// </summary>
+    public static StructType MakeOption(TypeBase innerType)
+    {
+        var key = innerType;
+        if (_optionStructCache.TryGetValue(key, out var cached))
+            return cached;
+
+        var optionType = new StructType(OptionFqn, new List<TypeBase> { innerType });
+
+        // Add fields: has_value: bool, value: T
+        optionType.WithFields(new List<(string, TypeBase)>
+        {
+            ("has_value", Bool),
+            ("value", innerType)
+        });
+
+        _optionStructCache[key] = optionType;
+        return optionType;
+    }
+
+    /// <summary>
+    /// Creates a Slice&lt;T&gt; type with fully qualified name (Algorithm W style).
+    /// </summary>
+    public static StructType MakeSlice(TypeBase elementType)
+    {
+        var key = elementType;
+        if (_sliceStructCache.TryGetValue(key, out var cached))
+            return cached;
+
+        var sliceType = new StructType(SliceFqn, new List<TypeBase> { elementType });
+
+        // Add fields: ptr: &T, len: usize
+        sliceType.WithFields(new List<(string, TypeBase)>
+        {
+            ("ptr", new ReferenceType(elementType)),
+            ("len", USize)
+        });
+
+        _sliceStructCache[key] = sliceType;
+        return sliceType;
+    }
+
+    /// <summary>
+    /// Creates a String type (equivalent to Slice&lt;u8&gt;).
+    /// </summary>
+    public static StructType MakeString()
+    {
+        return StringStruct; // Use existing canonical String struct
+    }
+
+    /// <summary>
+    /// Checks if a StructType is Option&lt;T&gt; using fully qualified name.
+    /// </summary>
+    public static bool IsOption(StructType st)
+    {
+        // Check fully qualified name first, then short name for compatibility
+        return st.StructName == OptionFqn || st.StructName == "Option";
+    }
+
+    /// <summary>
+    /// Checks if a StructType is Slice&lt;T&gt; using fully qualified name.
+    /// </summary>
+    public static bool IsSlice(StructType st)
+    {
+        // Check fully qualified name first, then short name for compatibility
+        return st.StructName == SliceFqn || st.StructName == "Slice";
+    }
+
+    /// <summary>
+    /// Checks if a StructType is String using fully qualified name.
+    /// </summary>
+    public static bool IsString(StructType st)
+    {
+        // Check fully qualified name first, then short name for compatibility
+        return st.StructName == StringFqn || st.StructName == "String";
+    }
+
+    /// <summary>
     /// Converts a FLang type to its C equivalent.
     /// </summary>
-    public static string ToCType(FType type)
+    public static string ToCType(TypeBase type)
     {
         if (type is PrimitiveType pt)
             return pt.Name switch
             {
-                "bool" => "int", // C99 bool (using int for simplicity)
+                "bool" => "int",
                 "i8" => "signed char",
                 "i16" => "short",
                 "i32" => "int",
@@ -627,44 +966,45 @@ public static class TypeRegistry
         // Handle reference types: &T becomes T*
         if (type is ReferenceType refType) return ToCType(refType.InnerType) + "*";
 
-        // Handle optional types: T? (not fully implemented yet)
+        // Handle optional types: T?
         if (type is OptionType optType)
             return ToCType(GetOptionStruct(optType.InnerType));
 
         // Handle struct types: use struct name
         if (type is StructType structType)
         {
-            // Generic structs: include type parameters in C name to avoid collisions
+            // Generic structs: include type parameters in C name
             if (structType.TypeParameters.Count > 0)
             {
                 var paramSuffix = string.Join("_", structType.TypeParameters.Select(p => p.Replace("*", "Ptr").Replace(" ", "_")));
                 return $"struct {structType.StructName}_{paramSuffix}";
             }
 
+            // New-style type arguments
+            if (structType.TypeArguments.Count > 0)
+            {
+                var argSuffix = string.Join("_", structType.TypeArguments.Select(a => a.ToString().Replace("*", "Ptr").Replace(" ", "_").Replace("<", "_").Replace(">", "_")));
+                return $"struct {structType.StructName}_{argSuffix}";
+            }
+
             return $"struct {structType.StructName}";
         }
 
         // Handle array types: same struct representation as slices
-        // Arrays and slices have identical binary layout: { ptr, len }
-        // The only difference is ownership semantics (arrays own their data)
         if (type is ArrayType arrayType)
         {
-            // For u8 arrays, use the same C struct name as String to guarantee ABI compatibility
             if (arrayType.ElementType.Equals(U8))
                 return "struct String";
 
-            // Generic array layout: same as slice - struct Slice_<Elem>
             return $"struct Slice_{ToCType(arrayType.ElementType).Replace(" ", "_").Replace("*", "Ptr")}";
         }
 
         // Handle slice types: struct with ptr and len
         if (type is SliceType sliceType)
         {
-            // For u8[] specifically, use the same C struct name as String to guarantee ABI compatibility
             if (sliceType.ElementType.Equals(U8))
                 return "struct String";
 
-            // Generic slice layout: struct Slice_<Elem>
             return $"struct Slice_{ToCType(sliceType.ElementType).Replace(" ", "_").Replace("*", "Ptr")}";
         }
 

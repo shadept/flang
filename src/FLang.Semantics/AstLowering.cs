@@ -1,4 +1,5 @@
 using FLang.Core;
+using FType = FLang.Core.TypeBase;
 using FLang.Frontend.Ast;
 using FLang.Frontend.Ast.Declarations;
 using FLang.Frontend.Ast.Expressions;

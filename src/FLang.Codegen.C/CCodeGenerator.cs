@@ -1,6 +1,7 @@
 using System.Text;
 using System.Linq;
 using FLang.Core;
+using FType = FLang.Core.TypeBase;
 using FLang.IR;
 using FLang.IR.Instructions;
 

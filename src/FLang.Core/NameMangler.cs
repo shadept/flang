@@ -1,3 +1,5 @@
+using FType = FLang.Core.TypeBase;
+
 namespace FLang.Core;
 
 public static class NameMangler

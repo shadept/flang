@@ -1,5 +1,6 @@
 using System.Text;
 using FLang.Core;
+using FType = FLang.Core.TypeBase;
 using FLang.IR.Instructions;
 
 namespace FLang.IR;

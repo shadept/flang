@@ -1,8 +1,8 @@
 using System;
 using System.Collections.Generic;
-using FLang.Core.TypeSystem;
+using FLang.Core;
 
-namespace FLang.Semantics.TypeSystem;
+namespace FLang.Semantics;
 
 /// <summary>
 /// Target architecture pointer width for isize/usize coercion rules.
@@ -194,7 +194,7 @@ public class OptionWrappingRule : ICoercionRule
     // T -> core.option.Option<T>
     public bool TryApply(TypeBase from, TypeBase to, TypeSolverCore solver)
     {
-        if (to is StructType st && TypeBaseRegistry.IsOption(st) &&
+        if (to is StructType st && TypeRegistry.IsOption(st) &&
             st.TypeArguments.Count == 1 && from.Equals(st.TypeArguments[0]))
             return true;
         return false;
@@ -206,7 +206,7 @@ public class ArrayToSliceRule : ICoercionRule
     // [T; N] -> core.slice.Slice<T>
     public bool TryApply(TypeBase from, TypeBase to, TypeSolverCore solver)
     {
-        if (to is StructType st && TypeBaseRegistry.IsSlice(st) && st.TypeArguments.Count == 1)
+        if (to is StructType st && TypeRegistry.IsSlice(st) && st.TypeArguments.Count == 1)
         {
             if (from is ArrayType arr && arr.ElementType.Equals(st.TypeArguments[0]))
                 return true;
@@ -222,9 +222,9 @@ public class StringToByteSliceRule : ICoercionRule
     // core.string.String -> core.slice.Slice<u8>
     public bool TryApply(TypeBase from, TypeBase to, TypeSolverCore solver)
     {
-        if (from is StructType fs && TypeBaseRegistry.IsString(fs) &&
-            to is StructType ts && TypeBaseRegistry.IsSlice(ts) &&
-            ts.TypeArguments.Count == 1 && ts.TypeArguments[0].Equals(TypeBaseRegistry.U8))
+        if (from is StructType fs && TypeRegistry.IsString(fs) &&
+            to is StructType ts && TypeRegistry.IsSlice(ts) &&
+            ts.TypeArguments.Count == 1 && ts.TypeArguments[0].Equals(TypeRegistry.U8))
             return true;
         return false;
     }
