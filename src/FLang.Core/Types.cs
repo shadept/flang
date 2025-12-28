@@ -502,6 +502,10 @@ public class StructType : TypeBase
     /// </summary>
     public int GetFieldOffset(string fieldName)
     {
+        // Ensure layout is computed
+        if (_fieldOffsets.Count == 0 && Fields.Count > 0)
+            ComputeLayout();
+
         return _fieldOffsets.TryGetValue(fieldName, out var offset) ? offset : -1;
     }
 }

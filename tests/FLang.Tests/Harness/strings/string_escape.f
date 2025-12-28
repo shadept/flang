@@ -8,6 +8,6 @@ import core.io
 pub fn main() i32 {
     let s: String = "hello\nworld"
     println(s)
-    return s.len
+    return s.len as i32
 }
 

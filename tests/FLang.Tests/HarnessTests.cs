@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Runtime.InteropServices;
+using Xunit.Sdk;
 
 namespace FLang.Tests;
 
@@ -169,7 +170,7 @@ public class HarnessTests
         if (RuntimeInformation.IsOSPlatform(OSPlatform.OSX)) return "osx-x64";
         if (RuntimeInformation.IsOSPlatform(OSPlatform.Linux)) return "linux-x64";
         if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows)) return "win-x64";
-        return "osx-x64";
+        throw new Exception("Unsupported platform");
     }
 
     public static IEnumerable<object[]> GetTestFiles()
@@ -204,8 +205,5 @@ public class HarnessTests
         int? ExpectedExitCode,
         List<string> ExpectedStdout,
         List<string> ExpectedStderr,
-        List<string> ExpectedCompileErrors)
-    {
-        public List<string> ExpectedCompileErrors { get; } = ExpectedCompileErrors;
-    }
+        List<string> ExpectedCompileErrors);
 }

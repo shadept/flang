@@ -10,6 +10,6 @@ pub fn main() i32 {
     let s2: String = "world!!!"
     println(s1)
     println(s2)
-    return s1.len + s2.len
+    return (s1.len + s2.len) as i32
 }
 

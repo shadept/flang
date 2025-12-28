@@ -21,10 +21,12 @@ public class TypeSolver
     public TypeSolver(PointerWidth pointerWidth = PointerWidth.Bits64)
     {
         // Add default coercion rules (pass pointer width to rules that need it)
+        // Note: Explicit rules like ArrayDecayRule are optimizations to avoid multi-step coercion chains
         _coercionRules.Add(new IntegerWideningRule(pointerWidth));
         _coercionRules.Add(new OptionWrappingRule());
         _coercionRules.Add(new ArrayToSliceRule());
         _coercionRules.Add(new StringToByteSliceRule());
+        _coercionRules.Add(new ArrayDecayRule());
         _coercionRules.Add(new SliceToReferenceRule());
     }
 
@@ -62,7 +64,16 @@ public class TypeSolver
         if (a is ComptimeInt && b is PrimitiveType p1 && IsInteger(p1)) return p1;
         if (b is ComptimeInt && a is PrimitiveType p2 && IsInteger(p2)) return p2;
 
-        // 4. Arrays (Recursion) - unify element types
+        // 4. Coercion Extension
+        // Must come before structural recursion to allow cross-type coercions
+        // (e.g., Array→Slice, &[T;N]→&T, String→Slice<u8>)
+        foreach (var rule in _coercionRules)
+        {
+            if (rule.TryApply(a, b, this))
+                return b;
+        }
+
+        // 5. Arrays (Structural Recursion) - unify element types
         if (a is ArrayType arr1 && b is ArrayType arr2)
         {
             if (arr1.Length != arr2.Length)
@@ -76,7 +87,7 @@ public class TypeSolver
             return new ArrayType(unifiedElem, arr1.Length);
         }
 
-        // 5. References (Recursion) - unify inner types
+        // 6. References (Structural Recursion) - unify inner types
         if (a is ReferenceType ref1 && b is ReferenceType ref2)
         {
             var unifiedInner = UnifyInternal(ref1.InnerType, ref2.InnerType, span);
@@ -85,7 +96,7 @@ public class TypeSolver
             return new ReferenceType(unifiedInner, ref1.PointerWidth);
         }
 
-        // 6. Structs/Enums (Recursion) - Only if no coercion applied
+        // 7. Structs/Enums (Structural Recursion)
         if (a is StructType s1 && b is StructType s2)
         {
             if (s1.Name != s2.Name)
@@ -105,15 +116,6 @@ public class TypeSolver
                     return null;
             }
             return a;
-        }
-
-        // 7. Coercion Extension (BEFORE structural checks to allow wrapping/conversions)
-        // TODO either allow coersion rules to compound on each other or suficient to allow converting multiple M(T) -> &T
-        // where M is Array, List, Slice or String
-        foreach (var rule in _coercionRules)
-        {
-            if (rule.TryApply(a, b, this))
-                return b;
         }
 
         // 8. Detailed Failure
@@ -184,6 +186,10 @@ public class IntegerWideningRule : ICoercionRule
 
         var (fromName, toName) = (pFrom.Name, pTo.Name);
 
+        // bool → any integer: treat bool as b1/u8 (rank 1 unsigned)
+        if (fromName == "bool" && (IsInteger(toName) || toName == "bool"))
+            return true;
+
         // Same-signedness widening (e.g., i8 → i32, u8 → u64, i64 → isize)
         if (_signedRank.TryGetValue(fromName, out var fromRank) &&
             _signedRank.TryGetValue(toName, out var toRank) &&
@@ -203,6 +209,11 @@ public class IntegerWideningRule : ICoercionRule
             return true;
 
         return false;
+    }
+
+    private static bool IsInteger(string typeName)
+    {
+        return typeName is "i8" or "i16" or "i32" or "i64" or "isize" or "u8" or "u16" or "u32" or "u64" or "usize";
     }
 }
 
@@ -246,6 +257,26 @@ public class StringToByteSliceRule : ICoercionRule
     }
 }
 
+public class ArrayDecayRule : ICoercionRule
+{
+    // Array decay: [T; N] → &T (array value to pointer to first element)
+    // Pointer conversion: &[T; N] → &T (pointer to array to pointer to first element)
+    // Enables passing arrays to C functions expecting pointers (e.g., memset, memcpy)
+    public bool TryApply(TypeBase from, TypeBase to, TypeSolver solver)
+    {
+        // [T; N] → &T
+        if (from is ArrayType arrValue && to is ReferenceType refTarget)
+            return arrValue.ElementType.Equals(refTarget.InnerType);
+
+        // &[T; N] → &T
+        if (from is ReferenceType { InnerType: ArrayType arrInRef } &&
+            to is ReferenceType { InnerType: var targetInner })
+            return arrInRef.ElementType.Equals(targetInner);
+
+        return false;
+    }
+}
+
 public class SliceToReferenceRule : ICoercionRule
 {
     // core.slice.Slice(T) -> &T
@@ -256,5 +287,4 @@ public class SliceToReferenceRule : ICoercionRule
             return true;
         return false;
     }
-
 }

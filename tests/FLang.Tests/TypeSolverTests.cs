@@ -761,4 +761,243 @@ public class TypeSolverTests
     }
 
     #endregion
+
+    #region BoolToIntegerRule Tests (IntegerWideningRule extension)
+
+    [Fact]
+    public void BoolToInteger_BoolToI32_Succeeds()
+    {
+        // Arrange
+        var solver = new TypeSolver();
+        var from = TypeRegistry.Bool;
+        var to = TypeRegistry.I32;
+
+        // Act
+        var result = solver.Unify(from, to);
+
+        // Assert - bool can coerce to any integer
+        Assert.Equal(to, result);
+        Assert.Empty(solver.Diagnostics);
+    }
+
+    [Fact]
+    public void BoolToInteger_BoolToU8_Succeeds()
+    {
+        // Arrange
+        var solver = new TypeSolver();
+        var from = TypeRegistry.Bool;
+        var to = TypeRegistry.U8;
+
+        // Act
+        var result = solver.Unify(from, to);
+
+        // Assert - bool (0 or 1) fits in u8
+        Assert.Equal(to, result);
+        Assert.Empty(solver.Diagnostics);
+    }
+
+    [Fact]
+    public void BoolToInteger_BoolToI64_Succeeds()
+    {
+        // Arrange
+        var solver = new TypeSolver();
+        var from = TypeRegistry.Bool;
+        var to = TypeRegistry.I64;
+
+        // Act
+        var result = solver.Unify(from, to);
+
+        // Assert
+        Assert.Equal(to, result);
+        Assert.Empty(solver.Diagnostics);
+    }
+
+    [Fact]
+    public void BoolToInteger_BoolToBool_Succeeds()
+    {
+        // Arrange
+        var solver = new TypeSolver();
+        var from = TypeRegistry.Bool;
+        var to = TypeRegistry.Bool;
+
+        // Act
+        var result = solver.Unify(from, to);
+
+        // Assert - identity
+        Assert.Equal(to, result);
+        Assert.Empty(solver.Diagnostics);
+    }
+
+    #endregion
+
+    #region ArrayDecayRule Tests
+
+    [Fact]
+    public void ArrayDecay_I32ArrayToI32Ref_Succeeds()
+    {
+        // Arrange
+        var solver = new TypeSolver();
+        var arrayType = new ArrayType(TypeRegistry.I32, 10);
+        var refType = new ReferenceType(TypeRegistry.I32);
+
+        // Act
+        var result = solver.Unify(arrayType, refType);
+
+        // Assert - [i32; 10] decays to &i32
+        Assert.Equal(refType, result);
+        Assert.Empty(solver.Diagnostics);
+    }
+
+    [Fact]
+    public void ArrayDecay_U8ArrayToU8Ref_Succeeds()
+    {
+        // Arrange
+        var solver = new TypeSolver();
+        var arrayType = new ArrayType(TypeRegistry.U8, 5);
+        var refType = new ReferenceType(TypeRegistry.U8);
+
+        // Act
+        var result = solver.Unify(arrayType, refType);
+
+        // Assert - [u8; 5] decays to &u8 (useful for memset, memcpy)
+        Assert.Equal(refType, result);
+        Assert.Empty(solver.Diagnostics);
+    }
+
+    [Fact]
+    public void ArrayDecay_RefArrayToRef_Succeeds()
+    {
+        // Arrange
+        var solver = new TypeSolver();
+        var arrayType = new ArrayType(TypeRegistry.I32, 3);
+        var refArrayType = new ReferenceType(arrayType);
+        var refElementType = new ReferenceType(TypeRegistry.I32);
+
+        // Act
+        var result = solver.Unify(refArrayType, refElementType);
+
+        // Assert - &[i32; 3] decays to &i32
+        Assert.Equal(refElementType, result);
+        Assert.Empty(solver.Diagnostics);
+    }
+
+    [Fact]
+    public void ArrayDecay_I32ArrayToI64Ref_Fails()
+    {
+        // Arrange
+        var solver = new TypeSolver();
+        var arrayType = new ArrayType(TypeRegistry.I32, 10);
+        var refType = new ReferenceType(TypeRegistry.I64);
+
+        // Act
+        solver.Unify(arrayType, refType);
+
+        // Assert - element type must match
+        Assert.NotEmpty(solver.Diagnostics);
+    }
+
+    [Fact]
+    public void ArrayDecay_SupportsMemcpyPattern()
+    {
+        // Arrange - Simulates passing array to memcpy(&u8, &u8, usize)
+        var solver = new TypeSolver();
+        var i32Array = new ArrayType(TypeRegistry.I32, 3);
+        var u8Ref = new ReferenceType(TypeRegistry.U8);
+
+        // Act
+        solver.Unify(i32Array, u8Ref);
+
+        // Assert - Different element types, should fail
+        Assert.NotEmpty(solver.Diagnostics);
+    }
+
+    [Fact]
+    public void ArrayDecay_SupportsMemsetPattern()
+    {
+        // Arrange - Simulates passing u8 array to memset(&u8, i32, usize)
+        var solver = new TypeSolver();
+        var u8Array = new ArrayType(TypeRegistry.U8, 100);
+        var u8Ref = new ReferenceType(TypeRegistry.U8);
+
+        // Act
+        var result = solver.Unify(u8Array, u8Ref);
+
+        // Assert - [u8; 100] should decay to &u8
+        Assert.Equal(u8Ref, result);
+        Assert.Empty(solver.Diagnostics);
+    }
+
+    #endregion
+
+    #region SliceToReferenceRule Tests
+
+    [Fact]
+    public void SliceToRef_I32SliceToI32Ref_Succeeds()
+    {
+        // Arrange
+        var solver = new TypeSolver();
+        var sliceType = TypeRegistry.MakeSlice(TypeRegistry.I32);
+        var refType = new ReferenceType(TypeRegistry.I32);
+
+        // Act
+        var result = solver.Unify(sliceType, refType);
+
+        // Assert - Slice<i32> can coerce to &i32 (extracts .ptr field)
+        Assert.Equal(refType, result);
+        Assert.Empty(solver.Diagnostics);
+    }
+
+    [Fact]
+    public void SliceToRef_U8SliceToU8Ref_Succeeds()
+    {
+        // Arrange
+        var solver = new TypeSolver();
+        var sliceType = TypeRegistry.MakeSlice(TypeRegistry.U8);
+        var refType = new ReferenceType(TypeRegistry.U8);
+
+        // Act
+        var result = solver.Unify(sliceType, refType);
+
+        // Assert - Slice<u8> to &u8 (useful for C interop)
+        Assert.Equal(refType, result);
+        Assert.Empty(solver.Diagnostics);
+    }
+
+    [Fact]
+    public void SliceToRef_I32SliceToI64Ref_Fails()
+    {
+        // Arrange
+        var solver = new TypeSolver();
+        var sliceType = TypeRegistry.MakeSlice(TypeRegistry.I32);
+        var refType = new ReferenceType(TypeRegistry.I64);
+
+        // Act
+        solver.Unify(sliceType, refType);
+
+        // Assert - element type must match
+        Assert.NotEmpty(solver.Diagnostics);
+    }
+
+    [Fact]
+    public void SliceToRef_StringSliceToU8Ref_SupportsChaining()
+    {
+        // Arrange - Test that String → Slice<u8> → &u8 could work
+        var solver1 = new TypeSolver();
+        var solver2 = new TypeSolver();
+        var stringType = TypeRegistry.MakeString();
+        var byteSliceType = TypeRegistry.MakeSlice(TypeRegistry.U8);
+        var u8RefType = new ReferenceType(TypeRegistry.U8);
+
+        // Act - Step 1: String → Slice<u8>
+        var step1 = solver1.Unify(stringType, byteSliceType);
+        // Step 2: Slice<u8> → &u8
+        var step2 = solver2.Unify(step1, u8RefType);
+
+        // Assert
+        Assert.Empty(solver1.Diagnostics);
+        Assert.Empty(solver2.Diagnostics);
+        Assert.Equal(u8RefType, step2);
+    }
+
+    #endregion
 }

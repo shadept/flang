@@ -73,9 +73,14 @@ public class CCodeGenerator
     {
         foreach (var elemType in _sliceElementTypes)
         {
-            if (elemType.Equals(TypeRegistry.U8)) continue;
+            // Create the Slice<T> StructType to get the correct C name
+            var sliceType = TypeRegistry.MakeSlice(elemType);
+            var structName = GetStructCName(sliceType);
+
+            // Skip if this is String (which is manually defined in headers)
+            if (structName == "String") continue;
+
             var elemCType = TypeToCType(elemType);
-            var structName = GetSliceStructName(elemType);
             _output.AppendLine($"struct {structName} {{");
             _output.AppendLine($"    {elemCType}* ptr;");
             _output.AppendLine("    uintptr_t len;");

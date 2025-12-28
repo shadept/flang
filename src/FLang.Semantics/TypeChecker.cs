@@ -1165,6 +1165,10 @@ public class TypeChecker
             // Check if target is a Slice struct (canonical representation)
             if (target is StructType sliceStruct && TypeRegistry.IsSlice(sliceStruct))
                 return true; // Can cast array to any slice struct
+
+            // Unsafe cast: [T; N] → &u8 for low-level memory operations (e.g., memcpy)
+            if (target is ReferenceType { InnerType: PrimitiveType { Name: "u8" } })
+                return true;
         }
 
         return false;

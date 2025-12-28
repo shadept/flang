@@ -4,7 +4,7 @@
 import core.string
 
 fn takes_bytes(b: u8[]) i32 {
-    return b.len
+    return b.len as i32
 }
 
 pub fn main() i32 {

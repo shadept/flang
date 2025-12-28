@@ -12,8 +12,8 @@ pub fn main() i32 {
     // Destination array
     let dst: [i32; 3]
 
-    // Copy first element (4 bytes)
-    memcpy(dst, src, 4)
+    // Copy first element (4 bytes) - requires explicit cast to &u8 for type safety
+    memcpy(dst as &u8, src as &u8, 4)
 
     return dst[0]
 }
