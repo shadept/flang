@@ -22,10 +22,6 @@ public static class DiagnosticPrinter
     {
         var sb = new StringBuilder();
 
-        // Get source information
-        var source = compilation.Sources[diagnostic.Span.FileId];
-        var (line, column) = source.GetLineAndColumn(diagnostic.Span.Index);
-
         // Format: error[E0001]: message
         var severityColor = diagnostic.Severity switch
         {
@@ -51,6 +47,16 @@ public static class DiagnosticPrinter
         sb.Append(": ");
         sb.Append(Color(Bold, diagnostic.Message));
         sb.AppendLine();
+
+        // If FileId is -1, we don't have source information (e.g., C compiler error)
+        if (diagnostic.Span.FileId == -1)
+        {
+            return sb.ToString();
+        }
+
+        // Get source information
+        var source = compilation.Sources[diagnostic.Span.FileId];
+        var (line, column) = source.GetLineAndColumn(diagnostic.Span.Index);
 
         // Location: --> filename:line:column
         sb.Append(Color(BoldBlue, "  --> "));

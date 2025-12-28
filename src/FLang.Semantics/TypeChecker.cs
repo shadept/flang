@@ -852,6 +852,7 @@ public class TypeChecker
                     var structType = obj switch
                     {
                         StructType st => st,
+                        // Borrow SlideType semantics for arrays (they should behave like slices)
                         ArrayType array => TypeRegistry.MakeSlice(array.ElementType),
                         _ => null
                     };

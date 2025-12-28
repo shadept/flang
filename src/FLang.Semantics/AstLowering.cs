@@ -817,10 +817,29 @@ public class AstLowering
                 // Get struct type from the target expression
                 var targetValue = LowerExpression(fieldAccess.Target);
                 var targetSemanticType = _typeSolver.GetType(fieldAccess.Target);
+
+                // Handle special case for arrays: they can act as having the same fields as Slices (ptr and len)
+                if (targetSemanticType is ArrayType arrayType)
+                {
+                    if (fieldAccess.FieldName == "ptr")
+                    {
+                        // ptr is an alias for the array itself but as reference
+                        var elementPtrType = new ReferenceType(arrayType.ElementType);
+                        var castResult = new LocalValue($"array_ptr_{_tempCounter++}") { Type = elementPtrType };
+                        var castInst = new CastInstruction(targetValue, elementPtrType, castResult);
+                        _currentBlock.Instructions.Add(castInst);
+                        return castResult;
+                    }
+                    if (fieldAccess.FieldName == "len")
+                    {
+                        // len is replaced with the actual literal constant length of the array
+                        return new ConstantValue(arrayType.Length) { Type = TypeRegistry.USize };
+                    }
+                }
+
                 var accessStruct = targetSemanticType switch
                 {
                     StructType st => st,
-                    ArrayType at => TypeRegistry.MakeSlice(at.ElementType),
                     _ => null
                 };
                 if (accessStruct == null)

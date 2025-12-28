@@ -113,7 +113,7 @@ public class Compiler
 
         if (allFunctions.Count == 0)
         {
-            allDiagnostics.Add(Diagnostic.Error("No functions found in any module", new SourceSpan(-1, 0, 0), "E0000"));
+            allDiagnostics.Add(Diagnostic.Error("No functions found in any module", SourceSpan.None, "E0000"));
             return new CompilationResult(false, null, allDiagnostics, compilation);
         }
 
@@ -149,8 +149,7 @@ public class Compiler
 
         if (compilerConfig == null)
         {
-            allDiagnostics.Add(Diagnostic.Error("No C compiler configuration provided.", new SourceSpan(-1, 0, 0),
-                "E0000"));
+            allDiagnostics.Add(Diagnostic.Error("No C compiler configuration provided.", SourceSpan.None, "E0000"));
             return new CompilationResult(false, null, allDiagnostics, compilation);
         }
 
@@ -180,7 +179,7 @@ public class Compiler
                 var stdout = process.StandardOutput.ReadToEnd();
                 var stderr = process.StandardError.ReadToEnd();
                 var errorMsg = $"C compiler ({compilerConfig.Name}) failed:\n{stdout}\n{stderr}";
-                allDiagnostics.Add(Diagnostic.Error(errorMsg, new SourceSpan(-1, 0, 0), "E0000"));
+                allDiagnostics.Add(Diagnostic.Error(errorMsg, SourceSpan.None, "E0000"));
                 return new CompilationResult(false, null, allDiagnostics, compilation);
             }
 
@@ -193,9 +192,7 @@ public class Compiler
         }
         catch (Exception ex)
         {
-            allDiagnostics.Add(Diagnostic.Error(
-                $"Error invoking C compiler ({compilerConfig.ExecutablePath}): {ex.Message}", new SourceSpan(-1, 0, 0),
-                "E0000"));
+            allDiagnostics.Add(Diagnostic.Error($"Error invoking C compiler ({compilerConfig.ExecutablePath}): {ex.Message}", SourceSpan.None, "E0000"));
             return new CompilationResult(false, null, allDiagnostics, compilation);
         }
 

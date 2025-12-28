@@ -1,4 +1,4 @@
-using System;
+using System.Diagnostics;
 using FLang.Core;
 using FLang.Frontend;
 using FLang.Frontend.Ast.Declarations;
@@ -19,10 +19,10 @@ public class ModuleCompiler
 
         if (importerPath != null && Path.GetFullPath(importerPath) == normalizedPath)
         {
-            var span = importSpan ?? new SourceSpan(-1, 0, 0);
+            Debug.Assert(importSpan != null);
             _diagnostics.Add(Diagnostic.Error(
                 "circular import detected",
-                span,
+                importSpan.Value,
                 "module imports itself",
                 "E0002"));
             return;
