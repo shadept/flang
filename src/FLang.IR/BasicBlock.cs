@@ -10,5 +10,5 @@ public class BasicBlock
     }
 
     public string Label { get; }
-    public List<Instruction> Instructions { get; } = new();
+    public List<Instruction> Instructions { get; } = [];
 }

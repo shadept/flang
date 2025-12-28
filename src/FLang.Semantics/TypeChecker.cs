@@ -21,27 +21,34 @@ public class TypeChecker
     private readonly TypeSolver _unificationEngine;
 
     // Overload-ready function registry
-    private readonly Dictionary<string, List<FunctionEntry>> _functions = new();
+    private readonly Dictionary<string, List<FunctionEntry>> _functions = [];
 
     // Variable scopes
     private readonly Stack<Dictionary<string, FType>> _scopes = new();
 
     // Struct type cache/registry - prevents duplicate struct instances for same fully qualified name
     // Key: struct name (with type parameters if generic)
-    private readonly Dictionary<string, StructType> _structs = new();
-    private readonly Dictionary<string, StructType> _structSpecializations = new();
+    private readonly Dictionary<string, StructType> _structs = [];
+    private readonly Dictionary<string, StructType> _structSpecializations = [];
+
+    // Module-aware type resolution
+    private string? _currentModulePath = null;
+    private readonly Dictionary<string, Dictionary<string, StructType>> _structsByModule = [];
+    private readonly Dictionary<string, StructType> _structsByFqn = [];
+    private readonly Dictionary<StructType, string> _structToFqn = []; // Reverse mapping
+    private readonly Dictionary<string, HashSet<string>> _moduleImports = [];
 
     // Anonymous struct literal mapping
-    private readonly Dictionary<AnonymousStructExpressionNode, StructType> _anonymousStructTypes = new();
+    private readonly Dictionary<AnonymousStructExpressionNode, StructType> _anonymousStructTypes = [];
 
     // AST type map
-    private readonly Dictionary<AstNode, FType> _typeMap = new();
+    private readonly Dictionary<AstNode, FType> _typeMap = [];
 
     // Track all instantiated types for global type table generation
-    private readonly HashSet<FType> _instantiatedTypes = new();
+    private readonly HashSet<FType> _instantiatedTypes = [];
 
     // Resolved call targets scoped per function
-    private readonly Dictionary<(FunctionDeclarationNode Function, CallExpressionNode Call), ResolvedCall> _resolvedCalls = new();
+    private readonly Dictionary<(FunctionDeclarationNode Function, CallExpressionNode Call), ResolvedCall> _resolvedCalls = [];
 
     private readonly HashSet<string> _emittedSpecs = [];
     private Dictionary<string, FType>? _currentBindings;
@@ -117,12 +124,114 @@ public class TypeChecker
 
     public IReadOnlySet<FType> InstantiatedTypes => _instantiatedTypes;
 
+    public string? GetStructFqn(StructType structType) => _structToFqn.GetValueOrDefault(structType);
+
     public FType? ResolveTypeName(string typeName)
     {
+        // Check built-in primitives first
         var builtInType = TypeRegistry.GetTypeByName(typeName);
         if (builtInType != null) return builtInType;
-        if (_structs.TryGetValue(typeName, out var st)) return st;
+
+        // Determine if FQN or short name
+        if (typeName.Contains('.'))
+            return ResolveFqnTypeName(typeName);
+        else
+            return ResolveShortTypeName(typeName);
+    }
+
+    private FType? ResolveFqnTypeName(string fqn)
+    {
+        // Try direct FQN lookup
+        if (_structsByFqn.TryGetValue(fqn, out var type))
+            return type;
+
+        // Parse FQN: "core.string.String" → "core.string" + "String"
+        var lastDot = fqn.LastIndexOf('.');
+        if (lastDot == -1) return null;
+
+        var modulePath = fqn.Substring(0, lastDot);
+        var typeName = fqn.Substring(lastDot + 1);
+
+        // Allow current module to reference its own types via FQN
+        if (_currentModulePath == modulePath)
+        {
+            if (_structsByModule.TryGetValue(modulePath, out var moduleTypes))
+                return moduleTypes.GetValueOrDefault(typeName);
+        }
+
+        // Check if module is imported
+        if (_currentModulePath != null &&
+            _moduleImports.TryGetValue(_currentModulePath, out var imports) &&
+            imports.Contains(modulePath))
+        {
+            if (_structsByModule.TryGetValue(modulePath, out var moduleTypes))
+                return moduleTypes.GetValueOrDefault(typeName);
+        }
+
         return null;
+    }
+
+    private FType? ResolveShortTypeName(string typeName)
+    {
+        if (_currentModulePath == null)
+        {
+            // Fallback: try legacy lookup
+            return _structs.GetValueOrDefault(typeName);
+        }
+
+        // 1. Check local module first (highest priority)
+        if (_structsByModule.TryGetValue(_currentModulePath, out var localTypes) &&
+            localTypes.TryGetValue(typeName, out var localType))
+        {
+            return localType;
+        }
+
+        // 2. Check imported modules
+        StructType? foundType = null;
+
+        if (_moduleImports.TryGetValue(_currentModulePath, out var imports))
+        {
+            foreach (var importedModulePath in imports)
+            {
+                if (_structsByModule.TryGetValue(importedModulePath, out var importedTypes) &&
+                    importedTypes.TryGetValue(typeName, out var importedType))
+                {
+                    if (foundType != null)
+                    {
+                        // Ambiguous reference - multiple imports define this type
+                        // Return null and let caller report E2003
+                        return null;
+                    }
+                    foundType = importedType;
+                }
+            }
+        }
+
+        return foundType;
+    }
+
+    public static string DeriveModulePath(string filePath, IReadOnlyList<string> includePaths, string workingDirectory)
+    {
+        var normalizedFile = Path.GetFullPath(filePath);
+
+        // Try to find which include path this file is under
+        foreach (var includePath in includePaths)
+        {
+            var normalizedInclude = Path.GetFullPath(includePath);
+
+            if (normalizedFile.StartsWith(normalizedInclude, StringComparison.OrdinalIgnoreCase))
+            {
+                var relativePath = Path.GetRelativePath(normalizedInclude, normalizedFile);
+                var withoutExtension = Path.ChangeExtension(relativePath, null);
+                return withoutExtension.Replace(Path.DirectorySeparatorChar, '.');
+            }
+        }
+
+        // If not under any include path, treat as relative to working directory
+        var normalizedWorking = Path.GetFullPath(workingDirectory);
+        var relativeToWorking = Path.GetRelativePath(normalizedWorking, normalizedFile);
+        var modulePathFromWorking = Path.ChangeExtension(relativeToWorking, null);
+        return modulePathFromWorking.Replace(Path.DirectorySeparatorChar, '.');
     }
 
     private void PushGenericScope(FunctionDeclarationNode function)
@@ -148,8 +257,10 @@ public class TypeChecker
         return false;
     }
 
-    public void CollectFunctionSignatures(ModuleNode module)
+    public void CollectFunctionSignatures(ModuleNode module, string modulePath)
     {
+        _currentModulePath = modulePath;
+
         foreach (var function in module.Functions)
         {
             var mods = function.Modifiers;
@@ -194,10 +305,17 @@ public class TypeChecker
                 PopGenericScope();
             }
         }
+
+        _currentModulePath = null;
     }
 
-    public void CollectStructDefinitions(ModuleNode module)
+    public void CollectStructDefinitions(ModuleNode module, string modulePath)
     {
+        _currentModulePath = modulePath;
+
+        if (!_structsByModule.ContainsKey(modulePath))
+            _structsByModule[modulePath] = new Dictionary<string, StructType>();
+
         foreach (var structDecl in module.Structs)
         {
             var fields = new List<(string, FType)>();
@@ -222,13 +340,53 @@ public class TypeChecker
             foreach (var param in structDecl.TypeParameters)
                 typeArgs.Add(new GenericParameterType(param));
 
-            var stype = new StructType(structDecl.Name, typeArgs, fields);
+            // Compute FQN for this struct
+            var fqn = $"{modulePath}.{structDecl.Name}";
+
+            // Check if this is a well-known type and use TypeRegistry version instead
+            // This ensures type identity (same instance) for comparisons
+            StructType stype;
+            if (fqn == "core.string.String")
+                stype = TypeRegistry.StringStruct;
+            else if (fqn == "core.rtti.Type")
+                stype = TypeRegistry.TypeStructTemplate;
+            else if (fqn == "core.option.Option")
+                stype = new StructType("core.option.Option", typeArgs, fields);
+            else if (fqn == "core.slice.Slice")
+                stype = new StructType("core.slice.Slice", typeArgs, fields);
+            else
+                // Create struct with simple name (keep StructName simple for C codegen compatibility)
+                stype = new StructType(structDecl.Name, typeArgs, fields);
+
+            // Store in new module-aware structures using FQN as key
+            _structsByModule[modulePath][structDecl.Name] = stype;
+            _structsByFqn[fqn] = stype;
+            _structToFqn[stype] = fqn; // Reverse mapping for typename emission
+
+            // Also store by simple name in legacy dict (for backward compatibility)
             _structs[structDecl.Name] = stype;
+        }
+
+        _currentModulePath = null;
+    }
+
+    public void RegisterImports(ModuleNode module, string modulePath)
+    {
+        if (!_moduleImports.ContainsKey(modulePath))
+            _moduleImports[modulePath] = new HashSet<string>();
+
+        foreach (var import in module.Imports)
+        {
+            // Convert ["core", "string"] → "core.string"
+            var importedModulePath = string.Join(".", import.Path);
+            _moduleImports[modulePath].Add(importedModulePath);
         }
     }
 
-    public void CheckModuleBodies(ModuleNode module)
+    public void CheckModuleBodies(ModuleNode module, string modulePath)
     {
+        _currentModulePath = modulePath;
+
         // Temporarily add private functions
         var added = new List<(string, FunctionEntry)>();
         foreach (var function in module.Functions)
@@ -283,6 +441,8 @@ public class TypeChecker
                 if (list.Count == 0) _functions.Remove(name);
             }
         }
+
+        _currentModulePath = null;
     }
 
     private void CheckFunction(FunctionDeclarationNode function)
@@ -478,7 +638,7 @@ public class TypeChecker
         {
             // This is a type literal: i32, Point, etc. used as a value
             // It has type Type(T) where T is the referenced type
-            var typeStruct = TypeRegistry.GetTypeStruct(resolvedType);
+            var typeStruct = TypeRegistry.MakeType(resolvedType);
 
             // Track that this type is used as a literal
             _instantiatedTypes.Add(resolvedType);
@@ -1316,8 +1476,11 @@ public class TypeChecker
                         args.Add(at);
                     }
 
-                    // Special case for Type(T)
-                    if (gt.Name == "Type")
+                    // Resolve the base type name (might be short name or FQN)
+                    var baseType = ResolveTypeName(gt.Name);
+
+                    // Special case for Type(T) - check using TypeRegistry
+                    if (baseType is StructType st && TypeRegistry.IsType(st))
                     {
                         if (args.Count != 1)
                         {
@@ -1330,10 +1493,11 @@ public class TypeChecker
                         }
 
                         // Do NOT track Type(T) instantiations!
-                        return TypeRegistry.GetTypeStruct(args[0]);
+                        return TypeRegistry.MakeType(args[0]);
                     }
 
-                    if (gt.Name == "Option")
+                    // Special case for Option(T)
+                    if (baseType is StructType st2 && TypeRegistry.IsOption(st2))
                     {
                         if (args.Count != 1)
                         {
@@ -1348,7 +1512,8 @@ public class TypeChecker
                         return TypeRegistry.MakeOption(args[0]);
                     }
 
-                    if (!_structs.TryGetValue(gt.Name, out var template))
+                    // General generic struct instantiation
+                    if (baseType is not StructType template)
                     {
                         _diagnostics.Add(Diagnostic.Error(
                             $"cannot find generic type `{gt.Name}`",
@@ -1695,7 +1860,7 @@ public class TypeChecker
         }
     }
 
-    private void PushScope() => _scopes.Push(new Dictionary<string, FType>());
+    private void PushScope() => _scopes.Push([]);
     private void PopScope() => _scopes.Pop();
 
     private void DeclareVariable(string name, FType type, SourceSpan span)

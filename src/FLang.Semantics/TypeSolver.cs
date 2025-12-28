@@ -24,7 +24,6 @@ public class TypeSolver
         // Note: Explicit rules like ArrayDecayRule are optimizations to avoid multi-step coercion chains
         _coercionRules.Add(new IntegerWideningRule(pointerWidth));
         _coercionRules.Add(new OptionWrappingRule());
-        _coercionRules.Add(new ArrayToSliceRule());
         _coercionRules.Add(new StringToByteSliceRule());
         _coercionRules.Add(new ArrayDecayRule());
         _coercionRules.Add(new SliceToReferenceRule());
@@ -222,24 +221,8 @@ public class OptionWrappingRule : ICoercionRule
     // T -> core.option.Option(T)
     public bool TryApply(TypeBase from, TypeBase to, TypeSolver solver)
     {
-        if (to is StructType st && TypeRegistry.IsOption(st) && st.TypeArguments.Count == 1 && from.Equals(st.TypeArguments[0]))
-            return true;
-        return false;
-    }
-}
-
-public class ArrayToSliceRule : ICoercionRule
-{
-    // [T; N] -> core.slice.Slice(T)
-    public bool TryApply(TypeBase from, TypeBase to, TypeSolver solver)
-    {
-        if (to is StructType st && TypeRegistry.IsSlice(st) && st.TypeArguments.Count == 1)
-        {
-            if (from is ArrayType arr && arr.ElementType.Equals(st.TypeArguments[0]))
-                return true;
-            if (from is ReferenceType { InnerType: ArrayType refArr } && refArr.ElementType.Equals(st.TypeArguments[0]))
-                return true;
-        }
+        if (to is StructType st && TypeRegistry.IsOption(st))
+            return from.Equals(st.TypeArguments[0]);
         return false;
     }
 }
@@ -250,20 +233,34 @@ public class StringToByteSliceRule : ICoercionRule
     public bool TryApply(TypeBase from, TypeBase to, TypeSolver solver)
     {
         if (from is StructType fs && TypeRegistry.IsString(fs) &&
-            to is StructType ts && TypeRegistry.IsSlice(ts) &&
-            ts.TypeArguments.Count == 1 && ts.TypeArguments[0].Equals(TypeRegistry.U8))
-            return true;
+            to is StructType ts && TypeRegistry.IsSlice(ts))
+            return ts.TypeArguments[0].Equals(TypeRegistry.U8);
         return false;
     }
 }
 
 public class ArrayDecayRule : ICoercionRule
 {
-    // Array decay: [T; N] → &T (array value to pointer to first element)
-    // Pointer conversion: &[T; N] → &T (pointer to array to pointer to first element)
-    // Enables passing arrays to C functions expecting pointers (e.g., memset, memcpy)
+    // Array decay and conversion rule (combines array-to-pointer and array-to-slice):
+    // - [T; N] → &T (array value to pointer to first element)
+    // - &[T; N] → &T (pointer to array to pointer to first element)
+    // - [T; N] → Slice(T) (array value to slice)
+    // - &[T; N] → Slice(T) (pointer to array to slice)
+    // Enables passing arrays to C functions and slice operations
     public bool TryApply(TypeBase from, TypeBase to, TypeSolver solver)
     {
+        // Array-to-slice coercions
+        if (to is StructType st && TypeRegistry.IsSlice(st))
+        {
+            // [T; N] → Slice(T)
+            if (from is ArrayType arr)
+                return arr.ElementType.Equals(st.TypeArguments[0]);
+            // &[T; N] → Slice(T)
+            if (from is ReferenceType { InnerType: ArrayType refArr })
+                return refArr.ElementType.Equals(st.TypeArguments[0]);
+        }
+
+        // Array-to-pointer coercions
         // [T; N] → &T
         if (from is ArrayType arrValue && to is ReferenceType refTarget)
             return arrValue.ElementType.Equals(refTarget.InnerType);

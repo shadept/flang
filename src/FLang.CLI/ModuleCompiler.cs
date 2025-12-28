@@ -8,10 +8,10 @@ namespace FLang.CLI;
 public class ModuleCompiler
 {
     private readonly Compilation _compilation;
-    private readonly Dictionary<string, ModuleNode> _parsedModules = new();
+    private readonly Dictionary<string, ModuleNode> _parsedModules = [];
     private readonly Queue<string> _workQueue = new();
-    private readonly HashSet<string> _queuedModules = new();
-    private readonly List<Diagnostic> _diagnostics = new();
+    private readonly HashSet<string> _queuedModules = [];
+    private readonly List<Diagnostic> _diagnostics = [];
 
     private void EnqueueModule(string modulePath, SourceSpan? importSpan = null, string? importerPath = null)
     {

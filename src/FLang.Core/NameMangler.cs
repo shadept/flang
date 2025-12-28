@@ -35,9 +35,9 @@ public static class NameMangler
             _ => t.Name
         };
 
-        // Replace non-identifier characters
+        // Replace non-identifier characters (including dots from FQNs)
         var s = raw.Replace("*", "Ptr").Replace(" ", "_").Replace("[", "_").Replace("]", "_").Replace(";", "_")
-            .Replace(",", "_");
+            .Replace(",", "_").Replace(".", "_");
         return s;
     }
 

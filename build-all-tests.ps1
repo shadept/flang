@@ -44,6 +44,87 @@ function Invoke-ChildPwsh([string] $file, [string] $arguments) {
   return $proc.ExitCode
 }
 
+function Parse-TestMetadata([string] $filePath) {
+  $metadata = @{
+    TestName = ''
+    ExpectedExitCode = $null
+    ExpectedStdout = @()
+    ExpectedStderr = @()
+    ExpectedCompileErrors = @()
+  }
+
+  $content = Get-Content -Path $filePath -Encoding UTF8
+  foreach ($line in $content) {
+    $trimmed = $line.Trim()
+    if ($trimmed -match '^//!\s*(.+)$') {
+      $directive = $matches[1].Trim()
+
+      if ($directive -match '^TEST:\s*(.+)$') {
+        $metadata.TestName = $matches[1].Trim()
+      }
+      elseif ($directive -match '^EXIT:\s*(.+)$') {
+        $metadata.ExpectedExitCode = [int]$matches[1].Trim()
+      }
+      elseif ($directive -match '^STDOUT:\s*(.+)$') {
+        $metadata.ExpectedStdout += $matches[1].Trim()
+      }
+      elseif ($directive -match '^STDERR:\s*(.+)$') {
+        $metadata.ExpectedStderr += $matches[1].Trim()
+      }
+      elseif ($directive -match '^COMPILE-ERROR:\s*(.+)$') {
+        $metadata.ExpectedCompileErrors += $matches[1].Trim()
+      }
+      elseif ($directive -match '^COMPILE-ERROR$') {
+        # Handle the case where COMPILE-ERROR has no specific code
+        $metadata.ExpectedCompileErrors += ''
+      }
+    }
+  }
+
+  return $metadata
+}
+
+function Normalize-Output([string] $text) {
+  # Split into lines, trim trailing whitespace and carriage returns
+  $lines = $text -split "`n" | ForEach-Object {
+    $_.TrimEnd("`r").TrimEnd()
+  } | Where-Object { $_ -ne '' }
+  return $lines
+}
+
+function Resolve-ExecutablePath([string] $sourceFile) {
+  $base = [System.IO.Path]::GetFileNameWithoutExtension($sourceFile)
+  $dir = [System.IO.Path]::GetDirectoryName($sourceFile)
+
+  # Try .exe first on Windows
+  $exePath = Join-Path $dir "$base.exe"
+  if (Test-Path $exePath) {
+    return $exePath
+  }
+
+  # Try without extension
+  $exePath = Join-Path $dir $base
+  if (Test-Path $exePath) {
+    return $exePath
+  }
+
+  return $null
+}
+
+function Render-ProgressBar([int] $current, [int] $total) {
+  if ($total -le 0) { return }
+
+  $width = 40
+  $percent = [Math]::Min(100, ($current * 100) / $total)
+  $filled = [Math]::Min($width, ($current * $width) / $total)
+  $empty = $width - $filled
+
+  $filledBar = '#' * $filled
+  $emptyBar = '-' * $empty
+
+  Write-Host "`r[$filledBar$emptyBar] $current/$total ($percent%)" -NoNewline
+}
+
 Write-Host "== Building compiler (win-x64) ==" -ForegroundColor Cyan
 $code = Invoke-ChildPwsh -file $BuildScript -arguments 'win-x64'
 if ($code -ne 0) {
@@ -79,17 +160,29 @@ $Passed = 0
 $Failed = 0
 $FailedList = @()
 
+Render-ProgressBar -current 0 -total $TestFiles.Count
+
 foreach ($file in $TestFiles) {
   $Total++
-  $rel = Resolve-Path -LiteralPath $file.FullName | ForEach-Object { $_.Path.Replace($RepoRoot + '\\','') }
-  if ($ShowProgress) { Write-Host "[BUILD] $rel" -ForegroundColor Yellow }
+  $rel = $file.FullName.Replace("$RepoRoot\", '')
 
+  $metadata = Parse-TestMetadata -filePath $file.FullName
+  $expectCompileFail = $metadata.ExpectedCompileErrors.Count -gt 0
+
+  if ($ShowProgress) {
+    Write-Host "`r$(' ' * 80)`r" -NoNewline  # Clear progress bar
+    if ($metadata.TestName) {
+      Write-Host "[BUILD] $rel :: $($metadata.TestName)" -ForegroundColor Yellow
+    } else {
+      Write-Host "[BUILD] $rel" -ForegroundColor Yellow
+    }
+  }
+
+  # Compile the test
   $psi = New-Object System.Diagnostics.ProcessStartInfo
   $psi.FileName = $Flang
-  # Only build; rely on default stdlib resolution near the binary. Use --release for optimized C backend.
-  # Also emit FIR next to the source file
   $firPath = [System.IO.Path]::ChangeExtension($file.FullName, 'fir')
-  $psi.Arguments = '"' + $file.FullName + '" --release --emit-fir ' + '"' + $firPath + '"'
+  $psi.Arguments = "`"$($file.FullName)`" --release --emit-fir `"$firPath`""
   $psi.UseShellExecute = $false
   $psi.RedirectStandardOutput = $true
   $psi.RedirectStandardError = $true
@@ -97,23 +190,143 @@ foreach ($file in $TestFiles) {
   $proc = New-Object System.Diagnostics.Process
   $proc.StartInfo = $psi
   $null = $proc.Start()
-  $stdout = $proc.StandardOutput.ReadToEnd()
-  $stderr = $proc.StandardError.ReadToEnd()
+  $compileStdout = $proc.StandardOutput.ReadToEnd()
+  $compileStderr = $proc.StandardError.ReadToEnd()
   $proc.WaitForExit()
-  $code = $proc.ExitCode
+  $compileExitCode = $proc.ExitCode
 
-  if ($stdout) { Write-Host $stdout.TrimEnd() }
-  if ($stderr) { Write-Host $stderr.TrimEnd() -ForegroundColor Red }
+  $compileOutput = $compileStdout + $compileStderr
+  $compileSucceeded = ($compileExitCode -eq 0)
 
-  if ($code -eq 0) {
+  $failureMessages = @()
+  $expectedFailureSatisfied = $false
+
+  if ($compileSucceeded) {
+    if ($expectCompileFail) {
+      $failureMessages += "Expected compile failure with codes: $($metadata.ExpectedCompileErrors -join ', '), but compilation succeeded"
+    } else {
+      # Compilation succeeded as expected - now run the executable
+      $exePath = Resolve-ExecutablePath -sourceFile $file.FullName
+
+      if (-not $exePath) {
+        $failureMessages += "FLang.CLI did not produce an executable for $rel"
+      } else {
+        # Run the executable
+        $runPsi = New-Object System.Diagnostics.ProcessStartInfo
+        $runPsi.FileName = $exePath
+        $runPsi.UseShellExecute = $false
+        $runPsi.RedirectStandardOutput = $true
+        $runPsi.RedirectStandardError = $true
+
+        $runProc = New-Object System.Diagnostics.Process
+        $runProc.StartInfo = $runPsi
+        $null = $runProc.Start()
+        $runStdout = $runProc.StandardOutput.ReadToEnd()
+        $runStderr = $runProc.StandardError.ReadToEnd()
+        $runProc.WaitForExit()
+        $runExitCode = $runProc.ExitCode
+
+        # Validate exit code
+        if ($null -ne $metadata.ExpectedExitCode) {
+          if ($runExitCode -ne $metadata.ExpectedExitCode) {
+            $failureMessages += "Expected exit code $($metadata.ExpectedExitCode) but got $runExitCode"
+          }
+        }
+
+        # Validate stdout
+        if ($metadata.ExpectedStdout.Count -gt 0) {
+          $actualStdout = Normalize-Output -text $runStdout
+          foreach ($expectedLine in $metadata.ExpectedStdout) {
+            if ($actualStdout -notcontains $expectedLine) {
+              $failureMessages += "Missing expected STDOUT line: $expectedLine"
+            }
+          }
+        }
+
+        # Validate stderr
+        if ($metadata.ExpectedStderr.Count -gt 0) {
+          $actualStderr = Normalize-Output -text $runStderr
+          foreach ($expectedLine in $metadata.ExpectedStderr) {
+            if ($actualStderr -notcontains $expectedLine) {
+              $failureMessages += "Missing expected STDERR line: $expectedLine"
+            }
+          }
+        }
+      }
+    }
+  } else {
+    # Compilation failed
+    if ($expectCompileFail) {
+      # Expected failure - check for error codes
+      $missingCodes = @()
+      foreach ($code in $metadata.ExpectedCompileErrors) {
+        if ($code -and $compileOutput -notlike "*$code*") {
+          $missingCodes += $code
+        }
+      }
+
+      if ($missingCodes.Count -eq 0) {
+        $expectedFailureSatisfied = $true
+      } else {
+        $failureMessages += "Missing expected error codes: $($missingCodes -join ', ')"
+      }
+    } else {
+      $failureMessages += "Compilation failed for $rel"
+    }
+  }
+
+  # Determine pass/fail
+  if ($failureMessages.Count -eq 0) {
     $Passed++
-    if ($ShowProgress) { Write-Host "[OK]    $rel" -ForegroundColor Green }
+    if ($ShowProgress) {
+      Write-Host "`r$(' ' * 80)`r" -NoNewline  # Clear progress bar
+      if ($expectedFailureSatisfied) {
+        Write-Host "[OK]    $rel (expected compile error)" -ForegroundColor Green
+      } else {
+        Write-Host "[OK]    $rel" -ForegroundColor Green
+      }
+    }
   } else {
     $Failed++
     $FailedList += $rel
-    Write-Host "[FAIL]  $rel (exit $code)" -ForegroundColor Red
+    Write-Host "`r$(' ' * 80)`r" -NoNewline  # Clear progress bar
+
+    foreach ($msg in $failureMessages) {
+      Write-Host $msg -ForegroundColor Red
+    }
+
+    if ($compileOutput) {
+      Write-Host "--- Compiler Output: $rel ---" -ForegroundColor Red
+      Write-Host $compileOutput
+    }
+
+    if ($runStdout) {
+      Write-Host "--- Program STDOUT: $rel ---" -ForegroundColor Red
+      Write-Host $runStdout
+    }
+
+    if ($runStderr) {
+      Write-Host "--- Program STDERR: $rel ---" -ForegroundColor Red
+      Write-Host $runStderr
+    }
+
+    Write-Host "[FAIL]  $rel" -ForegroundColor Red
   }
+
+  Render-ProgressBar -current $Total -total $TestFiles.Count
 }
 
+Write-Host ""  # New line after progress bar
 Write-Host "Build summary: $Passed passed, $Failed failed, $Total total" -ForegroundColor Cyan
+
+if ($Failed -gt 0) {
+  if ($FailedList.Count -gt 0) {
+    Write-Host "Failed scripts:" -ForegroundColor Red
+    foreach ($f in $FailedList) {
+      Write-Host " - $f" -ForegroundColor Red
+    }
+  }
+  exit 1
+}
+
 exit 0

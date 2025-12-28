@@ -11,6 +11,8 @@ public class Compilation
     private int _stringIdCounter;
 
     public string StdlibPath { get; set; } = "";
+    public string WorkingDirectory { get; set; } = "";
+    public List<string> IncludePaths { get; set; } = [];
 
     public int AllocateStringId()
     {

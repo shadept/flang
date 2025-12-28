@@ -15,8 +15,8 @@ public class AstLowering
     private readonly Compilation _compilation;
     private readonly List<BasicBlock> _allBlocks = [];
     private readonly List<Diagnostic> _diagnostics = [];
-    private readonly Dictionary<string, Value> _locals = new();
-    private readonly HashSet<string> _parameters = new();
+    private readonly Dictionary<string, Value> _locals = [];
+    private readonly HashSet<string> _parameters = [];
     private readonly Stack<LoopContext> _loopStack = new();
     private readonly Stack<List<ExpressionNode>> _deferStack = new();
     private readonly TypeChecker _typeSolver;
@@ -27,7 +27,7 @@ public class AstLowering
     private int _tempCounter;
 
     // Track type literal indices for the global type table
-    private readonly Dictionary<FType, int> _typeTableIndices = new();
+    private readonly Dictionary<FType, int> _typeTableIndices = [];
     private GlobalValue? _typeTableGlobal = null;
 
     private AstLowering(Compilation compilation, TypeChecker typeSolver)
@@ -141,7 +141,10 @@ public class AstLowering
             var type = types[i];
             _typeTableIndices[type] = i;
 
-            var typeName = type.Name;
+            // For user-defined structs, use the FQN if available
+            var typeName = type is StructType st && _typeSolver.GetStructFqn(st) is string fqn
+                ? fqn
+                : type.Name;
             var nameBytes = System.Text.Encoding.UTF8.GetBytes(typeName + "\0");
             var nameArray = new ArrayConstantValue(nameBytes, TypeRegistry.U8)
             {

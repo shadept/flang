@@ -11,7 +11,7 @@ public class Parser
 {
     private readonly Lexer _lexer;
     private Token _currentToken;
-    private readonly List<Diagnostic> _diagnostics = new();
+    private readonly List<Diagnostic> _diagnostics = [];
 
     public Parser(Lexer lexer)
     {

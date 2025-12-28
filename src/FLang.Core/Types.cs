@@ -340,9 +340,9 @@ public class StructType : TypeBase
     {
         StructName = name;
         Name = name; // Will be overridden in ToString() if type args present
-        TypeArguments = typeArguments ?? new List<TypeBase>();
+        TypeArguments = typeArguments ?? [];
         TypeParameters = new List<string>(); // Empty for new style
-        Fields = fields ?? new List<(string Name, TypeBase Type)>();
+        Fields = fields ?? [];
         ComputeLayout();
     }
 
@@ -570,7 +570,7 @@ public class EnumType : TypeBase
     public EnumType(string name, List<(string VariantName, TypeBase? PayloadType)>? variants = null)
     {
         Name = name;
-        Variants = variants ?? new List<(string, TypeBase?)>();
+        Variants = variants ?? [];
     }
 
     public override string Name { get; }
@@ -623,6 +623,12 @@ public class EnumType : TypeBase
 /// </summary>
 public static class TypeRegistry
 {
+    // Fully qualified names for well-known types
+    private const string OptionFqn = "core.option.Option";
+    private const string SliceFqn = "core.slice.Slice";
+    private const string StringFqn = "core.string.String";
+    private const string TypeFqn = "core.rtti.Type";
+
     // Void type (for functions with no return value)
     public static readonly PrimitiveType Void = new("void", 0, 0);
 
@@ -650,23 +656,17 @@ public static class TypeRegistry
     public static readonly ComptimeFloat ComptimeFloat = ComptimeFloat.Instance;
 
     // Canonical struct representation for String (binary layout: ptr + len)
-    public static readonly StructType StringStruct = new("String", [], [
+    public static readonly StructType StringStruct = new(StringFqn, [], [
         ("ptr", new ReferenceType(U8, PointerWidth.Bits64)),
         ("len", USize)
     ]);
 
     // Type struct template for runtime type information
-    public static readonly StructType TypeStructTemplate = new("Type", [], [
+    public static readonly StructType TypeStructTemplate = new(TypeFqn, [], [
         ("name", StringStruct),
         ("size", U8),
         ("align", U8)
     ]);
-
-    // Fully qualified names for well-known types
-    private const string OptionFqn = "core.option.Option";
-    private const string SliceFqn = "core.slice.Slice";
-    private const string StringFqn = "core.string.String";
-    private const string TypeFqn = "core.rtti.Type";
 
 
     // Cache for well-known types to ensure reference equality
@@ -723,25 +723,6 @@ public static class TypeRegistry
     }
 
     /// <summary>
-    /// Gets or creates a Type(T) struct instance for the given type parameter.
-    /// All instances have the same layout, differing only in the type parameter.
-    /// </summary>
-    public static StructType GetTypeStruct(TypeBase innerType)
-    {
-        if (_typeStructCache.TryGetValue(innerType, out var cached))
-            return cached;
-
-        var typeStruct = new StructType("Type", [innerType], [
-            ("name", StringStruct),
-            ("size", U8),
-            ("align", U8)
-        ]);
-
-        _typeStructCache[innerType] = typeStruct;
-        return typeStruct;
-    }
-
-    /// <summary>
     /// Creates an Option&lt;T&gt; type with fully qualified name (Algorithm W style).
     /// </summary>
     public static StructType MakeOption(TypeBase innerType)
@@ -750,7 +731,7 @@ public static class TypeRegistry
         if (_optionStructCache.TryGetValue(key, out var cached))
             return cached;
 
-        var optionType = new StructType(OptionFqn, new List<TypeBase> { innerType });
+        var optionType = new StructType(OptionFqn, [innerType]);
 
         // Add fields: has_value: bool, value: T
         optionType.WithFields([
@@ -792,6 +773,25 @@ public static class TypeRegistry
     }
 
     /// <summary>
+    /// Gets or creates a Type(T) struct instance for the given type parameter.
+    /// All instances have the same layout, differing only in the type parameter.
+    /// </summary>
+    public static StructType MakeType(TypeBase innerType)
+    {
+        if (_typeStructCache.TryGetValue(innerType, out var cached))
+            return cached;
+
+        var typeStruct = new StructType(TypeFqn, [innerType], [
+            ("name", StringStruct),
+            ("size", U8),
+            ("align", U8)
+        ]);
+
+        _typeStructCache[innerType] = typeStruct;
+        return typeStruct;
+    }
+
+    /// <summary>
     /// Checks if a TypeBase is Option&lt;T&gt; (convenience overload).
     /// </summary>
     public static bool IsOption(TypeBase type)
@@ -804,8 +804,7 @@ public static class TypeRegistry
     /// </summary>
     public static bool IsOption(StructType st)
     {
-        // Check fully qualified name first, then short name for compatibility
-        return st.StructName == OptionFqn || st.StructName == "Option";
+        return st.StructName == OptionFqn;
     }
 
     /// <summary>
@@ -821,8 +820,7 @@ public static class TypeRegistry
     /// </summary>
     public static bool IsSlice(StructType st)
     {
-        // Check fully qualified name first, then short name for compatibility
-        return st.StructName == SliceFqn || st.StructName == "Slice";
+        return st.StructName == SliceFqn;
     }
 
     /// <summary>
@@ -838,8 +836,7 @@ public static class TypeRegistry
     /// </summary>
     public static bool IsString(StructType st)
     {
-        // Check fully qualified name first, then short name for compatibility
-        return st.StructName == StringFqn || st.StructName == "String";
+        return st.StructName == StringFqn;
     }
 
     /// <summary>
@@ -855,7 +852,6 @@ public static class TypeRegistry
     /// </summary>
     public static bool IsType(StructType st)
     {
-        // Check fully qualified name first, then short name for compatibility
-        return st.StructName == TypeFqn || st.StructName == "Type";
+        return st.StructName == TypeFqn;
     }
 }

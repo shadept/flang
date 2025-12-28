@@ -14,10 +14,10 @@ namespace FLang.Codegen.C;
 public class CCodeGenerator
 {
     private readonly StringBuilder _output = new();
-    private readonly Dictionary<string, StructType> _structDefinitions = new();
-    private readonly HashSet<FType> _sliceElementTypes = new();
-    private readonly HashSet<string> _emittedGlobals = new();
-    private readonly Dictionary<string, string> _parameterRemap = new();
+    private readonly Dictionary<string, StructType> _structDefinitions = [];
+    private readonly HashSet<FType> _sliceElementTypes = [];
+    private readonly HashSet<string> _emittedGlobals = [];
+    private readonly Dictionary<string, string> _parameterRemap = [];
     private bool _headersEmitted;
 
     public static string GenerateProgram(IEnumerable<Function> functions)
@@ -93,8 +93,8 @@ public class CCodeGenerator
     {
         foreach (var structType in _structDefinitions.OrderBy(kvp => kvp.Key).Select(kvp => kvp.Value))
         {
-            if (structType.StructName == "String") continue;
-            if (structType.StructName == "Type") continue;
+            if (TypeRegistry.IsString(structType)) continue;
+            if (TypeRegistry.IsType(structType)) continue;
             EmitStructDefinition(structType);
         }
     }
@@ -146,7 +146,7 @@ public class CCodeGenerator
             return;
 
         if (global.Initializer is StructConstantValue structConst &&
-            structConst.Type is StructType st && st.Name == "String")
+            structConst.Type is StructType st && TypeRegistry.IsString(st))
         {
             var ptrField = structConst.FieldValues["ptr"];
             var lenField = structConst.FieldValues["len"];
@@ -833,9 +833,9 @@ public class CCodeGenerator
 
     private static bool HasSliceLayout(StructType structType)
     {
-        if (structType.StructName == "String")
+        if (TypeRegistry.IsString(structType))
             return true;
-        if (structType.StructName == "Slice" && structType.GetFieldType("ptr") != null && structType.GetFieldType("len") != null)
+        if (TypeRegistry.IsSlice(structType) && structType.GetFieldType("ptr") != null && structType.GetFieldType("len") != null)
             return true;
         return false;
     }
@@ -859,18 +859,18 @@ public class CCodeGenerator
     private string GetStructCName(StructType structType)
     {
         // Handle builtin String type
-        if (structType.StructName == "String")
+        if (TypeRegistry.IsString(structType))
             return "String";
 
         // Handle builtin Type(T) - all instantiations use the same C struct
-        if (structType.StructName == "Type")
+        if (TypeRegistry.IsType(structType))
             return "Type";
 
         // For generic structs, mangle type arguments into name
         if (structType.TypeArguments.Count > 0)
         {
             var typeArgs = string.Join("_", structType.TypeArguments.Select(t =>
-                t.Name.Replace("*", "Ptr").Replace(" ", "_").Replace("[", "").Replace("]", "").Replace("<", "_").Replace(">", "_")));
+                t.Name.Replace("*", "Ptr").Replace(" ", "_").Replace("[", "").Replace("]", "").Replace("<", "_").Replace(">", "_").Replace(".", "_")));
             return $"{structType.StructName.Replace('.', '_')}_{typeArgs}";
         }
 

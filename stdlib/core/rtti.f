@@ -1,10 +1,16 @@
 // Runtime type introspection functions
 // These are regular FLang functions, not compiler intrinsics!
 
+struct Type(T) {
+    name: String
+    size: u8
+    aling: u8
+}
+
 pub fn size_of(t: Type($T)) usize {
-    return t.size as usize
+    return t.size
 }
 
 pub fn align_of(t: Type($T)) usize {
-    return t.align as usize
+    return t.align
 }

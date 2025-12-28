@@ -21,7 +21,9 @@ public record CompilerOptions(
     CompilerConfig? CCompilerConfig = null,
     bool ReleaseBuild = false,
     string? EmitFir = null,
-    bool DebugLogging = false
+    bool DebugLogging = false,
+    string? WorkingDirectory = null,
+    IReadOnlyList<string>? IncludePaths = null
 );
 
 public record CompilationResult(
@@ -35,8 +37,23 @@ public class Compiler
 {
     public CompilationResult Compile(CompilerOptions options)
     {
+        // Default working directory to the directory of the input file if not specified
+        var workingDir = options.WorkingDirectory
+            ?? Path.GetDirectoryName(Path.GetFullPath(options.InputFilePath))
+            ?? Directory.GetCurrentDirectory();
+
         var compilation = new Compilation();
         compilation.StdlibPath = options.StdlibPath;
+        compilation.WorkingDirectory = workingDir;
+
+        // Build include paths: working directory, stdlib, then any additional paths
+        compilation.IncludePaths.Add(workingDir);  // Working dir first (input file's directory)
+        compilation.IncludePaths.Add(options.StdlibPath);  // Then stdlib
+        if (options.IncludePaths != null && options.IncludePaths.Count > 0)
+        {
+            foreach (var path in options.IncludePaths)
+                compilation.IncludePaths.Add(path);
+        }
 
         var allDiagnostics = new List<Diagnostic>();
 
@@ -63,15 +80,32 @@ public class Compiler
         var typeSolverLogger = loggerFactory.CreateLogger<TypeChecker>();
         var typeSolver = new TypeChecker(compilation, typeSolverLogger);
 
-        foreach (var module in parsedModules.Values)
+        // Phase 1: Collect struct definitions from all modules
+        foreach (var kvp in parsedModules)
         {
-            typeSolver.CollectStructDefinitions(module);
-            typeSolver.CollectFunctionSignatures(module);
+            var modulePath = TypeChecker.DeriveModulePath(kvp.Key, compilation.IncludePaths, compilation.WorkingDirectory);
+            typeSolver.CollectStructDefinitions(kvp.Value, modulePath);
         }
 
-        foreach (var module in parsedModules.Values)
+        // Phase 2: Collect function signatures
+        foreach (var kvp in parsedModules)
         {
-            typeSolver.CheckModuleBodies(module);
+            var modulePath = TypeChecker.DeriveModulePath(kvp.Key, compilation.IncludePaths, compilation.WorkingDirectory);
+            typeSolver.CollectFunctionSignatures(kvp.Value, modulePath);
+        }
+
+        // Phase 3: Register imports (must happen after all structs collected)
+        foreach (var kvp in parsedModules)
+        {
+            var modulePath = TypeChecker.DeriveModulePath(kvp.Key, compilation.IncludePaths, compilation.WorkingDirectory);
+            typeSolver.RegisterImports(kvp.Value, modulePath);
+        }
+
+        // Phase 4: Type check module bodies
+        foreach (var kvp in parsedModules)
+        {
+            var modulePath = TypeChecker.DeriveModulePath(kvp.Key, compilation.IncludePaths, compilation.WorkingDirectory);
+            typeSolver.CheckModuleBodies(kvp.Value, modulePath);
         }
 
         typeSolver.EnsureAllTypesResolved();

@@ -83,7 +83,7 @@ public class HarnessTests
             {
                 sb.Append(DiagnosticPrinter.Print(diagnostic, result.CompilationContext));
             }
-            Assert.Fail($"Compilation failed for {metadata.TestName} ({absoluteTestFile}):\n{sb}");
+            Assert.Fail($"Compilation failed for {metadata.TestName} ({absoluteTestFile}):\n\r{sb}");
         }
 
         var generatedExePath = result.ExecutablePath!;
