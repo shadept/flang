@@ -25,8 +25,8 @@ pub fn list_pop(list: &List($T)) T? {
     return null
 }
 
-pub fn list_get(list: &List($T), index: usize) &T {
+pub fn list_get(list: &List($T), index: usize) T {
     __flang_unimplemented()
     let zero: usize = 0
-    return zero as &T
+    return zero as T
 }

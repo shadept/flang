@@ -44,6 +44,7 @@ public class TypeChecker
     private readonly Dictionary<(FunctionDeclarationNode Function, CallExpressionNode Call), ResolvedCall> _resolvedCalls = new();
 
     private readonly HashSet<string> _emittedSpecs = [];
+    private Dictionary<string, FType>? _currentBindings;
 
     private readonly Stack<HashSet<string>> _genericScopes = new();
     private readonly Stack<FunctionDeclarationNode> _functionStack = new();
@@ -1242,6 +1243,17 @@ public class TypeChecker
     public FType? ResolveTypeNode(TypeNode? typeNode)
     {
         if (typeNode == null) return null;
+        var type = ResolveTypeNodeInternal(typeNode);
+        if (type != null && _currentBindings != null)
+        {
+            return SubstituteGenerics(type, _currentBindings);
+        }
+        return type;
+    }
+
+    private FType? ResolveTypeNodeInternal(TypeNode? typeNode)
+    {
+        if (typeNode == null) return null;
         switch (typeNode)
         {
             case NamedTypeNode named:
@@ -2040,6 +2052,7 @@ public class TypeChecker
         if (_emittedSpecs.Contains(key)) return;
 
         PushGenericScope(genericEntry.AstNode);
+        _currentBindings = bindings;
         try
         {
             // Substitute param/return types in the signature
@@ -2069,6 +2082,7 @@ public class TypeChecker
         }
         finally
         {
+            _currentBindings = null;
             PopGenericScope();
         }
     }

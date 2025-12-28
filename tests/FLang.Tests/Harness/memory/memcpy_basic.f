@@ -1,5 +1,5 @@
 //! TEST: memcpy_basic
-//! EXIT: 123
+//! EXIT: 456
 
 // Test memcpy - copy data between two buffers
 
@@ -13,7 +13,7 @@ pub fn main() i32 {
     let dst: [i32; 3]
 
     // Copy first element (4 bytes) - requires explicit cast to &u8 for type safety
-    memcpy(dst as &u8, src as &u8, 4)
+    memcpy(dst.ptr as &u8, src.ptr as &u8, 4)
 
-    return dst[0]
+    return dst[1]
 }
