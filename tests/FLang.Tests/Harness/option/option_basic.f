@@ -5,8 +5,7 @@ import std.option
 
 fn maybe_add(flag: bool, value: i32) i32? {
     if (flag) {
-        let r: i32? = value
-        return r
+        return value
     }
     return null
 }

@@ -1,6 +1,8 @@
 // Runtime type introspection functions
 // These are regular FLang functions, not compiler intrinsics!
 
+import core.string
+
 struct Type(T) {
     name: String
     size: u8

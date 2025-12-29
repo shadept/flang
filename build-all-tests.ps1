@@ -190,9 +190,13 @@ foreach ($file in $TestFiles) {
   $proc = New-Object System.Diagnostics.Process
   $proc.StartInfo = $psi
   $null = $proc.Start()
-  $compileStdout = $proc.StandardOutput.ReadToEnd()
-  $compileStderr = $proc.StandardError.ReadToEnd()
+
+  # Read asynchronously to avoid deadlock
+  $stdoutTask = $proc.StandardOutput.ReadToEndAsync()
+  $stderrTask = $proc.StandardError.ReadToEndAsync()
   $proc.WaitForExit()
+  $compileStdout = $stdoutTask.Result
+  $compileStderr = $stderrTask.Result
   $compileExitCode = $proc.ExitCode
 
   $compileOutput = $compileStdout + $compileStderr
@@ -221,9 +225,13 @@ foreach ($file in $TestFiles) {
         $runProc = New-Object System.Diagnostics.Process
         $runProc.StartInfo = $runPsi
         $null = $runProc.Start()
-        $runStdout = $runProc.StandardOutput.ReadToEnd()
-        $runStderr = $runProc.StandardError.ReadToEnd()
+
+        # Read asynchronously to avoid deadlock
+        $runStdoutTask = $runProc.StandardOutput.ReadToEndAsync()
+        $runStderrTask = $runProc.StandardError.ReadToEndAsync()
         $runProc.WaitForExit()
+        $runStdout = $runStdoutTask.Result
+        $runStderr = $runStderrTask.Result
         $runExitCode = $runProc.ExitCode
 
         # Validate exit code

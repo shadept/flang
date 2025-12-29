@@ -7,6 +7,7 @@ using FLang.Frontend.Ast.Statements;
 using FLang.Frontend.Ast.Types;
 using FLang.IR;
 using FLang.IR.Instructions;
+using Microsoft.Extensions.Logging;
 
 namespace FLang.Semantics;
 
@@ -20,6 +21,7 @@ public class AstLowering
     private readonly Stack<LoopContext> _loopStack = new();
     private readonly Stack<List<ExpressionNode>> _deferStack = new();
     private readonly TypeChecker _typeSolver;
+    private readonly ILogger<AstLowering> _logger;
     private int _blockCounter;
     private BasicBlock _currentBlock = null!;
     private Function _currentFunction = null!;
@@ -30,18 +32,19 @@ public class AstLowering
     private readonly Dictionary<FType, int> _typeTableIndices = [];
     private GlobalValue? _typeTableGlobal = null;
 
-    private AstLowering(Compilation compilation, TypeChecker typeSolver)
+    private AstLowering(Compilation compilation, TypeChecker typeSolver, ILogger<AstLowering> logger)
     {
         _compilation = compilation;
         _typeSolver = typeSolver;
+        _logger = logger;
     }
 
     public IReadOnlyList<Diagnostic> Diagnostics => _diagnostics;
 
     public static (Function Function, IReadOnlyList<Diagnostic> Diagnostics) Lower(FunctionDeclarationNode functionNode,
-        Compilation compilation, TypeChecker typeSolver)
+        Compilation compilation, TypeChecker typeSolver, ILogger<AstLowering> logger)
     {
-        var lowering = new AstLowering(compilation, typeSolver);
+        var lowering = new AstLowering(compilation, typeSolver, logger);
         var function = lowering.LowerFunction(functionNode);
         return (function, lowering.Diagnostics);
     }
@@ -398,10 +401,15 @@ public class AstLowering
         var value = LowerExpressionCore(expression);
         var finalType = _typeSolver.GetType(expression);
 
+        _logger.LogDebug("[AstLowering] LowerExpression: exprType={ExpressionType}, value.Type={ValueType}, finalType={FinalType}",
+            expression.GetType().Name, value.Type?.Name ?? "null", finalType?.Name ?? "null");
+
         // If final type is Option<T> but value is T, wrap it
         if (finalType is StructType st && TypeRegistry.IsOption(st) &&
             st.TypeArguments.Count > 0 && value.Type != null && value.Type.Equals(st.TypeArguments[0]))
         {
+            _logger.LogDebug("[AstLowering] Wrapping value in Option: {ValueType} -> {OptionType}",
+                value.Type.Name, st.Name);
             return LowerLiftToOption(value, st);
         }
 

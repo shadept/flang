@@ -35,7 +35,6 @@ public class TypeChecker
     private string? _currentModulePath = null;
     private readonly Dictionary<string, Dictionary<string, StructType>> _structsByModule = [];
     private readonly Dictionary<string, StructType> _structsByFqn = [];
-    private readonly Dictionary<StructType, string> _structToFqn = []; // Reverse mapping
     private readonly Dictionary<string, HashSet<string>> _moduleImports = [];
 
     // Anonymous struct literal mapping
@@ -55,6 +54,7 @@ public class TypeChecker
 
     private readonly Stack<HashSet<string>> _genericScopes = new();
     private readonly Stack<FunctionDeclarationNode> _functionStack = new();
+    private readonly Dictionary<FunctionDeclarationNode, FType> _functionReturnTypes = [];
 
     // Track binding recursion depth for indented logging
     private int _bindingDepth = 0;
@@ -124,7 +124,7 @@ public class TypeChecker
 
     public IReadOnlySet<FType> InstantiatedTypes => _instantiatedTypes;
 
-    public string? GetStructFqn(StructType structType) => _structToFqn.GetValueOrDefault(structType);
+    public string GetStructFqn(StructType structType) => structType.StructName;
 
     public FType? ResolveTypeName(string typeName)
     {
@@ -207,7 +207,26 @@ public class TypeChecker
             }
         }
 
-        return foundType;
+        if (foundType != null)
+            return foundType;
+
+        // 3. Fallback: search all modules for unambiguous match by simple name
+        // This allows finding types like Option even if core.option isn't directly imported
+        StructType? globalFoundType = null;
+        foreach (var moduleTypes in _structsByModule.Values)
+        {
+            if (moduleTypes.TryGetValue(typeName, out var globalType))
+            {
+                if (globalFoundType != null)
+                {
+                    // Ambiguous - multiple modules define this simple name
+                    return null;
+                }
+                globalFoundType = globalType;
+            }
+        }
+
+        return globalFoundType;
     }
 
     public static string DeriveModulePath(string filePath, IReadOnlyList<string> includePaths, string workingDirectory)
@@ -343,25 +362,12 @@ public class TypeChecker
             // Compute FQN for this struct
             var fqn = $"{modulePath}.{structDecl.Name}";
 
-            // Check if this is a well-known type and use TypeRegistry version instead
-            // This ensures type identity (same instance) for comparisons
-            StructType stype;
-            if (fqn == "core.string.String")
-                stype = TypeRegistry.StringStruct;
-            else if (fqn == "core.rtti.Type")
-                stype = TypeRegistry.TypeStructTemplate;
-            else if (fqn == "core.option.Option")
-                stype = new StructType("core.option.Option", typeArgs, fields);
-            else if (fqn == "core.slice.Slice")
-                stype = new StructType("core.slice.Slice", typeArgs, fields);
-            else
-                // Create struct with simple name (keep StructName simple for C codegen compatibility)
-                stype = new StructType(structDecl.Name, typeArgs, fields);
+            // Create struct type with FQN as StructName
+            StructType stype = new(fqn, typeArgs, fields);
 
             // Store in new module-aware structures using FQN as key
             _structsByModule[modulePath][structDecl.Name] = stype;
             _structsByFqn[fqn] = stype;
-            _structToFqn[stype] = fqn; // Reverse mapping for typename emission
 
             // Also store by simple name in legacy dict (for backward compatibility)
             _structs[structDecl.Name] = stype;
@@ -459,7 +465,15 @@ public class TypeChecker
             }
 
             var expectedReturn = ResolveTypeNode(function.ReturnType) ?? TypeRegistry.Void;
-            foreach (var stmt in function.Body) CheckStatement(stmt, expectedReturn);
+            _logger.LogDebug("[TypeChecker] CheckFunctionBody '{FunctionName}': ReturnType node type={ReturnTypeNodeType}, expectedReturn={ExpectedReturn}",
+                function.Name,
+                function.ReturnType?.GetType().Name ?? "null",
+                expectedReturn.Name);
+
+            // Store expected return type for this function (used by CheckReturnStatement)
+            _functionReturnTypes[function] = expectedReturn;
+
+            foreach (var stmt in function.Body) CheckStatement(stmt);
         }
         finally
         {
@@ -469,12 +483,12 @@ public class TypeChecker
         }
     }
 
-    private void CheckStatement(StatementNode statement, FType? expectedReturnType)
+    private void CheckStatement(StatementNode statement)
     {
         switch (statement)
         {
             case ReturnStatementNode ret:
-                CheckReturnStatement(ret, expectedReturnType);
+                CheckReturnStatement(ret);
                 break;
             case VariableDeclarationNode v:
                 CheckVariableDeclaration(v);
@@ -497,9 +511,20 @@ public class TypeChecker
         }
     }
 
-    private void CheckReturnStatement(ReturnStatementNode ret, FType? expectedReturnType)
+    private void CheckReturnStatement(ReturnStatementNode ret)
     {
+        // Get expected return type from current function
+        FType? expectedReturnType = null;
+        if (_functionStack.Count > 0)
+        {
+            var currentFunction = _functionStack.Peek();
+            expectedReturnType = _functionReturnTypes.GetValueOrDefault(currentFunction);
+        }
+
         var et = CheckExpression(ret.Expression, expectedReturnType);
+        _logger.LogDebug("[TypeChecker] CheckReturnStatement: expectedReturnType={ExpectedType}, expressionType={ExprType}",
+            expectedReturnType?.Name ?? "null", et.Name);
+
         if (expectedReturnType != null && !CanCoerse(et, expectedReturnType))
         {
             _diagnostics.Add(Diagnostic.Error(
@@ -513,6 +538,11 @@ public class TypeChecker
             // Update type map with resolved type to avoid comptime_int escape
             var unified = UnifyTypes(et, expectedReturnType, ret.Expression.Span);
             UpdateTypeMapRecursive(ret.Expression, unified);
+
+            // Log what's in the type map after update
+            var typeInMap = _typeMap.GetValueOrDefault(ret.Expression);
+            _logger.LogDebug("[TypeChecker] After UpdateTypeMapRecursive: unified={UnifiedType}, typeMap[expression]={TypeInMap}",
+                unified.Name, typeInMap?.Name ?? "null");
         }
     }
 
@@ -958,7 +988,7 @@ public class TypeChecker
                         if (s is ExpressionStatementNode es) last = CheckExpression(es.Expression);
                         else
                         {
-                            CheckStatement(s, null);
+                            CheckStatement(s);
                             last = null;
                         }
                     }
@@ -1433,14 +1463,16 @@ public class TypeChecker
                         return bt;
                     }
 
-                    if (_structs.TryGetValue(named.Name, out var st))
+                    // Use ResolveTypeName to handle both FQN and short names
+                    var resolvedType = ResolveTypeName(named.Name);
+                    if (resolvedType != null)
                     {
                         // Track non-Type struct usage
-                        if (st.StructName != "Type")
+                        if (!TypeRegistry.IsType(resolvedType))
                         {
-                            _instantiatedTypes.Add(st);
+                            _instantiatedTypes.Add(resolvedType);
                         }
-                        return st;
+                        return resolvedType;
                     }
 
                     if (named.Name.Length == 1 && char.IsUpper(named.Name[0]))

@@ -22,7 +22,7 @@ public static class CompilerDiscovery
             var (clPath, clEnv) = FindClExeWithEnvironment();
             environment = clEnv;
 
-            var msvcArgs = new List<string> { "/nologo" };
+            var msvcArgs = new List<string> { "/nologo", "/ZI" };
             if (releaseBuild) msvcArgs.Add("/O2");
             msvcArgs.Add($"/Fe\"{outputFilePath}\"");
             msvcArgs.Add($"\"{cFilePath}\"");

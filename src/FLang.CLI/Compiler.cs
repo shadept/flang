@@ -117,6 +117,7 @@ public class Compiler
         }
 
         // 3. Lowering to FIR
+        var loweringLogger = loggerFactory.CreateLogger<AstLowering>();
         var allFunctions = new List<Function>();
         var loweringDiagnostics = new List<Diagnostic>();
 
@@ -125,7 +126,7 @@ public class Compiler
             foreach (var functionNode in module.Functions)
             {
                 if (typeSolver.IsGenericFunction(functionNode)) continue;
-                var (irFunction, diagnostics) = AstLowering.Lower(functionNode, compilation, typeSolver);
+                var (irFunction, diagnostics) = AstLowering.Lower(functionNode, compilation, typeSolver, loweringLogger);
                 allFunctions.Add(irFunction);
                 loweringDiagnostics.AddRange(diagnostics);
             }
@@ -133,7 +134,7 @@ public class Compiler
 
         foreach (var specFn in typeSolver.GetSpecializedFunctions())
         {
-            var (irFunction, diagnostics) = AstLowering.Lower(specFn, compilation, typeSolver);
+            var (irFunction, diagnostics) = AstLowering.Lower(specFn, compilation, typeSolver, loweringLogger);
             allFunctions.Add(irFunction);
             loweringDiagnostics.AddRange(diagnostics);
         }

@@ -339,7 +339,7 @@ public class StructType : TypeBase
     public StructType(string name, List<TypeBase>? typeArguments = null, List<(string Name, TypeBase Type)>? fields = null)
     {
         StructName = name;
-        Name = name; // Will be overridden in ToString() if type args present
+        Name = name; // Fully qualified name
         TypeArguments = typeArguments ?? [];
         TypeParameters = new List<string>(); // Empty for new style
         Fields = fields ?? [];
@@ -473,16 +473,25 @@ public class StructType : TypeBase
 
     public override string ToString()
     {
+        // Extract simple name from FQN for display (e.g., "core.string.String" -> "String")
+        var displayName = GetSimpleName(StructName);
+
         if (TypeArguments.Count > 0)
         {
             var typeArgs = string.Join(", ", TypeArguments.Select(t => t.ToString()));
-            return $"{StructName}({typeArgs})";
+            return $"{displayName}({typeArgs})";
         }
         if (TypeParameters.Count > 0)
         {
-            return $"{StructName}[{string.Join(", ", TypeParameters)}]";
+            return $"{displayName}[{string.Join(", ", TypeParameters)}]";
         }
-        return StructName;
+        return displayName;
+    }
+
+    private static string GetSimpleName(string fqn)
+    {
+        var lastDot = fqn.LastIndexOf('.');
+        return lastDot >= 0 ? fqn.Substring(lastDot + 1) : fqn;
     }
 
     /// <summary>

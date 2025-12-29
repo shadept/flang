@@ -18,6 +18,7 @@ public class CCodeGenerator
     private readonly HashSet<FType> _sliceElementTypes = [];
     private readonly HashSet<string> _emittedGlobals = [];
     private readonly Dictionary<string, string> _parameterRemap = [];
+    private Function? _currentFunction;
     private bool _headersEmitted;
 
     public static string GenerateProgram(IEnumerable<Function> functions)
@@ -408,6 +409,7 @@ public class CCodeGenerator
 
     private void EmitFunctionDefinition(Function function)
     {
+        _currentFunction = function;
         var functionName = GetFunctionCName(function);
         var paramList = BuildParameterList(function);
         var returnType = TypeToCType(function.ReturnType);
@@ -727,6 +729,14 @@ public class CCodeGenerator
     private void EmitReturn(ReturnInstruction ret)
     {
         var valueExpr = ValueToString(ret.Value);
+
+        // If returning a struct by value, but the IR value is a pointer, dereference it
+        if (ret.Value.Type is ReferenceType { InnerType: StructType } &&
+            _currentFunction?.ReturnType is StructType)
+        {
+            valueExpr = $"*{valueExpr}";
+        }
+
         _output.AppendLine($"    return {valueExpr};");
     }
 
