@@ -3,12 +3,20 @@ using System.Runtime.InteropServices;
 using System.Text;
 using FLang.CLI;
 using FLang.Core;
+using Xunit.Abstractions;
 using Xunit.Sdk;
 
 namespace FLang.Tests;
 
 public class HarnessTests
 {
+    private readonly ITestOutputHelper _testOutputHelper;
+
+    public HarnessTests(ITestOutputHelper testOutputHelper)
+    {
+        _testOutputHelper = testOutputHelper;
+    }
+
     private static readonly Compiler _compiler = new();
     private static readonly string _projectRoot;
     private static readonly string _stdlibPath;
@@ -29,7 +37,7 @@ public class HarnessTests
     {
         // Resolve relative path (from Harness dir) to absolute
         var absoluteTestFile = Path.Combine(_harnessDir, testFile);
-        Console.WriteLine($"[TEST_FILE] {absoluteTestFile}");
+        _testOutputHelper.WriteLine($"[TEST_FILE] {absoluteTestFile}");
         var testFileName = Path.GetFileNameWithoutExtension(absoluteTestFile);
         var testDirectory = Path.GetDirectoryName(absoluteTestFile)!;
 
@@ -63,7 +71,7 @@ public class HarnessTests
 
             foreach (var code in metadata.ExpectedCompileErrors)
             {
-                if (!result.Diagnostics.Any(d => d.Code == code))
+                if (result.Diagnostics.All(d => d.Code != code))
                 {
                     var sb = new StringBuilder();
                     foreach (var diagnostic in result.Diagnostics)

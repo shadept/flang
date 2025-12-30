@@ -144,6 +144,26 @@ public class TypeChecker
 
     public string GetStructFqn(StructType structType) => structType.StructName;
 
+    /// <summary>
+    /// Formats a type name for display in error messages.
+    /// Returns the short name if available, otherwise the full name.
+    /// TODO: Check for ambiguities and use FQN when multiple types with same short name exist in scope.
+    /// </summary>
+    private string FormatTypeNameForDisplay(FType type)
+    {
+        return type switch
+        {
+            StructType st => GetSimpleName(st.StructName),
+            _ => type.Name
+        };
+    }
+
+    private static string GetSimpleName(string fqn)
+    {
+        var lastDot = fqn.LastIndexOf('.');
+        return lastDot >= 0 ? fqn.Substring(lastDot + 1) : fqn;
+    }
+
     public FType? ResolveTypeName(string typeName)
     {
         // Check built-in primitives first
@@ -660,6 +680,9 @@ public class TypeChecker
         // 1. Resolve iterable expression type
         var iterableType = CheckExpression(fl.IterableExpression);
 
+        // Track if we encountered any errors - if so, skip body checking
+        var hadIteratorError = false;
+
         // 2. Resolve iter(&T) for the iterable type using a synthetic in-memory call
         //    This leverages the normal overload resolution and generic binding machinery.
         if (_functions.TryGetValue("iter", out _))
@@ -672,30 +695,29 @@ public class TypeChecker
             var iterableAddr = new AddressOfExpressionNode(fl.IterableExpression.Span, iterableId);
             var iterCall = new CallExpressionNode(fl.Span, "iter", [iterableAddr]);
 
-            // Track diagnostics before the call to detect signature mismatches
+            // Track diagnostics before the call to detect failures
             var diagnosticsBefore = _diagnostics.Count;
             var iteratorType = CheckExpression(iterCall);
             var diagnosticsAfter = _diagnostics.Count;
-            var hadSignatureMismatch = diagnosticsAfter > diagnosticsBefore;
+            var hadError = diagnosticsAfter > diagnosticsBefore;
 
-            PopScope();
-
-            // If CheckExpression added diagnostics, it means signature mismatch (E2011 or E2004)
-            // Replace with the more specific E2022 for iterator protocol
-            if (hadSignatureMismatch)
+            // If iter(&T) failed, type is not iterable
+            if (hadError)
             {
-                // Remove the generic error and add the specific iterator protocol error
+                // Remove generic error and replace with E2021
                 var lastDiagnostic = _diagnostics[^1];
-                if (lastDiagnostic.Code == "E2011" || lastDiagnostic.Code == "E2004")
+                if (lastDiagnostic.Code == "E2004" || lastDiagnostic.Code == "E2011")
                 {
                     _diagnostics.RemoveAt(_diagnostics.Count - 1);
-                    _diagnostics.Add(Diagnostic.Error(
-                        $"no matching `iter` function for type `{iterableType}`",
-                        fl.IterableExpression.Span,
-                        $"no suitable `iter(&{iterableType})` function found for this type",
-                        "E2022"));
                 }
-                // Don't declare variable - type checking failed
+                var iterableTypeName = FormatTypeNameForDisplay(iterableType);
+                _diagnostics.Add(Diagnostic.Error(
+                    $"type `{iterableTypeName}` cannot be iterated",
+                    fl.IterableExpression.Span,
+                    $"implement the iterator protocol by defining `fn iter(&{iterableTypeName})`",
+                    "E2021"));
+                PopScope();
+                hadIteratorError = true;
             }
             else if (iteratorType is StructType iteratorStruct)
             {
@@ -710,35 +732,26 @@ public class TypeChecker
                 var diagnosticsBeforeNext = _diagnostics.Count;
                 var nextResultType = CheckExpression(nextCall);
                 var diagnosticsAfterNext = _diagnostics.Count;
-                var hadNextSignatureMismatch = diagnosticsAfterNext > diagnosticsBeforeNext;
+                var hadNextError = diagnosticsAfterNext > diagnosticsBeforeNext;
 
-                PopScope();
-
-                // If CheckExpression added diagnostics, distinguish between missing next and signature mismatch
-                if (hadNextSignatureMismatch)
+                // If next(&IteratorType) failed, iterator state missing next function
+                if (hadNextError)
                 {
+                    // Remove generic error and replace with E2023
                     var lastDiagnostic = _diagnostics[^1];
-                    if (lastDiagnostic.Code == "E2004")
+                    if (lastDiagnostic.Code == "E2004" || lastDiagnostic.Code == "E2011")
                     {
-                        // E2023: Iterator State Missing next Function (next doesn't exist at all)
                         _diagnostics.RemoveAt(_diagnostics.Count - 1);
-                        _diagnostics.Add(Diagnostic.Error(
-                            $"iterator state type `{iteratorStruct}` has no `next` function",
-                            fl.Span,
-                            $"the iterator state type returned by `iter` must have a `next(&{iteratorStruct})` function",
-                            "E2023"));
                     }
-                    else if (lastDiagnostic.Code == "E2011")
-                    {
-                        // E2024: No Matching next Function (next exists but signature doesn't match)
-                        _diagnostics.RemoveAt(_diagnostics.Count - 1);
-                        _diagnostics.Add(Diagnostic.Error(
-                            $"no matching `next` function for iterator type `{iteratorStruct}`",
-                            fl.Span,
-                            $"no suitable `next(&{iteratorStruct})` function found for this iterator state type",
-                            "E2024"));
-                    }
-                    // Don't declare variable - type checking failed
+                    var iteratorStructName = FormatTypeNameForDisplay(iteratorStruct);
+                    _diagnostics.Add(Diagnostic.Error(
+                        $"iterator state type `{iteratorStructName}` has no `next` function",
+                        fl.Span,
+                        $"define `fn next(&{iteratorStructName})` that returns an option type",
+                        "E2023"));
+                    PopScope();
+                    PopScope();
+                    hadIteratorError = true;
                 }
                 // 4. Validate that next returns an Option[E] and extract element type
                 else if (nextResultType is StructType optionStruct && TypeRegistry.IsOption(optionStruct)
@@ -749,17 +762,21 @@ public class TypeChecker
                     _forLoopTypes[fl] = new ForLoopTypes(iteratorStruct, elementType, optionStruct);
                     // Declare the loop variable with the inferred element type
                     DeclareVariable(fl.IteratorVariable, elementType, fl.Span);
+                    PopScope();
+                    PopScope();
                 }
                 else
                 {
                     // E2025: next must return an Option type
-                    var actualReturnType = nextResultType?.Name ?? "unknown";
+                    var actualReturnType = nextResultType != null ? FormatTypeNameForDisplay(nextResultType) : "unknown";
                     _diagnostics.Add(Diagnostic.Error(
-                        "`next` for this iterator must return an option type",
+                        $"`next` function must return an option type, but it returns `{actualReturnType}`",
                         fl.Span,
-                        $"expected return type `{actualReturnType}?` (`Option({actualReturnType})`), but `next` returned `{actualReturnType}`",
+                        $"change the return type to `{actualReturnType}?` or `Option({actualReturnType})`",
                         "E2025"));
-                    // Don't declare variable - type checking failed
+                    PopScope();
+                    PopScope();
+                    hadIteratorError = true;
                 }
             }
             else
@@ -768,29 +785,34 @@ public class TypeChecker
                 // This means iter exists and signature matched, but return type is wrong
                 // This is similar to E2023 (missing next), but the issue is that iter returned wrong type
                 // Use E2023 as it's the closest match (iterator state issue)
-                var actualReturnType = iteratorType?.Name ?? "unknown";
+                var actualReturnType = iteratorType != null ? FormatTypeNameForDisplay(iteratorType) : "unknown";
                 _diagnostics.Add(Diagnostic.Error(
-                    "iterator type must be a struct",
+                    $"`iter` function must return a struct, but it returns `{actualReturnType}`",
                     fl.Span,
-                    $"the `iter` function returned `{actualReturnType}`, but it must return a concrete iterator struct type",
+                    $"the iterator state must be a struct type",
                     "E2023"));
-                // Don't declare variable - type checking failed
+                PopScope();
+                hadIteratorError = true;
             }
         }
         else
         {
             // No `iter` function at all; the specific error for this loop is that T is not iterable.
             // E2021: type T is not iterable
+            var iterableTypeName = FormatTypeNameForDisplay(iterableType);
             _diagnostics.Add(Diagnostic.Error(
-                $"type `{iterableType}` is not iterable",
+                $"type `{iterableTypeName}` cannot be iterated",
                 fl.IterableExpression.Span,
-                $"no suitable `iter(&{iterableType})` function found for this type",
+                $"implement the iterator protocol by defining `fn iter(&{iterableTypeName})`",
                 "E2021"));
-            // Don't declare variable - type checking failed
+            hadIteratorError = true;
         }
 
-        // 6. Type-check loop body with the loop variable in scope
-        CheckExpression(fl.Body);
+        // 5. Type-check loop body with the loop variable in scope (only if iterator setup succeeded)
+        if (!hadIteratorError)
+        {
+            CheckExpression(fl.Body);
+        }
         PopScope();
     }
 

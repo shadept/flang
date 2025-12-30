@@ -800,12 +800,13 @@ public class Parser
         var iterator = Eat(TokenKind.Identifier);
         Eat(TokenKind.In);
         var iterable = ParseExpression();
-        Eat(TokenKind.CloseParenthesis);
+        var closeParen = Eat(TokenKind.CloseParenthesis);
 
         var body = ParseExpression();
 
+        // Span only includes "for (v in c)" part, not the body
         var span = new SourceSpan(forKeyword.Span.FileId, forKeyword.Span.Index,
-            body.Span.Index + body.Span.Length - forKeyword.Span.Index);
+            closeParen.Span.Index + closeParen.Span.Length - forKeyword.Span.Index);
         return new ForLoopNode(span, iterator.Text, iterable, body);
     }
 

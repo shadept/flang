@@ -1,6 +1,7 @@
 # FLang Compiler Error Codes
 
-This document provides a comprehensive reference for all compiler error codes used in FLang. Error codes follow the pattern `EXXXX` where `XXXX` is a four-digit number indicating the compiler phase and error type.
+This document provides a comprehensive reference for all compiler error codes used in FLang. Error codes follow the
+pattern `EXXXX` where `XXXX` is a four-digit number indicating the compiler phase and error type.
 
 ## Error Code Numbering Scheme
 
@@ -10,7 +11,8 @@ FLang uses a custom sequential numbering system organized by compiler phase:
 - **E2XXX**: Semantic analysis errors (type checking, name resolution, control flow)
 - **E3XXX**: Code generation errors (FIR lowering, C code generation)
 
-Within each category, error codes are assigned sequentially starting from E1001, E2001, E3001, etc. This ensures no gaps and no bias in numbering.
+Within each category, error codes are assigned sequentially starting from E1001, E2001, E3001, etc. This ensures no gaps
+and no bias in numbering.
 
 ---
 
@@ -35,7 +37,8 @@ Category: Parsing
 Severity: Error
 
 Description:
-The parser expected a specific token but found a different one. This commonly occurs with missing delimiters or keywords.
+The parser expected a specific token but found a different one. This commonly occurs with missing delimiters or
+keywords.
 
 ---
 
@@ -70,7 +73,8 @@ An array repeat literal like `[value; count]` used a non-integer repeat `count`.
 
 #### Description
 
-The compiler cannot infer the type of a variable because it has a compile-time type (`comptime_int` or `comptime_float`) that must be resolved to a concrete type. Type annotations are required.
+The compiler cannot infer the type of a variable because it has a compile-time type (`comptime_int` or `comptime_float`)
+that must be resolved to a concrete type. Type annotations are required.
 
 #### Example
 
@@ -101,7 +105,8 @@ pub fn main() i32 {
 
 #### Description
 
-A value of one type was provided where a different type was expected. This is the most common type error and can occur in many contexts:
+A value of one type was provided where a different type was expected. This is the most common type error and can occur
+in many contexts:
 
 - Variable initialization
 - Function return values
@@ -273,7 +278,8 @@ pub fn main() i32 {
 
 #### Description
 
-A variable was declared twice in the same scope with the same name. Each variable name can only be declared once per scope.
+A variable was declared twice in the same scope with the same name. Each variable name can only be declared once per
+scope.
 
 #### Example
 
@@ -316,7 +322,8 @@ pub fn main() i32 {
 
 #### Description
 
-A `break` statement was used outside of a loop context. The `break` statement can only be used inside `for` loops to exit the loop early.
+A `break` statement was used outside of a loop context. The `break` statement can only be used inside `for` loops to
+exit the loop early.
 
 #### Example
 
@@ -351,7 +358,8 @@ pub fn main() i32 {
 
 #### Description
 
-A `continue` statement was used outside of a loop context. The `continue` statement can only be used inside `for` loops to skip to the next iteration.
+A `continue` statement was used outside of a loop context. The `continue` statement can only be used inside `for` loops
+to skip to the next iteration.
 
 #### Example
 
@@ -387,7 +395,8 @@ pub fn main() i32 {
 
 #### Description
 
-A range expression (`a..b`) was used outside of a `for` loop context. Range expressions are currently only supported as the iterable in `for` loops.
+A range expression (`a..b`) was used outside of a `for` loop context. Range expressions are currently only supported as
+the iterable in `for` loops.
 
 #### Example
 
@@ -420,7 +429,9 @@ pub fn main() i32 {
 
 #### Description
 
-A `for` loop attempted to iterate over a non-range expression. Currently, FLang only supports range expressions (`a..b`) as the iterable in `for` loops. Support for iterating over other types (arrays, slices, custom iterators) will be added in future milestones.
+A `for` loop attempted to iterate over a non-range expression. Currently, FLang only supports range expressions (`a..b`)
+as the iterable in `for` loops. Support for iterating over other types (arrays, slices, custom iterators) will be added
+in future milestones.
 
 #### Example
 
@@ -456,7 +467,8 @@ pub fn main() i32 {
 
 #### Description
 
-An assignment was attempted to a variable that has not been declared with `let`. In FLang, variables must be declared before they can be assigned to.
+An assignment was attempted to a variable that has not been declared with `let`. In FLang, variables must be declared
+before they can be assigned to.
 
 #### Example
 
@@ -488,7 +500,8 @@ pub fn main() i32 {
 
 #### Description
 
-A function was called with the wrong number of arguments. The number of arguments provided must match the number of parameters declared in the function signature.
+A function was called with the wrong number of arguments. The number of arguments provided must match the number of
+parameters declared in the function signature.
 
 #### Example
 
@@ -525,7 +538,8 @@ pub fn main() i32 {
 
 #### Description
 
-An attempt was made to dereference a value that is not a reference type. The dereference operator (`.*`) can only be applied to reference types (`&T` or `&T?`).
+An attempt was made to dereference a value that is not a reference type. The dereference operator (`.*`) can only be
+applied to reference types (`&T` or `&T?`).
 
 #### Example
 
@@ -558,6 +572,7 @@ pub fn main() i32 {
 #### Description
 
 This error occurs in two scenarios:
+
 1. Attempting to access a field that doesn't exist on a struct type
 2. The String type is not found when using string literals
 
@@ -622,7 +637,8 @@ pub fn main() i32 {
 
 #### Description
 
-The `size_of` or `align_of` intrinsic was called with an incorrect number of arguments. These intrinsics require exactly one type argument.
+The `size_of` or `align_of` intrinsic was called with an incorrect number of arguments. These intrinsics require exactly
+one type argument.
 
 #### Example
 
@@ -732,7 +748,8 @@ Category: Type Checking / Casts
 Severity: Error
 
 Description:
-An explicit cast `expr as Type` was used where the compiler cannot prove a valid conversion under the language's casting rules.
+An explicit cast `expr as Type` was used where the compiler cannot prove a valid conversion under the language's casting
+rules.
 
 Examples:
 
@@ -742,7 +759,8 @@ let y: String = p as String  // ERROR: invalid cast `&i32` to `String`
 ```
 
 Solution:
-Use a valid cast pair (e.g., integer↔integer, `&T`↔`&U`, `&T`↔`usize`, `String`↔`u8[]`) or change the types/representation to match.
+Use a valid cast pair (e.g., integer↔integer, `&T`↔`&U`, `&T`↔`usize`, `String`↔`u8[]`) or change the
+types/representation to match.
 
 ---
 
@@ -754,7 +772,8 @@ Severity: Error
 Description:
 A `for` loop attempted to iterate over a type that doesn't implement the iterator protocol (no `iter` function found).
 
-The iterator protocol requires a function with signature `fn iter(collection: &T) StateType` where `StateType` is any struct.
+The iterator protocol requires a function with signature `fn iter(collection: &T) StateType` where `StateType` is any
+struct.
 
 Examples:
 
@@ -860,7 +879,8 @@ Category: Iterator Protocol
 Severity: Error
 
 Description:
-A `next` function exists, but none of its overloads match the signature `fn next(&StateType)` for the iterator state type.
+A `next` function exists, but none of its overloads match the signature `fn next(&StateType)` for the iterator state
+type.
 
 Examples:
 
@@ -923,38 +943,36 @@ fn next(state: &MyType) i32? {  // Correct: returns i32?
 
 ## E3XXX: Code Generation Errors
 
-
 _Currently no errors in this category. Reserved for future codegen errors._
 
 ---
 
 ## Summary Table
 
-| Code      | Category        | Description                               |
-| --------- | --------------- | ----------------------------------------- |
-| **E2001** | Type Inference  | Cannot infer type (needs annotation)      |
-| **E2002** | Type Checking   | Mismatched types                          |
-| **E2003** | Name Resolution | Cannot find type in scope                 |
-| **E2004** | Name Resolution | Cannot find value in scope                |
-| **E2005** | Name Resolution | Variable already declared                 |
-| **E2006** | Control Flow    | Break statement outside loop              |
-| **E2007** | Control Flow    | Continue statement outside loop           |
-| **E2008** | Control Flow    | Range expression outside loop             |
-| **E2009** | Iterators       | For loop only supports ranges             |
-| **E2010** | Name Resolution | Assignment to undeclared variable         |
-| **E2011** | Type Checking   | Function argument count mismatch          |
-| **E2012** | Type Checking   | Cannot dereference non-reference type     |
-| **E2013** | Type Checking   | Field access or type not found (structs)  |
-| **E2014** | Intrinsics      | Intrinsic requires exactly one type argument |
-| **E2015** | Intrinsics      | Intrinsic argument must be type name      |
-| **E2016** | Intrinsics      | Unknown type in intrinsic                 |
-| **E2020** | Type Checking   | Invalid cast                               |
-| **E2021** | Iterator Protocol | Type not iterable (no iter function)     |
-| **E2022** | Iterator Protocol | No matching iter(&T) signature           |
-| **E2023** | Iterator Protocol | Iterator state missing next function     |
-| **E2024** | Iterator Protocol | No matching next(&State) signature       |
-| **E2025** | Iterator Protocol | next must return Option type             |
-
+| Code      | Category          | Description                                  |
+|-----------|-------------------|----------------------------------------------|
+| **E2001** | Type Inference    | Cannot infer type (needs annotation)         |
+| **E2002** | Type Checking     | Mismatched types                             |
+| **E2003** | Name Resolution   | Cannot find type in scope                    |
+| **E2004** | Name Resolution   | Cannot find value in scope                   |
+| **E2005** | Name Resolution   | Variable already declared                    |
+| **E2006** | Control Flow      | Break statement outside loop                 |
+| **E2007** | Control Flow      | Continue statement outside loop              |
+| **E2008** | Control Flow      | Range expression outside loop                |
+| **E2009** | Iterators         | For loop only supports ranges                |
+| **E2010** | Name Resolution   | Assignment to undeclared variable            |
+| **E2011** | Type Checking     | Function argument count mismatch             |
+| **E2012** | Type Checking     | Cannot dereference non-reference type        |
+| **E2013** | Type Checking     | Field access or type not found (structs)     |
+| **E2014** | Intrinsics        | Intrinsic requires exactly one type argument |
+| **E2015** | Intrinsics        | Intrinsic argument must be type name         |
+| **E2016** | Intrinsics        | Unknown type in intrinsic                    |
+| **E2020** | Type Checking     | Invalid cast                                 |
+| **E2021** | Iterator Protocol | Type not iterable (no iter function)         |
+| **E2022** | Iterator Protocol | No matching iter(&T) signature               |
+| **E2023** | Iterator Protocol | Iterator state missing next function         |
+| **E2024** | Iterator Protocol | No matching next(&State) signature           |
+| **E2025** | Iterator Protocol | next must return Option type                 |
 
 ---
 
@@ -979,7 +997,6 @@ As FLang development continues, additional error codes will be added:
 - E2021: Index into non-indexable type
 - And more...
 
-
 ### E3XXX - Code Generation
 
 - E3001: Cannot generate code for expression
@@ -993,15 +1010,20 @@ As FLang development continues, additional error codes will be added:
 
 FLang's error code numbering follows these principles:
 
-1. **Sequential Assignment**: Error codes are assigned sequentially within each category (E2001, E2002, E2003, ...) with no gaps or skipped numbers. This prevents arbitrary number choices and ensures consistency.
+1. **Sequential Assignment**: Error codes are assigned sequentially within each category (E2001, E2002, E2003, ...) with
+   no gaps or skipped numbers. This prevents arbitrary number choices and ensures consistency.
 
-2. **Phase-Based Categories**: Errors are grouped by compiler phase (E1XXX for frontend, E2XXX for semantics, E3XXX for codegen), making it easy to understand where in the compilation pipeline an error occurred.
+2. **Phase-Based Categories**: Errors are grouped by compiler phase (E1XXX for frontend, E2XXX for semantics, E3XXX for
+   codegen), making it easy to understand where in the compilation pipeline an error occurred.
 
-3. **Self-Documenting**: The error code itself tells you the compiler phase. You don't need a lookup table to know that E2XXX errors are semantic analysis errors.
+3. **Self-Documenting**: The error code itself tells you the compiler phase. You don't need a lookup table to know that
+   E2XXX errors are semantic analysis errors.
 
-4. **No External Dependencies**: Unlike some compilers that use error codes from other languages, FLang's error codes are our own custom scheme designed specifically for our compiler architecture.
+4. **No External Dependencies**: Unlike some compilers that use error codes from other languages, FLang's error codes
+   are our own custom scheme designed specifically for our compiler architecture.
 
-5. **Future-Proof**: We reserve ranges for future expansion, ensuring we won't run out of error codes as the language grows.
+5. **Future-Proof**: We reserve ranges for future expansion, ensuring we won't run out of error codes as the language
+   grows.
 
 ---
 
