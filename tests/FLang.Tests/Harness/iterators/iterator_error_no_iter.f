@@ -1,5 +1,5 @@
 //! TEST: iterator_error_no_iter
-//! COMPILE-ERROR: E2020
+//! COMPILE-ERROR: E2021
 
 struct NoIterator {
     value: i32

@@ -46,6 +46,9 @@ public class TypeChecker
     // AST type map
     private readonly Dictionary<AstNode, FType> _typeMap = [];
 
+    // For-loop iterator protocol metadata (populated during type checking, used by lowering)
+    private readonly Dictionary<ForLoopNode, ForLoopTypes> _forLoopTypes = [];
+
     // Track all instantiated types for global type table generation
     private readonly HashSet<FType> _instantiatedTypes = [];
 
@@ -124,6 +127,18 @@ public class TypeChecker
 
     public StructType? GetAnonymousStructType(AnonymousStructExpressionNode node)
         => _anonymousStructTypes.GetValueOrDefault(node);
+
+    public ForLoopTypes? GetForLoopTypes(ForLoopNode node)
+        => _forLoopTypes.TryGetValue(node, out var types) ? types : null;
+
+    public FType? GetForLoopIteratorType(ForLoopNode node)
+        => _forLoopTypes.TryGetValue(node, out var types) ? types.IteratorType : null;
+
+    public FType? GetForLoopElementType(ForLoopNode node)
+        => _forLoopTypes.TryGetValue(node, out var types) ? types.ElementType : null;
+
+    public StructType? GetForLoopNextResultOptionType(ForLoopNode node)
+        => _forLoopTypes.TryGetValue(node, out var types) ? types.NextResultOptionType : null;
 
     public IReadOnlySet<FType> InstantiatedTypes => _instantiatedTypes;
 
@@ -642,15 +657,139 @@ public class TypeChecker
     {
         PushScope();
 
-        // Type check the iterable expression (range or any other type)
-        // RangeExpressionNode will be typed as Range struct
+        // 1. Resolve iterable expression type
         var iterableType = CheckExpression(fl.IterableExpression);
 
-        // For now, hardcode iterator variable as isize to match Range
-        // TODO: This will be replaced with iterator protocol resolution
-        // that extracts the element type from iter/next functions
-        DeclareVariable(fl.IteratorVariable, TypeRegistry.ISize, fl.Span);
+        // 2. Resolve iter(&T) for the iterable type using a synthetic in-memory call
+        //    This leverages the normal overload resolution and generic binding machinery.
+        if (_functions.TryGetValue("iter", out _))
+        {
+            // Use a nested scope so the synthetic variable does not leak into the loop body
+            PushScope();
+            var iterableTempName = "__flang_for_iterable_tmp";
+            DeclareVariable(iterableTempName, iterableType, fl.IterableExpression.Span);
+            var iterableId = new IdentifierExpressionNode(fl.IterableExpression.Span, iterableTempName);
+            var iterableAddr = new AddressOfExpressionNode(fl.IterableExpression.Span, iterableId);
+            var iterCall = new CallExpressionNode(fl.Span, "iter", [iterableAddr]);
 
+            // Track diagnostics before the call to detect signature mismatches
+            var diagnosticsBefore = _diagnostics.Count;
+            var iteratorType = CheckExpression(iterCall);
+            var diagnosticsAfter = _diagnostics.Count;
+            var hadSignatureMismatch = diagnosticsAfter > diagnosticsBefore;
+
+            PopScope();
+
+            // If CheckExpression added diagnostics, it means signature mismatch (E2011 or E2004)
+            // Replace with the more specific E2022 for iterator protocol
+            if (hadSignatureMismatch)
+            {
+                // Remove the generic error and add the specific iterator protocol error
+                var lastDiagnostic = _diagnostics[^1];
+                if (lastDiagnostic.Code == "E2011" || lastDiagnostic.Code == "E2004")
+                {
+                    _diagnostics.RemoveAt(_diagnostics.Count - 1);
+                    _diagnostics.Add(Diagnostic.Error(
+                        $"no matching `iter` function for type `{iterableType}`",
+                        fl.IterableExpression.Span,
+                        $"no suitable `iter(&{iterableType})` function found for this type",
+                        "E2022"));
+                }
+                // Don't declare variable - type checking failed
+            }
+            else if (iteratorType is StructType iteratorStruct)
+            {
+                // 3. Resolve next(&IteratorType) using another synthetic call
+                PushScope();
+                var iterTempName = "__flang_for_iterator_tmp";
+                DeclareVariable(iterTempName, iteratorStruct, fl.Span);
+                var iterId = new IdentifierExpressionNode(fl.Span, iterTempName);
+                var iterAddr = new AddressOfExpressionNode(fl.Span, iterId);
+                var nextCall = new CallExpressionNode(fl.Span, "next", [iterAddr]);
+
+                var diagnosticsBeforeNext = _diagnostics.Count;
+                var nextResultType = CheckExpression(nextCall);
+                var diagnosticsAfterNext = _diagnostics.Count;
+                var hadNextSignatureMismatch = diagnosticsAfterNext > diagnosticsBeforeNext;
+
+                PopScope();
+
+                // If CheckExpression added diagnostics, distinguish between missing next and signature mismatch
+                if (hadNextSignatureMismatch)
+                {
+                    var lastDiagnostic = _diagnostics[^1];
+                    if (lastDiagnostic.Code == "E2004")
+                    {
+                        // E2023: Iterator State Missing next Function (next doesn't exist at all)
+                        _diagnostics.RemoveAt(_diagnostics.Count - 1);
+                        _diagnostics.Add(Diagnostic.Error(
+                            $"iterator state type `{iteratorStruct}` has no `next` function",
+                            fl.Span,
+                            $"the iterator state type returned by `iter` must have a `next(&{iteratorStruct})` function",
+                            "E2023"));
+                    }
+                    else if (lastDiagnostic.Code == "E2011")
+                    {
+                        // E2024: No Matching next Function (next exists but signature doesn't match)
+                        _diagnostics.RemoveAt(_diagnostics.Count - 1);
+                        _diagnostics.Add(Diagnostic.Error(
+                            $"no matching `next` function for iterator type `{iteratorStruct}`",
+                            fl.Span,
+                            $"no suitable `next(&{iteratorStruct})` function found for this iterator state type",
+                            "E2024"));
+                    }
+                    // Don't declare variable - type checking failed
+                }
+                // 4. Validate that next returns an Option[E] and extract element type
+                else if (nextResultType is StructType optionStruct && TypeRegistry.IsOption(optionStruct)
+                    && optionStruct.TypeArguments.Count > 0)
+                {
+                    var elementType = optionStruct.TypeArguments[0];
+                    // Store all types together in a single struct
+                    _forLoopTypes[fl] = new ForLoopTypes(iteratorStruct, elementType, optionStruct);
+                    // Declare the loop variable with the inferred element type
+                    DeclareVariable(fl.IteratorVariable, elementType, fl.Span);
+                }
+                else
+                {
+                    // E2025: next must return an Option type
+                    var actualReturnType = nextResultType?.Name ?? "unknown";
+                    _diagnostics.Add(Diagnostic.Error(
+                        "`next` for this iterator must return an option type",
+                        fl.Span,
+                        $"expected return type `{actualReturnType}?` (`Option({actualReturnType})`), but `next` returned `{actualReturnType}`",
+                        "E2025"));
+                    // Don't declare variable - type checking failed
+                }
+            }
+            else
+            {
+                // iter was called successfully but returned a non-struct
+                // This means iter exists and signature matched, but return type is wrong
+                // This is similar to E2023 (missing next), but the issue is that iter returned wrong type
+                // Use E2023 as it's the closest match (iterator state issue)
+                var actualReturnType = iteratorType?.Name ?? "unknown";
+                _diagnostics.Add(Diagnostic.Error(
+                    "iterator type must be a struct",
+                    fl.Span,
+                    $"the `iter` function returned `{actualReturnType}`, but it must return a concrete iterator struct type",
+                    "E2023"));
+                // Don't declare variable - type checking failed
+            }
+        }
+        else
+        {
+            // No `iter` function at all; the specific error for this loop is that T is not iterable.
+            // E2021: type T is not iterable
+            _diagnostics.Add(Diagnostic.Error(
+                $"type `{iterableType}` is not iterable",
+                fl.IterableExpression.Span,
+                $"no suitable `iter(&{iterableType})` function found for this type",
+                "E2021"));
+            // Don't declare variable - type checking failed
+        }
+
+        // 6. Type-check loop body with the loop variable in scope
         CheckExpression(fl.Body);
         PopScope();
     }
@@ -1093,7 +1232,8 @@ public class TypeChecker
                     // Auto-dereference references to allow field access on &T
                     var structType = obj switch
                     {
-                        ReferenceType refType => refType.InnerType switch {
+                        ReferenceType refType => refType.InnerType switch
+                        {
                             StructType st => st,
                             ArrayType array => TypeRegistry.MakeSlice(array.ElementType),
                             _ => null
@@ -2392,4 +2532,18 @@ public class FunctionEntry
     public FunctionDeclarationNode AstNode { get; }
     public bool IsForeign { get; }
     public bool IsGeneric { get; }
+}
+
+public readonly struct ForLoopTypes
+{
+    public ForLoopTypes(FType iteratorType, FType elementType, StructType nextResultOptionType)
+    {
+        IteratorType = iteratorType;
+        ElementType = elementType;
+        NextResultOptionType = nextResultOptionType;
+    }
+
+    public FType IteratorType { get; }
+    public FType ElementType { get; }
+    public StructType NextResultOptionType { get; }
 }

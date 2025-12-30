@@ -1,5 +1,5 @@
 //! TEST: iterator_error_next_wrong_return
-//! COMPILE-ERROR: E2024
+//! COMPILE-ERROR: E2025
 
 struct BadIterator {
     value: i32

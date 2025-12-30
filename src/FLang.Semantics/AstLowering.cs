@@ -1160,66 +1160,115 @@ public class AstLowering
 
     private void LowerForLoop(ForLoopNode forLoop)
     {
-        // Only handle Range expressions for now
-        if (forLoop.IterableExpression is not RangeExpressionNode range)
-        {
-            _diagnostics.Add(Diagnostic.Error(
-                "`for` loops currently only support range expressions",
-                forLoop.IterableExpression.Span,
-                "use a range like `0..10` for iteration",
-                "E2009"
-            ));
-            return; // Skip lowering this loop
-        }
+        // Use iterator protocol lowered via iter/next functions.
+        // TypeChecker has already validated and recorded the iterator and element types.
+        var forLoopTypes = _typeSolver.GetForLoopTypes(forLoop);
+        var iterableType = _typeSolver.GetType(forLoop.IterableExpression);
 
-        var start = LowerExpression(range.Start);
-        var end = LowerExpression(range.End);
+        // If type checking failed for this loop, skip lowering – diagnostics are already emitted.
+        if (forLoopTypes == null || iterableType == null)
+            return;
+
+        var iteratorType = forLoopTypes.Value.IteratorType as StructType;
+        var optionType = forLoopTypes.Value.NextResultOptionType;
+        var elementType = forLoopTypes.Value.ElementType;
 
         // Create loop blocks
         var condBlock = CreateBlock("for_cond");
         var bodyBlock = CreateBlock("for_body");
-        var continueBlock = CreateBlock("for_continue");
         var exitBlock = CreateBlock("for_exit");
 
-        // Initialize iterator - allocate on stack (memory-based like all variables)
-        var iteratorPtr = new LocalValue(forLoop.IteratorVariable)
-            { Type = new ReferenceType(start.Type) };
-        var iteratorAlloca = new AllocaInstruction(start.Type, start.Type.Size, iteratorPtr);
+        // 1. Lower iterable expression
+        var iterableValue = LowerExpression(forLoop.IterableExpression);
+
+        // 2. Call iter(&iterable) -> IteratorStruct
+        var iterResult = new LocalValue($"iter_{_tempCounter++}") { Type = iteratorType };
+        var iterCall = new CallInstruction("iter", new List<Value> { iterableValue }, iterResult);
+        // iter has signature: fn iter(&T) IteratorState
+        iterCall.CalleeParamTypes = new List<FType> { new ReferenceType(iterableType) };
+        _currentBlock.Instructions.Add(iterCall);
+
+        // 3. Allocate iterator state on stack and store the initial iterator value
+        var iteratorPtr = new LocalValue($"iter_ptr_{_tempCounter++}")
+        {
+            Type = new ReferenceType(iteratorType)
+        };
+        var iteratorAlloca = new AllocaInstruction(iteratorType, iteratorType.Size, iteratorPtr);
         _currentBlock.Instructions.Add(iteratorAlloca);
-        _currentBlock.Instructions.Add(new StorePointerInstruction(iteratorPtr, start));
-        _locals[forLoop.IteratorVariable] = iteratorPtr;
+        _currentBlock.Instructions.Add(new StorePointerInstruction(iteratorPtr, iterResult));
+
+        // 4. Allocate loop variable on stack and register in locals
+        var loopVarPtr = new LocalValue(forLoop.IteratorVariable)
+        {
+            Type = new ReferenceType(elementType)
+        };
+        var loopVarAlloca = new AllocaInstruction(elementType, elementType.Size, loopVarPtr);
+        _currentBlock.Instructions.Add(loopVarAlloca);
+        _locals[forLoop.IteratorVariable] = loopVarPtr;
+
+        // Jump to condition block
         _currentBlock.Instructions.Add(new JumpInstruction(condBlock));
 
-        // Condition: load iterator, compare with end
+        // 5. loop_cond: call next(&iterator), check has_value
         _currentBlock = condBlock;
-        var iteratorValue = new LocalValue($"{forLoop.IteratorVariable}_load_{_tempCounter++}")
-            { Type = start.Type };
-        _currentBlock.Instructions.Add(new LoadInstruction(iteratorPtr, iteratorValue));
-        var lessThan = new LocalValue($"loop_cond_{_tempCounter++}") { Type = start.Type };
-        var cmpInst = new BinaryInstruction(BinaryOp.Subtract, iteratorValue, end, lessThan);
-        _currentBlock.Instructions.Add(cmpInst);
-        _currentBlock.Instructions.Add(new BranchInstruction(lessThan, bodyBlock, exitBlock));
 
-        // Body
+        var nextResult = new LocalValue($"next_{_tempCounter++}") { Type = optionType };
+        var nextCall = new CallInstruction("next", new List<Value> { iteratorPtr }, nextResult);
+        // next has signature: fn next(&IteratorState) E?
+        nextCall.CalleeParamTypes = new List<FType> { new ReferenceType(iteratorType) };
+        _currentBlock.Instructions.Add(nextCall);
+
+        // Load has_value field
+        var hasValueOffset = optionType.GetFieldOffset("has_value");
+        var hasValuePtr = new LocalValue($"has_value_ptr_{_tempCounter++}")
+        {
+            Type = new ReferenceType(TypeRegistry.Bool)
+        };
+        _currentBlock.Instructions.Add(new GetElementPtrInstruction(
+            nextResult,
+            new ConstantValue(hasValueOffset) { Type = TypeRegistry.USize },
+            hasValuePtr));
+
+        var hasValue = new LocalValue($"has_value_{_tempCounter++}") { Type = TypeRegistry.Bool };
+        _currentBlock.Instructions.Add(new LoadInstruction(hasValuePtr, hasValue));
+
+        // Branch based on has_value
+        _currentBlock.Instructions.Add(new BranchInstruction(hasValue, bodyBlock, exitBlock));
+
+        // 6. loop_body: extract value, bind loop variable, execute body, then jump back to cond
         _currentBlock = bodyBlock;
-        _loopStack.Push(new LoopContext(continueBlock, exitBlock));
+
+        _loopStack.Push(new LoopContext(condBlock, exitBlock));
+
+        // Extract value field from Option
+        var valueFieldType = optionType.GetFieldType("value") ?? elementType;
+        var valueOffset = optionType.GetFieldOffset("value");
+        var valuePtr = new LocalValue($"value_ptr_{_tempCounter++}")
+        {
+            Type = new ReferenceType(valueFieldType)
+        };
+        _currentBlock.Instructions.Add(new GetElementPtrInstruction(
+            nextResult,
+            new ConstantValue(valueOffset) { Type = TypeRegistry.USize },
+            valuePtr));
+
+        var loopValue = new LocalValue($"{forLoop.IteratorVariable}_val_{_tempCounter++}")
+        {
+            Type = valueFieldType
+        };
+        _currentBlock.Instructions.Add(new LoadInstruction(valuePtr, loopValue));
+
+        // Store into loop variable's stack slot
+        _currentBlock.Instructions.Add(new StorePointerInstruction(loopVarPtr, loopValue));
+
+        // Lower loop body expression
         LowerExpression(forLoop.Body);
         _loopStack.Pop();
-        _currentBlock.Instructions.Add(new JumpInstruction(continueBlock));
 
-        // Continue: load iterator, increment, store back
-        _currentBlock = continueBlock;
-        var currentIterator = new LocalValue($"{forLoop.IteratorVariable}_load_{_tempCounter++}")
-            { Type = start.Type };
-        _currentBlock.Instructions.Add(new LoadInstruction(iteratorPtr, currentIterator));
-        var incremented = new LocalValue($"loop_inc_{_tempCounter++}") { Type = start.Type };
-        var incInst = new BinaryInstruction(BinaryOp.Add, currentIterator, new ConstantValue(1) { Type = start.Type },
-            incremented);
-        _currentBlock.Instructions.Add(incInst);
-        _currentBlock.Instructions.Add(new StorePointerInstruction(iteratorPtr, incremented));
+        // At end of body, jump back to condition
         _currentBlock.Instructions.Add(new JumpInstruction(condBlock));
 
-        // Exit - no need to save/restore locals anymore! Memory persists naturally.
+        // 7. loop_exit: set as current block; no additional work needed
         _currentBlock = exitBlock;
     }
 

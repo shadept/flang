@@ -100,5 +100,6 @@ dist/
 *.pdb
 
 # Ignore all files in test harness except source files (.f)
-tests/FLang.Tests/Harness/**/*
+tests/FLang.Tests/Harness/**
+!tests/FLang.Tests/Harness/**/
 !tests/FLang.Tests/Harness/**/*.f
