@@ -4,6 +4,8 @@ namespace FLang.Core;
 
 public static class DiagnosticPrinter
 {
+    private const string NewLine = "\n\r";
+
     // ANSI color codes
     private const string Reset = "\x1b[0m";
     private const string Bold = "\x1b[1m";
@@ -46,7 +48,7 @@ public static class DiagnosticPrinter
         if (!string.IsNullOrEmpty(diagnostic.Code)) sb.Append(Color(severityColor, $"[{diagnostic.Code}]"));
         sb.Append(": ");
         sb.Append(Color(Bold, diagnostic.Message));
-        sb.AppendLine();
+        sb.Append(NewLine);
 
         // If FileId is -1, we don't have source information (e.g., C compiler error)
         if (diagnostic.Span.FileId == -1)
@@ -61,7 +63,7 @@ public static class DiagnosticPrinter
         // Location: --> filename:line:column
         sb.Append(Color(BoldBlue, "  --> "));
         sb.Append($"{source.FileName}:{line + 1}:{column + 1}");
-        sb.AppendLine();
+        sb.Append(NewLine);
 
         // Calculate the width needed for line numbers (including context)
         var startLine = Math.Max(0, line - 1);
@@ -80,7 +82,7 @@ public static class DiagnosticPrinter
 
         // Empty line before context
         PrintGutter();
-        sb.AppendLine();
+        sb.Append(NewLine);
 
         // Show context: line before (if exists)
         if (line > 0)
@@ -88,13 +90,13 @@ public static class DiagnosticPrinter
             var prevLine = line - 1;
             var prevLineText = source.GetLineText(prevLine);
             PrintGutter($"{prevLine + 1}");
-            sb.AppendLine(prevLineText);
+            sb.Append(prevLineText + NewLine);
         }
 
         // Main error line
         var lineText = source.GetLineText(line);
         PrintGutter($"{line + 1}");
-        sb.AppendLine(lineText);
+        sb.Append(lineText + NewLine);
 
         // Underline/caret pointing to error
         var underlineColor = diagnostic.Severity switch
@@ -122,7 +124,7 @@ public static class DiagnosticPrinter
             sb.Append(Color(underlineColor, diagnostic.Hint));
         }
 
-        sb.AppendLine();
+        sb.Append(NewLine);
 
         // Show context: line after (if exists)
         if (line + 1 < source.LineEndings.Length ||
@@ -131,12 +133,12 @@ public static class DiagnosticPrinter
             var nextLine = line + 1;
             var nextLineText = source.GetLineText(nextLine);
             PrintGutter($"{nextLine + 1}");
-            sb.AppendLine(nextLineText);
+            sb.Append(nextLineText + NewLine);
         }
 
         // Empty line at end
         PrintGutter();
-        sb.AppendLine();
+        sb.Append(NewLine);
 
         return sb.ToString();
     }

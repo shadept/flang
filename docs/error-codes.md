@@ -564,17 +564,47 @@ pub fn main() i32 {
 
 ---
 
-### E2013: Field Access or Type Not Found
+### E2013: Type Not Found
+
+**Category**: Type Checking
+**Severity**: Error
+
+#### Description
+
+This error occurs when the compiler expects a specific type to be present, but it cannot be found in the current scope. This is most common when using string literals, which require the `String` type from `core.string`.
+
+#### Example
+
+```flang
+pub fn main() i32 {
+    let s: String = "hello"  // ERROR: String type not found, make sure to import core/string
+    return 0
+}
+```
+
+#### Solution
+
+Import the missing type:
+
+```flang
+import core.string
+
+pub fn main() i32 {
+    let s: String = "hello"  // OK: String type is imported
+    return s.len
+}
+```
+
+---
+
+### E2014: Field Access Error
 
 **Category**: Type Checking / Structs
 **Severity**: Error
 
 #### Description
 
-This error occurs in two scenarios:
-
-1. Attempting to access a field that doesn't exist on a struct type
-2. The String type is not found when using string literals
+This error occurs when attempting to access a field that doesn't exist on a type, or when attempting to access a field on a non-struct type.
 
 #### Examples
 
@@ -592,53 +622,29 @@ pub fn main() i32 {
 }
 ```
 
-**String Type Not Found:**
+**Access on Non-struct Type:**
 
 ```flang
 pub fn main() i32 {
-    let s: String = "hello"  // ERROR: String type not found, make sure to import core/string
-    return 0
+    let x: i32 = 42
+    return x.field  // ERROR: cannot access field on non-struct type `i32`
 }
 ```
 
 #### Solution
 
-**For field access**, use an existing field:
-
-```flang
-struct Point {
-    x: i32,
-    y: i32
-}
-
-pub fn main() i32 {
-    let p: Point = Point { x: 10, y: 20 }
-    return p.x  // OK: field exists
-}
-```
-
-**For string literals**, import the String type:
-
-```flang
-import core.string
-
-pub fn main() i32 {
-    let s: String = "hello"  // OK: String type is imported
-    return s.len
-}
-```
+Ensure the field exists on the type being accessed, or that the type is a struct.
 
 ---
 
-### E2014: Intrinsic Requires Exactly One Type Argument
+### E2015: Intrinsic Requires Exactly One Type Argument
 
 **Category**: Compiler Intrinsics
 **Severity**: Error
 
 #### Description
 
-The `size_of` or `align_of` intrinsic was called with an incorrect number of arguments. These intrinsics require exactly
-one type argument.
+The `size_of` or `align_of` intrinsic was called with an incorrect number of arguments. These intrinsics require exactly one type argument.
 
 #### Example
 
@@ -666,7 +672,7 @@ pub fn main() i32 {
 
 ---
 
-### E2015: Intrinsic Argument Must Be Type Name
+### E2016: Intrinsic Argument Must Be Type Name
 
 **Category**: Compiler Intrinsics
 **Severity**: Error
@@ -702,7 +708,7 @@ pub fn main() i32 {
 
 ---
 
-### E2016: Unknown Type in Intrinsic
+### E2017: Unknown Type in Intrinsic
 
 **Category**: Compiler Intrinsics / Name Resolution
 **Severity**: Error
@@ -739,6 +745,49 @@ pub fn main() i32 {
     return size as i32
 }
 ```
+
+---
+
+### E2018: Struct Construction - Invalid Target
+
+**Category**: Type Checking / Structs
+**Severity**: Error
+
+#### Description
+
+This error occurs when attempting to construct a value as a struct, but the target type is not a struct, or when an anonymous struct literal is used without a target type that can be inferred.
+
+#### Example
+
+```flang
+let x: i32 = i32 { value: 42 } // ERROR: i32 is not a struct
+```
+
+#### Solution
+
+Ensure the target type is a struct, or provide a type annotation for anonymous struct literals.
+
+---
+
+### E2019: Struct Construction - Missing Fields
+
+**Category**: Type Checking / Structs
+**Severity**: Error
+
+#### Description
+
+This error occurs when a struct construction is missing one or more required fields.
+
+#### Example
+
+```flang
+struct Point { x: i32, y: i32 }
+let p = Point { x: 10 } // ERROR: missing field `y`
+```
+
+#### Solution
+
+Provide all required fields in the struct literal.
 
 ---
 
@@ -941,6 +990,75 @@ fn next(state: &MyType) i32? {  // Correct: returns i32?
 
 ---
 
+### E2026: Empty Array Inference
+
+**Category**: Type Checking / Arrays
+**Severity**: Error
+
+#### Description
+
+This error occurs when the compiler cannot infer the element type of an empty array literal.
+
+#### Example
+
+```flang
+let x = [] // ERROR: cannot infer type of empty array literal
+```
+
+#### Solution
+
+Add a type annotation:
+
+```flang
+let x: i32[] = [] // OK
+```
+
+---
+
+### E2027: Invalid Array Index Type
+
+**Category**: Type Checking / Arrays
+**Severity**: Error
+
+#### Description
+
+This error occurs when attempting to index into an array or slice with a non-integer value.
+
+#### Example
+
+```flang
+let x = [1, 2, 3]
+let val = x["0"] // ERROR: array index must be an integer
+```
+
+#### Solution
+
+Use an integer for indexing.
+
+---
+
+### E2028: Non-indexable Type
+
+**Category**: Type Checking
+**Severity**: Error
+
+#### Description
+
+This error occurs when attempting to use the index operator `[]` on a type that doesn't support indexing (i.e., not an array or slice).
+
+#### Example
+
+```flang
+let x: i32 = 42
+let val = x[0] // ERROR: cannot index into value of type `i32`
+```
+
+#### Solution
+
+Only index into arrays or slices.
+
+---
+
 ## E3XXX: Code Generation Errors
 
 _Currently no errors in this category. Reserved for future codegen errors._
@@ -963,16 +1081,22 @@ _Currently no errors in this category. Reserved for future codegen errors._
 | **E2010** | Name Resolution   | Assignment to undeclared variable            |
 | **E2011** | Type Checking     | Function argument count mismatch             |
 | **E2012** | Type Checking     | Cannot dereference non-reference type        |
-| **E2013** | Type Checking     | Field access or type not found (structs)     |
-| **E2014** | Intrinsics        | Intrinsic requires exactly one type argument |
-| **E2015** | Intrinsics        | Intrinsic argument must be type name         |
-| **E2016** | Intrinsics        | Unknown type in intrinsic                    |
+| **E2013** | Type Checking     | Type not found                               |
+| **E2014** | Type Checking     | Field access error                           |
+| **E2015** | Intrinsics        | Intrinsic requires exactly one type argument |
+| **E2016** | Intrinsics        | Intrinsic argument must be type name         |
+| **E2017** | Intrinsics        | Unknown type in intrinsic                    |
+| **E2018** | Type Checking     | Struct construction - invalid target         |
+| **E2019** | Type Checking     | Struct construction - missing fields         |
 | **E2020** | Type Checking     | Invalid cast                                 |
 | **E2021** | Iterator Protocol | Type not iterable (no iter function)         |
 | **E2022** | Iterator Protocol | No matching iter(&T) signature               |
 | **E2023** | Iterator Protocol | Iterator state missing next function         |
 | **E2024** | Iterator Protocol | No matching next(&State) signature           |
 | **E2025** | Iterator Protocol | next must return Option type                 |
+| **E2026** | Type Checking     | Empty array inference                        |
+| **E2027** | Type Checking     | Invalid array index type                     |
+| **E2028** | Type Checking     | Non-indexable type                           |
 
 ---
 
@@ -990,11 +1114,8 @@ As FLang development continues, additional error codes will be added:
 
 ### E2XXX - Semantic Analysis
 
-- E2017: Struct construction errors
-- E2018: Missing fields in struct construction
-- E2019: Array type inference errors
-- E2020: Invalid cast
-- E2021: Index into non-indexable type
+- E2030: Enum variant construction errors
+- E2031: Match expression pattern errors
 - And more...
 
 ### E3XXX - Code Generation

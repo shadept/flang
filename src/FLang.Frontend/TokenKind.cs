@@ -27,6 +27,8 @@ public enum TokenKind
     Defer,
     Import,
     Struct,
+    Enum,
+    Match,
     Foreign,
     As,
 
@@ -40,6 +42,7 @@ public enum TokenKind
     DotDot,
     Ampersand,
     Question,
+    FatArrow,
 
     // Comparison operators
     EqualsEquals,
@@ -62,6 +65,7 @@ public enum TokenKind
     Hash,
     Comma,
     Dollar,
+    Underscore,
 
     // Identifier
     Identifier

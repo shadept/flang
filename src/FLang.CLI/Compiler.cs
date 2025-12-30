@@ -46,14 +46,14 @@ public class Compiler
         compilation.StdlibPath = options.StdlibPath;
         compilation.WorkingDirectory = workingDir;
 
-        // Build include paths: working directory, stdlib, then any additional paths
-        compilation.IncludePaths.Add(workingDir);  // Working dir first (input file's directory)
-        compilation.IncludePaths.Add(options.StdlibPath);  // Then stdlib
+        // Build include paths: stdlib first (most specific), then user paths, then working directory (fallback)
+        compilation.IncludePaths.Add(options.StdlibPath);  // Stdlib first for correct module paths
         if (options.IncludePaths != null && options.IncludePaths.Count > 0)
         {
             foreach (var path in options.IncludePaths)
                 compilation.IncludePaths.Add(path);
         }
+        compilation.IncludePaths.Add(workingDir);  // Working dir last (fallback for entry point)
 
         var allDiagnostics = new List<Diagnostic>();
 
@@ -98,11 +98,26 @@ public class Compiler
             typeSolver.CollectStructNames(kvp.Value, modulePath);
         }
 
+        // Phase 2a-enum: Collect enum names (without resolving variant types)
+        // This enables order-independent enum declarations
+        foreach (var kvp in parsedModules)
+        {
+            var modulePath = TypeChecker.DeriveModulePath(kvp.Key, compilation.IncludePaths, compilation.WorkingDirectory);
+            typeSolver.CollectEnumNames(kvp.Value, modulePath);
+        }
+
         // Phase 2b: Resolve struct field types (after all struct names registered)
         foreach (var kvp in parsedModules)
         {
             var modulePath = TypeChecker.DeriveModulePath(kvp.Key, compilation.IncludePaths, compilation.WorkingDirectory);
             typeSolver.ResolveStructFields(kvp.Value, modulePath);
+        }
+
+        // Phase 2b-enum: Resolve enum variant types (after all type names registered)
+        foreach (var kvp in parsedModules)
+        {
+            var modulePath = TypeChecker.DeriveModulePath(kvp.Key, compilation.IncludePaths, compilation.WorkingDirectory);
+            typeSolver.ResolveEnumVariants(kvp.Value, modulePath);
         }
 
         // Phase 3: Collect function signatures

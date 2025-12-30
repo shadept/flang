@@ -47,7 +47,56 @@ Structs may be generic. Generic parameters are introduced by `[T, U, ...]`.
 - Anonymous structs: `.{ field = value, ... }`.
 - Structural typing allows binding by field name.
 
-### 2.4 Functions
+### 2.4 Enums (Tagged Unions)
+
+Enums represent tagged unions - a type that can be one of several named variants, each optionally carrying payload data.
+
+```
+enum Name {
+    Variant1
+    Variant2(Type1)
+    Variant3(Type1, Type2)
+}
+```
+
+**Declaration:**
+- `enum Name { Variant, ... }` declares an enum with unit (no payload) and payload variants.
+- Generic enums: `enum Result(T, E) { Ok(T), Err(E) }`
+- Variants may have zero or more payload types.
+- Tag values are assigned sequentially (0, 1, 2, ...) but are implementation details.
+
+**Memory Layout:**
+- Layout is opaque and determined by the compiler's `EnumType` class.
+- Initial implementation uses a discriminant tag (4-byte i32) followed by a union of variant payloads.
+- Future optimizations may use niche optimization (see below).
+- Always query `EnumType` layout methods; never hardcode assumptions.
+
+**Niche Optimization (Future Work):**
+
+Enums may use niche optimization to eliminate the discriminant tag by exploiting unused bit patterns:
+
+- `Option(&T)`: Uses null pointer (0x0) for `None`, actual pointer value for `Some(&T)`
+  - Size: Same as `&T` (one pointer), not tag + pointer
+- `Option(bool)`: Uses 0/1 for `Some(false)`/`Some(true)`, 2 for `None`
+- `Option(NonZeroU32)`: Uses 0 for `None`, non-zero values for `Some(n)`
+
+The compiler recognizes special types (references, `NonZero` wrappers) and automatically applies niche optimization where possible.
+
+**Variant Construction:**
+
+Variants are constructed using dot notation, consistent with module/struct qualified names:
+
+```
+let cmd1 = Command.Quit           // Fully qualified
+let cmd2 = Command.Move(10, 20)   // With payload
+let cmd3 = Move(10, 20)           // Short form (when unambiguous)
+```
+
+- Fully qualified: `EnumName.Variant` or `EnumName.Variant(args)`
+- Short form: `Variant` or `Variant(args)` when type inference can determine the enum type
+- Short form is allowed when there's no ambiguity (only one enum in scope with that variant name, or expected type is known)
+
+### 2.5 Functions
 
 ```
 fn name(parameters) ReturnType
@@ -136,6 +185,104 @@ defer expression
 ```
 
 - Executes on scope exit in LIFO order.
+
+#### Match Expression
+
+Match expressions enable pattern matching on enum values:
+
+```
+expr match {
+    pattern1 => result_expr1,
+    pattern2 => result_expr2,
+    else => default_expr
+}
+```
+
+**Syntax:**
+- `scrutinee match { arms }` where scrutinee is the value being matched
+- Each arm: `pattern => expression,`
+- Optional `else` clause as catch-all: `else => expression`
+
+**Semantics:**
+- Match is an expression - evaluates to a value (type unified across all arms)
+- Scrutinee must have enum type or reference to enum (`EnumType` or `&EnumType`)
+  - References may be automatically dereferenced during lowering, or inspected directly (for now, up to implementation)
+  - Matching on other types is a compile error (may support more types in future)
+- Arms are evaluated in order; first matching pattern wins
+- Pattern variables are bound in the arm's expression scope only
+
+**Patterns:**
+
+1. **Wildcard pattern (`_`)**: Matches anything, discards the value
+   ```
+   Write(_) => "message"   // Matches Write variant, ignores payload
+   ```
+
+2. **Variable binding pattern**: Binds the matched value to a variable
+   ```
+   Some(x) => x + 1        // Binds payload to x
+   Move(x, y) => x + y     // Binds both payload fields
+   ```
+
+3. **Enum variant pattern**: Matches a specific enum variant
+   ```
+   Quit => 0               // Unit variant (no payload)
+   Some(value) => value    // Variant with payload
+   Result.Ok(x) => x       // Fully qualified variant
+   ```
+
+- Nested patterns: `Option.Some(Result.Ok(x))` - destructure nested enums
+- Multiple wildcards: `Move(_, y)` - ignore first field, bind second
+
+**Exhaustiveness Checking:**
+
+The compiler enforces exhaustive pattern matching:
+- All enum variants must be covered, OR
+- An `else` clause must be present
+
+```
+// ERROR: Non-exhaustive (missing None variant)
+let x = opt match {
+    Some(v) => v
+}
+
+// OK: All variants covered
+let x = opt match {
+    Some(v) => v,
+    None => 0
+}
+
+// OK: else clause covers remaining cases
+let x = cmd match {
+    Quit => 0,
+    else => 1
+}
+```
+
+**Error Codes:**
+- E2030: Match on non-enum type
+- E2031: Non-exhaustive pattern match (missing variants)
+- E2032: Pattern arity mismatch (wrong number of payload fields)
+
+**Lowering:**
+
+Match expressions are desugared to if-else chains checking the discriminant tag:
+
+```
+cmd match {
+    Quit => expr1,
+    Move(x, y) => expr2
+} 
+
+// Lowered to:
+if (cmd.tag == 0) {           // Quit
+    expr1
+} else if (cmd.tag == 1) {    // Move
+    let x = cmd.payload.field0
+    let y = cmd.payload.field1
+    expr2
+}
+```
 
 #### Expression Statements
 

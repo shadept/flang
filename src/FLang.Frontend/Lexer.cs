@@ -125,11 +125,14 @@ public class Lexer
                 "defer" => TokenKind.Defer,
                 "import" => TokenKind.Import,
                 "struct" => TokenKind.Struct,
+                "enum" => TokenKind.Enum,
+                "match" => TokenKind.Match,
                 "foreign" => TokenKind.Foreign,
                 "as" => TokenKind.As,
                 "true" => TokenKind.True,
                 "false" => TokenKind.False,
                 "null" => TokenKind.Null,
+                "_" => TokenKind.Underscore,
                 _ => TokenKind.Identifier
             };
 
@@ -148,6 +151,7 @@ public class Lexer
             {
                 ('.', '.') => TokenKind.DotDot,
                 ('=', '=') => TokenKind.EqualsEquals,
+                ('=', '>') => TokenKind.FatArrow,
                 ('!', '=') => TokenKind.NotEquals,
                 ('<', '=') => TokenKind.LessThanOrEqual,
                 ('>', '=') => TokenKind.GreaterThanOrEqual,

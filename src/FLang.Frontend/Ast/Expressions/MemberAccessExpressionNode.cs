@@ -2,9 +2,9 @@ using FLang.Core;
 
 namespace FLang.Frontend.Ast.Expressions;
 
-public class FieldAccessExpressionNode : ExpressionNode
+public class MemberAccessExpressionNode : ExpressionNode
 {
-    public FieldAccessExpressionNode(SourceSpan span, ExpressionNode target, string fieldName) : base(span)
+    public MemberAccessExpressionNode(SourceSpan span, ExpressionNode target, string fieldName) : base(span)
     {
         Target = target;
         FieldName = fieldName;

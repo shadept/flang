@@ -345,7 +345,7 @@ public class AstLowering
                         "`break` statement outside of loop",
                         breakStmt.Span,
                         "`break` can only be used inside a loop",
-                        "E2006"
+                        "E3006"
                     ));
                 else
                     _currentBlock.Instructions.Add(new JumpInstruction(_loopStack.Peek().BreakTarget));
@@ -357,7 +357,7 @@ public class AstLowering
                         "`continue` statement outside of loop",
                         continueStmt.Span,
                         "`continue` can only be used inside a loop",
-                        "E2007"
+                        "E3007"
                     ));
                 else
                     _currentBlock.Instructions.Add(new JumpInstruction(_loopStack.Peek().ContinueTarget));
@@ -490,10 +490,10 @@ public class AstLowering
 
             case IdentifierExpressionNode identifier:
             {
-                var exprType = _typeSolver.GetType(identifier);
+                var identType = _typeSolver.GetType(identifier);
 
                 // Check if this is a type literal
-                if (exprType is StructType st && TypeRegistry.IsType(st))
+                if (identType is StructType st && TypeRegistry.IsType(st))
                 {
                     var referencedType = _typeSolver.ResolveTypeName(identifier.Name);
                     if (referencedType != null)
@@ -507,6 +507,17 @@ public class AstLowering
                         _currentBlock.Instructions.Add(new LoadInstruction(typeGlobal, loaded));
                         return loaded;
                     }
+                }
+
+                // Check if this is an unqualified enum variant (e.g., `Red` instead of `Color.Red`)
+                // Only treat as variant if the enum actually has a variant with this name
+                if (identType is EnumType variantEnumType &&
+                    variantEnumType.Variants.Any(v => v.VariantName == identifier.Name))
+                {
+                    // This is a unit variant - lower it as enum construction with no arguments
+                    // Create a synthetic CallExpressionNode to reuse existing lowering logic
+                    var syntheticCall = new CallExpressionNode(identifier.Span, identifier.Name, new List<ExpressionNode>());
+                    return LowerEnumConstruction(syntheticCall, variantEnumType);
                 }
 
                 if (_locals.TryGetValue(identifier.Name, out var localValue))
@@ -540,10 +551,10 @@ public class AstLowering
                 }
 
                 _diagnostics.Add(Diagnostic.Error(
-                    $"cannot find value `{identifier.Name}` in this scope",
+                    $"cannot find value `{identifier.Name}` during lowering",
                     identifier.Span,
-                    "not found in this scope",
-                    "E2004"
+                    "this may indicate a bug in the type checker",
+                    "E3004"
                 ));
                 // Return a dummy value to avoid cascading errors
                 return new ConstantValue(0);
@@ -582,7 +593,7 @@ public class AstLowering
                 Value targetPtr = assignment.Target switch
                 {
                     IdentifierExpressionNode id => GetVariablePointer(id, assignment),
-                    FieldAccessExpressionNode fa => GetFieldPointer(fa),
+                    MemberAccessExpressionNode fa => GetFieldPointer(fa),
                     _ => throw new Exception($"Invalid assignment target: {assignment.Target.GetType().Name}")
                 };
 
@@ -617,7 +628,17 @@ public class AstLowering
                 // Lower range expression to Range struct construction: .{ start = ..., end = ... }
                 return LowerRangeToStruct(rangeExpr);
 
+            case MatchExpressionNode match:
+                return LowerMatchExpression(match);
+
             case CallExpressionNode call:
+                // Check if this is enum variant construction
+                var exprType = _typeSolver.GetType(call);
+                if (exprType is EnumType enumType)
+                {
+                    return LowerEnumConstruction(call, enumType);
+                }
+
                 // size_of and align_of are now regular library functions defined in core.rtti
                 // They accept Type($T) parameters and access struct fields directly
 
@@ -647,7 +668,7 @@ public class AstLowering
                     }
                 }
 
-                var callType = _typeSolver.GetType(call) ?? TypeRegistry.I32;
+                var callType = exprType ?? TypeRegistry.I32;
                 var callResult = new LocalValue($"call_{_tempCounter++}") { Type = callType };
                 var targetName = resolved?.Name ?? call.FunctionName;
                 var callInst = new CallInstruction(targetName, args, callResult);
@@ -710,7 +731,7 @@ public class AstLowering
                         "cannot take address of indexed non-array value",
                         addressOf.Span,
                         null,
-                        "E2012"));
+                        "E3012"));
                     return new ConstantValue(0);
                 }
 
@@ -718,7 +739,7 @@ public class AstLowering
                     "can only take address of variables",
                     addressOf.Span,
                     "use `&variable_name`",
-                    "E2012"
+                    "E3012"
                 ));
                 return new ConstantValue(0); // Fallback
 
@@ -780,8 +801,8 @@ public class AstLowering
 
             case NullLiteralNode nullLiteral:
             {
-                var exprType = _typeSolver.GetType(nullLiteral) as StructType;
-                if (exprType == null || !TypeRegistry.IsOption(exprType))
+                var nullType = _typeSolver.GetType(nullLiteral) as StructType;
+                if (nullType == null || !TypeRegistry.IsOption(nullType))
                 {
                     _diagnostics.Add(Diagnostic.Error(
                         "null literal requires an option type",
@@ -791,7 +812,7 @@ public class AstLowering
                     return new ConstantValue(0);
                 }
 
-                return LowerNullLiteral(exprType);
+                return LowerNullLiteral(nullType);
             }
 
             case CastExpressionNode cast:
@@ -815,8 +836,19 @@ public class AstLowering
                 return castResult;
             }
 
-            case FieldAccessExpressionNode fieldAccess:
+            case MemberAccessExpressionNode fieldAccess:
             {
+                // Check if this is enum variant construction (e.g., Color.Blue)
+                // Only treat as variant if the enum actually has a variant with this name
+                var memberAccessType = _typeSolver.GetType(fieldAccess);
+                if (memberAccessType is EnumType enumFromMember &&
+                    enumFromMember.Variants.Any(v => v.VariantName == fieldAccess.FieldName))
+                {
+                    // This is EnumType.Variant syntax - lower as enum construction
+                    var syntheticCall = new CallExpressionNode(fieldAccess.Span, fieldAccess.FieldName, new List<ExpressionNode>());
+                    return LowerEnumConstruction(syntheticCall, enumFromMember);
+                }
+
                 // Get struct type from the target expression
                 var targetValue = LowerExpression(fieldAccess.Target);
                 var targetSemanticType = _typeSolver.GetType(fieldAccess.Target);
@@ -1043,7 +1075,7 @@ public class AstLowering
                 $"cannot assign to `{id.Name}` because it is not declared",
                 assignment.Span,
                 "declare the variable with `let` first",
-                "E2010"
+                "E3010"
             ));
             // Return a dummy pointer to avoid cascading errors
             return new LocalValue("error") { Type = new ReferenceType(TypeRegistry.I32) };
@@ -1051,11 +1083,11 @@ public class AstLowering
         return targetPtr;
     }
 
-    private Value GetFieldPointer(FieldAccessExpressionNode fieldAccess)
+    private Value GetFieldPointer(MemberAccessExpressionNode memberAccess)
     {
         // Get struct type from the target expression
-        var targetValue = LowerExpression(fieldAccess.Target);
-        var targetSemanticType = _typeSolver.GetType(fieldAccess.Target);
+        var targetValue = LowerExpression(memberAccess.Target);
+        var targetSemanticType = _typeSolver.GetType(memberAccess.Target);
 
         var accessStruct = targetSemanticType switch
         {
@@ -1068,7 +1100,7 @@ public class AstLowering
         {
             _diagnostics.Add(Diagnostic.Error(
                 "cannot access field on non-struct type",
-                fieldAccess.Span,
+                memberAccess.Span,
                 "type checking failed",
                 "E3002"
             ));
@@ -1076,12 +1108,12 @@ public class AstLowering
         }
 
         // Calculate field offset
-        var fieldByteOffset = accessStruct.GetFieldOffset(fieldAccess.FieldName);
+        var fieldByteOffset = accessStruct.GetFieldOffset(memberAccess.FieldName);
         if (fieldByteOffset == -1)
         {
             _diagnostics.Add(Diagnostic.Error(
-                $"field `{fieldAccess.FieldName}` not found",
-                fieldAccess.Span,
+                $"field `{memberAccess.FieldName}` not found",
+                memberAccess.Span,
                 "type checking failed",
                 "E3003"
             ));
@@ -1089,7 +1121,7 @@ public class AstLowering
         }
 
         // Get pointer to field: targetPtr + offset
-        var fieldType = accessStruct.GetFieldType(fieldAccess.FieldName) ?? TypeRegistry.I32;
+        var fieldType = accessStruct.GetFieldType(memberAccess.FieldName) ?? TypeRegistry.I32;
         var fieldPointer = new LocalValue($"field_ptr_{_tempCounter++}")
             { Type = new ReferenceType(fieldType) };
         var fieldGepInst = new GetElementPtrInstruction(targetValue, fieldByteOffset, fieldPointer);
@@ -1382,7 +1414,7 @@ public class AstLowering
                     $"struct `{structType.Name}` does not have a field named `{fieldName}`",
                     span,
                     null,
-                    "E2013"));
+                    "E3014"));
                 continue;
             }
 
@@ -1473,6 +1505,302 @@ public class AstLowering
     }
 
     private FType? GetExpressionType(ExpressionNode node) => _typeSolver.GetType(node);
+
+    // ==================== Enum Construction Lowering ====================
+
+    private Value LowerEnumConstruction(CallExpressionNode call, EnumType enumType)
+    {
+        // Parse variant name from call
+        string variantName;
+        if (call.FunctionName.Contains('.'))
+        {
+            var parts = call.FunctionName.Split('.');
+            variantName = parts[1];
+        }
+        else
+        {
+            variantName = call.FunctionName;
+        }
+
+        // Find variant index
+        int variantIndex = -1;
+        (string VariantName, TypeBase? PayloadType)? variant = null;
+        for (int i = 0; i < enumType.Variants.Count; i++)
+        {
+            if (enumType.Variants[i].VariantName == variantName)
+            {
+                variantIndex = i;
+                variant = enumType.Variants[i];
+                break;
+            }
+        }
+
+        if (variantIndex == -1 || variant == null)
+        {
+            // Error - should have been caught in type checking
+            _diagnostics.Add(Diagnostic.Error(
+                $"variant `{variantName}` not found in enum `{enumType.Name}`",
+                call.Span,
+                null,
+                "E3037"));
+            return new LocalValue("error") { Type = enumType };
+        }
+
+        // 1. Allocate space for the enum on the stack
+        var enumPtr = new LocalValue($"enum_{_tempCounter++}") { Type = new ReferenceType(enumType) };
+        var allocaInst = new AllocaInstruction(enumType, enumType.Size, enumPtr);
+        _currentBlock.Instructions.Add(allocaInst);
+
+        // 2. Get pointer to tag field (at offset from EnumType.GetTagOffset())
+        var tagOffset = enumType.GetTagOffset();
+        var tagPtr = new LocalValue($"tag_ptr_{_tempCounter++}") { Type = new ReferenceType(TypeRegistry.I32) };
+        var tagGep = new GetElementPtrInstruction(enumPtr, tagOffset, tagPtr);
+        _currentBlock.Instructions.Add(tagGep);
+
+        // 3. Store the variant index (tag)
+        var tagValue = new ConstantValue(variantIndex) { Type = TypeRegistry.I32 };
+        var tagStore = new StorePointerInstruction(tagPtr, tagValue);
+        _currentBlock.Instructions.Add(tagStore);
+
+        // 4. If variant has payload, store payload data
+        if (variant.Value.PayloadType != null)
+        {
+            var payloadOffset = enumType.GetPayloadOffset(variantIndex);
+            
+            if (variant.Value.PayloadType is StructType st && st.Name.Contains("_payload"))
+            {
+                // Multiple payloads - store each field
+                for (int i = 0; i < call.Arguments.Count && i < st.Fields.Count; i++)
+                {
+                    var argValue = LowerExpression(call.Arguments[i]);
+                    var fieldOffset = st.GetFieldOffset(st.Fields[i].Name);
+                    var fieldPtr = new LocalValue($"payload_field_ptr_{_tempCounter++}") 
+                        { Type = new ReferenceType(st.Fields[i].Type) };
+                    var fieldGep = new GetElementPtrInstruction(enumPtr, payloadOffset + fieldOffset, fieldPtr);
+                    _currentBlock.Instructions.Add(fieldGep);
+                    var fieldStore = new StorePointerInstruction(fieldPtr, argValue);
+                    _currentBlock.Instructions.Add(fieldStore);
+                }
+            }
+            else
+            {
+                // Single payload
+                var argValue = LowerExpression(call.Arguments[0]);
+                var payloadPtr = new LocalValue($"payload_ptr_{_tempCounter++}") 
+                    { Type = new ReferenceType(variant.Value.PayloadType) };
+                var payloadGep = new GetElementPtrInstruction(enumPtr, payloadOffset, payloadPtr);
+                _currentBlock.Instructions.Add(payloadGep);
+                var payloadStore = new StorePointerInstruction(payloadPtr, argValue);
+                _currentBlock.Instructions.Add(payloadStore);
+            }
+        }
+
+        // 5. Load the enum value from the pointer
+        var enumResult = new LocalValue($"enum_val_{_tempCounter++}") { Type = enumType };
+        var loadInst = new LoadInstruction(enumPtr, enumResult);
+        _currentBlock.Instructions.Add(loadInst);
+
+        return enumResult;
+    }
+
+    // ==================== Match Expression Lowering ====================
+
+    private Value LowerMatchExpression(MatchExpressionNode match)
+    {
+        // Get metadata from type checker
+        var metadata = _typeSolver.GetMatchMetadata(match);
+        if (metadata == null)
+        {
+            _diagnostics.Add(Diagnostic.Error(
+                "match expression not properly type-checked",
+                match.Span,
+                null,
+                "E1001"));
+            return new LocalValue("error") { Type = TypeRegistry.I32 };
+        }
+
+        var (enumType, needsDereference) = metadata.Value;
+        var resultType = _typeSolver.GetType(match) ?? TypeRegistry.I32;
+
+        // Lower scrutinee
+        var scrutineeValue = LowerExpression(match.Scrutinee);
+
+        // If scrutinee is a reference, dereference it to get the enum value
+        if (needsDereference)
+        {
+            var derefValue = new LocalValue($"match_deref_{_tempCounter++}") { Type = enumType };
+            var loadInst = new LoadInstruction(scrutineeValue, derefValue);
+            _currentBlock.Instructions.Add(loadInst);
+            scrutineeValue = derefValue;
+        }
+
+        // Allocate space on stack to hold scrutinee (so we can get pointer to it)
+        var scrutineePtr = new LocalValue($"match_scrutinee_ptr_{_tempCounter++}") 
+            { Type = new ReferenceType(enumType) };
+        var allocaInst = new AllocaInstruction(enumType, enumType.Size, scrutineePtr);
+        _currentBlock.Instructions.Add(allocaInst);
+        var storeScrutinee = new StorePointerInstruction(scrutineePtr, scrutineeValue);
+        _currentBlock.Instructions.Add(storeScrutinee);
+
+        // Get pointer to tag field
+        var tagOffset = enumType.GetTagOffset();
+        var tagPtr = new LocalValue($"match_tag_ptr_{_tempCounter++}") { Type = new ReferenceType(TypeRegistry.I32) };
+        var tagGep = new GetElementPtrInstruction(scrutineePtr, tagOffset, tagPtr);
+        _currentBlock.Instructions.Add(tagGep);
+
+        // Load the tag value
+        var tagValue = new LocalValue($"match_tag_{_tempCounter++}") { Type = TypeRegistry.I32 };
+        var tagLoad = new LoadInstruction(tagPtr, tagValue);
+        _currentBlock.Instructions.Add(tagLoad);
+
+        // Allocate result variable on stack (before any branches)
+        var resultPtr = new LocalValue($"match_result_ptr_{_tempCounter++}")
+            { Type = new ReferenceType(resultType) };
+        var resultAlloca = new AllocaInstruction(resultType, resultType.Size, resultPtr);
+        _currentBlock.Instructions.Add(resultAlloca);
+
+        // Create blocks in the order they should be emitted:
+        // 1. Arm blocks (executed bodies)
+        var armBlocks = new List<BasicBlock>();
+        for (int i = 0; i < match.Arms.Count; i++)
+        {
+            armBlocks.Add(CreateBlock($"match_arm_{i}"));
+        }
+
+        // 2. Check blocks (condition chain for arms 1..N, except first which uses current block)
+        var checkBlocks = new List<BasicBlock>();
+        for (int i = 0; i < match.Arms.Count - 1; i++)
+        {
+            checkBlocks.Add(CreateBlock($"match_check_{i}"));
+        }
+
+        // 3. Merge block (final, after all arms and checks)
+        var mergeBlock = CreateBlock("match_merge");
+
+        // Build check chain and arm blocks (forward iteration)
+        for (int armIndex = 0; armIndex < match.Arms.Count; armIndex++)
+        {
+            var arm = match.Arms[armIndex];
+            var armBlock = armBlocks[armIndex];
+
+            // Determine what block to use for the check
+            // First arm uses current block, others use their check block
+            var checkBlock = armIndex == 0 ? _currentBlock : checkBlocks[armIndex - 1];
+
+            // Emit the condition check
+            _currentBlock = checkBlock;
+
+            if (arm.Pattern is ElsePatternNode)
+            {
+                // Else always matches - unconditional jump to arm
+                _currentBlock.Instructions.Add(new JumpInstruction(armBlock));
+            }
+            else if (arm.Pattern is EnumVariantPatternNode evpCheck)
+            {
+                // Find variant index
+                string variantName = evpCheck.VariantName;
+                int variantIndex = -1;
+                for (int i = 0; i < enumType.Variants.Count; i++)
+                {
+                    if (enumType.Variants[i].VariantName == variantName)
+                    {
+                        variantIndex = i;
+                        break;
+                    }
+                }
+
+                // Compare tag with variant index
+                var expectedTag = new ConstantValue(variantIndex) { Type = TypeRegistry.I32 };
+                var comparison = new LocalValue($"match_cmp_{_tempCounter++}") { Type = TypeRegistry.Bool };
+                var cmpInst = new BinaryInstruction(BinaryOp.Equal, tagValue, expectedTag, comparison);
+                _currentBlock.Instructions.Add(cmpInst);
+
+                // Determine the else target (next check or merge if last)
+                var elseTarget = armIndex < match.Arms.Count - 1 ? checkBlocks[armIndex] : mergeBlock;
+                _currentBlock.Instructions.Add(new BranchInstruction(comparison, armBlock, elseTarget));
+            }
+
+            // Fill in the arm block with pattern bindings and result expression
+            _currentBlock = armBlock;
+
+            // Bind pattern variables (if any)
+            if (arm.Pattern is EnumVariantPatternNode evp)
+            {
+                // Find the variant
+                string variantName = evp.VariantName;
+                int variantIndex = -1;
+                (string VariantName, TypeBase? PayloadType)? variant = null;
+                for (int i = 0; i < enumType.Variants.Count; i++)
+                {
+                    if (enumType.Variants[i].VariantName == variantName)
+                    {
+                        variantIndex = i;
+                        variant = enumType.Variants[i];
+                        break;
+                    }
+                }
+
+                // Extract payload if present
+                if (variant.HasValue && variant.Value.PayloadType != null)
+                {
+                    var payloadOffset = enumType.GetPayloadOffset(variantIndex);
+
+                    if (variant.Value.PayloadType is StructType st && st.Name.Contains("_payload"))
+                    {
+                        // Multiple fields
+                        for (int i = 0; i < evp.SubPatterns.Count && i < st.Fields.Count; i++)
+                        {
+                            if (evp.SubPatterns[i] is VariablePatternNode vp)
+                            {
+                                var fieldOffset = st.GetFieldOffset(st.Fields[i].Name);
+                                var fieldPtr = new LocalValue($"payload_field_{_tempCounter++}")
+                                    { Type = new ReferenceType(st.Fields[i].Type) };
+                                var fieldGep = new GetElementPtrInstruction(scrutineePtr,
+                                    payloadOffset + fieldOffset, fieldPtr);
+                                _currentBlock.Instructions.Add(fieldGep);
+                                // Make variable name unique per-arm to avoid C redefinition errors
+                                var fieldValue = new LocalValue($"{vp.Name}_arm{armIndex}_{_tempCounter++}") { Type = st.Fields[i].Type };
+                                var fieldLoad = new LoadInstruction(fieldPtr, fieldValue);
+                                _currentBlock.Instructions.Add(fieldLoad);
+                                _locals[vp.Name] = fieldPtr; // Store pointer for later access
+                            }
+                        }
+                    }
+                    else if (evp.SubPatterns.Count > 0 && evp.SubPatterns[0] is VariablePatternNode vp)
+                    {
+                        // Single field
+                        var payloadPtr = new LocalValue($"payload_{_tempCounter++}")
+                            { Type = new ReferenceType(variant.Value.PayloadType) };
+                        var payloadGep = new GetElementPtrInstruction(scrutineePtr, payloadOffset, payloadPtr);
+                        _currentBlock.Instructions.Add(payloadGep);
+                        // Make variable name unique per-arm to avoid C redefinition errors
+                        var payloadValue = new LocalValue($"{vp.Name}_arm{armIndex}_{_tempCounter++}") { Type = variant.Value.PayloadType };
+                        var payloadLoad = new LoadInstruction(payloadPtr, payloadValue);
+                        _currentBlock.Instructions.Add(payloadLoad);
+                        _locals[vp.Name] = payloadPtr; // Store pointer for later access
+                    }
+                }
+            }
+
+            // Lower the arm expression and store to result pointer
+            var armResultValue = LowerExpression(arm.ResultExpr);
+            var storeResult = new StorePointerInstruction(resultPtr, armResultValue);
+            _currentBlock.Instructions.Add(storeResult);
+
+            // Jump to merge block
+            _currentBlock.Instructions.Add(new JumpInstruction(mergeBlock));
+        }
+
+        // Continue in merge block
+        _currentBlock = mergeBlock;
+
+        // Load the result that was written by whichever arm executed
+        var finalResult = new LocalValue($"match_result_{_tempCounter++}") { Type = resultType };
+        var loadResult = new LoadInstruction(resultPtr, finalResult);
+        _currentBlock.Instructions.Add(loadResult);
+
+        return finalResult;
+    }
 
     private class LoopContext
     {

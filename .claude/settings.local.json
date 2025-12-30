@@ -4,6 +4,7 @@
       "Bash(dotnet test:*)",
       "Bash(dotnet run:*)",
       "Bash(dotnet build:*)",
+      "Bash(pwsh -File build.ps1:*)",
       "Bash(pwsh -File build-all-tests.ps1:*)",
       "Bash(cat:*)",
       "Bash(./build.sh)",

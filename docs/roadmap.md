@@ -313,7 +313,7 @@ _Goal: Add the type system and fundamental data structures needed for real progr
 - E2015: Intrinsic argument must be type name
 - E2016: Unknown type in intrinsic
 
-**Note:** Use `Type($T)` when passing generic type parameters to intrinsics. Square-bracket syntax is reserved for future features and is not accepted by the parser.
+**Note:** Use `Type($T)` when passing generic type parameters to intrinsics.
 
 ---
 
@@ -390,25 +390,53 @@ _Goal: Generics, inference, and advanced type features._
 
 ---
 
-### Milestone 13: Iterator Protocol
+### ✅ Milestone 13: Iterator Protocol (COMPLETE)
 
 **Scope:** Full iterator protocol, for loops over custom types.
 
-**Key Tasks:**
+**Completed:**
 
-- [ ] `fn iterator(&T) Iterator(E)` protocol
-- [ ] `fn next(&Iterator(E)) E?` protocol
-- [ ] Desugar `for (x in iterable)` to iterator protocol
-- [ ] Built-in iterators:
-  - [ ] Range iterators (already hardcoded)
-  - [ ] Array/slice iterators
-  - [ ] String iterators (code points)
-- [ ] Custom iterator implementations
+- ✅ Iterator protocol implementation:
+  - ✅ `fn iter(&T) IteratorState` protocol function
+  - ✅ `fn next(&IteratorState) E?` protocol function
+  - ✅ Type checking for iterator protocol compliance
+  - ✅ Error codes: E2021 (type not iterable), E2023 (missing next function), E2025 (next returns wrong type)
+- ✅ For loop desugaring to iterator protocol:
+  - ✅ `for (x in iterable)` calls `iter(&iterable)` to get iterator state
+  - ✅ Loop body wrapped with `next(&iterator)` calls until `null` returned
+  - ✅ Element type inference from `Option(E)` return type
+- ✅ Built-in iterators:
+  - ✅ Range iterators: `0..5` syntax with `Range` and `RangeIterator` in `stdlib/core/range.f`
+  - ✅ Range iterator implementation with `iter(&Range)` and `next(&RangeIterator)`
+- ✅ Custom iterator implementations:
+  - ✅ Support for user-defined iterators with custom state types
+  - ✅ Examples: Countdown, Counter, Fibonacci iterators
+- ✅ Error handling improvements:
+  - ✅ Proper error spans (for loop span only includes `for (v in c)`, not body)
+  - ✅ Skip body checking when iterator setup fails (prevents cascading errors)
+  - ✅ Hint spans for E2025 pointing to return type of `next` function
+  - ✅ Short type names in error messages (FormatTypeNameForDisplay helper)
+  - ✅ Consistent, helpful error messages with proper grammar
 
-**Tests to Add:**
+**Tests Added:**
 
-- Custom iterators
-- For loops over various types
+- ✅ `iterators/iterator_range_syntax.f` - Range syntax `0..5` in for loops
+- ✅ `iterators/iterator_range_basic.f` - Range iterator with explicit Range struct
+- ✅ `iterators/iterator_range_empty.f` - Empty range handling
+- ✅ `iterators/iterator_with_break.f` - Break statement in iterator loops
+- ✅ `iterators/iterator_with_continue.f` - Continue statement in iterator loops
+- ✅ `iterators/iterator_custom_simple.f` - Simple custom iterator (Countdown)
+- ✅ `iterators/iterator_custom_counter.f` - Custom iterator with separate state type
+- ✅ `iterators/iterator_custom_fibonacci.f` - Complex custom iterator (Fibonacci)
+- ✅ `iterators/iterator_error_no_iter.f` - E2021: Type not iterable
+- ✅ `iterators/iterator_error_no_next.f` - E2023: Missing next function
+- ✅ `iterators/iterator_error_next_wrong_return.f` - E2025: Wrong return type (i32 instead of i32?)
+- ✅ `iterators/iterator_error_next_wrong_return_struct.f` - E2025: Wrong return type (struct instead of Option)
+
+**Deferred to Later Milestones:**
+
+- [ ] Array/slice iterators (needs slice iterator implementation)
+- [ ] String iterators (code points or bytes)
 
 ---
 
@@ -424,8 +452,19 @@ _Goal: Fill in remaining language features._
 
 - [ ] `enum` syntax parsing
 - [ ] Variant construction
-- [ ] Basic pattern matching (if we decide to add it)
-- [ ] Or defer this to later
+- [ ] Basic pattern matching
+
+---
+
+### Milestone 14.1: Replace struct Option(T) with enum Option(T)
+
+**Scope:** Better option semantics
+
+**Key Tasks:**
+
+- [ ] Necessary pattern matching to support this use case
+- [ ] Update existing compiler code, stdlib code and compiler tests to reflect this new approach.
+- [ ] Start implementing Result(T, E) to show capabilities of enum system
 
 ---
 
@@ -543,12 +582,14 @@ _Goal: Rewrite the compiler in FLang._
 ## Current Status
 
 - **Phase:** 3 (Advanced Type System)
-- **Milestone:** 12 (IN PROGRESS - Generic structs & Option(T) complete; List(T) operations pending)
+- **Milestone:** 13 (COMPLETE - Iterator Protocol fully implemented)
 - **Next Up:**
   - Fix `list_push_pop.f` type mismatch bug (E3001)
   - Implement allocator interface (deferred from M10)
   - Complete List(T) operations (push, pop, get)
-- **Tests Passing:** 54/55 (98%)
+  - Array/slice iterators (M13 deferred)
+  - String iterators (M13 deferred)
+- **Tests Passing:** 66/67 (98%)
 
   - ✅ 15 core tests (basics, control flow, functions)
   - ✅ 6 generics tests (M11)
@@ -562,6 +603,7 @@ _Goal: Rewrite the compiler in FLang._
   - ✅ 5 cast tests
   - ✅ 1 option test
   - ✅ 3 SSA tests (reassignment, print functions)
+  - ✅ 12 iterator tests (M13)
   - ❌ 1 list test failing (compiler bug, not missing feature)
   - ❌ 2 pre-existing struct bugs (see `docs/known-issues.md`)
 

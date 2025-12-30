@@ -208,7 +208,9 @@ public class ComptimeInt : TypeBase
 {
     public static readonly ComptimeInt Instance = new();
 
-    private ComptimeInt() { }
+    private ComptimeInt()
+    {
+    }
 
     public override string Name => "comptime_int";
 
@@ -233,7 +235,9 @@ public class ComptimeFloat : TypeBase
 {
     public static readonly ComptimeFloat Instance = new();
 
-    private ComptimeFloat() { }
+    private ComptimeFloat()
+    {
+    }
 
     public override string Name => "comptime_float";
 
@@ -336,7 +340,8 @@ public class StructType : TypeBase
     private readonly Dictionary<string, int> _fieldOffsets = [];
 
     // New constructor (takes TypeBase type arguments)
-    public StructType(string name, List<TypeBase>? typeArguments = null, List<(string Name, TypeBase Type)>? fields = null)
+    public StructType(string name, List<TypeBase>? typeArguments = null,
+        List<(string Name, TypeBase Type)>? fields = null)
     {
         StructName = name;
         Name = name; // Fully qualified name
@@ -481,10 +486,12 @@ public class StructType : TypeBase
             var typeArgs = string.Join(", ", TypeArguments.Select(t => t.ToString()));
             return $"{displayName}({typeArgs})";
         }
+
         if (TypeParameters.Count > 0)
         {
             return $"{displayName}[{string.Join(", ", TypeParameters)}]";
         }
+
         return displayName;
     }
 
@@ -530,8 +537,13 @@ public static class StructTypeExtensions
         structType.Fields.Clear();
         structType.Fields.AddRange(fields);
         // Invalidate cached layout
-        typeof(StructType).GetField("_cachedSize", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)?.SetValue(structType, null);
-        typeof(StructType).GetField("_cachedAlignment", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)?.SetValue(structType, null);
+        typeof(StructType)
+            .GetField("_cachedSize", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)
+            ?.SetValue(structType, null);
+        typeof(StructType)
+            .GetField("_cachedAlignment",
+                System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)
+            ?.SetValue(structType, null);
         return structType;
     }
 }
@@ -573,33 +585,76 @@ public class ArrayType : TypeBase
 
 /// <summary>
 /// Enum type (for tagged unions).
+/// Memory layout is abstracted through query methods to enable future niche optimization.
 /// </summary>
 public class EnumType : TypeBase
 {
-    public EnumType(string name, List<(string VariantName, TypeBase? PayloadType)>? variants = null)
+    public EnumType(string name, List<TypeBase> typeArguments,
+        List<(string VariantName, TypeBase? PayloadType)> variants)
     {
         Name = name;
-        Variants = variants ?? [];
+        TypeArguments = typeArguments;
+        Variants = variants;
     }
 
     public override string Name { get; }
+    public List<TypeBase> TypeArguments { get; }
     public List<(string VariantName, TypeBase? PayloadType)> Variants { get; }
+
+    /// <summary>
+    /// Get the byte offset of the discriminant tag within the enum.
+    /// Default implementation: tag at offset 0.
+    /// Can be overridden for niche optimization (e.g., Option(&amp;T) has no tag).
+    /// </summary>
+    public virtual int GetTagOffset() => 0;
+
+    /// <summary>
+    /// Get the byte offset of the payload data for a specific variant.
+    /// Default implementation: payload starts after 4-byte tag.
+    /// Can be overridden for niche optimization.
+    /// </summary>
+    public virtual int GetPayloadOffset(int variantIndex) => 4;
+
+    /// <summary>
+    /// Get the size of the payload for a specific variant (in bytes).
+    /// </summary>
+    public virtual int GetVariantPayloadSize(int variantIndex)
+    {
+        if (variantIndex < 0 || variantIndex >= Variants.Count)
+            return 0;
+
+        var payloadType = Variants[variantIndex].PayloadType;
+        return payloadType?.Size ?? 0;
+    }
+
+    /// <summary>
+    /// Get the size of the discriminant tag (in bytes).
+    /// Default: 4 bytes (i32).
+    /// </summary>
+    protected virtual int GetTagSize() => 4;
+
+    /// <summary>
+    /// Get the largest payload size among all variants.
+    /// </summary>
+    protected int GetLargestPayloadSize()
+    {
+        return Variants
+            .Where(v => v.PayloadType != null)
+            .Select(v => v.PayloadType!.Size)
+            .DefaultIfEmpty(0)
+            .Max();
+    }
 
     public override int Size
     {
         get
         {
             if (Variants.Count == 0)
-                return 4; // Tag only (i32)
+                return GetTagSize();
 
-            // Tag (4 bytes) + largest variant payload
-            int maxPayloadSize = Variants
-                .Where(v => v.PayloadType != null)
-                .Select(v => v.PayloadType!.Size)
-                .DefaultIfEmpty(0)
-                .Max();
-
-            return 4 + maxPayloadSize;
+            // Default implementation: tag + largest variant payload
+            // Future niche optimizations can override this
+            return GetTagSize() + GetLargestPayloadSize();
         }
     }
 
@@ -638,6 +693,9 @@ public static class TypeRegistry
     private const string SliceFqn = "core.slice.Slice";
     private const string StringFqn = "core.string.String";
     private const string TypeFqn = "core.rtti.Type";
+
+    // Never type (the bottom type)
+    public static readonly PrimitiveType Never = new("never", 0, 0);
 
     // Void type (for functions with no return value)
     public static readonly PrimitiveType Void = new("void", 0, 0);
@@ -713,7 +771,8 @@ public static class TypeRegistry
     /// </summary>
     public static bool IsIntegerType(TypeBase type)
     {
-        return type is ComptimeInt || (type is PrimitiveType pt && pt != Bool && pt != Void);
+        return type is ComptimeInt ||
+               (type is PrimitiveType pt && !pt.Equals(Bool) && !pt.Equals(Void) && !pt.Equals(Never));
     }
 
     /// <summary>

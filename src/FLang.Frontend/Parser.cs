@@ -26,6 +26,7 @@ public class Parser
         var startSpan = _currentToken.Span;
         var imports = new List<ImportDeclarationNode>();
         var structs = new List<StructDeclarationNode>();
+        var enums = new List<EnumDeclarationNode>();
         var functions = new List<FunctionDeclarationNode>();
 
         // Parse imports
@@ -45,12 +46,17 @@ public class Parser
                 }
                 else if (_currentToken.Kind == TokenKind.Pub)
                 {
-                    // Could be struct or function - peek ahead
+                    // Could be struct, enum, or function - peek ahead
                     var nextToken = PeekNextToken();
                     if (nextToken.Kind == TokenKind.Struct)
                     {
                         Eat(TokenKind.Pub);
                         structs.Add(ParseStruct());
+                    }
+                    else if (nextToken.Kind == TokenKind.Enum)
+                    {
+                        Eat(TokenKind.Pub);
+                        enums.Add(ParseEnumDeclaration());
                     }
                     else if (nextToken.Kind == TokenKind.Fn)
                     {
@@ -59,7 +65,7 @@ public class Parser
                     else
                     {
                         _diagnostics.Add(Diagnostic.Error(
-                            $"expected `struct` or `fn` after `pub`",
+                            $"expected `struct`, `enum`, or `fn` after `pub`",
                             _currentToken.Span,
                             $"found '{nextToken.Text}'",
                             "E1002"));
@@ -72,6 +78,11 @@ public class Parser
                     // Struct without pub (allowed for now)
                     structs.Add(ParseStruct());
                 }
+                else if (_currentToken.Kind == TokenKind.Enum)
+                {
+                    // Enum without pub (allowed for now)
+                    enums.Add(ParseEnumDeclaration());
+                }
                 else if (_currentToken.Kind == TokenKind.Fn)
                 {
                     // Non-public function
@@ -83,7 +94,7 @@ public class Parser
                     _diagnostics.Add(Diagnostic.Error(
                         $"unexpected token '{_currentToken.Text}'",
                         _currentToken.Span,
-                        "expected `struct`, `pub fn`, `fn`, or `#foreign fn`",
+                        "expected `struct`, `enum`, `pub fn`, `fn`, or `#foreign fn`",
                         "E1001"));
                     _currentToken = _lexer.NextToken();
                 }
@@ -97,7 +108,7 @@ public class Parser
 
         var endSpan = _currentToken.Span;
         var span = startSpan with { Length = endSpan.Index + endSpan.Length - startSpan.Index };
-        return new ModuleNode(span, imports, structs, functions);
+        return new ModuleNode(span, imports, structs, enums, functions);
     }
 
     private ImportDeclarationNode ParseImport()
@@ -169,6 +180,74 @@ public class Parser
         var span = new SourceSpan(structKeyword.Span.FileId, structKeyword.Span.Index,
             closeBrace.Span.Index + closeBrace.Span.Length - structKeyword.Span.Index);
         return new StructDeclarationNode(span, nameToken.Text, typeParameters, fields);
+    }
+
+    private EnumDeclarationNode ParseEnumDeclaration()
+    {
+        var enumKeyword = Eat(TokenKind.Enum);
+        var nameToken = Eat(TokenKind.Identifier);
+
+        // Parse optional generic type parameters: (T, U, V)
+        var typeParameters = new List<string>();
+        if (_currentToken.Kind == TokenKind.OpenParenthesis)
+        {
+            Eat(TokenKind.OpenParenthesis);
+
+            while (_currentToken.Kind != TokenKind.CloseParenthesis && _currentToken.Kind != TokenKind.EndOfFile)
+            {
+                var typeParam = Eat(TokenKind.Identifier);
+                typeParameters.Add(typeParam.Text);
+
+                if (_currentToken.Kind == TokenKind.Comma)
+                    Eat(TokenKind.Comma);
+                else if (_currentToken.Kind != TokenKind.CloseParenthesis) break;
+            }
+
+            Eat(TokenKind.CloseParenthesis);
+        }
+
+        // Parse enum body: { Variant, Variant(Type), Variant(T1, T2) }
+        Eat(TokenKind.OpenBrace);
+
+        var variants = new List<EnumVariantNode>();
+        while (_currentToken.Kind != TokenKind.CloseBrace && _currentToken.Kind != TokenKind.EndOfFile)
+        {
+            var variantStart = _currentToken.Span;
+            var variantNameToken = Eat(TokenKind.Identifier);
+
+            // Check for payload types: Variant(Type1, Type2)
+            var payloadTypes = new List<TypeNode>();
+            if (_currentToken.Kind == TokenKind.OpenParenthesis)
+            {
+                Eat(TokenKind.OpenParenthesis);
+
+                while (_currentToken.Kind != TokenKind.CloseParenthesis && _currentToken.Kind != TokenKind.EndOfFile)
+                {
+                    var payloadType = ParseType();
+                    payloadTypes.Add(payloadType);
+
+                    if (_currentToken.Kind == TokenKind.Comma)
+                        Eat(TokenKind.Comma);
+                    else if (_currentToken.Kind != TokenKind.CloseParenthesis) break;
+                }
+
+                Eat(TokenKind.CloseParenthesis);
+            }
+
+            var variantEnd = _currentToken.Span;
+            var variantSpan = new SourceSpan(variantStart.FileId, variantStart.Index,
+                variantEnd.Index - variantStart.Index);
+            variants.Add(new EnumVariantNode(variantSpan, variantNameToken.Text, payloadTypes));
+
+            // Variants can be separated by commas or newlines (optional)
+            if (_currentToken.Kind == TokenKind.Comma) Eat(TokenKind.Comma);
+        }
+
+        var closeBrace = Eat(TokenKind.CloseBrace);
+
+        var span = new SourceSpan(enumKeyword.Span.FileId, enumKeyword.Span.Index,
+            closeBrace.Span.Index + closeBrace.Span.Length - enumKeyword.Span.Index);
+        return new EnumDeclarationNode(span, nameToken.Text, typeParameters, variants);
     }
 
     public FunctionDeclarationNode ParseFunction(FunctionModifiers modifiers = FunctionModifiers.None)
@@ -359,6 +438,12 @@ public class Parser
         // Handle cast chains: expr as Type as Type
         left = ParseCastChain(left);
 
+        // Handle match expression: expr match { pattern => expr, ... }
+        if (_currentToken.Kind == TokenKind.Match)
+        {
+            return ParseMatchExpression(left);
+        }
+
         while (true)
         {
             // Check for assignment: lvalue = expression
@@ -434,11 +519,51 @@ public class Parser
 
                 if (_currentToken.Kind == TokenKind.Identifier)
                 {
-                    // Field access: obj.field
+                    // Field access or method call: obj.field or obj.method(args)
                     var fieldToken = Eat(TokenKind.Identifier);
+
+                    // Check if this is a method call: obj.method(args)
+                    if (_currentToken.Kind == TokenKind.OpenParenthesis)
+                    {
+                        Eat(TokenKind.OpenParenthesis);
+                        var arguments = new List<ExpressionNode>();
+
+                        // Parse arguments
+                        while (_currentToken.Kind != TokenKind.CloseParenthesis &&
+                               _currentToken.Kind != TokenKind.EndOfFile)
+                        {
+                            arguments.Add(ParseExpression());
+
+                            if (_currentToken.Kind == TokenKind.Comma)
+                                Eat(TokenKind.Comma);
+                            else if (_currentToken.Kind != TokenKind.CloseParenthesis)
+                                break;
+                        }
+
+                        var closeParenToken = Eat(TokenKind.CloseParenthesis);
+                        var callSpan = new SourceSpan(expr.Span.FileId, expr.Span.Index,
+                            closeParenToken.Span.Index + closeParenToken.Span.Length - expr.Span.Index);
+
+                        // Create a field access node for the method, wrapped in arguments
+                        // This will be interpreted as either enum construction or UFCS method call
+                        var fieldAccess = new MemberAccessExpressionNode(
+                            new SourceSpan(expr.Span.FileId, expr.Span.Index,
+                                fieldToken.Span.Index + fieldToken.Span.Length - expr.Span.Index),
+                            expr, fieldToken.Text);
+
+                        // Store as a special marker - we'll create a CallExpressionNode with the field access
+                        // For type checking, we need to know this is EnumName.Variant(args) or obj.method(args)
+                        // For now, create a CallExpressionNode with a synthetic name
+                        var syntheticName =
+                            $"{(expr is IdentifierExpressionNode id ? id.Name : "_")}.{fieldToken.Text}";
+                        expr = new CallExpressionNode(callSpan, syntheticName, arguments);
+                        continue;
+                    }
+
+                    // Regular field access
                     var span = new SourceSpan(expr.Span.FileId, expr.Span.Index,
                         fieldToken.Span.Index + fieldToken.Span.Length - expr.Span.Index);
-                    expr = new FieldAccessExpressionNode(span, expr, fieldToken.Text);
+                    expr = new MemberAccessExpressionNode(span, expr, fieldToken.Text);
                     continue;
                 }
 
@@ -627,7 +752,7 @@ public class Parser
 
     private bool IsValidLValue(ExpressionNode expr)
     {
-        return expr is IdentifierExpressionNode or FieldAccessExpressionNode;
+        return expr is IdentifierExpressionNode or MemberAccessExpressionNode;
     }
 
     private sealed class ParserException : Exception
@@ -1038,6 +1163,142 @@ public class Parser
         {
             _currentToken = _lexer.NextToken();
         }
+    }
+
+    private MatchExpressionNode ParseMatchExpression(ExpressionNode scrutinee)
+    {
+        var matchToken = Eat(TokenKind.Match);
+        Eat(TokenKind.OpenBrace);
+
+        var arms = new List<MatchArmNode>();
+
+        while (_currentToken.Kind != TokenKind.CloseBrace && _currentToken.Kind != TokenKind.EndOfFile)
+        {
+            var armStart = _currentToken.Span;
+
+            // Parse pattern
+            var pattern = ParsePattern();
+
+            // Expect =>
+            Eat(TokenKind.FatArrow);
+
+            // Parse result expression
+            var resultExpr = ParseExpression();
+
+            var armSpan = armStart with { Length = resultExpr.Span.Index + resultExpr.Span.Length - armStart.Index };
+            arms.Add(new MatchArmNode(armSpan, pattern, resultExpr));
+
+            // Arms can be separated by commas (optional)
+            if (_currentToken.Kind == TokenKind.Comma)
+                Eat(TokenKind.Comma);
+        }
+
+        var closeBrace = Eat(TokenKind.CloseBrace);
+
+        var span = scrutinee.Span with
+        {
+            Length = closeBrace.Span.Index + closeBrace.Span.Length - scrutinee.Span.Index
+        };
+        return new MatchExpressionNode(span, scrutinee, arms);
+    }
+
+    private PatternNode ParsePattern(bool isSubPattern = false)
+    {
+        var start = _currentToken.Span;
+
+        // Check for wildcard pattern: _
+        if (_currentToken.Kind == TokenKind.Underscore)
+        {
+            var underscoreToken = Eat(TokenKind.Underscore);
+            return new WildcardPatternNode(underscoreToken.Span);
+        }
+
+        // Check for else pattern
+        if (_currentToken.Kind == TokenKind.Else)
+        {
+            var elseToken = Eat(TokenKind.Else);
+            return new ElsePatternNode(elseToken.Span);
+        }
+
+        // Check for identifier pattern (variable binding or enum variant)
+        if (_currentToken.Kind == TokenKind.Identifier)
+        {
+            var firstIdent = Eat(TokenKind.Identifier);
+
+            // Check for qualified variant: EnumName.Variant
+            if (_currentToken.Kind == TokenKind.Dot)
+            {
+                Eat(TokenKind.Dot);
+                var variantToken = Eat(TokenKind.Identifier);
+
+                // Check for payload: Variant(pattern, pattern)
+                var subPatterns = new List<PatternNode>();
+                if (_currentToken.Kind == TokenKind.OpenParenthesis)
+                {
+                    Eat(TokenKind.OpenParenthesis);
+
+                    while (_currentToken.Kind != TokenKind.CloseParenthesis &&
+                           _currentToken.Kind != TokenKind.EndOfFile)
+                    {
+                        subPatterns.Add(ParsePattern(isSubPattern: true));
+
+                        if (_currentToken.Kind == TokenKind.Comma)
+                            Eat(TokenKind.Comma);
+                        else if (_currentToken.Kind != TokenKind.CloseParenthesis)
+                            break;
+                    }
+
+                    Eat(TokenKind.CloseParenthesis);
+                }
+
+                var endSpan = _currentToken.Span;
+                var span = new SourceSpan(start.FileId, start.Index, endSpan.Index - start.Index);
+                return new EnumVariantPatternNode(span, firstIdent.Text, variantToken.Text, subPatterns);
+            }
+
+            // Check for short-form variant with payload: Variant(pattern, pattern)
+            if (_currentToken.Kind == TokenKind.OpenParenthesis)
+            {
+                Eat(TokenKind.OpenParenthesis);
+
+                var subPatterns = new List<PatternNode>();
+                while (_currentToken.Kind != TokenKind.CloseParenthesis &&
+                       _currentToken.Kind != TokenKind.EndOfFile)
+                {
+                    subPatterns.Add(ParsePattern(isSubPattern: true));
+
+                    if (_currentToken.Kind == TokenKind.Comma)
+                        Eat(TokenKind.Comma);
+                    else if (_currentToken.Kind != TokenKind.CloseParenthesis)
+                        break;
+                }
+
+                var closeParen = Eat(TokenKind.CloseParenthesis);
+                var span = new SourceSpan(start.FileId, start.Index,
+                    closeParen.Span.Index + closeParen.Span.Length - start.Index);
+                return new EnumVariantPatternNode(span, null, firstIdent.Text, subPatterns);
+            }
+
+            // Simple identifier: could be unit variant OR variable binding
+            // If we're inside a variant's payload patterns, treat as variable binding
+            // Otherwise, let type checker distinguish (treat as enum variant pattern)
+            if (isSubPattern)
+            {
+                return new VariablePatternNode(firstIdent.Span, firstIdent.Text);
+            }
+            else
+            {
+                // Top-level pattern: could be unit variant or binding (type checker decides)
+                return new EnumVariantPatternNode(firstIdent.Span, null, firstIdent.Text, new List<PatternNode>());
+            }
+        }
+
+        _diagnostics.Add(Diagnostic.Error(
+            $"expected pattern",
+            _currentToken.Span,
+            "patterns can be: _, identifier, or EnumName.Variant",
+            "E1001"));
+        return new WildcardPatternNode(_currentToken.Span);
     }
 
     private Token Eat(TokenKind kind)

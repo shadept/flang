@@ -15,6 +15,7 @@ public class CCodeGenerator
 {
     private readonly StringBuilder _output = new();
     private readonly Dictionary<string, StructType> _structDefinitions = [];
+    private readonly Dictionary<string, EnumType> _enumDefinitions = [];
     private readonly HashSet<FType> _sliceElementTypes = [];
     private readonly HashSet<string> _emittedGlobals = [];
     private readonly Dictionary<string, string> _parameterRemap = [];
@@ -57,6 +58,7 @@ public class CCodeGenerator
         EmitHeaders();
         EmitSliceStructs();
         EmitStructDefinitions();
+        EmitEnumDefinitions();
         EmitForeignPrototypes(functions);
         EmitFunctionPrototypes(functions);
         EmitGlobals(functions);
@@ -98,6 +100,42 @@ public class CCodeGenerator
             if (TypeRegistry.IsType(structType)) continue;
             EmitStructDefinition(structType);
         }
+    }
+
+    private void EmitEnumDefinitions()
+    {
+        foreach (var enumType in _enumDefinitions.OrderBy(kvp => kvp.Key).Select(kvp => kvp.Value))
+        {
+            EmitEnumDefinition(enumType);
+        }
+    }
+
+    private void EmitEnumDefinition(EnumType enumType)
+    {
+        var cName = GetEnumCName(enumType);
+        
+        _output.AppendLine($"// Enum: {enumType.Name}");
+        _output.AppendLine($"struct {cName} {{");
+        _output.AppendLine("    int32_t tag;");
+        
+        // Emit union for payloads
+        if (enumType.Variants.Any(v => v.PayloadType != null))
+        {
+            _output.AppendLine("    union {");
+            for (int i = 0; i < enumType.Variants.Count; i++)
+            {
+                var variant = enumType.Variants[i];
+                if (variant.PayloadType != null)
+                {
+                    var payloadCType = TypeToCType(variant.PayloadType);
+                    _output.AppendLine($"        {payloadCType} variant_{i};  // {variant.VariantName}");
+                }
+            }
+            _output.AppendLine("    } payload;");
+        }
+        
+        _output.AppendLine("};");
+        _output.AppendLine();
     }
 
     private void EmitForeignPrototypes(IEnumerable<Function> functions)
@@ -329,6 +367,21 @@ public class CCodeGenerator
                     CollectStructType(st.TypeArguments[0]);
                 }
                 break;
+
+            case EnumType et:
+                {
+                    var cName = GetEnumCName(et);
+                    if (!_enumDefinitions.ContainsKey(cName))
+                    {
+                        _enumDefinitions[cName] = et;
+                        foreach (var (_, payloadType) in et.Variants)
+                        {
+                            if (payloadType != null)
+                                CollectStructType(payloadType);
+                        }
+                    }
+                    break;
+                }
 
             case StructType st:
                 {
@@ -833,6 +886,8 @@ public class CCodeGenerator
 
             StructType st => $"struct {GetStructCName(st)}",
 
+            EnumType et => $"struct {GetEnumCName(et)}",
+
             // Arrays are not converted to struct types - they remain as C arrays
             // Array syntax must be handled specially at declaration sites (see alloca handling)
             ArrayType => throw new InvalidOperationException("Array types must be handled specially at declaration sites"),
@@ -885,6 +940,19 @@ public class CCodeGenerator
         }
 
         return structType.StructName.Replace('.', '_');
+    }
+
+    private string GetEnumCName(EnumType enumType)
+    {
+        // For generic enums, mangle type arguments into name
+        if (enumType.TypeArguments.Count > 0)
+        {
+            var typeArgs = string.Join("_", enumType.TypeArguments.Select(t =>
+                t.Name.Replace("*", "Ptr").Replace(" ", "_").Replace("[", "").Replace("]", "").Replace("<", "_").Replace(">", "_").Replace(".", "_")));
+            return $"{enumType.Name.Replace('.', '_')}_{typeArgs}";
+        }
+
+        return enumType.Name.Replace('.', '_');
     }
 
     private string EscapeStringForC(string value)
