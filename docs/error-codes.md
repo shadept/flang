@@ -732,7 +732,7 @@ Category: Type Checking / Casts
 Severity: Error
 
 Description:
-An explicit cast `expr as Type` was used where the compiler cannot prove a valid conversion under the language’s casting rules.
+An explicit cast `expr as Type` was used where the compiler cannot prove a valid conversion under the language's casting rules.
 
 Examples:
 
@@ -743,6 +743,181 @@ let y: String = p as String  // ERROR: invalid cast `&i32` to `String`
 
 Solution:
 Use a valid cast pair (e.g., integer↔integer, `&T`↔`&U`, `&T`↔`usize`, `String`↔`u8[]`) or change the types/representation to match.
+
+---
+
+### E2021: Type Not Iterable
+
+Category: Iterator Protocol
+Severity: Error
+
+Description:
+A `for` loop attempted to iterate over a type that doesn't implement the iterator protocol (no `iter` function found).
+
+The iterator protocol requires a function with signature `fn iter(collection: &T) StateType` where `StateType` is any struct.
+
+Examples:
+
+```flang
+struct NoIterator {
+    value: i32
+}
+
+pub fn main() i32 {
+    let x: NoIterator = .{ value = 42 }
+    for (i in x) {  // ERROR E2021: type `NoIterator` cannot be iterated (no `iter` function)
+        return i
+    }
+    return 0
+}
+```
+
+Solution:
+Implement the iterator protocol by defining `iter` and `next` functions for the type:
+
+```flang
+fn iter(x: &NoIterator) NoIterator {
+    return *x
+}
+
+fn next(x: &NoIterator) i32? {
+    // ... return next element or null
+}
+```
+
+---
+
+### E2022: No Matching iter Function
+
+Category: Iterator Protocol
+Severity: Error
+
+Description:
+An `iter` function exists, but none of its overloads match the signature `fn iter(&T)` for the iterable type `T`.
+
+Examples:
+
+```flang
+struct MyType { value: i32 }
+
+fn iter(x: MyType) MyType {  // Wrong: takes MyType, not &MyType
+    return x
+}
+
+for (i in my_val) { }  // ERROR E2022: no `iter(&MyType)` found
+```
+
+Solution:
+Ensure the `iter` function takes a reference to the collection type:
+
+```flang
+fn iter(x: &MyType) MyType {  // Correct: takes &MyType
+    return *x
+}
+```
+
+---
+
+### E2023: Iterator State Missing next Function
+
+Category: Iterator Protocol
+Severity: Error
+
+Description:
+The `iter` function returns a state type, but no `next` function exists for that state type.
+
+Examples:
+
+```flang
+struct MyType { value: i32 }
+
+fn iter(x: &MyType) MyType {
+    return *x
+}
+
+// Missing: fn next(state: &MyType) Element?
+
+for (i in my_val) { }  // ERROR E2023: type `MyType` has no `next` method
+```
+
+Solution:
+Implement the `next` function for the iterator state:
+
+```flang
+fn next(state: &MyType) i32? {
+    if (state.value == 0) return null
+    let val = state.value
+    state.value = state.value - 1
+    return val
+}
+```
+
+---
+
+### E2024: No Matching next Function
+
+Category: Iterator Protocol
+Severity: Error
+
+Description:
+A `next` function exists, but none of its overloads match the signature `fn next(&StateType)` for the iterator state type.
+
+Examples:
+
+```flang
+struct MyType { value: i32 }
+
+fn iter(x: &MyType) MyType { return *x }
+
+fn next(state: MyType) i32? {  // Wrong: takes MyType, not &MyType
+    return state.value
+}
+
+for (i in my_val) { }  // ERROR E2024: no `next(&MyType)` found
+```
+
+Solution:
+Ensure the `next` function takes a reference to the state type:
+
+```flang
+fn next(state: &MyType) i32? {  // Correct: takes &MyType
+    return state.value
+}
+```
+
+---
+
+### E2025: next Must Return Option Type
+
+Category: Iterator Protocol
+Severity: Error
+
+Description:
+The `next` function must return an Option type (`T?` or `Option(T)`), but it returns a different type.
+
+Examples:
+
+```flang
+struct MyType { value: i32 }
+
+fn iter(x: &MyType) MyType { return *x }
+
+fn next(state: &MyType) i32 {  // Wrong: returns i32, not i32?
+    return state.value
+}
+
+for (i in my_val) { }  // ERROR E2025: found `i32`, expected `Option(T)`
+```
+
+Solution:
+Return an Option type from `next`:
+
+```flang
+fn next(state: &MyType) i32? {  // Correct: returns i32?
+    if (state.value == 0) return null
+    return state.value
+}
+```
 
 ---
 
@@ -774,6 +949,11 @@ _Currently no errors in this category. Reserved for future codegen errors._
 | **E2015** | Intrinsics      | Intrinsic argument must be type name      |
 | **E2016** | Intrinsics      | Unknown type in intrinsic                 |
 | **E2020** | Type Checking   | Invalid cast                               |
+| **E2021** | Iterator Protocol | Type not iterable (no iter function)     |
+| **E2022** | Iterator Protocol | No matching iter(&T) signature           |
+| **E2023** | Iterator Protocol | Iterator state missing next function     |
+| **E2024** | Iterator Protocol | No matching next(&State) signature       |
+| **E2025** | Iterator Protocol | next must return Option type             |
 
 
 ---

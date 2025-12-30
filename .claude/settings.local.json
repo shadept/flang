@@ -6,8 +6,8 @@
       "Bash(dotnet build:*)",
       "Bash(pwsh -File build-all-tests.ps1:*)",
       "Bash(cat:*)",
-      "Bash(\"C:\\Users\\Shade\\Projects\\flangv2\\dist\\win-x64\\flang.exe\" slice_to_string_explicit.f --dump-ir)",
-      "Bash(./build.sh)"
+      "Bash(./build.sh)",
+      "Bash(./dist/win-x64/flang.exe:*)"
     ],
     "deny": [],
     "ask": []

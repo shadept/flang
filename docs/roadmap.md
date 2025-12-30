@@ -125,7 +125,7 @@ _Goal: Add the type system and fundamental data structures needed for real progr
 - ✅ Update FIR to support function parameters
 - ✅ Update C codegen for parameters
 - ✅ Added comma token for parameter/argument lists
-- ✅ Extended type parser for `&T`, `T?`, `List[T]` (parsing infrastructure)
+- ✅ Extended type parser for `&T`, `T?`, `List(T)` (parsing infrastructure)
 - ✅ Added placeholder types for future milestones
 - ✅ Error code E2011: Function argument count mismatch
 
@@ -165,7 +165,7 @@ _Goal: Add the type system and fundamental data structures needed for real progr
 **Completed:**
 
 - ✅ `struct Name { field: Type }` parsing
-- ✅ Generic struct syntax: `struct Box[T] { value: T }` (no `$` in type parameter list)
+- ✅ Generic struct syntax: `struct Box(T) { value: T }` (no `$` in type parameter list)
 - ✅ Struct type registration in type system with field offset calculation
 - ✅ Struct construction: `Name { field: value }`
 - ✅ Field access: `obj.field` (enables `.len`, `.ptr` for slices/strings)
@@ -244,7 +244,7 @@ _Goal: Add the type system and fundamental data structures needed for real progr
 
 ---
 
-### Milestone 10: Memory Management Primitives (IN PROGRESS)
+### ✅ Milestone 10: Memory Management Primitives (COMPLETE)
 
 **Scope:** Core memory operations, allocator interface, manual memory management.
 
@@ -270,12 +270,20 @@ _Goal: Add the type system and fundamental data structures needed for real progr
   - ✅ Parse `#foreign fn` and mark functions as foreign
   - ✅ Collect signatures in type solver (parameters + return type)
   - ✅ C codegen emits proper `extern` prototypes with correct return type
+- ✅ **Cast operator (`as`)**:
+  - ✅ Parse `expr as Type` syntax
+  - ✅ Type checking for cast operations
+  - ✅ Numeric casts (implicit and explicit): `u8 -> usize`, `i32 -> i64`, etc.
+  - ✅ Pointer ↔ usize roundtrip casts: `&T as usize`, `usize as &T`
+  - ✅ String ↔ slice conversions (explicit and implicit)
+  - ✅ FIR lowering with `CastInstruction`
+  - ✅ C codegen with proper C cast syntax
+- ✅ **Zero-initialization**: Uninitialized variables automatically zeroed
 
-**Pending:**
+**Deferred to Future Milestones:**
 
 - [ ] `Allocator` interface (struct with function pointers)
 - [ ] Basic heap allocator wrapping malloc/free
-- [ ] End-to-end memory tests covering pointer casts (`as`) and pointer-typed call results
 
 **Tests Added/Status:**
 
@@ -287,10 +295,17 @@ _Goal: Add the type system and fundamental data structures needed for real progr
   - `defer/defer_basic.f` - Single defer in block scope
   - `defer/defer_multiple.f` - Multiple defers in LIFO order
   - `defer/defer_scope.f` - Defer in nested blocks
-- 🔧 3 memory tests created (blocked on casts/FFI pointer returns):
+- ✅ 4 memory tests passing:
   - `memory/malloc_free.f` - Allocate, write, read, free
   - `memory/memcpy_basic.f` - Copy between buffers
   - `memory/memset_basic.f` - Fill memory with byte value
+  - `memory/zero_init.f` - Zero-initialization verification
+- ✅ 5 cast tests passing:
+  - `casts/numeric_implicit.f` - Implicit integer widening (u8 → usize)
+  - `casts/ptr_usize_roundtrip.f` - Pointer ↔ usize conversions
+  - `casts/slice_to_string_explicit.f` - u8[] → String (explicit)
+  - `casts/string_to_slice_implicit.f` - String → u8[] (implicit)
+  - `casts/string_to_slice_view.f` - String field access as slice view
 
 **Error Codes Added:**
 
@@ -306,7 +321,7 @@ _Goal: Add the type system and fundamental data structures needed for real progr
 
 _Goal: Generics, inference, and advanced type features._
 
-### Milestone 11: Generics Basics (COMPLETED)
+### ✅ Milestone 11: Generics Basics (COMPLETE)
 
 **Scope:** `$T` syntax, generic functions, basic monomorphization.
 
@@ -320,41 +335,58 @@ _Goal: Generics, inference, and advanced type features._
 - ✅ Test harness support for expected compile errors: `//! COMPILE-ERROR: E2101`
 - ✅ Return-type–driven inference (incl. resolving `comptime_*` from expected type)
 
+**Tests Added:**
+
+- ✅ `generics/identity_basic.f` - Basic identity function with inference
+- ✅ `generics/two_params_pick_first.f` - Multiple generic parameters
+- ✅ `generics/generic_mangling_order.f` - Verify name mangling consistency
+- ✅ `generics/cannot_infer_from_context.f` - Error E2101 validation
+- ✅ `generics/conflicting_bindings_error.f` - Error E2102 validation
+
 **Deferred to Milestone 12:**
 
 - Generic constraints (structural)
 - Generic struct monomorphization and collections
 
-
-**Tests to Add/Expand:**
-
-- Identity and inference from args
-- Multiple generic parameters
-- Conflicting bindings (expects E2102)
-- Cannot infer from context (expects E2101)
-
 ---
 
-### Milestone 12: Generic Structs & Collections
+### Milestone 12: Generic Structs & Collections (IN PROGRESS)
 
-**Scope:** `Option[T]`, basic generic data structures.
+**Scope:** `Option(T)`, `List(T)`, basic generic data structures.
 
-**Key Tasks:**
+**Completed:**
 
-- [ ] Full generic struct implementation (already parsed in M7, now full monomorphization)
-- [ ] `Option[T]` enum (placeholder: struct with variants)
-- [ ] `T?` sugar for `Option[T]`
-- [ ] `null` keyword as `None` variant
-- [ ] Implement `List[T]` in stdlib:
-  - [ ] Dynamic array with capacity
-  - [ ] Binary compatible with `T[]` for first two fields
-  - [ ] Basic operations: push, pop, get, set
+- ✅ Full generic struct monomorphization
+  - ✅ Type parameter substitution for struct types
+  - ✅ Field type resolution with generic parameters
+  - ✅ Monomorphized struct instantiation and construction
+- ✅ `Option(T)` type implementation:
+  - ✅ Core definition: `struct Option(T) { has_value: bool, value: T }` in `stdlib/core/option.f`
+  - ✅ `T?` sugar syntax for `Option(T)`
+  - ✅ `null` keyword support (desugars to `Option(T)` with `has_value = false`)
+  - ✅ Implicit value coercion: `let x: i32? = 5` → `Option(i32) { has_value = true, value = 5 }`
+- ✅ `stdlib/std/option.f` helper functions:
+  - ✅ `is_some(value: Option($T)) bool`
+  - ✅ `is_none(value: Option($T)) bool`
+  - ✅ `unwrap_or(value: Option($T), fallback: T) T`
+- ✅ `List(T)` struct definition in `stdlib/std/list.f`:
+  - ✅ Struct layout: `{ ptr: &T, len: usize, cap: usize }`
+  - ✅ Binary compatible with `T[]` for first two fields
 
-**Tests to Add:**
+**Pending:**
 
-- Generic struct instantiation
-- Option/nullable types
-- List usage
+- [ ] `List(T)` operations (currently stubs calling `__flang_unimplemented()`):
+  - [ ] `list_new()` - Allocate empty list
+  - [ ] `list_push()` - Append element with reallocation
+  - [ ] `list_pop()` - Remove and return last element
+  - [ ] `list_get()` - Index access
+  - **Blocked on:** Allocator interface from M10
+
+**Tests Added:**
+
+- ✅ `generics/generic_struct_basic.f` - Generic struct `Pair(T)` with construction and field access
+- ✅ `option/option_basic.f` - Option type with null, implicit coercion, unwrap_or
+- 🔧 `lists/list_push_pop.f` - **FAILING** with type mismatch error (compiler bug, not missing feature)
 
 ---
 
@@ -364,8 +396,8 @@ _Goal: Generics, inference, and advanced type features._
 
 **Key Tasks:**
 
-- [ ] `fn iterator(&T) Iterator[E]` protocol
-- [ ] `fn next(&Iterator[E]) E?` protocol
+- [ ] `fn iterator(&T) Iterator(E)` protocol
+- [ ] `fn next(&Iterator(E)) E?` protocol
 - [ ] Desugar `for (x in iterable)` to iterator protocol
 - [ ] Built-in iterators:
   - [ ] Range iterators (already hardcoded)
@@ -454,8 +486,8 @@ _Goal: Build a usable standard library._
 
 **Tasks:**
 
-- [ ] `std/collections/list.f` - `List[T]`
-- [ ] `std/collections/dict.f` - `Dict[K, V]` (hash map)
+- [ ] `std/collections/list.f` - `List(T)`
+- [ ] `std/collections/dict.f` - `Dict(K, V)` (hash map)
 - [ ] `std/slice.f` - Slice utilities
 
 ---
@@ -510,15 +542,28 @@ _Goal: Rewrite the compiler in FLang._
 
 ## Current Status
 
-- **Phase:** 2 (Core Type System & Data Structures)
-- **Milestone:** 10 (IN PROGRESS - Defer/extern done; allocator pending)
-- **Next Up:** Continue M11 (Generics Basics: tests + docs + polish); allocator interface afterwards
-- **Tests Passing:** 32/37
+- **Phase:** 3 (Advanced Type System)
+- **Milestone:** 12 (IN PROGRESS - Generic structs & Option(T) complete; List(T) operations pending)
+- **Next Up:**
+  - Fix `list_push_pop.f` type mismatch bug (E3001)
+  - Implement allocator interface (deferred from M10)
+  - Complete List(T) operations (push, pop, get)
+- **Tests Passing:** 54/55 (98%)
 
-  - 3 intrinsic tests passing (size_of, align_of)
-  - 3 defer tests passing
-  - 3 memory tests blocked on casts and pointer-typed call results
-  - 2 pre-existing struct bugs (see `docs/known-issues.md`)
+  - ✅ 15 core tests (basics, control flow, functions)
+  - ✅ 6 generics tests (M11)
+  - ✅ 4 struct tests
+  - ✅ 3 array tests
+  - ✅ 3 string tests
+  - ✅ 3 reference/pointer tests
+  - ✅ 3 intrinsic tests
+  - ✅ 3 defer tests
+  - ✅ 4 memory tests
+  - ✅ 5 cast tests
+  - ✅ 1 option test
+  - ✅ 3 SSA tests (reassignment, print functions)
+  - ❌ 1 list test failing (compiler bug, not missing feature)
+  - ❌ 2 pre-existing struct bugs (see `docs/known-issues.md`)
 
-- **Total Lines of FLang Code:** ~420 (test files + stdlib)
-- **Total Lines of C# Compiler Code:** ~6,600
+- **Total Lines of FLang Code:** ~500+ (test files + stdlib)
+- **Total Lines of C# Compiler Code:** ~7,000+

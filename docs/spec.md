@@ -81,6 +81,54 @@ for (pattern in iterable) block
 - Uses the iterator protocol; built-in for ranges, arrays, and slices.
 - Supports `break` and `continue`.
 
+##### Lowering of For-in Loops (Iterator Protocol)
+
+The `for-in` loop in FLang is desugared by the compiler into a sequence of calls to the iterator protocol functions. This involves obtaining an iterator, repeatedly calling `next` on it, and handling the `null` return value to signal the end of the iteration.
+
+For a `for` loop of the form:
+
+```flang
+for (<elem> in <collection>) {
+    // <body>
+}
+```
+
+The compiler transforms this into equivalent pseudocode that follows the iterator protocol:
+
+```
+// 1. Obtain an iterator for the collection
+let it = iter(<collection>);
+
+// 2. Start an infinite loop
+loop {
+    // 3. Get the next element from the iterator
+    let n = next(it);
+
+    // 4. Check if there are no more elements
+    if (n.has_value == false) {
+        break; // Exit the loop
+    }
+
+    // 5. Extract the value from the optional (remove optional wrapper)
+    let <elem> = n.value;
+
+    // 6. Execute the loop body
+    // <body>
+}
+```
+
+**Explanation of Lowering Steps:**
+
+1.  **`iter(<collection>)`**: The compiler first generates a call to the `iter` function, passing the `<collection>` as an argument. This function is expected to return an instance of an iterator struct, which holds the necessary state for iteration and has the `next` function defined for it.
+2.  **Loop Structure**: A conceptual `loop` (or `while(true)`) is created in the intermediate representation.
+3.  **`next(it)`**: Inside the loop, a call to the `next` function is made, passing the iterator instance (`it`). The `next` function is expected to return `E?` (an `Option(E)`), which will not have a value (be `null`) when there are no more elements.
+4.  **Termination Condition**: The result of `next(it)` (`n`) is checked. If `n` is `null`, it signifies the end of the collection, and a `break` instruction is generated to exit the loop, jumping to the block after the loop.
+5.  **Element Extraction**: If `n` is not `null`, the actual element value is extracted from the `Option(E)` (e.g., `n.value`). This value is then bound to the `<elem>` variable declared in the `for` loop's pattern.
+6.  **Loop Body Execution**: The original `<body>` of the `for` loop is then executed with `<elem>` available in scope.
+
+This approach provides a flexible and extensible mechanism for iteration, allowing custom types to implement the `iter` and `next` functions to become iterable in FLang. `break` and `continue` statements within the `<body>` are lowered to jumps to the appropriate loop exit or continuation points, respectively.
+
+
 #### Defer
 
 ```

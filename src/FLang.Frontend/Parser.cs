@@ -361,14 +361,15 @@ public class Parser
 
         while (true)
         {
-            // Check for assignment (special case: identifier = expression)
-            if (_currentToken.Kind == TokenKind.Equals && left is IdentifierExpressionNode identifier)
+            // Check for assignment: lvalue = expression
+            // Valid lvalues: identifiers and field access expressions
+            if (_currentToken.Kind == TokenKind.Equals && IsValidLValue(left))
             {
                 _currentToken = _lexer.NextToken();
                 var value = ParseExpression(); // Right-associative, so parse full expression
                 var assignSpan = new SourceSpan(left.Span.FileId, left.Span.Index,
                     value.Span.Index + value.Span.Length - left.Span.Index);
-                return new AssignmentExpressionNode(assignSpan, identifier.Name, value);
+                return new AssignmentExpressionNode(assignSpan, left, value);
             }
 
             var precedence = GetBinaryOperatorPrecedence(_currentToken.Kind);
@@ -622,6 +623,11 @@ public class Parser
             TokenKind.EqualsEquals or TokenKind.NotEquals => 1,
             _ => 0
         };
+    }
+
+    private bool IsValidLValue(ExpressionNode expr)
+    {
+        return expr is IdentifierExpressionNode or FieldAccessExpressionNode;
     }
 
     private sealed class ParserException : Exception

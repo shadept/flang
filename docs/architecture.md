@@ -4,7 +4,15 @@
 
 - **Context is King:** Phases do not operate in a vacuum. They are managed by a central `Compilation` context.
 - **Async-First Orchestration:** The `Compilation` context must be thread-safe from Day 1 to support future concurrent file parsing.
-- **Separation of Concerns (Data vs. Logic):** AST nodes are dumb data containers. Logic lives in dedicated "Solvers" or "Visitors".
+  - **Parsing:** Multiple files parsed concurrently (Parser is stateless per file)
+  - **Type Checking:** Currently sequential; concurrent checking requires:
+    - Synchronized generic specialization creation (`ConcurrentDictionary` for deduplication)
+    - Thread-safe semantic annotation storage (e.g., `ConcurrentDictionary` for type maps)
+  - **Lowering/Codegen:** Can parallelize per-function after type checking completes
+- **Separation of Concerns (Data vs. Logic):** AST nodes are data containers with two phases:
+  - **Syntactic Phase:** Parser creates immutable syntactic data (names, operators, structure)
+  - **Semantic Phase:** TypeChecker may annotate nodes with semantic data (e.g., resolved types)
+  - Analysis logic lives in dedicated "Solvers" or "Visitors", never in AST node methods
 - **No Parent Pointers:** The AST is a strictly top-down tree. Context is passed down during traversal, never looked up.
 - **Standard Tools:** Use standard .NET BCL types (`string` for identifiers, `List<T>` for collections, `ReadOnlySpan<char>` for lexing). Do NOT reinvent basic data structures.
 
@@ -22,10 +30,22 @@
 
 ### 2.2 The AST
 
+**Syntactic Data:**
 - Nodes hold their owned data as standard C# types (e.g., `IdentifierExpression` holds a `string Name`).
 - Every node holds a `SourceSpan` for error reporting.
 - **`BinaryOperator`:** A wrapper struct around a `Token` and a `BinaryOperatorKind` enum for easy semantic processing.
 - **`DeclarationFlags`:** A `[Flags]` enum for modifiers like `Public`.
+
+**Semantic Annotations (Optional):**
+- TypeChecker may store semantic analysis results (e.g., resolved types) either:
+  - In external maps (current: `_typeMap` dictionary), OR
+  - As mutable fields on AST nodes (future consideration)
+
+**AST Lifecycle:**
+1. **Parser** creates AST from source text (syntactic data only)
+2. **TypeChecker** performs semantic analysis and records type information
+3. **TypeChecker** creates specialized AST nodes for generic instantiations (see Section 3.4)
+4. **AstLowering** reads AST and semantic data to generate IR
 
 ## 3. Key Components
 
@@ -60,6 +80,26 @@ A Linear SSA (Static Single Assignment) IR based on Basic Blocks, similar to TAC
 - **Structure:** `Module` -> `Function` -> `BasicBlock` -> `Instruction`.
 - **SSA:** Uses Block Arguments (instead of Phi nodes) for merge points.
 - **Desugaring:** Complex high-level constructs (like `for` loops, `if` expressions, `defer`) are lowered into simple Blocks and Branches during the AST -> FIR translation phase.
+
+### 3.4 Generic Instantiation (Monomorphization)
+
+FLang uses **eager monomorphization** - generic functions are instantiated with concrete type arguments during type checking.
+
+**Process:**
+1. Parser creates generic AST with type parameters (e.g., `fn foo(x: $T)`)
+2. TypeChecker encounters call with concrete types (e.g., `foo(42)` → infers `T = i32`)
+3. `EnsureSpecialization()` creates **new specialized AST node**:
+   - Substitutes `T` with `i32` in function signature
+   - Shares function body (not deep-copied)
+   - Type-checks specialized AST
+4. Compiler skips generic templates during lowering
+5. AstLowering lowers each concrete specialization
+6. Codegen applies name mangling based on parameter types
+
+**Key Points:**
+- Generic template AST nodes never reach IR
+- Specializations are created on-demand during type checking
+- Bodies are shared across specializations (memory efficient)
 
 ## 4. Bootstrapping Strategy (The C-Transpiler)
  

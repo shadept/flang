@@ -634,6 +634,7 @@ public static class TypeRegistry
 {
     // Fully qualified names for well-known types
     private const string OptionFqn = "core.option.Option";
+    private const string RangeFqn = "core.range.Range";
     private const string SliceFqn = "core.slice.Slice";
     private const string StringFqn = "core.string.String";
     private const string TypeFqn = "core.rtti.Type";
@@ -846,6 +847,22 @@ public static class TypeRegistry
     public static bool IsString(StructType st)
     {
         return st.StructName == StringFqn;
+    }
+
+    /// <summary>
+    /// Checks if a TypeBase is Range (convenience overload).
+    /// </summary>
+    public static bool IsRange(TypeBase type)
+    {
+        return type is StructType st && IsRange(st);
+    }
+
+    /// <summary>
+    /// Checks if a StructType is Range using fully qualified name.
+    /// </summary>
+    public static bool IsRange(StructType st)
+    {
+        return st.StructName == RangeFqn;
     }
 
     /// <summary>

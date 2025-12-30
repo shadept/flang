@@ -4,12 +4,12 @@ namespace FLang.Frontend.Ast.Expressions;
 
 public class AssignmentExpressionNode : ExpressionNode
 {
-    public AssignmentExpressionNode(SourceSpan span, string targetName, ExpressionNode value) : base(span)
+    public AssignmentExpressionNode(SourceSpan span, ExpressionNode target, ExpressionNode value) : base(span)
     {
-        TargetName = targetName;
+        Target = target;
         Value = value;
     }
 
-    public string TargetName { get; }
+    public ExpressionNode Target { get; }
     public ExpressionNode Value { get; }
 }

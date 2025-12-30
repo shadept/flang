@@ -575,18 +575,16 @@ public class AstLowering
                 return temp;
 
             case AssignmentExpressionNode assignment:
+            {
                 var assignValue = LowerExpression(assignment.Value);
-                if (!_locals.TryGetValue(assignment.TargetName, out var targetPtr))
+
+                // Get the pointer to the assignment target (lvalue)
+                Value targetPtr = assignment.Target switch
                 {
-                    _diagnostics.Add(Diagnostic.Error(
-                        $"cannot assign to `{assignment.TargetName}` because it is not declared",
-                        assignment.Span,
-                        "declare the variable with `let` first",
-                        "E2010"
-                    ));
-                    // Return the value to avoid cascading errors
-                    return assignValue;
-                }
+                    IdentifierExpressionNode id => GetVariablePointer(id, assignment),
+                    FieldAccessExpressionNode fa => GetFieldPointer(fa),
+                    _ => throw new Exception($"Invalid assignment target: {assignment.Target.GetType().Name}")
+                };
 
                 if (targetPtr.Type is ReferenceType { InnerType: StructType targetStruct })
                 {
@@ -607,6 +605,7 @@ public class AstLowering
 
                 // Assignment expressions return the assigned value
                 return assignValue;
+            }
 
             case IfExpressionNode ifExpr:
                 return LowerIfExpression(ifExpr);
@@ -615,15 +614,8 @@ public class AstLowering
                 return LowerBlockExpression(blockExpr);
 
             case RangeExpressionNode rangeExpr:
-                // Range expressions are handled specially in for loop lowering
-                _diagnostics.Add(Diagnostic.Error(
-                    "range expressions can only be used in `for` loops",
-                    rangeExpr.Span,
-                    "use this expression inside a `for (x in range)` loop",
-                    "E2008"
-                ));
-                // Return a dummy value to avoid cascading errors
-                return new ConstantValue(0);
+                // Lower range expression to Range struct construction: .{ start = ..., end = ... }
+                return LowerRangeToStruct(rangeExpr);
 
             case CallExpressionNode call:
                 // size_of and align_of are now regular library functions defined in core.rtti
@@ -850,6 +842,7 @@ public class AstLowering
 
                 var accessStruct = targetSemanticType switch
                 {
+                    ReferenceType refType => refType.InnerType as StructType,
                     StructType st => st,
                     _ => null
                 };
@@ -1042,6 +1035,69 @@ public class AstLowering
         return type.Size;
     }
 
+    private Value GetVariablePointer(IdentifierExpressionNode id, AssignmentExpressionNode assignment)
+    {
+        if (!_locals.TryGetValue(id.Name, out var targetPtr))
+        {
+            _diagnostics.Add(Diagnostic.Error(
+                $"cannot assign to `{id.Name}` because it is not declared",
+                assignment.Span,
+                "declare the variable with `let` first",
+                "E2010"
+            ));
+            // Return a dummy pointer to avoid cascading errors
+            return new LocalValue("error") { Type = new ReferenceType(TypeRegistry.I32) };
+        }
+        return targetPtr;
+    }
+
+    private Value GetFieldPointer(FieldAccessExpressionNode fieldAccess)
+    {
+        // Get struct type from the target expression
+        var targetValue = LowerExpression(fieldAccess.Target);
+        var targetSemanticType = _typeSolver.GetType(fieldAccess.Target);
+
+        var accessStruct = targetSemanticType switch
+        {
+            ReferenceType refType => refType.InnerType as StructType,
+            StructType st => st,
+            _ => null
+        };
+
+        if (accessStruct == null)
+        {
+            _diagnostics.Add(Diagnostic.Error(
+                "cannot access field on non-struct type",
+                fieldAccess.Span,
+                "type checking failed",
+                "E3002"
+            ));
+            return new LocalValue("error") { Type = new ReferenceType(TypeRegistry.I32) };
+        }
+
+        // Calculate field offset
+        var fieldByteOffset = accessStruct.GetFieldOffset(fieldAccess.FieldName);
+        if (fieldByteOffset == -1)
+        {
+            _diagnostics.Add(Diagnostic.Error(
+                $"field `{fieldAccess.FieldName}` not found",
+                fieldAccess.Span,
+                "type checking failed",
+                "E3003"
+            ));
+            return new LocalValue("error") { Type = new ReferenceType(TypeRegistry.I32) };
+        }
+
+        // Get pointer to field: targetPtr + offset
+        var fieldType = accessStruct.GetFieldType(fieldAccess.FieldName) ?? TypeRegistry.I32;
+        var fieldPointer = new LocalValue($"field_ptr_{_tempCounter++}")
+            { Type = new ReferenceType(fieldType) };
+        var fieldGepInst = new GetElementPtrInstruction(targetValue, fieldByteOffset, fieldPointer);
+        _currentBlock.Instructions.Add(fieldGepInst);
+
+        return fieldPointer;
+    }
+
     private Value LowerIfExpression(IfExpressionNode ifExpr)
     {
         var condition = LowerExpression(ifExpr.Condition);
@@ -1165,6 +1221,60 @@ public class AstLowering
 
         // Exit - no need to save/restore locals anymore! Memory persists naturally.
         _currentBlock = exitBlock;
+    }
+
+    /// <summary>
+    /// Lower a RangeExpressionNode (a..b) to a Range struct construction.
+    /// Creates: .{ start = a, end = b } as a Range struct.
+    /// </summary>
+    private Value LowerRangeToStruct(RangeExpressionNode rangeExpr)
+    {
+        // Get the Range struct type from type checker
+        var rangeType = _typeSolver.GetType(rangeExpr) as StructType;
+        if (rangeType == null)
+        {
+            _diagnostics.Add(Diagnostic.Error(
+                "range expression has invalid type",
+                rangeExpr.Span,
+                "expected Range struct type",
+                "E3008"
+            ));
+            return new ConstantValue(0);
+        }
+
+        // Lower start and end expressions
+        var startValue = LowerExpression(rangeExpr.Start);
+        var endValue = LowerExpression(rangeExpr.End);
+
+        // Allocate Range struct on stack
+        var rangePtr = new LocalValue($"_range_ptr_{_tempCounter++}")
+            { Type = new ReferenceType(rangeType) };
+        _currentBlock.Instructions.Add(new AllocaInstruction(
+            rangeType, rangeType.Size, rangePtr));
+
+        // Set start field
+        var startFieldOffset = rangeType.GetFieldOffset("start");
+        var startFieldPtr = new LocalValue($"_start_ptr_{_tempCounter++}")
+            { Type = new ReferenceType(startValue.Type) };
+        _currentBlock.Instructions.Add(new GetElementPtrInstruction(
+            rangePtr, new ConstantValue(startFieldOffset) { Type = TypeRegistry.USize },
+            startFieldPtr));
+        _currentBlock.Instructions.Add(new StorePointerInstruction(startFieldPtr, startValue));
+
+        // Set end field
+        var endFieldOffset = rangeType.GetFieldOffset("end");
+        var endFieldPtr = new LocalValue($"_end_ptr_{_tempCounter++}")
+            { Type = new ReferenceType(endValue.Type) };
+        _currentBlock.Instructions.Add(new GetElementPtrInstruction(
+            rangePtr, new ConstantValue(endFieldOffset) { Type = TypeRegistry.USize },
+            endFieldPtr));
+        _currentBlock.Instructions.Add(new StorePointerInstruction(endFieldPtr, endValue));
+
+        // Load the Range value
+        var rangeValue = new LocalValue($"_range_{_tempCounter++}") { Type = rangeType };
+        _currentBlock.Instructions.Add(new LoadInstruction(rangePtr, rangeValue));
+
+        return rangeValue;
     }
 
     /// <summary>

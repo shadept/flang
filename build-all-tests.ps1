@@ -169,6 +169,10 @@ foreach ($file in $TestFiles) {
   $metadata = Parse-TestMetadata -filePath $file.FullName
   $expectCompileFail = $metadata.ExpectedCompileErrors.Count -gt 0
 
+  # Initialize runtime output variables to avoid undefined variable errors
+  $runStdout = $null
+  $runStderr = $null
+
   if ($ShowProgress) {
     Write-Host "`r$(' ' * 80)`r" -NoNewline  # Clear progress bar
     if ($metadata.TestName) {

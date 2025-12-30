@@ -37,6 +37,9 @@ public class TypeChecker
     private readonly Dictionary<string, StructType> _structsByFqn = [];
     private readonly Dictionary<string, HashSet<string>> _moduleImports = [];
 
+    // Pending struct declarations for two-pass collection
+    private readonly List<(StructDeclarationNode, string)> _pendingStructs = [];
+
     // Anonymous struct literal mapping
     private readonly Dictionary<AnonymousStructExpressionNode, StructType> _anonymousStructTypes = [];
 
@@ -328,12 +331,45 @@ public class TypeChecker
         _currentModulePath = null;
     }
 
-    public void CollectStructDefinitions(ModuleNode module, string modulePath)
+    /// <summary>
+    /// Phase 1: Register struct names without resolving field types.
+    /// This enables order-independent struct declarations.
+    /// </summary>
+    public void CollectStructNames(ModuleNode module, string modulePath)
     {
-        _currentModulePath = modulePath;
-
         if (!_structsByModule.ContainsKey(modulePath))
             _structsByModule[modulePath] = new Dictionary<string, StructType>();
+
+        foreach (var structDecl in module.Structs)
+        {
+            // Store struct declaration for later field resolution
+            _pendingStructs.Add((structDecl, modulePath));
+
+            // Convert string type parameters to GenericParameterType instances
+            var typeArgs = new List<TypeBase>();
+            foreach (var param in structDecl.TypeParameters)
+                typeArgs.Add(new GenericParameterType(param));
+
+            // Compute FQN for this struct
+            var fqn = $"{modulePath}.{structDecl.Name}";
+
+            // Create struct type with EMPTY fields (placeholder)
+            StructType stype = new(fqn, typeArgs, []);
+
+            // Register the struct name immediately (fields will be resolved later)
+            _structsByModule[modulePath][structDecl.Name] = stype;
+            _structsByFqn[fqn] = stype;
+            _structs[structDecl.Name] = stype;
+        }
+    }
+
+    /// <summary>
+    /// Phase 2: Resolve struct field types after all struct names are registered.
+    /// This must run after CollectStructNames has processed ALL modules.
+    /// </summary>
+    public void ResolveStructFields(ModuleNode module, string modulePath)
+    {
+        _currentModulePath = modulePath;
 
         foreach (var structDecl in module.Structs)
         {
@@ -362,14 +398,12 @@ public class TypeChecker
             // Compute FQN for this struct
             var fqn = $"{modulePath}.{structDecl.Name}";
 
-            // Create struct type with FQN as StructName
+            // Create final struct type with resolved fields
             StructType stype = new(fqn, typeArgs, fields);
 
-            // Store in new module-aware structures using FQN as key
+            // Replace placeholder with complete struct type
             _structsByModule[modulePath][structDecl.Name] = stype;
             _structsByFqn[fqn] = stype;
-
-            // Also store by simple name in legacy dict (for backward compatibility)
             _structs[structDecl.Name] = stype;
         }
 
@@ -607,32 +641,15 @@ public class TypeChecker
     private void CheckForLoop(ForLoopNode fl)
     {
         PushScope();
-        if (fl.IterableExpression is RangeExpressionNode range)
-        {
-            var st = CheckExpression(range.Start);
-            var en = CheckExpression(range.End);
-            if (!TypeRegistry.IsIntegerType(st) || !TypeRegistry.IsIntegerType(en))
-                _diagnostics.Add(Diagnostic.Error(
-                    "range bounds must be integers",
-                    fl.IterableExpression.Span,
-                    $"found `{st}..{en}`",
-                    "E2002"));
-            else
-            {
-                // Resolve comptime_int range bounds to match iterator type (i32)
-                // This is valid because the iterator variable constrains the range type
-                if (st is ComptimeIntType)
-                    UpdateTypeMapRecursive(range.Start, TypeRegistry.I32);
-                if (en is ComptimeIntType)
-                    UpdateTypeMapRecursive(range.End, TypeRegistry.I32);
-            }
-            DeclareVariable(fl.IteratorVariable, TypeRegistry.I32, fl.Span);
-        }
-        else
-        {
-            CheckExpression(fl.IterableExpression);
-            DeclareVariable(fl.IteratorVariable, TypeRegistry.I32, fl.Span);
-        }
+
+        // Type check the iterable expression (range or any other type)
+        // RangeExpressionNode will be typed as Range struct
+        var iterableType = CheckExpression(fl.IterableExpression);
+
+        // For now, hardcode iterator variable as isize to match Range
+        // TODO: This will be replaced with iterator protocol resolution
+        // that extracts the element type from iter/next functions
+        DeclareVariable(fl.IteratorVariable, TypeRegistry.ISize, fl.Span);
 
         CheckExpression(fl.Body);
         PopScope();
@@ -728,21 +745,29 @@ public class TypeChecker
 
     private FType CheckAssignmentExpression(AssignmentExpressionNode ae)
     {
-        var vt = LookupVariable(ae.TargetName, ae.Span);
-        var val = CheckExpression(ae.Value, vt);
-        if (!CanCoerse(val, vt))
+        // Get the type of the assignment target (lvalue)
+        FType targetType = ae.Target switch
+        {
+            IdentifierExpressionNode id => LookupVariable(id.Name, ae.Target.Span),
+            FieldAccessExpressionNode fa => CheckExpression(fa),
+            _ => throw new Exception($"Invalid assignment target: {ae.Target.GetType().Name}")
+        };
+
+        // Check the value expression against the target type
+        var val = CheckExpression(ae.Value, targetType);
+        if (!CanCoerse(val, targetType))
             _diagnostics.Add(Diagnostic.Error(
                 "mismatched types",
                 ae.Value.Span,
-                $"expected `{vt}`, found `{val}`",
+                $"expected `{targetType}`, found `{val}`",
                 "E2002"));
         else
         {
             // Update type map with resolved type to avoid comptime_int escape
-            var unified = UnifyTypes(val, vt, ae.Value.Span);
+            var unified = UnifyTypes(val, targetType, ae.Value.Span);
             UpdateTypeMapRecursive(ae.Value, unified);
         }
-        return vt;
+        return targetType;
     }
 
     private FType CheckCallExpression(CallExpressionNode call, FType? expectedType)
@@ -1002,13 +1027,39 @@ public class TypeChecker
                 {
                     var st = CheckExpression(re.Start);
                     var en = CheckExpression(re.End);
+
+                    // Validate range bounds are integers
                     if (!TypeRegistry.IsIntegerType(st) || !TypeRegistry.IsIntegerType(en))
+                    {
                         _diagnostics.Add(Diagnostic.Error(
                             "range bounds must be integers",
                             re.Span,
                             $"found `{st}..{en}`",
                             "E2002"));
-                    type = TypeRegistry.I32; // placeholder
+                        type = TypeRegistry.I32; // fallback on error
+                        break;
+                    }
+
+                    // Coerce comptime_int to isize (Range uses isize fields)
+                    if (st is ComptimeIntType)
+                        UpdateTypeMapRecursive(re.Start, TypeRegistry.ISize);
+                    if (en is ComptimeIntType)
+                        UpdateTypeMapRecursive(re.End, TypeRegistry.ISize);
+
+                    // Return Range type from core.range
+                    // Try FQN lookup first (works after prelude is loaded)
+                    if (!_structsByFqn.TryGetValue("core.range.Range", out var rangeType))
+                    {
+                        _diagnostics.Add(Diagnostic.Error(
+                            "Range type not found",
+                            re.Span,
+                            "ensure `core.range` is loaded via prelude",
+                            "E2003"));
+                        type = TypeRegistry.I32; // fallback
+                        break;
+                    }
+
+                    type = rangeType;
                     break;
                 }
             case AddressOfExpressionNode adr:
@@ -1039,8 +1090,14 @@ public class TypeChecker
                     var obj = CheckExpression(fa.Target);
 
                     // Convert arrays and slices to their canonical struct representations
+                    // Auto-dereference references to allow field access on &T
                     var structType = obj switch
                     {
+                        ReferenceType refType => refType.InnerType switch {
+                            StructType st => st,
+                            ArrayType array => TypeRegistry.MakeSlice(array.ElementType),
+                            _ => null
+                        },
                         StructType st => st,
                         // Borrow SlideType semantics for arrays (they should behave like slices)
                         ArrayType array => TypeRegistry.MakeSlice(array.ElementType),

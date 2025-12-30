@@ -57,17 +57,7 @@ public class Compiler
 
         var allDiagnostics = new List<Diagnostic>();
 
-        // 1. Module Loading and Parsing
-        var moduleCompiler = new ModuleCompiler(compilation);
-        var parsedModules = moduleCompiler.CompileModules(options.InputFilePath);
-        allDiagnostics.AddRange(moduleCompiler.Diagnostics);
-
-        if (allDiagnostics.Any(d => d.Severity == DiagnosticSeverity.Error))
-        {
-            return new CompilationResult(false, null, allDiagnostics, compilation);
-        }
-
-        // 2. Type Checking
+        // Create logger factory for all compilation phases
         using var loggerFactory = LoggerFactory.Create(builder =>
         {
             builder.SetMinimumLevel(options.DebugLogging ? LogLevel.Debug : LogLevel.Warning);
@@ -77,28 +67,49 @@ public class Compiler
             builder.AddConsole(o => o.FormatterName = "custom-debug");
         });
 
+        // 1. Module Loading and Parsing
+        var moduleCompilerLogger = loggerFactory.CreateLogger<ModuleCompiler>();
+        var moduleCompiler = new ModuleCompiler(compilation, moduleCompilerLogger);
+        var parsedModules = moduleCompiler.CompileModules(options.InputFilePath);
+        allDiagnostics.AddRange(moduleCompiler.Diagnostics);
+
+        if (allDiagnostics.Any(d => d.Severity == DiagnosticSeverity.Error))
+        {
+            return new CompilationResult(false, null, allDiagnostics, compilation);
+        }
+
+        // 2. Type Checking
+
         var typeSolverLogger = loggerFactory.CreateLogger<TypeChecker>();
         var typeSolver = new TypeChecker(compilation, typeSolverLogger);
 
-        // Phase 1: Collect struct definitions from all modules
-        foreach (var kvp in parsedModules)
-        {
-            var modulePath = TypeChecker.DeriveModulePath(kvp.Key, compilation.IncludePaths, compilation.WorkingDirectory);
-            typeSolver.CollectStructDefinitions(kvp.Value, modulePath);
-        }
-
-        // Phase 2: Collect function signatures
-        foreach (var kvp in parsedModules)
-        {
-            var modulePath = TypeChecker.DeriveModulePath(kvp.Key, compilation.IncludePaths, compilation.WorkingDirectory);
-            typeSolver.CollectFunctionSignatures(kvp.Value, modulePath);
-        }
-
-        // Phase 3: Register imports (must happen after all structs collected)
+        // Phase 1: Register imports (before any type resolution)
         foreach (var kvp in parsedModules)
         {
             var modulePath = TypeChecker.DeriveModulePath(kvp.Key, compilation.IncludePaths, compilation.WorkingDirectory);
             typeSolver.RegisterImports(kvp.Value, modulePath);
+        }
+
+        // Phase 2a: Collect struct names (without resolving fields)
+        // This enables order-independent struct declarations
+        foreach (var kvp in parsedModules)
+        {
+            var modulePath = TypeChecker.DeriveModulePath(kvp.Key, compilation.IncludePaths, compilation.WorkingDirectory);
+            typeSolver.CollectStructNames(kvp.Value, modulePath);
+        }
+
+        // Phase 2b: Resolve struct field types (after all struct names registered)
+        foreach (var kvp in parsedModules)
+        {
+            var modulePath = TypeChecker.DeriveModulePath(kvp.Key, compilation.IncludePaths, compilation.WorkingDirectory);
+            typeSolver.ResolveStructFields(kvp.Value, modulePath);
+        }
+
+        // Phase 3: Collect function signatures
+        foreach (var kvp in parsedModules)
+        {
+            var modulePath = TypeChecker.DeriveModulePath(kvp.Key, compilation.IncludePaths, compilation.WorkingDirectory);
+            typeSolver.CollectFunctionSignatures(kvp.Value, modulePath);
         }
 
         // Phase 4: Type check module bodies
