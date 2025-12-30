@@ -712,9 +712,9 @@ public class TypeChecker
                 }
                 var iterableTypeName = FormatTypeNameForDisplay(iterableType);
                 _diagnostics.Add(Diagnostic.Error(
-                    $"type `{iterableTypeName}` cannot be iterated",
+                    $"type `{iterableTypeName}` is not iterable",
                     fl.IterableExpression.Span,
-                    $"implement the iterator protocol by defining `fn iter(&{iterableTypeName})`",
+                    $"define `fn iter(&{iterableTypeName})` that returns an iterator state struct type",
                     "E2021"));
                 PopScope();
                 hadIteratorError = true;
@@ -746,7 +746,7 @@ public class TypeChecker
                     var iteratorStructName = FormatTypeNameForDisplay(iteratorStruct);
                     _diagnostics.Add(Diagnostic.Error(
                         $"iterator state type `{iteratorStructName}` has no `next` function",
-                        fl.Span,
+                        fl.IterableExpression.Span,
                         $"define `fn next(&{iteratorStructName})` that returns an option type",
                         "E2023"));
                     PopScope();
@@ -769,11 +769,42 @@ public class TypeChecker
                 {
                     // E2025: next must return an Option type
                     var actualReturnType = nextResultType != null ? FormatTypeNameForDisplay(nextResultType) : "unknown";
+                    
+                    // Find the next function that was called to get its return type span for the hint
+                    SourceSpan? nextReturnTypeSpan = null;
+                    if (_functions.TryGetValue("next", out var nextCandidates))
+                    {
+                        // Find a next function that takes &iteratorStruct
+                        foreach (var candidate in nextCandidates)
+                        {
+                            if (candidate.ParameterTypes.Count == 1 && 
+                                candidate.ParameterTypes[0] is ReferenceType refType &&
+                                refType.InnerType.Equals(iteratorStruct))
+                            {
+                                // Found the matching next function - get its return type span
+                                if (candidate.AstNode.ReturnType != null)
+                                {
+                                    nextReturnTypeSpan = candidate.AstNode.ReturnType.Span;
+                                }
+                                break;
+                            }
+                        }
+                    }
+                    
                     _diagnostics.Add(Diagnostic.Error(
                         $"`next` function must return an option type, but it returns `{actualReturnType}`",
-                        fl.Span,
-                        $"change the return type to `{actualReturnType}?` or `Option({actualReturnType})`",
+                        fl.IterableExpression.Span,
+                        null, // No inline hint - we'll create a separate hint diagnostic
                         "E2025"));
+                    
+                    // Create a hint diagnostic pointing to the return type if we found it
+                    if (nextReturnTypeSpan.HasValue)
+                    {
+                        _diagnostics.Add(Diagnostic.CreateHint(
+                            $"change return type of `next` to `{actualReturnType}?` or `Option({actualReturnType})`",
+                            nextReturnTypeSpan.Value, $"change to `{actualReturnType}?`"));
+                    }
+                    
                     PopScope();
                     PopScope();
                     hadIteratorError = true;
@@ -786,11 +817,42 @@ public class TypeChecker
                 // This is similar to E2023 (missing next), but the issue is that iter returned wrong type
                 // Use E2023 as it's the closest match (iterator state issue)
                 var actualReturnType = iteratorType != null ? FormatTypeNameForDisplay(iteratorType) : "unknown";
+                
+                // Find the iter function that was called to get its return type span for the hint
+                SourceSpan? iterReturnTypeSpan = null;
+                if (_functions.TryGetValue("iter", out var iterCandidates))
+                {
+                    // Find an iter function that takes &iterableType
+                    foreach (var candidate in iterCandidates)
+                    {
+                        if (candidate.ParameterTypes.Count == 1 && 
+                            candidate.ParameterTypes[0] is ReferenceType refType &&
+                            refType.InnerType.Equals(iterableType))
+                        {
+                            // Found the matching iter function - get its return type span
+                            if (candidate.AstNode.ReturnType != null)
+                            {
+                                iterReturnTypeSpan = candidate.AstNode.ReturnType.Span;
+                            }
+                            break;
+                        }
+                    }
+                }
+                
                 _diagnostics.Add(Diagnostic.Error(
                     $"`iter` function must return a struct, but it returns `{actualReturnType}`",
                     fl.Span,
-                    $"the iterator state must be a struct type",
+                    null, // No inline hint - we'll create a separate hint diagnostic
                     "E2023"));
+                
+                // Create a hint diagnostic pointing to the return type if we found it
+                if (iterReturnTypeSpan.HasValue)
+                {
+                    _diagnostics.Add(Diagnostic.CreateHint(
+                        "change to a struct type",
+                        iterReturnTypeSpan.Value));
+                }
+                
                 PopScope();
                 hadIteratorError = true;
             }
