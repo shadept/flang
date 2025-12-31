@@ -54,9 +54,8 @@ public class AstLowering
         _currentFunctionNode = functionNode;
         var isForeign = (functionNode.Modifiers & FunctionModifiers.Foreign) != 0;
 
-        // Prepare return type (default to i32)
         var retTypeNode = functionNode.ReturnType;
-        var retType = retTypeNode != null ? ResolveTypeFromNode(retTypeNode) : TypeRegistry.I32;
+        var retType = retTypeNode != null ? ResolveTypeFromNode(retTypeNode) : TypeRegistry.Void;
 
         // Resolve parameter types first
         var resolvedParamTypes = new List<FType>();
@@ -110,7 +109,7 @@ public class AstLowering
 
     private FType ResolveTypeFromNode(TypeNode typeNode)
     {
-        return _typeSolver.ResolveTypeNode(typeNode) ?? TypeRegistry.I32;
+        return _typeSolver.ResolveTypeNode(typeNode) ?? TypeRegistry.Never;
     }
 
     private BasicBlock CreateBlock(string hint)
@@ -208,11 +207,11 @@ public class AstLowering
             case VariableDeclarationNode varDecl:
             {
                 // Establish variable type from annotation or initializer
-                FType varType = TypeRegistry.I32;
+                FType varType = TypeRegistry.Never;
                 if (varDecl.Type != null)
                     varType = ResolveTypeFromNode(varDecl.Type);
                 else if (varDecl.Initializer != null)
-                    varType = _typeSolver.GetType(varDecl.Initializer) ?? TypeRegistry.I32;
+                    varType = _typeSolver.GetType(varDecl.Initializer) ?? TypeRegistry.Never;
 
                 // Check if this is a struct or array type
                 bool isStruct = varType is StructType;
@@ -668,7 +667,7 @@ public class AstLowering
                     }
                 }
 
-                var callType = exprType ?? TypeRegistry.I32;
+                var callType = exprType ?? TypeRegistry.Never;
                 var callResult = new LocalValue($"call_{_tempCounter++}") { Type = callType };
                 var targetName = resolved?.Name ?? call.FunctionName;
                 var callInst = new CallInstruction(targetName, args, callResult);
@@ -819,7 +818,7 @@ public class AstLowering
             {
                 var srcVal = LowerExpression(cast.Expression);
                 var srcTypeForCast = _typeSolver.GetType(cast.Expression);
-                var dstType = _typeSolver.GetType(cast) ?? TypeRegistry.I32;
+                var dstType = _typeSolver.GetType(cast) ?? TypeRegistry.Never;
 
                 // No-op if types are already identical
                 if (srcTypeForCast != null && srcTypeForCast.Equals(dstType))
@@ -903,7 +902,7 @@ public class AstLowering
                 }
 
                 // Get pointer to field: targetPtr + offset
-                var fieldType2 = accessStruct.GetFieldType(fieldAccess.FieldName) ?? TypeRegistry.I32;
+                var fieldType2 = accessStruct.GetFieldType(fieldAccess.FieldName) ?? TypeRegistry.Never;
                 var fieldPointer = new LocalValue($"field_ptr_{_tempCounter++}")
                     { Type = new ReferenceType(fieldType2) };
                 var fieldGepInst = new GetElementPtrInstruction(targetValue, fieldByteOffset, fieldPointer);
@@ -1078,7 +1077,7 @@ public class AstLowering
                 "E3010"
             ));
             // Return a dummy pointer to avoid cascading errors
-            return new LocalValue("error") { Type = new ReferenceType(TypeRegistry.I32) };
+            return new LocalValue("error") { Type = new ReferenceType(TypeRegistry.Never) };
         }
         return targetPtr;
     }
@@ -1104,7 +1103,7 @@ public class AstLowering
                 "type checking failed",
                 "E3002"
             ));
-            return new LocalValue("error") { Type = new ReferenceType(TypeRegistry.I32) };
+            return new LocalValue("error") { Type = new ReferenceType(TypeRegistry.Never) };
         }
 
         // Calculate field offset
@@ -1117,11 +1116,11 @@ public class AstLowering
                 "type checking failed",
                 "E3003"
             ));
-            return new LocalValue("error") { Type = new ReferenceType(TypeRegistry.I32) };
+            return new LocalValue("error") { Type = new ReferenceType(TypeRegistry.Never) };
         }
 
         // Get pointer to field: targetPtr + offset
-        var fieldType = accessStruct.GetFieldType(memberAccess.FieldName) ?? TypeRegistry.I32;
+        var fieldType = accessStruct.GetFieldType(memberAccess.FieldName) ?? TypeRegistry.Never;
         var fieldPointer = new LocalValue($"field_ptr_{_tempCounter++}")
             { Type = new ReferenceType(fieldType) };
         var fieldGepInst = new GetElementPtrInstruction(targetValue, fieldByteOffset, fieldPointer);
@@ -1491,7 +1490,7 @@ public class AstLowering
         if (destinationPtr.Type is not ReferenceType)
             return;
 
-        var fieldType = structType.GetFieldType(fieldName) ?? TypeRegistry.I32;
+        var fieldType = structType.GetFieldType(fieldName) ?? TypeRegistry.Never;
         var fieldOffset = structType.GetFieldOffset(fieldName);
         if (fieldOffset < 0)
             return;
@@ -1620,7 +1619,7 @@ public class AstLowering
         }
 
         var (enumType, needsDereference) = metadata.Value;
-        var resultType = _typeSolver.GetType(match) ?? TypeRegistry.I32;
+        var resultType = _typeSolver.GetType(match) ?? TypeRegistry.Never;
 
         // Lower scrutinee
         var scrutineeValue = LowerExpression(match.Scrutinee);

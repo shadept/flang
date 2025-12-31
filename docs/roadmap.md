@@ -444,15 +444,33 @@ _Goal: Generics, inference, and advanced type features._
 
 _Goal: Fill in remaining language features._
 
-### Milestone 14: Enums & Pattern Matching (Placeholder)
+### Milestone 14: Enums & Pattern Matching (IN PROGRESS)
 
 **Scope:** Tagged unions, pattern matching (basic).
 
-**Key Tasks:**
+**Completed:**
 
-- [ ] `enum` syntax parsing
-- [ ] Variant construction
-- [ ] Basic pattern matching
+- ✅ `enum` syntax parsing
+- ✅ Generic enum declarations: `enum Result(T, E) { Ok(T), Err(E) }`
+- ✅ Enum type registration with type parameters
+- ✅ Variant construction (qualified and short forms)
+- ✅ Basic pattern matching with match expressions
+- ✅ Wildcard patterns (`_`) for ignoring values
+- ✅ Variable binding patterns
+- ✅ Exhaustiveness checking
+- ✅ Enum instantiation for generic enums
+- ✅ Pattern matching on enum references (`&EnumType`)
+
+**In Progress:**
+
+- [ ] Type inference for generic enum construction in all contexts
+  - Generic enums work but some edge cases remain with function parameter inference
+  - Recursive generic enums need more testing
+
+**Pending:**
+
+- [ ] Nested patterns (e.g., `Some(Ok(x))`)
+- [ ] Multiple wildcards in one pattern (e.g., `Move(_, y)` with 2+ fields)
 
 ---
 

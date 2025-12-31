@@ -256,7 +256,7 @@ public class ComptimeFloat : TypeBase
 }
 
 /// <summary>
-/// Represents a reference type like &T.
+/// Represents a reference type like &amp;T.
 /// </summary>
 public class ReferenceType : TypeBase
 {
@@ -522,7 +522,7 @@ public class StructType : TypeBase
         if (_fieldOffsets.Count == 0 && Fields.Count > 0)
             ComputeLayout();
 
-        return _fieldOffsets.TryGetValue(fieldName, out var offset) ? offset : -1;
+        return _fieldOffsets.GetValueOrDefault(fieldName, -1);
     }
 }
 
@@ -771,8 +771,12 @@ public static class TypeRegistry
     /// </summary>
     public static bool IsIntegerType(TypeBase type)
     {
-        return type is ComptimeInt ||
-               (type is PrimitiveType pt && !pt.Equals(Bool) && !pt.Equals(Void) && !pt.Equals(Never));
+        return type is ComptimeInt || (type is PrimitiveType pt && IsIntegerType(pt.Name));
+    }
+
+    public static bool IsIntegerType(string typeName)
+    {
+        return typeName is "i8" or "i16" or "i32" or "i64" or "isize" or "u8" or "u16" or "u32" or "u64" or "usize";
     }
 
     /// <summary>

@@ -10,7 +10,7 @@ enum List(T) {
 pub fn main() i32 {
     // Create a simple linked list: 1 -> 2 -> 3 -> Nil
     let nil: List(i32) = List.Nil
-    let list3: List(i32) = List.Cons(3, nil)
+    let list3: List(i32) = List.Cons(3, &nil)
     let list2: List(i32) = List.Cons(2, &list3)
     let list1: List(i32) = List.Cons(1, &list2)
     

@@ -133,7 +133,7 @@ public class TypeSolverTests
         // Assert
         Assert.Single(solver.Diagnostics);
         Assert.Equal("E3001", solver.Diagnostics[0].Code);
-        Assert.Contains("expected 'Point', got 'Vector'", solver.Diagnostics[0].Message);
+        Assert.Contains("expected `Point`, got `Vector`", solver.Diagnostics[0].Message);
     }
 
     [Fact]

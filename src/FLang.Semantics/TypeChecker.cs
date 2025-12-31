@@ -164,9 +164,19 @@ public class TypeChecker
     /// </summary>
     private string FormatTypeNameForDisplay(TypeBase type)
     {
+        // If we have active generic bindings, resolve GenericParameterType to its bound type
+        if (type is GenericParameterType gpt && _currentBindings != null)
+        {
+            if (_currentBindings.TryGetValue(gpt.ParamName, out var boundType))
+            {
+                return FormatTypeNameForDisplay(boundType);
+            }
+        }
+
         return type switch
         {
             StructType st => GetSimpleName(st.StructName),
+            EnumType et => GetSimpleName(et.Name),
             _ => type.Name
         };
     }
@@ -401,7 +411,7 @@ public class TypeChecker
                             param.Type.Span,
                             "not found in this scope",
                             "E2003");
-                        pt = TypeRegistry.I32;
+                        pt = TypeRegistry.Never;
                     }
 
                     parameterTypes.Add(pt);
@@ -519,12 +529,16 @@ public class TypeChecker
             // Store enum declaration for later variant resolution
             _pendingEnums.Add((enumDecl, modulePath));
 
+            // Convert string type parameters to GenericParameterType instances
+            var typeArgs = new List<TypeBase>();
+            foreach (var param in enumDecl.TypeParameters)
+                typeArgs.Add(new GenericParameterType(param));
+
             // Compute FQN for this enum
             var fqn = $"{modulePath}.{enumDecl.Name}";
 
-            // Create enum type with EMPTY variants (placeholder)
-            // TODO gather actual type arguments and variants
-            EnumType etype = new(fqn, [], []);
+            // Create enum type with type parameters and EMPTY variants (placeholder)
+            EnumType etype = new(fqn, typeArgs, []);
 
             // Register the enum name immediately (variants will be resolved later)
             _enumsByModule[modulePath][enumDecl.Name] = etype;
@@ -565,7 +579,7 @@ public class TypeChecker
                                 variant.PayloadTypes[0].Span,
                                 "not found in this scope",
                                 "E2003");
-                            payloadType = TypeRegistry.I32;
+                            payloadType = TypeRegistry.Never;
                         }
                         else
                         {
@@ -577,7 +591,7 @@ public class TypeChecker
                                     variant.PayloadTypes[0].Span,
                                     "recursive types must use references (e.g., &EnumName)",
                                     "E2035");
-                                payloadType = TypeRegistry.I32; // Fallback
+                                payloadType = TypeRegistry.Never; // Fallback
                             }
                         }
                     }
@@ -595,7 +609,7 @@ public class TypeChecker
                                     variant.PayloadTypes[i].Span,
                                     "not found in this scope",
                                     "E2003");
-                                fieldType = TypeRegistry.I32;
+                                fieldType = TypeRegistry.Never;
                             }
                             else
                             {
@@ -607,7 +621,7 @@ public class TypeChecker
                                         variant.PayloadTypes[i].Span,
                                         "recursive types must use references (e.g., &EnumName)",
                                         "E2035");
-                                    fieldType = TypeRegistry.I32; // Fallback
+                                    fieldType = TypeRegistry.Never; // Fallback
                                 }
                             }
 
@@ -640,8 +654,13 @@ public class TypeChecker
             // Compute FQN for this enum
             fqn = $"{modulePath}.{enumDecl.Name}";
 
-            // Create final enum type with resolved variants
-            EnumType etype = new(fqn, [], variants);
+            // Convert string type parameters to GenericParameterType instances
+            var typeArgs = new List<TypeBase>();
+            foreach (var param in enumDecl.TypeParameters)
+                typeArgs.Add(new GenericParameterType(param));
+
+            // Create final enum type with type parameters and resolved variants
+            EnumType etype = new(fqn, typeArgs, variants);
 
             // Replace placeholder with complete enum type
             _enumsByModule[modulePath][enumDecl.Name] = etype;
@@ -730,7 +749,7 @@ public class TypeChecker
                 var parameterTypes = new List<TypeBase>();
                 foreach (var param in function.Parameters)
                 {
-                    var pt = ResolveTypeNode(param.Type) ?? TypeRegistry.I32;
+                    var pt = ResolveTypeNode(param.Type) ?? TypeRegistry.Never;
                     parameterTypes.Add(pt);
                 }
 
@@ -848,15 +867,7 @@ public class TypeChecker
             "[TypeChecker] CheckReturnStatement: expectedReturnType={ExpectedType}, expressionType={ExprType}",
             expectedReturnType?.Name ?? "null", et.Name);
 
-        if (expectedReturnType != null && !CanCoerse(et, expectedReturnType))
-        {
-            ReportError(
-                "mismatched types",
-                ret.Span,
-                $"expected `{expectedReturnType}`, found `{et}`",
-                "E2002");
-        }
-        else if (expectedReturnType != null)
+        if (expectedReturnType != null)
         {
             // Update type map with resolved type to avoid comptime_int escape
             var unified = UnifyTypes(et, expectedReturnType, ret.Expression.Span);
@@ -876,18 +887,9 @@ public class TypeChecker
         var it = v.Initializer != null ? CheckExpression(v.Initializer, dt) : null;
         if (it != null && dt != null)
         {
-            // Use general coercion rules
-            var coerces = CanCoerse(it, dt);
-            if (!coerces)
-            {
-                ReportError("mismatched types", v.Initializer!.Span, $"expected `{dt}`, found `{it}`", "E2002");
-            }
-            else
-            {
-                // Update type map with resolved type to avoid comptime_int escape
-                var unified = UnifyTypes(it, dt, v.Initializer!.Span);
-                UpdateTypeMapRecursive(v.Initializer!, unified);
-            }
+            // Update type map with resolved type to avoid comptime_int escape
+            var unified = UnifyTypes(it, dt, v.Initializer!.Span);
+            UpdateTypeMapRecursive(v.Initializer!, unified);
 
             DeclareVariable(v.Name, dt, v.Span);
         }
@@ -1153,7 +1155,7 @@ public class TypeChecker
             strLit.Span,
             "make sure to import core.string",
             "E2013");
-        return TypeRegistry.I32;
+        return TypeRegistry.Never;
     }
 
     /// <summary>
@@ -1218,7 +1220,7 @@ public class TypeChecker
             id.Span,
             "not found in this scope",
             "E2004");
-        return TypeRegistry.I32;
+        return TypeRegistry.Never;
     }
 
     private TypeBase CheckMemberAccessExpression(MemberAccessExpressionNode ma)
@@ -1291,7 +1293,7 @@ public class TypeChecker
                     ma.Span,
                     $"type `{obj.Name}` does not have a field named `{ma.FieldName}`",
                     "E2014");
-                return TypeRegistry.I32;
+                return TypeRegistry.Never;
             }
 
             return ft;
@@ -1303,7 +1305,7 @@ public class TypeChecker
                 ma.Span,
                 $"expected struct type, found `{obj}`",
                 "E2014");
-            return TypeRegistry.I32;
+            return TypeRegistry.Never;
         }
     }
 
@@ -1314,39 +1316,17 @@ public class TypeChecker
 
         if (be.Operator >= BinaryOperatorKind.Equal && be.Operator <= BinaryOperatorKind.GreaterThanOrEqual)
         {
-            if (!IsCompatible(lt, rt))
-                ReportError(
-                    "mismatched types in comparison",
-                    be.Span,
-                    $"cannot compare `{lt}` with `{rt}`",
-                    "E2002");
-            else
-            {
-                var unified = UnifyTypes(lt, rt, be.Span);
-                UpdateTypeMapRecursive(be.Left, unified);
-                UpdateTypeMapRecursive(be.Right, unified);
-            }
-
+            var unified = UnifyTypes(lt, rt, be.Span);
+            UpdateTypeMapRecursive(be.Left, unified);
+            UpdateTypeMapRecursive(be.Right, unified);
             return TypeRegistry.Bool;
         }
         else
         {
-            if (!IsCompatible(lt, rt))
-            {
-                ReportError(
-                    "mismatched types",
-                    be.Span,
-                    $"cannot apply operator to `{lt}` and `{rt}`",
-                    "E2002");
-                return lt;
-            }
-            else
-            {
-                var unified = UnifyTypes(lt, rt, be.Span);
-                UpdateTypeMapRecursive(be.Left, unified);
-                UpdateTypeMapRecursive(be.Right, unified);
-                return unified;
-            }
+            var unified = UnifyTypes(lt, rt, be.Span);
+            UpdateTypeMapRecursive(be.Left, unified);
+            UpdateTypeMapRecursive(be.Right, unified);
+            return unified;
         }
     }
 
@@ -1362,18 +1342,10 @@ public class TypeChecker
 
         // Check the value expression against the target type
         var val = CheckExpression(ae.Value, targetType);
-        if (!CanCoerse(val, targetType))
-            ReportError(
-                "mismatched types",
-                ae.Value.Span,
-                $"expected `{targetType}`, found `{val}`",
-                "E2002");
-        else
-        {
-            // Update type map with resolved type to avoid comptime_int escape
-            var unified = UnifyTypes(val, targetType, ae.Value.Span);
-            UpdateTypeMapRecursive(ae.Value, unified);
-        }
+
+        // Update type map with resolved type to avoid comptime_int escape
+        var unified = UnifyTypes(val, targetType, ae.Value.Span);
+        UpdateTypeMapRecursive(ae.Value, unified);
 
         return targetType;
     }
@@ -1498,7 +1470,7 @@ public class TypeChecker
                         "E2011");
                 }
 
-                return TypeRegistry.I32;
+                return TypeRegistry.Never;
             }
             else if (!chosen.IsGeneric)
             {
@@ -1573,7 +1545,7 @@ public class TypeChecker
                 call.Span,
                 "not found in this scope",
                 "E2004");
-            return TypeRegistry.I32;
+            return TypeRegistry.Never;
         }
     }
 
@@ -1616,12 +1588,6 @@ public class TypeChecker
                 if (ie.ElseBranch != null)
                 {
                     var et = CheckExpression(ie.ElseBranch);
-                    if (!IsCompatible(tt, et))
-                        ReportError(
-                            "if and else branches have incompatible types",
-                            ie.Span,
-                            $"`if` branch: `{tt}`, `else` branch: `{et}`",
-                            "E2002");
                     type = UnifyTypes(tt, et, ie.Span);
                 }
                 else
@@ -1708,7 +1674,7 @@ public class TypeChecker
                         dr.Span,
                         $"expected `&T` or `&T?`, found `{pt}`",
                         "E2012");
-                    type = TypeRegistry.I32;
+                    type = TypeRegistry.Never;
                 }
 
                 break;
@@ -1733,7 +1699,7 @@ public class TypeChecker
                         sc.TypeName.Span,
                         "not found in this scope",
                         "E2003");
-                    type = TypeRegistry.I32;
+                    type = TypeRegistry.Never;
                     break;
                 }
 
@@ -1776,17 +1742,8 @@ public class TypeChecker
                     }
 
                     var valueType = CheckExpression(fieldExpr, fieldType);
-                    if (!CanCoerse(valueType, fieldType))
-                        ReportError(
-                            $"mismatched types for field `{fieldName}`",
-                            fieldExpr.Span,
-                            $"expected `{fieldType}`, found `{valueType}`",
-                            "E2002");
-                    else
-                    {
-                        var unified = UnifyTypes(valueType, fieldType, fieldExpr.Span);
-                        UpdateTypeMapRecursive(fieldExpr, unified);
-                    }
+                    var unified = UnifyTypes(valueType, fieldType, fieldExpr.Span);
+                    UpdateTypeMapRecursive(fieldExpr, unified);
                 }
 
                 foreach (var (fieldName, _) in st.Fields)
@@ -1846,7 +1803,7 @@ public class TypeChecker
                         nullLiteral.Span,
                         "add an option type annotation or use an explicit constructor",
                         "E2001");
-                    type = TypeRegistry.I32; // Fallback
+                    type = TypeRegistry.Never; // Fallback
                 }
                 else
                 {
@@ -1869,7 +1826,7 @@ public class TypeChecker
                         al.Span,
                         "consider adding type annotation",
                         "E2026");
-                    type = new ArrayType(TypeRegistry.I32, 0);
+                    type = new ArrayType(TypeRegistry.Never, 0);
                 }
                 else
                 {
@@ -1878,13 +1835,7 @@ public class TypeChecker
                     for (var i = 1; i < al.Elements.Count; i++)
                     {
                         var et = CheckExpression(al.Elements[i]);
-                        if (!IsCompatible(et, unified))
-                            ReportError(
-                                "array elements have incompatible types",
-                                al.Elements[i].Span,
-                                $"expected `{unified}`, found `{et}`",
-                                "E2002");
-                        else unified = UnifyTypes(unified, et, al.Elements[i].Span);
+                        unified = UnifyTypes(unified, et, al.Elements[i].Span);
                     }
 
                     type = new ArrayType(unified, al.Elements.Count);
@@ -1917,7 +1868,7 @@ public class TypeChecker
                         ix.Base.Span,
                         "only arrays and slices can be indexed",
                         "E2028");
-                    type = TypeRegistry.I32;
+                    type = TypeRegistry.Never;
                 }
 
                 break;
@@ -1925,7 +1876,7 @@ public class TypeChecker
             case CastExpressionNode c:
             {
                 var src = CheckExpression(c.Expression);
-                var dst = ResolveTypeNode(c.TargetType) ?? TypeRegistry.I32;
+                var dst = ResolveTypeNode(c.TargetType) ?? TypeRegistry.Never;
                 if (!CanExplicitCast(src, dst))
                     ReportError(
                         "invalid cast",
@@ -2000,7 +1951,7 @@ public class TypeChecker
         if (source is ArrayType arr)
         {
             if (target is StructType slice && TypeRegistry.IsSlice(slice) &&
-                IsCompatible(arr.ElementType, slice.TypeArguments[0]))
+                _unificationEngine.CanUnify(arr.ElementType, slice.TypeArguments[0]))
                 return true;
             // Check if target is a Slice struct (canonical representation)
             if (target is StructType sliceStruct && TypeRegistry.IsSlice(sliceStruct))
@@ -2010,73 +1961,6 @@ public class TypeChecker
             if (target is ReferenceType { InnerType: PrimitiveType { Name: "u8" } })
                 return true;
         }
-
-        return false;
-    }
-
-    // General implicit coercions used for variable initialization, assignments, arguments, etc.
-    // Intent: collect all special-case coercions in one place so behavior is consistent across the solver.
-    private bool CanCoerse(TypeBase source, TypeBase target)
-    {
-        // XXX tihs is mostly unification, no?
-
-        // Trivial and baseline compatibility
-        if (source.Equals(target)) return true;
-        if (IsCompatible(source, target)) return true;
-
-        if (target is StructType optionTarget && TypeRegistry.IsOption(optionTarget) &&
-            optionTarget.TypeArguments.Count > 0)
-        {
-            if (source is StructType optionSource && TypeRegistry.IsOption(optionSource) &&
-                optionSource.TypeArguments.Count > 0)
-                return CanCoerse(optionSource.TypeArguments[0], optionTarget.TypeArguments[0]);
-            if (source.Equals(optionTarget.TypeArguments[0]))
-                return true;
-        }
-
-        // Allow comptime int to any integer type
-        if (source is ComptimeIntType && TypeRegistry.IsIntegerType(target)) return true;
-
-        // Allow bool to implicitly cast to any integer type (bool -> 0 or 1)
-        if (source.Equals(TypeRegistry.Bool) && TypeRegistry.IsIntegerType(target)) return true;
-
-        // Array -> Slice
-        if (source is ArrayType arr && target is StructType st && TypeRegistry.IsSlice(st))
-        {
-            if (st.TypeArguments.Count > 0 && IsCompatible(arr.ElementType, st.TypeArguments[0]))
-                return true;
-        }
-
-        // &Array -> Slice
-        if (source is ReferenceType r1 && r1.InnerType is ArrayType rarr &&
-            target is StructType st2 && TypeRegistry.IsSlice(st2))
-        {
-            if (st2.TypeArguments.Count > 0 && IsCompatible(rarr.ElementType, st2.TypeArguments[0]))
-                return true;
-        }
-
-        // String <-> u8 slice views
-        bool IsU8Slice(TypeBase t)
-        {
-            if (t is StructType sst && TypeRegistry.IsSlice(sst) && sst.TypeArguments.Count > 0 &&
-                sst.TypeArguments[0].Equals(TypeRegistry.U8))
-                return true;
-            return false;
-        }
-
-        if (source is StructType ss && TypeRegistry.IsString(ss) && IsU8Slice(target)) return true;
-        if (target is StructType ts && TypeRegistry.IsString(ts) && IsU8Slice(source)) return true;
-
-        // Array decay: [T; N] -> &T (array value to pointer to first element)
-        // This enables passing arrays to C functions expecting pointers (e.g., memset, memcpy)
-        if (source is ArrayType arrValue && target is ReferenceType refTarget)
-            return IsCompatible(arrValue.ElementType, refTarget.InnerType);
-
-        // Pointer conversion: &[T; N] -> &T (pointer to array to pointer to first element)
-        // This handles the case when array variables (stored as &[T; N]) are passed to pointer parameters
-        if (source is ReferenceType { InnerType: ArrayType arrInRef } &&
-            target is ReferenceType { InnerType: var targetInner })
-            return IsCompatible(arrInRef.ElementType, targetInner);
 
         return false;
     }
@@ -2197,8 +2081,22 @@ public class TypeChecker
                     return TypeRegistry.MakeOption(args[0]);
                 }
 
-                // General generic struct instantiation
-                if (baseType is not StructType template)
+                // General generic struct/enum instantiation
+                if (baseType is StructType structTemplate)
+                {
+                    // Track generic struct instantiation
+                    var instantiated = InstantiateStruct(structTemplate, args, gt.Span);
+                    _instantiatedTypes.Add(instantiated);
+                    return instantiated;
+                }
+                else if (baseType is EnumType enumTemplate)
+                {
+                    // Track generic enum instantiation
+                    var instantiated = InstantiateEnum(enumTemplate, args, gt.Span);
+                    _instantiatedTypes.Add(instantiated);
+                    return instantiated;
+                }
+                else
                 {
                     ReportError(
                         $"cannot find generic type `{gt.Name}`",
@@ -2207,12 +2105,6 @@ public class TypeChecker
                         "E2003");
                     return null;
                 }
-
-                // Track generic struct instantiation
-                var instantiated = InstantiateStruct(template, args, gt.Span);
-                _instantiatedTypes.Add(instantiated);
-
-                return instantiated;
             }
             case ArrayTypeNode arr:
             {
@@ -2275,6 +2167,45 @@ public class TypeChecker
         return specialized;
     }
 
+    private EnumType InstantiateEnum(EnumType template, IReadOnlyList<TypeBase> typeArgs, SourceSpan span)
+    {
+        if (template.TypeArguments.Count != typeArgs.Count)
+        {
+            ReportError(
+                $"enum `{template.Name}` expects {template.TypeArguments.Count} type parameter(s)",
+                span,
+                $"provided {typeArgs.Count}",
+                "E2006");
+            return template;
+        }
+
+        var key = BuildStructSpecKey(template.Name, typeArgs);
+        if (_enumSpecializations.TryGetValue(key, out var cached))
+            return cached;
+
+        // Build bindings from GenericParameterType names to concrete types
+        var bindings = new Dictionary<string, TypeBase>();
+        for (var i = 0; i < template.TypeArguments.Count; i++)
+        {
+            if (template.TypeArguments[i] is GenericParameterType gp)
+                bindings[gp.ParamName] = typeArgs[i];
+        }
+
+        var specializedVariants = new List<(string VariantName, TypeBase? PayloadType)>();
+        foreach (var (variantName, payloadType) in template.Variants)
+        {
+            var specializedPayload = payloadType != null
+                ? SubstituteGenerics(payloadType, bindings)
+                : null;
+            specializedVariants.Add((variantName, specializedPayload));
+        }
+
+        // Create specialized enum with concrete type arguments
+        var specialized = new EnumType(template.Name, typeArgs.ToList(), specializedVariants);
+        _enumSpecializations[key] = specialized;
+        return specialized;
+    }
+
     private void ValidateStructLiteralFields(StructType structType,
         IReadOnlyList<(string FieldName, ExpressionNode Value)> fields, SourceSpan span)
     {
@@ -2294,19 +2225,8 @@ public class TypeChecker
             }
 
             var valueType = CheckExpression(expr, fieldType);
-            if (!CanCoerse(valueType, fieldType))
-            {
-                ReportError(
-                    $"mismatched types for field `{fieldName}`",
-                    expr.Span,
-                    $"expected `{fieldType}`, found `{valueType}`",
-                    "E2002");
-            }
-            else
-            {
-                var unified = UnifyTypes(valueType, fieldType, expr.Span);
-                UpdateTypeMapRecursive(expr, unified);
-            }
+            var unified = UnifyTypes(valueType, fieldType, expr.Span);
+            UpdateTypeMapRecursive(expr, unified);
         }
 
         foreach (var (fieldName, _) in structType.Fields)
@@ -2346,44 +2266,6 @@ public class TypeChecker
                     break;
             }
         }
-    }
-
-    private bool IsCompatible(TypeBase source, TypeBase target)
-    {
-        if (source.Equals(target)) return true;
-        if (source is ComptimeIntType && TypeRegistry.IsIntegerType(target)) return true;
-        if (target is ComptimeIntType && TypeRegistry.IsIntegerType(source)) return true;
-        if (source is ComptimeIntType && target is ComptimeIntType) return true;
-        if (source is ComptimeFloat || target is ComptimeFloat) return true; // placeholder
-        if (TypeRegistry.IsIntegerType(source) && TypeRegistry.IsIntegerType(target)) return true;
-
-        // Array -> slice view compatibility (by value or reference)
-        if (source is ArrayType sa && target is StructType ts && TypeRegistry.IsSlice(ts))
-        {
-            if (ts.TypeArguments.Count > 0)
-                return IsCompatible(sa.ElementType, ts.TypeArguments[0]);
-        }
-
-        if (source is ReferenceType rsa && rsa.InnerType is ArrayType ra &&
-            target is StructType tsr && TypeRegistry.IsSlice(tsr))
-        {
-            if (tsr.TypeArguments.Count > 0)
-                return IsCompatible(ra.ElementType, tsr.TypeArguments[0]);
-        }
-
-        // String is binary-compatible with u8[] slices (bidirectional)
-        if (source is StructType ss && TypeRegistry.IsString(ss) &&
-            target is StructType ts2 && TypeRegistry.IsSlice(ts2) &&
-            ts2.TypeArguments.Count > 0 && ts2.TypeArguments[0].Equals(TypeRegistry.U8))
-            return true;
-        if (source is StructType sl && TypeRegistry.IsSlice(sl) &&
-            sl.TypeArguments.Count > 0 && sl.TypeArguments[0].Equals(TypeRegistry.U8) &&
-            target is StructType ts3 && TypeRegistry.IsString(ts3))
-            return true;
-
-        if (source is ArrayType aa && target is ArrayType bb)
-            return aa.Length == bb.Length && IsCompatible(aa.ElementType, bb.ElementType);
-        return false;
     }
 
     private TypeBase UnifyTypes(TypeBase a, TypeBase b, SourceSpan span)
@@ -2598,7 +2480,7 @@ public class TypeChecker
             span,
             "not found in this scope",
             "E2004");
-        return TypeRegistry.I32;
+        return TypeRegistry.Never;
     }
 
     // ===== Generics helpers =====
@@ -2610,6 +2492,7 @@ public class TypeChecker
         ArrayType at => ContainsGeneric(at.ElementType),
         GenericType gt => gt.TypeArguments.Any(ContainsGeneric),
         StructType st => st.TypeArguments.Any(ContainsGeneric),
+        EnumType et => et.TypeArguments.Any(ContainsGeneric),
         _ => false
     };
 
@@ -2652,6 +2535,7 @@ public class TypeChecker
         ReferenceType rt => new ReferenceType(SubstituteGenerics(rt.InnerType, bindings)),
         ArrayType at => new ArrayType(SubstituteGenerics(at.ElementType, bindings), at.Length),
         StructType st => SubstituteStructType(st, bindings),
+        EnumType et => SubstituteEnumType(et, bindings),
         GenericType gt => new GenericType(gt.BaseName,
             gt.TypeArguments.Select(a => SubstituteGenerics(a, bindings)).ToList()),
         _ => type
@@ -2664,7 +2548,7 @@ public class TypeChecker
         for (var i = 0; i < sources.Count; i++)
         {
             if (sources[i].Equals(targets[i])) continue;
-            if (!CanCoerse(sources[i], targets[i])) return false;
+            if (!_unificationEngine.CanUnify(sources[i], targets[i])) return false;
             cost++;
         }
 
@@ -2934,6 +2818,46 @@ public class TypeChecker
         return new StructType(structType.StructName, updatedTypeArgs, updatedFields);
     }
 
+    private static EnumType SubstituteEnumType(EnumType enumType, Dictionary<string, TypeBase> bindings)
+    {
+        var updatedVariants = new List<(string VariantName, TypeBase? PayloadType)>(enumType.Variants.Count);
+        var changed = false;
+        foreach (var (variantName, payloadType) in enumType.Variants)
+        {
+            if (payloadType != null)
+            {
+                var substituted = SubstituteGenerics(payloadType, bindings);
+                if (!ReferenceEquals(substituted, payloadType))
+                    changed = true;
+                updatedVariants.Add((variantName, substituted));
+            }
+            else
+            {
+                updatedVariants.Add((variantName, null));
+            }
+        }
+
+        // Substitute type arguments
+        var updatedTypeArgs = new List<TypeBase>(enumType.TypeArguments.Count);
+        foreach (var typeArg in enumType.TypeArguments)
+        {
+            if (typeArg is GenericParameterType gp && bindings.TryGetValue(gp.ParamName, out var boundType))
+            {
+                changed = true;
+                updatedTypeArgs.Add(boundType);
+            }
+            else
+            {
+                updatedTypeArgs.Add(typeArg);
+            }
+        }
+
+        if (!changed)
+            return enumType;
+
+        return new EnumType(enumType.Name, updatedTypeArgs, updatedVariants);
+    }
+
     private void EnsureSpecialization(FunctionEntry genericEntry, Dictionary<string, TypeBase> bindings,
         IReadOnlyList<TypeBase> concreteParamTypes)
     {
@@ -2948,7 +2872,7 @@ public class TypeChecker
             var newParams = new List<FunctionParameterNode>();
             foreach (var p in genericEntry.AstNode.Parameters)
             {
-                var t = ResolveTypeNode(p.Type) ?? TypeRegistry.I32;
+                var t = ResolveTypeNode(p.Type) ?? TypeRegistry.Never;
                 var st = SubstituteGenerics(t, bindings);
                 var tnode = CreateTypeNodeFromTypeBase(p.Span, st);
                 newParams.Add(new FunctionParameterNode(p.Span, p.Name, tnode));
@@ -2957,7 +2881,7 @@ public class TypeChecker
             TypeNode? newRetNode = null;
             if (genericEntry.AstNode.ReturnType != null)
             {
-                var rt = ResolveTypeNode(genericEntry.AstNode.ReturnType) ?? TypeRegistry.I32;
+                var rt = ResolveTypeNode(genericEntry.AstNode.ReturnType) ?? TypeRegistry.Never;
                 var srt = SubstituteGenerics(rt, bindings);
                 newRetNode = CreateTypeNodeFromTypeBase(genericEntry.AstNode.ReturnType.Span, srt);
             }
@@ -2987,6 +2911,10 @@ public class TypeChecker
             ? new NamedTypeNode(span, st.StructName)
             : new GenericTypeNode(span, st.StructName,
                 st.TypeArguments.Select(t => CreateTypeNodeFromTypeBase(span, t)).ToList()),
+        EnumType et => et.TypeArguments.Count == 0
+            ? new NamedTypeNode(span, et.Name)
+            : new GenericTypeNode(span, et.Name,
+                et.TypeArguments.Select(t => CreateTypeNodeFromTypeBase(span, t)).ToList()),
         ReferenceType rt => new ReferenceTypeNode(span, CreateTypeNodeFromTypeBase(span, rt.InnerType)),
         ArrayType at => new ArrayTypeNode(span, CreateTypeNodeFromTypeBase(span, at.ElementType), at.Length),
         GenericType gt => new GenericTypeNode(span, gt.BaseName,
@@ -3033,9 +2961,17 @@ public class TypeChecker
                 var actualVariantName = parts[1];
 
                 // Try to find the enum
-                if (_enums.TryGetValue(enumName, out var enumType))
+                if (_enums.TryGetValue(enumName, out var enumTemplate))
                 {
-                    return CheckEnumVariantConstruction(enumType, actualVariantName, arguments, span);
+                    // If we have an expected type that's a specialized version of this enum, use that
+                    EnumType enumToUse = enumTemplate;
+                    if (expectedType is EnumType expectedEnumType &&
+                        expectedEnumType.Name == enumTemplate.Name &&
+                        expectedEnumType.TypeArguments.Count > 0)
+                    {
+                        enumToUse = expectedEnumType;
+                    }
+                    return CheckEnumVariantConstruction(enumToUse, actualVariantName, arguments, span);
                 }
             }
         }
@@ -3102,40 +3038,20 @@ public class TypeChecker
                 {
                     var expectedFieldType = st.Fields[i].Type;
                     var argType = CheckExpression(arguments[i], expectedFieldType);
-                    if (!IsCompatible(argType, expectedFieldType))
-                    {
-                        ReportError(
-                            $"mismatched types in variant construction",
-                            arguments[i].Span,
-                            $"expected `{expectedFieldType}`, found `{argType}`",
-                            "E2001");
-                    }
-                    else
-                    {
-                        // Update type map to resolve comptime_int to concrete type
-                        var unified = UnifyTypes(argType, expectedFieldType, arguments[i].Span);
-                        UpdateTypeMapRecursive(arguments[i], unified);
-                    }
+
+                    // Update type map to resolve comptime_int to concrete type
+                    var unified = UnifyTypes(argType, expectedFieldType, arguments[i].Span);
+                    UpdateTypeMapRecursive(arguments[i], unified);
                 }
             }
             else
             {
                 // Single payload
                 var argType = CheckExpression(arguments[0], variant.PayloadType);
-                if (!IsCompatible(argType, variant.PayloadType))
-                {
-                    ReportError(
-                        $"mismatched types in variant construction",
-                        arguments[0].Span,
-                        $"expected `{variant.PayloadType}`, found `{argType}`",
-                        "E2001");
-                }
-                else
-                {
-                    // Update type map to resolve comptime_int to concrete type
-                    var unified = UnifyTypes(argType, variant.PayloadType, arguments[0].Span);
-                    UpdateTypeMapRecursive(arguments[0], unified);
-                }
+
+                // Update type map to resolve comptime_int to concrete type
+                var unified = UnifyTypes(argType, variant.PayloadType, arguments[0].Span);
+                UpdateTypeMapRecursive(arguments[0], unified);
             }
         }
 
@@ -3165,7 +3081,7 @@ public class TypeChecker
                 match.Scrutinee.Span,
                 $"found `{scrutineeType}`",
                 "E2030");
-            return TypeRegistry.I32; // Fallback
+            return TypeRegistry.Never; // Fallback
         }
 
         // Store metadata for lowering
@@ -3199,7 +3115,7 @@ public class TypeChecker
 
             // Unify with expected type first if available, then with previous result type
             TypeBase unifiedArmType = armType;
-            if (expectedType != null && CanCoerse(armType, expectedType))
+            if (expectedType != null)
             {
                 unifiedArmType = UnifyTypes(armType, expectedType, arm.Span);
                 UpdateTypeMapRecursive(arm.ResultExpr, unifiedArmType);
@@ -3215,6 +3131,17 @@ public class TypeChecker
                 resultType = unifiedArmType;
             else
                 resultType = UnifyTypes(resultType, unifiedArmType, arm.Span);
+        }
+
+        // Second pass: update all arm result expressions with the final unified type
+        // This ensures that comptime_int literals get resolved to concrete types
+        // BUT: skip this if resultType is still a GenericParameterType (we're in a generic function body)
+        if (resultType != null && resultType is not GenericParameterType)
+        {
+            foreach (var arm in match.Arms)
+            {
+                UpdateTypeMapRecursive(arm.ResultExpr, resultType);
+            }
         }
 
         // Check exhaustiveness
@@ -3235,7 +3162,7 @@ public class TypeChecker
             }
         }
 
-        return resultType ?? TypeRegistry.I32;
+        return resultType ?? TypeRegistry.Never;
     }
 
     /// <summary>

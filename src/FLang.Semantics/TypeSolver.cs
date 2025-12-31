@@ -33,8 +33,26 @@ public class TypeSolver
 
     public TypeBase Unify(TypeBase t1, TypeBase t2, SourceSpan? span = null)
     {
-        var result = UnifyInternal(t1, t2, span ?? new SourceSpan());
-        return result ?? t1; // Return first type on failure (errors recorded)
+        var result = UnifyInternal(t1, t2, span ?? SourceSpan.None);
+        return result ?? TypeRegistry.Never;
+    }
+
+    /// <summary>
+    /// Checks if two types can unify without recording diagnostics.
+    /// Used for speculative type checking (e.g., overload resolution, checking coercion possibility).
+    /// </summary>
+    public bool CanUnify(TypeBase t1, TypeBase t2)
+    {
+        var diagCountBefore = _diagnostics.Count;
+        var result = UnifyInternal(t1, t2, SourceSpan.None);
+
+        // Remove any diagnostics that were added during speculative unification
+        if (_diagnostics.Count > diagCountBefore)
+        {
+            _diagnostics.RemoveRange(diagCountBefore, _diagnostics.Count - diagCountBefore);
+        }
+
+        return result != null;
     }
 
     private TypeBase? UnifyInternal(TypeBase t1, TypeBase t2, SourceSpan span)
@@ -42,26 +60,35 @@ public class TypeSolver
         var a = t1.Prune();
         var b = t2.Prune();
 
+        // 0. Never, always fails
+        if (a.Equals(TypeRegistry.Never) || b.Equals(TypeRegistry.Never))
+        {
+            // TODO proper error message
+            ReportError("Cannot unify with `never` type", span, "E2002");
+            return null;
+        }
+
         // 1. Identity (Primitives & Rigid Generics)
         if (a.Equals(b)) return a;
 
         // 2. Variables (Flexible)
         if (a is TypeVar v1)
         {
-            if (v1 != b)
+            if (!Equals(v1, b))
                 v1.Instance = b;
             return b;
         }
+
         if (b is TypeVar v2)
         {
-            if (v2 != a)
+            if (!Equals(v2, a))
                 v2.Instance = a;
             return a;
         }
 
         // 3. Comptime Hardening (Soft Unification)
-        if (a is ComptimeInt && b is PrimitiveType p1 && IsInteger(p1)) return p1;
-        if (b is ComptimeInt && a is PrimitiveType p2 && IsInteger(p2)) return p2;
+        if (a is ComptimeInt && b is PrimitiveType p1 && TypeRegistry.IsIntegerType(p1)) return p1;
+        if (b is ComptimeInt && a is PrimitiveType p2 && TypeRegistry.IsIntegerType(p2)) return p2;
 
         // 4. Coercion Extension
         // Must come before structural recursion to allow cross-type coercions
@@ -77,9 +104,10 @@ public class TypeSolver
         {
             if (arr1.Length != arr2.Length)
             {
-                ReportError($"Array length mismatch: expected {arr1.Length}, got {arr2.Length}", span, "E3001");
+                ReportError($"Array length mismatch: expected {arr1.Length}, got {arr2.Length}", span, "E2002");
                 return null;
             }
+
             var unifiedElem = UnifyInternal(arr1.ElementType, arr2.ElementType, span);
             if (unifiedElem == null)
                 return null;
@@ -95,34 +123,60 @@ public class TypeSolver
             return new ReferenceType(unifiedInner, ref1.PointerWidth);
         }
 
-        // 7. Structs/Enums (Structural Recursion)
+        // 7. Structs (Structural Recursion)
         if (a is StructType s1 && b is StructType s2)
         {
             if (s1.Name != s2.Name)
             {
-                ReportError($"Type mismatch: expected '{s1.Name}', got '{s2.Name}'", span, "E3001");
-                return null;
-            }
-            if (s1.TypeArguments.Count != s2.TypeArguments.Count)
-            {
-                ReportError($"Generic arity mismatch for '{s1.Name}'", span, "E3002");
+                ReportError($"Type mismatch: expected `{s1.Name}`, got `{s2.Name}`", span, "E2002");
                 return null;
             }
 
-            for (int i = 0; i < s1.TypeArguments.Count; i++)
+            if (s1.TypeArguments.Count != s2.TypeArguments.Count)
+            {
+                ReportError($"Generic arity mismatch for `{s1.Name}`", span, "E2002");
+                return null;
+            }
+
+            for (var i = 0; i < s1.TypeArguments.Count; i++)
             {
                 if (UnifyInternal(s1.TypeArguments[i], s2.TypeArguments[i], span) == null)
                     return null;
             }
+
             return a;
         }
 
-        // 8. Detailed Failure
+        // 8. Enums (Structural Recursion)
+        if (a is EnumType e1 && b is EnumType e2)
+        {
+            if (e1.Name != e2.Name)
+            {
+                ReportError($"Type mismatch: expected `{e1.Name}`, got `{e2.Name}`", span, "E2002");
+                return null;
+            }
+
+            if (e1.TypeArguments.Count != e2.TypeArguments.Count)
+            {
+                ReportError($"Generic arity mismatch for `{e1.Name}`", span, "E2002");
+                return null;
+            }
+
+            for (var i = 0; i < e1.TypeArguments.Count; i++)
+            {
+                if (UnifyInternal(e1.TypeArguments[i], e2.TypeArguments[i], span) == null)
+                    return null;
+            }
+
+            return a;
+        }
+
+        // 9. Detailed Failure
         var hint = GenerateHint(t1, t2);
         if (IsSkolem(a) || IsSkolem(b))
-            ReportError($"Cannot unify rigid generic parameter with concrete type", span, "E3003", hint);
+            ReportError($"Cannot unify rigid generic parameter with concrete type", span, "E2002", hint);
         else
-            ReportError($"Type mismatch: expected '{a}', got '{b}'", span, "E3001", hint);
+            ReportError($"Type mismatch: expected `{a}`, got `{b}`", span, "E2002", hint);
 
         return null;
     }
@@ -134,16 +188,11 @@ public class TypeSolver
 
     private static bool IsSkolem(TypeBase t) => t is PrimitiveType p && p.Name.StartsWith('$');
 
-    private static bool IsInteger(PrimitiveType p)
-    {
-        return p.Name is "i8" or "i16" or "i32" or "i64" or "isize" or "u8" or "u16" or "u32" or "u64" or "usize";
-    }
-
     private static string? GenerateHint(TypeBase t1, TypeBase t2)
     {
-        if (t1 is TypeVar v1 && v1.DeclarationSpan.HasValue)
+        if (t1 is TypeVar { DeclarationSpan: not null } v1)
             return $"variable '{v1.Id}' declared here";
-        if (t2 is TypeVar v2 && v2.DeclarationSpan.HasValue)
+        if (t2 is TypeVar { DeclarationSpan: not null } v2)
             return $"variable '{v2.Id}' declared here";
         return null;
     }
@@ -186,7 +235,7 @@ public class IntegerWideningRule : ICoercionRule
         var (fromName, toName) = (pFrom.Name, pTo.Name);
 
         // bool → any integer: treat bool as b1/u8 (rank 1 unsigned)
-        if (fromName == "bool" && (IsInteger(toName) || toName == "bool"))
+        if (fromName == "bool" && (TypeRegistry.IsIntegerType(toName) || toName == "bool"))
             return true;
 
         // Same-signedness widening (e.g., i8 → i32, u8 → u64, i64 → isize)
@@ -208,11 +257,6 @@ public class IntegerWideningRule : ICoercionRule
             return true;
 
         return false;
-    }
-
-    private static bool IsInteger(string typeName)
-    {
-        return typeName is "i8" or "i16" or "i32" or "i64" or "isize" or "u8" or "u16" or "u32" or "u64" or "usize";
     }
 }
 
