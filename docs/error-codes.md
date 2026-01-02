@@ -20,45 +20,125 @@ and no bias in numbering.
 
 ### E1001: Unexpected Token
 
-Category: Parsing
-Severity: Error
+**Category**: Parsing
+**Severity**: Error
 
-Description:
-An unexpected token was encountered in the current context.
+#### Description
 
-Hint:
-The diagnostic includes the found token and the context when available.
+An unexpected token was encountered in the current parsing context. The diagnostic includes the found token and the context when available.
+
+#### Example
+
+```flang
+pub fn main() i32 {
+    let x: i32 = 42;  // ERROR: unexpected token `;` (semicolons not required)
+    return x
+}
+```
+
+#### Solution
+
+Remove the unexpected token or check the syntax:
+
+```flang
+pub fn main() i32 {
+    let x: i32 = 42  // OK: no semicolon
+    return x
+}
+```
 
 ---
 
 ### E1002: Expected Token Mismatch
 
-Category: Parsing
-Severity: Error
+**Category**: Parsing
+**Severity**: Error
 
-Description:
-The parser expected a specific token but found a different one. This commonly occurs with missing delimiters or
-keywords.
+#### Description
+
+The parser expected a specific token but found a different one. This commonly occurs with missing delimiters or keywords.
+
+#### Example
+
+```flang
+pub fn main() i32 {
+    let x: i32 = 42  // ERROR: expected `}`, found end of file
+    return x
+// Missing closing brace
+```
+
+#### Solution
+
+Add the expected token:
+
+```flang
+pub fn main() i32 {
+    let x: i32 = 42
+    return x
+}  // OK: closing brace present
+```
 
 ---
 
 ### E1004: Invalid Array Length
 
-Category: Parsing / Types
-Severity: Error
+**Category**: Parsing / Types
+**Severity**: Error
 
-Description:
+#### Description
+
 An array type like `[T; N]` used a non-integer length `N`.
+
+#### Example
+
+```flang
+pub fn main() i32 {
+    let arr: [i32; "five"] = [1, 2, 3, 4, 5]  // ERROR: array length must be an integer
+    return 0
+}
+```
+
+#### Solution
+
+Use an integer literal for the array length:
+
+```flang
+pub fn main() i32 {
+    let arr: [i32; 5] = [1, 2, 3, 4, 5]  // OK: integer length
+    return 0
+}
+```
 
 ---
 
 ### E1005: Invalid Array Repeat Count
 
-Category: Parsing / Literals
-Severity: Error
+**Category**: Parsing / Literals
+**Severity**: Error
 
-Description:
+#### Description
+
 An array repeat literal like `[value; count]` used a non-integer repeat `count`.
+
+#### Example
+
+```flang
+pub fn main() i32 {
+    let arr: [i32; 5] = [0; "five"]  // ERROR: repeat count must be an integer
+    return 0
+}
+```
+
+#### Solution
+
+Use an integer literal for the repeat count:
+
+```flang
+pub fn main() i32 {
+    let arr: [i32; 5] = [0; 5]  // OK: integer repeat count
+    return 0
+}
+```
 
 ---
 

@@ -23,6 +23,19 @@ You are an expert compiler engineer assisting in the development of FLang v2. Yo
     - Make doc updates atomic with code changes - do not defer or forget them.
     - Keep documentation as the single source of truth.
     - When discovering bugs or limitations during implementation, document them in `docs\known-issues.md` with root cause, proposed solution, and affected tests.
+    - **CRITICAL - ERROR CODE DOCUMENTATION:** When adding, modifying, or removing error codes:
+      - IMMEDIATELY update `docs\error-codes.md` in the same response
+      - Never add an error code to the compiler without documenting it
+      - Never change error message text without updating the documentation
+      - Document error codes BEFORE they are used in production code
+      - Use the standard format for all error codes (E1XXX, E2XXX, E3XXX):
+        - Title: `### EXXXX: Error Title`
+        - Metadata: `**Category**: ...` and `**Severity**: Error` (bold markdown)
+        - `#### Description` - Detailed explanation with bullet points for multiple scenarios
+        - `#### Example` or `#### Examples` - FLang code blocks with `// ERROR` comments
+        - `#### Solution` - Explanation with FLang code blocks showing `// OK` comments
+      - Update the Summary Table at the end of error-codes.md when adding new errors
+      - Assign error codes sequentially (no gaps) within each category
 5.  **TEST COVERAGE:** Every new feature or bug fix must have at least one test in the test harness.
     - Use the lit-style test format defined in `docs\architecture.md`
     - When implementing a feature, add the test before marking the work complete
