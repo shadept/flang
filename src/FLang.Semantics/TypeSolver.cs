@@ -2,22 +2,38 @@ using FLang.Core;
 
 namespace FLang.Semantics;
 
+/// <summary>
+/// Interface for type coercion rules that convert one type to another.
+/// </summary>
 public interface ICoercionRule
 {
-    // Try to coerce 'from' to 'to'. Returns true if successful
+    /// <summary>
+    /// Attempts to coerce a value from one type to another.
+    /// </summary>
+    /// <param name="from">The source type to coerce from.</param>
+    /// <param name="to">The target type to coerce to.</param>
+    /// <param name="solver">The type solver for unified error reporting.</param>
+    /// <returns>True if coercion is possible, false otherwise.</returns>
     bool TryApply(TypeBase from, TypeBase to, TypeSolver solver);
 }
 
 /// <summary>
-/// Type unification and coercion solver with Core.Diagnostic reporting.
+/// Type unification and coercion solver with <see cref="Diagnostic"/> reporting.
 /// </summary>
 public class TypeSolver
 {
     private readonly List<Diagnostic> _diagnostics = [];
     private readonly List<ICoercionRule> _coercionRules = [];
 
+    /// <summary>
+    /// Gets the list of diagnostics generated during type unification.
+    /// </summary>
     public IReadOnlyList<Diagnostic> Diagnostics => _diagnostics;
 
+    /// <summary>
+    /// Initializes a new instance of the <see cref="TypeSolver"/> class with the specified pointer width.
+    /// </summary>
+    /// <param name="pointerWidth">The target platform pointer width (32 or 64 bits).</param>
     public TypeSolver(PointerWidth pointerWidth = PointerWidth.Bits64)
     {
         // Add default coercion rules (pass pointer width to rules that need it)
@@ -29,8 +45,18 @@ public class TypeSolver
         _coercionRules.Add(new SliceToReferenceRule());
     }
 
+    /// <summary>
+    /// Clears all diagnostics recorded by the type solver.
+    /// </summary>
     public void ClearDiagnostics() => _diagnostics.Clear();
 
+    /// <summary>
+    /// Unifies two types, applying coercion rules if necessary, and records diagnostics on failure.
+    /// </summary>
+    /// <param name="t1">The first type to unify.</param>
+    /// <param name="t2">The second type to unify.</param>
+    /// <param name="span">Optional source span for error reporting.</param>
+    /// <returns>The unified type, or Never type if unification fails.</returns>
     public TypeBase Unify(TypeBase t1, TypeBase t2, SourceSpan? span = null)
     {
         var result = UnifyInternal(t1, t2, span ?? SourceSpan.None);
@@ -55,6 +81,14 @@ public class TypeSolver
         return result != null;
     }
 
+    /// <summary>
+    /// Internal implementation of type unification with coercion support.
+    /// Attempts to unify two types, applying coercion rules if direct unification fails.
+    /// </summary>
+    /// <param name="t1">The first type to unify.</param>
+    /// <param name="t2">The second type to unify.</param>
+    /// <param name="span">Source span for error reporting.</param>
+    /// <returns>The unified type if successful, null otherwise.</returns>
     private TypeBase? UnifyInternal(TypeBase t1, TypeBase t2, SourceSpan span)
     {
         var a = t1.Prune();
@@ -181,13 +215,32 @@ public class TypeSolver
         return null;
     }
 
+    /// <summary>
+    /// Reports a type error diagnostic.
+    /// </summary>
+    /// <param name="message">The error message.</param>
+    /// <param name="span">The source location of the error.</param>
+    /// <param name="code">The error code.</param>
+    /// <param name="hint">Optional hint for resolving the error.</param>
     private void ReportError(string message, SourceSpan span, string code, string? hint = null)
     {
         _diagnostics.Add(Diagnostic.Error(message, span, hint, code));
     }
 
+    /// <summary>
+    /// Checks if a type is a skolem (rigid generic parameter).
+    /// Skolem types start with '$' and represent generic parameters that cannot be unified with concrete types.
+    /// </summary>
+    /// <param name="t">The type to check.</param>
+    /// <returns>True if the type is a skolem, false otherwise.</returns>
     private static bool IsSkolem(TypeBase t) => t is PrimitiveType p && p.Name.StartsWith('$');
 
+    /// <summary>
+    /// Generates a hint message for type mismatch errors based on common patterns.
+    /// </summary>
+    /// <param name="t1">The expected type.</param>
+    /// <param name="t2">The actual type.</param>
+    /// <returns>A hint string if applicable, null otherwise.</returns>
     private static string? GenerateHint(TypeBase t1, TypeBase t2)
     {
         if (t1 is TypeVar { DeclarationSpan: not null } v1)
@@ -200,11 +253,19 @@ public class TypeSolver
 
 // --- Coercion Rules ---
 
+/// <summary>
+/// Coercion rule that allows implicit widening of integer types (e.g., i8 to i32).
+/// Maintains separate rank hierarchies for signed and unsigned integers.
+/// </summary>
 public class IntegerWideningRule : ICoercionRule
 {
     private readonly Dictionary<string, int> _signedRank;
     private readonly Dictionary<string, int> _unsignedRank;
 
+    /// <summary>
+    /// Initializes a new instance of the <see cref="IntegerWideningRule"/> class.
+    /// </summary>
+    /// <param name="pointerWidth">The platform pointer width, used to determine isize/usize rank.</param>
     public IntegerWideningRule(PointerWidth pointerWidth)
     {
         // Map isize/usize to platform-specific types
@@ -227,6 +288,13 @@ public class IntegerWideningRule : ICoercionRule
         };
     }
 
+    /// <summary>
+    /// Attempts to widen an integer type to a larger integer type of the same signedness.
+    /// </summary>
+    /// <param name="from">The source integer type.</param>
+    /// <param name="to">The target integer type.</param>
+    /// <param name="solver">The type solver (unused by this rule).</param>
+    /// <returns>True if widening is valid, false otherwise.</returns>
     public bool TryApply(TypeBase from, TypeBase to, TypeSolver solver)
     {
         if (from is not PrimitiveType pFrom || to is not PrimitiveType pTo)
@@ -260,9 +328,18 @@ public class IntegerWideningRule : ICoercionRule
     }
 }
 
+/// <summary>
+/// Coercion rule that allows implicit wrapping of a value into an Option type.
+/// </summary>
 public class OptionWrappingRule : ICoercionRule
 {
-    // T -> core.option.Option(T)
+    /// <summary>
+    /// Attempts to coerce a value of type T into Option(T).
+    /// </summary>
+    /// <param name="from">The source type T.</param>
+    /// <param name="to">The target type, expected to be Option(T).</param>
+    /// <param name="solver">The type solver (unused by this rule).</param>
+    /// <returns>True if the target is Option and the inner type matches the source type.</returns>
     public bool TryApply(TypeBase from, TypeBase to, TypeSolver solver)
     {
         if (to is StructType st && TypeRegistry.IsOption(st))
@@ -271,9 +348,18 @@ public class OptionWrappingRule : ICoercionRule
     }
 }
 
+/// <summary>
+/// Coercion rule that allows implicit conversion from String to Slice(u8).
+/// </summary>
 public class StringToByteSliceRule : ICoercionRule
 {
-    // core.string.String -> core.slice.Slice(u8)
+    /// <summary>
+    /// Attempts to coerce a String to a Slice of bytes (u8).
+    /// </summary>
+    /// <param name="from">The source type, expected to be core.string.String.</param>
+    /// <param name="to">The target type, expected to be core.slice.Slice(u8).</param>
+    /// <param name="solver">The type solver (unused by this rule).</param>
+    /// <returns>True if conversion from String to Slice(u8) is requested.</returns>
     public bool TryApply(TypeBase from, TypeBase to, TypeSolver solver)
     {
         if (from is StructType fs && TypeRegistry.IsString(fs) &&
@@ -283,14 +369,19 @@ public class StringToByteSliceRule : ICoercionRule
     }
 }
 
+/// <summary>
+/// Coercion rule for array decay: converts arrays to pointers or slices.
+/// Supports: [T; N] → &amp;T, &[T; N] → &amp;T, [T; N] → Slice(T), &[T; N] → Slice(T).
+/// </summary>
 public class ArrayDecayRule : ICoercionRule
 {
-    // Array decay and conversion rule (combines array-to-pointer and array-to-slice):
-    // - [T; N] → &T (array value to pointer to first element)
-    // - &[T; N] → &T (pointer to array to pointer to first element)
-    // - [T; N] → Slice(T) (array value to slice)
-    // - &[T; N] → Slice(T) (pointer to array to slice)
-    // Enables passing arrays to C functions and slice operations
+    /// <summary>
+    /// Attempts to decay an array to a pointer or slice.
+    /// </summary>
+    /// <param name="from">The source array type or reference to array.</param>
+    /// <param name="to">The target type (pointer or slice).</param>
+    /// <param name="solver">The type solver (unused by this rule).</param>
+    /// <returns>True if array decay is valid for the given types.</returns>
     public bool TryApply(TypeBase from, TypeBase to, TypeSolver solver)
     {
         // Array-to-slice coercions
@@ -318,9 +409,18 @@ public class ArrayDecayRule : ICoercionRule
     }
 }
 
+/// <summary>
+/// Coercion rule that allows implicit conversion from Slice(T) to &amp;T.
+/// </summary>
 public class SliceToReferenceRule : ICoercionRule
 {
-    // core.slice.Slice(T) -> &T
+    /// <summary>
+    /// Attempts to coerce a Slice to a reference to its element type.
+    /// </summary>
+    /// <param name="from">The source type, expected to be core.slice.Slice(T).</param>
+    /// <param name="to">The target type, expected to be &amp;T.</param>
+    /// <param name="solver">The type solver (unused by this rule).</param>
+    /// <returns>True if conversion from Slice(T) to &amp;T is requested.</returns>
     public bool TryApply(TypeBase from, TypeBase to, TypeSolver solver)
     {
         if (from is StructType fs && TypeRegistry.IsSlice(fs) &&

@@ -7,20 +7,34 @@ using FLang.Frontend.Ast.Types;
 
 namespace FLang.Frontend;
 
+/// <summary>
+/// Recursive descent parser for FLang source code that produces an Abstract Syntax Tree (AST).
+/// </summary>
 public class Parser
 {
     private readonly Lexer _lexer;
     private Token _currentToken;
     private readonly List<Diagnostic> _diagnostics = [];
 
+    /// <summary>
+    /// Initializes a new instance of the <see cref="Parser"/> class.
+    /// </summary>
+    /// <param name="lexer">The lexer that provides tokens for parsing.</param>
     public Parser(Lexer lexer)
     {
         _lexer = lexer;
         _currentToken = _lexer.NextToken();
     }
 
+    /// <summary>
+    /// Gets the list of diagnostics (errors and warnings) encountered during parsing.
+    /// </summary>
     public IReadOnlyList<Diagnostic> Diagnostics => _diagnostics;
 
+    /// <summary>
+    /// Parses a complete module, including imports, struct declarations, enum declarations, and function declarations.
+    /// </summary>
+    /// <returns>A <see cref="ModuleNode"/> representing the parsed module.</returns>
     public ModuleNode ParseModule()
     {
         var startSpan = _currentToken.Span;
@@ -107,10 +121,14 @@ public class Parser
         }
 
         var endSpan = _currentToken.Span;
-        var span = startSpan with { Length = endSpan.Index + endSpan.Length - startSpan.Index };
+        var span = SourceSpan.Combine(startSpan, endSpan);
         return new ModuleNode(span, imports, structs, enums, functions);
     }
 
+    /// <summary>
+    /// Parses an import declaration (e.g., import std.io.File).
+    /// </summary>
+    /// <returns>An <see cref="ImportDeclarationNode"/> representing the import statement.</returns>
     private ImportDeclarationNode ParseImport()
     {
         var importKeyword = Eat(TokenKind.Import);
@@ -128,11 +146,14 @@ public class Parser
             path.Add(identifier.Text);
         }
 
-        var span = new SourceSpan(importKeyword.Span.FileId, importKeyword.Span.Index,
-            _currentToken.Span.Index - importKeyword.Span.Index);
+        var span = SourceSpan.Combine(importKeyword.Span, _currentToken.Span);
         return new ImportDeclarationNode(span, path);
     }
 
+    /// <summary>
+    /// Parses a struct declaration with optional generic type parameters.
+    /// </summary>
+    /// <returns>A <see cref="StructDeclarationNode"/> representing the struct definition.</returns>
     private StructDeclarationNode ParseStruct()
     {
         var structKeyword = Eat(TokenKind.Struct);
@@ -167,8 +188,7 @@ public class Parser
             Eat(TokenKind.Colon);
             var fieldType = ParseType();
 
-            var fieldSpan = new SourceSpan(fieldNameToken.Span.FileId, fieldNameToken.Span.Index,
-                fieldType.Span.Index + fieldType.Span.Length - fieldNameToken.Span.Index);
+            var fieldSpan = SourceSpan.Combine(fieldNameToken.Span, fieldType.Span);
             fields.Add(new StructFieldNode(fieldSpan, fieldNameToken.Text, fieldType));
 
             // Fields can be separated by commas or newlines (optional)
@@ -177,11 +197,14 @@ public class Parser
 
         var closeBrace = Eat(TokenKind.CloseBrace);
 
-        var span = new SourceSpan(structKeyword.Span.FileId, structKeyword.Span.Index,
-            closeBrace.Span.Index + closeBrace.Span.Length - structKeyword.Span.Index);
+        var span = SourceSpan.Combine(structKeyword.Span, closeBrace.Span);
         return new StructDeclarationNode(span, nameToken.Text, typeParameters, fields);
     }
 
+    /// <summary>
+    /// Parses an enum declaration with optional generic type parameters and variants.
+    /// </summary>
+    /// <returns>An <see cref="EnumDeclarationNode"/> representing the enum definition.</returns>
     private EnumDeclarationNode ParseEnumDeclaration()
     {
         var enumKeyword = Eat(TokenKind.Enum);
@@ -212,11 +235,11 @@ public class Parser
         var variants = new List<EnumVariantNode>();
         while (_currentToken.Kind != TokenKind.CloseBrace && _currentToken.Kind != TokenKind.EndOfFile)
         {
-            var variantStart = _currentToken.Span;
             var variantNameToken = Eat(TokenKind.Identifier);
 
             // Check for payload types: Variant(Type1, Type2)
             var payloadTypes = new List<TypeNode>();
+            SourceSpan variantEnd = variantNameToken.Span;
             if (_currentToken.Kind == TokenKind.OpenParenthesis)
             {
                 Eat(TokenKind.OpenParenthesis);
@@ -231,12 +254,11 @@ public class Parser
                     else if (_currentToken.Kind != TokenKind.CloseParenthesis) break;
                 }
 
-                Eat(TokenKind.CloseParenthesis);
+                var closeParen = Eat(TokenKind.CloseParenthesis);
+                variantEnd = closeParen.Span;
             }
 
-            var variantEnd = _currentToken.Span;
-            var variantSpan = new SourceSpan(variantStart.FileId, variantStart.Index,
-                variantEnd.Index - variantStart.Index);
+            var variantSpan = SourceSpan.Combine(variantNameToken.Span, variantEnd);
             variants.Add(new EnumVariantNode(variantSpan, variantNameToken.Text, payloadTypes));
 
             // Variants can be separated by commas or newlines (optional)
@@ -245,11 +267,15 @@ public class Parser
 
         var closeBrace = Eat(TokenKind.CloseBrace);
 
-        var span = new SourceSpan(enumKeyword.Span.FileId, enumKeyword.Span.Index,
-            closeBrace.Span.Index + closeBrace.Span.Length - enumKeyword.Span.Index);
+        var span = SourceSpan.Combine(enumKeyword.Span, closeBrace.Span);
         return new EnumDeclarationNode(span, nameToken.Text, typeParameters, variants);
     }
 
+    /// <summary>
+    /// Parses a function declaration with parameters, optional return type, and body.
+    /// </summary>
+    /// <param name="modifiers">Optional function modifiers (public, foreign, etc.).</param>
+    /// <returns>A <see cref="FunctionDeclarationNode"/> representing the function.</returns>
     public FunctionDeclarationNode ParseFunction(FunctionModifiers modifiers = FunctionModifiers.None)
     {
         if (_currentToken.Kind == TokenKind.Pub)
@@ -270,8 +296,7 @@ public class Parser
             Eat(TokenKind.Colon);
             var paramType = ParseType();
 
-            var paramSpan = new SourceSpan(paramNameToken.Span.FileId, paramNameToken.Span.Index,
-                paramType.Span.Index + paramType.Span.Length - paramNameToken.Span.Index);
+            var paramSpan = SourceSpan.Combine(paramNameToken.Span, paramType.Span);
             parameters.Add(new FunctionParameterNode(paramSpan, paramNameToken.Text, paramType));
 
             // If there's a comma, consume it and continue parsing parameters
@@ -286,9 +311,8 @@ public class Parser
 
         // Parse return type (optional for now, but expected in new syntax)
         TypeNode? returnType = null;
-        if (_currentToken.Kind == TokenKind.Identifier || _currentToken.Kind == TokenKind.Ampersand ||
-            _currentToken.Kind == TokenKind.Dollar || _currentToken.Kind == TokenKind.OpenBracket ||
-            _currentToken.Kind == TokenKind.OpenParenthesis)
+        if (_currentToken.Kind is TokenKind.Identifier or TokenKind.Ampersand or TokenKind.Dollar
+            or TokenKind.OpenBracket or TokenKind.OpenParenthesis)
             returnType = ParseType();
 
         var statements = new List<StatementNode>();
@@ -296,9 +320,7 @@ public class Parser
         if (modifiers.HasFlag(FunctionModifiers.Foreign))
         {
             // Foreign functions have no body
-            var start = fnKeyword.Span;
-            var span = new SourceSpan(start.FileId, start.Index,
-                _currentToken.Span.Index - start.Index);
+            var span = SourceSpan.Combine(fnKeyword.Span, _currentToken.Span);
             return new FunctionDeclarationNode(span, identifier.Text, parameters, returnType, statements,
                 modifiers | FunctionModifiers.Foreign);
         }
@@ -329,13 +351,15 @@ public class Parser
 
             Eat(TokenKind.CloseBrace);
 
-            var start = fnKeyword.Span;
-            var span = new SourceSpan(start.FileId, start.Index,
-                _currentToken.Span.Index + _currentToken.Span.Length - start.Index);
+            var span = SourceSpan.Combine(fnKeyword.Span, _currentToken.Span);
             return new FunctionDeclarationNode(span, identifier.Text, parameters, returnType, statements, modifiers);
         }
     }
 
+    /// <summary>
+    /// Parses a single statement (variable declaration, return, assignment, etc.).
+    /// </summary>
+    /// <returns>A <see cref="StatementNode"/> representing the parsed statement.</returns>
     private StatementNode ParseStatement()
     {
         switch (_currentToken.Kind)
@@ -347,8 +371,7 @@ public class Parser
             {
                 var returnKeyword = Eat(TokenKind.Return);
                 var expression = ParseExpression();
-                var span = new SourceSpan(returnKeyword.Span.FileId, returnKeyword.Span.Index,
-                    _currentToken.Span.Index - returnKeyword.Span.Index);
+                var span = SourceSpan.Combine(returnKeyword.Span, expression.Span);
                 return new ReturnStatementNode(span, expression);
             }
 
@@ -368,10 +391,7 @@ public class Parser
             {
                 var deferKeyword = Eat(TokenKind.Defer);
                 var expression = ParseExpression();
-                var span = deferKeyword.Span with
-                {
-                    Length = expression.Span.Index + expression.Span.Length - deferKeyword.Span.Index
-                };
+                var span = SourceSpan.Combine(deferKeyword.Span, expression.Span);
                 return new DeferStatementNode(span, expression);
             }
 
@@ -399,6 +419,10 @@ public class Parser
         }
     }
 
+    /// <summary>
+    /// Parses a variable declaration statement with optional type annotation and initializer.
+    /// </summary>
+    /// <returns>A <see cref="VariableDeclarationNode"/> representing the variable declaration.</returns>
     private VariableDeclarationNode ParseVariableDeclaration()
     {
         var letKeyword = Eat(TokenKind.Let);
@@ -418,16 +442,24 @@ public class Parser
             initializer = ParseExpression();
         }
 
-        var span = new SourceSpan(letKeyword.Span.FileId, letKeyword.Span.Index,
-            _currentToken.Span.Index - letKeyword.Span.Index);
+        var span = SourceSpan.Combine(letKeyword.Span, _currentToken.Span);
         return new VariableDeclarationNode(span, identifier.Text, type, initializer);
     }
 
+    /// <summary>
+    /// Parses an expression starting from the lowest precedence level.
+    /// </summary>
+    /// <returns>An <see cref="ExpressionNode"/> representing the parsed expression.</returns>
     private ExpressionNode ParseExpression()
     {
         return ParseBinaryExpression(0);
     }
 
+    /// <summary>
+    /// Parses binary expressions using precedence climbing algorithm.
+    /// </summary>
+    /// <param name="parentPrecedence">The precedence level of the parent expression.</param>
+    /// <returns>An <see cref="ExpressionNode"/> representing the binary expression tree.</returns>
     private ExpressionNode ParseBinaryExpression(int parentPrecedence)
     {
         var left = ParsePrimaryExpression();
@@ -452,8 +484,7 @@ public class Parser
             {
                 _currentToken = _lexer.NextToken();
                 var value = ParseExpression(); // Right-associative, so parse full expression
-                var assignSpan = new SourceSpan(left.Span.FileId, left.Span.Index,
-                    value.Span.Index + value.Span.Length - left.Span.Index);
+                var assignSpan = SourceSpan.Combine(left.Span, value.Span);
                 return new AssignmentExpressionNode(assignSpan, left, value);
             }
 
@@ -468,8 +499,7 @@ public class Parser
             {
                 _currentToken = _lexer.NextToken();
                 var rangeEnd = ParseBinaryExpression(precedence);
-                var rangeSpan = new SourceSpan(left.Span.FileId, left.Span.Index,
-                    rangeEnd.Span.Index + rangeEnd.Span.Length - left.Span.Index);
+                var rangeSpan = SourceSpan.Combine(left.Span, rangeEnd.Span);
                 left = new RangeExpressionNode(rangeSpan, left, rangeEnd);
                 continue;
             }
@@ -491,14 +521,18 @@ public class Parser
 
             var right = ParseBinaryExpression(precedence);
 
-            var span = new SourceSpan(left.Span.FileId, left.Span.Index,
-                right.Span.Index + right.Span.Length - left.Span.Index);
+            var span = SourceSpan.Combine(left.Span, right.Span);
             left = new BinaryExpressionNode(span, left, operatorKind, right);
         }
 
         return left;
     }
 
+    /// <summary>
+    /// Parses postfix operators such as field access, array indexing, function calls, and dereferencing.
+    /// </summary>
+    /// <param name="expr">The left-hand side expression to apply postfix operators to.</param>
+    /// <returns>An <see cref="ExpressionNode"/> with postfix operators applied.</returns>
     private ExpressionNode ParsePostfixOperators(ExpressionNode expr)
     {
         while (true)
@@ -511,8 +545,7 @@ public class Parser
                 {
                     // Dereference: ptr.*
                     var starToken = Eat(TokenKind.Star);
-                    var span = new SourceSpan(expr.Span.FileId, expr.Span.Index,
-                        starToken.Span.Index + starToken.Span.Length - expr.Span.Index);
+                    var span = SourceSpan.Combine(expr.Span, starToken.Span);
                     expr = new DereferenceExpressionNode(span, expr);
                     continue;
                 }
@@ -541,14 +574,12 @@ public class Parser
                         }
 
                         var closeParenToken = Eat(TokenKind.CloseParenthesis);
-                        var callSpan = new SourceSpan(expr.Span.FileId, expr.Span.Index,
-                            closeParenToken.Span.Index + closeParenToken.Span.Length - expr.Span.Index);
+                        var callSpan = SourceSpan.Combine(expr.Span, closeParenToken.Span);
 
                         // Create a field access node for the method, wrapped in arguments
                         // This will be interpreted as either enum construction or UFCS method call
                         var fieldAccess = new MemberAccessExpressionNode(
-                            new SourceSpan(expr.Span.FileId, expr.Span.Index,
-                                fieldToken.Span.Index + fieldToken.Span.Length - expr.Span.Index),
+                            SourceSpan.Combine(expr.Span, fieldToken.Span),
                             expr, fieldToken.Text);
 
                         // Store as a special marker - we'll create a CallExpressionNode with the field access
@@ -561,8 +592,7 @@ public class Parser
                     }
 
                     // Regular field access
-                    var span = new SourceSpan(expr.Span.FileId, expr.Span.Index,
-                        fieldToken.Span.Index + fieldToken.Span.Length - expr.Span.Index);
+                    var span = SourceSpan.Combine(expr.Span, fieldToken.Span);
                     expr = new MemberAccessExpressionNode(span, expr, fieldToken.Text);
                     continue;
                 }
@@ -581,8 +611,7 @@ public class Parser
                 var openBracket = Eat(TokenKind.OpenBracket);
                 var index = ParseExpression();
                 var closeBracket = Eat(TokenKind.CloseBracket);
-                var span = new SourceSpan(expr.Span.FileId, expr.Span.Index,
-                    closeBracket.Span.Index + closeBracket.Span.Length - expr.Span.Index);
+                var span = SourceSpan.Combine(expr.Span, closeBracket.Span);
                 expr = new IndexExpressionNode(span, expr, index);
                 continue;
             }
@@ -593,20 +622,28 @@ public class Parser
         return expr;
     }
 
+    /// <summary>
+    /// Parses a chain of cast expressions (e.g., expr as Type1 as Type2).
+    /// </summary>
+    /// <param name="expr">The expression to be cast.</param>
+    /// <returns>An <see cref="ExpressionNode"/> with cast operations applied.</returns>
     private ExpressionNode ParseCastChain(ExpressionNode expr)
     {
         while (_currentToken.Kind == TokenKind.As)
         {
             var asToken = Eat(TokenKind.As);
             var targetType = ParseType();
-            var span = new SourceSpan(expr.Span.FileId, expr.Span.Index,
-                targetType.Span.Index + targetType.Span.Length - expr.Span.Index);
+            var span = SourceSpan.Combine(expr.Span, targetType.Span);
             expr = new CastExpressionNode(span, expr, targetType);
         }
 
         return expr;
     }
 
+    /// <summary>
+    /// Parses primary expressions (literals, identifiers, parenthesized expressions, unary operators, etc.).
+    /// </summary>
+    /// <returns>An <see cref="ExpressionNode"/> representing the primary expression.</returns>
     private ExpressionNode ParsePrimaryExpression()
     {
         switch (_currentToken.Kind)
@@ -617,8 +654,7 @@ public class Parser
                 var ampToken = Eat(TokenKind.Ampersand);
                 var targetPrimary = ParsePrimaryExpression();
                 var targetWithPostfix = ParsePostfixOperators(targetPrimary);
-                var span = new SourceSpan(ampToken.Span.FileId, ampToken.Span.Index,
-                    targetWithPostfix.Span.Index + targetWithPostfix.Span.Length - ampToken.Span.Index);
+                var span = SourceSpan.Combine(ampToken.Span, targetWithPostfix.Span);
                 return new AddressOfExpressionNode(span, targetWithPostfix);
             }
 
@@ -700,8 +736,7 @@ public class Parser
                     }
 
                     var closeParenToken = Eat(TokenKind.CloseParenthesis);
-                    var callSpan = new SourceSpan(identifierToken.Span.FileId, identifierToken.Span.Index,
-                        closeParenToken.Span.Index + closeParenToken.Span.Length - identifierToken.Span.Index);
+                    var callSpan = SourceSpan.Combine(identifierToken.Span, closeParenToken.Span);
                     return new CallExpressionNode(callSpan, identifierToken.Text, arguments);
                 }
 
@@ -736,6 +771,12 @@ public class Parser
         }
     }
 
+    /// <summary>
+    /// Gets the precedence level for a binary operator token.
+    /// Higher values indicate higher precedence (tighter binding).
+    /// </summary>
+    /// <param name="kind">The token kind representing the binary operator.</param>
+    /// <returns>The precedence level (0-5), or 0 if not a binary operator.</returns>
     private int GetBinaryOperatorPrecedence(TokenKind kind)
     {
         return kind switch
@@ -750,6 +791,11 @@ public class Parser
         };
     }
 
+    /// <summary>
+    /// Checks if an expression is a valid l-value (can appear on left side of assignment).
+    /// </summary>
+    /// <param name="expr">The expression to check.</param>
+    /// <returns>True if the expression is a valid l-value, false otherwise.</returns>
     private bool IsValidLValue(ExpressionNode expr)
     {
         return expr is IdentifierExpressionNode or MemberAccessExpressionNode;
@@ -765,6 +811,12 @@ public class Parser
         public Diagnostic Diagnostic { get; }
     }
 
+    /// <summary>
+    /// Converts a token kind to its corresponding binary operator kind.
+    /// </summary>
+    /// <param name="kind">The token kind representing the operator.</param>
+    /// <returns>The corresponding <see cref="BinaryOperatorKind"/>.</returns>
+    /// <exception cref="ArgumentOutOfRangeException">Thrown if the token is not a valid binary operator.</exception>
     private BinaryOperatorKind GetBinaryOperatorKind(TokenKind kind)
     {
         return kind switch
@@ -788,6 +840,10 @@ public class Parser
         };
     }
 
+    /// <summary>
+    /// Parses an if expression with condition, then-branch, and optional else-branch.
+    /// </summary>
+    /// <returns>An <see cref="IfExpressionNode"/> representing the if expression.</returns>
     private IfExpressionNode ParseIfExpression()
     {
         var ifKeyword = Eat(TokenKind.If);
@@ -805,11 +861,15 @@ public class Parser
         }
 
         var endPos = elseBranch?.Span ?? thenBranch.Span;
-        var span = new SourceSpan(ifKeyword.Span.FileId, ifKeyword.Span.Index,
-            endPos.Index + endPos.Length - ifKeyword.Span.Index);
+        var span = SourceSpan.Combine(ifKeyword.Span, endPos);
         return new IfExpressionNode(span, condition, thenBranch, elseBranch);
     }
 
+    /// <summary>
+    /// Parses a struct construction expression with field initializers.
+    /// </summary>
+    /// <param name="typeName">The type of the struct being constructed.</param>
+    /// <returns>A <see cref="StructConstructionExpressionNode"/> representing the struct construction.</returns>
     private StructConstructionExpressionNode ParseStructConstruction(TypeNode typeName)
     {
         var openBrace = Eat(TokenKind.OpenBrace);
@@ -839,11 +899,15 @@ public class Parser
         }
 
         var closeBrace = Eat(TokenKind.CloseBrace);
-        var span = new SourceSpan(typeName.Span.FileId, typeName.Span.Index,
-            closeBrace.Span.Index + closeBrace.Span.Length - typeName.Span.Index);
+        var span = SourceSpan.Combine(typeName.Span, closeBrace.Span);
         return new StructConstructionExpressionNode(span, typeName, fields);
     }
 
+    /// <summary>
+    /// Parses an anonymous struct construction expression (e.g., .{ field1 = value1, field2 = value2 }).
+    /// </summary>
+    /// <param name="dotToken">The dot token that starts the anonymous struct literal.</param>
+    /// <returns>An <see cref="AnonymousStructExpressionNode"/> representing the anonymous struct.</returns>
     private AnonymousStructExpressionNode ParseAnonymousStructConstruction(Token dotToken)
     {
         var openBrace = Eat(TokenKind.OpenBrace);
@@ -871,11 +935,14 @@ public class Parser
         }
 
         var closeBrace = Eat(TokenKind.CloseBrace);
-        var span = new SourceSpan(dotToken.Span.FileId, dotToken.Span.Index,
-            closeBrace.Span.Index + closeBrace.Span.Length - dotToken.Span.Index);
+        var span = SourceSpan.Combine(dotToken.Span, closeBrace.Span);
         return new AnonymousStructExpressionNode(span, fields);
     }
 
+    /// <summary>
+    /// Parses a block expression containing statements and an optional trailing expression.
+    /// </summary>
+    /// <returns>A <see cref="BlockExpressionNode"/> representing the block.</returns>
     private BlockExpressionNode ParseBlockExpression()
     {
         var openBrace = Eat(TokenKind.OpenBrace);
@@ -913,11 +980,14 @@ public class Parser
         }
 
         var closeBrace = Eat(TokenKind.CloseBrace);
-        var span = new SourceSpan(openBrace.Span.FileId, openBrace.Span.Index,
-            closeBrace.Span.Index + closeBrace.Span.Length - openBrace.Span.Index);
+        var span = SourceSpan.Combine(openBrace.Span, closeBrace.Span);
         return new BlockExpressionNode(span, statements, trailingExpression);
     }
 
+    /// <summary>
+    /// Parses a for loop expression with an iterator variable and iterable expression.
+    /// </summary>
+    /// <returns>A <see cref="ForLoopNode"/> representing the for loop.</returns>
     private ForLoopNode ParseForLoop()
     {
         var forKeyword = Eat(TokenKind.For);
@@ -930,8 +1000,7 @@ public class Parser
         var body = ParseExpression();
 
         // Span only includes "for (v in c)" part, not the body
-        var span = new SourceSpan(forKeyword.Span.FileId, forKeyword.Span.Index,
-            closeParen.Span.Index + closeParen.Span.Length - forKeyword.Span.Index);
+        var span = SourceSpan.Combine(forKeyword.Span, closeParen.Span);
         return new ForLoopNode(span, iterator.Text, iterable, body);
     }
 
@@ -948,7 +1017,7 @@ public class Parser
     /// </summary>
     private TypeNode ParseType()
     {
-        var startPos = _currentToken.Span.Index;
+        var startSpan = _currentToken.Span;
 
         // Parse prefix operators (reference: &)
         TypeNode type;
@@ -956,7 +1025,7 @@ public class Parser
         {
             var ampToken = Eat(TokenKind.Ampersand);
             var innerType = ParseType(); // Recursively parse for nested references
-            var span = new SourceSpan(ampToken.Span.FileId, startPos, _currentToken.Span.Index - startPos);
+            var span = SourceSpan.Combine(ampToken.Span, innerType.Span);
             type = new ReferenceTypeNode(span, innerType);
         }
         else
@@ -970,8 +1039,7 @@ public class Parser
             if (_currentToken.Kind == TokenKind.Question)
             {
                 var questionToken = Eat(TokenKind.Question);
-                var span = new SourceSpan(type.Span.FileId, startPos,
-                    questionToken.Span.Index + questionToken.Span.Length - startPos);
+                var span = SourceSpan.Combine(startSpan, questionToken.Span);
                 type = new NullableTypeNode(span, type);
             }
             else if (_currentToken.Kind == TokenKind.OpenBracket && PeekNextToken().Kind == TokenKind.CloseBracket)
@@ -979,8 +1047,7 @@ public class Parser
                 // T[] - slice type (only if next token is immediately ']')
                 var openBracket = Eat(TokenKind.OpenBracket);
                 var closeBracket = Eat(TokenKind.CloseBracket);
-                var span = new SourceSpan(type.Span.FileId, startPos,
-                    closeBracket.Span.Index + closeBracket.Span.Length - startPos);
+                var span = SourceSpan.Combine(startSpan, closeBracket.Span);
                 type = new SliceTypeNode(span, type);
             }
             else
@@ -1016,8 +1083,7 @@ public class Parser
                 length = 0;
             }
 
-            var span = new SourceSpan(openBracket.Span.FileId, openBracket.Span.Index,
-                closeBracket.Span.Index + closeBracket.Span.Length - openBracket.Span.Index);
+            var span = SourceSpan.Combine(openBracket.Span, closeBracket.Span);
             return new ArrayTypeNode(span, elementType, length);
         }
 
@@ -1026,8 +1092,7 @@ public class Parser
         {
             var dollar = Eat(TokenKind.Dollar);
             var ident = Eat(TokenKind.Identifier);
-            var span = new SourceSpan(dollar.Span.FileId, dollar.Span.Index,
-                ident.Span.Index + ident.Span.Length - dollar.Span.Index);
+            var span = SourceSpan.Combine(dollar.Span, ident.Span);
             return new GenericParameterTypeNode(span, ident.Text);
         }
 
@@ -1049,20 +1114,27 @@ public class Parser
             }
 
             var closeParen = Eat(TokenKind.CloseParenthesis);
-            var span = new SourceSpan(nameToken.Span.FileId, nameToken.Span.Index,
-                closeParen.Span.Index + closeParen.Span.Length - nameToken.Span.Index);
+            var span = SourceSpan.Combine(nameToken.Span, closeParen.Span);
             return new GenericTypeNode(span, nameToken.Text, typeArgs);
         }
 
         return new NamedTypeNode(nameToken.Span, nameToken.Text);
     }
 
+    /// <summary>
+    /// Peeks at the next token without consuming it.
+    /// </summary>
+    /// <returns>The next token that would be returned by advancing the parser.</returns>
     private Token PeekNextToken()
     {
         // Save current lexer state and get next token
         return _lexer.PeekNextToken();
     }
 
+    /// <summary>
+    /// Parses an array literal expression (e.g., [1, 2, 3] or []).
+    /// </summary>
+    /// <returns>An <see cref="ExpressionNode"/> representing the array literal.</returns>
     private ExpressionNode ParseArrayLiteral()
     {
         var openBracket = Eat(TokenKind.OpenBracket);
@@ -1071,8 +1143,7 @@ public class Parser
         if (_currentToken.Kind == TokenKind.CloseBracket)
         {
             var closeBracket = Eat(TokenKind.CloseBracket);
-            var span = new SourceSpan(openBracket.Span.FileId, openBracket.Span.Index,
-                closeBracket.Span.Index + closeBracket.Span.Length - openBracket.Span.Index);
+            var span = SourceSpan.Combine(openBracket.Span, closeBracket.Span);
             return new ArrayLiteralExpressionNode(span, new List<ExpressionNode>());
         }
 
@@ -1096,8 +1167,7 @@ public class Parser
                 count = 0;
             }
 
-            var span = new SourceSpan(openBracket.Span.FileId, openBracket.Span.Index,
-                closeBracket.Span.Index + closeBracket.Span.Length - openBracket.Span.Index);
+            var span = SourceSpan.Combine(openBracket.Span, closeBracket.Span);
             return new ArrayLiteralExpressionNode(span, firstElement, count);
         }
 
@@ -1116,11 +1186,14 @@ public class Parser
         }
 
         var closeBracketToken = Eat(TokenKind.CloseBracket);
-        var finalSpan = new SourceSpan(openBracket.Span.FileId, openBracket.Span.Index,
-            closeBracketToken.Span.Index + closeBracketToken.Span.Length - openBracket.Span.Index);
+        var finalSpan = SourceSpan.Combine(openBracket.Span, closeBracketToken.Span);
         return new ArrayLiteralExpressionNode(finalSpan, elements);
     }
 
+    /// <summary>
+    /// Synchronizes the parser to a top-level construct after encountering an error.
+    /// Skips tokens until a plausible recovery point (pub, struct, import, etc.) is found.
+    /// </summary>
     private void SynchronizeTopLevel()
     {
         // Skip tokens until we hit a plausible top-level construct
@@ -1134,6 +1207,10 @@ public class Parser
         }
     }
 
+    /// <summary>
+    /// Synchronizes the parser to a statement boundary after encountering an error.
+    /// Skips tokens until a likely recovery point (let, return, if, etc.) is found.
+    /// </summary>
     private void SynchronizeStatement()
     {
         // Skip tokens until we reach a likely statement boundary
@@ -1152,6 +1229,10 @@ public class Parser
         }
     }
 
+    /// <summary>
+    /// Synchronizes the parser to an expression boundary after encountering an error.
+    /// Skips tokens until a delimiter (parenthesis, bracket, comma, etc.) is found.
+    /// </summary>
     private void SynchronizeExpression()
     {
         // Skip tokens until we hit a delimiter that likely ends an expression
@@ -1165,6 +1246,11 @@ public class Parser
         }
     }
 
+    /// <summary>
+    /// Parses a match expression with pattern matching arms.
+    /// </summary>
+    /// <param name="scrutinee">The expression being matched against.</param>
+    /// <returns>A <see cref="MatchExpressionNode"/> representing the match expression.</returns>
     private MatchExpressionNode ParseMatchExpression(ExpressionNode scrutinee)
     {
         var matchToken = Eat(TokenKind.Match);
@@ -1185,7 +1271,7 @@ public class Parser
             // Parse result expression
             var resultExpr = ParseExpression();
 
-            var armSpan = armStart with { Length = resultExpr.Span.Index + resultExpr.Span.Length - armStart.Index };
+            var armSpan = SourceSpan.Combine(armStart, resultExpr.Span);
             arms.Add(new MatchArmNode(armSpan, pattern, resultExpr));
 
             // Arms can be separated by commas (optional)
@@ -1195,13 +1281,15 @@ public class Parser
 
         var closeBrace = Eat(TokenKind.CloseBrace);
 
-        var span = scrutinee.Span with
-        {
-            Length = closeBrace.Span.Index + closeBrace.Span.Length - scrutinee.Span.Index
-        };
+        var span = SourceSpan.Combine(scrutinee.Span, closeBrace.Span);
         return new MatchExpressionNode(span, scrutinee, arms);
     }
 
+    /// <summary>
+    /// Parses a pattern for use in match expressions (literals, wildcards, enum variants, destructuring).
+    /// </summary>
+    /// <param name="isSubPattern">True if parsing a sub-pattern within a larger pattern.</param>
+    /// <returns>A <see cref="PatternNode"/> representing the parsed pattern.</returns>
     private PatternNode ParsePattern(bool isSubPattern = false)
     {
         var start = _currentToken.Span;
@@ -1233,6 +1321,7 @@ public class Parser
 
                 // Check for payload: Variant(pattern, pattern)
                 var subPatterns = new List<PatternNode>();
+                SourceSpan endSpan = variantToken.Span;
                 if (_currentToken.Kind == TokenKind.OpenParenthesis)
                 {
                     Eat(TokenKind.OpenParenthesis);
@@ -1248,11 +1337,11 @@ public class Parser
                             break;
                     }
 
-                    Eat(TokenKind.CloseParenthesis);
+                    var closeParen = Eat(TokenKind.CloseParenthesis);
+                    endSpan = closeParen.Span;
                 }
 
-                var endSpan = _currentToken.Span;
-                var span = new SourceSpan(start.FileId, start.Index, endSpan.Index - start.Index);
+                var span = SourceSpan.Combine(start, endSpan);
                 return new EnumVariantPatternNode(span, firstIdent.Text, variantToken.Text, subPatterns);
             }
 
@@ -1274,8 +1363,7 @@ public class Parser
                 }
 
                 var closeParen = Eat(TokenKind.CloseParenthesis);
-                var span = new SourceSpan(start.FileId, start.Index,
-                    closeParen.Span.Index + closeParen.Span.Length - start.Index);
+                var span = SourceSpan.Combine(start, closeParen.Span);
                 return new EnumVariantPatternNode(span, null, firstIdent.Text, subPatterns);
             }
 
@@ -1301,6 +1389,12 @@ public class Parser
         return new WildcardPatternNode(_currentToken.Span);
     }
 
+    /// <summary>
+    /// Consumes the current token if it matches the expected kind, otherwise throws a parser exception.
+    /// </summary>
+    /// <param name="kind">The expected token kind.</param>
+    /// <returns>The consumed token.</returns>
+    /// <exception cref="ParserException">Thrown if the current token does not match the expected kind.</exception>
     private Token Eat(TokenKind kind)
     {
         var token = _currentToken;

@@ -53,13 +53,25 @@ public abstract class TypeBase
 /// </summary>
 public class TypeVar : TypeBase
 {
+    /// <summary>
+    /// Initializes a new instance of the <see cref="TypeVar"/> class.
+    /// </summary>
+    /// <param name="id">The identifier for this type variable.</param>
+    /// <param name="declarationSpan">Optional source span where this type variable was declared.</param>
     public TypeVar(string id, SourceSpan? declarationSpan = null)
     {
         Id = id;
         DeclarationSpan = declarationSpan;
     }
 
+    /// <summary>
+    /// Gets the identifier of this type variable.
+    /// </summary>
     public string Id { get; }
+
+    /// <summary>
+    /// Gets the source location where this type variable was declared, if available.
+    /// </summary>
     public SourceSpan? DeclarationSpan { get; }
 
     /// <summary>
@@ -118,11 +130,18 @@ public class TypeVar : TypeBase
 /// </summary>
 public class GenericParameterType : TypeBase
 {
+    /// <summary>
+    /// Initializes a new instance of the <see cref="GenericParameterType"/> class.
+    /// </summary>
+    /// <param name="name">The name of the generic parameter (e.g., "T").</param>
     public GenericParameterType(string name)
     {
         ParamName = name;
     }
 
+    /// <summary>
+    /// Gets the name of this generic parameter.
+    /// </summary>
     public string ParamName { get; }
 
     public override string Name => ParamName;
@@ -149,6 +168,12 @@ public class GenericParameterType : TypeBase
 /// </summary>
 public class PrimitiveType : TypeBase
 {
+    /// <summary>
+    /// Initializes a new instance of the <see cref="PrimitiveType"/> class with explicit size and alignment.
+    /// </summary>
+    /// <param name="name">The name of the primitive type (e.g., "i32", "bool").</param>
+    /// <param name="sizeInBytes">The size of the type in bytes.</param>
+    /// <param name="alignmentInBytes">The alignment requirement in bytes.</param>
     public PrimitiveType(string name, int sizeInBytes, int alignmentInBytes)
     {
         Name = name;
@@ -156,16 +181,37 @@ public class PrimitiveType : TypeBase
         AlignmentInBytes = alignmentInBytes;
     }
 
-    // Legacy constructor for compatibility (assumes alignment = size)
+    /// <summary>
+    /// Initializes a new instance of the <see cref="PrimitiveType"/> class (legacy constructor).
+    /// Assumes alignment equals size.
+    /// </summary>
+    /// <param name="name">The name of the primitive type.</param>
+    /// <param name="sizeInBytes">The size of the type in bytes.</param>
+    /// <param name="isSigned">Whether this is a signed integer type.</param>
     public PrimitiveType(string name, int sizeInBytes, bool isSigned = true)
         : this(name, sizeInBytes, sizeInBytes)
     {
         IsSigned = isSigned;
     }
 
+    /// <summary>
+    /// Gets the name of this primitive type.
+    /// </summary>
     public override string Name { get; }
+
+    /// <summary>
+    /// Gets the size of this type in bytes.
+    /// </summary>
     public int SizeInBytes { get; }
+
+    /// <summary>
+    /// Gets the alignment requirement of this type in bytes.
+    /// </summary>
     public int AlignmentInBytes { get; }
+
+    /// <summary>
+    /// Gets or sets whether this is a signed integer type.
+    /// </summary>
     public bool IsSigned { get; init; } = true;
 
     public override int Size => SizeInBytes;
@@ -260,13 +306,25 @@ public class ComptimeFloat : TypeBase
 /// </summary>
 public class ReferenceType : TypeBase
 {
+    /// <summary>
+    /// Initializes a new instance of the <see cref="ReferenceType"/> class.
+    /// </summary>
+    /// <param name="innerType">The type being referenced.</param>
+    /// <param name="pointerWidth">The platform pointer width (32 or 64 bits).</param>
     public ReferenceType(TypeBase innerType, PointerWidth pointerWidth = PointerWidth.Bits64)
     {
         InnerType = innerType;
         PointerWidth = pointerWidth;
     }
 
+    /// <summary>
+    /// Gets the type being referenced.
+    /// </summary>
     public TypeBase InnerType { get; }
+
+    /// <summary>
+    /// Gets the platform pointer width.
+    /// </summary>
     public PointerWidth PointerWidth { get; }
 
     public override string Name => $"&{InnerType}";
@@ -293,13 +351,25 @@ public class ReferenceType : TypeBase
 /// </summary>
 public class GenericType : TypeBase
 {
+    /// <summary>
+    /// Initializes a new instance of the <see cref="GenericType"/> class.
+    /// </summary>
+    /// <param name="baseName">The base name of the generic type (e.g., "List", "Dict").</param>
+    /// <param name="typeArguments">The type arguments for this generic instantiation.</param>
     public GenericType(string baseName, IReadOnlyList<TypeBase> typeArguments)
     {
         BaseName = baseName;
         TypeArguments = typeArguments;
     }
 
+    /// <summary>
+    /// Gets the base name of this generic type.
+    /// </summary>
     public string BaseName { get; }
+
+    /// <summary>
+    /// Gets the type arguments for this generic instantiation.
+    /// </summary>
     public IReadOnlyList<TypeBase> TypeArguments { get; }
 
     public override string Name => $"{BaseName}[{string.Join(", ", TypeArguments.Select(t => t.Name))}]";
@@ -339,7 +409,12 @@ public class StructType : TypeBase
     private int? _cachedAlignment;
     private readonly Dictionary<string, int> _fieldOffsets = [];
 
-    // New constructor (takes TypeBase type arguments)
+    /// <summary>
+    /// Initializes a new instance of the <see cref="StructType"/> class.
+    /// </summary>
+    /// <param name="name">The fully qualified name of the struct.</param>
+    /// <param name="typeArguments">Optional type arguments for generic structs.</param>
+    /// <param name="fields">Optional list of field names and types.</param>
     public StructType(string name, List<TypeBase>? typeArguments = null,
         List<(string Name, TypeBase Type)>? fields = null)
     {
@@ -351,10 +426,29 @@ public class StructType : TypeBase
         ComputeLayout();
     }
 
+    /// <summary>
+    /// Gets the struct's base name (same as Name for new-style structs).
+    /// </summary>
     public string StructName { get; }
+
+    /// <summary>
+    /// Gets the fully qualified name of this struct type.
+    /// </summary>
     public override string Name { get; }
+
+    /// <summary>
+    /// Gets the type arguments for this generic struct instantiation.
+    /// </summary>
     public List<TypeBase> TypeArguments { get; }
+
+    /// <summary>
+    /// Gets the legacy type parameter names (deprecated, use TypeArguments instead).
+    /// </summary>
     public IReadOnlyList<string> TypeParameters { get; } // Legacy
+
+    /// <summary>
+    /// Gets the list of fields in this struct.
+    /// </summary>
     public List<(string Name, TypeBase Type)> Fields { get; }
 
     public override int Size
@@ -383,6 +477,9 @@ public class StructType : TypeBase
         }
     }
 
+    /// <summary>
+    /// Computes the memory layout of this struct, calculating field offsets, total size, and alignment.
+    /// </summary>
     private void ComputeLayout()
     {
         // Check if contains generic parameters
@@ -428,11 +525,22 @@ public class StructType : TypeBase
         _cachedAlignment = maxAlignment;
     }
 
+    /// <summary>
+    /// Aligns an offset up to the next multiple of the specified alignment.
+    /// </summary>
+    /// <param name="offset">The offset to align.</param>
+    /// <param name="alignment">The alignment requirement in bytes.</param>
+    /// <returns>The aligned offset.</returns>
     private static int AlignUp(int offset, int alignment)
     {
         return (offset + alignment - 1) / alignment * alignment;
     }
 
+    /// <summary>
+    /// Checks whether a type contains generic parameters or type variables.
+    /// </summary>
+    /// <param name="type">The type to check.</param>
+    /// <returns>True if the type contains generic parameters; otherwise, false.</returns>
     private static bool ContainsGeneric(TypeBase type) => type switch
     {
         GenericParameterType => true,
@@ -495,6 +603,11 @@ public class StructType : TypeBase
         return displayName;
     }
 
+    /// <summary>
+    /// Extracts the simple name from a fully qualified name (e.g., "core.string.String" becomes "String").
+    /// </summary>
+    /// <param name="fqn">The fully qualified name.</param>
+    /// <returns>The simple name without namespace qualifiers.</returns>
     private static string GetSimpleName(string fqn)
     {
         var lastDot = fqn.LastIndexOf('.');
@@ -531,6 +644,13 @@ public class StructType : TypeBase
 /// </summary>
 public static class StructTypeExtensions
 {
+    /// <summary>
+    /// Replaces the fields of a struct type and invalidates the cached layout.
+    /// Used in tests and internal type construction.
+    /// </summary>
+    /// <param name="structType">The struct type to modify.</param>
+    /// <param name="fields">The new list of fields.</param>
+    /// <returns>The modified struct type for method chaining.</returns>
     public static StructType WithFields(this StructType structType, List<(string Name, TypeBase Type)> fields)
     {
         // TODO make this part of a StructTypeBuilder
@@ -553,13 +673,25 @@ public static class StructTypeExtensions
 /// </summary>
 public class ArrayType : TypeBase
 {
+    /// <summary>
+    /// Initializes a new instance of the <see cref="ArrayType"/> class.
+    /// </summary>
+    /// <param name="elementType">The type of elements in the array.</param>
+    /// <param name="length">The fixed length of the array.</param>
     public ArrayType(TypeBase elementType, int length)
     {
         ElementType = elementType;
         Length = length;
     }
 
+    /// <summary>
+    /// Gets the type of elements in this array.
+    /// </summary>
     public TypeBase ElementType { get; }
+
+    /// <summary>
+    /// Gets the fixed length of this array.
+    /// </summary>
     public int Length { get; }
 
     public override string Name => $"[{ElementType}; {Length}]";
@@ -589,6 +721,12 @@ public class ArrayType : TypeBase
 /// </summary>
 public class EnumType : TypeBase
 {
+    /// <summary>
+    /// Initializes a new instance of the <see cref="EnumType"/> class.
+    /// </summary>
+    /// <param name="name">The fully qualified name of the enum type.</param>
+    /// <param name="typeArguments">The type arguments for generic enums.</param>
+    /// <param name="variants">The list of variants with their optional payload types.</param>
     public EnumType(string name, List<TypeBase> typeArguments,
         List<(string VariantName, TypeBase? PayloadType)> variants)
     {
@@ -597,8 +735,19 @@ public class EnumType : TypeBase
         Variants = variants;
     }
 
+    /// <summary>
+    /// Gets the fully qualified name of this enum type.
+    /// </summary>
     public override string Name { get; }
+
+    /// <summary>
+    /// Gets the type arguments for this generic enum instantiation.
+    /// </summary>
     public List<TypeBase> TypeArguments { get; }
+
+    /// <summary>
+    /// Gets the list of variants in this enum, each with an optional payload type.
+    /// </summary>
     public List<(string VariantName, TypeBase? PayloadType)> Variants { get; }
 
     /// <summary>
@@ -634,8 +783,9 @@ public class EnumType : TypeBase
     protected virtual int GetTagSize() => 4;
 
     /// <summary>
-    /// Get the largest payload size among all variants.
+    /// Gets the largest payload size among all variants.
     /// </summary>
+    /// <returns>The size in bytes of the largest variant payload.</returns>
     protected int GetLargestPayloadSize()
     {
         return Variants
@@ -684,6 +834,7 @@ public class EnumType : TypeBase
 
 /// <summary>
 /// Registry of all built-in types and well-known composite types.
+/// Provides factory methods for creating type instances and type checking utilities.
 /// </summary>
 public static class TypeRegistry
 {
@@ -694,42 +845,92 @@ public static class TypeRegistry
     private const string StringFqn = "core.string.String";
     private const string TypeFqn = "core.rtti.Type";
 
-    // Never type (the bottom type)
+    /// <summary>
+    /// The never type (bottom type) - represents computations that never return.
+    /// </summary>
     public static readonly PrimitiveType Never = new("never", 0, 0);
 
-    // Void type (for functions with no return value)
+    /// <summary>
+    /// The void type - represents absence of a value (used for functions with no return value).
+    /// </summary>
     public static readonly PrimitiveType Void = new("void", 0, 0);
 
-    // Boolean type
+    /// <summary>
+    /// The boolean type (1 byte).
+    /// </summary>
     public static readonly PrimitiveType Bool = new("bool", 1, 1);
 
-    // Signed integer types
+    /// <summary>
+    /// Signed 8-bit integer type.
+    /// </summary>
     public static readonly PrimitiveType I8 = new("i8", 1, 1);
+
+    /// <summary>
+    /// Signed 16-bit integer type.
+    /// </summary>
     public static readonly PrimitiveType I16 = new("i16", 2, 2);
+
+    /// <summary>
+    /// Signed 32-bit integer type.
+    /// </summary>
     public static readonly PrimitiveType I32 = new("i32", 4, 4);
+
+    /// <summary>
+    /// Signed 64-bit integer type.
+    /// </summary>
     public static readonly PrimitiveType I64 = new("i64", 8, 8);
 
-    // Unsigned integer types
+    /// <summary>
+    /// Unsigned 8-bit integer type.
+    /// </summary>
     public static readonly PrimitiveType U8 = new("u8", 1, 1) { IsSigned = false };
+
+    /// <summary>
+    /// Unsigned 16-bit integer type.
+    /// </summary>
     public static readonly PrimitiveType U16 = new("u16", 2, 2) { IsSigned = false };
+
+    /// <summary>
+    /// Unsigned 32-bit integer type.
+    /// </summary>
     public static readonly PrimitiveType U32 = new("u32", 4, 4) { IsSigned = false };
+
+    /// <summary>
+    /// Unsigned 64-bit integer type.
+    /// </summary>
     public static readonly PrimitiveType U64 = new("u64", 8, 8) { IsSigned = false };
 
-    // Platform-dependent integer types
+    /// <summary>
+    /// Platform-dependent signed integer type (32-bit on 32-bit platforms, 64-bit on 64-bit platforms).
+    /// </summary>
     public static readonly PrimitiveType ISize = new("isize", IntPtr.Size, IntPtr.Size);
+
+    /// <summary>
+    /// Platform-dependent unsigned integer type (32-bit on 32-bit platforms, 64-bit on 64-bit platforms).
+    /// </summary>
     public static readonly PrimitiveType USize = new("usize", IntPtr.Size, IntPtr.Size) { IsSigned = false };
 
-    // Compile-time types
+    /// <summary>
+    /// Compile-time integer type that must be resolved during type inference.
+    /// </summary>
     public static readonly ComptimeInt ComptimeInt = ComptimeInt.Instance;
+
+    /// <summary>
+    /// Compile-time float type that must be resolved during type inference.
+    /// </summary>
     public static readonly ComptimeFloat ComptimeFloat = ComptimeFloat.Instance;
 
-    // Canonical struct representation for String (binary layout: ptr + len)
+    /// <summary>
+    /// Canonical struct representation for String (binary layout: ptr + len).
+    /// </summary>
     public static readonly StructType StringStruct = new(StringFqn, [], [
         ("ptr", new ReferenceType(U8, PointerWidth.Bits64)),
         ("len", USize)
     ]);
 
-    // Type struct template for runtime type information
+    /// <summary>
+    /// Type struct template for runtime type information.
+    /// </summary>
     public static readonly StructType TypeStructTemplate = new(TypeFqn, [], [
         ("name", StringStruct),
         ("size", U8),
@@ -769,11 +970,18 @@ public static class TypeRegistry
     /// <summary>
     /// Returns true if the given type is an integer type (including comptime_int).
     /// </summary>
+    /// <param name="type">The type to check.</param>
+    /// <returns>True if the type is an integer type; otherwise, false.</returns>
     public static bool IsIntegerType(TypeBase type)
     {
         return type is ComptimeInt || (type is PrimitiveType pt && IsIntegerType(pt.Name));
     }
 
+    /// <summary>
+    /// Returns true if the given type name represents an integer type.
+    /// </summary>
+    /// <param name="typeName">The type name to check.</param>
+    /// <returns>True if the type name is an integer type; otherwise, false.</returns>
     public static bool IsIntegerType(string typeName)
     {
         return typeName is "i8" or "i16" or "i32" or "i64" or "isize" or "u8" or "u16" or "u32" or "u64" or "usize";
@@ -782,6 +990,8 @@ public static class TypeRegistry
     /// <summary>
     /// Returns true if the given type is a numeric type (int or float).
     /// </summary>
+    /// <param name="type">The type to check.</param>
+    /// <returns>True if the type is numeric; otherwise, false.</returns>
     public static bool IsNumericType(TypeBase type)
     {
         return IsIntegerType(type) || type is ComptimeFloat;
@@ -790,6 +1000,8 @@ public static class TypeRegistry
     /// <summary>
     /// Returns true if the given type is a compile-time type that needs resolution.
     /// </summary>
+    /// <param name="type">The type to check.</param>
+    /// <returns>True if the type is a compile-time type; otherwise, false.</returns>
     public static bool IsComptimeType(TypeBase type)
     {
         return type is ComptimeInt || type is ComptimeFloat;
@@ -797,7 +1009,10 @@ public static class TypeRegistry
 
     /// <summary>
     /// Creates an Option&lt;T&gt; type with fully qualified name (Algorithm W style).
+    /// Results are cached to ensure reference equality for the same inner type.
     /// </summary>
+    /// <param name="innerType">The type wrapped by the Option.</param>
+    /// <returns>A StructType representing Option&lt;T&gt;.</returns>
     public static StructType MakeOption(TypeBase innerType)
     {
         var key = innerType;
@@ -818,7 +1033,10 @@ public static class TypeRegistry
 
     /// <summary>
     /// Creates a Slice&lt;T&gt; type with fully qualified name (Algorithm W style).
+    /// Results are cached to ensure reference equality for the same element type.
     /// </summary>
+    /// <param name="elementType">The type of elements in the slice.</param>
+    /// <returns>A StructType representing Slice&lt;T&gt;.</returns>
     public static StructType MakeSlice(TypeBase elementType)
     {
         var key = elementType;
@@ -839,7 +1057,9 @@ public static class TypeRegistry
 
     /// <summary>
     /// Creates a String type (equivalent to Slice&lt;u8&gt;).
+    /// Returns the canonical String struct instance.
     /// </summary>
+    /// <returns>A StructType representing the String type.</returns>
     public static StructType MakeString()
     {
         return StringStruct; // Use existing canonical String struct
@@ -848,7 +1068,10 @@ public static class TypeRegistry
     /// <summary>
     /// Gets or creates a Type(T) struct instance for the given type parameter.
     /// All instances have the same layout, differing only in the type parameter.
+    /// Results are cached to ensure reference equality.
     /// </summary>
+    /// <param name="innerType">The type represented by this Type instance.</param>
+    /// <returns>A StructType representing Type&lt;T&gt;.</returns>
     public static StructType MakeType(TypeBase innerType)
     {
         if (_typeStructCache.TryGetValue(innerType, out var cached))
@@ -867,6 +1090,8 @@ public static class TypeRegistry
     /// <summary>
     /// Checks if a TypeBase is Option&lt;T&gt; (convenience overload).
     /// </summary>
+    /// <param name="type">The type to check.</param>
+    /// <returns>True if the type is Option&lt;T&gt;; otherwise, false.</returns>
     public static bool IsOption(TypeBase type)
     {
         return type is StructType st && IsOption(st);
@@ -875,6 +1100,8 @@ public static class TypeRegistry
     /// <summary>
     /// Checks if a StructType is Option&lt;T&gt; using fully qualified name.
     /// </summary>
+    /// <param name="st">The struct type to check.</param>
+    /// <returns>True if the struct is Option&lt;T&gt;; otherwise, false.</returns>
     public static bool IsOption(StructType st)
     {
         return st.StructName == OptionFqn;
@@ -883,6 +1110,8 @@ public static class TypeRegistry
     /// <summary>
     /// Checks if a TypeBase is Slice&lt;T&gt; (convenience overload).
     /// </summary>
+    /// <param name="type">The type to check.</param>
+    /// <returns>True if the type is Slice&lt;T&gt;; otherwise, false.</returns>
     public static bool IsSlice(TypeBase type)
     {
         return type is StructType st && IsSlice(st);
@@ -891,6 +1120,8 @@ public static class TypeRegistry
     /// <summary>
     /// Checks if a StructType is Slice&lt;T&gt; using fully qualified name.
     /// </summary>
+    /// <param name="st">The struct type to check.</param>
+    /// <returns>True if the struct is Slice&lt;T&gt;; otherwise, false.</returns>
     public static bool IsSlice(StructType st)
     {
         return st.StructName == SliceFqn;
@@ -899,6 +1130,8 @@ public static class TypeRegistry
     /// <summary>
     /// Checks if a TypeBase is String (convenience overload).
     /// </summary>
+    /// <param name="type">The type to check.</param>
+    /// <returns>True if the type is String; otherwise, false.</returns>
     public static bool IsString(TypeBase type)
     {
         return type is StructType st && IsString(st);
@@ -907,6 +1140,8 @@ public static class TypeRegistry
     /// <summary>
     /// Checks if a StructType is String using fully qualified name.
     /// </summary>
+    /// <param name="st">The struct type to check.</param>
+    /// <returns>True if the struct is String; otherwise, false.</returns>
     public static bool IsString(StructType st)
     {
         return st.StructName == StringFqn;
@@ -915,6 +1150,8 @@ public static class TypeRegistry
     /// <summary>
     /// Checks if a TypeBase is Range (convenience overload).
     /// </summary>
+    /// <param name="type">The type to check.</param>
+    /// <returns>True if the type is Range; otherwise, false.</returns>
     public static bool IsRange(TypeBase type)
     {
         return type is StructType st && IsRange(st);
@@ -923,6 +1160,8 @@ public static class TypeRegistry
     /// <summary>
     /// Checks if a StructType is Range using fully qualified name.
     /// </summary>
+    /// <param name="st">The struct type to check.</param>
+    /// <returns>True if the struct is Range; otherwise, false.</returns>
     public static bool IsRange(StructType st)
     {
         return st.StructName == RangeFqn;
@@ -931,6 +1170,8 @@ public static class TypeRegistry
     /// <summary>
     /// Checks if a TypeBase is Type (convenience overload).
     /// </summary>
+    /// <param name="type">The type to check.</param>
+    /// <returns>True if the type is Type; otherwise, false.</returns>
     public static bool IsType(TypeBase type)
     {
         return type is StructType st && IsType(st);
@@ -939,6 +1180,8 @@ public static class TypeRegistry
     /// <summary>
     /// Checks if a StructType is Type using fully qualified name.
     /// </summary>
+    /// <param name="st">The struct type to check.</param>
+    /// <returns>True if the struct is Type; otherwise, false.</returns>
     public static bool IsType(StructType st)
     {
         return st.StructName == TypeFqn;

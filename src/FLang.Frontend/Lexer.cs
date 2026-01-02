@@ -3,6 +3,9 @@ using FLang.Core;
 
 namespace FLang.Frontend;
 
+/// <summary>
+/// Lexical analyzer that tokenizes FLang source code into a stream of tokens.
+/// </summary>
 public class Lexer
 {
     private readonly int _fileId;
@@ -10,12 +13,22 @@ public class Lexer
     private int _position;
     private int _start;
 
+    /// <summary>
+    /// Initializes a new instance of the <see cref="Lexer"/> class.
+    /// </summary>
+    /// <param name="source">The source code to tokenize.</param>
+    /// <param name="fileId">The unique identifier for the source file.</param>
     public Lexer(Source source, int fileId)
     {
         _source = source;
         _fileId = fileId;
     }
 
+    /// <summary>
+    /// Advances the lexer to the next token in the source stream.
+    /// Skips whitespace and single-line comments automatically.
+    /// </summary>
+    /// <returns>The next token from the source code, or an EndOfFile token if the end is reached.</returns>
     public Token NextToken()
     {
         var text = _source.Text.AsSpan();
@@ -196,11 +209,20 @@ public class Lexer
             };
     }
 
+    /// <summary>
+    /// Creates a source span representing the current token's location in the source file.
+    /// </summary>
+    /// <returns>A <see cref="SourceSpan"/> covering the range from _start to _position.</returns>
     private SourceSpan CreateSpan()
     {
         return new SourceSpan(_fileId, _start, _position - _start);
     }
 
+    /// <summary>
+    /// Peeks at the next token without consuming it from the stream.
+    /// The lexer's internal state is preserved after this operation.
+    /// </summary>
+    /// <returns>The next token that would be returned by <see cref="NextToken"/>.</returns>
     public Token PeekNextToken()
     {
         // Save current state
@@ -217,6 +239,12 @@ public class Lexer
         return token;
     }
 
+    /// <summary>
+    /// Creates a token of the specified kind using the current lexer position.
+    /// The token's text is extracted from the source between _start and _position.
+    /// </summary>
+    /// <param name="kind">The kind of token to create.</param>
+    /// <returns>A new <see cref="Token"/> with the specified kind and extracted text.</returns>
     private Token CreateToken(TokenKind kind)
     {
         var text = _position > _start
@@ -225,6 +253,13 @@ public class Lexer
         return new Token(kind, CreateSpan(), text);
     }
 
+    /// <summary>
+    /// Creates a token with a custom value, typically used for string literals where
+    /// the value differs from the raw source text (e.g., after escape sequence processing).
+    /// </summary>
+    /// <param name="kind">The kind of token to create.</param>
+    /// <param name="value">The processed value to store in the token.</param>
+    /// <returns>A new <see cref="Token"/> with the specified kind and custom value.</returns>
     private Token CreateTokenWithValue(TokenKind kind, string value)
     {
         return new Token(kind, CreateSpan(), value);

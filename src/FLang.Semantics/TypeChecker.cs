@@ -1060,7 +1060,7 @@ public class TypeChecker
                     // Create a hint diagnostic pointing to the return type if we found it
                     if (nextReturnTypeSpan.HasValue)
                     {
-                        _diagnostics.Add(Diagnostic.CreateHint(
+                        _diagnostics.Add(Diagnostic.Hint(
                             $"change return type of `next` to `{actualReturnType}?` or `Option({actualReturnType})`",
                             nextReturnTypeSpan.Value, $"change to `{actualReturnType}?`"));
                     }
@@ -1109,7 +1109,7 @@ public class TypeChecker
                 // Create a hint diagnostic pointing to the return type if we found it
                 if (iterReturnTypeSpan.HasValue)
                 {
-                    _diagnostics.Add(Diagnostic.CreateHint(
+                    _diagnostics.Add(Diagnostic.Hint(
                         "change to a struct type",
                         iterReturnTypeSpan.Value));
                 }

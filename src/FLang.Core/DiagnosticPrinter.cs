@@ -2,6 +2,9 @@ using System.Text;
 
 namespace FLang.Core;
 
+/// <summary>
+/// Provides utilities for formatting and printing diagnostics with source context and color output.
+/// </summary>
 public static class DiagnosticPrinter
 {
     private const string NewLine = "\n\r";
@@ -18,8 +21,18 @@ public static class DiagnosticPrinter
     private const string BoldBlue = "\x1b[1;34m";
     private const string BoldCyan = "\x1b[1;36m";
 
+    /// <summary>
+    /// Gets or sets whether ANSI color codes should be included in diagnostic output.
+    /// Default is true.
+    /// </summary>
     public static bool EnableColors { get; set; } = true;
 
+    /// <summary>
+    /// Formats a diagnostic message with source context, line numbers, and color highlighting.
+    /// </summary>
+    /// <param name="diagnostic">The diagnostic to format.</param>
+    /// <param name="compilation">The compilation context containing source files.</param>
+    /// <returns>A formatted string with the diagnostic message, source location, and context lines.</returns>
     public static string Print(Diagnostic diagnostic, Compilation compilation)
     {
         var sb = new StringBuilder();
@@ -118,10 +131,10 @@ public static class DiagnosticPrinter
         sb.Append(Color(underlineColor, new string('^', underlineLength)));
 
         // Add hint if present
-        if (!string.IsNullOrEmpty(diagnostic.Hint))
+        if (!string.IsNullOrEmpty(diagnostic.HintMessage))
         {
             sb.Append(' ');
-            sb.Append(Color(underlineColor, diagnostic.Hint));
+            sb.Append(Color(underlineColor, diagnostic.HintMessage));
         }
 
         sb.Append(NewLine);
@@ -136,13 +149,19 @@ public static class DiagnosticPrinter
             sb.Append(nextLineText + NewLine);
         }
 
-        // Empty line at end
+        // Empty line at the end
         PrintGutter();
         sb.Append(NewLine);
 
         return sb.ToString();
     }
 
+    /// <summary>
+    /// Wraps text with ANSI color codes if colors are enabled.
+    /// </summary>
+    /// <param name="colorCode">The ANSI color code to apply.</param>
+    /// <param name="text">The text to colorize.</param>
+    /// <returns>The text wrapped in color codes if <see cref="EnableColors"/> is true; otherwise, the original text.</returns>
     private static string Color(string colorCode, string text)
     {
         if (!EnableColors)
@@ -150,6 +169,11 @@ public static class DiagnosticPrinter
         return $"{colorCode}{text}{Reset}";
     }
 
+    /// <summary>
+    /// Formats and prints a diagnostic to the standard error stream.
+    /// </summary>
+    /// <param name="diagnostic">The diagnostic to print.</param>
+    /// <param name="compilation">The compilation context containing source files.</param>
     public static void PrintToConsole(Diagnostic diagnostic, Compilation compilation)
     {
         Console.Error.Write(Print(diagnostic, compilation));
