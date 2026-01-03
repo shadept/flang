@@ -91,6 +91,52 @@ public class TypeSolver
     /// <returns>The unified type if successful, null otherwise.</returns>
     private TypeBase? UnifyInternal(TypeBase t1, TypeBase t2, SourceSpan span)
     {
+        // 2. Variables (Flexible) - Check BEFORE pruning to preserve TypeVar references
+        // Special case: when both are TypeVars, link them to create a chain
+        if (t1 is TypeVar v1 && t2 is TypeVar v2)
+        {
+            if (!Equals(v1, v2))
+                v1.Instance = v2;  // Create chain: v1 -> v2
+            return v2;
+        }
+
+        if (t1 is TypeVar v1a)
+        {
+            var pruned1 = v1a.Prune();  // Get current binding of the TypeVar
+            var pruned2 = t2.Prune();
+
+            // If the TypeVar is already bound to a concrete type (not itself, not comptime type, not another TypeVar),
+            // unify the existing binding with the new type to detect conflicts
+            if (!Equals(v1a, pruned1) && !TypeRegistry.IsComptimeType(pruned1) && pruned1 is not TypeVar)
+            {
+                return UnifyInternal(pruned1, pruned2, span);
+            }
+
+            // Otherwise, bind the TypeVar to the new type (soft binding, unbound, or TypeVar chain)
+            if (!Equals(v1a, pruned2))
+                v1a.Instance = pruned2;
+            return pruned2;
+        }
+
+        if (t2 is TypeVar v2a)
+        {
+            var pruned2 = v2a.Prune();  // Get current binding of the TypeVar
+            var pruned1 = t1.Prune();
+
+            // If the TypeVar is already bound to a concrete type (not itself, not comptime type, not another TypeVar),
+            // unify the existing binding with the new type to detect conflicts
+            if (!Equals(v2a, pruned2) && !TypeRegistry.IsComptimeType(pruned2) && pruned2 is not TypeVar)
+            {
+                return UnifyInternal(pruned1, pruned2, span);
+            }
+
+            // Otherwise, bind the TypeVar to the new type (soft binding, unbound, or TypeVar chain)
+            if (!Equals(v2a, pruned1))
+                v2a.Instance = pruned1;
+            return pruned1;
+        }
+
+        // Now prune for remaining checks
         var a = t1.Prune();
         var b = t2.Prune();
 
@@ -104,21 +150,6 @@ public class TypeSolver
 
         // 1. Identity (Primitives & Rigid Generics)
         if (a.Equals(b)) return a;
-
-        // 2. Variables (Flexible)
-        if (a is TypeVar v1)
-        {
-            if (!Equals(v1, b))
-                v1.Instance = b;
-            return b;
-        }
-
-        if (b is TypeVar v2)
-        {
-            if (!Equals(v2, a))
-                v2.Instance = a;
-            return a;
-        }
 
         // 3. Comptime Hardening (Soft Unification)
         if (a is ComptimeInt && b is PrimitiveType p1 && TypeRegistry.IsIntegerType(p1)) return p1;

@@ -2,9 +2,11 @@ using FLang.Core;
 
 namespace FLang.Frontend.Ast;
 
-public abstract class ExpressionNode : AstNode
+public abstract class ExpressionNode(SourceSpan span) : AstNode(span)
 {
-    protected ExpressionNode(SourceSpan span) : base(span)
-    {
-    }
+    /// <summary>
+    /// The semantic type of this expression, assigned during type checking.
+    /// Null before type checking completes.
+    /// </summary>
+    public TypeBase? Type { get; set; }
 }

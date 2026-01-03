@@ -13,4 +13,10 @@ public class FunctionParameterNode : AstNode
 
     public string Name { get; }
     public TypeNode Type { get; }
+
+    /// <summary>
+    /// Semantic: Resolved parameter type, set during type checking.
+    /// Null before type checking completes.
+    /// </summary>
+    public TypeBase? ResolvedType { get; set; }
 }

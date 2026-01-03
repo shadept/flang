@@ -29,4 +29,16 @@ public class FunctionDeclarationNode : AstNode
     public TypeNode? ReturnType { get; }
     public IReadOnlyList<StatementNode> Body { get; }
     public FunctionModifiers Modifiers { get; }
+
+    /// <summary>
+    /// Semantic: Resolved return type, set during type checking.
+    /// Null before type checking completes.
+    /// </summary>
+    public TypeBase? ResolvedReturnType { get; set; }
+
+    /// <summary>
+    /// Semantic: Resolved parameter types, set during type checking.
+    /// Null before type checking completes.
+    /// </summary>
+    public List<TypeBase>? ResolvedParameterTypes { get; set; }
 }

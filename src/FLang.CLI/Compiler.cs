@@ -134,7 +134,7 @@ public class Compiler
             typeSolver.CheckModuleBodies(kvp.Value, modulePath);
         }
 
-        typeSolver.EnsureAllTypesResolved();
+        typeSolver.VerifyAllTypesResolved();
         allDiagnostics.AddRange(typeSolver.Diagnostics);
 
         if (allDiagnostics.Any(d => d.Severity == DiagnosticSeverity.Error))

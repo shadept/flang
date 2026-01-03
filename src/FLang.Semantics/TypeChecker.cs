@@ -19,64 +19,41 @@ public class TypeChecker
     private readonly List<Diagnostic> _diagnostics = [];
     private readonly TypeSolver _unificationEngine;
 
-    // Overload-ready function registry
-    private readonly Dictionary<string, List<FunctionEntry>> _functions = [];
-
-    // Variable scopes
+    // Variable scopes (local to type checking phase)
     private readonly Stack<Dictionary<string, TypeBase>> _scopes = new();
 
-    // Struct type cache/registry - prevents duplicate struct instances for same fully qualified name
-    // Key: struct name (with type parameters if generic)
-    private readonly Dictionary<string, StructType> _structs = [];
-    private readonly Dictionary<string, StructType> _structSpecializations = [];
-
-    // Enum type cache/registry
-    private readonly Dictionary<string, EnumType> _enums = [];
-    private readonly Dictionary<string, EnumType> _enumSpecializations = [];
-
-    // Module-aware type resolution
-    private string? _currentModulePath = null;
-    private readonly Dictionary<string, Dictionary<string, StructType>> _structsByModule = [];
-    private readonly Dictionary<string, StructType> _structsByFqn = [];
-    private readonly Dictionary<string, Dictionary<string, EnumType>> _enumsByModule = [];
-    private readonly Dictionary<string, EnumType> _enumsByFqn = [];
-    private readonly Dictionary<string, HashSet<string>> _moduleImports = [];
-
-    // Pending struct declarations for two-pass collection
-    private readonly List<(StructDeclarationNode, string)> _pendingStructs = [];
-
-    // Pending enum declarations for two-pass collection
-    private readonly List<(EnumDeclarationNode, string)> _pendingEnums = [];
-
-    // Anonymous struct literal mapping
-    private readonly Dictionary<AnonymousStructExpressionNode, StructType> _anonymousStructTypes = [];
-
-    // AST type map
-    private readonly Dictionary<AstNode, TypeBase> _typeMap = [];
-
-    // Match expression metadata (for lowering)
-    // Tracks if scrutinee needs implicit dereference (&EnumType -> EnumType)
-    private readonly Dictionary<MatchExpressionNode, (EnumType EnumType, bool NeedsDereference)> _matchMetadata = [];
-
-    // For-loop iterator protocol metadata (populated during type checking, used by lowering)
-    private readonly Dictionary<ForLoopNode, ForLoopTypes> _forLoopTypes = [];
-
-    // Track all instantiated types for global type table generation
-    private readonly HashSet<TypeBase> _instantiatedTypes = [];
-
-    // Resolved call targets scoped per function
-    private readonly Dictionary<(FunctionDeclarationNode Function, CallExpressionNode Call), ResolvedCall>
-        _resolvedCalls = [];
-
+    // Function registry (stays in TypeChecker - contains AST nodes)
+    private readonly Dictionary<string, List<FunctionEntry>> _functions = [];
+    private readonly List<FunctionDeclarationNode> _specializations = [];
     private readonly HashSet<string> _emittedSpecs = [];
+
+    // Module-aware state (local to type checking phase)
+    private string? _currentModulePath = null;
+
+    // Generic binding state (local to type checking phase)
     private Dictionary<string, TypeBase>? _currentBindings;
 
     private readonly Stack<HashSet<string>> _genericScopes = new();
     private readonly Stack<FunctionDeclarationNode> _functionStack = new();
-    private readonly Dictionary<FunctionDeclarationNode, TypeBase> _functionReturnTypes = [];
 
     // Track binding recursion depth for indented logging
     private int _bindingDepth = 0;
+
+    // Literal TypeVar tracking for inference
+    private int _nextLiteralTypeVarId = 0;
+    private readonly List<TypeVar> _literalTypeVars = [];
+
+    /// <summary>
+    /// Creates a new TypeVar for a literal, soft-bound to the given comptime type.
+    /// Tracks the TypeVar for later verification.
+    /// </summary>
+    private TypeVar CreateLiteralTypeVar(string id, SourceSpan span, TypeBase comptimeType)
+    {
+        var tv = new TypeVar(id, span);
+        tv.Instance = comptimeType;
+        _literalTypeVars.Add(tv);
+        return tv;
+    }
 
     private static string BuildSpecKey(string name, IReadOnlyList<TypeBase> paramTypes)
 
@@ -108,23 +85,7 @@ public class TypeChecker
         return sb.ToString();
     }
 
-    private readonly struct ResolvedCall
-    {
-        public ResolvedCall(string name, IReadOnlyList<TypeBase> parameterTypes, bool isForeign)
-        {
-            Name = name;
-            ParameterTypes = parameterTypes;
-            IsForeign = isForeign;
-        }
-
-        public string Name { get; }
-        public IReadOnlyList<TypeBase> ParameterTypes { get; }
-        public bool IsForeign { get; }
-    }
-
-    // Specializations to emit
-    private readonly List<FunctionDeclarationNode> _specializations = [];
-    private readonly HashSet<string> _emittedMangled = [];
+    // ResolvedCall struct removed - call resolution info now stored on CallExpressionNode.ResolvedTarget
 
     public TypeChecker(Compilation compilation, ILogger<TypeChecker> logger)
     {
@@ -136,24 +97,9 @@ public class TypeChecker
 
     public IReadOnlyList<Diagnostic> Diagnostics => _diagnostics;
 
-    public TypeBase? GetType(AstNode node) => _typeMap.GetValueOrDefault(node);
+    // Accessor methods removed - semantic data is now directly on AST nodes
 
-    public StructType? GetAnonymousStructType(AnonymousStructExpressionNode node)
-        => _anonymousStructTypes.GetValueOrDefault(node);
-
-    public ForLoopTypes? GetForLoopTypes(ForLoopNode node)
-        => _forLoopTypes.TryGetValue(node, out var types) ? types : null;
-
-    public TypeBase? GetForLoopIteratorType(ForLoopNode node)
-        => _forLoopTypes.TryGetValue(node, out var types) ? types.IteratorType : null;
-
-    public TypeBase? GetForLoopElementType(ForLoopNode node)
-        => _forLoopTypes.TryGetValue(node, out var types) ? types.ElementType : null;
-
-    public StructType? GetForLoopNextResultOptionType(ForLoopNode node)
-        => _forLoopTypes.TryGetValue(node, out var types) ? types.NextResultOptionType : null;
-
-    public IReadOnlySet<TypeBase> InstantiatedTypes => _instantiatedTypes;
+    public IReadOnlySet<TypeBase> InstantiatedTypes => _compilation.InstantiatedTypes;
 
     public string GetStructFqn(StructType structType) => structType.StructName;
 
@@ -203,11 +149,11 @@ public class TypeChecker
     private TypeBase? ResolveFqnTypeName(string fqn)
     {
         // Try direct FQN lookup for structs
-        if (_structsByFqn.TryGetValue(fqn, out var type))
+        if (_compilation.StructsByFqn.TryGetValue(fqn, out var type))
             return type;
 
         // Try direct FQN lookup for enums
-        if (_enumsByFqn.TryGetValue(fqn, out var enumType))
+        if (_compilation.EnumsByFqn.TryGetValue(fqn, out var enumType))
             return enumType;
 
         // Parse FQN: "core.string.String" → "core.string" + "String"
@@ -220,13 +166,13 @@ public class TypeChecker
         // Allow current module to reference its own types via FQN
         if (_currentModulePath == modulePath)
         {
-            if (_structsByModule.TryGetValue(modulePath, out var moduleTypes))
+            if (_compilation.StructsByModule.TryGetValue(modulePath, out var moduleTypes))
             {
                 var result = moduleTypes.GetValueOrDefault(typeName);
                 if (result != null) return result;
             }
 
-            if (_enumsByModule.TryGetValue(modulePath, out var moduleEnums))
+            if (_compilation.EnumsByModule.TryGetValue(modulePath, out var moduleEnums))
             {
                 var result = moduleEnums.GetValueOrDefault(typeName);
                 if (result != null) return result;
@@ -235,16 +181,16 @@ public class TypeChecker
 
         // Check if module is imported
         if (_currentModulePath != null &&
-            _moduleImports.TryGetValue(_currentModulePath, out var imports) &&
+            _compilation.ModuleImports.TryGetValue(_currentModulePath, out var imports) &&
             imports.Contains(modulePath))
         {
-            if (_structsByModule.TryGetValue(modulePath, out var moduleTypes))
+            if (_compilation.StructsByModule.TryGetValue(modulePath, out var moduleTypes))
             {
                 var result = moduleTypes.GetValueOrDefault(typeName);
                 if (result != null) return result;
             }
 
-            if (_enumsByModule.TryGetValue(modulePath, out var moduleEnums))
+            if (_compilation.EnumsByModule.TryGetValue(modulePath, out var moduleEnums))
             {
                 var result = moduleEnums.GetValueOrDefault(typeName);
                 if (result != null) return result;
@@ -259,19 +205,19 @@ public class TypeChecker
         if (_currentModulePath == null)
         {
             // Fallback: try legacy lookup
-            var legacyStruct = _structs.GetValueOrDefault(typeName);
+            var legacyStruct = _compilation.Structs.GetValueOrDefault(typeName);
             if (legacyStruct != null) return legacyStruct;
-            return _enums.GetValueOrDefault(typeName);
+            return _compilation.Enums.GetValueOrDefault(typeName);
         }
 
         // 1. Check local module first (highest priority)
-        if (_structsByModule.TryGetValue(_currentModulePath, out var localTypes) &&
+        if (_compilation.StructsByModule.TryGetValue(_currentModulePath, out var localTypes) &&
             localTypes.TryGetValue(typeName, out var localType))
         {
             return localType;
         }
 
-        if (_enumsByModule.TryGetValue(_currentModulePath, out var localEnums) &&
+        if (_compilation.EnumsByModule.TryGetValue(_currentModulePath, out var localEnums) &&
             localEnums.TryGetValue(typeName, out var localEnum))
         {
             return localEnum;
@@ -280,12 +226,12 @@ public class TypeChecker
         // 2. Check imported modules
         TypeBase? foundType = null;
 
-        if (_moduleImports.TryGetValue(_currentModulePath, out var imports))
+        if (_compilation.ModuleImports.TryGetValue(_currentModulePath, out var imports))
         {
             foreach (var importedModulePath in imports)
             {
                 // Check structs
-                if (_structsByModule.TryGetValue(importedModulePath, out var importedTypes) &&
+                if (_compilation.StructsByModule.TryGetValue(importedModulePath, out var importedTypes) &&
                     importedTypes.TryGetValue(typeName, out var importedType))
                 {
                     if (foundType != null)
@@ -299,7 +245,7 @@ public class TypeChecker
                 }
 
                 // Check enums
-                if (_enumsByModule.TryGetValue(importedModulePath, out var importedEnums) &&
+                if (_compilation.EnumsByModule.TryGetValue(importedModulePath, out var importedEnums) &&
                     importedEnums.TryGetValue(typeName, out var importedEnum))
                 {
                     if (foundType != null)
@@ -320,7 +266,7 @@ public class TypeChecker
         // 3. Fallback: search all modules for unambiguous match by simple name
         // This allows finding types like Option even if core.option isn't directly imported
         StructType? globalFoundType = null;
-        foreach (var moduleTypes in _structsByModule.Values)
+        foreach (var moduleTypes in _compilation.StructsByModule.Values)
         {
             if (moduleTypes.TryGetValue(typeName, out var globalType))
             {
@@ -442,14 +388,11 @@ public class TypeChecker
     /// </summary>
     public void CollectStructNames(ModuleNode module, string modulePath)
     {
-        if (!_structsByModule.ContainsKey(modulePath))
-            _structsByModule[modulePath] = new Dictionary<string, StructType>();
+        if (!_compilation.StructsByModule.ContainsKey(modulePath))
+            _compilation.StructsByModule[modulePath] = new Dictionary<string, StructType>();
 
         foreach (var structDecl in module.Structs)
         {
-            // Store struct declaration for later field resolution
-            _pendingStructs.Add((structDecl, modulePath));
-
             // Convert string type parameters to GenericParameterType instances
             var typeArgs = new List<TypeBase>();
             foreach (var param in structDecl.TypeParameters)
@@ -462,9 +405,9 @@ public class TypeChecker
             StructType stype = new(fqn, typeArgs, []);
 
             // Register the struct name immediately (fields will be resolved later)
-            _structsByModule[modulePath][structDecl.Name] = stype;
-            _structsByFqn[fqn] = stype;
-            _structs[structDecl.Name] = stype;
+            _compilation.StructsByModule[modulePath][structDecl.Name] = stype;
+            _compilation.StructsByFqn[fqn] = stype;
+            _compilation.Structs[structDecl.Name] = stype;
         }
     }
 
@@ -507,9 +450,9 @@ public class TypeChecker
             StructType stype = new(fqn, typeArgs, fields);
 
             // Replace placeholder with complete struct type
-            _structsByModule[modulePath][structDecl.Name] = stype;
-            _structsByFqn[fqn] = stype;
-            _structs[structDecl.Name] = stype;
+            _compilation.StructsByModule[modulePath][structDecl.Name] = stype;
+            _compilation.StructsByFqn[fqn] = stype;
+            _compilation.Structs[structDecl.Name] = stype;
         }
 
         _currentModulePath = null;
@@ -521,14 +464,11 @@ public class TypeChecker
     /// </summary>
     public void CollectEnumNames(ModuleNode module, string modulePath)
     {
-        if (!_enumsByModule.ContainsKey(modulePath))
-            _enumsByModule[modulePath] = new Dictionary<string, EnumType>();
+        if (!_compilation.EnumsByModule.ContainsKey(modulePath))
+            _compilation.EnumsByModule[modulePath] = new Dictionary<string, EnumType>();
 
         foreach (var enumDecl in module.Enums)
         {
-            // Store enum declaration for later variant resolution
-            _pendingEnums.Add((enumDecl, modulePath));
-
             // Convert string type parameters to GenericParameterType instances
             var typeArgs = new List<TypeBase>();
             foreach (var param in enumDecl.TypeParameters)
@@ -541,9 +481,9 @@ public class TypeChecker
             EnumType etype = new(fqn, typeArgs, []);
 
             // Register the enum name immediately (variants will be resolved later)
-            _enumsByModule[modulePath][enumDecl.Name] = etype;
-            _enumsByFqn[fqn] = etype;
-            _enums[enumDecl.Name] = etype;
+            _compilation.EnumsByModule[modulePath][enumDecl.Name] = etype;
+            _compilation.EnumsByFqn[fqn] = etype;
+            _compilation.Enums[enumDecl.Name] = etype;
         }
     }
 
@@ -663,9 +603,9 @@ public class TypeChecker
             EnumType etype = new(fqn, typeArgs, variants);
 
             // Replace placeholder with complete enum type
-            _enumsByModule[modulePath][enumDecl.Name] = etype;
-            _enumsByFqn[fqn] = etype;
-            _enums[enumDecl.Name] = etype;
+            _compilation.EnumsByModule[modulePath][enumDecl.Name] = etype;
+            _compilation.EnumsByFqn[fqn] = etype;
+            _compilation.Enums[enumDecl.Name] = etype;
 
             // Register each variant as a symbol in the current scope
             // Each variant has type = enum type, allowing natural usage like `let c = Red`
@@ -718,20 +658,21 @@ public class TypeChecker
 
     public void RegisterImports(ModuleNode module, string modulePath)
     {
-        if (!_moduleImports.ContainsKey(modulePath))
-            _moduleImports[modulePath] = new HashSet<string>();
+        if (!_compilation.ModuleImports.ContainsKey(modulePath))
+            _compilation.ModuleImports[modulePath] = new HashSet<string>();
 
         foreach (var import in module.Imports)
         {
             // Convert ["core", "string"] → "core.string"
             var importedModulePath = string.Join(".", import.Path);
-            _moduleImports[modulePath].Add(importedModulePath);
+            _compilation.ModuleImports[modulePath].Add(importedModulePath);
         }
     }
 
     public void CheckModuleBodies(ModuleNode module, string modulePath)
     {
         _currentModulePath = modulePath;
+        _literalTypeVars.Clear();  // Clear TypeVars from previous module
 
         // Temporarily add private functions
         var added = new List<(string, FunctionEntry)>();
@@ -788,6 +729,9 @@ public class TypeChecker
             }
         }
 
+        // Verify all literal TypeVars have been resolved to concrete types
+        VerifyAllTypesResolved();
+
         _currentModulePath = null;
     }
 
@@ -798,21 +742,26 @@ public class TypeChecker
         _functionStack.Push(function);
         try
         {
+            // Resolve and store parameter types
+            var resolvedParamTypes = new List<TypeBase>();
             foreach (var p in function.Parameters)
             {
-                var t = ResolveTypeNode(p.Type);
-                if (t != null) DeclareVariable(p.Name, t, p.Span);
+                var t = ResolveTypeNode(p.Type) ?? TypeRegistry.Never;
+                p.ResolvedType = t;
+                resolvedParamTypes.Add(t);
+                if (t != TypeRegistry.Never) DeclareVariable(p.Name, t, p.Span);
             }
+            function.ResolvedParameterTypes = resolvedParamTypes;
 
+            // Resolve and store return type
             var expectedReturn = ResolveTypeNode(function.ReturnType) ?? TypeRegistry.Void;
+            function.ResolvedReturnType = expectedReturn;
+
             _logger.LogDebug(
                 "[TypeChecker] CheckFunctionBody '{FunctionName}': ReturnType node type={ReturnTypeNodeType}, expectedReturn={ExpectedReturn}",
                 function.Name,
                 function.ReturnType?.GetType().Name ?? "null",
                 expectedReturn.Name);
-
-            // Store expected return type for this function (used by CheckReturnStatement)
-            _functionReturnTypes[function] = expectedReturn;
 
             foreach (var stmt in function.Body) CheckStatement(stmt);
         }
@@ -859,7 +808,7 @@ public class TypeChecker
         if (_functionStack.Count > 0)
         {
             var currentFunction = _functionStack.Peek();
-            expectedReturnType = _functionReturnTypes.GetValueOrDefault(currentFunction);
+            expectedReturnType = currentFunction.ReturnType != null ? ResolveTypeNode(currentFunction.ReturnType) : TypeRegistry.Void;
         }
 
         var et = CheckExpression(ret.Expression, expectedReturnType);
@@ -869,15 +818,13 @@ public class TypeChecker
 
         if (expectedReturnType != null)
         {
-            // Update type map with resolved type to avoid comptime_int escape
+            // Unify with expected return type - TypeVar.Prune() handles propagation
             var unified = UnifyTypes(et, expectedReturnType, ret.Expression.Span);
-            UpdateTypeMapRecursive(ret.Expression, unified);
 
-            // Log what's in the type map after update
-            var typeInMap = _typeMap.GetValueOrDefault(ret.Expression);
+            // Log the unified type
             _logger.LogDebug(
-                "[TypeChecker] After UpdateTypeMapRecursive: unified={UnifiedType}, typeMap[expression]={TypeInMap}",
-                unified.Name, typeInMap?.Name ?? "null");
+                "[TypeChecker] After unification: unified={UnifiedType}",
+                unified.Name);
         }
     }
 
@@ -887,10 +834,10 @@ public class TypeChecker
         var it = v.Initializer != null ? CheckExpression(v.Initializer, dt) : null;
         if (it != null && dt != null)
         {
-            // Update type map with resolved type to avoid comptime_int escape
+            // Unify initializer type with declared type - TypeVar.Prune() handles propagation
             var unified = UnifyTypes(it, dt, v.Initializer!.Span);
-            UpdateTypeMapRecursive(v.Initializer!, unified);
 
+            v.ResolvedType = dt;
             DeclareVariable(v.Name, dt, v.Span);
         }
         else
@@ -906,19 +853,13 @@ public class TypeChecker
                     v.Span,
                     "type annotations needed: variable declaration requires either a type annotation or an initializer",
                     "E2001");
-                DeclareVariable(v.Name, TypeRegistry.Never, v.Span);
-            }
-            else if (TypeRegistry.IsComptimeType(varType))
-            {
-                ReportError(
-                    "cannot infer type",
-                    v.Span,
-                    $"type annotations needed: variable has comptime type `{varType}`",
-                    "E2001");
+                v.ResolvedType = TypeRegistry.Never;
                 DeclareVariable(v.Name, TypeRegistry.Never, v.Span);
             }
             else
             {
+                // No immediate check for IsComptimeType - validation happens in VerifyAllTypesResolved
+                v.ResolvedType = varType;
                 DeclareVariable(v.Name, varType, v.Span);
             }
         }
@@ -1016,8 +957,10 @@ public class TypeChecker
                                                                    && optionStruct.TypeArguments.Count > 0)
                 {
                     var elementType = optionStruct.TypeArguments[0];
-                    // Store all types together in a single struct
-                    _forLoopTypes[fl] = new ForLoopTypes(iteratorStruct, elementType, optionStruct);
+                    // Write iterator protocol types to node
+                    fl.IteratorType = iteratorStruct;
+                    fl.ElementType = elementType;
+                    fl.NextResultOptionType = optionStruct;
                     PopScope();
                     PopScope();
                     // Declare the loop variable with the inferred element type
@@ -1147,7 +1090,7 @@ public class TypeChecker
 
     private TypeBase CheckStringLiteral(StringLiteralNode strLit)
     {
-        if (_structs.TryGetValue("String", out var st))
+        if (_compilation.Structs.TryGetValue("String", out var st))
             return st;
 
         ReportError(
@@ -1210,7 +1153,7 @@ public class TypeChecker
             var typeStruct = TypeRegistry.MakeType(resolvedType);
 
             // Track that this type is used as a literal
-            _instantiatedTypes.Add(resolvedType);
+            _compilation.InstantiatedTypes.Add(resolvedType);
             return typeStruct;
         }
 
@@ -1234,16 +1177,17 @@ public class TypeChecker
             {
                 // This entire chain resolves to a type - return Type(T)
                 var typeLiteral = TypeRegistry.MakeType(resolvedType);
-                _instantiatedTypes.Add(resolvedType);
+                _compilation.InstantiatedTypes.Add(resolvedType);
                 return typeLiteral;
             }
         }
 
         // Evaluate target expression
         var obj = CheckExpression(ma.Target);
+        var prunedObj = obj.Prune();
 
         // Check if target is an enum type (accessing variant): EnumType.Variant
-        if (obj is StructType typeStruct && TypeRegistry.IsType(typeStruct))
+        if (prunedObj is StructType typeStruct && TypeRegistry.IsType(typeStruct))
         {
             // Extract the referenced type from Type(T)
             if (typeStruct.TypeArguments.Count > 0 && typeStruct.TypeArguments[0] is EnumType enumType)
@@ -1269,7 +1213,7 @@ public class TypeChecker
         // Runtime field access on struct values
         // Convert arrays and slices to their canonical struct representations
         // Auto-dereference references to allow field access on &T
-        var structType = obj switch
+        var structType = prunedObj switch
         {
             ReferenceType reTypeBase => reTypeBase.InnerType switch
             {
@@ -1289,9 +1233,9 @@ public class TypeChecker
             if (ft == null)
             {
                 ReportError(
-                    $"no field `{ma.FieldName}` on type `{obj.Name}`",
+                    $"no field `{ma.FieldName}` on type `{prunedObj.Name}`",
                     ma.Span,
-                    $"type `{obj.Name}` does not have a field named `{ma.FieldName}`",
+                    $"type `{prunedObj.Name}` does not have a field named `{ma.FieldName}`",
                     "E2014");
                 return TypeRegistry.Never;
             }
@@ -1314,18 +1258,15 @@ public class TypeChecker
         var lt = CheckExpression(be.Left);
         var rt = CheckExpression(be.Right, lt);
 
+        // Unify operand types - TypeVar.Prune() handles propagation automatically
+        var unified = UnifyTypes(lt, rt, be.Span);
+
         if (be.Operator >= BinaryOperatorKind.Equal && be.Operator <= BinaryOperatorKind.GreaterThanOrEqual)
         {
-            var unified = UnifyTypes(lt, rt, be.Span);
-            UpdateTypeMapRecursive(be.Left, unified);
-            UpdateTypeMapRecursive(be.Right, unified);
             return TypeRegistry.Bool;
         }
         else
         {
-            var unified = UnifyTypes(lt, rt, be.Span);
-            UpdateTypeMapRecursive(be.Left, unified);
-            UpdateTypeMapRecursive(be.Right, unified);
             return unified;
         }
     }
@@ -1343,9 +1284,8 @@ public class TypeChecker
         // Check the value expression against the target type
         var val = CheckExpression(ae.Value, targetType);
 
-        // Update type map with resolved type to avoid comptime_int escape
+        // Unify value with target type - TypeVar.Prune() handles propagation
         var unified = UnifyTypes(val, targetType, ae.Value.Span);
-        UpdateTypeMapRecursive(ae.Value, unified);
 
         return targetType;
     }
@@ -1479,13 +1419,14 @@ public class TypeChecker
                     type = UnifyTypes(type, expectedType, call.Span);
                 for (var i = 0; i < call.Arguments.Count; i++)
                 {
+                    // Unify argument types - TypeVar.Prune() handles propagation
                     var unified = UnifyTypes(argTypes[i], chosen.ParameterTypes[i], call.Arguments[i].Span);
-                    UpdateTypeMapRecursive(call.Arguments[i], unified);
                 }
 
                 if (_functionStack.Count > 0)
-                    _resolvedCalls[(_functionStack.Peek(), call)] =
-                        new ResolvedCall(chosen.Name, chosen.ParameterTypes, chosen.IsForeign);
+                {
+                    call.ResolvedTarget = chosen.AstNode;
+                }
                 return type;
             }
             else
@@ -1502,13 +1443,12 @@ public class TypeChecker
 
                 for (var i = 0; i < call.Arguments.Count; i++)
                 {
+                    // Unify argument types - TypeVar.Prune() handles propagation
                     var unified = UnifyTypes(argTypes[i], concreteParams[i], call.Arguments[i].Span);
-                    UpdateTypeMapRecursive(call.Arguments[i], unified);
                 }
 
-                _resolvedCalls[(_functionStack.Peek(), call)] =
-                    new ResolvedCall(chosen.Name, concreteParams, chosen.IsForeign);
-                EnsureSpecialization(chosen, bindings, concreteParams);
+                var specializedNode = EnsureSpecialization(chosen, bindings, concreteParams);
+                call.ResolvedTarget = specializedNode;
                 return type;
             }
         }
@@ -1522,11 +1462,11 @@ public class TypeChecker
                 for (var i = 0; i < call.Arguments.Count; i++)
                 {
                     var argType = CheckExpression(call.Arguments[i]);
-                    if (argType is ComptimeIntType)
+                    if (argType.Prune() is ComptimeIntType)
                     {
-                        // Resolve comptime_int to i32 for variadic functions
-                        UpdateTypeMapRecursive(call.Arguments[i], TypeRegistry.I32);
-                        argTypes.Add(TypeRegistry.I32);
+                        // Resolve comptime_int to i32 for variadic functions - unify handles TypeVar propagation
+                        var unified = UnifyTypes(argType, TypeRegistry.I32, call.Arguments[i].Span);
+                        argTypes.Add(unified);
                     }
                     else
                     {
@@ -1535,8 +1475,9 @@ public class TypeChecker
                 }
 
                 if (_functionStack.Count > 0)
-                    _resolvedCalls[(_functionStack.Peek(), call)] =
-                        new ResolvedCall("printf", argTypes, true);
+                {
+                    call.ResolvedTarget = null;  // printf is a special builtin, no FunctionDeclarationNode
+                }
                 return TypeRegistry.I32;
             }
 
@@ -1554,8 +1495,9 @@ public class TypeChecker
         TypeBase type;
         switch (expression)
         {
-            case IntegerLiteralNode:
-                type = TypeRegistry.ComptimeInt;
+            case IntegerLiteralNode lit:
+                var tvId = $"lit_{lit.Span.Index}_{_nextLiteralTypeVarId++}";
+                type = CreateLiteralTypeVar(tvId, lit.Span, TypeRegistry.ComptimeInt);
                 break;
             case BooleanLiteralNode:
                 type = TypeRegistry.Bool;
@@ -1578,11 +1520,12 @@ public class TypeChecker
             case IfExpressionNode ie:
             {
                 var ct = CheckExpression(ie.Condition);
-                if (!ct.Equals(TypeRegistry.Bool))
+                var prunedCt = ct.Prune();
+                if (!prunedCt.Equals(TypeRegistry.Bool))
                     ReportError(
                         "mismatched types",
                         ie.Condition.Span,
-                        $"expected `bool`, found `{ct}`",
+                        $"expected `bool`, found `{prunedCt}`",
                         "E2002");
                 var tt = CheckExpression(ie.ThenBranch);
                 if (ie.ElseBranch != null)
@@ -1620,25 +1563,27 @@ public class TypeChecker
             {
                 var st = CheckExpression(re.Start);
                 var en = CheckExpression(re.End);
+                var prunedSt = st.Prune();
+                var prunedEn = en.Prune();
 
                 // Validate range bounds are integers
-                if (!TypeRegistry.IsIntegerType(st) || !TypeRegistry.IsIntegerType(en))
+                if (!TypeRegistry.IsIntegerType(prunedSt) || !TypeRegistry.IsIntegerType(prunedEn))
                 {
-                    ReportError("range bounds must be integers", re.Span, $"found `{st}..{en}`",
+                    ReportError("range bounds must be integers", re.Span, $"found `{prunedSt}..{prunedEn}`",
                         "E2002");
                     type = TypeRegistry.Never;
                     break;
                 }
 
-                // Coerce comptime_int to isize (Range uses isize fields)
-                if (st is ComptimeIntType)
-                    UpdateTypeMapRecursive(re.Start, TypeRegistry.ISize);
-                if (en is ComptimeIntType)
-                    UpdateTypeMapRecursive(re.End, TypeRegistry.ISize);
+                // Coerce comptime_int to isize (Range uses isize fields) - unify handles TypeVar propagation
+                if (prunedSt is ComptimeIntType)
+                    UnifyTypes(st, TypeRegistry.ISize, re.Start.Span);
+                if (prunedEn is ComptimeIntType)
+                    UnifyTypes(en, TypeRegistry.ISize, re.End.Span);
 
                 // Return Range type from core.range
                 // Try FQN lookup first (works after prelude is loaded)
-                if (!_structsByFqn.TryGetValue("core.range.Range", out var rangeType))
+                if (!_compilation.StructsByFqn.TryGetValue("core.range.Range", out var rangeType))
                 {
                     ReportError(
                         "Range type not found",
@@ -1664,15 +1609,16 @@ public class TypeChecker
             case DereferenceExpressionNode dr:
             {
                 var pt = CheckExpression(dr.Target);
-                if (pt is ReferenceType rft) type = rft.InnerType;
-                else if (pt is StructType opt && TypeRegistry.IsOption(opt) && opt.TypeArguments.Count > 0 &&
+                var prunedPt = pt.Prune();
+                if (prunedPt is ReferenceType rft) type = rft.InnerType;
+                else if (prunedPt is StructType opt && TypeRegistry.IsOption(opt) && opt.TypeArguments.Count > 0 &&
                          opt.TypeArguments[0] is ReferenceType rf2) type = rf2.InnerType;
                 else
                 {
                     ReportError(
                         "cannot dereference non-reference type",
                         dr.Span,
-                        $"expected `&T` or `&T?`, found `{pt}`",
+                        $"expected `&T` or `&T?`, found `{prunedPt}`",
                         "E2012");
                     type = TypeRegistry.Never;
                 }
@@ -1742,8 +1688,8 @@ public class TypeChecker
                     }
 
                     var valueType = CheckExpression(fieldExpr, fieldType);
+                    // Unify field value with field type - TypeVar.Prune() handles propagation
                     var unified = UnifyTypes(valueType, fieldType, fieldExpr.Span);
-                    UpdateTypeMapRecursive(fieldExpr, unified);
                 }
 
                 foreach (var (fieldName, _) in st.Fields)
@@ -1777,7 +1723,7 @@ public class TypeChecker
                 }
 
                 ValidateStructLiteralFields(structType, anon.Fields, anon.Span);
-                _anonymousStructTypes[anon] = structType;
+                anon.Type = structType;
 
                 if (TypeRegistry.IsOption(expectedType))
                     type = expectedType;
@@ -1847,16 +1793,18 @@ public class TypeChecker
             {
                 var bt = CheckExpression(ix.Base);
                 var it = CheckExpression(ix.Index);
-                if (!TypeRegistry.IsIntegerType(it))
+                var prunedIt = it.Prune();  // Prune to get the actual type
+
+                if (!TypeRegistry.IsIntegerType(prunedIt))
                     ReportError(
                         "array index must be an integer",
                         ix.Index.Span,
-                        $"found `{it}`",
+                        $"found `{prunedIt}`",
                         "E2027");
-                else if (it is ComptimeIntType)
+                else if (prunedIt is ComptimeIntType)
                 {
-                    // Resolve comptime_int indices to usize
-                    UpdateTypeMapRecursive(ix.Index, TypeRegistry.USize);
+                    // Resolve comptime_int indices to usize - unify handles TypeVar propagation
+                    UnifyTypes(it, TypeRegistry.USize, ix.Index.Span);
                 }
 
                 if (bt is ArrayType at) type = at.ElementType;
@@ -1891,7 +1839,7 @@ public class TypeChecker
         }
 
         type = ApplyOptionExpectation(expression, type, expectedType);
-        _typeMap[expression] = type;
+        expression.Type = type;
         return type;
     }
 
@@ -1993,7 +1941,7 @@ public class TypeChecker
                     // Track primitive type usage (but not Type itself)
                     if (bt is not StructType { StructName: "Type" })
                     {
-                        _instantiatedTypes.Add(bt);
+                        _compilation.InstantiatedTypes.Add(bt);
                     }
 
                     return bt;
@@ -2006,7 +1954,7 @@ public class TypeChecker
                     // Track non-Type struct usage
                     if (!TypeRegistry.IsType(resolvedType))
                     {
-                        _instantiatedTypes.Add(resolvedType);
+                        _compilation.InstantiatedTypes.Add(resolvedType);
                     }
 
                     return resolvedType;
@@ -2086,14 +2034,14 @@ public class TypeChecker
                 {
                     // Track generic struct instantiation
                     var instantiated = InstantiateStruct(structTemplate, args, gt.Span);
-                    _instantiatedTypes.Add(instantiated);
+                    _compilation.InstantiatedTypes.Add(instantiated);
                     return instantiated;
                 }
                 else if (baseType is EnumType enumTemplate)
                 {
                     // Track generic enum instantiation
                     var instantiated = InstantiateEnum(enumTemplate, args, gt.Span);
-                    _instantiatedTypes.Add(instantiated);
+                    _compilation.InstantiatedTypes.Add(instantiated);
                     return instantiated;
                 }
                 else
@@ -2125,7 +2073,7 @@ public class TypeChecker
 
     public StructType? InstantiateStruct(GenericType genericType, SourceSpan span)
     {
-        if (!_structs.TryGetValue(genericType.BaseName, out var template))
+        if (!_compilation.Structs.TryGetValue(genericType.BaseName, out var template))
             return null;
         return InstantiateStruct(template, genericType.TypeArguments, span);
     }
@@ -2143,7 +2091,7 @@ public class TypeChecker
         }
 
         var key = BuildStructSpecKey(template.StructName, typeArgs);
-        if (_structSpecializations.TryGetValue(key, out var cached))
+        if (_compilation.StructSpecializations.TryGetValue(key, out var cached))
             return cached;
 
         // Build bindings from GenericParameterType names to concrete types
@@ -2163,7 +2111,7 @@ public class TypeChecker
 
         // Create specialized struct with concrete type arguments
         var specialized = new StructType(template.StructName, typeArgs.ToList(), specializedFields);
-        _structSpecializations[key] = specialized;
+        _compilation.StructSpecializations[key] = specialized;
         return specialized;
     }
 
@@ -2180,7 +2128,7 @@ public class TypeChecker
         }
 
         var key = BuildStructSpecKey(template.Name, typeArgs);
-        if (_enumSpecializations.TryGetValue(key, out var cached))
+        if (_compilation.EnumSpecializations.TryGetValue(key, out var cached))
             return cached;
 
         // Build bindings from GenericParameterType names to concrete types
@@ -2202,7 +2150,7 @@ public class TypeChecker
 
         // Create specialized enum with concrete type arguments
         var specialized = new EnumType(template.Name, typeArgs.ToList(), specializedVariants);
-        _enumSpecializations[key] = specialized;
+        _compilation.EnumSpecializations[key] = specialized;
         return specialized;
     }
 
@@ -2225,8 +2173,8 @@ public class TypeChecker
             }
 
             var valueType = CheckExpression(expr, fieldType);
+            // Unify field value with field type - TypeVar.Prune() handles propagation
             var unified = UnifyTypes(valueType, fieldType, expr.Span);
-            UpdateTypeMapRecursive(expr, unified);
         }
 
         foreach (var (fieldName, _) in structType.Fields)
@@ -2353,91 +2301,24 @@ public class TypeChecker
     }
 
     /// <summary>
-    /// Updates the type map for an expression and its sub-expressions when coercing to a target type.
-    /// This prevents comptime_int from escaping to later compilation stages.
+    /// Verifies that all literal TypeVars have been resolved to concrete types.
+    /// Reports E2001 errors for any that remain as comptime types.
     /// </summary>
-    private void UpdateTypeMapRecursive(ExpressionNode expr, TypeBase targetType)
+    public void VerifyAllTypesResolved()
     {
-        // For array literals, we need to rebuild the array type with corrected element types
-        // before updating the type map
-        if (expr is ArrayLiteralExpressionNode arr && targetType is ArrayType arrType)
+        foreach (var tv in _literalTypeVars)
         {
-            // Update all array elements with the resolved element type
-            if (arr.IsRepeatSyntax && arr.RepeatValue != null)
+            var finalType = tv.Prune();
+
+            // If still a comptime type after pruning, it wasn't resolved
+            if (TypeRegistry.IsComptimeType(finalType))
             {
-                UpdateTypeMapRecursive(arr.RepeatValue, arrType.ElementType);
+                ReportError(
+                    "cannot infer concrete type for literal",
+                    tv.DeclarationSpan ?? new SourceSpan(0, 0, 0),
+                    "use the literal in a context that requires a specific type or add a type annotation",
+                    "E2001");
             }
-            else if (arr.Elements != null)
-            {
-                foreach (var elem in arr.Elements)
-                    UpdateTypeMapRecursive(elem, arrType.ElementType);
-            }
-
-            // Create a new ArrayType with the corrected element type
-            var correctedArrayType = new ArrayType(arrType.ElementType, arrType.Length);
-            _typeMap[expr] = correctedArrayType;
-        }
-        else if (expr is BinaryExpressionNode bin)
-        {
-            // For binary operations, both operands should have the unified type
-            UpdateTypeMapRecursive(bin.Left, targetType);
-            UpdateTypeMapRecursive(bin.Right, targetType);
-            _typeMap[expr] = targetType;
-        }
-        else if (expr is IfExpressionNode ifExpr)
-        {
-            // For if expressions, update both branches with the target type
-            UpdateTypeMapRecursive(ifExpr.ThenBranch, targetType);
-            if (ifExpr.ElseBranch != null)
-                UpdateTypeMapRecursive(ifExpr.ElseBranch, targetType);
-            _typeMap[expr] = targetType;
-        }
-        else if (expr is BlockExpressionNode block)
-        {
-            // For block expressions, update the trailing expression if it exists
-            if (block.TrailingExpression != null)
-                UpdateTypeMapRecursive(block.TrailingExpression, targetType);
-            _typeMap[expr] = targetType;
-        }
-        else if (expr is CastExpressionNode cast)
-        {
-            if (_typeMap.TryGetValue(cast.Expression, out var sourceType) &&
-                sourceType != null && TypeRegistry.IsComptimeType(sourceType))
-            {
-                UpdateTypeMapRecursive(cast.Expression, targetType);
-            }
-
-            _typeMap[expr] = targetType;
-        }
-        else if (expr is MatchExpressionNode match)
-        {
-            // For match expressions, update all arm results with the target type
-            foreach (var arm in match.Arms)
-            {
-                UpdateTypeMapRecursive(arm.ResultExpr, targetType);
-            }
-
-            _typeMap[expr] = targetType;
-        }
-        else
-        {
-            // Base case: simple expressions (literals, identifiers) just need their own type updated
-            _typeMap[expr] = targetType;
-        }
-    }
-
-    public void EnsureAllTypesResolved()
-    {
-        foreach (var entry in _typeMap)
-        {
-            if (!TypeRegistry.IsComptimeType(entry.Value))
-                continue;
-
-            ReportError(
-                "cannot infer type",
-                entry.Key.Span,
-                $"type annotations needed: expression still has comptime type `{entry.Value}`",
-                "E2001");
         }
     }
 
@@ -2858,11 +2739,18 @@ public class TypeChecker
         return new EnumType(enumType.Name, updatedTypeArgs, updatedVariants);
     }
 
-    private void EnsureSpecialization(FunctionEntry genericEntry, Dictionary<string, TypeBase> bindings,
+    private FunctionDeclarationNode? EnsureSpecialization(FunctionEntry genericEntry, Dictionary<string, TypeBase> bindings,
         IReadOnlyList<TypeBase> concreteParamTypes)
     {
         var key = BuildSpecKey(genericEntry.Name, concreteParamTypes);
-        if (_emittedSpecs.Contains(key)) return;
+        if (_emittedSpecs.Contains(key))
+        {
+            // Already specialized - find and return the existing specialized node
+            return _specializations.FirstOrDefault(s =>
+                s.Name == genericEntry.Name &&
+                s.Parameters.Count == concreteParamTypes.Count &&
+                s.Parameters.Select((p, i) => ResolveTypeNode(p.Type) ?? TypeRegistry.Never).SequenceEqual(concreteParamTypes));
+        }
 
         PushGenericScope(genericEntry.AstNode);
         _currentBindings = bindings;
@@ -2892,6 +2780,7 @@ public class TypeChecker
             CheckFunction(newFn);
             _specializations.Add(newFn);
             _emittedSpecs.Add(key);
+            return newFn;
         }
         finally
         {
@@ -2923,24 +2812,9 @@ public class TypeChecker
         _ => new NamedTypeNode(span, t.Name)
     };
 
-    public (string Name, IReadOnlyList<TypeBase> ParameterTypes, bool IsForeign)? GetResolvedCall(
-        FunctionDeclarationNode function, CallExpressionNode call)
-        => _resolvedCalls.TryGetValue((function, call), out var info)
-            ? (info.Name, info.ParameterTypes, info.IsForeign)
-            : null;
-
-
     public IReadOnlyList<FunctionDeclarationNode> GetSpecializedFunctions() => _specializations;
 
     public bool IsGenericFunction(FunctionDeclarationNode fn) => IsGenericFunctionDecl(fn);
-
-    /// <summary>
-    /// Get match expression metadata for lowering (enum type and whether it needs dereference).
-    /// </summary>
-    public (EnumType EnumType, bool NeedsDereference)? GetMatchMetadata(MatchExpressionNode match)
-    {
-        return _matchMetadata.TryGetValue(match, out var metadata) ? metadata : null;
-    }
 
     // ==================== Enum Variant Construction ====================
 
@@ -2961,7 +2835,7 @@ public class TypeChecker
                 var actualVariantName = parts[1];
 
                 // Try to find the enum
-                if (_enums.TryGetValue(enumName, out var enumTemplate))
+                if (_compilation.Enums.TryGetValue(enumName, out var enumTemplate))
                 {
                     // If we have an expected type that's a specialized version of this enum, use that
                     EnumType enumToUse = enumTemplate;
@@ -3039,9 +2913,8 @@ public class TypeChecker
                     var expectedFieldType = st.Fields[i].Type;
                     var argType = CheckExpression(arguments[i], expectedFieldType);
 
-                    // Update type map to resolve comptime_int to concrete type
+                    // Unify argument with field type - TypeVar.Prune() handles propagation
                     var unified = UnifyTypes(argType, expectedFieldType, arguments[i].Span);
-                    UpdateTypeMapRecursive(arguments[i], unified);
                 }
             }
             else
@@ -3049,9 +2922,8 @@ public class TypeChecker
                 // Single payload
                 var argType = CheckExpression(arguments[0], variant.PayloadType);
 
-                // Update type map to resolve comptime_int to concrete type
+                // Unify argument with payload type - TypeVar.Prune() handles propagation
                 var unified = UnifyTypes(argType, variant.PayloadType, arguments[0].Span);
-                UpdateTypeMapRecursive(arguments[0], unified);
             }
         }
 
@@ -3064,28 +2936,29 @@ public class TypeChecker
     {
         // Check scrutinee type
         var scrutineeType = CheckExpression(match.Scrutinee);
+        var prunedScrutinee = scrutineeType.Prune();
 
         // Allow matching on &EnumType (auto-dereference)
         var needsDereference = false;
-        if (scrutineeType is ReferenceType rt)
+        if (prunedScrutinee is ReferenceType rt)
         {
-            scrutineeType = rt.InnerType;
+            prunedScrutinee = rt.InnerType;
             needsDereference = true;
         }
 
         // Scrutinee must be an enum type
-        if (scrutineeType is not EnumType enumType)
+        if (prunedScrutinee is not EnumType enumType)
         {
             ReportError(
                 "match expression requires enum type",
                 match.Scrutinee.Span,
-                $"found `{scrutineeType}`",
+                $"found `{prunedScrutinee}`",
                 "E2030");
             return TypeRegistry.Never; // Fallback
         }
 
         // Store metadata for lowering
-        _matchMetadata[match] = (enumType, needsDereference);
+        match.NeedsDereference = needsDereference;
 
         // Track which variants are covered
         var coveredVariants = new HashSet<string>();
@@ -3114,16 +2987,15 @@ public class TypeChecker
             PopScope();
 
             // Unify with expected type first if available, then with previous result type
+            // TypeVar.Prune() handles propagation automatically - no need for UpdateTypeMapRecursive
             TypeBase unifiedArmType = armType;
             if (expectedType != null)
             {
                 unifiedArmType = UnifyTypes(armType, expectedType, arm.Span);
-                UpdateTypeMapRecursive(arm.ResultExpr, unifiedArmType);
             }
             else if (resultType != null)
             {
                 unifiedArmType = UnifyTypes(resultType, armType, arm.Span);
-                UpdateTypeMapRecursive(arm.ResultExpr, unifiedArmType);
             }
 
             // Unify with previous arm types
@@ -3133,16 +3005,7 @@ public class TypeChecker
                 resultType = UnifyTypes(resultType, unifiedArmType, arm.Span);
         }
 
-        // Second pass: update all arm result expressions with the final unified type
-        // This ensures that comptime_int literals get resolved to concrete types
-        // BUT: skip this if resultType is still a GenericParameterType (we're in a generic function body)
-        if (resultType != null && resultType is not GenericParameterType)
-        {
-            foreach (var arm in match.Arms)
-            {
-                UpdateTypeMapRecursive(arm.ResultExpr, resultType);
-            }
-        }
+        // No second pass needed - TypeVar.Prune() handles type propagation automatically
 
         // Check exhaustiveness
         if (!hasElse)
@@ -3295,16 +3158,4 @@ public class FunctionEntry
     public bool IsGeneric { get; }
 }
 
-public readonly struct ForLoopTypes
-{
-    public ForLoopTypes(TypeBase iteratorType, TypeBase elementType, StructType nextResultOptionType)
-    {
-        IteratorType = iteratorType;
-        ElementType = elementType;
-        NextResultOptionType = nextResultOptionType;
-    }
-
-    public TypeBase IteratorType { get; }
-    public TypeBase ElementType { get; }
-    public StructType NextResultOptionType { get; }
-}
+// ForLoopTypes struct removed - iterator protocol types now stored directly on ForLoopNode

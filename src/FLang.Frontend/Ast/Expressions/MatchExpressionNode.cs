@@ -20,5 +20,8 @@ public class MatchExpressionNode : ExpressionNode
 
     public ExpressionNode Scrutinee { get; }
     public List<MatchArmNode> Arms { get; }
+
+    /// <summary>Semantic: Whether scrutinee needs implicit dereference during lowering.</summary>
+    public bool NeedsDereference { get; set; }
 }
 

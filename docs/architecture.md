@@ -36,16 +36,19 @@
 - **`BinaryOperator`:** A wrapper struct around a `Token` and a `BinaryOperatorKind` enum for easy semantic processing.
 - **`DeclarationFlags`:** A `[Flags]` enum for modifiers like `Public`.
 
-**Semantic Annotations (Optional):**
-- TypeChecker may store semantic analysis results (e.g., resolved types) either:
-  - In external maps (current: `_typeMap` dictionary), OR
-  - As mutable fields on AST nodes (future consideration)
+**Semantic Annotations:**
+- AST nodes have two categories of properties:
+  - **Syntactic** (immutable after construction): Names, operators, structure (e.g., `FunctionName`, `Operator`, `Body`)
+  - **Semantic** (mutable, written during type checking): Type information, resolved references (e.g., `Type`, `ResolvedTarget`)
+- Semantic properties are nullable and set to null initially by Parser
+- TypeChecker writes semantic properties directly during analysis (no external maps)
+- Thread safety: Currently sequential writes; future concurrent type checking will require atomic writes to semantic fields
 
 **AST Lifecycle:**
-1. **Parser** creates AST from source text (syntactic data only)
-2. **TypeChecker** performs semantic analysis and records type information
+1. **Parser** creates AST from source text (syntactic data only, semantic fields null)
+2. **TypeChecker** performs semantic analysis and populates semantic fields on nodes
 3. **TypeChecker** creates specialized AST nodes for generic instantiations (see Section 3.4)
-4. **AstLowering** reads AST and semantic data to generate IR
+4. **AstLowering** reads both syntactic and semantic data from AST to generate IR
 
 ## 3. Key Components
 
@@ -55,14 +58,40 @@
 - Phases should avoid throwing exceptions for user-facing errors; instead, add diagnostics with precise `SourceSpan`s and continue when possible.
 - The CLI aggregates diagnostics from module loading, parsing, type checking, and lowering, then prints them using `DiagnosticPrinter` before exiting.
 
-### 3.1 `Compilation` (Orchestrator)
+### 3.1 `Compilation` (Context Object)
 
+The `Compilation` class serves as the **central context object** for passing state between compilation phases. It follows the Context Object pattern from compiler design.
 
-- Owns the master list of `Source` objects (`List<Source>`) and assigns atomic `FileId`s.
-- Manages the work queue for parsing (handling `import` statements concurrently in the future).
-- Uses a thread-safe dictionary to deduplicate imports.
+**Responsibilities:**
+- Owns the master list of `Source` objects (`List<Source>`) and assigns atomic `FileId`s
+- Manages module resolution and import deduplication (thread-safe)
+- **Type System Registry**: Stores all type information (structs, enums, specializations) populated by TypeChecker and read by AstLowering
+- **Module Metadata**: Tracks module imports and relationships
 
-### 3.2 `TypeSolver` (The Heart of Semantics)
+**Phase Communication:**
+- **Parser** → Compilation: Adds parsed modules (future)
+- **TypeChecker** → Compilation: Populates type registries (Structs, Enums, InstantiatedTypes, etc.)
+- **AstLowering** → Compilation: Reads type registries for code generation
+
+This design ensures **phase independence** - each phase communicates only through Compilation, not direct references.
+
+### 3.2 `TypeChecker` (Semantic Analysis Phase)
+
+The `TypeChecker` class performs semantic analysis on the AST. It operates on `Compilation` as its context object.
+
+**Key Responsibilities:**
+- **Type Inference**: Resolve types for expressions, variables, and function calls
+- **Type Registry Population**: Write discovered types to `Compilation` registries
+- **Generic Specialization**: Create specialized instances of generic functions/types
+- **AST Annotation**: Write semantic data directly to AST nodes (Type, ResolvedTarget, etc.)
+- **Error Reporting**: Collect and report type errors via diagnostics
+
+**State Management:**
+- **Writes to Compilation**: Type registries (Structs, Enums, specializations, InstantiatedTypes)
+- **Writes to AST**: Semantic fields on nodes (Type, ResolvedTarget, NeedsDereference, etc.)
+- **Local State**: Variable scopes, generic bindings, function stack (discarded after phase)
+
+### 3.3 `TypeSolver` (Type Unification Engine)
 
 A short-lived, stateful object created to type-check a single function or expression scope.
 

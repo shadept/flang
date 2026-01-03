@@ -1,5 +1,4 @@
 using FLang.Core;
-using FType = FLang.Core.TypeBase;
 
 namespace FLang.IR;
 
@@ -15,13 +14,13 @@ public abstract class Value
     /// For constants, this is typically the string representation of the value.
     /// For locals, this is the SSA variable name (e.g., "t0", "x", "call_42").
     /// </summary>
-    public string Name { get; set; } = "";
+    public string Name { get; protected init; } = "";
 
     /// <summary>
     /// The type of this value, if known.
     /// May be null during early IR construction before type inference completes.
     /// </summary>
-    public FType? Type { get; set; }
+    public TypeBase? Type { get; set; }
 }
 
 /// <summary>
@@ -48,7 +47,7 @@ public class ConstantValue : Value
 /// </summary>
 public class ArrayConstantValue : Value
 {
-    public ArrayConstantValue(byte[] data, FType elementType)
+    public ArrayConstantValue(byte[] data, TypeBase elementType)
     {
         Data = data;
         Type = new ArrayType(elementType, data.Length);
@@ -102,7 +101,7 @@ public class GlobalValue : Value
 {
     public GlobalValue(string name, Value initializer)
     {
-        Name = name;  // e.g., "LC0", "LC1"
+        Name = name; // e.g., "LC0", "LC1"
         Initializer = initializer;
 
         // Type is a pointer to the initializer's type

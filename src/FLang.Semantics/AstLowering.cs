@@ -54,13 +54,13 @@ public class AstLowering
         _currentFunctionNode = functionNode;
         var isForeign = (functionNode.Modifiers & FunctionModifiers.Foreign) != 0;
 
-        var retTypeNode = functionNode.ReturnType;
-        var retType = retTypeNode != null ? ResolveTypeFromNode(retTypeNode) : TypeRegistry.Void;
+        var retType = functionNode.ResolvedReturnType ??
+                      (functionNode.ReturnType != null
+                          ? ResolveTypeFromNode(functionNode.ReturnType)
+                          : TypeRegistry.Void);
 
-        // Resolve parameter types first
-        var resolvedParamTypes = new List<FType>();
-        foreach (var p in functionNode.Parameters)
-            resolvedParamTypes.Add(ResolveTypeFromNode(p.Type));
+        var resolvedParamTypes = functionNode.ResolvedParameterTypes ??
+                                 functionNode.Parameters.Select(p => ResolveTypeFromNode(p.Type)).ToList();
 
         // Keep base name in IR; backend will mangle
         var function = new Function(functionNode.Name) { IsForeign = isForeign, ReturnType = retType };
@@ -135,7 +135,7 @@ public class AstLowering
         if (_typeTableGlobal != null) return;
 
         // Build the type table from all instantiated types collected by TypeSolver
-        var types = _typeSolver.InstantiatedTypes.OrderBy(t => t.Name).ToList();
+        var types = _compilation.InstantiatedTypes.OrderBy(t => t.Name).ToList();
         var typeStructElements = new List<Value>();
 
         for (int i = 0; i < types.Count; i++)
@@ -144,7 +144,7 @@ public class AstLowering
             _typeTableIndices[type] = i;
 
             // For user-defined structs, use the FQN if available
-            var typeName = type is StructType st && _typeSolver.GetStructFqn(st) is string fqn
+            var typeName = type is StructType st && st.StructName is string fqn
                 ? fqn
                 : type.Name;
             var nameBytes = System.Text.Encoding.UTF8.GetBytes(typeName + "\0");
@@ -206,12 +206,10 @@ public class AstLowering
         {
             case VariableDeclarationNode varDecl:
             {
-                // Establish variable type from annotation or initializer
-                FType varType = TypeRegistry.Never;
-                if (varDecl.Type != null)
-                    varType = ResolveTypeFromNode(varDecl.Type);
-                else if (varDecl.Initializer != null)
-                    varType = _typeSolver.GetType(varDecl.Initializer) ?? TypeRegistry.Never;
+                FType varType = varDecl.ResolvedType ??
+                                (varDecl.Type != null
+                                    ? ResolveTypeFromNode(varDecl.Type)
+                                    : varDecl.Initializer?.Type ?? TypeRegistry.Never);
 
                 // Check if this is a struct or array type
                 bool isStruct = varType is StructType;
@@ -398,9 +396,10 @@ public class AstLowering
     private Value LowerExpression(ExpressionNode expression)
     {
         var value = LowerExpressionCore(expression);
-        var finalType = _typeSolver.GetType(expression);
+        var finalType = expression.Type;
 
-        _logger.LogDebug("[AstLowering] LowerExpression: exprType={ExpressionType}, value.Type={ValueType}, finalType={FinalType}",
+        _logger.LogDebug(
+            "[AstLowering] LowerExpression: exprType={ExpressionType}, value.Type={ValueType}, finalType={FinalType}",
             expression.GetType().Name, value.Type?.Name ?? "null", finalType?.Name ?? "null");
 
         // If final type is Option<T> but value is T, wrap it
@@ -421,7 +420,7 @@ public class AstLowering
         {
             case IntegerLiteralNode intLiteral:
             {
-                var literalType = _typeSolver.GetType(expression);
+                var literalType = expression.Type;
                 var valueType =
                     (literalType is StructType st && TypeRegistry.IsOption(st) && st.TypeArguments.Count > 0)
                         ? st.TypeArguments[0]
@@ -431,7 +430,7 @@ public class AstLowering
 
             case BooleanLiteralNode boolLiteral:
             {
-                var literalType = _typeSolver.GetType(expression);
+                var literalType = expression.Type;
                 var valueType =
                     (literalType is StructType st && TypeRegistry.IsOption(st) && st.TypeArguments.Count > 0)
                         ? st.TypeArguments[0]
@@ -458,7 +457,7 @@ public class AstLowering
                 };
 
                 // Get String struct type from type solver
-                var stringType = _typeSolver.GetType(stringLiteral) as StructType;
+                var stringType = stringLiteral.Type as StructType;
                 if (stringType == null)
                 {
                     _diagnostics.Add(Diagnostic.Error(
@@ -489,23 +488,19 @@ public class AstLowering
 
             case IdentifierExpressionNode identifier:
             {
-                var identType = _typeSolver.GetType(identifier);
+                var identType = identifier.Type;
 
                 // Check if this is a type literal
-                if (identType is StructType st && TypeRegistry.IsType(st))
+                if (identType is StructType st && TypeRegistry.IsType(st) && st.TypeArguments.Count > 0)
                 {
-                    var referencedType = _typeSolver.ResolveTypeName(identifier.Name);
-                    if (referencedType != null)
-                    {
-                        // Load type metadata from global
-                        var typeGlobal = GetTypeLiteralValue(referencedType, st);
+                    var referencedType = st.TypeArguments[0];
+                    // Load type metadata from global
+                    var typeGlobal = GetTypeLiteralValue(referencedType, st);
 
-                        // Load the struct value
-                        var loaded = new LocalValue($"type_load_{_tempCounter++}");
-                        loaded.Type = st;
-                        _currentBlock.Instructions.Add(new LoadInstruction(typeGlobal, loaded));
-                        return loaded;
-                    }
+                    // Load the struct value
+                    var loaded = new LocalValue($"type_load_{_tempCounter++}") { Type = st };
+                    _currentBlock.Instructions.Add(new LoadInstruction(typeGlobal, loaded));
+                    return loaded;
                 }
 
                 // Check if this is an unqualified enum variant (e.g., `Red` instead of `Color.Red`)
@@ -515,7 +510,8 @@ public class AstLowering
                 {
                     // This is a unit variant - lower it as enum construction with no arguments
                     // Create a synthetic CallExpressionNode to reuse existing lowering logic
-                    var syntheticCall = new CallExpressionNode(identifier.Span, identifier.Name, new List<ExpressionNode>());
+                    var syntheticCall =
+                        new CallExpressionNode(identifier.Span, identifier.Name, new List<ExpressionNode>());
                     return LowerEnumConstruction(syntheticCall, variantEnumType);
                 }
 
@@ -579,7 +575,7 @@ public class AstLowering
                     _ => throw new Exception($"Unknown binary operator: {binary.Operator}")
                 };
 
-                var temp = new LocalValue($"t{_tempCounter++}") { Type = _typeSolver.GetType(binary) };
+                var temp = new LocalValue($"t{_tempCounter++}") { Type = binary.Type };
                 var instruction = new BinaryInstruction(op, left, right, temp);
                 _currentBlock.Instructions.Add(instruction);
                 return temp;
@@ -632,7 +628,7 @@ public class AstLowering
 
             case CallExpressionNode call:
                 // Check if this is enum variant construction
-                var exprType = _typeSolver.GetType(call);
+                var exprType = call.Type;
                 if (exprType is EnumType enumType)
                 {
                     return LowerEnumConstruction(call, enumType);
@@ -642,15 +638,22 @@ public class AstLowering
                 // They accept Type($T) parameters and access struct fields directly
 
                 // Regular function call
-                var resolved = _typeSolver.GetResolvedCall(_currentFunctionNode, call);
-                var paramTypes = resolved?.ParameterTypes ?? new List<FType>();
+                var paramTypes = new List<FType>();
+                if (call.ResolvedTarget != null)
+                {
+                    foreach (var param in call.ResolvedTarget.Parameters)
+                    {
+                        var paramType = param.ResolvedType ?? ResolveTypeFromNode(param.Type);
+                        paramTypes.Add(paramType);
+                    }
+                }
 
                 // Lower arguments, inserting implicit casts when needed
                 var args = new List<Value>();
                 for (var i = 0; i < call.Arguments.Count; i++)
                 {
                     var argVal = LowerExpression(call.Arguments[i]);
-                    var argType = _typeSolver.GetType(call.Arguments[i]);
+                    var argType = call.Arguments[i].Type;
 
                     // Insert cast if argument type doesn't match parameter type but can coerce
                     if (i < paramTypes.Count && argType != null && !argType.Equals(paramTypes[i]))
@@ -669,12 +672,12 @@ public class AstLowering
 
                 var callType = exprType ?? TypeRegistry.Never;
                 var callResult = new LocalValue($"call_{_tempCounter++}") { Type = callType };
-                var targetName = resolved?.Name ?? call.FunctionName;
+                var targetName = call.ResolvedTarget?.Name ?? call.FunctionName;
                 var callInst = new CallInstruction(targetName, args, callResult);
-                if (resolved.HasValue)
+                if (call.ResolvedTarget != null)
                 {
-                    callInst.CalleeParamTypes = resolved.Value.ParameterTypes;
-                    callInst.IsForeignCall = resolved.Value.IsForeign;
+                    callInst.CalleeParamTypes = paramTypes;
+                    callInst.IsForeignCall = (call.ResolvedTarget.Modifiers & FunctionModifiers.Foreign) != 0;
                 }
 
                 _currentBlock.Instructions.Add(callInst);
@@ -696,7 +699,7 @@ public class AstLowering
                     }
 
                     // For parameters or other non-alloca'd values, emit AddressOfInstruction
-                    var addrResult = new LocalValue($"addr_{_tempCounter++}") { Type = _typeSolver.GetType(addressOf) };
+                    var addrResult = new LocalValue($"addr_{_tempCounter++}") { Type = addressOf.Type };
                     var addrInst = new AddressOfInstruction(addrIdentifier.Name, addrResult);
                     _currentBlock.Instructions.Add(addrInst);
                     return addrResult;
@@ -705,7 +708,7 @@ public class AstLowering
                 if (addressOf.Target is IndexExpressionNode ixAddr)
                 {
                     // Compute pointer to array element: &base[index]
-                    var baseType = _typeSolver.GetType(ixAddr.Base);
+                    var baseType = ixAddr.Base.Type;
                     var addrBaseValue = LowerExpression(ixAddr.Base);
                     var addrIndexValue = LowerExpression(ixAddr.Index);
 
@@ -745,27 +748,20 @@ public class AstLowering
             case DereferenceExpressionNode deref:
                 // Dereference: ptr.*
                 var ptrValue = LowerExpression(deref.Target);
-                var loadResult = new LocalValue($"load_{_tempCounter++}") { Type = _typeSolver.GetType(deref) };
+                var loadResult = new LocalValue($"load_{_tempCounter++}") { Type = deref.Type };
                 var loadInst = new LoadInstruction(ptrValue, loadResult);
                 _currentBlock.Instructions.Add(loadInst);
                 return loadResult;
 
             case StructConstructionExpressionNode structCtor:
             {
-                var resolvedType = GetExpressionType(structCtor);
-                StructType? structType = resolvedType switch
-                {
-                    StructType st => st,
-                    GenericType gt => _typeSolver.InstantiateStruct(gt, structCtor.Span),
-                    _ => null
-                };
-
+                var structType = GetExpressionType(structCtor) as StructType;
                 if (structType == null)
                 {
                     _diagnostics.Add(Diagnostic.Error(
-                        "cannot determine struct type",
+                        "struct construction expression has non-struct type after type checking",
                         structCtor.Span,
-                        "type checking failed",
+                        "type checking should have produced a concrete StructType",
                         "E3001"
                     ));
                     return new ConstantValue(0);
@@ -776,20 +772,13 @@ public class AstLowering
 
             case AnonymousStructExpressionNode anonStruct:
             {
-                var resolvedType = GetExpressionType(anonStruct);
-                StructType? structType = resolvedType switch
-                {
-                    StructType st => st,
-                    GenericType gt => _typeSolver.InstantiateStruct(gt, anonStruct.Span),
-                    _ => null
-                };
-
+                var structType = GetExpressionType(anonStruct) as StructType;
                 if (structType == null)
                 {
                     _diagnostics.Add(Diagnostic.Error(
-                        "anonymous struct literal requires a concrete struct type",
+                        "anonymous struct expression has non-struct type after type checking",
                         anonStruct.Span,
-                        "type checking failed",
+                        "type checking should have produced a concrete StructType",
                         "E3001"
                     ));
                     return new ConstantValue(0);
@@ -800,7 +789,7 @@ public class AstLowering
 
             case NullLiteralNode nullLiteral:
             {
-                var nullType = _typeSolver.GetType(nullLiteral) as StructType;
+                var nullType = nullLiteral.Type as StructType;
                 if (nullType == null || !TypeRegistry.IsOption(nullType))
                 {
                     _diagnostics.Add(Diagnostic.Error(
@@ -817,8 +806,8 @@ public class AstLowering
             case CastExpressionNode cast:
             {
                 var srcVal = LowerExpression(cast.Expression);
-                var srcTypeForCast = _typeSolver.GetType(cast.Expression);
-                var dstType = _typeSolver.GetType(cast) ?? TypeRegistry.Never;
+                var srcTypeForCast = cast.Expression.Type;
+                var dstType = cast.Type ?? TypeRegistry.Never;
 
                 // No-op if types are already identical
                 if (srcTypeForCast != null && srcTypeForCast.Equals(dstType))
@@ -839,18 +828,19 @@ public class AstLowering
             {
                 // Check if this is enum variant construction (e.g., Color.Blue)
                 // Only treat as variant if the enum actually has a variant with this name
-                var memberAccessType = _typeSolver.GetType(fieldAccess);
+                var memberAccessType = fieldAccess.Type;
                 if (memberAccessType is EnumType enumFromMember &&
                     enumFromMember.Variants.Any(v => v.VariantName == fieldAccess.FieldName))
                 {
                     // This is EnumType.Variant syntax - lower as enum construction
-                    var syntheticCall = new CallExpressionNode(fieldAccess.Span, fieldAccess.FieldName, new List<ExpressionNode>());
+                    var syntheticCall = new CallExpressionNode(fieldAccess.Span, fieldAccess.FieldName,
+                        new List<ExpressionNode>());
                     return LowerEnumConstruction(syntheticCall, enumFromMember);
                 }
 
                 // Get struct type from the target expression
                 var targetValue = LowerExpression(fieldAccess.Target);
-                var targetSemanticType = _typeSolver.GetType(fieldAccess.Target);
+                var targetSemanticType = fieldAccess.Target.Type;
 
                 // Handle special case for arrays: they can act as having the same fields as Slices (ptr and len)
                 if (targetSemanticType is ArrayType arrayType)
@@ -864,6 +854,7 @@ public class AstLowering
                         _currentBlock.Instructions.Add(castInst);
                         return castResult;
                     }
+
                     if (fieldAccess.FieldName == "len")
                     {
                         // len is replaced with the actual literal constant length of the array
@@ -920,7 +911,7 @@ public class AstLowering
             case ArrayLiteralExpressionNode arrayLiteral:
             {
                 // Get array type from type solver
-                var arrayLitType = _typeSolver.GetType(arrayLiteral) as ArrayType;
+                var arrayLitType = arrayLiteral.Type as ArrayType;
                 if (arrayLitType == null)
                 {
                     _diagnostics.Add(Diagnostic.Error(
@@ -1006,7 +997,7 @@ public class AstLowering
                 // Get base array/slice
                 var baseValue = LowerExpression(indexExpr.Base);
                 var indexValue = LowerExpression(indexExpr.Index);
-                var baseArrayType = _typeSolver.GetType(indexExpr.Base);
+                var baseArrayType = indexExpr.Base.Type;
 
                 if (baseArrayType is ArrayType arrayTypeForIndex)
                 {
@@ -1079,6 +1070,7 @@ public class AstLowering
             // Return a dummy pointer to avoid cascading errors
             return new LocalValue("error") { Type = new ReferenceType(TypeRegistry.Never) };
         }
+
         return targetPtr;
     }
 
@@ -1086,7 +1078,7 @@ public class AstLowering
     {
         // Get struct type from the target expression
         var targetValue = LowerExpression(memberAccess.Target);
-        var targetSemanticType = _typeSolver.GetType(memberAccess.Target);
+        var targetSemanticType = memberAccess.Target.Type;
 
         var accessStruct = targetSemanticType switch
         {
@@ -1193,16 +1185,15 @@ public class AstLowering
     {
         // Use iterator protocol lowered via iter/next functions.
         // TypeChecker has already validated and recorded the iterator and element types.
-        var forLoopTypes = _typeSolver.GetForLoopTypes(forLoop);
-        var iterableType = _typeSolver.GetType(forLoop.IterableExpression);
+        var iterableType = forLoop.IterableExpression.Type;
 
         // If type checking failed for this loop, skip lowering – diagnostics are already emitted.
-        if (forLoopTypes == null || iterableType == null)
+        if (forLoop.IteratorType == null || forLoop.ElementType == null || iterableType == null)
             return;
 
-        var iteratorType = forLoopTypes.Value.IteratorType as StructType;
-        var optionType = forLoopTypes.Value.NextResultOptionType;
-        var elementType = forLoopTypes.Value.ElementType;
+        var iteratorType = forLoop.IteratorType;
+        var optionType = forLoop.NextResultOptionType;
+        var elementType = forLoop.ElementType;
 
         // Create loop blocks
         var condBlock = CreateBlock("for_cond");
@@ -1310,7 +1301,7 @@ public class AstLowering
     private Value LowerRangeToStruct(RangeExpressionNode rangeExpr)
     {
         // Get the Range struct type from type checker
-        var rangeType = _typeSolver.GetType(rangeExpr) as StructType;
+        var rangeType = rangeExpr.Type as StructType;
         if (rangeType == null)
         {
             _diagnostics.Add(Diagnostic.Error(
@@ -1503,7 +1494,7 @@ public class AstLowering
         _currentBlock.Instructions.Add(storeInst);
     }
 
-    private FType? GetExpressionType(ExpressionNode node) => _typeSolver.GetType(node);
+    private FType? GetExpressionType(ExpressionNode node) => node.Type;
 
     // ==================== Enum Construction Lowering ====================
 
@@ -1565,7 +1556,7 @@ public class AstLowering
         if (variant.Value.PayloadType != null)
         {
             var payloadOffset = enumType.GetPayloadOffset(variantIndex);
-            
+
             if (variant.Value.PayloadType is StructType st && st.Name.Contains("_payload"))
             {
                 // Multiple payloads - store each field
@@ -1573,7 +1564,7 @@ public class AstLowering
                 {
                     var argValue = LowerExpression(call.Arguments[i]);
                     var fieldOffset = st.GetFieldOffset(st.Fields[i].Name);
-                    var fieldPtr = new LocalValue($"payload_field_ptr_{_tempCounter++}") 
+                    var fieldPtr = new LocalValue($"payload_field_ptr_{_tempCounter++}")
                         { Type = new ReferenceType(st.Fields[i].Type) };
                     var fieldGep = new GetElementPtrInstruction(enumPtr, payloadOffset + fieldOffset, fieldPtr);
                     _currentBlock.Instructions.Add(fieldGep);
@@ -1585,7 +1576,7 @@ public class AstLowering
             {
                 // Single payload
                 var argValue = LowerExpression(call.Arguments[0]);
-                var payloadPtr = new LocalValue($"payload_ptr_{_tempCounter++}") 
+                var payloadPtr = new LocalValue($"payload_ptr_{_tempCounter++}")
                     { Type = new ReferenceType(variant.Value.PayloadType) };
                 var payloadGep = new GetElementPtrInstruction(enumPtr, payloadOffset, payloadPtr);
                 _currentBlock.Instructions.Add(payloadGep);
@@ -1606,9 +1597,9 @@ public class AstLowering
 
     private Value LowerMatchExpression(MatchExpressionNode match)
     {
-        // Get metadata from type checker
-        var metadata = _typeSolver.GetMatchMetadata(match);
-        if (metadata == null)
+        // Get enum type from scrutinee and dereference flag from match node
+        var enumType = match.Scrutinee.Type as EnumType;
+        if (enumType == null)
         {
             _diagnostics.Add(Diagnostic.Error(
                 "match expression not properly type-checked",
@@ -1618,8 +1609,8 @@ public class AstLowering
             return new LocalValue("error") { Type = TypeRegistry.I32 };
         }
 
-        var (enumType, needsDereference) = metadata.Value;
-        var resultType = _typeSolver.GetType(match) ?? TypeRegistry.Never;
+        var needsDereference = match.NeedsDereference;
+        var resultType = match.Type ?? TypeRegistry.Never;
 
         // Lower scrutinee
         var scrutineeValue = LowerExpression(match.Scrutinee);
@@ -1634,7 +1625,7 @@ public class AstLowering
         }
 
         // Allocate space on stack to hold scrutinee (so we can get pointer to it)
-        var scrutineePtr = new LocalValue($"match_scrutinee_ptr_{_tempCounter++}") 
+        var scrutineePtr = new LocalValue($"match_scrutinee_ptr_{_tempCounter++}")
             { Type = new ReferenceType(enumType) };
         var allocaInst = new AllocaInstruction(enumType, enumType.Size, scrutineePtr);
         _currentBlock.Instructions.Add(allocaInst);
@@ -1758,7 +1749,8 @@ public class AstLowering
                                     payloadOffset + fieldOffset, fieldPtr);
                                 _currentBlock.Instructions.Add(fieldGep);
                                 // Make variable name unique per-arm to avoid C redefinition errors
-                                var fieldValue = new LocalValue($"{vp.Name}_arm{armIndex}_{_tempCounter++}") { Type = st.Fields[i].Type };
+                                var fieldValue = new LocalValue($"{vp.Name}_arm{armIndex}_{_tempCounter++}")
+                                    { Type = st.Fields[i].Type };
                                 var fieldLoad = new LoadInstruction(fieldPtr, fieldValue);
                                 _currentBlock.Instructions.Add(fieldLoad);
                                 _locals[vp.Name] = fieldPtr; // Store pointer for later access
@@ -1773,7 +1765,8 @@ public class AstLowering
                         var payloadGep = new GetElementPtrInstruction(scrutineePtr, payloadOffset, payloadPtr);
                         _currentBlock.Instructions.Add(payloadGep);
                         // Make variable name unique per-arm to avoid C redefinition errors
-                        var payloadValue = new LocalValue($"{vp.Name}_arm{armIndex}_{_tempCounter++}") { Type = variant.Value.PayloadType };
+                        var payloadValue = new LocalValue($"{vp.Name}_arm{armIndex}_{_tempCounter++}")
+                            { Type = variant.Value.PayloadType };
                         var payloadLoad = new LoadInstruction(payloadPtr, payloadValue);
                         _currentBlock.Instructions.Add(payloadLoad);
                         _locals[vp.Name] = payloadPtr; // Store pointer for later access

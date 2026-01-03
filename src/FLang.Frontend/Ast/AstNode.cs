@@ -2,12 +2,7 @@ using FLang.Core;
 
 namespace FLang.Frontend.Ast;
 
-public abstract class AstNode
+public abstract class AstNode(SourceSpan span)
 {
-    protected AstNode(SourceSpan span)
-    {
-        Span = span;
-    }
-
-    public SourceSpan Span { get; }
+    public SourceSpan Span { get; } = span;
 }

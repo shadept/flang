@@ -4,6 +4,7 @@ namespace FLang.Core;
 
 /// <summary>
 /// Represents a compilation unit that manages source files, module resolution, and compilation-wide state.
+/// Serves as the context object for passing state between compilation phases (Parser → TypeChecker → AstLowering).
 /// </summary>
 public class Compilation
 {
@@ -12,6 +13,26 @@ public class Compilation
     private readonly List<Source> _sourcesList = [];
     private int _fileIdCounter;
     private int _stringIdCounter;
+
+    //=== Type System Registry (populated by TypeChecker, read by AstLowering) ===
+
+    // Struct type registry
+    public Dictionary<string, StructType> Structs { get; } = [];
+    public Dictionary<string, StructType> StructSpecializations { get; } = [];
+    public Dictionary<string, Dictionary<string, StructType>> StructsByModule { get; } = [];
+    public Dictionary<string, StructType> StructsByFqn { get; } = [];
+
+    // Enum type registry
+    public Dictionary<string, EnumType> Enums { get; } = [];
+    public Dictionary<string, EnumType> EnumSpecializations { get; } = [];
+    public Dictionary<string, Dictionary<string, EnumType>> EnumsByModule { get; } = [];
+    public Dictionary<string, EnumType> EnumsByFqn { get; } = [];
+
+    // Module imports
+    public Dictionary<string, HashSet<string>> ModuleImports { get; } = [];
+
+    // All instantiated types (for global type table generation)
+    public HashSet<TypeBase> InstantiatedTypes { get; } = [];
 
     /// <summary>
     /// Gets or sets the path to the standard library directory.

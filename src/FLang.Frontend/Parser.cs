@@ -761,6 +761,7 @@ public class Parser
                 return ParseArrayLiteral();
 
             default:
+                SynchronizeExpression();
                 _diagnostics.Add(Diagnostic.Error(
                     $"unexpected token '{_currentToken.Text}' in expression",
                     _currentToken.Span,

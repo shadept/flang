@@ -36,7 +36,7 @@ public class TypeSolverTests
 
         // Assert
         Assert.Single(solver.Diagnostics);
-        Assert.Equal("E3001", solver.Diagnostics[0].Code);
+        Assert.Equal("E2002", solver.Diagnostics[0].Code);
         Assert.Contains("i32", solver.Diagnostics[0].Message);
         Assert.Contains("bool", solver.Diagnostics[0].Message);
     }
@@ -132,7 +132,7 @@ public class TypeSolverTests
 
         // Assert
         Assert.Single(solver.Diagnostics);
-        Assert.Equal("E3001", solver.Diagnostics[0].Code);
+        Assert.Equal("E2002", solver.Diagnostics[0].Code);
         Assert.Contains("expected `Point`, got `Vector`", solver.Diagnostics[0].Message);
     }
 
@@ -164,7 +164,7 @@ public class TypeSolverTests
 
         // Assert
         Assert.NotEmpty(solver.Diagnostics);
-        Assert.Contains(solver.Diagnostics, d => d.Code == "E3001");
+        Assert.Contains(solver.Diagnostics, d => d.Code == "E2002");
     }
 
     #endregion
@@ -283,7 +283,7 @@ public class TypeSolverTests
 
         // Assert
         Assert.NotEmpty(solver.Diagnostics);
-        Assert.Equal("E3001", solver.Diagnostics[0].Code);
+        Assert.Equal("E2002", solver.Diagnostics[0].Code);
     }
 
     [Fact]
@@ -756,7 +756,7 @@ public class TypeSolverTests
 
         // Assert
         Assert.Single(solver.Diagnostics);
-        Assert.Equal("E3003", solver.Diagnostics[0].Code);
+        Assert.Equal("E2002", solver.Diagnostics[0].Code);
         Assert.Contains("rigid generic parameter", solver.Diagnostics[0].Message);
     }
 
@@ -997,6 +997,90 @@ public class TypeSolverTests
         Assert.Empty(solver1.Diagnostics);
         Assert.Empty(solver2.Diagnostics);
         Assert.Equal(u8RefType, step2);
+    }
+
+    #endregion
+
+    #region TypeVar Literal Wrapping Tests
+
+    [Fact]
+    public void TypeVar_ComptimeIntLiteral_UnifiesWithI32()
+    {
+        // Arrange
+        var solver = new TypeSolver();
+        var literalTypeVar = new TypeVar("lit_42", new SourceSpan(0, 0, 2));
+        literalTypeVar.Instance = TypeRegistry.ComptimeInt;
+        var concrete = TypeRegistry.I32;
+
+        // Act
+        var result = solver.Unify(literalTypeVar, concrete);
+
+        // Assert
+        Assert.Equal(concrete, result);
+        Assert.Equal(concrete, literalTypeVar.Prune());
+        Assert.Empty(solver.Diagnostics);
+    }
+
+    [Fact]
+    public void TypeVar_TwoLiterals_UnifyToComptimeInt()
+    {
+        // Arrange
+        var solver = new TypeSolver();
+        var lit1 = new TypeVar("lit_10", new SourceSpan(0, 0, 2));
+        lit1.Instance = TypeRegistry.ComptimeInt;
+        var lit2 = new TypeVar("lit_20", new SourceSpan(0, 5, 2));
+        lit2.Instance = TypeRegistry.ComptimeInt;
+
+        // Act
+        var result = solver.Unify(lit1, lit2);
+
+        // Assert
+        // Should unify to ComptimeInt (both literals remain flexible)
+        Assert.Equal(TypeRegistry.ComptimeInt, result.Prune());
+        Assert.Empty(solver.Diagnostics);
+    }
+
+    [Fact]
+    public void TypeVar_LiteralChain_PathCompression()
+    {
+        // Arrange
+        var solver = new TypeSolver();
+        var lit1 = new TypeVar("lit_1", new SourceSpan(0, 0, 1));
+        lit1.Instance = TypeRegistry.ComptimeInt;
+        var lit2 = new TypeVar("lit_2", new SourceSpan(0, 5, 1));
+        lit2.Instance = TypeRegistry.ComptimeInt;
+        var lit3 = new TypeVar("lit_3", new SourceSpan(0, 10, 1));
+        lit3.Instance = TypeRegistry.ComptimeInt;
+
+        // Act - Chain unifications: lit1 <- lit2 <- lit3 <- I64
+        solver.Unify(lit1, lit2);
+        solver.Unify(lit2, lit3);
+        var result = solver.Unify(lit3, TypeRegistry.I64);
+
+        // Assert - All should resolve to I64 via Prune()
+        Assert.Equal(TypeRegistry.I64, lit1.Prune());
+        Assert.Equal(TypeRegistry.I64, lit2.Prune());
+        Assert.Equal(TypeRegistry.I64, lit3.Prune());
+        Assert.Empty(solver.Diagnostics);
+    }
+
+    [Fact]
+    public void TypeVar_LiteralConflict_ReportsError()
+    {
+        // Arrange
+        var solver1 = new TypeSolver();
+        var solver2 = new TypeSolver();
+        var lit = new TypeVar("lit_42", new SourceSpan(0, 0, 2));
+        lit.Instance = TypeRegistry.ComptimeInt;
+
+        // Act - First harden to I64, then try to unify with U32
+        solver1.Unify(lit, TypeRegistry.I64);
+        solver2.Unify(lit, TypeRegistry.U32);
+
+        // Assert
+        Assert.Empty(solver1.Diagnostics);
+        Assert.NotEmpty(solver2.Diagnostics);
+        Assert.Contains("E2002", solver2.Diagnostics[0].Code);  // Type mismatch error
     }
 
     #endregion

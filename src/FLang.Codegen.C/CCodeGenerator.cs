@@ -867,7 +867,10 @@ public class CCodeGenerator
 
     private string TypeToCType(FType type)
     {
-        return type switch
+        // Prune TypeVars to get the actual concrete type
+        var prunedType = type.Prune();
+
+        return prunedType switch
         {
             PrimitiveType { Name: "i8" } => "int8_t",
             PrimitiveType { Name: "i16" } => "int16_t",
@@ -892,7 +895,7 @@ public class CCodeGenerator
             // Array syntax must be handled specially at declaration sites (see alloca handling)
             ArrayType => throw new InvalidOperationException("Array types must be handled specially at declaration sites"),
 
-            _ => "int" // Fallback
+            _ => throw new InvalidOperationException($"Cannot convert type '{prunedType}' (original: '{type}') to C type. This indicates an unhandled type in the C code generator.")
         };
     }
 
