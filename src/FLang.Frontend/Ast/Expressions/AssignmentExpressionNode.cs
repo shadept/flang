@@ -11,5 +11,5 @@ public class AssignmentExpressionNode : ExpressionNode
     }
 
     public ExpressionNode Target { get; }
-    public ExpressionNode Value { get; }
+    public ExpressionNode Value { get; set; }
 }

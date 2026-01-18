@@ -360,8 +360,14 @@ public class TypeChecker
                         pt = TypeRegistry.Never;
                     }
 
+                    // Store resolved type on parameter for AstLowering
+                    param.ResolvedType = pt;
                     parameterTypes.Add(pt);
                 }
+
+                // Store resolved types on function for AstLowering
+                function.ResolvedReturnType = returnType;
+                function.ResolvedParameterTypes = parameterTypes;
 
                 var entry = new FunctionEntry(function.Name, parameterTypes, returnType, function, isForeign,
                     IsGenericSignature(parameterTypes, returnType));
@@ -691,8 +697,14 @@ public class TypeChecker
                 foreach (var param in function.Parameters)
                 {
                     var pt = ResolveTypeNode(param.Type) ?? TypeRegistry.Never;
+                    // Store resolved type on parameter for AstLowering
+                    param.ResolvedType = pt;
                     parameterTypes.Add(pt);
                 }
+
+                // Store resolved types on function for AstLowering
+                function.ResolvedReturnType = returnType;
+                function.ResolvedParameterTypes = parameterTypes;
 
                 var entry = new FunctionEntry(function.Name, parameterTypes, returnType, function, false,
                     IsGenericSignature(parameterTypes, returnType));
@@ -821,6 +833,9 @@ public class TypeChecker
             // Unify with expected return type - TypeVar.Prune() handles propagation
             var unified = UnifyTypes(et, expectedReturnType, ret.Expression.Span);
 
+            // Wrap return expression with coercion node if needed
+            ret.Expression = WrapWithCoercionIfNeeded(ret.Expression, et.Prune(), expectedReturnType.Prune());
+
             // Log the unified type
             _logger.LogDebug(
                 "[TypeChecker] After unification: unified={UnifiedType}",
@@ -836,6 +851,9 @@ public class TypeChecker
         {
             // Unify initializer type with declared type - TypeVar.Prune() handles propagation
             var unified = UnifyTypes(it, dt, v.Initializer!.Span);
+
+            // Wrap initializer with coercion node if needed
+            v.Initializer = WrapWithCoercionIfNeeded(v.Initializer!, it.Prune(), dt.Prune());
 
             v.ResolvedType = dt;
             DeclareVariable(v.Name, dt, v.Span);
@@ -1421,6 +1439,9 @@ public class TypeChecker
                 {
                     // Unify argument types - TypeVar.Prune() handles propagation
                     var unified = UnifyTypes(argTypes[i], chosen.ParameterTypes[i], call.Arguments[i].Span);
+
+                    // Wrap argument with coercion node if needed
+                    call.Arguments[i] = WrapWithCoercionIfNeeded(call.Arguments[i], argTypes[i].Prune(), chosen.ParameterTypes[i].Prune());
                 }
 
                 if (_functionStack.Count > 0)
@@ -1445,6 +1466,9 @@ public class TypeChecker
                 {
                     // Unify argument types - TypeVar.Prune() handles propagation
                     var unified = UnifyTypes(argTypes[i], concreteParams[i], call.Arguments[i].Span);
+
+                    // Wrap argument with coercion node if needed
+                    call.Arguments[i] = WrapWithCoercionIfNeeded(call.Arguments[i], argTypes[i].Prune(), concreteParams[i].Prune());
                 }
 
                 var specializedNode = EnsureSpecialization(chosen, bindings, concreteParams);
@@ -1467,6 +1491,9 @@ public class TypeChecker
                         // Resolve comptime_int to i32 for variadic functions - unify handles TypeVar propagation
                         var unified = UnifyTypes(argType, TypeRegistry.I32, call.Arguments[i].Span);
                         argTypes.Add(unified);
+
+                        // Wrap argument with coercion node
+                        call.Arguments[i] = WrapWithCoercionIfNeeded(call.Arguments[i], argType.Prune(), TypeRegistry.I32);
                     }
                     else
                     {
@@ -1871,6 +1898,93 @@ public class TypeChecker
         }
 
         return type;
+    }
+
+    /// <summary>
+    /// Wraps an expression in an ImplicitCoercionNode if a coercion from sourceType to targetType is needed.
+    /// Returns the original expression if no coercion is needed, or a new ImplicitCoercionNode wrapping it.
+    /// </summary>
+    private ExpressionNode WrapWithCoercionIfNeeded(ExpressionNode expr, TypeBase sourceType, TypeBase targetType)
+    {
+        // No coercion needed if types are equal
+        if (sourceType.Equals(targetType))
+            return expr;
+
+        // Determine the coercion kind
+        CoercionKind? kind = DetermineCoercionKind(sourceType, targetType);
+        if (kind == null)
+            return expr; // No coercion applicable
+
+        // Create and return the coercion node
+        var coercionNode = new ImplicitCoercionNode(expr.Span, expr, targetType, kind.Value);
+        return coercionNode;
+    }
+
+    /// <summary>
+    /// Determines the coercion kind for converting from sourceType to targetType.
+    /// Returns null if no coercion is applicable.
+    /// The type system has already validated these coercions are valid.
+    /// </summary>
+    private static CoercionKind? DetermineCoercionKind(TypeBase sourceType, TypeBase targetType)
+    {
+        // Option wrapping: T → Option(T)
+        if (targetType is StructType optionTarget && TypeRegistry.IsOption(optionTarget))
+        {
+            if (optionTarget.TypeArguments.Count > 0 && sourceType.Equals(optionTarget.TypeArguments[0]))
+                return CoercionKind.Wrap;
+
+            // Also handle comptime_int → Option(intType): this is Wrap (will harden inside)
+            if (optionTarget.TypeArguments.Count > 0 &&
+                sourceType is ComptimeIntType &&
+                TypeRegistry.IsIntegerType(optionTarget.TypeArguments[0]))
+                return CoercionKind.Wrap;
+        }
+
+        // Integer widening (includes comptime_int hardening)
+        if (sourceType is ComptimeIntType && TypeRegistry.IsIntegerType(targetType))
+            return CoercionKind.IntegerWidening;
+
+        if (TypeRegistry.IsIntegerType(sourceType) && TypeRegistry.IsIntegerType(targetType))
+            return CoercionKind.IntegerWidening;
+
+        // Binary-compatible reinterpret casts:
+        // - String ↔ Slice(u8)
+        // - [T; N] → Slice(T) or &T
+        // - &[T; N] → Slice(T) or &T
+        // - Slice(T) → &T
+
+        // String to byte slice (binary compatible)
+        if (sourceType is StructType ss && TypeRegistry.IsString(ss) &&
+            targetType is StructType ts && TypeRegistry.IsSlice(ts) &&
+            ts.TypeArguments.Count > 0 && ts.TypeArguments[0].Equals(TypeRegistry.U8))
+            return CoercionKind.ReinterpretCast;
+
+        // Array decay: [T; N] → &T or [T; N] → Slice(T)
+        if (sourceType is ArrayType)
+        {
+            if (targetType is ReferenceType)
+                return CoercionKind.ReinterpretCast;
+            if (targetType is StructType sliceTarget && TypeRegistry.IsSlice(sliceTarget))
+                return CoercionKind.ReinterpretCast;
+        }
+
+        // Reference to array decay: &[T; N] → Slice(T) or &[T; N] → &T
+        if (sourceType is ReferenceType { InnerType: ArrayType })
+        {
+            if (targetType is StructType sliceTarget && TypeRegistry.IsSlice(sliceTarget))
+                return CoercionKind.ReinterpretCast;
+            if (targetType is ReferenceType)
+                return CoercionKind.ReinterpretCast;
+        }
+
+        // Slice to reference
+        if (sourceType is StructType sliceSource && TypeRegistry.IsSlice(sliceSource) &&
+            targetType is ReferenceType refTarget &&
+            sliceSource.TypeArguments.Count > 0 &&
+            sliceSource.TypeArguments[0].Equals(refTarget.InnerType))
+            return CoercionKind.ReinterpretCast;
+
+        return null;
     }
 
     private bool CanExplicitCast(TypeBase source, TypeBase target)

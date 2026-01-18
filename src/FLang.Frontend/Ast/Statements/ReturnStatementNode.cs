@@ -9,5 +9,5 @@ public class ReturnStatementNode : StatementNode
         Expression = expression;
     }
 
-    public ExpressionNode Expression { get; }
+    public ExpressionNode Expression { get; set; }
 }

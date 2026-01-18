@@ -4,7 +4,6 @@ using FLang.Frontend.Ast;
 using FLang.Frontend.Ast.Declarations;
 using FLang.Frontend.Ast.Expressions;
 using FLang.Frontend.Ast.Statements;
-using FLang.Frontend.Ast.Types;
 using FLang.IR;
 using FLang.IR.Instructions;
 using Microsoft.Extensions.Logging;
@@ -20,7 +19,6 @@ public class AstLowering
     private readonly HashSet<string> _parameters = [];
     private readonly Stack<LoopContext> _loopStack = new();
     private readonly Stack<List<ExpressionNode>> _deferStack = new();
-    private readonly TypeChecker _typeSolver;
     private readonly ILogger<AstLowering> _logger;
     private int _blockCounter;
     private BasicBlock _currentBlock = null!;
@@ -32,10 +30,9 @@ public class AstLowering
     private readonly Dictionary<FType, int> _typeTableIndices = [];
     private GlobalValue? _typeTableGlobal = null;
 
-    private AstLowering(Compilation compilation, TypeChecker typeSolver, ILogger<AstLowering> logger)
+    private AstLowering(Compilation compilation, ILogger<AstLowering> logger)
     {
         _compilation = compilation;
-        _typeSolver = typeSolver;
         _logger = logger;
     }
 
@@ -44,7 +41,9 @@ public class AstLowering
     public static (Function Function, IReadOnlyList<Diagnostic> Diagnostics) Lower(FunctionDeclarationNode functionNode,
         Compilation compilation, TypeChecker typeSolver, ILogger<AstLowering> logger)
     {
-        var lowering = new AstLowering(compilation, typeSolver, logger);
+        // Note: typeSolver parameter kept for API compatibility but is no longer used
+        // All type information should be pre-resolved on AST nodes during type checking
+        var lowering = new AstLowering(compilation, logger);
         var function = lowering.LowerFunction(functionNode);
         return (function, lowering.Diagnostics);
     }
@@ -54,13 +53,12 @@ public class AstLowering
         _currentFunctionNode = functionNode;
         var isForeign = (functionNode.Modifiers & FunctionModifiers.Foreign) != 0;
 
+        // Use pre-resolved types from TypeChecker (should always be set)
         var retType = functionNode.ResolvedReturnType ??
-                      (functionNode.ReturnType != null
-                          ? ResolveTypeFromNode(functionNode.ReturnType)
-                          : TypeRegistry.Void);
+                      throw new InvalidOperationException($"Function '{functionNode.Name}' has no resolved return type - TypeChecker must set ResolvedReturnType");
 
         var resolvedParamTypes = functionNode.ResolvedParameterTypes ??
-                                 functionNode.Parameters.Select(p => ResolveTypeFromNode(p.Type)).ToList();
+                                 throw new InvalidOperationException($"Function '{functionNode.Name}' has no resolved parameter types - TypeChecker must set ResolvedParameterTypes");
 
         // Keep base name in IR; backend will mangle
         var function = new Function(functionNode.Name) { IsForeign = isForeign, ReturnType = retType };
@@ -107,10 +105,6 @@ public class AstLowering
         return function;
     }
 
-    private FType ResolveTypeFromNode(TypeNode typeNode)
-    {
-        return _typeSolver.ResolveTypeNode(typeNode) ?? TypeRegistry.Never;
-    }
 
     private BasicBlock CreateBlock(string hint)
     {
@@ -206,10 +200,9 @@ public class AstLowering
         {
             case VariableDeclarationNode varDecl:
             {
+                // Use pre-resolved type from TypeChecker (should always be set)
                 FType varType = varDecl.ResolvedType ??
-                                (varDecl.Type != null
-                                    ? ResolveTypeFromNode(varDecl.Type)
-                                    : varDecl.Initializer?.Type ?? TypeRegistry.Never);
+                                throw new InvalidOperationException($"Variable '{varDecl.Name}' has no resolved type - TypeChecker must set ResolvedType");
 
                 // Check if this is a struct or array type
                 bool isStruct = varType is StructType;
@@ -418,6 +411,9 @@ public class AstLowering
     {
         switch (expression)
         {
+            case ImplicitCoercionNode coercion:
+                return LowerImplicitCoercion(coercion);
+
             case IntegerLiteralNode intLiteral:
             {
                 var literalType = expression.Type;
@@ -643,7 +639,9 @@ public class AstLowering
                 {
                     foreach (var param in call.ResolvedTarget.Parameters)
                     {
-                        var paramType = param.ResolvedType ?? ResolveTypeFromNode(param.Type);
+                        // Use pre-resolved type from TypeChecker (should always be set)
+                        var paramType = param.ResolvedType ??
+                                        throw new InvalidOperationException($"Parameter '{param.Name}' has no resolved type - TypeChecker must set ResolvedType");
                         paramTypes.Add(paramType);
                     }
                 }
@@ -1792,6 +1790,75 @@ public class AstLowering
         _currentBlock.Instructions.Add(loadResult);
 
         return finalResult;
+    }
+
+    // ==================== Implicit Coercion Lowering ====================
+
+    private Value LowerImplicitCoercion(ImplicitCoercionNode coercion)
+    {
+        // First lower the inner expression
+        var innerValue = LowerExpression(coercion.Inner);
+        var targetType = coercion.TargetType;
+
+        // AstLowering trusts the types from TypeChecker.
+        // We emit explicit CastInstructions for type conversions, letting the
+        // backend decide whether actual code is needed (e.g., no-op for binary-compatible types).
+
+        switch (coercion.Kind)
+        {
+            case CoercionKind.IntegerWidening:
+                // Integer widening (including comptime_int hardening)
+                // For comptime_int, emit a cast to materialize the concrete type
+                // For same types, no cast needed
+                if (innerValue.Type!.Equals(targetType))
+                    return innerValue;
+                {
+                    var castResult = new LocalValue($"cast_{_tempCounter++}") { Type = targetType };
+                    var castInst = new CastInstruction(innerValue, targetType, castResult);
+                    _currentBlock.Instructions.Add(castInst);
+                    return castResult;
+                }
+
+            case CoercionKind.ReinterpretCast:
+                // Binary-compatible types: emit a cast instruction
+                // The C backend will emit this as a simple cast that may be a no-op
+                // Examples: String ↔ Slice(u8), [T; N] → Slice(T), Slice(T) → &T
+                if (innerValue.Type!.Equals(targetType))
+                    return innerValue;
+                {
+                    var castResult = new LocalValue($"reinterpret_{_tempCounter++}") { Type = targetType };
+                    var castInst = new CastInstruction(innerValue, targetType, castResult);
+                    _currentBlock.Instructions.Add(castInst);
+                    return castResult;
+                }
+
+            case CoercionKind.Wrap:
+                // T → Option(T): wrap value in Option struct
+                if (targetType is StructType optionType && TypeRegistry.IsOption(optionType))
+                {
+                    // If wrapping comptime_int, emit a cast to harden first
+                    var valueToWrap = innerValue;
+                    if (innerValue.Type is ComptimeInt && optionType.TypeArguments.Count > 0)
+                    {
+                        var hardenResult = new LocalValue($"harden_{_tempCounter++}") { Type = optionType.TypeArguments[0] };
+                        var hardenInst = new CastInstruction(innerValue, optionType.TypeArguments[0], hardenResult);
+                        _currentBlock.Instructions.Add(hardenInst);
+                        valueToWrap = hardenResult;
+                    }
+                    return LowerLiftToOption(valueToWrap, optionType);
+                }
+                // Fallback for other wrap types (future expansion)
+                {
+                    var castResult = new LocalValue($"wrap_{_tempCounter++}") { Type = targetType };
+                    var castInst = new CastInstruction(innerValue, targetType, castResult);
+                    _currentBlock.Instructions.Add(castInst);
+                    return castResult;
+                }
+
+            default:
+                // Should not happen - all coercion kinds are handled above
+                throw new InvalidOperationException($"Unknown coercion kind: {coercion.Kind}");
+        }
     }
 
     private class LoopContext

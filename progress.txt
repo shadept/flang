@@ -1,0 +1,61 @@
+# Progress: Make AstLowering Stateless
+
+## Status: COMPLETED
+
+## Summary
+Implemented explicit ImplicitCoercionNode to make type coercions visible in the AST,
+allowing AstLowering to be stateless and not depend on TypeChecker at runtime.
+
+## Changes Made
+
+### 1. Created ImplicitCoercionNode AST node
+- File: `src/FLang.Frontend/Ast/Expressions/ImplicitCoercionNode.cs`
+- Represents implicit type coercions in the AST
+- Simplified CoercionKind enum to just 3 types (per user request):
+  - **IntegerWidening**: Integer widening (i8 -> i32) and comptime_int hardening
+  - **ReinterpretCast**: Binary-compatible coercions (String <-> Slice(u8), array decay, etc.)
+  - **Wrap**: Wrapping/lifting a value with a constructor (T -> Option(T))
+
+### 2. Made AST nodes mutable for coercion insertion
+Modified the following nodes to allow TypeChecker to update expression references:
+- VariableDeclarationNode.Initializer: get -> get; set
+- ReturnStatementNode.Expression: get -> get; set
+- CallExpressionNode.Arguments: IReadOnlyList -> List
+- AssignmentExpressionNode.Value: get -> get; set
+- StructConstructionExpressionNode.Fields: IReadOnlyList -> List
+- AnonymousStructExpressionNode.Fields: IReadOnlyList -> List
+
+### 3. Updated TypeChecker to insert ImplicitCoercionNode
+- Added `WrapWithCoercionIfNeeded` helper method
+- Added `DetermineCoercionKind` helper method - now returns simplified 3-type enum:
+  - Wrap: T -> Option(T), comptime_int -> Option(intType)
+  - IntegerWidening: comptime_int -> concrete int, integer widening
+  - ReinterpretCast: String <-> Slice(u8), array decay, slice to reference
+- TypeChecker now wraps expressions in ImplicitCoercionNode when:
+  - Variable initializers need coercion
+  - Return expressions need coercion
+  - Function call arguments need coercion
+- Also ensured resolved types are stored on AST nodes during signature collection
+
+### 4. Updated AstLowering to handle ImplicitCoercionNode
+- Added `LowerImplicitCoercion` method to handle the new node
+- **Key design principle**: AstLowering trusts types from TypeChecker and does NOT mutate types
+- All coercions emit explicit `CastInstruction`s, letting the backend decide if code is needed:
+  - **IntegerWidening**: Emits CastInstruction (backend generates extend/trunc ops)
+  - **ReinterpretCast**: Emits CastInstruction (backend may emit no-op for binary-compatible types)
+  - **Wrap**: For Option, emits harden instruction if needed, then calls LowerLiftToOption
+- Removed `_typeSolver` dependency entirely
+- All type resolution now happens via pre-resolved AST properties
+- Throws InvalidOperationException for unknown coercion kinds
+
+### 5. Test Results
+- 77 tests pass, 15 fail (same as before changes)
+- No regressions introduced
+- All failing tests are pre-existing issues (not related to this change)
+
+## Architecture Impact
+- AstLowering is now truly stateless - it only reads pre-computed semantic info from AST
+- Type coercions are now explicit in the AST, making the lowering pass simpler
+- Better separation of concerns between TypeChecker (semantic analysis) and AstLowering (IR generation)
+- Simplified CoercionKind enum trusts the type system - no need for complex kind determination
+- AstLowering does not mutate types - it emits explicit instructions and lets the backend optimize

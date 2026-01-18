@@ -9,11 +9,12 @@ public class CallExpressionNode : ExpressionNode
         base(span)
     {
         FunctionName = functionName;
-        Arguments = arguments;
+        // Store as mutable list to allow TypeChecker to insert coercion nodes
+        Arguments = arguments is List<ExpressionNode> list ? list : new List<ExpressionNode>(arguments);
     }
 
     public string FunctionName { get; }
-    public IReadOnlyList<ExpressionNode> Arguments { get; }
+    public List<ExpressionNode> Arguments { get; }
 
     /// <summary>
     /// Semantic: The resolved target function declaration.
