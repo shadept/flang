@@ -461,8 +461,9 @@ public class CCodeGenerator
             if (param.Type is StructType st)
             {
                 var structType = TypeToCType(st);
-                var copyName = $"{param.Name}_copy";
-                _output.AppendLine($"    {structType} {copyName} = *{param.Name};");
+                var escapedName = EscapeCIdentifier(param.Name);
+                var copyName = $"{escapedName}_copy";
+                _output.AppendLine($"    {structType} {copyName} = *{escapedName};");
                 // Track that uses of param should be remapped to param_copy
                 _parameterRemap[param.Name] = copyName;
             }
@@ -816,7 +817,7 @@ public class CCodeGenerator
             var paramType = TypeToCType(p.Type);
             if (p.Type is StructType)
                 paramType += "*";
-            return $"{paramType} {p.Name}";
+            return $"{paramType} {EscapeCIdentifier(p.Name)}";
         }));
     }
 
@@ -844,11 +845,13 @@ public class CCodeGenerator
 
     /// <summary>
     /// Sanitize an identifier name to be a valid C identifier.
-    /// Replaces dots and other invalid characters with underscores.
+    /// Replaces dots and other invalid characters with underscores,
+    /// and escapes C reserved keywords.
     /// </summary>
     private static string SanitizeCIdentifier(string name)
     {
-        return name.Replace('.', '_');
+        var sanitized = name.Replace('.', '_');
+        return EscapeCIdentifier(sanitized);
     }
 
     private string TypeToCType(FType type)
@@ -961,6 +964,26 @@ public class CCodeGenerator
             }
         }
         return builder.ToString();
+    }
+
+    // C reserved keywords that must be escaped when used as identifiers
+    private static readonly HashSet<string> CReservedKeywords =
+    [
+        "auto", "break", "case", "char", "const", "continue", "default", "do",
+        "double", "else", "enum", "extern", "float", "for", "goto", "if",
+        "inline", "int", "long", "register", "restrict", "return", "short",
+        "signed", "sizeof", "static", "struct", "switch", "typedef", "union",
+        "unsigned", "void", "volatile", "while", "_Alignas", "_Alignof",
+        "_Atomic", "_Bool", "_Complex", "_Generic", "_Imaginary", "_Noreturn",
+        "_Static_assert", "_Thread_local"
+    ];
+
+    /// <summary>
+    /// Escapes a FLang identifier if it conflicts with a C reserved keyword.
+    /// </summary>
+    private static string EscapeCIdentifier(string name)
+    {
+        return CReservedKeywords.Contains(name) ? $"{name}_" : name;
     }
 
     #endregion

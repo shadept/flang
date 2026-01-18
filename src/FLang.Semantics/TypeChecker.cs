@@ -1858,6 +1858,12 @@ public class TypeChecker
                         c.Span,
                         $"cannot cast `{src}` to `{dst}`",
                         "E2020");
+
+                // When casting comptime_int to a concrete integer type, update the TypeVar
+                // so the literal gets properly resolved
+                if (src is TypeVar srcTv && srcTv.Prune() is ComptimeIntType && TypeRegistry.IsIntegerType(dst))
+                    srcTv.Instance = dst;
+
                 type = dst;
                 break;
             }
@@ -1989,6 +1995,10 @@ public class TypeChecker
 
     private bool CanExplicitCast(TypeBase source, TypeBase target)
     {
+        // Prune TypeVars to get their actual types (e.g., TypeVar bound to comptime_int)
+        source = source.Prune();
+        target = target.Prune();
+
         if (source.Equals(target)) return true;
         if (TypeRegistry.IsIntegerType(source) && TypeRegistry.IsIntegerType(target)) return true;
         // XXX get rest seems like Unification
@@ -2586,34 +2596,41 @@ public class TypeChecker
         switch (param)
         {
             case GenericParameterType gp:
+                // Prune arg to handle TypeVars bound to comptime types
+                var prunedArg = arg.Prune();
+
                 if (bindings.TryGetValue(gp.ParamName, out var existing))
                 {
-                    if (existing is ComptimeIntType && TypeRegistry.IsIntegerType(arg))
+                    var prunedExisting = existing.Prune();
+
+                    // comptime_int in binding + concrete int arg: update binding to concrete type
+                    if (prunedExisting is ComptimeIntType && TypeRegistry.IsIntegerType(prunedArg))
                     {
-                        bindings[gp.ParamName] = arg;
+                        bindings[gp.ParamName] = prunedArg;
                         return true;
                     }
 
-                    if (arg is ComptimeIntType && TypeRegistry.IsIntegerType(existing))
+                    // concrete int in binding + comptime_int arg: propagate concrete type to arg's TypeVar
+                    if (prunedArg is ComptimeIntType && TypeRegistry.IsIntegerType(prunedExisting))
+                    {
+                        // If arg is a TypeVar, update it to point to the concrete type
+                        if (arg is TypeVar argTv)
+                            argTv.Instance = prunedExisting;
                         return true;
+                    }
 
-                    if (!existing.Equals(arg))
+                    if (!prunedExisting.Equals(prunedArg))
                     {
                         conflictParam = gp.ParamName;
-                        conflictTypes = (existing, arg);
+                        conflictTypes = (prunedExisting, prunedArg);
                         return false;
                     }
 
                     return true;
                 }
 
-                if (arg is ComptimeIntType)
-                {
-                    bindings[gp.ParamName] = arg;
-                    return true;
-                }
-
-                bindings[gp.ParamName] = arg;
+                // No existing binding - use pruned arg for the binding
+                bindings[gp.ParamName] = prunedArg;
                 return true;
             case ReferenceType pr when arg is ReferenceType ar:
                 _logger.LogDebug("{Indent}Recursing into reference types: &{ParamInner} vs &{ArgInner}", Indent(),
@@ -2736,7 +2753,62 @@ public class TypeChecker
 
                 return true;
             }
+            case EnumType pe when arg is EnumType ae && pe.Name == ae.Name:
+            {
+                // Match type arguments for generic enums
+                // e.g., matching Option($T) with Option(i32) should bind $T to i32
+                if (pe.TypeArguments.Count == ae.TypeArguments.Count)
+                {
+                    for (var i = 0; i < pe.TypeArguments.Count; i++)
+                    {
+                        var paramType = pe.TypeArguments[i];
+                        var argType = ae.TypeArguments[i];
+
+                        _logger.LogDebug("{Indent}Enum type arg[{Index}]: '{ParamType}' vs '{ArgType}'", Indent(), i,
+                            paramType.Name, argType.Name);
+
+                        // If param is a generic parameter type, bind it
+                        if (paramType is GenericParameterType gp)
+                        {
+                            var varName = gp.ParamName;
+                            _logger.LogDebug("{Indent}Binding type variable '{VarName}' -> '{ArgType}'", Indent(),
+                                varName, argType.Name);
+
+                            if (bindings.TryGetValue(varName, out var existingBinding))
+                            {
+                                if (!existingBinding.Equals(argType))
+                                {
+                                    _logger.LogDebug(
+                                        "{Indent}Conflict: '{VarName}' already bound to '{ExistingType}', cannot rebind to '{NewType}'",
+                                        Indent(), varName, existingBinding.Name, argType.Name);
+                                    conflictParam = varName;
+                                    conflictTypes = (existingBinding, argType);
+                                    return false;
+                                }
+                            }
+                            else
+                            {
+                                bindings[varName] = argType;
+                            }
+                        }
+                        else if (!TryBindGeneric(paramType, argType, bindings, out conflictParam, out conflictTypes))
+                        {
+                            // Recursively bind type arguments that may contain nested generics
+                            return false;
+                        }
+                    }
+                }
+
+                return true;
+            }
             default:
+                // If arg is a TypeVar bound to comptime_int and param is a concrete integer type,
+                // update the TypeVar to point to the concrete type
+                if (arg is TypeVar argTypeVar && argTypeVar.Prune() is ComptimeIntType && TypeRegistry.IsIntegerType(param))
+                {
+                    argTypeVar.Instance = param;
+                    return true;
+                }
                 return arg.Equals(param) || IsConcreteCompatible(arg, param);
         }
     }
