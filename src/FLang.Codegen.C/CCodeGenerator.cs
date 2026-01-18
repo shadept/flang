@@ -16,7 +16,6 @@ public class CCodeGenerator
     private readonly StringBuilder _output = new();
     private readonly Dictionary<string, StructType> _structDefinitions = [];
     private readonly Dictionary<string, EnumType> _enumDefinitions = [];
-    private readonly HashSet<FType> _sliceElementTypes = [];
     private readonly HashSet<string> _emittedGlobals = [];
     private readonly Dictionary<string, string> _parameterRemap = [];
     private Function? _currentFunction;
@@ -56,7 +55,6 @@ public class CCodeGenerator
     private void EmitProgram(IReadOnlyList<Function> functions)
     {
         EmitHeaders();
-        EmitSliceStructs();
         EmitStructDefinitions();
         EmitEnumDefinitions();
         EmitForeignPrototypes(functions);
@@ -68,26 +66,6 @@ public class CCodeGenerator
             if (function.IsForeign) continue;
             _parameterRemap.Clear();
             EmitFunctionDefinition(function);
-            _output.AppendLine();
-        }
-    }
-
-    private void EmitSliceStructs()
-    {
-        foreach (var elemType in _sliceElementTypes)
-        {
-            // Create the Slice<T> StructType to get the correct C name
-            var sliceType = TypeRegistry.MakeSlice(elemType);
-            var structName = GetStructCName(sliceType);
-
-            // Skip if this is String (which is manually defined in headers)
-            if (structName == "String") continue;
-
-            var elemCType = TypeToCType(elemType);
-            _output.AppendLine($"struct {structName} {{");
-            _output.AppendLine($"    {elemCType}* ptr;");
-            _output.AppendLine("    uintptr_t len;");
-            _output.AppendLine("};");
             _output.AppendLine();
         }
     }
@@ -361,12 +339,18 @@ public class CCodeGenerator
                 return;
 
             case StructType st when TypeRegistry.IsSlice(st):
-                if (st.TypeArguments.Count > 0)
                 {
-                    _sliceElementTypes.Add(st.TypeArguments[0]);
-                    CollectStructType(st.TypeArguments[0]);
+                    // Collect slice as a regular struct
+                    var cName = GetStructCName(st);
+                    if (!_structDefinitions.ContainsKey(cName))
+                    {
+                        _structDefinitions[cName] = st;
+                        // Also collect the element type
+                        if (st.TypeArguments.Count > 0)
+                            CollectStructType(st.TypeArguments[0]);
+                    }
+                    break;
                 }
-                break;
 
             case EnumType et:
                 {
@@ -400,7 +384,9 @@ public class CCodeGenerator
                 break;
 
             case ArrayType at:
-                _sliceElementTypes.Add(at.ElementType);
+                // Arrays may be coerced to slices, so collect a Slice struct for the element type
+                var sliceType = TypeRegistry.MakeSlice(at.ElementType);
+                CollectStructType(sliceType);
                 CollectStructType(at.ElementType);
                 break;
         }

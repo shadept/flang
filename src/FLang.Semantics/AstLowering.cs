@@ -75,7 +75,7 @@ public class AstLowering
             function.Parameters.Add(new FunctionParameter(param.Name, paramType));
 
             // Add parameter to locals with type so it can be referenced in the function body
-            var localParam = new LocalValue(param.Name) { Type = paramType };
+            var localParam = new LocalValue(param.Name, paramType);
             _locals[param.Name] = localParam;
             _parameters.Add(param.Name);
         }
@@ -187,8 +187,7 @@ public class AstLowering
         var byteOffset = new ConstantValue(index * typeSize) { Type = TypeRegistry.USize };
 
         // Get pointer to the element: &__flang__type_table[index]
-        var elemPtr = new LocalValue($"type_ptr_{_tempCounter++}");
-        elemPtr.Type = new ReferenceType(typeStructType);
+        var elemPtr = new LocalValue($"type_ptr_{_tempCounter++}", new ReferenceType(typeStructType));
         _currentBlock.Instructions.Add(new GetElementPtrInstruction(_typeTableGlobal, byteOffset, elemPtr));
 
         return elemPtr;
@@ -213,8 +212,7 @@ public class AstLowering
                     var structType = (StructType)varType;
 
                     // Allocate stack space for struct
-                    var allocaResult = new LocalValue(varDecl.Name)
-                        { Type = new ReferenceType(varType) };
+                    var allocaResult = new LocalValue(varDecl.Name, new ReferenceType(varType));
                     var allocaInst = new AllocaInstruction(varType, varType.Size, allocaResult);
                     _currentBlock.Instructions.Add(allocaInst);
 
@@ -254,8 +252,7 @@ public class AstLowering
                     var arrayType = (ArrayType)varType;
 
                     // Allocate stack space for array
-                    var allocaResult = new LocalValue(varDecl.Name)
-                        { Type = new ReferenceType(arrayType) };
+                    var allocaResult = new LocalValue(varDecl.Name, new ReferenceType(arrayType));
                     var allocaInst = new AllocaInstruction(arrayType, arrayType.Size, allocaResult);
                     _currentBlock.Instructions.Add(allocaInst);
 
@@ -272,7 +269,7 @@ public class AstLowering
                         if (initValue is GlobalValue globalArray)
                         {
                             // Use memcpy to copy the array
-                            var memcpyResult = new LocalValue($"memcpy_{_tempCounter++}") { Type = TypeRegistry.Void };
+                            var memcpyResult = new LocalValue($"memcpy_{_tempCounter++}", TypeRegistry.Void);
                             var sizeValue = new ConstantValue(arrayType.Size) { Type = TypeRegistry.USize };
 
                             var memcpyCall = new CallInstruction(
@@ -295,8 +292,7 @@ public class AstLowering
                 else
                 {
                     // Scalars: allocate on stack like arrays/structs (memory-based SSA)
-                    var allocaResult = new LocalValue(varDecl.Name)
-                        { Type = new ReferenceType(varType) };
+                    var allocaResult = new LocalValue(varDecl.Name, new ReferenceType(varType));
                     var allocaInst = new AllocaInstruction(varType, varType.Size, allocaResult);
                     _currentBlock.Instructions.Add(allocaInst);
 
@@ -494,7 +490,7 @@ public class AstLowering
                     var typeGlobal = GetTypeLiteralValue(referencedType, st);
 
                     // Load the struct value
-                    var loaded = new LocalValue($"type_load_{_tempCounter++}") { Type = st };
+                    var loaded = new LocalValue($"type_load_{_tempCounter++}", st);
                     _currentBlock.Instructions.Add(new LoadInstruction(typeGlobal, loaded));
                     return loaded;
                 }
@@ -530,8 +526,7 @@ public class AstLowering
                         }
 
                         // Scalars: load the value from memory
-                        var loadedValue = new LocalValue($"{identifier.Name}_load_{_tempCounter++}")
-                            { Type = refType.InnerType };
+                        var loadedValue = new LocalValue($"{identifier.Name}_load_{_tempCounter++}", refType.InnerType);
                         var loadInstruction = new LoadInstruction(localValue, loadedValue);
                         _currentBlock.Instructions.Add(loadInstruction);
                         return loadedValue;
@@ -571,7 +566,7 @@ public class AstLowering
                     _ => throw new Exception($"Unknown binary operator: {binary.Operator}")
                 };
 
-                var temp = new LocalValue($"t{_tempCounter++}") { Type = binary.Type };
+                var temp = new LocalValue($"t{_tempCounter++}", binary.Type!);
                 var instruction = new BinaryInstruction(op, left, right, temp);
                 _currentBlock.Instructions.Add(instruction);
                 return temp;
@@ -656,7 +651,7 @@ public class AstLowering
                     // Insert cast if argument type doesn't match parameter type but can coerce
                     if (i < paramTypes.Count && argType != null && !argType.Equals(paramTypes[i]))
                     {
-                        var argCastResult = new LocalValue($"cast_{_tempCounter++}") { Type = paramTypes[i] };
+                        var argCastResult = new LocalValue($"cast_{_tempCounter++}", paramTypes[i]);
                         // CastInstruction now infers cast kind from source and target types
                         var argCastInst = new CastInstruction(argVal, paramTypes[i], argCastResult);
                         _currentBlock.Instructions.Add(argCastInst);
@@ -669,7 +664,7 @@ public class AstLowering
                 }
 
                 var callType = exprType ?? TypeRegistry.Never;
-                var callResult = new LocalValue($"call_{_tempCounter++}") { Type = callType };
+                var callResult = new LocalValue($"call_{_tempCounter++}", callType);
                 var targetName = call.ResolvedTarget?.Name ?? call.FunctionName;
                 var callInst = new CallInstruction(targetName, args, callResult);
                 if (call.ResolvedTarget != null)
@@ -697,7 +692,7 @@ public class AstLowering
                     }
 
                     // For parameters or other non-alloca'd values, emit AddressOfInstruction
-                    var addrResult = new LocalValue($"addr_{_tempCounter++}") { Type = addressOf.Type };
+                    var addrResult = new LocalValue($"addr_{_tempCounter++}", addressOf.Type!);
                     var addrInst = new AddressOfInstruction(addrIdentifier.Name, addrResult);
                     _currentBlock.Instructions.Add(addrInst);
                     return addrResult;
@@ -714,14 +709,13 @@ public class AstLowering
                     {
                         var elemSize = GetTypeSize(atAddr.ElementType);
                         // offset = index * elem_size
-                        var offsetTemp = new LocalValue($"offset_{_tempCounter++}") { Type = TypeRegistry.USize };
+                        var offsetTemp = new LocalValue($"offset_{_tempCounter++}", TypeRegistry.USize);
                         var offsetInst = new BinaryInstruction(BinaryOp.Multiply, addrIndexValue,
                             new ConstantValue(elemSize) { Type = TypeRegistry.I32 }, offsetTemp);
                         _currentBlock.Instructions.Add(offsetInst);
 
                         // element pointer = base + offset
-                        var elemPtr = new LocalValue($"index_ptr_{_tempCounter++}")
-                            { Type = new ReferenceType(atAddr.ElementType) };
+                        var elemPtr = new LocalValue($"index_ptr_{_tempCounter++}", new ReferenceType(atAddr.ElementType));
                         var gepInst = new GetElementPtrInstruction(addrBaseValue, offsetTemp, elemPtr);
                         _currentBlock.Instructions.Add(gepInst);
                         return elemPtr;
@@ -746,7 +740,7 @@ public class AstLowering
             case DereferenceExpressionNode deref:
                 // Dereference: ptr.*
                 var ptrValue = LowerExpression(deref.Target);
-                var loadResult = new LocalValue($"load_{_tempCounter++}") { Type = deref.Type };
+                var loadResult = new LocalValue($"load_{_tempCounter++}", deref.Type!);
                 var loadInst = new LoadInstruction(ptrValue, loadResult);
                 _currentBlock.Instructions.Add(loadInst);
                 return loadResult;
@@ -816,7 +810,7 @@ public class AstLowering
 
                 // Emit CastInstruction for all casts
                 // The backend will determine the appropriate cast implementation by inspecting types
-                var castResult = new LocalValue($"cast_{_tempCounter++}") { Type = dstType };
+                var castResult = new LocalValue($"cast_{_tempCounter++}", dstType);
                 var castInst = new CastInstruction(srcVal, dstType, castResult);
                 _currentBlock.Instructions.Add(castInst);
                 return castResult;
@@ -847,7 +841,7 @@ public class AstLowering
                     {
                         // ptr is an alias for the array itself but as reference
                         var elementPtrType = new ReferenceType(arrayType.ElementType);
-                        var castResult = new LocalValue($"array_ptr_{_tempCounter++}") { Type = elementPtrType };
+                        var castResult = new LocalValue($"array_ptr_{_tempCounter++}", elementPtrType);
                         var castInst = new CastInstruction(targetValue, elementPtrType, castResult);
                         _currentBlock.Instructions.Add(castInst);
                         return castResult;
@@ -892,14 +886,12 @@ public class AstLowering
 
                 // Get pointer to field: targetPtr + offset
                 var fieldType2 = accessStruct.GetFieldType(fieldAccess.FieldName) ?? TypeRegistry.Never;
-                var fieldPointer = new LocalValue($"field_ptr_{_tempCounter++}")
-                    { Type = new ReferenceType(fieldType2) };
+                var fieldPointer = new LocalValue($"field_ptr_{_tempCounter++}", new ReferenceType(fieldType2));
                 var fieldGepInst = new GetElementPtrInstruction(targetValue, fieldByteOffset, fieldPointer);
                 _currentBlock.Instructions.Add(fieldGepInst);
 
                 // Load value from field
-                var fieldLoadResult = new LocalValue($"field_load_{_tempCounter++}")
-                    { Type = accessStruct.GetFieldType(fieldAccess.FieldName) };
+                var fieldLoadResult = new LocalValue($"field_load_{_tempCounter++}", fieldType2);
                 var fieldLoadInst = new LoadInstruction(fieldPointer, fieldLoadResult);
                 _currentBlock.Instructions.Add(fieldLoadInst);
 
@@ -1003,20 +995,18 @@ public class AstLowering
                     var elemSize = GetTypeSize(arrayTypeForIndex.ElementType);
 
                     // Calculate offset: index * element_size
-                    var offsetTemp = new LocalValue($"offset_{_tempCounter++}") { Type = TypeRegistry.USize };
+                    var offsetTemp = new LocalValue($"offset_{_tempCounter++}", TypeRegistry.USize);
                     var offsetInst = new BinaryInstruction(BinaryOp.Multiply, indexValue,
                         new ConstantValue(elemSize) { Type = TypeRegistry.I32 }, offsetTemp);
                     _currentBlock.Instructions.Add(offsetInst);
 
                     // Calculate element address: base + offset
-                    var indexElemPtr = new LocalValue($"index_ptr_{_tempCounter++}")
-                        { Type = new ReferenceType(arrayTypeForIndex.ElementType) };
+                    var indexElemPtr = new LocalValue($"index_ptr_{_tempCounter++}", new ReferenceType(arrayTypeForIndex.ElementType));
                     var indexGepInst = new GetElementPtrInstruction(baseValue, offsetTemp, indexElemPtr);
                     _currentBlock.Instructions.Add(indexGepInst);
 
                     // Load value from element
-                    var indexLoadResult = new LocalValue($"index_load_{_tempCounter++}")
-                        { Type = arrayTypeForIndex.ElementType };
+                    var indexLoadResult = new LocalValue($"index_load_{_tempCounter++}", arrayTypeForIndex.ElementType);
                     var indexLoadInst = new LoadInstruction(indexElemPtr, indexLoadResult);
                     _currentBlock.Instructions.Add(indexLoadInst);
 
@@ -1066,7 +1056,7 @@ public class AstLowering
                 "E3010"
             ));
             // Return a dummy pointer to avoid cascading errors
-            return new LocalValue("error") { Type = new ReferenceType(TypeRegistry.Never) };
+            return new LocalValue("error", new ReferenceType(TypeRegistry.Never));
         }
 
         return targetPtr;
@@ -1093,7 +1083,7 @@ public class AstLowering
                 "type checking failed",
                 "E3002"
             ));
-            return new LocalValue("error") { Type = new ReferenceType(TypeRegistry.Never) };
+            return new LocalValue("error", new ReferenceType(TypeRegistry.Never));
         }
 
         // Calculate field offset
@@ -1106,13 +1096,12 @@ public class AstLowering
                 "type checking failed",
                 "E3003"
             ));
-            return new LocalValue("error") { Type = new ReferenceType(TypeRegistry.Never) };
+            return new LocalValue("error", new ReferenceType(TypeRegistry.Never));
         }
 
         // Get pointer to field: targetPtr + offset
         var fieldType = accessStruct.GetFieldType(memberAccess.FieldName) ?? TypeRegistry.Never;
-        var fieldPointer = new LocalValue($"field_ptr_{_tempCounter++}")
-            { Type = new ReferenceType(fieldType) };
+        var fieldPointer = new LocalValue($"field_ptr_{_tempCounter++}", new ReferenceType(fieldType));
         var fieldGepInst = new GetElementPtrInstruction(targetValue, fieldByteOffset, fieldPointer);
         _currentBlock.Instructions.Add(fieldGepInst);
 
@@ -1134,7 +1123,7 @@ public class AstLowering
         _currentBlock = thenBlock;
         var thenValue = LowerExpression(ifExpr.ThenBranch);
         // TODO skip next 3 lines if thenbranch is terminal (return, never, etc)
-        var thenResult = new LocalValue($"if_result_then_{_tempCounter++}"); // TODO type
+        var thenResult = new LocalValue($"if_result_then_{_tempCounter++}", thenValue.Type ?? TypeRegistry.Never);
         _currentBlock.Instructions.Add(new StoreInstruction(thenResult.Name, thenValue, thenResult));
         _currentBlock.Instructions.Add(new JumpInstruction(mergeBlock));
 
@@ -1144,7 +1133,7 @@ public class AstLowering
         {
             _currentBlock = elseBlock;
             var elseValue = LowerExpression(ifExpr.ElseBranch);
-            elseResult = new LocalValue($"if_result_else_{_tempCounter++}"); // TODO type
+            elseResult = new LocalValue($"if_result_else_{_tempCounter++}", elseValue.Type ?? TypeRegistry.Never);
             _currentBlock.Instructions.Add(new StoreInstruction(elseResult.Name, elseValue, elseResult));
             _currentBlock.Instructions.Add(new JumpInstruction(mergeBlock));
         }
@@ -1186,7 +1175,7 @@ public class AstLowering
         var iterableType = forLoop.IterableExpression.Type;
 
         // If type checking failed for this loop, skip lowering – diagnostics are already emitted.
-        if (forLoop.IteratorType == null || forLoop.ElementType == null || iterableType == null)
+        if (forLoop.IteratorType == null || forLoop.ElementType == null || iterableType == null || forLoop.NextResultOptionType == null)
             return;
 
         var iteratorType = forLoop.IteratorType;
@@ -1202,26 +1191,20 @@ public class AstLowering
         var iterableValue = LowerExpression(forLoop.IterableExpression);
 
         // 2. Call iter(&iterable) -> IteratorStruct
-        var iterResult = new LocalValue($"iter_{_tempCounter++}") { Type = iteratorType };
+        var iterResult = new LocalValue($"iter_{_tempCounter++}", iteratorType);
         var iterCall = new CallInstruction("iter", new List<Value> { iterableValue }, iterResult);
         // iter has signature: fn iter(&T) IteratorState
         iterCall.CalleeParamTypes = new List<FType> { new ReferenceType(iterableType) };
         _currentBlock.Instructions.Add(iterCall);
 
         // 3. Allocate iterator state on stack and store the initial iterator value
-        var iteratorPtr = new LocalValue($"iter_ptr_{_tempCounter++}")
-        {
-            Type = new ReferenceType(iteratorType)
-        };
+        var iteratorPtr = new LocalValue($"iter_ptr_{_tempCounter++}", new ReferenceType(iteratorType));
         var iteratorAlloca = new AllocaInstruction(iteratorType, iteratorType.Size, iteratorPtr);
         _currentBlock.Instructions.Add(iteratorAlloca);
         _currentBlock.Instructions.Add(new StorePointerInstruction(iteratorPtr, iterResult));
 
         // 4. Allocate loop variable on stack and register in locals
-        var loopVarPtr = new LocalValue(forLoop.IteratorVariable)
-        {
-            Type = new ReferenceType(elementType)
-        };
+        var loopVarPtr = new LocalValue(forLoop.IteratorVariable, new ReferenceType(elementType));
         var loopVarAlloca = new AllocaInstruction(elementType, elementType.Size, loopVarPtr);
         _currentBlock.Instructions.Add(loopVarAlloca);
         _locals[forLoop.IteratorVariable] = loopVarPtr;
@@ -1232,7 +1215,7 @@ public class AstLowering
         // 5. loop_cond: call next(&iterator), check has_value
         _currentBlock = condBlock;
 
-        var nextResult = new LocalValue($"next_{_tempCounter++}") { Type = optionType };
+        var nextResult = new LocalValue($"next_{_tempCounter++}", optionType);
         var nextCall = new CallInstruction("next", new List<Value> { iteratorPtr }, nextResult);
         // next has signature: fn next(&IteratorState) E?
         nextCall.CalleeParamTypes = new List<FType> { new ReferenceType(iteratorType) };
@@ -1240,16 +1223,13 @@ public class AstLowering
 
         // Load has_value field
         var hasValueOffset = optionType.GetFieldOffset("has_value");
-        var hasValuePtr = new LocalValue($"has_value_ptr_{_tempCounter++}")
-        {
-            Type = new ReferenceType(TypeRegistry.Bool)
-        };
+        var hasValuePtr = new LocalValue($"has_value_ptr_{_tempCounter++}", new ReferenceType(TypeRegistry.Bool));
         _currentBlock.Instructions.Add(new GetElementPtrInstruction(
             nextResult,
             new ConstantValue(hasValueOffset) { Type = TypeRegistry.USize },
             hasValuePtr));
 
-        var hasValue = new LocalValue($"has_value_{_tempCounter++}") { Type = TypeRegistry.Bool };
+        var hasValue = new LocalValue($"has_value_{_tempCounter++}", TypeRegistry.Bool);
         _currentBlock.Instructions.Add(new LoadInstruction(hasValuePtr, hasValue));
 
         // Branch based on has_value
@@ -1263,19 +1243,13 @@ public class AstLowering
         // Extract value field from Option
         var valueFieldType = optionType.GetFieldType("value") ?? elementType;
         var valueOffset = optionType.GetFieldOffset("value");
-        var valuePtr = new LocalValue($"value_ptr_{_tempCounter++}")
-        {
-            Type = new ReferenceType(valueFieldType)
-        };
+        var valuePtr = new LocalValue($"value_ptr_{_tempCounter++}", new ReferenceType(valueFieldType));
         _currentBlock.Instructions.Add(new GetElementPtrInstruction(
             nextResult,
             new ConstantValue(valueOffset) { Type = TypeRegistry.USize },
             valuePtr));
 
-        var loopValue = new LocalValue($"{forLoop.IteratorVariable}_val_{_tempCounter++}")
-        {
-            Type = valueFieldType
-        };
+        var loopValue = new LocalValue($"{forLoop.IteratorVariable}_val_{_tempCounter++}", valueFieldType);
         _currentBlock.Instructions.Add(new LoadInstruction(valuePtr, loopValue));
 
         // Store into loop variable's stack slot
@@ -1316,15 +1290,13 @@ public class AstLowering
         var endValue = LowerExpression(rangeExpr.End);
 
         // Allocate Range struct on stack
-        var rangePtr = new LocalValue($"_range_ptr_{_tempCounter++}")
-            { Type = new ReferenceType(rangeType) };
+        var rangePtr = new LocalValue($"_range_ptr_{_tempCounter++}", new ReferenceType(rangeType));
         _currentBlock.Instructions.Add(new AllocaInstruction(
             rangeType, rangeType.Size, rangePtr));
 
         // Set start field
         var startFieldOffset = rangeType.GetFieldOffset("start");
-        var startFieldPtr = new LocalValue($"_start_ptr_{_tempCounter++}")
-            { Type = new ReferenceType(startValue.Type) };
+        var startFieldPtr = new LocalValue($"_start_ptr_{_tempCounter++}", new ReferenceType(startValue.Type!));
         _currentBlock.Instructions.Add(new GetElementPtrInstruction(
             rangePtr, new ConstantValue(startFieldOffset) { Type = TypeRegistry.USize },
             startFieldPtr));
@@ -1332,15 +1304,14 @@ public class AstLowering
 
         // Set end field
         var endFieldOffset = rangeType.GetFieldOffset("end");
-        var endFieldPtr = new LocalValue($"_end_ptr_{_tempCounter++}")
-            { Type = new ReferenceType(endValue.Type) };
+        var endFieldPtr = new LocalValue($"_end_ptr_{_tempCounter++}", new ReferenceType(endValue.Type!));
         _currentBlock.Instructions.Add(new GetElementPtrInstruction(
             rangePtr, new ConstantValue(endFieldOffset) { Type = TypeRegistry.USize },
             endFieldPtr));
         _currentBlock.Instructions.Add(new StorePointerInstruction(endFieldPtr, endValue));
 
         // Load the Range value
-        var rangeValue = new LocalValue($"_range_{_tempCounter++}") { Type = rangeType };
+        var rangeValue = new LocalValue($"_range_{_tempCounter++}", rangeType);
         _currentBlock.Instructions.Add(new LoadInstruction(rangePtr, rangeValue));
 
         return rangeValue;
@@ -1353,7 +1324,7 @@ public class AstLowering
     {
         // Use memcpy to copy the entire struct
         var sizeVal = new ConstantValue(structType.Size) { Type = TypeRegistry.USize };
-        var memcpyResult = new LocalValue($"_unused_{_tempCounter++}") { Type = TypeRegistry.Void };
+        var memcpyResult = new LocalValue($"_unused_{_tempCounter++}", TypeRegistry.Void);
 
         var memcpyCall = new CallInstruction("memcpy",
             new List<Value> { destPtr, srcPtr, sizeVal },
@@ -1372,7 +1343,7 @@ public class AstLowering
         // memset(ptr, 0, size)
         var zeroValue = new ConstantValue(0) { Type = TypeRegistry.U8 };
         var sizeValue = new ConstantValue(sizeInBytes) { Type = TypeRegistry.USize };
-        var memsetResult = new LocalValue($"_unused_{_tempCounter++}") { Type = TypeRegistry.Void };
+        var memsetResult = new LocalValue($"_unused_{_tempCounter++}", TypeRegistry.Void);
 
         var memsetCall = new CallInstruction("memset",
             new List<Value> { ptr, zeroValue, sizeValue },
@@ -1388,7 +1359,7 @@ public class AstLowering
         StructType structType,
         SourceSpan span)
     {
-        var allocaResult = new LocalValue($"alloca_{_tempCounter++}") { Type = new ReferenceType(structType) };
+        var allocaResult = new LocalValue($"alloca_{_tempCounter++}", new ReferenceType(structType));
         var allocaInst = new AllocaInstruction(structType, structType.Size, allocaResult);
         _currentBlock.Instructions.Add(allocaInst);
 
@@ -1407,8 +1378,7 @@ public class AstLowering
             }
 
             var fieldValue = LowerExpression(fieldExpr);
-            var fieldPtrResult = new LocalValue($"field_ptr_{_tempCounter++}")
-                { Type = new ReferenceType(fieldType) };
+            var fieldPtrResult = new LocalValue($"field_ptr_{_tempCounter++}", new ReferenceType(fieldType));
             var gepInst = new GetElementPtrInstruction(allocaResult, fieldOffset, fieldPtrResult);
             _currentBlock.Instructions.Add(gepInst);
 
@@ -1416,7 +1386,7 @@ public class AstLowering
             _currentBlock.Instructions.Add(storeInst);
         }
 
-        var structValue = new LocalValue($"struct_val_{_tempCounter++}") { Type = structType };
+        var structValue = new LocalValue($"struct_val_{_tempCounter++}", structType);
         var loadInst = new LoadInstruction(allocaResult, structValue);
         _currentBlock.Instructions.Add(loadInst);
         return structValue;
@@ -1424,7 +1394,7 @@ public class AstLowering
 
     private Value LowerNullLiteral(StructType optionType)
     {
-        var allocaResult = new LocalValue($"alloca_{_tempCounter++}") { Type = new ReferenceType(optionType) };
+        var allocaResult = new LocalValue($"alloca_{_tempCounter++}", new ReferenceType(optionType));
         var allocaInst = new AllocaInstruction(optionType, optionType.Size, allocaResult);
         _currentBlock.Instructions.Add(allocaInst);
 
@@ -1432,7 +1402,7 @@ public class AstLowering
         var falseValue = new ConstantValue(0) { Type = TypeRegistry.Bool };
         StoreStructField(allocaResult, optionType, "has_value", falseValue);
 
-        var structValue = new LocalValue($"struct_val_{_tempCounter++}") { Type = optionType };
+        var structValue = new LocalValue($"struct_val_{_tempCounter++}", optionType);
         var loadInst = new LoadInstruction(allocaResult, structValue);
         _currentBlock.Instructions.Add(loadInst);
         return structValue;
@@ -1440,7 +1410,7 @@ public class AstLowering
 
     private Value LowerLiftToOption(Value innerValue, StructType optionType)
     {
-        var allocaResult = new LocalValue($"alloca_{_tempCounter++}") { Type = new ReferenceType(optionType) };
+        var allocaResult = new LocalValue($"alloca_{_tempCounter++}", new ReferenceType(optionType));
         var allocaInst = new AllocaInstruction(optionType, optionType.Size, allocaResult);
         _currentBlock.Instructions.Add(allocaInst);
 
@@ -1449,7 +1419,7 @@ public class AstLowering
         StoreStructField(allocaResult, optionType, "has_value", trueValue);
         StoreStructField(allocaResult, optionType, "value", innerValue);
 
-        var structValue = new LocalValue($"struct_val_{_tempCounter++}") { Type = optionType };
+        var structValue = new LocalValue($"struct_val_{_tempCounter++}", optionType);
         var loadInst = new LoadInstruction(allocaResult, structValue);
         _currentBlock.Instructions.Add(loadInst);
         return structValue;
@@ -1464,7 +1434,7 @@ public class AstLowering
             return false;
 
         var elementPtrType = new ReferenceType(arrayType.ElementType);
-        var elementPtrValue = new LocalValue($"slice_ptr_{_tempCounter++}") { Type = elementPtrType };
+        var elementPtrValue = new LocalValue($"slice_ptr_{_tempCounter++}", elementPtrType);
         var castInst = new CastInstruction(sourceValue, elementPtrType, elementPtrValue);
         _currentBlock.Instructions.Add(castInst);
 
@@ -1484,8 +1454,7 @@ public class AstLowering
         if (fieldOffset < 0)
             return;
 
-        var fieldPointer = new LocalValue($"struct_{fieldName}_ptr_{_tempCounter++}")
-            { Type = new ReferenceType(fieldType) };
+        var fieldPointer = new LocalValue($"struct_{fieldName}_ptr_{_tempCounter++}", new ReferenceType(fieldType));
         var fieldGep = new GetElementPtrInstruction(destinationPtr, fieldOffset, fieldPointer);
         _currentBlock.Instructions.Add(fieldGep);
         var storeInst = new StorePointerInstruction(fieldPointer, value);
@@ -1531,17 +1500,17 @@ public class AstLowering
                 call.Span,
                 null,
                 "E3037"));
-            return new LocalValue("error") { Type = enumType };
+            return new LocalValue("error", enumType);
         }
 
         // 1. Allocate space for the enum on the stack
-        var enumPtr = new LocalValue($"enum_{_tempCounter++}") { Type = new ReferenceType(enumType) };
+        var enumPtr = new LocalValue($"enum_{_tempCounter++}", new ReferenceType(enumType));
         var allocaInst = new AllocaInstruction(enumType, enumType.Size, enumPtr);
         _currentBlock.Instructions.Add(allocaInst);
 
         // 2. Get pointer to tag field (at offset from EnumType.GetTagOffset())
         var tagOffset = enumType.GetTagOffset();
-        var tagPtr = new LocalValue($"tag_ptr_{_tempCounter++}") { Type = new ReferenceType(TypeRegistry.I32) };
+        var tagPtr = new LocalValue($"tag_ptr_{_tempCounter++}", new ReferenceType(TypeRegistry.I32));
         var tagGep = new GetElementPtrInstruction(enumPtr, tagOffset, tagPtr);
         _currentBlock.Instructions.Add(tagGep);
 
@@ -1562,8 +1531,7 @@ public class AstLowering
                 {
                     var argValue = LowerExpression(call.Arguments[i]);
                     var fieldOffset = st.GetFieldOffset(st.Fields[i].Name);
-                    var fieldPtr = new LocalValue($"payload_field_ptr_{_tempCounter++}")
-                        { Type = new ReferenceType(st.Fields[i].Type) };
+                    var fieldPtr = new LocalValue($"payload_field_ptr_{_tempCounter++}", new ReferenceType(st.Fields[i].Type));
                     var fieldGep = new GetElementPtrInstruction(enumPtr, payloadOffset + fieldOffset, fieldPtr);
                     _currentBlock.Instructions.Add(fieldGep);
                     var fieldStore = new StorePointerInstruction(fieldPtr, argValue);
@@ -1574,8 +1542,7 @@ public class AstLowering
             {
                 // Single payload
                 var argValue = LowerExpression(call.Arguments[0]);
-                var payloadPtr = new LocalValue($"payload_ptr_{_tempCounter++}")
-                    { Type = new ReferenceType(variant.Value.PayloadType) };
+                var payloadPtr = new LocalValue($"payload_ptr_{_tempCounter++}", new ReferenceType(variant.Value.PayloadType));
                 var payloadGep = new GetElementPtrInstruction(enumPtr, payloadOffset, payloadPtr);
                 _currentBlock.Instructions.Add(payloadGep);
                 var payloadStore = new StorePointerInstruction(payloadPtr, argValue);
@@ -1584,7 +1551,7 @@ public class AstLowering
         }
 
         // 5. Load the enum value from the pointer
-        var enumResult = new LocalValue($"enum_val_{_tempCounter++}") { Type = enumType };
+        var enumResult = new LocalValue($"enum_val_{_tempCounter++}", enumType);
         var loadInst = new LoadInstruction(enumPtr, enumResult);
         _currentBlock.Instructions.Add(loadInst);
 
@@ -1604,7 +1571,7 @@ public class AstLowering
                 match.Span,
                 null,
                 "E1001"));
-            return new LocalValue("error") { Type = TypeRegistry.I32 };
+            return new LocalValue("error", TypeRegistry.I32);
         }
 
         var needsDereference = match.NeedsDereference;
@@ -1616,15 +1583,14 @@ public class AstLowering
         // If scrutinee is a reference, dereference it to get the enum value
         if (needsDereference)
         {
-            var derefValue = new LocalValue($"match_deref_{_tempCounter++}") { Type = enumType };
+            var derefValue = new LocalValue($"match_deref_{_tempCounter++}", enumType);
             var loadInst = new LoadInstruction(scrutineeValue, derefValue);
             _currentBlock.Instructions.Add(loadInst);
             scrutineeValue = derefValue;
         }
 
         // Allocate space on stack to hold scrutinee (so we can get pointer to it)
-        var scrutineePtr = new LocalValue($"match_scrutinee_ptr_{_tempCounter++}")
-            { Type = new ReferenceType(enumType) };
+        var scrutineePtr = new LocalValue($"match_scrutinee_ptr_{_tempCounter++}", new ReferenceType(enumType));
         var allocaInst = new AllocaInstruction(enumType, enumType.Size, scrutineePtr);
         _currentBlock.Instructions.Add(allocaInst);
         var storeScrutinee = new StorePointerInstruction(scrutineePtr, scrutineeValue);
@@ -1632,18 +1598,17 @@ public class AstLowering
 
         // Get pointer to tag field
         var tagOffset = enumType.GetTagOffset();
-        var tagPtr = new LocalValue($"match_tag_ptr_{_tempCounter++}") { Type = new ReferenceType(TypeRegistry.I32) };
+        var tagPtr = new LocalValue($"match_tag_ptr_{_tempCounter++}", new ReferenceType(TypeRegistry.I32));
         var tagGep = new GetElementPtrInstruction(scrutineePtr, tagOffset, tagPtr);
         _currentBlock.Instructions.Add(tagGep);
 
         // Load the tag value
-        var tagValue = new LocalValue($"match_tag_{_tempCounter++}") { Type = TypeRegistry.I32 };
+        var tagValue = new LocalValue($"match_tag_{_tempCounter++}", TypeRegistry.I32);
         var tagLoad = new LoadInstruction(tagPtr, tagValue);
         _currentBlock.Instructions.Add(tagLoad);
 
         // Allocate result variable on stack (before any branches)
-        var resultPtr = new LocalValue($"match_result_ptr_{_tempCounter++}")
-            { Type = new ReferenceType(resultType) };
+        var resultPtr = new LocalValue($"match_result_ptr_{_tempCounter++}", new ReferenceType(resultType));
         var resultAlloca = new AllocaInstruction(resultType, resultType.Size, resultPtr);
         _currentBlock.Instructions.Add(resultAlloca);
 
@@ -1699,7 +1664,7 @@ public class AstLowering
 
                 // Compare tag with variant index
                 var expectedTag = new ConstantValue(variantIndex) { Type = TypeRegistry.I32 };
-                var comparison = new LocalValue($"match_cmp_{_tempCounter++}") { Type = TypeRegistry.Bool };
+                var comparison = new LocalValue($"match_cmp_{_tempCounter++}", TypeRegistry.Bool);
                 var cmpInst = new BinaryInstruction(BinaryOp.Equal, tagValue, expectedTag, comparison);
                 _currentBlock.Instructions.Add(cmpInst);
 
@@ -1741,14 +1706,12 @@ public class AstLowering
                             if (evp.SubPatterns[i] is VariablePatternNode vp)
                             {
                                 var fieldOffset = st.GetFieldOffset(st.Fields[i].Name);
-                                var fieldPtr = new LocalValue($"payload_field_{_tempCounter++}")
-                                    { Type = new ReferenceType(st.Fields[i].Type) };
+                                var fieldPtr = new LocalValue($"payload_field_{_tempCounter++}", new ReferenceType(st.Fields[i].Type));
                                 var fieldGep = new GetElementPtrInstruction(scrutineePtr,
                                     payloadOffset + fieldOffset, fieldPtr);
                                 _currentBlock.Instructions.Add(fieldGep);
                                 // Make variable name unique per-arm to avoid C redefinition errors
-                                var fieldValue = new LocalValue($"{vp.Name}_arm{armIndex}_{_tempCounter++}")
-                                    { Type = st.Fields[i].Type };
+                                var fieldValue = new LocalValue($"{vp.Name}_arm{armIndex}_{_tempCounter++}", st.Fields[i].Type);
                                 var fieldLoad = new LoadInstruction(fieldPtr, fieldValue);
                                 _currentBlock.Instructions.Add(fieldLoad);
                                 _locals[vp.Name] = fieldPtr; // Store pointer for later access
@@ -1758,13 +1721,11 @@ public class AstLowering
                     else if (evp.SubPatterns.Count > 0 && evp.SubPatterns[0] is VariablePatternNode vp)
                     {
                         // Single field
-                        var payloadPtr = new LocalValue($"payload_{_tempCounter++}")
-                            { Type = new ReferenceType(variant.Value.PayloadType) };
+                        var payloadPtr = new LocalValue($"payload_{_tempCounter++}", new ReferenceType(variant.Value.PayloadType));
                         var payloadGep = new GetElementPtrInstruction(scrutineePtr, payloadOffset, payloadPtr);
                         _currentBlock.Instructions.Add(payloadGep);
                         // Make variable name unique per-arm to avoid C redefinition errors
-                        var payloadValue = new LocalValue($"{vp.Name}_arm{armIndex}_{_tempCounter++}")
-                            { Type = variant.Value.PayloadType };
+                        var payloadValue = new LocalValue($"{vp.Name}_arm{armIndex}_{_tempCounter++}", variant.Value.PayloadType);
                         var payloadLoad = new LoadInstruction(payloadPtr, payloadValue);
                         _currentBlock.Instructions.Add(payloadLoad);
                         _locals[vp.Name] = payloadPtr; // Store pointer for later access
@@ -1785,7 +1746,7 @@ public class AstLowering
         _currentBlock = mergeBlock;
 
         // Load the result that was written by whichever arm executed
-        var finalResult = new LocalValue($"match_result_{_tempCounter++}") { Type = resultType };
+        var finalResult = new LocalValue($"match_result_{_tempCounter++}", resultType);
         var loadResult = new LoadInstruction(resultPtr, finalResult);
         _currentBlock.Instructions.Add(loadResult);
 
@@ -1813,7 +1774,7 @@ public class AstLowering
                 if (innerValue.Type!.Equals(targetType))
                     return innerValue;
                 {
-                    var castResult = new LocalValue($"cast_{_tempCounter++}") { Type = targetType };
+                    var castResult = new LocalValue($"cast_{_tempCounter++}", targetType);
                     var castInst = new CastInstruction(innerValue, targetType, castResult);
                     _currentBlock.Instructions.Add(castInst);
                     return castResult;
@@ -1826,7 +1787,7 @@ public class AstLowering
                 if (innerValue.Type!.Equals(targetType))
                     return innerValue;
                 {
-                    var castResult = new LocalValue($"reinterpret_{_tempCounter++}") { Type = targetType };
+                    var castResult = new LocalValue($"reinterpret_{_tempCounter++}", targetType);
                     var castInst = new CastInstruction(innerValue, targetType, castResult);
                     _currentBlock.Instructions.Add(castInst);
                     return castResult;
@@ -1840,7 +1801,7 @@ public class AstLowering
                     var valueToWrap = innerValue;
                     if (innerValue.Type is ComptimeInt && optionType.TypeArguments.Count > 0)
                     {
-                        var hardenResult = new LocalValue($"harden_{_tempCounter++}") { Type = optionType.TypeArguments[0] };
+                        var hardenResult = new LocalValue($"harden_{_tempCounter++}", optionType.TypeArguments[0]);
                         var hardenInst = new CastInstruction(innerValue, optionType.TypeArguments[0], hardenResult);
                         _currentBlock.Instructions.Add(hardenInst);
                         valueToWrap = hardenResult;
@@ -1849,7 +1810,7 @@ public class AstLowering
                 }
                 // Fallback for other wrap types (future expansion)
                 {
-                    var castResult = new LocalValue($"wrap_{_tempCounter++}") { Type = targetType };
+                    var castResult = new LocalValue($"wrap_{_tempCounter++}", targetType);
                     var castInst = new CastInstruction(innerValue, targetType, castResult);
                     _currentBlock.Instructions.Add(castInst);
                     return castResult;

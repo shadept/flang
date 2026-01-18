@@ -123,8 +123,9 @@ public class GlobalValue : Value
 /// </summary>
 public class LocalValue : Value
 {
-    public LocalValue(string name)
+    public LocalValue(string name, TypeBase type)
     {
         Name = name;
+        Type = type;
     }
 }
