@@ -927,12 +927,35 @@ public class AstLowering
                     }
                 }
 
-                var accessStruct = targetSemanticType switch
+                // Auto-dereference: if AutoDerefCount > 1, we need to dereference intermediate pointers
+                // AutoDerefCount=0: struct direct access (already a struct value)
+                // AutoDerefCount=1: &Struct - single pointer, no extra dereference needed (GEP handles it)
+                // AutoDerefCount=2: &&Struct - need to load once to get &Struct, then GEP
+                // AutoDerefCount=N: need to load N-1 times
+                var currentPtr = targetValue;
+                var currentType = targetSemanticType;
+                for (int i = 0; i < fieldAccess.AutoDerefCount - 1; i++)
                 {
-                    ReferenceType refType => refType.InnerType as StructType,
-                    StructType st => st,
-                    _ => null
-                };
+                    // Dereference to get the next pointer level
+                    if (currentType is ReferenceType refType)
+                    {
+                        var innerType = refType.InnerType;
+                        var derefResult = new LocalValue($"autoderef_{_tempCounter++}", innerType);
+                        var derefInst = new LoadInstruction(currentPtr, derefResult);
+                        _currentBlock.Instructions.Add(derefInst);
+                        currentPtr = derefResult;
+                        currentType = innerType;
+                    }
+                }
+
+                // Find the struct type by unwrapping references
+                var structTypeForAccess = currentType;
+                while (structTypeForAccess is ReferenceType rt)
+                {
+                    structTypeForAccess = rt.InnerType;
+                }
+                var accessStruct = structTypeForAccess as StructType;
+
                 if (accessStruct == null)
                 {
                     _diagnostics.Add(Diagnostic.Error(
@@ -960,7 +983,7 @@ public class AstLowering
                 // Get pointer to field: targetPtr + offset
                 var fieldType2 = accessStruct.GetFieldType(fieldAccess.FieldName) ?? TypeRegistry.Never;
                 var fieldPointer = new LocalValue($"field_ptr_{_tempCounter++}", new ReferenceType(fieldType2));
-                var fieldGepInst = new GetElementPtrInstruction(targetValue, fieldByteOffset, fieldPointer);
+                var fieldGepInst = new GetElementPtrInstruction(currentPtr, fieldByteOffset, fieldPointer);
                 _currentBlock.Instructions.Add(fieldGepInst);
 
                 // Load value from field
@@ -1141,12 +1164,34 @@ public class AstLowering
         var targetValue = LowerExpression(memberAccess.Target);
         var targetSemanticType = memberAccess.Target.Type;
 
-        var accessStruct = targetSemanticType switch
+        // Auto-dereference: if AutoDerefCount > 1, we need to dereference intermediate pointers
+        // AutoDerefCount=0: struct direct access (already a struct value)
+        // AutoDerefCount=1: &Struct - single pointer, no extra dereference needed (GEP handles it)
+        // AutoDerefCount=2: &&Struct - need to load once to get &Struct, then GEP
+        // AutoDerefCount=N: need to load N-1 times
+        var currentPtr = targetValue;
+        var currentType = targetSemanticType;
+        for (int i = 0; i < memberAccess.AutoDerefCount - 1; i++)
         {
-            ReferenceType refType => refType.InnerType as StructType,
-            StructType st => st,
-            _ => null
-        };
+            // Dereference to get the next pointer level
+            if (currentType is ReferenceType refType)
+            {
+                var innerType = refType.InnerType;
+                var loadResult = new LocalValue($"autoderef_{_tempCounter++}", innerType);
+                var loadInst = new LoadInstruction(currentPtr, loadResult);
+                _currentBlock.Instructions.Add(loadInst);
+                currentPtr = loadResult;
+                currentType = innerType;
+            }
+        }
+
+        // Find the struct type by unwrapping references
+        var structTypeForAccess = currentType;
+        while (structTypeForAccess is ReferenceType rt)
+        {
+            structTypeForAccess = rt.InnerType;
+        }
+        var accessStruct = structTypeForAccess as StructType;
 
         if (accessStruct == null)
         {
@@ -1175,7 +1220,7 @@ public class AstLowering
         // Get pointer to field: targetPtr + offset
         var fieldType = accessStruct.GetFieldType(memberAccess.FieldName) ?? TypeRegistry.Never;
         var fieldPointer = new LocalValue($"field_ptr_{_tempCounter++}", new ReferenceType(fieldType));
-        var fieldGepInst = new GetElementPtrInstruction(targetValue, fieldByteOffset, fieldPointer);
+        var fieldGepInst = new GetElementPtrInstruction(currentPtr, fieldByteOffset, fieldPointer);
         _currentBlock.Instructions.Add(fieldGepInst);
 
         return fieldPointer;

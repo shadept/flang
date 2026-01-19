@@ -1285,17 +1285,21 @@ public class TypeChecker
 
         // Runtime field access on struct values
         // Convert arrays and slices to their canonical struct representations
-        // Auto-dereference references to allow field access on &T
-        var structType = prunedObj switch
+        // Auto-dereference references recursively to allow field access on &T, &&T, etc.
+        var currentType = prunedObj;
+        int autoDerefCount = 0;
+
+        // Unwrap references recursively until we find a struct or non-reference type
+        while (currentType is ReferenceType refType)
         {
-            ReferenceType reTypeBase => reTypeBase.InnerType switch
-            {
-                StructType st => st,
-                ArrayType array => TypeRegistry.MakeSlice(array.ElementType),
-                _ => null
-            },
+            autoDerefCount++;
+            currentType = refType.InnerType.Prune();
+        }
+
+        // Convert arrays to slice representation for field access (.ptr, .len)
+        var structType = currentType switch
+        {
             StructType st => st,
-            // Borrow SlideType semantics for arrays (they should behave like slices)
             ArrayType array => TypeRegistry.MakeSlice(array.ElementType),
             _ => null
         };
@@ -1312,6 +1316,9 @@ public class TypeChecker
                     "E2014");
                 return TypeRegistry.Never;
             }
+
+            // Store the auto-deref count for lowering
+            ma.AutoDerefCount = autoDerefCount;
 
             return ft;
         }

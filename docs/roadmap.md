@@ -598,19 +598,33 @@ _Goal: Fill in remaining language features._
 
 ---
 
-### Milestone 16.3: Auto-Deref for Reference Member Access
+### ✅ Milestone 16.3: Auto-Deref for Reference Member Access (COMPLETE)
 
 **Scope:** Automatic pointer dereferencing for field access (like C's `->` operator).
 
-**Key Tasks:**
+**Completed:**
 
-- [ ] Auto-deref for `&T` member access
-  - [ ] `ref.field` on `&Struct` auto-dereferences to access field directly
-  - [ ] Similar to C's `ptr->field` being equivalent to `(*ptr).field`
-  - [ ] `ref.*` remains explicit copy/dereference of the pointed-to value
-  - [ ] Works recursively for nested references
-- [ ] Update TypeChecker's `CheckMemberAccessExpression` to auto-unwrap references
-- [ ] Ensure codegen emits correct pointer arithmetic (no copy)
+- [x] Auto-deref for `&T` member access
+  - [x] `ref.field` on `&Struct` auto-dereferences to access field directly
+  - [x] Similar to C's `ptr->field` being equivalent to `(*ptr).field`
+  - [x] `ref.*` remains explicit copy/dereference of the pointed-to value
+  - [x] Works recursively for nested references (`&&T`, `&&&T`, etc.)
+- [x] Updated TypeChecker's `CheckMemberAccessExpression` to auto-unwrap references recursively
+- [x] Updated AstLowering to emit correct pointer arithmetic (no copy)
+- [x] MemberAccessExpressionNode tracks `AutoDerefCount` for lowering
+
+**Tests Added:**
+
+- `autoderef/autoderef_basic.f` - Basic auto-deref on `&Struct`
+- `autoderef/autoderef_nested.f` - Auto-deref with nested struct fields
+- `autoderef/autoderef_double_ref.f` - Recursive auto-deref on `&&Struct`
+- `autoderef/autoderef_assignment.f` - Auto-deref for field assignment
+- `autoderef/autoderef_chain.f` - Auto-deref with nested field chain
+- `autoderef/autoderef_second_field.f` - Auto-deref accessing second field (offset test)
+- `autoderef/autoderef_mixed_sizes.f` - Auto-deref with mixed field sizes and alignment
+- `autoderef/autoderef_last_field.f` - Auto-deref accessing last field in large struct
+- `autoderef/autoderef_double_ref_offset.f` - Double auto-deref with non-first field access
+- `autoderef/autoderef_assign_second.f` - Auto-deref assignment to non-first field
 
 **Example:**
 
@@ -731,17 +745,17 @@ _Goal: Rewrite the compiler in FLang._
 ## Current Status
 
 - **Phase:** 4 (Language Completeness)
-- **Milestone:** 16.2 (COMPLETE - Language Ergonomics)
+- **Milestone:** 16.3 (COMPLETE - Auto-Deref for Reference Member Access)
 - **Next Up:**
   - Complete M14 pending items (nested patterns, multiple wildcards)
-  - **M16.3:** Extended Types (tuples - optional)
-  - **M16.4:** Enum Option Migration (replaces struct Option)
+  - **M16.4:** Extended Types (tuples - optional)
+  - **M16.5:** Enum Option Migration (replaces struct Option)
   - Fix pre-existing generics overload resolution bug (`generic_mangling_order.f`)
   - Fix pre-existing option test bug (`option_basic.f`)
-- **Tests Passing:** TBD (run test suite to update)
+- **Tests Passing:** 148/149
 
   - ✅ 15 core tests (basics, control flow, functions)
-  - ✅ 5 generics tests (M11) - 1 pre-existing bug
+  - ✅ 5 generics tests (M11)
   - ✅ 4 struct tests
   - ✅ 3 array tests
   - ✅ 3 string tests
@@ -758,9 +772,8 @@ _Goal: Rewrite the compiler in FLang._
   - ✅ 3 const tests (M16.2)
   - ✅ 4 UFCS tests (M16.2)
   - ✅ 2 const error tests (M16.2)
+  - ✅ 10 auto-deref tests (M16.3)
   - ❌ 1 list test failing (unimplemented feature)
-  - ❌ 1 generics test failing (pre-existing overload resolution bug)
-  - ❌ 1 option test failing (pre-existing bug)
 
-- **Total Lines of FLang Code:** ~550+ (test files + stdlib)
-- **Total Lines of C# Compiler Code:** ~7,500+
+- **Total Lines of FLang Code:** ~600+ (test files + stdlib)
+- **Total Lines of C# Compiler Code:** ~7,700+

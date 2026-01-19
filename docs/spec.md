@@ -22,12 +22,36 @@ All operations have defined semantics and the language avoids undefined behavior
 - Variables are block-scoped.
 - Mutability of struct fields is permitted only within the file that defines the struct (file-scope mutability).
 
-### 2.2 References
+### 2.2 References and Auto-Dereference
 
 - `&T` is a non-null reference to `T`.
 - `&T?` is an optional reference.
 - A C pointer corresponds to `&T?`. `void*` has no exact equivalent; `&u8?` is the closest.
 - Reference writes follow file-scope mutability rules.
+
+**Auto-Dereference for Member Access:**
+
+FLang automatically dereferences references when accessing struct fields, providing ergonomic pointer handling similar to C's `->` operator:
+
+```flang
+struct Point { x: i32, y: i32 }
+
+fn sum(p: &Point) i32 {
+    // Auto-deref: p.x accesses field through pointer directly
+    // Equivalent to C's ptr->x or (*ptr).x
+    return p.x + p.y
+}
+
+fn explicit_deref(p: &Point) i32 {
+    // Explicit deref with .* copies the pointed-to value first
+    return p.*.x + p.*.y
+}
+```
+
+- `ref.field` on `&Struct` auto-dereferences to access the field directly (no copy).
+- `ref.*` explicitly dereferences, producing a copy of the pointed-to value.
+- Auto-deref works recursively: `pp.field` on `&&Struct` dereferences twice.
+- Auto-deref applies to both reads and writes: `p.x = 10` modifies through the pointer.
 
 ### 2.3 Structs
 
@@ -534,7 +558,9 @@ pub fn op_coalesce(opt: Option(T), fallback: T) T
 - Allocation and deallocation are provided by the standard library and may wrap C runtime facilities.
 - The compiler guarantees deterministic type layouts per target/configuration and binary compatibility as stated.
 - Struct layout is optimized; introspection provides actual offsets.
-- We can take an address of a non temporary variable with `&var`, and we can dereference it with `ptr.*`.
+- Address-of: `&var` takes the address of a non-temporary variable.
+- Explicit dereference: `ptr.*` dereferences a pointer, producing a copy of the value.
+- Auto-dereference: `ptr.field` on `&Struct` automatically dereferences to access the field (see Section 2.2).
 
 ---
 
