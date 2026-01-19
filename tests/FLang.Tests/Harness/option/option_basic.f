@@ -10,10 +10,6 @@ fn maybe_add(flag: bool, value: i32) i32? {
     return null
 }
 
-fn unwrap_or_default(value: i32?, fallback: i32) i32 {
-    return unwrap_or(value, fallback)
-}
-
 pub fn main() i32 {
     let a: i32? = maybe_add(true, 4)
     let b: i32? = null

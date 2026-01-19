@@ -13,7 +13,7 @@ pub fn helper(a: i32, b: u64) i32 { return 84 }
 pub fn helper(a: u64, b: i32) i32 { return 48 }
 
 pub fn main() i32 {
-    let x: i32 = pick(1 as i32, 0 as u64)
-    let y: i32 = pick(1 as u64, 0 as i32)
+    let x: i32 = pick(1 as i32, 0 as u64)  // should pick first helper
+    let y: i32 = pick(1 as u64, 0 as i32)  // should pick second helper
     return x + y
 }
