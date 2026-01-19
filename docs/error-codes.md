@@ -7,12 +7,84 @@ pattern `EXXXX` where `XXXX` is a four-digit number indicating the compiler phas
 
 FLang uses a custom sequential numbering system organized by compiler phase:
 
+- **E0XXX**: CLI and infrastructure errors (module loading, C compiler invocation)
 - **E1XXX**: Frontend errors (lexing, parsing, syntax)
 - **E2XXX**: Semantic analysis errors (type checking, name resolution, control flow)
 - **E3XXX**: Code generation errors (FIR lowering, C code generation)
 
-Within each category, error codes are assigned sequentially starting from E1001, E2001, E3001, etc. This ensures no gaps
-and no bias in numbering.
+Within each category, error codes are assigned sequentially starting from E0001, E1001, E2001, E3001, etc. This ensures
+no gaps and no bias in numbering.
+
+---
+
+## E0XXX: CLI and Infrastructure Errors
+
+### E0000: Internal CLI Error
+
+**Category**: CLI
+**Severity**: Error
+
+#### Description
+
+A catch-all error code for CLI and infrastructure failures that don't fit other categories. This includes:
+
+- No functions found in any module
+- C compiler configuration missing
+- C compiler invocation failure
+
+#### Example
+
+```
+error[E0000]: No functions found in any module
+error[E0000]: C compiler (gcc) failed: ...
+```
+
+#### Solution
+
+Check that your source files contain at least one function and that a C compiler is available on your system.
+
+---
+
+### E0001: Module Not Found
+
+**Category**: Module Loading
+**Severity**: Error
+
+#### Description
+
+An `import` statement referenced a module that could not be found in the standard library or project directory.
+
+#### Example
+
+```flang
+import nonexistent.module  // ERROR: cannot find module `nonexistent.module`
+```
+
+#### Solution
+
+Check that the module path is correct and that the file exists under stdlib or the project directory.
+
+---
+
+### E0002: Circular Import
+
+**Category**: Module Loading
+**Severity**: Error
+
+#### Description
+
+A module attempted to import itself, creating a circular dependency.
+
+#### Example
+
+```flang
+// In file mymodule.f
+import mymodule  // ERROR: module imports itself
+```
+
+#### Solution
+
+Remove the self-import or restructure your module dependencies.
 
 ---
 
@@ -1139,13 +1211,543 @@ Only index into arrays or slices.
 
 ---
 
+### E2030: Match on Non-Enum Type
+
+**Category**: Pattern Matching
+**Severity**: Error
+
+#### Description
+
+A `match` expression was used on a value that is not an enum type. Match expressions in FLang only support enum types.
+
+#### Example
+
+```flang
+struct Point { x: i32, y: i32 }
+
+pub fn main() i32 {
+    let p: Point = .{ x = 10, y = 20 }
+    return p match {  // ERROR: match requires an enum type, found `Point`
+        Point => 0
+    }
+}
+```
+
+#### Solution
+
+Use match expressions only with enum types. For structs, use field access or destructuring.
+
+---
+
+### E2031: Non-Exhaustive Match
+
+**Category**: Pattern Matching
+**Severity**: Error
+
+#### Description
+
+A match expression does not cover all variants of an enum and has no `else` clause to handle remaining cases.
+
+#### Example
+
+```flang
+enum Value {
+    None
+    Some(i32)
+    Error(i32)
+}
+
+pub fn main() i32 {
+    let v: Value = Value.Some(5)
+    return v match {  // ERROR: non-exhaustive match, missing variants: Error
+        None => 0,
+        Some(x) => x
+    }
+}
+```
+
+#### Solution
+
+Either add the missing variants or add an `else` clause:
+
+```flang
+return v match {
+    None => 0,
+    Some(x) => x,
+    Error(e) => e  // OK: all variants covered
+}
+// OR
+return v match {
+    None => 0,
+    Some(x) => x,
+    else => -1  // OK: else handles remaining cases
+}
+```
+
+---
+
+### E2032: Match Pattern Arity Mismatch
+
+**Category**: Pattern Matching
+**Severity**: Error
+
+#### Description
+
+A match pattern has a different number of bindings than the enum variant expects.
+
+#### Example
+
+```flang
+enum Point {
+    Origin
+    Coordinate(i32, i32)
+}
+
+pub fn main() i32 {
+    let p: Point = Point.Coordinate(10, 20)
+    return p match {
+        Origin => 0,
+        Coordinate(x) => x  // ERROR: expected 2 bindings, found 1
+    }
+}
+```
+
+#### Solution
+
+Provide the correct number of bindings:
+
+```flang
+return p match {
+    Origin => 0,
+    Coordinate(x, y) => x + y  // OK: 2 bindings for 2-field variant
+}
+```
+
+---
+
+### E2034: Duplicate Enum Variant Name
+
+**Category**: Type Checking / Enums
+**Severity**: Error
+
+#### Description
+
+An enum definition contains multiple variants with the same name.
+
+#### Example
+
+```flang
+enum Status {
+    Ok
+    Error
+    Ok  // ERROR: variant names must be unique within an enum
+}
+```
+
+#### Solution
+
+Use unique names for each variant:
+
+```flang
+enum Status {
+    Ok
+    Error
+    Success  // OK: unique name
+}
+```
+
+---
+
+### E2035: Recursive Type Without Indirection
+
+**Category**: Type Checking / Enums
+**Severity**: Error
+
+#### Description
+
+An enum variant directly contains the enum type itself without using a reference. This would create an infinitely-sized
+type.
+
+#### Example
+
+```flang
+enum Bad {
+    Value(i32)
+    Recursive(Bad)  // ERROR: recursive types must use references
+}
+```
+
+#### Solution
+
+Use a reference (`&`) or nullable reference (`&?`) for recursive types:
+
+```flang
+enum Good {
+    Value(i32)
+    Recursive(&Good)  // OK: reference provides indirection
+}
+```
+
+---
+
+### E2037: Unknown Enum Variant
+
+**Category**: Pattern Matching
+**Severity**: Error
+
+#### Description
+
+A match pattern references an enum variant that does not exist in the matched enum type.
+
+#### Example
+
+```flang
+enum Color {
+    Red
+    Green
+    Blue
+}
+
+pub fn main() i32 {
+    let c: Color = Color.Red
+    return c match {
+        Red => 1,
+        Yellow => 2  // ERROR: no variant `Yellow` in enum `Color`
+    }
+}
+```
+
+#### Solution
+
+Use only valid variant names from the enum definition.
+
+---
+
+### E2102: Conflicting Generic Type Bindings
+
+**Category**: Generics
+**Severity**: Error
+
+#### Description
+
+During generic function call resolution, a type parameter was inferred to have conflicting concrete types from different
+arguments.
+
+#### Example
+
+```flang
+pub fn same(a: $T, b: T) T {
+    return a
+}
+
+pub fn main() i32 {
+    let v: i32 = same(1, true)  // ERROR: T mapped to `i32` and `bool`
+    return v
+}
+```
+
+#### Solution
+
+Ensure all arguments that bind to the same type parameter have compatible types:
+
+```flang
+let v: i32 = same(1, 2)  // OK: both arguments are integers
+```
+
+---
+
 ## E3XXX: Code Generation Errors
 
-_Currently no errors in this category. Reserved for future codegen errors._
+### E3001: Invalid Type During Lowering
+
+**Category**: Code Generation
+**Severity**: Error
+
+#### Description
+
+A struct constructor or null literal was encountered during code generation without a properly resolved type. This
+typically indicates a bug in the type checker.
+
+#### Example
+
+This error usually cannot be triggered by user code. If encountered, please report it as a compiler bug.
+
+#### Solution
+
+Report the issue with sample code that reproduces the error.
+
+---
+
+### E3002: Field Access on Unknown Type
+
+**Category**: Code Generation
+**Severity**: Error
+
+#### Description
+
+A field access expression was encountered but the base type was not properly resolved during type checking.
+
+#### Example
+
+This error usually indicates an internal compiler issue. It should not occur in normal usage.
+
+#### Solution
+
+Report the issue with sample code that reproduces the error.
+
+---
+
+### E3003: Field Not Found During Lowering
+
+**Category**: Code Generation
+**Severity**: Error
+
+#### Description
+
+A field access was attempted on a struct but the field name could not be found. This typically indicates a type
+checking bug since field access should be validated earlier.
+
+#### Example
+
+This error usually indicates an internal compiler issue.
+
+#### Solution
+
+Report the issue with sample code that reproduces the error.
+
+---
+
+### E3004: Unresolved Variable or Array Type
+
+**Category**: Code Generation
+**Severity**: Error
+
+#### Description
+
+A variable identifier or array literal was encountered without a resolved type. This may indicate a type checker bug.
+
+#### Example
+
+This error usually indicates an internal compiler issue.
+
+#### Solution
+
+Report the issue with sample code that reproduces the error.
+
+---
+
+### E3005: Non-Constant Array Expression
+
+**Category**: Code Generation
+**Severity**: Error
+
+#### Description
+
+An array repeat expression `[value; count]` used a non-constant count, or a slice index was used where only array
+indexing is currently supported.
+
+#### Example
+
+```flang
+pub fn main() i32 {
+    let n: i32 = 5
+    let arr: [i32; 5] = [0; n]  // ERROR: array repeat count must be constant
+    return 0
+}
+```
+
+#### Solution
+
+Use a constant expression for the repeat count:
+
+```flang
+let arr: [i32; 5] = [0; 5]  // OK: constant repeat count
+```
+
+---
+
+### E3006: Break Outside Loop (Lowering)
+
+**Category**: Code Generation
+**Severity**: Error
+
+#### Description
+
+A `break` statement was encountered outside of a loop context during code generation.
+
+#### Example
+
+```flang
+pub fn main() i32 {
+    break  // ERROR: break can only be used inside a loop
+    return 0
+}
+```
+
+#### Solution
+
+Use `break` only inside `for` loops.
+
+---
+
+### E3007: Continue Outside Loop (Lowering)
+
+**Category**: Code Generation
+**Severity**: Error
+
+#### Description
+
+A `continue` statement was encountered outside of a loop context during code generation.
+
+#### Example
+
+```flang
+pub fn main() i32 {
+    continue  // ERROR: continue can only be used inside a loop
+    return 0
+}
+```
+
+#### Solution
+
+Use `continue` only inside `for` loops.
+
+---
+
+### E3008: Range Type Error
+
+**Category**: Code Generation
+**Severity**: Error
+
+#### Description
+
+A range expression was encountered but did not have the expected Range struct type.
+
+#### Example
+
+This error typically indicates an internal issue with range lowering.
+
+#### Solution
+
+Report the issue with sample code that reproduces the error.
+
+---
+
+### E3010: Missing String Type or Undeclared Variable
+
+**Category**: Code Generation
+**Severity**: Error
+
+#### Description
+
+A string literal was used without importing `core.string`, or an assignment was made to an undeclared variable.
+
+#### Examples
+
+**Missing String import:**
+
+```flang
+pub fn main() i32 {
+    let s: String = "hello"  // ERROR: String type not found, import core.string
+    return 0
+}
+```
+
+**Undeclared variable:**
+
+```flang
+pub fn main() i32 {
+    x = 42  // ERROR: variable `x` is not declared
+    return 0
+}
+```
+
+#### Solution
+
+Import `core.string` for string literals, or declare variables with `let` before assignment.
+
+---
+
+### E3012: Invalid Address-Of Operation
+
+**Category**: Code Generation
+**Severity**: Error
+
+#### Description
+
+The address-of operator `&` was used on an expression that cannot have its address taken.
+
+#### Example
+
+```flang
+pub fn main() i32 {
+    let ptr = &(1 + 2)  // ERROR: cannot take address of expression
+    return 0
+}
+```
+
+#### Solution
+
+Use `&` only with variable names:
+
+```flang
+let x: i32 = 3
+let ptr = &x  // OK: taking address of variable
+```
+
+---
+
+### E3014: Invalid Function During Lowering
+
+**Category**: Code Generation
+**Severity**: Error
+
+#### Description
+
+A function could not be properly lowered to intermediate representation. This usually indicates an internal compiler
+issue.
+
+#### Solution
+
+Report the issue with sample code that reproduces the error.
+
+---
+
+### E3037: Enum Variant Lowering Error
+
+**Category**: Code Generation
+**Severity**: Error
+
+#### Description
+
+An enum variant construction could not be properly lowered. This typically indicates an issue with enum codegen.
+
+#### Solution
+
+Report the issue with sample code that reproduces the error.
 
 ---
 
 ## Summary Table
+
+### E0XXX: CLI and Infrastructure
+
+| Code      | Category          | Description                                  |
+|-----------|-------------------|----------------------------------------------|
+| **E0000** | CLI               | Internal CLI error (placeholder)             |
+| **E0001** | Module Loading    | Module not found                             |
+| **E0002** | Module Loading    | Circular import                              |
+
+### E1XXX: Frontend (Lexing & Parsing)
+
+| Code      | Category          | Description                                  |
+|-----------|-------------------|----------------------------------------------|
+| **E1001** | Parsing           | Unexpected token                             |
+| **E1002** | Parsing           | Expected token mismatch                      |
+| **E1004** | Parsing           | Invalid array length (non-integer)           |
+| **E1005** | Parsing           | Invalid array repeat count (non-integer)     |
+
+### E2XXX: Semantic Analysis
 
 | Code      | Category          | Description                                  |
 |-----------|-------------------|----------------------------------------------|
@@ -1177,33 +1779,30 @@ _Currently no errors in this category. Reserved for future codegen errors._
 | **E2026** | Type Checking     | Empty array inference                        |
 | **E2027** | Type Checking     | Invalid array index type                     |
 | **E2028** | Type Checking     | Non-indexable type                           |
+| **E2030** | Pattern Matching  | Match on non-enum type                       |
+| **E2031** | Pattern Matching  | Non-exhaustive match                         |
+| **E2032** | Pattern Matching  | Match pattern arity mismatch                 |
+| **E2034** | Enums             | Duplicate enum variant name                  |
+| **E2035** | Enums             | Recursive type without indirection           |
+| **E2037** | Pattern Matching  | Unknown enum variant in pattern              |
+| **E2102** | Generics          | Conflicting generic type bindings            |
 
----
+### E3XXX: Code Generation
 
-## Future Error Codes (Planned)
-
-As FLang development continues, additional error codes will be added:
-
-### E1XXX - Frontend
-
-- E1001: Unexpected token
-- E1002: Unterminated string literal
-- E1003: Invalid number format
-- E1004: Invalid character
-- And more...
-
-### E2XXX - Semantic Analysis
-
-- E2030: Enum variant construction errors
-- E2031: Match expression pattern errors
-- And more...
-
-### E3XXX - Code Generation
-
-- E3001: Cannot generate code for expression
-- E3002: Unsupported target architecture
-- E3003: Code generation internal error
-- And more...
+| Code      | Category          | Description                                  |
+|-----------|-------------------|----------------------------------------------|
+| **E3001** | Lowering          | Invalid type during struct/null lowering     |
+| **E3002** | Lowering          | Field access on unknown type                 |
+| **E3003** | Lowering          | Field not found during lowering              |
+| **E3004** | Lowering          | Unresolved variable or array type            |
+| **E3005** | Lowering          | Non-constant array expression                |
+| **E3006** | Lowering          | Break outside loop / array element error     |
+| **E3007** | Lowering          | Continue outside loop                        |
+| **E3008** | Lowering          | Range type error                             |
+| **E3010** | Lowering          | Missing String type / undeclared variable    |
+| **E3012** | Lowering          | Invalid address-of operation                 |
+| **E3014** | Lowering          | Invalid function during lowering             |
+| **E3037** | Lowering          | Enum variant lowering error                  |
 
 ---
 

@@ -138,6 +138,35 @@ Currently no runtime bounds checking on `arr[i]` - out-of-bounds access causes u
 
 ## Minor Issues
 
+### Error Code Inconsistencies
+
+**Status:** Partially fixed
+**Affected:** Error reporting throughout compiler
+**Impact:** Some error codes in documentation don't match implementation
+
+**Remaining Discrepancies:**
+
+1. **E2006/E2007 vs E3006/E3007:** Documentation says break/continue outside loop should report E2006/E2007 (semantic analysis), but these errors are actually caught during lowering (E3006/E3007).
+
+2. **E2015 vs E2019:** E2015 is documented as "Intrinsic requires exactly one type argument" but is also used for "missing field in struct construction" at line 2310 in TypeChecker.cs. E2019 is the documented code for missing fields (line 1728).
+
+**Fixed:**
+- E1004/E1005: Parser now correctly emits E1004 for invalid array lengths and E1005 for invalid repeat counts (was E1002)
+- E0XXX: Error codes E0000, E0001, E0002 are now documented
+
+**Root Cause:**
+Error codes were not consistently applied during development. Some semantic checks are performed during lowering rather than type checking.
+
+**Solution:**
+- Documentation has been updated to reflect actual error codes emitted
+- Test suite validates actual error codes
+- Future: Consider refactoring to move semantic checks earlier (E2006/E2007) and standardizing E2015/E2019
+
+**Related Tests:**
+- `tests/FLang.Tests/Harness/errors/` - 21 error code tests
+
+---
+
 ### Coercions: Array→Slice and String↔u8[] in declarations/calls
 
 Status: Open (partial)

@@ -1071,18 +1071,22 @@ public class Parser
             var openBracket = Eat(TokenKind.OpenBracket);
             var elementType = ParseType();
             Eat(TokenKind.Semicolon);
-            var lengthToken = Eat(TokenKind.Integer);
-            var closeBracket = Eat(TokenKind.CloseBracket);
 
-            if (!int.TryParse(lengthToken.Text, out var length))
+            // Consume the length token - check for integer type specifically for E1004
+            var lengthToken = _currentToken;
+            _currentToken = _lexer.NextToken();
+
+            int length = 0;
+            if (lengthToken.Kind != TokenKind.Integer || !int.TryParse(lengthToken.Text, out length))
             {
                 _diagnostics.Add(Diagnostic.Error(
                     $"invalid array length `{lengthToken.Text}`",
                     lengthToken.Span,
-                    "array length must be an integer",
+                    "array length must be an integer literal",
                     "E1004"));
-                length = 0;
             }
+
+            var closeBracket = Eat(TokenKind.CloseBracket);
 
             var span = SourceSpan.Combine(openBracket.Span, closeBracket.Span);
             return new ArrayTypeNode(span, elementType, length);
@@ -1155,18 +1159,22 @@ public class Parser
         if (_currentToken.Kind == TokenKind.Semicolon)
         {
             Eat(TokenKind.Semicolon);
-            var countToken = Eat(TokenKind.Integer);
-            var closeBracket = Eat(TokenKind.CloseBracket);
 
-            if (!int.TryParse(countToken.Text, out var count))
+            // Consume the count token - check for integer type specifically for E1005
+            var countToken = _currentToken;
+            _currentToken = _lexer.NextToken();
+
+            int count = 0;
+            if (countToken.Kind != TokenKind.Integer || !int.TryParse(countToken.Text, out count))
             {
                 _diagnostics.Add(Diagnostic.Error(
                     $"invalid array repeat count `{countToken.Text}`",
                     countToken.Span,
-                    "repeat count must be an integer",
+                    "repeat count must be an integer literal",
                     "E1005"));
-                count = 0;
             }
+
+            var closeBracket = Eat(TokenKind.CloseBracket);
 
             var span = SourceSpan.Combine(openBracket.Span, closeBracket.Span);
             return new ArrayLiteralExpressionNode(span, firstElement, count);
