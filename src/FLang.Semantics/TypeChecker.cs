@@ -875,11 +875,15 @@ public class TypeChecker
         var it = v.Initializer != null ? CheckExpression(v.Initializer, dt) : null;
         if (it != null && dt != null)
         {
+            // Capture the original initializer type BEFORE unification (for coercion detection)
+            var originalInitType = it.Prune();
+
             // Unify initializer type with declared type - TypeVar.Prune() handles propagation
             var unified = UnifyTypes(it, dt, v.Initializer!.Span);
 
             // Wrap initializer with coercion node if needed
-            v.Initializer = WrapWithCoercionIfNeeded(v.Initializer!, it.Prune(), dt.Prune());
+            // Use originalInitType (before unification) to correctly detect coercions like comptime_int -> Option
+            v.Initializer = WrapWithCoercionIfNeeded(v.Initializer!, originalInitType, dt.Prune());
 
             v.ResolvedType = dt;
             DeclareVariable(v.Name, dt, v.Span);
@@ -1533,7 +1537,6 @@ public class TypeChecker
             _logger.LogDebug("{Indent}Considering {CandidateCount} candidates for '{FunctionName}'", Indent(),
                 candidates.Count, call.FunctionName);
             var argTypes = call.Arguments.Select(arg => CheckExpression(arg)).ToList();
-
             FunctionEntry? bestNonGeneric = null;
             var bestNonGenericCost = int.MaxValue;
 
@@ -3128,6 +3131,55 @@ public class TypeChecker
         return new EnumType(enumType.Name, updatedTypeArgs, updatedVariants);
     }
 
+    // ==================== AST Deep Clone for Generic Specialization ====================
+
+    /// <summary>
+    /// Deep clones a list of statements. Used to create independent AST for each generic specialization.
+    /// This is necessary because type checking mutates the AST (e.g., setting ResolvedTarget on CallExpressionNode).
+    /// </summary>
+    private static List<StatementNode> CloneStatements(IReadOnlyList<StatementNode> statements)
+    {
+        return statements.Select(CloneStatement).ToList();
+    }
+
+    private static StatementNode CloneStatement(StatementNode stmt) => stmt switch
+    {
+        ReturnStatementNode ret => new ReturnStatementNode(ret.Span, CloneExpression(ret.Expression)),
+        ExpressionStatementNode es => new ExpressionStatementNode(es.Span, CloneExpression(es.Expression)),
+        VariableDeclarationNode vd => new VariableDeclarationNode(vd.Span, vd.Name, vd.Type, vd.Initializer != null ? CloneExpression(vd.Initializer) : null),
+        ForLoopNode fl => new ForLoopNode(fl.Span, fl.IteratorVariable, CloneExpression(fl.IterableExpression), CloneExpression(fl.Body)),
+        BreakStatementNode br => new BreakStatementNode(br.Span),
+        ContinueStatementNode cont => new ContinueStatementNode(cont.Span),
+        DeferStatementNode df => new DeferStatementNode(df.Span, CloneExpression(df.Expression)),
+        _ => throw new NotSupportedException($"Cloning not implemented for statement type: {stmt.GetType().Name}")
+    };
+
+    private static ExpressionNode CloneExpression(ExpressionNode expr) => expr switch
+    {
+        IntegerLiteralNode lit => new IntegerLiteralNode(lit.Span, lit.Value),
+        BooleanLiteralNode bl => new BooleanLiteralNode(bl.Span, bl.Value),
+        StringLiteralNode sl => new StringLiteralNode(sl.Span, sl.Value),
+        NullLiteralNode nl => new NullLiteralNode(nl.Span),
+        IdentifierExpressionNode id => new IdentifierExpressionNode(id.Span, id.Name),
+        BinaryExpressionNode bin => new BinaryExpressionNode(bin.Span, CloneExpression(bin.Left), bin.Operator, CloneExpression(bin.Right)),
+        CallExpressionNode call => new CallExpressionNode(call.Span, call.FunctionName, call.Arguments.Select(CloneExpression).ToList()),
+        IfExpressionNode ie => new IfExpressionNode(ie.Span, CloneExpression(ie.Condition), CloneExpression(ie.ThenBranch), ie.ElseBranch != null ? CloneExpression(ie.ElseBranch) : null),
+        BlockExpressionNode blk => new BlockExpressionNode(blk.Span, CloneStatements(blk.Statements), blk.TrailingExpression != null ? CloneExpression(blk.TrailingExpression) : null),
+        MemberAccessExpressionNode ma => new MemberAccessExpressionNode(ma.Span, CloneExpression(ma.Target), ma.FieldName),
+        IndexExpressionNode ix => new IndexExpressionNode(ix.Span, CloneExpression(ix.Base), CloneExpression(ix.Index)),
+        AssignmentExpressionNode ae => new AssignmentExpressionNode(ae.Span, CloneExpression(ae.Target), CloneExpression(ae.Value)),
+        AddressOfExpressionNode addr => new AddressOfExpressionNode(addr.Span, CloneExpression(addr.Target)),
+        DereferenceExpressionNode deref => new DereferenceExpressionNode(deref.Span, CloneExpression(deref.Target)),
+        CastExpressionNode cast => new CastExpressionNode(cast.Span, CloneExpression(cast.Expression), cast.TargetType),
+        RangeExpressionNode range => new RangeExpressionNode(range.Span, CloneExpression(range.Start), CloneExpression(range.End)),
+        MatchExpressionNode match => new MatchExpressionNode(match.Span, CloneExpression(match.Scrutinee), match.Arms.Select(a => new MatchArmNode(a.Span, a.Pattern, CloneExpression(a.ResultExpr))).ToList()),
+        ArrayLiteralExpressionNode arr => new ArrayLiteralExpressionNode(arr.Span, arr.Elements.Select(CloneExpression).ToList()),
+        AnonymousStructExpressionNode anon => new AnonymousStructExpressionNode(anon.Span, anon.Fields.Select(f => (f.FieldName, CloneExpression(f.Value))).ToList()),
+        StructConstructionExpressionNode sc => new StructConstructionExpressionNode(sc.Span, sc.TypeName, sc.Fields.Select(f => (f.FieldName, CloneExpression(f.Value))).ToList()),
+        ImplicitCoercionNode ic => new ImplicitCoercionNode(ic.Span, CloneExpression(ic.Inner), ic.TargetType, ic.Kind),
+        _ => throw new NotSupportedException($"Cloning not implemented for expression type: {expr.GetType().Name}")
+    };
+
     private FunctionDeclarationNode? EnsureSpecialization(FunctionEntry genericEntry, Dictionary<string, TypeBase> bindings,
         IReadOnlyList<TypeBase> concreteParamTypes)
     {
@@ -3164,8 +3216,11 @@ public class TypeChecker
             }
 
             // Keep base name; backend will mangle by parameter types
+            // Deep clone the body to avoid shared mutable state between specializations
+            // (e.g., CallExpressionNode.ResolvedTarget would be overwritten by subsequent specializations)
+            var clonedBody = CloneStatements(genericEntry.AstNode.Body);
             var newFn = new FunctionDeclarationNode(genericEntry.AstNode.Span, genericEntry.Name, newParams, newRetNode,
-                genericEntry.AstNode.Body, genericEntry.IsForeign ? FunctionModifiers.Foreign : FunctionModifiers.None);
+                clonedBody, genericEntry.IsForeign ? FunctionModifiers.Foreign : FunctionModifiers.None);
 
             // Register specialization BEFORE checking body to prevent infinite recursion
             // for recursive generic functions (e.g., count_list calling count_list)

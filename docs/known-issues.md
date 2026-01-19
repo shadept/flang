@@ -205,6 +205,45 @@ This was fixed to support dynamic array indexing with runtime index calculations
 
 ## Future Architectural Changes
 
+### Generic Instantiation: AST Cloning vs Side Table
+
+**Status:** Technical debt - current implementation uses AST deep cloning
+**Affected:** `TypeChecker.EnsureSpecialization`, generic function instantiation
+
+**Current Design:**
+When instantiating a generic function (e.g., `pick(a: $A, b: $B)` called as `pick(1i32, 0u64)`), the type checker must resolve calls within the body using the concrete types. Currently, this works by:
+1. Deep cloning the function body AST for each instantiation
+2. Type-checking each cloned body independently
+3. Storing `CallExpressionNode.ResolvedTarget` on the cloned nodes
+
+**Why cloning is necessary now:**
+- `CallExpressionNode.ResolvedTarget` is mutable and stored directly on the AST
+- Without cloning, multiple instantiations share the same body AST
+- The second instantiation's type-check overwrites the first's `ResolvedTarget`
+- This caused `helper(a, b)` inside `pick(i32, u64)` to incorrectly resolve to `helper(u64, i32)`
+
+**Why type-checking each instantiation is required:**
+FLang uses structural typing without explicit trait/interface bounds. The constraints on generic parameters are implicit - they're discovered by type-checking the body with concrete types. For example, calling `helper(a, b)` inside a generic constrains `$A` and `$B` to types for which a matching `helper` overload exists. This is similar to C++ templates or duck typing.
+
+**Proposed future solution - Side Table:**
+Replace `CallExpressionNode.ResolvedTarget` with a side table:
+```csharp
+Dictionary<(CallExpressionNode, SpecializationKey), FunctionDeclarationNode> _callResolutions
+```
+This keeps the AST immutable while allowing different resolutions per instantiation. The lowering phase would look up resolutions from this table instead of reading from the AST.
+
+**Benefits of side table approach:**
+- AST remains immutable (better for caching, debugging, error reporting)
+- No need to implement and maintain deep clone for every AST node type
+- Cleaner separation between syntax (AST) and semantics (resolutions)
+
+**Related code:**
+- `TypeChecker.CloneStatements()` / `CloneExpression()` - current cloning implementation
+- `TypeChecker.EnsureSpecialization()` - where cloning is invoked
+- `CallExpressionNode.ResolvedTarget` - the mutable field causing the issue
+
+---
+
 ### Move to SSA Form
 
 **Status:** Consideration for post-self-hosting
@@ -241,6 +280,25 @@ Milestone: 19 (Text & I/O)
 
 
 ## Recently Fixed
+
+### Generic Specialization Overload Resolution Collision
+
+**Fixed:** M16 (2026-01-19)
+**Was:** When a generic function body called an overloaded function (e.g., `helper(a, b)` with overloads `helper(i32, u64)` and `helper(u64, i32)`), multiple instantiations of the generic would resolve to the same overload. The second instantiation's type-check overwrote the first's `CallExpressionNode.ResolvedTarget` because both shared the same body AST.
+**Now:** `EnsureSpecialization` deep-clones the body AST for each instantiation, giving each its own `CallExpressionNode` instances. Each instantiation's overload resolution is preserved independently.
+**Note:** This is a pragmatic fix; see "Generic Instantiation: AST Cloning vs Side Table" in Future Architectural Changes for the planned cleaner solution.
+
+**Related Tests:**
+- `tests/FLang.Tests/Harness/generics/generic_mangling_order.f`
+
+### Option Type Coercion from Integer Literals
+
+**Fixed:** M16 (2026-01-19)
+**Was:** `let d: i32? = 5` left the variable uninitialized. The integer literal's type was captured AFTER `UnifyTypes` had already bound the TypeVar to the Option type, so `WrapWithCoercionIfNeeded` saw both types as `i32?` and skipped creating the `ImplicitCoercionNode` for the wrap.
+**Now:** `CheckVariableDeclaration` captures the original initializer type BEFORE calling `UnifyTypes`, ensuring the coercion from `comptime_int` to `i32?` is correctly detected and wrapped.
+
+**Related Tests:**
+- `tests/FLang.Tests/Harness/option/option_basic.f`
 
 ### Recursive Generic Functions Stack Overflow
 
