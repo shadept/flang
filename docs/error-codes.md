@@ -860,43 +860,71 @@ pub fn main() i32 {
 
 ---
 
-### E2017: Unknown Type in Intrinsic
+### E2017: No Operator Implementation
 
-**Category**: Compiler Intrinsics / Name Resolution
+**Category**: Type Checking / Operators
 **Severity**: Error
 
 #### Description
 
-The type name passed to `size_of` or `align_of` is not defined or not in scope.
+A binary operator was used on types that do not have an operator function implementation. In FLang, operators like `+`, `-`, `*`, etc. are desugared to function calls (`op_add`, `op_sub`, `op_mul`, etc.). This error occurs when:
+
+- Using an operator on custom struct types without defining the corresponding `op_*` function
+- The operator function exists but doesn't match the operand types
 
 #### Example
 
 ```flang
-#foreign fn size_of(t: Type($T)) usize
-
-pub fn main() i32 {
-    let size: usize = size_of(MyStruct)  // ERROR: unknown type `MyStruct`
-    return size as i32
-}
-```
-
-#### Solution
-
-Define the type before use, or use a built-in type:
-
-```flang
-#foreign fn size_of(t: Type($T)) usize
-
-struct MyStruct {
+struct Point {
     x: i32,
     y: i32
 }
 
 pub fn main() i32 {
-    let size: usize = size_of(MyStruct)  // OK: MyStruct is defined
-    return size as i32
+    let a: Point = Point { x = 1, y = 2 }
+    let b: Point = Point { x = 3, y = 4 }
+    let c: Point = a + b  // ERROR: cannot apply binary operator `+` to types `Point` and `Point`
+    return 0
 }
 ```
+
+#### Solution
+
+Define the operator function for your type:
+
+```flang
+struct Point {
+    x: i32,
+    y: i32
+}
+
+fn op_add(a: Point, b: Point) Point {
+    return Point { x = a.x + b.x, y = a.y + b.y }
+}
+
+pub fn main() i32 {
+    let a: Point = Point { x = 1, y = 2 }
+    let b: Point = Point { x = 3, y = 4 }
+    let c: Point = a + b  // OK: op_add is defined for Point
+    return c.x + c.y
+}
+```
+
+#### Operator Function Names
+
+| Operator | Function Name |
+|----------|---------------|
+| `+`      | `op_add`      |
+| `-`      | `op_sub`      |
+| `*`      | `op_mul`      |
+| `/`      | `op_div`      |
+| `%`      | `op_mod`      |
+| `==`     | `op_eq`       |
+| `!=`     | `op_ne`       |
+| `<`      | `op_lt`       |
+| `>`      | `op_gt`       |
+| `<=`     | `op_le`       |
+| `>=`     | `op_ge`       |
 
 ---
 
@@ -1767,7 +1795,7 @@ Report the issue with sample code that reproduces the error.
 | **E2014** | Type Checking     | Field access error                           |
 | **E2015** | Intrinsics        | Intrinsic requires exactly one type argument |
 | **E2016** | Intrinsics        | Intrinsic argument must be type name         |
-| **E2017** | Intrinsics        | Unknown type in intrinsic                    |
+| **E2017** | Operators         | No operator implementation                   |
 | **E2018** | Type Checking     | Struct construction - invalid target         |
 | **E2019** | Type Checking     | Struct construction - missing fields         |
 | **E2020** | Type Checking     | Invalid cast                                 |

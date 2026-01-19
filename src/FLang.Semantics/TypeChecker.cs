@@ -1286,6 +1286,33 @@ public class TypeChecker
         var lt = CheckExpression(be.Left);
         var rt = CheckExpression(be.Right, lt);
 
+        // Try to find an operator function for this operation
+        var opFuncName = OperatorFunctions.GetFunctionName(be.Operator);
+        var operatorFuncResult = TryResolveOperatorFunction(opFuncName, lt, rt, be.Span);
+
+        if (operatorFuncResult != null)
+        {
+            // Use operator function
+            be.ResolvedOperatorFunction = operatorFuncResult.Value.Function;
+            return operatorFuncResult.Value.ReturnType;
+        }
+
+        // Fall back to built-in handling for primitive types
+        var prunedLt = lt.Prune();
+        var prunedRt = rt.Prune();
+
+        // Built-in operators only work on numeric primitives
+        if (!IsBuiltinOperatorApplicable(prunedLt, prunedRt, be.Operator))
+        {
+            var opSymbol = OperatorFunctions.GetOperatorSymbol(be.Operator);
+            ReportError(
+                $"cannot apply binary operator `{opSymbol}` to types `{FormatTypeNameForDisplay(prunedLt)}` and `{FormatTypeNameForDisplay(prunedRt)}`",
+                be.Span,
+                $"no implementation for `{FormatTypeNameForDisplay(prunedLt)} {opSymbol} {FormatTypeNameForDisplay(prunedRt)}`",
+                "E2017");
+            return TypeRegistry.Never;
+        }
+
         // Unify operand types - TypeVar.Prune() handles propagation automatically
         var unified = UnifyTypes(lt, rt, be.Span);
 
@@ -1297,6 +1324,152 @@ public class TypeChecker
         {
             return unified;
         }
+    }
+
+    /// <summary>
+    /// Checks if built-in operator handling is applicable for the given operand types.
+    /// Built-in operators only work on numeric primitives and booleans (for equality).
+    /// </summary>
+    private bool IsBuiltinOperatorApplicable(TypeBase left, TypeBase right, BinaryOperatorKind op)
+    {
+        // Both must be primitive or comptime types
+        var leftIsNumeric = TypeRegistry.IsNumericType(left);
+        var rightIsNumeric = TypeRegistry.IsNumericType(right);
+        var leftIsBool = left.Equals(TypeRegistry.Bool);
+        var rightIsBool = right.Equals(TypeRegistry.Bool);
+
+        // Arithmetic operators require numeric types
+        if (op >= BinaryOperatorKind.Add && op <= BinaryOperatorKind.Modulo)
+        {
+            return leftIsNumeric && rightIsNumeric;
+        }
+
+        // Comparison operators work on numeric types
+        if (op >= BinaryOperatorKind.LessThan && op <= BinaryOperatorKind.GreaterThanOrEqual)
+        {
+            return leftIsNumeric && rightIsNumeric;
+        }
+
+        // Equality operators work on numeric types and booleans
+        if (op == BinaryOperatorKind.Equal || op == BinaryOperatorKind.NotEqual)
+        {
+            return (leftIsNumeric && rightIsNumeric) || (leftIsBool && rightIsBool);
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// Result of operator function resolution.
+    /// </summary>
+    private readonly struct OperatorFunctionResult
+    {
+        public FunctionDeclarationNode Function { get; init; }
+        public TypeBase ReturnType { get; init; }
+    }
+
+    /// <summary>
+    /// Attempts to resolve an operator function for the given operand types.
+    /// Returns null if no matching operator function is found.
+    /// </summary>
+    private OperatorFunctionResult? TryResolveOperatorFunction(string opFuncName, TypeBase leftType, TypeBase rightType, SourceSpan span)
+    {
+        if (!_functions.TryGetValue(opFuncName, out var candidates))
+            return null;
+
+        // Prune types to ensure we're comparing concrete types
+        var argTypes = new List<TypeBase> { leftType.Prune(), rightType.Prune() };
+
+        FunctionEntry? bestNonGeneric = null;
+        var bestNonGenericCost = int.MaxValue;
+
+        foreach (var cand in candidates)
+        {
+            if (cand.IsGeneric) continue;
+            if (cand.ParameterTypes.Count != 2) continue;
+            if (!TryComputeCoercionCost(argTypes, cand.ParameterTypes, out var cost))
+                continue;
+
+            if (cost < bestNonGenericCost)
+            {
+                bestNonGeneric = cand;
+                bestNonGenericCost = cost;
+            }
+        }
+
+        FunctionEntry? bestGeneric = null;
+        Dictionary<string, TypeBase>? bestBindings = null;
+        var bestGenericCost = int.MaxValue;
+
+        foreach (var cand in candidates)
+        {
+            if (!cand.IsGeneric) continue;
+            if (cand.ParameterTypes.Count != 2) continue;
+
+            var bindings = new Dictionary<string, TypeBase>();
+            var okGen = true;
+            for (var i = 0; i < 2; i++)
+            {
+                if (!TryBindGeneric(cand.ParameterTypes[i], argTypes[i], bindings, out _, out _))
+                {
+                    okGen = false;
+                    break;
+                }
+            }
+
+            if (!okGen) continue;
+
+            var concreteParams = cand.ParameterTypes
+                .Select(pt => SubstituteGenerics(pt, bindings))
+                .ToList();
+
+            if (!TryComputeCoercionCost(argTypes, concreteParams, out var genCost))
+                continue;
+
+            if (genCost < bestGenericCost)
+            {
+                bestGeneric = cand;
+                bestBindings = bindings;
+                bestGenericCost = genCost;
+            }
+        }
+
+        FunctionEntry? chosen;
+        Dictionary<string, TypeBase>? chosenBindings = null;
+
+        if (bestNonGeneric != null && (bestGeneric == null || bestNonGenericCost <= bestGenericCost))
+        {
+            chosen = bestNonGeneric;
+        }
+        else
+        {
+            chosen = bestGeneric;
+            chosenBindings = bestBindings;
+        }
+
+        if (chosen == null)
+            return null;
+
+        // Get the actual function to call (specialized if generic)
+        FunctionDeclarationNode resolvedFunction;
+        TypeBase returnType;
+
+        if (chosen.IsGeneric && chosenBindings != null)
+        {
+            resolvedFunction = EnsureSpecialization(chosen, chosenBindings, argTypes);
+            returnType = SubstituteGenerics(chosen.ReturnType, chosenBindings);
+        }
+        else
+        {
+            resolvedFunction = chosen.AstNode;
+            returnType = chosen.ReturnType;
+        }
+
+        return new OperatorFunctionResult
+        {
+            Function = resolvedFunction,
+            ReturnType = returnType
+        };
     }
 
     private TypeBase CheckAssignmentExpression(AssignmentExpressionNode ae)

@@ -1,23 +1,7 @@
 using FLang.Core;
+using FLang.Frontend.Ast.Declarations;
 
 namespace FLang.Frontend.Ast.Expressions;
-
-public enum BinaryOperatorKind
-{
-    Add,
-    Subtract,
-    Multiply,
-    Divide,
-    Modulo,
-
-    // Comparisons
-    Equal,
-    NotEqual,
-    LessThan,
-    GreaterThan,
-    LessThanOrEqual,
-    GreaterThanOrEqual
-}
 
 public class BinaryExpressionNode : ExpressionNode
 {
@@ -32,4 +16,11 @@ public class BinaryExpressionNode : ExpressionNode
     public ExpressionNode Left { get; }
     public BinaryOperatorKind Operator { get; }
     public ExpressionNode Right { get; }
+
+    /// <summary>
+    /// Semantic: The resolved operator function declaration.
+    /// Null if the operator uses built-in handling (primitive types).
+    /// For generic functions, this points to the specialized FunctionDeclarationNode with concrete types.
+    /// </summary>
+    public FunctionDeclarationNode? ResolvedOperatorFunction { get; set; }
 }

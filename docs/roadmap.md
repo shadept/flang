@@ -470,22 +470,29 @@ _Goal: Fill in remaining language features._
 
 ---
 
-### Milestone 15: Operators as Functions
+### ✅ Milestone 15: Operators as Functions (COMPLETE)
 
 **Scope:** Operator overloading via operator functions.
 
-**Key Tasks:**
+**Completed:**
 
-- [ ] Define operator function names: `op_add`, `op_eq`, etc.
-- [ ] Desugar operators to function calls
-- [ ] Overload resolution (strictest applicable)
-- [ ] Implement operator functions for primitives in stdlib
-- [ ] User-defined operator functions for custom types
+- ✅ Define operator function names: `op_add`, `op_sub`, `op_mul`, `op_div`, `op_mod`, `op_eq`, `op_ne`, `op_lt`, `op_gt`, `op_le`, `op_ge`
+- ✅ `OperatorFunctions` utility class with name mapping and symbol lookup
+- ✅ Desugar operators to function calls in type checker
+- ✅ Overload resolution for operator functions
+- ✅ User-defined operator functions for custom struct types
+- ✅ Proper error reporting (E2017) when operator not implemented
 
-**Tests to Add:**
+**Tests Added:**
 
-- Custom operator implementations
-- Operator overload resolution
+- ✅ `operators/op_add_struct.f` - Custom `+` operator for struct
+- ✅ `operators/op_sub_struct.f` - Custom `-` operator for struct
+- ✅ `operators/op_eq_basic.f` - Equality operator
+- ✅ `operators/op_eq_struct.f` - Custom `==` operator for struct
+- ✅ `operators/op_lt_struct.f` - Custom `<` operator for struct
+- ✅ `operators/op_error_no_impl.f` - E2017 error when no operator implementation
+
+**Note:** Primitive operator functions in stdlib deferred (primitives use built-in operators).
 
 ---
 
@@ -668,10 +675,9 @@ _Goal: Rewrite the compiler in FLang._
 ## Current Status
 
 - **Phase:** 4 (Language Completeness)
-- **Milestone:** 14 (IN PROGRESS - Enums & Pattern Matching)
+- **Milestone:** 15 (COMPLETE - Operators as Functions)
 - **Next Up:**
   - Complete M14 pending items (nested patterns, multiple wildcards)
-  - **M15:** Operators as Functions
   - **M16:** Test Framework (PRIORITY) - `test` blocks, `assert`, test runner
   - **M16.1:** Null Safety Operators (`??`, `?`)
   - **M16.2:** Language Ergonomics (`const`, UFCS)
@@ -679,7 +685,7 @@ _Goal: Rewrite the compiler in FLang._
   - **M16.4:** Enum Option Migration (replaces struct Option)
   - Fix pre-existing generics overload resolution bug (`generic_mangling_order.f`)
   - Fix pre-existing option test bug (`option_basic.f`)
-- **Tests Passing:** 110/113 (97%)
+- **Tests Passing:** 116/119 (97%)
 
   - ✅ 15 core tests (basics, control flow, functions)
   - ✅ 5 generics tests (M11) - 1 pre-existing bug
@@ -695,6 +701,7 @@ _Goal: Rewrite the compiler in FLang._
   - ✅ 12 match tests (M14)
   - ✅ 3 SSA tests (reassignment, print functions)
   - ✅ 12 iterator tests (M13)
+  - ✅ 6 operator tests (M15)
   - ❌ 1 list test failing (unimplemented feature)
   - ❌ 1 generics test failing (pre-existing overload resolution bug)
   - ❌ 1 option test failing (pre-existing bug)

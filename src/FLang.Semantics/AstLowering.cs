@@ -547,9 +547,18 @@ public class AstLowering
             }
 
             case BinaryExpressionNode binary:
+            {
                 var left = LowerExpression(binary.Left);
                 var right = LowerExpression(binary.Right);
 
+                // Check if operator resolved to a function call
+                if (binary.ResolvedOperatorFunction != null)
+                {
+                    // Emit function call for operator
+                    return LowerOperatorFunctionCall(binary, left, right);
+                }
+
+                // Fall back to built-in binary instruction
                 var op = binary.Operator switch
                 {
                     BinaryOperatorKind.Add => BinaryOp.Add,
@@ -570,6 +579,7 @@ public class AstLowering
                 var instruction = new BinaryInstruction(op, left, right, temp);
                 _currentBlock.Instructions.Add(instruction);
                 return temp;
+            }
 
             case AssignmentExpressionNode assignment:
             {
@@ -1825,6 +1835,55 @@ public class AstLowering
                 // Should not happen - all coercion kinds are handled above
                 throw new InvalidOperationException($"Unknown coercion kind: {coercion.Kind}");
         }
+    }
+
+    /// <summary>
+    /// Lowers an operator function call (e.g., op_add for +, op_eq for ==).
+    /// </summary>
+    private Value LowerOperatorFunctionCall(BinaryExpressionNode binary, Value left, Value right)
+    {
+        var resolvedFunc = binary.ResolvedOperatorFunction!;
+        var opFuncName = OperatorFunctions.GetFunctionName(binary.Operator);
+
+        // Collect parameter types from resolved function
+        var paramTypes = new List<FType>();
+        foreach (var param in resolvedFunc.Parameters)
+        {
+            var paramType = param.ResolvedType ??
+                throw new InvalidOperationException($"Parameter '{param.Name}' has no resolved type");
+            paramTypes.Add(paramType);
+        }
+
+        // Build argument list with casts if needed
+        var args = new List<Value>();
+        Value[] operands = [left, right];
+        for (var i = 0; i < 2; i++)
+        {
+            var argVal = operands[i];
+            var argType = i == 0 ? binary.Left.Type : binary.Right.Type;
+
+            // Insert cast if argument type doesn't match parameter type but can coerce
+            if (i < paramTypes.Count && argType != null && !argType.Equals(paramTypes[i]))
+            {
+                var argCastResult = new LocalValue($"cast_{_tempCounter++}", paramTypes[i]);
+                var argCastInst = new CastInstruction(argVal, paramTypes[i], argCastResult);
+                _currentBlock.Instructions.Add(argCastInst);
+                args.Add(argCastResult);
+            }
+            else
+            {
+                args.Add(argVal);
+            }
+        }
+
+        var returnType = binary.Type ?? TypeRegistry.Never;
+        var callResult = new LocalValue($"op_{_tempCounter++}", returnType);
+        var callInst = new CallInstruction(opFuncName, args, callResult);
+        callInst.CalleeParamTypes = paramTypes;
+        callInst.IsForeignCall = (resolvedFunc.Modifiers & FunctionModifiers.Foreign) != 0;
+
+        _currentBlock.Instructions.Add(callInst);
+        return callResult;
     }
 
     private class LoopContext
