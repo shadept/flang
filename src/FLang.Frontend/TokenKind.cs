@@ -43,6 +43,8 @@ public enum TokenKind
     DotDot,
     Ampersand,
     Question,
+    QuestionQuestion,
+    QuestionDot,
     FatArrow,
 
     // Comparison operators

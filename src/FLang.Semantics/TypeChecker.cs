@@ -1357,6 +1357,100 @@ public class TypeChecker
     }
 
     /// <summary>
+    /// Type checks a null-coalescing expression (a ?? b).
+    /// Resolves to op_coalesce(a, b) function call.
+    /// </summary>
+    private TypeBase CheckCoalesceExpression(CoalesceExpressionNode coalesce)
+    {
+        var lt = CheckExpression(coalesce.Left);
+
+        // For op_coalesce, we need to determine the expected type for the right side
+        // based on the available overloads. If left is Option(T), the right could be T or Option(T).
+        // We check the right side without an expected type and let overload resolution pick.
+        var rt = CheckExpression(coalesce.Right);
+
+        // Try to find op_coalesce function for this operation
+        const string opFuncName = "op_coalesce";
+        var operatorFuncResult = TryResolveOperatorFunction(opFuncName, lt, rt, coalesce.Span);
+
+        if (operatorFuncResult != null)
+        {
+            coalesce.ResolvedCoalesceFunction = operatorFuncResult.Value.Function;
+            return operatorFuncResult.Value.ReturnType;
+        }
+
+        // No op_coalesce function found - report error
+        var prunedLt = lt.Prune();
+        var prunedRt = rt.Prune();
+        ReportError(
+            $"cannot apply `??` operator to types `{FormatTypeNameForDisplay(prunedLt)}` and `{FormatTypeNameForDisplay(prunedRt)}`",
+            coalesce.Span,
+            $"no `op_coalesce` implementation for `{FormatTypeNameForDisplay(prunedLt)} ?? {FormatTypeNameForDisplay(prunedRt)}`",
+            "E2017");
+        return TypeRegistry.Never;
+    }
+
+    /// <summary>
+    /// Type checks a null-propagation expression (target?.field).
+    /// If target is Option(T), unwraps T, accesses field, and wraps result in Option.
+    /// </summary>
+    private TypeBase CheckNullPropagationExpression(NullPropagationExpressionNode nullProp)
+    {
+        var targetType = CheckExpression(nullProp.Target);
+        var prunedTarget = targetType.Prune();
+
+        // Target must be Option(T)
+        if (prunedTarget is not StructType optionType || !TypeRegistry.IsOption(optionType))
+        {
+            ReportError(
+                $"cannot use `?.` on non-optional type `{FormatTypeNameForDisplay(prunedTarget)}`",
+                nullProp.Target.Span,
+                "expected `Option(T)` or `T?`",
+                "E2002");
+            return TypeRegistry.Never;
+        }
+
+        // Get the inner type T from Option(T)
+        if (optionType.TypeArguments.Count == 0)
+        {
+            ReportError(
+                "Option type has no inner type",
+                nullProp.Target.Span,
+                null,
+                "E2002");
+            return TypeRegistry.Never;
+        }
+
+        var innerType = optionType.TypeArguments[0];
+
+        // Inner type must be a struct with the requested field
+        if (innerType is not StructType innerStruct)
+        {
+            ReportError(
+                $"cannot access field `{nullProp.MemberName}` on non-struct type `{FormatTypeNameForDisplay(innerType)}`",
+                nullProp.Span,
+                null,
+                "E2014");
+            return TypeRegistry.Never;
+        }
+
+        // Look up the field
+        var fieldType = innerStruct.GetFieldType(nullProp.MemberName);
+        if (fieldType == null)
+        {
+            ReportError(
+                $"struct `{innerStruct.Name}` does not have a field named `{nullProp.MemberName}`",
+                nullProp.Span,
+                "unknown field",
+                "E2014");
+            return TypeRegistry.Never;
+        }
+
+        // Result is Option(fieldType)
+        return TypeRegistry.MakeOption(fieldType);
+    }
+
+    /// <summary>
     /// Checks if built-in operator handling is applicable for the given operand types.
     /// Built-in operators only work on numeric primitives and booleans (for equality).
     /// </summary>
@@ -2073,6 +2167,12 @@ public class TypeChecker
                 type = dst;
                 break;
             }
+            case CoalesceExpressionNode coalesce:
+                type = CheckCoalesceExpression(coalesce);
+                break;
+            case NullPropagationExpressionNode nullProp:
+                type = CheckNullPropagationExpression(nullProp);
+                break;
             default:
                 throw new Exception($"Unknown expression type: {expression.GetType().Name}");
         }
@@ -3172,6 +3272,8 @@ public class TypeChecker
         DereferenceExpressionNode deref => new DereferenceExpressionNode(deref.Span, CloneExpression(deref.Target)),
         CastExpressionNode cast => new CastExpressionNode(cast.Span, CloneExpression(cast.Expression), cast.TargetType),
         RangeExpressionNode range => new RangeExpressionNode(range.Span, CloneExpression(range.Start), CloneExpression(range.End)),
+        CoalesceExpressionNode coal => new CoalesceExpressionNode(coal.Span, CloneExpression(coal.Left), CloneExpression(coal.Right)),
+        NullPropagationExpressionNode np => new NullPropagationExpressionNode(np.Span, CloneExpression(np.Target), np.MemberName),
         MatchExpressionNode match => new MatchExpressionNode(match.Span, CloneExpression(match.Scrutinee), match.Arms.Select(a => new MatchArmNode(a.Span, a.Pattern, CloneExpression(a.ResultExpr))).ToList()),
         ArrayLiteralExpressionNode arr => new ArrayLiteralExpressionNode(arr.Span, arr.Elements.Select(CloneExpression).ToList()),
         AnonymousStructExpressionNode anon => new AnonymousStructExpressionNode(anon.Span, anon.Fields.Select(f => (f.FieldName, CloneExpression(f.Value))).ToList()),

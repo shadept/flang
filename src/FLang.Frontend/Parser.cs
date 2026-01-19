@@ -566,6 +566,17 @@ public class Parser
                 continue;
             }
 
+            // Special handling for null-coalescing operator (right-associative)
+            if (operatorToken.Kind == TokenKind.QuestionQuestion)
+            {
+                _currentToken = _lexer.NextToken();
+                // Right-associative: parse with same precedence to allow chaining a ?? b ?? c
+                var coalesceRight = ParseBinaryExpression(precedence - 1);
+                var coalesceSpan = SourceSpan.Combine(left.Span, coalesceRight.Span);
+                left = new CoalesceExpressionNode(coalesceSpan, left, coalesceRight);
+                continue;
+            }
+
             BinaryOperatorKind operatorKind;
             try
             {
@@ -666,8 +677,28 @@ public class Parser
                     "E1002"));
                 break;
             }
-            // Handle index operator: arr[i]
 
+            // Handle null-propagation operator: opt?.field
+            if (_currentToken.Kind == TokenKind.QuestionDot)
+            {
+                var questionDotToken = Eat(TokenKind.QuestionDot);
+                if (_currentToken.Kind == TokenKind.Identifier)
+                {
+                    var fieldToken = Eat(TokenKind.Identifier);
+                    var span = SourceSpan.Combine(expr.Span, fieldToken.Span);
+                    expr = new NullPropagationExpressionNode(span, expr, fieldToken.Text);
+                    continue;
+                }
+
+                _diagnostics.Add(Diagnostic.Error(
+                    $"expected identifier after `?.`",
+                    questionDotToken.Span,
+                    $"found '{_currentToken.Text}'",
+                    "E1002"));
+                break;
+            }
+
+            // Handle index operator: arr[i]
             if (_currentToken.Kind == TokenKind.OpenBracket)
             {
                 var openBracket = Eat(TokenKind.OpenBracket);
@@ -839,17 +870,18 @@ public class Parser
     /// Higher values indicate higher precedence (tighter binding).
     /// </summary>
     /// <param name="kind">The token kind representing the binary operator.</param>
-    /// <returns>The precedence level (0-5), or 0 if not a binary operator.</returns>
+    /// <returns>The precedence level (0-6), or 0 if not a binary operator.</returns>
     private int GetBinaryOperatorPrecedence(TokenKind kind)
     {
         return kind switch
         {
-            TokenKind.Star or TokenKind.Slash or TokenKind.Percent => 5,
-            TokenKind.Plus or TokenKind.Minus => 4,
-            TokenKind.DotDot => 3,
+            TokenKind.Star or TokenKind.Slash or TokenKind.Percent => 6,
+            TokenKind.Plus or TokenKind.Minus => 5,
+            TokenKind.DotDot => 4,
             TokenKind.LessThan or TokenKind.GreaterThan or TokenKind.LessThanOrEqual
-                or TokenKind.GreaterThanOrEqual => 2,
-            TokenKind.EqualsEquals or TokenKind.NotEquals => 1,
+                or TokenKind.GreaterThanOrEqual => 3,
+            TokenKind.EqualsEquals or TokenKind.NotEquals => 2,
+            TokenKind.QuestionQuestion => 1, // Lowest precedence, right-associative
             _ => 0
         };
     }

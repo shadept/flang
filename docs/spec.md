@@ -457,20 +457,38 @@ The compiler automatically generates a global type metadata table (`__flang__typ
 a ?? b
 ```
 
-- If `a` is `Option[U]` or `U?` and is present, yields unwrapped `U`; otherwise yields `b`.
-- Result type is the least upper bound of `U` and the type of `b` (via anonymous union if necessary).
+- If `a` is `Option(T)` or `T?` and has a value, yields unwrapped `T`; otherwise yields `b`.
+- Desugars to `op_coalesce(a, b)` function call.
+- Two overloads in `std.option`:
+  - `op_coalesce(opt: Option(T), fallback: T) -> T` - unwrap or use fallback value
+  - `op_coalesce(first: Option(T), second: Option(T)) -> Option(T)` - returns first if present, otherwise second
+- Operator has lowest precedence (lower than `==`/`!=`), right-associative.
+- Enables chaining: `a ?? b ?? c` evaluates as `a ?? (b ?? c)`.
 
-### 4.2 Null-Propagation
+### 4.2 Safe Member Access
+
+```
+opt?.field
+```
+
+- If `opt` has type `Option(T)` or `T?` and has a value, yields `Option(field_type)` containing `opt.value.field`.
+- If `opt` is `null`, yields `null` (as `Option(field_type)`).
+- Enables safe chaining: `a?.b?.c` propagates null through the chain.
+- **Status**: Parsing and type checking implemented; IR lowering in progress.
+
+### 4.3 Early-Return Operator (Planned)
 
 ```
 expr?
 ```
 
-- If `expr` has type `U?`/`Option[U]` and is `null`, returns `null` from the enclosing function when that function’s return type is `V?`/`Option[V]`.
+- If `expr` has type `Option(U)` and is `null`, early-returns `null` from the enclosing function.
+- If `expr` has type `Result(U, E)` and is `Err(e)`, early-returns `Err(e)` from the enclosing function.
 - Otherwise yields unwrapped `U`.
-- May only appear in a function whose return type is optional/`Option`.
+- May only appear in a function whose return type is `Option` or `Result`.
+- **Status**: Planned for future milestone.
 
-### 4.3 Operator-as-Function
+### 4.4 Operator-as-Function
 
 - Every operator has a corresponding function name.
 - The compiler rewrites operators to calls to these functions and may inline them.
@@ -488,6 +506,7 @@ pub fn op_index(base: &A, index: I) R
 pub fn op_index_set(base: &A, index: I, value: V) void
 pub fn op_assign(lhs: &A, rhs: B) void
 pub fn op_add_assign(lhs: &A, rhs: B) void
+pub fn op_coalesce(opt: Option(T), fallback: T) T
 ```
 
 - The exact set of operator function names corresponds one-to-one with the language’s operators, including indexing and assignment forms.

@@ -681,6 +681,12 @@ public class AstLowering
                 // Lower range expression to Range struct construction: .{ start = ..., end = ... }
                 return LowerRangeToStruct(rangeExpr);
 
+            case CoalesceExpressionNode coalesce:
+                return LowerCoalesceExpression(coalesce);
+
+            case NullPropagationExpressionNode nullProp:
+                return LowerNullPropagationExpression(nullProp);
+
             case MatchExpressionNode match:
                 return LowerMatchExpression(match);
 
@@ -1959,6 +1965,165 @@ public class AstLowering
 
         _currentBlock.Instructions.Add(callInst);
         return callResult;
+    }
+
+    /// <summary>
+    /// Lowers a null-coalescing expression (a ?? b) to an op_coalesce function call.
+    /// </summary>
+    private Value LowerCoalesceExpression(CoalesceExpressionNode coalesce)
+    {
+        var left = LowerExpression(coalesce.Left);
+        var right = LowerExpression(coalesce.Right);
+
+        var resolvedFunc = coalesce.ResolvedCoalesceFunction ??
+            throw new InvalidOperationException("CoalesceExpressionNode has no resolved function");
+
+        // Collect parameter types from resolved function
+        var paramTypes = new List<FType>();
+        foreach (var param in resolvedFunc.Parameters)
+        {
+            var paramType = param.ResolvedType ??
+                throw new InvalidOperationException($"Parameter '{param.Name}' has no resolved type");
+            paramTypes.Add(paramType);
+        }
+
+        // Build argument list with casts if needed
+        var args = new List<Value>();
+        Value[] operands = [left, right];
+        for (var i = 0; i < 2; i++)
+        {
+            var argVal = operands[i];
+            var argType = i == 0 ? coalesce.Left.Type : coalesce.Right.Type;
+
+            // Insert cast if argument type doesn't match parameter type but can coerce
+            if (i < paramTypes.Count && argType != null && !argType.Equals(paramTypes[i]))
+            {
+                var argCastResult = new LocalValue($"cast_{_tempCounter++}", paramTypes[i]);
+                var argCastInst = new CastInstruction(argVal, paramTypes[i], argCastResult);
+                _currentBlock.Instructions.Add(argCastInst);
+                args.Add(argCastResult);
+            }
+            else
+            {
+                args.Add(argVal);
+            }
+        }
+
+        var returnType = coalesce.Type ?? TypeRegistry.Never;
+        var callResult = new LocalValue($"coalesce_{_tempCounter++}", returnType);
+        var callInst = new CallInstruction("op_coalesce", args, callResult);
+        callInst.CalleeParamTypes = paramTypes;
+        callInst.IsForeignCall = (resolvedFunc.Modifiers & FunctionModifiers.Foreign) != 0;
+
+        _currentBlock.Instructions.Add(callInst);
+        return callResult;
+    }
+
+    /// <summary>
+    /// Lowers a null-propagation expression (target?.field) to conditional branch.
+    /// If target.has_value is true, result is Some(target.value.field); otherwise None.
+    /// </summary>
+    private Value LowerNullPropagationExpression(NullPropagationExpressionNode nullProp)
+    {
+        var resultType = nullProp.Type as StructType ??
+            throw new InvalidOperationException("NullPropagationExpressionNode must have Option result type");
+
+        // Allocate result storage
+        var resultPtr = new LocalValue($"nullprop_result_{_tempCounter++}", new ReferenceType(resultType));
+        var allocInst = new AllocaInstruction(resultType, resultType.Size, resultPtr);
+        _currentBlock.Instructions.Add(allocInst);
+
+        // Lower target expression
+        var targetValue = LowerExpression(nullProp.Target);
+        var targetType = nullProp.Target.Type as StructType ??
+            throw new InvalidOperationException("NullPropagationExpressionNode target must be Option type");
+
+        // If target is a value (not a pointer), we need to store it to get a pointer
+        Value targetPtr;
+        if (targetValue.Type is ReferenceType)
+        {
+            targetPtr = targetValue;
+        }
+        else
+        {
+            // Allocate temporary storage for target value and store it
+            var tempPtr = new LocalValue($"nullprop_target_ptr_{_tempCounter++}", new ReferenceType(targetType));
+            _currentBlock.Instructions.Add(new AllocaInstruction(targetType, targetType.Size, tempPtr));
+            _currentBlock.Instructions.Add(new StorePointerInstruction(tempPtr, targetValue));
+            targetPtr = tempPtr;
+        }
+
+        // Get pointer to target's has_value field
+        var hasValuePtr = new LocalValue($"has_value_ptr_{_tempCounter++}", new ReferenceType(TypeRegistry.Bool));
+        var hasValueOffset = new ConstantValue(0) { Type = TypeRegistry.USize }; // has_value is first field
+        _currentBlock.Instructions.Add(new GetElementPtrInstruction(targetPtr, hasValueOffset, hasValuePtr));
+
+        // Load has_value
+        var hasValue = new LocalValue($"has_value_{_tempCounter++}", TypeRegistry.Bool);
+        _currentBlock.Instructions.Add(new LoadInstruction(hasValuePtr, hasValue));
+
+        // Create blocks
+        var thenBlock = CreateBlock("nullprop_some");
+        var elseBlock = CreateBlock("nullprop_none");
+        var mergeBlock = CreateBlock("nullprop_merge");
+
+        // Branch on has_value
+        _currentBlock.Instructions.Add(new BranchInstruction(hasValue, thenBlock, elseBlock));
+
+        // Then block: target has value, extract field and wrap in Some
+        _currentBlock = thenBlock;
+        {
+            // Get pointer to target's value field
+            var innerType = targetType.TypeArguments[0];
+            var valueFieldOffset = targetType.GetFieldOffset("value");
+            var valuePtr = new LocalValue($"value_ptr_{_tempCounter++}", new ReferenceType(innerType));
+            _currentBlock.Instructions.Add(new GetElementPtrInstruction(targetPtr, new ConstantValue(valueFieldOffset) { Type = TypeRegistry.USize }, valuePtr));
+
+            // If inner type is a struct, we need to get field from it
+            if (innerType is StructType innerStruct)
+            {
+                var fieldOffset = innerStruct.GetFieldOffset(nullProp.MemberName);
+                var fieldType = innerStruct.GetFieldType(nullProp.MemberName) ??
+                    throw new InvalidOperationException($"Field {nullProp.MemberName} not found");
+
+                var fieldPtr = new LocalValue($"field_ptr_{_tempCounter++}", new ReferenceType(fieldType));
+                _currentBlock.Instructions.Add(new GetElementPtrInstruction(valuePtr, new ConstantValue(fieldOffset) { Type = TypeRegistry.USize }, fieldPtr));
+
+                // Load field value
+                var fieldValue = new LocalValue($"field_val_{_tempCounter++}", fieldType);
+                _currentBlock.Instructions.Add(new LoadInstruction(fieldPtr, fieldValue));
+
+                // Store has_value = true in result
+                var resultHasValuePtr = new LocalValue($"result_has_value_ptr_{_tempCounter++}", new ReferenceType(TypeRegistry.Bool));
+                _currentBlock.Instructions.Add(new GetElementPtrInstruction(resultPtr, new ConstantValue(0) { Type = TypeRegistry.USize }, resultHasValuePtr));
+                _currentBlock.Instructions.Add(new StorePointerInstruction(resultHasValuePtr, new ConstantValue(1) { Type = TypeRegistry.Bool }));
+
+                // Store field value in result.value
+                var resultValueOffset = resultType.GetFieldOffset("value");
+                var resultValuePtr = new LocalValue($"result_value_ptr_{_tempCounter++}", new ReferenceType(fieldType));
+                _currentBlock.Instructions.Add(new GetElementPtrInstruction(resultPtr, new ConstantValue(resultValueOffset) { Type = TypeRegistry.USize }, resultValuePtr));
+                _currentBlock.Instructions.Add(new StorePointerInstruction(resultValuePtr, fieldValue));
+            }
+
+            _currentBlock.Instructions.Add(new JumpInstruction(mergeBlock));
+        }
+
+        // Else block: target is null, result is None
+        _currentBlock = elseBlock;
+        {
+            // Store has_value = false in result
+            var resultHasValuePtr = new LocalValue($"result_has_value_ptr_{_tempCounter++}", new ReferenceType(TypeRegistry.Bool));
+            _currentBlock.Instructions.Add(new GetElementPtrInstruction(resultPtr, new ConstantValue(0) { Type = TypeRegistry.USize }, resultHasValuePtr));
+            _currentBlock.Instructions.Add(new StorePointerInstruction(resultHasValuePtr, new ConstantValue(0) { Type = TypeRegistry.Bool }));
+
+            _currentBlock.Instructions.Add(new JumpInstruction(mergeBlock));
+        }
+
+        // Continue in merge block, load and return the result
+        _currentBlock = mergeBlock;
+        var finalResult = new LocalValue($"nullprop_final_{_tempCounter++}", resultType);
+        _currentBlock.Instructions.Add(new LoadInstruction(resultPtr, finalResult));
+        return finalResult;
     }
 
     private class LoopContext

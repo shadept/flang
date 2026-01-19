@@ -549,16 +549,20 @@ _Goal: Fill in remaining language features._
 
 **Key Tasks:**
 
-- [ ] Null-coalescing: `a ?? b`
-  - [ ] Parse `??` operator (low precedence, right-associative)
-  - [ ] Desugar to: `op_coalesce(a, b)`
-  - [ ] `Option(T)` implements `op_coalesce` via `unwrap_or` overloads
-  - [ ] `Result(T, E)` implements `op_coalesce` to find first `Ok` or return error
-  - [ ] Enables chaining: `a ?? b ?? c`
-- [ ] Null-propagation: `expr?` (optional, can defer if complex)
-  - [ ] Postfix `?` operator on nullable expressions
-  - [ ] Early return `null` if `expr` is `null`
-  - [ ] Similar to `fmap` / monadic bind
+- [x] Null-coalescing: `a ?? b`
+  - [x] Parse `??` operator (low precedence, right-associative)
+  - [x] Desugar to: `op_coalesce(a, b)`
+  - [x] `Option(T)` implements `op_coalesce` via `unwrap_or` overloads
+  - [ ] `Result(T, E)` implements `op_coalesce` to find first `Ok` or return error (deferred - Result type not yet implemented)
+  - [x] Enables chaining: `a ?? b ?? c`
+- [~] Null-propagation: `opt?.field` (partial - parsing and type checking done, lowering needs work)
+  - [x] Parse `?.` operator for safe member access
+  - [x] Type checking: unwrap Option, access field, wrap result in Option
+  - [ ] IR lowering: conditional branch generation (complex, deferred)
+- [ ] Early-return operator: `expr?` (deferred to future milestone)
+  - [ ] Postfix `?` operator on nullable/Result expressions
+  - [ ] Early return `null`/`Err` if `expr` has no value
+  - [ ] Requires function return type context tracking
 
 ---
 

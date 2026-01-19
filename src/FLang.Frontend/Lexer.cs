@@ -169,6 +169,8 @@ public class Lexer
                 ('!', '=') => TokenKind.NotEquals,
                 ('<', '=') => TokenKind.LessThanOrEqual,
                 ('>', '=') => TokenKind.GreaterThanOrEqual,
+                ('?', '?') => TokenKind.QuestionQuestion,
+                ('?', '.') => TokenKind.QuestionDot,
                 _ => (TokenKind?)null
             };
 

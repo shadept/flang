@@ -18,3 +18,21 @@ pub fn unwrap_or(value: Option($T), fallback: T) T {
     }
     return fallback
 }
+
+// Null-coalescing operator: Option(T) ?? T -> T
+// Returns the inner value if present, otherwise returns the fallback value.
+pub fn op_coalesce(opt: Option($T), fallback: T) T {
+    if (opt.has_value) {
+        return opt.value
+    }
+    return fallback
+}
+
+// Null-coalescing operator: Option(T) ?? Option(T) -> Option(T)
+// Returns the first option if it has a value, otherwise returns the second.
+pub fn op_coalesce(first: Option($T), second: Option(T)) Option(T) {
+    if (first.has_value) {
+        return first
+    }
+    return second
+}
