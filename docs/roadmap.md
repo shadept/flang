@@ -470,18 +470,6 @@ _Goal: Fill in remaining language features._
 
 ---
 
-### Milestone 14.1: Replace struct Option(T) with enum Option(T)
-
-**Scope:** Better option semantics
-
-**Key Tasks:**
-
-- [ ] Necessary pattern matching to support this use case
-- [ ] Update existing compiler code, stdlib code and compiler tests to reflect this new approach.
-- [ ] Start implementing Result(T, E) to show capabilities of enum system
-
----
-
 ### Milestone 15: Operators as Functions
 
 **Scope:** Operator overloading via operator functions.
@@ -501,18 +489,102 @@ _Goal: Fill in remaining language features._
 
 ---
 
-### Milestone 16: Advanced Features
+### Milestone 16: Test Framework (PRIORITY)
 
-**Scope:** Remaining spec features.
+**Scope:** Compiler-supported testing framework with `test` blocks and assertion functions.
+
+**Key Tasks:**
+
+- [ ] `panic(msg: String)` function in `core/panic.f`
+  - [ ] Wraps C `abort()` or similar
+  - [ ] Prints message before terminating
+  - [ ] Source location support (future: compiler intrinsic for file/line)
+- [ ] `assert_true(condition: bool, msg: String)` function
+  - [ ] Calls `panic(msg)` when condition is false
+- [ ] `assert_eq(a: $T, b: T)` function
+  - [ ] Equivalent to `assert_true(a == b)`
+  - [ ] Future: print expected vs actual on failure (needs ToString)
+- [ ] `test "name" { }` block syntax
+  - [ ] Parse `test` keyword followed by string literal and block
+  - [ ] `TestDeclarationNode` AST node
+  - [ ] Test blocks scoped to module (not exported)
+- [ ] Test discovery and execution
+  - [ ] CLI flag: `--test` to run tests instead of main
+  - [ ] Collect all `test` blocks from compiled modules
+  - [ ] Generate test runner that calls each test
+  - [ ] Report pass/fail counts
+- [ ] Test isolation
+  - [ ] Each test runs independently
+  - [ ] Failures don't stop other tests
+
+**Tests to Add:**
+
+- `test/test_block_basic.f` - Simple test block compiles and runs
+- `test/test_assert_true_pass.f` - assert_true with true condition
+- `test/test_assert_true_fail.f` - assert_true with false (expect panic)
+- `test/test_assert_eq.f` - assert_eq equality check
+
+---
+
+### Milestone 16.1: Null Safety Operators
+
+**Scope:** Ergonomic null handling operators.
 
 **Key Tasks:**
 
 - [ ] Null-coalescing: `a ?? b`
-- [ ] Null-propagation: `expr?`
-- [ ] `const` declarations (immutable by default)
-- [ ] UFCS desugaring: `obj.method(args)` → `method(&obj, args)`
-- [ ] Multiple return values / tuples (if we decide to add them)
-- [ ] `test "name" { }` blocks
+  - [ ] Parse `??` operator (low precedence, right-associative)
+  - [ ] Desugar to: `op_coalesce(a, b)`
+  - [ ] `Option(T)` implements `op_coalesce` via `unwrap_or` overloads
+  - [ ] `Result(T, E)` implements `op_coalesce` to find first `Ok` or return error
+  - [ ] Enables chaining: `a ?? b ?? c`
+- [ ] Null-propagation: `expr?` (optional, can defer if complex)
+  - [ ] Postfix `?` operator on nullable expressions
+  - [ ] Early return `null` if `expr` is `null`
+  - [ ] Similar to `fmap` / monadic bind
+
+---
+
+### Milestone 16.2: Language Ergonomics
+
+**Scope:** Quality-of-life language features.
+
+**Key Tasks:**
+
+- [ ] `const` declarations
+  - [ ] Parse `const NAME: Type = expr`
+  - [ ] Compile-time evaluation
+  - [ ] Immutable by default semantics
+- [ ] UFCS desugaring
+  - [ ] `obj.method(args)` → `method(obj, args)`
+  - [ ] Or `method(&obj, args)` if reference lifting required
+  - [ ] Method lookup in current module scope
+
+---
+
+### Milestone 16.3: Extended Types (Optional)
+
+**Scope:** Additional type system features.
+
+**Key Tasks:**
+
+- [ ] Multiple return values / tuples
+  - [ ] `(T, U)` tuple type syntax
+  - [ ] Tuple construction and destructuring
+  - [ ] Functions returning tuples
+
+---
+
+### Milestone 16.4: Enum Option Migration
+
+**Scope:** Replace struct Option(T) with enum Option(T) for better semantics.
+
+**Key Tasks:**
+
+- [ ] Update `stdlib/core/option.f` to use enum definition
+- [ ] Update pattern matching to support `Some(x)` / `None` variants
+- [ ] Update compiler tests and stdlib code
+- [ ] Implement `Result(T, E)` enum to demonstrate enum system
 
 ---
 
@@ -598,8 +670,13 @@ _Goal: Rewrite the compiler in FLang._
 - **Phase:** 4 (Language Completeness)
 - **Milestone:** 14 (IN PROGRESS - Enums & Pattern Matching)
 - **Next Up:**
-  - Complete Milestone 14.1 (enum Option replaces struct Option)
-  - Implement nested patterns
+  - Complete M14 pending items (nested patterns, multiple wildcards)
+  - **M15:** Operators as Functions
+  - **M16:** Test Framework (PRIORITY) - `test` blocks, `assert`, test runner
+  - **M16.1:** Null Safety Operators (`??`, `?`)
+  - **M16.2:** Language Ergonomics (`const`, UFCS)
+  - **M16.3:** Extended Types (tuples - optional)
+  - **M16.4:** Enum Option Migration (replaces struct Option)
   - Fix pre-existing generics overload resolution bug (`generic_mangling_order.f`)
   - Fix pre-existing option test bug (`option_basic.f`)
 - **Tests Passing:** 110/113 (97%)
