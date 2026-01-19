@@ -1184,7 +1184,7 @@ public class TypeChecker
         return TypeRegistry.Never;
     }
 
-    private TypeBase CheckMemberAccessExpression(MemberAccessExpressionNode ma)
+    private TypeBase CheckMemberAccessExpression(MemberAccessExpressionNode ma, TypeBase? expectedType = null)
     {
         // Try to resolve as full type FQN first (e.g., std.result.Result)
         var pathString = TryBuildMemberAccessPath(ma);
@@ -1213,8 +1213,18 @@ public class TypeChecker
                 // Check if field name matches a variant
                 if (enumType.Variants.Any(v => v.VariantName == ma.FieldName))
                 {
+                    // If the enum has type parameters and we have an expected type, use it
+                    // This handles cases like: let nil: List(i32) = List.Nil
+                    var enumToUse = enumType;
+                    if (enumType.TypeArguments.Any(t => t is GenericParameterType) && expectedType is EnumType expectedEnum)
+                    {
+                        // Expected type has concrete type arguments - use that
+                        if (expectedEnum.Name == enumType.Name)
+                            enumToUse = expectedEnum;
+                    }
+
                     // This is enum variant construction: EnumType.Variant
-                    return CheckEnumVariantConstruction(enumType, ma.FieldName, new List<ExpressionNode>(),
+                    return CheckEnumVariantConstruction(enumToUse, ma.FieldName, new List<ExpressionNode>(),
                         ma.Span);
                 }
 
@@ -1653,7 +1663,7 @@ public class TypeChecker
                 break;
             }
             case MemberAccessExpressionNode ma:
-                type = CheckMemberAccessExpression(ma);
+                type = CheckMemberAccessExpression(ma, expectedType);
                 break;
             case StructConstructionExpressionNode sc:
             {
@@ -2963,9 +2973,13 @@ public class TypeChecker
             // Keep base name; backend will mangle by parameter types
             var newFn = new FunctionDeclarationNode(genericEntry.AstNode.Span, genericEntry.Name, newParams, newRetNode,
                 genericEntry.AstNode.Body, genericEntry.IsForeign ? FunctionModifiers.Foreign : FunctionModifiers.None);
-            CheckFunction(newFn);
+
+            // Register specialization BEFORE checking body to prevent infinite recursion
+            // for recursive generic functions (e.g., count_list calling count_list)
             _specializations.Add(newFn);
             _emittedSpecs.Add(key);
+
+            CheckFunction(newFn);
             return newFn;
         }
         finally

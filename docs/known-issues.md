@@ -242,6 +242,33 @@ Milestone: 19 (Text & I/O)
 
 ## Recently Fixed
 
+### Recursive Generic Functions Stack Overflow
+
+**Fixed:** M14 (2026-01-19)
+**Was:** Recursive generic functions (e.g., `fn count_list(lst: &List($T)) i32` calling itself) caused stack overflow during type checking. The `EnsureSpecialization` method registered the specialization key AFTER `CheckFunction` completed, causing infinite recursion when the function body contained recursive calls.
+**Now:** Specialization registration (`_emittedSpecs.Add` and `_specializations.Add`) happens BEFORE `CheckFunction` is called, allowing recursive calls within the function body to find the already-registered specialization.
+
+**Related Tests:**
+- `tests/FLang.Tests/Harness/enums/enum_recursive_ok.f`
+
+### Match Expression on Reference Types
+
+**Fixed:** M14 (2026-01-19)
+**Was:** Matching on `&EnumType` (e.g., `lst match { ... }` where `lst: &List(i32)`) failed with E1001 because `LowerMatchExpression` tried to cast the scrutinee's type directly to `EnumType`, ignoring the reference wrapper.
+**Now:** `LowerMatchExpression` unwraps `ReferenceType` before casting to `EnumType`.
+
+**Related Tests:**
+- `tests/FLang.Tests/Harness/enums/enum_recursive_ok.f`
+
+### Generic Enum Variant Construction Type Inference
+
+**Fixed:** M14 (2026-01-19)
+**Was:** `let nil: List(i32) = List.Nil` generated code with unsubstituted type parameter (`List_T` instead of `List_i32`) because `CheckMemberAccessExpression` didn't propagate the expected type to variant construction.
+**Now:** `CheckMemberAccessExpression` accepts an optional `expectedType` parameter. When constructing a generic enum variant and the expected type is a concrete instantiation of the same enum, the concrete type is used instead of the template.
+
+**Related Tests:**
+- `tests/FLang.Tests/Harness/enums/enum_recursive_ok.f`
+
 ### Generics: Return Type Name Resolution
 
 **Fixed:** 2025-12-06

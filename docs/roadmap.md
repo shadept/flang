@@ -460,12 +460,8 @@ _Goal: Fill in remaining language features._
 - ✅ Exhaustiveness checking
 - ✅ Enum instantiation for generic enums
 - ✅ Pattern matching on enum references (`&EnumType`)
-
-**In Progress:**
-
-- [ ] Type inference for generic enum construction in all contexts
-  - Generic enums work but some edge cases remain with function parameter inference
-  - Recursive generic enums need more testing
+- ✅ Recursive generic enums (e.g., `enum List(T) { Cons(T, &List(T)), Nil }`)
+- ✅ Generic enum variant construction with type inference from expected type
 
 **Pending:**
 
@@ -599,18 +595,17 @@ _Goal: Rewrite the compiler in FLang._
 
 ## Current Status
 
-- **Phase:** 3 (Advanced Type System)
-- **Milestone:** 13 (COMPLETE - Iterator Protocol fully implemented)
+- **Phase:** 4 (Language Completeness)
+- **Milestone:** 14 (IN PROGRESS - Enums & Pattern Matching)
 - **Next Up:**
-  - Fix `list_push_pop.f` type mismatch bug (E3001)
-  - Implement allocator interface (deferred from M10)
-  - Complete List(T) operations (push, pop, get)
-  - Array/slice iterators (M13 deferred)
-  - String iterators (M13 deferred)
-- **Tests Passing:** 66/67 (98%)
+  - Complete Milestone 14.1 (enum Option replaces struct Option)
+  - Implement nested patterns
+  - Fix pre-existing generics overload resolution bug (`generic_mangling_order.f`)
+  - Fix pre-existing option test bug (`option_basic.f`)
+- **Tests Passing:** 110/113 (97%)
 
   - ✅ 15 core tests (basics, control flow, functions)
-  - ✅ 6 generics tests (M11)
+  - ✅ 5 generics tests (M11) - 1 pre-existing bug
   - ✅ 4 struct tests
   - ✅ 3 array tests
   - ✅ 3 string tests
@@ -619,11 +614,13 @@ _Goal: Rewrite the compiler in FLang._
   - ✅ 3 defer tests
   - ✅ 4 memory tests
   - ✅ 5 cast tests
-  - ✅ 1 option test
+  - ✅ 7 enum tests (M14) - includes recursive enums
+  - ✅ 12 match tests (M14)
   - ✅ 3 SSA tests (reassignment, print functions)
   - ✅ 12 iterator tests (M13)
-  - ❌ 1 list test failing (compiler bug, not missing feature)
-  - ❌ 2 pre-existing struct bugs (see `docs/known-issues.md`)
+  - ❌ 1 list test failing (unimplemented feature)
+  - ❌ 1 generics test failing (pre-existing overload resolution bug)
+  - ❌ 1 option test failing (pre-existing bug)
 
 - **Total Lines of FLang Code:** ~500+ (test files + stdlib)
 - **Total Lines of C# Compiler Code:** ~7,000+

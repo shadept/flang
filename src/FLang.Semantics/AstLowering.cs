@@ -1563,7 +1563,12 @@ public class AstLowering
     private Value LowerMatchExpression(MatchExpressionNode match)
     {
         // Get enum type from scrutinee and dereference flag from match node
-        var enumType = match.Scrutinee.Type as EnumType;
+        // If scrutinee is a reference type, unwrap it to get the inner enum type
+        var scrutineeType = match.Scrutinee.Type;
+        if (scrutineeType is ReferenceType rt)
+            scrutineeType = rt.InnerType;
+
+        var enumType = scrutineeType as EnumType;
         if (enumType == null)
         {
             _diagnostics.Add(Diagnostic.Error(
