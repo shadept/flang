@@ -1484,6 +1484,72 @@ let v: i32 = same(1, 2)  // OK: both arguments are integers
 
 ---
 
+### E2038: Cannot Assign to Const Variable
+
+**Category**: Variables
+**Severity**: Error
+
+#### Description
+
+An assignment was attempted on a variable declared with `const`. Const variables are immutable bindings that cannot be reassigned after initialization.
+
+#### Example
+
+```flang
+pub fn main() i32 {
+    const x: i32 = 42
+    x = 50  // ERROR: cannot assign to const variable `x`
+    return x
+}
+```
+
+#### Solution
+
+Use `let` instead of `const` if you need to reassign the variable:
+
+```flang
+pub fn main() i32 {
+    let x: i32 = 42
+    x = 50  // OK: let variables can be reassigned
+    return x
+}
+```
+
+---
+
+### E2039: Const Declaration Missing Initializer
+
+**Category**: Variables
+**Severity**: Error
+
+#### Description
+
+A `const` declaration was found without an initializer. Const variables must be initialized at the point of declaration because they cannot be assigned later.
+
+#### Example
+
+```flang
+pub fn main() i32 {
+    const x: i32  // ERROR: const declaration must have an initializer
+    return 0
+}
+```
+
+#### Solution
+
+Provide an initializer for the const variable, or use `let` if you need to initialize it later:
+
+```flang
+// Option 1: Initialize at declaration
+const x: i32 = 42  // OK
+
+// Option 2: Use let for deferred initialization
+let x: i32
+x = 42  // OK
+```
+
+---
+
 ## E3XXX: Code Generation Errors
 
 ### E3001: Invalid Type During Lowering
@@ -1813,6 +1879,8 @@ Report the issue with sample code that reproduces the error.
 | **E2034** | Enums             | Duplicate enum variant name                  |
 | **E2035** | Enums             | Recursive type without indirection           |
 | **E2037** | Pattern Matching  | Unknown enum variant in pattern              |
+| **E2038** | Variables         | Cannot assign to const variable              |
+| **E2039** | Variables         | Const declaration missing initializer        |
 | **E2102** | Generics          | Conflicting generic type bindings            |
 
 ### E3XXX: Code Generation

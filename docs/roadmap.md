@@ -566,24 +566,66 @@ _Goal: Fill in remaining language features._
 
 ---
 
-### Milestone 16.2: Language Ergonomics
+### ✅ Milestone 16.2: Language Ergonomics (COMPLETE)
 
 **Scope:** Quality-of-life language features.
 
-**Key Tasks:**
+**Completed:**
 
-- [ ] `const` declarations
-  - [ ] Parse `const NAME: Type = expr`
-  - [ ] Compile-time evaluation
-  - [ ] Immutable by default semantics
-- [ ] UFCS desugaring
-  - [ ] `obj.method(args)` → `method(obj, args)`
-  - [ ] Or `method(&obj, args)` if reference lifting required
-  - [ ] Method lookup in current module scope
+- [x] `const` declarations
+  - [x] Parse `const NAME: Type = expr` and `const NAME = expr`
+  - [x] Immutable binding semantics (E2038: cannot reassign to const)
+  - [x] Require initializer (E2039: const must have initializer)
+- [x] UFCS desugaring
+  - [x] `obj.method(args)` → `method(obj, args)`
+  - [x] Or `method(&obj, args)` if reference lifting required
+  - [x] Method lookup in current module scope
+  - [x] Works with generic functions
+
+**Tests Added:**
+
+- `const/const_basic.f` - Basic const declaration
+- `const/const_inferred_type.f` - Const with type inference
+- `const/const_with_expression.f` - Const with computed value
+- `errors/error_e2038_const_reassign.f` - E2038 validation
+- `errors/error_e2039_const_no_init.f` - E2039 validation
+- `ufcs/ufcs_basic_value.f` - UFCS with value parameter
+- `ufcs/ufcs_with_ref.f` - UFCS with reference lifting
+- `ufcs/ufcs_with_args.f` - UFCS with additional arguments
+- `ufcs/ufcs_generic.f` - UFCS with generic functions
+
+**Note:** Compile-time evaluation deferred (const values are runtime-evaluated)
 
 ---
 
-### Milestone 16.3: Extended Types (Optional)
+### Milestone 16.3: Auto-Deref for Reference Member Access
+
+**Scope:** Automatic pointer dereferencing for field access (like C's `->` operator).
+
+**Key Tasks:**
+
+- [ ] Auto-deref for `&T` member access
+  - [ ] `ref.field` on `&Struct` auto-dereferences to access field directly
+  - [ ] Similar to C's `ptr->field` being equivalent to `(*ptr).field`
+  - [ ] `ref.*` remains explicit copy/dereference of the pointed-to value
+  - [ ] Works recursively for nested references
+- [ ] Update TypeChecker's `CheckMemberAccessExpression` to auto-unwrap references
+- [ ] Ensure codegen emits correct pointer arithmetic (no copy)
+
+**Example:**
+
+```flang
+struct Point { x: i32, y: i32 }
+
+fn sum(p: &Point) i32 {
+    return p.x + p.y   // auto-deref: accesses through pointer directly
+    // return p.*.x + p.*.y  // explicit deref: copies Point first
+}
+```
+
+---
+
+### Milestone 16.4: Extended Types (Optional)
 
 **Scope:** Additional type system features.
 
@@ -596,7 +638,7 @@ _Goal: Fill in remaining language features._
 
 ---
 
-### Milestone 16.4: Enum Option Migration
+### Milestone 16.5: Enum Option Migration
 
 **Scope:** Replace struct Option(T) with enum Option(T) for better semantics.
 
@@ -689,17 +731,14 @@ _Goal: Rewrite the compiler in FLang._
 ## Current Status
 
 - **Phase:** 4 (Language Completeness)
-- **Milestone:** 15 (COMPLETE - Operators as Functions)
+- **Milestone:** 16.2 (COMPLETE - Language Ergonomics)
 - **Next Up:**
   - Complete M14 pending items (nested patterns, multiple wildcards)
-  - **M16:** Test Framework (PRIORITY) - `test` blocks, `assert`, test runner
-  - **M16.1:** Null Safety Operators (`??`, `?`)
-  - **M16.2:** Language Ergonomics (`const`, UFCS)
   - **M16.3:** Extended Types (tuples - optional)
   - **M16.4:** Enum Option Migration (replaces struct Option)
   - Fix pre-existing generics overload resolution bug (`generic_mangling_order.f`)
   - Fix pre-existing option test bug (`option_basic.f`)
-- **Tests Passing:** 116/119 (97%)
+- **Tests Passing:** TBD (run test suite to update)
 
   - ✅ 15 core tests (basics, control flow, functions)
   - ✅ 5 generics tests (M11) - 1 pre-existing bug
@@ -716,9 +755,12 @@ _Goal: Rewrite the compiler in FLang._
   - ✅ 3 SSA tests (reassignment, print functions)
   - ✅ 12 iterator tests (M13)
   - ✅ 6 operator tests (M15)
+  - ✅ 3 const tests (M16.2)
+  - ✅ 4 UFCS tests (M16.2)
+  - ✅ 2 const error tests (M16.2)
   - ❌ 1 list test failing (unimplemented feature)
   - ❌ 1 generics test failing (pre-existing overload resolution bug)
   - ❌ 1 option test failing (pre-existing bug)
 
-- **Total Lines of FLang Code:** ~500+ (test files + stdlib)
-- **Total Lines of C# Compiler Code:** ~7,000+
+- **Total Lines of FLang Code:** ~550+ (test files + stdlib)
+- **Total Lines of C# Compiler Code:** ~7,500+

@@ -18,6 +18,7 @@ public enum TokenKind
     Fn,
     Return,
     Let,
+    Const,
     If,
     Else,
     For,

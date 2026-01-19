@@ -129,6 +129,7 @@ public class Lexer
                 "fn" => TokenKind.Fn,
                 "return" => TokenKind.Return,
                 "let" => TokenKind.Let,
+                "const" => TokenKind.Const,
                 "if" => TokenKind.If,
                 "else" => TokenKind.Else,
                 "for" => TokenKind.For,

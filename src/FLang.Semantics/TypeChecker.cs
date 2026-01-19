@@ -20,7 +20,9 @@ public class TypeChecker
     private readonly TypeSolver _unificationEngine;
 
     // Variable scopes (local to type checking phase)
-    private readonly Stack<Dictionary<string, TypeBase>> _scopes = new();
+    // Each entry tracks both the type and whether the variable is const (immutable)
+    private readonly record struct VariableInfo(TypeBase Type, bool IsConst);
+    private readonly Stack<Dictionary<string, VariableInfo>> _scopes = new();
 
     // Function registry (stays in TypeChecker - contains AST nodes)
     private readonly Dictionary<string, List<FunctionEntry>> _functions = [];
@@ -871,6 +873,19 @@ public class TypeChecker
 
     private void CheckVariableDeclaration(VariableDeclarationNode v)
     {
+        // const declarations require an initializer
+        if (v.IsConst && v.Initializer == null)
+        {
+            ReportError(
+                "const declaration must have an initializer",
+                v.Span,
+                "const variables must be initialized at declaration",
+                "E2039");
+            v.ResolvedType = TypeRegistry.Never;
+            DeclareVariable(v.Name, TypeRegistry.Never, v.Span, isConst: true);
+            return;
+        }
+
         var dt = ResolveTypeNode(v.Type);
         var it = v.Initializer != null ? CheckExpression(v.Initializer, dt) : null;
         if (it != null && dt != null)
@@ -886,7 +901,7 @@ public class TypeChecker
             v.Initializer = WrapWithCoercionIfNeeded(v.Initializer!, originalInitType, dt.Prune());
 
             v.ResolvedType = dt;
-            DeclareVariable(v.Name, dt, v.Span);
+            DeclareVariable(v.Name, dt, v.Span, v.IsConst);
         }
         else
         {
@@ -902,13 +917,13 @@ public class TypeChecker
                     "type annotations needed: variable declaration requires either a type annotation or an initializer",
                     "E2001");
                 v.ResolvedType = TypeRegistry.Never;
-                DeclareVariable(v.Name, TypeRegistry.Never, v.Span);
+                DeclareVariable(v.Name, TypeRegistry.Never, v.Span, v.IsConst);
             }
             else
             {
                 // No immediate check for IsComptimeType - validation happens in VerifyAllTypesResolved
                 v.ResolvedType = varType;
-                DeclareVariable(v.Name, varType, v.Span);
+                DeclareVariable(v.Name, varType, v.Span, v.IsConst);
             }
         }
     }
@@ -1598,10 +1613,24 @@ public class TypeChecker
 
     private TypeBase CheckAssignmentExpression(AssignmentExpressionNode ae)
     {
+        // Check for const reassignment
+        if (ae.Target is IdentifierExpressionNode id)
+        {
+            if (TryLookupVariableInfo(id.Name, out var varInfo) && varInfo.IsConst)
+            {
+                ReportError(
+                    $"cannot assign to const variable `{id.Name}`",
+                    ae.Target.Span,
+                    "const variables cannot be reassigned after initialization",
+                    "E2038");
+                // Continue type checking for better error recovery
+            }
+        }
+
         // Get the type of the assignment target (lvalue)
         TypeBase targetType = ae.Target switch
         {
-            IdentifierExpressionNode id => LookupVariable(id.Name, ae.Target.Span),
+            IdentifierExpressionNode idExpr => LookupVariable(idExpr.Name, ae.Target.Span),
             MemberAccessExpressionNode fa => CheckExpression(fa),
             _ => throw new Exception($"Invalid assignment target: {ae.Target.GetType().Name}")
         };
@@ -1808,12 +1837,190 @@ public class TypeChecker
                 return TypeRegistry.I32;
             }
 
+            // Try UFCS: obj.method(args) -> method(obj, args) or method(&obj, args)
+            if (call.UfcsReceiver != null && call.MethodName != null)
+            {
+                var ufcsResult = TryResolveUfcsCall(call, expectedType);
+                if (ufcsResult != null)
+                    return ufcsResult;
+            }
+
             ReportError(
                 $"cannot find function `{call.FunctionName}` in this scope",
                 call.Span,
                 "not found in this scope",
                 "E2004");
             return TypeRegistry.Never;
+        }
+    }
+
+    /// <summary>
+    /// Attempts to resolve a UFCS (Uniform Function Call Syntax) call.
+    /// Transforms obj.method(args) to method(obj, args) or method(&amp;obj, args).
+    /// </summary>
+    private TypeBase? TryResolveUfcsCall(CallExpressionNode call, TypeBase? expectedType)
+    {
+        if (call.UfcsReceiver == null || call.MethodName == null)
+            return null;
+
+        // Check if the method name exists as a function
+        if (!_functions.TryGetValue(call.MethodName, out var candidates))
+            return null;
+
+        // Type-check the receiver expression
+        var receiverType = CheckExpression(call.UfcsReceiver);
+
+        // Build argument list: receiver + original arguments
+        // First, try with receiver value directly
+        var argTypes = new List<TypeBase> { receiverType };
+        argTypes.AddRange(call.Arguments.Select(arg => CheckExpression(arg)));
+
+        // Try to find a matching function
+        FunctionEntry? bestMatch = null;
+        var bestCost = int.MaxValue;
+        Dictionary<string, TypeBase>? bestBindings = null;
+        var usedReference = false;
+
+        // First try with value receiver: method(obj, args)
+        TryMatchUfcsCandidate(candidates, argTypes, ref bestMatch, ref bestCost, ref bestBindings);
+
+        // If no match found, try with reference receiver: method(&obj, args)
+        if (bestMatch == null)
+        {
+            var refReceiverType = new ReferenceType(receiverType);
+            var refArgTypes = new List<TypeBase> { refReceiverType };
+            refArgTypes.AddRange(argTypes.Skip(1)); // Skip original receiver, use rest
+
+            TryMatchUfcsCandidate(candidates, refArgTypes, ref bestMatch, ref bestCost, ref bestBindings);
+            if (bestMatch != null)
+                usedReference = true;
+        }
+
+        if (bestMatch == null)
+            return null;
+
+        // Found a match - transform the call
+        // Insert receiver as first argument
+        var newArguments = new List<ExpressionNode>();
+
+        if (usedReference)
+        {
+            // Wrap receiver in address-of expression
+            newArguments.Add(new AddressOfExpressionNode(call.UfcsReceiver.Span, call.UfcsReceiver));
+        }
+        else
+        {
+            newArguments.Add(call.UfcsReceiver);
+        }
+        newArguments.AddRange(call.Arguments);
+
+        // Update the call's arguments (mutate in place for proper lowering)
+        call.Arguments.Clear();
+        call.Arguments.AddRange(newArguments);
+
+        // Re-typecheck with the new argument list using the matched function
+        // This is similar to regular call resolution
+        // Important: We already computed argTypes above, which includes the receiver type.
+        // We should reuse those types to avoid re-checking expressions (which could cause infinite loops with UFCS chains).
+        var finalArgTypes = usedReference
+            ? new List<TypeBase> { new ReferenceType(receiverType) }.Concat(argTypes.Skip(1)).ToList()
+            : argTypes;
+
+        if (!bestMatch.IsGeneric)
+        {
+            var retType = bestMatch.ReturnType;
+            if (expectedType != null)
+                retType = UnifyTypes(retType, expectedType, call.Span);
+
+            // Unify and wrap with coercion as needed
+            for (var i = 0; i < call.Arguments.Count; i++)
+            {
+                var unified = UnifyTypes(finalArgTypes[i], bestMatch.ParameterTypes[i], call.Arguments[i].Span);
+                call.Arguments[i] = WrapWithCoercionIfNeeded(call.Arguments[i], finalArgTypes[i].Prune(), bestMatch.ParameterTypes[i].Prune());
+            }
+
+            call.ResolvedTarget = bestMatch.AstNode;
+            return retType;
+        }
+        else
+        {
+            // Generic UFCS - need to specialize
+            var bindings = bestBindings!;
+            if (expectedType != null)
+                RefineBindingsWithExpectedReturn(bestMatch.ReturnType, expectedType, bindings, call.Span);
+
+            var ret = SubstituteGenerics(bestMatch.ReturnType, bindings);
+            var retType = expectedType != null ? UnifyTypes(ret, expectedType, call.Span) : ret;
+
+            var concreteParams = new List<TypeBase>();
+            for (var i = 0; i < bestMatch.ParameterTypes.Count; i++)
+                concreteParams.Add(SubstituteGenerics(bestMatch.ParameterTypes[i], bindings));
+
+            // Unify and wrap with coercion as needed
+            for (var i = 0; i < call.Arguments.Count; i++)
+            {
+                var unified = UnifyTypes(finalArgTypes[i], concreteParams[i], call.Arguments[i].Span);
+                call.Arguments[i] = WrapWithCoercionIfNeeded(call.Arguments[i], finalArgTypes[i].Prune(), concreteParams[i].Prune());
+            }
+
+            var spec = EnsureSpecialization(bestMatch, bindings, concreteParams);
+            call.ResolvedTarget = spec;
+            return retType;
+        }
+    }
+
+    private void TryMatchUfcsCandidate(
+        List<FunctionEntry> candidates,
+        List<TypeBase> argTypes,
+        ref FunctionEntry? bestMatch,
+        ref int bestCost,
+        ref Dictionary<string, TypeBase>? bestBindings)
+    {
+        foreach (var cand in candidates)
+        {
+            if (cand.ParameterTypes.Count != argTypes.Count) continue;
+
+            if (!cand.IsGeneric)
+            {
+                if (!TryComputeCoercionCost(argTypes, cand.ParameterTypes, out var cost))
+                    continue;
+
+                if (cost < bestCost)
+                {
+                    bestMatch = cand;
+                    bestCost = cost;
+                    bestBindings = null;
+                }
+            }
+            else
+            {
+                var bindings = new Dictionary<string, TypeBase>();
+                var ok = true;
+                for (var i = 0; i < argTypes.Count; i++)
+                {
+                    if (!TryBindGeneric(cand.ParameterTypes[i], argTypes[i], bindings, out _, out _))
+                    {
+                        ok = false;
+                        break;
+                    }
+                }
+
+                if (!ok) continue;
+
+                var concreteParams = new List<TypeBase>();
+                for (var i = 0; i < cand.ParameterTypes.Count; i++)
+                    concreteParams.Add(SubstituteGenerics(cand.ParameterTypes[i], bindings));
+
+                if (!TryComputeCoercionCost(argTypes, concreteParams, out var cost))
+                    continue;
+
+                if (cost < bestCost)
+                {
+                    bestMatch = cand;
+                    bestCost = cost;
+                    bestBindings = bindings;
+                }
+            }
         }
     }
 
@@ -2755,10 +2962,10 @@ public class TypeChecker
     private void PushScope() => _scopes.Push([]);
     private void PopScope() => _scopes.Pop();
 
-    private void DeclareVariable(string name, TypeBase type, SourceSpan span)
+    private void DeclareVariable(string name, TypeBase type, SourceSpan span, bool isConst = false)
     {
         var cur = _scopes.Peek();
-        if (!cur.TryAdd(name, type))
+        if (!cur.TryAdd(name, new VariableInfo(type, isConst)))
             ReportError(
                 $"variable `{name}` is already declared",
                 span,
@@ -2770,14 +2977,26 @@ public class TypeChecker
     {
         foreach (var scope in _scopes)
         {
-            if (scope.TryGetValue(name, out var t))
+            if (scope.TryGetValue(name, out var info))
             {
-                type = t;
+                type = info.Type;
                 return true;
             }
         }
 
         type = TypeRegistry.Void;
+        return false;
+    }
+
+    private bool TryLookupVariableInfo(string name, out VariableInfo info)
+    {
+        foreach (var scope in _scopes)
+        {
+            if (scope.TryGetValue(name, out info))
+                return true;
+        }
+
+        info = default;
         return false;
     }
 
@@ -3665,8 +3884,8 @@ public class TypeChecker
                 break;
 
             case VariablePatternNode vp:
-                // Bind variable to the payload type
-                _scopes.Peek()[vp.Name] = type;
+                // Bind variable to the payload type (pattern bindings are mutable like let)
+                _scopes.Peek()[vp.Name] = new VariableInfo(type, IsConst: false);
                 break;
 
             case EnumVariantPatternNode:

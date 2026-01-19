@@ -427,6 +427,7 @@ public class Parser
         switch (_currentToken.Kind)
         {
             case TokenKind.Let:
+            case TokenKind.Const:
                 return ParseVariableDeclaration();
 
             case TokenKind.Return:
@@ -483,11 +484,14 @@ public class Parser
 
     /// <summary>
     /// Parses a variable declaration statement with optional type annotation and initializer.
+    /// Supports both `let` (mutable) and `const` (immutable) declarations.
     /// </summary>
     /// <returns>A <see cref="VariableDeclarationNode"/> representing the variable declaration.</returns>
     private VariableDeclarationNode ParseVariableDeclaration()
     {
-        var letKeyword = Eat(TokenKind.Let);
+        // Accept either 'let' or 'const'
+        var isConst = _currentToken.Kind == TokenKind.Const;
+        var keyword = isConst ? Eat(TokenKind.Const) : Eat(TokenKind.Let);
         var identifier = Eat(TokenKind.Identifier);
 
         TypeNode? type = null;
@@ -504,8 +508,8 @@ public class Parser
             initializer = ParseExpression();
         }
 
-        var span = SourceSpan.Combine(letKeyword.Span, _currentToken.Span);
-        return new VariableDeclarationNode(span, identifier.Text, type, initializer);
+        var span = SourceSpan.Combine(keyword.Span, _currentToken.Span);
+        return new VariableDeclarationNode(span, identifier.Text, type, initializer, isConst);
     }
 
     /// <summary>
@@ -649,18 +653,14 @@ public class Parser
                         var closeParenToken = Eat(TokenKind.CloseParenthesis);
                         var callSpan = SourceSpan.Combine(expr.Span, closeParenToken.Span);
 
-                        // Create a field access node for the method, wrapped in arguments
-                        // This will be interpreted as either enum construction or UFCS method call
-                        var fieldAccess = new MemberAccessExpressionNode(
-                            SourceSpan.Combine(expr.Span, fieldToken.Span),
-                            expr, fieldToken.Text);
-
-                        // Store as a special marker - we'll create a CallExpressionNode with the field access
-                        // For type checking, we need to know this is EnumName.Variant(args) or obj.method(args)
-                        // For now, create a CallExpressionNode with a synthetic name
+                        // For EnumName.Variant(args) or UFCS obj.method(args):
+                        // - syntheticName is "EnumName.Variant" or "obj.method" (for legacy enum construction lookup)
+                        // - ufcsReceiver is the base expression (for UFCS transformation)
+                        // - methodName is just "Variant" or "method" (the right side of the dot)
                         var syntheticName =
                             $"{(expr is IdentifierExpressionNode id ? id.Name : "_")}.{fieldToken.Text}";
-                        expr = new CallExpressionNode(callSpan, syntheticName, arguments);
+                        expr = new CallExpressionNode(callSpan, syntheticName, arguments,
+                            ufcsReceiver: expr, methodName: fieldToken.Text);
                         continue;
                     }
 
@@ -1048,6 +1048,7 @@ public class Parser
         {
             // Check if this might be a trailing expression (no statement keywords)
             if (_currentToken.Kind != TokenKind.Let &&
+                _currentToken.Kind != TokenKind.Const &&
                 _currentToken.Kind != TokenKind.Return &&
                 _currentToken.Kind != TokenKind.For &&
                 _currentToken.Kind != TokenKind.Break &&
@@ -1312,7 +1313,7 @@ public class Parser
 
     /// <summary>
     /// Synchronizes the parser to a statement boundary after encountering an error.
-    /// Skips tokens until a likely recovery point (let, return, if, etc.) is found.
+    /// Skips tokens until a likely recovery point (let, const, return, if, etc.) is found.
     /// </summary>
     private void SynchronizeStatement()
     {
@@ -1320,6 +1321,7 @@ public class Parser
         while (_currentToken.Kind != TokenKind.EndOfFile &&
                _currentToken.Kind != TokenKind.CloseBrace &&
                _currentToken.Kind != TokenKind.Let &&
+               _currentToken.Kind != TokenKind.Const &&
                _currentToken.Kind != TokenKind.Return &&
                _currentToken.Kind != TokenKind.For &&
                _currentToken.Kind != TokenKind.Break &&
