@@ -48,6 +48,63 @@ public class AstLowering
         return (function, lowering.Diagnostics);
     }
 
+    /// <summary>
+    /// Lower a test declaration to a void function.
+    /// </summary>
+    public static (Function Function, IReadOnlyList<Diagnostic> Diagnostics) LowerTest(
+        FLang.Frontend.Ast.Declarations.TestDeclarationNode testNode,
+        Compilation compilation, TypeChecker typeSolver, ILogger<AstLowering> logger)
+    {
+        var lowering = new AstLowering(compilation, logger);
+        var function = lowering.LowerTestDeclaration(testNode);
+        return (function, lowering.Diagnostics);
+    }
+
+    private Function LowerTestDeclaration(FLang.Frontend.Ast.Declarations.TestDeclarationNode testNode)
+    {
+        // Generate a unique function name for the test
+        var testFnName = $"__test_{SanitizeTestName(testNode.Name)}";
+
+        // Create a void function for the test
+        var function = new Function(testFnName) { IsForeign = false, ReturnType = TypeRegistry.Void };
+        _currentFunction = function;
+
+        _currentBlock = CreateBlock("entry");
+        function.BasicBlocks.Add(_currentBlock);
+
+        // Push a new defer scope for this function
+        _deferStack.Push([]);
+
+        // Lower each statement in the test body
+        foreach (var statement in testNode.Body)
+        {
+            LowerStatement(statement);
+        }
+
+        // Emit deferred statements at function end
+        EmitDeferredStatements();
+
+        // Pop the defer scope
+        _deferStack.Pop();
+
+        return function;
+    }
+
+    private static string SanitizeTestName(string name)
+    {
+        // Convert test name to valid C identifier
+        var sanitized = new System.Text.StringBuilder();
+        foreach (var c in name)
+        {
+            if (char.IsLetterOrDigit(c))
+                sanitized.Append(c);
+            else if (c == ' ')
+                sanitized.Append('_');
+            // Skip other characters
+        }
+        return sanitized.ToString();
+    }
+
     private Function LowerFunction(FunctionDeclarationNode functionNode)
     {
         _currentFunctionNode = functionNode;
@@ -1132,9 +1189,17 @@ public class AstLowering
         // Lower then branch
         _currentBlock = thenBlock;
         var thenValue = LowerExpression(ifExpr.ThenBranch);
-        // TODO skip next 3 lines if thenbranch is terminal (return, never, etc)
-        var thenResult = new LocalValue($"if_result_then_{_tempCounter++}", thenValue.Type ?? TypeRegistry.Never);
-        _currentBlock.Instructions.Add(new StoreInstruction(thenResult.Name, thenValue, thenResult));
+
+        // Skip storing void results (void function calls, etc.)
+        var thenType = thenValue.Type;
+        var isVoidResult = thenType == null || thenType == TypeRegistry.Void || thenType == TypeRegistry.Never;
+
+        LocalValue? thenResult = null;
+        if (!isVoidResult)
+        {
+            thenResult = new LocalValue($"if_result_then_{_tempCounter++}", thenType!);
+            _currentBlock.Instructions.Add(new StoreInstruction(thenResult.Name, thenValue, thenResult));
+        }
         _currentBlock.Instructions.Add(new JumpInstruction(mergeBlock));
 
         // Lower else branch if it exists
@@ -1143,16 +1208,26 @@ public class AstLowering
         {
             _currentBlock = elseBlock;
             var elseValue = LowerExpression(ifExpr.ElseBranch);
-            elseResult = new LocalValue($"if_result_else_{_tempCounter++}", elseValue.Type ?? TypeRegistry.Never);
-            _currentBlock.Instructions.Add(new StoreInstruction(elseResult.Name, elseValue, elseResult));
+
+            var elseType = elseValue.Type;
+            var isElseVoid = elseType == null || elseType == TypeRegistry.Void || elseType == TypeRegistry.Never;
+
+            if (!isElseVoid)
+            {
+                elseResult = new LocalValue($"if_result_else_{_tempCounter++}", elseType!);
+                _currentBlock.Instructions.Add(new StoreInstruction(elseResult.Name, elseValue, elseResult));
+            }
             _currentBlock.Instructions.Add(new JumpInstruction(mergeBlock));
         }
 
         // Continue in merge block
         _currentBlock = mergeBlock;
 
-        // For now, return the then result (proper SSA would use phi nodes or block arguments)
-        return thenResult;
+        // Return the then result, or a void constant if the if has void type
+        if (thenResult != null)
+            return thenResult;
+        else
+            return new ConstantValue(0) { Type = TypeRegistry.Void };
     }
 
     private Value LowerBlockExpression(BlockExpressionNode blockExpr)

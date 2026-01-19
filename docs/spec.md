@@ -604,8 +604,65 @@ These instructions must be the last instruction in a basic block:
 
 ## 9. Testing
 
-- `test "name" { ... }` defines an isolated test block.
-- The CLI test harness validates exit code, stdout, and stderr.
+### Test Blocks
+
+Test blocks define unit tests inline in source files:
+
+```flang
+import std.test
+
+test "addition works" {
+    let a: i32 = 2
+    let b: i32 = 3
+    assert_eq(a + b, 5, "2 + 3 should equal 5")
+}
+
+test "boolean assertion" {
+    assert_true(true, "true should be true")
+}
+```
+
+- `test "name" { ... }` defines a test block scoped to the module
+- Test blocks are not exported and only run in test mode
+- Multiple test blocks can exist in a single file
+
+### Assertion Functions
+
+Import `std.test` to access assertion functions:
+
+- `assert_true(condition: bool, msg: String)` - panics if condition is false
+- `assert_eq(a: $T, b: T, msg: String)` - panics if `a != b`
+
+### Running Tests
+
+Use the `--test` CLI flag to run tests instead of `main()`:
+
+```bash
+flang --test myfile.f
+./myfile
+```
+
+When `--test` is passed:
+1. All `test` blocks are collected from compiled modules
+2. A test runner replaces `main()` and executes each test
+3. Exit code 0 indicates all tests passed
+4. Exit code 1 indicates a test failed (via panic)
+
+### Panic Function
+
+The `panic(msg: String)` function in `core.panic` terminates the program:
+
+```flang
+import core.panic
+
+pub fn main() i32 {
+    panic("something went wrong")
+    return 0  // unreachable
+}
+```
+
+- Prints the message to stdout
+- Exits with code 1
 
 ---
 

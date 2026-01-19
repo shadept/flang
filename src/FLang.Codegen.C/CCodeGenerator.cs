@@ -481,6 +481,11 @@ public class CCodeGenerator
             // Emit instructions
             foreach (var instruction in block.Instructions)
                 EmitInstruction(instruction);
+
+            // C requires a statement after a label - add empty statement if block has no instructions
+            // or if the last block is just a label (like if_merge at end of void function)
+            if (i > 0 && block.Instructions.Count == 0)
+                _output.AppendLine("    ;");
         }
 
         _output.AppendLine("}");

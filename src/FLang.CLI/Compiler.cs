@@ -3,7 +3,9 @@ using System.Runtime.InteropServices;
 using System.Text;
 using FLang.Codegen.C;
 using FLang.Core;
+using FLang.Frontend.Ast.Declarations;
 using FLang.IR;
+using FLang.IR.Instructions;
 using FLang.Semantics;
 using Microsoft.Extensions.Logging;
 
@@ -23,7 +25,8 @@ public record CompilerOptions(
     string? EmitFir = null,
     bool DebugLogging = false,
     string? WorkingDirectory = null,
-    IReadOnlyList<string>? IncludePaths = null
+    IReadOnlyList<string>? IncludePaths = null,
+    bool RunTests = false
 );
 
 public record CompilationResult(
@@ -147,6 +150,9 @@ public class Compiler
         var allFunctions = new List<Function>();
         var loweringDiagnostics = new List<Diagnostic>();
 
+        // Collect all test declarations if running tests
+        var allTests = new List<(TestDeclarationNode Test, Function Function)>();
+
         foreach (var module in parsedModules.Values)
         {
             foreach (var functionNode in module.Functions)
@@ -156,6 +162,18 @@ public class Compiler
                 allFunctions.Add(irFunction);
                 loweringDiagnostics.AddRange(diagnostics);
             }
+
+            // Lower test declarations if running tests
+            if (options.RunTests)
+            {
+                foreach (var testNode in module.Tests)
+                {
+                    var (testFunction, diagnostics) = AstLowering.LowerTest(testNode, compilation, typeSolver, loweringLogger);
+                    allFunctions.Add(testFunction);
+                    allTests.Add((testNode, testFunction));
+                    loweringDiagnostics.AddRange(diagnostics);
+                }
+            }
         }
 
         foreach (var specFn in typeSolver.GetSpecializedFunctions())
@@ -163,6 +181,17 @@ public class Compiler
             var (irFunction, diagnostics) = AstLowering.Lower(specFn, compilation, typeSolver, loweringLogger);
             allFunctions.Add(irFunction);
             loweringDiagnostics.AddRange(diagnostics);
+        }
+
+        // Generate test runner if running tests
+        if (options.RunTests && allTests.Count > 0)
+        {
+            var testRunner = GenerateTestRunner(allTests, allFunctions);
+            allFunctions.Add(testRunner);
+        }
+        else if (options.RunTests && allTests.Count == 0)
+        {
+            allDiagnostics.Add(Diagnostic.Warning("No test blocks found in any module", SourceSpan.None, "W0001"));
         }
 
         allDiagnostics.AddRange(loweringDiagnostics);
@@ -258,5 +287,41 @@ public class Compiler
         }
 
         return new CompilationResult(true, outputFilePath, allDiagnostics, compilation);
+    }
+
+    /// <summary>
+    /// Generate a test runner main() function that calls all test functions and reports results.
+    /// </summary>
+    private Function GenerateTestRunner(
+        List<(TestDeclarationNode Test, Function Function)> tests,
+        List<Function> allFunctions)
+    {
+        // Remove existing main() if present (we're replacing it)
+        var existingMain = allFunctions.FirstOrDefault(f => f.Name == "main");
+        if (existingMain != null)
+        {
+            allFunctions.Remove(existingMain);
+        }
+
+        // Create the test runner main function
+        var main = new Function("main") { ReturnType = TypeRegistry.I32 };
+
+        var entry = new BasicBlock("entry");
+        main.BasicBlocks.Add(entry);
+
+        // Generate calls to each test function
+        var tempCounter = 0;
+        foreach (var (testNode, testFn) in tests)
+        {
+            // Call the test function (void return)
+            var result = new LocalValue($"test_result_{tempCounter++}", TypeRegistry.Void);
+            var call = new CallInstruction(testFn.Name, new List<Value>(), result);
+            entry.Instructions.Add(call);
+        }
+
+        // Return 0 (all tests passed - if a test fails, panic() will exit with 1)
+        entry.Instructions.Add(new ReturnInstruction(new ConstantValue(0) { Type = TypeRegistry.I32 }));
+
+        return main;
     }
 }

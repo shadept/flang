@@ -142,6 +142,7 @@ public class Lexer
                 "match" => TokenKind.Match,
                 "foreign" => TokenKind.Foreign,
                 "as" => TokenKind.As,
+                "test" => TokenKind.Test,
                 "true" => TokenKind.True,
                 "false" => TokenKind.False,
                 "null" => TokenKind.Null,

@@ -42,11 +42,12 @@ public class Parser
         var structs = new List<StructDeclarationNode>();
         var enums = new List<EnumDeclarationNode>();
         var functions = new List<FunctionDeclarationNode>();
+        var tests = new List<TestDeclarationNode>();
 
         // Parse imports
         while (_currentToken.Kind == TokenKind.Import) imports.Add(ParseImport());
 
-        // Parse structs and functions
+        // Parse structs, functions, and tests
         while (_currentToken.Kind != TokenKind.EndOfFile)
         {
             try
@@ -102,13 +103,18 @@ public class Parser
                     // Non-public function
                     functions.Add(ParseFunction());
                 }
+                else if (_currentToken.Kind == TokenKind.Test)
+                {
+                    // Test block
+                    tests.Add(ParseTest());
+                }
                 else
                 {
                     // Unexpected token: report and attempt to recover by skipping it
                     _diagnostics.Add(Diagnostic.Error(
                         $"unexpected token '{_currentToken.Text}'",
                         _currentToken.Span,
-                        "expected `struct`, `enum`, `pub fn`, `fn`, or `#foreign fn`",
+                        "expected `struct`, `enum`, `pub fn`, `fn`, `test`, or `#foreign fn`",
                         "E1001"));
                     _currentToken = _lexer.NextToken();
                 }
@@ -122,7 +128,7 @@ public class Parser
 
         var endSpan = _currentToken.Span;
         var span = SourceSpan.Combine(startSpan, endSpan);
-        return new ModuleNode(span, imports, structs, enums, functions);
+        return new ModuleNode(span, imports, structs, enums, functions, tests);
     }
 
     /// <summary>
@@ -134,20 +140,42 @@ public class Parser
         var importKeyword = Eat(TokenKind.Import);
         var path = new List<string>();
 
-        // Parse the first identifier
-        var firstIdentifier = Eat(TokenKind.Identifier);
+        // Parse the first identifier (or keyword used as module name)
+        var firstIdentifier = EatIdentifierOrKeyword();
         path.Add(firstIdentifier.Text);
 
         // Parse additional path components (e.g., std.io.File)
         while (_currentToken.Kind == TokenKind.Dot)
         {
             Eat(TokenKind.Dot);
-            var identifier = Eat(TokenKind.Identifier);
+            var identifier = EatIdentifierOrKeyword();
             path.Add(identifier.Text);
         }
 
         var span = SourceSpan.Combine(importKeyword.Span, _currentToken.Span);
         return new ImportDeclarationNode(span, path);
+    }
+
+    /// <summary>
+    /// Eats an identifier or a keyword that can be used as an identifier in certain contexts
+    /// (e.g., module names in import paths like "std.test").
+    /// </summary>
+    private Token EatIdentifierOrKeyword()
+    {
+        // Keywords that can be used as module/path names
+        if (_currentToken.Kind == TokenKind.Identifier ||
+            _currentToken.Kind == TokenKind.Test)
+        {
+            var token = _currentToken;
+            _currentToken = _lexer.NextToken();
+            return token;
+        }
+
+        throw new ParserException(Diagnostic.Error(
+            $"expected identifier",
+            _currentToken.Span,
+            $"found '{_currentToken.Text}'",
+            "E1002"));
     }
 
     /// <summary>
@@ -354,6 +382,40 @@ public class Parser
             var span = SourceSpan.Combine(fnKeyword.Span, _currentToken.Span);
             return new FunctionDeclarationNode(span, identifier.Text, parameters, returnType, statements, modifiers);
         }
+    }
+
+    /// <summary>
+    /// Parses a test block declaration: test "name" { ... }
+    /// </summary>
+    /// <returns>A <see cref="TestDeclarationNode"/> representing the test block.</returns>
+    private TestDeclarationNode ParseTest()
+    {
+        var testKeyword = Eat(TokenKind.Test);
+
+        // Parse test name (must be a string literal)
+        if (_currentToken.Kind != TokenKind.StringLiteral)
+        {
+            throw new ParserException(Diagnostic.Error(
+                "expected string literal for test name",
+                _currentToken.Span,
+                $"found '{_currentToken.Text}'",
+                "E1002"));
+        }
+        var testName = Eat(TokenKind.StringLiteral).Text;
+
+        // Parse test body
+        Eat(TokenKind.OpenBrace);
+
+        var statements = new List<StatementNode>();
+        while (_currentToken.Kind != TokenKind.CloseBrace && _currentToken.Kind != TokenKind.EndOfFile)
+        {
+            statements.Add(ParseStatement());
+        }
+
+        Eat(TokenKind.CloseBrace);
+
+        var span = SourceSpan.Combine(testKeyword.Span, _currentToken.Span);
+        return new TestDeclarationNode(span, testName, statements);
     }
 
     /// <summary>

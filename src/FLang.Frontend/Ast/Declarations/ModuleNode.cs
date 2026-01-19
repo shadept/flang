@@ -9,16 +9,19 @@ public class ModuleNode : AstNode
         IReadOnlyList<ImportDeclarationNode> imports,
         IReadOnlyList<StructDeclarationNode> structs,
         IReadOnlyList<EnumDeclarationNode> enums,
-        IReadOnlyList<FunctionDeclarationNode> functions) : base(span)
+        IReadOnlyList<FunctionDeclarationNode> functions,
+        IReadOnlyList<TestDeclarationNode> tests) : base(span)
     {
         Imports = imports;
         Structs = structs;
         Enums = enums;
         Functions = functions;
+        Tests = tests;
     }
 
     public IReadOnlyList<ImportDeclarationNode> Imports { get; }
     public IReadOnlyList<StructDeclarationNode> Structs { get; }
     public IReadOnlyList<EnumDeclarationNode> Enums { get; }
     public IReadOnlyList<FunctionDeclarationNode> Functions { get; }
+    public IReadOnlyList<TestDeclarationNode> Tests { get; }
 }

@@ -496,40 +496,50 @@ _Goal: Fill in remaining language features._
 
 ---
 
-### Milestone 16: Test Framework (PRIORITY)
+### Milestone 16: Test Framework (COMPLETE)
 
 **Scope:** Compiler-supported testing framework with `test` blocks and assertion functions.
 
 **Key Tasks:**
 
-- [ ] `panic(msg: String)` function in `core/panic.f`
-  - [ ] Wraps C `abort()` or similar
-  - [ ] Prints message before terminating
+- [x] `panic(msg: String)` function in `core/panic.f`
+  - [x] Uses C `exit(1)` to terminate
+  - [x] Prints message before terminating
   - [ ] Source location support (future: compiler intrinsic for file/line)
-- [ ] `assert_true(condition: bool, msg: String)` function
-  - [ ] Calls `panic(msg)` when condition is false
-- [ ] `assert_eq(a: $T, b: T)` function
-  - [ ] Equivalent to `assert_true(a == b)`
+- [x] `assert_true(condition: bool, msg: String)` function
+  - [x] Calls `panic(msg)` when condition is false
+- [x] `assert_eq(a: $T, b: T, msg: String)` function
+  - [x] Generic function for equality checks
   - [ ] Future: print expected vs actual on failure (needs ToString)
-- [ ] `test "name" { }` block syntax
-  - [ ] Parse `test` keyword followed by string literal and block
-  - [ ] `TestDeclarationNode` AST node
-  - [ ] Test blocks scoped to module (not exported)
-- [ ] Test discovery and execution
-  - [ ] CLI flag: `--test` to run tests instead of main
-  - [ ] Collect all `test` blocks from compiled modules
-  - [ ] Generate test runner that calls each test
-  - [ ] Report pass/fail counts
-- [ ] Test isolation
+- [x] `test "name" { }` block syntax
+  - [x] Parse `test` keyword followed by string literal and block
+  - [x] `TestDeclarationNode` AST node
+  - [x] Test blocks scoped to module (not exported)
+  - [x] TypeChecker support via CheckTest()
+- [x] Test discovery and execution
+  - [x] CLI flag: `--test` to run tests instead of main
+  - [x] Collect all `test` blocks from compiled modules
+  - [x] Generate test runner that calls each test
+  - [ ] Report pass/fail counts (deferred: currently just exits 0/1)
+- [ ] Test isolation (deferred to future milestone)
   - [ ] Each test runs independently
   - [ ] Failures don't stop other tests
+  - Requires setjmp/longjmp or subprocess execution
 
-**Tests to Add:**
+**Bug Fixes:**
+- Fixed void-if codegen: skip storing void results in if blocks
+- Fixed C codegen: add empty statement after labels with no instructions
+- Fixed TypeChecker: remove _functionStack guard for proper call resolution in tests
 
-- `test/test_block_basic.f` - Simple test block compiles and runs
-- `test/test_assert_true_pass.f` - assert_true with true condition
-- `test/test_assert_true_fail.f` - assert_true with false (expect panic)
-- `test/test_assert_eq.f` - assert_eq equality check
+**Tests Added:**
+
+- `test/test_block_basic.f` - Single test block with assertion
+- `test/multiple_tests.f` - Multiple test blocks with various assertions
+- `test/panic_basic.f` - panic() prints message and exits with code 1
+- `test/assert_true_pass.f` - assert_true with true condition
+- `test/assert_true_fail.f` - assert_true with false (exits with 1)
+- `test/assert_eq_pass.f` - assert_eq equality check (pass)
+- `test/assert_eq_fail.f` - assert_eq inequality (exits with 1)
 
 ---
 

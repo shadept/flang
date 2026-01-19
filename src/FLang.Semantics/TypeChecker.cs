@@ -731,6 +731,12 @@ public class TypeChecker
             CheckFunction(function);
         }
 
+        // Check test block bodies
+        foreach (var test in module.Tests)
+        {
+            CheckTest(test);
+        }
+
         // Remove private entries
         foreach (var (name, entry) in added)
         {
@@ -782,6 +788,26 @@ public class TypeChecker
             PopScope();
             PopGenericScope();
             _functionStack.Pop();
+        }
+    }
+
+    /// <summary>
+    /// Type check a test block body (no parameters, void return).
+    /// </summary>
+    private void CheckTest(TestDeclarationNode test)
+    {
+        PushScope();
+        try
+        {
+            // Test blocks have no parameters and implicitly return void
+            foreach (var stmt in test.Body)
+            {
+                CheckStatement(stmt);
+            }
+        }
+        finally
+        {
+            PopScope();
         }
     }
 
@@ -1627,10 +1653,7 @@ public class TypeChecker
                     call.Arguments[i] = WrapWithCoercionIfNeeded(call.Arguments[i], argTypes[i].Prune(), chosen.ParameterTypes[i].Prune());
                 }
 
-                if (_functionStack.Count > 0)
-                {
-                    call.ResolvedTarget = chosen.AstNode;
-                }
+                call.ResolvedTarget = chosen.AstNode;
                 return type;
             }
             else
@@ -1684,10 +1707,7 @@ public class TypeChecker
                     }
                 }
 
-                if (_functionStack.Count > 0)
-                {
-                    call.ResolvedTarget = null;  // printf is a special builtin, no FunctionDeclarationNode
-                }
+                call.ResolvedTarget = null;  // printf is a special builtin, no FunctionDeclarationNode
                 return TypeRegistry.I32;
             }
 

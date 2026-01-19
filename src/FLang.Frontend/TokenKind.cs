@@ -31,6 +31,7 @@ public enum TokenKind
     Match,
     Foreign,
     As,
+    Test,
 
     // Operators
     Plus,

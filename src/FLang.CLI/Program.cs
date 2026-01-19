@@ -11,6 +11,7 @@ var demoDiagnostics = false;
 var releaseBuild = false;
 var findCompilersOnly = false;
 var debugLogging = false;
+var runTests = false;
 
 for (var i = 0; i < args.Length; i++)
     if (args[i] == "--stdlib-path" && i + 1 < args.Length)
@@ -25,6 +26,8 @@ for (var i = 0; i < args.Length; i++)
         findCompilersOnly = true;
     else if (args[i] == "--debug-logging")
         debugLogging = true;
+    else if (args[i] == "--test")
+        runTests = true;
     else if (!args[i].StartsWith("--")) inputFilePath = args[i];
 
 if (demoDiagnostics)
@@ -47,6 +50,7 @@ if (inputFilePath == null)
     Console.WriteLine("  --stdlib-path <path>    Path to standard library directory");
     Console.WriteLine("  --emit-fir <file>       Emit FIR (intermediate representation) to file (use '-' for stdout)");
     Console.WriteLine("  --release               Enable C backend optimization (passes -O2 /O2)");
+    Console.WriteLine("  --test                  Run test blocks instead of main()");
     Console.WriteLine("  --debug-logging         Enable detailed logs for the compiler stages");
     Console.WriteLine("  --demo-diagnostics      Show diagnostic system demo");
     Console.WriteLine("  --find-compilers        Probe and list available C compilers on this machine, then exit");
@@ -70,7 +74,8 @@ var options = new CompilerOptions(
     CCompilerConfig: compilerConfig,
     ReleaseBuild: releaseBuild,
     EmitFir: emitFir,
-    DebugLogging: debugLogging
+    DebugLogging: debugLogging,
+    RunTests: runTests
 );
 
 var result = compiler.Compile(options);
