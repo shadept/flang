@@ -639,7 +639,38 @@ fn sum(p: &Point) i32 {
 
 ---
 
-### Milestone 16.4: Extended Types (Optional)
+### Milestone 16.4: Function Types
+
+**Scope:** First-class function types for passing functions as arguments.
+
+**Key Tasks:**
+
+- [ ] Function type syntax: `fn(T1, T2) R`
+  - [ ] Parse `fn(...)` in type position (mirrors declaration syntax)
+  - [ ] `FunctionType` in type system with parameter types and return type
+- [ ] Type checking for function types
+  - [ ] Function type compatibility (exact match on params + return)
+  - [ ] Named functions coerce to function type
+- [ ] Passing functions as arguments
+  - [ ] `fn apply(f: fn(i32) i32, x: i32) i32 { return f(x) }`
+  - [ ] Call expression on function-typed values
+- [ ] Generic function types
+  - [ ] `fn map(f: fn($T) T, x: T) T`
+  - [ ] Type inference from function argument
+- [ ] C codegen: function pointers
+  - [ ] Emit C function pointer syntax: `int (*f)(int)`
+  - [ ] Pass function addresses as arguments
+
+**Tests Planned:**
+
+- `functions/fn_type_basic.f` - Pass function as argument
+- `functions/fn_type_generic.f` - Generic function type parameter
+- `functions/fn_type_call.f` - Call function-typed value
+- `functions/fn_type_return.f` - Return function from function
+
+---
+
+### Milestone 16.5: Extended Types (Optional)
 
 **Scope:** Additional type system features.
 
@@ -652,7 +683,7 @@ fn sum(p: &Point) i32 {
 
 ---
 
-### Milestone 16.5: Enum Option Migration
+### Milestone 16.6: Enum Option Migration
 
 **Scope:** Replace struct Option(T) with enum Option(T) for better semantics.
 
@@ -747,9 +778,10 @@ _Goal: Rewrite the compiler in FLang._
 - **Phase:** 4 (Language Completeness)
 - **Milestone:** 16.3 (COMPLETE - Auto-Deref for Reference Member Access)
 - **Next Up:**
+  - **M16.4:** Function Types (first-class functions as arguments)
   - Complete M14 pending items (nested patterns, multiple wildcards)
-  - **M16.4:** Extended Types (tuples - optional)
-  - **M16.5:** Enum Option Migration (replaces struct Option)
+  - **M16.5:** Extended Types (tuples - optional)
+  - **M16.6:** Enum Option Migration (replaces struct Option)
   - Fix pre-existing generics overload resolution bug (`generic_mangling_order.f`)
   - Fix pre-existing option test bug (`option_basic.f`)
 - **Tests Passing:** 148/149
