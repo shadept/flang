@@ -129,3 +129,22 @@ public class LocalValue : Value
         Type = type;
     }
 }
+
+/// <summary>
+/// Represents a reference to a function (function pointer value).
+/// Used when a function name is used as a value in expressions.
+/// </summary>
+public class FunctionReferenceValue : Value
+{
+    public FunctionReferenceValue(string functionName, TypeBase type)
+    {
+        FunctionName = functionName;
+        Name = functionName;
+        Type = type;
+    }
+
+    /// <summary>
+    /// The name of the function being referenced.
+    /// </summary>
+    public string FunctionName { get; }
+}

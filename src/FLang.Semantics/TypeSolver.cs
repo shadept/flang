@@ -236,7 +236,51 @@ public class TypeSolver
             return a;
         }
 
-        // 9. Detailed Failure
+        // 9. Function Types (Exact Match - C semantics, no coercion)
+        if (a is FunctionType f1 && b is FunctionType f2)
+        {
+            if (f1.ParameterTypes.Count != f2.ParameterTypes.Count)
+            {
+                ReportError($"Function type parameter count mismatch: expected {f1.ParameterTypes.Count}, got {f2.ParameterTypes.Count}", span, "E2002");
+                return null;
+            }
+
+            // Parameter types must match exactly (no coercion for function types - C semantics)
+            for (var i = 0; i < f1.ParameterTypes.Count; i++)
+            {
+                var fp1 = f1.ParameterTypes[i].Prune();
+                var fp2 = f2.ParameterTypes[i].Prune();
+                // For function type parameters, require exact match (only unify for generics/TypeVar)
+                if (fp1 is TypeVar || fp2 is TypeVar || fp1 is GenericParameterType || fp2 is GenericParameterType)
+                {
+                    if (UnifyInternal(fp1, fp2, span) == null)
+                        return null;
+                }
+                else if (!fp1.Equals(fp2))
+                {
+                    ReportError($"Function type parameter mismatch at position {i}: expected `{fp1}`, got `{fp2}`", span, "E2002");
+                    return null;
+                }
+            }
+
+            // Return type must also match exactly
+            var r1 = f1.ReturnType.Prune();
+            var r2 = f2.ReturnType.Prune();
+            if (r1 is TypeVar || r2 is TypeVar || r1 is GenericParameterType || r2 is GenericParameterType)
+            {
+                if (UnifyInternal(r1, r2, span) == null)
+                    return null;
+            }
+            else if (!r1.Equals(r2))
+            {
+                ReportError($"Function type return type mismatch: expected `{r1}`, got `{r2}`", span, "E2002");
+                return null;
+            }
+
+            return a;
+        }
+
+        // 10. Detailed Failure
         var hint = GenerateHint(t1, t2);
         if (IsSkolem(a) || IsSkolem(b))
             ReportError($"Cannot unify rigid generic parameter with concrete type", span, "E2002", hint);

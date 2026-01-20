@@ -433,8 +433,17 @@ public class CCodeGenerator
 
         foreach (var (fieldName, fieldType) in structType.Fields)
         {
-            var fieldCType = TypeToCType(fieldType);
-            _output.AppendLine($"    {fieldCType} {fieldName};");
+            // Function pointer fields need special declaration syntax
+            if (fieldType is FunctionType ft)
+            {
+                var declaration = FunctionTypeToDeclaration(ft, fieldName);
+                _output.AppendLine($"    {declaration};");
+            }
+            else
+            {
+                var fieldCType = TypeToCType(fieldType);
+                _output.AppendLine($"    {fieldCType} {fieldName};");
+            }
         }
 
         _output.AppendLine("};");
@@ -531,6 +540,10 @@ public class CCodeGenerator
                 EmitCall(call);
                 break;
 
+            case IndirectCallInstruction indirectCall:
+                EmitIndirectCall(indirectCall);
+                break;
+
             case ReturnInstruction ret:
                 EmitReturn(ret);
                 break;
@@ -564,6 +577,15 @@ public class CCodeGenerator
             var elemType = TypeToCType(arrayType.ElementType);
             _output.AppendLine($"    {elemType} {tempVarName}[{arrayType.Length}];");
             _output.AppendLine($"    {elemType}* {resultName} = {tempVarName};");
+        }
+        else if (alloca.AllocatedType is FunctionType ft)
+        {
+            // Function pointers: special declaration syntax
+            // Example: %fptr = alloca fn(i32) i32 -> int32_t (*fptr_val)(int32_t); int32_t (**fptr)(int32_t) = &fptr_val;
+            var declaration = FunctionTypeToDeclaration(ft, tempVarName);
+            _output.AppendLine($"    {declaration};");
+            var ptrDecl = FunctionTypeToDeclaration(ft, $"*{resultName}");
+            _output.AppendLine($"    {ptrDecl} = &{tempVarName};");
         }
         else
         {
@@ -626,10 +648,20 @@ public class CCodeGenerator
     private void EmitLoad(LoadInstruction load)
     {
         // %result = load %ptr -> type result = *ptr;
-        var resultType = TypeToCType(load.Result.Type ?? TypeRegistry.I32);
         var resultName = SanitizeCIdentifier(load.Result.Name);
         var ptrExpr = ValueToString(load.Pointer);
-        _output.AppendLine($"    {resultType} {resultName} = *{ptrExpr};");
+
+        // Function pointers need special declaration syntax
+        if (load.Result.Type is FunctionType ft)
+        {
+            var declaration = FunctionTypeToDeclaration(ft, resultName);
+            _output.AppendLine($"    {declaration} = *{ptrExpr};");
+        }
+        else
+        {
+            var resultType = TypeToCType(load.Result.Type ?? TypeRegistry.I32);
+            _output.AppendLine($"    {resultType} {resultName} = *{ptrExpr};");
+        }
     }
 
     private void EmitAddressOf(AddressOfInstruction addressOf)
@@ -645,7 +677,6 @@ public class CCodeGenerator
         // %result = getelementptr %base, offset
         // -> type* result = (type*)((uint8_t*)base + offset);
 
-        var resultType = TypeToCType(gep.Result.Type ?? new ReferenceType(TypeRegistry.I32));
         var resultName = SanitizeCIdentifier(gep.Result.Name);
         var baseExpr = ValueToString(gep.BasePointer);
         var offsetExpr = ValueToString(gep.ByteOffset);
@@ -654,7 +685,18 @@ public class CCodeGenerator
         if (gep.BasePointer.Type is not ReferenceType)
             baseExpr = $"&{baseExpr}";
 
-        _output.AppendLine($"    {resultType} {resultName} = ({resultType})((uint8_t*){baseExpr} + {offsetExpr});");
+        // Pointer-to-function-pointer needs special C declaration syntax
+        if (gep.Result.Type is ReferenceType { InnerType: FunctionType ft })
+        {
+            var declaration = FunctionPointerTypeToDeclaration(ft, resultName);
+            var castType = FunctionPointerTypeToCast(ft);
+            _output.AppendLine($"    {declaration} = ({castType})((uint8_t*){baseExpr} + {offsetExpr});");
+        }
+        else
+        {
+            var resultType = TypeToCType(gep.Result.Type ?? new ReferenceType(TypeRegistry.I32));
+            _output.AppendLine($"    {resultType} {resultName} = ({resultType})((uint8_t*){baseExpr} + {offsetExpr});");
+        }
     }
 
     private void EmitBinary(BinaryInstruction binary)
@@ -771,6 +813,34 @@ public class CCodeGenerator
         }
     }
 
+    private void EmitIndirectCall(IndirectCallInstruction call)
+    {
+        // Get the function pointer value
+        var funcPtrExpr = ValueToString(call.FunctionPointer);
+
+        // Build argument list - take address of struct values since params are pointers
+        var args = string.Join(", ", call.Arguments.Select(arg =>
+        {
+            var argStr = ValueToString(arg);
+            // If argument is a struct value (not a pointer), take its address
+            if (arg.Type is StructType && !argStr.StartsWith("&"))
+                return $"&{argStr}";
+            return argStr;
+        }));
+
+        // Check if function returns void - if so, don't capture result
+        if (call.Result.Type != null && call.Result.Type.Equals(TypeRegistry.Void))
+        {
+            _output.AppendLine($"    {funcPtrExpr}({args});");
+        }
+        else
+        {
+            var resultType = TypeToCType(call.Result.Type ?? TypeRegistry.I32);
+            var resultName = SanitizeCIdentifier(call.Result.Name);
+            _output.AppendLine($"    {resultType} {resultName} = {funcPtrExpr}({args});");
+        }
+    }
+
     private void EmitReturn(ReturnInstruction ret)
     {
         var valueExpr = ValueToString(ret.Value);
@@ -819,6 +889,12 @@ public class CCodeGenerator
 
         return string.Join(", ", function.Parameters.Select(p =>
         {
+            // Function types need special handling - variable name goes inside the declaration
+            if (p.Type is FunctionType ft)
+            {
+                return FunctionTypeToDeclaration(ft, EscapeCIdentifier(p.Name));
+            }
+
             var paramType = TypeToCType(p.Type);
             if (p.Type is StructType)
                 paramType += "*";
@@ -839,6 +915,10 @@ public class CCodeGenerator
 
             GlobalValue global => SanitizeCIdentifier(global.Name),
 
+            // Handle FunctionReferenceValue - just emit the mangled function name
+            // C will implicitly convert a function name to a function pointer
+            FunctionReferenceValue funcRef => GetMangledFunctionName(funcRef),
+
             // Handle LocalValue - check if it's a remapped parameter
             LocalValue local => _parameterRemap.TryGetValue(local.Name, out var remapped)
                 ? remapped
@@ -846,6 +926,16 @@ public class CCodeGenerator
 
             _ => throw new Exception($"Unknown value type: {value.GetType().Name}")
         };
+    }
+
+    private string GetMangledFunctionName(FunctionReferenceValue funcRef)
+    {
+        // Get the function type to determine parameter types for mangling
+        if (funcRef.Type is FunctionType ft)
+        {
+            return NameMangler.GenericFunction(funcRef.FunctionName, ft.ParameterTypes.ToList());
+        }
+        return SanitizeCIdentifier(funcRef.FunctionName);
     }
 
     /// <summary>
@@ -885,12 +975,68 @@ public class CCodeGenerator
 
             EnumType et => $"struct {GetEnumCName(et)}",
 
+            // Function types: C function pointer syntax
+            // fn(i32, i32) i32 -> int32_t (*)(int32_t, int32_t)
+            FunctionType ft => FunctionTypeToCType(ft),
+
             // Arrays are not converted to struct types - they remain as C arrays
             // Array syntax must be handled specially at declaration sites (see alloca handling)
             ArrayType => throw new InvalidOperationException("Array types must be handled specially at declaration sites"),
 
             _ => throw new InvalidOperationException($"Cannot convert type '{prunedType}' (original: '{type}') to C type. This indicates an unhandled type in the C code generator.")
         };
+    }
+
+    /// <summary>
+    /// Converts a function type to C function pointer type syntax.
+    /// fn(i32, i32) i32 -> int32_t (*)(int32_t, int32_t)
+    /// </summary>
+    private string FunctionTypeToCType(FunctionType ft)
+    {
+        var returnType = TypeToCType(ft.ReturnType);
+        var paramTypes = ft.ParameterTypes.Count == 0
+            ? "void"
+            : string.Join(", ", ft.ParameterTypes.Select(p => TypeToCType(p)));
+        return $"{returnType} (*)({paramTypes})";
+    }
+
+    /// <summary>
+    /// Converts a function type to C function pointer declaration syntax with a name.
+    /// fn(i32, i32) i32 with name "f" -> int32_t (*f)(int32_t, int32_t)
+    /// </summary>
+    private string FunctionTypeToDeclaration(FunctionType ft, string varName)
+    {
+        var returnType = TypeToCType(ft.ReturnType);
+        var paramTypes = ft.ParameterTypes.Count == 0
+            ? "void"
+            : string.Join(", ", ft.ParameterTypes.Select(p => TypeToCType(p)));
+        return $"{returnType} (*{varName})({paramTypes})";
+    }
+
+    /// <summary>
+    /// Converts a pointer-to-function-type to C declaration syntax with a name.
+    /// &amp;fn(i32, i32) i32 with name "f" -> int32_t (**f)(int32_t, int32_t)
+    /// </summary>
+    private string FunctionPointerTypeToDeclaration(FunctionType ft, string varName)
+    {
+        var returnType = TypeToCType(ft.ReturnType);
+        var paramTypes = ft.ParameterTypes.Count == 0
+            ? "void"
+            : string.Join(", ", ft.ParameterTypes.Select(p => TypeToCType(p)));
+        return $"{returnType} (**{varName})({paramTypes})";
+    }
+
+    /// <summary>
+    /// Converts a pointer-to-function-type to C cast syntax (no variable name).
+    /// &amp;fn(i32, i32) i32 -> int32_t (**)(int32_t, int32_t)
+    /// </summary>
+    private string FunctionPointerTypeToCast(FunctionType ft)
+    {
+        var returnType = TypeToCType(ft.ReturnType);
+        var paramTypes = ft.ParameterTypes.Count == 0
+            ? "void"
+            : string.Join(", ", ft.ParameterTypes.Select(p => TypeToCType(p)));
+        return $"{returnType} (**)({paramTypes})";
     }
 
     private static bool HasSliceLayout(StructType structType)

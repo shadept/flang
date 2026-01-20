@@ -34,6 +34,14 @@ public class CallExpressionNode : ExpressionNode
     /// <summary>
     /// Semantic: The resolved target function declaration.
     /// For generic functions, this points to the specialized FunctionDeclarationNode with concrete types.
+    /// Null for indirect calls through function pointers.
     /// </summary>
     public FunctionDeclarationNode? ResolvedTarget { get; set; }
+
+    /// <summary>
+    /// Semantic: True if this is an indirect call through a function pointer.
+    /// When true and UfcsReceiver/MethodName are set, it's a field-call (vtable pattern).
+    /// When true and UfcsReceiver is null, FunctionName is a variable with function type.
+    /// </summary>
+    public bool IsIndirectCall { get; set; }
 }

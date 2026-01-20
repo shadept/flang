@@ -639,34 +639,45 @@ fn sum(p: &Point) i32 {
 
 ---
 
-### Milestone 16.4: Function Types
+### ✅ Milestone 16.4: Function Types (COMPLETE)
 
 **Scope:** First-class function types for passing functions as arguments.
 
-**Key Tasks:**
+**Completed:**
 
-- [ ] Function type syntax: `fn(T1, T2) R`
-  - [ ] Parse `fn(...)` in type position (mirrors declaration syntax)
-  - [ ] `FunctionType` in type system with parameter types and return type
-- [ ] Type checking for function types
-  - [ ] Function type compatibility (exact match on params + return)
-  - [ ] Named functions coerce to function type
-- [ ] Passing functions as arguments
-  - [ ] `fn apply(f: fn(i32) i32, x: i32) i32 { return f(x) }`
-  - [ ] Call expression on function-typed values
-- [ ] Generic function types
-  - [ ] `fn map(f: fn($T) T, x: T) T`
-  - [ ] Type inference from function argument
-- [ ] C codegen: function pointers
-  - [ ] Emit C function pointer syntax: `int (*f)(int)`
-  - [ ] Pass function addresses as arguments
+- ✅ Function type syntax: `fn(T1, T2) R`
+  - ✅ Parse `fn(...)` in type position (mirrors declaration syntax)
+  - ✅ `FunctionType` in type system with parameter types and return type
+  - ✅ `FunctionTypeNode` AST node
+- ✅ Type checking for function types
+  - ✅ Function type compatibility (exact match on params + return - C semantics)
+  - ✅ Named functions coerce to function type values
+  - ✅ comptime_int literals coerce to expected parameter types
+- ✅ Passing functions as arguments
+  - ✅ `fn apply(f: fn(i32) i32, x: i32) i32 { return f(x) }`
+  - ✅ Call expression on function-typed values (indirect calls)
+- ✅ Storing functions in variables
+  - ✅ `let f: fn(i32) i32 = my_function`
+  - ✅ Calling through function-typed variables
+- ✅ IR support
+  - ✅ `FunctionReferenceValue` for function pointer values
+  - ✅ `IndirectCallInstruction` for calls through function pointers
+- ✅ C codegen: function pointers
+  - ✅ Emit C function pointer syntax: `int32_t (*f)(int32_t)`
+  - ✅ Special handling for alloca, load, and function parameters
+  - ✅ Name mangling for function types in symbol names
 
-**Tests Planned:**
+**Deferred:**
 
-- `functions/fn_type_basic.f` - Pass function as argument
-- `functions/fn_type_generic.f` - Generic function type parameter
-- `functions/fn_type_call.f` - Call function-typed value
-- `functions/fn_type_return.f` - Return function from function
+- Generic function types (`fn($T) T`) - can be added later
+
+**Tests:** 5 new tests passing
+
+- ✅ `function_types/fn_type_basic.f` - Pass function as argument
+- ✅ `function_types/fn_type_variable.f` - Store function in variable
+- ✅ `function_types/fn_type_multiple_params.f` - Multiple parameter function types
+- ✅ `function_types/fn_type_higher_order.f` - Higher-order function calls
+- ✅ `function_types/fn_type_no_coercion_error.f` - Error test for type mismatch
 
 ---
 

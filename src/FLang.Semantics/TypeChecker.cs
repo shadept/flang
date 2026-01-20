@@ -5,7 +5,6 @@ using FLang.Frontend.Ast.Expressions;
 using FLang.Frontend.Ast.Statements;
 using FLang.Frontend.Ast.Types;
 using Microsoft.Extensions.Logging;
-using ComptimeIntType = FLang.Core.ComptimeInt;
 
 namespace FLang.Semantics;
 
@@ -1207,6 +1206,38 @@ public class TypeChecker
             return t;
         }
 
+        // Check if this identifier is a function name (function reference)
+        if (_functions.TryGetValue(id.Name, out var candidates))
+        {
+            // For now, only support non-overloaded, non-generic functions as values
+            var nonGenericCandidates = candidates.Where(c => !c.IsGeneric).ToList();
+            if (nonGenericCandidates.Count == 1)
+            {
+                var entry = nonGenericCandidates[0];
+                // Set the resolved target for IR lowering
+                id.ResolvedFunctionTarget = entry.AstNode;
+                return new FunctionType(entry.ParameterTypes, entry.ReturnType);
+            }
+            else if (nonGenericCandidates.Count > 1)
+            {
+                ReportError(
+                    $"cannot take address of overloaded function `{id.Name}`",
+                    id.Span,
+                    "function has multiple overloads",
+                    "E2004");
+                return TypeRegistry.Never;
+            }
+            else if (candidates.Count > 0)
+            {
+                ReportError(
+                    $"cannot take address of generic function `{id.Name}`",
+                    id.Span,
+                    "generic functions cannot be used as values directly",
+                    "E2004");
+                return TypeRegistry.Never;
+            }
+        }
+
         // Check if this identifier is a type name used as a value (type literal)
         var resolvedType = ResolveTypeName(id.Name);
         if (resolvedType != null)
@@ -1825,7 +1856,7 @@ public class TypeChecker
                 for (var i = 0; i < call.Arguments.Count; i++)
                 {
                     var argType = CheckExpression(call.Arguments[i]);
-                    if (argType.Prune() is ComptimeIntType)
+                    if (argType.Prune() is ComptimeInt)
                     {
                         // Resolve comptime_int to i32 for variadic functions - unify handles TypeVar propagation
                         var unified = UnifyTypes(argType, TypeRegistry.I32, call.Arguments[i].Span);
@@ -1844,12 +1875,66 @@ public class TypeChecker
                 return TypeRegistry.I32;
             }
 
-            // Try UFCS: obj.method(args) -> method(obj, args) or method(&obj, args)
+            // Try UFCS or field-call: obj.method(args)
+            // - UFCS: transforms to method(obj, args) or method(&obj, args)
+            // - Field-call: obj has field `method` with function type (vtable pattern)
             if (call.UfcsReceiver != null && call.MethodName != null)
             {
                 var ufcsResult = TryResolveUfcsCall(call, expectedType);
                 if (ufcsResult != null)
                     return ufcsResult;
+            }
+
+            // Check if function name is a variable with function type (indirect call)
+            if (TryLookupVariable(call.FunctionName, out var varType) && varType.Prune() is FunctionType funcType)
+            {
+                // Type-check the arguments
+                var argTypes = call.Arguments.Select(arg => CheckExpression(arg)).ToList();
+
+                // Check argument count
+                if (argTypes.Count != funcType.ParameterTypes.Count)
+                {
+                    ReportError(
+                        $"function expects {funcType.ParameterTypes.Count} argument(s), but {argTypes.Count} were provided",
+                        call.Span,
+                        $"expected {funcType.ParameterTypes.Count}, got {argTypes.Count}",
+                        "E2011");
+                    return TypeRegistry.Never;
+                }
+
+                // Check argument types - C semantics: exact match required except comptime_int
+                // comptime_int can coerce to the expected integer type (handled by UnifyTypes)
+                for (var i = 0; i < argTypes.Count; i++)
+                {
+                    var argTypePruned = argTypes[i].Prune();
+                    var paramType = funcType.ParameterTypes[i].Prune();
+
+                    // Allow comptime_int to coerce to the expected integer type
+                    // and TypeVar unification for generic contexts
+                    if (argTypePruned is ComptimeInt || argTypePruned is TypeVar ||
+                        paramType is TypeVar || argTypePruned is GenericParameterType ||
+                        paramType is GenericParameterType)
+                    {
+                        UnifyTypes(argTypes[i], funcType.ParameterTypes[i], call.Arguments[i].Span);
+                        // Wrap argument with coercion node if needed
+                        call.Arguments[i] = WrapWithCoercionIfNeeded(call.Arguments[i], argTypePruned, paramType);
+                    }
+                    else if (!argTypePruned.Equals(paramType))
+                    {
+                        // Exact match required for non-comptime types (C semantics - no integer widening)
+                        ReportError(
+                            $"mismatched types: expected `{paramType}`, got `{argTypePruned}`",
+                            call.Arguments[i].Span,
+                            $"expected `{paramType}`",
+                            "E2002");
+                        return TypeRegistry.Never;
+                    }
+                }
+
+                // Mark this as an indirect call (ResolvedTarget remains null for indirect calls)
+                call.ResolvedTarget = null;
+                call.IsIndirectCall = true;
+                return funcType.ReturnType;
             }
 
             ReportError(
@@ -1870,12 +1955,70 @@ public class TypeChecker
         if (call.UfcsReceiver == null || call.MethodName == null)
             return null;
 
+        // Type-check the receiver expression first
+        var receiverType = CheckExpression(call.UfcsReceiver);
+        var prunedReceiverType = receiverType.Prune();
+
+        // Check if receiver is a struct with a function-typed field matching the method name
+        // This enables vtable-style patterns: ops.add(5, 3) calls the function in ops.add field
+        StructType? structType = prunedReceiverType switch
+        {
+            StructType st => st,
+            ReferenceType { InnerType: StructType refSt } => refSt,
+            _ => null
+        };
+
+        if (structType != null)
+        {
+            var fieldType = structType.GetFieldType(call.MethodName);
+            if (fieldType?.Prune() is FunctionType funcType)
+            {
+                // Field-call pattern: type-check arguments and mark as indirect call
+                var fieldArgTypes = call.Arguments.Select(arg => CheckExpression(arg)).ToList();
+
+                if (fieldArgTypes.Count != funcType.ParameterTypes.Count)
+                {
+                    ReportError(
+                        $"function expects {funcType.ParameterTypes.Count} argument(s), but {fieldArgTypes.Count} were provided",
+                        call.Span,
+                        $"expected {funcType.ParameterTypes.Count}, got {fieldArgTypes.Count}",
+                        "E2011");
+                    return TypeRegistry.Never;
+                }
+
+                for (var i = 0; i < fieldArgTypes.Count; i++)
+                {
+                    var argTypePruned = fieldArgTypes[i].Prune();
+                    var paramType = funcType.ParameterTypes[i].Prune();
+
+                    if (argTypePruned is ComptimeInt || argTypePruned is TypeVar ||
+                        paramType is TypeVar || argTypePruned is GenericParameterType ||
+                        paramType is GenericParameterType)
+                    {
+                        UnifyTypes(fieldArgTypes[i], funcType.ParameterTypes[i], call.Arguments[i].Span);
+                        call.Arguments[i] = WrapWithCoercionIfNeeded(call.Arguments[i], argTypePruned, paramType);
+                    }
+                    else if (!argTypePruned.Equals(paramType))
+                    {
+                        ReportError(
+                            $"mismatched types: expected `{paramType}`, got `{argTypePruned}`",
+                            call.Arguments[i].Span,
+                            $"expected `{paramType}`",
+                            "E2002");
+                        return TypeRegistry.Never;
+                    }
+                }
+
+                // Mark as indirect call (UfcsReceiver + MethodName indicate field-call in lowering)
+                call.ResolvedTarget = null;
+                call.IsIndirectCall = true;
+                return funcType.ReturnType;
+            }
+        }
+
         // Check if the method name exists as a function
         if (!_functions.TryGetValue(call.MethodName, out var candidates))
             return null;
-
-        // Type-check the receiver expression
-        var receiverType = CheckExpression(call.UfcsReceiver);
 
         // Build argument list: receiver + original arguments
         // First, try with receiver value directly
@@ -2117,9 +2260,9 @@ public class TypeChecker
                 }
 
                 // Coerce comptime_int to isize (Range uses isize fields) - unify handles TypeVar propagation
-                if (prunedSt is ComptimeIntType)
+                if (prunedSt is ComptimeInt)
                     UnifyTypes(st, TypeRegistry.ISize, re.Start.Span);
-                if (prunedEn is ComptimeIntType)
+                if (prunedEn is ComptimeInt)
                     UnifyTypes(en, TypeRegistry.ISize, re.End.Span);
 
                 // Return Range type from core.range
@@ -2342,7 +2485,7 @@ public class TypeChecker
                         ix.Index.Span,
                         $"found `{prunedIt}`",
                         "E2027");
-                else if (prunedIt is ComptimeIntType)
+                else if (prunedIt is ComptimeInt)
                 {
                     // Resolve comptime_int indices to usize - unify handles TypeVar propagation
                     UnifyTypes(it, TypeRegistry.USize, ix.Index.Span);
@@ -2375,7 +2518,7 @@ public class TypeChecker
 
                 // When casting comptime_int to a concrete integer type, update the TypeVar
                 // so the literal gets properly resolved
-                if (src is TypeVar srcTv && srcTv.Prune() is ComptimeIntType && TypeRegistry.IsIntegerType(dst))
+                if (src is TypeVar srcTv && srcTv.Prune() is ComptimeInt && TypeRegistry.IsIntegerType(dst))
                     srcTv.Instance = dst;
 
                 type = dst;
@@ -2417,7 +2560,7 @@ public class TypeChecker
 
             if (expectedOption.TypeArguments.Count > 0 &&
                 (type.Equals(expectedOption.TypeArguments[0]) ||
-                 (type is ComptimeIntType && TypeRegistry.IsIntegerType(expectedOption.TypeArguments[0]))))
+                 (type is ComptimeInt && TypeRegistry.IsIntegerType(expectedOption.TypeArguments[0]))))
             {
                 return expectedOption;
             }
@@ -2461,13 +2604,13 @@ public class TypeChecker
 
             // Also handle comptime_int → Option(intType): this is Wrap (will harden inside)
             if (optionTarget.TypeArguments.Count > 0 &&
-                sourceType is ComptimeIntType &&
+                sourceType is ComptimeInt &&
                 TypeRegistry.IsIntegerType(optionTarget.TypeArguments[0]))
                 return CoercionKind.Wrap;
         }
 
         // Integer widening (includes comptime_int hardening)
-        if (sourceType is ComptimeIntType && TypeRegistry.IsIntegerType(targetType))
+        if (sourceType is ComptimeInt && TypeRegistry.IsIntegerType(targetType))
             return CoercionKind.IntegerWidening;
 
         if (TypeRegistry.IsIntegerType(sourceType) && TypeRegistry.IsIntegerType(targetType))
@@ -2619,6 +2762,16 @@ public class TypeChecker
             {
                 var inner = ResolveTypeNode(rt.InnerType);
                 if (inner == null) return null;
+                // Disallow &fn(...) - function types are already pointer-sized
+                if (inner is FunctionType)
+                {
+                    ReportError(
+                        "cannot create reference to function type",
+                        rt.Span,
+                        "function types are already pointer-sized; use `fn(...)` directly",
+                        "E2006");
+                    return null;
+                }
                 return new ReferenceType(inner);
             }
             case NullableTypeNode nt:
@@ -2709,6 +2862,19 @@ public class TypeChecker
                 var et = ResolveTypeNode(sl.ElementType);
                 if (et == null) return null;
                 return TypeRegistry.MakeSlice(et);
+            }
+            case FunctionTypeNode ft:
+            {
+                var paramTypes = new List<TypeBase>();
+                foreach (var pt in ft.ParameterTypes)
+                {
+                    var resolved = ResolveTypeNode(pt);
+                    if (resolved == null) return null;
+                    paramTypes.Add(resolved);
+                }
+                var returnType = ResolveTypeNode(ft.ReturnType);
+                if (returnType == null) return null;
+                return new FunctionType(paramTypes, returnType);
             }
             default:
                 return null;
@@ -2855,6 +3021,10 @@ public class TypeChecker
                     Visit(s.ElementType); break;
                 case GenericTypeNode g:
                     foreach (var t in g.TypeArguments) Visit(t);
+                    break;
+                case FunctionTypeNode ft:
+                    foreach (var pt in ft.ParameterTypes) Visit(pt);
+                    Visit(ft.ReturnType);
                     break;
             }
         }
@@ -3055,7 +3225,9 @@ public class TypeChecker
                 ArrayTypeNode a => HasGeneric(a.ElementType),
                 SliceTypeNode s => HasGeneric(s.ElementType),
                 GenericTypeNode g => g.TypeArguments.Any(HasGeneric),
-                _ => false
+                FunctionTypeNode ft => ft.ParameterTypes.Any(HasGeneric) || HasGeneric(ft.ReturnType),
+                NamedTypeNode => false,
+                _ => throw new InvalidOperationException($"Unhandled TypeNode in IsGenericFunctionDecl: {n.GetType().Name}")
             };
         }
 
@@ -3075,6 +3247,9 @@ public class TypeChecker
         EnumType et => SubstituteEnumType(et, bindings),
         GenericType gt => new GenericType(gt.BaseName,
             gt.TypeArguments.Select(a => SubstituteGenerics(a, bindings)).ToList()),
+        FunctionType ft => new FunctionType(
+            ft.ParameterTypes.Select(p => SubstituteGenerics(p, bindings)).ToList(),
+            SubstituteGenerics(ft.ReturnType, bindings)),
         _ => type
     };
 
@@ -3136,14 +3311,14 @@ public class TypeChecker
                     var prunedExisting = existing.Prune();
 
                     // comptime_int in binding + concrete int arg: update binding to concrete type
-                    if (prunedExisting is ComptimeIntType && TypeRegistry.IsIntegerType(prunedArg))
+                    if (prunedExisting is ComptimeInt && TypeRegistry.IsIntegerType(prunedArg))
                     {
                         bindings[gp.ParamName] = prunedArg;
                         return true;
                     }
 
                     // concrete int in binding + comptime_int arg: propagate concrete type to arg's TypeVar
-                    if (prunedArg is ComptimeIntType && TypeRegistry.IsIntegerType(prunedExisting))
+                    if (prunedArg is ComptimeInt && TypeRegistry.IsIntegerType(prunedExisting))
                     {
                         // If arg is a TypeVar, update it to point to the concrete type
                         if (arg is TypeVar argTv)
@@ -3333,10 +3508,35 @@ public class TypeChecker
 
                 return true;
             }
+            case FunctionType pf when arg is FunctionType af:
+            {
+                // Match function types: fn($T) T with fn(i32) i32
+                // Parameter counts must match
+                if (pf.ParameterTypes.Count != af.ParameterTypes.Count)
+                {
+                    _logger.LogDebug("{Indent}Function parameter count mismatch: {ParamCount} vs {ArgCount}",
+                        Indent(), pf.ParameterTypes.Count, af.ParameterTypes.Count);
+                    return false;
+                }
+
+                // Recursively bind each parameter type
+                for (var i = 0; i < pf.ParameterTypes.Count; i++)
+                {
+                    _logger.LogDebug("{Indent}Recursing into function param[{Index}]: {ParamType} vs {ArgType}",
+                        Indent(), i, pf.ParameterTypes[i].Name, af.ParameterTypes[i].Name);
+                    if (!TryBindGeneric(pf.ParameterTypes[i], af.ParameterTypes[i], bindings, out conflictParam, out conflictTypes))
+                        return false;
+                }
+
+                // Recursively bind return type
+                _logger.LogDebug("{Indent}Recursing into function return type: {ParamType} vs {ArgType}",
+                    Indent(), pf.ReturnType.Name, af.ReturnType.Name);
+                return TryBindGeneric(pf.ReturnType, af.ReturnType, bindings, out conflictParam, out conflictTypes);
+            }
             default:
                 // If arg is a TypeVar bound to comptime_int and param is a concrete integer type,
                 // update the TypeVar to point to the concrete type
-                if (arg is TypeVar argTypeVar && argTypeVar.Prune() is ComptimeIntType && TypeRegistry.IsIntegerType(param))
+                if (arg is TypeVar argTypeVar && argTypeVar.Prune() is ComptimeInt && TypeRegistry.IsIntegerType(param))
                 {
                     argTypeVar.Instance = param;
                     return true;
@@ -3567,6 +3767,9 @@ public class TypeChecker
 
     private static TypeNode CreateTypeNodeFromTypeBase(SourceSpan span, TypeBase t) => t switch
     {
+        // ComptimeInt can appear when specializing with unresolved literals -
+        // create a named type that will fail during resolution with proper error
+        ComptimeInt => new NamedTypeNode(span, "comptime_int"),
         PrimitiveType pt => new NamedTypeNode(span, pt.Name),
         StructType st when TypeRegistry.IsSlice(st) && st.TypeArguments.Count > 0 =>
             new SliceTypeNode(span, CreateTypeNodeFromTypeBase(span, st.TypeArguments[0])),
@@ -3585,7 +3788,10 @@ public class TypeChecker
         GenericType gt => new GenericTypeNode(span, gt.BaseName,
             gt.TypeArguments.Select(a => CreateTypeNodeFromTypeBase(span, a)).ToList()),
         GenericParameterType gp => new GenericParameterTypeNode(span, gp.ParamName),
-        _ => new NamedTypeNode(span, t.Name)
+        FunctionType ft => new FunctionTypeNode(span,
+            ft.ParameterTypes.Select(p => CreateTypeNodeFromTypeBase(span, p)).ToList(),
+            CreateTypeNodeFromTypeBase(span, ft.ReturnType)),
+        _ => throw new InvalidOperationException($"Unhandled type in CreateTypeNodeFromTypeBase: {t.GetType().Name} ({t.Name})")
     };
 
     public IReadOnlyList<FunctionDeclarationNode> GetSpecializedFunctions() => _specializations;

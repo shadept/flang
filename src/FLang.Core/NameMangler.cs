@@ -47,13 +47,27 @@ public static class NameMangler
             ArrayType at => $"arr{at.Length}_{SanitizeTypeForName(at.ElementType)}",
             GenericType gt => $"{gt.BaseName}_{string.Join("_", gt.TypeArguments.Select(SanitizeTypeForName))}",
             GenericParameterType gp => $"gp_{gp.ParamName}",
+            FunctionType ft => GetFunctionTypeName(ft),
             _ => t.Name
         };
 
         // Replace non-identifier characters (including dots from FQNs)
         var s = raw.Replace("*", "Ptr").Replace(" ", "_").Replace("[", "_").Replace("]", "_").Replace(";", "_")
-            .Replace(",", "_").Replace(".", "_");
+            .Replace(",", "_").Replace(".", "_").Replace("(", "_").Replace(")", "_");
         return s;
+    }
+
+    /// <summary>
+    /// Gets a mangled name for a function type.
+    /// fn(i32, i32) i32 -> "fn_i32_i32_ret_i32"
+    /// </summary>
+    private static string GetFunctionTypeName(FunctionType ft)
+    {
+        var paramParts = ft.ParameterTypes.Select(SanitizeTypeForName);
+        var returnPart = SanitizeTypeForName(ft.ReturnType);
+        if (ft.ParameterTypes.Count == 0)
+            return $"fn_ret_{returnPart}";
+        return $"fn_{string.Join("_", paramParts)}_ret_{returnPart}";
     }
 
     /// <summary>

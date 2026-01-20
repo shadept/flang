@@ -714,6 +714,84 @@ public class ArrayType : TypeBase
 }
 
 /// <summary>
+/// Represents a first-class function type like fn(T1, T2) R.
+/// Used for passing functions as arguments and storing them in variables.
+/// </summary>
+public class FunctionType : TypeBase
+{
+    /// <summary>
+    /// Initializes a new instance of the <see cref="FunctionType"/> class.
+    /// </summary>
+    /// <param name="parameterTypes">The types of the function parameters.</param>
+    /// <param name="returnType">The return type of the function.</param>
+    /// <param name="pointerWidth">The platform pointer width (32 or 64 bits).</param>
+    public FunctionType(IReadOnlyList<TypeBase> parameterTypes, TypeBase returnType, PointerWidth pointerWidth = PointerWidth.Bits64)
+    {
+        ParameterTypes = parameterTypes;
+        ReturnType = returnType;
+        PointerWidth = pointerWidth;
+    }
+
+    /// <summary>
+    /// Gets the parameter types of this function type.
+    /// </summary>
+    public IReadOnlyList<TypeBase> ParameterTypes { get; }
+
+    /// <summary>
+    /// Gets the return type of this function type.
+    /// </summary>
+    public TypeBase ReturnType { get; }
+
+    /// <summary>
+    /// Gets the platform pointer width.
+    /// </summary>
+    public PointerWidth PointerWidth { get; }
+
+    public override string Name
+    {
+        get
+        {
+            var paramList = string.Join(", ", ParameterTypes.Select(t => t.Name));
+            return $"fn({paramList}) {ReturnType.Name}";
+        }
+    }
+
+    /// <summary>
+    /// Function types are pointer-sized (function pointer).
+    /// </summary>
+    public override int Size => PointerWidth.Size;
+
+    /// <summary>
+    /// Function types are pointer-aligned.
+    /// </summary>
+    public override int Alignment => PointerWidth.Size;
+
+    public override bool IsConcrete => ParameterTypes.All(p => p.IsConcrete) && ReturnType.IsConcrete;
+
+    public override bool Equals(TypeBase other)
+    {
+        if (other is not FunctionType ft) return false;
+        if (ParameterTypes.Count != ft.ParameterTypes.Count) return false;
+        for (var i = 0; i < ParameterTypes.Count; i++)
+        {
+            if (!ParameterTypes[i].Equals(ft.ParameterTypes[i]))
+                return false;
+        }
+        return ReturnType.Equals(ft.ReturnType);
+    }
+
+    public override int GetHashCode()
+    {
+        var hash = new HashCode();
+        hash.Add("fn");
+        foreach (var param in ParameterTypes)
+            hash.Add(param.GetHashCode());
+        hash.Add(ReturnType.GetHashCode());
+        return hash.ToHashCode();
+    }
+}
+
+/// <summary>
 /// Enum type (for tagged unions).
 /// Memory layout is abstracted through query methods to enable future niche optimization.
 /// </summary>

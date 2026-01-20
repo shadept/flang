@@ -1156,10 +1156,36 @@ public class Parser
 
     /// <summary>
     /// Parses a primary type (identifier with optional generic arguments, or array type).
-    /// Examples: i32, List[T], Dict[K, V], [i32; 5], $T
+    /// Examples: i32, List[T], Dict[K, V], [i32; 5], $T, fn(i32, i32) i32
     /// </summary>
     private TypeNode ParsePrimaryType()
     {
+        // Check for function type: fn(T1, T2) R
+        if (_currentToken.Kind == TokenKind.Fn)
+        {
+            var fnKeyword = Eat(TokenKind.Fn);
+            Eat(TokenKind.OpenParenthesis);
+
+            var paramTypes = new List<TypeNode>();
+            while (_currentToken.Kind != TokenKind.CloseParenthesis && _currentToken.Kind != TokenKind.EndOfFile)
+            {
+                paramTypes.Add(ParseType());
+
+                if (_currentToken.Kind == TokenKind.Comma)
+                    Eat(TokenKind.Comma);
+                else if (_currentToken.Kind != TokenKind.CloseParenthesis)
+                    break;
+            }
+
+            var closeParen = Eat(TokenKind.CloseParenthesis);
+
+            // Parse return type (required for function types)
+            var returnType = ParseType();
+
+            var span = SourceSpan.Combine(fnKeyword.Span, returnType.Span);
+            return new FunctionTypeNode(span, paramTypes, returnType);
+        }
+
         // Check for array type: [T; N]
         if (_currentToken.Kind == TokenKind.OpenBracket)
         {

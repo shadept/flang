@@ -104,3 +104,18 @@ public class GenericParameterTypeNode : TypeNode
 
     public string Name { get; }
 }
+
+/// <summary>
+/// Represents a function type like `fn(T1, T2) R`.
+/// </summary>
+public class FunctionTypeNode : TypeNode
+{
+    public FunctionTypeNode(SourceSpan span, IReadOnlyList<TypeNode> parameterTypes, TypeNode returnType) : base(span)
+    {
+        ParameterTypes = parameterTypes;
+        ReturnType = returnType;
+    }
+
+    public IReadOnlyList<TypeNode> ParameterTypes { get; }
+    public TypeNode ReturnType { get; }
+}

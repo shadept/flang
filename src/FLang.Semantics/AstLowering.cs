@@ -539,6 +539,14 @@ public class AstLowering
             {
                 var identType = identifier.Type;
 
+                // Check if this is a function reference (function pointer)
+                if (identType is FunctionType && identifier.ResolvedFunctionTarget != null)
+                {
+                    // Create a function reference value
+                    var funcRefValue = new FunctionReferenceValue(identifier.ResolvedFunctionTarget.Name, identType);
+                    return funcRefValue;
+                }
+
                 // Check if this is a type literal
                 if (identType is StructType st && TypeRegistry.IsType(st) && st.TypeArguments.Count > 0)
                 {
@@ -700,6 +708,87 @@ public class AstLowering
 
                 // size_of and align_of are now regular library functions defined in core.rtti
                 // They accept Type($T) parameters and access struct fields directly
+
+                // Handle field-access-then-call (vtable pattern): ops.add(5, 3)
+                // Detected by: IsIndirectCall + UfcsReceiver/MethodName set (not a simple variable call)
+                if (call.IsIndirectCall && call.UfcsReceiver != null && call.MethodName != null)
+                {
+                    // Lower the receiver to get the struct value/pointer
+                    var receiverVal = LowerExpression(call.UfcsReceiver);
+                    var receiverType = call.UfcsReceiver.Type?.Prune();
+
+                    // Get the struct type
+                    var structType = receiverType switch
+                    {
+                        StructType st => st,
+                        ReferenceType { InnerType: StructType refSt } => refSt,
+                        _ => throw new InvalidOperationException($"Field call receiver is not a struct type: {receiverType}")
+                    };
+
+                    // Get field offset and type
+                    var fieldOffset = structType.GetFieldOffset(call.MethodName);
+                    var fieldType = structType.GetFieldType(call.MethodName);
+                    if (fieldType is not FunctionType funcFieldType)
+                        throw new InvalidOperationException($"Field '{call.MethodName}' is not a function type");
+
+                    // Get pointer to the field
+                    var fieldPtrType = new ReferenceType(funcFieldType);
+                    var fieldPtr = new LocalValue($"field_ptr_{_tempCounter++}", fieldPtrType);
+                    var gepInst = new GetElementPtrInstruction(receiverVal, fieldOffset, fieldPtr);
+                    _currentBlock.Instructions.Add(gepInst);
+
+                    // Load the function pointer from the field
+                    var funcPtrValue = new LocalValue($"fptr_load_{_tempCounter++}", funcFieldType);
+                    var funcLoadInst = new LoadInstruction(fieldPtr, funcPtrValue);
+                    _currentBlock.Instructions.Add(funcLoadInst);
+
+                    // Lower arguments
+                    var fieldCallArgs = new List<Value>();
+                    for (var i = 0; i < call.Arguments.Count; i++)
+                    {
+                        var argVal = LowerExpression(call.Arguments[i]);
+                        fieldCallArgs.Add(argVal);
+                    }
+
+                    var fieldCallType = exprType ?? TypeRegistry.Never;
+                    var fieldCallResult = new LocalValue($"call_{_tempCounter++}", fieldCallType);
+                    var fieldCallInst = new IndirectCallInstruction(funcPtrValue, fieldCallArgs, fieldCallResult);
+                    _currentBlock.Instructions.Add(fieldCallInst);
+                    return fieldCallResult;
+                }
+
+                // Handle indirect calls (through function pointers)
+                if (call.IsIndirectCall)
+                {
+                    // The function name is actually a variable holding a function pointer
+                    Value funcPtrValue;
+                    if (_locals.TryGetValue(call.FunctionName, out var localPtr))
+                    {
+                        // Load the function pointer from the local variable
+                        var funcLoadResult = new LocalValue($"fptr_load_{_tempCounter++}", localPtr.Type is ReferenceType indirectRt ? indirectRt.InnerType : localPtr.Type!);
+                        var funcLoadInst = new LoadInstruction(localPtr, funcLoadResult);
+                        _currentBlock.Instructions.Add(funcLoadInst);
+                        funcPtrValue = funcLoadResult;
+                    }
+                    else
+                    {
+                        throw new InvalidOperationException($"Cannot find function pointer variable '{call.FunctionName}'");
+                    }
+
+                    // Lower arguments
+                    var indirectArgs = new List<Value>();
+                    for (var i = 0; i < call.Arguments.Count; i++)
+                    {
+                        var argVal = LowerExpression(call.Arguments[i]);
+                        indirectArgs.Add(argVal);
+                    }
+
+                    var indirectCallType = exprType ?? TypeRegistry.Never;
+                    var indirectCallResult = new LocalValue($"call_{_tempCounter++}", indirectCallType);
+                    var indirectCallInst = new IndirectCallInstruction(funcPtrValue, indirectArgs, indirectCallResult);
+                    _currentBlock.Instructions.Add(indirectCallInst);
+                    return indirectCallResult;
+                }
 
                 // Regular function call
                 var paramTypes = new List<FType>();
