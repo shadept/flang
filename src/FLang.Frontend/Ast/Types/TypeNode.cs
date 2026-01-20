@@ -119,3 +119,17 @@ public class FunctionTypeNode : TypeNode
     public IReadOnlyList<TypeNode> ParameterTypes { get; }
     public TypeNode ReturnType { get; }
 }
+
+/// <summary>
+/// Represents an anonymous struct type like `{ _0: T1, _1: T2 }`.
+/// Used for desugaring tuple types like `(T1, T2)`.
+/// </summary>
+public class AnonymousStructTypeNode : TypeNode
+{
+    public AnonymousStructTypeNode(SourceSpan span, IReadOnlyList<(string FieldName, TypeNode FieldType)> fields) : base(span)
+    {
+        Fields = fields;
+    }
+
+    public IReadOnlyList<(string FieldName, TypeNode FieldType)> Fields { get; }
+}

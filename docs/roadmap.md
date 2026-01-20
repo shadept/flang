@@ -681,16 +681,19 @@ fn sum(p: &Point) i32 {
 
 ---
 
-### Milestone 16.5: Extended Types (Optional)
+### Milestone 16.5: Extended Types (Optional) [COMPLETE]
 
 **Scope:** Additional type system features.
 
 **Key Tasks:**
 
-- [ ] Multiple return values / tuples
-  - [ ] `(T, U)` tuple type syntax
-  - [ ] Tuple construction and destructuring
-  - [ ] Functions returning tuples
+- [x] Multiple return values / tuples
+  - [x] `(T, U)` tuple type syntax - desugars to anonymous struct `{ _0: T, _1: U }`
+  - [x] Tuple construction: `(a, b)` desugars to `.{ _0 = a, _1 = b }`
+  - [x] Tuple field access: `t.0` desugars to `t._0`
+  - [x] Functions returning tuples
+  - [x] Single-element tuple with trailing comma: `(x,)`
+  - [x] Empty tuple / unit type: `()`
 
 ---
 
@@ -787,15 +790,13 @@ _Goal: Rewrite the compiler in FLang._
 ## Current Status
 
 - **Phase:** 4 (Language Completeness)
-- **Milestone:** 16.3 (COMPLETE - Auto-Deref for Reference Member Access)
+- **Milestone:** 16.5 (COMPLETE - Tuples as Syntactic Sugar)
 - **Next Up:**
-  - **M16.4:** Function Types (first-class functions as arguments)
-  - Complete M14 pending items (nested patterns, multiple wildcards)
-  - **M16.5:** Extended Types (tuples - optional)
   - **M16.6:** Enum Option Migration (replaces struct Option)
+  - Complete M14 pending items (nested patterns, multiple wildcards)
   - Fix pre-existing generics overload resolution bug (`generic_mangling_order.f`)
   - Fix pre-existing option test bug (`option_basic.f`)
-- **Tests Passing:** 148/149
+- **Tests Passing:** 165/166
 
   - ✅ 15 core tests (basics, control flow, functions)
   - ✅ 5 generics tests (M11)

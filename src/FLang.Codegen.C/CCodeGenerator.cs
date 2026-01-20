@@ -431,18 +431,27 @@ public class CCodeGenerator
         var cName = GetStructCName(structType);
         _output.AppendLine($"struct {cName} {{");
 
-        foreach (var (fieldName, fieldType) in structType.Fields)
+        // C requires structs to have at least one member
+        // Add a dummy field for empty structs (like unit type / empty tuple)
+        if (structType.Fields.Count == 0)
         {
-            // Function pointer fields need special declaration syntax
-            if (fieldType is FunctionType ft)
+            _output.AppendLine("    uint8_t __dummy;");
+        }
+        else
+        {
+            foreach (var (fieldName, fieldType) in structType.Fields)
             {
-                var declaration = FunctionTypeToDeclaration(ft, fieldName);
-                _output.AppendLine($"    {declaration};");
-            }
-            else
-            {
-                var fieldCType = TypeToCType(fieldType);
-                _output.AppendLine($"    {fieldCType} {fieldName};");
+                // Function pointer fields need special declaration syntax
+                if (fieldType is FunctionType ft)
+                {
+                    var declaration = FunctionTypeToDeclaration(ft, fieldName);
+                    _output.AppendLine($"    {declaration};");
+                }
+                else
+                {
+                    var fieldCType = TypeToCType(fieldType);
+                    _output.AppendLine($"    {fieldCType} {fieldName};");
+                }
             }
         }
 
@@ -1074,6 +1083,14 @@ public class CCodeGenerator
         if (TypeRegistry.IsType(structType))
             return "Type";
 
+        // Handle anonymous structs (tuples) - generate name from field types
+        if (string.IsNullOrEmpty(structType.StructName))
+        {
+            var fieldTypes = string.Join("_", structType.Fields.Select(f =>
+                SanitizeTypeName(f.Type.Name)));
+            return $"__anon_{fieldTypes}";
+        }
+
         // For generic structs, mangle type arguments into name
         if (structType.TypeArguments.Count > 0)
         {
@@ -1083,6 +1100,11 @@ public class CCodeGenerator
         }
 
         return structType.StructName.Replace('.', '_');
+    }
+
+    private static string SanitizeTypeName(string typeName)
+    {
+        return typeName.Replace("*", "Ptr").Replace(" ", "_").Replace("[", "").Replace("]", "").Replace("<", "_").Replace(">", "_").Replace(".", "_");
     }
 
     private string GetEnumCName(EnumType enumType)

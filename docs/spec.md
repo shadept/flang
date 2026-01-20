@@ -71,6 +71,48 @@ Structs may be generic. Generic parameters are introduced by `[T, U, ...]`.
 - Anonymous structs: `.{ field = value, ... }`.
 - Structural typing allows binding by field name.
 
+### 2.3.1 Tuples
+
+Tuples are syntactic sugar for anonymous structs with positional fields (`_0`, `_1`, `_2`, ...).
+
+**Tuple Syntax Desugaring:**
+
+| Operation | User Writes | Desugared Form |
+| --- | --- | --- |
+| Type | `(A, B)` | `{ _0: A, _1: B }` |
+| Value | `(10, 20)` | `.{ _0 = 10, _1 = 20 }` |
+| Access | `t.0` | `t._0` |
+
+**Examples:**
+
+```flang
+// Basic tuple creation and access
+let t = (10, 20)
+let sum = t.0 + t.1    // 30
+
+// Tuple type annotation
+let p: (i32, i32) = (5, 10)
+
+// Tuples in function signatures
+fn make_pair(a: i32, b: i32) (i32, i32) {
+    return (a, b)
+}
+
+fn sum_pair(p: (i32, i32)) i32 {
+    return p.0 + p.1
+}
+```
+
+**Special Cases:**
+
+- `(x)` is a grouped expression (just `x`), not a tuple.
+- `(x,)` with a trailing comma is a single-element tuple.
+- `()` is the empty tuple (unit type).
+
+**Structural Typing Compatibility:**
+
+Because tuples desugar to anonymous structs, any function expecting `{ _0: i32, _1: i32 }` will automatically accept a tuple `(i32, i32)`.
+
 ### 2.4 Enums (Tagged Unions)
 
 Enums represent tagged unions - a type that can be one of several named variants, each optionally carrying payload data.

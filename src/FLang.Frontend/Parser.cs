@@ -670,8 +670,18 @@ public class Parser
                     continue;
                 }
 
+                // Tuple field access: t.0, t.1, etc. - desugars to t._0, t._1, etc.
+                if (_currentToken.Kind == TokenKind.Integer)
+                {
+                    var indexToken = Eat(TokenKind.Integer);
+                    var fieldName = $"_{indexToken.Text}";
+                    var span = SourceSpan.Combine(expr.Span, indexToken.Span);
+                    expr = new MemberAccessExpressionNode(span, expr, fieldName);
+                    continue;
+                }
+
                 _diagnostics.Add(Diagnostic.Error(
-                    $"expected `*` or identifier after `.`",
+                    $"expected `*`, identifier, or integer after `.`",
                     dotToken.Span,
                     $"found '{_currentToken.Text}'",
                     "E1002"));
@@ -838,10 +848,7 @@ public class Parser
 
             case TokenKind.OpenParenthesis:
             {
-                Eat(TokenKind.OpenParenthesis);
-                var expression = ParseExpression();
-                Eat(TokenKind.CloseParenthesis);
-                return expression;
+                return ParseTupleOrGroupedExpression();
             }
 
             case TokenKind.If:
@@ -1156,10 +1163,18 @@ public class Parser
 
     /// <summary>
     /// Parses a primary type (identifier with optional generic arguments, or array type).
-    /// Examples: i32, List[T], Dict[K, V], [i32; 5], $T, fn(i32, i32) i32
+    /// Examples: i32, List[T], Dict[K, V], [i32; 5], $T, fn(i32, i32) i32, (T1, T2)
     /// </summary>
     private TypeNode ParsePrimaryType()
     {
+        // Check for tuple type: (T1, T2) - desugars to anonymous struct { _0: T1, _1: T2 }
+        // Note: (T) with single element and no trailing comma is NOT a tuple, just grouping
+        // (T,) with trailing comma IS a tuple of one element
+        if (_currentToken.Kind == TokenKind.OpenParenthesis)
+        {
+            return ParseTupleType();
+        }
+
         // Check for function type: fn(T1, T2) R
         if (_currentToken.Kind == TokenKind.Fn)
         {
@@ -1245,6 +1260,125 @@ public class Parser
         }
 
         return new NamedTypeNode(nameToken.Span, nameToken.Text);
+    }
+
+    /// <summary>
+    /// Parses a tuple type: (T1, T2, ...) - desugars to anonymous struct { _0: T1, _1: T2, ... }
+    /// Rules:
+    /// - (T) = just T (grouping, not a tuple)
+    /// - (T,) = { _0: T } (tuple of one with trailing comma)
+    /// - (T1, T2) = { _0: T1, _1: T2 } (tuple of two or more)
+    /// </summary>
+    private TypeNode ParseTupleType()
+    {
+        var openParen = Eat(TokenKind.OpenParenthesis);
+
+        // Handle empty tuple: () - desugars to { } (unit type)
+        if (_currentToken.Kind == TokenKind.CloseParenthesis)
+        {
+            var closeParen = Eat(TokenKind.CloseParenthesis);
+            var emptySpan = SourceSpan.Combine(openParen.Span, closeParen.Span);
+            return new AnonymousStructTypeNode(emptySpan, new List<(string, TypeNode)>());
+        }
+
+        var types = new List<TypeNode>();
+        bool hasTrailingComma = false;
+
+        // Parse first type
+        types.Add(ParseType());
+
+        // Parse remaining types if there's a comma
+        while (_currentToken.Kind == TokenKind.Comma)
+        {
+            Eat(TokenKind.Comma);
+
+            // Check for trailing comma: (T,) or (T1, T2,)
+            if (_currentToken.Kind == TokenKind.CloseParenthesis)
+            {
+                hasTrailingComma = true;
+                break;
+            }
+
+            types.Add(ParseType());
+        }
+
+        var closeParenToken = Eat(TokenKind.CloseParenthesis);
+        var span = SourceSpan.Combine(openParen.Span, closeParenToken.Span);
+
+        // If single type with no trailing comma, it's just grouping (not a tuple)
+        if (types.Count == 1 && !hasTrailingComma)
+        {
+            return types[0];
+        }
+
+        // Convert to anonymous struct with _0, _1, _2, ... field names
+        var fields = new List<(string FieldName, TypeNode FieldType)>();
+        for (int i = 0; i < types.Count; i++)
+        {
+            fields.Add(($"_{i}", types[i]));
+        }
+
+        return new AnonymousStructTypeNode(span, fields);
+    }
+
+    /// <summary>
+    /// Parses a tuple expression or grouped expression: (a, b, ...) or (expr)
+    /// Rules:
+    /// - (expr) = just expr (grouping, not a tuple)
+    /// - (expr,) = .{ _0 = expr } (tuple of one with trailing comma)
+    /// - (a, b) = .{ _0 = a, _1 = b } (tuple of two or more)
+    /// - () = .{ } (empty tuple / unit value)
+    /// </summary>
+    private ExpressionNode ParseTupleOrGroupedExpression()
+    {
+        var openParen = Eat(TokenKind.OpenParenthesis);
+
+        // Handle empty tuple: () - desugars to .{ } (unit value)
+        if (_currentToken.Kind == TokenKind.CloseParenthesis)
+        {
+            var closeParen = Eat(TokenKind.CloseParenthesis);
+            var emptySpan = SourceSpan.Combine(openParen.Span, closeParen.Span);
+            return new AnonymousStructExpressionNode(emptySpan, new List<(string, ExpressionNode)>());
+        }
+
+        var expressions = new List<ExpressionNode>();
+        bool hasTrailingComma = false;
+
+        // Parse first expression
+        expressions.Add(ParseExpression());
+
+        // Parse remaining expressions if there's a comma
+        while (_currentToken.Kind == TokenKind.Comma)
+        {
+            Eat(TokenKind.Comma);
+
+            // Check for trailing comma: (x,) or (a, b,)
+            if (_currentToken.Kind == TokenKind.CloseParenthesis)
+            {
+                hasTrailingComma = true;
+                break;
+            }
+
+            expressions.Add(ParseExpression());
+        }
+
+        var closeParenToken = Eat(TokenKind.CloseParenthesis);
+        var span = SourceSpan.Combine(openParen.Span, closeParenToken.Span);
+
+        // If single expression with no trailing comma, it's just grouping (not a tuple)
+        if (expressions.Count == 1 && !hasTrailingComma)
+        {
+            return expressions[0];
+        }
+
+        // Convert to anonymous struct with _0, _1, _2, ... field names
+        var fields = new List<(string FieldName, ExpressionNode Value)>();
+        for (int i = 0; i < expressions.Count; i++)
+        {
+            fields.Add(($"_{i}", expressions[i]));
+        }
+
+        return new AnonymousStructExpressionNode(span, fields);
     }
 
     /// <summary>

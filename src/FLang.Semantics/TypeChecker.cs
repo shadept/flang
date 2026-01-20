@@ -2397,16 +2397,50 @@ public class TypeChecker
 
                 if (structType == null)
                 {
-                    ReportError(
-                        "anonymous struct literal requires a target struct type",
-                        anon.Span,
-                        "add a type annotation",
-                        "E2018");
-                    type = TypeRegistry.I32;
-                    break;
+                    // No expected type - infer field types from values (tuple case)
+                    // This enables tuples like (10, 20) without type annotation
+                    var inferredFields = new List<(string Name, TypeBase Type)>();
+                    bool inferenceSucceeded = true;
+
+                    foreach (var (fieldName, fieldValue) in anon.Fields)
+                    {
+                        var fieldType = CheckExpression(fieldValue);
+
+                        // Handle comptime types: default comptime_int to i32 for tuples
+                        var prunedType = fieldType is TypeVar tv ? tv.Prune() : fieldType;
+                        if (prunedType is ComptimeInt)
+                        {
+                            // Unify the TypeVar with i32 to resolve the comptime_int
+                            fieldType = UnifyTypes(fieldType, TypeRegistry.I32, fieldValue.Span) ?? TypeRegistry.I32;
+                        }
+                        else if (fieldType == TypeRegistry.Never)
+                        {
+                            inferenceSucceeded = false;
+                        }
+
+                        inferredFields.Add((fieldName, fieldType));
+                    }
+
+                    if (!inferenceSucceeded)
+                    {
+                        ReportError(
+                            "cannot infer type of anonymous struct/tuple literal",
+                            anon.Span,
+                            "add a type annotation",
+                            "E2018");
+                        type = TypeRegistry.Never;
+                        break;
+                    }
+
+                    // Create an anonymous struct type from inferred fields
+                    structType = new StructType("", typeArguments: null, fields: inferredFields);
+                    _compilation.InstantiatedTypes.Add(structType);
+                }
+                else
+                {
+                    ValidateStructLiteralFields(structType, anon.Fields, anon.Span);
                 }
 
-                ValidateStructLiteralFields(structType, anon.Fields, anon.Span);
                 anon.Type = structType;
 
                 if (TypeRegistry.IsOption(expectedType))
@@ -2876,6 +2910,21 @@ public class TypeChecker
                 if (returnType == null) return null;
                 return new FunctionType(paramTypes, returnType);
             }
+            case AnonymousStructTypeNode ast:
+            {
+                // Anonymous struct type (used for tuple types like (T1, T2) -> { _0: T1, _1: T2 })
+                var fields = new List<(string Name, TypeBase Type)>();
+                foreach (var (fieldName, fieldTypeNode) in ast.Fields)
+                {
+                    var fieldType = ResolveTypeNode(fieldTypeNode);
+                    if (fieldType == null) return null;
+                    fields.Add((fieldName, fieldType));
+                }
+                // Create an anonymous struct type (empty name for anonymous struct)
+                var anonStruct = new StructType("", typeArguments: null, fields: fields);
+                _compilation.InstantiatedTypes.Add(anonStruct);
+                return anonStruct;
+            }
             default:
                 return null;
         }
@@ -3226,6 +3275,7 @@ public class TypeChecker
                 SliceTypeNode s => HasGeneric(s.ElementType),
                 GenericTypeNode g => g.TypeArguments.Any(HasGeneric),
                 FunctionTypeNode ft => ft.ParameterTypes.Any(HasGeneric) || HasGeneric(ft.ReturnType),
+                AnonymousStructTypeNode ast => ast.Fields.Any(f => HasGeneric(f.FieldType)),
                 NamedTypeNode => false,
                 _ => throw new InvalidOperationException($"Unhandled TypeNode in IsGenericFunctionDecl: {n.GetType().Name}")
             };
