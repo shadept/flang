@@ -118,6 +118,7 @@ public static class TypeRegistry
     {
         return name switch
         {
+            "void" => Void,
             "bool" => Bool,
             "i8" => I8,
             "i16" => I16,
