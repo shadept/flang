@@ -1380,6 +1380,64 @@ Only index into arrays or slices.
 
 ---
 
+### E2029: Integer Literal Out of Range
+
+**Category**: Type Checking
+**Severity**: Error
+
+#### Description
+
+An integer literal value exceeds the valid range for the target type it was inferred to. This commonly occurs when:
+
+- A literal value is used in a context that requires a smaller integer type
+- An array with comptime_int elements is passed to a function expecting a slice of a smaller type
+
+#### Examples
+
+```flang
+fn takes_u8(x: u8) {}
+
+pub fn main() i32 {
+    takes_u8(256)  // ERROR: 256 > 255 (u8 max)
+    return 0
+}
+```
+
+```flang
+fn takes_slice(s: u8[]) usize { return s.len }
+
+pub fn main() i32 {
+    let arr = [256; 10]
+    takes_slice(arr)  // ERROR: array element 256 out of range for u8
+    return 0
+}
+```
+
+#### Solution
+
+Use a value within the valid range or explicitly cast to a larger type:
+
+```flang
+fn takes_u8(x: u8) {}
+
+pub fn main() i32 {
+    takes_u8(255)  // OK: 255 is within u8 range
+    return 0
+}
+```
+
+```flang
+fn takes_i32_slice(s: i32[]) usize { return s.len }
+
+pub fn main() i32 {
+    let arr = [256; 10]
+    takes_i32_slice(arr)  // OK: 256 fits in i32
+    return 0
+}
+```
+
+---
+
 ### E2030: Match on Non-Enum Type
 
 **Category**: Pattern Matching
@@ -2014,6 +2072,7 @@ Report the issue with sample code that reproduces the error.
 | **E2026** | Type Checking     | Empty array inference                        |
 | **E2027** | Type Checking     | Invalid array index type                     |
 | **E2028** | Type Checking     | Non-indexable type                           |
+| **E2029** | Type Checking     | Integer literal out of range                 |
 | **E2030** | Pattern Matching  | Match on non-enum type                       |
 | **E2031** | Pattern Matching  | Non-exhaustive match                         |
 | **E2032** | Pattern Matching  | Match pattern arity mismatch                 |

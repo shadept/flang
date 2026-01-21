@@ -155,7 +155,21 @@ public class TypeSolver
         if (a is ComptimeInt && b is PrimitiveType p1 && TypeRegistry.IsIntegerType(p1)) return p1;
         if (b is ComptimeInt && a is PrimitiveType p2 && TypeRegistry.IsIntegerType(p2)) return p2;
 
-        // 4. Coercion Extension
+        // 4. Array-to-Slice structural unification (enables comptime_int element hardening)
+        if (a is ArrayType arrToSlice && b is StructType sliceTarget && TypeRegistry.IsSlice(sliceTarget))
+        {
+            var unifiedElem = UnifyInternal(arrToSlice.ElementType, sliceTarget.TypeArguments[0], span);
+            return unifiedElem != null ? b : null;
+        }
+
+        if (a is ReferenceType { InnerType: ArrayType refArrToSlice } &&
+            b is StructType sliceTargetRef && TypeRegistry.IsSlice(sliceTargetRef))
+        {
+            var unifiedElem = UnifyInternal(refArrToSlice.ElementType, sliceTargetRef.TypeArguments[0], span);
+            return unifiedElem != null ? b : null;
+        }
+
+        // 5. Coercion Extension
         // Must come before structural recursion to allow cross-type coercions
         // (e.g., Array→Slice, &[T;N]→&T, String→Slice<u8>)
         foreach (var rule in _coercionRules)
@@ -164,7 +178,7 @@ public class TypeSolver
                 return b;
         }
 
-        // 5. Arrays (Structural Recursion) - unify element types
+        // 6. Arrays (Structural Recursion) - unify element types
         if (a is ArrayType arr1 && b is ArrayType arr2)
         {
             if (arr1.Length != arr2.Length)
@@ -179,7 +193,7 @@ public class TypeSolver
             return new ArrayType(unifiedElem, arr1.Length);
         }
 
-        // 6. References (Structural Recursion) - unify inner types
+        // 7. References (Structural Recursion) - unify inner types
         if (a is ReferenceType ref1 && b is ReferenceType ref2)
         {
             var unifiedInner = UnifyInternal(ref1.InnerType, ref2.InnerType, span);
@@ -188,7 +202,7 @@ public class TypeSolver
             return new ReferenceType(unifiedInner, ref1.PointerWidth);
         }
 
-        // 7. Structs (Structural Recursion)
+        // 8. Structs (Structural Recursion)
         if (a is StructType s1 && b is StructType s2)
         {
             if (s1.Name != s2.Name)
@@ -212,7 +226,7 @@ public class TypeSolver
             return a;
         }
 
-        // 8. Enums (Structural Recursion)
+        // 9. Enums (Structural Recursion)
         if (a is EnumType e1 && b is EnumType e2)
         {
             if (e1.Name != e2.Name)
@@ -236,7 +250,7 @@ public class TypeSolver
             return a;
         }
 
-        // 9. Function Types (Exact Match - C semantics, no coercion)
+        // 10. Function Types (Exact Match - C semantics, no coercion)
         if (a is FunctionType f1 && b is FunctionType f2)
         {
             if (f1.ParameterTypes.Count != f2.ParameterTypes.Count)
@@ -280,7 +294,7 @@ public class TypeSolver
             return a;
         }
 
-        // 10. Detailed Failure
+        // 11. Detailed Failure
         var hint = GenerateHint(t1, t2);
         if (IsSkolem(a) || IsSkolem(b))
             ReportError($"Cannot unify rigid generic parameter with concrete type", span, "E2002", hint);
@@ -455,19 +469,19 @@ public class ArrayDecayRule : ICoercionRule
     /// </summary>
     /// <param name="from">The source array type or reference to array.</param>
     /// <param name="to">The target type (pointer or slice).</param>
-    /// <param name="solver">The type solver (unused by this rule).</param>
+    /// <param name="solver">The type solver for element type unification.</param>
     /// <returns>True if array decay is valid for the given types.</returns>
     public bool TryApply(TypeBase from, TypeBase to, TypeSolver solver)
     {
         // Array-to-slice coercions
         if (to is StructType st && TypeRegistry.IsSlice(st))
         {
-            // [T; N] → Slice(T)
+            // [T; N] → Slice(T) - use CanUnify to allow comptime_int → concrete
             if (from is ArrayType arr)
-                return arr.ElementType.Equals(st.TypeArguments[0]);
+                return solver.CanUnify(arr.ElementType, st.TypeArguments[0]);
             // &[T; N] → Slice(T)
             if (from is ReferenceType { InnerType: ArrayType refArr })
-                return refArr.ElementType.Equals(st.TypeArguments[0]);
+                return solver.CanUnify(refArr.ElementType, st.TypeArguments[0]);
         }
 
         // Array-to-pointer coercions

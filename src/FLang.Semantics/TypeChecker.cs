@@ -40,19 +40,19 @@ public class TypeChecker
     // Track binding recursion depth for indented logging
     private int _bindingDepth = 0;
 
-    // Literal TypeVar tracking for inference
+    // Literal TypeVar tracking for inference (with value for range validation)
     private int _nextLiteralTypeVarId = 0;
-    private readonly List<TypeVar> _literalTypeVars = [];
+    private readonly List<(TypeVar Tv, long Value)> _literalTypeVars = [];
 
     /// <summary>
     /// Creates a new TypeVar for a literal, soft-bound to the given comptime type.
-    /// Tracks the TypeVar for later verification.
+    /// Tracks the TypeVar and its value for later verification.
     /// </summary>
-    private TypeVar CreateLiteralTypeVar(string id, SourceSpan span, TypeBase comptimeType)
+    private TypeVar CreateLiteralTypeVar(string id, SourceSpan span, TypeBase comptimeType, long value)
     {
         var tv = new TypeVar(id, span);
         tv.Instance = comptimeType;
-        _literalTypeVars.Add(tv);
+        _literalTypeVars.Add((tv, value));
         return tv;
     }
 
@@ -2192,7 +2192,7 @@ public class TypeChecker
         {
             case IntegerLiteralNode lit:
                 var tvId = $"lit_{lit.Span.Index}_{_nextLiteralTypeVarId++}";
-                type = CreateLiteralTypeVar(tvId, lit.Span, TypeRegistry.ComptimeInt);
+                type = CreateLiteralTypeVar(tvId, lit.Span, TypeRegistry.ComptimeInt, lit.Value);
                 break;
             case BooleanLiteralNode:
                 type = TypeRegistry.Bool;
@@ -3177,10 +3177,11 @@ public class TypeChecker
     /// <summary>
     /// Verifies that all literal TypeVars have been resolved to concrete types.
     /// Reports E2001 errors for any that remain as comptime types.
+    /// Reports E2029 errors for literals out of range for their inferred type.
     /// </summary>
     public void VerifyAllTypesResolved()
     {
-        foreach (var tv in _literalTypeVars)
+        foreach (var (tv, value) in _literalTypeVars)
         {
             var finalType = tv.Prune();
 
@@ -3193,8 +3194,50 @@ public class TypeChecker
                     "use the literal in a context that requires a specific type or add a type annotation",
                     "E2001");
             }
+            else if (finalType is PrimitiveType pt && TypeRegistry.IsIntegerType(pt))
+            {
+                if (!FitsInType(value, pt))
+                {
+                    var (min, max) = GetIntegerRange(pt);
+                    ReportError(
+                        $"literal value `{value}` out of range for `{pt.Name}`",
+                        tv.DeclarationSpan ?? new SourceSpan(0, 0, 0),
+                        $"valid range: {min}..{max}",
+                        "E2029");
+                }
+            }
         }
     }
+
+    private static bool FitsInType(long value, PrimitiveType pt) => pt.Name switch
+    {
+        "i8" => value >= sbyte.MinValue && value <= sbyte.MaxValue,
+        "i16" => value >= short.MinValue && value <= short.MaxValue,
+        "i32" => value >= int.MinValue && value <= int.MaxValue,
+        "i64" => true,
+        "u8" => value >= 0 && value <= byte.MaxValue,
+        "u16" => value >= 0 && value <= ushort.MaxValue,
+        "u32" => value >= 0 && value <= uint.MaxValue,
+        "u64" => value >= 0,
+        "isize" => true,
+        "usize" => value >= 0,
+        _ => true
+    };
+
+    private static (long min, long max) GetIntegerRange(PrimitiveType pt) => pt.Name switch
+    {
+        "i8" => (sbyte.MinValue, sbyte.MaxValue),
+        "i16" => (short.MinValue, short.MaxValue),
+        "i32" => (int.MinValue, int.MaxValue),
+        "i64" => (long.MinValue, long.MaxValue),
+        "u8" => (0, byte.MaxValue),
+        "u16" => (0, ushort.MaxValue),
+        "u32" => (0, uint.MaxValue),
+        "u64" => (0, long.MaxValue),
+        "isize" => (long.MinValue, long.MaxValue),
+        "usize" => (0, long.MaxValue),
+        _ => (long.MinValue, long.MaxValue)
+    };
 
     private void PushScope() => _scopes.Push([]);
     private void PopScope() => _scopes.Pop();
