@@ -1763,11 +1763,71 @@ public class TypeChecker
             return enumConstructionType;
         }
 
-        if (_functions.TryGetValue(call.FunctionName, out var candidates))
+        // UFCS calls (obj.method(args)) are semantically equivalent to method(&obj, args).
+        // We don't mutate the AST - instead we build the effective argument list for resolution
+        // and let lowering handle the actual transformation.
+        TypeBase? ufcsReceiverType = null;
+        if (call.UfcsReceiver != null && call.MethodName != null)
+        {
+            // Type-check the receiver expression first
+            ufcsReceiverType = CheckExpression(call.UfcsReceiver);
+            var prunedReceiverType = ufcsReceiverType.Prune();
+
+            // Check if receiver is a struct with a function-typed field matching the method name.
+            // This enables vtable-style patterns: ops.add(5, 3) calls the function in ops.add field.
+            StructType? structType = prunedReceiverType switch
+            {
+                StructType st => st,
+                ReferenceType { InnerType: StructType refSt } => refSt,
+                _ => null
+            };
+
+            if (structType != null)
+            {
+                var fieldType = structType.GetFieldType(call.MethodName);
+                if (fieldType?.Prune() is FunctionType funcType)
+                {
+                    // Field-call pattern: type-check arguments and mark as indirect call
+                    return CheckFieldCall(call, funcType);
+                }
+
+                // Check if field exists but is not callable (for better error message)
+                if (fieldType != null)
+                {
+                    var receiverTypeName = FormatTypeNameForDisplay(prunedReceiverType);
+                    var fieldTypeName = FormatTypeNameForDisplay(fieldType.Prune());
+                    ReportError(
+                        $"`{call.MethodName}` is a field of `{receiverTypeName}`, not a method",
+                        call.Span,
+                        $"has type `{fieldTypeName}` which is not callable",
+                        "E2011");
+                    return TypeRegistry.Never;
+                }
+            }
+
+            // UFCS: receiver.method(args) -> method(&receiver, args)
+            // If receiver is already a reference type, don't add another reference.
+            if (prunedReceiverType is not ReferenceType)
+            {
+                ufcsReceiverType = new ReferenceType(ufcsReceiverType);
+            }
+        }
+
+        // For UFCS calls, use MethodName (the actual function name) rather than FunctionName
+        // (which is a synthetic name like "obj.method" for error messages)
+        var functionName = call.MethodName ?? call.FunctionName;
+
+        if (_functions.TryGetValue(functionName, out var candidates))
         {
             _logger.LogDebug("{Indent}Considering {CandidateCount} candidates for '{FunctionName}'", Indent(),
-                candidates.Count, call.FunctionName);
-            var argTypes = call.Arguments.Select(arg => CheckExpression(arg)).ToList();
+                candidates.Count, functionName);
+
+            // Build effective argument types: for UFCS, prepend receiver type
+            var explicitArgTypes = call.Arguments.Select(arg => CheckExpression(arg)).ToList();
+            var argTypes = ufcsReceiverType != null
+                ? new List<TypeBase> { ufcsReceiverType }.Concat(explicitArgTypes).ToList()
+                : explicitArgTypes;
+
             FunctionEntry? bestNonGeneric = null;
             var bestNonGenericCost = int.MaxValue;
 
@@ -1895,10 +1955,23 @@ public class TypeChecker
                     // Check if we have a candidate with matching arg count but type mismatch
                     if (closestTypeMismatch != null && closestMismatchIndex >= 0)
                     {
-                        // Report error on the specific mismatched argument
+                        // For UFCS, index 0 is the receiver, explicit args start at 1
+                        var argOffset = ufcsReceiverType != null ? 1 : 0;
+                        SourceSpan errorSpan;
+                        if (ufcsReceiverType != null && closestMismatchIndex == 0)
+                        {
+                            // Receiver type mismatch
+                            errorSpan = call.UfcsReceiver!.Span;
+                        }
+                        else
+                        {
+                            // Explicit argument mismatch
+                            errorSpan = call.Arguments[closestMismatchIndex - argOffset].Span;
+                        }
+
                         ReportError(
                             $"mismatched types",
-                            call.Arguments[closestMismatchIndex].Span,
+                            errorSpan,
                             $"expected `{FormatTypeNameForDisplay(closestExpectedType!)}`, found `{FormatTypeNameForDisplay(closestActualType!)}`",
                             "E2011");
                     }
@@ -1920,13 +1993,22 @@ public class TypeChecker
                 var type = chosen.ReturnType;
                 if (expectedType != null)
                     type = UnifyTypes(type, expectedType, call.Span);
+
+                // For UFCS, receiver is at argTypes[0]/paramTypes[0], explicit args start at index 1
+                var argOffset = ufcsReceiverType != null ? 1 : 0;
+
+                // Unify receiver type if UFCS
+                if (ufcsReceiverType != null)
+                {
+                    UnifyTypes(argTypes[0], chosen.ParameterTypes[0], call.UfcsReceiver!.Span);
+                }
+
+                // Unify and wrap explicit arguments
                 for (var i = 0; i < call.Arguments.Count; i++)
                 {
-                    // Unify argument types - TypeVar.Prune() handles propagation
-                    var unified = UnifyTypes(argTypes[i], chosen.ParameterTypes[i], call.Arguments[i].Span);
-
-                    // Wrap argument with coercion node if needed
-                    call.Arguments[i] = WrapWithCoercionIfNeeded(call.Arguments[i], argTypes[i].Prune(), chosen.ParameterTypes[i].Prune());
+                    var argIdx = i + argOffset;
+                    var unified = UnifyTypes(argTypes[argIdx], chosen.ParameterTypes[argIdx], call.Arguments[i].Span);
+                    call.Arguments[i] = WrapWithCoercionIfNeeded(call.Arguments[i], argTypes[argIdx].Prune(), chosen.ParameterTypes[argIdx].Prune());
                 }
 
                 call.ResolvedTarget = chosen.AstNode;
@@ -1944,13 +2026,21 @@ public class TypeChecker
                 for (var i = 0; i < chosen.ParameterTypes.Count; i++)
                     concreteParams.Add(SubstituteGenerics(chosen.ParameterTypes[i], bindings));
 
+                // For UFCS, receiver is at index 0, explicit args start at index 1
+                var argOffset = ufcsReceiverType != null ? 1 : 0;
+
+                // Unify receiver type if UFCS
+                if (ufcsReceiverType != null)
+                {
+                    UnifyTypes(argTypes[0], concreteParams[0], call.UfcsReceiver!.Span);
+                }
+
+                // Unify and wrap explicit arguments
                 for (var i = 0; i < call.Arguments.Count; i++)
                 {
-                    // Unify argument types - TypeVar.Prune() handles propagation
-                    var unified = UnifyTypes(argTypes[i], concreteParams[i], call.Arguments[i].Span);
-
-                    // Wrap argument with coercion node if needed
-                    call.Arguments[i] = WrapWithCoercionIfNeeded(call.Arguments[i], argTypes[i].Prune(), concreteParams[i].Prune());
+                    var argIdx = i + argOffset;
+                    var unified = UnifyTypes(argTypes[argIdx], concreteParams[argIdx], call.Arguments[i].Span);
+                    call.Arguments[i] = WrapWithCoercionIfNeeded(call.Arguments[i], argTypes[argIdx].Prune(), concreteParams[argIdx].Prune());
                 }
 
                 var specializedNode = EnsureSpecialization(chosen, bindings, concreteParams);
@@ -1961,7 +2051,7 @@ public class TypeChecker
         else
         {
             // Temporary built-in fallback for C printf without explicit import
-            if (call.FunctionName == "printf")
+            if (functionName == "printf")
             {
                 // Check arguments and resolve comptime_int to i32 for variadic args
                 var argTypes = new List<TypeBase>();
@@ -1987,22 +2077,8 @@ public class TypeChecker
                 return TypeRegistry.I32;
             }
 
-            // Try UFCS or field-call: obj.method(args)
-            // - UFCS: transforms to method(obj, args) or method(&obj, args)
-            // - Field-call: obj has field `method` with function type (vtable pattern)
-            if (call.UfcsReceiver != null && call.MethodName != null)
-            {
-                var ufcsResult = TryResolveUfcsCall(call, expectedType);
-                if (ufcsResult != null)
-                    return ufcsResult;
-
-                // UFCS resolution failed - provide detailed error message
-                ReportUfcsError(call);
-                return TypeRegistry.Never;
-            }
-
             // Check if function name is a variable with function type (indirect call)
-            if (TryLookupVariable(call.FunctionName, out var varType) && varType.Prune() is FunctionType funcType)
+            if (TryLookupVariable(functionName, out var varType) && varType.Prune() is FunctionType funcType)
             {
                 // Type-check the arguments
                 var argTypes = call.Arguments.Select(arg => CheckExpression(arg)).ToList();
@@ -2063,303 +2139,50 @@ public class TypeChecker
     }
 
     /// <summary>
-    /// Attempts to resolve a UFCS (Uniform Function Call Syntax) call.
-    /// Transforms obj.method(args) to method(obj, args) or method(&amp;obj, args).
+    /// Handles field-call pattern: receiver.field(args) where field is a function type.
+    /// Used for vtable-style patterns.
     /// </summary>
-    private TypeBase? TryResolveUfcsCall(CallExpressionNode call, TypeBase? expectedType)
+    private TypeBase CheckFieldCall(CallExpressionNode call, FunctionType funcType)
     {
-        if (call.UfcsReceiver == null || call.MethodName == null)
-            return null;
+        var fieldArgTypes = call.Arguments.Select(arg => CheckExpression(arg)).ToList();
 
-        // Type-check the receiver expression first
-        var receiverType = CheckExpression(call.UfcsReceiver);
-        var prunedReceiverType = receiverType.Prune();
-
-        // Check if receiver is a struct with a function-typed field matching the method name
-        // This enables vtable-style patterns: ops.add(5, 3) calls the function in ops.add field
-        StructType? structType = prunedReceiverType switch
+        if (fieldArgTypes.Count != funcType.ParameterTypes.Count)
         {
-            StructType st => st,
-            ReferenceType { InnerType: StructType refSt } => refSt,
-            _ => null
-        };
-
-        if (structType != null)
-        {
-            var fieldType = structType.GetFieldType(call.MethodName);
-            if (fieldType?.Prune() is FunctionType funcType)
-            {
-                // Field-call pattern: type-check arguments and mark as indirect call
-                var fieldArgTypes = call.Arguments.Select(arg => CheckExpression(arg)).ToList();
-
-                if (fieldArgTypes.Count != funcType.ParameterTypes.Count)
-                {
-                    ReportError(
-                        $"function expects {funcType.ParameterTypes.Count} argument(s), but {fieldArgTypes.Count} were provided",
-                        call.Span,
-                        $"expected {funcType.ParameterTypes.Count}, got {fieldArgTypes.Count}",
-                        "E2011");
-                    return TypeRegistry.Never;
-                }
-
-                for (var i = 0; i < fieldArgTypes.Count; i++)
-                {
-                    var argTypePruned = fieldArgTypes[i].Prune();
-                    var paramType = funcType.ParameterTypes[i].Prune();
-
-                    if (argTypePruned is ComptimeInt || argTypePruned is TypeVar ||
-                        paramType is TypeVar || argTypePruned is GenericParameterType ||
-                        paramType is GenericParameterType)
-                    {
-                        UnifyTypes(fieldArgTypes[i], funcType.ParameterTypes[i], call.Arguments[i].Span);
-                        call.Arguments[i] = WrapWithCoercionIfNeeded(call.Arguments[i], argTypePruned, paramType);
-                    }
-                    else if (!argTypePruned.Equals(paramType))
-                    {
-                        ReportError(
-                            $"mismatched types: expected `{paramType}`, got `{argTypePruned}`",
-                            call.Arguments[i].Span,
-                            $"expected `{paramType}`",
-                            "E2002");
-                        return TypeRegistry.Never;
-                    }
-                }
-
-                // Mark as indirect call (UfcsReceiver + MethodName indicate field-call in lowering)
-                call.ResolvedTarget = null;
-                call.IsIndirectCall = true;
-                return funcType.ReturnType;
-            }
-        }
-
-        // Check if the method name exists as a function
-        if (!_functions.TryGetValue(call.MethodName, out var candidates))
-            return null;
-
-        // Build argument list: receiver + original arguments
-        // First, try with receiver value directly
-        var argTypes = new List<TypeBase> { receiverType };
-        argTypes.AddRange(call.Arguments.Select(arg => CheckExpression(arg)));
-
-        // Try to find a matching function
-        FunctionEntry? bestMatch = null;
-        var bestCost = int.MaxValue;
-        Dictionary<string, TypeBase>? bestBindings = null;
-        var usedReference = false;
-
-        // First try with value receiver: method(obj, args)
-        TryMatchUfcsCandidate(candidates, argTypes, ref bestMatch, ref bestCost, ref bestBindings);
-
-        // If no match found, try with reference receiver: method(&obj, args)
-        if (bestMatch == null)
-        {
-            var refReceiverType = new ReferenceType(receiverType);
-            var refArgTypes = new List<TypeBase> { refReceiverType };
-            refArgTypes.AddRange(argTypes.Skip(1)); // Skip original receiver, use rest
-
-            TryMatchUfcsCandidate(candidates, refArgTypes, ref bestMatch, ref bestCost, ref bestBindings);
-            if (bestMatch != null)
-                usedReference = true;
-        }
-
-        if (bestMatch == null)
-            return null;
-
-        // Found a match - transform the call
-        // Insert receiver as first argument
-        var newArguments = new List<ExpressionNode>();
-
-        if (usedReference)
-        {
-            // Wrap receiver in address-of expression
-            newArguments.Add(new AddressOfExpressionNode(call.UfcsReceiver.Span, call.UfcsReceiver));
-        }
-        else
-        {
-            newArguments.Add(call.UfcsReceiver);
-        }
-        newArguments.AddRange(call.Arguments);
-
-        // Update the call's arguments (mutate in place for proper lowering)
-        call.Arguments.Clear();
-        call.Arguments.AddRange(newArguments);
-
-        // Re-typecheck with the new argument list using the matched function
-        // This is similar to regular call resolution
-        // Important: We already computed argTypes above, which includes the receiver type.
-        // We should reuse those types to avoid re-checking expressions (which could cause infinite loops with UFCS chains).
-        var finalArgTypes = usedReference
-            ? new List<TypeBase> { new ReferenceType(receiverType) }.Concat(argTypes.Skip(1)).ToList()
-            : argTypes;
-
-        if (!bestMatch.IsGeneric)
-        {
-            var retType = bestMatch.ReturnType;
-            if (expectedType != null)
-                retType = UnifyTypes(retType, expectedType, call.Span);
-
-            // Unify and wrap with coercion as needed
-            for (var i = 0; i < call.Arguments.Count; i++)
-            {
-                var unified = UnifyTypes(finalArgTypes[i], bestMatch.ParameterTypes[i], call.Arguments[i].Span);
-                call.Arguments[i] = WrapWithCoercionIfNeeded(call.Arguments[i], finalArgTypes[i].Prune(), bestMatch.ParameterTypes[i].Prune());
-            }
-
-            call.ResolvedTarget = bestMatch.AstNode;
-            return retType;
-        }
-        else
-        {
-            // Generic UFCS - need to specialize
-            var bindings = bestBindings!;
-            if (expectedType != null)
-                RefineBindingsWithExpectedReturn(bestMatch.ReturnType, expectedType, bindings, call.Span);
-
-            var ret = SubstituteGenerics(bestMatch.ReturnType, bindings);
-            var retType = expectedType != null ? UnifyTypes(ret, expectedType, call.Span) : ret;
-
-            var concreteParams = new List<TypeBase>();
-            for (var i = 0; i < bestMatch.ParameterTypes.Count; i++)
-                concreteParams.Add(SubstituteGenerics(bestMatch.ParameterTypes[i], bindings));
-
-            // Unify and wrap with coercion as needed
-            for (var i = 0; i < call.Arguments.Count; i++)
-            {
-                var unified = UnifyTypes(finalArgTypes[i], concreteParams[i], call.Arguments[i].Span);
-                call.Arguments[i] = WrapWithCoercionIfNeeded(call.Arguments[i], finalArgTypes[i].Prune(), concreteParams[i].Prune());
-            }
-
-            var spec = EnsureSpecialization(bestMatch, bindings, concreteParams);
-            call.ResolvedTarget = spec;
-            return retType;
-        }
-    }
-
-    private void TryMatchUfcsCandidate(
-        List<FunctionEntry> candidates,
-        List<TypeBase> argTypes,
-        ref FunctionEntry? bestMatch,
-        ref int bestCost,
-        ref Dictionary<string, TypeBase>? bestBindings)
-    {
-        foreach (var cand in candidates)
-        {
-            if (cand.ParameterTypes.Count != argTypes.Count) continue;
-
-            if (!cand.IsGeneric)
-            {
-                if (!TryComputeCoercionCost(argTypes, cand.ParameterTypes, out var cost))
-                    continue;
-
-                if (cost < bestCost)
-                {
-                    bestMatch = cand;
-                    bestCost = cost;
-                    bestBindings = null;
-                }
-            }
-            else
-            {
-                var bindings = new Dictionary<string, TypeBase>();
-                var ok = true;
-                for (var i = 0; i < argTypes.Count; i++)
-                {
-                    if (!TryBindGeneric(cand.ParameterTypes[i], argTypes[i], bindings, out _, out _))
-                    {
-                        ok = false;
-                        break;
-                    }
-                }
-
-                if (!ok) continue;
-
-                var concreteParams = new List<TypeBase>();
-                for (var i = 0; i < cand.ParameterTypes.Count; i++)
-                    concreteParams.Add(SubstituteGenerics(cand.ParameterTypes[i], bindings));
-
-                if (!TryComputeCoercionCost(argTypes, concreteParams, out var cost))
-                    continue;
-
-                if (cost < bestCost)
-                {
-                    bestMatch = cand;
-                    bestCost = cost;
-                    bestBindings = bindings;
-                }
-            }
-        }
-    }
-
-    /// <summary>
-    /// Reports a detailed error message when UFCS call resolution fails.
-    /// Provides specific diagnostics based on the reason for failure.
-    /// </summary>
-    private void ReportUfcsError(CallExpressionNode call)
-    {
-        var methodName = call.MethodName!;
-        var receiver = call.UfcsReceiver!;
-        var receiverType = CheckExpression(receiver);
-        var prunedReceiverType = receiverType.Prune();
-        var receiverTypeName = FormatTypeNameForDisplay(prunedReceiverType);
-
-        // Check if receiver is a struct with a field matching the method name (but not callable)
-        StructType? structType = prunedReceiverType switch
-        {
-            StructType st => st,
-            ReferenceType { InnerType: StructType refSt } => refSt,
-            _ => null
-        };
-
-        if (structType != null)
-        {
-            var fieldType = structType.GetFieldType(methodName);
-            if (fieldType != null)
-            {
-                // Field exists but is not a function type (not callable)
-                var fieldTypeName = FormatTypeNameForDisplay(fieldType.Prune());
-                ReportError(
-                    $"`{methodName}` is a field of `{receiverTypeName}`, not a method",
-                    call.Span,
-                    $"has type `{fieldTypeName}` which is not callable",
-                    "E2011");
-                return;
-            }
-        }
-
-        // Check if the method name exists as a function at all
-        if (_functions.TryGetValue(methodName, out var candidates))
-        {
-            // Function(s) with this name exist, but none match the receiver type
-            // Build a list of the first parameter types that the function accepts
-            var acceptedTypes = new List<string>();
-            foreach (var cand in candidates)
-            {
-                if (cand.ParameterTypes.Count > 0)
-                {
-                    var firstParamType = cand.ParameterTypes[0].Prune();
-                    var firstParamTypeName = FormatTypeNameForDisplay(firstParamType);
-                    if (!acceptedTypes.Contains(firstParamTypeName))
-                        acceptedTypes.Add(firstParamTypeName);
-                }
-            }
-
-            // Report error on the receiver, similar to E2011's argument type mismatch
-            var expectedTypes = string.Join(" or ", acceptedTypes.Select(t => $"`{t}`"));
             ReportError(
-                $"mismatched types",
-                receiver.Span,
-                $"expected {expectedTypes}, found `{receiverTypeName}`",
-                "E2011");
-        }
-        else
-        {
-            // No function with this name exists
-            ReportError(
-                $"function `{methodName}` does not exist",
+                $"function expects {funcType.ParameterTypes.Count} argument(s), but {fieldArgTypes.Count} were provided",
                 call.Span,
-                "not found in this scope",
-                "E2004");
+                $"expected {funcType.ParameterTypes.Count}, got {fieldArgTypes.Count}",
+                "E2011");
+            return TypeRegistry.Never;
         }
+
+        for (var i = 0; i < fieldArgTypes.Count; i++)
+        {
+            var argTypePruned = fieldArgTypes[i].Prune();
+            var paramType = funcType.ParameterTypes[i].Prune();
+
+            if (argTypePruned is ComptimeInt || argTypePruned is TypeVar ||
+                paramType is TypeVar || argTypePruned is GenericParameterType ||
+                paramType is GenericParameterType)
+            {
+                UnifyTypes(fieldArgTypes[i], funcType.ParameterTypes[i], call.Arguments[i].Span);
+                call.Arguments[i] = WrapWithCoercionIfNeeded(call.Arguments[i], argTypePruned, paramType);
+            }
+            else if (!argTypePruned.Equals(paramType))
+            {
+                ReportError(
+                    $"mismatched types",
+                    call.Arguments[i].Span,
+                    $"expected `{FormatTypeNameForDisplay(paramType)}`, found `{FormatTypeNameForDisplay(argTypePruned)}`",
+                    "E2011");
+                return TypeRegistry.Never;
+            }
+        }
+
+        // Mark as indirect call (UfcsReceiver + MethodName indicate field-call in lowering)
+        call.ResolvedTarget = null;
+        call.IsIndirectCall = true;
+        return funcType.ReturnType;
     }
 
     private TypeBase CheckExpression(ExpressionNode expression, TypeBase? expectedType = null)

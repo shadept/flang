@@ -531,6 +531,7 @@ public class StructType : TypeBase
     /// <returns>The aligned offset.</returns>
     private static int AlignUp(int offset, int alignment)
     {
+        if (alignment <= 0) return offset;
         return (offset + alignment - 1) / alignment * alignment;
     }
 

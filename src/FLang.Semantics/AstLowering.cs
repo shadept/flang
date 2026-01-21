@@ -944,6 +944,45 @@ public class AstLowering
                     return indirectCallResult;
                 }
 
+                // UFCS call: receiver.method(args) -> method(&receiver, args)
+                // Handle the implicit receiver argument
+                Value? ufcsReceiverArg = null;
+                if (call.UfcsReceiver != null && call.MethodName != null && !call.IsIndirectCall)
+                {
+                    var receiverVal = LowerExpression(call.UfcsReceiver);
+                    var receiverType = call.UfcsReceiver.Type?.Prune();
+
+                    // If receiver is already a reference, use it directly; otherwise take its address
+                    if (receiverType is ReferenceType)
+                    {
+                        ufcsReceiverArg = receiverVal;
+                    }
+                    else
+                    {
+                        // Need to take address of the receiver
+                        // If it's an lvalue (stored in memory), we can get its address directly
+                        // If it's an rvalue (e.g., call result), we need to spill to a temp first
+                        if (receiverVal is LocalValue lv && _locals.ContainsValue(lv))
+                        {
+                            // It's already a pointer to storage, use it directly
+                            ufcsReceiverArg = lv;
+                        }
+                        else
+                        {
+                            // Rvalue - create temporary storage, store value, use address
+                            var tempName = $"ufcs_temp_{_tempCounter++}";
+                            var tempPtr = new LocalValue(tempName, new ReferenceType(receiverType!));
+                            var allocaInst = new AllocaInstruction(receiverType!, receiverType!.Size, tempPtr);
+                            _currentBlock.Instructions.Add(allocaInst);
+
+                            var storeInst = new StorePointerInstruction(tempPtr, receiverVal);
+                            _currentBlock.Instructions.Add(storeInst);
+
+                            ufcsReceiverArg = tempPtr;
+                        }
+                    }
+                }
+
                 // Regular function call
                 var paramTypes = new List<FType>();
                 if (call.ResolvedTarget != null)
@@ -959,17 +998,38 @@ public class AstLowering
 
                 // Lower arguments, inserting implicit casts when needed
                 var args = new List<Value>();
+
+                // For UFCS, prepend the receiver argument
+                if (ufcsReceiverArg != null)
+                {
+                    // Check if we need to cast the receiver
+                    if (paramTypes.Count > 0 && ufcsReceiverArg.Type != null && !ufcsReceiverArg.Type.Equals(paramTypes[0]))
+                    {
+                        var recvCastResult = new LocalValue($"cast_{_tempCounter++}", paramTypes[0]);
+                        var recvCastInst = new CastInstruction(ufcsReceiverArg, paramTypes[0], recvCastResult);
+                        _currentBlock.Instructions.Add(recvCastInst);
+                        args.Add(recvCastResult);
+                    }
+                    else
+                    {
+                        args.Add(ufcsReceiverArg);
+                    }
+                }
+
+                // Lower explicit arguments
+                var argOffset = ufcsReceiverArg != null ? 1 : 0;
                 for (var i = 0; i < call.Arguments.Count; i++)
                 {
                     var argVal = LowerExpression(call.Arguments[i]);
                     var argType = call.Arguments[i].Type;
+                    var paramIdx = i + argOffset;
 
                     // Insert cast if argument type doesn't match parameter type but can coerce
-                    if (i < paramTypes.Count && argType != null && !argType.Equals(paramTypes[i]))
+                    if (paramIdx < paramTypes.Count && argType != null && !argType.Equals(paramTypes[paramIdx]))
                     {
-                        var argCastResult = new LocalValue($"cast_{_tempCounter++}", paramTypes[i]);
+                        var argCastResult = new LocalValue($"cast_{_tempCounter++}", paramTypes[paramIdx]);
                         // CastInstruction now infers cast kind from source and target types
-                        var argCastInst = new CastInstruction(argVal, paramTypes[i], argCastResult);
+                        var argCastInst = new CastInstruction(argVal, paramTypes[paramIdx], argCastResult);
                         _currentBlock.Instructions.Add(argCastInst);
                         args.Add(argCastResult);
                     }
@@ -1045,13 +1105,26 @@ public class AstLowering
                     return new ConstantValue(0);
                 }
 
-                _diagnostics.Add(Diagnostic.Error(
-                    "can only take address of variables",
-                    addressOf.Span,
-                    "use `&variable_name`",
-                    "E3012"
-                ));
-                return new ConstantValue(0); // Fallback
+                // For any other expression (e.g., call results, struct construction),
+                // introduce a temporary variable to hold the value, then take its address.
+                // This enables UFCS chaining like: x.foo().bar() where bar takes &T
+                {
+                    var innerValue = LowerExpression(addressOf.Target);
+                    var innerType = addressOf.Target.Type ?? innerValue.Type;
+
+                    // Create a temporary alloca for the value
+                    var tempName = $"addr_temp_{_tempCounter++}";
+                    var tempPtr = new LocalValue(tempName, new ReferenceType(innerType!));
+                    var allocaInst = new AllocaInstruction(innerType!, innerType!.Size, tempPtr);
+                    _currentBlock.Instructions.Add(allocaInst);
+
+                    // Store the value into the temporary
+                    var storeInst = new StorePointerInstruction(tempPtr, innerValue);
+                    _currentBlock.Instructions.Add(storeInst);
+
+                    // Return the pointer to the temporary
+                    return tempPtr;
+                }
 
             case DereferenceExpressionNode deref:
                 // Dereference: ptr.*
