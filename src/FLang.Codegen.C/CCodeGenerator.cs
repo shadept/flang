@@ -1098,24 +1098,40 @@ public class CCodeGenerator
         if (string.IsNullOrEmpty(structType.StructName))
         {
             var fieldTypes = string.Join("_", structType.Fields.Select(f =>
-                SanitizeTypeName(f.Type.Name)));
+                SanitizeTypeForCName(f.Type)));
             return $"__anon_{fieldTypes}";
         }
 
         // For generic structs, mangle type arguments into name
         if (structType.TypeArguments.Count > 0)
         {
-            var typeArgs = string.Join("_", structType.TypeArguments.Select(t =>
-                t.Name.Replace("*", "Ptr").Replace(" ", "_").Replace("[", "").Replace("]", "").Replace("<", "_").Replace(">", "_").Replace(".", "_")));
+            var typeArgs = string.Join("_", structType.TypeArguments.Select(SanitizeTypeForCName));
             return $"{structType.StructName.Replace('.', '_')}_{typeArgs}";
         }
 
         return structType.StructName.Replace('.', '_');
     }
 
-    private static string SanitizeTypeName(string typeName)
+    /// <summary>
+    /// Converts a type to a safe C identifier string for use in mangled names.
+    /// Uses the type structure directly rather than string manipulation on Type.Name.
+    /// </summary>
+    private static string SanitizeTypeForCName(TypeBase type)
     {
-        return typeName.Replace("*", "Ptr").Replace(" ", "_").Replace("[", "").Replace("]", "").Replace("<", "_").Replace(">", "_").Replace(".", "_");
+        return type switch
+        {
+            PrimitiveType pt => pt.Name,
+            ReferenceType rt => $"ref_{SanitizeTypeForCName(rt.InnerType)}",
+            StructType st when TypeRegistry.IsSlice(st) && st.TypeArguments.Count > 0 =>
+                $"slice_{SanitizeTypeForCName(st.TypeArguments[0])}",
+            StructType st when TypeRegistry.IsOption(st) && st.TypeArguments.Count > 0 =>
+                $"opt_{SanitizeTypeForCName(st.TypeArguments[0])}",
+            StructType st => st.StructName.Replace('.', '_'),
+            ArrayType at => $"arr{at.Length}_{SanitizeTypeForCName(at.ElementType)}",
+            EnumType et => et.Name.Replace('.', '_'),
+            FunctionType ft => $"fn_{string.Join("_", ft.ParameterTypes.Select(SanitizeTypeForCName))}_ret_{SanitizeTypeForCName(ft.ReturnType)}",
+            _ => type.Name.Replace(".", "_").Replace(" ", "_")
+        };
     }
 
     private string GetEnumCName(EnumType enumType)
@@ -1123,8 +1139,7 @@ public class CCodeGenerator
         // For generic enums, mangle type arguments into name
         if (enumType.TypeArguments.Count > 0)
         {
-            var typeArgs = string.Join("_", enumType.TypeArguments.Select(t =>
-                t.Name.Replace("*", "Ptr").Replace(" ", "_").Replace("[", "").Replace("]", "").Replace("<", "_").Replace(">", "_").Replace(".", "_")));
+            var typeArgs = string.Join("_", enumType.TypeArguments.Select(SanitizeTypeForCName));
             return $"{enumType.Name.Replace('.', '_')}_{typeArgs}";
         }
 

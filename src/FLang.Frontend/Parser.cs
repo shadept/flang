@@ -1117,10 +1117,14 @@ public class Parser
     /// Parses a type expression with support for references, generics, and nullable types.
     /// Grammar:
     /// type := prefix_type postfix*
-    /// prefix_type := '&' prefix_type | primary_type
+    /// prefix_type := '&' prefix_type | primary_type postfix*
     /// primary_type := identifier generic_args?
     /// generic_args := '[' type (',' type)* ']'
-    /// postfix := '?'
+    /// postfix := '?' | '[]'
+    ///
+    /// Precedence (high to low): & > [] > ?
+    /// This means: &u8? parses as (&u8)?, &u8[] parses as &(u8[])
+    ///
     /// Examples:
     /// i32, &i32, i32?, &i32?, List[i32], &List[i32]?, Dict[String, i32]
     /// </summary>
@@ -1128,12 +1132,34 @@ public class Parser
     {
         var startSpan = _currentToken.Span;
 
-        // Parse prefix operators (reference: &)
+        // Parse prefix operators (reference: &) - binds tightest
+        TypeNode type = ParsePrefixType();
+
+        // Parse postfix ? (nullable) - binds loosest
+        // This is separate from slice [] which binds tighter
+        while (_currentToken.Kind == TokenKind.Question)
+        {
+            var questionToken = Eat(TokenKind.Question);
+            var span = SourceSpan.Combine(startSpan, questionToken.Span);
+            type = new NullableTypeNode(span, type);
+        }
+
+        return type;
+    }
+
+    /// <summary>
+    /// Parses prefix types (reference) and slice postfix.
+    /// Precedence: & > []
+    /// </summary>
+    private TypeNode ParsePrefixType()
+    {
+        var startSpan = _currentToken.Span;
+
         TypeNode type;
         if (_currentToken.Kind == TokenKind.Ampersand)
         {
             var ampToken = Eat(TokenKind.Ampersand);
-            var innerType = ParseType(); // Recursively parse for nested references
+            var innerType = ParsePrefixType(); // Recursively parse for nested references
             var span = SourceSpan.Combine(ampToken.Span, innerType.Span);
             type = new ReferenceTypeNode(span, innerType);
         }
@@ -1143,26 +1169,15 @@ public class Parser
             type = ParsePrimaryType();
         }
 
-        // Parse postfix operators (nullable: ?, slice: [])
-        while (true)
-            if (_currentToken.Kind == TokenKind.Question)
-            {
-                var questionToken = Eat(TokenKind.Question);
-                var span = SourceSpan.Combine(startSpan, questionToken.Span);
-                type = new NullableTypeNode(span, type);
-            }
-            else if (_currentToken.Kind == TokenKind.OpenBracket && PeekNextToken().Kind == TokenKind.CloseBracket)
-            {
-                // T[] - slice type (only if next token is immediately ']')
-                var openBracket = Eat(TokenKind.OpenBracket);
-                var closeBracket = Eat(TokenKind.CloseBracket);
-                var span = SourceSpan.Combine(startSpan, closeBracket.Span);
-                type = new SliceTypeNode(span, type);
-            }
-            else
-            {
-                break;
-            }
+        // Parse slice postfix [] - binds tighter than ?
+        while (_currentToken.Kind == TokenKind.OpenBracket && PeekNextToken().Kind == TokenKind.CloseBracket)
+        {
+            // T[] - slice type (only if next token is immediately ']')
+            var openBracket = Eat(TokenKind.OpenBracket);
+            var closeBracket = Eat(TokenKind.CloseBracket);
+            var span = SourceSpan.Combine(startSpan, closeBracket.Span);
+            type = new SliceTypeNode(span, type);
+        }
 
         return type;
     }
