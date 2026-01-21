@@ -1995,6 +1995,10 @@ public class TypeChecker
                 var ufcsResult = TryResolveUfcsCall(call, expectedType);
                 if (ufcsResult != null)
                     return ufcsResult;
+
+                // UFCS resolution failed - provide detailed error message
+                ReportUfcsError(call);
+                return TypeRegistry.Never;
             }
 
             // Check if function name is a variable with function type (indirect call)
@@ -2283,6 +2287,78 @@ public class TypeChecker
                     bestBindings = bindings;
                 }
             }
+        }
+    }
+
+    /// <summary>
+    /// Reports a detailed error message when UFCS call resolution fails.
+    /// Provides specific diagnostics based on the reason for failure.
+    /// </summary>
+    private void ReportUfcsError(CallExpressionNode call)
+    {
+        var methodName = call.MethodName!;
+        var receiver = call.UfcsReceiver!;
+        var receiverType = CheckExpression(receiver);
+        var prunedReceiverType = receiverType.Prune();
+        var receiverTypeName = FormatTypeNameForDisplay(prunedReceiverType);
+
+        // Check if receiver is a struct with a field matching the method name (but not callable)
+        StructType? structType = prunedReceiverType switch
+        {
+            StructType st => st,
+            ReferenceType { InnerType: StructType refSt } => refSt,
+            _ => null
+        };
+
+        if (structType != null)
+        {
+            var fieldType = structType.GetFieldType(methodName);
+            if (fieldType != null)
+            {
+                // Field exists but is not a function type (not callable)
+                var fieldTypeName = FormatTypeNameForDisplay(fieldType.Prune());
+                ReportError(
+                    $"`{methodName}` is a field of `{receiverTypeName}`, not a method",
+                    call.Span,
+                    $"has type `{fieldTypeName}` which is not callable",
+                    "E2011");
+                return;
+            }
+        }
+
+        // Check if the method name exists as a function at all
+        if (_functions.TryGetValue(methodName, out var candidates))
+        {
+            // Function(s) with this name exist, but none match the receiver type
+            // Build a list of the first parameter types that the function accepts
+            var acceptedTypes = new List<string>();
+            foreach (var cand in candidates)
+            {
+                if (cand.ParameterTypes.Count > 0)
+                {
+                    var firstParamType = cand.ParameterTypes[0].Prune();
+                    var firstParamTypeName = FormatTypeNameForDisplay(firstParamType);
+                    if (!acceptedTypes.Contains(firstParamTypeName))
+                        acceptedTypes.Add(firstParamTypeName);
+                }
+            }
+
+            // Report error on the receiver, similar to E2011's argument type mismatch
+            var expectedTypes = string.Join(" or ", acceptedTypes.Select(t => $"`{t}`"));
+            ReportError(
+                $"mismatched types",
+                receiver.Span,
+                $"expected {expectedTypes}, found `{receiverTypeName}`",
+                "E2011");
+        }
+        else
+        {
+            // No function with this name exists
+            ReportError(
+                $"function `{methodName}` does not exist",
+                call.Span,
+                "not found in this scope",
+                "E2004");
         }
     }
 

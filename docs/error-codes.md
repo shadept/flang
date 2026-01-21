@@ -379,6 +379,7 @@ A variable, function, or value name was used but no value with that name exists 
 - The variable hasn't been declared
 - The function hasn't been defined or imported
 - The name is out of scope
+- A UFCS method call uses a function name that doesn't exist
 
 #### Examples
 
@@ -395,6 +396,19 @@ pub fn main() i32 {
 ```flang
 pub fn main() i32 {
     return getNumber()  // ERROR: cannot find function `getNumber` in this scope
+}
+```
+
+**UFCS Method Not Found:**
+
+```flang
+struct Fba {
+    data: i32
+}
+
+pub fn main() i32 {
+    const fba: Fba = .{ data = 42 }
+    return fba.nonexistent()  // ERROR: function `nonexistent` does not exist
 }
 ```
 
@@ -418,6 +432,23 @@ pub fn getNumber() i32 {
 
 pub fn main() i32 {
     return getNumber()  // OK: getNumber is defined
+}
+```
+
+**For UFCS methods**, define a function with the receiver type as the first parameter:
+
+```flang
+struct Fba {
+    data: i32
+}
+
+fn getData(self: &Fba) i32 {
+    return self.data
+}
+
+pub fn main() i32 {
+    const fba: Fba = .{ data = 42 }
+    return fba.getData()  // OK: getData(&Fba) is defined
 }
 ```
 
@@ -653,11 +684,15 @@ pub fn main() i32 {
 #### Description
 
 A function call could not be resolved because no function with the given name accepts the provided argument types. This
-can happen for two reasons:
+can happen for several reasons:
 
 - **Argument count mismatch**: The function exists but expects a different number of arguments
 - **Argument type mismatch**: The function exists with the right number of parameters, but one or more argument types
   don't match the expected parameter types
+- **UFCS receiver type mismatch**: A method call syntax `obj.method()` was used, but no function `method` exists that
+  accepts `obj`'s type (or a reference to it) as its first parameter
+- **Field is not callable**: A method call syntax `obj.method()` was used, but `method` is a field of the struct, not
+  a function type
 
 When a function exists with the correct argument count but type mismatch, the error highlights the specific mismatched
 argument with the expected and actual types.
@@ -694,6 +729,38 @@ pub fn main() i32 {
 }
 ```
 
+**UFCS receiver type mismatch:**
+
+```flang
+struct Fba {
+    data: i32
+}
+
+fn allocator(x: &i32) i32 {
+    return x.*
+}
+
+pub fn main() i32 {
+    const fba: Fba = .{ data = 42 }
+    return fba.allocator()  // ERROR: mismatched types
+        // ^^^ expected `&i32`, found `Fba`
+}
+```
+
+**Field is not callable:**
+
+```flang
+struct Fba {
+    allocator: i32
+}
+
+pub fn main() i32 {
+    const fba: Fba = .{ allocator = 42 }
+    return fba.allocator()  // ERROR: `allocator` is a field of `Fba`, not a method
+                            // ^^^^^^^^^^^^^^^ has type `i32` which is not callable
+}
+```
+
 #### Solution
 
 For argument count mismatch, provide the correct number of arguments:
@@ -722,6 +789,36 @@ fn apply(f: fn(i64) i64, x: i64) i64 {
 pub fn main() i32 {
     let result = apply(takes_i64, 10)  // OK: function type matches
     return 0
+}
+```
+
+For UFCS receiver mismatch, define a function with the correct receiver type:
+
+```flang
+struct Fba {
+    data: i32
+}
+
+fn allocator(self: &Fba) i32 {
+    return self.data
+}
+
+pub fn main() i32 {
+    const fba: Fba = .{ data = 42 }
+    return fba.allocator()  // OK: allocator(&Fba) is defined
+}
+```
+
+For non-callable fields, access the field directly or use a function type:
+
+```flang
+struct Fba {
+    allocator: i32
+}
+
+pub fn main() i32 {
+    const fba: Fba = .{ allocator = 42 }
+    return fba.allocator  // OK: accessing field value directly
 }
 ```
 
