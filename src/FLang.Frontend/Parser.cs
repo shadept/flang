@@ -43,11 +43,12 @@ public class Parser
         var enums = new List<EnumDeclarationNode>();
         var functions = new List<FunctionDeclarationNode>();
         var tests = new List<TestDeclarationNode>();
+        var globalConstants = new List<VariableDeclarationNode>();
 
         // Parse imports
         while (_currentToken.Kind == TokenKind.Import) imports.Add(ParseImport());
 
-        // Parse structs, functions, and tests
+        // Parse structs, functions, tests, and global constants
         while (_currentToken.Kind != TokenKind.EndOfFile)
         {
             try
@@ -108,13 +109,18 @@ public class Parser
                     // Test block
                     tests.Add(ParseTest());
                 }
+                else if (_currentToken.Kind == TokenKind.Const)
+                {
+                    // Top-level const declaration
+                    globalConstants.Add(ParseVariableDeclaration());
+                }
                 else
                 {
                     // Unexpected token: report and attempt to recover by skipping it
                     _diagnostics.Add(Diagnostic.Error(
                         $"unexpected token '{_currentToken.Text}'",
                         _currentToken.Span,
-                        "expected `struct`, `enum`, `pub fn`, `fn`, `test`, or `#foreign fn`",
+                        "expected `struct`, `enum`, `pub fn`, `fn`, `test`, `const`, or `#foreign fn`",
                         "E1001"));
                     _currentToken = _lexer.NextToken();
                 }
@@ -128,7 +134,7 @@ public class Parser
 
         var endSpan = _currentToken.Span;
         var span = SourceSpan.Combine(startSpan, endSpan);
-        return new ModuleNode(span, imports, structs, enums, functions, tests);
+        return new ModuleNode(span, imports, structs, enums, functions, tests, globalConstants);
     }
 
     /// <summary>

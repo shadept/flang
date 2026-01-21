@@ -22,6 +22,33 @@ All operations have defined semantics and the language avoids undefined behavior
 - Variables are block-scoped.
 - Mutability of struct fields is permitted only within the file that defines the struct (file-scope mutability).
 
+**Top-Level Constants:**
+
+Constants can be declared at module (file) level outside of functions:
+
+```flang
+const BUFFER_SIZE: i32 = 1024
+const DEFAULT_NAME = "unnamed"
+
+struct AllocatorVTable {
+    alloc: fn(&usize) &u8?
+    free: fn(&u8?) void
+}
+
+const default_allocator = AllocatorVTable {
+    alloc = system_alloc,
+    free = system_free
+}
+
+pub fn main() i32 {
+    return BUFFER_SIZE
+}
+```
+
+- Top-level constants must have an initializer.
+- Initializers must be compile-time constant expressions (literals, struct constructions with constant fields, function references).
+- Top-level constants are visible to all functions in the module.
+
 ### 2.2 References and Auto-Dereference
 
 - `&T` is a non-null reference to `T`.

@@ -681,7 +681,8 @@ public class TypeChecker
         _currentModulePath = modulePath;
         _literalTypeVars.Clear();  // Clear TypeVars from previous module
 
-        // Temporarily add private functions
+        // Temporarily add private functions (must happen before global const checking
+        // so that function references can be resolved in global constant initializers)
         var added = new List<(string, FunctionEntry)>();
         foreach (var function in module.Functions)
         {
@@ -722,6 +723,12 @@ public class TypeChecker
             {
                 PopGenericScope();
             }
+        }
+
+        // Check top-level const declarations (after functions registered so function refs work)
+        foreach (var globalConst in module.GlobalConstants)
+        {
+            CheckGlobalConstant(globalConst);
         }
 
         // Check non-generic bodies
@@ -923,6 +930,69 @@ public class TypeChecker
                 // No immediate check for IsComptimeType - validation happens in VerifyAllTypesResolved
                 v.ResolvedType = varType;
                 DeclareVariable(v.Name, varType, v.Span, v.IsConst);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Type-checks a top-level global constant declaration.
+    /// Global constants are registered in Compilation.GlobalConstants for cross-module access.
+    /// </summary>
+    private void CheckGlobalConstant(VariableDeclarationNode v)
+    {
+        // Global constants must have an initializer
+        if (v.Initializer == null)
+        {
+            ReportError(
+                "global const declaration must have an initializer",
+                v.Span,
+                "global const variables must be initialized at declaration",
+                "E2039");
+            v.ResolvedType = TypeRegistry.Never;
+            _compilation.GlobalConstants[v.Name] = TypeRegistry.Never;
+            return;
+        }
+
+        // Check for duplicate global constant names
+        if (_compilation.GlobalConstants.ContainsKey(v.Name))
+        {
+            ReportError(
+                $"global constant `{v.Name}` is already declared",
+                v.Span,
+                "duplicate global constant declaration",
+                "E2005");
+            v.ResolvedType = TypeRegistry.Never;
+            return;
+        }
+
+        var dt = ResolveTypeNode(v.Type);
+        var it = CheckExpression(v.Initializer, dt);
+
+        if (it != null && dt != null)
+        {
+            var originalInitType = it.Prune();
+            var unified = UnifyTypes(it, dt, v.Initializer.Span);
+            v.Initializer = WrapWithCoercionIfNeeded(v.Initializer, originalInitType, dt.Prune());
+            v.ResolvedType = dt;
+            _compilation.GlobalConstants[v.Name] = dt;
+        }
+        else
+        {
+            var varType = dt ?? it;
+            if (varType == null)
+            {
+                ReportError(
+                    "cannot infer type",
+                    v.Span,
+                    "type annotations needed: global const declaration requires either a type annotation or an initializer",
+                    "E2001");
+                v.ResolvedType = TypeRegistry.Never;
+                _compilation.GlobalConstants[v.Name] = TypeRegistry.Never;
+            }
+            else
+            {
+                v.ResolvedType = varType;
+                _compilation.GlobalConstants[v.Name] = varType;
             }
         }
     }
@@ -3201,6 +3271,7 @@ public class TypeChecker
 
     private bool TryLookupVariable(string name, out TypeBase type)
     {
+        // First check local scopes
         foreach (var scope in _scopes)
         {
             if (scope.TryGetValue(name, out var info))
@@ -3210,16 +3281,30 @@ public class TypeChecker
             }
         }
 
+        // Then check global constants
+        if (_compilation.GlobalConstants.TryGetValue(name, out type!))
+        {
+            return true;
+        }
+
         type = TypeRegistry.Void;
         return false;
     }
 
     private bool TryLookupVariableInfo(string name, out VariableInfo info)
     {
+        // First check local scopes
         foreach (var scope in _scopes)
         {
             if (scope.TryGetValue(name, out info))
                 return true;
+        }
+
+        // Then check global constants (they're always const)
+        if (_compilation.GlobalConstants.TryGetValue(name, out var type))
+        {
+            info = new VariableInfo(type, IsConst: true);
+            return true;
         }
 
         info = default;

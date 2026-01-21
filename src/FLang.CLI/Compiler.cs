@@ -150,6 +150,13 @@ public class Compiler
         var allFunctions = new List<Function>();
         var loweringDiagnostics = new List<Diagnostic>();
 
+        // First pass: lower global constants from all modules
+        foreach (var module in parsedModules.Values)
+        {
+            var globalConstDiagnostics = AstLowering.LowerGlobalConstants(module, compilation, loweringLogger);
+            loweringDiagnostics.AddRange(globalConstDiagnostics);
+        }
+
         // Collect all test declarations if running tests
         var allTests = new List<(TestDeclarationNode Test, Function Function)>();
 

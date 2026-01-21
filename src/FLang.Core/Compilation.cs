@@ -34,6 +34,12 @@ public class Compilation
     // All instantiated types (for global type table generation)
     public HashSet<TypeBase> InstantiatedTypes { get; } = [];
 
+    // Global constants registry (name -> type, populated during type checking)
+    public Dictionary<string, TypeBase> GlobalConstants { get; } = [];
+
+    // Lowered global constants (name -> GlobalValue, populated during AST lowering)
+    public Dictionary<string, object> LoweredGlobalConstants { get; } = [];
+
     /// <summary>
     /// Gets or sets the path to the standard library directory.
     /// </summary>

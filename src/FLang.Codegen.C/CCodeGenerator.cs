@@ -183,6 +183,16 @@ public class CCodeGenerator
             return;
         }
 
+        // Handle general struct constants (e.g., vtables with function pointers)
+        if (global.Initializer is StructConstantValue generalStructConst &&
+            generalStructConst.Type is StructType generalSt)
+        {
+            var structTypeName = TypeToCType(generalSt);
+            var initStr = EmitStructConstantInline(generalStructConst);
+            _output.AppendLine($"static const {structTypeName} {global.Name} = {initStr};");
+            return;
+        }
+
         if (global.Initializer is ArrayConstantValue arrayConst3 &&
             arrayConst3.Elements != null && arrayConst3.Type is ArrayType arrType)
         {
@@ -234,6 +244,7 @@ public class CCodeGenerator
             var value = kvp.Value switch
             {
                 ConstantValue cv => cv.IntValue.ToString(),
+                FunctionReferenceValue funcRef => GetMangledFunctionName(funcRef),
                 GlobalValue gv when gv.Initializer is ArrayConstantValue arrayConst && arrayConst.StringRepresentation != null
                     => $"(const uint8_t*)\"{EscapeStringForC(arrayConst.StringRepresentation)}\"",
                 GlobalValue gv => gv.Name,

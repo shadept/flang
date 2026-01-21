@@ -576,6 +576,9 @@ _Goal: Fill in remaining language features._
   - [x] Parse `const NAME: Type = expr` and `const NAME = expr`
   - [x] Immutable binding semantics (E2038: cannot reassign to const)
   - [x] Require initializer (E2039: const must have initializer)
+  - [x] Top-level (module-scope) const declarations
+  - [x] Struct literal initializers for global constants
+  - [x] Function reference initializers for global constants
 - [x] UFCS desugaring
   - [x] `obj.method(args)` → `method(obj, args)`
   - [x] Or `method(&obj, args)` if reference lifting required
@@ -587,6 +590,11 @@ _Goal: Fill in remaining language features._
 - `const/const_basic.f` - Basic const declaration
 - `const/const_inferred_type.f` - Const with type inference
 - `const/const_with_expression.f` - Const with computed value
+- `const/global_const_scalar.f` - Top-level scalar const
+- `const/global_const_inferred.f` - Top-level const with type inference
+- `const/global_const_multiple.f` - Multiple top-level consts
+- `const/global_const_in_function.f` - Global const used in function
+- `const/global_const_vtable.f` - Global struct const with function pointers (vtable pattern)
 - `errors/error_e2038_const_reassign.f` - E2038 validation
 - `errors/error_e2039_const_no_init.f` - E2039 validation
 - `ufcs/ufcs_basic_value.f` - UFCS with value parameter

@@ -60,6 +60,144 @@ public class AstLowering
         return (function, lowering.Diagnostics);
     }
 
+    /// <summary>
+    /// Lower global constants from a module and store them in Compilation.LoweredGlobalConstants.
+    /// Must be called before lowering functions that reference these constants.
+    /// </summary>
+    public static IReadOnlyList<Diagnostic> LowerGlobalConstants(
+        ModuleNode module,
+        Compilation compilation,
+        ILogger<AstLowering> logger)
+    {
+        var lowering = new AstLowering(compilation, logger);
+        lowering.LowerModuleGlobalConstants(module);
+        return lowering.Diagnostics;
+    }
+
+    private void LowerModuleGlobalConstants(ModuleNode module)
+    {
+        foreach (var globalConst in module.GlobalConstants)
+        {
+            var constType = globalConst.ResolvedType ??
+                throw new InvalidOperationException($"Global constant '{globalConst.Name}' has no resolved type");
+
+            if (globalConst.Initializer == null)
+            {
+                _diagnostics.Add(Diagnostic.Error(
+                    $"global constant `{globalConst.Name}` has no initializer",
+                    globalConst.Span,
+                    "global constants must be initialized",
+                    "E3007"
+                ));
+                continue;
+            }
+
+            // Lower the initializer expression to get its value
+            // For global constants, we need to evaluate compile-time constant expressions
+            var initValue = LowerGlobalConstantInitializer(globalConst.Initializer, constType, globalConst.Name);
+            if (initValue != null)
+            {
+                _compilation.LoweredGlobalConstants[globalConst.Name] = initValue;
+            }
+        }
+    }
+
+    private Value? LowerGlobalConstantInitializer(ExpressionNode initializer, FType constType, string constName)
+    {
+        // Unwrap implicit coercion nodes - we use the target type for the final value
+        if (initializer is ImplicitCoercionNode coercion)
+        {
+            return LowerGlobalConstantInitializer(coercion.Inner, constType, constName);
+        }
+
+        // Handle named struct construction (e.g., AllocatorVTable { alloc = fn, ... })
+        if (initializer is StructConstructionExpressionNode structConstruction && constType is StructType st)
+        {
+            var fieldValues = new Dictionary<string, Value>();
+            foreach (var field in structConstruction.Fields)
+            {
+                var fieldType = st.Fields.FirstOrDefault(f => f.Name == field.FieldName).Type;
+                if (fieldType == null) continue;
+
+                var fieldValue = LowerGlobalConstantInitializer(field.Value, fieldType, $"{constName}.{field.FieldName}");
+                if (fieldValue != null)
+                {
+                    fieldValues[field.FieldName] = fieldValue;
+                }
+            }
+
+            var structConst = new StructConstantValue(st, fieldValues);
+            var global = new GlobalValue($"__global_{constName}", structConst);
+            return global;
+        }
+
+        // Handle anonymous struct construction (e.g., .{ field = value, ... })
+        if (initializer is AnonymousStructExpressionNode anonStruct && constType is StructType anonSt)
+        {
+            var fieldValues = new Dictionary<string, Value>();
+            foreach (var field in anonStruct.Fields)
+            {
+                var fieldType = anonSt.Fields.FirstOrDefault(f => f.Name == field.FieldName).Type;
+                if (fieldType == null) continue;
+
+                var fieldValue = LowerGlobalConstantInitializer(field.Value, fieldType, $"{constName}.{field.FieldName}");
+                if (fieldValue != null)
+                {
+                    fieldValues[field.FieldName] = fieldValue;
+                }
+            }
+
+            var structConst = new StructConstantValue(anonSt, fieldValues);
+            var global = new GlobalValue($"__global_{constName}", structConst);
+            return global;
+        }
+
+        // Handle integer literals
+        if (initializer is IntegerLiteralNode intLit)
+        {
+            return new ConstantValue(intLit.Value) { Type = constType };
+        }
+
+        // Handle boolean literals
+        if (initializer is BooleanLiteralNode boolLit)
+        {
+            return new ConstantValue(boolLit.Value ? 1 : 0) { Type = TypeRegistry.Bool };
+        }
+
+        // Handle identifier references (e.g., referencing other global constants or functions)
+        if (initializer is IdentifierExpressionNode ident)
+        {
+            // Check if it's a function reference
+            if (ident.Type is FunctionType && ident.ResolvedFunctionTarget != null)
+            {
+                return new FunctionReferenceValue(ident.ResolvedFunctionTarget.Name, ident.Type);
+            }
+
+            // Check if it's another global constant
+            if (_compilation.LoweredGlobalConstants.TryGetValue(ident.Name, out var existingGlobal))
+            {
+                return existingGlobal as Value;
+            }
+
+            _diagnostics.Add(Diagnostic.Error(
+                $"global constant initializer cannot reference local variable `{ident.Name}`",
+                initializer.Span,
+                "global constant initializers must be compile-time evaluable",
+                "E3008"
+            ));
+            return null;
+        }
+
+        // For now, report an error for unsupported initializer types
+        _diagnostics.Add(Diagnostic.Error(
+            $"unsupported global constant initializer for `{constName}`",
+            initializer.Span,
+            "global constant initializers must be compile-time constant expressions",
+            "E3008"
+        ));
+        return null;
+    }
+
     private Function LowerTestDeclaration(FLang.Frontend.Ast.Declarations.TestDeclarationNode testNode)
     {
         // Generate a unique function name for the test
@@ -599,6 +737,22 @@ public class AstLowering
 
                     // Shouldn't happen with new approach, but keep for safety
                     return localValue;
+                }
+
+                // Check if it's a global constant
+                if (_compilation.LoweredGlobalConstants.TryGetValue(identifier.Name, out var globalConstValue) && globalConstValue is Value gv)
+                {
+                    // For GlobalValue (struct constants), add to function's globals and return it
+                    if (gv is GlobalValue globalVal)
+                    {
+                        if (!_currentFunction.Globals.Contains(globalVal))
+                        {
+                            _currentFunction.Globals.Add(globalVal);
+                        }
+                        return globalVal;
+                    }
+                    // For ConstantValue (scalar constants), return directly
+                    return gv;
                 }
 
                 _diagnostics.Add(Diagnostic.Error(
