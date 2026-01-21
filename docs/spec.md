@@ -174,6 +174,7 @@ fn name(parameters) ReturnType
 - The type system selects the strictest applicable overload; if multiple remain, it is an error.
 - UFCS applies: `object.method(a, b)` desugars to `method(&object, a, b)`.
 - C backend name mangling: all non-foreign functions are emitted with a mangled name derived from the base name and the parameter types (e.g., `name__i32__u64`). This guarantees unique C symbols for overloads. The `main` entrypoint is not mangled. Generic specializations are emitted using the same scheme. Name mangling occurs only during code generation; earlier phases (TypeSolver, FIR) preserve base names and attach type metadata.
+- **Function types**: Functions are first-class values. The syntax `fn(T1, T2) R` denotes a function type taking parameters of types `T1` and `T2` and returning `R`. Optional parameter names are allowed for documentation: `fn(x: T1, y: T2) R` is equivalent to `fn(T1, T2) R`; the names are ignored semantically.
 
 ### 2.5 Expressions and Control Flow
 
@@ -780,3 +781,41 @@ pub fn main(args: String[], env: String[])
 
 - Exit code `0` indicates success.
 - UTF-8 source encoding.
+
+### Runtime Polymorphism Convention
+
+For vtable-based polymorphism, use the following pattern:
+
+1. Define the vtable as a struct with function pointer fields (first parameter is type-erased `&u8`):
+
+```flang
+pub struct WriterVTable {
+    write: fn(impl: &u8, data: u8[]) usize,
+    flush: fn(impl: &u8) bool
+}
+```
+
+2. Define the interface as a struct with a type-erased pointer and vtable reference:
+
+```flang
+pub struct Writer {
+    impl: &u8,
+    vtable: &WriterVTable
+}
+```
+
+3. Concrete types provide a conversion function named after the interface:
+
+```flang
+fn interface_name(instance: &ConcreteType) Interface
+```
+
+This enables UFCS-style calls that read naturally:
+
+```flang
+let alloc = state.allocator()    // FixedBufferAllocatorState -> Allocator
+let writer = file.writer()       // File -> Writer
+let reader = socket.reader()     // Socket -> Reader
+```
+
+The concrete state is owned by the caller; the interface is a borrowed view. The state must outlive the interface.

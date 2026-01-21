@@ -1175,7 +1175,7 @@ public class Parser
             return ParseTupleType();
         }
 
-        // Check for function type: fn(T1, T2) R
+        // Check for function type: fn(T1, T2) R or fn(x: T1, y: T2) R
         if (_currentToken.Kind == TokenKind.Fn)
         {
             var fnKeyword = Eat(TokenKind.Fn);
@@ -1184,6 +1184,14 @@ public class Parser
             var paramTypes = new List<TypeNode>();
             while (_currentToken.Kind != TokenKind.CloseParenthesis && _currentToken.Kind != TokenKind.EndOfFile)
             {
+                // Support optional parameter names: fn(x: i32, y: i32) i32
+                // The names are ignored but help document the type
+                if (_currentToken.Kind == TokenKind.Identifier && PeekNextToken().Kind == TokenKind.Colon)
+                {
+                    Eat(TokenKind.Identifier); // consume name
+                    Eat(TokenKind.Colon);      // consume colon
+                }
+
                 paramTypes.Add(ParseType());
 
                 if (_currentToken.Kind == TokenKind.Comma)
