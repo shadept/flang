@@ -862,6 +862,9 @@ public class TypeChecker
             "[TypeChecker] CheckReturnStatement: expectedReturnType={ExpectedType}, expressionType={ExprType}",
             expectedReturnType?.Name ?? "null", et.Name);
 
+        // Early exit if expression failed type checking to prevent cascading unification errors
+        if (IsNever(et)) return;
+
         if (expectedReturnType != null)
         {
             // Unify with expected return type - TypeVar.Prune() handles propagation
@@ -894,6 +897,15 @@ public class TypeChecker
 
         var dt = ResolveTypeNode(v.Type);
         var it = v.Initializer != null ? CheckExpression(v.Initializer, dt) : null;
+
+        // Early exit if initializer failed type checking to prevent cascading unification errors
+        if (it != null && IsNever(it))
+        {
+            v.ResolvedType = TypeRegistry.Never;
+            DeclareVariable(v.Name, TypeRegistry.Never, v.Span, v.IsConst);
+            return;
+        }
+
         if (it != null && dt != null)
         {
             // Capture the original initializer type BEFORE unification (for coercion detection)
@@ -1348,6 +1360,7 @@ public class TypeChecker
 
         // Evaluate target expression
         var obj = CheckExpression(ma.Target);
+        if (IsNever(obj)) return TypeRegistry.Never;
         var prunedObj = obj.Prune();
 
         // Check if target is an enum type (accessing variant): EnumType.Variant
@@ -1437,7 +1450,9 @@ public class TypeChecker
     private TypeBase CheckBinaryExpression(BinaryExpressionNode be)
     {
         var lt = CheckExpression(be.Left);
+        if (IsNever(lt)) return TypeRegistry.Never;
         var rt = CheckExpression(be.Right, lt);
+        if (IsNever(rt)) return TypeRegistry.Never;
 
         // Try to find an operator function for this operation
         var opFuncName = OperatorFunctions.GetFunctionName(be.Operator);
@@ -1486,11 +1501,13 @@ public class TypeChecker
     private TypeBase CheckCoalesceExpression(CoalesceExpressionNode coalesce)
     {
         var lt = CheckExpression(coalesce.Left);
+        if (IsNever(lt)) return TypeRegistry.Never;
 
         // For op_coalesce, we need to determine the expected type for the right side
         // based on the available overloads. If left is Option(T), the right could be T or Option(T).
         // We check the right side without an expected type and let overload resolution pick.
         var rt = CheckExpression(coalesce.Right);
+        if (IsNever(rt)) return TypeRegistry.Never;
 
         // Try to find op_coalesce function for this operation
         const string opFuncName = "op_coalesce";
@@ -1520,6 +1537,7 @@ public class TypeChecker
     private TypeBase CheckNullPropagationExpression(NullPropagationExpressionNode nullProp)
     {
         var targetType = CheckExpression(nullProp.Target);
+        if (IsNever(targetType)) return TypeRegistry.Never;
         var prunedTarget = targetType.Prune();
 
         // Target must be Option(T)
@@ -1742,9 +1760,11 @@ public class TypeChecker
             MemberAccessExpressionNode fa => CheckExpression(fa),
             _ => throw new Exception($"Invalid assignment target: {ae.Target.GetType().Name}")
         };
+        if (IsNever(targetType)) return TypeRegistry.Never;
 
         // Check the value expression against the target type
         var val = CheckExpression(ae.Value, targetType);
+        if (IsNever(val)) return TypeRegistry.Never;
 
         // Unify value with target type - TypeVar.Prune() handles propagation
         var unified = UnifyTypes(val, targetType, ae.Value.Span);
@@ -1771,6 +1791,7 @@ public class TypeChecker
         {
             // Type-check the receiver expression first
             ufcsReceiverType = CheckExpression(call.UfcsReceiver);
+            if (IsNever(ufcsReceiverType)) return TypeRegistry.Never;
             var prunedReceiverType = ufcsReceiverType.Prune();
 
             // Check if receiver is a struct with a function-typed field matching the method name.
@@ -1823,7 +1844,13 @@ public class TypeChecker
                 candidates.Count, functionName);
 
             // Build effective argument types: for UFCS, prepend receiver type
-            var explicitArgTypes = call.Arguments.Select(arg => CheckExpression(arg)).ToList();
+            var explicitArgTypes = new List<TypeBase>(call.Arguments.Count);
+            foreach (var arg in call.Arguments)
+            {
+                var argType = CheckExpression(arg);
+                if (IsNever(argType)) return TypeRegistry.Never;
+                explicitArgTypes.Add(argType);
+            }
             var argTypes = ufcsReceiverType != null
                 ? new List<TypeBase> { ufcsReceiverType }.Concat(explicitArgTypes).ToList()
                 : explicitArgTypes;
@@ -2215,6 +2242,11 @@ public class TypeChecker
             case IfExpressionNode ie:
             {
                 var ct = CheckExpression(ie.Condition);
+                if (IsNever(ct))
+                {
+                    type = TypeRegistry.Never;
+                    break;
+                }
                 var prunedCt = ct.Prune();
                 if (!prunedCt.Equals(TypeRegistry.Bool))
                     ReportError(
@@ -2257,7 +2289,17 @@ public class TypeChecker
             case RangeExpressionNode re:
             {
                 var st = CheckExpression(re.Start);
+                if (IsNever(st))
+                {
+                    type = TypeRegistry.Never;
+                    break;
+                }
                 var en = CheckExpression(re.End);
+                if (IsNever(en))
+                {
+                    type = TypeRegistry.Never;
+                    break;
+                }
                 var prunedSt = st.Prune();
                 var prunedEn = en.Prune();
 
@@ -2298,12 +2340,22 @@ public class TypeChecker
             case AddressOfExpressionNode adr:
             {
                 var tt = CheckExpression(adr.Target);
+                if (IsNever(tt))
+                {
+                    type = TypeRegistry.Never;
+                    break;
+                }
                 type = new ReferenceType(tt);
                 break;
             }
             case DereferenceExpressionNode dr:
             {
                 var pt = CheckExpression(dr.Target);
+                if (IsNever(pt))
+                {
+                    type = TypeRegistry.Never;
+                    break;
+                }
                 var prunedPt = pt.Prune();
                 if (prunedPt is ReferenceType rft) type = rft.InnerType;
                 else if (prunedPt is StructType opt && TypeRegistry.IsOption(opt) && opt.TypeArguments.Count > 0 &&
@@ -2521,7 +2573,17 @@ public class TypeChecker
             case IndexExpressionNode ix:
             {
                 var bt = CheckExpression(ix.Base);
+                if (IsNever(bt))
+                {
+                    type = TypeRegistry.Never;
+                    break;
+                }
                 var it = CheckExpression(ix.Index);
+                if (IsNever(it))
+                {
+                    type = TypeRegistry.Never;
+                    break;
+                }
                 var prunedIt = it.Prune();  // Prune to get the actual type
 
                 if (!TypeRegistry.IsIntegerType(prunedIt))
@@ -3208,6 +3270,13 @@ public class TypeChecker
             }
         }
     }
+
+    /// <summary>
+    /// Checks if a type is the Never type (indicating a previous error).
+    /// Used for early-exit to prevent cascading type errors.
+    /// </summary>
+    private static bool IsNever(TypeBase type) =>
+        ReferenceEquals(type.Prune(), TypeRegistry.Never);
 
     private static bool FitsInType(long value, PrimitiveType pt) => pt.Name switch
     {

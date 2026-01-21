@@ -499,7 +499,7 @@ public class Parser
         var isConst = _currentToken.Kind == TokenKind.Const;
         var keyword = isConst ? Eat(TokenKind.Const) : Eat(TokenKind.Let);
         var identifier = Eat(TokenKind.Identifier);
-
+        
         TypeNode? type = null;
         if (_currentToken.Kind == TokenKind.Colon)
         {
@@ -1525,16 +1525,28 @@ public class Parser
 
     /// <summary>
     /// Synchronizes the parser to an expression boundary after encountering an error.
-    /// Skips tokens until a delimiter (parenthesis, bracket, comma, etc.) is found.
+    /// Skips tokens until a delimiter or statement keyword is found.
     /// </summary>
     private void SynchronizeExpression()
     {
         // Skip tokens until we hit a delimiter that likely ends an expression
         while (_currentToken.Kind != TokenKind.EndOfFile &&
+               // Delimiters
                _currentToken.Kind != TokenKind.CloseParenthesis &&
                _currentToken.Kind != TokenKind.CloseBracket &&
                _currentToken.Kind != TokenKind.CloseBrace &&
-               _currentToken.Kind != TokenKind.Comma)
+               _currentToken.Kind != TokenKind.Comma &&
+               _currentToken.Kind != TokenKind.Semicolon &&
+               _currentToken.Kind != TokenKind.FatArrow &&
+               // Statement keywords (we've overshot the expression)
+               _currentToken.Kind != TokenKind.Let &&
+               _currentToken.Kind != TokenKind.Const &&
+               _currentToken.Kind != TokenKind.Return &&
+               _currentToken.Kind != TokenKind.For &&
+               _currentToken.Kind != TokenKind.Break &&
+               _currentToken.Kind != TokenKind.Continue &&
+               _currentToken.Kind != TokenKind.Defer &&
+               _currentToken.Kind != TokenKind.If)
         {
             _currentToken = _lexer.NextToken();
         }
