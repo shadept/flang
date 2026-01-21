@@ -1771,12 +1771,37 @@ public class TypeChecker
             FunctionEntry? bestNonGeneric = null;
             var bestNonGenericCost = int.MaxValue;
 
+            // Track candidates that matched arg count but failed type check (for better error messages)
+            FunctionEntry? closestTypeMismatch = null;
+            int closestMismatchIndex = -1;
+            TypeBase? closestExpectedType = null;
+            TypeBase? closestActualType = null;
+
             foreach (var cand in candidates)
             {
                 if (cand.IsGeneric) continue;
                 if (cand.ParameterTypes.Count != argTypes.Count) continue;
                 if (!TryComputeCoercionCost(argTypes, cand.ParameterTypes, out var cost))
+                {
+                    // Track which argument failed for error reporting
+                    if (closestTypeMismatch == null)
+                    {
+                        closestTypeMismatch = cand;
+                        for (var i = 0; i < argTypes.Count; i++)
+                        {
+                            var argPruned = argTypes[i].Prune();
+                            var paramPruned = cand.ParameterTypes[i].Prune();
+                            if (!argPruned.Equals(paramPruned) && !_unificationEngine.CanUnify(argTypes[i], cand.ParameterTypes[i]))
+                            {
+                                closestMismatchIndex = i;
+                                closestExpectedType = paramPruned;
+                                closestActualType = argPruned;
+                                break;
+                            }
+                        }
+                    }
                     continue;
+                }
 
                 if (cost < bestNonGenericCost)
                 {
@@ -1864,11 +1889,28 @@ public class TypeChecker
                 }
                 else
                 {
-                    ReportError(
-                        $"no applicable overload found for `{call.FunctionName}`",
-                        call.Span,
-                        "no matching function signature",
-                        "E2011");
+                    // Build argument type list for error message
+                    var argTypeNames = string.Join(", ", argTypes.Select(t => FormatTypeNameForDisplay(t.Prune())));
+
+                    // Check if we have a candidate with matching arg count but type mismatch
+                    if (closestTypeMismatch != null && closestMismatchIndex >= 0)
+                    {
+                        // Report error on the specific mismatched argument
+                        ReportError(
+                            $"mismatched types",
+                            call.Arguments[closestMismatchIndex].Span,
+                            $"expected `{FormatTypeNameForDisplay(closestExpectedType!)}`, found `{FormatTypeNameForDisplay(closestActualType!)}`",
+                            "E2011");
+                    }
+                    else
+                    {
+                        // No candidate with matching arg count - report on the call with arg types
+                        ReportError(
+                            $"no function `{call.FunctionName}` found for arguments `({argTypeNames})`",
+                            call.Span,
+                            "no matching function signature",
+                            "E2011");
+                    }
                 }
 
                 return TypeRegistry.Never;

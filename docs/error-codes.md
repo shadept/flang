@@ -645,17 +645,26 @@ pub fn main() i32 {
 
 ---
 
-### E2011: Function Argument Count Mismatch
+### E2011: No Matching Function Signature
 
 **Category**: Type Checking
 **Severity**: Error
 
 #### Description
 
-A function was called with the wrong number of arguments. The number of arguments provided must match the number of
-parameters declared in the function signature.
+A function call could not be resolved because no function with the given name accepts the provided argument types. This
+can happen for two reasons:
 
-#### Example
+- **Argument count mismatch**: The function exists but expects a different number of arguments
+- **Argument type mismatch**: The function exists with the right number of parameters, but one or more argument types
+  don't match the expected parameter types
+
+When a function exists with the correct argument count but type mismatch, the error highlights the specific mismatched
+argument with the expected and actual types.
+
+#### Examples
+
+**Argument count mismatch:**
 
 ```flang
 pub fn add(a: i32, b: i32) i32 {
@@ -663,13 +672,31 @@ pub fn add(a: i32, b: i32) i32 {
 }
 
 pub fn main() i32 {
-    return add(10)  // ERROR: function `add` expects 2 argument(s) but 1 were provided
+    return add(10)  // ERROR: no function `add` found for arguments `(comptime_int)`
+}
+```
+
+**Argument type mismatch:**
+
+```flang
+fn takes_i32(x: i32) i32 {
+    return x
+}
+
+fn apply(f: fn(i64) i64, x: i64) i64 {
+    return f(x)
+}
+
+pub fn main() i32 {
+    let result = apply(takes_i32, 10)  // ERROR: mismatched types
+                    // ^^^^^^^^^ expected `fn(i64) i64`, found `fn(i32) i32`
+    return 0
 }
 ```
 
 #### Solution
 
-Provide the correct number of arguments:
+For argument count mismatch, provide the correct number of arguments:
 
 ```flang
 pub fn add(a: i32, b: i32) i32 {
@@ -678,6 +705,23 @@ pub fn add(a: i32, b: i32) i32 {
 
 pub fn main() i32 {
     return add(10, 5)  // OK: correct number of arguments
+}
+```
+
+For type mismatch, ensure the argument types match the function signature:
+
+```flang
+fn takes_i64(x: i64) i64 {
+    return x
+}
+
+fn apply(f: fn(i64) i64, x: i64) i64 {
+    return f(x)
+}
+
+pub fn main() i32 {
+    let result = apply(takes_i64, 10)  // OK: function type matches
+    return 0
 }
 ```
 
@@ -1855,7 +1899,7 @@ Report the issue with sample code that reproduces the error.
 | **E2008** | Control Flow      | Range expression outside loop                |
 | **E2009** | Iterators         | For loop only supports ranges                |
 | **E2010** | Name Resolution   | Assignment to undeclared variable            |
-| **E2011** | Type Checking     | Function argument count mismatch             |
+| **E2011** | Type Checking     | No matching function signature               |
 | **E2012** | Type Checking     | Cannot dereference non-reference type        |
 | **E2013** | Type Checking     | Type not found                               |
 | **E2014** | Type Checking     | Field access error                           |
