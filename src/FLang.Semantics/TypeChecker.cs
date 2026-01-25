@@ -57,7 +57,6 @@ public class TypeChecker
     }
 
     private static string BuildSpecKey(string name, IReadOnlyList<TypeBase> paramTypes)
-
     {
         var sb = new System.Text.StringBuilder();
         sb.Append(name);
@@ -65,7 +64,8 @@ public class TypeChecker
         for (var i = 0; i < paramTypes.Count; i++)
         {
             if (i > 0) sb.Append(',');
-            sb.Append(paramTypes[i].Name);
+            // Use ToString() to include full type with type arguments (e.g., "Option(&u8)" vs "Option(Slice(u8))")
+            sb.Append(paramTypes[i].ToString());
         }
 
         return sb.ToString();
@@ -1926,12 +1926,9 @@ public class TypeChecker
                 }
             }
 
-            // UFCS: receiver.method(args) -> method(&receiver, args)
-            // If receiver is already a reference type, don't add another reference.
-            if (prunedReceiverType is not ReferenceType)
-            {
-                ufcsReceiverType = new ReferenceType(ufcsReceiverType);
-            }
+            // UFCS: receiver.method(args) -> method(receiver, a, b) or method(&receiver, a, b)
+            // The actual transformation depends on what the resolved function expects.
+            // We keep the original receiver type here; overload resolution will try both forms.
         }
 
         // For UFCS calls, use MethodName (the actual function name) rather than FunctionName
@@ -1968,17 +1965,25 @@ public class TypeChecker
             {
                 if (cand.IsGeneric) continue;
                 if (cand.ParameterTypes.Count != argTypes.Count) continue;
-                if (!TryComputeCoercionCost(argTypes, cand.ParameterTypes, out var cost))
+
+                // For UFCS calls, adapt receiver type to match what the function expects
+                var effectiveArgTypes = argTypes;
+                if (ufcsReceiverType != null && argTypes.Count > 0 && cand.ParameterTypes.Count > 0)
+                {
+                    effectiveArgTypes = TryAdaptUfcsReceiverType(argTypes, cand.ParameterTypes[0]);
+                }
+
+                if (!TryComputeCoercionCost(effectiveArgTypes, cand.ParameterTypes, out var cost))
                 {
                     // Track which argument failed for error reporting
                     if (closestTypeMismatch == null)
                     {
                         closestTypeMismatch = cand;
-                        for (var i = 0; i < argTypes.Count; i++)
+                        for (var i = 0; i < effectiveArgTypes.Count; i++)
                         {
-                            var argPruned = argTypes[i].Prune();
+                            var argPruned = effectiveArgTypes[i].Prune();
                             var paramPruned = cand.ParameterTypes[i].Prune();
-                            if (!argPruned.Equals(paramPruned) && !_unificationEngine.CanUnify(argTypes[i], cand.ParameterTypes[i]))
+                            if (!argPruned.Equals(paramPruned) && !_unificationEngine.CanUnify(effectiveArgTypes[i], cand.ParameterTypes[i]))
                             {
                                 closestMismatchIndex = i;
                                 closestExpectedType = paramPruned;
@@ -2012,13 +2017,20 @@ public class TypeChecker
                 if (!cand.IsGeneric) continue;
                 if (cand.ParameterTypes.Count != argTypes.Count) continue;
 
+                // For UFCS calls, adapt receiver type to match what the function expects
+                var effectiveArgTypes = argTypes;
+                if (ufcsReceiverType != null && argTypes.Count > 0 && cand.ParameterTypes.Count > 0)
+                {
+                    effectiveArgTypes = TryAdaptUfcsReceiverType(argTypes, cand.ParameterTypes[0]);
+                }
+
                 _logger.LogDebug("{Indent}Attempting generic binding for '{Name}'", Indent(), cand.Name);
                 var bindings = new Dictionary<string, TypeBase>();
                 var okGen = true;
                 var failedBindingIndex = -1;
-                for (var i = 0; i < argTypes.Count; i++)
+                for (var i = 0; i < effectiveArgTypes.Count; i++)
                 {
-                    var argType = argTypes[i] ?? throw new NullReferenceException();
+                    var argType = effectiveArgTypes[i] ?? throw new NullReferenceException();
                     using var __ = new BindingDepthScope(this);
                     _logger.LogDebug("{Indent}Binding param[{Index}] '{ParamName}' with arg '{ArgType}'", Indent(), i,
                         cand.ParameterTypes[i].Name, argType.Name);
@@ -2045,7 +2057,7 @@ public class TypeChecker
                         closestTypeMismatch = cand;
                         closestMismatchIndex = failedBindingIndex;
                         closestExpectedType = cand.ParameterTypes[failedBindingIndex].Prune();
-                        closestActualType = argTypes[failedBindingIndex].Prune();
+                        closestActualType = effectiveArgTypes[failedBindingIndex].Prune();
                     }
                     continue;
                 }
@@ -2054,11 +2066,21 @@ public class TypeChecker
                 for (var i = 0; i < cand.ParameterTypes.Count; i++)
                     concreteParams.Add(SubstituteGenerics(cand.ParameterTypes[i], bindings));
 
-                if (!TryComputeCoercionCost(argTypes, concreteParams, out var genCost))
+                // Re-adapt for coercion cost check using concrete params (not generic params)
+                var costCheckArgTypes = ufcsReceiverType != null && effectiveArgTypes.Count > 0 && concreteParams.Count > 0
+                    ? TryAdaptUfcsReceiverType(argTypes, concreteParams[0])
+                    : effectiveArgTypes;
+
+                if (!TryComputeCoercionCost(costCheckArgTypes, concreteParams, out var genCost))
+                {
+                    _logger.LogDebug("{Indent}  Coercion cost failed: costCheckArgTypes[0]={Arg}, concreteParams[0]={Param}",
+                        Indent(), costCheckArgTypes[0].Prune().Name, concreteParams[0].Prune().Name);
                     continue;
+                }
 
                 if (genCost < bestGenericCost)
                 {
+                    _logger.LogDebug("{Indent}  Setting bestGeneric to '{Name}' with cost {Cost}", Indent(), cand.Name, genCost);
                     bestGeneric = cand;
                     bestBindings = bindings;
                     bestGenericCost = genCost;
@@ -2154,10 +2176,11 @@ public class TypeChecker
                 // For UFCS, receiver is at argTypes[0]/paramTypes[0], explicit args start at index 1
                 var argOffset = ufcsReceiverType != null ? 1 : 0;
 
-                // Unify receiver type if UFCS
+                // Unify receiver type if UFCS (using adapted type for proper value/ref matching)
                 if (ufcsReceiverType != null)
                 {
-                    UnifyTypes(argTypes[0], chosen.ParameterTypes[0], call.UfcsReceiver!.Span);
+                    var adaptedArgTypes = TryAdaptUfcsReceiverType(argTypes, chosen.ParameterTypes[0]);
+                    UnifyTypes(adaptedArgTypes[0], chosen.ParameterTypes[0], call.UfcsReceiver!.Span);
                 }
 
                 // Unify and wrap explicit arguments
@@ -2189,10 +2212,11 @@ public class TypeChecker
                 // For UFCS, receiver is at index 0, explicit args start at index 1
                 var argOffset = ufcsReceiverType != null ? 1 : 0;
 
-                // Unify receiver type if UFCS
+                // Unify receiver type if UFCS (using adapted type for proper value/ref matching)
                 if (ufcsReceiverType != null)
                 {
-                    UnifyTypes(argTypes[0], concreteParams[0], call.UfcsReceiver!.Span);
+                    var adaptedArgTypes = TryAdaptUfcsReceiverType(argTypes, concreteParams[0]);
+                    UnifyTypes(adaptedArgTypes[0], concreteParams[0], call.UfcsReceiver!.Span);
                 }
 
                 // Unify and wrap explicit arguments
@@ -2205,6 +2229,8 @@ public class TypeChecker
 
                 var specializedNode = EnsureSpecialization(chosen, bindings, concreteParams);
                 call.ResolvedTarget = specializedNode;
+                _logger.LogDebug("{Indent}  Set ResolvedTarget for '{FuncName}' to '{Target}'",
+                    Indent(), call.FunctionName, specializedNode?.Name ?? "null");
                 return type;
             }
         }
@@ -3619,6 +3645,48 @@ public class TypeChecker
         };
     }
 
+    /// <summary>
+    /// Adapts the UFCS receiver type (argTypes[0]) to match the expected parameter type.
+    /// UFCS semantics:
+    /// - value receiver, value expected: pass as-is
+    /// - value receiver, &T expected: lift to reference
+    /// - &T receiver, value expected: allow (implicit dereference)
+    /// - &T receiver, &T expected: pass as-is
+    /// </summary>
+    private List<TypeBase> TryAdaptUfcsReceiverType(List<TypeBase> argTypes, TypeBase firstParamType)
+    {
+        if (argTypes.Count == 0) return argTypes;
+
+        var receiverType = argTypes[0].Prune();
+        var paramType = firstParamType.Prune();
+
+        var receiverIsRef = receiverType is ReferenceType;
+        var paramExpectsRef = paramType is ReferenceType;
+
+        // No adaptation needed if types already match structurally
+        if (receiverIsRef == paramExpectsRef) return argTypes;
+
+        // value receiver, &T expected: lift to reference
+        if (!receiverIsRef && paramExpectsRef)
+        {
+            var adapted = new List<TypeBase>(argTypes);
+            adapted[0] = new ReferenceType(receiverType);
+            return adapted;
+        }
+
+        // &T receiver, value expected: allow pass-through (implicit dereference happens at codegen)
+        // The underlying type should match, so we expose the inner type for matching
+        if (receiverIsRef && !paramExpectsRef)
+        {
+            var refType = (ReferenceType)receiverType;
+            var adapted = new List<TypeBase>(argTypes);
+            adapted[0] = refType.InnerType;
+            return adapted;
+        }
+
+        return argTypes;
+    }
+
     private bool TryComputeCoercionCost(IReadOnlyList<TypeBase> sources, IReadOnlyList<TypeBase> targets, out int cost)
     {
         cost = 0;
@@ -4082,10 +4150,15 @@ public class TypeChecker
         if (_emittedSpecs.Contains(key))
         {
             // Already specialized - find and return the existing specialized node
-            return _specializations.FirstOrDefault(s =>
+            var found = _specializations.FirstOrDefault(s =>
                 s.Name == genericEntry.Name &&
                 s.Parameters.Count == concreteParamTypes.Count &&
                 s.Parameters.Select((p, i) => ResolveTypeNode(p.Type) ?? TypeRegistry.Never).SequenceEqual(concreteParamTypes));
+            if (found == null)
+            {
+                _logger.LogDebug("EnsureSpecialization: key '{Key}' exists but no matching node found in _specializations", key);
+            }
+            return found;
         }
 
         // Save current bindings - nested specializations might overwrite them

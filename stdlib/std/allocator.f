@@ -23,24 +23,24 @@ pub struct Allocator {
 
 // Allocate `size` bytes with given `alignment`.
 // Returns pointer to allocated memory or null on failure.
-pub fn alloc(allocator: &Allocator, size: usize, alignment: usize) u8[]? {
+pub fn alloc(allocator: Allocator, size: usize, alignment: usize) u8[]? {
     return allocator.vtable.alloc(allocator.impl, size, alignment)
 }
 
 // Resize an existing allocation.
 // Returns new pointer or null on failure.
 // Some allocators may not support resize and return null.
-pub fn resize(allocator: &Allocator, memory: u8[], new_size: usize) u8[]? {
+pub fn resize(allocator: Allocator, memory: u8[], new_size: usize) u8[]? {
     return allocator.vtable.resize(allocator.impl, memory, new_size)
 }
 
 // Free memory previously allocated by this allocator.
 // Some allocators (like FixedBufferAllocator) may do nothing.
-pub fn free(allocator: &Allocator, memory: u8[]) {
+pub fn free(allocator: Allocator, memory: u8[]) {
     allocator.vtable.free(allocator.impl, memory)
 }
 
-pub fn new(allocator: &Allocator, type: Type($T)) &T {
+pub fn new(allocator: Allocator, type: Type($T)) &T {
     const buffer = allocator.alloc(type.size, type.align)
     if (buffer.is_none()) {
         panic("Unable to allocate")
@@ -48,7 +48,7 @@ pub fn new(allocator: &Allocator, type: Type($T)) &T {
     return buffer.value.ptr as &T
 }
 
-pub fn delete(allocator: &Allocator, value: &$T) {
+pub fn delete(allocator: Allocator, value: &$T) {
     // HACK: fake slice. assuming implementation doesnt care about length
     allocator.free(slice_from_raw_parts(value as &u8, 0))
 }

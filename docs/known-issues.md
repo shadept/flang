@@ -138,6 +138,36 @@ Currently no runtime bounds checking on `arr[i]` - out-of-bounds access causes u
 
 ## Minor Issues
 
+### Import Statements Must Be At Top of File
+
+**Status:** Open (parser limitation)
+**Affected:** Module organization, co-located tests
+
+**Problem:**
+The parser only accepts `import` statements at the beginning of a file, before any declarations. This prevents organizing code with imports closer to where they're used, and complicates co-located test patterns where tests at the bottom of a file might need additional imports (like `std.test`).
+
+**Example that fails:**
+```flang
+pub fn foo() i32 { return 42 }
+
+// Tests section
+import std.test  // ERROR: unexpected token 'import'
+
+test "foo works" {
+    assert_eq(foo(), 42, "should be 42")
+}
+```
+
+**Workaround:**
+Place all imports at the top of the file, even if they're only used by tests at the bottom.
+
+**Solution:**
+Modify the parser to allow `import` statements anywhere at the top level, or to allow a second import section before test blocks.
+
+**Milestone:** Low priority - workaround is simple
+
+---
+
 ### Error Code Inconsistencies
 
 **Status:** Partially fixed

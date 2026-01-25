@@ -705,16 +705,28 @@ fn sum(p: &Point) i32 {
 
 ---
 
-### Milestone 16.6: Enum Option Migration
+### Milestone 16.6: Result Type & Test Enhancements
 
-**Scope:** Replace struct Option(T) with enum Option(T) for better semantics.
+**Scope:** Implement `Result(T, E)` enum and add test-related features for enum validation.
 
 **Key Tasks:**
 
-- [ ] Update `stdlib/core/option.f` to use enum definition
-- [ ] Update pattern matching to support `Some(x)` / `None` variants
-- [ ] Update compiler tests and stdlib code
-- [ ] Implement `Result(T, E)` enum to demonstrate enum system
+- [x] Implement `Result(T, E)` enum in `stdlib/core/result.f`
+  - [x] `Ok(T)` and `Err(E)` variants
+  - [x] Helper functions: `is_ok`, `is_err`, `unwrap`, `unwrap_or`, `unwrap_err`
+- [x] Add Result-specific test assertions
+  - [x] `assert_ok(result: Result($T, $E), msg: String)` - panic if Err
+  - [x] `assert_err(result: Result($T, $E), msg: String)` - panic if Ok
+- [x] Test Result enum with `test` blocks to validate enum system
+  - [x] Basic Ok/Err construction and matching
+  - [x] Generic type parameter inference
+  - [x] Error propagation patterns
+
+**Deferred to Milestone 18+:**
+
+- [ ] Convert `struct Option(T)` to `enum Option(T) { Some(T), None }`
+  - Requires updating all Option-related compiler code
+  - Struct version works well for current use cases
 
 ---
 

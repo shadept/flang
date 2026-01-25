@@ -158,9 +158,13 @@ public class TypeSolver
         // 4. Coercion Extension
         // Must come before structural recursion to allow cross-type coercions
         // (e.g., Array→Slice, &[T;N]→&T, String→Slice<u8>)
+        // Try both directions: a→b and b→a (for cases like return bool where i32 expected)
         foreach (var rule in _coercionRules)
         {
             var coerced = rule.TryApply(a, b, this);
+            if (coerced != null)
+                return coerced;
+            coerced = rule.TryApply(b, a, this);
             if (coerced != null)
                 return coerced;
         }

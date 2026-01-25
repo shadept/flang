@@ -962,41 +962,73 @@ public class AstLowering
                     return indirectCallResult;
                 }
 
-                // UFCS call: receiver.method(args) -> method(&receiver, args)
-                // Handle the implicit receiver argument
+                // UFCS call: receiver.method(args) -> method(receiver, args) or method(&receiver, args)
+                // Handle the implicit receiver argument based on what the function expects
                 Value? ufcsReceiverArg = null;
                 if (call.UfcsReceiver != null && call.MethodName != null && !call.IsIndirectCall)
                 {
                     var receiverVal = LowerExpression(call.UfcsReceiver);
                     var receiverType = call.UfcsReceiver.Type?.Prune();
 
-                    // If receiver is already a reference, use it directly; otherwise take its address
-                    if (receiverType is ReferenceType)
+                    // Check what the first parameter of the resolved function expects
+                    var firstParamExpectsRef = false;
+                    if (call.ResolvedTarget?.Parameters.Count > 0)
                     {
-                        ufcsReceiverArg = receiverVal;
+                        var firstParamType = call.ResolvedTarget.Parameters[0].ResolvedType?.Prune();
+                        firstParamExpectsRef = firstParamType is ReferenceType;
                     }
-                    else
+
+                    var receiverIsRef = receiverType is ReferenceType;
+
+                    if (firstParamExpectsRef)
                     {
-                        // Need to take address of the receiver
-                        // If it's an lvalue (stored in memory), we can get its address directly
-                        // If it's an rvalue (e.g., call result), we need to spill to a temp first
-                        if (receiverVal is LocalValue lv && _locals.ContainsValue(lv))
+                        // Function expects a reference
+                        if (receiverIsRef)
                         {
-                            // It's already a pointer to storage, use it directly
-                            ufcsReceiverArg = lv;
+                            // Already a reference, use directly
+                            ufcsReceiverArg = receiverVal;
                         }
                         else
                         {
-                            // Rvalue - create temporary storage, store value, use address
-                            var tempName = $"ufcs_temp_{_tempCounter++}";
-                            var tempPtr = new LocalValue(tempName, new ReferenceType(receiverType!));
-                            var allocaInst = new AllocaInstruction(receiverType!, receiverType!.Size, tempPtr);
-                            _currentBlock.Instructions.Add(allocaInst);
+                            // Need to take address of the receiver
+                            // If it's an lvalue (stored in memory), we can get its address directly
+                            // If it's an rvalue (e.g., call result), we need to spill to a temp first
+                            if (receiverVal is LocalValue lv && _locals.ContainsValue(lv))
+                            {
+                                // It's already a pointer to storage, use it directly
+                                ufcsReceiverArg = lv;
+                            }
+                            else
+                            {
+                                // Rvalue - create temporary storage, store value, use address
+                                var tempName = $"ufcs_temp_{_tempCounter++}";
+                                var tempPtr = new LocalValue(tempName, new ReferenceType(receiverType!));
+                                var allocaInst = new AllocaInstruction(receiverType!, receiverType!.Size, tempPtr);
+                                _currentBlock.Instructions.Add(allocaInst);
 
-                            var storeInst = new StorePointerInstruction(tempPtr, receiverVal);
-                            _currentBlock.Instructions.Add(storeInst);
+                                var storeInst = new StorePointerInstruction(tempPtr, receiverVal);
+                                _currentBlock.Instructions.Add(storeInst);
 
-                            ufcsReceiverArg = tempPtr;
+                                ufcsReceiverArg = tempPtr;
+                            }
+                        }
+                    }
+                    else
+                    {
+                        // Function expects a value
+                        if (receiverIsRef)
+                        {
+                            // Receiver is a reference but function expects value - dereference it
+                            var innerType = ((ReferenceType)receiverType!).InnerType;
+                            var ufcsDerefResult = new LocalValue($"ufcs_deref_{_tempCounter++}", innerType);
+                            var ufcsDerefInst = new LoadInstruction(receiverVal, ufcsDerefResult);
+                            _currentBlock.Instructions.Add(ufcsDerefInst);
+                            ufcsReceiverArg = ufcsDerefResult;
+                        }
+                        else
+                        {
+                            // Value receiver, value expected - pass as-is
+                            ufcsReceiverArg = receiverVal;
                         }
                     }
                 }

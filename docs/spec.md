@@ -104,11 +104,11 @@ Tuples are syntactic sugar for anonymous structs with positional fields (`_0`, `
 
 **Tuple Syntax Desugaring:**
 
-| Operation | User Writes | Desugared Form |
-| --- | --- | --- |
-| Type | `(A, B)` | `{ _0: A, _1: B }` |
-| Value | `(10, 20)` | `.{ _0 = 10, _1 = 20 }` |
-| Access | `t.0` | `t._0` |
+| Operation | User Writes | Desugared Form          |
+| --------- | ----------- | ----------------------- |
+| Type      | `(A, B)`    | `{ _0: A, _1: B }`      |
+| Value     | `(10, 20)`  | `.{ _0 = 10, _1 = 20 }` |
+| Access    | `t.0`       | `t._0`                  |
 
 **Examples:**
 
@@ -153,12 +153,14 @@ enum Name {
 ```
 
 **Declaration:**
+
 - `enum Name { Variant, ... }` declares an enum with unit (no payload) and payload variants.
 - Generic enums: `enum Result(T, E) { Ok(T), Err(E) }`
 - Variants may have zero or more payload types.
 - Tag values are assigned sequentially (0, 1, 2, ...) but are implementation details.
 
 **Memory Layout:**
+
 - Layout is opaque and determined by the compiler's `EnumType` class.
 - Initial implementation uses a discriminant tag (4-byte i32) followed by a union of variant payloads.
 - Future optimizations may use niche optimization (see below).
@@ -199,7 +201,7 @@ fn name(parameters) ReturnType
 - `$T` declares and binds a generic parameter at any position (parameter or return).
 - Overloading is supported by name and compatible parameter types.
 - The type system selects the strictest applicable overload; if multiple remain, it is an error.
-- UFCS applies: `object.method(a, b)` desugars to `method(&object, a, b)`.
+- UFCS applies: `object.method(a, b)` desugars to `method(object, a, b)` or `method(&object, a, b)` depending on the first parameter type of the resolved function. If the function expects a reference (`&T`), the receiver is lifted to a reference; if it expects a value (`T`), the receiver is passed as-is. If the receiver is already a reference and the function expects a value, the reference is accepted (implicit dereference).
 - C backend name mangling: all non-foreign functions are emitted with a mangled name derived from the base name and the parameter types (e.g., `name__i32__u64`). This guarantees unique C symbols for overloads. The `main` entrypoint is not mangled. Generic specializations are emitted using the same scheme. Name mangling occurs only during code generation; earlier phases (TypeSolver, FIR) preserve base names and attach type metadata.
 - **Function types**: Functions are first-class values. The syntax `fn(T1, T2) R` denotes a function type taking parameters of types `T1` and `T2` and returning `R`. Optional parameter names are allowed for documentation: `fn(x: T1, y: T2) R` is equivalent to `fn(T1, T2) R`; the names are ignored semantically.
 
@@ -271,7 +273,6 @@ loop {
 
 This approach provides a flexible and extensible mechanism for iteration, allowing custom types to implement the `iter` and `next` functions to become iterable in FLang. `break` and `continue` statements within the `<body>` are lowered to jumps to the appropriate loop exit or continuation points, respectively.
 
-
 #### Defer
 
 ```
@@ -293,11 +294,13 @@ expr match {
 ```
 
 **Syntax:**
+
 - `scrutinee match { arms }` where scrutinee is the value being matched
 - Each arm: `pattern => expression,`
 - Optional `else` clause as catch-all: `else => expression`
 
 **Semantics:**
+
 - Match is an expression - evaluates to a value (type unified across all arms)
 - Scrutinee must have enum type or reference to enum (`EnumType` or `&EnumType`)
   - References may be automatically dereferenced during lowering, or inspected directly (for now, up to implementation)
@@ -308,11 +311,13 @@ expr match {
 **Patterns:**
 
 1. **Wildcard pattern (`_`)**: Matches anything, discards the value
+
    ```
    Write(_) => "message"   // Matches Write variant, ignores payload
    ```
 
 2. **Variable binding pattern**: Binds the matched value to a variable
+
    ```
    Some(x) => x + 1        // Binds payload to x
    Move(x, y) => x + y     // Binds both payload fields
@@ -331,6 +336,7 @@ expr match {
 **Exhaustiveness Checking:**
 
 The compiler enforces exhaustive pattern matching:
+
 - All enum variants must be covered, OR
 - An `else` clause must be present
 
@@ -354,6 +360,7 @@ let x = cmd match {
 ```
 
 **Error Codes:**
+
 - E2030: Match on non-enum type
 - E2031: Non-exhaustive pattern match (missing variants)
 - E2032: Pattern arity mismatch (wrong number of payload fields)
@@ -366,7 +373,7 @@ Match expressions are desugared to if-else chains checking the discriminant tag:
 cmd match {
     Quit => expr1,
     Move(x, y) => expr2
-} 
+}
 
 // Lowered to:
 if (cmd.tag == 0) {           // Quit
@@ -382,7 +389,6 @@ if (cmd.tag == 0) {           // Quit
 
 - A block may contain expression statements. Any expression is allowed as a statement; its value is ignored.
 - The final expression before '}' is a trailing expression and yields the block value.
-
 
 ### 2.6 Arrays, Slices, Lists, Strings
 
@@ -408,11 +414,30 @@ if (cmd.tag == 0) {           // Quit
 - Cyclic imports are compile-time errors.
 - Module names map to file paths.
 
+### 2.8 Casting
+
+- Syntax: `expr as Type`
+- Semantics:
+  - Numeric casts: any integer ↔ integer. Narrowing truncates; widening sign-extends where applicable.
+  - Pointer/integer: `&T` ↔ `usize|isize`.
+  - Pointer/pointer: `&T` ↔ `&U` allowed as a view cast. Binary compatibility is currently the programmer’s responsibility.
+  - Blessed binary compatibility: `String` ↔ `u8[]` is a zero‑copy view.
+- Implicit casts:
+  - When a `u8[]` is expected, a `String` value is implicitly accepted (safe re‑interpretation; zero‑copy).
+- Explicit casts:
+  - Converting from `u8[]` to `String` requires an explicit `as String`. The compiler does not infer this conversion.
+
+- Allocation and deallocation are provided by the standard library and may wrap C runtime facilities.
+- The compiler guarantees deterministic type layouts per target/configuration and binary compatibility as stated.
+- Struct layout is optimized; introspection provides actual offsets.
+- Address-of: `&var` takes the address of a non-temporary variable.
+- Explicit dereference: `ptr.*` dereferences a pointer, producing a copy of the value.
+- Auto-dereference: `ptr.field` on `&Struct` automatically dereferences to access the field (see Section 2.2).
+
 #### Directives
 
 - `#foreign`: declares a foreign function imported from the target’s C/ABI environment. Bodies are not provided; the backend does not mangle these names and relies on target headers for prototypes.
 - `#intrinsic` (planned): declares a standard-library intrinsic symbol that the compiler may lower specially or map to target builtins. Intrinsics must live in `stdlib/core` and be declared with `#intrinsic` to be used. Like `#foreign`, intrinsic calls are never mangled; the backend provides target-specific support as needed.
-
 
 ---
 
@@ -611,30 +636,116 @@ pub fn op_coalesce(opt: Option(T), fallback: T) T
 
 - The language specifies no intrinsic allocator and no heap management guarantees.
 
-### 2.8 Casting
+---
 
-- Syntax: `expr as Type`
-- Semantics:
-  - Numeric casts: any integer ↔ integer. Narrowing truncates; widening sign-extends where applicable.
-  - Pointer/integer: `&T` ↔ `usize|isize`.
-  - Pointer/pointer: `&T` ↔ `&U` allowed as a view cast. Binary compatibility is currently the programmer’s responsibility.
-  - Blessed binary compatibility: `String` ↔ `u8[]` is a zero‑copy view.
-- Implicit casts:
-  - When a `u8[]` is expected, a `String` value is implicitly accepted (safe re‑interpretation; zero‑copy).
-- Explicit casts:
-  - Converting from `u8[]` to `String` requires an explicit `as String`. The compiler does not infer this conversion.
+## 6. Value Semantics
 
+### 6.1 Storage
 
-- Allocation and deallocation are provided by the standard library and may wrap C runtime facilities.
-- The compiler guarantees deterministic type layouts per target/configuration and binary compatibility as stated.
-- Struct layout is optimized; introspection provides actual offsets.
-- Address-of: `&var` takes the address of a non-temporary variable.
-- Explicit dereference: `ptr.*` dereferences a pointer, producing a copy of the value.
-- Auto-dereference: `ptr.field` on `&Struct` automatically dereferences to access the field (see Section 2.2).
+Every named binding has a memory location. Values are sequences of bytes. No hidden reference counting or GC.
+
+### 6.2 Assignment
+
+```
+let x = expr
+```
+
+Shallow byte-copy of `expr` into `x`'s storage. Both exist independently. Pointers inside are copied as-is (aliasing possible).
+
+### 6.3 Function Arguments
+
+```
+fn foo(a: T, b: U) R
+```
+
+**Caller side:** Passes address of `a` and `b` (implicit reference).
+
+**Callee side:**
+
+- Read access: operates on original bytes via pointer (no copy)
+- Write access: compiler inserts copy-on-first-write into local shadow, all subsequent accesses use the shadow
+
+Caller's value is **never mutated** by callee.
+
+### 6.4 Return
+
+For return type `T` where `sizeof(T) > PLATFORM_REGISTER_SIZE`:
+
+1. **Caller** allocates storage for the return value
+2. **Caller** passes hidden pointer to this storage as implicit first argument
+3. **Callee** writes directly into that pointer
+4. **Callee** returns nothing (or just the pointer for chaining)
+
+#### Transparent Syntax
+
+```flang
+// What you write
+fn make_point(x: i32, y: i32) Point {
+    return .{ x = x, y = y }
+}
+
+let p = make_point(3, 4)
+```
+
+```flang
+// What compiler generates (conceptual)
+fn make_point(__ret: &Point, x: i32, y: i32) {
+    __ret.* = .{ x = x, y = y }
+}
+
+let p: Point = <uninitialized>
+make_point(&p, 3, 4)
+```
+
+#### Rules
+
+| Return type                           | Mechanism                     |
+| ------------------------------------- | ----------------------------- |
+| Primitives, small structs (≤ N bytes) | Returned in registers, copied |
+| Larger structs                        | Caller-provided slot          |
+
+### 6.5 Scope & Lifetime
+
+Variables valid from declaration until enclosing block ends. No invalidation via "move" or "consume." Accessing a variable always succeeds if in scope (C-like semantics).
+
+### 6.6 Scoped Mutability
+
+For `struct Point { x: i32, y: i32 }` defined in file A:
+
+- **File A:** Fields readable and writable
+- **File B (imports A):** Fields readable, writes are compile errors
+
+Functions in A can mutate via `self` (implicit reference that permits write-back):
+
+```flang
+fn translate(self: &Point, dx: i32, dy: i32) {
+    self.x = self.x + dx  // mutates caller's actual storage
+}
+```
+
+### 6.7 Summary Table
+
+| Operation        | Semantics                                                      |
+| ---------------- | -------------------------------------------------------------- |
+| `let x = y`      | shallow copy (memcpy)                                          |
+| `foo(x)`         | pass by implicit reference, copy-on-write inside               |
+| `return x`       | shallow copy to caller                                         |
+| `x.field` (read) | always allowed                                                 |
+| `x.field = v`    | allowed only in defining scope                                 |
+| `foo(&x)`        | explicit mutable reference, callee can mutate caller's storage |
+
+### 6.8 Safety Model
+
+The compiler enforces scoped mutability for invariant protection, nothing else. The following are the programmer's responsibility:
+
+- Double-free
+- Use-after-free
+- Aliased mutation
+- Data races
 
 ---
 
-## 6. Iterator Protocol
+## 7. Iterator Protocol
 
 A type is iterable if functions exist (or are derivable) matching:
 
@@ -649,14 +760,14 @@ The language uses standard library definitions for ranges, strings, and lists.
 
 ---
 
-## 7. Compilation Model
+## 8. Compilation Model
 
 - Multi-phase inference and semantic validation.
 - AST is data-only; logic resides in analysis passes.
 - FIR uses SSA form with versioned local variables. `if` and `for` lower to blocks and branches. Each assignment creates a new SSA version of the variable.
 - The reference compiler emits portable C as a bootstrap target.
 
-### 7.1 IR Instructions
+### 8.1 IR Instructions
 
 The FLang intermediate representation (FIR) uses a linear SSA instruction set. Instructions are organized into basic blocks, with control flow managed by terminator instructions. Each value assignment creates a new SSA version.
 
@@ -707,7 +818,7 @@ These instructions must be the last instruction in a basic block:
 
 ---
 
-## 8. Defined Behaviors
+## 9. Defined Behaviors
 
 - Out-of-bounds access: defined panic.
 - Integer overflow: panic in debug; wraparound in release.
@@ -717,7 +828,7 @@ These instructions must be the last instruction in a basic block:
 
 ---
 
-## 9. Testing
+## 10. Testing
 
 ### Test Blocks
 
@@ -758,6 +869,7 @@ flang --test myfile.f
 ```
 
 When `--test` is passed:
+
 1. All `test` blocks are collected from compiled modules
 2. A test runner replaces `main()` and executes each test
 3. Exit code 0 indicates all tests passed
@@ -781,7 +893,7 @@ pub fn main() i32 {
 
 ---
 
-## 10. Standard Library Overview
+## 11. Standard Library Overview
 
 ```
 core/              runtime bindings and platform integration
@@ -795,7 +907,7 @@ std/io/            input/output and filesystem
 
 ---
 
-## 11. Conventions
+## 12. Conventions
 
 - Source files use the `.f` extension.
 - Entry points (optional):

@@ -8,7 +8,8 @@
       "Bash(pwsh -File build-all-tests.ps1:*)",
       "Bash(cat:*)",
       "Bash(./build.sh)",
-      "Bash(dist/win-x64/flang.exe:*)"
+      "Bash(dist/win-x64/flang.exe:*)",
+      "mcp__acp__Write"
     ],
     "deny": [],
     "ask": []

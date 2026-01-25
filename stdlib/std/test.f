@@ -1,8 +1,6 @@
 // Testing utilities for FLang
 // Part of Milestone 16: Test Framework
 
-import core.panic
-
 // Assert that a condition is true, panic with message if false
 pub fn assert_true(condition: bool, msg: String) {
     if (condition == false) {
@@ -18,3 +16,5 @@ pub fn assert_eq(a: $T, b: T, msg: String) {
         panic(msg)
     }
 }
+
+// NOTE: assert_ok and assert_err are in std/result.f to avoid circular imports
