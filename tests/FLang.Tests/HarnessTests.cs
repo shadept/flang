@@ -132,7 +132,7 @@ public class HarnessTests
     private static TestMetadata ParseTestMetadata(string testFile)
     {
         var lines = File.ReadAllLines(testFile);
-        string testName = null;
+        string testName = "";
         int? exitCode = null;
         var stdout = new List<string>();
         var stderr = new List<string>();
@@ -143,35 +143,37 @@ public class HarnessTests
             if (!line.TrimStart().StartsWith("//!"))
                 continue;
 
-            var content = line.Substring(line.IndexOf("//!") + 3).Trim();
+            var content = line[(line.IndexOf("//!") + 3)..].Trim();
 
             if (content.StartsWith("TEST:"))
-                testName = content.Substring(5).Trim();
+                testName = content[5..].Trim();
             else if (content.StartsWith("EXIT:"))
-                exitCode = int.Parse(content.Substring(5).Trim());
+                exitCode = int.Parse(content[5..].Trim());
             else if (content.StartsWith("STDOUT:"))
-                stdout.Add(content.Substring(7).Trim());
+                stdout.Add(content[7..].Trim());
             else if (content.StartsWith("STDERR:"))
-                stderr.Add(content.Substring(7).Trim());
+                stderr.Add(content[7..].Trim());
             else if (content.StartsWith("COMPILE-ERROR:"))
-                compileErrors.Add(content.Substring(14).Trim());
+                compileErrors.Add(content[14..].Trim());
         }
 
         return new TestMetadata(testName, exitCode, stdout, stderr, compileErrors);
     }
 
-    public static IEnumerable<object[]> GetTestFiles()
+    public static TheoryData<string> GetTestFiles()
     {
         if (!Directory.Exists(_harnessDir))
             throw new DirectoryNotFoundException($"Harness directory not found at: {_harnessDir}");
 
         // Recursively find all .f files in Harness and subdirectories
         // Return paths relative to Harness directory for cleaner IDE presentation
+        var data = new TheoryData<string>();
         foreach (var file in Directory.GetFiles(_harnessDir, "*.f", SearchOption.AllDirectories))
         {
             var relativePath = Path.GetRelativePath(_harnessDir, file);
-            yield return [relativePath];
+            data.Add(relativePath);
         }
+        return data;
     }
 
     private static string GetGeneratedExecutablePath(string testDirectory, string testFileName)

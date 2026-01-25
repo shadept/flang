@@ -12,9 +12,9 @@ public interface ICoercionRule
     /// </summary>
     /// <param name="from">The source type to coerce from.</param>
     /// <param name="to">The target type to coerce to.</param>
-    /// <param name="solver">The type solver for unified error reporting.</param>
-    /// <returns>True if coercion is possible, false otherwise.</returns>
-    bool TryApply(TypeBase from, TypeBase to, TypeSolver solver);
+    /// <param name="solver">The type solver for recursive unification and error reporting.</param>
+    /// <returns>The coerced type if successful, null if this rule doesn't apply.</returns>
+    TypeBase? TryApply(TypeBase from, TypeBase to, TypeSolver solver);
 }
 
 /// <summary>
@@ -155,27 +155,14 @@ public class TypeSolver
         if (a is ComptimeInt && b is PrimitiveType p1 && TypeRegistry.IsIntegerType(p1)) return p1;
         if (b is ComptimeInt && a is PrimitiveType p2 && TypeRegistry.IsIntegerType(p2)) return p2;
 
-        // 4. Array-to-Slice structural unification (enables comptime_int element hardening)
-        if (a is ArrayType arrToSlice && b is StructType sliceTarget && TypeRegistry.IsSlice(sliceTarget))
-        {
-            var unifiedElem = UnifyInternal(arrToSlice.ElementType, sliceTarget.TypeArguments[0], span);
-            return unifiedElem != null ? b : null;
-        }
-
-        if (a is ReferenceType { InnerType: ArrayType refArrToSlice } &&
-            b is StructType sliceTargetRef && TypeRegistry.IsSlice(sliceTargetRef))
-        {
-            var unifiedElem = UnifyInternal(refArrToSlice.ElementType, sliceTargetRef.TypeArguments[0], span);
-            return unifiedElem != null ? b : null;
-        }
-
-        // 5. Coercion Extension
+        // 4. Coercion Extension
         // Must come before structural recursion to allow cross-type coercions
         // (e.g., Array→Slice, &[T;N]→&T, String→Slice<u8>)
         foreach (var rule in _coercionRules)
         {
-            if (rule.TryApply(a, b, this))
-                return b;
+            var coerced = rule.TryApply(a, b, this);
+            if (coerced != null)
+                return coerced;
         }
 
         // 6. Arrays (Structural Recursion) - unify element types
@@ -383,37 +370,37 @@ public class IntegerWideningRule : ICoercionRule
     /// <param name="from">The source integer type.</param>
     /// <param name="to">The target integer type.</param>
     /// <param name="solver">The type solver (unused by this rule).</param>
-    /// <returns>True if widening is valid, false otherwise.</returns>
-    public bool TryApply(TypeBase from, TypeBase to, TypeSolver solver)
+    /// <returns>The target type if widening is valid, null otherwise.</returns>
+    public TypeBase? TryApply(TypeBase from, TypeBase to, TypeSolver solver)
     {
         if (from is not PrimitiveType pFrom || to is not PrimitiveType pTo)
-            return false;
+            return null;
 
         var (fromName, toName) = (pFrom.Name, pTo.Name);
 
         // bool → any integer: treat bool as b1/u8 (rank 1 unsigned)
         if (fromName == "bool" && (TypeRegistry.IsIntegerType(toName) || toName == "bool"))
-            return true;
+            return to;
 
         // Same-signedness widening (e.g., i8 → i32, u8 → u64, i64 → isize)
         if (_signedRank.TryGetValue(fromName, out var fromRank) &&
             _signedRank.TryGetValue(toName, out var toRank) &&
             fromRank <= toRank)
-            return true;
+            return to;
 
         if (_unsignedRank.TryGetValue(fromName, out fromRank) &&
             _unsignedRank.TryGetValue(toName, out toRank) &&
             fromRank <= toRank)
-            return true;
+            return to;
 
         // Cross-signedness widening: unsigned → signed with STRICTLY higher rank
         // Safe because unsigned range fits in larger signed type (e.g., u32 → i64)
         if (_unsignedRank.TryGetValue(fromName, out var unsignedFromRank) &&
             _signedRank.TryGetValue(toName, out var signedToRank) &&
             unsignedFromRank < signedToRank)
-            return true;
+            return to;
 
-        return false;
+        return null;
     }
 }
 
@@ -424,16 +411,27 @@ public class OptionWrappingRule : ICoercionRule
 {
     /// <summary>
     /// Attempts to coerce a value of type T into Option(T).
+    /// Handles both argument orders since UnifyTypes(expected, actual) has expected first.
     /// </summary>
-    /// <param name="from">The source type T.</param>
-    /// <param name="to">The target type, expected to be Option(T).</param>
+    /// <param name="from">First type argument (may be expected or actual).</param>
+    /// <param name="to">Second type argument (may be actual or expected).</param>
     /// <param name="solver">The type solver (unused by this rule).</param>
-    /// <returns>True if the target is Option and the inner type matches the source type.</returns>
-    public bool TryApply(TypeBase from, TypeBase to, TypeSolver solver)
+    /// <returns>The Option type if coercion is valid, null otherwise.</returns>
+    public TypeBase? TryApply(TypeBase from, TypeBase to, TypeSolver solver)
     {
-        if (to is StructType st && TypeRegistry.IsOption(st))
-            return from.Equals(st.TypeArguments[0]);
-        return false;
+        // Check: to is Option(T) and from equals T
+        if (to is StructType stTo && TypeRegistry.IsOption(stTo) && stTo.TypeArguments.Count > 0)
+        {
+            if (from.Equals(stTo.TypeArguments[0]))
+                return to;
+        }
+        // Check: from is Option(T) and to equals T (handles reversed argument order)
+        if (from is StructType stFrom && TypeRegistry.IsOption(stFrom) && stFrom.TypeArguments.Count > 0)
+        {
+            if (to.Equals(stFrom.TypeArguments[0]))
+                return from;
+        }
+        return null;
     }
 }
 
@@ -448,13 +446,14 @@ public class StringToByteSliceRule : ICoercionRule
     /// <param name="from">The source type, expected to be core.string.String.</param>
     /// <param name="to">The target type, expected to be core.slice.Slice(u8).</param>
     /// <param name="solver">The type solver (unused by this rule).</param>
-    /// <returns>True if conversion from String to Slice(u8) is requested.</returns>
-    public bool TryApply(TypeBase from, TypeBase to, TypeSolver solver)
+    /// <returns>The Slice(u8) type if coercion is valid, null otherwise.</returns>
+    public TypeBase? TryApply(TypeBase from, TypeBase to, TypeSolver solver)
     {
         if (from is StructType fs && TypeRegistry.IsString(fs) &&
-            to is StructType ts && TypeRegistry.IsSlice(ts))
-            return ts.TypeArguments[0].Equals(TypeRegistry.U8);
-        return false;
+            to is StructType ts && TypeRegistry.IsSlice(ts) &&
+            ts.TypeArguments[0].Equals(TypeRegistry.U8))
+            return to;
+        return null;
     }
 }
 
@@ -470,31 +469,56 @@ public class ArrayDecayRule : ICoercionRule
     /// <param name="from">The source array type or reference to array.</param>
     /// <param name="to">The target type (pointer or slice).</param>
     /// <param name="solver">The type solver for element type unification.</param>
-    /// <returns>True if array decay is valid for the given types.</returns>
-    public bool TryApply(TypeBase from, TypeBase to, TypeSolver solver)
+    /// <returns>The target type if array decay is valid, null otherwise.</returns>
+    public TypeBase? TryApply(TypeBase from, TypeBase to, TypeSolver solver)
     {
         // Array-to-slice coercions
         if (to is StructType st && TypeRegistry.IsSlice(st))
         {
-            // [T; N] → Slice(T) - use CanUnify to allow comptime_int → concrete
+            // [T; N] → Slice(T)
             if (from is ArrayType arr)
-                return solver.CanUnify(arr.ElementType, st.TypeArguments[0]);
+                return TryUnifyArrayElementToSlice(arr.ElementType, st.TypeArguments[0], to);
             // &[T; N] → Slice(T)
             if (from is ReferenceType { InnerType: ArrayType refArr })
-                return solver.CanUnify(refArr.ElementType, st.TypeArguments[0]);
+                return TryUnifyArrayElementToSlice(refArr.ElementType, st.TypeArguments[0], to);
         }
 
         // Array-to-pointer coercions
         // [T; N] → &T
         if (from is ArrayType arrValue && to is ReferenceType refTarget)
-            return arrValue.ElementType.Equals(refTarget.InnerType);
+            return arrValue.ElementType.Equals(refTarget.InnerType) ? to : null;
 
         // &[T; N] → &T
         if (from is ReferenceType { InnerType: ArrayType arrInRef } &&
             to is ReferenceType { InnerType: var targetInner })
-            return arrInRef.ElementType.Equals(targetInner);
+            return arrInRef.ElementType.Equals(targetInner) ? to : null;
 
-        return false;
+        return null;
+    }
+
+    /// <summary>
+    /// Unifies array element type to slice element type.
+    /// Only allows exact match or comptime_int hardening (no integer widening).
+    /// </summary>
+    private static TypeBase? TryUnifyArrayElementToSlice(TypeBase arrElemRaw, TypeBase sliceElemRaw, TypeBase resultType)
+    {
+        var arrElem = arrElemRaw.Prune();
+        var sliceElem = sliceElemRaw.Prune();
+
+        // Exact match
+        if (arrElem.Equals(sliceElem))
+            return resultType;
+
+        // comptime_int hardening
+        if (arrElem is ComptimeInt && sliceElem is PrimitiveType pt && TypeRegistry.IsIntegerType(pt))
+        {
+            // If the original element type was a TypeVar, harden it
+            if (arrElemRaw is TypeVar tv)
+                tv.Instance = sliceElem;
+            return resultType;
+        }
+
+        return null;
     }
 }
 
@@ -509,12 +533,12 @@ public class SliceToReferenceRule : ICoercionRule
     /// <param name="from">The source type, expected to be core.slice.Slice(T).</param>
     /// <param name="to">The target type, expected to be &amp;T.</param>
     /// <param name="solver">The type solver (unused by this rule).</param>
-    /// <returns>True if conversion from Slice(T) to &amp;T is requested.</returns>
-    public bool TryApply(TypeBase from, TypeBase to, TypeSolver solver)
+    /// <returns>The reference type if coercion is valid, null otherwise.</returns>
+    public TypeBase? TryApply(TypeBase from, TypeBase to, TypeSolver solver)
     {
         if (from is StructType fs && TypeRegistry.IsSlice(fs) &&
             to is ReferenceType tr && tr.InnerType.Equals(fs.TypeArguments[0]))
-            return true;
-        return false;
+            return to;
+        return null;
     }
 }

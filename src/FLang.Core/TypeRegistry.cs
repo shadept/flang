@@ -201,11 +201,11 @@ public static class TypeRegistry
     }
 
     /// <summary>
-    /// Creates a Slice&lt;T&gt; type with fully qualified name (Algorithm W style).
+    /// Creates a Slice(T) type with fully qualified name (Algorithm W style).
     /// Results are cached to ensure reference equality for the same element type.
     /// </summary>
     /// <param name="elementType">The type of elements in the slice.</param>
-    /// <returns>A StructType representing Slice&lt;T&gt;.</returns>
+    /// <returns>A StructType representing Slice(T).</returns>
     public static StructType MakeSlice(TypeBase elementType)
     {
         var key = elementType;

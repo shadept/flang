@@ -18,6 +18,7 @@ public class CCodeGenerator
     private readonly Dictionary<string, EnumType> _enumDefinitions = [];
     private readonly HashSet<string> _emittedGlobals = [];
     private readonly Dictionary<string, string> _parameterRemap = [];
+    private readonly HashSet<string> _foreignFunctionsWithWrappers = [];
     private Function? _currentFunction;
     private bool _headersEmitted;
 
@@ -60,6 +61,7 @@ public class CCodeGenerator
         EmitForeignPrototypes(functions);
         EmitFunctionPrototypes(functions);
         EmitGlobals(functions);
+        EmitForeignWrappers(functions);
 
         foreach (var function in functions)
         {
@@ -72,12 +74,81 @@ public class CCodeGenerator
 
     private void EmitStructDefinitions()
     {
-        foreach (var structType in _structDefinitions.OrderBy(kvp => kvp.Key).Select(kvp => kvp.Value))
+        // Topologically sort structs by their dependencies
+        // A struct depends on another if it contains a field of that struct type (not pointer/reference)
+        var structs = _structDefinitions.Values
+            // TODO remove String restriction and use String from corelib
+            .Where(s => !TypeRegistry.IsString(s) && !TypeRegistry.IsType(s))
+            .ToList();
+
+        var sorted = TopologicalSortStructs(structs);
+
+        foreach (var structType in sorted)
         {
-            if (TypeRegistry.IsString(structType)) continue;
-            if (TypeRegistry.IsType(structType)) continue;
             EmitStructDefinition(structType);
         }
+    }
+
+    private List<StructType> TopologicalSortStructs(List<StructType> structs)
+    {
+        // Build dependency graph - struct A depends on B if A has a field of type B (by value, not pointer)
+        var structsByName = structs.ToDictionary(s => GetStructCName(s), s => s);
+        var dependencies = new Dictionary<string, HashSet<string>>();
+
+        foreach (var s in structs)
+        {
+            var name = GetStructCName(s);
+            dependencies[name] = new HashSet<string>();
+
+            foreach (var (_, fieldType) in s.Fields)
+            {
+                // Only by-value struct fields create dependencies
+                // Pointers/references don't need the full definition, just forward declaration
+                if (fieldType is StructType fieldStruct && !TypeRegistry.IsString(fieldStruct) && !TypeRegistry.IsType(fieldStruct))
+                {
+                    var depName = GetStructCName(fieldStruct);
+                    if (structsByName.ContainsKey(depName))
+                        dependencies[name].Add(depName);
+                }
+            }
+        }
+
+        // Kahn's algorithm for topological sort
+        // inDegree[X] = number of dependencies X has (must be emitted before X)
+        var result = new List<StructType>();
+        var inDegree = structs.ToDictionary(s => GetStructCName(s), s => dependencies[GetStructCName(s)].Count);
+
+        var queue = new Queue<string>(inDegree.Where(kv => kv.Value == 0).Select(kv => kv.Key).OrderBy(x => x));
+
+        while (queue.Count > 0)
+        {
+            var name = queue.Dequeue();
+            result.Add(structsByName[name]);
+
+            // Find all structs that depend on this one and reduce their in-degree
+            foreach (var (otherName, deps) in dependencies)
+            {
+                if (deps.Contains(name))
+                {
+                    inDegree[otherName]--;
+                    if (inDegree[otherName] == 0)
+                        queue.Enqueue(otherName);
+                }
+            }
+        }
+
+        // If we couldn't emit all structs, there's a cycle - fall back to alphabetical
+        if (result.Count < structs.Count)
+        {
+            var emitted = new HashSet<string>(result.Select(s => GetStructCName(s)));
+            foreach (var s in structs.OrderBy(s => GetStructCName(s)))
+            {
+                if (!emitted.Contains(GetStructCName(s)))
+                    result.Add(s);
+            }
+        }
+
+        return result;
     }
 
     private void EmitEnumDefinitions()
@@ -91,11 +162,11 @@ public class CCodeGenerator
     private void EmitEnumDefinition(EnumType enumType)
     {
         var cName = GetEnumCName(enumType);
-        
+
         _output.AppendLine($"// Enum: {enumType.Name}");
         _output.AppendLine($"struct {cName} {{");
         _output.AppendLine("    int32_t tag;");
-        
+
         // Emit union for payloads
         if (enumType.Variants.Any(v => v.PayloadType != null))
         {
@@ -111,10 +182,19 @@ public class CCodeGenerator
             }
             _output.AppendLine("    } payload;");
         }
-        
+
         _output.AppendLine("};");
         _output.AppendLine();
     }
+
+    // C stdlib functions already declared in headers - don't emit prototypes
+    private static readonly HashSet<string> _cStdlibFunctions =
+    [
+        "malloc", "free", "realloc", "calloc",
+        "memcpy", "memset", "memmove", "memcmp",
+        "printf", "fprintf", "sprintf", "snprintf",
+        "abort", "exit"
+    ];
 
     private void EmitForeignPrototypes(IEnumerable<Function> functions)
     {
@@ -124,13 +204,151 @@ public class CCodeGenerator
             if (!function.IsForeign) continue;
             if (function.Name == "__flang_unimplemented") continue;
             var name = GetFunctionCName(function);
+
+            // Skip C stdlib functions - they're already declared in headers
+            if (_cStdlibFunctions.Contains(name)) continue;
             if (!emitted.Add(name)) continue;
-            var paramList = BuildParameterList(function);
-            _output.AppendLine($"extern {TypeToCType(function.ReturnType)} {name}({paramList});");
+
+            // For foreign functions, map optional references to raw C pointers
+            var returnType = ForeignTypeToCType(function.ReturnType);
+            var paramList = BuildForeignParameterList(function);
+            _output.AppendLine($"extern {returnType} {name}({paramList});");
         }
 
         if (emitted.Count > 0)
             _output.AppendLine();
+    }
+
+    private void EmitForeignWrappers(IEnumerable<Function> functions)
+    {
+        foreach (var function in functions)
+        {
+            if (!function.IsForeign) continue;
+            if (function.Name == "__flang_unimplemented") continue;
+
+            // Check if wrapper is needed (has optional reference params or return)
+            bool needsWrapper = NeedsForeignWrapper(function);
+            if (!needsWrapper) continue;
+
+            // Track this function so EmitCall uses the wrapper instead of raw C call
+            _foreignFunctionsWithWrappers.Add(function.Name);
+            EmitForeignWrapper(function);
+        }
+    }
+
+    private bool NeedsForeignWrapper(Function function)
+    {
+        // Wrapper needed if return type or any param is Option<&T>
+        if (IsOptionalReference(function.ReturnType)) return true;
+        return function.Parameters.Any(p => IsOptionalReference(p.Type));
+    }
+
+    private bool IsOptionalReference(TypeBase type)
+    {
+        if (type is StructType st && TypeRegistry.IsOption(st) && st.TypeArguments.Count > 0)
+        {
+            return st.TypeArguments[0] is ReferenceType;
+        }
+        return false;
+    }
+
+    private void EmitForeignWrapper(Function function)
+    {
+        var wrapperName = NameMangler.GenericFunction(function.Name,
+            function.Parameters.Select(p => p.Type).ToList());
+        var rawName = function.Name;
+
+        // Build wrapper signature with FLang types (Option structs)
+        var returnType = TypeToCType(function.ReturnType);
+        var paramList = BuildParameterList(function);
+
+        _output.AppendLine($"{returnType} {wrapperName}({paramList}) {{");
+
+        // Build call to raw C function, converting Option params to raw pointers
+        var callArgs = new List<string>();
+        foreach (var param in function.Parameters)
+        {
+            var paramName = EscapeCIdentifier(param.Name);
+            if (IsOptionalReference(param.Type))
+            {
+                // Extract .value from Option struct (the raw pointer)
+                // For optional params, pass NULL if has_value is false
+                callArgs.Add($"({paramName}->has_value ? {paramName}->value : (void*)0)");
+            }
+            else if (param.Type is StructType)
+            {
+                // Struct params are passed by pointer, dereference for C call if needed
+                callArgs.Add($"*{paramName}");
+            }
+            else
+            {
+                callArgs.Add(paramName);
+            }
+        }
+        var argsStr = string.Join(", ", callArgs);
+
+        if (IsOptionalReference(function.ReturnType))
+        {
+            // Call returns raw pointer, wrap in Option
+            var optionType = (StructType)function.ReturnType;
+            var innerType = optionType.TypeArguments[0];
+            var innerCType = TypeToCType(innerType);
+
+            _output.AppendLine($"    {innerCType} __raw_result = {rawName}({argsStr});");
+            _output.AppendLine($"    {returnType} __result;");  // TODO TypeToCType
+            _output.AppendLine($"    if (__raw_result == (void*)0) {{");
+            _output.AppendLine($"        __result.has_value = 0;");
+            _output.AppendLine($"    }} else {{");
+            _output.AppendLine($"        __result.has_value = 1;");
+            _output.AppendLine($"        __result.value = __raw_result;");
+            _output.AppendLine($"    }}");
+            _output.AppendLine($"    return __result;");
+        }
+        else if (function.ReturnType.Equals(TypeRegistry.Void))
+        {
+            _output.AppendLine($"    {rawName}({argsStr});");
+        }
+        else
+        {
+            _output.AppendLine($"    return {rawName}({argsStr});");
+        }
+
+        _output.AppendLine($"}}");
+        _output.AppendLine();
+    }
+
+    /// <summary>
+    /// Convert FLang type to C type for foreign function signatures.
+    /// Optional references become raw C pointers.
+    /// </summary>
+    private string ForeignTypeToCType(TypeBase type)
+    {
+        // Option<&T> -> T* (nullable pointer)
+        if (type is StructType st && TypeRegistry.IsOption(st) && st.TypeArguments.Count > 0)
+        {
+            var inner = st.TypeArguments[0];
+            if (inner is ReferenceType rt)
+            {
+                return $"{TypeToCType(rt.InnerType)}*";
+            }
+        }
+        return TypeToCType(type);
+    }
+
+    /// <summary>
+    /// Build parameter list for foreign function prototypes.
+    /// Optional references become raw C pointers.
+    /// </summary>
+    private string BuildForeignParameterList(Function function)
+    {
+        if (function.Parameters.Count == 0) return "void";
+
+        return string.Join(", ", function.Parameters.Select(p =>
+        {
+            var paramType = ForeignTypeToCType(p.Type);
+            // Don't add extra * for structs in foreign functions - they use C calling convention
+            return $"{paramType} {EscapeCIdentifier(p.Name)}";
+        }));
     }
 
     private void EmitFunctionPrototypes(IEnumerable<Function> functions)
@@ -138,6 +356,7 @@ public class CCodeGenerator
         foreach (var function in functions)
         {
             if (function.IsForeign) continue;
+            _currentFunction = function;  // Track for error messages
             var name = GetFunctionCName(function);
             var paramList = BuildParameterList(function);
             _output.AppendLine($"{TypeToCType(function.ReturnType)} {name}({paramList});");
@@ -245,6 +464,9 @@ public class CCodeGenerator
             {
                 ConstantValue cv => cv.IntValue.ToString(),
                 FunctionReferenceValue funcRef => GetMangledFunctionName(funcRef),
+                // Handle inline ArrayConstantValue with string representation (e.g., type names in RTTI)
+                ArrayConstantValue arrayConst when arrayConst.StringRepresentation != null
+                    => $"(const uint8_t*)\"{EscapeStringForC(arrayConst.StringRepresentation)}\"",
                 GlobalValue gv when gv.Initializer is ArrayConstantValue arrayConst && arrayConst.StringRepresentation != null
                     => $"(const uint8_t*)\"{EscapeStringForC(arrayConst.StringRepresentation)}\"",
                 GlobalValue gv => gv.Name,
@@ -803,11 +1025,14 @@ public class CCodeGenerator
 
     private void EmitCall(CallInstruction call)
     {
-        // Determine callee name (mangled unless foreign/intrinsic)
-        var calleeName = call.IsForeignCall
+        // Determine callee name
+        // For foreign calls with wrappers (optional ref params/return), use the mangled wrapper name
+        // For other foreign calls without wrappers, use raw name (direct C FFI)
+        // For non-foreign calls, always mangle
+        var paramTypes = call.CalleeParamTypes?.ToList() ?? call.Arguments.Select(a => a.Type ?? TypeRegistry.I32).ToList();
+        var calleeName = call.IsForeignCall && !_foreignFunctionsWithWrappers.Contains(call.FunctionName)
             ? call.FunctionName
-            : NameMangler.GenericFunction(call.FunctionName,
-                call.CalleeParamTypes?.ToList() ?? call.Arguments.Select(a => a.Type ?? TypeRegistry.I32).ToList());
+            : NameMangler.GenericFunction(call.FunctionName, paramTypes);
 
         // Build argument list - take address of struct values since params are pointers
         var args = string.Join(", ", call.Arguments.Select(arg =>
@@ -898,9 +1123,16 @@ public class CCodeGenerator
 
     private string GetFunctionCName(Function function)
     {
-        return function.Name == "main"
-            ? "main"
-            : NameMangler.GenericFunction(function.Name, function.Parameters.Select(p => p.Type).ToList());
+        // Foreign functions use their exact name - no mangling (direct C FFI)
+        if (function.IsForeign)
+            return function.Name;
+
+        // main is special - no mangling
+        if (function.Name == "main")
+            return "main";
+
+        // All other FLang functions are mangled to support overloading
+        return NameMangler.GenericFunction(function.Name, function.Parameters.Select(p => p.Type).ToList());
     }
 
     private string BuildParameterList(Function function)
@@ -1003,59 +1235,86 @@ public class CCodeGenerator
             // Array syntax must be handled specially at declaration sites (see alloca handling)
             ArrayType => throw new InvalidOperationException("Array types must be handled specially at declaration sites"),
 
-            _ => throw new InvalidOperationException($"Cannot convert type '{prunedType}' (original: '{type}') to C type. This indicates an unhandled type in the C code generator.")
+            GenericParameterType gp => throw new InvalidOperationException($"Generic parameter type '{gp.ParamName}' escaped to codegen (from function '{_currentFunction?.Name ?? "unknown"}')"),
+            _ => throw new InvalidOperationException($"Cannot convert type '{prunedType}' (type: {prunedType.GetType().Name}, original: '{type}', original type: {type.GetType().Name}) to C type in function '{_currentFunction?.Name ?? "unknown"}'. This indicates an unhandled type in the C code generator.")
         };
     }
 
     /// <summary>
     /// Converts a function type to C function pointer type syntax.
     /// fn(i32, i32) i32 -> int32_t (*)(int32_t, int32_t)
+    /// Note: struct parameters are passed by pointer in C calling convention
     /// </summary>
     private string FunctionTypeToCType(FunctionType ft)
     {
         var returnType = TypeToCType(ft.ReturnType);
         var paramTypes = ft.ParameterTypes.Count == 0
             ? "void"
-            : string.Join(", ", ft.ParameterTypes.Select(p => TypeToCType(p)));
+            : string.Join(", ", ft.ParameterTypes.Select(p =>
+            {
+                var pType = TypeToCType(p);
+                // Structs are passed by pointer in our C calling convention
+                if (p is StructType) pType += "*";
+                return pType;
+            }));
         return $"{returnType} (*)({paramTypes})";
     }
 
     /// <summary>
     /// Converts a function type to C function pointer declaration syntax with a name.
     /// fn(i32, i32) i32 with name "f" -> int32_t (*f)(int32_t, int32_t)
+    /// Note: struct parameters are passed by pointer in C calling convention
     /// </summary>
     private string FunctionTypeToDeclaration(FunctionType ft, string varName)
     {
         var returnType = TypeToCType(ft.ReturnType);
         var paramTypes = ft.ParameterTypes.Count == 0
             ? "void"
-            : string.Join(", ", ft.ParameterTypes.Select(p => TypeToCType(p)));
+            : string.Join(", ", ft.ParameterTypes.Select(p =>
+            {
+                var pType = TypeToCType(p);
+                // Structs are passed by pointer in our C calling convention
+                if (p is StructType) pType += "*";
+                return pType;
+            }));
         return $"{returnType} (*{varName})({paramTypes})";
     }
 
     /// <summary>
     /// Converts a pointer-to-function-type to C declaration syntax with a name.
     /// &amp;fn(i32, i32) i32 with name "f" -> int32_t (**f)(int32_t, int32_t)
+    /// Note: struct parameters are passed by pointer in C calling convention
     /// </summary>
     private string FunctionPointerTypeToDeclaration(FunctionType ft, string varName)
     {
         var returnType = TypeToCType(ft.ReturnType);
         var paramTypes = ft.ParameterTypes.Count == 0
             ? "void"
-            : string.Join(", ", ft.ParameterTypes.Select(p => TypeToCType(p)));
+            : string.Join(", ", ft.ParameterTypes.Select(p =>
+            {
+                var pType = TypeToCType(p);
+                if (p is StructType) pType += "*";
+                return pType;
+            }));
         return $"{returnType} (**{varName})({paramTypes})";
     }
 
     /// <summary>
     /// Converts a pointer-to-function-type to C cast syntax (no variable name).
     /// &amp;fn(i32, i32) i32 -> int32_t (**)(int32_t, int32_t)
+    /// Note: struct parameters are passed by pointer in C calling convention
     /// </summary>
     private string FunctionPointerTypeToCast(FunctionType ft)
     {
         var returnType = TypeToCType(ft.ReturnType);
         var paramTypes = ft.ParameterTypes.Count == 0
             ? "void"
-            : string.Join(", ", ft.ParameterTypes.Select(p => TypeToCType(p)));
+            : string.Join(", ", ft.ParameterTypes.Select(p =>
+            {
+                var pType = TypeToCType(p);
+                if (p is StructType) pType += "*";
+                return pType;
+            }));
         return $"{returnType} (**)({paramTypes})";
     }
 

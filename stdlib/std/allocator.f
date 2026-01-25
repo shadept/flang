@@ -48,7 +48,7 @@ pub fn new(allocator: &Allocator, type: Type($T)) &T {
     return buffer.value.ptr as &T
 }
 
-pub fn delete(allocator: &Allocator, value: &T) {
+pub fn delete(allocator: &Allocator, value: &$T) {
     // HACK: fake slice. assuming implementation doesnt care about length
     allocator.free(slice_from_raw_parts(value as &u8, 0))
 }
@@ -76,22 +76,25 @@ fn global_resize(impl: &u8, memory: u8[], new_size: usize) u8[]? {
     // TODO import realloc in core.mem and it that instead
     // Simple resize: allocate new, copy, free old.
     // Could use realloc if available, but for simplicity we do manual copy.
-    if (memory.len == 0) {
-        return malloc(new_size)
+    if (memory.len == new_size) {
+        return memory
     }
+
+    // Regardless of exit path, free the old memory
+    defer free(memory.ptr)
 
     const new_ptr = malloc(new_size)
     if (new_ptr.is_none()) {
         return null
     }
-    
+
     const new_memory = slice_from_raw_parts(new_ptr.value, new_size)
     // Copy min(old_size, new_size) bytes
     const copy_size = if (memory.len < new_memory.len) memory.len else new_memory.len
     if (copy_size > 0) {
         memcpy(new_memory.ptr, memory.ptr, copy_size)
     }
-    free(memory.ptr)
+
     return new_memory
 }
 

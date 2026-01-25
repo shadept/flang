@@ -631,6 +631,95 @@ public class TypeSolverTests
         Assert.Empty(solver.Diagnostics);
     }
 
+    [Fact]
+    public void ArrayToSlice_ComptimeIntArray_ToI32Slice_Succeeds()
+    {
+        // Arrange
+        var solver = new TypeSolver();
+        var arrayType = new ArrayType(TypeRegistry.ComptimeInt, 5);
+        var sliceType = TypeRegistry.MakeSlice(TypeRegistry.I32);
+
+        // Act
+        var result = solver.Unify(arrayType, sliceType);
+
+        // Assert
+        Assert.Equal(sliceType, result);
+        Assert.Empty(solver.Diagnostics);
+    }
+
+    [Fact]
+    public void ArrayToSlice_TypeVarComptimeInt_ToI64Slice_HardensTypeVar()
+    {
+        // Arrange
+        var solver = new TypeSolver();
+        var elemTypeVar = new TypeVar("elem");
+        elemTypeVar.Instance = TypeRegistry.ComptimeInt;
+        var arrayType = new ArrayType(elemTypeVar, 3);
+        var sliceType = TypeRegistry.MakeSlice(TypeRegistry.I64);
+
+        // Act
+        var result = solver.Unify(arrayType, sliceType);
+
+        // Assert
+        Assert.Equal(sliceType, result);
+        Assert.Empty(solver.Diagnostics);
+        // TypeVar should be hardened to i64
+        Assert.Equal(TypeRegistry.I64, elemTypeVar.Prune());
+    }
+
+    [Fact]
+    public void ArrayToSlice_RefComptimeIntArray_ToU8Slice_Succeeds()
+    {
+        // Arrange
+        var solver = new TypeSolver();
+        var arrayType = new ArrayType(TypeRegistry.ComptimeInt, 10);
+        var refArrayType = new ReferenceType(arrayType, PointerWidth.Bits64);
+        var sliceType = TypeRegistry.MakeSlice(TypeRegistry.U8);
+
+        // Act
+        var result = solver.Unify(refArrayType, sliceType);
+
+        // Assert
+        Assert.Equal(sliceType, result);
+        Assert.Empty(solver.Diagnostics);
+    }
+
+    [Fact]
+    public void ArrayToSlice_RefTypeVarComptimeInt_ToI16Slice_HardensTypeVar()
+    {
+        // Arrange
+        var solver = new TypeSolver();
+        var elemTypeVar = new TypeVar("elem");
+        elemTypeVar.Instance = TypeRegistry.ComptimeInt;
+        var arrayType = new ArrayType(elemTypeVar, 8);
+        var refArrayType = new ReferenceType(arrayType, PointerWidth.Bits64);
+        var sliceType = TypeRegistry.MakeSlice(TypeRegistry.I16);
+
+        // Act
+        var result = solver.Unify(refArrayType, sliceType);
+
+        // Assert
+        Assert.Equal(sliceType, result);
+        Assert.Empty(solver.Diagnostics);
+        // TypeVar should be hardened to i16
+        Assert.Equal(TypeRegistry.I16, elemTypeVar.Prune());
+    }
+
+    [Fact]
+    public void ArrayToSlice_ComptimeIntArray_ToBoolSlice_Fails()
+    {
+        // Arrange - comptime_int should not coerce to non-integer types
+        var solver = new TypeSolver();
+        var arrayType = new ArrayType(TypeRegistry.ComptimeInt, 5);
+        var sliceType = TypeRegistry.MakeSlice(TypeRegistry.Bool);
+
+        // Act
+        solver.Unify(arrayType, sliceType);
+
+        // Assert
+        Assert.NotEmpty(solver.Diagnostics);
+    }
+
     #endregion
 
     #region StringToByteSliceRule Tests

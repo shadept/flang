@@ -948,14 +948,12 @@ public class TypeChecker
 
         if (expectedReturnType != null)
         {
-            // Unify with expected return type - TypeVar.Prune() handles propagation
-            // Note: UnifyTypes(expected, actual, ...) - first arg is what's expected
+            // Always unify to propagate type info (e.g., comptime_int → i32)
             var unified = UnifyTypes(expectedReturnType, et, ret.Expression.Span);
 
             // Wrap return expression with coercion node if needed
             ret.Expression = WrapWithCoercionIfNeeded(ret.Expression, et.Prune(), expectedReturnType.Prune());
 
-            // Log the unified type
             _logger.LogDebug(
                 "[TypeChecker] After unification: unified={UnifiedType}",
                 unified.Name);
@@ -1563,6 +1561,17 @@ public class TypeChecker
             return TypeRegistry.Never;
         }
 
+        // Handle pointer arithmetic specially - result type is the pointer type
+        if (prunedLt is ReferenceType refType && TypeRegistry.IsNumericType(prunedRt))
+        {
+            // Ensure the index is resolved to a concrete integer type
+            if (prunedRt is ComptimeInt)
+            {
+                UnifyTypes(rt, TypeRegistry.ISize, be.Span);
+            }
+            return refType;
+        }
+
         // Unify operand types - TypeVar.Prune() handles propagation automatically
         var unified = UnifyTypes(lt, rt, be.Span);
 
@@ -1675,7 +1684,8 @@ public class TypeChecker
 
     /// <summary>
     /// Checks if built-in operator handling is applicable for the given operand types.
-    /// Built-in operators only work on numeric primitives and booleans (for equality).
+    /// Built-in operators only work on numeric primitives, booleans (for equality),
+    /// and pointer arithmetic (&T + integer, &T - integer).
     /// </summary>
     private bool IsBuiltinOperatorApplicable(TypeBase left, TypeBase right, BinaryOperatorKind op)
     {
@@ -1684,10 +1694,17 @@ public class TypeChecker
         var rightIsNumeric = TypeRegistry.IsNumericType(right);
         var leftIsBool = left.Equals(TypeRegistry.Bool);
         var rightIsBool = right.Equals(TypeRegistry.Bool);
+        var leftIsPointer = left is ReferenceType;
+        var rightIsPointer = right is ReferenceType;
 
         // Arithmetic operators require numeric types
         if (op >= BinaryOperatorKind.Add && op <= BinaryOperatorKind.Modulo)
         {
+            // Pointer arithmetic: &T + integer or &T - integer
+            if (op == BinaryOperatorKind.Add || op == BinaryOperatorKind.Subtract)
+            {
+                if (leftIsPointer && rightIsNumeric) return true;
+            }
             return leftIsNumeric && rightIsNumeric;
         }
 
@@ -1697,9 +1714,10 @@ public class TypeChecker
             return leftIsNumeric && rightIsNumeric;
         }
 
-        // Equality operators work on numeric types and booleans
+        // Equality operators work on numeric types, booleans, and pointers
         if (op == BinaryOperatorKind.Equal || op == BinaryOperatorKind.NotEqual)
         {
+            if (leftIsPointer && rightIsPointer) return true;
             return (leftIsNumeric && rightIsNumeric) || (leftIsBool && rightIsBool);
         }
 
@@ -2127,9 +2145,11 @@ public class TypeChecker
             }
             else if (!chosen.IsGeneric)
             {
+                // Return actual function return type, not unified type,
+                // so that coercion (e.g., T → Option<T>) can be applied by the caller
                 var type = chosen.ReturnType;
                 if (expectedType != null)
-                    type = UnifyTypes(type, expectedType, call.Span);
+                    UnifyTypes(type, expectedType, call.Span);
 
                 // For UFCS, receiver is at argTypes[0]/paramTypes[0], explicit args start at index 1
                 var argOffset = ufcsReceiverType != null ? 1 : 0;
@@ -2157,7 +2177,10 @@ public class TypeChecker
                 if (expectedType != null)
                     RefineBindingsWithExpectedReturn(chosen.ReturnType, expectedType, bindings, call.Span);
                 var ret = SubstituteGenerics(chosen.ReturnType, bindings);
-                var type = expectedType != null ? UnifyTypes(ret, expectedType, call.Span) : ret;
+                // Unify to check compatibility, but return the actual function return type
+                // so that coercion (e.g., T → Option<T>) can be applied by the caller
+                if (expectedType != null) UnifyTypes(ret, expectedType, call.Span);
+                var type = ret;
 
                 var concreteParams = new List<TypeBase>();
                 for (var i = 0; i < chosen.ParameterTypes.Count; i++)
@@ -2694,17 +2717,40 @@ public class TypeChecker
                         type = TypeRegistry.Never;
                         break;
                     }
-                    var prunedIt = it.Prune();  // Prune to get the actual type
+
+                    // For slices, look up op_index function
+                    // Arrays use built-in indexing (no op_index lookup)
+                    if (bt is StructType sliceType && TypeRegistry.IsSlice(sliceType))
+                    {
+                        // op_index takes &Slice as first parameter
+                        var refBaseType = new ReferenceType(sliceType);
+
+                        // Try to find op_index function
+                        var opIndexResult = TryResolveOperatorFunction("op_index", refBaseType, it, ix.Span);
+
+                        if (opIndexResult != null)
+                        {
+                            // Use op_index function
+                            ix.ResolvedIndexFunction = opIndexResult.Value.Function;
+                            type = opIndexResult.Value.ReturnType;
+                            break;
+                        }
+                    }
+
+                    // Built-in array/slice indexing with usize
+                    var prunedIt = it.Prune();
 
                     if (!TypeRegistry.IsIntegerType(prunedIt))
+                    {
                         ReportError(
                             "array index must be an integer",
                             ix.Index.Span,
                             $"found `{prunedIt}`",
                             "E2027");
+                    }
                     else if (prunedIt is ComptimeInt)
                     {
-                        // Resolve comptime_int indices to usize - unify handles TypeVar propagation
+                        // Resolve comptime_int indices to usize for built-in indexing
                         UnifyTypes(it, TypeRegistry.USize, ix.Index.Span);
                     }
 
@@ -2775,12 +2821,11 @@ public class TypeChecker
                 return expectedOption;
             }
 
-            if (expectedOption.TypeArguments.Count > 0 &&
-                (type.Equals(expectedOption.TypeArguments[0]) ||
-                 (type is ComptimeInt && TypeRegistry.IsIntegerType(expectedOption.TypeArguments[0]))))
-            {
-                return expectedOption;
-            }
+            // NOTE: Do NOT change type from T to Option<T> here!
+            // The actual coercion (wrapping T in Option) must be done via WrapWithCoercionIfNeeded
+            // which creates an ImplicitCoercionNode. If we change the type here without a coercion node,
+            // the lowering phase will emit code that assigns T to Option<T> directly, causing C errors.
+            // Just return the actual type and let the caller handle coercion.
         }
 
         return type;
@@ -3554,20 +3599,25 @@ public class TypeChecker
         return false;
     }
 
-    private static TypeBase SubstituteGenerics(TypeBase type, Dictionary<string, TypeBase> bindings) => type switch
+    private static TypeBase SubstituteGenerics(TypeBase type, Dictionary<string, TypeBase> bindings)
     {
-        GenericParameterType gp => bindings.TryGetValue(gp.ParamName, out var b) ? b : gp,
-        ReferenceType rt => new ReferenceType(SubstituteGenerics(rt.InnerType, bindings)),
-        ArrayType at => new ArrayType(SubstituteGenerics(at.ElementType, bindings), at.Length),
-        StructType st => SubstituteStructType(st, bindings),
-        EnumType et => SubstituteEnumType(et, bindings),
-        GenericType gt => new GenericType(gt.BaseName,
-            gt.TypeArguments.Select(a => SubstituteGenerics(a, bindings)).ToList()),
-        FunctionType ft => new FunctionType(
-            ft.ParameterTypes.Select(p => SubstituteGenerics(p, bindings)).ToList(),
-            SubstituteGenerics(ft.ReturnType, bindings)),
-        _ => type
-    };
+        // Prune TypeVars to get concrete types - this handles comptime_int wrapped in TypeVar
+        var pruned = type.Prune();
+        return pruned switch
+        {
+            GenericParameterType gp => bindings.TryGetValue(gp.ParamName, out var b) ? b.Prune() : gp,
+            ReferenceType rt => new ReferenceType(SubstituteGenerics(rt.InnerType, bindings)),
+            ArrayType at => new ArrayType(SubstituteGenerics(at.ElementType, bindings), at.Length),
+            StructType st => SubstituteStructType(st, bindings),
+            EnumType et => SubstituteEnumType(et, bindings),
+            GenericType gt => new GenericType(gt.BaseName,
+                gt.TypeArguments.Select(a => SubstituteGenerics(a, bindings)).ToList()),
+            FunctionType ft => new FunctionType(
+                ft.ParameterTypes.Select(p => SubstituteGenerics(p, bindings)).ToList(),
+                SubstituteGenerics(ft.ReturnType, bindings)),
+            _ => pruned
+        };
+    }
 
     private bool TryComputeCoercionCost(IReadOnlyList<TypeBase> sources, IReadOnlyList<TypeBase> targets, out int cost)
     {
@@ -4090,34 +4140,39 @@ public class TypeChecker
         }
     }
 
-    private static TypeNode CreateTypeNodeFromTypeBase(SourceSpan span, TypeBase t) => t switch
+    private static TypeNode CreateTypeNodeFromTypeBase(SourceSpan span, TypeBase t)
     {
-        // ComptimeInt can appear when specializing with unresolved literals -
-        // create a named type that will fail during resolution with proper error
-        ComptimeInt => new NamedTypeNode(span, "comptime_int"),
-        PrimitiveType pt => new NamedTypeNode(span, pt.Name),
-        StructType st when TypeRegistry.IsSlice(st) && st.TypeArguments.Count > 0 =>
-            new SliceTypeNode(span, CreateTypeNodeFromTypeBase(span, st.TypeArguments[0])),
-        StructType st when TypeRegistry.IsOption(st) && st.TypeArguments.Count > 0 =>
-            new NullableTypeNode(span, CreateTypeNodeFromTypeBase(span, st.TypeArguments[0])),
-        StructType st => st.TypeArguments.Count == 0
-            ? new NamedTypeNode(span, st.StructName)
-            : new GenericTypeNode(span, st.StructName,
-                st.TypeArguments.Select(t => CreateTypeNodeFromTypeBase(span, t)).ToList()),
-        EnumType et => et.TypeArguments.Count == 0
-            ? new NamedTypeNode(span, et.Name)
-            : new GenericTypeNode(span, et.Name,
-                et.TypeArguments.Select(t => CreateTypeNodeFromTypeBase(span, t)).ToList()),
-        ReferenceType rt => new ReferenceTypeNode(span, CreateTypeNodeFromTypeBase(span, rt.InnerType)),
-        ArrayType at => new ArrayTypeNode(span, CreateTypeNodeFromTypeBase(span, at.ElementType), at.Length),
-        GenericType gt => new GenericTypeNode(span, gt.BaseName,
-            gt.TypeArguments.Select(a => CreateTypeNodeFromTypeBase(span, a)).ToList()),
-        GenericParameterType gp => new GenericParameterTypeNode(span, gp.ParamName),
-        FunctionType ft => new FunctionTypeNode(span,
-            ft.ParameterTypes.Select(p => CreateTypeNodeFromTypeBase(span, p)).ToList(),
-            CreateTypeNodeFromTypeBase(span, ft.ReturnType)),
-        _ => throw new InvalidOperationException($"Unhandled type in CreateTypeNodeFromTypeBase: {t.GetType().Name} ({t.Name})")
-    };
+        // Prune TypeVars to get concrete types
+        var pruned = t.Prune();
+        return pruned switch
+        {
+            // ComptimeInt can appear when specializing with unresolved literals -
+            // create a named type that will fail during resolution with proper error
+            ComptimeInt => new NamedTypeNode(span, "comptime_int"),
+            PrimitiveType pt => new NamedTypeNode(span, pt.Name),
+            StructType st when TypeRegistry.IsSlice(st) && st.TypeArguments.Count > 0 =>
+                new SliceTypeNode(span, CreateTypeNodeFromTypeBase(span, st.TypeArguments[0])),
+            StructType st when TypeRegistry.IsOption(st) && st.TypeArguments.Count > 0 =>
+                new NullableTypeNode(span, CreateTypeNodeFromTypeBase(span, st.TypeArguments[0])),
+            StructType st => st.TypeArguments.Count == 0
+                ? new NamedTypeNode(span, st.StructName)
+                : new GenericTypeNode(span, st.StructName,
+                    st.TypeArguments.Select(t => CreateTypeNodeFromTypeBase(span, t)).ToList()),
+            EnumType et => et.TypeArguments.Count == 0
+                ? new NamedTypeNode(span, et.Name)
+                : new GenericTypeNode(span, et.Name,
+                    et.TypeArguments.Select(t => CreateTypeNodeFromTypeBase(span, t)).ToList()),
+            ReferenceType rt => new ReferenceTypeNode(span, CreateTypeNodeFromTypeBase(span, rt.InnerType)),
+            ArrayType at => new ArrayTypeNode(span, CreateTypeNodeFromTypeBase(span, at.ElementType), at.Length),
+            GenericType gt => new GenericTypeNode(span, gt.BaseName,
+                gt.TypeArguments.Select(a => CreateTypeNodeFromTypeBase(span, a)).ToList()),
+            GenericParameterType gp => new GenericParameterTypeNode(span, gp.ParamName),
+            FunctionType ft => new FunctionTypeNode(span,
+                ft.ParameterTypes.Select(p => CreateTypeNodeFromTypeBase(span, p)).ToList(),
+                CreateTypeNodeFromTypeBase(span, ft.ReturnType)),
+            _ => throw new InvalidOperationException($"Unhandled type in CreateTypeNodeFromTypeBase: {pruned.GetType().Name} ({pruned.Name})")
+        };
+    }
 
     public IReadOnlyList<FunctionDeclarationNode> GetSpecializedFunctions() => _specializations;
 
