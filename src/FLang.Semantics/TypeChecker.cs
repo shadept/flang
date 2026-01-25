@@ -134,6 +134,87 @@ public class TypeChecker
         return lastDot >= 0 ? fqn.Substring(lastDot + 1) : fqn;
     }
 
+    /// <summary>
+    /// Formats a pair of types for error display, simplifying when the difference is only in wrappers.
+    /// For example, if expected is Option(Slice(u8)) and actual is &Option(Slice(u8)),
+    /// returns ("Option(T)", "&Option(T)") instead of the full instantiation.
+    /// </summary>
+    private (string Expected, string Actual) FormatTypePairForDisplay(TypeBase expected, TypeBase actual)
+    {
+        var expectedPruned = expected.Prune();
+        var actualPruned = actual.Prune();
+
+        // Check if one is a reference to the other
+        if (actualPruned is ReferenceType actualRef)
+        {
+            var innerActual = actualRef.InnerType.Prune();
+            if (AreStructurallyEquivalent(expectedPruned, innerActual))
+            {
+                // Difference is just the & wrapper - simplify display
+                var simpleName = GetSimplifiedTypeName(expectedPruned);
+                return (simpleName, $"&{simpleName}");
+            }
+        }
+        else if (expectedPruned is ReferenceType expectedRef)
+        {
+            var innerExpected = expectedRef.InnerType.Prune();
+            if (AreStructurallyEquivalent(innerExpected, actualPruned))
+            {
+                // Difference is just the & wrapper - simplify display
+                var simpleName = GetSimplifiedTypeName(actualPruned);
+                return ($"&{simpleName}", simpleName);
+            }
+        }
+
+        // Default: show full types
+        return (FormatTypeNameForDisplay(expectedPruned), FormatTypeNameForDisplay(actualPruned));
+    }
+
+    /// <summary>
+    /// Checks if two types are structurally equivalent (same base type, ignoring generic instantiation details).
+    /// </summary>
+    private static bool AreStructurallyEquivalent(TypeBase a, TypeBase b)
+    {
+        if (a.GetType() != b.GetType()) return false;
+
+        return (a, b) switch
+        {
+            (StructType sa, StructType sb) => sa.StructName == sb.StructName,
+            (EnumType ea, EnumType eb) => ea.Name == eb.Name,
+            (ReferenceType ra, ReferenceType rb) => AreStructurallyEquivalent(ra.InnerType.Prune(), rb.InnerType.Prune()),
+            (ArrayType aa, ArrayType ab) => aa.Length == ab.Length && AreStructurallyEquivalent(aa.ElementType.Prune(), ab.ElementType.Prune()),
+            _ => a.Equals(b)
+        };
+    }
+
+    /// <summary>
+    /// Gets a simplified type name, replacing generic arguments with T, U, etc.
+    /// </summary>
+    private static string GetSimplifiedTypeName(TypeBase type)
+    {
+        return type switch
+        {
+            StructType st when TypeRegistry.IsSlice(st) && st.TypeArguments.Count > 0 =>
+                $"{GetGenericPlaceholders(1).First()}[]",
+            StructType st when st.TypeArguments.Count > 0 =>
+                $"{GetSimpleName(st.StructName)}({string.Join(", ", GetGenericPlaceholders(st.TypeArguments.Count))})",
+            StructType st => GetSimpleName(st.StructName),
+            EnumType et when et.TypeArguments.Count > 0 =>
+                $"{GetSimpleName(et.Name)}({string.Join(", ", GetGenericPlaceholders(et.TypeArguments.Count))})",
+            EnumType et => GetSimpleName(et.Name),
+            ReferenceType rt => $"&{GetSimplifiedTypeName(rt.InnerType.Prune())}",
+            ArrayType at => $"[{at.Length}]{GetSimplifiedTypeName(at.ElementType.Prune())}",
+            _ => type.Name
+        };
+    }
+
+    private static IEnumerable<string> GetGenericPlaceholders(int count)
+    {
+        var names = new[] { "T", "U", "V", "W", "X", "Y", "Z" };
+        for (var i = 0; i < count; i++)
+            yield return i < names.Length ? names[i] : $"T{i}";
+    }
+
     public TypeBase? ResolveTypeName(string typeName)
     {
         // Check built-in primitives first
@@ -868,7 +949,8 @@ public class TypeChecker
         if (expectedReturnType != null)
         {
             // Unify with expected return type - TypeVar.Prune() handles propagation
-            var unified = UnifyTypes(et, expectedReturnType, ret.Expression.Span);
+            // Note: UnifyTypes(expected, actual, ...) - first arg is what's expected
+            var unified = UnifyTypes(expectedReturnType, et, ret.Expression.Span);
 
             // Wrap return expression with coercion node if needed
             ret.Expression = WrapWithCoercionIfNeeded(ret.Expression, et.Prune(), expectedReturnType.Prune());
@@ -1414,7 +1496,7 @@ public class TypeChecker
         var structType = currentType switch
         {
             StructType st => st,
-            ArrayType array => TypeRegistry.MakeSlice(array.ElementType),
+            ArrayType array => MakeSliceType(array.ElementType, ma.Span),
             _ => null
         };
 
@@ -1915,6 +1997,7 @@ public class TypeChecker
                 _logger.LogDebug("{Indent}Attempting generic binding for '{Name}'", Indent(), cand.Name);
                 var bindings = new Dictionary<string, TypeBase>();
                 var okGen = true;
+                var failedBindingIndex = -1;
                 for (var i = 0; i < argTypes.Count; i++)
                 {
                     var argType = argTypes[i] ?? throw new NullReferenceException();
@@ -1924,6 +2007,7 @@ public class TypeChecker
                     if (!TryBindGeneric(cand.ParameterTypes[i], argType, bindings, out var cn, out var ct))
                     {
                         okGen = false;
+                        failedBindingIndex = i;
                         if (cn != null)
                         {
                             conflictName = cn;
@@ -1934,7 +2018,19 @@ public class TypeChecker
                     }
                 }
 
-                if (!okGen) continue;
+                if (!okGen)
+                {
+                    // Track this as a type mismatch if we don't have one yet
+                    // For generic candidates, we report the argument that failed binding
+                    if (closestTypeMismatch == null && failedBindingIndex >= 0)
+                    {
+                        closestTypeMismatch = cand;
+                        closestMismatchIndex = failedBindingIndex;
+                        closestExpectedType = cand.ParameterTypes[failedBindingIndex].Prune();
+                        closestActualType = argTypes[failedBindingIndex].Prune();
+                    }
+                    continue;
+                }
 
                 var concreteParams = new List<TypeBase>();
                 for (var i = 0; i < cand.ParameterTypes.Count; i++)
@@ -1985,7 +2081,8 @@ public class TypeChecker
                         // For UFCS, index 0 is the receiver, explicit args start at 1
                         var argOffset = ufcsReceiverType != null ? 1 : 0;
                         SourceSpan errorSpan;
-                        if (ufcsReceiverType != null && closestMismatchIndex == 0)
+                        var isReceiverMismatch = ufcsReceiverType != null && closestMismatchIndex == 0;
+                        if (isReceiverMismatch)
                         {
                             // Receiver type mismatch
                             errorSpan = call.UfcsReceiver!.Span;
@@ -1996,11 +2093,24 @@ public class TypeChecker
                             errorSpan = call.Arguments[closestMismatchIndex - argOffset].Span;
                         }
 
-                        ReportError(
-                            $"mismatched types",
-                            errorSpan,
-                            $"expected `{FormatTypeNameForDisplay(closestExpectedType!)}`, found `{FormatTypeNameForDisplay(closestActualType!)}`",
-                            "E2011");
+                        var (expectedDisplay, actualDisplay) = FormatTypePairForDisplay(closestExpectedType!, closestActualType!);
+
+                        if (isReceiverMismatch)
+                        {
+                            ReportError(
+                                $"`{call.MethodName}` expects receiver of type `{expectedDisplay}`",
+                                errorSpan,
+                                $"expected `{expectedDisplay}`, found `{actualDisplay}`",
+                                "E2011");
+                        }
+                        else
+                        {
+                            ReportError(
+                                $"mismatched types",
+                                errorSpan,
+                                $"expected `{expectedDisplay}`, found `{actualDisplay}`",
+                                "E2011");
+                        }
                     }
                     else
                     {
@@ -2240,397 +2350,397 @@ public class TypeChecker
                 type = CheckCallExpression(call, expectedType);
                 break;
             case IfExpressionNode ie:
-            {
-                var ct = CheckExpression(ie.Condition);
-                if (IsNever(ct))
                 {
-                    type = TypeRegistry.Never;
-                    break;
-                }
-                var prunedCt = ct.Prune();
-                if (!prunedCt.Equals(TypeRegistry.Bool))
-                    ReportError(
-                        "mismatched types",
-                        ie.Condition.Span,
-                        $"expected `bool`, found `{prunedCt}`",
-                        "E2002");
-                var tt = CheckExpression(ie.ThenBranch);
-                if (ie.ElseBranch != null)
-                {
-                    var et = CheckExpression(ie.ElseBranch);
-                    type = UnifyTypes(tt, et, ie.Span);
-                }
-                else
-                {
-                    type = TypeRegistry.Never;
-                }
-
-                break;
-            }
-            case BlockExpressionNode bex:
-            {
-                PushScope();
-                TypeBase? last = null;
-                foreach (var s in bex.Statements)
-                {
-                    if (s is ExpressionStatementNode es) last = CheckExpression(es.Expression);
+                    var ct = CheckExpression(ie.Condition);
+                    if (IsNever(ct))
+                    {
+                        type = TypeRegistry.Never;
+                        break;
+                    }
+                    var prunedCt = ct.Prune();
+                    if (!prunedCt.Equals(TypeRegistry.Bool))
+                        ReportError(
+                            "mismatched types",
+                            ie.Condition.Span,
+                            $"expected `bool`, found `{prunedCt}`",
+                            "E2002");
+                    var tt = CheckExpression(ie.ThenBranch);
+                    if (ie.ElseBranch != null)
+                    {
+                        var et = CheckExpression(ie.ElseBranch);
+                        type = UnifyTypes(tt, et, ie.Span);
+                    }
                     else
                     {
-                        CheckStatement(s);
-                        last = null;
+                        type = TypeRegistry.Never;
                     }
-                }
 
-                if (bex.TrailingExpression != null) last = CheckExpression(bex.TrailingExpression);
-                PopScope();
-                type = last ?? TypeRegistry.Never;
-                break;
-            }
+                    break;
+                }
+            case BlockExpressionNode bex:
+                {
+                    PushScope();
+                    TypeBase? last = null;
+                    foreach (var s in bex.Statements)
+                    {
+                        if (s is ExpressionStatementNode es) last = CheckExpression(es.Expression);
+                        else
+                        {
+                            CheckStatement(s);
+                            last = null;
+                        }
+                    }
+
+                    if (bex.TrailingExpression != null) last = CheckExpression(bex.TrailingExpression);
+                    PopScope();
+                    type = last ?? TypeRegistry.Never;
+                    break;
+                }
             case RangeExpressionNode re:
-            {
-                var st = CheckExpression(re.Start);
-                if (IsNever(st))
                 {
-                    type = TypeRegistry.Never;
-                    break;
-                }
-                var en = CheckExpression(re.End);
-                if (IsNever(en))
-                {
-                    type = TypeRegistry.Never;
-                    break;
-                }
-                var prunedSt = st.Prune();
-                var prunedEn = en.Prune();
-
-                // Validate range bounds are integers
-                if (!TypeRegistry.IsIntegerType(prunedSt) || !TypeRegistry.IsIntegerType(prunedEn))
-                {
-                    ReportError("range bounds must be integers", re.Span, $"found `{prunedSt}..{prunedEn}`",
-                        "E2002");
-                    type = TypeRegistry.Never;
-                    break;
-                }
-
-                // Coerce comptime_int to isize (Range uses isize fields) - unify handles TypeVar propagation
-                if (prunedSt is ComptimeInt)
-                    UnifyTypes(st, TypeRegistry.ISize, re.Start.Span);
-                if (prunedEn is ComptimeInt)
-                    UnifyTypes(en, TypeRegistry.ISize, re.End.Span);
-
-                // Return Range type from core.range
-                // Try FQN lookup first (works after prelude is loaded)
-                if (!_compilation.StructsByFqn.TryGetValue("core.range.Range", out var rangeType))
-                {
-                    ReportError(
-                        "Range type not found",
-                        re.Span,
-                        "ensure `core.range` is loaded via prelude",
-                        "E2003");
-                    type = TypeRegistry.Never;
-                    break;
-                }
-
-                type = rangeType;
-                break;
-            }
-            case MatchExpressionNode match:
-                type = CheckMatchExpression(match, expectedType);
-                break;
-            case AddressOfExpressionNode adr:
-            {
-                var tt = CheckExpression(adr.Target);
-                if (IsNever(tt))
-                {
-                    type = TypeRegistry.Never;
-                    break;
-                }
-                type = new ReferenceType(tt);
-                break;
-            }
-            case DereferenceExpressionNode dr:
-            {
-                var pt = CheckExpression(dr.Target);
-                if (IsNever(pt))
-                {
-                    type = TypeRegistry.Never;
-                    break;
-                }
-                var prunedPt = pt.Prune();
-                if (prunedPt is ReferenceType rft) type = rft.InnerType;
-                else if (prunedPt is StructType opt && TypeRegistry.IsOption(opt) && opt.TypeArguments.Count > 0 &&
-                         opt.TypeArguments[0] is ReferenceType rf2) type = rf2.InnerType;
-                else
-                {
-                    ReportError(
-                        "cannot dereference non-reference type",
-                        dr.Span,
-                        $"expected `&T` or `&T?`, found `{prunedPt}`",
-                        "E2012");
-                    type = TypeRegistry.Never;
-                }
-
-                break;
-            }
-            case MemberAccessExpressionNode ma:
-                type = CheckMemberAccessExpression(ma, expectedType);
-                break;
-            case StructConstructionExpressionNode sc:
-            {
-                var resolvedType = ResolveTypeNode(sc.TypeName);
-                StructType? optionLiteral = null;
-                if (resolvedType is StructType optStruct && TypeRegistry.IsOption(optStruct))
-                {
-                    optionLiteral = optStruct;
-                    resolvedType = optStruct; // Already a StructType
-                }
-
-                if (resolvedType == null)
-                {
-                    ReportError(
-                        $"cannot find type `{(sc.TypeName as NamedTypeNode)?.Name ?? "unknown"}`",
-                        sc.TypeName.Span,
-                        "not found in this scope",
-                        "E2003");
-                    type = TypeRegistry.Never;
-                    break;
-                }
-
-                if (resolvedType is GenericType genericType)
-                    resolvedType = InstantiateStruct(genericType, sc.Span);
-
-                if (resolvedType is StructType optFromGeneric && TypeRegistry.IsOption(optFromGeneric))
-                {
-                    optionLiteral = optFromGeneric;
-                    resolvedType = optFromGeneric; // Already a StructType
-                }
-
-                if (resolvedType is not StructType st)
-                {
-                    ReportError(
-                        $"type `{resolvedType.Name}` is not a struct",
-                        sc.TypeName.Span,
-                        "cannot construct non-struct type",
-                        "E2018");
-                    type = TypeRegistry.I32;
-                    break;
-                }
-
-                ValidateStructLiteralFields(st, sc.Fields, sc.Span);
-
-                // Ensure no missing fields
-                var provided = new HashSet<string>();
-                foreach (var (fieldName, fieldExpr) in sc.Fields)
-                {
-                    provided.Add(fieldName);
-                    var fieldType = st.GetFieldType(fieldName);
-                    if (fieldType == null)
+                    var st = CheckExpression(re.Start);
+                    if (IsNever(st))
                     {
-                        ReportError(
-                            $"struct `{st.Name}` does not have a field named `{fieldName}`",
-                            fieldExpr.Span,
-                            "unknown field",
-                            "E2014");
-                        continue;
+                        type = TypeRegistry.Never;
+                        break;
                     }
-
-                    var valueType = CheckExpression(fieldExpr, fieldType);
-                    // Unify field value with field type - TypeVar.Prune() handles propagation
-                    var unified = UnifyTypes(valueType, fieldType, fieldExpr.Span);
-                }
-
-                foreach (var (fieldName, _) in st.Fields)
-                    if (!provided.Contains(fieldName))
-                        ReportError(
-                            $"missing field `{fieldName}` in struct construction",
-                            sc.Span,
-                            $"struct `{st.Name}` requires field `{fieldName}`",
-                            "E2019");
-                type = optionLiteral ?? st;
-                break;
-            }
-            case AnonymousStructExpressionNode anon:
-            {
-                StructType? structType = expectedType switch
-                {
-                    StructType st => st,
-                    GenericType gt => InstantiateStruct(gt, anon.Span),
-                    _ => null
-                };
-
-                if (structType == null)
-                {
-                    // No expected type - infer field types from values (tuple case)
-                    // This enables tuples like (10, 20) without type annotation
-                    var inferredFields = new List<(string Name, TypeBase Type)>();
-                    bool inferenceSucceeded = true;
-
-                    foreach (var (fieldName, fieldValue) in anon.Fields)
+                    var en = CheckExpression(re.End);
+                    if (IsNever(en))
                     {
-                        var fieldType = CheckExpression(fieldValue);
-
-                        // Handle comptime types: default comptime_int to i32 for tuples
-                        var prunedType = fieldType is TypeVar tv ? tv.Prune() : fieldType;
-                        if (prunedType is ComptimeInt)
-                        {
-                            // Unify the TypeVar with i32 to resolve the comptime_int
-                            fieldType = UnifyTypes(fieldType, TypeRegistry.I32, fieldValue.Span) ?? TypeRegistry.I32;
-                        }
-                        else if (fieldType == TypeRegistry.Never)
-                        {
-                            inferenceSucceeded = false;
-                        }
-
-                        inferredFields.Add((fieldName, fieldType));
+                        type = TypeRegistry.Never;
+                        break;
                     }
+                    var prunedSt = st.Prune();
+                    var prunedEn = en.Prune();
 
-                    if (!inferenceSucceeded)
+                    // Validate range bounds are integers
+                    if (!TypeRegistry.IsIntegerType(prunedSt) || !TypeRegistry.IsIntegerType(prunedEn))
                     {
-                        ReportError(
-                            "cannot infer type of anonymous struct/tuple literal",
-                            anon.Span,
-                            "add a type annotation",
-                            "E2018");
+                        ReportError("range bounds must be integers", re.Span, $"found `{prunedSt}..{prunedEn}`",
+                            "E2002");
                         type = TypeRegistry.Never;
                         break;
                     }
 
-                    // Create an anonymous struct type from inferred fields
-                    structType = new StructType("", typeArguments: null, fields: inferredFields);
-                    _compilation.InstantiatedTypes.Add(structType);
-                }
-                else
-                {
-                    ValidateStructLiteralFields(structType, anon.Fields, anon.Span);
-                }
+                    // Coerce comptime_int to isize (Range uses isize fields) - unify handles TypeVar propagation
+                    if (prunedSt is ComptimeInt)
+                        UnifyTypes(st, TypeRegistry.ISize, re.Start.Span);
+                    if (prunedEn is ComptimeInt)
+                        UnifyTypes(en, TypeRegistry.ISize, re.End.Span);
 
-                anon.Type = structType;
-
-                if (TypeRegistry.IsOption(expectedType))
-                    type = expectedType;
-                else
-                    type = structType;
-
-                break;
-            }
-
-            case NullLiteralNode nullLiteral:
-            {
-                // Infer Option type from context
-                var innerType = expectedType switch
-                {
-                    StructType st when TypeRegistry.IsOption(st) => st.TypeArguments[0],
-                    _ => null
-                };
-
-                if (innerType == null)
-                {
-                    ReportError(
-                        "cannot infer type of null literal",
-                        nullLiteral.Span,
-                        "add an option type annotation or use an explicit constructor",
-                        "E2001");
-                    type = TypeRegistry.Never; // Fallback
-                }
-                else
-                {
-                    type = TypeRegistry.MakeOption(innerType);
-                }
-
-                break;
-            }
-            case ArrayLiteralExpressionNode al:
-            {
-                if (al.IsRepeatSyntax)
-                {
-                    var rv = CheckExpression(al.RepeatValue!);
-                    type = new ArrayType(rv, al.RepeatCount!.Value);
-                }
-                else if (al.Elements!.Count == 0)
-                {
-                    ReportError(
-                        "cannot infer type of empty array literal",
-                        al.Span,
-                        "consider adding type annotation",
-                        "E2026");
-                    type = new ArrayType(TypeRegistry.Never, 0);
-                }
-                else
-                {
-                    var first = CheckExpression(al.Elements[0]);
-                    var unified = first;
-                    for (var i = 1; i < al.Elements.Count; i++)
+                    // Return Range type from core.range
+                    // Try FQN lookup first (works after prelude is loaded)
+                    if (!_compilation.StructsByFqn.TryGetValue("core.range.Range", out var rangeType))
                     {
-                        var et = CheckExpression(al.Elements[i]);
-                        unified = UnifyTypes(unified, et, al.Elements[i].Span);
+                        ReportError(
+                            "Range type not found",
+                            re.Span,
+                            "ensure `core.range` is loaded via prelude",
+                            "E2003");
+                        type = TypeRegistry.Never;
+                        break;
                     }
 
-                    type = new ArrayType(unified, al.Elements.Count);
+                    type = rangeType;
+                    break;
+                }
+            case MatchExpressionNode match:
+                type = CheckMatchExpression(match, expectedType);
+                break;
+            case AddressOfExpressionNode adr:
+                {
+                    var tt = CheckExpression(adr.Target);
+                    if (IsNever(tt))
+                    {
+                        type = TypeRegistry.Never;
+                        break;
+                    }
+                    type = new ReferenceType(tt);
+                    break;
+                }
+            case DereferenceExpressionNode dr:
+                {
+                    var pt = CheckExpression(dr.Target);
+                    if (IsNever(pt))
+                    {
+                        type = TypeRegistry.Never;
+                        break;
+                    }
+                    var prunedPt = pt.Prune();
+                    if (prunedPt is ReferenceType rft) type = rft.InnerType;
+                    else if (prunedPt is StructType opt && TypeRegistry.IsOption(opt) && opt.TypeArguments.Count > 0 &&
+                             opt.TypeArguments[0] is ReferenceType rf2) type = rf2.InnerType;
+                    else
+                    {
+                        ReportError(
+                            "cannot dereference non-reference type",
+                            dr.Span,
+                            $"expected `&T` or `&T?`, found `{prunedPt}`",
+                            "E2012");
+                        type = TypeRegistry.Never;
+                    }
+
+                    break;
+                }
+            case MemberAccessExpressionNode ma:
+                type = CheckMemberAccessExpression(ma, expectedType);
+                break;
+            case StructConstructionExpressionNode sc:
+                {
+                    var resolvedType = ResolveTypeNode(sc.TypeName);
+                    StructType? optionLiteral = null;
+                    if (resolvedType is StructType optStruct && TypeRegistry.IsOption(optStruct))
+                    {
+                        optionLiteral = optStruct;
+                        resolvedType = optStruct; // Already a StructType
+                    }
+
+                    if (resolvedType == null)
+                    {
+                        ReportError(
+                            $"cannot find type `{(sc.TypeName as NamedTypeNode)?.Name ?? "unknown"}`",
+                            sc.TypeName.Span,
+                            "not found in this scope",
+                            "E2003");
+                        type = TypeRegistry.Never;
+                        break;
+                    }
+
+                    if (resolvedType is GenericType genericType)
+                        resolvedType = InstantiateStruct(genericType, sc.Span);
+
+                    if (resolvedType is StructType optFromGeneric && TypeRegistry.IsOption(optFromGeneric))
+                    {
+                        optionLiteral = optFromGeneric;
+                        resolvedType = optFromGeneric; // Already a StructType
+                    }
+
+                    if (resolvedType is not StructType st)
+                    {
+                        ReportError(
+                            $"type `{resolvedType.Name}` is not a struct",
+                            sc.TypeName.Span,
+                            "cannot construct non-struct type",
+                            "E2018");
+                        type = TypeRegistry.I32;
+                        break;
+                    }
+
+                    ValidateStructLiteralFields(st, sc.Fields, sc.Span);
+
+                    // Ensure no missing fields
+                    var provided = new HashSet<string>();
+                    foreach (var (fieldName, fieldExpr) in sc.Fields)
+                    {
+                        provided.Add(fieldName);
+                        var fieldType = st.GetFieldType(fieldName);
+                        if (fieldType == null)
+                        {
+                            ReportError(
+                                $"struct `{st.Name}` does not have a field named `{fieldName}`",
+                                fieldExpr.Span,
+                                "unknown field",
+                                "E2014");
+                            continue;
+                        }
+
+                        var valueType = CheckExpression(fieldExpr, fieldType);
+                        // Unify field value with field type - TypeVar.Prune() handles propagation
+                        var unified = UnifyTypes(valueType, fieldType, fieldExpr.Span);
+                    }
+
+                    foreach (var (fieldName, _) in st.Fields)
+                        if (!provided.Contains(fieldName))
+                            ReportError(
+                                $"missing field `{fieldName}` in struct construction",
+                                sc.Span,
+                                $"struct `{st.Name}` requires field `{fieldName}`",
+                                "E2019");
+                    type = optionLiteral ?? st;
+                    break;
+                }
+            case AnonymousStructExpressionNode anon:
+                {
+                    StructType? structType = expectedType switch
+                    {
+                        StructType st => st,
+                        GenericType gt => InstantiateStruct(gt, anon.Span),
+                        _ => null
+                    };
+
+                    if (structType == null)
+                    {
+                        // No expected type - infer field types from values (tuple case)
+                        // This enables tuples like (10, 20) without type annotation
+                        var inferredFields = new List<(string Name, TypeBase Type)>();
+                        bool inferenceSucceeded = true;
+
+                        foreach (var (fieldName, fieldValue) in anon.Fields)
+                        {
+                            var fieldType = CheckExpression(fieldValue);
+
+                            // Handle comptime types: default comptime_int to i32 for tuples
+                            var prunedType = fieldType is TypeVar tv ? tv.Prune() : fieldType;
+                            if (prunedType is ComptimeInt)
+                            {
+                                // Unify the TypeVar with i32 to resolve the comptime_int
+                                fieldType = UnifyTypes(fieldType, TypeRegistry.I32, fieldValue.Span) ?? TypeRegistry.I32;
+                            }
+                            else if (fieldType == TypeRegistry.Never)
+                            {
+                                inferenceSucceeded = false;
+                            }
+
+                            inferredFields.Add((fieldName, fieldType));
+                        }
+
+                        if (!inferenceSucceeded)
+                        {
+                            ReportError(
+                                "cannot infer type of anonymous struct/tuple literal",
+                                anon.Span,
+                                "add a type annotation",
+                                "E2018");
+                            type = TypeRegistry.Never;
+                            break;
+                        }
+
+                        // Create an anonymous struct type from inferred fields
+                        structType = new StructType("", typeArguments: null, fields: inferredFields);
+                        _compilation.InstantiatedTypes.Add(structType);
+                    }
+                    else
+                    {
+                        ValidateStructLiteralFields(structType, anon.Fields, anon.Span);
+                    }
+
+                    anon.Type = structType;
+
+                    if (TypeRegistry.IsOption(expectedType))
+                        type = expectedType;
+                    else
+                        type = structType;
+
+                    break;
                 }
 
-                break;
-            }
+            case NullLiteralNode nullLiteral:
+                {
+                    // Infer Option type from context
+                    var innerType = expectedType switch
+                    {
+                        StructType st when TypeRegistry.IsOption(st) => st.TypeArguments[0],
+                        _ => null
+                    };
+
+                    if (innerType == null)
+                    {
+                        ReportError(
+                            "cannot infer type of null literal",
+                            nullLiteral.Span,
+                            "add an option type annotation or use an explicit constructor",
+                            "E2001");
+                        type = TypeRegistry.Never; // Fallback
+                    }
+                    else
+                    {
+                        type = TypeRegistry.MakeOption(innerType);
+                    }
+
+                    break;
+                }
+            case ArrayLiteralExpressionNode al:
+                {
+                    if (al.IsRepeatSyntax)
+                    {
+                        var rv = CheckExpression(al.RepeatValue!);
+                        type = new ArrayType(rv, al.RepeatCount!.Value);
+                    }
+                    else if (al.Elements!.Count == 0)
+                    {
+                        ReportError(
+                            "cannot infer type of empty array literal",
+                            al.Span,
+                            "consider adding type annotation",
+                            "E2026");
+                        type = new ArrayType(TypeRegistry.Never, 0);
+                    }
+                    else
+                    {
+                        var first = CheckExpression(al.Elements[0]);
+                        var unified = first;
+                        for (var i = 1; i < al.Elements.Count; i++)
+                        {
+                            var et = CheckExpression(al.Elements[i]);
+                            unified = UnifyTypes(unified, et, al.Elements[i].Span);
+                        }
+
+                        type = new ArrayType(unified, al.Elements.Count);
+                    }
+
+                    break;
+                }
             case IndexExpressionNode ix:
-            {
-                var bt = CheckExpression(ix.Base);
-                if (IsNever(bt))
                 {
-                    type = TypeRegistry.Never;
+                    var bt = CheckExpression(ix.Base);
+                    if (IsNever(bt))
+                    {
+                        type = TypeRegistry.Never;
+                        break;
+                    }
+                    var it = CheckExpression(ix.Index);
+                    if (IsNever(it))
+                    {
+                        type = TypeRegistry.Never;
+                        break;
+                    }
+                    var prunedIt = it.Prune();  // Prune to get the actual type
+
+                    if (!TypeRegistry.IsIntegerType(prunedIt))
+                        ReportError(
+                            "array index must be an integer",
+                            ix.Index.Span,
+                            $"found `{prunedIt}`",
+                            "E2027");
+                    else if (prunedIt is ComptimeInt)
+                    {
+                        // Resolve comptime_int indices to usize - unify handles TypeVar propagation
+                        UnifyTypes(it, TypeRegistry.USize, ix.Index.Span);
+                    }
+
+                    if (bt is ArrayType at) type = at.ElementType;
+                    else if (bt is StructType st && TypeRegistry.IsSlice(st)) type = st.TypeArguments[0];
+                    else
+                    {
+                        ReportError(
+                            $"cannot index into value of type `{bt}`",
+                            ix.Base.Span,
+                            "only arrays and slices can be indexed",
+                            "E2028");
+                        type = TypeRegistry.Never;
+                    }
+
                     break;
                 }
-                var it = CheckExpression(ix.Index);
-                if (IsNever(it))
-                {
-                    type = TypeRegistry.Never;
-                    break;
-                }
-                var prunedIt = it.Prune();  // Prune to get the actual type
-
-                if (!TypeRegistry.IsIntegerType(prunedIt))
-                    ReportError(
-                        "array index must be an integer",
-                        ix.Index.Span,
-                        $"found `{prunedIt}`",
-                        "E2027");
-                else if (prunedIt is ComptimeInt)
-                {
-                    // Resolve comptime_int indices to usize - unify handles TypeVar propagation
-                    UnifyTypes(it, TypeRegistry.USize, ix.Index.Span);
-                }
-
-                if (bt is ArrayType at) type = at.ElementType;
-                else if (bt is StructType st && TypeRegistry.IsSlice(st)) type = st.TypeArguments[0];
-                else
-                {
-                    ReportError(
-                        $"cannot index into value of type `{bt}`",
-                        ix.Base.Span,
-                        "only arrays and slices can be indexed",
-                        "E2028");
-                    type = TypeRegistry.Never;
-                }
-
-                break;
-            }
             case CastExpressionNode c:
-            {
-                var src = CheckExpression(c.Expression);
-                var dst = ResolveTypeNode(c.TargetType) ?? TypeRegistry.Never;
-                if (!CanExplicitCast(src, dst))
-                    ReportError(
-                        "invalid cast",
-                        c.Span,
-                        $"cannot cast `{src}` to `{dst}`",
-                        "E2020");
+                {
+                    var src = CheckExpression(c.Expression);
+                    var dst = ResolveTypeNode(c.TargetType) ?? TypeRegistry.Never;
+                    if (!CanExplicitCast(src, dst))
+                        ReportError(
+                            "invalid cast",
+                            c.Span,
+                            $"cannot cast `{src}` to `{dst}`",
+                            "E2020");
 
-                // When casting comptime_int to a concrete integer type, update the TypeVar
-                // so the literal gets properly resolved
-                if (src is TypeVar srcTv && srcTv.Prune() is ComptimeInt && TypeRegistry.IsIntegerType(dst))
-                    srcTv.Instance = dst;
+                    // When casting comptime_int to a concrete integer type, update the TypeVar
+                    // so the literal gets properly resolved
+                    if (src is TypeVar srcTv && srcTv.Prune() is ComptimeInt && TypeRegistry.IsIntegerType(dst))
+                        srcTv.Instance = dst;
 
-                type = dst;
-                break;
-            }
+                    type = dst;
+                    break;
+                }
             case CoalesceExpressionNode coalesce:
                 type = CheckCoalesceExpression(coalesce);
                 break;
@@ -2825,179 +2935,179 @@ public class TypeChecker
         switch (typeNode)
         {
             case NamedTypeNode named:
-            {
-                if (IsGenericNameInScope(named.Name))
-                    return new GenericParameterType(named.Name);
-
-                var bt = TypeRegistry.GetTypeByName(named.Name);
-                if (bt != null)
                 {
-                    // Track primitive type usage (but not Type itself)
-                    if (bt is not StructType { StructName: "Type" })
+                    if (IsGenericNameInScope(named.Name))
+                        return new GenericParameterType(named.Name);
+
+                    var bt = TypeRegistry.GetTypeByName(named.Name);
+                    if (bt != null)
                     {
-                        _compilation.InstantiatedTypes.Add(bt);
+                        // Track primitive type usage (but not Type itself)
+                        if (bt is not StructType { StructName: "Type" })
+                        {
+                            _compilation.InstantiatedTypes.Add(bt);
+                        }
+
+                        return bt;
                     }
 
-                    return bt;
-                }
-
-                // Use ResolveTypeName to handle both FQN and short names
-                var resolvedType = ResolveTypeName(named.Name);
-                if (resolvedType != null)
-                {
-                    // Track non-Type struct usage
-                    if (!TypeRegistry.IsType(resolvedType))
+                    // Use ResolveTypeName to handle both FQN and short names
+                    var resolvedType = ResolveTypeName(named.Name);
+                    if (resolvedType != null)
                     {
-                        _compilation.InstantiatedTypes.Add(resolvedType);
+                        // Track non-Type struct usage
+                        if (!TypeRegistry.IsType(resolvedType))
+                        {
+                            _compilation.InstantiatedTypes.Add(resolvedType);
+                        }
+
+                        return resolvedType;
                     }
 
-                    return resolvedType;
-                }
-
-                if (named.Name.Length == 1 && char.IsUpper(named.Name[0]))
-                    return new GenericParameterType(named.Name);
-                ReportError(
-                    $"cannot find type `{named.Name}` in this scope",
-                    named.Span,
-                    "not found in this scope",
-                    "E2003");
-                return null;
-            }
-            case GenericParameterTypeNode gp:
-                return new GenericParameterType(gp.Name);
-            case ReferenceTypeNode rt:
-            {
-                var inner = ResolveTypeNode(rt.InnerType);
-                if (inner == null) return null;
-                // Disallow &fn(...) - function types are already pointer-sized
-                if (inner is FunctionType)
-                {
+                    if (named.Name.Length == 1 && char.IsUpper(named.Name[0]))
+                        return new GenericParameterType(named.Name);
                     ReportError(
-                        "cannot create reference to function type",
-                        rt.Span,
-                        "function types are already pointer-sized; use `fn(...)` directly",
-                        "E2006");
-                    return null;
-                }
-                return new ReferenceType(inner);
-            }
-            case NullableTypeNode nt:
-            {
-                var inner = ResolveTypeNode(nt.InnerType);
-                if (inner == null) return null;
-                return TypeRegistry.MakeOption(inner);
-            }
-            case GenericTypeNode gt:
-            {
-                var args = new List<TypeBase>();
-                foreach (var a in gt.TypeArguments)
-                {
-                    var at = ResolveTypeNode(a);
-                    if (at == null) return null;
-                    args.Add(at);
-                }
-
-                // Resolve the base type name (might be short name or FQN)
-                var baseType = ResolveTypeName(gt.Name);
-
-                // Special case for Type(T) - check using TypeRegistry
-                if (baseType is StructType st && TypeRegistry.IsType(st))
-                {
-                    if (args.Count != 1)
-                    {
-                        ReportError(
-                            "`Type` expects exactly one type argument",
-                            gt.Span,
-                            "usage: Type(T)",
-                            "E2006");
-                        return null;
-                    }
-
-                    // Do NOT track Type(T) instantiations!
-                    return TypeRegistry.MakeType(args[0]);
-                }
-
-                // Special case for Option(T)
-                if (baseType is StructType st2 && TypeRegistry.IsOption(st2))
-                {
-                    if (args.Count != 1)
-                    {
-                        ReportError(
-                            "`Option` expects exactly one type argument",
-                            gt.Span,
-                            "usage: Option(T)",
-                            "E2006");
-                        return null;
-                    }
-
-                    return TypeRegistry.MakeOption(args[0]);
-                }
-
-                // General generic struct/enum instantiation
-                if (baseType is StructType structTemplate)
-                {
-                    // Track generic struct instantiation
-                    var instantiated = InstantiateStruct(structTemplate, args, gt.Span);
-                    _compilation.InstantiatedTypes.Add(instantiated);
-                    return instantiated;
-                }
-                else if (baseType is EnumType enumTemplate)
-                {
-                    // Track generic enum instantiation
-                    var instantiated = InstantiateEnum(enumTemplate, args, gt.Span);
-                    _compilation.InstantiatedTypes.Add(instantiated);
-                    return instantiated;
-                }
-                else
-                {
-                    ReportError(
-                        $"cannot find generic type `{gt.Name}`",
-                        gt.Span,
+                        $"cannot find type `{named.Name}` in this scope",
+                        named.Span,
                         "not found in this scope",
                         "E2003");
                     return null;
                 }
-            }
+            case GenericParameterTypeNode gp:
+                return new GenericParameterType(gp.Name);
+            case ReferenceTypeNode rt:
+                {
+                    var inner = ResolveTypeNode(rt.InnerType);
+                    if (inner == null) return null;
+                    // Disallow &fn(...) - function types are already pointer-sized
+                    if (inner is FunctionType)
+                    {
+                        ReportError(
+                            "cannot create reference to function type",
+                            rt.Span,
+                            "function types are already pointer-sized; use `fn(...)` directly",
+                            "E2006");
+                        return null;
+                    }
+                    return new ReferenceType(inner);
+                }
+            case NullableTypeNode nt:
+                {
+                    var inner = ResolveTypeNode(nt.InnerType);
+                    if (inner == null) return null;
+                    return TypeRegistry.MakeOption(inner);
+                }
+            case GenericTypeNode gt:
+                {
+                    var args = new List<TypeBase>();
+                    foreach (var a in gt.TypeArguments)
+                    {
+                        var at = ResolveTypeNode(a);
+                        if (at == null) return null;
+                        args.Add(at);
+                    }
+
+                    // Resolve the base type name (might be short name or FQN)
+                    var baseType = ResolveTypeName(gt.Name);
+
+                    // Special case for Type(T) - check using TypeRegistry
+                    if (baseType is StructType st && TypeRegistry.IsType(st))
+                    {
+                        if (args.Count != 1)
+                        {
+                            ReportError(
+                                "`Type` expects exactly one type argument",
+                                gt.Span,
+                                "usage: Type(T)",
+                                "E2006");
+                            return null;
+                        }
+
+                        // Do NOT track Type(T) instantiations!
+                        return TypeRegistry.MakeType(args[0]);
+                    }
+
+                    // Special case for Option(T)
+                    if (baseType is StructType st2 && TypeRegistry.IsOption(st2))
+                    {
+                        if (args.Count != 1)
+                        {
+                            ReportError(
+                                "`Option` expects exactly one type argument",
+                                gt.Span,
+                                "usage: Option(T)",
+                                "E2006");
+                            return null;
+                        }
+
+                        return TypeRegistry.MakeOption(args[0]);
+                    }
+
+                    // General generic struct/enum instantiation
+                    if (baseType is StructType structTemplate)
+                    {
+                        // Track generic struct instantiation
+                        var instantiated = InstantiateStruct(structTemplate, args, gt.Span);
+                        _compilation.InstantiatedTypes.Add(instantiated);
+                        return instantiated;
+                    }
+                    else if (baseType is EnumType enumTemplate)
+                    {
+                        // Track generic enum instantiation
+                        var instantiated = InstantiateEnum(enumTemplate, args, gt.Span);
+                        _compilation.InstantiatedTypes.Add(instantiated);
+                        return instantiated;
+                    }
+                    else
+                    {
+                        ReportError(
+                            $"cannot find generic type `{gt.Name}`",
+                            gt.Span,
+                            "not found in this scope",
+                            "E2003");
+                        return null;
+                    }
+                }
             case ArrayTypeNode arr:
-            {
-                var et = ResolveTypeNode(arr.ElementType);
-                if (et == null) return null;
-                return new ArrayType(et, arr.Length);
-            }
+                {
+                    var et = ResolveTypeNode(arr.ElementType);
+                    if (et == null) return null;
+                    return new ArrayType(et, arr.Length);
+                }
             case SliceTypeNode sl:
-            {
-                var et = ResolveTypeNode(sl.ElementType);
-                if (et == null) return null;
-                return TypeRegistry.MakeSlice(et);
-            }
+                {
+                    var et = ResolveTypeNode(sl.ElementType);
+                    if (et == null) return null;
+                    return MakeSliceType(et, sl.Span);
+                }
             case FunctionTypeNode ft:
-            {
-                var paramTypes = new List<TypeBase>();
-                foreach (var pt in ft.ParameterTypes)
                 {
-                    var resolved = ResolveTypeNode(pt);
-                    if (resolved == null) return null;
-                    paramTypes.Add(resolved);
+                    var paramTypes = new List<TypeBase>();
+                    foreach (var pt in ft.ParameterTypes)
+                    {
+                        var resolved = ResolveTypeNode(pt);
+                        if (resolved == null) return null;
+                        paramTypes.Add(resolved);
+                    }
+                    var returnType = ResolveTypeNode(ft.ReturnType);
+                    if (returnType == null) return null;
+                    return new FunctionType(paramTypes, returnType);
                 }
-                var returnType = ResolveTypeNode(ft.ReturnType);
-                if (returnType == null) return null;
-                return new FunctionType(paramTypes, returnType);
-            }
             case AnonymousStructTypeNode ast:
-            {
-                // Anonymous struct type (used for tuple types like (T1, T2) -> { _0: T1, _1: T2 })
-                var fields = new List<(string Name, TypeBase Type)>();
-                foreach (var (fieldName, fieldTypeNode) in ast.Fields)
                 {
-                    var fieldType = ResolveTypeNode(fieldTypeNode);
-                    if (fieldType == null) return null;
-                    fields.Add((fieldName, fieldType));
+                    // Anonymous struct type (used for tuple types like (T1, T2) -> { _0: T1, _1: T2 })
+                    var fields = new List<(string Name, TypeBase Type)>();
+                    foreach (var (fieldName, fieldTypeNode) in ast.Fields)
+                    {
+                        var fieldType = ResolveTypeNode(fieldTypeNode);
+                        if (fieldType == null) return null;
+                        fields.Add((fieldName, fieldType));
+                    }
+                    // Create an anonymous struct type (empty name for anonymous struct)
+                    var anonStruct = new StructType("", typeArguments: null, fields: fields);
+                    _compilation.InstantiatedTypes.Add(anonStruct);
+                    return anonStruct;
                 }
-                // Create an anonymous struct type (empty name for anonymous struct)
-                var anonStruct = new StructType("", typeArguments: null, fields: fields);
-                _compilation.InstantiatedTypes.Add(anonStruct);
-                return anonStruct;
-            }
             default:
                 return null;
         }
@@ -3045,6 +3155,24 @@ public class TypeChecker
         var specialized = new StructType(template.StructName, typeArgs.ToList(), specializedFields);
         _compilation.StructSpecializations[key] = specialized;
         return specialized;
+    }
+
+    /// <summary>
+    /// Creates a Slice(T) type using the stdlib Slice struct template.
+    /// Uses the normal generic instantiation infrastructure instead of hardcoded fields.
+    /// </summary>
+    public StructType MakeSliceType(TypeBase elementType, SourceSpan span)
+    {
+        // Look up the Slice template from core.slice
+        if (!_compilation.StructsByFqn.TryGetValue("core.slice.Slice", out var sliceTemplate))
+        {
+            // Fallback to TypeRegistry if stdlib not loaded (e.g., during early bootstrap)
+            return TypeRegistry.MakeSlice(elementType);
+        }
+
+        var instantiated = InstantiateStruct(sliceTemplate, [elementType], span);
+        _compilation.InstantiatedTypes.Add(instantiated);
+        return instantiated;
     }
 
     private EnumType InstantiateEnum(EnumType template, IReadOnlyList<TypeBase> typeArgs, SourceSpan span)
@@ -3580,147 +3708,147 @@ public class TypeChecker
 
                 return true;
             case StructType ps when arg is StructType @as && ps.StructName == @as.StructName:
-            {
-                // First, match type arguments
-                // e.g., matching Type<$T> with Type<i32> should bind $T to i32
-                if (ps.TypeArguments.Count == @as.TypeArguments.Count)
                 {
-                    for (var i = 0; i < ps.TypeArguments.Count; i++)
+                    // First, match type arguments
+                    // e.g., matching Type<$T> with Type<i32> should bind $T to i32
+                    if (ps.TypeArguments.Count == @as.TypeArguments.Count)
                     {
-                        var paramType = ps.TypeArguments[i];
-                        var argType = @as.TypeArguments[i];
-
-                        _logger.LogDebug("{Indent}Struct type arg[{Index}]: '{ParamType}' vs '{ArgType}'", Indent(), i,
-                            paramType.Name, argType.Name);
-
-                        // If param is a generic parameter type, bind it
-                        if (paramType is GenericParameterType gp)
+                        for (var i = 0; i < ps.TypeArguments.Count; i++)
                         {
-                            var varName = gp.ParamName;
-                            _logger.LogDebug("{Indent}Binding type variable '{VarName}' -> '{ArgType}'", Indent(),
-                                varName, argType.Name);
+                            var paramType = ps.TypeArguments[i];
+                            var argType = @as.TypeArguments[i];
 
-                            if (bindings.TryGetValue(varName, out var existingBinding))
-                            {
-                                if (!existingBinding.Equals(argType))
-                                {
-                                    _logger.LogDebug(
-                                        "{Indent}Conflict: '{VarName}' already bound to '{ExistingType}', cannot rebind to '{NewType}'",
-                                        Indent(), varName, existingBinding.Name, argType.Name);
-                                    conflictParam = varName;
-                                    conflictTypes = (existingBinding, argType);
-                                    return false;
-                                }
-                            }
-                            else
-                            {
-                                bindings[varName] = argType;
-                            }
-                        }
-                        else if (!paramType.Equals(argType))
-                        {
-                            // Concrete type arguments must match exactly
-                            _logger.LogDebug("{Indent}Concrete type mismatch: '{ParamType}' != '{ArgType}'", Indent(),
+                            _logger.LogDebug("{Indent}Struct type arg[{Index}]: '{ParamType}' vs '{ArgType}'", Indent(), i,
                                 paramType.Name, argType.Name);
-                            return false;
-                        }
-                    }
-                }
 
-                // Then, match fields
-                var argFields = new Dictionary<string, TypeBase>();
-                foreach (var (name, type) in @as.Fields)
-                    argFields[name] = type;
-
-                foreach (var (fieldName, fieldType) in ps.Fields)
-                {
-                    if (!argFields.TryGetValue(fieldName, out var argFieldType))
-                    {
-                        _logger.LogDebug("{Indent}Field '{FieldName}' not found in arg struct", Indent(), fieldName);
-                        return false;
-                    }
-
-                    _logger.LogDebug("{Indent}Recursing into field '{FieldName}': {ParamType} vs {ArgType}",
-                        Indent(), fieldName, fieldType.Name, argFieldType.Name);
-                    if (!TryBindGeneric(fieldType, argFieldType, bindings, out conflictParam, out conflictTypes))
-                        return false;
-                }
-
-                return true;
-            }
-            case EnumType pe when arg is EnumType ae && pe.Name == ae.Name:
-            {
-                // Match type arguments for generic enums
-                // e.g., matching Option($T) with Option(i32) should bind $T to i32
-                if (pe.TypeArguments.Count == ae.TypeArguments.Count)
-                {
-                    for (var i = 0; i < pe.TypeArguments.Count; i++)
-                    {
-                        var paramType = pe.TypeArguments[i];
-                        var argType = ae.TypeArguments[i];
-
-                        _logger.LogDebug("{Indent}Enum type arg[{Index}]: '{ParamType}' vs '{ArgType}'", Indent(), i,
-                            paramType.Name, argType.Name);
-
-                        // If param is a generic parameter type, bind it
-                        if (paramType is GenericParameterType gp)
-                        {
-                            var varName = gp.ParamName;
-                            _logger.LogDebug("{Indent}Binding type variable '{VarName}' -> '{ArgType}'", Indent(),
-                                varName, argType.Name);
-
-                            if (bindings.TryGetValue(varName, out var existingBinding))
+                            // If param is a generic parameter type, bind it
+                            if (paramType is GenericParameterType gp)
                             {
-                                if (!existingBinding.Equals(argType))
+                                var varName = gp.ParamName;
+                                _logger.LogDebug("{Indent}Binding type variable '{VarName}' -> '{ArgType}'", Indent(),
+                                    varName, argType.Name);
+
+                                if (bindings.TryGetValue(varName, out var existingBinding))
                                 {
-                                    _logger.LogDebug(
-                                        "{Indent}Conflict: '{VarName}' already bound to '{ExistingType}', cannot rebind to '{NewType}'",
-                                        Indent(), varName, existingBinding.Name, argType.Name);
-                                    conflictParam = varName;
-                                    conflictTypes = (existingBinding, argType);
-                                    return false;
+                                    if (!existingBinding.Equals(argType))
+                                    {
+                                        _logger.LogDebug(
+                                            "{Indent}Conflict: '{VarName}' already bound to '{ExistingType}', cannot rebind to '{NewType}'",
+                                            Indent(), varName, existingBinding.Name, argType.Name);
+                                        conflictParam = varName;
+                                        conflictTypes = (existingBinding, argType);
+                                        return false;
+                                    }
+                                }
+                                else
+                                {
+                                    bindings[varName] = argType;
                                 }
                             }
-                            else
+                            else if (!paramType.Equals(argType))
                             {
-                                bindings[varName] = argType;
+                                // Concrete type arguments must match exactly
+                                _logger.LogDebug("{Indent}Concrete type mismatch: '{ParamType}' != '{ArgType}'", Indent(),
+                                    paramType.Name, argType.Name);
+                                return false;
                             }
                         }
-                        else if (!TryBindGeneric(paramType, argType, bindings, out conflictParam, out conflictTypes))
+                    }
+
+                    // Then, match fields
+                    var argFields = new Dictionary<string, TypeBase>();
+                    foreach (var (name, type) in @as.Fields)
+                        argFields[name] = type;
+
+                    foreach (var (fieldName, fieldType) in ps.Fields)
+                    {
+                        if (!argFields.TryGetValue(fieldName, out var argFieldType))
                         {
-                            // Recursively bind type arguments that may contain nested generics
+                            _logger.LogDebug("{Indent}Field '{FieldName}' not found in arg struct", Indent(), fieldName);
                             return false;
                         }
+
+                        _logger.LogDebug("{Indent}Recursing into field '{FieldName}': {ParamType} vs {ArgType}",
+                            Indent(), fieldName, fieldType.Name, argFieldType.Name);
+                        if (!TryBindGeneric(fieldType, argFieldType, bindings, out conflictParam, out conflictTypes))
+                            return false;
                     }
-                }
 
-                return true;
-            }
+                    return true;
+                }
+            case EnumType pe when arg is EnumType ae && pe.Name == ae.Name:
+                {
+                    // Match type arguments for generic enums
+                    // e.g., matching Option($T) with Option(i32) should bind $T to i32
+                    if (pe.TypeArguments.Count == ae.TypeArguments.Count)
+                    {
+                        for (var i = 0; i < pe.TypeArguments.Count; i++)
+                        {
+                            var paramType = pe.TypeArguments[i];
+                            var argType = ae.TypeArguments[i];
+
+                            _logger.LogDebug("{Indent}Enum type arg[{Index}]: '{ParamType}' vs '{ArgType}'", Indent(), i,
+                                paramType.Name, argType.Name);
+
+                            // If param is a generic parameter type, bind it
+                            if (paramType is GenericParameterType gp)
+                            {
+                                var varName = gp.ParamName;
+                                _logger.LogDebug("{Indent}Binding type variable '{VarName}' -> '{ArgType}'", Indent(),
+                                    varName, argType.Name);
+
+                                if (bindings.TryGetValue(varName, out var existingBinding))
+                                {
+                                    if (!existingBinding.Equals(argType))
+                                    {
+                                        _logger.LogDebug(
+                                            "{Indent}Conflict: '{VarName}' already bound to '{ExistingType}', cannot rebind to '{NewType}'",
+                                            Indent(), varName, existingBinding.Name, argType.Name);
+                                        conflictParam = varName;
+                                        conflictTypes = (existingBinding, argType);
+                                        return false;
+                                    }
+                                }
+                                else
+                                {
+                                    bindings[varName] = argType;
+                                }
+                            }
+                            else if (!TryBindGeneric(paramType, argType, bindings, out conflictParam, out conflictTypes))
+                            {
+                                // Recursively bind type arguments that may contain nested generics
+                                return false;
+                            }
+                        }
+                    }
+
+                    return true;
+                }
             case FunctionType pf when arg is FunctionType af:
-            {
-                // Match function types: fn($T) T with fn(i32) i32
-                // Parameter counts must match
-                if (pf.ParameterTypes.Count != af.ParameterTypes.Count)
                 {
-                    _logger.LogDebug("{Indent}Function parameter count mismatch: {ParamCount} vs {ArgCount}",
-                        Indent(), pf.ParameterTypes.Count, af.ParameterTypes.Count);
-                    return false;
-                }
-
-                // Recursively bind each parameter type
-                for (var i = 0; i < pf.ParameterTypes.Count; i++)
-                {
-                    _logger.LogDebug("{Indent}Recursing into function param[{Index}]: {ParamType} vs {ArgType}",
-                        Indent(), i, pf.ParameterTypes[i].Name, af.ParameterTypes[i].Name);
-                    if (!TryBindGeneric(pf.ParameterTypes[i], af.ParameterTypes[i], bindings, out conflictParam, out conflictTypes))
+                    // Match function types: fn($T) T with fn(i32) i32
+                    // Parameter counts must match
+                    if (pf.ParameterTypes.Count != af.ParameterTypes.Count)
+                    {
+                        _logger.LogDebug("{Indent}Function parameter count mismatch: {ParamCount} vs {ArgCount}",
+                            Indent(), pf.ParameterTypes.Count, af.ParameterTypes.Count);
                         return false;
-                }
+                    }
 
-                // Recursively bind return type
-                _logger.LogDebug("{Indent}Recursing into function return type: {ParamType} vs {ArgType}",
-                    Indent(), pf.ReturnType.Name, af.ReturnType.Name);
-                return TryBindGeneric(pf.ReturnType, af.ReturnType, bindings, out conflictParam, out conflictTypes);
-            }
+                    // Recursively bind each parameter type
+                    for (var i = 0; i < pf.ParameterTypes.Count; i++)
+                    {
+                        _logger.LogDebug("{Indent}Recursing into function param[{Index}]: {ParamType} vs {ArgType}",
+                            Indent(), i, pf.ParameterTypes[i].Name, af.ParameterTypes[i].Name);
+                        if (!TryBindGeneric(pf.ParameterTypes[i], af.ParameterTypes[i], bindings, out conflictParam, out conflictTypes))
+                            return false;
+                    }
+
+                    // Recursively bind return type
+                    _logger.LogDebug("{Indent}Recursing into function return type: {ParamType} vs {ArgType}",
+                        Indent(), pf.ReturnType.Name, af.ReturnType.Name);
+                    return TryBindGeneric(pf.ReturnType, af.ReturnType, bindings, out conflictParam, out conflictTypes);
+                }
             default:
                 // If arg is a TypeVar bound to comptime_int and param is a concrete integer type,
                 // update the TypeVar to point to the concrete type
@@ -3876,7 +4004,8 @@ public class TypeChecker
         NullLiteralNode nl => new NullLiteralNode(nl.Span),
         IdentifierExpressionNode id => new IdentifierExpressionNode(id.Span, id.Name),
         BinaryExpressionNode bin => new BinaryExpressionNode(bin.Span, CloneExpression(bin.Left), bin.Operator, CloneExpression(bin.Right)),
-        CallExpressionNode call => new CallExpressionNode(call.Span, call.FunctionName, call.Arguments.Select(CloneExpression).ToList()),
+        CallExpressionNode call => new CallExpressionNode(call.Span, call.FunctionName, call.Arguments.Select(CloneExpression).ToList(),
+            call.UfcsReceiver != null ? CloneExpression(call.UfcsReceiver) : null, call.MethodName),
         IfExpressionNode ie => new IfExpressionNode(ie.Span, CloneExpression(ie.Condition), CloneExpression(ie.ThenBranch), ie.ElseBranch != null ? CloneExpression(ie.ElseBranch) : null),
         BlockExpressionNode blk => new BlockExpressionNode(blk.Span, CloneStatements(blk.Statements), blk.TrailingExpression != null ? CloneExpression(blk.TrailingExpression) : null),
         MemberAccessExpressionNode ma => new MemberAccessExpressionNode(ma.Span, CloneExpression(ma.Target), ma.FieldName),
@@ -3908,6 +4037,9 @@ public class TypeChecker
                 s.Parameters.Count == concreteParamTypes.Count &&
                 s.Parameters.Select((p, i) => ResolveTypeNode(p.Type) ?? TypeRegistry.Never).SequenceEqual(concreteParamTypes));
         }
+
+        // Save current bindings - nested specializations might overwrite them
+        var savedBindings = _currentBindings;
 
         PushGenericScope(genericEntry.AstNode);
         _currentBindings = bindings;
@@ -3943,12 +4075,17 @@ public class TypeChecker
             _specializations.Add(newFn);
             _emittedSpecs.Add(key);
 
+            // Check the specialized function body.
+            // Note: We keep _currentBindings and the generic scope active so that
+            // references to T in the body are properly substituted to concrete types.
+            // CheckFunction will push its own scope (which will be empty for newFn),
+            // but the outer scope from genericEntry.AstNode will still be active.
             CheckFunction(newFn);
             return newFn;
         }
         finally
         {
-            _currentBindings = null;
+            _currentBindings = savedBindings;  // Restore previous bindings
             PopGenericScope();
         }
     }
@@ -4215,56 +4352,56 @@ public class TypeChecker
                 return new List<string> { "_else_" };
 
             case EnumVariantPatternNode evp:
-            {
-                // Find the variant
-                string variantName = evp.VariantName;
-                var variant = enumType.Variants.FirstOrDefault(v => v.VariantName == variantName);
-
-                if (variant == default)
                 {
-                    ReportError(
-                        $"enum `{enumType.Name}` has no variant `{variantName}`",
-                        pattern.Span,
-                        null,
-                        "E2037");
-                    return new List<string>();
-                }
+                    // Find the variant
+                    string variantName = evp.VariantName;
+                    var variant = enumType.Variants.FirstOrDefault(v => v.VariantName == variantName);
 
-                // Check sub-pattern arity
-                var expectedSubPatterns = variant.PayloadType != null
-                    ? (variant.PayloadType is StructType stArity && stArity.Name.Contains("_payload")
-                        ? stArity.Fields.Count
-                        : 1)
-                    : 0;
-
-                if (evp.SubPatterns.Count != expectedSubPatterns)
-                {
-                    ReportError(
-                        $"variant `{variantName}` expects {expectedSubPatterns} field(s), pattern has {evp.SubPatterns.Count}",
-                        pattern.Span,
-                        null,
-                        "E2032");
-                }
-                else if (variant.PayloadType != null)
-                {
-                    // Bind sub-pattern variables
-                    if (variant.PayloadType is StructType st && st.Name.Contains("_payload"))
+                    if (variant == default)
                     {
-                        // Multiple fields
-                        for (int i = 0; i < evp.SubPatterns.Count && i < st.Fields.Count; i++)
+                        ReportError(
+                            $"enum `{enumType.Name}` has no variant `{variantName}`",
+                            pattern.Span,
+                            null,
+                            "E2037");
+                        return new List<string>();
+                    }
+
+                    // Check sub-pattern arity
+                    var expectedSubPatterns = variant.PayloadType != null
+                        ? (variant.PayloadType is StructType stArity && stArity.Name.Contains("_payload")
+                            ? stArity.Fields.Count
+                            : 1)
+                        : 0;
+
+                    if (evp.SubPatterns.Count != expectedSubPatterns)
+                    {
+                        ReportError(
+                            $"variant `{variantName}` expects {expectedSubPatterns} field(s), pattern has {evp.SubPatterns.Count}",
+                            pattern.Span,
+                            null,
+                            "E2032");
+                    }
+                    else if (variant.PayloadType != null)
+                    {
+                        // Bind sub-pattern variables
+                        if (variant.PayloadType is StructType st && st.Name.Contains("_payload"))
                         {
-                            BindPatternVariable(evp.SubPatterns[i], st.Fields[i].Type);
+                            // Multiple fields
+                            for (int i = 0; i < evp.SubPatterns.Count && i < st.Fields.Count; i++)
+                            {
+                                BindPatternVariable(evp.SubPatterns[i], st.Fields[i].Type);
+                            }
+                        }
+                        else
+                        {
+                            // Single field
+                            BindPatternVariable(evp.SubPatterns[0], variant.PayloadType);
                         }
                     }
-                    else
-                    {
-                        // Single field
-                        BindPatternVariable(evp.SubPatterns[0], variant.PayloadType);
-                    }
-                }
 
-                return new List<string> { variantName };
-            }
+                    return new List<string> { variantName };
+                }
 
             default:
                 ReportError(

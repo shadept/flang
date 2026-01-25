@@ -4,15 +4,15 @@
 
 import core.option
 
-pub fn is_some(value: Option($T)) bool {
+pub fn is_some(value: &Option($T)) bool {
     return value.has_value
 }
 
-pub fn is_none(value: Option($T)) bool {
+pub fn is_none(value: &Option($T)) bool {
     return value.has_value == false
 }
 
-pub fn unwrap_or(value: Option($T), fallback: T) T {
+pub fn unwrap_or(value: &Option($T), fallback: T) T {
     if (value.has_value) {
         return value.value
     }

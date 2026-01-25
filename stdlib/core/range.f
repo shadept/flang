@@ -14,6 +14,16 @@ pub struct Range {
     end: isize
 }
 
+pub fn op_index(r: &Range, index: isize) isize? {
+    if (index < 0) {
+        return null
+    }
+    if (index >= r.end - r.start) {
+        return null
+    }
+    return r.start + index
+}
+
 // Iterator state for ranges
 pub struct RangeIterator {
     current: isize

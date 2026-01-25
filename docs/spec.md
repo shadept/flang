@@ -554,8 +554,8 @@ a ?? b
 - If `a` is `Option(T)` or `T?` and has a value, yields unwrapped `T`; otherwise yields `b`.
 - Desugars to `op_coalesce(a, b)` function call.
 - Two overloads in `std.option`:
-  - `op_coalesce(opt: Option(T), fallback: T) -> T` - unwrap or use fallback value
-  - `op_coalesce(first: Option(T), second: Option(T)) -> Option(T)` - returns first if present, otherwise second
+  - `op_coalesce(opt: &Option(T), fallback: T) -> T` - unwrap or use fallback value
+  - `op_coalesce(first: &Option(T), second: &Option(T)) -> &Option(T)` - returns first if present, otherwise second
 - Operator has lowest precedence (lower than `==`/`!=`), right-associative.
 - Enables chaining: `a ?? b ?? c` evaluates as `a ?? (b ?? c)`.
 

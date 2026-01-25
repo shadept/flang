@@ -5,4 +5,5 @@ import core.panic
 import core.range
 import core.rtti
 import core.runtime
+import core.slice
 import core.string
