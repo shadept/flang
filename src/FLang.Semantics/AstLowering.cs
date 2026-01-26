@@ -292,10 +292,35 @@ public class AstLowering
         // Pop the defer scope
         _deferStack.Pop();
 
-        // Add all created blocks to function
+        // Add all created blocks to function first
         foreach (var block in _allBlocks)
             if (!function.BasicBlocks.Contains(block))
                 function.BasicBlocks.Add(block);
+
+        // Add implicit return for void functions - check ALL blocks, not just current
+        // This handles cases where nested if-expressions leave multiple merge blocks
+        // Compare by name since ResolvedReturnType might not be the exact TypeRegistry.Void instance
+        var isVoidFunc = retType == TypeRegistry.Void || retType?.Name == "void";
+        if (isVoidFunc)
+        {
+            foreach (var block in function.BasicBlocks)
+            {
+                if (block.Instructions.Count == 0)
+                {
+                    // Empty block needs a return
+                    block.Instructions.Add(new ReturnInstruction(new ConstantValue(0) { Type = TypeRegistry.Void }));
+                }
+                else
+                {
+                    var lastInst = block.Instructions[^1];
+                    var hasTerminator = lastInst is ReturnInstruction or JumpInstruction or BranchInstruction;
+                    if (!hasTerminator)
+                    {
+                        block.Instructions.Add(new ReturnInstruction(new ConstantValue(0) { Type = TypeRegistry.Void }));
+                    }
+                }
+            }
+        }
 
         return function;
     }
@@ -460,9 +485,12 @@ public class AstLowering
                             // Check for [value; N] repeat syntax with constant value
                             if (varDecl.Initializer is ArrayLiteralExpressionNode arrayLit && arrayLit.IsRepeatSyntax)
                             {
-                                if (arrayLit.RepeatValue is IntegerLiteralNode intLit)
+                                var elemSize = arrayType.ElementType.Size;
+                                if (arrayLit.RepeatValue is IntegerLiteralNode intLit &&
+                                    (intLit.Value == 0 || elemSize == 1))
                                 {
-                                    // Use memset for byte-sized elements or zero value
+                                    // Use memset only for zero value OR byte-sized elements
+                                    // (memset fills each byte, so only correct for these cases)
                                     var byteVal = (byte)(intLit.Value & 0xFF);
                                     var zeroValue = new ConstantValue(byteVal) { Type = TypeRegistry.U8 };
                                     var sizeValue = new ConstantValue(arrayType.Size) { Type = TypeRegistry.USize };
@@ -478,7 +506,8 @@ public class AstLowering
                                 }
                                 else
                                 {
-                                    // Non-constant repeat value - fall back to global + memcpy
+                                    // Non-byte-sized elements with non-zero value, or non-constant
+                                    // Fall back to global + memcpy
                                     var initValue = LowerExpression(varDecl.Initializer);
                                     if (initValue is GlobalValue globalArray)
                                     {
@@ -703,19 +732,6 @@ public class AstLowering
                         return funcRefValue;
                     }
 
-                    // Check if this is a type literal
-                    if (identType is StructType st && TypeRegistry.IsType(st) && st.TypeArguments.Count > 0)
-                    {
-                        var referencedType = st.TypeArguments[0];
-                        // Load type metadata from global
-                        var typeGlobal = GetTypeLiteralValue(referencedType, st);
-
-                        // Load the struct value
-                        var loaded = new LocalValue($"type_load_{_tempCounter++}", st);
-                        _currentBlock.Instructions.Add(new LoadInstruction(typeGlobal, loaded));
-                        return loaded;
-                    }
-
                     // Check if this is an unqualified enum variant (e.g., `Red` instead of `Color.Red`)
                     // Only treat as variant if the enum actually has a variant with this name
                     if (identType is EnumType variantEnumType &&
@@ -728,6 +744,8 @@ public class AstLowering
                         return LowerEnumConstruction(syntheticCall, variantEnumType);
                     }
 
+                    // Check locals/parameters FIRST - this handles Type(T) parameters correctly
+                    // Type literals (like `i32` as a bare expression) are handled below if not a local
                     if (_locals.TryGetValue(identifier.Name, out var localValue))
                     {
                         // Parameters are passed by value (even if they're pointers), so use them directly
@@ -771,6 +789,20 @@ public class AstLowering
                         }
                         // For ConstantValue (scalar constants), return directly
                         return gv;
+                    }
+
+                    // Check if this is a type literal (not a variable/parameter)
+                    // This handles cases like `size_of(i32)` where `i32` is a type name used as an expression
+                    if (identType is StructType st && TypeRegistry.IsType(st) && st.TypeArguments.Count > 0)
+                    {
+                        var referencedType = st.TypeArguments[0];
+                        // Load type metadata from global type table
+                        var typeGlobal = GetTypeLiteralValue(referencedType, st);
+
+                        // Load the struct value
+                        var loaded = new LocalValue($"type_load_{_tempCounter++}", st);
+                        _currentBlock.Instructions.Add(new LoadInstruction(typeGlobal, loaded));
+                        return loaded;
                     }
 
                     _diagnostics.Add(Diagnostic.Error(
@@ -1659,6 +1691,23 @@ public class AstLowering
         var elseBlock = ifExpr.ElseBranch != null ? CreateBlock("if_else") : null;
         var mergeBlock = CreateBlock("if_merge");
 
+        // Determine result type from then branch (type checker ensures both branches have compatible types)
+        // We need to peek at the then branch type to allocate the phi variable
+        var thenType = ifExpr.ThenBranch.Type;
+        var isVoidResult = thenType == null || thenType == TypeRegistry.Void || thenType == TypeRegistry.Never;
+
+        // For non-void if-expressions, allocate a phi result variable BEFORE branching
+        // Both branches will store to this same variable (simulating a phi node)
+        LocalValue? phiResult = null;
+        LocalValue? phiResultPtr = null;
+        if (!isVoidResult && ifExpr.ElseBranch != null)
+        {
+            phiResult = new LocalValue($"if_phi_{_tempCounter++}", thenType!);
+            phiResultPtr = new LocalValue($"if_phi_ptr_{_tempCounter}", new ReferenceType(thenType!));
+            var phiAlloca = new AllocaInstruction(thenType!, thenType!.Size, phiResultPtr);
+            _currentBlock.Instructions.Add(phiAlloca);
+        }
+
         // Branch to then or else
         _currentBlock.Instructions.Add(new BranchInstruction(condition, thenBlock, elseBlock ?? mergeBlock));
 
@@ -1666,32 +1715,23 @@ public class AstLowering
         _currentBlock = thenBlock;
         var thenValue = LowerExpression(ifExpr.ThenBranch);
 
-        // Skip storing void results (void function calls, etc.)
-        var thenType = thenValue.Type;
-        var isVoidResult = thenType == null || thenType == TypeRegistry.Void || thenType == TypeRegistry.Never;
-
-        LocalValue? thenResult = null;
-        if (!isVoidResult)
+        // Store result to phi variable if non-void
+        if (phiResultPtr != null)
         {
-            thenResult = new LocalValue($"if_result_then_{_tempCounter++}", thenType!);
-            _currentBlock.Instructions.Add(new StoreInstruction(thenResult.Name, thenValue, thenResult));
+            _currentBlock.Instructions.Add(new StorePointerInstruction(phiResultPtr, thenValue));
         }
         _currentBlock.Instructions.Add(new JumpInstruction(mergeBlock));
 
         // Lower else branch if it exists
-        Value? elseResult = null;
         if (ifExpr.ElseBranch != null && elseBlock != null)
         {
             _currentBlock = elseBlock;
             var elseValue = LowerExpression(ifExpr.ElseBranch);
 
-            var elseType = elseValue.Type;
-            var isElseVoid = elseType == null || elseType == TypeRegistry.Void || elseType == TypeRegistry.Never;
-
-            if (!isElseVoid)
+            // Store result to phi variable if non-void
+            if (phiResultPtr != null)
             {
-                elseResult = new LocalValue($"if_result_else_{_tempCounter++}", elseType!);
-                _currentBlock.Instructions.Add(new StoreInstruction(elseResult.Name, elseValue, elseResult));
+                _currentBlock.Instructions.Add(new StorePointerInstruction(phiResultPtr, elseValue));
             }
             _currentBlock.Instructions.Add(new JumpInstruction(mergeBlock));
         }
@@ -1699,9 +1739,12 @@ public class AstLowering
         // Continue in merge block
         _currentBlock = mergeBlock;
 
-        // Return the then result, or a void constant if the if has void type
-        if (thenResult != null)
-            return thenResult;
+        // Load and return the phi result, or a void constant if the if has void type
+        if (phiResultPtr != null && phiResult != null)
+        {
+            _currentBlock.Instructions.Add(new LoadInstruction(phiResultPtr, phiResult));
+            return phiResult;
+        }
         else
             return new ConstantValue(0) { Type = TypeRegistry.Void };
     }

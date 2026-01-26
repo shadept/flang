@@ -1,18 +1,23 @@
 // Generic hash map (dictionary) backed by manually managed heap storage.
 // Uses open addressing with linear probing for collision resolution.
-// Supports an optional allocator; defaults to global_allocator when null.
 //
-// NOTE: Full implementation is blocked by a compiler bug where modifying
-// fields of generic structs via reference causes the compiler to hang.
-// See docs/known-issues.md for details.
+// NOTE: Full implementation is blocked - requires while loop support.
+// FLang currently only supports for-in loops, which don't support:
+// - Conditional early exit (break)
+// - Complex state tracking across iterations
+// - Infinite loops with break conditions
+//
+// TODO: Implement when while loops are added to FLang (milestone TBD)
 
+import core.mem
+import core.panic
 import core.runtime
 
-import std.allocator
 import std.option
 
 // A single entry in the hash map.
-struct Entry(K, V) {
+pub struct Entry(K, V) {
+    state: u8
     hash: usize
     key: K
     value: V
@@ -20,67 +25,80 @@ struct Entry(K, V) {
 
 pub struct Dict(K, V) {
     entries: &Entry(K, V)
-    len: usize
+    length: usize
     cap: usize
-    allocator: Allocator?
+    key_size: usize
+    value_size: usize
+    entry_size: usize
 }
 
-// Returns the allocator for this dict, defaulting to global_allocator if none set.
-pub fn allocator(self: Dict($K, $V)) Allocator {
-    return self.allocator ?? global_allocator()
-}
-
-// Create a new empty dict using the global allocator.
-pub fn dict_new() Dict($K, $V) {
+// Create a new empty dict.
+// Type parameters are used to capture key and value sizes at creation time.
+pub fn dict_new(key_type: Type($K), value_type: Type($V)) Dict(K, V) {
     let zero: usize = 0
-    return .{ entries = zero as &Entry(K, V), len = 0, cap = 0, allocator = null }
-}
-
-// Create a new empty dict with a specific allocator.
-pub fn dict_with_allocator(alloc: Allocator) Dict($K, $V) {
-    let zero: usize = 0
-    return .{ entries = zero as &Entry(K, V), len = 0, cap = 0, allocator = alloc }
+    // Entry layout: u8 state + padding + usize hash + K key + V value
+    let entry_size: usize = 16 + (key_type.size as usize) + (value_type.size as usize)
+    return .{
+        entries = zero as &Entry(K, V),
+        length = 0,
+        cap = 0,
+        key_size = key_type.size as usize,
+        value_size = value_type.size as usize,
+        entry_size = entry_size
+    }
 }
 
 // Returns the number of key-value pairs in the dict.
-pub fn len(self: Dict($K, $V)) usize {
-    return self.len
+pub fn len(self: &Dict($K, $V)) usize {
+    return self.length
 }
 
 // Returns true if the dict is empty.
-pub fn is_empty(self: Dict($K, $V)) bool {
-    return self.len == 0
+pub fn is_empty(self: &Dict($K, $V)) bool {
+    return self.length == 0
 }
 
-// Set is blocked by compiler bug - see docs/known-issues.md
-pub fn set(dict: Dict($K, $V), key: K, value: V) {
+// Blocked: requires while loop support
+pub fn set(dict: &Dict($K, $V), key: K, value: V) {
     __flang_unimplemented()
 }
 
-// Get is blocked by compiler bug - see docs/known-issues.md
-pub fn get(dict: Dict($K, $V), key: K) V? {
+// Blocked: requires while loop support
+pub fn get(dict: &Dict($K, $V), key: K) V? {
     __flang_unimplemented()
     return null
 }
 
-// Contains is blocked by compiler bug - see docs/known-issues.md
-pub fn contains(dict: Dict($K, $V), key: K) bool {
+// Blocked: requires while loop support
+pub fn contains(dict: &Dict($K, $V), key: K) bool {
     __flang_unimplemented()
     return false
 }
 
-// Remove is blocked by compiler bug - see docs/known-issues.md
-pub fn remove(dict: Dict($K, $V), key: K) V? {
+// Blocked: requires while loop support
+pub fn remove(dict: &Dict($K, $V), key: K) V? {
     __flang_unimplemented()
     return null
 }
 
-// Clear is blocked by compiler bug - see docs/known-issues.md
-pub fn clear(dict: Dict($K, $V)) {
-    __flang_unimplemented()
+// Remove all entries from the dict without freeing memory.
+pub fn clear(dict: &Dict($K, $V)) {
+    if (dict.cap > 0) {
+        let bytes: usize = dict.cap * dict.entry_size
+        memset(dict.entries as &u8, 0, bytes)
+    }
+    dict.length = 0
 }
 
-// Deinit is blocked by compiler bug - see docs/known-issues.md
-pub fn deinit(dict: Dict($K, $V)) {
-    __flang_unimplemented()
+// Free the backing storage. The dict should not be used after this.
+pub fn deinit(dict: &Dict($K, $V)) {
+    if (dict.cap > 0) {
+        let old_ptr: &u8? = dict.entries as &u8
+        free(old_ptr)
+    }
+
+    let zero: usize = 0
+    dict.entries = zero as &Entry(K, V)
+    dict.length = 0
+    dict.cap = 0
 }

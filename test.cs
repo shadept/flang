@@ -30,6 +30,7 @@ bool showHelp = args.Contains("--help") || args.Contains("-h");
 bool listOnly = args.Contains("--list") || args.Contains("-l");
 bool verbose = args.Contains("--verbose") || args.Contains("-v");
 bool noProgress = args.Contains("--no-progress");
+bool keepFiles = args.Contains("--keep") || args.Contains("-k");
 string? filter = args.FirstOrDefault(a => !a.StartsWith("-"));
 
 if (showHelp)
@@ -49,6 +50,7 @@ if (showHelp)
           --list, -l        List all tests without running them
           --verbose, -v     Show detailed output for each test
           --no-progress     Disable progress bar
+          --keep, -k        Keep generated files (.c, .exe) after test
           --help, -h        Show this help message
 
         Filter:
@@ -133,7 +135,9 @@ Console.ResetColor();
 
 var passed = 0;
 var failed = 0;
+var skipped = 0;
 var failedTests = new List<(string Path, string Name, string Message)>();
+var skippedTests = new List<(string Path, string Name, string Reason)>();
 var total = testFiles.Count;
 var current = 0;
 
@@ -154,9 +158,20 @@ foreach (var testFile in testFiles)
         Console.ResetColor();
     }
 
-    var result = harness.RunTest(testFile);
+    var result = harness.RunTest(testFile, keepFiles);
 
-    if (result.Passed)
+    if (result.Skipped)
+    {
+        skipped++;
+        skippedTests.Add((relativePath, result.TestName, result.SkipReason ?? ""));
+        if (verbose)
+        {
+            Console.ForegroundColor = ConsoleColor.Yellow;
+            Console.WriteLine($"[SKIP] {relativePath}: {result.SkipReason}");
+            Console.ResetColor();
+        }
+    }
+    else if (result.Passed)
     {
         passed++;
         if (verbose)
@@ -195,7 +210,10 @@ if (!noProgress && !verbose)
 // Summary
 Console.WriteLine();
 Console.ForegroundColor = ConsoleColor.Cyan;
-Console.WriteLine($"Test Results: {passed} passed, {failed} failed, {total} total");
+if (skipped > 0)
+    Console.WriteLine($"Test Results: {passed} passed, {failed} failed, {skipped} skipped, {total} total");
+else
+    Console.WriteLine($"Test Results: {passed} passed, {failed} failed, {total} total");
 Console.ResetColor();
 
 if (failed > 0)
@@ -275,14 +293,17 @@ record TestMetadata(
     int? ExpectedExitCode,
     List<string> ExpectedStdout,
     List<string> ExpectedStderr,
-    List<string> ExpectedCompileErrors);
+    List<string> ExpectedCompileErrors,
+    string? SkipReason);
 
 record TestResult(
     string TestFile,
     string TestName,
     bool Passed,
     string? FailureMessage,
-    TimeSpan Duration);
+    TimeSpan Duration,
+    bool Skipped = false,
+    string? SkipReason = null);
 
 class TestHarness
 {
@@ -319,6 +340,7 @@ class TestHarness
         var stdout = new List<string>();
         var stderr = new List<string>();
         var compileErrors = new List<string>();
+        string? skipReason = null;
 
         foreach (var line in lines)
         {
@@ -337,12 +359,14 @@ class TestHarness
                 stderr.Add(content[7..].Trim());
             else if (content.StartsWith("COMPILE-ERROR:"))
                 compileErrors.Add(content[14..].Trim());
+            else if (content.StartsWith("SKIP:"))
+                skipReason = content[5..].Trim();
         }
 
-        return new TestMetadata(testName, exitCode, stdout, stderr, compileErrors);
+        return new TestMetadata(testName, exitCode, stdout, stderr, compileErrors, skipReason);
     }
 
-    public TestResult RunTest(string absoluteTestFile, TimeSpan? timeout = null)
+    public TestResult RunTest(string absoluteTestFile, bool keepFiles = false, TimeSpan? timeout = null)
     {
         timeout ??= TimeSpan.FromSeconds(30);
         var stopwatch = Stopwatch.StartNew();
@@ -359,6 +383,19 @@ class TestHarness
                 false,
                 "Test file is missing //! TEST: directive",
                 stopwatch.Elapsed);
+        }
+
+        // Handle SKIP directive
+        if (metadata.SkipReason != null)
+        {
+            return new TestResult(
+                absoluteTestFile,
+                metadata.TestName,
+                true, // Skipped tests are not failures
+                null,
+                stopwatch.Elapsed,
+                Skipped: true,
+                SkipReason: metadata.SkipReason);
         }
 
         var cFilePath = Path.ChangeExtension(absoluteTestFile, ".c");
@@ -380,7 +417,7 @@ class TestHarness
         {
             if (result.Success)
             {
-                CleanupGeneratedFiles(cFilePath, outputFilePath);
+                CleanupGeneratedFiles(cFilePath, outputFilePath, keepFiles);
                 return new TestResult(
                     absoluteTestFile,
                     metadata.TestName,
@@ -408,7 +445,7 @@ class TestHarness
                 }
             }
 
-            CleanupGeneratedFiles(cFilePath, null);
+            CleanupGeneratedFiles(cFilePath, null, keepFiles);
             return new TestResult(absoluteTestFile, metadata.TestName, true, null, stopwatch.Elapsed);
         }
 
@@ -432,7 +469,7 @@ class TestHarness
 
         if (!File.Exists(generatedExePath))
         {
-            CleanupGeneratedFiles(cFilePath, null);
+            CleanupGeneratedFiles(cFilePath, null, keepFiles);
             return new TestResult(
                 absoluteTestFile,
                 metadata.TestName,
@@ -465,7 +502,7 @@ class TestHarness
             if (!exited)
             {
                 try { exeProcess.Kill(); } catch { }
-                CleanupGeneratedFiles(cFilePath, generatedExePath);
+                CleanupGeneratedFiles(cFilePath, generatedExePath, keepFiles);
                 return new TestResult(
                     absoluteTestFile,
                     metadata.TestName,
@@ -508,7 +545,7 @@ class TestHarness
                 }
             }
 
-            CleanupGeneratedFiles(cFilePath, generatedExePath);
+            CleanupGeneratedFiles(cFilePath, generatedExePath, keepFiles);
 
             if (failures.Count > 0)
             {
@@ -524,7 +561,7 @@ class TestHarness
         }
         catch (Exception ex)
         {
-            CleanupGeneratedFiles(cFilePath, generatedExePath);
+            CleanupGeneratedFiles(cFilePath, generatedExePath, keepFiles);
             return new TestResult(
                 absoluteTestFile,
                 metadata.TestName,
@@ -542,8 +579,9 @@ class TestHarness
         return Path.Combine(testDirectory, testFileName);
     }
 
-    private static void CleanupGeneratedFiles(string cFilePath, string? exePath)
+    private static void CleanupGeneratedFiles(string cFilePath, string? exePath, bool keepFiles)
     {
+        if (keepFiles) return;
         try
         {
             if (File.Exists(cFilePath)) File.Delete(cFilePath);

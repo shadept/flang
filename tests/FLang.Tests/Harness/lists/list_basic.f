@@ -1,20 +1,17 @@
 //! TEST: list_basic
-//! SKIP: Blocked by compiler bug - generic struct field assignment via reference
-
-// This test is blocked by a compiler bug. See docs/known-issues.md
-// Once the bug is fixed, this test should EXIT: 15
+//! EXIT: 15
 
 import std.list
 import std.option
 
 pub fn main() i32 {
-    let list: List(i32) = list_new()
+    let list: List(i32) = list_new(i32)
 
     // Test push and len
     list.push(5)
     list.push(10)
 
-    let len1: usize = list.len()
+    let len1: usize = list.len
     if (len1 != 2) {
         return 1
     }
@@ -37,7 +34,7 @@ pub fn main() i32 {
         return 3
     }
 
-    let len2: usize = list.len()
+    let len2: usize = list.len
     if (len2 != 1) {
         return 4
     }

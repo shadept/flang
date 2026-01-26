@@ -747,33 +747,43 @@ _Goal: Build a usable standard library._
 
 ---
 
-### Milestone 18: Collections (BLOCKED)
+### Milestone 18: Collections (PARTIAL)
 
 **Scope:** Core data structures with allocator support.
 
-**Status:** Blocked by compiler bug. See `docs/known-issues.md` - "Generic Struct Field Assignment via Reference Causes Compiler Hang"
+**Status:** List(T) fully implemented. Dict(K,V) blocked by lack of `while` loop support in FLang (only `for-in` loops exist).
 
-**Completed (structural):**
+**Completed:**
 
-- [x] `std/list.f` - `List(T)` struct with allocator field
-  - [x] Struct layout: `{ ptr: &T, len: usize, cap: usize, allocator: Allocator? }`
-  - [x] `allocator()` getter with fallback to `global_allocator()`
-  - [x] `list_new()` and `list_with_allocator()` constructors
-  - [ ] Operations (push, pop, get, set, etc.) - blocked by compiler bug
-- [x] `std/dict.f` - `Dict(K, V)` struct with allocator field
-  - [x] Struct layout: `{ entries: &Entry(K,V), len: usize, cap: usize, allocator: Allocator? }`
-  - [x] `allocator()` getter with fallback to `global_allocator()`
-  - [x] `dict_new()` and `dict_with_allocator()` constructors
-  - [ ] Operations (set, get, remove, etc.) - blocked by compiler bug
+- [x] `std/list.f` - `List(T)` generic dynamic array - **FULLY WORKING**
+  - [x] Struct layout: `{ ptr: &T, length: usize, cap: usize, elem_size: usize }`
+  - [x] `list_new(type: Type($T))` constructor using type introspection
+  - [x] `push(&List(T), value: T)` - append with automatic reallocation
+  - [x] `pop(&List(T)) T?` - remove and return last element
+  - [x] `get(List(T), index: usize) T` - index access with bounds check (value semantics)
+  - [x] `set(&List(T), index: usize, value: T)` - index assignment with bounds check
+  - [x] `len(List(T)) usize` - element count (value semantics)
+  - [x] `is_empty(List(T)) bool` - empty check (value semantics)
+  - [x] `clear(&List(T))` - remove all elements (keep capacity)
+  - [x] `deinit(&List(T))` - free backing storage
+- [x] `std/dict.f` - `Dict(K, V)` hash table - **STUB ONLY**
+  - [x] Struct layout: `{ entries: &Entry(K,V), length: usize, cap: usize, key_size: usize, value_size: usize, entry_size: usize }`
+  - [x] `dict_new(key_type: Type($K), value_type: Type($V))` constructor
+  - [ ] Operations (set, get, contains, remove) - blocked by lack of `while` loops
 
-**Blocked Tasks:**
+**Blocked Tasks (Dict only):**
 
-- [ ] List operations (push, pop, get, set, clear, deinit)
-- [ ] Dict operations (set, get, contains, remove, clear, deinit)
+- [ ] `set(&Dict(K,V), key: K, value: V)` - requires `while` loop for hash probing
+- [ ] `get(&Dict(K,V), key: K) V?` - requires `while` loop for hash probing
+- [ ] `contains(&Dict(K,V), key: K) bool` - requires `while` loop for hash probing
+- [ ] `remove(&Dict(K,V), key: K) V?` - requires `while` loop for hash probing
+
+**Note:** FLang currently only supports `for (x in iterable)` loops. Hash table implementation requires `while (condition)` loops for linear probing. Adding `while` loops is a future language milestone.
 
 **Tests:**
 
-- 4 tests skipped (blocked): `list_push_pop.f`, `list_basic.f`, `dict_basic.f`, `dict_remove.f`
+- ✅ 3 list tests passing: `list_basic.f`, `list_push_pop.f`, `list_clear.f`
+- ⏭️ 2 dict tests skipped: `dict_basic.f`, `dict_remove.f` (blocked by while loop support)
 
 ---
 
@@ -826,21 +836,19 @@ _Goal: Rewrite the compiler in FLang._
 
 ## Current Status
 
-- **Phase:** 4 (Language Completeness)
-- **Milestone:** 16.5 (COMPLETE - Tuples as Syntactic Sugar)
+- **Phase:** 5 (Standard Library)
+- **Milestone:** 18 (Collections - PARTIAL)
 - **Next Up:**
-  - **M16.6:** Enum Option Migration (replaces struct Option)
+  - Add `while` loop support to FLang (required for Dict implementation)
   - Complete M14 pending items (nested patterns, multiple wildcards)
-  - Fix pre-existing generics overload resolution bug (`generic_mangling_order.f`)
-  - Fix pre-existing option test bug (`option_basic.f`)
-- **Tests Passing:** 165/166
+- **Tests Passing:** 188 passed, 2 skipped
 
   - ✅ 15 core tests (basics, control flow, functions)
   - ✅ 5 generics tests (M11)
   - ✅ 4 struct tests
   - ✅ 3 array tests
   - ✅ 3 string tests
-  - ✅ 3 reference/pointer tests
+  - ✅ 4 reference/pointer tests
   - ✅ 3 intrinsic tests
   - ✅ 3 defer tests
   - ✅ 4 memory tests
@@ -854,7 +862,8 @@ _Goal: Rewrite the compiler in FLang._
   - ✅ 4 UFCS tests (M16.2)
   - ✅ 2 const error tests (M16.2)
   - ✅ 10 auto-deref tests (M16.3)
-  - ❌ 1 list test failing (unimplemented feature)
+  - ✅ 3 list tests (M18)
+  - ⏭️ 2 dict tests skipped (blocked by while loop support)
 
-- **Total Lines of FLang Code:** ~600+ (test files + stdlib)
+- **Total Lines of FLang Code:** ~700+ (test files + stdlib)
 - **Total Lines of C# Compiler Code:** ~7,700+

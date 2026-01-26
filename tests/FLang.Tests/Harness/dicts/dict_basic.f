@@ -1,14 +1,15 @@
 //! TEST: dict_basic
-//! SKIP: Blocked by compiler bug - generic struct field assignment via reference
+//! SKIP: Blocked by lack of while loop support in FLang
 
-// This test is blocked by a compiler bug. See docs/known-issues.md
-// Once the bug is fixed, this test should EXIT: 30
+// Dict implementation requires while loops for hash table probing.
+// FLang currently only supports for-in loops over iterables.
+// Once while loops are added, this test should EXIT: 30
 
 import std.dict
 import std.option
 
 pub fn main() i32 {
-    let dict: Dict(i32, i32) = dict_new()
+    let dict: Dict(i32, i32) = dict_new(i32, i32)
 
     // Test set and get
     dict.set(1, 10)

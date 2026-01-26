@@ -1088,6 +1088,14 @@ public class CCodeGenerator
 
     private void EmitReturn(ReturnInstruction ret)
     {
+        // For void functions, emit simple return; without value
+        if (_currentFunction?.ReturnType == TypeRegistry.Void ||
+            _currentFunction?.ReturnType?.Name == "void")
+        {
+            _output.AppendLine("    return;");
+            return;
+        }
+
         var valueExpr = ValueToString(ret.Value);
 
         // If returning a struct by value, but the IR value is a pointer, dereference it

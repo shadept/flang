@@ -17,6 +17,6 @@ pub fn main() i32 {
     let result: &i32? = get_ref_opt(&x, true)
 
     // Unwrap the optional to get the reference, then dereference
-    let ptr = unwrap_or(&result, &x)
+    let ptr = unwrap_or(result, &x)
     return ptr.*
 }

@@ -326,6 +326,35 @@ This keeps the AST immutable while allowing different resolutions per instantiat
 
 ## Temporary Limitations
 
+### Dict(K,V) Implementation Blocked by Lack of While Loops
+
+**Status:** Blocked - requires language change
+**Affected:** `stdlib/std/dict.f`
+
+**Problem:**
+The `Dict(K,V)` hash table implementation requires `while` loops for linear probing during hash collisions. FLang currently only supports `for (x in iterable)` loops, which cannot express "loop until condition becomes false" semantics.
+
+**Example of what Dict needs:**
+```flang
+// This syntax does not exist in FLang
+while (entries[idx].occupied) {
+    idx = (idx + 1) % capacity  // linear probing
+}
+```
+
+**Current workaround:**
+Dict operations (`set`, `get`, `contains`, `remove`) call `__flang_unimplemented()` which panics at runtime. Dict tests are marked with `//! SKIP: Blocked by lack of while loop support`.
+
+**Solution:**
+Add `while (condition) { body }` loop syntax to FLang. This would be a Phase 4 language feature.
+
+**Related Files:**
+- `stdlib/std/dict.f` - stub implementation
+- `tests/FLang.Tests/Harness/dicts/dict_basic.f` - skipped
+- `tests/FLang.Tests/Harness/dicts/dict_remove.f` - skipped
+
+---
+
 ### Minimal I/O (`core/io.f`) uses C stdio printf length specifier
 
 Status: Intentional stopgap for tests
@@ -349,6 +378,19 @@ Milestone: 19 (Text & I/O)
 
 
 ## Recently Fixed
+
+### Array Repeat Memset Bug for Non-Zero Values
+
+**Fixed:** 2026-01-26
+**Was:** Array repeat expressions like `[42; 5]` (five elements of 42) were generating incorrect values. The codegen used `memset(arr, 42, 20)` which sets each BYTE to 42, resulting in `0x2A2A2A2A` (707406378) for each i32 element instead of 42.
+**Now:** `AstLowering` only uses `memset` optimization when the repeat value is zero OR the element size is 1 byte. For non-zero values with multi-byte elements, it falls back to creating a global initializer array and using `memcpy`.
+
+**Root Cause:** `memset` fills memory byte-by-byte, so `memset(ptr, 42, 20)` fills 20 bytes with value 42 (0x2A). For a 4-byte integer, this creates `0x2A2A2A2A = 707406378`, not `42`.
+
+**Related Tests:**
+- `tests/FLang.Tests/Harness/arrays/array_repeat.f` (now passing)
+
+---
 
 ### Parser Hangs on Unexpected Expression Tokens
 
