@@ -1,81 +1,68 @@
 // Generic dynamic array backed by manually managed heap storage.
 // Uses raw malloc/free for simplicity (allocator support to be added later).
 
-import core.mem
-import core.panic
-import core.rtti
-
+import std.allocator
 import std.option
 
 pub struct List(T) {
     ptr: &T
     len: usize
     cap: usize
+    allocator: &Allocator?
 }
 
-// Create a new empty list.
-pub fn list_new(type: Type($T)) List(T) {
-    let zero: usize = 0
-    return .{
-        ptr = zero as &T,
-        len = 0,
-        cap = 0
+fn allocator(self: List($T)) &Allocator {
+    return self.allocator ?? &global_allocator
+}
+
+fn as_slice(self: List($T)) T[] {
+    return slice_from_raw_parts(self.ptr, self.len)
+}
+
+pub fn reserve(self: &List($T), capacity: usize) {
+    if (self.cap >= capacity) {
+        return
     }
-}
 
-// Returns the number of elements in the list.
-pub fn len(self: List($T)) usize {
-    return self.len
-}
+    // Calculate new capacity: start with 4, then double
+    const new_cap: usize = if (self.cap == 0) 4 else self.cap * 2
+    if (new_cap < capacity) {
+        new_cap = capacity
+    }
 
-// Returns true if the list is empty.
-pub fn is_empty(self: List($T)) bool {
-    return self.len == 0
+    // Allocate new buffer using raw malloc
+    const elem_size: usize = sizeof(T)
+    const elem_align: usize = align_of(T)
+    const new_bytes: usize = new_cap * elem_size
+    const new_buf = self.allocator().alloc(new_bytes, elem_align)
+        .expect("reserve(List(T), capacity): allocation failed")
+    const new_ptr: &T = new_buf.value as &T
+
+    // Copy existing elements
+    if (self.len > 0) {
+        const old_bytes = self.len * elem_size
+        memcpy(new_ptr as &u8, self.ptr as &u8, old_bytes)
+    }
+
+    // Free old buffer if it existed
+    if (self.cap > 0) {
+        free(self.ptr)
+    }
+
+    self.ptr = new_ptr
+    self.cap = new_cap
 }
 
 // Append an element to the end of the list.
-pub fn push(list: &List($T), value: T) {
-    const type: Type(T) = T
-    let min_cap: usize = list.len + 1
-    if (list.cap < min_cap) {
-        let elem_size: usize = type.size as usize
-
-        // Calculate new capacity: start with 4, then double
-        let new_cap: usize = if (list.cap == 0) 4 else list.cap * 2
-        if (new_cap < min_cap) {
-            new_cap = min_cap
-        }
-
-        // Allocate new buffer using raw malloc
-        let new_bytes: usize = new_cap * elem_size
-        let new_buf: &u8? = malloc(new_bytes)
-        if (new_buf.is_none()) {
-            panic("List: allocation failed")
-        }
-
-        let new_ptr: &T = new_buf.value as &T
-
-        // Copy existing elements
-        if (list.len > 0) {
-            let old_bytes: usize = list.len * elem_size
-            memcpy(new_ptr as &u8, list.ptr as &u8, old_bytes)
-        }
-
-        // Free old buffer if it existed
-        if (list.cap > 0) {
-            let old_ptr: &u8? = list.ptr as &u8
-            free(old_ptr)
-        }
-
-        list.ptr = new_ptr
-        list.cap = new_cap
-    }
+pub fn push(self: &List($T), value: T) {
+    self.reserve(self.len + 1)
 
     // Write value at index len using memcpy
-    let dest: &u8 = (list.ptr + list.len) as &u8
-    memcpy(dest, &value as &u8, type.size as usize)
-
-    list.len = list.len + 1
+    self.len = self.len + 1
+    let data = self.as_slice()
+    data[self.len - 1] = value
+    // let dest: &u8 = (self.ptr + self.len) as &u8
+    // memcpy(dest, &value as &u8, type.size as usize)
 }
 
 // Remove and return the last element, or null if empty.

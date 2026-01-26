@@ -12,6 +12,13 @@ pub fn is_none(self: Option($T)) bool {
     return self.has_value == false
 }
 
+pub fn except(self: Option($T), msg: String) T {
+    if (self.has_value) {
+        return self.value
+    }
+    panic(msg)
+}
+
 pub fn unwrap_or(self: Option($T), fallback: T) T {
     if (self.has_value) {
         return self.value

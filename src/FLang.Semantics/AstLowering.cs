@@ -561,10 +561,18 @@ public class AstLowering
                 }
 
             case ReturnStatementNode returnStmt:
-                var returnValue = LowerExpression(returnStmt.Expression);
                 // Execute deferred statements before returning (in LIFO order)
                 EmitDeferredStatements();
-                _currentBlock.Instructions.Add(new ReturnInstruction(returnValue));
+                if (returnStmt.Expression != null)
+                {
+                    var returnValue = LowerExpression(returnStmt.Expression);
+                    _currentBlock.Instructions.Add(new ReturnInstruction(returnValue));
+                }
+                else
+                {
+                    // Bare return for void functions
+                    _currentBlock.Instructions.Add(new ReturnInstruction(null));
+                }
                 break;
 
             case BreakStatementNode breakStmt:

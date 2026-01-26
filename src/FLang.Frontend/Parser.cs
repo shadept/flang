@@ -437,49 +437,56 @@ public class Parser
                 return ParseVariableDeclaration();
 
             case TokenKind.Return:
-            {
-                var returnKeyword = Eat(TokenKind.Return);
-                var expression = ParseExpression();
-                var span = SourceSpan.Combine(returnKeyword.Span, expression.Span);
-                return new ReturnStatementNode(span, expression);
-            }
+                {
+                    var returnKeyword = Eat(TokenKind.Return);
+                    // Allow bare `return` for void functions - check if next token can't start an expression
+                    if (_currentToken.Kind == TokenKind.CloseBrace ||
+                        _currentToken.Kind == TokenKind.EndOfFile ||
+                        IsStatementStart(_currentToken.Kind))
+                    {
+                        return new ReturnStatementNode(returnKeyword.Span, null);
+                    }
+                    var expression = ParseExpression();
+                    var span = SourceSpan.Combine(returnKeyword.Span, expression.Span);
+                    return new ReturnStatementNode(span, expression);
+                }
 
             case TokenKind.Break:
-            {
-                var breakKeyword = Eat(TokenKind.Break);
-                return new BreakStatementNode(breakKeyword.Span);
-            }
+                {
+                    var breakKeyword = Eat(TokenKind.Break);
+                    return new BreakStatementNode(breakKeyword.Span);
+                }
 
             case TokenKind.Continue:
-            {
-                var continueKeyword = Eat(TokenKind.Continue);
-                return new ContinueStatementNode(continueKeyword.Span);
-            }
+                {
+                    var continueKeyword = Eat(TokenKind.Continue);
+                    return new ContinueStatementNode(continueKeyword.Span);
+                }
 
             case TokenKind.Defer:
-            {
-                var deferKeyword = Eat(TokenKind.Defer);
-                var expression = ParseExpression();
-                var span = SourceSpan.Combine(deferKeyword.Span, expression.Span);
-                return new DeferStatementNode(span, expression);
-            }
+                {
+                    var deferKeyword = Eat(TokenKind.Defer);
+                    var expression = ParseExpression();
+                    var span = SourceSpan.Combine(deferKeyword.Span, expression.Span);
+                    return new DeferStatementNode(span, expression);
+                }
 
             case TokenKind.For:
                 return ParseForLoop();
 
             case TokenKind.OpenBrace:
-            {
-                // Block statement - parse as expression statement
-                var blockExpr = ParseBlockExpression();
-                return new ExpressionStatementNode(blockExpr.Span, blockExpr);
-            }
+                {
+                    // Block statement - parse as expression statement
+                    var blockExpr = ParseBlockExpression();
+                    return new ExpressionStatementNode(blockExpr.Span, blockExpr);
+                }
 
             case TokenKind.If:
-            {
-                // If statement - parse as expression statement
-                var ifExpr = ParseIfExpression();
-                return new ExpressionStatementNode(ifExpr.Span, ifExpr);
-            }
+                {
+                    // If statement - parse as expression statement
+                    var ifExpr = ParseIfExpression();
+                    return new ExpressionStatementNode(ifExpr.Span, ifExpr);
+                }
 
             default:
                 // Default: parse an expression as a statement (e.g., println(s))
@@ -499,7 +506,7 @@ public class Parser
         var isConst = _currentToken.Kind == TokenKind.Const;
         var keyword = isConst ? Eat(TokenKind.Const) : Eat(TokenKind.Let);
         var identifier = Eat(TokenKind.Identifier);
-        
+
         TypeNode? type = null;
         if (_currentToken.Kind == TokenKind.Colon)
         {
@@ -758,104 +765,104 @@ public class Parser
         switch (_currentToken.Kind)
         {
             case TokenKind.Ampersand:
-            {
-                // Address-of operator: &expr — binds after postfix (so &arr[0] means address-of (arr[0]))
-                var ampToken = Eat(TokenKind.Ampersand);
-                var targetPrimary = ParsePrimaryExpression();
-                var targetWithPostfix = ParsePostfixOperators(targetPrimary);
-                var span = SourceSpan.Combine(ampToken.Span, targetWithPostfix.Span);
-                return new AddressOfExpressionNode(span, targetWithPostfix);
-            }
+                {
+                    // Address-of operator: &expr — binds after postfix (so &arr[0] means address-of (arr[0]))
+                    var ampToken = Eat(TokenKind.Ampersand);
+                    var targetPrimary = ParsePrimaryExpression();
+                    var targetWithPostfix = ParsePostfixOperators(targetPrimary);
+                    var span = SourceSpan.Combine(ampToken.Span, targetWithPostfix.Span);
+                    return new AddressOfExpressionNode(span, targetWithPostfix);
+                }
 
             case TokenKind.Integer:
-            {
-                var integerToken = Eat(TokenKind.Integer);
-                var value = long.Parse(integerToken.Text);
-                return new IntegerLiteralNode(integerToken.Span, value);
-            }
+                {
+                    var integerToken = Eat(TokenKind.Integer);
+                    var value = long.Parse(integerToken.Text);
+                    return new IntegerLiteralNode(integerToken.Span, value);
+                }
 
             case TokenKind.True:
-            {
-                var trueToken = Eat(TokenKind.True);
-                return new BooleanLiteralNode(trueToken.Span, true);
-            }
+                {
+                    var trueToken = Eat(TokenKind.True);
+                    return new BooleanLiteralNode(trueToken.Span, true);
+                }
 
             case TokenKind.False:
-            {
-                var falseToken = Eat(TokenKind.False);
-                return new BooleanLiteralNode(falseToken.Span, false);
-            }
+                {
+                    var falseToken = Eat(TokenKind.False);
+                    return new BooleanLiteralNode(falseToken.Span, false);
+                }
 
             case TokenKind.StringLiteral:
-            {
-                var stringToken = Eat(TokenKind.StringLiteral);
-                return new StringLiteralNode(stringToken.Span, stringToken.Text);
-            }
+                {
+                    var stringToken = Eat(TokenKind.StringLiteral);
+                    return new StringLiteralNode(stringToken.Span, stringToken.Text);
+                }
 
             case TokenKind.Null:
-            {
-                var nullToken = Eat(TokenKind.Null);
-                return new NullLiteralNode(nullToken.Span);
-            }
+                {
+                    var nullToken = Eat(TokenKind.Null);
+                    return new NullLiteralNode(nullToken.Span);
+                }
 
             case TokenKind.Dot:
-            {
-                var dotToken = Eat(TokenKind.Dot);
-                if (_currentToken.Kind == TokenKind.OpenBrace)
-                    return ParseAnonymousStructConstruction(dotToken);
+                {
+                    var dotToken = Eat(TokenKind.Dot);
+                    if (_currentToken.Kind == TokenKind.OpenBrace)
+                        return ParseAnonymousStructConstruction(dotToken);
 
-                _diagnostics.Add(Diagnostic.Error(
-                    "unexpected '.' in expression",
-                    dotToken.Span,
-                    "anonymous struct literals use .{ field = value }",
-                    "E1001"));
-                return new IntegerLiteralNode(dotToken.Span, 0);
-            }
+                    _diagnostics.Add(Diagnostic.Error(
+                        "unexpected '.' in expression",
+                        dotToken.Span,
+                        "anonymous struct literals use .{ field = value }",
+                        "E1001"));
+                    return new IntegerLiteralNode(dotToken.Span, 0);
+                }
 
             case TokenKind.Identifier:
-            {
-                var identifierToken = Eat(TokenKind.Identifier);
-
-                // Check if this is a struct construction: TypeName { field: value }
-                if (_currentToken.Kind == TokenKind.OpenBrace)
                 {
-                    // Parse as struct construction
-                    var typeName = new NamedTypeNode(identifierToken.Span, identifierToken.Text);
-                    return ParseStructConstruction(typeName);
-                }
+                    var identifierToken = Eat(TokenKind.Identifier);
 
-                // Check if this is a function call
-                if (_currentToken.Kind == TokenKind.OpenParenthesis)
-                {
-                    Eat(TokenKind.OpenParenthesis);
-                    var arguments = new List<ExpressionNode>();
-
-                    // Parse arguments
-                    while (_currentToken.Kind != TokenKind.CloseParenthesis &&
-                           _currentToken.Kind != TokenKind.EndOfFile)
+                    // Check if this is a struct construction: TypeName { field: value }
+                    if (_currentToken.Kind == TokenKind.OpenBrace)
                     {
-                        arguments.Add(ParseExpression());
-
-                        // If there's a comma, consume it and continue parsing arguments
-                        if (_currentToken.Kind == TokenKind.Comma)
-                            Eat(TokenKind.Comma);
-                        else if (_currentToken.Kind != TokenKind.CloseParenthesis)
-                            // Error: expected comma or close parenthesis
-                            break;
+                        // Parse as struct construction
+                        var typeName = new NamedTypeNode(identifierToken.Span, identifierToken.Text);
+                        return ParseStructConstruction(typeName);
                     }
 
-                    var closeParenToken = Eat(TokenKind.CloseParenthesis);
-                    var callSpan = SourceSpan.Combine(identifierToken.Span, closeParenToken.Span);
-                    return new CallExpressionNode(callSpan, identifierToken.Text, arguments);
+                    // Check if this is a function call
+                    if (_currentToken.Kind == TokenKind.OpenParenthesis)
+                    {
+                        Eat(TokenKind.OpenParenthesis);
+                        var arguments = new List<ExpressionNode>();
+
+                        // Parse arguments
+                        while (_currentToken.Kind != TokenKind.CloseParenthesis &&
+                               _currentToken.Kind != TokenKind.EndOfFile)
+                        {
+                            arguments.Add(ParseExpression());
+
+                            // If there's a comma, consume it and continue parsing arguments
+                            if (_currentToken.Kind == TokenKind.Comma)
+                                Eat(TokenKind.Comma);
+                            else if (_currentToken.Kind != TokenKind.CloseParenthesis)
+                                // Error: expected comma or close parenthesis
+                                break;
+                        }
+
+                        var closeParenToken = Eat(TokenKind.CloseParenthesis);
+                        var callSpan = SourceSpan.Combine(identifierToken.Span, closeParenToken.Span);
+                        return new CallExpressionNode(callSpan, identifierToken.Text, arguments);
+                    }
+
+                    return new IdentifierExpressionNode(identifierToken.Span, identifierToken.Text);
                 }
 
-                return new IdentifierExpressionNode(identifierToken.Span, identifierToken.Text);
-            }
-
             case TokenKind.OpenParenthesis:
-            {
-                return ParseTupleOrGroupedExpression();
-            }
+                {
+                    return ParseTupleOrGroupedExpression();
+                }
 
             case TokenKind.If:
                 return ParseIfExpression();
@@ -913,6 +920,16 @@ public class Parser
     private bool IsValidLValue(ExpressionNode expr)
     {
         return expr is IdentifierExpressionNode or MemberAccessExpressionNode;
+    }
+
+    /// <summary>
+    /// Checks if a token kind can start a statement (used for detecting bare return).
+    /// </summary>
+    private static bool IsStatementStart(TokenKind kind)
+    {
+        return kind is TokenKind.Let or TokenKind.Const or TokenKind.Return
+            or TokenKind.Break or TokenKind.Continue or TokenKind.Defer
+            or TokenKind.For or TokenKind.If;
     }
 
     private sealed class ParserException : Exception

@@ -98,6 +98,7 @@ dist/
 *.fir
 *.idb
 *.pdb
+*.ilk
 
 # Ignore all files in test harness except source files (.f)
 tests/FLang.Tests/Harness/**

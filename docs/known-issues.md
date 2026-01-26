@@ -72,6 +72,59 @@ memcpy(field_ptr_3, inner, sizeof(struct Inner));
 
 ---
 
+### Generic Parameter Binding Order Not Tracked
+
+**Status:** Deferred
+**Affected:** Type inference for generic function calls
+
+**Problem:**
+FLang's `$T` syntax distinguishes binding sites (`$T`) from use sites (`T`). Currently both become `GenericParameterType("T")` in the type system - the binding/use distinction is lost after parsing.
+
+**Impact:**
+Type inference relies on argument order rather than explicit binding semantics. The current workaround (deferring anonymous struct typing until generic bindings are established from other arguments) handles the common case but doesn't leverage the full semantic information from `$T` syntax.
+
+**Example:**
+```flang
+fn push(list: &List($T), value: T) { ... }
+```
+Here `$T` in `&List($T)` is the binding site - `T` should be inferred from the receiver. The second parameter `value: T` is a use site that should inherit the binding.
+
+**Current workaround:**
+Anonymous struct arguments are deferred during overload resolution, and TypeVars are accepted as wildcards during generic binding. This allows:
+```flang
+let list: List(Node)
+list.push(.{ value = 42 })  // Works: T inferred as Node from receiver
+```
+
+**Future improvement:**
+Track `IsBindingSite` on `GenericParameterType` or `FunctionEntry.ParameterTypes` to enable proper two-pass type inference based on binding order rather than relying on TypeVar placeholder heuristics.
+
+---
+
+### Complex LValue Assignment Not Supported
+
+**Status:** Open
+**Affected:** Parser/TypeChecker - assignment statements
+
+**Problem:**
+Complex expressions on the left-hand side of assignment are not fully supported. Specifically, dereference assignment with parenthesized expressions fails:
+
+```flang
+(list.ptr + list.len).* = value  // ERROR: unexpected token '='
+```
+
+**Workaround:**
+Use an intermediate variable:
+```flang
+let dest: &T = list.ptr + list.len
+dest.* = value
+```
+
+**Solution:**
+Extend the parser to recognize `(expr).*` as a valid lvalue in assignment context.
+
+---
+
 ## Deferred Features
 
 ### FFI Pointer Returns and Casts

@@ -6,6 +6,11 @@ pub struct Slice(T) {
     len: usize
 }
 
+// Creates a slice from pointer and length.
+pub fn slice_from_raw_parts(ptr: &$T, len: usize) T[] {
+    return .{ ptr = ptr, len = len }
+}
+
 pub fn op_index(s: &Slice($T), index: usize) &T {
     if (index >= s.len) {
         panic("index out of bounds")

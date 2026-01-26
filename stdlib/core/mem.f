@@ -17,8 +17,3 @@
 
 // Copy memory from source to destination (handles overlapping regions)
 #foreign fn memmove(dst: &u8, src: &u8, len: usize)
-
-// Creates a slice from pointer and length.
-pub fn slice_from_raw_parts(ptr: &$T, len: usize) T[] {
-    return .{ ptr = ptr, len = len }
-}

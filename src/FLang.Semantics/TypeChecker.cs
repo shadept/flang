@@ -938,6 +938,20 @@ public class TypeChecker
             expectedReturnType = currentFunction.ReturnType != null ? ResolveTypeNode(currentFunction.ReturnType) : TypeRegistry.Void;
         }
 
+        // Handle bare `return` for void functions
+        if (ret.Expression == null)
+        {
+            if (expectedReturnType != null && !expectedReturnType.Equals(TypeRegistry.Void))
+            {
+                ReportError(
+                    "bare `return` in non-void function",
+                    ret.Span,
+                    $"expected `{expectedReturnType.Name}`, use `return <expr>`",
+                    "E2027");
+            }
+            return;
+        }
+
         var et = CheckExpression(ret.Expression, expectedReturnType);
         _logger.LogDebug(
             "[TypeChecker] CheckReturnStatement: expectedReturnType={ExpectedType}, expressionType={ExprType}",
@@ -1941,12 +1955,24 @@ public class TypeChecker
                 candidates.Count, functionName);
 
             // Build effective argument types: for UFCS, prepend receiver type
+            // Defer anonymous struct arguments - they need expected type from generic bindings
             var explicitArgTypes = new List<TypeBase>(call.Arguments.Count);
-            foreach (var arg in call.Arguments)
+            var deferredAnonStructIndices = new List<int>();
+            for (var i = 0; i < call.Arguments.Count; i++)
             {
-                var argType = CheckExpression(arg);
-                if (IsNever(argType)) return TypeRegistry.Never;
-                explicitArgTypes.Add(argType);
+                var arg = call.Arguments[i];
+                if (arg is AnonymousStructExpressionNode)
+                {
+                    // Defer - use TypeVar placeholder until we have concrete expected type
+                    explicitArgTypes.Add(new TypeVar($"__deferred_anon_{i}"));
+                    deferredAnonStructIndices.Add(i);
+                }
+                else
+                {
+                    var argType = CheckExpression(arg);
+                    if (IsNever(argType)) return TypeRegistry.Never;
+                    explicitArgTypes.Add(argType);
+                }
             }
             var argTypes = ufcsReceiverType != null
                 ? new List<TypeBase> { ufcsReceiverType }.Concat(explicitArgTypes).ToList()
@@ -2211,6 +2237,17 @@ public class TypeChecker
 
                 // For UFCS, receiver is at index 0, explicit args start at index 1
                 var argOffset = ufcsReceiverType != null ? 1 : 0;
+
+                // Re-check deferred anonymous struct arguments with concrete expected types
+                foreach (var idx in deferredAnonStructIndices)
+                {
+                    var argIdx = idx + argOffset;
+                    var concreteExpected = concreteParams[argIdx];
+                    var argType = CheckExpression(call.Arguments[idx], concreteExpected);
+                    if (IsNever(argType)) return TypeRegistry.Never;
+                    argTypes[argIdx] = argType;
+                    explicitArgTypes[idx] = argType;
+                }
 
                 // Unify receiver type if UFCS (using adapted type for proper value/ref matching)
                 if (ufcsReceiverType != null)
@@ -3760,6 +3797,13 @@ public class TypeChecker
                         return true;
                     }
 
+                    // Unbound TypeVar arg (deferred anonymous struct): bind it to the existing type
+                    if (prunedArg is TypeVar deferredTv && deferredTv.Instance == null)
+                    {
+                        deferredTv.Instance = prunedExisting;
+                        return true;
+                    }
+
                     if (!prunedExisting.Equals(prunedArg))
                     {
                         conflictParam = gp.ParamName;
@@ -4104,7 +4148,7 @@ public class TypeChecker
 
     private static StatementNode CloneStatement(StatementNode stmt) => stmt switch
     {
-        ReturnStatementNode ret => new ReturnStatementNode(ret.Span, CloneExpression(ret.Expression)),
+        ReturnStatementNode ret => new ReturnStatementNode(ret.Span, ret.Expression != null ? CloneExpression(ret.Expression) : null),
         ExpressionStatementNode es => new ExpressionStatementNode(es.Span, CloneExpression(es.Expression)),
         VariableDeclarationNode vd => new VariableDeclarationNode(vd.Span, vd.Name, vd.Type, vd.Initializer != null ? CloneExpression(vd.Initializer) : null),
         ForLoopNode fl => new ForLoopNode(fl.Span, fl.IteratorVariable, CloneExpression(fl.IterableExpression), CloneExpression(fl.Body)),

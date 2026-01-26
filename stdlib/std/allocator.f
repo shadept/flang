@@ -111,14 +111,9 @@ const global_allocator_vtable = AllocatorVTable {
 
 // Singleton state for GlobalAllocator (no actual state needed)
 const global_allocator_state = GlobalAllocatorState { _unused = 0 }
-
-// Create a GlobalAllocator instance.
-// This wraps malloc/free from the C runtime.
-pub fn global_allocator() Allocator {
-    return Allocator {
-        impl = &global_allocator_state as &u8,
-        vtable = &global_allocator_vtable
-    }
+const global_allocator = Allocator {
+    impl = &global_allocator_state as &u8,
+    vtable = &global_allocator_vtable
 }
 
 // =============================================================================
