@@ -17,47 +17,7 @@ When you discover a bug or limitation:
 
 ## Critical Issues
 
-### Generic Struct Field Assignment via Reference Causes Compiler Hang
-
-**Status:** Open (blocks M18: Collections)
-**Affected:** Type checker or lowering for generic struct methods
-**Impact:** Any function that takes `&GenericStruct($T)` and modifies a field hangs the compiler indefinitely
-
-**Problem:**
-When a generic function takes a reference to a generic struct and attempts to modify a field, the compiler hangs (infinite loop or extremely slow processing). This pattern is fundamental to implementing mutable collections like `List(T)` and `Dict(K, V)`.
-
-**Minimal Reproduction:**
-```flang
-struct List(T) {
-    ptr: &T
-    len: usize
-}
-
-fn push(list: &List($T)) bool {
-    list.len = list.len + 1  // This line causes infinite hang
-    return true
-}
-
-pub fn main() i32 {
-    let zero: usize = 0
-    let list = List(i32) { ptr = zero as &i32, len = 0 }
-    push(&list)
-    return list.len as i32
-}
-```
-
-**Working Cases:**
-- Generic functions with non-generic struct parameters work fine
-- Generic functions that only READ fields of generic structs work fine
-- Non-generic functions that modify generic struct fields work fine
-
-**Root Cause:**
-Unknown - likely in TypeChecker monomorphization, UFCS resolution, or auto-deref handling for generic struct references.
-
-**Workaround:**
-None practical. Collections implementations must wait for fix.
-
-**Related Milestone:** M18 (Collections)
+(None currently)
 
 ---
 
@@ -177,6 +137,41 @@ Currently no runtime bounds checking on `arr[i]` - out-of-bounds access causes u
 3. Load from `slice.ptr[index]`
 
 **Related:** Depends on bounds checking infrastructure
+
+---
+
+### Named Struct Construction Syntax
+
+**Status:** Not implemented (planned)
+**Affected:** Parser, struct construction expressions
+
+**Problem:**
+The syntax `TypeName { field = value }` and `TypeName(TypeArg) { field = value }` for struct construction is not yet supported. Currently only anonymous struct syntax `.{ field = value }` with type annotation is available.
+
+**Desired syntax (not yet supported):**
+```flang
+// Non-generic struct
+let point = Point { x = 10, y = 20 }
+
+// Generic struct with explicit type argument
+let list = List(i32) { ptr = null, len = 0 }
+
+// Generic struct with inferred type argument
+let wrapper: Wrapper(i32) = Wrapper { value = 42 }
+```
+
+**Workaround:**
+Use anonymous struct syntax with explicit type annotation:
+```flang
+let point: Point = .{ x = 10, y = 20 }
+let list: List(i32) = .{ ptr = null, len = 0 }
+let wrapper: Wrapper(i32) = .{ value = 42 }
+```
+
+**Solution:**
+Extend the parser to recognize `Identifier { ... }` and `Identifier(TypeArgs) { ... }` as struct construction expressions. The type checker would resolve the identifier to a struct type and validate field assignments.
+
+**Milestone:** Low priority - workaround is straightforward
 
 ---
 
@@ -354,6 +349,21 @@ Milestone: 19 (Text & I/O)
 
 
 ## Recently Fixed
+
+### Parser Hangs on Unexpected Expression Tokens
+
+**Fixed:** 2026-01-26
+**Was:** The parser would hang indefinitely when encountering unexpected tokens in expression context (e.g., `;`, `,`). This happened because `SynchronizeExpression()` would stop AT delimiter tokens without consuming them, and `ParsePrimaryExpression()` would then return a dummy literal without advancing, causing an infinite loop when the same token was tried again.
+
+The hang appeared to be a "generic struct field assignment bug" because the original test case used invalid syntax: `let list = List(i32) { ... }` (should be `let list: List(i32) = .{ ... }`). The `List(i32)` was parsed as a function call, leaving `{ ... }` as an unexpected block that eventually led to a `,` token in expression context.
+
+**Now:** `ParsePrimaryExpression()` default case tracks the error token position before calling `SynchronizeExpression()`. If no progress was made (current token still at same position), it explicitly advances past the token before returning the dummy literal. This ensures the parser always makes progress even when error recovery fails.
+
+**Root Cause:** Parser error recovery in `SynchronizeExpression()` stops AT delimiters (`,`, `;`, `}`, etc.) to allow the caller to handle them. But `ParsePrimaryExpression()` didn't handle the case where the unexpected token itself was a delimiter.
+
+**Related Tests:**
+- `tests/FLang.Tests/Harness/lists/test_parser_hang_repro.f` (compile-error test)
+- `tests/FLang.Tests/Harness/errors/error_e1001_unexpected_token.f`
 
 ### Generic Specialization Overload Resolution Collision
 

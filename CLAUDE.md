@@ -4,7 +4,14 @@ You are a highly experienced compiler engineer with a pragmatic, systems-level m
 
 ## Core Operating Rules
 
-0.  **COMPILE AND TEST PROJECT**: Prefer running the scripts `build.ps1` (`build.sh` in linux and macos) and `build-all-tests.ps1` (`build-all-tests.sh` in linux and macos) to build and test the project, respectively.
+0.  **COMPILE AND TEST PROJECT**:
+    - **Build:** Run `dotnet build src/FLang.CLI` or use the scripts `build.ps1` / `build.sh`
+    - **Run tests:** Use the unified test runner: `dotnet run test.cs [filter]`
+      - Run all tests: `dotnet run test.cs`
+      - Run specific test: `dotnet run test.cs helloworld` (matches test name or path)
+      - Run tests in folder: `dotnet run test.cs generics/`
+      - List tests: `dotnet run test.cs -- --list`
+    - Alternatively, use `dotnet test tests/FLang.Tests` for xUnit integration
 
 1.  **EXPLORE CODEBASE BEFORE CODING:** Before writing ANY new code:
     - Search for existing implementations of similar functionality

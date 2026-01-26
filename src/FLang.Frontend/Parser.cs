@@ -867,14 +867,20 @@ public class Parser
                 return ParseArrayLiteral();
 
             default:
+                var errorToken = _currentToken;
                 SynchronizeExpression();
+                // If we didn't make progress (stuck on same token), skip it to prevent infinite loop
+                if (_currentToken.Kind == errorToken.Kind && _currentToken.Span.Index == errorToken.Span.Index)
+                {
+                    _currentToken = _lexer.NextToken();
+                }
                 _diagnostics.Add(Diagnostic.Error(
-                    $"unexpected token '{_currentToken.Text}' in expression",
-                    _currentToken.Span,
+                    $"unexpected token '{errorToken.Text}' in expression",
+                    errorToken.Span,
                     null,
                     "E1001"));
                 // Return a dummy literal to allow further parsing
-                return new IntegerLiteralNode(_currentToken.Span, 0);
+                return new IntegerLiteralNode(errorToken.Span, 0);
         }
     }
 
