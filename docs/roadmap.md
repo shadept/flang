@@ -747,14 +747,33 @@ _Goal: Build a usable standard library._
 
 ---
 
-### Milestone 18: Collections
+### Milestone 18: Collections (BLOCKED)
 
-**Scope:** Core data structures.
+**Scope:** Core data structures with allocator support.
 
-**Tasks:**
+**Status:** Blocked by compiler bug. See `docs/known-issues.md` - "Generic Struct Field Assignment via Reference Causes Compiler Hang"
 
-- [ ] `std/collections/list.f` - `List(T)`
-- [ ] `std/collections/dict.f` - `Dict(K, V)` (hash map)
+**Completed (structural):**
+
+- [x] `std/list.f` - `List(T)` struct with allocator field
+  - [x] Struct layout: `{ ptr: &T, len: usize, cap: usize, allocator: Allocator? }`
+  - [x] `allocator()` getter with fallback to `global_allocator()`
+  - [x] `list_new()` and `list_with_allocator()` constructors
+  - [ ] Operations (push, pop, get, set, etc.) - blocked by compiler bug
+- [x] `std/dict.f` - `Dict(K, V)` struct with allocator field
+  - [x] Struct layout: `{ entries: &Entry(K,V), len: usize, cap: usize, allocator: Allocator? }`
+  - [x] `allocator()` getter with fallback to `global_allocator()`
+  - [x] `dict_new()` and `dict_with_allocator()` constructors
+  - [ ] Operations (set, get, remove, etc.) - blocked by compiler bug
+
+**Blocked Tasks:**
+
+- [ ] List operations (push, pop, get, set, clear, deinit)
+- [ ] Dict operations (set, get, contains, remove, clear, deinit)
+
+**Tests:**
+
+- 4 tests skipped (blocked): `list_push_pop.f`, `list_basic.f`, `dict_basic.f`, `dict_remove.f`
 
 ---
 

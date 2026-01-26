@@ -17,6 +17,50 @@ When you discover a bug or limitation:
 
 ## Critical Issues
 
+### Generic Struct Field Assignment via Reference Causes Compiler Hang
+
+**Status:** Open (blocks M18: Collections)
+**Affected:** Type checker or lowering for generic struct methods
+**Impact:** Any function that takes `&GenericStruct($T)` and modifies a field hangs the compiler indefinitely
+
+**Problem:**
+When a generic function takes a reference to a generic struct and attempts to modify a field, the compiler hangs (infinite loop or extremely slow processing). This pattern is fundamental to implementing mutable collections like `List(T)` and `Dict(K, V)`.
+
+**Minimal Reproduction:**
+```flang
+struct List(T) {
+    ptr: &T
+    len: usize
+}
+
+fn push(list: &List($T)) bool {
+    list.len = list.len + 1  // This line causes infinite hang
+    return true
+}
+
+pub fn main() i32 {
+    let zero: usize = 0
+    let list = List(i32) { ptr = zero as &i32, len = 0 }
+    push(&list)
+    return list.len as i32
+}
+```
+
+**Working Cases:**
+- Generic functions with non-generic struct parameters work fine
+- Generic functions that only READ fields of generic structs work fine
+- Non-generic functions that modify generic struct fields work fine
+
+**Root Cause:**
+Unknown - likely in TypeChecker monomorphization, UFCS resolution, or auto-deref handling for generic struct references.
+
+**Workaround:**
+None practical. Collections implementations must wait for fix.
+
+**Related Milestone:** M18 (Collections)
+
+---
+
 ### FIR: Lack of Type Information in Values
 
 **Status:** Partially addressed (IR values now carry FLang types)
