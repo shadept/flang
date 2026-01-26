@@ -741,9 +741,9 @@ _Goal: Build a usable standard library._
 **Tasks:**
 
 - [ ] `core/mem.f` - Memory operations (already started in M10)
-- [ ] `core/intrinsics.f` - Compiler intrinsics
-- [ ] `core/panic.f` - Panic handling
-- [ ] `core/types.f` - Type aliases for primitives
+- [ ] `core/intrinsics.f` - Compiler intrinsics (dropped)
+- [ ] `core/panic.f` - Panic handling (already implemented)
+- [ ] `core/types.f` - Type aliases for primitives (incomplete, missing list of fields and their offsets)
 
 ---
 
@@ -755,7 +755,6 @@ _Goal: Build a usable standard library._
 
 - [ ] `std/collections/list.f` - `List(T)`
 - [ ] `std/collections/dict.f` - `Dict(K, V)` (hash map)
-- [ ] `std/slice.f` - Slice utilities
 
 ---
 
@@ -766,7 +765,6 @@ _Goal: Build a usable standard library._
 **Tasks:**
 
 - [ ] `std/text/string.f` - String utilities (incl. `fn to_cstr(s: &String) &u8` that returns a null-terminated pointer: if `s.ptr[s.len] == 0` return `s.ptr`; otherwise allocate `len+1`, copy, append `\0`).
-
 - [ ] `std/text/string_builder.f` - Efficient string building
 - [ ] `std/io/file.f` - File I/O
 - [ ] `std/io/fmt.f` - `println`, `print`, formatting
