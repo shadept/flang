@@ -1867,6 +1867,12 @@ public class TypeChecker
             }
         }
 
+        // Handle indexed assignment: expr[index] = value
+        if (ae.Target is IndexExpressionNode ix)
+        {
+            return CheckIndexedAssignment(ae, ix);
+        }
+
         // Get the type of the assignment target (lvalue)
         TypeBase targetType = ae.Target switch
         {
@@ -1884,6 +1890,184 @@ public class TypeChecker
         var unified = UnifyTypes(val, targetType, ae.Value.Span);
 
         return targetType;
+    }
+
+    /// <summary>
+    /// Handles indexed assignment: expr[index] = value
+    /// For slices/custom types, resolves op_set_index(&amp;base, index, value)
+    /// For arrays, validates element type and uses native store
+    /// </summary>
+    private TypeBase CheckIndexedAssignment(AssignmentExpressionNode ae, IndexExpressionNode ix)
+    {
+        var bt = CheckExpression(ix.Base);
+        if (IsNever(bt)) return TypeRegistry.Never;
+
+        var it = CheckExpression(ix.Index);
+        if (IsNever(it)) return TypeRegistry.Never;
+
+        // For slices/custom types, look up op_set_index function
+        if (bt is StructType sliceType && TypeRegistry.IsSlice(sliceType))
+        {
+            var refBaseType = new ReferenceType(sliceType);
+            var elementType = sliceType.TypeArguments[0];
+
+            // Check value against expected element type first
+            var val = CheckExpression(ae.Value, elementType);
+            if (IsNever(val)) return TypeRegistry.Never;
+
+            // Try to find op_set_index function: op_set_index(&Slice, index, value)
+            var opSetIndexResult = TryResolveSetIndexFunction("op_set_index", refBaseType, it, val, ae.Span);
+
+            if (opSetIndexResult != null)
+            {
+                ix.ResolvedSetIndexFunction = opSetIndexResult.Value.Function;
+                return opSetIndexResult.Value.ReturnType;
+            }
+        }
+
+        // Built-in array indexing
+        var prunedIt = it.Prune();
+        if (!TypeRegistry.IsIntegerType(prunedIt))
+        {
+            ReportError(
+                "array index must be an integer",
+                ix.Index.Span,
+                $"found `{prunedIt}`",
+                "E2027");
+        }
+        else if (prunedIt is ComptimeInt)
+        {
+            UnifyTypes(it, TypeRegistry.USize, ix.Index.Span);
+        }
+
+        TypeBase elementType2;
+        if (bt is ArrayType at)
+        {
+            elementType2 = at.ElementType;
+        }
+        else if (bt is StructType st && TypeRegistry.IsSlice(st))
+        {
+            elementType2 = st.TypeArguments[0];
+        }
+        else
+        {
+            ReportError(
+                $"cannot index into type `{bt}`",
+                ix.Base.Span,
+                "only arrays and slices support indexing",
+                "E2028");
+            return TypeRegistry.Never;
+        }
+
+        // Check value against element type
+        var valType = CheckExpression(ae.Value, elementType2);
+        if (IsNever(valType)) return TypeRegistry.Never;
+
+        UnifyTypes(valType, elementType2, ae.Value.Span);
+        return elementType2;
+    }
+
+    /// <summary>
+    /// Attempts to resolve an op_set_index function for indexed assignment.
+    /// op_set_index takes 3 arguments: (&amp;base, index, value)
+    /// </summary>
+    private OperatorFunctionResult? TryResolveSetIndexFunction(
+        string opFuncName, TypeBase baseRefType, TypeBase indexType, TypeBase valueType, SourceSpan span)
+    {
+        if (!_functions.TryGetValue(opFuncName, out var candidates))
+            return null;
+
+        var argTypes = new List<TypeBase> { baseRefType.Prune(), indexType.Prune(), valueType.Prune() };
+
+        FunctionEntry? bestNonGeneric = null;
+        var bestNonGenericCost = int.MaxValue;
+
+        foreach (var cand in candidates)
+        {
+            if (cand.IsGeneric) continue;
+            if (cand.ParameterTypes.Count != 3) continue;
+            if (!TryComputeCoercionCost(argTypes, cand.ParameterTypes, out var cost))
+                continue;
+
+            if (cost < bestNonGenericCost)
+            {
+                bestNonGeneric = cand;
+                bestNonGenericCost = cost;
+            }
+        }
+
+        FunctionEntry? bestGeneric = null;
+        Dictionary<string, TypeBase>? bestBindings = null;
+        var bestGenericCost = int.MaxValue;
+
+        foreach (var cand in candidates)
+        {
+            if (!cand.IsGeneric) continue;
+            if (cand.ParameterTypes.Count != 3) continue;
+
+            var bindings = new Dictionary<string, TypeBase>();
+            var okGen = true;
+            for (var i = 0; i < 3; i++)
+            {
+                if (!TryBindGeneric(cand.ParameterTypes[i], argTypes[i], bindings, out _, out _))
+                {
+                    okGen = false;
+                    break;
+                }
+            }
+
+            if (!okGen) continue;
+
+            var concreteParams = cand.ParameterTypes
+                .Select(pt => SubstituteGenerics(pt, bindings))
+                .ToList();
+
+            if (!TryComputeCoercionCost(argTypes, concreteParams, out var genCost))
+                continue;
+
+            if (genCost < bestGenericCost)
+            {
+                bestGeneric = cand;
+                bestBindings = bindings;
+                bestGenericCost = genCost;
+            }
+        }
+
+        FunctionEntry? chosen;
+        Dictionary<string, TypeBase>? chosenBindings = null;
+
+        if (bestNonGeneric != null && (bestGeneric == null || bestNonGenericCost <= bestGenericCost))
+        {
+            chosen = bestNonGeneric;
+        }
+        else
+        {
+            chosen = bestGeneric;
+            chosenBindings = bestBindings;
+        }
+
+        if (chosen == null)
+            return null;
+
+        FunctionDeclarationNode resolvedFunction;
+        TypeBase returnType;
+
+        if (chosen.IsGeneric && chosenBindings != null)
+        {
+            resolvedFunction = EnsureSpecialization(chosen, chosenBindings, argTypes);
+            returnType = SubstituteGenerics(chosen.ReturnType, chosenBindings);
+        }
+        else
+        {
+            resolvedFunction = chosen.AstNode;
+            returnType = chosen.ReturnType;
+        }
+
+        return new OperatorFunctionResult
+        {
+            Function = resolvedFunction,
+            ReturnType = returnType
+        };
     }
 
     private TypeBase CheckCallExpression(CallExpressionNode call, TypeBase? expectedType)

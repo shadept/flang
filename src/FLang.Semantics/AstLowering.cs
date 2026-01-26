@@ -860,6 +860,12 @@ public class AstLowering
 
             case AssignmentExpressionNode assignment:
                 {
+                    // Handle indexed assignment: expr[index] = value
+                    if (assignment.Target is IndexExpressionNode indexTarget)
+                    {
+                        return LowerIndexedAssignment(assignment, indexTarget);
+                    }
+
                     var assignValue = LowerExpression(assignment.Value);
 
                     // Get the pointer to the assignment target (lvalue)
@@ -1599,6 +1605,108 @@ public class AstLowering
             default:
                 throw new Exception($"Unknown expression type: {expression.GetType().Name}");
         }
+    }
+
+    /// <summary>
+    /// Lowers indexed assignment: expr[index] = value
+    /// For slices/custom types with op_set_index: calls op_set_index(&amp;base, index, value)
+    /// For arrays: uses native pointer arithmetic and store
+    /// </summary>
+    private Value LowerIndexedAssignment(AssignmentExpressionNode assignment, IndexExpressionNode indexTarget)
+    {
+        var assignValue = LowerExpression(assignment.Value);
+
+        // Check if type checker resolved this to an op_set_index function call
+        if (indexTarget.ResolvedSetIndexFunction != null)
+        {
+            var baseValue = LowerExpression(indexTarget.Base);
+            var indexValue = LowerExpression(indexTarget.Index);
+
+            // Get reference to base (op_set_index expects &Slice or &Array)
+            Value baseRef;
+            if (baseValue is LocalValue lv && lv.Type is ReferenceType)
+            {
+                baseRef = baseValue;
+            }
+            else
+            {
+                // Need to take address - store to temp and get address
+                var baseType = indexTarget.Base.Type!;
+                var tempPtr = new LocalValue($"set_index_base_{_tempCounter++}", new ReferenceType(baseType));
+                var allocaInst = new AllocaInstruction(baseType, baseType.Size, tempPtr);
+                _currentBlock.Instructions.Add(allocaInst);
+                var storePtrInst = new StorePointerInstruction(tempPtr, baseValue);
+                _currentBlock.Instructions.Add(storePtrInst);
+                baseRef = tempPtr;
+            }
+
+            // Call op_set_index function: op_set_index(&base, index, value)
+            var resolvedFunc = indexTarget.ResolvedSetIndexFunction;
+
+            var opSetIndexParamTypes = new List<FType>();
+            foreach (var param in resolvedFunc.Parameters)
+            {
+                var paramType = param.ResolvedType ??
+                    throw new InvalidOperationException($"Parameter '{param.Name}' has no resolved type");
+                opSetIndexParamTypes.Add(paramType);
+            }
+
+            var returnType = resolvedFunc.ResolvedReturnType ?? TypeRegistry.Void;
+            var resultValue = new LocalValue($"set_index_call_{_tempCounter++}", returnType);
+            var opSetIndexCall = new CallInstruction("op_set_index", [baseRef, indexValue, assignValue], resultValue);
+            opSetIndexCall.CalleeParamTypes = opSetIndexParamTypes;
+            opSetIndexCall.IsForeignCall = (resolvedFunc.Modifiers & FunctionModifiers.Foreign) != 0;
+            _currentBlock.Instructions.Add(opSetIndexCall);
+
+            return assignValue;
+        }
+
+        // Built-in array indexing
+        var baseValueFallback = LowerExpression(indexTarget.Base);
+        var indexValueFallback = LowerExpression(indexTarget.Index);
+        var baseArrayType = indexTarget.Base.Type;
+
+        if (baseArrayType is ArrayType arrayType)
+        {
+            var elemSize = GetTypeSize(arrayType.ElementType);
+
+            // Calculate offset: index * element_size
+            var offsetTemp = new LocalValue($"set_offset_{_tempCounter++}", TypeRegistry.USize);
+            var offsetInst = new BinaryInstruction(BinaryOp.Multiply, indexValueFallback,
+                new ConstantValue(elemSize) { Type = TypeRegistry.I32 }, offsetTemp);
+            _currentBlock.Instructions.Add(offsetInst);
+
+            // Calculate element address: base + offset
+            var elemPtr = new LocalValue($"set_index_ptr_{_tempCounter++}", new ReferenceType(arrayType.ElementType));
+            var gepInst = new GetElementPtrInstruction(baseValueFallback, offsetTemp, elemPtr);
+            _currentBlock.Instructions.Add(gepInst);
+
+            // Store value to element
+            var storeInst = new StorePointerInstruction(elemPtr, assignValue);
+            _currentBlock.Instructions.Add(storeInst);
+
+            return assignValue;
+        }
+
+        if (baseArrayType is StructType sliceType && TypeRegistry.IsSlice(sliceType))
+        {
+            // Slice set without op_set_index - should not happen if stdlib is loaded
+            _diagnostics.Add(Diagnostic.Error(
+                "slice indexed assignment requires op_set_index function",
+                indexTarget.Span,
+                "ensure core.slice is imported",
+                "E3007"
+            ));
+            return assignValue;
+        }
+
+        _diagnostics.Add(Diagnostic.Error(
+            "cannot index-assign to non-array type",
+            indexTarget.Span,
+            "type checking failed",
+            "E3008"
+        ));
+        return assignValue;
     }
 
     private int GetTypeSize(FType type)

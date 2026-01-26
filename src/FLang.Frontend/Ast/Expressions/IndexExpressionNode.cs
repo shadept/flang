@@ -23,4 +23,10 @@ public class IndexExpressionNode : ExpressionNode
     /// Lowering will emit: op_index(&amp;base, index)
     /// </summary>
     public FunctionDeclarationNode? ResolvedIndexFunction { get; set; }
+
+    /// <summary>
+    /// If set, indexed assignment is resolved to a call to this op_set_index function.
+    /// Lowering will emit: op_set_index(&amp;base, index, value)
+    /// </summary>
+    public FunctionDeclarationNode? ResolvedSetIndexFunction { get; set; }
 }

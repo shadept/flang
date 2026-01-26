@@ -919,7 +919,7 @@ public class Parser
     /// <returns>True if the expression is a valid l-value, false otherwise.</returns>
     private bool IsValidLValue(ExpressionNode expr)
     {
-        return expr is IdentifierExpressionNode or MemberAccessExpressionNode;
+        return expr is IdentifierExpressionNode or MemberAccessExpressionNode or IndexExpressionNode;
     }
 
     /// <summary>
