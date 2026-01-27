@@ -11,7 +11,7 @@ pub struct List(T) {
     allocator: &Allocator?
 }
 
-fn allocator(self: List($T)) &Allocator {
+fn get_allocator(self: List($T)) &Allocator {
     return self.allocator ?? &global_allocator
 }
 
@@ -31,12 +31,11 @@ pub fn reserve(self: &List($T), capacity: usize) {
     }
 
     // Allocate new buffer using raw malloc
-    const elem_size: usize = sizeof(T)
+    const elem_size: usize = size_of(T)
     const elem_align: usize = align_of(T)
     const new_bytes: usize = new_cap * elem_size
-    const new_buf = self.allocator().alloc(new_bytes, elem_align)
-        .expect("reserve(List(T), capacity): allocation failed")
-    const new_ptr: &T = new_buf.value as &T
+    const new_buf = self.get_allocator().alloc(new_bytes, elem_align).expect("reserve(List(T), capacity): allocation failed")
+    const new_ptr: &T = new_buf.ptr as &T
 
     // Copy existing elements
     if (self.len > 0) {
@@ -46,7 +45,7 @@ pub fn reserve(self: &List($T), capacity: usize) {
 
     // Free old buffer if it existed
     if (self.cap > 0) {
-        free(self.ptr)
+        free(self.ptr as &u8)
     }
 
     self.ptr = new_ptr

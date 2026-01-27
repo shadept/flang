@@ -62,7 +62,7 @@ public class Parser
                 }
                 else if (_currentToken.Kind == TokenKind.Pub)
                 {
-                    // Could be struct, enum, or function - peek ahead
+                    // Could be struct, enum, function, or const - peek ahead
                     var nextToken = PeekNextToken();
                     if (nextToken.Kind == TokenKind.Struct)
                     {
@@ -78,10 +78,15 @@ public class Parser
                     {
                         functions.Add(ParseFunction());
                     }
+                    else if (nextToken.Kind == TokenKind.Const)
+                    {
+                        Eat(TokenKind.Pub);
+                        globalConstants.Add(ParseVariableDeclaration(isPublic: true));
+                    }
                     else
                     {
                         _diagnostics.Add(Diagnostic.Error(
-                            $"expected `struct`, `enum`, or `fn` after `pub`",
+                            $"expected `struct`, `enum`, `fn`, or `const` after `pub`",
                             _currentToken.Span,
                             $"found '{nextToken.Text}'",
                             "E1002"));
@@ -499,8 +504,9 @@ public class Parser
     /// Parses a variable declaration statement with optional type annotation and initializer.
     /// Supports both `let` (mutable) and `const` (immutable) declarations.
     /// </summary>
+    /// <param name="isPublic">Whether this is a public declaration (for top-level constants).</param>
     /// <returns>A <see cref="VariableDeclarationNode"/> representing the variable declaration.</returns>
-    private VariableDeclarationNode ParseVariableDeclaration()
+    private VariableDeclarationNode ParseVariableDeclaration(bool isPublic = false)
     {
         // Accept either 'let' or 'const'
         var isConst = _currentToken.Kind == TokenKind.Const;
@@ -522,7 +528,7 @@ public class Parser
         }
 
         var span = SourceSpan.Combine(keyword.Span, _currentToken.Span);
-        return new VariableDeclarationNode(span, identifier.Text, type, initializer, isConst);
+        return new VariableDeclarationNode(span, identifier.Text, type, initializer, isConst, isPublic);
     }
 
     /// <summary>

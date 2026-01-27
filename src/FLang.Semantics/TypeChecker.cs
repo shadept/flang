@@ -28,6 +28,14 @@ public class TypeChecker
     private readonly List<FunctionDeclarationNode> _specializations = [];
     private readonly HashSet<string> _emittedSpecs = [];
 
+    // Private functions per module - needed for generic specialization
+    // When a generic function from module X is specialized, private functions from X must be visible
+    private readonly Dictionary<string, List<(string Name, FunctionEntry Entry)>> _privateEntriesByModule = [];
+
+    // Private global constants per module - needed for generic specialization
+    // When a generic function from module X is specialized, private constants from X must be visible
+    private readonly Dictionary<string, List<(string Name, TypeBase Type)>> _privateConstantsByModule = [];
+
     // Module-aware state (local to type checking phase)
     private string? _currentModulePath = null;
 
@@ -416,12 +424,15 @@ public class TypeChecker
     {
         _currentModulePath = modulePath;
 
+        // Collect private function entries for later use in generic specialization
+        // Private functions from a module must be visible when specializing generic functions from that module
+        var privateEntries = new List<(string, FunctionEntry)>();
+
         foreach (var function in module.Functions)
         {
             var mods = function.Modifiers;
             var isPublic = (mods & FunctionModifiers.Public) != 0;
             var isForeign = (mods & FunctionModifiers.Foreign) != 0;
-            if (!(isPublic || isForeign)) continue;
 
             PushGenericScope(function);
             try
@@ -452,14 +463,23 @@ public class TypeChecker
                 function.ResolvedParameterTypes = parameterTypes;
 
                 var entry = new FunctionEntry(function.Name, parameterTypes, returnType, function, isForeign,
-                    IsGenericSignature(parameterTypes, returnType));
-                if (!_functions.TryGetValue(function.Name, out var list))
-                {
-                    list = [];
-                    _functions[function.Name] = list;
-                }
+                    IsGenericSignature(parameterTypes, returnType), modulePath);
 
-                list.Add(entry);
+                if (isPublic || isForeign)
+                {
+                    // Public/foreign functions go into global registry
+                    if (!_functions.TryGetValue(function.Name, out var list))
+                    {
+                        list = [];
+                        _functions[function.Name] = list;
+                    }
+                    list.Add(entry);
+                }
+                else
+                {
+                    // Private functions: store for later use during generic specialization
+                    privateEntries.Add((function.Name, entry));
+                }
             }
             finally
             {
@@ -467,7 +487,121 @@ public class TypeChecker
             }
         }
 
+        // Store private entries for this module (needed when specializing generics from this module)
+        _privateEntriesByModule[modulePath] = privateEntries;
+
+        // Temporarily register private functions so constant initializers can reference them
+        foreach (var (name, entry) in privateEntries)
+        {
+            if (!_functions.TryGetValue(name, out var list))
+            {
+                list = [];
+                _functions[name] = list;
+            }
+            list.Add(entry);
+        }
+
+        // Collect global constants early so they're available during generic specialization
+        // Note: Constants are fully type-checked here (including initializers) so they can be used
+        // when generic functions from this module are specialized before CheckModuleBodies runs
+        var privateConstants = new List<(string Name, TypeBase Type)>();
+        foreach (var globalConst in module.GlobalConstants)
+        {
+            CollectGlobalConstant(globalConst, privateConstants);
+        }
+        _privateConstantsByModule[modulePath] = privateConstants;
+
+        // Remove private functions again (they'll be re-registered in CheckModuleBodies)
+        foreach (var (name, entry) in privateEntries)
+        {
+            if (_functions.TryGetValue(name, out var list))
+            {
+                list.Remove(entry);
+                if (list.Count == 0) _functions.Remove(name);
+            }
+        }
+
+        // Remove private constants again (they'll be re-registered in CheckModuleBodies)
+        foreach (var (name, _) in privateConstants)
+        {
+            _compilation.GlobalConstants.Remove(name);
+        }
+
         _currentModulePath = null;
+    }
+
+    /// <summary>
+    /// Collects a global constant during signature collection phase.
+    /// This is needed so constants are available when generic functions are specialized.
+    /// </summary>
+    private void CollectGlobalConstant(VariableDeclarationNode v, List<(string Name, TypeBase Type)> privateConstants)
+    {
+        // Global constants must have an initializer
+        if (v.Initializer == null)
+        {
+            ReportError(
+                "global const declaration must have an initializer",
+                v.Span,
+                "global const variables must be initialized at declaration",
+                "E2039");
+            v.ResolvedType = TypeRegistry.Never;
+            if (v.IsPublic)
+                _compilation.GlobalConstants[v.Name] = TypeRegistry.Never;
+            return;
+        }
+
+        // Check for duplicate global constant names
+        if (_compilation.GlobalConstants.ContainsKey(v.Name))
+        {
+            ReportError(
+                $"global constant `{v.Name}` is already declared",
+                v.Span,
+                "duplicate global constant declaration",
+                "E2005");
+            v.ResolvedType = TypeRegistry.Never;
+            return;
+        }
+
+        var dt = ResolveTypeNode(v.Type);
+        var it = CheckExpression(v.Initializer, dt);
+
+        TypeBase finalType;
+        if (it != null && dt != null)
+        {
+            var originalInitType = it.Prune();
+            UnifyTypes(it, dt, v.Initializer.Span);
+            v.Initializer = WrapWithCoercionIfNeeded(v.Initializer, originalInitType, dt.Prune());
+            v.ResolvedType = dt;
+            finalType = dt;
+        }
+        else
+        {
+            var varType = dt ?? it;
+            if (varType == null)
+            {
+                ReportError(
+                    "cannot infer type",
+                    v.Span,
+                    "type annotations needed: global const declaration requires either a type annotation or an initializer",
+                    "E2001");
+                v.ResolvedType = TypeRegistry.Never;
+                finalType = TypeRegistry.Never;
+            }
+            else
+            {
+                v.ResolvedType = varType;
+                finalType = varType;
+            }
+        }
+
+        // Register based on visibility
+        // Also register all constants temporarily so later constants in the same module can reference them
+        _compilation.GlobalConstants[v.Name] = finalType;
+        if (!v.IsPublic)
+        {
+            // Private constants: also store for module-local access during generic specialization
+            privateConstants.Add((v.Name, finalType));
+        }
     }
 
     /// <summary>
@@ -762,54 +896,28 @@ public class TypeChecker
         _currentModulePath = modulePath;
         _literalTypeVars.Clear();  // Clear TypeVars from previous module
 
-        // Temporarily add private functions (must happen before global const checking
+        // Get private function entries (collected earlier in CollectFunctionSignatures)
+        var privateEntries = _privateEntriesByModule.TryGetValue(modulePath, out var entries) ? entries : [];
+
+        // Temporarily add private functions to global registry (must happen before global const checking
         // so that function references can be resolved in global constant initializers)
-        var added = new List<(string, FunctionEntry)>();
-        foreach (var function in module.Functions)
+        foreach (var (name, entry) in privateEntries)
         {
-            var mods = function.Modifiers;
-            var isPublic = (mods & FunctionModifiers.Public) != 0;
-            var isForeign = (mods & FunctionModifiers.Foreign) != 0;
-            if (isPublic || isForeign) continue;
-
-            PushGenericScope(function);
-            try
+            if (!_functions.TryGetValue(name, out var list))
             {
-                var returnType = ResolveTypeNode(function.ReturnType) ?? TypeRegistry.Void;
-                var parameterTypes = new List<TypeBase>();
-                foreach (var param in function.Parameters)
-                {
-                    var pt = ResolveTypeNode(param.Type) ?? TypeRegistry.Never;
-                    // Store resolved type on parameter for AstLowering
-                    param.ResolvedType = pt;
-                    parameterTypes.Add(pt);
-                }
-
-                // Store resolved types on function for AstLowering
-                function.ResolvedReturnType = returnType;
-                function.ResolvedParameterTypes = parameterTypes;
-
-                var entry = new FunctionEntry(function.Name, parameterTypes, returnType, function, false,
-                    IsGenericSignature(parameterTypes, returnType));
-                if (!_functions.TryGetValue(function.Name, out var list))
-                {
-                    list = [];
-                    _functions[function.Name] = list;
-                }
-
-                list.Add(entry);
-                added.Add((function.Name, entry));
+                list = [];
+                _functions[name] = list;
             }
-            finally
-            {
-                PopGenericScope();
-            }
+            list.Add(entry);
         }
 
-        // Check top-level const declarations (after functions registered so function refs work)
-        foreach (var globalConst in module.GlobalConstants)
+        // Get private constants (already collected in CollectFunctionSignatures)
+        var privateConstants = _privateConstantsByModule.TryGetValue(modulePath, out var pc) ? pc : [];
+
+        // Temporarily register private constants for use within this module
+        foreach (var (name, type) in privateConstants)
         {
-            CheckGlobalConstant(globalConst);
+            _compilation.GlobalConstants[name] = type;
         }
 
         // Check non-generic bodies
@@ -826,14 +934,22 @@ public class TypeChecker
             CheckTest(test);
         }
 
-        // Remove private entries
-        foreach (var (name, entry) in added)
+        // Remove private entries from global registry
+        // They remain in _privateEntriesByModule for use during generic specialization
+        foreach (var (name, entry) in privateEntries)
         {
             if (_functions.TryGetValue(name, out var list))
             {
                 list.Remove(entry);
                 if (list.Count == 0) _functions.Remove(name);
             }
+        }
+
+        // Remove private constants from global registry
+        // They remain in _privateConstantsByModule for use during generic specialization
+        foreach (var (name, _) in privateConstants)
+        {
+            _compilation.GlobalConstants.Remove(name);
         }
 
         // Verify all literal TypeVars have been resolved to concrete types
@@ -1036,69 +1152,6 @@ public class TypeChecker
                 // No immediate check for IsComptimeType - validation happens in VerifyAllTypesResolved
                 v.ResolvedType = varType;
                 DeclareVariable(v.Name, varType, v.Span, v.IsConst);
-            }
-        }
-    }
-
-    /// <summary>
-    /// Type-checks a top-level global constant declaration.
-    /// Global constants are registered in Compilation.GlobalConstants for cross-module access.
-    /// </summary>
-    private void CheckGlobalConstant(VariableDeclarationNode v)
-    {
-        // Global constants must have an initializer
-        if (v.Initializer == null)
-        {
-            ReportError(
-                "global const declaration must have an initializer",
-                v.Span,
-                "global const variables must be initialized at declaration",
-                "E2039");
-            v.ResolvedType = TypeRegistry.Never;
-            _compilation.GlobalConstants[v.Name] = TypeRegistry.Never;
-            return;
-        }
-
-        // Check for duplicate global constant names
-        if (_compilation.GlobalConstants.ContainsKey(v.Name))
-        {
-            ReportError(
-                $"global constant `{v.Name}` is already declared",
-                v.Span,
-                "duplicate global constant declaration",
-                "E2005");
-            v.ResolvedType = TypeRegistry.Never;
-            return;
-        }
-
-        var dt = ResolveTypeNode(v.Type);
-        var it = CheckExpression(v.Initializer, dt);
-
-        if (it != null && dt != null)
-        {
-            var originalInitType = it.Prune();
-            var unified = UnifyTypes(it, dt, v.Initializer.Span);
-            v.Initializer = WrapWithCoercionIfNeeded(v.Initializer, originalInitType, dt.Prune());
-            v.ResolvedType = dt;
-            _compilation.GlobalConstants[v.Name] = dt;
-        }
-        else
-        {
-            var varType = dt ?? it;
-            if (varType == null)
-            {
-                ReportError(
-                    "cannot infer type",
-                    v.Span,
-                    "type annotations needed: global const declaration requires either a type annotation or an initializer",
-                    "E2001");
-                v.ResolvedType = TypeRegistry.Never;
-                _compilation.GlobalConstants[v.Name] = TypeRegistry.Never;
-            }
-            else
-            {
-                v.ResolvedType = varType;
-                _compilation.GlobalConstants[v.Name] = varType;
             }
         }
     }
@@ -1424,6 +1477,22 @@ public class TypeChecker
 
             // Track that this type is used as a literal
             _compilation.InstantiatedTypes.Add(resolvedType);
+            return typeStruct;
+        }
+
+        // Check if identifier is a generic type parameter in scope (e.g., T in List(T))
+        // This handles cases like size_of(T) where T is a generic parameter
+        if (IsGenericNameInScope(id.Name))
+        {
+            // Create generic parameter type and substitute with bound type if available
+            TypeBase genericType = new GenericParameterType(id.Name);
+            if (_currentBindings != null && _currentBindings.TryGetValue(id.Name, out var boundType))
+            {
+                genericType = boundType;
+            }
+            // Return as type literal: T → Type(T) or Type(i32) if bound
+            var typeStruct = TypeRegistry.MakeType(genericType);
+            _compilation.InstantiatedTypes.Add(genericType);
             return typeStruct;
         }
 
@@ -2537,7 +2606,7 @@ public class TypeChecker
             }
 
             ReportError(
-                $"cannot find function `{call.FunctionName}` in this scope",
+                $"cannot find function `{call.MethodName ?? call.FunctionName}` in this scope",
                 call.Span,
                 "not found in this scope",
                 "E2004");
@@ -4431,7 +4500,66 @@ public class TypeChecker
             // references to T in the body are properly substituted to concrete types.
             // CheckFunction will push its own scope (which will be empty for newFn),
             // but the outer scope from genericEntry.AstNode will still be active.
-            CheckFunction(newFn);
+
+            // Temporarily re-register private functions from the generic entry's module
+            // so that calls to private functions within the specialized body can resolve
+            var privateEntries = genericEntry.ModulePath != null &&
+                _privateEntriesByModule.TryGetValue(genericEntry.ModulePath, out var entries)
+                    ? entries : null;
+            if (privateEntries != null)
+            {
+                foreach (var (name, entry) in privateEntries)
+                {
+                    if (!_functions.TryGetValue(name, out var list))
+                    {
+                        list = [];
+                        _functions[name] = list;
+                    }
+                    list.Add(entry);
+                }
+            }
+
+            // Temporarily re-register private constants from the generic entry's module
+            var privateConstants = genericEntry.ModulePath != null &&
+                _privateConstantsByModule.TryGetValue(genericEntry.ModulePath, out var constEntries)
+                    ? constEntries : null;
+            if (privateConstants != null)
+            {
+                foreach (var (name, type) in privateConstants)
+                {
+                    _compilation.GlobalConstants[name] = type;
+                }
+            }
+
+            try
+            {
+                CheckFunction(newFn);
+            }
+            finally
+            {
+                // Remove private entries again
+                if (privateEntries != null)
+                {
+                    foreach (var (name, entry) in privateEntries)
+                    {
+                        if (_functions.TryGetValue(name, out var list))
+                        {
+                            list.Remove(entry);
+                            if (list.Count == 0) _functions.Remove(name);
+                        }
+                    }
+                }
+
+                // Remove private constants again
+                if (privateConstants != null)
+                {
+                    foreach (var (name, _) in privateConstants)
+                    {
+                        _compilation.GlobalConstants.Remove(name);
+                    }
+                }
+            }
+
             return newFn;
         }
         finally
@@ -4803,7 +4931,7 @@ public class TypeChecker
 public class FunctionEntry
 {
     public FunctionEntry(string name, IReadOnlyList<TypeBase> parameterTypes, TypeBase returnType,
-        FunctionDeclarationNode astNode, bool isForeign, bool isGeneric)
+        FunctionDeclarationNode astNode, bool isForeign, bool isGeneric, string? modulePath = null)
     {
         Name = name;
         ParameterTypes = parameterTypes;
@@ -4811,6 +4939,7 @@ public class FunctionEntry
         AstNode = astNode;
         IsForeign = isForeign;
         IsGeneric = isGeneric;
+        ModulePath = modulePath;
     }
 
     public string Name { get; }
@@ -4819,6 +4948,7 @@ public class FunctionEntry
     public FunctionDeclarationNode AstNode { get; }
     public bool IsForeign { get; }
     public bool IsGeneric { get; }
+    public string? ModulePath { get; }
 }
 
 // ForLoopTypes struct removed - iterator protocol types now stored directly on ForLoopNode

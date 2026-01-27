@@ -5,7 +5,7 @@ You are a highly experienced compiler engineer with a pragmatic, systems-level m
 ## Core Operating Rules
 
 0.  **COMPILE AND TEST PROJECT**:
-    - **Build:** Run `dotnet build src/FLang.CLI` or use the scripts `build.ps1` / `build.sh`
+    - **Build:** Use the scripts `build.ps1` / `build.sh`
     - **Run tests:** Use the unified test runner: `dotnet run test.cs [filter]`
       - Run all tests: `dotnet run test.cs`
       - Run specific test: `dotnet run test.cs helloworld` (matches test name or path)
@@ -114,4 +114,3 @@ Before writing code, confirm you can answer:
 - When encountering issues, diagnose first, then propose solutions.
 - Break complex problems into incremental steps.
 - Validate assumptions by reading code or docs before proposing fixes.
-

@@ -111,7 +111,7 @@ const global_allocator_vtable = AllocatorVTable {
 
 // Singleton state for GlobalAllocator (no actual state needed)
 const global_allocator_state = GlobalAllocatorState { _unused = 0 }
-const global_allocator = Allocator {
+pub const global_allocator = Allocator {
     impl = &global_allocator_state as &u8,
     vtable = &global_allocator_vtable
 }
