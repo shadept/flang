@@ -188,6 +188,40 @@ public class AstLowering
             return null;
         }
 
+        // Handle address-of expressions (e.g., &global_allocator_state)
+        if (initializer is AddressOfExpressionNode addressOf)
+        {
+            // The inner expression must be a reference to another global constant
+            var innerValue = LowerGlobalConstantInitializer(addressOf.Target, addressOf.Target.Type ?? constType, constName);
+            if (innerValue is GlobalValue)
+            {
+                // GlobalValue already has pointer type - return it directly
+                return innerValue;
+            }
+
+            if (innerValue != null)
+            {
+                // Wrap non-global values in a GlobalValue to get a pointer
+                var global = new GlobalValue($"__global_{constName}_addr", innerValue);
+                return global;
+            }
+
+            return null;
+        }
+
+        // Handle cast expressions (e.g., &x as &u8)
+        if (initializer is CastExpressionNode cast)
+        {
+            var innerValue = LowerGlobalConstantInitializer(cast.Expression, cast.Expression.Type ?? constType, constName);
+            if (innerValue != null)
+            {
+                // For constant initializers, casts are type-only reinterpretations
+                innerValue.Type = constType;
+                return innerValue;
+            }
+            return null;
+        }
+
         // For now, report an error for unsupported initializer types
         _diagnostics.Add(Diagnostic.Error(
             $"unsupported global constant initializer for `{constName}`",

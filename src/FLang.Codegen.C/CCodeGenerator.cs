@@ -406,6 +406,8 @@ public class CCodeGenerator
         if (global.Initializer is StructConstantValue generalStructConst &&
             generalStructConst.Type is StructType generalSt)
         {
+            // Recursively emit any globals referenced by this struct's fields
+            EmitDependentGlobals(generalStructConst);
             var structTypeName = TypeToCType(generalSt);
             var initStr = EmitStructConstantInline(generalStructConst);
             _output.AppendLine($"static const {structTypeName} {global.Name} = {initStr};");
@@ -456,6 +458,26 @@ public class CCodeGenerator
         }
     }
 
+    /// <summary>
+    /// Recursively emit any GlobalValue fields referenced by a struct constant,
+    /// ensuring they are declared before the struct that references them.
+    /// </summary>
+    private void EmitDependentGlobals(StructConstantValue scv)
+    {
+        foreach (var kvp in scv.FieldValues)
+        {
+            if (kvp.Value is GlobalValue gv)
+            {
+                // Recursively emit the referenced global first
+                EmitGlobal(gv);
+            }
+            else if (kvp.Value is StructConstantValue nested)
+            {
+                EmitDependentGlobals(nested);
+            }
+        }
+    }
+
     private string EmitStructConstantInline(StructConstantValue scv)
     {
         var fields = scv.FieldValues.Select(kvp =>
@@ -469,13 +491,36 @@ public class CCodeGenerator
                     => $"(const uint8_t*)\"{EscapeStringForC(arrayConst.StringRepresentation)}\"",
                 GlobalValue gv when gv.Initializer is ArrayConstantValue arrayConst && arrayConst.StringRepresentation != null
                     => $"(const uint8_t*)\"{EscapeStringForC(arrayConst.StringRepresentation)}\"",
-                GlobalValue gv => gv.Name,
+                GlobalValue gv => FormatGlobalReference(gv, kvp.Value.Type),
                 StructConstantValue nested => EmitStructConstantInline(nested),
                 _ => throw new InvalidOperationException($"Unsupported field value type: {kvp.Value}")
             };
             return $".{kvp.Key} = {value}";
         });
         return $"{{ {string.Join(", ", fields)} }}";
+    }
+
+    /// <summary>
+    /// Format a GlobalValue reference for use in a constant initializer.
+    /// GlobalValues are pointers to their data, so in C we need &amp;name.
+    /// If the target type differs from the natural pointer type, emit a cast.
+    /// </summary>
+    private string FormatGlobalReference(GlobalValue gv, TypeBase? targetType)
+    {
+        // GlobalValue's Type is ReferenceType (pointer to initializer type).
+        // In C, the global is declared as the struct itself, so &name gives us the pointer.
+        var expr = $"&{gv.Name}";
+
+        // If the target type is a reference to a different type than the global's initializer,
+        // emit a cast (e.g., (uint8_t*)&__global_inner_state)
+        if (targetType is ReferenceType refType && gv.Initializer.Type != null &&
+            !refType.InnerType.Equals(gv.Initializer.Type))
+        {
+            var castType = TypeToCType(targetType);
+            return $"({castType}){expr}";
+        }
+
+        return expr;
     }
 
     #region Phase 1: Analysis
