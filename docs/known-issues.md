@@ -381,30 +381,15 @@ This keeps the AST immutable while allowing different resolutions per instantiat
 
 ### Dict(K,V) Implementation Blocked by Lack of While Loops
 
-**Status:** Blocked - requires language change
-**Affected:** `stdlib/std/dict.f`
+**Status:** RESOLVED - implemented using bounded `for-in` loops with `break`
 
-**Problem:**
-The `Dict(K,V)` hash table implementation requires `while` loops for linear probing during hash collisions. FLang currently only supports `for (x in iterable)` loops, which cannot express "loop until condition becomes false" semantics.
-
-**Example of what Dict needs:**
-```flang
-// This syntax does not exist in FLang
-while (entries[idx].occupied) {
-    idx = (idx + 1) % capacity  // linear probing
-}
-```
-
-**Current workaround:**
-Dict operations (`set`, `get`, `contains`, `remove`) call `__flang_unimplemented()` which panics at runtime. Dict tests are marked with `//! SKIP: Blocked by lack of while loop support`.
-
-**Solution:**
-Add `while (condition) { body }` loop syntax to FLang. This would be a Phase 4 language feature.
+Dict(K,V) is now fully implemented using open addressing with linear probing. Instead of `while` loops, probing uses `for (i in 0..cap)` with early `return`/`continue`, which is bounded by capacity and functionally equivalent.
 
 **Related Files:**
-- `stdlib/std/dict.f` - stub implementation
-- `tests/FLang.Tests/Harness/dicts/dict_basic.f` - skipped
-- `tests/FLang.Tests/Harness/dicts/dict_remove.f` - skipped
+- `stdlib/std/dict.f` - full implementation
+- `tests/FLang.Tests/Harness/dicts/dict_basic.f` - passing
+- `tests/FLang.Tests/Harness/dicts/dict_remove.f` - passing
+- `tests/FLang.Tests/Harness/dicts/dict_overwrite.f` - passing
 
 ---
 

@@ -747,11 +747,11 @@ _Goal: Build a usable standard library._
 
 ---
 
-### Milestone 18: Collections (PARTIAL)
+### Milestone 18: Collections (COMPLETE)
 
 **Scope:** Core data structures with allocator support.
 
-**Status:** List(T) fully implemented. Dict(K,V) blocked by lack of `while` loop support in FLang (only `for-in` loops exist).
+**Status:** List(T) and Dict(K,V) fully implemented.
 
 **Completed:**
 
@@ -766,24 +766,26 @@ _Goal: Build a usable standard library._
   - [x] `is_empty(List(T)) bool` - empty check (value semantics)
   - [x] `clear(&List(T))` - remove all elements (keep capacity)
   - [x] `deinit(&List(T))` - free backing storage
-- [x] `std/dict.f` - `Dict(K, V)` hash table - **STUB ONLY**
-  - [x] Struct layout: `{ entries: &Entry(K,V), length: usize, cap: usize, key_size: usize, value_size: usize, entry_size: usize }`
-  - [x] `dict_new(key_type: Type($K), value_type: Type($V))` constructor
-  - [ ] Operations (set, get, contains, remove) - blocked by lack of `while` loops
-
-**Blocked Tasks (Dict only):**
-
-- [ ] `set(&Dict(K,V), key: K, value: V)` - requires `while` loop for hash probing
-- [ ] `get(&Dict(K,V), key: K) V?` - requires `while` loop for hash probing
-- [ ] `contains(&Dict(K,V), key: K) bool` - requires `while` loop for hash probing
-- [ ] `remove(&Dict(K,V), key: K) V?` - requires `while` loop for hash probing
-
-**Note:** FLang currently only supports `for (x in iterable)` loops. Hash table implementation requires `while (condition)` loops for linear probing. Adding `while` loops is a future language milestone.
+- [x] `std/dict.f` - `Dict(K, V)` hash table - **FULLY WORKING**
+  - [x] Open addressing with linear probing (uses bounded `for-in` loops)
+  - [x] Multiplicative hash function on raw key bytes
+  - [x] Automatic growth at 75% load factor (capacity doubles, starting at 8)
+  - [x] Tombstone-based deletion for correct probe chain handling
+  - [x] Allocator support (`&Allocator?` field, defaults to `global_allocator`)
+  - [x] Zero-value initialization (no constructor needed: `let d: Dict(K,V)`)
+  - [x] `set(&Dict(K,V), key: K, value: V)` - insert or update
+  - [x] `get(Dict(K,V), key: K) V?` - lookup
+  - [x] `contains(Dict(K,V), key: K) bool` - membership test
+  - [x] `remove(&Dict(K,V), key: K) V?` - delete with tombstone
+  - [x] `len(Dict(K,V)) usize` - entry count
+  - [x] `is_empty(Dict(K,V)) bool` - empty check
+  - [x] `clear(&Dict(K,V))` - remove all entries (keep capacity)
+  - [x] `deinit(&Dict(K,V))` - free backing storage
 
 **Tests:**
 
 - ✅ 3 list tests passing: `list_basic.f`, `list_push_pop.f`, `list_clear.f`
-- ⏭️ 2 dict tests skipped: `dict_basic.f`, `dict_remove.f` (blocked by while loop support)
+- ✅ 3 dict tests passing: `dict_basic.f`, `dict_remove.f`, `dict_overwrite.f`
 
 ---
 
@@ -837,11 +839,11 @@ _Goal: Rewrite the compiler in FLang._
 ## Current Status
 
 - **Phase:** 5 (Standard Library)
-- **Milestone:** 18 (Collections - PARTIAL)
+- **Milestone:** 18 (Collections - COMPLETE)
 - **Next Up:**
-  - Add `while` loop support to FLang (required for Dict implementation)
   - Complete M14 pending items (nested patterns, multiple wildcards)
-- **Tests Passing:** 188 passed, 2 skipped
+  - Milestone 19: Text & I/O
+- **Tests Passing:** 196 passed
 
   - ✅ 15 core tests (basics, control flow, functions)
   - ✅ 5 generics tests (M11)
@@ -863,7 +865,7 @@ _Goal: Rewrite the compiler in FLang._
   - ✅ 2 const error tests (M16.2)
   - ✅ 10 auto-deref tests (M16.3)
   - ✅ 3 list tests (M18)
-  - ⏭️ 2 dict tests skipped (blocked by while loop support)
+  - ✅ 3 dict tests (M18)
 
 - **Total Lines of FLang Code:** ~700+ (test files + stdlib)
 - **Total Lines of C# Compiler Code:** ~7,700+

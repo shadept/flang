@@ -1,15 +1,11 @@
 //! TEST: dict_remove
-//! SKIP: Blocked by lack of while loop support in FLang
-
-// Dict implementation requires while loops for hash table probing.
-// FLang currently only supports for-in loops over iterables.
-// Once while loops are added, this test should EXIT: 10
+//! EXIT: 10
 
 import std.dict
 import std.option
 
 pub fn main() i32 {
-    let dict: Dict(i32, i32) = dict_new(i32, i32)
+    let dict: Dict(i32, i32)
 
     dict.set(1, 10)
     dict.set(2, 20)
@@ -17,8 +13,8 @@ pub fn main() i32 {
 
     // Remove key 2
     let removed: i32? = dict.remove(2)
-    let removed_val: i32 = unwrap_or(removed, 0)
-    if (removed_val != 20) {
+    let rv: i32 = unwrap_or(removed, 0)
+    if (rv != 20) {
         return 1
     }
 
