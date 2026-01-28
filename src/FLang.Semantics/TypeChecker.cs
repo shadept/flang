@@ -2696,16 +2696,20 @@ public class TypeChecker
                             ie.Condition.Span,
                             $"expected `bool`, found `{prunedCt}`",
                             "E2002");
-                    var tt = CheckExpression(ie.ThenBranch);
+                    var tt = CheckExpression(ie.ThenBranch, expectedType);
                     if (ie.ElseBranch != null)
                     {
-                        var et = CheckExpression(ie.ElseBranch);
+                        var et = CheckExpression(ie.ElseBranch, expectedType);
                         type = UnifyTypes(tt, et, ie.Span);
                     }
                     else
                     {
                         type = TypeRegistry.Never;
                     }
+
+                    // Propagate expected type to resolve comptime literals in branches
+                    if (expectedType != null && !IsNever(type))
+                        type = UnifyTypes(type, expectedType, ie.Span);
 
                     break;
                 }

@@ -934,8 +934,7 @@ public class Parser
     private static bool IsStatementStart(TokenKind kind)
     {
         return kind is TokenKind.Let or TokenKind.Const or TokenKind.Return
-            or TokenKind.Break or TokenKind.Continue or TokenKind.Defer
-            or TokenKind.For or TokenKind.If;
+            or TokenKind.Break or TokenKind.Continue or TokenKind.Defer;
     }
 
     private sealed class ParserException : Exception
