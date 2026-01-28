@@ -4341,19 +4341,14 @@ public class TypeChecker
             updatedFields.Add((name, substituted));
         }
 
-        // Substitute type arguments
+        // Substitute type arguments recursively (handles nested types like &T)
         var updatedTypeArgs = new List<TypeBase>(structType.TypeArguments.Count);
         foreach (var typeArg in structType.TypeArguments)
         {
-            if (typeArg is GenericParameterType gp && bindings.TryGetValue(gp.ParamName, out var boundType))
-            {
+            var substituted = SubstituteGenerics(typeArg, bindings);
+            if (!ReferenceEquals(substituted, typeArg))
                 changed = true;
-                updatedTypeArgs.Add(boundType);
-            }
-            else
-            {
-                updatedTypeArgs.Add(typeArg);
-            }
+            updatedTypeArgs.Add(substituted);
         }
 
         if (!changed)
