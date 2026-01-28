@@ -77,13 +77,13 @@ pub fn pop(list: &List($T)) T? {
 
 // Get the element at the given index.
 // Panics if index is out of bounds.
-pub fn get(list: List($T), index: usize) T {
+pub fn get(list: List($T), index: usize) &T {
     if (index >= list.len) {
         panic("List: index out of bounds")
     }
 
     let elem: &T = list.ptr + index
-    return elem.*
+    return elem
 }
 
 // Set the element at the given index.
@@ -116,4 +116,26 @@ pub fn deinit(list: &List($T)) {
     list.ptr = zero as &T
     list.len = 0
     list.cap = 0
+}
+
+
+pub struct ListIterator(T) {
+    list: &List(T)
+    current: usize
+}
+
+// Create iterator from list
+pub fn iter(l: &List($T)) ListIterator(T) {
+    return .{ list = l, current = 0 }
+}
+
+// Advance iterator and return next value
+pub fn next(iter: &ListIterator($T)) &T? {
+    if (iter.current >= iter.list.len) {
+        return null
+    }
+
+    let elem: &T = iter.list.get(iter.current)
+    iter.current = iter.current + 1
+    return elem
 }
