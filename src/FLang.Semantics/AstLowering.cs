@@ -907,6 +907,7 @@ public class AstLowering
                     {
                         IdentifierExpressionNode id => GetVariablePointer(id, assignment),
                         MemberAccessExpressionNode fa => GetFieldPointer(fa),
+                        DereferenceExpressionNode dr => LowerExpression(dr.Target),
                         _ => throw new Exception($"Invalid assignment target: {assignment.Target.GetType().Name}")
                     };
 

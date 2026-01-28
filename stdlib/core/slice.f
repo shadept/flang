@@ -33,3 +33,11 @@ pub fn op_index(s: &Slice($T), index: Range) Slice(T) {
         len = end - start
     }
 }
+
+pub fn op_set_index(s: &Slice($T), index: usize, value: T) {
+    if (index >= s.len) {
+        panic("index out of bounds")
+    }
+    const slot = s.ptr + index
+    slot.* = value
+}

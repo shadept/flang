@@ -476,6 +476,20 @@ public class StructType : TypeBase
     }
 
     /// <summary>
+    /// Replaces the fields on this struct and recomputes layout.
+    /// Used by ResolveStructFields to update placeholder structs in-place.
+    /// </summary>
+    public void SetFields(List<(string Name, TypeBase Type)> fields)
+    {
+        Fields.Clear();
+        Fields.AddRange(fields);
+        _fieldOffsets.Clear();
+        _cachedSize = null;
+        _cachedAlignment = null;
+        ComputeLayout();
+    }
+
+    /// <summary>
     /// Computes the memory layout of this struct, calculating field offsets, total size, and alignment.
     /// </summary>
     private void ComputeLayout()

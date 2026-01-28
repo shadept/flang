@@ -660,21 +660,13 @@ public class TypeChecker
                 fields.Add((field.Name, ft));
             }
 
-            // Convert string type parameters to GenericParameterType instances
-            var typeArgs = new List<TypeBase>();
-            foreach (var param in structDecl.TypeParameters)
-                typeArgs.Add(new GenericParameterType(param));
-
             // Compute FQN for this struct
             var fqn = $"{modulePath}.{structDecl.Name}";
 
-            // Create final struct type with resolved fields
-            StructType stype = new(fqn, typeArgs, fields);
-
-            // Replace placeholder with complete struct type
-            _compilation.StructsByModule[modulePath][structDecl.Name] = stype;
-            _compilation.StructsByFqn[fqn] = stype;
-            _compilation.Structs[structDecl.Name] = stype;
+            // Update the existing placeholder struct in-place so all references
+            // (including those captured during Phase 1) get the resolved fields.
+            var existing = _compilation.StructsByFqn[fqn];
+            existing.SetFields(fields);
         }
 
         _currentModulePath = null;
@@ -1947,6 +1939,7 @@ public class TypeChecker
         {
             IdentifierExpressionNode idExpr => LookupVariable(idExpr.Name, ae.Target.Span),
             MemberAccessExpressionNode fa => CheckExpression(fa),
+            DereferenceExpressionNode dr => CheckExpression(dr),
             _ => throw new Exception($"Invalid assignment target: {ae.Target.GetType().Name}")
         };
         if (IsNever(targetType)) return TypeRegistry.Never;
@@ -2513,7 +2506,7 @@ public class TypeChecker
                 for (var i = 0; i < call.Arguments.Count; i++)
                 {
                     var argIdx = i + argOffset;
-                    var unified = UnifyTypes(argTypes[argIdx], concreteParams[argIdx], call.Arguments[i].Span);
+                    var unified = UnifyTypes(concreteParams[argIdx], argTypes[argIdx], call.Arguments[i].Span);
                     call.Arguments[i] = WrapWithCoercionIfNeeded(call.Arguments[i], argTypes[argIdx].Prune(), concreteParams[argIdx].Prune());
                 }
 
@@ -2788,12 +2781,27 @@ public class TypeChecker
                 break;
             case AddressOfExpressionNode adr:
                 {
-                    var tt = CheckExpression(adr.Target);
+                    // Propagate expected type through &: if context expects &T, pass T as expected type
+                    TypeBase? innerExpected = expectedType is ReferenceType refExpected ? refExpected.InnerType : null;
+                    var tt = CheckExpression(adr.Target, innerExpected);
                     if (IsNever(tt))
                     {
                         type = TypeRegistry.Never;
                         break;
                     }
+
+                    // Check that the target is not a temporary (e.g. anonymous struct literal)
+                    if (adr.Target is AnonymousStructExpressionNode)
+                    {
+                        ReportError(
+                            "cannot take address of temporary value",
+                            adr.Span,
+                            "consider assigning to a variable first",
+                            "E2040");
+                        type = TypeRegistry.Never;
+                        break;
+                    }
+
                     type = new ReferenceType(tt);
                     break;
                 }
@@ -2900,7 +2908,9 @@ public class TypeChecker
                 }
             case AnonymousStructExpressionNode anon:
                 {
-                    StructType? structType = expectedType switch
+                    // Unwrap ReferenceType to find the underlying struct type
+                    var unwrappedExpected = expectedType is ReferenceType refType ? refType.InnerType : expectedType;
+                    StructType? structType = unwrappedExpected switch
                     {
                         StructType st => st,
                         GenericType gt => InstantiateStruct(gt, anon.Span),

@@ -39,17 +39,44 @@ public class CCodeGenerator
 
             foreach (var global in function.Globals)
             {
-                CollectStructType(global.Type);
-                switch (global.Initializer)
-                {
-                    case StructConstantValue structConst:
-                        CollectStructType(structConst.Type);
-                        break;
-                    case ArrayConstantValue arrayConst when arrayConst.Type is ArrayType arrType:
-                        CollectStructType(arrType.ElementType);
-                        break;
-                }
+                CollectGlobalValueTypes(global);
             }
+        }
+    }
+
+    /// <summary>
+    /// Recursively collect struct types from a global value and its initializer.
+    /// </summary>
+    private void CollectGlobalValueTypes(GlobalValue global)
+    {
+        CollectStructType(global.Type);
+        switch (global.Initializer)
+        {
+            case StructConstantValue structConst:
+                CollectStructType(structConst.Type);
+                foreach (var kvp in structConst.FieldValues)
+                {
+                    if (kvp.Value is GlobalValue gv)
+                        CollectGlobalValueTypes(gv);
+                    else if (kvp.Value is StructConstantValue nested)
+                        CollectStructConstantTypes(nested);
+                }
+                break;
+            case ArrayConstantValue arrayConst when arrayConst.Type is ArrayType arrType:
+                CollectStructType(arrType.ElementType);
+                break;
+        }
+    }
+
+    private void CollectStructConstantTypes(StructConstantValue scv)
+    {
+        CollectStructType(scv.Type);
+        foreach (var kvp in scv.FieldValues)
+        {
+            if (kvp.Value is GlobalValue gv)
+                CollectGlobalValueTypes(gv);
+            else if (kvp.Value is StructConstantValue nested)
+                CollectStructConstantTypes(nested);
         }
     }
 
@@ -535,10 +562,7 @@ public class CCodeGenerator
         // Collect struct types from globals (e.g., String literals)
         foreach (var global in function.Globals)
         {
-            CollectStructType(global.Type);
-            // Also collect from the initializer if it's a struct constant
-            if (global.Initializer is StructConstantValue structConst)
-                CollectStructType(structConst.Type);
+            CollectGlobalValueTypes(global);
         }
 
         // Scan all instructions for struct types and string literals

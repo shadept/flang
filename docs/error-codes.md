@@ -1749,6 +1749,40 @@ x = 42  // OK
 
 ---
 
+### E2040: Cannot Take Address of Temporary Value
+
+**Category**: Type Checking
+**Severity**: Error
+
+#### Description
+
+The address-of operator `&` was applied to a temporary value (such as an anonymous struct literal). Only addressable values (variables, fields, index expressions) can have their address taken, because temporaries have no stable storage.
+
+#### Example
+
+```flang
+struct Point { x: i32, y: i32 }
+
+pub fn main() {
+    let p: &Point = &.{ x = 1, y = 2 }  // ERROR: cannot take address of temporary
+}
+```
+
+#### Solution
+
+Assign the value to a variable first, then take its address:
+
+```flang
+struct Point { x: i32, y: i32 }
+
+pub fn main() {
+    let pt: Point = .{ x = 1, y = 2 }
+    let p: &Point = &pt  // OK
+}
+```
+
+---
+
 ## E3XXX: Code Generation Errors
 
 ### E3001: Invalid Type During Lowering
@@ -2081,6 +2115,7 @@ Report the issue with sample code that reproduces the error.
 | **E2037** | Pattern Matching  | Unknown enum variant in pattern              |
 | **E2038** | Variables         | Cannot assign to const variable              |
 | **E2039** | Variables         | Const declaration missing initializer        |
+| **E2040** | Type Checking     | Cannot take address of temporary value       |
 | **E2102** | Generics          | Conflicting generic type bindings            |
 
 ### E3XXX: Code Generation
