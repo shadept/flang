@@ -26,6 +26,9 @@ public class AstLowering
     private FunctionDeclarationNode _currentFunctionNode = null!;
     private int _tempCounter;
 
+    // Track variable shadowing: maps source name to a counter for generating unique IR names
+    private readonly Dictionary<string, int> _shadowCounter = [];
+
     // Track type literal indices for the global type table
     private readonly Dictionary<FType, int> _typeTableIndices = [];
     private GlobalValue? _typeTableGlobal = null;
@@ -367,6 +370,22 @@ public class AstLowering
         return block;
     }
 
+    /// <summary>
+    /// Generate a unique IR name for a variable, handling shadowing.
+    /// First declaration uses the original name, subsequent ones get a numeric suffix.
+    /// </summary>
+    private string GetUniqueVariableName(string sourceName)
+    {
+        if (!_shadowCounter.TryGetValue(sourceName, out var count))
+        {
+            _shadowCounter[sourceName] = 0;
+            return sourceName;
+        }
+
+        _shadowCounter[sourceName] = count + 1;
+        return $"{sourceName}__shadow{count + 1}";
+    }
+
     private static string SanitizeTypeName(string name)
     {
         return name.Replace("&", "ref_")
@@ -457,6 +476,9 @@ public class AstLowering
                     FType varType = varDecl.ResolvedType ??
                                     throw new InvalidOperationException($"Variable '{varDecl.Name}' has no resolved type - TypeChecker must set ResolvedType");
 
+                    // Generate unique IR name for variable (handles shadowing)
+                    var uniqueName = GetUniqueVariableName(varDecl.Name);
+
                     // Check if this is a struct or array type
                     bool isStruct = varType is StructType;
                     bool isArray = varType is ArrayType;
@@ -465,19 +487,25 @@ public class AstLowering
                     {
                         var structType = (StructType)varType;
 
+                        // IMPORTANT: Evaluate initializer BEFORE updating _locals for shadowing to work
+                        // (e.g., `let x = x + 1` should use the old x value)
+                        Value? initValue = null;
+                        if (varDecl.Initializer != null)
+                        {
+                            initValue = LowerExpression(varDecl.Initializer);
+                        }
+
                         // Allocate stack space for struct
-                        var allocaResult = new LocalValue(varDecl.Name, new ReferenceType(varType));
+                        var allocaResult = new LocalValue(uniqueName, new ReferenceType(varType));
                         var allocaInst = new AllocaInstruction(varType, varType.Size, allocaResult);
                         _currentBlock.Instructions.Add(allocaInst);
 
-                        // Store the POINTER in locals map
+                        // Store the POINTER in locals map (use source name for lookup)
                         _locals[varDecl.Name] = allocaResult;
 
                         // Handle initialization
-                        if (varDecl.Initializer != null)
+                        if (initValue != null)
                         {
-                            var initValue = LowerExpression(varDecl.Initializer);
-
                             // Pointer to struct: use memcpy
                             if (initValue.Type is ReferenceType { InnerType: StructType })
                             {
@@ -505,58 +533,57 @@ public class AstLowering
                     {
                         var arrayType = (ArrayType)varType;
 
+                        // For arrays, we need special handling for memset optimization
+                        // Check if we can use memset optimization (doesn't need old variable values)
+                        bool useMemsetOptimization = false;
+                        byte memsetByteVal = 0;
+                        if (varDecl.Initializer is ArrayLiteralExpressionNode arrayLit && arrayLit.IsRepeatSyntax)
+                        {
+                            var elemSize = arrayType.ElementType.Size;
+                            if (arrayLit.RepeatValue is IntegerLiteralNode intLit &&
+                                (intLit.Value == 0 || elemSize == 1))
+                            {
+                                useMemsetOptimization = true;
+                                memsetByteVal = (byte)(intLit.Value & 0xFF);
+                            }
+                        }
+
+                        // For non-memset cases, evaluate initializer BEFORE updating _locals
+                        Value? initValue = null;
+                        if (varDecl.Initializer != null && !useMemsetOptimization)
+                        {
+                            initValue = LowerExpression(varDecl.Initializer);
+                        }
+
                         // Allocate stack space for array
-                        var allocaResult = new LocalValue(varDecl.Name, new ReferenceType(arrayType));
+                        var allocaResult = new LocalValue(uniqueName, new ReferenceType(arrayType));
                         var allocaInst = new AllocaInstruction(arrayType, arrayType.Size, allocaResult);
                         _currentBlock.Instructions.Add(allocaInst);
 
-                        // Store the POINTER in locals map
+                        // Store the POINTER in locals map (use source name for lookup)
                         _locals[varDecl.Name] = allocaResult;
 
                         // Handle initialization
-                        if (varDecl.Initializer != null)
+                        if (useMemsetOptimization)
                         {
-                            // Check for [value; N] repeat syntax with constant value
-                            if (varDecl.Initializer is ArrayLiteralExpressionNode arrayLit && arrayLit.IsRepeatSyntax)
-                            {
-                                var elemSize = arrayType.ElementType.Size;
-                                if (arrayLit.RepeatValue is IntegerLiteralNode intLit &&
-                                    (intLit.Value == 0 || elemSize == 1))
-                                {
-                                    // Use memset only for zero value OR byte-sized elements
-                                    // (memset fills each byte, so only correct for these cases)
-                                    var byteVal = (byte)(intLit.Value & 0xFF);
-                                    var zeroValue = new ConstantValue(byteVal) { Type = TypeRegistry.U8 };
-                                    var sizeValue = new ConstantValue(arrayType.Size) { Type = TypeRegistry.USize };
-                                    var memsetResult = new LocalValue($"memset_{_tempCounter++}", TypeRegistry.Void);
+                            // Use memset only for zero value OR byte-sized elements
+                            var zeroValue = new ConstantValue(memsetByteVal) { Type = TypeRegistry.U8 };
+                            var sizeValue = new ConstantValue(arrayType.Size) { Type = TypeRegistry.USize };
+                            var memsetResult = new LocalValue($"memset_{_tempCounter++}", TypeRegistry.Void);
 
-                                    var memsetCall = new CallInstruction("memset",
-                                        new List<Value> { allocaResult, zeroValue, sizeValue },
-                                        memsetResult)
-                                    {
-                                        IsForeignCall = true
-                                    };
-                                    _currentBlock.Instructions.Add(memsetCall);
-                                }
-                                else
-                                {
-                                    // Non-byte-sized elements with non-zero value, or non-constant
-                                    // Fall back to global + memcpy
-                                    var initValue = LowerExpression(varDecl.Initializer);
-                                    if (initValue is GlobalValue globalArray)
-                                    {
-                                        EmitArrayMemcpy(allocaResult, globalArray, arrayType.Size);
-                                    }
-                                }
-                            }
-                            else
+                            var memsetCall = new CallInstruction("memset",
+                                new List<Value> { allocaResult, zeroValue, sizeValue },
+                                memsetResult)
                             {
-                                // Regular array literal [v1, v2, ...] - use global + memcpy
-                                var initValue = LowerExpression(varDecl.Initializer);
-                                if (initValue is GlobalValue globalArray)
-                                {
-                                    EmitArrayMemcpy(allocaResult, globalArray, arrayType.Size);
-                                }
+                                IsForeignCall = true
+                            };
+                            _currentBlock.Instructions.Add(memsetCall);
+                        }
+                        else if (initValue != null)
+                        {
+                            if (initValue is GlobalValue globalArray)
+                            {
+                                EmitArrayMemcpy(allocaResult, globalArray, arrayType.Size);
                             }
                         }
                         else
@@ -568,17 +595,25 @@ public class AstLowering
                     else
                     {
                         // Scalars: allocate on stack like arrays/structs (memory-based SSA)
-                        var allocaResult = new LocalValue(varDecl.Name, new ReferenceType(varType));
+
+                        // IMPORTANT: Evaluate initializer BEFORE updating _locals for shadowing to work
+                        // (e.g., `let x = x + 1` should use the old x value)
+                        Value? initValue = null;
+                        if (varDecl.Initializer != null)
+                        {
+                            initValue = LowerExpression(varDecl.Initializer);
+                        }
+
+                        var allocaResult = new LocalValue(uniqueName, new ReferenceType(varType));
                         var allocaInst = new AllocaInstruction(varType, varType.Size, allocaResult);
                         _currentBlock.Instructions.Add(allocaInst);
 
-                        // Store the POINTER in locals map (not the value)
+                        // Store the POINTER in locals map (use source name for lookup)
                         _locals[varDecl.Name] = allocaResult;
 
                         // Handle initialization
-                        if (varDecl.Initializer != null)
+                        if (initValue != null)
                         {
-                            var initValue = LowerExpression(varDecl.Initializer);
                             var initStoreInst = new StorePointerInstruction(allocaResult, initValue);
                             _currentBlock.Instructions.Add(initStoreInst);
                         }
@@ -1959,7 +1994,8 @@ public class AstLowering
         _currentBlock.Instructions.Add(new StorePointerInstruction(iteratorPtr, iterResult));
 
         // 4. Allocate loop variable on stack and register in locals
-        var loopVarPtr = new LocalValue(forLoop.IteratorVariable, new ReferenceType(elementType));
+        var loopVarUniqueName = GetUniqueVariableName(forLoop.IteratorVariable);
+        var loopVarPtr = new LocalValue(loopVarUniqueName, new ReferenceType(elementType));
         var loopVarAlloca = new AllocaInstruction(elementType, elementType.Size, loopVarPtr);
         _currentBlock.Instructions.Add(loopVarAlloca);
         _locals[forLoop.IteratorVariable] = loopVarPtr;

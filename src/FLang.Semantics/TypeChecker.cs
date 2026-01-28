@@ -3816,13 +3816,9 @@ public class TypeChecker
 
     private void DeclareVariable(string name, TypeBase type, SourceSpan span, bool isConst = false)
     {
+        // Allow variable shadowing (like Rust): new declarations replace old ones in the same scope
         var cur = _scopes.Peek();
-        if (!cur.TryAdd(name, new VariableInfo(type, isConst)))
-            ReportError(
-                $"variable `{name}` is already declared",
-                span,
-                "variable redeclaration",
-                "E2005");
+        cur[name] = new VariableInfo(type, isConst);
     }
 
     private bool TryLookupVariable(string name, out TypeBase type)
