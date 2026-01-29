@@ -1576,32 +1576,52 @@ public class AstLowering
                     // Check if type checker resolved this to an op_index function call
                     if (indexExpr.ResolvedIndexFunction != null)
                     {
-                        // Lower as: op_index(&base, index)
                         var baseValue = LowerExpression(indexExpr.Base);
                         var indexValue = LowerExpression(indexExpr.Index);
 
-                        // Get reference to base (op_index expects &Slice or &Array)
-                        Value baseRef;
-                        if (baseValue is LocalValue lv && lv.Type is ReferenceType)
+                        // Call op_index function
+                        var resolvedFunc = indexExpr.ResolvedIndexFunction;
+
+                        // Check if the first parameter expects a reference or value
+                        var firstParamType = resolvedFunc.Parameters[0].ResolvedType?.Prune();
+                        var firstParamExpectsRef = firstParamType is ReferenceType;
+
+                        Value baseArg;
+                        if (firstParamExpectsRef)
                         {
-                            // Already a reference
-                            baseRef = baseValue;
+                            // op_index expects &T - lift to reference if needed
+                            if (baseValue is LocalValue lv && lv.Type is ReferenceType)
+                            {
+                                // Already a reference
+                                baseArg = baseValue;
+                            }
+                            else
+                            {
+                                // Need to take address - store to temp and get address
+                                var baseType = indexExpr.Base.Type!;
+                                var tempPtr = new LocalValue($"index_base_{_tempCounter++}", new ReferenceType(baseType));
+                                var allocaInst = new AllocaInstruction(baseType, baseType.Size, tempPtr);
+                                _currentBlock.Instructions.Add(allocaInst);
+                                var storePtrInst = new StorePointerInstruction(tempPtr, baseValue);
+                                _currentBlock.Instructions.Add(storePtrInst);
+                                baseArg = tempPtr;
+                            }
                         }
                         else
                         {
-                            // Need to take address - store to temp and get address
-                            var baseType = indexExpr.Base.Type!;
-                            var tempPtr = new LocalValue($"index_base_{_tempCounter++}", new ReferenceType(baseType));
-                            var allocaInst = new AllocaInstruction(baseType, baseType.Size, tempPtr);
-                            _currentBlock.Instructions.Add(allocaInst);
-                            // Store through the pointer (not as a new SSA variable)
-                            var storePtrInst = new StorePointerInstruction(tempPtr, baseValue);
-                            _currentBlock.Instructions.Add(storePtrInst);
-                            baseRef = tempPtr;
+                            // op_index expects value T - dereference if needed
+                            if (baseValue is LocalValue lv2 && lv2.Type is ReferenceType refType)
+                            {
+                                var derefResult = new LocalValue($"index_deref_{_tempCounter++}", refType.InnerType);
+                                var derefLoadInst = new LoadInstruction(baseValue, derefResult);
+                                _currentBlock.Instructions.Add(derefLoadInst);
+                                baseArg = derefResult;
+                            }
+                            else
+                            {
+                                baseArg = baseValue;
+                            }
                         }
-
-                        // Call op_index function
-                        var resolvedFunc = indexExpr.ResolvedIndexFunction;
 
                         // Collect parameter types from resolved function
                         var opIndexParamTypes = new List<FType>();
@@ -1614,7 +1634,7 @@ public class AstLowering
 
                         var returnType = indexExpr.Type ?? TypeRegistry.Never;
                         var resultValue = new LocalValue($"index_call_{_tempCounter++}", returnType);
-                        var opIndexCall = new CallInstruction("op_index", [baseRef, indexValue], resultValue);
+                        var opIndexCall = new CallInstruction("op_index", [baseArg, indexValue], resultValue);
                         opIndexCall.CalleeParamTypes = opIndexParamTypes;
                         opIndexCall.IsForeignCall = (resolvedFunc.Modifiers & FunctionModifiers.Foreign) != 0;
                         _currentBlock.Instructions.Add(opIndexCall);
@@ -1692,26 +1712,47 @@ public class AstLowering
             var baseValue = LowerExpression(indexTarget.Base);
             var indexValue = LowerExpression(indexTarget.Index);
 
-            // Get reference to base (op_set_index expects &Slice or &Array)
-            Value baseRef;
-            if (baseValue is LocalValue lv && lv.Type is ReferenceType)
+            // Call op_set_index function
+            var resolvedFunc = indexTarget.ResolvedSetIndexFunction;
+
+            // Check if the first parameter expects a reference or value
+            var firstParamType = resolvedFunc.Parameters[0].ResolvedType?.Prune();
+            var firstParamExpectsRef = firstParamType is ReferenceType;
+
+            Value baseArg;
+            if (firstParamExpectsRef)
             {
-                baseRef = baseValue;
+                // op_set_index expects &T - lift to reference if needed
+                if (baseValue is LocalValue lv && lv.Type is ReferenceType)
+                {
+                    baseArg = baseValue;
+                }
+                else
+                {
+                    var baseType = indexTarget.Base.Type!;
+                    var tempPtr = new LocalValue($"set_index_base_{_tempCounter++}", new ReferenceType(baseType));
+                    var allocaInst = new AllocaInstruction(baseType, baseType.Size, tempPtr);
+                    _currentBlock.Instructions.Add(allocaInst);
+                    var storePtrInst = new StorePointerInstruction(tempPtr, baseValue);
+                    _currentBlock.Instructions.Add(storePtrInst);
+                    baseArg = tempPtr;
+                }
             }
             else
             {
-                // Need to take address - store to temp and get address
-                var baseType = indexTarget.Base.Type!;
-                var tempPtr = new LocalValue($"set_index_base_{_tempCounter++}", new ReferenceType(baseType));
-                var allocaInst = new AllocaInstruction(baseType, baseType.Size, tempPtr);
-                _currentBlock.Instructions.Add(allocaInst);
-                var storePtrInst = new StorePointerInstruction(tempPtr, baseValue);
-                _currentBlock.Instructions.Add(storePtrInst);
-                baseRef = tempPtr;
+                // op_set_index expects value T - dereference if needed
+                if (baseValue is LocalValue lv2 && lv2.Type is ReferenceType refType)
+                {
+                    var derefResult = new LocalValue($"set_index_deref_{_tempCounter++}", refType.InnerType);
+                    var loadInst = new LoadInstruction(baseValue, derefResult);
+                    _currentBlock.Instructions.Add(loadInst);
+                    baseArg = derefResult;
+                }
+                else
+                {
+                    baseArg = baseValue;
+                }
             }
-
-            // Call op_set_index function: op_set_index(&base, index, value)
-            var resolvedFunc = indexTarget.ResolvedSetIndexFunction;
 
             var opSetIndexParamTypes = new List<FType>();
             foreach (var param in resolvedFunc.Parameters)
@@ -1723,7 +1764,7 @@ public class AstLowering
 
             var returnType = resolvedFunc.ResolvedReturnType ?? TypeRegistry.Void;
             var resultValue = new LocalValue($"set_index_call_{_tempCounter++}", returnType);
-            var opSetIndexCall = new CallInstruction("op_set_index", [baseRef, indexValue, assignValue], resultValue);
+            var opSetIndexCall = new CallInstruction("op_set_index", [baseArg, indexValue, assignValue], resultValue);
             opSetIndexCall.CalleeParamTypes = opSetIndexParamTypes;
             opSetIndexCall.IsForeignCall = (resolvedFunc.Modifiers & FunctionModifiers.Foreign) != 0;
             _currentBlock.Instructions.Add(opSetIndexCall);

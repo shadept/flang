@@ -1967,22 +1967,42 @@ public class TypeChecker
         var it = CheckExpression(ix.Index);
         if (IsNever(it)) return TypeRegistry.Never;
 
-        // For slices/custom types, look up op_set_index function
-        if (bt is StructType sliceType && TypeRegistry.IsSlice(sliceType))
+        // For struct types (slices, custom types), look up op_set_index function
+        var prunedBtForSet = bt.Prune();
+        if (prunedBtForSet is StructType structTypeForSetIndex)
         {
-            var refBaseType = new ReferenceType(sliceType);
-            var elementType = sliceType.TypeArguments[0];
+            var refBaseType = new ReferenceType(structTypeForSetIndex);
 
-            // Check value against expected element type first
-            var val = CheckExpression(ae.Value, elementType);
+            // Check value type
+            var val = CheckExpression(ae.Value);
             if (IsNever(val)) return TypeRegistry.Never;
 
-            // Try to find op_set_index function: op_set_index(&Slice, index, value)
+            // Try with &T first: op_set_index(&T, index, value)
             var opSetIndexResult = TryResolveSetIndexFunction("op_set_index", refBaseType, it, val, ae.Span);
+
+            // Also try with value T: op_set_index(T, index, value)
+            if (opSetIndexResult == null)
+                opSetIndexResult = TryResolveSetIndexFunction("op_set_index", prunedBtForSet, it, val, ae.Span);
 
             if (opSetIndexResult != null)
             {
                 ix.ResolvedSetIndexFunction = opSetIndexResult.Value.Function;
+
+                // Resolve comptime_int index and value to the parameter's concrete types
+                var resolvedSetFunc = opSetIndexResult.Value.Function;
+                if (resolvedSetFunc.Parameters.Count >= 2)
+                {
+                    var indexParamType = resolvedSetFunc.Parameters[1].ResolvedType;
+                    if (indexParamType != null)
+                        UnifyTypes(it, indexParamType, ix.Index.Span);
+                }
+                if (resolvedSetFunc.Parameters.Count >= 3)
+                {
+                    var valueParamType = resolvedSetFunc.Parameters[2].ResolvedType;
+                    if (valueParamType != null)
+                        UnifyTypes(val, valueParamType, ae.Value.Span);
+                }
+
                 return opSetIndexResult.Value.ReturnType;
             }
         }
@@ -3048,21 +3068,34 @@ public class TypeChecker
                         break;
                     }
 
-                    // For slices, look up op_index function
+                    // For struct types (slices, custom types), look up op_index function
                     // Arrays use built-in indexing (no op_index lookup)
-                    if (bt is StructType sliceType && TypeRegistry.IsSlice(sliceType))
+                    var prunedBt = bt.Prune();
+                    if (prunedBt is StructType structTypeForIndex)
                     {
-                        // op_index takes &Slice as first parameter
-                        var refBaseType = new ReferenceType(sliceType);
-
-                        // Try to find op_index function
+                        // Try with &T first (op_index(base: &T, index: I) R)
+                        var refBaseType = new ReferenceType(structTypeForIndex);
                         var opIndexResult = TryResolveOperatorFunction("op_index", refBaseType, it, ix.Span);
+
+                        // Also try with value T (op_index(base: T, index: I) R)
+                        if (opIndexResult == null)
+                            opIndexResult = TryResolveOperatorFunction("op_index", prunedBt, it, ix.Span);
 
                         if (opIndexResult != null)
                         {
                             // Use op_index function
                             ix.ResolvedIndexFunction = opIndexResult.Value.Function;
                             type = opIndexResult.Value.ReturnType;
+
+                            // Resolve comptime_int index to the parameter's concrete type
+                            var resolvedFunc = opIndexResult.Value.Function;
+                            if (resolvedFunc.Parameters.Count >= 2)
+                            {
+                                var indexParamType = resolvedFunc.Parameters[1].ResolvedType;
+                                if (indexParamType != null)
+                                    UnifyTypes(it, indexParamType, ix.Index.Span);
+                            }
+
                             break;
                         }
                     }

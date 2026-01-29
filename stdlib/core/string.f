@@ -22,7 +22,10 @@ pub fn op_eq(a: String, b: String) bool {
     }
 
     for (i in 0..a.len) {
-        if (a[i] != b[i]) {
+        let idx: usize = i as usize
+        let ca: u8? = a[idx]
+        let cb: u8? = b[idx]
+        if (ca.value != cb.value) {
             return false
         }
     }
