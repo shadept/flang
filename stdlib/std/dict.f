@@ -28,6 +28,21 @@ pub struct Dict(K, V) {
     allocator: &Allocator?
 }
 
+// Free the backing storage. The dict should not be used after this.
+pub fn deinit(self: &Dict($K, $V)) {
+    if (self.cap > 0) {
+        const bytes: usize = self.cap * self.entry_byte_size()
+        const alloc = self.get_allocator()
+        alloc.free(slice_from_raw_parts(self.entries as &u8, bytes))
+    }
+
+    let zero: usize = 0
+    self.entries = zero as &Entry(K, V)
+    self.length = 0
+    self.cap = 0
+}
+
+
 fn get_allocator(self: Dict($K, $V)) &Allocator {
     return self.allocator ?? &global_allocator
 }
@@ -257,8 +272,8 @@ pub struct DictIterator(K, V) {
 }
 
 // Create iterator from dict
-pub fn iter(d: &Dict($K, $V)) DictIterator(K, V) {
-    return .{ dict = d, current = 0 }
+pub fn iter(dict: &Dict($K, $V)) DictIterator(K, V) {
+    return .{ dict, current = 0 }
 }
 
 // Advance iterator and return next occupied entry
@@ -268,24 +283,9 @@ pub fn next(it: &DictIterator($K, $V)) Entry(K, V)? {
         const entry: &Entry(K, V) = it.dict.entries + idx
         if (entry.state == 1) {
             it.current = idx + 1
-            const result: Entry(K, V) = entry.*
-            return result
+            return entry.*
         }
     }
     it.current = it.dict.cap
     return null
-}
-
-// Free the backing storage. The dict should not be used after this.
-pub fn deinit(self: &Dict($K, $V)) {
-    if (self.cap > 0) {
-        const bytes: usize = self.cap * self.entry_byte_size()
-        const alloc = self.get_allocator()
-        alloc.free(slice_from_raw_parts(self.entries as &u8, bytes))
-    }
-
-    let zero: usize = 0
-    self.entries = zero as &Entry(K, V)
-    self.length = 0
-    self.cap = 0
 }

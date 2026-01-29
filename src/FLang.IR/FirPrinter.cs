@@ -65,6 +65,7 @@ public static class FirPrinter
             AddressOfInstruction addressOf => PrintAddressOf(addressOf),
             GetElementPtrInstruction gep => PrintGetElementPtr(gep),
             BinaryInstruction binary => PrintBinary(binary),
+            UnaryInstruction unary => PrintUnary(unary),
             CastInstruction cast => PrintCast(cast),
             CallInstruction call => PrintCall(call),
             ReturnInstruction ret => PrintReturn(ret),
@@ -134,6 +135,18 @@ public static class FirPrinter
         };
 
         return $"{PrintTypedValue(binary.Result)} = {opStr} {PrintTypedValue(binary.Left)}, {PrintValue(binary.Right)}";
+    }
+
+    private static string PrintUnary(UnaryInstruction unary)
+    {
+        var opStr = unary.Operation switch
+        {
+            UnaryOp.Negate => "neg",
+            UnaryOp.Not => "not",
+            _ => "?"
+        };
+
+        return $"{PrintTypedValue(unary.Result)} = {opStr} {PrintTypedValue(unary.Operand)}";
     }
 
     private static string PrintCast(CastInstruction cast)

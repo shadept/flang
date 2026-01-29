@@ -47,6 +47,7 @@ public enum TokenKind
     QuestionQuestion,
     QuestionDot,
     FatArrow,
+    Bang,
 
     // Comparison operators
     EqualsEquals,

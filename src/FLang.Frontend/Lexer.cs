@@ -185,32 +185,33 @@ public class Lexer
         _start = _position;
         _position++;
 
-            return ch switch
-            {
-                '(' => CreateToken(TokenKind.OpenParenthesis),
-                ')' => CreateToken(TokenKind.CloseParenthesis),
-                '{' => CreateToken(TokenKind.OpenBrace),
-                '}' => CreateToken(TokenKind.CloseBrace),
-                '[' => CreateToken(TokenKind.OpenBracket),
-                ']' => CreateToken(TokenKind.CloseBracket),
-                ':' => CreateToken(TokenKind.Colon),
-                '=' => CreateToken(TokenKind.Equals),
-                ';' => CreateToken(TokenKind.Semicolon),
-                ',' => CreateToken(TokenKind.Comma),
-                '&' => CreateToken(TokenKind.Ampersand),
-                '?' => CreateToken(TokenKind.Question),
-                '+' => CreateToken(TokenKind.Plus),
-                '-' => CreateToken(TokenKind.Minus),
-                '*' => CreateToken(TokenKind.Star),
-                '/' => CreateToken(TokenKind.Slash),
-                '%' => CreateToken(TokenKind.Percent),
-                '<' => CreateToken(TokenKind.LessThan),
-                '>' => CreateToken(TokenKind.GreaterThan),
-                '.' => CreateToken(TokenKind.Dot),
-                '#' => CreateToken(TokenKind.Hash),
-                '$' => CreateToken(TokenKind.Dollar),
-                _ => CreateToken(TokenKind.BadToken)
-            };
+        return ch switch
+        {
+            '(' => CreateToken(TokenKind.OpenParenthesis),
+            ')' => CreateToken(TokenKind.CloseParenthesis),
+            '{' => CreateToken(TokenKind.OpenBrace),
+            '}' => CreateToken(TokenKind.CloseBrace),
+            '[' => CreateToken(TokenKind.OpenBracket),
+            ']' => CreateToken(TokenKind.CloseBracket),
+            ':' => CreateToken(TokenKind.Colon),
+            '=' => CreateToken(TokenKind.Equals),
+            ';' => CreateToken(TokenKind.Semicolon),
+            ',' => CreateToken(TokenKind.Comma),
+            '&' => CreateToken(TokenKind.Ampersand),
+            '?' => CreateToken(TokenKind.Question),
+            '+' => CreateToken(TokenKind.Plus),
+            '-' => CreateToken(TokenKind.Minus),
+            '*' => CreateToken(TokenKind.Star),
+            '/' => CreateToken(TokenKind.Slash),
+            '%' => CreateToken(TokenKind.Percent),
+            '<' => CreateToken(TokenKind.LessThan),
+            '>' => CreateToken(TokenKind.GreaterThan),
+            '.' => CreateToken(TokenKind.Dot),
+            '#' => CreateToken(TokenKind.Hash),
+            '$' => CreateToken(TokenKind.Dollar),
+            '!' => CreateToken(TokenKind.Bang),
+            _ => CreateToken(TokenKind.BadToken)
+        };
     }
 
     /// <summary>

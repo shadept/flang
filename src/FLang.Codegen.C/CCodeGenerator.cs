@@ -616,6 +616,10 @@ public class CCodeGenerator
                 CollectStructType(binary.Result.Type);
                 break;
 
+            case UnaryInstruction unary:
+                CollectStructType(unary.Result.Type);
+                break;
+
             case GetElementPtrInstruction gep:
                 CollectStructType(gep.Result.Type);
                 break;
@@ -843,6 +847,10 @@ public class CCodeGenerator
                 EmitBinary(binary);
                 break;
 
+            case UnaryInstruction unary:
+                EmitUnary(unary);
+                break;
+
             case CastInstruction cast:
                 EmitCast(cast);
                 break;
@@ -1034,6 +1042,22 @@ public class CCodeGenerator
         var right = ValueToString(binary.Right);
 
         _output.AppendLine($"    {resultType} {resultName} = {left} {opSymbol} {right};");
+    }
+
+    private void EmitUnary(UnaryInstruction unary)
+    {
+        var opSymbol = unary.Operation switch
+        {
+            UnaryOp.Negate => "-",
+            UnaryOp.Not => "!",
+            _ => throw new Exception($"Unknown unary operation: {unary.Operation}")
+        };
+
+        var resultType = TypeToCType(unary.Result.Type ?? TypeRegistry.I32);
+        var resultName = SanitizeCIdentifier(unary.Result.Name);
+        var operand = ValueToString(unary.Operand);
+
+        _output.AppendLine($"    {resultType} {resultName} = {opSymbol}{operand};");
     }
 
     private void EmitCast(CastInstruction cast)

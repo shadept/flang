@@ -1660,6 +1660,135 @@ public class TypeChecker
         }
     }
 
+    private TypeBase CheckUnaryExpression(UnaryExpressionNode ue)
+    {
+        var operandType = CheckExpression(ue.Operand);
+        if (IsNever(operandType)) return TypeRegistry.Never;
+
+        // Try to find an operator function for this operation
+        var opFuncName = OperatorFunctions.GetFunctionName(ue.Operator);
+        var operatorFuncResult = TryResolveUnaryOperatorFunction(opFuncName, operandType, ue.Span);
+
+        if (operatorFuncResult != null)
+        {
+            ue.ResolvedOperatorFunction = operatorFuncResult.Value.Function;
+            return operatorFuncResult.Value.ReturnType;
+        }
+
+        // Fall back to built-in handling for primitive types
+        var pruned = operandType.Prune();
+
+        switch (ue.Operator)
+        {
+            case UnaryOperatorKind.Negate:
+                if (TypeRegistry.IsNumericType(pruned) || pruned is ComptimeInt)
+                    return operandType;
+                break;
+
+            case UnaryOperatorKind.Not:
+                if (pruned.Equals(TypeRegistry.Bool))
+                    return TypeRegistry.Bool;
+                break;
+        }
+
+        var opSymbol = OperatorFunctions.GetOperatorSymbol(ue.Operator);
+        ReportError(
+            $"cannot apply unary operator `{opSymbol}` to type `{FormatTypeNameForDisplay(pruned)}`",
+            ue.Span,
+            $"no implementation for `{opSymbol}{FormatTypeNameForDisplay(pruned)}`",
+            "E2017");
+        return TypeRegistry.Never;
+    }
+
+    private OperatorFunctionResult? TryResolveUnaryOperatorFunction(string opFuncName, TypeBase operandType, SourceSpan span)
+    {
+        if (!_functions.TryGetValue(opFuncName, out var candidates))
+            return null;
+
+        var argTypes = new List<TypeBase> { operandType.Prune() };
+
+        FunctionEntry? bestNonGeneric = null;
+        var bestNonGenericCost = int.MaxValue;
+
+        foreach (var cand in candidates)
+        {
+            if (cand.IsGeneric) continue;
+            if (cand.ParameterTypes.Count != 1) continue;
+            if (!TryComputeCoercionCost(argTypes, cand.ParameterTypes, out var cost))
+                continue;
+
+            if (cost < bestNonGenericCost)
+            {
+                bestNonGeneric = cand;
+                bestNonGenericCost = cost;
+            }
+        }
+
+        FunctionEntry? bestGeneric = null;
+        Dictionary<string, TypeBase>? bestBindings = null;
+        var bestGenericCost = int.MaxValue;
+
+        foreach (var cand in candidates)
+        {
+            if (!cand.IsGeneric) continue;
+            if (cand.ParameterTypes.Count != 1) continue;
+
+            var bindings = new Dictionary<string, TypeBase>();
+            if (!TryBindGeneric(cand.ParameterTypes[0], argTypes[0], bindings, out _, out _))
+                continue;
+
+            var concreteParams = cand.ParameterTypes
+                .Select(pt => SubstituteGenerics(pt, bindings))
+                .ToList();
+
+            if (!TryComputeCoercionCost(argTypes, concreteParams, out var genCost))
+                continue;
+
+            if (genCost < bestGenericCost)
+            {
+                bestGeneric = cand;
+                bestBindings = bindings;
+                bestGenericCost = genCost;
+            }
+        }
+
+        FunctionEntry? chosen;
+        Dictionary<string, TypeBase>? chosenBindings = null;
+
+        if (bestNonGeneric != null && (bestGeneric == null || bestNonGenericCost <= bestGenericCost))
+        {
+            chosen = bestNonGeneric;
+        }
+        else
+        {
+            chosen = bestGeneric;
+            chosenBindings = bestBindings;
+        }
+
+        if (chosen == null)
+            return null;
+
+        FunctionDeclarationNode resolvedFunction;
+        TypeBase returnType;
+
+        if (chosen.IsGeneric && chosenBindings != null)
+        {
+            resolvedFunction = EnsureSpecialization(chosen, chosenBindings, argTypes);
+            returnType = SubstituteGenerics(chosen.ReturnType, chosenBindings);
+        }
+        else
+        {
+            resolvedFunction = chosen.AstNode;
+            returnType = chosen.ReturnType;
+        }
+
+        return new OperatorFunctionResult
+        {
+            Function = resolvedFunction,
+            ReturnType = returnType
+        };
+    }
+
     /// <summary>
     /// Type checks a null-coalescing expression (a ?? b).
     /// Resolves to op_coalesce(a, b) function call.
@@ -2694,6 +2823,9 @@ public class TypeChecker
                 break;
             case BinaryExpressionNode be:
                 type = CheckBinaryExpression(be);
+                break;
+            case UnaryExpressionNode ue:
+                type = CheckUnaryExpression(ue);
                 break;
             case AssignmentExpressionNode ae:
                 type = CheckAssignmentExpression(ae);

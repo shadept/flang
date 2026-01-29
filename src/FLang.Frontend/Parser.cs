@@ -780,6 +780,26 @@ public class Parser
                     return new AddressOfExpressionNode(span, targetWithPostfix);
                 }
 
+            case TokenKind.Minus:
+                {
+                    // Unary negation: -expr
+                    var minusToken = Eat(TokenKind.Minus);
+                    var operandPrimary = ParsePrimaryExpression();
+                    var operandWithPostfix = ParsePostfixOperators(operandPrimary);
+                    var span = SourceSpan.Combine(minusToken.Span, operandWithPostfix.Span);
+                    return new UnaryExpressionNode(span, UnaryOperatorKind.Negate, operandWithPostfix);
+                }
+
+            case TokenKind.Bang:
+                {
+                    // Logical not: !expr
+                    var bangToken = Eat(TokenKind.Bang);
+                    var operandPrimary = ParsePrimaryExpression();
+                    var operandWithPostfix = ParsePostfixOperators(operandPrimary);
+                    var span = SourceSpan.Combine(bangToken.Span, operandWithPostfix.Span);
+                    return new UnaryExpressionNode(span, UnaryOperatorKind.Not, operandWithPostfix);
+                }
+
             case TokenKind.Integer:
                 {
                     var integerToken = Eat(TokenKind.Integer);

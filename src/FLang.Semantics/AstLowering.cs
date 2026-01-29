@@ -927,6 +927,30 @@ public class AstLowering
                     return temp;
                 }
 
+            case UnaryExpressionNode unary:
+                {
+                    var operand = LowerExpression(unary.Operand);
+
+                    // Check if operator resolved to a function call
+                    if (unary.ResolvedOperatorFunction != null)
+                    {
+                        return LowerUnaryOperatorFunctionCall(unary, operand);
+                    }
+
+                    // Fall back to built-in unary instruction
+                    var uop = unary.Operator switch
+                    {
+                        UnaryOperatorKind.Negate => UnaryOp.Negate,
+                        UnaryOperatorKind.Not => UnaryOp.Not,
+                        _ => throw new Exception($"Unknown unary operator: {unary.Operator}")
+                    };
+
+                    var temp = new LocalValue($"t{_tempCounter++}", unary.Type!);
+                    var instruction = new UnaryInstruction(uop, operand, temp);
+                    _currentBlock.Instructions.Add(instruction);
+                    return temp;
+                }
+
             case AssignmentExpressionNode assignment:
                 {
                     // Handle indexed assignment: expr[index] = value
@@ -2717,6 +2741,44 @@ public class AstLowering
         }
 
         var returnType = binary.Type ?? TypeRegistry.Never;
+        var callResult = new LocalValue($"op_{_tempCounter++}", returnType);
+        var callInst = new CallInstruction(opFuncName, args, callResult);
+        callInst.CalleeParamTypes = paramTypes;
+        callInst.IsForeignCall = (resolvedFunc.Modifiers & FunctionModifiers.Foreign) != 0;
+
+        _currentBlock.Instructions.Add(callInst);
+        return callResult;
+    }
+
+    private Value LowerUnaryOperatorFunctionCall(UnaryExpressionNode unary, Value operand)
+    {
+        var resolvedFunc = unary.ResolvedOperatorFunction!;
+        var opFuncName = OperatorFunctions.GetFunctionName(unary.Operator);
+
+        var paramTypes = new List<FType>();
+        foreach (var param in resolvedFunc.Parameters)
+        {
+            var paramType = param.ResolvedType ??
+                throw new InvalidOperationException($"Parameter '{param.Name}' has no resolved type");
+            paramTypes.Add(paramType);
+        }
+
+        var args = new List<Value>();
+        var argType = unary.Operand.Type;
+
+        if (paramTypes.Count > 0 && argType != null && !argType.Equals(paramTypes[0]))
+        {
+            var argCastResult = new LocalValue($"cast_{_tempCounter++}", paramTypes[0]);
+            var argCastInst = new CastInstruction(operand, paramTypes[0], argCastResult);
+            _currentBlock.Instructions.Add(argCastInst);
+            args.Add(argCastResult);
+        }
+        else
+        {
+            args.Add(operand);
+        }
+
+        var returnType = unary.Type ?? TypeRegistry.Never;
         var callResult = new LocalValue($"op_{_tempCounter++}", returnType);
         var callInst = new CallInstruction(opFuncName, args, callResult);
         callInst.CalleeParamTypes = paramTypes;

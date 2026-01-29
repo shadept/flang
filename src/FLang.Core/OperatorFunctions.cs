@@ -21,6 +21,15 @@ public enum BinaryOperatorKind
 }
 
 /// <summary>
+/// Unary operator kinds used in unary expressions.
+/// </summary>
+public enum UnaryOperatorKind
+{
+    Negate,
+    Not
+}
+
+/// <summary>
 /// Maps binary operators to their corresponding operator function names.
 /// Operator functions follow the pattern op_add, op_sub, op_eq, etc.
 /// </summary>
@@ -73,6 +82,26 @@ public static class OperatorFunctions
     };
 
     /// <summary>
+    /// Gets the operator function name for a unary operator.
+    /// </summary>
+    public static string GetFunctionName(UnaryOperatorKind op) => op switch
+    {
+        UnaryOperatorKind.Negate => "op_neg",
+        UnaryOperatorKind.Not => "op_not",
+        _ => throw new ArgumentOutOfRangeException(nameof(op), op, "Unknown unary operator")
+    };
+
+    /// <summary>
+    /// Gets the display symbol for a unary operator (used in error messages).
+    /// </summary>
+    public static string GetOperatorSymbol(UnaryOperatorKind op) => op switch
+    {
+        UnaryOperatorKind.Negate => "-",
+        UnaryOperatorKind.Not => "!",
+        _ => "?"
+    };
+
+    /// <summary>
     /// All arithmetic operator function names.
     /// </summary>
     public static readonly string[] ArithmeticOperators = ["op_add", "op_sub", "op_mul", "op_div", "op_mod"];
@@ -83,10 +112,15 @@ public static class OperatorFunctions
     public static readonly string[] ComparisonOperators = ["op_eq", "op_ne", "op_lt", "op_gt", "op_le", "op_ge"];
 
     /// <summary>
+    /// All unary operator function names.
+    /// </summary>
+    public static readonly string[] UnaryOperators = ["op_neg", "op_not"];
+
+    /// <summary>
     /// All operator function names.
     /// </summary>
     public static readonly string[] AllOperators =
-        [..ArithmeticOperators, ..ComparisonOperators];
+        [.. ArithmeticOperators, .. ComparisonOperators, .. UnaryOperators];
 
     /// <summary>
     /// Checks if a function name is an operator function.
