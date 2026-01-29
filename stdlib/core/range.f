@@ -36,11 +36,11 @@ pub fn iter(r: &Range) RangeIterator {
 }
 
 // Advance iterator and return next value
-pub fn next(iter: &RangeIterator) isize? {
-    if (iter.current >= iter.end) {
+pub fn next(it: &RangeIterator) isize? {
+    if (it.current >= it.end) {
         return null
     }
-    let val = iter.current
-    iter.current = iter.current + 1
+    let val = it.current
+    it.current = it.current + 1
     return val
 }

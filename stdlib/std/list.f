@@ -93,11 +93,9 @@ pub fn set(list: &List($T), index: usize, value: T) {
         panic("List: index out of bounds")
     }
 
-    const type: Type(T) = T
-
     // Write value using memcpy
     let dest: &u8 = (list.ptr + index) as &u8
-    memcpy(dest, &value as &u8, type.size as usize)
+    memcpy(dest, &value as &u8, size_of(T))
 }
 
 // Remove all elements from the list without freeing memory.
@@ -133,12 +131,12 @@ pub fn iter(l: &List($T)) ListIterator(T) {
 }
 
 // Advance iterator and return next value
-pub fn next(iter: &ListIterator($T)) T? {
-    if (iter.current >= iter.list.len) {
+pub fn next(it: &ListIterator($T)) T? {
+    if (it.current >= it.list.len) {
         return null
     }
 
-    const elem = iter.list.get(iter.current)
-    iter.current = iter.current + 1
+    const elem = it.list.get(it.current)
+    it.current = it.current + 1
     return elem
 }

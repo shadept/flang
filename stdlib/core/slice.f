@@ -11,11 +11,13 @@ pub fn slice_from_raw_parts(ptr: &$T, len: usize) T[] {
     return .{ ptr = ptr, len = len }
 }
 
-pub fn op_index(s: &Slice($T), index: usize) &T {
+pub fn op_index(s: &Slice($T), index: usize) T {
     if (index >= s.len) {
         panic("index out of bounds")
     }
-    return s.ptr + index
+
+    const ptr = s.ptr + index
+    return ptr.*
 }
 
 pub fn op_index(s: &Slice($T), index: Range) Slice(T) {

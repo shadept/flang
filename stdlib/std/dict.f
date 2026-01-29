@@ -247,6 +247,35 @@ pub fn clear(self: &Dict($K, $V)) {
     self.length = 0
 }
 
+// =============================================================================
+// Dict Iterator
+// =============================================================================
+
+pub struct DictIterator(K, V) {
+    dict: &Dict(K, V)
+    current: usize
+}
+
+// Create iterator from dict
+pub fn iter(d: &Dict($K, $V)) DictIterator(K, V) {
+    return .{ dict = d, current = 0 }
+}
+
+// Advance iterator and return next occupied entry
+pub fn next(it: &DictIterator($K, $V)) Entry(K, V)? {
+    for (i in it.current as isize..it.dict.cap as isize) {
+        const idx: usize = i as usize
+        const entry: &Entry(K, V) = it.dict.entries + idx
+        if (entry.state == 1) {
+            it.current = idx + 1
+            const result: Entry(K, V) = entry.*
+            return result
+        }
+    }
+    it.current = it.dict.cap
+    return null
+}
+
 // Free the backing storage. The dict should not be used after this.
 pub fn deinit(self: &Dict($K, $V)) {
     if (self.cap > 0) {
