@@ -1654,6 +1654,19 @@ public class TypeChecker
             return operatorFuncResult.Value.ReturnType;
         }
 
+        // Auto-derive op_eq from op_ne or vice versa by negating the complement
+        if (be.Operator is BinaryOperatorKind.Equal or BinaryOperatorKind.NotEqual)
+        {
+            var complementName = be.Operator == BinaryOperatorKind.Equal ? "op_ne" : "op_eq";
+            var complementResult = TryResolveOperatorFunction(complementName, lt, rt, be.Span);
+            if (complementResult != null)
+            {
+                be.ResolvedOperatorFunction = complementResult.Value.Function;
+                be.NegateOperatorResult = true;
+                return complementResult.Value.ReturnType;
+            }
+        }
+
         // Fall back to built-in handling for primitive types
         var prunedLt = lt.Prune();
         var prunedRt = rt.Prune();

@@ -2759,7 +2759,7 @@ public class AstLowering
     private Value LowerOperatorFunctionCall(BinaryExpressionNode binary, Value left, Value right)
     {
         var resolvedFunc = binary.ResolvedOperatorFunction!;
-        var opFuncName = OperatorFunctions.GetFunctionName(binary.Operator);
+        var opFuncName = resolvedFunc.Name;
 
         // Collect parameter types from resolved function
         var paramTypes = new List<FType>();
@@ -2799,6 +2799,15 @@ public class AstLowering
         callInst.IsForeignCall = (resolvedFunc.Modifiers & FunctionModifiers.Foreign) != 0;
 
         _currentBlock.Instructions.Add(callInst);
+
+        // Auto-derived op_eq/op_ne: negate the complement's result
+        if (binary.NegateOperatorResult)
+        {
+            var negResult = new LocalValue($"not_{_tempCounter++}", returnType);
+            _currentBlock.Instructions.Add(new UnaryInstruction(UnaryOp.Not, callResult, negResult));
+            return negResult;
+        }
+
         return callResult;
     }
 

@@ -23,4 +23,10 @@ public class BinaryExpressionNode : ExpressionNode
     /// For generic functions, this points to the specialized FunctionDeclarationNode with concrete types.
     /// </summary>
     public FunctionDeclarationNode? ResolvedOperatorFunction { get; set; }
+
+    /// <summary>
+    /// Semantic: When true, the result of the resolved operator function should be negated.
+    /// Used when op_eq is auto-derived from op_ne or vice versa.
+    /// </summary>
+    public bool NegateOperatorResult { get; set; }
 }
