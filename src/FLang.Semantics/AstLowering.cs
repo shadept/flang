@@ -2792,7 +2792,11 @@ public class AstLowering
             }
         }
 
-        var returnType = binary.Type ?? TypeRegistry.Never;
+        // When auto-deriving from op_cmp, the call returns the function's return type (Ord/i32),
+        // not the expression type (bool). We compare the result against 0 afterward.
+        var returnType = binary.CmpDerivedOperator != null
+            ? resolvedFunc.ResolvedReturnType ?? TypeRegistry.I32
+            : binary.Type ?? TypeRegistry.Never;
         var callResult = new LocalValue($"op_{_tempCounter++}", returnType);
         var callInst = new CallInstruction(opFuncName, args, callResult);
         callInst.CalleeParamTypes = paramTypes;
@@ -2806,6 +2810,37 @@ public class AstLowering
             var negResult = new LocalValue($"not_{_tempCounter++}", returnType);
             _currentBlock.Instructions.Add(new UnaryInstruction(UnaryOp.Not, callResult, negResult));
             return negResult;
+        }
+
+        // Auto-derived from op_cmp: extract tag from Ord enum, compare against 0
+        if (binary.CmpDerivedOperator is { } cmpOp)
+        {
+            // op_cmp returns an Ord enum (naked enum with tag values -1, 0, 1).
+            // Extract the tag field to get the underlying i32 value.
+            var ordPtr = new LocalValue($"ord_ptr_{_tempCounter++}", new ReferenceType(returnType));
+            _currentBlock.Instructions.Add(new AllocaInstruction(returnType, returnType.Size, ordPtr));
+            _currentBlock.Instructions.Add(new StorePointerInstruction(ordPtr, callResult));
+
+            var tagPtr = new LocalValue($"ord_tag_ptr_{_tempCounter++}", new ReferenceType(TypeRegistry.I32));
+            _currentBlock.Instructions.Add(new GetElementPtrInstruction(ordPtr, 0, tagPtr));
+
+            var tagValue = new LocalValue($"ord_tag_{_tempCounter++}", TypeRegistry.I32);
+            _currentBlock.Instructions.Add(new LoadInstruction(tagPtr, tagValue));
+
+            var irOp = cmpOp switch
+            {
+                BinaryOperatorKind.LessThan => BinaryOp.LessThan,
+                BinaryOperatorKind.GreaterThan => BinaryOp.GreaterThan,
+                BinaryOperatorKind.LessThanOrEqual => BinaryOp.LessThanOrEqual,
+                BinaryOperatorKind.GreaterThanOrEqual => BinaryOp.GreaterThanOrEqual,
+                BinaryOperatorKind.Equal => BinaryOp.Equal,
+                BinaryOperatorKind.NotEqual => BinaryOp.NotEqual,
+                _ => throw new InvalidOperationException($"Unexpected CmpDerivedOperator: {cmpOp}")
+            };
+            var zero = new ConstantValue(0) { Type = TypeRegistry.I32 };
+            var boolResult = new LocalValue($"cmp_{_tempCounter++}", TypeRegistry.Bool);
+            _currentBlock.Instructions.Add(new BinaryInstruction(irOp, tagValue, zero, boolResult));
+            return boolResult;
         }
 
         return callResult;

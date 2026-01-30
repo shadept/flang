@@ -657,7 +657,12 @@ pub fn op_add_assign(lhs: &A, rhs: B) void
 pub fn op_coalesce(opt: Option(T), fallback: T) T
 ```
 
-- The exact set of operator function names corresponds one-to-one with the language’s operators, including indexing and assignment forms.
+- The exact set of operator function names corresponds one-to-one with the language's operators, including indexing and assignment forms.
+
+**Auto-derived operators:**
+
+- `op_eq` / `op_ne`: If only one is defined, the compiler auto-derives the other by negating the result.
+- `op_cmp`: If a type defines `fn op_cmp(a, b) Ord`, the compiler auto-derives all six comparison operators (`<`, `>`, `<=`, `>=`, `==`, `!=`) when they are not explicitly defined. The derivation uses `op_cmp(a, b) <op> 0` (e.g., `op_cmp(a, b) < 0` for `<`). This works because `Ord` is a naked enum with `Less = -1`, `Equal = 0`, `Greater = 1`. Explicitly defined operators (including auto-derived `op_eq`/`op_ne`) take priority over `op_cmp` derivation.
 
 ---
 

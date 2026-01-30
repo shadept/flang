@@ -29,4 +29,11 @@ public class BinaryExpressionNode : ExpressionNode
     /// Used when op_eq is auto-derived from op_ne or vice versa.
     /// </summary>
     public bool NegateOperatorResult { get; set; }
+
+    /// <summary>
+    /// Semantic: When set, the resolved operator function is op_cmp (returns Ord/i32),
+    /// and this comparison should be applied to the result vs 0 to produce a bool.
+    /// e.g. op_cmp(a,b) &lt; 0 for LessThan.
+    /// </summary>
+    public BinaryOperatorKind? CmpDerivedOperator { get; set; }
 }

@@ -1713,6 +1713,22 @@ public class TypeChecker
             }
         }
 
+        // Auto-derive comparison operators from op_cmp
+        // op_cmp returns Ord (naked enum: Less=-1, Equal=0, Greater=1)
+        // So op_cmp(a,b) < 0 means a < b, etc.
+        if (be.Operator is BinaryOperatorKind.LessThan or BinaryOperatorKind.GreaterThan
+            or BinaryOperatorKind.LessThanOrEqual or BinaryOperatorKind.GreaterThanOrEqual
+            or BinaryOperatorKind.Equal or BinaryOperatorKind.NotEqual)
+        {
+            var cmpResult = TryResolveOperatorFunction("op_cmp", lt, rt, be.Span);
+            if (cmpResult != null)
+            {
+                be.ResolvedOperatorFunction = cmpResult.Value.Function;
+                be.CmpDerivedOperator = be.Operator;
+                return TypeRegistry.Bool;
+            }
+        }
+
         // Fall back to built-in handling for primitive types
         var prunedLt = lt.Prune();
         var prunedRt = rt.Prune();
