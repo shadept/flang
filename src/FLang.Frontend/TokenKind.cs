@@ -33,6 +33,8 @@ public enum TokenKind
     Foreign,
     As,
     Test,
+    And,
+    Or,
 
     // Operators
     Plus,

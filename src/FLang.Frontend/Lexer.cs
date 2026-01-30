@@ -144,6 +144,8 @@ public class Lexer
                 "foreign" => TokenKind.Foreign,
                 "as" => TokenKind.As,
                 "test" => TokenKind.Test,
+                "and" => TokenKind.And,
+                "or" => TokenKind.Or,
                 "true" => TokenKind.True,
                 "false" => TokenKind.False,
                 "null" => TokenKind.Null,

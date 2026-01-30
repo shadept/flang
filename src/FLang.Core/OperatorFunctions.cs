@@ -17,7 +17,11 @@ public enum BinaryOperatorKind
     LessThan,
     GreaterThan,
     LessThanOrEqual,
-    GreaterThanOrEqual
+    GreaterThanOrEqual,
+
+    // Logical (short-circuit, built-in only)
+    And,
+    Or
 }
 
 /// <summary>
@@ -57,6 +61,10 @@ public static class OperatorFunctions
         BinaryOperatorKind.LessThanOrEqual => "op_le",
         BinaryOperatorKind.GreaterThanOrEqual => "op_ge",
 
+        // Logical operators (built-in only, no user-defined overloads)
+        BinaryOperatorKind.And => "op_and",
+        BinaryOperatorKind.Or => "op_or",
+
         _ => throw new ArgumentOutOfRangeException(nameof(op), op, "Unknown binary operator")
     };
 
@@ -78,6 +86,8 @@ public static class OperatorFunctions
         BinaryOperatorKind.GreaterThan => ">",
         BinaryOperatorKind.LessThanOrEqual => "<=",
         BinaryOperatorKind.GreaterThanOrEqual => ">=",
+        BinaryOperatorKind.And => "and",
+        BinaryOperatorKind.Or => "or",
         _ => "?"
     };
 

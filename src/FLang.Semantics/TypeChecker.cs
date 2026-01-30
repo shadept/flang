@@ -1184,19 +1184,20 @@ public class TypeChecker
             // If iter(&T) failed, type is not iterable
             if (hadError)
             {
-                // Remove generic error and replace with E2021
+                // Check if the error is a resolution failure (E2004/E2011) or a body
+                // specialization error. Only replace with E2021 for resolution failures.
                 var lastDiagnostic = _diagnostics[^1];
                 if (lastDiagnostic.Code == "E2004" || lastDiagnostic.Code == "E2011")
                 {
                     _diagnostics.RemoveAt(_diagnostics.Count - 1);
-                }
 
-                var iterableTypeName = FormatTypeNameForDisplay(iterableType);
-                ReportError(
-                    $"type `{iterableTypeName}` is not iterable",
-                    fl.IterableExpression.Span,
-                    $"define `fn iter(&{iterableTypeName})` that returns an iterator state struct type",
-                    "E2021");
+                    var iterableTypeName = FormatTypeNameForDisplay(iterableType);
+                    ReportError(
+                        $"type `{iterableTypeName}` is not iterable",
+                        fl.IterableExpression.Span,
+                        $"define `fn iter(&{iterableTypeName})` that returns an iterator state struct type",
+                        "E2021");
+                }
                 PopScope();
                 hadIteratorError = true;
             }
@@ -1215,22 +1216,28 @@ public class TypeChecker
                 var diagnosticsAfterNext = _diagnostics.Count;
                 var hadNextError = diagnosticsAfterNext > diagnosticsBeforeNext;
 
-                // If next(&IteratorType) failed, iterator state missing next function
+                // If next(&IteratorType) failed, check what kind of failure:
+                // - Resolution failure (no matching function): replace with E2023
+                // - Body specialization error (function found but body has type errors):
+                //   keep the original errors as they are more informative
                 if (hadNextError)
                 {
-                    // Remove generic error and replace with E2023
-                    var lastDiagnostic = _diagnostics[^1];
-                    if (lastDiagnostic.Code == "E2004" || lastDiagnostic.Code == "E2011")
+                    // Only replace with E2023 if the function wasn't found at all.
+                    // If nextCall.ResolvedTarget is set, the function was resolved but
+                    // body specialization had errors - keep those errors as they are
+                    // more informative than a generic "no next function" message.
+                    var nextWasResolved = nextCall.ResolvedTarget != null;
+                    if (!nextWasResolved)
                     {
                         _diagnostics.RemoveAt(_diagnostics.Count - 1);
+                        var iteratorStructName = FormatTypeNameForDisplay(iteratorStruct);
+                        ReportError(
+                            $"iterator state type `{iteratorStructName}` has no `next` function",
+                            fl.IterableExpression.Span,
+                            $"define `fn next(&{iteratorStructName})` that returns an option type",
+                            "E2023");
                     }
-
-                    var iteratorStructName = FormatTypeNameForDisplay(iteratorStruct);
-                    ReportError(
-                        $"iterator state type `{iteratorStructName}` has no `next` function",
-                        fl.IterableExpression.Span,
-                        $"define `fn next(&{iteratorStructName})` that returns an option type",
-                        "E2023");
+                    // else: body errors are already in _diagnostics, keep them
                     PopScope();
                     PopScope();
                     hadIteratorError = true;
@@ -1608,6 +1615,33 @@ public class TypeChecker
         if (IsNever(lt)) return TypeRegistry.Never;
         var rt = CheckExpression(be.Right, lt);
         if (IsNever(rt)) return TypeRegistry.Never;
+
+        // Logical operators: both operands must be bool, no operator overloading
+        if (be.Operator is BinaryOperatorKind.And or BinaryOperatorKind.Or)
+        {
+            var opSymbol = OperatorFunctions.GetOperatorSymbol(be.Operator);
+            var leftPruned = lt.Prune();
+            var rightPruned = rt.Prune();
+            if (!leftPruned.Equals(TypeRegistry.Bool))
+            {
+                ReportError(
+                    $"cannot apply `{opSymbol}` to non-bool type `{FormatTypeNameForDisplay(leftPruned)}`",
+                    be.Left.Span,
+                    $"expected `bool`, found `{FormatTypeNameForDisplay(leftPruned)}`",
+                    "E2046");
+                return TypeRegistry.Never;
+            }
+            if (!rightPruned.Equals(TypeRegistry.Bool))
+            {
+                ReportError(
+                    $"cannot apply `{opSymbol}` to non-bool type `{FormatTypeNameForDisplay(rightPruned)}`",
+                    be.Right.Span,
+                    $"expected `bool`, found `{FormatTypeNameForDisplay(rightPruned)}`",
+                    "E2046");
+                return TypeRegistry.Never;
+            }
+            return TypeRegistry.Bool;
+        }
 
         // Try to find an operator function for this operation
         var opFuncName = OperatorFunctions.GetFunctionName(be.Operator);
@@ -2134,6 +2168,39 @@ public class TypeChecker
 
                 return opSetIndexResult.Value.ReturnType;
             }
+
+            // op_set_index not found — check WHY
+            if (_functions.TryGetValue("op_set_index", out var setIndexCandidates))
+            {
+                var matchingBaseCandidates = setIndexCandidates
+                    .Where(c => c.ParameterTypes.Count == 3 &&
+                           (_unificationEngine.CanUnify(c.ParameterTypes[0], structTypeForSetIndex) ||
+                            _unificationEngine.CanUnify(c.ParameterTypes[0], new ReferenceType(structTypeForSetIndex))))
+                    .ToList();
+
+                if (matchingBaseCandidates.Count > 0)
+                {
+                    // Type IS indexable for assignment, but not with this index type
+                    var indexTypeName = FormatTypeNameForDisplay(it.Prune());
+                    var baseTypeName = FormatTypeNameForDisplay(structTypeForSetIndex);
+
+                    var acceptedTypes = matchingBaseCandidates
+                        .Select(c => FormatTypeNameForDisplay(c.ParameterTypes[1]))
+                        .Distinct().ToList();
+                    var typeList = acceptedTypes.Count <= 3
+                        ? string.Join(", ", acceptedTypes.Select(t => $"`{t}`"))
+                        : string.Join(", ", acceptedTypes.Take(3).Select(t => $"`{t}`")) + ", ...";
+
+                    ReportError(
+                        $"type `{baseTypeName}` cannot be indexed by value of type `{indexTypeName}`",
+                        ix.Index.Span,
+                        $"expected {typeList}",
+                        "E2028");
+                    return TypeRegistry.Never;
+                }
+            }
+
+            // No op_set_index for this type at all — fall through to array/slice check
         }
 
         // Built-in array indexing
@@ -2163,9 +2230,9 @@ public class TypeChecker
         else
         {
             ReportError(
-                $"cannot index into type `{bt}`",
+                $"type `{bt}` does not support indexed assignment",
                 ix.Base.Span,
-                "only arrays and slices support indexing",
+                "define `op_set_index` to enable indexed assignment",
                 "E2028");
             return TypeRegistry.Never;
         }
@@ -3230,6 +3297,40 @@ public class TypeChecker
 
                             break;
                         }
+
+                        // op_index not found — check WHY
+                        if (_functions.TryGetValue("op_index", out var indexCandidates))
+                        {
+                            var matchingBaseCandidates = indexCandidates
+                                .Where(c => c.ParameterTypes.Count == 2 &&
+                                       (_unificationEngine.CanUnify(c.ParameterTypes[0], structTypeForIndex) ||
+                                        _unificationEngine.CanUnify(c.ParameterTypes[0], new ReferenceType(structTypeForIndex))))
+                                .ToList();
+
+                            if (matchingBaseCandidates.Count > 0)
+                            {
+                                // Type IS indexable, but not with this index type
+                                var indexTypeName = FormatTypeNameForDisplay(it.Prune());
+                                var baseTypeName = FormatTypeNameForDisplay(structTypeForIndex);
+
+                                var acceptedTypes = matchingBaseCandidates
+                                    .Select(c => FormatTypeNameForDisplay(c.ParameterTypes[1]))
+                                    .Distinct().ToList();
+                                var typeList = acceptedTypes.Count <= 3
+                                    ? string.Join(", ", acceptedTypes.Select(t => $"`{t}`"))
+                                    : string.Join(", ", acceptedTypes.Take(3).Select(t => $"`{t}`")) + ", ...";
+
+                                ReportError(
+                                    $"type `{baseTypeName}` cannot be indexed by value of type `{indexTypeName}`",
+                                    ix.Index.Span,
+                                    $"expected {typeList}",
+                                    "E2028");
+                                type = TypeRegistry.Never;
+                                break;
+                            }
+                        }
+
+                        // No op_index for this type at all — fall through to array/slice check
                     }
 
                     // Built-in array/slice indexing with usize
@@ -3254,9 +3355,9 @@ public class TypeChecker
                     else
                     {
                         ReportError(
-                            $"cannot index into value of type `{bt}`",
+                            $"type `{bt}` does not support indexing",
                             ix.Base.Span,
-                            "only arrays and slices can be indexed",
+                            "define `op_index` to enable indexing",
                             "E2028");
                         type = TypeRegistry.Never;
                     }
@@ -4607,6 +4708,7 @@ public class TypeChecker
         AnonymousStructExpressionNode anon => new AnonymousStructExpressionNode(anon.Span, anon.Fields.Select(f => (f.FieldName, CloneExpression(f.Value))).ToList()),
         StructConstructionExpressionNode sc => new StructConstructionExpressionNode(sc.Span, sc.TypeName, sc.Fields.Select(f => (f.FieldName, CloneExpression(f.Value))).ToList()),
         ImplicitCoercionNode ic => new ImplicitCoercionNode(ic.Span, CloneExpression(ic.Inner), ic.TargetType, ic.Kind),
+        UnaryExpressionNode un => new UnaryExpressionNode(un.Span, un.Operator, CloneExpression(un.Operand)),
         _ => throw new NotSupportedException($"Cloning not implemented for expression type: {expr.GetType().Name}")
     };
 

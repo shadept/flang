@@ -7,3 +7,17 @@ pub struct Option(T) {
     has_value: bool
     value: T
 }
+
+pub fn op_eq(a: Option($T), b: Option(T)) bool {
+    if (a.has_value != b.has_value) {
+        return false
+    }
+    if (a.has_value) {
+        return a.value == b.value
+    }
+    return true
+}
+
+pub fn op_ne(a: Option($T), b: Option(T)) bool {
+    return !op_eq(a, b)
+}

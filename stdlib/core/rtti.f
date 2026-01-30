@@ -20,7 +20,3 @@ pub fn size_of(t: Type($T)) usize {
 pub fn align_of(t: Type($T)) usize {
     return t.align
 }
-
-pub fn are_equal(a: $T, b: T) bool {
-    return a == b
-}

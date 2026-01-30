@@ -892,6 +892,11 @@ public class AstLowering
                     return new ConstantValue(0);
                 }
 
+            case BinaryExpressionNode binary when binary.Operator is BinaryOperatorKind.And or BinaryOperatorKind.Or:
+                {
+                    return LowerShortCircuitLogical(binary);
+                }
+
             case BinaryExpressionNode binary:
                 {
                     var left = LowerExpression(binary.Left);
@@ -1107,7 +1112,6 @@ public class AstLowering
                 Value? ufcsReceiverArg = null;
                 if (call.UfcsReceiver != null && call.MethodName != null && !call.IsIndirectCall)
                 {
-                    var receiverVal = LowerExpression(call.UfcsReceiver);
                     var receiverType = call.UfcsReceiver.Type?.Prune();
 
                     // Check what the first parameter of the resolved function expects
@@ -1126,10 +1130,18 @@ public class AstLowering
                         if (receiverIsRef)
                         {
                             // Already a reference, use directly
+                            var receiverVal = LowerExpression(call.UfcsReceiver);
                             ufcsReceiverArg = receiverVal;
+                        }
+                        else if (call.UfcsReceiver is MemberAccessExpressionNode fieldReceiver)
+                        {
+                            // Field access: use the field pointer directly so mutations
+                            // persist in the parent struct (e.g., self.it.next() → next(&self.it))
+                            ufcsReceiverArg = GetFieldPointer(fieldReceiver);
                         }
                         else
                         {
+                            var receiverVal = LowerExpression(call.UfcsReceiver);
                             // Need to take address of the receiver
                             // If it's an lvalue (stored in memory), we can get its address directly
                             // If it's an rvalue (e.g., call result), we need to spill to a temp first
@@ -1155,6 +1167,7 @@ public class AstLowering
                     }
                     else
                     {
+                        var receiverVal = LowerExpression(call.UfcsReceiver);
                         // Function expects a value
                         if (receiverIsRef)
                         {
@@ -2699,6 +2712,45 @@ public class AstLowering
                 // Should not happen - all coercion kinds are handled above
                 throw new InvalidOperationException($"Unknown coercion kind: {coercion.Kind}");
         }
+    }
+
+    /// <summary>
+    /// Lowers a short-circuit logical operator (and/or) using branching.
+    /// </summary>
+    private Value LowerShortCircuitLogical(BinaryExpressionNode binary)
+    {
+        var isAnd = binary.Operator == BinaryOperatorKind.And;
+        var left = LowerExpression(binary.Left);
+
+        // Allocate result on stack
+        var resultPtr = new LocalValue($"logic_result_{_tempCounter++}", new ReferenceType(TypeRegistry.Bool));
+        _currentBlock.Instructions.Add(new AllocaInstruction(TypeRegistry.Bool, TypeRegistry.Bool.Size, resultPtr));
+
+        // Store short-circuit default: false for 'and', true for 'or'
+        var defaultVal = new ConstantValue(isAnd ? 0 : 1) { Type = TypeRegistry.Bool };
+        _currentBlock.Instructions.Add(new StorePointerInstruction(resultPtr, defaultVal));
+
+        var rhsBlock = CreateBlock(isAnd ? "and_rhs" : "or_rhs");
+        var mergeBlock = CreateBlock(isAnd ? "and_merge" : "or_merge");
+
+        // For 'and': if LHS is true, evaluate RHS; else skip (result stays false)
+        // For 'or':  if LHS is false, evaluate RHS; else skip (result stays true)
+        if (isAnd)
+            _currentBlock.Instructions.Add(new BranchInstruction(left, rhsBlock, mergeBlock));
+        else
+            _currentBlock.Instructions.Add(new BranchInstruction(left, mergeBlock, rhsBlock));
+
+        // RHS block: evaluate right side and store
+        _currentBlock = rhsBlock;
+        var right = LowerExpression(binary.Right);
+        _currentBlock.Instructions.Add(new StorePointerInstruction(resultPtr, right));
+        _currentBlock.Instructions.Add(new JumpInstruction(mergeBlock));
+
+        // Merge block: load and return result
+        _currentBlock = mergeBlock;
+        var result = new LocalValue($"logic_val_{_tempCounter++}", TypeRegistry.Bool);
+        _currentBlock.Instructions.Add(new LoadInstruction(resultPtr, result));
+        return result;
     }
 
     /// <summary>

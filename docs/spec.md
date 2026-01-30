@@ -607,7 +607,28 @@ expr?
 - May only appear in a function whose return type is `Option` or `Result`.
 - **Status**: Planned for future milestone.
 
-### 4.4 Operator-as-Function
+### 4.4 Logical Operators
+
+```
+a and b
+a or b
+```
+
+- `and`: returns `false` without evaluating `b` if `a` is `false` (short-circuit).
+- `or`: returns `true` without evaluating `b` if `a` is `true` (short-circuit).
+- Both operands must be `bool`. Non-bool operands are a compile error (`E2046`).
+- These are built-in operators only — no user-defined overloading via operator functions.
+- **Precedence** (highest to lowest):
+  - `* / %` (8)
+  - `+ -` (7)
+  - `..` (6)
+  - `< > <= >=` (5)
+  - `== !=` (4)
+  - `and` (3)
+  - `or` (2)
+  - `??` (1)
+
+### 4.5 Operator-as-Function
 
 - Every operator has a corresponding function name.
 - The compiler rewrites operators to calls to these functions and may inline them.

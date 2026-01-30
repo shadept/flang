@@ -1,7 +1,39 @@
-// asda
+// TODO file doc
 
 // =============================================================================
-// Bytes
+// String
+// =============================================================================
+
+import core.string
+import std.option
+
+pub fn starts_with(s: String, prefix: String) bool {
+    if (s.len < prefix.len) {
+        return false
+    }
+    for (i in 0..prefix.len) {
+        const i = i as usize
+        if (s[i] != prefix[i]) {
+            return false
+        }
+    }
+    return true
+}
+
+// pub fn ends_with(s: String, suffix: String) bool {
+//     if (s.len < suffix.len) {
+//         return false
+//     }
+//     for (i in 0..suffix.len) {
+//         if (s[s.len - i - 1] != suffix[suffix.len - i - 1]) {
+//             return false
+//         }
+//     }
+//     return true
+// }
+
+// =============================================================================
+// Bytes Iterator
 // =============================================================================
 
 struct Bytes {
@@ -31,7 +63,7 @@ pub fn next(it: &Bytes) u8? {
 }
 
 // =============================================================================
-// Chars
+// Chars Iterator
 // =============================================================================
 
 struct Chars {

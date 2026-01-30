@@ -273,7 +273,7 @@ pub struct DictIterator(K, V) {
 
 // Create iterator from dict
 pub fn iter(dict: &Dict($K, $V)) DictIterator(K, V) {
-    return .{ dict, current = 0 }
+    return .{ dict = dict, current = 0 }
 }
 
 // Advance iterator and return next occupied entry

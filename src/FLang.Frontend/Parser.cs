@@ -927,12 +927,14 @@ public class Parser
     {
         return kind switch
         {
-            TokenKind.Star or TokenKind.Slash or TokenKind.Percent => 6,
-            TokenKind.Plus or TokenKind.Minus => 5,
-            TokenKind.DotDot => 4,
+            TokenKind.Star or TokenKind.Slash or TokenKind.Percent => 8,
+            TokenKind.Plus or TokenKind.Minus => 7,
+            TokenKind.DotDot => 6,
             TokenKind.LessThan or TokenKind.GreaterThan or TokenKind.LessThanOrEqual
-                or TokenKind.GreaterThanOrEqual => 3,
-            TokenKind.EqualsEquals or TokenKind.NotEquals => 2,
+                or TokenKind.GreaterThanOrEqual => 5,
+            TokenKind.EqualsEquals or TokenKind.NotEquals => 4,
+            TokenKind.And => 3,
+            TokenKind.Or => 2,
             TokenKind.QuestionQuestion => 1, // Lowest precedence, right-associative
             _ => 0
         };
@@ -988,6 +990,8 @@ public class Parser
             TokenKind.GreaterThan => BinaryOperatorKind.GreaterThan,
             TokenKind.LessThanOrEqual => BinaryOperatorKind.LessThanOrEqual,
             TokenKind.GreaterThanOrEqual => BinaryOperatorKind.GreaterThanOrEqual,
+            TokenKind.And => BinaryOperatorKind.And,
+            TokenKind.Or => BinaryOperatorKind.Or,
             _ => throw new ParserException(Diagnostic.Error(
                 $"unexpected operator token '{_currentToken.Text}'",
                 _currentToken.Span,

@@ -1358,25 +1358,44 @@ Use an integer for indexing.
 
 ---
 
-### E2028: Non-indexable Type
+### E2028: Non-indexable Type / Index Type Mismatch
 
 **Category**: Type Checking
 **Severity**: Error
 
 #### Description
 
-This error occurs when attempting to use the index operator `[]` on a type that doesn't support indexing (i.e., not an array or slice).
+This error occurs in two situations:
 
-#### Example
+1. **Type not indexable**: The index operator `[]` was used on a type that doesn't support indexing — it is not an array, slice, or a type with an `op_index` function defined.
+2. **Index type mismatch**: The type supports indexing (has `op_index` or `op_set_index`), but the index expression has the wrong type. The error message lists the accepted index types.
+
+#### Examples
+
+**Type not indexable:**
 
 ```flang
 let x: i32 = 42
-let val = x[0] // ERROR: cannot index into value of type `i32`
+let val = x[0] // ERROR: type `i32` does not support indexing
+               // hint: define `op_index` to enable indexing
+```
+
+**Index type mismatch:**
+
+```flang
+import std.string
+
+pub fn main() i32 {
+    let s: String = "hello"
+    let c = s[0 as isize]  // ERROR: type `String` cannot be indexed by value of type `isize`
+                            // hint: expected `usize`
+    return 0
+}
 ```
 
 #### Solution
 
-Only index into arrays or slices.
+For types that don't support indexing, define `op_index` (and optionally `op_set_index`) for your type. For index type mismatches, use the correct index type as listed in the error hint.
 
 ---
 
@@ -1778,6 +1797,39 @@ struct Point { x: i32, y: i32 }
 pub fn main() {
     let pt: Point = .{ x = 1, y = 2 }
     let p: &Point = &pt  // OK
+}
+```
+
+### E2046: Non-Bool Operand to Logical Operator
+
+**Category**: Semantic Analysis
+**Severity**: Error
+
+#### Description
+
+The `and` and `or` operators require both operands to be `bool`. This error is reported when a non-bool type is used.
+
+#### Example (Error)
+
+```flang
+pub fn main() i32 {
+    let x: i32 = 1
+    let y: i32 = 2
+    let z: bool = x and y  // ERROR: expected `bool`, found `i32`
+    return 0
+}
+```
+
+#### Solution
+
+Ensure both sides of `and`/`or` are boolean expressions:
+
+```flang
+pub fn main() i32 {
+    let x: i32 = 1
+    let y: i32 = 2
+    let z: bool = x > 0 and y > 0  // OK
+    return 0
 }
 ```
 
