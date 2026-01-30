@@ -5,7 +5,7 @@ import std.list
 import std.option
 
 pub fn main() i32 {
-    let list: List(i32) = list_new(i32)
+    let list: List(i32)
     list.push(3)
     list.push(4)
     list.push(5)

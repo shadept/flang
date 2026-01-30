@@ -297,8 +297,25 @@ public class Parser
                 variantEnd = closeParen.Span;
             }
 
+            // Check for explicit tag value: Variant = <integer>
+            long? explicitTagValue = null;
+            if (_currentToken.Kind == TokenKind.Equals)
+            {
+                Eat(TokenKind.Equals);
+                bool negative = false;
+                if (_currentToken.Kind == TokenKind.Minus)
+                {
+                    Eat(TokenKind.Minus);
+                    negative = true;
+                }
+                var intToken = Eat(TokenKind.Integer);
+                variantEnd = intToken.Span;
+                explicitTagValue = long.Parse(intToken.Text);
+                if (negative) explicitTagValue = -explicitTagValue;
+            }
+
             var variantSpan = SourceSpan.Combine(variantNameToken.Span, variantEnd);
-            variants.Add(new EnumVariantNode(variantSpan, variantNameToken.Text, payloadTypes));
+            variants.Add(new EnumVariantNode(variantSpan, variantNameToken.Text, payloadTypes, explicitTagValue));
 
             // Variants can be separated by commas or newlines (optional)
             if (_currentToken.Kind == TokenKind.Comma) Eat(TokenKind.Comma);

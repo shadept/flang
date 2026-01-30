@@ -150,6 +150,13 @@ enum Name {
     Variant2(Type1)
     Variant3(Type1, Type2)
 }
+
+// Naked enum (C-style, explicit integer tags, no payloads)
+enum Ord {
+    Less = -1
+    Equal = 0
+    Greater = 1
+}
 ```
 
 **Declaration:**
@@ -157,7 +164,8 @@ enum Name {
 - `enum Name { Variant, ... }` declares an enum with unit (no payload) and payload variants.
 - Generic enums: `enum Result(T, E) { Ok(T), Err(E) }`
 - Variants may have zero or more payload types.
-- Tag values are assigned sequentially (0, 1, 2, ...) but are implementation details.
+- Tag values are assigned sequentially (0, 1, 2, ...) by default.
+- **Naked enums** (C-style): Variants may have explicit integer tag values using `= <integer>` syntax. If any variant has an explicit tag, the enum is a naked enum and no variant may carry payload data. Implicit tag values auto-increment from the previous variant's value (first defaults to 0). Duplicate tag values are a compile error.
 
 **Memory Layout:**
 

@@ -842,6 +842,42 @@ public class EnumType : TypeBase
     public List<(string VariantName, TypeBase? PayloadType)> Variants { get; }
 
     /// <summary>
+    /// For naked enums (C-style enums with explicit tag values), stores the resolved
+    /// tag value for each variant by name. Null for standard tagged-union enums.
+    /// </summary>
+    public Dictionary<string, long>? TagValues { get; set; }
+
+    /// <summary>
+    /// Whether this enum is a naked enum (has explicit tag values, no payloads).
+    /// </summary>
+    public bool IsNaked => TagValues != null;
+
+    /// <summary>
+    /// Gets the tag value for a variant by index. For naked enums, returns the
+    /// resolved explicit value. For standard enums, returns the variant index.
+    /// </summary>
+    public long GetTagValue(int variantIndex)
+    {
+        if (TagValues != null)
+            return TagValues[Variants[variantIndex].VariantName];
+        return variantIndex;
+    }
+
+    /// <summary>
+    /// Gets the tag value for a variant by name. For naked enums, returns the
+    /// resolved explicit value. For standard enums, returns the variant index.
+    /// </summary>
+    public long GetTagValue(string variantName)
+    {
+        if (TagValues != null)
+            return TagValues[variantName];
+        for (int i = 0; i < Variants.Count; i++)
+            if (Variants[i].VariantName == variantName)
+                return i;
+        return -1;
+    }
+
+    /// <summary>
     /// Get the byte offset of the discriminant tag within the enum.
     /// Default implementation: tag at offset 0.
     /// Can be overridden for niche optimization (e.g., Option(&amp;T) has no tag).
@@ -890,7 +926,7 @@ public class EnumType : TypeBase
     {
         get
         {
-            if (Variants.Count == 0)
+            if (IsNaked || Variants.Count == 0)
                 return GetTagSize();
 
             // Default implementation: tag + largest variant payload
@@ -903,7 +939,7 @@ public class EnumType : TypeBase
     {
         get
         {
-            if (Variants.Count == 0)
+            if (IsNaked || Variants.Count == 0)
                 return 4; // Tag alignment
 
             // Max of tag alignment (4) and variant payload alignments

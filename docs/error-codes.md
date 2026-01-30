@@ -1833,6 +1833,88 @@ pub fn main() i32 {
 }
 ```
 
+### E2047: Naked Enum Variant Cannot Have Payload
+
+**Category**: Semantic Analysis
+**Severity**: Error
+
+#### Description
+
+A naked enum (one where any variant has an explicit tag value using `= <integer>`) cannot have variants with payload types. Naked enums are C-style enums that represent integer constants.
+
+#### Example (Error)
+
+```flang
+enum Bad {
+    A = 0
+    B(i32)  // ERROR: naked enum variant cannot have payload
+}
+```
+
+#### Solution
+
+Either remove the explicit tag values to use a standard tagged union, or remove payloads from all variants:
+
+```flang
+// Option 1: Standard tagged union (no explicit tags)
+enum Message {
+    Quit
+    Echo(i32)
+}
+
+// Option 2: Naked enum (no payloads)
+enum Status {
+    Ok = 0
+    Error = 1
+}
+```
+
+---
+
+### E2048: Duplicate Tag Value in Naked Enum
+
+**Category**: Semantic Analysis
+**Severity**: Error
+
+#### Description
+
+Two variants in a naked enum resolved to the same tag value. This can happen from explicit assignment or from auto-increment colliding with an earlier explicit value.
+
+#### Example (Error)
+
+```flang
+// Explicit duplicate
+enum Bad {
+    A = 1
+    B = 1  // ERROR: duplicate tag value `1`
+}
+
+// Auto-increment collision
+enum AlsoBad {
+    A        // 0
+    B        // 1
+    C = 6    // 6
+    D        // 7
+    E = 5    // 5
+    F        // ERROR: 6 already defined by C
+}
+```
+
+#### Solution
+
+Ensure all tag values (both explicit and auto-incremented) are unique:
+
+```flang
+enum Good {
+    A = 0
+    B = 1
+    C = 6
+    D = 7
+    E = 5
+    F = 8
+}
+```
+
 ---
 
 ## E3XXX: Code Generation Errors

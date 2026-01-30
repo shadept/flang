@@ -2401,8 +2401,8 @@ public class AstLowering
         var tagGep = new GetElementPtrInstruction(enumPtr, tagOffset, tagPtr);
         _currentBlock.Instructions.Add(tagGep);
 
-        // 3. Store the variant index (tag)
-        var tagValue = new ConstantValue(variantIndex) { Type = TypeRegistry.I32 };
+        // 3. Store the variant tag value
+        var tagValue = new ConstantValue((int)enumType.GetTagValue(variantIndex)) { Type = TypeRegistry.I32 };
         var tagStore = new StorePointerInstruction(tagPtr, tagValue);
         _currentBlock.Instructions.Add(tagStore);
 
@@ -2554,8 +2554,8 @@ public class AstLowering
                     }
                 }
 
-                // Compare tag with variant index
-                var expectedTag = new ConstantValue(variantIndex) { Type = TypeRegistry.I32 };
+                // Compare tag with variant tag value
+                var expectedTag = new ConstantValue((int)enumType.GetTagValue(variantIndex)) { Type = TypeRegistry.I32 };
                 var comparison = new LocalValue($"match_cmp_{_tempCounter++}", TypeRegistry.Bool);
                 var cmpInst = new BinaryInstruction(BinaryOp.Equal, tagValue, expectedTag, comparison);
                 _currentBlock.Instructions.Add(cmpInst);

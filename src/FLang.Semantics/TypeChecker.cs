@@ -816,6 +816,52 @@ public class TypeChecker
             // Create final enum type with type parameters and resolved variants
             EnumType etype = new(fqn, typeArgs, variants);
 
+            // Check for naked enum (C-style enum with explicit tag values)
+            bool hasExplicitTag = enumDecl.Variants.Any(v => v.ExplicitTagValue != null);
+            if (hasExplicitTag)
+            {
+                // Naked enums cannot have payload variants
+                foreach (var variant in enumDecl.Variants)
+                {
+                    if (variant.PayloadTypes.Count > 0)
+                    {
+                        ReportError(
+                            $"variant `{variant.Name}` in naked enum `{enumDecl.Name}` cannot have payload",
+                            variant.Span,
+                            "naked enums (with explicit tag values) cannot have variant payloads",
+                            "E2047");
+                    }
+                }
+
+                // Resolve tag values with auto-increment
+                var tagValues = new Dictionary<string, long>();
+                var usedTags = new Dictionary<long, string>();
+                long nextTag = 0;
+
+                foreach (var variant in enumDecl.Variants)
+                {
+                    long tagValue = variant.ExplicitTagValue ?? nextTag;
+
+                    if (usedTags.TryGetValue(tagValue, out var existingVariant))
+                    {
+                        ReportError(
+                            $"duplicate tag value `{tagValue}` in enum `{enumDecl.Name}`: variant `{variant.Name}` conflicts with `{existingVariant}`",
+                            variant.Span,
+                            "each variant must have a unique tag value",
+                            "E2048");
+                    }
+                    else
+                    {
+                        usedTags[tagValue] = variant.Name;
+                    }
+
+                    tagValues[variant.Name] = tagValue;
+                    nextTag = tagValue + 1;
+                }
+
+                etype.TagValues = tagValues;
+            }
+
             // Replace placeholder with complete enum type
             _compilation.EnumsByModule[modulePath][enumDecl.Name] = etype;
             _compilation.EnumsByFqn[fqn] = etype;

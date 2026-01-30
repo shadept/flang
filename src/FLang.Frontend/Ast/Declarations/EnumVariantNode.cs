@@ -12,14 +12,16 @@ public class EnumVariantNode : AstNode
     public EnumVariantNode(
         SourceSpan span,
         string name,
-        List<TypeNode> payloadTypes)
+        List<TypeNode> payloadTypes,
+        long? explicitTagValue = null)
         : base(span)
     {
         Name = name;
         PayloadTypes = payloadTypes;
+        ExplicitTagValue = explicitTagValue;
     }
 
     public string Name { get; }
     public List<TypeNode> PayloadTypes { get; }
+    public long? ExplicitTagValue { get; }
 }
-
