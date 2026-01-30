@@ -36,7 +36,3 @@ pub fn op_eq(a: String, b: String) bool {
 
     return true
 }
-
-pub fn op_ne(a: String, b: String) bool {
-    return !op_eq(a, b)
-}

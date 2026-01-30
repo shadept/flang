@@ -5,7 +5,7 @@ import core.range
 
 pub fn main() i32 {
     let sum: i32 = 0
-    let r: Range = .{ start = 0, end = 4 }
+    let r = 0..4
     for (i in r) {
         sum = sum + i as i32
     }

@@ -4,17 +4,17 @@
 //   0..10    - Range from 0 to 9 (exclusive end)
 //
 // The iterator protocol requires:
-//   fn iter(r: &Range) RangeIterator - Creates iterator state
-//   fn next(iter: &RangeIterator) isize? - Returns next value or null
+//   fn iter(r: &Range($T)) RangeIterator(T) - Creates iterator state
+//   fn next(iter: &RangeIterator($T)) T? - Returns next value or null
 
 // A (half-open) range bounded inclusively below and exclusively above (start..end).
 // The range start..end contains all values with start <= x < end. It is empty if start >= end.
-pub struct Range {
-    start: isize
-    end: isize
+pub struct Range(T) {
+    start: T
+    end: T
 }
 
-pub fn op_index(r: &Range, index: isize) isize? {
+pub fn op_index(r: &Range($T), index: isize) T? {
     if (index < 0 or index >= r.end - r.start) {
         return null
     }
@@ -22,18 +22,18 @@ pub fn op_index(r: &Range, index: isize) isize? {
 }
 
 // Iterator state for ranges
-pub struct RangeIterator {
-    current: isize
-    end: isize
+pub struct RangeIterator(T) {
+    current: T
+    end: T
 }
 
 // Create iterator from range
-pub fn iter(r: &Range) RangeIterator {
+pub fn iter(r: &Range($T)) RangeIterator(T) {
     return .{ current = r.start, end = r.end }
 }
 
 // Advance iterator and return next value
-pub fn next(it: &RangeIterator) isize? {
+pub fn next(it: &RangeIterator($T)) T? {
     if (it.current >= it.end) {
         return null
     }

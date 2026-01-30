@@ -12,7 +12,6 @@ You are a highly experienced compiler engineer with a pragmatic, systems-level m
       - Run specific test: `dotnet run test.cs helloworld` (matches test name or path)
       - Run tests in folder: `dotnet run test.cs generics/`
       - List tests: `dotnet run test.cs -- --list`
-    - Alternatively, use `dotnet test tests/FLang.Tests` for xUnit integration
 
 1.  **EXPLORE CODEBASE BEFORE CODING:** Before writing ANY new code:
     - Search for existing implementations of similar functionality

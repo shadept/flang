@@ -3052,26 +3052,21 @@ public class TypeChecker
                         break;
                     }
 
-                    // Coerce comptime_int to isize (Range uses isize fields) - unify handles TypeVar propagation
-                    if (prunedSt is ComptimeInt)
-                        UnifyTypes(st, TypeRegistry.ISize, re.Start.Span);
-                    if (prunedEn is ComptimeInt)
-                        UnifyTypes(en, TypeRegistry.ISize, re.End.Span);
+                    // Unify start and end types so they agree
+                    UnifyTypes(st, en, re.Span);
 
-                    // Return Range type from core.range
-                    // Try FQN lookup first (works after prelude is loaded)
-                    if (!_compilation.StructsByFqn.TryGetValue("core.range.Range", out var rangeType))
+                    // Determine the element type for Range(T)
+                    var elementType = st.Prune();
+
+                    // Coerce comptime_int to isize as default
+                    if (elementType is ComptimeInt)
                     {
-                        ReportError(
-                            "Range type not found",
-                            re.Span,
-                            "ensure `core.range` is loaded via prelude",
-                            "E2003");
-                        type = TypeRegistry.Never;
-                        break;
+                        elementType = TypeRegistry.ISize;
+                        UnifyTypes(st, TypeRegistry.ISize, re.Start.Span);
+                        UnifyTypes(en, TypeRegistry.ISize, re.End.Span);
                     }
 
-                    type = rangeType;
+                    type = MakeRangeType(elementType, re.Span);
                     break;
                 }
             case MatchExpressionNode match:
@@ -3887,6 +3882,24 @@ public class TypeChecker
         }
 
         var instantiated = InstantiateStruct(sliceTemplate, [elementType], span);
+        _compilation.InstantiatedTypes.Add(instantiated);
+        return instantiated;
+    }
+
+    /// <summary>
+    /// Creates a Range(T) type using the stdlib Range struct template.
+    /// Uses the normal generic instantiation infrastructure instead of hardcoded fields.
+    /// </summary>
+    public StructType MakeRangeType(TypeBase elementType, SourceSpan span)
+    {
+        // Look up the Range template from core.range
+        if (!_compilation.StructsByFqn.TryGetValue("core.range.Range", out var rangeTemplate))
+        {
+            // Fallback to TypeRegistry if stdlib not loaded (e.g., during early bootstrap)
+            return TypeRegistry.MakeRange(elementType);
+        }
+
+        var instantiated = InstantiateStruct(rangeTemplate, [elementType], span);
         _compilation.InstantiatedTypes.Add(instantiated);
         return instantiated;
     }

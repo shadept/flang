@@ -109,6 +109,7 @@ public static class TypeRegistry
     // Cache for well-known types to ensure reference equality
     private static readonly Dictionary<TypeBase, StructType> _sliceStructCache = [];
     private static readonly Dictionary<TypeBase, StructType> _optionStructCache = [];
+    private static readonly Dictionary<TypeBase, StructType> _rangeStructCache = [];
     private static readonly Dictionary<TypeBase, StructType> _typeStructCache = [];
 
     /// <summary>
@@ -222,6 +223,29 @@ public static class TypeRegistry
 
         _sliceStructCache[key] = sliceType;
         return sliceType;
+    }
+
+    /// <summary>
+    /// Creates a Range(T) type with fully qualified name.
+    /// Results are cached to ensure reference equality for the same element type.
+    /// </summary>
+    /// <param name="elementType">The type of range bounds.</param>
+    /// <returns>A StructType representing Range(T).</returns>
+    public static StructType MakeRange(TypeBase elementType)
+    {
+        var key = elementType;
+        if (_rangeStructCache.TryGetValue(key, out var cached))
+            return cached;
+
+        var rangeType = new StructType(RangeFqn, [elementType]);
+
+        rangeType.WithFields([
+            ("start", elementType),
+            ("end", elementType)
+        ]);
+
+        _rangeStructCache[key] = rangeType;
+        return rangeType;
     }
 
     /// <summary>

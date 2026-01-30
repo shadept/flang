@@ -20,10 +20,10 @@ pub fn op_index(s: &Slice($T), index: usize) T {
     return ptr.*
 }
 
-pub fn op_index(s: &Slice($T), index: Range) Slice(T) {
+pub fn op_index(s: &Slice($T), index: Range(usize)) Slice(T) {
     // Clamp negative indices to 0
-    let start = if (index.start < 0) 0 else index.start as usize
-    let end = if (index.end < 0) 0 else index.end as usize
+    let start = if (index.start < 0) 0 else index.start
+    let end = if (index.end < 0) 0 else index.end
 
     // Clamp to valid bounds, return empty slice for invalid ranges
     if (start > s.len) { start = s.len }
