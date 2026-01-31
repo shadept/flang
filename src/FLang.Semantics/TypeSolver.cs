@@ -43,6 +43,7 @@ public class TypeSolver
         _coercionRules.Add(new StringToByteSliceRule());
         _coercionRules.Add(new ArrayDecayRule());
         _coercionRules.Add(new SliceToReferenceRule());
+        _coercionRules.Add(new TypeToTypeInfoRule());
     }
 
     /// <summary>
@@ -542,6 +543,21 @@ public class SliceToReferenceRule : ICoercionRule
     {
         if (from is StructType fs && TypeRegistry.IsSlice(fs) &&
             to is ReferenceType tr && tr.InnerType.Equals(fs.TypeArguments[0]))
+            return to;
+        return null;
+    }
+}
+
+/// <summary>
+/// Coerces Type(T) to TypeInfo. Both have the same layout; Type(T) is just
+/// a generic wrapper that couples a type parameter to its runtime TypeInfo.
+/// </summary>
+public class TypeToTypeInfoRule : ICoercionRule
+{
+    public TypeBase? TryApply(TypeBase from, TypeBase to, TypeSolver solver)
+    {
+        if (from is StructType fs && TypeRegistry.IsType(fs) &&
+            to is StructType ts && TypeRegistry.IsTypeInfo(ts))
             return to;
         return null;
     }

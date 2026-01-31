@@ -386,17 +386,6 @@ public class AstLowering
         return $"{sourceName}__shadow{count + 1}";
     }
 
-    private static string SanitizeTypeName(string name)
-    {
-        return name.Replace("&", "ref_")
-            .Replace("[", "_")
-            .Replace("]", "_")
-            .Replace("(", "_")
-            .Replace(")", "_")
-            .Replace(" ", "")
-            .Replace(";", "_");
-    }
-
     private void EnsureTypeTableExists()
     {
         if (_typeTableGlobal != null) return;

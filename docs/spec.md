@@ -670,6 +670,55 @@ pub fn op_coalesce(opt: Option(T), fallback: T) T
 
 - The language specifies no intrinsic allocator and no heap management guarantees.
 
+### 5.1 Allocator Pattern
+
+All stdlib types that perform heap allocation accept an optional `&Allocator?` parameter. This is the standard pattern for memory management in FLang.
+
+**Rules:**
+
+1. Types that allocate must have an `allocator: &Allocator?` field.
+2. A `null` allocator falls back to `global_allocator` (which wraps `malloc`/`free`).
+3. Types must provide a private `get_allocator(self) &Allocator` helper that resolves the fallback.
+4. All allocation, realloc, and free operations go through the allocator — never raw `malloc`/`free` directly.
+5. Types that allocate must provide a `deinit` function that frees through the allocator.
+6. Callers use `defer x.deinit()` for deterministic cleanup.
+
+**Standard form:**
+
+```flang
+pub struct MyType {
+    // ... data fields ...
+    allocator: &Allocator?
+}
+
+fn get_allocator(self: MyType) &Allocator {
+    return self.allocator ?? &global_allocator
+}
+
+pub fn my_type(allocator: &Allocator?) MyType {
+    const alloc = allocator ?? &global_allocator
+    const buf = alloc.alloc(size, alignment).expect("allocation failed")
+    return MyType { ..., allocator: allocator }
+}
+
+pub fn deinit(self: &MyType) {
+    const alloc = self.get_allocator()
+    alloc.free(...)
+}
+```
+
+**Usage:**
+
+```flang
+let sb = string_builder(null)   // uses global allocator
+defer sb.deinit()
+
+let sb2 = string_builder(&my_arena.allocator())  // uses arena
+defer sb2.deinit()
+```
+
+This pattern enables arena-based bulk deallocation: allocate many objects into an arena, free them all at once by resetting or dropping the arena.
+
 ---
 
 ## 6. Value Semantics

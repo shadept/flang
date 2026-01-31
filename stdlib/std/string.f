@@ -7,6 +7,11 @@
 import core.string
 import std.option
 
+
+pub struct OwnedString {
+
+}
+
 pub fn starts_with(s: String, prefix: String) bool {
     if (s.len < prefix.len) {
         return false

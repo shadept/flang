@@ -21,6 +21,10 @@ pub fn op_index(r: &Range($T), index: isize) T? {
     return r.start + index
 }
 
+// =============================================================================
+// Range Iterator
+// =============================================================================
+
 // Iterator state for ranges
 pub struct RangeIterator(T) {
     current: T

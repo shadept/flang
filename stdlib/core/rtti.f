@@ -1,8 +1,12 @@
 // Runtime type introspection functions
 // These are regular FLang functions, not compiler intrinsics!
 
-import core.string
 import core.slice
+import core.string
+
+// Generic alias for TypeInfo.
+// Allows couple of T to its TypeInfo.
+pub struct Type(T) {}
 
 pub struct TypeInfo {
     name: String
@@ -17,10 +21,8 @@ pub struct FieldInfo {
     type: &TypeInfo
 }
 
-struct Type(T) {}
-
-pub fn type_of(t: Type($T)) Type(T) {
-    return t
+pub fn type_of(t: Type($T)) TypeInfo {
+    return t // auto coersed to TypeInfo
 }
 
 pub fn size_of(t: Type($T)) usize {

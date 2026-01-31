@@ -1,252 +1,324 @@
-# FLang v2 EBNF Grammar
+# FLang v2 Formal Grammar
 
-This document defines the formal grammar for FLang v2 using Extended Backus-Naur Form (EBNF) notation.
+This document defines the formal grammar for FLang v2 using Extended Backus-Naur Form (EBNF) notation. This is the authoritative syntactic specification for self-hosting.
 
-## Notation Conventions
+## Notation
 
 - `::=` defines a production rule
-- `|` denotes alternatives (OR)
-- `?` postfix denotes optional (0 or 1 occurrence)
-- `*` postfix denotes repetition (0 or more occurrences)
-- `()` denotes grouping
-- `""` denotes literal tokens
+- `|` denotes alternatives
+- `?` optional (0 or 1)
+- `*` repetition (0 or more)
+- `+` repetition (1 or more)
+- `()` grouping
+- `""` literal tokens
+- `,?` shorthand for optional comma (comma-or-newline separation)
 
-## Complete Grammar
+## Module Structure
 
-```
-program ::= module
+```ebnf
+program         ::= module
 
-module ::= import_declaration* declaration* EOF
+module          ::= import* declaration* EOF
 
-import_declaration ::= "import" identifier ("." identifier)*
+import          ::= "import" path_segment ("." path_segment)*
 
-declaration ::= 
-    struct_declaration |
-    function_declaration |
-    foreign_function_declaration
+path_segment    ::= IDENTIFIER | "test"
 
-struct_declaration ::= "pub"? "struct" identifier generic_parameters? "{" struct_field (","? struct_field)* "}"
+declaration     ::=
+    struct_decl
+  | enum_decl
+  | function_decl
+  | foreign_decl
+  | test_decl
+  | const_decl
 
-generic_parameters ::= "(" identifier ("," identifier)* ")"
-
-struct_field ::= identifier ":" type
-
-function_declaration ::= "pub"? "fn" identifier "(" parameter_list? ")" (":" type)? block_expression
-
-foreign_function_declaration ::= "#" "foreign" "fn" identifier "(" parameter_list? ")" (":" type)?
-
-parameter_list ::= parameter ("," parameter)*
-parameter ::= identifier ":" type
-
-type ::= reference_type postfix_operator*
-
-reference_type ::= "&"? primary_type
-
-primary_type ::= 
-    named_type generic_arguments? |
-    array_type
-
-named_type ::= "$"? identifier
-
-generic_arguments ::= "[" type ("," type)* "]"
-
-array_type ::= "[" type ";" integer_literal "]"
-
-postfix_operator ::= 
-    nullable_operator |
-    slice_operator
-
-nullable_operator ::= "?"
-slice_operator ::= "[" "]"
-
-expression ::= binary_expression
-
-; Casts are parsed after postfix operators
-cast_expression ::= primary_expression ("as" type)*
-
-binary_expression ::= unary_expression (binary_operator unary_expression)*
-
-unary_expression ::= 
-    address_of_expression |
-    primary_expression
-
-address_of_expression ::= "&" primary_expression
-
-primary_expression ::= 
-    literal |
-    identifier_expression |
-    parenthesized_expression |
-    if_expression |
-    block_expression |
-    array_literal |
-    struct_construction |
-    call_expression
-
-cast_expression ::= primary_expression ("as" type)*
-
-literal ::= integer_literal | string_literal | "true" | "false"
-
-identifier_expression ::= identifier postfix_expression?
-
-postfix_expression ::= 
-    field_access |
-    dereference |
-    index_expression
-
-field_access ::= "." identifier
-dereference ::= ".*"
-index_expression ::= "[" expression "]"
-
-parenthesized_expression ::= "(" expression ")"
-
-if_expression ::= "if" "(" expression ")" expression ("else" expression)?
-
-block_expression ::= "{" statement* expression? "}"
-
-array_literal ::= 
-    "[]" |
-    "[" expression ";" integer_literal "]" |
-    "[" expression ("," expression)* ","? "]"
-
-struct_construction ::= identifier "{" struct_field_value ("," struct_field_value)* ","? "}"
-
-struct_field_value ::= identifier ":" expression
-
-call_expression ::= identifier "(" argument_list? ")"
-
-argument_list ::= expression ("," expression)*
-
-statement ::= 
-    variable_declaration |
-    return_statement |
-    break_statement |
-    continue_statement |
-    defer_statement |
-    for_loop |
-    expression_statement
-
-variable_declaration ::= "let" identifier (":" type)? ("=" expression)?
-
-return_statement ::= "return" expression?
-
-break_statement ::= "break"
-
-continue_statement ::= "continue"
-
-defer_statement ::= "defer" expression
-
-for_loop ::= "for" "(" identifier "in" expression ")" expression
-
-expression_statement ::= 
-    assignment_expression |
-    if_expression
-
-assignment_expression ::= identifier "=" expression
-
-binary_operator ::= 
-    arithmetic_operator |
-    comparison_operator |
-    range_operator
-
-arithmetic_operator ::= "+" | "-" | "*" | "/" | "%"
-
-comparison_operator ::= "==" | "!=" | "<" | "<=" | ">" | ">="
-
-range_operator ::= ".."
-
-assignment_operator ::= "="
-
-identifier ::= letter (letter | digit | "_")*
-letter ::= "A".."Z" | "a".."z"
-digit ::= "0".."9"
-integer_literal ::= digit+
-string_literal ::= '"' (character | escape_sequence)* '"'
-escape_sequence ::= "\" ("n" | "t" | "r" | "\" | '"' | "0")
-
-whitespace ::= (" " | "\t" | "\n" | "\r")+
-comment ::= "//" character* "\n"
+const_decl      ::= "pub"? "const" IDENTIFIER (":" type)? ("=" expression)?
 ```
 
-## Operator Precedence (Highest to Lowest)
+## Struct Declaration
 
-1. Primary expressions (literals, identifiers, parenthesized expressions)
-2. Function calls, indexing, field access, dereference (`.` `.*` `[]`)
-3. Unary operators (`&`)
-4. Multiplicative operators (`*` `/` `%`)
-5. Additive operators (`+` `-`)
-6. Range operator (`..`)
-7. Comparison operators (`==` `!=` `<` `<=` `>` `>=`)
-8. Assignment (`=`)
+```ebnf
+struct_decl     ::= "pub"? "struct" IDENTIFIER generic_params? "{" struct_fields "}"
 
-## Examples
+generic_params  ::= "(" IDENTIFIER ("," IDENTIFIER)* ")"
 
-### Function Declaration
-```
-pub fn add(a: i32, b: i32) i32 {
-    return a + b
-}
+struct_fields   ::= (struct_field ","?)*
+
+struct_field    ::= IDENTIFIER ":" type
 ```
 
-### Struct Declaration
-```
-struct Point {
-    x: i32,
-    y: i32
-}
+## Enum Declaration
+
+```ebnf
+enum_decl       ::= "pub"? "enum" IDENTIFIER generic_params? "{" enum_variants "}"
+
+enum_variants   ::= (enum_variant ","?)*
+
+enum_variant    ::= IDENTIFIER variant_payload? explicit_tag?
+
+variant_payload ::= "(" type ("," type)* ")"
+
+explicit_tag    ::= "=" "-"? INTEGER
 ```
 
-### Generic Function
-```
-pub fn make_list(element: $T) List[T] {
-    return List { data: element }
-}
+When any variant has an `explicit_tag`, the enum is a naked enum (C-style integers). Naked enums cannot have payloads.
+
+## Function Declaration
+
+```ebnf
+function_decl   ::= "pub"? "fn" IDENTIFIER "(" param_list? ")" return_type? block
+
+foreign_decl    ::= "#" "foreign" "fn" IDENTIFIER "(" param_list? ")" return_type?
+
+param_list      ::= param ("," param)*
+
+param           ::= IDENTIFIER ":" type
+
+return_type     ::= type
 ```
 
-### Array Types and Literals
-```
-let fixed: [i32; 5] = [1, 2, 3, 4, 5]
-let repeat: [i32; 10] = [0; 10]
-let slice: i32[] = &fixed
+Return type is written directly after `)` with no arrow or colon.
+
+## Test Declaration
+
+```ebnf
+test_decl       ::= "test" STRING block
 ```
 
-### Reference Types
-```
-let x: i32 = 42
-let ptr: &i32 = &x
-let value: i32 = ptr.*
-let nullable_ptr: &i32? = null
+## Statements
+
+```ebnf
+block           ::= "{" statement* trailing_expr? "}"
+
+trailing_expr   ::= expression
+
+statement       ::=
+    var_decl
+  | return_stmt
+  | break_stmt
+  | continue_stmt
+  | defer_stmt
+  | for_loop
+  | block
+  | expression_stmt
+
+var_decl        ::= ("let" | "const") IDENTIFIER (":" type)? ("=" expression)?
+
+return_stmt     ::= "return" expression?
+
+break_stmt      ::= "break"
+
+continue_stmt   ::= "continue"
+
+defer_stmt      ::= "defer" expression
+
+for_loop        ::= "for" "(" IDENTIFIER "in" expression ")" expression
+
+expression_stmt ::= expression
 ```
 
-### Control Flow
-```
-let result = if (condition) {
-    do_something()
-    42
-} else {
-    do_alternative()
-    0
-}
+A block's last expression (without an intervening statement keyword) becomes the block's value (trailing expression).
 
-for (item in collection) {
-    process(item)
-    if (should_break) break
-}
-```
+## Expressions
 
-### Defer Statement
-```
-let file = open_file("test.txt")
-defer close_file(file)
-// file will be closed when scope exits
+### Precedence (lowest to highest)
+
+```ebnf
+expression      ::= assignment | binary_expr
+
+assignment      ::= lvalue "=" expression
+
+lvalue          ::= IDENTIFIER | member_access | index_expr | deref_expr
+
+binary_expr     ::= unary_expr (binary_op unary_expr)*
 ```
 
-### Import Statement
-```
-import core.memory
-import std.collections.List
+Binary operators, from lowest to highest precedence:
 
-pub fn main() i32 {
-    let list = List[i32] {}
-    return 0
-}
+| Precedence | Operators | Associativity |
+|---|---|---|
+| 1 | `??` | right |
+| 2 | `or` | left |
+| 3 | `and` | left |
+| 4 | `==` `!=` | left |
+| 5 | `<` `>` `<=` `>=` | left |
+| 6 | `..` | left |
+| 7 | `+` `-` | left |
+| 8 | `*` `/` `%` | left |
+
+```ebnf
+binary_op       ::=
+    "??" | "or" | "and"
+  | "==" | "!=" | "<" | ">" | "<=" | ">="
+  | ".." | "+" | "-" | "*" | "/" | "%"
 ```
+
+### Unary and Primary
+
+```ebnf
+unary_expr      ::= ("&" | "-" | "!") primary_expr postfix* cast*
+                   | primary_expr postfix* cast* match_suffix?
+
+primary_expr    ::=
+    INTEGER
+  | STRING
+  | "true" | "false" | "null"
+  | IDENTIFIER (call_args | struct_body)?
+  | "." struct_body
+  | tuple_or_grouped
+  | if_expr
+  | block
+  | array_literal
+```
+
+### Postfix Operators
+
+```ebnf
+postfix         ::=
+    "." "*"                                         -- dereference
+  | "." IDENTIFIER call_args?                       -- field access or UFCS method call
+  | "." INTEGER                                     -- tuple field (t.0, t.1)
+  | "?." IDENTIFIER                                 -- null-propagation
+  | "[" expression "]"                              -- index
+
+cast            ::= "as" type
+
+match_suffix    ::= "match" "{" match_arm* "}"
+```
+
+### Match
+
+```ebnf
+match_arm       ::= pattern "=>" expression ","?
+
+pattern         ::=
+    "_"                                             -- wildcard
+  | "else"                                          -- default
+  | IDENTIFIER "." IDENTIFIER variant_patterns?     -- qualified variant
+  | IDENTIFIER variant_patterns?                    -- short variant or binding
+  | IDENTIFIER                                      -- variable binding (in sub-patterns)
+
+variant_patterns ::= "(" pattern ("," pattern)* ")"
+```
+
+In sub-patterns (inside variant payload), a bare identifier is a variable binding. At the top level of a match arm, a bare identifier is treated as an enum variant (resolved by the type checker).
+
+### Call and Construction
+
+```ebnf
+call_args       ::= "(" (expression ("," expression)*)? ")"
+
+struct_body     ::= "{" (field_init ","?)* "}"
+
+field_init      ::= IDENTIFIER "=" expression
+```
+
+### Tuple and Grouping
+
+```ebnf
+tuple_or_grouped ::=
+    "(" ")"                                         -- unit value
+  | "(" expression ")"                              -- grouped expression
+  | "(" expression "," ")"                          -- single-element tuple
+  | "(" expression ("," expression)+ ","? ")"       -- multi-element tuple
+```
+
+### If Expression
+
+```ebnf
+if_expr         ::= "if" "(" expression ")" expression ("else" expression)?
+```
+
+Parentheses around the condition are required. `else if` chains are nested `if_expr` in the else branch.
+
+### Array Literal
+
+```ebnf
+array_literal   ::=
+    "[" "]"                                         -- empty array
+  | "[" expression ";" INTEGER "]"                  -- repeat: [value; count]
+  | "[" expression ("," expression)* ","? "]"       -- element list
+```
+
+## Types
+
+```ebnf
+type            ::= prefix_type "?"*
+
+prefix_type     ::= "&" prefix_type | base_type "[]"*
+
+base_type       ::=
+    IDENTIFIER generic_args?                        -- named or generic type
+  | "$" IDENTIFIER                                  -- generic parameter binding
+  | "[" type ";" INTEGER "]"                        -- fixed-size array
+  | "fn" "(" fn_type_params? ")" type               -- function type
+  | tuple_type
+
+generic_args    ::= "(" type ("," type)* ")"
+
+fn_type_params  ::= fn_type_param ("," fn_type_param)*
+
+fn_type_param   ::= (IDENTIFIER ":")? type
+
+tuple_type      ::=
+    "(" ")"                                         -- unit type
+  | "(" type ")"                                    -- grouped (not a tuple)
+  | "(" type "," ")"                                -- single-element tuple
+  | "(" type ("," type)+ ","? ")"                   -- multi-element tuple
+```
+
+### Type Precedence
+
+Postfix operators bind as: `&` > `[]` > `?`
+
+| Written | Parsed as |
+|---|---|
+| `&u8?` | `(&u8)?` |
+| `&u8[]` | `&(u8[])` |
+| `&u8[]?` | `(&(u8[]))?` |
+
+## Lexical Grammar
+
+```ebnf
+IDENTIFIER      ::= LETTER (LETTER | DIGIT | "_")*
+LETTER          ::= "A".."Z" | "a".."z"
+DIGIT           ::= "0".."9"
+INTEGER         ::= DIGIT+
+STRING          ::= '"' (CHAR | ESCAPE)* '"'
+ESCAPE          ::= "\" ("n" | "t" | "r" | "\" | '"' | "0")
+
+COMMENT         ::= "//" CHAR* NEWLINE
+WHITESPACE      ::= (" " | "\t" | "\n" | "\r")+
+```
+
+Single-line comments only. No block comments.
+
+## Tokens
+
+### Keywords
+
+```
+pub  fn  struct  enum  let  const  if  else  for  in
+break  continue  return  defer  match  import  as  test
+and  or  true  false  null
+```
+
+### Symbols
+
+```
++  -  *  /  %  .  ..  &  ?  ??  ?.  =>  !
+==  !=  <  >  <=  >=
+(  )  {  }  [  ]  :  =  ;  #  ,  $  _
+```
+
+## Separator Rules
+
+- No semicolons as statement terminators
+- Struct fields: comma or newline
+- Enum variants: comma or newline
+- Match arms: comma or newline
+- Function parameters: comma required
+- Call arguments: comma required
+- Type arguments: comma required
+- Array elements: comma required (trailing comma optional)
+- Tuple elements: comma required (trailing comma optional)

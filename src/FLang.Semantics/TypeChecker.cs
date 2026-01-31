@@ -1025,6 +1025,18 @@ public class TypeChecker
                 expectedReturn.Name);
 
             foreach (var stmt in function.Body) CheckStatement(stmt);
+
+            // Implicit return: if the function is non-void and the last statement is
+            // an expression statement, treat it as a tail expression (like blocks do).
+            // Rewrite `expr` → `return expr` so return type checking and lowering work normally.
+            if (!expectedReturn.Equals(TypeRegistry.Void) && function.Body.Count > 0
+                && function.Body[^1] is ExpressionStatementNode tailExpr
+                && function.Body is List<StatementNode> bodyList)
+            {
+                var returnStmt = new ReturnStatementNode(tailExpr.Span, tailExpr.Expression);
+                bodyList[^1] = returnStmt;
+                CheckReturnStatement(returnStmt);
+            }
         }
         finally
         {
@@ -3052,19 +3064,21 @@ public class TypeChecker
                         break;
                     }
 
+                    // If context expects Range(T), propagate T to the bounds
+                    if (expectedType?.Prune() is StructType expectedRange
+                        && TypeRegistry.IsRange(expectedRange)
+                        && expectedRange.TypeArguments.Count == 1)
+                    {
+                        var expectedElem = expectedRange.TypeArguments[0];
+                        UnifyTypes(st, expectedElem, re.Start.Span);
+                        UnifyTypes(en, expectedElem, re.End.Span);
+                    }
+
                     // Unify start and end types so they agree
                     UnifyTypes(st, en, re.Span);
 
                     // Determine the element type for Range(T)
                     var elementType = st.Prune();
-
-                    // Coerce comptime_int to isize as default
-                    if (elementType is ComptimeInt)
-                    {
-                        elementType = TypeRegistry.ISize;
-                        UnifyTypes(st, TypeRegistry.ISize, re.Start.Span);
-                        UnifyTypes(en, TypeRegistry.ISize, re.End.Span);
-                    }
 
                     type = MakeRangeType(elementType, re.Span);
                     break;

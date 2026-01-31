@@ -17,7 +17,3 @@ pub fn op_eq(a: Option($T), b: Option(T)) bool {
     }
     return true
 }
-
-pub fn op_ne(a: Option($T), b: Option(T)) bool {
-    return !op_eq(a, b)
-}

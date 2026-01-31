@@ -15,6 +15,12 @@ public static class TypeRegistry
     private const string TypeInfoFqn = "core.rtti.TypeInfo";
     private const string FieldInfoFqn = "core.rtti.FieldInfo";
 
+    // Cache for well-known types to ensure reference equality
+    private static readonly Dictionary<TypeBase, StructType> _sliceStructCache = [];
+    private static readonly Dictionary<TypeBase, StructType> _optionStructCache = [];
+    private static readonly Dictionary<TypeBase, StructType> _rangeStructCache = [];
+    private static readonly Dictionary<TypeBase, StructType> _typeStructCache = [];
+
     /// <summary>
     /// The never type (bottom type) - represents computations that never return.
     /// </summary>
@@ -111,55 +117,24 @@ public static class TypeRegistry
     /// </summary>
     public static readonly StructType FieldInfoStruct;
 
-    /// <summary>
-    /// Type struct template for runtime type information (generic wrapper).
-    /// Has the same layout as TypeInfoStruct but carries a type parameter.
-    /// </summary>
-    public static readonly StructType TypeStructTemplate;
-
     static TypeRegistry()
     {
-        // Forward-declare TypeInfoStruct so FieldInfoStruct can reference it
-        TypeInfoStruct = new StructType(TypeInfoFqn, [], []);
-        var typeInfoPtr = new ReferenceType(TypeInfoStruct, PointerWidth.Bits64);
+        // Forward-declare FieldInfoStruct so TypeInfoStruct can reference it
+        FieldInfoStruct = new StructType(FieldInfoFqn, [], []);
+        TypeInfoStruct = new StructType(TypeInfoFqn, [], [
+            ("name", StringStruct),
+            ("size", U8),
+            ("align", U8),
+            ("fields", MakeSlice(FieldInfoStruct))
+        ]);
 
-        FieldInfoStruct = new StructType(FieldInfoFqn, [], [
+        // Now set the actual fields on FieldInfoStruct
+        FieldInfoStruct.SetFields([
             ("name", StringStruct),
             ("offset", USize),
-            ("type", typeInfoPtr)
-        ]);
-
-        var fieldsSlice = new StructType(SliceFqn, [FieldInfoStruct], [
-            ("ptr", new ReferenceType(FieldInfoStruct, PointerWidth.Bits64)),
-            ("len", USize)
-        ]);
-
-        // Now set the actual fields on TypeInfoStruct
-        TypeInfoStruct.SetFields([
-            ("name", StringStruct),
-            ("size", U8),
-            ("align", U8),
-            ("fields", fieldsSlice)
-        ]);
-
-        // TypeStructTemplate has the same layout as TypeInfoStruct
-        TypeStructTemplate = new StructType(TypeFqn, [], [
-            ("name", StringStruct),
-            ("size", U8),
-            ("align", U8),
-            ("fields", new StructType(SliceFqn, [FieldInfoStruct], [
-                ("ptr", new ReferenceType(FieldInfoStruct, PointerWidth.Bits64)),
-                ("len", USize)
-            ]))
+            ("type", MakeReference(TypeInfoStruct))
         ]);
     }
-
-
-    // Cache for well-known types to ensure reference equality
-    private static readonly Dictionary<TypeBase, StructType> _sliceStructCache = [];
-    private static readonly Dictionary<TypeBase, StructType> _optionStructCache = [];
-    private static readonly Dictionary<TypeBase, StructType> _rangeStructCache = [];
-    private static readonly Dictionary<TypeBase, StructType> _typeStructCache = [];
 
     /// <summary>
     /// Looks up a type by name. Returns null if not found.
@@ -219,25 +194,12 @@ public static class TypeRegistry
     }
 
     /// <summary>
-    /// Creates an Option&lt;T&gt; type with fully qualified name (Algorithm W style).
-    /// Results are cached to ensure reference equality for the same inner type.
+    /// Creates a Reference(T) type with fully qualified name (Algorithm W style).
+    /// Results are cached to ensure reference equality for the same element type.
     /// </summary>
-    public static StructType MakeOption(TypeBase innerType)
+    public static ReferenceType MakeReference(TypeBase elementType)
     {
-        var key = innerType;
-        if (_optionStructCache.TryGetValue(key, out var cached))
-            return cached;
-
-        var optionType = new StructType(OptionFqn, [innerType]);
-
-        // Add fields: has_value: bool, value: T
-        optionType.WithFields([
-            ("has_value", Bool),
-            ("value", innerType)
-        ]);
-
-        _optionStructCache[key] = optionType;
-        return optionType;
+        return new ReferenceType(elementType, PointerWidth.Bits64);
     }
 
     /// <summary>
@@ -250,16 +212,32 @@ public static class TypeRegistry
         if (_sliceStructCache.TryGetValue(key, out var cached))
             return cached;
 
-        var sliceType = new StructType(SliceFqn, [elementType]);
-
-        // Add fields: ptr: &T, len: usize
-        sliceType.WithFields([
+        var sliceType = new StructType(SliceFqn, [elementType], [
             ("ptr", new ReferenceType(elementType, PointerWidth.Bits64)),
-            ("len", USize)
+            ("len", USize),
         ]);
 
         _sliceStructCache[key] = sliceType;
         return sliceType;
+    }
+
+    /// <summary>
+    /// Creates an Option&lt;T&gt; type with fully qualified name (Algorithm W style).
+    /// Results are cached to ensure reference equality for the same inner type.
+    /// </summary>
+    public static StructType MakeOption(TypeBase innerType)
+    {
+        var key = innerType;
+        if (_optionStructCache.TryGetValue(key, out var cached))
+            return cached;
+
+        var optionType = new StructType(OptionFqn, [innerType], [
+            ("has_value", Bool),
+            ("value", innerType),
+        ]);
+
+        _optionStructCache[key] = optionType;
+        return optionType;
     }
 
     /// <summary>
@@ -302,17 +280,8 @@ public static class TypeRegistry
         if (_typeStructCache.TryGetValue(innerType, out var cached))
             return cached;
 
-        var fieldsSlice = new StructType(SliceFqn, [FieldInfoStruct], [
-            ("ptr", new ReferenceType(FieldInfoStruct, PointerWidth.Bits64)),
-            ("len", USize)
-        ]);
-        var typeStruct = new StructType(TypeFqn, [innerType], [
-            ("name", StringStruct),
-            ("size", U8),
-            ("align", U8),
-            ("fields", fieldsSlice)
-        ]);
-
+        // Basically an alias to TypeInfoStruct with a generic parameter
+        var typeStruct = new StructType(TypeFqn, [innerType], TypeInfoStruct.Fields);
         _typeStructCache[innerType] = typeStruct;
         return typeStruct;
     }

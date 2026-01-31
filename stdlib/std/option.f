@@ -18,7 +18,7 @@ pub fn expect(self: Option($T), msg: String) T {
     }
     panic(msg)
     const fake: T // zero init
-    fake
+    return fake
 }
 
 pub fn unwrap_or(self: Option($T), fallback: T) T {

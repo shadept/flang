@@ -534,14 +534,16 @@ public class CCodeGenerator
     /// </summary>
     private string FormatGlobalReference(GlobalValue gv, TypeBase? targetType)
     {
-        // GlobalValue's Type is ReferenceType (pointer to initializer type).
-        // In C, the global is declared as the struct itself, so &name gives us the pointer.
-        var expr = $"&{gv.Name}";
+        // For array globals, the C declaration is `T name[N]`, so the name itself
+        // decays to a pointer to the first element — no & needed.
+        // Using & would give a pointer-to-array type mismatch.
+        var expr = gv.Initializer is ArrayConstantValue ? gv.Name : $"&{gv.Name}";
 
-        // If the target type is a reference to a different type than the global's initializer,
-        // emit a cast (e.g., (uint8_t*)&__global_inner_state)
-        if (targetType is ReferenceType refType && gv.Initializer.Type != null &&
-            !refType.InnerType.Equals(gv.Initializer.Type))
+        // Globals are emitted as `static const`, so &name yields a const pointer.
+        // Cast to the target pointer type to strip const and handle type mismatches
+        // (e.g., (uint8_t*)&__global_inner_state, (AllocatorVTable*)&vtable).
+        // Skip for array references — array name already decays to the correct pointer.
+        if (targetType is ReferenceType rt && rt.InnerType is not ArrayType)
         {
             var castType = TypeToCType(targetType);
             return $"({castType}){expr}";
@@ -1266,7 +1268,7 @@ public class CCodeGenerator
 
             var paramType = TypeToCType(p.Type);
             if (p.Type is StructType)
-                paramType += "*";
+                paramType = "const " + paramType + "*";
             return $"{paramType} {EscapeCIdentifier(p.Name)}";
         }));
     }
@@ -1279,8 +1281,10 @@ public class CCodeGenerator
 
             // Handle GlobalValue
             // If it's a struct constant (like String literal), take its address
-            // since GlobalValue type is &T (pointer) but C emits it as T (struct)
-            GlobalValue global when global.Initializer is StructConstantValue => $"&{SanitizeCIdentifier(global.Name)}",
+            // since GlobalValue type is &T (pointer) but C emits it as T (struct).
+            // Cast to non-const pointer since globals are emitted as static const.
+            GlobalValue global when global.Initializer is StructConstantValue scv
+                => $"({TypeToCType(scv.Type)}*)&{SanitizeCIdentifier(global.Name)}",
 
             GlobalValue global => SanitizeCIdentifier(global.Name),
 
@@ -1302,7 +1306,7 @@ public class CCodeGenerator
         // Get the function type to determine parameter types for mangling
         if (funcRef.Type is FunctionType ft)
         {
-            return NameMangler.GenericFunction(funcRef.FunctionName, ft.ParameterTypes.ToList());
+            return NameMangler.GenericFunction(funcRef.FunctionName, ft.ParameterTypes);
         }
         return SanitizeCIdentifier(funcRef.FunctionName);
     }

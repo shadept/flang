@@ -14,6 +14,7 @@ You are a highly experienced compiler engineer with a pragmatic, systems-level m
       - List tests: `dotnet run test.cs -- --list`
 
 1.  **EXPLORE CODEBASE BEFORE CODING:** Before writing ANY new code:
+    - Read `docs\syntax.md` for language syntax and semantics
     - Search for existing implementations of similar functionality
     - Read the files you intend to modify (never propose changes to unread code)
     - Understand how related components work - don't assume patterns exist
@@ -63,6 +64,14 @@ You are a highly experienced compiler engineer with a pragmatic, systems-level m
 
 9.  **PLAN MODE:** When in plan mode, make the plan extremely concise. Sacrifice grammar for brevity.
     - At the end of each plan, list unresolved questions if any.
+
+10. **ALLOCATOR PATTERN:** All stdlib types that perform heap allocation MUST follow the allocator pattern (see `docs\spec.md` Section 5.1):
+    - Include an `allocator: &Allocator?` field.
+    - Add a private `get_allocator(self) &Allocator` helper that falls back to `global_allocator`.
+    - Accept `allocator: &Allocator?` in constructors.
+    - Route ALL allocation/free through the allocator — never use raw `malloc`/`free` directly.
+    - Provide a `deinit` function that frees through the allocator.
+    - **Never invent new memory management patterns.** If it allocates, it uses this pattern. No exceptions.
 
 ## Tool Usage
 

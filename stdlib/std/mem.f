@@ -5,6 +5,9 @@
 // Returns null pointer if allocation fails
 #foreign fn malloc(size: usize) &u8?
 
+// Reallocates the given area of memory
+#foreign fn realloc(ptr: &u8?, size: usize) &u8?
+
 // Free memory allocated by malloc
 #foreign fn free(ptr: &u8?)
 

@@ -625,7 +625,7 @@ public class StructType : TypeBase
     private static string GetSimpleName(string fqn)
     {
         var lastDot = fqn.LastIndexOf('.');
-        return lastDot >= 0 ? fqn.Substring(lastDot + 1) : fqn;
+        return lastDot >= 0 ? fqn[(lastDot + 1)..] : fqn;
     }
 
     /// <summary>

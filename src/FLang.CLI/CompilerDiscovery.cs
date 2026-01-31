@@ -22,7 +22,7 @@ public static class CompilerDiscovery
             var (clPath, clEnv) = FindClExeWithEnvironment();
             environment = clEnv;
 
-            var msvcArgs = new List<string> { "/nologo", "/ZI" };
+            var msvcArgs = new List<string> { "/nologo", "/ZI", "/WX" };
             if (releaseBuild) msvcArgs.Add("/O2");
             msvcArgs.Add($"/Fe\"{outputFilePath}\"");
             msvcArgs.Add($"\"{cFilePath}\"");
@@ -30,7 +30,7 @@ public static class CompilerDiscovery
         }
         else
         {
-            var unixArgs = new List<string>();
+            var unixArgs = new List<string> { "-Werror" };
             if (releaseBuild) unixArgs.Add("-O2");
             unixArgs.Add($"-g -o \"{outputFilePath}\"");
             unixArgs.Add($"\"{cFilePath}\"");

@@ -11,6 +11,20 @@ pub struct List(T) {
     allocator: &Allocator?
 }
 
+pub fn list_with_capacity(capacity: usize, allocator: &Allocator?) List(T) {
+    const elem_size: usize = size_of(T)
+    const elem_align: usize = align_of(T)
+    const bytes: usize = capacity * elem_size
+    const buf = allocator.alloc(bytes, elem_align).expect("list_with_capacity: allocation failed")
+
+    return List {
+        ptr: buf.ptr,
+        len: 0,
+        cap: capacity,
+        allocator: allocator,
+    }
+}
+
 fn get_allocator(self: List($T)) &Allocator {
     return self.allocator ?? &global_allocator
 }

@@ -24,7 +24,7 @@ pub fn op_eq(a: String, b: String) bool {
         return false
     }
 
-    const len = min(a.len, b.len)
+    const len = if (a.len < b.len) a.len else b.len
     for (i in 0..len) {
         let idx: usize = i as usize
         let ca: u8? = a[idx]

@@ -49,3 +49,24 @@ pub fn next(self: &MapIter($I, $T, $U)) U? {
 pub fn map(it: $I, f: fn($T) $U) MapIter(I, T, U) {
     return .{ it = it, f = f }
 }
+
+
+// =============================================================================
+// Reduce
+// =============================================================================
+
+pub fn reduce(it: $I, init: $A, f: fn(A, $T) A) A {
+    let acc = init
+    for (item in it) {
+        acc = f(acc, item)
+    }
+    return acc
+}
+
+pub fn reduce(it: $I, f: fn($A, $T) A) A? {
+    const first = it.next()
+    if (!first.has_value) {
+         return null
+    }
+    return it.reduce(first, f)
+}

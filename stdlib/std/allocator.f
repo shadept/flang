@@ -1,15 +1,19 @@
 // Generic allocator abstraction with vtable-based polymorphism.
 
-import core.mem
 import core.panic
 import core.rtti
 
+import std.mem
 import std.option
+
+// =============================================================================
+// Allocator - interface for memory management
+// =============================================================================
 
 // Function type definitions for the allocator vtable.
 pub struct AllocatorVTable {
     alloc: fn(&u8, size: usize, alignment: usize) u8[]?
-    resize: fn(&u8, memory: u8[], new_size: usize) u8[]?
+    realloc: fn(&u8, memory: u8[], new_size: usize) u8[]?
     free: fn(&u8, memory: u8[]) void
 }
 
@@ -27,11 +31,11 @@ pub fn alloc(allocator: Allocator, size: usize, alignment: usize) u8[]? {
     return allocator.vtable.alloc(allocator.impl, size, alignment)
 }
 
-// Resize an existing allocation.
+// Reallocate an existing allocation to a new size.
 // Returns new pointer or null on failure.
-// Some allocators may not support resize and return null.
-pub fn resize(allocator: Allocator, memory: u8[], new_size: usize) u8[]? {
-    return allocator.vtable.resize(allocator.impl, memory, new_size)
+// Some allocators may not support realloc and return null.
+pub fn realloc(allocator: Allocator, memory: u8[], new_size: usize) u8[]? {
+    return allocator.vtable.realloc(allocator.impl, memory, new_size)
 }
 
 // Free memory previously allocated by this allocator.
@@ -72,30 +76,13 @@ fn global_alloc(impl: &u8, size: usize, alignment: usize) u8[]? {
     return slice_from_raw_parts(ptr.value, size)
 }
 
-fn global_resize(impl: &u8, memory: u8[], new_size: usize) u8[]? {
-    // TODO import realloc in core.mem and it that instead
-    // Simple resize: allocate new, copy, free old.
-    // Could use realloc if available, but for simplicity we do manual copy.
-    if (memory.len == new_size) {
-        return memory
-    }
-
-    // Regardless of exit path, free the old memory
-    defer free(memory.ptr)
-
-    const new_ptr = malloc(new_size)
-    if (new_ptr.is_none()) {
+fn global_realloc(impl: &u8, memory: u8[], new_size: usize) u8[]? {
+    const ptr = realloc(memory.ptr, new_size)
+    if (ptr.is_none()) {
         return null
     }
 
-    const new_memory = slice_from_raw_parts(new_ptr.value, new_size)
-    // Copy min(old_size, new_size) bytes
-    const copy_size = if (memory.len < new_memory.len) memory.len else new_memory.len
-    if (copy_size > 0) {
-        memcpy(new_memory.ptr, memory.ptr, copy_size)
-    }
-
-    return new_memory
+    return slice_from_raw_parts(ptr.value, new_size)
 }
 
 fn global_free(impl: &u8, memory: u8[]) {
@@ -105,7 +92,7 @@ fn global_free(impl: &u8, memory: u8[]) {
 // VTable instance for GlobalAllocator
 const global_allocator_vtable = AllocatorVTable {
     alloc = global_alloc,
-    resize = global_resize,
+    realloc = global_realloc,
     free = global_free
 }
 
@@ -129,9 +116,11 @@ pub struct FixedBufferAllocatorState {
 
 // Align a value up to the given alignment.
 // alignment must be a power of 2.
+// TODO: Needs bitwise AND operator to implement properly.
+//   Correct implementation: return (value + mask) & (0 - alignment)
 fn align_up(value: usize, alignment: usize) usize {
     let mask = alignment - 1
-    return (value + mask) & (0 - alignment)
+    return value + mask - (value + mask) % alignment
 }
 
 fn fixed_alloc(impl: &u8, size: usize, alignment: usize) u8[]? {
@@ -153,8 +142,8 @@ fn fixed_alloc(impl: &u8, size: usize, alignment: usize) u8[]? {
     return new_memory
 }
 
-fn fixed_resize(impl: &u8, memory: u8[], new_size: usize) u8[]? {
-    // FixedBufferAllocator does not support resize - return null
+fn fixed_realloc(impl: &u8, memory: u8[], new_size: usize) u8[]? {
+    // FixedBufferAllocator does not support realloc - return null
     return null
 }
 
@@ -166,7 +155,7 @@ fn fixed_free(impl: &u8, memory: u8[]) {
 // VTable instance for FixedBufferAllocator
 const fixed_buffer_allocator_vtable = AllocatorVTable {
     alloc = fixed_alloc,
-    resize = fixed_resize,
+    realloc = fixed_realloc,
     free = fixed_free
 }
 
