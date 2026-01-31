@@ -414,7 +414,8 @@ public class AstLowering
                 // Only expand fields of user-defined structs, not RTTI internal types
                 if (type is StructType structType
                     && !TypeRegistry.IsType(structType)
-                    && !TypeRegistry.IsField(structType)
+                    && !TypeRegistry.IsTypeInfo(structType)
+                    && !TypeRegistry.IsFieldInfo(structType)
                     && !TypeRegistry.IsString(structType))
                 {
                     foreach (var (_, fieldType) in structType.Fields)
@@ -439,7 +440,7 @@ public class AstLowering
 
         // Create the global type table first (forward reference for field type_info pointers)
         // We'll set the initializer after building all elements
-        var fieldsSliceType = TypeRegistry.TypeStructTemplate.GetFieldType("fields") as StructType;
+        var fieldsSliceType = TypeRegistry.TypeInfoStruct.GetFieldType("fields") as StructType;
 
         var typeStructElements = new List<Value>();
 
@@ -468,7 +469,8 @@ public class AstLowering
             // Build fields slice for this type
             Value fieldsSlice;
             if (type is StructType structType && structType.Fields.Count > 0
-                && !TypeRegistry.IsType(structType))
+                && !TypeRegistry.IsType(structType)
+                && !TypeRegistry.IsTypeInfo(structType))
             {
                 var fieldElements = new List<Value>();
                 foreach (var (fieldName, fieldType) in structType.Fields)
@@ -488,18 +490,18 @@ public class AstLowering
                     // Field offset
                     var offset = structType.GetFieldOffset(fieldName);
 
-                    // type_info: NULL for now, can be resolved at runtime via type table index
-                    var fieldStruct = new StructConstantValue(TypeRegistry.FieldStruct, new Dictionary<string, Value>
+                    // type: NULL for now, can be resolved at runtime via type table index
+                    var fieldStruct = new StructConstantValue(TypeRegistry.FieldInfoStruct, new Dictionary<string, Value>
                     {
                         ["name"] = fnameString,
                         ["offset"] = new ConstantValue(offset) { Type = TypeRegistry.USize },
-                        ["type_info"] = new ConstantValue(0) { Type = new ReferenceType(TypeRegistry.U8, PointerWidth.Bits64) }
+                        ["type"] = new ConstantValue(0) { Type = new ReferenceType(TypeRegistry.TypeInfoStruct, PointerWidth.Bits64) }
                     });
                     fieldElements.Add(fieldStruct);
                 }
 
                 // Create global array for fields
-                var fieldArrayType = new ArrayType(TypeRegistry.FieldStruct, fieldElements.Count);
+                var fieldArrayType = new ArrayType(TypeRegistry.FieldInfoStruct, fieldElements.Count);
                 var fieldArray = new ArrayConstantValue(fieldArrayType, fieldElements.ToArray());
                 var fieldGlobal = new GlobalValue($"__flang__type_{i}_fields", fieldArray);
                 _currentFunction.Globals.Add(fieldGlobal);
@@ -515,12 +517,12 @@ public class AstLowering
                 // No fields - empty slice
                 fieldsSlice = new StructConstantValue(fieldsSliceType!, new Dictionary<string, Value>
                 {
-                    ["ptr"] = new ConstantValue(0) { Type = new ReferenceType(TypeRegistry.FieldStruct, PointerWidth.Bits64) },
+                    ["ptr"] = new ConstantValue(0) { Type = new ReferenceType(TypeRegistry.FieldInfoStruct, PointerWidth.Bits64) },
                     ["len"] = new ConstantValue(0) { Type = TypeRegistry.USize }
                 });
             }
 
-            var typeStruct = new StructConstantValue(TypeRegistry.TypeStructTemplate, new Dictionary<string, Value>
+            var typeStruct = new StructConstantValue(TypeRegistry.TypeInfoStruct, new Dictionary<string, Value>
             {
                 ["name"] = nameString,
                 ["size"] = new ConstantValue(type.Size) { Type = TypeRegistry.U8 },
@@ -532,7 +534,7 @@ public class AstLowering
         }
 
         // Create the global type table array
-        var arrayType = new ArrayType(TypeRegistry.TypeStructTemplate, types.Count);
+        var arrayType = new ArrayType(TypeRegistry.TypeInfoStruct, types.Count);
         var typeTableArray = new ArrayConstantValue(arrayType, typeStructElements.ToArray());
         _typeTableGlobal = new GlobalValue("__flang__type_table", typeTableArray);
         _currentFunction.Globals.Add(_typeTableGlobal);
@@ -548,8 +550,8 @@ public class AstLowering
             throw new InvalidOperationException($"Type {referencedType.Name} was not collected during type checking");
         }
 
-        // Calculate byte offset: index * sizeof(struct Type)
-        var typeSize = TypeRegistry.TypeStructTemplate.Size;
+        // Calculate byte offset: index * sizeof(TypeInfo)
+        var typeSize = TypeRegistry.TypeInfoStruct.Size;
         var byteOffset = new ConstantValue(index * typeSize) { Type = TypeRegistry.USize };
 
         // Get pointer to the element: &__flang__type_table[index]

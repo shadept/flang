@@ -12,7 +12,8 @@ public static class TypeRegistry
     private const string SliceFqn = "core.slice.Slice";
     private const string StringFqn = "core.string.String";
     private const string TypeFqn = "core.rtti.Type";
-    private const string FieldFqn = "core.rtti.Field";
+    private const string TypeInfoFqn = "core.rtti.TypeInfo";
+    private const string FieldInfoFqn = "core.rtti.FieldInfo";
 
     /// <summary>
     /// The never type (bottom type) - represents computations that never return.
@@ -98,27 +99,60 @@ public static class TypeRegistry
     ]);
 
     /// <summary>
-    /// Field struct for runtime type information - describes a single field of a struct.
-    /// Layout: name (String), offset (usize), type_info (&u8 - pointer to Type entry).
+    /// Non-generic TypeInfo struct for the type table.
+    /// This is the actual data layout emitted by the compiler.
+    /// Type(T) has the same layout but is generic (used for type literal syntax).
     /// </summary>
-    public static readonly StructType FieldStruct = new(FieldFqn, [], [
-        ("name", StringStruct),
-        ("offset", USize),
-        ("type_info", new ReferenceType(U8, PointerWidth.Bits64))
-    ]);
+    public static readonly StructType TypeInfoStruct;
 
     /// <summary>
-    /// Type struct template for runtime type information.
+    /// FieldInfo struct for runtime type information - describes a single field of a struct.
+    /// Layout: name (String), offset (usize), type (&TypeInfo).
     /// </summary>
-    public static readonly StructType TypeStructTemplate = new(TypeFqn, [], [
-        ("name", StringStruct),
-        ("size", U8),
-        ("align", U8),
-        ("fields", new StructType(SliceFqn, [FieldStruct], [
-            ("ptr", new ReferenceType(FieldStruct, PointerWidth.Bits64)),
+    public static readonly StructType FieldInfoStruct;
+
+    /// <summary>
+    /// Type struct template for runtime type information (generic wrapper).
+    /// Has the same layout as TypeInfoStruct but carries a type parameter.
+    /// </summary>
+    public static readonly StructType TypeStructTemplate;
+
+    static TypeRegistry()
+    {
+        // Forward-declare TypeInfoStruct so FieldInfoStruct can reference it
+        TypeInfoStruct = new StructType(TypeInfoFqn, [], []);
+        var typeInfoPtr = new ReferenceType(TypeInfoStruct, PointerWidth.Bits64);
+
+        FieldInfoStruct = new StructType(FieldInfoFqn, [], [
+            ("name", StringStruct),
+            ("offset", USize),
+            ("type", typeInfoPtr)
+        ]);
+
+        var fieldsSlice = new StructType(SliceFqn, [FieldInfoStruct], [
+            ("ptr", new ReferenceType(FieldInfoStruct, PointerWidth.Bits64)),
             ("len", USize)
-        ]))
-    ]);
+        ]);
+
+        // Now set the actual fields on TypeInfoStruct
+        TypeInfoStruct.SetFields([
+            ("name", StringStruct),
+            ("size", U8),
+            ("align", U8),
+            ("fields", fieldsSlice)
+        ]);
+
+        // TypeStructTemplate has the same layout as TypeInfoStruct
+        TypeStructTemplate = new StructType(TypeFqn, [], [
+            ("name", StringStruct),
+            ("size", U8),
+            ("align", U8),
+            ("fields", new StructType(SliceFqn, [FieldInfoStruct], [
+                ("ptr", new ReferenceType(FieldInfoStruct, PointerWidth.Bits64)),
+                ("len", USize)
+            ]))
+        ]);
+    }
 
 
     // Cache for well-known types to ensure reference equality
@@ -155,8 +189,6 @@ public static class TypeRegistry
     /// <summary>
     /// Returns true if the given type is an integer type (including comptime_int).
     /// </summary>
-    /// <param name="type">The type to check.</param>
-    /// <returns>True if the type is an integer type; otherwise, false.</returns>
     public static bool IsIntegerType(TypeBase type)
     {
         return type is ComptimeInt || (type is PrimitiveType pt && IsIntegerType(pt.Name));
@@ -165,8 +197,6 @@ public static class TypeRegistry
     /// <summary>
     /// Returns true if the given type name represents an integer type.
     /// </summary>
-    /// <param name="typeName">The type name to check.</param>
-    /// <returns>True if the type name is an integer type; otherwise, false.</returns>
     public static bool IsIntegerType(string typeName)
     {
         return typeName is "i8" or "i16" or "i32" or "i64" or "isize" or "u8" or "u16" or "u32" or "u64" or "usize";
@@ -175,8 +205,6 @@ public static class TypeRegistry
     /// <summary>
     /// Returns true if the given type is a numeric type (int or float).
     /// </summary>
-    /// <param name="type">The type to check.</param>
-    /// <returns>True if the type is numeric; otherwise, false.</returns>
     public static bool IsNumericType(TypeBase type)
     {
         return IsIntegerType(type) || type is ComptimeFloat;
@@ -185,8 +213,6 @@ public static class TypeRegistry
     /// <summary>
     /// Returns true if the given type is a compile-time type that needs resolution.
     /// </summary>
-    /// <param name="type">The type to check.</param>
-    /// <returns>True if the type is a compile-time type; otherwise, false.</returns>
     public static bool IsComptimeType(TypeBase type)
     {
         return type is Core.ComptimeInt or Core.ComptimeFloat;
@@ -196,8 +222,6 @@ public static class TypeRegistry
     /// Creates an Option&lt;T&gt; type with fully qualified name (Algorithm W style).
     /// Results are cached to ensure reference equality for the same inner type.
     /// </summary>
-    /// <param name="innerType">The type wrapped by the Option.</param>
-    /// <returns>A StructType representing Option&lt;T&gt;.</returns>
     public static StructType MakeOption(TypeBase innerType)
     {
         var key = innerType;
@@ -220,8 +244,6 @@ public static class TypeRegistry
     /// Creates a Slice(T) type with fully qualified name (Algorithm W style).
     /// Results are cached to ensure reference equality for the same element type.
     /// </summary>
-    /// <param name="elementType">The type of elements in the slice.</param>
-    /// <returns>A StructType representing Slice(T).</returns>
     public static StructType MakeSlice(TypeBase elementType)
     {
         var key = elementType;
@@ -244,8 +266,6 @@ public static class TypeRegistry
     /// Creates a Range(T) type with fully qualified name.
     /// Results are cached to ensure reference equality for the same element type.
     /// </summary>
-    /// <param name="elementType">The type of range bounds.</param>
-    /// <returns>A StructType representing Range(T).</returns>
     public static StructType MakeRange(TypeBase elementType)
     {
         var key = elementType;
@@ -267,26 +287,23 @@ public static class TypeRegistry
     /// Creates a String type (equivalent to Slice&lt;u8&gt;).
     /// Returns the canonical String struct instance.
     /// </summary>
-    /// <returns>A StructType representing the String type.</returns>
     public static StructType MakeString()
     {
-        return StringStruct; // Use existing canonical String struct
+        return StringStruct;
     }
 
     /// <summary>
     /// Gets or creates a Type(T) struct instance for the given type parameter.
-    /// All instances have the same layout, differing only in the type parameter.
+    /// All instances have the same layout as TypeInfo, differing only in the type parameter.
     /// Results are cached to ensure reference equality.
     /// </summary>
-    /// <param name="innerType">The type represented by this Type instance.</param>
-    /// <returns>A StructType representing Type&lt;T&gt;.</returns>
     public static StructType MakeType(TypeBase innerType)
     {
         if (_typeStructCache.TryGetValue(innerType, out var cached))
             return cached;
 
-        var fieldsSlice = new StructType(SliceFqn, [FieldStruct], [
-            ("ptr", new ReferenceType(FieldStruct, PointerWidth.Bits64)),
+        var fieldsSlice = new StructType(SliceFqn, [FieldInfoStruct], [
+            ("ptr", new ReferenceType(FieldInfoStruct, PointerWidth.Bits64)),
             ("len", USize)
         ]);
         var typeStruct = new StructType(TypeFqn, [innerType], [
@@ -303,8 +320,6 @@ public static class TypeRegistry
     /// <summary>
     /// Checks if a TypeBase is Option(T) (convenience overload).
     /// </summary>
-    /// <param name="type">The type to check.</param>
-    /// <returns>True if the type is Option(T) otherwise, false.</returns>
     public static bool IsOption(TypeBase type)
     {
         return type is StructType st && IsOption(st);
@@ -313,8 +328,6 @@ public static class TypeRegistry
     /// <summary>
     /// Checks if a StructType is Option(T) using fully qualified name.
     /// </summary>
-    /// <param name="st">The struct type to check.</param>
-    /// <returns>True if the struct is Option(T) otherwise, false.</returns>
     public static bool IsOption(StructType st)
     {
         return st.StructName == OptionFqn;
@@ -323,8 +336,6 @@ public static class TypeRegistry
     /// <summary>
     /// Checks if a TypeBase is Slice(T) (convenience overload).
     /// </summary>
-    /// <param name="type">The type to check.</param>
-    /// <returns>True if the type is Slice(T); otherwise, false.</returns>
     public static bool IsSlice(TypeBase type)
     {
         return type is StructType st && IsSlice(st);
@@ -333,8 +344,6 @@ public static class TypeRegistry
     /// <summary>
     /// Checks if a StructType is Slice(T) using fully qualified name.
     /// </summary>
-    /// <param name="st">The struct type to check.</param>
-    /// <returns>True if the struct is Slice(T); otherwise, false.</returns>
     public static bool IsSlice(StructType st)
     {
         return st.StructName == SliceFqn;
@@ -343,8 +352,6 @@ public static class TypeRegistry
     /// <summary>
     /// Checks if a TypeBase is String (convenience overload).
     /// </summary>
-    /// <param name="type">The type to check.</param>
-    /// <returns>True if the type is String; otherwise, false.</returns>
     public static bool IsString(TypeBase type)
     {
         return type is StructType st && IsString(st);
@@ -353,8 +360,6 @@ public static class TypeRegistry
     /// <summary>
     /// Checks if a StructType is String using fully qualified name.
     /// </summary>
-    /// <param name="st">The struct type to check.</param>
-    /// <returns>True if the struct is String; otherwise, false.</returns>
     public static bool IsString(StructType st)
     {
         return st.StructName == StringFqn;
@@ -363,8 +368,6 @@ public static class TypeRegistry
     /// <summary>
     /// Checks if a TypeBase is Range (convenience overload).
     /// </summary>
-    /// <param name="type">The type to check.</param>
-    /// <returns>True if the type is Range; otherwise, false.</returns>
     public static bool IsRange(TypeBase type)
     {
         return type is StructType st && IsRange(st);
@@ -373,44 +376,54 @@ public static class TypeRegistry
     /// <summary>
     /// Checks if a StructType is Range using fully qualified name.
     /// </summary>
-    /// <param name="st">The struct type to check.</param>
-    /// <returns>True if the struct is Range; otherwise, false.</returns>
     public static bool IsRange(StructType st)
     {
         return st.StructName == RangeFqn;
     }
 
     /// <summary>
-    /// Checks if a TypeBase is Field (convenience overload).
+    /// Checks if a TypeBase is FieldInfo.
     /// </summary>
-    public static bool IsField(TypeBase type)
+    public static bool IsFieldInfo(TypeBase type)
     {
-        return type is StructType st && IsField(st);
+        return type is StructType st && IsFieldInfo(st);
     }
 
     /// <summary>
-    /// Checks if a StructType is Field using fully qualified name.
+    /// Checks if a StructType is FieldInfo using fully qualified name.
     /// </summary>
-    public static bool IsField(StructType st)
+    public static bool IsFieldInfo(StructType st)
     {
-        return st.StructName == FieldFqn;
+        return st.StructName == FieldInfoFqn;
     }
 
     /// <summary>
-    /// Checks if a TypeBase is Type (convenience overload).
+    /// Checks if a TypeBase is TypeInfo.
     /// </summary>
-    /// <param name="type">The type to check.</param>
-    /// <returns>True if the type is Type; otherwise, false.</returns>
+    public static bool IsTypeInfo(TypeBase type)
+    {
+        return type is StructType st && IsTypeInfo(st);
+    }
+
+    /// <summary>
+    /// Checks if a StructType is TypeInfo using fully qualified name.
+    /// </summary>
+    public static bool IsTypeInfo(StructType st)
+    {
+        return st.StructName == TypeInfoFqn;
+    }
+
+    /// <summary>
+    /// Checks if a TypeBase is Type(T) (convenience overload).
+    /// </summary>
     public static bool IsType(TypeBase type)
     {
         return type is StructType st && IsType(st);
     }
 
     /// <summary>
-    /// Checks if a StructType is Type using fully qualified name.
+    /// Checks if a StructType is Type(T) using fully qualified name.
     /// </summary>
-    /// <param name="st">The struct type to check.</param>
-    /// <returns>True if the struct is Type; otherwise, false.</returns>
     public static bool IsType(StructType st)
     {
         return st.StructName == TypeFqn;

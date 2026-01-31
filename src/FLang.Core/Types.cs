@@ -554,13 +554,14 @@ public class StructType : TypeBase
     /// </summary>
     /// <param name="type">The type to check.</param>
     /// <returns>True if the type contains generic parameters; otherwise, false.</returns>
-    private static bool ContainsGeneric(TypeBase type) => type switch
+    private static bool ContainsGeneric(TypeBase type, HashSet<StructType>? visited = null) => type switch
     {
         GenericParameterType => true,
         TypeVar => true,
-        ReferenceType rt => ContainsGeneric(rt.InnerType),
-        ArrayType at => ContainsGeneric(at.ElementType),
-        StructType st => st.Fields.Any(f => ContainsGeneric(f.Type)) || st.TypeArguments.Any(t => ContainsGeneric(t)),
+        ReferenceType rt => ContainsGeneric(rt.InnerType, visited),
+        ArrayType at => ContainsGeneric(at.ElementType, visited),
+        StructType st => (visited ??= []).Add(st) &&
+            (st.Fields.Any(f => ContainsGeneric(f.Type, visited)) || st.TypeArguments.Any(t => ContainsGeneric(t, visited))),
         GenericType => true,
         _ => false
     };

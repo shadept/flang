@@ -4,17 +4,24 @@
 import core.string
 import core.slice
 
-pub struct Field {
+pub struct TypeInfo {
+    name: String
+    size: u8
+    align: u8
+    fields: FieldInfo[]
+}
+
+pub struct FieldInfo {
     name: String
     offset: usize
-    type_info: &u8  // pointer to Type entry in the type table
+    type: &TypeInfo
 }
 
 struct Type(T) {
     name: String
     size: u8
     align: u8
-    fields: Slice(Field)
+    fields: FieldInfo[]
 }
 
 pub fn type_of(t: Type($T)) Type(T) {

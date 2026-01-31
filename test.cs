@@ -281,7 +281,7 @@ void RenderProgressBar(int current, int total, string currentTest)
 void ClearProgressLine()
 {
     if (!IsInteractive()) return;
-    Console.Write("\r" + new string(' ', Math.Min(GetConsoleWidth() - 1, 120)) + "\r");
+    Console.Write("\r" + new string(' ', Math.Max(Math.Min(GetConsoleWidth() - 1, 120), 0)) + "\r");
 }
 
 // ============================================================================

@@ -105,7 +105,7 @@ public class CCodeGenerator
         // A struct depends on another if it contains a field of that struct type (not pointer/reference)
         var structs = _structDefinitions.Values
             // TODO remove String restriction and use String from corelib
-            .Where(s => !TypeRegistry.IsString(s) && !TypeRegistry.IsType(s) && !TypeRegistry.IsField(s))
+            .Where(s => !TypeRegistry.IsString(s) && !TypeRegistry.IsType(s) && !TypeRegistry.IsTypeInfo(s) && !TypeRegistry.IsFieldInfo(s))
             .ToList();
 
         var sorted = TopologicalSortStructs(structs);
@@ -131,7 +131,7 @@ public class CCodeGenerator
             {
                 // Only by-value struct fields create dependencies
                 // Pointers/references don't need the full definition, just forward declaration
-                if (fieldType is StructType fieldStruct && !TypeRegistry.IsString(fieldStruct) && !TypeRegistry.IsType(fieldStruct) && !TypeRegistry.IsField(fieldStruct))
+                if (fieldType is StructType fieldStruct && !TypeRegistry.IsString(fieldStruct) && !TypeRegistry.IsType(fieldStruct) && !TypeRegistry.IsTypeInfo(fieldStruct) && !TypeRegistry.IsFieldInfo(fieldStruct))
                 {
                     var depName = GetStructCName(fieldStruct);
                     if (structsByName.ContainsKey(depName))
@@ -641,11 +641,15 @@ public class CCodeGenerator
                 return;
 
             case StructType st when TypeRegistry.IsType(st):
-                // Type struct is emitted in headers, don't collect
+                // Type struct is emitted in headers (as TypeInfo), don't collect
                 return;
 
-            case StructType st when TypeRegistry.IsField(st):
-                // Field struct is emitted in headers, don't collect
+            case StructType st when TypeRegistry.IsTypeInfo(st):
+                // TypeInfo struct is emitted in headers, don't collect
+                return;
+
+            case StructType st when TypeRegistry.IsFieldInfo(st):
+                // FieldInfo struct is emitted in headers, don't collect
                 return;
 
             case StructType st when TypeRegistry.IsSlice(st):
@@ -722,17 +726,18 @@ public class CCodeGenerator
         _output.AppendLine("};");
         _output.AppendLine();
         _output.AppendLine("// Runtime type information");
-        _output.AppendLine("struct Field {");
+        _output.AppendLine("struct TypeInfo;");
+        _output.AppendLine("struct FieldInfo {");
         _output.AppendLine("    struct String name;");
         _output.AppendLine("    uintptr_t offset;");
-        _output.AppendLine("    const uint8_t* type_info;");
+        _output.AppendLine("    const struct TypeInfo* type;");
         _output.AppendLine("};");
         _output.AppendLine();
-        _output.AppendLine("struct Type {");
+        _output.AppendLine("struct TypeInfo {");
         _output.AppendLine("    struct String name;");
         _output.AppendLine("    uint8_t size;");
         _output.AppendLine("    uint8_t align;");
-        _output.AppendLine("    struct { const struct Field* ptr; uintptr_t len; } fields;");
+        _output.AppendLine("    struct { const struct FieldInfo* ptr; uintptr_t len; } fields;");
         _output.AppendLine("};");
         _output.AppendLine();
         _output.AppendLine("static void __flang_unimplemented(void) {");
@@ -1463,11 +1468,15 @@ public class CCodeGenerator
 
         // Handle builtin Type(T) - all instantiations use the same C struct
         if (TypeRegistry.IsType(structType))
-            return "Type";
+            return "TypeInfo";
 
-        // Handle builtin Field struct
-        if (TypeRegistry.IsField(structType))
-            return "Field";
+        // Handle builtin TypeInfo struct
+        if (TypeRegistry.IsTypeInfo(structType))
+            return "TypeInfo";
+
+        // Handle builtin FieldInfo struct
+        if (TypeRegistry.IsFieldInfo(structType))
+            return "FieldInfo";
 
         // Handle anonymous structs (tuples) - generate name from field types
         if (string.IsNullOrEmpty(structType.StructName))

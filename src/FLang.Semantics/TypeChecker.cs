@@ -4279,22 +4279,24 @@ public class TypeChecker
         return false;
     }
 
-    private static TypeBase SubstituteGenerics(TypeBase type, Dictionary<string, TypeBase> bindings)
+    private static TypeBase SubstituteGenerics(TypeBase type, Dictionary<string, TypeBase> bindings,
+        HashSet<StructType>? visited = null)
     {
+        if (bindings.Count == 0) return type;
         // Prune TypeVars to get concrete types - this handles comptime_int wrapped in TypeVar
         var pruned = type.Prune();
         return pruned switch
         {
             GenericParameterType gp => bindings.TryGetValue(gp.ParamName, out var b) ? b.Prune() : gp,
-            ReferenceType rt => new ReferenceType(SubstituteGenerics(rt.InnerType, bindings)),
-            ArrayType at => new ArrayType(SubstituteGenerics(at.ElementType, bindings), at.Length),
-            StructType st => SubstituteStructType(st, bindings),
+            ReferenceType rt => new ReferenceType(SubstituteGenerics(rt.InnerType, bindings, visited)),
+            ArrayType at => new ArrayType(SubstituteGenerics(at.ElementType, bindings, visited), at.Length),
+            StructType st => SubstituteStructType(st, bindings, visited),
             EnumType et => SubstituteEnumType(et, bindings),
             GenericType gt => new GenericType(gt.BaseName,
-                gt.TypeArguments.Select(a => SubstituteGenerics(a, bindings)).ToList()),
+                gt.TypeArguments.Select(a => SubstituteGenerics(a, bindings, visited)).ToList()),
             FunctionType ft => new FunctionType(
-                ft.ParameterTypes.Select(p => SubstituteGenerics(p, bindings)).ToList(),
-                SubstituteGenerics(ft.ReturnType, bindings)),
+                ft.ParameterTypes.Select(p => SubstituteGenerics(p, bindings, visited)).ToList(),
+                SubstituteGenerics(ft.ReturnType, bindings, visited)),
             _ => pruned
         };
     }
@@ -4534,6 +4536,14 @@ public class TypeChecker
                         }
                     }
 
+                    // Skip field recursion when neither struct contains generic parameters.
+                    // Same-named concrete structs have identical fields by definition, and
+                    // recursing into fields of types with circular references (e.g. TypeInfo ↔ FieldInfo)
+                    // would cause infinite recursion.
+                    if (!ps.Fields.Any(f => ContainsGenericParam(f.Type)) &&
+                        !@as.Fields.Any(f => ContainsGenericParam(f.Type)))
+                        return true;
+
                     // Then, match fields
                     var argFields = new Dictionary<string, TypeBase>();
                     foreach (var (name, type) in @as.Fields)
@@ -4653,6 +4663,20 @@ public class TypeChecker
         return false;
     }
 
+    /// <summary>
+    /// Shallow check for generic parameters in a type (does not recurse into struct fields
+    /// to avoid infinite recursion with circular type references like TypeInfo ↔ FieldInfo).
+    /// </summary>
+    private static bool ContainsGenericParam(TypeBase type) => type switch
+    {
+        GenericParameterType => true,
+        TypeVar => true,
+        ReferenceType rt => ContainsGenericParam(rt.InnerType),
+        ArrayType at => ContainsGenericParam(at.ElementType),
+        GenericType => true,
+        _ => false
+    };
+
     private static void CollectGenericParamOrder(TypeBase t, HashSet<string> seen, List<string> order)
     {
         switch (t)
@@ -4679,13 +4703,19 @@ public class TypeChecker
         }
     }
 
-    private static StructType SubstituteStructType(StructType structType, Dictionary<string, TypeBase> bindings)
+    private static StructType SubstituteStructType(StructType structType, Dictionary<string, TypeBase> bindings,
+        HashSet<StructType>? visited = null)
     {
+        // Prevent infinite recursion from circular type references (e.g. TypeInfo ↔ FieldInfo)
+        visited ??= [];
+        if (!visited.Add(structType))
+            return structType;
+
         var updatedFields = new List<(string Name, TypeBase Type)>(structType.Fields.Count);
         var changed = false;
         foreach (var (name, fieldType) in structType.Fields)
         {
-            var substituted = SubstituteGenerics(fieldType, bindings);
+            var substituted = SubstituteGenerics(fieldType, bindings, visited);
             if (!ReferenceEquals(substituted, fieldType))
                 changed = true;
             updatedFields.Add((name, substituted));
@@ -4695,7 +4725,7 @@ public class TypeChecker
         var updatedTypeArgs = new List<TypeBase>(structType.TypeArguments.Count);
         foreach (var typeArg in structType.TypeArguments)
         {
-            var substituted = SubstituteGenerics(typeArg, bindings);
+            var substituted = SubstituteGenerics(typeArg, bindings, visited);
             if (!ReferenceEquals(substituted, typeArg))
                 changed = true;
             updatedTypeArgs.Add(substituted);
