@@ -30,6 +30,7 @@ jobs:
         with:
           dotnet-version: "10.x"
           cache: true
+          cache-dependency-path: subdir/packages.lock.json
 
       - name: Install C compiler (Linux)
         if: runner.os == 'Linux'
