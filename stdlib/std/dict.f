@@ -4,7 +4,7 @@
 // Probing uses bounded for-in loops over 0..capacity with break,
 // which avoids the need for while loops.
 
-import core.mem
+import std.mem
 import core.panic
 import core.runtime
 

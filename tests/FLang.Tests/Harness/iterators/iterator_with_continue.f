@@ -3,7 +3,7 @@
 
 pub fn main() i32 {
     let sum: i32 = 0
-    for (i in 0..6) {
+    for (i in 0..6 as i32) {
         if (i == 2) {
             continue  // Skip 2
         }

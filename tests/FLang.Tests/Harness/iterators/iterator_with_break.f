@@ -3,7 +3,7 @@
 
 pub fn main() i32 {
     let sum: i32 = 0
-    for (i in 0..10) {
+    for (i in 0..10 as i32) {
         if (i >= 3) {
             break
         }

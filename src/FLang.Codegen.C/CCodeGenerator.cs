@@ -1095,7 +1095,9 @@ public class CCodeGenerator
         else if (targetType is StructType targetStruct && HasSliceLayout(targetStruct) && TryGetArrayType(sourceType, out var arrayType))
         {
             var ptrExpr = sourceType is ReferenceType ? sourceExpr : $"&{sourceExpr}";
-            _output.AppendLine($"    {cTargetType} {resultName} = {{ .ptr = {ptrExpr}, .len = {arrayType!.Length} }};");
+            // Cast to element pointer type to strip const from static const array globals.
+            var elemCType = TypeToCType(arrayType!.ElementType);
+            _output.AppendLine($"    {cTargetType} {resultName} = {{ .ptr = ({elemCType}*){ptrExpr}, .len = {arrayType.Length} }};");
         }
         // Check if this is a struct-to-struct reinterpretation cast
         else if (targetType is StructType)

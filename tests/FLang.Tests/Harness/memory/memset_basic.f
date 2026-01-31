@@ -3,7 +3,7 @@
 
 // Test memset - fill memory with a byte value
 
-import core.mem
+import std.mem
 
 pub fn main() i32 {
     // Array of bytes

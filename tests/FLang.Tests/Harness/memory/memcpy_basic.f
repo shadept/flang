@@ -3,7 +3,7 @@
 
 // Test memcpy - copy data between two buffers
 
-import core.mem
+import std.mem
 
 pub fn main() i32 {
     // Source array

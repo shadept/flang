@@ -1,7 +1,7 @@
 //! TEST: for_loop_test
 //! EXIT: 42
 pub fn main() i32 {
-    for (i in 0..3) {
+    for (i in 0..3 as i32) {
         let x: isize = i
     }
     return 42

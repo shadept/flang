@@ -58,7 +58,7 @@ pub fn delete(allocator: Allocator, value: &$T) {
 }
 
 // =============================================================================
-// GlobalAllocator - wraps malloc/free from core.mem
+// GlobalAllocator - wraps malloc/free from std.mem
 // =============================================================================
 
 // GlobalAllocator has no state; we use a dummy struct for the impl pointer.

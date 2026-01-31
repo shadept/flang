@@ -5,7 +5,7 @@
 // Allocate an i32, write to it, read it back, then free
 // TODO fix test is causing the compiler to loop forever and consume all the memory in the world
 
-import core.mem
+import std.mem
 import core.rtti
 
 pub fn main() i32 {

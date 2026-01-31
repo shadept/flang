@@ -1,7 +1,7 @@
 //! TEST: void_return_test
 //! EXIT: 3
 
-import core.mem
+import std.mem
 
 pub fn set_value(ptr: &i32) {
     let a: i32 = 1
