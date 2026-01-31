@@ -17,12 +17,7 @@ pub struct FieldInfo {
     type: &TypeInfo
 }
 
-struct Type(T) {
-    name: String
-    size: u8
-    align: u8
-    fields: FieldInfo[]
-}
+struct Type(T) {}
 
 pub fn type_of(t: Type($T)) Type(T) {
     return t
