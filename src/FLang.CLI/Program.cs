@@ -7,6 +7,7 @@ using FLang.Core;
 string? inputFilePath = null;
 string? stdlibPath = null;
 string? emitFir = null;
+string? outputPath = null;
 var demoDiagnostics = false;
 var releaseBuild = false;
 var findCompilersOnly = false;
@@ -18,6 +19,8 @@ for (var i = 0; i < args.Length; i++)
         stdlibPath = args[++i];
     else if (args[i] == "--emit-fir" && i + 1 < args.Length)
         emitFir = args[++i];
+    else if ((args[i] == "-o" || args[i] == "--output") && i + 1 < args.Length)
+        outputPath = args[++i];
     else if (args[i] == "--demo-diagnostics")
         demoDiagnostics = true;
     else if (args[i] == "--release")
@@ -28,7 +31,7 @@ for (var i = 0; i < args.Length; i++)
         debugLogging = true;
     else if (args[i] == "--test")
         runTests = true;
-    else if (!args[i].StartsWith("--")) inputFilePath = args[i];
+    else if (!args[i].StartsWith("-")) inputFilePath = args[i];
 
 if (demoDiagnostics)
 {
@@ -47,6 +50,7 @@ if (inputFilePath == null)
 {
     Console.WriteLine("Usage: flang [options] <file>");
     Console.WriteLine("Options:");
+    Console.WriteLine("  -o, --output <path>     Output executable path (default: same as input with .exe)");
     Console.WriteLine("  --stdlib-path <path>    Path to standard library directory");
     Console.WriteLine("  --emit-fir <file>       Emit FIR (intermediate representation) to file (use '-' for stdout)");
     Console.WriteLine("  --release               Enable C backend optimization (passes -O2 /O2)");
@@ -58,19 +62,27 @@ if (inputFilePath == null)
 }
 
 // Set the default stdlib path if not provided
-if (stdlibPath == null) stdlibPath = Path.Combine(AppContext.BaseDirectory, "stdlib");
+stdlibPath ??= Path.Combine(AppContext.BaseDirectory, "stdlib");
 
-var cFilePath = Path.ChangeExtension(inputFilePath, ".c");
-var outputFilePath = Path.ChangeExtension(inputFilePath, ".exe");
-if (!RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
-    outputFilePath = Path.ChangeExtension(outputFilePath, null);
+// Resolve output path: default to input file location with platform extension
+if (outputPath == null)
+{
+    outputPath = Path.ChangeExtension(inputFilePath, ".exe");
+    if (!RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+        outputPath = Path.ChangeExtension(outputPath, null);
+}
 
-var compilerConfig = CompilerDiscovery.GetCompilerForCompilation(cFilePath, outputFilePath, releaseBuild);
+// Intermediate .c file goes next to the output
+var outputDir = Path.GetDirectoryName(Path.GetFullPath(outputPath))!;
+var cFilePath = Path.Combine(outputDir, Path.GetFileNameWithoutExtension(outputPath) + ".c");
+
+var compilerConfig = CompilerDiscovery.GetCompilerForCompilation(cFilePath, outputPath, releaseBuild);
 
 var compiler = new Compiler();
 var options = new CompilerOptions(
     InputFilePath: inputFilePath,
     StdlibPath: stdlibPath,
+    OutputPath: outputPath,
     CCompilerConfig: compilerConfig,
     ReleaseBuild: releaseBuild,
     EmitFir: emitFir,
@@ -106,11 +118,11 @@ static void PrintAvailableCompilers()
 
     Console.WriteLine("Compiler discovery (ordered by preference):");
     int idx = 1;
-    foreach (var r in results)
+    foreach (var (name, path, source) in results)
     {
-        var status = r.path != null ? "FOUND" : "not found";
-        var pathText = r.path ?? "<unavailable>";
-        Console.WriteLine($"  {idx}. {r.name,-15} : {status} -> {pathText}");
+        var status = path != null ? "FOUND" : "not found";
+        var pathText = path ?? "<unavailable>";
+        Console.WriteLine($"  {idx}. {name,-15} : {status} -> {pathText}");
         idx++;
     }
 
@@ -140,5 +152,3 @@ static void PrintCompilerDiscoveryHints()
             "Hint (Windows): Install Visual Studio Build Tools (with C++), or install gcc (e.g., via MSYS2/MinGW) and ensure it is on PATH.");
     }
 }
-
-static string? ResolveCommandPath(string command) => CompilerDiscovery.ResolveCommandPath(command);

@@ -20,6 +20,7 @@ public record CompilerConfig(
 public record CompilerOptions(
     string InputFilePath,
     string StdlibPath,
+    string? OutputPath = null,
     CompilerConfig? CCompilerConfig = null,
     bool ReleaseBuild = false,
     string? EmitFir = null,
@@ -234,12 +235,23 @@ public class Compiler
 
         // 5. Generate C Code
         var cCode = CCodeGenerator.GenerateProgram(allFunctions);
-        var cFilePath = Path.ChangeExtension(options.InputFilePath, ".c");
-        File.WriteAllText(cFilePath, cCode);
 
-        var outputFilePath = Path.ChangeExtension(options.InputFilePath, ".exe");
-        if (!RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
-            outputFilePath = Path.ChangeExtension(outputFilePath, null);
+        // Resolve output and intermediate paths
+        string outputFilePath;
+        if (options.OutputPath != null)
+        {
+            outputFilePath = options.OutputPath;
+        }
+        else
+        {
+            outputFilePath = Path.ChangeExtension(options.InputFilePath, ".exe");
+            if (!RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+                outputFilePath = Path.ChangeExtension(outputFilePath, null);
+        }
+
+        var outputDir = Path.GetDirectoryName(Path.GetFullPath(outputFilePath))!;
+        var cFilePath = Path.Combine(outputDir, Path.GetFileNameWithoutExtension(outputFilePath) + ".c");
+        File.WriteAllText(cFilePath, cCode);
 
         // 6. Invoke C Compiler
         var compilerConfig = options.CCompilerConfig;
@@ -281,11 +293,12 @@ public class Compiler
             }
 
             // Clean up intermediate files
-            var objFilePath = Path.ChangeExtension(options.InputFilePath, ".obj");
+            var objFilePath = Path.ChangeExtension(cFilePath, ".obj");
             if (File.Exists(objFilePath)) File.Delete(objFilePath);
 
-            var baseNameObj = Path.GetFileNameWithoutExtension(options.InputFilePath) + ".obj";
-            if (File.Exists(baseNameObj)) File.Delete(baseNameObj);
+            // MSVC may also place .obj in the working directory
+            var cwdObj = Path.GetFileNameWithoutExtension(cFilePath) + ".obj";
+            if (File.Exists(cwdObj)) File.Delete(cwdObj);
         }
         catch (Exception ex)
         {

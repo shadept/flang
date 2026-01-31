@@ -1,0 +1,56 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  build-and-test:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            rid: win-x64
+          - os: ubuntu-latest
+            rid: linux-x64
+
+    runs-on: ${{ matrix.os }}
+
+    env:
+      NUGET_PACKAGES: ${{ github.workspace }}/.nuget/packages
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Setup .NET 10
+        uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: "10.x"
+          cache: true
+
+      - name: Install C compiler (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc
+
+      - name: Restore
+        run: dotnet restore flang.sln
+
+      - name: Build compiler (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: ./build.ps1 ${{ matrix.rid }}
+
+      - name: Build compiler (Linux)
+        if: runner.os == 'Linux'
+        run: ./build.sh ${{ matrix.rid }}
+
+      - name: Run test harness
+        run: dotnet run test.cs
+
+      - name: Run xUnit tests
+        run: dotnet test tests/FLang.Tests/ --no-restore --verbosity normal

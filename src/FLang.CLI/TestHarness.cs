@@ -1,10 +1,9 @@
 using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Text;
-using FLang.CLI;
 using FLang.Core;
 
-namespace FLang.Tests;
+namespace FLang.CLI;
 
 /// <summary>
 /// Metadata parsed from test file //! directives.
@@ -14,7 +13,8 @@ public record TestMetadata(
     int? ExpectedExitCode,
     List<string> ExpectedStdout,
     List<string> ExpectedStderr,
-    List<string> ExpectedCompileErrors);
+    List<string> ExpectedCompileErrors,
+    string? SkipReason);
 
 /// <summary>
 /// Result of running a single test.
@@ -24,7 +24,9 @@ public record TestResult(
     string TestName,
     bool Passed,
     string? FailureMessage,
-    TimeSpan Duration);
+    TimeSpan Duration,
+    bool Skipped = false,
+    string? SkipReason = null);
 
 /// <summary>
 /// Reusable test harness for running FLang integration tests.
@@ -70,9 +72,7 @@ public class TestHarness
         if (!Directory.Exists(_harnessDir))
             throw new DirectoryNotFoundException($"Harness directory not found at: {_harnessDir}");
 
-        return Directory.GetFiles(_harnessDir, "*.f", SearchOption.AllDirectories)
-            .OrderBy(f => f)
-            .ToList();
+        return [.. Directory.GetFiles(_harnessDir, "*.f", SearchOption.AllDirectories).OrderBy(f => f)];
     }
 
     /// <summary>
@@ -86,6 +86,7 @@ public class TestHarness
         var stdout = new List<string>();
         var stderr = new List<string>();
         var compileErrors = new List<string>();
+        string? skipReason = null;
 
         foreach (var line in lines)
         {
@@ -104,21 +105,27 @@ public class TestHarness
                 stderr.Add(content[7..].Trim());
             else if (content.StartsWith("COMPILE-ERROR:"))
                 compileErrors.Add(content[14..].Trim());
+            else if (content.StartsWith("SKIP:"))
+                skipReason = content[5..].Trim();
         }
 
-        return new TestMetadata(testName, exitCode, stdout, stderr, compileErrors);
+        return new TestMetadata(testName, exitCode, stdout, stderr, compileErrors, skipReason);
     }
 
     /// <summary>
     /// Runs a single test and returns the result.
     /// </summary>
     /// <param name="absoluteTestFile">Absolute path to the test file.</param>
+    /// <param name="outputDir">Directory for build artifacts. When set, intermediate and output files are
+    /// placed here (mirroring the harness subfolder structure) and are NOT cleaned up.
+    /// When null, artifacts are placed next to the test file and cleaned up after the run.</param>
     /// <param name="timeout">Timeout for running the compiled executable (default 30 seconds).</param>
     /// <returns>The test result.</returns>
-    public TestResult RunTest(string absoluteTestFile, TimeSpan? timeout = null)
+    public TestResult RunTest(string absoluteTestFile, string? outputDir = null, TimeSpan? timeout = null)
     {
         timeout ??= TimeSpan.FromSeconds(30);
         var stopwatch = Stopwatch.StartNew();
+        var cleanupFiles = outputDir == null;
 
         var testFileName = Path.GetFileNameWithoutExtension(absoluteTestFile);
         var testDirectory = Path.GetDirectoryName(absoluteTestFile)!;
@@ -131,19 +138,46 @@ public class TestHarness
                 absoluteTestFile,
                 testFileName,
                 false,
-                $"Test file is missing //! TEST: directive",
+                "Test file is missing //! TEST: directive",
                 stopwatch.Elapsed);
         }
 
-        // 2. Call Compiler directly
-        var cFilePath = Path.ChangeExtension(absoluteTestFile, ".c");
-        var outputFilePath = GetGeneratedExecutablePath(testDirectory, testFileName);
+        // Handle SKIP directive
+        if (metadata.SkipReason != null)
+        {
+            return new TestResult(
+                absoluteTestFile,
+                metadata.TestName,
+                true,
+                null,
+                stopwatch.Elapsed,
+                Skipped: true,
+                SkipReason: metadata.SkipReason);
+        }
+
+        // 2. Resolve output paths
+        string artifactDir;
+        if (outputDir != null)
+        {
+            // Mirror the harness subfolder structure inside outputDir
+            var relativePath = Path.GetRelativePath(_harnessDir, testDirectory);
+            artifactDir = Path.Combine(outputDir, relativePath);
+            Directory.CreateDirectory(artifactDir);
+        }
+        else
+        {
+            artifactDir = testDirectory;
+        }
+
+        var outputFilePath = GetGeneratedExecutablePath(artifactDir, testFileName);
+        var cFilePath = Path.ChangeExtension(outputFilePath, ".c");
 
         var compilerConfig = CompilerDiscovery.GetCompilerForCompilation(cFilePath, outputFilePath, false);
 
         var options = new CompilerOptions(
             InputFilePath: absoluteTestFile,
             StdlibPath: _stdlibPath,
+            OutputPath: outputFilePath,
             CCompilerConfig: compilerConfig,
             ReleaseBuild: false,
             DebugLogging: false
@@ -156,7 +190,7 @@ public class TestHarness
         {
             if (result.Success)
             {
-                CleanupGeneratedFiles(cFilePath, outputFilePath);
+                CleanupGeneratedFiles(cFilePath, outputFilePath, cleanupFiles);
                 return new TestResult(
                     absoluteTestFile,
                     metadata.TestName,
@@ -185,7 +219,7 @@ public class TestHarness
             }
 
             // Expected compile failure satisfied
-            CleanupGeneratedFiles(cFilePath, null);
+            CleanupGeneratedFiles(cFilePath, null, cleanupFiles);
             return new TestResult(absoluteTestFile, metadata.TestName, true, null, stopwatch.Elapsed);
         }
 
@@ -210,7 +244,7 @@ public class TestHarness
 
         if (!File.Exists(generatedExePath))
         {
-            CleanupGeneratedFiles(cFilePath, null);
+            CleanupGeneratedFiles(cFilePath, null, cleanupFiles);
             return new TestResult(
                 absoluteTestFile,
                 metadata.TestName,
@@ -245,7 +279,7 @@ public class TestHarness
             if (!exited)
             {
                 try { exeProcess.Kill(); } catch { }
-                CleanupGeneratedFiles(cFilePath, generatedExePath);
+                CleanupGeneratedFiles(cFilePath, generatedExePath, cleanupFiles);
                 return new TestResult(
                     absoluteTestFile,
                     metadata.TestName,
@@ -290,7 +324,7 @@ public class TestHarness
             }
 
             // 5. Clean up generated files
-            CleanupGeneratedFiles(cFilePath, generatedExePath);
+            CleanupGeneratedFiles(cFilePath, generatedExePath, cleanupFiles);
 
             if (failures.Count > 0)
             {
@@ -306,7 +340,7 @@ public class TestHarness
         }
         catch (Exception ex)
         {
-            CleanupGeneratedFiles(cFilePath, generatedExePath);
+            CleanupGeneratedFiles(cFilePath, generatedExePath, cleanupFiles);
             return new TestResult(
                 absoluteTestFile,
                 metadata.TestName,
@@ -324,8 +358,9 @@ public class TestHarness
         return Path.Combine(testDirectory, testFileName);
     }
 
-    private static void CleanupGeneratedFiles(string cFilePath, string? exePath)
+    private static void CleanupGeneratedFiles(string cFilePath, string? exePath, bool cleanup)
     {
+        if (!cleanup) return;
         try
         {
             if (File.Exists(cFilePath)) File.Delete(cFilePath);

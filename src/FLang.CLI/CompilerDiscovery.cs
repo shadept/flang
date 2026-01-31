@@ -22,8 +22,10 @@ public static class CompilerDiscovery
             var (clPath, clEnv) = FindClExeWithEnvironment();
             environment = clEnv;
 
-            var msvcArgs = new List<string> { "/nologo", "/ZI", "/WX" };
+            var objFilePath = Path.ChangeExtension(Path.GetFullPath(outputFilePath), ".obj");
+            var msvcArgs = new List<string> { "/nologo", "/Z7", "/WX" };
             if (releaseBuild) msvcArgs.Add("/O2");
+            msvcArgs.Add($"/Fo\"{objFilePath}\"");
             msvcArgs.Add($"/Fe\"{outputFilePath}\"");
             msvcArgs.Add($"\"{cFilePath}\"");
             arguments = string.Join(" ", msvcArgs);

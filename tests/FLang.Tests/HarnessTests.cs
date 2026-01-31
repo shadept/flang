@@ -1,10 +1,5 @@
-using System.Diagnostics;
-using System.Runtime.InteropServices;
-using System.Text;
 using FLang.CLI;
-using FLang.Core;
 using Xunit.Abstractions;
-using Xunit.Sdk;
 
 namespace FLang.Tests;
 
@@ -17,178 +12,48 @@ public class HarnessTests
         _testOutputHelper = testOutputHelper;
     }
 
-    private static readonly Compiler _compiler = new();
-    private static readonly string _projectRoot;
-    private static readonly string _stdlibPath;
-    private static readonly string _harnessDir;
+    private static readonly TestHarness _harness;
 
     static HarnessTests()
     {
-        DiagnosticPrinter.EnableColors = false;
         var currentAssemblyPath = typeof(HarnessTests).Assembly.Location;
-        _projectRoot = Path.GetFullPath(Path.Combine(currentAssemblyPath, "..", "..", "..", ".."));
-        _stdlibPath = Path.GetFullPath(Path.Combine(_projectRoot, "..", "..", "stdlib"));
-        _harnessDir = Path.Combine(_projectRoot, "Harness");
+        var projectRoot = Path.GetFullPath(Path.Combine(currentAssemblyPath, "..", "..", "..", ".."));
+        _harness = new TestHarness(projectRoot);
     }
 
     [Theory]
     [MemberData(nameof(GetTestFiles))]
     public void RunTest(string testFile)
     {
-        // Resolve relative path (from Harness dir) to absolute
-        var absoluteTestFile = Path.Combine(_harnessDir, testFile);
+        var absoluteTestFile = Path.Combine(_harness.HarnessDir, testFile);
         _testOutputHelper.WriteLine($"[TEST_FILE] {absoluteTestFile}");
-        var testFileName = Path.GetFileNameWithoutExtension(absoluteTestFile);
-        var testDirectory = Path.GetDirectoryName(absoluteTestFile)!;
 
-        // 1. Parse test metadata from //! comments
-        var metadata = ParseTestMetadata(absoluteTestFile);
-        if (string.IsNullOrEmpty(metadata.TestName))
-            Assert.Fail($"Test file {absoluteTestFile} is missing //! TEST: directive");
+        var result = _harness.RunTest(absoluteTestFile);
 
-        // 2. Call Compiler directly
-        var cFilePath = Path.ChangeExtension(absoluteTestFile, ".c");
-        var outputFilePath = GetGeneratedExecutablePath(testDirectory, testFileName);
-
-        var compilerConfig = CompilerDiscovery.GetCompilerForCompilation(cFilePath, outputFilePath, false);
-
-        var options = new CompilerOptions(
-            InputFilePath: absoluteTestFile,
-            StdlibPath: _stdlibPath,
-            CCompilerConfig: compilerConfig,
-            ReleaseBuild: false,
-            DebugLogging: false
-        );
-
-        var result = _compiler.Compile(options);
-
-        if (metadata.ExpectedCompileErrors.Count > 0)
+        if (result.Skipped)
         {
-            if (result.Success)
-            {
-                Assert.Fail($"Expected compilation to fail with errors [{string.Join(", ", metadata.ExpectedCompileErrors)}] but it succeeded for test file: {absoluteTestFile}");
-            }
-
-            foreach (var code in metadata.ExpectedCompileErrors)
-            {
-                if (result.Diagnostics.All(d => d.Code != code))
-                {
-                    var sb = new StringBuilder();
-                    foreach (var diagnostic in result.Diagnostics)
-                    {
-                        sb.Append(DiagnosticPrinter.Print(diagnostic, result.CompilationContext));
-                    }
-                    Assert.Fail($"Expected error {code} not found in diagnostics for {metadata.TestName} ({absoluteTestFile}):\n{sb}");
-                }
-            }
-            return; // Skip running executable on expected compile failures
+            _testOutputHelper.WriteLine($"[SKIP] {result.SkipReason}");
+            return;
         }
 
-        if (!result.Success)
+        if (!result.Passed)
         {
-            var sb = new StringBuilder();
-            foreach (var diagnostic in result.Diagnostics)
-            {
-                sb.Append(DiagnosticPrinter.Print(diagnostic, result.CompilationContext));
-            }
-            Assert.Fail($"Compilation failed for {metadata.TestName} ({absoluteTestFile}):\n\r{sb}");
+            Assert.Fail($"{result.TestName} ({absoluteTestFile}):\n{result.FailureMessage}");
         }
-
-        var generatedExePath = result.ExecutablePath!;
-
-        if (!File.Exists(generatedExePath))
-        {
-            Assert.Fail($"Compiler reported success but did not produce an executable at {generatedExePath} for test file: {absoluteTestFile}");
-        }
-
-        // 3. Run the generated executable
-        var exeProcess = Process.Start(new ProcessStartInfo
-        {
-            FileName = generatedExePath,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            UseShellExecute = false,
-            CreateNoWindow = true
-        })!;
-        exeProcess.WaitForExit();
-
-        var actualExitCode = exeProcess.ExitCode;
-        var actualStdout = exeProcess.StandardOutput.ReadToEnd().Split('\n').Select(s => s.TrimEnd('\r'))
-            .Where(s => !string.IsNullOrEmpty(s)).ToList();
-        var actualStderr = exeProcess.StandardError.ReadToEnd().Split('\n').Select(s => s.TrimEnd('\r'))
-            .Where(s => !string.IsNullOrEmpty(s)).ToList();
-
-        // 4. Validate against metadata
-        if (metadata.ExpectedExitCode.HasValue) Assert.Equal(metadata.ExpectedExitCode.Value, actualExitCode);
-
-        foreach (var expectedLine in metadata.ExpectedStdout) Assert.Contains(expectedLine, actualStdout);
-        foreach (var expectedLine in metadata.ExpectedStderr) Assert.Contains(expectedLine, actualStderr);
-
-        // 5. Clean up generated files
-        File.Delete(cFilePath);
-        File.Delete(generatedExePath);
-    }
-
-    private static TestMetadata ParseTestMetadata(string testFile)
-    {
-        var lines = File.ReadAllLines(testFile);
-        string testName = "";
-        int? exitCode = null;
-        var stdout = new List<string>();
-        var stderr = new List<string>();
-        var compileErrors = new List<string>();
-
-        foreach (var line in lines)
-        {
-            if (!line.TrimStart().StartsWith("//!"))
-                continue;
-
-            var content = line[(line.IndexOf("//!") + 3)..].Trim();
-
-            if (content.StartsWith("TEST:"))
-                testName = content[5..].Trim();
-            else if (content.StartsWith("EXIT:"))
-                exitCode = int.Parse(content[5..].Trim());
-            else if (content.StartsWith("STDOUT:"))
-                stdout.Add(content[7..].Trim());
-            else if (content.StartsWith("STDERR:"))
-                stderr.Add(content[7..].Trim());
-            else if (content.StartsWith("COMPILE-ERROR:"))
-                compileErrors.Add(content[14..].Trim());
-        }
-
-        return new TestMetadata(testName, exitCode, stdout, stderr, compileErrors);
     }
 
     public static TheoryData<string> GetTestFiles()
     {
-        if (!Directory.Exists(_harnessDir))
-            throw new DirectoryNotFoundException($"Harness directory not found at: {_harnessDir}");
+        var currentAssemblyPath = typeof(HarnessTests).Assembly.Location;
+        var projectRoot = Path.GetFullPath(Path.Combine(currentAssemblyPath, "..", "..", "..", ".."));
+        var harness = new TestHarness(projectRoot);
 
-        // Recursively find all .f files in Harness and subdirectories
-        // Return paths relative to Harness directory for cleaner IDE presentation
         var data = new TheoryData<string>();
-        foreach (var file in Directory.GetFiles(_harnessDir, "*.f", SearchOption.AllDirectories))
+        foreach (var file in harness.DiscoverTests())
         {
-            var relativePath = Path.GetRelativePath(_harnessDir, file);
+            var relativePath = Path.GetRelativePath(harness.HarnessDir, file);
             data.Add(relativePath);
         }
         return data;
     }
-
-    private static string GetGeneratedExecutablePath(string testDirectory, string testFileName)
-    {
-        if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
-            return Path.Combine(testDirectory, $"{testFileName}.exe");
-
-        // Non-Windows: CLI strips extension (Path.ChangeExtension(..., null))
-        return Path.Combine(testDirectory, testFileName);
-    }
-
-    private record TestMetadata(
-        string TestName,
-        int? ExpectedExitCode,
-        List<string> ExpectedStdout,
-        List<string> ExpectedStderr,
-        List<string> ExpectedCompileErrors);
 }
