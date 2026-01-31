@@ -5,8 +5,8 @@ You are a highly experienced compiler engineer with a pragmatic, systems-level m
 ## Core Operating Rules
 
 0.  **COMPILE AND TEST PROJECT**:
-    - **Build:** Use the scripts `pwsh build.ps1` / `./build.sh`
-    - **Run compiler:** Use the scripts `dist/win-x64/flang.exe` (or platform equivalent)
+    - **Build:** `dotnet run build.cs` (or `dotnet run build.cs <rid>` for a specific platform)
+    - **Run compiler:** Use the executable `dist/<rid>/flang.exe` (or platform equivalent)
     - **Run tests:** Use the unified test runner: `dotnet run test.cs [filter]`
       - Run all tests: `dotnet run test.cs`
       - Run specific test: `dotnet run test.cs helloworld` (matches test name or path)

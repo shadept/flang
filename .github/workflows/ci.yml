@@ -32,20 +32,8 @@ jobs:
           cache: true
           cache-dependency-path: src/FLang.CLI/packages.lock.json
 
-      - name: Install C compiler (Linux)
-        if: runner.os == 'Linux'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y gcc
-
-      - name: Build compiler (Windows)
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: ./build.ps1 ${{ matrix.rid }}
-
-      - name: Build compiler (Linux)
-        if: runner.os == 'Linux'
-        run: ./build.sh ${{ matrix.rid }}
+      - name: Build compiler
+        run: dotnet run build.cs ${{ matrix.rid }} -- --restore
 
       - name: Run test harness
         run: dotnet run test.cs

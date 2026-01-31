@@ -2,6 +2,12 @@
   "version": 1,
   "dependencies": {
     "net10.0": {
+      "Microsoft.DotNet.ILCompiler": {
+        "type": "Direct",
+        "requested": "[10.0.2, )",
+        "resolved": "10.0.2",
+        "contentHash": "0g8tazNW4q0anSYNl1hnaHGc7+BQXwpNBMx3d5T3JboOVzz4OXZgqbuoBYfn60VtDFtBMNVS2Kfopelpo2pLZA=="
+      },
       "Microsoft.Extensions.Logging.Console": {
         "type": "Direct",
         "requested": "[9.0.0, )",
@@ -14,6 +20,12 @@
           "Microsoft.Extensions.Logging.Configuration": "9.0.0",
           "Microsoft.Extensions.Options": "9.0.0"
         }
+      },
+      "Microsoft.NET.ILLink.Tasks": {
+        "type": "Direct",
+        "requested": "[10.0.2, )",
+        "resolved": "10.0.2",
+        "contentHash": "sXdDtMf2qcnbygw9OdE535c2lxSxrZP8gO4UhDJ0xiJbl1wIqXS1OTcTDFTIJPOFd6Mhcm8gPEthqWGUxBsTqw=="
       },
       "Microsoft.Extensions.Configuration": {
         "type": "Transitive",
@@ -111,6 +123,17 @@
         "type": "Transitive",
         "resolved": "9.0.0",
         "contentHash": "N3qEBzmLMYiASUlKxxFIISP4AiwuPTHF5uCh+2CWSwwzAJiIYx0kBJsS30cp1nvhSySFAVi30jecD307jV+8Kg=="
+      },
+      "flang.cli": {
+        "type": "Project",
+        "dependencies": {
+          "FLang.Codegen.C": "[1.0.0, )",
+          "FLang.Core": "[1.0.0, )",
+          "FLang.Frontend": "[1.0.0, )",
+          "FLang.IR": "[1.0.0, )",
+          "FLang.Semantics": "[1.0.0, )",
+          "Microsoft.Extensions.Logging.Console": "[9.0.0, )"
+        }
       },
       "flang.codegen.c": {
         "type": "Project",

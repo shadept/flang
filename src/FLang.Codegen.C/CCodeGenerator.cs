@@ -223,6 +223,17 @@ public class CCodeGenerator
         "abort", "exit"
     ];
 
+    /// <summary>
+    /// C functions whose arguments expect char*/const char* rather than uint8_t*.
+    /// Used to emit casts and avoid -Wpointer-sign errors on clang/gcc.
+    /// </summary>
+    private static readonly HashSet<string> _charPtrFunctions =
+    [
+        "printf", "fprintf", "sprintf", "snprintf",
+        "puts", "fputs", "strcmp", "strncmp", "strlen",
+        "strcpy", "strncpy", "strcat", "strncat"
+    ];
+
     private void EmitForeignPrototypes(IEnumerable<Function> functions)
     {
         var emitted = new HashSet<string>();
@@ -817,8 +828,9 @@ public class CCodeGenerator
             var block = function.BasicBlocks[i];
 
             // Emit label (except for first block which is the function entry)
+            // Follow with a null statement so a declaration can appear next (C11 compliance)
             if (i > 0)
-                _output.AppendLine($"{block.Label}:");
+                _output.AppendLine($"{block.Label}: ;");
 
             // Emit instructions
             foreach (var instruction in block.Instructions)
@@ -1148,6 +1160,7 @@ public class CCodeGenerator
             : NameMangler.GenericFunction(call.FunctionName, paramTypes);
 
         // Build argument list - take address of struct values since params are pointers
+        var castUint8PtrToCharPtr = call.IsForeignCall && _charPtrFunctions.Contains(call.FunctionName);
         var args = string.Join(", ", call.Arguments.Select(arg =>
         {
             var argStr = ValueToString(arg);
@@ -1155,6 +1168,9 @@ public class CCodeGenerator
             // GlobalValue with StructConstantValue already returns &LC0, so check for that
             if (arg.Type is StructType && !argStr.StartsWith("&"))
                 return $"&{argStr}";
+            // Cast uint8_t* to const char* for C functions expecting char* (e.g. printf)
+            if (castUint8PtrToCharPtr && arg.Type is ReferenceType rt && rt.InnerType.Equals(TypeRegistry.U8))
+                return $"(const char*){argStr}";
             return argStr;
         }));
 
