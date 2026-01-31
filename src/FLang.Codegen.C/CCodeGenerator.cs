@@ -841,10 +841,6 @@ public class CCodeGenerator
                 _output.AppendLine("    ;");
         }
 
-        // C requires main to return int; emit return 0 if FLang main returns void
-        if (isMain && function.ReturnType.Equals(TypeRegistry.Void))
-            _output.AppendLine("    return 0;");
-
         _output.AppendLine("}");
     }
 
@@ -1221,10 +1217,14 @@ public class CCodeGenerator
     private void EmitReturn(ReturnInstruction ret)
     {
         // For void functions, emit simple return; without value
+        // Special case: main() returns int32_t in C even if void in FLang
         if (_currentFunction?.ReturnType == TypeRegistry.Void ||
             _currentFunction?.ReturnType?.Name == "void")
         {
-            _output.AppendLine("    return;");
+            if (_currentFunction?.Name == "main")
+                _output.AppendLine("    return 0;");
+            else
+                _output.AppendLine("    return;");
             return;
         }
 

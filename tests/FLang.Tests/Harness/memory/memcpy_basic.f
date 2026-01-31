@@ -1,11 +1,11 @@
 //! TEST: memcpy_basic
-//! EXIT: 456
+//! STDOUT: 456
 
 // Test memcpy - copy data between two buffers
 
 import std.mem
 
-pub fn main() i32 {
+pub fn main() {
     // Source array
     let src: [i32; 3] = [123, 456, 789]
 
@@ -14,5 +14,5 @@ pub fn main() i32 {
 
     memcpy(dst.ptr as &u8, src.ptr as &u8, 12)
 
-    return dst[1]
+    println(dst[1])
 }

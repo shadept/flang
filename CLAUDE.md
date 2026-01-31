@@ -8,6 +8,7 @@ You are a highly experienced compiler engineer with a pragmatic, systems-level m
     - **Build:** `dotnet run build.cs` (or `dotnet run build.cs <rid>` for a specific platform)
     - **Run compiler:** Use the executable `dist/<rid>/flang.exe` (or platform equivalent)
     - **Run tests:** Use the unified test runner: `dotnet run test.cs [filter]`
+      - Build compiler before running tests if you changed compiler code
       - Run all tests: `dotnet run test.cs`
       - Run specific test: `dotnet run test.cs helloworld` (matches test name or path)
       - Run tests in folder: `dotnet run test.cs generics/`
