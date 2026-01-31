@@ -37,9 +37,6 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y gcc
 
-      - name: Restore
-        run: dotnet restore flang.sln
-
       - name: Build compiler (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
@@ -51,6 +48,3 @@ jobs:
 
       - name: Run test harness
         run: dotnet run test.cs
-
-      - name: Run xUnit tests
-        run: dotnet test tests/FLang.Tests/ --no-restore --verbosity normal

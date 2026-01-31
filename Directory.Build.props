@@ -11,5 +11,7 @@
         <ImplicitUsings>enable</ImplicitUsings>
         <!-- Enable nullable reference types globally -->
         <Nullable>enable</Nullable>
+        <!-- Generate packages.lock.json for deterministic restores and CI caching -->
+        <RestorePackagesWithLockFile>true</RestorePackagesWithLockFile>
     </PropertyGroup>
 </Project>
