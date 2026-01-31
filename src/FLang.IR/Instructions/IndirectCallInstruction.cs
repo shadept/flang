@@ -1,4 +1,4 @@
-using FType = FLang.Core.TypeBase;
+using TypeBase = FLang.Core.TypeBase;
 
 namespace FLang.IR.Instructions;
 

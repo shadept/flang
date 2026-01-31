@@ -1,7 +1,5 @@
 using System.Text;
-using System.Linq;
 using FLang.Core;
-using FType = FLang.Core.TypeBase;
 using FLang.IR;
 using FLang.IR.Instructions;
 
@@ -116,10 +114,10 @@ public class CCodeGenerator
         }
     }
 
-    private List<StructType> TopologicalSortStructs(List<StructType> structs)
+    private static List<StructType> TopologicalSortStructs(List<StructType> structs)
     {
         // Build dependency graph - struct A depends on B if A has a field of type B (by value, not pointer)
-        var structsByName = structs.ToDictionary(s => GetStructCName(s), s => s);
+        var structsByName = structs.ToDictionary(GetStructCName, s => s);
         var dependencies = new Dictionary<string, HashSet<string>>();
 
         foreach (var s in structs)
@@ -143,7 +141,7 @@ public class CCodeGenerator
         // Kahn's algorithm for topological sort
         // inDegree[X] = number of dependencies X has (must be emitted before X)
         var result = new List<StructType>();
-        var inDegree = structs.ToDictionary(s => GetStructCName(s), s => dependencies[GetStructCName(s)].Count);
+        var inDegree = structs.ToDictionary(GetStructCName, s => dependencies[GetStructCName(s)].Count);
 
         var queue = new Queue<string>(inDegree.Where(kv => kv.Value == 0).Select(kv => kv.Key).OrderBy(x => x));
 
@@ -167,8 +165,8 @@ public class CCodeGenerator
         // If we couldn't emit all structs, there's a cycle - fall back to alphabetical
         if (result.Count < structs.Count)
         {
-            var emitted = new HashSet<string>(result.Select(s => GetStructCName(s)));
-            foreach (var s in structs.OrderBy(s => GetStructCName(s)))
+            var emitted = new HashSet<string>(result.Select(GetStructCName));
+            foreach (var s in structs.OrderBy(GetStructCName))
             {
                 if (!emitted.Contains(GetStructCName(s)))
                     result.Add(s);
@@ -200,11 +198,11 @@ public class CCodeGenerator
             _output.AppendLine("    union {");
             for (int i = 0; i < enumType.Variants.Count; i++)
             {
-                var variant = enumType.Variants[i];
-                if (variant.PayloadType != null)
+                var (VariantName, PayloadType) = enumType.Variants[i];
+                if (PayloadType != null)
                 {
-                    var payloadCType = TypeToCType(variant.PayloadType);
-                    _output.AppendLine($"        {payloadCType} variant_{i};  // {variant.VariantName}");
+                    var payloadCType = TypeToCType(PayloadType);
+                    _output.AppendLine($"        {payloadCType} variant_{i};  // {VariantName}");
                 }
             }
             _output.AppendLine("    } payload;");
@@ -274,14 +272,14 @@ public class CCodeGenerator
         }
     }
 
-    private bool NeedsForeignWrapper(Function function)
+    private static bool NeedsForeignWrapper(Function function)
     {
         // Wrapper needed if return type or any param is Option<&T>
         if (IsOptionalReference(function.ReturnType)) return true;
         return function.Parameters.Any(p => IsOptionalReference(p.Type));
     }
 
-    private bool IsOptionalReference(TypeBase type)
+    private static bool IsOptionalReference(TypeBase type)
     {
         if (type is StructType st && TypeRegistry.IsOption(st) && st.TypeArguments.Count > 0)
         {
@@ -292,8 +290,7 @@ public class CCodeGenerator
 
     private void EmitForeignWrapper(Function function)
     {
-        var wrapperName = NameMangler.GenericFunction(function.Name,
-            function.Parameters.Select(p => p.Type).ToList());
+        var wrapperName = NameMangler.GenericFunction(function.Name, [.. function.Parameters.Select(p => p.Type)]);
         var rawName = function.Name;
 
         // Build wrapper signature with FLang types (Option structs)
@@ -643,7 +640,7 @@ public class CCodeGenerator
         }
     }
 
-    private void CollectStructType(FType? type)
+    private void CollectStructType(TypeBase? type)
     {
         if (type == null) return;
 
@@ -1133,7 +1130,7 @@ public class CCodeGenerator
     /// Detects if this is an array-to-pointer decay cast.
     /// Handles both [T; N] -> &T and &[T; N] -> &T cases.
     /// </summary>
-    private static bool IsArrayToPointerCast(FType? sourceType, FType targetType)
+    private static bool IsArrayToPointerCast(TypeBase? sourceType, TypeBase targetType)
     {
         if (sourceType == null) return false;
 
@@ -1154,7 +1151,7 @@ public class CCodeGenerator
         // For foreign calls with wrappers (optional ref params/return), use the mangled wrapper name
         // For other foreign calls without wrappers, use raw name (direct C FFI)
         // For non-foreign calls, always mangle
-        var paramTypes = call.CalleeParamTypes?.ToList() ?? call.Arguments.Select(a => a.Type ?? TypeRegistry.I32).ToList();
+        var paramTypes = call.CalleeParamTypes?.ToList() ?? [.. call.Arguments.Select(a => a.Type ?? TypeRegistry.I32)];
         var calleeName = call.IsForeignCall && !_foreignFunctionsWithWrappers.Contains(call.FunctionName)
             ? call.FunctionName
             : NameMangler.GenericFunction(call.FunctionName, paramTypes);
@@ -1166,7 +1163,7 @@ public class CCodeGenerator
             var argStr = ValueToString(arg);
             // If argument is a struct value (not a pointer), take its address
             // GlobalValue with StructConstantValue already returns &LC0, so check for that
-            if (arg.Type is StructType && !argStr.StartsWith("&"))
+            if (arg.Type is StructType && !argStr.StartsWith('&'))
                 return $"&{argStr}";
             // Cast uint8_t* to const char* for C functions expecting char* (e.g. printf)
             if (castUint8PtrToCharPtr && arg.Type is ReferenceType rt && rt.InnerType.Equals(TypeRegistry.U8))
@@ -1197,7 +1194,7 @@ public class CCodeGenerator
         {
             var argStr = ValueToString(arg);
             // If argument is a struct value (not a pointer), take its address
-            if (arg.Type is StructType && !argStr.StartsWith("&"))
+            if (arg.Type is StructType && !argStr.StartsWith('&'))
                 return $"&{argStr}";
             return argStr;
         }));
@@ -1253,12 +1250,7 @@ public class CCodeGenerator
 
     #region Helper Methods
 
-    private string GetSliceStructName(FType elementType)
-    {
-        return $"Slice_{TypeToCType(elementType).Replace("*", "Ptr").Replace(" ", "_")}";
-    }
-
-    private string GetFunctionCName(Function function)
+    private static string GetFunctionCName(Function function)
     {
         // Foreign functions use their exact name - no mangling (direct C FFI)
         if (function.IsForeign)
@@ -1269,7 +1261,7 @@ public class CCodeGenerator
             return "main";
 
         // All other FLang functions are mangled to support overloading
-        return NameMangler.GenericFunction(function.Name, function.Parameters.Select(p => p.Type).ToList());
+        return NameMangler.GenericFunction(function.Name, [.. function.Parameters.Select(p => p.Type)]);
     }
 
     private string BuildParameterList(Function function)
@@ -1302,7 +1294,7 @@ public class CCodeGenerator
             // since GlobalValue type is &T (pointer) but C emits it as T (struct).
             // Cast to non-const pointer since globals are emitted as static const.
             GlobalValue global when global.Initializer is StructConstantValue scv
-                => $"({TypeToCType(scv.Type)}*)&{SanitizeCIdentifier(global.Name)}",
+                => $"({TypeToCType(scv.Type!)}*)&{SanitizeCIdentifier(global.Name)}",
 
             GlobalValue global => SanitizeCIdentifier(global.Name),
 
@@ -1319,7 +1311,7 @@ public class CCodeGenerator
         };
     }
 
-    private string GetMangledFunctionName(FunctionReferenceValue funcRef)
+    private static string GetMangledFunctionName(FunctionReferenceValue funcRef)
     {
         // Get the function type to determine parameter types for mangling
         if (funcRef.Type is FunctionType ft)
@@ -1340,7 +1332,7 @@ public class CCodeGenerator
         return EscapeCIdentifier(sanitized);
     }
 
-    private string TypeToCType(FType type)
+    private string TypeToCType(TypeBase type)
     {
         // Prune TypeVars to get the actual concrete type
         var prunedType = type.Prune();
@@ -1380,81 +1372,49 @@ public class CCodeGenerator
     }
 
     /// <summary>
-    /// Converts a function type to C function pointer type syntax.
-    /// fn(i32, i32) i32 -> int32_t (*)(int32_t, int32_t)
-    /// Note: struct parameters are passed by pointer in C calling convention
+    /// Builds the C parameter type list and return type for a FunctionType.
+    /// Struct parameters become const pointers per our C calling convention.
     /// </summary>
+    private (string ReturnType, string ParamTypes) BuildFunctionTypeParts(FunctionType ft)
+    {
+        var returnType = TypeToCType(ft.ReturnType);
+        var paramTypes = ft.ParameterTypes.Count == 0
+            ? "void"
+            : string.Join(", ", ft.ParameterTypes.Select(p =>
+            {
+                var pType = TypeToCType(p);
+                if (p is StructType) pType = "const " + pType + "*";
+                return pType;
+            }));
+        return (returnType, paramTypes);
+    }
+
+    /// <summary> fn(i32, i32) i32 -> int32_t (*)(int32_t, int32_t) </summary>
     private string FunctionTypeToCType(FunctionType ft)
     {
-        var returnType = TypeToCType(ft.ReturnType);
-        var paramTypes = ft.ParameterTypes.Count == 0
-            ? "void"
-            : string.Join(", ", ft.ParameterTypes.Select(p =>
-            {
-                var pType = TypeToCType(p);
-                // Structs are passed by pointer in our C calling convention
-                if (p is StructType) pType += "*";
-                return pType;
-            }));
-        return $"{returnType} (*)({paramTypes})";
+        var (ret, parms) = BuildFunctionTypeParts(ft);
+        return $"{ret} (*)({parms})";
     }
 
-    /// <summary>
-    /// Converts a function type to C function pointer declaration syntax with a name.
-    /// fn(i32, i32) i32 with name "f" -> int32_t (*f)(int32_t, int32_t)
-    /// Note: struct parameters are passed by pointer in C calling convention
-    /// </summary>
+    /// <summary> fn(i32, i32) i32 with name "f" -> int32_t (*f)(int32_t, int32_t) </summary>
     private string FunctionTypeToDeclaration(FunctionType ft, string varName)
     {
-        var returnType = TypeToCType(ft.ReturnType);
-        var paramTypes = ft.ParameterTypes.Count == 0
-            ? "void"
-            : string.Join(", ", ft.ParameterTypes.Select(p =>
-            {
-                var pType = TypeToCType(p);
-                // Structs are passed by pointer in our C calling convention
-                if (p is StructType) pType += "*";
-                return pType;
-            }));
-        return $"{returnType} (*{varName})({paramTypes})";
+        var (ret, parms) = BuildFunctionTypeParts(ft);
+        return $"{ret} (*{varName})({parms})";
     }
 
-    /// <summary>
-    /// Converts a pointer-to-function-type to C declaration syntax with a name.
-    /// &amp;fn(i32, i32) i32 with name "f" -> int32_t (**f)(int32_t, int32_t)
-    /// Note: struct parameters are passed by pointer in C calling convention
-    /// </summary>
+    /// <summary> &amp;fn(i32, i32) i32 with name "f" -> int32_t (**f)(int32_t, int32_t) </summary>
     private string FunctionPointerTypeToDeclaration(FunctionType ft, string varName)
     {
-        var returnType = TypeToCType(ft.ReturnType);
-        var paramTypes = ft.ParameterTypes.Count == 0
-            ? "void"
-            : string.Join(", ", ft.ParameterTypes.Select(p =>
-            {
-                var pType = TypeToCType(p);
-                if (p is StructType) pType += "*";
-                return pType;
-            }));
-        return $"{returnType} (**{varName})({paramTypes})";
+        var (ret, parms) = BuildFunctionTypeParts(ft);
+        return $"{ret} (**{varName})({parms})";
     }
 
-    /// <summary>
-    /// Converts a pointer-to-function-type to C cast syntax (no variable name).
-    /// &amp;fn(i32, i32) i32 -> int32_t (**)(int32_t, int32_t)
-    /// Note: struct parameters are passed by pointer in C calling convention
-    /// </summary>
+    /// <summary> &amp;fn(i32, i32) i32 -> int32_t (**)(int32_t, int32_t) </summary>
     private string FunctionPointerTypeToCast(FunctionType ft)
     {
-        var returnType = TypeToCType(ft.ReturnType);
-        var paramTypes = ft.ParameterTypes.Count == 0
-            ? "void"
-            : string.Join(", ", ft.ParameterTypes.Select(p =>
-            {
-                var pType = TypeToCType(p);
-                if (p is StructType) pType += "*";
-                return pType;
-            }));
-        return $"{returnType} (**)({paramTypes})";
+        var (ret, parms) = BuildFunctionTypeParts(ft);
+        return $"{ret} (**)({parms})";
     }
 
     private static bool HasSliceLayout(StructType structType)
@@ -1466,7 +1426,7 @@ public class CCodeGenerator
         return false;
     }
 
-    private static bool TryGetArrayType(FType? type, out ArrayType? arrayType)
+    private static bool TryGetArrayType(TypeBase? type, out ArrayType? arrayType)
     {
         switch (type)
         {
@@ -1482,7 +1442,7 @@ public class CCodeGenerator
         }
     }
 
-    private string GetStructCName(StructType structType)
+    private static string GetStructCName(StructType structType)
     {
         // Handle builtin String type
         if (TypeRegistry.IsString(structType))
@@ -1540,7 +1500,7 @@ public class CCodeGenerator
         };
     }
 
-    private string GetEnumCName(EnumType enumType)
+    private static string GetEnumCName(EnumType enumType)
     {
         // For generic enums, mangle type arguments into name
         if (enumType.TypeArguments.Count > 0)
@@ -1552,7 +1512,7 @@ public class CCodeGenerator
         return enumType.Name.Replace('.', '_');
     }
 
-    private string EscapeStringForC(string value)
+    private static string EscapeStringForC(string value)
     {
         var builder = new StringBuilder();
         foreach (var ch in value)

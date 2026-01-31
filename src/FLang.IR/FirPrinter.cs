@@ -1,6 +1,6 @@
 using System.Text;
 using FLang.Core;
-using FType = FLang.Core.TypeBase;
+using TypeBase = FLang.Core.TypeBase;
 using FLang.IR.Instructions;
 
 namespace FLang.IR;
@@ -227,9 +227,9 @@ public static class FirPrinter
     }
 
     /// <summary>
-    /// Convert FType to string representation (LLVM-like)
+    /// Convert TypeBase to string representation (LLVM-like)
     /// </summary>
-    private static string TypeToString(FType? type)
+    private static string TypeToString(TypeBase? type)
     {
         if (type == null)
             return "void";
@@ -260,7 +260,7 @@ public static class FirPrinter
     /// <summary>
     /// Check if a type is a primitive integer
     /// </summary>
-    private static bool IsPrimitiveInt(FType? type)
+    private static bool IsPrimitiveInt(TypeBase? type)
     {
         return type is PrimitiveType pt && (pt.Name.StartsWith('i') || pt.Name.StartsWith('u'));
     }

@@ -1624,10 +1624,10 @@ public class TypeChecker
         int autoDerefCount = 0;
 
         // Unwrap references recursively until we find a struct or non-reference type
-        while (currentType is ReferenceType refType)
+        while (currentType is ReferenceType reTypeBase)
         {
             autoDerefCount++;
-            currentType = refType.InnerType.Prune();
+            currentType = reTypeBase.InnerType.Prune();
         }
 
         // Convert arrays to slice representation for field access (.ptr, .len)
@@ -1758,14 +1758,14 @@ public class TypeChecker
         }
 
         // Handle pointer arithmetic specially - result type is the pointer type
-        if (prunedLt is ReferenceType refType && TypeRegistry.IsNumericType(prunedRt))
+        if (prunedLt is ReferenceType reTypeBase && TypeRegistry.IsNumericType(prunedRt))
         {
             // Ensure the index is resolved to a concrete integer type
             if (prunedRt is ComptimeInt)
             {
                 UnifyTypes(rt, TypeRegistry.ISize, be.Span);
             }
-            return refType;
+            return reTypeBase;
         }
 
         // Unify operand types - TypeVar.Prune() handles propagation automatically
@@ -2337,12 +2337,12 @@ public class TypeChecker
     /// op_set_index takes 3 arguments: (&amp;base, index, value)
     /// </summary>
     private OperatorFunctionResult? TryResolveSetIndexFunction(
-        string opFuncName, TypeBase baseRefType, TypeBase indexType, TypeBase valueType, SourceSpan span)
+        string opFuncName, TypeBase baseReTypeBase, TypeBase indexType, TypeBase valueType, SourceSpan span)
     {
         if (!_functions.TryGetValue(opFuncName, out var candidates))
             return null;
 
-        var argTypes = new List<TypeBase> { baseRefType.Prune(), indexType.Prune(), valueType.Prune() };
+        var argTypes = new List<TypeBase> { baseReTypeBase.Prune(), indexType.Prune(), valueType.Prune() };
 
         FunctionEntry? bestNonGeneric = null;
         var bestNonGenericCost = int.MaxValue;
@@ -3216,7 +3216,7 @@ public class TypeChecker
             case AnonymousStructExpressionNode anon:
                 {
                     // Unwrap ReferenceType to find the underlying struct type
-                    var unwrappedExpected = expectedType is ReferenceType refType ? refType.InnerType : expectedType;
+                    var unwrappedExpected = expectedType is ReferenceType reTypeBase ? reTypeBase.InnerType : expectedType;
                     StructType? structType = unwrappedExpected switch
                     {
                         StructType st => st,
@@ -4348,9 +4348,9 @@ public class TypeChecker
         // The underlying type should match, so we expose the inner type for matching
         if (receiverIsRef && !paramExpectsRef)
         {
-            var refType = (ReferenceType)receiverType;
+            var reTypeBase = (ReferenceType)receiverType;
             var adapted = new List<TypeBase>(argTypes);
-            adapted[0] = refType.InnerType;
+            adapted[0] = reTypeBase.InnerType;
             return adapted;
         }
 

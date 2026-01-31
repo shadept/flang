@@ -1,18 +1,18 @@
 using FLang.Core;
-using FType = FLang.Core.TypeBase;
+using TypeBase = FLang.Core.TypeBase;
 
 namespace FLang.IR;
 
 public class FunctionParameter
 {
-    public FunctionParameter(string name, FType type)
+    public FunctionParameter(string name, TypeBase type)
     {
         Name = name;
         Type = type;
     }
 
     public string Name { get; }
-    public FType Type { get; } // FLang type
+    public TypeBase Type { get; } // FLang type
 }
 
 public class Function
@@ -23,7 +23,7 @@ public class Function
     }
 
     public string Name { get; }
-    public FType ReturnType { get; set; } = TypeRegistry.I32; // FLang type
+    public TypeBase ReturnType { get; set; } = TypeRegistry.I32; // FLang type
     public List<FunctionParameter> Parameters { get; } = [];
     public List<BasicBlock> BasicBlocks { get; } = [];
     public bool IsForeign { get; set; }
@@ -34,4 +34,3 @@ public class Function
     /// </summary>
     public List<GlobalValue> Globals { get; } = [];
 }
-

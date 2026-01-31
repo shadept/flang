@@ -1,4 +1,4 @@
-using FType = FLang.Core.TypeBase;
+using TypeBase = FLang.Core.TypeBase;
 
 namespace FLang.Core;
 
@@ -13,7 +13,7 @@ public static class NameMangler
     /// <param name="baseName">The base function name without type parameters.</param>
     /// <param name="typeArgs">The list of type arguments to encode in the mangled name.</param>
     /// <returns>A mangled name in the format "baseName__type1__type2" (e.g., "map__i32__bool").</returns>
-    public static string GenericFunction(string baseName, IReadOnlyList<FType> typeArgs)
+    public static string GenericFunction(string baseName, IReadOnlyList<TypeBase> typeArgs)
     {
         // Example: name__i32__bool
         var parts = new List<string> { baseName };
@@ -32,9 +32,9 @@ public static class NameMangler
     /// </summary>
     /// <param name="t">The type to sanitize.</param>
     /// <returns>A sanitized string representation safe for use in symbol names.</returns>
-    private static string SanitizeTypeForName(FType t)
+    private static string SanitizeTypeForName(TypeBase t)
     {
-        // Map FType to a C-like token and then sanitize
+        // Map TypeBase to a C-like token and then sanitize
         var raw = t switch
         {
             PrimitiveType pt => pt.Name,

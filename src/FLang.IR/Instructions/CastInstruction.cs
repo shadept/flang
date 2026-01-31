@@ -1,5 +1,5 @@
 using FLang.Core;
-using FType = FLang.Core.TypeBase;
+using TypeBase = FLang.Core.TypeBase;
 
 namespace FLang.IR.Instructions;
 
@@ -15,7 +15,7 @@ namespace FLang.IR.Instructions;
 /// </summary>
 public class CastInstruction : Instruction
 {
-    public CastInstruction(Value source, FType targetType, Value result)
+    public CastInstruction(Value source, TypeBase targetType, Value result)
     {
         Source = source;
         TargetType = targetType;
@@ -30,7 +30,7 @@ public class CastInstruction : Instruction
     /// <summary>
     /// The type to cast to.
     /// </summary>
-    public FType TargetType { get; }
+    public TypeBase TargetType { get; }
 
     /// <summary>
     /// The result value produced by this cast.

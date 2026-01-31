@@ -1,5 +1,5 @@
 using FLang.Core;
-using FType = FLang.Core.TypeBase;
+using TypeBase = FLang.Core.TypeBase;
 
 namespace FLang.IR.Instructions;
 
@@ -36,7 +36,7 @@ public class CallInstruction : Instruction
     /// Parameter types of the callee function.
     /// Used for name mangling when calling FLang functions.
     /// </summary>
-    public IReadOnlyList<FType>? CalleeParamTypes { get; set; }
+    public IReadOnlyList<TypeBase>? CalleeParamTypes { get; set; }
 
     /// <summary>
     /// True if this is a call to a foreign (C) function that should not be name-mangled.
@@ -44,4 +44,3 @@ public class CallInstruction : Instruction
     /// </summary>
     public bool IsForeignCall { get; set; }
 }
-

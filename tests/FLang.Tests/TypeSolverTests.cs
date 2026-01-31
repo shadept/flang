@@ -685,7 +685,7 @@ public class TypeSolverTests
     }
 
     [Fact]
-    public void ArrayToSlice_RefTypeVarComptimeInt_ToI16Slice_HardensTypeVar()
+    public void ArrayToSlice_ReTypeBaseVarComptimeInt_ToI16Slice_HardensTypeVar()
     {
         // Arrange
         var solver = new TypeSolver();
@@ -927,13 +927,13 @@ public class TypeSolverTests
         // Arrange
         var solver = new TypeSolver();
         var arrayType = new ArrayType(TypeRegistry.I32, 10);
-        var refType = new ReferenceType(TypeRegistry.I32);
+        var reTypeBase = new ReferenceType(TypeRegistry.I32);
 
         // Act
-        var result = solver.Unify(arrayType, refType);
+        var result = solver.Unify(arrayType, reTypeBase);
 
         // Assert - [i32; 10] decays to &i32
-        Assert.Equal(refType, result);
+        Assert.Equal(reTypeBase, result);
         Assert.Empty(solver.Diagnostics);
     }
 
@@ -943,13 +943,13 @@ public class TypeSolverTests
         // Arrange
         var solver = new TypeSolver();
         var arrayType = new ArrayType(TypeRegistry.U8, 5);
-        var refType = new ReferenceType(TypeRegistry.U8);
+        var reTypeBase = new ReferenceType(TypeRegistry.U8);
 
         // Act
-        var result = solver.Unify(arrayType, refType);
+        var result = solver.Unify(arrayType, reTypeBase);
 
         // Assert - [u8; 5] decays to &u8 (useful for memset, memcpy)
-        Assert.Equal(refType, result);
+        Assert.Equal(reTypeBase, result);
         Assert.Empty(solver.Diagnostics);
     }
 
@@ -976,10 +976,10 @@ public class TypeSolverTests
         // Arrange
         var solver = new TypeSolver();
         var arrayType = new ArrayType(TypeRegistry.I32, 10);
-        var refType = new ReferenceType(TypeRegistry.I64);
+        var reTypeBase = new ReferenceType(TypeRegistry.I64);
 
         // Act
-        solver.Unify(arrayType, refType);
+        solver.Unify(arrayType, reTypeBase);
 
         // Assert - element type must match
         Assert.NotEmpty(solver.Diagnostics);
@@ -1026,13 +1026,13 @@ public class TypeSolverTests
         // Arrange
         var solver = new TypeSolver();
         var sliceType = TypeRegistry.MakeSlice(TypeRegistry.I32);
-        var refType = new ReferenceType(TypeRegistry.I32);
+        var reTypeBase = new ReferenceType(TypeRegistry.I32);
 
         // Act
-        var result = solver.Unify(sliceType, refType);
+        var result = solver.Unify(sliceType, reTypeBase);
 
         // Assert - Slice<i32> can coerce to &i32 (extracts .ptr field)
-        Assert.Equal(refType, result);
+        Assert.Equal(reTypeBase, result);
         Assert.Empty(solver.Diagnostics);
     }
 
@@ -1042,13 +1042,13 @@ public class TypeSolverTests
         // Arrange
         var solver = new TypeSolver();
         var sliceType = TypeRegistry.MakeSlice(TypeRegistry.U8);
-        var refType = new ReferenceType(TypeRegistry.U8);
+        var reTypeBase = new ReferenceType(TypeRegistry.U8);
 
         // Act
-        var result = solver.Unify(sliceType, refType);
+        var result = solver.Unify(sliceType, reTypeBase);
 
         // Assert - Slice<u8> to &u8 (useful for C interop)
-        Assert.Equal(refType, result);
+        Assert.Equal(reTypeBase, result);
         Assert.Empty(solver.Diagnostics);
     }
 
@@ -1058,10 +1058,10 @@ public class TypeSolverTests
         // Arrange
         var solver = new TypeSolver();
         var sliceType = TypeRegistry.MakeSlice(TypeRegistry.I32);
-        var refType = new ReferenceType(TypeRegistry.I64);
+        var reTypeBase = new ReferenceType(TypeRegistry.I64);
 
         // Act
-        solver.Unify(sliceType, refType);
+        solver.Unify(sliceType, reTypeBase);
 
         // Assert - element type must match
         Assert.NotEmpty(solver.Diagnostics);
@@ -1075,17 +1075,17 @@ public class TypeSolverTests
         var solver2 = new TypeSolver();
         var stringType = TypeRegistry.MakeString();
         var byteSliceType = TypeRegistry.MakeSlice(TypeRegistry.U8);
-        var u8RefType = new ReferenceType(TypeRegistry.U8);
+        var u8ReTypeBase = new ReferenceType(TypeRegistry.U8);
 
         // Act - Step 1: String → Slice<u8>
         var step1 = solver1.Unify(stringType, byteSliceType);
         // Step 2: Slice<u8> → &u8
-        var step2 = solver2.Unify(step1, u8RefType);
+        var step2 = solver2.Unify(step1, u8ReTypeBase);
 
         // Assert
         Assert.Empty(solver1.Diagnostics);
         Assert.Empty(solver2.Diagnostics);
-        Assert.Equal(u8RefType, step2);
+        Assert.Equal(u8ReTypeBase, step2);
     }
 
     #endregion

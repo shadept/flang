@@ -1,5 +1,5 @@
 using FLang.Core;
-using FType = FLang.Core.TypeBase;
+using TypeBase = FLang.Core.TypeBase;
 using FLang.Frontend.Ast;
 using FLang.Frontend.Ast.Declarations;
 using FLang.Frontend.Ast.Expressions;
@@ -30,7 +30,7 @@ public class AstLowering
     private readonly Dictionary<string, int> _shadowCounter = [];
 
     // Track type literal indices for the global type table
-    private readonly Dictionary<FType, int> _typeTableIndices = [];
+    private readonly Dictionary<TypeBase, int> _typeTableIndices = [];
     private GlobalValue? _typeTableGlobal = null;
 
     private AstLowering(Compilation compilation, ILogger<AstLowering> logger)
@@ -105,7 +105,7 @@ public class AstLowering
         }
     }
 
-    private Value? LowerGlobalConstantInitializer(ExpressionNode initializer, FType constType, string constName)
+    private Value? LowerGlobalConstantInitializer(ExpressionNode initializer, TypeBase constType, string constName)
     {
         // Unwrap implicit coercion nodes - we use the target type for the final value
         if (initializer is ImplicitCoercionNode coercion)
@@ -529,7 +529,7 @@ public class AstLowering
         _currentFunction.Globals.Add(_typeTableGlobal);
     }
 
-    private Value GetTypeLiteralValue(FType referencedType, StructType typeStructType)
+    private Value GetTypeLiteralValue(TypeBase referencedType, StructType typeStructType)
     {
         EnsureTypeTableExists();
 
@@ -557,7 +557,7 @@ public class AstLowering
             case VariableDeclarationNode varDecl:
                 {
                     // Use pre-resolved type from TypeChecker (should always be set)
-                    FType varType = varDecl.ResolvedType ??
+                    TypeBase varType = varDecl.ResolvedType ??
                                     throw new InvalidOperationException($"Variable '{varDecl.Name}' has no resolved type - TypeChecker must set ResolvedType");
 
                     // Generate unique IR name for variable (handles shadowing)
@@ -916,17 +916,17 @@ public class AstLowering
                         }
 
                         // Local variables are now pointers (alloca'd)
-                        if (localValue.Type is ReferenceType refType)
+                        if (localValue.Type is ReferenceType reTypeBase)
                         {
                             // Arrays and structs: return the pointer directly (don't load)
                             // They are manipulated via pointer in the IR
-                            if (refType.InnerType is ArrayType or StructType)
+                            if (reTypeBase.InnerType is ArrayType or StructType)
                             {
                                 return localValue;
                             }
 
                             // Scalars: load the value from memory
-                            var loadedValue = new LocalValue($"{identifier.Name}_load_{_tempCounter++}", refType.InnerType);
+                            var loadedValue = new LocalValue($"{identifier.Name}_load_{_tempCounter++}", reTypeBase.InnerType);
                             var loadInstruction = new LoadInstruction(localValue, loadedValue);
                             _currentBlock.Instructions.Add(loadInstruction);
                             return loadedValue;
@@ -1271,7 +1271,7 @@ public class AstLowering
                 }
 
                 // Regular function call
-                var paramTypes = new List<FType>();
+                var paramTypes = new List<TypeBase>();
                 if (call.ResolvedTarget != null)
                 {
                     foreach (var param in call.ResolvedTarget.Parameters)
@@ -1551,9 +1551,9 @@ public class AstLowering
                     for (int i = 0; i < fieldAccess.AutoDerefCount - 1; i++)
                     {
                         // Dereference to get the next pointer level
-                        if (currentType is ReferenceType refType)
+                        if (currentType is ReferenceType reTypeBase)
                         {
-                            var innerType = refType.InnerType;
+                            var innerType = reTypeBase.InnerType;
                             var derefResult = new LocalValue($"autoderef_{_tempCounter++}", innerType);
                             var derefInst = new LoadInstruction(currentPtr, derefResult);
                             _currentBlock.Instructions.Add(derefInst);
@@ -1731,9 +1731,9 @@ public class AstLowering
                         else
                         {
                             // op_index expects value T - dereference if needed
-                            if (baseValue is LocalValue lv2 && lv2.Type is ReferenceType refType)
+                            if (baseValue is LocalValue lv2 && lv2.Type is ReferenceType reTypeBase)
                             {
-                                var derefResult = new LocalValue($"index_deref_{_tempCounter++}", refType.InnerType);
+                                var derefResult = new LocalValue($"index_deref_{_tempCounter++}", reTypeBase.InnerType);
                                 var derefLoadInst = new LoadInstruction(baseValue, derefResult);
                                 _currentBlock.Instructions.Add(derefLoadInst);
                                 baseArg = derefResult;
@@ -1745,7 +1745,7 @@ public class AstLowering
                         }
 
                         // Collect parameter types from resolved function
-                        var opIndexParamTypes = new List<FType>();
+                        var opIndexParamTypes = new List<TypeBase>();
                         foreach (var param in resolvedFunc.Parameters)
                         {
                             var paramType = param.ResolvedType ??
@@ -1862,9 +1862,9 @@ public class AstLowering
             else
             {
                 // op_set_index expects value T - dereference if needed
-                if (baseValue is LocalValue lv2 && lv2.Type is ReferenceType refType)
+                if (baseValue is LocalValue lv2 && lv2.Type is ReferenceType reTypeBase)
                 {
-                    var derefResult = new LocalValue($"set_index_deref_{_tempCounter++}", refType.InnerType);
+                    var derefResult = new LocalValue($"set_index_deref_{_tempCounter++}", reTypeBase.InnerType);
                     var loadInst = new LoadInstruction(baseValue, derefResult);
                     _currentBlock.Instructions.Add(loadInst);
                     baseArg = derefResult;
@@ -1875,7 +1875,7 @@ public class AstLowering
                 }
             }
 
-            var opSetIndexParamTypes = new List<FType>();
+            var opSetIndexParamTypes = new List<TypeBase>();
             foreach (var param in resolvedFunc.Parameters)
             {
                 var paramType = param.ResolvedType ??
@@ -1941,7 +1941,7 @@ public class AstLowering
         return assignValue;
     }
 
-    private int GetTypeSize(FType type)
+    private int GetTypeSize(TypeBase type)
     {
         return type.Size;
     }
@@ -1979,9 +1979,9 @@ public class AstLowering
         for (int i = 0; i < memberAccess.AutoDerefCount - 1; i++)
         {
             // Dereference to get the next pointer level
-            if (currentType is ReferenceType refType)
+            if (currentType is ReferenceType reTypeBase)
             {
-                var innerType = refType.InnerType;
+                var innerType = reTypeBase.InnerType;
                 var loadResult = new LocalValue($"autoderef_{_tempCounter++}", innerType);
                 var loadInst = new LoadInstruction(currentPtr, loadResult);
                 _currentBlock.Instructions.Add(loadInst);
@@ -2146,7 +2146,7 @@ public class AstLowering
         var iterResult = new LocalValue($"iter_{_tempCounter++}", iteratorType);
         var iterCall = new CallInstruction("iter", new List<Value> { iterableValue }, iterResult);
         // iter has signature: fn iter(&T) IteratorState
-        iterCall.CalleeParamTypes = new List<FType> { new ReferenceType(iterableType) };
+        iterCall.CalleeParamTypes = new List<TypeBase> { new ReferenceType(iterableType) };
         _currentBlock.Instructions.Add(iterCall);
 
         // 3. Allocate iterator state on stack and store the initial iterator value
@@ -2171,7 +2171,7 @@ public class AstLowering
         var nextResult = new LocalValue($"next_{_tempCounter++}", optionType);
         var nextCall = new CallInstruction("next", new List<Value> { iteratorPtr }, nextResult);
         // next has signature: fn next(&IteratorState) E?
-        nextCall.CalleeParamTypes = new List<FType> { new ReferenceType(iteratorType) };
+        nextCall.CalleeParamTypes = new List<TypeBase> { new ReferenceType(iteratorType) };
         _currentBlock.Instructions.Add(nextCall);
 
         // Load has_value field
@@ -2432,7 +2432,7 @@ public class AstLowering
         _currentBlock.Instructions.Add(storeInst);
     }
 
-    private FType? GetExpressionType(ExpressionNode node) => node.Type;
+    private TypeBase? GetExpressionType(ExpressionNode node) => node.Type;
 
     // ==================== Enum Construction Lowering ====================
 
@@ -2846,7 +2846,7 @@ public class AstLowering
         var opFuncName = resolvedFunc.Name;
 
         // Collect parameter types from resolved function
-        var paramTypes = new List<FType>();
+        var paramTypes = new List<TypeBase>();
         foreach (var param in resolvedFunc.Parameters)
         {
             var paramType = param.ResolvedType ??
@@ -2935,7 +2935,7 @@ public class AstLowering
         var resolvedFunc = unary.ResolvedOperatorFunction!;
         var opFuncName = OperatorFunctions.GetFunctionName(unary.Operator);
 
-        var paramTypes = new List<FType>();
+        var paramTypes = new List<TypeBase>();
         foreach (var param in resolvedFunc.Parameters)
         {
             var paramType = param.ResolvedType ??
@@ -2980,7 +2980,7 @@ public class AstLowering
             throw new InvalidOperationException("CoalesceExpressionNode has no resolved function");
 
         // Collect parameter types from resolved function
-        var paramTypes = new List<FType>();
+        var paramTypes = new List<TypeBase>();
         foreach (var param in resolvedFunc.Parameters)
         {
             var paramType = param.ResolvedType ??

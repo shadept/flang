@@ -55,7 +55,7 @@ memcpy(field_ptr_3, inner, sizeof(struct Inner));
 - No way to distinguish `struct Foo*` from `int*` at codegen time
 
 **Solution (implemented incrementally):**
-- IR values now carry `FLang.Core.FType? Value.Type`
+- IR values now carry `FLang.Core.TypeBase? Value.Type`
 - Lowering attaches types for literals, temporaries, addresses, loads, GEPs, calls, and many locals
 - C backend maps FLang types to C types (`TypeRegistry.ToCType`) instead of defaulting to `int`
 - Next step: ensure all value producers set `Value.Type` consistently and teach `StorePointerInstruction` to emit `memcpy` for struct-by-value copies
