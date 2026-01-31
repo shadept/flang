@@ -12,6 +12,7 @@ public static class TypeRegistry
     private const string SliceFqn = "core.slice.Slice";
     private const string StringFqn = "core.string.String";
     private const string TypeFqn = "core.rtti.Type";
+    private const string FieldFqn = "core.rtti.Field";
 
     /// <summary>
     /// The never type (bottom type) - represents computations that never return.
@@ -97,12 +98,26 @@ public static class TypeRegistry
     ]);
 
     /// <summary>
+    /// Field struct for runtime type information - describes a single field of a struct.
+    /// Layout: name (String), offset (usize), type_info (&u8 - pointer to Type entry).
+    /// </summary>
+    public static readonly StructType FieldStruct = new(FieldFqn, [], [
+        ("name", StringStruct),
+        ("offset", USize),
+        ("type_info", new ReferenceType(U8, PointerWidth.Bits64))
+    ]);
+
+    /// <summary>
     /// Type struct template for runtime type information.
     /// </summary>
     public static readonly StructType TypeStructTemplate = new(TypeFqn, [], [
         ("name", StringStruct),
         ("size", U8),
-        ("align", U8)
+        ("align", U8),
+        ("fields", new StructType(SliceFqn, [FieldStruct], [
+            ("ptr", new ReferenceType(FieldStruct, PointerWidth.Bits64)),
+            ("len", USize)
+        ]))
     ]);
 
 
@@ -270,10 +285,15 @@ public static class TypeRegistry
         if (_typeStructCache.TryGetValue(innerType, out var cached))
             return cached;
 
+        var fieldsSlice = new StructType(SliceFqn, [FieldStruct], [
+            ("ptr", new ReferenceType(FieldStruct, PointerWidth.Bits64)),
+            ("len", USize)
+        ]);
         var typeStruct = new StructType(TypeFqn, [innerType], [
             ("name", StringStruct),
             ("size", U8),
-            ("align", U8)
+            ("align", U8),
+            ("fields", fieldsSlice)
         ]);
 
         _typeStructCache[innerType] = typeStruct;
@@ -358,6 +378,22 @@ public static class TypeRegistry
     public static bool IsRange(StructType st)
     {
         return st.StructName == RangeFqn;
+    }
+
+    /// <summary>
+    /// Checks if a TypeBase is Field (convenience overload).
+    /// </summary>
+    public static bool IsField(TypeBase type)
+    {
+        return type is StructType st && IsField(st);
+    }
+
+    /// <summary>
+    /// Checks if a StructType is Field using fully qualified name.
+    /// </summary>
+    public static bool IsField(StructType st)
+    {
+        return st.StructName == FieldFqn;
     }
 
     /// <summary>

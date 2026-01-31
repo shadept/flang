@@ -105,7 +105,7 @@ public class CCodeGenerator
         // A struct depends on another if it contains a field of that struct type (not pointer/reference)
         var structs = _structDefinitions.Values
             // TODO remove String restriction and use String from corelib
-            .Where(s => !TypeRegistry.IsString(s) && !TypeRegistry.IsType(s))
+            .Where(s => !TypeRegistry.IsString(s) && !TypeRegistry.IsType(s) && !TypeRegistry.IsField(s))
             .ToList();
 
         var sorted = TopologicalSortStructs(structs);
@@ -131,7 +131,7 @@ public class CCodeGenerator
             {
                 // Only by-value struct fields create dependencies
                 // Pointers/references don't need the full definition, just forward declaration
-                if (fieldType is StructType fieldStruct && !TypeRegistry.IsString(fieldStruct) && !TypeRegistry.IsType(fieldStruct))
+                if (fieldType is StructType fieldStruct && !TypeRegistry.IsString(fieldStruct) && !TypeRegistry.IsType(fieldStruct) && !TypeRegistry.IsField(fieldStruct))
                 {
                     var depName = GetStructCName(fieldStruct);
                     if (structsByName.ContainsKey(depName))
@@ -644,6 +644,10 @@ public class CCodeGenerator
                 // Type struct is emitted in headers, don't collect
                 return;
 
+            case StructType st when TypeRegistry.IsField(st):
+                // Field struct is emitted in headers, don't collect
+                return;
+
             case StructType st when TypeRegistry.IsSlice(st):
                 {
                     // Collect slice as a regular struct
@@ -718,10 +722,17 @@ public class CCodeGenerator
         _output.AppendLine("};");
         _output.AppendLine();
         _output.AppendLine("// Runtime type information");
+        _output.AppendLine("struct Field {");
+        _output.AppendLine("    struct String name;");
+        _output.AppendLine("    uintptr_t offset;");
+        _output.AppendLine("    const uint8_t* type_info;");
+        _output.AppendLine("};");
+        _output.AppendLine();
         _output.AppendLine("struct Type {");
         _output.AppendLine("    struct String name;");
         _output.AppendLine("    uint8_t size;");
         _output.AppendLine("    uint8_t align;");
+        _output.AppendLine("    struct { const struct Field* ptr; uintptr_t len; } fields;");
         _output.AppendLine("};");
         _output.AppendLine();
         _output.AppendLine("static void __flang_unimplemented(void) {");
@@ -1453,6 +1464,10 @@ public class CCodeGenerator
         // Handle builtin Type(T) - all instantiations use the same C struct
         if (TypeRegistry.IsType(structType))
             return "Type";
+
+        // Handle builtin Field struct
+        if (TypeRegistry.IsField(structType))
+            return "Field";
 
         // Handle anonymous structs (tuples) - generate name from field types
         if (string.IsNullOrEmpty(structType.StructName))
