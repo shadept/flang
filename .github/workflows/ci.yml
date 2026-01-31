@@ -28,9 +28,9 @@ jobs:
       - name: Setup .NET 10
         uses: actions/setup-dotnet@v5
         with:
-          dotnet-version: "10.x"
+          global-json-file: global.json
           cache: true
-          cache-dependency-path: subdir/packages.lock.json
+          cache-dependency-path: src/FLang.CLI/packages.lock.json
 
       - name: Install C compiler (Linux)
         if: runner.os == 'Linux'
