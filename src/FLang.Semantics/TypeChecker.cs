@@ -1894,7 +1894,7 @@ public class TypeChecker
 
         if (chosen.IsGeneric && chosenBindings != null)
         {
-            resolvedFunction = EnsureSpecialization(chosen, chosenBindings, argTypes);
+            resolvedFunction = EnsureSpecialization(chosen, chosenBindings, argTypes)!;
             returnType = SubstituteGenerics(chosen.ReturnType, chosenBindings);
         }
         else
@@ -2146,7 +2146,7 @@ public class TypeChecker
 
         if (chosen.IsGeneric && chosenBindings != null)
         {
-            resolvedFunction = EnsureSpecialization(chosen, chosenBindings, argTypes);
+            resolvedFunction = EnsureSpecialization(chosen, chosenBindings, argTypes)!;
             returnType = SubstituteGenerics(chosen.ReturnType, chosenBindings);
         }
         else
@@ -2419,7 +2419,7 @@ public class TypeChecker
 
         if (chosen.IsGeneric && chosenBindings != null)
         {
-            resolvedFunction = EnsureSpecialization(chosen, chosenBindings, argTypes);
+            resolvedFunction = EnsureSpecialization(chosen, chosenBindings, argTypes)!;
             returnType = SubstituteGenerics(chosen.ReturnType, chosenBindings);
         }
         else
@@ -3172,7 +3172,7 @@ public class TypeChecker
                     if (resolvedType is not StructType st)
                     {
                         ReportError(
-                            $"type `{resolvedType.Name}` is not a struct",
+                            $"type `{resolvedType?.Name ?? "unknown"}` is not a struct",
                             sc.TypeName.Span,
                             "cannot construct non-struct type",
                             "E2018");
@@ -3272,7 +3272,7 @@ public class TypeChecker
 
                     anon.Type = structType;
 
-                    if (TypeRegistry.IsOption(expectedType))
+                    if (expectedType != null && TypeRegistry.IsOption(expectedType))
                         type = expectedType;
                     else
                         type = structType;
@@ -4474,8 +4474,8 @@ public class TypeChecker
                 }
 
                 _logger.LogDebug(
-                    "{Indent}Recursing into array element types: [{Length}]{ParamElem} vs [{Length}]{ArgElem}",
-                    Indent(), pa.Length, pa.ElementType.Name, aa.ElementType.Name);
+                    "{Indent}Recursing into array element types: [{ParamLength}]{ParamElem} vs [{ArgLength}]{ArgElem}",
+                    Indent(), pa.Length, pa.ElementType.Name, aa.Length, aa.ElementType.Name);
                 return TryBindGeneric(pa.ElementType, aa.ElementType, bindings, out conflictParam, out conflictTypes);
             case StructType ps
                 when TypeRegistry.IsSlice(ps) && arg is StructType aslice && TypeRegistry.IsSlice(aslice):
@@ -4836,7 +4836,7 @@ public class TypeChecker
         CoalesceExpressionNode coal => new CoalesceExpressionNode(coal.Span, CloneExpression(coal.Left), CloneExpression(coal.Right)),
         NullPropagationExpressionNode np => new NullPropagationExpressionNode(np.Span, CloneExpression(np.Target), np.MemberName),
         MatchExpressionNode match => new MatchExpressionNode(match.Span, CloneExpression(match.Scrutinee), match.Arms.Select(a => new MatchArmNode(a.Span, a.Pattern, CloneExpression(a.ResultExpr))).ToList()),
-        ArrayLiteralExpressionNode arr => new ArrayLiteralExpressionNode(arr.Span, arr.Elements.Select(CloneExpression).ToList()),
+        ArrayLiteralExpressionNode arr => new ArrayLiteralExpressionNode(arr.Span, arr.Elements!.Select(CloneExpression).ToList()),
         AnonymousStructExpressionNode anon => new AnonymousStructExpressionNode(anon.Span, anon.Fields.Select(f => (f.FieldName, CloneExpression(f.Value))).ToList()),
         StructConstructionExpressionNode sc => new StructConstructionExpressionNode(sc.Span, sc.TypeName, sc.Fields.Select(f => (f.FieldName, CloneExpression(f.Value))).ToList()),
         ImplicitCoercionNode ic => new ImplicitCoercionNode(ic.Span, CloneExpression(ic.Inner), ic.TargetType, ic.Kind),

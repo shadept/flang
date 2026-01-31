@@ -21,7 +21,6 @@
           "Microsoft.Extensions.Logging.Abstractions": "[9.0.0, )"
         }
       }
-    },
-    "net10.0/win-x64": {}
+    }
   }
 }

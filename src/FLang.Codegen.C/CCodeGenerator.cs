@@ -394,7 +394,8 @@ public class CCodeGenerator
             _currentFunction = function;  // Track for error messages
             var name = GetFunctionCName(function);
             var paramList = BuildParameterList(function);
-            _output.AppendLine($"{TypeToCType(function.ReturnType)} {name}({paramList});");
+            var retType = function.Name == "main" ? "int32_t" : TypeToCType(function.ReturnType);
+            _output.AppendLine($"{retType} {name}({paramList});");
         }
 
         if (functions.Any(f => !f.IsForeign))
@@ -801,7 +802,8 @@ public class CCodeGenerator
         _currentFunction = function;
         var functionName = GetFunctionCName(function);
         var paramList = BuildParameterList(function);
-        var returnType = TypeToCType(function.ReturnType);
+        var isMain = function.Name == "main";
+        var returnType = isMain ? "int32_t" : TypeToCType(function.ReturnType);
         _output.AppendLine($"{returnType} {functionName}({paramList}) {{");
 
         // Emit defensive copies for by-value struct parameters
@@ -838,6 +840,10 @@ public class CCodeGenerator
             if (i > 0 && block.Instructions.Count == 0)
                 _output.AppendLine("    ;");
         }
+
+        // C requires main to return int; emit return 0 if FLang main returns void
+        if (isMain && function.ReturnType.Equals(TypeRegistry.Void))
+            _output.AppendLine("    return 0;");
 
         _output.AppendLine("}");
     }

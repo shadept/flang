@@ -545,7 +545,7 @@ public class AstLowering
 
         // Get pointer to the element: &__flang__type_table[index]
         var elemPtr = new LocalValue($"type_ptr_{_tempCounter++}", new ReferenceType(typeStructType));
-        _currentBlock.Instructions.Add(new GetElementPtrInstruction(_typeTableGlobal, byteOffset, elemPtr));
+        _currentBlock.Instructions.Add(new GetElementPtrInstruction(_typeTableGlobal!, byteOffset, elemPtr));
 
         return elemPtr;
     }
@@ -724,7 +724,7 @@ public class AstLowering
                 else
                 {
                     // Bare return for void functions
-                    _currentBlock.Instructions.Add(new ReturnInstruction(null));
+                    _currentBlock.Instructions.Add(new ReturnInstruction(new ConstantValue(0) { Type = TypeRegistry.Void }));
                 }
                 break;
 
