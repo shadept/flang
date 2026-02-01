@@ -151,6 +151,6 @@ fn sb_write(ctx: &u8, buf: u8[]) usize {
 
 pub fn writer(sb: &StringBuilder) BufferedWriter {
     const wfn = WriteFn { ctx = sb as &u8, write = sb_write }
-    const storage = [u8; 0] as u8[]
+    const storage = [0 as u8; 0] as u8[]
     return buffered_writer(wfn, storage)
 }

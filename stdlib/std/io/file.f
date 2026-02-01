@@ -60,7 +60,7 @@ pub fn close_file(file: &File) Result((), FileError) {
 // Result(OwnedString, FileError)
 pub fn read_all(file: &File) Result(String, FileError) {
     let sb: StringBuilder
-    let buf = [u8; 4096] as u8[]
+    let buf = [0 as u8; 4096] as u8[]
     // GAP: we should have a loop stament
     for (_i in 0..4096 as usize) {
         const n = read(file.handle.fd, buf.ptr, buf.len)
