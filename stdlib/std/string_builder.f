@@ -2,6 +2,7 @@
 // Uses a growable byte buffer backed by the allocator pattern.
 // Designed to support future string interpolation.
 
+import std.io.buffer
 import std.allocator
 
 pub struct StringBuilder {
@@ -132,4 +133,24 @@ pub fn deinit(sb: &StringBuilder) {
     sb.ptr = zero as &u8
     sb.len = 0
     sb.cap = 0
+}
+
+// =============================================================================
+// StringWriter
+// =============================================================================
+
+struct StringWriter {
+    sb: &StringBuilder
+}
+
+fn sb_write(ctx: &u8, buf: u8[]) usize {
+    const writer = ctx as &StringWriter
+    writer.sb.append_bytes(buf)
+    return buf.len
+}
+
+pub fn writer(sb: &StringBuilder) BufferedWriter {
+    const wfn = WriteFn { ctx = sb as &u8, write = sb_write }
+    const storage = [u8; 0] as u8[]
+    return buffered_writer(wfn, storage)
 }

@@ -1,5 +1,6 @@
 import std.io.buffer
 import std.result
+import std.string_builder
 
 enum FileMode {
     Read,
@@ -56,9 +57,36 @@ pub fn close_file(file: &File) Result((), FileError) {
     return Result.Ok(())
 }
 
+// Result(OwnedString, FileError)
+pub fn read_all(file: &File) Result(String, FileError) {
+    let sb: StringBuilder
+    let buf = [u8; 4096] as u8[]
+    // GAP: we should have a loop stament
+    for (_i in 0..4096 as usize) {
+        const n = read(file.handle.fd, buf.ptr, buf.len)
+        if (n == -1) {
+            return Result.Err(FileError.IOError)
+        }
+        if (n == 0) {
+            break
+        }
+        sb.append_bytes(buf)
+    }
+    return Result.Ok(sb.to_string())
+}
+
+// =============================================================================
+// Reader
+// =============================================================================
+
 fn file_read(ctx: &u8, buf: u8[]) usize {
     // Read from the file handle
-    return 0
+    const file = ctx as &File
+    const bytes = read(file.handle.fd, buf.ptr, buf.len)
+    if (bytes == -1) {
+        return 0
+    }
+    return bytes as usize
 }
 
 pub fn reader(file: &File, storage: u8[]) BufferedReader {
@@ -79,3 +107,6 @@ const O_APPEND: i32 = 1024
 
 #foreign fn open(path: &u8, flags: i32) i32
 #foreign fn close(fd: i32) i32
+
+#foreign fn read(fd: i32, buf: &u8, len: usize) isize
+#foreign fn write(fd: i32, buf: &u8, len: usize) isize
