@@ -820,8 +820,14 @@ public class Parser
             case TokenKind.Integer:
                 {
                     var integerToken = Eat(TokenKind.Integer);
-                    var value = long.Parse(integerToken.Text);
-                    return new IntegerLiteralNode(integerToken.Span, value);
+                    var text = integerToken.Text;
+                    // Find where digits end and suffix begins
+                    var digitEnd = 0;
+                    while (digitEnd < text.Length && char.IsDigit(text[digitEnd]))
+                        digitEnd++;
+                    var value = long.Parse(text[..digitEnd]);
+                    var suffix = digitEnd < text.Length ? text[digitEnd..] : null;
+                    return new IntegerLiteralNode(integerToken.Span, value, suffix);
                 }
 
             case TokenKind.True:

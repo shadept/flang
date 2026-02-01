@@ -26,7 +26,8 @@ bool showHelp = args.Contains("--help") || args.Contains("-h");
 bool listOnly = args.Contains("--list") || args.Contains("-l");
 bool verbose = args.Contains("--verbose") || args.Contains("-v");
 bool noProgress = args.Contains("--no-progress");
-string? filter = args.FirstOrDefault(a => !a.StartsWith("-"));
+bool sequential = args.Contains("--sequential") || args.Contains("-s");
+string? filter = args.FirstOrDefault(a => !a.StartsWith("-") && a != "--sequential" && a != "-s");
 
 if (showHelp)
 {
@@ -44,6 +45,7 @@ if (showHelp)
         Options:
           --list, -l        List all tests without running them
           --verbose, -v     Show detailed output for each test
+          --sequential, -s  Run tests sequentially (default is parallel)
           --no-progress     Disable progress bar
           --help, -h        Show this help message
 
@@ -124,8 +126,9 @@ if (listOnly)
 }
 
 // Run tests
+var parallelism = (sequential || verbose) ? 1 : Environment.ProcessorCount;
 Console.ForegroundColor = ConsoleColor.Cyan;
-Console.WriteLine($"Running {testFiles.Count} test(s)...");
+Console.WriteLine($"Running {testFiles.Count} test(s){(parallelism > 1 ? $" in parallel ({parallelism} workers)" : "")}...");
 Console.ResetColor();
 
 var passed = 0;
@@ -136,70 +139,96 @@ var skippedTests = new List<(string Path, string Name, string Reason)>();
 var total = testFiles.Count;
 var current = 0;
 
-foreach (var testFile in testFiles)
+var lockObj = new object();
+var results = new (string RelativePath, TestResult Result)[testFiles.Count];
+
+Parallel.For(0, testFiles.Count, new ParallelOptions { MaxDegreeOfParallelism = parallelism },
+    // Thread-local factory: each thread gets its own TestHarness to avoid shared state
+    () => new TestHarness(projectRoot),
+    (i, state, localHarness) =>
+    {
+        var testFile = testFiles[i];
+        var relativePath = Path.GetRelativePath(localHarness.HarnessDir, testFile);
+
+        if (verbose)
+        {
+            Console.ForegroundColor = ConsoleColor.Yellow;
+            Console.WriteLine($"[RUN]  {relativePath}");
+            Console.ResetColor();
+        }
+
+        var result = localHarness.RunTest(testFile, artifactsDir);
+        results[i] = (relativePath, result);
+
+        // Verbose: print result immediately (safe since parallelism=1 in verbose mode)
+        if (verbose)
+        {
+            if (result.Skipped)
+            {
+                Console.ForegroundColor = ConsoleColor.Yellow;
+                Console.WriteLine($"[SKIP] {relativePath}: {result.SkipReason}");
+                Console.ResetColor();
+            }
+            else if (result.Passed)
+            {
+                Console.ForegroundColor = ConsoleColor.Green;
+                Console.WriteLine($"[PASS] {relativePath} ({result.Duration.TotalMilliseconds:F0}ms)");
+                Console.ResetColor();
+            }
+            else
+            {
+                Console.ForegroundColor = ConsoleColor.Red;
+                Console.WriteLine($"[FAIL] {relativePath}");
+                Console.WriteLine($"       {result.FailureMessage}");
+                Console.ResetColor();
+            }
+        }
+        else if (!noProgress)
+        {
+            var done = Interlocked.Increment(ref current);
+            lock (lockObj)
+            {
+                RenderProgressBar(done, total, relativePath);
+            }
+        }
+
+        return localHarness;
+    },
+    _ => { } // No cleanup needed
+);
+
+if (!noProgress && !verbose)
 {
-    current++;
-    var relativePath = Path.GetRelativePath(harness.HarnessDir, testFile);
+    ClearProgressLine();
+}
 
-    if (!noProgress && !verbose)
-    {
-        RenderProgressBar(current, total, relativePath);
-    }
-
-    if (verbose)
-    {
-        Console.ForegroundColor = ConsoleColor.Yellow;
-        Console.WriteLine($"[RUN]  {relativePath}");
-        Console.ResetColor();
-    }
-
-    var result = harness.RunTest(testFile, artifactsDir);
-
+// Tally results in order
+foreach (var (relativePath, result) in results)
+{
     if (result.Skipped)
     {
         skipped++;
         skippedTests.Add((relativePath, result.TestName, result.SkipReason ?? ""));
-        if (verbose)
-        {
-            Console.ForegroundColor = ConsoleColor.Yellow;
-            Console.WriteLine($"[SKIP] {relativePath}: {result.SkipReason}");
-            Console.ResetColor();
-        }
     }
     else if (result.Passed)
     {
         passed++;
-        if (verbose)
-        {
-            Console.ForegroundColor = ConsoleColor.Green;
-            Console.WriteLine($"[PASS] {relativePath} ({result.Duration.TotalMilliseconds:F0}ms)");
-            Console.ResetColor();
-        }
     }
     else
     {
         failed++;
         failedTests.Add((relativePath, result.TestName, result.FailureMessage ?? "Unknown error"));
-
-        // Always show failures immediately
-        if (!noProgress && !verbose)
+        if (!verbose)
         {
-            ClearProgressLine();
+            Console.ForegroundColor = ConsoleColor.Red;
+            Console.WriteLine($"[FAIL] {relativePath}");
+            if (failedTests.Count <= 10)
+            {
+                Console.WriteLine($"       {result.FailureMessage}");
+            }
+            Console.ResetColor();
         }
-        Console.ForegroundColor = ConsoleColor.Red;
-        Console.WriteLine($"[FAIL] {relativePath}");
-        if (verbose || failedTests.Count <= 10)
-        {
-            Console.WriteLine($"       {result.FailureMessage}");
-        }
-        Console.ResetColor();
     }
-}
-
-// Clear progress bar
-if (!noProgress && !verbose)
-{
-    ClearProgressLine();
 }
 
 // Summary

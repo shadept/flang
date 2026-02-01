@@ -2985,8 +2985,25 @@ public class TypeChecker
         switch (expression)
         {
             case IntegerLiteralNode lit:
-                var tvId = $"lit_{lit.Span.Index}_{_nextLiteralTypeVarId++}";
-                type = CreateLiteralTypeVar(tvId, lit.Span, TypeRegistry.ComptimeInt, lit.Value);
+                if (lit.Suffix is not null)
+                {
+                    var suffixType = (PrimitiveType)TypeRegistry.GetTypeByName(lit.Suffix)!;
+                    if (!FitsInType(lit.Value, suffixType))
+                    {
+                        var (min, max) = GetIntegerRange(suffixType);
+                        ReportError(
+                            $"literal value `{lit.Value}` out of range for `{lit.Suffix}`",
+                            lit.Span,
+                            $"valid range: {min}..{max}",
+                            "E2029");
+                    }
+                    type = suffixType;
+                }
+                else
+                {
+                    var tvId = $"lit_{lit.Span.Index}_{_nextLiteralTypeVarId++}";
+                    type = CreateLiteralTypeVar(tvId, lit.Span, TypeRegistry.ComptimeInt, lit.Value);
+                }
                 break;
             case BooleanLiteralNode:
                 type = TypeRegistry.Bool;
@@ -4849,7 +4866,7 @@ public class TypeChecker
 
     private static ExpressionNode CloneExpression(ExpressionNode expr) => expr switch
     {
-        IntegerLiteralNode lit => new IntegerLiteralNode(lit.Span, lit.Value),
+        IntegerLiteralNode lit => new IntegerLiteralNode(lit.Span, lit.Value, lit.Suffix),
         BooleanLiteralNode bl => new BooleanLiteralNode(bl.Span, bl.Value),
         StringLiteralNode sl => new StringLiteralNode(sl.Span, sl.Value),
         NullLiteralNode nl => new NullLiteralNode(nl.Span),
