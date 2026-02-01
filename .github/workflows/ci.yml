@@ -6,6 +6,9 @@ on:
   pull_request:
     branches: [main]
 
+permissions:
+  contents: read
+
 jobs:
   build-and-test:
     strategy:
@@ -29,7 +32,6 @@ jobs:
         uses: actions/setup-dotnet@v5
         with:
           global-json-file: global.json
-          cache: true
 
       - name: Build compiler
         run: dotnet run build.cs ${{ matrix.rid }}
