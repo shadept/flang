@@ -33,7 +33,7 @@ pub fn println(value: isize) i32 {
 }
 
 pub fn println(value: usize) i32 {
-    return printf("%ulld\n".ptr, value)
+    return printf("%llu\n".ptr, value)
 }
 
 pub fn println(value: String) i32 {

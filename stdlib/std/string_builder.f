@@ -89,7 +89,7 @@ pub fn append_bytes(sb: &StringBuilder, data: u8[]) {
 // The returned String points into the builder's buffer and is only
 // valid while the builder is alive and not modified.
 pub fn as_string(sb: &StringBuilder) String {
-    return String {
+    return .{
         ptr = sb.ptr,
         len = sb.len,
     }
@@ -104,14 +104,15 @@ pub fn to_string(sb: &StringBuilder) String {
 // Return a copy of the current contents as a null-terminated String.
 // Allocates from the given allocator.
 pub fn to_string(sb: &StringBuilder, allocator: &Allocator) String {
-    const buf = allocator.alloc(sb.len + 1, 1).expect("StringBuilder.to_string: allocation failed")
+    const buf = allocator.alloc(sb.len + 1, align_of(u8))
+        .expect("StringBuilder.to_string: allocation failed")
     if (sb.len > 0) {
         memcpy(buf.ptr, sb.ptr, sb.len)
     }
     // Null-terminate for C FFI compatibility
     const term = buf.ptr + sb.len
     term.* = 0
-    return String {
+    return .{
         ptr = buf.ptr,
         len = sb.len,
     }
