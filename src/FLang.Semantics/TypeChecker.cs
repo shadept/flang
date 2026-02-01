@@ -1037,6 +1037,26 @@ public class TypeChecker
                 bodyList[^1] = returnStmt;
                 CheckReturnStatement(returnStmt);
             }
+
+            // Check for missing return in non-void functions.
+            // After implicit return rewriting, the last statement should be a return
+            // if the function has a non-void return type.
+            if (!expectedReturn.Equals(TypeRegistry.Void) && !IsNever(expectedReturn))
+            {
+                var hasReturn = function.Body.Count > 0 && function.Body[^1] is ReturnStatementNode;
+                if (!hasReturn)
+                {
+                    var span = function.Body.Count > 0
+                        ? function.Body[^1].Span
+                        : function.Span;
+                    var returnTypeName = FormatTypeNameForDisplay(expectedReturn);
+                    ReportError(
+                        $"function `{function.Name}` expects return type `{returnTypeName}` but body does not return a value",
+                        span,
+                        "missing return",
+                        "E2049");
+                }
+            }
         }
         finally
         {
@@ -1630,9 +1650,11 @@ public class TypeChecker
             currentType = reTypeBase.InnerType.Prune();
         }
 
-        // Convert arrays to slice representation for field access (.ptr, .len)
+        // Convert arrays and fieldless slices to proper slice representation for field access (.ptr, .len)
         var structType = currentType switch
         {
+            StructType st when TypeRegistry.IsSlice(st) && st.Fields.Count == 0 && st.TypeArguments.Count > 0
+                => TypeRegistry.MakeSlice(st.TypeArguments[0]),
             StructType st => st,
             ArrayType array => MakeSliceType(array.ElementType, ma.Span),
             _ => null
@@ -3859,7 +3881,15 @@ public class TypeChecker
 
         var key = BuildStructSpecKey(template.StructName, typeArgs);
         if (_compilation.StructSpecializations.TryGetValue(key, out var cached))
-            return cached;
+        {
+            // If the cached specialization has no fields but the template now does,
+            // the cache is stale (created before ResolveStructFields ran for the template).
+            // Re-instantiate to pick up the resolved fields.
+            if (cached.Fields.Count == 0 && template.Fields.Count > 0)
+                _compilation.StructSpecializations.Remove(key);
+            else
+                return cached;
+        }
 
         // Build bindings from GenericParameterType names to concrete types
         var bindings = new Dictionary<string, TypeBase>();
@@ -3889,9 +3919,11 @@ public class TypeChecker
     public StructType MakeSliceType(TypeBase elementType, SourceSpan span)
     {
         // Look up the Slice template from core.slice
-        if (!_compilation.StructsByFqn.TryGetValue("core.slice.Slice", out var sliceTemplate))
+        if (!_compilation.StructsByFqn.TryGetValue("core.slice.Slice", out var sliceTemplate)
+            || sliceTemplate.Fields.Count == 0)
         {
-            // Fallback to TypeRegistry if stdlib not loaded (e.g., during early bootstrap)
+            // Fallback to TypeRegistry if stdlib not loaded or template fields not yet resolved
+            // (phase ordering: struct fields may not be resolved yet during ResolveStructFields)
             return TypeRegistry.MakeSlice(elementType);
         }
 
@@ -3907,9 +3939,10 @@ public class TypeChecker
     public StructType MakeRangeType(TypeBase elementType, SourceSpan span)
     {
         // Look up the Range template from core.range
-        if (!_compilation.StructsByFqn.TryGetValue("core.range.Range", out var rangeTemplate))
+        if (!_compilation.StructsByFqn.TryGetValue("core.range.Range", out var rangeTemplate)
+            || rangeTemplate.Fields.Count == 0)
         {
-            // Fallback to TypeRegistry if stdlib not loaded (e.g., during early bootstrap)
+            // Fallback to TypeRegistry if stdlib not loaded or template fields not yet resolved
             return TypeRegistry.MakeRange(elementType);
         }
 
@@ -4987,6 +5020,9 @@ public class TypeChecker
                 new SliceTypeNode(span, CreateTypeNodeFromTypeBase(span, st.TypeArguments[0])),
             StructType st when TypeRegistry.IsOption(st) && st.TypeArguments.Count > 0 =>
                 new NullableTypeNode(span, CreateTypeNodeFromTypeBase(span, st.TypeArguments[0])),
+            StructType st when string.IsNullOrEmpty(st.StructName) =>
+                new AnonymousStructTypeNode(span,
+                    st.Fields.Select(f => (f.Name, CreateTypeNodeFromTypeBase(span, f.Type))).ToList()),
             StructType st => st.TypeArguments.Count == 0
                 ? new NamedTypeNode(span, st.StructName)
                 : new GenericTypeNode(span, st.StructName,

@@ -33,7 +33,7 @@ jobs:
           cache-dependency-path: src/FLang.CLI/packages.lock.json
 
       - name: Build compiler
-        run: dotnet run build.cs ${{ matrix.rid }} -- --restore
+        run: dotnet run build.cs ${{ matrix.rid }}
 
       - name: Run test harness
         run: dotnet run test.cs

@@ -373,11 +373,11 @@ public class Parser
 
         var statements = new List<StatementNode>();
 
+        var fnSpan = SourceSpan.Combine(fnKeyword.Span, _currentToken.Span);
         if (modifiers.HasFlag(FunctionModifiers.Foreign))
         {
             // Foreign functions have no body
-            var span = SourceSpan.Combine(fnKeyword.Span, _currentToken.Span);
-            return new FunctionDeclarationNode(span, identifier.Text, parameters, returnType, statements,
+            return new FunctionDeclarationNode(fnSpan, identifier.Text, parameters, returnType, statements,
                 modifiers | FunctionModifiers.Foreign);
         }
         else
@@ -407,8 +407,8 @@ public class Parser
 
             Eat(TokenKind.CloseBrace);
 
-            var span = SourceSpan.Combine(fnKeyword.Span, _currentToken.Span);
-            return new FunctionDeclarationNode(span, identifier.Text, parameters, returnType, statements, modifiers);
+            // var span = SourceSpan.Combine(fnKeyword.Span, _currentToken.Span);
+            return new FunctionDeclarationNode(fnSpan, identifier.Text, parameters, returnType, statements, modifiers);
         }
     }
 

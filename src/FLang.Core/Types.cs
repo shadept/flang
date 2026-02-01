@@ -956,6 +956,33 @@ public class EnumType : TypeBase
 
     public override bool Equals(TypeBase other)
     {
-        return other is EnumType et && et.Name == Name;
+        if (other is not EnumType et) return false;
+        if (et.Name != Name) return false;
+        if (TypeArguments.Count != et.TypeArguments.Count) return false;
+        for (int i = 0; i < TypeArguments.Count; i++)
+        {
+            if (!TypeArguments[i].Equals(et.TypeArguments[i]))
+                return false;
+        }
+        return true;
+    }
+
+    public override int GetHashCode()
+    {
+        var hash = Name.GetHashCode();
+        foreach (var arg in TypeArguments)
+            hash = HashCode.Combine(hash, arg.GetHashCode());
+        return hash;
+    }
+
+    public override string ToString()
+    {
+        var displayName = Name.Contains('.') ? Name[(Name.LastIndexOf('.') + 1)..] : Name;
+        if (TypeArguments.Count > 0)
+        {
+            var typeArgs = string.Join(", ", TypeArguments.Select(t => t.ToString()));
+            return $"{displayName}({typeArgs})";
+        }
+        return displayName;
     }
 }

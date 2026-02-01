@@ -46,6 +46,9 @@ public static class NameMangler
             ReferenceType rt => $"ref_{SanitizeTypeForName(rt.InnerType)}",
             ArrayType at => $"arr{at.Length}_{SanitizeTypeForName(at.ElementType)}",
             GenericType gt => $"{gt.BaseName}_{string.Join("_", gt.TypeArguments.Select(SanitizeTypeForName))}",
+            EnumType et when et.TypeArguments.Count > 0 =>
+                $"{et.Name}_{string.Join("_", et.TypeArguments.Select(SanitizeTypeForName))}",
+            EnumType et => et.Name,
             GenericParameterType gp => $"gp_{gp.ParamName}",
             FunctionType ft => GetFunctionTypeName(ft),
             _ => t.Name

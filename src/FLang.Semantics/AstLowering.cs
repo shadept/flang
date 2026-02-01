@@ -1101,8 +1101,10 @@ public class AstLowering
 
             case CallExpressionNode call:
                 // Check if this is enum variant construction
+                // A call is enum construction only if its type is EnumType AND it wasn't resolved
+                // to a regular function. Regular function calls that return an enum have ResolvedTarget set.
                 var exprType = call.Type;
-                if (exprType is EnumType enumType)
+                if (exprType is EnumType enumType && call.ResolvedTarget == null && !call.IsIndirectCall)
                 {
                     return LowerEnumConstruction(call, enumType);
                 }
