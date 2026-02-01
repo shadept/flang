@@ -415,7 +415,45 @@ Related Tests:
 Milestone: 19 (Text & I/O)
 
 
+## Open Issues
+
+### Array-to-Slice Coercion in Struct Construction
+
+**Status:** Open
+**Affected:** C codegen (struct field initialization)
+**Impact:** Assigning a `[T; N]` array directly to a `T[]` slice field in a struct literal fails at C compilation. The type checker accepts it (array-to-slice coercion), but C codegen doesn't emit the coercion for struct field initializers.
+
+**Workaround:** Pass the array through a function that accepts `T[]`, which triggers the coercion at the call site:
+```flang
+fn make_source(data: u8[]) Source {
+    return Source { data = data, pos = 0 }
+}
+let src = make_source(my_array)  // array coerces to slice at call site
+```
+
+**Related Tests:**
+- `tests/FLang.Tests/Harness/structs/struct_slice_field_init.f` (SKIP: demonstrates the bug)
+- `tests/FLang.Tests/Harness/buffer/buffered_reader_basic.f` (uses workaround)
+
+---
+
 ## Recently Fixed
+
+### Generic Struct Specialization Phase Ordering Bug
+
+**Fixed:** 2026-01-31
+**Was:** Accessing `.ptr` or `.len` on a slice (`T[]`) stored as a struct field would fail with `"no field 'len' on type 'core.slice.Slice'"`. This happened because `ResolveStructFields` (Phase 2b) processes modules in dictionary iteration order. If a user module with a `u8[]` struct field was resolved before `core.slice`, the Slice template had empty fields, causing `InstantiateStruct` to cache a specialization with no fields. Even after `core.slice` was resolved, the stale cache was used.
+
+**Fix:** Three changes:
+1. **Phase ordering** (`Compiler.cs`): Phase 2b now sorts modules so `core.*` is resolved before `std.*` before user code, ensuring fundamental type templates have fields before any user code instantiates them.
+2. **Fallback in `MakeSliceType`/`MakeRangeType`** (`TypeChecker.cs`): If the stdlib template has no fields yet, fall back to `TypeRegistry.MakeSlice`/`MakeRange` which have hardcoded fields.
+3. **Recovery in `CheckMemberAccessExpression`** (`TypeChecker.cs`): If a StructType is a Slice with 0 fields, reconstruct it via `TypeRegistry.MakeSlice`.
+4. **Stale cache invalidation in `InstantiateStruct`** (`TypeChecker.cs`): If a cached specialization has 0 fields but the template now has fields, re-instantiate.
+
+**Related Tests:**
+- `tests/FLang.Tests/Harness/structs/struct_slice_field_init.f` (also exercises this fix via the slice-in-struct pattern)
+
+---
 
 ### Array Repeat Memset Bug for Non-Zero Values
 

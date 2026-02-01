@@ -1,14 +1,17 @@
-import std.iter
-import std.char
-import std.string
-import std.string_builder
+import std.io.file
+import std.result
 
 pub fn main() {
-    let sb: StringBuilder
-    sb.append("Hello, ")
-    sb.append("World!")
-    let str = sb.as_string()
-    println(str)
+    const file = open_file("test.f", FileMode.Read).except("Failed to open file")
+    defer close_file(&file).except("Failed to close file")
 
-    println(type_of(i32).name)
+    print("Open fd: ")
+    println(file.handle.fd)
+
+
+
+    // const buffer = [u8; 1024]
+    // const reader = file.reader()
+    // const content = reader.read_all()
+    // println(content)
 }

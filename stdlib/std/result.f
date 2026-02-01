@@ -25,6 +25,30 @@ pub fn is_err(self: Result($T, $E)) bool {
     }
 }
 
+pub fn except(self: Result($T, $E), msg: String) T {
+    return self match {
+        Ok(value) => value,
+        Err(_) => {
+            panic(msg)
+            // unreachable but needed for type checker
+            const fake: T // zero init
+            fake
+        }
+    }
+}
+
+pub fn expect_err(self: Result($T, $E)) E {
+    return self match {
+        Ok(_) => {
+            panic(msg)
+            // unreachable but needed for type checker
+            const fake: E // zero init
+            fake
+        },
+        Err(error) => error
+    }
+}
+
 // Unwrap the Ok value, panic if Err
 pub fn unwrap(self: Result($T, $E)) T {
     return self match {

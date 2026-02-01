@@ -1917,6 +1917,46 @@ enum Good {
 
 ---
 
+### E2049: Missing Return Value
+
+**Category**: Semantic Analysis
+**Severity**: Error
+
+#### Description
+
+A function with a non-void return type does not return a value. The function body must end with a `return` statement or a tail expression whose type matches the declared return type.
+
+#### Example (Error)
+
+```flang
+fn compute(x: i32) i32 {
+    let y = x + 1
+    // ERROR: function expects return type `i32` but body does not return a value
+}
+
+fn empty() bool {
+    // ERROR: function expects return type `bool` but body does not return a value
+}
+```
+
+#### Solution
+
+Add a return statement or use a tail expression:
+
+```flang
+fn compute(x: i32) i32 {
+    let y = x + 1
+    return y
+}
+
+// Or with tail expression:
+fn compute(x: i32) i32 {
+    x + 1
+}
+```
+
+---
+
 ## E3XXX: Code Generation Errors
 
 ### E3001: Invalid Type During Lowering
@@ -2250,6 +2290,7 @@ Report the issue with sample code that reproduces the error.
 | **E2038** | Variables         | Cannot assign to const variable              |
 | **E2039** | Variables         | Const declaration missing initializer        |
 | **E2040** | Type Checking     | Cannot take address of temporary value       |
+| **E2049** | Semantic Analysis | Missing return value in non-void function    |
 | **E2102** | Generics          | Conflicting generic type bindings            |
 
 ### E3XXX: Code Generation

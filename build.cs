@@ -19,8 +19,7 @@ using System.Runtime.InteropServices;
 var scriptDir = Directory.GetCurrentDirectory();
 
 bool showHelp = args.Contains("--help") || args.Contains("-h");
-bool restore = args.Contains("--restore");
-string? rid = args.FirstOrDefault(a => !a.StartsWith("-"));
+string? rid = args.FirstOrDefault(a => !a.StartsWith('-'));
 
 if (showHelp)
 {
@@ -30,7 +29,6 @@ if (showHelp)
         Usage:
           dotnet run build.cs                  Build for current platform
           dotnet run build.cs <rid>            Build for specific RID
-          dotnet run build.cs -- --restore     Restore packages before building
           dotnet run build.cs -- --help        Show this help
 
         RID defaults:
@@ -67,18 +65,8 @@ Console.WriteLine($"=== Building FLang.CLI (Release) for RID={rid} ===");
 Console.ResetColor();
 Console.WriteLine();
 
-// Restore (optional)
-if (restore)
-{
-    if (Run("dotnet", $"restore flang.sln -r {rid} -nologo -v minimal") != 0)
-    {
-        Console.Error.WriteLine("Error: dotnet restore failed.");
-        return 1;
-    }
-}
-
 // Publish
-var publishArgs = $"publish src/FLang.CLI/FLang.CLI.csproj -c Release -r {rid} --no-restore -nologo -v minimal";
+var publishArgs = $"publish src/FLang.CLI/FLang.CLI.csproj -c Release -r {rid} -nologo -v minimal";
 if (Run("dotnet", publishArgs) != 0)
 {
     Console.Error.WriteLine("Error: dotnet publish failed.");

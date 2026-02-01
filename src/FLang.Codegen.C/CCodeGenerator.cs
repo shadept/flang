@@ -81,8 +81,7 @@ public class CCodeGenerator
     private void EmitProgram(IReadOnlyList<Function> functions)
     {
         EmitHeaders();
-        EmitStructDefinitions();
-        EmitEnumDefinitions();
+        EmitTypeDefinitions();
         EmitForeignPrototypes(functions);
         EmitFunctionPrototypes(functions);
         EmitGlobals(functions);
@@ -97,60 +96,100 @@ public class CCodeGenerator
         }
     }
 
-    private void EmitStructDefinitions()
+    private void EmitTypeDefinitions()
     {
-        // Topologically sort structs by their dependencies
-        // A struct depends on another if it contains a field of that struct type (not pointer/reference)
+        // Unified topological sort of structs and enums.
+        // Both are emitted as C structs, so they can be intermixed.
+        // Dependencies (by-value only, not pointers/references):
+        //   - Struct field of StructType → depends on that struct
+        //   - Struct field of EnumType → depends on that enum
+        //   - Enum variant payload of StructType → depends on that struct
+        //   - Enum variant payload of EnumType → depends on that enum
+
         var structs = _structDefinitions.Values
-            // TODO remove String restriction and use String from corelib
             .Where(s => !TypeRegistry.IsString(s) && !TypeRegistry.IsType(s) && !TypeRegistry.IsTypeInfo(s) && !TypeRegistry.IsFieldInfo(s))
             .ToList();
+        var enums = _enumDefinitions.Values.ToList();
 
-        var sorted = TopologicalSortStructs(structs);
+        // Map C name → type (either StructType or EnumType)
+        var typesByName = new Dictionary<string, TypeBase>();
+        foreach (var s in structs)
+            typesByName[GetStructCName(s)] = s;
+        foreach (var e in enums)
+            typesByName[GetEnumCName(e)] = e;
 
-        foreach (var structType in sorted)
-        {
-            EmitStructDefinition(structType);
-        }
-    }
-
-    private static List<StructType> TopologicalSortStructs(List<StructType> structs)
-    {
-        // Build dependency graph - struct A depends on B if A has a field of type B (by value, not pointer)
-        var structsByName = structs.ToDictionary(GetStructCName, s => s);
         var dependencies = new Dictionary<string, HashSet<string>>();
 
+        // Collect by-value type dependency name, or null if not a dependency
+        string? GetByValueDepName(TypeBase fieldType)
+        {
+            if (fieldType is StructType fs && !TypeRegistry.IsString(fs) && !TypeRegistry.IsType(fs) && !TypeRegistry.IsTypeInfo(fs) && !TypeRegistry.IsFieldInfo(fs))
+            {
+                var depName = GetStructCName(fs);
+                return typesByName.ContainsKey(depName) ? depName : null;
+            }
+            if (fieldType is EnumType fe)
+            {
+                var depName = GetEnumCName(fe);
+                return typesByName.ContainsKey(depName) ? depName : null;
+            }
+            return null;
+        }
+
+        // Build dependencies for structs
         foreach (var s in structs)
         {
             var name = GetStructCName(s);
-            dependencies[name] = new HashSet<string>();
-
+            var deps = new HashSet<string>();
             foreach (var (_, fieldType) in s.Fields)
             {
-                // Only by-value struct fields create dependencies
-                // Pointers/references don't need the full definition, just forward declaration
-                if (fieldType is StructType fieldStruct && !TypeRegistry.IsString(fieldStruct) && !TypeRegistry.IsType(fieldStruct) && !TypeRegistry.IsTypeInfo(fieldStruct) && !TypeRegistry.IsFieldInfo(fieldStruct))
+                var dep = GetByValueDepName(fieldType);
+                if (dep != null) deps.Add(dep);
+            }
+            dependencies[name] = deps;
+        }
+
+        // Build dependencies for enums
+        foreach (var e in enums)
+        {
+            var name = GetEnumCName(e);
+            var deps = new HashSet<string>();
+            foreach (var (_, payloadType) in e.Variants)
+            {
+                if (payloadType == null) continue;
+                // Payload can be a single type or a synthetic struct with multiple fields
+                if (payloadType is StructType ps && ps.Name.Contains("_payload"))
                 {
-                    var depName = GetStructCName(fieldStruct);
-                    if (structsByName.ContainsKey(depName))
-                        dependencies[name].Add(depName);
+                    // Multi-field payload struct: depend on each field type
+                    foreach (var (_, ft) in ps.Fields)
+                    {
+                        var dep = GetByValueDepName(ft);
+                        if (dep != null) deps.Add(dep);
+                    }
+                    // Also depend on the payload struct itself
+                    var psDep = GetByValueDepName(ps);
+                    if (psDep != null) deps.Add(psDep);
+                }
+                else
+                {
+                    var dep = GetByValueDepName(payloadType);
+                    if (dep != null) deps.Add(dep);
                 }
             }
+            dependencies[name] = deps;
         }
 
         // Kahn's algorithm for topological sort
-        // inDegree[X] = number of dependencies X has (must be emitted before X)
-        var result = new List<StructType>();
-        var inDegree = structs.ToDictionary(GetStructCName, s => dependencies[GetStructCName(s)].Count);
-
+        var allNames = typesByName.Keys.ToList();
+        var inDegree = allNames.ToDictionary(n => n, n => dependencies[n].Count);
         var queue = new Queue<string>(inDegree.Where(kv => kv.Value == 0).Select(kv => kv.Key).OrderBy(x => x));
+        var sorted = new List<string>();
 
         while (queue.Count > 0)
         {
             var name = queue.Dequeue();
-            result.Add(structsByName[name]);
+            sorted.Add(name);
 
-            // Find all structs that depend on this one and reduce their in-degree
             foreach (var (otherName, deps) in dependencies)
             {
                 if (deps.Contains(name))
@@ -162,25 +201,25 @@ public class CCodeGenerator
             }
         }
 
-        // If we couldn't emit all structs, there's a cycle - fall back to alphabetical
-        if (result.Count < structs.Count)
+        // Cycle fallback - append remaining in alphabetical order
+        if (sorted.Count < allNames.Count)
         {
-            var emitted = new HashSet<string>(result.Select(GetStructCName));
-            foreach (var s in structs.OrderBy(GetStructCName))
+            var emitted = new HashSet<string>(sorted);
+            foreach (var n in allNames.OrderBy(x => x))
             {
-                if (!emitted.Contains(GetStructCName(s)))
-                    result.Add(s);
+                if (!emitted.Contains(n))
+                    sorted.Add(n);
             }
         }
 
-        return result;
-    }
-
-    private void EmitEnumDefinitions()
-    {
-        foreach (var enumType in _enumDefinitions.OrderBy(kvp => kvp.Key).Select(kvp => kvp.Value))
+        // Emit in sorted order
+        foreach (var name in sorted)
         {
-            EmitEnumDefinition(enumType);
+            var type = typesByName[name];
+            if (type is StructType st)
+                EmitStructDefinition(st);
+            else if (type is EnumType et)
+                EmitEnumDefinition(et);
         }
     }
 

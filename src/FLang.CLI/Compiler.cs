@@ -111,7 +111,18 @@ public class Compiler
         }
 
         // Phase 2b: Resolve struct field types (after all struct names registered)
-        foreach (var kvp in parsedModules)
+        // Process stdlib core modules first to ensure fundamental types (Slice, Range, Option)
+        // have their fields resolved before any user code tries to instantiate them.
+        // Without this ordering, dictionary iteration may process user modules first,
+        // causing generic specializations (e.g., Slice(u8)) to be cached with empty fields.
+        var sortedModules = parsedModules.OrderBy(kvp =>
+        {
+            var mp = TypeChecker.DeriveModulePath(kvp.Key, compilation.IncludePaths, compilation.WorkingDirectory);
+            if (mp.StartsWith("core.")) return 0;
+            if (mp.StartsWith("std.")) return 1;
+            return 2;
+        });
+        foreach (var kvp in sortedModules)
         {
             var modulePath = TypeChecker.DeriveModulePath(kvp.Key, compilation.IncludePaths, compilation.WorkingDirectory);
             typeSolver.ResolveStructFields(kvp.Value, modulePath);
