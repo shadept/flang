@@ -493,6 +493,8 @@ public class CCodeGenerator
             arrayConst3.Elements != null && arrayConst3.Type is ArrayType arrType)
         {
             var elemType = TypeToCType(arrType.ElementType);
+            // MSVC does not allow zero-size arrays; use size 1 as a minimum
+            var declaredLen = Math.Max(arrType.Length, 1);
 
             // Handle array of structs (like the type table)
             if (arrType.ElementType is StructType)
@@ -517,7 +519,7 @@ public class CCodeGenerator
                     }
                     throw new InvalidOperationException($"Expected StructConstantValue in struct array: {e}");
                 }));
-                _output.AppendLine($"static const {elemType} {global.Name}[{arrType.Length}] = {{");
+                _output.AppendLine($"static const {elemType} {global.Name}[{declaredLen}] = {{");
                 _output.AppendLine($"    {elements}");
                 _output.AppendLine("};");
                 return;
@@ -529,7 +531,7 @@ public class CCodeGenerator
                 if (e is ConstantValue cv) return cv.IntValue.ToString();
                 throw new InvalidOperationException($"Non-constant value in array literal: {e}");
             }));
-            _output.AppendLine($"static const {elemType} {global.Name}[{arrType.Length}] = {{{primitiveElements}}};");
+            _output.AppendLine($"static const {elemType} {global.Name}[{declaredLen}] = {{{primitiveElements}}};");
         }
     }
 
@@ -962,7 +964,9 @@ public class CCodeGenerator
             // Arrays: allocate the data array directly
             // Example: %arr = alloca [3 x i32] -> int arr_val[3]; int* arr = arr_val;
             var elemType = TypeToCType(arrayType.ElementType);
-            _output.AppendLine($"    {elemType} {tempVarName}[{arrayType.Length}];");
+            // MSVC does not allow zero-size arrays; use size 1 as minimum
+            var declaredLen = Math.Max(arrayType.Length, 1);
+            _output.AppendLine($"    {elemType} {tempVarName}[{declaredLen}];");
             _output.AppendLine($"    {elemType}* {resultName} = {tempVarName};");
         }
         else if (alloca.AllocatedType is FunctionType ft)
