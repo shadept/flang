@@ -159,7 +159,6 @@ Parallel.For(0, testFiles.Count, new ParallelOptions { MaxDegreeOfParallelism = 
 
         var result = localHarness.RunTest(testFile, artifactsDir);
         results[i] = (relativePath, result);
-
         // Verbose: print result immediately (safe since parallelism=1 in verbose mode)
         if (verbose)
         {

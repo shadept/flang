@@ -49,9 +49,8 @@ public class TestHarness
         }
         else
         {
-            // Discover project root from assembly location
-            var currentAssemblyPath = typeof(TestHarness).Assembly.Location;
-            _projectRoot = Path.GetFullPath(Path.Combine(currentAssemblyPath, "..", "..", "..", ".."));
+            // Discover project root from app directory (works in single-file publish)
+            _projectRoot = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", ".."));
         }
 
         _stdlibPath = Path.GetFullPath(Path.Combine(_projectRoot, "..", "..", "stdlib"));

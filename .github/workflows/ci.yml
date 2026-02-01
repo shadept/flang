@@ -30,7 +30,6 @@ jobs:
         with:
           global-json-file: global.json
           cache: true
-          cache-dependency-path: src/FLang.CLI/packages.lock.json
 
       - name: Build compiler
         run: dotnet run build.cs ${{ matrix.rid }}

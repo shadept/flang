@@ -991,7 +991,9 @@ public class TypeChecker
         }
 
         // Verify all literal TypeVars have been resolved to concrete types
-        VerifyAllTypesResolved();
+        // Skip if errors already exist — unresolved literals are likely a consequence
+        if (!_diagnostics.Any(d => d.Severity == DiagnosticSeverity.Error))
+            VerifyAllTypesResolved();
 
         _currentModulePath = null;
     }
@@ -1170,8 +1172,15 @@ public class TypeChecker
                 v.Span,
                 "const variables must be initialized at declaration",
                 "E2039");
-            v.ResolvedType = TypeRegistry.Never;
-            DeclareVariable(v.Name, TypeRegistry.Never, v.Span, isConst: true);
+            if (v.Type != null)
+            {
+                v.ResolvedType = ResolveTypeNode(v.Type) ?? TypeRegistry.Never;
+            }
+            else
+            {
+                v.ResolvedType = TypeRegistry.Never;
+            }
+            DeclareVariable(v.Name, v.ResolvedType, v.Span, isConst: true);
             return;
         }
 
@@ -1182,7 +1191,7 @@ public class TypeChecker
         if (it != null && IsNever(it))
         {
             v.ResolvedType = TypeRegistry.Never;
-            DeclareVariable(v.Name, TypeRegistry.Never, v.Span, v.IsConst);
+            DeclareVariable(v.Name, v.ResolvedType, v.Span, v.IsConst);
             return;
         }
 
@@ -2457,6 +2466,41 @@ public class TypeChecker
         };
     }
 
+    private ArrayType CheckArrayLiteral(ArrayLiteralExpressionNode al, TypeBase? expectedType)
+    {
+        if (al.IsRepeatSyntax)
+        {
+            var rv = CheckExpression(al.RepeatValue!);
+            return new ArrayType(rv, al.RepeatCount!.Value);
+        }
+
+        if (al.Elements!.Count == 0)
+        {
+            if (expectedType != null)
+            {
+                // Empty array with context: element type resolved via unification
+                return new ArrayType(new TypeVar($"empty_arr_{al.Span.Index}"), 0);
+            }
+
+            ReportError(
+                "cannot infer type of empty array literal",
+                al.Span,
+                "consider adding type annotation",
+                "E2026");
+            return new ArrayType(TypeRegistry.Never, 0);
+        }
+
+        var first = CheckExpression(al.Elements[0]);
+        var unified = first;
+        for (var i = 1; i < al.Elements.Count; i++)
+        {
+            var et = CheckExpression(al.Elements[i]);
+            unified = UnifyTypes(unified, et, al.Elements[i].Span);
+        }
+
+        return new ArrayType(unified, al.Elements.Count);
+    }
+
     private TypeBase CheckCallExpression(CallExpressionNode call, TypeBase? expectedType)
     {
         // First check if this is enum variant construction (short form)
@@ -3345,36 +3389,8 @@ public class TypeChecker
                     break;
                 }
             case ArrayLiteralExpressionNode al:
-                {
-                    if (al.IsRepeatSyntax)
-                    {
-                        var rv = CheckExpression(al.RepeatValue!);
-                        type = new ArrayType(rv, al.RepeatCount!.Value);
-                    }
-                    else if (al.Elements!.Count == 0)
-                    {
-                        ReportError(
-                            "cannot infer type of empty array literal",
-                            al.Span,
-                            "consider adding type annotation",
-                            "E2026");
-                        type = new ArrayType(TypeRegistry.Never, 0);
-                    }
-                    else
-                    {
-                        var first = CheckExpression(al.Elements[0]);
-                        var unified = first;
-                        for (var i = 1; i < al.Elements.Count; i++)
-                        {
-                            var et = CheckExpression(al.Elements[i]);
-                            unified = UnifyTypes(unified, et, al.Elements[i].Span);
-                        }
-
-                        type = new ArrayType(unified, al.Elements.Count);
-                    }
-
-                    break;
-                }
+                type = CheckArrayLiteral(al, expectedType);
+                break;
             case IndexExpressionNode ix:
                 {
                     var bt = CheckExpression(ix.Base);

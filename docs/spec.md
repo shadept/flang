@@ -96,6 +96,7 @@ Structs may be generic. Generic parameters are introduced by `[T, U, ...]`.
 - Layout is optimized; declaration order does not determine memory order.
 - Layout is stable per target/configuration and queryable via introspection.
 - Anonymous structs: `.{ field = value, ... }`.
+- Field shorthand: `.{ field, ... }` is equivalent to `.{ field = field, ... }` when the field name matches a variable in scope.
 - Structural typing allows binding by field name.
 
 ### 2.3.1 Tuples
