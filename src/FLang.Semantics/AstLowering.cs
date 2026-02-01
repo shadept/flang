@@ -419,6 +419,9 @@ public class AstLowering
         // Remove any remaining unresolvable types (e.g. reference types wrapping generics)
         allTypes.RemoveWhere(t => t is GenericParameterType);
         allTypes.RemoveWhere(t => t is ReferenceType rt && rt.InnerType is GenericParameterType);
+        allTypes.RemoveWhere(t => t is EnumType et &&
+            et.Variants.Any(v => v.PayloadType is GenericParameterType
+                              || v.PayloadType is ReferenceType vrt && vrt.InnerType is GenericParameterType));
 
         // Build the type table from all types, sorted for deterministic layout
         var types = allTypes.OrderBy(t => t.Name).ToList();
@@ -629,6 +632,13 @@ public class AstLowering
                             {
                                 useMemsetOptimization = true;
                                 memsetByteVal = (byte)(intLit.Value & 0xFF);
+                            }
+                            // [Type; count] syntax means zero-initialized array
+                            else if (arrayLit.RepeatValue is IdentifierExpressionNode ident &&
+                                     ident.Name == arrayType.ElementType.Name)
+                            {
+                                useMemsetOptimization = true;
+                                memsetByteVal = 0;
                             }
                         }
 
@@ -1633,8 +1643,18 @@ public class AstLowering
                     Value[] elementValues;
                     if (arrayLiteral.IsRepeatSyntax)
                     {
-                        // Repeat syntax: [value; count]
-                        var repeatValue = LowerExpression(arrayLiteral.RepeatValue!);
+                        // Repeat syntax: [value; count] or [Type; count] (zero-initialized)
+                        Value repeatValue;
+                        if (arrayLiteral.RepeatValue is IdentifierExpressionNode repeatIdent &&
+                            repeatIdent.Name == arrayLitType.ElementType.Name)
+                        {
+                            // [Type; count] means zero-initialized array
+                            repeatValue = new ConstantValue(0) { Type = arrayLitType.ElementType };
+                        }
+                        else
+                        {
+                            repeatValue = LowerExpression(arrayLiteral.RepeatValue!);
+                        }
 
                         // For constants, we can create the array directly
                         if (repeatValue is ConstantValue constVal)
