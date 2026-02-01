@@ -3332,9 +3332,6 @@ public class TypeChecker
                     if (al.IsRepeatSyntax)
                     {
                         var rv = CheckExpression(al.RepeatValue!);
-                        // [Type; count] syntax: unwrap Type(T) to get the element type T
-                        if (rv is StructType rvSt && TypeRegistry.IsType(rvSt) && rvSt.TypeArguments.Count > 0)
-                            rv = rvSt.TypeArguments[0];
                         type = new ArrayType(rv, al.RepeatCount!.Value);
                     }
                     else if (al.Elements!.Count == 0)

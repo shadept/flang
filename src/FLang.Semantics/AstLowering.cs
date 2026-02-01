@@ -624,21 +624,20 @@ public class AstLowering
                         // Check if we can use memset optimization (doesn't need old variable values)
                         bool useMemsetOptimization = false;
                         byte memsetByteVal = 0;
-                        if (varDecl.Initializer is ArrayLiteralExpressionNode arrayLit && arrayLit.IsRepeatSyntax)
+                        // Unwrap cast expressions (e.g., [0 as u8; 4096] as u8[])
+                        var initExpr = varDecl.Initializer is CastExpressionNode castInit
+                            ? castInit.Expression : varDecl.Initializer;
+                        if (initExpr is ArrayLiteralExpressionNode arrayLit && arrayLit.IsRepeatSyntax)
                         {
+                            // Unwrap cast on repeat value (e.g., 0 as u8)
+                            var repeatExpr = arrayLit.RepeatValue is CastExpressionNode castRepeat
+                                ? castRepeat.Expression : arrayLit.RepeatValue;
                             var elemSize = arrayType.ElementType.Size;
-                            if (arrayLit.RepeatValue is IntegerLiteralNode intLit &&
+                            if (repeatExpr is IntegerLiteralNode intLit &&
                                 (intLit.Value == 0 || elemSize == 1))
                             {
                                 useMemsetOptimization = true;
                                 memsetByteVal = (byte)(intLit.Value & 0xFF);
-                            }
-                            // [Type; count] syntax means zero-initialized array
-                            else if (arrayLit.RepeatValue is IdentifierExpressionNode ident &&
-                                     ident.Name == arrayType.ElementType.Name)
-                            {
-                                useMemsetOptimization = true;
-                                memsetByteVal = 0;
                             }
                         }
 
@@ -1507,6 +1506,12 @@ public class AstLowering
                         return srcVal;
                     }
 
+                    // Constant folding: if casting a constant to a primitive type, keep it constant
+                    if (srcVal is ConstantValue constSrc && dstType is PrimitiveType)
+                    {
+                        return new ConstantValue(constSrc.IntValue) { Type = dstType };
+                    }
+
                     // Emit CastInstruction for all casts
                     // The backend will determine the appropriate cast implementation by inspecting types
                     var castResult = new LocalValue($"cast_{_tempCounter++}", dstType);
@@ -1643,18 +1648,8 @@ public class AstLowering
                     Value[] elementValues;
                     if (arrayLiteral.IsRepeatSyntax)
                     {
-                        // Repeat syntax: [value; count] or [Type; count] (zero-initialized)
-                        Value repeatValue;
-                        if (arrayLiteral.RepeatValue is IdentifierExpressionNode repeatIdent &&
-                            repeatIdent.Name == arrayLitType.ElementType.Name)
-                        {
-                            // [Type; count] means zero-initialized array
-                            repeatValue = new ConstantValue(0) { Type = arrayLitType.ElementType };
-                        }
-                        else
-                        {
-                            repeatValue = LowerExpression(arrayLiteral.RepeatValue!);
-                        }
+                        // Repeat syntax: [value; count]
+                        var repeatValue = LowerExpression(arrayLiteral.RepeatValue!);
 
                         // For constants, we can create the array directly
                         if (repeatValue is ConstantValue constVal)
