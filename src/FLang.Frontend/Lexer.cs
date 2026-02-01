@@ -72,6 +72,19 @@ public class Lexer
             _start = _position;
             while (_position < text.Length && char.IsDigit(text[_position]))
                 _position++;
+
+            // Check for integer type suffix (e.g., 42u8, 100isize)
+            if (_position < text.Length && (text[_position] == 'i' || text[_position] == 'u'))
+            {
+                var suffixStart = _position;
+                while (_position < text.Length && char.IsLetterOrDigit(text[_position]))
+                    _position++;
+                var suffix = text[suffixStart.._position];
+                if (suffix is not ("i8" or "i16" or "i32" or "i64" or "isize"
+                    or "u8" or "u16" or "u32" or "u64" or "usize"))
+                    _position = suffixStart; // backtrack if not a valid suffix
+            }
+
             return CreateToken(TokenKind.Integer);
         }
 

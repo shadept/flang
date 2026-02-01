@@ -37,6 +37,7 @@ No floating-point types.
 
 ```
 42              // integer (type inferred from context)
+42i32           // integer with type suffix (i8, i16, i32, i64, isize, u8, u16, u32, u64, usize)
 true false      // bool
 null            // None value for optionals
 "hello"         // string (UTF-8, null-terminated)
