@@ -4,7 +4,7 @@
 #:property Nullable=enable
 #:property ImplicitUsings=enable
 
-#:package Microsoft.Extensions.Logging.Console@9.0.0
+#:package Microsoft.Extensions.Logging.Console
 
 #:project src/FLang.CLI/FLang.CLI.csproj
 
