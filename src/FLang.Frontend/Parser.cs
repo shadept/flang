@@ -1061,15 +1061,25 @@ public class Parser
         while (_currentToken.Kind != TokenKind.CloseBrace && _currentToken.Kind != TokenKind.EndOfFile)
         {
             var fieldNameToken = Eat(TokenKind.Identifier);
+            ExpressionNode fieldValue;
             if (_currentToken.Kind == TokenKind.Equals)
+            {
                 Eat(TokenKind.Equals);
+                fieldValue = ParseExpression();
+            }
+            else if (_currentToken.Kind == TokenKind.Comma || _currentToken.Kind == TokenKind.CloseBrace)
+            {
+                // Shorthand: `field` is equivalent to `field = field`
+                fieldValue = new IdentifierExpressionNode(fieldNameToken.Span, fieldNameToken.Text);
+            }
             else
+            {
                 throw new ParserException(Diagnostic.Error(
                     "expected '=' in struct field",
                     _currentToken.Span,
-                    "use `field = expr`",
+                    "use `field = expr` or `field` shorthand",
                     "E1002"));
-            var fieldValue = ParseExpression();
+            }
 
             fields.Add((fieldNameToken.Text, fieldValue));
 
@@ -1099,15 +1109,25 @@ public class Parser
         while (_currentToken.Kind != TokenKind.CloseBrace && _currentToken.Kind != TokenKind.EndOfFile)
         {
             var fieldNameToken = Eat(TokenKind.Identifier);
+            ExpressionNode fieldValue;
             if (_currentToken.Kind == TokenKind.Equals)
+            {
                 Eat(TokenKind.Equals);
+                fieldValue = ParseExpression();
+            }
+            else if (_currentToken.Kind == TokenKind.Comma || _currentToken.Kind == TokenKind.CloseBrace)
+            {
+                // Shorthand: `field` is equivalent to `field = field`
+                fieldValue = new IdentifierExpressionNode(fieldNameToken.Span, fieldNameToken.Text);
+            }
             else
+            {
                 throw new ParserException(Diagnostic.Error(
                     "expected '=' in struct field",
                     _currentToken.Span,
-                    "use `field = expr`",
+                    "use `field = expr` or `field` shorthand",
                     "E1002"));
-            var fieldValue = ParseExpression();
+            }
 
             fields.Add((fieldNameToken.Text, fieldValue));
 

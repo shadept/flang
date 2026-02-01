@@ -278,8 +278,7 @@ pub fn iter(dict: &Dict($K, $V)) DictIterator(K, V) {
 
 // Advance iterator and return next occupied entry
 pub fn next(it: &DictIterator($K, $V)) Entry(K, V)? {
-    for (i in it.current as isize..it.dict.cap as isize) {
-        const idx: usize = i as usize
+    for (idx in it.current..it.dict.cap) {
         const entry: &Entry(K, V) = it.dict.entries + idx
         if (entry.state == 1) {
             it.current = idx + 1

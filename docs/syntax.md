@@ -125,9 +125,11 @@ struct Pair(T) {
 ```
 let p = Point { x = 10, y = 20 }       // named struct
 let a = .{ x = 10, y = 20 }            // anonymous struct (type from context)
+let p2 = Point { x, y = 20 }           // shorthand: `x` is equivalent to `x = x`
+let a2 = .{ x, y = 20 }               // shorthand works in anonymous structs too
 ```
 
-Field assignment uses `=`, not `:`.
+Field assignment uses `=`, not `:`. When the field name matches a variable in scope, you can omit the `= expr` part.
 
 ## Enums
 
