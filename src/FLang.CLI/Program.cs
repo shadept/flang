@@ -61,6 +61,8 @@ if (inputFilePath == null)
     return;
 }
 
+var stopwatch = Stopwatch.StartNew();
+
 // Set the default stdlib path if not provided
 stdlibPath ??= Path.Combine(AppContext.BaseDirectory, "stdlib");
 
@@ -105,6 +107,12 @@ if (!result.Success)
     }
     Console.Error.WriteLine($"Error: Compilation failed with {result.Diagnostics.Count(d => d.Severity == DiagnosticSeverity.Error)} error(s)");
     Environment.Exit(1);
+}
+else
+{
+    stopwatch.Stop();
+    var elapsedMs = stopwatch.ElapsedMilliseconds;
+    Console.WriteLine($"Compiled {inputFilePath} in {elapsedMs}ms");
 }
 
 // --- Utilities: compiler discovery and configuration ---
