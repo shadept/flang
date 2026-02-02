@@ -17,6 +17,18 @@ public class CCodeGenerator
     private readonly HashSet<string> _emittedGlobals = [];
     private readonly Dictionary<string, string> _parameterRemap = [];
     private readonly HashSet<string> _foreignFunctionsWithWrappers = [];
+
+    /// <summary>
+    /// Intern pool for deduplicating emitted constants (strings, arrays, etc.).
+    /// Maps content key -> canonical global name, so identical constants are emitted once.
+    /// </summary>
+    private readonly Dictionary<string, string> _internedConstants = [];
+
+    /// <summary>
+    /// Maps original global names to their interned canonical names.
+    /// Used in ValueToString to redirect references to deduplicated globals.
+    /// </summary>
+    private readonly Dictionary<string, string> _globalRemap = [];
     private Function? _currentFunction;
     private bool _headersEmitted;
 
@@ -109,7 +121,9 @@ public class CCodeGenerator
         var structs = _structDefinitions.Values
             .Where(s => !TypeRegistry.IsString(s) && !TypeRegistry.IsType(s) && !TypeRegistry.IsTypeInfo(s) && !TypeRegistry.IsFieldInfo(s))
             .ToList();
-        var enums = _enumDefinitions.Values.ToList();
+        var enums = _enumDefinitions.Values
+            .Where(e => !TypeRegistry.IsTypeKind(e))
+            .ToList();
 
         // Map C name → type (either StructType or EnumType)
         var typesByName = new Dictionary<string, TypeBase>();
@@ -443,6 +457,21 @@ public class CCodeGenerator
 
     private void EmitGlobals(IEnumerable<Function> functions)
     {
+        // Forward-declare the type table so that field/type_args arrays can reference it
+        foreach (var function in functions)
+        {
+            foreach (var global in function.Globals)
+            {
+                if (global.Name == "__flang__type_table" &&
+                    global.Initializer is ArrayConstantValue { Type: ArrayType arrTy })
+                {
+                    var len = Math.Max(arrTy.Length, 1);
+                    _output.AppendLine($"static const struct TypeInfo __flang__type_table[{len}];");
+                    break;
+                }
+            }
+        }
+
         foreach (var function in functions)
             foreach (var global in function.Globals)
                 EmitGlobal(global);
@@ -451,10 +480,42 @@ public class CCodeGenerator
             _output.AppendLine();
     }
 
+    /// <summary>
+    /// Computes an intern key for a global's initializer, if it is internable.
+    /// Returns null if the global should not be interned.
+    /// </summary>
+    private static string? GetInternKey(GlobalValue global)
+    {
+        // String constants: intern by string content
+        if (global.Initializer is StructConstantValue structConst &&
+            structConst.Type is StructType st && TypeRegistry.IsString(st))
+        {
+            var ptrField = structConst.FieldValues["ptr"];
+            if (ptrField is ArrayConstantValue arrayConst && arrayConst.StringRepresentation != null)
+                return $"str:{arrayConst.StringRepresentation}";
+        }
+
+        return null;
+    }
+
     private void EmitGlobal(GlobalValue global)
     {
         if (!_emittedGlobals.Add(global.Name))
             return;
+
+        // Check if this global can be interned (deduplicated)
+        var internKey = GetInternKey(global);
+        if (internKey != null)
+        {
+            if (_internedConstants.TryGetValue(internKey, out var canonicalName))
+            {
+                // Already emitted an identical constant - remap this name to the canonical one
+                _globalRemap[global.Name] = canonicalName;
+                return;
+            }
+            // First time seeing this content - register as canonical
+            _internedConstants[internKey] = global.Name;
+        }
 
         if (global.Initializer is StructConstantValue structConst &&
             structConst.Type is StructType st && TypeRegistry.IsString(st))
@@ -502,26 +563,24 @@ public class CCodeGenerator
                 var elements = string.Join(",\n    ", arrayConst3.Elements.Select(e =>
                 {
                     if (e is StructConstantValue scv)
-                    {
-                        // Emit struct initializer
-                        var fields = scv.FieldValues.Select(kvp =>
-                        {
-                            var value = kvp.Value switch
-                            {
-                                ConstantValue cv => cv.IntValue.ToString(),
-                                GlobalValue gv => $"&{gv.Name}",
-                                StructConstantValue nested => EmitStructConstantInline(nested),
-                                _ => throw new InvalidOperationException($"Unsupported field value type: {kvp.Value}")
-                            };
-                            return $".{kvp.Key} = {value}";
-                        });
-                        return $"{{ {string.Join(", ", fields)} }}";
-                    }
+                        return EmitStructConstantInline(scv);
                     throw new InvalidOperationException($"Expected StructConstantValue in struct array: {e}");
                 }));
                 _output.AppendLine($"static const {elemType} {global.Name}[{declaredLen}] = {{");
                 _output.AppendLine($"    {elements}");
                 _output.AppendLine("};");
+                return;
+            }
+
+            // Handle array of pointers (e.g., type_args: array of &TypeInfo)
+            if (arrType.ElementType is ReferenceType)
+            {
+                var ptrElements = string.Join(", ", arrayConst3.Elements.Select(e =>
+                {
+                    if (e is ConstantValue cv) return FormatConstantValue(cv);
+                    throw new InvalidOperationException($"Unsupported value in pointer array: {e}");
+                }));
+                _output.AppendLine($"static const {elemType} {global.Name}[{declaredLen}] = {{{ptrElements}}};");
                 return;
             }
 
@@ -555,13 +614,35 @@ public class CCodeGenerator
         }
     }
 
+    /// <summary>
+    /// Format a ConstantValue for use in a constant initializer.
+    /// Handles type table index references: ConstantValue with &amp;TypeInfo type
+    /// are emitted as pointers into __flang__type_table.
+    /// </summary>
+    private string FormatConstantValue(ConstantValue cv)
+    {
+        // Type table index references: &TypeInfo pointer encoded as integer index
+        if (cv.Type is ReferenceType rt && TypeRegistry.IsTypeInfo(rt.InnerType))
+        {
+            if (cv.IntValue == 0)
+                return "(const struct TypeInfo*)0";
+            return $"&__flang__type_table[{cv.IntValue}]";
+        }
+        // Naked enum values: emit as {.tag = N}
+        if (cv.Type is EnumType et && et.IsNaked)
+        {
+            return $"{{ .tag = {cv.IntValue} }}";
+        }
+        return cv.IntValue.ToString();
+    }
+
     private string EmitStructConstantInline(StructConstantValue scv)
     {
         var fields = scv.FieldValues.Select(kvp =>
         {
             var value = kvp.Value switch
             {
-                ConstantValue cv => cv.IntValue.ToString(),
+                ConstantValue cv => FormatConstantValue(cv),
                 FunctionReferenceValue funcRef => GetMangledFunctionName(funcRef),
                 // Handle inline ArrayConstantValue with string representation (e.g., type names in RTTI)
                 ArrayConstantValue arrayConst when arrayConst.StringRepresentation != null
@@ -587,7 +668,8 @@ public class CCodeGenerator
         // For array globals, the C declaration is `T name[N]`, so the name itself
         // decays to a pointer to the first element — no & needed.
         // Using & would give a pointer-to-array type mismatch.
-        var expr = gv.Initializer is ArrayConstantValue ? gv.Name : $"&{gv.Name}";
+        var resolvedName = ResolveGlobalName(gv.Name);
+        var expr = gv.Initializer is ArrayConstantValue ? resolvedName : $"&{resolvedName}";
 
         // Globals are emitted as `static const`, so &name yields a const pointer.
         // Cast to the target pointer type to strip const and handle type mismatches
@@ -785,10 +867,18 @@ public class CCodeGenerator
         _output.AppendLine("    const struct TypeInfo* type;");
         _output.AppendLine("};");
         _output.AppendLine();
+        _output.AppendLine("// TypeKind naked enum");
+        _output.AppendLine("struct core_rtti_TypeKind {");
+        _output.AppendLine("    int32_t tag;");
+        _output.AppendLine("};");
+        _output.AppendLine();
         _output.AppendLine("struct TypeInfo {");
         _output.AppendLine("    struct String name;");
         _output.AppendLine("    uint8_t size;");
         _output.AppendLine("    uint8_t align;");
+        _output.AppendLine("    struct core_rtti_TypeKind kind;");
+        _output.AppendLine("    struct { const struct String* ptr; uintptr_t len; } type_params;");
+        _output.AppendLine("    struct { const struct TypeInfo* const* ptr; uintptr_t len; } type_args;");
         _output.AppendLine("    struct { const struct FieldInfo* ptr; uintptr_t len; } fields;");
         _output.AppendLine("};");
         _output.AppendLine();
@@ -803,6 +893,7 @@ public class CCodeGenerator
     private void EmitStructDefinition(StructType structType)
     {
         var cName = GetStructCName(structType);
+        _output.AppendLine($"// Struct: {structType.ToString()}");
         _output.AppendLine($"struct {cName} {{");
 
         // C requires structs to have at least one member
@@ -1342,10 +1433,11 @@ public class CCodeGenerator
             // If it's a struct constant (like String literal), take its address
             // since GlobalValue type is &T (pointer) but C emits it as T (struct).
             // Cast to non-const pointer since globals are emitted as static const.
+            // Check _globalRemap for interned (deduplicated) globals.
             GlobalValue global when global.Initializer is StructConstantValue scv
-                => $"({TypeToCType(scv.Type!)}*)&{SanitizeCIdentifier(global.Name)}",
+                => $"({TypeToCType(scv.Type!)}*)&{ResolveGlobalName(global.Name)}",
 
-            GlobalValue global => SanitizeCIdentifier(global.Name),
+            GlobalValue global => ResolveGlobalName(global.Name),
 
             // Handle FunctionReferenceValue - just emit the mangled function name
             // C will implicitly convert a function name to a function pointer
@@ -1358,6 +1450,16 @@ public class CCodeGenerator
 
             _ => throw new Exception($"Unknown value type: {value.GetType().Name}")
         };
+    }
+
+    /// <summary>
+    /// Resolves a global name through the intern remap table.
+    /// If the global was deduplicated, returns the canonical name; otherwise returns the original.
+    /// </summary>
+    private string ResolveGlobalName(string name)
+    {
+        var resolved = _globalRemap.TryGetValue(name, out var canonical) ? canonical : name;
+        return SanitizeCIdentifier(resolved);
     }
 
     private static string GetMangledFunctionName(FunctionReferenceValue funcRef)

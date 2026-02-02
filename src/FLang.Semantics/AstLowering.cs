@@ -409,7 +409,13 @@ public class AstLowering
                 {
                     foreach (var (_, fieldType) in structType.Fields)
                     {
-                        if (fieldType is not GenericParameterType && allTypes.Add(fieldType))
+                        if (fieldType is GenericParameterType) continue;
+                        // Unwrap references — we don't emit TypeInfo for references
+                        var typeToAdd = fieldType is ReferenceType rt ? rt.InnerType : fieldType;
+                        // Skip function types entirely
+                        if (typeToAdd is FunctionType) continue;
+                        if (typeToAdd is GenericParameterType) continue;
+                        if (allTypes.Add(typeToAdd))
                             changed = true;
                     }
                 }
@@ -423,6 +429,10 @@ public class AstLowering
             et.Variants.Any(v => v.PayloadType is GenericParameterType
                               || v.PayloadType is ReferenceType vrt && vrt.InnerType is GenericParameterType));
 
+        // Don't emit TypeInfo for references or functions — references unwrap to inner type
+        allTypes.RemoveWhere(t => t is ReferenceType);
+        allTypes.RemoveWhere(t => t is FunctionType);
+
         // Build the type table from all types, sorted for deterministic layout
         var types = allTypes.OrderBy(t => t.Name).ToList();
 
@@ -433,8 +443,63 @@ public class AstLowering
         // Create the global type table first (forward reference for field type_info pointers)
         // We'll set the initializer after building all elements
         var fieldsSliceType = TypeRegistry.TypeInfoStruct.GetFieldType("fields") as StructType;
+        var typeParamsSliceType = TypeRegistry.TypeInfoStruct.GetFieldType("type_params") as StructType;
+        var typeArgsSliceType = TypeRegistry.TypeInfoStruct.GetFieldType("type_args") as StructType;
+        var typeInfoRefType = new ReferenceType(TypeRegistry.TypeInfoStruct, PointerWidth.Bits64);
 
         var typeStructElements = new List<Value>();
+
+        // Helper: build an inline String constant
+        Value MakeInlineString(string text)
+        {
+            var bytes = System.Text.Encoding.UTF8.GetBytes(text + "\0");
+            var arr = new ArrayConstantValue(bytes, TypeRegistry.U8)
+            {
+                StringRepresentation = text
+            };
+            return new StructConstantValue(TypeRegistry.StringStruct, new Dictionary<string, Value>
+            {
+                ["ptr"] = arr,
+                ["len"] = new ConstantValue(text.Length) { Type = TypeRegistry.USize }
+            });
+        }
+
+        // Helper: compute TypeKind integer value
+        int GetTypeKind(TypeBase t) => t switch
+        {
+            PrimitiveType => 0,  // Primitive
+            ArrayType => 1,      // Array
+            StructType => 2,     // Struct
+            EnumType => 3,       // Enum
+            _ => 0               // fallback to Primitive
+        };
+
+        // Helper: get type parameter names for a generic type
+        List<string> GetTypeParamNames(TypeBase t)
+        {
+            if (t is StructType st && st.TypeArguments.Count > 0)
+            {
+                // Look up the template to get param names
+                if (_compilation.StructsByFqn.TryGetValue(st.StructName, out var template)
+                    && template.TypeArguments.Count == st.TypeArguments.Count)
+                {
+                    return template.TypeArguments
+                        .Select(a => a is GenericParameterType gp ? gp.ParamName : a.Name)
+                        .ToList();
+                }
+            }
+            if (t is EnumType et && et.TypeArguments.Count > 0)
+            {
+                if (_compilation.EnumsByFqn.TryGetValue(et.Name, out var template)
+                    && template.TypeArguments.Count == et.TypeArguments.Count)
+                {
+                    return template.TypeArguments
+                        .Select(a => a is GenericParameterType gp ? gp.ParamName : a.Name)
+                        .ToList();
+                }
+            }
+            return [];
+        }
 
         for (int i = 0; i < types.Count; i++)
         {
@@ -444,19 +509,95 @@ public class AstLowering
             var typeName = type is StructType st && st.StructName is string fqn
                 ? fqn
                 : type.Name;
-            // Create an inline ArrayConstantValue for the type name - the C code generator
-            // will inline this directly as a string literal rather than creating a separate global
-            var nameBytes = System.Text.Encoding.UTF8.GetBytes(typeName + "\0");
-            var nameArray = new ArrayConstantValue(nameBytes, TypeRegistry.U8)
-            {
-                StringRepresentation = typeName
-            };
 
-            var nameString = new StructConstantValue(TypeRegistry.StringStruct, new Dictionary<string, Value>
+            var nameString = MakeInlineString(typeName);
+
+            // Compute kind
+            var kind = GetTypeKind(type);
+
+            // Build type_params slice
+            var paramNames = GetTypeParamNames(type);
+            Value typeParamsSlice;
+            if (paramNames.Count > 0)
             {
-                ["ptr"] = nameArray,
-                ["len"] = new ConstantValue(typeName.Length) { Type = TypeRegistry.USize }
-            });
+                var paramElements = paramNames.Select(n => MakeInlineString(n)).ToArray();
+                var paramArrayType = new ArrayType(TypeRegistry.StringStruct, paramElements.Length);
+                var paramArray = new ArrayConstantValue(paramArrayType, paramElements);
+                var paramGlobal = new GlobalValue($"__flang__type_{i}_params", paramArray);
+                _currentFunction.Globals.Add(paramGlobal);
+
+                typeParamsSlice = new StructConstantValue(typeParamsSliceType!, new Dictionary<string, Value>
+                {
+                    ["ptr"] = paramGlobal,
+                    ["len"] = new ConstantValue(paramElements.Length) { Type = TypeRegistry.USize }
+                });
+            }
+            else
+            {
+                typeParamsSlice = new StructConstantValue(typeParamsSliceType!, new Dictionary<string, Value>
+                {
+                    ["ptr"] = new ConstantValue(0) { Type = new ReferenceType(TypeRegistry.StringStruct, PointerWidth.Bits64) },
+                    ["len"] = new ConstantValue(0) { Type = TypeRegistry.USize }
+                });
+            }
+
+            // Build type_args slice (pointers into the type table)
+            // We'll emit these as GlobalValue references after the type table is created
+            // For now, collect the type arguments that need resolving
+            var typeArgs = new List<TypeBase>();
+            if (type is StructType structWithArgs && structWithArgs.TypeArguments.Count > 0
+                && paramNames.Count > 0)
+            {
+                typeArgs.AddRange(structWithArgs.TypeArguments.Where(a => a is not GenericParameterType));
+            }
+            else if (type is EnumType enumWithArgs && enumWithArgs.TypeArguments.Count > 0
+                && paramNames.Count > 0)
+            {
+                typeArgs.AddRange(enumWithArgs.TypeArguments.Where(a => a is not GenericParameterType));
+            }
+
+            Value typeArgsSlice;
+            if (typeArgs.Count > 0)
+            {
+                // Create an array of pointers (GlobalValue refs) into the type table
+                var argElements = new List<Value>();
+                foreach (var argType in typeArgs)
+                {
+                    // Unwrap references for lookup
+                    var lookupType = argType is ReferenceType argRef ? argRef.InnerType : argType;
+                    if (_typeTableIndices.TryGetValue(lookupType, out var argIndex))
+                    {
+                        // Create a GlobalValue that represents &__flang__type_table[argIndex]
+                        // We use a ConstantValue with the index, and resolve in the C emitter
+                        var argPtr = new ConstantValue(argIndex) { Type = typeInfoRefType };
+                        argElements.Add(argPtr);
+                    }
+                    else
+                    {
+                        // Type not in table, emit NULL
+                        argElements.Add(new ConstantValue(0) { Type = typeInfoRefType });
+                    }
+                }
+
+                var argArrayType = new ArrayType(typeInfoRefType, argElements.Count);
+                var argArray = new ArrayConstantValue(argArrayType, argElements.ToArray());
+                var argGlobal = new GlobalValue($"__flang__type_{i}_args", argArray);
+                _currentFunction.Globals.Add(argGlobal);
+
+                typeArgsSlice = new StructConstantValue(typeArgsSliceType!, new Dictionary<string, Value>
+                {
+                    ["ptr"] = argGlobal,
+                    ["len"] = new ConstantValue(argElements.Count) { Type = TypeRegistry.USize }
+                });
+            }
+            else
+            {
+                typeArgsSlice = new StructConstantValue(typeArgsSliceType!, new Dictionary<string, Value>
+                {
+                    ["ptr"] = new ConstantValue(0) { Type = new ReferenceType(typeInfoRefType, PointerWidth.Bits64) },
+                    ["len"] = new ConstantValue(0) { Type = TypeRegistry.USize }
+                });
+            }
 
             // Build fields slice for this type
             Value fieldsSlice;
@@ -467,27 +608,29 @@ public class AstLowering
                 var fieldElements = new List<Value>();
                 foreach (var (fieldName, fieldType) in structType.Fields)
                 {
-                    // Field name as String
-                    var fnameBytes = System.Text.Encoding.UTF8.GetBytes(fieldName + "\0");
-                    var fnameArray = new ArrayConstantValue(fnameBytes, TypeRegistry.U8)
-                    {
-                        StringRepresentation = fieldName
-                    };
-                    var fnameString = new StructConstantValue(TypeRegistry.StringStruct, new Dictionary<string, Value>
-                    {
-                        ["ptr"] = fnameArray,
-                        ["len"] = new ConstantValue(fieldName.Length) { Type = TypeRegistry.USize }
-                    });
+                    var fnameString = MakeInlineString(fieldName);
 
                     // Field offset
                     var offset = structType.GetFieldOffset(fieldName);
 
-                    // type: NULL for now, can be resolved at runtime via type table index
+                    // Resolve field type pointer: look up in type table
+                    // Unwrap references for the lookup
+                    var fieldLookupType = fieldType is ReferenceType frt ? frt.InnerType : fieldType;
+                    Value fieldTypePtr;
+                    if (fieldLookupType is not FunctionType && _typeTableIndices.TryGetValue(fieldLookupType, out var fieldTypeIndex))
+                    {
+                        fieldTypePtr = new ConstantValue(fieldTypeIndex) { Type = typeInfoRefType };
+                    }
+                    else
+                    {
+                        fieldTypePtr = new ConstantValue(0) { Type = typeInfoRefType };
+                    }
+
                     var fieldStruct = new StructConstantValue(TypeRegistry.FieldInfoStruct, new Dictionary<string, Value>
                     {
                         ["name"] = fnameString,
                         ["offset"] = new ConstantValue(offset) { Type = TypeRegistry.USize },
-                        ["type"] = new ConstantValue(0) { Type = new ReferenceType(TypeRegistry.TypeInfoStruct, PointerWidth.Bits64) }
+                        ["type"] = fieldTypePtr
                     });
                     fieldElements.Add(fieldStruct);
                 }
@@ -519,6 +662,9 @@ public class AstLowering
                 ["name"] = nameString,
                 ["size"] = new ConstantValue(type.Size) { Type = TypeRegistry.U8 },
                 ["align"] = new ConstantValue(type.Alignment) { Type = TypeRegistry.U8 },
+                ["kind"] = new ConstantValue(kind) { Type = TypeRegistry.TypeKindEnum },
+                ["type_params"] = typeParamsSlice,
+                ["type_args"] = typeArgsSlice,
                 ["fields"] = fieldsSlice
             });
 
@@ -536,8 +682,13 @@ public class AstLowering
     {
         EnsureTypeTableExists();
 
+        // Unwrap references — we don't emit TypeInfo for reference types
+        var lookupType = referencedType;
+        while (lookupType is ReferenceType rt)
+            lookupType = rt.InnerType;
+
         // Get the index for this type in the table
-        if (!_typeTableIndices.TryGetValue(referencedType, out var index))
+        if (!_typeTableIndices.TryGetValue(lookupType, out var index))
         {
             throw new InvalidOperationException($"Type {referencedType.Name} was not collected during type checking");
         }

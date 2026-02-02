@@ -12,10 +12,9 @@ pub struct List(T) {
 }
 
 pub fn list_with_capacity(capacity: usize, allocator: &Allocator?) List($T) {
-    const elem_size: usize = size_of(T)
-    const elem_align: usize = align_of(T)
-    const bytes: usize = capacity * elem_size
-    const buf = allocator.alloc(bytes, elem_align).expect("list_with_capacity: allocation failed")
+    const bytes: usize = capacity * size_of(T)
+    const buf = allocator.alloc(bytes, align_of(T))
+        .expect("list_with_capacity: allocation failed")
 
     return List {
         ptr = buf.ptr,
@@ -23,10 +22,6 @@ pub fn list_with_capacity(capacity: usize, allocator: &Allocator?) List($T) {
         cap = capacity,
         allocator = allocator,
     }
-}
-
-fn get_allocator(self: List($T)) &Allocator {
-    return self.allocator ?? &global_allocator
 }
 
 fn as_slice(self: List($T)) T[] {
@@ -48,7 +43,8 @@ pub fn reserve(self: &List($T), capacity: usize) {
     const elem_size: usize = size_of(T)
     const elem_align: usize = align_of(T)
     const new_bytes: usize = new_cap * elem_size
-    const new_buf = self.get_allocator().alloc(new_bytes, elem_align).expect("reserve(List(T), capacity): allocation failed")
+    const new_buf = self.allocator.or_global().alloc(new_bytes, elem_align)
+        .expect("reserve(List(T), capacity): allocation failed")
     const new_ptr: &T = new_buf.ptr as &T
 
     // Copy existing elements
@@ -118,16 +114,15 @@ pub fn clear(list: &List($T)) {
 }
 
 // Free the backing storage. The list should not be used after this.
-pub fn deinit(list: &List($T)) {
-    if (list.cap > 0) {
-        let old_ptr: &u8? = list.ptr as &u8
-        free(old_ptr)
+pub fn deinit(self: &List($T)) {
+    if (self.cap > 0) {
+        let old_ptr: &u8? = self.ptr as &u8
+        self.allocator.or_global().free(self.as_slice())
     }
 
-    let zero: usize = 0
-    list.ptr = zero as &T
-    list.len = 0
-    list.cap = 0
+    self.ptr = 0usize as &T
+    self.len = 0
+    self.cap = 0
 }
 
 // =============================================================================

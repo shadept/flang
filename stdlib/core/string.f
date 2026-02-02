@@ -2,10 +2,15 @@
 // Binary-compatible with u8[] slice
 
 import core.option
+import core.slice
 
 pub struct String {
     ptr: &u8,
     len: usize
+}
+
+pub fn as_bytes(s: String) u8[] {
+    return slice_from_raw_parts(s.ptr, s.len)
 }
 
 pub fn op_index(s: String, idx: usize) u8? {

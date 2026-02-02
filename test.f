@@ -1,4 +1,5 @@
 import std.io.file
+import std.io.fmt
 import std.result
 
 pub fn main() i32 {

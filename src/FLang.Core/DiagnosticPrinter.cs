@@ -153,6 +153,12 @@ public static class DiagnosticPrinter
         PrintGutter();
         sb.Append(NewLine);
 
+        // Render notes as full diagnostics
+        foreach (var note in diagnostic.Notes)
+        {
+            sb.Append(Print(note, compilation));
+        }
+
         return sb.ToString();
     }
 

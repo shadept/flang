@@ -55,6 +55,26 @@ fn reserve(sb: &StringBuilder, additional: usize) {
     sb.cap = new_cap
 }
 
+// Append a single byte to the builder.
+pub fn append(sb: &StringBuilder, value: u8) {
+    sb.reserve(1)
+    const dest = sb.ptr + sb.len
+    dest.* = value
+    sb.len = sb.len + 1
+}
+
+// Append a single byte to the builder.
+// pub fn append(sb: &StringBuilder, value: u16) {
+//     sb.reserve(2)
+//     const dest = sb.ptr + sb.len
+//     dest.* = value
+//     sb.len = sb.len + 2
+// }
+
+pub fn append(sb: &StringBuilder, s: OwnedString) {
+    sb.append(s.as_view())
+}
+
 // Append a String to the builder.
 pub fn append(sb: &StringBuilder, s: String) {
     if (s.len == 0) {
@@ -66,12 +86,14 @@ pub fn append(sb: &StringBuilder, s: String) {
     sb.len = sb.len + s.len
 }
 
-// Append a single byte to the builder.
-pub fn append_byte(sb: &StringBuilder, b: u8) {
-    sb.reserve(1)
-    const dest = sb.ptr + sb.len
-    dest.* = b
-    sb.len = sb.len + 1
+// Append a String to the builder.
+pub fn append(sb: &StringBuilder, val: $T) {
+    sb.append(val, "")
+}
+
+// Append a String to the builder.
+pub fn append(sb: &StringBuilder, val: $T, spec: String) {
+    val.format(sb, spec)
 }
 
 // Append a byte slice to the builder.
@@ -88,22 +110,19 @@ pub fn append_bytes(sb: &StringBuilder, data: u8[]) {
 // Return the current contents as a String.
 // The returned String points into the builder's buffer and is only
 // valid while the builder is alive and not modified.
-pub fn as_string(sb: &StringBuilder) String {
-    return .{
-        ptr = sb.ptr,
-        len = sb.len,
-    }
+pub fn as_view(sb: &StringBuilder) String {
+    return .{ ptr = sb.ptr, len = sb.len }
 }
 
 // Return a copy of the current contents as a null-terminated String.
 // Allocates from the builder's own allocator.
-pub fn to_string(sb: &StringBuilder) String {
+pub fn to_string(sb: &StringBuilder) OwnedString {
     return sb.to_string(sb.get_allocator())
 }
 
 // Return a copy of the current contents as a null-terminated String.
 // Allocates from the given allocator.
-pub fn to_string(sb: &StringBuilder, allocator: &Allocator) String {
+pub fn to_string(sb: &StringBuilder, allocator: &Allocator) OwnedString {
     const buf = allocator.alloc(sb.len + 1, align_of(u8))
         .expect("StringBuilder.to_string: allocation failed")
     if (sb.len > 0) {
@@ -112,10 +131,10 @@ pub fn to_string(sb: &StringBuilder, allocator: &Allocator) String {
     // Null-terminate for C FFI compatibility
     const term = buf.ptr + sb.len
     term.* = 0
-    return .{
-        ptr = buf.ptr,
-        len = sb.len,
-    }
+    const result = OwnedString { ptr = buf.ptr, len = sb.len, allocator }
+    sb.ptr = 0usize as &u8
+    sb.len = 0
+    return result
 }
 
 // Reset the builder to empty without freeing its buffer.

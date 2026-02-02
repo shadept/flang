@@ -103,6 +103,10 @@ pub const global_allocator = Allocator {
     vtable = &global_allocator_vtable
 }
 
+pub fn or_global(alloc: &Allocator?) &Allocator {
+    return alloc.unwrap_or(&global_allocator)
+}
+
 // =============================================================================
 // FixedBufferAllocator - bump allocator over a provided buffer
 // =============================================================================

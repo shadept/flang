@@ -4,6 +4,13 @@
 import core.slice
 import core.string
 
+pub enum TypeKind {
+    Primitive = 0
+    Array = 1
+    Struct = 2
+    Enum = 3
+}
+
 // Generic alias for TypeInfo.
 // Allows couple of T to its TypeInfo.
 pub struct Type(T) {}
@@ -12,6 +19,9 @@ pub struct TypeInfo {
     name: String
     size: u8
     align: u8
+    kind: TypeKind
+    type_params: String[]
+    type_args: &TypeInfo[]
     fields: FieldInfo[]
 }
 
