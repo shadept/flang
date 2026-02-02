@@ -13,13 +13,14 @@ public static class TypeRegistry
     private const string StringFqn = "core.string.String";
     private const string TypeFqn = "core.rtti.Type";
     private const string TypeInfoFqn = "core.rtti.TypeInfo";
+    private const string TypeKindFqn = "core.rtti.TypeKind";
     private const string FieldInfoFqn = "core.rtti.FieldInfo";
 
     // Cache for well-known types to ensure reference equality
-    private static readonly Dictionary<TypeBase, StructType> _sliceStructCache = [];
-    private static readonly Dictionary<TypeBase, StructType> _optionStructCache = [];
-    private static readonly Dictionary<TypeBase, StructType> _rangeStructCache = [];
-    private static readonly Dictionary<TypeBase, StructType> _typeStructCache = [];
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<TypeBase, StructType> _sliceStructCache = [];
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<TypeBase, StructType> _optionStructCache = [];
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<TypeBase, StructType> _rangeStructCache = [];
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<TypeBase, StructType> _typeStructCache = [];
 
     /// <summary>
     /// The never type (bottom type) - represents computations that never return.
@@ -105,6 +106,26 @@ public static class TypeRegistry
     ]);
 
     /// <summary>
+    /// TypeKind naked enum — Primitive=0, Array=1, Struct=2, Enum=3.
+    /// </summary>
+    public static readonly EnumType TypeKindEnum = new(TypeKindFqn, [],
+    [
+        ("Primitive", null),
+        ("Array", null),
+        ("Struct", null),
+        ("Enum", null),
+    ])
+    {
+        TagValues = new Dictionary<string, long>
+        {
+            ["Primitive"] = 0,
+            ["Array"] = 1,
+            ["Struct"] = 2,
+            ["Enum"] = 3,
+        }
+    };
+
+    /// <summary>
     /// Non-generic TypeInfo struct for the type table.
     /// This is the actual data layout emitted by the compiler.
     /// Type(T) has the same layout but is generic (used for type literal syntax).
@@ -119,16 +140,21 @@ public static class TypeRegistry
 
     static TypeRegistry()
     {
-        // Forward-declare FieldInfoStruct so TypeInfoStruct can reference it
+        // Forward-declare both structs so they can reference each other
         FieldInfoStruct = new StructType(FieldInfoFqn, [], []);
-        TypeInfoStruct = new StructType(TypeInfoFqn, [], [
+        TypeInfoStruct = new StructType(TypeInfoFqn, [], []);
+
+        // Now set the actual fields with all cross-references resolved
+        TypeInfoStruct.SetFields([
             ("name", StringStruct),
             ("size", U8),
             ("align", U8),
+            ("kind", TypeKindEnum),
+            ("type_params", MakeSlice(StringStruct)),
+            ("type_args", MakeSlice(MakeReference(TypeInfoStruct))),
             ("fields", MakeSlice(FieldInfoStruct))
         ]);
 
-        // Now set the actual fields on FieldInfoStruct
         FieldInfoStruct.SetFields([
             ("name", StringStruct),
             ("offset", USize),
@@ -380,6 +406,14 @@ public static class TypeRegistry
     public static bool IsTypeInfo(StructType st)
     {
         return st.StructName == TypeInfoFqn;
+    }
+
+    /// <summary>
+    /// Checks if a TypeBase is TypeKind.
+    /// </summary>
+    public static bool IsTypeKind(TypeBase type)
+    {
+        return type is EnumType et && et.Name == TypeKindFqn;
     }
 
     /// <summary>

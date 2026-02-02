@@ -79,6 +79,11 @@ public class Diagnostic
     public string? Code { get; }
 
     /// <summary>
+    /// Gets the list of sub-diagnostics providing additional context (e.g., instantiation traces).
+    /// </summary>
+    public List<Diagnostic> Notes { get; } = [];
+
+    /// <summary>
     /// Creates an error diagnostic.
     /// </summary>
     /// <param name="message">The error message text.</param>

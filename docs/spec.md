@@ -408,10 +408,12 @@ if (cmd.tag == 0) {           // Quit
   - Arrays automatically coerce to slices when needed.
   - Binary layout: pointer followed by length (platform-specific size).
 - **List:** dynamic container from the standard library; binary-compatible with `T[]` for copy-free conversions.
-- **String:** UTF-8 view represented as `struct String { ptr: &u8, len: usize }`.
+- **String:** Non-owning UTF-8 view represented as `struct String { ptr: &u8, len: usize }`.
   - Same binary layout as `u8[]` (struct `{ ptr: &u8, len: usize }`).
-  - All `String` values are null-terminated for C FFI; the null byte is not counted in `len`. The standard library upholds this contract for non-literals (Strings are immutable; file-scope mutability applies).
+  - Does **not** own its data. No `deinit`. Used for string literals, slices, and temporary references.
+  - All `String` values are null-terminated for C FFI; the null byte is not counted in `len`.
   - String literals are static and compiler-guaranteed valid UTF-8 and null-terminated.
+  - See Section 3.5 for full string type hierarchy (`String`, `OwnedString`, `StringBuilder`).
 - The language guarantees syntax and layout compatibility for slices, lists, and strings.
 
 ### 2.7 Modules and Imports
@@ -476,13 +478,201 @@ if (cmd.tag == 0) {           // Quit
 - `null` denotes `None`.
 - `&T?` models nullable references.
 
-### 3.5 Strings
+### 3.5 String Types
 
-- Type: `String` represented as `struct String { ptr: &u8, len: usize }`.
-- Representation: fat pointer `(ptr, len)` with the same binary layout as `u8[]`.
-- All `String` values are null-terminated for FFI; the terminator is not counted in `len`.
-- String literals are static and compiler-guaranteed valid UTF-8 and null-terminated.
-- Mutable variants (e.g., `MutableString`) are binary-compatible with readonly counterparts.
+FLang provides three string-related types with explicit ownership semantics. All share the same binary layout (`{ ptr: &u8, len: usize }`) and guarantee null-termination for C FFI. The null byte is not counted in `len`.
+
+#### 3.5.1 String (Non-Owning View)
+
+```flang
+pub struct String { ptr: &u8, len: usize }
+```
+
+- **Non-owning.** Does not manage the lifetime of the underlying buffer.
+- No `deinit`. Never frees memory.
+- Used for: string literals (static data), substrings, function parameters that only need to read string data.
+- String literals produce `String` values pointing to static memory.
+- Same binary layout as `u8[]`; `String` ↔ `u8[]` is a zero-copy view cast.
+
+```flang
+let greeting: String = "hello"   // points to static data, no allocation
+fn print_name(name: String) { }  // borrows, never frees
+```
+
+**Rule:** A `String` must not outlive the data it points to. This is the programmer's responsibility (see Section 6.8).
+
+#### 3.5.2 OwnedString (Owning, Immutable)
+
+```flang
+pub struct OwnedString {
+    ptr: &u8
+    len: usize
+    allocator: &Allocator?
+}
+```
+
+- **Owns its buffer.** Must be freed via `deinit()`.
+- Immutable — the contents cannot be modified after creation.
+- Follows the allocator pattern (Section 5.1).
+- Produced by operations that create new string data: `StringBuilder.to_string()`, `format()` on user types, string concatenation, `String.to_owned_string()`.
+
+```flang
+let owned = sb.to_string()   // StringBuilder transfers its buffer
+defer owned.deinit()          // caller owns it, caller frees it
+```
+
+**Conversions:**
+
+| From | To | Method | Cost |
+|------|----|--------|------|
+| `OwnedString` | `String` | `.as_view()` | Zero-copy (returns a non-owning view) |
+| `String` | `OwnedString` | `.to_owned_string(allocator)` | Allocates and copies; allocator required |
+| `OwnedString` | `OwnedString` | (assignment) | Shallow copy of fields; does **not** transfer ownership (see below) |
+
+**Ownership rules:**
+
+- `OwnedString` does not transfer ownership on copy. Assigning or passing an `OwnedString` copies the struct fields (pointer, length, allocator) but does not transfer responsibility to free.
+- If a function takes `OwnedString` as a parameter, it signals intent to take ownership. The caller should not use or free the value after passing it.
+- If a function only needs to read the string, the parameter type should be `String` (view), not `OwnedString`.
+- Exactly one owner must call `deinit()`. Double-free and use-after-free are the programmer's responsibility (Section 6.8).
+
+#### 3.5.3 StringBuilder (Owning, Mutable)
+
+```flang
+pub struct StringBuilder {
+    ptr: &u8
+    len: usize
+    capacity: usize
+    allocator: &Allocator?
+}
+```
+
+- **Owns a mutable, growable buffer.** Used to build strings incrementally.
+- Follows the allocator pattern (Section 5.1).
+- Supports `append(data)` to add content. May reallocate on growth.
+
+```flang
+let sb = string_builder(null)   // uses global allocator
+defer sb.deinit()
+sb.append("hello ")
+sb.append("world")
+let result = sb.to_string()     // transfers buffer, sb resets
+defer result.deinit()
+```
+
+**Producing strings from StringBuilder:**
+
+| Method | Returns | StringBuilder state after | Allocates? |
+|--------|---------|---------------------------|------------|
+| `to_string()` | `OwnedString` | Resets to empty (buffer transferred) | No |
+| `to_string_copy()` | `OwnedString` | Unchanged (keeps its buffer) | Yes (copies) |
+| `as_view()` | `String` | Unchanged | No |
+
+- `to_string()` uses **move semantics**: the builder's buffer is transferred to the returned `OwnedString`. The builder resets to an empty state (null pointer, zero length/capacity). This is the common case — build a string, extract it, done.
+- `to_string_copy()` allocates a new buffer, copies the contents, and returns an `OwnedString`. The builder retains its original buffer and can continue appending.
+- `as_view()` returns a non-owning `String` view of the current contents. The view is invalidated if the builder reallocates (e.g., on a subsequent `append`).
+
+#### 3.5.4 Conventions Summary
+
+**Function parameters** that read string data should use `String` (view). This accepts string literals, views from `OwnedString.as_view()`, and views from `StringBuilder.as_view()`.
+
+**Function return types** that produce new string data should use `OwnedString`. The caller is responsible for freeing via `deinit()`.
+
+**Conversions between named types are always explicit.** There are no implicit coercions between `String`, `OwnedString`, and `StringBuilder`. Use the named methods (`.as_view()`, `.to_owned_string(allocator)`, etc.).
+
+```flang
+// Typical usage pattern
+fn greet(name: String) OwnedString {       // takes view, returns owned
+    let sb = string_builder(null)
+    sb.append("Hello, ")
+    sb.append(name)
+    sb.append("!")
+    return sb.to_string()                   // transfers builder's buffer
+}
+
+let msg = greet("world")
+defer msg.deinit()
+print(msg.as_view())                        // pass view to print
+```
+
+#### 3.5.5 Formattable Protocol
+
+Types that can produce a human-readable text representation implement the `format` function. This function writes directly into a `StringBuilder`, avoiding intermediate allocations.
+
+**Signature:**
+
+```flang
+fn format(self: T, sb: &StringBuilder)
+```
+
+- `self` is the value (or reference) to format.
+- `sb` is the target `StringBuilder` to append the representation to.
+- No return value. The function appends its output to `sb`.
+
+**User-facing API — `sb.append()`:**
+
+Users do not call `format` directly. Instead, `StringBuilder.append()` is the unified API for adding content. The `append` method is overloaded:
+
+```flang
+// Specialized overloads for primitives and strings — direct, efficient
+append(self: &StringBuilder, val: String)
+append(self: &StringBuilder, val: OwnedString)
+append(self: &StringBuilder, val: i32)
+append(self: &StringBuilder, val: u8)
+append(self: &StringBuilder, val: bool)
+// ... etc for all primitive types
+
+// Generic fallback — dispatches to format() for user-defined types
+append(self: &StringBuilder, val: $T)
+```
+
+- Primitive overloads write bytes directly (e.g., integer-to-ASCII conversion). No indirection.
+- The generic `append($T)` overload calls `val.format(sb)`. It matches only when no specialized overload exists.
+- Overload resolution picks the strictest match: `sb.append("hello")` resolves to the `String` overload, `sb.append(my_point)` falls through to the generic one.
+- A type without a `format` implementation used in `append($T)` is a compile error.
+
+**Example:**
+
+```flang
+struct Point { x: i32, y: i32 }
+
+pub fn format(self: Point, sb: &StringBuilder) {
+    sb.append("Point{x=")
+    sb.append(self.x)       // resolves to append(sb, i32)
+    sb.append(",y=")
+    sb.append(self.y)       // resolves to append(sb, i32)
+    sb.append("}")
+}
+```
+
+**Design rationale:**
+
+- One verb (`append`), one pattern. No cognitive split between "appending" and "formatting."
+- `format` is the protocol types implement; `append` is the API users call.
+- Passing the `StringBuilder` down allows nested types to append without intermediate allocations.
+
+**String interpolation:**
+
+The syntax `"text ${expr} more"` desugars to `StringBuilder.append()` calls:
+
+```flang
+// Source:
+let msg = "Point is ${point} and value is ${val}"
+
+// Desugars to:
+let __sb = string_builder(null)
+__sb.append("Point is ")
+__sb.append(point)          // calls point.format(__sb) via generic overload
+__sb.append(" and value is ")
+__sb.append(val)
+let msg = __sb.to_string()
+```
+
+One builder, one allocation at the end. Types without a `format` implementation are a compile error when used in interpolation.
+
+**Relationship to printing:**
+
+`print` and similar output functions accept any type that implements `format`. Internally, they create a `StringBuilder` (or write directly to an output stream), call `sb.append(arg)` for each argument, and flush.
 
 ### 3.6 Never Type
 

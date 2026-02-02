@@ -600,8 +600,7 @@ public class StructType : TypeBase
 
     public override string ToString()
     {
-        // Extract simple name from FQN for display (e.g., "core.string.String" -> "String")
-        var displayName = GetSimpleName(StructName);
+        var displayName = StructName;
 
         if (TypeArguments.Count > 0)
         {
@@ -615,17 +614,6 @@ public class StructType : TypeBase
         }
 
         return displayName;
-    }
-
-    /// <summary>
-    /// Extracts the simple name from a fully qualified name (e.g., "core.string.String" becomes "String").
-    /// </summary>
-    /// <param name="fqn">The fully qualified name.</param>
-    /// <returns>The simple name without namespace qualifiers.</returns>
-    private static string GetSimpleName(string fqn)
-    {
-        var lastDot = fqn.LastIndexOf('.');
-        return lastDot >= 0 ? fqn[(lastDot + 1)..] : fqn;
     }
 
     /// <summary>

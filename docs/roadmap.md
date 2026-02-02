@@ -789,16 +789,65 @@ _Goal: Build a usable standard library._
 
 ---
 
-### Milestone 19: Text & I/O
+### Milestone 19: String Types, Formatting & I/O
 
-**Scope:** String handling and I/O.
+**Scope:** Implement the three-tier string ownership model (spec Section 3.5), the Formattable protocol (spec Section 3.5.5), string interpolation, and file I/O.
 
-**Tasks:**
+#### 19a: String Ownership Types
 
-- [ ] `std/string.f` - String utilities (incl. `fn to_cstr(s: &String) &u8` that returns a null-terminated pointer: if `s.ptr[s.len] == 0` return `s.ptr`; otherwise allocate `len+1`, copy, append `\0`).
-- [ ] `std/string_builder.f` - Efficient string building
+- [ ] `OwnedString` type in `stdlib/std/string.f`
+  - [ ] Struct: `{ ptr: &u8, len: usize, allocator: &Allocator? }` (currently empty stub)
+  - [ ] `deinit(&OwnedString)` — free buffer through allocator
+  - [ ] `as_view(OwnedString) String` — explicit non-owning view (zero-copy)
+  - [ ] `to_owned_string(String, &Allocator?) OwnedString` — allocate + copy
+- [x] `String` is already non-owning (`core/string.f`: `{ ptr: &u8, len: usize }`, no allocator, no deinit)
+  - [x] String literals produce `String` (static data)
+  - [x] `op_eq`, `op_index`, `as_bytes` implemented
+
+#### 19b: StringBuilder
+
+Partially implemented in `stdlib/std/string_builder.f`:
+
+- [x] `StringBuilder` struct: `{ ptr: &u8, len: usize, cap: usize, allocator: &Allocator? }`
+- [x] `string_builder(&Allocator?)` — constructor (default capacity 16)
+- [x] `string_builder_with_capacity(usize, &Allocator?)` — constructor with capacity
+- [x] `deinit(&StringBuilder)` — free buffer
+- [x] `append(&StringBuilder, String)` — append string view (memcpy)
+- [x] `append(&StringBuilder, u8)` — single byte
+- [x] `append(&StringBuilder, u8[])` — byte slice
+- [x] `as_string(&StringBuilder) String` — non-owning view
+- [x] `clear(&StringBuilder)` — reset length without freeing
+- [x] `reserve(&StringBuilder, usize)` — internal growth (double capacity)
+- [x] `to_string(&StringBuilder) String` — allocates a copy (current impl returns `String`)
+- [x] `writer(&StringBuilder) BufferedWriter` — writer interface adapter
+
+Remaining:
+
+- [ ] `append(&StringBuilder, i32)` / `u8` / `bool` / etc. — specialized primitive overloads
+- [ ] `append(&StringBuilder, $T)` — generic fallback, calls `val.format(sb)`
+- [ ] Update `to_string` to return `OwnedString` with move semantics (transfer buffer, reset builder)
+- [ ] Add `to_string_copy` returning `OwnedString` (current `to_string` behavior — allocate + copy)
+- [ ] Rename `as_string` → `as_view` per spec conventions
+
+#### 19c: Formattable Protocol
+
+- [ ] `fn format(self: T, sb: &StringBuilder)` convention for user-defined types
+- [ ] Primitive `format` implementations (i32, u8, u16, u32, u64, i8, i16, i64, usize, isize, bool)
+- [ ] `format` for `String` and `OwnedString`
+- [ ] Verify generic `append($T)` dispatches to `format` via overload resolution
+
+#### 19d: String Interpolation (Future)
+
+- [ ] Parse `"text ${expr} more"` syntax in lexer/parser
+- [ ] Desugar to `StringBuilder` + `append` calls + `to_string()` (see spec Section 3.5.5)
+- [ ] Compile error for types without `format` implementation
+
+#### 19e: I/O
+
 - [ ] `std/io/file.f` - File I/O
-- [ ] `std/io/fmt.f` - `println`, `print`, formatting
+- [ ] `std/io/fmt.f` - `print`, `println` using StringBuilder + format protocol
+  - [ ] Replace current `core/io.f` stopgap (`printf`/`puts`) with proper implementation
+  - [ ] `print` accepts any type with `format` — calls `sb.append(arg)` internally
 
 Note: A minimal stopgap exists now in `core/io.f` providing `print` and `println` via C `printf`/`puts` for test use; this will be replaced by `std/io/fmt.f` in this milestone.
 
@@ -841,8 +890,8 @@ _Goal: Rewrite the compiler in FLang._
 - **Phase:** 5 (Standard Library)
 - **Milestone:** 18 (Collections - COMPLETE)
 - **Next Up:**
+  - Milestone 19: String Types, Formatting & I/O (19a → 19b → 19c → 19d → 19e)
   - Complete M14 pending items (nested patterns, multiple wildcards)
-  - Milestone 19: Text & I/O
 - **Tests Passing:** 196 passed
 
   - ✅ 15 core tests (basics, control flow, functions)

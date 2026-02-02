@@ -5,11 +5,28 @@
 // =============================================================================
 
 import core.string
+import std.allocator
 import std.option
 
 
 pub struct OwnedString {
+    ptr: &u8
+    len: usize
+    allocator: &Allocator?
+}
 
+fn get_allocator(self: OwnedString) &Allocator {
+    return self.allocator ?? &global_allocator
+}
+
+pub fn deinit(self: &OwnedString) {
+    self.get_allocator().free(slice_from_raw_parts(self.ptr, self.len))
+    self.ptr = 0usize as &u8
+    self.len = 0
+}
+
+pub fn as_view(self: OwnedString) String {
+    return .{ ptr = self.ptr, len = self.len }
 }
 
 pub fn starts_with(s: String, prefix: String) bool {

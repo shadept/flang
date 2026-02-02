@@ -1,5 +1,6 @@
 import std.io.buffer
 import std.result
+import std.string
 import std.string_builder
 
 enum FileMode {
@@ -57,8 +58,7 @@ pub fn close_file(file: &File) Result((), FileError) {
     return Result.Ok(())
 }
 
-// Result(OwnedString, FileError)
-pub fn read_all(file: &File) Result(String, FileError) {
+pub fn read_all(file: &File) Result(OwnedString, FileError) {
     let sb: StringBuilder
     let buf = [0u8; 4096]
     // GAP: we should have a `loop` stament
@@ -73,6 +73,23 @@ pub fn read_all(file: &File) Result(String, FileError) {
         sb.append_bytes(buf)
     }
     return Result.Ok(sb.to_string())
+}
+
+pub fn write(file: &File, value: String) Result((), FileError) {
+    // TODO handle encoding
+    let bytes = value.as_bytes()
+    let total_written = 0usize
+    for (_i in bytes) {
+        const n = write(file.handle.fd, bytes[total_written..bytes.len].ptr, bytes.len - total_written)
+        if (n == -1) {
+            return Result.Err(FileError.IOError)
+        }
+        total_written = total_written + n as usize
+        if (total_written == bytes.len) {
+            break
+        }
+    }
+    return Result.Ok(())
 }
 
 // =============================================================================
