@@ -1,32 +1,6 @@
 namespace FLang.Core;
 
 /// <summary>
-/// Represents the severity level of a diagnostic message.
-/// </summary>
-public enum DiagnosticSeverity
-{
-    /// <summary>
-    /// A fatal error that prevents compilation.
-    /// </summary>
-    Error,
-
-    /// <summary>
-    /// A warning about potentially problematic code.
-    /// </summary>
-    Warning,
-
-    /// <summary>
-    /// An informational message.
-    /// </summary>
-    Info,
-
-    /// <summary>
-    /// A hint or suggestion for code improvement.
-    /// </summary>
-    Hint
-}
-
-/// <summary>
 /// Represents a diagnostic message (error, warning, info, or hint) with source location.
 /// </summary>
 public class Diagnostic
@@ -39,12 +13,7 @@ public class Diagnostic
     /// <param name="span">The source location where this diagnostic applies.</param>
     /// <param name="hintMessage">Optional hint or suggestion text to help fix the issue.</param>
     /// <param name="code">Optional diagnostic code (e.g., "E0001").</param>
-    private Diagnostic(
-        DiagnosticSeverity severity,
-        string message,
-        SourceSpan span,
-        string? hintMessage = null,
-        string? code = null)
+    private Diagnostic(DiagnosticSeverity severity, string message, SourceSpan span, string? hintMessage = null, string? code = null)
     {
         Severity = severity;
         Message = message;
