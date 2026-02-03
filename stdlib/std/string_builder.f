@@ -55,21 +55,305 @@ fn reserve(sb: &StringBuilder, additional: usize) {
     sb.cap = new_cap
 }
 
-// Append a single byte to the builder.
-pub fn append(sb: &StringBuilder, value: u8) {
+// Append a single raw byte to the builder (not numeric representation).
+pub fn append_byte(sb: &StringBuilder, value: u8) {
     sb.reserve(1)
     const dest = sb.ptr + sb.len
     dest.* = value
     sb.len = sb.len + 1
 }
 
-// Append a single byte to the builder.
-// pub fn append(sb: &StringBuilder, value: u16) {
-//     sb.reserve(2)
-//     const dest = sb.ptr + sb.len
-//     dest.* = value
-//     sb.len = sb.len + 2
-// }
+// =============================================================================
+// Primitive Type Append Functions
+// =============================================================================
+// Each primitive type has two append functions:
+//   append(&StringBuilder, T)           - default decimal representation
+//   append(&StringBuilder, T, String)   - with format spec (C-style)
+//
+// Format spec supports:
+//   ""  or "d" - decimal (default)
+//   "x"        - lowercase hexadecimal
+//   "X"        - uppercase hexadecimal
+//   "o"        - octal
+//   "b"        - binary
+// =============================================================================
+
+// Helper: convert a digit (0-35) to ASCII character
+fn digit_to_char(digit: u8, uppercase: bool) u8 {
+    if (digit < 10) {
+        return 48 + digit  // '0' = 48
+    }
+    if (uppercase) {
+        return 55 + digit  // 'A' - 10 = 55
+    }
+    return 87 + digit      // 'a' - 10 = 87
+}
+
+// Helper: get base from format spec
+fn spec_to_base(spec: String) u8 {
+    if (spec.len == 0) {
+        return 10
+    }
+    const c = spec.ptr.*
+    if (c == 100) { return 10 }  // 'd'
+    if (c == 105) { return 10 }  // 'i'
+    if (c == 120) { return 16 }  // 'x'
+    if (c == 88)  { return 16 }  // 'X'
+    if (c == 111) { return 8 }   // 'o'
+    if (c == 98)  { return 2 }   // 'b'
+    return 10  // default to decimal
+}
+
+// Helper: check if spec is uppercase hex
+fn spec_is_uppercase(spec: String) bool {
+    if (spec.len == 0) {
+        return false
+    }
+    return spec.ptr.* == 88  // 'X'
+}
+
+// -----------------------------------------------------------------------------
+// bool
+// -----------------------------------------------------------------------------
+pub fn append(sb: &StringBuilder, value: bool) {
+    if (value) {
+        sb.append("true")
+    } else {
+        sb.append("false")
+    }
+}
+
+pub fn append(sb: &StringBuilder, value: bool, spec: String) {
+    // bool ignores spec for now
+    sb.append(value)
+}
+
+// -----------------------------------------------------------------------------
+// u8 - numeric representation
+// -----------------------------------------------------------------------------
+pub fn append(sb: &StringBuilder, value: u8) {
+    sb.append(value, "")
+}
+
+pub fn append(sb: &StringBuilder, value: u8, spec: String) {
+    const base = spec_to_base(spec)
+    const uppercase = spec_is_uppercase(spec)
+
+    // Max digits for u8: 8 (binary) + possible prefix
+    let buf: [u8; 10] = [0 as u8; 10]
+    let idx: usize = 10
+    let val = value
+
+    if (val == 0) {
+        idx = idx - 1
+        buf[idx] = 48  // '0'
+    } else {
+        while (val > 0) {
+            idx = idx - 1
+            const digit = (val % base) as u8
+            buf[idx] = digit_to_char(digit, uppercase)
+            val = val / base
+        }
+    }
+
+    const slice = slice_from_raw_parts(&buf[idx], 10 - idx)
+    sb.append_bytes(slice)
+}
+
+// -----------------------------------------------------------------------------
+// i8
+// -----------------------------------------------------------------------------
+pub fn append(sb: &StringBuilder, value: i8) {
+    sb.append(value, "")
+}
+
+pub fn append(sb: &StringBuilder, value: i8, spec: String) {
+    if (value < 0) {
+        sb.append_byte(45)  // '-'
+        // Safe: -128 as i8, negated is 128 which fits in u8
+        const abs_val = (-(value as i32)) as u8
+        sb.append(abs_val, spec)
+    } else {
+        sb.append(value as u8, spec)
+    }
+}
+
+// -----------------------------------------------------------------------------
+// u16
+// -----------------------------------------------------------------------------
+pub fn append(sb: &StringBuilder, value: u16) {
+    sb.append(value, "")
+}
+
+pub fn append(sb: &StringBuilder, value: u16, spec: String) {
+    const base = spec_to_base(spec) as u16
+    const uppercase = spec_is_uppercase(spec)
+
+    // Max digits for u16: 16 (binary)
+    let buf: [u8; 20] = [0 as u8; 20]
+    let idx: usize = 20
+    let val = value
+
+    if (val == 0) {
+        idx = idx - 1
+        buf[idx] = 48  // '0'
+    } else {
+        while (val > 0) {
+            idx = idx - 1
+            const digit = (val % base) as u8
+            buf[idx] = digit_to_char(digit, uppercase)
+            val = val / base
+        }
+    }
+
+    const slice = slice_from_raw_parts(&buf[idx], 20 - idx)
+    sb.append_bytes(slice)
+}
+
+// -----------------------------------------------------------------------------
+// i16
+// -----------------------------------------------------------------------------
+pub fn append(sb: &StringBuilder, value: i16) {
+    sb.append(value, "")
+}
+
+pub fn append(sb: &StringBuilder, value: i16, spec: String) {
+    if (value < 0) {
+        sb.append_byte(45)  // '-'
+        const abs_val = (-(value as i32)) as u16
+        sb.append(abs_val, spec)
+    } else {
+        sb.append(value as u16, spec)
+    }
+}
+
+// -----------------------------------------------------------------------------
+// u32
+// -----------------------------------------------------------------------------
+pub fn append(sb: &StringBuilder, value: u32) {
+    sb.append(value, "")
+}
+
+pub fn append(sb: &StringBuilder, value: u32, spec: String) {
+    const base = spec_to_base(spec) as u32
+    const uppercase = spec_is_uppercase(spec)
+
+    // Max digits for u32: 32 (binary)
+    let buf: [u8; 40] = [0 as u8; 40]
+    let idx: usize = 40
+    let val = value
+
+    if (val == 0) {
+        idx = idx - 1
+        buf[idx] = 48  // '0'
+    } else {
+        while (val > 0) {
+            idx = idx - 1
+            const digit = (val % base) as u8
+            buf[idx] = digit_to_char(digit, uppercase)
+            val = val / base
+        }
+    }
+
+    const slice = slice_from_raw_parts(&buf[idx], 40 - idx)
+    sb.append_bytes(slice)
+}
+
+// -----------------------------------------------------------------------------
+// i32
+// -----------------------------------------------------------------------------
+pub fn append(sb: &StringBuilder, value: i32) {
+    sb.append(value, "")
+}
+
+pub fn append(sb: &StringBuilder, value: i32, spec: String) {
+    if (value < 0) {
+        sb.append_byte(45)  // '-'
+        const abs_val = (-(value as i64)) as u32
+        sb.append(abs_val, spec)
+    } else {
+        sb.append(value as u32, spec)
+    }
+}
+
+// -----------------------------------------------------------------------------
+// u64
+// -----------------------------------------------------------------------------
+pub fn append(sb: &StringBuilder, value: u64) {
+    sb.append(value, "")
+}
+
+pub fn append(sb: &StringBuilder, value: u64, spec: String) {
+    const base = spec_to_base(spec) as u64
+    const uppercase = spec_is_uppercase(spec)
+
+    // Max digits for u64: 64 (binary)
+    let buf: [u8; 70] = [0 as u8; 70]
+    let idx: usize = 70
+    let val = value
+
+    if (val == 0) {
+        idx = idx - 1
+        buf[idx] = 48  // '0'
+    } else {
+        while (val > 0) {
+            idx = idx - 1
+            const digit = (val % base) as u8
+            buf[idx] = digit_to_char(digit, uppercase)
+            val = val / base
+        }
+    }
+
+    const slice = slice_from_raw_parts(&buf[idx], 70 - idx)
+    sb.append_bytes(slice)
+}
+
+// -----------------------------------------------------------------------------
+// i64
+// -----------------------------------------------------------------------------
+pub fn append(sb: &StringBuilder, value: i64) {
+    sb.append(value, "")
+}
+
+pub fn append(sb: &StringBuilder, value: i64, spec: String) {
+    if (value < 0) {
+        sb.append_byte(45)  // '-'
+        // Handle i64 min specially to avoid overflow
+        if (value == -9223372036854775808) {
+            // i64::MIN cannot be negated, handle specially
+            sb.append("9223372036854775808")
+        } else {
+            const abs_val = (-value) as u64
+            sb.append(abs_val, spec)
+        }
+    } else {
+        sb.append(value as u64, spec)
+    }
+}
+
+// -----------------------------------------------------------------------------
+// usize
+// -----------------------------------------------------------------------------
+pub fn append(sb: &StringBuilder, value: usize) {
+    sb.append(value, "")
+}
+
+pub fn append(sb: &StringBuilder, value: usize, spec: String) {
+    // usize is same size as u64 on 64-bit platforms
+    sb.append(value as u64, spec)
+}
+
+// -----------------------------------------------------------------------------
+// isize
+// -----------------------------------------------------------------------------
+pub fn append(sb: &StringBuilder, value: isize) {
+    sb.append(value, "")
+}
+
+pub fn append(sb: &StringBuilder, value: isize, spec: String) {
+    // isize is same size as i64 on 64-bit platforms
+    sb.append(value as i64, spec)
+}
 
 pub fn append(sb: &StringBuilder, s: OwnedString) {
     sb.append(s.as_view())
