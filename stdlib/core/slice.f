@@ -1,6 +1,8 @@
 import core.panic
 import core.range
 
+// A view into a contiguous sequence of elements of type T.
+// A Slice does not own ptr.
 pub struct Slice(T) {
     ptr: &T
     len: usize
@@ -8,22 +10,29 @@ pub struct Slice(T) {
 
 // Creates a slice from pointer and length.
 pub fn slice_from_raw_parts(ptr: &$T, len: usize) T[] {
-    return .{ ptr = ptr, len = len }
+    return .{ ptr, len }
 }
 
-pub fn op_index(s: &Slice($T), index: usize) T {
-    if (index >= s.len) {
-        panic("index out of bounds")
+pub fn get(s: Slice($T), idx: usize) u8? {
+    if (idx >= s.len) {
+        return null
     }
-
-    const ptr = s.ptr + index
+    const ptr = s.ptr + idx
     return ptr.*
 }
 
-pub fn op_index(s: &Slice($T), index: Range(usize)) Slice(T) {
-    // Clamp negative indices to 0
-    let start = if (index.start < 0) 0 else index.start
-    let end = if (index.end < 0) 0 else index.end
+pub fn op_index(s: Slice($T), idx: usize) T {
+    if (idx >= s.len) {
+        panic("index out of bounds")
+    }
+
+    const ptr = s.ptr + idx
+    return ptr.*
+}
+
+pub fn op_index(s: Slice($T), range: Range(usize)) Slice(T) {
+    let start = range.start
+    let end = range.end
 
     // Clamp to valid bounds, return empty slice for invalid ranges
     if (start > s.len) { start = s.len }

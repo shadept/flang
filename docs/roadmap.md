@@ -802,7 +802,7 @@ _Goal: Build a usable standard library._
   - [ ] `to_owned_string(String, &Allocator?) OwnedString` — allocate + copy
 - [x] `String` is already non-owning (`core/string.f`: `{ ptr: &u8, len: usize }`, no allocator, no deinit)
   - [x] String literals produce `String` (static data)
-  - [x] `op_eq`, `op_index`, `as_bytes` implemented
+  - [x] `op_eq`, `op_index`, `as_raw_slice` implemented
 
 #### 19b: StringBuilder
 
@@ -832,7 +832,6 @@ Remaining:
 #### 19c: Formattable Protocol
 
 - [ ] `fn format(self: T, sb: &StringBuilder)` convention for user-defined types
-- [ ] Primitive `format` implementations (i32, u8, u16, u32, u64, i8, i16, i64, usize, isize, bool)
 - [ ] `format` for `String` and `OwnedString`
 - [ ] Verify generic `append($T)` dispatches to `format` via overload resolution
 

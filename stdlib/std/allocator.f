@@ -147,8 +147,40 @@ fn fixed_alloc(impl: &u8, size: usize, alignment: usize) u8[]? {
 }
 
 fn fixed_realloc(impl: &u8, memory: u8[], new_size: usize) u8[]? {
-    // FixedBufferAllocator does not support realloc - return null
-    return null
+    let state = impl as &FixedBufferAllocatorState
+
+    // If memory is empty, treat as fresh allocation
+    if (memory.len == 0) {
+        return fixed_alloc(impl, new_size, 1)
+    }
+
+    // Check if this is the most recent allocation (can extend in place)
+    let mem_start = memory.ptr as usize
+    let mem_end = mem_start + memory.len
+    let buf_start = state.buffer.ptr as usize
+    let current_end = buf_start + state.offset
+
+    if (mem_end == current_end) {
+        // This is the last allocation, try to extend
+        let new_end = mem_start + new_size
+        let buf_end = buf_start + state.buffer.len
+        if (new_end <= buf_end) {
+            // Can extend in place
+            state.offset = new_end - buf_start
+            return slice_from_raw_parts(memory.ptr, new_size)
+        }
+    }
+
+    // Cannot extend in place - allocate new and copy
+    let new_mem = fixed_alloc(impl, new_size, 1)
+    if (new_mem.is_none()) {
+        return null
+    }
+
+    // Copy old data
+    let copy_size = if (memory.len < new_size) memory.len else new_size
+    memcpy(new_mem.value.ptr, memory.ptr, copy_size)
+    return new_mem
 }
 
 fn fixed_free(impl: &u8, memory: u8[]) {

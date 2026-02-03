@@ -437,6 +437,64 @@ let src = make_source(my_array)  // array coerces to slice at call site
 
 ---
 
+### Bitwise AND Operator Not Working for u64
+
+**Status:** Open
+**Affected:** Any code using `&` for bitwise AND on u64 values
+**Impact:** `val & mask` returns `val` unchanged instead of performing bitwise AND.
+
+**Example:**
+```flang
+let mask: u64 = 4294967295u64  // 0xFFFFFFFF
+let val: u64 = (-1i64) as u64  // 0xFFFFFFFFFFFFFFFF
+let masked = val & mask        // Should be 4294967295, but returns val unchanged
+```
+
+**Workaround:** None currently. Avoid relying on bitwise AND for u64.
+
+**Blocked Features:**
+- `StringBuilder.append` signed hex formatting with proper type width masking
+
+**Related Tests:**
+- `tests/FLang.Tests/Harness/string_builder/append_signed_hex.f` (SKIP)
+
+---
+
+### Integer Literal Parser Overflow for u64 Max
+
+**Status:** Open
+**Affected:** Parser (ParsePrimaryExpression)
+**Impact:** Cannot parse `18446744073709551615u64` (u64 max) or `-9223372036854775808i64` (i64 min) as literals.
+
+**Example:**
+```flang
+let max: u64 = 18446744073709551615u64  // Parser error: OverflowException
+```
+
+**Cause:** Parser uses `Int64.Parse()` which cannot represent values > i64 max.
+
+**Workaround:** Use `(-1i64) as u64` for u64 max, or compute large values at runtime.
+
+**Related Files:**
+- `src/FLang.Frontend/Parser.cs:828`
+
+---
+
+### Hex Literal Syntax Not Supported
+
+**Status:** Open
+**Affected:** Lexer/Parser
+**Impact:** `0xff`, `0xDEADBEEF` style hex literals are not recognized.
+
+**Example:**
+```flang
+let x = 0xff  // Error: cannot find value `xff`
+```
+
+**Workaround:** Use decimal literals (e.g., `255u8` instead of `0xffu8`).
+
+---
+
 ## Recently Fixed
 
 ### Generic Struct Specialization Phase Ordering Bug

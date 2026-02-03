@@ -15,12 +15,8 @@ pub struct OwnedString {
     allocator: &Allocator?
 }
 
-fn get_allocator(self: OwnedString) &Allocator {
-    return self.allocator ?? &global_allocator
-}
-
 pub fn deinit(self: &OwnedString) {
-    self.get_allocator().free(slice_from_raw_parts(self.ptr, self.len))
+    self.allocator.or_global().free(slice_from_raw_parts(self.ptr, self.len))
     self.ptr = 0usize as &u8
     self.len = 0
 }

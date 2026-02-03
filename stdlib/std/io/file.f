@@ -77,7 +77,7 @@ pub fn read_all(file: &File) Result(OwnedString, FileError) {
 
 pub fn write(file: &File, value: String) Result((), FileError) {
     // TODO handle encoding
-    let bytes = value.as_bytes()
+    let bytes = value.as_raw_slice()
     let total_written = 0usize
     for (_i in bytes) {
         const n = write(file.handle.fd, bytes[total_written..bytes.len].ptr, bytes.len - total_written)
