@@ -1,3 +1,4 @@
+using System.Numerics;
 using FLang.Core;
 using FLang.Frontend.Ast;
 using FLang.Frontend.Ast.Declarations;
@@ -16,7 +17,7 @@ public partial class TypeChecker
     /// Creates a new TypeVar for a literal, soft-bound to the given comptime type.
     /// Tracks the TypeVar and its value for later verification.
     /// </summary>
-    private TypeVar CreateLiteralTypeVar(string id, SourceSpan span, TypeBase comptimeType, long value)
+    private TypeVar CreateLiteralTypeVar(string id, SourceSpan span, TypeBase comptimeType, BigInteger value)
     {
         var tv = new TypeVar(id, span)
         {

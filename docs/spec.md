@@ -460,6 +460,8 @@ if (cmd.tag == 0) {           // Quit
 - Inference is multi-phase (constraint collection and resolution) and follows a Hindley–Milner discipline: constraints flow bidirectionally so return-position expectations, parameter annotations, and assignment targets all participate in solving.
 - Untyped literals (`comptime_int`, `comptime_float`) are placeholders that must unify with a concrete type before type checking completes; otherwise the compiler emits `E2001` instead of lowering invalid FIR.
 - Integer literals may carry a type suffix (e.g., `42u8`, `0isize`) specifying the concrete type directly. Suffixed literals bypass `comptime_int` inference and are typed immediately. Valid suffixes: `i8`, `i16`, `i32`, `i64`, `isize`, `u8`, `u16`, `u32`, `u64`, `usize`. Out-of-range values emit `E2029`.
+- Integer literals support hexadecimal notation with `0x` or `0X` prefix (e.g., `0xff`, `0xDEADBEEF`). Hex literals may also have type suffixes (e.g., `0xffu8`).
+- Underscore separators are allowed in integer literals for readability (e.g., `1_000_000`, `0xff_ff`). Underscores can appear anywhere in the digit sequence and are ignored during parsing.
 - Return positions may bind generics (e.g., `fn new_list(n: usize) List[$T]`).
 
 ### 3.2 Structural Typing
@@ -818,9 +820,26 @@ a or b
 - `or`: returns `true` without evaluating `b` if `a` is `true` (short-circuit).
 - Both operands must be `bool`. Non-bool operands are a compile error (`E2046`).
 - These are built-in operators only — no user-defined overloading via operator functions.
-- **Precedence** (highest to lowest):
-  - `* / %` (8)
-  - `+ -` (7)
+
+### 4.5 Bitwise Operators
+
+```
+a & b    // bitwise AND
+a ^ b    // bitwise XOR
+a | b    // bitwise OR
+```
+
+- Operands must be integer types (`i8`, `i16`, `i32`, `i64`, `isize`, `u8`, `u16`, `u32`, `u64`, `usize`).
+- Both operands must have the same type (no implicit widening).
+- Result type matches the operand type.
+- Bitwise AND binds tighter than XOR, which binds tighter than OR (same as C).
+
+**Precedence** (highest to lowest):
+  - `* / %` (11)
+  - `+ -` (10)
+  - `&` bitwise AND (9)
+  - `^` bitwise XOR (8)
+  - `|` bitwise OR (7)
   - `..` (6)
   - `< > <= >=` (5)
   - `== !=` (4)
@@ -828,7 +847,7 @@ a or b
   - `or` (2)
   - `??` (1)
 
-### 4.5 Operator-as-Function
+### 4.6 Operator-as-Function
 
 - Every operator has a corresponding function name.
 - The compiler rewrites operators to calls to these functions and may inline them.

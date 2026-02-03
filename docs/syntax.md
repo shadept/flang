@@ -38,6 +38,10 @@ No floating-point types.
 ```
 42              // integer (type inferred from context)
 42i32           // integer with type suffix (i8, i16, i32, i64, isize, u8, u16, u32, u64, usize)
+0xff            // hexadecimal integer
+0xDEAD_BEEF     // hex with underscore separators
+1_000_000       // decimal with underscore separators for readability
+1_000i32        // underscores work with type suffixes
 true false      // bool
 null            // None value for optionals
 "hello"         // string (UTF-8, null-terminated)
@@ -299,8 +303,11 @@ return          // void return
 
 | Level | Operators |
 |---|---|
-| 8 | `*` `/` `%` |
-| 7 | `+` `-` |
+| 11 | `*` `/` `%` |
+| 10 | `+` `-` |
+| 9 | `&` (bitwise AND) |
+| 8 | `^` (bitwise XOR) |
+| 7 | `\|` (bitwise OR) |
 | 6 | `..` |
 | 5 | `<` `>` `<=` `>=` |
 | 4 | `==` `!=` |
@@ -310,7 +317,17 @@ return          // void return
 
 - `and` / `or` are keywords, not symbols. Short-circuit. Bool operands only.
 - `!expr` is logical NOT (prefix, unary).
-- `&expr` takes address of a variable.
+- `&expr` takes address of a variable (when used as prefix unary operator).
+
+### Bitwise Operators
+
+```
+a & b           // bitwise AND
+a ^ b           // bitwise XOR
+a | b           // bitwise OR
+```
+
+Operands must be the same integer type. No implicit widening. Bitwise AND binds tighter than XOR, which binds tighter than OR (same as C).
 
 ### Null Operators
 
@@ -338,6 +355,9 @@ All operators desugar to function calls. Define these to overload:
 | `*` | `op_multiply` |
 | `/` | `op_divide` |
 | `%` | `op_modulo` |
+| `&` | `op_band` |
+| `\|` | `op_bor` |
+| `^` | `op_bxor` |
 | `==` | `op_eq` |
 | `!=` | `op_ne` |
 | `<` | `op_lt` |

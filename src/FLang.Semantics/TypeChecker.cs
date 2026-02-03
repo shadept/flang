@@ -1,3 +1,4 @@
+using System.Numerics;
 using FLang.Core;
 using FLang.Frontend.Ast;
 using FLang.Frontend.Ast.Declarations;
@@ -50,7 +51,7 @@ public partial class TypeChecker
 
     // Literal TypeVar tracking for inference (with value for range validation)
     private int _nextLiteralTypeVarId = 0;
-    private readonly List<(TypeVar Tv, long Value)> _literalTypeVars = [];
+    private readonly List<(TypeVar Tv, BigInteger Value)> _literalTypeVars = [];
 
     // ResolvedCall struct removed - call resolution info now stored on CallExpressionNode.ResolvedTarget
 
@@ -324,22 +325,22 @@ public partial class TypeChecker
     private static bool IsNever(TypeBase type) =>
         ReferenceEquals(type.Prune(), TypeRegistry.Never);
 
-    private static bool FitsInType(long value, PrimitiveType pt) => pt.Name switch
+    private static bool FitsInType(BigInteger value, PrimitiveType pt) => pt.Name switch
     {
         "i8" => value >= sbyte.MinValue && value <= sbyte.MaxValue,
         "i16" => value >= short.MinValue && value <= short.MaxValue,
         "i32" => value >= int.MinValue && value <= int.MaxValue,
-        "i64" => true,
+        "i64" => value >= long.MinValue && value <= long.MaxValue,
         "u8" => value >= 0 && value <= byte.MaxValue,
         "u16" => value >= 0 && value <= ushort.MaxValue,
         "u32" => value >= 0 && value <= uint.MaxValue,
-        "u64" => value >= 0,
-        "isize" => true,
-        "usize" => value >= 0,
+        "u64" => value >= 0 && value <= ulong.MaxValue,
+        "isize" => value >= long.MinValue && value <= long.MaxValue,
+        "usize" => value >= 0 && value <= ulong.MaxValue,
         _ => true
     };
 
-    private static (long min, long max) GetIntegerRange(PrimitiveType pt) => pt.Name switch
+    private static (BigInteger min, BigInteger max) GetIntegerRange(PrimitiveType pt) => pt.Name switch
     {
         "i8" => (sbyte.MinValue, sbyte.MaxValue),
         "i16" => (short.MinValue, short.MaxValue),
@@ -348,9 +349,9 @@ public partial class TypeChecker
         "u8" => (0, byte.MaxValue),
         "u16" => (0, ushort.MaxValue),
         "u32" => (0, uint.MaxValue),
-        "u64" => (0, long.MaxValue),
+        "u64" => (0, ulong.MaxValue),
         "isize" => (long.MinValue, long.MaxValue),
-        "usize" => (0, long.MaxValue),
+        "usize" => (0, ulong.MaxValue),
         _ => (long.MinValue, long.MaxValue)
     };
 

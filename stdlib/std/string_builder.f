@@ -137,16 +137,16 @@ fn parse_int_spec(spec: String) FormatSpec {
         return FormatSpec { base = 10, uppercase = false }
     }
     const c = spec[0]
-    if (c == 88u8) { // 'X'
+    if (c == 0x58u8) { // 'X'
         return FormatSpec { base = 16, uppercase = true }
     }
-    if (c == 120u8) { // 'x'
+    if (c == 0x78u8) { // 'x'
         return FormatSpec { base = 16, uppercase = false }
     }
-    if (c == 98u8) { // 'b'
+    if (c == 0x62u8) { // 'b'
         return FormatSpec { base = 2, uppercase = false }
     }
-    if (c == 111u8) { // 'o'
+    if (c == 0x6Fu8) { // 'o'
         return FormatSpec { base = 8, uppercase = false }
     }
     return FormatSpec { base = 10, uppercase = false }
@@ -154,7 +154,7 @@ fn parse_int_spec(spec: String) FormatSpec {
 
 fn append_unsigned_with_base(sb: &StringBuilder, value: u64, base: u64, uppercase: bool) {
     if (value == 0) {
-        sb.append_byte(48u8) // '0'
+        sb.append_byte(0x30u8) // '0'
         return
     }
 
@@ -171,11 +171,11 @@ fn append_unsigned_with_base(sb: &StringBuilder, value: u64, base: u64, uppercas
 
         let c: u8 = 0
         if (digit < 10u8) {
-            c = 48u8 + digit
+            c = 0x30u8 + digit // '0' + digit
         } else if (uppercase) {
-            c = 55u8 + digit // 'A' - 10 + digit
+            c = 0x37u8 + digit // 'A' - 10 + digit
         } else {
-            c = 87u8 + digit // 'a' - 10 + digit
+            c = 0x57u8 + digit // 'a' - 10 + digit
         }
         pos = pos - 1
         buf[pos] = c
@@ -192,11 +192,11 @@ fn append_unsigned_impl(sb: &StringBuilder, value: u64, spec: String) {
 }
 
 fn mask_for_bits(bits: u64) u64 {
-    if (bits >= 64u64) { return (-1i64) as u64 }
-    if (bits == 32u64) { return 4294967295u64 }
-    if (bits == 16u64) { return 65535u64 }
-    if (bits == 8u64) { return 255u64 }
-    return (-1i64) as u64
+    if (bits >= 64u64) { return 0xFFFF_FFFF_FFFF_FFFFu64 }
+    if (bits == 32u64) { return 0xFFFF_FFFFu64 }
+    if (bits == 16u64) { return 0xFFFFu64 }
+    if (bits == 8u64) { return 0xFFu64 }
+    return 0xFFFF_FFFF_FFFF_FFFFu64
 }
 
 fn append_signed_impl(sb: &StringBuilder, value: i64, spec: String, bits: u64) {
@@ -215,7 +215,7 @@ fn append_signed_impl(sb: &StringBuilder, value: i64, spec: String, bits: u64) {
     let abs_value: u64 = if (is_negative) (0 - value) as u64 else value as u64
 
     if (is_negative) {
-        sb.append_byte(45u8) // '-'
+        sb.append_byte(0x2Du8) // '-'
     }
     append_unsigned_with_base(sb, abs_value, 10, false)
 }

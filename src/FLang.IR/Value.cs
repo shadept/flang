@@ -1,3 +1,4 @@
+using System.Numerics;
 using FLang.Core;
 
 namespace FLang.IR;
@@ -29,7 +30,7 @@ public abstract class Value
 /// </summary>
 public class ConstantValue : Value
 {
-    public ConstantValue(long intValue)
+    public ConstantValue(BigInteger intValue)
     {
         IntValue = intValue;
         Name = intValue.ToString();
@@ -39,7 +40,7 @@ public class ConstantValue : Value
     /// <summary>
     /// The integer value of this constant.
     /// </summary>
-    public long IntValue { get; }
+    public BigInteger IntValue { get; }
 }
 
 /// <summary>

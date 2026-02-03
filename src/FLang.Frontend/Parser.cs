@@ -1,3 +1,4 @@
+using System.Numerics;
 using FLang.Core;
 using FLang.Frontend.Ast;
 using FLang.Frontend.Ast.Declarations;
@@ -799,12 +800,23 @@ public class Parser
 
             case TokenKind.Minus:
                 {
-                    // Unary negation: -expr
                     var minusToken = Eat(TokenKind.Minus);
+
+                    // Special case: negative integer literal (e.g., -9223372036854775808i64)
+                    // Parse the minus and integer together to support i64 min value
+                    if (_currentToken.Kind == TokenKind.Integer)
+                    {
+                        var integerToken = Eat(TokenKind.Integer);
+                        var (value, suffix) = ParseIntegerLiteralValue(integerToken.Text);
+                        var span = SourceSpan.Combine(minusToken.Span, integerToken.Span);
+                        return new IntegerLiteralNode(span, -value, suffix);
+                    }
+
+                    // General unary negation: -expr
                     var operandPrimary = ParsePrimaryExpression();
                     var operandWithPostfix = ParsePostfixOperators(operandPrimary);
-                    var span = SourceSpan.Combine(minusToken.Span, operandWithPostfix.Span);
-                    return new UnaryExpressionNode(span, UnaryOperatorKind.Negate, operandWithPostfix);
+                    var span2 = SourceSpan.Combine(minusToken.Span, operandWithPostfix.Span);
+                    return new UnaryExpressionNode(span2, UnaryOperatorKind.Negate, operandWithPostfix);
                 }
 
             case TokenKind.Bang:
@@ -820,13 +832,7 @@ public class Parser
             case TokenKind.Integer:
                 {
                     var integerToken = Eat(TokenKind.Integer);
-                    var text = integerToken.Text;
-                    // Find where digits end and suffix begins
-                    var digitEnd = 0;
-                    while (digitEnd < text.Length && char.IsDigit(text[digitEnd]))
-                        digitEnd++;
-                    var value = long.Parse(text[..digitEnd]);
-                    var suffix = digitEnd < text.Length ? text[digitEnd..] : null;
+                    var (value, suffix) = ParseIntegerLiteralValue(integerToken.Text);
                     return new IntegerLiteralNode(integerToken.Span, value, suffix);
                 }
 
@@ -952,13 +958,13 @@ public class Parser
         {
             TokenKind.Star or TokenKind.Slash or TokenKind.Percent => 11,
             TokenKind.Plus or TokenKind.Minus => 10,
-            TokenKind.DotDot => 9,
+            TokenKind.Ampersand => 9, // Bitwise AND (above comparisons, like C/Rust)
+            TokenKind.Caret => 8,     // Bitwise XOR
+            TokenKind.Pipe => 7,      // Bitwise OR
+            TokenKind.DotDot => 6,
             TokenKind.LessThan or TokenKind.GreaterThan or TokenKind.LessThanOrEqual
-                or TokenKind.GreaterThanOrEqual => 8,
-            TokenKind.EqualsEquals or TokenKind.NotEquals => 7,
-            TokenKind.Ampersand => 6, // Bitwise AND
-            TokenKind.Caret => 5,     // Bitwise XOR
-            TokenKind.Pipe => 4,      // Bitwise OR
+                or TokenKind.GreaterThanOrEqual => 5,
+            TokenKind.EqualsEquals or TokenKind.NotEquals => 4,
             TokenKind.And => 3,       // Logical AND
             TokenKind.Or => 2,        // Logical OR
             TokenKind.QuestionQuestion => 1, // Lowest precedence, right-associative
@@ -1818,5 +1824,45 @@ public class Parser
 
         _currentToken = _lexer.NextToken();
         return token;
+    }
+
+    /// <summary>
+    /// Parses an integer literal token text into its value and optional suffix.
+    /// Supports decimal (123), hexadecimal (0xff), and underscore separators (1_000_000).
+    /// </summary>
+    /// <param name="text">The raw token text (e.g., "255u8", "0xffu8", "1_000i32").</param>
+    /// <returns>A tuple of the parsed value and optional suffix.</returns>
+    private static (BigInteger value, string? suffix) ParseIntegerLiteralValue(string text)
+    {
+        bool isHex = text.Length >= 2 && text[0] == '0' && (text[1] == 'x' || text[1] == 'X');
+        int digitStart = isHex ? 2 : 0;
+
+        // Find where digits end and suffix begins
+        int digitEnd = digitStart;
+        if (isHex)
+        {
+            while (digitEnd < text.Length && (IsHexDigit(text[digitEnd]) || text[digitEnd] == '_'))
+                digitEnd++;
+        }
+        else
+        {
+            while (digitEnd < text.Length && (char.IsDigit(text[digitEnd]) || text[digitEnd] == '_'))
+                digitEnd++;
+        }
+
+        // Strip underscores for parsing
+        var digitSpan = text[digitStart..digitEnd].Replace("_", "");
+        var value = isHex
+            // Prepend "0" to ensure BigInteger parses as unsigned (high bit set = negative otherwise)
+            ? BigInteger.Parse("0" + digitSpan, System.Globalization.NumberStyles.HexNumber)
+            : BigInteger.Parse(digitSpan);
+        var suffix = digitEnd < text.Length ? text[digitEnd..] : null;
+
+        return (value, suffix);
+    }
+
+    private static bool IsHexDigit(char c)
+    {
+        return char.IsDigit(c) || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F');
     }
 }

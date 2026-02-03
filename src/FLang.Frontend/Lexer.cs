@@ -70,8 +70,19 @@ public class Lexer
         if (char.IsDigit(ch))
         {
             _start = _position;
-            while (_position < text.Length && char.IsDigit(text[_position]))
-                _position++;
+
+            // Check for hex literal (0x or 0X prefix)
+            if (ch == '0' && _position + 1 < text.Length && (text[_position + 1] == 'x' || text[_position + 1] == 'X'))
+            {
+                _position += 2; // Skip "0x"
+                while (_position < text.Length && (IsHexDigit(text[_position]) || text[_position] == '_'))
+                    _position++;
+            }
+            else
+            {
+                while (_position < text.Length && (char.IsDigit(text[_position]) || text[_position] == '_'))
+                    _position++;
+            }
 
             // Check for integer type suffix (e.g., 42u8, 100isize)
             if (_position < text.Length && (text[_position] == 'i' || text[_position] == 'u'))
@@ -134,7 +145,7 @@ public class Lexer
             while (_position < text.Length && (char.IsLetterOrDigit(text[_position]) || text[_position] == '_'))
                 _position++;
 
-            var span = text.Slice(_start, _position - _start);
+            var span = text[_start.._position];
 
             var kind = span switch
             {
@@ -285,5 +296,13 @@ public class Lexer
     private Token CreateTokenWithValue(TokenKind kind, string value)
     {
         return new Token(kind, CreateSpan(), value);
+    }
+
+    /// <summary>
+    /// Checks if a character is a valid hexadecimal digit (0-9, a-f, A-F).
+    /// </summary>
+    private static bool IsHexDigit(char c)
+    {
+        return char.IsDigit(c) || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F');
     }
 }

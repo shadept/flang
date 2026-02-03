@@ -143,14 +143,18 @@ Binary operators, from lowest to highest precedence:
 | 4 | `==` `!=` | left |
 | 5 | `<` `>` `<=` `>=` | left |
 | 6 | `..` | left |
-| 7 | `+` `-` | left |
-| 8 | `*` `/` `%` | left |
+| 7 | `\|` (bitwise OR) | left |
+| 8 | `^` (bitwise XOR) | left |
+| 9 | `&` (bitwise AND) | left |
+| 10 | `+` `-` | left |
+| 11 | `*` `/` `%` | left |
 
 ```ebnf
 binary_op       ::=
     "??" | "or" | "and"
   | "==" | "!=" | "<" | ">" | "<=" | ">="
-  | ".." | "+" | "-" | "*" | "/" | "%"
+  | ".." | "|" | "^" | "&"
+  | "+" | "-" | "*" | "/" | "%"
 ```
 
 ### Unary and Primary
@@ -283,7 +287,10 @@ Postfix operators bind as: `&` > `[]` > `?`
 IDENTIFIER      ::= LETTER (LETTER | DIGIT | "_")*
 LETTER          ::= "A".."Z" | "a".."z"
 DIGIT           ::= "0".."9"
-INTEGER         ::= DIGIT+
+HEX_DIGIT       ::= DIGIT | "a".."f" | "A".."F"
+INTEGER         ::= DEC_INTEGER | HEX_INTEGER
+DEC_INTEGER     ::= DIGIT (DIGIT | "_")*
+HEX_INTEGER     ::= "0" ("x" | "X") HEX_DIGIT (HEX_DIGIT | "_")*
 STRING          ::= '"' (CHAR | ESCAPE)* '"'
 ESCAPE          ::= "\" ("n" | "t" | "r" | "\" | '"' | "0")
 
@@ -292,6 +299,12 @@ WHITESPACE      ::= (" " | "\t" | "\n" | "\r")+
 ```
 
 Single-line comments only. No block comments.
+
+Integer literals support:
+- Decimal: `42`, `1_000_000`
+- Hexadecimal: `0xff`, `0xDEAD_BEEF`
+- Type suffixes: `42i32`, `0xffu8`
+- Underscores for readability (ignored during parsing)
 
 ## Tokens
 
@@ -306,7 +319,7 @@ and  or  true  false  null
 ### Symbols
 
 ```
-+  -  *  /  %  .  ..  &  ?  ??  ?.  =>  !
++  -  *  /  %  .  ..  &  |  ^  ?  ??  ?.  =>  !
 ==  !=  <  >  <=  >=
 (  )  {  }  [  ]  :  =  ;  #  ,  $  _
 ```

@@ -437,42 +437,28 @@ let src = make_source(my_array)  // array coerces to slice at call site
 
 ---
 
-### Integer Literal Parser Overflow for u64 Max
-
-**Status:** Open
-**Affected:** Parser (ParsePrimaryExpression)
-**Impact:** Cannot parse `18446744073709551615u64` (u64 max) or `-9223372036854775808i64` (i64 min) as literals.
-
-**Example:**
-```flang
-let max: u64 = 18446744073709551615u64  // Parser error: OverflowException
-```
-
-**Cause:** Parser uses `Int64.Parse()` which cannot represent values > i64 max.
-
-**Workaround:** Use `(-1i64) as u64` for u64 max, or compute large values at runtime.
-
-**Related Files:**
-- `src/FLang.Frontend/Parser.cs:828`
-
----
-
-### Hex Literal Syntax Not Supported
-
-**Status:** Open
-**Affected:** Lexer/Parser
-**Impact:** `0xff`, `0xDEADBEEF` style hex literals are not recognized.
-
-**Example:**
-```flang
-let x = 0xff  // Error: cannot find value `xff`
-```
-
-**Workaround:** Use decimal literals (e.g., `255u8` instead of `0xffu8`).
-
----
-
 ## Recently Fixed
+
+### Hex Literal Syntax
+
+**Fixed:** 2026-02-03
+**Solution:** Updated lexer to recognize `0x`/`0X` prefix and consume hex digits. Updated parser to parse hex values using `BigInteger.Parse` with `NumberStyles.HexNumber`.
+
+**Tests:**
+- `tests/FLang.Tests/Harness/literals/hex_literals.f`
+
+---
+
+### Integer Literal Parser Overflow for u64 Max / i64 Min
+
+**Fixed:** 2026-02-03
+**Solution:** Changed `IntegerLiteralNode.Value` and `ConstantValue.IntValue` from `long` to `BigInteger`. Parser now uses `BigInteger.Parse()` which has no upper/lower bounds. Also added special case in parser to handle negative integer literals (e.g., `-9223372036854775808i64`) by parsing the minus and number together.
+
+**Tests:**
+- `tests/FLang.Tests/Harness/literals/u64_max.f`
+- `tests/FLang.Tests/Harness/literals/i64_min.f`
+
+---
 
 ### Bitwise Operators (AND, OR, XOR)
 
