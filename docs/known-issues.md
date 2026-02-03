@@ -437,29 +437,6 @@ let src = make_source(my_array)  // array coerces to slice at call site
 
 ---
 
-### Bitwise AND Operator Not Working for u64
-
-**Status:** Open
-**Affected:** Any code using `&` for bitwise AND on u64 values
-**Impact:** `val & mask` returns `val` unchanged instead of performing bitwise AND.
-
-**Example:**
-```flang
-let mask: u64 = 4294967295u64  // 0xFFFFFFFF
-let val: u64 = (-1i64) as u64  // 0xFFFFFFFFFFFFFFFF
-let masked = val & mask        // Should be 4294967295, but returns val unchanged
-```
-
-**Workaround:** None currently. Avoid relying on bitwise AND for u64.
-
-**Blocked Features:**
-- `StringBuilder.append` signed hex formatting with proper type width masking
-
-**Related Tests:**
-- `tests/FLang.Tests/Harness/string_builder/append_signed_hex.f` (SKIP)
-
----
-
 ### Integer Literal Parser Overflow for u64 Max
 
 **Status:** Open
@@ -496,6 +473,28 @@ let x = 0xff  // Error: cannot find value `xff`
 ---
 
 ## Recently Fixed
+
+### Bitwise Operators (AND, OR, XOR)
+
+**Fixed:** 2026-02-03
+**Was:** Bitwise operators (`&`, `|`, `^`) were not implemented. The `&` token was only used for address-of/reference types.
+**Now:** Full support for bitwise AND (`&`), OR (`|`), and XOR (`^`) operators on integer types. Precedence follows C conventions: `&` binds tighter than `^`, which binds tighter than `|`, and all bitwise operators bind tighter than logical `and`/`or`.
+
+**Syntax:**
+```flang
+let a = 12 & 5   // Bitwise AND: 4
+let b = 12 | 5   // Bitwise OR: 13
+let c = 12 ^ 5   // Bitwise XOR: 9
+```
+
+**Related Tests:**
+- `tests/FLang.Tests/Harness/basics/bitwise_and.f`
+- `tests/FLang.Tests/Harness/basics/bitwise_or.f`
+- `tests/FLang.Tests/Harness/basics/bitwise_xor.f`
+- `tests/FLang.Tests/Harness/basics/bitwise_u64.f`
+- `tests/FLang.Tests/Harness/basics/bitwise_precedence.f`
+
+---
 
 ### Generic Struct Specialization Phase Ordering Bug
 

@@ -1,5 +1,4 @@
 //! TEST: string_builder_append_signed_hex
-//! SKIP: requires bitwise AND operator for proper type width masking
 //! EXIT: 0
 //! STDOUT: ffffffff
 //! STDOUT: ffffffffffffff85

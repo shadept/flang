@@ -58,7 +58,7 @@ public partial class TypeChecker
     /// Built-in operators only work on numeric primitives, booleans (for equality),
     /// and pointer arithmetic (&T + integer, &T - integer).
     /// </summary>
-    private bool IsBuiltinOperatorApplicable(TypeBase left, TypeBase right, BinaryOperatorKind op)
+    private static bool IsBuiltinOperatorApplicable(TypeBase left, TypeBase right, BinaryOperatorKind op)
     {
         // Both must be primitive or comptime types
         var leftIsNumeric = TypeRegistry.IsNumericType(left);
@@ -90,6 +90,12 @@ public partial class TypeChecker
         {
             if (leftIsPointer && rightIsPointer) return true;
             return (leftIsNumeric && rightIsNumeric) || (leftIsBool && rightIsBool);
+        }
+
+        // Bitwise operators require integer types (not floats, not bools)
+        if (op is BinaryOperatorKind.BitwiseAnd or BinaryOperatorKind.BitwiseOr or BinaryOperatorKind.BitwiseXor)
+        {
+            return TypeRegistry.IsIntegerType(left) && TypeRegistry.IsIntegerType(right);
         }
 
         return false;

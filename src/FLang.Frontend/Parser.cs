@@ -945,19 +945,22 @@ public class Parser
     /// Higher values indicate higher precedence (tighter binding).
     /// </summary>
     /// <param name="kind">The token kind representing the binary operator.</param>
-    /// <returns>The precedence level (0-6), or 0 if not a binary operator.</returns>
+    /// <returns>The precedence level, or 0 if not a binary operator.</returns>
     private int GetBinaryOperatorPrecedence(TokenKind kind)
     {
         return kind switch
         {
-            TokenKind.Star or TokenKind.Slash or TokenKind.Percent => 8,
-            TokenKind.Plus or TokenKind.Minus => 7,
-            TokenKind.DotDot => 6,
+            TokenKind.Star or TokenKind.Slash or TokenKind.Percent => 11,
+            TokenKind.Plus or TokenKind.Minus => 10,
+            TokenKind.DotDot => 9,
             TokenKind.LessThan or TokenKind.GreaterThan or TokenKind.LessThanOrEqual
-                or TokenKind.GreaterThanOrEqual => 5,
-            TokenKind.EqualsEquals or TokenKind.NotEquals => 4,
-            TokenKind.And => 3,
-            TokenKind.Or => 2,
+                or TokenKind.GreaterThanOrEqual => 8,
+            TokenKind.EqualsEquals or TokenKind.NotEquals => 7,
+            TokenKind.Ampersand => 6, // Bitwise AND
+            TokenKind.Caret => 5,     // Bitwise XOR
+            TokenKind.Pipe => 4,      // Bitwise OR
+            TokenKind.And => 3,       // Logical AND
+            TokenKind.Or => 2,        // Logical OR
             TokenKind.QuestionQuestion => 1, // Lowest precedence, right-associative
             _ => 0
         };
@@ -1015,6 +1018,9 @@ public class Parser
             TokenKind.GreaterThanOrEqual => BinaryOperatorKind.GreaterThanOrEqual,
             TokenKind.And => BinaryOperatorKind.And,
             TokenKind.Or => BinaryOperatorKind.Or,
+            TokenKind.Ampersand => BinaryOperatorKind.BitwiseAnd,
+            TokenKind.Pipe => BinaryOperatorKind.BitwiseOr,
+            TokenKind.Caret => BinaryOperatorKind.BitwiseXor,
             _ => throw new ParserException(Diagnostic.Error(
                 $"unexpected operator token '{_currentToken.Text}'",
                 _currentToken.Span,

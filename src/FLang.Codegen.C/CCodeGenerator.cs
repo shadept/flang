@@ -1196,6 +1196,9 @@ public class CCodeGenerator
             BinaryOp.GreaterThan => ">",
             BinaryOp.LessThanOrEqual => "<=",
             BinaryOp.GreaterThanOrEqual => ">=",
+            BinaryOp.BitwiseAnd => "&",
+            BinaryOp.BitwiseOr => "|",
+            BinaryOp.BitwiseXor => "^",
             _ => throw new Exception($"Unknown binary operation: {binary.Operation}")
         };
 

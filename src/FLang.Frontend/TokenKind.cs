@@ -45,6 +45,8 @@ public enum TokenKind
     Dot,
     DotDot,
     Ampersand,
+    Pipe,
+    Caret,
     Question,
     QuestionQuestion,
     QuestionDot,

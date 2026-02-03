@@ -37,7 +37,16 @@ public enum BinaryOp
     LessThanOrEqual,
 
     /// <summary>Greater than or equal comparison: left &gt;= right</summary>
-    GreaterThanOrEqual
+    GreaterThanOrEqual,
+
+    /// <summary>Bitwise AND: left &amp; right</summary>
+    BitwiseAnd,
+
+    /// <summary>Bitwise OR: left | right</summary>
+    BitwiseOr,
+
+    /// <summary>Bitwise XOR: left ^ right</summary>
+    BitwiseXor
 }
 
 /// <summary>

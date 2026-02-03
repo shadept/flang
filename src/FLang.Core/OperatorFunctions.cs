@@ -21,7 +21,12 @@ public enum BinaryOperatorKind
 
     // Logical (short-circuit, built-in only)
     And,
-    Or
+    Or,
+
+    // Bitwise
+    BitwiseAnd,
+    BitwiseOr,
+    BitwiseXor
 }
 
 /// <summary>
@@ -65,6 +70,11 @@ public static class OperatorFunctions
         BinaryOperatorKind.And => "op_and",
         BinaryOperatorKind.Or => "op_or",
 
+        // Bitwise operators (built-in only)
+        BinaryOperatorKind.BitwiseAnd => "op_band",
+        BinaryOperatorKind.BitwiseOr => "op_bor",
+        BinaryOperatorKind.BitwiseXor => "op_bxor",
+
         _ => throw new ArgumentOutOfRangeException(nameof(op), op, "Unknown binary operator")
     };
 
@@ -88,6 +98,9 @@ public static class OperatorFunctions
         BinaryOperatorKind.GreaterThanOrEqual => ">=",
         BinaryOperatorKind.And => "and",
         BinaryOperatorKind.Or => "or",
+        BinaryOperatorKind.BitwiseAnd => "&",
+        BinaryOperatorKind.BitwiseOr => "|",
+        BinaryOperatorKind.BitwiseXor => "^",
         _ => "?"
     };
 

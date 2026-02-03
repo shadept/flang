@@ -213,6 +213,8 @@ public class Lexer
             ';' => CreateToken(TokenKind.Semicolon),
             ',' => CreateToken(TokenKind.Comma),
             '&' => CreateToken(TokenKind.Ampersand),
+            '|' => CreateToken(TokenKind.Pipe),
+            '^' => CreateToken(TokenKind.Caret),
             '?' => CreateToken(TokenKind.Question),
             '+' => CreateToken(TokenKind.Plus),
             '-' => CreateToken(TokenKind.Minus),

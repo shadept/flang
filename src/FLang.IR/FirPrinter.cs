@@ -131,6 +131,9 @@ public static class FirPrinter
             BinaryOp.GreaterThan => "icmp sgt",
             BinaryOp.LessThanOrEqual => "icmp sle",
             BinaryOp.GreaterThanOrEqual => "icmp sge",
+            BinaryOp.BitwiseAnd => "and",
+            BinaryOp.BitwiseOr => "or",
+            BinaryOp.BitwiseXor => "xor",
             _ => "?"
         };
 

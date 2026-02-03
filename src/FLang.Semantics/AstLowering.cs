@@ -1167,6 +1167,9 @@ public class AstLowering
                         BinaryOperatorKind.GreaterThan => BinaryOp.GreaterThan,
                         BinaryOperatorKind.LessThanOrEqual => BinaryOp.LessThanOrEqual,
                         BinaryOperatorKind.GreaterThanOrEqual => BinaryOp.GreaterThanOrEqual,
+                        BinaryOperatorKind.BitwiseAnd => BinaryOp.BitwiseAnd,
+                        BinaryOperatorKind.BitwiseOr => BinaryOp.BitwiseOr,
+                        BinaryOperatorKind.BitwiseXor => BinaryOp.BitwiseXor,
                         _ => throw new Exception($"Unknown binary operator: {binary.Operator}")
                     };
 
