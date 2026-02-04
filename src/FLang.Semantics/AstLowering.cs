@@ -1937,8 +1937,15 @@ public class AstLowering
 
                     // Fallback: built-in array indexing
                     var baseValueFallback = LowerExpression(indexExpr.Base);
-                    var indexValueFallback = LowerExpression(indexExpr.Index);
                     var baseArrayType = indexExpr.Base.Type;
+
+                    // Range indexing: arr[x..y] or arr[..] etc -> Slice
+                    if (indexExpr.IsRangeIndex)
+                    {
+                        return LowerRangeIndex(indexExpr, baseValueFallback, baseArrayType!);
+                    }
+
+                    var indexValueFallback = LowerExpression(indexExpr.Index);
 
                     if (baseArrayType is ArrayType arrayTypeForIndex)
                     {
@@ -2410,6 +2417,19 @@ public class AstLowering
             return new ConstantValue(0);
         }
 
+        // Partial ranges (x.., ..y, ..) are only valid in index context
+        // In standalone context (e.g., for loops), both bounds are required
+        if (rangeExpr.Start == null || rangeExpr.End == null)
+        {
+            _diagnostics.Add(Diagnostic.Error(
+                "partial range requires index context",
+                rangeExpr.Span,
+                "use full range `start..end` or use within array/slice index",
+                "E3009"
+            ));
+            return new ConstantValue(0);
+        }
+
         // Lower start and end expressions
         var startValue = LowerExpression(rangeExpr.Start);
         var endValue = LowerExpression(rangeExpr.End);
@@ -2440,6 +2460,131 @@ public class AstLowering
         _currentBlock.Instructions.Add(new LoadInstruction(rangePtr, rangeValue));
 
         return rangeValue;
+    }
+
+    /// <summary>
+    /// Lowers range indexing on arrays/slices: arr[x..y], arr[..], arr[x..], arr[..y] -> Slice(T)
+    /// For arrays and partial ranges on slices, this handles the built-in range indexing.
+    /// Full ranges on slices go through the op_index function call path.
+    /// </summary>
+    private Value LowerRangeIndex(IndexExpressionNode indexExpr, Value baseValue, TypeBase baseType)
+    {
+        TypeBase elementType;
+        Value basePtr;
+        Value lengthValue;
+
+        if (baseType is ArrayType arrayType)
+        {
+            elementType = arrayType.ElementType;
+
+            // Array: cast to pointer to first element
+            var ptrType = new ReferenceType(elementType);
+            basePtr = new LocalValue($"arr_ptr_{_tempCounter++}", ptrType);
+            _currentBlock.Instructions.Add(new CastInstruction(baseValue, ptrType, basePtr));
+
+            // Length is compile-time constant
+            lengthValue = new ConstantValue(arrayType.Length) { Type = TypeRegistry.USize };
+        }
+        else if (baseType is StructType sliceType && TypeRegistry.IsSlice(sliceType))
+        {
+            elementType = sliceType.TypeArguments[0];
+
+            // Slice: extract ptr and len fields
+            basePtr = ExtractStructField(baseValue, sliceType, "ptr");
+            lengthValue = ExtractStructField(baseValue, sliceType, "len");
+        }
+        else
+        {
+            throw new InvalidOperationException($"IsRangeIndex set on unsupported type: {baseType}");
+        }
+
+        // Get start/end values from range expression (handle partial ranges)
+        Value startVal, endVal;
+        if (indexExpr.Index is RangeExpressionNode rangeExpr)
+        {
+            // Start: use 0 if not specified
+            startVal = rangeExpr.Start != null
+                ? LowerExpression(rangeExpr.Start)
+                : new ConstantValue(0) { Type = TypeRegistry.USize };
+
+            // End: use array length if not specified
+            endVal = rangeExpr.End != null
+                ? LowerExpression(rangeExpr.End)
+                : lengthValue;
+        }
+        else
+        {
+            // Index is already a Range value (not a literal range expression)
+            var rangeValue = LowerExpression(indexExpr.Index);
+            var rangeType = TypeRegistry.MakeRange(TypeRegistry.USize);
+            startVal = ExtractStructField(rangeValue, rangeType, "start");
+            endVal = ExtractStructField(rangeValue, rangeType, "end");
+        }
+
+        // Compute slice length: end - start
+        var sliceLen = new LocalValue($"slice_len_{_tempCounter++}", TypeRegistry.USize);
+        _currentBlock.Instructions.Add(new BinaryInstruction(BinaryOp.Subtract, endVal, startVal, sliceLen));
+
+        // Compute slice ptr: base + start (using GEP for proper pointer arithmetic)
+        var slicePtr = new LocalValue($"slice_ptr_{_tempCounter++}", new ReferenceType(elementType));
+        _currentBlock.Instructions.Add(new GetElementPtrInstruction(basePtr, startVal, slicePtr));
+
+        // Build Slice struct { ptr, len }
+        return BuildSliceStruct(elementType, slicePtr, sliceLen);
+    }
+
+    /// <summary>
+    /// Extracts a field value from a struct value (not a pointer to struct).
+    /// Stores the struct to stack, gets field pointer, loads field.
+    /// </summary>
+    private Value ExtractStructField(Value structValue, StructType structType, string fieldName)
+    {
+        // Store struct to stack to get addressable memory
+        var structPtr = new LocalValue($"struct_tmp_{_tempCounter++}", new ReferenceType(structType));
+        _currentBlock.Instructions.Add(new AllocaInstruction(structType, structType.Size, structPtr));
+        _currentBlock.Instructions.Add(new StorePointerInstruction(structPtr, structValue));
+
+        // Get field offset and type
+        var fieldOffset = structType.GetFieldOffset(fieldName);
+        var fieldType = structType.GetFieldType(fieldName)!;
+
+        // Get pointer to field
+        var fieldPtr = new LocalValue($"{fieldName}_ptr_{_tempCounter++}", new ReferenceType(fieldType));
+        _currentBlock.Instructions.Add(new GetElementPtrInstruction(structPtr, fieldOffset, fieldPtr));
+
+        // Load field value
+        var fieldVal = new LocalValue($"{fieldName}_{_tempCounter++}", fieldType);
+        _currentBlock.Instructions.Add(new LoadInstruction(fieldPtr, fieldVal));
+
+        return fieldVal;
+    }
+
+    /// <summary>
+    /// Builds a Slice struct from a pointer and length.
+    /// </summary>
+    private Value BuildSliceStruct(TypeBase elementType, Value ptr, Value len)
+    {
+        var sliceType = TypeRegistry.MakeSlice(elementType);
+
+        // Allocate slice on stack
+        var slicePtr = new LocalValue($"slice_result_{_tempCounter++}", new ReferenceType(sliceType));
+        _currentBlock.Instructions.Add(new AllocaInstruction(sliceType, sliceType.Size, slicePtr));
+
+        // Store ptr field (offset 0)
+        var ptrFieldPtr = new LocalValue($"ptr_field_{_tempCounter++}", new ReferenceType(ptr.Type!));
+        _currentBlock.Instructions.Add(new GetElementPtrInstruction(slicePtr, 0, ptrFieldPtr));
+        _currentBlock.Instructions.Add(new StorePointerInstruction(ptrFieldPtr, ptr));
+
+        // Store len field (offset 8, since ptr is 8 bytes on 64-bit)
+        var lenFieldPtr = new LocalValue($"len_field_{_tempCounter++}", new ReferenceType(TypeRegistry.USize));
+        _currentBlock.Instructions.Add(new GetElementPtrInstruction(slicePtr, 8, lenFieldPtr));
+        _currentBlock.Instructions.Add(new StorePointerInstruction(lenFieldPtr, len));
+
+        // Load the completed slice value
+        var sliceVal = new LocalValue($"slice_{_tempCounter++}", sliceType);
+        _currentBlock.Instructions.Add(new LoadInstruction(slicePtr, sliceVal));
+
+        return sliceVal;
     }
 
     /// <summary>

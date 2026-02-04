@@ -601,8 +601,17 @@ public class Parser
             if (operatorToken.Kind == TokenKind.DotDot)
             {
                 _currentToken = _lexer.NextToken();
-                var rangeEnd = ParseBinaryExpression(precedence);
-                var rangeSpan = SourceSpan.Combine(left.Span, rangeEnd.Span);
+
+                // Check if end is omitted (x..) - next token is a delimiter
+                ExpressionNode? rangeEnd = null;
+                if (!IsRangeDelimiter(_currentToken.Kind))
+                {
+                    rangeEnd = ParseBinaryExpression(precedence);
+                }
+
+                var rangeSpan = rangeEnd != null
+                    ? SourceSpan.Combine(left.Span, rangeEnd.Span)
+                    : SourceSpan.Combine(left.Span, operatorToken.Span);
                 left = new RangeExpressionNode(rangeSpan, left, rangeEnd);
                 continue;
             }
@@ -829,6 +838,24 @@ public class Parser
                     return new UnaryExpressionNode(span, UnaryOperatorKind.Not, operandWithPostfix);
                 }
 
+            case TokenKind.DotDot:
+                {
+                    // Prefix range: ..end or .. (unbounded)
+                    var dotDotToken = Eat(TokenKind.DotDot);
+
+                    // Check if there's an end expression (not followed by delimiter)
+                    ExpressionNode? rangeEnd = null;
+                    if (!IsRangeDelimiter(_currentToken.Kind))
+                    {
+                        rangeEnd = ParseBinaryExpression(0);
+                    }
+
+                    var span = rangeEnd != null
+                        ? SourceSpan.Combine(dotDotToken.Span, rangeEnd.Span)
+                        : dotDotToken.Span;
+                    return new RangeExpressionNode(span, null, rangeEnd);
+                }
+
             case TokenKind.Integer:
                 {
                     var integerToken = Eat(TokenKind.Integer);
@@ -989,6 +1016,16 @@ public class Parser
     {
         return kind is TokenKind.Let or TokenKind.Const or TokenKind.Return
             or TokenKind.Break or TokenKind.Continue or TokenKind.Defer;
+    }
+
+    /// <summary>
+    /// Checks if a token kind is a delimiter that terminates a range expression.
+    /// Used to detect partial ranges like x.. or ..y or ..
+    /// </summary>
+    private static bool IsRangeDelimiter(TokenKind kind)
+    {
+        return kind is TokenKind.CloseBracket or TokenKind.CloseParenthesis or TokenKind.Comma
+            or TokenKind.CloseBrace or TokenKind.Semicolon or TokenKind.EndOfFile;
     }
 
     private sealed class ParserException : Exception

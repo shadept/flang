@@ -70,7 +70,9 @@ pub fn read_all(file: &File) Result(OwnedString, FileError) {
         if (n == 0) {
             break
         }
-        sb.append_bytes(buf)
+        const buf_slice = buf as u8[]
+        const n = n as usize
+        sb.append_bytes(buf_slice[..n])
     }
     return Result.Ok(sb.to_string())
 }

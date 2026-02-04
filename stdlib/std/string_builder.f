@@ -182,8 +182,7 @@ fn append_unsigned_with_base(sb: &StringBuilder, value: u64, base: u64, uppercas
     }
 
     const buf_slice = buf as u8[]
-    const slice = buf_slice[pos..64usize]
-    sb.append_bytes(slice)
+    sb.append_bytes(buf_slice[pos..])
 }
 
 fn append_unsigned_impl(sb: &StringBuilder, value: u64, spec: String) {
@@ -404,6 +403,6 @@ fn sb_write(ctx: &u8, buf: u8[]) usize {
 
 pub fn writer(sb: &StringBuilder) BufferedWriter {
     const wfn = WriteFn { ctx = sb as &u8, write = sb_write }
-    const storage = [0 as u8; 0] as u8[]
+    const storage = [0u8; 0]
     return buffered_writer(wfn, storage)
 }

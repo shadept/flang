@@ -1811,45 +1811,71 @@ public partial class TypeChecker
                 }
             case RangeExpressionNode re:
                 {
-                    var st = CheckExpression(re.Start);
-                    if (IsNever(st))
-                    {
-                        type = TypeRegistry.Never;
-                        break;
-                    }
-                    var en = CheckExpression(re.End);
-                    if (IsNever(en))
-                    {
-                        type = TypeRegistry.Never;
-                        break;
-                    }
-                    var prunedSt = st.Prune();
-                    var prunedEn = en.Prune();
+                    TypeBase? st = null, en = null;
 
-                    // Validate range bounds are integers
-                    if (!TypeRegistry.IsIntegerType(prunedSt) || !TypeRegistry.IsIntegerType(prunedEn))
+                    if (re.Start != null)
                     {
-                        ReportError("range bounds must be integers", re.Span, $"found `{prunedSt}..{prunedEn}`",
+                        st = CheckExpression(re.Start);
+                        if (IsNever(st))
+                        {
+                            type = TypeRegistry.Never;
+                            break;
+                        }
+                    }
+
+                    if (re.End != null)
+                    {
+                        en = CheckExpression(re.End);
+                        if (IsNever(en))
+                        {
+                            type = TypeRegistry.Never;
+                            break;
+                        }
+                    }
+
+                    // For fully unbounded ranges (..), default to usize
+                    // The actual bounds will be filled in during index lowering
+                    if (st == null && en == null)
+                    {
+                        type = TypeRegistry.MakeRange(TypeRegistry.USize);
+                        break;
+                    }
+
+                    var prunedSt = st?.Prune();
+                    var prunedEn = en?.Prune();
+
+                    // Validate present bounds are integers
+                    if (prunedSt != null && !TypeRegistry.IsIntegerType(prunedSt))
+                    {
+                        ReportError("range bounds must be integers", re.Start!.Span, $"found `{prunedSt}`",
+                            "E2002");
+                        type = TypeRegistry.Never;
+                        break;
+                    }
+                    if (prunedEn != null && !TypeRegistry.IsIntegerType(prunedEn))
+                    {
+                        ReportError("range bounds must be integers", re.End!.Span, $"found `{prunedEn}`",
                             "E2002");
                         type = TypeRegistry.Never;
                         break;
                     }
 
-                    // If context expects Range(T), propagate T to the bounds
+                    // If context expects Range(T), propagate T to present bounds
                     if (expectedType?.Prune() is StructType expectedRange
                         && TypeRegistry.IsRange(expectedRange)
                         && expectedRange.TypeArguments.Count == 1)
                     {
                         var expectedElem = expectedRange.TypeArguments[0];
-                        UnifyTypes(st, expectedElem, re.Start.Span);
-                        UnifyTypes(en, expectedElem, re.End.Span);
+                        if (st != null) UnifyTypes(st, expectedElem, re.Start!.Span);
+                        if (en != null) UnifyTypes(en, expectedElem, re.End!.Span);
                     }
 
-                    // Unify start and end types so they agree
-                    UnifyTypes(st, en, re.Span);
+                    // Unify start and end types if both present
+                    if (st != null && en != null)
+                        UnifyTypes(st, en, re.Span);
 
-                    // Determine the element type for Range(T)
-                    var elementType = st.Prune();
+                    // Determine the element type for Range(T) from whichever bound is present
+                    var elementType = (st ?? en)!.Prune();
 
                     type = MakeRangeType(elementType, re.Span);
                     break;
@@ -2067,9 +2093,20 @@ public partial class TypeChecker
 
                     // For struct types (slices, custom types), look up op_index function
                     // Arrays use built-in indexing (no op_index lookup)
+                    // Special case: partial ranges on slices use built-in handling
                     var prunedBt = bt.Prune();
                     if (prunedBt is StructType structTypeForIndex)
                     {
+                        // For slices with partial ranges, skip op_index lookup and use built-in handling
+                        // This is because partial ranges need to fill in missing bounds from the slice's length
+                        if (TypeRegistry.IsSlice(structTypeForIndex) &&
+                            ix.Index is RangeExpressionNode partialRangeCheck &&
+                            (partialRangeCheck.Start == null || partialRangeCheck.End == null))
+                        {
+                            // Fall through to built-in range indexing below
+                            goto builtInRangeIndexing;
+                        }
+
                         // Try with &T first (op_index(base: &T, index: I) R)
                         var refBaseType = new ReferenceType(structTypeForIndex);
                         var opIndexResult = TryResolveOperatorFunction("op_index", refBaseType, it, ix.Span);
@@ -2090,7 +2127,23 @@ public partial class TypeChecker
                             {
                                 var indexParamType = resolvedFunc.Parameters[1].ResolvedType;
                                 if (indexParamType != null)
+                                {
                                     UnifyTypes(it, indexParamType, ix.Index.Span);
+
+                                    // For range literals, also unify the bound expressions
+                                    // This ensures comptime_int bounds get resolved to the correct type
+                                    if (ix.Index is RangeExpressionNode rangeExpr &&
+                                        indexParamType is StructType rangeParamType &&
+                                        TypeRegistry.IsRange(rangeParamType) &&
+                                        rangeParamType.TypeArguments.Count > 0)
+                                    {
+                                        var elemType = rangeParamType.TypeArguments[0];
+                                        if (rangeExpr.Start?.Type != null)
+                                            UnifyTypes(rangeExpr.Start.Type, elemType, rangeExpr.Start.Span);
+                                        if (rangeExpr.End?.Type != null)
+                                            UnifyTypes(rangeExpr.End.Type, elemType, rangeExpr.End.Span);
+                                    }
+                                }
                             }
 
                             break;
@@ -2131,9 +2184,44 @@ public partial class TypeChecker
                         // No op_index for this type at all — fall through to array/slice check
                     }
 
-                    // Built-in array/slice indexing with usize
+                    // Check for range indexing on arrays/slices: arr[x..y] -> Slice(T)
+                    // For partial ranges (x.., ..y, ..), use built-in handling for both arrays and slices
+                    // Full ranges on slices use op_index from stdlib (handled above)
+                builtInRangeIndexing:
                     var prunedIt = it.Prune();
+                    if (prunedIt is StructType rangeStruct && TypeRegistry.IsRange(rangeStruct))
+                    {
+                        // Check if this is a partial range that needs built-in handling
+                        var isPartialRange = ix.Index is RangeExpressionNode re && (re.Start == null || re.End == null);
 
+                        TypeBase? elementType = null;
+                        if (bt is ArrayType arrayForRange)
+                            elementType = arrayForRange.ElementType;
+                        else if (isPartialRange && bt is StructType sliceForRange && TypeRegistry.IsSlice(sliceForRange))
+                            elementType = sliceForRange.TypeArguments[0];
+
+                        if (elementType != null)
+                        {
+                            // Unify range bounds with usize via the Range type argument
+                            if (rangeStruct.TypeArguments.Count > 0)
+                                UnifyTypes(rangeStruct.TypeArguments[0], TypeRegistry.USize, ix.Index.Span);
+
+                            // Also unify the actual bound expressions if it's a range literal
+                            if (ix.Index is RangeExpressionNode rangeExpr)
+                            {
+                                if (rangeExpr.Start?.Type != null)
+                                    UnifyTypes(rangeExpr.Start.Type, TypeRegistry.USize, rangeExpr.Start.Span);
+                                if (rangeExpr.End?.Type != null)
+                                    UnifyTypes(rangeExpr.End.Type, TypeRegistry.USize, rangeExpr.End.Span);
+                            }
+
+                            ix.IsRangeIndex = true;
+                            type = TypeRegistry.MakeSlice(elementType);
+                            break;
+                        }
+                    }
+
+                    // Built-in array/slice indexing with usize
                     if (!TypeRegistry.IsIntegerType(prunedIt))
                     {
                         ReportError(

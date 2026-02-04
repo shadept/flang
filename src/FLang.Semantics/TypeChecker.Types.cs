@@ -999,6 +999,17 @@ public partial class TypeChecker
                             }
                             else if (!paramType.Equals(argType))
                             {
+                                // Allow comptime_int arg to match concrete integer param
+                                var prunedArgType = argType.Prune();
+                                if (prunedArgType is ComptimeInt && TypeRegistry.IsIntegerType(paramType))
+                                {
+                                    // comptime_int can coerce to any integer type
+                                    // Propagate the concrete type to the arg's TypeVar if possible
+                                    if (argType is TypeVar argTv)
+                                        argTv.Instance = paramType;
+                                    continue;
+                                }
+
                                 // Concrete type arguments must match exactly
                                 _logger.LogDebug("{Indent}Concrete type mismatch: '{ParamType}' != '{ArgType}'", Indent(),
                                     paramType.Name, argType.Name);

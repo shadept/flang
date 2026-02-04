@@ -29,4 +29,10 @@ public class IndexExpressionNode : ExpressionNode
     /// Lowering will emit: op_set_index(&amp;base, index, value)
     /// </summary>
     public FunctionDeclarationNode? ResolvedSetIndexFunction { get; set; }
+
+    /// <summary>
+    /// If true, this is a range index operation (e.g., arr[1..3], arr[..], arr[1..], arr[..3]).
+    /// The result type is a slice of the base array/slice element type.
+    /// </summary>
+    public bool IsRangeIndex { get; set; }
 }
