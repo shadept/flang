@@ -22,6 +22,7 @@ public enum TokenKind
     If,
     Else,
     For,
+    Loop,
     In,
     Break,
     Continue,

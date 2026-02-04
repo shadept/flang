@@ -231,9 +231,29 @@ if (cond) expr1 else expr2
 for (pattern in iterable) block
 ```
 
-- Only looping construct.
+- Iterator-based looping construct.
 - Uses the iterator protocol; built-in for ranges, arrays, and slices.
 - Supports `break` and `continue`.
+
+#### Loop Expression
+
+```
+loop block
+```
+
+- Infinite loop that repeats until `break` or `return`.
+- Supports `break` and `continue`.
+- Useful when the exit condition is complex or checked mid-body.
+
+```flang
+let count = 0
+loop {
+    count = count + 1
+    if (count == 10) {
+        break
+    }
+}
+```
 
 ##### Lowering of For-in Loops (Iterator Protocol)
 

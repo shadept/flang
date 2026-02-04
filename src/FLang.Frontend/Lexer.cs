@@ -157,6 +157,7 @@ public class Lexer
                 "if" => TokenKind.If,
                 "else" => TokenKind.Else,
                 "for" => TokenKind.For,
+                "loop" => TokenKind.Loop,
                 "in" => TokenKind.In,
                 "break" => TokenKind.Break,
                 "continue" => TokenKind.Continue,

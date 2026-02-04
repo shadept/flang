@@ -25,6 +25,9 @@ public partial class TypeChecker
             case ForLoopNode fl:
                 CheckForLoop(fl);
                 break;
+            case LoopNode loop:
+                CheckLoop(loop);
+                break;
             case BreakStatementNode:
             case ContinueStatementNode:
                 // No-op: these statements don't require type checking
@@ -379,6 +382,12 @@ public partial class TypeChecker
         }
 
         PopScope();
+    }
+
+    private void CheckLoop(LoopNode loop)
+    {
+        // Infinite loop: just type-check the body
+        CheckExpression(loop.Body);
     }
 
     private void CheckDeferStatement(DeferStatementNode ds)

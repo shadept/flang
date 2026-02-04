@@ -162,7 +162,7 @@ fn append_unsigned_with_base(sb: &StringBuilder, value: u64, base: u64, uppercas
     let pos: usize = 64
     let v = value
 
-    for (_i in 0i32..64i32) {
+    loop {
         if (v == 0) {
             break
         }

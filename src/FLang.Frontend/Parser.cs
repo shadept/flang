@@ -497,6 +497,9 @@ public class Parser
             case TokenKind.For:
                 return ParseForLoop();
 
+            case TokenKind.Loop:
+                return ParseLoop();
+
             case TokenKind.OpenBrace:
                 {
                     // Block statement - parse as expression statement
@@ -1255,6 +1258,17 @@ public class Parser
         // Span only includes "for (v in c)" part, not the body
         var span = SourceSpan.Combine(forKeyword.Span, closeParen.Span);
         return new ForLoopNode(span, iterator.Text, iterable, body);
+    }
+
+    /// <summary>
+    /// Parses an infinite loop statement: loop { body }
+    /// </summary>
+    /// <returns>A <see cref="LoopNode"/> representing the loop.</returns>
+    private LoopNode ParseLoop()
+    {
+        var loopKeyword = Eat(TokenKind.Loop);
+        var body = ParseBlockExpression();
+        return new LoopNode(loopKeyword.Span, body);
     }
 
     /// <summary>

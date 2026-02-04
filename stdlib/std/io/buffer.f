@@ -163,10 +163,7 @@ pub fn write(bw: &BufferedWriter, data: u8[]) usize {
     let written: usize = 0
     let remaining: usize = data.len
 
-    // Loop bound: each iteration consumes at least 1 byte, so data.len
-    // is a safe upper bound on iterations. +1 for the potential partial
-    // fill-and-flush at the start.
-    for (_i in 0..data.len as isize + 1) {
+    loop {
         if (remaining == 0) {
             break
         }
@@ -214,8 +211,7 @@ pub fn flush(bw: &BufferedWriter) {
 // Handles partial writes by looping until all bytes are written.
 fn flush_all(bw: &BufferedWriter) {
     let flushed: usize = 0
-    // cap is the max bytes in the buffer; each iteration writes at least 1 byte.
-    for (_i in 0..bw.cap as isize) {
+    loop {
         if (flushed >= bw.pos) {
             break
         }

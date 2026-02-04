@@ -4,7 +4,7 @@ This document is the complete syntax reference for FLang. Every construct the la
 
 ## What FLang Does NOT Have
 
-No semicolons. No `while` loops. No `mut` keyword. No `->` return type arrow. No `impl` blocks. No traits/interfaces. No closures. No string interpolation. No multi-line comments. No default parameter values. No `elif`. No ternary operator. No `switch`/`case`. No macros. No `async`/`await`. No destructuring assignment. No spread operator. No variadic functions (except `#foreign`). No type aliases.
+No semicolons. No `while` loops (use `loop` with `break`). No `mut` keyword. No `->` return type arrow. No `impl` blocks. No traits/interfaces. No closures. No string interpolation. No multi-line comments. No default parameter values. No `elif`. No ternary operator. No `switch`/`case`. No macros. No `async`/`await`. No destructuring assignment. No spread operator. No variadic functions (except `#foreign`). No type aliases.
 
 ## Comments
 
@@ -194,7 +194,7 @@ else baz
 
 ### For Loop
 
-Only `for`-`in`. No `while`. No C-style `for`.
+Only `for`-`in`. No C-style `for`.
 
 ```
 for (item in collection) {
@@ -207,6 +207,21 @@ for (i in 0..5) {
 ```
 
 Loop body can be a block or single expression. `break` and `continue` work inside.
+
+### Loop
+
+Infinite loop. Repeats until `break` or `return`.
+
+```
+loop {
+    // runs forever until break
+    if (condition) {
+        break
+    }
+}
+```
+
+Use instead of `while`. `break` and `continue` work inside.
 
 ### Iterator Protocol
 

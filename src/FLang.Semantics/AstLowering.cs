@@ -917,6 +917,10 @@ public class AstLowering
                 LowerForLoop(forLoop);
                 break;
 
+            case LoopNode loop:
+                LowerLoop(loop);
+                break;
+
             case DeferStatementNode deferStmt:
                 // Add the deferred expression to the current scope's defer list
                 if (_deferStack.Count > 0)
@@ -2395,6 +2399,33 @@ public class AstLowering
         _currentBlock.Instructions.Add(new JumpInstruction(condBlock));
 
         // 7. loop_exit: set as current block; no additional work needed
+        _currentBlock = exitBlock;
+    }
+
+    /// <summary>
+    /// Lower an infinite loop: loop { body }
+    /// Generates: loop_body -> [body] -> jump loop_body, with break targeting loop_exit
+    /// </summary>
+    private void LowerLoop(LoopNode loop)
+    {
+        // Create loop blocks
+        var bodyBlock = CreateBlock("loop_body");
+        var exitBlock = CreateBlock("loop_exit");
+
+        // Jump to body block to start the loop
+        _currentBlock.Instructions.Add(new JumpInstruction(bodyBlock));
+
+        // Loop body
+        _currentBlock = bodyBlock;
+        _loopStack.Push(new LoopContext(bodyBlock, exitBlock));
+
+        LowerExpression(loop.Body);
+        _loopStack.Pop();
+
+        // At end of body, jump back to start of body (infinite loop)
+        _currentBlock.Instructions.Add(new JumpInstruction(bodyBlock));
+
+        // Exit block for break statements
         _currentBlock = exitBlock;
     }
 

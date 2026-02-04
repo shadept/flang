@@ -61,8 +61,7 @@ pub fn close_file(file: &File) Result((), FileError) {
 pub fn read_all(file: &File) Result(OwnedString, FileError) {
     let sb: StringBuilder
     let buf = [0u8; 4096]
-    // GAP: we should have a `loop` stament
-    for (_i in 0..4096usize) {
+    loop {
         const n = read(file.handle.fd, buf.ptr, buf.len)
         if (n == -1) {
             return Result.Err(FileError.IOError)
@@ -81,13 +80,13 @@ pub fn write(file: &File, value: String) Result((), FileError) {
     // TODO handle encoding
     let bytes = value.as_raw_slice()
     let total_written = 0usize
-    for (_i in bytes) {
+    loop {
         const n = write(file.handle.fd, bytes[total_written..bytes.len].ptr, bytes.len - total_written)
         if (n == -1) {
             return Result.Err(FileError.IOError)
         }
         total_written = total_written + n as usize
-        if (total_written == bytes.len) {
+        if (total_written >= bytes.len) {
             break
         }
     }

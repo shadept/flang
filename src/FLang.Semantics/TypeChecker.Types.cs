@@ -1236,6 +1236,7 @@ public partial class TypeChecker
         ExpressionStatementNode es => new ExpressionStatementNode(es.Span, CloneExpression(es.Expression)),
         VariableDeclarationNode vd => new VariableDeclarationNode(vd.Span, vd.Name, vd.Type, vd.Initializer != null ? CloneExpression(vd.Initializer) : null),
         ForLoopNode fl => new ForLoopNode(fl.Span, fl.IteratorVariable, CloneExpression(fl.IterableExpression), CloneExpression(fl.Body)),
+        LoopNode loop => new LoopNode(loop.Span, CloneExpression(loop.Body)),
         BreakStatementNode br => new BreakStatementNode(br.Span),
         ContinueStatementNode cont => new ContinueStatementNode(cont.Span),
         DeferStatementNode df => new DeferStatementNode(df.Span, CloneExpression(df.Expression)),

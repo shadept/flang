@@ -1,29 +1,22 @@
 // TODO file doc
 
-// =============================================================================
-// String
-// =============================================================================
+import core.string // explicit import for clarity
 
-import core.string
 import std.allocator
 import std.option
 
+// =============================================================================
+// String stdlib functions
+// =============================================================================
 
-pub struct OwnedString {
-    ptr: &u8
-    len: usize
-    allocator: &Allocator?
-}
+// **1. String manipulation (HIGH PRIORITY)**
+// - `split()`, `trim()`, `find()`, `contains()`, `replace()`
+// - `ends_with()` (commented out)
+// - Substring search
+// - Character classification (`is_digit`, `is_alpha`, `is_whitespace`)
+// - String-to-integer parsing (`parse_int`)
 
-pub fn deinit(self: &OwnedString) {
-    self.allocator.or_global().free(slice_from_raw_parts(self.ptr, self.len))
-    self.ptr = 0usize as &u8
-    self.len = 0
-}
-
-pub fn as_view(self: OwnedString) String {
-    return .{ ptr = self.ptr, len = self.len }
-}
+// pub fn index_of(
 
 pub fn starts_with(s: String, prefix: String) bool {
     if (s.len < prefix.len) {
@@ -49,6 +42,27 @@ pub fn starts_with(s: String, prefix: String) bool {
 //     }
 //     return true
 // }
+
+
+// =============================================================================
+// OwnedString
+// =============================================================================
+
+pub struct OwnedString {
+    ptr: &u8
+    len: usize
+    allocator: &Allocator?
+}
+
+pub fn deinit(self: &OwnedString) {
+    self.allocator.or_global().free(slice_from_raw_parts(self.ptr, self.len))
+    self.ptr = 0usize as &u8
+    self.len = 0
+}
+
+pub fn as_view(self: OwnedString) String {
+    return .{ ptr = self.ptr, len = self.len }
+}
 
 // =============================================================================
 // Bytes Iterator
