@@ -5,6 +5,8 @@ import core.string
 
 #foreign fn printf(fmt: &u8, val: u8) i32
 #foreign fn printf(fmt: &u8, val: i32) i32
+#foreign fn printf(fmt: &u8, val: i64) i32
+#foreign fn printf(fmt: &u8, val: u64) i32
 #foreign fn printf(fmt: &u8, len: i32, ptr: &u8) i32
 
 // Length-aware printing using C stdio printf via varargs.
@@ -29,11 +31,11 @@ pub fn println(value: i32) i32 {
 }
 
 pub fn println(value: isize) i32 {
-    return printf("%lld\n".ptr, value)
+    return printf("%lld\n".ptr, value as i64)
 }
 
 pub fn println(value: usize) i32 {
-    return printf("%llu\n".ptr, value)
+    return printf("%llu\n".ptr, value as u64)
 }
 
 pub fn println(value: String) i32 {

@@ -417,6 +417,50 @@ Milestone: 19 (Text & I/O)
 
 ## Open Issues
 
+### Foreign Function Argument Type Checking Bypassed
+
+**Status:** Open
+**Affected:** TypeChecker - foreign function calls
+**Impact:** Calls to `#foreign` functions bypass argument type checking, allowing implicit narrowing conversions that would be rejected for normal functions.
+
+**Problem:**
+When calling a `#foreign fn` with an argument type wider than declared (e.g., passing `usize` to a parameter declared as `i32`), the compiler does not emit an error. The generated C code passes the wrong-sized value, causing truncation or garbage.
+
+**Reproduction:**
+```flang
+#foreign fn printf(fmt: &u8, val: i32) i32
+
+pub fn main() i32 {
+    const val: usize = 500
+    printf("test".ptr, val)  // Should error: no implicit usize->i32 conversion
+    return 0
+}
+```
+
+This compiles without error but produces incorrect output (e.g., `244` instead of `500`).
+
+**Contrast with normal functions:**
+```flang
+fn my_func(val: i32) i32 { return val }
+
+pub fn main() i32 {
+    const val: usize = 500
+    my_func(val)  // Correctly errors: E2011 expected `i32`, found `usize`
+    return 0
+}
+```
+
+**Root Cause:**
+Foreign function overload resolution likely has different type-matching logic that doesn't enforce strict type compatibility.
+
+**Workaround:**
+Ensure `#foreign fn` declarations exist for all argument types you intend to pass, or explicitly cast arguments to the declared type.
+
+**Related Files:**
+- `stdlib/core/io.f` - required adding `i64`/`u64` printf overloads as a workaround
+
+---
+
 ### Array-to-Slice Coercion in Struct Construction
 
 **Status:** Open
