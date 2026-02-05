@@ -32,7 +32,7 @@ pub struct Dict(K, V) {
 pub fn deinit(self: &Dict($K, $V)) {
     if (self.cap > 0) {
         const bytes = self.cap * self.entry_byte_size()
-        const alloc = self.allocator.or_global()
+        self.allocator.or_global()
             .free(slice_from_raw_parts(self.entries as &u8, bytes))
     }
 
@@ -90,7 +90,7 @@ fn ensure_capacity(self: &Dict($K, $V)) {
 
     const old_cap: usize = self.cap
     const old_entries: &Entry(K, V) = self.entries
-    const new_cap: usize = if (old_cap == 0) 8 else old_cap * 2
+    const new_cap: usize = if (old_cap == 0) { 8 } else { old_cap * 2 }
 
     // Allocate new entry array, zero-initialized (all states = empty)
     const esize: usize = self.entry_byte_size()
@@ -112,7 +112,7 @@ fn ensure_capacity(self: &Dict($K, $V)) {
             }
         }
         const old_bytes: usize = old_cap * esize
-        alloc.free(slice_from_raw_parts(old_entries as &u8, old_bytes))
+        self.allocator.or_global().free(slice_from_raw_parts(old_entries as &u8, old_bytes))
     }
 }
 
@@ -129,7 +129,7 @@ pub fn set(self: &Dict($K, $V), key: K, value: V) {
 
         if (entry.state == 0) {
             // Empty slot: use tombstone slot if we passed one, otherwise this slot
-            const target_idx: usize = if (tombstone_idx < self.cap) tombstone_idx else idx
+            const target_idx: usize = if (tombstone_idx < self.cap) { tombstone_idx } else { idx }
             const target: &Entry(K, V) = self.entries + target_idx
             target.state = 1
             target.hash = h

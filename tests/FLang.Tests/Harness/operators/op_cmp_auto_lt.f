@@ -14,9 +14,9 @@ struct Box {
 }
 
 pub fn op_cmp(lhs: Box, rhs: Box) Ord {
-    return if (lhs.size < rhs.size) Ord.Less
-        else if (lhs.size > rhs.size) Ord.Greater
-        else Ord.Equal
+    return if (lhs.size < rhs.size) { Ord.Less }
+        else if (lhs.size > rhs.size) { Ord.Greater }
+        else { Ord.Equal }
 }
 
 pub fn main() i32 {
@@ -24,5 +24,5 @@ pub fn main() i32 {
     let large: Box = Box { size = 10 }
 
     // op_lt is not defined, should auto-derive from op_cmp
-    return if (small < large) 1 else 0
+    return if (small < large) { 1 } else { 0 }
 }

@@ -3,7 +3,7 @@
 
 // Test basic BufferedReader: read from in-memory source via fake ReadFn.
 
-import std.io.buffer
+import std.io.reader
 
 // Source: serves bytes from a fixed slice, tracking position.
 struct Source {
@@ -21,7 +21,7 @@ fn source_read(ctx: &u8, buf: u8[]) usize {
     if (avail == 0) {
         return 0
     }
-    let n = if (buf.len < avail) buf.len else avail
+    let n = if (buf.len < avail) { buf.len } else { avail }
     memcpy(buf.ptr, src.data.ptr + src.pos, n)
     src.pos = src.pos + n
     return n
@@ -35,7 +35,7 @@ pub fn main() i32 {
     let storage: [u8; 8]
 
     let rfn = ReadFn { ctx = &src as &u8, read = source_read }
-    let br = buffered_reader(rfn, storage)
+    let br = reader(rfn, storage)
 
     // Read first byte
     let b0 = br.read_byte()

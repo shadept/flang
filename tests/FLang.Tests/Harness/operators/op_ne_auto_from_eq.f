@@ -17,5 +17,5 @@ pub fn main() i32 {
     let b: Point = Point { x = 99, y = 20 }
 
     // op_ne is not defined, so compiler should auto-derive it as !op_eq
-    return if (a != b) 1 else 0
+    return if (a != b) { 1 } else { 0 }
 }

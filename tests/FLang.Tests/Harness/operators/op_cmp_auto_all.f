@@ -14,33 +14,33 @@ struct Val {
 }
 
 pub fn op_cmp(lhs: Val, rhs: Val) Ord {
-    return if (lhs.n < rhs.n) Ord.Less
-        else if (lhs.n > rhs.n) Ord.Greater
-        else Ord.Equal
+    return if (lhs.n < rhs.n) { Ord.Less }
+        else if (lhs.n > rhs.n) { Ord.Greater }
+        else { Ord.Equal }
 }
 
 fn check_lt(a: Val, b: Val) i32 {
-    return if (a < b) 1 else 0
+    return if (a < b) { 1 } else { 0 }
 }
 
 fn check_gt(a: Val, b: Val) i32 {
-    return if (a > b) 1 else 0
+    return if (a > b) { 1 } else { 0 }
 }
 
 fn check_le(a: Val, b: Val) i32 {
-    return if (a <= b) 1 else 0
+    return if (a <= b) { 1 } else { 0 }
 }
 
 fn check_ge(a: Val, b: Val) i32 {
-    return if (a >= b) 1 else 0
+    return if (a >= b) { 1 } else { 0 }
 }
 
 fn check_eq(a: Val, b: Val) i32 {
-    return if (a == b) 1 else 0
+    return if (a == b) { 1 } else { 0 }
 }
 
 fn check_ne(a: Val, b: Val) i32 {
-    return if (a != b) 1 else 0
+    return if (a != b) { 1 } else { 0 }
 }
 
 pub fn main() i32 {

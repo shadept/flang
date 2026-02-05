@@ -16,6 +16,7 @@ public class Parser
     private readonly Lexer _lexer;
     private Token _currentToken;
     private readonly List<Diagnostic> _diagnostics = [];
+    private bool _stopAtBrace; // When true, '{' terminates expression parsing (used for if/for conditions)
 
     /// <summary>
     /// Initializes a new instance of the <see cref="Parser"/> class.
@@ -389,15 +390,7 @@ public class Parser
             {
                 try
                 {
-                    try
-                    {
-                        statements.Add(ParseStatement());
-                    }
-                    catch (ParserException ex)
-                    {
-                        _diagnostics.Add(ex.Diagnostic);
-                        SynchronizeStatement();
-                    }
+                    statements.Add(ParseStatement());
                 }
                 catch (ParserException ex)
                 {
@@ -438,7 +431,15 @@ public class Parser
         var statements = new List<StatementNode>();
         while (_currentToken.Kind != TokenKind.CloseBrace && _currentToken.Kind != TokenKind.EndOfFile)
         {
-            statements.Add(ParseStatement());
+            try
+            {
+                statements.Add(ParseStatement());
+            }
+            catch (ParserException ex)
+            {
+                _diagnostics.Add(ex.Diagnostic);
+                SynchronizeStatement();
+            }
         }
 
         Eat(TokenKind.CloseBrace);
@@ -463,9 +464,7 @@ public class Parser
                 {
                     var returnKeyword = Eat(TokenKind.Return);
                     // Allow bare `return` for void functions - check if next token can't start an expression
-                    if (_currentToken.Kind == TokenKind.CloseBrace ||
-                        _currentToken.Kind == TokenKind.EndOfFile ||
-                        IsStatementStart(_currentToken.Kind))
+                    if (IsBareReturn(_currentToken.Kind))
                     {
                         return new ReturnStatementNode(returnKeyword.Span, null);
                     }
@@ -923,7 +922,7 @@ public class Parser
                     var identifierToken = Eat(TokenKind.Identifier);
 
                     // Check if this is a struct construction: TypeName { field: value }
-                    if (_currentToken.Kind == TokenKind.OpenBrace)
+                    if (_currentToken.Kind == TokenKind.OpenBrace && !_stopAtBrace)
                     {
                         // Parse as struct construction
                         var typeName = new NamedTypeNode(identifierToken.Span, identifierToken.Text);
@@ -967,6 +966,7 @@ public class Parser
                 return ParseIfExpression();
 
             case TokenKind.OpenBrace:
+                if (_stopAtBrace) goto default; // '{' terminates condition parsing in if/for without parens
                 return ParseBlockExpression();
 
             case TokenKind.OpenBracket:
@@ -1033,6 +1033,20 @@ public class Parser
     private static bool IsStatementStart(TokenKind kind)
     {
         return kind is TokenKind.Let or TokenKind.Const or TokenKind.Return
+            or TokenKind.Break or TokenKind.Continue or TokenKind.Defer
+            or TokenKind.For or TokenKind.If or TokenKind.Loop
+            or TokenKind.OpenBrace;
+    }
+
+    /// <summary>
+    /// Checks if the token after `return` indicates a bare return (no expression).
+    /// Only tokens that cannot start an expression qualify. Note: if, for, loop,
+    /// and { are expression starters, so `return if ...` / `return { ... }` are valid.
+    /// </summary>
+    private static bool IsBareReturn(TokenKind kind)
+    {
+        return kind is TokenKind.CloseBrace or TokenKind.EndOfFile
+            or TokenKind.Let or TokenKind.Const or TokenKind.Return
             or TokenKind.Break or TokenKind.Continue or TokenKind.Defer;
     }
 
@@ -1100,17 +1114,36 @@ public class Parser
     private IfExpressionNode ParseIfExpression()
     {
         var ifKeyword = Eat(TokenKind.If);
-        Eat(TokenKind.OpenParenthesis);
-        var condition = ParseExpression();
-        Eat(TokenKind.CloseParenthesis);
 
-        var thenBranch = ParseExpression();
+        // Parse condition: parens are optional, but body must be a block
+        ExpressionNode condition;
+        if (_currentToken.Kind == TokenKind.OpenParenthesis)
+        {
+            // Parenthesized condition: if (expr) { ... }
+            Eat(TokenKind.OpenParenthesis);
+            condition = ParseExpression();
+            Eat(TokenKind.CloseParenthesis);
+        }
+        else
+        {
+            // Bare condition: if expr { ... } — stop parsing at '{'
+            _stopAtBrace = true;
+            condition = ParseExpression();
+            _stopAtBrace = false;
+        }
+
+        // Then branch must be a block
+        var thenBranch = ParseBlockExpression();
 
         ExpressionNode? elseBranch = null;
         if (_currentToken.Kind == TokenKind.Else)
         {
             Eat(TokenKind.Else);
-            elseBranch = ParseExpression();
+            // else if ... or else { ... }
+            if (_currentToken.Kind == TokenKind.If)
+                elseBranch = ParseIfExpression();
+            else
+                elseBranch = ParseBlockExpression();
         }
 
         var endPos = elseBranch?.Span ?? thenBranch.Span;
@@ -1265,16 +1298,33 @@ public class Parser
     private ForLoopNode ParseForLoop()
     {
         var forKeyword = Eat(TokenKind.For);
-        Eat(TokenKind.OpenParenthesis);
-        var iterator = Eat(TokenKind.Identifier);
-        Eat(TokenKind.In);
-        var iterable = ParseExpression();
-        var closeParen = Eat(TokenKind.CloseParenthesis);
 
-        var body = ParseExpression();
+        Token iterator;
+        ExpressionNode iterable;
 
-        // Span only includes "for (v in c)" part, not the body
-        var span = SourceSpan.Combine(forKeyword.Span, closeParen.Span);
+        if (_currentToken.Kind == TokenKind.OpenParenthesis)
+        {
+            // Parenthesized: for (i in expr) { ... }
+            Eat(TokenKind.OpenParenthesis);
+            iterator = Eat(TokenKind.Identifier);
+            Eat(TokenKind.In);
+            iterable = ParseExpression();
+            Eat(TokenKind.CloseParenthesis);
+        }
+        else
+        {
+            // Bare: for i in expr { ... }
+            iterator = Eat(TokenKind.Identifier);
+            Eat(TokenKind.In);
+            _stopAtBrace = true;
+            iterable = ParseExpression();
+            _stopAtBrace = false;
+        }
+
+        // Body must be a block
+        var body = ParseBlockExpression();
+
+        var span = SourceSpan.Combine(forKeyword.Span, _currentToken.Span);
         return new ForLoopNode(span, iterator.Text, iterable, body);
     }
 
@@ -1632,6 +1682,10 @@ public class Parser
                     countToken.Span,
                     "repeat count must be an integer literal",
                     "E1005"));
+                // Skip remaining tokens until we find the closing bracket
+                while (_currentToken.Kind != TokenKind.CloseBracket &&
+                       _currentToken.Kind != TokenKind.EndOfFile)
+                    _currentToken = _lexer.NextToken();
             }
 
             var closeBracket = Eat(TokenKind.CloseBracket);
@@ -1661,69 +1715,122 @@ public class Parser
 
     /// <summary>
     /// Synchronizes the parser to a top-level construct after encountering an error.
-    /// Skips tokens until a plausible recovery point (pub, struct, import, etc.) is found.
+    /// Tracks brace depth so entire bodies are skipped rather than stopping at keywords inside them.
     /// </summary>
     private void SynchronizeTopLevel()
     {
-        // Skip tokens until we hit a plausible top-level construct
-        while (_currentToken.Kind != TokenKind.EndOfFile &&
-               _currentToken.Kind != TokenKind.Pub &&
-               _currentToken.Kind != TokenKind.Struct &&
-               _currentToken.Kind != TokenKind.Import &&
-               _currentToken.Kind != TokenKind.Hash)
+        int braceDepth = 0;
+        while (_currentToken.Kind != TokenKind.EndOfFile)
         {
+            if (_currentToken.Kind == TokenKind.OpenBrace)
+            {
+                braceDepth++;
+                _currentToken = _lexer.NextToken();
+                continue;
+            }
+
+            if (_currentToken.Kind == TokenKind.CloseBrace)
+            {
+                if (braceDepth > 0)
+                {
+                    braceDepth--;
+                    _currentToken = _lexer.NextToken();
+                    continue;
+                }
+                // Stray } at top level — skip it
+                _currentToken = _lexer.NextToken();
+                continue;
+            }
+
+            if (braceDepth == 0 && IsTopLevelStart(_currentToken.Kind))
+                return;
+
             _currentToken = _lexer.NextToken();
         }
     }
 
+    private static bool IsTopLevelStart(TokenKind kind)
+    {
+        return kind is TokenKind.Pub or TokenKind.Struct or TokenKind.Enum
+            or TokenKind.Fn or TokenKind.Test or TokenKind.Const
+            or TokenKind.Import or TokenKind.Hash;
+    }
+
     /// <summary>
     /// Synchronizes the parser to a statement boundary after encountering an error.
-    /// Skips tokens until a likely recovery point (let, const, return, if, etc.) is found.
+    /// Tracks brace depth so nested blocks are skipped entirely rather than stopping at inner braces.
     /// </summary>
     private void SynchronizeStatement()
     {
-        // Skip tokens until we reach a likely statement boundary
-        while (_currentToken.Kind != TokenKind.EndOfFile &&
-               _currentToken.Kind != TokenKind.CloseBrace &&
-               _currentToken.Kind != TokenKind.Let &&
-               _currentToken.Kind != TokenKind.Const &&
-               _currentToken.Kind != TokenKind.Return &&
-               _currentToken.Kind != TokenKind.For &&
-               _currentToken.Kind != TokenKind.Break &&
-               _currentToken.Kind != TokenKind.Continue &&
-               _currentToken.Kind != TokenKind.Defer &&
-               _currentToken.Kind != TokenKind.If &&
-               _currentToken.Kind != TokenKind.OpenBrace)
+        int braceDepth = 0;
+        while (_currentToken.Kind != TokenKind.EndOfFile)
         {
+            if (_currentToken.Kind == TokenKind.OpenBrace)
+            {
+                braceDepth++;
+                _currentToken = _lexer.NextToken();
+                continue;
+            }
+
+            if (_currentToken.Kind == TokenKind.CloseBrace)
+            {
+                if (braceDepth > 0)
+                {
+                    braceDepth--;
+                    _currentToken = _lexer.NextToken();
+                    continue;
+                }
+                // Depth 0: this } belongs to the caller (function body end) — stop without consuming
+                return;
+            }
+
+            // Only consider recovery at depth 0 (back at the function body level)
+            if (braceDepth == 0 && IsStatementStart(_currentToken.Kind))
+                return;
+
             _currentToken = _lexer.NextToken();
         }
     }
 
     /// <summary>
     /// Synchronizes the parser to an expression boundary after encountering an error.
-    /// Skips tokens until a delimiter or statement keyword is found.
+    /// Tracks (), [], {} depth so nested delimiters are skipped rather than treated as recovery points.
     /// </summary>
     private void SynchronizeExpression()
     {
-        // Skip tokens until we hit a delimiter that likely ends an expression
-        while (_currentToken.Kind != TokenKind.EndOfFile &&
-               // Delimiters
-               _currentToken.Kind != TokenKind.CloseParenthesis &&
-               _currentToken.Kind != TokenKind.CloseBracket &&
-               _currentToken.Kind != TokenKind.CloseBrace &&
-               _currentToken.Kind != TokenKind.Comma &&
-               _currentToken.Kind != TokenKind.Semicolon &&
-               _currentToken.Kind != TokenKind.FatArrow &&
-               // Statement keywords (we've overshot the expression)
-               _currentToken.Kind != TokenKind.Let &&
-               _currentToken.Kind != TokenKind.Const &&
-               _currentToken.Kind != TokenKind.Return &&
-               _currentToken.Kind != TokenKind.For &&
-               _currentToken.Kind != TokenKind.Break &&
-               _currentToken.Kind != TokenKind.Continue &&
-               _currentToken.Kind != TokenKind.Defer &&
-               _currentToken.Kind != TokenKind.If)
+        int depth = 0;
+        while (_currentToken.Kind != TokenKind.EndOfFile)
         {
+            switch (_currentToken.Kind)
+            {
+                case TokenKind.OpenParenthesis:
+                case TokenKind.OpenBracket:
+                case TokenKind.OpenBrace:
+                    depth++;
+                    _currentToken = _lexer.NextToken();
+                    continue;
+
+                case TokenKind.CloseParenthesis:
+                case TokenKind.CloseBracket:
+                case TokenKind.CloseBrace:
+                    if (depth > 0)
+                    {
+                        depth--;
+                        _currentToken = _lexer.NextToken();
+                        continue;
+                    }
+                    // Closing delimiter for the caller — stop without consuming
+                    return;
+            }
+
+            if (depth == 0)
+            {
+                if (_currentToken.Kind is TokenKind.Comma or TokenKind.Semicolon or TokenKind.FatArrow)
+                    return;
+                if (IsStatementStart(_currentToken.Kind))
+                    return;
+            }
+
             _currentToken = _lexer.NextToken();
         }
     }

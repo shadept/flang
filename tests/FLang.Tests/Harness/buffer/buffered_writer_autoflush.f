@@ -3,7 +3,7 @@
 
 // Test BufferedWriter auto-flush when buffer fills up.
 
-import std.io.buffer
+import std.io.writer
 
 struct Sink {
     total: usize,
@@ -23,7 +23,7 @@ pub fn main() i32 {
     let storage: [u8; 4]
 
     let wfn = WriteFn { ctx = &sink as &u8, write = sink_write }
-    let bw = buffered_writer(wfn, storage)
+    let bw = writer(wfn, storage)
 
     // Write "abcdefgh" (8 bytes) into a 4-byte buffer.
     // Should auto-flush at least once (when first 4 bytes fill buffer),

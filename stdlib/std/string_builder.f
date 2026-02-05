@@ -2,7 +2,7 @@
 // Uses a growable byte buffer backed by the allocator pattern.
 // Designed to support future string interpolation.
 
-import std.io.buffer
+import std.io.writer
 import std.allocator
 import std.string
 
@@ -51,7 +51,7 @@ fn reserve(sb: &StringBuilder, additional: usize) {
         return
     }
 
-    let new_cap = if (sb.cap == 0) 16 else sb.cap * 2
+    let new_cap = if (sb.cap == 0) { 16 } else { sb.cap * 2 }
     if (new_cap < required) {
         new_cap = required
     }
@@ -211,7 +211,7 @@ fn append_signed_impl(sb: &StringBuilder, value: i64, spec: String, bits: u64) {
 
     // Decimal format: handle sign
     let is_negative = value < 0
-    let abs_value: u64 = if (is_negative) (0 - value) as u64 else value as u64
+    let abs_value: u64 = if (is_negative) { (0 - value) as u64 } else { value as u64 }
 
     if (is_negative) {
         sb.append_byte(b'-')
@@ -401,8 +401,8 @@ fn sb_write(ctx: &u8, buf: u8[]) usize {
     return buf.len
 }
 
-pub fn writer(sb: &StringBuilder) BufferedWriter {
+pub fn writer(sb: &StringBuilder) Writer {
     const wfn = WriteFn { ctx = sb as &u8, write = sb_write }
     const storage = [0u8; 0]
-    return buffered_writer(wfn, storage)
+    return writer(wfn, storage)
 }

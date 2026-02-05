@@ -176,28 +176,32 @@ let r2 = Ok(42)                 // short form (when unambiguous)
 
 ### If Expression
 
-Parentheses around the condition are **required**.
+Parentheses around the condition are **optional**. Body must be a block.
 
 ```
-let x = if (a > b) a else b
+let x = if a > b { a } else { b }
 
-if (condition) {
+if condition {
     do_thing()
 }
 
-if (a) foo
-else if (b) bar
-else baz
+if (a > b) {
+    foo
+} else if (b > c) {
+    bar
+} else {
+    baz
+}
 ```
 
 `if` without `else` used as expression yields `Option` of the body type.
 
 ### For Loop
 
-Only `for`-`in`. No C-style `for`.
+Only `for`-`in`. No C-style `for`. Parentheses around the header are **optional**. Body must be a block.
 
 ```
-for (item in collection) {
+for item in collection {
     process(item)
 }
 
@@ -206,7 +210,7 @@ for (i in 0..5) {
 }
 ```
 
-Loop body can be a block or single expression. `break` and `continue` work inside.
+`break` and `continue` work inside.
 
 ### Loop
 

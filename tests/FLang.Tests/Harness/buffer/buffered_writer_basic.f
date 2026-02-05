@@ -3,7 +3,7 @@
 
 // Test basic BufferedWriter: write small data, flush, verify via sink.
 
-import std.io.buffer
+import std.io.writer
 
 // Sink: counts bytes written
 struct Sink {
@@ -16,9 +16,9 @@ fn sink_write(ctx: &u8, data: u8[]) usize {
     return data.len
 }
 
-fn writer(sink: &Sink, buffer: u8[]) BufferedWriter {
+fn writer(sink: &Sink, buffer: u8[]) Writer {
     const wfn = WriteFn { ctx = &sink as &u8, write = sink_write }
-    return buffered_writer(wfn, buffer)
+    return writer(wfn, buffer)
 }
 
 pub fn main() i32 {

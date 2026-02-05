@@ -1,4 +1,4 @@
-import std.io.buffer
+import std.io.reader
 import std.result
 import std.string
 import std.string_builder
@@ -107,9 +107,9 @@ fn file_read(ctx: &u8, buf: u8[]) usize {
     return bytes as usize
 }
 
-pub fn reader(file: &File, storage: u8[]) BufferedReader {
+pub fn reader(file: &File, storage: u8[]) Reader {
     const rfn = ReadFn { ctx = &file as &u8, read = file_read }
-    return buffered_reader(rfn, storage)
+    return reader(rfn, storage)
 }
 
 // =============================================================================

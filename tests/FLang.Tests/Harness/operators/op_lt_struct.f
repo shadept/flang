@@ -17,5 +17,5 @@ pub fn main() i32 {
     let large: Box = Box { size = 10 }
 
     // This should use our op_lt function
-    return if (small < large) 1 else 0
+    return if (small < large) { 1 } else { 0 }
 }

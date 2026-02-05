@@ -17,24 +17,56 @@ import std.option
 // - Character classification (`is_digit`, `is_alpha`, `is_whitespace`)
 // - String-to-integer parsing (`parse_int`)
 
-pub fn index_of(s: String, needle: String) usize? {
-    if (needle.len > s.len) {
-        return null
-    }
-
-    let i = 0usize
-    const limit = s.len - needle.len
-    loop {
-        if (s[i..s.len].starts_with(needle)) {
-            return i
-        }
-        if (i >= limit) {
-            break
-        }
-        i = i + 1
-    }
-    return null
-}
+//pub fn find(s: String, needle: String) usize? {
+//    let h = s.bytes()
+//    let n = needle.bytes()
+//
+//    if (n.len == 0) {
+//        return 0
+//    }
+//    if (n.len > h.len) {
+//        return null
+//    }
+//
+//    // Build table
+//    // Would need to support dynamic stack allocated arrays
+//    let table = [0usize; 1024] // TODO support dynamic stack allocations and replace 1024 with n.len
+//    let j = 0 // TODO handle multi statement inference
+//    for (i in 1..n.len) {
+//        loop {
+//            if (n[i] == n[j]) {
+//                j = j + 1
+//                table[i] = j
+//                break
+//            }
+//            if (j == 0) {
+//                table[i] = 0
+//                break
+//            }
+//            j = table[j - 1]
+//        }
+//    }
+//
+//    // Search
+//    j = 0
+//    for (i in 0..h.len) {
+//        loop {
+//            if (h[i] == n[j]) {
+//                j = j + 1
+//                if (j == n.len) {
+//                    return i - n.len + 1
+//                }
+//                break
+//            }
+//            if (j == 0) {
+//                break
+//            }
+//            j = table[j - 1]
+//        }
+//    }
+//
+//    return null
+//}
 
 pub fn starts_with(s: String, prefix: String) bool {
     if (s.len < prefix.len) {

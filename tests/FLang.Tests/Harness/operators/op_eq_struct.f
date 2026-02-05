@@ -18,5 +18,5 @@ pub fn main() i32 {
     let b: Point = Point { x = 10, y = 99 }  // Same x, different y
 
     // This should use our op_eq function (only compares x)
-    return if (a == b) 1 else 0
+    return if (a == b) { 1 } else { 0 }
 }

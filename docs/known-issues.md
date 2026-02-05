@@ -21,6 +21,13 @@ When you discover a bug or limitation:
 
 ---
 
+### `return if` Expression — FIXED
+
+**Status:** Fixed
+**Root cause:** Parser treated `if` after `return` as a statement start (via `IsStatementStart`), producing a bare `return` instead of `return <if-expression>`. Fixed by introducing `IsBareReturn()` that only includes tokens that cannot start an expression.
+
+---
+
 ### FIR: Lack of Type Information in Values
 
 **Status:** Partially addressed (IR values now carry FLang types)

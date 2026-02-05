@@ -219,18 +219,25 @@ fn name(parameters) ReturnType
 #### If Expression
 
 ```
-if (cond) expr1 else expr2
+if cond { expr1 } else { expr2 }
+if (cond) { expr1 } else { expr2 }   // parens optional
 ```
 
+- Parentheses around the condition are optional; the block braces are mandatory.
+- When parentheses are omitted, the condition expression terminates at `{`.
 - Yields the anonymous union of the types of `expr1` and `expr2`.
 - If `else` is omitted, result type is `Option` of the type of `expr1`.
+- `else if` chains are supported: `if cond { ... } else if cond2 { ... } else { ... }`.
 
 #### For Expression
 
 ```
-for (pattern in iterable) block
+for ident in iterable { block }
+for (ident in iterable) { block }    // parens optional
 ```
 
+- Parentheses around the iterator clause are optional; the block braces are mandatory.
+- When parentheses are omitted, the iterable expression terminates at `{`.
 - Iterator-based looping construct.
 - Uses the iterator protocol; built-in for ranges, arrays, and slices.
 - Supports `break` and `continue`.
@@ -249,7 +256,7 @@ loop block
 let count = 0
 loop {
     count = count + 1
-    if (count == 10) {
+    if count == 10 {
         break
     }
 }
