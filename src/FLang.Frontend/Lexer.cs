@@ -109,21 +109,32 @@ public class Lexer
             while (_position < text.Length && text[_position] != '"')
                 if (text[_position] == '\\' && _position + 1 < text.Length)
                 {
-                    // Handle escape sequences
                     _position++;
                     var escapeChar = text[_position];
-                    var escaped = escapeChar switch
+                    if (escapeChar == 'u')
                     {
-                        'n' => '\n',
-                        't' => '\t',
-                        'r' => '\r',
-                        '\\' => '\\',
-                        '"' => '"',
-                        '0' => '\0',
-                        _ => escapeChar // Unknown escape, keep as-is
-                    };
-                    stringBuilder.Append(escaped);
-                    _position++;
+                        // Unicode escape: \uXXXX (1-6 hex digits)
+                        _position++;
+                        var codepoint = ReadUnicodeEscape(text);
+                        if (codepoint < 0)
+                            return CreateTokenWithValue(TokenKind.BadToken, "");
+                        stringBuilder.Append(char.ConvertFromUtf32(codepoint));
+                    }
+                    else
+                    {
+                        var escaped = escapeChar switch
+                        {
+                            'n' => '\n',
+                            't' => '\t',
+                            'r' => '\r',
+                            '\\' => '\\',
+                            '"' => '"',
+                            '0' => '\0',
+                            _ => escapeChar // Unknown escape, keep as-is
+                        };
+                        stringBuilder.Append(escaped);
+                        _position++;
+                    }
                 }
                 else
                 {
@@ -139,8 +150,21 @@ public class Lexer
             return CreateTokenWithValue(TokenKind.StringLiteral, stringBuilder.ToString());
         }
 
+        if (ch == '\'')
+        {
+            return LexCharLiteral(text, TokenKind.CharLiteral);
+        }
+
         if (char.IsLetter(ch) || ch == '_')
         {
+            // Check for byte literal: b'...'
+            if (ch == 'b' && _position + 1 < text.Length && text[_position + 1] == '\'')
+            {
+                _start = _position;
+                _position++; // Skip 'b'
+                return LexCharLiteral(text, TokenKind.ByteLiteral);
+            }
+
             _start = _position;
             while (_position < text.Length && (char.IsLetterOrDigit(text[_position]) || text[_position] == '_'))
                 _position++;
@@ -183,6 +207,17 @@ public class Lexer
 
         // Whitespace already skipped at the top
 
+        // Check for three-character operators first
+        if (_position + 2 < text.Length)
+        {
+            _start = _position;
+            if (ch == '>' && text[_position + 1] == '>' && text[_position + 2] == '>')
+            {
+                _position += 3;
+                return CreateToken(TokenKind.UnsignedShiftRight);
+            }
+        }
+
         // Check for two-character operators
         if (_position + 1 < text.Length)
         {
@@ -195,7 +230,9 @@ public class Lexer
                 ('=', '=') => TokenKind.EqualsEquals,
                 ('=', '>') => TokenKind.FatArrow,
                 ('!', '=') => TokenKind.NotEquals,
+                ('<', '<') => TokenKind.ShiftLeft,
                 ('<', '=') => TokenKind.LessThanOrEqual,
+                ('>', '>') => TokenKind.ShiftRight,
                 ('>', '=') => TokenKind.GreaterThanOrEqual,
                 ('?', '?') => TokenKind.QuestionQuestion,
                 ('?', '.') => TokenKind.QuestionDot,
@@ -297,6 +334,105 @@ public class Lexer
     private Token CreateTokenWithValue(TokenKind kind, string value)
     {
         return new Token(kind, CreateSpan(), value);
+    }
+
+    /// <summary>
+    /// Lexes a char literal ('x') or byte literal (b'x'). Position should be at the opening quote.
+    /// </summary>
+    private Token LexCharLiteral(ReadOnlySpan<char> text, TokenKind kind)
+    {
+        _position++; // Skip opening quote
+
+        if (_position >= text.Length || text[_position] == '\'')
+        {
+            // Empty char literal
+            if (_position < text.Length) _position++; // Skip closing quote
+            return CreateTokenWithValue(TokenKind.BadToken, "");
+        }
+
+        int codepoint;
+        if (text[_position] == '\\' && _position + 1 < text.Length)
+        {
+            _position++;
+            var escapeChar = text[_position];
+            if (escapeChar == 'u')
+            {
+                if (kind == TokenKind.ByteLiteral)
+                {
+                    // \u not allowed in byte literals
+                    return CreateTokenWithValue(TokenKind.BadToken, "");
+                }
+                _position++;
+                codepoint = ReadUnicodeEscape(text);
+                if (codepoint < 0)
+                    return CreateTokenWithValue(TokenKind.BadToken, "");
+            }
+            else
+            {
+                codepoint = escapeChar switch
+                {
+                    'n' => '\n',
+                    't' => '\t',
+                    'r' => '\r',
+                    '\\' => '\\',
+                    '\'' => '\'',
+                    '0' => '\0',
+                    _ => escapeChar
+                };
+                _position++;
+            }
+        }
+        else
+        {
+            var ch0 = text[_position];
+            if (char.IsHighSurrogate(ch0) && _position + 1 < text.Length && char.IsLowSurrogate(text[_position + 1]))
+            {
+                codepoint = char.ConvertToUtf32(ch0, text[_position + 1]);
+                _position += 2;
+            }
+            else
+            {
+                codepoint = ch0;
+                _position++;
+            }
+        }
+
+        if (_position >= text.Length || text[_position] != '\'')
+        {
+            // Unterminated or multi-character literal
+            return CreateTokenWithValue(TokenKind.BadToken, "");
+        }
+
+        _position++; // Skip closing quote
+
+        if (kind == TokenKind.ByteLiteral && codepoint > 255)
+        {
+            return CreateTokenWithValue(TokenKind.BadToken, "");
+        }
+
+        return CreateTokenWithValue(kind, codepoint.ToString());
+    }
+
+    /// <summary>
+    /// Reads a unicode escape sequence (1-6 hex digits after \u). Returns the codepoint, or -1 on error.
+    /// Position should be right after the 'u'.
+    /// </summary>
+    private int ReadUnicodeEscape(ReadOnlySpan<char> text)
+    {
+        var hexStart = _position;
+        while (_position < text.Length && IsHexDigit(text[_position]) && (_position - hexStart) < 6)
+            _position++;
+
+        if (_position == hexStart)
+            return -1; // No hex digits
+
+        var hexSpan = text[hexStart.._position];
+        var codepoint = int.Parse(hexSpan, System.Globalization.NumberStyles.HexNumber);
+
+        if (codepoint > 0x10FFFF)
+            return -1; // Invalid codepoint
+
+        return codepoint;
     }
 
     /// <summary>

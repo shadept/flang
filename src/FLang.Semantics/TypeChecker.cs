@@ -27,7 +27,7 @@ public partial class TypeChecker
     // Function registry (stays in TypeChecker - contains AST nodes)
     private readonly Dictionary<string, List<FunctionEntry>> _functions = [];
     private readonly List<FunctionDeclarationNode> _specializations = [];
-    private readonly HashSet<string> _emittedSpecs = [];
+    private readonly Dictionary<string, FunctionDeclarationNode> _emittedSpecs = [];
 
     // Private functions per module - needed for generic specialization
     // When a generic function from module X is specialized, private functions from X must be visible
@@ -305,8 +305,9 @@ public partial class TypeChecker
         for (var i = 0; i < paramTypes.Count; i++)
         {
             if (i > 0) sb.Append(',');
+            // Prune types so that comptime_int resolved to e.g. usize produces the same key
             // Use ToString() to include full type with type arguments (e.g., "Option(&u8)" vs "Option(Slice(u8))")
-            sb.Append(paramTypes[i].ToString());
+            sb.Append(paramTypes[i].Prune().ToString());
         }
 
         return sb.ToString();

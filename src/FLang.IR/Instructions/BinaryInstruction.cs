@@ -46,7 +46,16 @@ public enum BinaryOp
     BitwiseOr,
 
     /// <summary>Bitwise XOR: left ^ right</summary>
-    BitwiseXor
+    BitwiseXor,
+
+    /// <summary>Left shift: left &lt;&lt; right</summary>
+    ShiftLeft,
+
+    /// <summary>Arithmetic right shift: left &gt;&gt; right (preserves sign)</summary>
+    ShiftRight,
+
+    /// <summary>Logical (unsigned) right shift: left &gt;&gt;&gt; right (zero-fills)</summary>
+    UnsignedShiftRight
 }
 
 /// <summary>

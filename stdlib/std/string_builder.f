@@ -137,16 +137,16 @@ fn parse_int_spec(spec: String) FormatSpec {
         return FormatSpec { base = 10, uppercase = false }
     }
     const c = spec[0]
-    if (c == 0x58u8) { // 'X'
+    if (c == b'X') {
         return FormatSpec { base = 16, uppercase = true }
     }
-    if (c == 0x78u8) { // 'x'
+    if (c == b'x') {
         return FormatSpec { base = 16, uppercase = false }
     }
-    if (c == 0x62u8) { // 'b'
+    if (c == b'b') {
         return FormatSpec { base = 2, uppercase = false }
     }
-    if (c == 0x6Fu8) { // 'o'
+    if (c == b'o') {
         return FormatSpec { base = 8, uppercase = false }
     }
     return FormatSpec { base = 10, uppercase = false }
@@ -154,7 +154,7 @@ fn parse_int_spec(spec: String) FormatSpec {
 
 fn append_unsigned_with_base(sb: &StringBuilder, value: u64, base: u64, uppercase: bool) {
     if (value == 0) {
-        sb.append_byte(0x30u8) // '0'
+        sb.append_byte(b'0')
         return
     }
 
@@ -171,11 +171,11 @@ fn append_unsigned_with_base(sb: &StringBuilder, value: u64, base: u64, uppercas
 
         let c: u8 = 0
         if (digit < 10u8) {
-            c = 0x30u8 + digit // '0' + digit
+            c = b'0' + digit
         } else if (uppercase) {
-            c = 0x37u8 + digit // 'A' - 10 + digit
+            c = b'A' - 10 + digit
         } else {
-            c = 0x57u8 + digit // 'a' - 10 + digit
+            c = b'a' - 10 + digit
         }
         pos = pos - 1
         buf[pos] = c
@@ -214,14 +214,14 @@ fn append_signed_impl(sb: &StringBuilder, value: i64, spec: String, bits: u64) {
     let abs_value: u64 = if (is_negative) (0 - value) as u64 else value as u64
 
     if (is_negative) {
-        sb.append_byte(0x2Du8) // '-'
+        sb.append_byte(b'-')
     }
     append_unsigned_with_base(sb, abs_value, 10, false)
 }
 
 // fn append_float_impl(sb: &StringBuilder, val: f64, spec: String) {
 //     if (val < 0.0) {
-//         sb.append_byte(45u8) // '-'
+//         sb.append_byte(b'-')
 //         append_float_impl(sb, 0.0 - val, spec)
 //         return
 //     }
@@ -229,7 +229,7 @@ fn append_signed_impl(sb: &StringBuilder, value: i64, spec: String, bits: u64) {
 //     let int_part: u64 = val as u64
 //     append_unsigned_with_base(sb, int_part, 10, false)
 //
-//     sb.append_byte(46u8) // '.'
+//     sb.append_byte(b'.')
 //
 //     let frac = val - (int_part as f64)
 //     let precision: usize = 6

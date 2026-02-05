@@ -1279,18 +1279,9 @@ public partial class TypeChecker
         IReadOnlyList<TypeBase> concreteParamTypes, SourceSpan? instantiationSpan = null)
     {
         var key = BuildSpecKey(genericEntry.Name, concreteParamTypes);
-        if (_emittedSpecs.Contains(key))
+        if (_emittedSpecs.TryGetValue(key, out var existing))
         {
-            // Already specialized - find and return the existing specialized node
-            var found = _specializations.FirstOrDefault(s =>
-                s.Name == genericEntry.Name &&
-                s.Parameters.Count == concreteParamTypes.Count &&
-                s.Parameters.Select((p, i) => ResolveTypeNode(p.Type) ?? TypeRegistry.Never).SequenceEqual(concreteParamTypes));
-            if (found == null)
-            {
-                _logger.LogDebug("EnsureSpecialization: key '{Key}' exists but no matching node found in _specializations", key);
-            }
-            return found;
+            return existing;
         }
 
         // Save current bindings - nested specializations might overwrite them
@@ -1328,7 +1319,7 @@ public partial class TypeChecker
             // Register specialization BEFORE checking body to prevent infinite recursion
             // for recursive generic functions (e.g., count_list calling count_list)
             _specializations.Add(newFn);
-            _emittedSpecs.Add(key);
+            _emittedSpecs[key] = newFn;
 
             // Check the specialized function body.
             // Note: We keep _currentBindings and the generic scope active so that

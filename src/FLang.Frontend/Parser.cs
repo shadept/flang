@@ -890,6 +890,20 @@ public class Parser
                     return new NullLiteralNode(nullToken.Span);
                 }
 
+            case TokenKind.CharLiteral:
+                {
+                    var charToken = Eat(TokenKind.CharLiteral);
+                    var codepoint = BigInteger.Parse(charToken.Text);
+                    return new IntegerLiteralNode(charToken.Span, codepoint, "char");
+                }
+
+            case TokenKind.ByteLiteral:
+                {
+                    var byteToken = Eat(TokenKind.ByteLiteral);
+                    var byteValue = BigInteger.Parse(byteToken.Text);
+                    return new IntegerLiteralNode(byteToken.Span, byteValue, "u8");
+                }
+
             case TokenKind.Dot:
                 {
                     var dotToken = Eat(TokenKind.Dot);
@@ -986,8 +1000,9 @@ public class Parser
     {
         return kind switch
         {
-            TokenKind.Star or TokenKind.Slash or TokenKind.Percent => 11,
-            TokenKind.Plus or TokenKind.Minus => 10,
+            TokenKind.Star or TokenKind.Slash or TokenKind.Percent => 12,
+            TokenKind.Plus or TokenKind.Minus => 11,
+            TokenKind.ShiftLeft or TokenKind.ShiftRight or TokenKind.UnsignedShiftRight => 10,
             TokenKind.Ampersand => 9, // Bitwise AND (above comparisons, like C/Rust)
             TokenKind.Caret => 8,     // Bitwise XOR
             TokenKind.Pipe => 7,      // Bitwise OR
@@ -1067,6 +1082,9 @@ public class Parser
             TokenKind.Ampersand => BinaryOperatorKind.BitwiseAnd,
             TokenKind.Pipe => BinaryOperatorKind.BitwiseOr,
             TokenKind.Caret => BinaryOperatorKind.BitwiseXor,
+            TokenKind.ShiftLeft => BinaryOperatorKind.ShiftLeft,
+            TokenKind.ShiftRight => BinaryOperatorKind.ShiftRight,
+            TokenKind.UnsignedShiftRight => BinaryOperatorKind.UnsignedShiftRight,
             _ => throw new ParserException(Diagnostic.Error(
                 $"unexpected operator token '{_currentToken.Text}'",
                 _currentToken.Span,

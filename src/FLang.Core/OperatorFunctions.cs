@@ -26,7 +26,12 @@ public enum BinaryOperatorKind
     // Bitwise
     BitwiseAnd,
     BitwiseOr,
-    BitwiseXor
+    BitwiseXor,
+
+    // Shift
+    ShiftLeft,
+    ShiftRight,
+    UnsignedShiftRight
 }
 
 /// <summary>
@@ -75,6 +80,11 @@ public static class OperatorFunctions
         BinaryOperatorKind.BitwiseOr => "op_bor",
         BinaryOperatorKind.BitwiseXor => "op_bxor",
 
+        // Shift operators (built-in only)
+        BinaryOperatorKind.ShiftLeft => "op_shl",
+        BinaryOperatorKind.ShiftRight => "op_shr",
+        BinaryOperatorKind.UnsignedShiftRight => "op_ushr",
+
         _ => throw new ArgumentOutOfRangeException(nameof(op), op, "Unknown binary operator")
     };
 
@@ -101,6 +111,9 @@ public static class OperatorFunctions
         BinaryOperatorKind.BitwiseAnd => "&",
         BinaryOperatorKind.BitwiseOr => "|",
         BinaryOperatorKind.BitwiseXor => "^",
+        BinaryOperatorKind.ShiftLeft => "<<",
+        BinaryOperatorKind.ShiftRight => ">>",
+        BinaryOperatorKind.UnsignedShiftRight => ">>>",
         _ => "?"
     };
 

@@ -31,20 +31,15 @@ pub struct Dict(K, V) {
 // Free the backing storage. The dict should not be used after this.
 pub fn deinit(self: &Dict($K, $V)) {
     if (self.cap > 0) {
-        const bytes: usize = self.cap * self.entry_byte_size()
-        const alloc = self.get_allocator()
-        alloc.free(slice_from_raw_parts(self.entries as &u8, bytes))
+        const bytes = self.cap * self.entry_byte_size()
+        const alloc = self.allocator.or_global()
+            .free(slice_from_raw_parts(self.entries as &u8, bytes))
     }
 
     let zero: usize = 0
     self.entries = zero as &Entry(K, V)
     self.length = 0
     self.cap = 0
-}
-
-
-fn get_allocator(self: Dict($K, $V)) &Allocator {
-    return self.allocator ?? &global_allocator
 }
 
 // Compute the byte size of a single Entry(K, V) from component sizes.
@@ -100,8 +95,8 @@ fn ensure_capacity(self: &Dict($K, $V)) {
     // Allocate new entry array, zero-initialized (all states = empty)
     const esize: usize = self.entry_byte_size()
     const alloc_size: usize = new_cap * esize
-    const alloc = self.get_allocator()
-    const raw: u8[] = alloc.alloc(alloc_size, 8).expect("dict: allocation failed")
+    const raw: u8[] = self.allocator.or_global().alloc(alloc_size, 8)
+        .expect("dict: allocation failed")
     memset(raw.ptr, 0, alloc_size)
 
     self.entries = raw.ptr as &Entry(K, V)

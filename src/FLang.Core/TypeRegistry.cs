@@ -88,6 +88,11 @@ public static class TypeRegistry
     public static readonly PrimitiveType USize = new("usize", IntPtr.Size, IntPtr.Size) { IsSigned = false };
 
     /// <summary>
+    /// Character type (4 bytes, unsigned) — alias for u32, represents a Unicode scalar value.
+    /// </summary>
+    public static readonly PrimitiveType Char = new("char", 4, 4) { IsSigned = false };
+
+    /// <summary>
     /// Compile-time integer type that must be resolved during type inference.
     /// </summary>
     public static readonly ComptimeInt ComptimeInt = ComptimeInt.Instance;
@@ -181,6 +186,7 @@ public static class TypeRegistry
             "u64" => U64,
             "isize" => ISize,
             "usize" => USize,
+            "char" => Char,
             "comptime_int" => ComptimeInt,
             "comptime_float" => ComptimeFloat,
             _ => null
@@ -200,7 +206,7 @@ public static class TypeRegistry
     /// </summary>
     public static bool IsIntegerType(string typeName)
     {
-        return typeName is "i8" or "i16" or "i32" or "i64" or "isize" or "u8" or "u16" or "u32" or "u64" or "usize";
+        return typeName is "i8" or "i16" or "i32" or "i64" or "isize" or "u8" or "u16" or "u32" or "u64" or "usize" or "char";
     }
 
     /// <summary>

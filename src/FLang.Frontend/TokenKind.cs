@@ -9,6 +9,8 @@ public enum TokenKind
     // Literals
     Integer,
     StringLiteral,
+    CharLiteral,
+    ByteLiteral,
     True,
     False,
     Null,
@@ -61,6 +63,11 @@ public enum TokenKind
     GreaterThan,
     LessThanOrEqual,
     GreaterThanOrEqual,
+
+    // Shift operators
+    ShiftLeft,
+    ShiftRight,
+    UnsignedShiftRight,
 
     // Punctuation
     OpenParenthesis,

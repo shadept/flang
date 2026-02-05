@@ -482,6 +482,32 @@ if (cmd.tag == 0) {           // Quit
 - Integer literals may carry a type suffix (e.g., `42u8`, `0isize`) specifying the concrete type directly. Suffixed literals bypass `comptime_int` inference and are typed immediately. Valid suffixes: `i8`, `i16`, `i32`, `i64`, `isize`, `u8`, `u16`, `u32`, `u64`, `usize`. Out-of-range values emit `E2029`.
 - Integer literals support hexadecimal notation with `0x` or `0X` prefix (e.g., `0xff`, `0xDEADBEEF`). Hex literals may also have type suffixes (e.g., `0xffu8`).
 - Underscore separators are allowed in integer literals for readability (e.g., `1_000_000`, `0xff_ff`). Underscores can appear anywhere in the digit sequence and are ignored during parsing.
+
+#### Char Type
+
+- `char` is a primitive type alias for `u32`, representing a Unicode scalar value (U+0000 to U+10FFFF).
+- Like `isize`/`usize`, `char` is a distinct named type with the same underlying representation as `u32` (4 bytes, unsigned).
+- `char` participates in all integer operations (arithmetic, bitwise, shift, comparison).
+
+#### Char Literals
+
+- Syntax: `'x'` — produces a value of type `char`.
+- Supported escape sequences: `\n`, `\t`, `\r`, `\\`, `\'`, `\0`.
+- Unicode escape: `\uXXXX` where X is 1-6 hex digits (e.g., `'\u1F600'` for U+1F600).
+- Examples: `'A'` (65), `'\n'` (10), `'\u20AC'` (euro sign, 8364).
+
+#### Byte Literals
+
+- Syntax: `b'x'` — produces a value of type `u8`.
+- Supported escape sequences: `\n`, `\t`, `\r`, `\\`, `\'`, `\0`.
+- Unicode escape (`\u`) is **not** allowed in byte literals (value must fit in 0-255).
+- Examples: `b'A'` (65), `b'\n'` (10), `b'\0'` (0).
+
+#### Unicode Escape in String Literals
+
+- String literals also support `\uXXXX` escape sequences (1-6 hex digits).
+- The codepoint is encoded as UTF-8 in the resulting string.
+- Example: `"Hello \u1F600"` produces a string containing the grinning face emoji.
 - Return positions may bind generics (e.g., `fn new_list(n: usize) List[$T]`).
 
 ### 3.2 Structural Typing
@@ -841,22 +867,27 @@ a or b
 - Both operands must be `bool`. Non-bool operands are a compile error (`E2046`).
 - These are built-in operators only — no user-defined overloading via operator functions.
 
-### 4.5 Bitwise Operators
+### 4.5 Bitwise and Shift Operators
 
 ```
 a & b    // bitwise AND
 a ^ b    // bitwise XOR
 a | b    // bitwise OR
+a << b   // left shift
+a >> b   // arithmetic right shift (preserves sign bit)
+a >>> b  // logical right shift (zero-fills from left)
 ```
 
-- Operands must be integer types (`i8`, `i16`, `i32`, `i64`, `isize`, `u8`, `u16`, `u32`, `u64`, `usize`).
+- Operands must be integer types (`i8`, `i16`, `i32`, `i64`, `isize`, `u8`, `u16`, `u32`, `u64`, `usize`, `char`).
 - Both operands must have the same type (no implicit widening).
 - Result type matches the operand type.
 - Bitwise AND binds tighter than XOR, which binds tighter than OR (same as C).
+- Shift operators: `>>` is arithmetic (sign-preserving) for signed types. `>>>` is logical (zero-filling) for all types. For unsigned types, `>>` and `>>>` are equivalent.
 
 **Precedence** (highest to lowest):
-  - `* / %` (11)
-  - `+ -` (10)
+  - `* / %` (12)
+  - `+ -` (11)
+  - `<< >> >>>` shift (10)
   - `&` bitwise AND (9)
   - `^` bitwise XOR (8)
   - `|` bitwise OR (7)

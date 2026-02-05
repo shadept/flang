@@ -2,6 +2,7 @@
 
 import core.string // explicit import for clarity
 
+import std.encoding.utf8
 import std.allocator
 import std.option
 
@@ -16,7 +17,24 @@ import std.option
 // - Character classification (`is_digit`, `is_alpha`, `is_whitespace`)
 // - String-to-integer parsing (`parse_int`)
 
-// pub fn index_of(
+pub fn index_of(s: String, needle: String) usize? {
+    if (needle.len > s.len) {
+        return null
+    }
+
+    let i = 0usize
+    const limit = s.len - needle.len
+    loop {
+        if (s[i..s.len].starts_with(needle)) {
+            return i
+        }
+        if (i >= limit) {
+            break
+        }
+        i = i + 1
+    }
+    return null
+}
 
 pub fn starts_with(s: String, prefix: String) bool {
     if (s.len < prefix.len) {
@@ -113,22 +131,12 @@ pub fn iter(c: &Chars) Chars {
     return c.*
 }
 
-pub fn next(it: &Chars) u8? {
+pub fn next(it: &Chars) char? {
     if (it.idx >= it.buf.len) {
         return null
     }
 
-    const elem = it.buf[it.idx]
-    it.idx = it.idx + 1
-    return elem
-}
-
-
-pub fn hash(s: String) usize {
-    //let mut hash = 5381;
-    //for (c in s.bytes()) {
-    //    hash = ((hash << 5) + hash) + c as usize
-    //}
-    //hash
-    return 0
+    const res = decode_char(it.buf[it.idx..])
+    it.idx = it.idx + res.1
+    return res.0
 }

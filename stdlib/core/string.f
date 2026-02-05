@@ -74,3 +74,12 @@ pub fn op_eq(a: String, b: String) bool {
 
     return true
 }
+
+pub fn hash(s: String) usize {
+    //let mut hash = 5381;
+    //for (c in s.bytes()) {
+    //    hash = ((hash << 5) + hash) + c as usize
+    //}
+    //hash
+    return 0
+}

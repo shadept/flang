@@ -1183,6 +1183,29 @@ public class CCodeGenerator
 
     private void EmitBinary(BinaryInstruction binary)
     {
+        var resultType = TypeToCType(binary.Result.Type ?? TypeRegistry.I32);
+        var resultName = SanitizeCIdentifier(binary.Result.Name);
+        var left = ValueToString(binary.Left);
+        var right = ValueToString(binary.Right);
+
+        // Unsigned right shift (>>>) needs special handling for signed types:
+        // Cast to unsigned, shift, cast back: (int32_t)((uint32_t)left >> right)
+        if (binary.Operation == BinaryOp.UnsignedShiftRight)
+        {
+            var leftType = binary.Left.Type?.Prune();
+            if (leftType is PrimitiveType pt && pt.IsSigned)
+            {
+                var unsignedType = GetUnsignedCounterpart(pt);
+                _output.AppendLine($"    {resultType} {resultName} = ({resultType})(({unsignedType}){left} >> {right});");
+            }
+            else
+            {
+                // Already unsigned — plain >> is logical shift
+                _output.AppendLine($"    {resultType} {resultName} = {left} >> {right};");
+            }
+            return;
+        }
+
         var opSymbol = binary.Operation switch
         {
             BinaryOp.Add => "+",
@@ -1199,15 +1222,25 @@ public class CCodeGenerator
             BinaryOp.BitwiseAnd => "&",
             BinaryOp.BitwiseOr => "|",
             BinaryOp.BitwiseXor => "^",
+            BinaryOp.ShiftLeft => "<<",
+            BinaryOp.ShiftRight => ">>",
             _ => throw new Exception($"Unknown binary operation: {binary.Operation}")
         };
 
-        var resultType = TypeToCType(binary.Result.Type ?? TypeRegistry.I32);
-        var resultName = SanitizeCIdentifier(binary.Result.Name);
-        var left = ValueToString(binary.Left);
-        var right = ValueToString(binary.Right);
-
         _output.AppendLine($"    {resultType} {resultName} = {left} {opSymbol} {right};");
+    }
+
+    private static string GetUnsignedCounterpart(PrimitiveType pt)
+    {
+        return pt.Name switch
+        {
+            "i8" => "uint8_t",
+            "i16" => "uint16_t",
+            "i32" => "uint32_t",
+            "i64" => "uint64_t",
+            "isize" => "uintptr_t",
+            _ => "uint32_t" // fallback
+        };
     }
 
     private void EmitUnary(UnaryInstruction unary)
@@ -1503,6 +1536,7 @@ public class CCodeGenerator
             PrimitiveType { Name: "u32" } => "uint32_t",
             PrimitiveType { Name: "u64" } => "uint64_t",
             PrimitiveType { Name: "usize" } => "uintptr_t",
+            PrimitiveType { Name: "char" } => "uint32_t",
             PrimitiveType { Name: "bool" } => "int",
             PrimitiveType { Name: "void" } => "void",
 

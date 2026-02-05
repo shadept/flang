@@ -93,8 +93,9 @@ public partial class TypeChecker
             return (leftIsNumeric && rightIsNumeric) || (leftIsBool && rightIsBool);
         }
 
-        // Bitwise operators require integer types (not floats, not bools)
-        if (op is BinaryOperatorKind.BitwiseAnd or BinaryOperatorKind.BitwiseOr or BinaryOperatorKind.BitwiseXor)
+        // Bitwise and shift operators require integer types (not floats, not bools)
+        if (op is BinaryOperatorKind.BitwiseAnd or BinaryOperatorKind.BitwiseOr or BinaryOperatorKind.BitwiseXor
+            or BinaryOperatorKind.ShiftLeft or BinaryOperatorKind.ShiftRight or BinaryOperatorKind.UnsignedShiftRight)
         {
             return TypeRegistry.IsIntegerType(left) && TypeRegistry.IsIntegerType(right);
         }
@@ -199,7 +200,10 @@ public partial class TypeChecker
 
         if (chosen.IsGeneric && chosenBindings != null)
         {
-            resolvedFunction = EnsureSpecialization(chosen, chosenBindings, argTypes, span)!;
+            var concreteParamTypes = chosen.ParameterTypes
+                .Select(pt => SubstituteGenerics(pt, chosenBindings))
+                .ToList();
+            resolvedFunction = EnsureSpecialization(chosen, chosenBindings, concreteParamTypes, span)!;
             returnType = SubstituteGenerics(chosen.ReturnType, chosenBindings);
         }
         else
@@ -288,7 +292,10 @@ public partial class TypeChecker
 
         if (chosen.IsGeneric && chosenBindings != null)
         {
-            resolvedFunction = EnsureSpecialization(chosen, chosenBindings, argTypes, span)!;
+            var concreteParamTypes = chosen.ParameterTypes
+                .Select(pt => SubstituteGenerics(pt, chosenBindings))
+                .ToList();
+            resolvedFunction = EnsureSpecialization(chosen, chosenBindings, concreteParamTypes, span)!;
             returnType = SubstituteGenerics(chosen.ReturnType, chosenBindings);
         }
         else
@@ -391,7 +398,10 @@ public partial class TypeChecker
 
         if (chosen.IsGeneric && chosenBindings != null)
         {
-            resolvedFunction = EnsureSpecialization(chosen, chosenBindings, argTypes, span)!;
+            var concreteParamTypes = chosen.ParameterTypes
+                .Select(pt => SubstituteGenerics(pt, chosenBindings))
+                .ToList();
+            resolvedFunction = EnsureSpecialization(chosen, chosenBindings, concreteParamTypes, span)!;
             returnType = SubstituteGenerics(chosen.ReturnType, chosenBindings);
         }
         else
