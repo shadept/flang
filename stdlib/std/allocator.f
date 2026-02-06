@@ -18,7 +18,7 @@ pub struct AllocatorVTable {
 }
 
 // Type-erased allocator interface.
-// impl: pointer to allocator-specific state (cast to &u8? for type erasure)
+// impl: pointer to allocator-specific state (cast to &u8 for type erasure)
 // vtable: pointer to function table
 pub struct Allocator {
     impl: &u8,

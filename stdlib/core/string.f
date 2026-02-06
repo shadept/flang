@@ -26,7 +26,7 @@ pub fn get(s: String, idx: usize) u8? {
 }
 
 // Returns the string contents as a raw byte slice.
-pub fn as_raw_slice(s: String) u8[] {
+pub fn as_raw_bytes(s: String) u8[] {
     return slice_from_raw_parts(s.ptr, s.len)
 }
 

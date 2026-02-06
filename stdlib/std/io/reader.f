@@ -24,8 +24,8 @@ pub struct ReadFn {
 // refills from the OS. If pos > 0 on refill, remaining data is compacted
 // to the front via memmove.
 pub struct Reader {
-    buf: &u8,
     read_fn: ReadFn,
+    buf: &u8,
     pos: usize,
     end: usize,
     cap: usize
@@ -38,8 +38,8 @@ pub fn reader(read_fn: ReadFn, storage: u8[]) Reader {
         panic("reader: storage must not be empty")
     }
     return .{
-        buf = storage.ptr,
         read_fn = read_fn,
+        buf = storage.ptr,
         pos = 0,
         end = 0,
         cap = storage.len

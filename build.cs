@@ -72,6 +72,11 @@ if (Run("dotnet", publishArgs) != 0)
     Console.Error.WriteLine("Error: dotnet publish failed.");
     return 1;
 }
+if (Run("dotnet", "build test.cs") != 0)
+{
+    Console.Error.WriteLine("Error: dotnet build test.cs failed.");
+    return 1;
+}
 
 Console.WriteLine();
 

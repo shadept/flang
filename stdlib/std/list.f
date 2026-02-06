@@ -34,7 +34,7 @@ pub fn reserve(self: &List($T), capacity: usize) {
     }
 
     // Calculate new capacity: start with 4, then double
-    const new_cap: usize = if (self.cap == 0) { 4 } else { self.cap * 2 }
+    const new_cap: usize = if self.cap == 0 { 4 } else { self.cap * 2 }
     if (new_cap < capacity) {
         new_cap = capacity
     }

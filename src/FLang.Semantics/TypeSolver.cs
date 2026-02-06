@@ -90,14 +90,29 @@ public class TypeSolver
     /// <param name="t2">The second type to unify.</param>
     /// <param name="span">Source span for error reporting.</param>
     /// <returns>The unified type if successful, null otherwise.</returns>
+    /// <summary>
+    /// Checks whether <paramref name="target"/> is reachable by following the Instance chain from <paramref name="start"/>.
+    /// Used to prevent creating cycles when linking TypeVars.
+    /// </summary>
+    private static bool OccursIn(TypeVar target, TypeVar start)
+    {
+        TypeBase? current = start;
+        while (current is TypeVar tv)
+        {
+            if (ReferenceEquals(tv, target)) return true;
+            current = tv.Instance;
+        }
+        return false;
+    }
+
     private TypeBase? UnifyInternal(TypeBase t1, TypeBase t2, SourceSpan span)
     {
         // 2. Variables (Flexible) - Check BEFORE pruning to preserve TypeVar references
         // Special case: when both are TypeVars, link them to create a chain
         if (t1 is TypeVar v1 && t2 is TypeVar v2)
         {
-            if (!Equals(v1, v2))
-                v1.Instance = v2;  // Create chain: v1 -> v2
+            if (!ReferenceEquals(v1, v2) && !OccursIn(v1, v2))
+                v1.Instance = v2;  // Create chain: v1 -> v2 (safe — v1 not reachable from v2)
             return v2;
         }
 

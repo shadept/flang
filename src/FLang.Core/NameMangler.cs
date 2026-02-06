@@ -1,3 +1,4 @@
+using System.Text;
 using TypeBase = FLang.Core.TypeBase;
 
 namespace FLang.Core;
@@ -55,9 +56,9 @@ public static class NameMangler
         };
 
         // Replace non-identifier characters (including dots from FQNs)
-        var s = raw.Replace("*", "Ptr").Replace(" ", "_").Replace("[", "_").Replace("]", "_").Replace(";", "_")
+        var s = new StringBuilder(raw).Replace("*", "Ptr").Replace(" ", "_").Replace("[", "_").Replace("]", "_").Replace(";", "_")
             .Replace(",", "_").Replace(".", "_").Replace("(", "_").Replace(")", "_");
-        return s;
+        return s.ToString();
     }
 
     /// <summary>

@@ -74,11 +74,17 @@ public partial class TypeChecker
 
         if (expectedReturnType != null)
         {
+            // Capture the original expression type BEFORE unification (for coercion detection)
+            // Without this, unification changes et's TypeVar to the target type,
+            // causing WrapWithCoercionIfNeeded to see both types as equal and skip the wrap
+            // (e.g., return 0 in a usize? function: comptime_int must wrap to Option)
+            var originalExprType = et.Prune();
+
             // Always unify to propagate type info (e.g., comptime_int → i32)
             var unified = UnifyTypes(expectedReturnType, et, ret.Expression.Span);
 
             // Wrap return expression with coercion node if needed
-            ret.Expression = WrapWithCoercionIfNeeded(ret.Expression, et.Prune(), expectedReturnType.Prune());
+            ret.Expression = WrapWithCoercionIfNeeded(ret.Expression, originalExprType, expectedReturnType.Prune());
 
             _logger.LogDebug(
                 "[TypeChecker] After unification: unified={UnifiedType}",

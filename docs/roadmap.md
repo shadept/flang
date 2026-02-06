@@ -527,9 +527,10 @@ _Goal: Fill in remaining language features._
   - Requires setjmp/longjmp or subprocess execution
 
 **Bug Fixes:**
+
 - Fixed void-if codegen: skip storing void results in if blocks
 - Fixed C codegen: add empty statement after labels with no instructions
-- Fixed TypeChecker: remove _functionStack guard for proper call resolution in tests
+- Fixed TypeChecker: remove \_functionStack guard for proper call resolution in tests
 
 **Tests Added:**
 
@@ -802,7 +803,7 @@ _Goal: Build a usable standard library._
   - [ ] `to_owned_string(String, &Allocator?) OwnedString` — allocate + copy
 - [x] `String` is already non-owning (`core/string.f`: `{ ptr: &u8, len: usize }`, no allocator, no deinit)
   - [x] String literals produce `String` (static data)
-  - [x] `op_eq`, `op_index`, `as_raw_slice` implemented
+  - [x] `op_eq`, `op_index`, `as_raw_bytes` implemented
 
 #### 19b: StringBuilder
 
@@ -864,6 +865,94 @@ Note: A minimal stopgap exists now in `core/io.f` providing `print` and `println
 
 ---
 
+## Phase 5b: Lambdas, Closures & Allocator Redesign
+
+_Goal: First-class anonymous functions and a thread-local allocator model that eliminates viral allocator parameters._
+
+### Milestone 21: Non-Capturing Lambdas
+
+**Scope:** Anonymous function expressions that desugar to module-level functions + function references.
+
+**Syntax:**
+
+```
+\ Expression form (return type inferred):
+let double = fn(x: i32) => x * 2
+
+\ Block form (explicit return type):
+let add = fn(x: i32, y: i32) i32 { return x + y }
+
+\ Type-inferred params (from expected type):
+let f: fn(i32) i32 = fn(x) => x + 1
+
+\ As argument:
+apply(fn(x) => x * 2, 5)
+```
+
+**Tasks:**
+
+- [ ] `LambdaExpressionNode` AST node (params with optional types, expr or block body)
+- [ ] Parser: `fn(...)` in expression position → lambda
+- [ ] TypeChecker: type-check lambda, infer param types from expected type context
+- [ ] TypeChecker: synthesize `FunctionDeclarationNode` (`__lambda_N`), add to generated list
+- [ ] TypeChecker: capture guard — error if lambda body references outer variables
+- [ ] AstLowering: lambda → `FunctionReferenceValue` pointing to generated function
+- [ ] Compiler pipeline: lower synthesized lambda functions alongside specializations
+- [ ] Tests: basic, block form, as argument, type inference, capture error
+
+---
+
+### Milestone 22: Thread-Local Variables & Allocator Redesign
+
+**Scope:** `#thread_local` directive for per-thread global variables. Redesign stdlib to use a thread-local `current_allocator` instead of per-type `allocator: &Allocator?` fields.
+
+**Design:**
+
+```
+\ Thread-local variable (each thread gets its own copy)
+#thread_local
+let current_allocator: &Allocator = &global_allocator
+
+\ Override for a scope using defer:
+const old = current_allocator
+current_allocator = FixedBufferAllocator(buf)
+defer current_allocator = old
+```
+
+**Tasks:**
+
+- [ ] `#thread_local` directive: parser, AST, codegen (TLS segment in C backend)
+- [ ] `current_allocator` thread-local variable in stdlib
+- [ ] Stdlib helper: `using_allocator(&Allocator) &Allocator` (swap + return old)
+- [ ] Redesign stdlib types: remove `allocator: &Allocator?` fields, use `current_allocator` instead
+- [ ] Update List, Dict, StringBuilder, OwnedString to use `current_allocator`
+- [ ] Tests: thread-local basics, allocator override + defer restore
+
+---
+
+### Milestone 23: Closures (Capturing Lambdas)
+
+**Scope:** Lambdas that capture variables from enclosing scope. Environment struct allocated via `current_allocator`.
+
+**Design:**
+
+- Closure = fat pointer (function pointer + environment pointer)
+- Captured variables copied by value into heap-allocated environment struct
+- Environment allocated through `current_allocator` (thread-local)
+- `deinit` frees environment through the allocator it was allocated with
+
+**Tasks:**
+
+- [ ] Capture analysis: detect which outer variables the lambda body references
+- [ ] Environment struct generation: `__closure_env_N { allocator, captured_vars... }`
+- [ ] Generated function takes hidden `env` parameter
+- [ ] Fat pointer representation: function type becomes (fn_ptr, env_ptr) when captures exist
+- [ ] Codegen: indirect calls pass environment pointer
+- [ ] Stdlib helper: `with_allocator(&Allocator, fn() void)` using closures
+- [ ] Tests: capture by value, closure as argument, closure with allocator override
+
+---
+
 ## Phase 6: Self-Hosting
 
 _Goal: Rewrite the compiler in FLang._
@@ -892,7 +981,6 @@ _Goal: Rewrite the compiler in FLang._
   - Milestone 19: String Types, Formatting & I/O (19a → 19b → 19c → 19d → 19e)
   - Complete M14 pending items (nested patterns, multiple wildcards)
 - **Tests Passing:** 196 passed
-
   - ✅ 15 core tests (basics, control flow, functions)
   - ✅ 5 generics tests (M11)
   - ✅ 4 struct tests

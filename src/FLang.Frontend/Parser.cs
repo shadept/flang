@@ -1265,6 +1265,7 @@ public class Parser
                 _currentToken.Kind != TokenKind.Break &&
                 _currentToken.Kind != TokenKind.Continue &&
                 _currentToken.Kind != TokenKind.Defer &&
+                _currentToken.Kind != TokenKind.Loop &&
                 _currentToken.Kind != TokenKind.OpenBrace &&
                 _currentToken.Kind != TokenKind.If)
             {

@@ -23,8 +23,8 @@ pub struct WriteFn {
 // auto-flushes via the write function. Explicit flush() drains
 // any remaining bytes.
 pub struct Writer {
-    buf: &u8
     write_fn: WriteFn
+    buf: &u8
     pos: usize
     cap: usize
 }
@@ -33,8 +33,8 @@ pub struct Writer {
 // If storage is empty, writes flush immediately (unbuffered).
 pub fn writer(write_fn: WriteFn, storage: u8[]) Writer {
     return .{
-        buf = storage.ptr,
         write_fn = write_fn,
+        buf = storage.ptr,
         pos = 0,
         cap = storage.len
     }

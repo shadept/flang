@@ -1,4 +1,5 @@
 import std.io.reader
+import std.allocator
 import std.result
 import std.string
 import std.string_builder
@@ -59,7 +60,11 @@ pub fn close_file(file: &File) Result((), FileError) {
 }
 
 pub fn read_all(file: &File) Result(OwnedString, FileError) {
-    let sb: StringBuilder
+    return read_all(file, &global_allocator)
+}
+
+pub fn read_all(file: &File, allocator: &Allocator) Result(OwnedString, FileError) {
+    let sb = string_builder(allocator)
     let buf = [0u8; 4096]
     loop {
         const n = read(file.handle.fd, buf.ptr, buf.len)
@@ -78,7 +83,7 @@ pub fn read_all(file: &File) Result(OwnedString, FileError) {
 
 pub fn write(file: &File, value: String) Result((), FileError) {
     // TODO handle encoding
-    let bytes = value.as_raw_slice()
+    let bytes = value.as_raw_bytes()
     let total_written = 0usize
     loop {
         const n = write(file.handle.fd, bytes[total_written..bytes.len].ptr, bytes.len - total_written)
