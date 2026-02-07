@@ -1267,6 +1267,9 @@ public class AstLowering
             case NullPropagationExpressionNode nullProp:
                 return LowerNullPropagationExpression(nullProp);
 
+            case LambdaExpressionNode lambda:
+                return new FunctionReferenceValue(lambda.SynthesizedFunction!.Name, lambda.Type!);
+
             case MatchExpressionNode match:
                 return LowerMatchExpression(match);
 

@@ -53,6 +53,10 @@ public partial class TypeChecker
     private int _nextLiteralTypeVarId = 0;
     private readonly List<(TypeVar Tv, BigInteger Value)> _literalTypeVars = [];
 
+    // Lambda synthesis state
+    private int _nextLambdaId = 0;
+    private int _lambdaScopeBarrier = 0;
+
     // ResolvedCall struct removed - call resolution info now stored on CallExpressionNode.ResolvedTarget
 
     public TypeChecker(Compilation compilation, ILogger<TypeChecker> logger)
@@ -229,13 +233,24 @@ public partial class TypeChecker
     private bool TryLookupVariable(string name, out TypeBase type)
     {
         // First check local scopes
+        int depth = 0;
         foreach (var scope in _scopes)
         {
             if (scope.TryGetValue(name, out var info))
             {
+                // Check capture barrier: if inside a lambda, variables from outer scopes are forbidden
+                if (_lambdaScopeBarrier > 0 && depth >= _scopes.Count - _lambdaScopeBarrier)
+                {
+                    // Variable exists but crosses the lambda boundary — treat as not found.
+                    // The caller will report E2004; this is intentional for non-capturing lambdas.
+                    type = TypeRegistry.Void;
+                    return false;
+                }
+
                 type = info.Type;
                 return true;
             }
+            depth++;
         }
 
         // Then check global constants

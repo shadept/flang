@@ -47,7 +47,9 @@ public partial class TypeChecker
         if (_functionStack.Count > 0)
         {
             var currentFunction = _functionStack.Peek();
-            expectedReturnType = currentFunction.ReturnType != null ? ResolveTypeNode(currentFunction.ReturnType) : TypeRegistry.Void;
+            // Prefer ResolvedReturnType (already set for lambdas with inferred return types)
+            expectedReturnType = currentFunction.ResolvedReturnType
+                ?? (currentFunction.ReturnType != null ? ResolveTypeNode(currentFunction.ReturnType) : TypeRegistry.Void);
         }
 
         // Handle bare `return` for void functions

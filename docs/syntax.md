@@ -4,7 +4,7 @@ This document is the complete syntax reference for FLang. Every construct the la
 
 ## What FLang Does NOT Have
 
-No semicolons. No `while` loops (use `loop` with `break`). No `mut` keyword. No `->` return type arrow. No `impl` blocks. No traits/interfaces. No closures. No string interpolation. No multi-line comments. No default parameter values. No `elif`. No ternary operator. No `switch`/`case`. No macros. No `async`/`await`. No destructuring assignment. No spread operator. No variadic functions (except `#foreign`). No type aliases.
+No semicolons. No `while` loops (use `loop` with `break`). No `mut` keyword. No `->` return type arrow. No `impl` blocks. No traits/interfaces. No closures (lambdas exist but cannot capture). No string interpolation. No multi-line comments. No default parameter values. No `elif`. No ternary operator. No `switch`/`case`. No macros. No `async`/`await`. No destructuring assignment. No spread operator. No variadic functions (except `#foreign`). No type aliases.
 
 ## Comments
 
@@ -105,6 +105,31 @@ fn make_pair(a: $T, b: $U) (T, U) {
 ```
 
 No body. C calling convention. Name not mangled. Variadic `...` allowed only here.
+
+### Lambdas (Non-Capturing)
+
+```
+let add = fn(x: i32, y: i32) i32 { x + y }
+
+// Parameter types inferred from expected type:
+let f: fn(i32) i32 = fn(x) { x + 1 }
+
+// Inline as argument:
+apply(fn(x: i32) i32 { x * 2 }, 21)
+
+// Multi-statement body:
+let compute = fn(x: i32, y: i32) i32 {
+    let sum = x + y
+    return sum * 2
+}
+```
+
+- Same `fn` keyword, but no name after `fn` — `fn(` immediately.
+- Parameter types can be omitted when inferrable from context.
+- Return type is optional (same position as function declarations).
+- Body is always a brace-delimited block.
+- Lambdas **cannot** capture variables from enclosing scopes.
+- Desugars to a synthesized module-level function + function reference.
 
 ## Structs
 

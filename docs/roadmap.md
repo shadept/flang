@@ -876,29 +876,26 @@ _Goal: First-class anonymous functions and a thread-local allocator model that e
 **Syntax:**
 
 ```
-\ Expression form (return type inferred):
-let double = fn(x: i32) => x * 2
+\ Anonymous function:
+let add = fn(x: i32, y: i32) i32 { x + y }
 
-\ Block form (explicit return type):
-let add = fn(x: i32, y: i32) i32 { return x + y }
-
-\ Type-inferred params (from expected type):
-let f: fn(i32) i32 = fn(x) => x + 1
+\ Type-inferred params, including return type (from expected type):
+let f: fn(i32) i32 = fn(x) { x + 1 }
 
 \ As argument:
-apply(fn(x) => x * 2, 5)
+apply(fn(x) { x * 2 }, 5)
 ```
 
 **Tasks:**
 
-- [ ] `LambdaExpressionNode` AST node (params with optional types, expr or block body)
-- [ ] Parser: `fn(...)` in expression position → lambda
-- [ ] TypeChecker: type-check lambda, infer param types from expected type context
-- [ ] TypeChecker: synthesize `FunctionDeclarationNode` (`__lambda_N`), add to generated list
-- [ ] TypeChecker: capture guard — error if lambda body references outer variables
-- [ ] AstLowering: lambda → `FunctionReferenceValue` pointing to generated function
-- [ ] Compiler pipeline: lower synthesized lambda functions alongside specializations
-- [ ] Tests: basic, block form, as argument, type inference, capture error
+- [x] `LambdaExpressionNode` AST node (params with optional types, expr or block body)
+- [x] Parser: `fn(...)` in expression position → lambda
+- [x] TypeChecker: type-check lambda, infer param types from expected type context
+- [x] TypeChecker: synthesize `FunctionDeclarationNode` (`__lambda_N`), add to generated list
+- [x] TypeChecker: capture guard — error if lambda body references outer variables
+- [x] AstLowering: lambda → `FunctionReferenceValue` pointing to generated function
+- [x] Compiler pipeline: lower synthesized lambda functions alongside specializations
+- [x] Tests: basic, block form, as argument, type inference, capture error
 
 ---
 

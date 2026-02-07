@@ -1,5 +1,5 @@
 
-pub fn lower(c: u8) u8 {
+pub fn lower(c: char) char {
     const a = 'a'
     const A = 'A'
     const Z = 'Z'
@@ -10,7 +10,7 @@ pub fn lower(c: u8) u8 {
     }
 }
 
-pub fn upper(c: u8) u8 {
+pub fn upper(c: char) char {
     const a = 'a'
     const z = 'z'
     const A = 'A'

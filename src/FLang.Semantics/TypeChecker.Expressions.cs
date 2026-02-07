@@ -1843,11 +1843,10 @@ public partial class TypeChecker
                         }
                     }
 
-                    // For fully unbounded ranges (..), default to usize
-                    // The actual bounds will be filled in during index lowering
+                    // Fully unbounded range (..): TypeVar resolved via indexing context
                     if (st == null && en == null)
                     {
-                        type = TypeRegistry.MakeRange(TypeRegistry.USize);
+                        type = TypeRegistry.MakeRange(new TypeVar($"__range_{re.Span.Index}"));
                         break;
                     }
 
@@ -2060,10 +2059,11 @@ public partial class TypeChecker
 
             case NullLiteralNode nullLiteral:
                 {
-                    // Infer Option type from context
+                    // Infer Option inner type from context, or defer via TypeVar
                     var innerType = expectedType switch
                     {
                         StructType st when TypeRegistry.IsOption(st) => st.TypeArguments[0],
+                        not null => (TypeBase)new TypeVar($"__null_option_{nullLiteral.Span.Index}"),
                         _ => null
                     };
 
@@ -2074,7 +2074,7 @@ public partial class TypeChecker
                             nullLiteral.Span,
                             "add an option type annotation or use an explicit constructor",
                             "E2001");
-                        type = TypeRegistry.Never; // Fallback
+                        type = TypeRegistry.Never;
                     }
                     else
                     {
@@ -2284,6 +2284,9 @@ public partial class TypeChecker
                 break;
             case NullPropagationExpressionNode nullProp:
                 type = CheckNullPropagationExpression(nullProp);
+                break;
+            case LambdaExpressionNode lambda:
+                type = CheckLambdaExpression(lambda, expectedType);
                 break;
             default:
                 throw new Exception($"Unknown expression type: {expression.GetType().Name}");
@@ -2607,5 +2610,146 @@ public partial class TypeChecker
                     "E1001");
                 break;
         }
+    }
+
+    // ==================== Lambda Expressions ====================
+
+    private TypeBase CheckLambdaExpression(LambdaExpressionNode lambda, TypeBase? expectedType)
+    {
+        var expectedFunc = expectedType?.Prune() as FunctionType;
+
+        // 1. Resolve parameter types
+        var resolvedParamTypes = new List<TypeBase>();
+        var paramNodes = new List<FunctionParameterNode>();
+        for (int i = 0; i < lambda.Parameters.Count; i++)
+        {
+            var param = lambda.Parameters[i];
+            TypeBase? paramType = null;
+
+            if (param.Type != null)
+            {
+                // Explicit type annotation
+                paramType = ResolveTypeNode(param.Type);
+            }
+            else if (expectedFunc != null && i < expectedFunc.ParameterTypes.Count)
+            {
+                // Infer from expected function type
+                paramType = expectedFunc.ParameterTypes[i];
+            }
+
+            if (paramType == null)
+            {
+                // Assign a fresh TypeVar — body type-checking (UFCS, unification) will resolve it
+                paramType = new TypeVar($"__lambda_param_{param.Name}_{lambda.Span.Index}");
+            }
+
+            resolvedParamTypes.Add(paramType);
+            // Create a FunctionParameterNode (Type won't be used since we set ResolvedType directly)
+            var fpn = new FunctionParameterNode(param.Span, param.Name,
+                param.Type ?? new NamedTypeNode(param.Span, paramType.Name));
+            fpn.ResolvedType = paramType;
+            paramNodes.Add(fpn);
+        }
+
+        // 2. Resolve return type
+        TypeBase? resolvedReturnType = null;
+        if (lambda.ReturnType != null)
+        {
+            resolvedReturnType = ResolveTypeNode(lambda.ReturnType);
+        }
+        else if (expectedFunc != null)
+        {
+            resolvedReturnType = expectedFunc.ReturnType;
+        }
+
+        // Assign TypeVar for return type when unknown — body checking will resolve it
+        resolvedReturnType ??= new TypeVar($"__lambda_return_{lambda.Span.Index}");
+
+        // 3. Synthesize a FunctionDeclarationNode
+        var lambdaName = $"__lambda_{_nextLambdaId++}";
+        var synthesized = new FunctionDeclarationNode(
+            lambda.Span, lambdaName, paramNodes, lambda.ReturnType, lambda.Body);
+        synthesized.ResolvedReturnType = resolvedReturnType;
+        synthesized.ResolvedParameterTypes = resolvedParamTypes;
+
+        // 4. Type-check the body with capture barrier
+        var savedBarrier = _lambdaScopeBarrier;
+        _lambdaScopeBarrier = _scopes.Count;
+
+        PushScope();
+        _functionStack.Push(synthesized);
+        try
+        {
+            // Declare parameters
+            foreach (var p in paramNodes)
+            {
+                if (p.ResolvedType != TypeRegistry.Never)
+                    DeclareVariable(p.Name, p.ResolvedType!, p.Span);
+            }
+
+            // Check body statements
+            foreach (var stmt in lambda.Body)
+                CheckStatement(stmt);
+
+            // Implicit return: rewrite tail expression to return statement
+            if (!resolvedReturnType.Equals(TypeRegistry.Void) && lambda.Body.Count > 0
+                && lambda.Body[^1] is ExpressionStatementNode tailExpr
+                && lambda.Body is List<StatementNode> bodyList)
+            {
+                var returnStmt = new ReturnStatementNode(tailExpr.Span, tailExpr.Expression);
+                bodyList[^1] = returnStmt;
+                CheckReturnStatement(returnStmt);
+            }
+
+            // Check for missing return in non-void lambdas
+            if (!resolvedReturnType.Equals(TypeRegistry.Void) && !IsNever(resolvedReturnType))
+            {
+                var hasReturn = lambda.Body.Count > 0 && lambda.Body[^1] is ReturnStatementNode;
+                if (!hasReturn)
+                {
+                    var span = lambda.Body.Count > 0 ? lambda.Body[^1].Span : lambda.Span;
+                    ReportError(
+                        $"lambda expects return type `{FormatTypeNameForDisplay(resolvedReturnType)}` but body does not return a value",
+                        span,
+                        "missing return",
+                        "E2049");
+                }
+            }
+        }
+        finally
+        {
+            _functionStack.Pop();
+            PopScope();
+            _lambdaScopeBarrier = savedBarrier;
+        }
+
+        // 5. Finalize types — prune TypeVars resolved during body checking
+        for (int i = 0; i < resolvedParamTypes.Count; i++)
+        {
+            resolvedParamTypes[i] = resolvedParamTypes[i].Prune();
+            if (resolvedParamTypes[i] is TypeVar)
+            {
+                ReportError(
+                    $"cannot infer type for lambda parameter `{lambda.Parameters[i].Name}`",
+                    lambda.Parameters[i].Span,
+                    "add a type annotation",
+                    "E2002");
+                resolvedParamTypes[i] = TypeRegistry.Never;
+            }
+            paramNodes[i].ResolvedType = resolvedParamTypes[i];
+        }
+        resolvedReturnType = resolvedReturnType.Prune();
+        if (resolvedReturnType is TypeVar)
+            resolvedReturnType = TypeRegistry.Void; // unresolved return → void
+
+        synthesized.ResolvedParameterTypes = resolvedParamTypes;
+        synthesized.ResolvedReturnType = resolvedReturnType;
+
+        // 6. Register synthesized function
+        lambda.SynthesizedFunction = synthesized;
+        _specializations.Add(synthesized);
+
+        // 7. Return function type
+        return new FunctionType(resolvedParamTypes, resolvedReturnType);
     }
 }

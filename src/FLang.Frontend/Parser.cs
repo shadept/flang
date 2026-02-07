@@ -972,6 +972,9 @@ public class Parser
             case TokenKind.OpenBracket:
                 return ParseArrayLiteral();
 
+            case TokenKind.Fn:
+                return ParseLambdaExpression();
+
             default:
                 var errorToken = _currentToken;
                 SynchronizeExpression();
@@ -988,6 +991,61 @@ public class Parser
                 // Return a dummy literal to allow further parsing
                 return new IntegerLiteralNode(errorToken.Span, 0);
         }
+    }
+
+    private LambdaExpressionNode ParseLambdaExpression()
+    {
+        var fnKeyword = Eat(TokenKind.Fn);
+        Eat(TokenKind.OpenParenthesis);
+
+        var parameters = new List<LambdaExpressionNode.LambdaParameter>();
+        while (_currentToken.Kind != TokenKind.CloseParenthesis && _currentToken.Kind != TokenKind.EndOfFile)
+        {
+            var paramNameToken = Eat(TokenKind.Identifier);
+            TypeNode? paramType = null;
+
+            // If next token is ':', parse explicit type
+            if (_currentToken.Kind == TokenKind.Colon)
+            {
+                Eat(TokenKind.Colon);
+                paramType = ParseType();
+            }
+
+            parameters.Add(new LambdaExpressionNode.LambdaParameter(paramNameToken.Span, paramNameToken.Text, paramType));
+
+            if (_currentToken.Kind == TokenKind.Comma)
+                Eat(TokenKind.Comma);
+            else if (_currentToken.Kind != TokenKind.CloseParenthesis)
+                break;
+        }
+
+        Eat(TokenKind.CloseParenthesis);
+
+        // Parse optional return type (same logic as ParseFunction)
+        TypeNode? returnType = null;
+        if (_currentToken.Kind is TokenKind.Identifier or TokenKind.Ampersand or TokenKind.Dollar
+            or TokenKind.OpenBracket or TokenKind.OpenParenthesis)
+            returnType = ParseType();
+
+        // Parse body
+        Eat(TokenKind.OpenBrace);
+        var statements = new List<StatementNode>();
+        while (_currentToken.Kind != TokenKind.CloseBrace && _currentToken.Kind != TokenKind.EndOfFile)
+        {
+            try
+            {
+                statements.Add(ParseStatement());
+            }
+            catch (ParserException ex)
+            {
+                _diagnostics.Add(ex.Diagnostic);
+                SynchronizeStatement();
+            }
+        }
+        var closeBrace = Eat(TokenKind.CloseBrace);
+
+        var span = SourceSpan.Combine(fnKeyword.Span, closeBrace.Span);
+        return new LambdaExpressionNode(span, parameters, returnType, statements);
     }
 
     /// <summary>

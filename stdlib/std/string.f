@@ -129,6 +129,12 @@ pub fn bytes(s: String) Bytes {
     return .{ buf = slice, idx = 0 }
 }
 
+pub fn bytes(s: OwnedString) Bytes {
+    // TODO fix String to Slice(u8) coersion
+    const slice = slice_from_raw_parts(s.ptr, s.len)
+    return .{ buf = slice, idx = 0 }
+}
+
 pub fn iter(b: &Bytes) Bytes {
     // TODO allow iter without reference
     return b.*
@@ -154,6 +160,12 @@ struct Chars {
 }
 
 pub fn chars(s: String) Chars {
+    // TODO fix String to Slice(u8) coersion
+    const slice = slice_from_raw_parts(s.ptr, s.len)
+    return .{ buf = slice, idx = 0 }
+}
+
+pub fn chars(s: OwnedString) Chars {
     // TODO fix String to Slice(u8) coersion
     const slice = slice_from_raw_parts(s.ptr, s.len)
     return .{ buf = slice, idx = 0 }

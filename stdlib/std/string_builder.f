@@ -123,6 +123,12 @@ pub fn append_bytes(sb: &StringBuilder, data: u8[]) {
     sb.len = sb.len + data.len
 }
 
+pub fn append(sb: &StringBuilder, value: char) {
+    const buf = [0u8; 4]
+    const len = encode_char(value, buf)
+    append_bytes(sb, buf[0..len])
+}
+
 // =============================================================================
 // Internal Format Helpers
 // =============================================================================
