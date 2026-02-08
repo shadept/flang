@@ -416,4 +416,11 @@ public static class WellKnown
     public static readonly PrimitiveType Char = new("char");
     public static readonly PrimitiveType ISize = new("isize");
     public static readonly PrimitiveType USize = new("usize");
+
+    // Well-known nominal type FQNs
+    public const string String = "core.string.String";
+    public const string Option = "core.option.Option";
+    public const string Slice = "core.slice.Slice";
+    public const string Range = "core.range.Range";
+    public const string TypeInfo = "core.rtti.Type";
 }

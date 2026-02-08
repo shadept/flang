@@ -77,7 +77,7 @@ public class OptionWrappingCoercionRule : IInferenceCoercionRule
     public Type? TryApply(Type from, Type to, InferenceEngine engine)
     {
         // to is Option[T] and from equals T
-        if (to is NominalType { Name: "Option" } stTo && stTo.TypeArguments.Count > 0)
+        if (to is NominalType { Name: WellKnown.Option } stTo && stTo.TypeArguments.Count > 0)
         {
             if (from.Equals(stTo.TypeArguments[0]))
                 return to;
@@ -94,8 +94,8 @@ public class StringToByteSliceCoercionRule : IInferenceCoercionRule
 {
     public Type? TryApply(Type from, Type to, InferenceEngine engine)
     {
-        if (from is NominalType { Name: "String" } &&
-            to is NominalType { Name: "Slice" } sliceTo &&
+        if (from is NominalType { Name: WellKnown.String } &&
+            to is NominalType { Name: WellKnown.Slice } sliceTo &&
             sliceTo.TypeArguments.Count > 0 &&
             sliceTo.TypeArguments[0].Equals(WellKnown.U8))
             return to;
@@ -112,7 +112,7 @@ public class ArrayDecayCoercionRule : IInferenceCoercionRule
     public Type? TryApply(Type from, Type to, InferenceEngine engine)
     {
         // [T; N] → Slice[T]
-        if (from is ArrayType arr && to is NominalType { Name: "Slice" } sliceTo &&
+        if (from is ArrayType arr && to is NominalType { Name: WellKnown.Slice } sliceTo &&
             sliceTo.TypeArguments.Count > 0)
         {
             var resolvedElem = engine.Resolve(arr.ElementType);
@@ -123,7 +123,7 @@ public class ArrayDecayCoercionRule : IInferenceCoercionRule
 
         // &[T; N] → Slice[T]
         if (from is ReferenceType { InnerType: ArrayType refArr } &&
-            to is NominalType { Name: "Slice" } sliceTo2 &&
+            to is NominalType { Name: WellKnown.Slice } sliceTo2 &&
             sliceTo2.TypeArguments.Count > 0)
         {
             var resolvedElem = engine.Resolve(refArr.ElementType);
@@ -162,7 +162,7 @@ public class SliceToReferenceCoercionRule : IInferenceCoercionRule
 {
     public Type? TryApply(Type from, Type to, InferenceEngine engine)
     {
-        if (from is NominalType { Name: "Slice" } sliceFrom &&
+        if (from is NominalType { Name: WellKnown.Slice } sliceFrom &&
             sliceFrom.TypeArguments.Count > 0 &&
             to is ReferenceType refTo)
         {

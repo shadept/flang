@@ -921,7 +921,7 @@ pub fn op_add(lhs: &A, rhs: B) C
 pub fn op_sub(lhs: &A, rhs: B) C
 pub fn op_eq(lhs: &A, rhs: B) bool
 pub fn op_index(base: &A, index: I) R
-pub fn op_index_set(base: &A, index: I, value: V) void
+pub fn op_set_index(base: &A, index: I, value: V) void
 pub fn op_assign(lhs: &A, rhs: B) void
 pub fn op_add_assign(lhs: &A, rhs: B) void
 pub fn op_coalesce(opt: Option(T), fallback: T) T
