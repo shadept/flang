@@ -30,6 +30,18 @@ public class FunctionDeclarationNode : AstNode
     public IReadOnlyList<StatementNode> Body { get; }
     public FunctionModifiers Modifiers { get; }
 
+    public bool IsGeneric => Parameters.Any(p => TypeNode.ContainsGenericParam(p.Type));
+
+    public HashSet<string> GetGenericParamNames()
+    {
+        var names = new HashSet<string>();
+        foreach (var param in Parameters)
+            TypeNode.CollectGenericParamNames(param.Type, names);
+        if (ReturnType != null)
+            TypeNode.CollectGenericParamNames(ReturnType, names);
+        return names;
+    }
+
     /// <summary>
     /// Semantic: Resolved return type, set during type checking.
     /// Null before type checking completes.

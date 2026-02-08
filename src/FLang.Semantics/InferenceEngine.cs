@@ -32,7 +32,7 @@ public interface IInferenceCoercionRule
 /// Hindley-Milner type inference engine.
 /// Owns the DisjointSet for union-find. Provides Unify, Generalize, Specialize, Zonk.
 /// </summary>
-public class InferenceEngine
+public class InferenceEngine : ITypeResolver
 {
     private readonly DisjointSet<Type> _unionFind = new();
     private readonly List<IInferenceCoercionRule> _coercionRules = [];
@@ -115,7 +115,7 @@ public class InferenceEngine
             if (!ReferenceEquals(resolvedArgs[i], n.TypeArguments[i])) changed = true;
         }
 
-        return changed ? new NominalType(n.Name, resolvedArgs, n.FieldsOrVariants) : n;
+        return changed ? new NominalType(n.Name, n.Kind, resolvedArgs, n.FieldsOrVariants) : n;
     }
 
     // =========================================================================
@@ -205,7 +205,7 @@ public class InferenceEngine
             var unifiedArgs = new Type[na.TypeArguments.Count];
             for (var i = 0; i < na.TypeArguments.Count; i++)
                 unifiedArgs[i] = UnifyInternal(na.TypeArguments[i], nb.TypeArguments[i], span, ref cost);
-            return new NominalType(na.Name, unifiedArgs, na.FieldsOrVariants);
+            return new NominalType(na.Name, na.Kind, unifiedArgs, na.FieldsOrVariants);
         }
 
         // Coercion fallback
@@ -326,7 +326,7 @@ public class InferenceEngine
             ArrayType a => new ArrayType(Substitute(a.ElementType, subs), a.Length),
             NominalType n => n.TypeArguments.Count == 0
                 ? n
-                : new NominalType(n.Name, [.. n.TypeArguments.Select(ta => Substitute(ta, subs))], n.FieldsOrVariants),
+                : new NominalType(n.Name, n.Kind, [.. n.TypeArguments.Select(ta => Substitute(ta, subs))], n.FieldsOrVariants),
             _ => type
         };
     }
@@ -349,7 +349,7 @@ public class InferenceEngine
             ArrayType a => new ArrayType(Zonk(a.ElementType), a.Length),
             NominalType n => n.TypeArguments.Count == 0
                 ? n
-                : new NominalType(n.Name, [.. n.TypeArguments.Select(Zonk)], n.FieldsOrVariants),
+                : new NominalType(n.Name, n.Kind, [.. n.TypeArguments.Select(Zonk)], n.FieldsOrVariants),
             PolymorphicType p => new PolymorphicType(p.QuantifiedVarIds, Zonk(p.Body)),
             _ => type
         };

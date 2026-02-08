@@ -7,6 +7,49 @@ public abstract class TypeNode : AstNode
     protected TypeNode(SourceSpan span) : base(span)
     {
     }
+
+    public static bool ContainsGenericParam(TypeNode node) => node switch
+    {
+        GenericParameterTypeNode => true,
+        ReferenceTypeNode rt => ContainsGenericParam(rt.InnerType),
+        NullableTypeNode nt => ContainsGenericParam(nt.InnerType),
+        ArrayTypeNode at => ContainsGenericParam(at.ElementType),
+        SliceTypeNode st => ContainsGenericParam(st.ElementType),
+        GenericTypeNode gt => gt.TypeArguments.Any(ContainsGenericParam),
+        FunctionTypeNode ft => ft.ParameterTypes.Any(ContainsGenericParam) || ContainsGenericParam(ft.ReturnType),
+        _ => false
+    };
+
+    public static void CollectGenericParamNames(TypeNode node, HashSet<string> names)
+    {
+        switch (node)
+        {
+            case GenericParameterTypeNode gp:
+                names.Add(gp.Name);
+                break;
+            case ReferenceTypeNode rt:
+                CollectGenericParamNames(rt.InnerType, names);
+                break;
+            case NullableTypeNode nt:
+                CollectGenericParamNames(nt.InnerType, names);
+                break;
+            case ArrayTypeNode at:
+                CollectGenericParamNames(at.ElementType, names);
+                break;
+            case SliceTypeNode st:
+                CollectGenericParamNames(st.ElementType, names);
+                break;
+            case GenericTypeNode gt:
+                foreach (var ta in gt.TypeArguments)
+                    CollectGenericParamNames(ta, names);
+                break;
+            case FunctionTypeNode ft:
+                foreach (var pt in ft.ParameterTypes)
+                    CollectGenericParamNames(pt, names);
+                CollectGenericParamNames(ft.ReturnType, names);
+                break;
+        }
+    }
 }
 
 /// <summary>

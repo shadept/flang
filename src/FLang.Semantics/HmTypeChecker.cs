@@ -28,7 +28,7 @@ public record FunctionContext(FunctionDeclarationNode Node, Type ReturnType);
 /// Hindley-Milner type checker. Drives InferenceEngine over the AST.
 /// Works exclusively with FLang.Core.Types.Type — no TypeBase references.
 /// </summary>
-public partial class HmTypeChecker
+public partial class HmTypeChecker : INominalTypeRegistry
 {
     private readonly InferenceEngine _engine;
     private readonly TypeScopes _scopes;
@@ -39,6 +39,11 @@ public partial class HmTypeChecker
     /// FQN → NominalType template for all structs and enums.
     /// </summary>
     private readonly Dictionary<string, NominalType> _nominalTypes = [];
+
+    /// <summary>
+    /// FQN → SourceSpan of the first declaration, for duplicate-detection notes.
+    /// </summary>
+    private readonly Dictionary<string, SourceSpan> _nominalSpans = [];
 
     /// <summary>
     /// Function name → list of overloads.
@@ -93,16 +98,18 @@ public partial class HmTypeChecker
         [.. _diagnostics, .. _engine.Diagnostics];
     public IReadOnlyDictionary<AstNode, Type> InferredTypes => _inferredTypes;
     public IReadOnlyDictionary<string, NominalType> NominalTypes => _nominalTypes;
+    public InferenceEngine Engine => _engine;
+
+    public bool IsGenericFunction(FunctionDeclarationNode fn) => fn.IsGeneric;
+    public IReadOnlyList<FunctionDeclarationNode> GetSpecializedFunctions() => _specializations;
 
     /// <summary>
     /// Run all type-checking phases on a module.
     /// </summary>
     public void CheckModule(ModuleNode module, string modulePath)
     {
-        CollectStructNames(module, modulePath);
-        CollectEnumNames(module, modulePath);
-        ResolveStructFields(module, modulePath);
-        ResolveEnumVariants(module, modulePath);
+        CollectNominalTypes(module, modulePath);
+        ResolveNominalTypes(module, modulePath);
         CollectFunctionSignatures(module, modulePath);
         CheckModuleBodies(module, modulePath);
     }
@@ -136,10 +143,14 @@ public partial class HmTypeChecker
 
     /// <summary>
     /// Get the previously inferred type for an AST node.
+    /// Throws if the type was not recorded — a missing type indicates a bug in the type checker.
     /// </summary>
-    public Type? GetInferredType(AstNode node)
+    public Type GetInferredType(AstNode node)
     {
-        return _inferredTypes.TryGetValue(node, out var type) ? type : null;
+        if (_inferredTypes.TryGetValue(node, out var type))
+            return type;
+        throw new InvalidOperationException(
+            $"BUG: No inferred type recorded for {node.GetType().Name} at {node.Span}");
     }
 
     // =========================================================================
@@ -162,13 +173,39 @@ public partial class HmTypeChecker
     }
 
     // =========================================================================
+    // Module path
+    // =========================================================================
+
+    public static string DeriveModulePath(string filePath, IReadOnlyList<string> includePaths, string workingDirectory)
+    {
+        var normalizedFile = Path.GetFullPath(filePath);
+
+        foreach (var includePath in includePaths)
+        {
+            var normalizedInclude = Path.GetFullPath(includePath);
+
+            if (normalizedFile.StartsWith(normalizedInclude, StringComparison.OrdinalIgnoreCase))
+            {
+                var relativePath = Path.GetRelativePath(normalizedInclude, normalizedFile);
+                var withoutExtension = Path.ChangeExtension(relativePath, null);
+                return withoutExtension.Replace(Path.DirectorySeparatorChar, '.');
+            }
+        }
+
+        var normalizedWorking = Path.GetFullPath(workingDirectory);
+        var relativeToWorking = Path.GetRelativePath(normalizedWorking, normalizedFile);
+        var modulePathFromWorking = Path.ChangeExtension(relativeToWorking, null);
+        return modulePathFromWorking.Replace(Path.DirectorySeparatorChar, '.');
+    }
+
+    // =========================================================================
     // Nominal type registry
     // =========================================================================
 
     /// <summary>
     /// Look up a nominal type by FQN or short name.
     /// </summary>
-    private NominalType? LookupNominalType(string name)
+    public NominalType? LookupNominalType(string name)
     {
         if (_nominalTypes.TryGetValue(name, out var type))
             return type;

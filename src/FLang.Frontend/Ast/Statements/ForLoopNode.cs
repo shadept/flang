@@ -1,4 +1,5 @@
 using FLang.Core;
+using FLang.Frontend.Ast.Declarations;
 
 namespace FLang.Frontend.Ast.Statements;
 
@@ -24,4 +25,10 @@ public class ForLoopNode : StatementNode
 
     /// <summary>Semantic: The Option[T] type wrapping next() result.</summary>
     public StructType? NextResultOptionType { get; set; }
+
+    /// <summary>Semantic (HM pipeline): Resolved iter() function declaration.</summary>
+    public FunctionDeclarationNode? ResolvedIterFunction { get; set; }
+
+    /// <summary>Semantic (HM pipeline): Resolved next() function declaration.</summary>
+    public FunctionDeclarationNode? ResolvedNextFunction { get; set; }
 }

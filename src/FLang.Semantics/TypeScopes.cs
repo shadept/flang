@@ -1,4 +1,5 @@
 using FLang.Core.Types;
+using Type = FLang.Core.Types.Type;
 
 namespace FLang.Semantics;
 
@@ -26,11 +27,19 @@ public class TypeScopes
     }
 
     /// <summary>
-    /// Bind a name to a type in the current (innermost) scope.
+    /// Bind a name to a polymorphic type scheme in the current (innermost) scope.
     /// </summary>
     public void Bind(string name, PolymorphicType type)
     {
         _scopes.Peek()[name] = type;
+    }
+
+    /// <summary>
+    /// Bind a name to a monomorphic type in the current (innermost) scope.
+    /// </summary>
+    public void Bind(string name, Type type)
+    {
+        _scopes.Peek()[name] = new PolymorphicType(type);
     }
 
     /// <summary>

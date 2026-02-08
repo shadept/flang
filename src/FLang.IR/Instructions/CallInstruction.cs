@@ -33,10 +33,16 @@ public class CallInstruction : Instruction
     public Value Result { get; }
 
     /// <summary>
-    /// Parameter types of the callee function.
+    /// Parameter types of the callee function (old TypeBase system).
     /// Used for name mangling when calling FLang functions.
     /// </summary>
     public IReadOnlyList<TypeBase>? CalleeParamTypes { get; set; }
+
+    /// <summary>
+    /// Parameter types of the callee function (new IrType system).
+    /// Used for name mangling in the HM pipeline.
+    /// </summary>
+    public IReadOnlyList<IrType>? CalleeIrParamTypes { get; set; }
 
     /// <summary>
     /// True if this is a call to a foreign (C) function that should not be name-mangled.

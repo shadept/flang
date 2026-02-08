@@ -76,9 +76,18 @@ public partial class HmTypeChecker
         return _engine.FreshVar();
     }
 
-    private static NominalType InferStringLiteral() => new(WellKnown.String);
+    private NominalType InferStringLiteral()
+    {
+        return LookupNominalType(WellKnown.String)
+            ?? throw new InvalidOperationException($"Well-known type `{WellKnown.String}` not registered");
+    }
 
-    private NominalType InferNullLiteral() => new(WellKnown.Option, [_engine.FreshVar()]);
+    private NominalType InferNullLiteral()
+    {
+        var option = LookupNominalType(WellKnown.Option)
+            ?? throw new InvalidOperationException($"Well-known type `{WellKnown.Option}` not registered");
+        return new NominalType(option.Name, option.Kind, [_engine.FreshVar()], option.FieldsOrVariants);
+    }
 
     // =========================================================================
     // Identifiers
@@ -139,6 +148,18 @@ public partial class HmTypeChecker
 
     private Type InferBuiltinBinary(BinaryOperatorKind op, Type left, Type right, SourceSpan span)
     {
+        var resolvedLeft = _engine.Resolve(left);
+        var resolvedRight = _engine.Resolve(right);
+
+        // Pointer arithmetic: ref + int → ref, int + ref → ref, ref - int → ref
+        if (op is BinaryOperatorKind.Add or BinaryOperatorKind.Subtract)
+        {
+            if (resolvedLeft is ReferenceType)
+                return resolvedLeft;
+            if (resolvedRight is ReferenceType && op == BinaryOperatorKind.Add)
+                return resolvedRight;
+        }
+
         // Unify operands (must be same numeric type)
         var unified = _engine.Unify(left, right, span);
 
@@ -238,6 +259,13 @@ public partial class HmTypeChecker
     /// </summary>
     private Type? TryResolveOperatorFunction(string opName, Type[] argTypes, SourceSpan span)
     {
+        return TryResolveOperatorFunction(opName, argTypes, span, out _);
+    }
+
+    private Type? TryResolveOperatorFunction(string opName, Type[] argTypes, SourceSpan span,
+        out FunctionDeclarationNode? resolvedNode)
+    {
+        resolvedNode = null;
         var candidates = LookupFunctions(opName);
         if (candidates == null) return null;
 
@@ -296,6 +324,7 @@ public partial class HmTypeChecker
         for (int i = 0; i < argTypes.Length; i++)
             _engine.Unify(argTypes[i], winnerFn.ParameterTypes[i], span);
 
+        resolvedNode = bestCandidate.Node;
         return winnerFn.ReturnType;
     }
 
@@ -612,7 +641,7 @@ public partial class HmTypeChecker
         switch (pattern)
         {
             case VariablePatternNode varPat:
-                _scopes.Bind(varPat.Name, new PolymorphicType(scrutineeType));
+                _scopes.Bind(varPat.Name, scrutineeType);
                 Record(varPat, scrutineeType);
                 break;
 
@@ -779,8 +808,17 @@ public partial class HmTypeChecker
 
         if (resolved is NominalType nominal)
         {
+            // If the NominalType instance has no fields, look up the registered template
+            var fieldsSource = nominal;
+            if (nominal.FieldsOrVariants.Count == 0)
+            {
+                var template = LookupNominalType(nominal.Name);
+                if (template != null)
+                    fieldsSource = template;
+            }
+
             // Look up field/variant by name
-            var field = nominal.FieldsOrVariants
+            var field = fieldsSource.FieldsOrVariants
                 .FirstOrDefault(f => f.Name == fieldName);
 
             if (field != default)
@@ -857,7 +895,7 @@ public partial class HmTypeChecker
         }
 
         var name = $"__anon_{string.Join("_", fields.Select(f => f.Name))}";
-        return new NominalType(name, [], fields);
+        return new NominalType(name, NominalKind.Struct, [], fields);
     }
 
     // =========================================================================
@@ -961,7 +999,9 @@ public partial class HmTypeChecker
             elemType = _engine.FreshVar();
         }
 
-        return new NominalType(WellKnown.Range, [elemType]);
+        var rangeNominal = LookupNominalType(WellKnown.Range)
+            ?? throw new InvalidOperationException($"Well-known type `{WellKnown.Range}` not registered");
+        return new NominalType(rangeNominal.Name, rangeNominal.Kind, [elemType], rangeNominal.FieldsOrVariants);
     }
 
     // =========================================================================
@@ -981,7 +1021,7 @@ public partial class HmTypeChecker
                 ? ResolveTypeNode(param.Type)
                 : _engine.FreshVar();
 
-            _scopes.Bind(param.Name, new PolymorphicType(paramTypes[i]));
+            _scopes.Bind(param.Name, paramTypes[i]);
         }
 
         // Determine return type
@@ -1052,7 +1092,11 @@ public partial class HmTypeChecker
                     .FirstOrDefault(f => f.Name == nullProp.MemberName);
 
                 if (field != default)
-                    return new NominalType(WellKnown.Option, [field.Type]);
+                {
+                    var opt = LookupNominalType(WellKnown.Option)
+                        ?? throw new InvalidOperationException($"Well-known type `{WellKnown.Option}` not registered");
+                    return new NominalType(opt.Name, opt.Kind, [field.Type], opt.FieldsOrVariants);
+                }
 
                 ReportError($"No field `{nullProp.MemberName}` on inner type", nullProp.Span);
                 return _engine.FreshVar();

@@ -4,6 +4,32 @@ using System.Text;
 namespace FLang.Core.Types;
 
 /// <summary>
+/// Distinguishes struct vs enum nominal types in the HM type system.
+/// </summary>
+public enum NominalKind { Struct, Enum }
+
+/// <summary>
+/// Resolves and zonks inference type variables to their bound types.
+/// Implemented by InferenceEngine, consumed by TypeLayoutService and other
+/// downstream phases that need resolved types without depending on Semantics.
+/// </summary>
+public interface ITypeResolver
+{
+    Type Resolve(Type type);
+    Type Zonk(Type type);
+}
+
+/// <summary>
+/// Looks up registered NominalType definitions by fully-qualified name.
+/// Implemented by HmTypeChecker, consumed by TypeLayoutService to resolve
+/// bare NominalTypes (no fields) to their full definitions for layout computation.
+/// </summary>
+public interface INominalTypeRegistry
+{
+    NominalType? LookupNominalType(string name);
+}
+
+/// <summary>
 /// Base for all types in the new inference type system.
 /// Immutable — all binding state lives in the DisjointSet, not on the types.
 /// </summary>
@@ -108,14 +134,14 @@ public sealed record ArrayType(Type ElementType, int Length) : Type
 ///
 /// Equality is by name + type arguments (not fields/variants).
 /// </summary>
-public sealed record NominalType(string Name, IReadOnlyList<Type> TypeArguments,
+public sealed record NominalType(string Name, NominalKind Kind, IReadOnlyList<Type> TypeArguments,
     IReadOnlyList<(string Name, Type Type)> FieldsOrVariants) : Type
 {
-    public NominalType(string name, IReadOnlyList<Type> typeArguments)
-        : this(name, typeArguments, []) { }
+    public NominalType(string name, NominalKind kind, IReadOnlyList<Type> typeArguments)
+        : this(name, kind, typeArguments, []) { }
 
-    public NominalType(string name)
-        : this(name, [], []) { }
+    public NominalType(string name, NominalKind kind)
+        : this(name, kind, [], []) { }
 
     public bool Equals(NominalType? other)
     {

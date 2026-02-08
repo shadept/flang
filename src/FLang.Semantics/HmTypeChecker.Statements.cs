@@ -82,7 +82,7 @@ public partial class HmTypeChecker
             varType = _engine.FreshVar();
         }
 
-        _scopes.Bind(varDecl.Name, new PolymorphicType(varType));
+        _scopes.Bind(varDecl.Name, varType);
         Record(varDecl, varType);
     }
 
@@ -122,25 +122,29 @@ public partial class HmTypeChecker
 
         // Resolve iter(&T) → IteratorType
         var iterRef = new ReferenceType(iterableType);
-        var iterResult = TryResolveOperatorFunction("iter", [iterRef], forLoop.Span);
+        FunctionDeclarationNode? iterNode = null;
+        var iterResult = TryResolveOperatorFunction("iter", [iterRef], forLoop.Span, out iterNode);
         if (iterResult == null)
         {
             // Try without reference
-            iterResult = TryResolveOperatorFunction("iter", [iterableType], forLoop.Span);
+            iterResult = TryResolveOperatorFunction("iter", [iterableType], forLoop.Span, out iterNode);
         }
 
         Type elementType;
         if (iterResult != null)
         {
+            forLoop.ResolvedIterFunction = iterNode;
             var iteratorType = iterResult;
             // Resolve next(&IteratorType) → Option[E]
             var nextRef = new ReferenceType(iteratorType);
-            var nextResult = TryResolveOperatorFunction("next", [nextRef], forLoop.Span);
+            FunctionDeclarationNode? nextNode = null;
+            var nextResult = TryResolveOperatorFunction("next", [nextRef], forLoop.Span, out nextNode);
             if (nextResult == null)
-                nextResult = TryResolveOperatorFunction("next", [iteratorType], forLoop.Span);
+                nextResult = TryResolveOperatorFunction("next", [iteratorType], forLoop.Span, out nextNode);
 
             if (nextResult != null)
             {
+                forLoop.ResolvedNextFunction = nextNode;
                 var nextReturnType = _engine.Resolve(nextResult);
                 if (nextReturnType is NominalType { Name: WellKnown.Option } optType
                     && optType.TypeArguments.Count > 0)
@@ -165,9 +169,12 @@ public partial class HmTypeChecker
             elementType = TryResolveDirectIteration(iterableType, forLoop.Span);
         }
 
+        // Record element type for lowering
+        Record(forLoop, elementType);
+
         // Check body with loop variable in scope
         _scopes.PushScope();
-        _scopes.Bind(forLoop.IteratorVariable, new PolymorphicType(elementType));
+        _scopes.Bind(forLoop.IteratorVariable, elementType);
 
         InferExpression(forLoop.Body);
 

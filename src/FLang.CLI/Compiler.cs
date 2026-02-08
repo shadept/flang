@@ -3,6 +3,8 @@ using System.Runtime.InteropServices;
 using System.Text;
 using FLang.Codegen.C;
 using FLang.Core;
+using FLang.Core.Types;
+using FLang.Frontend.Ast;
 using FLang.Frontend.Ast.Declarations;
 using FLang.IR;
 using FLang.IR.Instructions;
@@ -27,7 +29,8 @@ public record CompilerOptions(
     bool DebugLogging = false,
     string? WorkingDirectory = null,
     IReadOnlyList<string>? IncludePaths = null,
-    bool RunTests = false
+    bool RunTests = false,
+    bool UseHm = false
 );
 
 public record CompilationResult(
@@ -80,6 +83,12 @@ public class Compiler
         if (allDiagnostics.Any(d => d.Severity == DiagnosticSeverity.Error))
         {
             return new CompilationResult(false, null, allDiagnostics, compilation);
+        }
+
+        // Branch: HM pipeline
+        if (options.UseHm)
+        {
+            return CompileHm(options, compilation, parsedModules, allDiagnostics, loggerFactory);
         }
 
         // 2. Type Checking
@@ -308,6 +317,176 @@ public class Compiler
             if (File.Exists(objFilePath)) File.Delete(objFilePath);
 
             // MSVC may also place .obj in the working directory
+            var cwdObj = Path.GetFileNameWithoutExtension(cFilePath) + ".obj";
+            if (File.Exists(cwdObj)) File.Delete(cwdObj);
+        }
+        catch (Exception ex)
+        {
+            allDiagnostics.Add(Diagnostic.Error($"Error invoking C compiler ({compilerConfig.ExecutablePath}): {ex.Message}", SourceSpan.None, "E0000"));
+            return new CompilationResult(false, null, allDiagnostics, compilation);
+        }
+
+        return new CompilationResult(true, outputFilePath, allDiagnostics, compilation);
+    }
+
+    /// <summary>
+    /// HM pipeline: HmTypeChecker → HmAstLowering → HmCCodeGenerator → C compiler.
+    /// </summary>
+    private CompilationResult CompileHm(
+        CompilerOptions options,
+        Compilation compilation,
+        Dictionary<string, ModuleNode> parsedModules,
+        List<Diagnostic> allDiagnostics,
+        ILoggerFactory loggerFactory)
+    {
+        // 2. HM Type Checking — multi-phase across all modules
+        // BFS insertion order from ModuleCompiler is already correct (prelude → core → user).
+        // The 2-phase collect-then-resolve approach makes ordering within each phase irrelevant.
+        var hmChecker = new HmTypeChecker(compilation);
+
+        foreach (var kvp in parsedModules)
+        {
+            var modulePath = HmTypeChecker.DeriveModulePath(kvp.Key, compilation.IncludePaths, compilation.WorkingDirectory);
+            hmChecker.CollectNominalTypes(kvp.Value, modulePath);
+        }
+
+        foreach (var kvp in parsedModules)
+        {
+            var modulePath = HmTypeChecker.DeriveModulePath(kvp.Key, compilation.IncludePaths, compilation.WorkingDirectory);
+            hmChecker.ResolveNominalTypes(kvp.Value, modulePath);
+        }
+
+        foreach (var kvp in parsedModules)
+        {
+            var modulePath = HmTypeChecker.DeriveModulePath(kvp.Key, compilation.IncludePaths, compilation.WorkingDirectory);
+            hmChecker.CollectFunctionSignatures(kvp.Value, modulePath);
+        }
+
+        foreach (var kvp in parsedModules)
+        {
+            var modulePath = HmTypeChecker.DeriveModulePath(kvp.Key, compilation.IncludePaths, compilation.WorkingDirectory);
+            hmChecker.CheckModuleBodies(kvp.Value, modulePath);
+        }
+
+        allDiagnostics.AddRange(hmChecker.Diagnostics);
+
+        if (allDiagnostics.Any(d => d.Severity == DiagnosticSeverity.Error))
+        {
+            return new CompilationResult(false, null, allDiagnostics, compilation);
+        }
+
+        // 3. Lowering to IrModule
+        var layoutService = new TypeLayoutService(hmChecker.Engine, hmChecker);
+        var lowering = new HmAstLowering(hmChecker, layoutService, hmChecker.Engine);
+
+        var moduleEntries = parsedModules.Select(kvp =>
+        {
+            var modulePath = HmTypeChecker.DeriveModulePath(kvp.Key, compilation.IncludePaths, compilation.WorkingDirectory);
+            return (modulePath, kvp.Value);
+        });
+
+        var irModule = lowering.LowerModule(moduleEntries);
+        allDiagnostics.AddRange(lowering.Diagnostics);
+
+        if (allDiagnostics.Any(d => d.Severity == DiagnosticSeverity.Error))
+        {
+            return new CompilationResult(false, null, allDiagnostics, compilation);
+        }
+
+        if (irModule.Functions.Count == 0)
+        {
+            allDiagnostics.Add(Diagnostic.Error("No functions found in any module", SourceSpan.None, "E0000"));
+            return new CompilationResult(false, null, allDiagnostics, compilation);
+        }
+
+        // 4. Emit FIR (optional) — for HM pipeline, emit IrModule functions through FirPrinter
+        if (options.EmitFir != null)
+        {
+            var firBuilder = new StringBuilder();
+            foreach (var func in irModule.Functions)
+            {
+                // Convert IrFunction to Function for FirPrinter compatibility
+                var irFunc = new Function(func.Name) { ReturnType = TypeRegistry.Void };
+                foreach (var bb in func.BasicBlocks)
+                    irFunc.BasicBlocks.Add(bb);
+                firBuilder.AppendLine(FirPrinter.Print(irFunc));
+            }
+
+            var firOutput = firBuilder.ToString();
+            if (options.EmitFir == "-")
+            {
+                Console.WriteLine("=== FIR (HM) ===");
+                Console.WriteLine(firOutput);
+            }
+            else
+            {
+                File.WriteAllText(options.EmitFir, firOutput);
+            }
+        }
+
+        // 5. Generate C Code
+        var cCode = HmCCodeGenerator.GenerateProgram(irModule);
+
+        // Resolve output and intermediate paths
+        string outputFilePath;
+        if (options.OutputPath != null)
+        {
+            outputFilePath = options.OutputPath;
+        }
+        else
+        {
+            outputFilePath = Path.ChangeExtension(options.InputFilePath, ".exe");
+            if (!RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+                outputFilePath = Path.ChangeExtension(outputFilePath, null);
+        }
+
+        var outputDir = Path.GetDirectoryName(Path.GetFullPath(outputFilePath))!;
+        var cFilePath = Path.Combine(outputDir, Path.GetFileNameWithoutExtension(outputFilePath) + ".c");
+        File.WriteAllText(cFilePath, cCode);
+
+        // 6. Invoke C Compiler
+        var compilerConfig = options.CCompilerConfig;
+
+        if (compilerConfig == null)
+        {
+            allDiagnostics.Add(Diagnostic.Error("No C compiler configuration provided.", SourceSpan.None, "E0000"));
+            return new CompilationResult(false, null, allDiagnostics, compilation);
+        }
+
+        var startInfo = new ProcessStartInfo
+        {
+            FileName = compilerConfig.ExecutablePath,
+            Arguments = compilerConfig.Arguments,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+            CreateNoWindow = true
+        };
+
+        if (compilerConfig.Environment != null)
+            foreach (var (key, value) in compilerConfig.Environment)
+                startInfo.EnvironmentVariables[key] = value;
+
+        using var process = new Process { StartInfo = startInfo };
+
+        try
+        {
+            process.Start();
+            process.WaitForExit();
+
+            if (process.ExitCode != 0)
+            {
+                var stdout = process.StandardOutput.ReadToEnd();
+                var stderr = process.StandardError.ReadToEnd();
+                var errorMsg = $"C compiler ({compilerConfig.Name}) failed:\n{stdout}\n{stderr}";
+                allDiagnostics.Add(Diagnostic.Error(errorMsg, SourceSpan.None, "E0000"));
+                return new CompilationResult(false, null, allDiagnostics, compilation);
+            }
+
+            // Clean up intermediate files
+            var objFilePath = Path.ChangeExtension(cFilePath, ".obj");
+            if (File.Exists(objFilePath)) File.Delete(objFilePath);
+
             var cwdObj = Path.GetFileNameWithoutExtension(cFilePath) + ".obj";
             if (File.Exists(cwdObj)) File.Delete(cwdObj);
         }

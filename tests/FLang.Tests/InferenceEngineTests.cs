@@ -174,7 +174,7 @@ public class InferenceEngineTests
     {
         var engine = CreateBareEngine();
         var v = engine.FreshVar();
-        var s = new NominalType("List", [v]);
+        var s = new NominalType("List", NominalKind.Struct, [v]);
         engine.Unify(v, s, SourceSpan.None);
         Assert.Single(engine.Diagnostics);
     }
@@ -369,8 +369,8 @@ public class InferenceEngineTests
     public void Unify_NominalTypes_SameName_NoArgs()
     {
         var engine = CreateBareEngine();
-        var s1 = new NominalType("Point");
-        var s2 = new NominalType("Point");
+        var s1 = new NominalType("Point", NominalKind.Struct);
+        var s2 = new NominalType("Point", NominalKind.Struct);
         var result = engine.Unify(s1, s2, SourceSpan.None);
         Assert.Equal(s1, result.Type);
         Assert.Empty(engine.Diagnostics);
@@ -380,8 +380,8 @@ public class InferenceEngineTests
     public void Unify_NominalTypes_SameName_WithTypeArgs()
     {
         var engine = CreateBareEngine();
-        var s1 = new NominalType("List", [WellKnown.I32]);
-        var s2 = new NominalType("List", [WellKnown.I32]);
+        var s1 = new NominalType("List", NominalKind.Struct, [WellKnown.I32]);
+        var s2 = new NominalType("List", NominalKind.Struct, [WellKnown.I32]);
         var result = engine.Unify(s1, s2, SourceSpan.None);
         Assert.Equal(s1, result.Type);
         Assert.Empty(engine.Diagnostics);
@@ -392,8 +392,8 @@ public class InferenceEngineTests
     {
         var engine = CreateBareEngine();
         var v = engine.FreshVar();
-        var s1 = new NominalType("Option", [v]);
-        var s2 = new NominalType("Option", [WellKnown.Bool]);
+        var s1 = new NominalType("Option", NominalKind.Struct, [v]);
+        var s2 = new NominalType("Option", NominalKind.Struct, [WellKnown.Bool]);
         engine.Unify(s1, s2, SourceSpan.None);
         Assert.Equal(WellKnown.Bool, engine.Resolve(v));
         Assert.Empty(engine.Diagnostics);
@@ -403,8 +403,8 @@ public class InferenceEngineTests
     public void Unify_NominalTypes_DifferentNames_NoCoercion_Fails()
     {
         var engine = CreateBareEngine();
-        var s1 = new NominalType("Point");
-        var s2 = new NominalType("Vec2");
+        var s1 = new NominalType("Point", NominalKind.Struct);
+        var s2 = new NominalType("Vec2", NominalKind.Struct);
         engine.Unify(s1, s2, SourceSpan.None);
         Assert.NotEmpty(engine.Diagnostics);
     }
@@ -413,8 +413,8 @@ public class InferenceEngineTests
     public void Unify_NominalTypes_SameName_ArityMismatch()
     {
         var engine = CreateBareEngine();
-        var s1 = new NominalType("Dict", [WellKnown.I32]);
-        var s2 = new NominalType("Dict", [WellKnown.I32, WellKnown.Bool]);
+        var s1 = new NominalType("Dict", NominalKind.Struct, [WellKnown.I32]);
+        var s2 = new NominalType("Dict", NominalKind.Struct, [WellKnown.I32, WellKnown.Bool]);
         engine.Unify(s1, s2, SourceSpan.None);
         Assert.Single(engine.Diagnostics);
         Assert.Contains("arity", engine.Diagnostics[0].Message);
@@ -424,8 +424,8 @@ public class InferenceEngineTests
     public void Unify_NominalTypes_SameName_TypeArgMismatch()
     {
         var engine = CreateBareEngine();
-        var s1 = new NominalType("List", [WellKnown.I32]);
-        var s2 = new NominalType("List", [WellKnown.Bool]);
+        var s1 = new NominalType("List", NominalKind.Struct, [WellKnown.I32]);
+        var s2 = new NominalType("List", NominalKind.Struct, [WellKnown.Bool]);
         engine.Unify(s1, s2, SourceSpan.None);
         Assert.NotEmpty(engine.Diagnostics);
     }
@@ -445,10 +445,10 @@ public class InferenceEngineTests
         var b = engine.FreshVar();
         var fn1 = new FunctionType(
             [new ReferenceType(a), new ArrayType(b, 3)],
-            new NominalType("Option", [a]));
+            new NominalType("Option", NominalKind.Struct, [a]));
         var fn2 = new FunctionType(
             [new ReferenceType(WellKnown.I32), new ArrayType(WellKnown.Bool, 3)],
-            new NominalType("Option", [WellKnown.I32]));
+            new NominalType("Option", NominalKind.Struct, [WellKnown.I32]));
 
         engine.Unify(fn1, fn2, SourceSpan.None);
         Assert.Equal(WellKnown.I32, engine.Resolve(a));
@@ -474,8 +474,8 @@ public class InferenceEngineTests
         // List[Option[?a]] unified with List[Option[i32]]
         var engine = CreateBareEngine();
         var v = engine.FreshVar();
-        var s1 = new NominalType("List", [new NominalType("Option", [v])]);
-        var s2 = new NominalType("List", [new NominalType("Option", [WellKnown.I32])]);
+        var s1 = new NominalType("List", NominalKind.Struct, [new NominalType("Option", NominalKind.Struct, [v])]);
+        var s2 = new NominalType("List", NominalKind.Struct, [new NominalType("Option", NominalKind.Struct, [WellKnown.I32])]);
         engine.Unify(s1, s2, SourceSpan.None);
         Assert.Equal(WellKnown.I32, engine.Resolve(v));
         Assert.Empty(engine.Diagnostics);
@@ -503,7 +503,7 @@ public class InferenceEngineTests
     {
         var engine = CreateBareEngine();
         var fn = new FunctionType([WellKnown.I32], WellKnown.Bool);
-        var s = new NominalType("Foo");
+        var s = new NominalType("Foo", NominalKind.Struct);
         engine.Unify(fn, s, SourceSpan.None);
         Assert.NotEmpty(engine.Diagnostics);
     }
@@ -523,8 +523,8 @@ public class InferenceEngineTests
     {
         // With unified NominalType, same name = same type regardless of struct/enum origin
         var engine = CreateBareEngine();
-        var s = new NominalType("Foo");
-        var e = new NominalType("Foo");
+        var s = new NominalType("Foo", NominalKind.Struct);
+        var e = new NominalType("Foo", NominalKind.Struct);
         var result = engine.Unify(s, e, SourceSpan.None);
         Assert.Equal(s, result.Type);
         Assert.Empty(engine.Diagnostics);
@@ -620,7 +620,7 @@ public class InferenceEngineTests
     public void Unify_OptionWrapping_ValueToOption()
     {
         var engine = CreateEngine();
-        var optI32 = new NominalType(WellKnown.Option, [WellKnown.I32]);
+        var optI32 = new NominalType(WellKnown.Option, NominalKind.Struct, [WellKnown.I32]);
         var result = engine.Unify(WellKnown.I32, optI32, SourceSpan.None);
         Assert.Equal(optI32, result.Type);
         Assert.Equal(1, result.Cost);
@@ -631,7 +631,7 @@ public class InferenceEngineTests
     public void Unify_OptionWrapping_WrongInnerType_Fails()
     {
         var engine = CreateEngine();
-        var optBool = new NominalType(WellKnown.Option, [WellKnown.Bool]);
+        var optBool = new NominalType(WellKnown.Option, NominalKind.Struct, [WellKnown.Bool]);
         engine.Unify(WellKnown.I32, optBool, SourceSpan.None);
         Assert.NotEmpty(engine.Diagnostics);
     }
@@ -644,8 +644,8 @@ public class InferenceEngineTests
     public void Unify_StringToByteSlice()
     {
         var engine = CreateEngine();
-        var str = new NominalType(WellKnown.String);
-        var slice = new NominalType(WellKnown.Slice, [WellKnown.U8]);
+        var str = new NominalType(WellKnown.String, NominalKind.Struct);
+        var slice = new NominalType(WellKnown.Slice, NominalKind.Struct, [WellKnown.U8]);
         var result = engine.Unify(str, slice, SourceSpan.None);
         Assert.Equal(slice, result.Type);
         Assert.Equal(1, result.Cost);
@@ -656,8 +656,8 @@ public class InferenceEngineTests
     public void Unify_StringToNonByteSlice_Fails()
     {
         var engine = CreateEngine();
-        var str = new NominalType(WellKnown.String);
-        var slice = new NominalType(WellKnown.Slice, [WellKnown.I32]);
+        var str = new NominalType(WellKnown.String, NominalKind.Struct);
+        var slice = new NominalType(WellKnown.Slice, NominalKind.Struct, [WellKnown.I32]);
         engine.Unify(str, slice, SourceSpan.None);
         Assert.NotEmpty(engine.Diagnostics);
     }
@@ -671,7 +671,7 @@ public class InferenceEngineTests
     {
         var engine = CreateEngine();
         var arr = new ArrayType(WellKnown.I32, 5);
-        var slice = new NominalType(WellKnown.Slice, [WellKnown.I32]);
+        var slice = new NominalType(WellKnown.Slice, NominalKind.Struct, [WellKnown.I32]);
         var result = engine.Unify(arr, slice, SourceSpan.None);
         Assert.Equal(slice, result.Type);
         Assert.Equal(1, result.Cost);
@@ -683,7 +683,7 @@ public class InferenceEngineTests
     {
         var engine = CreateEngine();
         var refArr = new ReferenceType(new ArrayType(WellKnown.U8, 10));
-        var slice = new NominalType(WellKnown.Slice, [WellKnown.U8]);
+        var slice = new NominalType(WellKnown.Slice, NominalKind.Struct, [WellKnown.U8]);
         var result = engine.Unify(refArr, slice, SourceSpan.None);
         Assert.Equal(slice, result.Type);
         Assert.Equal(1, result.Cost);
@@ -707,7 +707,7 @@ public class InferenceEngineTests
     {
         var engine = CreateEngine();
         var arr = new ArrayType(WellKnown.I32, 5);
-        var slice = new NominalType(WellKnown.Slice, [WellKnown.Bool]);
+        var slice = new NominalType(WellKnown.Slice, NominalKind.Struct, [WellKnown.Bool]);
         engine.Unify(arr, slice, SourceSpan.None);
         Assert.NotEmpty(engine.Diagnostics);
     }
@@ -720,7 +720,7 @@ public class InferenceEngineTests
     public void Unify_SliceToReference()
     {
         var engine = CreateEngine();
-        var slice = new NominalType(WellKnown.Slice, [WellKnown.U8]);
+        var slice = new NominalType(WellKnown.Slice, NominalKind.Struct, [WellKnown.U8]);
         var refT = new ReferenceType(WellKnown.U8);
         var result = engine.Unify(slice, refT, SourceSpan.None);
         Assert.Equal(refT, result.Type);
@@ -732,7 +732,7 @@ public class InferenceEngineTests
     public void Unify_SliceToReference_ElementMismatch_Fails()
     {
         var engine = CreateEngine();
-        var slice = new NominalType(WellKnown.Slice, [WellKnown.U8]);
+        var slice = new NominalType(WellKnown.Slice, NominalKind.Struct, [WellKnown.U8]);
         var refT = new ReferenceType(WellKnown.I32);
         engine.Unify(slice, refT, SourceSpan.None);
         Assert.NotEmpty(engine.Diagnostics);
@@ -881,13 +881,13 @@ public class InferenceEngineTests
         engine.Unify(v, WellKnown.Bool, SourceSpan.None);
 
         var type = new FunctionType(
-            [new ReferenceType(v), new NominalType("List", [v])],
+            [new ReferenceType(v), new NominalType("List", NominalKind.Struct, [v])],
             new ArrayType(v, 3));
 
         var resolved = engine.Resolve(type);
         var fn = Assert.IsType<FunctionType>(resolved);
         Assert.Equal(new ReferenceType(WellKnown.Bool), fn.ParameterTypes[0]);
-        Assert.Equal(new NominalType("List", [WellKnown.Bool]), fn.ParameterTypes[1]);
+        Assert.Equal(new NominalType("List", NominalKind.Struct, [WellKnown.Bool]), fn.ParameterTypes[1]);
         Assert.Equal(new ArrayType(WellKnown.Bool, 3), fn.ReturnType);
     }
 
@@ -902,7 +902,7 @@ public class InferenceEngineTests
     public void Resolve_NoChangeNominal_ReturnsSameInstance()
     {
         var engine = CreateBareEngine();
-        var s = new NominalType("Point");
+        var s = new NominalType("Point", NominalKind.Struct);
         Assert.Same(s, engine.Resolve(s));
     }
 
@@ -1112,8 +1112,8 @@ public class InferenceEngineTests
         var engine = CreateBareEngine();
         var v = engine.FreshVar();
         engine.Unify(v, WellKnown.I64, SourceSpan.None);
-        var zonked = engine.Zonk(new NominalType("List", [v]));
-        Assert.Equal(new NominalType("List", [WellKnown.I64]), zonked);
+        var zonked = engine.Zonk(new NominalType("List", NominalKind.Struct, [v]));
+        Assert.Equal(new NominalType("List", NominalKind.Struct, [WellKnown.I64]), zonked);
     }
 
     [Fact]
@@ -1135,12 +1135,12 @@ public class InferenceEngineTests
         engine.Unify(v, WellKnown.U8, SourceSpan.None);
 
         var type = new FunctionType(
-            [new ReferenceType(new NominalType("Slice", [v]))],
+            [new ReferenceType(new NominalType("Slice", NominalKind.Struct, [v]))],
             new ArrayType(v, 2));
 
         var zonked = Assert.IsType<FunctionType>(engine.Zonk(type));
         Assert.Equal(
-            new ReferenceType(new NominalType("Slice", [WellKnown.U8])),
+            new ReferenceType(new NominalType("Slice", NominalKind.Struct, [WellKnown.U8])),
             zonked.ParameterTypes[0]);
         Assert.Equal(new ArrayType(WellKnown.U8, 2), zonked.ReturnType);
     }

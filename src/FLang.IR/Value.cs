@@ -18,10 +18,16 @@ public abstract class Value
     public string Name { get; protected init; } = "";
 
     /// <summary>
-    /// The type of this value, if known.
+    /// The type of this value, if known (old TypeBase pipeline).
     /// May be null during early IR construction before type inference completes.
     /// </summary>
     public TypeBase? Type { get; set; }
+
+    /// <summary>
+    /// The type of this value in the new IrType system (HM pipeline).
+    /// Set by HmAstLowering; null when using old pipeline.
+    /// </summary>
+    public IrType? IrType { get; set; }
 }
 
 /// <summary>
@@ -35,6 +41,13 @@ public class ConstantValue : Value
         IntValue = intValue;
         Name = intValue.ToString();
         Type = TypeRegistry.USize;
+    }
+
+    public ConstantValue(BigInteger intValue, IrType irType)
+    {
+        IntValue = intValue;
+        Name = intValue.ToString();
+        IrType = irType;
     }
 
     /// <summary>
@@ -105,9 +118,9 @@ public class GlobalValue : Value
         Name = name; // e.g., "LC0", "LC1"
         Initializer = initializer;
 
-        // Type is a pointer to the initializer's type
-        // Example: initializer is [5 x u8] → Type is &[u8; 5]
-        Type = new ReferenceType(initializer.Type!, PointerWidth.Bits64);
+        // Type is a pointer to the initializer's type (when available from old pipeline)
+        if (initializer.Type != null)
+            Type = new ReferenceType(initializer.Type, PointerWidth.Bits64);
     }
 
     /// <summary>
@@ -129,6 +142,28 @@ public class LocalValue : Value
         Name = name;
         Type = type;
     }
+
+    public LocalValue(string name, IrType irType)
+    {
+        Name = name;
+        IrType = irType;
+    }
+}
+
+/// <summary>
+/// Represents a reference to an entry in the module's string table.
+/// Codegen emits this as __flang__string_table[Index].
+/// </summary>
+public class StringTableValue : Value
+{
+    public StringTableValue(int index, IrType stringIrType)
+    {
+        Index = index;
+        Name = $"__flang__string_table[{index}]";
+        IrType = stringIrType;
+    }
+
+    public int Index { get; }
 }
 
 /// <summary>

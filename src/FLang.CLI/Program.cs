@@ -13,6 +13,7 @@ var releaseBuild = false;
 var findCompilersOnly = false;
 var debugLogging = false;
 var runTests = false;
+var useHm = false;
 
 for (var i = 0; i < args.Length; i++)
     if (args[i] == "--stdlib-path" && i + 1 < args.Length)
@@ -31,6 +32,8 @@ for (var i = 0; i < args.Length; i++)
         debugLogging = true;
     else if (args[i] == "--test")
         runTests = true;
+    else if (args[i] == "--use-hm")
+        useHm = true;
     else if (!args[i].StartsWith("-")) inputFilePath = args[i];
 
 if (demoDiagnostics)
@@ -55,6 +58,7 @@ if (inputFilePath == null)
     Console.WriteLine("  --emit-fir <file>       Emit FIR (intermediate representation) to file (use '-' for stdout)");
     Console.WriteLine("  --release               Enable C backend optimization (passes -O2 /O2)");
     Console.WriteLine("  --test                  Run test blocks instead of main()");
+    Console.WriteLine("  --use-hm                Use Hindley-Milner type checker pipeline");
     Console.WriteLine("  --debug-logging         Enable detailed logs for the compiler stages");
     Console.WriteLine("  --demo-diagnostics      Show diagnostic system demo");
     Console.WriteLine("  --find-compilers        Probe and list available C compilers on this machine, then exit");
@@ -89,7 +93,8 @@ var options = new CompilerOptions(
     ReleaseBuild: releaseBuild,
     EmitFir: emitFir,
     DebugLogging: debugLogging,
-    RunTests: runTests
+    RunTests: runTests,
+    UseHm: useHm
 );
 
 var result = compiler.Compile(options);

@@ -15,12 +15,10 @@ public partial class HmTypeChecker
         {
             NamedTypeNode named => ResolveNamedType(named),
             ReferenceTypeNode refType => new ReferenceType(ResolveTypeNode(refType.InnerType)),
-            NullableTypeNode nullable => new NominalType(WellKnown.Option,
-                [ResolveTypeNode(nullable.InnerType)]),
+            NullableTypeNode nullable => ResolveNullableType(nullable),
             GenericTypeNode generic => ResolveGenericType(generic),
             ArrayTypeNode array => new ArrayType(ResolveTypeNode(array.ElementType), array.Length),
-            SliceTypeNode slice => new NominalType(WellKnown.Slice,
-                [ResolveTypeNode(slice.ElementType)]),
+            SliceTypeNode slice => ResolveSliceType(slice),
             GenericParameterTypeNode genParam => ResolveGenericParam(genParam),
             FunctionTypeNode fnType => new FunctionType(
                 fnType.ParameterTypes.Select(ResolveTypeNode).ToArray(),
@@ -73,27 +71,29 @@ public partial class HmTypeChecker
         };
     }
 
+    private Type ResolveNullableType(NullableTypeNode nullable)
+    {
+        var innerType = ResolveTypeNode(nullable.InnerType);
+        var option = LookupNominalType(WellKnown.Option)
+            ?? throw new InvalidOperationException($"Well-known type `{WellKnown.Option}` not registered");
+        return new NominalType(option.Name, option.Kind, [innerType], option.FieldsOrVariants);
+    }
+
+    private Type ResolveSliceType(SliceTypeNode slice)
+    {
+        var elementType = ResolveTypeNode(slice.ElementType);
+        var sliceNominal = LookupNominalType(WellKnown.Slice)
+            ?? throw new InvalidOperationException($"Well-known type `{WellKnown.Slice}` not registered");
+        return new NominalType(sliceNominal.Name, sliceNominal.Kind, [elementType], sliceNominal.FieldsOrVariants);
+    }
+
     private Type ResolveGenericType(GenericTypeNode generic)
     {
         var typeArgs = generic.TypeArguments.Select(ResolveTypeNode).ToArray();
 
-        // Check for well-known generic types
-        var name = generic.Name switch
-        {
-            "Option" => WellKnown.Option,
-            "Slice" => WellKnown.Slice,
-            "Range" => WellKnown.Range,
-            "Type" => WellKnown.TypeInfo,
-            _ => null
-        };
-
-        if (name != null)
-            return new NominalType(name, typeArgs);
-
-        // Look up user-defined generic nominal type
         var nominal = LookupNominalType(generic.Name);
         if (nominal != null)
-            return new NominalType(nominal.Name, typeArgs, nominal.FieldsOrVariants);
+            return new NominalType(nominal.Name, nominal.Kind, typeArgs, nominal.FieldsOrVariants);
 
         ReportError($"Unknown generic type `{generic.Name}`", generic.Span, "E2003");
         return _engine.FreshVar();
@@ -118,6 +118,6 @@ public partial class HmTypeChecker
 
         // Anonymous structs get a synthetic name based on field structure
         var name = $"__anon_{string.Join("_", fields.Select(f => f.FieldName))}";
-        return new NominalType(name, [], fields);
+        return new NominalType(name, NominalKind.Struct, [], fields);
     }
 }

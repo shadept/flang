@@ -11,61 +11,62 @@ namespace FLang.Semantics;
 public partial class HmTypeChecker
 {
     // =========================================================================
-    // Phase 1: Collect struct names (placeholder NominalTypes, no fields yet)
+    // Phase 1: Collect nominal type names (placeholder NominalTypes, no fields)
     // =========================================================================
 
-    public void CollectStructNames(ModuleNode module, string modulePath)
+    public void CollectNominalTypes(ModuleNode module, string modulePath)
     {
         _currentModulePath = modulePath;
+
         foreach (var structDecl in module.Structs)
         {
             var fqn = $"{modulePath}.{structDecl.Name}";
             if (_nominalTypes.ContainsKey(fqn))
             {
-                ReportError($"Duplicate struct declaration `{structDecl.Name}`", structDecl.Span, "E2005");
+                var diag = Diagnostic.Error($"Duplicate type declaration `{structDecl.Name}`", structDecl.Span, code: "E2005");
+                if (_nominalSpans.TryGetValue(fqn, out var originalSpan))
+                    diag.Notes.Add(Diagnostic.Info($"`{structDecl.Name}` first declared here", originalSpan));
+                _diagnostics.Add(diag);
                 continue;
             }
 
-            // Placeholder — fields resolved later. Type args are empty for now.
-            var placeholder = new NominalType(fqn);
+            var placeholder = new NominalType(fqn, NominalKind.Struct);
             _nominalTypes[fqn] = placeholder;
+            _nominalSpans[fqn] = structDecl.Span;
         }
-    }
 
-    // =========================================================================
-    // Phase 2: Collect enum names (placeholder NominalTypes, no variants yet)
-    // =========================================================================
-
-    public void CollectEnumNames(ModuleNode module, string modulePath)
-    {
-        _currentModulePath = modulePath;
         foreach (var enumDecl in module.Enums)
         {
             var fqn = $"{modulePath}.{enumDecl.Name}";
             if (_nominalTypes.ContainsKey(fqn))
             {
-                ReportError($"Duplicate enum declaration `{enumDecl.Name}`", enumDecl.Span, "E2005");
+                var diag = Diagnostic.Error($"Duplicate type declaration `{enumDecl.Name}`", enumDecl.Span, code: "E2005");
+                if (_nominalSpans.TryGetValue(fqn, out var originalSpan))
+                    diag.Notes.Add(Diagnostic.Info($"`{enumDecl.Name}` first declared here", originalSpan));
+                _diagnostics.Add(diag);
                 continue;
             }
 
-            var placeholder = new NominalType(fqn);
+            var placeholder = new NominalType(fqn, NominalKind.Enum);
             _nominalTypes[fqn] = placeholder;
+            _nominalSpans[fqn] = enumDecl.Span;
         }
     }
 
     // =========================================================================
-    // Phase 3: Resolve struct fields
+    // Phase 2: Resolve nominal type fields and variants
     // =========================================================================
 
-    public void ResolveStructFields(ModuleNode module, string modulePath)
+    public void ResolveNominalTypes(ModuleNode module, string modulePath)
     {
         _currentModulePath = modulePath;
+
+        // Resolve struct fields
         foreach (var structDecl in module.Structs)
         {
             var fqn = $"{modulePath}.{structDecl.Name}";
             if (!_nominalTypes.ContainsKey(fqn)) continue;
 
-            // If generic, bind type params as TypeVars in scope
             _scopes.PushScope();
             var typeArgs = BindTypeParameters(structDecl.TypeParameters);
 
@@ -78,24 +79,15 @@ public partial class HmTypeChecker
 
             _scopes.PopScope();
 
-            // Replace placeholder with fully resolved NominalType
-            _nominalTypes[fqn] = new NominalType(fqn, typeArgs, fields);
+            _nominalTypes[fqn] = new NominalType(fqn, NominalKind.Struct, typeArgs, fields);
         }
-    }
 
-    // =========================================================================
-    // Phase 4: Resolve enum variants
-    // =========================================================================
-
-    public void ResolveEnumVariants(ModuleNode module, string modulePath)
-    {
-        _currentModulePath = modulePath;
+        // Resolve enum variants
         foreach (var enumDecl in module.Enums)
         {
             var fqn = $"{modulePath}.{enumDecl.Name}";
             if (!_nominalTypes.ContainsKey(fqn)) continue;
 
-            // Bind type params
             _scopes.PushScope();
             var typeArgs = BindTypeParameters(enumDecl.TypeParameters);
 
@@ -105,7 +97,6 @@ public partial class HmTypeChecker
                 var variant = enumDecl.Variants[i];
                 if (variant.PayloadTypes.Count == 0)
                 {
-                    // Payload-less variant: void sentinel
                     variants[i] = (variant.Name, WellKnown.Void);
                 }
                 else if (variant.PayloadTypes.Count == 1)
@@ -114,22 +105,19 @@ public partial class HmTypeChecker
                 }
                 else
                 {
-                    // Multi-payload: create anonymous tuple type
                     var payloadFields = variant.PayloadTypes
                         .Select((pt, idx) => ($"_{idx}", ResolveTypeNode(pt)))
                         .ToArray();
                     var tupleName = $"__tuple_{variant.PayloadTypes.Count}";
-                    variants[i] = (variant.Name, new NominalType(tupleName, [], payloadFields));
+                    variants[i] = (variant.Name, new NominalType(tupleName, NominalKind.Struct, [], payloadFields));
                 }
             }
 
             _scopes.PopScope();
 
-            // Replace placeholder
-            var enumType = new NominalType(fqn, typeArgs, variants);
+            var enumType = new NominalType(fqn, NominalKind.Enum, typeArgs, variants);
             _nominalTypes[fqn] = enumType;
 
-            // Bind variant constructors in scope
             BindVariantConstructors(enumDecl, enumType, typeArgs);
         }
     }
@@ -196,20 +184,13 @@ public partial class HmTypeChecker
 
     private void CollectFunctionSignature(FunctionDeclarationNode fn, string modulePath)
     {
-        var isGeneric = fn.Parameters.Any(p => ContainsGenericParam(p.Type));
-
         _engine.EnterLevel();
         _scopes.PushScope();
 
         // Bind generic type parameters as TypeVars
-        var genericTypeVars = new List<TypeVar>();
-        var genericNames = CollectGenericParamNames(fn);
+        var genericNames = fn.GetGenericParamNames();
         foreach (var name in genericNames)
-        {
-            var tv = _engine.FreshVar();
-            genericTypeVars.Add(tv);
-            _scopes.Bind(name, new PolymorphicType(tv));
-        }
+            _scopes.Bind(name, _engine.FreshVar());
 
         // Resolve parameter types
         var paramTypes = new Type[fn.Parameters.Count];
@@ -222,6 +203,9 @@ public partial class HmTypeChecker
             : WellKnown.Void;
 
         var fnType = new FunctionType(paramTypes, returnType);
+
+        // Record function type on declaration node for lowering
+        Record(fn, fnType);
 
         _scopes.PopScope();
         _engine.ExitLevel();
@@ -250,7 +234,7 @@ public partial class HmTypeChecker
         // Check non-generic function bodies
         foreach (var fn in module.Functions)
         {
-            if (IsGenericFunctionDecl(fn)) continue;
+            if (fn.IsGeneric) continue;
             if (fn.Modifiers.HasFlag(FunctionModifiers.Foreign)) continue;
             CheckFunctionBody(fn);
         }
@@ -283,6 +267,9 @@ public partial class HmTypeChecker
             return;
         }
 
+        // Record the function type on the declaration node for lowering
+        Record(fn, fnType);
+
         // Push function context for return type checking
         _functionStack.Push(new FunctionContext(fn, fnType.ReturnType));
 
@@ -291,7 +278,7 @@ public partial class HmTypeChecker
         {
             var param = fn.Parameters[i];
             var paramType = fnType.ParameterTypes[i];
-            _scopes.Bind(param.Name, new PolymorphicType(paramType));
+            _scopes.Bind(param.Name, paramType);
             Record(param, paramType);
         }
 
@@ -329,65 +316,9 @@ public partial class HmTypeChecker
         {
             var tv = _engine.FreshVar();
             typeArgs[i] = tv;
-            _scopes.Bind(typeParamNames[i], new PolymorphicType(tv));
+            _scopes.Bind(typeParamNames[i], tv);
         }
         return typeArgs;
     }
 
-    /// <summary>
-    /// Collect generic parameter names ($T) from a function's parameter types.
-    /// </summary>
-    private static HashSet<string> CollectGenericParamNames(FunctionDeclarationNode fn)
-    {
-        var names = new HashSet<string>();
-        foreach (var param in fn.Parameters)
-            CollectGenericParamNamesFromTypeNode(param.Type, names);
-        if (fn.ReturnType != null)
-            CollectGenericParamNamesFromTypeNode(fn.ReturnType, names);
-        return names;
-    }
-
-    private static void CollectGenericParamNamesFromTypeNode(
-        FLang.Frontend.Ast.Types.TypeNode typeNode, HashSet<string> names)
-    {
-        switch (typeNode)
-        {
-            case FLang.Frontend.Ast.Types.GenericParameterTypeNode gp:
-                names.Add(gp.Name);
-                break;
-            case FLang.Frontend.Ast.Types.ReferenceTypeNode rt:
-                CollectGenericParamNamesFromTypeNode(rt.InnerType, names);
-                break;
-            case FLang.Frontend.Ast.Types.NullableTypeNode nt:
-                CollectGenericParamNamesFromTypeNode(nt.InnerType, names);
-                break;
-            case FLang.Frontend.Ast.Types.ArrayTypeNode at:
-                CollectGenericParamNamesFromTypeNode(at.ElementType, names);
-                break;
-            case FLang.Frontend.Ast.Types.SliceTypeNode st:
-                CollectGenericParamNamesFromTypeNode(st.ElementType, names);
-                break;
-            case FLang.Frontend.Ast.Types.GenericTypeNode gt:
-                foreach (var ta in gt.TypeArguments)
-                    CollectGenericParamNamesFromTypeNode(ta, names);
-                break;
-            case FLang.Frontend.Ast.Types.FunctionTypeNode ft:
-                foreach (var pt in ft.ParameterTypes)
-                    CollectGenericParamNamesFromTypeNode(pt, names);
-                CollectGenericParamNamesFromTypeNode(ft.ReturnType, names);
-                break;
-        }
-    }
-
-    private static bool ContainsGenericParam(FLang.Frontend.Ast.Types.TypeNode typeNode)
-    {
-        var names = new HashSet<string>();
-        CollectGenericParamNamesFromTypeNode(typeNode, names);
-        return names.Count > 0;
-    }
-
-    private static bool IsGenericFunctionDecl(FunctionDeclarationNode fn)
-    {
-        return fn.Parameters.Any(p => ContainsGenericParam(p.Type));
-    }
 }
