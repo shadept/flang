@@ -3,6 +3,7 @@ using FLang.Core.Types;
 using FLang.Frontend.Ast;
 using FLang.Frontend.Ast.Declarations;
 using FLang.Frontend.Ast.Expressions;
+using FLang.Frontend.Ast.Statements;
 using FLang.Frontend.Ast.Types;
 using ArrayType = FLang.Core.Types.ArrayType;
 using FunctionType = FLang.Core.Types.FunctionType;
@@ -79,13 +80,13 @@ public partial class HmTypeChecker
     private NominalType InferStringLiteral()
     {
         return LookupNominalType(WellKnown.String)
-            ?? throw new InvalidOperationException($"Well-known type `{WellKnown.String}` not registered");
+               ?? throw new InvalidOperationException($"Well-known type `{WellKnown.String}` not registered");
     }
 
     private NominalType InferNullLiteral()
     {
         var option = LookupNominalType(WellKnown.Option)
-            ?? throw new InvalidOperationException($"Well-known type `{WellKnown.Option}` not registered");
+                     ?? throw new InvalidOperationException($"Well-known type `{WellKnown.Option}` not registered");
         return new NominalType(option.Name, option.Kind, [_engine.FreshVar()], option.FieldsOrVariants);
     }
 
@@ -133,12 +134,15 @@ public partial class HmTypeChecker
 
         // Try user-defined operator function
         var opName = OperatorFunctions.GetFunctionName(bin.Operator);
-        var opResult = TryResolveOperatorFunction(opName, [left, right], bin.Span);
+        var opResult = TryResolveOperatorFunction(opName, [left, right], bin.Span, out var resolvedNode);
         if (opResult != null)
+        {
+            _resolvedOperators[bin] = new ResolvedOperator(resolvedNode!);
             return opResult;
+        }
 
         // Try derived operators: op_ne from op_eq, comparisons from op_cmp
-        var derivedResult = TryResolveDerivedOperator(bin.Operator, left, right, bin.Span);
+        var derivedResult = TryResolveDerivedOperator(bin, left, right, bin.Span);
         if (derivedResult != null)
             return derivedResult;
 
@@ -191,29 +195,41 @@ public partial class HmTypeChecker
     /// <summary>
     /// Try to resolve a derived operator (e.g., != from ==, &lt; from op_cmp).
     /// </summary>
-    private PrimitiveType? TryResolveDerivedOperator(BinaryOperatorKind op, Type left, Type right, SourceSpan span)
+    private PrimitiveType? TryResolveDerivedOperator(BinaryExpressionNode bin, Type left, Type right, SourceSpan span)
     {
-        switch (op)
+        switch (bin.Operator)
         {
             case BinaryOperatorKind.NotEqual:
+            {
+                var eq = TryResolveOperatorFunction("op_eq", [left, right], span, out var eqNode);
+                if (eq != null)
                 {
-                    var eq = TryResolveOperatorFunction("op_eq", [left, right], span);
-                    if (eq != null) return WellKnown.Bool;
-                    return null;
+                    _resolvedOperators[bin] = new ResolvedOperator(eqNode!, NegateResult: true);
+                    return WellKnown.Bool;
                 }
+                return null;
+            }
             case BinaryOperatorKind.Equal:
+            {
+                var ne = TryResolveOperatorFunction("op_ne", [left, right], span, out var neNode);
+                if (ne != null)
                 {
-                    var ne = TryResolveOperatorFunction("op_ne", [left, right], span);
-                    if (ne != null) return WellKnown.Bool;
-                    return null;
+                    _resolvedOperators[bin] = new ResolvedOperator(neNode!, NegateResult: true);
+                    return WellKnown.Bool;
                 }
+                return null;
+            }
             case BinaryOperatorKind.LessThan or BinaryOperatorKind.GreaterThan or
                 BinaryOperatorKind.LessThanOrEqual or BinaryOperatorKind.GreaterThanOrEqual:
+            {
+                var cmp = TryResolveOperatorFunction("op_cmp", [left, right], span, out var cmpNode);
+                if (cmp != null)
                 {
-                    var cmp = TryResolveOperatorFunction("op_cmp", [left, right], span);
-                    if (cmp != null) return WellKnown.Bool;
-                    return null;
+                    _resolvedOperators[bin] = new ResolvedOperator(cmpNode!, CmpDerivedOperator: bin.Operator);
+                    return WellKnown.Bool;
                 }
+                return null;
+            }
             default:
                 return null;
         }
@@ -237,9 +253,12 @@ public partial class HmTypeChecker
 
         // Try operator function
         var opName = OperatorFunctions.GetFunctionName(un.Operator);
-        var opResult = TryResolveOperatorFunction(opName, [operand], un.Span);
+        var opResult = TryResolveOperatorFunction(opName, [operand], un.Span, out var resolvedNode);
         if (opResult != null)
+        {
+            _resolvedOperators[un] = new ResolvedOperator(resolvedNode!);
             return opResult;
+        }
 
         // Built-in negate: same type
         if (un.Operator == UnaryOperatorKind.Negate)
@@ -272,6 +291,7 @@ public partial class HmTypeChecker
         FunctionScheme? bestCandidate = null;
         int bestCost = int.MaxValue;
         bool bestIsGeneric = true;
+        bool[]? bestAdapted = null;
 
         foreach (var candidate in candidates)
         {
@@ -280,12 +300,24 @@ public partial class HmTypeChecker
             if (fnType == null) continue;
             if (fnType.ParameterTypes.Count != argTypes.Length) continue;
 
-            // Try speculative unification
+            // Try speculative unification with auto-ref-lifting
             int totalCost = 0;
             bool success = true;
+            var adapted = new bool[argTypes.Length];
             for (int i = 0; i < argTypes.Length; i++)
             {
                 var result = _engine.TryUnify(argTypes[i], fnType.ParameterTypes[i]);
+                if (result == null)
+                {
+                    // Auto-lift: value T → &T when param expects a reference
+                    var resolvedArg = _engine.Resolve(argTypes[i]);
+                    if (resolvedArg is not ReferenceType)
+                    {
+                        var refArg = new ReferenceType(resolvedArg);
+                        result = _engine.TryUnify(refArg, fnType.ParameterTypes[i]);
+                        if (result != null) adapted[i] = true;
+                    }
+                }
                 if (result == null)
                 {
                     success = false;
@@ -305,12 +337,14 @@ public partial class HmTypeChecker
                 bestCandidate = candidate;
                 bestCost = totalCost;
                 bestIsGeneric = false;
+                bestAdapted = adapted;
             }
             else if (isGeneric == bestIsGeneric && totalCost < bestCost)
             {
                 bestCandidate = candidate;
                 bestCost = totalCost;
                 bestIsGeneric = isGeneric;
+                bestAdapted = adapted;
             }
         }
 
@@ -322,7 +356,12 @@ public partial class HmTypeChecker
         if (winnerFn == null) return null;
 
         for (int i = 0; i < argTypes.Length; i++)
-            _engine.Unify(argTypes[i], winnerFn.ParameterTypes[i], span);
+        {
+            var arg = bestAdapted != null && bestAdapted[i]
+                ? (Type)new ReferenceType(_engine.Resolve(argTypes[i]))
+                : argTypes[i];
+            _engine.Unify(arg, winnerFn.ParameterTypes[i], span);
+        }
 
         resolvedNode = bestCandidate.Node;
         return winnerFn.ReturnType;
@@ -731,12 +770,15 @@ public partial class HmTypeChecker
 
         // Try op_set_index(&base, index, value) first, then op_set_index(base, index, value)
         var refBaseType = new ReferenceType(baseType);
-        var opResult = TryResolveOperatorFunction("op_set_index", [refBaseType, indexType, valueType], assign.Span);
+        var opResult = TryResolveOperatorFunction("op_set_index", [refBaseType, indexType, valueType], assign.Span, out var setNode);
         if (opResult == null)
-            opResult = TryResolveOperatorFunction("op_set_index", [baseType, indexType, valueType], assign.Span);
+            opResult = TryResolveOperatorFunction("op_set_index", [baseType, indexType, valueType], assign.Span, out setNode);
 
         if (opResult != null)
+        {
+            _resolvedOperators[assign] = new ResolvedOperator(setNode!);
             return WellKnown.Void;
+        }
 
         // Built-in array/slice indexed assignment
         var resolvedBase = _engine.Resolve(baseType);
@@ -937,10 +979,13 @@ public partial class HmTypeChecker
         var baseType = InferExpression(idx.Base);
         var indexType = InferExpression(idx.Index);
 
-        // Try op_index first
-        var opResult = TryResolveOperatorFunction("op_index", [baseType, indexType], idx.Span);
+        // Try op_index — auto-ref-lifting handled by TryResolveOperatorFunction
+        var opResult = TryResolveOperatorFunction("op_index", [baseType, indexType], idx.Span, out var resolvedNode);
         if (opResult != null)
+        {
+            _resolvedOperators[idx] = new ResolvedOperator(resolvedNode!);
             return opResult;
+        }
 
         // Built-in array/slice indexing
         var resolvedBase = _engine.Resolve(baseType);
@@ -1000,7 +1045,8 @@ public partial class HmTypeChecker
         }
 
         var rangeNominal = LookupNominalType(WellKnown.Range)
-            ?? throw new InvalidOperationException($"Well-known type `{WellKnown.Range}` not registered");
+                           ?? throw new InvalidOperationException(
+                               $"Well-known type `{WellKnown.Range}` not registered");
         return new NominalType(rangeNominal.Name, rangeNominal.Kind, [elemType], rangeNominal.FieldsOrVariants);
     }
 
@@ -1012,9 +1058,10 @@ public partial class HmTypeChecker
     {
         _scopes.PushScope();
 
-        // Determine parameter types from annotations or FreshVar
+        // 1. Resolve parameter types from annotations or FreshVar
         var paramTypes = new Type[lambda.Parameters.Count];
-        for (int i = 0; i < lambda.Parameters.Count; i++)
+        var paramNodes = new List<FunctionParameterNode>();
+        for (var i = 0; i < lambda.Parameters.Count; i++)
         {
             var param = lambda.Parameters[i];
             paramTypes[i] = param.Type != null
@@ -1022,24 +1069,66 @@ public partial class HmTypeChecker
                 : _engine.FreshVar();
 
             _scopes.Bind(param.Name, paramTypes[i]);
+
+            // Create FunctionParameterNode for synthesized function
+            var typeNode = param.Type ?? new NamedTypeNode(param.Span, "_inferred");
+            paramNodes.Add(new FunctionParameterNode(param.Span, param.Name, typeNode));
         }
 
-        // Determine return type
-        Type returnType = lambda.ReturnType != null
+        // 2. Resolve return type
+        var returnType = lambda.ReturnType != null
             ? ResolveTypeNode(lambda.ReturnType)
             : _engine.FreshVar();
 
-        // Push function context for return statements inside lambda
-        _functionStack.Push(new FunctionContext(null!, returnType));
+        // 3. Synthesize a FunctionDeclarationNode
+        var lambdaName = $"__lambda_{_nextLambdaId++}";
+        var synthesized = new FunctionDeclarationNode(lambda.Span, lambdaName, paramNodes, lambda.ReturnType, lambda.Body);
+
+        // 4. Push function context for return statements inside lambda
+        _functionStack.Push(new FunctionContext(synthesized, returnType));
 
         // Check body statements
         foreach (var stmt in lambda.Body)
             CheckStatement(stmt);
 
+        // 5. Implicit return: rewrite tail expression to return statement
+        if (lambda.Body.Count > 0
+            && lambda.Body[^1] is ExpressionStatementNode tailExpr
+            && lambda.Body is List<StatementNode> bodyList)
+        {
+            var returnStmt = new ReturnStatementNode(tailExpr.Span, tailExpr.Expression);
+            bodyList[^1] = returnStmt;
+            // Unify tail expression type with return type
+            var tailType = _checker_GetInferredTypeOrFresh(tailExpr.Expression);
+            _engine.Unify(tailType, returnType, tailExpr.Span);
+        }
+
         _functionStack.Pop();
         _scopes.PopScope();
 
-        return new FunctionType(paramTypes, returnType);
+        // 6. Record inferred types on synthesized function parameters
+        for (var i = 0; i < paramNodes.Count; i++)
+            Record(paramNodes[i], paramTypes[i]);
+
+        // Record the synthesized function itself with its function type
+        var fnType = new FunctionType(paramTypes, returnType);
+        Record(synthesized, fnType);
+
+        // 7. Set lambda.SynthesizedFunction and register in _specializations
+        lambda.SynthesizedFunction = synthesized;
+        _specializations.Add(synthesized);
+
+        return fnType;
+    }
+
+    /// <summary>
+    /// Get the inferred type for an expression node, or return a fresh var if not yet recorded.
+    /// </summary>
+    private Type _checker_GetInferredTypeOrFresh(ExpressionNode expr)
+    {
+        if (_inferredTypes.TryGetValue(expr, out var type))
+            return type;
+        return _engine.FreshVar();
     }
 
     // =========================================================================
@@ -1063,9 +1152,12 @@ public partial class HmTypeChecker
 
         // Try op_coalesce
         var rightType2 = InferExpression(coal.Right);
-        var opResult = TryResolveOperatorFunction("op_coalesce", [leftType, rightType2], coal.Span);
+        var opResult = TryResolveOperatorFunction("op_coalesce", [leftType, rightType2], coal.Span, out var resolvedNode);
         if (opResult != null)
+        {
+            _resolvedOperators[coal] = new ResolvedOperator(resolvedNode!);
             return opResult;
+        }
 
         ReportError("Left operand of `??` must be Option type", coal.Span);
         return _engine.FreshVar();
@@ -1094,7 +1186,8 @@ public partial class HmTypeChecker
                 if (field != default)
                 {
                     var opt = LookupNominalType(WellKnown.Option)
-                        ?? throw new InvalidOperationException($"Well-known type `{WellKnown.Option}` not registered");
+                              ?? throw new InvalidOperationException(
+                                  $"Well-known type `{WellKnown.Option}` not registered");
                     return new NominalType(opt.Name, opt.Kind, [field.Type], opt.FieldsOrVariants);
                 }
 

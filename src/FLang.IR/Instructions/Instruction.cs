@@ -1,3 +1,5 @@
+using FLang.Core;
+
 namespace FLang.IR.Instructions;
 
 /// <summary>
@@ -8,4 +10,14 @@ namespace FLang.IR.Instructions;
 /// </summary>
 public abstract class Instruction
 {
+    protected Instruction(SourceSpan span)
+    {
+        Span = span;
+    }
+
+    /// <summary>
+    /// The source location this instruction originated from.
+    /// Used by the C code generator to emit #line directives.
+    /// </summary>
+    public SourceSpan Span { get; }
 }

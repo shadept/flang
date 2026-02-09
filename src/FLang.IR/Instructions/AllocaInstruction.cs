@@ -10,7 +10,8 @@ namespace FLang.IR.Instructions;
 /// </summary>
 public class AllocaInstruction : Instruction
 {
-    public AllocaInstruction(TypeBase allocatedType, int sizeInBytes, Value result)
+    public AllocaInstruction(SourceSpan span, TypeBase allocatedType, int sizeInBytes, Value result)
+        : base(span)
     {
         AllocatedType = allocatedType;
         SizeInBytes = sizeInBytes;

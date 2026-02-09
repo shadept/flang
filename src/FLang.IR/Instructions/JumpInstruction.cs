@@ -1,3 +1,5 @@
+using FLang.Core;
+
 namespace FLang.IR.Instructions;
 
 /// <summary>
@@ -6,7 +8,8 @@ namespace FLang.IR.Instructions;
 /// </summary>
 public class JumpInstruction : Instruction
 {
-    public JumpInstruction(BasicBlock targetBlock)
+    public JumpInstruction(SourceSpan span, BasicBlock targetBlock)
+        : base(span)
     {
         TargetBlock = targetBlock;
     }

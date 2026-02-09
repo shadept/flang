@@ -1,3 +1,5 @@
+using FLang.Core;
+
 namespace FLang.IR.Instructions;
 
 /// <summary>
@@ -18,7 +20,8 @@ public enum UnaryOp
 /// </summary>
 public class UnaryInstruction : Instruction
 {
-    public UnaryInstruction(UnaryOp operation, Value operand, Value result)
+    public UnaryInstruction(SourceSpan span, UnaryOp operation, Value operand, Value result)
+        : base(span)
     {
         Operation = operation;
         Operand = operand;

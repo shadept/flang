@@ -1,3 +1,5 @@
+using FLang.Core;
+
 namespace FLang.IR.Instructions;
 
 /// <summary>
@@ -6,7 +8,8 @@ namespace FLang.IR.Instructions;
 /// </summary>
 public class ReturnInstruction : Instruction
 {
-    public ReturnInstruction(Value value)
+    public ReturnInstruction(SourceSpan span, Value value)
+        : base(span)
     {
         Value = value;
     }

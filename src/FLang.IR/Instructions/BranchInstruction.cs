@@ -1,3 +1,5 @@
+using FLang.Core;
+
 namespace FLang.IR.Instructions;
 
 /// <summary>
@@ -7,7 +9,8 @@ namespace FLang.IR.Instructions;
 /// </summary>
 public class BranchInstruction : Instruction
 {
-    public BranchInstruction(Value condition, BasicBlock trueBlock, BasicBlock falseBlock)
+    public BranchInstruction(SourceSpan span, Value condition, BasicBlock trueBlock, BasicBlock falseBlock)
+        : base(span)
     {
         Condition = condition;
         TrueBlock = trueBlock;

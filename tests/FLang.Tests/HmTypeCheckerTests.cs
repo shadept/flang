@@ -1,8 +1,10 @@
+using FLang.CLI;
 using FLang.Core;
 using FLang.Core.Types;
 using FLang.Frontend;
 using FLang.Frontend.Ast.Declarations;
 using FLang.Semantics;
+using Microsoft.Extensions.Logging.Abstractions;
 using ArrayType = FLang.Core.Types.ArrayType;
 using FunctionType = FLang.Core.Types.FunctionType;
 using ReferenceType = FLang.Core.Types.ReferenceType;
@@ -16,23 +18,65 @@ public class HmTypeCheckerTests
     // Parse helper: parse FLang source → run type checker → return results
     // =========================================================================
 
+    private static readonly string AssemblyPath = Path.GetDirectoryName(typeof(HmTypeCheckerTests).Assembly.Location)!;
+    private static readonly string ProjectRoot = Path.GetFullPath(Path.Combine(AssemblyPath, "..", "..", "..", "..", ".."));
+    private static readonly string StdlibPath = Path.Combine(ProjectRoot, "stdlib");
+
     /// <summary>
     /// Parse FLang source code and run the HM type checker.
+    /// Loads prelude + stdlib so types like String, Option, Range are available.
     /// Returns the checker (with inferred types map) and diagnostics.
     /// </summary>
     private static (HmTypeChecker Checker, List<Diagnostic> Diagnostics) Check(string source)
     {
-        var compilation = new Compilation();
-        var src = new Source(source, "test.f");
-        var fileId = compilation.AddSource(src);
-        var lexer = new Lexer(src, fileId);
-        var parser = new Parser(lexer);
-        var module = parser.ParseModule();
+        var tempFile = Path.GetTempFileName() + ".f";
+        File.WriteAllText(tempFile, source);
 
-        var checker = new HmTypeChecker(compilation);
-        checker.CheckModule(module, "test");
+        try
+        {
+            var compilation = new Compilation();
+            compilation.StdlibPath = StdlibPath;
+            compilation.WorkingDirectory = Path.GetDirectoryName(tempFile)!;
+            compilation.IncludePaths.Add(StdlibPath);
 
-        return (checker, checker.Diagnostics.ToList());
+            // Load prelude + transitive imports (same as real compiler)
+            var moduleCompiler = new ModuleCompiler(compilation, NullLogger<ModuleCompiler>.Instance);
+            var parsedModules = moduleCompiler.CompileModules(tempFile);
+
+            // Run full 4-phase HM type checking across all modules
+            var checker = new HmTypeChecker(compilation);
+            foreach (var kvp in parsedModules)
+            {
+                var modulePath = HmTypeChecker.DeriveModulePath(
+                    kvp.Key, compilation.IncludePaths, compilation.WorkingDirectory);
+                checker.CollectNominalTypes(kvp.Value, modulePath);
+            }
+            foreach (var kvp in parsedModules)
+            {
+                var modulePath = HmTypeChecker.DeriveModulePath(
+                    kvp.Key, compilation.IncludePaths, compilation.WorkingDirectory);
+                checker.ResolveNominalTypes(kvp.Value, modulePath);
+            }
+            foreach (var kvp in parsedModules)
+            {
+                var modulePath = HmTypeChecker.DeriveModulePath(
+                    kvp.Key, compilation.IncludePaths, compilation.WorkingDirectory);
+                checker.CollectFunctionSignatures(kvp.Value, modulePath);
+            }
+            foreach (var kvp in parsedModules)
+            {
+                var modulePath = HmTypeChecker.DeriveModulePath(
+                    kvp.Key, compilation.IncludePaths, compilation.WorkingDirectory);
+                checker.CheckModuleBodies(kvp.Value, modulePath);
+            }
+
+            var allDiags = checker.Diagnostics.Concat(moduleCompiler.Diagnostics).ToList();
+            return (checker, allDiags);
+        }
+        finally
+        {
+            File.Delete(tempFile);
+        }
     }
 
     /// <summary>
@@ -73,6 +117,23 @@ public class HmTypeCheckerTests
                 return type;
         }
         return null;
+    }
+
+    /// <summary>
+    /// Find a nominal type by short name (ignoring module path prefix).
+    /// </summary>
+    private static NominalType FindNominal(HmTypeChecker checker, string shortName)
+    {
+        var match = checker.NominalTypes.Values
+            .FirstOrDefault(nt =>
+            {
+                var name = nt.Name;
+                var dot = name.LastIndexOf('.');
+                var sn = dot >= 0 ? name[(dot + 1)..] : name;
+                return sn == shortName;
+            });
+        Assert.NotNull(match);
+        return match;
     }
 
     // =========================================================================
@@ -343,7 +404,7 @@ public class HmTypeCheckerTests
         Assert.NotNull(t);
         Assert.IsType<NominalType>(t);
         var nominal = (NominalType)t;
-        Assert.Equal("test.Point", nominal.Name);
+        Assert.EndsWith("Point", nominal.Name);
     }
 
     [Fact]
@@ -655,8 +716,8 @@ public class HmTypeCheckerTests
                 B
             }
             """);
-        Assert.True(checker.NominalTypes.ContainsKey("test.Foo"));
-        Assert.True(checker.NominalTypes.ContainsKey("test.Bar"));
+        FindNominal(checker, "Foo");
+        FindNominal(checker, "Bar");
     }
 
     [Fact]
@@ -668,7 +729,7 @@ public class HmTypeCheckerTests
                 y: i32
             }
             """);
-        var vec2 = checker.NominalTypes["test.Vec2"];
+        var vec2 = FindNominal(checker, "Vec2");
         Assert.Equal(2, vec2.FieldsOrVariants.Count);
         Assert.Equal("x", vec2.FieldsOrVariants[0].Name);
         Assert.Equal(WellKnown.I32, vec2.FieldsOrVariants[0].Type);
@@ -686,7 +747,7 @@ public class HmTypeCheckerTests
                 Right
             }
             """);
-        var dir = checker.NominalTypes["test.Direction"];
+        var dir = FindNominal(checker, "Direction");
         Assert.Equal(4, dir.FieldsOrVariants.Count);
         // Payload-less variants use void sentinel
         Assert.All(dir.FieldsOrVariants, v => Assert.Equal(WellKnown.Void, v.Type));
@@ -1148,7 +1209,7 @@ public class HmTypeCheckerTests
         var t = FindVarType(checker, "c");
         Assert.NotNull(t);
         Assert.IsType<NominalType>(t);
-        Assert.Equal("test.Vec2", ((NominalType)t).Name);
+        Assert.EndsWith("Vec2", ((NominalType)t).Name);
     }
 
     [Fact]
@@ -1596,7 +1657,7 @@ public class HmTypeCheckerTests
             }
             """);
         AssertNoErrors(diags);
-        var rh = checker.NominalTypes["test.RefHolder"];
+        var rh = FindNominal(checker, "RefHolder");
         Assert.Single(rh.FieldsOrVariants);
         Assert.IsType<ReferenceType>(rh.FieldsOrVariants[0].Type);
     }

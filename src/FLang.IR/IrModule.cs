@@ -1,3 +1,5 @@
+using FLang.Core;
+
 namespace FLang.IR;
 
 /// <summary>
@@ -23,6 +25,12 @@ public class IrModule
 
     /// <summary>Extern fn declarations (foreign functions).</summary>
     public List<IrForeignDecl> ForeignDecls { get; } = [];
+
+    /// <summary>
+    /// Source files indexed by FileId.
+    /// Used by the C code generator to emit #line directives.
+    /// </summary>
+    public IReadOnlyList<Source> SourceFiles { get; set; } = [];
 }
 
 /// <summary>

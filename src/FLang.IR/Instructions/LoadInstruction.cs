@@ -1,3 +1,5 @@
+using FLang.Core;
+
 namespace FLang.IR.Instructions;
 
 /// <summary>
@@ -6,7 +8,8 @@ namespace FLang.IR.Instructions;
 /// </summary>
 public class LoadInstruction : Instruction
 {
-    public LoadInstruction(Value pointer, Value result)
+    public LoadInstruction(SourceSpan span, Value pointer, Value result)
+        : base(span)
     {
         Pointer = pointer;
         Result = result;

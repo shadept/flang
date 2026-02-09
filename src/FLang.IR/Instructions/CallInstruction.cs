@@ -10,7 +10,8 @@ namespace FLang.IR.Instructions;
 /// </summary>
 public class CallInstruction : Instruction
 {
-    public CallInstruction(string functionName, IReadOnlyList<Value> arguments, Value result)
+    public CallInstruction(SourceSpan span, string functionName, IReadOnlyList<Value> arguments, Value result)
+        : base(span)
     {
         FunctionName = functionName;
         Arguments = arguments;
@@ -49,4 +50,10 @@ public class CallInstruction : Instruction
     /// False for FLang functions that require mangling.
     /// </summary>
     public bool IsForeignCall { get; set; }
+
+    /// <summary>
+    /// True if this is an indirect call through a function pointer variable.
+    /// Indirect calls are not validated against the module's function list.
+    /// </summary>
+    public bool IsIndirectCall { get; set; }
 }

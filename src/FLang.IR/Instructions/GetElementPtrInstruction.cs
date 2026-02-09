@@ -1,3 +1,5 @@
+using FLang.Core;
+
 namespace FLang.IR.Instructions;
 
 /// <summary>
@@ -7,7 +9,8 @@ namespace FLang.IR.Instructions;
 /// </summary>
 public class GetElementPtrInstruction : Instruction
 {
-    public GetElementPtrInstruction(Value basePointer, Value byteOffset, Value result)
+    public GetElementPtrInstruction(SourceSpan span, Value basePointer, Value byteOffset, Value result)
+        : base(span)
     {
         BasePointer = basePointer;
         ByteOffset = byteOffset;
@@ -15,8 +18,8 @@ public class GetElementPtrInstruction : Instruction
     }
 
     // Convenience constructor for constant offsets
-    public GetElementPtrInstruction(Value basePointer, int byteOffset, Value result)
-        : this(basePointer, new ConstantValue(byteOffset), result)
+    public GetElementPtrInstruction(SourceSpan span, Value basePointer, int byteOffset, Value result)
+        : this(span, basePointer, new ConstantValue(byteOffset), result)
     {
     }
 

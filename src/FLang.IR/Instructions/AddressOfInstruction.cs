@@ -1,3 +1,5 @@
+using FLang.Core;
+
 namespace FLang.IR.Instructions;
 
 /// <summary>
@@ -6,7 +8,8 @@ namespace FLang.IR.Instructions;
 /// </summary>
 public class AddressOfInstruction : Instruction
 {
-    public AddressOfInstruction(string variableName, Value result)
+    public AddressOfInstruction(SourceSpan span, string variableName, Value result)
+        : base(span)
     {
         VariableName = variableName;
         Result = result;

@@ -386,6 +386,7 @@ public class Compiler
         });
 
         var irModule = lowering.LowerModule(moduleEntries);
+        irModule.SourceFiles = compilation.Sources;
         allDiagnostics.AddRange(lowering.Diagnostics);
 
         if (allDiagnostics.Any(d => d.Severity == DiagnosticSeverity.Error))
@@ -525,12 +526,12 @@ public class Compiler
         {
             // Call the test function (void return)
             var result = new LocalValue($"test_result_{tempCounter++}", TypeRegistry.Void);
-            var call = new CallInstruction(testFn.Name, new List<Value>(), result);
+            var call = new CallInstruction(SourceSpan.None, testFn.Name, new List<Value>(), result);
             entry.Instructions.Add(call);
         }
 
         // Return 0 (all tests passed - if a test fails, panic() will exit with 1)
-        entry.Instructions.Add(new ReturnInstruction(new ConstantValue(0) { Type = TypeRegistry.I32 }));
+        entry.Instructions.Add(new ReturnInstruction(SourceSpan.None, new ConstantValue(0) { Type = TypeRegistry.I32 }));
 
         return main;
     }

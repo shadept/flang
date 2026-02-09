@@ -1,3 +1,4 @@
+using FLang.Core;
 using TypeBase = FLang.Core.TypeBase;
 
 namespace FLang.IR.Instructions;
@@ -8,7 +9,8 @@ namespace FLang.IR.Instructions;
 /// </summary>
 public class IndirectCallInstruction : Instruction
 {
-    public IndirectCallInstruction(Value functionPointer, IReadOnlyList<Value> arguments, Value result)
+    public IndirectCallInstruction(SourceSpan span, Value functionPointer, IReadOnlyList<Value> arguments, Value result)
+        : base(span)
     {
         FunctionPointer = functionPointer;
         Arguments = arguments;

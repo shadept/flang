@@ -4,28 +4,28 @@ import std.result
 import std.string
 import std.string_builder
 
-enum FileMode {
+pub enum FileMode {
     Read,
     Write,
     Append,
 }
 
-enum FileEncoding {
+pub enum FileEncoding {
     Utf8,
     Ascii,
 }
 
-enum FileError {
+pub enum FileError {
     IOError,
     NotFound,
     PermissionDenied,
 }
 
-struct FileHandle {
+pub struct FileHandle {
     fd: i32  // TODO system dependent
 }
 
-struct File {
+pub struct File {
     path: String
     mode: FileMode
     encoding: FileEncoding

@@ -1,3 +1,5 @@
+using FLang.Core;
+
 namespace FLang.IR.Instructions;
 
 /// <summary>
@@ -7,7 +9,8 @@ namespace FLang.IR.Instructions;
 /// </summary>
 public class StoreInstruction : Instruction
 {
-    public StoreInstruction(string variableName, Value value, Value result)
+    public StoreInstruction(SourceSpan span, string variableName, Value value, Value result)
+        : base(span)
     {
         VariableName = variableName;
         Value = value;

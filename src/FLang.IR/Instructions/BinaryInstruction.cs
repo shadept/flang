@@ -1,3 +1,5 @@
+using FLang.Core;
+
 namespace FLang.IR.Instructions;
 
 /// <summary>
@@ -65,7 +67,8 @@ public enum BinaryOp
 /// </summary>
 public class BinaryInstruction : Instruction
 {
-    public BinaryInstruction(BinaryOp operation, Value left, Value right, Value result)
+    public BinaryInstruction(SourceSpan span, BinaryOp operation, Value left, Value right, Value result)
+        : base(span)
     {
         Operation = operation;
         Left = left;

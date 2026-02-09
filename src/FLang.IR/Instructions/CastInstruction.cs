@@ -15,7 +15,8 @@ namespace FLang.IR.Instructions;
 /// </summary>
 public class CastInstruction : Instruction
 {
-    public CastInstruction(Value source, TypeBase targetType, Value result)
+    public CastInstruction(SourceSpan span, Value source, TypeBase targetType, Value result)
+        : base(span)
     {
         Source = source;
         TargetType = targetType;

@@ -25,6 +25,15 @@ public record FunctionScheme(
 public record FunctionContext(FunctionDeclarationNode Node, Type ReturnType);
 
 /// <summary>
+/// Records a resolved operator function for an AST node.
+/// Used by the lowering pass to emit CallInstructions instead of primitive ops.
+/// </summary>
+public record ResolvedOperator(
+    FunctionDeclarationNode Function,
+    bool NegateResult = false,
+    BinaryOperatorKind? CmpDerivedOperator = null);
+
+/// <summary>
 /// Hindley-Milner type checker. Drives InferenceEngine over the AST.
 /// Works exclusively with FLang.Core.Types.Type — no TypeBase references.
 /// </summary>
@@ -60,6 +69,12 @@ public partial class HmTypeChecker : INominalTypeRegistry
     /// Inferred type per AST node. Populated during inference, read during Zonk/stamping.
     /// </summary>
     private readonly Dictionary<AstNode, Type> _inferredTypes = [];
+
+    /// <summary>
+    /// Resolved operator functions per AST node (binary, unary, index, coalesce).
+    /// Populated during type checking, read during lowering to emit CallInstructions.
+    /// </summary>
+    private readonly Dictionary<AstNode, ResolvedOperator> _resolvedOperators = [];
 
     /// <summary>
     /// Stack of functions currently being checked (for return type context).
@@ -98,6 +113,7 @@ public partial class HmTypeChecker : INominalTypeRegistry
         [.. _diagnostics, .. _engine.Diagnostics];
     public IReadOnlyDictionary<AstNode, Type> InferredTypes => _inferredTypes;
     public IReadOnlyDictionary<string, NominalType> NominalTypes => _nominalTypes;
+    public IReadOnlyDictionary<AstNode, ResolvedOperator> ResolvedOperators => _resolvedOperators;
     public InferenceEngine Engine => _engine;
 
     public bool IsGenericFunction(FunctionDeclarationNode fn) => fn.IsGeneric;
@@ -152,6 +168,12 @@ public partial class HmTypeChecker : INominalTypeRegistry
         throw new InvalidOperationException(
             $"BUG: No inferred type recorded for {node.GetType().Name} at {node.Span}");
     }
+
+    /// <summary>
+    /// Get the resolved operator function for an AST node, or null if none.
+    /// </summary>
+    public ResolvedOperator? GetResolvedOperator(AstNode node)
+        => _resolvedOperators.TryGetValue(node, out var op) ? op : null;
 
     // =========================================================================
     // Function registry
