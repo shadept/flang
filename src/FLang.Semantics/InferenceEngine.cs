@@ -135,7 +135,22 @@ public class InferenceEngine : ITypeResolver
         b = Resolve(b);
 
         // Identity
-        if (a.Equals(b)) return a;
+        if (a.Equals(b))
+        {
+            // NominalType.Equals only checks Name+TypeArguments, not FieldsOrVariants.
+            // For anonymous structs with no TypeArguments, also unify field types
+            // to resolve TypeVars in field positions (e.g., tuple literals).
+            if (!ReferenceEquals(a, b)
+                && a is NominalType na2 && b is NominalType nb2
+                && na2.TypeArguments.Count == 0
+                && na2.FieldsOrVariants.Count == nb2.FieldsOrVariants.Count
+                && na2.FieldsOrVariants.Count > 0)
+            {
+                for (int i = 0; i < na2.FieldsOrVariants.Count; i++)
+                    UnifyInternal(na2.FieldsOrVariants[i].Type, nb2.FieldsOrVariants[i].Type, span, ref cost);
+            }
+            return a;
+        }
 
         // TypeVar binding
         if (a is TypeVar || b is TypeVar)
@@ -205,6 +220,7 @@ public class InferenceEngine : ITypeResolver
             var unifiedArgs = new Type[na.TypeArguments.Count];
             for (var i = 0; i < na.TypeArguments.Count; i++)
                 unifiedArgs[i] = UnifyInternal(na.TypeArguments[i], nb.TypeArguments[i], span, ref cost);
+
             return new NominalType(na.Name, na.Kind, unifiedArgs, na.FieldsOrVariants);
         }
 
@@ -423,4 +439,5 @@ public static class WellKnown
     public const string Slice = "core.slice.Slice";
     public const string Range = "core.range.Range";
     public const string TypeInfo = "core.rtti.Type";
+    public const string RttiPrefix = "core.rtti.";
 }

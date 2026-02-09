@@ -14,6 +14,9 @@ public class IrModule
     /// <summary>Global constants (allocator defaults, etc.).</summary>
     public List<IrGlobal> Globals { get; } = [];
 
+    /// <summary>Global constant values (HM pipeline) — struct globals with field initializers.</summary>
+    public List<GlobalValue> GlobalValues { get; } = [];
+
     /// <summary>
     /// String table — all string literals in the module.
     /// Emitted as a single C array: static const struct String __flang__string_table[N].
@@ -75,8 +78,18 @@ public record IrForeignDecl(string Name, string CName, IrType ReturnType, IrType
 
 /// <summary>
 /// A function parameter with name and type.
+/// Name is sanitized for C at construction time.
 /// </summary>
-public record IrParam(string Name, IrType Type);
+public record IrParam
+{
+    public string Name { get; }
+    public IrType Type { get; }
+    public IrParam(string name, IrType type)
+    {
+        Name = Value.SanitizeCIdent(name);
+        Type = type;
+    }
+}
 
 /// <summary>
 /// An entry in the module's string table.

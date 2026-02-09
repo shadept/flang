@@ -43,6 +43,11 @@ public class TypeScopes
     }
 
     /// <summary>
+    /// Current scope depth (number of scopes on the stack).
+    /// </summary>
+    public int Depth => _scopes.Count;
+
+    /// <summary>
     /// Look up a name, searching from innermost to outermost scope.
     /// Returns null if not found.
     /// </summary>
@@ -52,6 +57,31 @@ public class TypeScopes
         {
             if (scope.TryGetValue(name, out var type))
                 return type;
+        }
+        return null;
+    }
+
+    /// <summary>
+    /// Look up a name with scope barrier. Names found at or below the barrier depth
+    /// are treated as not found (for non-capturing lambda enforcement).
+    /// barrier == 0 means no barrier.
+    /// </summary>
+    public PolymorphicType? LookupWithBarrier(string name, int barrier)
+    {
+        if (barrier <= 0) return Lookup(name);
+
+        int depth = _scopes.Count;
+        foreach (var scope in _scopes)
+        {
+            if (scope.TryGetValue(name, out var type))
+            {
+                // depth goes from Count (innermost) down to 1 (outermost/global)
+                // If found at a depth <= barrier, it's across the barrier → not accessible
+                if (depth <= barrier)
+                    return null;
+                return type;
+            }
+            depth--;
         }
         return null;
     }

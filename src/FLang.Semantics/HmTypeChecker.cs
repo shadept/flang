@@ -97,6 +97,31 @@ public partial class HmTypeChecker : INominalTypeRegistry
     /// </summary>
     private int _lambdaScopeBarrier;
 
+    /// <summary>
+    /// Parallel scope stack for tracking const-ness of variable declarations.
+    /// Each scope maps name → isConst. Mirrors _scopes push/pop via PushScope/PopScope helpers.
+    /// </summary>
+    private readonly Stack<HashSet<string>> _constScopes = new(new[] { new HashSet<string>() });
+
+    /// <summary>
+    /// Active generic type parameter names (during specialization), for type-as-value wrapping.
+    /// Uses ref-counting to handle nested specializations with the same param name.
+    /// </summary>
+    private readonly Dictionary<string, int> _activeTypeParams = [];
+
+    /// <summary>
+    /// Unsuffixed integer literals and their TypeVars, for post-inference validation.
+    /// After inference, these are checked for: unresolved TypeVars (E2001),
+    /// non-numeric resolved types (E2102), and out-of-range values (E2029).
+    /// </summary>
+    private readonly List<(IntegerLiteralNode Node, Type TypeVar)> _unsuffixedLiterals = [];
+
+    /// <summary>
+    /// Types used as Type(T) values (e.g., i32 in size_of(i32)).
+    /// Populated during type checking, consumed by lowering to build type table.
+    /// </summary>
+    public HashSet<Type> InstantiatedTypes { get; } = new();
+
     public HmTypeChecker(Compilation compilation)
     {
         _compilation = compilation;
@@ -106,6 +131,7 @@ public partial class HmTypeChecker : INominalTypeRegistry
         _engine.AddCoercionRule(new StringToByteSliceCoercionRule());
         _engine.AddCoercionRule(new ArrayDecayCoercionRule());
         _engine.AddCoercionRule(new SliceToReferenceCoercionRule());
+        _engine.AddCoercionRule(new AnonymousStructCoercionRule(LookupNominalType));
         _scopes = new TypeScopes();
     }
 
@@ -128,6 +154,37 @@ public partial class HmTypeChecker : INominalTypeRegistry
         ResolveNominalTypes(module, modulePath);
         CollectFunctionSignatures(module, modulePath);
         CheckModuleBodies(module, modulePath);
+    }
+
+    // =========================================================================
+    // Scope management (wraps _scopes with parallel const tracking)
+    // =========================================================================
+
+    private void PushScope()
+    {
+        _scopes.PushScope();
+        _constScopes.Push(new HashSet<string>());
+    }
+
+    private void PopScope()
+    {
+        _scopes.PopScope();
+        _constScopes.Pop();
+    }
+
+    private void MarkConst(string name)
+    {
+        _constScopes.Peek().Add(name);
+    }
+
+    private bool IsConst(string name)
+    {
+        foreach (var scope in _constScopes)
+        {
+            if (scope.Contains(name))
+                return true;
+        }
+        return false;
     }
 
     // =========================================================================
@@ -249,5 +306,54 @@ public partial class HmTypeChecker : INominalTypeRegistry
         }
 
         return null;
+    }
+
+    // =========================================================================
+    // Post-inference validation
+    // =========================================================================
+
+    private static readonly HashSet<string> _integerTypeNames =
+        ["i8", "i16", "i32", "i64", "u8", "u16", "u32", "u64", "isize", "usize", "char"];
+
+    /// <summary>
+    /// Validate unsuffixed integer literals after all inference is complete.
+    /// Detects: unresolved TypeVars (E2001), non-numeric resolved types (E2102),
+    /// and out-of-range values (E2029).
+    /// </summary>
+    public void ValidatePostInference()
+    {
+        foreach (var (node, typeVar) in _unsuffixedLiterals)
+        {
+            var resolved = _engine.Resolve(typeVar);
+
+            if (resolved is FLang.Core.Types.TypeVar)
+            {
+                // Still unresolved after inference — no context to determine concrete type
+                ReportError($"Cannot determine concrete type for integer literal `{node.Value}`", node.Span, "E2001");
+                continue;
+            }
+
+            if (resolved is FLang.Core.Types.PrimitiveType prim)
+            {
+                if (!_integerTypeNames.Contains(prim.Name))
+                {
+                    // Resolved to a non-integer type (e.g., bool) — conflicting binding
+                    ReportError(
+                        $"Integer literal `{node.Value}` cannot be used as `{prim.Name}`",
+                        node.Span, "E2102");
+                    continue;
+                }
+
+                // Check range
+                if (!HmTypeChecker.FitsInType(node.Value, prim.Name))
+                {
+                    ReportError(
+                        $"Literal `{node.Value}` out of range for type `{prim.Name}`",
+                        node.Span, "E2029");
+                }
+            }
+            // Non-primitive resolved types (e.g., NominalType) are allowed —
+            // they might be valid through coercion rules
+        }
     }
 }

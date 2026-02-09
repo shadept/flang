@@ -42,6 +42,12 @@ public class HmAstLowering
     // Defer stack — per-function, stores deferred expressions in LIFO order
     private readonly Stack<ExpressionNode> _deferStack = new();
 
+    // Global constants — name → lowered Value
+    private readonly Dictionary<string, Value> _globalConstants = [];
+
+    // Type table — maps type cache key → GlobalValue for Type(T) RTTI
+    private Dictionary<string, GlobalValue>? _typeTableGlobals;
+
     public IReadOnlyList<Diagnostic> Diagnostics => _diagnostics;
 
     public HmAstLowering(HmTypeChecker checker, TypeLayoutService layout, InferenceEngine engine)
@@ -57,6 +63,10 @@ public class HmAstLowering
 
     public IrModule LowerModule(IEnumerable<(string ModulePath, ModuleNode Module)> modules)
     {
+        // Lower global constants first (before functions that reference them)
+        foreach (var (modulePath, module) in modules)
+            LowerModuleGlobals(module);
+
         // Collect foreign declarations (also collects types from signatures)
         foreach (var (modulePath, module) in modules)
         {
@@ -95,6 +105,322 @@ public class HmAstLowering
         ValidateCallTargets();
 
         return _module;
+    }
+
+    // =========================================================================
+    // Global constant lowering
+    // =========================================================================
+
+    private void LowerModuleGlobals(ModuleNode module)
+    {
+        foreach (var globalConst in module.GlobalConstants)
+        {
+            if (globalConst.Initializer == null) continue;
+            var hmType = _checker.Engine.Resolve(_checker.GetInferredType(globalConst));
+            var irType = _layout.Lower(hmType);
+            var value = LowerGlobalInitializer(globalConst.Initializer, irType, globalConst.Name);
+            if (value != null)
+            {
+                _globalConstants[globalConst.Name] = value;
+                if (value is GlobalValue gv)
+                    _module.GlobalValues.Add(gv);
+            }
+        }
+    }
+
+    private Value? LowerGlobalInitializer(ExpressionNode expr, IrType targetType, string name)
+    {
+        // Unwrap implicit coercions
+        if (expr is ImplicitCoercionNode coercion)
+            return LowerGlobalInitializer(coercion.Inner, targetType, name);
+
+        // Integer literal
+        if (expr is IntegerLiteralNode intLit)
+            return new ConstantValue(intLit.Value, targetType);
+
+        // Boolean literal
+        if (expr is BooleanLiteralNode boolLit)
+            return new ConstantValue(boolLit.Value ? 1 : 0, targetType);
+
+        // Struct construction
+        if (expr is StructConstructionExpressionNode sc && targetType is IrStruct irStruct)
+        {
+            var fieldValues = new Dictionary<string, Value>();
+            foreach (var field in sc.Fields)
+            {
+                var fieldDef = irStruct.Fields.FirstOrDefault(f => f.Name == field.FieldName);
+                if (fieldDef == null) continue;
+                var fieldVal = LowerGlobalInitializer(field.Value, fieldDef.Type, $"{name}.{field.FieldName}");
+                if (fieldVal != null)
+                    fieldValues[field.FieldName] = fieldVal;
+            }
+            var structConst = new StructConstantValue(irStruct, fieldValues);
+            var global = new GlobalValue($"__global_{name}", structConst, irStruct);
+            return global;
+        }
+
+        // Anonymous struct construction
+        if (expr is AnonymousStructExpressionNode anon && targetType is IrStruct anonStruct)
+        {
+            var fieldValues = new Dictionary<string, Value>();
+            foreach (var field in anon.Fields)
+            {
+                var fieldDef = anonStruct.Fields.FirstOrDefault(f => f.Name == field.FieldName);
+                if (fieldDef == null) continue;
+                var fieldVal = LowerGlobalInitializer(field.Value, fieldDef.Type, $"{name}.{field.FieldName}");
+                if (fieldVal != null)
+                    fieldValues[field.FieldName] = fieldVal;
+            }
+            var structConst = new StructConstantValue(anonStruct, fieldValues);
+            var global = new GlobalValue($"__global_{name}", structConst, anonStruct);
+            return global;
+        }
+
+        // Identifier — reference to another global constant or function
+        if (expr is IdentifierExpressionNode id)
+        {
+            // Check for function reference
+            var idType = _checker.Engine.Resolve(_checker.GetInferredType(id));
+            if (idType is FunctionType)
+                return new FunctionReferenceValue(id.Name, null!) { IrType = _layout.Lower(idType) };
+
+            // Check for another global constant
+            if (_globalConstants.TryGetValue(id.Name, out var existing))
+                return existing;
+
+            return null;
+        }
+
+        // Address-of
+        if (expr is AddressOfExpressionNode addrOf)
+        {
+            var innerType = _checker.Engine.Resolve(_checker.GetInferredType(addrOf.Target));
+            var innerIrType = _layout.Lower(innerType);
+            var innerVal = LowerGlobalInitializer(addrOf.Target, innerIrType, name);
+            if (innerVal is GlobalValue)
+                return innerVal; // GlobalValue is already a pointer
+            return innerVal;
+        }
+
+        // Cast — unwrap and use target type
+        if (expr is CastExpressionNode cast)
+        {
+            var castTargetType = _checker.Engine.Resolve(_checker.GetInferredType(cast));
+            var castIrType = _layout.Lower(castTargetType);
+            return LowerGlobalInitializer(cast.Expression, castIrType, name);
+        }
+
+        return null;
+    }
+
+    // =========================================================================
+    // Type table (RTTI) — builds GlobalValue entries for each Type(T)
+    // =========================================================================
+
+    private void EnsureTypeTableExists()
+    {
+        if (_typeTableGlobals != null) return;
+        _typeTableGlobals = new Dictionary<string, GlobalValue>();
+
+        // Get the IrStruct for TypeInfo
+        var typeInfoNominal = _checker.LookupNominalType("core.rtti.TypeInfo");
+        if (typeInfoNominal == null) return;
+        var typeInfoIr = _layout.Lower(typeInfoNominal) as IrStruct;
+        if (typeInfoIr == null) return;
+
+        // Get the IrStruct for FieldInfo
+        var fieldInfoNominal = _checker.LookupNominalType("core.rtti.FieldInfo");
+        var fieldInfoIr = fieldInfoNominal != null ? _layout.Lower(fieldInfoNominal) as IrStruct : null;
+
+        // Get the IrStruct for String
+        var stringNominal = _checker.LookupNominalType(WellKnown.String);
+        var stringIr = stringNominal != null ? _layout.Lower(stringNominal) as IrStruct : null;
+
+        // Get slice IrStructs by looking at TypeInfo field types
+        IrStruct? fieldsSliceIr = null;
+        IrStruct? typeParamsSliceIr = null;
+        IrStruct? typeArgsSliceIr = null;
+        foreach (var field in typeInfoIr.Fields)
+        {
+            if (field.Name == "fields" && field.Type is IrStruct fs) fieldsSliceIr = fs;
+            else if (field.Name == "type_params" && field.Type is IrStruct tps) typeParamsSliceIr = tps;
+            else if (field.Name == "type_args" && field.Type is IrPointer { Pointee: IrStruct tas }) typeArgsSliceIr = tas;
+        }
+
+        // Expand InstantiatedTypes to include field types of struct types
+        var allTypes = new HashSet<Type>(_checker.InstantiatedTypes.Select(t => _engine.Resolve(t)));
+        bool changed = true;
+        while (changed)
+        {
+            changed = false;
+            foreach (var type in allTypes.ToList())
+            {
+                if (type is NominalType { Kind: NominalKind.Struct } nt
+                    && !nt.Name.StartsWith(WellKnown.RttiPrefix) && nt.Name != WellKnown.String)
+                {
+                    foreach (var (_, ft) in nt.FieldsOrVariants)
+                    {
+                        var fieldType = _engine.Resolve(ft);
+                        if (fieldType is Core.Types.ReferenceType refT) fieldType = _engine.Resolve(refT.InnerType);
+                        if (fieldType is Core.Types.FunctionType || fieldType is Core.Types.TypeVar) continue;
+                        if (allTypes.Add(fieldType)) changed = true;
+                    }
+                }
+            }
+        }
+
+        // First pass: create all globals (so we can reference them for field type pointers)
+        var typeKeys = new Dictionary<string, Type>();
+        foreach (var innerType in allTypes)
+        {
+            var key = BuildTypeKey(innerType);
+            if (!typeKeys.ContainsKey(key))
+                typeKeys[key] = innerType;
+        }
+
+        // Helper: build a String constant value
+        StructConstantValue MakeStringConstant(string text)
+        {
+            var bytes = System.Text.Encoding.UTF8.GetBytes(text + "\0");
+            var arr = new ArrayConstantValue(bytes, TypeLayoutService.IrU8)
+            {
+                StringRepresentation = text
+            };
+            return new StructConstantValue(stringIr!, new Dictionary<string, Value>
+            {
+                ["ptr"] = arr,
+                ["len"] = new ConstantValue(text.Length, TypeLayoutService.IrUSize),
+            });
+        }
+
+        // Helper: get TypeKind integer
+        int GetTypeKind(Type t) => t switch
+        {
+            Core.Types.PrimitiveType => 0,
+            Core.Types.ArrayType => 1,
+            NominalType { Kind: NominalKind.Struct } => 2,
+            NominalType { Kind: NominalKind.Enum } => 3,
+            _ => 0
+        };
+
+        // Helper: make empty slice constant
+        StructConstantValue MakeEmptySlice(IrStruct sliceIr)
+        {
+            return new StructConstantValue(sliceIr, new Dictionary<string, Value>
+            {
+                ["ptr"] = new ConstantValue(0, TypeLayoutService.IrUSize),
+                ["len"] = new ConstantValue(0, TypeLayoutService.IrUSize),
+            });
+        }
+
+        // Create static empty type_args slice global (type_args is &Slice, so we need a global to point to)
+        GlobalValue? emptyTypeArgsGlobal = null;
+        if (typeArgsSliceIr != null)
+        {
+            var emptySlice = MakeEmptySlice(typeArgsSliceIr);
+            emptyTypeArgsGlobal = new GlobalValue("__flang__empty_type_args", emptySlice, typeArgsSliceIr);
+            _module.GlobalValues.Add(emptyTypeArgsGlobal);
+        }
+
+        // Build type table entries
+        int typeIndex = 0;
+        foreach (var (key, innerType) in typeKeys.OrderBy(kv => kv.Key))
+        {
+            if (_typeTableGlobals.ContainsKey(key)) continue;
+
+            var innerIr = _layout.Lower(innerType);
+            var typeName = innerType is NominalType nt2 ? nt2.Name : innerType.ToString() ?? "unknown";
+            var globalName = $"__flang__typeinfo_{key}";
+
+            // Build field values
+            var fieldValues = new Dictionary<string, Value>
+            {
+                ["size"] = new ConstantValue(innerIr.Size, TypeLayoutService.IrU8),
+                ["align"] = new ConstantValue(innerIr.Alignment, TypeLayoutService.IrU8),
+                ["kind"] = new ConstantValue(GetTypeKind(innerType), TypeLayoutService.IrI32),
+            };
+
+            // Name field
+            if (stringIr != null)
+                fieldValues["name"] = MakeStringConstant(typeName);
+
+            // Empty slices for type_params, type_args
+            if (typeParamsSliceIr != null)
+                fieldValues["type_params"] = MakeEmptySlice(typeParamsSliceIr);
+            if (emptyTypeArgsGlobal != null)
+                fieldValues["type_args"] = emptyTypeArgsGlobal;
+
+            // Fields slice
+            if (fieldsSliceIr != null && fieldInfoIr != null && stringIr != null
+                && innerType is NominalType { Kind: NominalKind.Struct } structType
+                && structType.FieldsOrVariants.Count > 0
+                && !structType.Name.StartsWith(WellKnown.RttiPrefix))
+            {
+                // Build FieldInfo array for this struct's fields
+                var fieldElements = new List<Value>();
+                var structIr = innerIr as IrStruct;
+
+                foreach (var (fieldName, fieldType) in structType.FieldsOrVariants)
+                {
+                    // Find field offset from IR
+                    int offset = 0;
+                    if (structIr != null)
+                    {
+                        var irField = structIr.Fields.FirstOrDefault(f => f.Name == fieldName);
+                        if (irField.Type != null) offset = irField.ByteOffset;
+                    }
+
+                    var fieldInfoValues = new Dictionary<string, Value>
+                    {
+                        ["name"] = MakeStringConstant(fieldName),
+                        ["offset"] = new ConstantValue(offset, TypeLayoutService.IrUSize),
+                        ["type"] = new ConstantValue(0, TypeLayoutService.IrUSize), // NULL for now
+                    };
+                    fieldElements.Add(new StructConstantValue(fieldInfoIr, fieldInfoValues));
+                }
+
+                // Create global array for fields
+                var fieldArrayGlobal = new GlobalValue(
+                    $"__flang__typeinfo_{key}_fields",
+                    new ArrayConstantValue(
+                        new IrArray(fieldInfoIr, fieldElements.Count),
+                        fieldElements.ToArray()),
+                    new IrArray(fieldInfoIr, fieldElements.Count));
+                _module.GlobalValues.Add(fieldArrayGlobal);
+
+                fieldValues["fields"] = new StructConstantValue(fieldsSliceIr, new Dictionary<string, Value>
+                {
+                    ["ptr"] = fieldArrayGlobal,
+                    ["len"] = new ConstantValue(fieldElements.Count, TypeLayoutService.IrUSize),
+                });
+            }
+            else if (fieldsSliceIr != null)
+            {
+                fieldValues["fields"] = MakeEmptySlice(fieldsSliceIr);
+            }
+
+            var structConst = new StructConstantValue(typeInfoIr, fieldValues);
+            var global = new GlobalValue(globalName, structConst, typeInfoIr);
+
+            _typeTableGlobals[key] = global;
+            _module.GlobalValues.Add(global);
+            typeIndex++;
+        }
+    }
+
+    private string BuildTypeKey(Type type)
+    {
+        var resolved = _engine.Resolve(type);
+        return resolved switch
+        {
+            Core.Types.PrimitiveType pt => pt.Name,
+            NominalType nt => nt.TypeArguments.Count > 0
+                ? $"{nt.Name}|{string.Join("|", nt.TypeArguments.Select(a => BuildTypeKey(a)))}"
+                : nt.Name,
+            Core.Types.ReferenceType rt => $"&{BuildTypeKey(rt.InnerType)}",
+            Core.Types.ArrayType at => $"[{BuildTypeKey(at.ElementType)};{at.Length}]",
+            _ => resolved.ToString() ?? "unknown"
+        };
     }
 
     // =========================================================================
@@ -157,6 +483,26 @@ public class HmAstLowering
             CollectIrType(fn.ReturnType, collected);
             foreach (var p in fn.Params)
                 CollectIrType(p.Type, collected);
+
+            // Walk function body to collect types used in local values
+            foreach (var bb in fn.BasicBlocks)
+                foreach (var inst in bb.Instructions)
+                {
+                    Value? result = inst switch
+                    {
+                        AllocaInstruction a => a.Result,
+                        CallInstruction c => c.Result,
+                        CastInstruction c => c.Result,
+                        BinaryInstruction b => b.Result,
+                        UnaryInstruction u => u.Result,
+                        LoadInstruction l => l.Result,
+                        GetElementPtrInstruction g => g.Result,
+                        AddressOfInstruction a => a.Result,
+                        _ => null
+                    };
+                    if (result?.IrType != null)
+                        CollectIrType(result.IrType, collected);
+                }
         }
 
         foreach (var decl in _module.ForeignDecls)
@@ -165,6 +511,13 @@ public class HmAstLowering
             foreach (var pt in decl.ParamTypes)
                 CollectIrType(pt, collected);
         }
+
+        // Walk global values to collect their struct types
+        foreach (var gv in _module.GlobalValues)
+        {
+            if (gv.IrType != null)
+                CollectIrType(gv.IrType, collected);
+        }
     }
 
     private void CollectIrType(IrType type, HashSet<string> collected)
@@ -172,7 +525,7 @@ public class HmAstLowering
         switch (type)
         {
             case IrStruct s:
-                if (collected.Add(s.Name))
+                if (collected.Add(s.CName))
                 {
                     // Collect field types first (dependencies)
                     foreach (var f in s.Fields)
@@ -181,7 +534,7 @@ public class HmAstLowering
                 }
                 break;
             case IrEnum e:
-                if (collected.Add(e.Name))
+                if (collected.Add(e.CName))
                 {
                     foreach (var v in e.Variants)
                         if (v.PayloadType != null)
@@ -261,21 +614,38 @@ public class HmAstLowering
             }
         }
 
-        // Lower body statements
-        foreach (var stmt in fn.Body)
+        // Lower body statements — the last expression-statement in a non-void
+        // function is an implicit return value.
+        var isNonVoid = retIrType != TypeLayoutService.IrVoidPrim
+                     && retIrType != TypeLayoutService.IrNeverPrim;
+        for (int si = 0; si < fn.Body.Count; si++)
+        {
+            var stmt = fn.Body[si];
+            if (si == fn.Body.Count - 1 && isNonVoid && stmt is ExpressionStatementNode lastExpr)
+            {
+                var val = LowerExpression(lastExpr.Expression, retIrType);
+                _currentBlock.Instructions.Add(new ReturnInstruction(stmt.Span, val));
+                continue;
+            }
             LowerStatement(stmt);
+        }
 
-        // Emit deferred expressions at function epilogue (before implicit return)
-        EmitDeferredExpressions();
+        // Emit deferred expressions at function epilogue (before implicit return),
+        // but only if the current block isn't already terminated by a return/jump.
+        if (_currentBlock.Instructions.Count == 0 ||
+            _currentBlock.Instructions[^1] is not (ReturnInstruction or JumpInstruction or BranchInstruction))
+        {
+            EmitDeferredExpressions();
+        }
 
-        // Add implicit void return if block has no terminator
+        // Add implicit return to any unterminated block
         foreach (var block in irFn.BasicBlocks)
         {
             if (block.Instructions.Count == 0 ||
                 block.Instructions[^1] is not (ReturnInstruction or JumpInstruction or BranchInstruction))
             {
-                var voidVal = new ConstantValue(0, TypeLayoutService.IrVoidPrim);
-                block.Instructions.Add(new ReturnInstruction(_currentSpan, voidVal));
+                var retVal = new ConstantValue(0, isNonVoid ? retIrType : TypeLayoutService.IrVoidPrim);
+                block.Instructions.Add(new ReturnInstruction(_currentSpan, retVal));
             }
         }
 
@@ -325,7 +695,8 @@ public class HmAstLowering
 
         if (ret.Expression != null)
         {
-            var val = LowerExpression(ret.Expression);
+            var fnRetType = _currentFunction.ReturnType;
+            var val = LowerExpression(ret.Expression, fnRetType);
             _currentBlock.Instructions.Add(new ReturnInstruction(_currentSpan, val));
         }
         else
@@ -335,24 +706,235 @@ public class HmAstLowering
         }
     }
 
+    /// <summary>
+    /// If the target type is an Option-like struct (has_value + value fields) and the
+    /// source value's type matches the value field, wrap it in Some(val).
+    /// </summary>
+    /// <summary>
+    /// Apply implicit coercions when the lowered value doesn't match the expected type.
+    /// Mirrors the coercion rules in the type checker (CoercionRules.cs).
+    /// </summary>
+    private Value ApplyCoercions(Value val, IrType expectedType)
+    {
+        var actualType = val.IrType;
+        if (actualType == null || actualType == expectedType) return val;
+        // Same C name means same concrete type
+        if (actualType is IrStruct aS && expectedType is IrStruct eS && aS.CName == eS.CName) return val;
+
+        // 1. Array → Slice: [T; N] → Slice[T]
+        if (actualType is IrArray arrType && expectedType is IrStruct sliceStruct)
+        {
+            var ptrField = sliceStruct.Fields.FirstOrDefault(f => f.Name == "ptr");
+            var lenField = sliceStruct.Fields.FirstOrDefault(f => f.Name == "len");
+            if (ptrField.Type != null && lenField.Type != null)
+                return CoerceArrayToSlice(val, arrType, sliceStruct, ptrField, lenField);
+        }
+
+        // 2. Slice[T] → &T: extract .ptr field
+        if (actualType is IrStruct sliceSrc && expectedType is IrPointer ptrTarget)
+        {
+            var ptrField = sliceSrc.Fields.FirstOrDefault(f => f.Name == "ptr");
+            if (ptrField.Type != null)
+                return CoerceSliceToPointer(val, sliceSrc, ptrField);
+        }
+
+        // 3. String → Slice[u8]: binary compatible, reinterpret cast
+        if (actualType is IrStruct strSrc && expectedType is IrStruct sliceDst
+            && strSrc.Name == WellKnown.String && sliceDst.Name == WellKnown.Slice
+            && strSrc.Size == sliceDst.Size)
+        {
+            return ReinterpretCast(val, strSrc, sliceDst);
+        }
+
+        // 4. Anonymous struct → named struct: reinterpret cast (same layout)
+        if (actualType is IrStruct anonSrc && expectedType is IrStruct namedDst
+            && anonSrc.CName != namedDst.CName && anonSrc.Size == namedDst.Size)
+        {
+            return ReinterpretCast(val, anonSrc, namedDst);
+        }
+
+        // 5. T → Option[T]: wrap in Some
+        //    Handles: same-size value, integer widening, pointer→Option[pointer]
+        if (expectedType is IrStruct optStruct)
+        {
+            var hvField = optStruct.Fields.FirstOrDefault(f => f.Name == "has_value");
+            var valField = optStruct.Fields.FirstOrDefault(f => f.Name == "value");
+            if (hvField.Type != null && valField.Type != null
+                && hvField.Type == TypeLayoutService.IrBool)
+            {
+                // Exact size match — wrap directly
+                if (actualType.Size == valField.Type.Size)
+                    return CoerceToOption(val, optStruct, hvField, valField);
+
+                // Integer widening then wrap: e.g. i32 → usize → Option[usize]
+                if (actualType is IrPrimitive && valField.Type is IrPrimitive)
+                {
+                    var widened = new LocalValue($"widen_{_tempCounter++}", valField.Type);
+                    _currentBlock.Instructions.Add(new CastInstruction(_currentSpan, val, null!, widened));
+                    return CoerceToOption(widened, optStruct, hvField, valField);
+                }
+
+                // Pointer → Option[pointer]: e.g. &Allocator → Option[&Allocator]
+                if (actualType is IrPointer && valField.Type is IrPointer)
+                    return CoerceToOption(val, optStruct, hvField, valField);
+            }
+        }
+
+        // 6. Primitive widening: e.g. i32 → usize
+        if (actualType is IrPrimitive && expectedType is IrPrimitive && actualType.Size < expectedType.Size)
+        {
+            var widened = new LocalValue($"widen_{_tempCounter++}", expectedType);
+            _currentBlock.Instructions.Add(new CastInstruction(_currentSpan, val, null!, widened));
+            return widened;
+        }
+
+        return val;
+    }
+
+    private Value CoerceArrayToSlice(Value val, IrArray arrType, IrStruct sliceStruct,
+        IrField ptrField, IrField lenField)
+    {
+        var tmpPtr = new LocalValue($"slice_{_tempCounter++}", new IrPointer(sliceStruct));
+        _currentBlock.Instructions.Add(new AllocaInstruction(_currentSpan, null!, sliceStruct.Size, tmpPtr));
+
+        // ptr = (element_type*)array
+        var elemPtrType = new IrPointer(arrType.Element);
+        var castResult = new LocalValue($"slice_ptr_{_tempCounter++}", elemPtrType);
+        _currentBlock.Instructions.Add(new CastInstruction(_currentSpan, val, null!, castResult));
+
+        var ptrFieldPtr = new LocalValue($"slice_ptr_f_{_tempCounter++}", new IrPointer(ptrField.Type));
+        _currentBlock.Instructions.Add(new GetElementPtrInstruction(_currentSpan, tmpPtr, ptrField.ByteOffset, ptrFieldPtr));
+        _currentBlock.Instructions.Add(new StorePointerInstruction(_currentSpan, ptrFieldPtr, castResult));
+
+        // len = array_length
+        var lenFieldPtr = new LocalValue($"slice_len_f_{_tempCounter++}", new IrPointer(lenField.Type));
+        _currentBlock.Instructions.Add(new GetElementPtrInstruction(_currentSpan, tmpPtr, lenField.ByteOffset, lenFieldPtr));
+        _currentBlock.Instructions.Add(new StorePointerInstruction(_currentSpan, lenFieldPtr,
+            new ConstantValue(arrType.Length ?? 0, TypeLayoutService.IrUSize)));
+
+        var loaded = new LocalValue($"slice_val_{_tempCounter++}", sliceStruct);
+        _currentBlock.Instructions.Add(new LoadInstruction(_currentSpan, tmpPtr, loaded));
+        return loaded;
+    }
+
+    private Value CoerceSliceToPointer(Value val, IrStruct sliceStruct, IrField ptrField)
+    {
+        // Spill to alloca, GEP to ptr field, load
+        var tmpPtr = new LocalValue($"slice_tmp_{_tempCounter++}", new IrPointer(sliceStruct));
+        _currentBlock.Instructions.Add(new AllocaInstruction(_currentSpan, null!, sliceStruct.Size, tmpPtr));
+        _currentBlock.Instructions.Add(new StorePointerInstruction(_currentSpan, tmpPtr, val));
+
+        var fieldPtr = new LocalValue($"slice_ptr_f_{_tempCounter++}", new IrPointer(ptrField.Type));
+        _currentBlock.Instructions.Add(new GetElementPtrInstruction(_currentSpan, tmpPtr, ptrField.ByteOffset, fieldPtr));
+        var loaded = new LocalValue($"slice_ptr_val_{_tempCounter++}", ptrField.Type);
+        _currentBlock.Instructions.Add(new LoadInstruction(_currentSpan, fieldPtr, loaded));
+        return loaded;
+    }
+
+    private Value ReinterpretCast(Value val, IrStruct srcType, IrStruct dstType)
+    {
+        var tmpPtr = new LocalValue($"cast_tmp_{_tempCounter++}", new IrPointer(srcType));
+        _currentBlock.Instructions.Add(new AllocaInstruction(_currentSpan, null!, srcType.Size, tmpPtr));
+        _currentBlock.Instructions.Add(new StorePointerInstruction(_currentSpan, tmpPtr, val));
+        var casted = new LocalValue($"cast_val_{_tempCounter++}", dstType);
+        _currentBlock.Instructions.Add(new LoadInstruction(_currentSpan, tmpPtr, casted));
+        return casted;
+    }
+
+    private Value CoerceToOption(Value val, IrStruct optStruct, IrField hvField, IrField valField)
+    {
+        var tmpPtr = new LocalValue($"some_{_tempCounter++}", new IrPointer(optStruct));
+        _currentBlock.Instructions.Add(new AllocaInstruction(_currentSpan, null!, optStruct.Size, tmpPtr));
+
+        // has_value = true
+        var hvPtr = new LocalValue($"some_hv_ptr_{_tempCounter++}", new IrPointer(TypeLayoutService.IrBool));
+        _currentBlock.Instructions.Add(new GetElementPtrInstruction(_currentSpan, tmpPtr, hvField.ByteOffset, hvPtr));
+        _currentBlock.Instructions.Add(new StorePointerInstruction(_currentSpan, hvPtr, new ConstantValue(1, TypeLayoutService.IrBool)));
+
+        // value = val
+        var vPtr = new LocalValue($"some_val_ptr_{_tempCounter++}", new IrPointer(valField.Type));
+        _currentBlock.Instructions.Add(new GetElementPtrInstruction(_currentSpan, tmpPtr, valField.ByteOffset, vPtr));
+        _currentBlock.Instructions.Add(new StorePointerInstruction(_currentSpan, vPtr, val));
+
+        var loaded = new LocalValue($"some_val_{_tempCounter++}", optStruct);
+        _currentBlock.Instructions.Add(new LoadInstruction(_currentSpan, tmpPtr, loaded));
+        return loaded;
+    }
+
+    /// <summary>
+    /// Wrap a raw pointer from a foreign call into Option[&T].
+    /// has_value = (ptr != NULL), value = ptr.
+    /// </summary>
+    private Value WrapPointerInOption(Value rawPtr, IrStruct optStruct, IrField hvField, IrField valField)
+    {
+        // has_value = (rawPtr != 0)
+        var nullVal = new ConstantValue(0, rawPtr.IrType!);
+        var hvResult = new LocalValue($"ffi_nonnull_{_tempCounter++}", TypeLayoutService.IrBool);
+        _currentBlock.Instructions.Add(new BinaryInstruction(_currentSpan, BinaryOp.NotEqual, rawPtr, nullVal, hvResult));
+
+        var tmpPtr = new LocalValue($"ffi_opt_{_tempCounter++}", new IrPointer(optStruct));
+        _currentBlock.Instructions.Add(new AllocaInstruction(_currentSpan, null!, optStruct.Size, tmpPtr));
+
+        // has_value field
+        var hvPtr = new LocalValue($"ffi_hv_ptr_{_tempCounter++}", new IrPointer(TypeLayoutService.IrBool));
+        _currentBlock.Instructions.Add(new GetElementPtrInstruction(_currentSpan, tmpPtr, hvField.ByteOffset, hvPtr));
+        _currentBlock.Instructions.Add(new StorePointerInstruction(_currentSpan, hvPtr, hvResult));
+
+        // value field = raw pointer
+        var vPtr = new LocalValue($"ffi_val_ptr_{_tempCounter++}", new IrPointer(valField.Type));
+        _currentBlock.Instructions.Add(new GetElementPtrInstruction(_currentSpan, tmpPtr, valField.ByteOffset, vPtr));
+        _currentBlock.Instructions.Add(new StorePointerInstruction(_currentSpan, vPtr, rawPtr));
+
+        var loaded = new LocalValue($"ffi_opt_val_{_tempCounter++}", optStruct);
+        _currentBlock.Instructions.Add(new LoadInstruction(_currentSpan, tmpPtr, loaded));
+        return loaded;
+    }
+
     private void LowerVariableDeclaration(VariableDeclarationNode varDecl)
     {
+        // Discard pattern: `let _ = expr` — evaluate for side effects, don't store
+        if (varDecl.Name == "_")
+        {
+            if (varDecl.Initializer != null)
+                LowerExpression(varDecl.Initializer);
+            return;
+        }
+
         var irType = GetIrType(varDecl);
         var uniqueName = GetUniqueVariableName(varDecl.Name);
+
+        // Array variables with initializers: reuse the literal's alloca directly.
+        // LowerArrayLiteral already creates storage and stores elements — creating a
+        // second alloca and trying to "store" the array pointer into it is wrong.
+        var isArray = irType is IrArray;
+        if (isArray && varDecl.Initializer != null)
+        {
+            var initVal = LowerExpression(varDecl.Initializer, irType);
+            _locals[varDecl.Name] = new LocalValue(initVal.Name, new IrPointer(irType));
+            return;
+        }
 
         // Allocate stack space
         var allocaResult = new LocalValue(uniqueName, new IrPointer(irType));
         _currentBlock.Instructions.Add(new AllocaInstruction(_currentSpan, null!, irType.Size, allocaResult)
         {
-            // AllocaInstruction uses TypeBase for AllocatedType — leave null for new pipeline
-            // The IrType is carried on the result value
+            IsArrayStorage = isArray
         });
 
-        // Store initializer if present
+        // Store initializer if present, otherwise zero-initialize
         if (varDecl.Initializer != null)
         {
-            var initVal = LowerExpression(varDecl.Initializer);
+            var initVal = LowerExpression(varDecl.Initializer, irType);
             _currentBlock.Instructions.Add(new StorePointerInstruction(_currentSpan, allocaResult, initVal));
+        }
+        else
+        {
+            // Zero-initialize variables declared without an initializer (e.g. `let sb: StringBuilder`)
+            var memsetResult = new LocalValue($"memset_{_tempCounter++}", TypeLayoutService.IrVoidPrim);
+            _currentBlock.Instructions.Add(new CallInstruction(_currentSpan, "memset",
+                [allocaResult, new ConstantValue(0, TypeLayoutService.IrI32), new ConstantValue(irType.Size, TypeLayoutService.IrUSize)],
+                memsetResult)
+            { IsForeignCall = true });
         }
 
         _locals[varDecl.Name] = allocaResult;
@@ -393,7 +975,7 @@ public class HmAstLowering
     {
         if (_loopStack.Count == 0)
         {
-            _diagnostics.Add(Diagnostic.Error("break outside of loop", _.Span, null, "E3015"));
+            _diagnostics.Add(Diagnostic.Error("break outside of loop", _.Span, null, "E3006"));
             return;
         }
 
@@ -410,7 +992,7 @@ public class HmAstLowering
     {
         if (_loopStack.Count == 0)
         {
-            _diagnostics.Add(Diagnostic.Error("continue outside of loop", _.Span, null, "E3016"));
+            _diagnostics.Add(Diagnostic.Error("continue outside of loop", _.Span, null, "E3007"));
             return;
         }
 
@@ -697,10 +1279,10 @@ public class HmAstLowering
     // Expression lowering
     // =========================================================================
 
-    private Value LowerExpression(ExpressionNode expr)
+    private Value LowerExpression(ExpressionNode expr, IrType? expectedType = null)
     {
         _currentSpan = expr.Span;
-        return expr switch
+        var result = expr switch
         {
             IntegerLiteralNode intLit => LowerIntegerLiteral(intLit),
             BooleanLiteralNode boolLit => LowerBooleanLiteral(boolLit),
@@ -722,7 +1304,7 @@ public class HmAstLowering
             DereferenceExpressionNode deref => LowerDereference(deref),
             AssignmentExpressionNode assign => LowerAssignment(assign),
             StructConstructionExpressionNode structCtor => LowerStructConstruction(structCtor),
-            AnonymousStructExpressionNode anonStruct => LowerAnonymousStruct(anonStruct),
+            AnonymousStructExpressionNode anonStruct => LowerAnonymousStruct(anonStruct, expectedType),
             ArrayLiteralExpressionNode arrLit => LowerArrayLiteral(arrLit),
             IndexExpressionNode index => LowerIndex(index),
             RangeExpressionNode range => LowerRange(range),
@@ -732,11 +1314,21 @@ public class HmAstLowering
             LambdaExpressionNode lambda => LowerLambda(lambda),
             _ => throw new NotImplementedException($"Lowering of expression type {expr.GetType()} is not implemented.")
         };
+
+        if (expectedType != null)
+            result = ApplyCoercions(result, expectedType);
+
+        return result;
     }
 
     private Value LowerIntegerLiteral(IntegerLiteralNode intLit)
     {
         var irType = GetIrType(intLit);
+        // The HM type checker may unify the literal with a non-primitive type
+        // (e.g., Option[usize] for `return 0` in a usize? function).
+        // Always produce a primitive-typed constant; ApplyCoercions handles wrapping.
+        if (irType is not IrPrimitive)
+            irType = TypeLayoutService.IrI32;
         return new ConstantValue(intLit.Value, irType);
     }
 
@@ -812,6 +1404,12 @@ public class HmAstLowering
 
             // Local variables are stored via alloca — need to load
             var irType = GetIrType(id);
+
+            // Array locals use IsArrayStorage — the alloca pointer IS the array base,
+            // no load needed (same pattern as LowerArrayLiteral).
+            if (irType is IrArray)
+                return new LocalValue(localVal.Name, irType);
+
             var loaded = new LocalValue($"t{_tempCounter++}", irType);
             _currentBlock.Instructions.Add(new LoadInstruction(_currentSpan, localVal, loaded));
             return loaded;
@@ -822,6 +1420,26 @@ public class HmAstLowering
         // Check for function reference
         if (inferredType is FunctionType)
             return new FunctionReferenceValue(id.Name, null!) { IrType = GetIrType(id) };
+
+        // Check for global constant
+        if (_globalConstants.TryGetValue(id.Name, out var globalVal))
+            return globalVal;
+
+        // Check for type-as-value (e.g., u8 in size_of(u8)) — Type(T) with RTTI
+        var resolvedType = _engine.Resolve(inferredType);
+        if (resolvedType is NominalType { Name: "core.rtti.Type" } typeNom
+            && typeNom.TypeArguments.Count > 0)
+        {
+            EnsureTypeTableExists();
+            var key = BuildTypeKey(typeNom.TypeArguments[0]);
+            if (_typeTableGlobals != null && _typeTableGlobals.TryGetValue(key, out var typeInfoGlobal))
+            {
+                var typeIrType = GetIrType(id);
+                var loaded = new LocalValue($"type_load_{_tempCounter++}", typeIrType);
+                _currentBlock.Instructions.Add(new LoadInstruction(_currentSpan, typeInfoGlobal, loaded));
+                return loaded;
+            }
+        }
 
         // Check for bare enum variant (payload-less variant constructor used as identifier)
         var idIrType = _layout.Lower(inferredType);
@@ -878,33 +1496,127 @@ public class HmAstLowering
     {
         var retIrType = GetIrType(call);
 
+        // Handle field-access-then-call (vtable pattern): obj.field(args)
+        // where field is a function pointer within a struct
+        if (call.IsIndirectCall && call.UfcsReceiver != null && call.MethodName != null)
+        {
+            return LowerIndirectFieldCall(call, retIrType);
+        }
+
+        // Handle indirect call through a local variable holding a function pointer
+        if (call.IsIndirectCall && call.UfcsReceiver == null)
+        {
+            return LowerIndirectVarCall(call, retIrType);
+        }
+
         // Lower arguments
         var args = new List<Value>();
 
         // UFCS: prepend receiver as first arg
         if (call.UfcsReceiver != null)
         {
-            var receiverVal = LowerExpression(call.UfcsReceiver);
-
-            // UFCS temp materialization: if receiver is not already a pointer,
-            // save to a temp alloca so the callee can receive a pointer
-            if (receiverVal.IrType is not IrPointer)
+            // Check if callee's first param expects a pointer (i.e. &self)
+            var firstParamWantsPtr = false;
+            if (call.ResolvedTarget != null && call.ResolvedTarget.Parameters.Count > 0)
             {
-                var receiverIrType = receiverVal.IrType ?? TypeLayoutService.IrVoidPrim;
-                var temp = new LocalValue($"ufcs_tmp_{_tempCounter++}", new IrPointer(receiverIrType));
-                _currentBlock.Instructions.Add(new AllocaInstruction(_currentSpan, null!, receiverIrType.Size, temp));
-                _currentBlock.Instructions.Add(new StorePointerInstruction(_currentSpan, temp, receiverVal));
-                args.Add(temp);
+                var firstParamIrType = GetIrType(call.ResolvedTarget.Parameters[0]);
+                firstParamWantsPtr = firstParamIrType is IrPointer;
+            }
+
+            // When callee expects &self and receiver is a local variable whose alloca type
+            // matches the expected param type, pass the alloca pointer directly so the
+            // function can mutate the original variable (not a copy).
+            // Only applies to non-pointer value types — if the variable already stores a
+            // pointer (e.g. `let w: &Writer`), loading is needed to avoid double-indirection.
+            if (firstParamWantsPtr && call.UfcsReceiver is IdentifierExpressionNode receiverId
+                && _locals.TryGetValue(receiverId.Name, out var localAlloca)
+                && !_parameters.Contains(receiverId.Name)
+                && localAlloca.IrType is IrPointer ptrType
+                && ptrType.Pointee is not IrPointer) // value type, not already a pointer
+            {
+                args.Add(localAlloca);
+            }
+            else if (firstParamWantsPtr && call.UfcsReceiver is MemberAccessExpressionNode memberReceiver)
+            {
+                // UFCS on a field: self.field.method() where method wants &self.
+                // Compute a pointer to the field in-place (avoid copying the field value,
+                // which would lose mutation semantics for iterators, etc.).
+                var targetVal = LowerExpression(memberReceiver.Target);
+                var baseVal = targetVal;
+                var baseIrType = targetVal.IrType;
+
+                // Auto-deref all but the last pointer layer (keep the struct pointer)
+                for (int i = 0; i < memberReceiver.AutoDerefCount - 1; i++)
+                {
+                    if (baseIrType is IrPointer derefPtrType)
+                    {
+                        var derefResult = new LocalValue($"autoderef_{_tempCounter++}", derefPtrType.Pointee);
+                        _currentBlock.Instructions.Add(new LoadInstruction(_currentSpan, baseVal, derefResult));
+                        baseVal = derefResult;
+                        baseIrType = derefPtrType.Pointee;
+                    }
+                }
+
+                if (baseIrType is IrPointer { Pointee: IrStruct baseStruct })
+                {
+                    // GEP directly on the struct pointer — field pointer stays in-place
+                    var field = FindField(baseStruct, memberReceiver.FieldName);
+                    var fieldPtr = new LocalValue($"ufcs_field_ptr_{_tempCounter++}", new IrPointer(field.Type));
+                    _currentBlock.Instructions.Add(
+                        new GetElementPtrInstruction(_currentSpan, baseVal, field.ByteOffset, fieldPtr));
+
+                    if (field.Type is IrPointer)
+                    {
+                        // Field is itself a pointer (e.g. sb: &StringBuilder) — load the
+                        // pointer value so we pass &StringBuilder, not &&StringBuilder.
+                        var loadedPtr = new LocalValue($"ufcs_field_load_{_tempCounter++}", field.Type);
+                        _currentBlock.Instructions.Add(new LoadInstruction(_currentSpan, fieldPtr, loadedPtr));
+                        args.Add(loadedPtr);
+                    }
+                    else
+                    {
+                        // Field is a value type — pass the GEP pointer so callee can
+                        // mutate the field in-place (e.g. iterator state).
+                        args.Add(fieldPtr);
+                    }
+                }
+                else
+                {
+                    // Fallback: base is a value, copy + materialize pointer
+                    var receiverVal = LowerExpression(call.UfcsReceiver);
+                    var receiverIrType = receiverVal.IrType ?? TypeLayoutService.IrVoidPrim;
+                    var temp = new LocalValue($"ufcs_tmp_{_tempCounter++}", new IrPointer(receiverIrType));
+                    _currentBlock.Instructions.Add(new AllocaInstruction(_currentSpan, null!, receiverIrType.Size, temp));
+                    _currentBlock.Instructions.Add(new StorePointerInstruction(_currentSpan, temp, receiverVal));
+                    args.Add(temp);
+                }
             }
             else
             {
-                args.Add(receiverVal);
-            }
-        }
+                var receiverVal = LowerExpression(call.UfcsReceiver);
 
-        foreach (var arg in call.Arguments)
-        {
-            args.Add(LowerExpression(arg));
+                if (firstParamWantsPtr && receiverVal.IrType is not IrPointer)
+                {
+                    // Callee expects &self — materialize a pointer
+                    var receiverIrType = receiverVal.IrType ?? TypeLayoutService.IrVoidPrim;
+                    var temp = new LocalValue($"ufcs_tmp_{_tempCounter++}", new IrPointer(receiverIrType));
+                    _currentBlock.Instructions.Add(new AllocaInstruction(_currentSpan, null!, receiverIrType.Size, temp));
+                    _currentBlock.Instructions.Add(new StorePointerInstruction(_currentSpan, temp, receiverVal));
+                    args.Add(temp);
+                }
+                else if (!firstParamWantsPtr && receiverVal.IrType is IrPointer recvPtr)
+                {
+                    // Callee expects value but receiver is a pointer (e.g. self: &List(T)
+                    // calling as_slice(self: List(T))) — deref the pointer
+                    var loaded = new LocalValue($"ufcs_deref_{_tempCounter++}", recvPtr.Pointee);
+                    _currentBlock.Instructions.Add(new LoadInstruction(_currentSpan, receiverVal, loaded));
+                    args.Add(loaded);
+                }
+                else
+                {
+                    args.Add(receiverVal);
+                }
+            }
         }
 
         // Resolve target function name
@@ -922,12 +1634,38 @@ public class HmAstLowering
         if (call.ResolvedTarget != null && !isForeign)
         {
             foreach (var param in call.ResolvedTarget.Parameters)
-            {
                 calleeIrParamTypes.Add(GetIrType(param));
+        }
+
+        // Lower arguments with expected types from callee params (triggers coercions)
+        // Offset by ufcs arg count since receiver was already added
+        var ufcsOffset = call.UfcsReceiver != null ? 1 : 0;
+        for (int i = 0; i < call.Arguments.Count; i++)
+        {
+            var paramIdx = i + ufcsOffset;
+            IrType? expectedParamType = paramIdx < calleeIrParamTypes.Count
+                ? calleeIrParamTypes[paramIdx] : null;
+            args.Add(LowerExpression(call.Arguments[i], expectedParamType));
+        }
+
+        // For foreign calls returning Option[&T], the C function returns a raw pointer.
+        // Emit the call with pointer return type, then wrap in Option.
+        var actualRetType = retIrType;
+        IrStruct? foreignOptionRet = null;
+        IrField foreignValField = default;
+        if (isForeign && retIrType is IrStruct optRet)
+        {
+            var hvF = optRet.Fields.FirstOrDefault(f => f.Name == "has_value");
+            var vF = optRet.Fields.FirstOrDefault(f => f.Name == "value");
+            if (hvF.Type == TypeLayoutService.IrBool && vF.Type is IrPointer)
+            {
+                actualRetType = vF.Type; // raw pointer
+                foreignOptionRet = optRet;
+                foreignValField = vF;
             }
         }
 
-        var result = new LocalValue($"call_{_tempCounter++}", retIrType);
+        var result = new LocalValue($"call_{_tempCounter++}", actualRetType);
         var callInst = new CallInstruction(_currentSpan, targetName, args, result);
         callInst.IsForeignCall = isForeign;
         callInst.IsIndirectCall = call.IsIndirectCall;
@@ -935,6 +1673,108 @@ public class HmAstLowering
             callInst.CalleeIrParamTypes = calleeIrParamTypes;
 
         _currentBlock.Instructions.Add(callInst);
+
+        // Wrap foreign raw-pointer return in Option[&T]
+        if (foreignOptionRet != null)
+        {
+            var hvField = foreignOptionRet.Fields.First(f => f.Name == "has_value");
+            return WrapPointerInOption(result, foreignOptionRet, hvField, foreignValField);
+        }
+
+        return result;
+    }
+
+    /// <summary>
+    /// Lower a field-call: receiver.field(args) where field is a function pointer.
+    /// Extracts the function pointer from the struct and emits an IndirectCallInstruction.
+    /// </summary>
+    private Value LowerIndirectFieldCall(CallExpressionNode call, IrType retIrType)
+    {
+        var receiverVal = LowerExpression(call.UfcsReceiver!);
+        var baseVal = receiverVal;
+        var baseIrType = receiverVal.IrType;
+
+        // Auto-deref pointer layers
+        while (baseIrType is IrPointer ptrType)
+        {
+            var derefResult = new LocalValue($"autoderef_{_tempCounter++}", ptrType.Pointee);
+            _currentBlock.Instructions.Add(new LoadInstruction(_currentSpan, baseVal, derefResult));
+            baseVal = derefResult;
+            baseIrType = ptrType.Pointee;
+        }
+
+        // GEP requires a pointer base — spill struct value to alloca
+        if (baseIrType is IrStruct or IrEnum)
+        {
+            var tmpPtr = new LocalValue($"field_tmp_{_tempCounter++}", new IrPointer(baseIrType));
+            _currentBlock.Instructions.Add(new AllocaInstruction(_currentSpan, null!, baseIrType.Size, tmpPtr));
+            _currentBlock.Instructions.Add(new StorePointerInstruction(_currentSpan, tmpPtr, baseVal));
+            baseVal = tmpPtr;
+        }
+
+        // Find the function pointer field
+        var structType = baseIrType switch
+        {
+            IrStruct s => s,
+            IrPointer { Pointee: IrStruct s } => s,
+            _ => throw new InvalidOperationException(
+                $"BUG: Indirect field call receiver is not a struct: {baseIrType} at {call.Span}")
+        };
+
+        var field = FindField(structType, call.MethodName!);
+
+        // GEP to get field pointer, then load the function pointer
+        var fieldPtrResult = new LocalValue($"field_ptr_{_tempCounter++}", new IrPointer(field.Type));
+        _currentBlock.Instructions.Add(
+            new GetElementPtrInstruction(_currentSpan, baseVal, field.ByteOffset, fieldPtrResult));
+
+        var funcPtrVal = new LocalValue($"fptr_load_{_tempCounter++}", field.Type);
+        _currentBlock.Instructions.Add(new LoadInstruction(_currentSpan, fieldPtrResult, funcPtrVal));
+
+        // Lower arguments
+        var args = new List<Value>();
+        foreach (var arg in call.Arguments)
+            args.Add(LowerExpression(arg));
+
+        var result = new LocalValue($"call_{_tempCounter++}", retIrType);
+        _currentBlock.Instructions.Add(new IndirectCallInstruction(_currentSpan, funcPtrVal, args, result));
+        return result;
+    }
+
+    /// <summary>
+    /// Lower an indirect call through a variable holding a function pointer.
+    /// </summary>
+    private Value LowerIndirectVarCall(CallExpressionNode call, IrType retIrType)
+    {
+        // Look up the local that holds the function pointer
+        Value funcPtrVal;
+        if (_locals.TryGetValue(call.FunctionName, out var localPtr))
+        {
+            // Load from local pointer if it's stored as a pointer
+            if (localPtr.IrType is IrPointer { Pointee: IrFunctionPtr } ptrToFn)
+            {
+                var loadResult = new LocalValue($"fptr_load_{_tempCounter++}", ptrToFn.Pointee);
+                _currentBlock.Instructions.Add(new LoadInstruction(_currentSpan, localPtr, loadResult));
+                funcPtrVal = loadResult;
+            }
+            else
+            {
+                funcPtrVal = localPtr;
+            }
+        }
+        else
+        {
+            // Fall back to a named reference (e.g. global function pointer)
+            funcPtrVal = new LocalValue(call.FunctionName, retIrType);
+        }
+
+        // Lower arguments
+        var args = new List<Value>();
+        foreach (var arg in call.Arguments)
+            args.Add(LowerExpression(arg));
+
+        var result = new LocalValue($"call_{_tempCounter++}", retIrType);
+        _currentBlock.Instructions.Add(new IndirectCallInstruction(_currentSpan, funcPtrVal, args, result));
         return result;
     }
 
@@ -1107,14 +1947,39 @@ public class HmAstLowering
 
     private Value LowerMemberAccess(MemberAccessExpressionNode member)
     {
-        var targetVal = LowerExpression(member.Target);
         var fieldName = member.FieldName;
+
+        // Check if this is an enum variant access (e.g., FileMode.Read)
+        // The target's inferred type is the enum type, and the member is a variant name.
+        var targetInferredType = _checker.GetInferredType(member.Target);
+        var resolvedTarget = _checker.Engine.Resolve(targetInferredType);
+        if (resolvedTarget is NominalType { Kind: NominalKind.Enum })
+        {
+            var irType = GetIrType(member);
+            if (irType is IrEnum irEnum)
+                return LowerBareVariant(fieldName, irEnum);
+        }
+
+        var targetVal = LowerExpression(member.Target);
+
+        // Handle array .len and .ptr (arrays act as having these virtual fields)
+        var targetIrType = targetVal.IrType;
+        var arrayIr = targetIrType as IrArray ?? (targetIrType as IrPointer)?.Pointee as IrArray;
+        if (arrayIr != null)
+        {
+            if (fieldName == "len")
+                return new ConstantValue(arrayIr.Length ?? 0, TypeLayoutService.IrUSize);
+            if (fieldName == "ptr")
+            {
+                var elemPtrType = new IrPointer(arrayIr.Element);
+                var castResult = new LocalValue($"array_ptr_{_tempCounter++}", elemPtrType);
+                _currentBlock.Instructions.Add(new CastInstruction(_currentSpan, targetVal, null!, castResult));
+                return castResult;
+            }
+        }
 
         // Get the result type from the type checker
         var fieldIrType = GetIrType(member);
-
-        // Determine the struct IrType from the target
-        var targetIrType = targetVal.IrType;
 
         // Auto-dereference: peel off pointer layers as needed
         var baseVal = targetVal;
@@ -1138,9 +2003,31 @@ public class HmAstLowering
             _ => null
         };
 
+        // Type(T) is a phantom alias for TypeInfo — redirect field access to TypeInfo's layout
+        if (structType != null && structType.Fields.Length == 0)
+        {
+            var targetHmType = _checker.Engine.Resolve(_checker.GetInferredType(member.Target));
+            if (targetHmType is NominalType { Name: "core.rtti.Type" })
+            {
+                var typeInfo = _checker.LookupNominalType("core.rtti.TypeInfo");
+                if (typeInfo != null)
+                    structType = _layout.Lower(typeInfo) as IrStruct;
+            }
+        }
+
         if (structType == null)
             throw new InvalidOperationException(
                 $"BUG: Member access on non-struct type `{baseIrType}` at {member.Span}");
+
+        // If the base is a struct VALUE (not a pointer), spill to a local alloca first.
+        // GEP requires a pointer base — we can't byte-cast a C struct value.
+        if (baseIrType is IrStruct or IrEnum)
+        {
+            var tmpPtr = new LocalValue($"field_tmp_{_tempCounter++}", new IrPointer(baseIrType));
+            _currentBlock.Instructions.Add(new AllocaInstruction(_currentSpan, null!, baseIrType.Size, tmpPtr));
+            _currentBlock.Instructions.Add(new StorePointerInstruction(_currentSpan, tmpPtr, baseVal));
+            baseVal = tmpPtr;
+        }
 
         var field = FindField(structType, fieldName);
 
@@ -1163,6 +2050,43 @@ public class HmAstLowering
         // No-op if types match
         if (srcVal.IrType != null && srcVal.IrType == targetIrType)
             return srcVal;
+
+        // Try systematic coercions first (handles array→slice, pointer→Option, etc.)
+        var coerced = ApplyCoercions(srcVal, targetIrType);
+        if (coerced != srcVal)
+            return coerced;
+
+        // Pointer → Slice: e.g. `buf as u8[]` where buf is [u8; N]
+        // The source is a pointer (arrays decay to pointers), target is a Slice struct.
+        if (srcVal.IrType is IrPointer && targetIrType is IrStruct sliceTarget)
+        {
+            var ptrField = sliceTarget.Fields.FirstOrDefault(f => f.Name == "ptr");
+            var lenField = sliceTarget.Fields.FirstOrDefault(f => f.Name == "len");
+            if (ptrField.Type != null && lenField.Type != null)
+            {
+                // Get the array length from the HM type (the IrType lost length info)
+                var hmSrcType = _engine.Resolve(_checker.GetInferredType(cast.Expression));
+                int length = 0;
+                if (hmSrcType is FLang.Core.Types.ArrayType arrHm)
+                    length = arrHm.Length;
+
+                var tmpPtr = new LocalValue($"slice_{_tempCounter++}", new IrPointer(sliceTarget));
+                _currentBlock.Instructions.Add(new AllocaInstruction(_currentSpan, null!, sliceTarget.Size, tmpPtr));
+
+                var ptrFieldPtr = new LocalValue($"slice_ptr_f_{_tempCounter++}", new IrPointer(ptrField.Type));
+                _currentBlock.Instructions.Add(new GetElementPtrInstruction(_currentSpan, tmpPtr, ptrField.ByteOffset, ptrFieldPtr));
+                _currentBlock.Instructions.Add(new StorePointerInstruction(_currentSpan, ptrFieldPtr, srcVal));
+
+                var lenFieldPtr = new LocalValue($"slice_len_f_{_tempCounter++}", new IrPointer(lenField.Type));
+                _currentBlock.Instructions.Add(new GetElementPtrInstruction(_currentSpan, tmpPtr, lenField.ByteOffset, lenFieldPtr));
+                _currentBlock.Instructions.Add(new StorePointerInstruction(_currentSpan, lenFieldPtr,
+                    new ConstantValue(length, TypeLayoutService.IrUSize)));
+
+                var loaded = new LocalValue($"slice_val_{_tempCounter++}", sliceTarget);
+                _currentBlock.Instructions.Add(new LoadInstruction(_currentSpan, tmpPtr, loaded));
+                return loaded;
+            }
+        }
 
         // Constant folding for primitive casts
         if (srcVal is ConstantValue constSrc && targetIrType is IrPrimitive)
@@ -1209,7 +2133,7 @@ public class HmAstLowering
         // Then branch
         _currentFunction.BasicBlocks.Add(thenBlock);
         _currentBlock = thenBlock;
-        var thenVal = LowerExpression(ifExpr.ThenBranch);
+        var thenVal = LowerExpression(ifExpr.ThenBranch, isVoid ? null : resultIrType);
         if (!isVoid && resultPtr != null)
             _currentBlock.Instructions.Add(new StorePointerInstruction(_currentSpan, resultPtr, thenVal));
         if (_currentBlock.Instructions.Count == 0 ||
@@ -1223,7 +2147,7 @@ public class HmAstLowering
         _currentBlock = elseBlock;
         if (ifExpr.ElseBranch != null)
         {
-            var elseVal = LowerExpression(ifExpr.ElseBranch);
+            var elseVal = LowerExpression(ifExpr.ElseBranch, isVoid ? null : resultIrType);
             if (!isVoid && resultPtr != null)
                 _currentBlock.Instructions.Add(new StorePointerInstruction(_currentSpan, resultPtr, elseVal));
         }
@@ -1255,6 +2179,19 @@ public class HmAstLowering
             // localVal is already a pointer (alloca result) for locals
             if (!_parameters.Contains(id.Name))
                 return localVal;
+
+            // For parameters that are already pointer types (e.g., sink: &Sink),
+            // &sink returns the pointer value directly — no double-indirection.
+            if (localVal.IrType is IrPointer)
+                return localVal;
+        }
+
+        // If target is a global constant, the GlobalValue is already a pointer
+        if (addrOf.Target is IdentifierExpressionNode gid
+            && _globalConstants.TryGetValue(gid.Name, out var gv)
+            && gv is GlobalValue)
+        {
+            return gv;
         }
 
         // General case: emit AddressOfInstruction
@@ -1266,7 +2203,7 @@ public class HmAstLowering
         return result;
     }
 
-    private Value LowerDereference(DereferenceExpressionNode deref)
+    private LocalValue LowerDereference(DereferenceExpressionNode deref)
     {
         var targetVal = LowerExpression(deref.Target);
 
@@ -1277,7 +2214,7 @@ public class HmAstLowering
         return result;
     }
 
-    private Value LowerAssignment(AssignmentExpressionNode assign)
+    private ConstantValue LowerAssignment(AssignmentExpressionNode assign)
     {
         // Indexed assignment with op_set_index
         if (assign.Target is IndexExpressionNode idx)
@@ -1288,7 +2225,9 @@ public class HmAstLowering
         }
 
         var ptr = LowerLValue(assign.Target);
-        var val = LowerExpression(assign.Value);
+        // Determine expected type from LValue's pointee type
+        IrType? expectedType = ptr?.IrType is IrPointer ptrType ? ptrType.Pointee : null;
+        var val = LowerExpression(assign.Value, expectedType);
 
         if (ptr != null)
             _currentBlock.Instructions.Add(new StorePointerInstruction(_currentSpan, ptr, val));
@@ -1296,20 +2235,31 @@ public class HmAstLowering
         return new ConstantValue(0, TypeLayoutService.IrVoidPrim);
     }
 
-    private Value LowerSetIndexCall(IndexExpressionNode idx, ExpressionNode valueExpr, ResolvedOperator resolved)
+    private ConstantValue LowerSetIndexCall(IndexExpressionNode idx, ExpressionNode valueExpr, ResolvedOperator resolved)
     {
-        var baseVal = LowerExpression(idx.Base);
         var indexVal = LowerExpression(idx.Index);
         var val = LowerExpression(valueExpr);
 
-        // Materialize base to a temp pointer if not already a pointer
-        if (baseVal.IrType is not IrPointer)
+        // For op_set_index(&base, ...), pass the address of the original variable
+        // so mutations are visible to the caller. Use LowerLValue if the first
+        // param expects a reference, otherwise fall back to LowerExpression + materialize.
+        var calleeIrParamTypes0 = GetIrType(resolved.Function.Parameters[0]);
+        Value baseVal;
+        if (calleeIrParamTypes0 is IrPointer)
         {
-            var baseIrType = baseVal.IrType ?? TypeLayoutService.IrVoidPrim;
-            var temp = new LocalValue($"setidx_tmp_{_tempCounter++}", new IrPointer(baseIrType));
-            _currentBlock.Instructions.Add(new AllocaInstruction(_currentSpan, null!, baseIrType.Size, temp));
-            _currentBlock.Instructions.Add(new StorePointerInstruction(_currentSpan, temp, baseVal));
-            baseVal = temp;
+            baseVal = LowerLValue(idx.Base) ?? LowerExpression(idx.Base);
+            if (baseVal.IrType is not IrPointer)
+            {
+                var baseIrType = baseVal.IrType ?? TypeLayoutService.IrVoidPrim;
+                var temp = new LocalValue($"setidx_tmp_{_tempCounter++}", new IrPointer(baseIrType));
+                _currentBlock.Instructions.Add(new AllocaInstruction(_currentSpan, null!, baseIrType.Size, temp));
+                _currentBlock.Instructions.Add(new StorePointerInstruction(_currentSpan, temp, baseVal));
+                baseVal = temp;
+            }
+        }
+        else
+        {
+            baseVal = LowerExpression(idx.Base);
         }
 
         var calleeIrParamTypes = new List<IrType>();
@@ -1325,7 +2275,7 @@ public class HmAstLowering
         return new ConstantValue(0, TypeLayoutService.IrVoidPrim);
     }
 
-    private Value LowerStructConstruction(StructConstructionExpressionNode structCtor)
+    private LocalValue LowerStructConstruction(StructConstructionExpressionNode structCtor)
     {
         var irType = GetIrType(structCtor);
 
@@ -1335,9 +2285,15 @@ public class HmAstLowering
         return EmitStructConstruction(structIrType, structCtor.Fields, structCtor.Span);
     }
 
-    private Value LowerAnonymousStruct(AnonymousStructExpressionNode anonStruct)
+    private LocalValue LowerAnonymousStruct(AnonymousStructExpressionNode anonStruct, IrType? expectedType = null)
     {
-        var irType = GetIrType(anonStruct);
+        // Prefer the expected type (e.g. function return type) over the inferred anonymous type.
+        // This handles cases like `return .{ current = ..., end = ... }` in a function returning
+        // RangeIterator(T), where the anonymous struct's inferred fields may have unresolved TypeVars.
+        var irType = expectedType is IrStruct expectedStruct
+                     && HasMatchingFields(expectedStruct, anonStruct)
+            ? expectedType
+            : GetIrType(anonStruct);
 
         if (irType is not IrStruct structIrType)
             throw new InvalidOperationException($"BUG: Anonymous struct target is not a struct type: `{irType}` at {anonStruct.Span}");
@@ -1345,19 +2301,37 @@ public class HmAstLowering
         return EmitStructConstruction(structIrType, anonStruct.Fields, anonStruct.Span);
     }
 
+    private static bool HasMatchingFields(IrStruct expected, AnonymousStructExpressionNode anon)
+    {
+        if (anon.Fields.Count > expected.Fields.Length) return false;
+        foreach (var (fieldName, _) in anon.Fields)
+        {
+            if (!expected.Fields.Any(f => f.Name == fieldName))
+                return false;
+        }
+        return true;
+    }
+
     /// <summary>
     /// Shared helper for struct construction: alloca + GEP/store per field + load result.
     /// </summary>
-    private Value EmitStructConstruction(IrStruct structIrType,
+    private LocalValue EmitStructConstruction(IrStruct structIrType,
         IReadOnlyList<(string FieldName, ExpressionNode Value)> fields, SourceSpan span)
     {
         var resultPtr = new LocalValue($"struct_{_tempCounter++}", new IrPointer(structIrType));
         _currentBlock.Instructions.Add(new AllocaInstruction(_currentSpan, null!, structIrType.Size, resultPtr));
 
+        // Zero-initialize the struct so unspecified fields get default values
+        var memsetResult = new LocalValue($"memset_{_tempCounter++}", TypeLayoutService.IrVoidPrim);
+        _currentBlock.Instructions.Add(new CallInstruction(_currentSpan, "memset",
+            [resultPtr, new ConstantValue(0, TypeLayoutService.IrI32), new ConstantValue(structIrType.Size, TypeLayoutService.IrUSize)],
+            memsetResult)
+        { IsForeignCall = true });
+
         foreach (var (fieldName, fieldExpr) in fields)
         {
-            var fieldVal = LowerExpression(fieldExpr);
             var irField = FindField(structIrType, fieldName);
+            var fieldVal = LowerExpression(fieldExpr, irField.Type);
 
             var fieldPtr = new LocalValue($"field_ptr_{_tempCounter++}", new IrPointer(irField.Type));
             _currentBlock.Instructions.Add(new GetElementPtrInstruction(_currentSpan, resultPtr, irField.ByteOffset, fieldPtr));
@@ -1370,7 +2344,35 @@ public class HmAstLowering
         return loaded;
     }
 
-    private Value LowerArrayLiteral(ArrayLiteralExpressionNode arrLit)
+    /// <summary>
+    /// Construct a struct value from pre-lowered field values (alloca + GEP/store per field + load).
+    /// </summary>
+    private LocalValue BuildStruct(IrStruct structType, Dictionary<string, Value> fieldValues)
+    {
+        var resultPtr = new LocalValue($"struct_{_tempCounter++}", new IrPointer(structType));
+        _currentBlock.Instructions.Add(new AllocaInstruction(_currentSpan, null!, structType.Size, resultPtr));
+
+        // Zero-initialize the struct so unspecified fields get default values
+        var memsetResult = new LocalValue($"memset_{_tempCounter++}", TypeLayoutService.IrVoidPrim);
+        _currentBlock.Instructions.Add(new CallInstruction(_currentSpan, "memset",
+            [resultPtr, new ConstantValue(0, TypeLayoutService.IrI32), new ConstantValue(structType.Size, TypeLayoutService.IrUSize)],
+            memsetResult)
+        { IsForeignCall = true });
+
+        foreach (var field in structType.Fields)
+        {
+            if (!fieldValues.TryGetValue(field.Name, out var val)) continue;
+            var fieldPtr = new LocalValue($"field_ptr_{_tempCounter++}", new IrPointer(field.Type));
+            _currentBlock.Instructions.Add(new GetElementPtrInstruction(_currentSpan, resultPtr, field.ByteOffset, fieldPtr));
+            _currentBlock.Instructions.Add(new StorePointerInstruction(_currentSpan, fieldPtr, val));
+        }
+
+        var loaded = new LocalValue($"struct_val_{_tempCounter++}", structType);
+        _currentBlock.Instructions.Add(new LoadInstruction(_currentSpan, resultPtr, loaded));
+        return loaded;
+    }
+
+    private LocalValue LowerArrayLiteral(ArrayLiteralExpressionNode arrLit)
     {
         var irType = GetIrType(arrLit);
 
@@ -1380,19 +2382,69 @@ public class HmAstLowering
 
         var elementIrType = arrayIrType.Element;
         var allocaResult = new LocalValue($"arr_{_tempCounter++}", new IrPointer(irType));
-        _currentBlock.Instructions.Add(new AllocaInstruction(_currentSpan, null!, irType.Size, allocaResult));
+        _currentBlock.Instructions.Add(new AllocaInstruction(_currentSpan, null!, irType.Size, allocaResult)
+        { IsArrayStorage = true });
 
         if (arrLit.IsRepeatSyntax && arrLit.RepeatValue != null && arrLit.RepeatCount.HasValue)
         {
-            // [val; count] — store same value at each index
             var repeatVal = LowerExpression(arrLit.RepeatValue);
-            for (int i = 0; i < arrLit.RepeatCount.Value; i++)
+            var count = arrLit.RepeatCount.Value;
+            var elemSize = elementIrType.Size;
+            var totalSize = elemSize * count;
+
+            // Fast path: memset for single-byte elements or zero-valued constants
+            bool useMemset = false;
+            int memsetByte = 0;
+            if (repeatVal is ConstantValue cv)
             {
-                var elemOffset = elementIrType.Size * i;
-                var elemPtr = new LocalValue($"arr_elem_ptr_{_tempCounter++}", new IrPointer(elementIrType));
+                if (cv.IntValue == 0)
+                {
+                    // Zero works for any type via memset
+                    useMemset = true;
+                    memsetByte = 0;
+                }
+                else if (elemSize == 1 && cv.IntValue >= 0 && cv.IntValue <= 255)
+                {
+                    // Single-byte element (u8, i8, bool) with value that fits in a byte
+                    useMemset = true;
+                    memsetByte = (int)cv.IntValue;
+                }
+            }
+
+            if (useMemset)
+            {
+                var voidResult = new LocalValue($"memset_{_tempCounter++}", TypeLayoutService.IrVoidPrim);
+                _currentBlock.Instructions.Add(new CallInstruction(_currentSpan, "memset",
+                    [allocaResult, new ConstantValue(memsetByte, TypeLayoutService.IrI32),
+                     new ConstantValue(totalSize, TypeLayoutService.IrUSize)],
+                    voidResult)
+                { IsForeignCall = true });
+            }
+            else
+            {
+                // General path: store element 0, then doubling memcpy to fill the rest
+                var elem0Ptr = new LocalValue($"arr_elem_ptr_{_tempCounter++}", new IrPointer(elementIrType));
                 _currentBlock.Instructions.Add(
-                    new GetElementPtrInstruction(_currentSpan, allocaResult, elemOffset, elemPtr));
-                _currentBlock.Instructions.Add(new StorePointerInstruction(_currentSpan, elemPtr, repeatVal));
+                    new GetElementPtrInstruction(_currentSpan, allocaResult, 0, elem0Ptr));
+                _currentBlock.Instructions.Add(new StorePointerInstruction(_currentSpan, elem0Ptr, repeatVal));
+
+                if (count > 1)
+                {
+                    int filled = 1;
+                    while (filled < count)
+                    {
+                        var chunk = Math.Min(filled, count - filled);
+                        var destPtr = new LocalValue($"arr_fill_ptr_{_tempCounter++}", new IrPointer(elementIrType));
+                        _currentBlock.Instructions.Add(
+                            new GetElementPtrInstruction(_currentSpan, allocaResult, filled * elemSize, destPtr));
+                        var voidResult = new LocalValue($"memcpy_{_tempCounter++}", TypeLayoutService.IrVoidPrim);
+                        _currentBlock.Instructions.Add(new CallInstruction(_currentSpan, "memcpy",
+                            [destPtr, allocaResult, new ConstantValue(chunk * elemSize, TypeLayoutService.IrUSize)],
+                            voidResult)
+                        { IsForeignCall = true });
+                        filled += chunk;
+                    }
+                }
             }
         }
         else if (arrLit.Elements != null)
@@ -1409,10 +2461,9 @@ public class HmAstLowering
             }
         }
 
-        // Load the complete array value
-        var loaded = new LocalValue($"arr_val_{_tempCounter++}", irType);
-        _currentBlock.Instructions.Add(new LoadInstruction(_currentSpan, allocaResult, loaded));
-        return loaded;
+        // Array values in C are just pointers — return the alloca pointer directly
+        // (no Load needed; the alloca result name in C is already a pointer to the array data)
+        return new LocalValue(allocaResult.Name, irType);
     }
 
     private Value LowerIndex(IndexExpressionNode index)
@@ -1424,8 +2475,15 @@ public class HmAstLowering
             var baseVal = LowerExpression(index.Base);
             var indexVal = LowerExpression(index.Index);
 
-            // Materialize base to a temp if not already a pointer
-            if (baseVal.IrType is not IrPointer)
+            var retIrType = GetIrType(index);
+
+            var calleeIrParamTypes = new List<IrType>();
+            foreach (var param in resolved.Function.Parameters)
+                calleeIrParamTypes.Add(GetIrType(param));
+
+            // Only materialize base to a temp pointer if the callee expects a pointer
+            var firstParamIsPtr = calleeIrParamTypes.Count > 0 && calleeIrParamTypes[0] is IrPointer;
+            if (firstParamIsPtr && baseVal.IrType is not IrPointer)
             {
                 var baseIrType = baseVal.IrType ?? TypeLayoutService.IrVoidPrim;
                 var temp = new LocalValue($"idx_tmp_{_tempCounter++}", new IrPointer(baseIrType));
@@ -1433,12 +2491,6 @@ public class HmAstLowering
                 _currentBlock.Instructions.Add(new StorePointerInstruction(_currentSpan, temp, baseVal));
                 baseVal = temp;
             }
-
-            var retIrType = GetIrType(index);
-
-            var calleeIrParamTypes = new List<IrType>();
-            foreach (var param in resolved.Function.Parameters)
-                calleeIrParamTypes.Add(GetIrType(param));
 
             var result = new LocalValue($"call_{_tempCounter++}", retIrType);
             var callInst = new CallInstruction(_currentSpan, resolved.Function.Name, [baseVal, indexVal], result);
@@ -1448,33 +2500,211 @@ public class HmAstLowering
             return result;
         }
 
-        // Built-in array indexing: compute element pointer via GEP
+        // Built-in array/slice indexing
         var arrVal = LowerExpression(index.Base);
+        var resultIrType = GetIrType(index);
+
+        // Range indexing with literal range expression: handle partial ranges (pos.., ..end, ..)
+        if (index.Index is RangeExpressionNode rangeExpr)
+        {
+            // Start: use 0 if not specified
+            Value startVal = rangeExpr.Start != null
+                ? LowerExpression(rangeExpr.Start)
+                : new ConstantValue(0, TypeLayoutService.IrUSize);
+
+            // End: use base length if not specified
+            Value endVal;
+            if (rangeExpr.End != null)
+            {
+                endVal = LowerExpression(rangeExpr.End);
+            }
+            else
+            {
+                // Get length from base: fixed array has compile-time length, slice has .len field
+                var baseSemanticType = _checker.Engine.Resolve(_checker.GetInferredType(index.Base));
+                if (baseSemanticType is FLang.Core.Types.ArrayType arrType)
+                    endVal = new ConstantValue(arrType.Length, TypeLayoutService.IrUSize);
+                else
+                    endVal = ExtractSliceLen(arrVal);
+            }
+
+            return LowerRangeSlicingWithBounds(arrVal, startVal, endVal, resultIrType);
+        }
+
         var idxVal = LowerExpression(index.Index);
 
-        var elementIrType = GetIrType(index);
+        // Range indexing with a Range value (not literal): both bounds already set
+        if (idxVal.IrType is IrStruct rangeStruct && rangeStruct.Name == WellKnown.Range)
+        {
+            return LowerRangeSlicing(arrVal, idxVal, rangeStruct, resultIrType);
+        }
 
-        // Compute byte offset = index * element_size
-        var elementSize = new ConstantValue(elementIrType.Size, TypeLayoutService.IrUSize);
+        // If base is a Slice struct, extract .ptr field for pointer arithmetic
+        var basePtr = arrVal;
+        if (arrVal.IrType is IrStruct sliceBase)
+        {
+            var ptrField = sliceBase.Fields.FirstOrDefault(f => f.Name == "ptr");
+            if (ptrField.Type != null)
+            {
+                basePtr = CoerceSliceToPointer(arrVal, sliceBase, ptrField);
+            }
+        }
+
+        // Scalar indexing: compute element pointer via GEP
+        var elementSize = new ConstantValue(resultIrType.Size, TypeLayoutService.IrUSize);
         var byteOffset = new LocalValue($"idx_offset_{_tempCounter++}", TypeLayoutService.IrUSize);
         _currentBlock.Instructions.Add(new BinaryInstruction(_currentSpan, BinaryOp.Multiply, idxVal, elementSize, byteOffset));
 
-        var elemPtr = new LocalValue($"elem_ptr_{_tempCounter++}", new IrPointer(elementIrType));
-        _currentBlock.Instructions.Add(new GetElementPtrInstruction(_currentSpan, arrVal, byteOffset, elemPtr));
+        var elemPtr = new LocalValue($"elem_ptr_{_tempCounter++}", new IrPointer(resultIrType));
+        _currentBlock.Instructions.Add(new GetElementPtrInstruction(_currentSpan, basePtr, byteOffset, elemPtr));
 
-        var loaded = new LocalValue($"elem_{_tempCounter++}", elementIrType);
+        var loaded = new LocalValue($"elem_{_tempCounter++}", resultIrType);
         _currentBlock.Instructions.Add(new LoadInstruction(_currentSpan, elemPtr, loaded));
         return loaded;
     }
 
-    private Value LowerRange(RangeExpressionNode range)
+    /// <summary>
+    /// Lower range slicing: base[range] → Slice { ptr: base.ptr + start, len: end - start }
+    /// </summary>
+    private Value LowerRangeSlicing(Value baseVal, Value rangeVal, IrStruct rangeStruct, IrType resultIrType)
     {
-        // Construct a Range struct from start and end values
-        var rangeNominal = _checker.LookupNominalType(WellKnown.Range)
-            ?? throw new InvalidOperationException(
-                $"BUG: Range type not registered at {range.Span}");
+        // Extract start and end from range struct
+        var startField = FindField(rangeStruct, "start");
+        var endField = FindField(rangeStruct, "end");
 
-        var rangeIrType = _layout.Lower(rangeNominal);
+        // Spill range to alloca for field access
+        var rangePtr = new LocalValue($"rng_ptr_{_tempCounter++}", new IrPointer(rangeStruct));
+        _currentBlock.Instructions.Add(new AllocaInstruction(_currentSpan, null!, rangeStruct.Size, rangePtr));
+        _currentBlock.Instructions.Add(new StorePointerInstruction(_currentSpan, rangePtr, rangeVal));
+
+        var startPtr = new LocalValue($"rng_start_ptr_{_tempCounter++}", new IrPointer(startField.Type));
+        _currentBlock.Instructions.Add(new GetElementPtrInstruction(_currentSpan, rangePtr, startField.ByteOffset, startPtr));
+        var startVal = new LocalValue($"rng_start_{_tempCounter++}", startField.Type);
+        _currentBlock.Instructions.Add(new LoadInstruction(_currentSpan, startPtr, startVal));
+
+        var endPtr = new LocalValue($"rng_end_ptr_{_tempCounter++}", new IrPointer(endField.Type));
+        _currentBlock.Instructions.Add(new GetElementPtrInstruction(_currentSpan, rangePtr, endField.ByteOffset, endPtr));
+        var endVal = new LocalValue($"rng_end_{_tempCounter++}", endField.Type);
+        _currentBlock.Instructions.Add(new LoadInstruction(_currentSpan, endPtr, endVal));
+
+        // Get base pointer: for Slice, extract .ptr; for array, use array pointer directly
+        Value basePtrVal;
+        if (baseVal.IrType is IrStruct baseStruct && baseStruct.Name == WellKnown.Slice)
+        {
+            // Slice: extract .ptr field
+            var ptrField = FindField(baseStruct, "ptr");
+            var baseSpill = new LocalValue($"base_ptr_{_tempCounter++}", new IrPointer(baseStruct));
+            _currentBlock.Instructions.Add(new AllocaInstruction(_currentSpan, null!, baseStruct.Size, baseSpill));
+            _currentBlock.Instructions.Add(new StorePointerInstruction(_currentSpan, baseSpill, baseVal));
+            var ptrPtr = new LocalValue($"base_ptr_field_{_tempCounter++}", new IrPointer(ptrField.Type));
+            _currentBlock.Instructions.Add(new GetElementPtrInstruction(_currentSpan, baseSpill, ptrField.ByteOffset, ptrPtr));
+            basePtrVal = new LocalValue($"base_raw_ptr_{_tempCounter++}", ptrField.Type);
+            _currentBlock.Instructions.Add(new LoadInstruction(_currentSpan, ptrPtr, basePtrVal));
+        }
+        else
+        {
+            basePtrVal = baseVal;
+        }
+
+        // Compute new_ptr = base_ptr + start (byte offset, element is u8-sized for slices)
+        var newPtr = new LocalValue($"slice_ptr_{_tempCounter++}", basePtrVal.IrType!);
+        _currentBlock.Instructions.Add(new BinaryInstruction(_currentSpan, BinaryOp.Add,
+            basePtrVal, startVal, newPtr));
+
+        // Compute new_len = end - start
+        var newLen = new LocalValue($"slice_len_{_tempCounter++}", TypeLayoutService.IrUSize);
+        _currentBlock.Instructions.Add(new BinaryInstruction(_currentSpan, BinaryOp.Subtract,
+            endVal, startVal, newLen));
+
+        // Construct slice struct: { ptr, len }
+        if (resultIrType is IrStruct sliceStruct)
+        {
+            return BuildStruct(sliceStruct, new Dictionary<string, Value>
+            {
+                ["ptr"] = newPtr,
+                ["len"] = newLen
+            });
+        }
+
+        // Fallback — shouldn't happen
+        return rangeVal;
+    }
+
+    /// <summary>
+    /// Extract the 'len' field from a Slice struct value.
+    /// </summary>
+    private Value ExtractSliceLen(Value sliceVal)
+    {
+        if (sliceVal.IrType is IrStruct sliceStruct)
+        {
+            var lenField = sliceStruct.Fields.FirstOrDefault(f => f.Name == "len");
+            if (lenField.Type != null)
+            {
+                var tmpPtr = new LocalValue($"slen_tmp_{_tempCounter++}", new IrPointer(sliceStruct));
+                _currentBlock.Instructions.Add(new AllocaInstruction(_currentSpan, null!, sliceStruct.Size, tmpPtr));
+                _currentBlock.Instructions.Add(new StorePointerInstruction(_currentSpan, tmpPtr, sliceVal));
+                var lenPtr = new LocalValue($"slen_ptr_{_tempCounter++}", new IrPointer(lenField.Type));
+                _currentBlock.Instructions.Add(new GetElementPtrInstruction(_currentSpan, tmpPtr, lenField.ByteOffset, lenPtr));
+                var lenVal = new LocalValue($"slen_val_{_tempCounter++}", lenField.Type);
+                _currentBlock.Instructions.Add(new LoadInstruction(_currentSpan, lenPtr, lenVal));
+                return lenVal;
+            }
+        }
+        // Fallback: 0 (shouldn't happen for valid slice types)
+        return new ConstantValue(0, TypeLayoutService.IrUSize);
+    }
+
+    /// <summary>
+    /// Lower range slicing with pre-resolved start/end values (handles partial ranges).
+    /// </summary>
+    private LocalValue LowerRangeSlicingWithBounds(Value baseVal, Value startVal, Value endVal, IrType resultIrType)
+    {
+        // Get base pointer: for Slice, extract .ptr; for array, use array pointer directly
+        Value basePtrVal;
+        if (baseVal.IrType is IrStruct baseStruct && baseStruct.Name == WellKnown.Slice)
+        {
+            var ptrField = FindField(baseStruct, "ptr");
+            var baseSpill = new LocalValue($"base_ptr_{_tempCounter++}", new IrPointer(baseStruct));
+            _currentBlock.Instructions.Add(new AllocaInstruction(_currentSpan, null!, baseStruct.Size, baseSpill));
+            _currentBlock.Instructions.Add(new StorePointerInstruction(_currentSpan, baseSpill, baseVal));
+            var ptrPtr = new LocalValue($"base_ptr_field_{_tempCounter++}", new IrPointer(ptrField.Type));
+            _currentBlock.Instructions.Add(new GetElementPtrInstruction(_currentSpan, baseSpill, ptrField.ByteOffset, ptrPtr));
+            basePtrVal = new LocalValue($"base_raw_ptr_{_tempCounter++}", ptrField.Type);
+            _currentBlock.Instructions.Add(new LoadInstruction(_currentSpan, ptrPtr, basePtrVal));
+        }
+        else
+        {
+            basePtrVal = baseVal;
+        }
+
+        // Compute new_ptr = base_ptr + start
+        var newPtr = new LocalValue($"slice_ptr_{_tempCounter++}", basePtrVal.IrType!);
+        _currentBlock.Instructions.Add(new BinaryInstruction(_currentSpan, BinaryOp.Add,
+            basePtrVal, startVal, newPtr));
+
+        // Compute new_len = end - start
+        var newLen = new LocalValue($"slice_len_{_tempCounter++}", TypeLayoutService.IrUSize);
+        _currentBlock.Instructions.Add(new BinaryInstruction(_currentSpan, BinaryOp.Subtract,
+            endVal, startVal, newLen));
+
+        // Construct slice struct: { ptr, len }
+        if (resultIrType is IrStruct sliceStruct)
+        {
+            return BuildStruct(sliceStruct, new Dictionary<string, Value>
+            {
+                ["ptr"] = newPtr,
+                ["len"] = newLen
+            });
+        }
+
+        // Fallback
+        return newPtr;
+    }
+
+    private LocalValue LowerRange(RangeExpressionNode range)
+    {
+        // Use the inferred concrete type (e.g. Range[usize]), not the generic template
+        var rangeIrType = GetIrType(range);
         if (rangeIrType is not IrStruct rangeStruct)
             throw new InvalidOperationException(
                 $"BUG: Range type is not a struct: `{rangeIrType}` at {range.Span}");
@@ -1593,8 +2823,89 @@ public class HmAstLowering
             return result;
         }
 
-        throw new InvalidOperationException(
-            $"BUG: Coalesce expression without resolved function at {coalesce.Span}");
+        // Inline Option[T] ?? T: if left.has_value then left.value else right
+        var leftOption = LowerExpression(coalesce.Left);
+        var resultIrType = GetIrType(coalesce);
+
+        IrStruct? optionStruct = leftOption.IrType as IrStruct;
+        if (optionStruct == null && leftOption.IrType is IrPointer { Pointee: IrStruct s })
+            optionStruct = s;
+
+        if (optionStruct == null)
+            throw new InvalidOperationException(
+                $"BUG: Coalesce left operand is not an Option struct: `{leftOption.IrType}` at {coalesce.Span}");
+
+        // Materialize left to alloca
+        Value leftPtr;
+        if (leftOption.IrType is IrPointer)
+        {
+            leftPtr = leftOption;
+        }
+        else
+        {
+            leftPtr = new LocalValue($"coal_tmp_{_tempCounter++}", new IrPointer(optionStruct));
+            _currentBlock.Instructions.Add(new AllocaInstruction(_currentSpan, null!, optionStruct.Size, leftPtr));
+            _currentBlock.Instructions.Add(new StorePointerInstruction(_currentSpan, leftPtr, leftOption));
+        }
+
+        // Load has_value
+        var hvField = FindField(optionStruct, "has_value");
+        var hvPtr = new LocalValue($"coal_hv_ptr_{_tempCounter++}", new IrPointer(hvField.Type));
+        _currentBlock.Instructions.Add(new GetElementPtrInstruction(_currentSpan, leftPtr, hvField.ByteOffset, hvPtr));
+        var hvVal = new LocalValue($"coal_hv_{_tempCounter++}", TypeLayoutService.IrBool);
+        _currentBlock.Instructions.Add(new LoadInstruction(_currentSpan, hvPtr, hvVal));
+
+        // Alloca for result
+        var resultPtr = new LocalValue($"coal_result_{_tempCounter++}", new IrPointer(resultIrType));
+        _currentBlock.Instructions.Add(new AllocaInstruction(_currentSpan, null!, resultIrType.Size, resultPtr));
+
+        var thenBlock = CreateBlock("coal_then");
+        var elseBlock = CreateBlock("coal_else");
+        var mergeBlock = CreateBlock("coal_merge");
+
+        _currentBlock.Instructions.Add(new BranchInstruction(_currentSpan, hvVal, thenBlock, elseBlock));
+
+        // Then: left has value
+        _currentFunction.BasicBlocks.Add(thenBlock);
+        _currentBlock = thenBlock;
+
+        // Check if result is also Option (Option[T] ?? Option[T] → Option[T])
+        // In that case, store the whole left Option, don't unwrap
+        bool resultIsOption = resultIrType is IrStruct resultStruct
+            && resultStruct.Name == WellKnown.Option;
+
+        if (resultIsOption)
+        {
+            // Store entire left Option into result
+            var leftLoaded = new LocalValue($"coal_left_{_tempCounter++}", optionStruct);
+            _currentBlock.Instructions.Add(new LoadInstruction(_currentSpan, leftPtr, leftLoaded));
+            _currentBlock.Instructions.Add(new StorePointerInstruction(_currentSpan, resultPtr, leftLoaded));
+        }
+        else
+        {
+            // Unwrap: store left.value into result
+            var valField = FindField(optionStruct, "value");
+            var valPtr = new LocalValue($"coal_val_ptr_{_tempCounter++}", new IrPointer(valField.Type));
+            _currentBlock.Instructions.Add(new GetElementPtrInstruction(_currentSpan, leftPtr, valField.ByteOffset, valPtr));
+            var valLoaded = new LocalValue($"coal_val_{_tempCounter++}", valField.Type);
+            _currentBlock.Instructions.Add(new LoadInstruction(_currentSpan, valPtr, valLoaded));
+            _currentBlock.Instructions.Add(new StorePointerInstruction(_currentSpan, resultPtr, valLoaded));
+        }
+        _currentBlock.Instructions.Add(new JumpInstruction(_currentSpan, mergeBlock));
+
+        // Else: right
+        _currentFunction.BasicBlocks.Add(elseBlock);
+        _currentBlock = elseBlock;
+        var rightVal2 = LowerExpression(coalesce.Right);
+        _currentBlock.Instructions.Add(new StorePointerInstruction(_currentSpan, resultPtr, rightVal2));
+        _currentBlock.Instructions.Add(new JumpInstruction(_currentSpan, mergeBlock));
+
+        // Merge
+        _currentFunction.BasicBlocks.Add(mergeBlock);
+        _currentBlock = mergeBlock;
+        var finalResult = new LocalValue($"coal_final_{_tempCounter++}", resultIrType);
+        _currentBlock.Instructions.Add(new LoadInstruction(_currentSpan, resultPtr, finalResult));
+        return finalResult;
     }
 
     private Value LowerNullPropagation(NullPropagationExpressionNode nullProp)
@@ -1791,7 +3102,7 @@ public class HmAstLowering
         // 3. If variant has payload, store payload data
         if (variant.PayloadType != null)
         {
-            if (variant.PayloadType is IrStruct payloadStruct && payloadStruct.Fields.Length > 1)
+            if (variant.PayloadType is IrStruct payloadStruct && call.Arguments.Count > 1)
             {
                 // Multi-payload: each arg maps to a field in the payload struct
                 for (int i = 0; i < call.Arguments.Count && i < payloadStruct.Fields.Length; i++)
@@ -1999,7 +3310,7 @@ public class HmAstLowering
             }
 
             // Lower arm result expression
-            var armResultVal = LowerExpression(arm.ResultExpr);
+            var armResultVal = LowerExpression(arm.ResultExpr, isVoid ? null : resultIrType);
             if (!isVoid && resultPtr != null)
                 _currentBlock.Instructions.Add(new StorePointerInstruction(_currentSpan, resultPtr, armResultVal));
 
@@ -2055,13 +3366,16 @@ public class HmAstLowering
                 {
                     if (_locals.TryGetValue(id.Name, out var localVal))
                     {
-                        // For parameters, we need to create an alloca to make them assignable
+                        // For parameters, we need to create an alloca to make them assignable.
+                        // Insert at the START of the entry block so it's visible in all branches
+                        // and doesn't appear after branch instructions.
                         if (_parameters.Contains(id.Name))
                         {
                             var paramIrType = localVal.IrType ?? TypeLayoutService.IrVoidPrim;
                             var alloca = new LocalValue($"{id.Name}_mut", new IrPointer(paramIrType));
-                            _currentBlock.Instructions.Add(new AllocaInstruction(_currentSpan, null!, paramIrType.Size, alloca));
-                            _currentBlock.Instructions.Add(new StorePointerInstruction(_currentSpan, alloca, localVal));
+                            var entryBlock = _currentFunction.BasicBlocks[0];
+                            entryBlock.Instructions.Insert(0, new StorePointerInstruction(_currentSpan, alloca, localVal));
+                            entryBlock.Instructions.Insert(0, new AllocaInstruction(_currentSpan, null!, paramIrType.Size, alloca));
                             _locals[id.Name] = alloca;
                             _parameters.Remove(id.Name);
                             return alloca;
@@ -2075,21 +3389,36 @@ public class HmAstLowering
 
             case MemberAccessExpressionNode member:
                 {
-                    // Lower the target expression
-                    var targetVal = LowerExpression(member.Target);
+                    // For LValue member access, get a POINTER to the target (not the loaded value).
+                    // LowerLValue returns the alloca/pointer for locals; LowerExpression would
+                    // load the value, making GEP impossible (can't take address of a value in C).
+                    var targetVal = LowerLValue(member.Target) ?? LowerExpression(member.Target);
                     var targetIrType = targetVal.IrType;
 
-                    // Auto-dereference
+                    // Auto-dereference — for LValue, keep ONE pointer level so GEP
+                    // can produce a writable pointer to the field. If we dereference
+                    // fully, we'd get a local value copy that can't be written through.
                     var baseVal = targetVal;
                     var baseIrType = targetIrType;
-                    for (int i = 0; i < member.AutoDerefCount; i++)
+                    var derefCount = member.AutoDerefCount;
+                    // If fully dereffing would leave us with a value (not pointer), do one less
+                    if (derefCount > 0 && baseIrType is IrPointer)
                     {
-                        if (baseIrType is IrPointer ptrType)
+                        // Count how many pointer layers we have
+                        var ptrDepth = 0;
+                        var t = baseIrType;
+                        while (t is IrPointer pp) { ptrDepth++; t = pp.Pointee; }
+                        // Deref enough times to still have a pointer to the struct
+                        var maxDeref = Math.Min(derefCount, ptrDepth - 1);
+                        for (int i = 0; i < maxDeref; i++)
                         {
-                            var derefResult = new LocalValue($"autoderef_{_tempCounter++}", ptrType.Pointee);
-                            _currentBlock.Instructions.Add(new LoadInstruction(_currentSpan, baseVal, derefResult));
-                            baseVal = derefResult;
-                            baseIrType = ptrType.Pointee;
+                            if (baseIrType is IrPointer ptrType)
+                            {
+                                var derefResult = new LocalValue($"autoderef_{_tempCounter++}", ptrType.Pointee);
+                                _currentBlock.Instructions.Add(new LoadInstruction(_currentSpan, baseVal, derefResult));
+                                baseVal = derefResult;
+                                baseIrType = ptrType.Pointee;
+                            }
                         }
                     }
 
@@ -2124,6 +3453,15 @@ public class HmAstLowering
                     var arrVal = LowerExpression(index.Base);
                     var idxVal = LowerExpression(index.Index);
 
+                    // If base is a Slice struct, extract .ptr for pointer arithmetic
+                    var basePtr = arrVal;
+                    if (arrVal.IrType is IrStruct sliceBase2)
+                    {
+                        var ptrField2 = sliceBase2.Fields.FirstOrDefault(f => f.Name == "ptr");
+                        if (ptrField2.Type != null)
+                            basePtr = CoerceSliceToPointer(arrVal, sliceBase2, ptrField2);
+                    }
+
                     var elementIrType = GetIrType(index);
 
                     // Compute byte offset = index * element_size
@@ -2133,7 +3471,7 @@ public class HmAstLowering
                         new BinaryInstruction(_currentSpan, BinaryOp.Multiply, idxVal, elementSize, byteOffset));
 
                     var elemPtr = new LocalValue($"elem_ptr_{_tempCounter++}", new IrPointer(elementIrType));
-                    _currentBlock.Instructions.Add(new GetElementPtrInstruction(_currentSpan, arrVal, byteOffset, elemPtr));
+                    _currentBlock.Instructions.Add(new GetElementPtrInstruction(_currentSpan, basePtr, byteOffset, elemPtr));
                     return elemPtr;
                 }
 
@@ -2197,6 +3535,7 @@ public class HmAstLowering
             BinaryOperatorKind.BitwiseXor => BinaryOp.BitwiseXor,
             BinaryOperatorKind.ShiftLeft => BinaryOp.ShiftLeft,
             BinaryOperatorKind.ShiftRight => BinaryOp.ShiftRight,
+            BinaryOperatorKind.UnsignedShiftRight => BinaryOp.UnsignedShiftRight,
             _ => throw new NotImplementedException($"Unsupported binary operator: {kind}"),
         };
     }

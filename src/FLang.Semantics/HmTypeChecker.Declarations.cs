@@ -1,8 +1,12 @@
 using FLang.Core;
 using FLang.Core.Types;
+using FLang.Frontend.Ast;
 using FLang.Frontend.Ast.Declarations;
+using FLang.Frontend.Ast.Expressions;
 using FLang.Frontend.Ast.Statements;
+using FLang.Frontend.Ast.Types;
 using FunctionType = FLang.Core.Types.FunctionType;
+using PrimitiveType = FLang.Core.Types.PrimitiveType;
 using Type = FLang.Core.Types.Type;
 using TypeVar = FLang.Core.Types.TypeVar;
 
@@ -67,7 +71,7 @@ public partial class HmTypeChecker
             var fqn = $"{modulePath}.{structDecl.Name}";
             if (!_nominalTypes.ContainsKey(fqn)) continue;
 
-            _scopes.PushScope();
+            PushScope();
             var typeArgs = BindTypeParameters(structDecl.TypeParameters);
 
             var fields = new (string Name, Type Type)[structDecl.Fields.Count];
@@ -77,9 +81,16 @@ public partial class HmTypeChecker
                 fields[i] = (field.Name, ResolveTypeNode(field.Type));
             }
 
-            _scopes.PopScope();
+            PopScope();
 
             _nominalTypes[fqn] = new NominalType(fqn, NominalKind.Struct, typeArgs, fields);
+        }
+
+        // Make Type(T) share TypeInfo's fields so Type(T) values carry size/align/kind/etc.
+        if (_nominalTypes.TryGetValue("core.rtti.Type", out var rttiType)
+            && _nominalTypes.TryGetValue("core.rtti.TypeInfo", out var rttiTypeInfo))
+        {
+            _nominalTypes["core.rtti.Type"] = rttiType with { FieldsOrVariants = rttiTypeInfo.FieldsOrVariants };
         }
 
         // Resolve enum variants
@@ -88,7 +99,15 @@ public partial class HmTypeChecker
             var fqn = $"{modulePath}.{enumDecl.Name}";
             if (!_nominalTypes.ContainsKey(fqn)) continue;
 
-            _scopes.PushScope();
+            // E2034: Check for duplicate variant names
+            var seenVariantNames = new HashSet<string>();
+            foreach (var variant in enumDecl.Variants)
+            {
+                if (!seenVariantNames.Add(variant.Name))
+                    ReportError($"Duplicate variant `{variant.Name}` in enum `{enumDecl.Name}`", variant.Span, "E2034");
+            }
+
+            PushScope();
             var typeArgs = BindTypeParameters(enumDecl.TypeParameters);
 
             var variants = new (string Name, Type Type)[enumDecl.Variants.Count];
@@ -113,9 +132,58 @@ public partial class HmTypeChecker
                 }
             }
 
-            _scopes.PopScope();
+            PopScope();
 
             var enumType = new NominalType(fqn, NominalKind.Enum, typeArgs, variants);
+
+            // Resolve explicit tag values for naked enums (e.g., Less = -1, Equal = 0, Greater = 1)
+            Dictionary<string, long>? tagValues = null;
+            bool hasExplicitTags = enumDecl.Variants.Any(v => v.ExplicitTagValue.HasValue);
+            long nextTag = 0;
+            for (var i = 0; i < enumDecl.Variants.Count; i++)
+            {
+                var variant = enumDecl.Variants[i];
+                if (variant.ExplicitTagValue.HasValue)
+                {
+                    tagValues ??= new Dictionary<string, long>();
+                    nextTag = variant.ExplicitTagValue.Value;
+                }
+                if (tagValues != null)
+                    tagValues[variant.Name] = nextTag;
+
+                // E2047: Naked enum (has explicit tags) variants must not have payloads
+                if (hasExplicitTags && variant.PayloadTypes.Count > 0)
+                    ReportError($"Naked enum variant `{variant.Name}` cannot have a payload", variant.Span, "E2047");
+
+                nextTag++;
+            }
+
+            // E2048: Duplicate tag values in naked enums
+            if (tagValues != null)
+            {
+                var seenTags = new Dictionary<long, string>();
+                foreach (var (name, tag) in tagValues)
+                {
+                    if (seenTags.TryGetValue(tag, out var existing))
+                        ReportError($"Duplicate tag value `{tag}` in enum `{enumDecl.Name}` (already used by `{existing}`)", enumDecl.Span, "E2048");
+                    else
+                        seenTags[tag] = name;
+                }
+            }
+
+            if (tagValues != null)
+                enumType = enumType with { TagValues = tagValues };
+
+            // E2035: Check for infinite-size recursive variants (direct self-reference without indirection)
+            foreach (var variant in enumDecl.Variants)
+            {
+                foreach (var payloadType in variant.PayloadTypes)
+                {
+                    if (ContainsDirectSelfReference(payloadType, enumDecl.Name))
+                        ReportError($"Recursive variant `{variant.Name}` creates infinite-size type (use `&{enumDecl.Name}` for indirection)", variant.Span, "E2035");
+                }
+            }
+
             _nominalTypes[fqn] = enumType;
 
             BindVariantConstructors(enumDecl, enumType, typeArgs);
@@ -157,10 +225,17 @@ public partial class HmTypeChecker
             else
             {
                 // Multi payload: fn(T1, T2, ...) -> EnumType
-                var paramTypes = variant.PayloadTypes
-                    .Select(ResolveTypeNode)
-                    .ToArray();
-                constructorType = new FunctionType(paramTypes, enumType);
+                // Use already-resolved types from the tuple struct (variantField.Type)
+                // instead of re-resolving TypeNodes (scope may not have type params in scope)
+                if (variantField.Type is NominalType tupleType)
+                {
+                    var paramTypes = tupleType.FieldsOrVariants.Select(f => f.Type).ToArray();
+                    constructorType = new FunctionType(paramTypes, enumType);
+                }
+                else
+                {
+                    constructorType = new FunctionType([variantField.Type], enumType);
+                }
             }
 
             var scheme = quantifiedIds.Count > 0
@@ -185,7 +260,7 @@ public partial class HmTypeChecker
     private void CollectFunctionSignature(FunctionDeclarationNode fn, string modulePath)
     {
         _engine.EnterLevel();
-        _scopes.PushScope();
+        PushScope();
 
         // Bind generic type parameters as TypeVars
         var genericNames = fn.GetGenericParamNames();
@@ -207,7 +282,7 @@ public partial class HmTypeChecker
         // Record function type on declaration node for lowering
         Record(fn, fnType);
 
-        _scopes.PopScope();
+        PopScope();
         _engine.ExitLevel();
 
         var scheme = _engine.Generalize(fnType);
@@ -223,13 +298,20 @@ public partial class HmTypeChecker
     // Phase 6: Check module bodies
     // =========================================================================
 
+    /// <summary>
+    /// Phase 5b: Check global constants only, so they are in scope for all modules' function bodies.
+    /// Must be called for ALL modules before CheckModuleBodies.
+    /// </summary>
+    public void CheckGlobalConstants(ModuleNode module, string modulePath)
+    {
+        _currentModulePath = modulePath;
+        foreach (var globalConst in module.GlobalConstants)
+            CheckStatement(globalConst);
+    }
+
     public void CheckModuleBodies(ModuleNode module, string modulePath)
     {
         _currentModulePath = modulePath;
-
-        // Check global constants
-        foreach (var globalConst in module.GlobalConstants)
-            CheckStatement(globalConst);
 
         // Check non-generic function bodies
         foreach (var fn in module.Functions)
@@ -246,7 +328,7 @@ public partial class HmTypeChecker
 
     private void CheckFunctionBody(FunctionDeclarationNode fn)
     {
-        _scopes.PushScope();
+        PushScope();
 
         // Specialize the function's own signature to get concrete param/return types
         var overloads = LookupFunctions(fn.Name);
@@ -254,7 +336,7 @@ public partial class HmTypeChecker
         if (scheme == null)
         {
             ReportError($"Internal: function `{fn.Name}` not registered", fn.Span);
-            _scopes.PopScope();
+            PopScope();
             return;
         }
 
@@ -263,7 +345,7 @@ public partial class HmTypeChecker
         if (fnType == null)
         {
             ReportError($"Internal: function `{fn.Name}` signature did not resolve to FunctionType", fn.Span);
-            _scopes.PopScope();
+            PopScope();
             return;
         }
 
@@ -286,25 +368,99 @@ public partial class HmTypeChecker
         foreach (var stmt in fn.Body)
             CheckStatement(stmt);
 
+        // E2049: Check non-void functions have a return statement or implicit return
+        if (fnType.ReturnType is not PrimitiveType { Name: "void" or "never" })
+        {
+            if (!HasReturnOrImplicitReturn(fn.Body))
+                ReportError($"Function `{fn.Name}` must return a value", fn.Span, "E2049");
+        }
+
         _functionStack.Pop();
-        _scopes.PopScope();
+        PopScope();
     }
 
     private void CheckTestBody(TestDeclarationNode test)
     {
-        _scopes.PushScope();
+        PushScope();
         _functionStack.Push(new FunctionContext(null!, WellKnown.Void));
 
         foreach (var stmt in test.Body)
             CheckStatement(stmt);
 
         _functionStack.Pop();
-        _scopes.PopScope();
+        PopScope();
     }
 
     // =========================================================================
     // Helpers
     // =========================================================================
+
+    /// <summary>
+    /// Check if a block has a return statement or ends with an implicit return (trailing expression).
+    /// </summary>
+    private static bool HasReturnOrImplicitReturn(IReadOnlyList<StatementNode> statements)
+    {
+        if (statements.Count == 0) return false;
+
+        foreach (var stmt in statements)
+        {
+            if (stmt is ReturnStatementNode)
+                return true;
+
+            if (stmt is ExpressionStatementNode { Expression: IfExpressionNode ifExpr })
+            {
+                if (ifExpr.ElseBranch != null)
+                {
+                    var thenReturns = HasReturnInExpression(ifExpr.ThenBranch);
+                    var elseReturns = HasReturnInExpression(ifExpr.ElseBranch);
+                    if (thenReturns && elseReturns)
+                        return true;
+                }
+            }
+
+            if (stmt is ExpressionStatementNode { Expression: BlockExpressionNode block })
+            {
+                if (HasReturnOrImplicitReturn(block.Statements))
+                    return true;
+            }
+
+            if (stmt is ExpressionStatementNode { Expression: MatchExpressionNode match })
+            {
+                if (match.Arms.Count > 0 && match.Arms.All(a => HasReturnInExpression(a.ResultExpr)))
+                    return true;
+            }
+        }
+
+        // Check if the last statement is an expression (implicit return)
+        var last = statements[^1];
+        if (last is ExpressionStatementNode)
+            return true;
+
+        return false;
+    }
+
+    private static bool HasReturnInExpression(ExpressionNode expr)
+    {
+        return expr switch
+        {
+            BlockExpressionNode block => HasReturnOrImplicitReturn(block.Statements),
+            IfExpressionNode ifExpr => ifExpr.ElseBranch != null
+                && HasReturnInExpression(ifExpr.ThenBranch)
+                && HasReturnInExpression(ifExpr.ElseBranch),
+            _ => false
+        };
+    }
+
+    /// <summary>
+    /// Check if a TypeNode references the given type name directly (not through a reference &amp;).
+    /// </summary>
+    private static bool ContainsDirectSelfReference(TypeNode typeNode, string typeName) => typeNode switch
+    {
+        NamedTypeNode named => named.Name == typeName,
+        GenericTypeNode generic => generic.Name == typeName,
+        ReferenceTypeNode => false, // Reference adds indirection, so not infinite size
+        _ => false
+    };
 
     /// <summary>
     /// Bind type parameters as fresh TypeVars in scope. Returns the TypeVar list.

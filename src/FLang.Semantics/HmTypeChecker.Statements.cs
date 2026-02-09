@@ -54,6 +54,10 @@ public partial class HmTypeChecker
 
     private void CheckVariableDeclaration(VariableDeclarationNode varDecl)
     {
+        // E2039: Const must have initializer
+        if (varDecl.IsConst && varDecl.Initializer == null)
+            ReportError($"Constant `{varDecl.Name}` must be initialized", varDecl.Span, "E2039");
+
         Type? annotationType = null;
         if (varDecl.Type != null)
             annotationType = ResolveTypeNode(varDecl.Type);
@@ -64,11 +68,30 @@ public partial class HmTypeChecker
             var initType = InferExpression(varDecl.Initializer);
             if (annotationType != null)
             {
+                // E2015: Check anonymous struct → named struct for missing fields
+                if (varDecl.Initializer is AnonymousStructExpressionNode anonInit)
+                {
+                    var resolvedTarget = _engine.Resolve(annotationType);
+                    if (resolvedTarget is NominalType { Kind: NominalKind.Struct } targetStruct)
+                    {
+                        var providedFields = new HashSet<string>(anonInit.Fields.Select(f => f.FieldName));
+                        foreach (var field in targetStruct.FieldsOrVariants)
+                            if (!providedFields.Contains(field.Name))
+                                ReportError($"Missing field `{field.Name}` in struct construction", varDecl.Span, "E2015");
+                    }
+                }
+
                 var unified = _engine.Unify(initType, annotationType, varDecl.Span);
                 varType = unified.Type;
             }
             else
             {
+                // E2026: Empty array literal without type annotation
+                if (varDecl.Initializer is ArrayLiteralExpressionNode { IsRepeatSyntax: false } arrLit
+                    && (arrLit.Elements == null || arrLit.Elements.Count == 0))
+                {
+                    ReportError("Empty array literal `[]` requires a type annotation", varDecl.Span, "E2026");
+                }
                 varType = initType;
             }
         }
@@ -84,6 +107,10 @@ public partial class HmTypeChecker
 
         _scopes.Bind(varDecl.Name, varType);
         Record(varDecl, varType);
+
+        // Track const names for E2038 checking
+        if (varDecl.IsConst)
+            MarkConst(varDecl.Name);
     }
 
     // =========================================================================
@@ -103,6 +130,7 @@ public partial class HmTypeChecker
         if (ret.Expression != null)
         {
             var exprType = InferExpression(ret.Expression);
+
             _engine.Unify(exprType, ctx.ReturnType, ret.Span);
         }
         else
@@ -173,12 +201,12 @@ public partial class HmTypeChecker
         Record(forLoop, elementType);
 
         // Check body with loop variable in scope
-        _scopes.PushScope();
+        PushScope();
         _scopes.Bind(forLoop.IteratorVariable, elementType);
 
         InferExpression(forLoop.Body);
 
-        _scopes.PopScope();
+        PopScope();
     }
 
     /// <summary>

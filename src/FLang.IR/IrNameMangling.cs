@@ -11,8 +11,9 @@ public static class IrNameMangling
     /// </summary>
     public static string MangleFunctionName(string baseName, IReadOnlyList<IrType> paramTypes)
     {
-        if (paramTypes.Count == 0) return baseName;
-        var parts = new List<string>(paramTypes.Count + 1) { baseName };
+        var sanitizedBase = TypeLayoutService.SanitizeCName(baseName);
+        if (paramTypes.Count == 0) return sanitizedBase;
+        var parts = new List<string>(paramTypes.Count + 1) { sanitizedBase };
         foreach (var pt in paramTypes)
             parts.Add(MangleIrType(pt));
         return string.Join("__", parts);

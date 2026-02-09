@@ -28,6 +28,53 @@ public abstract class Value
     /// Set by HmAstLowering; null when using old pipeline.
     /// </summary>
     public IrType? IrType { get; set; }
+
+    // C keywords that must be escaped when used as identifiers.
+    private static readonly HashSet<string> CKeywords =
+    [
+        "default", "switch", "case", "break", "continue", "return",
+        "if", "else", "for", "while", "do", "struct", "enum",
+        "union", "typedef", "void", "int", "char", "float",
+        "double", "long", "short", "signed", "unsigned", "const",
+        "static", "extern", "register", "volatile", "auto",
+        "goto", "sizeof", "inline", "restrict"
+    ];
+
+    /// <summary>
+    /// Sanitize a name for use as a C identifier. Replaces non-identifier chars in a
+    /// single pass with no intermediate allocations, and escapes C keywords.
+    /// </summary>
+    public static string SanitizeCIdent(string name)
+    {
+        // Fast path: check if any char needs replacing
+        bool needsSanitize = false;
+        for (int i = 0; i < name.Length; i++)
+        {
+            char c = name[i];
+            if (c == '.' || c == '[' || c == ']' || c == ',' || c == ' '
+                || c == '-' || c == '|' || c == '&' || c == '(' || c == ')' || c == ';')
+            {
+                needsSanitize = true;
+                break;
+            }
+        }
+        if (!needsSanitize)
+            return CKeywords.Contains(name) ? $"_{name}" : name;
+
+        var result = string.Create(name.Length, name, static (span, src) =>
+        {
+            for (int i = 0; i < src.Length; i++)
+            {
+                span[i] = src[i] switch
+                {
+                    '.' or '[' or ']' or ',' or ' ' or '-' or '|' or '(' or ')' or ';' => '_',
+                    '&' => 'R',
+                    _ => src[i]
+                };
+            }
+        });
+        return CKeywords.Contains(result) ? $"_{result}" : result;
+    }
 }
 
 /// <summary>
@@ -75,6 +122,26 @@ public class ArrayConstantValue : Value
         Data = null;
     }
 
+    /// <summary>
+    /// HM pipeline: byte array constant (e.g., string data).
+    /// </summary>
+    public ArrayConstantValue(byte[] data, IrType elementIrType)
+    {
+        Data = data;
+        IrType = new IrArray(elementIrType, data.Length);
+        Elements = null;
+    }
+
+    /// <summary>
+    /// HM pipeline: array of structured values (e.g., FieldInfo[]).
+    /// </summary>
+    public ArrayConstantValue(IrArray arrayIrType, Value[] elements)
+    {
+        IrType = arrayIrType;
+        Elements = elements;
+        Data = null;
+    }
+
     public byte[]? Data { get; }
 
     /// <summary>
@@ -97,6 +164,15 @@ public class StructConstantValue : Value
     public StructConstantValue(StructType structType, Dictionary<string, Value> fieldValues)
     {
         Type = structType;
+        FieldValues = fieldValues;
+    }
+
+    /// <summary>
+    /// Constructor for HM pipeline (uses IrType instead of old StructType).
+    /// </summary>
+    public StructConstantValue(IrType irType, Dictionary<string, Value> fieldValues)
+    {
+        IrType = irType;
         FieldValues = fieldValues;
     }
 
@@ -124,6 +200,16 @@ public class GlobalValue : Value
     }
 
     /// <summary>
+    /// Constructor for HM pipeline (uses IrType instead of old TypeBase).
+    /// </summary>
+    public GlobalValue(string name, Value initializer, IrType initializerIrType)
+    {
+        Name = SanitizeCIdent(name);
+        Initializer = initializer;
+        IrType = new IrPointer(initializerIrType);
+    }
+
+    /// <summary>
     /// The data stored at this global address.
     /// Used by backends to emit .data section.
     /// </summary>
@@ -145,7 +231,7 @@ public class LocalValue : Value
 
     public LocalValue(string name, IrType irType)
     {
-        Name = name;
+        Name = SanitizeCIdent(name);
         IrType = irType;
     }
 }

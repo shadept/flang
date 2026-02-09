@@ -30,7 +30,8 @@ public class FunctionDeclarationNode : AstNode
     public IReadOnlyList<StatementNode> Body { get; }
     public FunctionModifiers Modifiers { get; }
 
-    public bool IsGeneric => Parameters.Any(p => TypeNode.ContainsGenericParam(p.Type));
+    public bool IsGeneric => Parameters.Any(p => TypeNode.ContainsGenericParam(p.Type))
+        || (ReturnType != null && TypeNode.ContainsGenericParam(ReturnType));
 
     public HashSet<string> GetGenericParamNames()
     {

@@ -28,6 +28,13 @@ public static class HmCCodeGenerator
         sb.AppendLine("#include <stdbool.h>");
         sb.AppendLine("#include <stdint.h>");
         sb.AppendLine("#include <string.h>");
+        sb.AppendLine("#ifdef _WIN32");
+        sb.AppendLine("#include <io.h>");
+        sb.AppendLine("#include <fcntl.h>");
+        sb.AppendLine("#else");
+        sb.AppendLine("#include <unistd.h>");
+        sb.AppendLine("#include <fcntl.h>");
+        sb.AppendLine("#endif");
         sb.AppendLine();
 
         // Type forward declarations
@@ -40,10 +47,6 @@ public static class HmCCodeGenerator
         }
         if (module.TypeDefs.Count > 0)
             sb.AppendLine();
-
-        // String type (needed for string table)
-        sb.AppendLine("typedef struct { const char* data; int64_t length; } String;");
-        sb.AppendLine();
 
         // Type definitions
         foreach (var td in module.TypeDefs)
@@ -60,6 +63,12 @@ public static class HmCCodeGenerator
         foreach (var fn in module.Functions)
             EmitFunctionForwardDecl(sb, fn);
         if (module.Functions.Count > 0)
+            sb.AppendLine();
+
+        // Global constants
+        foreach (var gv in module.GlobalValues)
+            EmitGlobalValue(sb, gv);
+        if (module.GlobalValues.Count > 0)
             sb.AppendLine();
 
         // Function definitions
@@ -80,9 +89,13 @@ public static class HmCCodeGenerator
             case IrStruct s:
                 sb.AppendLine($"struct {s.CName} {{");
                 foreach (var f in s.Fields)
-                    sb.AppendLine($"    {IrTypeToCType(f.Type)} {SanitizeName(f.Name)};");
+                {
+                    sb.AppendLine($"    {EmitFieldDecl(f.Type, f.Name)};");
+                }
                 if (s.Fields.Length == 0)
+                {
                     sb.AppendLine("    char __empty;");
+                }
                 sb.AppendLine("};");
                 sb.AppendLine();
                 break;
@@ -110,17 +123,96 @@ public static class HmCCodeGenerator
     // String table
     // =========================================================================
 
+    // =========================================================================
+    // Global constants
+    // =========================================================================
+
+    private static void EmitGlobalValue(StringBuilder sb, GlobalValue gv)
+    {
+        if (gv.Initializer is StructConstantValue scv)
+        {
+            var irType = scv.IrType;
+            if (irType == null) return;
+
+            sb.Append($"static {IrTypeToCType(irType)} {gv.Name} = {{ ");
+            if (irType is IrStruct irStruct)
+            {
+                var parts = new List<string>();
+                foreach (var field in irStruct.Fields)
+                {
+                    if (scv.FieldValues.TryGetValue(field.Name, out var fv))
+                        parts.Add($".{field.Name} = {EmitGlobalFieldValue(fv, field.Type)}");
+                    else
+                        parts.Add($".{field.Name} = {{0}}");
+                }
+                sb.Append(string.Join(", ", parts));
+            }
+            sb.AppendLine(" };");
+        }
+        else if (gv.Initializer is ArrayConstantValue acv && acv.Elements != null && acv.IrType is IrArray arrTy)
+        {
+            var elemType = arrTy.Element;
+            sb.Append($"static {IrTypeToCType(elemType)} {gv.Name}[{acv.Elements.Length}] = {{ ");
+            var parts = new List<string>();
+            foreach (var elem in acv.Elements)
+            {
+                if (elem is StructConstantValue elemScv && elemScv.IrType is IrStruct elemStruct)
+                    parts.Add(EmitNestedStructConstant(elemScv, elemStruct));
+                else
+                    parts.Add("{0}");
+            }
+            sb.Append(string.Join(", ", parts));
+            sb.AppendLine(" };");
+        }
+    }
+
+    private static string EmitGlobalFieldValue(Value value, IrType targetType)
+    {
+        return value switch
+        {
+            ConstantValue cv => EmitConstant(cv),
+            FunctionReferenceValue fv => fv.IrType is IrFunctionPtr fp2
+                ? IrNameMangling.MangleFunctionName(fv.Name, fp2.Params)
+                : fv.Name,
+            StructConstantValue nested when nested.IrType is IrStruct nestedStruct
+                => EmitNestedStructConstant(nested, nestedStruct),
+            ArrayConstantValue arr when arr.Data != null
+                => $"(uint8_t*)\"{EscapeString(arr.StringRepresentation ?? "")}\"",
+            GlobalValue gv when gv.Initializer is ArrayConstantValue
+                => gv.Name,
+            GlobalValue gv when gv.Initializer is StructConstantValue
+                => targetType is IrPointer
+                    ? $"({IrTypeToCType(targetType)})&{gv.Name}"
+                    : $"&{gv.Name}",
+            GlobalValue gv => $"&{gv.Name}",
+            _ => "{0}"
+        };
+    }
+
+    private static string EmitNestedStructConstant(StructConstantValue scv, IrStruct irStruct)
+    {
+        var parts = new List<string>();
+        foreach (var field in irStruct.Fields)
+        {
+            if (scv.FieldValues.TryGetValue(field.Name, out var fv))
+                parts.Add($".{field.Name} = {EmitGlobalFieldValue(fv, field.Type)}");
+            else
+                parts.Add($".{field.Name} = {{0}}");
+        }
+        return $"{{ {string.Join(", ", parts)} }}";
+    }
+
     private static void EmitStringTable(StringBuilder sb, IrModule module)
     {
         if (module.StringTable.Count == 0) return;
 
-        sb.AppendLine($"static const String __flang__string_table[{module.StringTable.Count}] = {{");
+        sb.AppendLine($"static const core_string_String __flang__string_table[{module.StringTable.Count}] = {{");
         for (var i = 0; i < module.StringTable.Count; i++)
         {
             var entry = module.StringTable[i];
             var escaped = EscapeString(entry.Value);
             var comma = i < module.StringTable.Count - 1 ? "," : "";
-            sb.AppendLine($"    {{ \"{escaped}\", {entry.Utf8Data.Length - 1} }}{comma}");
+            sb.AppendLine($"    {{ (uint8_t*)\"{escaped}\", {entry.Utf8Data.Length - 1} }}{comma}");
         }
         sb.AppendLine("};");
         sb.AppendLine();
@@ -144,7 +236,7 @@ public static class HmCCodeGenerator
     {
         var retType = IrTypeToCType(fn.ReturnType);
         var name = MangleFunctionName(fn);
-        var parms = string.Join(", ", fn.Params.Select(p => $"{IrTypeToCType(p.Type)} {SanitizeName(p.Name)}"));
+        var parms = string.Join(", ", fn.Params.Select(p => EmitVarDecl(p.Type, p.Name)));
         if (string.IsNullOrEmpty(parms)) parms = "void";
         sb.AppendLine($"{retType} {name}({parms});");
     }
@@ -153,7 +245,7 @@ public static class HmCCodeGenerator
     {
         var retType = IrTypeToCType(fn.ReturnType);
         var name = fn.IsEntryPoint ? "main" : MangleFunctionName(fn);
-        var parms = string.Join(", ", fn.Params.Select(p => $"{IrTypeToCType(p.Type)} {SanitizeName(p.Name)}"));
+        var parms = string.Join(", ", fn.Params.Select(p => EmitVarDecl(p.Type, p.Name)));
         if (string.IsNullOrEmpty(parms)) parms = "void";
 
         sb.AppendLine($"{retType} {name}({parms}) {{");
@@ -204,12 +296,20 @@ public static class HmCCodeGenerator
         {
             case AllocaInstruction alloca:
                 {
-                    var resultName = SanitizeName(alloca.Result.Name);
+                    var resultName = alloca.Result.Name;
                     var irType = alloca.Result.IrType;
-                    if (irType is IrPointer ptr)
+                    if (alloca.IsArrayStorage && irType is IrPointer { Pointee: IrArray arr })
                     {
-                        sb.AppendLine($"    {IrTypeToCType(ptr.Pointee)} _store_{resultName};");
-                        sb.AppendLine($"    {IrTypeToCType(irType)} {resultName} = &_store_{resultName};");
+                        // Array data alloca: emit actual C array for the storage
+                        var elemC = IrTypeToCType(arr.Element);
+                        var length = Math.Max(arr.Length ?? 0, 1); // minimum 1 for MSVC
+                        sb.AppendLine($"    {elemC} _store_{resultName}[{length}];");
+                        sb.AppendLine($"    {elemC}* {resultName} = _store_{resultName};");
+                    }
+                    else if (irType is IrPointer ptr)
+                    {
+                        sb.AppendLine($"    {EmitVarDecl(ptr.Pointee, $"_store_{resultName}")};");
+                        sb.AppendLine($"    {EmitVarDecl(irType, resultName)} = &_store_{resultName};");
                     }
                     else
                     {
@@ -225,7 +325,11 @@ public static class HmCCodeGenerator
                     var val = EmitValue(store.Value);
                     var pointeeType = store.Pointer.IrType is IrPointer p ? p.Pointee : null;
                     if (pointeeType != null)
-                        sb.AppendLine($"    *({IrTypeToCType(pointeeType)}*){ptr} = {val};");
+                    {
+                        // Use IrPointer wrapper to handle function pointer syntax correctly
+                        var castType = IrTypeToCType(new IrPointer(pointeeType));
+                        sb.AppendLine($"    *({castType}){ptr} = {val};");
+                    }
                     else
                         sb.AppendLine($"    *{ptr} = {val};");
                     break;
@@ -233,10 +337,11 @@ public static class HmCCodeGenerator
 
             case LoadInstruction load:
                 {
-                    var resultName = SanitizeName(load.Result.Name);
-                    var resultType = IrTypeToCType(load.Result.IrType ?? TypeLayoutService.IrI32);
+                    var resultName = load.Result.Name;
+                    var resultIrType = load.Result.IrType ?? TypeLayoutService.IrI32;
                     var ptr = EmitValue(load.Pointer);
-                    sb.AppendLine($"    {resultType} {resultName} = *({resultType}*){ptr};");
+                    var castType = IrTypeToCType(new IrPointer(resultIrType));
+                    sb.AppendLine($"    {EmitVarDecl(resultIrType, resultName)} = *({castType}){ptr};");
                     break;
                 }
 
@@ -252,18 +357,32 @@ public static class HmCCodeGenerator
 
             case BinaryInstruction bin:
                 {
-                    var resultName = SanitizeName(bin.Result.Name);
+                    var resultName = bin.Result.Name;
                     var resultType = IrTypeToCType(bin.Result.IrType ?? TypeLayoutService.IrI32);
                     var left = EmitValue(bin.Left);
                     var right = EmitValue(bin.Right);
-                    var op = BinaryOpToC(bin.Operation);
-                    sb.AppendLine($"    {resultType} {resultName} = {left} {op} {right};");
+                    if (bin.Operation == BinaryOp.UnsignedShiftRight)
+                    {
+                        // >>> (logical shift): cast to unsigned, shift, cast back
+                        var leftIr = bin.Left.IrType ?? TypeLayoutService.IrI32;
+                        var unsignedType = leftIr == TypeLayoutService.IrI32 ? "uint32_t"
+                            : leftIr == TypeLayoutService.IrI64 || leftIr == TypeLayoutService.IrISize ? "uint64_t"
+                            : leftIr == TypeLayoutService.IrI16 ? "uint16_t"
+                            : leftIr == TypeLayoutService.IrI8 ? "uint8_t"
+                            : IrTypeToCType(leftIr); // already unsigned
+                        sb.AppendLine($"    {resultType} {resultName} = ({resultType})(({unsignedType}){left} >> {right});");
+                    }
+                    else
+                    {
+                        var op = BinaryOpToC(bin.Operation);
+                        sb.AppendLine($"    {resultType} {resultName} = {left} {op} {right};");
+                    }
                     break;
                 }
 
             case UnaryInstruction unary:
                 {
-                    var resultName = SanitizeName(unary.Result.Name);
+                    var resultName = unary.Result.Name;
                     var resultType = IrTypeToCType(unary.Result.IrType ?? TypeLayoutService.IrI32);
                     var operand = EmitValue(unary.Operand);
                     var op = unary.Operation == UnaryOp.Negate ? "-" : "!";
@@ -273,9 +392,9 @@ public static class HmCCodeGenerator
 
             case CallInstruction call:
                 {
-                    var resultName = SanitizeName(call.Result.Name);
+                    var resultName = call.Result.Name;
                     var resultType = call.Result.IrType ?? TypeLayoutService.IrVoidPrim;
-                    var args = string.Join(", ", call.Arguments.Select(EmitValue));
+                    var args = string.Join(", ", call.Arguments.Select(a => EmitArg(a, call.IsForeignCall)));
                     var fnName = call.IsForeignCall
                         ? call.FunctionName
                         : IrNameMangling.MangleFunctionName(call.FunctionName,
@@ -285,26 +404,42 @@ public static class HmCCodeGenerator
                     if (resultType == TypeLayoutService.IrVoidPrim)
                         sb.AppendLine($"    {fnName}({args});");
                     else
-                        sb.AppendLine($"    {IrTypeToCType(resultType)} {resultName} = {fnName}({args});");
+                        sb.AppendLine($"    {EmitVarDecl(resultType, resultName)} = {fnName}({args});");
+                    break;
+                }
+
+            case IndirectCallInstruction indirectCall:
+                {
+                    var funcPtrExpr = EmitValue(indirectCall.FunctionPointer);
+                    var args = string.Join(", ", indirectCall.Arguments.Select(EmitValue));
+                    var resultName = indirectCall.Result.Name;
+                    var resultType = indirectCall.Result.IrType ?? TypeLayoutService.IrVoidPrim;
+
+                    if (resultType == TypeLayoutService.IrVoidPrim)
+                        sb.AppendLine($"    {funcPtrExpr}({args});");
+                    else
+                        sb.AppendLine($"    {EmitVarDecl(resultType, resultName)} = {funcPtrExpr}({args});");
                     break;
                 }
 
             case CastInstruction cast:
                 {
-                    var resultName = SanitizeName(cast.Result.Name);
-                    var resultType = IrTypeToCType(cast.Result.IrType ?? TypeLayoutService.IrI32);
+                    var resultName = cast.Result.Name;
+                    var resultIrType = cast.Result.IrType ?? TypeLayoutService.IrI32;
+                    var resultType = IrTypeToCType(resultIrType);
                     var src = EmitValue(cast.Source);
-                    sb.AppendLine($"    {resultType} {resultName} = ({resultType}){src};");
+                    sb.AppendLine($"    {EmitVarDecl(resultIrType, resultName)} = ({resultType}){src};");
                     break;
                 }
 
             case GetElementPtrInstruction gep:
                 {
-                    var resultName = SanitizeName(gep.Result.Name);
-                    var resultType = IrTypeToCType(gep.Result.IrType ?? TypeLayoutService.IrVoidPrim);
+                    var resultName = gep.Result.Name;
+                    var resultIrType = gep.Result.IrType ?? TypeLayoutService.IrVoidPrim;
+                    var resultType = IrTypeToCType(resultIrType);
                     var basePtr = EmitValue(gep.BasePointer);
                     var offset = EmitValue(gep.ByteOffset);
-                    sb.AppendLine($"    {resultType} {resultName} = ({resultType})((uint8_t*){basePtr} + {offset});");
+                    sb.AppendLine($"    {EmitVarDecl(resultIrType, resultName)} = ({resultType})((uint8_t*){basePtr} + {offset});");
                     break;
                 }
 
@@ -322,9 +457,9 @@ public static class HmCCodeGenerator
 
             case AddressOfInstruction addrOf:
                 {
-                    var resultName = SanitizeName(addrOf.Result.Name);
+                    var resultName = addrOf.Result.Name;
                     var resultType = IrTypeToCType(addrOf.Result.IrType ?? TypeLayoutService.IrVoidPrim);
-                    sb.AppendLine($"    {resultType} {resultName} = &{SanitizeName(addrOf.VariableName)};");
+                    sb.AppendLine($"    {resultType} {resultName} = &{addrOf.VariableName};");
                     break;
                 }
 
@@ -342,17 +477,68 @@ public static class HmCCodeGenerator
     {
         return value switch
         {
-            ConstantValue cv => cv.IntValue.ToString(),
-            LocalValue lv => SanitizeName(lv.Name),
+            ConstantValue cv => EmitConstant(cv),
+            LocalValue lv => lv.Name,
             StringTableValue stv => $"__flang__string_table[{stv.Index}]",
-            FunctionReferenceValue fv => SanitizeName(fv.Name),
+            FunctionReferenceValue fv => fv.IrType is IrFunctionPtr fp
+                ? IrNameMangling.MangleFunctionName(fv.Name, fp.Params)
+                : fv.Name,
+            GlobalValue gv when gv.Initializer is StructConstantValue
+                => $"&{gv.Name}",
+            GlobalValue gv => gv.Name,
             _ => $"/* unknown value: {value.GetType().Name} */"
         };
+    }
+
+    /// <summary>
+    /// Emit an integer constant with the appropriate C suffix for its type.
+    /// </summary>
+    private static string EmitConstant(ConstantValue cv)
+    {
+        var lit = cv.IntValue.ToString();
+        if (cv.IrType is IrPrimitive p)
+        {
+            if (p == TypeLayoutService.IrU64 || p == TypeLayoutService.IrUSize)
+                return lit + "ULL";
+            if (p == TypeLayoutService.IrI64 || p == TypeLayoutService.IrISize)
+                return lit + "LL";
+            if (p == TypeLayoutService.IrU32)
+                return lit + "U";
+        }
+        return lit;
+    }
+
+    /// <summary>
+    /// Emit a value as a call argument. For foreign calls, casts uint8_t* to (char*)
+    /// to avoid clang -Wpointer-sign warnings (FLang uses u8 for bytes, C uses char).
+    /// Uses (char*) not (const char*) so it's compatible with both const and non-const params.
+    /// </summary>
+    private static string EmitArg(Value value, bool isForeignCall)
+    {
+        var emitted = EmitValue(value);
+        if (isForeignCall && value.IrType is IrPointer { Pointee: IrPrimitive p } && p == TypeLayoutService.IrU8)
+            return $"(char*){emitted}";
+        return emitted;
     }
 
     // =========================================================================
     // Type mapping
     // =========================================================================
+
+    /// <summary>
+    /// Emit a C field/variable declaration. Handles function pointer syntax:
+    /// C requires `ret (*name)(params)` not `ret(*)(params) name`.
+    /// </summary>
+    private static string EmitFieldDecl(IrType type, string name)
+    {
+        if (type is IrFunctionPtr fp)
+        {
+            var ret = IrTypeToCType(fp.Return);
+            var parms = string.Join(", ", fp.Params.Select(IrTypeToCType));
+            return $"{ret} (*{name})({parms})";
+        }
+        return $"{IrTypeToCType(type)} {name}";
+    }
 
     private static string IrTypeToCType(IrType? type)
     {
@@ -377,6 +563,8 @@ public static class HmCCodeGenerator
                 "char" => "uint32_t",
                 _ => "int32_t"
             },
+            IrPointer ptr when ptr.Pointee is IrFunctionPtr fp2 =>
+                $"{IrTypeToCType(fp2.Return)}(**)({string.Join(", ", fp2.Params.Select(IrTypeToCType))})",
             IrPointer ptr => $"{IrTypeToCType(ptr.Pointee)}*",
             IrArray arr => $"{IrTypeToCType(arr.Element)}*",
             IrStruct s => s.CName,
@@ -417,23 +605,39 @@ public static class HmCCodeGenerator
 
     private static string MangleFunctionName(IrFunction fn)
     {
-        return IrNameMangling.MangleFunctionName(fn.Name, fn.Params.Select(p => p.Type).ToArray());
+        return IrNameMangling.MangleFunctionName(fn.Name, [.. fn.Params.Select(p => p.Type)]);
     }
 
-    private static string SanitizeName(string name)
+    /// <summary>
+    /// Emit a C variable/parameter declaration. Function pointer types and pointers
+    /// to function pointers need the name embedded: ret(*name)(params), ret(**name)(params).
+    /// </summary>
+    private static string EmitVarDecl(IrType type, string name)
     {
-        // Replace characters that are invalid in C identifiers
-        return name.Replace('.', '_').Replace('[', '_').Replace(']', '_')
-            .Replace(',', '_').Replace(' ', '_').Replace('-', '_');
+        if (type is IrFunctionPtr fp)
+        {
+            var ret = IrTypeToCType(fp.Return);
+            var parms = string.Join(", ", fp.Params.Select(IrTypeToCType));
+            return $"{ret}(*{name})({parms})";
+        }
+        if (type is IrPointer { Pointee: IrFunctionPtr fp2 })
+        {
+            var ret = IrTypeToCType(fp2.Return);
+            var parms = string.Join(", ", fp2.Params.Select(IrTypeToCType));
+            return $"{ret}(**{name})({parms})";
+        }
+        return $"{IrTypeToCType(type)} {name}";
     }
 
     private static string EscapeString(string s)
     {
-        return s.Replace("\\", "\\\\")
+        return new StringBuilder(s)
+            .Replace("\\", "\\\\")
             .Replace("\"", "\\\"")
             .Replace("\n", "\\n")
             .Replace("\r", "\\r")
             .Replace("\t", "\\t")
-            .Replace("\0", "\\0");
+            .Replace("\0", "\\0")
+            .ToString();
     }
 }

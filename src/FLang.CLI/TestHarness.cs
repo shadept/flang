@@ -39,9 +39,15 @@ public class TestHarness
     private readonly string _stdlibPath;
     private readonly string _harnessDir;
 
-    public TestHarness(string? projectRoot = null)
+    /// <summary>
+    /// When true, use the Hindley-Milner type checker pipeline for compilation.
+    /// </summary>
+    public bool UseHm { get; set; }
+
+    public TestHarness(string? projectRoot = null, bool useHm = false)
     {
         DiagnosticPrinter.EnableColors = false;
+        UseHm = useHm;
 
         if (projectRoot != null)
         {
@@ -179,10 +185,25 @@ public class TestHarness
             OutputPath: outputFilePath,
             CCompilerConfig: compilerConfig,
             ReleaseBuild: false,
-            DebugLogging: false
+            DebugLogging: false,
+            UseHm: UseHm
         );
 
-        var result = _compiler.Compile(options);
+        CompilationResult result;
+        try
+        {
+            result = _compiler.Compile(options);
+        }
+        catch (Exception ex)
+        {
+            CleanupGeneratedFiles(cFilePath, null, cleanupFiles);
+            return new TestResult(
+                absoluteTestFile,
+                metadata.TestName,
+                false,
+                $"Compiler crashed: {ex.Message}",
+                stopwatch.Elapsed);
+        }
 
         // Handle expected compile errors
         if (metadata.ExpectedCompileErrors.Count > 0)

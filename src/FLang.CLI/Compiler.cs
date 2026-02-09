@@ -365,8 +365,17 @@ public class Compiler
         foreach (var kvp in parsedModules)
         {
             var modulePath = HmTypeChecker.DeriveModulePath(kvp.Key, compilation.IncludePaths, compilation.WorkingDirectory);
+            hmChecker.CheckGlobalConstants(kvp.Value, modulePath);
+        }
+
+        foreach (var kvp in parsedModules)
+        {
+            var modulePath = HmTypeChecker.DeriveModulePath(kvp.Key, compilation.IncludePaths, compilation.WorkingDirectory);
             hmChecker.CheckModuleBodies(kvp.Value, modulePath);
         }
+
+        // Post-inference validation (unsuffixed literal checks: E2001, E2029, E2102)
+        hmChecker.ValidatePostInference();
 
         allDiagnostics.AddRange(hmChecker.Diagnostics);
 

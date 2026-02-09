@@ -27,7 +27,8 @@ bool listOnly = args.Contains("--list") || args.Contains("-l");
 bool verbose = args.Contains("--verbose") || args.Contains("-v");
 bool noProgress = args.Contains("--no-progress");
 bool sequential = args.Contains("--sequential") || args.Contains("-s");
-string? filter = args.FirstOrDefault(a => !a.StartsWith("-") && a != "--sequential" && a != "-s");
+bool useHm = args.Contains("--use-hm");
+string? filter = args.FirstOrDefault(a => !a.StartsWith("-") && a != "--sequential" && a != "-s" && a != "--use-hm");
 
 if (showHelp)
 {
@@ -47,6 +48,7 @@ if (showHelp)
           --verbose, -v     Show detailed output for each test
           --sequential, -s  Run tests sequentially (default is parallel)
           --no-progress     Disable progress bar
+          --use-hm          Use Hindley-Milner type checker pipeline
           --help, -h        Show this help message
 
         Filter:
@@ -61,7 +63,7 @@ if (showHelp)
 
 // Initialize harness with project root
 var projectRoot = Path.GetFullPath(Path.Combine(scriptDir, "tests", "FLang.Tests"));
-var harness = new TestHarness(projectRoot);
+var harness = new TestHarness(projectRoot, useHm: useHm);
 var artifactsDir = Path.GetFullPath(Path.Combine(scriptDir, ".test-artifacts"));
 
 // Discover tests
@@ -128,7 +130,8 @@ if (listOnly)
 // Run tests
 var parallelism = (sequential || verbose) ? 1 : Environment.ProcessorCount;
 Console.ForegroundColor = ConsoleColor.Cyan;
-Console.WriteLine($"Running {testFiles.Count} test(s){(parallelism > 1 ? $" in parallel ({parallelism} workers)" : "")}...");
+var hmLabel = useHm ? " [HM pipeline]" : "";
+Console.WriteLine($"Running {testFiles.Count} test(s){hmLabel}{(parallelism > 1 ? $" in parallel ({parallelism} workers)" : "")}...");
 Console.ResetColor();
 
 var passed = 0;
@@ -144,7 +147,7 @@ var results = new (string RelativePath, TestResult Result)[testFiles.Count];
 
 Parallel.For(0, testFiles.Count, new ParallelOptions { MaxDegreeOfParallelism = parallelism },
     // Thread-local factory: each thread gets its own TestHarness to avoid shared state
-    () => new TestHarness(projectRoot),
+    () => new TestHarness(projectRoot, useHm: useHm),
     (i, state, localHarness) =>
     {
         var testFile = testFiles[i];

@@ -69,13 +69,46 @@ public partial class HmTypeChecker
         if (lit.Suffix != null)
         {
             var prim = ResolvePrimitive(lit.Suffix);
-            if (prim != null) return prim;
+            if (prim != null)
+            {
+                // E2029: Check literal value fits in the suffix type
+                if (!FitsInType(lit.Value, lit.Suffix))
+                    ReportError($"Literal `{lit.Value}{lit.Suffix}` out of range for type `{lit.Suffix}`", lit.Span, "E2029");
+                return prim;
+            }
             ReportError($"Unknown integer suffix `{lit.Suffix}`", lit.Span);
         }
 
         // Unsuffixed integer: fresh type variable (constrained by context)
-        return _engine.FreshVar();
+        var tv = _engine.FreshVar();
+        _unsuffixedLiterals.Add((lit, tv));
+        return tv;
     }
+
+    private static bool ContainsTypeVar(Type type) => type switch
+    {
+        TypeVar => true,
+        FunctionType fn => fn.ParameterTypes.Any(ContainsTypeVar) || ContainsTypeVar(fn.ReturnType),
+        ReferenceType r => ContainsTypeVar(r.InnerType),
+        NominalType n => n.TypeArguments.Any(ContainsTypeVar),
+        ArrayType a => ContainsTypeVar(a.ElementType),
+        _ => false
+    };
+
+    internal static bool FitsInType(System.Numerics.BigInteger value, string typeName) => typeName switch
+    {
+        "u8" => value >= 0 && value <= 255,
+        "u16" => value >= 0 && value <= 65535,
+        "u32" => value >= 0 && value <= uint.MaxValue,
+        "u64" => value >= 0 && value <= ulong.MaxValue,
+        "usize" => value >= 0 && value <= ulong.MaxValue,
+        "i8" => value >= -128 && value <= 127,
+        "i16" => value >= -32768 && value <= 32767,
+        "i32" => value >= int.MinValue && value <= int.MaxValue,
+        "i64" => value >= long.MinValue && value <= long.MaxValue,
+        "isize" => value >= long.MinValue && value <= long.MaxValue,
+        _ => true
+    };
 
     private NominalType InferStringLiteral()
     {
@@ -96,10 +129,22 @@ public partial class HmTypeChecker
 
     private Type InferIdentifier(IdentifierExpressionNode id)
     {
-        // Look up in type scope
-        var scheme = _scopes.Lookup(id.Name);
+        // Look up in type scope (local variables, parameters, variant constructors)
+        // With lambda scope barrier enforcement for non-capturing lambdas
+        var scheme = _lambdaScopeBarrier > 0
+            ? _scopes.LookupWithBarrier(id.Name, _lambdaScopeBarrier)
+            : _scopes.Lookup(id.Name);
         if (scheme != null)
+        {
+            // If this name is an active type parameter (inside a generic specialization),
+            // it's being used as a type-as-value and should be wrapped in Type(T)
+            if (_activeTypeParams.ContainsKey(id.Name))
+            {
+                var resolvedType = _engine.Resolve(_engine.Specialize(scheme));
+                return WrapInTypeStruct(resolvedType);
+            }
             return _engine.Specialize(scheme);
+        }
 
         // Check if it's a function name
         var fns = LookupFunctions(id.Name);
@@ -109,8 +154,40 @@ public partial class HmTypeChecker
             return _engine.Specialize(fns[0].Signature);
         }
 
-        ReportError($"Unresolved identifier `{id.Name}`", id.Span, "E2001");
+        // Check if it's a nominal type name
+        var nominal = LookupNominalType(id.Name);
+        if (nominal != null)
+        {
+            // Structs in expression context are type-as-value (e.g., size_of(Point))
+            if (nominal.Kind == NominalKind.Struct)
+                return WrapInTypeStruct(nominal);
+            // Enums returned directly for variant access (e.g., FileMode.Read)
+            return nominal;
+        }
+
+        // Check if it's a primitive type name in expression context (e.g., align_of(u8))
+        // Primitives are wrapped in Type(T) since they're only used as type-as-value args.
+        var primitive = ResolvePrimitive(id.Name);
+        if (primitive != null)
+            return WrapInTypeStruct(primitive);
+
+        ReportError($"Unresolved identifier `{id.Name}`", id.Span, "E2004");
         return _engine.FreshVar();
+    }
+
+    /// <summary>
+    /// Wrap a type in Type(T) for type-as-value expressions (e.g., align_of(u8)).
+    /// Falls back to the raw type if the Type struct is not registered (rtti not imported).
+    /// </summary>
+    private Type WrapInTypeStruct(Type innerType)
+    {
+        var typeNominal = LookupNominalType("Type");
+        if (typeNominal != null)
+        {
+            InstantiatedTypes.Add(innerType);
+            return new NominalType(typeNominal.Name, typeNominal.Kind, [innerType], typeNominal.FieldsOrVariants);
+        }
+        return innerType;
     }
 
     // =========================================================================
@@ -164,6 +241,17 @@ public partial class HmTypeChecker
                 return resolvedRight;
         }
 
+        // E2017: Non-primitive types with no operator implementation
+        if (resolvedLeft is NominalType && resolvedLeft is not PrimitiveType
+            && resolvedRight is not TypeVar)
+        {
+            var opSymbol = OperatorFunctions.GetOperatorSymbol(op);
+            ReportError(
+                $"No implementation for `{resolvedLeft} {opSymbol} {resolvedRight}`",
+                span, "E2017");
+            return _engine.FreshVar();
+        }
+
         // Unify operands (must be same numeric type)
         var unified = _engine.Unify(left, right, span);
 
@@ -207,6 +295,13 @@ public partial class HmTypeChecker
                     _resolvedOperators[bin] = new ResolvedOperator(eqNode!, NegateResult: true);
                     return WellKnown.Bool;
                 }
+                // Also try deriving from op_cmp: != means op_cmp(a,b) != 0
+                var cmpNe = TryResolveOperatorFunction("op_cmp", [left, right], span, out var cmpNeNode);
+                if (cmpNe != null)
+                {
+                    _resolvedOperators[bin] = new ResolvedOperator(cmpNeNode!, CmpDerivedOperator: bin.Operator);
+                    return WellKnown.Bool;
+                }
                 return null;
             }
             case BinaryOperatorKind.Equal:
@@ -215,6 +310,13 @@ public partial class HmTypeChecker
                 if (ne != null)
                 {
                     _resolvedOperators[bin] = new ResolvedOperator(neNode!, NegateResult: true);
+                    return WellKnown.Bool;
+                }
+                // Also try deriving from op_cmp: == means op_cmp(a,b) == 0
+                var cmpEq = TryResolveOperatorFunction("op_cmp", [left, right], span, out var cmpEqNode);
+                if (cmpEq != null)
+                {
+                    _resolvedOperators[bin] = new ResolvedOperator(cmpEqNode!, CmpDerivedOperator: bin.Operator);
                     return WellKnown.Bool;
                 }
                 return null;
@@ -363,7 +465,18 @@ public partial class HmTypeChecker
             _engine.Unify(arg, winnerFn.ParameterTypes[i], span);
         }
 
-        resolvedNode = bestCandidate.Node;
+        // Generic monomorphization for operator functions
+        if (bestCandidate.Signature.QuantifiedVarIds.Count > 0)
+        {
+            var concreteParams = winnerFn.ParameterTypes.Select(p => _engine.Resolve(p)).ToArray();
+            var concreteReturn = _engine.Resolve(winnerFn.ReturnType);
+            var specialized = EnsureSpecialization(bestCandidate, concreteParams, concreteReturn, span);
+            resolvedNode = specialized ?? bestCandidate.Node;
+        }
+        else
+        {
+            resolvedNode = bestCandidate.Node;
+        }
         return winnerFn.ReturnType;
     }
 
@@ -383,6 +496,18 @@ public partial class HmTypeChecker
         for (int i = 0; i < call.Arguments.Count; i++)
             argTypes[i] = InferExpression(call.Arguments[i]);
 
+        // Use MethodName for UFCS lookup, FunctionName for regular calls
+        var lookupName = call.MethodName ?? call.FunctionName;
+
+        // Check for vtable/field-call pattern: receiver.field(args)
+        // When the receiver is a struct with a function-typed field matching the method name,
+        // this is an indirect call through a function pointer, NOT a UFCS method call.
+        if (receiverType != null && call.MethodName != null)
+        {
+            var fieldCallResult = TryFieldCall(call, receiverType, call.MethodName, argTypes);
+            if (fieldCallResult != null) return fieldCallResult;
+        }
+
         // Build full argument list (receiver prepended for UFCS)
         Type[] fullArgTypes;
         if (receiverType != null)
@@ -396,23 +521,88 @@ public partial class HmTypeChecker
             fullArgTypes = argTypes;
         }
 
-        // Use MethodName for UFCS lookup, FunctionName for regular calls
-        var lookupName = call.MethodName ?? call.FunctionName;
-
-        // Try enum variant construction first
-        var variantType = TryResolveVariantConstruction(lookupName, fullArgTypes, call.Span);
-        if (variantType != null) return variantType;
-
-        // Look up function candidates
-        var candidates = LookupFunctions(lookupName);
-        if (candidates == null || candidates.Count == 0)
+        // Try enum variant construction: EnumType.Variant(args)
+        // When the UFCS receiver is an enum type and the method is a variant,
+        // use only the actual args (not the receiver) for construction.
+        if (receiverType != null)
         {
-            // Try indirect call (variable with function type)
-            return TryIndirectCall(call, fullArgTypes);
+            var resolvedReceiver = _engine.Resolve(receiverType);
+            if (resolvedReceiver is NominalType { Kind: NominalKind.Enum })
+            {
+                var variantType = TryResolveVariantConstruction(lookupName, argTypes, call.Span);
+                if (variantType != null) return variantType;
+            }
         }
 
-        // Overload resolution (with UFCS receiver adaptation)
-        return ResolveOverload(candidates, fullArgTypes, call, receiverType != null);
+        // Look up function candidates FIRST — regular functions take priority over variant constructors.
+        // Variant constructors (Ok, Err, etc.) only exist in _scopes, not _functions.
+        // Regular functions exist in both. If we tried variant construction first, any function
+        // returning an enum type (e.g., open_file → Result) would be misidentified as a variant.
+        var candidates = LookupFunctions(lookupName);
+        if (candidates != null && candidates.Count > 0)
+        {
+            // Overload resolution (with UFCS receiver adaptation)
+            return ResolveOverload(candidates, fullArgTypes, call, receiverType != null);
+        }
+
+        // Try enum variant construction (non-UFCS: bare variant name)
+        var variantType2 = TryResolveVariantConstruction(lookupName, fullArgTypes, call.Span);
+        if (variantType2 != null) return variantType2;
+
+        // Try indirect call (variable with function type)
+        return TryIndirectCall(call, fullArgTypes);
+    }
+
+    /// <summary>
+    /// Try to resolve a call as a field-call (vtable pattern): receiver.field(args)
+    /// where the receiver is a struct with a function-typed field matching the method name.
+    /// </summary>
+    private Type? TryFieldCall(CallExpressionNode call, Type receiverType, string fieldName, Type[] argTypes)
+    {
+        var resolved = _engine.Resolve(receiverType);
+
+        // Auto-deref through references
+        while (resolved is ReferenceType refType)
+            resolved = _engine.Resolve(refType.InnerType);
+
+        if (resolved is not NominalType { Kind: NominalKind.Struct } nominal)
+            return null;
+
+        // Look up the registered template if needed
+        var fieldsSource = nominal;
+        if (nominal.FieldsOrVariants.Count == 0)
+        {
+            var template = LookupNominalType(nominal.Name);
+            if (template != null) fieldsSource = template;
+        }
+
+        // Find the field
+        var field = fieldsSource.FieldsOrVariants.FirstOrDefault(f => f.Name == fieldName);
+        if (field == default) return null;
+
+        // Check if it's a function type
+        var fieldType = _engine.Resolve(field.Type);
+        if (fieldType is not FunctionType fnType)
+        {
+            // E2011: Field exists but is not callable
+            ReportError($"Field `{fieldName}` is not a function and cannot be called", call.Span, "E2011");
+            foreach (var arg in call.Arguments) InferExpression(arg);
+            return fieldType;
+        }
+
+        // It's a function-typed field — treat as indirect call
+        if (fnType.ParameterTypes.Count != argTypes.Length)
+        {
+            ReportError($"No matching overload for `{fieldName}` with {argTypes.Length} arguments",
+                call.Span, "E2011");
+            return _engine.FreshVar();
+        }
+
+        for (int i = 0; i < argTypes.Length; i++)
+            _engine.Unify(argTypes[i], fnType.ParameterTypes[i], call.Span);
+
+        call.IsIndirectCall = true;
+        return fnType.ReturnType;
     }
 
     /// <summary>
@@ -476,7 +666,7 @@ public partial class HmTypeChecker
             }
         }
 
-        ReportError($"Unresolved function `{call.FunctionName}`", call.Span, "E2001");
+        ReportError($"Unresolved function `{call.FunctionName}`", call.Span, "E2004");
         return _engine.FreshVar();
     }
 
@@ -509,6 +699,15 @@ public partial class HmTypeChecker
             bool success = true;
             for (int i = 0; i < effectiveArgs.Length; i++)
             {
+                // Function types are invariant — reject coercion between different concrete fn types
+                var resolvedArg = _engine.Resolve(effectiveArgs[i]);
+                var resolvedParam = _engine.Resolve(fnType.ParameterTypes[i]);
+                if (resolvedArg is FunctionType argFn && resolvedParam is FunctionType paramFn
+                    && !ContainsTypeVar(argFn) && !ContainsTypeVar(paramFn))
+                {
+                    if (!argFn.Equals(paramFn)) { success = false; break; }
+                }
+
                 var result = _engine.TryUnify(effectiveArgs[i], fnType.ParameterTypes[i]);
                 if (result == null)
                 {
@@ -544,7 +743,7 @@ public partial class HmTypeChecker
         {
             var displayName = call.MethodName ?? call.FunctionName;
             ReportError($"No matching overload for `{displayName}` with {argTypes.Length} arguments",
-                call.Span, "E2010");
+                call.Span, "E2011");
             return _engine.FreshVar();
         }
 
@@ -564,8 +763,21 @@ public partial class HmTypeChecker
         for (int i = 0; i < commitArgs.Length; i++)
             _engine.Unify(commitArgs[i], winnerFn.ParameterTypes[i], call.Span);
 
-        // Record resolved target for later phases
-        call.ResolvedTarget = bestCandidate.Node;
+        // Generic monomorphization: specialize if the winner is generic
+        if (bestCandidate.Signature.QuantifiedVarIds.Count > 0)
+        {
+            var concreteParams = winnerFn.ParameterTypes.Select(p => _engine.Resolve(p)).ToArray();
+            var concreteReturn = _engine.Resolve(winnerFn.ReturnType);
+            var specialized = EnsureSpecialization(bestCandidate, concreteParams, concreteReturn, call.Span);
+            if (specialized != null)
+                call.ResolvedTarget = specialized;
+            else
+                call.ResolvedTarget = bestCandidate.Node;
+        }
+        else
+        {
+            call.ResolvedTarget = bestCandidate.Node;
+        }
 
         return winnerFn.ReturnType;
     }
@@ -630,7 +842,7 @@ public partial class HmTypeChecker
 
     private Type InferBlock(BlockExpressionNode block)
     {
-        _scopes.PushScope();
+        PushScope();
 
         foreach (var stmt in block.Statements)
             CheckStatement(stmt);
@@ -641,7 +853,7 @@ public partial class HmTypeChecker
         else
             result = WellKnown.Void;
 
-        _scopes.PopScope();
+        PopScope();
         return result;
     }
 
@@ -656,7 +868,7 @@ public partial class HmTypeChecker
 
         foreach (var arm in match.Arms)
         {
-            _scopes.PushScope();
+            PushScope();
 
             // Bind pattern variables
             CheckPattern(arm.Pattern, scrutineeType);
@@ -666,7 +878,38 @@ public partial class HmTypeChecker
             var unified = _engine.Unify(resultType, armType, arm.Span);
             resultType = unified.Type;
 
-            _scopes.PopScope();
+            PopScope();
+        }
+
+        // E2030/E2031: Check match exhaustiveness for enum types
+        var resolvedScrutinee = _engine.Resolve(scrutineeType);
+        // Auto-deref for exhaustiveness check
+        while (resolvedScrutinee is ReferenceType refScrutinee)
+            resolvedScrutinee = _engine.Resolve(refScrutinee.InnerType);
+
+        if (resolvedScrutinee is NominalType { Kind: NominalKind.Enum } enumScrutinee)
+        {
+            // Check exhaustiveness only if there are variant patterns and no catch-all
+            bool hasElse = match.Arms.Any(a => a.Pattern is ElsePatternNode or VariablePatternNode or WildcardPatternNode);
+            if (!hasElse)
+            {
+                var coveredVariants = new HashSet<string>();
+                foreach (var arm in match.Arms)
+                {
+                    if (arm.Pattern is EnumVariantPatternNode vp)
+                        coveredVariants.Add(vp.VariantName);
+                }
+
+                var allVariants = enumScrutinee.FieldsOrVariants.Select(f => f.Name).ToHashSet();
+                var missing = allVariants.Except(coveredVariants).ToList();
+                if (missing.Count > 0)
+                    ReportError($"Non-exhaustive match: missing variant(s) {string.Join(", ", missing.Select(m => $"`{m}`"))}", match.Span, "E2031");
+            }
+        }
+        else if (resolvedScrutinee is not TypeVar && match.Arms.Any(a => a.Pattern is EnumVariantPatternNode))
+        {
+            // E2030: Match variant pattern on non-enum type
+            ReportError($"Cannot match on non-enum type `{resolvedScrutinee}`", match.Span, "E2030");
         }
 
         return resultType;
@@ -702,6 +945,11 @@ public partial class HmTypeChecker
     private void CheckEnumVariantPattern(EnumVariantPatternNode pattern, Type scrutineeType)
     {
         var resolved = _engine.Resolve(scrutineeType);
+
+        // Auto-dereference through references (e.g., &List → List)
+        while (resolved is ReferenceType refType)
+            resolved = _engine.Resolve(refType.InnerType);
+
         if (resolved is not NominalType enumType)
         {
             ReportError($"Cannot match variant pattern against non-nominal type", pattern.Span);
@@ -714,33 +962,51 @@ public partial class HmTypeChecker
 
         if (variant == default)
         {
-            ReportError($"Unknown variant `{pattern.VariantName}` for type `{enumType.Name}`", pattern.Span);
+            ReportError($"Unknown variant `{pattern.VariantName}` for type `{enumType.Name}`", pattern.Span, "E2037");
             return;
         }
 
-        // Bind sub-patterns to variant payload
-        if (variant.Type is PrimitiveType { Name: "void" })
+        // Substitute template TypeVars with concrete type arguments
+        var variantType = variant.Type;
+        if (enumType.TypeArguments.Count > 0)
         {
-            // Payload-less variant: no sub-patterns expected
+            var template = LookupNominalType(enumType.Name);
+            if (template != null && template.TypeArguments.Count == enumType.TypeArguments.Count)
+                variantType = SubstituteTypeArgs(variantType, template.TypeArguments, enumType.TypeArguments);
+        }
+
+        // Bind sub-patterns to variant payload
+        if (variantType is PrimitiveType { Name: "void" })
+        {
+            // E2032: Payload-less variant: no sub-patterns expected
             if (pattern.SubPatterns.Count > 0)
-                ReportError($"Variant `{pattern.VariantName}` has no payload", pattern.Span);
+                ReportError($"Variant `{pattern.VariantName}` expects 0 bindings, got {pattern.SubPatterns.Count}", pattern.Span, "E2032");
+        }
+        else if (variantType is NominalType tupleType && tupleType.Name.StartsWith("__tuple_"))
+        {
+            // Multi-payload variant: check ARITY first, then bind
+            // E2032: Arity mismatch
+            if (pattern.SubPatterns.Count != tupleType.FieldsOrVariants.Count)
+            {
+                ReportError($"Variant `{pattern.VariantName}` expects {tupleType.FieldsOrVariants.Count} bindings, got {pattern.SubPatterns.Count}", pattern.Span, "E2032");
+            }
+            else
+            {
+                // Multi-payload: bind each sub-pattern to tuple field
+                for (int i = 0; i < pattern.SubPatterns.Count; i++)
+                    CheckPattern(pattern.SubPatterns[i], tupleType.FieldsOrVariants[i].Type);
+            }
         }
         else if (pattern.SubPatterns.Count == 1)
         {
             // Single payload: bind directly
-            CheckPattern(pattern.SubPatterns[0], variant.Type);
+            CheckPattern(pattern.SubPatterns[0], variantType);
         }
-        else if (variant.Type is NominalType tupleType && tupleType.Name.StartsWith("__tuple_"))
+        else if (pattern.SubPatterns.Count > 1)
         {
-            // Multi-payload: bind each sub-pattern to tuple field
-            for (int i = 0; i < pattern.SubPatterns.Count && i < tupleType.FieldsOrVariants.Count; i++)
-                CheckPattern(pattern.SubPatterns[i], tupleType.FieldsOrVariants[i].Type);
-        }
-        else if (pattern.SubPatterns.Count > 0)
-        {
-            // Single payload but multiple sub-patterns
+            // E2032: Single payload but multiple sub-patterns
             ReportError($"Variant `{pattern.VariantName}` expects 1 binding, got {pattern.SubPatterns.Count}",
-                pattern.Span);
+                pattern.Span, "E2032");
         }
 
         Record(pattern, scrutineeType);
@@ -756,6 +1022,10 @@ public partial class HmTypeChecker
         if (assign.Target is IndexExpressionNode idx)
             return InferIndexedAssignment(assign, idx);
 
+        // E2038: Cannot assign to const variable
+        if (assign.Target is IdentifierExpressionNode targetId && IsConst(targetId.Name))
+            ReportError($"Cannot assign to constant `{targetId.Name}`", assign.Span, "E2038");
+
         var targetType = InferExpression(assign.Target);
         var valueType = InferExpression(assign.Value);
         _engine.Unify(valueType, targetType, assign.Value.Span);
@@ -768,25 +1038,14 @@ public partial class HmTypeChecker
         var indexType = InferExpression(idx.Index);
         var valueType = InferExpression(assign.Value);
 
-        // Try op_set_index(&base, index, value) first, then op_set_index(base, index, value)
-        var refBaseType = new ReferenceType(baseType);
-        var opResult = TryResolveOperatorFunction("op_set_index", [refBaseType, indexType, valueType], assign.Span, out var setNode);
-        if (opResult == null)
-            opResult = TryResolveOperatorFunction("op_set_index", [baseType, indexType, valueType], assign.Span, out setNode);
-
-        if (opResult != null)
-        {
-            _resolvedOperators[assign] = new ResolvedOperator(setNode!);
-            return WellKnown.Void;
-        }
-
-        // Built-in array/slice indexed assignment
+        // Built-in array/slice indexed assignment takes priority (matches InferIndex pattern)
         var resolvedBase = _engine.Resolve(baseType);
 
         if (resolvedBase is ArrayType arrayType)
         {
             _engine.Unify(indexType, WellKnown.USize, idx.Index.Span);
             _engine.Unify(valueType, arrayType.ElementType, assign.Value.Span);
+            Record(idx, arrayType.ElementType);
             return WellKnown.Void;
         }
 
@@ -795,10 +1054,25 @@ public partial class HmTypeChecker
         {
             _engine.Unify(indexType, WellKnown.USize, idx.Index.Span);
             _engine.Unify(valueType, sliceType.TypeArguments[0], assign.Value.Span);
+            Record(idx, sliceType.TypeArguments[0]);
+            return WellKnown.Void;
+        }
+
+        // Try op_set_index(&base, index, value) for user-defined types
+        var refBaseType = new ReferenceType(baseType);
+        var opResult = TryResolveOperatorFunction("op_set_index", [refBaseType, indexType, valueType], assign.Span, out var setNode);
+        if (opResult == null)
+            opResult = TryResolveOperatorFunction("op_set_index", [baseType, indexType, valueType], assign.Span, out setNode);
+
+        if (opResult != null)
+        {
+            _resolvedOperators[assign] = new ResolvedOperator(setNode!);
+            Record(idx, valueType);
             return WellKnown.Void;
         }
 
         ReportError("Type does not support indexed assignment", idx.Span);
+        Record(idx, _engine.FreshVar());
         return WellKnown.Void;
     }
 
@@ -808,6 +1082,13 @@ public partial class HmTypeChecker
 
     private ReferenceType InferAddressOf(AddressOfExpressionNode addrOf)
     {
+        // E2040: Cannot take address of temporaries (only identifiers, member access, index, deref)
+        if (addrOf.Target is not (IdentifierExpressionNode or MemberAccessExpressionNode
+            or IndexExpressionNode or DereferenceExpressionNode))
+        {
+            ReportError("Cannot take address of temporary value", addrOf.Span, "E2040");
+        }
+
         var inner = InferExpression(addrOf.Target);
         return new ReferenceType(inner);
     }
@@ -819,7 +1100,7 @@ public partial class HmTypeChecker
         if (resolved is ReferenceType refType)
             return refType.InnerType;
 
-        ReportError("Cannot dereference non-reference type", deref.Span);
+        ReportError("Cannot dereference non-reference type", deref.Span, "E2012");
         return _engine.FreshVar();
     }
 
@@ -863,8 +1144,52 @@ public partial class HmTypeChecker
             var field = fieldsSource.FieldsOrVariants
                 .FirstOrDefault(f => f.Name == fieldName);
 
+            // Type(T) is a phantom type — field access resolves against TypeInfo
+            if (field == default && nominal.Name == "core.rtti.Type")
+            {
+                var typeInfo = LookupNominalType("core.rtti.TypeInfo");
+                if (typeInfo != null)
+                    field = typeInfo.FieldsOrVariants.FirstOrDefault(f => f.Name == fieldName);
+            }
+
             if (field != default)
-                return field.Type;
+            {
+                // For enum variants, return the enum type (payload-less) or a
+                // constructor function type (payload), not the raw payload type
+                if (fieldsSource.Kind == NominalKind.Enum)
+                {
+                    // Substitute generic type args for variant payload types
+                    var payloadType = field.Type;
+                    if (nominal.TypeArguments.Count > 0)
+                    {
+                        var tmpl = LookupNominalType(nominal.Name);
+                        if (tmpl != null && tmpl.TypeArguments.Count == nominal.TypeArguments.Count)
+                            payloadType = SubstituteTypeArgs(payloadType, tmpl.TypeArguments, nominal.TypeArguments);
+                    }
+
+                    if (payloadType is PrimitiveType { Name: "void" })
+                    {
+                        // Payload-less variant: value IS the enum type
+                        return nominal;
+                    }
+                    else
+                    {
+                        // Payload variant: fn(payload) -> EnumType
+                        return new FunctionType([payloadType], nominal);
+                    }
+                }
+
+                // For generic types, substitute template TypeVars with instance type args
+                var fieldType = field.Type;
+                if (nominal.TypeArguments.Count > 0)
+                {
+                    var template = LookupNominalType(nominal.Name);
+                    if (template != null && template.TypeArguments.Count == nominal.TypeArguments.Count)
+                        fieldType = SubstituteTypeArgs(fieldType, template.TypeArguments, nominal.TypeArguments);
+                }
+
+                return fieldType;
+            }
         }
 
         // Fixed-size arrays have implicit .len and .ptr fields
@@ -874,7 +1199,7 @@ public partial class HmTypeChecker
             if (fieldName == "ptr") return new ReferenceType(arrayType.ElementType);
         }
 
-        ReportError($"No field `{fieldName}` on type", member.Span);
+        ReportError($"No field `{fieldName}` on type", member.Span, "E2014");
         return _engine.FreshVar();
     }
 
@@ -887,39 +1212,48 @@ public partial class HmTypeChecker
         var structType = ResolveTypeNode(structCon.TypeName);
         var resolved = _engine.Resolve(structType);
 
-        if (resolved is NominalType nominal)
+        // E2018: Non-nominal types (primitives, references, etc.) can't be constructed
+        if (resolved is not NominalType nominal)
         {
-            // Check each field
-            foreach (var (fieldName, valueExpr) in structCon.Fields)
-            {
-                var fieldDef = nominal.FieldsOrVariants
-                    .FirstOrDefault(f => f.Name == fieldName);
+            ReportError($"Cannot construct non-struct type `{resolved}`", structCon.Span, "E2018");
+            foreach (var (_, valueExpr) in structCon.Fields)
+                InferExpression(valueExpr);
+            return resolved;
+        }
 
-                if (fieldDef == default)
-                {
-                    ReportError($"Unknown field `{fieldName}` in struct `{nominal.Name}`", valueExpr.Span);
-                    InferExpression(valueExpr);
-                    continue;
-                }
-
-                var valType = InferExpression(valueExpr);
-                _engine.Unify(valType, fieldDef.Type, valueExpr.Span);
-            }
-
-            // Check for missing fields
-            var provided = new HashSet<string>(structCon.Fields.Select(f => f.FieldName));
-            foreach (var field in nominal.FieldsOrVariants)
-                if (!provided.Contains(field.Name))
-                    ReportError($"Missing field `{field.Name}` in struct construction", structCon.Span, "E2015");
-
+        // E2018: Cannot construct non-struct type (enums, etc.)
+        if (nominal.Kind != NominalKind.Struct)
+        {
+            ReportError($"Cannot construct non-struct type `{nominal.Name}`", structCon.Span, "E2018");
+            foreach (var (_, valueExpr) in structCon.Fields)
+                InferExpression(valueExpr);
             return nominal;
         }
 
-        // Fallback: infer fields without constraint
-        foreach (var (_, valueExpr) in structCon.Fields)
-            InferExpression(valueExpr);
+        // Check each field
+        foreach (var (fieldName, valueExpr) in structCon.Fields)
+        {
+            var fieldDef = nominal.FieldsOrVariants
+                .FirstOrDefault(f => f.Name == fieldName);
 
-        return structType;
+            if (fieldDef == default)
+            {
+                ReportError($"Unknown field `{fieldName}` in struct `{nominal.Name}`", valueExpr.Span);
+                InferExpression(valueExpr);
+                continue;
+            }
+
+            var valType = InferExpression(valueExpr);
+            _engine.Unify(valType, fieldDef.Type, valueExpr.Span);
+        }
+
+        // E2015: Check for missing fields
+        var provided = new HashSet<string>(structCon.Fields.Select(f => f.FieldName));
+        foreach (var field in nominal.FieldsOrVariants)
+            if (!provided.Contains(field.Name))
+                ReportError($"Missing field `{field.Name}` in struct construction", structCon.Span, "E2015");
+
+        return nominal;
     }
 
     // =========================================================================
@@ -955,7 +1289,8 @@ public partial class HmTypeChecker
 
         if (arr.Elements == null || arr.Elements.Count == 0)
         {
-            // Empty array: element type solved by caller via Unify
+            // Empty array: element type solved by caller via Unify.
+            // E2026 is checked during variable declaration when we can verify no type context exists.
             return new ArrayType(_engine.FreshVar(), 0);
         }
 
@@ -979,7 +1314,55 @@ public partial class HmTypeChecker
         var baseType = InferExpression(idx.Base);
         var indexType = InferExpression(idx.Index);
 
-        // Try op_index — auto-ref-lifting handled by TryResolveOperatorFunction
+        // Built-in array/slice indexing takes priority over user-defined op_index.
+        // This prevents false matches where op_index(String, Range) matches Slice[u8]
+        // through StringToByteSlice bidirectional coercion.
+        var resolvedBase = _engine.Resolve(baseType);
+        var resolvedIndex = _engine.Resolve(indexType);
+
+        // Check if index is a Range — range indexing returns a Slice
+        var isRangeIndex = resolvedIndex is NominalType { Kind: NominalKind.Struct } nomIdx
+                           && nomIdx.Name.EndsWith("Range");
+
+        // E2027: Check that index type is not bool (common mistake)
+        if (!isRangeIndex && resolvedIndex is PrimitiveType { Name: "bool" })
+        {
+            ReportError("Cannot use `bool` as an index type", idx.Index.Span, "E2027");
+            return _engine.FreshVar();
+        }
+
+        if (resolvedBase is ArrayType arrayType)
+        {
+            if (isRangeIndex)
+            {
+                // Range indexing: array[range] → Slice[T]
+                // Unify range element type with usize
+                if (resolvedIndex is NominalType rangeNom && rangeNom.TypeArguments.Count > 0)
+                    _engine.Unify(rangeNom.TypeArguments[0], WellKnown.USize, idx.Index.Span);
+                var sliceNominal = LookupNominalType(WellKnown.Slice)
+                    ?? throw new InvalidOperationException($"Well-known type `{WellKnown.Slice}` not registered");
+                return new NominalType(sliceNominal.Name, sliceNominal.Kind,
+                    [arrayType.ElementType], sliceNominal.FieldsOrVariants);
+            }
+            _engine.Unify(indexType, WellKnown.USize, idx.Index.Span);
+            return arrayType.ElementType;
+        }
+
+        if (resolvedBase is NominalType { Name: WellKnown.Slice, TypeArguments.Count: > 0 } sliceType)
+        {
+            if (isRangeIndex)
+            {
+                // Range indexing: slice[range] → Slice[T]
+                // Unify range element type with usize
+                if (resolvedIndex is NominalType rangeNom2 && rangeNom2.TypeArguments.Count > 0)
+                    _engine.Unify(rangeNom2.TypeArguments[0], WellKnown.USize, idx.Index.Span);
+                return sliceType;
+            }
+            _engine.Unify(indexType, WellKnown.USize, idx.Index.Span);
+            return sliceType.TypeArguments[0];
+        }
+
+        // Try op_index for user-defined types (Dict, String, etc.)
         var opResult = TryResolveOperatorFunction("op_index", [baseType, indexType], idx.Span, out var resolvedNode);
         if (opResult != null)
         {
@@ -987,22 +1370,7 @@ public partial class HmTypeChecker
             return opResult;
         }
 
-        // Built-in array/slice indexing
-        var resolvedBase = _engine.Resolve(baseType);
-
-        if (resolvedBase is ArrayType arrayType)
-        {
-            _engine.Unify(indexType, WellKnown.USize, idx.Index.Span);
-            return arrayType.ElementType;
-        }
-
-        if (resolvedBase is NominalType { Name: WellKnown.Slice, TypeArguments.Count: > 0 } sliceType)
-        {
-            _engine.Unify(indexType, WellKnown.USize, idx.Index.Span);
-            return sliceType.TypeArguments[0];
-        }
-
-        ReportError("Type does not support indexing", idx.Span);
+        ReportError("Type does not support indexing", idx.Span, "E2028");
         return _engine.FreshVar();
     }
 
@@ -1012,8 +1380,60 @@ public partial class HmTypeChecker
 
     private Type InferCast(CastExpressionNode cast)
     {
-        InferExpression(cast.Expression);
-        return ResolveTypeNode(cast.TargetType);
+        var innerType = InferExpression(cast.Expression);
+        var targetType = ResolveTypeNode(cast.TargetType);
+
+        // For numeric casts (e.g. `10 as i32`), unify the inner expression's type
+        // with the target so unsuffixed integer literals get their TypeVar resolved.
+        if (innerType is TypeVar && targetType is PrimitiveType)
+            _engine.Unify(innerType, targetType, cast.Span);
+
+        // E2020: Validate cast compatibility
+        var resolvedInner = _engine.Resolve(innerType);
+        var resolvedTarget = _engine.Resolve(targetType);
+        if (resolvedInner is not TypeVar && resolvedTarget is not TypeVar)
+        {
+            if (!IsCastValid(resolvedInner, resolvedTarget))
+                ReportError($"Invalid cast from `{resolvedInner}` to `{resolvedTarget}`", cast.Span, "E2020");
+        }
+
+        return targetType;
+    }
+
+    private static bool IsCastValid(Type from, Type to)
+    {
+        // Same type is always valid
+        if (from.Equals(to)) return true;
+
+        // Numeric → numeric is valid (including bool)
+        if (from is PrimitiveType pFrom && to is PrimitiveType pTo)
+        {
+            var numerics = new HashSet<string>
+                { "i8", "i16", "i32", "i64", "isize", "u8", "u16", "u32", "u64", "usize", "bool", "char" };
+            return numerics.Contains(pFrom.Name) && numerics.Contains(pTo.Name);
+        }
+
+        // Reference → reference is valid (reinterpret cast)
+        if (from is ReferenceType && to is ReferenceType) return true;
+
+        // Reference → usize (pointer to int)
+        if (from is ReferenceType && to is PrimitiveType { Name: "usize" or "isize" }) return true;
+
+        // usize → reference (int to pointer)
+        if (from is PrimitiveType { Name: "usize" or "isize" } && to is ReferenceType) return true;
+
+        // Nominal → nominal casts are allowed (reinterpret/binary-compatible casts)
+        // This covers String ↔ Slice[u8], array → slice, etc.
+        if (from is NominalType && to is NominalType) return true;
+
+        // Array → nominal (array → slice cast)
+        if (from is ArrayType && to is NominalType) return true;
+
+        // Enum → primitive (tag extraction) or primitive → enum
+        if (from is NominalType { Kind: NominalKind.Enum } && to is PrimitiveType) return true;
+        if (from is PrimitiveType && to is NominalType { Kind: NominalKind.Enum }) return true;
+
+        return false;
     }
 
     // =========================================================================
@@ -1056,7 +1476,11 @@ public partial class HmTypeChecker
 
     private FunctionType InferLambda(LambdaExpressionNode lambda)
     {
-        _scopes.PushScope();
+        // Set scope barrier for non-capturing lambda (all FLang lambdas are non-capturing)
+        var savedBarrier = _lambdaScopeBarrier;
+        _lambdaScopeBarrier = _scopes.Depth;
+
+        PushScope();
 
         // 1. Resolve parameter types from annotations or FreshVar
         var paramTypes = new Type[lambda.Parameters.Count];
@@ -1104,7 +1528,10 @@ public partial class HmTypeChecker
         }
 
         _functionStack.Pop();
-        _scopes.PopScope();
+        PopScope();
+
+        // Restore scope barrier
+        _lambdaScopeBarrier = savedBarrier;
 
         // 6. Record inferred types on synthesized function parameters
         for (var i = 0; i < paramNodes.Count; i++)
@@ -1140,12 +1567,23 @@ public partial class HmTypeChecker
         var leftType = InferExpression(coal.Left);
         var resolved = _engine.Resolve(leftType);
 
-        // Left must be Option[T], result is T
+        // Left must be Option[T]
         if (resolved is NominalType { Name: WellKnown.Option } optType
             && optType.TypeArguments.Count > 0)
         {
             var innerType = optType.TypeArguments[0];
             var rightType = InferExpression(coal.Right);
+            var resolvedRight = _engine.Resolve(rightType);
+
+            // Option[T] ?? Option[T] → Option[T]
+            if (resolvedRight is NominalType { Name: WellKnown.Option } rightOpt
+                && rightOpt.TypeArguments.Count > 0)
+            {
+                _engine.Unify(innerType, rightOpt.TypeArguments[0], coal.Right.Span);
+                return resolved; // return Option[T]
+            }
+
+            // Option[T] ?? T → T
             _engine.Unify(rightType, innerType, coal.Right.Span);
             return innerType;
         }

@@ -86,9 +86,9 @@ public class TypeLayoutService
             case NominalType nt:
                 return LowerNominal(nt);
 
-            case TypeVar:
-                // Unresolved type variable — shouldn't happen after type checking
-                return IrVoidPrim;
+            case TypeVar tv:
+                // Unresolved type variable — default to i32 (unsuffixed integer literals)
+                return IrI32;
 
             default:
                 return IrVoidPrim;
@@ -102,34 +102,85 @@ public class TypeLayoutService
 
     private IrType LowerNominal(NominalType nt)
     {
-        // If this NominalType has no fields, look up the registered version with fields
-        var actual = nt;
-        if (nt.FieldsOrVariants.Count == 0)
-        {
-            var registered = _nominalTypes.LookupNominalType(nt.Name);
-            if (registered != null && registered.FieldsOrVariants.Count > 0)
-                actual = registered;
-        }
-
-        // Build a cache key from name + type arguments
-        var cacheKey = BuildCacheKey(actual);
+        // Build cache key from the CONCRETE type (nt), not the template
+        var cacheKey = BuildCacheKey(nt);
         if (_cache.TryGetValue(cacheKey, out var cached))
             return cached;
 
-        IrType result;
-        if (actual.Kind == NominalKind.Enum)
-            result = LowerEnum(actual, cacheKey);
+        // Produce a concrete NominalType with fields populated from the template.
+        // Generic types carry template FieldsOrVariants (with TypeVars) — we must
+        // always substitute those TypeVars with the concrete type arguments.
+        var concrete = nt;
+
+        if (nt.TypeArguments.Count > 0)
+        {
+            // If any type argument is still an unresolved TypeVar, this is a generic
+            // template definition — skip it, it should never be emitted as concrete C code.
+            foreach (var ta in nt.TypeArguments)
+            {
+                if (_engine.Resolve(ta) is TypeVar)
+                    return IrVoidPrim;
+            }
+
+            // Look up the template to get the TypeVar → type-arg mapping
+            var template = _nominalTypes.LookupNominalType(nt.Name);
+            if (template != null && template.TypeArguments.Count == nt.TypeArguments.Count)
+            {
+                // Build substitution: template TypeVar id → concrete type arg
+                var subst = new Dictionary<int, Type>();
+                for (int i = 0; i < template.TypeArguments.Count; i++)
+                {
+                    var templateArg = _engine.Resolve(template.TypeArguments[i]);
+                    if (templateArg is TypeVar tv)
+                        subst[tv.Id] = _engine.Resolve(nt.TypeArguments[i]);
+                }
+
+                // Use template's fields (the canonical source) and substitute TypeVars
+                var sourceFields = template.FieldsOrVariants.Count > 0
+                    ? template.FieldsOrVariants
+                    : nt.FieldsOrVariants;
+
+                if (subst.Count > 0 && sourceFields.Count > 0)
+                {
+                    var concreteFields = new List<(string Name, Type Type)>();
+                    foreach (var (fname, ftype) in sourceFields)
+                        concreteFields.Add((fname, SubstituteTypeArgs(_engine.Resolve(ftype), subst)));
+
+                    concrete = new NominalType(nt.Name, template.Kind, nt.TypeArguments, concreteFields);
+                }
+            }
+        }
+        else if (nt.FieldsOrVariants.Count == 0)
+        {
+            // Non-generic type with no fields — look up the template definition
+            var template = _nominalTypes.LookupNominalType(nt.Name);
+            if (template != null && template.FieldsOrVariants.Count > 0)
+                concrete = template;
+        }
+
+        // Pre-register a stub to break recursive cycles (self-referencing types via pointers).
+        // LowerStruct/LowerEnum will produce the real result and we update the cache.
+        // Use the cache key for the CName so each specialization gets a unique C identifier.
+        var cName = SanitizeCName(cacheKey);
+        IrType stub;
+        if (concrete.Kind == NominalKind.Enum)
+            stub = new IrEnum(concrete.Name, cName, 4, [], 4, 4);
         else
-            result = LowerStruct(actual, cacheKey);
+            stub = new IrStruct(concrete.Name, cName, [], 0, 1);
+        _cache[cacheKey] = stub;
+
+        IrType result;
+        if (concrete.Kind == NominalKind.Enum)
+            result = LowerEnum(concrete, cacheKey, cName);
+        else
+            result = LowerStruct(concrete, cacheKey, cName);
 
         _cache[cacheKey] = result;
         return result;
     }
 
-    private IrStruct LowerStruct(NominalType nt, string cacheKey)
+    private IrStruct LowerStruct(NominalType nt, string cacheKey, string cName)
     {
-        var cName = SanitizeCName(nt.Name);
-
         if (nt.FieldsOrVariants.Count == 0)
         {
             return new IrStruct(nt.Name, cName, [], 0, 1);
@@ -154,14 +205,22 @@ public class TypeLayoutService
         return new IrStruct(nt.Name, cName, fields, totalSize, maxAlignment);
     }
 
-    private IrEnum LowerEnum(NominalType nt, string cacheKey)
+    private IrEnum LowerEnum(NominalType nt, string cacheKey, string cName)
     {
-        var cName = SanitizeCName(nt.Name);
         const int tagSize = 4;
 
         if (nt.FieldsOrVariants.Count == 0)
         {
             return new IrEnum(nt.Name, cName, tagSize, [], tagSize, 4);
+        }
+
+        // Look up tag values from the type or its template
+        var tagValues = nt.TagValues;
+        if (tagValues == null)
+        {
+            var template = _nominalTypes.LookupNominalType(nt.Name);
+            if (template != null)
+                tagValues = template.TagValues;
         }
 
         var variants = new IrVariant[nt.FieldsOrVariants.Count];
@@ -172,6 +231,8 @@ public class TypeLayoutService
         for (int i = 0; i < nt.FieldsOrVariants.Count; i++)
         {
             var (variantName, payloadHmType) = nt.FieldsOrVariants[i];
+            var tag = tagValues != null && tagValues.TryGetValue(variantName, out var explicitTag)
+                ? (int)explicitTag : i;
 
             // Check if payload-less: void sentinel means no payload
             IrType? payloadIrType = null;
@@ -179,7 +240,7 @@ public class TypeLayoutService
             if (resolved is PrimitiveType pt && pt.Name == "void")
             {
                 // No payload
-                variants[i] = new IrVariant(variantName, i, null, tagSize);
+                variants[i] = new IrVariant(variantName, tag, null, tagSize);
             }
             else
             {
@@ -187,7 +248,7 @@ public class TypeLayoutService
                 allPayloadless = false;
                 largestPayload = Math.Max(largestPayload, payloadIrType.Size);
                 maxPayloadAlignment = Math.Max(maxPayloadAlignment, payloadIrType.Alignment);
-                variants[i] = new IrVariant(variantName, i, payloadIrType, tagSize);
+                variants[i] = new IrVariant(variantName, tag, payloadIrType, tagSize);
             }
         }
 
@@ -224,6 +285,30 @@ public class TypeLayoutService
         return string.Join("|", parts);
     }
 
+    /// <summary>
+    /// Replace TypeVars in a type according to the substitution map.
+    /// </summary>
+    private static Type SubstituteTypeArgs(Type type, Dictionary<int, Type>? subst)
+    {
+        if (subst == null || subst.Count == 0) return type;
+        return SubstituteRec(type, subst);
+    }
+
+    private static Type SubstituteRec(Type type, Dictionary<int, Type> subst) => type switch
+    {
+        TypeVar tv when subst.TryGetValue(tv.Id, out var concrete) => concrete,
+        ReferenceType rt => new ReferenceType(SubstituteRec(rt.InnerType, subst)),
+        ArrayType at => new ArrayType(SubstituteRec(at.ElementType, subst), at.Length),
+        FunctionType ft => new FunctionType(
+            ft.ParameterTypes.Select(p => SubstituteRec(p, subst)).ToArray(),
+            SubstituteRec(ft.ReturnType, subst)),
+        NominalType nt when nt.TypeArguments.Count > 0 => new NominalType(
+            nt.Name, nt.Kind,
+            nt.TypeArguments.Select(a => SubstituteRec(a, subst)).ToList(),
+            nt.FieldsOrVariants),
+        _ => type
+    };
+
     public static string SanitizeCName(string fqn)
     {
         // string.Create lets us work directly on the string's memory before it is marked as immutable.
@@ -235,7 +320,7 @@ public class TypeLayoutService
                 // Check all 5 conditions in one single pass through the string
                 span[i] = c switch
                 {
-                    '.' or '[' or ']' or ',' or ' ' => '_',
+                    '.' or '[' or ']' or ',' or ' ' or '|' or '&' or '(' or ')' => '_',
                     _ => c
                 };
             }

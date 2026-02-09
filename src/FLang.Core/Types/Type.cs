@@ -137,6 +137,12 @@ public sealed record ArrayType(Type ElementType, int Length) : Type
 public sealed record NominalType(string Name, NominalKind Kind, IReadOnlyList<Type> TypeArguments,
     IReadOnlyList<(string Name, Type Type)> FieldsOrVariants) : Type
 {
+    /// <summary>
+    /// For naked enums (C-style enums with explicit tag values like Less = -1),
+    /// maps variant name to its explicit tag value. Null for standard tagged-union enums.
+    /// </summary>
+    public Dictionary<string, long>? TagValues { get; init; }
+
     public NominalType(string name, NominalKind kind, IReadOnlyList<Type> typeArguments)
         : this(name, kind, typeArguments, []) { }
 
