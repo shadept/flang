@@ -150,13 +150,8 @@ public partial class HmTypeChecker
 
         // Resolve iter(&T) → IteratorType
         var iterRef = new ReferenceType(iterableType);
-        FunctionDeclarationNode? iterNode = null;
-        var iterResult = TryResolveOperatorFunction("iter", [iterRef], forLoop.Span, out iterNode);
-        if (iterResult == null)
-        {
-            // Try without reference
-            iterResult = TryResolveOperatorFunction("iter", [iterableType], forLoop.Span, out iterNode);
-        }
+        var iterResult = TryResolveOperator("iter", [iterRef], forLoop.Span, out var iterNode)
+                      ?? TryResolveOperator("iter", [iterableType], forLoop.Span, out iterNode);
 
         Type elementType;
         if (iterResult != null)
@@ -165,10 +160,8 @@ public partial class HmTypeChecker
             var iteratorType = iterResult;
             // Resolve next(&IteratorType) → Option[E]
             var nextRef = new ReferenceType(iteratorType);
-            FunctionDeclarationNode? nextNode = null;
-            var nextResult = TryResolveOperatorFunction("next", [nextRef], forLoop.Span, out nextNode);
-            if (nextResult == null)
-                nextResult = TryResolveOperatorFunction("next", [iteratorType], forLoop.Span, out nextNode);
+            var nextResult = TryResolveOperator("next", [nextRef], forLoop.Span, out var nextNode)
+                          ?? TryResolveOperator("next", [iteratorType], forLoop.Span, out nextNode);
 
             if (nextResult != null)
             {

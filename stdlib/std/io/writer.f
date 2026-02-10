@@ -24,9 +24,8 @@ pub struct WriteFn {
 // any remaining bytes.
 pub struct Writer {
     write_fn: WriteFn
-    buf: &u8
+    buf: u8[]
     pos: usize
-    cap: usize
 }
 
 // Create a Writer over the given storage slice.
@@ -34,10 +33,25 @@ pub struct Writer {
 pub fn writer(write_fn: WriteFn, storage: u8[]) Writer {
     return .{
         write_fn = write_fn,
-        buf = storage.ptr,
+        buf = storage,
         pos = 0,
-        cap = storage.len
     }
+}
+
+// Write a single byte through the buffer.
+pub fn write(w: &Writer, b: u8) {
+    if w.buf.len == 0 {
+        let byte = b
+        w.write_fn.write(w.write_fn.ctx, slice_from_raw_parts(&byte as &u8, 1))
+        return
+    }
+
+    if w.pos == w.buf.len {
+        w.flush_all()
+    }
+
+    w.buf[w.pos] = b
+    w.pos = w.pos + 1
 }
 
 // Write data through the buffer.
@@ -49,7 +63,7 @@ pub fn write(w: &Writer, data: u8[]) usize {
     }
 
     // Unbuffered: write directly
-    if w.cap == 0 {
+    if w.buf.len == 0 {
         return w.write_fn.write(w.write_fn.ctx, data)
     }
 
@@ -61,40 +75,26 @@ pub fn write(w: &Writer, data: u8[]) usize {
             break
         }
 
-        let space = w.cap - w.pos
+        let space = w.buf.len - w.pos
 
         if remaining <= space {
             // Fits in buffer without flushing
-            memcpy(w.buf + w.pos, data.ptr + written, remaining)
+            //memcpy(w.buf.ptr + w.pos, data.ptr + written, remaining)
+            memcpy(w.buf[w.pos..], data.ptr + written, remaining)
             w.pos = w.pos + remaining
             written = written + remaining
             break
         }
 
         // Fill the rest of the buffer and flush
-        memcpy(w.buf + w.pos, data.ptr + written, space)
-        w.pos = w.cap
+        memcpy(w.buf.ptr + w.pos, data.ptr + written, space)
+        w.pos = w.buf.len
         w.flush_all()
         written = written + space
         remaining = remaining - space
     }
 
     return written
-}
-
-// Write a single byte through the buffer.
-pub fn write(w: &Writer, b: u8) {
-    if w.cap == 0 {
-        let byte = b
-        w.write_fn.write(w.write_fn.ctx, slice_from_raw_parts(&byte as &u8, 1))
-        return
-    }
-    if w.pos == w.cap {
-        w.flush_all()
-    }
-    const dest = w.buf + w.pos
-    dest.* = b
-    w.pos = w.pos + 1
 }
 
 // Flush all buffered data to the underlying write function.
@@ -113,7 +113,7 @@ fn flush_all(w: &Writer) {
         if flushed >= w.pos {
             break
         }
-        const chunk = slice_from_raw_parts(w.buf + flushed, w.pos - flushed)
+        const chunk = slice_from_raw_parts(w.buf.ptr + flushed, w.pos - flushed)
         const n = w.write_fn.write(w.write_fn.ctx, chunk)
         if n == 0 {
             panic("writer: write returned 0")

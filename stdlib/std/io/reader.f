@@ -46,6 +46,20 @@ pub fn reader(read_fn: ReadFn, storage: u8[]) Reader {
     }
 }
 
+// Read a single byte. Returns the byte in an Option; null on EOF.
+pub fn read_byte(r: &Reader) u8? {
+    if r.pos == r.end {
+        r.fill()
+        if r.pos == r.end {
+            return null
+        }
+    }
+    const src = r.buf + r.pos
+    let b: u8 = src.*
+    r.pos = r.pos + 1
+    return b
+}
+
 // Read up to dst.len bytes into dst.
 // Returns the number of bytes read. 0 means EOF.
 pub fn read(r: &Reader, dst: u8[]) usize {
@@ -79,20 +93,6 @@ pub fn read(r: &Reader, dst: u8[]) usize {
     memcpy(dst.ptr, r.buf + r.pos, n)
     r.pos = r.pos + n
     return n
-}
-
-// Read a single byte. Returns the byte in an Option; null on EOF.
-pub fn read_byte(r: &Reader) u8? {
-    if r.pos == r.end {
-        r.fill()
-        if r.pos == r.end {
-            return null
-        }
-    }
-    const src = r.buf + r.pos
-    let b: u8 = src.*
-    r.pos = r.pos + 1
-    return b
 }
 
 // Internal: refill the buffer from the underlying reader.

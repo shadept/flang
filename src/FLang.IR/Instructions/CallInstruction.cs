@@ -1,5 +1,4 @@
 using FLang.Core;
-using TypeBase = FLang.Core.TypeBase;
 
 namespace FLang.IR.Instructions;
 
@@ -34,14 +33,8 @@ public class CallInstruction : Instruction
     public Value Result { get; }
 
     /// <summary>
-    /// Parameter types of the callee function (old TypeBase system).
-    /// Used for name mangling when calling FLang functions.
-    /// </summary>
-    public IReadOnlyList<TypeBase>? CalleeParamTypes { get; set; }
-
-    /// <summary>
-    /// Parameter types of the callee function (new IrType system).
-    /// Used for name mangling in the HM pipeline.
+    /// Parameter types of the callee function (IrType system).
+    /// Used for name mangling.
     /// </summary>
     public IReadOnlyList<IrType>? CalleeIrParamTypes { get; set; }
 

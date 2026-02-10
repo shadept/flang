@@ -13,20 +13,22 @@ pub struct StringBuilder {
     allocator: &Allocator?
 }
 
+const DEFAULT_CAPACITY: usize = 16
+
+// Create a new empty StringBuilder with the given initial capacity.
+pub fn string_builder_with_capacity(capacity: usize) StringBuilder {
+    return string_builder_with_capacity_and_allocator(capacity, null)
+}
+
 // Create a new empty StringBuilder with default capacity.
-pub fn string_builder(allocator: &Allocator) StringBuilder {
+pub fn string_builder_with_allocator(allocator: &Allocator) StringBuilder {
     return string_builder_with_capacity_and_allocator(0, allocator)
 }
 
 // Create a new empty StringBuilder with the given initial capacity.
-pub fn string_builder_with_capacity(capacity: usize, allocator: &Allocator?) StringBuilder {
-    return string_builder_with_capacity_and_allocator(capacity, allocator.or_global())
-}
-
-// Create a new empty StringBuilder with the given initial capacity.
-pub fn string_builder_with_capacity_and_allocator(capacity: usize, allocator: &Allocator) StringBuilder {
+pub fn string_builder_with_capacity_and_allocator(capacity: usize, allocator: &Allocator?) StringBuilder {
     let sb: StringBuilder
-    sb.allocator = .{ has_value = true, value = allocator }
+    sb.allocator = allocator.or_global()
     if (capacity > 0) {
         sb.reserve(capacity)
     }
@@ -51,7 +53,7 @@ fn reserve(sb: &StringBuilder, additional: usize) {
         return
     }
 
-    let new_cap = if (sb.cap == 0) { 16 } else { sb.cap * 2 }
+    let new_cap = if (sb.cap == 0) { DEFAULT_CAPACITY } else { sb.cap * 2 }
     if (new_cap < required) {
         new_cap = required
     }
@@ -72,13 +74,13 @@ pub fn as_view(sb: &StringBuilder) String {
     return .{ ptr = sb.ptr, len = sb.len }
 }
 
-// Return a copy of the current contents as a null-terminated String.
+// Return a copy of the current contents as a null-terminated OwnedString.
 // Allocates from the builder's own allocator.
 pub fn to_string(sb: &StringBuilder) OwnedString {
     return sb.to_string(sb.allocator.or_global())
 }
 
-// Return a copy of the current contents as a null-terminated String.
+// Return a copy of the current contents as a null-terminated OwnedString.
 // Allocates from the given allocator.
 pub fn to_string(sb: &StringBuilder, allocator: &Allocator) OwnedString {
     const buf = allocator.alloc(sb.len + 1, align_of(u8))
@@ -164,8 +166,8 @@ fn append_unsigned_with_base(sb: &StringBuilder, value: u64, base: u64, uppercas
         return
     }
 
-    let buf = [0u8; 64]
-    let pos: usize = 64
+    let buf = [0; 64]
+    let pos = 64
     let v = value
 
     loop {
@@ -175,8 +177,8 @@ fn append_unsigned_with_base(sb: &StringBuilder, value: u64, base: u64, uppercas
         const digit = (v % base) as u8
         v = v / base
 
-        let c: u8 = 0
-        if (digit < 10u8) {
+        let c = 0
+        if (digit < 10) {
             c = b'0' + digit
         } else if (uppercase) {
             c = b'A' - 10 + digit
@@ -187,8 +189,7 @@ fn append_unsigned_with_base(sb: &StringBuilder, value: u64, base: u64, uppercas
         buf[pos] = c
     }
 
-    const buf_slice = buf as u8[]
-    sb.append_bytes(buf_slice[pos..])
+    sb.append_bytes(buf[pos..])
 }
 
 fn append_unsigned_impl(sb: &StringBuilder, value: u64, spec: String) {
@@ -197,11 +198,11 @@ fn append_unsigned_impl(sb: &StringBuilder, value: u64, spec: String) {
 }
 
 fn mask_for_bits(bits: u64) u64 {
-    if (bits >= 64u64) { return 0xFFFF_FFFF_FFFF_FFFFu64 }
-    if (bits == 32u64) { return 0xFFFF_FFFFu64 }
-    if (bits == 16u64) { return 0xFFFFu64 }
-    if (bits == 8u64) { return 0xFFu64 }
-    return 0xFFFF_FFFF_FFFF_FFFFu64
+    if (bits >= 64) { return 0xFFFF_FFFF_FFFF_FFFF }
+    if (bits == 32) { return 0xFFFF_FFFF }
+    if (bits == 16) { return 0xFFFF }
+    if (bits == 8) { return 0xFF }
+    return 0xFFFF_FFFF_FFFF_FFFF
 }
 
 fn append_signed_impl(sb: &StringBuilder, value: i64, spec: String, bits: u64) {
@@ -397,18 +398,14 @@ pub fn append(sb: &StringBuilder, val: $T, spec: String) {
 // StringWriter
 // =============================================================================
 
-struct StringWriter {
-    sb: &StringBuilder
-}
-
 fn sb_write(ctx: &u8, buf: u8[]) usize {
-    const writer = ctx as &StringWriter
-    writer.sb.append_bytes(buf)
+    const sb = ctx as &StringBuilder
+    sb.append_bytes(buf)
     return buf.len
 }
 
 pub fn writer(sb: &StringBuilder) Writer {
     const wfn = WriteFn { ctx = sb as &u8, write = sb_write }
-    const storage = [0u8; 0]
+    const storage = [0; 0]
     return writer(wfn, storage)
 }

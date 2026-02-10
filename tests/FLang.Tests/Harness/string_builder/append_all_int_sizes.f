@@ -18,7 +18,7 @@ pub fn main() i32 {
     let buf = [0u8; 512]
     let fba = fixed_buffer_allocator(buf as u8[])
     let alloc = fba.allocator()
-    let sb = string_builder(&alloc)
+    let sb = string_builder_with_allocator(&alloc)
 
     // Test all unsigned types: zero, half-max, max
     sb.append("u8: ")

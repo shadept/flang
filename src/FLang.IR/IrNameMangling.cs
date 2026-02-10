@@ -27,6 +27,7 @@ public static class IrNameMangling
         return type switch
         {
             IrPrimitive p => p.Name,
+            IrPointer { IsNullable: true } ptr => $"opt_ref_{MangleIrType(ptr.Pointee)}",
             IrPointer ptr => $"ref_{MangleIrType(ptr.Pointee)}",
             IrStruct s => $"struct_{s.CName}",
             IrEnum e => $"struct_{e.CName}",

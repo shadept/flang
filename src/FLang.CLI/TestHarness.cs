@@ -39,15 +39,9 @@ public class TestHarness
     private readonly string _stdlibPath;
     private readonly string _harnessDir;
 
-    /// <summary>
-    /// When true, use the Hindley-Milner type checker pipeline for compilation.
-    /// </summary>
-    public bool UseHm { get; set; }
-
-    public TestHarness(string? projectRoot = null, bool useHm = false)
+    public TestHarness(string? projectRoot = null)
     {
         DiagnosticPrinter.EnableColors = false;
-        UseHm = useHm;
 
         if (projectRoot != null)
         {
@@ -185,8 +179,7 @@ public class TestHarness
             OutputPath: outputFilePath,
             CCompilerConfig: compilerConfig,
             ReleaseBuild: false,
-            DebugLogging: false,
-            UseHm: UseHm
+            DebugLogging: false
         );
 
         CompilationResult result;

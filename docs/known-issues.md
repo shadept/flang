@@ -132,6 +132,22 @@ Currently deep-clones function body AST for each generic instantiation so each h
 
 ---
 
+### Implicit Reference Passing for Large Structs
+
+**Status:** Blocked on old pipeline removal
+**Affected:** HmAstLowering, HmCCodeGenerator, IrModule
+
+Large structs (size > pointer width) are currently passed by value in generated C, causing unnecessary copies. Per spec Section 6.3, these should be passed by implicit reference with copy-on-write semantics:
+- **Caller:** passes address of argument
+- **Callee:** reads through pointer (no copy); copy-on-first-write into local shadow
+- **Section 6.4:** large struct returns should use caller-provided hidden pointer (return slot optimization)
+
+**Prerequisite:** Remove old pipeline (TypeChecker, AstLowering, CCodeGenerator) first to reduce implementation complexity. Implementation design documented in `.claude/plans/twinkling-sparking-manatee.md`.
+
+**Related:** `PointerWidth` enum (`src/FLang.Core/PointerWidth.cs`), spec Sections 6.3-6.4
+
+---
+
 ### Move to SSA Form
 
 **Status:** Post-self-hosting consideration

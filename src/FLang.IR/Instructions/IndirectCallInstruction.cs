@@ -1,5 +1,4 @@
 using FLang.Core;
-using TypeBase = FLang.Core.TypeBase;
 
 namespace FLang.IR.Instructions;
 

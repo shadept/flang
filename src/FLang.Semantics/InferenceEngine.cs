@@ -171,7 +171,7 @@ public class InferenceEngine : ITypeResolver
             return a;
         }
 
-        // Structural: function types
+        // Structural: function types (invariant — no coercion on params or return)
         if (a is FunctionType fa && b is FunctionType fb)
         {
             if (fa.ParameterTypes.Count != fb.ParameterTypes.Count)
@@ -184,8 +184,22 @@ public class InferenceEngine : ITypeResolver
 
             var unifiedParams = new Type[fa.ParameterTypes.Count];
             for (var i = 0; i < fa.ParameterTypes.Count; i++)
-                unifiedParams[i] = UnifyInternal(fa.ParameterTypes[i], fb.ParameterTypes[i], span, ref cost);
-            var unifiedReturn = UnifyInternal(fa.ReturnType, fb.ReturnType, span, ref cost);
+            {
+                int paramCost = 0;
+                unifiedParams[i] = UnifyInternal(fa.ParameterTypes[i], fb.ParameterTypes[i], span, ref paramCost);
+                if (paramCost > 0)
+                {
+                    ReportError($"Function parameter type mismatch: `{fa.ParameterTypes[i]}` vs `{fb.ParameterTypes[i]}`", span);
+                    return a;
+                }
+            }
+            int retCost = 0;
+            var unifiedReturn = UnifyInternal(fa.ReturnType, fb.ReturnType, span, ref retCost);
+            if (retCost > 0)
+            {
+                ReportError($"Function return type mismatch: `{fa.ReturnType}` vs `{fb.ReturnType}`", span);
+                return a;
+            }
             return new FunctionType(unifiedParams, unifiedReturn);
         }
 

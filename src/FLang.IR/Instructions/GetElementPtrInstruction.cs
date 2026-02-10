@@ -19,7 +19,7 @@ public class GetElementPtrInstruction : Instruction
 
     // Convenience constructor for constant offsets
     public GetElementPtrInstruction(SourceSpan span, Value basePointer, int byteOffset, Value result)
-        : this(span, basePointer, new ConstantValue(byteOffset), result)
+        : this(span, basePointer, new ConstantValue(byteOffset, TypeLayoutService.IrUSize), result)
     {
     }
 

@@ -11,7 +11,7 @@ namespace FLang.Codegen.C;
 /// </summary>
 public static class HmCCodeGenerator
 {
-    // Tracks the last emitted #line to avoid redundant directives
+    // Tracks the last emitted #line for diagnostics
     private struct LineState
     {
         public int Line;
@@ -276,14 +276,19 @@ public static class HmCCodeGenerator
         var source = sourceFiles[span.FileId];
         var line = source.GetLineNumber(span.Index) + 1; // #line is 1-based
 
-        // Skip if same line+file as last directive
-        if (line == state.Line && span.FileId == state.FileId) return;
+        // Only include filename when the file changes
+        if (span.FileId != state.FileId)
+        {
+            var path = source.FileName.Replace("\\", "\\\\");
+            sb.AppendLine($"#line {line} \"{path}\"");
+        }
+        else
+        {
+            sb.AppendLine($"#line {line}");
+        }
 
         state.Line = line;
         state.FileId = span.FileId;
-
-        var path = source.FileName.Replace("\\", "\\\\");
-        sb.AppendLine($"#line {line} \"{path}\"");
     }
 
     // =========================================================================

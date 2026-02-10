@@ -107,6 +107,23 @@ public class TypeLayoutService
         if (_cache.TryGetValue(cacheKey, out var cached))
             return cached;
 
+        // Niche optimization: Option[&T] → IrPointer(T, IsNullable: true)
+        // Only applies when the type argument is a reference/pointer type.
+        if (nt.Name == "core.option.Option" && nt.TypeArguments.Count == 1)
+        {
+            var innerResolved = _engine.Resolve(nt.TypeArguments[0]);
+            if (innerResolved is ReferenceType)
+            {
+                var innerIr = LowerResolved(innerResolved);
+                if (innerIr is IrPointer innerPtr)
+                {
+                    var nicheType = new IrPointer(innerPtr.Pointee, IsNullable: true);
+                    _cache[cacheKey] = nicheType;
+                    return nicheType;
+                }
+            }
+        }
+
         // Produce a concrete NominalType with fields populated from the template.
         // Generic types carry template FieldsOrVariants (with TypeVars) — we must
         // always substitute those TypeVars with the concrete type arguments.

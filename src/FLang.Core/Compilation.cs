@@ -4,7 +4,7 @@ namespace FLang.Core;
 
 /// <summary>
 /// Represents a compilation unit that manages source files, module resolution, and compilation-wide state.
-/// Serves as the context object for passing state between compilation phases (Parser → TypeChecker → AstLowering).
+/// Serves as the context object for passing state between compilation phases (Parser → HmTypeChecker → HmAstLowering).
 /// </summary>
 public class Compilation
 {
@@ -14,7 +14,7 @@ public class Compilation
     private int _fileIdCounter;
     private int _stringIdCounter;
 
-    //=== Type System Registry (populated by TypeChecker, read by AstLowering) ===
+    //=== Type System Registry (populated by HmTypeChecker, read by HmAstLowering) ===
 
     // Struct type registry
     public Dictionary<string, StructType> Structs { get; } = [];

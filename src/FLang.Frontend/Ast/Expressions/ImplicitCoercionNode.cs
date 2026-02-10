@@ -4,7 +4,7 @@ namespace FLang.Frontend.Ast.Expressions;
 
 /// <summary>
 /// Represents the kind of implicit coercion being performed.
-/// The type system has already validated these coercions; AstLowering trusts these are correct.
+/// The type system has already validated these coercions; HmAstLowering trusts these are correct.
 /// </summary>
 public enum CoercionKind
 {

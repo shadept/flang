@@ -32,11 +32,11 @@ public sealed record IrPrimitive : IrType
 /// <summary>
 /// Pointer to another type. Always 8 bytes on 64-bit.
 /// </summary>
-public sealed record IrPointer(IrType Pointee) : IrType
+public sealed record IrPointer(IrType Pointee, bool IsNullable = false) : IrType
 {
     public override int Size => 8;
     public override int Alignment => 8;
-    public override string ToString() => $"&{Pointee}";
+    public override string ToString() => IsNullable ? $"&{Pointee}?" : $"&{Pointee}";
 }
 
 /// <summary>

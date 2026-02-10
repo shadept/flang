@@ -85,29 +85,17 @@ public partial class HmTypeChecker
         return tv;
     }
 
-    private static bool ContainsTypeVar(Type type) => type switch
-    {
-        TypeVar => true,
-        FunctionType fn => fn.ParameterTypes.Any(ContainsTypeVar) || ContainsTypeVar(fn.ReturnType),
-        ReferenceType r => ContainsTypeVar(r.InnerType),
-        NominalType n => n.TypeArguments.Any(ContainsTypeVar),
-        ArrayType a => ContainsTypeVar(a.ElementType),
-        _ => false
-    };
-
     internal static bool FitsInType(System.Numerics.BigInteger value, string typeName) => typeName switch
     {
-        "u8" => value >= 0 && value <= 255,
-        "u16" => value >= 0 && value <= 65535,
-        "u32" => value >= 0 && value <= uint.MaxValue,
-        "u64" => value >= 0 && value <= ulong.MaxValue,
-        "usize" => value >= 0 && value <= ulong.MaxValue,
-        "i8" => value >= -128 && value <= 127,
-        "i16" => value >= -32768 && value <= 32767,
+        "u8" => value >= 0 && value <= byte.MaxValue,
+        "u16" => value >= 0 && value <= ushort.MaxValue,
+        "u32" or "char" => value >= 0 && value <= uint.MaxValue,
+        "u64" or "usize" => value >= 0 && value <= ulong.MaxValue,
+        "i8" => value >= sbyte.MinValue && value <= sbyte.MaxValue,
+        "i16" => value >= short.MinValue && value <= short.MaxValue,
         "i32" => value >= int.MinValue && value <= int.MaxValue,
-        "i64" => value >= long.MinValue && value <= long.MaxValue,
-        "isize" => value >= long.MinValue && value <= long.MaxValue,
-        _ => true
+        "i64" or "isize" => value >= long.MinValue && value <= long.MaxValue,
+        _ => false
     };
 
     private NominalType InferStringLiteral()
@@ -196,22 +184,20 @@ public partial class HmTypeChecker
 
     private Type InferBinary(BinaryExpressionNode bin)
     {
-        // Logical operators are always bool → bool → bool
-        if (bin.Operator is BinaryOperatorKind.And or BinaryOperatorKind.Or)
-        {
-            var leftType = InferExpression(bin.Left);
-            _engine.Unify(leftType, WellKnown.Bool, bin.Left.Span);
-            var rightType = InferExpression(bin.Right);
-            _engine.Unify(rightType, WellKnown.Bool, bin.Right.Span);
-            return WellKnown.Bool;
-        }
-
         var left = InferExpression(bin.Left);
         var right = InferExpression(bin.Right);
 
+        // Logical operators are always bool → bool → bool
+        if (bin.Operator is BinaryOperatorKind.And or BinaryOperatorKind.Or)
+        {
+            _engine.Unify(left, WellKnown.Bool, bin.Left.Span);
+            _engine.Unify(right, WellKnown.Bool, bin.Right.Span);
+            return WellKnown.Bool;
+        }
+
         // Try user-defined operator function
         var opName = OperatorFunctions.GetFunctionName(bin.Operator);
-        var opResult = TryResolveOperatorFunction(opName, [left, right], bin.Span, out var resolvedNode);
+        var opResult = TryResolveOperator(opName, [left, right], bin.Span, out var resolvedNode);
         if (opResult != null)
         {
             _resolvedOperators[bin] = new ResolvedOperator(resolvedNode!);
@@ -288,50 +274,50 @@ public partial class HmTypeChecker
         switch (bin.Operator)
         {
             case BinaryOperatorKind.NotEqual:
-            {
-                var eq = TryResolveOperatorFunction("op_eq", [left, right], span, out var eqNode);
-                if (eq != null)
                 {
-                    _resolvedOperators[bin] = new ResolvedOperator(eqNode!, NegateResult: true);
-                    return WellKnown.Bool;
+                    var eq = TryResolveOperator("op_eq", [left, right], span, out var eqNode);
+                    if (eq != null)
+                    {
+                        _resolvedOperators[bin] = new ResolvedOperator(eqNode!, NegateResult: true);
+                        return WellKnown.Bool;
+                    }
+                    // Also try deriving from op_cmp: != means op_cmp(a,b) != 0
+                    var cmpNe = TryResolveOperator("op_cmp", [left, right], span, out var cmpNeNode);
+                    if (cmpNe != null)
+                    {
+                        _resolvedOperators[bin] = new ResolvedOperator(cmpNeNode!, CmpDerivedOperator: bin.Operator);
+                        return WellKnown.Bool;
+                    }
+                    return null;
                 }
-                // Also try deriving from op_cmp: != means op_cmp(a,b) != 0
-                var cmpNe = TryResolveOperatorFunction("op_cmp", [left, right], span, out var cmpNeNode);
-                if (cmpNe != null)
-                {
-                    _resolvedOperators[bin] = new ResolvedOperator(cmpNeNode!, CmpDerivedOperator: bin.Operator);
-                    return WellKnown.Bool;
-                }
-                return null;
-            }
             case BinaryOperatorKind.Equal:
-            {
-                var ne = TryResolveOperatorFunction("op_ne", [left, right], span, out var neNode);
-                if (ne != null)
                 {
-                    _resolvedOperators[bin] = new ResolvedOperator(neNode!, NegateResult: true);
-                    return WellKnown.Bool;
+                    var ne = TryResolveOperator("op_ne", [left, right], span, out var neNode);
+                    if (ne != null)
+                    {
+                        _resolvedOperators[bin] = new ResolvedOperator(neNode!, NegateResult: true);
+                        return WellKnown.Bool;
+                    }
+                    // Also try deriving from op_cmp: == means op_cmp(a,b) == 0
+                    var cmpEq = TryResolveOperator("op_cmp", [left, right], span, out var cmpEqNode);
+                    if (cmpEq != null)
+                    {
+                        _resolvedOperators[bin] = new ResolvedOperator(cmpEqNode!, CmpDerivedOperator: bin.Operator);
+                        return WellKnown.Bool;
+                    }
+                    return null;
                 }
-                // Also try deriving from op_cmp: == means op_cmp(a,b) == 0
-                var cmpEq = TryResolveOperatorFunction("op_cmp", [left, right], span, out var cmpEqNode);
-                if (cmpEq != null)
-                {
-                    _resolvedOperators[bin] = new ResolvedOperator(cmpEqNode!, CmpDerivedOperator: bin.Operator);
-                    return WellKnown.Bool;
-                }
-                return null;
-            }
             case BinaryOperatorKind.LessThan or BinaryOperatorKind.GreaterThan or
                 BinaryOperatorKind.LessThanOrEqual or BinaryOperatorKind.GreaterThanOrEqual:
-            {
-                var cmp = TryResolveOperatorFunction("op_cmp", [left, right], span, out var cmpNode);
-                if (cmp != null)
                 {
-                    _resolvedOperators[bin] = new ResolvedOperator(cmpNode!, CmpDerivedOperator: bin.Operator);
-                    return WellKnown.Bool;
+                    var cmp = TryResolveOperator("op_cmp", [left, right], span, out var cmpNode);
+                    if (cmp != null)
+                    {
+                        _resolvedOperators[bin] = new ResolvedOperator(cmpNode!, CmpDerivedOperator: bin.Operator);
+                        return WellKnown.Bool;
+                    }
+                    return null;
                 }
-                return null;
-            }
             default:
                 return null;
         }
@@ -355,7 +341,7 @@ public partial class HmTypeChecker
 
         // Try operator function
         var opName = OperatorFunctions.GetFunctionName(un.Operator);
-        var opResult = TryResolveOperatorFunction(opName, [operand], un.Span, out var resolvedNode);
+        var opResult = TryResolveOperator(opName, [operand], un.Span, out var resolvedNode);
         if (opResult != null)
         {
             _resolvedOperators[un] = new ResolvedOperator(resolvedNode!);
@@ -371,29 +357,21 @@ public partial class HmTypeChecker
     }
 
     // =========================================================================
-    // Operator function resolution
+    // Overload resolution
     // =========================================================================
 
     /// <summary>
-    /// Try to resolve an operator function by name with the given argument types.
-    /// Uses TryUnify for speculative matching (no side effects on failure).
+    /// Unified overload resolution: pick the best candidate from a list of overloads
+    /// for the given argument types. Returns null winner on no match.
+    /// Caller is responsible for candidate collection, arg adaptation, error reporting,
+    /// and wiring up the resolved target.
     /// </summary>
-    private Type? TryResolveOperatorFunction(string opName, Type[] argTypes, SourceSpan span)
+    private (FunctionScheme Winner, FunctionType FnType, FunctionDeclarationNode Node)?
+        ResolveOverload(List<FunctionScheme> candidates, Type[] argTypes, SourceSpan span)
     {
-        return TryResolveOperatorFunction(opName, argTypes, span, out _);
-    }
-
-    private Type? TryResolveOperatorFunction(string opName, Type[] argTypes, SourceSpan span,
-        out FunctionDeclarationNode? resolvedNode)
-    {
-        resolvedNode = null;
-        var candidates = LookupFunctions(opName);
-        if (candidates == null) return null;
-
         FunctionScheme? bestCandidate = null;
         int bestCost = int.MaxValue;
         bool bestIsGeneric = true;
-        bool[]? bestAdapted = null;
 
         foreach (var candidate in candidates)
         {
@@ -402,30 +380,17 @@ public partial class HmTypeChecker
             if (fnType == null) continue;
             if (fnType.ParameterTypes.Count != argTypes.Length) continue;
 
-            // Try speculative unification with auto-ref-lifting
+            // Try speculative unification of all arguments
             int totalCost = 0;
             bool success = true;
-            var adapted = new bool[argTypes.Length];
             for (int i = 0; i < argTypes.Length; i++)
             {
                 var result = _engine.TryUnify(argTypes[i], fnType.ParameterTypes[i]);
                 if (result == null)
                 {
-                    // Auto-lift: value T → &T when param expects a reference
-                    var resolvedArg = _engine.Resolve(argTypes[i]);
-                    if (resolvedArg is not ReferenceType)
-                    {
-                        var refArg = new ReferenceType(resolvedArg);
-                        result = _engine.TryUnify(refArg, fnType.ParameterTypes[i]);
-                        if (result != null) adapted[i] = true;
-                    }
-                }
-                if (result == null)
-                {
                     success = false;
                     break;
                 }
-
                 totalCost += result.Value.Cost;
             }
 
@@ -433,51 +398,64 @@ public partial class HmTypeChecker
 
             bool isGeneric = candidate.Signature.QuantifiedVarIds.Count > 0;
 
-            // Prefer non-generic, then lowest cost
+            // Two-tier: non-generic preferred, cost ranks within tier
             if (!isGeneric && bestIsGeneric)
             {
                 bestCandidate = candidate;
                 bestCost = totalCost;
                 bestIsGeneric = false;
-                bestAdapted = adapted;
             }
             else if (isGeneric == bestIsGeneric && totalCost < bestCost)
             {
                 bestCandidate = candidate;
                 bestCost = totalCost;
                 bestIsGeneric = isGeneric;
-                bestAdapted = adapted;
             }
         }
 
         if (bestCandidate == null) return null;
 
-        // Re-run with commit (Unify, not TryUnify)
-        var winnerType = _engine.Specialize(bestCandidate.Signature);
-        var winnerFn = _engine.Resolve(winnerType) as FunctionType;
+        // Re-specialize and commit unification
+        var winnerSpec = _engine.Specialize(bestCandidate.Signature);
+        var winnerFn = _engine.Resolve(winnerSpec) as FunctionType;
         if (winnerFn == null) return null;
 
         for (int i = 0; i < argTypes.Length; i++)
-        {
-            var arg = bestAdapted != null && bestAdapted[i]
-                ? (Type)new ReferenceType(_engine.Resolve(argTypes[i]))
-                : argTypes[i];
-            _engine.Unify(arg, winnerFn.ParameterTypes[i], span);
-        }
+            _engine.Unify(argTypes[i], winnerFn.ParameterTypes[i], span);
 
-        // Generic monomorphization for operator functions
+        // Generic monomorphization
+        FunctionDeclarationNode node;
         if (bestCandidate.Signature.QuantifiedVarIds.Count > 0)
         {
             var concreteParams = winnerFn.ParameterTypes.Select(p => _engine.Resolve(p)).ToArray();
             var concreteReturn = _engine.Resolve(winnerFn.ReturnType);
             var specialized = EnsureSpecialization(bestCandidate, concreteParams, concreteReturn, span);
-            resolvedNode = specialized ?? bestCandidate.Node;
+            node = specialized ?? bestCandidate.Node;
         }
         else
         {
-            resolvedNode = bestCandidate.Node;
+            node = bestCandidate.Node;
         }
-        return winnerFn.ReturnType;
+
+        return (bestCandidate, winnerFn, node);
+    }
+
+    /// <summary>
+    /// Try to resolve an operator function by name. Returns null on no match.
+    /// Thin wrapper: LookupFunctions + ResolveOverload.
+    /// </summary>
+    private Type? TryResolveOperator(string opName, Type[] argTypes, SourceSpan span, out FunctionDeclarationNode? resolvedNode)
+    {
+        resolvedNode = null;
+        var candidates = LookupFunctions(opName);
+        if (candidates == null) return null;
+
+        var result = ResolveOverload(candidates, argTypes, span);
+        if (result == null) return null;
+
+        var (_, fnType, node) = result.Value;
+        resolvedNode = node;
+        return fnType!.ReturnType;
     }
 
     // =========================================================================
@@ -541,8 +519,32 @@ public partial class HmTypeChecker
         var candidates = LookupFunctions(lookupName);
         if (candidates != null && candidates.Count > 0)
         {
-            // Overload resolution (with UFCS receiver adaptation)
-            return ResolveOverload(candidates, fullArgTypes, call, receiverType != null);
+            // Try with args as-is first
+            var result = ResolveOverload(candidates, fullArgTypes, call.Span);
+
+            // For UFCS, try adapting receiver (value ↔ &T) if direct match failed
+            if (result == null && receiverType != null && fullArgTypes.Length > 0)
+            {
+                var resolvedReceiver = _engine.Resolve(fullArgTypes[0]);
+                var adapted = (Type[])fullArgTypes.Clone();
+                if (resolvedReceiver is ReferenceType rt)
+                    adapted[0] = rt.InnerType; // &T → T
+                else
+                    adapted[0] = new ReferenceType(resolvedReceiver); // T → &T
+                result = ResolveOverload(candidates, adapted, call.Span);
+            }
+
+            if (result == null)
+            {
+                var displayName = call.MethodName ?? call.FunctionName;
+                ReportError($"No matching overload for `{displayName}` with {fullArgTypes.Length} arguments",
+                    call.Span, "E2011");
+                return _engine.FreshVar();
+            }
+
+            var (_, fnType, node) = result.Value;
+            call.ResolvedTarget = node;
+            return fnType!.ReturnType;
         }
 
         // Try enum variant construction (non-UFCS: bare variant name)
@@ -668,147 +670,6 @@ public partial class HmTypeChecker
 
         ReportError($"Unresolved function `{call.FunctionName}`", call.Span, "E2004");
         return _engine.FreshVar();
-    }
-
-    /// <summary>
-    /// Multi-pass overload resolution: non-generic preferred, cost ranks within tier.
-    /// For UFCS calls, adapts the receiver (argTypes[0]) between value/ref to match candidates.
-    /// </summary>
-    private Type ResolveOverload(List<FunctionScheme> candidates, Type[] argTypes,
-        CallExpressionNode call, bool isUfcs = false)
-    {
-        FunctionScheme? bestCandidate = null;
-        int bestCost = int.MaxValue;
-        bool bestIsGeneric = true;
-        FunctionType? bestFnType = null;
-
-        foreach (var candidate in candidates)
-        {
-            var specialized = _engine.Specialize(candidate.Signature);
-            var fnType = _engine.Resolve(specialized) as FunctionType;
-            if (fnType == null) continue;
-            if (fnType.ParameterTypes.Count != argTypes.Length) continue;
-
-            // For UFCS, adapt receiver type to match what the candidate expects
-            var effectiveArgs = argTypes;
-            if (isUfcs && argTypes.Length > 0 && fnType.ParameterTypes.Count > 0)
-                effectiveArgs = AdaptUfcsReceiver(argTypes, fnType.ParameterTypes[0]);
-
-            // Try speculative unification of all arguments
-            int totalCost = 0;
-            bool success = true;
-            for (int i = 0; i < effectiveArgs.Length; i++)
-            {
-                // Function types are invariant — reject coercion between different concrete fn types
-                var resolvedArg = _engine.Resolve(effectiveArgs[i]);
-                var resolvedParam = _engine.Resolve(fnType.ParameterTypes[i]);
-                if (resolvedArg is FunctionType argFn && resolvedParam is FunctionType paramFn
-                    && !ContainsTypeVar(argFn) && !ContainsTypeVar(paramFn))
-                {
-                    if (!argFn.Equals(paramFn)) { success = false; break; }
-                }
-
-                var result = _engine.TryUnify(effectiveArgs[i], fnType.ParameterTypes[i]);
-                if (result == null)
-                {
-                    success = false;
-                    break;
-                }
-
-                totalCost += result.Value.Cost;
-            }
-
-            if (!success) continue;
-
-            bool isGeneric = candidate.Signature.QuantifiedVarIds.Count > 0;
-
-            // Two-tier: non-generic preferred, cost ranks within tier
-            if (!isGeneric && bestIsGeneric)
-            {
-                bestCandidate = candidate;
-                bestCost = totalCost;
-                bestIsGeneric = false;
-                bestFnType = fnType;
-            }
-            else if (isGeneric == bestIsGeneric && totalCost < bestCost)
-            {
-                bestCandidate = candidate;
-                bestCost = totalCost;
-                bestIsGeneric = isGeneric;
-                bestFnType = fnType;
-            }
-        }
-
-        if (bestCandidate == null)
-        {
-            var displayName = call.MethodName ?? call.FunctionName;
-            ReportError($"No matching overload for `{displayName}` with {argTypes.Length} arguments",
-                call.Span, "E2011");
-            return _engine.FreshVar();
-        }
-
-        // Re-specialize and commit unification
-        var winnerSpec = _engine.Specialize(bestCandidate.Signature);
-        var winnerFn = _engine.Resolve(winnerSpec) as FunctionType;
-        if (winnerFn == null)
-        {
-            ReportError($"Internal: winner did not resolve to FunctionType", call.Span);
-            return _engine.FreshVar();
-        }
-
-        // Re-adapt against the fresh winner (speculative adapted args are stale)
-        var commitArgs = isUfcs && argTypes.Length > 0 && winnerFn.ParameterTypes.Count > 0
-            ? AdaptUfcsReceiver(argTypes, winnerFn.ParameterTypes[0])
-            : argTypes;
-        for (int i = 0; i < commitArgs.Length; i++)
-            _engine.Unify(commitArgs[i], winnerFn.ParameterTypes[i], call.Span);
-
-        // Generic monomorphization: specialize if the winner is generic
-        if (bestCandidate.Signature.QuantifiedVarIds.Count > 0)
-        {
-            var concreteParams = winnerFn.ParameterTypes.Select(p => _engine.Resolve(p)).ToArray();
-            var concreteReturn = _engine.Resolve(winnerFn.ReturnType);
-            var specialized = EnsureSpecialization(bestCandidate, concreteParams, concreteReturn, call.Span);
-            if (specialized != null)
-                call.ResolvedTarget = specialized;
-            else
-                call.ResolvedTarget = bestCandidate.Node;
-        }
-        else
-        {
-            call.ResolvedTarget = bestCandidate.Node;
-        }
-
-        return winnerFn.ReturnType;
-    }
-
-    /// <summary>
-    /// For UFCS calls, adapt the receiver (argTypes[0]) to match what the candidate's
-    /// first parameter expects: value T ↔ &amp;T.
-    /// </summary>
-    private Type[] AdaptUfcsReceiver(Type[] argTypes, Type firstParamType)
-    {
-        var receiver = _engine.Resolve(argTypes[0]);
-        var param = _engine.Resolve(firstParamType);
-
-        bool receiverIsRef = receiver is ReferenceType;
-        bool paramExpectsRef = param is ReferenceType;
-
-        if (receiverIsRef == paramExpectsRef) return argTypes;
-
-        var adapted = (Type[])argTypes.Clone();
-        if (!receiverIsRef && paramExpectsRef)
-        {
-            // value → &T: lift to reference
-            adapted[0] = new ReferenceType(receiver);
-        }
-        else if (receiverIsRef && !paramExpectsRef)
-        {
-            // &T → value: implicit deref
-            adapted[0] = ((ReferenceType)receiver).InnerType;
-        }
-
-        return adapted;
     }
 
     // =========================================================================
@@ -1060,9 +921,9 @@ public partial class HmTypeChecker
 
         // Try op_set_index(&base, index, value) for user-defined types
         var refBaseType = new ReferenceType(baseType);
-        var opResult = TryResolveOperatorFunction("op_set_index", [refBaseType, indexType, valueType], assign.Span, out var setNode);
+        var opResult = TryResolveOperator("op_set_index", [refBaseType, indexType, valueType], assign.Span, out var setNode);
         if (opResult == null)
-            opResult = TryResolveOperatorFunction("op_set_index", [baseType, indexType, valueType], assign.Span, out setNode);
+            opResult = TryResolveOperator("op_set_index", [baseType, indexType, valueType], assign.Span, out setNode);
 
         if (opResult != null)
         {
@@ -1363,7 +1224,9 @@ public partial class HmTypeChecker
         }
 
         // Try op_index for user-defined types (Dict, String, etc.)
-        var opResult = TryResolveOperatorFunction("op_index", [baseType, indexType], idx.Span, out var resolvedNode);
+        var refBaseType = new ReferenceType(baseType);
+        var opResult = TryResolveOperator("op_index", [refBaseType, indexType], idx.Span, out var resolvedNode)
+                    ?? TryResolveOperator("op_index", [baseType, indexType], idx.Span, out resolvedNode);
         if (opResult != null)
         {
             _resolvedOperators[idx] = new ResolvedOperator(resolvedNode!);
@@ -1400,17 +1263,18 @@ public partial class HmTypeChecker
         return targetType;
     }
 
+    /// <summary>
+    /// Validates explicit `as` casts only — implicit coercions are handled by unification.
+    /// </summary>
     private static bool IsCastValid(Type from, Type to)
     {
         // Same type is always valid
         if (from.Equals(to)) return true;
 
-        // Numeric → numeric is valid (including bool)
+        // Numeric → numeric is valid (including bool and char)
         if (from is PrimitiveType pFrom && to is PrimitiveType pTo)
         {
-            var numerics = new HashSet<string>
-                { "i8", "i16", "i32", "i64", "isize", "u8", "u16", "u32", "u64", "usize", "bool", "char" };
-            return numerics.Contains(pFrom.Name) && numerics.Contains(pTo.Name);
+            return IsNumericPrimitive(pFrom) && IsNumericPrimitive(pTo);
         }
 
         // Reference → reference is valid (reinterpret cast)
@@ -1435,6 +1299,8 @@ public partial class HmTypeChecker
 
         return false;
     }
+
+    private static bool IsNumericPrimitive(PrimitiveType p) => p.Name is not ("void" or "never") && ResolvePrimitive(p.Name) != null;
 
     // =========================================================================
     // Range expression
@@ -1465,8 +1331,7 @@ public partial class HmTypeChecker
         }
 
         var rangeNominal = LookupNominalType(WellKnown.Range)
-                           ?? throw new InvalidOperationException(
-                               $"Well-known type `{WellKnown.Range}` not registered");
+            ?? throw new InvalidOperationException($"Well-known type `{WellKnown.Range}` not registered");
         return new NominalType(rangeNominal.Name, rangeNominal.Kind, [elemType], rangeNominal.FieldsOrVariants);
     }
 
@@ -1590,7 +1455,7 @@ public partial class HmTypeChecker
 
         // Try op_coalesce
         var rightType2 = InferExpression(coal.Right);
-        var opResult = TryResolveOperatorFunction("op_coalesce", [leftType, rightType2], coal.Span, out var resolvedNode);
+        var opResult = TryResolveOperator("op_coalesce", [leftType, rightType2], coal.Span, out var resolvedNode);
         if (opResult != null)
         {
             _resolvedOperators[coal] = new ResolvedOperator(resolvedNode!);

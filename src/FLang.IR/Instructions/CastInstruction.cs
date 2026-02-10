@@ -1,5 +1,4 @@
 using FLang.Core;
-using TypeBase = FLang.Core.TypeBase;
 
 namespace FLang.IR.Instructions;
 
@@ -11,15 +10,14 @@ namespace FLang.IR.Instructions;
 /// - Array decay (array to pointer to first element)
 /// - String to slice conversions
 /// - Slice to pointer conversions
-/// The specific cast behavior is determined by inspecting the source and target types.
+/// The specific cast behavior is determined by inspecting the source and target IrTypes.
 /// </summary>
 public class CastInstruction : Instruction
 {
-    public CastInstruction(SourceSpan span, Value source, TypeBase targetType, Value result)
+    public CastInstruction(SourceSpan span, Value source, Value result)
         : base(span)
     {
         Source = source;
-        TargetType = targetType;
         Result = result;
     }
 
@@ -27,11 +25,6 @@ public class CastInstruction : Instruction
     /// The value to cast from.
     /// </summary>
     public Value Source { get; }
-
-    /// <summary>
-    /// The type to cast to.
-    /// </summary>
-    public TypeBase TargetType { get; }
 
     /// <summary>
     /// The result value produced by this cast.

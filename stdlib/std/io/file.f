@@ -64,7 +64,7 @@ pub fn read_all(file: &File) Result(OwnedString, FileError) {
 }
 
 pub fn read_all(file: &File, allocator: &Allocator) Result(OwnedString, FileError) {
-    let sb = string_builder(allocator)
+    let sb = string_builder_with_allocator(allocator)
     let buf = [0u8; 4096]
     loop {
         const n = read(file.handle.fd, buf.ptr, buf.len)
