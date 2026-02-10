@@ -8,19 +8,14 @@ namespace FLang.IR;
 /// Converts HM Type to IrType with pre-computed layout (size, alignment, offsets).
 /// Caches results to ensure the same HM Type always produces the same IrType instance.
 /// </summary>
-public class TypeLayoutService
+public class TypeLayoutService(ITypeResolver engine, INominalTypeRegistry nominalTypes)
 {
     private readonly Dictionary<string, IrType> _cache = [];
-    private readonly ITypeResolver _engine;
-    private readonly INominalTypeRegistry _nominalTypes;
-
-    public TypeLayoutService(ITypeResolver engine, INominalTypeRegistry nominalTypes)
-    {
-        _engine = engine;
-        _nominalTypes = nominalTypes;
-    }
+    private readonly ITypeResolver _engine = engine;
+    private readonly INominalTypeRegistry _nominalTypes = nominalTypes;
 
     // Well-known IrType primitives (cached singletons)
+
     public static readonly IrPrimitive IrVoidPrim = new("void", 0, 1);
     public static readonly IrPrimitive IrNeverPrim = new("never", 0, 1);
     public static readonly IrPrimitive IrBool = new("bool", 1, 1);
@@ -35,6 +30,12 @@ public class TypeLayoutService
     public static readonly IrPrimitive IrISize = new("isize", 8, 8);
     public static readonly IrPrimitive IrUSize = new("usize", 8, 8);
     public static readonly IrPrimitive IrChar = new("char", 4, 4);
+
+    /// <summary>
+    /// Returns true when the type is a large value type (struct or enum > 8 bytes)
+    /// that should be passed by implicit reference at the ABI level.
+    /// </summary>
+    public static bool IsLargeValue(IrType type) => type is IrStruct { Size: > 8 } or IrEnum { Size: > 8 };
 
     private static readonly Dictionary<string, IrPrimitive> PrimitiveLookup = new()
     {

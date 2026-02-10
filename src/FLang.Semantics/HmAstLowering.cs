@@ -28,6 +28,7 @@ public class HmAstLowering
     // Per-function state
     private readonly Dictionary<string, Value> _locals = [];
     private readonly HashSet<string> _parameters = [];
+    private readonly HashSet<string> _byRefParams = [];
     private readonly Dictionary<string, int> _shadowCounter = [];
     private BasicBlock _currentBlock = null!;
     private IrFunction _currentFunction = null!;
@@ -70,6 +71,61 @@ public class HmAstLowering
     /// Strip the nullable flag from a nullable pointer to get the non-nullable equivalent.
     /// </summary>
     private static IrPointer StripNullable(IrPointer p) => new(p.Pointee, false);
+
+    /// <summary>
+    /// Returns true when the type is a large value type (struct or enum > 8 bytes)
+    /// that should be passed by implicit reference at the ABI level.
+    /// </summary>
+    private static bool IsLargeValue(IrType type) => TypeLayoutService.IsLargeValue(type);
+
+    /// <summary>
+    /// Emit a non-foreign call instruction with implicit by-ref transformations:
+    /// - Large value args are materialized as pointers
+    /// - Large return types use a hidden return slot
+    /// </summary>
+    private LocalValue EmitFLangCall(string fnName, List<Value> args, IrType retIrType, List<IrType>? calleeIrParamTypes)
+    {
+        // Materialize large value args as pointers
+        if (calleeIrParamTypes != null)
+        {
+            for (int i = 0; i < args.Count && i < calleeIrParamTypes.Count; i++)
+            {
+                if (IsLargeValue(calleeIrParamTypes[i]) && args[i].IrType is not IrPointer)
+                {
+                    var argIrType = args[i].IrType ?? calleeIrParamTypes[i];
+                    var temp = new LocalValue($"byref_arg_{_tempCounter++}", new IrPointer(argIrType));
+                    _currentBlock.Instructions.Add(new AllocaInstruction(_currentSpan, argIrType.Size, temp));
+                    _currentBlock.Instructions.Add(new StorePointerInstruction(_currentSpan, temp, args[i]));
+                    args[i] = temp;
+                }
+            }
+        }
+
+        // Return slot for large return types
+        if (IsLargeValue(retIrType))
+        {
+            var retSlot = new LocalValue($"retslot_{_tempCounter++}", new IrPointer(retIrType));
+            _currentBlock.Instructions.Add(new AllocaInstruction(_currentSpan, retIrType.Size, retSlot));
+            args.Insert(0, retSlot);
+
+            var voidResult = new LocalValue($"call_{_tempCounter++}", TypeLayoutService.IrVoidPrim);
+            var callInst = new CallInstruction(_currentSpan, fnName, args, voidResult);
+            if (calleeIrParamTypes != null && calleeIrParamTypes.Count > 0)
+                callInst.CalleeIrParamTypes = calleeIrParamTypes;
+            _currentBlock.Instructions.Add(callInst);
+
+            var loaded = new LocalValue($"retload_{_tempCounter++}", retIrType);
+            _currentBlock.Instructions.Add(new LoadInstruction(_currentSpan, retSlot, loaded));
+            return loaded;
+        }
+
+        var result = new LocalValue($"call_{_tempCounter++}", retIrType);
+        var normalCall = new CallInstruction(_currentSpan, fnName, args, result);
+        if (calleeIrParamTypes != null && calleeIrParamTypes.Count > 0)
+            normalCall.CalleeIrParamTypes = calleeIrParamTypes;
+        _currentBlock.Instructions.Add(normalCall);
+        return result;
+    }
 
     // =========================================================================
     // Module lowering
@@ -449,7 +505,10 @@ public class HmAstLowering
     {
         var knownFunctions = new HashSet<string>();
         foreach (var fn in _module.Functions)
-            knownFunctions.Add(MangleFunctionName(fn.Name, fn.Params.Select(p => p.Type).ToArray()));
+        {
+            var paramList = fn.UsesReturnSlot ? fn.Params.Skip(1) : fn.Params;
+            knownFunctions.Add(MangleFunctionName(fn.Name, paramList.Select(p => p.Type).ToArray()));
+        }
         foreach (var decl in _module.ForeignDecls)
             knownFunctions.Add(decl.CName);
         // C stdlib functions are always available
@@ -594,6 +653,7 @@ public class HmAstLowering
         // Reset per-function state
         _locals.Clear();
         _parameters.Clear();
+        _byRefParams.Clear();
         _shadowCounter.Clear();
         _loopStack.Clear();
         _deferStack.Clear();
@@ -620,12 +680,36 @@ public class HmAstLowering
             {
                 var param = fn.Parameters[i];
                 var paramIrType = _layout.Lower(fnType.ParameterTypes[i]);
-                irFn.Params.Add(new IrParam(param.Name, paramIrType));
+                var irParam = new IrParam(param.Name, paramIrType);
 
-                var paramVal = new LocalValue(param.Name, paramIrType);
-                _locals[param.Name] = paramVal;
-                _parameters.Add(param.Name);
+                if (IsLargeValue(paramIrType))
+                {
+                    irParam = irParam with { IsByRef = true };
+                    var paramVal = new LocalValue(param.Name, new IrPointer(paramIrType));
+                    _locals[param.Name] = paramVal;
+                    _parameters.Add(param.Name);
+                    _byRefParams.Add(param.Name);
+                }
+                else
+                {
+                    var paramVal = new LocalValue(param.Name, paramIrType);
+                    _locals[param.Name] = paramVal;
+                    _parameters.Add(param.Name);
+                }
+
+                irFn.Params.Add(irParam);
             }
+        }
+
+        // Large struct return: use hidden __ret pointer parameter
+        if (IsLargeValue(retIrType) && fn.Name != "main")
+        {
+            irFn.UsesReturnSlot = true;
+            var retPtrType = new IrPointer(retIrType);
+            irFn.Params.Insert(0, new IrParam("__ret", retPtrType));
+            var retLocal = new LocalValue("__ret", retPtrType);
+            _locals["__ret"] = retLocal;
+            _parameters.Add("__ret");
         }
 
         // Lower body statements — the last expression-statement in a non-void
@@ -638,7 +722,15 @@ public class HmAstLowering
             if (si == fn.Body.Count - 1 && isNonVoid && stmt is ExpressionStatementNode lastExpr)
             {
                 var val = LowerExpression(lastExpr.Expression, retIrType);
-                _currentBlock.Instructions.Add(new ReturnInstruction(stmt.Span, val));
+                if (irFn.UsesReturnSlot)
+                {
+                    _currentBlock.Instructions.Add(new StorePointerInstruction(stmt.Span, _locals["__ret"], val));
+                    _currentBlock.Instructions.Add(new ReturnInstruction(stmt.Span, new ConstantValue(0, TypeLayoutService.IrVoidPrim)));
+                }
+                else
+                {
+                    _currentBlock.Instructions.Add(new ReturnInstruction(stmt.Span, val));
+                }
                 continue;
             }
             LowerStatement(stmt);
@@ -658,7 +750,9 @@ public class HmAstLowering
             if (block.Instructions.Count == 0 ||
                 block.Instructions[^1] is not (ReturnInstruction or JumpInstruction or BranchInstruction))
             {
-                var retVal = new ConstantValue(0, isNonVoid ? retIrType : TypeLayoutService.IrVoidPrim);
+                var retType = irFn.UsesReturnSlot ? TypeLayoutService.IrVoidPrim
+                    : (isNonVoid ? retIrType : TypeLayoutService.IrVoidPrim);
+                var retVal = new ConstantValue(0, retType);
                 block.Instructions.Add(new ReturnInstruction(_currentSpan, retVal));
             }
         }
@@ -711,7 +805,15 @@ public class HmAstLowering
         {
             var fnRetType = _currentFunction.ReturnType;
             var val = LowerExpression(ret.Expression, fnRetType);
-            _currentBlock.Instructions.Add(new ReturnInstruction(_currentSpan, val));
+            if (_currentFunction.UsesReturnSlot)
+            {
+                _currentBlock.Instructions.Add(new StorePointerInstruction(_currentSpan, _locals["__ret"], val));
+                _currentBlock.Instructions.Add(new ReturnInstruction(_currentSpan, new ConstantValue(0, TypeLayoutService.IrVoidPrim)));
+            }
+            else
+            {
+                _currentBlock.Instructions.Add(new ReturnInstruction(_currentSpan, val));
+            }
         }
         else
         {
@@ -1066,14 +1168,10 @@ public class HmAstLowering
         }
 
         // 2. Call iter(&iterable) → IteratorStruct
-        var iterResult = new LocalValue($"iter_{_tempCounter++}", iteratorIrType);
         var iterCalleeParamTypes = new List<IrType>();
         foreach (var p in forLoop.ResolvedIterFunction.Parameters)
             iterCalleeParamTypes.Add(GetIrType(p));
-        var iterCall = new CallInstruction(_currentSpan, "iter", [iterableVal], iterResult);
-        if (iterCalleeParamTypes.Count > 0)
-            iterCall.CalleeIrParamTypes = iterCalleeParamTypes;
-        _currentBlock.Instructions.Add(iterCall);
+        var iterResult = EmitFLangCall("iter", [iterableVal], iteratorIrType, iterCalleeParamTypes);
 
         // 3. Allocate iterator state on stack
         var iteratorPtr = new LocalValue($"iter_ptr_{_tempCounter++}", new IrPointer(iteratorIrType));
@@ -1093,14 +1191,10 @@ public class HmAstLowering
         _currentFunction.BasicBlocks.Add(condBlock);
         _currentBlock = condBlock;
 
-        var nextResult = new LocalValue($"next_{_tempCounter++}", optionIrType);
         var nextCalleeParamTypes = new List<IrType>();
         foreach (var p in forLoop.ResolvedNextFunction.Parameters)
             nextCalleeParamTypes.Add(GetIrType(p));
-        var nextCall = new CallInstruction(_currentSpan, "next", [iteratorPtr], nextResult);
-        if (nextCalleeParamTypes.Count > 0)
-            nextCall.CalleeIrParamTypes = nextCalleeParamTypes;
-        _currentBlock.Instructions.Add(nextCall);
+        var nextResult = EmitFLangCall("next", [iteratorPtr], optionIrType, nextCalleeParamTypes);
 
         if (IsNicheOption(optionIrType))
         {
@@ -1453,6 +1547,14 @@ public class HmAstLowering
         {
             if (_parameters.Contains(id.Name))
             {
+                if (_byRefParams.Contains(id.Name))
+                {
+                    // By-ref param: load the value through the pointer
+                    var innerType = ((IrPointer)localVal.IrType).Pointee;
+                    var byRefLoaded = new LocalValue($"t{_tempCounter++}", innerType);
+                    _currentBlock.Instructions.Add(new LoadInstruction(_currentSpan, localVal, byRefLoaded));
+                    return byRefLoaded;
+                }
                 // Parameters are used directly
                 return localVal;
             }
@@ -1571,27 +1673,34 @@ public class HmAstLowering
         if (call.UfcsReceiver != null)
         {
             // Check if callee's first param expects a pointer (i.e. &self)
+            // or if it's a non-foreign function with a large value param (implicit by-ref)
             var firstParamWantsPtr = false;
+            IrType? firstParamIrType = null;
             if (call.ResolvedTarget != null && call.ResolvedTarget.Parameters.Count > 0)
             {
-                var firstParamIrType = GetIrType(call.ResolvedTarget.Parameters[0]);
+                firstParamIrType = GetIrType(call.ResolvedTarget.Parameters[0]);
                 firstParamWantsPtr = firstParamIrType is IrPointer;
             }
+            var isForeignCheck = call.ResolvedTarget != null &&
+                                 (call.ResolvedTarget.Modifiers & FunctionModifiers.Foreign) != 0;
+            var needsByRef = firstParamWantsPtr ||
+                             (!isForeignCheck && firstParamIrType != null && IsLargeValue(firstParamIrType));
 
-            // When callee expects &self and receiver is a local variable whose alloca type
-            // matches the expected param type, pass the alloca pointer directly so the
-            // function can mutate the original variable (not a copy).
+            // When callee expects &self (or implicit by-ref) and receiver is a local variable
+            // whose alloca type matches the expected param type, pass the alloca pointer directly
+            // so the function can mutate the original variable (not a copy).
             // Only applies to non-pointer value types — if the variable already stores a
             // pointer (e.g. `let w: &Writer`), loading is needed to avoid double-indirection.
-            if (firstParamWantsPtr && call.UfcsReceiver is IdentifierExpressionNode receiverId
+            // By-ref params are already pointers, so they also qualify for direct passing.
+            if (needsByRef && call.UfcsReceiver is IdentifierExpressionNode receiverId
                 && _locals.TryGetValue(receiverId.Name, out var localAlloca)
-                && !_parameters.Contains(receiverId.Name)
+                && (!_parameters.Contains(receiverId.Name) || _byRefParams.Contains(receiverId.Name))
                 && localAlloca.IrType is IrPointer ptrType
                 && ptrType.Pointee is not IrPointer) // value type, not already a pointer
             {
                 args.Add(localAlloca);
             }
-            else if (firstParamWantsPtr && call.UfcsReceiver is MemberAccessExpressionNode memberReceiver)
+            else if (needsByRef && call.UfcsReceiver is MemberAccessExpressionNode memberReceiver)
             {
                 // UFCS on a field: self.field.method() where method wants &self.
                 // Compute a pointer to the field in-place (avoid copying the field value,
@@ -1650,16 +1759,16 @@ public class HmAstLowering
             {
                 var receiverVal = LowerExpression(call.UfcsReceiver);
 
-                if (firstParamWantsPtr && receiverVal.IrType is not IrPointer)
+                if (needsByRef && receiverVal.IrType is not IrPointer)
                 {
-                    // Callee expects &self — materialize a pointer
+                    // Callee expects &self or implicit by-ref — materialize a pointer
                     var receiverIrType = receiverVal.IrType ?? TypeLayoutService.IrVoidPrim;
                     var temp = new LocalValue($"ufcs_tmp_{_tempCounter++}", new IrPointer(receiverIrType));
                     _currentBlock.Instructions.Add(new AllocaInstruction(_currentSpan, receiverIrType.Size, temp));
                     _currentBlock.Instructions.Add(new StorePointerInstruction(_currentSpan, temp, receiverVal));
                     args.Add(temp);
                 }
-                else if (!firstParamWantsPtr && receiverVal.IrType is IrPointer recvPtr)
+                else if (!needsByRef && receiverVal.IrType is IrPointer recvPtr)
                 {
                     // Callee expects value but receiver is a pointer (e.g. self: &List(T)
                     // calling as_slice(self: List(T))) — deref the pointer
@@ -1714,7 +1823,21 @@ public class HmAstLowering
                 expectedParamType = calleeIrParamTypes[paramIdx];
             else if (foreignParamTypes != null && paramIdx < foreignParamTypes.Count)
                 expectedParamType = foreignParamTypes[paramIdx];
-            args.Add(LowerExpression(call.Arguments[i], expectedParamType));
+            var argVal = LowerExpression(call.Arguments[i], expectedParamType);
+
+            // Implicit by-ref: large value args to non-foreign functions need pointer materialization
+            if (!isForeign && expectedParamType != null && IsLargeValue(expectedParamType) && argVal.IrType is not IrPointer)
+            {
+                var argIrType = argVal.IrType ?? expectedParamType;
+                var temp = new LocalValue($"byref_arg_{_tempCounter++}", new IrPointer(argIrType));
+                _currentBlock.Instructions.Add(new AllocaInstruction(_currentSpan, argIrType.Size, temp));
+                _currentBlock.Instructions.Add(new StorePointerInstruction(_currentSpan, temp, argVal));
+                args.Add(temp);
+            }
+            else
+            {
+                args.Add(argVal);
+            }
         }
 
         // For foreign calls returning Option[&T], the C function returns a raw pointer.
@@ -1734,14 +1857,34 @@ public class HmAstLowering
             }
         }
 
-        var result = new LocalValue($"call_{_tempCounter++}", actualRetType);
-        var callInst = new CallInstruction(_currentSpan, targetName, args, result);
-        callInst.IsForeignCall = isForeign;
-        callInst.IsIndirectCall = call.IsIndirectCall;
-        if (calleeIrParamTypes.Count > 0)
-            callInst.CalleeIrParamTypes = calleeIrParamTypes;
+        // Return slot: non-foreign, non-indirect call returning large value
+        if (!isForeign && !call.IsIndirectCall && IsLargeValue(retIrType) && foreignOptionRet == null)
+        {
+            var retSlot = new LocalValue($"retslot_{_tempCounter++}", new IrPointer(retIrType));
+            _currentBlock.Instructions.Add(new AllocaInstruction(_currentSpan, retIrType.Size, retSlot));
+            args.Insert(0, retSlot);
 
-        _currentBlock.Instructions.Add(callInst);
+            var voidResult = new LocalValue($"call_{_tempCounter++}", TypeLayoutService.IrVoidPrim);
+            var callInst = new CallInstruction(_currentSpan, targetName, args, voidResult);
+            callInst.IsForeignCall = false;
+            callInst.IsIndirectCall = false;
+            if (calleeIrParamTypes.Count > 0)
+                callInst.CalleeIrParamTypes = calleeIrParamTypes;
+            _currentBlock.Instructions.Add(callInst);
+
+            var loaded = new LocalValue($"retload_{_tempCounter++}", retIrType);
+            _currentBlock.Instructions.Add(new LoadInstruction(_currentSpan, retSlot, loaded));
+            return loaded;
+        }
+
+        var result = new LocalValue($"call_{_tempCounter++}", actualRetType);
+        var callInstNorm = new CallInstruction(_currentSpan, targetName, args, result);
+        callInstNorm.IsForeignCall = isForeign;
+        callInstNorm.IsIndirectCall = call.IsIndirectCall;
+        if (calleeIrParamTypes.Count > 0)
+            callInstNorm.CalleeIrParamTypes = calleeIrParamTypes;
+
+        _currentBlock.Instructions.Add(callInstNorm);
 
         // Wrap foreign raw-pointer return in Option[&T]
         if (foreignOptionRet != null)
@@ -1800,10 +1943,41 @@ public class HmAstLowering
         var funcPtrVal = new LocalValue($"fptr_load_{_tempCounter++}", field.Type);
         _currentBlock.Instructions.Add(new LoadInstruction(_currentSpan, fieldPtrResult, funcPtrVal));
 
-        // Lower arguments
+        // Lower arguments — apply implicit by-ref for large values
         var args = new List<Value>();
+        IrFunctionPtr? fpType = funcPtrVal.IrType as IrFunctionPtr;
         foreach (var arg in call.Arguments)
-            args.Add(LowerExpression(arg));
+        {
+            var argVal = LowerExpression(arg);
+            // Materialize large value args as pointers to match the transformed function pointer type
+            if (IsLargeValue(argVal.IrType) && argVal.IrType is not IrPointer)
+            {
+                var argIrType = argVal.IrType ?? TypeLayoutService.IrVoidPrim;
+                var temp = new LocalValue($"ifc_tmp_{_tempCounter++}", new IrPointer(argIrType));
+                _currentBlock.Instructions.Add(new AllocaInstruction(_currentSpan, argIrType.Size, temp));
+                _currentBlock.Instructions.Add(new StorePointerInstruction(_currentSpan, temp, argVal));
+                args.Add(temp);
+            }
+            else
+            {
+                args.Add(argVal);
+            }
+        }
+
+        // Return slot for large return types
+        if (IsLargeValue(retIrType))
+        {
+            var retSlot = new LocalValue($"retslot_{_tempCounter++}", new IrPointer(retIrType));
+            _currentBlock.Instructions.Add(new AllocaInstruction(_currentSpan, retIrType.Size, retSlot));
+            args.Insert(0, retSlot);
+
+            var voidResult = new LocalValue($"call_{_tempCounter++}", TypeLayoutService.IrVoidPrim);
+            _currentBlock.Instructions.Add(new IndirectCallInstruction(_currentSpan, funcPtrVal, args, voidResult));
+
+            var loaded = new LocalValue($"retload_{_tempCounter++}", retIrType);
+            _currentBlock.Instructions.Add(new LoadInstruction(_currentSpan, retSlot, loaded));
+            return loaded;
+        }
 
         var result = new LocalValue($"call_{_tempCounter++}", retIrType);
         _currentBlock.Instructions.Add(new IndirectCallInstruction(_currentSpan, funcPtrVal, args, result));
@@ -1837,10 +2011,39 @@ public class HmAstLowering
             funcPtrVal = new LocalValue(call.FunctionName, retIrType);
         }
 
-        // Lower arguments
+        // Lower arguments — apply implicit by-ref for large values
         var args = new List<Value>();
         foreach (var arg in call.Arguments)
-            args.Add(LowerExpression(arg));
+        {
+            var argVal = LowerExpression(arg);
+            if (IsLargeValue(argVal.IrType) && argVal.IrType is not IrPointer)
+            {
+                var argIrType = argVal.IrType ?? TypeLayoutService.IrVoidPrim;
+                var temp = new LocalValue($"ivc_tmp_{_tempCounter++}", new IrPointer(argIrType));
+                _currentBlock.Instructions.Add(new AllocaInstruction(_currentSpan, argIrType.Size, temp));
+                _currentBlock.Instructions.Add(new StorePointerInstruction(_currentSpan, temp, argVal));
+                args.Add(temp);
+            }
+            else
+            {
+                args.Add(argVal);
+            }
+        }
+
+        // Return slot for large return types
+        if (IsLargeValue(retIrType))
+        {
+            var retSlot = new LocalValue($"retslot_{_tempCounter++}", new IrPointer(retIrType));
+            _currentBlock.Instructions.Add(new AllocaInstruction(_currentSpan, retIrType.Size, retSlot));
+            args.Insert(0, retSlot);
+
+            var voidResult = new LocalValue($"call_{_tempCounter++}", TypeLayoutService.IrVoidPrim);
+            _currentBlock.Instructions.Add(new IndirectCallInstruction(_currentSpan, funcPtrVal, args, voidResult));
+
+            var loaded = new LocalValue($"retload_{_tempCounter++}", retIrType);
+            _currentBlock.Instructions.Add(new LoadInstruction(_currentSpan, retSlot, loaded));
+            return loaded;
+        }
 
         var result = new LocalValue($"call_{_tempCounter++}", retIrType);
         _currentBlock.Instructions.Add(new IndirectCallInstruction(_currentSpan, funcPtrVal, args, result));
@@ -1944,12 +2147,22 @@ public class HmAstLowering
         var fnHmType = GetFunctionHmType(fn);
         var callRetIrType = _layout.Lower(fnHmType.ReturnType);
 
-        var callResult = new LocalValue($"op_{_tempCounter++}", callRetIrType);
-        var callInst = new CallInstruction(_currentSpan, fn.Name, args, callResult);
-        callInst.IsForeignCall = (fn.Modifiers & FunctionModifiers.Foreign) != 0;
-        if (calleeIrParamTypes.Count > 0)
-            callInst.CalleeIrParamTypes = calleeIrParamTypes;
-        _currentBlock.Instructions.Add(callInst);
+        var isForeignOp = (fn.Modifiers & FunctionModifiers.Foreign) != 0;
+        Value callResult;
+        if (!isForeignOp)
+        {
+            callResult = EmitFLangCall(fn.Name, args, callRetIrType, calleeIrParamTypes);
+        }
+        else
+        {
+            var opResult = new LocalValue($"op_{_tempCounter++}", callRetIrType);
+            var callInst = new CallInstruction(_currentSpan, fn.Name, args, opResult);
+            callInst.IsForeignCall = true;
+            if (calleeIrParamTypes.Count > 0)
+                callInst.CalleeIrParamTypes = calleeIrParamTypes;
+            _currentBlock.Instructions.Add(callInst);
+            callResult = opResult;
+        }
 
         // Auto-derived op_eq/op_ne: negate the complement's result
         if (resolved.NegateResult)
@@ -2355,12 +2568,7 @@ public class HmAstLowering
         foreach (var param in resolved.Function.Parameters)
             calleeIrParamTypes.Add(GetIrType(param));
 
-        var result = new LocalValue($"call_{_tempCounter++}", TypeLayoutService.IrVoidPrim);
-        var callInst = new CallInstruction(_currentSpan, resolved.Function.Name, [baseVal, indexVal, val], result);
-        if (calleeIrParamTypes.Count > 0)
-            callInst.CalleeIrParamTypes = calleeIrParamTypes;
-        _currentBlock.Instructions.Add(callInst);
-
+        EmitFLangCall(resolved.Function.Name, [baseVal, indexVal, val], TypeLayoutService.IrVoidPrim, calleeIrParamTypes);
         return new ConstantValue(0, TypeLayoutService.IrVoidPrim);
     }
 
@@ -2570,9 +2778,12 @@ public class HmAstLowering
             foreach (var param in resolved.Function.Parameters)
                 calleeIrParamTypes.Add(GetIrType(param));
 
-            // Only materialize base to a temp pointer if the callee expects a pointer
+            // Materialize base to a temp pointer if the callee expects a pointer
+            // or if it's a large value type (implicit by-ref)
             var firstParamIsPtr = calleeIrParamTypes.Count > 0 && calleeIrParamTypes[0] is IrPointer;
-            if (firstParamIsPtr && baseVal.IrType is not IrPointer)
+            var firstParamNeedsByRef = firstParamIsPtr ||
+                (calleeIrParamTypes.Count > 0 && IsLargeValue(calleeIrParamTypes[0]));
+            if (firstParamNeedsByRef && baseVal.IrType is not IrPointer)
             {
                 var baseIrType = baseVal.IrType ?? TypeLayoutService.IrVoidPrim;
                 var temp = new LocalValue($"idx_tmp_{_tempCounter++}", new IrPointer(baseIrType));
@@ -2581,12 +2792,7 @@ public class HmAstLowering
                 baseVal = temp;
             }
 
-            var result = new LocalValue($"call_{_tempCounter++}", retIrType);
-            var callInst = new CallInstruction(_currentSpan, resolved.Function.Name, [baseVal, indexVal], result);
-            if (calleeIrParamTypes.Count > 0)
-                callInst.CalleeIrParamTypes = calleeIrParamTypes;
-            _currentBlock.Instructions.Add(callInst);
-            return result;
+            return EmitFLangCall(resolved.Function.Name, [baseVal, indexVal], retIrType, calleeIrParamTypes);
         }
 
         // Built-in array/slice indexing
@@ -2911,12 +3117,7 @@ public class HmAstLowering
             foreach (var param in resolved.Function.Parameters)
                 calleeIrParamTypes.Add(GetIrType(param));
 
-            var result = new LocalValue($"call_{_tempCounter++}", retIrType);
-            var callInst = new CallInstruction(_currentSpan, resolved.Function.Name, [leftVal, rightVal], result);
-            if (calleeIrParamTypes.Count > 0)
-                callInst.CalleeIrParamTypes = calleeIrParamTypes;
-            _currentBlock.Instructions.Add(callInst);
-            return result;
+            return EmitFLangCall(resolved.Function.Name, [leftVal, rightVal], retIrType, calleeIrParamTypes);
         }
 
         // Inline Option[T] ?? T: if left.has_value then left.value else right
@@ -3584,7 +3785,7 @@ public class HmAstLowering
     // Lambda lowering
     // =========================================================================
 
-    private Value LowerLambda(LambdaExpressionNode lambda)
+    private FunctionReferenceValue LowerLambda(LambdaExpressionNode lambda)
     {
         if (lambda.SynthesizedFunction == null)
             throw new InvalidOperationException(
@@ -3615,14 +3816,29 @@ public class HmAstLowering
                         // and doesn't appear after branch instructions.
                         if (_parameters.Contains(id.Name))
                         {
+                            if (_byRefParams.Contains(id.Name))
+                            {
+                                // By-ref param: load from pointer, then store into alloca (copy-on-write)
+                                var innerType = ((IrPointer)localVal.IrType!).Pointee;
+                                var alloca = new LocalValue($"{id.Name}_mut", new IrPointer(innerType));
+                                var tmpLoad = new LocalValue($"t{_tempCounter++}", innerType);
+                                var entryBlock = _currentFunction.BasicBlocks[0];
+                                entryBlock.Instructions.Insert(0, new StorePointerInstruction(_currentSpan, alloca, tmpLoad));
+                                entryBlock.Instructions.Insert(0, new LoadInstruction(_currentSpan, localVal, tmpLoad));
+                                entryBlock.Instructions.Insert(0, new AllocaInstruction(_currentSpan, innerType.Size, alloca));
+                                _locals[id.Name] = alloca;
+                                _parameters.Remove(id.Name);
+                                _byRefParams.Remove(id.Name);
+                                return alloca;
+                            }
                             var paramIrType = localVal.IrType ?? TypeLayoutService.IrVoidPrim;
-                            var alloca = new LocalValue($"{id.Name}_mut", new IrPointer(paramIrType));
-                            var entryBlock = _currentFunction.BasicBlocks[0];
-                            entryBlock.Instructions.Insert(0, new StorePointerInstruction(_currentSpan, alloca, localVal));
-                            entryBlock.Instructions.Insert(0, new AllocaInstruction(_currentSpan, paramIrType.Size, alloca));
-                            _locals[id.Name] = alloca;
+                            var allocaP = new LocalValue($"{id.Name}_mut", new IrPointer(paramIrType));
+                            var entryBlockP = _currentFunction.BasicBlocks[0];
+                            entryBlockP.Instructions.Insert(0, new StorePointerInstruction(_currentSpan, allocaP, localVal));
+                            entryBlockP.Instructions.Insert(0, new AllocaInstruction(_currentSpan, paramIrType.Size, allocaP));
+                            _locals[id.Name] = allocaP;
                             _parameters.Remove(id.Name);
-                            return alloca;
+                            return allocaP;
                         }
                         return localVal; // Already an alloca pointer
                     }

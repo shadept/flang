@@ -1054,7 +1054,7 @@ public class Parser
     /// </summary>
     /// <param name="kind">The token kind representing the binary operator.</param>
     /// <returns>The precedence level, or 0 if not a binary operator.</returns>
-    private int GetBinaryOperatorPrecedence(TokenKind kind)
+    private static int GetBinaryOperatorPrecedence(TokenKind kind)
     {
         return kind switch
         {
@@ -1080,7 +1080,7 @@ public class Parser
     /// </summary>
     /// <param name="expr">The expression to check.</param>
     /// <returns>True if the expression is a valid l-value, false otherwise.</returns>
-    private bool IsValidLValue(ExpressionNode expr)
+    private static bool IsValidLValue(ExpressionNode expr)
     {
         return expr is IdentifierExpressionNode or MemberAccessExpressionNode or IndexExpressionNode or DereferenceExpressionNode;
     }
@@ -1118,14 +1118,9 @@ public class Parser
             or TokenKind.CloseBrace or TokenKind.Semicolon or TokenKind.EndOfFile;
     }
 
-    private sealed class ParserException : Exception
+    private sealed class ParserException(Diagnostic diagnostic) : Exception
     {
-        public ParserException(Diagnostic diagnostic)
-        {
-            Diagnostic = diagnostic;
-        }
-
-        public Diagnostic Diagnostic { get; }
+        public Diagnostic Diagnostic { get; } = diagnostic;
     }
 
     /// <summary>
@@ -1709,7 +1704,7 @@ public class Parser
     /// Parses an array literal expression (e.g., [1, 2, 3] or []).
     /// </summary>
     /// <returns>An <see cref="ExpressionNode"/> representing the array literal.</returns>
-    private ExpressionNode ParseArrayLiteral()
+    private ArrayLiteralExpressionNode ParseArrayLiteral()
     {
         var openBracket = Eat(TokenKind.OpenBracket);
 
@@ -1718,7 +1713,7 @@ public class Parser
         {
             var closeBracket = Eat(TokenKind.CloseBracket);
             var span = SourceSpan.Combine(openBracket.Span, closeBracket.Span);
-            return new ArrayLiteralExpressionNode(span, new List<ExpressionNode>());
+            return new ArrayLiteralExpressionNode(span, []);
         }
 
         // Parse first element
@@ -2025,7 +2020,7 @@ public class Parser
             else
             {
                 // Top-level pattern: could be unit variant or binding (type checker decides)
-                return new EnumVariantPatternNode(firstIdent.Span, null, firstIdent.Text, new List<PatternNode>());
+                return new EnumVariantPatternNode(firstIdent.Span, null, firstIdent.Text, []);
             }
         }
 

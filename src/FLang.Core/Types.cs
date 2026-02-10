@@ -132,7 +132,7 @@ public class GenericParameterType : TypeBase
     /// Initializes a new instance of the <see cref="GenericParameterType"/> class.
     /// </summary>
     /// <param name="name">The name of the generic parameter (e.g., "T").</param>
-    public GenericParameterType(string name)
+    public GenericParameterType(string name) // DEPRECATED
     {
         ParamName = name;
     }

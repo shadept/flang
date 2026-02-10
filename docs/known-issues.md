@@ -134,17 +134,18 @@ Currently deep-clones function body AST for each generic instantiation so each h
 
 ### Implicit Reference Passing for Large Structs
 
-**Status:** Blocked on old pipeline removal
-**Affected:** HmAstLowering, HmCCodeGenerator, IrModule
+**Status:** Implemented
+**Affected:** HmAstLowering, HmCCodeGenerator, IrModule, TypeLayoutService
 
-Large structs (size > pointer width) are currently passed by value in generated C, causing unnecessary copies. Per spec Section 6.3, these should be passed by implicit reference with copy-on-write semantics:
-- **Caller:** passes address of argument
-- **Callee:** reads through pointer (no copy); copy-on-first-write into local shadow
-- **Section 6.4:** large struct returns should use caller-provided hidden pointer (return slot optimization)
+Large structs/enums (size > 8 bytes) are now passed by implicit reference and returned via caller-provided hidden slot:
+- **Params:** `IrParam.IsByRef = true`, callee receives pointer; reads load through pointer, writes use copy-on-write (alloca + load + store)
+- **Returns:** `IrFunction.UsesReturnSlot = true`, hidden `__ret` pointer prepended to params; callee stores result through `__ret` and returns void
+- **Call sites:** Caller alloca + store for large value args; alloca return slot + load for large returns
+- **Function pointers:** `IrFunctionPtr` stores original types (for name mangling); C codegen applies ABI transformation via `GetAbiFunctionPtr()` when emitting C function pointer types
+- **Direct calls, indirect calls (vtable), for-loop iter/next, operator overloads** all handled uniformly via `EmitFLangCall` helper
+- **Foreign functions** excluded from transformation (C ABI preserved)
 
-**Prerequisite:** Remove old pipeline (TypeChecker, AstLowering, CCodeGenerator) first to reduce implementation complexity. Implementation design documented in `.claude/plans/twinkling-sparking-manatee.md`.
-
-**Related:** `PointerWidth` enum (`src/FLang.Core/PointerWidth.cs`), spec Sections 6.3-6.4
+**Test:** `tests/FLang.Tests/Harness/structs/struct_large_pass_return.f`
 
 ---
 

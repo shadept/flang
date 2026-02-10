@@ -52,7 +52,7 @@ public class IrFunction
     public List<IrParam> Params { get; } = [];
     public List<BasicBlock> BasicBlocks { get; } = [];
     public bool IsEntryPoint { get; set; }
-
+    public bool UsesReturnSlot { get; set; }
 }
 
 /// <summary>
@@ -84,6 +84,7 @@ public record IrParam
 {
     public string Name { get; }
     public IrType Type { get; }
+    public bool IsByRef { get; init; }
     public IrParam(string name, IrType type)
     {
         Name = Value.SanitizeCIdent(name);

@@ -234,18 +234,20 @@ public static class HmCCodeGenerator
 
     private static void EmitFunctionForwardDecl(StringBuilder sb, IrFunction fn)
     {
-        var retType = IrTypeToCType(fn.ReturnType);
+        var retType = fn.UsesReturnSlot ? "void" : IrTypeToCType(fn.ReturnType);
         var name = MangleFunctionName(fn);
-        var parms = string.Join(", ", fn.Params.Select(p => EmitVarDecl(p.Type, p.Name)));
+        var parms = string.Join(", ", fn.Params.Select(p =>
+            p.IsByRef ? EmitVarDecl(new IrPointer(p.Type), p.Name) : EmitVarDecl(p.Type, p.Name)));
         if (string.IsNullOrEmpty(parms)) parms = "void";
         sb.AppendLine($"{retType} {name}({parms});");
     }
 
     private static void EmitFunction(StringBuilder sb, IrFunction fn, IrModule module)
     {
-        var retType = IrTypeToCType(fn.ReturnType);
+        var retType = fn.UsesReturnSlot ? "void" : IrTypeToCType(fn.ReturnType);
         var name = fn.IsEntryPoint ? "main" : MangleFunctionName(fn);
-        var parms = string.Join(", ", fn.Params.Select(p => EmitVarDecl(p.Type, p.Name)));
+        var parms = string.Join(", ", fn.Params.Select(p =>
+            p.IsByRef ? EmitVarDecl(new IrPointer(p.Type), p.Name) : EmitVarDecl(p.Type, p.Name)));
         if (string.IsNullOrEmpty(parms)) parms = "void";
 
         sb.AppendLine($"{retType} {name}({parms}) {{");
@@ -531,6 +533,21 @@ public static class HmCCodeGenerator
     // =========================================================================
 
     /// <summary>
+    /// Transform an IrFunctionPtr to its ABI form: large value params become pointers,
+    /// large return type becomes void with a hidden __ret pointer param.
+    /// </summary>
+    private static (IrType[] Params, IrType Return) GetAbiFunctionPtr(IrFunctionPtr fp)
+    {
+        var abiParams = new List<IrType>();
+        var usesRetSlot = TypeLayoutService.IsLargeValue(fp.Return);
+        if (usesRetSlot)
+            abiParams.Add(new IrPointer(fp.Return));
+        foreach (var p in fp.Params)
+            abiParams.Add(TypeLayoutService.IsLargeValue(p) ? new IrPointer(p) : p);
+        return ([.. abiParams], usesRetSlot ? TypeLayoutService.IrVoidPrim : fp.Return);
+    }
+
+    /// <summary>
     /// Emit a C field/variable declaration. Handles function pointer syntax:
     /// C requires `ret (*name)(params)` not `ret(*)(params) name`.
     /// </summary>
@@ -538,8 +555,9 @@ public static class HmCCodeGenerator
     {
         if (type is IrFunctionPtr fp)
         {
-            var ret = IrTypeToCType(fp.Return);
-            var parms = string.Join(", ", fp.Params.Select(IrTypeToCType));
+            var (abiParams, abiRet) = GetAbiFunctionPtr(fp);
+            var ret = IrTypeToCType(abiRet);
+            var parms = string.Join(", ", abiParams.Select(IrTypeToCType));
             return $"{ret} (*{name})({parms})";
         }
         return $"{IrTypeToCType(type)} {name}";
@@ -569,15 +587,20 @@ public static class HmCCodeGenerator
                 _ => "int32_t"
             },
             IrPointer ptr when ptr.Pointee is IrFunctionPtr fp2 =>
-                $"{IrTypeToCType(fp2.Return)}(**)({string.Join(", ", fp2.Params.Select(IrTypeToCType))})",
+                EmitFuncPtrType(fp2, "**"),
             IrPointer ptr => $"{IrTypeToCType(ptr.Pointee)}*",
             IrArray arr => $"{IrTypeToCType(arr.Element)}*",
             IrStruct s => s.CName,
             IrEnum e => e.CName,
-            IrFunctionPtr fp =>
-                $"{IrTypeToCType(fp.Return)}(*)({string.Join(", ", fp.Params.Select(IrTypeToCType))})",
+            IrFunctionPtr fp => EmitFuncPtrType(fp, "*"),
             _ => "void"
         };
+    }
+
+    private static string EmitFuncPtrType(IrFunctionPtr fp, string indirection)
+    {
+        var (abiParams, abiRet) = GetAbiFunctionPtr(fp);
+        return $"{IrTypeToCType(abiRet)}({indirection})({string.Join(", ", abiParams.Select(IrTypeToCType))})";
     }
 
     private static string BinaryOpToC(BinaryOp op)
@@ -610,7 +633,8 @@ public static class HmCCodeGenerator
 
     private static string MangleFunctionName(IrFunction fn)
     {
-        return IrNameMangling.MangleFunctionName(fn.Name, [.. fn.Params.Select(p => p.Type)]);
+        var paramList = fn.UsesReturnSlot ? fn.Params.Skip(1) : fn.Params;
+        return IrNameMangling.MangleFunctionName(fn.Name, [.. paramList.Select(p => p.Type)]);
     }
 
     /// <summary>
@@ -621,14 +645,16 @@ public static class HmCCodeGenerator
     {
         if (type is IrFunctionPtr fp)
         {
-            var ret = IrTypeToCType(fp.Return);
-            var parms = string.Join(", ", fp.Params.Select(IrTypeToCType));
+            var (abiParams, abiRet) = GetAbiFunctionPtr(fp);
+            var ret = IrTypeToCType(abiRet);
+            var parms = string.Join(", ", abiParams.Select(IrTypeToCType));
             return $"{ret}(*{name})({parms})";
         }
         if (type is IrPointer { Pointee: IrFunctionPtr fp2 })
         {
-            var ret = IrTypeToCType(fp2.Return);
-            var parms = string.Join(", ", fp2.Params.Select(IrTypeToCType));
+            var (abiParams, abiRet) = GetAbiFunctionPtr(fp2);
+            var ret = IrTypeToCType(abiRet);
+            var parms = string.Join(", ", abiParams.Select(IrTypeToCType));
             return $"{ret}(**{name})({parms})";
         }
         return $"{IrTypeToCType(type)} {name}";

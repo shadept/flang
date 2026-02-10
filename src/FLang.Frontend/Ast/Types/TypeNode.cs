@@ -2,11 +2,8 @@ using FLang.Core;
 
 namespace FLang.Frontend.Ast.Types;
 
-public abstract class TypeNode : AstNode
+public abstract class TypeNode(SourceSpan span) : AstNode(span)
 {
-    protected TypeNode(SourceSpan span) : base(span)
-    {
-    }
 
     public static bool ContainsGenericParam(TypeNode node) => node switch
     {
@@ -55,40 +52,25 @@ public abstract class TypeNode : AstNode
 /// <summary>
 /// Represents a named type like `i32`, `String`, `MyStruct`.
 /// </summary>
-public class NamedTypeNode : TypeNode
+public class NamedTypeNode(SourceSpan span, string name) : TypeNode(span)
 {
-    public NamedTypeNode(SourceSpan span, string name) : base(span)
-    {
-        Name = name;
-    }
-
-    public string Name { get; }
+    public string Name { get; } = name;
 }
 
 /// <summary>
 /// Represents a reference type like `&amp;T`.
 /// </summary>
-public class ReferenceTypeNode : TypeNode
+public class ReferenceTypeNode(SourceSpan span, TypeNode innerType) : TypeNode(span)
 {
-    public ReferenceTypeNode(SourceSpan span, TypeNode innerType) : base(span)
-    {
-        InnerType = innerType;
-    }
-
-    public TypeNode InnerType { get; }
+    public TypeNode InnerType { get; } = innerType;
 }
 
 /// <summary>
 /// Represents a nullable type like `T?` (sugar for `Option[T]`).
 /// </summary>
-public class NullableTypeNode : TypeNode
+public class NullableTypeNode(SourceSpan span, TypeNode innerType) : TypeNode(span)
 {
-    public NullableTypeNode(SourceSpan span, TypeNode innerType) : base(span)
-    {
-        InnerType = innerType;
-    }
-
-    public TypeNode InnerType { get; }
+    public TypeNode InnerType { get; } = innerType;
 }
 
 /// <summary>
@@ -110,69 +92,43 @@ public class GenericTypeNode : TypeNode
 /// <summary>
 /// Represents a fixed-size array type like `[T; N]`.
 /// </summary>
-public class ArrayTypeNode : TypeNode
+public class ArrayTypeNode(SourceSpan span, TypeNode elementType, int length) : TypeNode(span)
 {
-    public ArrayTypeNode(SourceSpan span, TypeNode elementType, int length) : base(span)
-    {
-        ElementType = elementType;
-        Length = length;
-    }
-
-    public TypeNode ElementType { get; }
-    public int Length { get; }
+    public TypeNode ElementType { get; } = elementType;
+    public int Length { get; } = length;
 }
 
 /// <summary>
 /// Represents a slice type like `T[]`.
 /// </summary>
-public class SliceTypeNode : TypeNode
+public class SliceTypeNode(SourceSpan span, TypeNode elementType) : TypeNode(span)
 {
-    public SliceTypeNode(SourceSpan span, TypeNode elementType) : base(span)
-    {
-        ElementType = elementType;
-    }
-
-    public TypeNode ElementType { get; }
+    public TypeNode ElementType { get; } = elementType;
 }
 
 /// <summary>
 /// Represents a generic parameter type like `$T`.
 /// </summary>
-public class GenericParameterTypeNode : TypeNode
+public class GenericParameterTypeNode(SourceSpan span, string name) : TypeNode(span)
 {
-    public GenericParameterTypeNode(SourceSpan span, string name) : base(span)
-    {
-        Name = name;
-    }
-
-    public string Name { get; }
+    public string Name { get; } = name;
 }
 
 /// <summary>
 /// Represents a function type like `fn(T1, T2) R`.
 /// </summary>
-public class FunctionTypeNode : TypeNode
+public class FunctionTypeNode(SourceSpan span, IReadOnlyList<TypeNode> parameterTypes, TypeNode returnType) : TypeNode(span)
 {
-    public FunctionTypeNode(SourceSpan span, IReadOnlyList<TypeNode> parameterTypes, TypeNode returnType) : base(span)
-    {
-        ParameterTypes = parameterTypes;
-        ReturnType = returnType;
-    }
-
-    public IReadOnlyList<TypeNode> ParameterTypes { get; }
-    public TypeNode ReturnType { get; }
+    public IReadOnlyList<TypeNode> ParameterTypes { get; } = parameterTypes;
+    public TypeNode ReturnType { get; } = returnType;
 }
 
 /// <summary>
 /// Represents an anonymous struct type like `{ _0: T1, _1: T2 }`.
 /// Used for desugaring tuple types like `(T1, T2)`.
 /// </summary>
-public class AnonymousStructTypeNode : TypeNode
+public class AnonymousStructTypeNode(SourceSpan span, IReadOnlyList<(string FieldName, TypeNode FieldType)> fields) : TypeNode(span)
 {
-    public AnonymousStructTypeNode(SourceSpan span, IReadOnlyList<(string FieldName, TypeNode FieldType)> fields) : base(span)
-    {
-        Fields = fields;
-    }
 
-    public IReadOnlyList<(string FieldName, TypeNode FieldType)> Fields { get; }
+    public IReadOnlyList<(string FieldName, TypeNode FieldType)> Fields { get; } = fields;
 }

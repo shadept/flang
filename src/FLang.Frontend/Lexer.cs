@@ -6,23 +6,18 @@ namespace FLang.Frontend;
 /// <summary>
 /// Lexical analyzer that tokenizes FLang source code into a stream of tokens.
 /// </summary>
-public class Lexer
+/// <remarks>
+/// Initializes a new instance of the <see cref="Lexer"/> class.
+/// </remarks>
+/// <param name="source">The source code to tokenize.</param>
+/// <param name="fileId">The unique identifier for the source file.</param>
+public class Lexer(Source source, int fileId)
 {
-    private readonly int _fileId;
-    private readonly Source _source;
+    private readonly int _fileId = fileId;
+    private readonly Source _source = source;
     private int _position;
     private int _start;
 
-    /// <summary>
-    /// Initializes a new instance of the <see cref="Lexer"/> class.
-    /// </summary>
-    /// <param name="source">The source code to tokenize.</param>
-    /// <param name="fileId">The unique identifier for the source file.</param>
-    public Lexer(Source source, int fileId)
-    {
-        _source = source;
-        _fileId = fileId;
-    }
 
     /// <summary>
     /// Advances the lexer to the next token in the source stream.
@@ -318,9 +313,7 @@ public class Lexer
     /// <returns>A new <see cref="Token"/> with the specified kind and extracted text.</returns>
     private Token CreateToken(TokenKind kind)
     {
-        var text = _position > _start
-            ? _source.Text.AsSpan().Slice(_start, _position - _start).ToString()
-            : "";
+        var text = _position > _start ? _source.Text.AsSpan()[_start.._position].ToString() : "";
         return new Token(kind, CreateSpan(), text);
     }
 
