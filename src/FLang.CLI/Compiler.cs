@@ -82,7 +82,7 @@ public class Compiler
         }
 
         // 2. HM Type Checking — multi-phase across all modules
-        // BFS insertion order from ModuleCompiler is already correct (prelude → core → user).
+        // BFS insertion order from ModuleCompiler is already correct (prelude -> core -> user).
         // The 2-phase collect-then-resolve approach makes ordering within each phase irrelevant.
         var hmChecker = new HmTypeChecker(compilation);
 
@@ -114,6 +114,12 @@ public class Compiler
         {
             var modulePath = HmTypeChecker.DeriveModulePath(kvp.Key, compilation.IncludePaths, compilation.WorkingDirectory);
             hmChecker.CheckModuleBodies(kvp.Value, modulePath);
+        }
+
+        foreach (var kvp in parsedModules)
+        {
+            var modulePath = HmTypeChecker.DeriveModulePath(kvp.Key, compilation.IncludePaths, compilation.WorkingDirectory);
+            hmChecker.CheckGenericBodies(kvp.Value, modulePath);
         }
 
         // Post-inference validation (unsuffixed literal checks: E2001, E2029, E2102)

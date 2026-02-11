@@ -8,7 +8,7 @@ using Type = FLang.Core.Types.Type;
 namespace FLang.Semantics;
 
 /// <summary>
-/// Implicit widening of integer types (e.g., i8 → i32).
+/// Implicit widening of integer types (e.g., i8 -> i32).
 /// Separate rank hierarchies for signed and unsigned.
 /// </summary>
 public class IntegerWideningCoercionRule : IInferenceCoercionRule
@@ -44,7 +44,7 @@ public class IntegerWideningCoercionRule : IInferenceCoercionRule
 
         var (fromName, toName) = (pFrom.Name, pTo.Name);
 
-        // bool → any integer
+        // bool -> any integer
         if (fromName == "bool" && (_signedRank.ContainsKey(toName) || _unsignedRank.ContainsKey(toName)))
             return to;
 
@@ -59,7 +59,7 @@ public class IntegerWideningCoercionRule : IInferenceCoercionRule
             fromRank <= toRank)
             return to;
 
-        // Cross-signedness: unsigned → signed with strictly higher rank
+        // Cross-signedness: unsigned -> signed with strictly higher rank
         if (_unsignedRank.TryGetValue(fromName, out var uFromRank) &&
             _signedRank.TryGetValue(toName, out var sToRank) &&
             uFromRank < sToRank)
@@ -70,7 +70,7 @@ public class IntegerWideningCoercionRule : IInferenceCoercionRule
 }
 
 /// <summary>
-/// Implicit wrapping: T → Option(T).
+/// Implicit wrapping: T -> Option(T).
 /// </summary>
 public class OptionWrappingCoercionRule : IInferenceCoercionRule
 {
@@ -88,7 +88,7 @@ public class OptionWrappingCoercionRule : IInferenceCoercionRule
 }
 
 /// <summary>
-/// String → Slice[u8] (binary-compatible view cast).
+/// String -> Slice[u8] (binary-compatible view cast).
 /// </summary>
 public class StringToByteSliceCoercionRule : IInferenceCoercionRule
 {
@@ -105,13 +105,13 @@ public class StringToByteSliceCoercionRule : IInferenceCoercionRule
 }
 
 /// <summary>
-/// Array decay: [T; N] → &amp;T, [T; N] → Slice[T], &amp;[T; N] → Slice[T].
+/// Array decay: [T; N] -> &amp;T, [T; N] -> Slice[T], &amp;[T; N] -> Slice[T].
 /// </summary>
 public class ArrayDecayCoercionRule : IInferenceCoercionRule
 {
     public Type? TryApply(Type from, Type to, InferenceEngine engine)
     {
-        // [T; N] → Slice[T]
+        // [T; N] -> Slice[T]
         if (from is ArrayType arr && to is NominalType { Name: WellKnown.Slice } sliceTo &&
             sliceTo.TypeArguments.Count > 0)
         {
@@ -122,7 +122,7 @@ public class ArrayDecayCoercionRule : IInferenceCoercionRule
             }
         }
 
-        // &[T; N] → Slice[T]
+        // &[T; N] -> Slice[T]
         if (from is ReferenceType { InnerType: ArrayType refArr } &&
             to is NominalType { Name: WellKnown.Slice } sliceTo2 &&
             sliceTo2.TypeArguments.Count > 0)
@@ -134,7 +134,7 @@ public class ArrayDecayCoercionRule : IInferenceCoercionRule
             }
         }
 
-        // [T; N] → &T
+        // [T; N] -> &T
         if (from is ArrayType arrVal && to is ReferenceType refTarget)
         {
             if (engine.TryUnify(arrVal.ElementType, refTarget.InnerType) != null)
@@ -144,7 +144,7 @@ public class ArrayDecayCoercionRule : IInferenceCoercionRule
             }
         }
 
-        // &[T; N] → &T
+        // &[T; N] -> &T
         if (from is ReferenceType { InnerType: ArrayType arrInRef } &&
             to is ReferenceType refTarget2)
         {
@@ -160,7 +160,7 @@ public class ArrayDecayCoercionRule : IInferenceCoercionRule
 }
 
 /// <summary>
-/// Anonymous struct → named struct (structural compatibility).
+/// Anonymous struct -> named struct (structural compatibility).
 /// When an __anon_* struct has the same fields as a named struct, coerce to the named type.
 /// Uses a type lookup callback to properly substitute generic type arguments.
 /// </summary>
@@ -221,7 +221,7 @@ public class AnonymousStructCoercionRule : IInferenceCoercionRule
             return instance.FieldsOrVariants;
         }
 
-        // Build substitution map: template TypeVar Id → instance type arg
+        // Build substitution map: template TypeVar Id -> instance type arg
         var substMap = new Dictionary<int, Type>();
         for (int i = 0; i < template.TypeArguments.Count; i++)
         {
@@ -252,7 +252,7 @@ public class AnonymousStructCoercionRule : IInferenceCoercionRule
 }
 
 /// <summary>
-/// Slice[T] → &amp;T (extract pointer from slice).
+/// Slice[T] -> &amp;T (extract pointer from slice).
 /// </summary>
 public class SliceToReferenceCoercionRule : IInferenceCoercionRule
 {

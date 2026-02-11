@@ -220,29 +220,6 @@ public class PrimitiveType : TypeBase
     {
         return other is PrimitiveType pt && pt.Name == Name;
     }
-
-    /// <summary>
-    /// Creates a skolem (rigid generic parameter) for use in generic function signatures.
-    /// These cannot be unified with concrete types.
-    /// </summary>
-    public static PrimitiveType CreateSkolem(string name)
-    {
-        // Skolems have $ prefix and throw on Size/Alignment access
-        return new SkolemType(name);
-    }
-
-    private class SkolemType : PrimitiveType
-    {
-        public SkolemType(string name) : base($"${name}", 0, 0)
-        {
-        }
-
-        public override int Size =>
-            throw new InvalidOperationException($"Cannot get size of skolem type {Name}");
-
-        public override int Alignment =>
-            throw new InvalidOperationException($"Cannot get alignment of skolem type {Name}");
-    }
 }
 
 /// <summary>

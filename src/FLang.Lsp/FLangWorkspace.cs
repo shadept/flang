@@ -156,6 +156,20 @@ public class FLangWorkspace
                 FLangLanguageServer.Log($"  [validatePost] {sw.ElapsedMilliseconds - lap}ms");
 
                 allDiagnostics.AddRange(hmChecker.Diagnostics);
+
+                // LSP-only: type-check generic function bodies with placeholder types
+                // for hover/go-to-definition support. Run after all normal phases complete.
+                lap = sw.ElapsedMilliseconds;
+                var diagCountBefore = hmChecker.Diagnostics.Count;
+                foreach (var kvp in parsedModules)
+                {
+                    var modulePath = HmTypeChecker.DeriveModulePath(kvp.Key, compilation.IncludePaths, compilation.WorkingDirectory);
+                    hmChecker.CheckGenericBodies(kvp.Value, modulePath);
+                }
+                // Collect diagnostics from generic body checking
+                for (var i = diagCountBefore; i < hmChecker.Diagnostics.Count; i++)
+                    allDiagnostics.Add(hmChecker.Diagnostics[i]);
+                FLangLanguageServer.Log($"  [checkGenericBodies] {sw.ElapsedMilliseconds - lap}ms");
             }
 
             var result = new FileAnalysisResult(allDiagnostics, compilation, parsedModules, hmChecker);

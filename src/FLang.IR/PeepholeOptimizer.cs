@@ -56,28 +56,28 @@ public static class PeepholeOptimizer
             switch (inst)
             {
                 case StorePointerInstruction sp:
-                {
-                    var ptr = Resolve(substitutions, sp.Pointer);
-                    var val = Resolve(substitutions, sp.Value);
-                    // Conservative: any store might alias other tracked pointers
-                    // (e.g., storing to a GEP of an alloca invalidates the alloca's entry).
-                    // Clear all, then record this store.
-                    pointerStore.Clear();
-                    pointerStore[ptr] = val;
-                    break;
-                }
+                    {
+                        var ptr = Resolve(substitutions, sp.Pointer);
+                        var val = Resolve(substitutions, sp.Value);
+                        // Conservative: any store might alias other tracked pointers
+                        // (e.g., storing to a GEP of an alloca invalidates the alloca's entry).
+                        // Clear all, then record this store.
+                        pointerStore.Clear();
+                        pointerStore[ptr] = val;
+                        break;
+                    }
 
                 case LoadInstruction load:
-                {
-                    var ptr = Resolve(substitutions, load.Pointer);
-                    if (pointerStore.TryGetValue(ptr, out var stored)
-                        && TypesMatch(stored.IrType, load.Result.IrType))
                     {
-                        substitutions[load.Result] = stored;
-                        dead.Add(inst);
+                        var ptr = Resolve(substitutions, load.Pointer);
+                        if (pointerStore.TryGetValue(ptr, out var stored)
+                            && TypesMatch(stored.IrType, load.Result.IrType))
+                        {
+                            substitutions[load.Result] = stored;
+                            dead.Add(inst);
+                        }
+                        break;
                     }
-                    break;
-                }
 
                 case CallInstruction:
                 case IndirectCallInstruction:
@@ -139,7 +139,7 @@ public static class PeepholeOptimizer
             var consumer = instructions[j];
             if (dead.Contains(consumer)) continue;
 
-            // Pattern 1: Load + StorePointer → Copy
+            // Pattern 1: Load + StorePointer -> Copy
             if (producer is LoadInstruction load && consumer is StorePointerInstruction store)
             {
                 var resolvedStoreVal = Resolve(substitutions, store.Value);
@@ -159,7 +159,7 @@ public static class PeepholeOptimizer
                 }
             }
 
-            // Pattern 2: GEP + Load → CopyFromOffset
+            // Pattern 2: GEP + Load -> CopyFromOffset
             if (producer is GetElementPtrInstruction gep1 && consumer is LoadInstruction load2)
             {
                 var resolvedLoadPtr = Resolve(substitutions, load2.Pointer);
@@ -178,7 +178,7 @@ public static class PeepholeOptimizer
                 }
             }
 
-            // Pattern 3: GEP + StorePointer → CopyToOffset
+            // Pattern 3: GEP + StorePointer -> CopyToOffset
             if (producer is GetElementPtrInstruction gep2 && consumer is StorePointerInstruction store2)
             {
                 var resolvedStorePtr = Resolve(substitutions, store2.Pointer);
@@ -309,15 +309,15 @@ public static class PeepholeOptimizer
                 return new UnaryInstruction(u.Span, u.Operation, R(u.Operand), u.Result);
 
             case CallInstruction c:
-            {
-                var newCall = new CallInstruction(c.Span, c.FunctionName, RList(c.Arguments), c.Result)
                 {
-                    CalleeIrParamTypes = c.CalleeIrParamTypes,
-                    IsForeignCall = c.IsForeignCall,
-                    IsIndirectCall = c.IsIndirectCall
-                };
-                return newCall;
-            }
+                    var newCall = new CallInstruction(c.Span, c.FunctionName, RList(c.Arguments), c.Result)
+                    {
+                        CalleeIrParamTypes = c.CalleeIrParamTypes,
+                        IsForeignCall = c.IsForeignCall,
+                        IsIndirectCall = c.IsIndirectCall
+                    };
+                    return newCall;
+                }
 
             case IndirectCallInstruction ic:
                 return new IndirectCallInstruction(ic.Span, R(ic.FunctionPointer), RList(ic.Arguments), ic.Result);
@@ -438,7 +438,7 @@ public static class PeepholeOptimizer
                 yield return cto.DstPtr;
                 yield return cto.ByteOffset;
                 break;
-            // AllocaInstruction, AddressOfInstruction, JumpInstruction: no Value operands
+                // AllocaInstruction, AddressOfInstruction, JumpInstruction: no Value operands
         }
     }
 }

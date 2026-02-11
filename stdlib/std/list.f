@@ -11,8 +11,10 @@ pub struct List(T) {
     allocator: &Allocator?
 }
 
+const DEFAULT_CAPACITY: usize = 16
+
 pub fn list_with_capacity(capacity: usize, allocator: &Allocator?) List($T) {
-    const bytes: usize = capacity * size_of(T)
+    const bytes = capacity * size_of(T)
     const buf = allocator.alloc(bytes, align_of(T))
         .expect("list_with_capacity: allocation failed")
 
@@ -22,6 +24,18 @@ pub fn list_with_capacity(capacity: usize, allocator: &Allocator?) List($T) {
         cap = capacity,
         allocator = allocator,
     }
+}
+
+// Free the backing storage. The list should not be used after this.
+pub fn deinit(self: &List($T)) {
+    if (self.cap > 0) {
+        let old_ptr: &u8? = self.ptr as &u8
+        self.allocator.or_global().free(self.as_slice())
+    }
+
+    self.ptr = 0usize as &T
+    self.len = 0
+    self.cap = 0
 }
 
 fn as_slice(self: List($T)) T[] {
@@ -34,8 +48,8 @@ pub fn reserve(self: &List($T), capacity: usize) {
     }
 
     // Calculate new capacity: start with 4, then double
-    const new_cap: usize = if self.cap == 0 { 4 } else { self.cap * 2 }
-    if (new_cap < capacity) {
+    let new_cap = if self.cap == 0 { DEFAULT_CAPACITY } else { self.cap * 2 }
+    if new_cap < capacity {
         new_cap = capacity
     }
 
@@ -111,18 +125,6 @@ pub fn set(list: &List($T), index: usize, value: T) {
 // Remove all elements from the list without freeing memory.
 pub fn clear(list: &List($T)) {
     list.len = 0
-}
-
-// Free the backing storage. The list should not be used after this.
-pub fn deinit(self: &List($T)) {
-    if (self.cap > 0) {
-        let old_ptr: &u8? = self.ptr as &u8
-        self.allocator.or_global().free(self.as_slice())
-    }
-
-    self.ptr = 0usize as &T
-    self.len = 0
-    self.cap = 0
 }
 
 // =============================================================================

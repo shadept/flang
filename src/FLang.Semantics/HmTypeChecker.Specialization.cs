@@ -95,7 +95,7 @@ public partial class HmTypeChecker
         for (int i = 0; i < originalFn.Parameters.Count; i++)
             resolvedParamTypes[i] = ResolveTypeNode(originalFn.Parameters[i].Type);
 
-        // Unify resolved params with concrete params → binds generic TypeVars to concrete types
+        // Unify resolved params with concrete params -> binds generic TypeVars to concrete types
         for (int i = 0; i < resolvedParamTypes.Length && i < concreteParamTypes.Length; i++)
             _engine.Unify(resolvedParamTypes[i], concreteParamTypes[i], callSpan);
 

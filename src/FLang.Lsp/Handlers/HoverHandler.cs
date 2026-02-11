@@ -1,12 +1,20 @@
 using FLang.Core;
+using FLang.Core.Types;
 using FLang.Frontend.Ast;
 using FLang.Frontend.Ast.Declarations;
 using FLang.Frontend.Ast.Expressions;
 using FLang.Frontend.Ast.Types;
+using FLang.Semantics;
 using Microsoft.Extensions.Logging;
 using OmniSharp.Extensions.LanguageServer.Protocol.Client.Capabilities;
 using OmniSharp.Extensions.LanguageServer.Protocol.Document;
 using OmniSharp.Extensions.LanguageServer.Protocol.Models;
+using ArrayType = FLang.Core.Types.ArrayType;
+using FunctionType = FLang.Core.Types.FunctionType;
+using PrimitiveType = FLang.Core.Types.PrimitiveType;
+using ReferenceType = FLang.Core.Types.ReferenceType;
+using Type = FLang.Core.Types.Type;
+using TypeVar = FLang.Core.Types.TypeVar;
 
 namespace FLang.Lsp.Handlers;
 
@@ -52,14 +60,14 @@ public class HoverHandler : HoverHandlerBase
         var source = analysis.Compilation.Sources[fileId.Value];
         var position = PositionUtil.ToSourcePosition(request.Position, source);
         var node = AstNodeFinder.FindDeepestNodeAt(module, fileId.Value, position);
-        FLangLanguageServer.Log($"  [findNode] {sw.ElapsedMilliseconds - lap}ms → {node?.GetType().Name ?? "null"}");
+        FLangLanguageServer.Log($"  [findNode] {sw.ElapsedMilliseconds - lap}ms -> {node?.GetType().Name ?? "null"}");
 
         if (node == null)
             return Task.FromResult<Hover?>(null);
 
         lap = sw.ElapsedMilliseconds;
         var hoverText = GetHoverText(node, analysis);
-        FLangLanguageServer.Log($"  [getHoverText] {sw.ElapsedMilliseconds - lap}ms → {(hoverText != null ? $"\"{hoverText}\"" : "null")}");
+        FLangLanguageServer.Log($"  [getHoverText] {sw.ElapsedMilliseconds - lap}ms -> {(hoverText != null ? $"\"{hoverText}\"" : "null")}");
 
         if (hoverText == null)
             return Task.FromResult<Hover?>(null);
@@ -81,6 +89,7 @@ public class HoverHandler : HoverHandlerBase
     private static string? GetHoverText(AstNode node, FileAnalysisResult analysis)
     {
         if (analysis.TypeChecker == null) return null;
+        var tc = analysis.TypeChecker;
 
         switch (node)
         {
@@ -88,17 +97,17 @@ public class HoverHandler : HoverHandlerBase
                 {
                     // Show function signature if it resolves to a function
                     if (id.ResolvedFunctionTarget is { } fn)
-                        return FormatFunctionSignature(fn);
+                        return FormatFunctionSignature(fn, tc);
 
                     // Show variable type
-                    if (analysis.TypeChecker.InferredTypes.TryGetValue(id, out var type))
+                    if (tc.InferredTypes.TryGetValue(id, out var type))
                     {
-                        var resolved = analysis.TypeChecker.Engine.Resolve(type);
+                        var display = FormatHmType(tc.Engine.Resolve(type), tc);
                         if (id.ResolvedVariableDeclaration != null)
-                            return $"{(id.ResolvedVariableDeclaration.IsConst ? "const" : "let")} {id.Name}: {resolved}";
+                            return $"{(id.ResolvedVariableDeclaration.IsConst ? "const" : "let")} {id.Name}: {display}";
                         if (id.ResolvedParameterDeclaration != null)
-                            return $"{id.Name}: {resolved}";
-                        return $"{id.Name}: {resolved}";
+                            return $"{id.Name}: {display}";
+                        return $"{id.Name}: {display}";
                     }
                     break;
                 }
@@ -106,44 +115,69 @@ public class HoverHandler : HoverHandlerBase
             case CallExpressionNode call:
                 {
                     if (call.ResolvedTarget is { } fn)
-                        return FormatFunctionSignature(fn);
-                    if (analysis.TypeChecker.InferredTypes.TryGetValue(call, out var type))
-                        return analysis.TypeChecker.Engine.Resolve(type).ToString();
+                        return FormatFunctionSignature(fn, tc);
+                    if (tc.InferredTypes.TryGetValue(call, out var type))
+                        return FormatHmType(tc.Engine.Resolve(type), tc);
                     break;
                 }
 
             case VariableDeclarationNode varDecl:
                 {
-                    if (analysis.TypeChecker.InferredTypes.TryGetValue(varDecl, out var type))
+                    if (tc.InferredTypes.TryGetValue(varDecl, out var type))
                     {
-                        var resolved = analysis.TypeChecker.Engine.Resolve(type);
-                        return $"{(varDecl.IsConst ? "const" : "let")} {varDecl.Name}: {resolved}";
+                        var display = FormatHmType(tc.Engine.Resolve(type), tc);
+                        return $"{(varDecl.IsConst ? "const" : "let")} {varDecl.Name}: {display}";
                     }
                     break;
                 }
 
             case FunctionDeclarationNode fn:
-                return FormatFunctionSignature(fn);
+                return FormatFunctionSignature(fn, tc);
 
             case FunctionParameterNode param:
                 {
-                    if (analysis.TypeChecker.InferredTypes.TryGetValue(param, out var type))
-                        return $"{param.Name}: {analysis.TypeChecker.Engine.Resolve(type)}";
+                    if (tc.InferredTypes.TryGetValue(param, out var type))
+                        return $"{param.Name}: {FormatHmType(tc.Engine.Resolve(type), tc)}";
                     break;
                 }
 
             case MemberAccessExpressionNode ma:
                 {
-                    if (analysis.TypeChecker.InferredTypes.TryGetValue(ma, out var type))
-                        return $".{ma.FieldName}: {analysis.TypeChecker.Engine.Resolve(type)}";
+                    if (tc.InferredTypes.TryGetValue(ma, out var type))
+                        return $".{ma.FieldName}: {FormatHmType(tc.Engine.Resolve(type), tc)}";
+                    break;
+                }
+
+            case VariablePatternNode varPat:
+                {
+                    if (tc.InferredTypes.TryGetValue(varPat, out var type))
+                        return $"{varPat.Name}: {FormatHmType(tc.Engine.Resolve(type), tc)}";
+                    break;
+                }
+
+            case EnumVariantPatternNode variantPat:
+                {
+                    if (tc.InferredTypes.TryGetValue(variantPat, out var type))
+                        return $".{variantPat.VariantName}: {FormatHmType(tc.Engine.Resolve(type), tc)}";
                     break;
                 }
 
             default:
                 {
+                    // Type annotations: resolve semantically when possible
+                    if (node is NamedTypeNode named)
+                    {
+                        // If the name isn't a primitive or nominal type, it's a generic parameter
+                        if (!IsPrimitiveTypeName(named.Name)
+                            && !tc.NominalTypes.Values.Any(n => n.ShortName == named.Name))
+                            return $"${named.Name}";
+                    }
+                    if (node is TypeNode typeNode)
+                        return FormatTypeNode(typeNode);
+
                     // Generic expression type display
-                    if (node is ExpressionNode && analysis.TypeChecker.InferredTypes.TryGetValue(node, out var type))
-                        return analysis.TypeChecker.Engine.Resolve(type).ToString();
+                    if (node is ExpressionNode && tc.InferredTypes.TryGetValue(node, out var type))
+                        return FormatHmType(tc.Engine.Resolve(type), tc);
                     break;
                 }
         }
@@ -151,15 +185,55 @@ public class HoverHandler : HoverHandlerBase
         return null;
     }
 
-    private static string FormatFunctionSignature(FunctionDeclarationNode fn)
+    private static string FormatFunctionSignature(FunctionDeclarationNode fn, HmTypeChecker tc)
     {
         var pars = string.Join(", ", fn.Parameters.Select(p =>
         {
-            var typeStr = p.ResolvedType?.ToString() ?? FormatTypeNode(p.Type);
-            return $"{p.Name}: {typeStr}";
+            if (tc.InferredTypes.TryGetValue(p, out var inferredType))
+                return $"{p.Name}: {FormatHmType(tc.Engine.Resolve(inferredType), tc)}";
+            return $"{p.Name}: {FormatTypeNode(p.Type)}";
         }));
-        var ret = fn.ResolvedReturnType?.ToString() ?? (fn.ReturnType != null ? FormatTypeNode(fn.ReturnType) : "void");
+
+        string ret = "void";
+        if (tc.InferredTypes.TryGetValue(fn, out var fnInferred))
+        {
+            var resolved = tc.Engine.Resolve(fnInferred);
+            if (resolved is FunctionType fnType)
+                ret = FormatHmType(fnType.ReturnType, tc);
+            else
+                ret = FormatHmType(resolved, tc);
+        }
+        else if (fn.ReturnType != null)
+        {
+            ret = FormatTypeNode(fn.ReturnType);
+        }
+
         return $"fn {fn.Name}({pars}) {ret}";
+    }
+
+    private static bool IsPrimitiveTypeName(string name) => name is
+        "i8" or "i16" or "i32" or "i64" or "isize" or
+        "u8" or "u16" or "u32" or "u64" or "usize" or
+        "f32" or "f64" or "bool" or "char" or "void" or "never";
+
+    /// <summary>
+    /// Format an HM type for display. Placeholder NominalTypes from generic body checking
+    /// display as "$T", "$U" etc. naturally via ShortName.
+    /// </summary>
+    private static string FormatHmType(Type type, HmTypeChecker tc)
+    {
+        var resolved = tc.Engine.Resolve(type);
+        return resolved switch
+        {
+            TypeVar tv => $"?{tv.Id}",
+            PrimitiveType p => p.Name,
+            ReferenceType r => $"&{FormatHmType(r.InnerType, tc)}",
+            ArrayType a => $"[{FormatHmType(a.ElementType, tc)}; {a.Length}]",
+            FunctionType f => $"fn({string.Join(", ", f.ParameterTypes.Select(p => FormatHmType(p, tc)))}) {FormatHmType(f.ReturnType, tc)}",
+            NominalType n when n.TypeArguments.Count == 0 => n.ShortName,
+            NominalType n => $"{n.ShortName}({string.Join(", ", n.TypeArguments.Select(ta => FormatHmType(ta, tc)))})",
+            _ => resolved.ToString()
+        };
     }
 
     private static string FormatTypeNode(TypeNode type) => type switch
@@ -194,8 +268,7 @@ public class HoverHandler : HoverHandlerBase
     {
         return new HoverRegistrationOptions
         {
-            DocumentSelector = new TextDocumentSelector(
-                new TextDocumentFilter { Language = "flang" })
+            DocumentSelector = TextDocumentSelector.ForLanguage("flang")
         };
     }
 }

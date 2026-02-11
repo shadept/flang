@@ -195,7 +195,7 @@ public partial class HmTypeChecker
         var left = InferExpression(bin.Left);
         var right = InferExpression(bin.Right);
 
-        // Logical operators are always bool → bool → bool
+        // Logical operators are always bool -> bool -> bool
         if (bin.Operator is BinaryOperatorKind.And or BinaryOperatorKind.Or)
         {
             _engine.Unify(left, WellKnown.Bool, bin.Left.Span);
@@ -226,7 +226,7 @@ public partial class HmTypeChecker
         var resolvedLeft = _engine.Resolve(left);
         var resolvedRight = _engine.Resolve(right);
 
-        // Pointer arithmetic: ref + int → ref, int + ref → ref, ref - int → ref
+        // Pointer arithmetic: ref + int -> ref, int + ref -> ref, ref - int -> ref
         if (op is BinaryOperatorKind.Add or BinaryOperatorKind.Subtract)
         {
             if (resolvedLeft is ReferenceType)
@@ -523,7 +523,7 @@ public partial class HmTypeChecker
         // Look up function candidates FIRST — regular functions take priority over variant constructors.
         // Variant constructors (Ok, Err, etc.) only exist in _scopes, not _functions.
         // Regular functions exist in both. If we tried variant construction first, any function
-        // returning an enum type (e.g., open_file → Result) would be misidentified as a variant.
+        // returning an enum type (e.g., open_file -> Result) would be misidentified as a variant.
         var candidates = LookupFunctions(lookupName);
         if (candidates != null && candidates.Count > 0)
         {
@@ -536,9 +536,9 @@ public partial class HmTypeChecker
                 var resolvedReceiver = _engine.Resolve(fullArgTypes[0]);
                 var adapted = (Type[])fullArgTypes.Clone();
                 if (resolvedReceiver is ReferenceType rt)
-                    adapted[0] = rt.InnerType; // &T → T
+                    adapted[0] = rt.InnerType; // &T -> T
                 else
-                    adapted[0] = new ReferenceType(resolvedReceiver); // T → &T
+                    adapted[0] = new ReferenceType(resolvedReceiver); // T -> &T
                 result = ResolveOverload(candidates, adapted, call.Span);
             }
 
@@ -547,7 +547,9 @@ public partial class HmTypeChecker
                 var displayName = call.MethodName ?? call.FunctionName;
                 ReportError($"No matching overload for `{displayName}` with {fullArgTypes.Length} arguments",
                     call.Span, "E2011");
-                return _engine.FreshVar();
+                return _isCheckingGenericBody
+                    ? GuessReturnTypeFromCandidates(candidates)
+                    : _engine.FreshVar();
             }
 
             var (_, fnType, node) = result.Value;
@@ -676,7 +678,14 @@ public partial class HmTypeChecker
             }
         }
 
-        ReportError($"Unresolved function `{call.FunctionName}`", call.Span, "E2004");
+        var fnName = call.MethodName ?? call.FunctionName;
+        ReportError($"Unresolved function `{fnName}`", call.Span, "E2004");
+        if (_isCheckingGenericBody)
+        {
+            var fallbackCandidates = LookupFunctions(fnName);
+            if (fallbackCandidates != null)
+                return GuessReturnTypeFromCandidates(fallbackCandidates);
+        }
         return _engine.FreshVar();
     }
 
@@ -815,7 +824,7 @@ public partial class HmTypeChecker
     {
         var resolved = _engine.Resolve(scrutineeType);
 
-        // Auto-dereference through references (e.g., &List → List)
+        // Auto-dereference through references (e.g., &List -> List)
         while (resolved is ReferenceType refType)
             resolved = _engine.Resolve(refType.InnerType);
 
@@ -887,7 +896,7 @@ public partial class HmTypeChecker
 
     private PrimitiveType InferAssignment(AssignmentExpressionNode assign)
     {
-        // Indexed assignment: arr[i] = val → op_set_index(&arr, i, val)
+        // Indexed assignment: arr[i] = val -> op_set_index(&arr, i, val)
         if (assign.Target is IndexExpressionNode idx)
             return InferIndexedAssignment(assign, idx);
 
@@ -1099,6 +1108,36 @@ public partial class HmTypeChecker
             return nominal;
         }
 
+        // Instantiate fresh TypeVars for the struct's generic type parameters.
+        // This prevents field unification from contaminating the template's
+        // shared TypeVars (which would corrupt all subsequent uses of the struct).
+        if (nominal.TypeArguments.Count > 0)
+        {
+            var subst = new Dictionary<int, Type>();
+            var freshArgs = new Type[nominal.TypeArguments.Count];
+            for (int i = 0; i < nominal.TypeArguments.Count; i++)
+            {
+                var ta = _engine.Resolve(nominal.TypeArguments[i]);
+                if (ta is TypeVar tv)
+                {
+                    var fresh = _engine.FreshVar();
+                    freshArgs[i] = fresh;
+                    subst[tv.Id] = fresh;
+                }
+                else
+                {
+                    freshArgs[i] = ta;
+                }
+            }
+            if (subst.Count > 0)
+            {
+                var freshFields = nominal.FieldsOrVariants
+                    .Select(f => (f.Name, SubstituteTypeVars(f.Type, subst)))
+                    .ToArray();
+                nominal = new NominalType(nominal.Name, nominal.Kind, freshArgs, freshFields);
+            }
+        }
+
         // Check each field
         foreach (var (fieldName, valueExpr) in structCon.Fields)
         {
@@ -1204,7 +1243,7 @@ public partial class HmTypeChecker
         {
             if (isRangeIndex)
             {
-                // Range indexing: array[range] → Slice[T]
+                // Range indexing: array[range] -> Slice[T]
                 // Unify range element type with usize
                 if (resolvedIndex is NominalType rangeNom && rangeNom.TypeArguments.Count > 0)
                     _engine.Unify(rangeNom.TypeArguments[0], WellKnown.USize, idx.Index.Span);
@@ -1221,7 +1260,7 @@ public partial class HmTypeChecker
         {
             if (isRangeIndex)
             {
-                // Range indexing: slice[range] → Slice[T]
+                // Range indexing: slice[range] -> Slice[T]
                 // Unify range element type with usize
                 if (resolvedIndex is NominalType rangeNom2 && rangeNom2.TypeArguments.Count > 0)
                     _engine.Unify(rangeNom2.TypeArguments[0], WellKnown.USize, idx.Index.Span);
@@ -1279,29 +1318,29 @@ public partial class HmTypeChecker
         // Same type is always valid
         if (from.Equals(to)) return true;
 
-        // Numeric → numeric is valid (including bool and char)
+        // Numeric -> numeric is valid (including bool and char)
         if (from is PrimitiveType pFrom && to is PrimitiveType pTo)
         {
             return IsNumericPrimitive(pFrom) && IsNumericPrimitive(pTo);
         }
 
-        // Reference → reference is valid (reinterpret cast)
+        // Reference -> reference is valid (reinterpret cast)
         if (from is ReferenceType && to is ReferenceType) return true;
 
-        // Reference → usize (pointer to int)
+        // Reference -> usize (pointer to int)
         if (from is ReferenceType && to is PrimitiveType { Name: "usize" or "isize" }) return true;
 
-        // usize → reference (int to pointer)
+        // usize -> reference (int to pointer)
         if (from is PrimitiveType { Name: "usize" or "isize" } && to is ReferenceType) return true;
 
-        // Nominal → nominal casts are allowed (reinterpret/binary-compatible casts)
-        // This covers String ↔ Slice[u8], array → slice, etc.
+        // Nominal -> nominal casts are allowed (reinterpret/binary-compatible casts)
+        // This covers String ↔ Slice[u8], array -> slice, etc.
         if (from is NominalType && to is NominalType) return true;
 
-        // Array → nominal (array → slice cast)
+        // Array -> nominal (array -> slice cast)
         if (from is ArrayType && to is NominalType) return true;
 
-        // Enum → primitive (tag extraction) or primitive → enum
+        // Enum -> primitive (tag extraction) or primitive -> enum
         if (from is NominalType { Kind: NominalKind.Enum } && to is PrimitiveType) return true;
         if (from is PrimitiveType && to is NominalType { Kind: NominalKind.Enum }) return true;
 
@@ -1448,7 +1487,7 @@ public partial class HmTypeChecker
             var rightType = InferExpression(coal.Right);
             var resolvedRight = _engine.Resolve(rightType);
 
-            // Option[T] ?? Option[T] → Option[T]
+            // Option[T] ?? Option[T] -> Option[T]
             if (resolvedRight is NominalType { Name: WellKnown.Option } rightOpt
                 && rightOpt.TypeArguments.Count > 0)
             {
@@ -1456,7 +1495,7 @@ public partial class HmTypeChecker
                 return resolved; // return Option[T]
             }
 
-            // Option[T] ?? T → T
+            // Option[T] ?? T -> T
             _engine.Unify(rightType, innerType, coal.Right.Span);
             return innerType;
         }

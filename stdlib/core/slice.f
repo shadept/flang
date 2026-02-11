@@ -13,7 +13,7 @@ pub fn slice_from_raw_parts(ptr: &$T, len: usize) T[] {
     return .{ ptr, len }
 }
 
-pub fn get(s: Slice($T), idx: usize) u8? {
+pub fn get(s: Slice($T), idx: usize) T? {
     if (idx >= s.len) {
         return null
     }

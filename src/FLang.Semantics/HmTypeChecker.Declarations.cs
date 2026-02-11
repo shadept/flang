@@ -328,6 +328,7 @@ public partial class HmTypeChecker
 
     private void CheckFunctionBody(FunctionDeclarationNode fn)
     {
+        // Outer scope: function parameters
         PushScope();
 
         // Specialize the function's own signature to get concrete param/return types
@@ -377,6 +378,140 @@ public partial class HmTypeChecker
 
         _functionStack.Pop();
         PopScope();
+    }
+
+    /// <summary>
+    /// Type-check generic function bodies using placeholder nominal types for generic parameters.
+    /// Must be called AFTER all normal type checking phases are complete. Catches errors like
+    /// undefined variables, missing parameters, etc. inside generic function definitions.
+    /// </summary>
+    public void CheckGenericBodies(ModuleNode module, string modulePath)
+    {
+        _currentModulePath = modulePath;
+        foreach (var fn in module.Functions)
+        {
+            if (!fn.IsGeneric) continue;
+            if (fn.Modifiers.HasFlag(FunctionModifiers.Foreign)) continue;
+            CheckGenericFunctionBody(fn);
+        }
+    }
+
+    private void CheckGenericFunctionBody(FunctionDeclarationNode fn)
+    {
+        PushScope();
+
+        // Create placeholder NominalTypes for each generic parameter and bind in scope.
+        // Using concrete (empty struct) types avoids TypeVar cyclic-type issues.
+        var genericNames = fn.GetGenericParamNames();
+        var placeholderNames = new HashSet<string>();
+        foreach (var name in genericNames)
+        {
+            var placeholder = new NominalType($"${name}", NominalKind.Struct, [], []);
+            _scopes.Bind(name, new PolymorphicType(placeholder));
+            placeholderNames.Add($"${name}");
+        }
+
+        var paramTypes = new Type[fn.Parameters.Count];
+        for (var i = 0; i < fn.Parameters.Count; i++)
+            paramTypes[i] = ResolveTypeNode(fn.Parameters[i].Type);
+
+        var returnType = fn.ReturnType != null ? ResolveTypeNode(fn.ReturnType) : WellKnown.Void;
+        var fnType = new FunctionType(paramTypes, returnType);
+
+        // Save compiler state so generic body checking doesn't corrupt it.
+        // CheckStatement calls Record/specialize which would pollute the lowering pass.
+        var savedTypes = new Dictionary<AstNode, Type>(_inferredTypes);
+        var savedOperators = new Dictionary<AstNode, ResolvedOperator>(_resolvedOperators);
+        var savedSpecCount = _specializations.Count;
+        var savedEmittedSpecs = new Dictionary<string, FunctionDeclarationNode>(_emittedSpecs);
+
+        Record(fn, fnType);
+        _functionStack.Push(new FunctionContext(fn, returnType));
+
+        for (var i = 0; i < fn.Parameters.Count; i++)
+        {
+            var param = fn.Parameters[i];
+            _scopes.Bind(param.Name, paramTypes[i], param);
+            Record(param, paramTypes[i]);
+        }
+
+        // Snapshot diagnostic counts, check body, then filter out false positives
+        var diagCountBefore = _diagnostics.Count;
+        var engineDiagCountBefore = _engine.DiagnosticCount;
+
+        _isCheckingGenericBody = true;
+        foreach (var stmt in fn.Body)
+            CheckStatement(stmt);
+        _isCheckingGenericBody = false;
+
+        _functionStack.Pop();
+        PopScope();
+
+        // Restore compiler state — placeholder types must not leak to lowering.
+        // For _inferredTypes, restore pre-existing entries but keep new ones (for LSP hover).
+        foreach (var kvp in savedTypes)
+            _inferredTypes[kvp.Key] = kvp.Value;
+
+        // Revert specializations, emitted specs, and resolved operators
+        if (_specializations.Count > savedSpecCount)
+            _specializations.RemoveRange(savedSpecCount, _specializations.Count - savedSpecCount);
+        _emittedSpecs.Clear();
+        foreach (var kvp in savedEmittedSpecs)
+            _emittedSpecs[kvp.Key] = kvp.Value;
+        foreach (var kvp in savedOperators)
+            _resolvedOperators[kvp.Key] = kvp.Value;
+
+        // Filter diagnostics: remove errors that involve placeholder types or
+        // missing functions (overload resolution requires concrete types).
+        FilterGenericBodyDiagnostics(diagCountBefore, placeholderNames);
+        FilterGenericBodyEngineDiagnostics(engineDiagCountBefore, placeholderNames);
+    }
+
+    /// <summary>
+    /// Remove diagnostics from generic body checking that are false positives:
+    /// - Errors mentioning placeholder type names ($T, $E, etc.)
+    /// - Missing function/overload errors since monomorphization resolves these with concrete types
+    /// - Operator/const errors that depend on concrete type knowledge
+    /// </summary>
+    private void FilterGenericBodyDiagnostics(int fromIndex, HashSet<string> placeholderNames)
+    {
+        // Error codes that depend on concrete type resolution
+        HashSet<string> suppressedCodes =
+            ["E2003", "E2004", "E2006", "E2011", "E2014", "E2017", "E2021", "E2039", "E2049"];
+
+        for (var i = _diagnostics.Count - 1; i >= fromIndex; i--)
+        {
+            var diag = _diagnostics[i];
+            if (diag.Severity != DiagnosticSeverity.Error) continue;
+
+            bool suppress = suppressedCodes.Contains(diag.Code)
+                || placeholderNames.Any(p => diag.Message.Contains(p));
+
+            if (suppress)
+                _diagnostics.RemoveAt(i);
+        }
+    }
+
+    private void FilterGenericBodyEngineDiagnostics(int fromCount, HashSet<string> placeholderNames)
+    {
+        var currentCount = _engine.DiagnosticCount;
+        if (currentCount <= fromCount) return;
+
+        // Engine diagnostics are type mismatch errors — suppress any mentioning placeholders
+        // We truncate and re-add only the ones we want to keep
+        var toKeep = new List<Diagnostic>();
+        for (var i = fromCount; i < currentCount; i++)
+        {
+            var diag = _engine.GetDiagnostic(i);
+            if (diag.Severity == DiagnosticSeverity.Error
+                && placeholderNames.Any(p => diag.Message.Contains(p)))
+                continue;
+            toKeep.Add(diag);
+        }
+
+        _engine.TruncateDiagnostics(fromCount);
+        foreach (var d in toKeep)
+            _engine.AddDiagnostic(d);
     }
 
     private void CheckTestBody(TestDeclarationNode test)

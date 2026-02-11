@@ -116,7 +116,7 @@ public class TypeScopes
             if (scope.TryGetValue(name, out var type))
             {
                 // depth goes from Count (innermost) down to 1 (outermost/global)
-                // If found at a depth <= barrier, it's across the barrier → not accessible
+                // If found at a depth <= barrier, it's across the barrier -> not accessible
                 if (depth <= barrier)
                     return null;
                 return type;

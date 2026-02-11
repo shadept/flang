@@ -31,18 +31,18 @@ pub fn except(self: Result($T, $E), msg: String) T {
         Err(_) => {
             panic(msg)
             // unreachable but needed for type checker
-            const fake: T // zero init
+            let fake: T // zero init
             fake
         }
     }
 }
 
-pub fn expect_err(self: Result($T, $E)) E {
+pub fn expect_err(self: Result($T, $E), msg: String) E {
     return self match {
         Ok(_) => {
             panic(msg)
             // unreachable but needed for type checker
-            const fake: E // zero init
+            let fake: E // zero init
             fake
         },
         Err(error) => error
@@ -56,7 +56,7 @@ pub fn unwrap(self: Result($T, $E)) T {
         Err(_) => {
             panic("called unwrap on an Err value")
             // unreachable but needed for type checker
-            const fake: T // zero init
+            let fake: T // zero init
             fake
         }
     }
@@ -76,7 +76,7 @@ pub fn unwrap_err(self: Result($T, $E)) E {
         Ok(_) => {
             panic("called unwrap_err on an Ok value")
             // unreachable but needed for type checker
-            const fake: E // zero init
+            let fake: E // zero init
             fake
         },
         Err(error) => error

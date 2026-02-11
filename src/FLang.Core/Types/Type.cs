@@ -168,18 +168,24 @@ public sealed record NominalType(string Name, NominalKind Kind, IReadOnlyList<Ty
         return hash.ToHashCode();
     }
 
+    /// <summary>
+    /// Short name without module path (e.g., "MapIter" instead of "std.iter.MapIter").
+    /// </summary>
+    public string ShortName => Name.Contains('.') ? Name[(Name.LastIndexOf('.') + 1)..] : Name;
+
     public override string ToString()
     {
-        if (TypeArguments.Count == 0) return Name;
+        var displayName = ShortName;
+        if (TypeArguments.Count == 0) return displayName;
         var sb = new StringBuilder();
-        sb.Append(Name);
-        sb.Append('[');
+        sb.Append(displayName);
+        sb.Append('(');
         for (var i = 0; i < TypeArguments.Count; i++)
         {
             if (i > 0) sb.Append(", ");
             sb.Append(TypeArguments[i]);
         }
-        sb.Append(']');
+        sb.Append(')');
         return sb.ToString();
     }
 }

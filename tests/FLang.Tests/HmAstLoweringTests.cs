@@ -15,7 +15,7 @@ namespace FLang.Tests;
 public class HmAstLoweringTests
 {
     // =========================================================================
-    // Test helper: parse → type-check → lower → return IrModule
+    // Test helper: parse -> type-check -> lower -> return IrModule
     // =========================================================================
 
     private static readonly string AssemblyPath = Path.GetDirectoryName(typeof(HmAstLoweringTests).Assembly.Location)!;
@@ -1137,7 +1137,7 @@ public class HmAstLoweringTests
         AssertNoErrors(diags);
         var main = FindFunction(module, "main");
 
-        // Multiple jump instructions: entry→body, continue→body, break→exit, backedge→body
+        // Multiple jump instructions: entry->body, continue->body, break->exit, backedge->body
         var jumps = InstructionsOfType<JumpInstruction>(main);
         Assert.True(jumps.Count >= 2);
     }

@@ -68,7 +68,7 @@ public partial class HmTypeChecker
             var initType = InferExpression(varDecl.Initializer);
             if (annotationType != null)
             {
-                // E2015: Check anonymous struct → named struct for missing fields
+                // E2015: Check anonymous struct -> named struct for missing fields
                 if (varDecl.Initializer is AnonymousStructExpressionNode anonInit)
                 {
                     var resolvedTarget = _engine.Resolve(annotationType);
@@ -141,14 +141,14 @@ public partial class HmTypeChecker
     }
 
     // =========================================================================
-    // For loop — iterator protocol: iter(&T) → next(&Iter) → Option[E]
+    // For loop — iterator protocol: iter(&T) -> next(&Iter) -> Option[E]
     // =========================================================================
 
     private void CheckForLoop(ForLoopNode forLoop)
     {
         var iterableType = InferExpression(forLoop.IterableExpression);
 
-        // Resolve iter(&T) → IteratorType
+        // Resolve iter(&T) -> IteratorType
         var iterRef = new ReferenceType(iterableType);
         var iterResult = TryResolveOperator("iter", [iterRef], forLoop.Span, out var iterNode)
                       ?? TryResolveOperator("iter", [iterableType], forLoop.Span, out iterNode);
@@ -158,7 +158,7 @@ public partial class HmTypeChecker
         {
             forLoop.ResolvedIterFunction = iterNode;
             var iteratorType = iterResult;
-            // Resolve next(&IteratorType) → Option[E]
+            // Resolve next(&IteratorType) -> Option[E]
             var nextRef = new ReferenceType(iteratorType);
             var nextResult = TryResolveOperator("next", [nextRef], forLoop.Span, out var nextNode)
                           ?? TryResolveOperator("next", [iteratorType], forLoop.Span, out nextNode);
@@ -187,7 +187,7 @@ public partial class HmTypeChecker
         else
         {
             // Try direct range/array/slice iteration
-            elementType = TryResolveDirectIteration(iterableType, forLoop.Span);
+            elementType = TryResolveDirectIteration(iterableType, forLoop.IterableExpression.Span);
         }
 
         // Record element type for lowering

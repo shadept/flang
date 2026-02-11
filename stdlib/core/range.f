@@ -14,7 +14,7 @@ pub struct Range(T) {
     end: T
 }
 
-pub fn op_index(r: &Range($T), index: isize) T? {
+pub fn op_index(r: &Range($T), index: usize) T? {
     if (index < 0 or index >= r.end - r.start) {
         return null
     }

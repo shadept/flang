@@ -15,7 +15,7 @@ namespace FLang.Tests;
 public class HmTypeCheckerTests
 {
     // =========================================================================
-    // Parse helper: parse FLang source → run type checker → return results
+    // Parse helper: parse FLang source -> run type checker -> return results
     // =========================================================================
 
     private static readonly string AssemblyPath = Path.GetDirectoryName(typeof(HmTypeCheckerTests).Assembly.Location)!;

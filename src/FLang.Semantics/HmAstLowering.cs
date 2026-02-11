@@ -43,10 +43,10 @@ public class HmAstLowering
     // Defer stack — per-function, stores deferred expressions in LIFO order
     private readonly Stack<ExpressionNode> _deferStack = new();
 
-    // Global constants — name → lowered Value
+    // Global constants — name -> lowered Value
     private readonly Dictionary<string, Value> _globalConstants = [];
 
-    // Type table — maps type cache key → GlobalValue for Type(T) RTTI
+    // Type table — maps type cache key -> GlobalValue for Type(T) RTTI
     private Dictionary<string, GlobalValue>? _typeTableGlobals;
 
     public IReadOnlyList<Diagnostic> Diagnostics => _diagnostics;
@@ -59,7 +59,7 @@ public class HmAstLowering
     }
 
     // =========================================================================
-    // Niche optimization helpers: Option[&T] → nullable pointer
+    // Niche optimization helpers: Option[&T] -> nullable pointer
     // =========================================================================
 
     /// <summary>
@@ -879,7 +879,7 @@ public class HmAstLowering
         // Same C name means same concrete type
         if (actualType is IrStruct aS && expectedType is IrStruct eS && aS.CName == eS.CName) return val;
 
-        // 1. Array → Slice: [T; N] → Slice[T]
+        // 1. Array -> Slice: [T; N] -> Slice[T]
         if (actualType is IrArray arrType && expectedType is IrStruct sliceStruct)
         {
             var ptrField = sliceStruct.Fields.FirstOrDefault(f => f.Name == "ptr");
@@ -888,7 +888,7 @@ public class HmAstLowering
                 return CoerceArrayToSlice(val, arrType, sliceStruct, ptrField, lenField);
         }
 
-        // 2. Slice[T] → &T: extract .ptr field
+        // 2. Slice[T] -> &T: extract .ptr field
         if (actualType is IrStruct sliceSrc && expectedType is IrPointer ptrTarget)
         {
             var ptrField = sliceSrc.Fields.FirstOrDefault(f => f.Name == "ptr");
@@ -896,7 +896,7 @@ public class HmAstLowering
                 return CoerceSliceToPointer(val, sliceSrc, ptrField);
         }
 
-        // 3. String → Slice[u8]: binary compatible, reinterpret cast
+        // 3. String -> Slice[u8]: binary compatible, reinterpret cast
         if (actualType is IrStruct strSrc && expectedType is IrStruct sliceDst
             && strSrc.Name == WellKnown.String && sliceDst.Name == WellKnown.Slice
             && strSrc.Size == sliceDst.Size)
@@ -904,14 +904,14 @@ public class HmAstLowering
             return ReinterpretCast(val, strSrc, sliceDst);
         }
 
-        // 4. Anonymous struct → named struct: reinterpret cast (same layout)
+        // 4. Anonymous struct -> named struct: reinterpret cast (same layout)
         if (actualType is IrStruct anonSrc && expectedType is IrStruct namedDst
             && anonSrc.CName != namedDst.CName && anonSrc.Size == namedDst.Size)
         {
             return ReinterpretCast(val, anonSrc, namedDst);
         }
 
-        // 5a. Niche Option: non-nullable pointer → nullable pointer (same bits, retype)
+        // 5a. Niche Option: non-nullable pointer -> nullable pointer (same bits, retype)
         if (expectedType is IrPointer { IsNullable: true } expectedNullable
             && actualType is IrPointer { IsNullable: false })
         {
@@ -919,8 +919,8 @@ public class HmAstLowering
             return val;
         }
 
-        // 5. T → Option[T]: wrap in Some
-        //    Handles: same-size value, integer widening, pointer→Option[pointer]
+        // 5. T -> Option[T]: wrap in Some
+        //    Handles: same-size value, integer widening, pointer->Option[pointer]
         if (expectedType is IrStruct optStruct)
         {
             var hvField = optStruct.Fields.FirstOrDefault(f => f.Name == "has_value");
@@ -932,7 +932,7 @@ public class HmAstLowering
                 if (actualType.Size == valField.Type.Size)
                     return CoerceToOption(val, optStruct, hvField, valField);
 
-                // Integer widening then wrap: e.g. i32 → usize → Option[usize]
+                // Integer widening then wrap: e.g. i32 -> usize -> Option[usize]
                 if (actualType is IrPrimitive && valField.Type is IrPrimitive)
                 {
                     var widened = new LocalValue($"widen_{_tempCounter++}", valField.Type);
@@ -940,13 +940,13 @@ public class HmAstLowering
                     return CoerceToOption(widened, optStruct, hvField, valField);
                 }
 
-                // Pointer → Option[pointer]: e.g. &Allocator → Option[&Allocator]
+                // Pointer -> Option[pointer]: e.g. &Allocator -> Option[&Allocator]
                 if (actualType is IrPointer && valField.Type is IrPointer)
                     return CoerceToOption(val, optStruct, hvField, valField);
             }
         }
 
-        // 6. Primitive widening: e.g. i32 → usize
+        // 6. Primitive widening: e.g. i32 -> usize
         if (actualType is IrPrimitive && expectedType is IrPrimitive && actualType.Size < expectedType.Size)
         {
             var widened = new LocalValue($"widen_{_tempCounter++}", expectedType);
@@ -1194,7 +1194,7 @@ public class HmAstLowering
             iterableVal = temp;
         }
 
-        // 2. Call iter(&iterable) → IteratorStruct
+        // 2. Call iter(&iterable) -> IteratorStruct
         var iterCalleeParamTypes = new List<IrType>();
         foreach (var p in forLoop.ResolvedIterFunction.Parameters)
             iterCalleeParamTypes.Add(GetIrType(p));
@@ -1265,7 +1265,7 @@ public class HmAstLowering
 
             var hvVal = EmitLoadFromOffset(nextPtr, hvField.ByteOffset, TypeLayoutService.IrBool, "for_hv");
 
-            // Branch: has_value → body, else → exit
+            // Branch: has_value -> body, else -> exit
             _currentBlock.Instructions.Add(new BranchInstruction(_currentSpan, hvVal, bodyBlock, exitBlock));
 
             // 6. Body block: extract value, store to loop var, lower body, jump back to cond
@@ -2303,7 +2303,7 @@ public class HmAstLowering
             }
         }
 
-        // Niche-optimized Option[&T]: .has_value → ptr != NULL, .value → cast to non-nullable
+        // Niche-optimized Option[&T]: .has_value -> ptr != NULL, .value -> cast to non-nullable
         if (IsNicheOption(baseIrType))
         {
             var nichePtr = (IrPointer)baseIrType;
@@ -2391,12 +2391,12 @@ public class HmAstLowering
         if (srcVal.IrType != null && srcVal.IrType == targetIrType)
             return srcVal;
 
-        // Try systematic coercions first (handles array→slice, pointer→Option, etc.)
+        // Try systematic coercions first (handles array->slice, pointer->Option, etc.)
         var coerced = ApplyCoercions(srcVal, targetIrType);
         if (coerced != srcVal)
             return coerced;
 
-        // Pointer → Slice: e.g. `buf as u8[]` where buf is [u8; N]
+        // Pointer -> Slice: e.g. `buf as u8[]` where buf is [u8; N]
         // The source is a pointer (arrays decay to pointers), target is a Slice struct.
         if (srcVal.IrType is IrPointer && targetIrType is IrStruct sliceTarget)
         {
@@ -2878,7 +2878,7 @@ public class HmAstLowering
     }
 
     /// <summary>
-    /// Lower range slicing: base[range] → Slice { ptr: base.ptr + start, len: end - start }
+    /// Lower range slicing: base[range] -> Slice { ptr: base.ptr + start, len: end - start }
     /// </summary>
     private Value LowerRangeSlicing(Value baseVal, Value rangeVal, IrStruct rangeStruct, IrType resultIrType)
     {
@@ -3063,7 +3063,7 @@ public class HmAstLowering
                         return innerVal;
                     }
 
-                    // Wrap T → Option(T): construct Option struct with has_value=true, value=inner
+                    // Wrap T -> Option(T): construct Option struct with has_value=true, value=inner
                     if (targetIrType is IrStruct optionStruct && optionStruct.Fields.Length >= 2)
                     {
                         var resultPtr = new LocalValue($"wrap_{_tempCounter++}", new IrPointer(optionStruct));
@@ -3158,7 +3158,7 @@ public class HmAstLowering
         _currentFunction.BasicBlocks.Add(thenBlock);
         _currentBlock = thenBlock;
 
-        // Check if result is also Option (Option[T] ?? Option[T] → Option[T])
+        // Check if result is also Option (Option[T] ?? Option[T] -> Option[T])
         // In that case, store the whole left Option, don't unwrap
         bool resultIsOption = resultIrType is IrStruct resultStruct
             && resultStruct.Name == WellKnown.Option;

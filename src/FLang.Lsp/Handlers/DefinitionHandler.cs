@@ -42,12 +42,12 @@ public class DefinitionHandler : DefinitionHandlerBase
         var source = analysis.Compilation.Sources[fileId.Value];
         var position = PositionUtil.ToSourcePosition(request.Position, source);
         var node = AstNodeFinder.FindDeepestNodeAt(module, fileId.Value, position);
-        FLangLanguageServer.Log($"  [findNode] {sw.ElapsedMilliseconds - lap}ms → {node?.GetType().Name ?? "null"}");
+        FLangLanguageServer.Log($"  [findNode] {sw.ElapsedMilliseconds - lap}ms -> {node?.GetType().Name ?? "null"}");
         if (node == null) return Task.FromResult<LocationOrLocationLinks?>(null);
 
         lap = sw.ElapsedMilliseconds;
         var targetSpan = ResolveDefinitionTarget(node, analysis);
-        FLangLanguageServer.Log($"  [resolve] {sw.ElapsedMilliseconds - lap}ms → {(targetSpan.HasValue ? $"FileId={targetSpan.Value.FileId} Idx={targetSpan.Value.Index}" : "null")}");
+        FLangLanguageServer.Log($"  [resolve] {sw.ElapsedMilliseconds - lap}ms -> {(targetSpan.HasValue ? $"FileId={targetSpan.Value.FileId} Idx={targetSpan.Value.Index}" : "null")}");
         if (targetSpan == null || targetSpan.Value.FileId < 0)
             return Task.FromResult<LocationOrLocationLinks?>(null);
 
@@ -66,52 +66,52 @@ public class DefinitionHandler : DefinitionHandlerBase
                 return call.ResolvedTarget.NameSpan;
 
             case IdentifierExpressionNode id:
-            {
-                if (id.ResolvedFunctionTarget != null)
-                    return id.ResolvedFunctionTarget.NameSpan;
-                if (id.ResolvedVariableDeclaration != null)
-                    return id.ResolvedVariableDeclaration.NameSpan;
-                if (id.ResolvedParameterDeclaration != null)
-                    return id.ResolvedParameterDeclaration.NameSpan;
-
-                // Try type resolution: if identifier refers to a nominal type
-                if (analysis.TypeChecker?.NominalSpans != null)
                 {
-                    if (analysis.TypeChecker.NominalSpans.TryGetValue(id.Name, out var span))
-                        return span;
+                    if (id.ResolvedFunctionTarget != null)
+                        return id.ResolvedFunctionTarget.NameSpan;
+                    if (id.ResolvedVariableDeclaration != null)
+                        return id.ResolvedVariableDeclaration.NameSpan;
+                    if (id.ResolvedParameterDeclaration != null)
+                        return id.ResolvedParameterDeclaration.NameSpan;
+
+                    // Try type resolution: if identifier refers to a nominal type
+                    if (analysis.TypeChecker?.NominalSpans != null)
+                    {
+                        if (analysis.TypeChecker.NominalSpans.TryGetValue(id.Name, out var span))
+                            return span;
+                    }
+                    break;
                 }
-                break;
-            }
 
             case MemberAccessExpressionNode ma:
-            {
-                // Try to find the struct field definition in parsed AST
-                if (analysis.TypeChecker != null
-                    && analysis.TypeChecker.InferredTypes.TryGetValue(ma.Target, out var targetType))
                 {
-                    var resolved = analysis.TypeChecker.Engine.Resolve(targetType);
-                    var typeName = GetNominalTypeName(resolved);
-                    if (typeName != null)
+                    // Try to find the struct field definition in parsed AST
+                    if (analysis.TypeChecker != null
+                        && analysis.TypeChecker.InferredTypes.TryGetValue(ma.Target, out var targetType))
                     {
-                        // Search parsed modules for struct declaration with matching field
-                        foreach (var module in analysis.ParsedModules.Values)
+                        var resolved = analysis.TypeChecker.Engine.Resolve(targetType);
+                        var typeName = GetNominalTypeName(resolved);
+                        if (typeName != null)
                         {
-                            foreach (var structDecl in module.Structs)
+                            // Search parsed modules for struct declaration with matching field
+                            foreach (var module in analysis.ParsedModules.Values)
                             {
-                                if (structDecl.Name == typeName || typeName.EndsWith("." + structDecl.Name))
+                                foreach (var structDecl in module.Structs)
                                 {
-                                    foreach (var field in structDecl.Fields)
+                                    if (structDecl.Name == typeName || typeName.EndsWith("." + structDecl.Name))
                                     {
-                                        if (field.Name == ma.FieldName)
-                                            return field.NameSpan;
+                                        foreach (var field in structDecl.Fields)
+                                        {
+                                            if (field.Name == ma.FieldName)
+                                                return field.NameSpan;
+                                        }
                                     }
                                 }
                             }
                         }
                     }
+                    break;
                 }
-                break;
-            }
         }
 
         return null;

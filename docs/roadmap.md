@@ -54,7 +54,7 @@ _Goal: Build a minimal but complete foundation for systems programming._
 - ✅ Block expressions with trailing values
 - ✅ `for (var in range) body` with `a..b` ranges
 - ✅ `break` and `continue` statements
-- ✅ FIR lowering: control flow → basic blocks + branches
+- ✅ FIR lowering: control flow -> basic blocks + branches
 - ✅ Function calls: `func()` syntax
 - ✅ `#foreign` directive for C FFI declarations
 - ✅ CLI flags: `--stdlib-path`, `--emit-fir`
@@ -192,12 +192,12 @@ _Goal: Add the type system and fundamental data structures needed for real progr
 - ✅ Repeat syntax: `[0; 10]` (ten zeros)
 - ✅ `T[]` slice type syntax parsing
 - ✅ Array indexing: `arr[i]` with dynamic index calculation
-- ✅ Array → slice type coercion in type checker
+- ✅ Array -> slice type coercion in type checker
 - ✅ FIR support: `ArrayType`, `SliceType`, dynamic `GetElementPtrInstruction`
 - ✅ C codegen: Valid C array syntax `int arr[N]`, pointer arithmetic for indexing
 - ✅ Type inference for array literals with element unification
 - ✅ Fixed two critical bugs:
-  - Invalid C array declaration syntax (`int[3]` → `int[3]`)
+  - Invalid C array declaration syntax (`int[3]` -> `int[3]`)
   - Hardcoded offset in array indexing (now uses calculated `index * elem_size`)
 
 **Deferred to Later Milestones:**
@@ -301,10 +301,10 @@ _Goal: Add the type system and fundamental data structures needed for real progr
   - `memory/memset_basic.f` - Fill memory with byte value
   - `memory/zero_init.f` - Zero-initialization verification
 - ✅ 5 cast tests passing:
-  - `casts/numeric_implicit.f` - Implicit integer widening (u8 → usize)
+  - `casts/numeric_implicit.f` - Implicit integer widening (u8 -> usize)
   - `casts/ptr_usize_roundtrip.f` - Pointer ↔ usize conversions
-  - `casts/slice_to_string_explicit.f` - u8[] → String (explicit)
-  - `casts/string_to_slice_implicit.f` - String → u8[] (implicit)
+  - `casts/slice_to_string_explicit.f` - u8[] -> String (explicit)
+  - `casts/string_to_slice_implicit.f` - String -> u8[] (implicit)
   - `casts/string_to_slice_view.f` - String field access as slice view
 
 **Error Codes Added:**
@@ -364,7 +364,7 @@ _Goal: Generics, inference, and advanced type features._
   - ✅ Core definition: `struct Option(T) { has_value: bool, value: T }` in `stdlib/core/option.f`
   - ✅ `T?` sugar syntax for `Option(T)`
   - ✅ `null` keyword support (desugars to `Option(T)` with `has_value = false`)
-  - ✅ Implicit value coercion: `let x: i32? = 5` → `Option(i32) { has_value = true, value = 5 }`
+  - ✅ Implicit value coercion: `let x: i32? = 5` -> `Option(i32) { has_value = true, value = 5 }`
 - ✅ `stdlib/std/option.f` helper functions:
   - ✅ `is_some(value: Option($T)) bool`
   - ✅ `is_none(value: Option($T)) bool`
@@ -581,7 +581,7 @@ _Goal: Fill in remaining language features._
   - [x] Struct literal initializers for global constants
   - [x] Function reference initializers for global constants
 - [x] UFCS desugaring
-  - [x] `obj.method(args)` → `method(obj, args)`
+  - [x] `obj.method(args)` -> `method(obj, args)`
   - [x] Or `method(&obj, args)` if reference lifting required
   - [x] Method lookup in current module scope
   - [x] Works with generic functions
@@ -828,7 +828,7 @@ Remaining:
 - [ ] `append(&StringBuilder, $T)` — generic fallback, calls `val.format(sb)`
 - [ ] Update `to_string` to return `OwnedString` with move semantics (transfer buffer, reset builder)
 - [ ] Add `to_string_copy` returning `OwnedString` (current `to_string` behavior — allocate + copy)
-- [ ] Rename `as_string` → `as_view` per spec conventions
+- [ ] Rename `as_string` -> `as_view` per spec conventions
 
 #### 19c: Formattable Protocol
 
@@ -889,11 +889,11 @@ apply(fn(x) { x * 2 }, 5)
 **Tasks:**
 
 - [x] `LambdaExpressionNode` AST node (params with optional types, expr or block body)
-- [x] Parser: `fn(...)` in expression position → lambda
+- [x] Parser: `fn(...)` in expression position -> lambda
 - [x] TypeChecker: type-check lambda, infer param types from expected type context
 - [x] TypeChecker: synthesize `FunctionDeclarationNode` (`__lambda_N`), add to generated list
 - [x] TypeChecker: capture guard — error if lambda body references outer variables
-- [x] AstLowering: lambda → `FunctionReferenceValue` pointing to generated function
+- [x] AstLowering: lambda -> `FunctionReferenceValue` pointing to generated function
 - [x] Compiler pipeline: lower synthesized lambda functions alongside specializations
 - [x] Tests: basic, block form, as argument, type inference, capture error
 
@@ -975,7 +975,7 @@ _Goal: Rewrite the compiler in FLang._
 - **Phase:** 5 (Standard Library)
 - **Milestone:** 18 (Collections - COMPLETE)
 - **Next Up:**
-  - Milestone 19: String Types, Formatting & I/O (19a → 19b → 19c → 19d → 19e)
+  - Milestone 19: String Types, Formatting & I/O (19a -> 19b -> 19c -> 19d -> 19e)
   - Complete M14 pending items (nested patterns, multiple wildcards)
 - **Tests Passing:** 196 passed
   - ✅ 15 core tests (basics, control flow, functions)

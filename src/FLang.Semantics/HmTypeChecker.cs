@@ -45,17 +45,17 @@ public partial class HmTypeChecker : INominalTypeRegistry
     private readonly List<Diagnostic> _diagnostics = [];
 
     /// <summary>
-    /// FQN → NominalType template for all structs and enums.
+    /// FQN -> NominalType template for all structs and enums.
     /// </summary>
     private readonly Dictionary<string, NominalType> _nominalTypes = [];
 
     /// <summary>
-    /// FQN → SourceSpan of the first declaration, for duplicate-detection notes.
+    /// FQN -> SourceSpan of the first declaration, for duplicate-detection notes.
     /// </summary>
     private readonly Dictionary<string, SourceSpan> _nominalSpans = [];
 
     /// <summary>
-    /// Function name → list of overloads.
+    /// Function name -> list of overloads.
     /// </summary>
     private readonly Dictionary<string, List<FunctionScheme>> _functions = [];
 
@@ -76,6 +76,7 @@ public partial class HmTypeChecker : INominalTypeRegistry
     /// </summary>
     private readonly Dictionary<AstNode, ResolvedOperator> _resolvedOperators = [];
 
+
     /// <summary>
     /// Stack of functions currently being checked (for return type context).
     /// </summary>
@@ -85,6 +86,12 @@ public partial class HmTypeChecker : INominalTypeRegistry
     /// Module currently being checked.
     /// </summary>
     private string? _currentModulePath;
+
+    /// <summary>
+    /// True during CheckGenericFunctionBody — enables fallback return type guessing
+    /// when overload resolution fails (since placeholder types can't match).
+    /// </summary>
+    private bool _isCheckingGenericBody;
 
     /// <summary>
     /// Lambda synthesis counter.
@@ -99,7 +106,7 @@ public partial class HmTypeChecker : INominalTypeRegistry
 
     /// <summary>
     /// Parallel scope stack for tracking const-ness of variable declarations.
-    /// Each scope maps name → isConst. Mirrors _scopes push/pop via PushScope/PopScope helpers.
+    /// Each scope maps name -> isConst. Mirrors _scopes push/pop via PushScope/PopScope helpers.
     /// </summary>
     private readonly Stack<HashSet<string>> _constScopes = new(new[] { new HashSet<string>() });
 
@@ -216,6 +223,7 @@ public partial class HmTypeChecker : INominalTypeRegistry
         return type;
     }
 
+
     /// <summary>
     /// Get the previously inferred type for an AST node.
     /// Throws if the type was not recorded — a missing type indicates a bug in the type checker.
@@ -251,6 +259,21 @@ public partial class HmTypeChecker : INominalTypeRegistry
     private List<FunctionScheme>? LookupFunctions(string name)
     {
         return _functions.TryGetValue(name, out var overloads) ? overloads : null;
+    }
+
+    /// <summary>
+    /// When overload resolution fails during generic body checking, guess the return type
+    /// from the candidate functions. Heuristic:
+    /// 1. If all candidates share the same return type structure, use that.
+    /// 2. Otherwise use the first candidate's return type.
+    /// The return type's generic params are specialized fresh so they don't pollute inference.
+    /// </summary>
+    private Type GuessReturnTypeFromCandidates(List<FunctionScheme> candidates)
+    {
+        if (candidates.Count == 0) return _engine.FreshVar();
+        return _engine.Specialize(candidates[0].Signature) is Core.Types.FunctionType ft
+            ? ft.ReturnType
+            : _engine.FreshVar();
     }
 
     // =========================================================================

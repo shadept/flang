@@ -345,6 +345,22 @@ public class InferenceEngine : ITypeResolver
         return Substitute(scheme.Body, substitutions);
     }
 
+    /// <summary>
+    /// Like Specialize, but also returns the mapping from old quantified var IDs to new TypeVar IDs.
+    /// Used by the LSP to map TypeVars back to generic parameter names.
+    /// </summary>
+    public Type Specialize(PolymorphicType scheme, out Dictionary<int, TypeVar> substitutions)
+    {
+        substitutions = [];
+        if (scheme.IsMonomorphic)
+            return scheme.Body;
+
+        foreach (var id in scheme.QuantifiedVarIds)
+            substitutions[id] = FreshVar();
+
+        return Substitute(scheme.Body, substitutions);
+    }
+
     private static Type Substitute(Type type, Dictionary<int, TypeVar> subs)
     {
         return type switch
@@ -425,6 +441,10 @@ public class InferenceEngine : ITypeResolver
     }
 
     public void ClearDiagnostics() => _diagnostics.Clear();
+    public int DiagnosticCount => _diagnostics.Count;
+    public Diagnostic GetDiagnostic(int index) => _diagnostics[index];
+    public void AddDiagnostic(Diagnostic diag) => _diagnostics.Add(diag);
+    public void TruncateDiagnostics(int count) => _diagnostics.RemoveRange(count, _diagnostics.Count - count);
 }
 
 /// <summary>

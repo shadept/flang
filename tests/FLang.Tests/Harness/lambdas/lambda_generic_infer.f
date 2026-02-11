@@ -3,7 +3,7 @@
 
 // Test lambda parameter type inference via TypeVars + UFCS resolution.
 // fn(x) { x.double() } — x has no type annotation and no expected type context.
-// UFCS resolves x.double() → double(x), binding TypeVar_x to i32.
+// UFCS resolves x.double() -> double(x), binding TypeVar_x to i32.
 
 fn double(x: i32) i32 {
     return x * 2

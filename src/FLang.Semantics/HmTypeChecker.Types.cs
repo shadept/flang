@@ -141,7 +141,7 @@ public partial class HmTypeChecker
     /// </summary>
     private Type SubstituteTypeArgs(Type type, IReadOnlyList<Type> templateArgs, IReadOnlyList<Type> instanceArgs)
     {
-        // Build substitution map: template TypeVar Id → instance type
+        // Build substitution map: template TypeVar Id -> instance type
         var substMap = new Dictionary<int, Type>();
         for (int i = 0; i < templateArgs.Count && i < instanceArgs.Count; i++)
         {

@@ -4,7 +4,7 @@ namespace FLang.Core;
 
 /// <summary>
 /// Represents a compilation unit that manages source files, module resolution, and compilation-wide state.
-/// Serves as the context object for passing state between compilation phases (Parser → HmTypeChecker → HmAstLowering).
+/// Serves as the context object for passing state between compilation phases (Parser -> HmTypeChecker -> HmAstLowering).
 /// </summary>
 public class Compilation
 {

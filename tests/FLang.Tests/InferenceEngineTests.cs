@@ -580,7 +580,7 @@ public class InferenceEngineTests
     [Theory]
     [InlineData("u32", "i32")]  // same rank — not strictly higher
     [InlineData("u64", "i64")]  // same rank
-    [InlineData("i32", "u32")]  // signed→unsigned not supported
+    [InlineData("i32", "u32")]  // signed->unsigned not supported
     public void Unify_CrossSignedness_InvalidCases_Fails(string from, string to)
     {
         var engine = CreateEngine();
@@ -603,10 +603,10 @@ public class InferenceEngineTests
     [Fact]
     public void Unify_IntegerWidening_BothDirections()
     {
-        // Coercion rules try both a→b and b→a
+        // Coercion rules try both a->b and b->a
         var engine = CreateEngine();
         var result = engine.Unify(WellKnown.I32, WellKnown.I8, SourceSpan.None);
-        // i8 → i32 should work (reversed direction)
+        // i8 -> i32 should work (reversed direction)
         Assert.Equal(WellKnown.I32, result.Type);
         Assert.Equal(1, result.Cost);
         Assert.Empty(engine.Diagnostics);
@@ -812,9 +812,9 @@ public class InferenceEngineTests
         var engine = CreateEngine();
         var argType = WellKnown.I8;
 
-        // Candidate 1: fn(i32) -> void  (cost 1: i8 → i32)
+        // Candidate 1: fn(i32) -> void  (cost 1: i8 -> i32)
         var cand1 = new FunctionType([WellKnown.I32], WellKnown.Void);
-        // Candidate 2: fn(i64) -> void  (cost 1: i8 → i64)
+        // Candidate 2: fn(i64) -> void  (cost 1: i8 -> i64)
         var cand2 = new FunctionType([WellKnown.I64], WellKnown.Void);
         // Candidate 3: fn(i8) -> void  (cost 0: exact match)
         var cand3 = new FunctionType([WellKnown.I8], WellKnown.Void);
@@ -1175,7 +1175,7 @@ public class InferenceEngineTests
         var xVar = engine.FreshVar();
         scopes.Bind("x", new PolymorphicType(xVar));
 
-        // op_eq(x, 0) → bool
+        // op_eq(x, 0) -> bool
         var opEqInst = Assert.IsType<FunctionType>(engine.Specialize(scopes.Lookup("op_eq")!));
         engine.Unify(opEqInst.ParameterTypes[0], engine.Resolve(xVar), SourceSpan.None);
         engine.Unify(opEqInst.ParameterTypes[1], WellKnown.I32, SourceSpan.None);

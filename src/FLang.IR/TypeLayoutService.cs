@@ -108,7 +108,7 @@ public class TypeLayoutService(ITypeResolver engine, INominalTypeRegistry nomina
         if (_cache.TryGetValue(cacheKey, out var cached))
             return cached;
 
-        // Niche optimization: Option[&T] → IrPointer(T, IsNullable: true)
+        // Niche optimization: Option[&T] -> IrPointer(T, IsNullable: true)
         // Only applies when the type argument is a reference/pointer type.
         if (nt.Name == "core.option.Option" && nt.TypeArguments.Count == 1)
         {
@@ -140,11 +140,11 @@ public class TypeLayoutService(ITypeResolver engine, INominalTypeRegistry nomina
                     return IrVoidPrim;
             }
 
-            // Look up the template to get the TypeVar → type-arg mapping
+            // Look up the template to get the TypeVar -> type-arg mapping
             var template = _nominalTypes.LookupNominalType(nt.Name);
             if (template != null && template.TypeArguments.Count == nt.TypeArguments.Count)
             {
-                // Build substitution: template TypeVar id → concrete type arg
+                // Build substitution: template TypeVar id -> concrete type arg
                 var subst = new Dictionary<int, Type>();
                 for (int i = 0; i < template.TypeArguments.Count; i++)
                 {

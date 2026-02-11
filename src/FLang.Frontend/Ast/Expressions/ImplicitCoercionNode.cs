@@ -9,21 +9,21 @@ namespace FLang.Frontend.Ast.Expressions;
 public enum CoercionKind
 {
     /// <summary>
-    /// Integer widening (e.g., i8 → i32, u8 → u64) including comptime_int hardening.
+    /// Integer widening (e.g., i8 -> i32, u8 -> u64) including comptime_int hardening.
     /// Generates an integer extend instruction.
     /// </summary>
     IntegerWidening,
 
     /// <summary>
     /// Reinterpret cast for binary-compatible types.
-    /// Examples: String ↔ Slice(u8), [T; N] → Slice(T), Slice(T) → &T.
+    /// Examples: String ↔ Slice(u8), [T; N] -> Slice(T), Slice(T) -> &T.
     /// No code generation needed - these types have the same binary representation.
     /// </summary>
     ReinterpretCast,
 
     /// <summary>
     /// Wrapping/lifting a value with a type's constructor.
-    /// Example: T → Option(T) wraps the value in a Some variant.
+    /// Example: T -> Option(T) wraps the value in a Some variant.
     /// </summary>
     Wrap,
 }
