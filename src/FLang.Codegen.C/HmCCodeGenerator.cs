@@ -470,6 +470,36 @@ public static class HmCCodeGenerator
                     break;
                 }
 
+            case CopyInstruction copy:
+                {
+                    var src = EmitValue(copy.SrcPtr);
+                    var dst = EmitValue(copy.DstPtr);
+                    var castType = IrTypeToCType(new IrPointer(copy.ValueType));
+                    sb.AppendLine($"    *({castType}){dst} = *({castType}){src};");
+                    break;
+                }
+
+            case CopyFromOffsetInstruction cfo:
+                {
+                    var resultName = cfo.Result.Name;
+                    var resultIrType = cfo.Result.IrType ?? TypeLayoutService.IrI32;
+                    var src = EmitValue(cfo.SrcPtr);
+                    var offset = EmitValue(cfo.ByteOffset);
+                    var castType = IrTypeToCType(new IrPointer(resultIrType));
+                    sb.AppendLine($"    {EmitVarDecl(resultIrType, resultName)} = *({castType})((uint8_t*){src} + {offset});");
+                    break;
+                }
+
+            case CopyToOffsetInstruction cto:
+                {
+                    var val = EmitValue(cto.Val);
+                    var dst = EmitValue(cto.DstPtr);
+                    var offset = EmitValue(cto.ByteOffset);
+                    var castType = IrTypeToCType(new IrPointer(cto.ValueType));
+                    sb.AppendLine($"    *({castType})((uint8_t*){dst} + {offset}) = {val};");
+                    break;
+                }
+
             default:
                 sb.AppendLine($"    /* TODO: {inst.GetType().Name} */");
                 break;

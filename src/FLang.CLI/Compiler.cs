@@ -150,6 +150,8 @@ public class Compiler
             return new CompilationResult(false, null, allDiagnostics, compilation);
         }
 
+        PeepholeOptimizer.Optimize(irModule);
+
         // 4. Emit FIR (optional)
         if (options.EmitFir != null)
         {

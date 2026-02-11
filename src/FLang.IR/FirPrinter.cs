@@ -73,6 +73,9 @@ public static class FirPrinter
             ReturnInstruction ret => PrintReturn(ret),
             BranchInstruction branch => PrintBranch(branch),
             JumpInstruction jump => PrintJump(jump),
+            CopyInstruction copy => PrintCopy(copy),
+            CopyFromOffsetInstruction cfo => PrintCopyFromOffset(cfo),
+            CopyToOffsetInstruction cto => PrintCopyToOffset(cto),
             _ => $"; <unknown instruction: {instruction.GetType().Name}>"
         };
     }
@@ -184,6 +187,22 @@ public static class FirPrinter
     private static string PrintJump(JumpInstruction jump)
     {
         return $"br label %{jump.TargetBlock.Label}";
+    }
+
+    private static string PrintCopy(CopyInstruction copy)
+    {
+        return $"copy {TypeToString(copy.ValueType)}, ptr {PrintValue(copy.SrcPtr)} to ptr {PrintValue(copy.DstPtr)}";
+    }
+
+    private static string PrintCopyFromOffset(CopyFromOffsetInstruction cfo)
+    {
+        var loadType = TypeToString(cfo.Result.IrType);
+        return $"{PrintTypedValue(cfo.Result)} = copyfromoffset {loadType}, ptr {PrintValue(cfo.SrcPtr)}, {PrintTypedValue(cfo.ByteOffset)}";
+    }
+
+    private static string PrintCopyToOffset(CopyToOffsetInstruction cto)
+    {
+        return $"copytooffset {PrintTypedValue(cto.Val)}, ptr {PrintValue(cto.DstPtr)}, {PrintTypedValue(cto.ByteOffset)}";
     }
 
     private static string PrintTypedValue(Value? value)
