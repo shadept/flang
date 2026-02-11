@@ -178,9 +178,9 @@ fn append_unsigned_with_base(sb: &StringBuilder, value: u64, base: u64, uppercas
         v = v / base
 
         let c = 0
-        if (digit < 10) {
+        if digit < 10 {
             c = b'0' + digit
-        } else if (uppercase) {
+        } else if uppercase {
             c = b'A' - 10 + digit
         } else {
             c = b'a' - 10 + digit
@@ -198,10 +198,10 @@ fn append_unsigned_impl(sb: &StringBuilder, value: u64, spec: String) {
 }
 
 fn mask_for_bits(bits: u64) u64 {
-    if (bits >= 64) { return 0xFFFF_FFFF_FFFF_FFFF }
-    if (bits == 32) { return 0xFFFF_FFFF }
-    if (bits == 16) { return 0xFFFF }
-    if (bits == 8) { return 0xFF }
+    if bits >= 64 { return 0xFFFF_FFFF_FFFF_FFFF }
+    if bits == 32 { return 0xFFFF_FFFF }
+    if bits == 16 { return 0xFFFF }
+    if bits == 8 { return 0xFF }
     return 0xFFFF_FFFF_FFFF_FFFF
 }
 

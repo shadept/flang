@@ -124,6 +124,13 @@ public partial class HmTypeChecker
             : _scopes.Lookup(id.Name);
         if (scheme != null)
         {
+            // Track declaration for go-to-definition support
+            var decl = _scopes.LookupDeclaration(id.Name);
+            if (decl is VariableDeclarationNode varDeclNode)
+                id.ResolvedVariableDeclaration = varDeclNode;
+            else if (decl is FunctionParameterNode paramDeclNode)
+                id.ResolvedParameterDeclaration = paramDeclNode;
+
             // If this name is an active type parameter (inside a generic specialization),
             // it's being used as a type-as-value and should be wrapped in Type(T)
             if (_activeTypeParams.ContainsKey(id.Name))
@@ -138,7 +145,8 @@ public partial class HmTypeChecker
         var fns = LookupFunctions(id.Name);
         if (fns is { Count: 1 })
         {
-            // Single overload: return its function type
+            // Single overload: resolve function target for go-to-definition
+            id.ResolvedFunctionTarget = fns[0].Node;
             return _engine.Specialize(fns[0].Signature);
         }
 
@@ -1361,7 +1369,7 @@ public partial class HmTypeChecker
 
             // Create FunctionParameterNode for synthesized function
             var typeNode = param.Type ?? new NamedTypeNode(param.Span, "_inferred");
-            paramNodes.Add(new FunctionParameterNode(param.Span, param.Name, typeNode));
+            paramNodes.Add(new FunctionParameterNode(param.Span, param.Span, param.Name, typeNode));
         }
 
         // 2. Resolve return type
@@ -1371,7 +1379,7 @@ public partial class HmTypeChecker
 
         // 3. Synthesize a FunctionDeclarationNode
         var lambdaName = $"__lambda_{_nextLambdaId++}";
-        var synthesized = new FunctionDeclarationNode(lambda.Span, lambdaName, paramNodes, lambda.ReturnType, lambda.Body);
+        var synthesized = new FunctionDeclarationNode(lambda.Span, lambda.Span, lambdaName, paramNodes, lambda.ReturnType, lambda.Body);
 
         // 4. Push function context for return statements inside lambda
         _functionStack.Push(new FunctionContext(synthesized, returnType));

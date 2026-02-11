@@ -230,7 +230,7 @@ public class Parser
             var fieldType = ParseType();
 
             var fieldSpan = SourceSpan.Combine(fieldNameToken.Span, fieldType.Span);
-            fields.Add(new StructFieldNode(fieldSpan, fieldNameToken.Text, fieldType));
+            fields.Add(new StructFieldNode(fieldSpan, fieldNameToken.Span, fieldNameToken.Text, fieldType));
 
             // Fields can be separated by commas or newlines (optional)
             if (_currentToken.Kind == TokenKind.Comma) Eat(TokenKind.Comma);
@@ -239,7 +239,7 @@ public class Parser
         var closeBrace = Eat(TokenKind.CloseBrace);
 
         var span = SourceSpan.Combine(structKeyword.Span, closeBrace.Span);
-        return new StructDeclarationNode(span, nameToken.Text, typeParameters, fields);
+        return new StructDeclarationNode(span, nameToken.Span, nameToken.Text, typeParameters, fields);
     }
 
     /// <summary>
@@ -317,7 +317,7 @@ public class Parser
             }
 
             var variantSpan = SourceSpan.Combine(variantNameToken.Span, variantEnd);
-            variants.Add(new EnumVariantNode(variantSpan, variantNameToken.Text, payloadTypes, explicitTagValue));
+            variants.Add(new EnumVariantNode(variantSpan, variantNameToken.Span, variantNameToken.Text, payloadTypes, explicitTagValue));
 
             // Variants can be separated by commas or newlines (optional)
             if (_currentToken.Kind == TokenKind.Comma) Eat(TokenKind.Comma);
@@ -326,7 +326,7 @@ public class Parser
         var closeBrace = Eat(TokenKind.CloseBrace);
 
         var span = SourceSpan.Combine(enumKeyword.Span, closeBrace.Span);
-        return new EnumDeclarationNode(span, nameToken.Text, typeParameters, variants);
+        return new EnumDeclarationNode(span, nameToken.Span, nameToken.Text, typeParameters, variants);
     }
 
     /// <summary>
@@ -355,7 +355,7 @@ public class Parser
             var paramType = ParseType();
 
             var paramSpan = SourceSpan.Combine(paramNameToken.Span, paramType.Span);
-            parameters.Add(new FunctionParameterNode(paramSpan, paramNameToken.Text, paramType));
+            parameters.Add(new FunctionParameterNode(paramSpan, paramNameToken.Span, paramNameToken.Text, paramType));
 
             // If there's a comma, consume it and continue parsing parameters
             if (_currentToken.Kind == TokenKind.Comma)
@@ -379,7 +379,7 @@ public class Parser
         if (modifiers.HasFlag(FunctionModifiers.Foreign))
         {
             // Foreign functions have no body
-            return new FunctionDeclarationNode(fnSpan, identifier.Text, parameters, returnType, statements,
+            return new FunctionDeclarationNode(fnSpan, identifier.Span, identifier.Text, parameters, returnType, statements,
                 modifiers | FunctionModifiers.Foreign);
         }
         else
@@ -402,7 +402,7 @@ public class Parser
             Eat(TokenKind.CloseBrace);
 
             // var span = SourceSpan.Combine(fnKeyword.Span, _currentToken.Span);
-            return new FunctionDeclarationNode(fnSpan, identifier.Text, parameters, returnType, statements, modifiers);
+            return new FunctionDeclarationNode(fnSpan, identifier.Span, identifier.Text, parameters, returnType, statements, modifiers);
         }
     }
 
@@ -548,7 +548,7 @@ public class Parser
         }
 
         var span = SourceSpan.Combine(keyword.Span, _currentToken.Span);
-        return new VariableDeclarationNode(span, identifier.Text, type, initializer, isConst, isPublic);
+        return new VariableDeclarationNode(span, identifier.Span, identifier.Text, type, initializer, isConst, isPublic);
     }
 
     /// <summary>

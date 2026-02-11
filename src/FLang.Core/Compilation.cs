@@ -101,13 +101,21 @@ public class Compilation
     /// Attempts to resolve an import path to a file system path.
     /// </summary>
     /// <param name="importPath">The import path segments (e.g., ["std", "io"]).</param>
+    /// <param name="sourceProvider">Optional source provider for file existence checks.</param>
     /// <returns>The resolved file path if found; otherwise, null.</returns>
-    public string? TryResolveImportPath(IReadOnlyList<string> importPath)
+    public string? TryResolveImportPath(IReadOnlyList<string> importPath, ISourceProvider? sourceProvider = null)
     {
         // Convert import path to filepath: ["std", "io"] -> "stdlib/std/io.f"
         var relativePath = string.Join(Path.DirectorySeparatorChar, importPath) + ".f";
         var fullPath = Path.Combine(StdlibPath, relativePath);
-        if (File.Exists(fullPath)) return fullPath;
+        if (sourceProvider != null)
+        {
+            if (sourceProvider.Exists(fullPath)) return fullPath;
+        }
+        else
+        {
+            if (File.Exists(fullPath)) return fullPath;
+        }
         return null;
     }
 

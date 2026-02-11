@@ -14,9 +14,10 @@ public enum FunctionModifiers
 
 public class FunctionDeclarationNode : AstNode
 {
-    public FunctionDeclarationNode(SourceSpan span, string name, IReadOnlyList<FunctionParameterNode> parameters,
+    public FunctionDeclarationNode(SourceSpan span, SourceSpan nameSpan, string name, IReadOnlyList<FunctionParameterNode> parameters,
         TypeNode? returnType, IReadOnlyList<StatementNode> body, FunctionModifiers modifiers = FunctionModifiers.None) : base(span)
     {
+        NameSpan = nameSpan;
         Name = name;
         Parameters = parameters;
         ReturnType = returnType;
@@ -25,6 +26,7 @@ public class FunctionDeclarationNode : AstNode
     }
 
     public string Name { get; }
+    public SourceSpan NameSpan { get; }
     public IReadOnlyList<FunctionParameterNode> Parameters { get; }
     public TypeNode? ReturnType { get; }
     public IReadOnlyList<StatementNode> Body { get; }

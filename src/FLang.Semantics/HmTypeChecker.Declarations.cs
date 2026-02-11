@@ -36,7 +36,7 @@ public partial class HmTypeChecker
 
             var placeholder = new NominalType(fqn, NominalKind.Struct);
             _nominalTypes[fqn] = placeholder;
-            _nominalSpans[fqn] = structDecl.Span;
+            _nominalSpans[fqn] = structDecl.NameSpan;
         }
 
         foreach (var enumDecl in module.Enums)
@@ -53,7 +53,7 @@ public partial class HmTypeChecker
 
             var placeholder = new NominalType(fqn, NominalKind.Enum);
             _nominalTypes[fqn] = placeholder;
-            _nominalSpans[fqn] = enumDecl.Span;
+            _nominalSpans[fqn] = enumDecl.NameSpan;
         }
     }
 
@@ -360,7 +360,7 @@ public partial class HmTypeChecker
         {
             var param = fn.Parameters[i];
             var paramType = fnType.ParameterTypes[i];
-            _scopes.Bind(param.Name, paramType);
+            _scopes.Bind(param.Name, paramType, param);
             Record(param, paramType);
         }
 

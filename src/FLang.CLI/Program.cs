@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Runtime.InteropServices;
 using FLang.CLI;
 using FLang.Core;
+using FLang.Lsp;
 
 // Parse command-line arguments
 string? inputFilePath = null;
@@ -13,6 +14,7 @@ var releaseBuild = false;
 var findCompilersOnly = false;
 var debugLogging = false;
 var runTests = false;
+var lspMode = false;
 
 for (var i = 0; i < args.Length; i++)
     if (args[i] == "--stdlib-path" && i + 1 < args.Length)
@@ -31,7 +33,16 @@ for (var i = 0; i < args.Length; i++)
         debugLogging = true;
     else if (args[i] == "--test")
         runTests = true;
+    else if (args[i] == "--lsp")
+        lspMode = true;
     else if (!args[i].StartsWith("-")) inputFilePath = args[i];
+
+if (lspMode)
+{
+    stdlibPath ??= Path.Combine(AppContext.BaseDirectory, "stdlib");
+    await FLangLanguageServer.RunAsync(stdlibPath);
+    return;
+}
 
 if (demoDiagnostics)
 {
@@ -55,6 +66,7 @@ if (inputFilePath == null)
     Console.WriteLine("  --emit-fir <file>       Emit FIR (intermediate representation) to file (use '-' for stdout)");
     Console.WriteLine("  --release               Enable C backend optimization (passes -O2 /O2)");
     Console.WriteLine("  --test                  Run test blocks instead of main()");
+    Console.WriteLine("  --lsp                   Start Language Server Protocol server over stdio");
     Console.WriteLine("  --debug-logging         Enable detailed logs for the compiler stages");
     Console.WriteLine("  --demo-diagnostics      Show diagnostic system demo");
     Console.WriteLine("  --find-compilers        Probe and list available C compilers on this machine, then exit");

@@ -59,7 +59,7 @@ public partial class HmTypeChecker
         {
             var origParam = originalFn.Parameters[i];
             var typeNode = new NamedTypeNode(origParam.Span, "_specialized");
-            newParams.Add(new FunctionParameterNode(origParam.Span, origParam.Name, typeNode));
+            newParams.Add(new FunctionParameterNode(origParam.Span, origParam.NameSpan, origParam.Name, typeNode));
         }
 
         TypeNode? newRetNode = originalFn.ReturnType != null
@@ -67,7 +67,7 @@ public partial class HmTypeChecker
             : null;
 
         var newFn = new FunctionDeclarationNode(
-            originalFn.Span, originalFn.Name, newParams, newRetNode,
+            originalFn.Span, originalFn.NameSpan, originalFn.Name, newParams, newRetNode,
             clonedBody, originalFn.Modifiers);
 
         // Register BEFORE checking body to prevent infinite recursion for recursive generics
@@ -163,7 +163,7 @@ public partial class HmTypeChecker
             ret.Expression != null ? CloneExpression(ret.Expression) : null),
         ExpressionStatementNode es => new ExpressionStatementNode(es.Span,
             CloneExpression(es.Expression)),
-        VariableDeclarationNode vd => new VariableDeclarationNode(vd.Span, vd.Name, vd.Type,
+        VariableDeclarationNode vd => new VariableDeclarationNode(vd.Span, vd.NameSpan, vd.Name, vd.Type,
             vd.Initializer != null ? CloneExpression(vd.Initializer) : null),
         ForLoopNode fl => new ForLoopNode(fl.Span, fl.IteratorVariable,
             CloneExpression(fl.IterableExpression), CloneExpression(fl.Body)),

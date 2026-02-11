@@ -1,15 +1,15 @@
 using System.Diagnostics;
 using FLang.Core;
-using FLang.Frontend;
 using FLang.Frontend.Ast.Declarations;
 using Microsoft.Extensions.Logging;
 
-namespace FLang.CLI;
+namespace FLang.Frontend;
 
 public class ModuleCompiler
 {
     private readonly Compilation _compilation;
-    private readonly ILogger<ModuleCompiler> _logger;
+    private readonly ILogger _logger;
+    private readonly ISourceProvider _sourceProvider;
     private readonly Dictionary<string, ModuleNode> _parsedModules = [];
     private readonly Queue<string> _workQueue = new();
     private readonly HashSet<string> _queuedModules = [];
@@ -38,10 +38,11 @@ public class ModuleCompiler
         _compilation.RegisterModule(normalizedPath, -1);
     }
 
-    public ModuleCompiler(Compilation compilation, ILogger<ModuleCompiler> logger)
+    public ModuleCompiler(Compilation compilation, ILogger logger, ISourceProvider? sourceProvider = null)
     {
         _compilation = compilation;
         _logger = logger;
+        _sourceProvider = sourceProvider ?? new FileSystemSourceProvider();
     }
 
     public IReadOnlyList<Diagnostic> Diagnostics => _diagnostics;
@@ -52,7 +53,7 @@ public class ModuleCompiler
 
         // Always include core prelude (imports all core modules)
         var preludePath = Path.Combine(_compilation.StdlibPath, "core", "predule.f");
-        if (File.Exists(preludePath))
+        if (_sourceProvider.Exists(preludePath))
         {
             _logger.LogDebug("Queueing prelude: {PreludePath}", preludePath);
             EnqueueModule(Path.GetFullPath(preludePath));
@@ -87,7 +88,16 @@ public class ModuleCompiler
 
             // Read and parse the module
             _logger.LogDebug("  Reading file: {FilePath}", modulePath);
-            var text = File.ReadAllText(modulePath);
+            var text = _sourceProvider.ReadSource(modulePath);
+            if (text == null)
+            {
+                _diagnostics.Add(Diagnostic.Error(
+                    $"Could not read module file: {modulePath}",
+                    SourceSpan.None,
+                    "Check that the file exists and is readable.",
+                    "E0001"));
+                continue;
+            }
             var source = new Source(text, modulePath);
             var fileId = _compilation.AddSource(source);
             _compilation.RegisterModule(modulePath, fileId);
@@ -112,7 +122,7 @@ public class ModuleCompiler
                 var importPath = string.Join(".", import.Path);
                 _logger.LogDebug("    Resolving import: {ImportPath}", importPath);
 
-                var resolvedPath = _compilation.TryResolveImportPath(import.Path);
+                var resolvedPath = _compilation.TryResolveImportPath(import.Path, _sourceProvider);
 
                 if (resolvedPath == null)
                 {

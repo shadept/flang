@@ -105,7 +105,7 @@ public partial class HmTypeChecker
             varType = _engine.FreshVar();
         }
 
-        _scopes.Bind(varDecl.Name, varType);
+        _scopes.Bind(varDecl.Name, varType, varDecl);
         Record(varDecl, varType);
 
         // Track const names for E2038 checking

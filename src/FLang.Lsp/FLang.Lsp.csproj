@@ -1,0 +1,14 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+    <ItemGroup>
+        <ProjectReference Include="..\FLang.Core\FLang.Core.csproj"/>
+        <ProjectReference Include="..\FLang.Frontend\FLang.Frontend.csproj"/>
+        <ProjectReference Include="..\FLang.Semantics\FLang.Semantics.csproj"/>
+    </ItemGroup>
+
+    <ItemGroup>
+        <PackageReference Include="OmniSharp.Extensions.LanguageServer" />
+        <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
+    </ItemGroup>
+
+</Project>

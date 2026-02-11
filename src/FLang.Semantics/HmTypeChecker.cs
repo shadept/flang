@@ -139,6 +139,8 @@ public partial class HmTypeChecker : INominalTypeRegistry
         [.. _diagnostics, .. _engine.Diagnostics];
     public IReadOnlyDictionary<AstNode, Type> InferredTypes => _inferredTypes;
     public IReadOnlyDictionary<string, NominalType> NominalTypes => _nominalTypes;
+    public IReadOnlyDictionary<string, SourceSpan> NominalSpans => _nominalSpans;
+    public IReadOnlyDictionary<string, List<FunctionScheme>> Functions => _functions;
     public IReadOnlyDictionary<AstNode, ResolvedOperator> ResolvedOperators => _resolvedOperators;
     public InferenceEngine Engine => _engine;
 

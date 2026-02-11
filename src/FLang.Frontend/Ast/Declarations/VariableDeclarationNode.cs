@@ -5,9 +5,10 @@ namespace FLang.Frontend.Ast.Declarations;
 
 public class VariableDeclarationNode : StatementNode
 {
-    public VariableDeclarationNode(SourceSpan span, string name, TypeNode? type, ExpressionNode? initializer, bool isConst = false, bool isPublic = false) :
+    public VariableDeclarationNode(SourceSpan span, SourceSpan nameSpan, string name, TypeNode? type, ExpressionNode? initializer, bool isConst = false, bool isPublic = false) :
         base(span)
     {
+        NameSpan = nameSpan;
         Name = name;
         Type = type;
         Initializer = initializer;
@@ -16,6 +17,7 @@ public class VariableDeclarationNode : StatementNode
     }
 
     public string Name { get; }
+    public SourceSpan NameSpan { get; }
     public TypeNode? Type { get; }
     public ExpressionNode? Initializer { get; set; }
 

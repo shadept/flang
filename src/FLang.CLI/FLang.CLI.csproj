@@ -6,6 +6,7 @@
         <ProjectReference Include="..\FLang.Semantics\FLang.Semantics.csproj"/>
         <ProjectReference Include="..\FLang.IR\FLang.IR.csproj"/>
         <ProjectReference Include="..\FLang.Codegen.C\FLang.Codegen.C.csproj"/>
+        <ProjectReference Include="..\FLang.Lsp\FLang.Lsp.csproj"/>
     </ItemGroup>
 
     <ItemGroup>

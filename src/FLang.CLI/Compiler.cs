@@ -2,6 +2,7 @@
 using System.Runtime.InteropServices;
 using FLang.Codegen.C;
 using FLang.Core;
+using FLang.Frontend;
 using FLang.Frontend.Ast;
 using FLang.IR;
 using FLang.Semantics;
@@ -71,7 +72,7 @@ public class Compiler
 
         // 1. Module Loading and Parsing
         var moduleCompilerLogger = loggerFactory.CreateLogger<ModuleCompiler>();
-        var moduleCompiler = new ModuleCompiler(compilation, moduleCompilerLogger);
+        var moduleCompiler = new ModuleCompiler(compilation, moduleCompilerLogger, new FileSystemSourceProvider());
         var parsedModules = moduleCompiler.CompileModules(options.InputFilePath);
         allDiagnostics.AddRange(moduleCompiler.Diagnostics);
 

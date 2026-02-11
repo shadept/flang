@@ -17,4 +17,16 @@ public class IdentifierExpressionNode : ExpressionNode
     /// this holds the resolved function declaration.
     /// </summary>
     public FunctionDeclarationNode? ResolvedFunctionTarget { get; set; }
+
+    /// <summary>
+    /// Semantic: When this identifier refers to a local variable,
+    /// this holds the declaration node.
+    /// </summary>
+    public VariableDeclarationNode? ResolvedVariableDeclaration { get; set; }
+
+    /// <summary>
+    /// Semantic: When this identifier refers to a function parameter,
+    /// this holds the parameter node.
+    /// </summary>
+    public FunctionParameterNode? ResolvedParameterDeclaration { get; set; }
 }
