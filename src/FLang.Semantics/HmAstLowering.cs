@@ -879,13 +879,16 @@ public class HmAstLowering
         // Same C name means same concrete type
         if (actualType is IrStruct aS && expectedType is IrStruct eS && aS.CName == eS.CName) return val;
 
-        // 1. Array -> Slice: [T; N] -> Slice[T]
-        if (actualType is IrArray arrType && expectedType is IrStruct sliceStruct)
+        // 1. Array -> Slice: [T; N] -> Slice[T] (also handles pointer-to-array from LowerArrayLiteral)
+        IrArray? coerceArrType = actualType as IrArray;
+        if (coerceArrType == null && actualType is IrPointer { Pointee: IrArray innerArr })
+            coerceArrType = innerArr;
+        if (coerceArrType != null && expectedType is IrStruct sliceStruct)
         {
             var ptrField = sliceStruct.Fields.FirstOrDefault(f => f.Name == "ptr");
             var lenField = sliceStruct.Fields.FirstOrDefault(f => f.Name == "len");
             if (ptrField.Type != null && lenField.Type != null)
-                return CoerceArrayToSlice(val, arrType, sliceStruct, ptrField, lenField);
+                return CoerceArrayToSlice(val, coerceArrType, sliceStruct, ptrField, lenField);
         }
 
         // 2. Slice[T] -> &T: extract .ptr field
@@ -1471,6 +1474,7 @@ public class HmAstLowering
             CoalesceExpressionNode coalesce => LowerCoalesce(coalesce),
             NullPropagationExpressionNode nullProp => LowerNullPropagation(nullProp),
             LambdaExpressionNode lambda => LowerLambda(lambda),
+            NamedArgumentExpressionNode na => LowerExpression(na.Value, expectedType),
             _ => throw new NotImplementedException($"Lowering of expression type {expr.GetType()} is not implemented.")
         };
 
@@ -1675,6 +1679,9 @@ public class HmAstLowering
             return LowerIndirectVarCall(call, retIrType);
         }
 
+        // Use ResolvedArguments (from named/default/variadic resolution) when available
+        var callArguments = call.ResolvedArguments ?? call.Arguments;
+
         // Lower arguments
         var args = new List<Value>();
 
@@ -1822,7 +1829,7 @@ public class HmAstLowering
         // Lower arguments with expected types from callee params (triggers coercions)
         // Offset by ufcs arg count since receiver was already added
         var ufcsOffset = call.UfcsReceiver != null ? 1 : 0;
-        for (int i = 0; i < call.Arguments.Count; i++)
+        for (int i = 0; i < callArguments.Count; i++)
         {
             var paramIdx = i + ufcsOffset;
             IrType? expectedParamType = null;
@@ -1830,7 +1837,42 @@ public class HmAstLowering
                 expectedParamType = calleeIrParamTypes[paramIdx];
             else if (foreignParamTypes != null && paramIdx < foreignParamTypes.Count)
                 expectedParamType = foreignParamTypes[paramIdx];
-            var argVal = LowerExpression(call.Arguments[i], expectedParamType);
+
+            // Special case: empty array literal for variadic → construct empty slice directly
+            if (callArguments[i] is ArrayLiteralExpressionNode { Elements.Count: 0 } emptyArr
+                && expectedParamType is IrStruct sliceStruct)
+            {
+                var ptrField = sliceStruct.Fields.FirstOrDefault(f => f.Name == "ptr");
+                var lenField = sliceStruct.Fields.FirstOrDefault(f => f.Name == "len");
+                if (ptrField.Type != null && lenField.Type != null)
+                {
+                    var tmpPtr = new LocalValue($"empty_slice_{_tempCounter++}", new IrPointer(sliceStruct));
+                    _currentBlock.Instructions.Add(new AllocaInstruction(_currentSpan, sliceStruct.Size, tmpPtr));
+                    // ptr = NULL (0 cast to pointer)
+                    EmitStoreToOffset(tmpPtr, ptrField.ByteOffset,
+                        new ConstantValue(0, ptrField.Type), ptrField.Type);
+                    // len = 0
+                    EmitStoreToOffset(tmpPtr, lenField.ByteOffset,
+                        new ConstantValue(0, TypeLayoutService.IrUSize), lenField.Type);
+                    var loaded = new LocalValue($"empty_slice_val_{_tempCounter++}", sliceStruct);
+                    _currentBlock.Instructions.Add(new LoadInstruction(_currentSpan, tmpPtr, loaded));
+
+                    if (!isForeign && IsLargeValue(expectedParamType))
+                    {
+                        var temp = new LocalValue($"byref_arg_{_tempCounter++}", new IrPointer(sliceStruct));
+                        _currentBlock.Instructions.Add(new AllocaInstruction(_currentSpan, sliceStruct.Size, temp));
+                        _currentBlock.Instructions.Add(new StorePointerInstruction(_currentSpan, temp, loaded));
+                        args.Add(temp);
+                    }
+                    else
+                    {
+                        args.Add(loaded);
+                    }
+                    continue;
+                }
+            }
+
+            var argVal = LowerExpression(callArguments[i], expectedParamType);
 
             // Implicit by-ref: large value args to non-foreign functions need pointer materialization
             if (!isForeign && expectedParamType != null && IsLargeValue(expectedParamType) && argVal.IrType is not IrPointer)

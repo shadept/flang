@@ -270,7 +270,17 @@ public partial class HmTypeChecker
         // Resolve parameter types
         var paramTypes = new Type[fn.Parameters.Count];
         for (var i = 0; i < fn.Parameters.Count; i++)
-            paramTypes[i] = ResolveTypeNode(fn.Parameters[i].Type);
+        {
+            var paramType = ResolveTypeNode(fn.Parameters[i].Type);
+            if (fn.Parameters[i].IsVariadic)
+            {
+                // Variadic param: declared element type becomes Slice[T]
+                var sliceNominal = LookupNominalType(WellKnown.Slice)
+                    ?? throw new InvalidOperationException($"Well-known type `{WellKnown.Slice}` not registered");
+                paramType = new NominalType(sliceNominal.Name, sliceNominal.Kind, [paramType], sliceNominal.FieldsOrVariants);
+            }
+            paramTypes[i] = paramType;
+        }
 
         // Resolve return type
         var returnType = fn.ReturnType != null

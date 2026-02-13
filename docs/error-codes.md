@@ -1957,6 +1957,220 @@ fn compute(x: i32) i32 {
 
 ---
 
+### E2060: Variadic Parameter Cannot Have Default Value
+
+**Category**: Parsing
+**Severity**: Error
+
+#### Description
+
+A variadic parameter (`..name: Type`) was declared with a default value. Variadic parameters accept zero or more arguments and cannot have defaults.
+
+#### Example
+
+```
+fn bad(..args: i32 = 0) { }  // error: variadic parameter cannot have default value
+```
+
+#### Solution
+
+Remove the default value or the `..` prefix.
+
+---
+
+### E2061: Multiple Variadic Parameters
+
+**Category**: Parsing
+**Severity**: Error
+
+#### Description
+
+A function was declared with more than one variadic parameter. Only one variadic parameter is allowed per function.
+
+#### Example
+
+```
+fn bad(..a: i32, ..b: i32) { }  // error: only one variadic parameter allowed
+```
+
+#### Solution
+
+Remove the extra `..` prefix.
+
+---
+
+### E2062: Parameter After Variadic
+
+**Category**: Parsing
+**Severity**: Error
+
+#### Description
+
+A parameter was declared after the variadic parameter. The variadic parameter must be the last parameter.
+
+#### Example
+
+```
+fn bad(..args: i32, extra: i32) { }  // error: parameter after variadic
+```
+
+#### Solution
+
+Move the parameter before the variadic parameter.
+
+---
+
+### E2063: Required Parameter After Default
+
+**Category**: Parsing
+**Severity**: Error
+
+#### Description
+
+A required parameter (no default value) was declared after a parameter with a default value. Required parameters must come before parameters with defaults.
+
+#### Example
+
+```
+fn bad(a: i32 = 10, b: i32) { }  // error: required parameter after default
+```
+
+#### Solution
+
+Add a default value or reorder parameters so required parameters come first.
+
+---
+
+### E2064: Foreign Function Cannot Have FLang-Style Variadic
+
+**Category**: Parsing
+**Severity**: Error
+
+#### Description
+
+A `#foreign` function was declared with a FLang-style variadic parameter (`..name: Type`). Foreign functions should use C-style variadic (`...`) instead.
+
+#### Example
+
+```
+#foreign fn bad(..args: i32) i32  // error: use C-style variadic instead
+```
+
+#### Solution
+
+Use C-style variadic calling conventions: `#foreign fn printf(fmt: &u8, ...) i32`.
+
+---
+
+### E2065: Named Arguments Not Supported for Indirect Calls
+
+**Category**: Type Checking
+**Severity**: Error
+
+#### Description
+
+Named arguments were used in a call through a function pointer or field. Function pointer types do not carry parameter names, so named arguments cannot be resolved.
+
+#### Example
+
+```
+let f: fn(i32, i32) i32 = add
+f(b = 3, a = 10)  // error: named arguments not supported for indirect calls
+```
+
+#### Solution
+
+Use positional arguments for indirect calls.
+
+---
+
+### E2066: Duplicate Named Argument
+
+**Category**: Type Checking
+**Severity**: Error
+
+#### Description
+
+The same named argument was specified more than once in a function call.
+
+#### Example
+
+```
+foo(x = 1, x = 2)  // error: duplicate named argument `x`
+```
+
+#### Solution
+
+Remove the duplicate named argument.
+
+---
+
+### E2067: Missing Required Argument
+
+**Category**: Type Checking
+**Severity**: Error
+
+#### Description
+
+A required parameter (no default value) was not provided by either positional or named argument in the function call.
+
+#### Example
+
+```
+fn foo(a: i32, b: i32) { }
+foo(a = 10)  // error: missing argument for required parameter `b`
+```
+
+#### Solution
+
+Provide the missing argument positionally or by name.
+
+---
+
+### E2068: Too Many Positional Arguments
+
+**Category**: Type Checking
+**Severity**: Error
+
+#### Description
+
+More positional arguments were supplied than the function accepts.
+
+#### Example
+
+```
+fn foo(a: i32, b: i32) { }
+foo(1, 2, 3)  // error: too many positional arguments
+```
+
+#### Solution
+
+Remove the extra arguments.
+
+---
+
+### E2069: Unknown Named Argument
+
+**Category**: Type Checking
+**Severity**: Error
+
+#### Description
+
+A named argument does not match any parameter name of the called function.
+
+#### Example
+
+```
+fn foo(a: i32, b: i32) { }
+foo(a = 1, c = 2)  // error: unknown named argument `c`
+```
+
+#### Solution
+
+Use a valid parameter name.
+
+---
+
 ## E3XXX: Code Generation Errors
 
 ### E3001: Invalid Type During Lowering
@@ -2291,6 +2505,16 @@ Report the issue with sample code that reproduces the error.
 | **E2039** | Variables         | Const declaration missing initializer        |
 | **E2040** | Type Checking     | Cannot take address of temporary value       |
 | **E2049** | Semantic Analysis | Missing return value in non-void function    |
+| **E2060** | Parsing           | Variadic parameter cannot have default value |
+| **E2061** | Parsing           | Multiple variadic parameters                 |
+| **E2062** | Parsing           | Parameter after variadic                     |
+| **E2063** | Parsing           | Required parameter after default             |
+| **E2064** | Parsing           | Foreign fn cannot have FLang-style variadic  |
+| **E2065** | Type Checking     | Named args not supported for indirect calls  |
+| **E2066** | Type Checking     | Duplicate named argument                     |
+| **E2067** | Type Checking     | Missing required argument                    |
+| **E2068** | Type Checking     | Too many positional arguments                |
+| **E2069** | Type Checking     | Unknown named argument                       |
 | **E2102** | Generics          | Conflicting generic type bindings            |
 
 ### E3XXX: Code Generation

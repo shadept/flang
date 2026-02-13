@@ -153,7 +153,21 @@ public class HoverHandler : HoverHandlerBase
             case FunctionParameterNode param:
                 {
                     if (tc.InferredTypes.TryGetValue(param, out var type))
-                        return $"{param.Name}: {FormatHmType(tc.Engine.Resolve(type), tc)}";
+                    {
+                        var prefix = param.IsVariadic ? ".." : "";
+                        var display = $"{prefix}{param.Name}: {FormatHmType(tc.Engine.Resolve(type), tc)}";
+                        if (param.DefaultValue != null)
+                            display += $" = {FormatExpressionSnippet(param.DefaultValue)}";
+                        return display;
+                    }
+                    break;
+                }
+
+            case NamedArgumentExpressionNode namedArg:
+                {
+                    // Show the parameter this named argument refers to
+                    if (tc.InferredTypes.TryGetValue(namedArg, out var type))
+                        return $"{namedArg.Name}: {FormatHmType(tc.Engine.Resolve(type), tc)}";
                     break;
                 }
 
@@ -205,9 +219,15 @@ public class HoverHandler : HoverHandlerBase
     {
         var pars = string.Join(", ", fn.Parameters.Select(p =>
         {
+            var prefix = p.IsVariadic ? ".." : "";
+            string label;
             if (tc.InferredTypes.TryGetValue(p, out var inferredType))
-                return $"{p.Name}: {FormatHmType(tc.Engine.Resolve(inferredType), tc)}";
-            return $"{p.Name}: {FormatTypeNode(p.Type)}";
+                label = $"{prefix}{p.Name}: {FormatHmType(tc.Engine.Resolve(inferredType), tc)}";
+            else
+                label = $"{prefix}{p.Name}: {FormatTypeNode(p.Type)}";
+            if (p.DefaultValue != null)
+                label += $" = {FormatExpressionSnippet(p.DefaultValue)}";
+            return label;
         }));
 
         string ret = "void";
@@ -226,6 +246,31 @@ public class HoverHandler : HoverHandlerBase
 
         return $"fn {fn.Name}({pars}) {ret}";
     }
+
+    /// <summary>
+    /// Format a default value expression as a short source snippet for display.
+    /// </summary>
+    internal static string FormatExpressionSnippet(ExpressionNode expr) => expr switch
+    {
+        IntegerLiteralNode lit => lit.Value.ToString(),
+        BooleanLiteralNode bl => bl.Value ? "true" : "false",
+        StringLiteralNode sl => $"\"{sl.Value}\"",
+        NullLiteralNode => "null",
+        IdentifierExpressionNode id => id.Name,
+        CallExpressionNode call => $"{call.FunctionName}(..)",
+        ArrayLiteralExpressionNode arr => arr.Elements?.Count > 0
+            ? $"[{string.Join(", ", arr.Elements.Select(FormatExpressionSnippet))}]"
+            : "[]",
+        UnaryExpressionNode un => $"{FormatUnaryOp(un.Operator)}{FormatExpressionSnippet(un.Operand)}",
+        _ => ".."
+    };
+
+    private static string FormatUnaryOp(UnaryOperatorKind op) => op switch
+    {
+        UnaryOperatorKind.Negate => "-",
+        UnaryOperatorKind.Not => "!",
+        _ => "?"
+    };
 
     private static bool IsPrimitiveTypeName(string name) => name is
         "i8" or "i16" or "i32" or "i64" or "isize" or
@@ -271,6 +316,7 @@ public class HoverHandler : HoverHandlerBase
         FunctionDeclarationNode fn => fn.NameSpan,
         VariableDeclarationNode vd => vd.NameSpan,
         FunctionParameterNode fp => fp.NameSpan,
+        NamedArgumentExpressionNode na => na.NameSpan,
         StructDeclarationNode sd => sd.NameSpan,
         EnumDeclarationNode ed => ed.NameSpan,
         StructFieldNode sf => sf.NameSpan,

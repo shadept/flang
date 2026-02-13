@@ -350,14 +350,75 @@ public class Parser
 
         // Parse parameter list
         var parameters = new List<FunctionParameterNode>();
+        bool hasSeenDefault = false;
+        bool hasSeenVariadic = false;
         while (_currentToken.Kind != TokenKind.CloseParenthesis && _currentToken.Kind != TokenKind.EndOfFile)
         {
+            // Check for variadic prefix: ..name
+            bool isVariadic = false;
+            if (_currentToken.Kind == TokenKind.DotDot)
+            {
+                Eat(TokenKind.DotDot);
+                isVariadic = true;
+            }
+
             var paramNameToken = Eat(TokenKind.Identifier);
             Eat(TokenKind.Colon);
             var paramType = ParseType();
 
-            var paramSpan = SourceSpan.Combine(paramNameToken.Span, paramType.Span);
-            parameters.Add(new FunctionParameterNode(paramSpan, paramNameToken.Span, paramNameToken.Text, paramType));
+            // Check for default value: name: Type = expr
+            ExpressionNode? defaultValue = null;
+            if (_currentToken.Kind == TokenKind.Equals)
+            {
+                Eat(TokenKind.Equals);
+                defaultValue = ParseExpression();
+
+                if (isVariadic)
+                {
+                    _diagnostics.Add(Diagnostic.Error(
+                        "variadic parameter cannot have a default value",
+                        paramNameToken.Span,
+                        "remove the default value or the '..' prefix",
+                        "E2060"));
+                }
+            }
+
+            if (isVariadic)
+            {
+                if (hasSeenVariadic)
+                {
+                    _diagnostics.Add(Diagnostic.Error(
+                        "only one variadic parameter is allowed",
+                        paramNameToken.Span,
+                        "remove the extra '..' prefix",
+                        "E2061"));
+                }
+                hasSeenVariadic = true;
+            }
+            else if (hasSeenVariadic)
+            {
+                _diagnostics.Add(Diagnostic.Error(
+                    "no parameters are allowed after a variadic parameter",
+                    paramNameToken.Span,
+                    "move this parameter before the variadic parameter",
+                    "E2062"));
+            }
+
+            if (defaultValue != null)
+                hasSeenDefault = true;
+            else if (hasSeenDefault && !isVariadic)
+            {
+                _diagnostics.Add(Diagnostic.Error(
+                    "required parameter cannot follow a parameter with a default value",
+                    paramNameToken.Span,
+                    "add a default value or reorder parameters",
+                    "E2063"));
+            }
+
+            var paramSpan = SourceSpan.Combine(paramNameToken.Span,
+                defaultValue?.Span ?? paramType.Span);
+            parameters.Add(new FunctionParameterNode(paramSpan, paramNameToken.Span, paramNameToken.Text,
+                paramType, defaultValue, isVariadic));
 
             // If there's a comma, consume it and continue parsing parameters
             if (_currentToken.Kind == TokenKind.Comma)
@@ -376,6 +437,16 @@ public class Parser
             returnType = ParseType();
 
         var statements = new List<StatementNode>();
+
+        // Foreign functions cannot have FLang-style variadic or default params
+        if (modifiers.HasFlag(FunctionModifiers.Foreign) && hasSeenVariadic)
+        {
+            _diagnostics.Add(Diagnostic.Error(
+                "foreign functions cannot have variadic parameters",
+                identifier.Span,
+                "use C-style variadic calling conventions instead",
+                "E2064"));
+        }
 
         var fnSpan = SourceSpan.Combine(fnKeyword.Span, _currentToken.Span);
         if (modifiers.HasFlag(FunctionModifiers.Foreign))
@@ -686,20 +757,7 @@ public class Parser
                     if (_currentToken.Kind == TokenKind.OpenParenthesis)
                     {
                         Eat(TokenKind.OpenParenthesis);
-                        var arguments = new List<ExpressionNode>();
-
-                        // Parse arguments
-                        while (_currentToken.Kind != TokenKind.CloseParenthesis &&
-                               _currentToken.Kind != TokenKind.EndOfFile)
-                        {
-                            arguments.Add(ParseExpression());
-
-                            if (_currentToken.Kind == TokenKind.Comma)
-                                Eat(TokenKind.Comma);
-                            else if (_currentToken.Kind != TokenKind.CloseParenthesis)
-                                break;
-                        }
-
+                        var arguments = ParseCallArguments();
                         var closeParenToken = Eat(TokenKind.CloseParenthesis);
                         var callSpan = SourceSpan.Combine(expr.Span, closeParenToken.Span);
 
@@ -935,22 +993,7 @@ public class Parser
                     if (_currentToken.Kind == TokenKind.OpenParenthesis)
                     {
                         Eat(TokenKind.OpenParenthesis);
-                        var arguments = new List<ExpressionNode>();
-
-                        // Parse arguments
-                        while (_currentToken.Kind != TokenKind.CloseParenthesis &&
-                               _currentToken.Kind != TokenKind.EndOfFile)
-                        {
-                            arguments.Add(ParseExpression());
-
-                            // If there's a comma, consume it and continue parsing arguments
-                            if (_currentToken.Kind == TokenKind.Comma)
-                                Eat(TokenKind.Comma);
-                            else if (_currentToken.Kind != TokenKind.CloseParenthesis)
-                                // Error: expected comma or close parenthesis
-                                break;
-                        }
-
+                        var arguments = ParseCallArguments();
                         var closeParenToken = Eat(TokenKind.CloseParenthesis);
                         var callSpan = SourceSpan.Combine(identifierToken.Span, closeParenToken.Span);
                         return new CallExpressionNode(callSpan, identifierToken.Text, arguments);
@@ -1690,6 +1733,38 @@ public class Parser
         }
 
         return new AnonymousStructExpressionNode(span, fields);
+    }
+
+    /// <summary>
+    /// Parses a comma-separated list of call arguments, supporting named arguments (name = expr).
+    /// Caller must have already consumed the opening parenthesis.
+    /// </summary>
+    private List<ExpressionNode> ParseCallArguments()
+    {
+        var arguments = new List<ExpressionNode>();
+        while (_currentToken.Kind != TokenKind.CloseParenthesis &&
+               _currentToken.Kind != TokenKind.EndOfFile)
+        {
+            // Check for named argument: identifier '=' (but not '==')
+            if (_currentToken.Kind == TokenKind.Identifier && PeekNextToken().Kind == TokenKind.Equals)
+            {
+                var nameToken = Eat(TokenKind.Identifier);
+                Eat(TokenKind.Equals);
+                var value = ParseExpression();
+                var span = SourceSpan.Combine(nameToken.Span, value.Span);
+                arguments.Add(new NamedArgumentExpressionNode(span, nameToken.Span, nameToken.Text, value));
+            }
+            else
+            {
+                arguments.Add(ParseExpression());
+            }
+
+            if (_currentToken.Kind == TokenKind.Comma)
+                Eat(TokenKind.Comma);
+            else if (_currentToken.Kind != TokenKind.CloseParenthesis)
+                break;
+        }
+        return arguments;
     }
 
     /// <summary>

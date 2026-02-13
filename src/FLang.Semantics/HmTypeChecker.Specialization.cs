@@ -59,7 +59,9 @@ public partial class HmTypeChecker
         {
             var origParam = originalFn.Parameters[i];
             var typeNode = new NamedTypeNode(origParam.Span, "_specialized");
-            newParams.Add(new FunctionParameterNode(origParam.Span, origParam.NameSpan, origParam.Name, typeNode));
+            var clonedDefault = origParam.DefaultValue != null ? CloneExpression(origParam.DefaultValue) : null;
+            newParams.Add(new FunctionParameterNode(origParam.Span, origParam.NameSpan, origParam.Name, typeNode,
+                clonedDefault, origParam.IsVariadic));
         }
 
         TypeNode? newRetNode = originalFn.ReturnType != null
@@ -226,6 +228,8 @@ public partial class HmTypeChecker
             sc.Fields.Select(f => (f.FieldName, CloneExpression(f.Value))).ToList()),
         ImplicitCoercionNode ic => new ImplicitCoercionNode(ic.Span,
             CloneExpression(ic.Inner), ic.TargetType, ic.Kind),
+        NamedArgumentExpressionNode na => new NamedArgumentExpressionNode(na.Span,
+            na.NameSpan, na.Name, CloneExpression(na.Value)),
         UnaryExpressionNode un => new UnaryExpressionNode(un.Span, un.Operator,
             CloneExpression(un.Operand)),
         LambdaExpressionNode lambda => new LambdaExpressionNode(lambda.Span,

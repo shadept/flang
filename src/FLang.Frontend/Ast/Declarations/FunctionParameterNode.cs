@@ -5,16 +5,21 @@ namespace FLang.Frontend.Ast.Declarations;
 
 public class FunctionParameterNode : AstNode
 {
-    public FunctionParameterNode(SourceSpan span, SourceSpan nameSpan, string name, TypeNode type) : base(span)
+    public FunctionParameterNode(SourceSpan span, SourceSpan nameSpan, string name, TypeNode type,
+        ExpressionNode? defaultValue = null, bool isVariadic = false) : base(span)
     {
         NameSpan = nameSpan;
         Name = name;
         Type = type;
+        DefaultValue = defaultValue;
+        IsVariadic = isVariadic;
     }
 
     public string Name { get; }
     public SourceSpan NameSpan { get; }
     public TypeNode Type { get; }
+    public ExpressionNode? DefaultValue { get; }
+    public bool IsVariadic { get; }
 
     /// <summary>
     /// Semantic: Resolved parameter type, set during type checking.

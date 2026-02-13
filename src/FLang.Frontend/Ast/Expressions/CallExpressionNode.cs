@@ -44,4 +44,11 @@ public class CallExpressionNode : ExpressionNode
     /// When true and UfcsReceiver is null, FunctionName is a variable with function type.
     /// </summary>
     public bool IsIndirectCall { get; set; }
+
+    /// <summary>
+    /// Semantic: Fully resolved argument list in parameter order, with defaults filled
+    /// and named arguments reordered. When set by the type checker, lowering uses this
+    /// instead of Arguments. Does NOT include the UFCS receiver.
+    /// </summary>
+    public List<ExpressionNode>? ResolvedArguments { get; set; }
 }

@@ -100,13 +100,23 @@ public class InlayHintHandler : InlayHintsHandlerBase
 
             // For UFCS calls, skip the implicit self parameter
             var paramOffset = call.UfcsReceiver != null ? 1 : 0;
+            var positionalIndex = paramOffset;
 
             for (var i = 0; i < args.Count; i++)
             {
-                var paramIndex = i + paramOffset;
-                if (paramIndex >= parameters.Count) break;
+                // Named arguments already display their name — no hint needed
+                if (args[i] is NamedArgumentExpressionNode)
+                    continue;
 
-                var paramName = parameters[paramIndex].Name;
+                if (positionalIndex >= parameters.Count) break;
+
+                var param = parameters[positionalIndex];
+
+                // Variadic params collect remaining args into a slice — skip hints
+                if (param.IsVariadic) break;
+
+                var paramName = param.Name;
+                positionalIndex++;
 
                 // Skip self parameter hints
                 if (paramName == "self") continue;
@@ -200,6 +210,10 @@ public class InlayHintHandler : InlayHintsHandlerBase
                 foreach (var s in fn.Body) yield return s;
                 break;
 
+            case FunctionParameterNode fp:
+                if (fp.DefaultValue != null) yield return fp.DefaultValue;
+                break;
+
             case VariableDeclarationNode vd:
                 if (vd.Type != null) yield return vd.Type;
                 if (vd.Initializer != null) yield return vd.Initializer;
@@ -221,6 +235,10 @@ public class InlayHintHandler : InlayHintsHandlerBase
             case CallExpressionNode call:
                 if (call.UfcsReceiver != null) yield return call.UfcsReceiver;
                 foreach (var a in call.Arguments) yield return a;
+                break;
+
+            case NamedArgumentExpressionNode namedArg:
+                yield return namedArg.Value;
                 break;
 
             case MemberAccessExpressionNode ma:

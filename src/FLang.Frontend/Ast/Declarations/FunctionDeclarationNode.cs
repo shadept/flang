@@ -35,6 +35,9 @@ public class FunctionDeclarationNode : AstNode
     public bool IsGeneric => Parameters.Any(p => TypeNode.ContainsGenericParam(p.Type))
         || (ReturnType != null && TypeNode.ContainsGenericParam(ReturnType));
 
+    public int RequiredParameterCount => Parameters.Count(p => p.DefaultValue == null && !p.IsVariadic);
+    public bool HasVariadicParam => Parameters.Any(p => p.IsVariadic);
+
     public HashSet<string> GetGenericParamNames()
     {
         var names = new HashSet<string>();

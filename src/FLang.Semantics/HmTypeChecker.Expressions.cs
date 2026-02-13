@@ -48,6 +48,7 @@ public partial class HmTypeChecker
             CoalesceExpressionNode coal => InferCoalesce(coal),
             NullPropagationExpressionNode nullProp => InferNullPropagation(nullProp),
             AnonymousStructExpressionNode anon => InferAnonymousStruct(anon),
+            NamedArgumentExpressionNode namedArg => InferExpression(namedArg.Value),
             _ => InferUnknownExpression(expr)
         };
 
@@ -466,6 +467,285 @@ public partial class HmTypeChecker
         return fnType!.ReturnType;
     }
 
+    /// <summary>
+    /// Generalized overload resolution that supports default params, named args, and variadics.
+    /// Arity check is relaxed: requiredCount &lt;= positional + named &lt;= totalCount (or unbounded for variadic).
+    /// </summary>
+    private (FunctionScheme Winner, FunctionType FnType, FunctionDeclarationNode Node)?
+        ResolveOverloadWithDefaults(
+            List<FunctionScheme> candidates,
+            Type[] fullPositionalTypes,
+            List<NamedArgumentExpressionNode> namedArgs,
+            Dictionary<string, Type> namedTypes,
+            SourceSpan span,
+            int ufcsOffset)
+    {
+        FunctionScheme? bestCandidate = null;
+        int bestCost = int.MaxValue;
+        bool bestIsGeneric = true;
+
+        foreach (var candidate in candidates)
+        {
+            var fn = candidate.Node;
+            var paramCount = fn.Parameters.Count;
+            var requiredCount = fn.RequiredParameterCount;
+            var hasVariadic = fn.HasVariadicParam;
+
+            // Check named arg names are valid for this candidate (skip UFCS receiver params)
+            bool validNames = true;
+            foreach (var na in namedArgs)
+            {
+                bool found = false;
+                for (int p = ufcsOffset; p < paramCount; p++)
+                {
+                    if (fn.Parameters[p].Name == na.Name) { found = true; break; }
+                }
+                if (!found) { validNames = false; break; }
+            }
+            if (!validNames) continue;
+
+            // Arity check:
+            // positionalCount (excluding UFCS receiver) + namedCount must cover required params
+            // and not exceed total non-variadic params (excess positionals go to variadic)
+            int userPositionalCount = fullPositionalTypes.Length - ufcsOffset;
+            int totalSupplied = userPositionalCount + namedArgs.Count;
+            int nonVariadicParamCount = hasVariadic ? paramCount - 1 : paramCount;
+
+            if (!hasVariadic && totalSupplied + ufcsOffset > paramCount) continue;
+            if (totalSupplied + ufcsOffset < requiredCount) continue;
+
+            // Speculative unification
+            var specialized = _engine.Specialize(candidate.Signature);
+            var fnType = _engine.Resolve(specialized) as FunctionType;
+            if (fnType == null) continue;
+
+            int totalCost = 0;
+            bool success = true;
+
+            // Unify positional args with corresponding params
+            for (int i = 0; i < fullPositionalTypes.Length && i < fnType.ParameterTypes.Count; i++)
+            {
+                // For variadic param: unify positional args past last non-variadic with element type
+                if (i >= ufcsOffset && i - ufcsOffset >= nonVariadicParamCount - ufcsOffset && hasVariadic)
+                {
+                    // Get the variadic param's slice type -> extract element type
+                    var variadicParamType = fnType.ParameterTypes[paramCount - 1];
+                    var resolvedVP = _engine.Resolve(variadicParamType);
+                    Type elemType;
+                    if (resolvedVP is NominalType { Name: WellKnown.Slice } sliceType && sliceType.TypeArguments.Count > 0)
+                        elemType = sliceType.TypeArguments[0];
+                    else
+                        elemType = variadicParamType;
+
+                    var result = _engine.TryUnify(fullPositionalTypes[i], elemType);
+                    if (result == null) { success = false; break; }
+                    totalCost += result.Value.Cost;
+                }
+                else if (i < fnType.ParameterTypes.Count)
+                {
+                    var result = _engine.TryUnify(fullPositionalTypes[i], fnType.ParameterTypes[i]);
+                    if (result == null) { success = false; break; }
+                    totalCost += result.Value.Cost;
+                }
+            }
+            if (!success) continue;
+
+            // Unify named args by matching to parameter index
+            foreach (var na in namedArgs)
+            {
+                int paramIdx = -1;
+                for (int p = ufcsOffset; p < paramCount; p++)
+                {
+                    if (fn.Parameters[p].Name == na.Name) { paramIdx = p; break; }
+                }
+                if (paramIdx < 0 || paramIdx >= fnType.ParameterTypes.Count) { success = false; break; }
+
+                var result = _engine.TryUnify(namedTypes[na.Name], fnType.ParameterTypes[paramIdx]);
+                if (result == null) { success = false; break; }
+                totalCost += result.Value.Cost;
+            }
+            if (!success) continue;
+
+            // Cost penalty for each defaulted param (prefer overloads that use fewer defaults)
+            int suppliedParamIndices = fullPositionalTypes.Length + namedArgs.Count;
+            int defaultsUsed = paramCount - suppliedParamIndices;
+            if (hasVariadic) defaultsUsed = Math.Max(0, defaultsUsed - 1); // variadic itself is optional
+            totalCost += defaultsUsed * 100;
+
+            bool isGeneric = candidate.Signature.QuantifiedVarIds.Count > 0;
+
+            if (!isGeneric && bestIsGeneric)
+            {
+                bestCandidate = candidate;
+                bestCost = totalCost;
+                bestIsGeneric = false;
+            }
+            else if (isGeneric == bestIsGeneric && totalCost < bestCost)
+            {
+                bestCandidate = candidate;
+                bestCost = totalCost;
+                bestIsGeneric = isGeneric;
+            }
+        }
+
+        if (bestCandidate == null) return null;
+
+        // Re-specialize and commit unification
+        var winnerSpec = _engine.Specialize(bestCandidate.Signature);
+        var winnerFn = _engine.Resolve(winnerSpec) as FunctionType;
+        if (winnerFn == null) return null;
+
+        // Commit positional unification
+        var fn2 = bestCandidate.Node;
+        var nonVarCount = fn2.HasVariadicParam ? fn2.Parameters.Count - 1 : fn2.Parameters.Count;
+
+        for (int i = 0; i < fullPositionalTypes.Length; i++)
+        {
+            if (i >= ufcsOffset && (i - ufcsOffset) >= (nonVarCount - ufcsOffset) && fn2.HasVariadicParam)
+            {
+                var variadicParamType = winnerFn.ParameterTypes[fn2.Parameters.Count - 1];
+                var resolvedVP = _engine.Resolve(variadicParamType);
+                Type elemType;
+                if (resolvedVP is NominalType { Name: WellKnown.Slice } sliceType && sliceType.TypeArguments.Count > 0)
+                    elemType = sliceType.TypeArguments[0];
+                else
+                    elemType = variadicParamType;
+                _engine.Unify(fullPositionalTypes[i], elemType, span);
+            }
+            else if (i < winnerFn.ParameterTypes.Count)
+            {
+                _engine.Unify(fullPositionalTypes[i], winnerFn.ParameterTypes[i], span);
+            }
+        }
+
+        // Commit named arg unification
+        foreach (var na in namedArgs)
+        {
+            for (int p = ufcsOffset; p < fn2.Parameters.Count; p++)
+            {
+                if (fn2.Parameters[p].Name == na.Name)
+                {
+                    _engine.Unify(namedTypes[na.Name], winnerFn.ParameterTypes[p], span);
+                    break;
+                }
+            }
+        }
+
+        // Generic monomorphization
+        FunctionDeclarationNode node;
+        if (bestCandidate.Signature.QuantifiedVarIds.Count > 0)
+        {
+            var concreteParams = winnerFn.ParameterTypes.Select(p => _engine.Resolve(p)).ToArray();
+            var concreteReturn = _engine.Resolve(winnerFn.ReturnType);
+            var spec = EnsureSpecialization(bestCandidate, concreteParams, concreteReturn, span);
+            node = spec ?? bestCandidate.Node;
+        }
+        else
+        {
+            node = bestCandidate.Node;
+        }
+
+        return (bestCandidate, winnerFn, node);
+    }
+
+    /// <summary>
+    /// Build the fully resolved argument list in parameter order, filling defaults and packing variadics.
+    /// Sets call.ResolvedArguments. Does NOT include the UFCS receiver (lowering handles that separately).
+    /// </summary>
+    private void BuildResolvedArguments(
+        CallExpressionNode call,
+        FunctionDeclarationNode target,
+        FunctionType winnerFnType,
+        List<ExpressionNode> positionalArgs,
+        List<NamedArgumentExpressionNode> namedArgs,
+        int ufcsOffset)
+    {
+        var resolved = new List<ExpressionNode>();
+        int positionalIdx = 0; // index into user's positional args (excluding UFCS receiver)
+
+        // Build a lookup for named args
+        var namedLookup = new Dictionary<string, ExpressionNode>();
+        foreach (var na in namedArgs)
+        {
+            if (namedLookup.ContainsKey(na.Name))
+            {
+                ReportError($"duplicate named argument `{na.Name}`", na.Span, "E2066");
+                continue;
+            }
+            namedLookup[na.Name] = na.Value;
+        }
+
+        for (int p = ufcsOffset; p < target.Parameters.Count; p++)
+        {
+            var param = target.Parameters[p];
+            var paramType = p < winnerFnType.ParameterTypes.Count ? winnerFnType.ParameterTypes[p] : null;
+
+            if (param.IsVariadic)
+            {
+                // Collect remaining positional args into an array literal
+                var variadicElements = new List<ExpressionNode>();
+                while (positionalIdx < positionalArgs.Count)
+                    variadicElements.Add(positionalArgs[positionalIdx++]);
+
+                var arrLiteral = new ArrayLiteralExpressionNode(call.Span, variadicElements);
+                // Infer the array literal type so lowering can handle it
+                var arrType = InferExpression(arrLiteral);
+                // Unify the array element type with the variadic element type (from Slice[T])
+                if (paramType != null)
+                {
+                    var resolvedPT = _engine.Resolve(paramType);
+                    if (resolvedPT is NominalType { Name: WellKnown.Slice } sliceType
+                        && sliceType.TypeArguments.Count > 0
+                        && arrType is ArrayType arrT)
+                    {
+                        _engine.Unify(arrT.ElementType, sliceType.TypeArguments[0], call.Span);
+                    }
+                }
+                resolved.Add(arrLiteral);
+            }
+            else if (namedLookup.TryGetValue(param.Name, out var namedValue))
+            {
+                resolved.Add(namedValue);
+                namedLookup.Remove(param.Name);
+            }
+            else if (positionalIdx < positionalArgs.Count)
+            {
+                resolved.Add(positionalArgs[positionalIdx++]);
+            }
+            else if (param.DefaultValue != null)
+            {
+                // Clone the default expression (fresh eval per call site)
+                var cloned = CloneExpression(param.DefaultValue);
+                var defaultType = InferExpression(cloned);
+                // Unify with parameter type to give the literal a concrete type
+                if (paramType != null)
+                    _engine.Unify(defaultType, paramType, call.Span);
+                resolved.Add(cloned);
+            }
+            else
+            {
+                ReportError($"missing argument for required parameter `{param.Name}`",
+                    call.Span, "E2067");
+            }
+        }
+
+        // Check for excess positional args
+        if (positionalIdx < positionalArgs.Count)
+        {
+            ReportError($"too many positional arguments (expected {target.Parameters.Count - ufcsOffset}, got {positionalArgs.Count})",
+                call.Span, "E2068");
+        }
+
+        // Check for unknown named args
+        foreach (var remaining in namedLookup)
+        {
+            ReportError($"unknown named argument `{remaining.Key}`",
+                call.Span, "E2069");
+        }
+
+        call.ResolvedArguments = resolved;
+    }
+
     // =========================================================================
     // Function calls
     // =========================================================================
@@ -477,92 +757,148 @@ public partial class HmTypeChecker
         if (call.UfcsReceiver != null)
             receiverType = InferExpression(call.UfcsReceiver);
 
-        // Infer argument types
-        var argTypes = new Type[call.Arguments.Count];
-        for (int i = 0; i < call.Arguments.Count; i++)
-            argTypes[i] = InferExpression(call.Arguments[i]);
+        // Separate arguments into positional and named
+        var positionalArgs = new List<ExpressionNode>();
+        var namedArgs = new List<NamedArgumentExpressionNode>();
+        foreach (var arg in call.Arguments)
+        {
+            if (arg is NamedArgumentExpressionNode named)
+                namedArgs.Add(named);
+            else
+                positionalArgs.Add(arg);
+        }
+
+        // Infer types for all argument values
+        var positionalTypes = new Type[positionalArgs.Count];
+        for (int i = 0; i < positionalArgs.Count; i++)
+            positionalTypes[i] = InferExpression(positionalArgs[i]);
+
+        var namedTypes = new Dictionary<string, Type>();
+        foreach (var na in namedArgs)
+            namedTypes[na.Name] = InferExpression(na.Value);
 
         // Use MethodName for UFCS lookup, FunctionName for regular calls
         var lookupName = call.MethodName ?? call.FunctionName;
 
         // Check for vtable/field-call pattern: receiver.field(args)
-        // When the receiver is a struct with a function-typed field matching the method name,
-        // this is an indirect call through a function pointer, NOT a UFCS method call.
         if (receiverType != null && call.MethodName != null)
         {
-            var fieldCallResult = TryFieldCall(call, receiverType, call.MethodName, argTypes);
-            if (fieldCallResult != null) return fieldCallResult;
+            var fieldArgTypes = positionalTypes;
+            var fieldCallResult = TryFieldCall(call, receiverType, call.MethodName, fieldArgTypes);
+            if (fieldCallResult != null)
+            {
+                if (namedArgs.Count > 0)
+                    ReportError("named arguments are not supported for indirect/field calls",
+                        namedArgs[0].Span, "E2065");
+                return fieldCallResult;
+            }
         }
 
-        // Build full argument list (receiver prepended for UFCS)
-        Type[] fullArgTypes;
+        // Build full positional argument types (receiver prepended for UFCS)
+        Type[] fullPositionalTypes;
         if (receiverType != null)
         {
-            fullArgTypes = new Type[argTypes.Length + 1];
-            fullArgTypes[0] = receiverType;
-            Array.Copy(argTypes, 0, fullArgTypes, 1, argTypes.Length);
+            fullPositionalTypes = new Type[positionalTypes.Length + 1];
+            fullPositionalTypes[0] = receiverType;
+            Array.Copy(positionalTypes, 0, fullPositionalTypes, 1, positionalTypes.Length);
         }
         else
         {
-            fullArgTypes = argTypes;
+            fullPositionalTypes = positionalTypes;
         }
 
         // Try enum variant construction: EnumType.Variant(args)
-        // When the UFCS receiver is an enum type and the method is a variant,
-        // use only the actual args (not the receiver) for construction.
-        if (receiverType != null)
+        if (receiverType != null && namedArgs.Count == 0)
         {
             var resolvedReceiver = _engine.Resolve(receiverType);
             if (resolvedReceiver is NominalType { Kind: NominalKind.Enum })
             {
-                var variantType = TryResolveVariantConstruction(lookupName, argTypes, call.Span);
+                var variantType = TryResolveVariantConstruction(lookupName, positionalTypes, call.Span);
                 if (variantType != null) return variantType;
             }
         }
 
         // Look up function candidates FIRST — regular functions take priority over variant constructors.
-        // Variant constructors (Ok, Err, etc.) only exist in _scopes, not _functions.
-        // Regular functions exist in both. If we tried variant construction first, any function
-        // returning an enum type (e.g., open_file -> Result) would be misidentified as a variant.
         var candidates = LookupFunctions(lookupName);
         if (candidates != null && candidates.Count > 0)
         {
-            // Try with args as-is first
-            var result = ResolveOverload(candidates, fullArgTypes, call.Span);
+            bool hasNamedOrDefaults = namedArgs.Count > 0
+                || candidates.Any(c => c.Node.Parameters.Any(p => p.DefaultValue != null || p.IsVariadic));
 
-            // For UFCS, try adapting receiver (value ↔ &T) if direct match failed
-            if (result == null && receiverType != null && fullArgTypes.Length > 0)
+            (FunctionScheme Winner, FunctionType FnType, FunctionDeclarationNode Node)? result;
+
+            if (hasNamedOrDefaults)
             {
-                var resolvedReceiver = _engine.Resolve(fullArgTypes[0]);
-                var adapted = (Type[])fullArgTypes.Clone();
-                if (resolvedReceiver is ReferenceType rt)
-                    adapted[0] = rt.InnerType; // &T -> T
-                else
-                    adapted[0] = new ReferenceType(resolvedReceiver); // T -> &T
-                result = ResolveOverload(candidates, adapted, call.Span);
+                var ufcsOffset = receiverType != null ? 1 : 0;
+                result = ResolveOverloadWithDefaults(candidates, fullPositionalTypes, namedArgs, namedTypes, call.Span, ufcsOffset);
+
+                // For UFCS, try adapting receiver (value ↔ &T) if direct match failed
+                if (result == null && receiverType != null && fullPositionalTypes.Length > 0)
+                {
+                    var resolvedReceiver = _engine.Resolve(fullPositionalTypes[0]);
+                    var adapted = (Type[])fullPositionalTypes.Clone();
+                    if (resolvedReceiver is ReferenceType rt)
+                        adapted[0] = rt.InnerType;
+                    else
+                        adapted[0] = new ReferenceType(resolvedReceiver);
+                    result = ResolveOverloadWithDefaults(candidates, adapted, namedArgs, namedTypes, call.Span, ufcsOffset);
+                }
+
+                if (result != null)
+                {
+                    var (winner, fnType, node) = result.Value;
+                    call.ResolvedTarget = node;
+                    BuildResolvedArguments(call, winner.Node, fnType, positionalArgs, namedArgs, ufcsOffset);
+                    return fnType.ReturnType;
+                }
+            }
+            else
+            {
+                // Fast path: no named args or defaults — use original overload resolution
+                result = ResolveOverload(candidates, fullPositionalTypes, call.Span);
+
+                // For UFCS, try adapting receiver (value ↔ &T) if direct match failed
+                if (result == null && receiverType != null && fullPositionalTypes.Length > 0)
+                {
+                    var resolvedReceiver = _engine.Resolve(fullPositionalTypes[0]);
+                    var adapted = (Type[])fullPositionalTypes.Clone();
+                    if (resolvedReceiver is ReferenceType rt)
+                        adapted[0] = rt.InnerType;
+                    else
+                        adapted[0] = new ReferenceType(resolvedReceiver);
+                    result = ResolveOverload(candidates, adapted, call.Span);
+                }
+
+                if (result != null)
+                {
+                    var (_, fnType, node) = result.Value;
+                    call.ResolvedTarget = node;
+                    return fnType.ReturnType;
+                }
             }
 
-            if (result == null)
-            {
-                var displayName = call.MethodName ?? call.FunctionName;
-                ReportError($"No matching overload for `{displayName}` with {fullArgTypes.Length} arguments",
-                    call.Span, "E2011");
-                return _isCheckingGenericBody
-                    ? GuessReturnTypeFromCandidates(candidates)
-                    : _engine.FreshVar();
-            }
-
-            var (_, fnType, node) = result.Value;
-            call.ResolvedTarget = node;
-            return fnType!.ReturnType;
+            var displayName = call.MethodName ?? call.FunctionName;
+            ReportError($"No matching overload for `{displayName}` with {fullPositionalTypes.Length} arguments",
+                call.Span, "E2011");
+            return _isCheckingGenericBody
+                ? GuessReturnTypeFromCandidates(candidates)
+                : _engine.FreshVar();
         }
 
         // Try enum variant construction (non-UFCS: bare variant name)
-        var variantType2 = TryResolveVariantConstruction(lookupName, fullArgTypes, call.Span);
-        if (variantType2 != null) return variantType2;
+        if (namedArgs.Count == 0)
+        {
+            var variantType2 = TryResolveVariantConstruction(lookupName, fullPositionalTypes, call.Span);
+            if (variantType2 != null) return variantType2;
+        }
 
         // Try indirect call (variable with function type)
-        return TryIndirectCall(call, fullArgTypes);
+        if (namedArgs.Count > 0)
+        {
+            ReportError("named arguments are not supported for indirect calls",
+                namedArgs[0].Span, "E2065");
+        }
+        return TryIndirectCall(call, fullPositionalTypes);
     }
 
     /// <summary>

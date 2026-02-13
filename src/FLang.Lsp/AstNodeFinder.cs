@@ -109,6 +109,7 @@ public static class AstNodeFinder
 
             case FunctionParameterNode fp:
                 yield return fp.Type;
+                if (fp.DefaultValue != null) yield return fp.DefaultValue;
                 break;
 
             case StructDeclarationNode sd:
@@ -149,6 +150,10 @@ public static class AstNodeFinder
             case CallExpressionNode call:
                 if (call.UfcsReceiver != null) yield return call.UfcsReceiver;
                 foreach (var a in call.Arguments) yield return a;
+                break;
+
+            case NamedArgumentExpressionNode namedArg:
+                yield return namedArg.Value;
                 break;
 
             case MemberAccessExpressionNode ma:

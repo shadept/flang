@@ -89,6 +89,20 @@ public class DefinitionHandler : DefinitionHandlerBase
             case CallExpressionNode call when call.ResolvedTarget != null:
                 return call.ResolvedTarget.NameSpan;
 
+            case NamedArgumentExpressionNode namedArg:
+                {
+                    // Navigate from named argument to the parameter declaration
+                    var enclosingCall = FindEnclosingCallForNamedArg(namedArg, analysis);
+                    if (enclosingCall?.ResolvedTarget != null)
+                    {
+                        var param = enclosingCall.ResolvedTarget.Parameters
+                            .FirstOrDefault(p => p.Name == namedArg.Name);
+                        if (param != null)
+                            return param.NameSpan;
+                    }
+                    break;
+                }
+
             case IdentifierExpressionNode id:
                 {
                     if (id.ResolvedFunctionTarget != null)
@@ -178,6 +192,21 @@ public class DefinitionHandler : DefinitionHandlerBase
             return nominal.Name;
         if (type is FLang.Core.Types.ReferenceType refType)
             return GetNominalTypeName(refType.InnerType);
+        return null;
+    }
+
+    /// <summary>
+    /// Find the CallExpressionNode that contains a given NamedArgumentExpressionNode.
+    /// Searches all parsed modules for a call whose Arguments list contains the named arg.
+    /// </summary>
+    private static CallExpressionNode? FindEnclosingCallForNamedArg(
+        NamedArgumentExpressionNode namedArg, FileAnalysisResult analysis)
+    {
+        foreach (var module in analysis.ParsedModules.Values)
+        {
+            var result = AstNodeFinder.FindEnclosingCall(module, namedArg.Span.FileId, namedArg.Span.Index);
+            if (result != null) return result;
+        }
         return null;
     }
 

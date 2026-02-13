@@ -4,7 +4,7 @@ This document is the complete syntax reference for FLang. Every construct the la
 
 ## What FLang Does NOT Have
 
-No semicolons. No `while` loops (use `loop` with `break`). No `mut` keyword. No `->` return type arrow. No `impl` blocks. No traits/interfaces. No closures (lambdas exist but cannot capture). No string interpolation. No multi-line comments. No default parameter values. No `elif`. No ternary operator. No `switch`/`case`. No macros. No `async`/`await`. No destructuring assignment. No spread operator. No variadic functions (except `#foreign`). No type aliases.
+No semicolons. No `while` loops (use `loop` with `break`). No `mut` keyword. No `->` return type arrow. No `impl` blocks. No traits/interfaces. No closures (lambdas exist but cannot capture). No string interpolation. No multi-line comments. No `elif`. No ternary operator. No `switch`/`case`. No macros. No `async`/`await`. No destructuring assignment. No spread operator. No type aliases.
 
 ## Comments
 
@@ -80,6 +80,59 @@ pub fn main() i32 {
 - `pub` makes the function visible outside the file.
 - Return type goes after `)` with NO arrow, NO colon.
 - No return type means void.
+
+### Default Parameter Values
+
+Parameters can have default values using `= expr` after the type:
+
+```
+fn greet(name: String, times: i32 = 1) { ... }
+
+greet("Alice")        // times = 1
+greet("Alice", 3)     // times = 3
+```
+
+- Default values are evaluated fresh at each call site (Kotlin semantics).
+- Parameters with defaults must come after required parameters.
+- Default expressions can be any expression, including function calls.
+
+### Named Arguments
+
+Call-site arguments can be named using `name = expr`:
+
+```
+fn sub(a: i32, b: i32) i32 { return a - b }
+
+sub(b = 3, a = 10)       // returns 7
+sub(10, b = 3)            // positional + named mix
+```
+
+- Named arguments can appear in any order, but positional arguments must come first.
+- Named arguments are not supported for indirect calls (function pointers).
+- To disambiguate from `==`, use: `foo(x = 5)` is named arg, `foo(x == 5)` is comparison.
+
+### Variadic Parameters
+
+A function can accept a variable number of arguments using `..name: Type`:
+
+```
+fn sum(..nums: i32) i32 {
+    let total: i32 = 0
+    for n in nums {
+        total = total + n
+    }
+    return total
+}
+
+sum(1, 2, 3)     // nums received as i32[] slice
+sum()            // nums is empty slice
+```
+
+- At most one variadic parameter, must be the last parameter.
+- The variadic parameter is received as a slice (`Type[]`).
+- Arguments are stack-allocated at the call site, then coerced to a slice.
+- Fixed parameters can precede the variadic: `fn fmt(prefix: String, ..args: i32)`.
+- Foreign functions use C-style `...` instead (not `..name`).
 
 ### Generic Functions
 

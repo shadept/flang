@@ -112,7 +112,11 @@ public class SignatureHelpHandler : SignatureHelpHandlerBase
             else
                 paramType = FormatTypeNode(p.Type);
 
-            var label = $"{p.Name}: {paramType}";
+            var prefix = p.IsVariadic ? ".." : "";
+            var label = $"{prefix}{p.Name}: {paramType}";
+            if (p.DefaultValue != null)
+                label += $" = {HoverHandler.FormatExpressionSnippet(p.DefaultValue)}";
+
             paramLabels.Add(label);
             paramInfos.Add(new ParameterInformation
             {
