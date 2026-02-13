@@ -31,7 +31,10 @@ public static class FLangLanguageServer
                 .WithHandler<TextDocumentSyncHandler>()
                 .WithHandler<HoverHandler>()
                 .WithHandler<DefinitionHandler>()
+                .WithHandler<TypeDefinitionHandler>()
                 .WithHandler<DocumentSymbolHandler>()
+                .WithHandler<InlayHintHandler>()
+                .WithHandler<SignatureHelpHandler>()
                 .OnInitialize((server, request, ct) =>
                 {
                     Log($"Initialize: rootPath={request.RootPath}, rootUri={request.RootUri}");

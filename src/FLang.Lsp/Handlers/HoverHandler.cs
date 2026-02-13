@@ -66,7 +66,7 @@ public class HoverHandler : HoverHandlerBase
             return Task.FromResult<Hover?>(null);
 
         lap = sw.ElapsedMilliseconds;
-        var hoverText = GetHoverText(node, analysis);
+        var hoverText = GetHoverText(node, analysis, position);
         FLangLanguageServer.Log($"  [getHoverText] {sw.ElapsedMilliseconds - lap}ms -> {(hoverText != null ? $"\"{hoverText}\"" : "null")}");
 
         if (hoverText == null)
@@ -86,8 +86,24 @@ public class HoverHandler : HoverHandlerBase
         });
     }
 
-    private static string? GetHoverText(AstNode node, FileAnalysisResult analysis)
+    private static string? GetHoverText(AstNode node, FileAnalysisResult analysis, int position)
     {
+        // Import hover: show resolved file path (only when cursor is on the module path)
+        if (node is ImportDeclarationNode import
+            && position >= import.ModuleSpan.Index
+            && position < import.ModuleSpan.Index + import.ModuleSpan.Length)
+        {
+            var modulePath = string.Join(".", import.Path);
+            var relativePath = string.Join(Path.DirectorySeparatorChar, import.Path) + ".f";
+            foreach (var includePath in analysis.Compilation.IncludePaths)
+            {
+                var fullPath = Path.GetFullPath(Path.Combine(includePath, relativePath));
+                if (File.Exists(fullPath))
+                    return $"import {modulePath}\n// {fullPath}";
+            }
+            return $"import {modulePath}";
+        }
+
         if (analysis.TypeChecker == null) return null;
         var tc = analysis.TypeChecker;
 
@@ -259,6 +275,7 @@ public class HoverHandler : HoverHandlerBase
         EnumDeclarationNode ed => ed.NameSpan,
         StructFieldNode sf => sf.NameSpan,
         EnumVariantNode ev => ev.NameSpan,
+        ImportDeclarationNode imp => imp.ModuleSpan,
         _ => node.Span
     };
 

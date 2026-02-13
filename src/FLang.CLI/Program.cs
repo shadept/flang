@@ -35,6 +35,11 @@ for (var i = 0; i < args.Length; i++)
         runTests = true;
     else if (args[i] == "--lsp")
         lspMode = true;
+    else if (args[i] == "--version" || args[i] == "-v")
+    {
+        Console.WriteLine("flang 0.1.0");
+        return;
+    }
     else if (!args[i].StartsWith("-")) inputFilePath = args[i];
 
 if (lspMode)
@@ -70,6 +75,7 @@ if (inputFilePath == null)
     Console.WriteLine("  --debug-logging         Enable detailed logs for the compiler stages");
     Console.WriteLine("  --demo-diagnostics      Show diagnostic system demo");
     Console.WriteLine("  --find-compilers        Probe and list available C compilers on this machine, then exit");
+    Console.WriteLine("  -v, --version           Print version and exit");
     return;
 }
 

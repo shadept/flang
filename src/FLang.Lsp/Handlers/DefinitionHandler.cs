@@ -45,6 +45,30 @@ public class DefinitionHandler : DefinitionHandlerBase
         FLangLanguageServer.Log($"  [findNode] {sw.ElapsedMilliseconds - lap}ms -> {node?.GetType().Name ?? "null"}");
         if (node == null) return Task.FromResult<LocationOrLocationLinks?>(null);
 
+        // Import declarations: resolve to the imported file (only when cursor is on the module path)
+        if (node is ImportDeclarationNode import
+            && position >= import.ModuleSpan.Index
+            && position < import.ModuleSpan.Index + import.ModuleSpan.Length)
+        {
+            var relativePath = string.Join(Path.DirectorySeparatorChar, import.Path) + ".f";
+            foreach (var includePath in analysis.Compilation.IncludePaths)
+            {
+                var fullPath = Path.GetFullPath(Path.Combine(includePath, relativePath));
+                FLangLanguageServer.Log($"  [testing path] {fullPath}");
+                if (File.Exists(fullPath))
+                {
+                    var loc = new Location
+                    {
+                        Uri = DocumentUri.FromFileSystemPath(fullPath),
+                        Range = new OmniSharp.Extensions.LanguageServer.Protocol.Models.Range(
+                            new Position(0, 0), new Position(0, 0))
+                    };
+                    FLangLanguageServer.Log($"  [import] {sw.ElapsedMilliseconds}ms -> {fullPath}");
+                    return Task.FromResult<LocationOrLocationLinks?>(new LocationOrLocationLinks(loc));
+                }
+            }
+        }
+
         lap = sw.ElapsedMilliseconds;
         var targetSpan = ResolveDefinitionTarget(node, analysis);
         FLangLanguageServer.Log($"  [resolve] {sw.ElapsedMilliseconds - lap}ms -> {(targetSpan.HasValue ? $"FileId={targetSpan.Value.FileId} Idx={targetSpan.Value.Index}" : "null")}");
@@ -75,11 +99,8 @@ public class DefinitionHandler : DefinitionHandlerBase
                         return id.ResolvedParameterDeclaration.NameSpan;
 
                     // Try type resolution: if identifier refers to a nominal type
-                    if (analysis.TypeChecker?.NominalSpans != null)
-                    {
-                        if (analysis.TypeChecker.NominalSpans.TryGetValue(id.Name, out var span))
-                            return span;
-                    }
+                    var typeSpan = ResolveTypeDefinition(id, analysis);
+                    if (typeSpan != null) return typeSpan;
                     break;
                 }
 
@@ -112,6 +133,40 @@ public class DefinitionHandler : DefinitionHandlerBase
                     }
                     break;
                 }
+        }
+
+        // Final fallback: try resolving the node's inferred type to a nominal type definition
+        return ResolveTypeDefinition(node, analysis);
+    }
+
+    /// <summary>
+    /// Given an AST node, resolve its inferred type to a NominalType and look up
+    /// the type's definition span. Works for identifiers that refer to types (enums, structs)
+    /// and any expression whose type is a nominal type.
+    /// </summary>
+    private static SourceSpan? ResolveTypeDefinition(AstNode node, FileAnalysisResult analysis)
+    {
+        var tc = analysis.TypeChecker;
+        if (tc == null) return null;
+
+        // Try via inferred type → NominalType → FQN lookup
+        if (tc.InferredTypes.TryGetValue(node, out var type))
+        {
+            var resolved = tc.Engine.Resolve(type);
+            var typeName = GetNominalTypeName(resolved);
+            if (typeName != null && tc.NominalSpans.TryGetValue(typeName, out var span))
+                return span;
+        }
+
+        // Fallback: match identifier name against NominalSpans by short name
+        // (NominalSpans keys are FQNs like "module.FileMore", but the identifier is just "FileMore")
+        if (node is IdentifierExpressionNode id)
+        {
+            foreach (var (fqn, span) in tc.NominalSpans)
+            {
+                if (fqn == id.Name || fqn.EndsWith("." + id.Name))
+                    return span;
+            }
         }
 
         return null;

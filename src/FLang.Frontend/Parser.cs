@@ -156,17 +156,19 @@ public class Parser
         // Parse the first identifier (or keyword used as module name)
         var firstIdentifier = EatIdentifierOrKeyword();
         path.Add(firstIdentifier.Text);
+        var lastIdentifier = firstIdentifier;
 
         // Parse additional path components (e.g., std.io.File)
         while (_currentToken.Kind == TokenKind.Dot)
         {
             Eat(TokenKind.Dot);
-            var identifier = EatIdentifierOrKeyword();
-            path.Add(identifier.Text);
+            lastIdentifier = EatIdentifierOrKeyword();
+            path.Add(lastIdentifier.Text);
         }
 
+        var moduleSpan = SourceSpan.Combine(firstIdentifier.Span, lastIdentifier.Span);
         var span = SourceSpan.Combine(importKeyword.Span, _currentToken.Span);
-        return new ImportDeclarationNode(span, path);
+        return new ImportDeclarationNode(span, moduleSpan, path);
     }
 
     /// <summary>

@@ -10,6 +10,34 @@ namespace FLang.Lsp;
 /// </summary>
 public static class AstNodeFinder
 {
+    /// <summary>
+    /// Finds the enclosing CallExpressionNode whose argument span contains the given position.
+    /// Returns the call node and the deepest node at the position.
+    /// </summary>
+    public static CallExpressionNode? FindEnclosingCall(ModuleNode module, int fileId, int position)
+    {
+        CallExpressionNode? enclosingCall = null;
+
+        void Visit(AstNode? node)
+        {
+            if (node == null) return;
+
+            // Track call expressions whose span contains the position
+            if (node is CallExpressionNode call && Contains(call, fileId, position))
+                enclosingCall = call;
+
+            var contained = Contains(node, fileId, position);
+            if (contained || IsContainer(node))
+            {
+                foreach (var child in GetChildren(node))
+                    Visit(child);
+            }
+        }
+
+        Visit(module);
+        return enclosingCall;
+    }
+
     public static AstNode? FindDeepestNodeAt(ModuleNode module, int fileId, int position)
     {
         AstNode? best = null;
