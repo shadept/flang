@@ -1196,7 +1196,8 @@ public partial class HmTypeChecker
             if (pattern.SubPatterns.Count > 0)
                 ReportError($"Variant `{pattern.VariantName}` expects 0 bindings, got {pattern.SubPatterns.Count}", pattern.Span, "E2032");
         }
-        else if (variantType is NominalType { Kind: NominalKind.Tuple } tupleType)
+        else if (variantType is NominalType { Kind: NominalKind.Tuple } tupleType
+                 && tupleType.FieldsOrVariants.Count > 0)
         {
             // Multi-payload variant: check ARITY first, then bind
             // E2032: Arity mismatch

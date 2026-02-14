@@ -230,7 +230,8 @@ public class HmAstLowering
             if (globalConst.Initializer == null) continue;
             var hmType = _checker.Engine.Resolve(_checker.GetInferredType(globalConst));
             var irType = _layout.Lower(hmType);
-            var value = LowerGlobalInitializer(globalConst.Initializer, irType, globalConst.Name);
+            var value = LowerGlobalInitializer(globalConst.Initializer, irType, globalConst.Name,
+                isTopLevel: true);
             if (value != null)
             {
                 _globalConstants[globalConst.Name] = value;
@@ -240,11 +241,12 @@ public class HmAstLowering
         }
     }
 
-    private Value? LowerGlobalInitializer(ExpressionNode expr, IrType targetType, string name)
+    private Value? LowerGlobalInitializer(ExpressionNode expr, IrType targetType, string name,
+        bool isTopLevel = false)
     {
         // Unwrap implicit coercions
         if (expr is ImplicitCoercionNode coercion)
-            return LowerGlobalInitializer(coercion.Inner, targetType, name);
+            return LowerGlobalInitializer(coercion.Inner, targetType, name, isTopLevel);
 
         // Integer literal
         if (expr is IntegerLiteralNode intLit)
@@ -253,6 +255,49 @@ public class HmAstLowering
         // Boolean literal
         if (expr is BooleanLiteralNode boolLit)
             return new ConstantValue(boolLit.Value ? 1 : 0, targetType);
+
+        // String literal — add to string table and return inline struct value
+        if (expr is StringLiteralNode strLit && targetType is IrStruct strStruct)
+        {
+            // Reuse LowerStringLiteral to add to string table, but we need the
+            // raw bytes for the inline C initializer
+            var bytes = System.Text.Encoding.UTF8.GetBytes(strLit.Value);
+            var nullTerminated = new byte[bytes.Length + 1];
+            Array.Copy(bytes, nullTerminated, bytes.Length);
+
+            // Add to string table for the data
+            if (!_stringTableIndices.TryGetValue(strLit.Value, out var strIndex))
+            {
+                strIndex = _module.StringTable.Count;
+                _module.StringTable.Add(new StringTableEntry(strLit.Value, nullTerminated));
+                _stringTableIndices[strLit.Value] = strIndex;
+            }
+
+            return new StringTableValue(strIndex, targetType);
+        }
+
+        // Enum variant access (e.g., FileMode.Read) — lower to tag constant
+        if (expr is MemberAccessExpressionNode memberAccess && targetType is IrEnum irEnum)
+        {
+            foreach (var variant in irEnum.Variants)
+            {
+                if (variant.Name == memberAccess.FieldName)
+                {
+                    // Naked enum: return a StructConstantValue with just the tag field
+                    var fieldValues = new Dictionary<string, Value>
+                    {
+                        ["tag"] = new ConstantValue(variant.TagValue, TypeLayoutService.IrI32)
+                    };
+                    var result = new StructConstantValue(irEnum, fieldValues);
+                    if (isTopLevel)
+                    {
+                        var global = new GlobalValue($"__global_{name}", result, irEnum);
+                        return global;
+                    }
+                    return result;
+                }
+            }
+        }
 
         // Struct construction
         if (expr is StructConstructionExpressionNode sc && targetType is IrStruct irStruct)
@@ -267,8 +312,12 @@ public class HmAstLowering
                     fieldValues[field.FieldName] = fieldVal;
             }
             var structConst = new StructConstantValue(irStruct, fieldValues);
-            var global = new GlobalValue($"__global_{name}", structConst, irStruct);
-            return global;
+            if (isTopLevel)
+            {
+                var global = new GlobalValue($"__global_{name}", structConst, irStruct);
+                return global;
+            }
+            return structConst;
         }
 
         // Anonymous struct construction
@@ -284,8 +333,12 @@ public class HmAstLowering
                     fieldValues[field.FieldName] = fieldVal;
             }
             var structConst = new StructConstantValue(anonStruct, fieldValues);
-            var global = new GlobalValue($"__global_{name}", structConst, anonStruct);
-            return global;
+            if (isTopLevel)
+            {
+                var global = new GlobalValue($"__global_{name}", structConst, anonStruct);
+                return global;
+            }
+            return structConst;
         }
 
         // Identifier — reference to another global constant or function

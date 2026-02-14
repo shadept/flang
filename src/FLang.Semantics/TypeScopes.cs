@@ -74,6 +74,15 @@ public class TypeScopes
     public int Depth => _scopes.Count;
 
     /// <summary>
+    /// Check if a name exists in the current (innermost) scope only.
+    /// Does NOT search outer scopes — used to detect same-scope redeclarations.
+    /// </summary>
+    public bool ExistsInCurrentScope(string name)
+    {
+        return _scopes.Peek().ContainsKey(name);
+    }
+
+    /// <summary>
     /// Look up a name, searching from innermost to outermost scope.
     /// Returns null if not found.
     /// </summary>

@@ -1,4 +1,5 @@
 import std.io.reader
+import std.io.writer
 import std.allocator
 import std.result
 import std.string
@@ -115,6 +116,49 @@ fn file_read(ctx: &u8, buf: u8[]) usize {
 pub fn reader(file: &File, storage: u8[]) Reader {
     const rfn = ReadFn { ctx = &file as &u8, read = file_read }
     return reader(rfn, storage)
+}
+
+// =============================================================================
+// Writer
+// =============================================================================
+
+fn file_write(ctx: &u8, data: u8[]) usize {
+    const file = ctx as &File
+    const n = write(file.handle.fd, data.ptr, data.len)
+    if (n == -1) {
+        return 0
+    }
+    return n as usize
+}
+
+pub fn writer(file: &File, storage: u8[]) Writer {
+    const wfn = WriteFn { ctx = &file as &u8, write = file_write }
+    return writer(wfn, storage)
+}
+
+// =============================================================================
+// Standard streams (stdin/stdout/stderr as Files)
+// =============================================================================
+
+pub const stdin = File {
+    path = "<stdin>",
+    mode = FileMode.Read,
+    encoding = FileEncoding.Utf8,
+    handle = FileHandle { fd = 0 },
+}
+
+pub const stdout = File {
+    path = "<stdout>",
+    mode = FileMode.Write,
+    encoding = FileEncoding.Utf8,
+    handle = FileHandle { fd = 1 },
+}
+
+pub const stderr = File {
+    path = "<stderr>",
+    mode = FileMode.Write,
+    encoding = FileEncoding.Utf8,
+    handle = FileHandle { fd = 2 },
 }
 
 // =============================================================================

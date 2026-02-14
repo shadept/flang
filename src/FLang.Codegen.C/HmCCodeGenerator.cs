@@ -147,6 +147,10 @@ public static class HmCCodeGenerator
                 }
                 sb.Append(string.Join(", ", parts));
             }
+            else if (irType is IrEnum irEnum)
+            {
+                sb.Append(EmitEnumConstantBody(scv, irEnum));
+            }
             sb.AppendLine(" };");
         }
         else if (gv.Initializer is ArrayConstantValue acv && acv.Elements != null && acv.IrType is IrArray arrTy)
@@ -171,11 +175,14 @@ public static class HmCCodeGenerator
         return value switch
         {
             ConstantValue cv => EmitConstant(cv),
+            StringTableValue stv => $"__flang__string_table[{stv.Index}]",
             FunctionReferenceValue fv => fv.IrType is IrFunctionPtr fp2
                 ? IrNameMangling.MangleFunctionName(fv.Name, fp2.Params)
                 : fv.Name,
             StructConstantValue nested when nested.IrType is IrStruct nestedStruct
                 => EmitNestedStructConstant(nested, nestedStruct),
+            StructConstantValue nested when nested.IrType is IrEnum nestedEnum
+                => $"{{ {EmitEnumConstantBody(nested, nestedEnum)} }}",
             ArrayConstantValue arr when arr.Data != null
                 => $"(uint8_t*)\"{EscapeString(arr.StringRepresentation ?? "")}\"",
             GlobalValue gv when gv.Initializer is ArrayConstantValue
@@ -200,6 +207,15 @@ public static class HmCCodeGenerator
                 parts.Add($".{field.Name} = {{0}}");
         }
         return $"{{ {string.Join(", ", parts)} }}";
+    }
+
+    private static string EmitEnumConstantBody(StructConstantValue scv, IrEnum irEnum)
+    {
+        // Enum in C is: struct { int32_t tag; uint8_t payload[N]; }
+        // For naked variants (no payload), just set the tag
+        if (scv.FieldValues.TryGetValue("tag", out var tagVal) && tagVal is ConstantValue cv)
+            return $".tag = {EmitConstant(cv)}";
+        return ".tag = 0";
     }
 
     private static void EmitStringTable(StringBuilder sb, IrModule module)

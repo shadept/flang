@@ -105,6 +105,17 @@ public partial class HmTypeChecker
             varType = _engine.FreshVar();
         }
 
+        // E2005: Prevent redeclaration of global constants.
+        // Local let-rebinding (same-scope shadowing) is allowed in function bodies.
+        if (_scopes.Depth == 1 && _scopes.ExistsInCurrentScope(varDecl.Name))
+        {
+            var diag = Diagnostic.Error($"Global `{varDecl.Name}` is already declared", varDecl.Span, code: "E2005");
+            var existingDecl = _scopes.LookupDeclaration(varDecl.Name);
+            if (existingDecl != null)
+                diag.Notes.Add(Diagnostic.Info($"`{varDecl.Name}` first declared here", existingDecl.Span));
+            _diagnostics.Add(diag);
+        }
+
         _scopes.Bind(varDecl.Name, varType, varDecl);
         Record(varDecl, varType);
 
