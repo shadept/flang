@@ -31,7 +31,8 @@ public class TextDocumentSyncHandler : TextDocumentSyncHandlerBase
         FLangLanguageServer.Log($"didOpen: {filePath} ({request.TextDocument.Text.Length} chars)");
 
         _workspace.UpdateDocument(filePath, request.TextDocument.Text);
-        Task.Run(() => _workspace.AnalyzeFile(filePath), cancellationToken);
+        var task = Task.Run(() => _workspace.AnalyzeFile(filePath), cancellationToken);
+        _workspace.SetPendingAnalysis(filePath, task);
 
         return Unit.Task;
     }
@@ -46,7 +47,8 @@ public class TextDocumentSyncHandler : TextDocumentSyncHandlerBase
             _workspace.UpdateDocument(filePath, change.Text);
         }
 
-        Task.Run(() => _workspace.AnalyzeFile(filePath), cancellationToken);
+        var task = Task.Run(() => _workspace.AnalyzeFile(filePath), cancellationToken);
+        _workspace.SetPendingAnalysis(filePath, task);
 
         return Unit.Task;
     }
@@ -66,7 +68,8 @@ public class TextDocumentSyncHandler : TextDocumentSyncHandlerBase
         var filePath = request.TextDocument.Uri.GetFileSystemPath();
         FLangLanguageServer.Log($"didSave: {filePath}");
 
-        Task.Run(() => _workspace.AnalyzeFile(filePath), cancellationToken);
+        var task = Task.Run(() => _workspace.AnalyzeFile(filePath), cancellationToken);
+        _workspace.SetPendingAnalysis(filePath, task);
 
         return Unit.Task;
     }

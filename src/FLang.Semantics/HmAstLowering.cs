@@ -367,7 +367,7 @@ public class HmAstLowering
             changed = false;
             foreach (var type in allTypes.ToList())
             {
-                if (type is NominalType { Kind: NominalKind.Struct } nt
+                if (type is NominalType { Kind: NominalKind.Struct or NominalKind.Tuple } nt
                     && !nt.Name.StartsWith(WellKnown.RttiPrefix) && nt.Name != WellKnown.String)
                 {
                     foreach (var (_, ft) in nt.FieldsOrVariants)
@@ -410,7 +410,7 @@ public class HmAstLowering
         {
             Core.Types.PrimitiveType => 0,
             Core.Types.ArrayType => 1,
-            NominalType { Kind: NominalKind.Struct } => 2,
+            NominalType { Kind: NominalKind.Struct or NominalKind.Tuple } => 2,
             NominalType { Kind: NominalKind.Enum } => 3,
             _ => 0
         };
@@ -464,7 +464,7 @@ public class HmAstLowering
 
             // Fields slice
             if (fieldsSliceIr != null && fieldInfoIr != null && stringIr != null
-                && innerType is NominalType { Kind: NominalKind.Struct } structType
+                && innerType is NominalType { Kind: NominalKind.Struct or NominalKind.Tuple } structType
                 && structType.FieldsOrVariants.Count > 0
                 && !structType.Name.StartsWith(WellKnown.RttiPrefix))
             {

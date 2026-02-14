@@ -128,7 +128,9 @@ public partial class HmTypeChecker
 
         // Anonymous structs get a synthetic name based on field structure
         var name = $"__anon_{string.Join("_", fields.Select(f => f.FieldName))}";
-        return new NominalType(name, NominalKind.Struct, [], fields);
+        // Detect tuples: field names are _0, _1, _2, ... (from parser desugaring)
+        var isTuple = fields.Length == 0 || fields.Select((f, i) => f.FieldName == $"_{i}").All(b => b);
+        return new NominalType(name, isTuple ? NominalKind.Tuple : NominalKind.Struct, [], fields);
     }
 
     // =========================================================================

@@ -29,31 +29,31 @@ public class HoverHandler : HoverHandlerBase
         _logger = logger;
     }
 
-    public override Task<Hover?> Handle(HoverParams request, CancellationToken cancellationToken)
+    public override async Task<Hover?> Handle(HoverParams request, CancellationToken cancellationToken)
     {
         var sw = System.Diagnostics.Stopwatch.StartNew();
         var filePath = request.TextDocument.Uri.GetFileSystemPath();
         FLangLanguageServer.Log($"Hover: {filePath} @ {request.Position.Line}:{request.Position.Character}");
 
-        var analysis = _workspace.GetAnalysis(filePath);
+        var analysis = await _workspace.GetAnalysisAsync(filePath);
         if (analysis == null)
         {
             FLangLanguageServer.Log("  No analysis result");
-            return Task.FromResult<Hover?>(null);
+            return null;
         }
 
         var fileId = PositionUtil.FindFileId(filePath, analysis.Compilation);
         if (fileId == null)
         {
             FLangLanguageServer.Log($"  FileId not found for {filePath}");
-            return Task.FromResult<Hover?>(null);
+            return null;
         }
 
         var normalizedPath = Path.GetFullPath(filePath);
         if (!analysis.ParsedModules.TryGetValue(normalizedPath, out var module))
         {
             FLangLanguageServer.Log($"  Module not found for {normalizedPath}");
-            return Task.FromResult<Hover?>(null);
+            return null;
         }
 
         var lap = sw.ElapsedMilliseconds;
@@ -63,19 +63,19 @@ public class HoverHandler : HoverHandlerBase
         FLangLanguageServer.Log($"  [findNode] {sw.ElapsedMilliseconds - lap}ms -> {node?.GetType().Name ?? "null"}");
 
         if (node == null)
-            return Task.FromResult<Hover?>(null);
+            return null;
 
         lap = sw.ElapsedMilliseconds;
         var hoverText = GetHoverText(node, analysis, position);
         FLangLanguageServer.Log($"  [getHoverText] {sw.ElapsedMilliseconds - lap}ms -> {(hoverText != null ? $"\"{hoverText}\"" : "null")}");
 
         if (hoverText == null)
-            return Task.FromResult<Hover?>(null);
+            return null;
 
         var range = PositionUtil.ToLspRange(GetNameSpan(node), analysis.Compilation);
         FLangLanguageServer.Log($"  [total] {sw.ElapsedMilliseconds}ms");
 
-        return Task.FromResult<Hover?>(new Hover
+        return new Hover
         {
             Contents = new MarkedStringsOrMarkupContent(new MarkupContent
             {
@@ -83,7 +83,7 @@ public class HoverHandler : HoverHandlerBase
                 Value = $"```flang\n{hoverText}\n```"
             }),
             Range = range
-        });
+        };
     }
 
     private static string? GetHoverText(AstNode node, FileAnalysisResult analysis, int position)
@@ -291,6 +291,8 @@ public class HoverHandler : HoverHandlerBase
             ReferenceType r => $"&{FormatHmType(r.InnerType, tc)}",
             ArrayType a => $"[{FormatHmType(a.ElementType, tc)}; {a.Length}]",
             FunctionType f => $"fn({string.Join(", ", f.ParameterTypes.Select(p => FormatHmType(p, tc)))}) {FormatHmType(f.ReturnType, tc)}",
+            NominalType { Kind: NominalKind.Tuple } n =>
+                n.FieldsOrVariants.Count == 0 ? "()" : $"({string.Join(", ", n.FieldsOrVariants.Select(f => FormatHmType(f.Type, tc)))})",
             NominalType n when n.TypeArguments.Count == 0 => n.ShortName,
             NominalType n => $"{n.ShortName}({string.Join(", ", n.TypeArguments.Select(ta => FormatHmType(ta, tc)))})",
             _ => resolved.ToString()

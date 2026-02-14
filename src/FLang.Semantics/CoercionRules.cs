@@ -175,11 +175,11 @@ public class AnonymousStructCoercionRule : IInferenceCoercionRule
 
     public Type? TryApply(Type from, Type to, InferenceEngine engine)
     {
-        if (from is not NominalType { Kind: NominalKind.Struct } fromStruct) return null;
+        if (from is not NominalType { Kind: NominalKind.Struct or NominalKind.Tuple } fromStruct) return null;
         if (to is not NominalType { Kind: NominalKind.Struct } toStruct) return null;
 
-        // Only apply when one side is anonymous
-        if (!fromStruct.Name.StartsWith("__anon_")) return null;
+        // Only apply when the source is anonymous/tuple
+        if (fromStruct.Kind != NominalKind.Tuple && !fromStruct.Name.StartsWith("__anon_")) return null;
 
         // Get the target's fields, substituting generic type args if needed
         var targetFields = GetSubstitutedFields(toStruct);

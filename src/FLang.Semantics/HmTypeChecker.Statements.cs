@@ -72,7 +72,7 @@ public partial class HmTypeChecker
                 if (varDecl.Initializer is AnonymousStructExpressionNode anonInit)
                 {
                     var resolvedTarget = _engine.Resolve(annotationType);
-                    if (resolvedTarget is NominalType { Kind: NominalKind.Struct } targetStruct)
+                    if (resolvedTarget is NominalType { Kind: NominalKind.Struct or NominalKind.Tuple } targetStruct)
                     {
                         var providedFields = new HashSet<string>(anonInit.Fields.Select(f => f.FieldName));
                         foreach (var field in targetStruct.FieldsOrVariants)

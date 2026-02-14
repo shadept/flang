@@ -22,28 +22,28 @@ public class DefinitionHandler : DefinitionHandlerBase
         _logger = logger;
     }
 
-    public override Task<LocationOrLocationLinks?> Handle(DefinitionParams request, CancellationToken cancellationToken)
+    public override async Task<LocationOrLocationLinks?> Handle(DefinitionParams request, CancellationToken cancellationToken)
     {
         var sw = System.Diagnostics.Stopwatch.StartNew();
         var filePath = request.TextDocument.Uri.GetFileSystemPath();
         FLangLanguageServer.Log($"Definition: {filePath} @ {request.Position.Line}:{request.Position.Character}");
 
-        var analysis = _workspace.GetAnalysis(filePath);
-        if (analysis == null) return Task.FromResult<LocationOrLocationLinks?>(null);
+        var analysis = await _workspace.GetAnalysisAsync(filePath);
+        if (analysis == null) return null;
 
         var fileId = PositionUtil.FindFileId(filePath, analysis.Compilation);
-        if (fileId == null) return Task.FromResult<LocationOrLocationLinks?>(null);
+        if (fileId == null) return null;
 
         var normalizedPath = Path.GetFullPath(filePath);
         if (!analysis.ParsedModules.TryGetValue(normalizedPath, out var module))
-            return Task.FromResult<LocationOrLocationLinks?>(null);
+            return null;
 
         var lap = sw.ElapsedMilliseconds;
         var source = analysis.Compilation.Sources[fileId.Value];
         var position = PositionUtil.ToSourcePosition(request.Position, source);
         var node = AstNodeFinder.FindDeepestNodeAt(module, fileId.Value, position);
         FLangLanguageServer.Log($"  [findNode] {sw.ElapsedMilliseconds - lap}ms -> {node?.GetType().Name ?? "null"}");
-        if (node == null) return Task.FromResult<LocationOrLocationLinks?>(null);
+        if (node == null) return null;
 
         // Import declarations: resolve to the imported file (only when cursor is on the module path)
         if (node is ImportDeclarationNode import
@@ -64,7 +64,7 @@ public class DefinitionHandler : DefinitionHandlerBase
                             new Position(0, 0), new Position(0, 0))
                     };
                     FLangLanguageServer.Log($"  [import] {sw.ElapsedMilliseconds}ms -> {fullPath}");
-                    return Task.FromResult<LocationOrLocationLinks?>(new LocationOrLocationLinks(loc));
+                    return new LocationOrLocationLinks(loc);
                 }
             }
         }
@@ -73,13 +73,13 @@ public class DefinitionHandler : DefinitionHandlerBase
         var targetSpan = ResolveDefinitionTarget(node, analysis);
         FLangLanguageServer.Log($"  [resolve] {sw.ElapsedMilliseconds - lap}ms -> {(targetSpan.HasValue ? $"FileId={targetSpan.Value.FileId} Idx={targetSpan.Value.Index}" : "null")}");
         if (targetSpan == null || targetSpan.Value.FileId < 0)
-            return Task.FromResult<LocationOrLocationLinks?>(null);
+            return null;
 
         var location = SpanToLocation(targetSpan.Value, analysis.Compilation);
         FLangLanguageServer.Log($"  [total] {sw.ElapsedMilliseconds}ms");
-        if (location == null) return Task.FromResult<LocationOrLocationLinks?>(null);
+        if (location == null) return null;
 
-        return Task.FromResult<LocationOrLocationLinks?>(new LocationOrLocationLinks(location));
+        return new LocationOrLocationLinks(location);
     }
 
     private static SourceSpan? ResolveDefinitionTarget(AstNode node, FileAnalysisResult analysis)

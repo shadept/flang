@@ -24,49 +24,49 @@ public class TypeDefinitionHandler : TypeDefinitionHandlerBase
         _logger = logger;
     }
 
-    public override Task<LocationOrLocationLinks?> Handle(TypeDefinitionParams request, CancellationToken cancellationToken)
+    public override async Task<LocationOrLocationLinks?> Handle(TypeDefinitionParams request, CancellationToken cancellationToken)
     {
         var sw = System.Diagnostics.Stopwatch.StartNew();
         var filePath = request.TextDocument.Uri.GetFileSystemPath();
         FLangLanguageServer.Log($"TypeDefinition: {filePath} @ {request.Position.Line}:{request.Position.Character}");
 
-        var analysis = _workspace.GetAnalysis(filePath);
-        if (analysis == null) return Task.FromResult<LocationOrLocationLinks?>(null);
+        var analysis = await _workspace.GetAnalysisAsync(filePath);
+        if (analysis == null) return null;
 
         var fileId = PositionUtil.FindFileId(filePath, analysis.Compilation);
-        if (fileId == null) return Task.FromResult<LocationOrLocationLinks?>(null);
+        if (fileId == null) return null;
 
         var normalizedPath = Path.GetFullPath(filePath);
         if (!analysis.ParsedModules.TryGetValue(normalizedPath, out var module))
-            return Task.FromResult<LocationOrLocationLinks?>(null);
+            return null;
 
         var source = analysis.Compilation.Sources[fileId.Value];
         var position = PositionUtil.ToSourcePosition(request.Position, source);
         var node = AstNodeFinder.FindDeepestNodeAt(module, fileId.Value, position);
-        if (node == null) return Task.FromResult<LocationOrLocationLinks?>(null);
+        if (node == null) return null;
 
         var tc = analysis.TypeChecker;
-        if (tc == null) return Task.FromResult<LocationOrLocationLinks?>(null);
+        if (tc == null) return null;
 
         // Get the inferred type for the node
         if (!tc.InferredTypes.TryGetValue(node, out var type))
-            return Task.FromResult<LocationOrLocationLinks?>(null);
+            return null;
 
         var resolved = tc.Engine.Resolve(type);
         var typeName = GetNominalTypeName(resolved);
-        if (typeName == null) return Task.FromResult<LocationOrLocationLinks?>(null);
+        if (typeName == null) return null;
 
         if (!tc.NominalSpans.TryGetValue(typeName, out var targetSpan))
-            return Task.FromResult<LocationOrLocationLinks?>(null);
+            return null;
 
         if (targetSpan.FileId < 0)
-            return Task.FromResult<LocationOrLocationLinks?>(null);
+            return null;
 
         var location = SpanToLocation(targetSpan, analysis.Compilation);
         FLangLanguageServer.Log($"  [total] {sw.ElapsedMilliseconds}ms -> {typeName}");
-        if (location == null) return Task.FromResult<LocationOrLocationLinks?>(null);
+        if (location == null) return null;
 
-        return Task.FromResult<LocationOrLocationLinks?>(new LocationOrLocationLinks(location));
+        return new LocationOrLocationLinks(location);
     }
 
     private static string? GetNominalTypeName(Type type)

@@ -18,7 +18,7 @@ public class DocumentSymbolHandler : DocumentSymbolHandlerBase
         _logger = logger;
     }
 
-    public override Task<SymbolInformationOrDocumentSymbolContainer?> Handle(
+    public override async Task<SymbolInformationOrDocumentSymbolContainer?> Handle(
         DocumentSymbolParams request,
         CancellationToken cancellationToken)
     {
@@ -26,12 +26,12 @@ public class DocumentSymbolHandler : DocumentSymbolHandlerBase
         var filePath = request.TextDocument.Uri.GetFileSystemPath();
         FLangLanguageServer.Log($"DocumentSymbol: {filePath}");
 
-        var analysis = _workspace.GetAnalysis(filePath);
-        if (analysis == null) return Task.FromResult<SymbolInformationOrDocumentSymbolContainer?>(null);
+        var analysis = await _workspace.GetAnalysisAsync(filePath);
+        if (analysis == null) return null;
 
         var normalizedPath = Path.GetFullPath(filePath);
         if (!analysis.ParsedModules.TryGetValue(normalizedPath, out var module))
-            return Task.FromResult<SymbolInformationOrDocumentSymbolContainer?>(null);
+            return null;
 
         var symbols = new List<DocumentSymbol>();
 
@@ -123,7 +123,7 @@ public class DocumentSymbolHandler : DocumentSymbolHandlerBase
             symbols.Select(s => new SymbolInformationOrDocumentSymbol(s)));
 
         FLangLanguageServer.Log($"  [total] {sw.ElapsedMilliseconds}ms — {symbols.Count} symbols");
-        return Task.FromResult<SymbolInformationOrDocumentSymbolContainer?>(result);
+        return result;
     }
 
     protected override DocumentSymbolRegistrationOptions CreateRegistrationOptions(

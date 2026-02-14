@@ -30,24 +30,24 @@ public class InlayHintHandler : InlayHintsHandlerBase
         _logger = logger;
     }
 
-    public override Task<InlayHintContainer?> Handle(InlayHintParams request, CancellationToken cancellationToken)
+    public override async Task<InlayHintContainer?> Handle(InlayHintParams request, CancellationToken cancellationToken)
     {
         var sw = System.Diagnostics.Stopwatch.StartNew();
         var filePath = request.TextDocument.Uri.GetFileSystemPath();
         FLangLanguageServer.Log($"InlayHint: {filePath} @ range {request.Range.Start.Line}-{request.Range.End.Line}");
 
-        var analysis = _workspace.GetAnalysis(filePath);
-        if (analysis == null) return Task.FromResult<InlayHintContainer?>(null);
+        var analysis = await _workspace.GetAnalysisAsync(filePath);
+        if (analysis == null) return null;
 
         var fileId = PositionUtil.FindFileId(filePath, analysis.Compilation);
-        if (fileId == null) return Task.FromResult<InlayHintContainer?>(null);
+        if (fileId == null) return null;
 
         var normalizedPath = Path.GetFullPath(filePath);
         if (!analysis.ParsedModules.TryGetValue(normalizedPath, out var module))
-            return Task.FromResult<InlayHintContainer?>(null);
+            return null;
 
         var tc = analysis.TypeChecker;
-        if (tc == null) return Task.FromResult<InlayHintContainer?>(null);
+        if (tc == null) return null;
 
         var source = analysis.Compilation.Sources[fileId.Value];
         var rangeStart = PositionUtil.ToSourcePosition(request.Range.Start, source);
@@ -57,7 +57,7 @@ public class InlayHintHandler : InlayHintsHandlerBase
         CollectHints(module, fileId.Value, rangeStart, rangeEnd, tc, analysis.Compilation, hints);
 
         FLangLanguageServer.Log($"  [total] {sw.ElapsedMilliseconds}ms -> {hints.Count} hints");
-        return Task.FromResult<InlayHintContainer?>(new InlayHintContainer(hints));
+        return new InlayHintContainer(hints);
     }
 
     private static void CollectHints(AstNode node, int fileId, int rangeStart, int rangeEnd,
@@ -181,6 +181,8 @@ public class InlayHintHandler : InlayHintsHandlerBase
             ReferenceType r => $"&{FormatType(r.InnerType, tc)}",
             ArrayType a => $"[{FormatType(a.ElementType, tc)}; {a.Length}]",
             FunctionType f => $"fn({string.Join(", ", f.ParameterTypes.Select(p => FormatType(p, tc)))}) {FormatType(f.ReturnType, tc)}",
+            NominalType { Kind: NominalKind.Tuple } n =>
+                n.FieldsOrVariants.Count == 0 ? "()" : $"({string.Join(", ", n.FieldsOrVariants.Select(f => FormatType(f.Type, tc)))})",
             NominalType n when n.TypeArguments.Count == 0 => n.ShortName,
             NominalType n => $"{n.ShortName}({string.Join(", ", n.TypeArguments.Select(ta => FormatType(ta, tc)))})",
             _ => resolved.ToString()

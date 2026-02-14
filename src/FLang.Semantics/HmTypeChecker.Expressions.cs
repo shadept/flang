@@ -155,8 +155,8 @@ public partial class HmTypeChecker
         var nominal = LookupNominalType(id.Name);
         if (nominal != null)
         {
-            // Structs in expression context are type-as-value (e.g., size_of(Point))
-            if (nominal.Kind == NominalKind.Struct)
+            // Structs/tuples in expression context are type-as-value (e.g., size_of(Point))
+            if (nominal.Kind == NominalKind.Struct || nominal.Kind == NominalKind.Tuple)
                 return WrapInTypeStruct(nominal);
             // Enums returned directly for variant access (e.g., FileMode.Read)
             return nominal;
@@ -913,7 +913,7 @@ public partial class HmTypeChecker
         while (resolved is ReferenceType refType)
             resolved = _engine.Resolve(refType.InnerType);
 
-        if (resolved is not NominalType { Kind: NominalKind.Struct } nominal)
+        if (resolved is not NominalType { Kind: NominalKind.Struct or NominalKind.Tuple } nominal)
             return null;
 
         // Look up the registered template if needed
@@ -1196,7 +1196,7 @@ public partial class HmTypeChecker
             if (pattern.SubPatterns.Count > 0)
                 ReportError($"Variant `{pattern.VariantName}` expects 0 bindings, got {pattern.SubPatterns.Count}", pattern.Span, "E2032");
         }
-        else if (variantType is NominalType tupleType && tupleType.Name.StartsWith("__tuple_"))
+        else if (variantType is NominalType { Kind: NominalKind.Tuple } tupleType)
         {
             // Multi-payload variant: check ARITY first, then bind
             // E2032: Arity mismatch
@@ -1436,7 +1436,7 @@ public partial class HmTypeChecker
         }
 
         // E2018: Cannot construct non-struct type (enums, etc.)
-        if (nominal.Kind != NominalKind.Struct)
+        if (nominal.Kind != NominalKind.Struct && nominal.Kind != NominalKind.Tuple)
         {
             ReportError($"Cannot construct non-struct type `{nominal.Name}`", structCon.Span, "E2018");
             foreach (var (_, valueExpr) in structCon.Fields)
@@ -1515,7 +1515,9 @@ public partial class HmTypeChecker
         }
 
         var name = $"__anon_{string.Join("_", fields.Select(f => f.Name))}";
-        return new NominalType(name, NominalKind.Struct, [], fields);
+        // Detect tuples: field names are _0, _1, _2, ... (from parser desugaring)
+        var isTuple = fields.Length == 0 || fields.Select((f, i) => f.Name == $"_{i}").All(b => b);
+        return new NominalType(name, isTuple ? NominalKind.Tuple : NominalKind.Struct, [], fields);
     }
 
     // =========================================================================

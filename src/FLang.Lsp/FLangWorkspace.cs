@@ -29,6 +29,7 @@ public class FLangWorkspace
     private readonly Dictionary<string, string> _openDocuments = [];
     private readonly CompilationCache _cache = new();
     private readonly Dictionary<string, FileAnalysisResult> _analysisResults = [];
+    private readonly Dictionary<string, Task> _pendingAnalyses = [];
     private readonly Lock _lock = new();
     private readonly ILogger _logger;
     private readonly ILanguageServerFacade _server;
@@ -68,6 +69,38 @@ public class FLangWorkspace
         lock (_lock)
         {
             return _analysisResults.GetValueOrDefault(normalized);
+        }
+    }
+
+    /// <summary>
+    /// Returns the analysis result, waiting for any pending analysis to complete first.
+    /// Use this in handlers that need up-to-date results (InlayHint, Hover, etc.).
+    /// </summary>
+    public async Task<FileAnalysisResult?> GetAnalysisAsync(string filePath)
+    {
+        var normalized = Path.GetFullPath(filePath);
+        Task? pending;
+        lock (_lock)
+        {
+            _pendingAnalyses.TryGetValue(normalized, out pending);
+        }
+        if (pending != null)
+        {
+            try { await pending; }
+            catch { /* analysis errors are handled internally */ }
+        }
+        lock (_lock)
+        {
+            return _analysisResults.GetValueOrDefault(normalized);
+        }
+    }
+
+    public void SetPendingAnalysis(string filePath, Task task)
+    {
+        var normalized = Path.GetFullPath(filePath);
+        lock (_lock)
+        {
+            _pendingAnalyses[normalized] = task;
         }
     }
 
@@ -176,6 +209,7 @@ public class FLangWorkspace
             lock (_lock)
             {
                 _analysisResults[normalized] = result;
+                _pendingAnalyses.Remove(normalized);
             }
 
             sw.Stop();
@@ -192,6 +226,10 @@ public class FLangWorkspace
         {
             FLangLanguageServer.Log($"  Analysis FAILED: {ex.Message}");
             FLangLanguageServer.Log($"  {ex.StackTrace}");
+            lock (_lock)
+            {
+                _pendingAnalyses.Remove(normalized);
+            }
         }
     }
 

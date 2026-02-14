@@ -128,7 +128,7 @@ public partial class HmTypeChecker
                         .Select((pt, idx) => ($"_{idx}", ResolveTypeNode(pt)))
                         .ToArray();
                     var tupleName = $"__tuple_{variant.PayloadTypes.Count}";
-                    variants[i] = (variant.Name, new NominalType(tupleName, NominalKind.Struct, [], payloadFields));
+                    variants[i] = (variant.Name, new NominalType(tupleName, NominalKind.Tuple, [], payloadFields));
                 }
             }
 

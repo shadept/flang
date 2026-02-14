@@ -28,24 +28,24 @@ public class SignatureHelpHandler : SignatureHelpHandlerBase
         _logger = logger;
     }
 
-    public override Task<SignatureHelp?> Handle(SignatureHelpParams request, CancellationToken cancellationToken)
+    public override async Task<SignatureHelp?> Handle(SignatureHelpParams request, CancellationToken cancellationToken)
     {
         var sw = System.Diagnostics.Stopwatch.StartNew();
         var filePath = request.TextDocument.Uri.GetFileSystemPath();
         FLangLanguageServer.Log($"SignatureHelp: {filePath} @ {request.Position.Line}:{request.Position.Character}");
 
-        var analysis = _workspace.GetAnalysis(filePath);
-        if (analysis == null) return Task.FromResult<SignatureHelp?>(null);
+        var analysis = await _workspace.GetAnalysisAsync(filePath);
+        if (analysis == null) return null;
 
         var fileId = PositionUtil.FindFileId(filePath, analysis.Compilation);
-        if (fileId == null) return Task.FromResult<SignatureHelp?>(null);
+        if (fileId == null) return null;
 
         var normalizedPath = Path.GetFullPath(filePath);
         if (!analysis.ParsedModules.TryGetValue(normalizedPath, out var module))
-            return Task.FromResult<SignatureHelp?>(null);
+            return null;
 
         var tc = analysis.TypeChecker;
-        if (tc == null) return Task.FromResult<SignatureHelp?>(null);
+        if (tc == null) return null;
 
         var source = analysis.Compilation.Sources[fileId.Value];
         var position = PositionUtil.ToSourcePosition(request.Position, source);
@@ -55,7 +55,7 @@ public class SignatureHelpHandler : SignatureHelpHandlerBase
         if (call == null)
         {
             FLangLanguageServer.Log($"  No enclosing call found");
-            return Task.FromResult<SignatureHelp?>(null);
+            return null;
         }
 
         var signatures = new List<SignatureInformation>();
@@ -79,7 +79,7 @@ public class SignatureHelpHandler : SignatureHelpHandlerBase
         if (signatures.Count == 0)
         {
             FLangLanguageServer.Log($"  No signatures found for {call.FunctionName}");
-            return Task.FromResult<SignatureHelp?>(null);
+            return null;
         }
 
         // Determine active parameter by counting commas before cursor in the source text
@@ -91,12 +91,12 @@ public class SignatureHelpHandler : SignatureHelpHandlerBase
 
         FLangLanguageServer.Log($"  [total] {sw.ElapsedMilliseconds}ms -> {signatures.Count} sigs, activeParam={activeParam}");
 
-        return Task.FromResult<SignatureHelp?>(new SignatureHelp
+        return new SignatureHelp
         {
             Signatures = new Container<SignatureInformation>(signatures),
             ActiveSignature = 0,
             ActiveParameter = activeParam
-        });
+        };
     }
 
     private static SignatureInformation? BuildSignature(FunctionDeclarationNode fn, HmTypeChecker tc)
@@ -192,6 +192,8 @@ public class SignatureHelpHandler : SignatureHelpHandlerBase
             ReferenceType r => $"&{FormatType(r.InnerType, tc)}",
             ArrayType a => $"[{FormatType(a.ElementType, tc)}; {a.Length}]",
             FunctionType f => $"fn({string.Join(", ", f.ParameterTypes.Select(p => FormatType(p, tc)))}) {FormatType(f.ReturnType, tc)}",
+            NominalType { Kind: NominalKind.Tuple } n =>
+                n.FieldsOrVariants.Count == 0 ? "()" : $"({string.Join(", ", n.FieldsOrVariants.Select(f => FormatType(f.Type, tc)))})",
             NominalType n when n.TypeArguments.Count == 0 => n.ShortName,
             NominalType n => $"{n.ShortName}({string.Join(", ", n.TypeArguments.Select(ta => FormatType(ta, tc)))})",
             _ => resolved.ToString()

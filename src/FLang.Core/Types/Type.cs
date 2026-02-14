@@ -6,7 +6,7 @@ namespace FLang.Core.Types;
 /// <summary>
 /// Distinguishes struct vs enum nominal types in the HM type system.
 /// </summary>
-public enum NominalKind { Struct, Enum }
+public enum NominalKind { Struct, Enum, Tuple }
 
 /// <summary>
 /// Resolves and zonks inference type variables to their bound types.
