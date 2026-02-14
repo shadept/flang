@@ -235,7 +235,8 @@ public static class HmCCodeGenerator
     private static void EmitFunctionForwardDecl(StringBuilder sb, IrFunction fn)
     {
         var retType = fn.UsesReturnSlot ? "void" : IrTypeToCType(fn.ReturnType);
-        var name = MangleFunctionName(fn);
+        var name = fn.IsEntryPoint ? "main" : MangleFunctionName(fn);
+        if (fn.IsEntryPoint) retType = "int";
         var parms = string.Join(", ", fn.Params.Select(p =>
             p.IsByRef ? EmitVarDecl(new IrPointer(p.Type), p.Name) : EmitVarDecl(p.Type, p.Name)));
         if (string.IsNullOrEmpty(parms)) parms = "void";
@@ -246,10 +247,10 @@ public static class HmCCodeGenerator
     {
         var retType = fn.UsesReturnSlot ? "void" : IrTypeToCType(fn.ReturnType);
         var name = fn.IsEntryPoint ? "main" : MangleFunctionName(fn);
+        if (fn.IsEntryPoint) retType = "int";
         var parms = string.Join(", ", fn.Params.Select(p =>
             p.IsByRef ? EmitVarDecl(new IrPointer(p.Type), p.Name) : EmitVarDecl(p.Type, p.Name)));
         if (string.IsNullOrEmpty(parms)) parms = "void";
-
         sb.AppendLine($"{retType} {name}({parms}) {{");
 
         var lineState = new LineState { Line = -1, FileId = -1 };
@@ -259,10 +260,11 @@ public static class HmCCodeGenerator
             foreach (var inst in block.Instructions)
             {
                 EmitLineDirective(sb, inst.Span, module.SourceFiles, ref lineState);
-                EmitInstruction(sb, inst);
+                EmitInstruction(sb, inst, fn.IsEntryPoint);
             }
         }
 
+        if (fn.IsEntryPoint) sb.AppendLine("  return 0;");
         sb.AppendLine("}");
         sb.AppendLine();
     }
@@ -297,7 +299,7 @@ public static class HmCCodeGenerator
     // Instruction emission
     // =========================================================================
 
-    private static void EmitInstruction(StringBuilder sb, Instruction inst)
+    private static void EmitInstruction(StringBuilder sb, Instruction inst, bool isEntryPoint = false)
     {
         switch (inst)
         {
@@ -356,7 +358,7 @@ public static class HmCCodeGenerator
                 {
                     if (ret.Value.IrType == TypeLayoutService.IrVoidPrim ||
                         ret.Value.IrType == null)
-                        sb.AppendLine("    return;");
+                        sb.AppendLine(isEntryPoint ? "    return 0;" : "    return;");
                     else
                         sb.AppendLine($"    return {EmitValue(ret.Value)};");
                     break;
@@ -532,6 +534,12 @@ public static class HmCCodeGenerator
     /// </summary>
     private static string EmitConstant(ConstantValue cv)
     {
+        // INT64_MIN can't be written as -9223372036854775808LL in C because the positive
+        // part overflows signed long long. Use the (-MAX - 1) idiom instead.
+        if (cv.IntValue == long.MinValue && cv.IrType is IrPrimitive p64
+            && (p64 == TypeLayoutService.IrI64 || p64 == TypeLayoutService.IrISize))
+            return "(-9223372036854775807LL - 1LL)";
+
         var lit = cv.IntValue.ToString();
         if (cv.IrType is IrPrimitive p)
         {
