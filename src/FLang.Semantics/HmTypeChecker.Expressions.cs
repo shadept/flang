@@ -370,6 +370,139 @@ public partial class HmTypeChecker
     // =========================================================================
 
     /// <summary>
+    /// Report E2011 with per-candidate notes explaining why each overload was rejected.
+    /// </summary>
+    private void ReportOverloadFailure(
+        string displayName,
+        List<FunctionScheme> candidates,
+        Type[] fullPositionalTypes,
+        List<NamedArgumentExpressionNode> namedArgs,
+        Dictionary<string, Type> namedTypes,
+        SourceSpan span,
+        int ufcsOffset)
+    {
+        var userArgCount = fullPositionalTypes.Length - ufcsOffset + namedArgs.Count;
+        var diag = Diagnostic.Error(
+            $"No matching overload for `{displayName}` with {userArgCount} argument(s)",
+            span, null, "E2011");
+
+        foreach (var candidate in candidates)
+        {
+            var fn = candidate.Node;
+            var paramCount = fn.Parameters.Count;
+            var requiredCount = fn.RequiredParameterCount;
+            var hasVariadic = fn.HasVariadicParam;
+            var userParamCount = paramCount - ufcsOffset;
+
+            // Specialize to get concrete types
+            {
+                var specialized = _engine.Specialize(candidate.Signature);
+                var fnType = _engine.Resolve(specialized) as FunctionType;
+                if (fnType == null) continue;
+
+                // Format the candidate signature using resolved types
+                var paramDescs = new List<string>();
+                for (int p = ufcsOffset; p < fn.Parameters.Count; p++)
+                {
+                    var resolvedP = p < fnType.ParameterTypes.Count ? _engine.Resolve(fnType.ParameterTypes[p]) : null;
+                    paramDescs.Add($"{fn.Parameters[p].Name}: {resolvedP ?? (object)fn.Parameters[p].Type}");
+                }
+                var sig = $"{fn.Name}({string.Join(", ", paramDescs)})";
+
+                // Check named arg validity
+                foreach (var na in namedArgs)
+                {
+                    bool found = false;
+                    for (int p = ufcsOffset; p < paramCount; p++)
+                    {
+                        if (fn.Parameters[p].Name == na.Name) { found = true; break; }
+                    }
+                    if (!found)
+                    {
+                        diag.Notes.Add(Diagnostic.Hint(
+                            $"`{sig}`: no parameter named `{na.Name}`", fn.Span));
+                        goto nextCandidate;
+                    }
+                }
+
+                // Arity check (with defaults/variadics awareness)
+                int totalSupplied = (fullPositionalTypes.Length - ufcsOffset) + namedArgs.Count;
+                int nonVariadicParams = hasVariadic ? paramCount - 1 : paramCount;
+
+                if (!hasVariadic && totalSupplied + ufcsOffset > paramCount)
+                {
+                    diag.Notes.Add(Diagnostic.Hint(
+                        $"`{sig}`: expected at most {userParamCount} argument(s), got {userArgCount}", fn.Span));
+                    continue;
+                }
+                if (totalSupplied + ufcsOffset < requiredCount)
+                {
+                    var requiredUserCount = requiredCount - ufcsOffset;
+                    diag.Notes.Add(Diagnostic.Hint(
+                        $"`{sig}`: expected at least {requiredUserCount} argument(s), got {userArgCount}", fn.Span));
+                    continue;
+                }
+
+                // Check positional type mismatches
+                for (int i = 0; i < fullPositionalTypes.Length && i < fnType.ParameterTypes.Count; i++)
+                {
+                    Type expectedType;
+                    if (i >= ufcsOffset && (i - ufcsOffset) >= (nonVariadicParams - ufcsOffset) && hasVariadic)
+                    {
+                        var variadicParamType = fnType.ParameterTypes[paramCount - 1];
+                        var resolvedVP = _engine.Resolve(variadicParamType);
+                        expectedType = resolvedVP is NominalType { Name: WellKnown.Slice } sliceType
+                            && sliceType.TypeArguments.Count > 0
+                            ? sliceType.TypeArguments[0] : variadicParamType;
+                    }
+                    else
+                    {
+                        expectedType = fnType.ParameterTypes[i];
+                    }
+
+                    var result = _engine.TryUnify(fullPositionalTypes[i], expectedType);
+                    if (result == null)
+                    {
+                        var resolvedArg = _engine.Resolve(fullPositionalTypes[i]);
+                        var resolvedParam = _engine.Resolve(expectedType);
+                        var paramName = i < fn.Parameters.Count ? fn.Parameters[i].Name : $"arg{i}";
+                        diag.Notes.Add(Diagnostic.Hint(
+                            $"`{sig}`: parameter `{paramName}` expects `{resolvedParam}`, got `{resolvedArg}`",
+                            fn.Span));
+                        goto nextCandidate;
+                    }
+                }
+
+                // Check named arg type mismatches
+                foreach (var na in namedArgs)
+                {
+                    int paramIdx = -1;
+                    for (int p = ufcsOffset; p < paramCount; p++)
+                    {
+                        if (fn.Parameters[p].Name == na.Name) { paramIdx = p; break; }
+                    }
+                    if (paramIdx < 0 || paramIdx >= fnType.ParameterTypes.Count) continue;
+
+                    var naResult = _engine.TryUnify(namedTypes[na.Name], fnType.ParameterTypes[paramIdx]);
+                    if (naResult == null)
+                    {
+                        var resolvedArg = _engine.Resolve(namedTypes[na.Name]);
+                        var resolvedParam = _engine.Resolve(fnType.ParameterTypes[paramIdx]);
+                        diag.Notes.Add(Diagnostic.Hint(
+                            $"`{sig}`: parameter `{na.Name}` expects `{resolvedParam}`, got `{resolvedArg}`",
+                            fn.Span));
+                        goto nextCandidate;
+                    }
+                }
+            }
+
+            nextCandidate:;
+        }
+
+        _diagnostics.Add(diag);
+    }
+
+    /// <summary>
     /// Unified overload resolution: pick the best candidate from a list of overloads
     /// for the given argument types. Returns null winner on no match.
     /// Caller is responsible for candidate collection, arg adaptation, error reporting,
@@ -878,8 +1011,8 @@ public partial class HmTypeChecker
             }
 
             var displayName = call.MethodName ?? call.FunctionName;
-            ReportError($"No matching overload for `{displayName}` with {fullPositionalTypes.Length} arguments",
-                call.Span, "E2011");
+            var ufcsOff = receiverType != null ? 1 : 0;
+            ReportOverloadFailure(displayName, candidates, fullPositionalTypes, namedArgs, namedTypes, call.Span, ufcsOff);
             return _isCheckingGenericBody
                 ? GuessReturnTypeFromCandidates(candidates)
                 : _engine.FreshVar();

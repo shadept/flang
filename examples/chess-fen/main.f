@@ -1,3 +1,4 @@
+import std.allocator
 import std.string_builder
 
 fn append_piece(sb: &StringBuilder, piece: u8) {
@@ -16,7 +17,11 @@ fn append_piece(sb: &StringBuilder, piece: u8) {
 }
 
 fn display_board(fen: String) {
-    let sb = string_builder_with_capacity(128)
+    const buf = [0; 80]
+    const fba = fixed_buffer_allocator(buf)
+    const alloc = fba.allocator()
+
+    let sb = string_builder_with_capacity_and_allocator(80, &alloc)
     defer sb.deinit()
 
     const top = "  ┌───┬───┬───┬───┬───┬───┬───┬───┐"
