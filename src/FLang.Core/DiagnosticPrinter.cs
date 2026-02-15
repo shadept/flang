@@ -42,18 +42,18 @@ public static class DiagnosticPrinter
 
         // Get source information
         var source = compilation.Sources[diagnostic.Span.FileId];
-        var (line, column) = source.GetLineAndColumn(diagnostic.Span.Index);
+        var (startLine, startColumn) = source.GetLineAndColumn(diagnostic.Span.Index);
+        var spanEnd = diagnostic.Span.Index + Math.Max(1, diagnostic.Span.Length) - 1;
+        var (endLine, endColumn) = source.GetLineAndColumn(Math.Min(spanEnd, source.Text.Length - 1));
 
         // Location: --> filename:line:column
         sb.Append(Color(AnsiColor.BoldBlue, "  --> "));
-        sb.Append($"{source.FileName}:{line + 1}:{column + 1}");
+        sb.Append($"{source.FileName}:{startLine + 1}:{startColumn + 1}");
         sb.Append(NewLine);
 
-        // Calculate the width needed for line numbers (including context)
-        var startLine = Math.Max(0, line - 1);
-        var endLine = Math.Min(source.LineEndings.Length, line + 1);
-        var maxLineNumber = endLine + 1;
-        var lineNumberWidth = maxLineNumber.ToString().Length;
+        // Calculate the width needed for line numbers (including context lines)
+        var lastVisibleLine = Math.Min(source.LineEndings.Length, endLine + 1);
+        var lineNumberWidth = Math.Max(1, (lastVisibleLine + 1).ToString().Length);
 
         // Helper to print the gutter (the " | " part)
         void PrintGutter(string lineNumber = "")
@@ -64,52 +64,83 @@ public static class DiagnosticPrinter
                 sb.Append(Color(AnsiColor.BoldBlue, $" {lineNumber.PadLeft(lineNumberWidth)} | "));
         }
 
+        var underlineColor = diagnostic.Severity.ToColor();
+        var isMultiLine = startLine != endLine;
+
         // Empty line before context
         PrintGutter();
         sb.Append(NewLine);
 
-        // Show context: line before (if exists)
-        if (line > 0)
+        // Context line before the span
+        if (startLine > 0)
         {
-            var prevLine = line - 1;
-            var prevLineText = source.GetLineText(prevLine);
-            PrintGutter($"{prevLine + 1}");
-            sb.Append(prevLineText + NewLine);
+            PrintGutter($"{startLine}");
+            sb.Append(source.GetLineText(startLine - 1) + NewLine);
         }
 
-        // Main error line
-        var lineText = source.GetLineText(line);
-        PrintGutter($"{line + 1}");
-        sb.Append(lineText + NewLine);
-
-        // Underline/caret pointing to error
-        var underlineColor = diagnostic.Severity.ToColor();
-        PrintGutter();
-
-        // Add spaces before the underline
-        for (var i = 0; i < column; i++) sb.Append(' ');
-
-        // Add the underline (carets)
-        var underlineLength = Math.Max(1, diagnostic.Span.Length);
-        sb.Append(Color(underlineColor, new string('^', underlineLength)));
-
-        // Add hint if present
-        if (!string.IsNullOrEmpty(diagnostic.HintMessage))
+        if (!isMultiLine)
         {
-            sb.Append(' ');
-            sb.Append(Color(underlineColor, diagnostic.HintMessage));
+            // Single-line span
+            var lineText = source.GetLineText(startLine);
+            PrintGutter($"{startLine + 1}");
+            sb.Append(lineText + NewLine);
+
+            PrintGutter();
+            for (var i = 0; i < startColumn; i++) sb.Append(' ');
+            var underlineLength = Math.Max(1, Math.Min(diagnostic.Span.Length, lineText.Length - startColumn));
+            sb.Append(Color(underlineColor, new string('^', underlineLength)));
+            if (!string.IsNullOrEmpty(diagnostic.HintMessage))
+            {
+                sb.Append(' ');
+                sb.Append(Color(underlineColor, diagnostic.HintMessage));
+            }
+            sb.Append(NewLine);
+        }
+        else
+        {
+            // Multi-line span: show each spanned line with its underline
+            for (var lineIdx = startLine; lineIdx <= endLine; lineIdx++)
+            {
+                var lineText = source.GetLineText(lineIdx);
+                PrintGutter($"{lineIdx + 1}");
+                sb.Append(lineText + NewLine);
+
+                int underStart, underLen;
+                if (lineIdx == startLine)
+                {
+                    underStart = startColumn;
+                    underLen = Math.Max(1, lineText.Length - startColumn);
+                }
+                else if (lineIdx == endLine)
+                {
+                    underStart = 0;
+                    underLen = Math.Max(1, endColumn + 1);
+                }
+                else
+                {
+                    underStart = 0;
+                    underLen = Math.Max(1, lineText.Length);
+                }
+
+                PrintGutter();
+                for (var i = 0; i < underStart; i++) sb.Append(' ');
+                sb.Append(Color(underlineColor, new string('^', underLen)));
+                if (lineIdx == endLine && !string.IsNullOrEmpty(diagnostic.HintMessage))
+                {
+                    sb.Append(' ');
+                    sb.Append(Color(underlineColor, diagnostic.HintMessage));
+                }
+                sb.Append(NewLine);
+            }
         }
 
-        sb.Append(NewLine);
-
-        // Show context: line after (if exists)
-        if (line + 1 < source.LineEndings.Length ||
-            (line + 1 == source.LineEndings.Length && source.Text.Length > source.GetLineEnd(line)))
+        // Context line after the span
+        var afterLine = isMultiLine ? endLine + 1 : startLine + 1;
+        if (afterLine < source.LineEndings.Length ||
+            (afterLine == source.LineEndings.Length && source.Text.Length > source.GetLineEnd(afterLine - 1)))
         {
-            var nextLine = line + 1;
-            var nextLineText = source.GetLineText(nextLine);
-            PrintGutter($"{nextLine + 1}");
-            sb.Append(nextLineText + NewLine);
+            PrintGutter($"{afterLine + 1}");
+            sb.Append(source.GetLineText(afterLine) + NewLine);
         }
 
         // Empty line at the end

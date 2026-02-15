@@ -185,7 +185,6 @@ public class Lexer(Source source, int fileId)
                 "struct" => TokenKind.Struct,
                 "enum" => TokenKind.Enum,
                 "match" => TokenKind.Match,
-                "foreign" => TokenKind.Foreign,
                 "as" => TokenKind.As,
                 "test" => TokenKind.Test,
                 "and" => TokenKind.And,

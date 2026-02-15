@@ -1,5 +1,5 @@
 //! TEST: array_literal_too_many
-//! COMPILE-ERROR: E2002
+//! COMPILE-ERROR: E2002 expected 2, got 5
 
 // Array literal has more elements than the declared type
 pub fn main() i32 {

@@ -33,7 +33,6 @@ public enum TokenKind
     Struct,
     Enum,
     Match,
-    Foreign,
     As,
     Test,
     And,

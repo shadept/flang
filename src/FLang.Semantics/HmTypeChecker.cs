@@ -1,5 +1,6 @@
 using FLang.Core;
 using FLang.Core.Types;
+using FLang.Frontend;
 using FLang.Frontend.Ast;
 using FLang.Frontend.Ast.Declarations;
 using FLang.Frontend.Ast.Expressions;
@@ -124,6 +125,16 @@ public partial class HmTypeChecker : INominalTypeRegistry
     private readonly List<(IntegerLiteralNode Node, Type TypeVar)> _unsuffixedLiterals = [];
 
     /// <summary>
+    /// Deprecated type FQNs → optional message. Populated during CollectNominalTypes.
+    /// </summary>
+    private readonly Dictionary<string, string?> _deprecatedTypes = [];
+
+    /// <summary>
+    /// Deprecated function names → optional message. Populated during CollectFunctionSignatures.
+    /// </summary>
+    private readonly Dictionary<string, string?> _deprecatedFunctions = [];
+
+    /// <summary>
     /// Types used as Type(T) values (e.g., i32 in size_of(i32)).
     /// Populated during type checking, consumed by lowering to build type table.
     /// </summary>
@@ -207,7 +218,7 @@ public partial class HmTypeChecker : INominalTypeRegistry
 
     private void ReportWarning(string message, SourceSpan span, string code = "W0001")
     {
-        _diagnostics.Add(Diagnostic.Warning(message, span, code));
+        _diagnostics.Add(Diagnostic.Warning(message, span, code: code));
     }
 
     // =========================================================================
@@ -331,6 +342,76 @@ public partial class HmTypeChecker : INominalTypeRegistry
         }
 
         return null;
+    }
+
+    // =========================================================================
+    // Directive validation
+    // =========================================================================
+
+    private static readonly HashSet<string> _knownDirectives = ["foreign", "inline", "deprecated"];
+
+    /// <summary>
+    /// Validate directives on a declaration. Reports unknown directives (W2003)
+    /// and validates argument counts for known directives.
+    /// </summary>
+    private void ValidateDirectives(IReadOnlyList<DirectiveNode> directives)
+    {
+        foreach (var d in directives)
+        {
+            if (!_knownDirectives.Contains(d.Name))
+            {
+                ReportWarning($"unknown directive `#{d.Name}`", d.Span, "W2003");
+                continue;
+            }
+
+            switch (d.Name)
+            {
+                case "foreign" when d.Arguments.Count > 0:
+                    ReportError("`#foreign` takes no arguments", d.Span, "E1002");
+                    break;
+                case "inline" when d.Arguments.Count > 0:
+                    ReportError("`#inline` takes no arguments", d.Span, "E1002");
+                    break;
+                case "deprecated" when d.Arguments.Count > 1:
+                    ReportError("`#deprecated` takes at most one string argument", d.Span, "E1002");
+                    break;
+                case "deprecated" when d.Arguments.Count == 1 && d.Arguments[0].Kind != Frontend.TokenKind.StringLiteral:
+                    ReportError("`#deprecated` argument must be a string literal", d.Span, "E1002");
+                    break;
+            }
+        }
+    }
+
+    /// <summary>
+    /// Check if a directive list contains #deprecated and extract its optional message.
+    /// Returns true if the directive is present.
+    /// </summary>
+    private static bool GetDeprecatedMessage(IReadOnlyList<DirectiveNode> directives, out string? message)
+    {
+        foreach (var d in directives)
+        {
+            if (d.Name == "deprecated")
+            {
+                message = d.Arguments.Count > 0 ? d.Arguments[0].Text : null;
+                return true;
+            }
+        }
+        message = null;
+        return false;
+    }
+
+    /// <summary>
+    /// Emit a deprecation warning if the resolved function has a #deprecated directive.
+    /// </summary>
+    private void CheckDeprecatedCall(FunctionDeclarationNode node, SourceSpan callSpan)
+    {
+        if (GetDeprecatedMessage(node.Directives, out var msg))
+        {
+            var warning = msg != null
+                ? $"function `{node.Name}` is deprecated: {msg}"
+                : $"function `{node.Name}` is deprecated";
+            ReportWarning(warning, callSpan, "W2002");
+        }
     }
 
     // =========================================================================

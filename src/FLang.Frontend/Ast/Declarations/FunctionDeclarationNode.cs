@@ -15,7 +15,8 @@ public enum FunctionModifiers
 public class FunctionDeclarationNode : AstNode
 {
     public FunctionDeclarationNode(SourceSpan span, SourceSpan nameSpan, string name, IReadOnlyList<FunctionParameterNode> parameters,
-        TypeNode? returnType, IReadOnlyList<StatementNode> body, FunctionModifiers modifiers = FunctionModifiers.None) : base(span)
+        TypeNode? returnType, IReadOnlyList<StatementNode> body, FunctionModifiers modifiers = FunctionModifiers.None,
+        IReadOnlyList<DirectiveNode>? directives = null) : base(span)
     {
         NameSpan = nameSpan;
         Name = name;
@@ -23,6 +24,7 @@ public class FunctionDeclarationNode : AstNode
         ReturnType = returnType;
         Body = body;
         Modifiers = modifiers;
+        Directives = directives ?? [];
     }
 
     public string Name { get; }
@@ -31,6 +33,7 @@ public class FunctionDeclarationNode : AstNode
     public TypeNode? ReturnType { get; }
     public IReadOnlyList<StatementNode> Body { get; }
     public FunctionModifiers Modifiers { get; }
+    public IReadOnlyList<DirectiveNode> Directives { get; }
 
     public bool IsGeneric => Parameters.Any(p => TypeNode.ContainsGenericParam(p.Type))
         || (ReturnType != null && TypeNode.ContainsGenericParam(ReturnType));

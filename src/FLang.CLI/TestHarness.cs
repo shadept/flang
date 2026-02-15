@@ -8,12 +8,18 @@ namespace FLang.CLI;
 /// <summary>
 /// Metadata parsed from test file //! directives.
 /// </summary>
+/// <summary>
+/// An expected diagnostic code with optional message substring match.
+/// </summary>
+public record ExpectedDiagnostic(string Code, string? MessageContains = null);
+
 public record TestMetadata(
     string TestName,
     int? ExpectedExitCode,
     List<string> ExpectedStdout,
     List<string> ExpectedStderr,
-    List<string> ExpectedCompileErrors,
+    List<ExpectedDiagnostic> ExpectedCompileErrors,
+    List<ExpectedDiagnostic> ExpectedCompileWarnings,
     string? SkipReason);
 
 /// <summary>
@@ -84,7 +90,8 @@ public class TestHarness
         int? exitCode = null;
         var stdout = new List<string>();
         var stderr = new List<string>();
-        var compileErrors = new List<string>();
+        var compileErrors = new List<ExpectedDiagnostic>();
+        var compileWarnings = new List<ExpectedDiagnostic>();
         string? skipReason = null;
 
         foreach (var line in lines)
@@ -103,12 +110,27 @@ public class TestHarness
             else if (content.StartsWith("STDERR:"))
                 stderr.Add(content[7..].Trim());
             else if (content.StartsWith("COMPILE-ERROR:"))
-                compileErrors.Add(content[14..].Trim());
+                compileErrors.Add(ParseExpectedDiagnostic(content[14..].Trim()));
+            else if (content.StartsWith("COMPILE-WARNING:"))
+                compileWarnings.Add(ParseExpectedDiagnostic(content[16..].Trim()));
             else if (content.StartsWith("SKIP:"))
                 skipReason = content[5..].Trim();
         }
 
-        return new TestMetadata(testName, exitCode, stdout, stderr, compileErrors, skipReason);
+        return new TestMetadata(testName, exitCode, stdout, stderr, compileErrors, compileWarnings, skipReason);
+    }
+
+    /// <summary>
+    /// Parses "E2002" or "E2002 some message text" into an ExpectedDiagnostic.
+    /// </summary>
+    private static ExpectedDiagnostic ParseExpectedDiagnostic(string value)
+    {
+        var spaceIdx = value.IndexOf(' ');
+        if (spaceIdx < 0)
+            return new ExpectedDiagnostic(value);
+        var code = value[..spaceIdx];
+        var message = value[(spaceIdx + 1)..].Trim();
+        return new ExpectedDiagnostic(code, message.Length > 0 ? message : null);
     }
 
     /// <summary>
@@ -208,13 +230,17 @@ public class TestHarness
                     absoluteTestFile,
                     metadata.TestName,
                     false,
-                    $"Expected compilation to fail with errors [{string.Join(", ", metadata.ExpectedCompileErrors)}] but it succeeded",
+                    $"Expected compilation to fail with errors [{string.Join(", ", metadata.ExpectedCompileErrors.Select(e => e.Code))}] but it succeeded",
                     stopwatch.Elapsed);
             }
 
-            foreach (var code in metadata.ExpectedCompileErrors)
+            foreach (var expected in metadata.ExpectedCompileErrors)
             {
-                if (result.Diagnostics.All(d => d.Code != code))
+                var match = result.Diagnostics.FirstOrDefault(d =>
+                    d.Code == expected.Code
+                    && (expected.MessageContains == null || d.Message.Contains(expected.MessageContains, StringComparison.Ordinal)));
+
+                if (match == null)
                 {
                     var sb = new StringBuilder();
                     foreach (var diagnostic in result.Diagnostics)
@@ -222,11 +248,14 @@ public class TestHarness
                         sb.Append(DiagnosticPrinter.Print(diagnostic, result.CompilationContext));
                     }
 
+                    var expectDesc = expected.MessageContains != null
+                        ? $"{expected.Code} containing \"{expected.MessageContains}\""
+                        : expected.Code;
                     return new TestResult(
                         absoluteTestFile,
                         metadata.TestName,
                         false,
-                        $"Expected error {code} not found in diagnostics:\n{sb}",
+                        $"Expected error {expectDesc} not found in diagnostics:\n{sb}",
                         stopwatch.Elapsed);
                 }
             }
@@ -234,6 +263,38 @@ public class TestHarness
             // Expected compile failure satisfied
             CleanupGeneratedFiles(cFilePath, null, cleanupFiles);
             return new TestResult(absoluteTestFile, metadata.TestName, true, null, stopwatch.Elapsed);
+        }
+
+        // Handle expected compile warnings
+        if (metadata.ExpectedCompileWarnings.Count > 0)
+        {
+            foreach (var expected in metadata.ExpectedCompileWarnings)
+            {
+                var match = result.Diagnostics.FirstOrDefault(d =>
+                    d.Code == expected.Code
+                    && d.Severity == DiagnosticSeverity.Warning
+                    && (expected.MessageContains == null || d.Message.Contains(expected.MessageContains, StringComparison.Ordinal)));
+
+                if (match == null)
+                {
+                    var sb = new StringBuilder();
+                    foreach (var diagnostic in result.Diagnostics)
+                    {
+                        sb.Append(DiagnosticPrinter.Print(diagnostic, result.CompilationContext));
+                    }
+
+                    var expectDesc = expected.MessageContains != null
+                        ? $"{expected.Code} containing \"{expected.MessageContains}\""
+                        : expected.Code;
+                    CleanupGeneratedFiles(cFilePath, result.Success ? result.ExecutablePath : null, cleanupFiles);
+                    return new TestResult(
+                        absoluteTestFile,
+                        metadata.TestName,
+                        false,
+                        $"Expected warning {expectDesc} not found in diagnostics:\n{sb}",
+                        stopwatch.Elapsed);
+                }
+            }
         }
 
         // Handle unexpected compile failure

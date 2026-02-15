@@ -24,6 +24,7 @@ public partial class HmTypeChecker
 
         foreach (var structDecl in module.Structs)
         {
+            ValidateDirectives(structDecl.Directives);
             var fqn = $"{modulePath}.{structDecl.Name}";
             if (_nominalTypes.ContainsKey(fqn))
             {
@@ -37,10 +38,14 @@ public partial class HmTypeChecker
             var placeholder = new NominalType(fqn, NominalKind.Struct);
             _nominalTypes[fqn] = placeholder;
             _nominalSpans[fqn] = structDecl.NameSpan;
+
+            if (GetDeprecatedMessage(structDecl.Directives, out var msg))
+                _deprecatedTypes[fqn] = msg;
         }
 
         foreach (var enumDecl in module.Enums)
         {
+            ValidateDirectives(enumDecl.Directives);
             var fqn = $"{modulePath}.{enumDecl.Name}";
             if (_nominalTypes.ContainsKey(fqn))
             {
@@ -54,6 +59,9 @@ public partial class HmTypeChecker
             var placeholder = new NominalType(fqn, NominalKind.Enum);
             _nominalTypes[fqn] = placeholder;
             _nominalSpans[fqn] = enumDecl.NameSpan;
+
+            if (GetDeprecatedMessage(enumDecl.Directives, out var msg))
+                _deprecatedTypes[fqn] = msg;
         }
     }
 
@@ -259,6 +267,8 @@ public partial class HmTypeChecker
 
     private void CollectFunctionSignature(FunctionDeclarationNode fn, string modulePath)
     {
+        ValidateDirectives(fn.Directives);
+
         _engine.EnterLevel();
         PushScope();
 
@@ -299,6 +309,9 @@ public partial class HmTypeChecker
         var isForeign = fn.Modifiers.HasFlag(FunctionModifiers.Foreign);
 
         RegisterFunction(new FunctionScheme(fn.Name, scheme, fn, isForeign, modulePath));
+
+        if (GetDeprecatedMessage(fn.Directives, out var depMsg))
+            _deprecatedFunctions[fn.Name] = depMsg;
 
         // Also bind in scope for recursive calls and identifier references
         _scopes.Bind(fn.Name, scheme);
@@ -383,7 +396,11 @@ public partial class HmTypeChecker
         if (fnType.ReturnType is not PrimitiveType { Name: "void" or "never" })
         {
             if (!HasReturnOrImplicitReturn(fn.Body))
-                ReportError($"Function `{fn.Name}` must return a value", fn.Span, "E2049");
+            {
+                // Point at the closing `}` — where control flow falls off without returning
+                var closeBraceSpan = new SourceSpan(fn.Span.FileId, fn.Span.Index + fn.Span.Length - 1, 1);
+                ReportError($"Function `{fn.Name}` must return a value", closeBraceSpan, "E2049");
+            }
         }
 
         _functionStack.Pop();

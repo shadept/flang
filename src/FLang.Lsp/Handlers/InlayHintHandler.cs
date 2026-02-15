@@ -176,7 +176,7 @@ public class InlayHintHandler : InlayHintsHandlerBase
         var resolved = tc.Engine.Resolve(type);
         return resolved switch
         {
-            TypeVar tv => $"?{tv.Id}",
+            TypeVar tv => $"?Unbounded",
             PrimitiveType p => p.Name,
             ReferenceType r => $"&{FormatType(r.InnerType, tc)}",
             ArrayType a => $"[{FormatType(a.ElementType, tc)}; {a.Length}]",

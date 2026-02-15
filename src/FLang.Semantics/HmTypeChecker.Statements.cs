@@ -81,7 +81,8 @@ public partial class HmTypeChecker
                     }
                 }
 
-                var unified = _engine.Unify(initType, annotationType, varDecl.Span);
+                var unifySpan = varDecl.Initializer?.Span ?? varDecl.Span;
+                var unified = _engine.Unify(annotationType, initType, unifySpan);
                 varType = unified.Type;
             }
             else
@@ -142,12 +143,12 @@ public partial class HmTypeChecker
         {
             var exprType = InferExpression(ret.Expression);
 
-            _engine.Unify(exprType, ctx.ReturnType, ret.Span);
+            _engine.Unify(ctx.ReturnType, exprType, ret.Expression.Span);
         }
         else
         {
             // Bare return: return type must be void
-            _engine.Unify(WellKnown.Void, ctx.ReturnType, ret.Span);
+            _engine.Unify(ctx.ReturnType, WellKnown.Void, ret.Span);
         }
     }
 

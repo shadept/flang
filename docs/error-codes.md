@@ -11,6 +11,7 @@ FLang uses a custom sequential numbering system organized by compiler phase:
 - **E1XXX**: Frontend errors (lexing, parsing, syntax)
 - **E2XXX**: Semantic analysis errors (type checking, name resolution, control flow)
 - **E3XXX**: Code generation errors (FIR lowering, C code generation)
+- **W2XXX**: Semantic analysis warnings (deprecation, suspicious patterns)
 
 Within each category, error codes are assigned sequentially starting from E0001, E1001, E2001, E3001, etc. This ensures
 no gaps and no bias in numbering.
@@ -2554,6 +2555,84 @@ FLang's error code numbering follows these principles:
 
 5. **Future-Proof**: We reserve ranges for future expansion, ensuring we won't run out of error codes as the language
    grows.
+
+---
+
+## W2XXX: Semantic Analysis Warnings
+
+### W2001: Deprecated Type Usage
+
+**Category**: Semantic Analysis
+**Severity**: Warning
+
+#### Description
+
+A type marked with `#deprecated` was used. The deprecation message (if provided) explains what to use instead.
+
+#### Example
+
+```flang
+#deprecated("use NewFoo instead")
+struct OldFoo { x: i32 }
+
+pub fn main() i32 {
+    let f: OldFoo = OldFoo { x: 1 }  // warning[W2001]: type `OldFoo` is deprecated: use NewFoo instead
+    return 0
+}
+```
+
+#### Solution
+
+Replace usage of the deprecated type with the suggested alternative.
+
+---
+
+### W2002: Deprecated Function Call
+
+**Category**: Semantic Analysis
+**Severity**: Warning
+
+#### Description
+
+A function marked with `#deprecated` was called. The deprecation message (if provided) explains what to use instead.
+
+#### Example
+
+```flang
+#deprecated("use bar() instead")
+fn foo() i32 { return 42 }
+
+pub fn main() i32 {
+    let x: i32 = foo()  // warning[W2002]: function `foo` is deprecated: use bar() instead
+    return 0
+}
+```
+
+#### Solution
+
+Replace the call with the suggested alternative function.
+
+---
+
+### W2003: Unknown Directive
+
+**Category**: Semantic Analysis
+**Severity**: Warning
+
+#### Description
+
+A directive was used that the compiler does not recognize. This may indicate a typo or a directive from a future version.
+
+#### Example
+
+```flang
+#noexist
+fn foo() i32 { return 42 }  // warning[W2003]: unknown directive `#noexist`
+```
+
+#### Solution
+
+Check the directive name for typos. Known directives: `#foreign`, `#deprecated`, `#inline`.
 
 ---
 

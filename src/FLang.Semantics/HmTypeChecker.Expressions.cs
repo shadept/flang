@@ -982,6 +982,7 @@ public partial class HmTypeChecker
                     var (winner, fnType, node) = result.Value;
                     call.ResolvedTarget = node;
                     BuildResolvedArguments(call, winner.Node, fnType, positionalArgs, namedArgs, ufcsOffset);
+                    CheckDeprecatedCall(node, call.Span);
                     return fnType.ReturnType;
                 }
             }
@@ -1006,6 +1007,7 @@ public partial class HmTypeChecker
                 {
                     var (_, fnType, node) = result.Value;
                     call.ResolvedTarget = node;
+                    CheckDeprecatedCall(node, call.Span);
                     return fnType.ReturnType;
                 }
             }

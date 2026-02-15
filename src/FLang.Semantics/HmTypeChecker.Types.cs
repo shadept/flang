@@ -48,7 +48,17 @@ public partial class HmTypeChecker
         // Look up nominal type (struct/enum)
         var nominal = LookupNominalType(named.Name);
         if (nominal != null)
+        {
+            // Check if this type is deprecated
+            if (_deprecatedTypes.TryGetValue(nominal.Name, out var depMsg))
+            {
+                var warning = depMsg != null
+                    ? $"type `{named.Name}` is deprecated: {depMsg}"
+                    : $"type `{named.Name}` is deprecated";
+                ReportWarning(warning, named.Span, "W2001");
+            }
             return nominal;
+        }
 
         // Check scope for type parameters (bare T from generic context)
         var scheme = _scopes.Lookup(named.Name);
@@ -103,7 +113,17 @@ public partial class HmTypeChecker
 
         var nominal = LookupNominalType(generic.Name);
         if (nominal != null)
+        {
+            // Check if this type is deprecated
+            if (_deprecatedTypes.TryGetValue(nominal.Name, out var depMsg))
+            {
+                var warning = depMsg != null
+                    ? $"type `{generic.Name}` is deprecated: {depMsg}"
+                    : $"type `{generic.Name}` is deprecated";
+                ReportWarning(warning, generic.Span, "W2001");
+            }
             return new NominalType(nominal.Name, nominal.Kind, typeArgs, nominal.FieldsOrVariants);
+        }
 
         ReportError($"Unknown generic type `{generic.Name}`", generic.Span, "E2003");
         return _engine.FreshVar();

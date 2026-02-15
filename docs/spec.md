@@ -479,8 +479,21 @@ if (cmd.tag == 0) {           // Quit
 
 #### Directives
 
-- `#foreign`: declares a foreign function imported from the target’s C/ABI environment. Bodies are not provided; the backend does not mangle these names and relies on target headers for prototypes.
+Directives are prefixed with `#` and precede declarations (`struct`, `enum`, `fn`). They can take optional arguments in parentheses. Multiple directives can be stacked on a single declaration.
+
+```flang
+#directive_name
+#directive_name(arg1, arg2)
+```
+
+**Built-in directives:**
+
+- `#foreign`: declares a foreign function imported from the target's C/ABI environment. Bodies are not provided; the backend does not mangle these names and relies on target headers for prototypes. Takes no arguments.
+- `#deprecated` or `#deprecated("message")`: marks a declaration as deprecated. Usage of the declared type or function emits a warning. The optional string argument provides a migration hint shown in the warning.
+- `#inline` (planned): hints that the function should be inlined at call sites. Takes no arguments.
 - `#intrinsic` (planned): declares a standard-library intrinsic symbol that the compiler may lower specially or map to target builtins. Intrinsics must live in `stdlib/core` and be declared with `#intrinsic` to be used. Like `#foreign`, intrinsic calls are never mangled; the backend provides target-specific support as needed.
+
+Unknown directives produce warning W2003.
 
 ---
 

@@ -55,33 +55,36 @@ public class Parser
         {
             try
             {
-                if (_currentToken.Kind == TokenKind.Hash)
-                {
-                    // Directive(s), currently only #foreign
-                    Eat(TokenKind.Hash);
-                    var directive = Eat(TokenKind.Foreign);
-                    functions.Add(ParseFunction(FunctionModifiers.Foreign));
-                }
-                else if (_currentToken.Kind == TokenKind.Pub)
+                // Parse leading directives (e.g., #foreign, #deprecated("msg"))
+                var directives = ParseDirectives();
+
+                if (_currentToken.Kind == TokenKind.Pub)
                 {
                     // Could be struct, enum, function, or const - peek ahead
                     var nextToken = PeekNextToken();
                     if (nextToken.Kind == TokenKind.Struct)
                     {
                         Eat(TokenKind.Pub);
-                        structs.Add(ParseStruct());
+                        structs.Add(ParseStruct(directives));
                     }
                     else if (nextToken.Kind == TokenKind.Enum)
                     {
                         Eat(TokenKind.Pub);
-                        enums.Add(ParseEnumDeclaration());
+                        enums.Add(ParseEnumDeclaration(directives));
                     }
                     else if (nextToken.Kind == TokenKind.Fn)
                     {
-                        functions.Add(ParseFunction());
+                        functions.Add(ParseFunction(directives: directives));
                     }
                     else if (nextToken.Kind == TokenKind.Const)
                     {
+                        if (directives.Count > 0)
+                        {
+                            _diagnostics.Add(Diagnostic.Error(
+                                "directives are not supported on const declarations",
+                                directives[0].Span,
+                                code: "E1001"));
+                        }
                         Eat(TokenKind.Pub);
                         globalConstants.Add(ParseVariableDeclaration(isPublic: true));
                     }
@@ -98,28 +101,49 @@ public class Parser
                 }
                 else if (_currentToken.Kind == TokenKind.Struct)
                 {
-                    // Struct without pub (allowed for now)
-                    structs.Add(ParseStruct());
+                    structs.Add(ParseStruct(directives));
                 }
                 else if (_currentToken.Kind == TokenKind.Enum)
                 {
-                    // Enum without pub (allowed for now)
-                    enums.Add(ParseEnumDeclaration());
+                    enums.Add(ParseEnumDeclaration(directives));
                 }
                 else if (_currentToken.Kind == TokenKind.Fn)
                 {
-                    // Non-public function
-                    functions.Add(ParseFunction());
+                    functions.Add(ParseFunction(directives: directives));
                 }
                 else if (_currentToken.Kind == TokenKind.Test)
                 {
-                    // Test block
+                    if (directives.Count > 0)
+                    {
+                        _diagnostics.Add(Diagnostic.Error(
+                            "directives are not supported on test blocks",
+                            directives[0].Span,
+                            code: "E1001"));
+                    }
                     tests.Add(ParseTest());
                 }
                 else if (_currentToken.Kind == TokenKind.Const)
                 {
-                    // Top-level const declaration
+                    if (directives.Count > 0)
+                    {
+                        _diagnostics.Add(Diagnostic.Error(
+                            "directives are not supported on const declarations",
+                            directives[0].Span,
+                            code: "E1001"));
+                    }
                     globalConstants.Add(ParseVariableDeclaration());
+                }
+                else if (directives.Count > 0)
+                {
+                    // Directives were parsed but no declaration follows
+                    _diagnostics.Add(Diagnostic.Error(
+                        "expected declaration after directive(s)",
+                        _currentToken.Span,
+                        "directives must precede `struct`, `enum`, or `fn`",
+                        "E1001"));
+                    // Skip token to avoid infinite loop
+                    if (_currentToken.Kind != TokenKind.EndOfFile)
+                        _currentToken = _lexer.NextToken();
                 }
                 else
                 {
@@ -127,7 +151,7 @@ public class Parser
                     _diagnostics.Add(Diagnostic.Error(
                         $"unexpected token '{_currentToken.Text}'",
                         _currentToken.Span,
-                        "expected `struct`, `enum`, `pub fn`, `fn`, `test`, `const`, or `#foreign fn`",
+                        "expected `struct`, `enum`, `pub fn`, `fn`, `test`, `const`, or directive",
                         "E1001"));
                     _currentToken = _lexer.NextToken();
                 }
@@ -142,6 +166,57 @@ public class Parser
         var endSpan = _currentToken.Span;
         var span = SourceSpan.Combine(startSpan, endSpan);
         return new ModuleNode(span, imports, structs, enums, functions, tests, globalConstants);
+    }
+
+    /// <summary>
+    /// Parses zero or more directives: #name or #name(arg1, arg2, ...).
+    /// Arguments can be string literals, identifiers, or integers.
+    /// </summary>
+    private List<DirectiveNode> ParseDirectives()
+    {
+        var directives = new List<DirectiveNode>();
+        while (_currentToken.Kind == TokenKind.Hash)
+        {
+            var hashToken = Eat(TokenKind.Hash);
+            var nameToken = Eat(TokenKind.Identifier);
+
+            var arguments = new List<Token>();
+            if (_currentToken.Kind == TokenKind.OpenParenthesis)
+            {
+                Eat(TokenKind.OpenParenthesis);
+                while (_currentToken.Kind != TokenKind.CloseParenthesis && _currentToken.Kind != TokenKind.EndOfFile)
+                {
+                    if (_currentToken.Kind is TokenKind.StringLiteral or TokenKind.Identifier or TokenKind.Integer)
+                    {
+                        arguments.Add(_currentToken);
+                        _currentToken = _lexer.NextToken();
+                    }
+                    else
+                    {
+                        _diagnostics.Add(Diagnostic.Error(
+                            "expected string literal, identifier, or integer in directive arguments",
+                            _currentToken.Span,
+                            $"found '{_currentToken.Text}'",
+                            "E1002"));
+                        break;
+                    }
+
+                    if (_currentToken.Kind == TokenKind.Comma)
+                        Eat(TokenKind.Comma);
+                    else if (_currentToken.Kind != TokenKind.CloseParenthesis)
+                        break;
+                }
+                var closeParen = Eat(TokenKind.CloseParenthesis);
+                var span = SourceSpan.Combine(hashToken.Span, closeParen.Span);
+                directives.Add(new DirectiveNode(span, nameToken.Text, arguments));
+            }
+            else
+            {
+                var span = SourceSpan.Combine(hashToken.Span, nameToken.Span);
+                directives.Add(new DirectiveNode(span, nameToken.Text, arguments));
+            }
+        }
+        return directives;
     }
 
     /// <summary>
@@ -167,7 +242,7 @@ public class Parser
         }
 
         var moduleSpan = SourceSpan.Combine(firstIdentifier.Span, lastIdentifier.Span);
-        var span = SourceSpan.Combine(importKeyword.Span, _currentToken.Span);
+        var span = SourceSpan.Combine(importKeyword.Span, lastIdentifier.Span);
         return new ImportDeclarationNode(span, moduleSpan, path);
     }
 
@@ -197,7 +272,7 @@ public class Parser
     /// Parses a struct declaration with optional generic type parameters.
     /// </summary>
     /// <returns>A <see cref="StructDeclarationNode"/> representing the struct definition.</returns>
-    private StructDeclarationNode ParseStruct()
+    private StructDeclarationNode ParseStruct(List<DirectiveNode>? directives = null)
     {
         var structKeyword = Eat(TokenKind.Struct);
         var nameToken = Eat(TokenKind.Identifier);
@@ -240,15 +315,16 @@ public class Parser
 
         var closeBrace = Eat(TokenKind.CloseBrace);
 
-        var span = SourceSpan.Combine(structKeyword.Span, closeBrace.Span);
-        return new StructDeclarationNode(span, nameToken.Span, nameToken.Text, typeParameters, fields);
+        var startSpan = directives is { Count: > 0 } ? directives[0].Span : structKeyword.Span;
+        var span = SourceSpan.Combine(startSpan, closeBrace.Span);
+        return new StructDeclarationNode(span, nameToken.Span, nameToken.Text, typeParameters, fields, directives);
     }
 
     /// <summary>
     /// Parses an enum declaration with optional generic type parameters and variants.
     /// </summary>
     /// <returns>An <see cref="EnumDeclarationNode"/> representing the enum definition.</returns>
-    private EnumDeclarationNode ParseEnumDeclaration()
+    private EnumDeclarationNode ParseEnumDeclaration(List<DirectiveNode>? directives = null)
     {
         var enumKeyword = Eat(TokenKind.Enum);
         var nameToken = Eat(TokenKind.Identifier);
@@ -327,8 +403,9 @@ public class Parser
 
         var closeBrace = Eat(TokenKind.CloseBrace);
 
-        var span = SourceSpan.Combine(enumKeyword.Span, closeBrace.Span);
-        return new EnumDeclarationNode(span, nameToken.Span, nameToken.Text, typeParameters, variants);
+        var startSpan = directives is { Count: > 0 } ? directives[0].Span : enumKeyword.Span;
+        var span = SourceSpan.Combine(startSpan, closeBrace.Span);
+        return new EnumDeclarationNode(span, nameToken.Span, nameToken.Text, typeParameters, variants, directives);
     }
 
     /// <summary>
@@ -336,8 +413,18 @@ public class Parser
     /// </summary>
     /// <param name="modifiers">Optional function modifiers (public, foreign, etc.).</param>
     /// <returns>A <see cref="FunctionDeclarationNode"/> representing the function.</returns>
-    public FunctionDeclarationNode ParseFunction(FunctionModifiers modifiers = FunctionModifiers.None)
+    public FunctionDeclarationNode ParseFunction(FunctionModifiers modifiers = FunctionModifiers.None,
+        List<DirectiveNode>? directives = null)
     {
+        directives ??= [];
+
+        // Derive modifiers from directives
+        foreach (var d in directives)
+        {
+            if (d.Name == "foreign") modifiers |= FunctionModifiers.Foreign;
+            else if (d.Name == "inline") modifiers |= FunctionModifiers.Inline;
+        }
+
         if (_currentToken.Kind == TokenKind.Pub)
         {
             Eat(TokenKind.Pub);
@@ -428,7 +515,7 @@ public class Parser
                 break;
         }
 
-        Eat(TokenKind.CloseParenthesis);
+        var closeParen = Eat(TokenKind.CloseParenthesis);
 
         // Parse return type (optional for now, but expected in new syntax)
         TypeNode? returnType = null;
@@ -448,12 +535,13 @@ public class Parser
                 "E2064"));
         }
 
-        var fnSpan = SourceSpan.Combine(fnKeyword.Span, _currentToken.Span);
+        var spanStart = directives.Count > 0 ? directives[0].Span : fnKeyword.Span;
         if (modifiers.HasFlag(FunctionModifiers.Foreign))
         {
             // Foreign functions have no body
+            var fnSpan = SourceSpan.Combine(spanStart, returnType?.Span ?? closeParen.Span);
             return new FunctionDeclarationNode(fnSpan, identifier.Span, identifier.Text, parameters, returnType, statements,
-                modifiers | FunctionModifiers.Foreign);
+                modifiers | FunctionModifiers.Foreign, directives);
         }
         else
         {
@@ -472,10 +560,9 @@ public class Parser
                 }
             }
 
-            Eat(TokenKind.CloseBrace);
-
-            // var span = SourceSpan.Combine(fnKeyword.Span, _currentToken.Span);
-            return new FunctionDeclarationNode(fnSpan, identifier.Span, identifier.Text, parameters, returnType, statements, modifiers);
+            var closeBrace = Eat(TokenKind.CloseBrace);
+            var fnSpan = SourceSpan.Combine(spanStart, closeBrace.Span);
+            return new FunctionDeclarationNode(fnSpan, identifier.Span, identifier.Text, parameters, returnType, statements, modifiers, directives);
         }
     }
 
@@ -515,9 +602,9 @@ public class Parser
             }
         }
 
-        Eat(TokenKind.CloseBrace);
+        var closeBrace = Eat(TokenKind.CloseBrace);
 
-        var span = SourceSpan.Combine(testKeyword.Span, _currentToken.Span);
+        var span = SourceSpan.Combine(testKeyword.Span, closeBrace.Span);
         return new TestDeclarationNode(span, testName, statements);
     }
 
@@ -620,7 +707,8 @@ public class Parser
             initializer = ParseExpression();
         }
 
-        var span = SourceSpan.Combine(keyword.Span, _currentToken.Span);
+        var lastSpan = initializer?.Span ?? type?.Span ?? identifier.Span;
+        var span = SourceSpan.Combine(keyword.Span, lastSpan);
         return new VariableDeclarationNode(span, identifier.Span, identifier.Text, type, initializer, isConst, isPublic);
     }
 
@@ -1423,7 +1511,7 @@ public class Parser
         // Body must be a block
         var body = ParseBlockExpression();
 
-        var span = SourceSpan.Combine(forKeyword.Span, _currentToken.Span);
+        var span = SourceSpan.Combine(forKeyword.Span, body.Span);
         return new ForLoopNode(span, iterator.Text, iterable, body);
     }
 
