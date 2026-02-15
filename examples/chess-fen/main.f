@@ -18,24 +18,64 @@ fn append_piece(sb: &StringBuilder, piece: u8) {
     else if piece == b'p' { sb.append("♟") }
 }
 
+// Set BACKGROUND to the square's color at (rank, col).
 fn set_square_bg(w: &Writer, rank: i32, col: i32) {
     const is_light = (rank + col) % 2 == 0
     if is_light { set_bg(w, Color.White) }
     else { set_bg(w, Color.Green) }
 }
 
+// Set FOREGROUND to the square's color at (rank, col).
+// Used for half-block characters where fg paints the visible half.
+fn set_square_fg(w: &Writer, rank: i32, col: i32) {
+    const is_light = (rank + col) % 2 == 0
+    if is_light { set_fg(w, Color.White) }
+    else { set_fg(w, Color.Green) }
+}
+
+// Emit a half-block border/transition line.
+// ▄ = lower half block: bg paints top half, fg paints bottom half.
+// ▀ = upper half block: fg paints top half, bg paints bottom half.
+fn emit_border(sb: &StringBuilder, w: &Writer, top_rank: i32, bot_rank: i32) {
+    sb.append("  ")
+    let c: i32 = 0
+    loop {
+        if c >= 8 { break }
+        set_square_bg(w, top_rank, c)
+        set_square_fg(w, bot_rank, c)
+        sb.append("▄▄▄▄")
+        reset(w)
+        c = c + 1
+    }
+    println(sb.as_view())
+    sb.clear()
+}
+
 fn display_board(fen: String) {
     const buf = [0; 256]
     const fba = fixed_buffer_allocator(buf)
     const alloc = fba.allocator()
-    let sb = string_builder_with_capacity_and_allocator(256, &alloc)
+    let sb = string_builder(256, &alloc)
     defer sb.deinit()
     let w = sb.writer()
 
     let rank: i32 = 8
     let col: i32 = 0
 
-    // Rank number
+    // Top border: ▄ with default bg (top half) and rank 8 colors (bottom half)
+    sb.append("  ")
+    let c: i32 = 0
+    loop {
+        if c >= 8 { break }
+        set_square_fg(&w, rank, c)
+        sb.append("▄▄▄▄")
+        reset(&w)
+        c = c + 1
+    }
+    println(sb.as_view())
+    sb.clear()
+
+    // First rank number
     set_style(&w, Style.Dim)
     sb.append(rank)
     reset(&w)
@@ -50,10 +90,17 @@ fn display_board(fen: String) {
         if ch == b' ' {
             break
         } else if ch == b'/' {
+            // Finish content line
             println(sb.as_view())
             sb.clear()
+
+            // Transition: top half = current rank, bottom half = next rank
+            sb.emit_border(&w, rank, rank - 1)
+
             rank = rank - 1
             col = 0
+
+            // Start next content line
             set_style(&w, Style.Dim)
             sb.append(rank)
             reset(&w)
@@ -62,7 +109,7 @@ fn display_board(fen: String) {
             const count = (ch - b'0') as i32
             for (j in 0..count) {
                 set_square_bg(&w, rank, col)
-                sb.append("   ")
+                sb.append("    ")
                 reset(&w)
                 col = col + 1
             }
@@ -77,7 +124,7 @@ fn display_board(fen: String) {
             }
             sb.append(" ")
             sb.append_piece(ch)
-            sb.append(" ")
+            sb.append("  ")
             reset(&w)
             col = col + 1
         }
@@ -85,12 +132,26 @@ fn display_board(fen: String) {
         pos = pos + 1
     }
 
+    // Last content line
     println(sb.as_view())
     sb.clear()
 
-    // Column labels
+    // Bottom border: ▀ with rank 1 colors (top half) and default bg (bottom half)
+    sb.append("  ")
+    c = 0
+    loop {
+        if c >= 8 { break }
+        set_square_fg(&w, rank, c)
+        sb.append("▀▀▀▀")
+        reset(&w)
+        c = c + 1
+    }
+    println(sb.as_view())
+    sb.clear()
+
+    // Column labels (4-char cells)
     set_style(&w, Style.Dim)
-    sb.append("   a  b  c  d  e  f  g  h")
+    sb.append("   a   b   c   d   e   f   g   h")
     reset(&w)
     println(sb.as_view())
     sb.clear()
