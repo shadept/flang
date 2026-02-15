@@ -143,12 +143,20 @@ public partial class HmTypeChecker
         {
             var exprType = InferExpression(ret.Expression);
 
-            _engine.Unify(ctx.ReturnType, exprType, ret.Expression.Span);
+            using (_engine.OverrideErrors("E2071",
+                () => "function `" + ctx.Node.Name + "` returns `{expected}`, but got `{actual}`"))
+            {
+                _engine.Unify(ctx.ReturnType, exprType, ret.Expression.Span);
+            }
         }
         else
         {
             // Bare return: return type must be void
-            _engine.Unify(ctx.ReturnType, WellKnown.Void, ret.Span);
+            using (_engine.OverrideErrors("E2071",
+                () => "function `" + ctx.Node.Name + "` must return `{expected}`, but got bare return"))
+            {
+                _engine.Unify(ctx.ReturnType, WellKnown.Void, ret.Span);
+            }
         }
     }
 

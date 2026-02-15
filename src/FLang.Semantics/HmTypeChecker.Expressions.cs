@@ -1177,8 +1177,12 @@ public partial class HmTypeChecker
         {
             // Both branches: unify
             var elseType = InferExpression(ifExpr.ElseBranch);
-            var unified = _engine.Unify(thenType, elseType, ifExpr.Span);
-            return unified.Type;
+            using (_engine.OverrideErrors("E2074",
+                () => "if/else branches have different types: then is `{expected}`, else is `{actual}`"))
+            {
+                var unified = _engine.Unify(thenType, elseType, ifExpr.Span);
+                return unified.Type;
+            }
         }
 
         // No else: void
@@ -1224,8 +1228,12 @@ public partial class HmTypeChecker
 
             // Infer arm body and unify with result type
             var armType = InferExpression(arm.ResultExpr);
-            var unified = _engine.Unify(resultType, armType, arm.Span);
-            resultType = unified.Type;
+            using (_engine.OverrideErrors("E2075",
+                () => "match arm returns `{actual}`, but previous arms return `{expected}`"))
+            {
+                var unified = _engine.Unify(resultType, armType, arm.Span);
+                resultType = unified.Type;
+            }
 
             PopScope();
         }
@@ -1378,7 +1386,16 @@ public partial class HmTypeChecker
 
         var targetType = InferExpression(assign.Target);
         var valueType = InferExpression(assign.Value);
+        var diagCount = _engine.DiagnosticCount;
         _engine.Unify(valueType, targetType, assign.Value.Span);
+        if (_engine.DiagnosticCount > diagCount
+            && assign.Target is IdentifierExpressionNode targetId2)
+        {
+            var decl = _scopes.LookupDeclaration(targetId2.Name);
+            if (decl != null)
+                _engine.GetDiagnostic(diagCount).Notes.Add(
+                    Diagnostic.Info($"`{targetId2.Name}` declared here", decl.Span));
+        }
         return WellKnown.Void;
     }
 
