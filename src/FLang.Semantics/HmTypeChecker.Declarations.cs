@@ -281,8 +281,9 @@ public partial class HmTypeChecker
         var paramTypes = new Type[fn.Parameters.Count];
         for (var i = 0; i < fn.Parameters.Count; i++)
         {
-            var paramType = ResolveTypeNode(fn.Parameters[i].Type);
-            if (fn.Parameters[i].IsVariadic)
+            var param = fn.Parameters[i];
+            var paramType = ResolveTypeNode(param.Type);
+            if (param.IsVariadic)
             {
                 // Variadic param: declared element type becomes Slice[T]
                 var sliceNominal = LookupNominalType(WellKnown.Slice)
@@ -290,6 +291,21 @@ public partial class HmTypeChecker
                 paramType = new NominalType(sliceNominal.Name, sliceNominal.Kind, [paramType], sliceNominal.FieldsOrVariants);
             }
             paramTypes[i] = paramType;
+        }
+
+        // Validate default parameter values against declared types
+        for (var i = 0; i < fn.Parameters.Count; i++)
+        {
+            var param = fn.Parameters[i];
+            if (param.DefaultValue != null)
+            {
+                var cloned = CloneExpression(param.DefaultValue);
+                var defaultType = InferExpression(cloned);
+                using (_engine.OverrideErrors("E2070", () => "default value for parameter `" + param.Name + "`: expected `{expected}`, got `{actual}`"))
+                {
+                    _engine.Unify(defaultType, paramTypes[i], param.DefaultValue.Span);
+                }
+            }
         }
 
         // Resolve return type
@@ -511,11 +527,12 @@ public partial class HmTypeChecker
             var diag = _diagnostics[i];
             if (diag.Severity != DiagnosticSeverity.Error) continue;
 
-            bool suppress = suppressedCodes.Contains(diag.Code)
-                || placeholderNames.Any(p => diag.Message.Contains(p));
-
+            bool suppress = diag.Code != null &&
+                (suppressedCodes.Contains(diag.Code) || placeholderNames.Any(p => diag.Message.Contains(p)));
             if (suppress)
+            {
                 _diagnostics.RemoveAt(i);
+            }
         }
     }
 

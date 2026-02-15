@@ -39,6 +39,10 @@ public class InferenceEngine : ITypeResolver
     private readonly List<Diagnostic> _diagnostics = [];
     private int _currentLevel;
 
+    // Scoped error override — set via OverrideErrors()
+    private string? _errorCodeOverride;
+    private Func<string>? _errorMessageTemplate;
+
     public IReadOnlyList<Diagnostic> Diagnostics => _diagnostics;
 
     public InferenceEngine()
@@ -261,7 +265,7 @@ public class InferenceEngine : ITypeResolver
             }
         }
 
-        ReportError($"Type mismatch: expected `{a}`, got `{b}`", span);
+        ReportError($"Type mismatch: expected `{a}`, got `{b}`", span, expected: a, actual: b);
         return a;
     }
 
@@ -435,9 +439,41 @@ public class InferenceEngine : ITypeResolver
     // Diagnostics
     // =========================================================================
 
-    private void ReportError(string message, SourceSpan span)
+    private void ReportError(string message, SourceSpan span, Type? expected = null, Type? actual = null)
     {
-        _diagnostics.Add(Diagnostic.Error(message, span, null, "E2002"));
+        var code = _errorCodeOverride ?? "E2002";
+        var msg = message;
+        if (_errorMessageTemplate != null && expected != null && actual != null)
+            msg = _errorMessageTemplate()
+                .Replace("{expected}", expected.ToString())
+                .Replace("{actual}", actual.ToString());
+        _diagnostics.Add(Diagnostic.Error(msg, span, null, code));
+    }
+
+    /// <summary>
+    /// Returns a scope that overrides the error code and optionally the message
+    /// for all unification errors reported within it.
+    /// The template may use {expected} and {actual} placeholders for the types.
+    /// </summary>
+    public ErrorOverrideScope OverrideErrors(string errorCode, Func<string>? messageTemplate = null)
+    {
+        var prevCode = _errorCodeOverride;
+        var prevTemplate = _errorMessageTemplate;
+        _errorCodeOverride = errorCode;
+        _errorMessageTemplate = messageTemplate;
+        return new ErrorOverrideScope(this, prevCode, prevTemplate);
+    }
+
+    public readonly struct ErrorOverrideScope(
+        InferenceEngine engine,
+        string? prevCode,
+        Func<string>? prevTemplate) : IDisposable
+    {
+        public void Dispose()
+        {
+            engine._errorCodeOverride = prevCode;
+            engine._errorMessageTemplate = prevTemplate;
+        }
     }
 
     public void ClearDiagnostics() => _diagnostics.Clear();

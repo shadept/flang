@@ -16,7 +16,7 @@ pub struct StringBuilder {
 const DEFAULT_CAPACITY: usize = 16
 
 // Create a new empty StringBuilder with the given initial capacity.
-pub fn string_builder(capacity: usize = 0, allocator: &Allocator = null) StringBuilder {
+pub fn string_builder(capacity: usize = 0, allocator: &Allocator? = null) StringBuilder {
     let sb: StringBuilder
     sb.allocator = allocator.or_global()
     if (capacity > 0) {
