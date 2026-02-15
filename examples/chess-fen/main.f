@@ -1,5 +1,7 @@
 import std.allocator
 import std.string_builder
+import std.io.writer
+import std.terminal
 
 fn append_piece(sb: &StringBuilder, piece: u8) {
     if piece == b'K' { sb.append("♔") }
@@ -16,23 +18,28 @@ fn append_piece(sb: &StringBuilder, piece: u8) {
     else if piece == b'p' { sb.append("♟") }
 }
 
+fn set_square_bg(w: &Writer, rank: i32, col: i32) {
+    const is_light = (rank + col) % 2 == 0
+    if is_light { set_bg(w, Color.White) }
+    else { set_bg(w, Color.Green) }
+}
+
 fn display_board(fen: String) {
-    const buf = [0; 80]
+    const buf = [0; 256]
     const fba = fixed_buffer_allocator(buf)
     const alloc = fba.allocator()
-
-    let sb = string_builder_with_capacity_and_allocator(80, &alloc)
+    let sb = string_builder_with_capacity_and_allocator(256, &alloc)
     defer sb.deinit()
-
-    const top = "  ┌───┬───┬───┬───┬───┬───┬───┬───┐"
-    const mid = "  ├───┼───┼───┼───┼───┼───┼───┼───┤"
-    const bot = "  └───┴───┴───┴───┴───┴───┴───┴───┘"
-
-    println(top)
+    let w = sb.writer()
 
     let rank: i32 = 8
+    let col: i32 = 0
+
+    // Rank number
+    set_style(&w, Style.Dim)
     sb.append(rank)
-    sb.append(" │")
+    reset(&w)
+    sb.append(" ")
 
     let pos: usize = 0
     loop {
@@ -44,43 +51,82 @@ fn display_board(fen: String) {
             break
         } else if ch == b'/' {
             println(sb.as_view())
-            println(mid)
             sb.clear()
             rank = rank - 1
+            col = 0
+            set_style(&w, Style.Dim)
             sb.append(rank)
-            sb.append(" │")
+            reset(&w)
+            sb.append(" ")
         } else if ch >= b'1' and ch <= b'8' {
             const count = (ch - b'0') as i32
             for (j in 0..count) {
-                sb.append("   │")
+                set_square_bg(&w, rank, col)
+                sb.append("   ")
+                reset(&w)
+                col = col + 1
             }
         } else {
+            set_square_bg(&w, rank, col)
+            const is_white_piece = ch >= b'A' and ch <= b'Z'
+            if is_white_piece {
+                set_style(&w, Style.Bold)
+                set_bright_fg(&w, Color.White)
+            } else {
+                set_fg(&w, Color.Black)
+            }
             sb.append(" ")
             sb.append_piece(ch)
-            sb.append(" │")
+            sb.append(" ")
+            reset(&w)
+            col = col + 1
         }
 
         pos = pos + 1
     }
 
     println(sb.as_view())
-    println(bot)
-    println("    a   b   c   d   e   f   g   h")
+    sb.clear()
 
-    // Display side to move
+    // Column labels
+    set_style(&w, Style.Dim)
+    sb.append("   a  b  c  d  e  f  g  h")
+    reset(&w)
+    println(sb.as_view())
+    sb.clear()
+
+    // Side to move
     pos = pos + 1
     if (pos < fen.len) {
-        print("  ")
+        sb.append("  ")
         if (fen[pos] == b'w') {
-            println("White to move")
+            set_style(&w, Style.Bold)
+            set_bright_fg(&w, Color.White)
+            sb.append("White")
+            reset(&w)
+            sb.append(" to move")
         } else {
-            println("Black to move")
+            set_style(&w, Style.Bold)
+            set_fg(&w, Color.Yellow)
+            sb.append("Black")
+            reset(&w)
+            sb.append(" to move")
         }
+        println(sb.as_view())
     }
 }
 
 pub fn main() i32 {
-    println("♚ FEN Chess Board Display ♔")
+    let sb = string_builder_with_capacity(64)
+    let w = sb.writer()
+
+    set_style(&w, Style.Bold)
+    set_fg(&w, Color.Cyan)
+    sb.append("♚ FEN Chess Board Display ♔")
+    reset(&w)
+    println(sb.as_view())
+    sb.deinit()
+
     println("")
 
     println("=== Starting Position ===")

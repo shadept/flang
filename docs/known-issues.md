@@ -69,6 +69,17 @@ fn make_wrapper(data: u8[]) Wrapper {
 
 ---
 
+### `#foreign` Directive Doesn't Manage C Includes
+
+**Status:** Open
+**Affected:** C codegen preamble, `#foreign fn` declarations
+
+Foreign function declarations (`#foreign fn`) rely on the C codegen preamble (`HmCCodeGenerator.cs`) having the right `#include` headers. When a new foreign function needs a header not already included (e.g., `ioctl` needs `<sys/ioctl.h>`), the codegen preamble must be manually updated.
+
+**Future:** Allow `#foreign` to specify required C headers, or auto-detect them from a mapping table.
+
+---
+
 ## Deferred Features
 
 ### FFI Pointer Returns and Casts

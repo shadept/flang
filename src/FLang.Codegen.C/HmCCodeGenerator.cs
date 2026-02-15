@@ -34,6 +34,7 @@ public static class HmCCodeGenerator
         sb.AppendLine("#else");
         sb.AppendLine("#include <unistd.h>");
         sb.AppendLine("#include <fcntl.h>");
+        sb.AppendLine("#include <sys/ioctl.h>");
         sb.AppendLine("#endif");
         sb.AppendLine();
 
