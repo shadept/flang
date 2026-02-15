@@ -11,7 +11,7 @@ import std.option
 // =============================================================================
 
 // Function type definitions for the allocator vtable.
-pub struct AllocatorVTable {
+pub type AllocatorVTable = struct {
     alloc: fn(&u8, size: usize, alignment: usize) u8[]?
     realloc: fn(&u8, memory: u8[], new_size: usize) u8[]?
     free: fn(&u8, memory: u8[]) void
@@ -20,7 +20,7 @@ pub struct AllocatorVTable {
 // Type-erased allocator interface.
 // impl: pointer to allocator-specific state (cast to &u8 for type erasure)
 // vtable: pointer to function table
-pub struct Allocator {
+pub type Allocator = struct {
     impl: &u8,
     vtable: &AllocatorVTable
 }
@@ -53,8 +53,8 @@ pub fn new(allocator: &Allocator, type: Type($T)) &T {
 }
 
 pub fn delete(allocator: &Allocator, value: &$T) {
-    // HACK: fake slice. assuming implementation doesnt care about length
-    allocator.free(slice_from_raw_parts(value as &u8, 0))
+    const slice = slice_from_raw_parts(value as &u8, size_of(T))
+    allocator.free(slice)
 }
 
 // =============================================================================
@@ -62,7 +62,7 @@ pub fn delete(allocator: &Allocator, value: &$T) {
 // =============================================================================
 
 // GlobalAllocator has no state; we use a dummy struct for the impl pointer.
-pub struct GlobalAllocatorState {
+pub type GlobalAllocatorState = struct {
     _unused: u8
 }
 
@@ -113,7 +113,7 @@ pub fn or_global(alloc: &Allocator?) &Allocator {
 
 // State for the fixed buffer allocator.
 // Tracks the buffer, its size, and current allocation offset.
-pub struct FixedBufferAllocatorState {
+pub type FixedBufferAllocatorState = struct {
     buffer: u8[],
     offset: usize
 }
@@ -214,4 +214,154 @@ pub fn allocator(state: &FixedBufferAllocatorState) Allocator {
 // Reset a FixedBufferAllocator to reuse its buffer from the beginning.
 pub fn reset(state: &FixedBufferAllocatorState) {
     state.offset = 0
+}
+
+// =============================================================================
+// ArenaAllocator - page-based bump allocator with bulk teardown
+// =============================================================================
+// Arena semantics: bump-allocate within pages, no individual free,
+// bulk teardown via reset()/deinit(). Composable with any backing allocator.
+
+// Intrusive linked list header at the start of each page.
+// Page layout in memory: [ArenaPage header | usable bytes...]
+type ArenaPage = struct {
+    next: &ArenaPage?,
+    size: usize,
+    offset: usize
+}
+
+pub type ArenaAllocatorState = struct {
+    backing: &Allocator,
+    page_size: usize,
+    first_page: &ArenaPage?,
+    current_page: &ArenaPage?
+}
+
+pub const DEFAULT_ARENA_PAGE_SIZE: usize = 4096
+
+fn arena_new_page(state: &ArenaAllocatorState, min_size: usize) &ArenaPage? {
+    const header_size = size_of(ArenaPage)
+    const needed = min_size + header_size
+    const total = align_up(needed, state.page_size)
+
+    const raw = state.backing.alloc(total, 8)
+    if (raw.is_none()) {
+        return null
+    }
+
+    const page = raw.value.ptr as &ArenaPage
+    page.next = null
+    page.size = total - header_size
+    page.offset = 0
+
+    // Link into chain
+    if (state.current_page.is_some()) {
+        state.current_page.value.next = page
+    }
+    if (state.first_page.is_none()) {
+        state.first_page = page
+    }
+    state.current_page = page
+
+    return page
+}
+
+fn arena_alloc(impl: &u8, size: usize, alignment: usize) u8[]? {
+    let state = impl as &ArenaAllocatorState
+    const header_size = size_of(ArenaPage)
+
+    // Try current page first
+    if (state.current_page.is_some()) {
+        let page = state.current_page.value
+        let aligned_offset = align_up(page.offset, alignment)
+
+        if (aligned_offset + size <= page.size) {
+            // Compute pointer: page base + header + aligned offset
+            let base = page as &u8
+            let ptr = (base as usize + header_size + aligned_offset) as &u8
+            page.offset = aligned_offset + size
+            return slice_from_raw_parts(ptr, size)
+        }
+    }
+
+    // Current page doesn't fit — allocate a new page
+    let new_page = arena_new_page(state, size)
+    if (new_page.is_none()) {
+        return null
+    }
+
+    let page = new_page.value
+    let aligned_offset = align_up(0, alignment)
+    let base = page as &u8
+    let ptr = (base as usize + header_size + aligned_offset) as &u8
+    page.offset = aligned_offset + size
+    return slice_from_raw_parts(ptr, size)
+}
+
+fn arena_realloc(impl: &u8, memory: u8[], new_size: usize) u8[]? {
+    // Allocate new, copy old data
+    let new_mem = arena_alloc(impl, new_size, 1)
+    if (new_mem.is_none()) {
+        return null
+    }
+
+    let copy_size = if (memory.len < new_size) { memory.len } else { new_size }
+    if (copy_size > 0) {
+        memcpy(new_mem.value.ptr, memory.ptr, copy_size)
+    }
+    return new_mem
+}
+
+fn arena_free(impl: &u8, memory: u8[]) {
+    // Arena does not support individual frees — no-op.
+}
+
+const arena_allocator_vtable = AllocatorVTable {
+    alloc = arena_alloc,
+    realloc = arena_realloc,
+    free = arena_free
+}
+
+// Create an arena allocator backed by the given allocator.
+pub fn arena_allocator(backing: &Allocator, page_size: usize = 4096) ArenaAllocatorState {
+    return .{
+        backing = backing,
+        page_size = page_size,
+        first_page = null,
+        current_page = null
+    }
+}
+
+pub fn allocator(state: &ArenaAllocatorState) Allocator {
+    return Allocator {
+        impl = state as &u8,
+        vtable = &arena_allocator_vtable
+    }
+}
+
+// Reset all pages to offset 0 — keeps pages allocated for reuse.
+pub fn reset(state: &ArenaAllocatorState) {
+    let page = state.first_page
+    loop {
+        if (page.is_none()) { break }
+        page.value.offset = 0
+        page = page.value.next
+    }
+    state.current_page = state.first_page
+}
+
+// Free all pages through the backing allocator.
+pub fn deinit(state: &ArenaAllocatorState) {
+    const header_size = size_of(ArenaPage)
+    let page = state.first_page
+    loop {
+        if (page.is_none()) { break }
+        let next = page.value.next
+        let total = page.value.size + header_size
+        let raw = slice_from_raw_parts(page.value as &u8, total)
+        state.backing.free(raw)
+        page = next
+    }
+    state.first_page = null
+    state.current_page = null
 }

@@ -243,8 +243,8 @@ public partial class HmTypeChecker : INominalTypeRegistry
     {
         if (_inferredTypes.TryGetValue(node, out var type))
             return type;
-        throw new InvalidOperationException(
-            $"BUG: No inferred type recorded for {node.GetType().Name} at {node.Span}");
+        throw new InternalCompilerError(
+            $"No inferred type recorded for {node.GetType().Name}", node.Span);
     }
 
     /// <summary>

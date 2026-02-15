@@ -83,13 +83,15 @@ fn explicit_deref(p: &Point) i32 {
 ### 2.3 Structs
 
 ```
-struct Name {
+type Name = struct {
     field1: Type1
     field2: Type2
 }
 ```
 
-Structs may be generic. Generic parameters are introduced by `[T, U, ...]`.
+> **Note:** The old `struct Name { ... }` syntax is deprecated but still accepted. Use `type Name = struct { ... }` for new code.
+
+Structs may be generic. Generic parameters are introduced by `(T, U, ...)`.
 
 - All fields are public.
 - Field writes are allowed only in the defining file.
@@ -146,24 +148,26 @@ Because tuples desugar to anonymous structs, any function expecting `{ _0: i32, 
 Enums represent tagged unions - a type that can be one of several named variants, each optionally carrying payload data.
 
 ```
-enum Name {
+type Name = enum {
     Variant1
     Variant2(Type1)
     Variant3(Type1, Type2)
 }
 
 // Naked enum (C-style, explicit integer tags, no payloads)
-enum Ord {
+type Ord = enum {
     Less = -1
     Equal = 0
     Greater = 1
 }
 ```
 
+> **Note:** The old `enum Name { ... }` syntax is deprecated but still accepted. Use `type Name = enum { ... }` for new code.
+
 **Declaration:**
 
-- `enum Name { Variant, ... }` declares an enum with unit (no payload) and payload variants.
-- Generic enums: `enum Result(T, E) { Ok(T), Err(E) }`
+- `type Name = enum { Variant, ... }` declares an enum with unit (no payload) and payload variants.
+- Generic enums: `type Result(T, E) = enum { Ok(T), Err(E) }`
 - Variants may have zero or more payload types.
 - Tag values are assigned sequentially (0, 1, 2, ...) by default.
 - **Naked enums** (C-style): Variants may have explicit integer tag values using `= <integer>` syntax. If any variant has an explicit tag, the enum is a naked enum and no variant may carry payload data. Implicit tag values auto-increment from the previous variant's value (first defaults to 0). Duplicate tag values are a compile error.

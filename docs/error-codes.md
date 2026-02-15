@@ -11,6 +11,7 @@ FLang uses a custom sequential numbering system organized by compiler phase:
 - **E1XXX**: Frontend errors (lexing, parsing, syntax)
 - **E2XXX**: Semantic analysis errors (type checking, name resolution, control flow)
 - **E3XXX**: Code generation errors (FIR lowering, C code generation)
+- **W1XXX**: Frontend warnings (deprecated syntax)
 - **W2XXX**: Semantic analysis warnings (deprecation, suspicious patterns)
 
 Within each category, error codes are assigned sequentially starting from E0001, E1001, E2001, E3001, etc. This ensures
@@ -2555,6 +2556,70 @@ FLang's error code numbering follows these principles:
 
 5. **Future-Proof**: We reserve ranges for future expansion, ensuring we won't run out of error codes as the language
    grows.
+
+---
+
+## W1XXX: Frontend Warnings
+
+### W1001: Deprecated Struct Declaration Syntax
+
+**Category**: Parsing
+**Severity**: Warning
+
+#### Description
+
+The old `struct Name { ... }` declaration syntax is deprecated. Use the new `type Name = struct { ... }` syntax instead.
+
+#### Example
+
+```flang
+// Deprecated:
+struct Foo {
+    x: i32
+}
+
+// Preferred:
+type Foo = struct {
+    x: i32
+}
+```
+
+#### Solution
+
+Replace `struct Name { ... }` with `type Name = struct { ... }`.
+
+---
+
+### W1002: Deprecated Enum Declaration Syntax
+
+**Category**: Parsing
+**Severity**: Warning
+
+#### Description
+
+The old `enum Name { ... }` declaration syntax is deprecated. Use the new `type Name = enum { ... }` syntax instead.
+
+#### Example
+
+```flang
+// Deprecated:
+enum Color {
+    Red
+    Green
+    Blue
+}
+
+// Preferred:
+type Color = enum {
+    Red
+    Green
+    Blue
+}
+```
+
+#### Solution
+
+Replace `enum Name { ... }` with `type Name = enum { ... }`.
 
 ---
 

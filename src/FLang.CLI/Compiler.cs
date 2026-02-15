@@ -81,6 +81,10 @@ public class Compiler
             return new CompilationResult(false, null, allDiagnostics, compilation);
         }
 
+        // Wrap type checking, lowering, and codegen in a try-catch to convert
+        // internal compiler errors into proper diagnostics with source locations.
+        try
+        {
         // 2. HM Type Checking — multi-phase across all modules
         // BFS insertion order from ModuleCompiler is already correct (prelude -> core -> user).
         // The 2-phase collect-then-resolve approach makes ordering within each phase irrelevant.
@@ -247,5 +251,21 @@ public class Compiler
         }
 
         return new CompilationResult(true, outputFilePath, allDiagnostics, compilation);
+
+        }
+        catch (InternalCompilerError ice)
+        {
+            allDiagnostics.Add(Diagnostic.Error(
+                $"internal compiler error: {ice.Message}",
+                ice.Span, "Please report this bug.", "E0000"));
+            return new CompilationResult(false, null, allDiagnostics, compilation);
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException and not StackOverflowException)
+        {
+            allDiagnostics.Add(Diagnostic.Error(
+                $"internal compiler error: {ex.Message}",
+                SourceSpan.None, "Please report this bug.", "E0000"));
+            return new CompilationResult(false, null, allDiagnostics, compilation);
+        }
     }
 }

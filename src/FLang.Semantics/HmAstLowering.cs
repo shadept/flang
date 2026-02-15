@@ -1392,8 +1392,8 @@ public class HmAstLowering
         }
         else
         {
-            throw new InvalidOperationException(
-                $"BUG: Unsupported direct iteration over {baseIrType} at {forLoop.Span}");
+            throw new InternalCompilerError(
+                $"Unsupported direct iteration over {baseIrType}", forLoop.Span);
         }
 
         // Allocate index counter (usize, init to 0)
@@ -1528,7 +1528,7 @@ public class HmAstLowering
             NullPropagationExpressionNode nullProp => LowerNullPropagation(nullProp),
             LambdaExpressionNode lambda => LowerLambda(lambda),
             NamedArgumentExpressionNode na => LowerExpression(na.Value, expectedType),
-            _ => throw new NotImplementedException($"Lowering of expression type {expr.GetType()} is not implemented.")
+            _ => throw new InternalCompilerError($"Lowering of expression type {expr.GetType()} is not implemented.", expr.Span)
         };
 
         if (expectedType != null)
@@ -1556,7 +1556,7 @@ public class HmAstLowering
     private Value LowerStringLiteral(StringLiteralNode strLit)
     {
         var stringNominal = _checker.LookupNominalType(WellKnown.String)
-            ?? throw new InvalidOperationException($"Well-known type `{WellKnown.String}` not registered");
+            ?? throw new InternalCompilerError($"Well-known type `{WellKnown.String}` not registered", strLit.Span);
         var stringIrType = _layout.Lower(stringNominal);
 
         // Deduplicate: reuse existing entry for the same string value
@@ -1857,8 +1857,8 @@ public class HmAstLowering
 
         // Generic functions must be monomorphized before lowering
         if (call.ResolvedTarget != null && !isForeign && call.ResolvedTarget.IsGeneric)
-            throw new InvalidOperationException(
-                $"BUG: Call to unspecialized generic function `{targetName}` at {call.Span}");
+            throw new InternalCompilerError(
+                $"Call to unspecialized generic function `{targetName}`", call.Span);
 
         // Build callee param IrTypes for name mangling (non-foreign only)
         var calleeIrParamTypes = new List<IrType>();
@@ -2053,8 +2053,8 @@ public class HmAstLowering
         {
             IrStruct s => s,
             IrPointer { Pointee: IrStruct s } => s,
-            _ => throw new InvalidOperationException(
-                $"BUG: Indirect field call receiver is not a struct: {baseIrType} at {call.Span}")
+            _ => throw new InternalCompilerError(
+                $"Indirect field call receiver is not a struct: {baseIrType}", call.Span)
         };
 
         var field = FindField(structType, call.MethodName!);
@@ -2308,7 +2308,7 @@ public class HmAstLowering
                 BinaryOperatorKind.GreaterThanOrEqual => BinaryOp.GreaterThanOrEqual,
                 BinaryOperatorKind.Equal => BinaryOp.Equal,
                 BinaryOperatorKind.NotEqual => BinaryOp.NotEqual,
-                _ => throw new InvalidOperationException($"Unexpected CmpDerivedOperator: {cmpOp}")
+                _ => throw new InternalCompilerError($"Unexpected CmpDerivedOperator: {cmpOp}", expr.Span)
             };
 
             var zero = new ConstantValue(0, TypeLayoutService.IrI32);
@@ -2439,8 +2439,8 @@ public class HmAstLowering
         }
 
         if (structType == null)
-            throw new InvalidOperationException(
-                $"BUG: Member access on non-struct type `{baseIrType}` at {member.Span}");
+            throw new InternalCompilerError(
+                $"Member access on non-struct type `{baseIrType}`", member.Span);
 
         // GEP requires a pointer base. If the base is a struct VALUE (not a pointer),
         // try to use the original pointer (by-ref param or alloca local) to avoid load-then-spill.
@@ -2705,7 +2705,7 @@ public class HmAstLowering
         var irType = GetIrType(structCtor);
 
         if (irType is not IrStruct structIrType)
-            throw new InvalidOperationException($"BUG: Struct construction target is not a struct type: `{irType}` at {structCtor.Span}");
+            throw new InternalCompilerError($"Struct construction target is not a struct type: `{irType}`", structCtor.Span);
 
         return EmitStructConstruction(structIrType, structCtor.Fields, structCtor.Span);
     }
@@ -2721,7 +2721,7 @@ public class HmAstLowering
             : GetIrType(anonStruct);
 
         if (irType is not IrStruct structIrType)
-            throw new InvalidOperationException($"BUG: Anonymous struct target is not a struct type: `{irType}` at {anonStruct.Span}");
+            throw new InternalCompilerError($"Anonymous struct target is not a struct type: `{irType}`", anonStruct.Span);
 
         return EmitStructConstruction(structIrType, anonStruct.Fields, anonStruct.Span);
     }
@@ -2798,8 +2798,8 @@ public class HmAstLowering
         var irType = GetIrType(arrLit);
 
         if (irType is not IrArray arrayIrType)
-            throw new InvalidOperationException(
-                $"BUG: Array literal target is not an array type: `{irType}` at {arrLit.Span}");
+            throw new InternalCompilerError(
+                $"Array literal target is not an array type: `{irType}`", arrLit.Span);
 
         var elementIrType = arrayIrType.Element;
         var allocaResult = new LocalValue($"arr_{_tempCounter++}", new IrPointer(irType));
@@ -3099,8 +3099,8 @@ public class HmAstLowering
         // Use the inferred concrete type (e.g. Range[usize]), not the generic template
         var rangeIrType = GetIrType(range);
         if (rangeIrType is not IrStruct rangeStruct)
-            throw new InvalidOperationException(
-                $"BUG: Range type is not a struct: `{rangeIrType}` at {range.Span}");
+            throw new InternalCompilerError(
+                $"Range type is not a struct: `{rangeIrType}`", range.Span);
 
         var resultPtr = new LocalValue($"range_{_tempCounter++}", new IrPointer(rangeStruct));
         _currentBlock.Instructions.Add(new AllocaInstruction(_currentSpan, rangeStruct.Size, resultPtr));
@@ -3219,8 +3219,8 @@ public class HmAstLowering
             optionStruct = s;
 
         if (optionStruct == null)
-            throw new InvalidOperationException(
-                $"BUG: Coalesce left operand is not an Option struct: `{leftOption.IrType}` at {coalesce.Span}");
+            throw new InternalCompilerError(
+                $"Coalesce left operand is not an Option struct: `{leftOption.IrType}`", coalesce.Span);
 
         // Materialize left to alloca
         Value leftPtr;
@@ -3354,8 +3354,8 @@ public class HmAstLowering
             optionStruct = s;
 
         if (optionStruct == null)
-            throw new InvalidOperationException(
-                $"BUG: Null propagation target is not an Option type: `{targetIrType}` at {nullProp.Span}");
+            throw new InternalCompilerError(
+                $"Null propagation target is not an Option type: `{targetIrType}`", nullProp.Span);
 
         // Materialize target to alloca if not already a pointer
         Value targetPtr;
@@ -3831,8 +3831,8 @@ public class HmAstLowering
     private FunctionReferenceValue LowerLambda(LambdaExpressionNode lambda)
     {
         if (lambda.SynthesizedFunction == null)
-            throw new InvalidOperationException(
-                $"BUG: Lambda at {lambda.Span} has no synthesized function");
+            throw new InternalCompilerError(
+                "Lambda has no synthesized function", lambda.Span);
 
         var irType = GetIrType(lambda);
         return new FunctionReferenceValue(lambda.SynthesizedFunction.Name, irType);
@@ -3925,17 +3925,28 @@ public class HmAstLowering
                         }
                     }
 
-                    // Niche-optimized Option[&T]: .value lvalue is the pointer itself
-                    if (IsNicheOption(baseIrType))
+                    // Niche-optimized Option[&T]: .value lvalue is the pointer itself.
+                    // Only applies to Option-specific fields (value/has_value), not to
+                    // struct fields accessed through a nullable pointer after unwrap.
+                    // Check both direct niche option (from LowerExpression fallback) and
+                    // pointer-to-niche-option (from LowerLValue, which adds an extra indirection).
+                    if (member.FieldName is "value" or "has_value")
                     {
-                        if (member.FieldName == "has_value")
+                        var isNiche = IsNicheOption(baseIrType);
+                        var isNicheViaPtr = !isNiche
+                            && baseIrType is IrPointer { Pointee: var innerPt }
+                            && IsNicheOption(innerPt);
+                        if (isNiche || isNicheViaPtr)
                         {
-                            _diagnostics.Add(Diagnostic.Error(
-                                "Cannot assign to `has_value` on niche-optimized Option", member.Span, null, "E3005"));
-                            return null;
+                            if (member.FieldName == "has_value")
+                            {
+                                _diagnostics.Add(Diagnostic.Error(
+                                    "Cannot assign to `has_value` on niche-optimized Option", member.Span, null, "E3005"));
+                                return null;
+                            }
+                            // .value — the nullable pointer IS the value; return the lvalue holding it
+                            return baseVal;
                         }
-                        // .value — the nullable pointer IS the value; return the lvalue holding it
-                        return targetVal;
                     }
 
                     IrStruct? structType = baseIrType switch
@@ -3946,8 +3957,8 @@ public class HmAstLowering
                     };
 
                     if (structType == null)
-                        throw new InvalidOperationException(
-                            $"BUG: Cannot assign to member on non-struct type at {member.Span}");
+                        throw new InternalCompilerError(
+                            $"Cannot assign to member on non-struct type `{baseIrType}`", member.Span);
 
                     var field = FindField(structType, member.FieldName);
 
@@ -4031,7 +4042,7 @@ public class HmAstLowering
         return $"{sourceName}__shadow{count + 1}";
     }
 
-    private static BinaryOp MapBinaryOp(BinaryOperatorKind kind)
+    private BinaryOp MapBinaryOp(BinaryOperatorKind kind)
     {
         return kind switch
         {
@@ -4052,19 +4063,19 @@ public class HmAstLowering
             BinaryOperatorKind.ShiftLeft => BinaryOp.ShiftLeft,
             BinaryOperatorKind.ShiftRight => BinaryOp.ShiftRight,
             BinaryOperatorKind.UnsignedShiftRight => BinaryOp.UnsignedShiftRight,
-            _ => throw new NotImplementedException($"Unsupported binary operator: {kind}"),
+            _ => throw new InternalCompilerError($"Unsupported binary operator: {kind}", _currentSpan),
         };
     }
 
-    private static IrField FindField(IrStruct structType, string fieldName)
+    private IrField FindField(IrStruct structType, string fieldName)
     {
         foreach (var f in structType.Fields)
         {
             if (f.Name == fieldName)
                 return f;
         }
-        throw new InvalidOperationException(
-            $"BUG: Field `{fieldName}` not found in struct `{structType.Name}`");
+        throw new InternalCompilerError(
+            $"Field `{fieldName}` not found in struct `{structType.Name}`", _currentSpan);
     }
 
     // =========================================================================

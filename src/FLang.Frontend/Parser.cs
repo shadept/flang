@@ -60,7 +60,7 @@ public class Parser
 
                 if (_currentToken.Kind == TokenKind.Pub)
                 {
-                    // Could be struct, enum, function, or const - peek ahead
+                    // Could be struct, enum, type, function, or const - peek ahead
                     var nextToken = PeekNextToken();
                     if (nextToken.Kind == TokenKind.Struct)
                     {
@@ -71,6 +71,13 @@ public class Parser
                     {
                         Eat(TokenKind.Pub);
                         enums.Add(ParseEnumDeclaration(directives));
+                    }
+                    else if (nextToken.Kind == TokenKind.Identifier && nextToken.Text == "type")
+                    {
+                        Eat(TokenKind.Pub);
+                        var decl = ParseTypeDeclaration(directives);
+                        if (decl is StructDeclarationNode s) structs.Add(s);
+                        else if (decl is EnumDeclarationNode e) enums.Add(e);
                     }
                     else if (nextToken.Kind == TokenKind.Fn)
                     {
@@ -91,7 +98,7 @@ public class Parser
                     else
                     {
                         _diagnostics.Add(Diagnostic.Error(
-                            $"expected `struct`, `enum`, `fn`, or `const` after `pub`",
+                            $"expected `struct`, `enum`, `type`, `fn`, or `const` after `pub`",
                             _currentToken.Span,
                             $"found '{nextToken.Text}'",
                             "E1002"));
@@ -106,6 +113,12 @@ public class Parser
                 else if (_currentToken.Kind == TokenKind.Enum)
                 {
                     enums.Add(ParseEnumDeclaration(directives));
+                }
+                else if (_currentToken.Kind == TokenKind.Identifier && _currentToken.Text == "type")
+                {
+                    var decl = ParseTypeDeclaration(directives);
+                    if (decl is StructDeclarationNode s) structs.Add(s);
+                    else if (decl is EnumDeclarationNode e) enums.Add(e);
                 }
                 else if (_currentToken.Kind == TokenKind.Fn)
                 {
@@ -139,7 +152,7 @@ public class Parser
                     _diagnostics.Add(Diagnostic.Error(
                         "expected declaration after directive(s)",
                         _currentToken.Span,
-                        "directives must precede `struct`, `enum`, or `fn`",
+                        "directives must precede `struct`, `enum`, `type`, or `fn`",
                         "E1001"));
                     // Skip token to avoid infinite loop
                     if (_currentToken.Kind != TokenKind.EndOfFile)
@@ -151,7 +164,7 @@ public class Parser
                     _diagnostics.Add(Diagnostic.Error(
                         $"unexpected token '{_currentToken.Text}'",
                         _currentToken.Span,
-                        "expected `struct`, `enum`, `pub fn`, `fn`, `test`, `const`, or directive",
+                        "expected `struct`, `enum`, `type`, `pub fn`, `fn`, `test`, `const`, or directive",
                         "E1001"));
                     _currentToken = _lexer.NextToken();
                 }
@@ -275,27 +288,23 @@ public class Parser
     private StructDeclarationNode ParseStruct(List<DirectiveNode>? directives = null)
     {
         var structKeyword = Eat(TokenKind.Struct);
+
+        _diagnostics.Add(Diagnostic.Warning(
+            "`struct Name { ... }` syntax is deprecated, use `type Name = struct { ... }` instead",
+            structKeyword.Span,
+            hint: "replace with `type` declaration syntax",
+            code: "W1001"));
+
         var nameToken = Eat(TokenKind.Identifier);
 
         // Parse optional generic type parameters: (T, U, V)
-        var typeParameters = new List<string>();
-        if (_currentToken.Kind == TokenKind.OpenParenthesis)
-        {
-            Eat(TokenKind.OpenParenthesis);
+        var typeParameters = ParseTypeParameters();
 
-            while (_currentToken.Kind != TokenKind.CloseParenthesis && _currentToken.Kind != TokenKind.EndOfFile)
-            {
-                var typeParam = Eat(TokenKind.Identifier);
-                typeParameters.Add(typeParam.Text);
+        return ParseStructBody(nameToken.Text, nameToken.Span, typeParameters, structKeyword.Span, directives);
+    }
 
-                if (_currentToken.Kind == TokenKind.Comma)
-                    Eat(TokenKind.Comma);
-                else if (_currentToken.Kind != TokenKind.CloseParenthesis) break;
-            }
-
-            Eat(TokenKind.CloseParenthesis);
-        }
-
+    private StructDeclarationNode ParseStructBody(string name, SourceSpan nameSpan, List<string> typeParameters, SourceSpan startSpan, List<DirectiveNode>? directives)
+    {
         // Parse struct body: { field: Type, field2: Type2 }
         Eat(TokenKind.OpenBrace);
 
@@ -315,9 +324,9 @@ public class Parser
 
         var closeBrace = Eat(TokenKind.CloseBrace);
 
-        var startSpan = directives is { Count: > 0 } ? directives[0].Span : structKeyword.Span;
-        var span = SourceSpan.Combine(startSpan, closeBrace.Span);
-        return new StructDeclarationNode(span, nameToken.Span, nameToken.Text, typeParameters, fields, directives);
+        var effectiveStart = directives is { Count: > 0 } ? directives[0].Span : startSpan;
+        var span = SourceSpan.Combine(effectiveStart, closeBrace.Span);
+        return new StructDeclarationNode(span, nameSpan, name, typeParameters, fields, directives);
     }
 
     /// <summary>
@@ -327,27 +336,23 @@ public class Parser
     private EnumDeclarationNode ParseEnumDeclaration(List<DirectiveNode>? directives = null)
     {
         var enumKeyword = Eat(TokenKind.Enum);
+
+        _diagnostics.Add(Diagnostic.Warning(
+            "`enum Name { ... }` syntax is deprecated, use `type Name = enum { ... }` instead",
+            enumKeyword.Span,
+            hint: "replace with `type` declaration syntax",
+            code: "W1002"));
+
         var nameToken = Eat(TokenKind.Identifier);
 
         // Parse optional generic type parameters: (T, U, V)
-        var typeParameters = new List<string>();
-        if (_currentToken.Kind == TokenKind.OpenParenthesis)
-        {
-            Eat(TokenKind.OpenParenthesis);
+        var typeParameters = ParseTypeParameters();
 
-            while (_currentToken.Kind != TokenKind.CloseParenthesis && _currentToken.Kind != TokenKind.EndOfFile)
-            {
-                var typeParam = Eat(TokenKind.Identifier);
-                typeParameters.Add(typeParam.Text);
+        return ParseEnumBody(nameToken.Text, nameToken.Span, typeParameters, enumKeyword.Span, directives);
+    }
 
-                if (_currentToken.Kind == TokenKind.Comma)
-                    Eat(TokenKind.Comma);
-                else if (_currentToken.Kind != TokenKind.CloseParenthesis) break;
-            }
-
-            Eat(TokenKind.CloseParenthesis);
-        }
-
+    private EnumDeclarationNode ParseEnumBody(string name, SourceSpan nameSpan, List<string> typeParameters, SourceSpan startSpan, List<DirectiveNode>? directives)
+    {
         // Parse enum body: { Variant, Variant(Type), Variant(T1, T2) }
         Eat(TokenKind.OpenBrace);
 
@@ -403,9 +408,65 @@ public class Parser
 
         var closeBrace = Eat(TokenKind.CloseBrace);
 
-        var startSpan = directives is { Count: > 0 } ? directives[0].Span : enumKeyword.Span;
-        var span = SourceSpan.Combine(startSpan, closeBrace.Span);
-        return new EnumDeclarationNode(span, nameToken.Span, nameToken.Text, typeParameters, variants, directives);
+        var effectiveStart = directives is { Count: > 0 } ? directives[0].Span : startSpan;
+        var span = SourceSpan.Combine(effectiveStart, closeBrace.Span);
+        return new EnumDeclarationNode(span, nameSpan, name, typeParameters, variants, directives);
+    }
+
+    private List<string> ParseTypeParameters()
+    {
+        var typeParameters = new List<string>();
+        if (_currentToken.Kind != TokenKind.OpenParenthesis) return typeParameters;
+
+        Eat(TokenKind.OpenParenthesis);
+
+        while (_currentToken.Kind != TokenKind.CloseParenthesis && _currentToken.Kind != TokenKind.EndOfFile)
+        {
+            var typeParam = Eat(TokenKind.Identifier);
+            typeParameters.Add(typeParam.Text);
+
+            if (_currentToken.Kind == TokenKind.Comma)
+                Eat(TokenKind.Comma);
+            else if (_currentToken.Kind != TokenKind.CloseParenthesis) break;
+        }
+
+        Eat(TokenKind.CloseParenthesis);
+        return typeParameters;
+    }
+
+    /// <summary>
+    /// Parses a type declaration: type Name = struct { ... } or type Name = enum { ... }
+    /// </summary>
+    private object ParseTypeDeclaration(List<DirectiveNode>? directives = null)
+    {
+        var typeKeyword = Eat(TokenKind.Identifier); // contextual keyword "type"
+        var nameToken = Eat(TokenKind.Identifier);
+
+        // Parse optional generic type parameters: (T, U, V)
+        var typeParameters = ParseTypeParameters();
+
+        Eat(TokenKind.Equals);
+
+        if (_currentToken.Kind == TokenKind.Struct)
+        {
+            Eat(TokenKind.Struct);
+            return ParseStructBody(nameToken.Text, nameToken.Span, typeParameters, typeKeyword.Span, directives);
+        }
+
+        if (_currentToken.Kind == TokenKind.Enum)
+        {
+            Eat(TokenKind.Enum);
+            return ParseEnumBody(nameToken.Text, nameToken.Span, typeParameters, typeKeyword.Span, directives);
+        }
+
+        _diagnostics.Add(Diagnostic.Error(
+            $"expected `struct` or `enum` after `=` in type declaration",
+            _currentToken.Span,
+            $"found '{_currentToken.Text}'",
+            "E1002"));
+
+        // Return a dummy struct node to avoid null
+        return ParseStructBody(nameToken.Text, nameToken.Span, typeParameters, typeKeyword.Span, directives);
     }
 
     /// <summary>

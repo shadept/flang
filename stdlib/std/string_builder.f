@@ -6,7 +6,7 @@ import std.io.writer
 import std.allocator
 import std.string
 
-pub struct StringBuilder {
+pub type StringBuilder = struct {
     ptr: &u8
     len: usize
     cap: usize
@@ -28,24 +28,19 @@ pub fn string_builder(capacity: usize = 0, allocator: &Allocator? = null) String
 // Create a new empty StringBuilder with the given initial capacity.
 #deprecated("use string_builder(capacity)")
 pub fn string_builder_with_capacity(capacity: usize) StringBuilder {
-    return string_builder_with_capacity_and_allocator(capacity, null)
+    return string_builder(capacity, null)
 }
 
 // Create a new empty StringBuilder with default capacity.
 #deprecated("use string_builder(allocator=allocator)")
 pub fn string_builder_with_allocator(allocator: &Allocator) StringBuilder {
-    return string_builder_with_capacity_and_allocator(0, allocator)
+    return string_builder(0, allocator)
 }
 
 // Create a new empty StringBuilder with the given initial capacity.
 #deprecated("use string_builder(capacity, allocator)")
 pub fn string_builder_with_capacity_and_allocator(capacity: usize, allocator: &Allocator?) StringBuilder {
-    let sb: StringBuilder
-    sb.allocator = allocator.or_global()
-    if (capacity > 0) {
-        sb.reserve(capacity)
-    }
-    return sb
+    return string_builder(capacity, allocator)
 }
 
 // Free the backing storage. The builder should not be used after this.
@@ -148,7 +143,7 @@ pub fn append(sb: &StringBuilder, value: char) {
 // Internal Format Helpers
 // =============================================================================
 
-struct FormatSpec {
+type FormatSpec = struct {
     base: u64
     uppercase: bool
 }
