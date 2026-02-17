@@ -9,7 +9,7 @@ import std.string_builder
 import std.terminal
 
 pub fn main() i32 {
-    let sb = string_builder_with_capacity(64)
+    let sb = string_builder(64)
     let w = sb.writer()
 
     // Test move_to(3, 5) -> ESC [ 3 ; 5 H

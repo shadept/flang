@@ -8,8 +8,8 @@ import std.string
 
 pub type StringBuilder = struct {
     ptr: &u8
-    cap: usize
     len: usize
+    cap: usize
     allocator: &Allocator?
 }
 
@@ -66,13 +66,18 @@ fn reserve(sb: &StringBuilder, additional: usize) {
         new_cap = required
     }
 
-    const resized = sb.allocator.or_global().realloc(slice_from_raw_parts(sb.ptr, sb.cap), new_cap)
+    const resized = sb.allocator.or_global()
+        .realloc(slice_from_raw_parts(sb.ptr, sb.cap), new_cap)
     if (resized.is_none()) {
         panic("StringBuilder.reserve: realloc failed")
     }
 
     sb.ptr = resized.value.ptr
     sb.cap = new_cap
+}
+
+pub fn ensure_capacity(sb: &StringBuilder, capacity: usize) {
+    sb.reserve(capacity - sb.cap)
 }
 
 // Return the current contents as a String.

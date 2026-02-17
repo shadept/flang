@@ -68,7 +68,7 @@ public static class HmCCodeGenerator
 
         // Global constants
         foreach (var gv in module.GlobalValues)
-            EmitGlobalValue(sb, gv);
+            EmitGlobalValue(sb, gv, module.StringTable);
         if (module.GlobalValues.Count > 0)
             sb.AppendLine();
 
@@ -128,7 +128,7 @@ public static class HmCCodeGenerator
     // Global constants
     // =========================================================================
 
-    private static void EmitGlobalValue(StringBuilder sb, GlobalValue gv)
+    private static void EmitGlobalValue(StringBuilder sb, GlobalValue gv, List<StringTableEntry> stringTable)
     {
         if (gv.Initializer is StructConstantValue scv)
         {
@@ -142,7 +142,7 @@ public static class HmCCodeGenerator
                 foreach (var field in irStruct.Fields)
                 {
                     if (scv.FieldValues.TryGetValue(field.Name, out var fv))
-                        parts.Add($".{field.Name} = {EmitGlobalFieldValue(fv, field.Type)}");
+                        parts.Add($".{field.Name} = {EmitGlobalFieldValue(fv, field.Type, stringTable)}");
                     else
                         parts.Add($".{field.Name} = {{0}}");
                 }
@@ -162,7 +162,7 @@ public static class HmCCodeGenerator
             foreach (var elem in acv.Elements)
             {
                 if (elem is StructConstantValue elemScv && elemScv.IrType is IrStruct elemStruct)
-                    parts.Add(EmitNestedStructConstant(elemScv, elemStruct));
+                    parts.Add(EmitNestedStructConstant(elemScv, elemStruct, stringTable));
                 else
                     parts.Add("{0}");
             }
@@ -171,17 +171,17 @@ public static class HmCCodeGenerator
         }
     }
 
-    private static string EmitGlobalFieldValue(Value value, IrType targetType)
+    private static string EmitGlobalFieldValue(Value value, IrType targetType, List<StringTableEntry> stringTable)
     {
         return value switch
         {
             ConstantValue cv => EmitConstant(cv),
-            StringTableValue stv => $"__flang__string_table[{stv.Index}]",
+            StringTableValue stv => EmitInlineStringLiteral(stringTable[stv.Index]),
             FunctionReferenceValue fv => fv.IrType is IrFunctionPtr fp2
                 ? IrNameMangling.MangleFunctionName(fv.Name, fp2.Params)
                 : fv.Name,
             StructConstantValue nested when nested.IrType is IrStruct nestedStruct
-                => EmitNestedStructConstant(nested, nestedStruct),
+                => EmitNestedStructConstant(nested, nestedStruct, stringTable),
             StructConstantValue nested when nested.IrType is IrEnum nestedEnum
                 => $"{{ {EmitEnumConstantBody(nested, nestedEnum)} }}",
             ArrayConstantValue arr when arr.Data != null
@@ -197,13 +197,21 @@ public static class HmCCodeGenerator
         };
     }
 
-    private static string EmitNestedStructConstant(StructConstantValue scv, IrStruct irStruct)
+    /// <summary>Inline a string table entry as a C struct literal { (uint8_t*)"...", len }.</summary>
+    private static string EmitInlineStringLiteral(StringTableEntry entry)
+    {
+        var escaped = EscapeString(entry.Value);
+        var len = entry.Utf8Data.Length - 1; // exclude null terminator
+        return $"{{ (uint8_t*)\"{escaped}\", {len} }}";
+    }
+
+    private static string EmitNestedStructConstant(StructConstantValue scv, IrStruct irStruct, List<StringTableEntry> stringTable)
     {
         var parts = new List<string>();
         foreach (var field in irStruct.Fields)
         {
             if (scv.FieldValues.TryGetValue(field.Name, out var fv))
-                parts.Add($".{field.Name} = {EmitGlobalFieldValue(fv, field.Type)}");
+                parts.Add($".{field.Name} = {EmitGlobalFieldValue(fv, field.Type, stringTable)}");
             else
                 parts.Add($".{field.Name} = {{0}}");
         }

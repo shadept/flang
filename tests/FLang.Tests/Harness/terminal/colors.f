@@ -8,7 +8,7 @@ import std.string_builder
 import std.terminal
 
 pub fn main() i32 {
-    let sb = string_builder_with_capacity(64)
+    let sb = string_builder(64)
     let w = sb.writer()
 
     // Test set_fg(Color.Red) -> ESC [ 3 1 m

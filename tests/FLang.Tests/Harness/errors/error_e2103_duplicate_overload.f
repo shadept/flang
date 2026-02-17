@@ -1,0 +1,14 @@
+//! TEST: error_e2103_duplicate_overload
+//! COMPILE-ERROR: E2103
+
+fn add(a: i32, b: i32) i32 {
+    return a + b
+}
+
+fn add(a: i32, b: i32) i32 {
+    return a - b
+}
+
+pub fn main() i32 {
+    return add(1, 2)
+}

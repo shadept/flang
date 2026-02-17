@@ -44,7 +44,7 @@ pub fn open_file(path: String, mode: FileMode, encoding: FileEncoding) Result(Fi
         FileMode.Append => O_WRONLY + O_CREAT + O_APPEND,
     }
     const fd = open(path.ptr, flags)
-    if (fd == -1) {
+    if fd == -1 {
         return Result.Err(FileError.IOError)
     }
 
@@ -54,7 +54,7 @@ pub fn open_file(path: String, mode: FileMode, encoding: FileEncoding) Result(Fi
 }
 
 pub fn close_file(file: &File) Result((), FileError) {
-    if (close(file.handle.fd) == -1) {
+    if close(file.handle.fd) == -1 {
         return Result.Err(FileError.IOError)
     }
     return Result.Ok(())
@@ -64,7 +64,31 @@ pub fn read_all(file: &File) Result(OwnedString, FileError) {
     return read_all(file, &global_allocator)
 }
 
+
 pub fn read_all(file: &File, allocator: &Allocator) Result(OwnedString, FileError) {
+    const PAGE_SIZE = 4096
+    let sb = string_builder(PAGE_SIZE, allocator)
+    loop {
+        const buf = sb.ptr + sb.len
+        const len = sb.cap - sb.len
+        const n = read(file.handle.fd, buf, len)
+        if n < 0 {
+            return Result.Err(FileError.IOError)
+        }
+        sb.len = n as usize // XXX: this will not be possible after we implement scoped mutability
+        if n as usize < len {
+            break
+        }
+        // Grow capacity by one page. StringBuilder doubles capacity on each growth,
+        // so subsequent calls over-allocate. This amortizes allocation cost and aligns
+        // with typical file size distributions (many small, few large).
+        sb.ensure_capacity(sb.cap + PAGE_SIZE)
+    }
+    return Result.Ok(sb.to_string())
+}
+
+
+pub fn read_all_inplace(file: &File, allocator: &Allocator) Result(OwnedString, FileError) {
     const PAGE_SIZE = 4096
     let sb = string_builder(PAGE_SIZE, allocator)
     let buf = [0u8; PAGE_SIZE]
@@ -73,12 +97,12 @@ pub fn read_all(file: &File, allocator: &Allocator) Result(OwnedString, FileErro
         if n == -1 {
             return Result.Err(FileError.IOError)
         }
-        if n as usize < PAGE_SIZE {
-            break
-        }
         const buf_slice = buf as u8[]
         const n = n as usize
         sb.append_bytes(buf_slice[..n])
+        if n as usize < PAGE_SIZE {
+            break
+        }
     }
     return Result.Ok(sb.to_string())
 }

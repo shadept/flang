@@ -1704,6 +1704,44 @@ let v: i32 = same(1, 2)  // OK: both arguments are integers
 
 ---
 
+### E2103: Duplicate Function Overload
+
+**Category**: Functions
+**Severity**: Error
+
+#### Description
+
+Two function definitions have the same name and identical parameter types. Overloads must differ in at least one
+parameter type. Duplicate foreign declarations are allowed (extern decls across modules).
+
+#### Example
+
+```flang
+fn add(a: i32, b: i32) i32 {
+    return a + b
+}
+
+fn add(a: i32, b: i32) i32 {  // ERROR: duplicate definition
+    return a - b
+}
+```
+
+#### Solution
+
+Either remove the duplicate definition, or differentiate the parameter types to create a valid overload:
+
+```flang
+fn add(a: i32, b: i32) i32 {
+    return a + b
+}
+
+fn add(a: i64, b: i64) i64 {  // OK: different parameter types
+    return a + b
+}
+```
+
+---
+
 ### E2038: Cannot Assign to Const Variable
 
 **Category**: Variables
