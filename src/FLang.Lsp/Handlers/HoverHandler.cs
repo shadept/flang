@@ -309,7 +309,8 @@ public class HoverHandler : HoverHandlerBase
         SliceTypeNode slice => $"{FormatTypeNode(slice.ElementType)}[]",
         GenericParameterTypeNode gp => $"${gp.Name}",
         FunctionTypeNode func => $"fn({string.Join(", ", func.ParameterTypes.Select(FormatTypeNode))}) {FormatTypeNode(func.ReturnType)}",
-        AnonymousStructTypeNode anon => $".{{ {string.Join(", ", anon.Fields.Select(f => $"{f.FieldName}: {FormatTypeNode(f.FieldType)}"))} }}",
+        AnonymousStructTypeNode anon => $"struct {{ {string.Join(", ", anon.Fields.Select(f => $"{f.FieldName}: {FormatTypeNode(f.FieldType)}"))} }}",
+        AnonymousEnumTypeNode anonEnum => $"enum {{ {string.Join(", ", anonEnum.Variants.Select(v => v.PayloadTypes.Count == 0 ? v.Name : $"{v.Name}({string.Join(", ", v.PayloadTypes.Select(FormatTypeNode))})"))} }}",
         _ => type.GetType().Name
     };
 

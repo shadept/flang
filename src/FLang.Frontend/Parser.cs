@@ -581,7 +581,8 @@ public class Parser
         // Parse return type (optional for now, but expected in new syntax)
         TypeNode? returnType = null;
         if (_currentToken.Kind is TokenKind.Identifier or TokenKind.Ampersand or TokenKind.Dollar
-            or TokenKind.OpenBracket or TokenKind.OpenParenthesis)
+            or TokenKind.OpenBracket or TokenKind.OpenParenthesis or TokenKind.Fn
+            or TokenKind.Struct or TokenKind.Enum)
             returnType = ParseType();
 
         var statements = new List<StatementNode>();
@@ -1218,7 +1219,8 @@ public class Parser
         // Parse optional return type (same logic as ParseFunction)
         TypeNode? returnType = null;
         if (_currentToken.Kind is TokenKind.Identifier or TokenKind.Ampersand or TokenKind.Dollar
-            or TokenKind.OpenBracket or TokenKind.OpenParenthesis)
+            or TokenKind.OpenBracket or TokenKind.OpenParenthesis or TokenKind.Fn
+            or TokenKind.Struct or TokenKind.Enum)
             returnType = ParseType();
 
         // Parse body
@@ -1731,6 +1733,18 @@ public class Parser
             return new ArrayTypeNode(span, elementType, length);
         }
 
+        // Anonymous struct type: struct { field: Type, ... }
+        if (_currentToken.Kind == TokenKind.Struct)
+        {
+            return ParseAnonymousStructType();
+        }
+
+        // Anonymous enum type: enum { Variant, Variant(Type), ... }
+        if (_currentToken.Kind == TokenKind.Enum)
+        {
+            return ParseAnonymousEnumType();
+        }
+
         // Generic parameter type: $T
         if (_currentToken.Kind == TokenKind.Dollar)
         {
@@ -1822,6 +1836,70 @@ public class Parser
         }
 
         return new AnonymousStructTypeNode(span, fields);
+    }
+
+    /// <summary>
+    /// Parses an anonymous struct type expression: struct { field: Type, ... }
+    /// </summary>
+    private AnonymousStructTypeNode ParseAnonymousStructType()
+    {
+        var structKeyword = Eat(TokenKind.Struct);
+        Eat(TokenKind.OpenBrace);
+
+        var fields = new List<(string FieldName, TypeNode FieldType)>();
+        while (_currentToken.Kind != TokenKind.CloseBrace && _currentToken.Kind != TokenKind.EndOfFile)
+        {
+            var fieldNameToken = Eat(TokenKind.Identifier);
+            Eat(TokenKind.Colon);
+            var fieldType = ParseType();
+            fields.Add((fieldNameToken.Text, fieldType));
+
+            if (_currentToken.Kind == TokenKind.Comma) Eat(TokenKind.Comma);
+        }
+
+        var closeBrace = Eat(TokenKind.CloseBrace);
+        var span = SourceSpan.Combine(structKeyword.Span, closeBrace.Span);
+        return new AnonymousStructTypeNode(span, fields);
+    }
+
+    /// <summary>
+    /// Parses an anonymous enum type expression: enum { Variant, Variant(Type), ... }
+    /// </summary>
+    private AnonymousEnumTypeNode ParseAnonymousEnumType()
+    {
+        var enumKeyword = Eat(TokenKind.Enum);
+        Eat(TokenKind.OpenBrace);
+
+        var variants = new List<(string Name, IReadOnlyList<TypeNode> PayloadTypes)>();
+        while (_currentToken.Kind != TokenKind.CloseBrace && _currentToken.Kind != TokenKind.EndOfFile)
+        {
+            var variantNameToken = Eat(TokenKind.Identifier);
+
+            var payloadTypes = new List<TypeNode>();
+            if (_currentToken.Kind == TokenKind.OpenParenthesis)
+            {
+                Eat(TokenKind.OpenParenthesis);
+
+                while (_currentToken.Kind != TokenKind.CloseParenthesis && _currentToken.Kind != TokenKind.EndOfFile)
+                {
+                    payloadTypes.Add(ParseType());
+
+                    if (_currentToken.Kind == TokenKind.Comma)
+                        Eat(TokenKind.Comma);
+                    else if (_currentToken.Kind != TokenKind.CloseParenthesis) break;
+                }
+
+                Eat(TokenKind.CloseParenthesis);
+            }
+
+            variants.Add((variantNameToken.Text, payloadTypes));
+
+            if (_currentToken.Kind == TokenKind.Comma) Eat(TokenKind.Comma);
+        }
+
+        var closeBrace = Eat(TokenKind.CloseBrace);
+        var span = SourceSpan.Combine(enumKeyword.Span, closeBrace.Span);
+        return new AnonymousEnumTypeNode(span, variants);
     }
 
     /// <summary>

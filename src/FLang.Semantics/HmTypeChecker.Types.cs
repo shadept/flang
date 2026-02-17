@@ -22,6 +22,7 @@ public partial class HmTypeChecker
             GenericParameterTypeNode genParam => ResolveGenericParam(genParam),
             FunctionTypeNode fnType => new FunctionType([.. fnType.ParameterTypes.Select(ResolveTypeNode)], ResolveTypeNode(fnType.ReturnType)),
             AnonymousStructTypeNode anonStruct => ResolveAnonymousStructType(anonStruct),
+            AnonymousEnumTypeNode anonEnum => ResolveAnonymousEnumType(anonEnum),
             _ => throw new NotSupportedException($"Unknown TypeNode: {typeNode.GetType().Name}")
         };
     }
@@ -151,6 +152,23 @@ public partial class HmTypeChecker
         // Detect tuples: field names are _0, _1, _2, ... (from parser desugaring)
         var isTuple = fields.Length == 0 || fields.Select((f, i) => f.FieldName == $"_{i}").All(b => b);
         return new NominalType(name, isTuple ? NominalKind.Tuple : NominalKind.Struct, [], fields);
+    }
+
+    private NominalType ResolveAnonymousEnumType(AnonymousEnumTypeNode anonEnum)
+    {
+        var variants = anonEnum.Variants
+            .Select(v => (v.Name, Type: v.PayloadTypes.Count switch
+            {
+                0 => (Type)WellKnown.Void,
+                1 => ResolveTypeNode(v.PayloadTypes[0]),
+                _ => (Type)new NominalType(
+                    $"__tuple_{v.PayloadTypes.Count}", NominalKind.Tuple, [],
+                    v.PayloadTypes.Select((pt, idx) => ($"_{idx}", ResolveTypeNode(pt))).ToArray())
+            }))
+            .ToArray();
+
+        var name = $"__anon_enum_{string.Join("_", variants.Select(v => v.Name))}";
+        return new NominalType(name, NominalKind.Enum, [], variants);
     }
 
     // =========================================================================

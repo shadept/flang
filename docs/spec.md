@@ -143,6 +143,33 @@ fn sum_pair(p: (i32, i32)) i32 {
 
 Because tuples desugar to anonymous structs, any function expecting `{ _0: i32, _1: i32 }` will automatically accept a tuple `(i32, i32)`.
 
+### 2.3.2 Anonymous Type Expressions
+
+`struct { ... }` and `enum { ... }` are valid as inline type expressions anywhere a type can appear (variable annotations, parameter types, return types, etc.).
+
+```flang
+// Anonymous struct type in variable annotation
+let p: struct { x: i32, y: i32 } = .{ x = 42, y = 10 }
+
+// Anonymous struct type as parameter
+fn sum(p: struct { a: i32, b: i32 }) i32 {
+    return p.a + p.b
+}
+
+// Anonymous struct type as return type
+fn make() struct { x: i32, y: i32 } {
+    return .{ x = 1, y = 2 }
+}
+
+// Struct with function field (useful for source generators)
+let ops: struct { compute: fn(i32, i32) i32 } = .{ compute = add }
+
+// Anonymous enum type (metadata only — no variant construction in Phase 1)
+let x: enum { None, Some(i32) }
+```
+
+Anonymous type expressions compose with all type modifiers: `struct { x: i32 }[]` (slice), `&struct { x: i32 }` (reference), `struct { x: i32 }?` (nullable), `fn(struct { x: i32 }) bool` (function type param).
+
 ### 2.4 Enums (Tagged Unions)
 
 Enums represent tagged unions - a type that can be one of several named variants, each optionally carrying payload data.

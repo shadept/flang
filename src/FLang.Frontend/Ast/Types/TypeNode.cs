@@ -14,6 +14,8 @@ public abstract class TypeNode(SourceSpan span) : AstNode(span)
         SliceTypeNode st => ContainsGenericParam(st.ElementType),
         GenericTypeNode gt => gt.TypeArguments.Any(ContainsGenericParam),
         FunctionTypeNode ft => ft.ParameterTypes.Any(ContainsGenericParam) || ContainsGenericParam(ft.ReturnType),
+        AnonymousStructTypeNode ast => ast.Fields.Any(f => ContainsGenericParam(f.FieldType)),
+        AnonymousEnumTypeNode aet => aet.Variants.Any(v => v.PayloadTypes.Any(ContainsGenericParam)),
         _ => false
     };
 
@@ -44,6 +46,15 @@ public abstract class TypeNode(SourceSpan span) : AstNode(span)
                 foreach (var pt in ft.ParameterTypes)
                     CollectGenericParamNames(pt, names);
                 CollectGenericParamNames(ft.ReturnType, names);
+                break;
+            case AnonymousStructTypeNode ast:
+                foreach (var f in ast.Fields)
+                    CollectGenericParamNames(f.FieldType, names);
+                break;
+            case AnonymousEnumTypeNode aet:
+                foreach (var v in aet.Variants)
+                    foreach (var pt in v.PayloadTypes)
+                        CollectGenericParamNames(pt, names);
                 break;
         }
     }
@@ -131,4 +142,13 @@ public class AnonymousStructTypeNode(SourceSpan span, IReadOnlyList<(string Fiel
 {
 
     public IReadOnlyList<(string FieldName, TypeNode FieldType)> Fields { get; } = fields;
+}
+
+/// <summary>
+/// Represents an anonymous enum type like `enum { None, Some(T) }`.
+/// Used as inline type expressions.
+/// </summary>
+public class AnonymousEnumTypeNode(SourceSpan span, IReadOnlyList<(string Name, IReadOnlyList<TypeNode> PayloadTypes)> variants) : TypeNode(span)
+{
+    public IReadOnlyList<(string Name, IReadOnlyList<TypeNode> PayloadTypes)> Variants { get; } = variants;
 }
