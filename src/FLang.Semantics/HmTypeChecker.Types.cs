@@ -88,6 +88,8 @@ public partial class HmTypeChecker
             "usize" => WellKnown.USize,
             "bool" => WellKnown.Bool,
             "char" => WellKnown.Char,
+            "f32" => WellKnown.F32,
+            "f64" => WellKnown.F64,
             _ => null
         };
     }

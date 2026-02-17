@@ -25,6 +25,7 @@ public partial class HmTypeChecker
         var type = expr switch
         {
             IntegerLiteralNode lit => InferIntegerLiteral(lit),
+            FloatingPointLiteralNode flit => InferFloatingPointLiteral(flit),
             BooleanLiteralNode => WellKnown.Bool,
             StringLiteralNode => InferStringLiteral(),
             NullLiteralNode => InferNullLiteral(),
@@ -83,6 +84,26 @@ public partial class HmTypeChecker
         // Unsuffixed integer: fresh type variable (constrained by context)
         var tv = _engine.FreshVar();
         _unsuffixedLiterals.Add((lit, tv));
+        return tv;
+    }
+
+    private Type InferFloatingPointLiteral(FloatingPointLiteralNode lit)
+    {
+        if (lit.Suffix != null)
+        {
+            var prim = ResolvePrimitive(lit.Suffix);
+            if (prim != null)
+            {
+                if (lit.Suffix == "f32" && (double.IsInfinity((float)lit.Value) && !double.IsInfinity(lit.Value)))
+                    ReportError($"Literal `{lit.Value}f32` out of range for type `f32`", lit.Span, "E2029");
+                return prim;
+            }
+            ReportError($"Unknown float suffix `{lit.Suffix}`", lit.Span);
+        }
+
+        // Unsuffixed float: fresh type variable (constrained by context)
+        var tv = _engine.FreshVar();
+        _unsuffixedFloatLiterals.Add((lit, tv));
         return tv;
     }
 
@@ -249,6 +270,21 @@ public partial class HmTypeChecker
 
         // Unify operands (must be same numeric type)
         var unified = _engine.Unify(left, right, span);
+
+        // Reject bitwise/shift ops on float types
+        if (op is BinaryOperatorKind.BitwiseAnd or BinaryOperatorKind.BitwiseOr or
+            BinaryOperatorKind.BitwiseXor or BinaryOperatorKind.ShiftLeft or
+            BinaryOperatorKind.ShiftRight or BinaryOperatorKind.UnsignedShiftRight)
+        {
+            var resolvedUnified = _engine.Resolve(unified.Type);
+            if (resolvedUnified is PrimitiveType pt && _floatTypeNames.Contains(pt.Name))
+            {
+                var opSymbol = OperatorFunctions.GetOperatorSymbol(op);
+                ReportError(
+                    $"Bitwise operation `{opSymbol}` is not supported on floating-point type `{pt.Name}`",
+                    span, "E2017");
+            }
+        }
 
         return op switch
         {

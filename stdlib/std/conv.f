@@ -19,8 +19,6 @@ pub type ConvError = enum {
 // Constants
 // =============================================================================
 
-const U64_MAX: u64 = 0xFFFF_FFFF_FFFF_FFFF
-const I64_MAX: u64 = 0x7FFF_FFFF_FFFF_FFFF
 const I64_MIN_ABS: u64 = 0x8000_0000_0000_0000
 
 // =============================================================================
@@ -29,29 +27,28 @@ const I64_MIN_ABS: u64 = 0x8000_0000_0000_0000
 
 // Format an unsigned 64-bit integer into buf. Returns bytes written.
 // Supports bases 2–16. Lowercase a–f for hex.
-pub fn format_uint(val: u64, buf: u8[], base: u8 = 10) Result(usize, ConvError) {
+pub fn format_u64(val: u64, buf: u8[], base: u8 = 10) Result(usize, ConvError) {
     if base < 2 or base > 16 {
-        return Result.Err(ConvError.InvalidBase)
+        return Err(ConvError.InvalidBase)
     }
 
     if val == 0 {
         if buf.len < 1 {
-            return Result.Err(ConvError.BufferTooSmall)
+            return Err(ConvError.BufferTooSmall)
         }
         buf[0] = b'0'
-        return Result.Ok(1usize)
+        return Ok(1usize)
     }
 
     // Extract digits right-to-left into temp buffer
     let tmp = [0u8; 64]
-    let pos = 64
-    let v = val
+    let pos = tmp.len
     const base_u64 = base as u64
 
     loop {
-        if v == 0 { break }
-        const digit = (v % base_u64) as u8
-        v = v / base_u64
+        if val == 0 { break }
+        const digit = (val % base_u64) as u8
+        val = val / base_u64
         pos = pos - 1
         if digit < 10 {
             tmp[pos] = b'0' + digit
@@ -62,25 +59,25 @@ pub fn format_uint(val: u64, buf: u8[], base: u8 = 10) Result(usize, ConvError) 
 
     const len = 64 - pos
     if buf.len < len {
-        return Result.Err(ConvError.BufferTooSmall)
+        return Err(ConvError.BufferTooSmall)
     }
 
     // Copy to front of caller buffer
-    let i = 0usize
+    let i = 0
     loop {
         if i >= len { break }
         buf[i] = tmp[pos + i]
         i = i + 1
     }
 
-    return Result.Ok(len)
+    return Ok(len)
 }
 
 // Format a signed 64-bit integer into buf. Returns bytes written.
 // Supports bases 2–16. Lowercase a–f for hex.
-pub fn format_int(val: i64, buf: u8[], base: u8 = 10) Result(usize, ConvError) {
+pub fn format_i64(val: i64, buf: u8[], base: u8 = 10) Result(usize, ConvError) {
     if base < 2 or base > 16 {
-        return Result.Err(ConvError.InvalidBase)
+        return Err(ConvError.InvalidBase)
     }
 
     const is_negative = val < 0
@@ -89,16 +86,16 @@ pub fn format_int(val: i64, buf: u8[], base: u8 = 10) Result(usize, ConvError) {
     let offset = 0usize
     if is_negative {
         if buf.len < 2 {
-            return Result.Err(ConvError.BufferTooSmall)
+            return Err(ConvError.BufferTooSmall)
         }
         buf[0] = b'-'
         offset = 1
     }
 
-    const result = format_uint(abs_val, buf[offset..], base)
+    const result = format_u64(abs_val, buf[offset..], base)
     return result match {
-        Ok(written) => Result.Ok(offset + written),
-        Err(e) => Result.Err(e)
+        Ok(written) => Ok(offset + written),
+        Err(e) => Err(e)
     }
 }
 
@@ -110,16 +107,16 @@ pub fn format_int(val: i64, buf: u8[], base: u8 = 10) Result(usize, ConvError) {
 // Returns (value, bytes_consumed).
 pub fn parse_u64(s: u8[], base: u8 = 10) Result((u64, usize), ConvError) {
     if base < 2 or base > 16 {
-        return Result.Err(ConvError.InvalidBase)
+        return Err(ConvError.InvalidBase)
     }
     if s.len == 0 {
-        return Result.Err(ConvError.InvalidInput)
+        return Err(ConvError.InvalidInput)
     }
 
     const base_u64 = base as u64
     const max_before_mul = U64_MAX / base_u64
     let value: u64 = 0
-    let consumed = 0usize
+    let consumed = 0
 
     loop {
         if consumed >= s.len { break }
@@ -143,31 +140,31 @@ pub fn parse_u64(s: u8[], base: u8 = 10) Result((u64, usize), ConvError) {
 
         // Overflow check: value * base + digit > U64_MAX
         if value > max_before_mul {
-            return Result.Err(ConvError.Overflow)
+            return Err(ConvError.Overflow)
         }
         value = value * base_u64
         if digit_val > U64_MAX - value {
-            return Result.Err(ConvError.Overflow)
+            return Err(ConvError.Overflow)
         }
         value = value + digit_val
         consumed = consumed + 1
     }
 
     if consumed == 0 {
-        return Result.Err(ConvError.InvalidInput)
+        return Err(ConvError.InvalidInput)
     }
 
-    return Result.Ok((value, consumed))
+    return Ok((value, consumed))
 }
 
 // Parse a signed 64-bit integer from a byte buffer.
 // Returns (value, bytes_consumed).
 pub fn parse_i64(s: u8[], base: u8 = 10) Result((i64, usize), ConvError) {
     if base < 2 or base > 16 {
-        return Result.Err(ConvError.InvalidBase)
+        return Err(ConvError.InvalidBase)
     }
     if s.len == 0 {
-        return Result.Err(ConvError.InvalidInput)
+        return Err(ConvError.InvalidInput)
     }
 
     let negative = false
@@ -177,36 +174,36 @@ pub fn parse_i64(s: u8[], base: u8 = 10) Result((i64, usize), ConvError) {
         negative = true
         offset = 1
         if offset >= s.len {
-            return Result.Err(ConvError.InvalidInput)
+            return Err(ConvError.InvalidInput)
         }
     }
 
     const result = parse_u64(s[offset..], base)
     if result.is_err() {
         const e: ConvError = result.unwrap_err()
-        return Result.Err(e)
+        return Err(e)
     }
     const p = result.unwrap()
-    const val: u64 = p.0
-    const digits: usize = p.1
+    const val = p.0
+    const digits = p.1
 
     if negative {
         if val > I64_MIN_ABS {
-            return Result.Err(ConvError.Overflow)
+            return Err(ConvError.Overflow)
         }
         if val == I64_MIN_ABS {
             const min_val: i64 = 0 - I64_MAX as i64 - 1
-            return Result.Ok((min_val, offset + digits))
+            return Ok((min_val, offset + digits))
         }
         const neg_val: i64 = 0 - val as i64
-        return Result.Ok((neg_val, offset + digits))
+        return Ok((neg_val, offset + digits))
     }
 
-    if val > I64_MAX {
-        return Result.Err(ConvError.Overflow)
+    if val > I64_MAX as usize {
+        return Err(ConvError.Overflow)
     }
     const pos_val: i64 = val as i64
-    return Result.Ok((pos_val, offset + digits))
+    return Ok((pos_val, offset + digits))
 }
 
 // =============================================================================
@@ -216,24 +213,24 @@ pub fn parse_i64(s: u8[], base: u8 = 10) Result((i64, usize), ConvError) {
 // Parse a u8. Returns (value, bytes_consumed) with value guaranteed <= 0xFF.
 pub fn parse_u8(s: u8[], base: u8 = 10) Result((u64, usize), ConvError) {
     return parse_u64(s, base) match {
-        Ok(p) => if p.0 > 0xFF { Result.Err(ConvError.Overflow) } else { Result.Ok(p) },
-        Err(e) => Result.Err(e)
+        Ok(p) => if p.0 > 0xFF { Err(ConvError.Overflow) } else { Ok(p) },
+        Err(e) => Err(e)
     }
 }
 
 // Parse a u16. Returns (value, bytes_consumed) with value guaranteed <= 0xFFFF.
 pub fn parse_u16(s: u8[], base: u8 = 10) Result((u64, usize), ConvError) {
     return parse_u64(s, base) match {
-        Ok(p) => if p.0 > 0xFFFF { Result.Err(ConvError.Overflow) } else { Result.Ok(p) },
-        Err(e) => Result.Err(e)
+        Ok(p) => if p.0 > 0xFFFF { Err(ConvError.Overflow) } else { Ok(p) },
+        Err(e) => Err(e)
     }
 }
 
 // Parse a u32. Returns (value, bytes_consumed) with value guaranteed <= 0xFFFF_FFFF.
 pub fn parse_u32(s: u8[], base: u8 = 10) Result((u64, usize), ConvError) {
     return parse_u64(s, base) match {
-        Ok(p) => if p.0 > 0xFFFF_FFFF { Result.Err(ConvError.Overflow) } else { Result.Ok(p) },
-        Err(e) => Result.Err(e)
+        Ok(p) => if p.0 > 0xFFFF_FFFF { Err(ConvError.Overflow) } else { Ok(p) },
+        Err(e) => Err(e)
     }
 }
 
@@ -245,24 +242,24 @@ pub fn parse_usize(s: u8[], base: u8 = 10) Result((u64, usize), ConvError) {
 // Parse an i8. Returns (value, bytes_consumed) with value guaranteed in [-128, 127].
 pub fn parse_i8(s: u8[], base: u8 = 10) Result((i64, usize), ConvError) {
     return parse_i64(s, base) match {
-        Ok(p) => if p.0 < -128i64 or p.0 > 127i64 { Result.Err(ConvError.Overflow) } else { Result.Ok(p) },
-        Err(e) => Result.Err(e)
+        Ok(p) => if p.0 < -128i64 or p.0 > 127i64 { Err(ConvError.Overflow) } else { Ok(p) },
+        Err(e) => Err(e)
     }
 }
 
 // Parse an i16. Returns (value, bytes_consumed) with value guaranteed in [-32768, 32767].
 pub fn parse_i16(s: u8[], base: u8 = 10) Result((i64, usize), ConvError) {
     return parse_i64(s, base) match {
-        Ok(p) => if p.0 < -32768i64 or p.0 > 32767i64 { Result.Err(ConvError.Overflow) } else { Result.Ok(p) },
-        Err(e) => Result.Err(e)
+        Ok(p) => if p.0 < -32768 or p.0 > 32767 { Err(ConvError.Overflow) } else { Ok(p) },
+        Err(e) => Err(e)
     }
 }
 
 // Parse an i32. Returns (value, bytes_consumed) with value guaranteed in [-2147483648, 2147483647].
 pub fn parse_i32(s: u8[], base: u8 = 10) Result((i64, usize), ConvError) {
     return parse_i64(s, base) match {
-        Ok(p) => if p.0 < -2147483648i64 or p.0 > 2147483647i64 { Result.Err(ConvError.Overflow) } else { Result.Ok(p) },
-        Err(e) => Result.Err(e)
+        Ok(p) => if p.0 < -2147483648 or p.0 > 2147483647 { Err(ConvError.Overflow) } else { Ok(p) },
+        Err(e) => Err(e)
     }
 }
 
@@ -278,47 +275,47 @@ pub fn parse_isize(s: u8[], base: u8 = 10) Result((i64, usize), ConvError) {
 // Format a boolean into buf ("true" or "false"). Returns bytes written.
 pub fn format_bool(val: bool, buf: u8[]) Result(usize, ConvError) {
     if val {
-        if buf.len < 4 { return Result.Err(ConvError.BufferTooSmall) }
+        if buf.len < 4 { return Err(ConvError.BufferTooSmall) }
         buf[0] = b't'
         buf[1] = b'r'
         buf[2] = b'u'
         buf[3] = b'e'
-        return Result.Ok(4usize)
+        return Ok(4usize)
     }
-    if buf.len < 5 { return Result.Err(ConvError.BufferTooSmall) }
+    if buf.len < 5 { return Err(ConvError.BufferTooSmall) }
     buf[0] = b'f'
     buf[1] = b'a'
     buf[2] = b'l'
     buf[3] = b's'
     buf[4] = b'e'
-    return Result.Ok(5usize)
+    return Ok(5usize)
 }
 
 // Parse a boolean from a byte buffer. Returns (value, bytes_consumed).
 pub fn parse_bool(s: u8[]) Result((bool, usize), ConvError) {
     if s.len >= 4 and s[0] == b't' and s[1] == b'r' and s[2] == b'u' and s[3] == b'e' {
-        return Result.Ok((true, 4usize))
+        return Ok((true, 4usize))
     }
     if s.len >= 5 and s[0] == b'f' and s[1] == b'a' and s[2] == b'l' and s[3] == b's' and s[4] == b'e' {
-        return Result.Ok((false, 5usize))
+        return Ok((false, 5usize))
     }
-    return Result.Err(ConvError.InvalidInput)
+    return Err(ConvError.InvalidInput)
 }
 
 // =============================================================================
 // Tests
 // =============================================================================
 
-test "format_uint zero" {
+test "format_u64 zero" {
     let buf = [0u8; 64]
-    const len = format_uint(0, buf).unwrap()
+    const len = format_u64(0, buf).unwrap()
     assert_eq(len, 1usize, "zero should be 1 byte")
     assert_eq(buf[0], b'0', "zero should be '0'")
 }
 
-test "format_uint decimal" {
+test "format_u64 decimal" {
     let buf = [0u8; 64]
-    const len = format_uint(12345, buf).unwrap()
+    const len = format_u64(12345, buf).unwrap()
     assert_eq(len, 5usize, "12345 is 5 digits")
     assert_eq(buf[0], b'1', "first digit")
     assert_eq(buf[1], b'2', "second digit")
@@ -327,17 +324,17 @@ test "format_uint decimal" {
     assert_eq(buf[4], b'5', "fifth digit")
 }
 
-test "format_uint hex" {
+test "format_u64 hex" {
     let buf = [0u8; 64]
-    const len = format_uint(255, buf, 16).unwrap()
+    const len = format_u64(255, buf, 16).unwrap()
     assert_eq(len, 2usize, "0xff is 2 hex digits")
     assert_eq(buf[0], b'f', "first hex digit")
     assert_eq(buf[1], b'f', "second hex digit")
 }
 
-test "format_uint binary" {
+test "format_u64 binary" {
     let buf = [0u8; 64]
-    const len = format_uint(10, buf, 2).unwrap()
+    const len = format_u64(10, buf, 2).unwrap()
     assert_eq(len, 4usize, "10 in binary is 4 digits")
     assert_eq(buf[0], b'1', "bit 3")
     assert_eq(buf[1], b'0', "bit 2")
@@ -345,50 +342,50 @@ test "format_uint binary" {
     assert_eq(buf[3], b'0', "bit 0")
 }
 
-test "format_uint octal" {
+test "format_u64 octal" {
     let buf = [0u8; 64]
-    const len = format_uint(8, buf, 8).unwrap()
+    const len = format_u64(8, buf, 8).unwrap()
     assert_eq(len, 2usize, "8 in octal is 10")
     assert_eq(buf[0], b'1', "octal digit 1")
     assert_eq(buf[1], b'0', "octal digit 0")
 }
 
-test "format_uint u64 max" {
+test "format_u64 u64 max" {
     let buf = [0u8; 64]
-    const len = format_uint(0xFFFF_FFFF_FFFF_FFFF, buf).unwrap()
+    const len = format_u64(0xFFFF_FFFF_FFFF_FFFF, buf).unwrap()
     assert_eq(len, 20usize, "u64 max is 20 decimal digits")
 }
 
-test "format_uint invalid base" {
+test "format_u64 invalid base" {
     let buf = [0u8; 64]
-    const result = format_uint(42, buf, 1)
+    const result = format_u64(42, buf, 1)
     assert_true(result.is_err(), "base 1 should fail")
 }
 
-test "format_uint buffer too small" {
+test "format_u64 buffer too small" {
     let buf = [0u8; 2]
-    const result = format_uint(12345, buf)
+    const result = format_u64(12345, buf)
     assert_true(result.is_err(), "2-byte buf too small for 12345")
 }
 
-test "format_int positive" {
+test "format_i64 positive" {
     let buf = [0u8; 64]
-    const len = format_int(42, buf).unwrap()
+    const len = format_i64(42, buf).unwrap()
     assert_eq(len, 2usize, "42 is 2 digits")
     assert_eq(buf[0], b'4', "first digit")
     assert_eq(buf[1], b'2', "second digit")
 }
 
-test "format_int zero" {
+test "format_i64 zero" {
     let buf = [0u8; 64]
-    const len = format_int(0, buf).unwrap()
+    const len = format_i64(0, buf).unwrap()
     assert_eq(len, 1usize, "0 is 1 digit")
     assert_eq(buf[0], b'0', "zero")
 }
 
-test "format_int negative" {
+test "format_i64 negative" {
     let buf = [0u8; 64]
-    const len = format_int(-123, buf).unwrap()
+    const len = format_i64(-123, buf).unwrap()
     assert_eq(len, 4usize, "-123 is 4 chars")
     assert_eq(buf[0], b'-', "minus sign")
     assert_eq(buf[1], b'1', "first digit")
@@ -396,10 +393,10 @@ test "format_int negative" {
     assert_eq(buf[3], b'3', "third digit")
 }
 
-test "format_int i64 min" {
+test "format_i64 i64 min" {
     let buf = [0u8; 64]
     const min_val: i64 = 0 - 9223372036854775807 - 1
-    const len = format_int(min_val, buf).unwrap()
+    const len = format_i64(min_val, buf).unwrap()
     assert_eq(len, 20usize, "i64 min is 20 chars including minus")
     assert_eq(buf[0], b'-', "minus sign")
 }
@@ -534,16 +531,16 @@ test "parse_bool invalid returns error" {
     assert_true(result.is_err(), "invalid should return error")
 }
 
-test "format_uint roundtrip" {
+test "format_u64 roundtrip" {
     let buf = [0u8; 64]
-    const len = format_uint(9876543210, buf).unwrap()
+    const len = format_u64(9876543210, buf).unwrap()
     const p = parse_u64(buf[0..len]).unwrap()
     assert_eq(p.0, 9876543210u64, "roundtrip value")
 }
 
-test "format_int roundtrip negative" {
+test "format_i64 roundtrip negative" {
     let buf = [0u8; 64]
-    const len = format_int(-9876543210, buf).unwrap()
+    const len = format_i64(-9876543210, buf).unwrap()
     const p = parse_i64(buf[0..len]).unwrap()
     const val: i64 = p.0 as i64
     assert_eq(val, -9876543210i64, "negative roundtrip value")

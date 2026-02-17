@@ -3,16 +3,17 @@
 
 import core.string
 
-#foreign fn printf(fmt: &u8) i32
-#foreign fn printf(fmt: &u8, val: u8) i32
-#foreign fn printf(fmt: &u8, val1: u8, val2: u8) i32
-#foreign fn printf(fmt: &u8, val1: u8, val2: u8, val3: u8) i32
-#foreign fn printf(fmt: &u8, val1: u8, val2: u8, val3: u8, val4: u8) i32
-#foreign fn printf(fmt: &u8, val: i32) i32
-#foreign fn printf(fmt: &u8, val: u32) i32
-#foreign fn printf(fmt: &u8, val: i64) i32
-#foreign fn printf(fmt: &u8, val: u64) i32
-#foreign fn printf(fmt: &u8, len: i32, ptr: &u8) i32
+#foreign pub fn printf(fmt: &u8) i32
+#foreign pub fn printf(fmt: &u8, val: u8) i32
+#foreign pub fn printf(fmt: &u8, val1: u8, val2: u8) i32
+#foreign pub fn printf(fmt: &u8, val1: u8, val2: u8, val3: u8) i32
+#foreign pub fn printf(fmt: &u8, val1: u8, val2: u8, val3: u8, val4: u8) i32
+#foreign pub fn printf(fmt: &u8, val: i32) i32
+#foreign pub fn printf(fmt: &u8, val: u32) i32
+#foreign pub fn printf(fmt: &u8, val: i64) i32
+#foreign pub fn printf(fmt: &u8, val: u64) i32
+#foreign pub fn printf(fmt: &u8, val: f64) i32
+#foreign pub fn printf(fmt: &u8, len: i32, ptr: &u8) i32
 
 pub fn print(value: i32) i32 {
     return printf("%d".ptr, value)
@@ -40,6 +41,14 @@ pub fn println(value: isize) i32 {
 
 pub fn println(value: usize) i32 {
     return printf("%llu\n".ptr, value as u64)
+}
+
+pub fn println(value: f64) i32 {
+    return printf("%f\n".ptr, value)
+}
+
+pub fn println(value: f32) i32 {
+    return printf("%f\n".ptr, value as f64)
 }
 
 pub fn println(value: String) i32 {

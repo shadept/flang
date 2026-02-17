@@ -30,6 +30,8 @@ public class TypeLayoutService(ITypeResolver engine, INominalTypeRegistry nomina
     public static readonly IrPrimitive IrISize = new("isize", 8, 8);
     public static readonly IrPrimitive IrUSize = new("usize", 8, 8);
     public static readonly IrPrimitive IrChar = new("char", 4, 4);
+    public static readonly IrPrimitive IrF32 = new("f32", 4, 4);
+    public static readonly IrPrimitive IrF64 = new("f64", 8, 8);
 
     /// <summary>
     /// Returns true when the type is a large value type (struct or enum > 8 bytes)
@@ -53,6 +55,8 @@ public class TypeLayoutService(ITypeResolver engine, INominalTypeRegistry nomina
         ["isize"] = IrISize,
         ["usize"] = IrUSize,
         ["char"] = IrChar,
+        ["f32"] = IrF32,
+        ["f64"] = IrF64,
     };
 
     /// <summary>

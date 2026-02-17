@@ -512,6 +512,8 @@ public static class WellKnown
     public static readonly PrimitiveType Char = new("char");
     public static readonly PrimitiveType ISize = new("isize");
     public static readonly PrimitiveType USize = new("usize");
+    public static readonly PrimitiveType F32 = new("f32");
+    public static readonly PrimitiveType F64 = new("f64");
 
     // Well-known nominal type FQNs
     public const string String = "core.string.String";

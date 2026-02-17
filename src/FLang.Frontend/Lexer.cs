@@ -65,9 +65,11 @@ public class Lexer(Source source, int fileId)
         if (char.IsDigit(ch))
         {
             _start = _position;
+            bool isFloat = false;
 
             // Check for hex literal (0x or 0X prefix)
-            if (ch == '0' && _position + 1 < text.Length && (text[_position + 1] == 'x' || text[_position + 1] == 'X'))
+            bool isHex = ch == '0' && _position + 1 < text.Length && (text[_position + 1] == 'x' || text[_position + 1] == 'X');
+            if (isHex)
             {
                 _position += 2; // Skip "0x"
                 while (_position < text.Length && (IsHexDigit(text[_position]) || text[_position] == '_'))
@@ -77,10 +79,53 @@ public class Lexer(Source source, int fileId)
             {
                 while (_position < text.Length && (char.IsDigit(text[_position]) || text[_position] == '_'))
                     _position++;
+
+                // Check for decimal point: '.' followed by a digit (not '..' range or '.method()')
+                if (_position < text.Length && text[_position] == '.'
+                    && _position + 1 < text.Length && char.IsDigit(text[_position + 1]))
+                {
+                    isFloat = true;
+                    _position++; // skip '.'
+                    while (_position < text.Length && (char.IsDigit(text[_position]) || text[_position] == '_'))
+                        _position++;
+                }
+
+                // Check for scientific notation: e/E followed by optional +/- and digits
+                if (_position < text.Length && (text[_position] == 'e' || text[_position] == 'E'))
+                {
+                    isFloat = true;
+                    _position++; // skip 'e'/'E'
+                    if (_position < text.Length && (text[_position] == '+' || text[_position] == '-'))
+                        _position++; // skip sign
+                    while (_position < text.Length && (char.IsDigit(text[_position]) || text[_position] == '_'))
+                        _position++;
+                }
+
+                // Check for f32/f64 suffix
+                if (_position < text.Length && text[_position] == 'f'
+                    && _position + 1 < text.Length && (text[_position + 1] == '3' || text[_position + 1] == '6'))
+                {
+                    var suffixStart = _position;
+                    _position += 2; // skip 'f3' or 'f6'
+                    if (_position < text.Length && char.IsDigit(text[_position]))
+                        _position++; // skip the '2' in f32 or '4' in f64
+                    var suffix = text[suffixStart.._position];
+                    if (suffix is "f32" or "f64")
+                    {
+                        isFloat = true;
+                    }
+                    else
+                    {
+                        _position = suffixStart; // backtrack
+                    }
+                }
             }
 
+            if (isFloat)
+                return CreateToken(TokenKind.Float);
+
             // Check for integer type suffix (e.g., 42u8, 100isize)
-            if (_position < text.Length && (text[_position] == 'i' || text[_position] == 'u'))
+            if (!isHex && _position < text.Length && (text[_position] == 'i' || text[_position] == 'u'))
             {
                 var suffixStart = _position;
                 while (_position < text.Length && char.IsLetterOrDigit(text[_position]))

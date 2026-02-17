@@ -70,6 +70,19 @@ public class IntegerWideningCoercionRule : IInferenceCoercionRule
 }
 
 /// <summary>
+/// Implicit widening of floating-point types: f32 -> f64.
+/// </summary>
+public class FloatWideningCoercionRule : IInferenceCoercionRule
+{
+    public Type? TryApply(Type from, Type to, InferenceEngine engine)
+    {
+        if (from is not PrimitiveType { Name: "f32" } || to is not PrimitiveType { Name: "f64" })
+            return null;
+        return to;
+    }
+}
+
+/// <summary>
 /// Implicit wrapping: T -> Option(T).
 /// </summary>
 public class OptionWrappingCoercionRule : IInferenceCoercionRule

@@ -18,6 +18,7 @@ public record FunctionScheme(
     PolymorphicType Signature,
     FunctionDeclarationNode Node,
     bool IsForeign,
+    bool IsPublic,
     string? ModulePath);
 
 /// <summary>
@@ -125,6 +126,11 @@ public partial class HmTypeChecker : INominalTypeRegistry
     private readonly List<(IntegerLiteralNode Node, Type TypeVar)> _unsuffixedLiterals = [];
 
     /// <summary>
+    /// Unsuffixed float literals and their TypeVars, for post-inference validation.
+    /// </summary>
+    private readonly List<(FloatingPointLiteralNode Node, Type TypeVar)> _unsuffixedFloatLiterals = [];
+
+    /// <summary>
     /// Deprecated type FQNs → optional message. Populated during CollectNominalTypes.
     /// </summary>
     private readonly Dictionary<string, string?> _deprecatedTypes = [];
@@ -145,6 +151,7 @@ public partial class HmTypeChecker : INominalTypeRegistry
         _compilation = compilation;
         _engine = new InferenceEngine();
         _engine.AddCoercionRule(new IntegerWideningCoercionRule(true));
+        _engine.AddCoercionRule(new FloatWideningCoercionRule());
         _engine.AddCoercionRule(new OptionWrappingCoercionRule());
         _engine.AddCoercionRule(new StringToByteSliceCoercionRule());
         _engine.AddCoercionRule(new ArrayDecayCoercionRule());
@@ -334,7 +341,16 @@ public partial class HmTypeChecker : INominalTypeRegistry
 
     private List<FunctionScheme>? LookupFunctions(string name)
     {
-        return _functions.TryGetValue(name, out var overloads) ? overloads : null;
+        if (!_functions.TryGetValue(name, out var overloads)) return null;
+
+        // Filter out non-public functions from other modules
+        if (_currentModulePath != null)
+        {
+            var visible = overloads.Where(f => f.IsPublic || f.ModulePath == _currentModulePath).ToList();
+            return visible.Count > 0 ? visible : null;
+        }
+
+        return overloads;
     }
 
     /// <summary>
@@ -486,6 +502,8 @@ public partial class HmTypeChecker : INominalTypeRegistry
     private static readonly HashSet<string> _integerTypeNames =
         ["i8", "i16", "i32", "i64", "u8", "u16", "u32", "u64", "isize", "usize", "char"];
 
+    private static readonly HashSet<string> _floatTypeNames = ["f32", "f64"];
+
     /// <summary>
     /// Validate unsuffixed integer literals after all inference is complete.
     /// Detects: unresolved TypeVars (E2001), non-numeric resolved types (E2102),
@@ -525,6 +543,38 @@ public partial class HmTypeChecker : INominalTypeRegistry
             }
             // Non-primitive resolved types (e.g., NominalType) are allowed —
             // they might be valid through coercion rules
+        }
+
+        // Validate unsuffixed float literals
+        foreach (var (node, typeVar) in _unsuffixedFloatLiterals)
+        {
+            var resolved = _engine.Resolve(typeVar);
+
+            if (resolved is FLang.Core.Types.TypeVar)
+            {
+                // Default to f64 when no context
+                _engine.Unify(typeVar, WellKnown.F64, node.Span);
+                continue;
+            }
+
+            if (resolved is FLang.Core.Types.PrimitiveType prim)
+            {
+                if (!_floatTypeNames.Contains(prim.Name))
+                {
+                    ReportError(
+                        $"Float literal `{node.Value}` cannot be used as `{prim.Name}`",
+                        node.Span, "E2102");
+                    continue;
+                }
+
+                // Check f32 range
+                if (prim.Name == "f32" && double.IsInfinity((float)node.Value) && !double.IsInfinity(node.Value))
+                {
+                    ReportError(
+                        $"Literal `{node.Value}` out of range for type `f32`",
+                        node.Span, "E2029");
+                }
+            }
         }
     }
 }

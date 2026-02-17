@@ -223,60 +223,6 @@ public class PrimitiveType : TypeBase
 }
 
 /// <summary>
-/// Compile-time integer type that must be resolved during type inference.
-/// </summary>
-public class ComptimeInt : TypeBase
-{
-    public static readonly ComptimeInt Instance = new();
-
-    private ComptimeInt()
-    {
-    }
-
-    public override string Name => "comptime_int";
-
-    public override int Size =>
-        throw new InvalidOperationException("Cannot get size of comptime_int (not a concrete type)");
-
-    public override int Alignment =>
-        throw new InvalidOperationException("Cannot get alignment of comptime_int (not a concrete type)");
-
-    public override bool IsConcrete => false;
-
-    public override bool Equals(TypeBase other)
-    {
-        return other is ComptimeInt;
-    }
-}
-
-/// <summary>
-/// Represents compile-time float type that must be resolved during type inference.
-/// </summary>
-public class ComptimeFloat : TypeBase
-{
-    public static readonly ComptimeFloat Instance = new();
-
-    private ComptimeFloat()
-    {
-    }
-
-    public override string Name => "comptime_float";
-
-    public override int Size =>
-        throw new InvalidOperationException("Cannot get size of comptime_float (not a concrete type)");
-
-    public override int Alignment =>
-        throw new InvalidOperationException("Cannot get alignment of comptime_float (not a concrete type)");
-
-    public override bool IsConcrete => false;
-
-    public override bool Equals(TypeBase other)
-    {
-        return other is ComptimeFloat;
-    }
-}
-
-/// <summary>
 /// Represents a reference type like &amp;T.
 /// </summary>
 public class ReferenceType : TypeBase

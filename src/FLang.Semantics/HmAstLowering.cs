@@ -390,6 +390,10 @@ public class HmAstLowering
         if (expr is IntegerLiteralNode intLit)
             return new ConstantValue(intLit.Value, targetType);
 
+        // Floating-point literal
+        if (expr is FloatingPointLiteralNode floatLit)
+            return new FloatConstantValue(floatLit.Value, targetType);
+
         // Boolean literal
         if (expr is BooleanLiteralNode boolLit)
             return new ConstantValue(boolLit.Value ? 1 : 0, targetType);
@@ -1638,6 +1642,7 @@ public class HmAstLowering
         var result = expr switch
         {
             IntegerLiteralNode intLit => LowerIntegerLiteral(intLit),
+            FloatingPointLiteralNode floatLit => LowerFloatingPointLiteral(floatLit),
             BooleanLiteralNode boolLit => LowerBooleanLiteral(boolLit),
             StringLiteralNode strLit => LowerStringLiteral(strLit),
             NullLiteralNode nullLit => LowerNullLiteral(nullLit),
@@ -1684,6 +1689,14 @@ public class HmAstLowering
         if (irType is not IrPrimitive)
             irType = TypeLayoutService.IrI32;
         return new ConstantValue(intLit.Value, irType);
+    }
+
+    private Value LowerFloatingPointLiteral(FloatingPointLiteralNode floatLit)
+    {
+        var irType = GetIrType(floatLit);
+        if (irType is not IrPrimitive)
+            irType = TypeLayoutService.IrF64;
+        return new FloatConstantValue(floatLit.Value, irType);
     }
 
     private Value LowerBooleanLiteral(BooleanLiteralNode boolLit)

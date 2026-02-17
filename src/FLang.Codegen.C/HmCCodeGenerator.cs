@@ -28,6 +28,7 @@ public static class HmCCodeGenerator
         sb.AppendLine("#include <stdbool.h>");
         sb.AppendLine("#include <stdint.h>");
         sb.AppendLine("#include <string.h>");
+        sb.AppendLine("#include <math.h>");
         sb.AppendLine("#ifdef _WIN32");
         sb.AppendLine("#include <io.h>");
         sb.AppendLine("#include <fcntl.h>");
@@ -176,6 +177,7 @@ public static class HmCCodeGenerator
         return value switch
         {
             ConstantValue cv => EmitConstant(cv),
+            FloatConstantValue fcv => EmitFloatConstant(fcv),
             StringTableValue stv => EmitInlineStringLiteral(stringTable[stv.Index]),
             FunctionReferenceValue fv => fv.IrType is IrFunctionPtr fp2
                 ? IrNameMangling.MangleFunctionName(fv.Name, fp2.Params)
@@ -406,6 +408,10 @@ public static class HmCCodeGenerator
                             : IrTypeToCType(leftIr); // already unsigned
                         sb.AppendLine($"    {resultType} {resultName} = ({resultType})(({unsignedType}){left} >> {right});");
                     }
+                    else if (bin.Operation == BinaryOp.Modulo && IsFloatIrType(bin.Left.IrType))
+                    {
+                        sb.AppendLine($"    {resultType} {resultName} = fmod({left}, {right});");
+                    }
                     else
                     {
                         var op = BinaryOpToC(bin.Operation);
@@ -542,6 +548,7 @@ public static class HmCCodeGenerator
         return value switch
         {
             ConstantValue cv => EmitConstant(cv),
+            FloatConstantValue fcv => EmitFloatConstant(fcv),
             LocalValue lv => lv.Name,
             StringTableValue stv => $"__flang__string_table[{stv.Index}]",
             FunctionReferenceValue fv => fv.IrType is IrFunctionPtr fp
@@ -576,6 +583,29 @@ public static class HmCCodeGenerator
             if (p == TypeLayoutService.IrU32)
                 return lit + "U";
         }
+        return lit;
+    }
+
+    /// <summary>
+    /// Emit a floating-point constant with the appropriate C suffix.
+    /// </summary>
+    private static string EmitFloatConstant(FloatConstantValue fcv)
+    {
+        if (double.IsNaN(fcv.FloatValue))
+            return "NAN";
+        if (double.IsPositiveInfinity(fcv.FloatValue))
+            return "INFINITY";
+        if (double.IsNegativeInfinity(fcv.FloatValue))
+            return "(-INFINITY)";
+
+        // Use R format for round-trip precision
+        var lit = fcv.FloatValue.ToString("R", System.Globalization.CultureInfo.InvariantCulture);
+        // Ensure the literal always has a decimal point so C sees it as floating-point
+        if (!lit.Contains('.') && !lit.Contains('E') && !lit.Contains('e'))
+            lit += ".0";
+
+        if (fcv.IrType == TypeLayoutService.IrF32)
+            return lit + "f";
         return lit;
     }
 
@@ -648,6 +678,8 @@ public static class HmCCodeGenerator
                 "isize" => "int64_t",
                 "usize" => "uint64_t",
                 "char" => "uint32_t",
+                "f32" => "float",
+                "f64" => "double",
                 _ => "int32_t"
             },
             IrPointer ptr when ptr.Pointee is IrFunctionPtr fp2 =>
@@ -690,6 +722,9 @@ public static class HmCCodeGenerator
             _ => "/* unknown op */"
         };
     }
+
+    private static bool IsFloatIrType(IrType? type) =>
+        type == TypeLayoutService.IrF32 || type == TypeLayoutService.IrF64;
 
     // =========================================================================
     // Helpers

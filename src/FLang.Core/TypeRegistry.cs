@@ -93,14 +93,14 @@ public static class TypeRegistry
     public static readonly PrimitiveType Char = new("char", 4, 4) { IsSigned = false };
 
     /// <summary>
-    /// Compile-time integer type that must be resolved during type inference.
+    /// 32-bit floating-point type (IEEE 754 single precision).
     /// </summary>
-    public static readonly ComptimeInt ComptimeInt = ComptimeInt.Instance;
+    public static readonly PrimitiveType F32 = new("f32", 4, 4);
 
     /// <summary>
-    /// Compile-time float type that must be resolved during type inference.
+    /// 64-bit floating-point type (IEEE 754 double precision).
     /// </summary>
-    public static readonly ComptimeFloat ComptimeFloat = ComptimeFloat.Instance;
+    public static readonly PrimitiveType F64 = new("f64", 8, 8);
 
     /// <summary>
     /// Canonical struct representation for String (binary layout: ptr + len).
@@ -187,18 +187,18 @@ public static class TypeRegistry
             "isize" => ISize,
             "usize" => USize,
             "char" => Char,
-            "comptime_int" => ComptimeInt,
-            "comptime_float" => ComptimeFloat,
+            "f32" => F32,
+            "f64" => F64,
             _ => null
         };
     }
 
     /// <summary>
-    /// Returns true if the given type is an integer type (including comptime_int).
+    /// Returns true if the given type is an integer type.
     /// </summary>
     public static bool IsIntegerType(TypeBase type)
     {
-        return type is ComptimeInt || (type is PrimitiveType pt && IsIntegerType(pt.Name));
+        return type is PrimitiveType pt && IsIntegerType(pt.Name);
     }
 
     /// <summary>
@@ -210,19 +210,27 @@ public static class TypeRegistry
     }
 
     /// <summary>
+    /// Returns true if the given type name represents a floating-point type.
+    /// </summary>
+    public static bool IsFloatingPointType(string typeName)
+    {
+        return typeName is "f32" or "f64";
+    }
+
+    /// <summary>
+    /// Returns true if the given type is a floating-point type.
+    /// </summary>
+    public static bool IsFloatingPointType(TypeBase type)
+    {
+        return type is PrimitiveType pt && IsFloatingPointType(pt.Name);
+    }
+
+    /// <summary>
     /// Returns true if the given type is a numeric type (int or float).
     /// </summary>
     public static bool IsNumericType(TypeBase type)
     {
-        return IsIntegerType(type) || type is ComptimeFloat;
-    }
-
-    /// <summary>
-    /// Returns true if the given type is a compile-time type that needs resolution.
-    /// </summary>
-    public static bool IsComptimeType(TypeBase type)
-    {
-        return type is Core.ComptimeInt or Core.ComptimeFloat;
+        return IsIntegerType(type) || IsFloatingPointType(type);
     }
 
     /// <summary>

@@ -1043,6 +1043,15 @@ public class Parser
                         return new IntegerLiteralNode(span, -value, suffix);
                     }
 
+                    // Special case: negative float literal (e.g., -3.14f64)
+                    if (_currentToken.Kind == TokenKind.Float)
+                    {
+                        var floatToken = Eat(TokenKind.Float);
+                        var (value, suffix) = ParseFloatingPointLiteralValue(floatToken.Text);
+                        var span = SourceSpan.Combine(minusToken.Span, floatToken.Span);
+                        return new FloatingPointLiteralNode(span, -value, suffix);
+                    }
+
                     // General unary negation: -expr
                     var operandPrimary = ParsePrimaryExpression();
                     var operandWithPostfix = ParsePostfixOperators(operandPrimary);
@@ -1083,6 +1092,13 @@ public class Parser
                     var integerToken = Eat(TokenKind.Integer);
                     var (value, suffix) = ParseIntegerLiteralValue(integerToken.Text);
                     return new IntegerLiteralNode(integerToken.Span, value, suffix);
+                }
+
+            case TokenKind.Float:
+                {
+                    var floatToken = Eat(TokenKind.Float);
+                    var (value, suffix) = ParseFloatingPointLiteralValue(floatToken.Text);
+                    return new FloatingPointLiteralNode(floatToken.Span, value, suffix);
                 }
 
             case TokenKind.True:
@@ -2385,6 +2401,30 @@ public class Parser
             ? BigInteger.Parse("0" + digitSpan, System.Globalization.NumberStyles.HexNumber)
             : BigInteger.Parse(digitSpan);
         var suffix = digitEnd < text.Length ? text[digitEnd..] : null;
+
+        return (value, suffix);
+    }
+
+    private static (double value, string? suffix) ParseFloatingPointLiteralValue(string text)
+    {
+        string? suffix = null;
+        var numText = text;
+
+        // Check for f32/f64 suffix
+        if (text.EndsWith("f32"))
+        {
+            suffix = "f32";
+            numText = text[..^3];
+        }
+        else if (text.EndsWith("f64"))
+        {
+            suffix = "f64";
+            numText = text[..^3];
+        }
+
+        // Strip underscores for parsing
+        numText = numText.Replace("_", "");
+        var value = double.Parse(numText, System.Globalization.CultureInfo.InvariantCulture);
 
         return (value, suffix);
     }

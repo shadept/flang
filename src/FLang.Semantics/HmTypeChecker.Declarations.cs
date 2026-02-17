@@ -323,8 +323,9 @@ public partial class HmTypeChecker
 
         var scheme = _engine.Generalize(fnType);
         var isForeign = fn.Modifiers.HasFlag(FunctionModifiers.Foreign);
+        var isPublic = fn.Modifiers.HasFlag(FunctionModifiers.Public);
 
-        RegisterFunction(new FunctionScheme(fn.Name, scheme, fn, isForeign, modulePath));
+        RegisterFunction(new FunctionScheme(fn.Name, scheme, fn, isForeign, isPublic, modulePath));
 
         if (GetDeprecatedMessage(fn.Directives, out var depMsg))
             _deprecatedFunctions[fn.Name] = depMsg;

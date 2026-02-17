@@ -45,27 +45,22 @@ pub fn open_file(path: String, mode: FileMode, encoding: FileEncoding) Result(Fi
     }
     const fd = open(path.ptr, flags)
     if fd == -1 {
-        return Result.Err(FileError.IOError)
+        return Err(FileError.IOError)
     }
 
     let handle = FileHandle { fd = fd }
     const file = File { path = path, mode = mode, encoding = encoding, handle = handle }
-    return Result.Ok(file)
+    return Ok(file)
 }
 
 pub fn close_file(file: &File) Result((), FileError) {
     if close(file.handle.fd) == -1 {
-        return Result.Err(FileError.IOError)
+        return Err(FileError.IOError)
     }
-    return Result.Ok(())
+    return Ok(())
 }
 
-pub fn read_all(file: &File) Result(OwnedString, FileError) {
-    return read_all(file, &global_allocator)
-}
-
-
-pub fn read_all(file: &File, allocator: &Allocator) Result(OwnedString, FileError) {
+pub fn read_all(file: &File, allocator: &Allocator? = null) Result(OwnedString, FileError) {
     const PAGE_SIZE = 4096
     let sb = string_builder(PAGE_SIZE, allocator)
     loop {
@@ -73,7 +68,7 @@ pub fn read_all(file: &File, allocator: &Allocator) Result(OwnedString, FileErro
         const len = sb.cap - sb.len
         const n = read(file.handle.fd, buf, len)
         if n < 0 {
-            return Result.Err(FileError.IOError)
+            return Err(FileError.IOError)
         }
         sb.len = n as usize // XXX: this will not be possible after we implement scoped mutability
         if n as usize < len {
@@ -84,7 +79,7 @@ pub fn read_all(file: &File, allocator: &Allocator) Result(OwnedString, FileErro
         // with typical file size distributions (many small, few large).
         sb.ensure_capacity(sb.cap + PAGE_SIZE)
     }
-    return Result.Ok(sb.to_string())
+    return Ok(sb.to_string())
 }
 
 
@@ -95,7 +90,7 @@ pub fn read_all_inplace(file: &File, allocator: &Allocator) Result(OwnedString, 
     loop {
         const n = read(file.handle.fd, buf.ptr, buf.len)
         if n == -1 {
-            return Result.Err(FileError.IOError)
+            return Err(FileError.IOError)
         }
         const buf_slice = buf as u8[]
         const n = n as usize
@@ -104,7 +99,7 @@ pub fn read_all_inplace(file: &File, allocator: &Allocator) Result(OwnedString, 
             break
         }
     }
-    return Result.Ok(sb.to_string())
+    return Ok(sb.to_string())
 }
 
 pub fn write(file: &File, value: String) Result((), FileError) {
@@ -114,14 +109,14 @@ pub fn write(file: &File, value: String) Result((), FileError) {
     loop {
         const n = write(file.handle.fd, bytes[total_written..bytes.len].ptr, bytes.len - total_written)
         if (n == -1) {
-            return Result.Err(FileError.IOError)
+            return Err(FileError.IOError)
         }
         total_written = total_written + n as usize
         if (total_written >= bytes.len) {
             break
         }
     }
-    return Result.Ok(())
+    return Ok(())
 }
 
 // =============================================================================

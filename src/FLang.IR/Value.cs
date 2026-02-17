@@ -90,6 +90,24 @@ public class ConstantValue : Value
 }
 
 /// <summary>
+/// Represents a compile-time floating-point constant.
+/// </summary>
+public class FloatConstantValue : Value
+{
+    public FloatConstantValue(double floatValue, IrType irType)
+    {
+        FloatValue = floatValue;
+        Name = floatValue.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        IrType = irType;
+    }
+
+    /// <summary>
+    /// The floating-point value of this constant.
+    /// </summary>
+    public double FloatValue { get; }
+}
+
+/// <summary>
 /// Represents a compile-time array constant (e.g., byte array for strings).
 /// </summary>
 public class ArrayConstantValue : Value

@@ -8,6 +8,7 @@ public enum TokenKind
 
     // Literals
     Integer,
+    Float,
     StringLiteral,
     CharLiteral,
     ByteLiteral,

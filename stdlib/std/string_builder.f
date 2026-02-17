@@ -176,7 +176,7 @@ fn parse_int_spec(spec: String) FormatSpec {
 
 fn append_unsigned_with_base(sb: &StringBuilder, value: u64, base: u64, uppercase: bool) {
     let buf = [0u8; 64]
-    const len = format_uint(value, buf, base as u8).unwrap()
+    const len = format_u64(value, buf, base as u8).unwrap()
     if uppercase {
         let i = 0usize
         loop {
@@ -216,7 +216,7 @@ fn append_signed_impl(sb: &StringBuilder, value: i64, spec: String, bits: u64) {
 
     // Decimal format: use format_int from std.conv
     let buf = [0u8; 21]
-    const len = format_int(value, buf, 10).unwrap()
+    const len = format_i64(value, buf, 10).unwrap()
     sb.append_bytes(buf[0..len])
 }
 
