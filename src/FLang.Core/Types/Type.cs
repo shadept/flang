@@ -157,6 +157,22 @@ public sealed record NominalType(string Name, NominalKind Kind, IReadOnlyList<Ty
         if (other.TypeArguments.Count != TypeArguments.Count) return false;
         for (var i = 0; i < TypeArguments.Count; i++)
             if (!TypeArguments[i].Equals(other.TypeArguments[i])) return false;
+
+        // Anonymous types share names based on field names only (e.g. __anon__0__1 for tuples).
+        // Two anonymous types with different concrete field types must NOT be considered equal.
+        // TypeVars act as wildcards — they'll be unified by the inference engine later.
+        if (Name.StartsWith("__anon_") && FieldsOrVariants.Count > 0)
+        {
+            if (other.FieldsOrVariants.Count != FieldsOrVariants.Count) return false;
+            for (var i = 0; i < FieldsOrVariants.Count; i++)
+            {
+                var fa = FieldsOrVariants[i].Type;
+                var fb = other.FieldsOrVariants[i].Type;
+                if (fa is TypeVar || fb is TypeVar) continue;
+                if (!fa.Equals(fb)) return false;
+            }
+        }
+
         return true;
     }
 

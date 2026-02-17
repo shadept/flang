@@ -5,6 +5,7 @@
 import std.io.writer
 import std.allocator
 import std.string
+import std.conv
 
 pub type StringBuilder = struct {
     ptr: &u8
@@ -174,35 +175,19 @@ fn parse_int_spec(spec: String) FormatSpec {
 }
 
 fn append_unsigned_with_base(sb: &StringBuilder, value: u64, base: u64, uppercase: bool) {
-    if (value == 0) {
-        sb.append_byte(b'0')
-        return
-    }
-
-    let buf = [0; 64]
-    let pos = 64
-    let v = value
-
-    loop {
-        if (v == 0) {
-            break
+    let buf = [0u8; 64]
+    const len = format_uint(value, buf, base as u8).unwrap()
+    if uppercase {
+        let i = 0usize
+        loop {
+            if i >= len { break }
+            if buf[i] >= b'a' and buf[i] <= b'f' {
+                buf[i] = buf[i] - (b'a' - b'A')
+            }
+            i = i + 1
         }
-        const digit = (v % base) as u8
-        v = v / base
-
-        let c = 0
-        if digit < 10 {
-            c = b'0' + digit
-        } else if uppercase {
-            c = b'A' - 10 + digit
-        } else {
-            c = b'a' - 10 + digit
-        }
-        pos = pos - 1
-        buf[pos] = c
     }
-
-    sb.append_bytes(buf[pos..])
+    sb.append_bytes(buf[0..len])
 }
 
 fn append_unsigned_impl(sb: &StringBuilder, value: u64, spec: String) {
@@ -229,14 +214,10 @@ fn append_signed_impl(sb: &StringBuilder, value: i64, spec: String, bits: u64) {
         return
     }
 
-    // Decimal format: handle sign
-    let is_negative = value < 0
-    let abs_value: u64 = if (is_negative) { (0 - value) as u64 } else { value as u64 }
-
-    if (is_negative) {
-        sb.append_byte(b'-')
-    }
-    append_unsigned_with_base(sb, abs_value, 10, false)
+    // Decimal format: use format_int from std.conv
+    let buf = [0u8; 21]
+    const len = format_int(value, buf, 10).unwrap()
+    sb.append_bytes(buf[0..len])
 }
 
 // fn append_float_impl(sb: &StringBuilder, val: f64, spec: String) {

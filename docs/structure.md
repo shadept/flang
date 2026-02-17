@@ -71,4 +71,5 @@ The solution is divided to enforce strict separation of concerns and allow for m
   - `std/`: Higher-level standard libraries.
     - `collections/`: `list.f`, `dict.f`.
     - `text/`: `string.f` (defines built-in `String`), `string_builder.f`.
+    - `conv.f`: Zero-allocation integer/bool formatting and parsing.
     - `io.f`, `os.f`, `math.f`.

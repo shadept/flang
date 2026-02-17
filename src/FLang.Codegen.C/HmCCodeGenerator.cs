@@ -547,6 +547,7 @@ public static class HmCCodeGenerator
             FunctionReferenceValue fv => fv.IrType is IrFunctionPtr fp
                 ? IrNameMangling.MangleFunctionName(fv.Name, fp.Params)
                 : fv.Name,
+            RawCStringValue rv => $"\"{rv.Text}\"",
             GlobalValue gv when gv.Initializer is StructConstantValue
                 => $"&{gv.Name}",
             GlobalValue gv => gv.Name,

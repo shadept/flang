@@ -173,14 +173,17 @@ public class HmAstLowering
     // Module lowering
     // =========================================================================
 
-    public IrModule LowerModule(IEnumerable<(string ModulePath, ModuleNode Module)> modules)
+    public IrModule LowerModule(IEnumerable<(string ModulePath, ModuleNode Module)> modules, bool runTests = false)
     {
+        // Materialize so we can iterate multiple times
+        var moduleList = modules.ToList();
+
         // Lower global constants first (before functions that reference them)
-        foreach (var (modulePath, module) in modules)
+        foreach (var (modulePath, module) in moduleList)
             LowerModuleGlobals(module);
 
         // Collect foreign declarations (also collects types from signatures)
-        foreach (var (modulePath, module) in modules)
+        foreach (var (modulePath, module) in moduleList)
         {
             foreach (var fn in module.Functions)
             {
@@ -192,7 +195,7 @@ public class HmAstLowering
         }
 
         // Lower non-generic, non-foreign functions
-        foreach (var (modulePath, module) in modules)
+        foreach (var (modulePath, module) in moduleList)
         {
             foreach (var fn in module.Functions)
             {
@@ -210,6 +213,31 @@ public class HmAstLowering
             _module.Functions.Add(irFn);
         }
 
+        // When running tests: lower test blocks and generate synthetic main
+        if (runTests)
+        {
+            var testFunctions = new List<(string Name, IrFunction Function)>();
+            int testIndex = 0;
+            foreach (var (modulePath, module) in moduleList)
+            {
+                foreach (var test in module.Tests)
+                {
+                    var irFn = LowerTestBlock(test, testIndex++);
+                    _module.Functions.Add(irFn);
+                    testFunctions.Add((test.Name, irFn));
+                }
+            }
+
+            if (testFunctions.Count > 0)
+            {
+                var mainFn = GenerateTestMain(testFunctions);
+                // Remove any existing entry point (test files shouldn't have main)
+                foreach (var fn in _module.Functions)
+                    fn.IsEntryPoint = false;
+                _module.Functions.Add(mainFn);
+            }
+        }
+
         // Collect struct/enum types referenced in function signatures
         CollectReferencedTypes();
 
@@ -217,6 +245,116 @@ public class HmAstLowering
         ValidateCallTargets();
 
         return _module;
+    }
+
+    // =========================================================================
+    // Test block lowering
+    // =========================================================================
+
+    private IrFunction LowerTestBlock(TestDeclarationNode test, int index)
+    {
+        // Reset per-function state
+        _locals.Clear();
+        _parameters.Clear();
+        _byRefParams.Clear();
+        _shadowCounter.Clear();
+        _loopStack.Clear();
+        _deferStack.Clear();
+        _tempCounter = 0;
+        _blockCounter = 0;
+
+        var fnName = $"__test_{index}__";
+        var irFn = new IrFunction(fnName, TypeLayoutService.IrVoidPrim);
+        _currentFunction = irFn;
+
+        _currentBlock = CreateBlock("entry");
+        irFn.BasicBlocks.Add(_currentBlock);
+
+        foreach (var stmt in test.Body)
+            LowerStatement(stmt);
+
+        // Emit deferred expressions
+        if (_currentBlock.Instructions.Count == 0 ||
+            _currentBlock.Instructions[^1] is not (ReturnInstruction or JumpInstruction or BranchInstruction))
+        {
+            EmitDeferredExpressions();
+        }
+
+        // Add implicit void return to unterminated blocks
+        foreach (var block in irFn.BasicBlocks)
+        {
+            if (block.Instructions.Count == 0 ||
+                block.Instructions[^1] is not (ReturnInstruction or JumpInstruction or BranchInstruction))
+            {
+                var retVal = new ConstantValue(0, TypeLayoutService.IrVoidPrim);
+                block.Instructions.Add(new ReturnInstruction(_currentSpan, retVal));
+            }
+        }
+
+        return irFn;
+    }
+
+    private IrFunction GenerateTestMain(List<(string Name, IrFunction Function)> testFunctions)
+    {
+        _locals.Clear();
+        _parameters.Clear();
+        _byRefParams.Clear();
+        _shadowCounter.Clear();
+        _loopStack.Clear();
+        _deferStack.Clear();
+        _tempCounter = 0;
+        _blockCounter = 0;
+
+        var irFn = new IrFunction("main", TypeLayoutService.IrI32);
+        irFn.IsEntryPoint = true;
+        _currentFunction = irFn;
+
+        _currentBlock = CreateBlock("entry");
+        irFn.BasicBlocks.Add(_currentBlock);
+
+        // Print header
+        AddStringPrintf($"Running {testFunctions.Count} test(s)...\\n");
+
+        for (int i = 0; i < testFunctions.Count; i++)
+        {
+            var (name, testFn) = testFunctions[i];
+
+            // Print: "test N/total: name... "
+            AddStringPrintf($"test {i + 1}/{testFunctions.Count}: {EscapeCString(name)}... ");
+
+            // Call the test function
+            var callResult = new LocalValue($"call_{_tempCounter++}", TypeLayoutService.IrVoidPrim);
+            var callInst = new CallInstruction(SourceSpan.None, testFn.Name, [], callResult);
+            _currentBlock.Instructions.Add(callInst);
+
+            // Print "ok\n"
+            AddStringPrintf("ok\\n");
+        }
+
+        // Print summary
+        AddStringPrintf($"\\nAll {testFunctions.Count} test(s) passed.\\n");
+
+        // return 0
+        _currentBlock.Instructions.Add(new ReturnInstruction(SourceSpan.None,
+            new ConstantValue(0, TypeLayoutService.IrI32)));
+
+        return irFn;
+    }
+
+    private void AddStringPrintf(string text)
+    {
+        var fmtResult = new LocalValue($"call_{_tempCounter++}", TypeLayoutService.IrI32);
+        var fmtStr = new RawCStringValue(text);
+        var printfCall = new CallInstruction(SourceSpan.None, "printf", [fmtStr], fmtResult)
+        {
+            IsForeignCall = true
+        };
+        _currentBlock.Instructions.Add(printfCall);
+    }
+
+    private static string EscapeCString(string s)
+    {
+        return s.Replace("\\", "\\\\").Replace("\"", "\\\"").Replace("\n", "\\n");
     }
 
     // =========================================================================
@@ -3602,9 +3740,11 @@ public class HmAstLowering
         // 3. If variant has payload, store payload data
         if (variant.PayloadType != null)
         {
-            if (variant.PayloadType is IrStruct payloadStruct && call.Arguments.Count > 1)
+            if (variant.PayloadType is IrStruct payloadStruct
+                && payloadStruct.Name.StartsWith("__tuple_")
+                && call.Arguments.Count > 1)
             {
-                // Multi-payload: each arg maps to a field in the payload struct
+                // Multi-payload (synthetic tuple): each arg maps to a field in the payload struct
                 for (int i = 0; i < call.Arguments.Count && i < payloadStruct.Fields.Length; i++)
                 {
                     var argVal = LowerExpression(call.Arguments[i]);
@@ -3761,9 +3901,10 @@ public class HmAstLowering
                 if (armVariant != null && armVariant.Value.PayloadType != null)
                 {
                     if (armVariant.Value.PayloadType is IrStruct payloadStruct
+                        && payloadStruct.Name.StartsWith("__tuple_")
                         && payloadStruct.Fields.Length > 1)
                     {
-                        // Multi-payload: bind each sub-pattern to its payload field
+                        // Multi-payload (synthetic tuple): bind each sub-pattern to its payload field
                         for (int i = 0; i < evp.SubPatterns.Count && i < payloadStruct.Fields.Length; i++)
                         {
                             if (evp.SubPatterns[i] is VariablePatternNode vp)

@@ -146,7 +146,7 @@ public class Compiler
             return (modulePath, kvp.Value);
         });
 
-        var irModule = lowering.LowerModule(moduleEntries);
+        var irModule = lowering.LowerModule(moduleEntries, options.RunTests);
         irModule.SourceFiles = compilation.Sources;
         allDiagnostics.AddRange(lowering.Diagnostics);
 

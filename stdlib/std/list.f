@@ -13,10 +13,10 @@ pub type List = struct(T) {
 
 const DEFAULT_CAPACITY: usize = 16
 
-pub fn list_with_capacity(capacity: usize, allocator: &Allocator?) List($T) {
+pub fn list(capacity: usize, allocator: &Allocator? = null) List($T) {
     const bytes = capacity * size_of(T)
     const buf = allocator.alloc(bytes, align_of(T))
-        .expect("list_with_capacity: allocation failed")
+        .expect("list: allocation failed")
 
     return List {
         ptr = buf.ptr,

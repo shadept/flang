@@ -197,6 +197,22 @@ public class StringTableValue : Value
 }
 
 /// <summary>
+/// Represents a raw C string literal (e.g. "hello\n").
+/// Emitted directly as a C string literal in codegen — used for synthetic printf calls.
+/// </summary>
+public class RawCStringValue : Value
+{
+    public RawCStringValue(string text)
+    {
+        Text = text;
+        Name = $"\"{text}\"";
+        IrType = null!; // Not a typed IR value; only used as printf argument
+    }
+
+    public string Text { get; }
+}
+
+/// <summary>
 /// Represents a reference to a function (function pointer value).
 /// Used when a function name is used as a value in expressions.
 /// </summary>

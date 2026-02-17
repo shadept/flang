@@ -107,6 +107,19 @@ Slices (`T[]`) have runtime bounds checking via `op_index` in `core/slice.f`. Bu
 
 ---
 
+### Nested Generics Not Supported in Type Positions
+
+**Status:** Open
+**Affected:** Parser — type expressions
+
+Nested generic types like `Result(Option(u64), Error)` cause parse errors (`expected CloseParenthesis`). The parser cannot distinguish nested generic arguments from function call syntax when type parameters themselves have type parameters.
+
+Additionally, tuples inside enum variants are flattened: `Result((i64, usize), E)` treats `Ok` as having 2 bindings instead of 1 tuple, breaking `unwrap()` and pattern matching.
+
+**Workaround:** Use concrete wrapper structs instead of nested generics or tuples in generic type parameters.
+
+---
+
 ## Temporary Limitations
 
 ### Import Statements Must Be At Top of File

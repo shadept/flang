@@ -16,6 +16,13 @@ var debugLogging = false;
 var runTests = false;
 var lspMode = false;
 
+// Handle "test" subcommand: flang test <file>
+if (args.Length > 0 && args[0] == "test")
+{
+    runTests = true;
+    args = args[1..]; // consume "test", parse remaining normally
+}
+
 for (var i = 0; i < args.Length; i++)
     if (args[i] == "--stdlib-path" && i + 1 < args.Length)
         stdlibPath = args[++i];
@@ -65,6 +72,7 @@ if (findCompilersOnly)
 if (inputFilePath == null)
 {
     Console.WriteLine("Usage: flang [options] <file>");
+    Console.WriteLine("       flang test <file>          Compile and run test blocks");
     Console.WriteLine("Options:");
     Console.WriteLine("  -o, --output <path>     Output executable path (default: same as input with .exe)");
     Console.WriteLine("  --stdlib-path <path>    Path to standard library directory");
@@ -83,6 +91,18 @@ var stopwatch = Stopwatch.StartNew();
 
 // Set the default stdlib path if not provided
 stdlibPath ??= Path.Combine(AppContext.BaseDirectory, "stdlib");
+
+// When running tests, use a temp directory for output
+string? tempDir = null;
+if (runTests)
+{
+    tempDir = Path.Combine(Path.GetTempPath(), "flang_test_" + Guid.NewGuid().ToString("N")[..8]);
+    Directory.CreateDirectory(tempDir);
+    var exeName = "test_runner";
+    if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+        exeName += ".exe";
+    outputPath = Path.Combine(tempDir, exeName);
+}
 
 // Resolve output path: default to input file location with platform extension
 if (outputPath == null)
@@ -110,27 +130,60 @@ var options = new CompilerOptions(
     RunTests: runTests
 );
 
-var result = compiler.Compile(options);
-
-foreach (var diagnostic in result.Diagnostics)
+try
 {
-    DiagnosticPrinter.PrintToConsole(diagnostic, result.CompilationContext);
-}
+    var result = compiler.Compile(options);
 
-if (!result.Success)
-{
-    if (compilerConfig == null)
+    foreach (var diagnostic in result.Diagnostics)
     {
-        PrintCompilerDiscoveryHints();
+        DiagnosticPrinter.PrintToConsole(diagnostic, result.CompilationContext);
     }
-    Console.Error.WriteLine($"Error: Compilation failed with {result.Diagnostics.Count(d => d.Severity == DiagnosticSeverity.Error)} error(s)");
-    Environment.Exit(1);
+
+    if (!result.Success)
+    {
+        if (compilerConfig == null)
+        {
+            PrintCompilerDiscoveryHints();
+        }
+        Console.Error.WriteLine($"Error: Compilation failed with {result.Diagnostics.Count(d => d.Severity == DiagnosticSeverity.Error)} error(s)");
+        Environment.Exit(1);
+    }
+
+    if (runTests && result.ExecutablePath != null)
+    {
+        // Run the compiled test executable
+        var testProcess = new Process
+        {
+            StartInfo = new ProcessStartInfo
+            {
+                FileName = result.ExecutablePath,
+                UseShellExecute = false
+            }
+        };
+        testProcess.Start();
+        testProcess.WaitForExit();
+
+        if (testProcess.ExitCode != 0)
+        {
+            Console.Error.WriteLine($"\nTest failed with exit code {testProcess.ExitCode}");
+            Environment.Exit(1);
+        }
+    }
+    else
+    {
+        stopwatch.Stop();
+        var elapsedMs = stopwatch.ElapsedMilliseconds;
+        Console.WriteLine($"Compiled {inputFilePath} in {elapsedMs}ms");
+    }
 }
-else
+finally
 {
-    stopwatch.Stop();
-    var elapsedMs = stopwatch.ElapsedMilliseconds;
-    Console.WriteLine($"Compiled {inputFilePath} in {elapsedMs}ms");
+    // Clean up temp directory
+    if (tempDir != null && Directory.Exists(tempDir))
+    {
+        try { Directory.Delete(tempDir, recursive: true); }
+        catch { /* best effort cleanup */ }
+    }
 }
 
 // --- Utilities: compiler discovery and configuration ---

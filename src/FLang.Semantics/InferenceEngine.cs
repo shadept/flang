@@ -239,6 +239,16 @@ public class InferenceEngine : ITypeResolver
             for (var i = 0; i < na.TypeArguments.Count; i++)
                 unifiedArgs[i] = UnifyInternal(na.TypeArguments[i], nb.TypeArguments[i], span, ref cost);
 
+            // For anonymous types, also unify field/variant types to catch structural
+            // mismatches (e.g. (i64, usize) vs (u64, usize) which share the name __anon__0__1).
+            if (na.Name.StartsWith("__anon_")
+                && na.FieldsOrVariants.Count > 0
+                && na.FieldsOrVariants.Count == nb.FieldsOrVariants.Count)
+            {
+                for (var i = 0; i < na.FieldsOrVariants.Count; i++)
+                    UnifyInternal(na.FieldsOrVariants[i].Type, nb.FieldsOrVariants[i].Type, span, ref cost);
+            }
+
             return new NominalType(na.Name, na.Kind, unifiedArgs, na.FieldsOrVariants);
         }
 
