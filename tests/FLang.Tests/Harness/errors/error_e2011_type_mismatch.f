@@ -4,7 +4,7 @@
 // Test that E2011 highlights the specific mismatched argument
 // when a function exists but argument types don't match
 
-struct Point {
+type Point = struct {
     x: i32,
     y: i32
 }

@@ -4,7 +4,7 @@
 // After COW triggers on a by-value param, taking &param must
 // give a reference to the shadow copy, not the original.
 
-struct Data {
+type Data = struct {
     x: i32,
     y: i32,
     z: i32

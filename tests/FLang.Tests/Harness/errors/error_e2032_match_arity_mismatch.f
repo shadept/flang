@@ -1,7 +1,7 @@
 //! TEST: match_error_arity_mismatch
 //! COMPILE-ERROR: E2032
 
-enum Point {
+type Point = enum {
     Origin
     Coordinate(i32, i32)
 }

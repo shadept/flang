@@ -1,7 +1,7 @@
 //! TEST: error_e2004_ufcs_function_not_found
 //! COMPILE-ERROR: E2004
 
-struct Fba {
+type Fba = struct {
     data: i32
 }
 

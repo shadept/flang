@@ -1,7 +1,7 @@
 //! TEST: autoderef_last_field
 //! EXIT: 99
 
-struct Large {
+type Large = struct {
     a: i32,
     b: i32,
     c: i32,

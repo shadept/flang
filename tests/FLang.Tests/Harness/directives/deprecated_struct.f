@@ -3,11 +3,11 @@
 //! EXIT: 0
 
 #deprecated("use NewFoo instead")
-struct OldFoo {
+type OldFoo = struct {
     x: i32
 }
 
-struct NewFoo {
+type NewFoo = struct {
     x: i32
 }
 

@@ -4,7 +4,7 @@
 // Large struct returns use caller-provided hidden return slot.
 // Tests that return values don't corrupt each other.
 
-struct Rect {
+type Rect = struct {
     x: i32,
     y: i32,
     w: i32,

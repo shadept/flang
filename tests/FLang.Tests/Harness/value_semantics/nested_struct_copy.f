@@ -4,11 +4,11 @@
 // Nested structs: assignment copies the entire structure (shallow).
 // Inner struct is copied by value, not aliased.
 
-struct Inner {
+type Inner = struct {
     val: i32
 }
 
-struct Outer {
+type Outer = struct {
     a: Inner,
     b: Inner
 }

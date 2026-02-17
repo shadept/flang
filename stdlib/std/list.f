@@ -4,7 +4,7 @@
 import std.allocator
 import std.option
 
-pub struct List(T) {
+pub type List = struct(T) {
     ptr: &T
     len: usize
     cap: usize
@@ -131,7 +131,7 @@ pub fn clear(list: &List($T)) {
 // List Iterator
 // =============================================================================
 
-pub struct ListIterator(T) {
+pub type ListIterator = struct(T) {
     list: &List(T)
     current: usize
 }

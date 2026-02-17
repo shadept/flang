@@ -27,7 +27,7 @@ bool listOnly = args.Contains("--list") || args.Contains("-l");
 bool verbose = args.Contains("--verbose") || args.Contains("-v");
 bool noProgress = args.Contains("--no-progress");
 bool sequential = args.Contains("--sequential") || args.Contains("-s");
-string? filter = args.FirstOrDefault(a => !a.StartsWith("-") && a != "--sequential" && a != "-s");
+string? filter = args.FirstOrDefault(a => !a.StartsWith('-') && a != "--sequential" && a != "-s");
 
 if (showHelp)
 {
@@ -274,8 +274,8 @@ void RenderProgressBar(int current, int total, string currentTest)
     if (!IsInteractive()) return;  // Skip progress bar when not interactive
 
     const int width = 40;
-    var percent = total > 0 ? (current * 100) / total : 0;
-    var filled = total > 0 ? (current * width) / total : 0;
+    var percent = total > 0 ? current * 100 / total : 0;
+    var filled = total > 0 ? current * width / total : 0;
     var empty = width - filled;
 
     var filledBar = new string('#', filled);

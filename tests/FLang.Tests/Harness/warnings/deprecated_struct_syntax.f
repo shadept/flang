@@ -1,6 +1,6 @@
 //! TEST: deprecated_struct_syntax
-//! COMPILE-WARNING: W1001
-//! EXIT: 0
+//! COMPILE-ERROR: E1050
+//! EXIT: 1
 
 struct OldStyle {
     x: i32

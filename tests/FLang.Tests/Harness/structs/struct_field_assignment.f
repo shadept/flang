@@ -1,7 +1,7 @@
 //! TEST: struct_field_assignment
 //! EXIT: 42
 
-struct Counter {
+type Counter = struct {
     value: isize
 }
 

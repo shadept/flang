@@ -1,7 +1,7 @@
 //! TEST: error_e2011_ufcs_receiver_mismatch
 //! COMPILE-ERROR: E2011
 
-struct Fba {
+type Fba = struct {
     data: i32
 }
 

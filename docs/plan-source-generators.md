@@ -55,16 +55,21 @@ Template expressions use FLang semantics:
 
 ### Anonymous Type Expressions
 
-`struct { ... }` and `enum { ... }` can appear inline as type expressions:
+`struct { ... }` and `enum { ... }` can appear inline as type expressions, optionally with generic type parameters via `struct(T) { ... }`:
 
 ```
 #interface(Writer, struct {
   write: fn(data: u8[]) usize
   flush: fn() bool
 })
+
+// With generic type parameters:
+#interface(Reader, struct(T) {
+  read: fn(buf: T[]) usize
+})
 ```
 
-These are parsed as anonymous type definitions and passed to generators as `Type` parameters.
+These are parsed as anonymous type definitions and passed to generators as `Type` parameters. Generic type parameters are accessible via `Spec.type_params` in template expressions.
 
 ---
 
@@ -339,40 +344,41 @@ fn writer(self: &StringBuilder) Writer {
 
 ## Implementation Plan
 
-### Phase 0: Unified Type Declaration Syntax
+### Phase 0: Unified Type Declaration Syntax ✅ DONE
 
-**Goal:** Replace `struct Name { ... }` and `enum Name { ... }` with `type Name = struct { ... }` and `type Name = enum { ... }`. One canonical way to declare named types.
+**Goal:** Replace `struct Name { ... }` and `enum Name { ... }` with `type Name = struct { ... }` and `type Name = enum { ... }`. One canonical way to declare named types. Generic type parameters live on the `struct`/`enum` keyword, not on the name.
 
 **Syntax:**
 ```
 type Vec2 = struct { x: i32, y: i32 }
 type Color = enum { Red, Green, Blue }
-type Option(T) = struct { has_value: bool, value: T }
-type Result(T, E) = enum { Ok(T), Err(E) }
+type Option = struct(T) { has_value: bool, value: T }
+type Result = enum(T, E) { Ok(T), Err(E) }
 ```
 
 **Changes:**
-- Parser: `type Name = struct { ... }` parses as a type declaration (reuse existing struct/enum body parsing)
-- Parser: `struct Name { ... }` / `enum Name { ... }` kept temporarily, deprecated — emit warning
-- AST: `TypeDeclarationNode` wrapping the struct/enum body + name + type params
-- Type checker: treat identically to current struct/enum declarations
-- Migrate stdlib, tests, examples to new syntax over time
-- Remove old syntax once migration complete
+- Parser: `type Name = struct(T) { ... }` parses type params after `struct`/`enum` keyword
+- Parser: `struct Name { ... }` / `enum Name { ... }` is a hard error (E1050/E1051)
+- Parser: `type Name(T) = struct { ... }` (params on name) is a hard error (E1052)
+- `type Name = ...` is purely naming; generics belong on `struct`/`enum`
+- This makes named and anonymous usage consistent: `struct(T) { ... }` works in both contexts
 
-**Test:** `type Foo = struct { x: i32, y: i32 }` compiles, can be constructed, fields accessible. Generic: `type Pair(T) = struct { a: T, b: T }` works with monomorphization.
+**Test:** `type Foo = struct { x: i32, y: i32 }` compiles. Generic: `type Pair = struct(T) { a: T, b: T }` works with monomorphization.
 
 ---
 
 ### Phase 1: Anonymous Type Expressions
 
-**Goal:** `struct { ... }` and `enum { ... }` usable as inline type expressions (unnamed).
+**Goal:** `struct { ... }` and `enum { ... }` usable as inline type expressions (unnamed), including with generic type parameters via `struct(T) { ... }`.
 
 **Changes:**
-- Parser: `struct { ... }` / `enum { ... }` in expression/argument position (not just after `type Name =`)
+- Parser: `struct(T, U) { ... }` / `enum(T) { ... }` in expression/argument position (not just after `type Name =`)
+- Type parameters on anonymous structs use the same `(T, U, ...)` syntax as named types
 - Type checker: register anonymous types with compiler-generated names
+- `TypeInfo.type_params` populated from anonymous struct type parameters
 - These are the building blocks for generator arguments
 
-**Test:** `#interface(Writer, struct { write: fn(data: u8[]) usize })` parses the anonymous struct as a generator argument (expansion not yet wired).
+**Test:** `#interface(Reader, struct(T) { read: fn(buf: T[]) usize })` parses the anonymous struct with type param `T` as a generator argument (expansion not yet wired).
 
 ---
 

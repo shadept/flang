@@ -3,7 +3,7 @@
 // can agree on binary representations. The preferred surface syntax uses
 // `T?` and `null`, but the underlying type is declared here for codegen.
 
-pub struct Option(T) {
+pub type Option = struct(T) {
     has_value: bool
     value: T
 }

@@ -4,7 +4,7 @@
 import core.slice
 import core.string
 
-pub enum TypeKind {
+pub type TypeKind = enum {
     Primitive = 0
     Array = 1
     Struct = 2
@@ -13,9 +13,9 @@ pub enum TypeKind {
 
 // Generic alias for TypeInfo.
 // Allows couple of T to its TypeInfo.
-pub struct Type(T) {}
+pub type Type = struct(T) {}
 
-pub struct TypeInfo {
+pub type TypeInfo = struct {
     name: String
     size: u8
     align: u8
@@ -25,7 +25,7 @@ pub struct TypeInfo {
     fields: FieldInfo[]
 }
 
-pub struct FieldInfo {
+pub type FieldInfo = struct {
     name: String
     offset: usize
     type: &TypeInfo

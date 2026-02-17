@@ -4,7 +4,7 @@
 // Test void return type in function type within struct field
 // This matches the original bug report: Allocator { free: fn(...) void }
 
-struct Handler {
+type Handler = struct {
     process: fn(i32) void,
     get_value: fn() i32
 }

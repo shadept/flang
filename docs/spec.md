@@ -89,9 +89,7 @@ type Name = struct {
 }
 ```
 
-> **Note:** The old `struct Name { ... }` syntax is deprecated but still accepted. Use `type Name = struct { ... }` for new code.
-
-Structs may be generic. Generic parameters are introduced by `(T, U, ...)`.
+Structs may be generic. Generic parameters are introduced by `(T, U, ...)` on the `struct` keyword: `type Pair = struct(T) { first: T, second: T }`.
 
 - All fields are public.
 - Field writes are allowed only in the defining file.
@@ -189,12 +187,10 @@ type Ord = enum {
 }
 ```
 
-> **Note:** The old `enum Name { ... }` syntax is deprecated but still accepted. Use `type Name = enum { ... }` for new code.
-
 **Declaration:**
 
 - `type Name = enum { Variant, ... }` declares an enum with unit (no payload) and payload variants.
-- Generic enums: `type Result(T, E) = enum { Ok(T), Err(E) }`
+- Generic enums: `type Result = enum(T, E) { Ok(T), Err(E) }`
 - Variants may have zero or more payload types.
 - Tag values are assigned sequentially (0, 1, 2, ...) by default.
 - **Naked enums** (C-style): Variants may have explicit integer tag values using `= <integer>` syntax. If any variant has an explicit tag, the enum is a naked enum and no variant may carry payload data. Implicit tag values auto-increment from the previous variant's value (first defaults to 0). Duplicate tag values are a compile error.

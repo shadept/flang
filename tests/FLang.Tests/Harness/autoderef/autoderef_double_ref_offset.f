@@ -1,7 +1,7 @@
 //! TEST: autoderef_double_ref_offset
 //! EXIT: 55
 
-struct Data {
+type Data = struct {
     first: i32,
     second: i32,
     third: i32

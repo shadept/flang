@@ -1,7 +1,7 @@
 //! TEST: match_error_non_enum
 //! COMPILE-ERROR: E2030
 
-struct Point {
+type Point = struct {
     x: i32
     y: i32
 }

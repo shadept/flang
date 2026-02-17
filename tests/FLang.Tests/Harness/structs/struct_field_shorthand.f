@@ -1,7 +1,7 @@
 //! TEST: struct_field_shorthand
 //! EXIT: 52
 
-struct Point {
+type Point = struct {
     x: i32,
     y: i32
 }

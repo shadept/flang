@@ -1,7 +1,7 @@
 //! TEST: autoderef_basic
 //! EXIT: 35
 
-struct Point {
+type Point = struct {
     x: i32,
     y: i32
 }

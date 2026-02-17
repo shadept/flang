@@ -5,28 +5,28 @@ import std.result
 import std.string
 import std.string_builder
 
-pub enum FileMode {
+pub type FileMode = enum {
     Read,
     Write,
     Append,
 }
 
-pub enum FileEncoding {
+pub type FileEncoding = enum {
     Utf8,
     Ascii,
 }
 
-pub enum FileError {
+pub type FileError = enum {
     IOError,
     NotFound,
     PermissionDenied,
 }
 
-pub struct FileHandle {
+pub type FileHandle = struct {
     fd: i32  // TODO system dependent
 }
 
-pub struct File {
+pub type File = struct {
     path: String
     mode: FileMode
     encoding: FileEncoding
@@ -65,14 +65,15 @@ pub fn read_all(file: &File) Result(OwnedString, FileError) {
 }
 
 pub fn read_all(file: &File, allocator: &Allocator) Result(OwnedString, FileError) {
-    let sb = string_builder_with_allocator(allocator)
-    let buf = [0u8; 4096]
+    const PAGE_SIZE = 4096
+    let sb = string_builder(PAGE_SIZE, allocator)
+    let buf = [0u8; PAGE_SIZE]
     loop {
         const n = read(file.handle.fd, buf.ptr, buf.len)
-        if (n == -1) {
+        if n == -1 {
             return Result.Err(FileError.IOError)
         }
-        if (n == 0) {
+        if n as usize < PAGE_SIZE {
             break
         }
         const buf_slice = buf as u8[]

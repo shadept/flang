@@ -1679,11 +1679,19 @@ public partial class HmTypeChecker
 
     private ArrayType InferArrayLiteral(ArrayLiteralExpressionNode arr)
     {
-        if (arr.IsRepeatSyntax && arr.RepeatValue != null)
+        if (arr.IsRepeatSyntax && arr.RepeatValue != null && arr.RepeatCountExpression != null)
         {
             // [value; count]
             var elemType = InferExpression(arr.RepeatValue);
-            return new ArrayType(elemType, arr.RepeatCount ?? 0);
+
+            // Try to resolve count to a compile-time integer
+            int? staticCount = TryEvalConstantInt(arr.RepeatCountExpression);
+
+            // Count must be usize
+            var countType = InferExpression(arr.RepeatCountExpression);
+            _engine.Unify(countType, WellKnown.USize, arr.RepeatCountExpression.Span);
+
+            return new ArrayType(elemType, staticCount ?? 0);
         }
 
         if (arr.Elements == null || arr.Elements.Count == 0)
@@ -1702,6 +1710,25 @@ public partial class HmTypeChecker
         }
 
         return new ArrayType(firstType, arr.Elements.Count);
+    }
+
+    /// <summary>
+    /// Tries to evaluate an expression as a compile-time integer constant.
+    /// Handles integer literals and const variable references.
+    /// </summary>
+    private int? TryEvalConstantInt(ExpressionNode expr)
+    {
+        if (expr is IntegerLiteralNode intLit)
+            return (int)intLit.Value;
+
+        if (expr is IdentifierExpressionNode id)
+        {
+            var decl = _scopes.LookupDeclaration(id.Name);
+            if (decl is VariableDeclarationNode { IsConst: true, Initializer: not null } constVar)
+                return TryEvalConstantInt(constVar.Initializer);
+        }
+
+        return null;
     }
 
     // =========================================================================

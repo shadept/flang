@@ -1,7 +1,7 @@
 //! TEST: autoderef_assign_second
 //! EXIT: 88
 
-struct Point {
+type Point = struct {
     x: i32,
     y: i32
 }

@@ -1,7 +1,7 @@
 //! TEST: struct_slice_field_init
 //! EXIT: 5
 
-struct Wrapper {
+type Wrapper = struct {
     data: u8[],
     pos: usize
 }

@@ -12,7 +12,7 @@
 import core.option
 import core.slice
 
-pub struct String {
+pub type String = struct {
     ptr: &u8,
     len: usize
 }

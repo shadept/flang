@@ -1,7 +1,7 @@
 //! TEST: error_e2048_duplicate_implicit
 //! COMPILE-ERROR: E2048
 
-enum Bad {
+type Bad = enum {
     A
     B
     C = 6

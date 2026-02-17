@@ -3,7 +3,7 @@
 
 // Test operator overloading with op_eq for a custom struct type
 
-struct Point {
+type Point = struct {
     x: i32,
     y: i32
 }

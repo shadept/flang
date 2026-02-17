@@ -6,7 +6,7 @@
 // Copy-on-write for large structs passed by implicit reference.
 // Writing to a by-ref param must create a local shadow copy.
 
-struct Matrix {
+type Matrix = struct {
     m00: i32,
     m01: i32,
     m10: i32,

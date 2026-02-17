@@ -13,7 +13,7 @@ import std.mem
 // Returns the number of bytes actually read. 0 means EOF.
 // ctx: opaque pointer to the underlying resource (fd, handle, etc.)
 // buf: slice to read into
-pub struct ReadFn {
+pub type ReadFn = struct {
     ctx: &u8,
     read: fn(ctx: &u8, buf: u8[]) usize
 }
@@ -23,7 +23,7 @@ pub struct ReadFn {
 // reads from buf[pos..end]. When pos == end (all consumed), the buffer
 // refills from the OS. If pos > 0 on refill, remaining data is compacted
 // to the front via memmove.
-pub struct Reader {
+pub type Reader = struct {
     read_fn: ReadFn,
     buf: &u8,
     pos: usize,

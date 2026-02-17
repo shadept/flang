@@ -1,7 +1,7 @@
 //! TEST: enum_construction_unit
 //! EXIT: 1
 
-enum Status {
+type Status = enum {
     Idle
     Running
     Stopped

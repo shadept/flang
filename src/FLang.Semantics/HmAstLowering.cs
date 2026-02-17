@@ -2806,10 +2806,11 @@ public class HmAstLowering
         _currentBlock.Instructions.Add(new AllocaInstruction(_currentSpan, irType.Size, allocaResult)
         { IsArrayStorage = true });
 
-        if (arrLit.IsRepeatSyntax && arrLit.RepeatValue != null && arrLit.RepeatCount.HasValue)
+        if (arrLit.IsRepeatSyntax && arrLit.RepeatValue != null && arrLit.RepeatCountExpression != null)
         {
             var repeatVal = LowerExpression(arrLit.RepeatValue);
-            var count = arrLit.RepeatCount.Value;
+            var count = arrayIrType.Length ?? throw new InternalCompilerError(
+                "Array repeat count must be compile-time evaluable", arrLit.Span);
             var elemSize = elementIrType.Size;
             var totalSize = elemSize * count;
 

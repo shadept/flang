@@ -4,7 +4,7 @@
 // Returning large structs through nested function calls.
 // Each return uses a hidden return slot — must not corrupt other slots.
 
-struct Point3D {
+type Point3D = struct {
     x: i32,
     y: i32,
     z: i32

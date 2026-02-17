@@ -98,7 +98,7 @@ pub fn starts_with(s: String, prefix: String) bool {
 // OwnedString
 // =============================================================================
 
-pub struct OwnedString {
+pub type OwnedString = struct {
     ptr: &u8
     len: usize
     allocator: &Allocator?
@@ -118,7 +118,7 @@ pub fn as_view(self: OwnedString) String {
 // Bytes Iterator
 // =============================================================================
 
-struct Bytes {
+type Bytes = struct {
     buf: u8[]
     idx: usize
 }
@@ -154,7 +154,7 @@ pub fn next(it: &Bytes) u8? {
 // Chars Iterator
 // =============================================================================
 
-struct Chars {
+type Chars = struct {
     buf: u8[]
     idx: usize
 }

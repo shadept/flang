@@ -3,7 +3,7 @@
 
 // Test auto-deriving op_ne from op_eq (should emit not op_eq)
 
-struct Point {
+type Point = struct {
     x: i32,
     y: i32
 }

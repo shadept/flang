@@ -1,7 +1,7 @@
 //! TEST: iterator_error_no_next
 //! COMPILE-ERROR: E2023
 
-struct IncompleteIterator {
+type IncompleteIterator = struct {
     value: i32
 }
 

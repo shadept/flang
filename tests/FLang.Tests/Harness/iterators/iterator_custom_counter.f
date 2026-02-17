@@ -1,12 +1,12 @@
 //! TEST: iterator_custom_counter
 //! EXIT: 33
 
-struct Counter {
+type Counter = struct {
     start: i32
     count: i32
 }
 
-struct CounterState {
+type CounterState = struct {
     current: i32
     remaining: i32
 }

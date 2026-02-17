@@ -1,12 +1,12 @@
 //! TEST: match_nested_enum
 //! EXIT: 42
 
-enum Inner {
+type Inner = enum {
     Value(i32)
     Empty
 }
 
-enum Outer {
+type Outer = enum {
     Wrapped(Inner)
     Direct(i32)
 }

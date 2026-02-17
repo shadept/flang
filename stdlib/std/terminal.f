@@ -9,12 +9,12 @@ import std.io.writer
 // Terminal Size
 // =============================================================================
 
-pub struct TerminalSize {
+pub type TerminalSize = struct {
     rows: u16
     cols: u16
 }
 
-struct Winsize {
+type Winsize = struct {
     ws_row: u16
     ws_col: u16
     ws_xpixel: u16
@@ -105,7 +105,7 @@ pub fn show_cursor(w: &Writer) {
 // Colors
 // =============================================================================
 
-pub enum Color {
+pub type Color = enum {
     Black = 0
     Red = 1
     Green = 2
@@ -168,7 +168,7 @@ pub fn set_bright_bg(w: &Writer, color: Color) {
 // Styles
 // =============================================================================
 
-pub enum Style {
+pub type Style = enum {
     Bold = 1
     Dim = 2
     Italic = 3

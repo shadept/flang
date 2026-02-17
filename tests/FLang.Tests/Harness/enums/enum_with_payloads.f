@@ -1,7 +1,7 @@
 //! TEST: enum_with_payloads
 //! EXIT: 42
 
-enum Message {
+type Message = enum {
     Quit
     Echo(i32)
     Move(i32, i32)

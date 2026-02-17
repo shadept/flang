@@ -195,6 +195,7 @@ public static class AstNodeFinder
                 if (arr.Elements != null)
                     foreach (var e in arr.Elements) yield return e;
                 if (arr.RepeatValue != null) yield return arr.RepeatValue;
+                if (arr.RepeatCountExpression != null) yield return arr.RepeatCountExpression;
                 break;
 
             case StructConstructionExpressionNode sc:

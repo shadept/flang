@@ -1,7 +1,7 @@
 //! TEST: match_wildcard
 //! EXIT: 10
 
-enum Point {
+type Point = enum {
     Origin
     OnXAxis(i32)
     OnYAxis(i32)

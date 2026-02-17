@@ -6,7 +6,7 @@
 // Workaround: use anonymous struct syntax with type annotation:
 //   let x: Foo(i32) = .{ value = 5 }
 
-struct Foo(T) {
+type Foo = struct(T) {
     value: T
 }
 

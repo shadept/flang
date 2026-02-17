@@ -1,6 +1,6 @@
 //! TEST: deprecated_enum_syntax
-//! COMPILE-WARNING: W1002
-//! EXIT: 0
+//! COMPILE-ERROR: E1051
+//! EXIT: 1
 
 enum OldColor {
     Red

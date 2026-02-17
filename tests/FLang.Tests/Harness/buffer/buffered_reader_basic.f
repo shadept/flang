@@ -6,7 +6,7 @@
 import std.io.reader
 
 // Source: serves bytes from a fixed slice, tracking position.
-struct Source {
+type Source = struct {
     data: u8[],
     pos: usize
 }

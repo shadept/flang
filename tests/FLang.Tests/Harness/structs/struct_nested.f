@@ -1,11 +1,11 @@
 //! TEST: struct_nested
 //! EXIT: 42
 
-struct Inner {
+type Inner = struct {
     value: i32
 }
 
-struct Outer {
+type Outer = struct {
     inner: Inner,
     extra: i32
 }

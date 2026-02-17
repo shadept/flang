@@ -2559,26 +2559,26 @@ FLang's error code numbering follows these principles:
 
 ---
 
-## W1XXX: Frontend Warnings
+## E105X: Removed Syntax Errors
 
-### W1001: Deprecated Struct Declaration Syntax
+### E1050: Removed Struct Declaration Syntax
 
 **Category**: Parsing
-**Severity**: Warning
+**Severity**: Error
 
 #### Description
 
-The old `struct Name { ... }` declaration syntax is deprecated. Use the new `type Name = struct { ... }` syntax instead.
+The `struct Name { ... }` declaration syntax has been removed. Use the `type Name = struct { ... }` syntax instead.
 
 #### Example
 
 ```flang
-// Deprecated:
+// Error:
 struct Foo {
     x: i32
 }
 
-// Preferred:
+// Correct:
 type Foo = struct {
     x: i32
 }
@@ -2590,26 +2590,26 @@ Replace `struct Name { ... }` with `type Name = struct { ... }`.
 
 ---
 
-### W1002: Deprecated Enum Declaration Syntax
+### E1051: Removed Enum Declaration Syntax
 
 **Category**: Parsing
-**Severity**: Warning
+**Severity**: Error
 
 #### Description
 
-The old `enum Name { ... }` declaration syntax is deprecated. Use the new `type Name = enum { ... }` syntax instead.
+The `enum Name { ... }` declaration syntax has been removed. Use the `type Name = enum { ... }` syntax instead.
 
 #### Example
 
 ```flang
-// Deprecated:
+// Error:
 enum Color {
     Red
     Green
     Blue
 }
 
-// Preferred:
+// Correct:
 type Color = enum {
     Red
     Green
@@ -2620,6 +2620,37 @@ type Color = enum {
 #### Solution
 
 Replace `enum Name { ... }` with `type Name = enum { ... }`.
+
+---
+
+### E1052: Type Parameters on Type Name
+
+**Category**: Parsing
+**Severity**: Error
+
+#### Description
+
+Generic type parameters must be placed on the `struct`/`enum` keyword, not on the type name.
+
+#### Example
+
+```flang
+// Error:
+type Pair(T) = struct {
+    first: T
+    second: T
+}
+
+// Correct:
+type Pair = struct(T) {
+    first: T
+    second: T
+}
+```
+
+#### Solution
+
+Move the type parameters from the name to after the `struct`/`enum` keyword.
 
 ---
 

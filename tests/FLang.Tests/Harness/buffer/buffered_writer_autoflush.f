@@ -5,7 +5,7 @@
 
 import std.io.writer
 
-struct Sink {
+type Sink = struct {
     total: usize,
     flush_count: usize
 }

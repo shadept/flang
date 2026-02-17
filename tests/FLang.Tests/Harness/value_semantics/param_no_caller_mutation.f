@@ -6,7 +6,7 @@
 // Passing a struct to a function must never mutate the caller's value.
 // Callee gets implicit reference; writes trigger copy-on-write.
 
-struct Box {
+type Box = struct {
     val: i32
 }
 

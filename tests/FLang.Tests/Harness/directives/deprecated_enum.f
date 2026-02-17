@@ -3,7 +3,7 @@
 //! EXIT: 0
 
 #deprecated
-enum OldColor {
+type OldColor = enum {
     Red
     Green
     Blue

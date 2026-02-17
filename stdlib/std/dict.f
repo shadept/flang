@@ -14,14 +14,14 @@ import std.option
 // Entry states: 0 = empty, 1 = occupied, 2 = tombstone
 
 // A single entry in the hash map.
-pub struct Entry(K, V) {
+pub type Entry = struct(K, V) {
     state: u8
     hash: usize
     key: K
     value: V
 }
 
-pub struct Dict(K, V) {
+pub type Dict = struct(K, V) {
     entries: &Entry(K, V)
     length: usize
     cap: usize
@@ -269,7 +269,7 @@ pub fn clear(self: &Dict($K, $V)) {
 // Dict Iterator
 // =============================================================================
 
-pub struct DictIterator(K, V) {
+pub type DictIterator = struct(K, V) {
     dict: &Dict(K, V)
     current: usize
 }

@@ -1,7 +1,7 @@
 //! TEST: error_e2037_unknown_variant
 //! COMPILE-ERROR: E2037
 
-enum Color {
+type Color = enum {
     Red
     Green
     Blue

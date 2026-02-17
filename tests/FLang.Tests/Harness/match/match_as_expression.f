@@ -1,7 +1,7 @@
 //! TEST: match_as_expression
 //! EXIT: 49
 
-enum Result {
+type Result = enum {
     Ok(i32)
     Err(i32)
 }

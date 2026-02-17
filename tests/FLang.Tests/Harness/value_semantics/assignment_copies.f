@@ -5,7 +5,7 @@
 
 // Assignment is a shallow byte-copy. Both variables exist independently.
 
-struct Pair {
+type Pair = struct {
     a: i32,
     b: i32
 }

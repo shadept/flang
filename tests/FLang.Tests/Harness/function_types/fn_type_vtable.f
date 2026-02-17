@@ -4,7 +4,7 @@
 // Test struct containing function pointers (vtable pattern)
 // Uses direct field-call syntax: ops.add(5, 3)
 
-struct Operations {
+type Operations = struct {
     add: fn(i32, i32) i32,
     mul: fn(i32, i32) i32
 }

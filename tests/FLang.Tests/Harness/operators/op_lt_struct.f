@@ -3,7 +3,7 @@
 
 // Test operator overloading with op_lt for a custom struct type
 
-struct Box {
+type Box = struct {
     size: i32
 }
 

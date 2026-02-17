@@ -16,6 +16,7 @@ ANSI escape code utilities: colors, cursor movement, screen clearing, styles.
 |---------|-------------|----------------|
 | `chess-fen` | Parse FEN strings and display Unicode chess boards | `std.string_builder` |
 | `chess-fen-color` | Colored chess board with dark/light square backgrounds | `std.terminal` |
+| `snake` | Classic snake game with raw terminal input and game loop | `std.terminal` |
 | `game-of-life` | Conway's Game of Life with animated terminal display | `std.terminal` |
 
 ### Phase 2: String Utilities

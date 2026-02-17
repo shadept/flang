@@ -5,7 +5,7 @@
 // Exercises: large struct param by-ref, large struct return via hidden slot,
 // copy-on-write (mutation of large param), and nested calls.
 
-struct Vec3 {
+type Vec3 = struct {
     x: i32,
     y: i32,
     z: i32

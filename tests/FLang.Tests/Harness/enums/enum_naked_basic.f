@@ -1,13 +1,13 @@
 //! TEST: enum_naked_basic
 //! EXIT: 5
 
-enum Ord {
+type Ord = enum {
     Less = -1
     Equal = 0
     Greater = 1
 }
 
-enum Status {
+type Status = enum {
     A
     B
     C = 6

@@ -3,13 +3,13 @@
 
 // Test auto-deriving all comparison operators from op_cmp
 
-enum Ord {
+type Ord = enum {
     Less = -1
     Equal = 0
     Greater = 1
 }
 
-struct Val {
+type Val = struct {
     n: i32
 }
 

@@ -3,7 +3,7 @@
 
 // Test that using an operator on a struct without op_* function produces an error
 
-struct NoOps {
+type NoOps = struct {
     val: i32
 }
 

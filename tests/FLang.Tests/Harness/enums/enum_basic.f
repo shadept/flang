@@ -1,7 +1,7 @@
 //! TEST: enum_basic
 //! EXIT: 1
 
-enum Color {
+type Color = enum {
     Red
     Green
     Blue

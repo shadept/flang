@@ -3,7 +3,7 @@
 
 // Test operator overloading with op_sub for a custom struct type
 
-struct Vec2 {
+type Vec2 = struct {
     x: i32,
     y: i32
 }

@@ -1,7 +1,7 @@
 //! TEST: struct_op_index
 //! EXIT: 42
 
-pub struct MyVec {
+pub type MyVec = struct {
     a: i32
     b: i32
     c: i32

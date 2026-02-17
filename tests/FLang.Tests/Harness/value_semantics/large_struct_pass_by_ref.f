@@ -4,7 +4,7 @@
 // Large structs (>8 bytes) are passed by implicit reference.
 // The caller's value must still be unaffected by callee reads.
 
-struct BigData {
+type BigData = struct {
     a: i32,
     b: i32,
     c: i32,

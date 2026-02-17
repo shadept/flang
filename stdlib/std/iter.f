@@ -4,7 +4,7 @@ import std.option
 // Filter
 // =============================================================================
 
-struct FilterIter(I, T) {
+type FilterIter = struct(I, T) {
     it: I
     f: fn(T) bool
 }
@@ -29,7 +29,7 @@ pub fn filter(it: $I, f: fn($T) bool) FilterIter(I, T) {
 // Map
 // =============================================================================
 
-struct MapIter(I, T, U) {
+type MapIter = struct(I, T, U) {
     it: I
     f: fn(T) U
 }

@@ -4,7 +4,7 @@
 // Copy-on-write must work correctly when mutation happens inside a loop.
 // The shadow copy is created once, then subsequent iterations use it.
 
-struct Accum {
+type Accum = struct {
     total: i32,
     count: i32
 }

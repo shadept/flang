@@ -2,7 +2,7 @@
 //! EXIT: 3
 
 // OK: Recursive enum using reference (linked list)
-enum List(T) {
+type List = enum(T) {
     Cons(T, &List(T))
     Nil
 }

@@ -5,7 +5,7 @@
 // be needed (no COW triggered). This tests that read-only access
 // through implicit reference works correctly for various types.
 
-struct Big {
+type Big = struct {
     a: i32,
     b: i32,
     c: i32

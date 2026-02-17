@@ -1,11 +1,11 @@
 //! TEST: global_const_address_of
 //! EXIT: 42
 
-struct Inner {
+type Inner = struct {
     value: i32
 }
 
-struct Wrapper {
+type Wrapper = struct {
     ptr: &u8,
     tag: i32
 }

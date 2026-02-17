@@ -1,7 +1,7 @@
 //! TEST: error_e2040_address_of_temporary
 //! COMPILE-ERROR: E2040
 
-struct Point {
+type Point = struct {
     x: i32
     y: i32
 }

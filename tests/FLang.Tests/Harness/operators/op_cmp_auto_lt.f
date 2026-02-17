@@ -3,13 +3,13 @@
 
 // Test auto-deriving op_lt from op_cmp
 
-enum Ord {
+type Ord = enum {
     Less = -1
     Equal = 0
     Greater = 1
 }
 
-struct Box {
+type Box = struct {
     size: i32
 }
 

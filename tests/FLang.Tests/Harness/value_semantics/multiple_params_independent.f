@@ -4,7 +4,7 @@
 // When the same value is passed to multiple parameters,
 // each parameter gets its own copy/reference. Mutations are independent.
 
-struct Vec2 {
+type Vec2 = struct {
     x: i32,
     y: i32
 }

@@ -2,7 +2,7 @@
 //! EXIT: 15
 
 // Simple custom iterator that counts down
-struct Countdown {
+type Countdown = struct {
     from: i32
 }
 

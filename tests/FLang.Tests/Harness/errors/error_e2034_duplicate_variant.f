@@ -1,7 +1,7 @@
 //! TEST: error_e2034_duplicate_variant
 //! COMPILE-ERROR: E2034
 
-enum Status {
+type Status = enum {
     Ok
     Error
     Ok  // ERROR: variant names must be unique within an enum

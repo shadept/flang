@@ -1,7 +1,7 @@
 //! TEST: match_variable_binding
 //! EXIT: 35
 
-enum Data {
+type Data = enum {
     Single(i32)
     Pair(i32, i32)
     Triple(i32, i32, i32)

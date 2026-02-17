@@ -1,7 +1,7 @@
 //! TEST: match_basic
 //! EXIT: 5
 
-enum Value {
+type Value = enum {
     Some(i32)
     None
 }

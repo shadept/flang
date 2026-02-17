@@ -289,15 +289,15 @@ public class Parser
     {
         var structKeyword = Eat(TokenKind.Struct);
 
-        _diagnostics.Add(Diagnostic.Warning(
-            "`struct Name { ... }` syntax is deprecated, use `type Name = struct { ... }` instead",
+        _diagnostics.Add(Diagnostic.Error(
+            "`struct Name { ... }` syntax has been removed, use `type Name = struct { ... }` instead",
             structKeyword.Span,
             hint: "replace with `type` declaration syntax",
-            code: "W1001"));
+            code: "E1050"));
 
         var nameToken = Eat(TokenKind.Identifier);
 
-        // Parse optional generic type parameters: (T, U, V)
+        // Parse type parameters (on struct keyword in new syntax, but here for error recovery)
         var typeParameters = ParseTypeParameters();
 
         return ParseStructBody(nameToken.Text, nameToken.Span, typeParameters, structKeyword.Span, directives);
@@ -337,15 +337,15 @@ public class Parser
     {
         var enumKeyword = Eat(TokenKind.Enum);
 
-        _diagnostics.Add(Diagnostic.Warning(
-            "`enum Name { ... }` syntax is deprecated, use `type Name = enum { ... }` instead",
+        _diagnostics.Add(Diagnostic.Error(
+            "`enum Name { ... }` syntax has been removed, use `type Name = enum { ... }` instead",
             enumKeyword.Span,
             hint: "replace with `type` declaration syntax",
-            code: "W1002"));
+            code: "E1051"));
 
         var nameToken = Eat(TokenKind.Identifier);
 
-        // Parse optional generic type parameters: (T, U, V)
+        // Parse type parameters for error recovery
         var typeParameters = ParseTypeParameters();
 
         return ParseEnumBody(nameToken.Text, nameToken.Span, typeParameters, enumKeyword.Span, directives);
@@ -442,20 +442,30 @@ public class Parser
         var typeKeyword = Eat(TokenKind.Identifier); // contextual keyword "type"
         var nameToken = Eat(TokenKind.Identifier);
 
-        // Parse optional generic type parameters: (T, U, V)
-        var typeParameters = ParseTypeParameters();
+        // Type parameters on the name is now an error — they belong on struct/enum
+        if (_currentToken.Kind == TokenKind.OpenParenthesis)
+        {
+            _diagnostics.Add(Diagnostic.Error(
+                "type parameters belong on `struct`/`enum`, not the type name",
+                _currentToken.Span,
+                hint: $"use `type {nameToken.Text} = struct(...) {{ ... }}` instead",
+                code: "E1052"));
+            ParseTypeParameters(); // consume for error recovery
+        }
 
         Eat(TokenKind.Equals);
 
         if (_currentToken.Kind == TokenKind.Struct)
         {
             Eat(TokenKind.Struct);
+            var typeParameters = ParseTypeParameters();
             return ParseStructBody(nameToken.Text, nameToken.Span, typeParameters, typeKeyword.Span, directives);
         }
 
         if (_currentToken.Kind == TokenKind.Enum)
         {
             Eat(TokenKind.Enum);
+            var typeParameters = ParseTypeParameters();
             return ParseEnumBody(nameToken.Text, nameToken.Span, typeParameters, typeKeyword.Span, directives);
         }
 
@@ -466,7 +476,7 @@ public class Parser
             "E1002"));
 
         // Return a dummy struct node to avoid null
-        return ParseStructBody(nameToken.Text, nameToken.Span, typeParameters, typeKeyword.Span, directives);
+        return ParseStructBody(nameToken.Text, nameToken.Span, [], typeKeyword.Span, directives);
     }
 
     /// <summary>
@@ -2028,28 +2038,12 @@ public class Parser
         {
             Eat(TokenKind.Semicolon);
 
-            // Consume the count token - check for integer type specifically for E1005
-            var countToken = _currentToken;
-            _currentToken = _lexer.NextToken();
-
-            int count = 0;
-            if (countToken.Kind != TokenKind.Integer || !int.TryParse(countToken.Text, out count))
-            {
-                _diagnostics.Add(Diagnostic.Error(
-                    $"invalid array repeat count `{countToken.Text}`",
-                    countToken.Span,
-                    "repeat count must be an integer literal",
-                    "E1005"));
-                // Skip remaining tokens until we find the closing bracket
-                while (_currentToken.Kind != TokenKind.CloseBracket &&
-                       _currentToken.Kind != TokenKind.EndOfFile)
-                    _currentToken = _lexer.NextToken();
-            }
+            var countExpr = ParseExpression();
 
             var closeBracket = Eat(TokenKind.CloseBracket);
 
             var span = SourceSpan.Combine(openBracket.Span, closeBracket.Span);
-            return new ArrayLiteralExpressionNode(span, firstElement, count);
+            return new ArrayLiteralExpressionNode(span, firstElement, countExpr);
         }
 
         // Regular array literal: [elem1, elem2, ...]

@@ -6,7 +6,7 @@
 import std.io.writer
 
 // Sink: counts bytes written
-struct Sink {
+type Sink = struct {
     total: usize
 }
 

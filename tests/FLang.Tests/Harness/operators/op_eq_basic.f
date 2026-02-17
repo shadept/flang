@@ -3,7 +3,7 @@
 
 // Test op_eq for struct
 
-struct Point {
+type Point = struct {
     x: i32
 }
 

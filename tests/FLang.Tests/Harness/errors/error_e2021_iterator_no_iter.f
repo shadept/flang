@@ -1,7 +1,7 @@
 //! TEST: iterator_error_no_iter
 //! COMPILE-ERROR: E2021
 
-struct NoIterator {
+type NoIterator = struct {
     value: i32
 }
 

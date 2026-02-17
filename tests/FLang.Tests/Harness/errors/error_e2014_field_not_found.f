@@ -1,7 +1,7 @@
 //! TEST: error_e2014_field_not_found
 //! COMPILE-ERROR: E2014
 
-struct Point {
+type Point = struct {
     x: i32
     y: i32
 }

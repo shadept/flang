@@ -8,8 +8,8 @@ import std.string
 
 pub type StringBuilder = struct {
     ptr: &u8
-    len: usize
     cap: usize
+    len: usize
     allocator: &Allocator?
 }
 

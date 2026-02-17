@@ -1,7 +1,7 @@
 //! TEST: error_e2075_match_arm_mismatch
 //! COMPILE-ERROR: E2075
 
-enum Color { Red, Blue }
+type Color = enum { Red, Blue }
 fn get_int() i32 { return 42 }
 
 pub fn main() i32 {

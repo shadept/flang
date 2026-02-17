@@ -4,7 +4,7 @@
 // Small structs (<= 8 bytes) are passed/returned by value (register).
 // Mutations in callee must not affect caller.
 
-struct Pair {
+type Pair = struct {
     x: i32,
     y: i32
 }

@@ -2,7 +2,7 @@
 //! COMPILE-ERROR: E2035
 
 // Error: Enum cannot contain itself directly (infinite size)
-enum Bad {
+type Bad = enum {
     Value(i32)
     Recursive(Bad)
 }

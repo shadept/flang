@@ -1,7 +1,7 @@
 //! TEST: enum_naked_auto_increment
 //! EXIT: 7
 
-enum Example {
+type Example = enum {
     A
     B
     C = 6

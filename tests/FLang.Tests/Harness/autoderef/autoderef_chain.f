@@ -2,11 +2,11 @@
 //! EXIT: 77
 
 // Define in dependency order for C codegen
-struct Inner {
+type Inner = struct {
     value: i32
 }
 
-struct Outer {
+type Outer = struct {
     inner: Inner
 }
 

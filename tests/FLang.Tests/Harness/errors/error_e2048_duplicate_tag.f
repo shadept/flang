@@ -1,7 +1,7 @@
 //! TEST: error_e2048_duplicate_tag
 //! COMPILE-ERROR: E2048
 
-enum Bad {
+type Bad = enum {
     A = 1
     B = 1
 }

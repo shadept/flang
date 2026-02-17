@@ -4,7 +4,7 @@
 // After copy-on-write triggers, all subsequent reads and writes
 // must use the shadow copy, not the original by-ref pointer.
 
-struct Config {
+type Config = struct {
     width: i32,
     height: i32,
     depth: i32

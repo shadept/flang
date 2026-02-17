@@ -1,7 +1,7 @@
 //! TEST: iterator_custom_fibonacci
 //! EXIT: 20
 
-struct Fibonacci {
+type Fibonacci = struct {
     a: u64
     b: u64
     max: u64

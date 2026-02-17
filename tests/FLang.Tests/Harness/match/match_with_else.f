@@ -1,7 +1,7 @@
 //! TEST: match_with_else
 //! EXIT: 10
 
-enum Command {
+type Command = enum {
     Quit
     Move(i32, i32)
     Write(i32)

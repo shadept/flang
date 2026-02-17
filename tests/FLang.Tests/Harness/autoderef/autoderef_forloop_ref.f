@@ -3,7 +3,7 @@
 
 import std.list
 
-struct Node {
+type Node = struct {
     value: i32
 }
 

@@ -1,7 +1,7 @@
 //! TEST: type_enum_generic
 //! EXIT: 42
 
-type Maybe(T) = enum {
+type Maybe = enum(T) {
     Just(T)
     Nothing
 }

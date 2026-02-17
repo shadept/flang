@@ -4,7 +4,7 @@
 // Explicit &T references allow callee to mutate caller's storage.
 // Contrast with implicit pass-by-value semantics.
 
-struct Counter {
+type Counter = struct {
     count: i32
 }
 

@@ -1,7 +1,7 @@
 //! TEST: error_e2002_type_mismatch
 //! COMPILE-ERROR: E2002 expected `i32`, got `Foo`
 
-struct Foo { x: i32 }
+type Foo = struct { x: i32 }
 
 pub fn returns_foo() Foo {
     return .{ x = 42 }

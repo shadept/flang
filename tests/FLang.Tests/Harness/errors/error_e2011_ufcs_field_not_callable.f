@@ -1,7 +1,7 @@
 //! TEST: error_e2011_ufcs_field_not_callable
 //! COMPILE-ERROR: E2011
 
-struct Fba {
+type Fba = struct {
     allocator: i32
 }
 

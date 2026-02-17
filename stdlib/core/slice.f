@@ -3,7 +3,7 @@ import core.range
 
 // A view into a contiguous sequence of elements of type T.
 // A Slice does not own ptr.
-pub struct Slice(T) {
+pub type Slice = struct(T) {
     ptr: &T
     len: usize
 }
@@ -59,7 +59,7 @@ pub fn op_set_index(s: &Slice($T), index: usize, value: T) {
 
 // Slice Iterator
 // Iterates over slices T[]
-pub struct SliceIterator(T) {
+pub type SliceIterator = struct(T) {
     ptr: T[]
     index: usize
     len: usize

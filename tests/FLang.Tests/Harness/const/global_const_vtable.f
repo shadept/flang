@@ -1,7 +1,7 @@
 //! TEST: global_const_vtable
 //! EXIT: 7
 
-struct Operations {
+type Operations = struct {
     add: fn(i32, i32) i32
     sub: fn(i32, i32) i32
 }

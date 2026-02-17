@@ -1,11 +1,11 @@
 //! TEST: iterator_error_next_wrong_return_struct
 //! COMPILE-ERROR: E2025
 
-struct BadIterator {
+type BadIterator = struct {
     value: i32
 }
 
-struct WrongReturn {
+type WrongReturn = struct {
     val: i32
 }
 

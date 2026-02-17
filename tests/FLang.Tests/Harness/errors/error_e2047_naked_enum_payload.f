@@ -1,7 +1,7 @@
 //! TEST: error_e2047_naked_enum_payload
 //! COMPILE-ERROR: E2047
 
-enum Bad {
+type Bad = enum {
     A = 0
     B(i32)
 }

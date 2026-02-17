@@ -1,7 +1,7 @@
 //! TEST: match_error_non_exhaustive
 //! COMPILE-ERROR: E2031
 
-enum Value {
+type Value = enum {
     None
     Some(i32)
     Error(i32)

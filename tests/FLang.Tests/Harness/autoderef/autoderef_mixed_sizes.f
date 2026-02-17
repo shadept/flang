@@ -1,7 +1,7 @@
 //! TEST: autoderef_mixed_sizes
 //! EXIT: 77
 
-struct Mixed {
+type Mixed = struct {
     a: u8,
     b: i32,
     c: u8,

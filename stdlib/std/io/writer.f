@@ -13,7 +13,7 @@ import std.mem
 // Returns the number of bytes actually written.
 // ctx: opaque pointer to the underlying resource (fd, handle, etc.)
 // data: slice of bytes to write
-pub struct WriteFn {
+pub type WriteFn = struct {
     ctx: &u8
     write: fn(ctx: &u8, data: u8[]) usize
 }
@@ -22,7 +22,7 @@ pub struct WriteFn {
 // Writes accumulate in buf[0..pos]. When pos reaches cap, the buffer
 // auto-flushes via the write function. Explicit flush() drains
 // any remaining bytes.
-pub struct Writer {
+pub type Writer = struct {
     write_fn: WriteFn
     buf: u8[]
     pos: usize

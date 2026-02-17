@@ -1,7 +1,7 @@
 //! TEST: enum_naked_negative
 //! EXIT: 1
 
-enum Sign {
+type Sign = enum {
     Negative = -1
     Zero = 0
     Positive = 1

@@ -1,7 +1,7 @@
 //! TEST: enum_construction_payload
 //! EXIT: 55
 
-enum Command {
+type Command = enum {
     Quit
     Move(i32, i32)
     Write(i32)

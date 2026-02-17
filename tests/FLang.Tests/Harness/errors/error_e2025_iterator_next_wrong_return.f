@@ -1,7 +1,7 @@
 //! TEST: iterator_error_next_wrong_return
 //! COMPILE-ERROR: E2025
 
-struct BadIterator {
+type BadIterator = struct {
     value: i32
 }
 
