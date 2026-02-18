@@ -192,17 +192,18 @@ public sealed record NominalType(string Name, NominalKind Kind, IReadOnlyList<Ty
     public override string ToString()
     {
         var displayName = ShortName;
+
         if (TypeArguments.Count == 0) return displayName;
-        var sb = new StringBuilder();
-        sb.Append(displayName);
-        sb.Append('(');
+        var sb2 = new StringBuilder();
+        sb2.Append(displayName);
+        sb2.Append('(');
         for (var i = 0; i < TypeArguments.Count; i++)
         {
-            if (i > 0) sb.Append(", ");
-            sb.Append(TypeArguments[i]);
+            if (i > 0) sb2.Append(", ");
+            sb2.Append(TypeArguments[i]);
         }
-        sb.Append(')');
-        return sb.ToString();
+        sb2.Append(')');
+        return sb2.ToString();
     }
 }
 

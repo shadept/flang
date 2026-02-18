@@ -835,12 +835,16 @@ public class HmAstLowering
         switch (type)
         {
             case IrStruct s:
-                if (collected.Add(s.CName))
+                // Resolve through the layout cache to get the canonical struct.
+                // During recursive lowering, pointer pointees may hold stale stubs
+                // with empty fields — the cache always has the final version.
+                var resolved = _layout.ResolveStruct(s);
+                if (collected.Add(resolved.CName))
                 {
                     // Collect field types first (dependencies)
-                    foreach (var f in s.Fields)
+                    foreach (var f in resolved.Fields)
                         CollectIrType(f.Type, collected);
-                    _module.TypeDefs.Add(s);
+                    _module.TypeDefs.Add(resolved);
                 }
                 break;
             case IrEnum e:
@@ -948,6 +952,11 @@ public class HmAstLowering
             _locals["__ret"] = retLocal;
             _parameters.Add("__ret");
         }
+
+        // Pre-create allocas for parameters that are assigned to in the body.
+        // This ensures ALL reads (including those textually before the assignment,
+        // e.g. in a loop condition) go through the alloca, not the original param.
+        PromoteMutatedParameters(fn.Body);
 
         // Lower body statements — the last expression-statement in a non-void
         // function is an implicit return value.
@@ -3991,6 +4000,105 @@ public class HmAstLowering
 
         var irType = GetIrType(lambda);
         return new FunctionReferenceValue(lambda.SynthesizedFunction.Name, irType);
+    }
+
+    // =========================================================================
+    // Parameter mutation pre-scan
+    // =========================================================================
+
+    /// <summary>
+    /// Scans the function body for assignments to parameters and eagerly creates
+    /// allocas for them. This ensures all reads (including those in loop conditions
+    /// textually before the assignment) go through the alloca, not the original param.
+    /// </summary>
+    private void PromoteMutatedParameters(IReadOnlyList<StatementNode> body)
+    {
+        var mutated = new HashSet<string>();
+        CollectMutatedParams(body, mutated);
+
+        foreach (var name in mutated)
+        {
+            if (!_parameters.Contains(name) || !_locals.TryGetValue(name, out var localVal))
+                continue;
+
+            if (_byRefParams.Contains(name))
+            {
+                var innerType = ((IrPointer)localVal.IrType!).Pointee;
+                var alloca = new LocalValue($"{name}_mut", new IrPointer(innerType));
+                var tmpLoad = new LocalValue($"t{_tempCounter++}", innerType);
+                _currentBlock.Instructions.Add(new AllocaInstruction(_currentSpan, innerType.Size, alloca));
+                _currentBlock.Instructions.Add(new LoadInstruction(_currentSpan, localVal, tmpLoad));
+                _currentBlock.Instructions.Add(new StorePointerInstruction(_currentSpan, alloca, tmpLoad));
+                _locals[name] = alloca;
+                _parameters.Remove(name);
+                _byRefParams.Remove(name);
+            }
+            else
+            {
+                var paramIrType = localVal.IrType ?? TypeLayoutService.IrVoidPrim;
+                var allocaP = new LocalValue($"{name}_mut", new IrPointer(paramIrType));
+                _currentBlock.Instructions.Add(new AllocaInstruction(_currentSpan, paramIrType.Size, allocaP));
+                _currentBlock.Instructions.Add(new StorePointerInstruction(_currentSpan, allocaP, localVal));
+                _locals[name] = allocaP;
+                _parameters.Remove(name);
+            }
+        }
+    }
+
+    private void CollectMutatedParams(IReadOnlyList<StatementNode> stmts, HashSet<string> mutated)
+    {
+        foreach (var stmt in stmts)
+            CollectMutatedParamsStmt(stmt, mutated);
+    }
+
+    private void CollectMutatedParamsStmt(StatementNode stmt, HashSet<string> mutated)
+    {
+        switch (stmt)
+        {
+            case ExpressionStatementNode es:
+                CollectMutatedParamsExpr(es.Expression, mutated);
+                break;
+            case ReturnStatementNode ret:
+                if (ret.Expression != null) CollectMutatedParamsExpr(ret.Expression, mutated);
+                break;
+            case VariableDeclarationNode vd:
+                if (vd.Initializer != null) CollectMutatedParamsExpr(vd.Initializer, mutated);
+                break;
+            case LoopNode loop:
+                CollectMutatedParamsExpr(loop.Body, mutated);
+                break;
+            case ForLoopNode forLoop:
+                CollectMutatedParamsExpr(forLoop.Body, mutated);
+                break;
+            case DeferStatementNode defer:
+                CollectMutatedParamsExpr(defer.Expression, mutated);
+                break;
+        }
+    }
+
+    private void CollectMutatedParamsExpr(ExpressionNode expr, HashSet<string> mutated)
+    {
+        switch (expr)
+        {
+            case AssignmentExpressionNode assign:
+                if (assign.Target is IdentifierExpressionNode id && _parameters.Contains(id.Name))
+                    mutated.Add(id.Name);
+                CollectMutatedParamsExpr(assign.Value, mutated);
+                break;
+            case IfExpressionNode ifExpr:
+                CollectMutatedParamsExpr(ifExpr.Condition, mutated);
+                CollectMutatedParamsExpr(ifExpr.ThenBranch, mutated);
+                if (ifExpr.ElseBranch != null) CollectMutatedParamsExpr(ifExpr.ElseBranch, mutated);
+                break;
+            case BlockExpressionNode block:
+                CollectMutatedParams(block.Statements, mutated);
+                if (block.TrailingExpression != null) CollectMutatedParamsExpr(block.TrailingExpression, mutated);
+                break;
+            case MatchExpressionNode match:
+                foreach (var arm in match.Arms)
+                    CollectMutatedParamsExpr(arm.ResultExpr, mutated);
+                break;
+        }
     }
 
     // =========================================================================

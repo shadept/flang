@@ -468,6 +468,8 @@ public partial class HmTypeChecker
         var savedOperators = new Dictionary<AstNode, ResolvedOperator>(_resolvedOperators);
         var savedSpecCount = _specializations.Count;
         var savedEmittedSpecs = new Dictionary<string, FunctionDeclarationNode>(_emittedSpecs);
+        var savedLiteralsCount = _unsuffixedLiterals.Count;
+        var savedFloatLiteralsCount = _unsuffixedFloatLiterals.Count;
 
         Record(fn, fnType);
         _functionStack.Push(new FunctionContext(fn, returnType));
@@ -496,7 +498,7 @@ public partial class HmTypeChecker
         foreach (var kvp in savedTypes)
             _inferredTypes[kvp.Key] = kvp.Value;
 
-        // Revert specializations, emitted specs, and resolved operators
+        // Revert specializations, emitted specs, resolved operators, and unsuffixed literals
         if (_specializations.Count > savedSpecCount)
             _specializations.RemoveRange(savedSpecCount, _specializations.Count - savedSpecCount);
         _emittedSpecs.Clear();
@@ -504,6 +506,10 @@ public partial class HmTypeChecker
             _emittedSpecs[kvp.Key] = kvp.Value;
         foreach (var kvp in savedOperators)
             _resolvedOperators[kvp.Key] = kvp.Value;
+        if (_unsuffixedLiterals.Count > savedLiteralsCount)
+            _unsuffixedLiterals.RemoveRange(savedLiteralsCount, _unsuffixedLiterals.Count - savedLiteralsCount);
+        if (_unsuffixedFloatLiterals.Count > savedFloatLiteralsCount)
+            _unsuffixedFloatLiterals.RemoveRange(savedFloatLiteralsCount, _unsuffixedFloatLiterals.Count - savedFloatLiteralsCount);
 
         // Filter diagnostics: remove errors that involve placeholder types or
         // missing functions (overload resolution requires concrete types).

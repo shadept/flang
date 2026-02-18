@@ -131,6 +131,18 @@ public partial class HmTypeChecker : INominalTypeRegistry
     private readonly List<(FloatingPointLiteralNode Node, Type TypeVar)> _unsuffixedFloatLiterals = [];
 
     /// <summary>
+    /// Specializations deferred because concreteParams contained unresolved TypeVars.
+    /// Resolved after all module bodies are checked, when TypeVars should be concrete.
+    /// </summary>
+    private readonly List<(FunctionScheme Scheme, Type[] ParamTypes, Type ReturnType, SourceSpan CallSpan, CallExpressionNode CallNode)> _pendingSpecializations = [];
+
+    /// <summary>
+    /// Set by ResolveOverload/ResolveOverloadWithDefaults when specialization is deferred.
+    /// Consumed by InferCall to register the pending specialization with the call node.
+    /// </summary>
+    private (FunctionScheme Scheme, Type[] Params, Type Return)? _deferredSpecInfo;
+
+    /// <summary>
     /// Deprecated type FQNs → optional message. Populated during CollectNominalTypes.
     /// </summary>
     private readonly Dictionary<string, string?> _deprecatedTypes = [];
@@ -552,8 +564,8 @@ public partial class HmTypeChecker : INominalTypeRegistry
 
             if (resolved is FLang.Core.Types.TypeVar)
             {
-                // Default to f64 when no context
-                _engine.Unify(typeVar, WellKnown.F64, node.Span);
+                // Still unresolved after inference — no context to determine concrete type
+                ReportError($"Cannot determine concrete type for float literal `{node.Value}`", node.Span, "E2001");
                 continue;
             }
 
@@ -576,5 +588,27 @@ public partial class HmTypeChecker : INominalTypeRegistry
                 }
             }
         }
+    }
+
+    /// <summary>
+    /// Resolve specializations that were deferred because concreteParams contained TypeVars.
+    /// Call after all module bodies are checked but before ValidatePostInference.
+    /// </summary>
+    public void ResolvePendingSpecializations()
+    {
+        foreach (var (scheme, paramTypes, returnType, callSpan, callNode) in _pendingSpecializations)
+        {
+            var resolvedParams = paramTypes.Select(p => _engine.Resolve(p)).ToArray();
+            var resolvedReturn = _engine.Resolve(returnType);
+
+            // If any param is still a TypeVar, skip — ValidatePostInference will report E2001
+            if (resolvedParams.Any(p => p is FLang.Core.Types.TypeVar) || resolvedReturn is FLang.Core.Types.TypeVar)
+                continue;
+
+            var specialized = EnsureSpecialization(scheme, resolvedParams, resolvedReturn, callSpan);
+            if (specialized != null)
+                callNode.ResolvedTarget = specialized;
+        }
+        _pendingSpecializations.Clear();
     }
 }

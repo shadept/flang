@@ -60,6 +60,22 @@ public class TypeLayoutService(ITypeResolver engine, INominalTypeRegistry nomina
     };
 
     /// <summary>
+    /// Resolve an IrStruct that may be a stale stub (empty fields from cycle-breaking)
+    /// to the canonical version from the cache. Returns the input if not a stub.
+    /// </summary>
+    public IrStruct ResolveStruct(IrStruct s)
+    {
+        if (s.Fields.Length > 0) return s;
+        // Look up by CName in the cache
+        foreach (var cached in _cache.Values)
+        {
+            if (cached is IrStruct cs && cs.CName == s.CName && cs.Fields.Length > 0)
+                return cs;
+        }
+        return s; // Genuinely empty struct
+    }
+
+    /// <summary>
     /// Lower an HM Type to an IrType with fully computed layout.
     /// The type should be fully resolved/zonked before calling this.
     /// </summary>
@@ -295,16 +311,44 @@ public class TypeLayoutService(ITypeResolver engine, INominalTypeRegistry nomina
 
     private string BuildCacheKey(NominalType nt)
     {
-        if (nt.TypeArguments.Count == 0)
-            return nt.Name;
+        var sb = new StringBuilder();
+        AppendTypeCacheKey(sb, nt);
+        return sb.ToString();
+    }
 
-        var parts = new List<string> { nt.Name };
-        foreach (var ta in nt.TypeArguments)
+    /// <summary>
+    /// Append a unique cache key for a type. For anonymous types (tuples),
+    /// includes resolved field types to distinguish e.g. (i64, usize) from (u64, usize).
+    /// </summary>
+    private void AppendTypeCacheKey(StringBuilder sb, Type type)
+    {
+        if (type is NominalType nt)
         {
-            var resolved = _engine.Resolve(ta);
-            parts.Add(resolved.ToString()!);
+            sb.Append(nt.Name);
+            if (nt.TypeArguments.Count > 0)
+            {
+                sb.Append('|');
+                for (int i = 0; i < nt.TypeArguments.Count; i++)
+                {
+                    if (i > 0) sb.Append(',');
+                    AppendTypeCacheKey(sb, _engine.Resolve(nt.TypeArguments[i]));
+                }
+            }
+            else if (nt.Name.StartsWith("__anon_") && nt.FieldsOrVariants.Count > 0)
+            {
+                sb.Append('{');
+                for (int i = 0; i < nt.FieldsOrVariants.Count; i++)
+                {
+                    if (i > 0) sb.Append(',');
+                    AppendTypeCacheKey(sb, _engine.Resolve(nt.FieldsOrVariants[i].Type));
+                }
+                sb.Append('}');
+            }
         }
-        return string.Join("|", parts);
+        else
+        {
+            sb.Append(type);
+        }
     }
 
     /// <summary>
@@ -342,7 +386,7 @@ public class TypeLayoutService(ITypeResolver engine, INominalTypeRegistry nomina
                 // Check all 5 conditions in one single pass through the string
                 span[i] = c switch
                 {
-                    '.' or '[' or ']' or ',' or ' ' or '|' or '&' or '(' or ')' => '_',
+                    '.' or '[' or ']' or ',' or ' ' or '|' or '&' or '(' or ')' or '{' or '}' or '?' => '_',
                     _ => c
                 };
             }

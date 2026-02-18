@@ -4,6 +4,8 @@
 // with any output target (stdout, file, StringBuilder, etc.).
 
 import std.io.writer
+import std.string_builder
+import std.test
 
 // =============================================================================
 // Terminal Size
@@ -278,4 +280,102 @@ fn write_uint(w: &Writer, value: u32) {
     }
 
     w.write(buf[pos..])
+}
+
+// =============================================================================
+// Tests
+// =============================================================================
+
+test "escape codes" {
+    let sb = string_builder(64)
+    let w = sb.writer()
+
+    // move_to(3, 5) -> ESC [ 3 ; 5 H
+    move_to(&w, 3, 5)
+    w.flush()
+    let view = sb.as_view()
+    assert_eq(view.len as i32, 6, "move_to len")
+    assert_eq(view[0], 27u8, "ESC")
+    assert_eq(view[1], 91u8, "[")
+    assert_eq(view[2], 51u8, "3")
+    assert_eq(view[3], 59u8, ";")
+    assert_eq(view[4], 53u8, "5")
+    assert_eq(view[5], 72u8, "H")
+    sb.clear()
+
+    // reset -> ESC [ 0 m
+    reset(&w)
+    w.flush()
+    let view2 = sb.as_view()
+    assert_eq(view2.len as i32, 4, "reset len")
+    assert_eq(view2[0], 27u8, "ESC")
+    assert_eq(view2[1], 91u8, "[")
+    assert_eq(view2[2], 48u8, "0")
+    assert_eq(view2[3], 109u8, "m")
+    sb.clear()
+
+    // move_up(1) -> ESC [ 1 A
+    move_up(&w, 1)
+    w.flush()
+    let view3 = sb.as_view()
+    assert_eq(view3.len as i32, 4, "move_up len")
+    assert_eq(view3[2], 49u8, "1")
+    assert_eq(view3[3], 65u8, "A")
+    sb.clear()
+
+    // clear_screen -> ESC [ 2 J
+    clear_screen(&w)
+    w.flush()
+    let view4 = sb.as_view()
+    assert_eq(view4.len as i32, 4, "clear_screen len")
+    assert_eq(view4[2], 50u8, "2")
+    assert_eq(view4[3], 74u8, "J")
+
+    sb.deinit()
+}
+
+test "colors" {
+    let sb = string_builder(64)
+    let w = sb.writer()
+
+    // set_fg(Color.Red) -> ESC [ 3 1 m
+    set_fg(&w, Color.Red)
+    w.flush()
+    let view = sb.as_view()
+    assert_eq(view.len as i32, 5, "set_fg len")
+    assert_eq(view[0], 27u8, "ESC")
+    assert_eq(view[1], 91u8, "[")
+    assert_eq(view[2], 51u8, "3")
+    assert_eq(view[3], 49u8, "1")
+    assert_eq(view[4], 109u8, "m")
+    sb.clear()
+
+    // set_bg(Color.Blue) -> ESC [ 4 4 m
+    set_bg(&w, Color.Blue)
+    w.flush()
+    let view2 = sb.as_view()
+    assert_eq(view2.len as i32, 5, "set_bg len")
+    assert_eq(view2[2], 52u8, "4")
+    assert_eq(view2[3], 52u8, "4")
+    assert_eq(view2[4], 109u8, "m")
+    sb.clear()
+
+    // set_style(Style.Bold) -> ESC [ 1 m
+    set_style(&w, Style.Bold)
+    w.flush()
+    let view3 = sb.as_view()
+    assert_eq(view3.len as i32, 4, "set_style len")
+    assert_eq(view3[2], 49u8, "1")
+    assert_eq(view3[3], 109u8, "m")
+    sb.clear()
+
+    // set_fg(Color.Default) -> ESC [ 3 9 m
+    set_fg(&w, Color.Default)
+    w.flush()
+    let view4 = sb.as_view()
+    assert_eq(view4.len as i32, 5, "set_fg default len")
+    assert_eq(view4[2], 51u8, "3")
+    assert_eq(view4[3], 57u8, "9")
+
+    sb.deinit()
 }

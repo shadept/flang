@@ -184,6 +184,8 @@ public class FLangWorkspace
                 }
                 FLangLanguageServer.Log($"  [checkBodies] {sw.ElapsedMilliseconds - lap}ms");
 
+                hmChecker.ResolvePendingSpecializations();
+
                 lap = sw.ElapsedMilliseconds;
                 hmChecker.ValidatePostInference();
                 FLangLanguageServer.Log($"  [validatePost] {sw.ElapsedMilliseconds - lap}ms");

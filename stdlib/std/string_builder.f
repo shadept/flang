@@ -6,6 +6,7 @@ import std.io.writer
 import std.allocator
 import std.string
 import std.conv
+import std.test
 
 pub type StringBuilder = struct {
     ptr: &u8
@@ -208,15 +209,15 @@ fn append_signed_impl(sb: &StringBuilder, value: i64, spec: String, bits: u64) {
 
     // For non-decimal formats, mask to original type width and show as unsigned
     // NOTE: requires bitwise AND operator to work correctly
-    if (fmt.base != 10) {
+    if fmt.base != 10 {
         const masked = (value as u64) & mask_for_bits(bits)
         append_unsigned_with_base(sb, masked, fmt.base, fmt.uppercase)
         return
     }
 
     // Decimal format: use format_int from std.conv
-    let buf = [0u8; 21]
-    const len = format_i64(value, buf, 10).unwrap()
+    let buf = [0; 21]
+    const len = format_i64(value, buf).unwrap()
     sb.append_bytes(buf[0..len])
 }
 
@@ -402,4 +403,326 @@ pub fn writer(sb: &StringBuilder) Writer {
     const wfn = WriteFn { ctx = sb as &u8, write = sb_write }
     const storage = [0; 0]
     return writer(wfn, storage)
+}
+
+// =============================================================================
+// Tests
+// =============================================================================
+
+fn expect_view(sb: &StringBuilder, expected: String, msg: String) {
+    const view = sb.as_view()
+    assert_true(view.len == expected.len, msg)
+    for i in 0..view.len {
+        assert_true(view[i] == expected[i], msg)
+    }
+}
+
+test "append integers" {
+    let buf = [0u8; 256]
+    let fba = fixed_buffer_allocator(buf)
+    let alloc = fba.allocator()
+    let sb = string_builder(allocator=&alloc)
+
+    sb.append(0i32)
+    expect_view(&sb, "0", "zero")
+    sb.clear()
+
+    sb.append(42i32)
+    expect_view(&sb, "42", "positive i32")
+    sb.clear()
+
+    sb.append(-123i32)
+    expect_view(&sb, "-123", "negative i32")
+    sb.clear()
+
+    sb.append(255u8)
+    expect_view(&sb, "255", "u8 max")
+    sb.clear()
+
+    sb.append(65535u16)
+    expect_view(&sb, "65535", "u16 max")
+    sb.clear()
+
+    sb.append(4294967295u32)
+    expect_view(&sb, "4294967295", "u32 max")
+    sb.clear()
+
+    sb.append(9223372036854775807i64)
+    expect_view(&sb, "9223372036854775807", "i64 max")
+    sb.clear()
+
+    sb.append(-9223372036854775807i64)
+    expect_view(&sb, "-9223372036854775807", "large negative i64")
+}
+
+test "append bool and string" {
+    let buf = [0u8; 256]
+    let fba = fixed_buffer_allocator(buf)
+    let alloc = fba.allocator()
+    let sb = string_builder(allocator=&alloc)
+
+    sb.append(true)
+    expect_view(&sb, "true", "bool true")
+    sb.clear()
+
+    sb.append(false)
+    expect_view(&sb, "false", "bool false")
+    sb.clear()
+
+    sb.append("hello ")
+    sb.append("world")
+    expect_view(&sb, "hello world", "string append")
+    sb.clear()
+
+    sb.append("abc")
+    sb.append(123i32)
+    expect_view(&sb, "abc123", "mixed string and int")
+}
+
+test "append all int sizes" {
+    let buf = [0u8; 512]
+    let fba = fixed_buffer_allocator(buf)
+    let alloc = fba.allocator()
+    let sb = string_builder(allocator=&alloc)
+
+    sb.append("u8: ")
+    sb.append(0u8)
+    sb.append(" ")
+    sb.append(127u8)
+    sb.append(" ")
+    sb.append(255u8)
+    expect_view(&sb, "u8: 0 127 255", "u8 sizes")
+    sb.clear()
+
+    sb.append("i8: ")
+    sb.append(0i8)
+    sb.append(" ")
+    sb.append(127i8)
+    sb.append(" ")
+    sb.append(-128i8)
+    expect_view(&sb, "i8: 0 127 -128", "i8 sizes")
+    sb.clear()
+
+    sb.append("u16: ")
+    sb.append(0u16)
+    sb.append(" ")
+    sb.append(32767u16)
+    sb.append(" ")
+    sb.append(65535u16)
+    expect_view(&sb, "u16: 0 32767 65535", "u16 sizes")
+    sb.clear()
+
+    sb.append("i16: ")
+    sb.append(0i16)
+    sb.append(" ")
+    sb.append(32767i16)
+    sb.append(" ")
+    sb.append(-32768i16)
+    expect_view(&sb, "i16: 0 32767 -32768", "i16 sizes")
+    sb.clear()
+
+    sb.append("u32: ")
+    sb.append(0u32)
+    sb.append(" ")
+    sb.append(2147483647u32)
+    sb.append(" ")
+    sb.append(4294967295u32)
+    expect_view(&sb, "u32: 0 2147483647 4294967295", "u32 sizes")
+    sb.clear()
+
+    sb.append("i32: ")
+    sb.append(0i32)
+    sb.append(" ")
+    sb.append(2147483647i32)
+    sb.append(" ")
+    sb.append(-2147483648i32)
+    expect_view(&sb, "i32: 0 2147483647 -2147483648", "i32 sizes")
+}
+
+test "append format hex" {
+    let buf = [0u8; 256]
+    let fba = fixed_buffer_allocator(buf)
+    let alloc = fba.allocator()
+    let sb = string_builder(allocator=&alloc)
+
+    sb.append(255u8, "x")
+    expect_view(&sb, "ff", "u8 hex lower")
+    sb.clear()
+
+    sb.append(255u8, "X")
+    expect_view(&sb, "FF", "u8 hex upper")
+    sb.clear()
+
+    sb.append(3735928559u32, "x")
+    expect_view(&sb, "deadbeef", "u32 hex")
+    sb.clear()
+
+    sb.append(3735928559u32, "X")
+    expect_view(&sb, "DEADBEEF", "u32 hex upper")
+    sb.clear()
+
+    sb.append(0u32, "x")
+    expect_view(&sb, "0", "zero hex")
+    sb.clear()
+
+    sb.append(9223372036854775807i64, "x")
+    expect_view(&sb, "7fffffffffffffff", "i64 max hex")
+}
+
+test "append format octal binary" {
+    let buf = [0u8; 256]
+    let fba = fixed_buffer_allocator(buf)
+    let alloc = fba.allocator()
+    let sb = string_builder(allocator=&alloc)
+
+    sb.append(255u8, "o")
+    expect_view(&sb, "377", "u8 octal")
+    sb.clear()
+
+    sb.append(255u8, "b")
+    expect_view(&sb, "11111111", "u8 binary")
+    sb.clear()
+
+    sb.append(42u8, "o")
+    expect_view(&sb, "52", "42 octal")
+    sb.clear()
+
+    sb.append(42u8, "b")
+    expect_view(&sb, "101010", "42 binary")
+    sb.clear()
+
+    sb.append(0u8, "o")
+    expect_view(&sb, "0", "zero octal")
+    sb.clear()
+
+    sb.append(0u8, "b")
+    expect_view(&sb, "0", "zero binary")
+}
+
+test "append signed hex" {
+    let buf = [0u8; 256]
+    let fba = fixed_buffer_allocator(buf)
+    let alloc = fba.allocator()
+    let sb = string_builder(allocator=&alloc)
+
+    sb.append(-1i32, "x")
+    expect_view(&sb, "ffffffff", "i32 -1 hex")
+    sb.clear()
+
+    sb.append(-123i64, "x")
+    expect_view(&sb, "ffffffffffffff85", "i64 -123 hex")
+    sb.clear()
+
+    sb.append(42i32, "x")
+    expect_view(&sb, "2a", "i32 42 hex")
+}
+
+test "append signed hex all sizes" {
+    let buf = [0u8; 512]
+    let fba = fixed_buffer_allocator(buf)
+    let alloc = fba.allocator()
+    let sb = string_builder(allocator=&alloc)
+
+    sb.append(-1i8, "x")
+    expect_view(&sb, "ff", "i8 -1 hex")
+    sb.clear()
+
+    sb.append(-128i8, "x")
+    expect_view(&sb, "80", "i8 -128 hex")
+    sb.clear()
+
+    sb.append(-1i16, "x")
+    expect_view(&sb, "ffff", "i16 -1 hex")
+    sb.clear()
+
+    sb.append(-32768i16, "x")
+    expect_view(&sb, "8000", "i16 min hex")
+    sb.clear()
+
+    sb.append(-1i32, "x")
+    expect_view(&sb, "ffffffff", "i32 -1 hex")
+    sb.clear()
+
+    sb.append(-2147483648i32, "x")
+    expect_view(&sb, "80000000", "i32 min hex")
+    sb.clear()
+
+    sb.append(-1i64, "x")
+    expect_view(&sb, "ffffffffffffffff", "i64 -1 hex")
+    sb.clear()
+
+    sb.append(-9223372036854775808i64, "x")
+    expect_view(&sb, "8000000000000000", "i64 min hex")
+}
+
+test "append unsigned hex all sizes" {
+    let buf = [0u8; 512]
+    let fba = fixed_buffer_allocator(buf)
+    let alloc = fba.allocator()
+    let sb = string_builder(allocator=&alloc)
+
+    sb.append(255u8, "x")
+    expect_view(&sb, "ff", "u8 max hex")
+    sb.clear()
+
+    sb.append(65535u16, "x")
+    expect_view(&sb, "ffff", "u16 max hex")
+    sb.clear()
+
+    sb.append(4294967295u32, "x")
+    expect_view(&sb, "ffffffff", "u32 max hex")
+    sb.clear()
+
+    sb.append(18446744073709551615u64, "x")
+    expect_view(&sb, "ffffffffffffffff", "u64 max hex")
+    sb.clear()
+
+    sb.append(128u8, "x")
+    expect_view(&sb, "80", "u8 high bit")
+    sb.clear()
+
+    sb.append(32768u16, "x")
+    expect_view(&sb, "8000", "u16 high bit")
+    sb.clear()
+
+    sb.append(2147483648u32, "x")
+    expect_view(&sb, "80000000", "u32 high bit")
+}
+
+test "append binary octal all sizes" {
+    let buf = [0u8; 512]
+    let fba = fixed_buffer_allocator(buf)
+    let alloc = fba.allocator()
+    let sb = string_builder(allocator=&alloc)
+
+    sb.append(255u8, "b")
+    expect_view(&sb, "11111111", "u8 max binary")
+    sb.clear()
+
+    sb.append(255u8, "o")
+    expect_view(&sb, "377", "u8 max octal")
+    sb.clear()
+
+    sb.append(65535u16, "b")
+    expect_view(&sb, "1111111111111111", "u16 max binary")
+    sb.clear()
+
+    sb.append(65535u16, "o")
+    expect_view(&sb, "177777", "u16 max octal")
+    sb.clear()
+
+    sb.append(-1i8, "b")
+    expect_view(&sb, "11111111", "i8 -1 binary")
+    sb.clear()
+
+    sb.append(-1i8, "o")
+    expect_view(&sb, "377", "i8 -1 octal")
+    sb.clear()
+
+    sb.append(-1i16, "b")
+    expect_view(&sb, "1111111111111111", "i16 -1 binary")
+    sb.clear()
+
+    sb.append(-1i16, "o")
+    expect_view(&sb, "177777", "i16 -1 octal")
 }

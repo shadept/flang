@@ -120,6 +120,9 @@ public class Compiler
             hmChecker.CheckModuleBodies(kvp.Value, modulePath);
         }
 
+        // Resolve specializations deferred due to unresolved TypeVars
+        hmChecker.ResolvePendingSpecializations();
+
         foreach (var kvp in parsedModules)
         {
             var modulePath = HmTypeChecker.DeriveModulePath(kvp.Key, compilation.IncludePaths, compilation.WorkingDirectory);
@@ -226,12 +229,15 @@ public class Compiler
         try
         {
             process.Start();
+
+            // Read stdout/stderr BEFORE WaitForExit to avoid deadlock when
+            // the pipe buffer fills up (classic .NET Process deadlock).
+            var stdout = process.StandardOutput.ReadToEnd();
+            var stderr = process.StandardError.ReadToEnd();
             process.WaitForExit();
 
             if (process.ExitCode != 0)
             {
-                var stdout = process.StandardOutput.ReadToEnd();
-                var stderr = process.StandardError.ReadToEnd();
                 var errorMsg = $"C compiler ({compilerConfig.Name}) failed:\n{stdout}\n{stderr}";
                 allDiagnostics.Add(Diagnostic.Error(errorMsg, SourceSpan.None, "E0000"));
                 return new CompilationResult(false, null, allDiagnostics, compilation);

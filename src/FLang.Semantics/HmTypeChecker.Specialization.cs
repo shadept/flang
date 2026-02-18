@@ -16,7 +16,7 @@ public partial class HmTypeChecker
     // Generic Function Specialization (Monomorphization)
     // =========================================================================
 
-    private static string BuildSpecKey(string name, Type[] paramTypes)
+    private string BuildSpecKey(string name, Type[] paramTypes)
     {
         var sb = new System.Text.StringBuilder();
         sb.Append(name);
@@ -24,9 +24,46 @@ public partial class HmTypeChecker
         for (var i = 0; i < paramTypes.Length; i++)
         {
             if (i > 0) sb.Append(',');
-            sb.Append(paramTypes[i].ToString());
+            AppendTypeSpecKey(sb, paramTypes[i]);
         }
         return sb.ToString();
+    }
+
+    /// <summary>
+    /// Append a unique string representation of a type for specialization keys.
+    /// For anonymous types (tuples), includes resolved field types to distinguish
+    /// e.g. (i64, usize) from (u64, usize) which share the name __anon__0__1.
+    /// </summary>
+    private void AppendTypeSpecKey(System.Text.StringBuilder sb, Type type)
+    {
+        if (type is NominalType nt)
+        {
+            if (nt.Name.StartsWith("__anon_") && nt.FieldsOrVariants.Count > 0 && nt.TypeArguments.Count == 0)
+            {
+                sb.Append(nt.ShortName);
+                sb.Append('{');
+                for (int i = 0; i < nt.FieldsOrVariants.Count; i++)
+                {
+                    if (i > 0) sb.Append(',');
+                    AppendTypeSpecKey(sb, _engine.Resolve(nt.FieldsOrVariants[i].Type));
+                }
+                sb.Append('}');
+                return;
+            }
+            if (nt.TypeArguments.Count > 0)
+            {
+                sb.Append(nt.ShortName);
+                sb.Append('(');
+                for (int i = 0; i < nt.TypeArguments.Count; i++)
+                {
+                    if (i > 0) sb.Append(", ");
+                    AppendTypeSpecKey(sb, _engine.Resolve(nt.TypeArguments[i]));
+                }
+                sb.Append(')');
+                return;
+            }
+        }
+        sb.Append(type);
     }
 
     /// <summary>

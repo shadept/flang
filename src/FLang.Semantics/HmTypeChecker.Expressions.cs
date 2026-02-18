@@ -602,13 +602,24 @@ public partial class HmTypeChecker
             _engine.Unify(argTypes[i], winnerFn.ParameterTypes[i], span);
 
         // Generic monomorphization
+        _deferredSpecInfo = null;
         FunctionDeclarationNode node;
         if (bestCandidate.Signature.QuantifiedVarIds.Count > 0)
         {
             var concreteParams = winnerFn.ParameterTypes.Select(p => _engine.Resolve(p)).ToArray();
             var concreteReturn = _engine.Resolve(winnerFn.ReturnType);
-            var specialized = EnsureSpecialization(bestCandidate, concreteParams, concreteReturn, span);
-            node = specialized ?? bestCandidate.Node;
+
+            if (concreteParams.Any(p => p is TypeVar) || concreteReturn is TypeVar)
+            {
+                // Defer specialization — TypeVars not yet resolved
+                _deferredSpecInfo = (bestCandidate, concreteParams, concreteReturn);
+                node = bestCandidate.Node;
+            }
+            else
+            {
+                var specialized = EnsureSpecialization(bestCandidate, concreteParams, concreteReturn, span);
+                node = specialized ?? bestCandidate.Node;
+            }
         }
         else
         {
@@ -625,10 +636,18 @@ public partial class HmTypeChecker
     private Type? TryResolveOperator(string opName, Type[] argTypes, SourceSpan span, out FunctionDeclarationNode? resolvedNode)
     {
         resolvedNode = null;
+
+        // Don't resolve user-defined operators when all arguments are unresolved TypeVars.
+        // This prevents incorrect TypeVar binding (e.g., op_eq(String,String) binding
+        // unsuffixed integer TypeVars to String). The builtin operator path handles these.
+        if (argTypes.Length > 0 && argTypes.All(a => _engine.Resolve(a) is TypeVar))
+            return null;
+
         var candidates = LookupFunctions(opName);
         if (candidates == null) return null;
 
         var result = ResolveOverload(candidates, argTypes, span);
+        _deferredSpecInfo = null; // Operators don't use deferred specialization
         if (result == null) return null;
 
         var (_, fnType, node) = result.Value;
@@ -801,13 +820,24 @@ public partial class HmTypeChecker
         }
 
         // Generic monomorphization
+        _deferredSpecInfo = null;
         FunctionDeclarationNode node;
         if (bestCandidate.Signature.QuantifiedVarIds.Count > 0)
         {
             var concreteParams = winnerFn.ParameterTypes.Select(p => _engine.Resolve(p)).ToArray();
             var concreteReturn = _engine.Resolve(winnerFn.ReturnType);
-            var spec = EnsureSpecialization(bestCandidate, concreteParams, concreteReturn, span);
-            node = spec ?? bestCandidate.Node;
+
+            if (concreteParams.Any(p => p is TypeVar) || concreteReturn is TypeVar)
+            {
+                // Defer specialization — TypeVars not yet resolved
+                _deferredSpecInfo = (bestCandidate, concreteParams, concreteReturn);
+                node = bestCandidate.Node;
+            }
+            else
+            {
+                var spec = EnsureSpecialization(bestCandidate, concreteParams, concreteReturn, span);
+                node = spec ?? bestCandidate.Node;
+            }
         }
         else
         {
@@ -1017,6 +1047,12 @@ public partial class HmTypeChecker
                 {
                     var (winner, fnType, node) = result.Value;
                     call.ResolvedTarget = node;
+                    if (_deferredSpecInfo != null)
+                    {
+                        var (scheme, dParams, dReturn) = _deferredSpecInfo.Value;
+                        _pendingSpecializations.Add((scheme, dParams, dReturn, call.Span, call));
+                        _deferredSpecInfo = null;
+                    }
                     BuildResolvedArguments(call, winner.Node, fnType, positionalArgs, namedArgs, ufcsOffset);
                     CheckDeprecatedCall(node, call.Span);
                     return fnType.ReturnType;
@@ -1043,6 +1079,12 @@ public partial class HmTypeChecker
                 {
                     var (_, fnType, node) = result.Value;
                     call.ResolvedTarget = node;
+                    if (_deferredSpecInfo != null)
+                    {
+                        var (scheme, dParams, dReturn) = _deferredSpecInfo.Value;
+                        _pendingSpecializations.Add((scheme, dParams, dReturn, call.Span, call));
+                        _deferredSpecInfo = null;
+                    }
                     CheckDeprecatedCall(node, call.Span);
                     return fnType.ReturnType;
                 }

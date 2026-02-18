@@ -140,9 +140,9 @@ var total = testFiles.Count;
 var current = 0;
 
 var lockObj = new object();
-var results = new (string RelativePath, TestResult Result)[testFiles.Count];
+var results = new (string RelativePath, TestResult Result)[total];
 
-Parallel.For(0, testFiles.Count, new ParallelOptions { MaxDegreeOfParallelism = parallelism },
+Parallel.For(0, total, new ParallelOptions { MaxDegreeOfParallelism = parallelism },
     // Thread-local factory: each thread gets its own TestHarness to avoid shared state
     () => new TestHarness(projectRoot),
     (i, state, localHarness) =>

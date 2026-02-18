@@ -344,15 +344,23 @@ public class TestHarness
 
             exeProcess.Start();
 
-            // Use async read to avoid deadlocks
-            var stdoutTask = exeProcess.StandardOutput.ReadToEndAsync();
-            var stderrTask = exeProcess.StandardError.ReadToEndAsync();
+            // Read stdout/stderr on dedicated threads to avoid both:
+            // 1. Pipe buffer deadlock (must read before/during WaitForExit)
+            // 2. ThreadPool starvation (don't use async tasks in Parallel.For)
+            string stdoutContent = "";
+            string stderrContent = "";
+            var stdoutThread = new Thread(() => stdoutContent = exeProcess.StandardOutput.ReadToEnd());
+            var stderrThread = new Thread(() => stderrContent = exeProcess.StandardError.ReadToEnd());
+            stdoutThread.Start();
+            stderrThread.Start();
 
             var exited = exeProcess.WaitForExit((int)timeout.Value.TotalMilliseconds);
 
             if (!exited)
             {
                 try { exeProcess.Kill(); } catch { }
+                stdoutThread.Join(1000);
+                stderrThread.Join(1000);
                 CleanupGeneratedFiles(cFilePath, generatedExePath, cleanupFiles);
                 return new TestResult(
                     absoluteTestFile,
@@ -362,9 +370,9 @@ public class TestHarness
                     stopwatch.Elapsed);
             }
 
+            stdoutThread.Join();
+            stderrThread.Join();
             var actualExitCode = exeProcess.ExitCode;
-            var stdoutContent = stdoutTask.Result;
-            var stderrContent = stderrTask.Result;
 
             var actualStdout = stdoutContent.Split('\n').Select(s => s.TrimEnd('\r'))
                 .Where(s => !string.IsNullOrEmpty(s)).ToList();
