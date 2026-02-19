@@ -1,0 +1,88 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+  id-token: write
+  attestations: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            rid: win-x64
+          - os: ubuntu-latest
+            rid: linux-x64
+
+    runs-on: ${{ matrix.os }}
+
+    env:
+      NUGET_PACKAGES: ${{ github.workspace }}/.nuget/packages
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Setup .NET 10
+        uses: actions/setup-dotnet@v5
+        with:
+          global-json-file: global.json
+
+      - name: Build compiler
+        run: dotnet run build.cs ${{ matrix.rid }}
+
+      - name: Run test harness
+        run: dotnet run test.cs
+
+      - name: Create distribution zip
+        shell: bash
+        run: |
+          cd dist/${{ matrix.rid }}
+          7z a -tzip ../../flang-${{ matrix.rid }}.zip flang* stdlib/
+
+      - name: Generate SHA256 checksum
+        shell: bash
+        run: |
+          sha256sum flang-${{ matrix.rid }}.zip > flang-${{ matrix.rid }}.zip.sha256
+
+      - name: Attest artifact
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: flang-${{ matrix.rid }}.zip
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: flang-${{ matrix.rid }}
+          path: |
+            flang-${{ matrix.rid }}.zip
+            flang-${{ matrix.rid }}.zip.sha256
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          gh release create "$TAG" \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "FLang $TAG" \
+            --generate-notes \
+            artifacts/flang-win-x64/flang-win-x64.zip \
+            artifacts/flang-win-x64/flang-win-x64.zip.sha256 \
+            artifacts/flang-linux-x64/flang-linux-x64.zip \
+            artifacts/flang-linux-x64/flang-linux-x64.zip.sha256
