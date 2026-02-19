@@ -48,7 +48,7 @@ pub fn string_builder_with_capacity_and_allocator(capacity: usize, allocator: &A
 // Free the backing storage. The builder should not be used after this.
 pub fn deinit(sb: &StringBuilder) {
     if (sb.cap > 0) {
-        sb.allocator.or_global().free(slice_from_raw_parts(sb.ptr, sb.cap))
+        sb.allocator.or_global().dealloc(slice_from_raw_parts(sb.ptr, sb.cap))
     }
     let zero: usize = 0
     sb.ptr = zero as &u8

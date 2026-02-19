@@ -105,7 +105,7 @@ pub type OwnedString = struct {
 }
 
 pub fn deinit(self: &OwnedString) {
-    self.allocator.or_global().free(slice_from_raw_parts(self.ptr, self.len))
+    self.allocator.or_global().dealloc(slice_from_raw_parts(self.ptr, self.len))
     self.ptr = 0usize as &u8
     self.len = 0
 }

@@ -17,6 +17,8 @@ public class Parser
     private Token _currentToken;
     private readonly List<Diagnostic> _diagnostics = [];
     private bool _stopAtBrace; // When true, '{' terminates expression parsing (used for if/for conditions)
+    private readonly List<StructDeclarationNode> _hoistedStructs = [];
+    private readonly List<EnumDeclarationNode> _hoistedEnums = [];
 
     /// <summary>
     /// Initializes a new instance of the <see cref="Parser"/> class.
@@ -72,7 +74,7 @@ public class Parser
                         Eat(TokenKind.Pub);
                         enums.Add(ParseEnumDeclaration(directives));
                     }
-                    else if (nextToken.Kind == TokenKind.Identifier && nextToken.Text == "type")
+                    else if (nextToken.Kind == TokenKind.Type)
                     {
                         Eat(TokenKind.Pub);
                         var decl = ParseTypeDeclaration(directives);
@@ -114,7 +116,7 @@ public class Parser
                 {
                     enums.Add(ParseEnumDeclaration(directives));
                 }
-                else if (_currentToken.Kind == TokenKind.Identifier && _currentToken.Text == "type")
+                else if (_currentToken.Kind == TokenKind.Type)
                 {
                     var decl = ParseTypeDeclaration(directives);
                     if (decl is StructDeclarationNode s) structs.Add(s);
@@ -175,6 +177,10 @@ public class Parser
                 SynchronizeTopLevel();
             }
         }
+
+        // Add any types hoisted from local scopes (e.g., type declarations inside functions/tests)
+        structs.AddRange(_hoistedStructs);
+        enums.AddRange(_hoistedEnums);
 
         var endSpan = _currentToken.Span;
         var span = SourceSpan.Combine(startSpan, endSpan);
@@ -439,7 +445,7 @@ public class Parser
     /// </summary>
     private object ParseTypeDeclaration(List<DirectiveNode>? directives = null)
     {
-        var typeKeyword = Eat(TokenKind.Identifier); // contextual keyword "type"
+        var typeKeyword = Eat(TokenKind.Type);
         var nameToken = Eat(TokenKind.Identifier);
 
         // Type parameters on the name is now an error — they belong on struct/enum
@@ -691,6 +697,18 @@ public class Parser
             case TokenKind.Let:
             case TokenKind.Const:
                 return ParseVariableDeclaration();
+
+            case TokenKind.Type:
+                {
+                    // Local type declaration — hoist to module level
+                    var typeSpan = _currentToken.Span;
+                    var decl = ParseTypeDeclaration();
+                    if (decl is StructDeclarationNode s) _hoistedStructs.Add(s);
+                    else if (decl is EnumDeclarationNode e) _hoistedEnums.Add(e);
+                    // Return a no-op expression statement
+                    return new ExpressionStatementNode(typeSpan,
+                        new IntegerLiteralNode(typeSpan, 0));
+                }
 
             case TokenKind.Return:
                 {
@@ -1165,13 +1183,22 @@ public class Parser
                         return ParseStructConstruction(typeName);
                     }
 
-                    // Check if this is a function call
+                    // Check if this is a function call or generic struct construction: Name(T) { ... }
                     if (_currentToken.Kind == TokenKind.OpenParenthesis)
                     {
                         Eat(TokenKind.OpenParenthesis);
                         var arguments = ParseCallArguments();
                         var closeParenToken = Eat(TokenKind.CloseParenthesis);
                         var callSpan = SourceSpan.Combine(identifierToken.Span, closeParenToken.Span);
+
+                        // If followed by '{', this is generic struct construction: Name(T) { field = value }
+                        if (_currentToken.Kind == TokenKind.OpenBrace && !_stopAtBrace)
+                        {
+                            var typeArgs = ConvertExpressionsToTypeNodes(arguments);
+                            var typeName = new GenericTypeNode(callSpan, identifierToken.Text, typeArgs);
+                            return ParseStructConstruction(typeName);
+                        }
+
                         return new CallExpressionNode(callSpan, identifierToken.Text, arguments);
                     }
 
@@ -1315,7 +1342,7 @@ public class Parser
         return kind is TokenKind.Let or TokenKind.Const or TokenKind.Return
             or TokenKind.Break or TokenKind.Continue or TokenKind.Defer
             or TokenKind.For or TokenKind.If or TokenKind.Loop
-            or TokenKind.OpenBrace;
+            or TokenKind.OpenBrace or TokenKind.Type;
     }
 
     /// <summary>
@@ -1327,7 +1354,8 @@ public class Parser
     {
         return kind is TokenKind.CloseBrace or TokenKind.EndOfFile
             or TokenKind.Let or TokenKind.Const or TokenKind.Return
-            or TokenKind.Break or TokenKind.Continue or TokenKind.Defer;
+            or TokenKind.Break or TokenKind.Continue or TokenKind.Defer
+            or TokenKind.Type;
     }
 
     /// <summary>
@@ -1338,6 +1366,36 @@ public class Parser
     {
         return kind is TokenKind.CloseBracket or TokenKind.CloseParenthesis or TokenKind.Comma
             or TokenKind.CloseBrace or TokenKind.Semicolon or TokenKind.EndOfFile;
+    }
+
+    /// <summary>
+    /// Converts a list of expression nodes (from call argument parsing) to type nodes.
+    /// Used when reinterpreting Name(args) { ... } as generic struct construction.
+    /// </summary>
+    private static List<TypeNode> ConvertExpressionsToTypeNodes(List<ExpressionNode> expressions)
+    {
+        var types = new List<TypeNode>(expressions.Count);
+        foreach (var expr in expressions)
+        {
+            types.Add(ConvertExpressionToTypeNode(expr));
+        }
+        return types;
+    }
+
+    private static TypeNode ConvertExpressionToTypeNode(ExpressionNode expr)
+    {
+        switch (expr)
+        {
+            case IdentifierExpressionNode id:
+                return new NamedTypeNode(id.Span, id.Name);
+            case CallExpressionNode call:
+                // Nested generic: e.g., List(i32) inside Rc(List(i32))
+                var innerArgs = ConvertExpressionsToTypeNodes(call.Arguments);
+                return new GenericTypeNode(call.Span, call.FunctionName, innerArgs);
+            default:
+                // Fallback — use span text as type name
+                return new NamedTypeNode(expr.Span, expr.Span.ToString());
+        }
     }
 
     private sealed class ParserException(Diagnostic diagnostic) : Exception

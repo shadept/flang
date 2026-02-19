@@ -28,7 +28,7 @@ pub type TypeInfo = struct {
 pub type FieldInfo = struct {
     name: String
     offset: usize
-    type: &TypeInfo
+    type_info: &TypeInfo
 }
 
 pub fn type_of(t: Type($T)) TypeInfo {

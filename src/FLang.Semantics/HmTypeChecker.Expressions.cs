@@ -178,7 +178,18 @@ public partial class HmTypeChecker
         {
             // Structs/tuples in expression context are type-as-value (e.g., size_of(Point))
             if (nominal.Kind == NominalKind.Struct || nominal.Kind == NominalKind.Tuple)
+            {
+                // Generic types used bare (without type args) are invalid in expression context
+                if (nominal.TypeArguments.Count > 0
+                    && nominal.TypeArguments.Any(a => _engine.Resolve(a) is TypeVar))
+                {
+                    ReportError(
+                        $"generic type `{id.Name}` requires type arguments in expression context, use `{id.Name}(...)`",
+                        id.Span, "E2104");
+                    return _engine.FreshVar();
+                }
                 return WrapInTypeStruct(nominal);
+            }
             // Enums returned directly for variant access (e.g., FileMode.Read)
             return nominal;
         }
@@ -1098,6 +1109,56 @@ public partial class HmTypeChecker
                 : _engine.FreshVar();
         }
 
+        // Try generic type instantiation in expression context: TypeName(TypeArgs)
+        // e.g., allocator.new(RcInner(T)) — RcInner is a type, not a function
+        if (receiverType == null && namedArgs.Count == 0)
+        {
+            var nominal = LookupNominalType(lookupName);
+            if (nominal != null && (nominal.Kind == NominalKind.Struct || nominal.Kind == NominalKind.Tuple))
+            {
+                var typeNominal = LookupNominalType("Type");
+                var typeArgs = new Type[positionalTypes.Length];
+                bool allTypeArgs = positionalTypes.Length > 0;
+                for (int i = 0; i < positionalTypes.Length; i++)
+                {
+                    var resolved = _engine.Resolve(positionalTypes[i]);
+                    // Unwrap Type(X) wrapper from type-as-value expressions
+                    if (typeNominal != null && resolved is NominalType nt
+                        && nt.Name == typeNominal.Name && nt.TypeArguments.Count == 1)
+                    {
+                        typeArgs[i] = _engine.Resolve(nt.TypeArguments[0]);
+                    }
+                    else
+                    {
+                        allTypeArgs = false;
+                        break;
+                    }
+                }
+
+                if (allTypeArgs)
+                {
+                    // Build substitution from template TypeVars to concrete type args
+                    var subst = new Dictionary<int, Type>();
+                    for (int i = 0; i < Math.Min(typeArgs.Length, nominal.TypeArguments.Count); i++)
+                    {
+                        var templateArg = _engine.Resolve(nominal.TypeArguments[i]);
+                        if (templateArg is TypeVar tv)
+                            subst[tv.Id] = typeArgs[i];
+                    }
+
+                    var fields = subst.Count > 0
+                        ? nominal.FieldsOrVariants
+                            .Select(f => (f.Name, SubstituteTypeVars(f.Type, subst)))
+                            .ToArray()
+                        : nominal.FieldsOrVariants;
+
+                    var instantiated = new NominalType(nominal.Name, nominal.Kind, typeArgs, fields);
+                    call.IsTypeInstantiation = true;
+                    return WrapInTypeStruct(instantiated);
+                }
+            }
+        }
+
         // Try enum variant construction (non-UFCS: bare variant name)
         if (namedArgs.Count == 0)
         {
@@ -1676,6 +1737,15 @@ public partial class HmTypeChecker
             return nominal;
         }
 
+        // Generic structs constructed by name must include type arguments.
+        // e.g., `Rc(i32) { ... }` is valid, `Rc { ... }` is not — use `.{ ... }` for inference.
+        if (nominal.TypeArguments.Count > 0 && structCon.TypeName is NamedTypeNode namedType)
+        {
+            ReportError(
+                $"generic struct `{namedType.Name}` requires type arguments, use `{namedType.Name}(...)` or `.{{ ... }}`",
+                structCon.TypeName.Span, "E2019");
+        }
+
         // Instantiate fresh TypeVars for the struct's generic type parameters.
         // This prevents field unification from contaminating the template's
         // shared TypeVars (which would corrupt all subsequent uses of the struct).
@@ -1683,6 +1753,12 @@ public partial class HmTypeChecker
         {
             var subst = new Dictionary<int, Type>();
             var freshArgs = new Type[nominal.TypeArguments.Count];
+
+            // Look up the template to get the original TypeVars for field substitution.
+            // When type args are concrete (e.g., Foo(i32)), we need to map the template's
+            // TypeVars to the concrete args so fields get properly substituted.
+            var template = LookupNominalType(nominal.Name);
+
             for (int i = 0; i < nominal.TypeArguments.Count; i++)
             {
                 var ta = _engine.Resolve(nominal.TypeArguments[i]);
@@ -1695,11 +1771,20 @@ public partial class HmTypeChecker
                 else
                 {
                     freshArgs[i] = ta;
+                    // Map the template's TypeVar to the concrete type arg
+                    if (template != null && i < template.TypeArguments.Count)
+                    {
+                        var templateArg = _engine.Resolve(template.TypeArguments[i]);
+                        if (templateArg is TypeVar templateTv)
+                            subst[templateTv.Id] = ta;
+                    }
                 }
             }
             if (subst.Count > 0)
             {
-                var freshFields = nominal.FieldsOrVariants
+                // Use the template's fields as the base for substitution
+                var baseFields = template?.FieldsOrVariants ?? nominal.FieldsOrVariants;
+                var freshFields = baseFields
                     .Select(f => (f.Name, SubstituteTypeVars(f.Type, subst)))
                     .ToArray();
                 nominal = new NominalType(nominal.Name, nominal.Kind, freshArgs, freshFields);

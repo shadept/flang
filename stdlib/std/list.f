@@ -18,7 +18,7 @@ pub fn list(capacity: usize, allocator: &Allocator? = null) List($T) {
     const buf = allocator.alloc(bytes, align_of(T))
         .expect("list: allocation failed")
 
-    return List {
+    return .{
         ptr = buf.ptr,
         len = 0,
         cap = capacity,
@@ -30,7 +30,7 @@ pub fn list(capacity: usize, allocator: &Allocator? = null) List($T) {
 pub fn deinit(self: &List($T)) {
     if (self.cap > 0) {
         let old_ptr: &u8? = self.ptr as &u8
-        self.allocator.or_global().free(self.as_slice())
+        self.allocator.or_global().dealloc(slice_from_raw_parts(self.ptr as &u8, self.cap * size_of(T)))
     }
 
     self.ptr = 0usize as &T
@@ -69,7 +69,7 @@ pub fn reserve(self: &List($T), capacity: usize) {
 
     // Free old buffer if it existed
     if (self.cap > 0) {
-        free(self.ptr as &u8)
+        self.allocator.or_global().dealloc(slice_from_raw_parts(self.ptr as &u8, self.cap * elem_size))
     }
 
     self.ptr = new_ptr

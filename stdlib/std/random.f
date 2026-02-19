@@ -82,6 +82,28 @@ pub fn next_urange(r: &Random, min: u64, max: u64) u64 {
     return min + (r.next_u64() % range)
 }
 
+// Generate a random f64 in [0.0, 1.0).
+// Uses the upper 53 bits of a u64 for full mantissa precision.
+pub fn next_f64(r: &Random) f64 {
+    return (r.next_u64() >> 11) as f64 / 9007199254740992.0
+}
+
+// Generate a random f32 in [0.0, 1.0).
+// Uses the upper 24 bits of a u64 for full mantissa precision.
+pub fn next_f32(r: &Random) f32 {
+    return (r.next_u64() >> 40) as f32 / 16777216.0f32
+}
+
+// Generate a random f64 in [min, max).
+pub fn next_f64_range(r: &Random, min: f64, max: f64) f64 {
+    return min + r.next_f64() * (max - min)
+}
+
+// Generate a random f32 in [min, max).
+pub fn next_f32_range(r: &Random, min: f32, max: f32) f32 {
+    return min + r.next_f32() * (max - min)
+}
+
 // Fill a byte slice with random bytes.
 pub fn fill_bytes(r: &Random, buf: u8[]) {
     let i = 0usize
@@ -146,4 +168,48 @@ test "next_bool works" {
     const b = rng.next_bool()
     // just verifying it doesn't crash; both true/false are valid
     assert_true(a or a == false, "bool should be true or false")
+}
+
+test "next_f64 in [0, 1)" {
+    let rng = random(42)
+    let i: i64 = 0
+    loop {
+        if (i >= 100) { break }
+        const val = rng.next_f64()
+        assert_true(val >= 0.0 and val < 1.0, "f64 should be in [0, 1)")
+        i = i + 1
+    }
+}
+
+test "next_f32 in [0, 1)" {
+    let rng = random(42)
+    let i: i64 = 0
+    loop {
+        if (i >= 100) { break }
+        const val = rng.next_f32()
+        assert_true(val >= 0.0f32 and val < 1.0f32, "f32 should be in [0, 1)")
+        i = i + 1
+    }
+}
+
+test "next_f64_range stays in bounds" {
+    let rng = random(77)
+    let i: i64 = 0
+    loop {
+        if (i >= 100) { break }
+        const val = rng.next_f64_range(5.0, 10.0)
+        assert_true(val >= 5.0 and val < 10.0, "f64 range value out of bounds")
+        i = i + 1
+    }
+}
+
+test "next_f32_range stays in bounds" {
+    let rng = random(77)
+    let i: i64 = 0
+    loop {
+        if (i >= 100) { break }
+        const val = rng.next_f32_range(5.0f32, 10.0f32)
+        assert_true(val >= 5.0f32 and val < 10.0f32, "f32 range value out of bounds")
+        i = i + 1
+    }
 }

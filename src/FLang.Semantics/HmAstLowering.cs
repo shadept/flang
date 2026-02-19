@@ -681,7 +681,7 @@ public class HmAstLowering
                     {
                         ["name"] = MakeStringConstant(fieldName),
                         ["offset"] = new ConstantValue(offset, TypeLayoutService.IrUSize),
-                        ["type"] = new ConstantValue(0, TypeLayoutService.IrUSize), // NULL for now
+                        ["type_info"] = new ConstantValue(0, TypeLayoutService.IrUSize), // NULL for now
                     };
                     fieldElements.Add(new StructConstantValue(fieldInfoIr, fieldInfoValues));
                 }
@@ -1656,6 +1656,7 @@ public class HmAstLowering
             StringLiteralNode strLit => LowerStringLiteral(strLit),
             NullLiteralNode nullLit => LowerNullLiteral(nullLit),
             IdentifierExpressionNode id => LowerIdentifier(id),
+            CallExpressionNode call when call.IsTypeInstantiation => LowerTypeInstantiation(call),
             CallExpressionNode call when IsVariantConstruction(call) => LowerEnumConstruction(call),
             CallExpressionNode call => LowerCall(call),
             BinaryExpressionNode binary when binary.Operator is BinaryOperatorKind.And or BinaryOperatorKind.Or
@@ -1768,6 +1769,30 @@ public class HmAstLowering
         }
 
         return new ConstantValue(0, irType);
+    }
+
+    /// <summary>
+    /// Lower a generic type instantiation in expression context (e.g., Foo(i32) used as type-as-value).
+    /// Emits a reference to the RTTI type info global, same as bare type identifiers like i32 or Point.
+    /// </summary>
+    private Value LowerTypeInstantiation(CallExpressionNode call)
+    {
+        var resolvedType = _engine.Resolve(_checker.GetInferredType(call));
+        if (resolvedType is NominalType { Name: "core.rtti.Type" } typeNom
+            && typeNom.TypeArguments.Count > 0)
+        {
+            EnsureTypeTableExists();
+            var key = BuildTypeKey(typeNom.TypeArguments[0]);
+            if (_typeTableGlobals != null && _typeTableGlobals.TryGetValue(key, out var typeInfoGlobal))
+            {
+                var typeIrType = _layout.Lower(resolvedType);
+                var loaded = new LocalValue($"type_load_{_tempCounter++}", typeIrType);
+                _currentBlock.Instructions.Add(new LoadInstruction(_currentSpan, typeInfoGlobal, loaded));
+                return loaded;
+            }
+        }
+        // Fallback: should not happen for correctly typed code
+        return new ConstantValue(0, _layout.Lower(resolvedType));
     }
 
     private Value LowerIdentifier(IdentifierExpressionNode id)

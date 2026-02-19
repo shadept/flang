@@ -232,6 +232,7 @@ public class Lexer(Source source, int fileId)
                 "match" => TokenKind.Match,
                 "as" => TokenKind.As,
                 "test" => TokenKind.Test,
+                "type" => TokenKind.Type,
                 "and" => TokenKind.And,
                 "or" => TokenKind.Or,
                 "true" => TokenKind.True,

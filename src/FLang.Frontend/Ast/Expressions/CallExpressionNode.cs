@@ -51,4 +51,11 @@ public class CallExpressionNode : ExpressionNode
     /// instead of Arguments. Does NOT include the UFCS receiver.
     /// </summary>
     public List<ExpressionNode>? ResolvedArguments { get; set; }
+
+    /// <summary>
+    /// Semantic: True if this call is actually a generic type instantiation in expression context
+    /// (e.g., Foo(i32) used as a type-as-value). The lowering should emit a type info reference
+    /// instead of a function call.
+    /// </summary>
+    public bool IsTypeInstantiation { get; set; }
 }
