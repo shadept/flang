@@ -36,6 +36,7 @@ public static class CompilerDiscovery
             if (releaseBuild) unixArgs.Add("-O2");
             unixArgs.Add($"-g -o \"{outputFilePath}\"");
             unixArgs.Add($"\"{cFilePath}\"");
+            unixArgs.Add("-lm");
 
             if (selected.name.Contains("xcrun"))
             {
