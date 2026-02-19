@@ -50,10 +50,10 @@ jobs:
         run: |
           sha256sum flang-${{ matrix.rid }}.zip > flang-${{ matrix.rid }}.zip.sha256
 
-      - name: Attest artifact
-        uses: actions/attest-build-provenance@v2
-        with:
-          subject-path: flang-${{ matrix.rid }}.zip
+      # - name: Attest artifact
+      #   uses: actions/attest-build-provenance@v2
+      #   with:
+      #     subject-path: flang-${{ matrix.rid }}.zip
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
