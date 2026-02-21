@@ -15,6 +15,15 @@ pub type StringBuilder = struct {
     allocator: &Allocator?
 }
 
+// Return the current contents as a String.
+// The returned String points into the builder's buffer and is only
+// valid while the builder is alive and not modified.
+pub fn as_view(sb: &StringBuilder) String {
+    return .{ ptr = sb.ptr, len = sb.len }
+}
+
+#string_reader(StringBuilder)
+
 const DEFAULT_CAPACITY: usize = 16
 
 // Create a new empty StringBuilder with the given initial capacity.
@@ -80,13 +89,6 @@ fn reserve(sb: &StringBuilder, additional: usize) {
 
 pub fn ensure_capacity(sb: &StringBuilder, capacity: usize) {
     sb.reserve(capacity - sb.cap)
-}
-
-// Return the current contents as a String.
-// The returned String points into the builder's buffer and is only
-// valid while the builder is alive and not modified.
-pub fn as_view(sb: &StringBuilder) String {
-    return .{ ptr = sb.ptr, len = sb.len }
 }
 
 // Return a copy of the current contents as a null-terminated OwnedString.
@@ -221,28 +223,159 @@ fn append_signed_impl(sb: &StringBuilder, value: i64, spec: String, bits: u64) {
     sb.append_bytes(buf[0..len])
 }
 
-// fn append_float_impl(sb: &StringBuilder, val: f64, spec: String) {
-//     if (val < 0.0) {
-//         sb.append_byte(b'-')
-//         append_float_impl(sb, 0.0 - val, spec)
-//         return
-//     }
-//
-//     let int_part: u64 = val as u64
-//     append_unsigned_with_base(sb, int_part, 10, false)
-//
-//     sb.append_byte(b'.')
-//
-//     let frac = val - (int_part as f64)
-//     let precision: usize = 6
-//
-//     for (i in 0..precision) {
-//         frac = frac * 10.0
-//         let digit: u64 = frac as u64
-//         sb.append_byte((48u64 + digit) as u8)
-//         frac = frac - (digit as f64)
-//     }
-// }
+type FloatFormatSpec = struct {
+    precision: usize   // decimal digits (default 6)
+    has_precision: bool // whether user specified precision
+    width: usize       // minimum total width (0 = no padding)
+    pad_zero: bool     // pad with '0' instead of ' '
+}
+
+fn parse_float_spec(spec: String) FloatFormatSpec {
+    let result = FloatFormatSpec {
+        precision = 6, has_precision = false,
+        width = 0, pad_zero = false
+    }
+    if spec.len == 0 { return result }
+
+    let pos = 0usize
+
+    // Leading '0' means zero-pad
+    if spec[pos] == b'0' and pos + 1 < spec.len {
+        result.pad_zero = true
+        pos = pos + 1
+    }
+
+    // Parse width digits before '.'
+    let width: usize = 0
+    loop {
+        if pos >= spec.len { break }
+        if spec[pos] < b'0' or spec[pos] > b'9' { break }
+        width = width * 10 + (spec[pos] - b'0') as usize
+        pos = pos + 1
+    }
+    result.width = width
+
+    // '.' followed by precision digits
+    if pos < spec.len and spec[pos] == b'.' {
+        pos = pos + 1
+        let prec: usize = 0
+        loop {
+            if pos >= spec.len { break }
+            if spec[pos] < b'0' or spec[pos] > b'9' { break }
+            prec = prec * 10 + (spec[pos] - b'0') as usize
+            pos = pos + 1
+        }
+        result.precision = prec
+        result.has_precision = true
+    }
+
+    return result
+}
+
+fn append_float_impl(sb: &StringBuilder, val: f64, spec: String) {
+    const fmt = parse_float_spec(spec)
+
+    // Format into a temp buffer: sign + digits + '.' + frac digits
+    let tmp = [0u8; 80]
+    let len = 0usize
+
+    let abs_val = val
+    let negative = false
+    if val < 0.0 {
+        negative = true
+        abs_val = 0.0 - val
+    }
+
+    // Round: add 0.5 * 10^-precision so truncation produces correct rounding
+    let round = 0.5
+    let r = 0usize
+    loop {
+        if r >= fmt.precision { break }
+        round = round / 10.0
+        r = r + 1
+    }
+    abs_val = abs_val + round
+
+    // Integer part into a small buffer
+    let int_part: u64 = abs_val as u64
+    let int_buf = [0u8; 21]
+    const int_len = format_u64(int_part, int_buf).unwrap()
+
+    // Fractional digits
+    let frac = abs_val - (int_part as f64)
+    let frac_buf = [0u8; 20]
+    let frac_len = 0usize
+    let i = 0usize
+    loop {
+        if i >= fmt.precision { break }
+        frac = frac * 10.0
+        let digit: u64 = frac as u64
+        frac_buf[frac_len] = (48u64 + digit) as u8
+        frac_len = frac_len + 1
+        frac = frac - (digit as f64)
+        i = i + 1
+    }
+
+    // Trim trailing zeros only when no explicit precision was given
+    if fmt.has_precision == false {
+        loop {
+            if frac_len == 0 { break }
+            if frac_buf[frac_len - 1] != b'0' { break }
+            frac_len = frac_len - 1
+        }
+    }
+
+    // Assemble into tmp: ['-'] int_digits ['.' frac_digits]
+    if negative {
+        tmp[len] = b'-'
+        len = len + 1
+    }
+    let j = 0usize
+    loop {
+        if j >= int_len { break }
+        tmp[len] = int_buf[j]
+        len = len + 1
+        j = j + 1
+    }
+    if frac_len > 0 {
+        tmp[len] = b'.'
+        len = len + 1
+        j = 0
+        loop {
+            if j >= frac_len { break }
+            tmp[len] = frac_buf[j]
+            len = len + 1
+            j = j + 1
+        }
+    }
+
+    // Apply width padding
+    if fmt.width > len {
+        const pad_count = fmt.width - len
+        const pad_char: u8 = if fmt.pad_zero { b'0' } else { b' ' }
+        if fmt.pad_zero and negative {
+            // Zero-pad after sign: "-003.14"
+            sb.append_byte(b'-')
+            let k = 0usize
+            loop {
+                if k >= pad_count { break }
+                sb.append_byte(b'0')
+                k = k + 1
+            }
+            sb.append_bytes(tmp[1..len])
+        } else {
+            let k = 0usize
+            loop {
+                if k >= pad_count { break }
+                sb.append_byte(pad_char)
+                k = k + 1
+            }
+            sb.append_bytes(tmp[0..len])
+        }
+    } else {
+        sb.append_bytes(tmp[0..len])
+    }
+}
 
 // =============================================================================
 // Unsigned Integer Append
@@ -336,21 +469,21 @@ pub fn append(sb: &StringBuilder, val: isize, spec: String) {
 // Floating Point Append
 // =============================================================================
 
-//pub fn append(sb: &StringBuilder, val: f32) {
-//    append_float_impl(sb, val as f64, "")
-//}
+pub fn append(sb: &StringBuilder, val: f32) {
+    append_float_impl(sb, val as f64, "")
+}
 
-//pub fn append(sb: &StringBuilder, val: f32, spec: String) {
-//    append_float_impl(sb, val as f64, spec)
-//}
+pub fn append(sb: &StringBuilder, val: f32, spec: String) {
+    append_float_impl(sb, val as f64, spec)
+}
 
-//pub fn append(sb: &StringBuilder, val: f64) {
-//    append_float_impl(sb, val, "")
-//}
+pub fn append(sb: &StringBuilder, val: f64) {
+    append_float_impl(sb, val, "")
+}
 
-//pub fn append(sb: &StringBuilder, val: f64, spec: String) {
-//    append_float_impl(sb, val, spec)
-//}
+pub fn append(sb: &StringBuilder, val: f64, spec: String) {
+    append_float_impl(sb, val, spec)
+}
 
 // =============================================================================
 // Bool Append
@@ -393,16 +526,16 @@ pub fn append(sb: &StringBuilder, val: $T, spec: String) {
 // StringWriter
 // =============================================================================
 
-fn sb_write(ctx: &u8, buf: u8[]) usize {
-    const sb = ctx as &StringBuilder
-    sb.append_bytes(buf)
-    return buf.len
+fn write(self: &StringBuilder, data: u8[]) usize {
+    self.append_bytes(data)
+    return data.len
 }
 
-pub fn writer(sb: &StringBuilder) Writer {
-    const wfn = WriteFn { ctx = sb as &u8, write = sb_write }
-    const storage = [0; 0]
-    return writer(wfn, storage)
+#implement(StringBuilder, Writer)
+
+pub fn buffered_writer(sb: &StringBuilder) BufferedWriter {
+    let empty: u8[]
+    return buffered_writer(sb.writer(), empty)
 }
 
 // =============================================================================
@@ -687,6 +820,78 @@ test "append unsigned hex all sizes" {
 
     sb.append(2147483648u32, "x")
     expect_view(&sb, "80000000", "u32 high bit")
+}
+
+test "append floats" {
+    let buf = [0u8; 256]
+    let fba = fixed_buffer_allocator(buf)
+    let alloc = fba.allocator()
+    let sb = string_builder(allocator=&alloc)
+
+    sb.append(3.14f64)
+    expect_view(&sb, "3.14", "f64 3.14")
+    sb.clear()
+
+    sb.append(0.0f64)
+    expect_view(&sb, "0", "f64 zero")
+    sb.clear()
+
+    sb.append(-1.5f64)
+    expect_view(&sb, "-1.5", "f64 negative")
+    sb.clear()
+
+    sb.append(42.0f64)
+    expect_view(&sb, "42", "f64 integer value")
+    sb.clear()
+
+    sb.append(1.0f32)
+    expect_view(&sb, "1", "f32 one")
+    sb.clear()
+
+    sb.append(0.125f64)
+    expect_view(&sb, "0.125", "f64 0.125")
+}
+
+test "append floats with precision" {
+    let buf = [0u8; 256]
+    let fba = fixed_buffer_allocator(buf)
+    let alloc = fba.allocator()
+    let sb = string_builder(allocator=&alloc)
+
+    sb.append(3.14f64, ".2")
+    expect_view(&sb, "3.14", "f64 .2 precision")
+    sb.clear()
+
+    sb.append(3.14f64, ".4")
+    expect_view(&sb, "3.1400", "f64 .4 precision")
+    sb.clear()
+
+    sb.append(1.0f64, ".0")
+    expect_view(&sb, "1", "f64 .0 precision")
+    sb.clear()
+
+    sb.append(1.0f64, ".3")
+    expect_view(&sb, "1.000", "f64 .3 precision")
+    sb.clear()
+}
+
+test "append floats with width" {
+    let buf = [0u8; 256]
+    let fba = fixed_buffer_allocator(buf)
+    let alloc = fba.allocator()
+    let sb = string_builder(allocator=&alloc)
+
+    sb.append(3.14f64, "8.2")
+    expect_view(&sb, "    3.14", "f64 width 8")
+    sb.clear()
+
+    sb.append(3.14f64, "08.2")
+    expect_view(&sb, "00003.14", "f64 zero-pad width 8")
+    sb.clear()
+
+    sb.append(-3.14f64, "08.2")
+    expect_view(&sb, "-0003.14", "f64 neg zero-pad")
+    sb.clear()
 }
 
 test "append binary octal all sizes" {

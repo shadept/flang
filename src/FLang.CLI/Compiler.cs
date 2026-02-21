@@ -120,15 +120,20 @@ public class Compiler
             hmChecker.CollectNominalTypes(kvp.Value, modulePath);
         }
 
-        foreach (var kvp in parsedModules)
-        {
-            var modulePath = TemplateExpander.DeriveModulePath(kvp.Key, compilation.IncludePaths, compilation.WorkingDirectory);
-            hmChecker.ResolveNominalTypes(kvp.Value, modulePath);
-        }
-
         // ── Source generator template expansion ──────────────────────────────
+        // Runs after CollectNominalTypes (so generators can look up types and field AST nodes)
+        // but before ResolveNominalTypes (so generated types are available as struct fields).
         var expansion = TemplateExpander.ExpandAll(parsedModules, compilation, hmChecker, allDiagnostics);
         var syntheticModulePaths = expansion.SyntheticModulePaths;
+
+        // Helper: resolve module path for real and synthetic modules
+        string ResolveModulePath(string key) =>
+            syntheticModulePaths.TryGetValue(key, out var path)
+                ? path
+                : TemplateExpander.DeriveModulePath(key, compilation.IncludePaths, compilation.WorkingDirectory);
+
+        foreach (var kvp in parsedModules)
+            hmChecker.ResolveNominalTypes(kvp.Value, ResolveModulePath(kvp.Key));
 
         // Write .generated.f files so debuggers / error messages can reference real files
         foreach (var (genPath, genContent) in expansion.GeneratedFiles)
@@ -141,12 +146,6 @@ public class Compiler
         {
             return new CompilationResult(false, null, allDiagnostics, compilation);
         }
-
-        // Helper: resolve module path for real and synthetic modules
-        string ResolveModulePath(string key) =>
-            syntheticModulePaths.TryGetValue(key, out var path)
-                ? path
-                : TemplateExpander.DeriveModulePath(key, compilation.IncludePaths, compilation.WorkingDirectory);
 
         foreach (var kvp in parsedModules)
             hmChecker.CollectFunctionSignatures(kvp.Value, ResolveModulePath(kvp.Key));

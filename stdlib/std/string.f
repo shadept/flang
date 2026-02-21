@@ -5,6 +5,7 @@ import core.string // explicit import for clarity
 import std.encoding.utf8
 import std.allocator
 import std.option
+import std.string_reader
 
 // =============================================================================
 // String stdlib functions
@@ -81,17 +82,87 @@ pub fn starts_with(s: String, prefix: String) bool {
     return true
 }
 
-// pub fn ends_with(s: String, suffix: String) bool {
-//     if (s.len < suffix.len) {
-//         return false
-//     }
-//     for (i in 0..suffix.len) {
-//         if (s[s.len - i - 1] != suffix[suffix.len - i - 1]) {
-//             return false
-//         }
-//     }
-//     return true
-// }
+pub fn rfind(s: String, needle: String) usize? {
+    let h = s.as_raw_bytes()
+    let n = needle.as_raw_bytes()
+
+    if n.len == 0 {
+        return s.len
+    }
+    if n.len > h.len {
+        return null
+    }
+
+    // Reverse linear scan
+    let i = h.len - n.len + 1
+    loop {
+        if i == 0 { break }
+        i = i - 1
+
+        let found = true
+        for (j in 0..n.len) {
+            const j = j as usize
+            if h[i + j] != n[j] {
+                found = false
+                break
+            }
+        }
+        if found {
+            return i
+        }
+    }
+    return null
+}
+
+pub fn contains(s: String, needle: String) bool {
+    return find(s, needle).is_some()
+}
+
+pub fn ends_with(s: String, suffix: String) bool {
+    if s.len < suffix.len {
+        return false
+    }
+    let h = s.as_raw_bytes()
+    let n = suffix.as_raw_bytes()
+    let start = s.len - suffix.len
+    for (i in 0..suffix.len) {
+        const i = i as usize
+        if h[start + i] != n[i] {
+            return false
+        }
+    }
+    return true
+}
+
+fn is_ascii_whitespace(c: u8) bool {
+    return c == 32 or c == 9 or c == 10 or c == 13
+}
+
+pub fn trim_start(s: String) String {
+    let h = s.as_raw_bytes()
+    let start: usize = 0
+    loop {
+        if start >= h.len { break }
+        if !is_ascii_whitespace(h[start]) { break }
+        start = start + 1
+    }
+    return .{ ptr = s.ptr + start, len = s.len - start }
+}
+
+pub fn trim_end(s: String) String {
+    let h = s.as_raw_bytes()
+    let end = h.len
+    loop {
+        if end == 0 { break }
+        if !is_ascii_whitespace(h[end - 1]) { break }
+        end = end - 1
+    }
+    return .{ ptr = s.ptr, len = end }
+}
+
+pub fn trim(s: String) String {
+    return trim_end(trim_start(s))
+}
 
 
 // =============================================================================
@@ -113,6 +184,8 @@ pub fn deinit(self: &OwnedString) {
 pub fn as_view(self: OwnedString) String {
     return .{ ptr = self.ptr, len = self.len }
 }
+
+#string_reader(OwnedString)
 
 // =============================================================================
 // Bytes Iterator

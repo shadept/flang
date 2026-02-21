@@ -273,11 +273,21 @@ public class Parser
         // First argument: generator name
         var nameToken = Eat(TokenKind.Identifier);
 
-        // Remaining arguments: typed parameters (Name: Kind)
+        // Remaining arguments: typed parameters (Name: Kind) or variadic (..Name: Kind)
         var parameters = new List<GeneratorParameter>();
+        var hasSeenVariadic = false;
         while (_currentToken.Kind == TokenKind.Comma)
         {
             Eat(TokenKind.Comma);
+
+            // Check for variadic prefix: ..Name
+            var isVariadic = false;
+            if (_currentToken.Kind == TokenKind.DotDot)
+            {
+                Eat(TokenKind.DotDot);
+                isVariadic = true;
+            }
+
             var paramNameToken = Eat(TokenKind.Identifier);
             Eat(TokenKind.Colon);
             var kindToken = Eat(TokenKind.Identifier);
@@ -298,8 +308,29 @@ public class Parser
                     "E1002"));
             }
 
+            if (isVariadic)
+            {
+                if (hasSeenVariadic)
+                {
+                    _diagnostics.Add(Diagnostic.Error(
+                        "only one variadic parameter is allowed",
+                        paramNameToken.Span,
+                        "remove the extra '..' prefix",
+                        "E2061"));
+                }
+                hasSeenVariadic = true;
+            }
+            else if (hasSeenVariadic)
+            {
+                _diagnostics.Add(Diagnostic.Error(
+                    "no parameters are allowed after a variadic parameter",
+                    paramNameToken.Span,
+                    "move this parameter before the variadic parameter",
+                    "E2062"));
+            }
+
             var paramSpan = SourceSpan.Combine(paramNameToken.Span, kindToken.Span);
-            parameters.Add(new GeneratorParameter(paramNameToken.Text, kind, paramSpan));
+            parameters.Add(new GeneratorParameter(paramNameToken.Text, kind, paramSpan, isVariadic));
         }
 
         Eat(TokenKind.CloseParenthesis);
@@ -542,7 +573,7 @@ public class Parser
         return new TemplateIndexExpr(SourceSpan.Combine(obj.Span, closeBracket.Span), obj, first);
     }
 
-    private static readonly HashSet<string> _templateBuiltins = ["type_of", "lower"];
+    private static readonly HashSet<string> _templateBuiltins = ["type_of", "lower", "snake_case", "pascal_case"];
 
     private TemplateExpr ParseTemplatePrimary()
     {

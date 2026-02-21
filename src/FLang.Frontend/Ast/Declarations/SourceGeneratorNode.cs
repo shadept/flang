@@ -11,7 +11,7 @@ public enum GeneratorParamKind
     Type,  // type expression
 }
 
-public record GeneratorParameter(string Name, GeneratorParamKind Kind, SourceSpan Span);
+public record GeneratorParameter(string Name, GeneratorParamKind Kind, SourceSpan Span, bool IsVariadic = false);
 
 // ─── Template body AST ───────────────────────────────────────────────────────
 

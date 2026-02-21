@@ -156,6 +156,41 @@ public class TemplateEngine
                 return Stringify(arg).ToLowerInvariant();
             }
 
+            case "snake_case":
+            {
+                var arg = EvalExpr(call.Arguments[0]);
+                var input = Stringify(arg);
+                var sb = new System.Text.StringBuilder(input.Length + 4);
+                for (var i = 0; i < input.Length; i++)
+                {
+                    var c = input[i];
+                    if (char.IsUpper(c) && i > 0)
+                        sb.Append('_');
+                    sb.Append(char.ToLowerInvariant(c));
+                }
+                return sb.ToString();
+            }
+
+            case "pascal_case":
+            {
+                var arg = EvalExpr(call.Arguments[0]);
+                var input = Stringify(arg);
+                var sb = new System.Text.StringBuilder(input.Length);
+                var capitalizeNext = true;
+                for (var i = 0; i < input.Length; i++)
+                {
+                    var c = input[i];
+                    if (c == '_')
+                    {
+                        capitalizeNext = true;
+                        continue;
+                    }
+                    sb.Append(capitalizeNext ? char.ToUpperInvariant(c) : c);
+                    capitalizeNext = false;
+                }
+                return sb.ToString();
+            }
+
             default:
                 throw new InvalidOperationException($"Unknown template function: {call.FunctionName}");
         }
@@ -178,7 +213,7 @@ public class TemplateEngine
             case NominalType nominal when member == "fields":
             {
                 var fieldNodes = _fieldNodeLookup(nominal.Name);
-                if (fieldNodes != null)
+                if (fieldNodes != null && fieldNodes.Count > 0)
                     return fieldNodes.Select(f =>
                         (object)new TemplateFieldInfo(f.Name, f.TypeNode)).ToList();
                 // Fallback: build from NominalType's FieldsOrVariants (no TypeNode info)
@@ -194,6 +229,16 @@ public class TemplateEngine
                 var dot = name.LastIndexOf('.');
                 return dot >= 0 ? name[(dot + 1)..] : name;
             }
+
+            // NominalType — .kind
+            case NominalType nominal when member == "kind":
+                return nominal.Kind switch
+                {
+                    NominalKind.Struct => "struct",
+                    NominalKind.Enum => "enum",
+                    NominalKind.Tuple => "tuple",
+                    _ => "unknown"
+                };
 
             // TemplateFieldInfo — field.name, field.type_info
             case TemplateFieldInfo field when member == "name":

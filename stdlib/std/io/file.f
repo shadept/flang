@@ -120,40 +120,34 @@ pub fn write(file: &File, value: String) Result((), FileError) {
 }
 
 // =============================================================================
-// Reader
+// Reader / Writer interface implementations
 // =============================================================================
 
-fn file_read(ctx: &u8, buf: u8[]) usize {
-    // Read from the file handle
-    const file = ctx as &File
-    const bytes = read(file.handle.fd, buf.ptr, buf.len)
-    if (bytes == -1) {
+fn read(self: &File, buf: u8[]) usize {
+    const bytes = read(self.handle.fd, buf.ptr, buf.len)
+    if bytes == -1 {
         return 0
     }
     return bytes as usize
 }
 
-pub fn reader(file: &File, storage: u8[]) Reader {
-    const rfn = ReadFn { ctx = &file as &u8, read = file_read }
-    return reader(rfn, storage)
-}
-
-// =============================================================================
-// Writer
-// =============================================================================
-
-fn file_write(ctx: &u8, data: u8[]) usize {
-    const file = ctx as &File
-    const n = write(file.handle.fd, data.ptr, data.len)
-    if (n == -1) {
+fn write(self: &File, data: u8[]) usize {
+    const n = write(self.handle.fd, data.ptr, data.len)
+    if n == -1 {
         return 0
     }
     return n as usize
 }
 
-pub fn writer(file: &File, storage: u8[]) Writer {
-    const wfn = WriteFn { ctx = &file as &u8, write = file_write }
-    return writer(wfn, storage)
+#implement(File, Reader)
+#implement(File, Writer)
+
+pub fn buffered_reader(file: &File, storage: u8[]) BufferedReader {
+    return buffered_reader(file.reader(), storage)
+}
+
+pub fn buffered_writer(file: &File, storage: u8[]) BufferedWriter {
+    return buffered_writer(file.writer(), storage)
 }
 
 // =============================================================================

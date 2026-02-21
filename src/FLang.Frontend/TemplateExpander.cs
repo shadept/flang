@@ -58,8 +58,8 @@ public static class TemplateExpander
 
     /// <summary>
     /// Expand all source generator invocations in the parsed modules.
-    /// Runs between ResolveNominalTypes and CollectFunctionSignatures so generated
-    /// code can reference already-collected types.
+    /// Runs between CollectNominalTypes and ResolveNominalTypes so generated
+    /// types can be used as struct fields in the original modules.
     /// Mutates <paramref name="parsedModules"/> by adding synthetic module entries.
     /// </summary>
     public static TemplateExpansionResult ExpandAll(
@@ -114,10 +114,16 @@ public static class TemplateExpander
                         continue;
                     }
 
-                    if (inv.Arguments.Count != def.Parameters.Count)
+                    // Arity check: account for variadic (last param may consume 0+ args)
+                    var hasVariadic = def.Parameters.Count > 0 && def.Parameters[^1].IsVariadic;
+                    var requiredCount = hasVariadic ? def.Parameters.Count - 1 : def.Parameters.Count;
+                    if (hasVariadic ? inv.Arguments.Count < requiredCount : inv.Arguments.Count != def.Parameters.Count)
                     {
+                        var expectMsg = hasVariadic
+                            ? $"at least {requiredCount}"
+                            : $"{def.Parameters.Count}";
                         diagnostics.Add(Diagnostic.Error(
-                            $"Source generator `{inv.Name}` expects {def.Parameters.Count} arguments, got {inv.Arguments.Count}",
+                            $"Source generator `{inv.Name}` expects {expectMsg} arguments, got {inv.Arguments.Count}",
                             inv.Span, "E2071"));
                         continue;
                     }
@@ -128,6 +134,25 @@ public static class TemplateExpander
                     for (var p = 0; p < def.Parameters.Count; p++)
                     {
                         var param = def.Parameters[p];
+
+                        if (param.IsVariadic)
+                        {
+                            // Collect remaining args into a list
+                            var list = new List<object>();
+                            for (var a = p; a < inv.Arguments.Count; a++)
+                            {
+                                var varg = inv.Arguments[a];
+                                if (param.Kind == GeneratorParamKind.Ident)
+                                    list.Add(varg.Identifier ?? "");
+                                else if (varg.TypeExpr != null)
+                                    list.Add(varg.TypeExpr);
+                                else
+                                    list.Add(new NamedTypeNode(varg.Span, varg.Identifier ?? ""));
+                            }
+                            env[param.Name] = list;
+                            break;
+                        }
+
                         var arg = inv.Arguments[p];
 
                         if (param.Kind == GeneratorParamKind.Ident)

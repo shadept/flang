@@ -55,8 +55,9 @@ You are a highly experienced compiler engineer with a pragmatic, systems-level m
     - When discovering bugs or limitations during implementation, document them in `docs\known-issues.md`.
     - When adding/modifying error codes, update `docs\error-codes.md` immediately (follow format in that file).
 
-7.  **TEST COVERAGE:** Every new feature or bug fix must have at least one test in the test harness.
-    - Use the lit-style test format defined in `docs\architecture.md`
+7.  **TEST COVERAGE:** Every new feature or bug fix must have at least one test.
+    - **Test harness** (`tests/FLang.Tests/Harness/`) is for **language feature** tests only (parser, type checker, codegen, generics, etc.). Use the lit-style test format defined in `docs\architecture.md`.
+    - **Stdlib tests** must be **colocated** with the implementation using `test "name" { ... }` blocks inside the `.f` source file (see `string_builder.f`, `terminal.f` for examples). Do NOT add stdlib tests to the harness.
     - When implementing a feature, add the test before marking the work complete
 
 8.  **CODE QUALITY:** All implementation guidelines (performance, memory usage, C# patterns) are defined in `docs\architecture.md`.

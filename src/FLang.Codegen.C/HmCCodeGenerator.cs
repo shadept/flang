@@ -67,6 +67,10 @@ public static class HmCCodeGenerator
         if (module.Functions.Count > 0)
             sb.AppendLine();
 
+        // Global forward declarations (needed for cross-referencing RTTI globals)
+        foreach (var gv in module.GlobalValues)
+            EmitGlobalForwardDecl(sb, gv);
+
         // Global constants
         foreach (var gv in module.GlobalValues)
             EmitGlobalValue(sb, gv, module.StringTable);
@@ -128,6 +132,14 @@ public static class HmCCodeGenerator
     // =========================================================================
     // Global constants
     // =========================================================================
+
+    private static void EmitGlobalForwardDecl(StringBuilder sb, GlobalValue gv)
+    {
+        if (gv.Initializer is StructConstantValue scv && scv.IrType != null)
+            sb.AppendLine($"static {IrTypeToCType(scv.IrType)} {gv.Name};");
+        else if (gv.Initializer is ArrayConstantValue acv && acv.Elements != null && acv.IrType is IrArray arrTy)
+            sb.AppendLine($"static {IrTypeToCType(arrTy.Element)} {gv.Name}[{acv.Elements.Length}];");
+    }
 
     private static void EmitGlobalValue(StringBuilder sb, GlobalValue gv, List<StringTableEntry> stringTable)
     {

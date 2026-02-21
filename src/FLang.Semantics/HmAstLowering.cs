@@ -650,6 +650,9 @@ public class HmAstLowering
             _module.GlobalValues.Add(emptyTypeArgsGlobal);
         }
 
+        // Deferred patches: after all globals are created, wire up type_info pointers
+        var patches = new List<(Dictionary<string, Value> Dict, string Field, Type TargetType)>();
+
         // Build type table entries
         int typeIndex = 0;
         foreach (var (key, innerType) in typeKeys.OrderBy(kv => kv.Key))
@@ -708,8 +711,16 @@ public class HmAstLowering
                     {
                         ["name"] = MakeStringConstant(fieldName),
                         ["offset"] = new ConstantValue(offset, TypeLayoutService.IrUSize),
-                        ["type_info"] = new ConstantValue(0, TypeLayoutService.IrUSize), // NULL for now
+                        ["type_info"] = new ConstantValue(0, TypeLayoutService.IrUSize), // patched below
                     };
+
+                    // Resolve the field type for deferred patching
+                    var resolvedFieldType = _engine.Resolve(fieldType);
+                    if (resolvedFieldType is Core.Types.ReferenceType refFT)
+                        resolvedFieldType = _engine.Resolve(refFT.InnerType);
+                    if (resolvedFieldType is not Core.Types.TypeVar)
+                        patches.Add((fieldInfoValues, "type_info", resolvedFieldType));
+
                     fieldElements.Add(new StructConstantValue(fieldInfoIr, fieldInfoValues));
                 }
 
@@ -743,8 +754,16 @@ public class HmAstLowering
                     var paramInfoValues = new Dictionary<string, Value>
                     {
                         ["name"] = MakeStringConstant($"_{i}"),
-                        ["type_info"] = new ConstantValue(0, TypeLayoutService.IrUSize), // NULL for now
+                        ["type_info"] = new ConstantValue(0, TypeLayoutService.IrUSize), // patched below
                     };
+
+                    // Resolve the param type for deferred patching
+                    var resolvedParamType = _engine.Resolve(fnType2.ParameterTypes[i]);
+                    if (resolvedParamType is Core.Types.ReferenceType refPT)
+                        resolvedParamType = _engine.Resolve(refPT.InnerType);
+                    if (resolvedParamType is not Core.Types.TypeVar)
+                        patches.Add((paramInfoValues, "type_info", resolvedParamType));
+
                     paramElements.Add(new StructConstantValue(paramInfoIr, paramInfoValues));
                 }
 
@@ -769,8 +788,13 @@ public class HmAstLowering
                     fieldValues["params"] = MakeEmptySlice(paramsSliceIr);
                 }
 
-                // return_type pointer — NULL for now
+                // return_type pointer — patched below
                 fieldValues["return_type"] = new ConstantValue(0, TypeLayoutService.IrUSize);
+                var resolvedRetType = _engine.Resolve(fnType2.ReturnType);
+                if (resolvedRetType is Core.Types.ReferenceType refRT)
+                    resolvedRetType = _engine.Resolve(refRT.InnerType);
+                if (resolvedRetType is not Core.Types.TypeVar)
+                    patches.Add((fieldValues, "return_type", resolvedRetType));
             }
             else
             {
@@ -785,6 +809,14 @@ public class HmAstLowering
             _typeTableGlobals[key] = global;
             _module.GlobalValues.Add(global);
             typeIndex++;
+        }
+
+        // Second pass: apply deferred patches to wire up type_info and return_type pointers
+        foreach (var (dict, field, targetType) in patches)
+        {
+            var targetKey = BuildTypeKey(targetType);
+            if (_typeTableGlobals.TryGetValue(targetKey, out var targetGlobal))
+                dict[field] = targetGlobal;
         }
     }
 

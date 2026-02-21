@@ -27,6 +27,12 @@ Source generators are compile-time templates that produce FLang source code. The
 - `Ident` — a bare identifier (e.g., `Writer`)
 - `Type` — a type expression, including anonymous `struct { ... }` or `enum { ... }`
 
+**Variadic parameters:**
+- `..Param: Kind` — collects all remaining arguments into a list
+- Only the last parameter may be variadic
+- At most one variadic parameter per definition
+- Example: `#define(derive, T: Type, ..Traits: Ident)`
+
 ### Generator Invocation
 
 ```
@@ -40,18 +46,19 @@ Top-level statement. Triggers template expansion with the given arguments.
 | Directive | Description |
 |---|---|
 | `#(expr)` | Interpolation — evaluates `expr`, emits as source text |
-| `#each(collection) { ... }` | Iteration — `it` is the implicit binding |
-| `#if(condition) { ... }` | Conditional emission |
-| `#join(sep, items)` | Join items with separator string |
-| `typeof(string_expr)` | Compile-time type lookup by name, returns `Type` |
+| `#for var in collection { ... }` | Iteration with named binding |
+| `#if condition { ... } #else { ... }` | Conditional emission |
+| `type_of(string_expr)` | Compile-time type lookup by name, returns `NominalType` |
 
 ### Expression Language
 
 Template expressions use FLang semantics:
-- Dot access: `T.name`, `it.type`, `field.type.params`
-- Slicing: `it.type.params[1..]`, `args[0]`
+- Dot access: `T.name`, `field.type_info`, `fn_type.return_type`
+- Member access: `.name`, `.fields`, `.params`, `.return_type`, `.kind`, `.len`
+- Indexing: `list[0]`, slicing: `list[1..]`
 - String concat: `Impl.name + "_" + Iface.name`
-- Built-in functions: `typeof(...)`, `lower(...)`
+- Comparison: `==`, `!=`, `<`, `>`, `<=`, `>=`
+- Built-in functions: `type_of(name)`, `lower(s)`, `snake_case(s)`, `pascal_case(s)`
 
 ### Anonymous Type Expressions
 
@@ -221,48 +228,56 @@ fn writer(self: &StringBuilder) Writer {
 
 ### Generator Definitions
 
+See `stdlib/std/interface.f` for the actual `#interface`/`#implement` definitions. Key syntax:
+
 ```
 #define(interface, Name: Ident, Spec: Type) {
-
-  struct #(Name)Vtable {
-    #each(Spec.fields) {
-      #(it.name): fn(#join(", ", "ctx: &u8", #each(it.type.params) { it.name + ": " + it.type.name })) #(it.type.return_type.name)
+    type #(Name)Vtable = struct {
+        #for method in Spec.fields {
+            #(method.name): fn(ctx: &u8, #for p in method.type_info.params { #(p.name): #(p.type_info.name), }) #(method.type_info.return_type.name)
+        }
     }
-  }
-
-  struct #(Name) {
-    _ctx: &u8
-    _vtable: &#(Name)Vtable
-  }
-
-  #each(Spec.fields) {
-    fn #(it.name)(self: &#(Name), #join(", ", #each(it.type.params) { it.name + ": " + it.type.name })) #(it.type.return_type.name) {
-      return self._vtable.#(it.name)(self._ctx, #join(", ", #each(it.type.params) { it.name }))
-    }
-  }
+    // ... vtable struct, dispatch methods
 }
 
-#define(implement, Impl: Type, Iface: Type) {
+#define(implement, Impl: Ident, Iface: Ident) {
+    // ... thunk functions, vtable const, conversion method
+}
+```
 
-  #each(typeof(Iface.name + "Vtable").fields) {
-    fn __#(Impl.name)_#(Iface.name)_#(it.name)(#join(", ", #each(it.type.params) { it.name + ": " + it.type.name })) #(it.type.return_type.name) {
-      let self = ctx as &#(Impl.name)
-      return self.#(it.name)(#join(", ", #each(it.type.params[1..]) { it.name }))
-    }
-  }
+See `stdlib/std/derive.f` for `#derive`:
 
-  const __#(Impl.name)_#(Iface.name)_vtable = #(Iface.name)Vtable {
-    #each(typeof(Iface.name + "Vtable").fields) {
-      #(it.name): __#(Impl.name)_#(Iface.name)_#(it.name)
+```
+#define(derive, T: Type, ..Traits: Ident) {
+    #for Trait in Traits {
+        #if Trait == "eq" {
+            pub fn op_eq(a: #(T.name), b: #(T.name)) bool {
+                #for field in type_of(T.name).fields {
+                    if a.#(field.name) != b.#(field.name) { return false }
+                }
+                return true
+            }
+        } #else #if Trait == "clone" {
+            // ... field-by-field copy
+        } #else #if Trait == "debug" {
+            // ... StringBuilder format
+        }
     }
-  }
+}
+```
 
-  fn #(lower(Iface.name))(self: &#(Impl.name)) #(Iface.name) {
-    return #(Iface.name) {
-      _ctx: self as &u8
-      _vtable: &__#(Impl.name)_#(Iface.name)_vtable
+See `stdlib/std/enum_utils.f` for `#enum_utils`:
+
+```
+#define(enum_utils, E: Type) {
+    pub fn to_string(self: #(E.name)) String {
+        return self match {
+            #for v in type_of(E.name).fields {
+                #(E.name).#(v.name) => #("\"" + v.name + "\""),
+            }
+        }
     }
-  }
+    // ... from_string
 }
 ```
 
@@ -270,13 +285,15 @@ fn writer(self: &StringBuilder) Writer {
 
 ## Other Use Cases
 
-### Derive (auto-generated common methods)
+### Derive (auto-generated common methods) ✅ DONE
 
 ```
-#derive(Vec2, debug)       // fn debug(self: &Vec2) String
-#derive(Vec2, eq)          // fn op_eq(self: &Vec2, other: &Vec2) bool
-#derive(Vec2, hash)        // fn hash(self: &Vec2) u64
-#derive(Vec2, clone)       // fn clone(self: &Vec2) Vec2
+#derive(Vec2, eq, clone, debug)  // all three in one call via variadic params
+
+// Generates:
+//   fn op_eq(a: Vec2, b: Vec2) bool      — field-by-field equality
+//   fn clone(self: &Vec2) Vec2            — field-by-field copy
+//   fn format(self: &Vec2, sb: &StringBuilder, spec: String) — debug format
 ```
 
 ### Serialization
@@ -296,12 +313,14 @@ fn writer(self: &StringBuilder) Writer {
 // generates: HttpRequestBuilder struct + fluent setter methods + build()
 ```
 
-### Enum Utilities
+### Enum Utilities ✅ DONE
 
 ```
 #enum_utils(Color)
 
-// generates: to_string, from_string, count, values
+// Generates:
+//   fn to_string(self: Color) String      — match-based variant name
+//   fn from_string(s: String) Color?      — if-chain lookup by name
 ```
 
 ### Bitflags
@@ -367,7 +386,7 @@ type Result = enum(T, E) { Ok(T), Err(E) }
 
 ---
 
-### Phase 1: Anonymous Type Expressions
+### Phase 1: Anonymous Type Expressions ✅ DONE
 
 **Goal:** `struct { ... }` and `enum { ... }` usable as inline type expressions (unnamed), including with generic type parameters via `struct(T) { ... }`.
 
@@ -382,7 +401,7 @@ type Result = enum(T, E) { Ok(T), Err(E) }
 
 ---
 
-### Phase 2: RTTI Extension for Function Types
+### Phase 2: RTTI Extension for Function Types ✅ DONE
 
 **Goal:** `TypeInfo` exposes function parameters and return type.
 
@@ -396,7 +415,7 @@ type Result = enum(T, E) { Ok(T), Err(E) }
 
 ---
 
-### Phase 3: `#define` Parsing & Storage
+### Phase 3: `#define` Parsing & Storage ✅ DONE
 
 **Goal:** Parse generator definitions and store templates.
 
@@ -410,7 +429,7 @@ type Result = enum(T, E) { Ok(T), Err(E) }
 
 ---
 
-### Phase 4: `#invocation` Parsing
+### Phase 4: `#invocation` Parsing ✅ DONE
 
 **Goal:** Parse generator call sites as pending expansion nodes.
 
@@ -423,7 +442,7 @@ type Result = enum(T, E) { Ok(T), Err(E) }
 
 ---
 
-### Phase 5: Template Engine
+### Phase 5: Template Engine ✅ DONE
 
 **Goal:** Expand templates into FLang source text.
 
@@ -440,7 +459,7 @@ type Result = enum(T, E) { Ok(T), Err(E) }
 
 ---
 
-### Phase 6: Collect/Expand Loop
+### Phase 6: Collect/Expand Loop ✅ DONE
 
 **Goal:** Wire template expansion into the type checker pipeline.
 
@@ -479,18 +498,20 @@ type Result = enum(T, E) { Ok(T), Err(E) }
 
 ---
 
-### Phase 8: Stdlib Generators
+### Phase 8: Stdlib Generators ✅ DONE
 
 **Goal:** Ship useful generators in the standard library.
 
-**Generators to implement:**
-1. `#interface` + `#implement` — vtable-based interfaces
-2. `#derive(Type, debug)` — debug string representation
-3. `#derive(Type, eq)` — field-by-field equality
-4. `#derive(Type, clone)` — field-by-field copy
-5. `#enum_utils(Enum)` — to_string, from_string, values
+**Generators implemented:**
+1. `#interface` + `#implement` — vtable-based interfaces (`stdlib/std/interface.f`)
+2. `#derive(Type, eq)` — field-by-field equality (`stdlib/std/derive.f`)
+3. `#derive(Type, clone)` — field-by-field copy (`stdlib/std/derive.f`)
+4. `#derive(Type, debug)` — debug string via StringBuilder (`stdlib/std/derive.f`)
+5. `#enum_utils(Enum)` — to_string, from_string (`stdlib/std/enum_utils.f`)
 
-**Test:** Each generator has at least one end-to-end test: define type → invoke generator → use generated code → verify output.
+`#derive` uses variadic parameters: `#define(derive, T: Type, ..Traits: Ident)` — multiple traits in one call.
+
+**Test:** Each generator has end-to-end tests in `tests/.../source_generators/`.
 
 ---
 

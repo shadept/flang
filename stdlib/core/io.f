@@ -54,3 +54,13 @@ pub fn println(value: f32) i32 {
 pub fn println(value: String) i32 {
     return printf("%.*s\n".ptr, value.len as i32, value.ptr)
 }
+
+pub fn println(value: &$T) i32 {
+    return println(value.*)
+}
+
+pub fn println(value: $T) i32 {
+    const sb: StringBuilder
+    sb.append(value)
+    return println(sb.as_view())
+}

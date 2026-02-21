@@ -152,15 +152,9 @@ public class FLangWorkspace
                 }
                 FLangLanguageServer.Log($"  [collectNominals] {sw.ElapsedMilliseconds - lap}ms");
 
-                lap = sw.ElapsedMilliseconds;
-                foreach (var kvp in parsedModules)
-                {
-                    var modulePath = TemplateExpander.DeriveModulePath(kvp.Key, compilation.IncludePaths, compilation.WorkingDirectory);
-                    hmChecker.ResolveNominalTypes(kvp.Value, modulePath);
-                }
-                FLangLanguageServer.Log($"  [resolveNominals] {sw.ElapsedMilliseconds - lap}ms");
-
                 // ── Source generator template expansion ──────────────────
+                // Runs after CollectNominalTypes but before ResolveNominalTypes
+                // so generated types are available as struct fields.
                 lap = sw.ElapsedMilliseconds;
                 var expansion = TemplateExpander.ExpandAll(parsedModules, compilation, hmChecker, allDiagnostics);
                 var syntheticModulePaths = expansion.SyntheticModulePaths;
@@ -171,6 +165,11 @@ public class FLangWorkspace
                     syntheticModulePaths.TryGetValue(key, out var path)
                         ? path
                         : TemplateExpander.DeriveModulePath(key, compilation.IncludePaths, compilation.WorkingDirectory);
+
+                lap = sw.ElapsedMilliseconds;
+                foreach (var kvp in parsedModules)
+                    hmChecker.ResolveNominalTypes(kvp.Value, ResolveModulePath(kvp.Key));
+                FLangLanguageServer.Log($"  [resolveNominals] {sw.ElapsedMilliseconds - lap}ms");
 
                 lap = sw.ElapsedMilliseconds;
                 foreach (var kvp in parsedModules)

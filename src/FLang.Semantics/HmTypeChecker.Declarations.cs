@@ -38,6 +38,7 @@ public partial class HmTypeChecker
             var placeholder = new NominalType(fqn, NominalKind.Struct);
             _nominalTypes[fqn] = placeholder;
             _nominalSpans[fqn] = structDecl.NameSpan;
+            _fieldTypeNodes[fqn] = structDecl.Fields.Select(f => (f.Name, f.Type)).ToList();
 
             if (GetDeprecatedMessage(structDecl.Directives, out var msg))
                 _deprecatedTypes[fqn] = msg;
@@ -59,6 +60,8 @@ public partial class HmTypeChecker
             var placeholder = new NominalType(fqn, NominalKind.Enum);
             _nominalTypes[fqn] = placeholder;
             _nominalSpans[fqn] = enumDecl.NameSpan;
+            _fieldTypeNodes[fqn] = enumDecl.Variants.Select(v =>
+                (v.Name, (TypeNode)new NamedTypeNode(v.NameSpan, "void"))).ToList();
 
             if (GetDeprecatedMessage(enumDecl.Directives, out var msg))
                 _deprecatedTypes[fqn] = msg;
@@ -92,7 +95,6 @@ public partial class HmTypeChecker
             PopScope();
 
             _nominalTypes[fqn] = new NominalType(fqn, NominalKind.Struct, typeArgs, fields);
-            _fieldTypeNodes[fqn] = structDecl.Fields.Select(f => (f.Name, f.Type)).ToList();
         }
 
         // Make Type(T) share TypeInfo's fields so Type(T) values carry size/align/kind/etc.
