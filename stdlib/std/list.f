@@ -28,7 +28,7 @@ pub fn list(capacity: usize, allocator: &Allocator? = null) List($T) {
 
 // Free the backing storage. The list should not be used after this.
 pub fn deinit(self: &List($T)) {
-    if (self.cap > 0) {
+    if self.cap > 0 {
         let old_ptr: &u8? = self.ptr as &u8
         self.allocator.or_global().dealloc(slice_from_raw_parts(self.ptr as &u8, self.cap * size_of(T)))
     }
@@ -43,7 +43,7 @@ fn as_slice(self: List($T)) T[] {
 }
 
 pub fn reserve(self: &List($T), capacity: usize) {
-    if (self.cap >= capacity) {
+    if self.cap >= capacity {
         return
     }
 
@@ -62,13 +62,13 @@ pub fn reserve(self: &List($T), capacity: usize) {
     const new_ptr: &T = new_buf.ptr as &T
 
     // Copy existing elements
-    if (self.len > 0) {
+    if self.len > 0 {
         const old_bytes = self.len * elem_size
         memcpy(new_ptr as &u8, self.ptr as &u8, old_bytes)
     }
 
     // Free old buffer if it existed
-    if (self.cap > 0) {
+    if self.cap > 0 {
         self.allocator.or_global().dealloc(slice_from_raw_parts(self.ptr as &u8, self.cap * elem_size))
     }
 
@@ -90,7 +90,7 @@ pub fn push(self: &List($T), value: T) {
 
 // Remove and return the last element, or null if empty.
 pub fn pop(list: &List($T)) T? {
-    if (list.len == 0) {
+    if list.len == 0 {
         return null
     }
 
@@ -102,7 +102,7 @@ pub fn pop(list: &List($T)) T? {
 // Get the element at the given index.
 // Panics if index is out of bounds.
 pub fn get(list: List($T), index: usize) T {
-    if (index >= list.len) {
+    if index >= list.len {
         panic("List: index out of bounds")
     }
 
@@ -113,7 +113,7 @@ pub fn get(list: List($T), index: usize) T {
 // Set the element at the given index.
 // Panics if index is out of bounds.
 pub fn set(list: &List($T), index: usize, value: T) {
-    if (index >= list.len) {
+    if index >= list.len {
         panic("List: index out of bounds")
     }
 
@@ -143,7 +143,7 @@ pub fn iter(l: &List($T)) ListIterator(T) {
 
 // Advance iterator and return next value
 pub fn next(it: &ListIterator($T)) T? {
-    if (it.current >= it.list.len) {
+    if it.current >= it.list.len {
         return null
     }
 

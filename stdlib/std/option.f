@@ -13,7 +13,7 @@ pub fn is_none(self: Option($T)) bool {
 }
 
 pub fn expect(self: Option($T), msg: String) T {
-    if (self.has_value) {
+    if self.has_value {
         return self.value
     }
     panic(msg)
@@ -22,7 +22,7 @@ pub fn expect(self: Option($T), msg: String) T {
 }
 
 pub fn unwrap_or(self: Option($T), fallback: T) T {
-    if (self.has_value) {
+    if self.has_value {
         return self.value
     }
     return fallback
@@ -31,7 +31,7 @@ pub fn unwrap_or(self: Option($T), fallback: T) T {
 // Null-coalescing operator: Option(T) ?? T -> T
 // Returns the inner value if present, otherwise returns the fallback value.
 pub fn op_coalesce(opt: Option($T), fallback: T) T {
-    if (opt.has_value) {
+    if opt.has_value {
         return opt.value
     }
     return fallback
@@ -40,7 +40,7 @@ pub fn op_coalesce(opt: Option($T), fallback: T) T {
 // Null-coalescing operator: Option(T) ?? Option(T) -> Option(T)
 // Returns the first option if it has a value, otherwise returns the second.
 pub fn op_coalesce(first: Option($T), second: Option(T)) Option(T) {
-    if (first.has_value) {
+    if first.has_value {
         return first
     }
     return second

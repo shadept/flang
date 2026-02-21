@@ -15,7 +15,7 @@ pub type Range = struct(T) {
 }
 
 pub fn op_index(r: &Range($T), index: usize) T? {
-    if (index < 0 or index >= r.end - r.start) {
+    if index < 0 or index >= r.end - r.start {
         return null
     }
     return r.start + index
@@ -38,7 +38,7 @@ pub fn iter(r: &Range($T)) RangeIterator(T) {
 
 // Advance iterator and return next value
 pub fn next(it: &RangeIterator($T)) T? {
-    if (it.current >= it.end) {
+    if it.current >= it.end {
         return null
     }
     let val = it.current

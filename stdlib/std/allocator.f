@@ -46,7 +46,7 @@ pub fn dealloc(allocator: &Allocator, memory: u8[]) {
 
 pub fn new(allocator: &Allocator, ty: Type($T)) &T {
     const buffer = allocator.alloc(ty.size, ty.align)
-    if (buffer.is_none()) {
+    if buffer.is_none() {
         panic("Unable to allocate")
     }
     return buffer.value.ptr as &T
@@ -70,7 +70,7 @@ fn global_alloc(impl: &u8, size: usize, alignment: usize) u8[]? {
     // malloc typically returns suitably aligned memory for any type.
     // For now we ignore alignment and rely on malloc's default alignment.
     const ptr = malloc(size)
-    if (ptr.is_none()) {
+    if ptr.is_none() {
         return null
     }
     return slice_from_raw_parts(ptr.value, size)
@@ -78,7 +78,7 @@ fn global_alloc(impl: &u8, size: usize, alignment: usize) u8[]? {
 
 fn global_realloc(impl: &u8, memory: u8[], new_size: usize) u8[]? {
     const ptr = realloc(memory.ptr, new_size)
-    if (ptr.is_none()) {
+    if ptr.is_none() {
         return null
     }
 
@@ -135,7 +135,7 @@ fn fixed_alloc(impl: &u8, size: usize, alignment: usize) u8[]? {
 
     // Check if we have enough space
     let end_offset = aligned_offset + size
-    if (end_offset > state.buffer.len) {
+    if end_offset > state.buffer.len {
         return null
     }
 
@@ -150,7 +150,7 @@ fn fixed_realloc(impl: &u8, memory: u8[], new_size: usize) u8[]? {
     let state = impl as &FixedBufferAllocatorState
 
     // If memory is empty, treat as fresh allocation
-    if (memory.len == 0) {
+    if memory.len == 0 {
         return fixed_alloc(impl, new_size, 1)
     }
 
@@ -160,7 +160,7 @@ fn fixed_realloc(impl: &u8, memory: u8[], new_size: usize) u8[]? {
     let buf_start = state.buffer.ptr as usize
     let current_end = buf_start + state.offset
 
-    if (mem_end == current_end) {
+    if mem_end == current_end {
         // This is the last allocation, try to extend
         let new_end = mem_start + new_size
         let buf_end = buf_start + state.buffer.len
@@ -173,12 +173,12 @@ fn fixed_realloc(impl: &u8, memory: u8[], new_size: usize) u8[]? {
 
     // Cannot extend in place - allocate new and copy
     let new_mem = fixed_alloc(impl, new_size, 1)
-    if (new_mem.is_none()) {
+    if new_mem.is_none() {
         return null
     }
 
     // Copy old data
-    let copy_size = if (memory.len < new_size) { memory.len } else { new_size }
+    let copy_size = if memory.len < new_size { memory.len } else { new_size }
     memcpy(new_mem.value.ptr, memory.ptr, copy_size)
     return new_mem
 }
@@ -245,7 +245,7 @@ fn arena_new_page(state: &ArenaAllocatorState, min_size: usize) &ArenaPage? {
     const total = align_up(needed, state.page_size)
 
     const raw = state.backing.alloc(total, 8)
-    if (raw.is_none()) {
+    if raw.is_none() {
         return null
     }
 
@@ -255,10 +255,10 @@ fn arena_new_page(state: &ArenaAllocatorState, min_size: usize) &ArenaPage? {
     page.offset = 0
 
     // Link into chain
-    if (state.current_page.is_some()) {
+    if state.current_page.is_some() {
         state.current_page.value.next = page
     }
-    if (state.first_page.is_none()) {
+    if state.first_page.is_none() {
         state.first_page = page
     }
     state.current_page = page
@@ -271,11 +271,11 @@ fn arena_alloc(impl: &u8, size: usize, alignment: usize) u8[]? {
     const header_size = size_of(ArenaPage)
 
     // Try current page first
-    if (state.current_page.is_some()) {
+    if state.current_page.is_some() {
         let page = state.current_page.value
         let aligned_offset = align_up(page.offset, alignment)
 
-        if (aligned_offset + size <= page.size) {
+        if aligned_offset + size <= page.size {
             // Compute pointer: page base + header + aligned offset
             let base = page as &u8
             let ptr = (base as usize + header_size + aligned_offset) as &u8
@@ -286,7 +286,7 @@ fn arena_alloc(impl: &u8, size: usize, alignment: usize) u8[]? {
 
     // Current page doesn't fit — allocate a new page
     let new_page = arena_new_page(state, size)
-    if (new_page.is_none()) {
+    if new_page.is_none() {
         return null
     }
 
@@ -301,12 +301,12 @@ fn arena_alloc(impl: &u8, size: usize, alignment: usize) u8[]? {
 fn arena_realloc(impl: &u8, memory: u8[], new_size: usize) u8[]? {
     // Allocate new, copy old data
     let new_mem = arena_alloc(impl, new_size, 1)
-    if (new_mem.is_none()) {
+    if new_mem.is_none() {
         return null
     }
 
-    let copy_size = if (memory.len < new_size) { memory.len } else { new_size }
-    if (copy_size > 0) {
+    let copy_size = if memory.len < new_size { memory.len } else { new_size }
+    if copy_size > 0 {
         memcpy(new_mem.value.ptr, memory.ptr, copy_size)
     }
     return new_mem
@@ -337,7 +337,7 @@ pub fn deinit(state: &ArenaAllocatorState) {
     const header_size = size_of(ArenaPage)
     let page = state.first_page
     loop {
-        if (page.is_none()) { break }
+        if page.is_none() { break }
         let next = page.value.next
         let total = page.value.size + header_size
         let raw = slice_from_raw_parts(page.value as &u8, total)
@@ -352,7 +352,7 @@ pub fn deinit(state: &ArenaAllocatorState) {
 pub fn reset(state: &ArenaAllocatorState) {
     let page = state.first_page
     loop {
-        if (page.is_none()) { break }
+        if page.is_none() { break }
         page.value.offset = 0
         page = page.value.next
     }

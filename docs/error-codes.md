@@ -1671,6 +1671,104 @@ Use only valid variant names from the enum definition.
 
 ---
 
+### E2070: Unknown Source Generator
+
+**Category**: Source Generators
+**Severity**: Error
+
+#### Description
+
+A source generator invocation referenced a generator name that has not been defined with `#define`.
+
+#### Example
+
+```flang
+#nonexistent(Foo)  // ERROR: unknown source generator `nonexistent`
+```
+
+#### Solution
+
+Define the generator with `#define(name, ...)` before invoking it, or check for typos in the generator name.
+
+---
+
+### E2071: Source Generator Argument Count Mismatch
+
+**Category**: Source Generators
+**Severity**: Error
+
+#### Description
+
+A source generator was invoked with a different number of arguments than its definition expects.
+
+#### Example
+
+```flang
+#define(make_fn, Name: Ident, T: Type) {
+    fn #(Name)() #(T) { return 0 }
+}
+
+#make_fn(foo)  // ERROR: expects 2 arguments, got 1
+```
+
+#### Solution
+
+Provide the correct number of arguments matching the generator's parameter list.
+
+---
+
+### E2072: Source Generator Argument Kind Mismatch
+
+**Category**: Source Generators
+**Severity**: Error
+
+#### Description
+
+A source generator parameter declared as `Ident` received a complex type expression instead of a bare identifier.
+
+#### Example
+
+```flang
+#define(make_fn, Name: Ident) {
+    fn #(Name)() i32 { return 0 }
+}
+
+#make_fn(struct { x: i32 })  // ERROR: parameter `Name` expects an identifier
+```
+
+#### Solution
+
+Pass a bare identifier for `Ident` parameters. Use `Type` parameter kind if you need to pass type expressions.
+
+---
+
+### E2073: Template Expansion Error
+
+**Category**: Source Generators
+**Severity**: Error
+
+#### Description
+
+An error occurred while expanding a source generator template body. This can happen when template expressions reference undefined variables, access invalid members, or encounter type lookup failures.
+
+#### Example
+
+```flang
+#define(make_fn, T: Type) {
+    #for field in type_of(#(T.name)).fields {
+        fn get_#(field.name)(self: &#(T.name)) #(field.nonexistent) {
+            return self.#(field.name)
+        }
+    }
+}
+```
+
+#### Solution
+
+Check that all template expressions use valid member accesses and that referenced types exist and have been defined before the generator invocation.
+
+---
+
 ### E2102: Conflicting Generic Type Bindings
 
 **Category**: Generics
@@ -2555,6 +2653,10 @@ Report the issue with sample code that reproduces the error.
 | **E2067** | Type Checking     | Missing required argument                    |
 | **E2068** | Type Checking     | Too many positional arguments                |
 | **E2069** | Type Checking     | Unknown named argument                       |
+| **E2070** | Source Generators | Unknown source generator                     |
+| **E2071** | Source Generators | Source generator argument count mismatch     |
+| **E2072** | Source Generators | Source generator argument kind mismatch      |
+| **E2073** | Source Generators | Template expansion error                     |
 | **E2102** | Generics          | Conflicting generic type bindings            |
 
 ### E3XXX: Code Generation

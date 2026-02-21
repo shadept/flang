@@ -15,7 +15,8 @@ fn kind_to_int(k: TypeKind) i32 {
         Primitive => 0,
         Array => 1,
         Struct => 2,
-        Enum => 3
+        Enum => 3,
+        Function => 4
     }
 }
 

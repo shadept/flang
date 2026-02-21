@@ -128,10 +128,12 @@ public class GenericParameterTypeNode(SourceSpan span, string name) : TypeNode(s
 /// <summary>
 /// Represents a function type like `fn(T1, T2) R`.
 /// </summary>
-public class FunctionTypeNode(SourceSpan span, IReadOnlyList<TypeNode> parameterTypes, TypeNode returnType) : TypeNode(span)
+public class FunctionTypeNode(SourceSpan span, IReadOnlyList<TypeNode> parameterTypes, TypeNode returnType,
+    IReadOnlyList<string?>? parameterNames = null) : TypeNode(span)
 {
     public IReadOnlyList<TypeNode> ParameterTypes { get; } = parameterTypes;
     public TypeNode ReturnType { get; } = returnType;
+    public IReadOnlyList<string?> ParameterNames { get; } = parameterNames ?? new string?[parameterTypes.Count];
 }
 
 /// <summary>

@@ -147,7 +147,7 @@ public class FLangWorkspace
                 lap = sw.ElapsedMilliseconds;
                 foreach (var kvp in parsedModules)
                 {
-                    var modulePath = HmTypeChecker.DeriveModulePath(kvp.Key, compilation.IncludePaths, compilation.WorkingDirectory);
+                    var modulePath = TemplateExpander.DeriveModulePath(kvp.Key, compilation.IncludePaths, compilation.WorkingDirectory);
                     hmChecker.CollectNominalTypes(kvp.Value, modulePath);
                 }
                 FLangLanguageServer.Log($"  [collectNominals] {sw.ElapsedMilliseconds - lap}ms");
@@ -155,33 +155,36 @@ public class FLangWorkspace
                 lap = sw.ElapsedMilliseconds;
                 foreach (var kvp in parsedModules)
                 {
-                    var modulePath = HmTypeChecker.DeriveModulePath(kvp.Key, compilation.IncludePaths, compilation.WorkingDirectory);
+                    var modulePath = TemplateExpander.DeriveModulePath(kvp.Key, compilation.IncludePaths, compilation.WorkingDirectory);
                     hmChecker.ResolveNominalTypes(kvp.Value, modulePath);
                 }
                 FLangLanguageServer.Log($"  [resolveNominals] {sw.ElapsedMilliseconds - lap}ms");
 
+                // ── Source generator template expansion ──────────────────
+                lap = sw.ElapsedMilliseconds;
+                var expansion = TemplateExpander.ExpandAll(parsedModules, compilation, hmChecker, allDiagnostics);
+                var syntheticModulePaths = expansion.SyntheticModulePaths;
+                FLangLanguageServer.Log($"  [templateExpand] {sw.ElapsedMilliseconds - lap}ms — {syntheticModulePaths.Count} synthetic modules");
+
+                // Helper: resolve module path for real and synthetic modules
+                string ResolveModulePath(string key) =>
+                    syntheticModulePaths.TryGetValue(key, out var path)
+                        ? path
+                        : TemplateExpander.DeriveModulePath(key, compilation.IncludePaths, compilation.WorkingDirectory);
+
                 lap = sw.ElapsedMilliseconds;
                 foreach (var kvp in parsedModules)
-                {
-                    var modulePath = HmTypeChecker.DeriveModulePath(kvp.Key, compilation.IncludePaths, compilation.WorkingDirectory);
-                    hmChecker.CollectFunctionSignatures(kvp.Value, modulePath);
-                }
+                    hmChecker.CollectFunctionSignatures(kvp.Value, ResolveModulePath(kvp.Key));
                 FLangLanguageServer.Log($"  [collectFnSigs] {sw.ElapsedMilliseconds - lap}ms");
 
                 lap = sw.ElapsedMilliseconds;
                 foreach (var kvp in parsedModules)
-                {
-                    var modulePath = HmTypeChecker.DeriveModulePath(kvp.Key, compilation.IncludePaths, compilation.WorkingDirectory);
-                    hmChecker.CheckGlobalConstants(kvp.Value, modulePath);
-                }
+                    hmChecker.CheckGlobalConstants(kvp.Value, ResolveModulePath(kvp.Key));
                 FLangLanguageServer.Log($"  [checkGlobals] {sw.ElapsedMilliseconds - lap}ms");
 
                 lap = sw.ElapsedMilliseconds;
                 foreach (var kvp in parsedModules)
-                {
-                    var modulePath = HmTypeChecker.DeriveModulePath(kvp.Key, compilation.IncludePaths, compilation.WorkingDirectory);
-                    hmChecker.CheckModuleBodies(kvp.Value, modulePath);
-                }
+                    hmChecker.CheckModuleBodies(kvp.Value, ResolveModulePath(kvp.Key));
                 FLangLanguageServer.Log($"  [checkBodies] {sw.ElapsedMilliseconds - lap}ms");
 
                 hmChecker.ResolvePendingSpecializations();
@@ -197,10 +200,7 @@ public class FLangWorkspace
                 lap = sw.ElapsedMilliseconds;
                 var diagCountBefore = hmChecker.Diagnostics.Count;
                 foreach (var kvp in parsedModules)
-                {
-                    var modulePath = HmTypeChecker.DeriveModulePath(kvp.Key, compilation.IncludePaths, compilation.WorkingDirectory);
-                    hmChecker.CheckGenericBodies(kvp.Value, modulePath);
-                }
+                    hmChecker.CheckGenericBodies(kvp.Value, ResolveModulePath(kvp.Key));
                 // Collect diagnostics from generic body checking
                 for (var i = diagCountBefore; i < hmChecker.Diagnostics.Count; i++)
                     allDiagnostics.Add(hmChecker.Diagnostics[i]);

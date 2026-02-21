@@ -23,6 +23,7 @@ public record CompilerOptions(
     CompilerConfig? CCompilerConfig = null,
     bool ReleaseBuild = false,
     string? EmitFir = null,
+    bool DumpTemplates = false,
     bool DebugLogging = false,
     string? WorkingDirectory = null,
     IReadOnlyList<string>? IncludePaths = null,
@@ -76,6 +77,29 @@ public class Compiler
         var parsedModules = moduleCompiler.CompileModules(options.InputFilePath);
         allDiagnostics.AddRange(moduleCompiler.Diagnostics);
 
+        if (options.DumpTemplates)
+        {
+            foreach (var kvp in parsedModules)
+            {
+                var mod = kvp.Value;
+                if (mod.GeneratorDefinitions.Count == 0 && mod.GeneratorInvocations.Count == 0)
+                    continue;
+
+                Console.WriteLine($"=== {kvp.Key} ===");
+                if (mod.GeneratorDefinitions.Count > 0)
+                    Console.Write(TemplatePrinter.PrintAllDefinitions(mod.GeneratorDefinitions));
+                if (mod.GeneratorInvocations.Count > 0)
+                {
+                    foreach (var inv in mod.GeneratorInvocations)
+                    {
+                        var argsStr = string.Join(", ", inv.Arguments.Select(a =>
+                            a.Identifier ?? a.TypeExpr?.GetType().Name ?? "?"));
+                        Console.WriteLine($"#{inv.Name}({argsStr})");
+                    }
+                }
+            }
+        }
+
         if (allDiagnostics.Any(d => d.Severity == DiagnosticSeverity.Error))
         {
             return new CompilationResult(false, null, allDiagnostics, compilation);
@@ -92,42 +116,52 @@ public class Compiler
 
         foreach (var kvp in parsedModules)
         {
-            var modulePath = HmTypeChecker.DeriveModulePath(kvp.Key, compilation.IncludePaths, compilation.WorkingDirectory);
+            var modulePath = TemplateExpander.DeriveModulePath(kvp.Key, compilation.IncludePaths, compilation.WorkingDirectory);
             hmChecker.CollectNominalTypes(kvp.Value, modulePath);
         }
 
         foreach (var kvp in parsedModules)
         {
-            var modulePath = HmTypeChecker.DeriveModulePath(kvp.Key, compilation.IncludePaths, compilation.WorkingDirectory);
+            var modulePath = TemplateExpander.DeriveModulePath(kvp.Key, compilation.IncludePaths, compilation.WorkingDirectory);
             hmChecker.ResolveNominalTypes(kvp.Value, modulePath);
         }
 
-        foreach (var kvp in parsedModules)
+        // ── Source generator template expansion ──────────────────────────────
+        var expansion = TemplateExpander.ExpandAll(parsedModules, compilation, hmChecker, allDiagnostics);
+        var syntheticModulePaths = expansion.SyntheticModulePaths;
+
+        // Write .generated.f files so debuggers / error messages can reference real files
+        foreach (var (genPath, genContent) in expansion.GeneratedFiles)
         {
-            var modulePath = HmTypeChecker.DeriveModulePath(kvp.Key, compilation.IncludePaths, compilation.WorkingDirectory);
-            hmChecker.CollectFunctionSignatures(kvp.Value, modulePath);
+            try { File.WriteAllText(genPath, genContent); }
+            catch { /* best-effort */ }
         }
 
-        foreach (var kvp in parsedModules)
+        if (allDiagnostics.Any(d => d.Severity == DiagnosticSeverity.Error))
         {
-            var modulePath = HmTypeChecker.DeriveModulePath(kvp.Key, compilation.IncludePaths, compilation.WorkingDirectory);
-            hmChecker.CheckGlobalConstants(kvp.Value, modulePath);
+            return new CompilationResult(false, null, allDiagnostics, compilation);
         }
 
+        // Helper: resolve module path for real and synthetic modules
+        string ResolveModulePath(string key) =>
+            syntheticModulePaths.TryGetValue(key, out var path)
+                ? path
+                : TemplateExpander.DeriveModulePath(key, compilation.IncludePaths, compilation.WorkingDirectory);
+
         foreach (var kvp in parsedModules)
-        {
-            var modulePath = HmTypeChecker.DeriveModulePath(kvp.Key, compilation.IncludePaths, compilation.WorkingDirectory);
-            hmChecker.CheckModuleBodies(kvp.Value, modulePath);
-        }
+            hmChecker.CollectFunctionSignatures(kvp.Value, ResolveModulePath(kvp.Key));
+
+        foreach (var kvp in parsedModules)
+            hmChecker.CheckGlobalConstants(kvp.Value, ResolveModulePath(kvp.Key));
+
+        foreach (var kvp in parsedModules)
+            hmChecker.CheckModuleBodies(kvp.Value, ResolveModulePath(kvp.Key));
 
         // Resolve specializations deferred due to unresolved TypeVars
         hmChecker.ResolvePendingSpecializations();
 
         foreach (var kvp in parsedModules)
-        {
-            var modulePath = HmTypeChecker.DeriveModulePath(kvp.Key, compilation.IncludePaths, compilation.WorkingDirectory);
-            hmChecker.CheckGenericBodies(kvp.Value, modulePath);
-        }
+            hmChecker.CheckGenericBodies(kvp.Value, ResolveModulePath(kvp.Key));
 
         // Post-inference validation (unsuffixed literal checks: E2001, E2029, E2102)
         hmChecker.ValidatePostInference();
@@ -145,8 +179,7 @@ public class Compiler
 
         var moduleEntries = parsedModules.Select(kvp =>
         {
-            var modulePath = HmTypeChecker.DeriveModulePath(kvp.Key, compilation.IncludePaths, compilation.WorkingDirectory);
-            return (modulePath, kvp.Value);
+            return (ResolveModulePath(kvp.Key), kvp.Value);
         });
 
         var irModule = lowering.LowerModule(moduleEntries, options.RunTests);
@@ -274,4 +307,5 @@ public class Compiler
             return new CompilationResult(false, null, allDiagnostics, compilation);
         }
     }
+
 }

@@ -92,6 +92,7 @@ public partial class HmTypeChecker
             PopScope();
 
             _nominalTypes[fqn] = new NominalType(fqn, NominalKind.Struct, typeArgs, fields);
+            _fieldTypeNodes[fqn] = structDecl.Fields.Select(f => (f.Name, f.Type)).ToList();
         }
 
         // Make Type(T) share TypeInfo's fields so Type(T) values carry size/align/kind/etc.

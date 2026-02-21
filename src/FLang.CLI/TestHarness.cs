@@ -77,7 +77,9 @@ public class TestHarness
         if (!Directory.Exists(_harnessDir))
             throw new DirectoryNotFoundException($"Harness directory not found at: {_harnessDir}");
 
-        return [.. Directory.GetFiles(_harnessDir, "*.f", SearchOption.AllDirectories).OrderBy(f => f)];
+        return [.. Directory.GetFiles(_harnessDir, "*.f", SearchOption.AllDirectories)
+            .Where(f => !f.EndsWith(".generated.f", StringComparison.OrdinalIgnoreCase))
+            .OrderBy(f => f)];
     }
 
     /// <summary>

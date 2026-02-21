@@ -66,7 +66,7 @@ pub fn next_bool(r: &Random) bool {
 
 // Generate a random i64 in [min, max).
 pub fn next_range(r: &Random, min: i64, max: i64) i64 {
-    if (min >= max) {
+    if min >= max {
         return min
     }
     const range = (max - min) as u64
@@ -75,7 +75,7 @@ pub fn next_range(r: &Random, min: i64, max: i64) i64 {
 
 // Generate a random u64 in [min, max).
 pub fn next_urange(r: &Random, min: u64, max: u64) u64 {
-    if (min >= max) {
+    if min >= max {
         return min
     }
     const range = max - min

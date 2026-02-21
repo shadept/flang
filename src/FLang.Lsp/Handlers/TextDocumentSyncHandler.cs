@@ -28,6 +28,7 @@ public class TextDocumentSyncHandler : TextDocumentSyncHandlerBase
     public override Task<Unit> Handle(DidOpenTextDocumentParams request, CancellationToken cancellationToken)
     {
         var filePath = request.TextDocument.Uri.GetFileSystemPath();
+        if (IsGeneratedFile(filePath)) return Unit.Task;
         FLangLanguageServer.Log($"didOpen: {filePath} ({request.TextDocument.Text.Length} chars)");
 
         _workspace.UpdateDocument(filePath, request.TextDocument.Text);
@@ -40,6 +41,7 @@ public class TextDocumentSyncHandler : TextDocumentSyncHandlerBase
     public override Task<Unit> Handle(DidChangeTextDocumentParams request, CancellationToken cancellationToken)
     {
         var filePath = request.TextDocument.Uri.GetFileSystemPath();
+        if (IsGeneratedFile(filePath)) return Unit.Task;
         FLangLanguageServer.Log($"didChange: {filePath} ({request.ContentChanges.Count()} changes)");
 
         foreach (var change in request.ContentChanges)
@@ -56,6 +58,7 @@ public class TextDocumentSyncHandler : TextDocumentSyncHandlerBase
     public override Task<Unit> Handle(DidCloseTextDocumentParams request, CancellationToken cancellationToken)
     {
         var filePath = request.TextDocument.Uri.GetFileSystemPath();
+        if (IsGeneratedFile(filePath)) return Unit.Task;
         FLangLanguageServer.Log($"didClose: {filePath}");
 
         _workspace.CloseDocument(filePath);
@@ -66,6 +69,7 @@ public class TextDocumentSyncHandler : TextDocumentSyncHandlerBase
     public override Task<Unit> Handle(DidSaveTextDocumentParams request, CancellationToken cancellationToken)
     {
         var filePath = request.TextDocument.Uri.GetFileSystemPath();
+        if (IsGeneratedFile(filePath)) return Unit.Task;
         FLangLanguageServer.Log($"didSave: {filePath}");
 
         var task = Task.Run(() => _workspace.AnalyzeFile(filePath), cancellationToken);
@@ -73,6 +77,9 @@ public class TextDocumentSyncHandler : TextDocumentSyncHandlerBase
 
         return Unit.Task;
     }
+
+    private static bool IsGeneratedFile(string filePath) =>
+        filePath.EndsWith(".generated.f", StringComparison.OrdinalIgnoreCase);
 
     protected override TextDocumentSyncRegistrationOptions CreateRegistrationOptions(
         TextSynchronizationCapability capability,

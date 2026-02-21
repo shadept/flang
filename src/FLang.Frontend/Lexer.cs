@@ -15,6 +15,8 @@ public class Lexer(Source source, int fileId)
 {
     private readonly int _fileId = fileId;
     private readonly Source _source = source;
+
+    public Source Source => _source;
     private int _position;
     private int _start;
 

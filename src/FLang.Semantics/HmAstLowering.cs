@@ -539,6 +539,10 @@ public class HmAstLowering
         var fieldInfoNominal = _checker.LookupNominalType("core.rtti.FieldInfo");
         var fieldInfoIr = fieldInfoNominal != null ? _layout.Lower(fieldInfoNominal) as IrStruct : null;
 
+        // Get the IrStruct for ParamInfo
+        var paramInfoNominal = _checker.LookupNominalType("core.rtti.ParamInfo");
+        var paramInfoIr = paramInfoNominal != null ? _layout.Lower(paramInfoNominal) as IrStruct : null;
+
         // Get the IrStruct for String
         var stringNominal = _checker.LookupNominalType(WellKnown.String);
         var stringIr = stringNominal != null ? _layout.Lower(stringNominal) as IrStruct : null;
@@ -547,11 +551,13 @@ public class HmAstLowering
         IrStruct? fieldsSliceIr = null;
         IrStruct? typeParamsSliceIr = null;
         IrStruct? typeArgsSliceIr = null;
+        IrStruct? paramsSliceIr = null;
         foreach (var field in typeInfoIr.Fields)
         {
             if (field.Name == "fields" && field.Type is IrStruct fs) fieldsSliceIr = fs;
             else if (field.Name == "type_params" && field.Type is IrStruct tps) typeParamsSliceIr = tps;
             else if (field.Name == "type_args" && field.Type is IrPointer { Pointee: IrStruct tas }) typeArgsSliceIr = tas;
+            else if (field.Name == "params" && field.Type is IrStruct ps) paramsSliceIr = ps;
         }
 
         // Expand InstantiatedTypes to include field types of struct types
@@ -569,9 +575,23 @@ public class HmAstLowering
                     {
                         var fieldType = _engine.Resolve(ft);
                         if (fieldType is Core.Types.ReferenceType refT) fieldType = _engine.Resolve(refT.InnerType);
-                        if (fieldType is Core.Types.FunctionType || fieldType is Core.Types.TypeVar) continue;
+                        if (fieldType is Core.Types.TypeVar) continue;
                         if (allTypes.Add(fieldType)) changed = true;
                     }
+                }
+                // Expand function types: include parameter types and return type
+                else if (type is Core.Types.FunctionType fnType)
+                {
+                    foreach (var pt in fnType.ParameterTypes)
+                    {
+                        var paramType = _engine.Resolve(pt);
+                        if (paramType is Core.Types.ReferenceType refT) paramType = _engine.Resolve(refT.InnerType);
+                        if (paramType is Core.Types.TypeVar) continue;
+                        if (allTypes.Add(paramType)) changed = true;
+                    }
+                    var retType = _engine.Resolve(fnType.ReturnType);
+                    if (retType is Core.Types.ReferenceType retRef) retType = _engine.Resolve(retRef.InnerType);
+                    if (retType is not Core.Types.TypeVar && allTypes.Add(retType)) changed = true;
                 }
             }
         }
@@ -607,6 +627,7 @@ public class HmAstLowering
             Core.Types.ArrayType => 1,
             NominalType { Kind: NominalKind.Struct or NominalKind.Tuple } => 2,
             NominalType { Kind: NominalKind.Enum } => 3,
+            Core.Types.FunctionType => 4,
             _ => 0
         };
 
@@ -636,7 +657,13 @@ public class HmAstLowering
             if (_typeTableGlobals.ContainsKey(key)) continue;
 
             var innerIr = _layout.Lower(innerType);
-            var typeName = innerType is NominalType nt2 ? nt2.Name : innerType.ToString() ?? "unknown";
+            var typeName = innerType switch
+            {
+                NominalType nt2 => nt2.Name,
+                Core.Types.FunctionType ft2 =>
+                    $"fn({string.Join(", ", ft2.ParameterTypes.Select(p => _engine.Resolve(p).ToString()))}) {_engine.Resolve(ft2.ReturnType)}",
+                _ => innerType.ToString() ?? "unknown"
+            };
             var globalName = $"__flang__typeinfo_{key}";
 
             // Build field values
@@ -706,6 +733,52 @@ public class HmAstLowering
                 fieldValues["fields"] = MakeEmptySlice(fieldsSliceIr);
             }
 
+            // Params slice (for function types)
+            if (paramsSliceIr != null && paramInfoIr != null && stringIr != null
+                && innerType is Core.Types.FunctionType fnType2)
+            {
+                var paramElements = new List<Value>();
+                for (int i = 0; i < fnType2.ParameterTypes.Count; i++)
+                {
+                    var paramInfoValues = new Dictionary<string, Value>
+                    {
+                        ["name"] = MakeStringConstant($"_{i}"),
+                        ["type_info"] = new ConstantValue(0, TypeLayoutService.IrUSize), // NULL for now
+                    };
+                    paramElements.Add(new StructConstantValue(paramInfoIr, paramInfoValues));
+                }
+
+                if (paramElements.Count > 0)
+                {
+                    var paramArrayGlobal = new GlobalValue(
+                        $"__flang__typeinfo_{key}_params",
+                        new ArrayConstantValue(
+                            new IrArray(paramInfoIr, paramElements.Count),
+                            paramElements.ToArray()),
+                        new IrArray(paramInfoIr, paramElements.Count));
+                    _module.GlobalValues.Add(paramArrayGlobal);
+
+                    fieldValues["params"] = new StructConstantValue(paramsSliceIr, new Dictionary<string, Value>
+                    {
+                        ["ptr"] = paramArrayGlobal,
+                        ["len"] = new ConstantValue(paramElements.Count, TypeLayoutService.IrUSize),
+                    });
+                }
+                else
+                {
+                    fieldValues["params"] = MakeEmptySlice(paramsSliceIr);
+                }
+
+                // return_type pointer — NULL for now
+                fieldValues["return_type"] = new ConstantValue(0, TypeLayoutService.IrUSize);
+            }
+            else
+            {
+                if (paramsSliceIr != null)
+                    fieldValues["params"] = MakeEmptySlice(paramsSliceIr);
+                fieldValues["return_type"] = new ConstantValue(0, TypeLayoutService.IrUSize); // NULL
+            }
+
             var structConst = new StructConstantValue(typeInfoIr, fieldValues);
             var global = new GlobalValue(globalName, structConst, typeInfoIr);
 
@@ -726,6 +799,8 @@ public class HmAstLowering
                 : nt.Name,
             Core.Types.ReferenceType rt => $"&{BuildTypeKey(rt.InnerType)}",
             Core.Types.ArrayType at => $"[{BuildTypeKey(at.ElementType)};{at.Length}]",
+            Core.Types.FunctionType ft =>
+                $"fn({string.Join(",", ft.ParameterTypes.Select(BuildTypeKey))}){BuildTypeKey(ft.ReturnType)}",
             _ => resolved.ToString() ?? "unknown"
         };
     }

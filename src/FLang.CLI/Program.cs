@@ -15,6 +15,7 @@ var findCompilersOnly = false;
 var debugLogging = false;
 var runTests = false;
 var lspMode = false;
+var dumpTemplates = false;
 
 // Handle "test" subcommand: flang test <file>
 if (args.Length > 0 && args[0] == "test")
@@ -42,6 +43,8 @@ for (var i = 0; i < args.Length; i++)
         runTests = true;
     else if (args[i] == "--lsp")
         lspMode = true;
+    else if (args[i] == "--dump-templates")
+        dumpTemplates = true;
     else if (args[i] == "--version" || args[i] == "-v")
     {
         Console.WriteLine("flang 0.1.0");
@@ -126,6 +129,7 @@ var options = new CompilerOptions(
     CCompilerConfig: compilerConfig,
     ReleaseBuild: releaseBuild,
     EmitFir: emitFir,
+    DumpTemplates: dumpTemplates,
     DebugLogging: debugLogging,
     RunTests: runTests
 );

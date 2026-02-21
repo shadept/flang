@@ -39,7 +39,7 @@ public record ResolvedOperator(
 /// Hindley-Milner type checker. Drives InferenceEngine over the AST.
 /// Works exclusively with FLang.Core.Types.Type — no TypeBase references.
 /// </summary>
-public partial class HmTypeChecker : INominalTypeRegistry
+public partial class HmTypeChecker : INominalTypeRegistry, ITemplateTypeProvider
 {
     private readonly InferenceEngine _engine;
     private readonly TypeScopes _scopes;
@@ -55,6 +55,12 @@ public partial class HmTypeChecker : INominalTypeRegistry
     /// FQN -> SourceSpan of the first declaration, for duplicate-detection notes.
     /// </summary>
     private readonly Dictionary<string, SourceSpan> _nominalSpans = [];
+
+    /// <summary>
+    /// FQN -> list of (field name, AST TypeNode) for struct fields.
+    /// Used by source generator template expansion to access field type info.
+    /// </summary>
+    private readonly Dictionary<string, IReadOnlyList<(string Name, TypeNode TypeNode)>> _fieldTypeNodes = [];
 
     /// <summary>
     /// Function name -> list of overloads.
@@ -177,6 +183,7 @@ public partial class HmTypeChecker : INominalTypeRegistry
     public IReadOnlyDictionary<AstNode, Type> InferredTypes => _inferredTypes;
     public IReadOnlyDictionary<string, NominalType> NominalTypes => _nominalTypes;
     public IReadOnlyDictionary<string, SourceSpan> NominalSpans => _nominalSpans;
+    public IReadOnlyDictionary<string, IReadOnlyList<(string Name, TypeNode TypeNode)>> FieldTypeNodes => _fieldTypeNodes;
     public IReadOnlyDictionary<string, List<FunctionScheme>> Functions => _functions;
     public IReadOnlyDictionary<AstNode, ResolvedOperator> ResolvedOperators => _resolvedOperators;
     public InferenceEngine Engine => _engine;

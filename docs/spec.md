@@ -1215,6 +1215,85 @@ These instructions must be the last instruction in a basic block:
 
 ---
 
+### 8.2 Source Generators
+
+Source generators are a compile-time metaprogramming feature that produces FLang source code from template definitions and invocations.
+
+#### Definition
+
+```flang
+#define(name, Param1: Kind1, Param2: Kind2) {
+    // template body
+}
+```
+
+- `name` — generator name, used for invocation.
+- Each parameter has a name and a kind: `Ident` (bare identifier string) or `Type` (type expression).
+
+#### Parameter Kinds
+
+| Kind    | Passed as         | Bound as              |
+|---------|-------------------|-----------------------|
+| `Ident` | bare identifier   | string                |
+| `Type`  | type expression   | `TypeNode` (AST node) |
+
+A bare identifier passed to a `Type` parameter is automatically wrapped in a `NamedTypeNode`.
+
+#### Invocation
+
+```flang
+#name(arg1, arg2)
+```
+
+Invocations are top-level declarations. The compiler expands them between type collection and function signature collection, producing a `.generated.f` file alongside the source.
+
+#### Template Body
+
+The body between `{ }` is verbatim source text with embedded directives:
+
+- **Verbatim text** — copied as-is to the output.
+- **`#(expr)`** — evaluate `expr`, stringify, paste into output.
+- **`#for var in expr { body }`** — iterate `expr` (must evaluate to a list), expanding `body` for each element.
+- **`#if expr { body }`** — expand `body` if `expr` is truthy.
+- **`#if expr { body } #else { body }`** — expand the first body if truthy, else the second.
+- **`#else #if expr { ... } #else { ... }`** — elif chaining via recursion. Mirrors FLang's `else if`.
+
+#### Template Expressions
+
+Expressions inside `#()`, `#for`, and `#if`:
+
+- **Identifiers** — variable lookup from the environment, falls back to the name as a string.
+- **String literals** — `"hello"`.
+- **Integer literals** — `123`.
+- **Member access** — `obj.member` (dispatched by value type).
+- **Arithmetic** — `+`, `-`, `*`, `/`, `%` on integers; `+` for string concatenation.
+- **Comparison** — `==`, `!=`, `<`, `>`, `<=`, `>=` on integers and strings.
+- **Indexing** — `list[i]` (integer index into a list).
+- **Slicing** — `list[start..end]`, `list[start..]`, `list[..end]`.
+- **Built-in functions** — `type_of(name)` (looks up a nominal type), `lower(str)` (lowercase string).
+
+#### Value Model
+
+| Value type          | `.name`      | `.fields`          | `.params`          | `.return_type` | `.type_info` | `.len`       |
+|---------------------|-------------|--------------------|--------------------|----------------|--------------|-------------|
+| `NamedTypeNode`     | type name   | —                  | —                  | —              | —            | —           |
+| `NominalType`       | short name  | list of field info | —                  | —              | —            | —           |
+| `FunctionTypeNode`  | stringified | —                  | list of param info | return TypeNode| —            | —           |
+| `TemplateFieldInfo` | field name  | —                  | —                  | —              | field TypeNode| —          |
+| `TemplateParamInfo` | param name  | —                  | —                  | —              | param TypeNode| —          |
+| `string`            | —           | —                  | —                  | —              | —            | length      |
+| `List`              | —           | —                  | —                  | —              | —            | count       |
+
+#### Multi-Round Expansion
+
+Expansion runs up to 8 rounds. Each round collects new generator definitions and type declarations from generated code, enabling generators that produce other generators or types referenced by later generators.
+
+#### Output
+
+Generated code is written to `<source>.generated.f` next to the original file. Per-invocation outputs are combined into a single generated file per source file.
+
+---
+
 ## 9. Defined Behaviors
 
 - Out-of-bounds access: defined panic.

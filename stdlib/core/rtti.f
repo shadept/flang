@@ -9,11 +9,17 @@ pub type TypeKind = enum {
     Array = 1
     Struct = 2
     Enum = 3
+    Function = 4
 }
 
 // Generic alias for TypeInfo.
 // Allows couple of T to its TypeInfo.
 pub type Type = struct(T) {}
+
+pub type ParamInfo = struct {
+    name: String
+    type_info: &TypeInfo
+}
 
 pub type TypeInfo = struct {
     name: String
@@ -23,6 +29,8 @@ pub type TypeInfo = struct {
     type_params: String[]
     type_args: &TypeInfo[]
     fields: FieldInfo[]
+    params: ParamInfo[]
+    return_type: &TypeInfo
 }
 
 pub type FieldInfo = struct {

@@ -19,6 +19,7 @@ public class Parser
     private bool _stopAtBrace; // When true, '{' terminates expression parsing (used for if/for conditions)
     private readonly List<StructDeclarationNode> _hoistedStructs = [];
     private readonly List<EnumDeclarationNode> _hoistedEnums = [];
+    private static readonly HashSet<string> _knownDirectiveNames = ["foreign", "inline", "deprecated"];
 
     /// <summary>
     /// Initializes a new instance of the <see cref="Parser"/> class.
@@ -48,6 +49,8 @@ public class Parser
         var functions = new List<FunctionDeclarationNode>();
         var tests = new List<TestDeclarationNode>();
         var globalConstants = new List<VariableDeclarationNode>();
+        var generatorDefs = new List<SourceGeneratorDefinitionNode>();
+        var generatorInvocations = new List<SourceGeneratorInvocationNode>();
 
         // Parse imports
         while (_currentToken.Kind == TokenKind.Import) imports.Add(ParseImport());
@@ -57,6 +60,24 @@ public class Parser
         {
             try
             {
+                // Check for #define or #invocation before parsing directives
+                if (_currentToken.Kind == TokenKind.Hash)
+                {
+                    var next = PeekNextToken();
+                    if (next.Kind == TokenKind.Identifier && next.Text == "define")
+                    {
+                        generatorDefs.Add(ParseGeneratorDefinition());
+                        continue;
+                    }
+
+                    // Check if this is a generator invocation: #name(...) not followed by a declaration
+                    if (next.Kind == TokenKind.Identifier && !_knownDirectiveNames.Contains(next.Text))
+                    {
+                        generatorInvocations.Add(ParseGeneratorInvocation());
+                        continue;
+                    }
+                }
+
                 // Parse leading directives (e.g., #foreign, #deprecated("msg"))
                 var directives = ParseDirectives();
 
@@ -184,7 +205,8 @@ public class Parser
 
         var endSpan = _currentToken.Span;
         var span = SourceSpan.Combine(startSpan, endSpan);
-        return new ModuleNode(span, imports, structs, enums, functions, tests, globalConstants);
+        return new ModuleNode(span, imports, structs, enums, functions, tests, globalConstants,
+            generatorDefs, generatorInvocations);
     }
 
     /// <summary>
@@ -236,6 +258,390 @@ public class Parser
             }
         }
         return directives;
+    }
+
+    /// <summary>
+    /// Parses a source generator definition: #define(name, Param1: Kind, ...) { body tokens }
+    /// </summary>
+    private SourceGeneratorDefinitionNode ParseGeneratorDefinition()
+    {
+        var hashToken = Eat(TokenKind.Hash);
+        var defineToken = Eat(TokenKind.Identifier); // "define"
+
+        Eat(TokenKind.OpenParenthesis);
+
+        // First argument: generator name
+        var nameToken = Eat(TokenKind.Identifier);
+
+        // Remaining arguments: typed parameters (Name: Kind)
+        var parameters = new List<GeneratorParameter>();
+        while (_currentToken.Kind == TokenKind.Comma)
+        {
+            Eat(TokenKind.Comma);
+            var paramNameToken = Eat(TokenKind.Identifier);
+            Eat(TokenKind.Colon);
+            var kindToken = Eat(TokenKind.Identifier);
+
+            var kind = kindToken.Text switch
+            {
+                "Ident" => GeneratorParamKind.Ident,
+                "Type" => GeneratorParamKind.Type,
+                _ => GeneratorParamKind.Ident // default, with error
+            };
+
+            if (kindToken.Text is not ("Ident" or "Type"))
+            {
+                _diagnostics.Add(Diagnostic.Error(
+                    $"unknown generator parameter kind `{kindToken.Text}`",
+                    kindToken.Span,
+                    "expected `Ident` or `Type`",
+                    "E1002"));
+            }
+
+            var paramSpan = SourceSpan.Combine(paramNameToken.Span, kindToken.Span);
+            parameters.Add(new GeneratorParameter(paramNameToken.Text, kind, paramSpan));
+        }
+
+        Eat(TokenKind.CloseParenthesis);
+
+        // Parse structured template body
+        var openBrace = Eat(TokenKind.OpenBrace);
+        var body = ParseTemplateBody(openBrace.Span.Index + openBrace.Span.Length);
+        var closeBrace = Eat(TokenKind.CloseBrace);
+
+        var span = SourceSpan.Combine(hashToken.Span, closeBrace.Span);
+        return new SourceGeneratorDefinitionNode(span, nameToken.Text, parameters, body);
+    }
+
+    // ─── Template body parsing ───────────────────────────────────────────────
+
+    /// <summary>
+    /// Parses a template body: a sequence of verbatim text runs, #() interpolations,
+    /// #for loops, and #if conditionals. Stops at the matching CloseBrace (depth 0).
+    /// The closing brace is NOT consumed — the caller eats it.
+    /// Consecutive verbatim tokens are fused into a single node preserving original
+    /// whitespace by extracting source text between construct boundaries.
+    /// </summary>
+    /// <param name="cursor">Source index right after the opening brace of this body.</param>
+    private IReadOnlyList<TemplateNode> ParseTemplateBody(int cursor)
+    {
+        var nodes = new List<TemplateNode>();
+        var sourceText = _lexer.Source.Text;
+        var fileId = _currentToken.Span.FileId;
+        int braceDepth = 0;
+
+        void FlushVerbatim(int end)
+        {
+            if (cursor >= end) return;
+            var text = sourceText[cursor..end];
+            nodes.Add(new TemplateVerbatimNode(new SourceSpan(fileId, cursor, end - cursor), text));
+        }
+
+        while (_currentToken.Kind != TokenKind.EndOfFile)
+        {
+            if (_currentToken.Kind == TokenKind.CloseBrace && braceDepth == 0)
+                break;
+
+            if (_currentToken.Kind == TokenKind.Hash)
+            {
+                var next = PeekNextToken();
+                if (next.Kind is TokenKind.OpenParenthesis or TokenKind.For or TokenKind.If)
+                {
+                    FlushVerbatim(_currentToken.Span.Index);
+
+                    TemplateNode node = next.Kind switch
+                    {
+                        TokenKind.OpenParenthesis => ParseTemplateInterpolation(),
+                        TokenKind.For => ParseTemplateFor(),
+                        _ => ParseTemplateIf(),
+                    };
+
+                    cursor = node.Span.Index + node.Span.Length;
+                    nodes.Add(node);
+                    continue;
+                }
+            }
+
+            // Verbatim token — just advance; the cursor-based range will capture it.
+            if (_currentToken.Kind == TokenKind.OpenBrace) braceDepth++;
+            else if (_currentToken.Kind == TokenKind.CloseBrace) braceDepth--;
+            _currentToken = _lexer.NextToken();
+        }
+
+        // Flush trailing verbatim up to the closing brace
+        FlushVerbatim(_currentToken.Span.Index);
+        return nodes;
+    }
+
+    /// <summary>Parses #(expr) interpolation.</summary>
+    private TemplateInterpolationNode ParseTemplateInterpolation()
+    {
+        var hash = Eat(TokenKind.Hash);
+        Eat(TokenKind.OpenParenthesis);
+        var expr = ParseTemplateExpression();
+        var close = Eat(TokenKind.CloseParenthesis);
+        return new TemplateInterpolationNode(SourceSpan.Combine(hash.Span, close.Span), expr);
+    }
+
+    /// <summary>Parses #for name in expr { body }.</summary>
+    private TemplateForNode ParseTemplateFor()
+    {
+        var hash = Eat(TokenKind.Hash);
+        Eat(TokenKind.For);
+        var varToken = Eat(TokenKind.Identifier);
+        Eat(TokenKind.In);
+        var iterable = ParseTemplateExpression();
+        var forOpenBrace = Eat(TokenKind.OpenBrace);
+        var body = ParseTemplateBody(forOpenBrace.Span.Index + forOpenBrace.Span.Length);
+        var closeBrace = Eat(TokenKind.CloseBrace);
+        return new TemplateForNode(
+            SourceSpan.Combine(hash.Span, closeBrace.Span),
+            varToken.Text, iterable, body);
+    }
+
+    /// <summary>Parses #if expr { body } [#else { body }] or #else #if chaining.</summary>
+    private TemplateIfNode ParseTemplateIf()
+    {
+        var hash = Eat(TokenKind.Hash);
+        Eat(TokenKind.If);
+        var condition = ParseTemplateExpression();
+        var ifOpenBrace = Eat(TokenKind.OpenBrace);
+        var body = ParseTemplateBody(ifOpenBrace.Span.Index + ifOpenBrace.Span.Length);
+        var endSpan = Eat(TokenKind.CloseBrace);
+
+        IReadOnlyList<TemplateNode>? elseBranch = null;
+
+        // Check for #else
+        if (_currentToken.Kind == TokenKind.Hash && PeekNextToken().Kind == TokenKind.Else)
+        {
+            Eat(TokenKind.Hash);
+            Eat(TokenKind.Else);
+
+            if (_currentToken.Kind == TokenKind.Hash && PeekNextToken().Kind == TokenKind.If)
+            {
+                // #else #if — recursive parse, wrap in single-element list
+                var elseIf = ParseTemplateIf();
+                elseBranch = new List<TemplateNode> { elseIf };
+                endSpan = new Token(TokenKind.CloseBrace, elseIf.Span, "");
+            }
+            else
+            {
+                // #else { body }
+                var elseOpenBrace = Eat(TokenKind.OpenBrace);
+                elseBranch = ParseTemplateBody(elseOpenBrace.Span.Index + elseOpenBrace.Span.Length);
+                endSpan = Eat(TokenKind.CloseBrace);
+            }
+        }
+
+        return new TemplateIfNode(
+            SourceSpan.Combine(hash.Span, endSpan.Span),
+            condition, body, elseBranch);
+    }
+
+    // ─── Template expression parsing ─────────────────────────────────────────
+
+    /// <summary>Top-level template expression: comparison precedence.</summary>
+    private TemplateExpr ParseTemplateExpression()
+    {
+        return ParseTemplateComparison();
+    }
+
+    private TemplateExpr ParseTemplateComparison()
+    {
+        var left = ParseTemplateAdditive();
+        while (_currentToken.Kind is TokenKind.EqualsEquals or TokenKind.NotEquals
+               or TokenKind.LessThan or TokenKind.GreaterThan
+               or TokenKind.LessThanOrEqual or TokenKind.GreaterThanOrEqual)
+        {
+            var op = _currentToken.Text;
+            _currentToken = _lexer.NextToken();
+            var right = ParseTemplateAdditive();
+            left = new TemplateBinaryExpr(SourceSpan.Combine(left.Span, right.Span), left, op, right);
+        }
+        return left;
+    }
+
+    private TemplateExpr ParseTemplateAdditive()
+    {
+        var left = ParseTemplateMultiplicative();
+        while (_currentToken.Kind is TokenKind.Plus or TokenKind.Minus)
+        {
+            var op = _currentToken.Text;
+            _currentToken = _lexer.NextToken();
+            var right = ParseTemplateMultiplicative();
+            left = new TemplateBinaryExpr(SourceSpan.Combine(left.Span, right.Span), left, op, right);
+        }
+        return left;
+    }
+
+    private TemplateExpr ParseTemplateMultiplicative()
+    {
+        var left = ParseTemplatePostfix();
+        while (_currentToken.Kind is TokenKind.Star or TokenKind.Slash or TokenKind.Percent)
+        {
+            var op = _currentToken.Text;
+            _currentToken = _lexer.NextToken();
+            var right = ParseTemplatePostfix();
+            left = new TemplateBinaryExpr(SourceSpan.Combine(left.Span, right.Span), left, op, right);
+        }
+        return left;
+    }
+
+    private TemplateExpr ParseTemplatePostfix()
+    {
+        var expr = ParseTemplatePrimary();
+        while (true)
+        {
+            if (_currentToken.Kind == TokenKind.Dot)
+            {
+                _currentToken = _lexer.NextToken();
+                var member = Eat(TokenKind.Identifier);
+                expr = new TemplateMemberAccessExpr(
+                    SourceSpan.Combine(expr.Span, member.Span), expr, member.Text);
+            }
+            else if (_currentToken.Kind == TokenKind.OpenBracket)
+            {
+                expr = ParseTemplateIndexOrSlice(expr);
+            }
+            else
+            {
+                break;
+            }
+        }
+        return expr;
+    }
+
+    private TemplateExpr ParseTemplateIndexOrSlice(TemplateExpr obj)
+    {
+        Eat(TokenKind.OpenBracket);
+
+        // [..end]
+        if (_currentToken.Kind == TokenKind.DotDot)
+        {
+            _currentToken = _lexer.NextToken();
+            var end = ParseTemplateExpression();
+            var close = Eat(TokenKind.CloseBracket);
+            return new TemplateSliceExpr(SourceSpan.Combine(obj.Span, close.Span), obj, null, end);
+        }
+
+        var first = ParseTemplateExpression();
+
+        // [start..]  or  [start..end]
+        if (_currentToken.Kind == TokenKind.DotDot)
+        {
+            _currentToken = _lexer.NextToken();
+            TemplateExpr? end = null;
+            if (_currentToken.Kind != TokenKind.CloseBracket)
+                end = ParseTemplateExpression();
+            var close = Eat(TokenKind.CloseBracket);
+            return new TemplateSliceExpr(SourceSpan.Combine(obj.Span, close.Span), obj, first, end);
+        }
+
+        // [index]
+        var closeBracket = Eat(TokenKind.CloseBracket);
+        return new TemplateIndexExpr(SourceSpan.Combine(obj.Span, closeBracket.Span), obj, first);
+    }
+
+    private static readonly HashSet<string> _templateBuiltins = ["type_of", "lower"];
+
+    private TemplateExpr ParseTemplatePrimary()
+    {
+        switch (_currentToken.Kind)
+        {
+            case TokenKind.StringLiteral:
+            {
+                var token = _currentToken;
+                _currentToken = _lexer.NextToken();
+                return new TemplateStringLiteral(token.Span, token.Text);
+            }
+
+            case TokenKind.Integer:
+            {
+                var token = _currentToken;
+                _currentToken = _lexer.NextToken();
+                long.TryParse(token.Text, out var value);
+                return new TemplateIntLiteral(token.Span, value);
+            }
+
+            case TokenKind.Identifier:
+            {
+                var token = _currentToken;
+                _currentToken = _lexer.NextToken();
+
+                // Built-in function call: type_of(...), lower(...)
+                if (_templateBuiltins.Contains(token.Text) &&
+                    _currentToken.Kind == TokenKind.OpenParenthesis)
+                {
+                    Eat(TokenKind.OpenParenthesis);
+                    var args = new List<TemplateExpr>();
+                    while (_currentToken.Kind != TokenKind.CloseParenthesis &&
+                           _currentToken.Kind != TokenKind.EndOfFile)
+                    {
+                        args.Add(ParseTemplateExpression());
+                        if (_currentToken.Kind == TokenKind.Comma)
+                            _currentToken = _lexer.NextToken();
+                    }
+                    var close = Eat(TokenKind.CloseParenthesis);
+                    return new TemplateCallExpr(
+                        SourceSpan.Combine(token.Span, close.Span), token.Text, args);
+                }
+
+                return new TemplateNameExpr(token.Span, token.Text);
+            }
+
+            default:
+                throw new ParserException(Diagnostic.Error(
+                    "expected template expression",
+                    _currentToken.Span,
+                    $"found '{_currentToken.Text}'",
+                    "E1002"));
+        }
+    }
+
+    /// <summary>
+    /// Parses a source generator invocation: #name(arg1, arg2, ...)
+    /// Arguments can be identifiers or type expressions (struct { ... }, enum { ... }).
+    /// </summary>
+    private SourceGeneratorInvocationNode ParseGeneratorInvocation()
+    {
+        var hashToken = Eat(TokenKind.Hash);
+        var nameToken = Eat(TokenKind.Identifier);
+
+        var arguments = new List<GeneratorArgument>();
+        Token? closeParenToken = null;
+        if (_currentToken.Kind == TokenKind.OpenParenthesis)
+        {
+            Eat(TokenKind.OpenParenthesis);
+
+            while (_currentToken.Kind != TokenKind.CloseParenthesis && _currentToken.Kind != TokenKind.EndOfFile)
+            {
+                // Type expression: struct { ... } or enum { ... }
+                if (_currentToken.Kind is TokenKind.Struct or TokenKind.Enum)
+                {
+                    var typeExpr = _currentToken.Kind == TokenKind.Struct
+                        ? (TypeNode)ParseAnonymousStructType()
+                        : ParseAnonymousEnumType();
+                    arguments.Add(new GeneratorArgument(typeExpr.Span, null, typeExpr));
+                }
+                else
+                {
+                    // Bare identifier
+                    var argToken = Eat(TokenKind.Identifier);
+                    arguments.Add(new GeneratorArgument(argToken.Span, argToken.Text, null));
+                }
+
+                if (_currentToken.Kind == TokenKind.Comma)
+                    Eat(TokenKind.Comma);
+                else if (_currentToken.Kind != TokenKind.CloseParenthesis)
+                    break;
+            }
+
+            closeParenToken = Eat(TokenKind.CloseParenthesis);
+        }
+
+        var endSpan = closeParenToken?.Span ?? nameToken.Span;
+        var span = SourceSpan.Combine(hashToken.Span, endSpan);
+        return new SourceGeneratorInvocationNode(span, nameToken.Text, arguments);
     }
 
     /// <summary>
@@ -1763,17 +2169,19 @@ public class Parser
             Eat(TokenKind.OpenParenthesis);
 
             var paramTypes = new List<TypeNode>();
+            var paramNames = new List<string?>();
             while (_currentToken.Kind != TokenKind.CloseParenthesis && _currentToken.Kind != TokenKind.EndOfFile)
             {
                 // Support optional parameter names: fn(x: i32, y: i32) i32
-                // The names are ignored but help document the type
+                string? paramName = null;
                 if (_currentToken.Kind == TokenKind.Identifier && PeekNextToken().Kind == TokenKind.Colon)
                 {
-                    Eat(TokenKind.Identifier); // consume name
+                    paramName = Eat(TokenKind.Identifier).Text; // consume name
                     Eat(TokenKind.Colon);      // consume colon
                 }
 
                 paramTypes.Add(ParseType());
+                paramNames.Add(paramName);
 
                 if (_currentToken.Kind == TokenKind.Comma)
                     Eat(TokenKind.Comma);
@@ -1787,7 +2195,7 @@ public class Parser
             var returnType = ParseType();
 
             var span = SourceSpan.Combine(fnKeyword.Span, returnType.Span);
-            return new FunctionTypeNode(span, paramTypes, returnType);
+            return new FunctionTypeNode(span, paramTypes, returnType, paramNames);
         }
 
         // Check for array type: [T; N]

@@ -9,7 +9,9 @@ public class ModuleNode(
     IReadOnlyList<EnumDeclarationNode> enums,
     IReadOnlyList<FunctionDeclarationNode> functions,
     IReadOnlyList<TestDeclarationNode> tests,
-    IReadOnlyList<VariableDeclarationNode> globalConstants) : AstNode(span)
+    IReadOnlyList<VariableDeclarationNode> globalConstants,
+    IReadOnlyList<SourceGeneratorDefinitionNode> generatorDefinitions,
+    IReadOnlyList<SourceGeneratorInvocationNode> generatorInvocations) : AstNode(span)
 {
     public IReadOnlyList<ImportDeclarationNode> Imports { get; } = imports;
     public IReadOnlyList<VariableDeclarationNode> GlobalConstants { get; } = globalConstants;
@@ -17,4 +19,6 @@ public class ModuleNode(
     public IReadOnlyList<EnumDeclarationNode> Enums { get; } = enums;
     public IReadOnlyList<FunctionDeclarationNode> Functions { get; } = functions;
     public IReadOnlyList<TestDeclarationNode> Tests { get; } = tests;
+    public IReadOnlyList<SourceGeneratorDefinitionNode> GeneratorDefinitions { get; } = generatorDefinitions;
+    public IReadOnlyList<SourceGeneratorInvocationNode> GeneratorInvocations { get; } = generatorInvocations;
 }

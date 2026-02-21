@@ -108,3 +108,4 @@ dist/
 tests/FLang.Tests/Harness/**
 !tests/FLang.Tests/Harness/**/
 !tests/FLang.Tests/Harness/**/*.f
+*.generated.f
