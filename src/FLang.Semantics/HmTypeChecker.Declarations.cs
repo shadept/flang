@@ -35,6 +35,14 @@ public partial class HmTypeChecker
                 continue;
             }
 
+            // E2074: Check for duplicate field names
+            var seenFieldNames = new HashSet<string>();
+            foreach (var field in structDecl.Fields)
+            {
+                if (!seenFieldNames.Add(field.Name))
+                    ReportError($"Duplicate field `{field.Name}` in struct `{structDecl.Name}`", field.NameSpan, "E2076");
+            }
+
             var placeholder = new NominalType(fqn, NominalKind.Struct);
             _nominalTypes[fqn] = placeholder;
             _nominalSpans[fqn] = structDecl.NameSpan;

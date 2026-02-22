@@ -88,7 +88,7 @@ public class HmAstLowering
     private LocalValue EmitLoadFromOffset(Value basePtr, int byteOffset, IrType fieldType, string nameHint)
     {
         var result = new LocalValue($"{nameHint}_{_tempCounter++}", fieldType);
-        var offset = new ConstantValue(byteOffset, TypeLayoutService.IrUSize);
+        var offset = new IntConstantValue(byteOffset, TypeLayoutService.IrUSize);
         _currentBlock.Instructions.Add(new CopyFromOffsetInstruction(_currentSpan, basePtr, offset, result));
         return result;
     }
@@ -108,7 +108,7 @@ public class HmAstLowering
     /// </summary>
     private void EmitStoreToOffset(Value basePtr, int byteOffset, Value val, IrType valueType)
     {
-        var offset = new ConstantValue(byteOffset, TypeLayoutService.IrUSize);
+        var offset = new IntConstantValue(byteOffset, TypeLayoutService.IrUSize);
         _currentBlock.Instructions.Add(new CopyToOffsetInstruction(_currentSpan, val, basePtr, offset, valueType));
     }
 
@@ -286,7 +286,7 @@ public class HmAstLowering
             if (block.Instructions.Count == 0 ||
                 block.Instructions[^1] is not (ReturnInstruction or JumpInstruction or BranchInstruction))
             {
-                var retVal = new ConstantValue(0, TypeLayoutService.IrVoidPrim);
+                var retVal = new IntConstantValue(0, TypeLayoutService.IrVoidPrim);
                 block.Instructions.Add(new ReturnInstruction(_currentSpan, retVal));
             }
         }
@@ -336,7 +336,7 @@ public class HmAstLowering
 
         // return 0
         _currentBlock.Instructions.Add(new ReturnInstruction(SourceSpan.None,
-            new ConstantValue(0, TypeLayoutService.IrI32)));
+            new IntConstantValue(0, TypeLayoutService.IrI32)));
 
         return irFn;
     }
@@ -388,7 +388,7 @@ public class HmAstLowering
 
         // Integer literal
         if (expr is IntegerLiteralNode intLit)
-            return new ConstantValue(intLit.Value, targetType);
+            return new IntConstantValue(intLit.Value, targetType);
 
         // Floating-point literal
         if (expr is FloatingPointLiteralNode floatLit)
@@ -396,7 +396,7 @@ public class HmAstLowering
 
         // Boolean literal
         if (expr is BooleanLiteralNode boolLit)
-            return new ConstantValue(boolLit.Value ? 1 : 0, targetType);
+            return new IntConstantValue(boolLit.Value ? 1 : 0, targetType);
 
         // String literal — add to string table and return inline struct value
         if (expr is StringLiteralNode strLit && targetType is IrStruct strStruct)
@@ -428,7 +428,7 @@ public class HmAstLowering
                     // Naked enum: return a StructConstantValue with just the tag field
                     var fieldValues = new Dictionary<string, Value>
                     {
-                        ["tag"] = new ConstantValue(variant.TagValue, TypeLayoutService.IrI32)
+                        ["tag"] = new IntConstantValue(variant.TagValue, TypeLayoutService.IrI32)
                     };
                     var result = new StructConstantValue(irEnum, fieldValues);
                     if (isTopLevel)
@@ -616,7 +616,7 @@ public class HmAstLowering
             return new StructConstantValue(stringIr!, new Dictionary<string, Value>
             {
                 ["ptr"] = arr,
-                ["len"] = new ConstantValue(text.Length, TypeLayoutService.IrUSize),
+                ["len"] = new IntConstantValue(text.Length, TypeLayoutService.IrUSize),
             });
         }
 
@@ -636,8 +636,8 @@ public class HmAstLowering
         {
             return new StructConstantValue(sliceIr, new Dictionary<string, Value>
             {
-                ["ptr"] = new ConstantValue(0, TypeLayoutService.IrUSize),
-                ["len"] = new ConstantValue(0, TypeLayoutService.IrUSize),
+                ["ptr"] = new IntConstantValue(0, TypeLayoutService.IrUSize),
+                ["len"] = new IntConstantValue(0, TypeLayoutService.IrUSize),
             });
         }
 
@@ -672,9 +672,9 @@ public class HmAstLowering
             // Build field values
             var fieldValues = new Dictionary<string, Value>
             {
-                ["size"] = new ConstantValue(innerIr.Size, TypeLayoutService.IrU8),
-                ["align"] = new ConstantValue(innerIr.Alignment, TypeLayoutService.IrU8),
-                ["kind"] = new ConstantValue(GetTypeKind(innerType), TypeLayoutService.IrI32),
+                ["size"] = new IntConstantValue(innerIr.Size, TypeLayoutService.IrU8),
+                ["align"] = new IntConstantValue(innerIr.Alignment, TypeLayoutService.IrU8),
+                ["kind"] = new IntConstantValue(GetTypeKind(innerType), TypeLayoutService.IrI32),
             };
 
             // Name field
@@ -710,8 +710,8 @@ public class HmAstLowering
                     var fieldInfoValues = new Dictionary<string, Value>
                     {
                         ["name"] = MakeStringConstant(fieldName),
-                        ["offset"] = new ConstantValue(offset, TypeLayoutService.IrUSize),
-                        ["type_info"] = new ConstantValue(0, TypeLayoutService.IrUSize), // patched below
+                        ["offset"] = new IntConstantValue(offset, TypeLayoutService.IrUSize),
+                        ["type_info"] = new IntConstantValue(0, TypeLayoutService.IrUSize), // patched below
                     };
 
                     // Resolve the field type for deferred patching
@@ -736,7 +736,7 @@ public class HmAstLowering
                 fieldValues["fields"] = new StructConstantValue(fieldsSliceIr, new Dictionary<string, Value>
                 {
                     ["ptr"] = fieldArrayGlobal,
-                    ["len"] = new ConstantValue(fieldElements.Count, TypeLayoutService.IrUSize),
+                    ["len"] = new IntConstantValue(fieldElements.Count, TypeLayoutService.IrUSize),
                 });
             }
             else if (fieldsSliceIr != null)
@@ -754,7 +754,7 @@ public class HmAstLowering
                     var paramInfoValues = new Dictionary<string, Value>
                     {
                         ["name"] = MakeStringConstant($"_{i}"),
-                        ["type_info"] = new ConstantValue(0, TypeLayoutService.IrUSize), // patched below
+                        ["type_info"] = new IntConstantValue(0, TypeLayoutService.IrUSize), // patched below
                     };
 
                     // Resolve the param type for deferred patching
@@ -780,7 +780,7 @@ public class HmAstLowering
                     fieldValues["params"] = new StructConstantValue(paramsSliceIr, new Dictionary<string, Value>
                     {
                         ["ptr"] = paramArrayGlobal,
-                        ["len"] = new ConstantValue(paramElements.Count, TypeLayoutService.IrUSize),
+                        ["len"] = new IntConstantValue(paramElements.Count, TypeLayoutService.IrUSize),
                     });
                 }
                 else
@@ -789,7 +789,7 @@ public class HmAstLowering
                 }
 
                 // return_type pointer — patched below
-                fieldValues["return_type"] = new ConstantValue(0, TypeLayoutService.IrUSize);
+                fieldValues["return_type"] = new IntConstantValue(0, TypeLayoutService.IrUSize);
                 var resolvedRetType = _engine.Resolve(fnType2.ReturnType);
                 if (resolvedRetType is Core.Types.ReferenceType refRT)
                     resolvedRetType = _engine.Resolve(refRT.InnerType);
@@ -800,7 +800,7 @@ public class HmAstLowering
             {
                 if (paramsSliceIr != null)
                     fieldValues["params"] = MakeEmptySlice(paramsSliceIr);
-                fieldValues["return_type"] = new ConstantValue(0, TypeLayoutService.IrUSize); // NULL
+                fieldValues["return_type"] = new IntConstantValue(0, TypeLayoutService.IrUSize); // NULL
             }
 
             var structConst = new StructConstantValue(typeInfoIr, fieldValues);
@@ -1078,7 +1078,7 @@ public class HmAstLowering
                 if (irFn.UsesReturnSlot)
                 {
                     _currentBlock.Instructions.Add(new StorePointerInstruction(stmt.Span, _locals["__ret"], val));
-                    _currentBlock.Instructions.Add(new ReturnInstruction(stmt.Span, new ConstantValue(0, TypeLayoutService.IrVoidPrim)));
+                    _currentBlock.Instructions.Add(new ReturnInstruction(stmt.Span, new IntConstantValue(0, TypeLayoutService.IrVoidPrim)));
                 }
                 else
                 {
@@ -1105,7 +1105,7 @@ public class HmAstLowering
             {
                 var retType = irFn.UsesReturnSlot ? TypeLayoutService.IrVoidPrim
                     : (isNonVoid ? retIrType : TypeLayoutService.IrVoidPrim);
-                var retVal = new ConstantValue(0, retType);
+                var retVal = new IntConstantValue(0, retType);
                 block.Instructions.Add(new ReturnInstruction(_currentSpan, retVal));
             }
         }
@@ -1161,7 +1161,7 @@ public class HmAstLowering
             if (_currentFunction.UsesReturnSlot)
             {
                 _currentBlock.Instructions.Add(new StorePointerInstruction(_currentSpan, _locals["__ret"], val));
-                _currentBlock.Instructions.Add(new ReturnInstruction(_currentSpan, new ConstantValue(0, TypeLayoutService.IrVoidPrim)));
+                _currentBlock.Instructions.Add(new ReturnInstruction(_currentSpan, new IntConstantValue(0, TypeLayoutService.IrVoidPrim)));
             }
             else
             {
@@ -1170,7 +1170,7 @@ public class HmAstLowering
         }
         else
         {
-            var voidVal = new ConstantValue(0, TypeLayoutService.IrVoidPrim);
+            var voidVal = new IntConstantValue(0, TypeLayoutService.IrVoidPrim);
             _currentBlock.Instructions.Add(new ReturnInstruction(_currentSpan, voidVal));
         }
     }
@@ -1286,7 +1286,7 @@ public class HmAstLowering
 
         // len = array_length
         EmitStoreToOffset(tmpPtr, lenField.ByteOffset,
-            new ConstantValue(arrType.Length ?? 0, TypeLayoutService.IrUSize), lenField.Type);
+            new IntConstantValue(arrType.Length ?? 0, TypeLayoutService.IrUSize), lenField.Type);
 
         var loaded = new LocalValue($"slice_val_{_tempCounter++}", sliceStruct);
         _currentBlock.Instructions.Add(new LoadInstruction(_currentSpan, tmpPtr, loaded));
@@ -1320,7 +1320,7 @@ public class HmAstLowering
         _currentBlock.Instructions.Add(new AllocaInstruction(_currentSpan, optStruct.Size, tmpPtr));
 
         // has_value = true
-        EmitStoreToOffset(tmpPtr, hvField.ByteOffset, new ConstantValue(1, TypeLayoutService.IrBool), TypeLayoutService.IrBool);
+        EmitStoreToOffset(tmpPtr, hvField.ByteOffset, new IntConstantValue(1, TypeLayoutService.IrBool), TypeLayoutService.IrBool);
 
         // value = val
         EmitStoreToOffset(tmpPtr, valField.ByteOffset, val, valField.Type);
@@ -1337,7 +1337,7 @@ public class HmAstLowering
     private Value WrapPointerInOption(Value rawPtr, IrStruct optStruct, IrField hvField, IrField valField)
     {
         // has_value = (rawPtr != 0)
-        var nullVal = new ConstantValue(0, rawPtr.IrType!);
+        var nullVal = new IntConstantValue(0, rawPtr.IrType!);
         var hvResult = new LocalValue($"ffi_nonnull_{_tempCounter++}", TypeLayoutService.IrBool);
         _currentBlock.Instructions.Add(new BinaryInstruction(_currentSpan, BinaryOp.NotEqual, rawPtr, nullVal, hvResult));
 
@@ -1397,7 +1397,7 @@ public class HmAstLowering
             // Zero-initialize variables declared without an initializer (e.g. `let sb: StringBuilder`)
             var memsetResult = new LocalValue($"memset_{_tempCounter++}", TypeLayoutService.IrVoidPrim);
             _currentBlock.Instructions.Add(new CallInstruction(_currentSpan, "memset",
-                [allocaResult, new ConstantValue(0, TypeLayoutService.IrI32), new ConstantValue(irType.Size, TypeLayoutService.IrUSize)],
+                [allocaResult, new IntConstantValue(0, TypeLayoutService.IrI32), new IntConstantValue(irType.Size, TypeLayoutService.IrUSize)],
                 memsetResult)
             { IsForeignCall = true });
         }
@@ -1541,7 +1541,7 @@ public class HmAstLowering
         {
             // Niche-optimized: nextResult is a nullable pointer; NULL = None
             var nichePtr = (IrPointer)optionIrType;
-            var nullVal = new ConstantValue(0, nichePtr);
+            var nullVal = new IntConstantValue(0, nichePtr);
             var isNonNull = new LocalValue($"for_niche_{_tempCounter++}", TypeLayoutService.IrBool);
             _currentBlock.Instructions.Add(new BinaryInstruction(_currentSpan, BinaryOp.NotEqual, nextResult, nullVal, isNonNull));
             _currentBlock.Instructions.Add(new BranchInstruction(_currentSpan, isNonNull, bodyBlock, exitBlock));
@@ -1634,7 +1634,7 @@ public class HmAstLowering
         if (baseIrType is IrArray irArray && irArray.Length.HasValue)
         {
             // Fixed-size array — length is compile-time known
-            lengthVal = new ConstantValue(irArray.Length.Value, usizeType);
+            lengthVal = new IntConstantValue(irArray.Length.Value, usizeType);
 
             // Get pointer to array start
             if (iterableVal.IrType is IrPointer)
@@ -1658,7 +1658,7 @@ public class HmAstLowering
         var indexPtr = new LocalValue($"for_idx_{_tempCounter++}", new IrPointer(usizeType));
         _currentBlock.Instructions.Add(new AllocaInstruction(_currentSpan, usizeType.Size, indexPtr));
         _currentBlock.Instructions.Add(new StorePointerInstruction(_currentSpan, indexPtr,
-            new ConstantValue(0, usizeType)));
+            new IntConstantValue(0, usizeType)));
 
         // Allocate loop variable
         var loopVarName = GetUniqueVariableName(forLoop.IteratorVariable);
@@ -1693,7 +1693,7 @@ public class HmAstLowering
         _loopStack.Push((condBlock, exitBlock));
 
         // Compute byte offset: index * element_size
-        var elemSize = new ConstantValue(elementIrType.Size, usizeType);
+        var elemSize = new IntConstantValue(elementIrType.Size, usizeType);
         var byteOffset = new LocalValue($"for_off_{_tempCounter++}", usizeType);
         _currentBlock.Instructions.Add(
             new BinaryInstruction(_currentSpan, BinaryOp.Multiply, indexVal, elemSize, byteOffset));
@@ -1708,7 +1708,7 @@ public class HmAstLowering
         _loopStack.Pop();
 
         // Increment index: index = index + 1
-        var one = new ConstantValue(1, usizeType);
+        var one = new IntConstantValue(1, usizeType);
         var indexVal2 = new LocalValue($"for_i2_{_tempCounter++}", usizeType);
         _currentBlock.Instructions.Add(new LoadInstruction(_currentSpan, indexPtr, indexVal2));
         var nextIndex = new LocalValue($"for_inc_{_tempCounter++}", usizeType);
@@ -1805,7 +1805,12 @@ public class HmAstLowering
         // Always produce a primitive-typed constant; ApplyCoercions handles wrapping.
         if (irType is not IrPrimitive)
             irType = TypeLayoutService.IrI32;
-        return new ConstantValue(intLit.Value, irType);
+
+        // Integer literal unified with a float type (e.g., 1 assigned to f32 field)
+        if (irType is IrPrimitive { Name: "f32" or "f64" })
+            return new FloatConstantValue((double)intLit.Value, irType);
+
+        return new IntConstantValue(intLit.Value, irType);
     }
 
     private Value LowerFloatingPointLiteral(FloatingPointLiteralNode floatLit)
@@ -1818,7 +1823,7 @@ public class HmAstLowering
 
     private Value LowerBooleanLiteral(BooleanLiteralNode boolLit)
     {
-        return new ConstantValue(boolLit.Value ? 1 : 0, TypeLayoutService.IrBool);
+        return new IntConstantValue(boolLit.Value ? 1 : 0, TypeLayoutService.IrBool);
     }
 
     private Value LowerStringLiteral(StringLiteralNode strLit)
@@ -1850,7 +1855,7 @@ public class HmAstLowering
 
         // Niche-optimized Option[&T]: null = 0 (NULL pointer)
         if (IsNicheOption(irType))
-            return new ConstantValue(0, irType);
+            return new IntConstantValue(0, irType);
 
         if (irType is IrStruct optionStruct && optionStruct.Fields.Length > 0)
         {
@@ -1864,7 +1869,7 @@ public class HmAstLowering
                 if (f.Name == "has_value")
                 {
                     EmitStoreToOffset(allocaResult, f.ByteOffset,
-                        new ConstantValue(0, TypeLayoutService.IrBool), TypeLayoutService.IrBool);
+                        new IntConstantValue(0, TypeLayoutService.IrBool), TypeLayoutService.IrBool);
                     break;
                 }
             }
@@ -1875,7 +1880,7 @@ public class HmAstLowering
             return loaded;
         }
 
-        return new ConstantValue(0, irType);
+        return new IntConstantValue(0, irType);
     }
 
     /// <summary>
@@ -1899,7 +1904,7 @@ public class HmAstLowering
             }
         }
         // Fallback: should not happen for correctly typed code
-        return new ConstantValue(0, _layout.Lower(resolvedType));
+        return new IntConstantValue(0, _layout.Lower(resolvedType));
     }
 
     private Value LowerIdentifier(IdentifierExpressionNode id)
@@ -1968,7 +1973,7 @@ public class HmAstLowering
 
         _diagnostics.Add(Diagnostic.Error(
             $"Unresolved identifier `{id.Name}`", id.Span, null, "E3002"));
-        return new ConstantValue(0, TypeLayoutService.IrVoidPrim);
+        return new IntConstantValue(0, TypeLayoutService.IrVoidPrim);
     }
 
     /// <summary>
@@ -1991,7 +1996,7 @@ public class HmAstLowering
             _diagnostics.Add(Diagnostic.Error(
                 $"Variant `{variantName}` not found in enum `{irEnum.Name}`",
                 default, null, "E3037"));
-            return new ConstantValue(0, irEnum);
+            return new IntConstantValue(0, irEnum);
         }
 
         var variant = foundVariant.Value;
@@ -2000,7 +2005,7 @@ public class HmAstLowering
         var enumPtr = new LocalValue($"enum_{_tempCounter++}", new IrPointer(irEnum));
         _currentBlock.Instructions.Add(new AllocaInstruction(_currentSpan, irEnum.Size, enumPtr));
 
-        EmitStoreToOffset(enumPtr, 0, new ConstantValue(variant.TagValue, TypeLayoutService.IrI32), TypeLayoutService.IrI32);
+        EmitStoreToOffset(enumPtr, 0, new IntConstantValue(variant.TagValue, TypeLayoutService.IrI32), TypeLayoutService.IrI32);
 
         var enumResult = new LocalValue($"enum_val_{_tempCounter++}", irEnum);
         _currentBlock.Instructions.Add(new LoadInstruction(_currentSpan, enumPtr, enumResult));
@@ -2195,10 +2200,10 @@ public class HmAstLowering
                     _currentBlock.Instructions.Add(new AllocaInstruction(_currentSpan, sliceStruct.Size, tmpPtr));
                     // ptr = NULL (0 cast to pointer)
                     EmitStoreToOffset(tmpPtr, ptrField.ByteOffset,
-                        new ConstantValue(0, ptrField.Type), ptrField.Type);
+                        new IntConstantValue(0, ptrField.Type), ptrField.Type);
                     // len = 0
                     EmitStoreToOffset(tmpPtr, lenField.ByteOffset,
-                        new ConstantValue(0, TypeLayoutService.IrUSize), lenField.Type);
+                        new IntConstantValue(0, TypeLayoutService.IrUSize), lenField.Type);
                     var loaded = new LocalValue($"empty_slice_val_{_tempCounter++}", sliceStruct);
                     _currentBlock.Instructions.Add(new LoadInstruction(_currentSpan, tmpPtr, loaded));
 
@@ -2471,7 +2476,7 @@ public class HmAstLowering
         _currentBlock.Instructions.Add(new AllocaInstruction(_currentSpan, TypeLayoutService.IrBool.Size, resultPtr));
 
         // Store short-circuit default: false for 'and', true for 'or'
-        var defaultVal = new ConstantValue(isAnd ? 0 : 1, TypeLayoutService.IrBool);
+        var defaultVal = new IntConstantValue(isAnd ? 0 : 1, TypeLayoutService.IrBool);
         _currentBlock.Instructions.Add(new StorePointerInstruction(_currentSpan, resultPtr, defaultVal));
 
         var rhsBlock = CreateBlock(isAnd ? "and_rhs" : "or_rhs");
@@ -2603,7 +2608,7 @@ public class HmAstLowering
                 _ => throw new InternalCompilerError($"Unexpected CmpDerivedOperator: {cmpOp}", expr.Span)
             };
 
-            var zero = new ConstantValue(0, TypeLayoutService.IrI32);
+            var zero = new IntConstantValue(0, TypeLayoutService.IrI32);
             var cmpResult = new LocalValue($"cmp_{_tempCounter++}", TypeLayoutService.IrBool);
             _currentBlock.Instructions.Add(new BinaryInstruction(_currentSpan, irOp, tagValue, zero, cmpResult));
             return cmpResult;
@@ -2657,7 +2662,7 @@ public class HmAstLowering
         if (arrayIr != null)
         {
             if (fieldName == "len")
-                return new ConstantValue(arrayIr.Length ?? 0, TypeLayoutService.IrUSize);
+                return new IntConstantValue(arrayIr.Length ?? 0, TypeLayoutService.IrUSize);
             if (fieldName == "ptr")
             {
                 var elemPtrType = new IrPointer(arrayIr.Element);
@@ -2696,7 +2701,7 @@ public class HmAstLowering
             var nichePtr = (IrPointer)baseIrType;
             if (fieldName == "has_value")
             {
-                var nullVal = new ConstantValue(0, nichePtr);
+                var nullVal = new IntConstantValue(0, nichePtr);
                 var cmpResult = new LocalValue($"niche_hv_{_tempCounter++}", TypeLayoutService.IrBool);
                 _currentBlock.Instructions.Add(new BinaryInstruction(_currentSpan, BinaryOp.NotEqual, baseVal, nullVal, cmpResult));
                 return cmpResult;
@@ -2802,7 +2807,7 @@ public class HmAstLowering
 
                 EmitStoreToOffset(tmpPtr, ptrField.ByteOffset, srcVal, ptrField.Type);
                 EmitStoreToOffset(tmpPtr, lenField.ByteOffset,
-                    new ConstantValue(length, TypeLayoutService.IrUSize), lenField.Type);
+                    new IntConstantValue(length, TypeLayoutService.IrUSize), lenField.Type);
 
                 var loaded = new LocalValue($"slice_val_{_tempCounter++}", sliceTarget);
                 _currentBlock.Instructions.Add(new LoadInstruction(_currentSpan, tmpPtr, loaded));
@@ -2811,8 +2816,8 @@ public class HmAstLowering
         }
 
         // Constant folding for primitive casts
-        if (srcVal is ConstantValue constSrc && targetIrType is IrPrimitive)
-            return new ConstantValue(constSrc.IntValue, targetIrType);
+        if (srcVal is IntConstantValue constSrc && targetIrType is IrPrimitive)
+            return new IntConstantValue(constSrc.IntValue, targetIrType);
 
         // Emit cast instruction — pass null! for TypeBase, codegen uses IrType
         var result = new LocalValue($"cast_{_tempCounter++}", targetIrType);
@@ -2828,7 +2833,7 @@ public class HmAstLowering
         if (block.TrailingExpression != null)
             return LowerExpression(block.TrailingExpression);
 
-        return new ConstantValue(0, TypeLayoutService.IrVoidPrim);
+        return new IntConstantValue(0, TypeLayoutService.IrVoidPrim);
     }
 
     private Value LowerIf(IfExpressionNode ifExpr)
@@ -2890,7 +2895,7 @@ public class HmAstLowering
             return loaded;
         }
 
-        return new ConstantValue(0, TypeLayoutService.IrVoidPrim);
+        return new IntConstantValue(0, TypeLayoutService.IrVoidPrim);
     }
 
     private Value LowerAddressOf(AddressOfExpressionNode addrOf)
@@ -2936,7 +2941,7 @@ public class HmAstLowering
         return result;
     }
 
-    private ConstantValue LowerAssignment(AssignmentExpressionNode assign)
+    private IntConstantValue LowerAssignment(AssignmentExpressionNode assign)
     {
         // Indexed assignment with op_set_index
         if (assign.Target is IndexExpressionNode idx)
@@ -2954,10 +2959,10 @@ public class HmAstLowering
         if (ptr != null)
             _currentBlock.Instructions.Add(new StorePointerInstruction(_currentSpan, ptr, val));
 
-        return new ConstantValue(0, TypeLayoutService.IrVoidPrim);
+        return new IntConstantValue(0, TypeLayoutService.IrVoidPrim);
     }
 
-    private ConstantValue LowerSetIndexCall(IndexExpressionNode idx, ExpressionNode valueExpr, ResolvedOperator resolved)
+    private IntConstantValue LowerSetIndexCall(IndexExpressionNode idx, ExpressionNode valueExpr, ResolvedOperator resolved)
     {
         var indexVal = LowerExpression(idx.Index);
         var val = LowerExpression(valueExpr);
@@ -2989,7 +2994,7 @@ public class HmAstLowering
             calleeIrParamTypes.Add(GetIrType(param));
 
         EmitFLangCall(resolved.Function.Name, [baseVal, indexVal, val], TypeLayoutService.IrVoidPrim, calleeIrParamTypes);
-        return new ConstantValue(0, TypeLayoutService.IrVoidPrim);
+        return new IntConstantValue(0, TypeLayoutService.IrVoidPrim);
     }
 
     private LocalValue LowerStructConstruction(StructConstructionExpressionNode structCtor)
@@ -3041,7 +3046,7 @@ public class HmAstLowering
         // Zero-initialize the struct so unspecified fields get default values
         var memsetResult = new LocalValue($"memset_{_tempCounter++}", TypeLayoutService.IrVoidPrim);
         _currentBlock.Instructions.Add(new CallInstruction(_currentSpan, "memset",
-            [resultPtr, new ConstantValue(0, TypeLayoutService.IrI32), new ConstantValue(structIrType.Size, TypeLayoutService.IrUSize)],
+            [resultPtr, new IntConstantValue(0, TypeLayoutService.IrI32), new IntConstantValue(structIrType.Size, TypeLayoutService.IrUSize)],
             memsetResult)
         { IsForeignCall = true });
 
@@ -3070,7 +3075,7 @@ public class HmAstLowering
         // Zero-initialize the struct so unspecified fields get default values
         var memsetResult = new LocalValue($"memset_{_tempCounter++}", TypeLayoutService.IrVoidPrim);
         _currentBlock.Instructions.Add(new CallInstruction(_currentSpan, "memset",
-            [resultPtr, new ConstantValue(0, TypeLayoutService.IrI32), new ConstantValue(structType.Size, TypeLayoutService.IrUSize)],
+            [resultPtr, new IntConstantValue(0, TypeLayoutService.IrI32), new IntConstantValue(structType.Size, TypeLayoutService.IrUSize)],
             memsetResult)
         { IsForeignCall = true });
 
@@ -3109,7 +3114,7 @@ public class HmAstLowering
             // Fast path: memset for single-byte elements or zero-valued constants
             bool useMemset = false;
             int memsetByte = 0;
-            if (repeatVal is ConstantValue cv)
+            if (repeatVal is IntConstantValue cv)
             {
                 if (cv.IntValue == 0)
                 {
@@ -3129,8 +3134,8 @@ public class HmAstLowering
             {
                 var voidResult = new LocalValue($"memset_{_tempCounter++}", TypeLayoutService.IrVoidPrim);
                 _currentBlock.Instructions.Add(new CallInstruction(_currentSpan, "memset",
-                    [allocaResult, new ConstantValue(memsetByte, TypeLayoutService.IrI32),
-                     new ConstantValue(totalSize, TypeLayoutService.IrUSize)],
+                    [allocaResult, new IntConstantValue(memsetByte, TypeLayoutService.IrI32),
+                     new IntConstantValue(totalSize, TypeLayoutService.IrUSize)],
                     voidResult)
                 { IsForeignCall = true });
             }
@@ -3150,7 +3155,7 @@ public class HmAstLowering
                             new GetElementPtrInstruction(_currentSpan, allocaResult, filled * elemSize, destPtr));
                         var voidResult = new LocalValue($"memcpy_{_tempCounter++}", TypeLayoutService.IrVoidPrim);
                         _currentBlock.Instructions.Add(new CallInstruction(_currentSpan, "memcpy",
-                            [destPtr, allocaResult, new ConstantValue(chunk * elemSize, TypeLayoutService.IrUSize)],
+                            [destPtr, allocaResult, new IntConstantValue(chunk * elemSize, TypeLayoutService.IrUSize)],
                             voidResult)
                         { IsForeignCall = true });
                         filled += chunk;
@@ -3216,7 +3221,7 @@ public class HmAstLowering
             // Start: use 0 if not specified
             Value startVal = rangeExpr.Start != null
                 ? LowerExpression(rangeExpr.Start)
-                : new ConstantValue(0, TypeLayoutService.IrUSize);
+                : new IntConstantValue(0, TypeLayoutService.IrUSize);
 
             // End: use base length if not specified
             Value endVal;
@@ -3229,7 +3234,7 @@ public class HmAstLowering
                 // Get length from base: fixed array has compile-time length, slice has .len field
                 var baseSemanticType = _checker.Engine.Resolve(_checker.GetInferredType(index.Base));
                 if (baseSemanticType is FLang.Core.Types.ArrayType arrType)
-                    endVal = new ConstantValue(arrType.Length, TypeLayoutService.IrUSize);
+                    endVal = new IntConstantValue(arrType.Length, TypeLayoutService.IrUSize);
                 else
                     endVal = ExtractSliceLen(arrVal);
             }
@@ -3257,7 +3262,7 @@ public class HmAstLowering
         }
 
         // Scalar indexing: compute element pointer via GEP
-        var elementSize = new ConstantValue(resultIrType.Size, TypeLayoutService.IrUSize);
+        var elementSize = new IntConstantValue(resultIrType.Size, TypeLayoutService.IrUSize);
         var byteOffset = new LocalValue($"idx_offset_{_tempCounter++}", TypeLayoutService.IrUSize);
         _currentBlock.Instructions.Add(new BinaryInstruction(_currentSpan, BinaryOp.Multiply, idxVal, elementSize, byteOffset));
 
@@ -3340,7 +3345,7 @@ public class HmAstLowering
             }
         }
         // Fallback: 0 (shouldn't happen for valid slice types)
-        return new ConstantValue(0, TypeLayoutService.IrUSize);
+        return new IntConstantValue(0, TypeLayoutService.IrUSize);
     }
 
     /// <summary>
@@ -3460,7 +3465,7 @@ public class HmAstLowering
                         // Store has_value = true
                         var hvField = FindField(optionStruct, "has_value");
                         EmitStoreToOffset(resultPtr, hvField.ByteOffset,
-                            new ConstantValue(1, TypeLayoutService.IrBool), TypeLayoutService.IrBool);
+                            new IntConstantValue(1, TypeLayoutService.IrBool), TypeLayoutService.IrBool);
 
                         // Store value = inner
                         var valField = FindField(optionStruct, "value");
@@ -3585,7 +3590,7 @@ public class HmAstLowering
     private LocalValue LowerCoalesceNiche(CoalesceExpressionNode coalesce, Value leftOption, IrType resultIrType)
     {
         var nichePtr = (IrPointer)leftOption.IrType!;
-        var nullVal = new ConstantValue(0, nichePtr);
+        var nullVal = new IntConstantValue(0, nichePtr);
         var isNonNull = new LocalValue($"coal_niche_{_tempCounter++}", TypeLayoutService.IrBool);
         _currentBlock.Instructions.Add(new BinaryInstruction(_currentSpan, BinaryOp.NotEqual, leftOption, nullVal, isNonNull));
 
@@ -3700,7 +3705,7 @@ public class HmAstLowering
 
             var someHvField = FindField(resultOptionStruct, "has_value");
             EmitStoreToOffset(somePtr, someHvField.ByteOffset,
-                new ConstantValue(1, TypeLayoutService.IrBool), TypeLayoutService.IrBool);
+                new IntConstantValue(1, TypeLayoutService.IrBool), TypeLayoutService.IrBool);
 
             var someValField = FindField(resultOptionStruct, "value");
             EmitStoreToOffset(somePtr, someValField.ByteOffset, memberVal, someValField.Type);
@@ -3725,7 +3730,7 @@ public class HmAstLowering
 
             var nullHvField = FindField(nullOptionStruct, "has_value");
             EmitStoreToOffset(nullPtr, nullHvField.ByteOffset,
-                new ConstantValue(0, TypeLayoutService.IrBool), TypeLayoutService.IrBool);
+                new IntConstantValue(0, TypeLayoutService.IrBool), TypeLayoutService.IrBool);
 
             var nullLoaded = new LocalValue($"np_null_val_{_tempCounter++}", nullOptionStruct);
             _currentBlock.Instructions.Add(new LoadInstruction(_currentSpan, nullPtr, nullLoaded));
@@ -3745,7 +3750,7 @@ public class HmAstLowering
     private LocalValue LowerNullPropagationNiche(NullPropagationExpressionNode nullProp, Value targetVal, IrType resultIrType)
     {
         var nichePtr = (IrPointer)targetVal.IrType!;
-        var nullVal = new ConstantValue(0, nichePtr);
+        var nullVal = new IntConstantValue(0, nichePtr);
         var isNonNull = new LocalValue($"np_niche_{_tempCounter++}", TypeLayoutService.IrBool);
         _currentBlock.Instructions.Add(new BinaryInstruction(_currentSpan, BinaryOp.NotEqual, targetVal, nullVal, isNonNull));
 
@@ -3782,7 +3787,7 @@ public class HmAstLowering
 
                 var someHvField = FindField(resultOptionStruct, "has_value");
                 EmitStoreToOffset(somePtr, someHvField.ByteOffset,
-                    new ConstantValue(1, TypeLayoutService.IrBool), TypeLayoutService.IrBool);
+                    new IntConstantValue(1, TypeLayoutService.IrBool), TypeLayoutService.IrBool);
 
                 var someValField = FindField(resultOptionStruct, "value");
                 EmitStoreToOffset(somePtr, someValField.ByteOffset, memberVal, someValField.Type);
@@ -3804,7 +3809,7 @@ public class HmAstLowering
         if (IsNicheOption(resultIrType))
         {
             _currentBlock.Instructions.Add(new StorePointerInstruction(_currentSpan, resultPtr,
-                new ConstantValue(0, resultIrType)));
+                new IntConstantValue(0, resultIrType)));
         }
         else if (resultIrType is IrStruct nullOptionStruct)
         {
@@ -3813,7 +3818,7 @@ public class HmAstLowering
 
             var nullHvField = FindField(nullOptionStruct, "has_value");
             EmitStoreToOffset(nullPtr2, nullHvField.ByteOffset,
-                new ConstantValue(0, TypeLayoutService.IrBool), TypeLayoutService.IrBool);
+                new IntConstantValue(0, TypeLayoutService.IrBool), TypeLayoutService.IrBool);
 
             var nullLoaded = new LocalValue($"np_null_val_{_tempCounter++}", nullOptionStruct);
             _currentBlock.Instructions.Add(new LoadInstruction(_currentSpan, nullPtr2, nullLoaded));
@@ -3879,7 +3884,7 @@ public class HmAstLowering
             _diagnostics.Add(Diagnostic.Error(
                 $"Variant `{variantName}` not found in enum `{irEnum.Name}`",
                 call.Span, null, "E3037"));
-            return new ConstantValue(0, irEnum);
+            return new IntConstantValue(0, irEnum);
         }
 
         var variant = foundVariant.Value;
@@ -3889,7 +3894,7 @@ public class HmAstLowering
         _currentBlock.Instructions.Add(new AllocaInstruction(_currentSpan, irEnum.Size, enumPtr));
 
         // 2. Store tag value (offset 0) as i32
-        EmitStoreToOffset(enumPtr, 0, new ConstantValue(variant.TagValue, TypeLayoutService.IrI32), TypeLayoutService.IrI32);
+        EmitStoreToOffset(enumPtr, 0, new IntConstantValue(variant.TagValue, TypeLayoutService.IrI32), TypeLayoutService.IrI32);
 
         // 3. If variant has payload, store payload data
         if (variant.PayloadType != null)
@@ -3945,7 +3950,7 @@ public class HmAstLowering
         {
             _diagnostics.Add(Diagnostic.Error(
                 "Match scrutinee is not an enum type", match.Span, null, "E3038"));
-            return new ConstantValue(0, TypeLayoutService.IrVoidPrim);
+            return new IntConstantValue(0, TypeLayoutService.IrVoidPrim);
         }
 
         var resultIrType = GetIrType(match);
@@ -4014,7 +4019,7 @@ public class HmAstLowering
 
                 if (checkVariant != null)
                 {
-                    var expectedTag = new ConstantValue(checkVariant.Value.TagValue, TypeLayoutService.IrI32);
+                    var expectedTag = new IntConstantValue(checkVariant.Value.TagValue, TypeLayoutService.IrI32);
                     var cmpResult = new LocalValue($"match_cmp_{_tempCounter++}", TypeLayoutService.IrBool);
                     _currentBlock.Instructions.Add(
                         new BinaryInstruction(_currentSpan, BinaryOp.Equal, tagValue, expectedTag, cmpResult));
@@ -4117,7 +4122,7 @@ public class HmAstLowering
             return finalResult;
         }
 
-        return new ConstantValue(0, TypeLayoutService.IrVoidPrim);
+        return new IntConstantValue(0, TypeLayoutService.IrVoidPrim);
     }
 
     // =========================================================================
@@ -4387,7 +4392,7 @@ public class HmAstLowering
                     var elementIrType = GetIrType(index);
 
                     // Compute byte offset = index * element_size
-                    var elementSize = new ConstantValue(elementIrType.Size, TypeLayoutService.IrUSize);
+                    var elementSize = new IntConstantValue(elementIrType.Size, TypeLayoutService.IrUSize);
                     var byteOffset = new LocalValue($"idx_offset_{_tempCounter++}", TypeLayoutService.IrUSize);
                     _currentBlock.Instructions.Add(
                         new BinaryInstruction(_currentSpan, BinaryOp.Multiply, idxVal, elementSize, byteOffset));

@@ -1769,6 +1769,39 @@ Check that all template expressions use valid member accesses and that reference
 
 ---
 
+### E2076: Duplicate Struct Field Name
+
+**Category**: Type Checking / Structs
+**Severity**: Error
+
+#### Description
+
+A struct declaration contains two or more fields with the same name.
+
+#### Example
+
+```flang
+type Vector2 = struct {
+    x: f32
+    x: f32  // ERROR: duplicate field `x`
+    z: f32
+}
+```
+
+#### Solution
+
+Give each field a unique name:
+
+```flang
+type Vector2 = struct {
+    x: f32
+    y: f32
+    z: f32
+}
+```
+
+---
+
 ### E2102: Conflicting Generic Type Bindings
 
 **Category**: Generics
@@ -2657,6 +2690,7 @@ Report the issue with sample code that reproduces the error.
 | **E2071** | Source Generators | Source generator argument count mismatch     |
 | **E2072** | Source Generators | Source generator argument kind mismatch      |
 | **E2073** | Source Generators | Template expansion error                     |
+| **E2076** | Type Checking     | Duplicate struct field name                   |
 | **E2102** | Generics          | Conflicting generic type bindings            |
 
 ### E3XXX: Code Generation

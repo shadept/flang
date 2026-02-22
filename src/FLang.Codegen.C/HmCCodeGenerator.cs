@@ -188,7 +188,7 @@ public static class HmCCodeGenerator
     {
         return value switch
         {
-            ConstantValue cv => EmitConstant(cv),
+            IntConstantValue cv => EmitConstant(cv),
             FloatConstantValue fcv => EmitFloatConstant(fcv),
             StringTableValue stv => EmitInlineStringLiteral(stringTable[stv.Index]),
             FunctionReferenceValue fv => fv.IrType is IrFunctionPtr fp2
@@ -236,7 +236,7 @@ public static class HmCCodeGenerator
     {
         // Enum in C is: struct { int32_t tag; uint8_t payload[N]; }
         // For naked variants (no payload), just set the tag
-        if (scv.FieldValues.TryGetValue("tag", out var tagVal) && tagVal is ConstantValue cv)
+        if (scv.FieldValues.TryGetValue("tag", out var tagVal) && tagVal is IntConstantValue cv)
             return $".tag = {EmitConstant(cv)}";
         return ".tag = 0";
     }
@@ -559,7 +559,7 @@ public static class HmCCodeGenerator
     {
         return value switch
         {
-            ConstantValue cv => EmitConstant(cv),
+            IntConstantValue cv => EmitConstant(cv),
             FloatConstantValue fcv => EmitFloatConstant(fcv),
             LocalValue lv => lv.Name,
             StringTableValue stv => $"__flang__string_table[{stv.Index}]",
@@ -577,7 +577,7 @@ public static class HmCCodeGenerator
     /// <summary>
     /// Emit an integer constant with the appropriate C suffix for its type.
     /// </summary>
-    private static string EmitConstant(ConstantValue cv)
+    private static string EmitConstant(IntConstantValue cv)
     {
         // INT64_MIN can't be written as -9223372036854775808LL in C because the positive
         // part overflows signed long long. Use the (-MAX - 1) idiom instead.

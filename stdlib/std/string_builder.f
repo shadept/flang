@@ -505,13 +505,17 @@ pub fn append(sb: &StringBuilder, val: bool, spec: String) {
 // Generic Append (for user-defined types with format)
 // =============================================================================
 
+// Append a String to the builder.
+pub fn append(sb: &StringBuilder, s: String) {
+    sb.append_bytes(slice_from_raw_parts(s.ptr, s.len))
+}
+
 pub fn append(sb: &StringBuilder, s: OwnedString) {
     sb.append(s.as_view())
 }
 
-// Append a String to the builder.
-pub fn append(sb: &StringBuilder, s: String) {
-    sb.append_bytes(slice_from_raw_parts(s.ptr, s.len))
+pub fn append(sb: &StringBuilder, s: StringBuilder) {
+    sb.append(s.as_view())
 }
 
 pub fn append(sb: &StringBuilder, val: $T) {

@@ -73,10 +73,10 @@ pub fn op_eq(a: String, b: String) bool {
 }
 
 pub fn hash(s: String) usize {
-    //let mut hash = 5381;
-    //for (c in s.bytes()) {
-    //    hash = ((hash << 5) + hash) + c as usize
-    //}
-    //hash
-    return 0
+    let h: usize = 14695981039346656037
+    for (i in 0..s.len as isize) {
+        const byte: &u8 = s.ptr + (i as usize)
+        h = (h ^ (byte.* as usize)) * 1099511628211
+    }
+    return h
 }

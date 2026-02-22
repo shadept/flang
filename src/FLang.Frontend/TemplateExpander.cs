@@ -84,6 +84,8 @@ public static class TemplateExpander
 
         var expandedInvocations = new HashSet<string>();
         var generatedSources = new Dictionary<string, StringBuilder>();
+        // Track invocations that failed expansion so we can report errors after all rounds
+        var failedInvocations = new Dictionary<string, Diagnostic>();
 
         const int maxRounds = 8;
         for (var round = 0; round < maxRounds; round++)
@@ -180,6 +182,33 @@ public static class TemplateExpander
 
                     if (bindingError) continue;
 
+                    // Validate Type parameters refer to known types
+                    var typeArgError = false;
+                    for (var p = 0; p < def.Parameters.Count && p < inv.Arguments.Count; p++)
+                    {
+                        var param = def.Parameters[p];
+                        if (param.IsVariadic) break;
+                        if (param.Kind != GeneratorParamKind.Type) continue;
+
+                        var arg = inv.Arguments[p];
+                        if (arg.Identifier == null) continue; // struct/enum type expr — skip
+
+                        var typeName = arg.Identifier;
+                        var fqn = $"{modulePath}.{typeName}";
+                        if (typeProvider.LookupNominalType(fqn) == null &&
+                            typeProvider.LookupNominalType(typeName) == null)
+                        {
+                            // Type not found — allow retry on next round in case
+                            // another generator produces it
+                            expandedInvocations.Remove(invocationKey);
+                            failedInvocations[invocationKey] = Diagnostic.Error(
+                                $"Unknown type `{typeName}`", arg.Span, "E2003");
+                            typeArgError = true;
+                            break;
+                        }
+                    }
+                    if (typeArgError) continue;
+
                     // Create lookups
                     NominalType? TypeOfLookup(string name)
                     {
@@ -213,14 +242,14 @@ public static class TemplateExpander
                     catch (Exception ex)
                     {
                         expandedInvocations.Remove(invocationKey);
-                        if (round == maxRounds - 1)
-                        {
-                            diagnostics.Add(Diagnostic.Error(
-                                $"Template expansion error in `#{inv.Name}`: {ex.Message}",
-                                inv.Span, "E2073"));
-                        }
+                        failedInvocations[invocationKey] = Diagnostic.Error(
+                            $"Template expansion error in `#{inv.Name}`: {ex.Message}",
+                            inv.Span, "E2073");
                         continue;
                     }
+
+                    // Expansion succeeded — clear any previous failure
+                    failedInvocations.Remove(invocationKey);
 
                     var originFile = ResolveOriginFile(kvp.Key, syntheticModulePaths);
                     var genFilePath = Path.ChangeExtension(originFile, ".generated.f");
@@ -279,6 +308,10 @@ public static class TemplateExpander
                     allDefs[def.Name] = def;
             }
         }
+
+        // Report errors for invocations that failed on every round
+        foreach (var (_, diag) in failedInvocations)
+            diagnostics.Add(diag);
 
         foreach (var (path, sb) in generatedSources)
             generatedFiles[path] = sb.ToString();

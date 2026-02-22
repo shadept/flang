@@ -1,3 +1,4 @@
+import core.hash
 import core.io
 import core.math
 import core.option

@@ -74,9 +74,9 @@ public abstract class Value
 /// Represents a compile-time integer constant.
 /// Used for literal values, array sizes, offsets, etc.
 /// </summary>
-public class ConstantValue : Value
+public class IntConstantValue : Value
 {
-    public ConstantValue(BigInteger intValue, IrType irType)
+    public IntConstantValue(BigInteger intValue, IrType irType)
     {
         IntValue = intValue;
         Name = intValue.ToString();

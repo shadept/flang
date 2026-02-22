@@ -223,7 +223,8 @@ public static class FirPrinter
         return value switch
         {
             GlobalValue global => $"@{global.Name}",
-            ConstantValue constant => constant.IntValue.ToString(),
+            IntConstantValue constant => constant.IntValue.ToString(),
+            FloatConstantValue constant => constant.FloatValue.ToString(),
             StringTableValue stv => $"@string_table[{stv.Index}]",
             FunctionReferenceValue fv => $"@{fv.FunctionName}",
             LocalValue local => $"%{local.Name}",

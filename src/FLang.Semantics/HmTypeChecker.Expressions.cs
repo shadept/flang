@@ -1799,7 +1799,7 @@ public partial class HmTypeChecker
 
             if (fieldDef == default)
             {
-                ReportError($"Unknown field `{fieldName}` in struct `{nominal.Name}`", valueExpr.Span);
+                ReportError($"Unknown field `{fieldName}` in struct `{nominal.Name}`", valueExpr.Span, "E2014");
                 InferExpression(valueExpr);
                 continue;
             }

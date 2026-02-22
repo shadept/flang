@@ -266,8 +266,8 @@ public class HmAstLoweringTests
         AssertNoErrors(diags);
         var fn = FindFunction(module, "get_value");
         var ret = InstructionsOfType<ReturnInstruction>(fn).First();
-        Assert.IsType<ConstantValue>(ret.Value);
-        Assert.Equal(42, ((ConstantValue)ret.Value).IntValue);
+        Assert.IsType<IntConstantValue>(ret.Value);
+        Assert.Equal(42, ((IntConstantValue)ret.Value).IntValue);
     }
 
     // =========================================================================
@@ -329,7 +329,7 @@ public class HmAstLoweringTests
             """);
         AssertNoErrors(diags);
         var ret = InstructionsOfType<ReturnInstruction>(FindFunction(module, "get")).First();
-        var cv = Assert.IsType<ConstantValue>(ret.Value);
+        var cv = Assert.IsType<IntConstantValue>(ret.Value);
         Assert.Equal(99, cv.IntValue);
     }
 
@@ -341,7 +341,7 @@ public class HmAstLoweringTests
             """);
         AssertNoErrors(diags);
         var ret = InstructionsOfType<ReturnInstruction>(FindFunction(module, "get")).First();
-        var cv = Assert.IsType<ConstantValue>(ret.Value);
+        var cv = Assert.IsType<IntConstantValue>(ret.Value);
         Assert.Equal(1, cv.IntValue);
     }
 
@@ -1323,8 +1323,8 @@ public class HmAstLoweringTests
 
         // Constant cast of a literal should be folded — result is ConstantValue
         var ret = InstructionsOfType<ReturnInstruction>(fn).First();
-        Assert.IsType<ConstantValue>(ret.Value);
-        Assert.Equal(42, ((ConstantValue)ret.Value).IntValue);
+        Assert.IsType<IntConstantValue>(ret.Value);
+        Assert.Equal(42, ((IntConstantValue)ret.Value).IntValue);
     }
 
     // =========================================================================

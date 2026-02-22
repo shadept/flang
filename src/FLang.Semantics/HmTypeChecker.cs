@@ -543,6 +543,12 @@ public partial class HmTypeChecker : INominalTypeRegistry, ITemplateTypeProvider
 
             if (resolved is FLang.Core.Types.PrimitiveType prim)
             {
+                if (_floatTypeNames.Contains(prim.Name))
+                {
+                    // Integer literal used as float (e.g., 1 assigned to f32 field) — valid
+                    continue;
+                }
+
                 if (!_integerTypeNames.Contains(prim.Name))
                 {
                     // Resolved to a non-integer type (e.g., bool) — conflicting binding

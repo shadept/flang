@@ -3,6 +3,7 @@
 // #derive(T, eq)          — field-by-field equality (op_eq)
 // #derive(T, clone)       — field-by-field copy
 // #derive(T, debug)       — format(self, sb, spec) for StringBuilder integration
+// #derive(T, hash)         — recursive FNV-1a hash combining field hashes
 // #derive(T, eq, clone)   — multiple traits via variadic params
 
 #define(derive, T: Type, ..Traits: Ident) {
@@ -31,6 +32,14 @@
                     sb.append(", ")
                 }
                 sb.append("}")
+            }
+        } #else #if Trait == "hash" {
+            pub fn hash(self: #(T.name)) usize {
+                let h: usize = 14695981039346656037
+                #for field in type_of(T.name).fields {
+                    h = (h ^ hash(self.#(field.name))) * 1099511628211
+                }
+                return h
             }
         }
     }
