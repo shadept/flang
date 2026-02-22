@@ -12,6 +12,6 @@ type NewFoo = struct {
 }
 
 pub fn main() i32 {
-    let f: OldFoo = OldFoo { x = 42 }
+    let _f: OldFoo = OldFoo { x = 42 }
     return 0
 }

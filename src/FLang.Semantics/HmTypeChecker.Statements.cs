@@ -123,6 +123,9 @@ public partial class HmTypeChecker
         // Track const names for E2038 checking
         if (varDecl.IsConst)
             MarkConst(varDecl.Name);
+
+        // Track for unused variable warnings (only inside function bodies)
+        _currentFnDeclaredVars?.TryAdd(varDecl.Name, varDecl.Span);
     }
 
     // =========================================================================

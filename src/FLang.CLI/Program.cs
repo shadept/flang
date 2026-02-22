@@ -74,8 +74,11 @@ if (findCompilersOnly)
 
 if (inputFilePath == null)
 {
+    Console.WriteLine("FLang — an experimental language that transpiles to C");
+    Console.WriteLine();
     Console.WriteLine("Usage: flang [options] <file>");
     Console.WriteLine("       flang test <file>          Compile and run test blocks");
+    Console.WriteLine();
     Console.WriteLine("Options:");
     Console.WriteLine("  -o, --output <path>     Output executable path (default: same as input with .exe)");
     Console.WriteLine("  --stdlib-path <path>    Path to standard library directory");

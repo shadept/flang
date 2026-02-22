@@ -2,14 +2,13 @@
 
 ## 1. Core Philosophy
 
-FLang is a modern systems programming language designed for explicit control, strong inference, and ergonomic syntax.
-All operations have defined semantics and the language avoids undefined behavior.
+FLang is a statically-typed language, designed for explicit control, strong inference, and ergonomic syntax.
 
-- Manual memory control.
+- No garbage collector — explicit memory management with allocators and `defer`.
 - Strong multi-phase type inference and unification.
-- Structural typing.
-- Immutable by default.
-- Binary compatibility for core abstractions.
+- Nominal typing for structs and enums, structural for tuples and anonymous types.
+- Scoped mutability (not yet implemented/enforced).
+- Simple but extensible — small core language, grow through the standard library and source generators.
 
 ---
 
@@ -1296,11 +1295,11 @@ Generated code is written to `<source>.generated.f` next to the original file. P
 
 ## 9. Defined Behaviors
 
-- Out-of-bounds access: defined panic.
-- Integer overflow: panic in debug; wraparound in release.
-- Uninitialized memory: compile-time error.
-- Null dereference: defined panic.
-- Struct layout and alignment are guaranteed and discoverable via introspection.
+- **Memory initialization:** All memory is zero-initialized by default. The compiler may optimize this away when it can prove the memory is written before being read.
+- **Integer overflow:** Wrapping arithmetic by default (two's complement).
+- **Out-of-bounds access:** Panics at runtime. Slices enforce this today; fixed-size arrays do not yet emit bounds checks.
+- **Null safety:** `&T` is non-null by type — no null checks needed. `&T?` requires explicit unwrap or `?.` operator; the type system prevents accidental null dereference.
+- **Struct layout and alignment:** Guaranteed and discoverable via `size_of` and `align_of` intrinsics.
 
 ---
 

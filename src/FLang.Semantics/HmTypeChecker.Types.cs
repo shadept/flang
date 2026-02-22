@@ -66,7 +66,10 @@ public partial class HmTypeChecker
         if (scheme != null)
             return _engine.Specialize(scheme);
 
-        ReportError($"Unknown type `{named.Name}`", named.Span, "E2003");
+        var candidates = _nominalTypes.Keys.Select(k => k.Contains('.') ? k[(k.LastIndexOf('.') + 1)..] : k);
+        var suggestion = FLang.Core.StringDistance.FindClosestMatch(named.Name, candidates);
+        var hint = suggestion != null ? $"did you mean `{suggestion}`?" : null;
+        ReportError($"Unknown type `{named.Name}`", named.Span, "E2003", hint);
         return _engine.FreshVar();
     }
 
@@ -128,7 +131,10 @@ public partial class HmTypeChecker
             return new NominalType(nominal.Name, nominal.Kind, typeArgs, nominal.FieldsOrVariants);
         }
 
-        ReportError($"Unknown generic type `{generic.Name}`", generic.Span, "E2003");
+        var candidates = _nominalTypes.Keys.Select(k => k.Contains('.') ? k[(k.LastIndexOf('.') + 1)..] : k);
+        var suggestion = FLang.Core.StringDistance.FindClosestMatch(generic.Name, candidates);
+        var hint = suggestion != null ? $"did you mean `{suggestion}`?" : null;
+        ReportError($"Unknown generic type `{generic.Name}`", generic.Span, "E2003", hint);
         return _engine.FreshVar();
     }
 

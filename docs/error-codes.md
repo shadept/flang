@@ -11,7 +11,7 @@ FLang uses a custom sequential numbering system organized by compiler phase:
 - **E1XXX**: Frontend errors (lexing, parsing, syntax)
 - **E2XXX**: Semantic analysis errors (type checking, name resolution, control flow)
 - **E3XXX**: Code generation errors (FIR lowering, C code generation)
-- **W1XXX**: Frontend warnings (deprecated syntax)
+- **W1XXX**: Code quality warnings (unused variables, dead code)
 - **W2XXX**: Semantic analysis warnings (deprecation, suspicious patterns)
 
 Within each category, error codes are assigned sequentially starting from E0001, E1001, E2001, E3001, etc. This ensures
@@ -2825,6 +2825,39 @@ type Pair = struct(T) {
 #### Solution
 
 Move the type parameters from the name to after the `struct`/`enum` keyword.
+
+---
+
+## W1XXX: Code Quality Warnings
+
+### W1001: Unused Variable
+
+**Category**: Code Quality
+**Severity**: Warning
+
+#### Description
+
+A variable was declared but never used in the function body.
+
+#### Example
+
+```flang
+pub fn main() i32 {
+    let x = 42      // warning: unused variable `x`
+    return 0
+}
+```
+
+#### Solution
+
+Remove the variable or prefix it with `_` to indicate it is intentionally unused:
+
+```flang
+pub fn main() i32 {
+    let _x = 42     // no warning
+    return 0
+}
+```
 
 ---
 

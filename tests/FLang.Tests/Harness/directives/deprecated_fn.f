@@ -12,6 +12,6 @@ fn bar() i32 {
 }
 
 pub fn main() i32 {
-    let x: i32 = foo()
+    let _x: i32 = foo()
     return 0
 }

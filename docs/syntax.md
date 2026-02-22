@@ -4,7 +4,7 @@ This document is the complete syntax reference for FLang. Every construct the la
 
 ## What FLang Does NOT Have
 
-No semicolons. No `while` loops (use `loop` with `break`). No `mut` keyword. No `->` return type arrow. No `impl` blocks. No traits/interfaces. No closures (lambdas exist but cannot capture). No string interpolation. No multi-line comments. No `elif`. No ternary operator. No `switch`/`case`. No macros. No `async`/`await`. No destructuring assignment. No spread operator. No type aliases.
+No semicolons. No `while` loops (use `loop` with `break`). No `mut` keyword. No `->` return type arrow. No `impl` blocks. No traits/interfaces. No closures (lambdas exist but cannot capture). No string interpolation. No multi-line comments. No `elif`. No ternary operator. No `switch`/`case`. No `async`/`await`. No destructuring assignment. No spread operator.
 
 ## Comments
 
@@ -14,9 +14,7 @@ No semicolons. No `while` loops (use `loop` with `break`). No `mut` keyword. No 
 
 ## Primitive Types
 
-`i8` `i16` `i32` `i64` `u8` `u16` `u32` `u64` `usize` `isize` `bool`
-
-No floating-point types.
+`i8` `i16` `i32` `i64` `u8` `u16` `u32` `u64` `usize` `isize` `f32` `f64` `bool`
 
 ## Composite Types
 
@@ -42,6 +40,11 @@ No floating-point types.
 0xDEAD_BEEF     // hex with underscore separators
 1_000_000       // decimal with underscore separators for readability
 1_000i32        // underscores work with type suffixes
+3.14            // float (type inferred, defaults to f64)
+3.14f32         // float with type suffix (f32 or f64)
+1.5e10          // scientific notation (defaults to f64)
+3e-4            // scientific notation without decimal point
+1_000.5f64      // underscores work in float literals too
 true false      // bool
 null            // None value for optionals
 "hello"         // string (UTF-8, null-terminated)
@@ -191,6 +194,9 @@ struct Point {
     x: i32
     y: i32
 }
+
+// equivalent using type declaration:
+type Point = struct { x: i32, y: i32 }
 ```
 
 Commas between fields are optional. Generic structs:
@@ -222,6 +228,9 @@ enum Color {
     Blue
 }
 
+// equivalent using type declaration:
+type Color = enum { Red, Green, Blue }
+
 enum Result(T, E) {
     Ok(T)
     Err(E)
@@ -249,6 +258,19 @@ let c = Color.Red               // qualified
 let r = Result.Ok(42)           // qualified with payload
 let r2 = Ok(42)                 // short form (when unambiguous)
 ```
+
+## Type Declarations
+
+The `type` keyword provides an alternative syntax for defining structs and enums:
+
+```
+type Vec2 = struct { x: i32, y: i32 }
+type Color = enum { Red, Green, Blue }
+type Option = struct(T) { has_value: bool, value: T }
+type Result = enum(T, E) { Ok(T), Err(E) }
+```
+
+Both forms are equivalent: `type Name = struct { ... }` and `struct Name { ... }` define the same type. Same for enums.
 
 ## Control Flow
 
@@ -439,7 +461,7 @@ a?.field        // if a has value, access field; otherwise null
 expr as Type
 ```
 
-Works for: numeric conversions, pointer-to-integer, pointer-to-pointer, `String`/`u8[]`.
+Works for: numeric conversions (including `i32 as f64`, `f64 as i32`, `f32 as f64`), pointer-to-integer, pointer-to-pointer, `String`/`u8[]`.
 
 ### Operator Overloading
 
@@ -552,3 +574,53 @@ ptr.field = 5          // field write through reference
 ```
 
 Compound assignment: `+=` (others not yet implemented).
+
+## Source Generators
+
+Source generators are compile-time code generation constructs prefixed with `#`.
+
+### Defining a Generator
+
+```
+#define(name, Param1: Kind, Param2: Kind) {
+    // template body with directives
+}
+```
+
+Parameter kinds: `Ident` (bare identifier), `Type` (type expression). The last parameter can be variadic: `..Param: Kind`.
+
+### Invoking a Generator
+
+```
+#name(arg1, arg2, ...)
+```
+
+### Template Directives
+
+Inside a generator body, these directives control code generation:
+
+| Directive | Purpose |
+|---|---|
+| `#(expr)` | Interpolation — inserts the value of `expr` |
+| `#for var in collection { ... }` | Iteration over parameters or lists |
+| `#if condition { ... } #else { ... }` | Conditional generation |
+
+### Built-in Generators (stdlib)
+
+| Generator | Purpose |
+|---|---|
+| `#derive(T, eq, clone, debug, hash)` | Derive trait implementations for type `T` |
+| `#enum_utils(E)` | Generate `to_string`/`from_string` for enum `E` |
+| `#interface(Name, Spec)` | Define a vtable-based interface |
+| `#implement(Impl, Iface)` | Implement an interface for a type |
+
+### Anonymous Type Expressions in Generator Args
+
+Generator arguments can include inline anonymous type expressions:
+
+```
+#interface(Writer, struct {
+    write: fn(data: u8[]) usize
+    flush: fn() bool
+})
+```

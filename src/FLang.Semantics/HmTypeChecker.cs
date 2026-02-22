@@ -159,6 +159,17 @@ public partial class HmTypeChecker : INominalTypeRegistry, ITemplateTypeProvider
     private readonly Dictionary<string, string?> _deprecatedFunctions = [];
 
     /// <summary>
+    /// Tracks variable declarations in the current function for unused variable warnings.
+    /// Maps variable name to its declaration span. Null when not inside a function body.
+    /// </summary>
+    private Dictionary<string, SourceSpan>? _currentFnDeclaredVars;
+
+    /// <summary>
+    /// Tracks variable usages in the current function for unused variable warnings.
+    /// </summary>
+    private HashSet<string>? _currentFnUsedVars;
+
+    /// <summary>
     /// Types used as Type(T) values (e.g., i32 in size_of(i32)).
     /// Populated during type checking, consumed by lowering to build type table.
     /// </summary>
@@ -242,9 +253,19 @@ public partial class HmTypeChecker : INominalTypeRegistry, ITemplateTypeProvider
         _diagnostics.Add(Diagnostic.Error(message, span, null, code));
     }
 
+    private void ReportError(string message, SourceSpan span, string code, string? hint)
+    {
+        _diagnostics.Add(Diagnostic.Error(message, span, hint, code));
+    }
+
     private void ReportWarning(string message, SourceSpan span, string code = "W0001")
     {
         _diagnostics.Add(Diagnostic.Warning(message, span, code: code));
+    }
+
+    private void ReportWarning(string message, SourceSpan span, string code, string? hint)
+    {
+        _diagnostics.Add(Diagnostic.Warning(message, span, hint, code));
     }
 
     // =========================================================================

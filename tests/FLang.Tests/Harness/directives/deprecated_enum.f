@@ -10,6 +10,6 @@ type OldColor = enum {
 }
 
 pub fn main() i32 {
-    let c: OldColor = OldColor.Red
+    let _c: OldColor = OldColor.Red
     return 0
 }

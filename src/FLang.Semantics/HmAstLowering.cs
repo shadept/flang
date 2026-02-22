@@ -1440,7 +1440,7 @@ public class HmAstLowering
     {
         if (_loopStack.Count == 0)
         {
-            _diagnostics.Add(Diagnostic.Error("break outside of loop", _.Span, null, "E3006"));
+            _diagnostics.Add(Diagnostic.Error("break outside of loop", _.Span, "break can only be used inside for/while loops", "E3006"));
             return;
         }
 
@@ -1457,7 +1457,7 @@ public class HmAstLowering
     {
         if (_loopStack.Count == 0)
         {
-            _diagnostics.Add(Diagnostic.Error("continue outside of loop", _.Span, null, "E3007"));
+            _diagnostics.Add(Diagnostic.Error("continue outside of loop", _.Span, "continue can only be used inside for/while loops", "E3007"));
             return;
         }
 
@@ -1993,9 +1993,11 @@ public class HmAstLowering
 
         if (foundVariant == null)
         {
+            var suggestion = StringDistance.FindClosestMatch(variantName, irEnum.Variants.Select(v => v.Name));
+            var hint = suggestion != null ? $"did you mean `{suggestion}`?" : null;
             _diagnostics.Add(Diagnostic.Error(
                 $"Variant `{variantName}` not found in enum `{irEnum.Name}`",
-                default, null, "E3037"));
+                default, hint, "E3037"));
             return new IntConstantValue(0, irEnum);
         }
 
@@ -3881,9 +3883,11 @@ public class HmAstLowering
 
         if (foundVariant == null)
         {
+            var suggestion = StringDistance.FindClosestMatch(variantName, irEnum.Variants.Select(v => v.Name));
+            var hint = suggestion != null ? $"did you mean `{suggestion}`?" : null;
             _diagnostics.Add(Diagnostic.Error(
                 $"Variant `{variantName}` not found in enum `{irEnum.Name}`",
-                call.Span, null, "E3037"));
+                call.Span, hint, "E3037"));
             return new IntConstantValue(0, irEnum);
         }
 

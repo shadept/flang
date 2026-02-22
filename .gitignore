@@ -101,6 +101,11 @@ dist/
 *.idb
 *.pdb
 *.ilk
+*.dSYM/
+*.DotSettings.user
+.vscode/
+.idea/
+/test
 
 !src/FLang.Codegen.C/
 

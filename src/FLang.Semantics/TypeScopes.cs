@@ -111,6 +111,22 @@ public class TypeScopes
     }
 
     /// <summary>
+    /// Collect all visible names across all scopes (for "did you mean?" suggestions).
+    /// </summary>
+    public IEnumerable<string> GetAllNames()
+    {
+        var seen = new HashSet<string>();
+        foreach (var scope in _scopes)
+        {
+            foreach (var name in scope.Keys)
+            {
+                if (seen.Add(name))
+                    yield return name;
+            }
+        }
+    }
+
+    /// <summary>
     /// Look up a name with scope barrier. Names found at or below the barrier depth
     /// are treated as not found (for non-capturing lambda enforcement).
     /// barrier == 0 means no barrier.

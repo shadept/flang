@@ -146,6 +146,9 @@ public partial class HmTypeChecker
             : _scopes.Lookup(id.Name);
         if (scheme != null)
         {
+            // Track usage for unused variable warnings
+            _currentFnUsedVars?.Add(id.Name);
+
             // Track declaration for go-to-definition support
             var decl = _scopes.LookupDeclaration(id.Name);
             if (decl is VariableDeclarationNode varDeclNode)
@@ -1706,7 +1709,21 @@ public partial class HmTypeChecker
             if (fieldName == "ptr") return new ReferenceType(arrayType.ElementType);
         }
 
-        ReportError($"No field `{fieldName}` on type", member.Span, "E2014");
+        // "did you mean?" for field names
+        string? fieldHint = null;
+        if (resolved is NominalType nomForHint)
+        {
+            var fieldsSource = nomForHint;
+            if (nomForHint.FieldsOrVariants.Count == 0)
+            {
+                var tmpl = LookupNominalType(nomForHint.Name);
+                if (tmpl != null) fieldsSource = tmpl;
+            }
+            var fieldNames = fieldsSource.FieldsOrVariants.Select(f => f.Name);
+            var suggestion = StringDistance.FindClosestMatch(fieldName, fieldNames);
+            if (suggestion != null) fieldHint = $"did you mean `{suggestion}`?";
+        }
+        ReportError($"No field `{fieldName}` on type", member.Span, "E2014", fieldHint);
         return _engine.FreshVar();
     }
 

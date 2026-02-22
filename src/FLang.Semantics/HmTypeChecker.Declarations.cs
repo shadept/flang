@@ -379,6 +379,12 @@ public partial class HmTypeChecker
 
     private void CheckFunctionBody(FunctionDeclarationNode fn)
     {
+        // Set up unused variable tracking
+        var prevDeclared = _currentFnDeclaredVars;
+        var prevUsed = _currentFnUsedVars;
+        _currentFnDeclaredVars = new Dictionary<string, SourceSpan>();
+        _currentFnUsedVars = new HashSet<string>();
+
         // Outer scope: function parameters
         PushScope();
 
@@ -430,6 +436,18 @@ public partial class HmTypeChecker
                 ReportError($"Function `{fn.Name}` must return a value", closeBraceSpan, "E2049");
             }
         }
+
+        // W1001: Warn about unused variables (skip _ prefix)
+        if (_currentFnDeclaredVars != null && _currentFnUsedVars != null)
+        {
+            foreach (var (name, span) in _currentFnDeclaredVars)
+            {
+                if (!name.StartsWith('_') && !_currentFnUsedVars.Contains(name))
+                    ReportWarning($"unused variable `{name}`", span, "W1001", "prefix with `_` to suppress");
+            }
+        }
+        _currentFnDeclaredVars = prevDeclared;
+        _currentFnUsedVars = prevUsed;
 
         _functionStack.Pop();
         PopScope();
