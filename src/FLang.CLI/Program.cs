@@ -47,10 +47,10 @@ for (var i = 0; i < args.Length; i++)
         dumpTemplates = true;
     else if (args[i] == "--version" || args[i] == "-v")
     {
-        Console.WriteLine("flang 0.1.0");
+        Console.WriteLine("flang 0.1.0-alpha");
         return;
     }
-    else if (!args[i].StartsWith("-")) inputFilePath = args[i];
+    else if (!args[i].StartsWith('-')) inputFilePath = args[i];
 
 if (lspMode)
 {
