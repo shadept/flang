@@ -1,7 +1,7 @@
 //! TEST: enum_utils_basic
 //! EXIT: 0
 
-import std.enum_utils
+import std.enum
 
 type Color = enum {
     Red

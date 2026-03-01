@@ -27,6 +27,9 @@ public partial class HmTypeChecker
             case ReturnStatementNode ret:
                 CheckReturn(ret);
                 break;
+            case ExpressionStatementNode { Expression: IfExpressionNode ifStmt }:
+                InferIfAsStatement(ifStmt);
+                break;
             case ExpressionStatementNode exprStmt:
                 InferExpression(exprStmt.Expression);
                 break;

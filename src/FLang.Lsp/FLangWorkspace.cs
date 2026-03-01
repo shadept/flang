@@ -104,7 +104,9 @@ public class FLangWorkspace
         }
     }
 
-    public void AnalyzeFile(string filePath)
+    public void AnalyzeFile(string filePath) => AnalyzeFileInternal(filePath, cascade: true);
+
+    private void AnalyzeFileInternal(string filePath, bool cascade)
     {
         var normalized = Path.GetFullPath(filePath);
         FLangLanguageServer.Log($"Analyzing: {normalized}");
@@ -222,6 +224,17 @@ public class FLangWorkspace
             PublishDiagnostics(normalized, result);
             var publishMs = (System.Diagnostics.Stopwatch.GetTimestamp() - lap) * 1000.0 / System.Diagnostics.Stopwatch.Frequency;
             FLangLanguageServer.Log($"  [publishDiags] {publishMs:F1}ms — {allDiagnostics.Count} diagnostics");
+
+            // Re-analyze open files that depend on the changed file
+            if (cascade)
+            {
+                var dependents = GetDependentFiles(normalized);
+                foreach (var dep in dependents)
+                {
+                    FLangLanguageServer.Log($"  cascade: re-analyzing {dep}");
+                    AnalyzeFileInternal(dep, cascade: false);
+                }
+            }
         }
         catch (Exception ex)
         {
@@ -232,6 +245,27 @@ public class FLangWorkspace
                 _pendingAnalyses.Remove(normalized);
             }
         }
+    }
+
+    /// <summary>
+    /// Returns open files whose last analysis included the given file as a dependency.
+    /// </summary>
+    private List<string> GetDependentFiles(string normalizedPath)
+    {
+        var dependents = new List<string>();
+        lock (_lock)
+        {
+            foreach (var (file, result) in _analysisResults)
+            {
+                if (string.Equals(file, normalizedPath, StringComparison.OrdinalIgnoreCase))
+                    continue;
+                if (!_openDocuments.ContainsKey(file))
+                    continue;
+                if (result.ParsedModules.ContainsKey(normalizedPath))
+                    dependents.Add(file);
+            }
+        }
+        return dependents;
     }
 
     private void PublishDiagnostics(string filePath, FileAnalysisResult result)

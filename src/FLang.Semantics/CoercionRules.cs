@@ -89,10 +89,11 @@ public class OptionWrappingCoercionRule : IInferenceCoercionRule
 {
     public Type? TryApply(Type from, Type to, InferenceEngine engine)
     {
-        // to is Option[T] and from equals T
+        // to is Option(T) and from equals T (resolving through union-find)
         if (to is NominalType { Name: WellKnown.Option } stTo && stTo.TypeArguments.Count > 0)
         {
-            if (from.Equals(stTo.TypeArguments[0]))
+            var innerType = engine.Resolve(stTo.TypeArguments[0]);
+            if (from.Equals(innerType))
                 return to;
         }
 
@@ -101,7 +102,7 @@ public class OptionWrappingCoercionRule : IInferenceCoercionRule
 }
 
 /// <summary>
-/// String -> Slice[u8] (binary-compatible view cast).
+/// String -> Slice(u8) (binary-compatible view cast).
 /// </summary>
 public class StringToByteSliceCoercionRule : IInferenceCoercionRule
 {
@@ -118,13 +119,13 @@ public class StringToByteSliceCoercionRule : IInferenceCoercionRule
 }
 
 /// <summary>
-/// Array decay: [T; N] -> &amp;T, [T; N] -> Slice[T], &amp;[T; N] -> Slice[T].
+/// Array decay: [T; N] -> &amp;T, [T; N] -> Slice(T), &amp;[T; N] -> Slice(T).
 /// </summary>
 public class ArrayDecayCoercionRule : IInferenceCoercionRule
 {
     public Type? TryApply(Type from, Type to, InferenceEngine engine)
     {
-        // [T; N] -> Slice[T]
+        // [T; N] -> Slice(T)
         if (from is ArrayType arr && to is NominalType { Name: WellKnown.Slice } sliceTo &&
             sliceTo.TypeArguments.Count > 0)
         {
@@ -135,7 +136,7 @@ public class ArrayDecayCoercionRule : IInferenceCoercionRule
             }
         }
 
-        // &[T; N] -> Slice[T]
+        // &[T; N] -> Slice(T)
         if (from is ReferenceType { InnerType: ArrayType refArr } &&
             to is NominalType { Name: WellKnown.Slice } sliceTo2 &&
             sliceTo2.TypeArguments.Count > 0)
@@ -265,7 +266,7 @@ public class AnonymousStructCoercionRule : IInferenceCoercionRule
 }
 
 /// <summary>
-/// Slice[T] -> &amp;T (extract pointer from slice).
+/// Slice(T) -> &amp;T (extract pointer from slice).
 /// </summary>
 public class SliceToReferenceCoercionRule : IInferenceCoercionRule
 {

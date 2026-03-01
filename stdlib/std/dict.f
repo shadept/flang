@@ -4,12 +4,10 @@
 // Probing uses bounded for-in loops over 0..capacity with break,
 // which avoids the need for while loops.
 
-import std.mem
-import core.panic
-import core.runtime
-
 import std.allocator
+import std.mem
 import std.option
+import std.string
 
 // Entry states: 0 = empty, 1 = occupied, 2 = tombstone
 
@@ -48,17 +46,11 @@ fn entry_byte_size(self: Dict($K, $V)) usize {
     return 16 + size_of(K) + size_of(V)
 }
 
-// Hash function operating on raw bytes of a key.
-// Uses multiplicative hashing (no bitwise ops available in FLang).
-fn hash_key(key: &$K) usize {
-    const key_size: usize = size_of(K)
-    const key_bytes: &u8 = key as &u8
-    let hash: usize = 2166136261
-    for (i in 0..key_size as isize) {
-        const byte: &u8 = key_bytes + (i as usize)
-        hash = (hash + (byte.* as usize) + 1) * 16777619
-    }
-    return hash
+// Hash a key using the public hash() function.
+// Types with custom hash semantics (e.g. String, OwnedString) provide their
+// own hash() overload, so Dict automatically uses content-aware hashing.
+fn hash_key(key: $K) usize {
+    return hash(key)
 }
 
 // Returns the number of key-value pairs in the dict.
@@ -124,7 +116,7 @@ pub fn op_set_index(self: Dict($K, $V), key: K, value: V) {
 pub fn set(self: &Dict($K, $V), key: K, value: V) {
     self.ensure_capacity()
 
-    const h: usize = hash_key(&key)
+    const h: usize = hash_key(key)
     let tombstone_idx: usize = self.cap  // sentinel: no tombstone found
 
     for (i in 0..self.cap as isize) {
@@ -164,6 +156,11 @@ pub fn set(self: &Dict($K, $V), key: K, value: V) {
     panic("dict: set failed - table full")
 }
 
+pub fn set(self: Dict(OwnedString, $V), key: String, value: V) {
+    const fake = OwnedString{ptr=key.ptr, len=key.len, allocator=null}
+    return set(self, fake, value)
+}
+
 pub fn op_index(self: Dict($K, $V), key: K) V? {
     return self.get(key)
 }
@@ -174,7 +171,7 @@ pub fn get(self: Dict($K, $V), key: K) V? {
         return null
     }
 
-    const h: usize = hash_key(&key)
+    const h: usize = hash_key(key)
 
     for (i in 0..self.cap as isize) {
         const idx: usize = (h + (i as usize)) % self.cap
@@ -197,13 +194,18 @@ pub fn get(self: Dict($K, $V), key: K) V? {
     return null
 }
 
+pub fn get(self: Dict(OwnedString, $V), key: String) V? {
+    const fake = OwnedString{ptr=key.ptr, len=key.len, allocator=null}
+    return get(self, fake)
+}
+
 // Check if a key exists in the dict.
 pub fn contains(self: Dict($K, $V), key: K) bool {
     if (self.cap == 0) {
         return false
     }
 
-    const h: usize = hash_key(&key)
+    const h: usize = hash_key(key)
 
     for (i in 0..self.cap as isize) {
         const idx: usize = (h + (i as usize)) % self.cap
@@ -225,13 +227,18 @@ pub fn contains(self: Dict($K, $V), key: K) bool {
     return false
 }
 
+pub fn contains(self: Dict(OwnedString, $V), key: String) bool {
+    const fake = OwnedString{ptr=key.ptr, len=key.len, allocator=null}
+    return contains(self, fake)
+}
+
 // Remove a key from the dict. Returns the removed value, or null if not found.
 pub fn remove(self: &Dict($K, $V), key: K) V? {
     if (self.cap == 0) {
         return null
     }
 
-    const h: usize = hash_key(&key)
+    const h: usize = hash_key(key)
 
     for (i in 0..self.cap as isize) {
         const idx: usize = (h + (i as usize)) % self.cap

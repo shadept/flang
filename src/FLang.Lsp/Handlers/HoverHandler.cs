@@ -174,7 +174,20 @@ public class HoverHandler : HoverHandlerBase
             case MemberAccessExpressionNode ma:
                 {
                     if (tc.InferredTypes.TryGetValue(ma, out var type))
-                        return $".{ma.FieldName}: {FormatHmType(tc.Engine.Resolve(type), tc)}";
+                    {
+                        var resolved = tc.Engine.Resolve(type);
+                        // Enum payload variant constructor: fn(payload) -> EnumType
+                        if (resolved is FunctionType ft
+                            && ft.ReturnType is NominalType { Kind: NominalKind.Enum } enumType)
+                        {
+                            var payloadStr = string.Join(", ", ft.ParameterTypes.Select(p => FormatHmType(p, tc)));
+                            return $".{ma.FieldName}({payloadStr}): {FormatHmType(enumType, tc)}";
+                        }
+                        // Payload-less enum variant
+                        if (resolved is NominalType { Kind: NominalKind.Enum } directEnum)
+                            return $".{ma.FieldName}: {FormatHmType(directEnum, tc)}";
+                        return $".{ma.FieldName}: {FormatHmType(resolved, tc)}";
+                    }
                     break;
                 }
 

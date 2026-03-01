@@ -1,4 +1,3 @@
-using System.Numerics;
 using System.Text;
 using FLang.Core;
 using FLang.Core.Types;
@@ -580,7 +579,7 @@ public class HmAstLowering
                     }
                 }
                 // Expand function types: include parameter types and return type
-                else if (type is Core.Types.FunctionType fnType)
+                else if (type is FunctionType fnType)
                 {
                     foreach (var pt in fnType.ParameterTypes)
                     {
@@ -663,7 +662,7 @@ public class HmAstLowering
             var typeName = innerType switch
             {
                 NominalType nt2 => nt2.Name,
-                Core.Types.FunctionType ft2 =>
+                FunctionType ft2 =>
                     $"fn({string.Join(", ", ft2.ParameterTypes.Select(p => _engine.Resolve(p).ToString()))}) {_engine.Resolve(ft2.ReturnType)}",
                 _ => innerType.ToString() ?? "unknown"
             };
@@ -746,7 +745,7 @@ public class HmAstLowering
 
             // Params slice (for function types)
             if (paramsSliceIr != null && paramInfoIr != null && stringIr != null
-                && innerType is Core.Types.FunctionType fnType2)
+                && innerType is FunctionType fnType2)
             {
                 var paramElements = new List<Value>();
                 for (int i = 0; i < fnType2.ParameterTypes.Count; i++)
@@ -831,7 +830,7 @@ public class HmAstLowering
                 : nt.Name,
             Core.Types.ReferenceType rt => $"&{BuildTypeKey(rt.InnerType)}",
             Core.Types.ArrayType at => $"[{BuildTypeKey(at.ElementType)};{at.Length}]",
-            Core.Types.FunctionType ft =>
+            FunctionType ft =>
                 $"fn({string.Join(",", ft.ParameterTypes.Select(BuildTypeKey))}){BuildTypeKey(ft.ReturnType)}",
             _ => resolved.ToString() ?? "unknown"
         };
@@ -2801,7 +2800,7 @@ public class HmAstLowering
                 // Get the array length from the HM type (the IrType lost length info)
                 var hmSrcType = _engine.Resolve(_checker.GetInferredType(cast.Expression));
                 int length = 0;
-                if (hmSrcType is FLang.Core.Types.ArrayType arrHm)
+                if (hmSrcType is Core.Types.ArrayType arrHm)
                     length = arrHm.Length;
 
                 var tmpPtr = new LocalValue($"slice_{_tempCounter++}", new IrPointer(sliceTarget));
@@ -2923,12 +2922,24 @@ public class HmAstLowering
             return gv;
         }
 
+        // Temporary promotion: if target is a call result, materialize on the stack
+        // so we can take its address (same pattern as UFCS temp materialization).
+        if (addrOf.Target is CallExpressionNode)
+        {
+            var targetVal = LowerExpression(addrOf.Target);
+            var valType = targetVal.IrType ?? TypeLayoutService.IrVoidPrim;
+            var temp = new LocalValue($"addrof_tmp_{_tempCounter++}", new IrPointer(valType));
+            _currentBlock.Instructions.Add(new AllocaInstruction(_currentSpan, valType.Size, temp));
+            _currentBlock.Instructions.Add(new StorePointerInstruction(_currentSpan, temp, targetVal));
+            return temp;
+        }
+
         // General case: emit AddressOfInstruction
-        var targetVal = LowerExpression(addrOf.Target);
+        var targetVal2 = LowerExpression(addrOf.Target);
         var irType = GetIrType(addrOf);
 
         var result = new LocalValue($"addr_{_tempCounter++}", irType);
-        _currentBlock.Instructions.Add(new AddressOfInstruction(_currentSpan, targetVal.Name, result));
+        _currentBlock.Instructions.Add(new AddressOfInstruction(_currentSpan, targetVal2.Name, result));
         return result;
     }
 
@@ -3235,7 +3246,7 @@ public class HmAstLowering
             {
                 // Get length from base: fixed array has compile-time length, slice has .len field
                 var baseSemanticType = _checker.Engine.Resolve(_checker.GetInferredType(index.Base));
-                if (baseSemanticType is FLang.Core.Types.ArrayType arrType)
+                if (baseSemanticType is Core.Types.ArrayType arrType)
                     endVal = new IntConstantValue(arrType.Length, TypeLayoutService.IrUSize);
                 else
                     endVal = ExtractSliceLen(arrVal);

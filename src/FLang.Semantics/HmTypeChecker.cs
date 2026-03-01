@@ -555,14 +555,20 @@ public partial class HmTypeChecker : INominalTypeRegistry, ITemplateTypeProvider
         {
             var resolved = _engine.Resolve(typeVar);
 
-            if (resolved is FLang.Core.Types.TypeVar)
+            if (resolved is Core.Types.TypeVar)
             {
+                // Char literals default to char when unconstrained
+                if (node.Suffix == "char")
+                {
+                    _engine.Unify(typeVar, WellKnown.Char, node.Span);
+                    continue;
+                }
                 // Still unresolved after inference — no context to determine concrete type
                 ReportError($"Cannot determine concrete type for integer literal `{node.Value}`", node.Span, "E2001");
                 continue;
             }
 
-            if (resolved is FLang.Core.Types.PrimitiveType prim)
+            if (resolved is Core.Types.PrimitiveType prim)
             {
                 if (_floatTypeNames.Contains(prim.Name))
                 {
@@ -596,14 +602,14 @@ public partial class HmTypeChecker : INominalTypeRegistry, ITemplateTypeProvider
         {
             var resolved = _engine.Resolve(typeVar);
 
-            if (resolved is FLang.Core.Types.TypeVar)
+            if (resolved is Core.Types.TypeVar)
             {
                 // Still unresolved after inference — no context to determine concrete type
                 ReportError($"Cannot determine concrete type for float literal `{node.Value}`", node.Span, "E2001");
                 continue;
             }
 
-            if (resolved is FLang.Core.Types.PrimitiveType prim)
+            if (resolved is Core.Types.PrimitiveType prim)
             {
                 if (!_floatTypeNames.Contains(prim.Name))
                 {
@@ -636,7 +642,7 @@ public partial class HmTypeChecker : INominalTypeRegistry, ITemplateTypeProvider
             var resolvedReturn = _engine.Resolve(returnType);
 
             // If any param is still a TypeVar, skip — ValidatePostInference will report E2001
-            if (resolvedParams.Any(p => p is FLang.Core.Types.TypeVar) || resolvedReturn is FLang.Core.Types.TypeVar)
+            if (resolvedParams.Any(p => p is Core.Types.TypeVar) || resolvedReturn is Core.Types.TypeVar)
                 continue;
 
             var specialized = EnsureSpecialization(scheme, resolvedParams, resolvedReturn, callSpan);

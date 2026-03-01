@@ -88,3 +88,10 @@ public enum TokenKind
     // Identifier
     Identifier
 }
+
+public static class TokenKindExtensions
+{
+    public static bool IsKeyword(this TokenKind kind) =>
+        kind is (>= TokenKind.Pub and <= TokenKind.Or)
+            or TokenKind.True or TokenKind.False or TokenKind.Null;
+}

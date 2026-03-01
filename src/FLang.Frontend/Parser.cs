@@ -53,7 +53,30 @@ public class Parser
         var generatorInvocations = new List<SourceGeneratorInvocationNode>();
 
         // Parse imports
-        while (_currentToken.Kind == TokenKind.Import) imports.Add(ParseImport());
+        while (_currentToken.Kind == TokenKind.Import)
+        {
+            try
+            {
+                imports.Add(ParseImport());
+            }
+            catch (ParserException ex)
+            {
+                _diagnostics.Add(ex.Diagnostic);
+                // Skip tokens until the next import or top-level declaration
+                while (_currentToken.Kind != TokenKind.Import &&
+                       _currentToken.Kind != TokenKind.Pub &&
+                       _currentToken.Kind != TokenKind.Fn &&
+                       _currentToken.Kind != TokenKind.Type &&
+                       _currentToken.Kind != TokenKind.Struct &&
+                       _currentToken.Kind != TokenKind.Enum &&
+                       _currentToken.Kind != TokenKind.Test &&
+                       _currentToken.Kind != TokenKind.Hash &&
+                       _currentToken.Kind != TokenKind.EndOfFile)
+                {
+                    _currentToken = _lexer.NextToken();
+                }
+            }
+        }
 
         // Parse structs, functions, tests, and global constants
         while (_currentToken.Kind != TokenKind.EndOfFile)
@@ -708,9 +731,9 @@ public class Parser
     /// </summary>
     private Token EatIdentifierOrKeyword()
     {
-        // Keywords that can be used as module/path names
+        // Any keyword or identifier can appear as a module/path name
         if (_currentToken.Kind == TokenKind.Identifier ||
-            _currentToken.Kind == TokenKind.Test)
+            _currentToken.Kind.IsKeyword())
         {
             var token = _currentToken;
             _currentToken = _lexer.NextToken();

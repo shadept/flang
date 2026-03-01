@@ -70,6 +70,14 @@ public partial class HmTypeChecker
     {
         if (lit.Suffix != null)
         {
+            // Char literals with codepoints 0-255: allow contextual inference to u8 or char
+            if (lit.Suffix == "char" && lit.Value >= 0 && lit.Value <= 255)
+            {
+                var charTv = _engine.FreshVar();
+                _unsuffixedLiterals.Add((lit, charTv));
+                return charTv;
+            }
+
             var prim = ResolvePrimitive(lit.Suffix);
             if (prim != null)
             {
@@ -546,7 +554,7 @@ public partial class HmTypeChecker
                 }
             }
 
-            nextCandidate:;
+        nextCandidate:;
         }
 
         _diagnostics.Add(diag);
@@ -563,7 +571,7 @@ public partial class HmTypeChecker
     {
         FunctionScheme? bestCandidate = null;
         int bestCost = int.MaxValue;
-        bool bestIsGeneric = true;
+        int bestGenericCount = int.MaxValue;
 
         foreach (var candidate in candidates)
         {
@@ -588,20 +596,15 @@ public partial class HmTypeChecker
 
             if (!success) continue;
 
-            bool isGeneric = candidate.Signature.QuantifiedVarIds.Count > 0;
+            int genericCount = candidate.Signature.QuantifiedVarIds.Count;
 
-            // Two-tier: non-generic preferred, cost ranks within tier
-            if (!isGeneric && bestIsGeneric)
+            // Prefer fewer quantified type vars (0 = non-generic), then lower coercion cost
+            if (genericCount < bestGenericCount
+                || (genericCount == bestGenericCount && totalCost < bestCost))
             {
                 bestCandidate = candidate;
                 bestCost = totalCost;
-                bestIsGeneric = false;
-            }
-            else if (isGeneric == bestIsGeneric && totalCost < bestCost)
-            {
-                bestCandidate = candidate;
-                bestCost = totalCost;
-                bestIsGeneric = isGeneric;
+                bestGenericCount = genericCount;
             }
         }
 
@@ -684,7 +687,7 @@ public partial class HmTypeChecker
     {
         FunctionScheme? bestCandidate = null;
         int bestCost = int.MaxValue;
-        bool bestIsGeneric = true;
+        int bestGenericCount = int.MaxValue;
 
         foreach (var candidate in candidates)
         {
@@ -774,19 +777,15 @@ public partial class HmTypeChecker
             if (hasVariadic) defaultsUsed = Math.Max(0, defaultsUsed - 1); // variadic itself is optional
             totalCost += defaultsUsed * 100;
 
-            bool isGeneric = candidate.Signature.QuantifiedVarIds.Count > 0;
+            int genericCount = candidate.Signature.QuantifiedVarIds.Count;
 
-            if (!isGeneric && bestIsGeneric)
+            // Prefer fewer quantified type vars (0 = non-generic), then lower coercion cost
+            if (genericCount < bestGenericCount
+                || (genericCount == bestGenericCount && totalCost < bestCost))
             {
                 bestCandidate = candidate;
                 bestCost = totalCost;
-                bestIsGeneric = false;
-            }
-            else if (isGeneric == bestIsGeneric && totalCost < bestCost)
-            {
-                bestCandidate = candidate;
-                bestCost = totalCost;
-                bestIsGeneric = isGeneric;
+                bestGenericCount = genericCount;
             }
         }
 
@@ -1024,9 +1023,18 @@ public partial class HmTypeChecker
         if (receiverType != null && namedArgs.Count == 0)
         {
             var resolvedReceiver = _engine.Resolve(receiverType);
-            if (resolvedReceiver is NominalType { Kind: NominalKind.Enum })
+            if (resolvedReceiver is NominalType { Kind: NominalKind.Enum } enumNominal)
             {
-                var variantType = TryResolveVariantConstruction(lookupName, positionalTypes, call.Span);
+                // For non-generic enums, resolve variant directly from the enum type
+                // to avoid name collisions with variants of other enums in scope
+                // (e.g. TypeKind.Array vs JsonValue.Array).
+                // Generic enums use scope-based lookup to get fresh TypeVars via Specialize.
+                var isGeneric = enumNominal.TypeArguments.Any(a => _engine.Resolve(a) is TypeVar);
+                Type? variantType;
+                if (isGeneric)
+                    variantType = TryResolveVariantConstruction(lookupName, positionalTypes, call.Span);
+                else
+                    variantType = TryResolveQualifiedVariant(enumNominal, lookupName, positionalTypes, call.Span);
                 if (variantType != null) return variantType;
             }
         }
@@ -1231,6 +1239,50 @@ public partial class HmTypeChecker
     }
 
     /// <summary>
+    /// Resolve a variant construction from a qualified EnumType.Variant(args) call.
+    /// Uses the enum type's FieldsOrVariants directly to avoid name collisions with
+    /// variants of other enums in scope.
+    /// </summary>
+    private Type? TryResolveQualifiedVariant(NominalType enumType, string variantName, Type[] argTypes, SourceSpan span)
+    {
+        // Look up the registered enum (may have more complete field info)
+        var registered = LookupNominalType(enumType.Name) ?? enumType;
+
+        var variant = registered.FieldsOrVariants.FirstOrDefault(f => f.Name == variantName);
+        if (variant == default) return null;
+
+        // Payload-less variant
+        if (variant.Type.Equals(WellKnown.Void) && argTypes.Length == 0)
+            return enumType;
+
+        // Payload variant
+        if (argTypes.Length == 1)
+        {
+            if (_engine.TryUnify(argTypes[0], variant.Type) == null)
+                return null;
+            _engine.Unify(argTypes[0], variant.Type, span);
+            return enumType;
+        }
+
+        // Multi-payload variant (tuple)
+        if (variant.Type is NominalType { Kind: NominalKind.Tuple } tupleType)
+        {
+            if (tupleType.FieldsOrVariants.Count != argTypes.Length)
+                return null;
+            for (int i = 0; i < argTypes.Length; i++)
+            {
+                if (_engine.TryUnify(argTypes[i], tupleType.FieldsOrVariants[i].Type) == null)
+                    return null;
+            }
+            for (int i = 0; i < argTypes.Length; i++)
+                _engine.Unify(argTypes[i], tupleType.FieldsOrVariants[i].Type, span);
+            return enumType;
+        }
+
+        return null;
+    }
+
+    /// <summary>
     /// Try to resolve a call as an enum variant construction.
     /// Variant constructors are bound in scope as polymorphic types.
     /// </summary>
@@ -1319,6 +1371,10 @@ public partial class HmTypeChecker
         {
             // Both branches: unify
             var elseType = InferExpression(ifExpr.ElseBranch);
+
+            // Pre-bind Option TypeVars for T vs null coercion
+            PreBindOptionTypeVar(thenType, elseType, ifExpr.Span);
+
             using (_engine.OverrideErrors("E2074",
                 () => "if/else branches have different types: then is `{expected}`, else is `{actual}`"))
             {
@@ -1329,6 +1385,33 @@ public partial class HmTypeChecker
 
         // No else: void
         return WellKnown.Void;
+    }
+
+    /// <summary>
+    /// Infer an if/else in statement context — try to unify branches, but if they
+    /// differ, silently record void instead of reporting an error.
+    /// </summary>
+    private void InferIfAsStatement(IfExpressionNode ifExpr)
+    {
+        var condType = InferExpression(ifExpr.Condition);
+        _engine.Unify(condType, WellKnown.Bool, ifExpr.Condition.Span);
+
+        var thenType = InferExpression(ifExpr.ThenBranch);
+
+        if (ifExpr.ElseBranch != null)
+        {
+            var elseType = InferExpression(ifExpr.ElseBranch);
+            PreBindOptionTypeVar(thenType, elseType, ifExpr.Span);
+
+            if (_engine.TryUnify(thenType, elseType) != null)
+            {
+                var unified = _engine.Unify(thenType, elseType, ifExpr.Span);
+                Record(ifExpr, unified.Type);
+                return;
+            }
+        }
+
+        Record(ifExpr, WellKnown.Void);
     }
 
     // =========================================================================
@@ -1370,6 +1453,12 @@ public partial class HmTypeChecker
 
             // Infer arm body and unify with result type
             var armType = InferExpression(arm.ResultExpr);
+
+            // Pre-bind Option TypeVars for T vs null coercion:
+            // When one side is concrete T and the other is Option(TypeVar), bind the
+            // TypeVar so the OptionWrappingCoercionRule can match T -> Option(T).
+            PreBindOptionTypeVar(resultType, armType, arm.Span);
+
             using (_engine.OverrideErrors("E2075",
                 () => "match arm returns `{actual}`, but previous arms return `{expected}`"))
             {
@@ -1412,6 +1501,33 @@ public partial class HmTypeChecker
         }
 
         return resultType;
+    }
+
+    /// <summary>
+    /// When one side is a concrete type T and the other is Option(TypeVar),
+    /// pre-bind the TypeVar to T so the OptionWrappingCoercionRule can match.
+    /// This enables T-to-Option(T) coercion in match arms and if/else branches
+    /// where one branch returns T and another returns null.
+    /// </summary>
+    private void PreBindOptionTypeVar(Type a, Type b, SourceSpan span)
+    {
+        a = _engine.Resolve(a);
+        b = _engine.Resolve(b);
+
+        // a is concrete T, b is Option(TypeVar) → bind TypeVar = T
+        if (b is NominalType { Name: WellKnown.Option } optB && optB.TypeArguments.Count > 0)
+        {
+            var inner = _engine.Resolve(optB.TypeArguments[0]);
+            if (inner is TypeVar && a is not TypeVar && !(a is NominalType { Name: WellKnown.Option }))
+                _engine.Unify(a, inner, span);
+        }
+        // b is concrete T, a is Option(TypeVar) → bind TypeVar = T
+        else if (a is NominalType { Name: WellKnown.Option } optA && optA.TypeArguments.Count > 0)
+        {
+            var inner = _engine.Resolve(optA.TypeArguments[0]);
+            if (inner is TypeVar && b is not TypeVar && !(b is NominalType { Name: WellKnown.Option }))
+                _engine.Unify(b, inner, span);
+        }
     }
 
     /// <summary>
@@ -1592,9 +1708,9 @@ public partial class HmTypeChecker
 
     private ReferenceType InferAddressOf(AddressOfExpressionNode addrOf)
     {
-        // E2040: Cannot take address of temporaries (only identifiers, member access, index, deref)
+        // E2040: Cannot take address of temporaries (only identifiers, member access, index, deref, calls)
         if (addrOf.Target is not (IdentifierExpressionNode or MemberAccessExpressionNode
-            or IndexExpressionNode or DereferenceExpressionNode))
+            or IndexExpressionNode or DereferenceExpressionNode or CallExpressionNode))
         {
             ReportError("Cannot take address of temporary value", addrOf.Span, "E2040");
         }
