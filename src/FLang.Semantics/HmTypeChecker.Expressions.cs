@@ -1941,11 +1941,7 @@ public partial class HmTypeChecker
             _engine.Unify(valType, fieldDef.Type, valueExpr.Span);
         }
 
-        // E2015: Check for missing fields
-        var provided = new HashSet<string>(structCon.Fields.Select(f => f.FieldName));
-        foreach (var field in nominal.FieldsOrVariants)
-            if (!provided.Contains(field.Name))
-                ReportError($"Missing field `{field.Name}` in struct construction", structCon.Span, "E2015");
+        // Unspecified fields are zero-initialized (codegen memsets the struct to 0)
 
         return nominal;
     }

@@ -156,7 +156,7 @@ pub fn set(self: &Dict($K, $V), key: K, value: V) {
     panic("dict: set failed - table full")
 }
 
-pub fn set(self: Dict(OwnedString, $V), key: String, value: V) {
+pub fn set(self: &Dict(OwnedString, $V), key: String, value: V) {
     const fake = OwnedString{ptr=key.ptr, len=key.len, allocator=null}
     return set(self, fake, value)
 }

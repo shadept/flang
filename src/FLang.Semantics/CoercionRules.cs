@@ -198,8 +198,8 @@ public class AnonymousStructCoercionRule : IInferenceCoercionRule
         // Get the target's fields, substituting generic type args if needed
         var targetFields = GetSubstitutedFields(toStruct);
 
-        // Must have same number of fields
-        if (fromStruct.FieldsOrVariants.Count != targetFields.Count) return null;
+        // Source must not have more fields than target (extra fields = unknown)
+        if (fromStruct.FieldsOrVariants.Count > targetFields.Count) return null;
 
         // Build field map for the target
         var targetFieldMap = new Dictionary<string, Type>();

@@ -19,7 +19,7 @@ pub fn list(capacity: usize, allocator: &Allocator? = null) List($T) {
         .expect("list: allocation failed")
 
     return .{
-        ptr = buf.ptr,
+        ptr = buf.ptr as &T,
         len = 0,
         cap = capacity,
         allocator = allocator,

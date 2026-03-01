@@ -60,7 +60,7 @@ pub fn json_bool(value: bool) JsonValue { return JsonValue.Bool(value) }
 pub fn json_number(value: f64) JsonValue { return JsonValue.Number(value) }
 
 pub fn json_string(value: String, allocator: &Allocator? = null) JsonValue {
-    return JsonValue.Str(owned_string(value, allocator))
+    return JsonValue.Str(from_view(value, allocator))
 }
 
 pub fn json_array(allocator: &Allocator? = null) JsonValue {

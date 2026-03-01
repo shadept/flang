@@ -71,18 +71,7 @@ public partial class HmTypeChecker
             var initType = InferExpression(varDecl.Initializer);
             if (annotationType != null)
             {
-                // E2015: Check anonymous struct -> named struct for missing fields
-                if (varDecl.Initializer is AnonymousStructExpressionNode anonInit)
-                {
-                    var resolvedTarget = _engine.Resolve(annotationType);
-                    if (resolvedTarget is NominalType { Kind: NominalKind.Struct or NominalKind.Tuple } targetStruct)
-                    {
-                        var providedFields = new HashSet<string>(anonInit.Fields.Select(f => f.FieldName));
-                        foreach (var field in targetStruct.FieldsOrVariants)
-                            if (!providedFields.Contains(field.Name))
-                                ReportError($"Missing field `{field.Name}` in struct construction", varDecl.Span, "E2015");
-                    }
-                }
+                // Unspecified fields are zero-initialized (codegen memsets the struct to 0)
 
                 var unifySpan = varDecl.Initializer?.Span ?? varDecl.Span;
                 var unified = _engine.Unify(annotationType, initType, unifySpan);

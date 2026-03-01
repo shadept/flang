@@ -32,6 +32,10 @@ fn read(self: &MemReader, buf: u8[]) usize {
 
 #implement(MemReader, Reader)
 
+pub fn reader(s: String) MemReader {
+    return mem_reader(s)
+}
+
 #define(string_reader, T: Type) {
     pub fn find(s: #(T.name), needle: String) usize? { return find(s.as_view(), needle) }
     pub fn rfind(s: #(T.name), needle: String) usize? { return rfind(s.as_view(), needle) }
@@ -41,5 +45,5 @@ fn read(self: &MemReader, buf: u8[]) usize {
     pub fn trim(s: #(T.name)) String { return trim(s.as_view()) }
     pub fn trim_start(s: #(T.name)) String { return trim_start(s.as_view()) }
     pub fn trim_end(s: #(T.name)) String { return trim_end(s.as_view()) }
-    pub fn reader(s: #(T.name)) MemReader { return mem_reader(s.as_view()) }
+    pub fn reader(s: #(T.name)) MemReader { return reader(s.as_view()) }
 }

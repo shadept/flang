@@ -5,6 +5,7 @@ import core.string // explicit import for clarity
 import std.encoding.utf8
 import std.allocator
 import std.option
+import std.string_builder
 import std.string_reader
 
 // =============================================================================
@@ -175,11 +176,19 @@ pub type OwnedString = struct {
     allocator: &Allocator?
 }
 
+pub fn from_view(s: String, allocator: &Allocator?) OwnedString {
+    // TODO optimize
+    const sb = string_builder(s.len, allocator)
+    sb.append(s)
+    return sb.to_string()
+}
+
 pub fn deinit(self: &OwnedString) {
     self.allocator.or_global().dealloc(slice_from_raw_parts(self.ptr, self.len))
     self.ptr = 0usize as &u8
     self.len = 0
 }
+
 
 pub fn as_view(self: OwnedString) String {
     return .{ ptr = self.ptr, len = self.len }
