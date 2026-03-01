@@ -24,6 +24,8 @@ jobs:
             rid: win-x64
           - os: ubuntu-latest
             rid: linux-x64
+          - os: macos-latest
+            rid: darwin-arm64
 
     runs-on: ${{ matrix.os }}
 
@@ -90,4 +92,6 @@ jobs:
             artifacts/flang-win-x64/flang-win-x64.zip \
             artifacts/flang-win-x64/flang-win-x64.zip.sha256 \
             artifacts/flang-linux-x64/flang-linux-x64.zip \
-            artifacts/flang-linux-x64/flang-linux-x64.zip.sha256
+            artifacts/flang-linux-x64/flang-linux-x64.zip.sha256 \
+            artifacts/flang-darwin-arm64/flang-darwin-arm64.zip \
+            artifacts/flang-darwin-arm64/flang-darwin-arm64.zip.sha256

@@ -31,10 +31,10 @@ if (showHelp)
           dotnet run build.cs <rid>            Build for specific RID
           dotnet run build.cs -- --help        Show this help
 
-        RID defaults:
-          Windows  -> win-x64
-          Linux    -> linux-x64
-          macOS    -> osx-x64
+        RID is auto-detected from OS and architecture, e.g.:
+          Windows x64   -> win-x64
+          Linux x64     -> linux-x64
+          macOS ARM64   -> darwin-arm64
         """);
     return 0;
 }
@@ -42,17 +42,33 @@ if (showHelp)
 // Auto-detect RID if not provided
 if (rid == null)
 {
+    string os;
     if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
-        rid = "win-x64";
+        os = "win";
     else if (RuntimeInformation.IsOSPlatform(OSPlatform.Linux))
-        rid = "linux-x64";
+        os = "linux";
     else if (RuntimeInformation.IsOSPlatform(OSPlatform.OSX))
-        rid = "osx-x64";
+        os = "darwin";
     else
     {
         Console.Error.WriteLine("Error: Could not detect platform. Please specify a RID.");
         return 1;
     }
+
+    var arch = RuntimeInformation.OSArchitecture switch
+    {
+        Architecture.X64 => "x64",
+        Architecture.Arm64 => "arm64",
+        _ => null
+    };
+
+    if (arch == null)
+    {
+        Console.Error.WriteLine($"Error: Unsupported architecture {RuntimeInformation.OSArchitecture}. Please specify a RID.");
+        return 1;
+    }
+
+    rid = $"{os}-{arch}";
 }
 
 var exeExt = rid.StartsWith("win") ? ".exe" : "";
