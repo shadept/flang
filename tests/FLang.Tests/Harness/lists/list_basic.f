@@ -17,12 +17,12 @@ pub fn main() i32 {
     }
 
     // Test get
-    let first: i32 = list.get(0)
-    let second: i32 = list.get(1)
+    let first: i32 = list[0]
+    let second: i32 = list[1]
 
     // Test set
     list.set(0, 7)
-    let updated: i32 = list.get(0)
+    let updated: i32 = list[0]
     if (updated != 7) {
         return 2
     }

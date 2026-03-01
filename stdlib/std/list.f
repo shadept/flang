@@ -100,8 +100,12 @@ pub fn pop(list: &List($T)) T? {
 }
 
 // Get the element at the given index.
-// Panics if index is out of bounds.
-pub fn get(list: List($T), index: usize) &T {
+pub fn get(list: List($T), index: usize) T? {
+    return get_ref(list, index).map(fn(el){ el.* })
+}
+
+// Get the element at the given index.
+pub fn get_ref(list: List($T), index: usize) &T? {
     if index >= list.len {
         return null
     }
@@ -122,13 +126,13 @@ pub fn set(list: &List($T), index: usize, value: T) {
     memcpy(dest, &value as &u8, size_of(T))
 }
 
-pub fn op_index(list: List($T), index: usize) &T {
+pub fn op_index(list: List($T), index: usize) T {
     if index >= list.len {
         panic("List: index out of bounds")
     }
 
     let elem: &T = list.ptr + index
-    return elem
+    return elem.*
 }
 
 pub fn op_set_index(list: &List($T), index: usize, value: T) {

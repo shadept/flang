@@ -1726,6 +1726,16 @@ public partial class HmTypeChecker
         if (resolved is ReferenceType refType)
             return refType.InnerType;
 
+        // If the type is still a TypeVar (e.g., unannotated lambda parameter),
+        // create a reference constraint: inner must be &resultType.
+        // Unification will propagate this when the TypeVar gets bound.
+        if (resolved is TypeVar)
+        {
+            var resultType = _engine.FreshVar();
+            _engine.Unify(inner, new ReferenceType(resultType), deref.Span);
+            return resultType;
+        }
+
         ReportError("Cannot dereference non-reference type", deref.Span, "E2012");
         return _engine.FreshVar();
     }

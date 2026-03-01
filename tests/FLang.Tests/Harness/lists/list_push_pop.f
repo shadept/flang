@@ -10,8 +10,8 @@ pub fn main() i32 {
     list.push(4)
     list.push(5)
 
-    let a: i32 = list.get(0)
-    let b: i32 = list.get(1)
+    let a: i32 = list.get(0).unwrap_or(0)
+    let b: i32 = list.get(1).unwrap_or(0)
     let c_opt: i32? = list.pop()
     let c: i32 = unwrap_or(c_opt, 0)
 
