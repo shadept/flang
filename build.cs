@@ -85,7 +85,8 @@ Console.ResetColor();
 Console.WriteLine();
 
 // Publish
-var publishArgs = $"publish src/FLang.CLI/FLang.CLI.csproj -c Release -r {dotnetRid} -nologo -v minimal";
+var distRidProp = rid != dotnetRid ? $" -p:DistRid={rid}" : "";
+var publishArgs = $"publish src/FLang.CLI/FLang.CLI.csproj -c Release -r {dotnetRid}{distRidProp} -nologo -v minimal";
 if (Run("dotnet", publishArgs) != 0)
 {
     Console.Error.WriteLine("Error: dotnet publish failed.");

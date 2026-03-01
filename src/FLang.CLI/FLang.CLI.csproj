@@ -36,7 +36,8 @@
         <!-- Compute dist directory at repo root: <repo>/dist/<RID>/ -->
         <PropertyGroup>
             <RepoRoot>$([System.IO.Path]::GetFullPath('$(MSBuildProjectDirectory)\..\..\'))</RepoRoot>
-            <DistDir>$([System.IO.Path]::Combine('$(RepoRoot)', 'dist', '$(RuntimeIdentifier)'))\</DistDir>
+            <DistRid Condition="'$(DistRid)' == ''">$(RuntimeIdentifier)</DistRid>
+            <DistDir>$([System.IO.Path]::Combine('$(RepoRoot)', 'dist', '$(DistRid)'))\</DistDir>
             <ExeName>$(AssemblyName)$(ExeExt)</ExeName>
             <FinalExeName>flang$(ExeExt)</FinalExeName>
             <!-- Stdlib source and destination -->
