@@ -71,6 +71,9 @@ if (rid == null)
     rid = $"{os}-{arch}";
 }
 
+// Map FLang RID to .NET RID (dotnet uses "osx" not "darwin")
+var dotnetRid = rid.StartsWith("darwin") ? rid.Replace("darwin", "osx") : rid;
+
 var exeExt = rid.StartsWith("win") ? ".exe" : "";
 var distDir = Path.GetFullPath(Path.Combine(scriptDir, "dist", rid));
 var finalExe = Path.Combine(distDir, $"flang{exeExt}");
@@ -82,7 +85,7 @@ Console.ResetColor();
 Console.WriteLine();
 
 // Publish
-var publishArgs = $"publish src/FLang.CLI/FLang.CLI.csproj -c Release -r {rid} -nologo -v minimal";
+var publishArgs = $"publish src/FLang.CLI/FLang.CLI.csproj -c Release -r {dotnetRid} -nologo -v minimal";
 if (Run("dotnet", publishArgs) != 0)
 {
     Console.Error.WriteLine("Error: dotnet publish failed.");
