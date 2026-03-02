@@ -17,11 +17,16 @@ var runTests = false;
 var lspMode = false;
 var dumpTemplates = false;
 
-// Handle "test" subcommand: flang test <file>
-if (args.Length > 0 && args[0] == "test")
+// Handle "test" subcommand: flang test <file> or flang --flags test <file>
 {
-    runTests = true;
-    args = args[1..]; // consume "test", parse remaining normally
+    var argsList = new List<string>(args);
+    var testIdx = argsList.IndexOf("test");
+    if (testIdx >= 0)
+    {
+        runTests = true;
+        argsList.RemoveAt(testIdx);
+        args = argsList.ToArray();
+    }
 }
 
 for (var i = 0; i < args.Length; i++)

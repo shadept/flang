@@ -80,6 +80,35 @@ Foreign function declarations (`#foreign fn`) rely on the C codegen preamble (`H
 
 ---
 
+### C Codegen Fails for Recursive Enum Types (json.f)
+
+**Status:** Open
+**Affected:** C codegen — recursive enum types with generic containers
+
+`JsonValue` (a recursive enum containing `List(JsonValue)` and `Dict(OwnedString, JsonValue)`) passes semantic analysis but generates invalid C:
+- Incomplete type errors (forward-declared struct used by value)
+- Undeclared variable errors (`elem_N` references emitted before declarations)
+- Incompatible pointer type errors in serialization functions
+
+**Blocked:** `flang test stdlib/std/encoding/json.f` cannot run due to codegen failures.
+
+**Workaround:** None. Requires compiler fix for recursive type C emission ordering and variable scoping in generated C.
+
+---
+
+### Option.map Resolves Function Param as Enum Variant
+
+**Status:** Workaround applied
+**Affected:** Semantic analysis — generic function specialization with enum types
+
+When `Option(T).map(f: fn(T) U)` is specialized with an enum type (e.g., `T = JsonValue`), the compiler incorrectly resolves the function parameter `f` as an enum variant constructor call instead of a function call. Produces `E3037: Variant 'f' not found in enum`.
+
+**Workaround:** `List.get` rewritten to avoid calling `Option.map`, preventing the specialization from being triggered.
+
+**Future:** Fix name resolution in generic specialization to prefer function parameters over enum variant lookup.
+
+---
+
 ## Deferred Features
 
 ### FFI Pointer Returns and Casts

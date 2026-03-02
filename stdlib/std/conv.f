@@ -269,6 +269,113 @@ pub fn parse_isize(s: u8[], base: u8 = 10) Result((i64, usize), ConvError) {
 }
 
 // =============================================================================
+// Buffer → Float
+// =============================================================================
+
+// Parse a 64-bit float from a byte buffer.
+// Handles: optional sign, integer digits, fractional part, exponent (e/E).
+// Returns (value, bytes_consumed).
+pub fn parse_f64(s: u8[]) Result((f64, usize), ConvError) {
+    if s.len == 0 {
+        return Err(ConvError.InvalidInput)
+    }
+
+    let pos = 0usize
+    let negative = false
+
+    // Optional sign
+    if s[0] == b'-' {
+        negative = true
+        pos = 1
+    } else if s[0] == b'+' {
+        pos = 1
+    }
+
+    // Integer part
+    let result: f64 = 0.0
+    let has_digits = false
+    loop {
+        if pos >= s.len { break }
+        const c = s[pos]
+        if c < b'0' or c > b'9' { break }
+        result = result * 10.0 + (c - b'0') as f64
+        has_digits = true
+        pos = pos + 1
+    }
+
+    // Fractional part
+    if pos < s.len {
+        if s[pos] == b'.' {
+            pos = pos + 1
+            let frac_mul = 0.1
+            loop {
+                if pos >= s.len { break }
+                const c = s[pos]
+                if c < b'0' or c > b'9' { break }
+                result = result + (c - b'0') as f64 * frac_mul
+                frac_mul = frac_mul * 0.1
+                has_digits = true
+                pos = pos + 1
+            }
+        }
+    }
+
+    if has_digits == false {
+        return Err(ConvError.InvalidInput)
+    }
+
+    // Exponent part
+    if pos < s.len {
+        if s[pos] == b'e' or s[pos] == b'E' {
+            pos = pos + 1
+            let exp_negative = false
+            if pos < s.len {
+                if s[pos] == b'-' {
+                    exp_negative = true
+                    pos = pos + 1
+                } else if s[pos] == b'+' {
+                    pos = pos + 1
+                }
+            }
+            let exp: i64 = 0
+            let has_exp_digits = false
+            loop {
+                if pos >= s.len { break }
+                const c = s[pos]
+                if c < b'0' or c > b'9' { break }
+                exp = exp * 10 + (c - b'0') as i64
+                has_exp_digits = true
+                pos = pos + 1
+            }
+            if has_exp_digits == false {
+                return Err(ConvError.InvalidInput)
+            }
+            if exp_negative { exp = 0 - exp }
+            // Apply 10^exp
+            let abs_exp = if exp < 0 { 0 - exp } else { exp }
+            let mul = 1.0
+            let i: i64 = 0
+            loop {
+                if i >= abs_exp { break }
+                mul = mul * 10.0
+                i = i + 1
+            }
+            if exp >= 0 {
+                result = result * mul
+            } else {
+                result = result / mul
+            }
+        }
+    }
+
+    if negative {
+        result = 0.0 - result
+    }
+
+    return Ok((result, pos))
+}
+
+// =============================================================================
 // Bool
 // =============================================================================
 
@@ -573,4 +680,59 @@ test "parse_i8 overflow" {
     const s = slice_from_raw_parts(input.ptr, input.len)
     const result = parse_i8(s)
     assert_true(result.is_err(), "128 overflows i8")
+}
+
+test "parse_f64 integer" {
+    const input = "42"
+    const s = slice_from_raw_parts(input.ptr, input.len)
+    const p = parse_f64(s).unwrap()
+    assert_eq(p.0, 42.0, "value should be 42.0")
+    assert_eq(p.1, 2usize, "consumed 2 bytes")
+}
+
+test "parse_f64 decimal" {
+    const input = "3.14"
+    const s = slice_from_raw_parts(input.ptr, input.len)
+    const p = parse_f64(s).unwrap()
+    assert_true(p.0 > 3.13 and p.0 < 3.15, "value should be ~3.14")
+    assert_eq(p.1, 4usize, "consumed 4 bytes")
+}
+
+test "parse_f64 negative" {
+    const input = "-1.5"
+    const s = slice_from_raw_parts(input.ptr, input.len)
+    const p = parse_f64(s).unwrap()
+    assert_eq(p.0, -1.5, "value should be -1.5")
+    assert_eq(p.1, 4usize, "consumed 4 bytes")
+}
+
+test "parse_f64 exponent" {
+    const input = "1e3"
+    const s = slice_from_raw_parts(input.ptr, input.len)
+    const p = parse_f64(s).unwrap()
+    assert_eq(p.0, 1000.0, "1e3 should be 1000")
+    assert_eq(p.1, 3usize, "consumed 3 bytes")
+}
+
+test "parse_f64 negative exponent" {
+    const input = "5e-2"
+    const s = slice_from_raw_parts(input.ptr, input.len)
+    const p = parse_f64(s).unwrap()
+    assert_true(p.0 > 0.049 and p.0 < 0.051, "5e-2 should be ~0.05")
+    assert_eq(p.1, 4usize, "consumed 4 bytes")
+}
+
+test "parse_f64 zero" {
+    const input = "0"
+    const s = slice_from_raw_parts(input.ptr, input.len)
+    const p = parse_f64(s).unwrap()
+    assert_eq(p.0, 0.0, "value should be 0.0")
+    assert_eq(p.1, 1usize, "consumed 1 byte")
+}
+
+test "parse_f64 empty returns error" {
+    const input = ""
+    const s = slice_from_raw_parts(input.ptr, input.len)
+    const result = parse_f64(s)
+    assert_true(result.is_err(), "empty should return error")
 }

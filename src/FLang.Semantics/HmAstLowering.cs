@@ -193,6 +193,9 @@ public class HmAstLowering
             }
         }
 
+        // Track emitted function mangled names to deduplicate across modules
+        var emittedFunctions = new HashSet<string>();
+
         // Lower non-generic, non-foreign functions
         foreach (var (modulePath, module) in moduleList)
         {
@@ -201,7 +204,11 @@ public class HmAstLowering
                 if ((fn.Modifiers & FunctionModifiers.Foreign) != 0) continue;
                 if (fn.IsGeneric) continue;
                 var irFn = LowerFunction(fn);
-                _module.Functions.Add(irFn);
+                var mangledName = irFn.IsEntryPoint ? "main"
+                    : IrNameMangling.MangleFunctionName(irFn.Name,
+                        [.. irFn.Params.Select(p => p.Type)]);
+                if (emittedFunctions.Add(mangledName))
+                    _module.Functions.Add(irFn);
             }
         }
 
@@ -209,7 +216,11 @@ public class HmAstLowering
         foreach (var fn in _checker.GetSpecializedFunctions())
         {
             var irFn = LowerFunction(fn);
-            _module.Functions.Add(irFn);
+            var mangledName = irFn.IsEntryPoint ? "main"
+                : IrNameMangling.MangleFunctionName(irFn.Name,
+                    [.. irFn.Params.Select(p => p.Type)]);
+            if (emittedFunctions.Add(mangledName))
+                _module.Functions.Add(irFn);
         }
 
         // When running tests: lower test blocks and generate synthetic main

@@ -214,6 +214,15 @@ public static class PeepholeOptimizer
         while (changed)
         {
             changed = false;
+
+            // AddressOfInstruction references variables by string name, not by Value.
+            // Collect these names so DCE doesn't remove the defining instructions.
+            var addressOfTargets = new HashSet<string>();
+            foreach (var block in fn.BasicBlocks)
+                foreach (var inst in block.Instructions)
+                    if (!dead.Contains(inst) && inst is AddressOfInstruction ao)
+                        addressOfTargets.Add(ao.VariableName);
+
             var useCounts = new Dictionary<Value, int>();
 
             // Count uses across all blocks
@@ -246,6 +255,10 @@ public static class PeepholeOptimizer
                     useCounts.TryGetValue(resolvedResult, out int uses);
                     if (uses == 0)
                     {
+                        // Protect variables referenced by AddressOf instructions
+                        if (resolvedResult.Name != null && addressOfTargets.Contains(resolvedResult.Name))
+                            continue;
+
                         dead.Add(inst);
                         changed = true;
                     }

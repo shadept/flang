@@ -29,8 +29,8 @@ pub fn list(capacity: usize, allocator: &Allocator? = null) List($T) {
 // Free the backing storage. The list should not be used after this.
 pub fn deinit(self: &List($T)) {
     if self.cap > 0 {
-        let old_ptr: &u8? = self.ptr as &u8
-        self.allocator.or_global().dealloc(slice_from_raw_parts(self.ptr as &u8, self.cap * size_of(T)))
+        const slice = slice_from_raw_parts(self.ptr as &u8, self.cap * size_of(T))
+        self.allocator.or_global().dealloc(slice)
     }
 
     self.ptr = 0usize as &T
@@ -101,15 +101,14 @@ pub fn pop(list: &List($T)) T? {
 
 // Get the element at the given index.
 pub fn get(list: List($T), index: usize) T? {
-    return get_ref(list, index).map(fn(el){ el.* })
+    if index >= list.len { return null }
+    let elem: &T = list.ptr + index
+    return elem.*
 }
 
 // Get the element at the given index.
 pub fn get_ref(list: List($T), index: usize) &T? {
-    if index >= list.len {
-        return null
-    }
-
+    if index >= list.len { return null }
     let elem: &T = list.ptr + index
     return elem
 }

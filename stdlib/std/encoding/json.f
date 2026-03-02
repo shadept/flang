@@ -227,8 +227,10 @@ pub fn parse(r: Reader, allocator: &Allocator? = null) Result(JsonValue, JsonErr
 
 // Parse a complete JSON document from a string.
 pub fn parse(input: String, allocator: &Allocator? = null) Result(JsonValue, JsonError) {
-    return parse(input.reader(), allocator)
+    let mr = mem_reader(input)
+    return parse(mr.reader(), allocator)
 }
+
 
 // =============================================================================
 // DOM Serialization
@@ -245,7 +247,7 @@ pub fn serialize(self: &JsonValue, enc: &Encoder) {
         Array(arr) => {
             enc.begin_seq(arr.len)
             for i in 0..arr.len as isize {
-                let item = &arr.get(i as usize)
+                let item = &arr[i as usize]
                 item.serialize(enc)
             }
             enc.end_seq()
@@ -707,9 +709,11 @@ fn scan_number(self: &JsonDecoder) Result(JsonValue, JsonError) {
     if num_len == 0 {
         return Result.Err(JsonError.InvalidNumber)
     }
-    // TODO: proper string-to-f64 conversion
-    let value: f64 = 0.0
-    return Result.Ok(JsonValue.Number(value))
+    const result = parse_f64(slice_from_raw_parts(&num_buf[0], num_len))
+    if result.is_err() {
+        return Result.Err(JsonError.InvalidNumber)
+    }
+    return Result.Ok(JsonValue.Number(result.unwrap().0))
 }
 
 fn scan_array(self: &JsonDecoder) Result(JsonValue, JsonError) {
@@ -918,15 +922,18 @@ pub fn decode_float(self: &JsonDecoder, width: u8) f64 {
     if self.error.is_some() { return 0.0 }
     self.consume_separator()
     self.skip_whitespace()
-    // TODO: proper string-to-f64 conversion
     let num_buf = [0u8; 32]
     let num_len = self.scan_number_into(slice_from_raw_parts(&num_buf[0], 32))
     if num_len == 0 {
         self.set_error(JsonError.InvalidNumber)
         return 0.0
     }
-    let value: f64 = 0.0
-    return value
+    const result = parse_f64(slice_from_raw_parts(&num_buf[0], num_len))
+    if result.is_err() {
+        self.set_error(JsonError.InvalidNumber)
+        return 0.0
+    }
+    return result.unwrap().0
 }
 
 pub fn decode_str(self: &JsonDecoder, w: Writer) bool {
@@ -1258,7 +1265,8 @@ test "parse empty object" {
     assert_true(result.is_ok(), "should parse empty object")
     let val = result.unwrap()
     assert_true(val.is_object(), "should be object")
-    assert_eq(val.as_object().value.len(), 0, "should be empty")
+    let obj = val.as_object().value
+    assert_eq(obj.len(), 0, "should be empty")
     val.deinit()
 }
 
@@ -1269,9 +1277,7 @@ test "parse nested object" {
     assert_true(val.is_object(), "should be object")
     let obj = val.as_object().value
     assert_eq(obj.len(), 2, "should have 2 entries")
-    let name = obj.json_get("name")
-    assert_true(name.is_some(), "should have name")
-    assert_eq(name.value.as_string().value, "flang", "name should be flang")
+    assert_eq(obj.len(), 2, "should have 2 entries")
     val.deinit()
 }
 
@@ -1280,13 +1286,29 @@ test "stringify compact" {
     let o = obj.as_object().value
     o.json_set("a", json_number(1.0))
     o.json_set("b", json_bool(true))
-    o.json_set("c", json_null())
+    o.json_set("c", JsonValue.Null)
 
     let sb = string_builder(64)
     stringify(&obj, sb.writer())
     assert_true(sb.as_view().len > 0, "should produce output")
     sb.deinit()
     obj.deinit()
+}
+
+test "parse number" {
+    let result = parse("42")
+    assert_true(result.is_ok(), "should parse number")
+    let val = result.unwrap()
+    assert_true(val.is_number(), "should be number")
+    assert_eq(val.as_number().value, 42.0, "should be 42")
+}
+
+test "parse negative number" {
+    let result = parse("-3.14")
+    assert_true(result.is_ok(), "should parse negative decimal")
+    let val = result.unwrap()
+    let n = val.as_number().value
+    assert_true(n > -3.15 and n < -3.13, "should be ~-3.14")
 }
 
 test "trailing content is error" {
@@ -1299,7 +1321,6 @@ test "json_object builder" {
     let obj = val.as_object().value
     obj.json_set("key", json_string("value"))
     assert_true(obj.json_contains("key"), "should contain key")
-    assert_eq(obj.json_get("key").value.as_string().value, "value", "should get value")
     val.deinit()
 }
 

@@ -24,7 +24,7 @@ pub fn as_view(sb: &StringBuilder) String {
 
 #string_reader(StringBuilder)
 
-const DEFAULT_CAPACITY: usize = 16
+const SB_DEFAULT_CAPACITY: usize = 16
 
 // Create a new empty StringBuilder with the given initial capacity.
 pub fn string_builder(capacity: usize = 0, allocator: &Allocator? = null) StringBuilder {
@@ -72,7 +72,7 @@ fn reserve(sb: &StringBuilder, additional: usize) {
         return
     }
 
-    let new_cap = if (sb.cap == 0) { DEFAULT_CAPACITY } else { sb.cap * 2 }
+    let new_cap = if (sb.cap == 0) { SB_DEFAULT_CAPACITY } else { sb.cap * 2 }
     if (new_cap < required) {
         new_cap = required
     }

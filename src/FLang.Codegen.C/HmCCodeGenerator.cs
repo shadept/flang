@@ -39,19 +39,22 @@ public static class HmCCodeGenerator
         sb.AppendLine("#endif");
         sb.AppendLine();
 
+        // Topological sort: structs/enums used by value must be defined before their users
+        var sortedTypes = TopologicalSortTypes(module.TypeDefs);
+
         // Type forward declarations
-        foreach (var td in module.TypeDefs)
+        foreach (var td in sortedTypes)
         {
             if (td is IrStruct s)
                 sb.AppendLine($"typedef struct {s.CName} {s.CName};");
             else if (td is IrEnum e)
                 sb.AppendLine($"typedef struct {e.CName} {e.CName};");
         }
-        if (module.TypeDefs.Count > 0)
+        if (sortedTypes.Count > 0)
             sb.AppendLine();
 
         // Type definitions
-        foreach (var td in module.TypeDefs)
+        foreach (var td in sortedTypes)
             EmitTypeDef(sb, td);
 
         // String table
@@ -82,6 +85,116 @@ public static class HmCCodeGenerator
             EmitFunction(sb, fn, module);
 
         return sb.ToString();
+    }
+
+    // =========================================================================
+    // Type ordering (topological sort for by-value dependencies)
+    // =========================================================================
+
+    /// <summary>
+    /// Topologically sort type definitions so that struct/enum types used by value
+    /// appear before the types that contain them. Pointer dependencies are excluded
+    /// because forward declarations satisfy them.
+    /// </summary>
+    private static List<IrType> TopologicalSortTypes(List<IrType> typeDefs)
+    {
+        if (typeDefs.Count <= 1) return typeDefs;
+
+        // Map CName → IrType for lookup
+        var nameToType = new Dictionary<string, IrType>(typeDefs.Count);
+        foreach (var td in typeDefs)
+        {
+            var name = td switch { IrStruct s => s.CName, IrEnum e => e.CName, _ => null };
+            if (name != null) nameToType[name] = td;
+        }
+
+        // Build dependency edges: deps[type] = set of types it depends on (by value)
+        var deps = new Dictionary<IrType, List<IrType>>(typeDefs.Count);
+        foreach (var td in typeDefs)
+        {
+            var byValueDeps = new List<IrType>();
+            CollectByValueDeps(td, byValueDeps, nameToType);
+            deps[td] = byValueDeps;
+        }
+
+        // Kahn's algorithm
+        var inDegree = new Dictionary<IrType, int>(typeDefs.Count);
+        // Reverse mapping: depOf[dependency] = list of types that depend on it
+        var dependents = new Dictionary<IrType, List<IrType>>(typeDefs.Count);
+        foreach (var td in typeDefs)
+        {
+            if (!inDegree.ContainsKey(td)) inDegree[td] = 0;
+            if (!dependents.ContainsKey(td)) dependents[td] = [];
+        }
+        foreach (var (td, depList) in deps)
+        {
+            foreach (var dep in depList)
+            {
+                if (inDegree.ContainsKey(dep))
+                {
+                    inDegree[td]++;
+                    dependents[dep].Add(td);
+                }
+            }
+        }
+
+        var queue = new Queue<IrType>();
+        foreach (var (td, deg) in inDegree)
+            if (deg == 0) queue.Enqueue(td);
+
+        var sorted = new List<IrType>(typeDefs.Count);
+        while (queue.Count > 0)
+        {
+            var td = queue.Dequeue();
+            sorted.Add(td);
+            foreach (var dependent in dependents[td])
+            {
+                inDegree[dependent]--;
+                if (inDegree[dependent] == 0)
+                    queue.Enqueue(dependent);
+            }
+        }
+
+        // Append any remaining types (cycle — shouldn't happen for valid programs)
+        if (sorted.Count < typeDefs.Count)
+            foreach (var td in typeDefs)
+                if (!sorted.Contains(td))
+                    sorted.Add(td);
+
+        return sorted;
+    }
+
+    private static void CollectByValueDeps(IrType type, List<IrType> deps, Dictionary<string, IrType> nameToType)
+    {
+        switch (type)
+        {
+            case IrStruct s:
+                foreach (var f in s.Fields)
+                    AddByValueDep(f.Type, deps, nameToType);
+                break;
+            case IrEnum e:
+                foreach (var v in e.Variants)
+                    if (v.PayloadType != null)
+                        AddByValueDep(v.PayloadType, deps, nameToType);
+                break;
+        }
+    }
+
+    private static void AddByValueDep(IrType fieldType, List<IrType> deps, Dictionary<string, IrType> nameToType)
+    {
+        switch (fieldType)
+        {
+            case IrStruct s when nameToType.TryGetValue(s.CName, out var resolved):
+                deps.Add(resolved);
+                break;
+            case IrEnum e when nameToType.TryGetValue(e.CName, out var resolved):
+                deps.Add(resolved);
+                break;
+            case IrArray a:
+                AddByValueDep(a.Element, deps, nameToType);
+                break;
+            // IrPointer, IrPrimitive, IrFunctionPtr: satisfied by forward declarations
+        }
     }
 
     // =========================================================================
