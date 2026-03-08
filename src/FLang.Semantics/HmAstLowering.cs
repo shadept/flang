@@ -2933,6 +2933,32 @@ public class HmAstLowering
             return gv;
         }
 
+        // &arr[i] — compute element address directly via GEP instead of load+address-of
+        if (addrOf.Target is IndexExpressionNode indexTarget
+            && _checker.GetResolvedOperator(indexTarget) == null)
+        {
+            var arrVal = LowerExpression(indexTarget.Base);
+            var idxVal = LowerExpression(indexTarget.Index);
+            var elemIrType = GetIrType(indexTarget);
+
+            // If base is a Slice struct, extract .ptr field
+            var basePtr = arrVal;
+            if (arrVal.IrType is IrStruct sliceBase2)
+            {
+                var ptrField = sliceBase2.Fields.FirstOrDefault(f => f.Name == "ptr");
+                if (ptrField.Type != null)
+                    basePtr = CoerceSliceToPointer(arrVal, sliceBase2, ptrField);
+            }
+
+            var elementSize = new IntConstantValue(elemIrType.Size, TypeLayoutService.IrUSize);
+            var byteOffset = new LocalValue($"idx_offset_{_tempCounter++}", TypeLayoutService.IrUSize);
+            _currentBlock.Instructions.Add(new BinaryInstruction(_currentSpan, BinaryOp.Multiply, idxVal, elementSize, byteOffset));
+
+            var elemPtr = new LocalValue($"addr_{_tempCounter++}", new IrPointer(elemIrType));
+            _currentBlock.Instructions.Add(new GetElementPtrInstruction(_currentSpan, basePtr, byteOffset, elemPtr));
+            return elemPtr;
+        }
+
         // Temporary promotion: if target is a call result, materialize on the stack
         // so we can take its address (same pattern as UFCS temp materialization).
         if (addrOf.Target is CallExpressionNode)
@@ -3957,14 +3983,41 @@ public class HmAstLowering
 
     private Value LowerMatch(MatchExpressionNode match)
     {
-        // 1. Lower scrutinee and resolve to enum type
-        var scrutineeValue = LowerExpression(match.Scrutinee);
+        // 1. Lower scrutinee and resolve to enum type.
+        // If scrutinee is a dereference (e.g. self.*), keep the original pointer
+        // so match arm bindings (e.g. &obj) point into the original struct, not a dangling local copy.
+        Value? originalEnumPtr = null;
+        Value scrutineeValue;
+
+        if (match.Scrutinee is DereferenceExpressionNode derefExpr)
+        {
+            var ptrVal = LowerExpression(derefExpr.Target);
+            if (ptrVal.IrType is IrPointer { Pointee: IrEnum })
+            {
+                originalEnumPtr = ptrVal;
+                // Load the value from the pointer for tag checks
+                var loadedVal = new LocalValue($"match_deref_{_tempCounter++}", ((IrPointer)ptrVal.IrType).Pointee);
+                _currentBlock.Instructions.Add(new LoadInstruction(_currentSpan, ptrVal, loadedVal));
+                scrutineeValue = loadedVal;
+            }
+            else
+            {
+                scrutineeValue = LowerExpression(match.Scrutinee);
+            }
+        }
+        else
+        {
+            scrutineeValue = LowerExpression(match.Scrutinee);
+        }
+
         var scrutineeHmType = _checker.GetInferredType(match.Scrutinee);
         var scrutineeIrType = _layout.Lower(scrutineeHmType);
 
         // Dereference if scrutinee is a pointer/reference to get the enum value
         if (scrutineeIrType is IrPointer ptrType && ptrType.Pointee is IrEnum)
         {
+            if (originalEnumPtr == null)
+                originalEnumPtr = scrutineeValue;
             var derefVal = new LocalValue($"match_deref_{_tempCounter++}", ptrType.Pointee);
             _currentBlock.Instructions.Add(new LoadInstruction(_currentSpan, scrutineeValue, derefVal));
             scrutineeValue = derefVal;
@@ -3982,10 +4035,20 @@ public class HmAstLowering
         var resultIrType = GetIrType(match);
         var isVoid = resultIrType == TypeLayoutService.IrVoidPrim;
 
-        // 2. Store scrutinee to alloca (need addressable for GEP)
-        var scrutineePtr = new LocalValue($"match_scrutinee_ptr_{_tempCounter++}", new IrPointer(irEnum));
-        _currentBlock.Instructions.Add(new AllocaInstruction(_currentSpan, irEnum.Size, scrutineePtr));
-        _currentBlock.Instructions.Add(new StorePointerInstruction(_currentSpan, scrutineePtr, scrutineeValue));
+        // 2. Store scrutinee to alloca (need addressable for GEP).
+        // If the scrutinee came from a pointer deref, use the original pointer
+        // so that bound variables point into the original struct (not a dangling local copy).
+        Value scrutineePtr;
+        if (originalEnumPtr != null)
+        {
+            scrutineePtr = originalEnumPtr;
+        }
+        else
+        {
+            scrutineePtr = new LocalValue($"match_scrutinee_ptr_{_tempCounter++}", new IrPointer(irEnum));
+            _currentBlock.Instructions.Add(new AllocaInstruction(_currentSpan, irEnum.Size, scrutineePtr));
+            _currentBlock.Instructions.Add(new StorePointerInstruction(_currentSpan, scrutineePtr, scrutineeValue));
+        }
 
         // 3. Extract tag: load i32 at offset 0
         var tagValue = EmitLoadFromOffset(scrutineePtr, 0, TypeLayoutService.IrI32, "match_tag");

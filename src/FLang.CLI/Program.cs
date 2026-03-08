@@ -16,6 +16,7 @@ var debugLogging = false;
 var runTests = false;
 var lspMode = false;
 var dumpTemplates = false;
+var emitC = false;
 
 // Handle "test" subcommand: flang test <file> or flang --flags test <file>
 {
@@ -50,6 +51,8 @@ for (var i = 0; i < args.Length; i++)
         lspMode = true;
     else if (args[i] == "--dump-templates")
         dumpTemplates = true;
+    else if (args[i] == "--emit-c")
+        emitC = true;
     else if (args[i] == "--version" || args[i] == "-v")
     {
         Console.WriteLine("flang 0.1.0-alpha");
@@ -87,6 +90,7 @@ if (inputFilePath == null)
     Console.WriteLine("Options:");
     Console.WriteLine("  -o, --output <path>     Output executable path (default: same as input with .exe)");
     Console.WriteLine("  --stdlib-path <path>    Path to standard library directory");
+    Console.WriteLine("  --emit-c                Emit the generated C code next to the input file (.generated.c)");
     Console.WriteLine("  --emit-fir <file>       Emit FIR (intermediate representation) to file (use '-' for stdout)");
     Console.WriteLine("  --release               Enable C backend optimization (passes -O2 /O2)");
     Console.WriteLine("  --test                  Run test blocks instead of main()");
@@ -159,6 +163,14 @@ try
         }
         Console.Error.WriteLine($"Error: Compilation failed with {result.Diagnostics.Count(d => d.Severity == DiagnosticSeverity.Error)} error(s)");
         Environment.Exit(1);
+    }
+
+    // --emit-c: copy the intermediate .c file before running tests
+    if (emitC && File.Exists(cFilePath))
+    {
+        var emitCDest = Path.ChangeExtension(inputFilePath, ".generated.c");
+        try { File.Copy(cFilePath, emitCDest, overwrite: true); Console.WriteLine($"C code emitted to {emitCDest}"); }
+        catch { /* best effort */ }
     }
 
     if (runTests && result.ExecutablePath != null)

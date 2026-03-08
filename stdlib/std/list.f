@@ -14,8 +14,13 @@ pub type List = struct(T) {
 const DEFAULT_CAPACITY: usize = 16
 
 pub fn list(capacity: usize, allocator: &Allocator? = null) List($T) {
+    if capacity == 0 {
+        let empty: List(T)
+        empty.allocator = allocator
+        return empty
+    }
     const bytes = capacity * size_of(T)
-    const buf = allocator.alloc(bytes, align_of(T))
+    const buf = allocator.or_global().alloc(bytes, align_of(T))
         .expect("list: allocation failed")
 
     return .{
@@ -27,8 +32,14 @@ pub fn list(capacity: usize, allocator: &Allocator? = null) List($T) {
 }
 
 // Free the backing storage. The list should not be used after this.
+// Calls deinit on all stored elements before freeing.
 pub fn deinit(self: &List($T)) {
     if self.cap > 0 {
+        // Deinit all live elements
+        for (i in 0..self.len as isize) {
+            const elem: &T = self.ptr + (i as usize)
+            elem.deinit()
+        }
         const slice = slice_from_raw_parts(self.ptr as &u8, self.cap * size_of(T))
         self.allocator.or_global().dealloc(slice)
     }
@@ -126,6 +137,15 @@ pub fn set(list: &List($T), index: usize, value: T) {
 }
 
 pub fn op_index(list: List($T), index: usize) T {
+    if index >= list.len {
+        panic("List: index out of bounds")
+    }
+
+    let elem: &T = list.ptr + index
+    return elem.*
+}
+
+pub fn op_index(list: &List($T), index: usize) T {
     if index >= list.len {
         panic("List: index out of bounds")
     }

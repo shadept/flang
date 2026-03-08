@@ -149,23 +149,8 @@ pub fn json_contains(self: &Dict(OwnedString, JsonValue), key: String) bool {
 pub fn deinit(self: &JsonValue) {
     self.* match {
         Str(s) => s.deinit(),
-        Array(arr) => {
-            for i in 0..arr.len {
-                let item = arr[i]
-                item.deinit()
-            }
-            arr.deinit()
-        },
-        Object(obj) => {
-            let it = obj.iter()
-            loop {
-                let entry = it.next()
-                if entry.is_none() { break }
-                entry.value.key.deinit()
-                entry.value.value.deinit()
-            }
-            obj.deinit()
-        },
+        Array(arr) => arr.deinit(),
+        Object(obj) => obj.deinit(),
         else => {},
     }
 }

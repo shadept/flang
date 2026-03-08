@@ -27,8 +27,17 @@ pub type Dict = struct(K, V) {
 }
 
 // Free the backing storage. The dict should not be used after this.
+// Calls deinit on all stored keys and values before freeing.
 pub fn deinit(self: &Dict($K, $V)) {
     if (self.cap > 0) {
+        // Deinit all occupied keys and values
+        for (i in 0..self.cap as isize) {
+            const entry: &Entry(K, V) = self.entries + (i as usize)
+            if (entry.state == 1) {
+                entry.key.deinit()
+                entry.value.deinit()
+            }
+        }
         const bytes = self.cap * self.entry_byte_size()
         self.allocator.or_global()
             .dealloc(slice_from_raw_parts(self.entries as &u8, bytes))
@@ -146,6 +155,9 @@ pub fn set(self: &Dict($K, $V), key: K, value: V) {
         // Occupied: check if same key
         if (entry.hash == h) {
             if (entry.key == key) {
+                // Key already exists: deinit old value and unused new key
+                entry.value.deinit()
+                key.deinit()
                 entry.value = value
                 return
             }
@@ -157,8 +169,47 @@ pub fn set(self: &Dict($K, $V), key: K, value: V) {
 }
 
 pub fn set(self: &Dict(OwnedString, $V), key: String, value: V) {
+    self.ensure_capacity()
+
+    // Fake OwnedString for comparison — no allocation for lookups.
     const fake = OwnedString{ptr=key.ptr, len=key.len, allocator=null}
-    return set(self, fake, value)
+    const h: usize = hash_key(fake)
+    let tombstone_idx: usize = self.cap
+
+    for (i in 0..self.cap as isize) {
+        const idx: usize = (h + (i as usize)) % self.cap
+        const entry: &Entry(OwnedString, V) = self.entries + idx
+
+        if (entry.state == 0) {
+            // Empty slot: allocate owned key and insert
+            const target_idx: usize = if (tombstone_idx < self.cap) { tombstone_idx } else { idx }
+            const target: &Entry(OwnedString, V) = self.entries + target_idx
+            target.state = 1
+            target.hash = h
+            target.key = from_view(key, self.allocator)
+            target.value = value
+            self.length = self.length + 1
+            return
+        }
+
+        if (entry.state == 2) {
+            if (tombstone_idx == self.cap) {
+                tombstone_idx = idx
+            }
+            continue
+        }
+
+        if (entry.hash == h) {
+            if (entry.key == fake) {
+                // Key exists: update value only, no key allocation
+                entry.value.deinit()
+                entry.value = value
+                return
+            }
+        }
+    }
+
+    panic("dict: set failed - table full")
 }
 
 pub fn op_index(self: Dict($K, $V), key: K) V? {
@@ -252,6 +303,7 @@ pub fn remove(self: &Dict($K, $V), key: K) V? {
             if (entry.hash == h) {
                 if (entry.key == key) {
                     const val: V = entry.value
+                    entry.key.deinit()
                     entry.state = 2
                     self.length = self.length - 1
                     return val
@@ -263,9 +315,17 @@ pub fn remove(self: &Dict($K, $V), key: K) V? {
     return null
 }
 
-// Remove all entries from the dict without freeing memory.
+// Remove all entries from the dict without freeing backing storage.
+// Deinits all stored keys and values.
 pub fn clear(self: &Dict($K, $V)) {
     if (self.cap > 0) {
+        for (i in 0..self.cap as isize) {
+            const entry: &Entry(K, V) = self.entries + (i as usize)
+            if (entry.state == 1) {
+                entry.key.deinit()
+                entry.value.deinit()
+            }
+        }
         const bytes: usize = self.cap * self.entry_byte_size()
         memset(self.entries as &u8, 0, bytes)
     }
