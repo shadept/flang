@@ -114,3 +114,7 @@ tests/FLang.Tests/Harness/**
 !tests/FLang.Tests/Harness/**/
 !tests/FLang.Tests/Harness/**/*.f
 *.generated.f
+
+# Compiled binaries in examples (extensionless executables on Linux/macOS)
+examples/**/*
+!examples/**/*.*
