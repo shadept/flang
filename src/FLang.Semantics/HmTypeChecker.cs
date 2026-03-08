@@ -46,6 +46,9 @@ public partial class HmTypeChecker : INominalTypeRegistry, ITemplateTypeProvider
     private readonly Compilation _compilation;
     private readonly List<Diagnostic> _diagnostics = [];
 
+    /// <summary>Compile-time context for #if directive evaluation.</summary>
+    public Dictionary<string, object> CompileTimeContext => _compilation.CompileTimeContext;
+
     /// <summary>
     /// FQN -> NominalType template for all structs and enums.
     /// </summary>

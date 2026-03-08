@@ -1,5 +1,6 @@
 using FLang.Core;
 using FLang.Core.Types;
+using FLang.Frontend;
 using FLang.Frontend.Ast;
 using FLang.Frontend.Ast.Declarations;
 using FLang.Frontend.Ast.Expressions;
@@ -45,6 +46,15 @@ public partial class HmTypeChecker
             case DeferStatementNode defer:
                 InferExpression(defer.Expression);
                 break;
+            case IfDirectiveStatementNode directive:
+            {
+                var active = TemplateEngine.EvaluateCondition(directive.Condition, _compilation.CompileTimeContext);
+                var branch = active ? directive.ThenBody : directive.ElseBody;
+                if (branch != null)
+                    foreach (var s in branch)
+                        CheckStatement(s);
+                break;
+            }
             default:
                 ReportError($"Unsupported statement kind: {stmt.GetType().Name}", stmt.Span);
                 break;

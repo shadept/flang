@@ -1,6 +1,7 @@
 using System.Text;
 using FLang.Core;
 using FLang.Core.Types;
+using FLang.Frontend;
 using FLang.Frontend.Ast;
 using FLang.Frontend.Ast.Declarations;
 using FLang.Frontend.Ast.Expressions;
@@ -1156,6 +1157,15 @@ public class HmAstLowering
             case DeferStatementNode defer:
                 LowerDefer(defer);
                 break;
+            case IfDirectiveStatementNode directive:
+            {
+                var active = TemplateEngine.EvaluateCondition(directive.Condition, _checker.CompileTimeContext);
+                var branch = active ? directive.ThenBody : directive.ElseBody;
+                if (branch != null)
+                    foreach (var s in branch)
+                        LowerStatement(s);
+                break;
+            }
         }
     }
 
@@ -4299,6 +4309,14 @@ public class HmAstLowering
             case DeferStatementNode defer:
                 CollectMutatedParamsExpr(defer.Expression, mutated);
                 break;
+            case IfDirectiveStatementNode directive:
+            {
+                var active = TemplateEngine.EvaluateCondition(directive.Condition, _checker.CompileTimeContext);
+                var branch = active ? directive.ThenBody : directive.ElseBody;
+                if (branch != null)
+                    CollectMutatedParams(branch, mutated);
+                break;
+            }
         }
     }
 

@@ -1223,11 +1223,70 @@ public class Parser
                     return new ExpressionStatementNode(ifExpr.Span, ifExpr);
                 }
 
+            case TokenKind.Hash:
+                return ParseIfDirectiveStatement();
+
             default:
                 // Default: parse an expression as a statement (e.g., println(s))
                 var expr = ParseExpression();
                 return new ExpressionStatementNode(expr.Span, expr);
         }
+    }
+
+    /// <summary>
+    /// Parses a compile-time conditional: #if(expr) { ... } [else { ... }]
+    /// The condition is a TemplateExpr supporting comparisons, member access, indexing:
+    ///   #if(runtime.testing) { ... }
+    ///   #if(platform.os == "windows") { ... }
+    ///   #if(runtime.env["KEY"] == "production") { ... }
+    /// </summary>
+    private IfDirectiveStatementNode ParseIfDirectiveStatement()
+    {
+        var hashToken = Eat(TokenKind.Hash);
+        var ifToken = Eat(TokenKind.If);
+
+        Eat(TokenKind.OpenParenthesis);
+
+        // Reuse the template expression parser for the condition
+        var condition = ParseTemplateExpression();
+
+        Eat(TokenKind.CloseParenthesis);
+
+        // Parse then body
+        Eat(TokenKind.OpenBrace);
+        var thenBody = new List<StatementNode>();
+        while (_currentToken.Kind != TokenKind.CloseBrace && _currentToken.Kind != TokenKind.EndOfFile)
+        {
+            try { thenBody.Add(ParseStatement()); }
+            catch (ParserException ex)
+            {
+                _diagnostics.Add(ex.Diagnostic);
+                SynchronizeStatement();
+            }
+        }
+        Eat(TokenKind.CloseBrace);
+
+        // Parse optional else body
+        List<StatementNode>? elseBody = null;
+        if (_currentToken.Kind == TokenKind.Else)
+        {
+            Eat(TokenKind.Else);
+            Eat(TokenKind.OpenBrace);
+            elseBody = new List<StatementNode>();
+            while (_currentToken.Kind != TokenKind.CloseBrace && _currentToken.Kind != TokenKind.EndOfFile)
+            {
+                try { elseBody.Add(ParseStatement()); }
+                catch (ParserException ex)
+                {
+                    _diagnostics.Add(ex.Diagnostic);
+                    SynchronizeStatement();
+                }
+            }
+            Eat(TokenKind.CloseBrace);
+        }
+
+        var span = SourceSpan.Combine(hashToken.Span, _currentToken.Span);
+        return new IfDirectiveStatementNode(span, condition, thenBody, elseBody);
     }
 
     /// <summary>

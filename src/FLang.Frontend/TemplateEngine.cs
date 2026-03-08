@@ -116,6 +116,8 @@ public class TemplateEngine
                 var indexVal = EvalExpr(idx.Index);
                 if (indexObj is List<object> indexList && indexVal is long i)
                     return indexList[(int)i];
+                if (indexObj is Dictionary<string, object> indexDict && indexVal is string key)
+                    return indexDict.TryGetValue(key, out var dv) ? dv : "";
                 throw new InvalidOperationException($"Cannot index {indexObj?.GetType().Name} with {indexVal}");
 
             case TemplateSliceExpr slice:
@@ -276,6 +278,13 @@ public class TemplateEngine
             case List<object> list when member == "len":
                 return (long)list.Count;
 
+            // Dictionary — nested compile-time context (platform.os, runtime.testing, etc.)
+            case Dictionary<string, object> dict:
+                if (dict.TryGetValue(member, out var v))
+                    return v;
+                throw new InvalidOperationException(
+                    $"Unknown compile-time property '{member}'");
+
             default:
                 throw new InvalidOperationException(
                     $"Cannot access member '{member}' on {value?.GetType().Name ?? "null"} (value: {value})");
@@ -324,6 +333,17 @@ public class TemplateEngine
             };
         }
 
+        // Bool comparison
+        if (left is bool lb && right is bool rb)
+        {
+            return op switch
+            {
+                "==" => lb == rb ? 1L : 0L,
+                "!=" => lb != rb ? 1L : 0L,
+                _ => throw new InvalidOperationException($"Cannot apply '{op}' to bools")
+            };
+        }
+
         throw new InvalidOperationException($"Cannot apply '{op}' to {left?.GetType().Name} and {right?.GetType().Name}");
     }
 
@@ -365,6 +385,16 @@ public class TemplateEngine
                 $"struct {{ {string.Join(", ", anon.Fields.Select(f => $"{f.FieldName}: {TypeNodeToString(f.FieldType)}"))} }}",
             _ => node.GetType().Name
         };
+    }
+
+    /// <summary>
+    /// Evaluates a TemplateExpr condition against a plain dictionary context.
+    /// Used by #if directive evaluation in the type checker and lowering.
+    /// </summary>
+    public static bool EvaluateCondition(TemplateExpr condition, Dictionary<string, object> context)
+    {
+        var engine = new TemplateEngine(context, _ => null, _ => null);
+        return IsTruthy(engine.EvalExpr(condition));
     }
 
     private static bool IsTruthy(object value)

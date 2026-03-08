@@ -104,7 +104,168 @@ pub const global_allocator = Allocator {
 }
 
 pub fn or_global(alloc: &Allocator?) &Allocator {
+    #if(runtime.testing) {
+        return alloc.unwrap_or(&test_allocator)
+    }
     return alloc.unwrap_or(&global_allocator)
+}
+
+// =============================================================================
+// TestAllocator - tracking allocator for leak detection in tests
+// =============================================================================
+// Wraps malloc/free but records every live allocation in an intrusive linked
+// list (itself allocated via raw malloc so it never recurses through or_global).
+// At the end of a test, call check_leaks() to print any un-freed allocations,
+// then deinit() to tear down the tracker and free all remaining memory.
+
+// Linked-list node tracking a single live allocation.
+// Allocated via raw malloc — never goes through the Allocator interface.
+type TestAllocEntry = struct {
+    ptr: &u8
+    size: usize
+    next: &TestAllocEntry?
+}
+
+pub type TestAllocatorState = struct {
+    head: &TestAllocEntry?
+    alloc_count: usize
+    dealloc_count: usize
+    total_bytes: usize
+}
+
+fn test_alloc(impl: &u8, size: usize, alignment: usize) u8[]? {
+    let state = impl as &TestAllocatorState
+    const ptr = malloc(size)
+    if ptr.is_none() {
+        return null
+    }
+
+    // Record this allocation in the tracking list
+    const entry_raw = malloc(size_of(TestAllocEntry))
+    if entry_raw.is_some() {
+        const entry = entry_raw.value as &TestAllocEntry
+        entry.ptr = ptr.value
+        entry.size = size
+        entry.next = state.head
+        state.head = entry
+    }
+
+    state.alloc_count = state.alloc_count + 1
+    state.total_bytes = state.total_bytes + size
+
+    return slice_from_raw_parts(ptr.value, size)
+}
+
+fn test_realloc(impl: &u8, memory: u8[], new_size: usize) u8[]? {
+    let state = impl as &TestAllocatorState
+    const old_ptr = memory.ptr
+    const old_size = memory.len
+    const ptr = realloc(old_ptr, new_size)
+    if ptr.is_none() {
+        return null
+    }
+
+    // Update the tracking entry for this pointer
+    let entry = state.head
+    loop {
+        if entry.is_none() { break }
+        if entry.value.ptr as usize == old_ptr as usize {
+            entry.value.ptr = ptr.value
+            entry.value.size = new_size
+            break
+        }
+        entry = entry.value.next
+    }
+
+    state.total_bytes = state.total_bytes - old_size + new_size
+
+    return slice_from_raw_parts(ptr.value, new_size)
+}
+
+fn test_dealloc(impl: &u8, memory: u8[]) {
+    let state = impl as &TestAllocatorState
+    const target = memory.ptr as usize
+
+    // Remove from tracking list
+    let prev: &TestAllocEntry? = null
+    let entry = state.head
+    loop {
+        if entry.is_none() { break }
+        if entry.value.ptr as usize == target {
+            // Unlink
+            if prev.is_some() {
+                prev.value.next = entry.value.next
+            } else {
+                state.head = entry.value.next
+            }
+            state.total_bytes = state.total_bytes - entry.value.size
+            free(entry.value as &u8)
+            break
+        }
+        prev = entry
+        entry = entry.value.next
+    }
+
+    state.dealloc_count = state.dealloc_count + 1
+    free(memory.ptr)
+}
+
+// Returns the number of live (leaked) allocations.
+pub fn check_leaks(state: &TestAllocatorState) usize {
+    let count: usize = 0
+    let leaked_bytes: usize = 0
+    let entry = state.head
+    loop {
+        if entry.is_none() { break }
+        count = count + 1
+        leaked_bytes = leaked_bytes + entry.value.size
+        print("  leak: address=")
+        println(entry.value.ptr as usize)
+        print(" size=")
+        println(entry.value.size)
+        entry = entry.value.next
+    }
+    if count > 0 {
+        print("test allocator: leaked allocations=")
+        println(count)
+        print(" bytes=")
+        println(leaked_bytes)
+    }
+    return count
+}
+
+// Free all remaining tracked allocations and the tracking nodes themselves.
+pub fn deinit(state: &TestAllocatorState) {
+    let entry = state.head
+    loop {
+        if entry.is_none() { break }
+        let next = entry.value.next
+        free(entry.value.ptr)
+        free(entry.value as &u8)
+        entry = next
+    }
+    state.head = null
+    state.alloc_count = 0
+    state.dealloc_count = 0
+    state.total_bytes = 0
+}
+
+const test_allocator_vtable = AllocatorVTable {
+    alloc = test_alloc,
+    realloc = test_realloc,
+    dealloc = test_dealloc
+}
+
+pub const test_allocator_state = TestAllocatorState {
+    head = null,
+    alloc_count = 0,
+    dealloc_count = 0,
+    total_bytes = 0
+}
+
+pub const test_allocator = Allocator {
+    impl = &test_allocator_state as &u8,
+    vtable = &test_allocator_vtable
 }
 
 // =============================================================================

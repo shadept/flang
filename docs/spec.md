@@ -521,6 +521,45 @@ Directives are prefixed with `#` and precede declarations (`struct`, `enum`, `fn
 
 Unknown directives produce warning W2003.
 
+### Compile-Time Conditional: `#if`
+
+The `#if` directive enables compile-time conditional compilation within function bodies. The condition is an expression evaluated against a structured compile-time context — only the active branch is type-checked and lowered, the inactive branch is completely discarded.
+
+```flang
+#if(platform.os == "macos") {
+    // macOS-specific code
+} else {
+    // other platforms
+}
+
+#if(runtime.testing) {
+    // only compiled in test mode
+}
+
+#if(runtime.env["FEATURE_FLAG"] == "enabled") {
+    // controlled by environment variable at build time
+}
+```
+
+**Compile-time context tree:**
+
+| Path | Type | Description |
+|------|------|-------------|
+| `platform.os` | string | `"macos"`, `"linux"`, `"windows"`, or `"unknown"` |
+| `platform.arch` | string | `"arm64"`, `"x86_64"`, `"x86"`, etc. |
+| `runtime.testing` | bool | `true` when compiling with `test` subcommand |
+| `runtime.release` | bool | `true` when compiling with `--release` |
+| `runtime.env` | dict | Build-time environment variables (string indexing) |
+
+**Supported condition expressions:**
+
+- Member access: `platform.os`, `runtime.testing`
+- String equality: `platform.os == "macos"`, `platform.arch != "arm64"`
+- Dict indexing: `runtime.env["KEY"]`
+- Truthiness: bare `runtime.testing` evaluates as bool
+
+The `#if` directive can appear anywhere a statement is valid. It supports an optional `else` branch.
+
 ---
 
 ## 3. Type System

@@ -59,6 +59,42 @@ public class Compiler
         }
         compilation.IncludePaths.Add(workingDir);  // Working dir last (fallback for entry point)
 
+        // Build structured compile-time context for #if directives
+        var ctx = compilation.CompileTimeContext;
+
+        // platform.os, platform.arch
+        string os, arch;
+        if (RuntimeInformation.IsOSPlatform(OSPlatform.OSX)) os = "macos";
+        else if (RuntimeInformation.IsOSPlatform(OSPlatform.Linux)) os = "linux";
+        else if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows)) os = "windows";
+        else os = "unknown";
+
+        arch = RuntimeInformation.OSArchitecture switch
+        {
+            Architecture.Arm64 => "arm64",
+            Architecture.X64 => "x86_64",
+            Architecture.X86 => "x86",
+            _ => RuntimeInformation.OSArchitecture.ToString().ToLowerInvariant()
+        };
+
+        ctx["platform"] = new Dictionary<string, object>
+        {
+            ["os"] = os,
+            ["arch"] = arch
+        };
+
+        // runtime.testing, runtime.release, runtime.env
+        var envDict = new Dictionary<string, object>();
+        foreach (System.Collections.DictionaryEntry e in Environment.GetEnvironmentVariables())
+            envDict[e.Key.ToString()!] = e.Value?.ToString() ?? "";
+
+        ctx["runtime"] = new Dictionary<string, object>
+        {
+            ["testing"] = options.RunTests,
+            ["release"] = options.ReleaseBuild,
+            ["env"] = envDict
+        };
+
         var allDiagnostics = new List<Diagnostic>();
 
         // Create logger factory for all compilation phases

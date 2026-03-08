@@ -1073,6 +1073,13 @@ pub fn next_key(self: &JsonDecoder, sb: &StringBuilder) bool {
         return false
     }
 
+    // Reset separator state so the following value decoder does not
+    // try to consume a comma before the value.  next_key already
+    // handles commas between key-value pairs.
+    if self.stack_len > 0 {
+        self.stack[self.stack_len - 1] = 0
+    }
+
     return true
 }
 

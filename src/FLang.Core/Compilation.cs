@@ -56,6 +56,13 @@ public class Compilation
     public List<string> IncludePaths { get; set; } = [];
 
     /// <summary>
+    /// Structured compile-time context for #if directives.
+    /// Evaluated as a tree: platform.os, runtime.testing, runtime.env["KEY"], etc.
+    /// Values can be strings, bools, longs, or nested Dictionary&lt;string, object&gt;.
+    /// </summary>
+    public Dictionary<string, object> CompileTimeContext { get; set; } = [];
+
+    /// <summary>
     /// Allocates a unique string identifier for string literals.
     /// Thread-safe.
     /// </summary>
