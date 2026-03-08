@@ -61,13 +61,13 @@ pub fn main() i32 {
     defer files.deinit()
 
     for (r in opts) {
-        const ch = r match { Opt(c) => c, _ => 0 }
-        if ch == b'l' { show_lines = true }
-        else if ch == b'w' { show_words = true }
-        else if ch == b'c' { show_bytes = true }
-
-        const file = r match { NonOpt(s) => s, _ => "" }
-        if file.len > 0 { files.push(file) }
+        r match {
+            Opt(b'l') => { show_lines = true }
+            Opt(b'w') => { show_words = true }
+            Opt(b'c') => { show_bytes = true }
+            NonOpt(s) => { if s.len > 0 { files.push(s) } }
+            _ => {}
+        }
     }
 
     // Default: show all if no flags specified

@@ -58,16 +58,14 @@ pub fn get(key: String) String? {
 // =============================================================================
 //
 // Format string: each char is a short option. ':' after = takes argument.
-// '(name)' after = long alias.  e.g. "v(verbose)o:(output)h(help)"
+// '(name)' after = long alias.  e.g. "v(verbose)o(output):h(help)"
 //
 // Usage:
 //   let a = get_args()
 //   defer a.deinit()
-//   let opts = getopts("vho:(output)", a.as_slice())
-//   opts.index = 1  // skip argv[0]
-//   loop {
-//       const r = opts.next()
-//       match r { .Opt(ch) => ..., .OptArg(ch, val) => ..., .Done => break }
+//   let opts = getopts("vho(output):", a.as_slice())
+//   for (r in opts) {
+//       r match { Opt(ch) => ..., OptArg(ch, val) => ..., _ => {} }
 //   }
 
 pub type OptResult = enum {
@@ -119,7 +117,20 @@ fn lookup_short(format: String, ch: u8) u8 {
             continue
         }
         if c == ch {
-            if i + 1 < format.len and format[i + 1] == b':' { return 2 }
+            // Check for ':' after option char, skipping over optional '(long)' alias
+            let j = i + 1
+            if j < format.len and format[j] == b'(' {
+                j = j + 1
+                loop {
+                    if j >= format.len { return 1 }
+                    if format[j] == b')' {
+                        j = j + 1
+                        break
+                    }
+                    j = j + 1
+                }
+            }
+            if j < format.len and format[j] == b':' { return 2 }
             return 1
         }
         i = i + 1
@@ -155,6 +166,10 @@ fn lookup_long(format: String, name: String) u8 {
         i = i + 1
     }
     return 0
+}
+
+pub fn iter(self: &GetOpt) GetOpt {
+    return self.*
 }
 
 pub fn next(self: &GetOpt) OptResult? {
@@ -345,14 +360,14 @@ test "getopts long option" {
 
 test "getopts long option with value" {
     let args = ["--output=file.txt"]
-    let opts = getopts("o:(output)", args)
+    let opts = getopts("o(output):", args)
     expect_optarg(opts.next(), b'o', "file.txt", "long with =")
     expect_done(opts.next(), "done")
 }
 
 test "getopts long option with next arg value" {
     let args = ["--output", "file.txt"]
-    let opts = getopts("o:(output)", args)
+    let opts = getopts("o(output):", args)
     expect_optarg(opts.next(), b'o', "file.txt", "long next arg")
     expect_done(opts.next(), "done")
 }
@@ -376,7 +391,7 @@ test "getopts double dash stops options" {
 
 test "getopts mixed short long and files" {
     let args = ["-v", "--output=out.txt", "input.f"]
-    let opts = getopts("v(verbose)o:(output)", args)
+    let opts = getopts("v(verbose)o(output):", args)
     expect_opt(opts.next(), b'v', "short v")
     expect_optarg(opts.next(), b'o', "out.txt", "long output")
     expect_nonopt(opts.next(), "input.f", "file arg")
