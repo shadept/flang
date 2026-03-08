@@ -155,47 +155,148 @@ pub fn append(sb: &StringBuilder, value: char) {
 type FormatSpec = struct {
     base: u64
     uppercase: bool
+    width: usize
+    fill: u8       // pad character (default space)
+    align: u8      // '<' left, '>' right, '^' center (default '>')
+    pad_zero: bool // '0' flag: zero-pad after sign
 }
 
+fn is_align_char(c: u8) bool {
+    return c == b'<' or c == b'>' or c == b'^'
+}
+
+fn is_base_char(c: u8) bool {
+    return c == b'x' or c == b'X' or c == b'b' or c == b'o'
+}
+
+// Parse format spec: [fill][align][0][width][type]
+// Examples: "8", ">8", "<8x", "^10", "-<8", "08x", "08X"
 fn parse_int_spec(spec: String) FormatSpec {
-    if (spec.len == 0) {
-        return FormatSpec { base = 10, uppercase = false }
+    let result = FormatSpec {
+        base = 10, uppercase = false,
+        width = 0, fill = b' ', align = b'>', pad_zero = false
     }
-    const c = spec[0]
-    if (c == b'X') {
-        return FormatSpec { base = 16, uppercase = true }
+    if spec.len == 0 { return result }
+
+    let pos = 0usize
+
+    // Try [fill][align] or just [align]
+    if pos + 1 < spec.len and is_align_char(spec[pos + 1]) {
+        // fill + align: e.g. "-<", ".^"
+        result.fill = spec[pos]
+        result.align = spec[pos + 1]
+        pos = pos + 2
+    } else if pos < spec.len and is_align_char(spec[pos]) {
+        // bare align: e.g. "<", ">", "^"
+        result.align = spec[pos]
+        pos = pos + 1
     }
-    if (c == b'x') {
-        return FormatSpec { base = 16, uppercase = false }
+
+    // '0' flag for zero-padding (only meaningful with right-align)
+    if pos < spec.len and spec[pos] == b'0' and pos + 1 < spec.len {
+        result.pad_zero = true
+        result.fill = b'0'
+        pos = pos + 1
     }
-    if (c == b'b') {
-        return FormatSpec { base = 2, uppercase = false }
+
+    // Parse width digits
+    let width: usize = 0
+    loop {
+        if pos >= spec.len { break }
+        if spec[pos] < b'0' or spec[pos] > b'9' { break }
+        width = width * 10 + (spec[pos] - b'0') as usize
+        pos = pos + 1
     }
-    if (c == b'o') {
-        return FormatSpec { base = 8, uppercase = false }
+    result.width = width
+
+    // Parse base type char
+    if pos < spec.len {
+        const c = spec[pos]
+        if c == b'X' {
+            result.base = 16
+            result.uppercase = true
+        } else if c == b'x' {
+            result.base = 16
+        } else if c == b'b' {
+            result.base = 2
+        } else if c == b'o' {
+            result.base = 8
+        }
     }
-    return FormatSpec { base = 10, uppercase = false }
+
+    return result
 }
 
-fn append_unsigned_with_base(sb: &StringBuilder, value: u64, base: u64, uppercase: bool) {
-    let buf = [0u8; 64]
-    const len = format_u64(value, buf, base as u8).unwrap()
+// Write pad_count copies of fill_char into sb.
+fn repeat_fill(sb: &StringBuilder, fill_char: u8, pad_count: usize) {
+    let k = 0usize
+    loop {
+        if k >= pad_count { break }
+        sb.append_byte(fill_char)
+        k = k + 1
+    }
+}
+
+// Emit content (in tmp[0..len]) with alignment/padding per fmt.
+// For zero-pad with sign, sign_len is 1 if tmp starts with '-'.
+fn apply_int_padding(sb: &StringBuilder, tmp: u8[], len: usize, fmt: &FormatSpec) {
+    if fmt.width <= len {
+        sb.append_bytes(tmp[0..len])
+        return
+    }
+    const pad_count = fmt.width - len
+
+    if fmt.pad_zero and fmt.align == b'>' {
+        // Zero-pad after sign: "-007"
+        if len > 0 and tmp[0] == b'-' {
+            sb.append_byte(b'-')
+            repeat_fill(sb, b'0', pad_count)
+            sb.append_bytes(tmp[1..len])
+        } else {
+            repeat_fill(sb, b'0', pad_count)
+            sb.append_bytes(tmp[0..len])
+        }
+        return
+    }
+
+    if fmt.align == b'<' {
+        // Left-align: content then padding
+        sb.append_bytes(tmp[0..len])
+        repeat_fill(sb, fmt.fill, pad_count)
+    } else if fmt.align == b'^' {
+        // Center: split padding
+        const left = pad_count / 2
+        const right = pad_count - left
+        repeat_fill(sb, fmt.fill, left)
+        sb.append_bytes(tmp[0..len])
+        repeat_fill(sb, fmt.fill, right)
+    } else {
+        // Right-align (default)
+        repeat_fill(sb, fmt.fill, pad_count)
+        sb.append_bytes(tmp[0..len])
+    }
+}
+
+fn format_unsigned_into(tmp: u8[], value: u64, base: u64, uppercase: bool) usize {
+    const len = format_u64(value, tmp, base as u8).unwrap()
     if uppercase {
         let i = 0usize
         loop {
             if i >= len { break }
-            if buf[i] >= b'a' and buf[i] <= b'f' {
-                buf[i] = buf[i] - (b'a' - b'A')
+            if tmp[i] >= b'a' and tmp[i] <= b'f' {
+                tmp[i] = tmp[i] - (b'a' - b'A')
             }
             i = i + 1
         }
     }
-    sb.append_bytes(buf[0..len])
+    return len
 }
 
 fn append_unsigned_impl(sb: &StringBuilder, value: u64, spec: String) {
     const fmt = parse_int_spec(spec)
-    append_unsigned_with_base(sb, value, fmt.base, fmt.uppercase)
+    let tmp = [0u8; 64]
+    const len = format_unsigned_into(tmp, value, fmt.base, fmt.uppercase)
+    apply_int_padding(sb, tmp, len, &fmt)
 }
 
 fn mask_for_bits(bits: u64) u64 {
@@ -210,17 +311,18 @@ fn append_signed_impl(sb: &StringBuilder, value: i64, spec: String, bits: u64) {
     const fmt = parse_int_spec(spec)
 
     // For non-decimal formats, mask to original type width and show as unsigned
-    // NOTE: requires bitwise AND operator to work correctly
     if fmt.base != 10 {
+        let tmp = [0u8; 64]
         const masked = (value as u64) & mask_for_bits(bits)
-        append_unsigned_with_base(sb, masked, fmt.base, fmt.uppercase)
+        const len = format_unsigned_into(tmp, masked, fmt.base, fmt.uppercase)
+        apply_int_padding(sb, tmp, len, &fmt)
         return
     }
 
-    // Decimal format: use format_int from std.conv
-    let buf = [0; 21]
-    const len = format_i64(value, buf).unwrap()
-    sb.append_bytes(buf[0..len])
+    // Decimal format
+    let tmp = [0u8; 21]
+    const len = format_i64(value, tmp).unwrap()
+    apply_int_padding(sb, tmp, len, &fmt)
 }
 
 type FloatFormatSpec = struct {
@@ -228,20 +330,35 @@ type FloatFormatSpec = struct {
     has_precision: bool // whether user specified precision
     width: usize       // minimum total width (0 = no padding)
     pad_zero: bool     // pad with '0' instead of ' '
+    fill: u8           // pad character (default space)
+    align: u8          // '<' left, '>' right, '^' center (default '>')
 }
 
+// Parse float format spec: [fill][align][0][width][.precision]
 fn parse_float_spec(spec: String) FloatFormatSpec {
     let result = FloatFormatSpec {
         precision = 6, has_precision = false,
-        width = 0, pad_zero = false
+        width = 0, pad_zero = false,
+        fill = b' ', align = b'>'
     }
     if spec.len == 0 { return result }
 
     let pos = 0usize
 
-    // Leading '0' means zero-pad
-    if spec[pos] == b'0' and pos + 1 < spec.len {
+    // Try [fill][align] or just [align]
+    if pos + 1 < spec.len and is_align_char(spec[pos + 1]) {
+        result.fill = spec[pos]
+        result.align = spec[pos + 1]
+        pos = pos + 2
+    } else if pos < spec.len and is_align_char(spec[pos]) {
+        result.align = spec[pos]
+        pos = pos + 1
+    }
+
+    // '0' flag for zero-padding
+    if pos < spec.len and spec[pos] == b'0' and pos + 1 < spec.len {
         result.pad_zero = true
+        result.fill = b'0'
         pos = pos + 1
     }
 
@@ -349,26 +466,30 @@ fn append_float_impl(sb: &StringBuilder, val: f64, spec: String) {
         }
     }
 
-    // Apply width padding
+    // Apply width padding with alignment
     if fmt.width > len {
         const pad_count = fmt.width - len
-        const pad_char: u8 = if fmt.pad_zero { b'0' } else { b' ' }
-        if fmt.pad_zero and negative {
+
+        if fmt.pad_zero and fmt.align == b'>' and negative {
             // Zero-pad after sign: "-003.14"
             sb.append_byte(b'-')
-            let k = 0usize
-            loop {
-                if k >= pad_count { break }
-                sb.append_byte(b'0')
-                k = k + 1
-            }
+            repeat_fill(sb, b'0', pad_count)
             sb.append_bytes(tmp[1..len])
+        } else if fmt.align == b'<' {
+            sb.append_bytes(tmp[0..len])
+            repeat_fill(sb, fmt.fill, pad_count)
+        } else if fmt.align == b'^' {
+            const left = pad_count / 2
+            const right = pad_count - left
+            repeat_fill(sb, fmt.fill, left)
+            sb.append_bytes(tmp[0..len])
+            repeat_fill(sb, fmt.fill, right)
         } else {
-            let k = 0usize
-            loop {
-                if k >= pad_count { break }
-                sb.append_byte(pad_char)
-                k = k + 1
+            // Right-align (default)
+            if fmt.pad_zero {
+                repeat_fill(sb, b'0', pad_count)
+            } else {
+                repeat_fill(sb, fmt.fill, pad_count)
             }
             sb.append_bytes(tmp[0..len])
         }
@@ -934,4 +1055,149 @@ test "append binary octal all sizes" {
 
     sb.append(-1i16, "o")
     expect_view(&sb, "177777", "i16 -1 octal")
+}
+
+test "int width right align" {
+    let buf = [0u8; 256]
+    let fba = fixed_buffer_allocator(buf)
+    let alloc = fba.allocator()
+    let sb = string_builder(allocator=&alloc)
+
+    sb.append(42usize, "8")
+    expect_view(&sb, "      42", "usize width 8")
+    sb.clear()
+
+    sb.append(42i32, "8")
+    expect_view(&sb, "      42", "i32 width 8")
+    sb.clear()
+
+    sb.append(-42i32, "8")
+    expect_view(&sb, "     -42", "i32 neg width 8")
+    sb.clear()
+
+    sb.append(7u8, "4")
+    expect_view(&sb, "   7", "u8 width 4")
+    sb.clear()
+
+    sb.append(12345usize, "4")
+    expect_view(&sb, "12345", "usize exceeds width")
+    sb.clear()
+}
+
+test "int width left align" {
+    let buf = [0u8; 256]
+    let fba = fixed_buffer_allocator(buf)
+    let alloc = fba.allocator()
+    let sb = string_builder(allocator=&alloc)
+
+    sb.append(42usize, "<8")
+    expect_view(&sb, "42      ", "usize left 8")
+    sb.clear()
+
+    sb.append(-42i32, "<8")
+    expect_view(&sb, "-42     ", "i32 neg left 8")
+    sb.clear()
+}
+
+test "int width center align" {
+    let buf = [0u8; 256]
+    let fba = fixed_buffer_allocator(buf)
+    let alloc = fba.allocator()
+    let sb = string_builder(allocator=&alloc)
+
+    sb.append(42usize, "^8")
+    expect_view(&sb, "   42   ", "usize center 8")
+    sb.clear()
+
+    sb.append(7u8, "^5")
+    expect_view(&sb, "  7  ", "u8 center 5")
+    sb.clear()
+
+    sb.append(42usize, "^7")
+    expect_view(&sb, "  42   ", "usize center 7 odd pad")
+    sb.clear()
+}
+
+test "int zero pad" {
+    let buf = [0u8; 256]
+    let fba = fixed_buffer_allocator(buf)
+    let alloc = fba.allocator()
+    let sb = string_builder(allocator=&alloc)
+
+    sb.append(42usize, "08")
+    expect_view(&sb, "00000042", "usize zero-pad 8")
+    sb.clear()
+
+    sb.append(-42i32, "08")
+    expect_view(&sb, "-0000042", "i32 neg zero-pad 8")
+    sb.clear()
+
+    sb.append(255u8, "08x")
+    expect_view(&sb, "000000ff", "u8 zero-pad hex")
+    sb.clear()
+
+    sb.append(255u8, "08X")
+    expect_view(&sb, "000000FF", "u8 zero-pad HEX")
+    sb.clear()
+}
+
+test "int custom fill" {
+    let buf = [0u8; 256]
+    let fba = fixed_buffer_allocator(buf)
+    let alloc = fba.allocator()
+    let sb = string_builder(allocator=&alloc)
+
+    sb.append(42usize, "-<8")
+    expect_view(&sb, "42------", "dash left-fill")
+    sb.clear()
+
+    sb.append(42usize, ".>8")
+    expect_view(&sb, "......42", "dot right-fill")
+    sb.clear()
+
+    sb.append(42usize, "*^8")
+    expect_view(&sb, "***42***", "star center-fill")
+    sb.clear()
+}
+
+test "int width with base" {
+    let buf = [0u8; 256]
+    let fba = fixed_buffer_allocator(buf)
+    let alloc = fba.allocator()
+    let sb = string_builder(allocator=&alloc)
+
+    sb.append(255u8, ">8x")
+    expect_view(&sb, "      ff", "hex right width 8")
+    sb.clear()
+
+    sb.append(255u8, "<8x")
+    expect_view(&sb, "ff      ", "hex left width 8")
+    sb.clear()
+
+    sb.append(15u8, "^6x")
+    expect_view(&sb, "  f   ", "hex center width 6")
+    sb.clear()
+}
+
+test "float alignment" {
+    let buf = [0u8; 256]
+    let fba = fixed_buffer_allocator(buf)
+    let alloc = fba.allocator()
+    let sb = string_builder(allocator=&alloc)
+
+    sb.append(3.14f64, "<10.2")
+    expect_view(&sb, "3.14      ", "f64 left 10")
+    sb.clear()
+
+    sb.append(3.14f64, "^10.2")
+    expect_view(&sb, "   3.14   ", "f64 center 10")
+    sb.clear()
+
+    sb.append(3.14f64, ">10.2")
+    expect_view(&sb, "      3.14", "f64 right 10")
+    sb.clear()
+
+    sb.append(3.14f64, "-<10.2")
+    expect_view(&sb, "3.14------", "f64 dash left 10")
+    sb.clear()
 }

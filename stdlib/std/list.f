@@ -49,7 +49,7 @@ pub fn deinit(self: &List($T)) {
     self.cap = 0
 }
 
-fn as_slice(self: List($T)) T[] {
+pub fn as_slice(self: List($T)) T[] {
     return slice_from_raw_parts(self.ptr, self.len)
 }
 

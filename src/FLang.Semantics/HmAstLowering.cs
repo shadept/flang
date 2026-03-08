@@ -2289,8 +2289,7 @@ public class HmAstLowering
             var callInst = new CallInstruction(_currentSpan, targetName, args, voidResult);
             callInst.IsForeignCall = false;
             callInst.IsIndirectCall = false;
-            if (calleeIrParamTypes.Count > 0)
-                callInst.CalleeIrParamTypes = calleeIrParamTypes;
+            callInst.CalleeIrParamTypes = calleeIrParamTypes;
             _currentBlock.Instructions.Add(callInst);
 
             var loaded = new LocalValue($"retload_{_tempCounter++}", retIrType);
@@ -2302,8 +2301,7 @@ public class HmAstLowering
         var callInstNorm = new CallInstruction(_currentSpan, targetName, args, result);
         callInstNorm.IsForeignCall = isForeign;
         callInstNorm.IsIndirectCall = call.IsIndirectCall;
-        if (calleeIrParamTypes.Count > 0)
-            callInstNorm.CalleeIrParamTypes = calleeIrParamTypes;
+        callInstNorm.CalleeIrParamTypes = calleeIrParamTypes;
 
         _currentBlock.Instructions.Add(callInstNorm);
 
