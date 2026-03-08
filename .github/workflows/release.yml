@@ -52,11 +52,6 @@ jobs:
           cd dist/${{ matrix.rid }}
           7z a -tzip ../../flang-${{ matrix.rid }}.zip flang* stdlib/
 
-      - name: Generate SHA256 checksum
-        shell: bash
-        run: |
-          sha256sum flang-${{ matrix.rid }}.zip > flang-${{ matrix.rid }}.zip.sha256
-
       # - name: Attest artifact
       #   uses: actions/attest-build-provenance@v2
       #   with:
@@ -68,7 +63,6 @@ jobs:
           name: flang-${{ matrix.rid }}
           path: |
             flang-${{ matrix.rid }}.zip
-            flang-${{ matrix.rid }}.zip.sha256
 
   release:
     needs: build
@@ -90,8 +84,5 @@ jobs:
             --title "FLang $TAG" \
             --generate-notes \
             artifacts/flang-win-x64/flang-win-x64.zip \
-            artifacts/flang-win-x64/flang-win-x64.zip.sha256 \
             artifacts/flang-linux-x64/flang-linux-x64.zip \
-            artifacts/flang-linux-x64/flang-linux-x64.zip.sha256 \
-            artifacts/flang-darwin-arm64/flang-darwin-arm64.zip \
-            artifacts/flang-darwin-arm64/flang-darwin-arm64.zip.sha256
+            artifacts/flang-darwin-arm64/flang-darwin-arm64.zip
