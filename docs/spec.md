@@ -369,9 +369,8 @@ expr match {
 **Semantics:**
 
 - Match is an expression - evaluates to a value (type unified across all arms)
-- Scrutinee must have enum type or reference to enum (`EnumType` or `&EnumType`)
-  - References may be automatically dereferenced during lowering, or inspected directly (for now, up to implementation)
-  - Matching on other types is a compile error (may support more types in future)
+- Scrutinee can be an enum type, reference to enum (`&EnumType`), or any type supporting literal pattern matching (primitives, structs with `op_eq`)
+  - Enum references are automatically dereferenced during lowering
 - Arms are evaluated in order; first matching pattern wins
 - Pattern variables are bound in the arm's expression scope only
 
@@ -396,6 +395,19 @@ expr match {
    Some(value) => value    // Variant with payload
    Result.Ok(x) => x       // Fully qualified variant
    ```
+
+4. **Literal pattern**: Matches when the scrutinee equals the literal value.
+   Uses the same comparison rules as the `==` operator (calls `op_eq` for structs).
+   Supported in both top-level and sub-pattern positions.
+
+   ```
+   x match { 42 => "found it", _ => "nope" }           // Integer literal
+   c match { b'A' => 1, b'B' => 2, _ => 0 }            // Byte literal
+   flag match { true => "yes", false => "no" }          // Boolean literal
+   tok match { Char(b'l') => 1, Char(b'w') => 2, _ => 0 }  // Literal inside enum variant
+   ```
+
+   Non-enum scrutinees (primitives, structs) are supported when all arms use literal, wildcard, variable, or else patterns.
 
 - Nested patterns: `Option.Some(Result.Ok(x))` - destructure nested enums
 - Multiple wildcards: `Move(_, y)` - ignore first field, bind second

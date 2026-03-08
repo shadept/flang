@@ -109,6 +109,37 @@ When `Option(T).map(f: fn(T) U)` is specialized with an enum type (e.g., `T = Js
 
 ---
 
+### Never Type Not Implemented as Bottom Type
+
+**Status:** Open
+**Affected:** Type inference, match expressions, control flow expressions
+
+The `never` type exists (`WellKnown.Never`) but is not implemented as a proper bottom type. It does not unify with all other types, meaning expressions like `return`, `panic()`, or diverging paths cannot be used in positions requiring a specific type. For example, a match arm that panics cannot coexist with arms returning `i32` without explicit workarounds.
+
+**Future:** Add unification rule: `never` unifies with any type `T` (resolving to `T`). This enables natural control flow in match arms and if/else branches.
+
+---
+
+### Break and Continue Cannot Appear in Expression Position
+
+**Status:** Open
+**Affected:** Parser, type checker — control flow in expressions
+
+`break` and `continue` are statement-only constructs and cannot appear in expression position (e.g., as match arm results). This prevents patterns like:
+
+```flang
+let x = value match {
+    Done => break,     // Error: break is a statement, not an expression
+    Value(v) => v
+}
+```
+
+This is related to the never-type gap — `break` and `continue` would need to produce `never` type to be used in expression position. Changing them to expressions would also require removing their statement form to avoid ambiguity.
+
+**Future:** Consider making `break`/`continue` expressions of type `never`, or keep them as statements only and rely on other patterns (like early `if` checks before the match).
+
+---
+
 ## Deferred Features
 
 ### FFI Pointer Returns and Casts

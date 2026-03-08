@@ -4033,12 +4033,10 @@ public class HmAstLowering
         }
 
         var irEnum = scrutineeIrType as IrEnum;
+
+        // Non-enum scrutinee: match directly against literal/wildcard/variable patterns
         if (irEnum == null)
-        {
-            _diagnostics.Add(Diagnostic.Error(
-                "Match scrutinee is not an enum type", match.Span, null, "E3038"));
-            return new IntConstantValue(0, TypeLayoutService.IrVoidPrim);
-        }
+            return LowerMatchNonEnum(match, scrutineeValue, scrutineeIrType);
 
         var resultIrType = GetIrType(match);
         var isVoid = resultIrType == TypeLayoutService.IrVoidPrim;
@@ -4156,27 +4154,45 @@ public class HmAstLowering
 
                 if (armVariant != null && armVariant.Value.PayloadType != null)
                 {
+                    // Determine fallthrough target for literal sub-pattern mismatches
+                    var litFallthrough = armIndex < match.Arms.Count - 1
+                        ? checkBlocks[armIndex]
+                        : mergeBlock;
+
                     if (armVariant.Value.PayloadType is IrStruct payloadStruct
                         && payloadStruct.Name.StartsWith("__tuple_")
                         && payloadStruct.Fields.Length > 1)
                     {
-                        // Multi-payload (synthetic tuple): bind each sub-pattern to its payload field
+                        // Multi-payload (synthetic tuple): bind/check each sub-pattern
                         for (int i = 0; i < evp.SubPatterns.Count && i < payloadStruct.Fields.Length; i++)
                         {
+                            var fieldOffset = armVariant.Value.PayloadOffset
+                                              + payloadStruct.Fields[i].ByteOffset;
+                            var fieldPtr = new LocalValue(
+                                $"payload_field_{_tempCounter++}",
+                                new IrPointer(payloadStruct.Fields[i].Type));
+                            _currentBlock.Instructions.Add(
+                                new GetElementPtrInstruction(_currentSpan, scrutineePtr, fieldOffset, fieldPtr));
+
                             if (evp.SubPatterns[i] is VariablePatternNode vp)
                             {
-                                var fieldOffset = armVariant.Value.PayloadOffset
-                                                  + payloadStruct.Fields[i].ByteOffset;
-                                var fieldPtr = new LocalValue(
-                                    $"payload_field_{_tempCounter++}",
-                                    new IrPointer(payloadStruct.Fields[i].Type));
-                                _currentBlock.Instructions.Add(
-                                    new GetElementPtrInstruction(_currentSpan, scrutineePtr, fieldOffset, fieldPtr));
                                 _locals[vp.Name] = fieldPtr;
+                            }
+                            else if (evp.SubPatterns[i] is LiteralPatternNode litSubPat)
+                            {
+                                var payloadVal = new LocalValue($"payload_val_{_tempCounter++}", payloadStruct.Fields[i].Type);
+                                _currentBlock.Instructions.Add(new LoadInstruction(_currentSpan, fieldPtr, payloadVal));
+                                var literalVal = LowerExpression(litSubPat.Literal);
+                                var cmp = EmitPatternComparison(litSubPat, payloadVal, literalVal);
+
+                                var contBlock = CreateBlock($"match_arm_{armIndex}_cont_{i}");
+                                _currentBlock.Instructions.Add(new BranchInstruction(_currentSpan, cmp, contBlock, litFallthrough));
+                                _currentFunction.BasicBlocks.Add(contBlock);
+                                _currentBlock = contBlock;
                             }
                         }
                     }
-                    else if (evp.SubPatterns.Count > 0 && evp.SubPatterns[0] is VariablePatternNode vp)
+                    else if (evp.SubPatterns.Count > 0)
                     {
                         // Single payload
                         var payloadPtr = new LocalValue(
@@ -4185,7 +4201,23 @@ public class HmAstLowering
                         _currentBlock.Instructions.Add(
                             new GetElementPtrInstruction(_currentSpan,
                                 scrutineePtr, armVariant.Value.PayloadOffset, payloadPtr));
-                        _locals[vp.Name] = payloadPtr;
+
+                        if (evp.SubPatterns[0] is VariablePatternNode vp)
+                        {
+                            _locals[vp.Name] = payloadPtr;
+                        }
+                        else if (evp.SubPatterns[0] is LiteralPatternNode litSubPat)
+                        {
+                            var payloadVal = new LocalValue($"payload_val_{_tempCounter++}", armVariant.Value.PayloadType);
+                            _currentBlock.Instructions.Add(new LoadInstruction(_currentSpan, payloadPtr, payloadVal));
+                            var literalVal = LowerExpression(litSubPat.Literal);
+                            var cmp = EmitPatternComparison(litSubPat, payloadVal, literalVal);
+
+                            var contBlock = CreateBlock($"match_arm_{armIndex}_body");
+                            _currentBlock.Instructions.Add(new BranchInstruction(_currentSpan, cmp, contBlock, litFallthrough));
+                            _currentFunction.BasicBlocks.Add(contBlock);
+                            _currentBlock = contBlock;
+                        }
                     }
                 }
             }
@@ -4220,6 +4252,129 @@ public class HmAstLowering
         }
 
         return new IntConstantValue(0, TypeLayoutService.IrVoidPrim);
+    }
+
+    /// <summary>
+    /// Handles match expressions where the scrutinee is NOT an enum (e.g., u8, i32, String).
+    /// Supports literal, wildcard, variable, and else patterns.
+    /// </summary>
+    private Value LowerMatchNonEnum(MatchExpressionNode match, Value scrutineeValue, IrType scrutineeIrType)
+    {
+        var resultIrType = GetIrType(match);
+        var isVoid = resultIrType == TypeLayoutService.IrVoidPrim;
+
+        // Store scrutinee to alloca for variable binding
+        Value scrutineePtr = new LocalValue($"match_val_ptr_{_tempCounter++}", new IrPointer(scrutineeIrType));
+        _currentBlock.Instructions.Add(new AllocaInstruction(_currentSpan, scrutineeIrType.Size, scrutineePtr));
+        _currentBlock.Instructions.Add(new StorePointerInstruction(_currentSpan, scrutineePtr, scrutineeValue));
+
+        // Alloca result
+        Value? resultPtr = null;
+        if (!isVoid)
+        {
+            resultPtr = new LocalValue($"match_result_ptr_{_tempCounter++}", new IrPointer(resultIrType));
+            _currentBlock.Instructions.Add(new AllocaInstruction(_currentSpan, resultIrType.Size, resultPtr));
+        }
+
+        // Create blocks
+        var armBlocks = new List<BasicBlock>();
+        for (int i = 0; i < match.Arms.Count; i++)
+            armBlocks.Add(CreateBlock($"match_arm_{i}"));
+
+        var checkBlocks = new List<BasicBlock>();
+        for (int i = 0; i < match.Arms.Count - 1; i++)
+            checkBlocks.Add(CreateBlock($"match_check_{i}"));
+
+        var mergeBlock = CreateBlock("match_merge");
+
+        for (int armIndex = 0; armIndex < match.Arms.Count; armIndex++)
+        {
+            var arm = match.Arms[armIndex];
+            var armBlock = armBlocks[armIndex];
+            var checkBlock = armIndex == 0 ? _currentBlock : checkBlocks[armIndex - 1];
+            _currentBlock = checkBlock;
+
+            if (arm.Pattern is ElsePatternNode or WildcardPatternNode)
+            {
+                _currentBlock.Instructions.Add(new JumpInstruction(_currentSpan, armBlock));
+            }
+            else if (arm.Pattern is VariablePatternNode)
+            {
+                _currentBlock.Instructions.Add(new JumpInstruction(_currentSpan, armBlock));
+            }
+            else if (arm.Pattern is LiteralPatternNode litPat)
+            {
+                var literalVal = LowerExpression(litPat.Literal);
+                var cmp = EmitPatternComparison(litPat, scrutineeValue, literalVal);
+
+                var elseTarget = armIndex < match.Arms.Count - 1
+                    ? checkBlocks[armIndex]
+                    : mergeBlock;
+                _currentBlock.Instructions.Add(new BranchInstruction(_currentSpan, cmp, armBlock, elseTarget));
+            }
+
+            if (armIndex > 0)
+                _currentFunction.BasicBlocks.Add(checkBlock);
+
+            _currentFunction.BasicBlocks.Add(armBlock);
+            _currentBlock = armBlock;
+
+            // Bind variable pattern
+            if (arm.Pattern is VariablePatternNode varPat)
+                _locals[varPat.Name] = scrutineePtr;
+
+            // Lower arm result
+            var armResultVal = LowerExpression(arm.ResultExpr, isVoid ? null : resultIrType);
+            if (!isVoid && resultPtr != null)
+                _currentBlock.Instructions.Add(new StorePointerInstruction(_currentSpan, resultPtr, armResultVal));
+
+            if (_currentBlock.Instructions.Count == 0 ||
+                _currentBlock.Instructions[^1] is not (ReturnInstruction or JumpInstruction or BranchInstruction))
+            {
+                _currentBlock.Instructions.Add(new JumpInstruction(_currentSpan, mergeBlock));
+            }
+        }
+
+        _currentFunction.BasicBlocks.Add(mergeBlock);
+        _currentBlock = mergeBlock;
+
+        if (!isVoid && resultPtr != null)
+        {
+            var finalResult = new LocalValue($"match_result_{_tempCounter++}", resultIrType);
+            _currentBlock.Instructions.Add(new LoadInstruction(_currentSpan, resultPtr, finalResult));
+            return finalResult;
+        }
+
+        return new IntConstantValue(0, TypeLayoutService.IrVoidPrim);
+    }
+
+    /// <summary>
+    /// Emits a comparison between a value and a literal pattern value.
+    /// Uses op_eq resolution from the type checker (same rules as binary ==).
+    /// Primitives use BinaryInstruction(Equal), structs use resolved op_eq.
+    /// </summary>
+    private Value EmitPatternComparison(LiteralPatternNode litPat, Value actual, Value literal)
+    {
+        var resolved = _checker.GetResolvedOperator(litPat);
+        if (resolved != null)
+        {
+            // Struct type with op_eq — call it exactly like binary ==
+            var fn = resolved.Function;
+            var calleeIrParamTypes = new List<IrType>();
+            foreach (var param in fn.Parameters)
+                calleeIrParamTypes.Add(GetIrType(param));
+
+            var fnHmType = GetFunctionHmType(fn);
+            var callRetIrType = _layout.Lower(fnHmType.ReturnType);
+
+            return EmitFLangCall(fn.Name, [actual, literal], callRetIrType, calleeIrParamTypes);
+        }
+
+        // Primitive type — use built-in equality
+        var cmpResult = new LocalValue($"pat_cmp_{_tempCounter++}", TypeLayoutService.IrBool);
+        _currentBlock.Instructions.Add(
+            new BinaryInstruction(_currentSpan, BinaryOp.Equal, actual, literal, cmpResult));
+        return cmpResult;
     }
 
     // =========================================================================

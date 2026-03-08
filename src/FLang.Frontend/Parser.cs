@@ -2844,6 +2844,44 @@ public class Parser
             return new ElsePatternNode(elseToken.Span);
         }
 
+        // Check for literal patterns: 42, b'x', true, false, "hello"
+        if (_currentToken.Kind == TokenKind.Integer)
+        {
+            var integerToken = Eat(TokenKind.Integer);
+            var (value, suffix) = ParseIntegerLiteralValue(integerToken.Text);
+            var literal = new IntegerLiteralNode(integerToken.Span, value, suffix);
+            return new LiteralPatternNode(integerToken.Span, literal);
+        }
+
+        if (_currentToken.Kind == TokenKind.ByteLiteral)
+        {
+            var byteToken = Eat(TokenKind.ByteLiteral);
+            var byteValue = BigInteger.Parse(byteToken.Text);
+            var literal = new IntegerLiteralNode(byteToken.Span, byteValue, "u8");
+            return new LiteralPatternNode(byteToken.Span, literal);
+        }
+
+        if (_currentToken.Kind == TokenKind.True)
+        {
+            var trueToken = Eat(TokenKind.True);
+            var literal = new BooleanLiteralNode(trueToken.Span, true);
+            return new LiteralPatternNode(trueToken.Span, literal);
+        }
+
+        if (_currentToken.Kind == TokenKind.False)
+        {
+            var falseToken = Eat(TokenKind.False);
+            var literal = new BooleanLiteralNode(falseToken.Span, false);
+            return new LiteralPatternNode(falseToken.Span, literal);
+        }
+
+        if (_currentToken.Kind == TokenKind.StringLiteral)
+        {
+            var stringToken = Eat(TokenKind.StringLiteral);
+            var literal = new StringLiteralNode(stringToken.Span, stringToken.Text);
+            return new LiteralPatternNode(stringToken.Span, literal);
+        }
+
         // Check for identifier pattern (variable binding or enum variant)
         if (_currentToken.Kind == TokenKind.Identifier)
         {

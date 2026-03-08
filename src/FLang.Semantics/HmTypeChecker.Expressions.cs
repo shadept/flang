@@ -1551,6 +1551,16 @@ public partial class HmTypeChecker
                 CheckEnumVariantPattern(variantPat, scrutineeType);
                 break;
 
+            case LiteralPatternNode litPat:
+                var litType = InferExpression(litPat.Literal);
+                _engine.Unify(litType, scrutineeType, litPat.Span);
+                // Resolve op_eq using the same rules as binary ==
+                var eqResult = TryResolveOperator("op_eq", [scrutineeType, litType], litPat.Span, out var eqNode);
+                if (eqResult != null)
+                    _resolvedOperators[litPat] = new ResolvedOperator(eqNode!);
+                Record(litPat, scrutineeType);
+                break;
+
             default:
                 ReportError($"Unsupported pattern kind: {pattern.GetType().Name}", pattern.Span);
                 break;

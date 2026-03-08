@@ -1,3 +1,4 @@
+using System.Runtime.InteropServices;
 using FLang.Core;
 using FLang.Frontend;
 using FLang.Frontend.Ast.Declarations;
@@ -122,6 +123,32 @@ public class FLangWorkspace
                 ?? Directory.GetCurrentDirectory();
             compilation.IncludePaths.Add(compilation.StdlibPath);
             compilation.IncludePaths.Add(compilation.WorkingDirectory);
+
+            // Build compile-time context for #if directives (same as CLI)
+            var ctx = compilation.CompileTimeContext;
+            string os;
+            if (RuntimeInformation.IsOSPlatform(OSPlatform.OSX)) os = "macos";
+            else if (RuntimeInformation.IsOSPlatform(OSPlatform.Linux)) os = "linux";
+            else if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows)) os = "windows";
+            else os = "unknown";
+            var arch = RuntimeInformation.OSArchitecture switch
+            {
+                Architecture.Arm64 => "arm64",
+                Architecture.X64 => "x86_64",
+                Architecture.X86 => "x86",
+                _ => RuntimeInformation.OSArchitecture.ToString().ToLowerInvariant()
+            };
+            ctx["platform"] = new Dictionary<string, object>
+            {
+                ["os"] = os,
+                ["arch"] = arch
+            };
+            ctx["runtime"] = new Dictionary<string, object>
+            {
+                ["testing"] = false,
+                ["release"] = false,
+                ["env"] = new Dictionary<string, object>()
+            };
 
             Dictionary<string, string> openDocs;
             lock (_lock)
