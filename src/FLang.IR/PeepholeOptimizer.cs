@@ -397,7 +397,7 @@ public static class PeepholeOptimizer
         _ => null
     };
 
-    private static IEnumerable<Value> GetOperands(Instruction inst)
+    public static IEnumerable<Value> GetOperands(Instruction inst)
     {
         switch (inst)
         {
