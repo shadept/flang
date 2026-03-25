@@ -1,69 +1,61 @@
 # FLang Syntax Reference
 
-This document is the complete syntax reference for FLang. Every construct the language supports is listed here. If something is not listed, it does not exist in FLang.
+If something is not listed here, it does not exist in FLang.
 
-## What FLang Does NOT Have
+## FLang is NOT Rust
 
-No semicolons. No `while` loops (use `loop` with `break`). No `mut` keyword. No `->` return type arrow. No `impl` blocks. No traits/interfaces. No closures (lambdas exist but cannot capture). No string interpolation. No multi-line comments. No `elif`. No ternary operator. No `switch`/`case`. No `async`/`await`. No destructuring assignment. No spread operator.
+| Concept | FLang | NOT this |
+|---|---|---|
+| Generics | `Option(T)`, `List(String)`, `Result(T, E)` | `Option<T>`, `Option[T]` |
+| Type params | `fn foo(x: $T) T` (`$` binds, then `T` refers) | `fn foo<T>(x: T) -> T` |
+| Return type | `fn foo() i32 { ... }` (after `)`, no arrow) | `fn foo() -> i32` |
+| Mutability | `let` is mutable, `const` is immutable | `let` immutable, `let mut` |
+| Match | `x match { A => ..., else => ... }` (postfix) | `match x { A => ... }` |
+| Optionals | `T?` or `&T?`, null value is `null` | `Option<T>`, `None` |
+| Deref | `ptr.*` | `*ptr` |
+| Methods | UFCS — free functions with `self: &T` first param | `impl` blocks |
+| No semicolons | Statements end at newline | `;` required |
+| No `while` | Use `loop` + `break` | `while cond { }` |
+| No `mut` keyword | `let` is already mutable | `let mut` |
+| No `impl` blocks | UFCS resolves methods from free functions | `impl Type { }` |
+| No traits | `#interface` / `#implement` source generators | `trait Foo { }` |
+| No closures | Lambdas exist but cannot capture | closures capture env |
+| No `elif`/`else if` | Chain `else if` (two keywords) | `elif` |
 
-## Comments
+## Types
 
-```
-// single line comment (only kind)
-```
+**Primitives:** `i8` `i16` `i32` `i64` `u8` `u16` `u32` `u64` `usize` `isize` `f32` `f64` `bool`
 
-## Primitive Types
-
-`i8` `i16` `i32` `i64` `u8` `u16` `u32` `u64` `usize` `isize` `f32` `f64` `bool`
-
-## Composite Types
-
-| Written as | Meaning |
+| Syntax | Meaning |
 |---|---|
 | `String` | UTF-8 string (ptr + len) |
-| `[T; N]` | Fixed-size array of N elements |
-| `T[]` | Slice (fat pointer: ptr + len) |
+| `[T; N]` | Fixed-size array |
+| `T[]` | Slice (ptr + len) |
 | `&T` | Non-null reference |
-| `T?` | Optional (equivalent to `Option(T)`) |
-| `&T?` | Nullable reference (equivalent to `Option(&T)`) |
+| `T?` | Optional (`Option(T)`) |
+| `&T?` | Nullable reference (`Option(&T)`) |
 | `(A, B)` | Tuple (sugar for `{ _0: A, _1: B }`) |
-| `()` | Unit (empty tuple) |
-| `fn(T1, T2) R` | Function/Lambda type |
+| `()` | Unit |
+| `fn(T1, T2) R` | Function type |
 | `Type(T)` | Runtime type descriptor |
 
 ## Literals
 
 ```
-42              // integer (type inferred from context)
-42i32           // integer with type suffix (i8, i16, i32, i64, isize, u8, u16, u32, u64, usize)
-0xff            // hexadecimal integer
-0xDEAD_BEEF     // hex with underscore separators
-1_000_000       // decimal with underscore separators for readability
-1_000i32        // underscores work with type suffixes
-3.14            // float (type inferred, defaults to f64)
-3.14f32         // float with type suffix (f32 or f64)
-1.5e10          // scientific notation (defaults to f64)
-3e-4            // scientific notation without decimal point
-1_000.5f64      // underscores work in float literals too
-true false      // bool
-null            // None value for optionals
-"hello"         // string (UTF-8, null-terminated)
-[1, 2, 3]      // array literal
-[0; 10]         // array repeat: 10 elements, all 0
-(1, 2)          // tuple
-(1,)            // single-element tuple (trailing comma required)
-(x)             // grouped expression (NOT a tuple)
+42          3.14         true false null
+42i32       3.14f32      1.5e10       0xff      1_000_000
+"hello"     b'\n'
+[1, 2, 3]   [0; 10]     (1, 2)       (1,)      // trailing comma = single-element tuple
 ```
 
-**Escape sequences in strings:** `\n` `\t` `\r` `\\` `\"` `\0`
+Escape sequences: `\n` `\t` `\r` `\\` `\"` `\0`
 
-## Variable Declarations
+## Variables
 
 ```
 let x = 10               // mutable, type inferred
-let x: i32 = 10          // mutable, type explicit
+let x: i32 = 10          // mutable, explicit type
 const X = 42             // immutable
-const X: i32 = 42        // immutable, type explicit
 ```
 
 `const` at file scope = module-level constant. `let` inside functions only.
@@ -71,556 +63,173 @@ const X: i32 = 42        // immutable, type explicit
 ## Functions
 
 ```
-fn add(a: i32, b: i32) i32 {
-    return a + b
-}
-
-pub fn main() i32 {
-    return 0
-}
+fn add(a: i32, b: i32) i32 { return a + b }
+pub fn main() i32 { return 0 }              // pub = visible outside file
+fn greet(name: String, times: i32 = 1) {}   // default parameter
 ```
 
-- `pub` makes the function visible outside the file.
-- Return type goes after `)` with NO arrow, NO colon.
-- No return type means void.
+**Named arguments:** `sub(b = 3, a = 10)` — positional args first, then named.
 
-### Default Parameter Values
+**Variadic:** `fn sum(..nums: i32) i32` — received as `i32[]` slice. One variadic, must be last. Foreign uses C-style `...` instead.
 
-Parameters can have default values using `= expr` after the type:
+**Generic:** `$T` introduces, `T` refers. Example: `fn identity(x: $T) T { return x }`
 
-```
-fn greet(name: String, times: i32 = 1) { ... }
+**Foreign:** `#foreign fn malloc(size: usize) &u8?` — no body, C calling convention, not mangled.
 
-greet("Alice")        // times = 1
-greet("Alice", 3)     // times = 3
-```
-
-- Default values are evaluated fresh at each call site (Kotlin semantics).
-- Parameters with defaults must come after required parameters.
-- Default expressions can be any expression, including function calls.
-
-### Named Arguments
-
-Call-site arguments can be named using `name = expr`:
-
-```
-fn sub(a: i32, b: i32) i32 { return a - b }
-
-sub(b = 3, a = 10)       // returns 7
-sub(10, b = 3)            // positional + named mix
-```
-
-- Named arguments can appear in any order, but positional arguments must come first.
-- Named arguments are not supported for indirect calls (function pointers).
-- To disambiguate from `==`, use: `foo(x = 5)` is named arg, `foo(x == 5)` is comparison.
-
-### Variadic Parameters
-
-A function can accept a variable number of arguments using `..name: Type`:
-
-```
-fn sum(..nums: i32) i32 {
-    let total: i32 = 0
-    for n in nums {
-        total = total + n
-    }
-    return total
-}
-
-sum(1, 2, 3)     // nums received as i32[] slice
-sum()            // nums is empty slice
-```
-
-- At most one variadic parameter, must be the last parameter.
-- The variadic parameter is received as a slice (`Type[]`).
-- Arguments are stack-allocated at the call site, then coerced to a slice.
-- Fixed parameters can precede the variadic: `fn fmt(prefix: String, ..args: i32)`.
-- Foreign functions use C-style `...` instead (not `..name`).
-
-### Generic Functions
-
-`$T` introduces a type parameter. It can appear anywhere in the parameter list or return type.
-
-```
-fn identity(x: $T) T {
-    return x
-}
-
-fn make_pair(a: $T, b: $U) (T, U) {
-    return (a, b)
-}
-```
-
-`$T` binds the type. Subsequent uses of `T` (without `$`) refer to the bound type.
-
-### Foreign Functions
-
-```
-#foreign fn malloc(size: usize) &u8?
-#foreign fn printf(fmt: &u8, ...) i32
-```
-
-No body. C calling convention. Name not mangled. Variadic `...` allowed only here.
-
-### Lambdas (Non-Capturing)
-
-```
-let add = fn(x: i32, y: i32) i32 { x + y }
-
-// Parameter types inferred from expected type:
-let f: fn(i32) i32 = fn(x) { x + 1 }
-
-// Inline as argument:
-apply(fn(x: i32) i32 { x * 2 }, 21)
-
-// Multi-statement body:
-let compute = fn(x: i32, y: i32) i32 {
-    let sum = x + y
-    return sum * 2
-}
-```
-
-- Same `fn` keyword, but no name after `fn` — `fn(` immediately.
-- Parameter types can be omitted when inferrable from context.
-- Return type is optional (same position as function declarations).
-- Body is always a brace-delimited block.
-- Lambdas **cannot** capture variables from enclosing scopes.
-- Desugars to a synthesized module-level function + function reference.
+**Lambda:** `fn(x: i32, y: i32) i32 { x + y }` — no name after `fn`. Cannot capture. Parameter types inferred when context available.
 
 ## Structs
 
 ```
-struct Point {
-    x: i32
-    y: i32
-}
+struct Point { x: i32, y: i32 }
+struct Pair(T) { first: T, second: T }          // generic
+type Vec2 = struct { x: i32, y: i32 }           // alternative syntax
 
-// equivalent using type declaration:
-type Point = struct { x: i32, y: i32 }
+let p = Point { x = 10, y = 20 }                // construction (= not :)
+let a = .{ x = 10, y = 20 }                     // anonymous (type from context)
+let p2 = Point { x, y = 20 }                    // shorthand: x = x
 ```
 
-Commas between fields are optional. Generic structs:
-
-```
-struct Pair(T) {
-    first: T
-    second: T
-}
-```
-
-### Construction
-
-```
-let p = Point { x = 10, y = 20 }       // named struct
-let a = .{ x = 10, y = 20 }            // anonymous struct (type from context)
-let p2 = Point { x, y = 20 }           // shorthand: `x` is equivalent to `x = x`
-let a2 = .{ x, y = 20 }               // shorthand works in anonymous structs too
-```
-
-Field assignment uses `=`, not `:`. When the field name matches a variable in scope, you can omit the `= expr` part.
+Commas between fields optional. Field assignment uses `=`.
 
 ## Enums
 
 ```
-enum Color {
-    Red
-    Green
-    Blue
-}
+enum Color { Red, Green, Blue }
+enum Result(T, E) { Ok(T), Err(E) }             // generic with payloads
+type JsonError = enum { UnexpectedChar, UnexpectedEnd }  // alternative syntax
 
-// equivalent using type declaration:
-type Color = enum { Red, Green, Blue }
+// Naked enum (C-style integers, no payloads allowed):
+enum Ord { Less = -1, Equal = 0, Greater = 1 }
 
-enum Result(T, E) {
-    Ok(T)
-    Err(E)
-}
+let c = Color.Red          // qualified
+let r = Result.Ok(42)      // with payload
+let r2 = Ok(42)            // short form when unambiguous
 ```
 
-Commas between variants are optional. Variants can carry payloads in parentheses or be bare (unit variants).
-
-### Naked Enums (C-style integers)
-
-```
-enum Ord {
-    Less = -1
-    Equal = 0
-    Greater = 1
-}
-```
-
-When any variant has `= value`, the enum is naked: all variants are integer-tagged, none may carry payloads. Tags auto-increment if omitted.
-
-### Variant Construction
-
-```
-let c = Color.Red               // qualified
-let r = Result.Ok(42)           // qualified with payload
-let r2 = Ok(42)                 // short form (when unambiguous)
-```
-
-## Type Declarations
-
-The `type` keyword provides an alternative syntax for defining structs and enums:
-
-```
-type Vec2 = struct { x: i32, y: i32 }
-type Color = enum { Red, Green, Blue }
-type Option = struct(T) { has_value: bool, value: T }
-type Result = enum(T, E) { Ok(T), Err(E) }
-```
-
-Both forms are equivalent: `type Name = struct { ... }` and `struct Name { ... }` define the same type. Same for enums.
+Commas between variants optional.
 
 ## Control Flow
 
-### If Expression
-
-Parentheses around the condition are **optional**. Body must be a block.
-
 ```
+// if (expression — can return a value)
 let x = if a > b { a } else { b }
+if condition { do_thing() }
+if a { foo } else if b { bar } else { baz }
 
-if condition {
-    do_thing()
-}
+// for-in (only kind of for loop)
+for item in collection { process(item) }
+for i in 0..5 { /* 0,1,2,3,4 */ }
 
-if (a > b) {
-    foo
-} else if (b > c) {
-    bar
-} else {
-    baz
-}
-```
+// loop (infinite, use break/continue)
+loop { if done { break } }
 
-`if` without `else` used as expression yields `Option` of the body type.
-
-### For Loop
-
-Only `for`-`in`. No C-style `for`. Parentheses around the header are **optional**. Body must be a block.
-
-```
-for item in collection {
-    process(item)
-}
-
-for (i in 0..5) {
-    // i = 0, 1, 2, 3, 4
-}
-```
-
-`break` and `continue` work inside.
-
-### Loop
-
-Infinite loop. Repeats until `break` or `return`.
-
-```
-loop {
-    // runs forever until break
-    if (condition) {
-        break
-    }
-}
-```
-
-Use instead of `while`. `break` and `continue` work inside.
-
-### Iterator Protocol
-
-`for`-`in` works on any type that implements `iter()` and `next()`. The loop:
-
-```
-for (x in collection) { body }
-```
-
-desugars to:
-
-```
-let it = iter(&collection)
-// loop:
-let n = next(&it)       // returns T?
-if (n == null) break
-let x = n               // unwrapped value
-body
-```
-
-To make a type iterable, define two free functions:
-
-```
-struct MyIterator {
-    // iterator state
-}
-
-fn iter(self: &MyCollection) MyIterator {
-    return .{ /* initial state */ }
-}
-
-fn next(self: &MyIterator) Element? {
-    if (done) return null
-    // advance state
-    return value
-}
-```
-
-`iter()` returns an iterator struct. `next()` returns `T?` — the next value, or `null` to signal end. Both are regular functions found via UFCS.
-
-### Match Expression
-
-`match` is postfix: scrutinee comes first.
-
-```
+// match (postfix)
 let result = cmd match {
-    Quit => 0,
-    Move(x, y) => x + y,
-    Write(s) => s.len as i32,
+    Quit => 0
+    Move(x, y) => x + y
+    Write(s) => s.len as i32
     else => -1
 }
-```
 
-Arms use `=>`. Commas between arms are optional. Patterns:
-
-| Pattern | Example |
-|---|---|
-| Unit variant | `Quit` |
-| Payload variant | `Move(x, y)` |
-| Qualified variant | `Color.Red` |
-| Nested | `Some(Ok(x))` |
-| Wildcard | `_` |
-| `else` | default arm |
-
-All variants must be covered, or `else` is required.
-
-### Defer
-
-```
+// defer (LIFO at scope exit)
 defer close(handle)
 ```
 
-Runs at scope exit. Multiple defers execute in LIFO order.
+`if` without `else` as expression yields `Option` of the body type. Parentheses around conditions optional.
 
-### Break / Continue
+### Iterator Protocol
 
-```
-for (i in 0..10) {
-    if (i == 5) break
-    if (i % 2 == 0) continue
-}
-```
-
-### Return
-
-```
-return value
-return          // void return
-```
+`for x in collection` desugars to calling `iter(&collection)` then `next(&iterator)` returning `T?`. Make a type iterable by defining `fn iter(self: &T) Iterator` and `fn next(self: &Iterator) Element?`.
 
 ## Operators
 
-### Precedence (highest to lowest)
-
-| Level | Operators |
+| Precedence | Operators |
 |---|---|
 | 11 | `*` `/` `%` |
 | 10 | `+` `-` |
 | 9 | `&` (bitwise AND) |
-| 8 | `^` (bitwise XOR) |
-| 7 | `\|` (bitwise OR) |
+| 8 | `^` (XOR) |
+| 7 | `\|` (OR) |
 | 6 | `..` |
 | 5 | `<` `>` `<=` `>=` |
 | 4 | `==` `!=` |
 | 3 | `and` |
 | 2 | `or` |
-| 1 | `??` (right-associative) |
+| 1 | `??` (right-assoc) |
 
-- `and` / `or` are keywords, not symbols. Short-circuit. Bool operands only.
-- `!expr` is logical NOT (prefix, unary).
-- `&expr` takes address of a variable (when used as prefix unary operator).
-
-### Bitwise Operators
-
-```
-a & b           // bitwise AND
-a ^ b           // bitwise XOR
-a | b           // bitwise OR
-```
-
-Operands must be the same integer type. No implicit widening. Bitwise AND binds tighter than XOR, which binds tighter than OR (same as C).
-
-### Null Operators
-
-```
-a ?? b          // if a has value, unwrap it; otherwise b
-a?.field        // if a has value, access field; otherwise null
-```
-
-### Casting
-
-```
-expr as Type
-```
-
-Works for: numeric conversions (including `i32 as f64`, `f64 as i32`, `f32 as f64`), pointer-to-integer, pointer-to-pointer, `String`/`u8[]`.
+- `and`/`or` are keywords, short-circuit, bool only
+- `!expr` logical NOT, `&expr` address-of (both prefix unary)
+- `a ?? b` unwraps optional or uses fallback
+- `a?.field` optional chaining
+- `expr as Type` casting (numeric, pointer, String/u8[])
 
 ### Operator Overloading
 
-All operators desugar to function calls. Define these to overload:
+All operators desugar to function calls: `op_add`, `op_sub`, `op_multiply`, `op_divide`, `op_modulo`, `op_band`, `op_bor`, `op_bxor`, `op_eq`, `op_ne`, `op_lt`, `op_gt`, `op_le`, `op_ge`, `op_index`, `op_set_index`, `op_coalesce`, `op_assign`, `op_add_assign`.
 
-| Operator | Function name |
-|---|---|
-| `+` | `op_add` |
-| `-` | `op_sub` |
-| `*` | `op_multiply` |
-| `/` | `op_divide` |
-| `%` | `op_modulo` |
-| `&` | `op_band` |
-| `\|` | `op_bor` |
-| `^` | `op_bxor` |
-| `==` | `op_eq` |
-| `!=` | `op_ne` |
-| `<` | `op_lt` |
-| `>` | `op_gt` |
-| `<=` | `op_le` |
-| `>=` | `op_ge` |
-| `[]` read | `op_index` |
-| `[] =` write | `op_set_index` |
-| `??` | `op_coalesce` |
-| `=` | `op_assign` |
-| `+=` | `op_add_assign` |
+`op_eq` auto-derives `op_ne`. `op_cmp(a, b) Ord` auto-derives all six comparison operators.
 
-**Auto-derivation:** defining `op_eq` auto-derives `op_ne` (and vice versa). Defining `op_cmp(a, b) Ord` auto-derives all six comparison operators.
-
-```
-pub fn op_add(lhs: &Vec2, rhs: Vec2) Vec2 { ... }
-pub fn op_cmp(lhs: &Box, rhs: Box) Ord { ... }
-```
-
-## References and Auto-Dereference
+## References and UFCS
 
 ```
 let ptr = &x           // take reference
-let val = ptr.*        // explicit dereference (copy)
-let f = ptr.field      // auto-dereference (no copy, reads through pointer)
-ptr.field = 10         // auto-deref write (modifies pointed-to value)
+let val = ptr.*        // explicit dereference
+let f = ptr.field      // auto-deref (recursive through &&T)
 ```
 
-Auto-deref applies recursively: `&&T` accessed via `.field` dereferences twice.
+Any function with first param `T` or `&T` can be called as `value.func()`. This is how methods work — no `impl` blocks.
 
-## UFCS (Unified Function Call Syntax)
-
-Any function whose first parameter is `T` or `&T` can be called with dot syntax:
+## Imports and Visibility
 
 ```
-fn len(s: &String) usize { ... }
-
-let n = s.len()         // desugars to len(&s)
+import std.io.file
+import std.list
 ```
 
-If the first parameter is `&T`, the receiver is automatically referenced. This is how methods work - there are no `impl` blocks.
-
-## Imports
-
-```
-import core.string
-import std.io
-```
-
-Each file is a module. Path segments map to directories and filenames.
-Core modules dont need to explicitly imported, `core.produle` is auto imported on all files, which includes all other core modules.
+Each file is a module. Core modules are auto-imported. `pub` makes items visible outside the defining file. Struct fields are read-only externally (writable only in defining file).
 
 ## Test Blocks
 
 ```
-import std.test
-
-test "addition" {
+test "name" {
     assert_eq(2 + 3, 5, "math works")
+    assert_true(x > 0, "positive")
 }
 ```
 
-Test blocks are module-scoped, not exported. Multiple per file. Run with `--test` flag. Available assertions: `assert_true(bool, String)`, `assert_eq($T, T, String)`.
-
-## Visibility
-
-- `pub fn`, `pub struct`, `pub enum`: visible outside the defining file.
-- Without `pub`: visible only within the defining file.
-- Struct fields are writable only within the defining file (read-only externally).
+Module-scoped, not exported. Run with `--test`. Requires `import std.test`.
 
 ## Tuples
 
 ```
 let t: (i32, bool) = (42, true)
-let x = t.0            // access first element (desugars to t._0)
-let y = t.1            // access second element
+let x = t.0            // desugars to t._0
 ```
-
-Tuples are anonymous structs with fields `_0`, `_1`, etc. Structurally typed.
-
-## Type Literals
-
-```
-let t: Type(i32) = i32
-let s = t.size          // size in bytes
-let n = t.name          // "i32"
-```
-
-## Assignment
-
-```
-x = 10                  // simple assignment
-arr[i] = 42            // index assignment (calls op_set_index)
-ptr.field = 5          // field write through reference
-```
-
-Compound assignment: `+=` (others not yet implemented).
 
 ## Source Generators
 
-Source generators are compile-time code generation constructs prefixed with `#`.
-
-### Defining a Generator
+Compile-time code generation, prefixed with `#`.
 
 ```
-#define(name, Param1: Kind, Param2: Kind) {
-    // template body with directives
-}
+// Define:
+#define(name, Param1: Kind, Param2: Kind) { /* template body */ }
+
+// Invoke:
+#name(arg1, arg2)
 ```
 
-Parameter kinds: `Ident` (bare identifier), `Type` (type expression). The last parameter can be variadic: `..Param: Kind`.
+Parameter kinds: `Ident`, `Type`. Last param can be variadic: `..Param: Kind`.
 
-### Invoking a Generator
+**Directives inside generators:** `#(expr)` interpolation, `#for var in collection { }`, `#if condition { } #else { }`.
 
-```
-#name(arg1, arg2, ...)
-```
-
-### Template Directives
-
-Inside a generator body, these directives control code generation:
-
-| Directive | Purpose |
-|---|---|
-| `#(expr)` | Interpolation — inserts the value of `expr` |
-| `#for var in collection { ... }` | Iteration over parameters or lists |
-| `#if condition { ... } #else { ... }` | Conditional generation |
-
-### Built-in Generators (stdlib)
+**Built-in generators:**
 
 | Generator | Purpose |
 |---|---|
-| `#derive(T, eq, clone, debug, hash)` | Derive trait implementations for type `T` |
-| `#enum_utils(E)` | Generate `to_string`/`from_string` for enum `E` |
-| `#interface(Name, Spec)` | Define a vtable-based interface |
-| `#implement(Impl, Iface)` | Implement an interface for a type |
+| `#derive(T, eq, clone, debug, hash)` | Derive implementations for type |
+| `#enum_utils(E)` | Generate `to_string`/`from_string` for enum |
+| `#interface(Name, Spec)` | Define vtable-based interface |
+| `#implement(Impl, Iface)` | Implement interface for a type |
 
-### Anonymous Type Expressions in Generator Args
-
-Generator arguments can include inline anonymous type expressions:
-
-```
-#interface(Writer, struct {
-    write: fn(data: u8[]) usize
-    flush: fn() bool
-})
-```
+Generator args can include inline anonymous types: `#interface(Writer, struct { write: fn(data: u8[]) usize })`.
