@@ -41,91 +41,15 @@ public record ResolvedOperator(
 /// </summary>
 public partial class HmTypeChecker : INominalTypeRegistry, ITemplateTypeProvider
 {
-    private readonly InferenceEngine _engine;
-    private readonly TypeScopes _scopes;
+    private readonly TypeRegistry _types = new();
+    private readonly FunctionRegistry _fns = new();
+    private readonly InferenceResults _results = new();
+    private readonly InferenceContext _ctx;
     private readonly Compilation _compilation;
     private readonly List<Diagnostic> _diagnostics = [];
 
     /// <summary>Compile-time context for #if directive evaluation.</summary>
     public Dictionary<string, object> CompileTimeContext => _compilation.CompileTimeContext;
-
-    /// <summary>
-    /// FQN -> NominalType template for all structs and enums.
-    /// </summary>
-    private readonly Dictionary<string, NominalType> _nominalTypes = [];
-
-    /// <summary>
-    /// FQN -> SourceSpan of the first declaration, for duplicate-detection notes.
-    /// </summary>
-    private readonly Dictionary<string, SourceSpan> _nominalSpans = [];
-
-    /// <summary>
-    /// FQN -> list of (field name, AST TypeNode) for struct fields.
-    /// Used by source generator template expansion to access field type info.
-    /// </summary>
-    private readonly Dictionary<string, IReadOnlyList<(string Name, TypeNode TypeNode)>> _fieldTypeNodes = [];
-
-    /// <summary>
-    /// Function name -> list of overloads.
-    /// </summary>
-    private readonly Dictionary<string, List<FunctionScheme>> _functions = [];
-
-    /// <summary>
-    /// Monomorphized generic function bodies.
-    /// </summary>
-    private readonly List<FunctionDeclarationNode> _specializations = [];
-    private readonly Dictionary<string, FunctionDeclarationNode> _emittedSpecs = [];
-
-    /// <summary>
-    /// Inferred type per AST node. Populated during inference, read during Zonk/stamping.
-    /// </summary>
-    private readonly Dictionary<AstNode, Type> _inferredTypes = [];
-
-    /// <summary>
-    /// Resolved operator functions per AST node (binary, unary, index, coalesce).
-    /// Populated during type checking, read during lowering to emit CallInstructions.
-    /// </summary>
-    private readonly Dictionary<AstNode, ResolvedOperator> _resolvedOperators = [];
-
-
-    /// <summary>
-    /// Stack of functions currently being checked (for return type context).
-    /// </summary>
-    private readonly Stack<FunctionContext> _functionStack = new();
-
-    /// <summary>
-    /// Module currently being checked.
-    /// </summary>
-    private string? _currentModulePath;
-
-    /// <summary>
-    /// True during CheckGenericFunctionBody — enables fallback return type guessing
-    /// when overload resolution fails (since placeholder types can't match).
-    /// </summary>
-    private bool _isCheckingGenericBody;
-
-    /// <summary>
-    /// Lambda synthesis counter.
-    /// </summary>
-    private int _nextLambdaId;
-
-    /// <summary>
-    /// Scope barrier for non-capturing lambda enforcement.
-    /// Variables from scopes at or below this index are inaccessible.
-    /// </summary>
-    private int _lambdaScopeBarrier;
-
-    /// <summary>
-    /// Parallel scope stack for tracking const-ness of variable declarations.
-    /// Each scope maps name -> isConst. Mirrors _scopes push/pop via PushScope/PopScope helpers.
-    /// </summary>
-    private readonly Stack<HashSet<string>> _constScopes = new(new[] { new HashSet<string>() });
-
-    /// <summary>
-    /// Active generic type parameter names (during specialization), for type-as-value wrapping.
-    /// Uses ref-counting to handle nested specializations with the same param name.
-    /// </summary>
-    private readonly Dictionary<string, int> _activeTypeParams = [];
 
     /// <summary>
     /// Unsuffixed integer literals and their TypeVars, for post-inference validation.
@@ -145,65 +69,34 @@ public partial class HmTypeChecker : INominalTypeRegistry, ITemplateTypeProvider
     /// </summary>
     private readonly List<(FunctionScheme Scheme, Type[] ParamTypes, Type ReturnType, SourceSpan CallSpan, CallExpressionNode CallNode)> _pendingSpecializations = [];
 
-    /// <summary>
-    /// Set by ResolveOverload/ResolveOverloadWithDefaults when specialization is deferred.
-    /// Consumed by InferCall to register the pending specialization with the call node.
-    /// </summary>
-    private (FunctionScheme Scheme, Type[] Params, Type Return)? _deferredSpecInfo;
-
-    /// <summary>
-    /// Deprecated type FQNs → optional message. Populated during CollectNominalTypes.
-    /// </summary>
-    private readonly Dictionary<string, string?> _deprecatedTypes = [];
-
-    /// <summary>
-    /// Deprecated function names → optional message. Populated during CollectFunctionSignatures.
-    /// </summary>
-    private readonly Dictionary<string, string?> _deprecatedFunctions = [];
-
-    /// <summary>
-    /// Tracks variable declarations in the current function for unused variable warnings.
-    /// Maps variable name to its declaration span. Null when not inside a function body.
-    /// </summary>
-    private Dictionary<string, SourceSpan>? _currentFnDeclaredVars;
-
-    /// <summary>
-    /// Tracks variable usages in the current function for unused variable warnings.
-    /// </summary>
-    private HashSet<string>? _currentFnUsedVars;
-
-    /// <summary>
-    /// Types used as Type(T) values (e.g., i32 in size_of(i32)).
-    /// Populated during type checking, consumed by lowering to build type table.
-    /// </summary>
-    public HashSet<Type> InstantiatedTypes { get; } = new();
+    public HashSet<Type> InstantiatedTypes => _results.InstantiatedTypes;
 
     public HmTypeChecker(Compilation compilation)
     {
         _compilation = compilation;
-        _engine = new InferenceEngine();
-        _engine.AddCoercionRule(new IntegerWideningCoercionRule(true));
-        _engine.AddCoercionRule(new FloatWideningCoercionRule());
-        _engine.AddCoercionRule(new OptionWrappingCoercionRule());
-        _engine.AddCoercionRule(new StringToByteSliceCoercionRule());
-        _engine.AddCoercionRule(new ArrayDecayCoercionRule());
-        _engine.AddCoercionRule(new SliceToReferenceCoercionRule());
-        _engine.AddCoercionRule(new AnonymousStructCoercionRule(LookupNominalType));
-        _scopes = new TypeScopes();
+        var engine = new InferenceEngine();
+        engine.AddCoercionRule(new IntegerWideningCoercionRule(true));
+        engine.AddCoercionRule(new FloatWideningCoercionRule());
+        engine.AddCoercionRule(new OptionWrappingCoercionRule());
+        engine.AddCoercionRule(new StringToByteSliceCoercionRule());
+        engine.AddCoercionRule(new ArrayDecayCoercionRule());
+        engine.AddCoercionRule(new SliceToReferenceCoercionRule());
+        engine.AddCoercionRule(new AnonymousStructCoercionRule(name => _types.LookupNominalType(name, _ctx.CurrentModulePath)));
+        _ctx = new InferenceContext(engine);
     }
 
     public IReadOnlyList<Diagnostic> Diagnostics =>
-        [.. _diagnostics, .. _engine.Diagnostics];
-    public IReadOnlyDictionary<AstNode, Type> InferredTypes => _inferredTypes;
-    public IReadOnlyDictionary<string, NominalType> NominalTypes => _nominalTypes;
-    public IReadOnlyDictionary<string, SourceSpan> NominalSpans => _nominalSpans;
-    public IReadOnlyDictionary<string, IReadOnlyList<(string Name, TypeNode TypeNode)>> FieldTypeNodes => _fieldTypeNodes;
-    public IReadOnlyDictionary<string, List<FunctionScheme>> Functions => _functions;
-    public IReadOnlyDictionary<AstNode, ResolvedOperator> ResolvedOperators => _resolvedOperators;
-    public InferenceEngine Engine => _engine;
+        [.. _diagnostics, .. _ctx.Engine.Diagnostics];
+    public IReadOnlyDictionary<AstNode, Type> InferredTypes => _results.InferredTypes;
+    public IReadOnlyDictionary<string, NominalType> NominalTypes => _types.NominalTypes;
+    public IReadOnlyDictionary<string, SourceSpan> NominalSpans => _types.NominalSpans;
+    public IReadOnlyDictionary<string, IReadOnlyList<(string Name, TypeNode TypeNode)>> FieldTypeNodes => _types.FieldTypeNodes;
+    public IReadOnlyDictionary<string, List<FunctionScheme>> Functions => _fns.Functions;
+    public IReadOnlyDictionary<AstNode, ResolvedOperator> ResolvedOperators => _results.ResolvedOperators;
+    public InferenceEngine Engine => _ctx.Engine;
 
     public bool IsGenericFunction(FunctionDeclarationNode fn) => fn.IsGeneric;
-    public IReadOnlyList<FunctionDeclarationNode> GetSpecializedFunctions() => _specializations;
+    public IReadOnlyList<FunctionDeclarationNode> GetSpecializedFunctions() => _results.Specializations;
 
     /// <summary>
     /// Run all type-checking phases on a module.
@@ -217,35 +110,13 @@ public partial class HmTypeChecker : INominalTypeRegistry, ITemplateTypeProvider
     }
 
     // =========================================================================
-    // Scope management (wraps _scopes with parallel const tracking)
+    // Scope management (delegates to _ctx)
     // =========================================================================
 
-    private void PushScope()
-    {
-        _scopes.PushScope();
-        _constScopes.Push(new HashSet<string>());
-    }
-
-    private void PopScope()
-    {
-        _scopes.PopScope();
-        _constScopes.Pop();
-    }
-
-    private void MarkConst(string name)
-    {
-        _constScopes.Peek().Add(name);
-    }
-
-    private bool IsConst(string name)
-    {
-        foreach (var scope in _constScopes)
-        {
-            if (scope.Contains(name))
-                return true;
-        }
-        return false;
-    }
+    private void PushScope() => _ctx.PushScope();
+    private void PopScope() => _ctx.PopScope();
+    private void MarkConst(string name) => _ctx.MarkConst(name);
+    private bool IsConst(string name) => _ctx.IsConst(name);
 
     // =========================================================================
     // Diagnostics
@@ -272,129 +143,24 @@ public partial class HmTypeChecker : INominalTypeRegistry, ITemplateTypeProvider
     }
 
     // =========================================================================
-    // Type recording
+    // Type recording (delegates to _results)
     // =========================================================================
 
-    /// <summary>
-    /// Record the inferred type for an AST node.
-    /// </summary>
-    private Type Record(AstNode node, Type type)
-    {
-        _inferredTypes[node] = type;
-        return type;
-    }
+    private Type Record(AstNode node, Type type) => _results.Record(node, type);
 
+    public Type GetInferredType(AstNode node) => _results.GetInferredType(node);
 
-    /// <summary>
-    /// Get the previously inferred type for an AST node.
-    /// Throws if the type was not recorded — a missing type indicates a bug in the type checker.
-    /// </summary>
-    public Type GetInferredType(AstNode node)
-    {
-        if (_inferredTypes.TryGetValue(node, out var type))
-            return type;
-        throw new InternalCompilerError(
-            $"No inferred type recorded for {node.GetType().Name}", node.Span);
-    }
-
-    /// <summary>
-    /// Get the resolved operator function for an AST node, or null if none.
-    /// </summary>
-    public ResolvedOperator? GetResolvedOperator(AstNode node)
-        => _resolvedOperators.TryGetValue(node, out var op) ? op : null;
+    public ResolvedOperator? GetResolvedOperator(AstNode node) => _results.GetResolvedOperator(node);
 
     // =========================================================================
-    // Function registry
+    // Function registry (delegates to _fns)
     // =========================================================================
 
     private void RegisterFunction(FunctionScheme scheme)
-    {
-        if (!_functions.TryGetValue(scheme.Name, out var overloads))
-        {
-            overloads = [];
-            _functions[scheme.Name] = overloads;
-        }
-
-        // Check for duplicate overloads (same name + same parameter types)
-        // Allow duplicate foreign declarations (extern decls across modules)
-        foreach (var existing in overloads)
-        {
-            if (existing.IsForeign && scheme.IsForeign) continue;
-            if (HasSameParameterSignature(existing.Node, scheme.Node))
-            {
-                ReportError(
-                    $"duplicate definition of function `{scheme.Name}` with the same parameter types",
-                    scheme.Node.NameSpan, "E2103");
-                break;
-            }
-        }
-
-        overloads.Add(scheme);
-    }
-
-    /// <summary>
-    /// Checks whether two function declarations have the same parameter signature
-    /// by comparing their AST type nodes structurally.
-    /// </summary>
-    private static bool HasSameParameterSignature(FunctionDeclarationNode a, FunctionDeclarationNode b)
-    {
-        if (a.Parameters.Count != b.Parameters.Count) return false;
-        for (var i = 0; i < a.Parameters.Count; i++)
-        {
-            if (!TypeNodeEquals(a.Parameters[i].Type, b.Parameters[i].Type))
-                return false;
-        }
-        return true;
-    }
-
-    /// <summary>
-    /// Structural equality of two AST type nodes.
-    /// </summary>
-    private static bool TypeNodeEquals(TypeNode a, TypeNode b)
-    {
-        return (a, b) switch
-        {
-            (NamedTypeNode na, NamedTypeNode nb) => na.Name == nb.Name,
-            (ReferenceTypeNode ra, ReferenceTypeNode rb) => TypeNodeEquals(ra.InnerType, rb.InnerType),
-            (NullableTypeNode na, NullableTypeNode nb) => TypeNodeEquals(na.InnerType, nb.InnerType),
-            (GenericTypeNode ga, GenericTypeNode gb) =>
-                ga.Name == gb.Name
-                && ga.TypeArguments.Count == gb.TypeArguments.Count
-                && ga.TypeArguments.Zip(gb.TypeArguments).All(p => TypeNodeEquals(p.First, p.Second)),
-            (ArrayTypeNode aa, ArrayTypeNode ab) =>
-                aa.Length == ab.Length && TypeNodeEquals(aa.ElementType, ab.ElementType),
-            (SliceTypeNode sa, SliceTypeNode sb) => TypeNodeEquals(sa.ElementType, sb.ElementType),
-            (GenericParameterTypeNode ga, GenericParameterTypeNode gb) => ga.Name == gb.Name,
-            (FunctionTypeNode fa, FunctionTypeNode fb) =>
-                fa.ParameterTypes.Count == fb.ParameterTypes.Count
-                && fa.ParameterTypes.Zip(fb.ParameterTypes).All(p => TypeNodeEquals(p.First, p.Second))
-                && TypeNodeEquals(fa.ReturnType, fb.ReturnType),
-            (AnonymousStructTypeNode sa, AnonymousStructTypeNode sb) =>
-                sa.Fields.Count == sb.Fields.Count
-                && sa.Fields.Zip(sb.Fields).All(p => p.First.FieldName == p.Second.FieldName && TypeNodeEquals(p.First.FieldType, p.Second.FieldType)),
-            (AnonymousEnumTypeNode ea, AnonymousEnumTypeNode eb) =>
-                ea.Variants.Count == eb.Variants.Count
-                && ea.Variants.Zip(eb.Variants).All(p =>
-                    p.First.Name == p.Second.Name
-                    && p.First.PayloadTypes.Count == p.Second.PayloadTypes.Count
-                    && p.First.PayloadTypes.Zip(p.Second.PayloadTypes).All(q => TypeNodeEquals(q.First, q.Second))),
-            _ => false
-        };
-    }
+        => _fns.Register(scheme, ReportError);
 
     private List<FunctionScheme>? LookupFunctions(string name)
-    {
-        if (!_functions.TryGetValue(name, out var overloads)) return null;
-
-        // Filter out non-public functions from other modules
-        if (_currentModulePath != null)
-        {
-            var visible = overloads.Where(f => f.IsPublic || f.ModulePath == _currentModulePath).ToList();
-            return visible.Count > 0 ? visible : null;
-        }
-
-        return overloads;
-    }
+        => _fns.Lookup(name, _ctx.CurrentModulePath);
 
     /// <summary>
     /// When overload resolution fails during generic body checking, guess the return type
@@ -405,10 +171,10 @@ public partial class HmTypeChecker : INominalTypeRegistry, ITemplateTypeProvider
     /// </summary>
     private Type GuessReturnTypeFromCandidates(List<FunctionScheme> candidates)
     {
-        if (candidates.Count == 0) return _engine.FreshVar();
-        return _engine.Specialize(candidates[0].Signature) is Core.Types.FunctionType ft
+        if (candidates.Count == 0) return _ctx.Engine.FreshVar();
+        return _ctx.Engine.Specialize(candidates[0].Signature) is Core.Types.FunctionType ft
             ? ft.ReturnType
-            : _engine.FreshVar();
+            : _ctx.Engine.FreshVar();
     }
 
     // =========================================================================
@@ -445,28 +211,7 @@ public partial class HmTypeChecker : INominalTypeRegistry, ITemplateTypeProvider
     /// Look up a nominal type by FQN or short name.
     /// </summary>
     public NominalType? LookupNominalType(string name)
-    {
-        if (_nominalTypes.TryGetValue(name, out var type))
-            return type;
-
-        // Try with current module prefix
-        if (_currentModulePath != null)
-        {
-            var fqn = $"{_currentModulePath}.{name}";
-            if (_nominalTypes.TryGetValue(fqn, out type))
-                return type;
-        }
-
-        // Try all registered types for short name match
-        foreach (var (fqn, nominal) in _nominalTypes)
-        {
-            var shortName = fqn.Contains('.') ? fqn[(fqn.LastIndexOf('.') + 1)..] : fqn;
-            if (shortName == name)
-                return nominal;
-        }
-
-        return null;
-    }
+        => _types.LookupNominalType(name, _ctx.CurrentModulePath);
 
     // =========================================================================
     // Directive validation
@@ -556,14 +301,14 @@ public partial class HmTypeChecker : INominalTypeRegistry, ITemplateTypeProvider
     {
         foreach (var (node, typeVar) in _unsuffixedLiterals)
         {
-            var resolved = _engine.Resolve(typeVar);
+            var resolved = _ctx.Engine.Resolve(typeVar);
 
             if (resolved is Core.Types.TypeVar)
             {
                 // Char literals default to char when unconstrained
                 if (node.Suffix == "char")
                 {
-                    _engine.Unify(typeVar, WellKnown.Char, node.Span);
+                    _ctx.Engine.Unify(typeVar, WellKnown.Char, node.Span);
                     continue;
                 }
                 // Still unresolved after inference — no context to determine concrete type
@@ -603,7 +348,7 @@ public partial class HmTypeChecker : INominalTypeRegistry, ITemplateTypeProvider
         // Validate unsuffixed float literals
         foreach (var (node, typeVar) in _unsuffixedFloatLiterals)
         {
-            var resolved = _engine.Resolve(typeVar);
+            var resolved = _ctx.Engine.Resolve(typeVar);
 
             if (resolved is Core.Types.TypeVar)
             {
@@ -641,23 +386,23 @@ public partial class HmTypeChecker : INominalTypeRegistry, ITemplateTypeProvider
     /// </summary>
     public TypeCheckResult BuildResult()
     {
-        var zonked = new Dictionary<AstNode, Type>(_inferredTypes.Count);
-        foreach (var (node, type) in _inferredTypes)
-            zonked[node] = _engine.Resolve(type);
+        var zonked = new Dictionary<AstNode, Type>(_results.InferredTypes.Count);
+        foreach (var (node, type) in _results.InferredTypes)
+            zonked[node] = _ctx.Engine.Resolve(type);
 
         var zonkedInstantiated = new HashSet<Type>(
-            InstantiatedTypes.Select(t => _engine.Resolve(t)));
+            _results.InstantiatedTypes.Select(t => _ctx.Engine.Resolve(t)));
 
         return new TypeCheckResult(
             nodeTypes: zonked,
-            resolvedOperators: _resolvedOperators,
-            nominalTypes: _nominalTypes,
-            nominalSpans: _nominalSpans,
-            functions: _functions,
-            specializedFunctions: _specializations,
+            resolvedOperators: _results.ResolvedOperators,
+            nominalTypes: _types.NominalTypes,
+            nominalSpans: _types.NominalSpans,
+            functions: _fns.Functions,
+            specializedFunctions: _results.Specializations,
             instantiatedTypes: zonkedInstantiated,
             compileTimeContext: _compilation.CompileTimeContext,
-            resolver: _engine);
+            resolver: _ctx.Engine);
     }
 
     /// <summary>
@@ -668,8 +413,8 @@ public partial class HmTypeChecker : INominalTypeRegistry, ITemplateTypeProvider
     {
         foreach (var (scheme, paramTypes, returnType, callSpan, callNode) in _pendingSpecializations)
         {
-            var resolvedParams = paramTypes.Select(p => _engine.Resolve(p)).ToArray();
-            var resolvedReturn = _engine.Resolve(returnType);
+            var resolvedParams = paramTypes.Select(p => _ctx.Engine.Resolve(p)).ToArray();
+            var resolvedReturn = _ctx.Engine.Resolve(returnType);
 
             // If any param is still a TypeVar, skip — ValidatePostInference will report E2001
             if (resolvedParams.Any(p => p is Core.Types.TypeVar) || resolvedReturn is Core.Types.TypeVar)

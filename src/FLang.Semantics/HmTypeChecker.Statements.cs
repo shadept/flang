@@ -84,7 +84,7 @@ public partial class HmTypeChecker
                 // Unspecified fields are zero-initialized (codegen memsets the struct to 0)
 
                 var unifySpan = varDecl.Initializer?.Span ?? varDecl.Span;
-                var unified = _engine.Unify(annotationType, initType, unifySpan);
+                var unified = _ctx.Engine.Unify(annotationType, initType, unifySpan);
                 varType = unified.Type;
             }
             else
@@ -105,21 +105,21 @@ public partial class HmTypeChecker
         else
         {
             ReportError("Variable must have a type annotation or initializer", varDecl.Span);
-            varType = _engine.FreshVar();
+            varType = _ctx.Engine.FreshVar();
         }
 
         // E2005: Prevent redeclaration of global constants.
         // Local let-rebinding (same-scope shadowing) is allowed in function bodies.
-        if (_scopes.Depth == 1 && _scopes.ExistsInCurrentScope(varDecl.Name))
+        if (_ctx.Scopes.Depth == 1 && _ctx.Scopes.ExistsInCurrentScope(varDecl.Name))
         {
             var diag = Diagnostic.Error($"Global `{varDecl.Name}` is already declared", varDecl.Span, code: "E2005");
-            var existingDecl = _scopes.LookupDeclaration(varDecl.Name);
+            var existingDecl = _ctx.Scopes.LookupDeclaration(varDecl.Name);
             if (existingDecl != null)
                 diag.Notes.Add(Diagnostic.Info($"`{varDecl.Name}` first declared here", existingDecl.Span));
             _diagnostics.Add(diag);
         }
 
-        _scopes.Bind(varDecl.Name, varType, varDecl);
+        _ctx.Scopes.Bind(varDecl.Name, varType, varDecl);
         Record(varDecl, varType);
 
         // Track const names for E2038 checking
@@ -127,7 +127,7 @@ public partial class HmTypeChecker
             MarkConst(varDecl.Name);
 
         // Track for unused variable warnings (only inside function bodies)
-        _currentFnDeclaredVars?.TryAdd(varDecl.Name, varDecl.Span);
+        _ctx.CurrentFnDeclaredVars?.TryAdd(varDecl.Name, varDecl.Span);
     }
 
     // =========================================================================
@@ -136,31 +136,31 @@ public partial class HmTypeChecker
 
     private void CheckReturn(ReturnStatementNode ret)
     {
-        if (_functionStack.Count == 0)
+        if (_ctx.FunctionStack.Count == 0)
         {
             ReportError("Return statement outside of function", ret.Span);
             return;
         }
 
-        var ctx = _functionStack.Peek();
+        var ctx = _ctx.FunctionStack.Peek();
 
         if (ret.Expression != null)
         {
             var exprType = InferExpression(ret.Expression);
 
-            using (_engine.OverrideErrors("E2071",
+            using (_ctx.Engine.OverrideErrors("E2071",
                 () => "function `" + ctx.Node.Name + "` returns `{expected}`, but got `{actual}`"))
             {
-                _engine.Unify(ctx.ReturnType, exprType, ret.Expression.Span);
+                _ctx.Engine.Unify(ctx.ReturnType, exprType, ret.Expression.Span);
             }
         }
         else
         {
             // Bare return: return type must be void
-            using (_engine.OverrideErrors("E2071",
+            using (_ctx.Engine.OverrideErrors("E2071",
                 () => "function `" + ctx.Node.Name + "` must return `{expected}`, but got bare return"))
             {
-                _engine.Unify(ctx.ReturnType, WellKnown.Void, ret.Span);
+                _ctx.Engine.Unify(ctx.ReturnType, WellKnown.Void, ret.Span);
             }
         }
     }
@@ -191,7 +191,7 @@ public partial class HmTypeChecker
             if (nextResult != null)
             {
                 forLoop.ResolvedNextFunction = nextNode;
-                var nextReturnType = _engine.Resolve(nextResult);
+                var nextReturnType = _ctx.Engine.Resolve(nextResult);
                 if (nextReturnType is NominalType { Name: WellKnown.Option } optType
                     && optType.TypeArguments.Count > 0)
                 {
@@ -200,13 +200,13 @@ public partial class HmTypeChecker
                 else
                 {
                     ReportError("`next` must return Option type", forLoop.Span, "E2025");
-                    elementType = _engine.FreshVar();
+                    elementType = _ctx.Engine.FreshVar();
                 }
             }
             else
             {
                 ReportError("Iterator type has no `next` function", forLoop.Span, "E2023");
-                elementType = _engine.FreshVar();
+                elementType = _ctx.Engine.FreshVar();
             }
         }
         else
@@ -220,7 +220,7 @@ public partial class HmTypeChecker
 
         // Check body with loop variable in scope
         PushScope();
-        _scopes.Bind(forLoop.IteratorVariable, elementType);
+        _ctx.Scopes.Bind(forLoop.IteratorVariable, elementType);
 
         InferExpression(forLoop.Body);
 
@@ -232,7 +232,7 @@ public partial class HmTypeChecker
     /// </summary>
     private Type TryResolveDirectIteration(Type iterableType, SourceSpan span)
     {
-        var resolved = _engine.Resolve(iterableType);
+        var resolved = _ctx.Engine.Resolve(iterableType);
 
         if (resolved is ArrayType arrayType)
             return arrayType.ElementType;
@@ -246,7 +246,7 @@ public partial class HmTypeChecker
         }
 
         ReportError("Type is not iterable", span, "E2021");
-        return _engine.FreshVar();
+        return _ctx.Engine.FreshVar();
     }
 
     // =========================================================================

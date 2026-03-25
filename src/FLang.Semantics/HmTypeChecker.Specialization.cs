@@ -45,7 +45,7 @@ public partial class HmTypeChecker
                 for (int i = 0; i < nt.FieldsOrVariants.Count; i++)
                 {
                     if (i > 0) sb.Append(',');
-                    AppendTypeSpecKey(sb, _engine.Resolve(nt.FieldsOrVariants[i].Type));
+                    AppendTypeSpecKey(sb, _ctx.Engine.Resolve(nt.FieldsOrVariants[i].Type));
                 }
                 sb.Append('}');
                 return;
@@ -57,7 +57,7 @@ public partial class HmTypeChecker
                 for (int i = 0; i < nt.TypeArguments.Count; i++)
                 {
                     if (i > 0) sb.Append(", ");
-                    AppendTypeSpecKey(sb, _engine.Resolve(nt.TypeArguments[i]));
+                    AppendTypeSpecKey(sb, _ctx.Engine.Resolve(nt.TypeArguments[i]));
                 }
                 sb.Append(')');
                 return;
@@ -77,7 +77,7 @@ public partial class HmTypeChecker
         FunctionScheme scheme, Type[] concreteParamTypes, Type concreteReturnType, SourceSpan callSpan)
     {
         var key = BuildSpecKey(scheme.Name, concreteParamTypes);
-        if (_emittedSpecs.TryGetValue(key, out var existing))
+        if (_results.EmittedSpecs.TryGetValue(key, out var existing))
             return existing;
 
         // Guard against infinite specialization recursion (unresolved TypeVars producing unique keys)
@@ -110,12 +110,12 @@ public partial class HmTypeChecker
             clonedBody, originalFn.Modifiers);
 
         // Register BEFORE checking body to prevent infinite recursion for recursive generics
-        _specializations.Add(newFn);
-        _emittedSpecs[key] = newFn;
+        _results.Specializations.Add(newFn);
+        _results.EmittedSpecs[key] = newFn;
 
         // Save and set module path for nominal type resolution
-        var savedModulePath = _currentModulePath;
-        _currentModulePath = scheme.ModulePath;
+        var savedModulePath = _ctx.CurrentModulePath;
+        _ctx.CurrentModulePath = scheme.ModulePath;
 
         // Type-check the specialized body
         PushScope();
@@ -124,8 +124,8 @@ public partial class HmTypeChecker
         var genericNames = originalFn.GetGenericParamNames();
         foreach (var name in genericNames)
         {
-            _scopes.Bind(name, _engine.FreshVar());
-            _activeTypeParams[name] = _activeTypeParams.GetValueOrDefault(name) + 1;
+            _ctx.Scopes.Bind(name, _ctx.Engine.FreshVar());
+            _ctx.ActiveTypeParams[name] = _ctx.ActiveTypeParams.GetValueOrDefault(name) + 1;
         }
 
         // Re-resolve parameter types from the original TypeNodes.
@@ -136,13 +136,13 @@ public partial class HmTypeChecker
 
         // Unify resolved params with concrete params -> binds generic TypeVars to concrete types
         for (int i = 0; i < resolvedParamTypes.Length && i < concreteParamTypes.Length; i++)
-            _engine.Unify(resolvedParamTypes[i], concreteParamTypes[i], callSpan);
+            _ctx.Engine.Unify(resolvedParamTypes[i], concreteParamTypes[i], callSpan);
 
         // Resolve return type and unify
         if (originalFn.ReturnType != null)
         {
             var resolvedRetType = ResolveTypeNode(originalFn.ReturnType);
-            _engine.Unify(resolvedRetType, concreteReturnType, callSpan);
+            _ctx.Engine.Unify(resolvedRetType, concreteReturnType, callSpan);
         }
 
         // Record the function type on the new node
@@ -152,12 +152,12 @@ public partial class HmTypeChecker
         // Bind parameters in scope and record their types on the new param nodes
         for (int i = 0; i < newParams.Count; i++)
         {
-            _scopes.Bind(newParams[i].Name, concreteParamTypes[i]);
+            _ctx.Scopes.Bind(newParams[i].Name, concreteParamTypes[i]);
             Record(newParams[i], concreteParamTypes[i]);
         }
 
         // Push function context for return type checking
-        _functionStack.Push(new FunctionContext(newFn, concreteReturnType));
+        _ctx.FunctionStack.Push(new FunctionContext(newFn, concreteReturnType));
 
         // Check cloned body (with recursion depth guard)
         _specDepth++;
@@ -171,19 +171,19 @@ public partial class HmTypeChecker
             _specDepth--;
         }
 
-        _functionStack.Pop();
+        _ctx.FunctionStack.Pop();
         PopScope();
 
         // Remove active type params (decrement ref count)
         foreach (var name in genericNames)
         {
-            if (_activeTypeParams.TryGetValue(name, out var count) && count > 1)
-                _activeTypeParams[name] = count - 1;
+            if (_ctx.ActiveTypeParams.TryGetValue(name, out var count) && count > 1)
+                _ctx.ActiveTypeParams[name] = count - 1;
             else
-                _activeTypeParams.Remove(name);
+                _ctx.ActiveTypeParams.Remove(name);
         }
 
-        _currentModulePath = savedModulePath;
+        _ctx.CurrentModulePath = savedModulePath;
         return newFn;
     }
 

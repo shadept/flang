@@ -20,16 +20,16 @@ public partial class HmTypeChecker
 
     public void CollectNominalTypes(ModuleNode module, string modulePath)
     {
-        _currentModulePath = modulePath;
+        _ctx.CurrentModulePath = modulePath;
 
         foreach (var structDecl in module.Structs)
         {
             ValidateDirectives(structDecl.Directives);
             var fqn = $"{modulePath}.{structDecl.Name}";
-            if (_nominalTypes.ContainsKey(fqn))
+            if (_types.NominalTypes.ContainsKey(fqn))
             {
                 var diag = Diagnostic.Error($"Duplicate type declaration `{structDecl.Name}`", structDecl.Span, code: "E2005");
-                if (_nominalSpans.TryGetValue(fqn, out var originalSpan))
+                if (_types.NominalSpans.TryGetValue(fqn, out var originalSpan))
                     diag.Notes.Add(Diagnostic.Info($"`{structDecl.Name}` first declared here", originalSpan));
                 _diagnostics.Add(diag);
                 continue;
@@ -44,35 +44,35 @@ public partial class HmTypeChecker
             }
 
             var placeholder = new NominalType(fqn, NominalKind.Struct);
-            _nominalTypes[fqn] = placeholder;
-            _nominalSpans[fqn] = structDecl.NameSpan;
-            _fieldTypeNodes[fqn] = structDecl.Fields.Select(f => (f.Name, f.Type)).ToList();
+            _types.NominalTypes[fqn] = placeholder;
+            _types.NominalSpans[fqn] = structDecl.NameSpan;
+            _types.FieldTypeNodes[fqn] = structDecl.Fields.Select(f => (f.Name, f.Type)).ToList();
 
             if (GetDeprecatedMessage(structDecl.Directives, out var msg))
-                _deprecatedTypes[fqn] = msg;
+                _types.DeprecatedTypes[fqn] = msg;
         }
 
         foreach (var enumDecl in module.Enums)
         {
             ValidateDirectives(enumDecl.Directives);
             var fqn = $"{modulePath}.{enumDecl.Name}";
-            if (_nominalTypes.ContainsKey(fqn))
+            if (_types.NominalTypes.ContainsKey(fqn))
             {
                 var diag = Diagnostic.Error($"Duplicate type declaration `{enumDecl.Name}`", enumDecl.Span, code: "E2005");
-                if (_nominalSpans.TryGetValue(fqn, out var originalSpan))
+                if (_types.NominalSpans.TryGetValue(fqn, out var originalSpan))
                     diag.Notes.Add(Diagnostic.Info($"`{enumDecl.Name}` first declared here", originalSpan));
                 _diagnostics.Add(diag);
                 continue;
             }
 
             var placeholder = new NominalType(fqn, NominalKind.Enum);
-            _nominalTypes[fqn] = placeholder;
-            _nominalSpans[fqn] = enumDecl.NameSpan;
-            _fieldTypeNodes[fqn] = enumDecl.Variants.Select(v =>
+            _types.NominalTypes[fqn] = placeholder;
+            _types.NominalSpans[fqn] = enumDecl.NameSpan;
+            _types.FieldTypeNodes[fqn] = enumDecl.Variants.Select(v =>
                 (v.Name, (TypeNode)new NamedTypeNode(v.NameSpan, "void"))).ToList();
 
             if (GetDeprecatedMessage(enumDecl.Directives, out var msg))
-                _deprecatedTypes[fqn] = msg;
+                _types.DeprecatedTypes[fqn] = msg;
         }
     }
 
@@ -82,13 +82,13 @@ public partial class HmTypeChecker
 
     public void ResolveNominalTypes(ModuleNode module, string modulePath)
     {
-        _currentModulePath = modulePath;
+        _ctx.CurrentModulePath = modulePath;
 
         // Resolve struct fields
         foreach (var structDecl in module.Structs)
         {
             var fqn = $"{modulePath}.{structDecl.Name}";
-            if (!_nominalTypes.ContainsKey(fqn)) continue;
+            if (!_types.NominalTypes.ContainsKey(fqn)) continue;
 
             PushScope();
             var typeArgs = BindTypeParameters(structDecl.TypeParameters);
@@ -102,21 +102,21 @@ public partial class HmTypeChecker
 
             PopScope();
 
-            _nominalTypes[fqn] = new NominalType(fqn, NominalKind.Struct, typeArgs, fields);
+            _types.NominalTypes[fqn] = new NominalType(fqn, NominalKind.Struct, typeArgs, fields);
         }
 
         // Make Type(T) share TypeInfo's fields so Type(T) values carry size/align/kind/etc.
-        if (_nominalTypes.TryGetValue("core.rtti.Type", out var rttiType)
-            && _nominalTypes.TryGetValue("core.rtti.TypeInfo", out var rttiTypeInfo))
+        if (_types.NominalTypes.TryGetValue("core.rtti.Type", out var rttiType)
+            && _types.NominalTypes.TryGetValue("core.rtti.TypeInfo", out var rttiTypeInfo))
         {
-            _nominalTypes["core.rtti.Type"] = rttiType with { FieldsOrVariants = rttiTypeInfo.FieldsOrVariants };
+            _types.NominalTypes["core.rtti.Type"] = rttiType with { FieldsOrVariants = rttiTypeInfo.FieldsOrVariants };
         }
 
         // Resolve enum variants
         foreach (var enumDecl in module.Enums)
         {
             var fqn = $"{modulePath}.{enumDecl.Name}";
-            if (!_nominalTypes.ContainsKey(fqn)) continue;
+            if (!_types.NominalTypes.ContainsKey(fqn)) continue;
 
             // E2034: Check for duplicate variant names
             var seenVariantNames = new HashSet<string>();
@@ -203,7 +203,7 @@ public partial class HmTypeChecker
                 }
             }
 
-            _nominalTypes[fqn] = enumType;
+            _types.NominalTypes[fqn] = enumType;
 
             BindVariantConstructors(enumDecl, enumType, typeArgs);
         }
@@ -261,7 +261,7 @@ public partial class HmTypeChecker
                 ? new PolymorphicType(quantifiedIds, constructorType)
                 : new PolymorphicType(constructorType);
 
-            _scopes.Bind(variant.Name, scheme);
+            _ctx.Scopes.Bind(variant.Name, scheme);
         }
     }
 
@@ -271,7 +271,7 @@ public partial class HmTypeChecker
 
     public void CollectFunctionSignatures(ModuleNode module, string modulePath)
     {
-        _currentModulePath = modulePath;
+        _ctx.CurrentModulePath = modulePath;
         foreach (var fn in module.Functions)
             CollectFunctionSignature(fn, modulePath);
     }
@@ -280,13 +280,13 @@ public partial class HmTypeChecker
     {
         ValidateDirectives(fn.Directives);
 
-        _engine.EnterLevel();
+        _ctx.Engine.EnterLevel();
         PushScope();
 
         // Bind generic type parameters as TypeVars
         var genericNames = fn.GetGenericParamNames();
         foreach (var name in genericNames)
-            _scopes.Bind(name, _engine.FreshVar());
+            _ctx.Scopes.Bind(name, _ctx.Engine.FreshVar());
 
         // Resolve parameter types
         var paramTypes = new Type[fn.Parameters.Count];
@@ -312,9 +312,9 @@ public partial class HmTypeChecker
             {
                 var cloned = CloneExpression(param.DefaultValue);
                 var defaultType = InferExpression(cloned);
-                using (_engine.OverrideErrors("E2070", () => "default value for parameter `" + param.Name + "`: expected `{expected}`, got `{actual}`"))
+                using (_ctx.Engine.OverrideErrors("E2070", () => "default value for parameter `" + param.Name + "`: expected `{expected}`, got `{actual}`"))
                 {
-                    _engine.Unify(defaultType, paramTypes[i], param.DefaultValue.Span);
+                    _ctx.Engine.Unify(defaultType, paramTypes[i], param.DefaultValue.Span);
                 }
             }
         }
@@ -330,19 +330,19 @@ public partial class HmTypeChecker
         Record(fn, fnType);
 
         PopScope();
-        _engine.ExitLevel();
+        _ctx.Engine.ExitLevel();
 
-        var scheme = _engine.Generalize(fnType);
+        var scheme = _ctx.Engine.Generalize(fnType);
         var isForeign = fn.Modifiers.HasFlag(FunctionModifiers.Foreign);
         var isPublic = fn.Modifiers.HasFlag(FunctionModifiers.Public);
 
         RegisterFunction(new FunctionScheme(fn.Name, scheme, fn, isForeign, isPublic, modulePath));
 
         if (GetDeprecatedMessage(fn.Directives, out var depMsg))
-            _deprecatedFunctions[fn.Name] = depMsg;
+            _fns.DeprecatedFunctions[fn.Name] = depMsg;
 
         // Also bind in scope for recursive calls and identifier references
-        _scopes.Bind(fn.Name, scheme);
+        _ctx.Scopes.Bind(fn.Name, scheme);
     }
 
     // =========================================================================
@@ -355,14 +355,14 @@ public partial class HmTypeChecker
     /// </summary>
     public void CheckGlobalConstants(ModuleNode module, string modulePath)
     {
-        _currentModulePath = modulePath;
+        _ctx.CurrentModulePath = modulePath;
         foreach (var globalConst in module.GlobalConstants)
             CheckStatement(globalConst);
     }
 
     public void CheckModuleBodies(ModuleNode module, string modulePath)
     {
-        _currentModulePath = modulePath;
+        _ctx.CurrentModulePath = modulePath;
 
         // Check non-generic function bodies
         foreach (var fn in module.Functions)
@@ -380,10 +380,10 @@ public partial class HmTypeChecker
     private void CheckFunctionBody(FunctionDeclarationNode fn)
     {
         // Set up unused variable tracking
-        var prevDeclared = _currentFnDeclaredVars;
-        var prevUsed = _currentFnUsedVars;
-        _currentFnDeclaredVars = new Dictionary<string, SourceSpan>();
-        _currentFnUsedVars = new HashSet<string>();
+        var prevDeclared = _ctx.CurrentFnDeclaredVars;
+        var prevUsed = _ctx.CurrentFnUsedVars;
+        _ctx.CurrentFnDeclaredVars = new Dictionary<string, SourceSpan>();
+        _ctx.CurrentFnUsedVars = new HashSet<string>();
 
         // Outer scope: function parameters
         PushScope();
@@ -398,8 +398,8 @@ public partial class HmTypeChecker
             return;
         }
 
-        var specialized = _engine.Specialize(scheme);
-        var fnType = _engine.Resolve(specialized) as FunctionType;
+        var specialized = _ctx.Engine.Specialize(scheme);
+        var fnType = _ctx.Engine.Resolve(specialized) as FunctionType;
         if (fnType == null)
         {
             ReportError($"Internal: function `{fn.Name}` signature did not resolve to FunctionType", fn.Span);
@@ -411,14 +411,14 @@ public partial class HmTypeChecker
         Record(fn, fnType);
 
         // Push function context for return type checking
-        _functionStack.Push(new FunctionContext(fn, fnType.ReturnType));
+        _ctx.FunctionStack.Push(new FunctionContext(fn, fnType.ReturnType));
 
         // Bind parameters in scope
         for (var i = 0; i < fn.Parameters.Count; i++)
         {
             var param = fn.Parameters[i];
             var paramType = fnType.ParameterTypes[i];
-            _scopes.Bind(param.Name, paramType, param);
+            _ctx.Scopes.Bind(param.Name, paramType, param);
             Record(param, paramType);
         }
 
@@ -438,18 +438,18 @@ public partial class HmTypeChecker
         }
 
         // W1001: Warn about unused variables (skip _ prefix)
-        if (_currentFnDeclaredVars != null && _currentFnUsedVars != null)
+        if (_ctx.CurrentFnDeclaredVars != null && _ctx.CurrentFnUsedVars != null)
         {
-            foreach (var (name, span) in _currentFnDeclaredVars)
+            foreach (var (name, span) in _ctx.CurrentFnDeclaredVars)
             {
-                if (!name.StartsWith('_') && !_currentFnUsedVars.Contains(name))
+                if (!name.StartsWith('_') && !_ctx.CurrentFnUsedVars.Contains(name))
                     ReportWarning($"unused variable `{name}`", span, "W1001", "prefix with `_` to suppress");
             }
         }
-        _currentFnDeclaredVars = prevDeclared;
-        _currentFnUsedVars = prevUsed;
+        _ctx.CurrentFnDeclaredVars = prevDeclared;
+        _ctx.CurrentFnUsedVars = prevUsed;
 
-        _functionStack.Pop();
+        _ctx.FunctionStack.Pop();
         PopScope();
     }
 
@@ -460,7 +460,7 @@ public partial class HmTypeChecker
     /// </summary>
     public void CheckGenericBodies(ModuleNode module, string modulePath)
     {
-        _currentModulePath = modulePath;
+        _ctx.CurrentModulePath = modulePath;
         foreach (var fn in module.Functions)
         {
             if (!fn.IsGeneric) continue;
@@ -480,7 +480,7 @@ public partial class HmTypeChecker
         foreach (var name in genericNames)
         {
             var placeholder = new NominalType($"${name}", NominalKind.Struct, [], []);
-            _scopes.Bind(name, new PolymorphicType(placeholder));
+            _ctx.Scopes.Bind(name, new PolymorphicType(placeholder));
             placeholderNames.Add($"${name}");
         }
 
@@ -493,48 +493,48 @@ public partial class HmTypeChecker
 
         // Save compiler state so generic body checking doesn't corrupt it.
         // CheckStatement calls Record/specialize which would pollute the lowering pass.
-        var savedTypes = new Dictionary<AstNode, Type>(_inferredTypes);
-        var savedOperators = new Dictionary<AstNode, ResolvedOperator>(_resolvedOperators);
-        var savedSpecCount = _specializations.Count;
-        var savedEmittedSpecs = new Dictionary<string, FunctionDeclarationNode>(_emittedSpecs);
+        var savedTypes = new Dictionary<AstNode, Type>(_results.InferredTypes);
+        var savedOperators = new Dictionary<AstNode, ResolvedOperator>(_results.ResolvedOperators);
+        var savedSpecCount = _results.Specializations.Count;
+        var savedEmittedSpecs = new Dictionary<string, FunctionDeclarationNode>(_results.EmittedSpecs);
         var savedLiteralsCount = _unsuffixedLiterals.Count;
         var savedFloatLiteralsCount = _unsuffixedFloatLiterals.Count;
 
         Record(fn, fnType);
-        _functionStack.Push(new FunctionContext(fn, returnType));
+        _ctx.FunctionStack.Push(new FunctionContext(fn, returnType));
 
         for (var i = 0; i < fn.Parameters.Count; i++)
         {
             var param = fn.Parameters[i];
-            _scopes.Bind(param.Name, paramTypes[i], param);
+            _ctx.Scopes.Bind(param.Name, paramTypes[i], param);
             Record(param, paramTypes[i]);
         }
 
         // Snapshot diagnostic counts, check body, then filter out false positives
         var diagCountBefore = _diagnostics.Count;
-        var engineDiagCountBefore = _engine.DiagnosticCount;
+        var engineDiagCountBefore = _ctx.Engine.DiagnosticCount;
 
-        _isCheckingGenericBody = true;
+        _ctx.IsCheckingGenericBody = true;
         foreach (var stmt in fn.Body)
             CheckStatement(stmt);
-        _isCheckingGenericBody = false;
+        _ctx.IsCheckingGenericBody = false;
 
-        _functionStack.Pop();
+        _ctx.FunctionStack.Pop();
         PopScope();
 
         // Restore compiler state — placeholder types must not leak to lowering.
-        // For _inferredTypes, restore pre-existing entries but keep new ones (for LSP hover).
+        // For _results.InferredTypes, restore pre-existing entries but keep new ones (for LSP hover).
         foreach (var kvp in savedTypes)
-            _inferredTypes[kvp.Key] = kvp.Value;
+            _results.InferredTypes[kvp.Key] = kvp.Value;
 
         // Revert specializations, emitted specs, resolved operators, and unsuffixed literals
-        if (_specializations.Count > savedSpecCount)
-            _specializations.RemoveRange(savedSpecCount, _specializations.Count - savedSpecCount);
-        _emittedSpecs.Clear();
+        if (_results.Specializations.Count > savedSpecCount)
+            _results.Specializations.RemoveRange(savedSpecCount, _results.Specializations.Count - savedSpecCount);
+        _results.EmittedSpecs.Clear();
         foreach (var kvp in savedEmittedSpecs)
-            _emittedSpecs[kvp.Key] = kvp.Value;
+            _results.EmittedSpecs[kvp.Key] = kvp.Value;
         foreach (var kvp in savedOperators)
-            _resolvedOperators[kvp.Key] = kvp.Value;
+            _results.ResolvedOperators[kvp.Key] = kvp.Value;
         if (_unsuffixedLiterals.Count > savedLiteralsCount)
             _unsuffixedLiterals.RemoveRange(savedLiteralsCount, _unsuffixedLiterals.Count - savedLiteralsCount);
         if (_unsuffixedFloatLiterals.Count > savedFloatLiteralsCount)
@@ -574,7 +574,7 @@ public partial class HmTypeChecker
 
     private void FilterGenericBodyEngineDiagnostics(int fromCount, HashSet<string> placeholderNames)
     {
-        var currentCount = _engine.DiagnosticCount;
+        var currentCount = _ctx.Engine.DiagnosticCount;
         if (currentCount <= fromCount) return;
 
         // Engine diagnostics are type mismatch errors — suppress any mentioning placeholders
@@ -582,27 +582,27 @@ public partial class HmTypeChecker
         var toKeep = new List<Diagnostic>();
         for (var i = fromCount; i < currentCount; i++)
         {
-            var diag = _engine.GetDiagnostic(i);
+            var diag = _ctx.Engine.GetDiagnostic(i);
             if (diag.Severity == DiagnosticSeverity.Error
                 && placeholderNames.Any(p => diag.Message.Contains(p)))
                 continue;
             toKeep.Add(diag);
         }
 
-        _engine.TruncateDiagnostics(fromCount);
+        _ctx.Engine.TruncateDiagnostics(fromCount);
         foreach (var d in toKeep)
-            _engine.AddDiagnostic(d);
+            _ctx.Engine.AddDiagnostic(d);
     }
 
     private void CheckTestBody(TestDeclarationNode test)
     {
         PushScope();
-        _functionStack.Push(new FunctionContext(null!, WellKnown.Void));
+        _ctx.FunctionStack.Push(new FunctionContext(null!, WellKnown.Void));
 
         foreach (var stmt in test.Body)
             CheckStatement(stmt);
 
-        _functionStack.Pop();
+        _ctx.FunctionStack.Pop();
         PopScope();
     }
 
@@ -685,9 +685,9 @@ public partial class HmTypeChecker
         var typeArgs = new Type[typeParamNames.Count];
         for (var i = 0; i < typeParamNames.Count; i++)
         {
-            var tv = _engine.FreshVar();
+            var tv = _ctx.Engine.FreshVar();
             typeArgs[i] = tv;
-            _scopes.Bind(typeParamNames[i], tv);
+            _ctx.Scopes.Bind(typeParamNames[i], tv);
         }
         return typeArgs;
     }

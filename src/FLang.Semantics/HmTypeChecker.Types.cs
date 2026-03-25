@@ -51,7 +51,7 @@ public partial class HmTypeChecker
         if (nominal != null)
         {
             // Check if this type is deprecated
-            if (_deprecatedTypes.TryGetValue(nominal.Name, out var depMsg))
+            if (_types.DeprecatedTypes.TryGetValue(nominal.Name, out var depMsg))
             {
                 var warning = depMsg != null
                     ? $"type `{named.Name}` is deprecated: {depMsg}"
@@ -62,15 +62,15 @@ public partial class HmTypeChecker
         }
 
         // Check scope for type parameters (bare T from generic context)
-        var scheme = _scopes.Lookup(named.Name);
+        var scheme = _ctx.Scopes.Lookup(named.Name);
         if (scheme != null)
-            return _engine.Specialize(scheme);
+            return _ctx.Engine.Specialize(scheme);
 
-        var candidates = _nominalTypes.Keys.Select(k => k.Contains('.') ? k[(k.LastIndexOf('.') + 1)..] : k);
+        var candidates = _types.NominalTypes.Keys.Select(k => k.Contains('.') ? k[(k.LastIndexOf('.') + 1)..] : k);
         var suggestion = FLang.Core.StringDistance.FindClosestMatch(named.Name, candidates);
         var hint = suggestion != null ? $"did you mean `{suggestion}`?" : null;
         ReportError($"Unknown type `{named.Name}`", named.Span, "E2003", hint);
-        return _engine.FreshVar();
+        return _ctx.Engine.FreshVar();
     }
 
     private static PrimitiveType? ResolvePrimitive(string name)
@@ -121,7 +121,7 @@ public partial class HmTypeChecker
         if (nominal != null)
         {
             // Check if this type is deprecated
-            if (_deprecatedTypes.TryGetValue(nominal.Name, out var depMsg))
+            if (_types.DeprecatedTypes.TryGetValue(nominal.Name, out var depMsg))
             {
                 var warning = depMsg != null
                     ? $"type `{generic.Name}` is deprecated: {depMsg}"
@@ -131,22 +131,22 @@ public partial class HmTypeChecker
             return new NominalType(nominal.Name, nominal.Kind, typeArgs, nominal.FieldsOrVariants);
         }
 
-        var candidates = _nominalTypes.Keys.Select(k => k.Contains('.') ? k[(k.LastIndexOf('.') + 1)..] : k);
+        var candidates = _types.NominalTypes.Keys.Select(k => k.Contains('.') ? k[(k.LastIndexOf('.') + 1)..] : k);
         var suggestion = FLang.Core.StringDistance.FindClosestMatch(generic.Name, candidates);
         var hint = suggestion != null ? $"did you mean `{suggestion}`?" : null;
         ReportError($"Unknown generic type `{generic.Name}`", generic.Span, "E2003", hint);
-        return _engine.FreshVar();
+        return _ctx.Engine.FreshVar();
     }
 
     private Type ResolveGenericParam(GenericParameterTypeNode genParam)
     {
         // Generic parameters should be bound in scope as TypeVars during fn signature collection
-        var scheme = _scopes.Lookup(genParam.Name);
+        var scheme = _ctx.Scopes.Lookup(genParam.Name);
         if (scheme != null)
             return scheme.Body;
 
         ReportError($"Unbound generic parameter `{genParam.Name}`", genParam.Span, "E2003");
-        return _engine.FreshVar();
+        return _ctx.Engine.FreshVar();
     }
 
     private NominalType ResolveAnonymousStructType(AnonymousStructTypeNode anonStruct)
@@ -203,7 +203,7 @@ public partial class HmTypeChecker
 
     private Type SubstituteTypeVars(Type type, Dictionary<int, Type> substMap)
     {
-        var resolved = _engine.Resolve(type);
+        var resolved = _ctx.Engine.Resolve(type);
 
         return resolved switch
         {
