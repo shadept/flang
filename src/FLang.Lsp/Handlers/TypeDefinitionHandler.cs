@@ -49,10 +49,10 @@ public class TypeDefinitionHandler : TypeDefinitionHandlerBase
         if (tc == null) return null;
 
         // Get the inferred type for the node
-        if (!tc.InferredTypes.TryGetValue(node, out var type))
+        if (!tc.NodeTypes.TryGetValue(node, out var type))
             return null;
 
-        var resolved = tc.Engine.Resolve(type);
+        var resolved = tc.Resolve(type);
         var typeName = GetNominalTypeName(resolved);
         if (typeName == null) return null;
 

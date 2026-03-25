@@ -19,9 +19,8 @@ namespace FLang.Semantics;
 /// </summary>
 public class HmAstLowering
 {
-    private readonly HmTypeChecker _checker;
+    private readonly TypeCheckResult _types;
     private readonly TypeLayoutService _layout;
-    private readonly InferenceEngine _engine;
     private readonly IrModule _module = new();
     private readonly List<Diagnostic> _diagnostics = [];
 
@@ -51,11 +50,10 @@ public class HmAstLowering
 
     public IReadOnlyList<Diagnostic> Diagnostics => _diagnostics;
 
-    public HmAstLowering(HmTypeChecker checker, TypeLayoutService layout, InferenceEngine engine)
+    public HmAstLowering(TypeCheckResult types, TypeLayoutService layout)
     {
-        _checker = checker;
+        _types = types;
         _layout = layout;
-        _engine = engine;
     }
 
     // =========================================================================
@@ -214,7 +212,7 @@ public class HmAstLowering
         }
 
         // Lower specialized/synthesized functions (lambdas, monomorphized generics)
-        foreach (var fn in _checker.GetSpecializedFunctions())
+        foreach (var fn in _types.SpecializedFunctions)
         {
             var irFn = LowerFunction(fn);
             var mangledName = irFn.IsEntryPoint ? "main"
@@ -377,7 +375,7 @@ public class HmAstLowering
         foreach (var globalConst in module.GlobalConstants)
         {
             if (globalConst.Initializer == null) continue;
-            var hmType = _checker.Engine.Resolve(_checker.GetInferredType(globalConst));
+            var hmType = _types.GetResolvedType(globalConst);
             var irType = _layout.Lower(hmType);
             var value = LowerGlobalInitializer(globalConst.Initializer, irType, globalConst.Name,
                 isTopLevel: true);
@@ -498,7 +496,7 @@ public class HmAstLowering
         if (expr is IdentifierExpressionNode id)
         {
             // Check for function reference
-            var idType = _checker.Engine.Resolve(_checker.GetInferredType(id));
+            var idType = _types.GetResolvedType(id);
             if (idType is FunctionType)
                 return new FunctionReferenceValue(id.Name, _layout.Lower(idType));
 
@@ -512,7 +510,7 @@ public class HmAstLowering
         // Address-of
         if (expr is AddressOfExpressionNode addrOf)
         {
-            var innerType = _checker.Engine.Resolve(_checker.GetInferredType(addrOf.Target));
+            var innerType = _types.GetResolvedType(addrOf.Target);
             var innerIrType = _layout.Lower(innerType);
             var innerVal = LowerGlobalInitializer(addrOf.Target, innerIrType, name);
             if (innerVal is GlobalValue)
@@ -523,7 +521,7 @@ public class HmAstLowering
         // Cast — unwrap and use target type
         if (expr is CastExpressionNode cast)
         {
-            var castTargetType = _checker.Engine.Resolve(_checker.GetInferredType(cast));
+            var castTargetType = _types.GetResolvedType(cast);
             var castIrType = _layout.Lower(castTargetType);
             return LowerGlobalInitializer(cast.Expression, castIrType, name);
         }
@@ -541,21 +539,21 @@ public class HmAstLowering
         _typeTableGlobals = new Dictionary<string, GlobalValue>();
 
         // Get the IrStruct for TypeInfo
-        var typeInfoNominal = _checker.LookupNominalType("core.rtti.TypeInfo");
+        var typeInfoNominal = _types.LookupNominal("core.rtti.TypeInfo");
         if (typeInfoNominal == null) return;
         var typeInfoIr = _layout.Lower(typeInfoNominal) as IrStruct;
         if (typeInfoIr == null) return;
 
         // Get the IrStruct for FieldInfo
-        var fieldInfoNominal = _checker.LookupNominalType("core.rtti.FieldInfo");
+        var fieldInfoNominal = _types.LookupNominal("core.rtti.FieldInfo");
         var fieldInfoIr = fieldInfoNominal != null ? _layout.Lower(fieldInfoNominal) as IrStruct : null;
 
         // Get the IrStruct for ParamInfo
-        var paramInfoNominal = _checker.LookupNominalType("core.rtti.ParamInfo");
+        var paramInfoNominal = _types.LookupNominal("core.rtti.ParamInfo");
         var paramInfoIr = paramInfoNominal != null ? _layout.Lower(paramInfoNominal) as IrStruct : null;
 
         // Get the IrStruct for String
-        var stringNominal = _checker.LookupNominalType(WellKnown.String);
+        var stringNominal = _types.LookupNominal(WellKnown.String);
         var stringIr = stringNominal != null ? _layout.Lower(stringNominal) as IrStruct : null;
 
         // Get slice IrStructs by looking at TypeInfo field types
@@ -572,7 +570,7 @@ public class HmAstLowering
         }
 
         // Expand InstantiatedTypes to include field types of struct types
-        var allTypes = new HashSet<Type>(_checker.InstantiatedTypes.Select(t => _engine.Resolve(t)));
+        var allTypes = new HashSet<Type>(_types.InstantiatedTypes);
         bool changed = true;
         while (changed)
         {
@@ -584,8 +582,8 @@ public class HmAstLowering
                 {
                     foreach (var (_, ft) in nt.FieldsOrVariants)
                     {
-                        var fieldType = _engine.Resolve(ft);
-                        if (fieldType is Core.Types.ReferenceType refT) fieldType = _engine.Resolve(refT.InnerType);
+                        var fieldType = _types.Resolve(ft);
+                        if (fieldType is Core.Types.ReferenceType refT) fieldType = _types.Resolve(refT.InnerType);
                         if (fieldType is Core.Types.TypeVar) continue;
                         if (allTypes.Add(fieldType)) changed = true;
                     }
@@ -595,13 +593,13 @@ public class HmAstLowering
                 {
                     foreach (var pt in fnType.ParameterTypes)
                     {
-                        var paramType = _engine.Resolve(pt);
-                        if (paramType is Core.Types.ReferenceType refT) paramType = _engine.Resolve(refT.InnerType);
+                        var paramType = _types.Resolve(pt);
+                        if (paramType is Core.Types.ReferenceType refT) paramType = _types.Resolve(refT.InnerType);
                         if (paramType is Core.Types.TypeVar) continue;
                         if (allTypes.Add(paramType)) changed = true;
                     }
-                    var retType = _engine.Resolve(fnType.ReturnType);
-                    if (retType is Core.Types.ReferenceType retRef) retType = _engine.Resolve(retRef.InnerType);
+                    var retType = _types.Resolve(fnType.ReturnType);
+                    if (retType is Core.Types.ReferenceType retRef) retType = _types.Resolve(retRef.InnerType);
                     if (retType is not Core.Types.TypeVar && allTypes.Add(retType)) changed = true;
                 }
             }
@@ -675,7 +673,7 @@ public class HmAstLowering
             {
                 NominalType nt2 => nt2.Name,
                 FunctionType ft2 =>
-                    $"fn({string.Join(", ", ft2.ParameterTypes.Select(p => _engine.Resolve(p).ToString()))}) {_engine.Resolve(ft2.ReturnType)}",
+                    $"fn({string.Join(", ", ft2.ParameterTypes.Select(p => _types.Resolve(p).ToString()))}) {_types.Resolve(ft2.ReturnType)}",
                 _ => innerType.ToString() ?? "unknown"
             };
             var globalName = $"__flang__typeinfo_{key}";
@@ -726,9 +724,9 @@ public class HmAstLowering
                     };
 
                     // Resolve the field type for deferred patching
-                    var resolvedFieldType = _engine.Resolve(fieldType);
+                    var resolvedFieldType = _types.Resolve(fieldType);
                     if (resolvedFieldType is Core.Types.ReferenceType refFT)
-                        resolvedFieldType = _engine.Resolve(refFT.InnerType);
+                        resolvedFieldType = _types.Resolve(refFT.InnerType);
                     if (resolvedFieldType is not Core.Types.TypeVar)
                         patches.Add((fieldInfoValues, "type_info", resolvedFieldType));
 
@@ -769,9 +767,9 @@ public class HmAstLowering
                     };
 
                     // Resolve the param type for deferred patching
-                    var resolvedParamType = _engine.Resolve(fnType2.ParameterTypes[i]);
+                    var resolvedParamType = _types.Resolve(fnType2.ParameterTypes[i]);
                     if (resolvedParamType is Core.Types.ReferenceType refPT)
-                        resolvedParamType = _engine.Resolve(refPT.InnerType);
+                        resolvedParamType = _types.Resolve(refPT.InnerType);
                     if (resolvedParamType is not Core.Types.TypeVar)
                         patches.Add((paramInfoValues, "type_info", resolvedParamType));
 
@@ -801,9 +799,9 @@ public class HmAstLowering
 
                 // return_type pointer — patched below
                 fieldValues["return_type"] = new IntConstantValue(0, TypeLayoutService.IrUSize);
-                var resolvedRetType = _engine.Resolve(fnType2.ReturnType);
+                var resolvedRetType = _types.Resolve(fnType2.ReturnType);
                 if (resolvedRetType is Core.Types.ReferenceType refRT)
-                    resolvedRetType = _engine.Resolve(refRT.InnerType);
+                    resolvedRetType = _types.Resolve(refRT.InnerType);
                 if (resolvedRetType is not Core.Types.TypeVar)
                     patches.Add((fieldValues, "return_type", resolvedRetType));
             }
@@ -833,7 +831,7 @@ public class HmAstLowering
 
     private string BuildTypeKey(Type type)
     {
-        var resolved = _engine.Resolve(type);
+        var resolved = _types.Resolve(type);
         return resolved switch
         {
             Core.Types.PrimitiveType pt => pt.Name,
@@ -1159,7 +1157,7 @@ public class HmAstLowering
                 break;
             case IfDirectiveStatementNode directive:
             {
-                var active = TemplateEngine.EvaluateCondition(directive.Condition, _checker.CompileTimeContext);
+                var active = TemplateEngine.EvaluateCondition(directive.Condition, _types.CompileTimeContext);
                 var branch = active ? directive.ThenBody : directive.ElseBody;
                 if (branch != null)
                     foreach (var s in branch)
@@ -1848,7 +1846,7 @@ public class HmAstLowering
 
     private Value LowerStringLiteral(StringLiteralNode strLit)
     {
-        var stringNominal = _checker.LookupNominalType(WellKnown.String)
+        var stringNominal = _types.LookupNominal(WellKnown.String)
             ?? throw new InternalCompilerError($"Well-known type `{WellKnown.String}` not registered", strLit.Span);
         var stringIrType = _layout.Lower(stringNominal);
 
@@ -1909,7 +1907,7 @@ public class HmAstLowering
     /// </summary>
     private Value LowerTypeInstantiation(CallExpressionNode call)
     {
-        var resolvedType = _engine.Resolve(_checker.GetInferredType(call));
+        var resolvedType = _types.GetResolvedType(call);
         if (resolvedType is NominalType { Name: "core.rtti.Type" } typeNom
             && typeNom.TypeArguments.Count > 0)
         {
@@ -1958,7 +1956,7 @@ public class HmAstLowering
             return loaded;
         }
 
-        var inferredType = _checker.GetInferredType(id);
+        var inferredType = _types.GetResolvedType(id);
 
         // Check for function reference
         if (inferredType is FunctionType)
@@ -1969,7 +1967,7 @@ public class HmAstLowering
             return globalVal;
 
         // Check for type-as-value (e.g., u8 in size_of(u8)) — Type(T) with RTTI
-        var resolvedType = _engine.Resolve(inferredType);
+        var resolvedType = _types.Resolve(inferredType);
         if (resolvedType is NominalType { Name: "core.rtti.Type" } typeNom
             && typeNom.TypeArguments.Count > 0)
         {
@@ -2526,7 +2524,7 @@ public class HmAstLowering
 
     private Value LowerBinary(BinaryExpressionNode binary)
     {
-        var resolved = _checker.GetResolvedOperator(binary);
+        var resolved = _types.GetResolvedOperator(binary);
         if (resolved != null)
             return LowerOperatorFunctionCall(binary, resolved);
 
@@ -2640,7 +2638,7 @@ public class HmAstLowering
     private Value LowerUnary(UnaryExpressionNode unary)
     {
         // Check table for resolved operator function
-        var resolved = _checker.GetResolvedOperator(unary);
+        var resolved = _types.GetResolvedOperator(unary);
         if (resolved != null)
             return LowerOperatorFunctionCall(unary, resolved);
 
@@ -2665,8 +2663,7 @@ public class HmAstLowering
 
         // Check if this is an enum variant access (e.g., FileMode.Read)
         // The target's inferred type is the enum type, and the member is a variant name.
-        var targetInferredType = _checker.GetInferredType(member.Target);
-        var resolvedTarget = _checker.Engine.Resolve(targetInferredType);
+        var resolvedTarget = _types.GetResolvedType(member.Target);
         if (resolvedTarget is NominalType { Kind: NominalKind.Enum })
         {
             var irType = GetIrType(member);
@@ -2746,10 +2743,10 @@ public class HmAstLowering
         // Type(T) is a phantom alias for TypeInfo — redirect field access to TypeInfo's layout
         if (structType != null && structType.Fields.Length == 0)
         {
-            var targetHmType = _checker.Engine.Resolve(_checker.GetInferredType(member.Target));
+            var targetHmType = _types.GetResolvedType(member.Target);
             if (targetHmType is NominalType { Name: "core.rtti.Type" })
             {
-                var typeInfo = _checker.LookupNominalType("core.rtti.TypeInfo");
+                var typeInfo = _types.LookupNominal("core.rtti.TypeInfo");
                 if (typeInfo != null)
                     structType = _layout.Lower(typeInfo) as IrStruct;
             }
@@ -2817,7 +2814,7 @@ public class HmAstLowering
             if (ptrField.Type != null && lenField.Type != null)
             {
                 // Get the array length from the HM type (the IrType lost length info)
-                var hmSrcType = _engine.Resolve(_checker.GetInferredType(cast.Expression));
+                var hmSrcType = _types.GetResolvedType(cast.Expression);
                 int length = 0;
                 if (hmSrcType is Core.Types.ArrayType arrHm)
                     length = arrHm.Length;
@@ -2943,7 +2940,7 @@ public class HmAstLowering
 
         // &arr[i] — compute element address directly via GEP instead of load+address-of
         if (addrOf.Target is IndexExpressionNode indexTarget
-            && _checker.GetResolvedOperator(indexTarget) == null)
+            && _types.GetResolvedOperator(indexTarget) == null)
         {
             var arrVal = LowerExpression(indexTarget.Base);
             var idxVal = LowerExpression(indexTarget.Index);
@@ -3004,7 +3001,7 @@ public class HmAstLowering
         // Indexed assignment with op_set_index
         if (assign.Target is IndexExpressionNode idx)
         {
-            var resolved = _checker.GetResolvedOperator(assign);
+            var resolved = _types.GetResolvedOperator(assign);
             if (resolved != null)
                 return LowerSetIndexCall(idx, assign.Value, resolved);
         }
@@ -3240,7 +3237,7 @@ public class HmAstLowering
     private Value LowerIndex(IndexExpressionNode index)
     {
         // If resolved to an op_index function, emit as call
-        var resolved = _checker.GetResolvedOperator(index);
+        var resolved = _types.GetResolvedOperator(index);
         if (resolved != null)
         {
             var baseVal = LowerExpression(index.Base);
@@ -3290,7 +3287,7 @@ public class HmAstLowering
             else
             {
                 // Get length from base: fixed array has compile-time length, slice has .len field
-                var baseSemanticType = _checker.Engine.Resolve(_checker.GetInferredType(index.Base));
+                var baseSemanticType = _types.GetResolvedType(index.Base);
                 if (baseSemanticType is Core.Types.ArrayType arrType)
                     endVal = new IntConstantValue(arrType.Length, TypeLayoutService.IrUSize);
                 else
@@ -3547,7 +3544,7 @@ public class HmAstLowering
     private LocalValue LowerCoalesce(CoalesceExpressionNode coalesce)
     {
         // Lower as call to op_coalesce if resolved
-        var resolved = _checker.GetResolvedOperator(coalesce);
+        var resolved = _types.GetResolvedOperator(coalesce);
         if (resolved != null)
         {
             var leftVal = LowerExpression(coalesce.Left);
@@ -3904,7 +3901,7 @@ public class HmAstLowering
     private bool IsVariantConstruction(CallExpressionNode call)
     {
         if (call.ResolvedTarget != null || call.IsIndirectCall) return false;
-        var hmType = _checker.GetInferredType(call);
+        var hmType = _types.GetResolvedType(call);
         var irType = _layout.Lower(hmType);
         return irType is IrEnum;
     }
@@ -4018,7 +4015,7 @@ public class HmAstLowering
             scrutineeValue = LowerExpression(match.Scrutinee);
         }
 
-        var scrutineeHmType = _checker.GetInferredType(match.Scrutinee);
+        var scrutineeHmType = _types.GetResolvedType(match.Scrutinee);
         var scrutineeIrType = _layout.Lower(scrutineeHmType);
 
         // Dereference if scrutinee is a pointer/reference to get the enum value
@@ -4355,7 +4352,7 @@ public class HmAstLowering
     /// </summary>
     private Value EmitPatternComparison(LiteralPatternNode litPat, Value actual, Value literal)
     {
-        var resolved = _checker.GetResolvedOperator(litPat);
+        var resolved = _types.GetResolvedOperator(litPat);
         if (resolved != null)
         {
             // Struct type with op_eq — call it exactly like binary ==
@@ -4464,7 +4461,7 @@ public class HmAstLowering
                 break;
             case IfDirectiveStatementNode directive:
             {
-                var active = TemplateEngine.EvaluateCondition(directive.Condition, _checker.CompileTimeContext);
+                var active = TemplateEngine.EvaluateCondition(directive.Condition, _types.CompileTimeContext);
                 var branch = active ? directive.ThenBody : directive.ElseBody;
                 if (branch != null)
                     CollectMutatedParams(branch, mutated);
@@ -4677,12 +4674,11 @@ public class HmAstLowering
     /// <summary>
     /// Get the lowered IR type for an AST node: resolves the inferred HM type and lowers to IrType.
     /// </summary>
-    private IrType GetIrType(AstNode node) => _layout.Lower(_checker.GetInferredType(node));
+    private IrType GetIrType(AstNode node) => _layout.Lower(_types.GetResolvedType(node));
 
     private FunctionType GetFunctionHmType(FunctionDeclarationNode fn)
     {
-        var scheme = _checker.GetInferredType(fn);
-        return (FunctionType)_engine.Resolve(scheme);
+        return (FunctionType)_types.GetResolvedType(fn);
     }
 
     private BasicBlock CreateBlock(string label)

@@ -99,7 +99,7 @@ public class SignatureHelpHandler : SignatureHelpHandlerBase
         };
     }
 
-    private static SignatureInformation? BuildSignature(FunctionDeclarationNode fn, HmTypeChecker tc)
+    private static SignatureInformation? BuildSignature(FunctionDeclarationNode fn, TypeCheckResult tc)
     {
         var paramInfos = new List<ParameterInformation>();
         var paramLabels = new List<string>();
@@ -107,8 +107,8 @@ public class SignatureHelpHandler : SignatureHelpHandlerBase
         foreach (var p in fn.Parameters)
         {
             string paramType;
-            if (tc.InferredTypes.TryGetValue(p, out var inferredType))
-                paramType = FormatType(tc.Engine.Resolve(inferredType), tc);
+            if (tc.NodeTypes.TryGetValue(p, out var inferredType))
+                paramType = FormatType(tc.Resolve(inferredType), tc);
             else
                 paramType = FormatTypeNode(p.Type);
 
@@ -126,9 +126,9 @@ public class SignatureHelpHandler : SignatureHelpHandlerBase
 
         // Build return type
         string ret = "void";
-        if (tc.InferredTypes.TryGetValue(fn, out var fnInferred))
+        if (tc.NodeTypes.TryGetValue(fn, out var fnInferred))
         {
-            var resolved = tc.Engine.Resolve(fnInferred);
+            var resolved = tc.Resolve(fnInferred);
             if (resolved is FunctionType fnType)
                 ret = FormatType(fnType.ReturnType, tc);
             else
@@ -182,9 +182,9 @@ public class SignatureHelpHandler : SignatureHelpHandlerBase
         return commaCount;
     }
 
-    private static string FormatType(Type type, HmTypeChecker tc)
+    private static string FormatType(Type type, TypeCheckResult tc)
     {
-        var resolved = tc.Engine.Resolve(type);
+        var resolved = tc.Resolve(type);
         return resolved switch
         {
             TypeVar tv => $"?{tv.Id}",

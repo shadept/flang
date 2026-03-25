@@ -210,7 +210,8 @@ public class Compiler
 
         // 3. Lowering to IrModule
         var layoutService = new TypeLayoutService(hmChecker.Engine, hmChecker);
-        var lowering = new HmAstLowering(hmChecker, layoutService, hmChecker.Engine);
+        var typeCheckResult = hmChecker.BuildResult();
+        var lowering = new HmAstLowering(typeCheckResult, layoutService);
 
         var moduleEntries = parsedModules.Select(kvp =>
         {

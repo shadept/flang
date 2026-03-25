@@ -634,6 +634,33 @@ public partial class HmTypeChecker : INominalTypeRegistry, ITemplateTypeProvider
     }
 
     /// <summary>
+    /// Produces a read-only snapshot of all type-checking results.
+    /// Call once after ValidatePostInference() has returned.
+    /// All inferred types are eagerly zonked (resolved through the union-find)
+    /// so consumers never need the InferenceEngine.
+    /// </summary>
+    public TypeCheckResult BuildResult()
+    {
+        var zonked = new Dictionary<AstNode, Type>(_inferredTypes.Count);
+        foreach (var (node, type) in _inferredTypes)
+            zonked[node] = _engine.Resolve(type);
+
+        var zonkedInstantiated = new HashSet<Type>(
+            InstantiatedTypes.Select(t => _engine.Resolve(t)));
+
+        return new TypeCheckResult(
+            nodeTypes: zonked,
+            resolvedOperators: _resolvedOperators,
+            nominalTypes: _nominalTypes,
+            nominalSpans: _nominalSpans,
+            functions: _functions,
+            specializedFunctions: _specializations,
+            instantiatedTypes: zonkedInstantiated,
+            compileTimeContext: _compilation.CompileTimeContext,
+            resolver: _engine);
+    }
+
+    /// <summary>
     /// Resolve specializations that were deferred because concreteParams contained TypeVars.
     /// Call after all module bodies are checked but before ValidatePostInference.
     /// </summary>

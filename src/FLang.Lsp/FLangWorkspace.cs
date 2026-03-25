@@ -20,7 +20,7 @@ public record FileAnalysisResult(
     IReadOnlyList<Diagnostic> Diagnostics,
     Compilation Compilation,
     Dictionary<string, ModuleNode> ParsedModules,
-    HmTypeChecker? TypeChecker);
+    TypeCheckResult? TypeChecker);
 
 /// <summary>
 /// Manages open documents, compilation cache, and analysis results for the LSP.
@@ -167,6 +167,7 @@ public class FLangWorkspace
             var allDiagnostics = new List<Diagnostic>();
             allDiagnostics.AddRange(moduleCompiler.Diagnostics);
 
+            TypeCheckResult? typeCheckResult = null;
             HmTypeChecker? hmChecker = null;
 
             if (!allDiagnostics.Any(d => d.Severity == DiagnosticSeverity.Error))
@@ -233,9 +234,11 @@ public class FLangWorkspace
                 for (var i = diagCountBefore; i < hmChecker.Diagnostics.Count; i++)
                     allDiagnostics.Add(hmChecker.Diagnostics[i]);
                 FLangLanguageServer.Log($"  [checkGenericBodies] {sw.ElapsedMilliseconds - lap}ms");
+
+                typeCheckResult = hmChecker.BuildResult();
             }
 
-            var result = new FileAnalysisResult(allDiagnostics, compilation, parsedModules, hmChecker);
+            var result = new FileAnalysisResult(allDiagnostics, compilation, parsedModules, typeCheckResult);
             lock (_lock)
             {
                 _analysisResults[normalized] = result;

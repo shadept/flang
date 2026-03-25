@@ -61,7 +61,7 @@ public class InlayHintHandler : InlayHintsHandlerBase
     }
 
     private static void CollectHints(AstNode node, int fileId, int rangeStart, int rangeEnd,
-        HmTypeChecker tc, Compilation compilation, List<InlayHint> hints)
+        TypeCheckResult tc, Compilation compilation, List<InlayHint> hints)
     {
         // Variable type hints: show inferred type when no explicit annotation
         if (node is VariableDeclarationNode varDecl
@@ -70,9 +70,9 @@ public class InlayHintHandler : InlayHintsHandlerBase
             && varDecl.NameSpan.FileId == fileId
             && IsInRange(varDecl.NameSpan, rangeStart, rangeEnd))
         {
-            if (tc.InferredTypes.TryGetValue(varDecl, out var type))
+            if (tc.NodeTypes.TryGetValue(varDecl, out var type))
             {
-                var display = FormatType(tc.Engine.Resolve(type), tc);
+                var display = FormatType(tc.Resolve(type), tc);
                 var pos = SpanEndToPosition(varDecl.NameSpan, compilation);
                 if (pos != null)
                 {
@@ -171,9 +171,9 @@ public class InlayHintHandler : InlayHintsHandlerBase
         return new Position(line, col);
     }
 
-    private static string FormatType(Type type, HmTypeChecker tc)
+    private static string FormatType(Type type, TypeCheckResult tc)
     {
-        var resolved = tc.Engine.Resolve(type);
+        var resolved = tc.Resolve(type);
         return resolved switch
         {
             TypeVar tv => $"?Unbounded",

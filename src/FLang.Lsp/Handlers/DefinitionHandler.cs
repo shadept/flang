@@ -122,9 +122,9 @@ public class DefinitionHandler : DefinitionHandlerBase
                 {
                     // Try to find the struct field definition in parsed AST
                     if (analysis.TypeChecker != null
-                        && analysis.TypeChecker.InferredTypes.TryGetValue(ma.Target, out var targetType))
+                        && analysis.TypeChecker.NodeTypes.TryGetValue(ma.Target, out var targetType))
                     {
-                        var resolved = analysis.TypeChecker.Engine.Resolve(targetType);
+                        var resolved = analysis.TypeChecker.Resolve(targetType);
                         var typeName = GetNominalTypeName(resolved);
                         if (typeName != null)
                         {
@@ -164,9 +164,9 @@ public class DefinitionHandler : DefinitionHandlerBase
         if (tc == null) return null;
 
         // Try via inferred type → NominalType → FQN lookup
-        if (tc.InferredTypes.TryGetValue(node, out var type))
+        if (tc.NodeTypes.TryGetValue(node, out var type))
         {
-            var resolved = tc.Engine.Resolve(type);
+            var resolved = tc.Resolve(type);
             var typeName = GetNominalTypeName(resolved);
             if (typeName != null && tc.NominalSpans.TryGetValue(typeName, out var span))
                 return span;
