@@ -195,13 +195,10 @@ public class TestHarness
         var outputFilePath = GetGeneratedExecutablePath(artifactDir, testFileName);
         var cFilePath = Path.ChangeExtension(outputFilePath, ".c");
 
-        var compilerConfig = CompilerDiscovery.GetCompilerForCompilation(cFilePath, outputFilePath, false);
-
         var options = new CompilerOptions(
             InputFilePath: absoluteTestFile,
             StdlibPath: _stdlibPath,
             OutputPath: outputFilePath,
-            CCompilerConfig: compilerConfig,
             ReleaseBuild: false,
             DebugLogging: false
         );

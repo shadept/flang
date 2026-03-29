@@ -61,13 +61,14 @@ public readonly record struct IrField(string Name, IrType Type, int ByteOffset);
 /// </summary>
 public sealed record IrStruct : IrType
 {
-    public IrStruct(string name, string cName, IrField[] fields, int size, int alignment)
+    public IrStruct(string name, string cName, IrField[] fields, int size, int alignment, int registerSize)
     {
         Name = name;
         CName = cName;
         Fields = fields;
         Size = size;
         Alignment = alignment;
+        RegisterSize = registerSize;
     }
 
     public string Name { get; }
@@ -75,6 +76,7 @@ public sealed record IrStruct : IrType
     public IrField[] Fields { get; }
     public override int Size { get; }
     public override int Alignment { get; }
+    public int RegisterSize { get; }
     public override string ToString() => Name;
 }
 

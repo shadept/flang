@@ -19,7 +19,7 @@ public class Parser
     private bool _stopAtBrace; // When true, '{' terminates expression parsing (used for if/for conditions)
     private readonly List<StructDeclarationNode> _hoistedStructs = [];
     private readonly List<EnumDeclarationNode> _hoistedEnums = [];
-    private static readonly HashSet<string> _knownDirectiveNames = ["foreign", "inline", "deprecated"];
+    private static readonly HashSet<string> _knownDirectiveNames = ["foreign", "inline", "deprecated", "simd"];
 
     /// <summary>
     /// Initializes a new instance of the <see cref="Parser"/> class.

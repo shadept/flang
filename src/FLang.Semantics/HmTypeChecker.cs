@@ -217,7 +217,7 @@ public partial class HmTypeChecker : INominalTypeRegistry, ITemplateTypeProvider
     // Directive validation
     // =========================================================================
 
-    private static readonly HashSet<string> _knownDirectives = ["foreign", "inline", "deprecated"];
+    private static readonly HashSet<string> _knownDirectives = ["foreign", "inline", "deprecated", "simd"];
 
     /// <summary>
     /// Validate directives on a declaration. Reports unknown directives (W2003)
@@ -247,6 +247,9 @@ public partial class HmTypeChecker : INominalTypeRegistry, ITemplateTypeProvider
                 case "deprecated" when d.Arguments.Count == 1 && d.Arguments[0].Kind != Frontend.TokenKind.StringLiteral:
                     ReportError("`#deprecated` argument must be a string literal", d.Span, "E1002");
                     break;
+                case "simd" when d.Arguments.Count > 0:
+                    ReportError("`#simd` takes no arguments", d.Span, "E1002");
+                    break;
             }
         }
     }
@@ -268,6 +271,9 @@ public partial class HmTypeChecker : INominalTypeRegistry, ITemplateTypeProvider
         message = null;
         return false;
     }
+
+    private static bool HasSimdDirective(IReadOnlyList<DirectiveNode> directives)
+        => directives.Any(d => d.Name == "simd");
 
     /// <summary>
     /// Emit a deprecation warning if the resolved function has a #deprecated directive.

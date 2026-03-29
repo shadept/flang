@@ -17,6 +17,8 @@ var runTests = false;
 var lspMode = false;
 var dumpTemplates = false;
 var emitC = false;
+var emitCfg = false;
+var linkFlags = new List<string>();
 
 // Handle "test" subcommand: flang test <file> or flang --flags test <file>
 {
@@ -53,6 +55,10 @@ for (var i = 0; i < args.Length; i++)
         dumpTemplates = true;
     else if (args[i] == "--emit-c")
         emitC = true;
+    else if (args[i] == "--emit-cfg")
+        emitCfg = true;
+    else if (args[i] == "--link" && i + 1 < args.Length)
+        linkFlags.Add(args[++i]);
     else if (args[i] == "--version" || args[i] == "-v")
     {
         Console.WriteLine("flang 0.1.0-alpha");
@@ -91,6 +97,7 @@ if (inputFilePath == null)
     Console.WriteLine("  -o, --output <path>     Output executable path (default: same as input with .exe)");
     Console.WriteLine("  --stdlib-path <path>    Path to standard library directory");
     Console.WriteLine("  --emit-c                Emit the generated C code next to the input file (.generated.c)");
+    Console.WriteLine("  --emit-cfg              Emit control flow graph as cfg.html next to the input file");
     Console.WriteLine("  --emit-fir <file>       Emit FIR (intermediate representation) to file (use '-' for stdout)");
     Console.WriteLine("  --release               Enable C backend optimization (passes -O2 /O2)");
     Console.WriteLine("  --test                  Run test blocks instead of main()");
@@ -127,23 +134,18 @@ if (outputPath == null)
         outputPath = Path.ChangeExtension(outputPath, null);
 }
 
-// Intermediate .c file goes next to the output
-var outputDir = Path.GetDirectoryName(Path.GetFullPath(outputPath))!;
-var cFilePath = Path.Combine(outputDir, Path.GetFileNameWithoutExtension(outputPath) + ".c");
-
-var compilerConfig = CompilerDiscovery.GetCompilerForCompilation(cFilePath, outputPath, releaseBuild);
-
 var compiler = new Compiler();
 var options = new CompilerOptions(
     InputFilePath: inputFilePath,
     StdlibPath: stdlibPath,
     OutputPath: outputPath,
-    CCompilerConfig: compilerConfig,
     ReleaseBuild: releaseBuild,
     EmitFir: emitFir,
     DumpTemplates: dumpTemplates,
     DebugLogging: debugLogging,
-    RunTests: runTests
+    RunTests: runTests,
+    EmitCfg: emitCfg,
+    LinkFlags: linkFlags.Count > 0 ? linkFlags : null
 );
 
 try
@@ -157,15 +159,14 @@ try
 
     if (!result.Success)
     {
-        if (compilerConfig == null)
-        {
-            PrintCompilerDiscoveryHints();
-        }
         Console.Error.WriteLine($"Error: Compilation failed with {result.Diagnostics.Count(d => d.Severity == DiagnosticSeverity.Error)} error(s)");
         Environment.Exit(1);
     }
 
     // --emit-c: copy the intermediate .c file before running tests
+    var cFilePath = Path.Combine(
+        Path.GetDirectoryName(Path.GetFullPath(outputPath))!,
+        Path.GetFileNameWithoutExtension(outputPath) + ".c");
     if (emitC && File.Exists(cFilePath))
     {
         var emitCDest = Path.ChangeExtension(inputFilePath, ".generated.c");

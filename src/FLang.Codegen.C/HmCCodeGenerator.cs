@@ -45,6 +45,11 @@ public static class HmCCodeGenerator
         sb.AppendLine("#include <fcntl.h>");
         sb.AppendLine("#include <sys/ioctl.h>");
         sb.AppendLine("#endif");
+        sb.AppendLine("#if defined(__x86_64__) || defined(_M_X64)");
+        sb.AppendLine("#include <immintrin.h>");
+        sb.AppendLine("#elif defined(__aarch64__) || defined(_M_ARM64)");
+        sb.AppendLine("#include <arm_neon.h>");
+        sb.AppendLine("#endif");
         sb.AppendLine();
 
         // Runtime globals: argc/argv capture for std.env
@@ -253,7 +258,10 @@ public static class HmCCodeGenerator
         switch (type)
         {
             case IrStruct s:
-                sb.AppendLine($"struct {s.CName} {{");
+                if (s.RegisterSize > 8)
+                    sb.AppendLine($"struct __attribute__((aligned({s.RegisterSize}))) {s.CName} {{");
+                else
+                    sb.AppendLine($"struct {s.CName} {{");
                 foreach (var f in s.Fields)
                 {
                     sb.AppendLine($"    {EmitFieldDecl(f.Type, f.Name)};");
@@ -425,10 +433,26 @@ public static class HmCCodeGenerator
     // Foreign declarations
     // =========================================================================
 
+    private static readonly HashSet<string> StandardCFunctions =
+    [
+        "malloc", "realloc", "free", "memcpy", "memset", "memmove",
+        "printf", "fprintf", "snprintf", "sprintf", "puts", "putchar",
+        "strlen", "strcmp", "strncmp", "strcpy", "strncpy",
+        "open", "close", "read", "write", "ioctl", "exit", "abort",
+        "__flang_get_argc", "__flang_get_arg", "__flang_getenv"
+    ];
+
     private static void EmitForeignDecl(StringBuilder sb, IrForeignDecl decl)
     {
-        // Most foreign functions come from C headers — skip declarations for common ones
-        // Only emit if it's not a standard C function
+        // Skip standard C functions — they come from #include headers or the runtime preamble
+        if (StandardCFunctions.Contains(decl.CName))
+            return;
+
+        var retType = IrTypeToCType(decl.ReturnType);
+        var parms = decl.ParamTypes.Length > 0
+            ? string.Join(", ", decl.ParamTypes.Select(IrTypeToCType))
+            : "void";
+        sb.AppendLine($"extern {retType} {decl.CName}({parms});");
     }
 
     // =========================================================================
@@ -827,10 +851,7 @@ public static class HmCCodeGenerator
     /// </summary>
     private static string EmitArg(Value value, bool isForeignCall)
     {
-        var emitted = EmitValue(value);
-        if (isForeignCall && value.IrType is IrPointer { Pointee: IrPrimitive p } && p == TypeLayoutService.IrU8)
-            return $"(char*){emitted}";
-        return emitted;
+        return EmitValue(value);
     }
 
     // =========================================================================
