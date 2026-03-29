@@ -43,7 +43,8 @@ public partial class HmTypeChecker
                     ReportError($"Duplicate field `{field.Name}` in struct `{structDecl.Name}`", field.NameSpan, "E2076");
             }
 
-            var placeholder = new NominalType(fqn, NominalKind.Struct);
+            var isSimd = HasSimdDirective(structDecl.Directives);
+            var placeholder = new NominalType(fqn, NominalKind.Struct, [], [], isSimd);
             _types.NominalTypes[fqn] = placeholder;
             _types.NominalSpans[fqn] = structDecl.NameSpan;
             _types.FieldTypeNodes[fqn] = structDecl.Fields.Select(f => (f.Name, f.Type)).ToList();
@@ -55,6 +56,8 @@ public partial class HmTypeChecker
         foreach (var enumDecl in module.Enums)
         {
             ValidateDirectives(enumDecl.Directives);
+            if (HasSimdDirective(enumDecl.Directives))
+                ReportError("`#simd` can only be applied to struct types", enumDecl.Span, "E1002");
             var fqn = $"{modulePath}.{enumDecl.Name}";
             if (_types.NominalTypes.ContainsKey(fqn))
             {
@@ -102,7 +105,8 @@ public partial class HmTypeChecker
 
             PopScope();
 
-            _types.NominalTypes[fqn] = new NominalType(fqn, NominalKind.Struct, typeArgs, fields);
+            var existing = _types.NominalTypes[fqn];
+            _types.NominalTypes[fqn] = new NominalType(fqn, NominalKind.Struct, typeArgs, fields, existing.IsSimd);
         }
 
         // Make Type(T) share TypeInfo's fields so Type(T) values carry size/align/kind/etc.
@@ -147,13 +151,13 @@ public partial class HmTypeChecker
                         .Select((pt, idx) => ($"_{idx}", ResolveTypeNode(pt)))
                         .ToArray();
                     var tupleName = $"__tuple_{variant.PayloadTypes.Count}";
-                    variants[i] = (variant.Name, new NominalType(tupleName, NominalKind.Tuple, [], payloadFields));
+                    variants[i] = (variant.Name, new NominalType(tupleName, NominalKind.Tuple, [], payloadFields, false));
                 }
             }
 
             PopScope();
 
-            var enumType = new NominalType(fqn, NominalKind.Enum, typeArgs, variants);
+            var enumType = new NominalType(fqn, NominalKind.Enum, typeArgs, variants, false);
 
             // Resolve explicit tag values for naked enums (e.g., Less = -1, Equal = 0, Greater = 1)
             Dictionary<string, long>? tagValues = null;
@@ -299,7 +303,7 @@ public partial class HmTypeChecker
                 // Variadic param: declared element type becomes Slice[T]
                 var sliceNominal = LookupNominalType(WellKnown.Slice)
                     ?? throw new InvalidOperationException($"Well-known type `{WellKnown.Slice}` not registered");
-                paramType = new NominalType(sliceNominal.Name, sliceNominal.Kind, [paramType], sliceNominal.FieldsOrVariants);
+                paramType = new NominalType(sliceNominal.Name, sliceNominal.Kind, [paramType], sliceNominal.FieldsOrVariants, false);
             }
             paramTypes[i] = paramType;
         }
@@ -479,7 +483,7 @@ public partial class HmTypeChecker
         var placeholderNames = new HashSet<string>();
         foreach (var name in genericNames)
         {
-            var placeholder = new NominalType($"${name}", NominalKind.Struct, [], []);
+            var placeholder = new NominalType($"${name}", NominalKind.Struct, [], [], false);
             _ctx.Scopes.Bind(name, new PolymorphicType(placeholder));
             placeholderNames.Add($"${name}");
         }

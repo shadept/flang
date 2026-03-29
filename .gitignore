@@ -94,7 +94,6 @@ fabric.properties
 
 dist/
 .test-artifacts/
-*.c
 *.obj
 *.exe
 *.fir
@@ -107,13 +106,21 @@ dist/
 .idea/
 /test
 
+# Generated C and FLang files (compiler output)
+*.generated.c
+*.generated.f
+
+# Intermediate C files from compilation (but not hand-written stdlib .c files)
+examples/**/*.c
+tests/**/*.c
+
 !src/FLang.Codegen.C/
 
-# Ignore all files in test harness except source files (.f)
+# Ignore all files in test harness except source files (.f, not .generated.f)
 tests/FLang.Tests/Harness/**
 !tests/FLang.Tests/Harness/**/
 !tests/FLang.Tests/Harness/**/*.f
-*.generated.f
+tests/FLang.Tests/Harness/**/*.generated.f
 
 # Compiled binaries in examples (extensionless executables on Linux/macOS)
 examples/**/*

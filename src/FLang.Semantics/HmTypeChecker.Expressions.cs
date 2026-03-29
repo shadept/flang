@@ -138,7 +138,7 @@ public partial class HmTypeChecker
     {
         var option = LookupNominalType(WellKnown.Option)
                      ?? throw new InvalidOperationException($"Well-known type `{WellKnown.Option}` not registered");
-        return new NominalType(option.Name, option.Kind, [_ctx.Engine.FreshVar()], option.FieldsOrVariants);
+        return new NominalType(option.Name, option.Kind, [_ctx.Engine.FreshVar()], option.FieldsOrVariants, false);
     }
 
     // =========================================================================
@@ -225,7 +225,7 @@ public partial class HmTypeChecker
         if (typeNominal != null)
         {
             InstantiatedTypes.Add(innerType);
-            return new NominalType(typeNominal.Name, typeNominal.Kind, [innerType], typeNominal.FieldsOrVariants);
+            return new NominalType(typeNominal.Name, typeNominal.Kind, [innerType], typeNominal.FieldsOrVariants, false);
         }
         return innerType;
     }
@@ -1163,7 +1163,7 @@ public partial class HmTypeChecker
                             .ToArray()
                         : nominal.FieldsOrVariants;
 
-                    var instantiated = new NominalType(nominal.Name, nominal.Kind, typeArgs, fields);
+                    var instantiated = new NominalType(nominal.Name, nominal.Kind, typeArgs, fields, nominal.IsSimd);
                     call.IsTypeInstantiation = true;
                     return WrapInTypeStruct(instantiated);
                 }
@@ -1940,7 +1940,7 @@ public partial class HmTypeChecker
                 var freshFields = baseFields
                     .Select(f => (f.Name, SubstituteTypeVars(f.Type, subst)))
                     .ToArray();
-                nominal = new NominalType(nominal.Name, nominal.Kind, freshArgs, freshFields);
+                nominal = new NominalType(nominal.Name, nominal.Kind, freshArgs, freshFields, nominal.IsSimd);
             }
         }
 
@@ -1983,7 +1983,7 @@ public partial class HmTypeChecker
         var name = $"__anon_{string.Join("_", fields.Select(f => f.Name))}";
         // Detect tuples: field names are _0, _1, _2, ... (from parser desugaring)
         var isTuple = fields.Length == 0 || fields.Select((f, i) => f.Name == $"_{i}").All(b => b);
-        return new NominalType(name, isTuple ? NominalKind.Tuple : NominalKind.Struct, [], fields);
+        return new NominalType(name, isTuple ? NominalKind.Tuple : NominalKind.Struct, [], fields, false);
     }
 
     // =========================================================================
@@ -2081,7 +2081,7 @@ public partial class HmTypeChecker
                 var sliceNominal = LookupNominalType(WellKnown.Slice)
                     ?? throw new InvalidOperationException($"Well-known type `{WellKnown.Slice}` not registered");
                 return new NominalType(sliceNominal.Name, sliceNominal.Kind,
-                    [arrayType.ElementType], sliceNominal.FieldsOrVariants);
+                    [arrayType.ElementType], sliceNominal.FieldsOrVariants, false);
             }
             _ctx.Engine.Unify(indexType, WellKnown.USize, idx.Index.Span);
             return arrayType.ElementType;
@@ -2210,7 +2210,7 @@ public partial class HmTypeChecker
 
         var rangeNominal = LookupNominalType(WellKnown.Range)
             ?? throw new InvalidOperationException($"Well-known type `{WellKnown.Range}` not registered");
-        return new NominalType(rangeNominal.Name, rangeNominal.Kind, [elemType], rangeNominal.FieldsOrVariants);
+        return new NominalType(rangeNominal.Name, rangeNominal.Kind, [elemType], rangeNominal.FieldsOrVariants, false);
     }
 
     // =========================================================================
@@ -2369,7 +2369,7 @@ public partial class HmTypeChecker
                     var opt = LookupNominalType(WellKnown.Option)
                               ?? throw new InvalidOperationException(
                                   $"Well-known type `{WellKnown.Option}` not registered");
-                    return new NominalType(opt.Name, opt.Kind, [field.Type], opt.FieldsOrVariants);
+                    return new NominalType(opt.Name, opt.Kind, [field.Type], opt.FieldsOrVariants, false);
                 }
 
                 ReportError($"No field `{nullProp.MemberName}` on inner type", nullProp.Span);

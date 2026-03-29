@@ -5,7 +5,8 @@ namespace FLang.CLI;
 
 public static class CompilerDiscovery
 {
-    public static CompilerConfig? GetCompilerForCompilation(string cFilePath, string outputFilePath, bool releaseBuild)
+    public static CompilerConfig? GetCompilerForCompilation(string cFilePath, string outputFilePath, bool releaseBuild,
+        IReadOnlyList<string>? extraCFiles = null, IReadOnlyList<string>? linkFlags = null)
     {
         var availableCompilers = FindCompilersOrderedByPreference();
         var selected = availableCompilers.FirstOrDefault(c => c.path != null);
@@ -28,15 +29,25 @@ public static class CompilerDiscovery
             msvcArgs.Add($"/Fo\"{objFilePath}\"");
             msvcArgs.Add($"/Fe\"{outputFilePath}\"");
             msvcArgs.Add($"\"{cFilePath}\"");
+            if (extraCFiles != null)
+                foreach (var f in extraCFiles)
+                    msvcArgs.Add($"\"{f}\"");
+            if (linkFlags != null)
+                msvcArgs.AddRange(linkFlags);
             arguments = string.Join(" ", msvcArgs);
         }
         else
         {
-            var unixArgs = new List<string> { "-Werror" };
+            var unixArgs = new List<string> { "-Werror", "-Wno-pointer-sign" };
             if (releaseBuild) unixArgs.Add("-O2");
             unixArgs.Add($"-g -o \"{outputFilePath}\"");
             unixArgs.Add($"\"{cFilePath}\"");
+            if (extraCFiles != null)
+                foreach (var f in extraCFiles)
+                    unixArgs.Add($"\"{f}\"");
             unixArgs.Add("-lm");
+            if (linkFlags != null)
+                unixArgs.AddRange(linkFlags);
 
             if (selected.name.Contains("xcrun"))
             {

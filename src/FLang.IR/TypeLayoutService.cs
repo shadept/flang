@@ -34,10 +34,16 @@ public class TypeLayoutService(ITypeResolver engine, INominalTypeRegistry nomina
     public static readonly IrPrimitive IrF64 = new("f64", 8, 8);
 
     /// <summary>
-    /// Returns true when the type is a large value type (struct or enum > 8 bytes)
-    /// that should be passed by implicit reference at the ABI level.
+    /// Returns true when the type is a large value type that should be passed
+    /// by implicit reference at the ABI level. For normal structs the threshold
+    /// is 8 bytes; for #simd structs it equals the SIMD register size.
     /// </summary>
-    public static bool IsLargeValue(IrType type) => type is IrStruct { Size: > 8 } or IrEnum { Size: > 8 };
+    public static bool IsLargeValue(IrType type) => type switch
+    {
+        IrStruct s => s.Size > s.RegisterSize,
+        IrEnum { Size: > 8 } => true,
+        _ => false
+    };
 
     private static readonly Dictionary<string, IrPrimitive> PrimitiveLookup = new()
     {
@@ -184,16 +190,21 @@ public class TypeLayoutService(ITypeResolver engine, INominalTypeRegistry nomina
                     foreach (var (fname, ftype) in sourceFields)
                         concreteFields.Add((fname, SubstituteTypeArgs(_engine.Resolve(ftype), subst)));
 
-                    concrete = new NominalType(nt.Name, template.Kind, nt.TypeArguments, concreteFields);
+                    concrete = new NominalType(nt.Name, template.Kind, nt.TypeArguments, concreteFields, template.IsSimd);
                 }
             }
         }
-        else if (nt.FieldsOrVariants.Count == 0)
+        else
         {
-            // Non-generic type with no fields — look up the template definition
+            // Non-generic type — check if the template has IsSimd or more fields
             var template = _nominalTypes.LookupNominalType(nt.Name);
-            if (template != null && template.FieldsOrVariants.Count > 0)
-                concrete = template;
+            if (template != null)
+            {
+                if (nt.FieldsOrVariants.Count == 0 && template.FieldsOrVariants.Count > 0)
+                    concrete = template;
+                else if (template.IsSimd && !nt.IsSimd)
+                    concrete = new NominalType(nt.Name, nt.Kind, nt.TypeArguments, nt.FieldsOrVariants, template.IsSimd);
+            }
         }
 
         // Pre-register a stub to break recursive cycles (self-referencing types via pointers).
@@ -204,7 +215,7 @@ public class TypeLayoutService(ITypeResolver engine, INominalTypeRegistry nomina
         if (concrete.Kind == NominalKind.Enum)
             stub = new IrEnum(concrete.Name, cName, 4, [], 4, 4);
         else
-            stub = new IrStruct(concrete.Name, cName, [], 0, 1);
+            stub = new IrStruct(concrete.Name, cName, [], 0, 1, 8);
         _cache[cacheKey] = stub;
 
         IrType result;
@@ -219,10 +230,10 @@ public class TypeLayoutService(ITypeResolver engine, INominalTypeRegistry nomina
 
     private IrStruct LowerStruct(NominalType nt, string cacheKey, string cName)
     {
+        int registerSize = 8;
+
         if (nt.FieldsOrVariants.Count == 0)
-        {
-            return new IrStruct(nt.Name, cName, [], 0, 1);
-        }
+            return new IrStruct(nt.Name, cName, [], 0, 1, registerSize);
 
         var fields = new IrField[nt.FieldsOrVariants.Count];
         int offset = 0;
@@ -239,8 +250,22 @@ public class TypeLayoutService(ITypeResolver engine, INominalTypeRegistry nomina
             offset += fieldIrType.Size;
         }
 
+        if (nt.IsSimd)
+        {
+            var simdAlign = Math.Max(16, NextPowerOfTwo(offset));
+            maxAlignment = Math.Max(maxAlignment, simdAlign);
+            registerSize = simdAlign;
+        }
+
         var totalSize = AlignUp(offset, maxAlignment);
-        return new IrStruct(nt.Name, cName, fields, totalSize, maxAlignment);
+        return new IrStruct(nt.Name, cName, fields, totalSize, maxAlignment, registerSize);
+    }
+
+    private static int NextPowerOfTwo(int v)
+    {
+        v--;
+        v |= v >> 1; v |= v >> 2; v |= v >> 4; v |= v >> 8; v |= v >> 16;
+        return v + 1;
     }
 
     private IrEnum LowerEnum(NominalType nt, string cacheKey, string cName)
@@ -371,7 +396,7 @@ public class TypeLayoutService(ITypeResolver engine, INominalTypeRegistry nomina
         NominalType nt when nt.TypeArguments.Count > 0 => new NominalType(
             nt.Name, nt.Kind,
             nt.TypeArguments.Select(a => SubstituteRec(a, subst)).ToList(),
-            nt.FieldsOrVariants),
+            nt.FieldsOrVariants, nt.IsSimd),
         _ => type
     };
 

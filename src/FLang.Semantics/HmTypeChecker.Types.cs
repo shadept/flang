@@ -102,7 +102,7 @@ public partial class HmTypeChecker
         var innerType = ResolveTypeNode(nullable.InnerType);
         var option = LookupNominalType(WellKnown.Option)
             ?? throw new InvalidOperationException($"Well-known type `{WellKnown.Option}` not registered");
-        return new NominalType(option.Name, option.Kind, [innerType], option.FieldsOrVariants);
+        return new NominalType(option.Name, option.Kind, [innerType], option.FieldsOrVariants, false);
     }
 
     private NominalType ResolveSliceType(SliceTypeNode slice)
@@ -110,7 +110,7 @@ public partial class HmTypeChecker
         var elementType = ResolveTypeNode(slice.ElementType);
         var sliceNominal = LookupNominalType(WellKnown.Slice)
             ?? throw new InvalidOperationException($"Well-known type `{WellKnown.Slice}` not registered");
-        return new NominalType(sliceNominal.Name, sliceNominal.Kind, [elementType], sliceNominal.FieldsOrVariants);
+        return new NominalType(sliceNominal.Name, sliceNominal.Kind, [elementType], sliceNominal.FieldsOrVariants, false);
     }
 
     private Type ResolveGenericType(GenericTypeNode generic)
@@ -128,7 +128,7 @@ public partial class HmTypeChecker
                     : $"type `{generic.Name}` is deprecated";
                 ReportWarning(warning, generic.Span, "W2001");
             }
-            return new NominalType(nominal.Name, nominal.Kind, typeArgs, nominal.FieldsOrVariants);
+            return new NominalType(nominal.Name, nominal.Kind, typeArgs, nominal.FieldsOrVariants, nominal.IsSimd);
         }
 
         var candidates = _types.NominalTypes.Keys.Select(k => k.Contains('.') ? k[(k.LastIndexOf('.') + 1)..] : k);
@@ -159,7 +159,7 @@ public partial class HmTypeChecker
         var name = $"__anon_{string.Join("_", fields.Select(f => f.FieldName))}";
         // Detect tuples: field names are _0, _1, _2, ... (from parser desugaring)
         var isTuple = fields.Length == 0 || fields.Select((f, i) => f.FieldName == $"_{i}").All(b => b);
-        return new NominalType(name, isTuple ? NominalKind.Tuple : NominalKind.Struct, [], fields);
+        return new NominalType(name, isTuple ? NominalKind.Tuple : NominalKind.Struct, [], fields, false);
     }
 
     private NominalType ResolveAnonymousEnumType(AnonymousEnumTypeNode anonEnum)
@@ -171,12 +171,12 @@ public partial class HmTypeChecker
                 1 => ResolveTypeNode(v.PayloadTypes[0]),
                 _ => (Type)new NominalType(
                     $"__tuple_{v.PayloadTypes.Count}", NominalKind.Tuple, [],
-                    v.PayloadTypes.Select((pt, idx) => ($"_{idx}", ResolveTypeNode(pt))).ToArray())
+                    v.PayloadTypes.Select((pt, idx) => ($"_{idx}", ResolveTypeNode(pt))).ToArray(), false)
             }))
             .ToArray();
 
         var name = $"__anon_enum_{string.Join("_", variants.Select(v => v.Name))}";
-        return new NominalType(name, NominalKind.Enum, [], variants);
+        return new NominalType(name, NominalKind.Enum, [], variants, false);
     }
 
     // =========================================================================
@@ -221,7 +221,7 @@ public partial class HmTypeChecker
                 nominal.Name,
                 nominal.Kind,
                 nominal.TypeArguments.Select(a => SubstituteTypeVars(a, substMap)).ToArray(),
-                nominal.FieldsOrVariants),
+                nominal.FieldsOrVariants, nominal.IsSimd),
             _ => resolved
         };
     }

@@ -168,7 +168,7 @@ public class BasicBlock
 
             var voidResult = Ctx!.FreshLocal("call", TypeLayoutService.IrVoidPrim);
             var inst = new CallInstruction(Ctx.Span, fnName, args, voidResult);
-            if (calleeParamTypes is { Count: > 0 })
+            if (calleeParamTypes != null)
                 inst.CalleeIrParamTypes = calleeParamTypes;
             Instructions.Add(inst);
 
@@ -179,7 +179,7 @@ public class BasicBlock
         var call = new CallInstruction(Ctx.Span, fnName, args, result);
         call.IsForeignCall = isForeign;
         call.IsIndirectCall = isIndirect;
-        if (calleeParamTypes is { Count: > 0 })
+        if (calleeParamTypes != null)
             call.CalleeIrParamTypes = calleeParamTypes;
         Instructions.Add(call);
         return result;
