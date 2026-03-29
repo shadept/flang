@@ -31,9 +31,7 @@ public class HmAstLowering
     private readonly Dictionary<string, int> _shadowCounter = [];
     private BasicBlock _currentBlock = null!;
     private IrFunction _currentFunction = null!;
-    private SourceSpan _currentSpan;
-    private int _tempCounter;
-    private int _blockCounter;
+    private BlockBuildContext _ctx = null!;
     private readonly Dictionary<string, int> _stringTableIndices = [];
 
     // Loop control flow
@@ -70,12 +68,6 @@ public class HmAstLowering
     /// </summary>
     private static IrPointer StripNullable(IrPointer p) => new(p.Pointee, false);
 
-    /// <summary>
-    /// Returns true when the type is a large value type (struct or enum > 8 bytes)
-    /// that should be passed by implicit reference at the ABI level.
-    /// </summary>
-    private static bool IsLargeValue(IrType type) => TypeLayoutService.IsLargeValue(type);
-
     // =========================================================================
     // Fused offset helpers — emit CopyFromOffset / CopyToOffset directly
     // =========================================================================
@@ -85,10 +77,8 @@ public class HmAstLowering
     /// </summary>
     private LocalValue EmitLoadFromOffset(Value basePtr, int byteOffset, IrType fieldType, string nameHint)
     {
-        var result = new LocalValue($"{nameHint}_{_tempCounter++}", fieldType);
         var offset = new IntConstantValue(byteOffset, TypeLayoutService.IrUSize);
-        _currentBlock.Instructions.Add(new CopyFromOffsetInstruction(_currentSpan, basePtr, offset, result));
-        return result;
+        return _currentBlock.EmitCopyFromOffset(basePtr, offset, fieldType);
     }
 
     /// <summary>
@@ -96,9 +86,7 @@ public class HmAstLowering
     /// </summary>
     private LocalValue EmitLoadFromOffset(Value basePtr, Value byteOffset, IrType fieldType, string nameHint)
     {
-        var result = new LocalValue($"{nameHint}_{_tempCounter++}", fieldType);
-        _currentBlock.Instructions.Add(new CopyFromOffsetInstruction(_currentSpan, basePtr, byteOffset, result));
-        return result;
+        return _currentBlock.EmitCopyFromOffset(basePtr, byteOffset, fieldType);
     }
 
     /// <summary>
@@ -107,7 +95,7 @@ public class HmAstLowering
     private void EmitStoreToOffset(Value basePtr, int byteOffset, Value val, IrType valueType)
     {
         var offset = new IntConstantValue(byteOffset, TypeLayoutService.IrUSize);
-        _currentBlock.Instructions.Add(new CopyToOffsetInstruction(_currentSpan, val, basePtr, offset, valueType));
+        _currentBlock.EmitCopyToOffset(basePtr, offset, val, valueType);
     }
 
     /// <summary>
@@ -115,56 +103,7 @@ public class HmAstLowering
     /// </summary>
     private void EmitStoreToOffset(Value basePtr, Value byteOffset, Value val, IrType valueType)
     {
-        _currentBlock.Instructions.Add(new CopyToOffsetInstruction(_currentSpan, val, basePtr, byteOffset, valueType));
-    }
-
-    /// <summary>
-    /// Emit a non-foreign call instruction with implicit by-ref transformations:
-    /// - Large value args are materialized as pointers
-    /// - Large return types use a hidden return slot
-    /// </summary>
-    private LocalValue EmitFLangCall(string fnName, List<Value> args, IrType retIrType, List<IrType>? calleeIrParamTypes)
-    {
-        // Materialize large value args as pointers
-        if (calleeIrParamTypes != null)
-        {
-            for (int i = 0; i < args.Count && i < calleeIrParamTypes.Count; i++)
-            {
-                if (IsLargeValue(calleeIrParamTypes[i]) && args[i].IrType is not IrPointer)
-                {
-                    var argIrType = args[i].IrType ?? calleeIrParamTypes[i];
-                    var temp = new LocalValue($"byref_arg_{_tempCounter++}", new IrPointer(argIrType));
-                    _currentBlock.Instructions.Add(new AllocaInstruction(_currentSpan, argIrType.Size, temp));
-                    _currentBlock.Instructions.Add(new StorePointerInstruction(_currentSpan, temp, args[i]));
-                    args[i] = temp;
-                }
-            }
-        }
-
-        // Return slot for large return types
-        if (IsLargeValue(retIrType))
-        {
-            var retSlot = new LocalValue($"retslot_{_tempCounter++}", new IrPointer(retIrType));
-            _currentBlock.Instructions.Add(new AllocaInstruction(_currentSpan, retIrType.Size, retSlot));
-            args.Insert(0, retSlot);
-
-            var voidResult = new LocalValue($"call_{_tempCounter++}", TypeLayoutService.IrVoidPrim);
-            var callInst = new CallInstruction(_currentSpan, fnName, args, voidResult);
-            if (calleeIrParamTypes != null && calleeIrParamTypes.Count > 0)
-                callInst.CalleeIrParamTypes = calleeIrParamTypes;
-            _currentBlock.Instructions.Add(callInst);
-
-            var loaded = new LocalValue($"retload_{_tempCounter++}", retIrType);
-            _currentBlock.Instructions.Add(new LoadInstruction(_currentSpan, retSlot, loaded));
-            return loaded;
-        }
-
-        var result = new LocalValue($"call_{_tempCounter++}", retIrType);
-        var normalCall = new CallInstruction(_currentSpan, fnName, args, result);
-        if (calleeIrParamTypes != null && calleeIrParamTypes.Count > 0)
-            normalCall.CalleeIrParamTypes = calleeIrParamTypes;
-        _currentBlock.Instructions.Add(normalCall);
-        return result;
+        _currentBlock.EmitCopyToOffset(basePtr, byteOffset, val, valueType);
     }
 
     // =========================================================================
@@ -269,22 +208,19 @@ public class HmAstLowering
         _shadowCounter.Clear();
         _loopStack.Clear();
         _deferStack.Clear();
-        _tempCounter = 0;
-        _blockCounter = 0;
 
         var fnName = $"__test_{index}__";
         var irFn = new IrFunction(fnName, TypeLayoutService.IrVoidPrim);
         _currentFunction = irFn;
+        _ctx = new BlockBuildContext(irFn, _layout);
 
-        _currentBlock = CreateBlock("entry");
-        irFn.BasicBlocks.Add(_currentBlock);
+        _currentBlock = _ctx.CreateBlock("entry");
 
         foreach (var stmt in test.Body)
             LowerStatement(stmt);
 
         // Emit deferred expressions
-        if (_currentBlock.Instructions.Count == 0 ||
-            _currentBlock.Instructions[^1] is not (ReturnInstruction or JumpInstruction or BranchInstruction))
+        if (!_currentBlock.IsTerminated)
         {
             EmitDeferredExpressions();
         }
@@ -292,12 +228,8 @@ public class HmAstLowering
         // Add implicit void return to unterminated blocks
         foreach (var block in irFn.BasicBlocks)
         {
-            if (block.Instructions.Count == 0 ||
-                block.Instructions[^1] is not (ReturnInstruction or JumpInstruction or BranchInstruction))
-            {
-                var retVal = new IntConstantValue(0, TypeLayoutService.IrVoidPrim);
-                block.Instructions.Add(new ReturnInstruction(_currentSpan, retVal));
-            }
+            if (!block.IsTerminated)
+                block.EmitReturn(new IntConstantValue(0, TypeLayoutService.IrVoidPrim));
         }
 
         return irFn;
@@ -311,15 +243,13 @@ public class HmAstLowering
         _shadowCounter.Clear();
         _loopStack.Clear();
         _deferStack.Clear();
-        _tempCounter = 0;
-        _blockCounter = 0;
 
         var irFn = new IrFunction("main", TypeLayoutService.IrI32);
         irFn.IsEntryPoint = true;
         _currentFunction = irFn;
+        _ctx = new BlockBuildContext(irFn, _layout);
 
-        _currentBlock = CreateBlock("entry");
-        irFn.BasicBlocks.Add(_currentBlock);
+        _currentBlock = _ctx.CreateBlock("entry");
 
         // Print header
         AddStringPrintf($"Running {testFunctions.Count} test(s)...\\n");
@@ -332,9 +262,7 @@ public class HmAstLowering
             AddStringPrintf($"test {i + 1}/{testFunctions.Count}: {EscapeCString(name)}... ");
 
             // Call the test function
-            var callResult = new LocalValue($"call_{_tempCounter++}", TypeLayoutService.IrVoidPrim);
-            var callInst = new CallInstruction(SourceSpan.None, testFn.Name, [], callResult);
-            _currentBlock.Instructions.Add(callInst);
+            _currentBlock.EmitCall(testFn.Name, [], TypeLayoutService.IrVoidPrim, null);
 
             // Print "ok\n"
             AddStringPrintf("ok\\n");
@@ -344,21 +272,15 @@ public class HmAstLowering
         AddStringPrintf($"\\nAll {testFunctions.Count} test(s) passed.\\n");
 
         // return 0
-        _currentBlock.Instructions.Add(new ReturnInstruction(SourceSpan.None,
-            new IntConstantValue(0, TypeLayoutService.IrI32)));
+        _currentBlock.EmitReturn(new IntConstantValue(0, TypeLayoutService.IrI32));
 
         return irFn;
     }
 
     private void AddStringPrintf(string text)
     {
-        var fmtResult = new LocalValue($"call_{_tempCounter++}", TypeLayoutService.IrI32);
         var fmtStr = new RawCStringValue(text);
-        var printfCall = new CallInstruction(SourceSpan.None, "printf", [fmtStr], fmtResult)
-        {
-            IsForeignCall = true
-        };
-        _currentBlock.Instructions.Add(printfCall);
+        _currentBlock.EmitCall("printf", [fmtStr], TypeLayoutService.IrI32, null, isForeign: true);
     }
 
     private static string EscapeCString(string s)
@@ -1014,60 +936,36 @@ public class HmAstLowering
         _shadowCounter.Clear();
         _loopStack.Clear();
         _deferStack.Clear();
-        _tempCounter = 0;
-        _blockCounter = 0;
 
         var fnType = GetFunctionHmType(fn);
         var retIrType = _layout.Lower(fnType.ReturnType);
 
         var irFn = new IrFunction(fn.Name, retIrType);
         _currentFunction = irFn;
+        _ctx = new BlockBuildContext(irFn, _layout);
 
         if (fn.Name == "main")
             irFn.IsEntryPoint = true;
 
         // Create entry block
-        _currentBlock = CreateBlock("entry");
-        irFn.BasicBlocks.Add(_currentBlock);
+        _currentBlock = _ctx.CreateBlock("entry");
 
-        // Lower parameters
+        // Setup callee ABI (parameter promotion for large values, return slot)
+        var declaredParams = new List<(string Name, IrType Type)>();
         if (fnType != null)
-        {
             for (int i = 0; i < fn.Parameters.Count; i++)
-            {
-                var param = fn.Parameters[i];
-                var paramIrType = _layout.Lower(fnType.ParameterTypes[i]);
-                var irParam = new IrParam(param.Name, paramIrType);
+                declaredParams.Add((fn.Parameters[i].Name, _layout.Lower(fnType.ParameterTypes[i])));
 
-                if (IsLargeValue(paramIrType))
-                {
-                    irParam = irParam with { IsByRef = true };
-                    var paramVal = new LocalValue(param.Name, new IrPointer(paramIrType));
-                    _locals[param.Name] = paramVal;
-                    _parameters.Add(param.Name);
-                    _byRefParams.Add(param.Name);
-                }
-                else
-                {
-                    var paramVal = new LocalValue(param.Name, paramIrType);
-                    _locals[param.Name] = paramVal;
-                    _parameters.Add(param.Name);
-                }
-
-                irFn.Params.Add(irParam);
-            }
-        }
-
-        // Large struct return: use hidden __ret pointer parameter
-        if (IsLargeValue(retIrType) && fn.Name != "main")
+        var abi = BasicBlock.SetupCalleeAbi(declaredParams, retIrType, fn.Name == "main");
+        irFn.UsesReturnSlot = abi.UsesReturnSlot;
+        foreach (var p in abi.Params) irFn.Params.Add(p);
+        foreach (var (name, localVal) in abi.Locals)
         {
-            irFn.UsesReturnSlot = true;
-            var retPtrType = new IrPointer(retIrType);
-            irFn.Params.Insert(0, new IrParam("__ret", retPtrType));
-            var retLocal = new LocalValue("__ret", retPtrType);
-            _locals["__ret"] = retLocal;
-            _parameters.Add("__ret");
+            _locals[name] = localVal;
+            _parameters.Add(name);
         }
+        foreach (var name in abi.ByRefParams)
+            _byRefParams.Add(name);
 
         // Pre-create allocas for parameters that are assigned to in the body.
         // This ensures ALL reads (including those textually before the assignment,
@@ -1084,15 +982,9 @@ public class HmAstLowering
             if (si == fn.Body.Count - 1 && isNonVoid && stmt is ExpressionStatementNode lastExpr)
             {
                 var val = LowerExpression(lastExpr.Expression, retIrType);
-                if (irFn.UsesReturnSlot)
-                {
-                    _currentBlock.Instructions.Add(new StorePointerInstruction(stmt.Span, _locals["__ret"], val));
-                    _currentBlock.Instructions.Add(new ReturnInstruction(stmt.Span, new IntConstantValue(0, TypeLayoutService.IrVoidPrim)));
-                }
-                else
-                {
-                    _currentBlock.Instructions.Add(new ReturnInstruction(stmt.Span, val));
-                }
+                _ctx.Span = stmt.Span;
+                _currentBlock.EmitFunctionReturn(val, _currentFunction,
+                    _currentFunction.UsesReturnSlot ? _locals["__ret"] : null);
                 continue;
             }
             LowerStatement(stmt);
@@ -1100,8 +992,7 @@ public class HmAstLowering
 
         // Emit deferred expressions at function epilogue (before implicit return),
         // but only if the current block isn't already terminated by a return/jump.
-        if (_currentBlock.Instructions.Count == 0 ||
-            _currentBlock.Instructions[^1] is not (ReturnInstruction or JumpInstruction or BranchInstruction))
+        if (!_currentBlock.IsTerminated)
         {
             EmitDeferredExpressions();
         }
@@ -1109,13 +1000,11 @@ public class HmAstLowering
         // Add implicit return to any unterminated block
         foreach (var block in irFn.BasicBlocks)
         {
-            if (block.Instructions.Count == 0 ||
-                block.Instructions[^1] is not (ReturnInstruction or JumpInstruction or BranchInstruction))
+            if (!block.IsTerminated)
             {
                 var retType = irFn.UsesReturnSlot ? TypeLayoutService.IrVoidPrim
                     : (isNonVoid ? retIrType : TypeLayoutService.IrVoidPrim);
-                var retVal = new IntConstantValue(0, retType);
-                block.Instructions.Add(new ReturnInstruction(_currentSpan, retVal));
+                block.EmitReturn(new IntConstantValue(0, retType));
             }
         }
 
@@ -1128,7 +1017,7 @@ public class HmAstLowering
 
     private void LowerStatement(StatementNode stmt)
     {
-        _currentSpan = stmt.Span;
+        _ctx.Span = stmt.Span;
         switch (stmt)
         {
             case ReturnStatementNode ret:
@@ -1176,20 +1065,13 @@ public class HmAstLowering
         {
             var fnRetType = _currentFunction.ReturnType;
             var val = LowerExpression(ret.Expression, fnRetType);
-            if (_currentFunction.UsesReturnSlot)
-            {
-                _currentBlock.Instructions.Add(new StorePointerInstruction(_currentSpan, _locals["__ret"], val));
-                _currentBlock.Instructions.Add(new ReturnInstruction(_currentSpan, new IntConstantValue(0, TypeLayoutService.IrVoidPrim)));
-            }
-            else
-            {
-                _currentBlock.Instructions.Add(new ReturnInstruction(_currentSpan, val));
-            }
+            _currentBlock.EmitFunctionReturn(val, _currentFunction,
+                _currentFunction.UsesReturnSlot ? _locals["__ret"] : null);
         }
         else
         {
             var voidVal = new IntConstantValue(0, TypeLayoutService.IrVoidPrim);
-            _currentBlock.Instructions.Add(new ReturnInstruction(_currentSpan, voidVal));
+            _currentBlock.EmitReturn(voidVal);
         }
     }
 
@@ -1267,8 +1149,7 @@ public class HmAstLowering
                 // Integer widening then wrap: e.g. i32 -> usize -> Option[usize]
                 if (actualType is IrPrimitive && valField.Type is IrPrimitive)
                 {
-                    var widened = new LocalValue($"widen_{_tempCounter++}", valField.Type);
-                    _currentBlock.Instructions.Add(new CastInstruction(_currentSpan, val, widened));
+                    var widened = _currentBlock.EmitCast(val, valField.Type);
                     return CoerceToOption(widened, optStruct, hvField, valField);
                 }
 
@@ -1281,9 +1162,7 @@ public class HmAstLowering
         // 6. Primitive widening: e.g. i32 -> usize
         if (actualType is IrPrimitive && expectedType is IrPrimitive && actualType.Size < expectedType.Size)
         {
-            var widened = new LocalValue($"widen_{_tempCounter++}", expectedType);
-            _currentBlock.Instructions.Add(new CastInstruction(_currentSpan, val, widened));
-            return widened;
+            return _currentBlock.EmitCast(val, expectedType);
         }
 
         return val;
@@ -1292,13 +1171,11 @@ public class HmAstLowering
     private Value CoerceArrayToSlice(Value val, IrArray arrType, IrStruct sliceStruct,
         IrField ptrField, IrField lenField)
     {
-        var tmpPtr = new LocalValue($"slice_{_tempCounter++}", new IrPointer(sliceStruct));
-        _currentBlock.Instructions.Add(new AllocaInstruction(_currentSpan, sliceStruct.Size, tmpPtr));
+        var tmpPtr = _currentBlock.EmitAlloca(sliceStruct);
 
         // ptr = (element_type*)array
         var elemPtrType = new IrPointer(arrType.Element);
-        var castResult = new LocalValue($"slice_ptr_{_tempCounter++}", elemPtrType);
-        _currentBlock.Instructions.Add(new CastInstruction(_currentSpan, val, castResult));
+        var castResult = _currentBlock.EmitCast(val, elemPtrType);
 
         EmitStoreToOffset(tmpPtr, ptrField.ByteOffset, castResult, ptrField.Type);
 
@@ -1306,36 +1183,28 @@ public class HmAstLowering
         EmitStoreToOffset(tmpPtr, lenField.ByteOffset,
             new IntConstantValue(arrType.Length ?? 0, TypeLayoutService.IrUSize), lenField.Type);
 
-        var loaded = new LocalValue($"slice_val_{_tempCounter++}", sliceStruct);
-        _currentBlock.Instructions.Add(new LoadInstruction(_currentSpan, tmpPtr, loaded));
-        return loaded;
+        return _currentBlock.EmitLoad(tmpPtr, sliceStruct);
     }
 
     private Value CoerceSliceToPointer(Value val, IrStruct sliceStruct, IrField ptrField)
     {
         // Spill to alloca, GEP to ptr field, load
-        var tmpPtr = new LocalValue($"slice_tmp_{_tempCounter++}", new IrPointer(sliceStruct));
-        _currentBlock.Instructions.Add(new AllocaInstruction(_currentSpan, sliceStruct.Size, tmpPtr));
-        _currentBlock.Instructions.Add(new StorePointerInstruction(_currentSpan, tmpPtr, val));
+        var tmpPtr = _currentBlock.EmitAlloca(sliceStruct);
+        _currentBlock.EmitStorePtr(tmpPtr, val);
 
-        var loaded = EmitLoadFromOffset(tmpPtr, ptrField.ByteOffset, ptrField.Type, "slice_ptr_val");
-        return loaded;
+        return EmitLoadFromOffset(tmpPtr, ptrField.ByteOffset, ptrField.Type, "slice_ptr_val");
     }
 
     private Value ReinterpretCast(Value val, IrStruct srcType, IrStruct dstType)
     {
-        var tmpPtr = new LocalValue($"cast_tmp_{_tempCounter++}", new IrPointer(srcType));
-        _currentBlock.Instructions.Add(new AllocaInstruction(_currentSpan, srcType.Size, tmpPtr));
-        _currentBlock.Instructions.Add(new StorePointerInstruction(_currentSpan, tmpPtr, val));
-        var casted = new LocalValue($"cast_val_{_tempCounter++}", dstType);
-        _currentBlock.Instructions.Add(new LoadInstruction(_currentSpan, tmpPtr, casted));
-        return casted;
+        var tmpPtr = _currentBlock.EmitAlloca(srcType);
+        _currentBlock.EmitStorePtr(tmpPtr, val);
+        return _currentBlock.EmitLoad(tmpPtr, dstType);
     }
 
     private Value CoerceToOption(Value val, IrStruct optStruct, IrField hvField, IrField valField)
     {
-        var tmpPtr = new LocalValue($"some_{_tempCounter++}", new IrPointer(optStruct));
-        _currentBlock.Instructions.Add(new AllocaInstruction(_currentSpan, optStruct.Size, tmpPtr));
+        var tmpPtr = _currentBlock.EmitAlloca(optStruct);
 
         // has_value = true
         EmitStoreToOffset(tmpPtr, hvField.ByteOffset, new IntConstantValue(1, TypeLayoutService.IrBool), TypeLayoutService.IrBool);
@@ -1343,9 +1212,7 @@ public class HmAstLowering
         // value = val
         EmitStoreToOffset(tmpPtr, valField.ByteOffset, val, valField.Type);
 
-        var loaded = new LocalValue($"some_val_{_tempCounter++}", optStruct);
-        _currentBlock.Instructions.Add(new LoadInstruction(_currentSpan, tmpPtr, loaded));
-        return loaded;
+        return _currentBlock.EmitLoad(tmpPtr, optStruct);
     }
 
     /// <summary>
@@ -1356,11 +1223,9 @@ public class HmAstLowering
     {
         // has_value = (rawPtr != 0)
         var nullVal = new IntConstantValue(0, rawPtr.IrType!);
-        var hvResult = new LocalValue($"ffi_nonnull_{_tempCounter++}", TypeLayoutService.IrBool);
-        _currentBlock.Instructions.Add(new BinaryInstruction(_currentSpan, BinaryOp.NotEqual, rawPtr, nullVal, hvResult));
+        var hvResult = _currentBlock.EmitBinary(BinaryOp.NotEqual, rawPtr, nullVal, TypeLayoutService.IrBool);
 
-        var tmpPtr = new LocalValue($"ffi_opt_{_tempCounter++}", new IrPointer(optStruct));
-        _currentBlock.Instructions.Add(new AllocaInstruction(_currentSpan, optStruct.Size, tmpPtr));
+        var tmpPtr = _currentBlock.EmitAlloca(optStruct);
 
         // has_value field
         EmitStoreToOffset(tmpPtr, hvField.ByteOffset, hvResult, TypeLayoutService.IrBool);
@@ -1368,9 +1233,7 @@ public class HmAstLowering
         // value field = raw pointer
         EmitStoreToOffset(tmpPtr, valField.ByteOffset, rawPtr, valField.Type);
 
-        var loaded = new LocalValue($"ffi_opt_val_{_tempCounter++}", optStruct);
-        _currentBlock.Instructions.Add(new LoadInstruction(_currentSpan, tmpPtr, loaded));
-        return loaded;
+        return _currentBlock.EmitLoad(tmpPtr, optStruct);
     }
 
     private void LowerVariableDeclaration(VariableDeclarationNode varDecl)
@@ -1398,26 +1261,20 @@ public class HmAstLowering
         }
 
         // Allocate stack space
-        var allocaResult = new LocalValue(uniqueName, new IrPointer(irType));
-        _currentBlock.Instructions.Add(new AllocaInstruction(_currentSpan, irType.Size, allocaResult)
-        {
-            IsArrayStorage = isArray
-        });
+        var allocaResult = _currentBlock.EmitAlloca(irType, isArrayStorage: isArray);
 
         // Store initializer if present, otherwise zero-initialize
         if (varDecl.Initializer != null)
         {
             var initVal = LowerExpression(varDecl.Initializer, irType);
-            _currentBlock.Instructions.Add(new StorePointerInstruction(_currentSpan, allocaResult, initVal));
+            _currentBlock.EmitStorePtr(allocaResult, initVal);
         }
         else
         {
             // Zero-initialize variables declared without an initializer (e.g. `let sb: StringBuilder`)
-            var memsetResult = new LocalValue($"memset_{_tempCounter++}", TypeLayoutService.IrVoidPrim);
-            _currentBlock.Instructions.Add(new CallInstruction(_currentSpan, "memset",
+            _currentBlock.EmitCall("memset",
                 [allocaResult, new IntConstantValue(0, TypeLayoutService.IrI32), new IntConstantValue(irType.Size, TypeLayoutService.IrUSize)],
-                memsetResult)
-            { IsForeignCall = true });
+                TypeLayoutService.IrVoidPrim, calleeParamTypes: null, isForeign: true);
         }
 
         _locals[varDecl.Name] = allocaResult;
@@ -1429,8 +1286,7 @@ public class HmAstLowering
         var exitBlock = CreateBlock("loop_exit");
 
         // Jump from current block into the loop body
-        _currentBlock.Instructions.Add(new JumpInstruction(_currentSpan, bodyBlock));
-        _currentFunction.BasicBlocks.Add(bodyBlock);
+        _currentBlock.EmitJump(bodyBlock);
         _currentBlock = bodyBlock;
 
         // Push loop context for break/continue
@@ -1443,14 +1299,9 @@ public class HmAstLowering
         _loopStack.Pop();
 
         // Back-edge: jump back to loop body (if not already terminated)
-        if (_currentBlock.Instructions.Count == 0 ||
-            _currentBlock.Instructions[^1] is not (ReturnInstruction or JumpInstruction or BranchInstruction))
-        {
-            _currentBlock.Instructions.Add(new JumpInstruction(_currentSpan, bodyBlock));
-        }
+        _currentBlock.EmitJumpIfNotTerminated(bodyBlock);
 
         // Continue after the loop
-        _currentFunction.BasicBlocks.Add(exitBlock);
         _currentBlock = exitBlock;
     }
 
@@ -1463,11 +1314,10 @@ public class HmAstLowering
         }
 
         var (_, exitBlock) = _loopStack.Peek();
-        _currentBlock.Instructions.Add(new JumpInstruction(_currentSpan, exitBlock));
+        _currentBlock.EmitJump(exitBlock);
 
         // Start a dead block — subsequent code is unreachable but we need a valid block
         var deadBlock = CreateBlock("dead");
-        _currentFunction.BasicBlocks.Add(deadBlock);
         _currentBlock = deadBlock;
     }
 
@@ -1480,11 +1330,10 @@ public class HmAstLowering
         }
 
         var (bodyBlock, _2) = _loopStack.Peek();
-        _currentBlock.Instructions.Add(new JumpInstruction(_currentSpan, bodyBlock));
+        _currentBlock.EmitJump(bodyBlock);
 
         // Start a dead block
         var deadBlock = CreateBlock("dead");
-        _currentFunction.BasicBlocks.Add(deadBlock);
         _currentBlock = deadBlock;
     }
 
@@ -1520,9 +1369,8 @@ public class HmAstLowering
         if (iterableVal.IrType is not IrPointer)
         {
             var iterableIrType = iterableVal.IrType ?? TypeLayoutService.IrVoidPrim;
-            var temp = new LocalValue($"iterable_tmp_{_tempCounter++}", new IrPointer(iterableIrType));
-            _currentBlock.Instructions.Add(new AllocaInstruction(_currentSpan, iterableIrType.Size, temp));
-            _currentBlock.Instructions.Add(new StorePointerInstruction(_currentSpan, temp, iterableVal));
+            var temp = _currentBlock.EmitAlloca(iterableIrType);
+            _currentBlock.EmitStorePtr(temp, iterableVal);
             iterableVal = temp;
         }
 
@@ -1530,66 +1378,57 @@ public class HmAstLowering
         var iterCalleeParamTypes = new List<IrType>();
         foreach (var p in forLoop.ResolvedIterFunction.Parameters)
             iterCalleeParamTypes.Add(GetIrType(p));
-        var iterResult = EmitFLangCall("iter", [iterableVal], iteratorIrType, iterCalleeParamTypes);
+        var iterResult = _currentBlock.EmitCall("iter", [iterableVal], iteratorIrType, iterCalleeParamTypes);
 
         // 3. Allocate iterator state on stack
-        var iteratorPtr = new LocalValue($"iter_ptr_{_tempCounter++}", new IrPointer(iteratorIrType));
-        _currentBlock.Instructions.Add(new AllocaInstruction(_currentSpan, iteratorIrType.Size, iteratorPtr));
-        _currentBlock.Instructions.Add(new StorePointerInstruction(_currentSpan, iteratorPtr, iterResult));
+        var iteratorPtr = _currentBlock.EmitAlloca(iteratorIrType);
+        _currentBlock.EmitStorePtr(iteratorPtr, iterResult);
 
         // 4. Allocate loop variable on stack
-        var loopVarName = GetUniqueVariableName(forLoop.IteratorVariable);
-        var loopVarPtr = new LocalValue(loopVarName, new IrPointer(elementIrType));
-        _currentBlock.Instructions.Add(new AllocaInstruction(_currentSpan, elementIrType.Size, loopVarPtr));
+        var loopVarPtr = _currentBlock.EmitAlloca(elementIrType);
         _locals[forLoop.IteratorVariable] = loopVarPtr;
 
         // Jump to condition block
-        _currentBlock.Instructions.Add(new JumpInstruction(_currentSpan, condBlock));
+        _currentBlock.EmitJump(condBlock);
 
         // 5. Condition block: call next(&iterator), check has_value
-        _currentFunction.BasicBlocks.Add(condBlock);
         _currentBlock = condBlock;
 
         var nextCalleeParamTypes = new List<IrType>();
         foreach (var p in forLoop.ResolvedNextFunction.Parameters)
             nextCalleeParamTypes.Add(GetIrType(p));
-        var nextResult = EmitFLangCall("next", [iteratorPtr], optionIrType, nextCalleeParamTypes);
+        var nextResult = _currentBlock.EmitCall("next", [iteratorPtr], optionIrType, nextCalleeParamTypes);
 
         if (IsNicheOption(optionIrType))
         {
             // Niche-optimized: nextResult is a nullable pointer; NULL = None
             var nichePtr = (IrPointer)optionIrType;
             var nullVal = new IntConstantValue(0, nichePtr);
-            var isNonNull = new LocalValue($"for_niche_{_tempCounter++}", TypeLayoutService.IrBool);
-            _currentBlock.Instructions.Add(new BinaryInstruction(_currentSpan, BinaryOp.NotEqual, nextResult, nullVal, isNonNull));
-            _currentBlock.Instructions.Add(new BranchInstruction(_currentSpan, isNonNull, bodyBlock, exitBlock));
+            var isNonNull = _currentBlock.EmitBinary(BinaryOp.NotEqual, nextResult, nullVal, TypeLayoutService.IrBool);
+            _currentBlock.EmitBranch(isNonNull, bodyBlock, exitBlock);
 
             // Body: cast to non-nullable, store to loop var
-            _currentFunction.BasicBlocks.Add(bodyBlock);
             _currentBlock = bodyBlock;
             _loopStack.Push((condBlock, exitBlock));
 
             var stripped = StripNullable(nichePtr);
-            var castVal = new LocalValue($"for_strip_{_tempCounter++}", stripped);
-            _currentBlock.Instructions.Add(new CastInstruction(_currentSpan, nextResult, castVal));
+            var castVal = _currentBlock.EmitCast(nextResult, stripped);
             // If element type differs from stripped pointer (e.g. loop var is the inner pointee), load
             if (elementIrType is IrPointer)
             {
-                _currentBlock.Instructions.Add(new StorePointerInstruction(_currentSpan, loopVarPtr, castVal));
+                _currentBlock.EmitStorePtr(loopVarPtr, castVal);
             }
             else
             {
-                var loaded = new LocalValue($"for_deref_{_tempCounter++}", elementIrType);
-                _currentBlock.Instructions.Add(new LoadInstruction(_currentSpan, castVal, loaded));
-                _currentBlock.Instructions.Add(new StorePointerInstruction(_currentSpan, loopVarPtr, loaded));
+                var loaded = _currentBlock.EmitLoad(castVal, elementIrType);
+                _currentBlock.EmitStorePtr(loopVarPtr, loaded);
             }
         }
         else
         {
             // Materialize next result to alloca so we can GEP into it
-            var nextPtr = new LocalValue($"next_ptr_{_tempCounter++}", new IrPointer(optionIrType));
-            _currentBlock.Instructions.Add(new AllocaInstruction(_currentSpan, optionIrType.Size, nextPtr));
-            _currentBlock.Instructions.Add(new StorePointerInstruction(_currentSpan, nextPtr, nextResult));
+            var nextPtr = _currentBlock.EmitAlloca(optionIrType);
+            _currentBlock.EmitStorePtr(nextPtr, nextResult);
 
             // Load has_value field
             var optionStruct = (IrStruct)optionIrType;
@@ -1598,17 +1437,16 @@ public class HmAstLowering
             var hvVal = EmitLoadFromOffset(nextPtr, hvField.ByteOffset, TypeLayoutService.IrBool, "for_hv");
 
             // Branch: has_value -> body, else -> exit
-            _currentBlock.Instructions.Add(new BranchInstruction(_currentSpan, hvVal, bodyBlock, exitBlock));
+            _currentBlock.EmitBranch(hvVal, bodyBlock, exitBlock);
 
             // 6. Body block: extract value, store to loop var, lower body, jump back to cond
-            _currentFunction.BasicBlocks.Add(bodyBlock);
             _currentBlock = bodyBlock;
             _loopStack.Push((condBlock, exitBlock));
 
             // Extract value field from Option
             var valField = FindField(optionStruct, "value");
             var valLoaded = EmitLoadFromOffset(nextPtr, valField.ByteOffset, elementIrType, "for_val");
-            _currentBlock.Instructions.Add(new StorePointerInstruction(_currentSpan, loopVarPtr, valLoaded));
+            _currentBlock.EmitStorePtr(loopVarPtr, valLoaded);
         }
 
         // Lower loop body
@@ -1617,14 +1455,9 @@ public class HmAstLowering
         _loopStack.Pop();
 
         // Back-edge to condition
-        if (_currentBlock.Instructions.Count == 0 ||
-            _currentBlock.Instructions[^1] is not (ReturnInstruction or JumpInstruction or BranchInstruction))
-        {
-            _currentBlock.Instructions.Add(new JumpInstruction(_currentSpan, condBlock));
-        }
+        _currentBlock.EmitJumpIfNotTerminated(condBlock);
 
         // 7. Exit block
-        _currentFunction.BasicBlocks.Add(exitBlock);
         _currentBlock = exitBlock;
     }
 
@@ -1660,9 +1493,8 @@ public class HmAstLowering
             else
             {
                 // Materialize to stack
-                var temp = new LocalValue($"arr_tmp_{_tempCounter++}", new IrPointer(baseIrType));
-                _currentBlock.Instructions.Add(new AllocaInstruction(_currentSpan, baseIrType.Size, temp));
-                _currentBlock.Instructions.Add(new StorePointerInstruction(_currentSpan, temp, iterableVal));
+                var temp = _currentBlock.EmitAlloca(baseIrType);
+                _currentBlock.EmitStorePtr(temp, iterableVal);
                 arrayPtr = temp;
             }
         }
@@ -1673,15 +1505,11 @@ public class HmAstLowering
         }
 
         // Allocate index counter (usize, init to 0)
-        var indexPtr = new LocalValue($"for_idx_{_tempCounter++}", new IrPointer(usizeType));
-        _currentBlock.Instructions.Add(new AllocaInstruction(_currentSpan, usizeType.Size, indexPtr));
-        _currentBlock.Instructions.Add(new StorePointerInstruction(_currentSpan, indexPtr,
-            new IntConstantValue(0, usizeType)));
+        var indexPtr = _currentBlock.EmitAlloca(usizeType);
+        _currentBlock.EmitStorePtr(indexPtr, new IntConstantValue(0, usizeType));
 
         // Allocate loop variable
-        var loopVarName = GetUniqueVariableName(forLoop.IteratorVariable);
-        var loopVarPtr = new LocalValue(loopVarName, new IrPointer(elementIrType));
-        _currentBlock.Instructions.Add(new AllocaInstruction(_currentSpan, elementIrType.Size, loopVarPtr));
+        var loopVarPtr = _currentBlock.EmitAlloca(elementIrType);
         _locals[forLoop.IteratorVariable] = loopVarPtr;
 
         // Create blocks
@@ -1689,36 +1517,29 @@ public class HmAstLowering
         var bodyBlock = CreateBlock("for_body");
         var exitBlock = CreateBlock("for_exit");
 
-        _currentBlock.Instructions.Add(new JumpInstruction(_currentSpan, condBlock));
+        _currentBlock.EmitJump(condBlock);
 
         // Condition block: load index, compare < length
-        _currentFunction.BasicBlocks.Add(condBlock);
         _currentBlock = condBlock;
 
-        var indexVal = new LocalValue($"for_i_{_tempCounter++}", usizeType);
-        _currentBlock.Instructions.Add(new LoadInstruction(_currentSpan, indexPtr, indexVal));
+        var indexVal = _currentBlock.EmitLoad(indexPtr, usizeType);
 
-        var cmpResult = new LocalValue($"for_cmp_{_tempCounter++}", TypeLayoutService.IrBool);
-        _currentBlock.Instructions.Add(
-            new BinaryInstruction(_currentSpan, BinaryOp.LessThan, indexVal, lengthVal, cmpResult));
+        var cmpResult = _currentBlock.EmitBinary(BinaryOp.LessThan, indexVal, lengthVal, TypeLayoutService.IrBool);
 
-        _currentBlock.Instructions.Add(new BranchInstruction(_currentSpan, cmpResult, bodyBlock, exitBlock));
+        _currentBlock.EmitBranch(cmpResult, bodyBlock, exitBlock);
 
         // Body block: GEP to array[index], load element, store to loop var
-        _currentFunction.BasicBlocks.Add(bodyBlock);
         _currentBlock = bodyBlock;
 
         _loopStack.Push((condBlock, exitBlock));
 
         // Compute byte offset: index * element_size
         var elemSize = new IntConstantValue(elementIrType.Size, usizeType);
-        var byteOffset = new LocalValue($"for_off_{_tempCounter++}", usizeType);
-        _currentBlock.Instructions.Add(
-            new BinaryInstruction(_currentSpan, BinaryOp.Multiply, indexVal, elemSize, byteOffset));
+        var byteOffset = _currentBlock.EmitBinary(BinaryOp.Multiply, indexVal, elemSize, usizeType);
 
         // Load element at dynamic offset
         var elemVal = EmitLoadFromOffset(arrayPtr, byteOffset, elementIrType, "for_elem");
-        _currentBlock.Instructions.Add(new StorePointerInstruction(_currentSpan, loopVarPtr, elemVal));
+        _currentBlock.EmitStorePtr(loopVarPtr, elemVal);
 
         // Lower loop body
         LowerExpression(forLoop.Body);
@@ -1727,22 +1548,14 @@ public class HmAstLowering
 
         // Increment index: index = index + 1
         var one = new IntConstantValue(1, usizeType);
-        var indexVal2 = new LocalValue($"for_i2_{_tempCounter++}", usizeType);
-        _currentBlock.Instructions.Add(new LoadInstruction(_currentSpan, indexPtr, indexVal2));
-        var nextIndex = new LocalValue($"for_inc_{_tempCounter++}", usizeType);
-        _currentBlock.Instructions.Add(
-            new BinaryInstruction(_currentSpan, BinaryOp.Add, indexVal2, one, nextIndex));
-        _currentBlock.Instructions.Add(new StorePointerInstruction(_currentSpan, indexPtr, nextIndex));
+        var indexVal2 = _currentBlock.EmitLoad(indexPtr, usizeType);
+        var nextIndex = _currentBlock.EmitBinary(BinaryOp.Add, indexVal2, one, usizeType);
+        _currentBlock.EmitStorePtr(indexPtr, nextIndex);
 
         // Back-edge to condition
-        if (_currentBlock.Instructions.Count == 0 ||
-            _currentBlock.Instructions[^1] is not (ReturnInstruction or JumpInstruction or BranchInstruction))
-        {
-            _currentBlock.Instructions.Add(new JumpInstruction(_currentSpan, condBlock));
-        }
+        _currentBlock.EmitJumpIfNotTerminated(condBlock);
 
         // Exit block
-        _currentFunction.BasicBlocks.Add(exitBlock);
         _currentBlock = exitBlock;
     }
 
@@ -1772,7 +1585,7 @@ public class HmAstLowering
 
     private Value LowerExpression(ExpressionNode expr, IrType? expectedType = null)
     {
-        _currentSpan = expr.Span;
+        _ctx.Span = expr.Span;
         var result = expr switch
         {
             IntegerLiteralNode intLit => LowerIntegerLiteral(intLit),
@@ -1878,8 +1691,7 @@ public class HmAstLowering
         if (irType is IrStruct optionStruct && optionStruct.Fields.Length > 0)
         {
             // Alloca the option struct, store has_value = false (0)
-            var allocaResult = new LocalValue($"null_{_tempCounter++}", new IrPointer(irType));
-            _currentBlock.Instructions.Add(new AllocaInstruction(_currentSpan, irType.Size, allocaResult));
+            var allocaResult = _currentBlock.EmitAlloca(irType);
 
             // Find has_value field and store 0
             foreach (var f in optionStruct.Fields)
@@ -1893,9 +1705,7 @@ public class HmAstLowering
             }
 
             // Load and return the struct
-            var loaded = new LocalValue($"null_val_{_tempCounter++}", irType);
-            _currentBlock.Instructions.Add(new LoadInstruction(_currentSpan, allocaResult, loaded));
-            return loaded;
+            return _currentBlock.EmitLoad(allocaResult, irType);
         }
 
         return new IntConstantValue(0, irType);
@@ -1916,9 +1726,7 @@ public class HmAstLowering
             if (_typeTableGlobals != null && _typeTableGlobals.TryGetValue(key, out var typeInfoGlobal))
             {
                 var typeIrType = _layout.Lower(resolvedType);
-                var loaded = new LocalValue($"type_load_{_tempCounter++}", typeIrType);
-                _currentBlock.Instructions.Add(new LoadInstruction(_currentSpan, typeInfoGlobal, loaded));
-                return loaded;
+                return _currentBlock.EmitLoad(typeInfoGlobal, typeIrType);
             }
         }
         // Fallback: should not happen for correctly typed code
@@ -1935,9 +1743,7 @@ public class HmAstLowering
                 {
                     // By-ref param: load the value through the pointer
                     var innerType = ((IrPointer)localVal.IrType).Pointee;
-                    var byRefLoaded = new LocalValue($"t{_tempCounter++}", innerType);
-                    _currentBlock.Instructions.Add(new LoadInstruction(_currentSpan, localVal, byRefLoaded));
-                    return byRefLoaded;
+                    return _currentBlock.EmitLoad(localVal, innerType);
                 }
                 // Parameters are used directly
                 return localVal;
@@ -1951,9 +1757,7 @@ public class HmAstLowering
             if (irType is IrArray)
                 return new LocalValue(localVal.Name, irType);
 
-            var loaded = new LocalValue($"t{_tempCounter++}", irType);
-            _currentBlock.Instructions.Add(new LoadInstruction(_currentSpan, localVal, loaded));
-            return loaded;
+            return _currentBlock.EmitLoad(localVal, irType);
         }
 
         var inferredType = _types.GetResolvedType(id);
@@ -1976,9 +1780,7 @@ public class HmAstLowering
             if (_typeTableGlobals != null && _typeTableGlobals.TryGetValue(key, out var typeInfoGlobal))
             {
                 var typeIrType = GetIrType(id);
-                var loaded = new LocalValue($"type_load_{_tempCounter++}", typeIrType);
-                _currentBlock.Instructions.Add(new LoadInstruction(_currentSpan, typeInfoGlobal, loaded));
-                return loaded;
+                return _currentBlock.EmitLoad(typeInfoGlobal, typeIrType);
             }
         }
 
@@ -2022,14 +1824,11 @@ public class HmAstLowering
         var variant = foundVariant.Value;
 
         // Alloca + store tag + load
-        var enumPtr = new LocalValue($"enum_{_tempCounter++}", new IrPointer(irEnum));
-        _currentBlock.Instructions.Add(new AllocaInstruction(_currentSpan, irEnum.Size, enumPtr));
+        var enumPtr = _currentBlock.EmitAlloca(irEnum);
 
         EmitStoreToOffset(enumPtr, 0, new IntConstantValue(variant.TagValue, TypeLayoutService.IrI32), TypeLayoutService.IrI32);
 
-        var enumResult = new LocalValue($"enum_val_{_tempCounter++}", irEnum);
-        _currentBlock.Instructions.Add(new LoadInstruction(_currentSpan, enumPtr, enumResult));
-        return enumResult;
+        return _currentBlock.EmitLoad(enumPtr, irEnum);
     }
 
     private Value LowerCall(CallExpressionNode call)
@@ -2070,7 +1869,7 @@ public class HmAstLowering
             var isForeignCheck = call.ResolvedTarget != null &&
                                  (call.ResolvedTarget.Modifiers & FunctionModifiers.Foreign) != 0;
             var needsByRef = firstParamWantsPtr ||
-                             (!isForeignCheck && firstParamIrType != null && IsLargeValue(firstParamIrType));
+                             (!isForeignCheck && firstParamIrType != null && TypeLayoutService.IsLargeValue(firstParamIrType));
 
             // When callee expects &self (or implicit by-ref) and receiver is a local variable
             // whose alloca type matches the expected param type, pass the alloca pointer directly
@@ -2100,9 +1899,7 @@ public class HmAstLowering
                 {
                     if (baseIrType is IrPointer derefPtrType)
                     {
-                        var derefResult = new LocalValue($"autoderef_{_tempCounter++}", derefPtrType.Pointee);
-                        _currentBlock.Instructions.Add(new LoadInstruction(_currentSpan, baseVal, derefResult));
-                        baseVal = derefResult;
+                        baseVal = _currentBlock.EmitLoad(baseVal, derefPtrType.Pointee);
                         baseIrType = derefPtrType.Pointee;
                     }
                 }
@@ -2122,9 +1919,7 @@ public class HmAstLowering
                     {
                         // Field is a value type — pass the GEP pointer so callee can
                         // mutate the field in-place (e.g. iterator state).
-                        var fieldPtr = new LocalValue($"ufcs_field_ptr_{_tempCounter++}", new IrPointer(field.Type));
-                        _currentBlock.Instructions.Add(
-                            new GetElementPtrInstruction(_currentSpan, baseVal, field.ByteOffset, fieldPtr));
+                        var fieldPtr = _currentBlock.EmitGEP(baseVal, field.ByteOffset, field.Type);
                         args.Add(fieldPtr);
                     }
                 }
@@ -2133,9 +1928,8 @@ public class HmAstLowering
                     // Fallback: base is a value, copy + materialize pointer
                     var receiverVal = LowerExpression(call.UfcsReceiver);
                     var receiverIrType = receiverVal.IrType ?? TypeLayoutService.IrVoidPrim;
-                    var temp = new LocalValue($"ufcs_tmp_{_tempCounter++}", new IrPointer(receiverIrType));
-                    _currentBlock.Instructions.Add(new AllocaInstruction(_currentSpan, receiverIrType.Size, temp));
-                    _currentBlock.Instructions.Add(new StorePointerInstruction(_currentSpan, temp, receiverVal));
+                    var temp = _currentBlock.EmitAlloca(receiverIrType);
+                    _currentBlock.EmitStorePtr(temp, receiverVal);
                     args.Add(temp);
                 }
             }
@@ -2147,18 +1941,15 @@ public class HmAstLowering
                 {
                     // Callee expects &self or implicit by-ref — materialize a pointer
                     var receiverIrType = receiverVal.IrType ?? TypeLayoutService.IrVoidPrim;
-                    var temp = new LocalValue($"ufcs_tmp_{_tempCounter++}", new IrPointer(receiverIrType));
-                    _currentBlock.Instructions.Add(new AllocaInstruction(_currentSpan, receiverIrType.Size, temp));
-                    _currentBlock.Instructions.Add(new StorePointerInstruction(_currentSpan, temp, receiverVal));
+                    var temp = _currentBlock.EmitAlloca(receiverIrType);
+                    _currentBlock.EmitStorePtr(temp, receiverVal);
                     args.Add(temp);
                 }
                 else if (!needsByRef && receiverVal.IrType is IrPointer recvPtr)
                 {
                     // Callee expects value but receiver is a pointer (e.g. self: &List(T)
                     // calling as_slice(self: List(T))) — deref the pointer
-                    var loaded = new LocalValue($"ufcs_deref_{_tempCounter++}", recvPtr.Pointee);
-                    _currentBlock.Instructions.Add(new LoadInstruction(_currentSpan, receiverVal, loaded));
-                    args.Add(loaded);
+                    args.Add(_currentBlock.EmitLoad(receiverVal, recvPtr.Pointee));
                 }
                 else
                 {
@@ -2216,22 +2007,19 @@ public class HmAstLowering
                 var lenField = sliceStruct.Fields.FirstOrDefault(f => f.Name == "len");
                 if (ptrField.Type != null && lenField.Type != null)
                 {
-                    var tmpPtr = new LocalValue($"empty_slice_{_tempCounter++}", new IrPointer(sliceStruct));
-                    _currentBlock.Instructions.Add(new AllocaInstruction(_currentSpan, sliceStruct.Size, tmpPtr));
+                    var tmpPtr = _currentBlock.EmitAlloca(sliceStruct);
                     // ptr = NULL (0 cast to pointer)
                     EmitStoreToOffset(tmpPtr, ptrField.ByteOffset,
                         new IntConstantValue(0, ptrField.Type), ptrField.Type);
                     // len = 0
                     EmitStoreToOffset(tmpPtr, lenField.ByteOffset,
                         new IntConstantValue(0, TypeLayoutService.IrUSize), lenField.Type);
-                    var loaded = new LocalValue($"empty_slice_val_{_tempCounter++}", sliceStruct);
-                    _currentBlock.Instructions.Add(new LoadInstruction(_currentSpan, tmpPtr, loaded));
+                    var loaded = _currentBlock.EmitLoad(tmpPtr, sliceStruct);
 
-                    if (!isForeign && IsLargeValue(expectedParamType))
+                    if (!isForeign && TypeLayoutService.IsLargeValue(expectedParamType))
                     {
-                        var temp = new LocalValue($"byref_arg_{_tempCounter++}", new IrPointer(sliceStruct));
-                        _currentBlock.Instructions.Add(new AllocaInstruction(_currentSpan, sliceStruct.Size, temp));
-                        _currentBlock.Instructions.Add(new StorePointerInstruction(_currentSpan, temp, loaded));
+                        var temp = _currentBlock.EmitAlloca(sliceStruct);
+                        _currentBlock.EmitStorePtr(temp, loaded);
                         args.Add(temp);
                     }
                     else
@@ -2245,12 +2033,11 @@ public class HmAstLowering
             var argVal = LowerExpression(callArguments[i], expectedParamType);
 
             // Implicit by-ref: large value args to non-foreign functions need pointer materialization
-            if (!isForeign && expectedParamType != null && IsLargeValue(expectedParamType) && argVal.IrType is not IrPointer)
+            if (!isForeign && expectedParamType != null && TypeLayoutService.IsLargeValue(expectedParamType) && argVal.IrType is not IrPointer)
             {
                 var argIrType = argVal.IrType ?? expectedParamType;
-                var temp = new LocalValue($"byref_arg_{_tempCounter++}", new IrPointer(argIrType));
-                _currentBlock.Instructions.Add(new AllocaInstruction(_currentSpan, argIrType.Size, temp));
-                _currentBlock.Instructions.Add(new StorePointerInstruction(_currentSpan, temp, argVal));
+                var temp = _currentBlock.EmitAlloca(argIrType);
+                _currentBlock.EmitStorePtr(temp, argVal);
                 args.Add(temp);
             }
             else
@@ -2277,31 +2064,13 @@ public class HmAstLowering
         }
 
         // Return slot: non-foreign, non-indirect call returning large value
-        if (!isForeign && !call.IsIndirectCall && IsLargeValue(retIrType) && foreignOptionRet == null)
+        if (!isForeign && !call.IsIndirectCall && TypeLayoutService.IsLargeValue(retIrType) && foreignOptionRet == null)
         {
-            var retSlot = new LocalValue($"retslot_{_tempCounter++}", new IrPointer(retIrType));
-            _currentBlock.Instructions.Add(new AllocaInstruction(_currentSpan, retIrType.Size, retSlot));
-            args.Insert(0, retSlot);
-
-            var voidResult = new LocalValue($"call_{_tempCounter++}", TypeLayoutService.IrVoidPrim);
-            var callInst = new CallInstruction(_currentSpan, targetName, args, voidResult);
-            callInst.IsForeignCall = false;
-            callInst.IsIndirectCall = false;
-            callInst.CalleeIrParamTypes = calleeIrParamTypes;
-            _currentBlock.Instructions.Add(callInst);
-
-            var loaded = new LocalValue($"retload_{_tempCounter++}", retIrType);
-            _currentBlock.Instructions.Add(new LoadInstruction(_currentSpan, retSlot, loaded));
-            return loaded;
+            return _currentBlock.EmitCall(targetName, args, retIrType, calleeIrParamTypes);
         }
 
-        var result = new LocalValue($"call_{_tempCounter++}", actualRetType);
-        var callInstNorm = new CallInstruction(_currentSpan, targetName, args, result);
-        callInstNorm.IsForeignCall = isForeign;
-        callInstNorm.IsIndirectCall = call.IsIndirectCall;
-        callInstNorm.CalleeIrParamTypes = calleeIrParamTypes;
-
-        _currentBlock.Instructions.Add(callInstNorm);
+        var result = _currentBlock.EmitCall(targetName, args, actualRetType, calleeIrParamTypes,
+            isForeign: isForeign, isIndirect: call.IsIndirectCall);
 
         // Wrap foreign raw-pointer return in Option[&T]
         if (foreignOptionRet != null)
@@ -2332,9 +2101,7 @@ public class HmAstLowering
                 baseIrType = ptrType.Pointee;
                 break;
             }
-            var derefResult = new LocalValue($"autoderef_{_tempCounter++}", ptrType.Pointee);
-            _currentBlock.Instructions.Add(new LoadInstruction(_currentSpan, baseVal, derefResult));
-            baseVal = derefResult;
+            baseVal = _currentBlock.EmitLoad(baseVal, ptrType.Pointee);
             baseIrType = ptrType.Pointee;
         }
 
@@ -2356,9 +2123,8 @@ public class HmAstLowering
             }
             else
             {
-                var tmpPtr = new LocalValue($"field_tmp_{_tempCounter++}", new IrPointer(baseIrType));
-                _currentBlock.Instructions.Add(new AllocaInstruction(_currentSpan, baseIrType.Size, tmpPtr));
-                _currentBlock.Instructions.Add(new StorePointerInstruction(_currentSpan, tmpPtr, baseVal));
+                var tmpPtr = _currentBlock.EmitAlloca(baseIrType);
+                _currentBlock.EmitStorePtr(tmpPtr, baseVal);
                 baseVal = tmpPtr;
             }
         }
@@ -2377,45 +2143,12 @@ public class HmAstLowering
         // Load function pointer from field
         var funcPtrVal = EmitLoadFromOffset(baseVal, field.ByteOffset, field.Type, "fptr_load");
 
-        // Lower arguments — apply implicit by-ref for large values
+        // Lower arguments
         var args = new List<Value>();
-        IrFunctionPtr? fpType = funcPtrVal.IrType as IrFunctionPtr;
         foreach (var arg in call.Arguments)
-        {
-            var argVal = LowerExpression(arg);
-            // Materialize large value args as pointers to match the transformed function pointer type
-            if (IsLargeValue(argVal.IrType) && argVal.IrType is not IrPointer)
-            {
-                var argIrType = argVal.IrType ?? TypeLayoutService.IrVoidPrim;
-                var temp = new LocalValue($"ifc_tmp_{_tempCounter++}", new IrPointer(argIrType));
-                _currentBlock.Instructions.Add(new AllocaInstruction(_currentSpan, argIrType.Size, temp));
-                _currentBlock.Instructions.Add(new StorePointerInstruction(_currentSpan, temp, argVal));
-                args.Add(temp);
-            }
-            else
-            {
-                args.Add(argVal);
-            }
-        }
+            args.Add(LowerExpression(arg));
 
-        // Return slot for large return types
-        if (IsLargeValue(retIrType))
-        {
-            var retSlot = new LocalValue($"retslot_{_tempCounter++}", new IrPointer(retIrType));
-            _currentBlock.Instructions.Add(new AllocaInstruction(_currentSpan, retIrType.Size, retSlot));
-            args.Insert(0, retSlot);
-
-            var voidResult = new LocalValue($"call_{_tempCounter++}", TypeLayoutService.IrVoidPrim);
-            _currentBlock.Instructions.Add(new IndirectCallInstruction(_currentSpan, funcPtrVal, args, voidResult));
-
-            var loaded = new LocalValue($"retload_{_tempCounter++}", retIrType);
-            _currentBlock.Instructions.Add(new LoadInstruction(_currentSpan, retSlot, loaded));
-            return loaded;
-        }
-
-        var result = new LocalValue($"call_{_tempCounter++}", retIrType);
-        _currentBlock.Instructions.Add(new IndirectCallInstruction(_currentSpan, funcPtrVal, args, result));
-        return result;
+        return _currentBlock.EmitIndirectCall(funcPtrVal, args, retIrType);
     }
 
     /// <summary>
@@ -2429,15 +2162,9 @@ public class HmAstLowering
         {
             // Load from local pointer if it's stored as a pointer
             if (localPtr.IrType is IrPointer { Pointee: IrFunctionPtr } ptrToFn)
-            {
-                var loadResult = new LocalValue($"fptr_load_{_tempCounter++}", ptrToFn.Pointee);
-                _currentBlock.Instructions.Add(new LoadInstruction(_currentSpan, localPtr, loadResult));
-                funcPtrVal = loadResult;
-            }
+                funcPtrVal = _currentBlock.EmitLoad(localPtr, ptrToFn.Pointee);
             else
-            {
                 funcPtrVal = localPtr;
-            }
         }
         else
         {
@@ -2445,43 +2172,12 @@ public class HmAstLowering
             funcPtrVal = new LocalValue(call.FunctionName, retIrType);
         }
 
-        // Lower arguments — apply implicit by-ref for large values
+        // Lower arguments
         var args = new List<Value>();
         foreach (var arg in call.Arguments)
-        {
-            var argVal = LowerExpression(arg);
-            if (IsLargeValue(argVal.IrType) && argVal.IrType is not IrPointer)
-            {
-                var argIrType = argVal.IrType ?? TypeLayoutService.IrVoidPrim;
-                var temp = new LocalValue($"ivc_tmp_{_tempCounter++}", new IrPointer(argIrType));
-                _currentBlock.Instructions.Add(new AllocaInstruction(_currentSpan, argIrType.Size, temp));
-                _currentBlock.Instructions.Add(new StorePointerInstruction(_currentSpan, temp, argVal));
-                args.Add(temp);
-            }
-            else
-            {
-                args.Add(argVal);
-            }
-        }
+            args.Add(LowerExpression(arg));
 
-        // Return slot for large return types
-        if (IsLargeValue(retIrType))
-        {
-            var retSlot = new LocalValue($"retslot_{_tempCounter++}", new IrPointer(retIrType));
-            _currentBlock.Instructions.Add(new AllocaInstruction(_currentSpan, retIrType.Size, retSlot));
-            args.Insert(0, retSlot);
-
-            var voidResult = new LocalValue($"call_{_tempCounter++}", TypeLayoutService.IrVoidPrim);
-            _currentBlock.Instructions.Add(new IndirectCallInstruction(_currentSpan, funcPtrVal, args, voidResult));
-
-            var loaded = new LocalValue($"retload_{_tempCounter++}", retIrType);
-            _currentBlock.Instructions.Add(new LoadInstruction(_currentSpan, retSlot, loaded));
-            return loaded;
-        }
-
-        var result = new LocalValue($"call_{_tempCounter++}", retIrType);
-        _currentBlock.Instructions.Add(new IndirectCallInstruction(_currentSpan, funcPtrVal, args, result));
-        return result;
+        return _currentBlock.EmitIndirectCall(funcPtrVal, args, retIrType);
     }
 
     private Value LowerShortCircuitLogical(BinaryExpressionNode binary)
@@ -2490,12 +2186,11 @@ public class HmAstLowering
         var left = LowerExpression(binary.Left);
 
         // Allocate result on stack
-        var resultPtr = new LocalValue($"logic_result_{_tempCounter++}", new IrPointer(TypeLayoutService.IrBool));
-        _currentBlock.Instructions.Add(new AllocaInstruction(_currentSpan, TypeLayoutService.IrBool.Size, resultPtr));
+        var resultPtr = _currentBlock.EmitAlloca(TypeLayoutService.IrBool);
 
         // Store short-circuit default: false for 'and', true for 'or'
         var defaultVal = new IntConstantValue(isAnd ? 0 : 1, TypeLayoutService.IrBool);
-        _currentBlock.Instructions.Add(new StorePointerInstruction(_currentSpan, resultPtr, defaultVal));
+        _currentBlock.EmitStorePtr(resultPtr, defaultVal);
 
         var rhsBlock = CreateBlock(isAnd ? "and_rhs" : "or_rhs");
         var mergeBlock = CreateBlock(isAnd ? "and_merge" : "or_merge");
@@ -2503,23 +2198,19 @@ public class HmAstLowering
         // For 'and': if LHS is true, evaluate RHS; else skip (result stays false)
         // For 'or':  if LHS is false, evaluate RHS; else skip (result stays true)
         if (isAnd)
-            _currentBlock.Instructions.Add(new BranchInstruction(_currentSpan, left, rhsBlock, mergeBlock));
+            _currentBlock.EmitBranch(left, rhsBlock, mergeBlock);
         else
-            _currentBlock.Instructions.Add(new BranchInstruction(_currentSpan, left, mergeBlock, rhsBlock));
+            _currentBlock.EmitBranch(left, mergeBlock, rhsBlock);
 
         // RHS block: evaluate right side and store
-        _currentFunction.BasicBlocks.Add(rhsBlock);
         _currentBlock = rhsBlock;
         var right = LowerExpression(binary.Right);
-        _currentBlock.Instructions.Add(new StorePointerInstruction(_currentSpan, resultPtr, right));
-        _currentBlock.Instructions.Add(new JumpInstruction(_currentSpan, mergeBlock));
+        _currentBlock.EmitStorePtr(resultPtr, right);
+        _currentBlock.EmitJump(mergeBlock);
 
         // Merge block: load and return result
-        _currentFunction.BasicBlocks.Add(mergeBlock);
         _currentBlock = mergeBlock;
-        var result = new LocalValue($"logic_val_{_tempCounter++}", TypeLayoutService.IrBool);
-        _currentBlock.Instructions.Add(new LoadInstruction(_currentSpan, resultPtr, result));
-        return result;
+        return _currentBlock.EmitLoad(resultPtr, TypeLayoutService.IrBool);
     }
 
     private Value LowerBinary(BinaryExpressionNode binary)
@@ -2534,9 +2225,7 @@ public class HmAstLowering
         var irType = GetIrType(binary);
 
         var op = MapBinaryOp(binary.Operator);
-        var result = new LocalValue($"t{_tempCounter++}", irType);
-        _currentBlock.Instructions.Add(new BinaryInstruction(_currentSpan, op, left, right, result));
-        return result;
+        return _currentBlock.EmitBinary(op, left, right, irType);
     }
 
     /// <summary>
@@ -2570,9 +2259,8 @@ public class HmAstLowering
             if (calleeIrParamTypes[i] is IrPointer && args[i].IrType is not IrPointer)
             {
                 var argIrType = args[i].IrType ?? TypeLayoutService.IrVoidPrim;
-                var temp = new LocalValue($"op_tmp_{_tempCounter++}", new IrPointer(argIrType));
-                _currentBlock.Instructions.Add(new AllocaInstruction(_currentSpan, argIrType.Size, temp));
-                _currentBlock.Instructions.Add(new StorePointerInstruction(_currentSpan, temp, args[i]));
+                var temp = _currentBlock.EmitAlloca(argIrType);
+                _currentBlock.EmitStorePtr(temp, args[i]);
                 args[i] = temp;
             }
         }
@@ -2582,36 +2270,18 @@ public class HmAstLowering
         var callRetIrType = _layout.Lower(fnHmType.ReturnType);
 
         var isForeignOp = (fn.Modifiers & FunctionModifiers.Foreign) != 0;
-        Value callResult;
-        if (!isForeignOp)
-        {
-            callResult = EmitFLangCall(fn.Name, args, callRetIrType, calleeIrParamTypes);
-        }
-        else
-        {
-            var opResult = new LocalValue($"op_{_tempCounter++}", callRetIrType);
-            var callInst = new CallInstruction(_currentSpan, fn.Name, args, opResult);
-            callInst.IsForeignCall = true;
-            if (calleeIrParamTypes.Count > 0)
-                callInst.CalleeIrParamTypes = calleeIrParamTypes;
-            _currentBlock.Instructions.Add(callInst);
-            callResult = opResult;
-        }
+        var callResult = _currentBlock.EmitCall(fn.Name, args, callRetIrType, calleeIrParamTypes,
+            isForeign: isForeignOp);
 
         // Auto-derived op_eq/op_ne: negate the complement's result
         if (resolved.NegateResult)
-        {
-            var negResult = new LocalValue($"not_{_tempCounter++}", callRetIrType);
-            _currentBlock.Instructions.Add(new UnaryInstruction(_currentSpan, UnaryOp.Not, callResult, negResult));
-            return negResult;
-        }
+            return _currentBlock.EmitUnary(UnaryOp.Not, callResult, callRetIrType);
 
         // Auto-derived from op_cmp: extract tag from Ord enum, compare against 0
         if (resolved.CmpDerivedOperator is { } cmpOp)
         {
-            var ordPtr = new LocalValue($"ord_ptr_{_tempCounter++}", new IrPointer(callRetIrType));
-            _currentBlock.Instructions.Add(new AllocaInstruction(_currentSpan, callRetIrType.Size, ordPtr));
-            _currentBlock.Instructions.Add(new StorePointerInstruction(_currentSpan, ordPtr, callResult));
+            var ordPtr = _currentBlock.EmitAlloca(callRetIrType);
+            _currentBlock.EmitStorePtr(ordPtr, callResult);
 
             var tagValue = EmitLoadFromOffset(ordPtr, 0, TypeLayoutService.IrI32, "ord_tag");
 
@@ -2627,9 +2297,7 @@ public class HmAstLowering
             };
 
             var zero = new IntConstantValue(0, TypeLayoutService.IrI32);
-            var cmpResult = new LocalValue($"cmp_{_tempCounter++}", TypeLayoutService.IrBool);
-            _currentBlock.Instructions.Add(new BinaryInstruction(_currentSpan, irOp, tagValue, zero, cmpResult));
-            return cmpResult;
+            return _currentBlock.EmitBinary(irOp, tagValue, zero, TypeLayoutService.IrBool);
         }
 
         return callResult;
@@ -2652,9 +2320,7 @@ public class HmAstLowering
             _ => UnaryOp.Negate
         };
 
-        var unaryResult = new LocalValue($"t{_tempCounter++}", irType);
-        _currentBlock.Instructions.Add(new UnaryInstruction(_currentSpan, op, operand, unaryResult));
-        return unaryResult;
+        return _currentBlock.EmitUnary(op, operand, irType);
     }
 
     private Value LowerMemberAccess(MemberAccessExpressionNode member)
@@ -2683,9 +2349,7 @@ public class HmAstLowering
             if (fieldName == "ptr")
             {
                 var elemPtrType = new IrPointer(arrayIr.Element);
-                var castResult = new LocalValue($"array_ptr_{_tempCounter++}", elemPtrType);
-                _currentBlock.Instructions.Add(new CastInstruction(_currentSpan, targetVal, castResult));
-                return castResult;
+                return _currentBlock.EmitCast(targetVal, elemPtrType);
             }
         }
 
@@ -2705,9 +2369,7 @@ public class HmAstLowering
                     baseIrType = ptrType.Pointee;
                     break;
                 }
-                var derefResult = new LocalValue($"autoderef_{_tempCounter++}", ptrType.Pointee);
-                _currentBlock.Instructions.Add(new LoadInstruction(_currentSpan, baseVal, derefResult));
-                baseVal = derefResult;
+                baseVal = _currentBlock.EmitLoad(baseVal, ptrType.Pointee);
                 baseIrType = ptrType.Pointee;
             }
         }
@@ -2719,16 +2381,12 @@ public class HmAstLowering
             if (fieldName == "has_value")
             {
                 var nullVal = new IntConstantValue(0, nichePtr);
-                var cmpResult = new LocalValue($"niche_hv_{_tempCounter++}", TypeLayoutService.IrBool);
-                _currentBlock.Instructions.Add(new BinaryInstruction(_currentSpan, BinaryOp.NotEqual, baseVal, nullVal, cmpResult));
-                return cmpResult;
+                return _currentBlock.EmitBinary(BinaryOp.NotEqual, baseVal, nullVal, TypeLayoutService.IrBool);
             }
             if (fieldName == "value")
             {
                 var stripped = StripNullable(nichePtr);
-                var castResult = new LocalValue($"niche_val_{_tempCounter++}", stripped);
-                _currentBlock.Instructions.Add(new CastInstruction(_currentSpan, baseVal, castResult));
-                return castResult;
+                return _currentBlock.EmitCast(baseVal, stripped);
             }
         }
 
@@ -2776,9 +2434,8 @@ public class HmAstLowering
             }
             else
             {
-                var tmpPtr = new LocalValue($"field_tmp_{_tempCounter++}", new IrPointer(baseIrType));
-                _currentBlock.Instructions.Add(new AllocaInstruction(_currentSpan, baseIrType.Size, tmpPtr));
-                _currentBlock.Instructions.Add(new StorePointerInstruction(_currentSpan, tmpPtr, baseVal));
+                var tmpPtr = _currentBlock.EmitAlloca(baseIrType);
+                _currentBlock.EmitStorePtr(tmpPtr, baseVal);
                 baseVal = tmpPtr;
             }
         }
@@ -2819,16 +2476,13 @@ public class HmAstLowering
                 if (hmSrcType is Core.Types.ArrayType arrHm)
                     length = arrHm.Length;
 
-                var tmpPtr = new LocalValue($"slice_{_tempCounter++}", new IrPointer(sliceTarget));
-                _currentBlock.Instructions.Add(new AllocaInstruction(_currentSpan, sliceTarget.Size, tmpPtr));
+                var tmpPtr = _currentBlock.EmitAlloca(sliceTarget);
 
                 EmitStoreToOffset(tmpPtr, ptrField.ByteOffset, srcVal, ptrField.Type);
                 EmitStoreToOffset(tmpPtr, lenField.ByteOffset,
                     new IntConstantValue(length, TypeLayoutService.IrUSize), lenField.Type);
 
-                var loaded = new LocalValue($"slice_val_{_tempCounter++}", sliceTarget);
-                _currentBlock.Instructions.Add(new LoadInstruction(_currentSpan, tmpPtr, loaded));
-                return loaded;
+                return _currentBlock.EmitLoad(tmpPtr, sliceTarget);
             }
         }
 
@@ -2837,9 +2491,7 @@ public class HmAstLowering
             return new IntConstantValue(constSrc.IntValue, targetIrType);
 
         // Emit cast instruction — pass null! for TypeBase, codegen uses IrType
-        var result = new LocalValue($"cast_{_tempCounter++}", targetIrType);
-        _currentBlock.Instructions.Add(new CastInstruction(_currentSpan, srcVal, result));
-        return result;
+        return _currentBlock.EmitCast(srcVal, targetIrType);
     }
 
     private Value LowerBlock(BlockExpressionNode block)
@@ -2867,50 +2519,32 @@ public class HmAstLowering
         // Phi-via-alloca: allocate result slot if non-void
         Value? resultPtr = null;
         if (!isVoid)
-        {
-            resultPtr = new LocalValue($"if_result_{_tempCounter++}", new IrPointer(resultIrType));
-            _currentBlock.Instructions.Add(new AllocaInstruction(_currentSpan, resultIrType.Size, resultPtr));
-        }
+            resultPtr = _currentBlock.EmitAlloca(resultIrType);
 
-        _currentBlock.Instructions.Add(new BranchInstruction(_currentSpan, condVal, thenBlock, elseBlock));
+        _currentBlock.EmitBranch(condVal, thenBlock, elseBlock);
 
         // Then branch
-        _currentFunction.BasicBlocks.Add(thenBlock);
         _currentBlock = thenBlock;
         var thenVal = LowerExpression(ifExpr.ThenBranch, isVoid ? null : resultIrType);
         if (!isVoid && resultPtr != null)
-            _currentBlock.Instructions.Add(new StorePointerInstruction(_currentSpan, resultPtr, thenVal));
-        if (_currentBlock.Instructions.Count == 0 ||
-            _currentBlock.Instructions[^1] is not (ReturnInstruction or JumpInstruction or BranchInstruction))
-        {
-            _currentBlock.Instructions.Add(new JumpInstruction(_currentSpan, mergeBlock));
-        }
+            _currentBlock.EmitStorePtr(resultPtr, thenVal);
+        _currentBlock.EmitJumpIfNotTerminated(mergeBlock);
 
         // Else branch
-        _currentFunction.BasicBlocks.Add(elseBlock);
         _currentBlock = elseBlock;
         if (ifExpr.ElseBranch != null)
         {
             var elseVal = LowerExpression(ifExpr.ElseBranch, isVoid ? null : resultIrType);
             if (!isVoid && resultPtr != null)
-                _currentBlock.Instructions.Add(new StorePointerInstruction(_currentSpan, resultPtr, elseVal));
+                _currentBlock.EmitStorePtr(resultPtr, elseVal);
         }
-        if (_currentBlock.Instructions.Count == 0 ||
-            _currentBlock.Instructions[^1] is not (ReturnInstruction or JumpInstruction or BranchInstruction))
-        {
-            _currentBlock.Instructions.Add(new JumpInstruction(_currentSpan, mergeBlock));
-        }
+        _currentBlock.EmitJumpIfNotTerminated(mergeBlock);
 
         // Merge
-        _currentFunction.BasicBlocks.Add(mergeBlock);
         _currentBlock = mergeBlock;
 
         if (!isVoid && resultPtr != null)
-        {
-            var loaded = new LocalValue($"if_val_{_tempCounter++}", resultIrType);
-            _currentBlock.Instructions.Add(new LoadInstruction(_currentSpan, resultPtr, loaded));
-            return loaded;
-        }
+            return _currentBlock.EmitLoad(resultPtr, resultIrType);
 
         return new IntConstantValue(0, TypeLayoutService.IrVoidPrim);
     }
@@ -2956,12 +2590,8 @@ public class HmAstLowering
             }
 
             var elementSize = new IntConstantValue(elemIrType.Size, TypeLayoutService.IrUSize);
-            var byteOffset = new LocalValue($"idx_offset_{_tempCounter++}", TypeLayoutService.IrUSize);
-            _currentBlock.Instructions.Add(new BinaryInstruction(_currentSpan, BinaryOp.Multiply, idxVal, elementSize, byteOffset));
-
-            var elemPtr = new LocalValue($"addr_{_tempCounter++}", new IrPointer(elemIrType));
-            _currentBlock.Instructions.Add(new GetElementPtrInstruction(_currentSpan, basePtr, byteOffset, elemPtr));
-            return elemPtr;
+            var byteOffset = _currentBlock.EmitBinary(BinaryOp.Multiply, idxVal, elementSize, TypeLayoutService.IrUSize);
+            return _currentBlock.EmitGEP(basePtr, byteOffset, elemIrType);
         }
 
         // Temporary promotion: if target is a call result, materialize on the stack
@@ -2970,30 +2600,22 @@ public class HmAstLowering
         {
             var targetVal = LowerExpression(addrOf.Target);
             var valType = targetVal.IrType ?? TypeLayoutService.IrVoidPrim;
-            var temp = new LocalValue($"addrof_tmp_{_tempCounter++}", new IrPointer(valType));
-            _currentBlock.Instructions.Add(new AllocaInstruction(_currentSpan, valType.Size, temp));
-            _currentBlock.Instructions.Add(new StorePointerInstruction(_currentSpan, temp, targetVal));
+            var temp = _currentBlock.EmitAlloca(valType);
+            _currentBlock.EmitStorePtr(temp, targetVal);
             return temp;
         }
 
         // General case: emit AddressOfInstruction
         var targetVal2 = LowerExpression(addrOf.Target);
         var irType = GetIrType(addrOf);
-
-        var result = new LocalValue($"addr_{_tempCounter++}", irType);
-        _currentBlock.Instructions.Add(new AddressOfInstruction(_currentSpan, targetVal2.Name, result));
-        return result;
+        return _currentBlock.EmitAddressOf(targetVal2.Name, irType is IrPointer ptr2 ? ptr2.Pointee : irType);
     }
 
     private LocalValue LowerDereference(DereferenceExpressionNode deref)
     {
         var targetVal = LowerExpression(deref.Target);
-
         var irType = GetIrType(deref);
-
-        var result = new LocalValue($"deref_{_tempCounter++}", irType);
-        _currentBlock.Instructions.Add(new LoadInstruction(_currentSpan, targetVal, result));
-        return result;
+        return _currentBlock.EmitLoad(targetVal, irType);
     }
 
     private IntConstantValue LowerAssignment(AssignmentExpressionNode assign)
@@ -3012,7 +2634,7 @@ public class HmAstLowering
         var val = LowerExpression(assign.Value, expectedType);
 
         if (ptr != null)
-            _currentBlock.Instructions.Add(new StorePointerInstruction(_currentSpan, ptr, val));
+            _currentBlock.EmitStorePtr(ptr, val);
 
         return new IntConstantValue(0, TypeLayoutService.IrVoidPrim);
     }
@@ -3033,9 +2655,8 @@ public class HmAstLowering
             if (baseVal.IrType is not IrPointer)
             {
                 var baseIrType = baseVal.IrType ?? TypeLayoutService.IrVoidPrim;
-                var temp = new LocalValue($"setidx_tmp_{_tempCounter++}", new IrPointer(baseIrType));
-                _currentBlock.Instructions.Add(new AllocaInstruction(_currentSpan, baseIrType.Size, temp));
-                _currentBlock.Instructions.Add(new StorePointerInstruction(_currentSpan, temp, baseVal));
+                var temp = _currentBlock.EmitAlloca(baseIrType);
+                _currentBlock.EmitStorePtr(temp, baseVal);
                 baseVal = temp;
             }
         }
@@ -3048,7 +2669,7 @@ public class HmAstLowering
         foreach (var param in resolved.Function.Parameters)
             calleeIrParamTypes.Add(GetIrType(param));
 
-        EmitFLangCall(resolved.Function.Name, [baseVal, indexVal, val], TypeLayoutService.IrVoidPrim, calleeIrParamTypes);
+        _currentBlock.EmitCall(resolved.Function.Name, [baseVal, indexVal, val], TypeLayoutService.IrVoidPrim, calleeIrParamTypes);
         return new IntConstantValue(0, TypeLayoutService.IrVoidPrim);
     }
 
@@ -3095,15 +2716,12 @@ public class HmAstLowering
     private LocalValue EmitStructConstruction(IrStruct structIrType,
         IReadOnlyList<(string FieldName, ExpressionNode Value)> fields, SourceSpan span)
     {
-        var resultPtr = new LocalValue($"struct_{_tempCounter++}", new IrPointer(structIrType));
-        _currentBlock.Instructions.Add(new AllocaInstruction(_currentSpan, structIrType.Size, resultPtr));
+        var resultPtr = _currentBlock.EmitAlloca(structIrType);
 
         // Zero-initialize the struct so unspecified fields get default values
-        var memsetResult = new LocalValue($"memset_{_tempCounter++}", TypeLayoutService.IrVoidPrim);
-        _currentBlock.Instructions.Add(new CallInstruction(_currentSpan, "memset",
+        _currentBlock.EmitCall("memset",
             [resultPtr, new IntConstantValue(0, TypeLayoutService.IrI32), new IntConstantValue(structIrType.Size, TypeLayoutService.IrUSize)],
-            memsetResult)
-        { IsForeignCall = true });
+            TypeLayoutService.IrVoidPrim, calleeParamTypes: null, isForeign: true);
 
         foreach (var (fieldName, fieldExpr) in fields)
         {
@@ -3113,10 +2731,7 @@ public class HmAstLowering
             EmitStoreToOffset(resultPtr, irField.ByteOffset, fieldVal, irField.Type);
         }
 
-        // Load the complete struct value
-        var loaded = new LocalValue($"struct_val_{_tempCounter++}", structIrType);
-        _currentBlock.Instructions.Add(new LoadInstruction(_currentSpan, resultPtr, loaded));
-        return loaded;
+        return _currentBlock.EmitLoad(resultPtr, structIrType);
     }
 
     /// <summary>
@@ -3124,15 +2739,12 @@ public class HmAstLowering
     /// </summary>
     private LocalValue BuildStruct(IrStruct structType, Dictionary<string, Value> fieldValues)
     {
-        var resultPtr = new LocalValue($"struct_{_tempCounter++}", new IrPointer(structType));
-        _currentBlock.Instructions.Add(new AllocaInstruction(_currentSpan, structType.Size, resultPtr));
+        var resultPtr = _currentBlock.EmitAlloca(structType);
 
         // Zero-initialize the struct so unspecified fields get default values
-        var memsetResult = new LocalValue($"memset_{_tempCounter++}", TypeLayoutService.IrVoidPrim);
-        _currentBlock.Instructions.Add(new CallInstruction(_currentSpan, "memset",
+        _currentBlock.EmitCall("memset",
             [resultPtr, new IntConstantValue(0, TypeLayoutService.IrI32), new IntConstantValue(structType.Size, TypeLayoutService.IrUSize)],
-            memsetResult)
-        { IsForeignCall = true });
+            TypeLayoutService.IrVoidPrim, calleeParamTypes: null, isForeign: true);
 
         foreach (var field in structType.Fields)
         {
@@ -3140,9 +2752,7 @@ public class HmAstLowering
             EmitStoreToOffset(resultPtr, field.ByteOffset, val, field.Type);
         }
 
-        var loaded = new LocalValue($"struct_val_{_tempCounter++}", structType);
-        _currentBlock.Instructions.Add(new LoadInstruction(_currentSpan, resultPtr, loaded));
-        return loaded;
+        return _currentBlock.EmitLoad(resultPtr, structType);
     }
 
     private LocalValue LowerArrayLiteral(ArrayLiteralExpressionNode arrLit)
@@ -3154,9 +2764,7 @@ public class HmAstLowering
                 $"Array literal target is not an array type: `{irType}`", arrLit.Span);
 
         var elementIrType = arrayIrType.Element;
-        var allocaResult = new LocalValue($"arr_{_tempCounter++}", new IrPointer(irType));
-        _currentBlock.Instructions.Add(new AllocaInstruction(_currentSpan, irType.Size, allocaResult)
-        { IsArrayStorage = true });
+        var allocaResult = _currentBlock.EmitAlloca(irType, isArrayStorage: true);
 
         if (arrLit.IsRepeatSyntax && arrLit.RepeatValue != null && arrLit.RepeatCountExpression != null)
         {
@@ -3187,12 +2795,10 @@ public class HmAstLowering
 
             if (useMemset)
             {
-                var voidResult = new LocalValue($"memset_{_tempCounter++}", TypeLayoutService.IrVoidPrim);
-                _currentBlock.Instructions.Add(new CallInstruction(_currentSpan, "memset",
+                _currentBlock.EmitCall("memset",
                     [allocaResult, new IntConstantValue(memsetByte, TypeLayoutService.IrI32),
                      new IntConstantValue(totalSize, TypeLayoutService.IrUSize)],
-                    voidResult)
-                { IsForeignCall = true });
+                    TypeLayoutService.IrVoidPrim, calleeParamTypes: null, isForeign: true);
             }
             else
             {
@@ -3205,14 +2811,10 @@ public class HmAstLowering
                     while (filled < count)
                     {
                         var chunk = Math.Min(filled, count - filled);
-                        var destPtr = new LocalValue($"arr_fill_ptr_{_tempCounter++}", new IrPointer(elementIrType));
-                        _currentBlock.Instructions.Add(
-                            new GetElementPtrInstruction(_currentSpan, allocaResult, filled * elemSize, destPtr));
-                        var voidResult = new LocalValue($"memcpy_{_tempCounter++}", TypeLayoutService.IrVoidPrim);
-                        _currentBlock.Instructions.Add(new CallInstruction(_currentSpan, "memcpy",
+                        var destPtr = _currentBlock.EmitGEP(allocaResult, filled * elemSize, elementIrType);
+                        _currentBlock.EmitCall("memcpy",
                             [destPtr, allocaResult, new IntConstantValue(chunk * elemSize, TypeLayoutService.IrUSize)],
-                            voidResult)
-                        { IsForeignCall = true });
+                            TypeLayoutService.IrVoidPrim, calleeParamTypes: null, isForeign: true);
                         filled += chunk;
                     }
                 }
@@ -3253,17 +2855,16 @@ public class HmAstLowering
             // or if it's a large value type (implicit by-ref)
             var firstParamIsPtr = calleeIrParamTypes.Count > 0 && calleeIrParamTypes[0] is IrPointer;
             var firstParamNeedsByRef = firstParamIsPtr ||
-                (calleeIrParamTypes.Count > 0 && IsLargeValue(calleeIrParamTypes[0]));
+                (calleeIrParamTypes.Count > 0 && TypeLayoutService.IsLargeValue(calleeIrParamTypes[0]));
             if (firstParamNeedsByRef && baseVal.IrType is not IrPointer)
             {
                 var baseIrType = baseVal.IrType ?? TypeLayoutService.IrVoidPrim;
-                var temp = new LocalValue($"idx_tmp_{_tempCounter++}", new IrPointer(baseIrType));
-                _currentBlock.Instructions.Add(new AllocaInstruction(_currentSpan, baseIrType.Size, temp));
-                _currentBlock.Instructions.Add(new StorePointerInstruction(_currentSpan, temp, baseVal));
+                var temp = _currentBlock.EmitAlloca(baseIrType);
+                _currentBlock.EmitStorePtr(temp, baseVal);
                 baseVal = temp;
             }
 
-            return EmitFLangCall(resolved.Function.Name, [baseVal, indexVal], retIrType, calleeIrParamTypes);
+            return _currentBlock.EmitCall(resolved.Function.Name, [baseVal, indexVal], retIrType, calleeIrParamTypes);
         }
 
         // Built-in array/slice indexing
@@ -3318,8 +2919,7 @@ public class HmAstLowering
 
         // Scalar indexing: compute element pointer via GEP
         var elementSize = new IntConstantValue(resultIrType.Size, TypeLayoutService.IrUSize);
-        var byteOffset = new LocalValue($"idx_offset_{_tempCounter++}", TypeLayoutService.IrUSize);
-        _currentBlock.Instructions.Add(new BinaryInstruction(_currentSpan, BinaryOp.Multiply, idxVal, elementSize, byteOffset));
+        var byteOffset = _currentBlock.EmitBinary(BinaryOp.Multiply, idxVal, elementSize, TypeLayoutService.IrUSize);
 
         var loaded = EmitLoadFromOffset(basePtr, byteOffset, resultIrType, "elem");
         return loaded;
@@ -3335,9 +2935,8 @@ public class HmAstLowering
         var endField = FindField(rangeStruct, "end");
 
         // Spill range to alloca for field access
-        var rangePtr = new LocalValue($"rng_ptr_{_tempCounter++}", new IrPointer(rangeStruct));
-        _currentBlock.Instructions.Add(new AllocaInstruction(_currentSpan, rangeStruct.Size, rangePtr));
-        _currentBlock.Instructions.Add(new StorePointerInstruction(_currentSpan, rangePtr, rangeVal));
+        var rangePtr = _currentBlock.EmitAlloca(rangeStruct);
+        _currentBlock.EmitStorePtr(rangePtr, rangeVal);
 
         var startVal = EmitLoadFromOffset(rangePtr, startField.ByteOffset, startField.Type, "rng_start");
         var endVal = EmitLoadFromOffset(rangePtr, endField.ByteOffset, endField.Type, "rng_end");
@@ -3348,9 +2947,8 @@ public class HmAstLowering
         {
             // Slice: extract .ptr field
             var ptrField = FindField(baseStruct, "ptr");
-            var baseSpill = new LocalValue($"base_ptr_{_tempCounter++}", new IrPointer(baseStruct));
-            _currentBlock.Instructions.Add(new AllocaInstruction(_currentSpan, baseStruct.Size, baseSpill));
-            _currentBlock.Instructions.Add(new StorePointerInstruction(_currentSpan, baseSpill, baseVal));
+            var baseSpill = _currentBlock.EmitAlloca(baseStruct);
+            _currentBlock.EmitStorePtr(baseSpill, baseVal);
             basePtrVal = EmitLoadFromOffset(baseSpill, ptrField.ByteOffset, ptrField.Type, "base_raw_ptr");
         }
         else
@@ -3359,14 +2957,10 @@ public class HmAstLowering
         }
 
         // Compute new_ptr = base_ptr + start (byte offset, element is u8-sized for slices)
-        var newPtr = new LocalValue($"slice_ptr_{_tempCounter++}", basePtrVal.IrType!);
-        _currentBlock.Instructions.Add(new BinaryInstruction(_currentSpan, BinaryOp.Add,
-            basePtrVal, startVal, newPtr));
+        var newPtr = _currentBlock.EmitBinary(BinaryOp.Add, basePtrVal, startVal, basePtrVal.IrType!);
 
         // Compute new_len = end - start
-        var newLen = new LocalValue($"slice_len_{_tempCounter++}", TypeLayoutService.IrUSize);
-        _currentBlock.Instructions.Add(new BinaryInstruction(_currentSpan, BinaryOp.Subtract,
-            endVal, startVal, newLen));
+        var newLen = _currentBlock.EmitBinary(BinaryOp.Subtract, endVal, startVal, TypeLayoutService.IrUSize);
 
         // Construct slice struct: { ptr, len }
         if (resultIrType is IrStruct sliceStruct)
@@ -3392,11 +2986,9 @@ public class HmAstLowering
             var lenField = sliceStruct.Fields.FirstOrDefault(f => f.Name == "len");
             if (lenField.Type != null)
             {
-                var tmpPtr = new LocalValue($"slen_tmp_{_tempCounter++}", new IrPointer(sliceStruct));
-                _currentBlock.Instructions.Add(new AllocaInstruction(_currentSpan, sliceStruct.Size, tmpPtr));
-                _currentBlock.Instructions.Add(new StorePointerInstruction(_currentSpan, tmpPtr, sliceVal));
-                var lenVal = EmitLoadFromOffset(tmpPtr, lenField.ByteOffset, lenField.Type, "slen_val");
-                return lenVal;
+                var tmpPtr = _currentBlock.EmitAlloca(sliceStruct);
+                _currentBlock.EmitStorePtr(tmpPtr, sliceVal);
+                return EmitLoadFromOffset(tmpPtr, lenField.ByteOffset, lenField.Type, "slen_val");
             }
         }
         // Fallback: 0 (shouldn't happen for valid slice types)
@@ -3413,9 +3005,8 @@ public class HmAstLowering
         if (baseVal.IrType is IrStruct baseStruct && baseStruct.Name == WellKnown.Slice)
         {
             var ptrField = FindField(baseStruct, "ptr");
-            var baseSpill = new LocalValue($"base_ptr_{_tempCounter++}", new IrPointer(baseStruct));
-            _currentBlock.Instructions.Add(new AllocaInstruction(_currentSpan, baseStruct.Size, baseSpill));
-            _currentBlock.Instructions.Add(new StorePointerInstruction(_currentSpan, baseSpill, baseVal));
+            var baseSpill = _currentBlock.EmitAlloca(baseStruct);
+            _currentBlock.EmitStorePtr(baseSpill, baseVal);
             basePtrVal = EmitLoadFromOffset(baseSpill, ptrField.ByteOffset, ptrField.Type, "base_raw_ptr");
         }
         else
@@ -3424,14 +3015,10 @@ public class HmAstLowering
         }
 
         // Compute new_ptr = base_ptr + start
-        var newPtr = new LocalValue($"slice_ptr_{_tempCounter++}", basePtrVal.IrType!);
-        _currentBlock.Instructions.Add(new BinaryInstruction(_currentSpan, BinaryOp.Add,
-            basePtrVal, startVal, newPtr));
+        var newPtr = _currentBlock.EmitBinary(BinaryOp.Add, basePtrVal, startVal, basePtrVal.IrType!);
 
         // Compute new_len = end - start
-        var newLen = new LocalValue($"slice_len_{_tempCounter++}", TypeLayoutService.IrUSize);
-        _currentBlock.Instructions.Add(new BinaryInstruction(_currentSpan, BinaryOp.Subtract,
-            endVal, startVal, newLen));
+        var newLen = _currentBlock.EmitBinary(BinaryOp.Subtract, endVal, startVal, TypeLayoutService.IrUSize);
 
         // Construct slice struct: { ptr, len }
         if (resultIrType is IrStruct sliceStruct)
@@ -3455,8 +3042,7 @@ public class HmAstLowering
             throw new InternalCompilerError(
                 $"Range type is not a struct: `{rangeIrType}`", range.Span);
 
-        var resultPtr = new LocalValue($"range_{_tempCounter++}", new IrPointer(rangeStruct));
-        _currentBlock.Instructions.Add(new AllocaInstruction(_currentSpan, rangeStruct.Size, resultPtr));
+        var resultPtr = _currentBlock.EmitAlloca(rangeStruct);
 
         // Store start
         if (range.Start != null)
@@ -3474,9 +3060,7 @@ public class HmAstLowering
             EmitStoreToOffset(resultPtr, endField.ByteOffset, endVal, endField.Type);
         }
 
-        var loaded = new LocalValue($"range_val_{_tempCounter++}", rangeStruct);
-        _currentBlock.Instructions.Add(new LoadInstruction(_currentSpan, resultPtr, loaded));
-        return loaded;
+        return _currentBlock.EmitLoad(resultPtr, rangeStruct);
     }
 
     private Value LowerImplicitCoercion(ImplicitCoercionNode coercion)
@@ -3488,12 +3072,7 @@ public class HmAstLowering
         switch (coercion.Kind)
         {
             case CoercionKind.IntegerWidening:
-                {
-                    // Emit a cast instruction for widening
-                    var result = new LocalValue($"widen_{_tempCounter++}", targetIrType);
-                    _currentBlock.Instructions.Add(new CastInstruction(_currentSpan, innerVal, result));
-                    return result;
-                }
+                return _currentBlock.EmitCast(innerVal, targetIrType);
 
             case CoercionKind.ReinterpretCast:
                 {
@@ -3514,8 +3093,7 @@ public class HmAstLowering
                     // Wrap T -> Option(T): construct Option struct with has_value=true, value=inner
                     if (targetIrType is IrStruct optionStruct && optionStruct.Fields.Length >= 2)
                     {
-                        var resultPtr = new LocalValue($"wrap_{_tempCounter++}", new IrPointer(optionStruct));
-                        _currentBlock.Instructions.Add(new AllocaInstruction(_currentSpan, optionStruct.Size, resultPtr));
+                        var resultPtr = _currentBlock.EmitAlloca(optionStruct);
 
                         // Store has_value = true
                         var hvField = FindField(optionStruct, "has_value");
@@ -3526,9 +3104,7 @@ public class HmAstLowering
                         var valField = FindField(optionStruct, "value");
                         EmitStoreToOffset(resultPtr, valField.ByteOffset, innerVal, valField.Type);
 
-                        var loaded = new LocalValue($"wrap_val_{_tempCounter++}", optionStruct);
-                        _currentBlock.Instructions.Add(new LoadInstruction(_currentSpan, resultPtr, loaded));
-                        return loaded;
+                        return _currentBlock.EmitLoad(resultPtr, optionStruct);
                     }
 
                     // Fallback: just return inner with target type
@@ -3556,7 +3132,7 @@ public class HmAstLowering
             foreach (var param in resolved.Function.Parameters)
                 calleeIrParamTypes.Add(GetIrType(param));
 
-            return EmitFLangCall(resolved.Function.Name, [leftVal, rightVal], retIrType, calleeIrParamTypes);
+            return _currentBlock.EmitCall(resolved.Function.Name, [leftVal, rightVal], retIrType, calleeIrParamTypes);
         }
 
         // Inline Option[T] ?? T: if left.has_value then left.value else right
@@ -3583,9 +3159,8 @@ public class HmAstLowering
         }
         else
         {
-            leftPtr = new LocalValue($"coal_tmp_{_tempCounter++}", new IrPointer(optionStruct));
-            _currentBlock.Instructions.Add(new AllocaInstruction(_currentSpan, optionStruct.Size, leftPtr));
-            _currentBlock.Instructions.Add(new StorePointerInstruction(_currentSpan, leftPtr, leftOption));
+            leftPtr = _currentBlock.EmitAlloca(optionStruct);
+            _currentBlock.EmitStorePtr(leftPtr, leftOption);
         }
 
         // Load has_value
@@ -3593,17 +3168,15 @@ public class HmAstLowering
         var hvVal = EmitLoadFromOffset(leftPtr, hvField.ByteOffset, TypeLayoutService.IrBool, "coal_hv");
 
         // Alloca for result
-        var resultPtr = new LocalValue($"coal_result_{_tempCounter++}", new IrPointer(resultIrType));
-        _currentBlock.Instructions.Add(new AllocaInstruction(_currentSpan, resultIrType.Size, resultPtr));
+        var resultPtr = _currentBlock.EmitAlloca(resultIrType);
 
         var thenBlock = CreateBlock("coal_then");
         var elseBlock = CreateBlock("coal_else");
         var mergeBlock = CreateBlock("coal_merge");
 
-        _currentBlock.Instructions.Add(new BranchInstruction(_currentSpan, hvVal, thenBlock, elseBlock));
+        _currentBlock.EmitBranch(hvVal, thenBlock, elseBlock);
 
         // Then: left has value
-        _currentFunction.BasicBlocks.Add(thenBlock);
         _currentBlock = thenBlock;
 
         // Check if result is also Option (Option[T] ?? Option[T] -> Option[T])
@@ -3614,78 +3187,65 @@ public class HmAstLowering
         if (resultIsOption)
         {
             // Store entire left Option into result
-            var leftLoaded = new LocalValue($"coal_left_{_tempCounter++}", optionStruct);
-            _currentBlock.Instructions.Add(new LoadInstruction(_currentSpan, leftPtr, leftLoaded));
-            _currentBlock.Instructions.Add(new StorePointerInstruction(_currentSpan, resultPtr, leftLoaded));
+            var leftLoaded = _currentBlock.EmitLoad(leftPtr, optionStruct);
+            _currentBlock.EmitStorePtr(resultPtr, leftLoaded);
         }
         else
         {
             // Unwrap: store left.value into result
             var valField = FindField(optionStruct, "value");
             var valLoaded = EmitLoadFromOffset(leftPtr, valField.ByteOffset, valField.Type, "coal_val");
-            _currentBlock.Instructions.Add(new StorePointerInstruction(_currentSpan, resultPtr, valLoaded));
+            _currentBlock.EmitStorePtr(resultPtr, valLoaded);
         }
-        _currentBlock.Instructions.Add(new JumpInstruction(_currentSpan, mergeBlock));
+        _currentBlock.EmitJump(mergeBlock);
 
         // Else: right
-        _currentFunction.BasicBlocks.Add(elseBlock);
         _currentBlock = elseBlock;
         var rightVal2 = LowerExpression(coalesce.Right);
-        _currentBlock.Instructions.Add(new StorePointerInstruction(_currentSpan, resultPtr, rightVal2));
-        _currentBlock.Instructions.Add(new JumpInstruction(_currentSpan, mergeBlock));
+        _currentBlock.EmitStorePtr(resultPtr, rightVal2);
+        _currentBlock.EmitJump(mergeBlock);
 
         // Merge
-        _currentFunction.BasicBlocks.Add(mergeBlock);
         _currentBlock = mergeBlock;
-        var finalResult = new LocalValue($"coal_final_{_tempCounter++}", resultIrType);
-        _currentBlock.Instructions.Add(new LoadInstruction(_currentSpan, resultPtr, finalResult));
-        return finalResult;
+        return _currentBlock.EmitLoad(resultPtr, resultIrType);
     }
 
     private LocalValue LowerCoalesceNiche(CoalesceExpressionNode coalesce, Value leftOption, IrType resultIrType)
     {
         var nichePtr = (IrPointer)leftOption.IrType!;
         var nullVal = new IntConstantValue(0, nichePtr);
-        var isNonNull = new LocalValue($"coal_niche_{_tempCounter++}", TypeLayoutService.IrBool);
-        _currentBlock.Instructions.Add(new BinaryInstruction(_currentSpan, BinaryOp.NotEqual, leftOption, nullVal, isNonNull));
+        var isNonNull = _currentBlock.EmitBinary(BinaryOp.NotEqual, leftOption, nullVal, TypeLayoutService.IrBool);
 
-        var resultPtr = new LocalValue($"coal_result_{_tempCounter++}", new IrPointer(resultIrType));
-        _currentBlock.Instructions.Add(new AllocaInstruction(_currentSpan, resultIrType.Size, resultPtr));
+        var resultPtr = _currentBlock.EmitAlloca(resultIrType);
 
         var thenBlock = CreateBlock("coal_niche_then");
         var elseBlock = CreateBlock("coal_niche_else");
         var mergeBlock = CreateBlock("coal_niche_merge");
-        _currentBlock.Instructions.Add(new BranchInstruction(_currentSpan, isNonNull, thenBlock, elseBlock));
+        _currentBlock.EmitBranch(isNonNull, thenBlock, elseBlock);
 
         // Then: use the pointer (strip nullable if result is non-option)
-        _currentFunction.BasicBlocks.Add(thenBlock);
         _currentBlock = thenBlock;
         if (IsNicheOption(resultIrType))
         {
-            _currentBlock.Instructions.Add(new StorePointerInstruction(_currentSpan, resultPtr, leftOption));
+            _currentBlock.EmitStorePtr(resultPtr, leftOption);
         }
         else
         {
             var stripped = StripNullable(nichePtr);
-            var castResult = new LocalValue($"coal_strip_{_tempCounter++}", stripped);
-            _currentBlock.Instructions.Add(new CastInstruction(_currentSpan, leftOption, castResult));
-            _currentBlock.Instructions.Add(new StorePointerInstruction(_currentSpan, resultPtr, castResult));
+            var castResult = _currentBlock.EmitCast(leftOption, stripped);
+            _currentBlock.EmitStorePtr(resultPtr, castResult);
         }
-        _currentBlock.Instructions.Add(new JumpInstruction(_currentSpan, mergeBlock));
+        _currentBlock.EmitJump(mergeBlock);
 
         // Else: evaluate right
-        _currentFunction.BasicBlocks.Add(elseBlock);
         _currentBlock = elseBlock;
         var rightVal = LowerExpression(coalesce.Right);
-        _currentBlock.Instructions.Add(new StorePointerInstruction(_currentSpan, resultPtr, rightVal));
-        _currentBlock.Instructions.Add(new JumpInstruction(_currentSpan, mergeBlock));
+        _currentBlock.EmitStorePtr(resultPtr, rightVal);
+        _currentBlock.EmitJump(mergeBlock);
 
         // Merge
-        _currentFunction.BasicBlocks.Add(mergeBlock);
         _currentBlock = mergeBlock;
-        var finalResult = new LocalValue($"coal_niche_final_{_tempCounter++}", resultIrType);
-        _currentBlock.Instructions.Add(new LoadInstruction(_currentSpan, resultPtr, finalResult));
-        return finalResult;
+        return _currentBlock.EmitLoad(resultPtr, resultIrType);
     }
 
     private LocalValue LowerNullPropagation(NullPropagationExpressionNode nullProp)
@@ -3718,9 +3278,8 @@ public class HmAstLowering
         }
         else
         {
-            targetPtr = new LocalValue($"np_tmp_{_tempCounter++}", new IrPointer(optionStruct));
-            _currentBlock.Instructions.Add(new AllocaInstruction(_currentSpan, optionStruct.Size, targetPtr));
-            _currentBlock.Instructions.Add(new StorePointerInstruction(_currentSpan, targetPtr, targetVal));
+            targetPtr = _currentBlock.EmitAlloca(optionStruct);
+            _currentBlock.EmitStorePtr(targetPtr, targetVal);
         }
 
         // Load has_value field
@@ -3733,18 +3292,15 @@ public class HmAstLowering
         var mergeBlock = CreateBlock("np_merge");
 
         // Alloca for result
-        var resultPtr = new LocalValue($"np_result_{_tempCounter++}", new IrPointer(resultIrType));
-        _currentBlock.Instructions.Add(new AllocaInstruction(_currentSpan, resultIrType.Size, resultPtr));
-        _currentBlock.Instructions.Add(new BranchInstruction(_currentSpan, hvVal, thenBlock, elseBlock));
+        var resultPtr = _currentBlock.EmitAlloca(resultIrType);
+        _currentBlock.EmitBranch(hvVal, thenBlock, elseBlock);
 
         // Then: access target.value.field, wrap in new Option
-        _currentFunction.BasicBlocks.Add(thenBlock);
         _currentBlock = thenBlock;
 
         // GEP to value field
         var valField = FindField(optionStruct, "value");
-        var valPtr = new LocalValue($"np_val_ptr_{_tempCounter++}", new IrPointer(valField.Type));
-        _currentBlock.Instructions.Add(new GetElementPtrInstruction(_currentSpan, targetPtr, valField.ByteOffset, valPtr));
+        var valPtr = _currentBlock.EmitGEP(targetPtr, valField.ByteOffset, valField.Type);
 
         // Access the member on value
         var innerStruct = (IrStruct)valField.Type;
@@ -3754,9 +3310,7 @@ public class HmAstLowering
         // Wrap in Option if result is Option type
         if (resultIrType is IrStruct resultOptionStruct && resultOptionStruct.Fields.Length >= 2)
         {
-            var somePtr = new LocalValue($"np_some_{_tempCounter++}", new IrPointer(resultOptionStruct));
-            _currentBlock.Instructions.Add(
-                new AllocaInstruction(_currentSpan, resultOptionStruct.Size, somePtr));
+            var somePtr = _currentBlock.EmitAlloca(resultOptionStruct);
 
             var someHvField = FindField(resultOptionStruct, "has_value");
             EmitStoreToOffset(somePtr, someHvField.ByteOffset,
@@ -3765,64 +3319,52 @@ public class HmAstLowering
             var someValField = FindField(resultOptionStruct, "value");
             EmitStoreToOffset(somePtr, someValField.ByteOffset, memberVal, someValField.Type);
 
-            var someLoaded = new LocalValue($"np_some_val_{_tempCounter++}", resultOptionStruct);
-            _currentBlock.Instructions.Add(new LoadInstruction(_currentSpan, somePtr, someLoaded));
-            _currentBlock.Instructions.Add(new StorePointerInstruction(_currentSpan, resultPtr, someLoaded));
+            var someLoaded = _currentBlock.EmitLoad(somePtr, resultOptionStruct);
+            _currentBlock.EmitStorePtr(resultPtr, someLoaded);
         }
         else
         {
-            _currentBlock.Instructions.Add(new StorePointerInstruction(_currentSpan, resultPtr, memberVal));
+            _currentBlock.EmitStorePtr(resultPtr, memberVal);
         }
-        _currentBlock.Instructions.Add(new JumpInstruction(_currentSpan, mergeBlock));
+        _currentBlock.EmitJump(mergeBlock);
 
         // Else: return null Option
-        _currentFunction.BasicBlocks.Add(elseBlock);
         _currentBlock = elseBlock;
         if (resultIrType is IrStruct nullOptionStruct)
         {
-            var nullPtr = new LocalValue($"np_null_{_tempCounter++}", new IrPointer(nullOptionStruct));
-            _currentBlock.Instructions.Add(new AllocaInstruction(_currentSpan, nullOptionStruct.Size, nullPtr));
+            var nullPtr = _currentBlock.EmitAlloca(nullOptionStruct);
 
             var nullHvField = FindField(nullOptionStruct, "has_value");
             EmitStoreToOffset(nullPtr, nullHvField.ByteOffset,
                 new IntConstantValue(0, TypeLayoutService.IrBool), TypeLayoutService.IrBool);
 
-            var nullLoaded = new LocalValue($"np_null_val_{_tempCounter++}", nullOptionStruct);
-            _currentBlock.Instructions.Add(new LoadInstruction(_currentSpan, nullPtr, nullLoaded));
-            _currentBlock.Instructions.Add(new StorePointerInstruction(_currentSpan, resultPtr, nullLoaded));
+            var nullLoaded = _currentBlock.EmitLoad(nullPtr, nullOptionStruct);
+            _currentBlock.EmitStorePtr(resultPtr, nullLoaded);
         }
-        _currentBlock.Instructions.Add(new JumpInstruction(_currentSpan, mergeBlock));
+        _currentBlock.EmitJump(mergeBlock);
 
         // Merge
-        _currentFunction.BasicBlocks.Add(mergeBlock);
         _currentBlock = mergeBlock;
-
-        var finalResult = new LocalValue($"np_final_{_tempCounter++}", resultIrType);
-        _currentBlock.Instructions.Add(new LoadInstruction(_currentSpan, resultPtr, finalResult));
-        return finalResult;
+        return _currentBlock.EmitLoad(resultPtr, resultIrType);
     }
 
     private LocalValue LowerNullPropagationNiche(NullPropagationExpressionNode nullProp, Value targetVal, IrType resultIrType)
     {
         var nichePtr = (IrPointer)targetVal.IrType!;
         var nullVal = new IntConstantValue(0, nichePtr);
-        var isNonNull = new LocalValue($"np_niche_{_tempCounter++}", TypeLayoutService.IrBool);
-        _currentBlock.Instructions.Add(new BinaryInstruction(_currentSpan, BinaryOp.NotEqual, targetVal, nullVal, isNonNull));
+        var isNonNull = _currentBlock.EmitBinary(BinaryOp.NotEqual, targetVal, nullVal, TypeLayoutService.IrBool);
 
-        var resultPtr = new LocalValue($"np_result_{_tempCounter++}", new IrPointer(resultIrType));
-        _currentBlock.Instructions.Add(new AllocaInstruction(_currentSpan, resultIrType.Size, resultPtr));
+        var resultPtr = _currentBlock.EmitAlloca(resultIrType);
 
         var thenBlock = CreateBlock("np_niche_then");
         var elseBlock = CreateBlock("np_niche_else");
         var mergeBlock = CreateBlock("np_niche_merge");
-        _currentBlock.Instructions.Add(new BranchInstruction(_currentSpan, isNonNull, thenBlock, elseBlock));
+        _currentBlock.EmitBranch(isNonNull, thenBlock, elseBlock);
 
         // Then: dereference the pointer, access field, wrap result
-        _currentFunction.BasicBlocks.Add(thenBlock);
         _currentBlock = thenBlock;
         var strippedPtr = StripNullable(nichePtr);
-        var castVal = new LocalValue($"np_strip_{_tempCounter++}", strippedPtr);
-        _currentBlock.Instructions.Add(new CastInstruction(_currentSpan, targetVal, castVal));
+        var castVal = _currentBlock.EmitCast(targetVal, strippedPtr);
 
         var innerType = strippedPtr.Pointee;
         if (innerType is IrStruct innerStruct)
@@ -3833,12 +3375,11 @@ public class HmAstLowering
             if (IsNicheOption(resultIrType))
             {
                 memberVal.IrType = resultIrType;
-                _currentBlock.Instructions.Add(new StorePointerInstruction(_currentSpan, resultPtr, memberVal));
+                _currentBlock.EmitStorePtr(resultPtr, memberVal);
             }
             else if (resultIrType is IrStruct resultOptionStruct && resultOptionStruct.Fields.Length >= 2)
             {
-                var somePtr = new LocalValue($"np_some_{_tempCounter++}", new IrPointer(resultOptionStruct));
-                _currentBlock.Instructions.Add(new AllocaInstruction(_currentSpan, resultOptionStruct.Size, somePtr));
+                var somePtr = _currentBlock.EmitAlloca(resultOptionStruct);
 
                 var someHvField = FindField(resultOptionStruct, "has_value");
                 EmitStoreToOffset(somePtr, someHvField.ByteOffset,
@@ -3847,46 +3388,38 @@ public class HmAstLowering
                 var someValField = FindField(resultOptionStruct, "value");
                 EmitStoreToOffset(somePtr, someValField.ByteOffset, memberVal, someValField.Type);
 
-                var someLoaded = new LocalValue($"np_some_val_{_tempCounter++}", resultOptionStruct);
-                _currentBlock.Instructions.Add(new LoadInstruction(_currentSpan, somePtr, someLoaded));
-                _currentBlock.Instructions.Add(new StorePointerInstruction(_currentSpan, resultPtr, someLoaded));
+                var someLoaded = _currentBlock.EmitLoad(somePtr, resultOptionStruct);
+                _currentBlock.EmitStorePtr(resultPtr, someLoaded);
             }
             else
             {
-                _currentBlock.Instructions.Add(new StorePointerInstruction(_currentSpan, resultPtr, memberVal));
+                _currentBlock.EmitStorePtr(resultPtr, memberVal);
             }
         }
-        _currentBlock.Instructions.Add(new JumpInstruction(_currentSpan, mergeBlock));
+        _currentBlock.EmitJump(mergeBlock);
 
         // Else: return null
-        _currentFunction.BasicBlocks.Add(elseBlock);
         _currentBlock = elseBlock;
         if (IsNicheOption(resultIrType))
         {
-            _currentBlock.Instructions.Add(new StorePointerInstruction(_currentSpan, resultPtr,
-                new IntConstantValue(0, resultIrType)));
+            _currentBlock.EmitStorePtr(resultPtr, new IntConstantValue(0, resultIrType));
         }
         else if (resultIrType is IrStruct nullOptionStruct)
         {
-            var nullPtr2 = new LocalValue($"np_null_{_tempCounter++}", new IrPointer(nullOptionStruct));
-            _currentBlock.Instructions.Add(new AllocaInstruction(_currentSpan, nullOptionStruct.Size, nullPtr2));
+            var nullPtr2 = _currentBlock.EmitAlloca(nullOptionStruct);
 
             var nullHvField = FindField(nullOptionStruct, "has_value");
             EmitStoreToOffset(nullPtr2, nullHvField.ByteOffset,
                 new IntConstantValue(0, TypeLayoutService.IrBool), TypeLayoutService.IrBool);
 
-            var nullLoaded = new LocalValue($"np_null_val_{_tempCounter++}", nullOptionStruct);
-            _currentBlock.Instructions.Add(new LoadInstruction(_currentSpan, nullPtr2, nullLoaded));
-            _currentBlock.Instructions.Add(new StorePointerInstruction(_currentSpan, resultPtr, nullLoaded));
+            var nullLoaded = _currentBlock.EmitLoad(nullPtr2, nullOptionStruct);
+            _currentBlock.EmitStorePtr(resultPtr, nullLoaded);
         }
-        _currentBlock.Instructions.Add(new JumpInstruction(_currentSpan, mergeBlock));
+        _currentBlock.EmitJump(mergeBlock);
 
         // Merge
-        _currentFunction.BasicBlocks.Add(mergeBlock);
         _currentBlock = mergeBlock;
-        var finalResult = new LocalValue($"np_niche_final_{_tempCounter++}", resultIrType);
-        _currentBlock.Instructions.Add(new LoadInstruction(_currentSpan, resultPtr, finalResult));
-        return finalResult;
+        return _currentBlock.EmitLoad(resultPtr, resultIrType);
     }
 
     // =========================================================================
@@ -3947,8 +3480,7 @@ public class HmAstLowering
         var variant = foundVariant.Value;
 
         // 1. Alloca enum-sized storage
-        var enumPtr = new LocalValue($"enum_{_tempCounter++}", new IrPointer(irEnum));
-        _currentBlock.Instructions.Add(new AllocaInstruction(_currentSpan, irEnum.Size, enumPtr));
+        var enumPtr = _currentBlock.EmitAlloca(irEnum);
 
         // 2. Store tag value (offset 0) as i32
         EmitStoreToOffset(enumPtr, 0, new IntConstantValue(variant.TagValue, TypeLayoutService.IrI32), TypeLayoutService.IrI32);
@@ -3977,9 +3509,7 @@ public class HmAstLowering
         }
 
         // 4. Load the complete enum value
-        var enumResult = new LocalValue($"enum_val_{_tempCounter++}", irEnum);
-        _currentBlock.Instructions.Add(new LoadInstruction(_currentSpan, enumPtr, enumResult));
-        return enumResult;
+        return _currentBlock.EmitLoad(enumPtr, irEnum);
     }
 
     // =========================================================================
@@ -4001,9 +3531,7 @@ public class HmAstLowering
             {
                 originalEnumPtr = ptrVal;
                 // Load the value from the pointer for tag checks
-                var loadedVal = new LocalValue($"match_deref_{_tempCounter++}", ((IrPointer)ptrVal.IrType).Pointee);
-                _currentBlock.Instructions.Add(new LoadInstruction(_currentSpan, ptrVal, loadedVal));
-                scrutineeValue = loadedVal;
+                scrutineeValue = _currentBlock.EmitLoad(ptrVal, ((IrPointer)ptrVal.IrType).Pointee);
             }
             else
             {
@@ -4023,9 +3551,7 @@ public class HmAstLowering
         {
             if (originalEnumPtr == null)
                 originalEnumPtr = scrutineeValue;
-            var derefVal = new LocalValue($"match_deref_{_tempCounter++}", ptrType.Pointee);
-            _currentBlock.Instructions.Add(new LoadInstruction(_currentSpan, scrutineeValue, derefVal));
-            scrutineeValue = derefVal;
+            scrutineeValue = _currentBlock.EmitLoad(scrutineeValue, ptrType.Pointee);
             scrutineeIrType = ptrType.Pointee;
         }
 
@@ -4048,9 +3574,8 @@ public class HmAstLowering
         }
         else
         {
-            scrutineePtr = new LocalValue($"match_scrutinee_ptr_{_tempCounter++}", new IrPointer(irEnum));
-            _currentBlock.Instructions.Add(new AllocaInstruction(_currentSpan, irEnum.Size, scrutineePtr));
-            _currentBlock.Instructions.Add(new StorePointerInstruction(_currentSpan, scrutineePtr, scrutineeValue));
+            scrutineePtr = _currentBlock.EmitAlloca(irEnum);
+            _currentBlock.EmitStorePtr(scrutineePtr, scrutineeValue);
         }
 
         // 3. Extract tag: load i32 at offset 0
@@ -4059,21 +3584,18 @@ public class HmAstLowering
         // 4. Alloca result (phi-via-alloca pattern)
         Value? resultPtr = null;
         if (!isVoid)
-        {
-            resultPtr = new LocalValue($"match_result_ptr_{_tempCounter++}", new IrPointer(resultIrType));
-            _currentBlock.Instructions.Add(new AllocaInstruction(_currentSpan, resultIrType.Size, resultPtr));
-        }
+            resultPtr = _currentBlock.EmitAlloca(resultIrType);
 
         // 5. Create basic blocks
         var armBlocks = new List<BasicBlock>();
         for (int i = 0; i < match.Arms.Count; i++)
-            armBlocks.Add(CreateBlock($"match_arm_{i}"));
+            armBlocks.Add(_currentBlock.CreateBlock($"match_arm_{i}"));
 
         var checkBlocks = new List<BasicBlock>();
         for (int i = 0; i < match.Arms.Count - 1; i++)
-            checkBlocks.Add(CreateBlock($"match_check_{i}"));
+            checkBlocks.Add(_currentBlock.CreateBlock($"match_check_{i}"));
 
-        var mergeBlock = CreateBlock("match_merge");
+        var mergeBlock = _currentBlock.CreateBlock("match_merge");
 
         // 6. For each arm: emit check + arm body
         for (int armIndex = 0; armIndex < match.Arms.Count; armIndex++)
@@ -4089,12 +3611,12 @@ public class HmAstLowering
             if (arm.Pattern is ElsePatternNode or WildcardPatternNode)
             {
                 // Unconditional match
-                _currentBlock.Instructions.Add(new JumpInstruction(_currentSpan, armBlock));
+                _currentBlock.EmitJump(armBlock);
             }
             else if (arm.Pattern is VariablePatternNode)
             {
                 // Variable pattern: matches everything (binds whole scrutinee)
-                _currentBlock.Instructions.Add(new JumpInstruction(_currentSpan, armBlock));
+                _currentBlock.EmitJump(armBlock);
             }
             else if (arm.Pattern is EnumVariantPatternNode evpCheck)
             {
@@ -4112,28 +3634,21 @@ public class HmAstLowering
                 if (checkVariant != null)
                 {
                     var expectedTag = new IntConstantValue(checkVariant.Value.TagValue, TypeLayoutService.IrI32);
-                    var cmpResult = new LocalValue($"match_cmp_{_tempCounter++}", TypeLayoutService.IrBool);
-                    _currentBlock.Instructions.Add(
-                        new BinaryInstruction(_currentSpan, BinaryOp.Equal, tagValue, expectedTag, cmpResult));
+                    var cmpResult = _currentBlock.EmitBinary(BinaryOp.Equal, tagValue, expectedTag, TypeLayoutService.IrBool);
 
                     var elseTarget = armIndex < match.Arms.Count - 1
                         ? checkBlocks[armIndex]
                         : mergeBlock;
-                    _currentBlock.Instructions.Add(new BranchInstruction(_currentSpan, cmpResult, armBlock, elseTarget));
+                    _currentBlock.EmitBranch(cmpResult, armBlock, elseTarget);
                 }
                 else
                 {
                     // Unknown variant — unconditional jump (error already caught in TC)
-                    _currentBlock.Instructions.Add(new JumpInstruction(_currentSpan, armBlock));
+                    _currentBlock.EmitJump(armBlock);
                 }
             }
 
-            // Add check block to function (skip first arm, it reuses current block)
-            if (armIndex > 0)
-                _currentFunction.BasicBlocks.Add(checkBlock);
-
             // Fill in arm block
-            _currentFunction.BasicBlocks.Add(armBlock);
             _currentBlock = armBlock;
 
             // Bind pattern variables
@@ -4165,11 +3680,7 @@ public class HmAstLowering
                         {
                             var fieldOffset = armVariant.Value.PayloadOffset
                                               + payloadStruct.Fields[i].ByteOffset;
-                            var fieldPtr = new LocalValue(
-                                $"payload_field_{_tempCounter++}",
-                                new IrPointer(payloadStruct.Fields[i].Type));
-                            _currentBlock.Instructions.Add(
-                                new GetElementPtrInstruction(_currentSpan, scrutineePtr, fieldOffset, fieldPtr));
+                            var fieldPtr = _currentBlock.EmitGEP(scrutineePtr, fieldOffset, payloadStruct.Fields[i].Type);
 
                             if (evp.SubPatterns[i] is VariablePatternNode vp)
                             {
@@ -4177,14 +3688,12 @@ public class HmAstLowering
                             }
                             else if (evp.SubPatterns[i] is LiteralPatternNode litSubPat)
                             {
-                                var payloadVal = new LocalValue($"payload_val_{_tempCounter++}", payloadStruct.Fields[i].Type);
-                                _currentBlock.Instructions.Add(new LoadInstruction(_currentSpan, fieldPtr, payloadVal));
+                                var payloadVal = _currentBlock.EmitLoad(fieldPtr, payloadStruct.Fields[i].Type);
                                 var literalVal = LowerExpression(litSubPat.Literal);
                                 var cmp = EmitPatternComparison(litSubPat, payloadVal, literalVal);
 
-                                var contBlock = CreateBlock($"match_arm_{armIndex}_cont_{i}");
-                                _currentBlock.Instructions.Add(new BranchInstruction(_currentSpan, cmp, contBlock, litFallthrough));
-                                _currentFunction.BasicBlocks.Add(contBlock);
+                                var contBlock = _currentBlock.CreateBlock($"match_arm_{armIndex}_cont_{i}");
+                                _currentBlock.EmitBranch(cmp, contBlock, litFallthrough);
                                 _currentBlock = contBlock;
                             }
                         }
@@ -4192,12 +3701,7 @@ public class HmAstLowering
                     else if (evp.SubPatterns.Count > 0)
                     {
                         // Single payload
-                        var payloadPtr = new LocalValue(
-                            $"payload_{_tempCounter++}",
-                            new IrPointer(armVariant.Value.PayloadType));
-                        _currentBlock.Instructions.Add(
-                            new GetElementPtrInstruction(_currentSpan,
-                                scrutineePtr, armVariant.Value.PayloadOffset, payloadPtr));
+                        var payloadPtr = _currentBlock.EmitGEP(scrutineePtr, armVariant.Value.PayloadOffset, armVariant.Value.PayloadType);
 
                         if (evp.SubPatterns[0] is VariablePatternNode vp)
                         {
@@ -4205,14 +3709,12 @@ public class HmAstLowering
                         }
                         else if (evp.SubPatterns[0] is LiteralPatternNode litSubPat)
                         {
-                            var payloadVal = new LocalValue($"payload_val_{_tempCounter++}", armVariant.Value.PayloadType);
-                            _currentBlock.Instructions.Add(new LoadInstruction(_currentSpan, payloadPtr, payloadVal));
+                            var payloadVal = _currentBlock.EmitLoad(payloadPtr, armVariant.Value.PayloadType);
                             var literalVal = LowerExpression(litSubPat.Literal);
                             var cmp = EmitPatternComparison(litSubPat, payloadVal, literalVal);
 
-                            var contBlock = CreateBlock($"match_arm_{armIndex}_body");
-                            _currentBlock.Instructions.Add(new BranchInstruction(_currentSpan, cmp, contBlock, litFallthrough));
-                            _currentFunction.BasicBlocks.Add(contBlock);
+                            var contBlock = _currentBlock.CreateBlock($"match_arm_{armIndex}_body");
+                            _currentBlock.EmitBranch(cmp, contBlock, litFallthrough);
                             _currentBlock = contBlock;
                         }
                     }
@@ -4227,26 +3729,17 @@ public class HmAstLowering
             // Lower arm result expression
             var armResultVal = LowerExpression(arm.ResultExpr, isVoid ? null : resultIrType);
             if (!isVoid && resultPtr != null)
-                _currentBlock.Instructions.Add(new StorePointerInstruction(_currentSpan, resultPtr, armResultVal));
+                _currentBlock.EmitStorePtr(resultPtr, armResultVal);
 
             // Jump to merge
-            if (_currentBlock.Instructions.Count == 0 ||
-                _currentBlock.Instructions[^1] is not (ReturnInstruction or JumpInstruction or BranchInstruction))
-            {
-                _currentBlock.Instructions.Add(new JumpInstruction(_currentSpan, mergeBlock));
-            }
+            _currentBlock.EmitJumpIfNotTerminated(mergeBlock);
         }
 
         // 7. Merge block
-        _currentFunction.BasicBlocks.Add(mergeBlock);
         _currentBlock = mergeBlock;
 
         if (!isVoid && resultPtr != null)
-        {
-            var finalResult = new LocalValue($"match_result_{_tempCounter++}", resultIrType);
-            _currentBlock.Instructions.Add(new LoadInstruction(_currentSpan, resultPtr, finalResult));
-            return finalResult;
-        }
+            return _currentBlock.EmitLoad(resultPtr, resultIrType);
 
         return new IntConstantValue(0, TypeLayoutService.IrVoidPrim);
     }
@@ -4261,28 +3754,24 @@ public class HmAstLowering
         var isVoid = resultIrType == TypeLayoutService.IrVoidPrim;
 
         // Store scrutinee to alloca for variable binding
-        Value scrutineePtr = new LocalValue($"match_val_ptr_{_tempCounter++}", new IrPointer(scrutineeIrType));
-        _currentBlock.Instructions.Add(new AllocaInstruction(_currentSpan, scrutineeIrType.Size, scrutineePtr));
-        _currentBlock.Instructions.Add(new StorePointerInstruction(_currentSpan, scrutineePtr, scrutineeValue));
+        var scrutineePtr = _currentBlock.EmitAlloca(scrutineeIrType);
+        _currentBlock.EmitStorePtr(scrutineePtr, scrutineeValue);
 
         // Alloca result
         Value? resultPtr = null;
         if (!isVoid)
-        {
-            resultPtr = new LocalValue($"match_result_ptr_{_tempCounter++}", new IrPointer(resultIrType));
-            _currentBlock.Instructions.Add(new AllocaInstruction(_currentSpan, resultIrType.Size, resultPtr));
-        }
+            resultPtr = _currentBlock.EmitAlloca(resultIrType);
 
         // Create blocks
         var armBlocks = new List<BasicBlock>();
         for (int i = 0; i < match.Arms.Count; i++)
-            armBlocks.Add(CreateBlock($"match_arm_{i}"));
+            armBlocks.Add(_currentBlock.CreateBlock($"match_arm_{i}"));
 
         var checkBlocks = new List<BasicBlock>();
         for (int i = 0; i < match.Arms.Count - 1; i++)
-            checkBlocks.Add(CreateBlock($"match_check_{i}"));
+            checkBlocks.Add(_currentBlock.CreateBlock($"match_check_{i}"));
 
-        var mergeBlock = CreateBlock("match_merge");
+        var mergeBlock = _currentBlock.CreateBlock("match_merge");
 
         for (int armIndex = 0; armIndex < match.Arms.Count; armIndex++)
         {
@@ -4293,11 +3782,11 @@ public class HmAstLowering
 
             if (arm.Pattern is ElsePatternNode or WildcardPatternNode)
             {
-                _currentBlock.Instructions.Add(new JumpInstruction(_currentSpan, armBlock));
+                _currentBlock.EmitJump(armBlock);
             }
             else if (arm.Pattern is VariablePatternNode)
             {
-                _currentBlock.Instructions.Add(new JumpInstruction(_currentSpan, armBlock));
+                _currentBlock.EmitJump(armBlock);
             }
             else if (arm.Pattern is LiteralPatternNode litPat)
             {
@@ -4307,13 +3796,9 @@ public class HmAstLowering
                 var elseTarget = armIndex < match.Arms.Count - 1
                     ? checkBlocks[armIndex]
                     : mergeBlock;
-                _currentBlock.Instructions.Add(new BranchInstruction(_currentSpan, cmp, armBlock, elseTarget));
+                _currentBlock.EmitBranch(cmp, armBlock, elseTarget);
             }
 
-            if (armIndex > 0)
-                _currentFunction.BasicBlocks.Add(checkBlock);
-
-            _currentFunction.BasicBlocks.Add(armBlock);
             _currentBlock = armBlock;
 
             // Bind variable pattern
@@ -4323,24 +3808,15 @@ public class HmAstLowering
             // Lower arm result
             var armResultVal = LowerExpression(arm.ResultExpr, isVoid ? null : resultIrType);
             if (!isVoid && resultPtr != null)
-                _currentBlock.Instructions.Add(new StorePointerInstruction(_currentSpan, resultPtr, armResultVal));
+                _currentBlock.EmitStorePtr(resultPtr, armResultVal);
 
-            if (_currentBlock.Instructions.Count == 0 ||
-                _currentBlock.Instructions[^1] is not (ReturnInstruction or JumpInstruction or BranchInstruction))
-            {
-                _currentBlock.Instructions.Add(new JumpInstruction(_currentSpan, mergeBlock));
-            }
+            _currentBlock.EmitJumpIfNotTerminated(mergeBlock);
         }
 
-        _currentFunction.BasicBlocks.Add(mergeBlock);
         _currentBlock = mergeBlock;
 
         if (!isVoid && resultPtr != null)
-        {
-            var finalResult = new LocalValue($"match_result_{_tempCounter++}", resultIrType);
-            _currentBlock.Instructions.Add(new LoadInstruction(_currentSpan, resultPtr, finalResult));
-            return finalResult;
-        }
+            return _currentBlock.EmitLoad(resultPtr, resultIrType);
 
         return new IntConstantValue(0, TypeLayoutService.IrVoidPrim);
     }
@@ -4364,14 +3840,11 @@ public class HmAstLowering
             var fnHmType = GetFunctionHmType(fn);
             var callRetIrType = _layout.Lower(fnHmType.ReturnType);
 
-            return EmitFLangCall(fn.Name, [actual, literal], callRetIrType, calleeIrParamTypes);
+            return _currentBlock.EmitCall(fn.Name, [actual, literal], callRetIrType, calleeIrParamTypes);
         }
 
         // Primitive type — use built-in equality
-        var cmpResult = new LocalValue($"pat_cmp_{_tempCounter++}", TypeLayoutService.IrBool);
-        _currentBlock.Instructions.Add(
-            new BinaryInstruction(_currentSpan, BinaryOp.Equal, actual, literal, cmpResult));
-        return cmpResult;
+        return _currentBlock.EmitBinary(BinaryOp.Equal, actual, literal, TypeLayoutService.IrBool);
     }
 
     // =========================================================================
@@ -4410,11 +3883,9 @@ public class HmAstLowering
             if (_byRefParams.Contains(name))
             {
                 var innerType = ((IrPointer)localVal.IrType!).Pointee;
-                var alloca = new LocalValue($"{name}_mut", new IrPointer(innerType));
-                var tmpLoad = new LocalValue($"t{_tempCounter++}", innerType);
-                _currentBlock.Instructions.Add(new AllocaInstruction(_currentSpan, innerType.Size, alloca));
-                _currentBlock.Instructions.Add(new LoadInstruction(_currentSpan, localVal, tmpLoad));
-                _currentBlock.Instructions.Add(new StorePointerInstruction(_currentSpan, alloca, tmpLoad));
+                var alloca = _currentBlock.EmitAlloca(innerType);
+                var tmpLoad = _currentBlock.EmitLoad(localVal, innerType);
+                _currentBlock.EmitStorePtr(alloca, tmpLoad);
                 _locals[name] = alloca;
                 _parameters.Remove(name);
                 _byRefParams.Remove(name);
@@ -4422,9 +3893,8 @@ public class HmAstLowering
             else
             {
                 var paramIrType = localVal.IrType ?? TypeLayoutService.IrVoidPrim;
-                var allocaP = new LocalValue($"{name}_mut", new IrPointer(paramIrType));
-                _currentBlock.Instructions.Add(new AllocaInstruction(_currentSpan, paramIrType.Size, allocaP));
-                _currentBlock.Instructions.Add(new StorePointerInstruction(_currentSpan, allocaP, localVal));
+                var allocaP = _currentBlock.EmitAlloca(paramIrType);
+                _currentBlock.EmitStorePtr(allocaP, localVal);
                 _locals[name] = allocaP;
                 _parameters.Remove(name);
             }
@@ -4521,11 +3991,11 @@ public class HmAstLowering
                                 // By-ref param: load from pointer, then store into alloca (copy-on-write)
                                 var innerType = ((IrPointer)localVal.IrType!).Pointee;
                                 var alloca = new LocalValue($"{id.Name}_mut", new IrPointer(innerType));
-                                var tmpLoad = new LocalValue($"t{_tempCounter++}", innerType);
+                                var tmpLoad = _ctx.FreshLocal("t", innerType);
                                 var entryBlock = _currentFunction.BasicBlocks[0];
-                                entryBlock.Instructions.Insert(0, new StorePointerInstruction(_currentSpan, alloca, tmpLoad));
-                                entryBlock.Instructions.Insert(0, new LoadInstruction(_currentSpan, localVal, tmpLoad));
-                                entryBlock.Instructions.Insert(0, new AllocaInstruction(_currentSpan, innerType.Size, alloca));
+                                entryBlock.Instructions.Insert(0, new StorePointerInstruction(_ctx.Span, alloca, tmpLoad));
+                                entryBlock.Instructions.Insert(0, new LoadInstruction(_ctx.Span, localVal, tmpLoad));
+                                entryBlock.Instructions.Insert(0, new AllocaInstruction(_ctx.Span, innerType.Size, alloca));
                                 _locals[id.Name] = alloca;
                                 _parameters.Remove(id.Name);
                                 _byRefParams.Remove(id.Name);
@@ -4534,8 +4004,8 @@ public class HmAstLowering
                             var paramIrType = localVal.IrType ?? TypeLayoutService.IrVoidPrim;
                             var allocaP = new LocalValue($"{id.Name}_mut", new IrPointer(paramIrType));
                             var entryBlockP = _currentFunction.BasicBlocks[0];
-                            entryBlockP.Instructions.Insert(0, new StorePointerInstruction(_currentSpan, allocaP, localVal));
-                            entryBlockP.Instructions.Insert(0, new AllocaInstruction(_currentSpan, paramIrType.Size, allocaP));
+                            entryBlockP.Instructions.Insert(0, new StorePointerInstruction(_ctx.Span, allocaP, localVal));
+                            entryBlockP.Instructions.Insert(0, new AllocaInstruction(_ctx.Span, paramIrType.Size, allocaP));
                             _locals[id.Name] = allocaP;
                             _parameters.Remove(id.Name);
                             return allocaP;
@@ -4574,9 +4044,7 @@ public class HmAstLowering
                         {
                             if (baseIrType is IrPointer ptrType)
                             {
-                                var derefResult = new LocalValue($"autoderef_{_tempCounter++}", ptrType.Pointee);
-                                _currentBlock.Instructions.Add(new LoadInstruction(_currentSpan, baseVal, derefResult));
-                                baseVal = derefResult;
+                                baseVal = _currentBlock.EmitLoad(baseVal, ptrType.Pointee);
                                 baseIrType = ptrType.Pointee;
                             }
                         }
@@ -4620,10 +4088,7 @@ public class HmAstLowering
                     var field = FindField(structType, member.FieldName);
 
                     // Return pointer to field (GEP without final load)
-                    var gepResult = new LocalValue($"field_ptr_{_tempCounter++}", new IrPointer(field.Type));
-                    _currentBlock.Instructions.Add(
-                        new GetElementPtrInstruction(_currentSpan, baseVal, field.ByteOffset, gepResult));
-                    return gepResult;
+                    return _currentBlock.EmitGEP(baseVal, field.ByteOffset, field.Type);
                 }
 
             case DereferenceExpressionNode deref:
@@ -4650,13 +4115,8 @@ public class HmAstLowering
 
                     // Compute byte offset = index * element_size
                     var elementSize = new IntConstantValue(elementIrType.Size, TypeLayoutService.IrUSize);
-                    var byteOffset = new LocalValue($"idx_offset_{_tempCounter++}", TypeLayoutService.IrUSize);
-                    _currentBlock.Instructions.Add(
-                        new BinaryInstruction(_currentSpan, BinaryOp.Multiply, idxVal, elementSize, byteOffset));
-
-                    var elemPtr = new LocalValue($"elem_ptr_{_tempCounter++}", new IrPointer(elementIrType));
-                    _currentBlock.Instructions.Add(new GetElementPtrInstruction(_currentSpan, basePtr, byteOffset, elemPtr));
-                    return elemPtr;
+                    var byteOffset = _currentBlock.EmitBinary(BinaryOp.Multiply, idxVal, elementSize, TypeLayoutService.IrUSize);
+                    return _currentBlock.EmitGEP(basePtr, byteOffset, elementIrType);
                 }
 
             default:
@@ -4681,10 +4141,7 @@ public class HmAstLowering
         return (FunctionType)_types.GetResolvedType(fn);
     }
 
-    private BasicBlock CreateBlock(string label)
-    {
-        return new BasicBlock($"{label}_{_blockCounter++}");
-    }
+    private BasicBlock CreateBlock(string label) => _ctx.CreateBlock(label);
 
     private string GetUniqueVariableName(string sourceName)
     {
@@ -4719,7 +4176,7 @@ public class HmAstLowering
             BinaryOperatorKind.ShiftLeft => BinaryOp.ShiftLeft,
             BinaryOperatorKind.ShiftRight => BinaryOp.ShiftRight,
             BinaryOperatorKind.UnsignedShiftRight => BinaryOp.UnsignedShiftRight,
-            _ => throw new InternalCompilerError($"Unsupported binary operator: {kind}", _currentSpan),
+            _ => throw new InternalCompilerError($"Unsupported binary operator: {kind}", _ctx.Span),
         };
     }
 
@@ -4731,7 +4188,7 @@ public class HmAstLowering
                 return f;
         }
         throw new InternalCompilerError(
-            $"Field `{fieldName}` not found in struct `{structType.Name}`", _currentSpan);
+            $"Field `{fieldName}` not found in struct `{structType.Name}`", _ctx.Span);
     }
 
     // =========================================================================
