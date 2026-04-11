@@ -140,6 +140,41 @@ This is related to the never-type gap — `break` and `continue` would need to p
 
 ---
 
+### List(T) Generic Monomorphization Produces Wrong Specialization
+
+**Status:** Open
+**Affected:** C codegen — generic function instantiation
+
+Calling the `list(capacity)` constructor for multiple generic specializations (e.g., `List(OwnedString)`, `List(CsvRecord)`, `List(usize)`) in the same compilation unit generates C code that routes all calls to the first specialization. Produces incompatible pointer type errors in the C compiler.
+
+**Workaround:** Zero-initialize non-`OwnedString` lists with `let x: List(T)` and rely on `push()` auto-allocation.
+
+---
+
+### No Bitwise NOT Operator
+
+**Status:** Open (language gap)
+**Affected:** Parser, operators
+
+FLang has no `~` prefix operator for bitwise NOT. The operator table includes `&` (AND), `|` (OR), `^` (XOR) but not NOT.
+
+**Workaround:** Use `x ^ 0xFFFF` (or appropriate all-ones mask) to invert bits.
+
+**Future:** Add `~` as a prefix unary operator desugaring to `op_bnot`.
+
+---
+
+### Inlined Helper Function Stack Variable Codegen
+
+**Status:** Open
+**Affected:** C codegen — function inlining with local arrays
+
+Non-pub helper functions using `let buf: [u8; 1] = [0; 1]` followed by vtable dispatch generate C code referencing undeclared `alloca_1` identifiers.
+
+**Workaround:** Use `let byte = b; w.write(slice_from_raw_parts(&byte, 1))` instead of local array pattern.
+
+---
+
 ## Deferred Features
 
 ### FFI Pointer Returns and Casts
