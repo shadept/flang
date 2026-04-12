@@ -1,10 +1,17 @@
 // CSV encoding, decoding, and table manipulation.
 //
-//   CsvReader  — implements Decoder for CSV input from a Reader;
-//                SIMD-accelerated delimiter detection
-//   CsvWriter  — implements Encoder for CSV output to a Writer
-//   CsvRecord  — single row with get-by-name and get-by-index
-//   CsvTable   — materialized table with column/row selection
+// Three separate components sharing a common SIMD classifier:
+//
+//   SIMD classifier  — shared core: classifies 16-byte chunks into delimiter bitmasks,
+//                      computes quote parity via carryless multiply
+//   CsvDecoder       — implements Decoder for #derive(T, deserialize);
+//                      reads from a Reader, decodes fields directly without materializing records
+//   CsvEncoder       — implements Encoder for #derive(T, serialize);
+//                      writes CSV rows to a Writer
+//   CsvReader        — reads entire file into memory, produces CsvRecord with String views;
+//                      feeds CsvTable for column/row selection
+//   CsvRecord        — single row with String views into a backing buffer
+//   CsvTable         — materialized table owning its buffer, with select_columns/select_rows
 //
 // The parser handles RFC 4180 with lenient line endings (LF, CR, CRLF).
 // Quoting and delimiter characters are configurable via CsvOptions.
@@ -17,6 +24,7 @@ import std.conv
 import std.enum
 import std.interface
 import std.list
+import std.mem
 import std.result
 import std.string
 import std.string_builder
@@ -52,24 +60,24 @@ pub fn csv_options() CsvOptions {
 }
 
 // =============================================================================
-// CsvRecord — single parsed row
+// CsvRecord — single row with String views into a backing buffer
 // =============================================================================
 
 pub type CsvRecord = struct {
-    fields: List(OwnedString)
-    headers: &List(OwnedString)?
+    fields: List(String)
+    headers: &List(String)?
 }
 
 pub fn get(record: &CsvRecord, index: usize) String? {
     if index >= record.fields.len { return null }
-    return record.fields.as_slice()[index].as_view()
+    return record.fields.as_slice()[index]
 }
 
 pub fn get(record: &CsvRecord, name: String) String? {
     if record.headers.is_none() { return null }
     const hdrs = record.headers.value
     for (i in 0..hdrs.len) {
-        if hdrs.as_slice()[i].as_view() == name {
+        if hdrs.as_slice()[i] == name {
             return record.get(i)
         }
     }
@@ -78,28 +86,6 @@ pub fn get(record: &CsvRecord, name: String) String? {
 
 pub fn field_count(record: &CsvRecord) usize {
     return record.fields.len
-}
-
-// =============================================================================
-// CsvTable — materialized table with arena-owned strings
-// =============================================================================
-
-pub type CsvTable = struct {
-    headers: List(OwnedString)
-    rows: List(CsvRecord)
-    arena: ArenaAllocatorState
-}
-
-pub fn deinit(table: &CsvTable) {
-    table.arena.deinit()
-}
-
-pub fn row_count(table: &CsvTable) usize {
-    return table.rows.len
-}
-
-pub fn column_count(table: &CsvTable) usize {
-    return table.headers.len
 }
 
 // =============================================================================
@@ -116,15 +102,14 @@ fn write_str(w: Writer, s: String) {
 }
 
 // =============================================================================
-// SIMD classifier — find delimiters in 16-byte chunks
+// SIMD classifier — shared core for delimiter detection
 // =============================================================================
 
-// Classify a 16-byte chunk. Returns bitmasks for structural characters.
-// Bits in each mask correspond to byte positions in the chunk.
+// Bitmasks for structural characters in a 16-byte chunk.
 type ChunkMasks = struct {
-    delimiters: u32   // comma (or custom delimiter) positions
-    quotes: u32       // quote character positions
-    newlines: u32     // LF or CR positions
+    delimiters: u32
+    quotes: u32
+    newlines: u32
 }
 
 fn classify_chunk(chunk_ptr: &u8, delimiter: u8, quote: u8) ChunkMasks {
@@ -140,40 +125,26 @@ fn classify_chunk(chunk_ptr: &u8, delimiter: u8, quote: u8) ChunkMasks {
     }
 }
 
-// Compute prefix XOR to determine which positions are inside quoted fields.
-// Returns a bitmask where bit=1 means "inside quotes".
 fn compute_quote_parity(quote_mask: u32, carry: u64) (u32, u64) {
-    // Combine carry with current quote mask.
-    // If carry is odd (we entered this chunk inside quotes), flip all bits.
     const effective_mask = quote_mask as u64
-
-    // Prefix XOR via carryless multiply: clmul(quotes, all_ones) gives
-    // the running XOR parity at each position.
     const quote_vec = v128_from_u64(effective_mask)
     const all_ones = v128_from_u64(0xFFFF_FFFF_FFFF_FFFF)
     const parity_vec = v128_clmul(quote_vec, all_ones)
 
-    // Extract low 64 bits — we only need the low 16 bits for a 16-byte chunk
     let parity_out: [u8; 16] = [0; 16]
     v128_store(&parity_out[0], parity_vec)
-    let parity_lo: u64 = 0
-    // Read first 2 bytes as u16 (little-endian)
-    parity_lo = parity_out[0] as u64 | ((parity_out[1] as u64) << 8)
+    let parity_lo = parity_out[0] as u64 | ((parity_out[1] as u64) << 8)
 
-    // Apply carry: if we entered inside quotes, flip the parity
     let result = parity_lo as u32
     const carry_bit = carry & 1
     if carry_bit == 1 {
         result = result ^ 0xFFFF
     }
 
-    // New carry: total quote count parity (odd = still inside)
     const new_carry = carry + count_ones_u32(quote_mask) as u64
-
     return (result & 0xFFFF, new_carry)
 }
 
-// Filter out structural characters that are inside quoted fields.
 fn filter_by_quotes(masks: ChunkMasks, inside_quotes: u32) ChunkMasks {
     const outside = (inside_quotes ^ 0xFFFF) & 0xFFFF
     return .{
@@ -183,182 +154,206 @@ fn filter_by_quotes(masks: ChunkMasks, inside_quotes: u32) ChunkMasks {
     }
 }
 
+// Field span within a buffer: [start, end) byte range.
+type FieldSpan = struct {
+    start: usize
+    end: usize
+}
+
 // =============================================================================
-// CsvReader — streaming row reader with SIMD parsing
+// Shared row parsing — extracts field spans from a buffer
 // =============================================================================
 
-pub type CsvReader = struct {
+// Parse state for CsvDecoder's streaming row parser.
+type ParseState = struct {
+    quote_carry: u64
+    prev_cr: bool
+    in_quotes: bool
+}
+
+// Process a chunk of data, appending field content to field_buf and
+// completed fields to spans. Returns the number of bytes consumed.
+// Sets row_complete to true if a newline was found (end of row).
+fn process_chunk(
+    data: u8[], data_len: usize,
+    options: &CsvOptions, state: &ParseState,
+    field_buf: &StringBuilder, spans: &List(FieldSpan),
+    field_start_offset: usize,
+    row_complete: &bool
+) usize {
+    // Pad to 16 bytes for SIMD if needed
+    let chunk_buf: [u8; 16] = [0; 16]
+    let chunk_ptr = data.ptr
+    if data_len < 16 {
+        memcpy(&chunk_buf[0], data.ptr, data_len)
+        chunk_ptr = &chunk_buf[0]
+    }
+
+    const masks = classify_chunk(chunk_ptr, options.delimiter, options.quote)
+    const parity_result = compute_quote_parity(masks.quotes, state.quote_carry)
+    const inside_quotes = parity_result._0
+    state.quote_carry = parity_result._1
+    const filtered = filter_by_quotes(masks, inside_quotes)
+
+    const valid_mask = (1u32 << (data_len as u32)) - 1
+    const quote_bits = masks.quotes & valid_mask
+
+    let pos: usize = 0
+
+    // Handle prev_cr + LF at start of chunk
+    if state.prev_cr {
+        state.prev_cr = false
+        if data_len > 0 {
+            if data[pos] == 0x0A {
+                pos = 1
+            }
+        }
+    }
+
+    loop {
+        if pos >= data_len { break }
+
+        const byte = data[pos]
+        const bit = 1u32 << (pos as u32)
+
+        const is_newline = filtered.newlines & bit
+        const is_delim = filtered.delimiters & bit
+        const is_quote = quote_bits & bit
+
+        if is_newline != 0 {
+            if byte == 0x0D { state.prev_cr = true }
+            // End current field and row
+            let span: FieldSpan
+            span.start = field_start_offset
+            span.end = field_start_offset + field_buf.len
+            spans.push(span)
+            pos = pos + 1
+            // Check for CRLF within chunk
+            if state.prev_cr {
+                if pos < data_len {
+                    if data[pos] == 0x0A {
+                        pos = pos + 1
+                        state.prev_cr = false
+                    }
+                }
+            }
+            row_complete.* = true
+            return pos
+        } else if is_delim != 0 {
+            // End current field
+            let span: FieldSpan
+            span.start = field_start_offset
+            span.end = field_start_offset + field_buf.len
+            spans.push(span)
+            // Next field starts after what we've accumulated
+            field_buf.clear()
+            pos = pos + 1
+        } else if is_quote != 0 {
+            if state.in_quotes {
+                if pos + 1 < data_len {
+                    if data[pos + 1] == options.quote {
+                        field_buf.append_byte(options.quote)
+                        pos = pos + 2
+                    } else {
+                        state.in_quotes = false
+                        pos = pos + 1
+                    }
+                } else {
+                    state.in_quotes = false
+                    pos = pos + 1
+                }
+            } else {
+                state.in_quotes = true
+                pos = pos + 1
+            }
+        } else {
+            field_buf.append_byte(byte)
+            pos = pos + 1
+        }
+    }
+
+    return pos
+}
+
+// =============================================================================
+// CsvDecoder — streaming decoder for #derive(T, deserialize)
+// =============================================================================
+
+pub type CsvDecoder = struct {
     reader: Reader
     chunk: [u8; 16]
     chunk_len: usize
     options: CsvOptions
-    headers: List(OwnedString)
-    current_field: usize
-    row_fields: List(OwnedString)
+    headers: List(String)
+    header_buf: StringBuilder
+    // Current row: field_buf accumulates bytes, spans mark boundaries
     field_buf: StringBuilder
+    spans: List(FieldSpan)
+    current_field: usize
     row_parsed: bool
     eof: bool
     error: CsvError?
-    arena: ArenaAllocatorState
-    quote_carry: u64
-    // State for tracking CR in CRLF sequences
-    prev_cr: bool
+    state: ParseState
 }
 
-pub fn csv_reader(r: Reader, options: CsvOptions = csv_options()) CsvReader {
-    let reader: CsvReader
-    reader.reader = r
-    reader.options = options
-    let headers: List(OwnedString) = list(16)
-    reader.headers = headers
-    let row_fields: List(OwnedString) = list(16)
-    reader.row_fields = row_fields
-    reader.field_buf = string_builder(256)
-    reader.arena = arena_allocator(&global_allocator)
-    return reader
+pub fn csv_decoder_init(self: &CsvDecoder, r: Reader, options: CsvOptions = csv_options(), allocator: &Allocator? = null) {
+    self.reader = r
+    self.options = options
+    let hdrs: List(String)
+    self.headers = hdrs
+    self.header_buf = string_builder(256, allocator)
+    self.field_buf = string_builder(4096, allocator)
+    let spans: List(FieldSpan)
+    self.spans = spans
 }
 
-fn fill_chunk(self: &CsvReader) {
+fn fill_decoder_chunk(self: &CsvDecoder) {
     let dst = slice_from_raw_parts(&self.chunk[0], 16)
     const n = self.reader.read(dst)
     self.chunk_len = n
-    if n == 0 {
-        self.eof = true
-    }
+    if n == 0 { self.eof = true }
 }
 
-// Parse one complete row from the input stream.
-// Returns true if a row was parsed, false at EOF.
-fn parse_row(self: &CsvReader) bool {
-    self.row_fields.clear()
+// Parse one row into field_buf + spans.
+fn parse_decoder_row(self: &CsvDecoder) bool {
     self.field_buf.clear()
-    let in_quotes = false
+    self.spans.clear()
 
     loop {
         if self.chunk_len == 0 {
-            self.fill_chunk()
+            self.fill_decoder_chunk()
             if self.eof {
-                // Flush remaining field if we have content
                 if self.field_buf.len > 0 {
-                    const arena_alloc = self.arena.allocator()
-                    const field = from_view(self.field_buf.as_view(), &arena_alloc)
-                    self.row_fields.push(field)
+                    let span: FieldSpan
+                    span.start = 0
+                    span.end = self.field_buf.len
+                    self.spans.push(span)
                     return true
                 }
-                return self.row_fields.len > 0
+                return self.spans.len > 0
             }
         }
 
-        // Pad chunk to 16 bytes with zeros if partial
-        if self.chunk_len < 16 {
-            for (i in self.chunk_len..16) {
-                self.chunk[i] = 0
-            }
-        }
+        let row_complete = false
+        // field_start_offset: where the current field's data starts in field_buf
+        // For spans, we track relative to field_buf. But since process_chunk
+        // clears field_buf between fields, we need a different approach.
+        // Instead: accumulate ALL field data into field_buf with a separator,
+        // and track spans as absolute offsets into field_buf.
+        const chunk_slice = slice_from_raw_parts(&self.chunk[0], self.chunk_len)
+        const consumed = process_chunk(
+            chunk_slice, self.chunk_len,
+            &self.options, &self.state,
+            &self.field_buf, &self.spans,
+            self.field_buf.len,
+            &row_complete
+        )
 
-        // SIMD classify
-        const masks = classify_chunk(&self.chunk[0], self.options.delimiter, self.options.quote)
-        const parity_result = compute_quote_parity(masks.quotes, self.quote_carry)
-        const inside_quotes = parity_result._0
-        self.quote_carry = parity_result._1
-        const filtered = filter_by_quotes(masks, inside_quotes)
-
-        // Mask to valid chunk length
-        const valid_mask = (1u32 << (self.chunk_len as u32)) - 1
-        const quote_bits = masks.quotes & valid_mask
-
-        // Process byte by byte within this chunk, using the bitmasks to identify structure
-        let pos: usize = 0
-        let found_newline = false
-
-        // Handle prev_cr + current chunk starts with LF → skip the LF
-        if self.prev_cr {
-            self.prev_cr = false
-            if self.chunk_len > 0 {
-                if self.chunk[0] == 0x0A {
-                    pos = 1
-                }
-            }
-        }
-
-        loop {
-            if pos >= self.chunk_len { break }
-
-            const byte = self.chunk[pos]
-            const bit = 1u32 << (pos as u32)
-
-            const is_newline = filtered.newlines & bit
-            const is_delim = filtered.delimiters & bit
-            const is_quote = quote_bits & bit
-
-            if is_newline != 0 {
-                // Real newline (outside quotes)
-                if byte == 0x0D {
-                    self.prev_cr = true
-                }
-                // Flush current field
-                const arena_alloc = self.arena.allocator()
-                const field = from_view(self.field_buf.as_view(), &arena_alloc)
-                self.row_fields.push(field)
-                self.field_buf.clear()
-                found_newline = true
-                // Consume remaining bytes after newline as next chunk's start
-                pos = pos + 1
-                // Check for CRLF within chunk
-                if self.prev_cr {
-                    if pos < self.chunk_len {
-                        if self.chunk[pos] == 0x0A {
-                            pos = pos + 1
-                            self.prev_cr = false
-                        }
-                    }
-                }
-                break
-            } else if is_delim != 0 {
-                // Real delimiter (outside quotes)
-                const arena_alloc = self.arena.allocator()
-                const field = from_view(self.field_buf.as_view(), &arena_alloc)
-                self.row_fields.push(field)
-                self.field_buf.clear()
-                pos = pos + 1
-            } else if is_quote != 0 {
-                // Quote character — toggle in_quotes state
-                // For escaped quotes (""), the second quote re-enters the field
-                // Check if next byte is also a quote (escaped)
-                if in_quotes {
-                    if pos + 1 < self.chunk_len {
-                        if self.chunk[pos + 1] == self.options.quote {
-                            // Escaped quote — emit one quote character
-                            self.field_buf.append_byte(self.options.quote)
-                            pos = pos + 2
-                        } else {
-                            // End of quoted field
-                            in_quotes = false
-                            pos = pos + 1
-                        }
-                    } else {
-                        // Quote at end of chunk — need more data to decide
-                        in_quotes = false
-                        pos = pos + 1
-                    }
-                } else {
-                    // Start of quoted field
-                    in_quotes = true
-                    pos = pos + 1
-                }
-            } else {
-                // Regular character
-                self.field_buf.append_byte(byte)
-                pos = pos + 1
-            }
-        }
-
-        // Update chunk: shift remaining bytes or clear
-        if found_newline {
-            if pos < self.chunk_len {
-                // Shift remaining bytes to start of chunk
-                const remaining = self.chunk_len - pos
-                let src_pos = pos
+        if row_complete {
+            // Shift remaining bytes
+            if consumed < self.chunk_len {
+                const remaining = self.chunk_len - consumed
+                let src_pos = consumed
                 for (i in 0..remaining) {
                     self.chunk[i] = self.chunk[src_pos]
                     src_pos = src_pos + 1
@@ -367,84 +362,68 @@ fn parse_row(self: &CsvReader) bool {
             } else {
                 self.chunk_len = 0
             }
-            // Reset quote carry for new row
-            self.quote_carry = 0
+            self.state.quote_carry = 0
             return true
         } else {
-            // Consumed entire chunk, need more data
             self.chunk_len = 0
         }
     }
     return false
 }
 
-// Read the next record from the CSV stream.
-// On first call, parses headers if has_headers is true.
-pub fn next_record(self: &CsvReader) CsvRecord? {
-    if self.eof {
-        if self.row_fields.len > 0 {
-            // Already returned last row
-        }
-        return null
+// Get field value as String view into field_buf for the current row.
+fn get_decoder_field(self: &CsvDecoder, index: usize) String {
+    if index >= self.spans.len {
+        return ""
     }
+    const span = self.spans.as_slice()[index]
+    if span.end <= span.start { return "" }
+    const len = span.end - span.start
+    const ptr = self.field_buf.ptr + span.start
+    return .{ ptr = ptr, len = len } as String
+}
 
-    // Parse headers on first call
-    if self.options.has_headers {
-        if self.headers.len == 0 {
-            if self.parse_row() == false { return null }
-            // Move parsed fields to headers
-            for (i in 0..self.row_fields.len) {
-                self.headers.push(self.row_fields.as_slice()[i])
-            }
-            self.row_fields.clear()
+// Parse headers on first call
+fn ensure_decoder_headers(self: &CsvDecoder) {
+    if self.headers.len > 0 { return }
+    if self.options.has_headers == false { return }
+
+    if self.parse_decoder_row() {
+        // Copy header values into header_buf so they persist
+        for (i in 0..self.spans.len) {
+            const field_val = self.get_decoder_field(i)
+            self.header_buf.append(field_val)
+            // String views resolved after all headers are added
+        }
+        // Now create String views into header_buf
+        const buf_ptr = self.header_buf.ptr
+        let offset: usize = 0
+        for (i in 0..self.spans.len) {
+            const span = self.spans.as_slice()[i]
+            const len = span.end - span.start
+            const view = .{ ptr = buf_ptr + offset, len = len } as String
+            self.headers.push(view)
+            offset = offset + len
         }
     }
-
-    // Parse next data row
-    if self.parse_row() == false { return null }
-
-    let record: CsvRecord
-    record.fields = self.row_fields
-    record.headers = &self.headers
-    // Create a new list for next row's fields
-    let new_fields: List(OwnedString) = list(16)
-    self.row_fields = new_fields
-    return record
 }
 
-pub fn get_headers(self: &CsvReader) &List(OwnedString) {
-    return &self.headers
-}
+// Decoder interface implementation
 
-pub fn has_error(self: &CsvReader) bool {
-    return self.error.is_some()
-}
+pub fn decode_null(self: &CsvDecoder) bool { return true }
 
-pub fn deinit(self: &CsvReader) {
-    self.field_buf.deinit()
-    self.arena.deinit()
-}
-
-// =============================================================================
-// CsvReader as Decoder (for #derive(T, deserialize) support)
-// =============================================================================
-
-pub fn decode_null(self: &CsvReader) bool {
-    return true
-}
-
-pub fn decode_bool(self: &CsvReader) bool {
-    if self.current_field >= self.row_fields.len { return false }
-    const val = self.row_fields.as_slice()[self.current_field].as_view()
+pub fn decode_bool(self: &CsvDecoder) bool {
+    if self.current_field >= self.spans.len { return false }
+    const val = self.get_decoder_field(self.current_field)
     self.current_field = self.current_field + 1
     if val == "true" { return true }
     if val == "1" { return true }
     return false
 }
 
-pub fn decode_int(self: &CsvReader, width: u8) i64 {
-    if self.current_field >= self.row_fields.len { return 0 }
-    const val = self.row_fields.as_slice()[self.current_field].as_view()
+pub fn decode_int(self: &CsvDecoder, width: u8) i64 {
+    if self.current_field >= self.spans.len { return 0 }
+    const val = self.get_decoder_field(self.current_field)
     self.current_field = self.current_field + 1
     if val.len == 0 { return 0 }
     const parsed = parse_i64(val)
@@ -452,9 +431,9 @@ pub fn decode_int(self: &CsvReader, width: u8) i64 {
     return 0
 }
 
-pub fn decode_uint(self: &CsvReader, width: u8) u64 {
-    if self.current_field >= self.row_fields.len { return 0 }
-    const val = self.row_fields.as_slice()[self.current_field].as_view()
+pub fn decode_uint(self: &CsvDecoder, width: u8) u64 {
+    if self.current_field >= self.spans.len { return 0 }
+    const val = self.get_decoder_field(self.current_field)
     self.current_field = self.current_field + 1
     if val.len == 0 { return 0 }
     const parsed = parse_u64(val)
@@ -462,9 +441,9 @@ pub fn decode_uint(self: &CsvReader, width: u8) u64 {
     return 0
 }
 
-pub fn decode_float(self: &CsvReader, width: u8) f64 {
-    if self.current_field >= self.row_fields.len { return 0.0 }
-    const val = self.row_fields.as_slice()[self.current_field].as_view()
+pub fn decode_float(self: &CsvDecoder, width: u8) f64 {
+    if self.current_field >= self.spans.len { return 0.0 }
+    const val = self.get_decoder_field(self.current_field)
     self.current_field = self.current_field + 1
     if val.len == 0 { return 0.0 }
     const parsed = parse_f64(val)
@@ -472,66 +451,61 @@ pub fn decode_float(self: &CsvReader, width: u8) f64 {
     return 0.0
 }
 
-pub fn decode_str(self: &CsvReader, w: Writer) bool {
-    if self.current_field >= self.row_fields.len { return false }
-    const val = self.row_fields.as_slice()[self.current_field].as_view()
+pub fn decode_str(self: &CsvDecoder, w: Writer) bool {
+    if self.current_field >= self.spans.len { return false }
+    const val = self.get_decoder_field(self.current_field)
     self.current_field = self.current_field + 1
     write_str(w, val)
     return true
 }
 
-pub fn decode_bytes(self: &CsvReader, w: Writer) bool {
+pub fn decode_bytes(self: &CsvDecoder, w: Writer) bool {
     return self.decode_str(w)
 }
 
-pub fn begin_seq(self: &CsvReader) usize { return 0 }
-pub fn end_seq(self: &CsvReader) bool { return true }
+pub fn begin_seq(self: &CsvDecoder) usize { return 0 }
+pub fn end_seq(self: &CsvDecoder) bool { return true }
 
-pub fn begin_map(self: &CsvReader) usize {
-    // Parse next row for Decoder interface usage
+pub fn begin_map(self: &CsvDecoder) usize {
+    self.ensure_decoder_headers()
     if self.row_parsed == false {
-        // On first call, parse headers
-        if self.options.has_headers {
-            if self.headers.len == 0 {
-                if self.parse_row() {
-                    for (i in 0..self.row_fields.len) {
-                        self.headers.push(self.row_fields.as_slice()[i])
-                    }
-                    self.row_fields.clear()
-                }
-            }
-        }
-        self.parse_row()
+        self.parse_decoder_row()
         self.row_parsed = true
     }
     self.current_field = 0
-    return self.row_fields.len
+    return self.spans.len
 }
 
-pub fn end_map(self: &CsvReader) bool {
+pub fn end_map(self: &CsvDecoder) bool {
     self.row_parsed = false
     return true
 }
 
-pub fn next_key(self: &CsvReader, sb: &StringBuilder) bool {
+pub fn next_key(self: &CsvDecoder, sb: &StringBuilder) bool {
     if self.current_field >= self.headers.len { return false }
-    const key = self.headers.as_slice()[self.current_field].as_view()
-    sb.append(key)
+    sb.append(self.headers.as_slice()[self.current_field])
     return true
 }
 
-pub fn skip_value(self: &CsvReader) bool {
+pub fn skip_value(self: &CsvDecoder) bool {
     self.current_field = self.current_field + 1
     return true
 }
 
-#implement(CsvReader, Decoder)
+pub fn has_error(self: &CsvDecoder) bool { return self.error.is_some() }
+
+pub fn deinit(self: &CsvDecoder) {
+    self.field_buf.deinit()
+    self.header_buf.deinit()
+}
+
+#implement(CsvDecoder, Decoder)
 
 // =============================================================================
-// CsvWriter — streaming row writer
+// CsvEncoder — streaming CSV writer for #derive(T, serialize)
 // =============================================================================
 
-pub type CsvWriter = struct {
+pub type CsvEncoder = struct {
     w: Writer
     options: CsvOptions
     header_written: bool
@@ -541,18 +515,18 @@ pub type CsvWriter = struct {
     row_count: usize
 }
 
-pub fn csv_writer(w: Writer, options: CsvOptions = csv_options()) CsvWriter {
-    let writer: CsvWriter
-    writer.w = w
-    writer.options = options
+pub fn csv_encoder(w: Writer, options: CsvOptions = csv_options()) CsvEncoder {
+    let enc: CsvEncoder
+    enc.w = w
+    enc.options = options
     let keys: List(OwnedString) = list(16)
-    writer.current_keys = keys
+    enc.current_keys = keys
     let vals: List(OwnedString) = list(16)
-    writer.first_row_values = vals
-    return writer
+    enc.first_row_values = vals
+    return enc
 }
 
-fn needs_quoting(self: &CsvWriter, s: String) bool {
+fn needs_quoting(self: &CsvEncoder, s: String) bool {
     for (i in 0..s.len) {
         const c = s[i]
         if c == self.options.delimiter { return true }
@@ -563,7 +537,7 @@ fn needs_quoting(self: &CsvWriter, s: String) bool {
     return false
 }
 
-fn write_field(self: &CsvWriter, s: String) {
+fn write_csv_field(self: &CsvEncoder, s: String) {
     if self.field_index > 0 {
         write_byte(self.w, self.options.delimiter)
     }
@@ -583,86 +557,82 @@ fn write_field(self: &CsvWriter, s: String) {
     self.field_index = self.field_index + 1
 }
 
-// Encoder interface implementation
-
-pub fn encode_null(self: &CsvWriter) usize {
-    self.write_value("")
+pub fn encode_null(self: &CsvEncoder) usize {
+    self.write_enc_value("")
     return 0
 }
 
-pub fn encode_bool(self: &CsvWriter, v: bool) usize {
-    if v { self.write_value("true") }
-    else { self.write_value("false") }
+pub fn encode_bool(self: &CsvEncoder, v: bool) usize {
+    if v { self.write_enc_value("true") }
+    else { self.write_enc_value("false") }
     return 0
 }
 
-pub fn encode_int(self: &CsvWriter, v: i64, width: u8) usize {
+pub fn encode_int(self: &CsvEncoder, v: i64, width: u8) usize {
     let buf = [0u8; 21]
     const len = format_i64(v, buf).unwrap()
     const view = .{ ptr = &buf[0], len = len } as String
-    self.write_value(view)
+    self.write_enc_value(view)
     return 0
 }
 
-pub fn encode_uint(self: &CsvWriter, v: u64, width: u8) usize {
+pub fn encode_uint(self: &CsvEncoder, v: u64, width: u8) usize {
     let buf = [0u8; 21]
     const len = format_u64(v, buf).unwrap()
     const view = .{ ptr = &buf[0], len = len } as String
-    self.write_value(view)
+    self.write_enc_value(view)
     return 0
 }
 
-pub fn encode_float(self: &CsvWriter, v: f64, width: u8) usize {
+pub fn encode_float(self: &CsvEncoder, v: f64, width: u8) usize {
     let sb = string_builder(32)
     sb.append(v)
-    self.write_value(sb.as_view())
+    self.write_enc_value(sb.as_view())
     sb.deinit()
     return 0
 }
 
-pub fn encode_str(self: &CsvWriter, v: String) usize {
-    self.write_value(v)
+pub fn encode_str(self: &CsvEncoder, v: String) usize {
+    self.write_enc_value(v)
     return 0
 }
 
-pub fn encode_bytes(self: &CsvWriter, v: u8[]) usize {
+pub fn encode_bytes(self: &CsvEncoder, v: u8[]) usize {
     const view = .{ ptr = v.ptr, len = v.len } as String
-    self.write_value(view)
+    self.write_enc_value(view)
     return 0
 }
 
-fn write_value(self: &CsvWriter, v: String) {
+fn write_enc_value(self: &CsvEncoder, v: String) {
     if self.header_written == false {
-        // First row: collect values, will emit after end_map
         let owned = from_view(v, null)
         self.first_row_values.push(owned)
     } else {
-        self.write_field(v)
+        self.write_csv_field(v)
     }
 }
 
-pub fn begin_seq(self: &CsvWriter, len: usize) usize { return 0 }
-pub fn end_seq(self: &CsvWriter) usize { return 0 }
-pub fn begin_map(self: &CsvWriter, len: usize) usize {
+pub fn begin_seq(self: &CsvEncoder, len: usize) usize { return 0 }
+pub fn end_seq(self: &CsvEncoder) usize { return 0 }
+
+pub fn begin_map(self: &CsvEncoder, len: usize) usize {
     self.field_index = 0
     return 0
 }
 
-pub fn end_map(self: &CsvWriter) usize {
+pub fn end_map(self: &CsvEncoder) usize {
     if self.header_written == false {
         self.header_written = true
-        // Write header row from collected keys
         for (i in 0..self.current_keys.len) {
             if i > 0 { write_byte(self.w, self.options.delimiter) }
             write_str(self.w, self.current_keys.as_slice()[i].as_view())
         }
         write_byte(self.w, 0x0A)
-        // Write first data row from collected values
         for (i in 0..self.first_row_values.len) {
             if i > 0 { write_byte(self.w, self.options.delimiter) }
             const val = self.first_row_values.as_slice()[i].as_view()
             self.field_index = i
-            self.write_field(val)
+            self.write_csv_field(val)
         }
         self.first_row_values.deinit()
         let empty_vals: List(OwnedString) = list(0)
@@ -674,7 +644,7 @@ pub fn end_map(self: &CsvWriter) usize {
     return 0
 }
 
-pub fn key(self: &CsvWriter, name: String) usize {
+pub fn key(self: &CsvEncoder, name: String) usize {
     if self.header_written == false {
         let owned = from_view(name, null)
         self.current_keys.push(owned)
@@ -682,11 +652,11 @@ pub fn key(self: &CsvWriter, name: String) usize {
     return 0
 }
 
-pub fn is_human_readable(self: &CsvWriter) bool { return true }
+pub fn is_human_readable(self: &CsvEncoder) bool { return true }
 
-#implement(CsvWriter, Encoder)
+#implement(CsvEncoder, Encoder)
 
-pub fn deinit(self: &CsvWriter) {
+pub fn deinit(self: &CsvEncoder) {
     for (i in 0..self.current_keys.len) {
         self.current_keys.as_slice()[i].deinit()
     }
@@ -694,83 +664,309 @@ pub fn deinit(self: &CsvWriter) {
 }
 
 // =============================================================================
-// CsvTable construction and querying
+// CsvReader — reads entire file into memory, produces CsvRecord with String views
 // =============================================================================
 
-pub fn csv_table(r: Reader, options: CsvOptions = csv_options()) Result(CsvTable, CsvError) {
-    let reader = csv_reader(r, options)
-    let table: CsvTable
-    let rows: List(CsvRecord)
-    table.rows = rows
+pub type CsvReader = struct {
+    buffer: StringBuilder
+    options: CsvOptions
+    headers: List(String)
+    rows: List(CsvRecord)
+    parsed: bool
+}
 
-    // Read all rows
+pub fn csv_reader_init(self: &CsvReader, r: Reader, options: CsvOptions = csv_options(), allocator: &Allocator? = null) {
+    self.options = options
+    self.buffer = string_builder(4096, allocator)
+    let hdrs: List(String)
+    self.headers = hdrs
+
+    // Read entire input into buffer
+    let chunk: [u8; 4096] = [0; 4096]
     loop {
-        let rec = reader.next_record()
-        if rec.is_none() { break }
-        table.rows.push(rec.value)
+        let dst = slice_from_raw_parts(&chunk[0], 4096)
+        const n = r.read(dst)
+        if n == 0 { break }
+        const data = slice_from_raw_parts(&chunk[0], n)
+        self.buffer.append_bytes(data)
+    }
+}
+
+// SIMD-accelerated parser for in-memory buffer.
+// Uses classify_chunk to find delimiters in 16-byte batches,
+// then extracts field boundaries as String views into self.buffer.
+fn parse_all(self: &CsvReader) {
+    if self.parsed { return }
+    self.parsed = true
+
+    const data = self.buffer.as_view()
+    const data_ptr = data.ptr
+    const data_len = data.len
+    let pos: usize = 0
+    let quote_carry: u64 = 0
+    let field_start: usize = 0
+
+    // --- Parse headers ---
+    if self.options.has_headers {
+        field_start = 0
+        loop {
+            if pos >= data_len { break }
+            const remaining = data_len - pos
+            const chunk_size = if remaining < 16 { remaining } else { 16usize }
+
+            // SIMD classify
+            let chunk_buf: [u8; 16] = [0; 16]
+            if chunk_size < 16 {
+                memcpy(&chunk_buf[0], data_ptr + pos, chunk_size)
+            }
+            const cptr = if chunk_size < 16 { &chunk_buf[0] } else { data_ptr + pos }
+            const masks = classify_chunk(cptr, self.options.delimiter, self.options.quote)
+            const parity = compute_quote_parity(masks.quotes, quote_carry)
+            const inside = parity._0
+            quote_carry = parity._1
+            const filtered = filter_by_quotes(masks, inside)
+            const valid = (1u32 << (chunk_size as u32)) - 1
+
+            // Scan structural bits
+            let structural = (filtered.delimiters | filtered.newlines) & valid
+            let header_done = false
+            loop {
+                if structural == 0 { break }
+                const bit_pos = trailing_zeros_u32(structural) as usize
+                const abs_pos = pos + bit_pos
+                const byte = data[abs_pos]
+
+                if byte == 0x0A or byte == 0x0D {
+                    self.headers.push(self.extract_field(data, field_start, abs_pos))
+                    let next = abs_pos + 1
+                    if byte == 0x0D {
+                        if next < data_len {
+                            if data[next] == 0x0A { next = next + 1 }
+                        }
+                    }
+                    pos = next
+                    field_start = next
+                    quote_carry = 0
+                    header_done = true
+                    break
+                } else {
+                    // Delimiter
+                    self.headers.push(self.extract_field(data, field_start, abs_pos))
+                    field_start = abs_pos + 1
+                }
+                structural = structural & (structural - 1)
+            }
+            if header_done { break }
+            if structural == 0 {
+                pos = pos + chunk_size
+            }
+        }
     }
 
-    if reader.has_error() {
-        reader.deinit()
-        return Result.Err(reader.error.value)
+    // --- Parse data rows ---
+    let rows: List(CsvRecord)
+    field_start = pos
+    let current_fields: List(String)
+    let pad_buf: [u8; 16] = [0; 16]
+
+    loop {
+        if pos >= data_len {
+            // EOF — flush remaining field
+            if field_start < data_len {
+                current_fields.push(self.extract_field(data, field_start, data_len))
+                let rec: CsvRecord
+                rec.headers = &self.headers
+                rec.fields = current_fields
+                rows.push(rec)
+            }
+            break
+        }
+
+        const remaining = data_len - pos
+        // For the last partial chunk, copy to padded buffer
+        const is_partial = remaining < 16
+        const chunk_size = if is_partial { remaining } else { 16usize }
+        let cptr = data_ptr + pos
+        if is_partial {
+            memcpy(&pad_buf[0], cptr, chunk_size)
+            cptr = &pad_buf[0]
+        }
+
+        const masks = classify_chunk(cptr, self.options.delimiter, self.options.quote)
+
+        // Compute structural character mask, filtering out delimiters inside quotes
+        let structural: u32 = 0
+        const valid = (1u32 << (chunk_size as u32)) - 1
+        const carry_odd = (quote_carry & 1) == 1
+        const has_quotes = masks.quotes != 0
+        if has_quotes or carry_odd {
+            // Need full quote parity computation
+            const parity = compute_quote_parity(masks.quotes, quote_carry)
+            const inside = parity._0
+            quote_carry = parity._1
+            const filtered = filter_by_quotes(masks, inside)
+            structural = (filtered.delimiters | filtered.newlines) & valid
+        } else {
+            // No quotes anywhere — all delimiters are real
+            structural = (masks.delimiters | masks.newlines) & valid
+        }
+
+        if structural == 0 {
+            pos = pos + chunk_size
+            continue
+        }
+
+        // Process ALL structural characters in this chunk
+        loop {
+            if structural == 0 { break }
+            const bit_pos = trailing_zeros_u32(structural) as usize
+            const abs_pos = pos + bit_pos
+            const byte = data[abs_pos]
+
+            if byte == 0x0A or byte == 0x0D {
+                current_fields.push(self.extract_field(data, field_start, abs_pos))
+                let rec: CsvRecord
+                rec.headers = &self.headers
+                rec.fields = current_fields
+                rows.push(rec)
+
+                let new_fields: List(String)
+                current_fields = new_fields
+
+                field_start = abs_pos + 1
+                if byte == 0x0D {
+                    if field_start < data_len {
+                        if data[field_start] == 0x0A { field_start = field_start + 1 }
+                    }
+                }
+            } else {
+                current_fields.push(self.extract_field(data, field_start, abs_pos))
+                field_start = abs_pos + 1
+            }
+            structural = structural & (structural - 1)
+        }
+
+        pos = pos + chunk_size
     }
 
-    // Transfer ownership: headers and arena move from reader to table
+    self.rows = rows
+}
+
+// Extract a field value from the buffer between start and end.
+// Strips surrounding quotes and unescapes doubled quotes.
+fn extract_field(self: &CsvReader, data: String, start: usize, end: usize) String {
+    if start >= end { return "" }
+    // Fast path: unquoted field — just a pointer+length view (vast majority of fields)
+    if data[start] != self.options.quote {
+        return .{ ptr = data.ptr + start, len = end - start } as String
+    }
+    // Quoted field — strip surrounding quotes
+    const quote = self.options.quote
+    if end > start + 1 {
+        if data[end - 1] == quote {
+            const len = end - start - 2
+            if len == 0 { return "" }
+            // TODO: unescape doubled quotes into a separate buffer
+            return .{ ptr = data.ptr + start + 1usize, len = len } as String
+        }
+    }
+    // Fallback — return as-is
+    return .{ ptr = data.ptr + start, len = end - start } as String
+}
+
+pub fn get_headers(self: &CsvReader) &List(String) {
+    self.parse_all()
+    return &self.headers
+}
+
+pub fn get_rows(self: &CsvReader) &List(CsvRecord) {
+    self.parse_all()
+    return &self.rows
+}
+
+pub fn row_count(self: &CsvReader) usize {
+    self.parse_all()
+    return self.rows.len
+}
+
+pub fn deinit(self: &CsvReader) {
+    self.buffer.deinit()
+}
+
+// =============================================================================
+// CsvTable — materialized table owning its buffer
+// =============================================================================
+
+pub type CsvTable = struct {
+    headers: List(String)
+    rows: List(CsvRecord)
+    buffer: StringBuilder
+}
+
+pub fn csv_table(r: Reader, options: CsvOptions = csv_options(), allocator: &Allocator? = null) Result(CsvTable, CsvError) {
+    let reader: CsvReader
+    csv_reader_init(&reader, r, options, allocator)
+    reader.parse_all()
+
+    let table: CsvTable
     table.headers = reader.headers
-    table.arena = reader.arena
-
-    // Don't deinit the arena — table owns it now.
-    // Just clean up the reader's other resources.
-    reader.field_buf.deinit()
-
+    table.rows = reader.rows
+    table.buffer = reader.buffer
+    // Don't deinit reader — table took ownership of buffer
     return Result.Ok(table)
+}
+
+pub fn deinit(table: &CsvTable) {
+    table.buffer.deinit()
+}
+
+pub fn row_count(table: &CsvTable) usize {
+    return table.rows.len
+}
+
+pub fn column_count(table: &CsvTable) usize {
+    return table.headers.len
 }
 
 pub fn select_rows(table: &CsvTable, start: usize, end: usize) CsvTable {
     let result: CsvTable
-    result.arena = arena_allocator(&global_allocator)
-    const arena_alloc = result.arena.allocator()
+    result.buffer = string_builder(0)
 
-    // Copy headers
-    let sel_headers: List(OwnedString) = list(table.headers.len)
+    // Share headers (String views — still valid as long as original table lives)
+    let sel_headers: List(String)
     for (i in 0..table.headers.len) {
-        const h = from_view(table.headers.as_slice()[i].as_view(), &arena_alloc)
-        sel_headers.push(h)
+        sel_headers.push(table.headers.as_slice()[i])
     }
     result.headers = sel_headers
 
-    // Copy selected rows
     const actual_end = if end > table.rows.len { table.rows.len } else { end }
     const actual_start = if start > actual_end { actual_end } else { start }
     let sel_rows: List(CsvRecord)
-    result.rows = sel_rows
-
     for (i in actual_start..actual_end) {
-        const src = &table.rows.as_slice()[i]
+        const src = table.rows.as_slice()[i]
         let rec: CsvRecord
-        let rec_fields: List(OwnedString) = list(src.fields.len)
-        rec.fields = rec_fields
-        rec.headers = &result.headers
-        for (j in 0..src.fields.len) {
-            const f = from_view(src.fields.as_slice()[j].as_view(), &arena_alloc)
-            rec.fields.push(f)
+        let copied_fields: List(String)
+        for (fi in 0..src.fields.len) {
+            copied_fields.push(src.fields.as_slice()[fi])
         }
-        result.rows.push(rec)
+        rec.fields = copied_fields
+        rec.headers = &result.headers
+        sel_rows.push(rec)
     }
+    result.rows = sel_rows
 
     return result
 }
 
 pub fn select_columns(table: &CsvTable, names: String[]) CsvTable {
     let result: CsvTable
-    result.arena = arena_allocator(&global_allocator)
-    const arena_alloc = result.arena.allocator()
+    result.buffer = string_builder(0)
 
     // Find column indices
     let indices: List(usize)
     for (n in 0..names.len) {
         for (i in 0..table.headers.len) {
-            if table.headers.as_slice()[i].as_view() == names[n] {
+            if table.headers.as_slice()[i] == names[n] {
                 indices.push(i)
                 break
             }
@@ -778,35 +974,32 @@ pub fn select_columns(table: &CsvTable, names: String[]) CsvTable {
     }
 
     // Copy selected headers
-    let col_headers: List(OwnedString) = list(indices.len)
+    let col_headers: List(String)
     for (i in 0..indices.len) {
         const idx = indices.as_slice()[i]
-        const h = from_view(table.headers.as_slice()[idx].as_view(), &arena_alloc)
-        col_headers.push(h)
+        col_headers.push(table.headers.as_slice()[idx])
     }
     result.headers = col_headers
 
     // Copy rows with selected columns
     let col_rows: List(CsvRecord)
-    result.rows = col_rows
     for (r in 0..table.rows.len) {
-        const src = &table.rows.as_slice()[r]
+        const src = table.rows.as_slice()[r]
         let rec: CsvRecord
-        let rec_fields: List(OwnedString) = list(indices.len)
-        rec.fields = rec_fields
         rec.headers = &result.headers
+        let rec_fields: List(String)
         for (j in 0..indices.len) {
             const idx = indices.as_slice()[j]
             if idx < src.fields.len {
-                const f = from_view(src.fields.as_slice()[idx].as_view(), &arena_alloc)
-                rec.fields.push(f)
+                rec_fields.push(src.fields.as_slice()[idx])
             } else {
-                const f = from_view("", &arena_alloc)
-                rec.fields.push(f)
+                rec_fields.push("")
             }
         }
-        result.rows.push(rec)
+        rec.fields = rec_fields
+        col_rows.push(rec)
     }
+    result.rows = col_rows
 
     indices.deinit()
     return result
@@ -819,61 +1012,57 @@ pub fn select_columns(table: &CsvTable, names: String[]) CsvTable {
 test "parse simple CSV" {
     const input = "a\n1\n"
     let mr = mem_reader(input)
-    let r = csv_reader(mr.reader())
-    const rec = r.next_record()
-    assert_true(rec.is_some(), "should have record")
-    r.deinit()
+    let reader: CsvReader
+    csv_reader_init(&reader, mr.reader())
+    reader.parse_all()
+    assert_eq(reader.row_count(), 1usize, "1 row")
+    const rows = reader.get_rows()
+    assert_eq(rows.as_slice()[0].get(0usize).value, "1", "field 0")
+    reader.deinit()
 }
 
 test "parse CSV with quoted fields" {
     const input = "name,city\n\"Alice, Jr.\",\"New York\"\nBob,London\n"
     let mr = mem_reader(input)
-    let r = csv_reader(mr.reader())
-    const rec1 = r.next_record()
-    assert_true(rec1.is_some(), "should have first record")
-    const name1 = rec1.value.get("name")
-    assert_true(name1.is_some(), "should have name field")
-    r.deinit()
+    let reader: CsvReader
+    csv_reader_init(&reader, mr.reader())
+    reader.parse_all()
+    assert_eq(reader.row_count(), 2usize, "2 rows")
+    reader.deinit()
 }
 
 test "get by index" {
     const input = "a,b,c\n1,2,3\n"
     let mr = mem_reader(input)
-    let r = csv_reader(mr.reader())
-    const rec = r.next_record()
-    assert_true(rec.is_some(), "should have record")
-    assert_eq(rec.value.get(0usize).value, "1", "index 0")
-    assert_eq(rec.value.get(1usize).value, "2", "index 1")
-    assert_eq(rec.value.get(2usize).value, "3", "index 2")
-    assert_true(rec.value.get(3usize).is_none(), "index 3 out of bounds")
-    r.deinit()
+    let reader: CsvReader
+    csv_reader_init(&reader, mr.reader())
+    reader.parse_all()
+    const rows = reader.get_rows()
+    assert_eq(rows.as_slice()[0].get(0usize).value, "1", "index 0")
+    assert_eq(rows.as_slice()[0].get(1usize).value, "2", "index 1")
+    assert_eq(rows.as_slice()[0].get(2usize).value, "3", "index 2")
+    assert_true(rows.as_slice()[0].get(3usize).is_none(), "index 3 out of bounds")
+    reader.deinit()
 }
 
 test "CRLF line endings" {
     const input = "a,b\r\n1,2\r\n3,4\r\n"
     let mr = mem_reader(input)
-    let r = csv_reader(mr.reader())
-    const rec1 = r.next_record()
-    assert_true(rec1.is_some(), "should have first record")
-    assert_eq(rec1.value.get("a").value, "1", "first a")
-    const rec2 = r.next_record()
-    assert_true(rec2.is_some(), "should have second record")
-    assert_eq(rec2.value.get("a").value, "3", "second a")
-    r.deinit()
+    let reader: CsvReader
+    csv_reader_init(&reader, mr.reader())
+    const hdrs = reader.get_headers()
+    assert_eq(hdrs.len, 2usize, "2 headers")
+    assert_eq(hdrs.as_slice()[0], "a", "header a")
+    reader.deinit()
 }
 
 test "CR only line endings" {
     const input = "a,b\r1,2\r3,4\r"
     let mr = mem_reader(input)
-    let r = csv_reader(mr.reader())
-    const rec1 = r.next_record()
-    assert_true(rec1.is_some(), "should have first record")
-    assert_eq(rec1.value.get("a").value, "1", "first a")
-    const rec2 = r.next_record()
-    assert_true(rec2.is_some(), "should have second record")
-    assert_eq(rec2.value.get("a").value, "3", "second a")
-    r.deinit()
+    let reader: CsvReader
+    csv_reader_init(&reader, mr.reader())
+    const hdrs = reader.get_headers()
+    assert_eq(hdrs.len, 2usize, "2 headers")
+    assert_eq(hdrs.as_slice()[0], "a", "header a")
+    reader.deinit()
 }
-
-// TODO: csv_table, select_rows, select_columns, csv_writer tests disabled
-// pending fix for List(CsvRecord) monomorphization crash

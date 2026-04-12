@@ -31,6 +31,26 @@ pub fn list(capacity: usize, allocator: &Allocator? = null) List($T) {
     }
 }
 
+// Create a shallow copy of an existing list.
+// Allocates new backing storage and copies all elements.
+pub fn list(source: List($T), allocator: &Allocator? = null) List(T) {
+    if source.len == 0 {
+        let empty: List(T)
+        empty.allocator = allocator
+        return empty
+    }
+    const bytes = source.len * size_of(T)
+    const buf = allocator.or_global().alloc(bytes, align_of(T))
+        .expect("list(copy): allocation failed")
+    memcpy(buf.ptr, source.ptr as &u8, bytes)
+    return .{
+        ptr = buf.ptr as &T,
+        len = source.len,
+        cap = source.len,
+        allocator = allocator,
+    }
+}
+
 // Free the backing storage. The list should not be used after this.
 // Calls deinit on all stored elements before freeing.
 pub fn deinit(self: &List($T)) {
