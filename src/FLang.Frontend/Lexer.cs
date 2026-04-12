@@ -318,6 +318,7 @@ public class Lexer(Source source, int fileId)
             '#' => CreateToken(TokenKind.Hash),
             '$' => CreateToken(TokenKind.Dollar),
             '!' => CreateToken(TokenKind.Bang),
+            '~' => CreateToken(TokenKind.Tilde),
             _ => CreateToken(TokenKind.BadToken)
         };
     }

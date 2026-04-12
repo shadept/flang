@@ -53,6 +53,44 @@ public class IrFunction
     public List<BasicBlock> BasicBlocks { get; } = [];
     public bool IsEntryPoint { get; set; }
     public bool UsesReturnSlot { get; set; }
+
+    /// <summary>
+    /// Semantic identity key for this function (name + param types + return type).
+    /// Computed once after params are populated. Used by IR passes for deduplication
+    /// and dead-code elimination. Not a C symbol — codegen computes its own names.
+    /// </summary>
+    public string? SemanticKey { get; set; }
+
+    /// <summary>
+    /// Compute a semantic identity key from a function's name and type signature.
+    /// Two functions with the same key are the same specialization.
+    /// </summary>
+    public static string ComputeSemanticKey(string name, IEnumerable<IrType> paramTypes, IrType returnType)
+    {
+        var sb = new System.Text.StringBuilder();
+        sb.Append(name);
+        sb.Append('|');
+        bool first = true;
+        foreach (var pt in paramTypes)
+        {
+            if (!first) sb.Append(',');
+            sb.Append(IrNameMangling.MangleIrType(pt));
+            first = false;
+        }
+        sb.Append('|');
+        sb.Append(IrNameMangling.MangleIrType(returnType));
+        return sb.ToString();
+    }
+
+    /// <summary>
+    /// Compute and store the semantic key from this function's current params and return type.
+    /// Skips the hidden return slot param when UsesReturnSlot is true.
+    /// </summary>
+    public void ComputeAndStoreSemanticKey()
+    {
+        var paramTypes = UsesReturnSlot ? Params.Skip(1).Select(p => p.Type) : Params.Select(p => p.Type);
+        SemanticKey = ComputeSemanticKey(Name, paramTypes, ReturnType);
+    }
 }
 
 /// <summary>

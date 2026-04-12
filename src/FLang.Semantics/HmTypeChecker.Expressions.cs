@@ -406,6 +406,28 @@ public partial class HmTypeChecker
                 return WellKnown.Bool;
         }
 
+        // Bitwise NOT: built-in for integers, error on bool/float
+        if (un.Operator == UnaryOperatorKind.BitwiseNot)
+        {
+            var resolved = _ctx.Engine.Resolve(operand);
+            if (resolved is PrimitiveType pt)
+            {
+                if (pt.Name == "bool")
+                {
+                    ReportError("Bitwise operation `~` is not supported on type `bool`, use `!` for logical negation",
+                        un.Span, "E2017");
+                    return operand;
+                }
+                if (_floatTypeNames.Contains(pt.Name))
+                {
+                    ReportError($"Bitwise operation `~` is not supported on floating-point type `{pt.Name}`",
+                        un.Span, "E2017");
+                    return operand;
+                }
+            }
+            return operand;
+        }
+
         // Try operator function
         var opName = OperatorFunctions.GetFunctionName(un.Operator);
         var opResult = TryResolveOperator(opName, [operand], un.Span, out var resolvedNode);

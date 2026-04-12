@@ -25,10 +25,11 @@ public static class InliningPass
     {
         _inlineCounter = 0;
 
-        // Build function lookup by mangled name
+        // Build function lookup by semantic key
         var functionMap = new Dictionary<string, IrFunction>();
         foreach (var fn in module.Functions)
-            functionMap.TryAdd(MangleName(fn), fn);
+            if (fn.SemanticKey != null)
+                functionMap.TryAdd(fn.SemanticKey, fn);
 
         // Multi-pass inlining until no more changes
         for (int pass = 0; pass < MaxPasses; pass++)
@@ -39,11 +40,10 @@ public static class InliningPass
             foreach (var fn in module.Functions)
             {
                 if (fn.IsEntryPoint) continue;
-                var mangled = MangleName(fn);
-                if (recursive.Contains(mangled)) continue;
+                if (fn.SemanticKey == null || recursive.Contains(fn.SemanticKey)) continue;
                 if (fn.BasicBlocks.Count != 1) continue;
                 if (fn.BasicBlocks[0].Instructions.Count > MaxInlineInstructions) continue;
-                inlineable[mangled] = fn;
+                inlineable[fn.SemanticKey] = fn;
             }
 
             if (inlineable.Count == 0) break;
@@ -71,13 +71,14 @@ public static class InliningPass
         var callGraph = new Dictionary<string, HashSet<string>>();
         foreach (var fn in module.Functions)
         {
-            var mangled = MangleName(fn);
+            if (fn.SemanticKey == null) continue;
             var callees = new HashSet<string>();
             foreach (var block in fn.BasicBlocks)
                 foreach (var inst in block.Instructions)
-                    if (inst is CallInstruction call && !call.IsForeignCall && !call.IsIndirectCall)
-                        callees.Add(ResolveMangledCallName(call));
-            callGraph[mangled] = callees;
+                    if (inst is CallInstruction call && !call.IsForeignCall && !call.IsIndirectCall
+                        && call.CalleeSemanticKey != null)
+                        callees.Add(call.CalleeSemanticKey);
+            callGraph[fn.SemanticKey] = callees;
         }
 
         var recursive = new HashSet<string>();
@@ -139,7 +140,8 @@ public static class InliningPass
                 if (processedInst is CallInstruction call
                     && !call.IsForeignCall
                     && !call.IsIndirectCall
-                    && inlineable.TryGetValue(ResolveMangledCallName(call), out var callee))
+                    && call.CalleeSemanticKey != null
+                    && inlineable.TryGetValue(call.CalleeSemanticKey, out var callee))
                 {
                     var returnValue = InlineCall(call, callee, newInstructions);
 
@@ -276,6 +278,8 @@ public static class InliningPass
                 return new CallInstruction(c.Span, c.FunctionName, RL(c.Arguments), Fresh(c.Result))
                 {
                     CalleeIrParamTypes = c.CalleeIrParamTypes,
+                    CalleeIrReturnType = c.CalleeIrReturnType,
+                    CalleeSemanticKey = c.CalleeSemanticKey,
                     IsForeignCall = c.IsForeignCall,
                     IsIndirectCall = c.IsIndirectCall
                 };
@@ -354,6 +358,8 @@ public static class InliningPass
                 new CallInstruction(c.Span, c.FunctionName, RL(c.Arguments), c.Result)
                 {
                     CalleeIrParamTypes = c.CalleeIrParamTypes,
+                    CalleeIrReturnType = c.CalleeIrReturnType,
+                    CalleeSemanticKey = c.CalleeSemanticKey,
                     IsForeignCall = c.IsForeignCall,
                     IsIndirectCall = c.IsIndirectCall
                 },
@@ -393,16 +399,18 @@ public static class InliningPass
             foreach (var block in fn.BasicBlocks)
                 foreach (var inst in block.Instructions)
                 {
-                    if (inst is CallInstruction call && !call.IsForeignCall && !call.IsIndirectCall)
-                        referenced.Add(ResolveMangledCallName(call));
+                    if (inst is CallInstruction call && !call.IsForeignCall && !call.IsIndirectCall
+                        && call.CalleeSemanticKey != null)
+                        referenced.Add(call.CalleeSemanticKey);
 
-                    // Function pointer references
+                    // Function pointer references — use semantic key from name + type info
                     foreach (var op in PeepholeOptimizer.GetOperands(inst))
                         if (op is FunctionReferenceValue fref)
                         {
-                            referenced.Add(fref.FunctionName);
                             if (fref.IrType is IrFunctionPtr fp)
-                                referenced.Add(IrNameMangling.MangleFunctionName(fref.FunctionName, fp.Params));
+                                referenced.Add(IrFunction.ComputeSemanticKey(fref.FunctionName, fp.Params, fp.Return));
+                            else
+                                referenced.Add(fref.FunctionName);
                         }
                 }
 
@@ -413,16 +421,18 @@ public static class InliningPass
         module.Functions.RemoveAll(fn =>
             !fn.IsEntryPoint
             && !fn.Name.StartsWith("__test_")  // preserve test functions
-            && !referenced.Contains(MangleName(fn)));
+            && fn.SemanticKey != null
+            && !referenced.Contains(fn.SemanticKey));
     }
 
     private static void CollectFunctionRefsFromValue(Value val, HashSet<string> referenced)
     {
         if (val is FunctionReferenceValue fref)
         {
-            referenced.Add(fref.FunctionName);
             if (fref.IrType is IrFunctionPtr fp)
-                referenced.Add(IrNameMangling.MangleFunctionName(fref.FunctionName, fp.Params));
+                referenced.Add(IrFunction.ComputeSemanticKey(fref.FunctionName, fp.Params, fp.Return));
+            else
+                referenced.Add(fref.FunctionName);
         }
         else if (val is StructConstantValue scv)
         {
@@ -434,21 +444,5 @@ public static class InliningPass
             foreach (var elem in acv.Elements)
                 CollectFunctionRefsFromValue(elem, referenced);
         }
-    }
-
-    // ── Helpers ───────────────────────────────────────────────────────────
-
-    private static string MangleName(IrFunction fn)
-    {
-        var paramList = fn.UsesReturnSlot ? fn.Params.Skip(1) : fn.Params;
-        return IrNameMangling.MangleFunctionName(fn.Name, [.. paramList.Select(p => p.Type)]);
-    }
-
-    private static string ResolveMangledCallName(CallInstruction call)
-    {
-        var irParamTypes = call.CalleeIrParamTypes
-            ?? (IReadOnlyList<IrType>)call.Arguments
-                .Select(a => a.IrType ?? TypeLayoutService.IrI32).ToArray();
-        return IrNameMangling.MangleFunctionName(call.FunctionName, irParamTypes);
     }
 }

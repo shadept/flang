@@ -159,14 +159,15 @@ defer close(handle)
 | 1 | `??` (right-assoc) |
 
 - `and`/`or` are keywords, short-circuit, bool only
-- `!expr` logical NOT, `&expr` address-of (both prefix unary)
+- `!expr` logical NOT, `~expr` bitwise NOT, `&expr` address-of (all prefix unary)
+- `~` is integer-only (error on `bool` and floats); `!` is `bool`-only
 - `a ?? b` unwraps optional or uses fallback
 - `a?.field` optional chaining
 - `expr as Type` casting (numeric, pointer, String/u8[])
 
 ### Operator Overloading
 
-All operators desugar to function calls: `op_add`, `op_sub`, `op_multiply`, `op_divide`, `op_modulo`, `op_band`, `op_bor`, `op_bxor`, `op_eq`, `op_ne`, `op_lt`, `op_gt`, `op_le`, `op_ge`, `op_index`, `op_set_index`, `op_coalesce`, `op_assign`, `op_add_assign`.
+All operators desugar to function calls: `op_add`, `op_sub`, `op_multiply`, `op_divide`, `op_modulo`, `op_band`, `op_bor`, `op_bxor`, `op_bnot`, `op_eq`, `op_ne`, `op_lt`, `op_gt`, `op_le`, `op_ge`, `op_index`, `op_set_index`, `op_coalesce`, `op_assign`, `op_add_assign`.
 
 `op_eq` auto-derives `op_ne`. `op_cmp(a, b) Ord` auto-derives all six comparison operators.
 

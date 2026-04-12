@@ -360,7 +360,7 @@ public static class HmCCodeGenerator
             FloatConstantValue fcv => EmitFloatConstant(fcv),
             StringTableValue stv => EmitInlineStringLiteral(stringTable[stv.Index]),
             FunctionReferenceValue fv => fv.IrType is IrFunctionPtr fp2
-                ? IrNameMangling.MangleFunctionName(fv.Name, fp2.Params)
+                ? IrNameMangling.MangleFunctionName(fv.Name, fp2.Params, fp2.Return)
                 : fv.Name,
             StructConstantValue nested when nested.IrType is IrStruct nestedStruct
                 => EmitNestedStructConstant(nested, nestedStruct, stringTable),
@@ -651,8 +651,18 @@ public static class HmCCodeGenerator
                     var resultName = unary.Result.Name;
                     var resultType = IrTypeToCType(unary.Result.IrType ?? TypeLayoutService.IrI32);
                     var operand = EmitValue(unary.Operand);
-                    var op = unary.Operation == UnaryOp.Negate ? "-" : "!";
-                    sb.AppendLine($"    {resultType} {resultName} = {op}{operand};");
+                    var op = unary.Operation switch
+                    {
+                        UnaryOp.Negate => "-",
+                        UnaryOp.Not => "!",
+                        UnaryOp.BitwiseNot => "~",
+                        _ => "-"
+                    };
+                    // Cast bitwise NOT result to suppress C integer promotion warnings
+                    if (unary.Operation == UnaryOp.BitwiseNot)
+                        sb.AppendLine($"    {resultType} {resultName} = ({resultType})({op}{operand});");
+                    else
+                        sb.AppendLine($"    {resultType} {resultName} = {op}{operand};");
                     break;
                 }
 
@@ -665,7 +675,8 @@ public static class HmCCodeGenerator
                         ? call.FunctionName
                         : IrNameMangling.MangleFunctionName(call.FunctionName,
                             call.CalleeIrParamTypes
-                            ?? (IReadOnlyList<IrType>)call.Arguments.Select(a => a.IrType ?? TypeLayoutService.IrI32).ToArray());
+                            ?? (IReadOnlyList<IrType>)call.Arguments.Select(a => a.IrType ?? TypeLayoutService.IrI32).ToArray(),
+                            call.CalleeIrReturnType);
 
                     if (resultType == TypeLayoutService.IrVoidPrim)
                         sb.AppendLine($"    {fnName}({args});");
@@ -787,7 +798,7 @@ public static class HmCCodeGenerator
             LocalValue lv => lv.Name,
             StringTableValue stv => $"__flang__string_table[{stv.Index}]",
             FunctionReferenceValue fv => fv.IrType is IrFunctionPtr fp
-                ? IrNameMangling.MangleFunctionName(fv.Name, fp.Params)
+                ? IrNameMangling.MangleFunctionName(fv.Name, fp.Params, fp.Return)
                 : fv.Name,
             RawCStringValue rv => $"\"{rv.Text}\"",
             GlobalValue gv when gv.Initializer is StructConstantValue
@@ -969,7 +980,7 @@ public static class HmCCodeGenerator
     private static string MangleFunctionName(IrFunction fn)
     {
         var paramList = fn.UsesReturnSlot ? fn.Params.Skip(1) : fn.Params;
-        return IrNameMangling.MangleFunctionName(fn.Name, [.. paramList.Select(p => p.Type)]);
+        return IrNameMangling.MangleFunctionName(fn.Name, [.. paramList.Select(p => p.Type)], fn.ReturnType);
     }
 
     /// <summary>

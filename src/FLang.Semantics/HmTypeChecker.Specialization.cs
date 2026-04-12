@@ -16,7 +16,7 @@ public partial class HmTypeChecker
     // Generic Function Specialization (Monomorphization)
     // =========================================================================
 
-    private string BuildSpecKey(string name, Type[] paramTypes)
+    private string BuildSpecKey(string name, Type[] paramTypes, Type returnType)
     {
         var sb = new System.Text.StringBuilder();
         sb.Append(name);
@@ -26,6 +26,8 @@ public partial class HmTypeChecker
             if (i > 0) sb.Append(',');
             AppendTypeSpecKey(sb, paramTypes[i]);
         }
+        sb.Append('|');
+        AppendTypeSpecKey(sb, _ctx.Engine.Resolve(returnType));
         return sb.ToString();
     }
 
@@ -76,7 +78,7 @@ public partial class HmTypeChecker
     private FunctionDeclarationNode? EnsureSpecialization(
         FunctionScheme scheme, Type[] concreteParamTypes, Type concreteReturnType, SourceSpan callSpan)
     {
-        var key = BuildSpecKey(scheme.Name, concreteParamTypes);
+        var key = BuildSpecKey(scheme.Name, concreteParamTypes, concreteReturnType);
         if (_results.EmittedSpecs.TryGetValue(key, out var existing))
             return existing;
 

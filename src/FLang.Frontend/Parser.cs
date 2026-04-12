@@ -1606,6 +1606,16 @@ public class Parser
                     return new UnaryExpressionNode(span, UnaryOperatorKind.Not, operandWithPostfix);
                 }
 
+            case TokenKind.Tilde:
+                {
+                    // Bitwise not: ~expr
+                    var tildeToken = Eat(TokenKind.Tilde);
+                    var operandPrimary = ParsePrimaryExpression();
+                    var operandWithPostfix = ParsePostfixOperators(operandPrimary);
+                    var span = SourceSpan.Combine(tildeToken.Span, operandWithPostfix.Span);
+                    return new UnaryExpressionNode(span, UnaryOperatorKind.BitwiseNot, operandWithPostfix);
+                }
+
             case TokenKind.DotDot:
                 {
                     // Prefix range: ..end or .. (unbounded)

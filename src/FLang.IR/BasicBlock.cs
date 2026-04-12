@@ -170,6 +170,9 @@ public class BasicBlock
             var inst = new CallInstruction(Ctx.Span, fnName, args, voidResult);
             if (calleeParamTypes != null)
                 inst.CalleeIrParamTypes = calleeParamTypes;
+            inst.CalleeIrReturnType = retType;
+            if (!isForeign && calleeParamTypes != null)
+                inst.CalleeSemanticKey = IrFunction.ComputeSemanticKey(fnName, calleeParamTypes, retType);
             Instructions.Add(inst);
 
             return EmitLoad(retSlot, retType);
@@ -181,6 +184,9 @@ public class BasicBlock
         call.IsIndirectCall = isIndirect;
         if (calleeParamTypes != null)
             call.CalleeIrParamTypes = calleeParamTypes;
+        call.CalleeIrReturnType = retType;
+        if (!isForeign && !isIndirect && calleeParamTypes != null)
+            call.CalleeSemanticKey = IrFunction.ComputeSemanticKey(fnName, calleeParamTypes, retType);
         Instructions.Add(call);
         return result;
     }

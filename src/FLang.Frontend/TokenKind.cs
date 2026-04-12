@@ -56,6 +56,7 @@ public enum TokenKind
     QuestionDot,
     FatArrow,
     Bang,
+    Tilde,
 
     // Comparison operators
     EqualsEquals,

@@ -7,15 +7,17 @@ namespace FLang.IR;
 public static class IrNameMangling
 {
     /// <summary>
-    /// Mangle a function name with its parameter types: "name__type1__type2".
+    /// Mangle a function name with its parameter and return types: "name__type1__type2__ret_rettype".
     /// </summary>
-    public static string MangleFunctionName(string baseName, IReadOnlyList<IrType> paramTypes)
+    public static string MangleFunctionName(string baseName, IReadOnlyList<IrType> paramTypes, IrType? returnType = null)
     {
         var sanitizedBase = TypeLayoutService.SanitizeCName(baseName);
-        if (paramTypes.Count == 0) return sanitizedBase;
-        var parts = new List<string>(paramTypes.Count + 1) { sanitizedBase };
+        if (paramTypes.Count == 0 && returnType == null) return sanitizedBase;
+        var parts = new List<string>(paramTypes.Count + 2) { sanitizedBase };
         foreach (var pt in paramTypes)
             parts.Add(MangleIrType(pt));
+        if (returnType != null)
+            parts.Add("ret_" + MangleIrType(returnType));
         return string.Join("__", parts);
     }
 

@@ -326,6 +326,8 @@ public static class PeepholeOptimizer
                     var newCall = new CallInstruction(c.Span, c.FunctionName, RList(c.Arguments), c.Result)
                     {
                         CalleeIrParamTypes = c.CalleeIrParamTypes,
+                        CalleeIrReturnType = c.CalleeIrReturnType,
+                        CalleeSemanticKey = c.CalleeSemanticKey,
                         IsForeignCall = c.IsForeignCall,
                         IsIndirectCall = c.IsIndirectCall
                     };

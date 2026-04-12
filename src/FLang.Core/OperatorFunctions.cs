@@ -40,7 +40,8 @@ public enum BinaryOperatorKind
 public enum UnaryOperatorKind
 {
     Negate,
-    Not
+    Not,
+    BitwiseNot
 }
 
 /// <summary>
@@ -124,6 +125,7 @@ public static class OperatorFunctions
     {
         UnaryOperatorKind.Negate => "op_neg",
         UnaryOperatorKind.Not => "op_not",
+        UnaryOperatorKind.BitwiseNot => "op_bnot",
         _ => throw new ArgumentOutOfRangeException(nameof(op), op, "Unknown unary operator")
     };
 
@@ -134,6 +136,7 @@ public static class OperatorFunctions
     {
         UnaryOperatorKind.Negate => "-",
         UnaryOperatorKind.Not => "!",
+        UnaryOperatorKind.BitwiseNot => "~",
         _ => "?"
     };
 
@@ -150,7 +153,7 @@ public static class OperatorFunctions
     /// <summary>
     /// All unary operator function names.
     /// </summary>
-    public static readonly string[] UnaryOperators = ["op_neg", "op_not"];
+    public static readonly string[] UnaryOperators = ["op_neg", "op_not", "op_bnot"];
 
     /// <summary>
     /// All operator function names.

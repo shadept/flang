@@ -140,27 +140,25 @@ This is related to the never-type gap — `break` and `continue` would need to p
 
 ---
 
-### List(T) Generic Monomorphization Produces Wrong Specialization
+### ~~List(T) Generic Monomorphization Produces Wrong Specialization~~
 
-**Status:** Open
+**Status:** Fixed
 **Affected:** C codegen — generic function instantiation
 
-Calling the `list(capacity)` constructor for multiple generic specializations (e.g., `List(OwnedString)`, `List(CsvRecord)`, `List(usize)`) in the same compilation unit generates C code that routes all calls to the first specialization. Produces incompatible pointer type errors in the C compiler.
+Fixed by including the return type in both the specialization key (`BuildSpecKey`) and the C function name mangling (`IrNameMangling.MangleFunctionName`). Specializations with identical parameter types but different return types now produce distinct keys and distinct C symbols.
 
-**Workaround:** Zero-initialize non-`OwnedString` lists with `let x: List(T)` and rely on `push()` auto-allocation.
+**Test:** `tests/FLang.Tests/Harness/generics/generic_multi_return_type.f`
 
 ---
 
-### No Bitwise NOT Operator
+### ~~No Bitwise NOT Operator~~
 
-**Status:** Open (language gap)
+**Status:** Fixed
 **Affected:** Parser, operators
 
-FLang has no `~` prefix operator for bitwise NOT. The operator table includes `&` (AND), `|` (OR), `^` (XOR) but not NOT.
+Added `~` as a prefix unary operator. Built-in for all integer types (same as `&`, `|`, `^`). Produces compile error E2017 on `bool` and floating-point types. Supports user-defined `op_bnot` via operator function dispatch.
 
-**Workaround:** Use `x ^ 0xFFFF` (or appropriate all-ones mask) to invert bits.
-
-**Future:** Add `~` as a prefix unary operator desugaring to `op_bnot`.
+**Test:** `tests/FLang.Tests/Harness/operators/bitwise_not.f`, `bitwise_not_bool_error.f`, `bitwise_not_float_error.f`
 
 ---
 

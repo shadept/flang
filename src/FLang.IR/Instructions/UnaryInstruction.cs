@@ -11,7 +11,10 @@ public enum UnaryOp
     Negate,
 
     /// <summary>Logical not: !x</summary>
-    Not
+    Not,
+
+    /// <summary>Bitwise not: ~x</summary>
+    BitwiseNot
 }
 
 /// <summary>

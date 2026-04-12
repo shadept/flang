@@ -131,7 +131,7 @@ public class HmAstLowering
             }
         }
 
-        // Track emitted function mangled names to deduplicate across modules
+        // Track emitted function semantic keys to deduplicate across modules
         var emittedFunctions = new HashSet<string>();
 
         // Lower non-generic, non-foreign functions
@@ -142,10 +142,9 @@ public class HmAstLowering
                 if ((fn.Modifiers & FunctionModifiers.Foreign) != 0) continue;
                 if (fn.IsGeneric) continue;
                 var irFn = LowerFunction(fn);
-                var mangledName = irFn.IsEntryPoint ? "main"
-                    : IrNameMangling.MangleFunctionName(irFn.Name,
-                        [.. irFn.Params.Select(p => p.Type)]);
-                if (emittedFunctions.Add(mangledName))
+                irFn.ComputeAndStoreSemanticKey();
+                var key = irFn.IsEntryPoint ? "main" : irFn.SemanticKey!;
+                if (emittedFunctions.Add(key))
                     _module.Functions.Add(irFn);
             }
         }
@@ -154,10 +153,9 @@ public class HmAstLowering
         foreach (var fn in _types.SpecializedFunctions)
         {
             var irFn = LowerFunction(fn);
-            var mangledName = irFn.IsEntryPoint ? "main"
-                : IrNameMangling.MangleFunctionName(irFn.Name,
-                    [.. irFn.Params.Select(p => p.Type)]);
-            if (emittedFunctions.Add(mangledName))
+            irFn.ComputeAndStoreSemanticKey();
+            var key = irFn.IsEntryPoint ? "main" : irFn.SemanticKey!;
+            if (emittedFunctions.Add(key))
                 _module.Functions.Add(irFn);
         }
 
@@ -781,8 +779,8 @@ public class HmAstLowering
         var knownFunctions = new HashSet<string>();
         foreach (var fn in _module.Functions)
         {
-            var paramList = fn.UsesReturnSlot ? fn.Params.Skip(1) : fn.Params;
-            knownFunctions.Add(MangleFunctionName(fn.Name, paramList.Select(p => p.Type).ToArray()));
+            if (fn.SemanticKey != null)
+                knownFunctions.Add(fn.SemanticKey);
         }
         foreach (var decl in _module.ForeignDecls)
             knownFunctions.Add(decl.CName);
@@ -803,13 +801,11 @@ public class HmAstLowering
                 {
                     if (inst is CallInstruction call && !call.IsForeignCall && !call.IsIndirectCall)
                     {
-                        var irParamTypes = call.CalleeIrParamTypes
-                            ?? call.Arguments.Select(a => a.IrType ?? TypeLayoutService.IrI32).ToArray();
-                        var calleeName = MangleFunctionName(call.FunctionName, (IReadOnlyList<IrType>)irParamTypes);
-                        if (!knownFunctions.Contains(calleeName))
+                        var callKey = call.CalleeSemanticKey;
+                        if (callKey != null && !knownFunctions.Contains(callKey))
                         {
                             _diagnostics.Add(Diagnostic.Error(
-                                $"Unknown call target `{calleeName}` in function `{fn.Name}`",
+                                $"Unknown call target `{call.FunctionName}` in function `{fn.Name}`",
                                 default, null, "E3002"));
                         }
                     }
@@ -2317,6 +2313,7 @@ public class HmAstLowering
         {
             UnaryOperatorKind.Negate => UnaryOp.Negate,
             UnaryOperatorKind.Not => UnaryOp.Not,
+            UnaryOperatorKind.BitwiseNot => UnaryOp.BitwiseNot,
             _ => UnaryOp.Negate
         };
 
@@ -4193,11 +4190,4 @@ public class HmAstLowering
 
     // =========================================================================
     // IrType-based name mangling (delegates to FLang.IR.IrNameMangling)
-    // =========================================================================
-
-    public static string MangleFunctionName(string baseName, IReadOnlyList<IrType> paramTypes)
-        => IrNameMangling.MangleFunctionName(baseName, paramTypes);
-
-    public static string MangleIrType(IrType type)
-        => IrNameMangling.MangleIrType(type);
 }

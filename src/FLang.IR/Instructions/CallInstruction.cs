@@ -39,6 +39,20 @@ public class CallInstruction : Instruction
     public IReadOnlyList<IrType>? CalleeIrParamTypes { get; set; }
 
     /// <summary>
+    /// Return type of the callee function (pre-ABI, logical type).
+    /// Used by codegen for name mangling to distinguish generic specializations
+    /// with identical parameter types but different return types.
+    /// </summary>
+    public IrType? CalleeIrReturnType { get; set; }
+
+    /// <summary>
+    /// Semantic identity key of the callee function.
+    /// Used by IR passes (inlining, dead-code elimination) to match calls to functions.
+    /// Not a C symbol — codegen computes its own names.
+    /// </summary>
+    public string? CalleeSemanticKey { get; set; }
+
+    /// <summary>
     /// True if this is a call to a foreign (C) function that should not be name-mangled.
     /// False for FLang functions that require mangling.
     /// </summary>
