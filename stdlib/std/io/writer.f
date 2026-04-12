@@ -17,6 +17,16 @@ import std.interface
     write: fn(data: u8[]) usize
 })
 
+// Write a single byte.
+pub fn write_byte(self: Writer, b: u8) {
+    self.write([b])
+}
+
+// Write a string as raw bytes.
+pub fn write_str(self: Writer, s: String) {
+    self.write(s.as_raw_bytes())
+}
+
 // Buffered writer over caller-provided storage.
 // Writes accumulate in buf[0..pos]. When pos reaches buf.len, the buffer
 // auto-flushes via the underlying Writer. Explicit flush() drains

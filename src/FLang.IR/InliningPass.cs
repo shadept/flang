@@ -239,7 +239,22 @@ public static class InliningPass
 
     private static Value Remap(Value v, Dictionary<Value, Value> map)
     {
-        return map.TryGetValue(v, out var mapped) ? mapped : v;
+        if (map.TryGetValue(v, out var mapped))
+            return mapped;
+
+        // Fallback: name-based lookup for LocalValues that were recreated with
+        // different type wrappers (e.g. array locals emitted as IrArray but
+        // alloca'd as IrPointer(IrArray) — same name, different object identity).
+        if (v is LocalValue lv)
+        {
+            foreach (var (key, val) in map)
+            {
+                if (key is LocalValue keyLv && keyLv.Name == lv.Name)
+                    return val;
+            }
+        }
+
+        return v;
     }
 
     private static Instruction CloneInstruction(

@@ -92,14 +92,6 @@ pub fn field_count(record: &CsvRecord) usize {
 // Internal helpers
 // =============================================================================
 
-fn write_byte(w: Writer, b: u8) {
-    let byte = b
-    w.write(slice_from_raw_parts(&byte, 1))
-}
-
-fn write_str(w: Writer, s: String) {
-    w.write(slice_from_raw_parts(s.ptr, s.len))
-}
 
 // =============================================================================
 // SIMD classifier — shared core for delimiter detection
@@ -453,7 +445,7 @@ pub fn decode_str(self: &CsvDecoder, w: Writer) bool {
     if self.current_field >= self.spans.len { return false }
     const val = self.get_decoder_field(self.current_field)
     self.current_field = self.current_field + 1
-    write_str(w, val)
+    w.write_str(val)
     return true
 }
 
@@ -537,20 +529,20 @@ fn needs_quoting(self: &CsvEncoder, s: String) bool {
 
 fn write_csv_field(self: &CsvEncoder, s: String) {
     if self.field_index > 0 {
-        write_byte(self.w, self.options.delimiter)
+        self.w.write_byte(self.options.delimiter)
     }
     if self.needs_quoting(s) {
-        write_byte(self.w, self.options.quote)
+        self.w.write_byte(self.options.quote)
         for (i in 0..s.len) {
             const c = s[i]
             if c == self.options.quote {
-                write_byte(self.w, self.options.quote)
+                self.w.write_byte(self.options.quote)
             }
-            write_byte(self.w, c)
+            self.w.write_byte(c)
         }
-        write_byte(self.w, self.options.quote)
+        self.w.write_byte(self.options.quote)
     } else {
-        write_str(self.w, s)
+        self.w.write_str(s)
     }
     self.field_index = self.field_index + 1
 }
@@ -622,12 +614,12 @@ pub fn end_map(self: &CsvEncoder) usize {
     if self.header_written == false {
         self.header_written = true
         for (i in 0..self.current_keys.len) {
-            if i > 0 { write_byte(self.w, self.options.delimiter) }
-            write_str(self.w, self.current_keys.as_slice()[i].as_view())
+            if i > 0 { self.w.write_byte(self.options.delimiter) }
+            self.w.write_str(self.current_keys.as_slice()[i].as_view())
         }
-        write_byte(self.w, 0x0A)
+        self.w.write_byte(0x0A)
         for (i in 0..self.first_row_values.len) {
-            if i > 0 { write_byte(self.w, self.options.delimiter) }
+            if i > 0 { self.w.write_byte(self.options.delimiter) }
             const val = self.first_row_values.as_slice()[i].as_view()
             self.field_index = i
             self.write_csv_field(val)
@@ -636,7 +628,7 @@ pub fn end_map(self: &CsvEncoder) usize {
         let empty_vals = list(0)
         self.first_row_values = empty_vals
     }
-    write_byte(self.w, 0x0A)
+    self.w.write_byte(0x0A)
     self.row_count = self.row_count + 1
     self.field_index = 0
     return 0
