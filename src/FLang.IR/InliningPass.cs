@@ -399,9 +399,8 @@ public static class InliningPass
             foreach (var block in fn.BasicBlocks)
                 foreach (var inst in block.Instructions)
                 {
-                    if (inst is CallInstruction call && !call.IsForeignCall && !call.IsIndirectCall
-                        && call.CalleeSemanticKey != null)
-                        referenced.Add(call.CalleeSemanticKey);
+                    if (inst is CallInstruction call && !call.IsForeignCall && !call.IsIndirectCall)
+                        referenced.Add(call.CalleeSemanticKey ?? call.FunctionName);
 
                     // Function pointer references — use semantic key from name + type info
                     foreach (var op in PeepholeOptimizer.GetOperands(inst))
@@ -420,9 +419,7 @@ public static class InliningPass
 
         module.Functions.RemoveAll(fn =>
             !fn.IsEntryPoint
-            && !fn.Name.StartsWith("__test_")  // preserve test functions
-            && fn.SemanticKey != null
-            && !referenced.Contains(fn.SemanticKey));
+            && !referenced.Contains(fn.SemanticKey ?? fn.Name));
     }
 
     private static void CollectFunctionRefsFromValue(Value val, HashSet<string> referenced)

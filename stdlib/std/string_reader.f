@@ -10,8 +10,8 @@ import std.io.reader
 import std.interface
 
 // Reader over a byte slice in memory.
-// Create via mem_reader(s) or via the reader() method on String-like types.
-// The source data must outlive the MemReader.
+// Create via mem_reader(s), then call mr.reader() to get a Reader interface.
+// The MemReader must outlive the Reader (it holds the context pointer).
 pub type MemReader = struct {
     data: u8[]
     pos: usize
@@ -32,10 +32,6 @@ fn read(self: &MemReader, buf: u8[]) usize {
 
 #implement(MemReader, Reader)
 
-pub fn reader(s: String) Reader {
-    return mem_reader(s).reader()
-}
-
 #define(string_reader, T: Type) {
     pub fn find(s: #(T.name), needle: String) usize? { return find(s.as_view(), needle) }
     pub fn rfind(s: #(T.name), needle: String) usize? { return rfind(s.as_view(), needle) }
@@ -45,5 +41,4 @@ pub fn reader(s: String) Reader {
     pub fn trim(s: #(T.name)) String { return trim(s.as_view()) }
     pub fn trim_start(s: #(T.name)) String { return trim_start(s.as_view()) }
     pub fn trim_end(s: #(T.name)) String { return trim_end(s.as_view()) }
-    pub fn reader(s: #(T.name)) Reader { return reader(s.as_view()) }
 }

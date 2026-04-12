@@ -979,6 +979,9 @@ public static class HmCCodeGenerator
 
     private static string MangleFunctionName(IrFunction fn)
     {
+        // Test functions and entry points use their raw names — they're already unique
+        if (fn.IsEntryPoint || fn.Name.StartsWith("__test_"))
+            return TypeLayoutService.SanitizeCName(fn.Name);
         var paramList = fn.UsesReturnSlot ? fn.Params.Skip(1) : fn.Params;
         return IrNameMangling.MangleFunctionName(fn.Name, [.. paramList.Select(p => p.Type)], fn.ReturnType);
     }
