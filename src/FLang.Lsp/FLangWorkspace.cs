@@ -170,7 +170,10 @@ public class FLangWorkspace
             TypeCheckResult? typeCheckResult = null;
             HmTypeChecker? hmChecker = null;
 
-            if (!allDiagnostics.Any(d => d.Severity == DiagnosticSeverity.Error))
+            // Best-effort type checking: proceed even with parse errors so the LSP
+            // can provide hover/definition for the parts of the file that parsed correctly.
+            // The type checker handles dummy AST nodes from error recovery gracefully.
+            try
             {
                 hmChecker = new HmTypeChecker(compilation);
 
@@ -236,6 +239,16 @@ public class FLangWorkspace
                 FLangLanguageServer.Log($"  [checkGenericBodies] {sw.ElapsedMilliseconds - lap}ms");
 
                 typeCheckResult = hmChecker.BuildResult();
+            }
+            catch (Exception ex)
+            {
+                FLangLanguageServer.Log($"  Type checking failed (best-effort): {ex.Message}");
+                // Still build a partial result if we got far enough
+                if (hmChecker != null)
+                {
+                    try { typeCheckResult = hmChecker.BuildResult(); }
+                    catch { /* truly broken — proceed without type info */ }
+                }
             }
 
             var result = new FileAnalysisResult(allDiagnostics, compilation, parsedModules, typeCheckResult);

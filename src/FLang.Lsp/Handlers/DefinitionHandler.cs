@@ -3,6 +3,7 @@ using FLang.Core.Types;
 using FLang.Frontend.Ast;
 using FLang.Frontend.Ast.Declarations;
 using FLang.Frontend.Ast.Expressions;
+using FLang.Frontend.Ast.Types;
 using Microsoft.Extensions.Logging;
 using OmniSharp.Extensions.LanguageServer.Protocol;
 using OmniSharp.Extensions.LanguageServer.Protocol.Client.Capabilities;
@@ -118,6 +119,18 @@ public class DefinitionHandler : DefinitionHandlerBase
                     break;
                 }
 
+            case NamedTypeNode named:
+                return ResolveTypeNameToDefinition(named.Name, analysis);
+
+            case GenericTypeNode generic:
+                return ResolveTypeNameToDefinition(generic.Name, analysis);
+
+            case ReferenceTypeNode refType when refType.InnerType is NamedTypeNode inner:
+                return ResolveTypeNameToDefinition(inner.Name, analysis);
+
+            case NullableTypeNode nullable when nullable.InnerType is NamedTypeNode inner:
+                return ResolveTypeNameToDefinition(inner.Name, analysis);
+
             case MemberAccessExpressionNode ma:
                 {
                     // Try to find the struct field definition in parsed AST
@@ -183,6 +196,23 @@ public class DefinitionHandler : DefinitionHandlerBase
             }
         }
 
+        return null;
+    }
+
+    /// <summary>
+    /// Resolves a type name (from a type annotation) to its definition span.
+    /// Searches NominalSpans by short name match.
+    /// </summary>
+    private static SourceSpan? ResolveTypeNameToDefinition(string name, FileAnalysisResult analysis)
+    {
+        var tc = analysis.TypeChecker;
+        if (tc == null) return null;
+
+        foreach (var (fqn, span) in tc.NominalSpans)
+        {
+            if (fqn == name || fqn.EndsWith("." + name))
+                return span;
+        }
         return null;
     }
 

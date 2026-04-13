@@ -15,6 +15,7 @@ public class Parser
 {
     private readonly Lexer _lexer;
     private Token _currentToken;
+    private Token _previousToken;
     private readonly List<Diagnostic> _diagnostics = [];
     private bool _stopAtBrace; // When true, '{' terminates expression parsing (used for if/for conditions)
     private readonly List<StructDeclarationNode> _hoistedStructs = [];
@@ -28,6 +29,16 @@ public class Parser
     public Parser(Lexer lexer)
     {
         _lexer = lexer;
+        Advance();
+        _previousToken = _currentToken;
+    }
+
+    /// <summary>
+    /// Advances to the next token, keeping track of the previous token for line-aware parsing.
+    /// </summary>
+    private void Advance()
+    {
+        _previousToken = _currentToken;
         _currentToken = _lexer.NextToken();
     }
 
@@ -73,7 +84,7 @@ public class Parser
                        _currentToken.Kind != TokenKind.Hash &&
                        _currentToken.Kind != TokenKind.EndOfFile)
                 {
-                    _currentToken = _lexer.NextToken();
+                    Advance();
                 }
             }
         }
@@ -149,7 +160,7 @@ public class Parser
                             $"found '{nextToken.Text}'",
                             "E1002"));
                         // Consume `pub` to prevent infinite loop and continue
-                        _currentToken = _lexer.NextToken();
+                        Advance();
                     }
                 }
                 else if (_currentToken.Kind == TokenKind.Struct)
@@ -202,7 +213,7 @@ public class Parser
                         "E1001"));
                     // Skip token to avoid infinite loop
                     if (_currentToken.Kind != TokenKind.EndOfFile)
-                        _currentToken = _lexer.NextToken();
+                        Advance();
                 }
                 else
                 {
@@ -212,7 +223,7 @@ public class Parser
                         _currentToken.Span,
                         "expected `struct`, `enum`, `type`, `pub fn`, `fn`, `test`, `const`, or directive",
                         "E1001"));
-                    _currentToken = _lexer.NextToken();
+                    Advance();
                 }
             }
             catch (ParserException ex)
@@ -253,7 +264,7 @@ public class Parser
                     if (_currentToken.Kind is TokenKind.StringLiteral or TokenKind.Identifier or TokenKind.Integer)
                     {
                         arguments.Add(_currentToken);
-                        _currentToken = _lexer.NextToken();
+                        Advance();
                     }
                     else
                     {
@@ -419,7 +430,7 @@ public class Parser
             // Verbatim token — just advance; the cursor-based range will capture it.
             if (_currentToken.Kind == TokenKind.OpenBrace) braceDepth++;
             else if (_currentToken.Kind == TokenKind.CloseBrace) braceDepth--;
-            _currentToken = _lexer.NextToken();
+            Advance();
         }
 
         // Flush trailing verbatim up to the closing brace
@@ -508,7 +519,7 @@ public class Parser
                or TokenKind.LessThanOrEqual or TokenKind.GreaterThanOrEqual)
         {
             var op = _currentToken.Text;
-            _currentToken = _lexer.NextToken();
+            Advance();
             var right = ParseTemplateAdditive();
             left = new TemplateBinaryExpr(SourceSpan.Combine(left.Span, right.Span), left, op, right);
         }
@@ -521,7 +532,7 @@ public class Parser
         while (_currentToken.Kind is TokenKind.Plus or TokenKind.Minus)
         {
             var op = _currentToken.Text;
-            _currentToken = _lexer.NextToken();
+            Advance();
             var right = ParseTemplateMultiplicative();
             left = new TemplateBinaryExpr(SourceSpan.Combine(left.Span, right.Span), left, op, right);
         }
@@ -534,7 +545,7 @@ public class Parser
         while (_currentToken.Kind is TokenKind.Star or TokenKind.Slash or TokenKind.Percent)
         {
             var op = _currentToken.Text;
-            _currentToken = _lexer.NextToken();
+            Advance();
             var right = ParseTemplatePostfix();
             left = new TemplateBinaryExpr(SourceSpan.Combine(left.Span, right.Span), left, op, right);
         }
@@ -548,7 +559,7 @@ public class Parser
         {
             if (_currentToken.Kind == TokenKind.Dot)
             {
-                _currentToken = _lexer.NextToken();
+                Advance();
                 var member = Eat(TokenKind.Identifier);
                 expr = new TemplateMemberAccessExpr(
                     SourceSpan.Combine(expr.Span, member.Span), expr, member.Text);
@@ -572,7 +583,7 @@ public class Parser
         // [..end]
         if (_currentToken.Kind == TokenKind.DotDot)
         {
-            _currentToken = _lexer.NextToken();
+            Advance();
             var end = ParseTemplateExpression();
             var close = Eat(TokenKind.CloseBracket);
             return new TemplateSliceExpr(SourceSpan.Combine(obj.Span, close.Span), obj, null, end);
@@ -583,7 +594,7 @@ public class Parser
         // [start..]  or  [start..end]
         if (_currentToken.Kind == TokenKind.DotDot)
         {
-            _currentToken = _lexer.NextToken();
+            Advance();
             TemplateExpr? end = null;
             if (_currentToken.Kind != TokenKind.CloseBracket)
                 end = ParseTemplateExpression();
@@ -605,14 +616,14 @@ public class Parser
             case TokenKind.StringLiteral:
             {
                 var token = _currentToken;
-                _currentToken = _lexer.NextToken();
+                Advance();
                 return new TemplateStringLiteral(token.Span, token.Text);
             }
 
             case TokenKind.Integer:
             {
                 var token = _currentToken;
-                _currentToken = _lexer.NextToken();
+                Advance();
                 long.TryParse(token.Text, out var value);
                 return new TemplateIntLiteral(token.Span, value);
             }
@@ -620,7 +631,7 @@ public class Parser
             case TokenKind.Identifier:
             {
                 var token = _currentToken;
-                _currentToken = _lexer.NextToken();
+                Advance();
 
                 // Built-in function call: type_of(...), lower(...)
                 if (_templateBuiltins.Contains(token.Text) &&
@@ -633,7 +644,7 @@ public class Parser
                     {
                         args.Add(ParseTemplateExpression());
                         if (_currentToken.Kind == TokenKind.Comma)
-                            _currentToken = _lexer.NextToken();
+                            Advance();
                     }
                     var close = Eat(TokenKind.CloseParenthesis);
                     return new TemplateCallExpr(
@@ -736,7 +747,7 @@ public class Parser
             _currentToken.Kind.IsKeyword())
         {
             var token = _currentToken;
-            _currentToken = _lexer.NextToken();
+            Advance();
             return token;
         }
 
@@ -1175,9 +1186,19 @@ public class Parser
 
     /// <summary>
     /// Parses a single statement (variable declaration, return, assignment, etc.).
+    /// Consumes an optional trailing semicolon if present.
     /// </summary>
     /// <returns>A <see cref="StatementNode"/> representing the parsed statement.</returns>
     private StatementNode ParseStatement()
+    {
+        var stmt = ParseStatementCore();
+        // Consume optional trailing semicolon
+        if (_currentToken.Kind == TokenKind.Semicolon)
+            Advance();
+        return stmt;
+    }
+
+    private StatementNode ParseStatementCore()
     {
         switch (_currentToken.Kind)
         {
@@ -1384,7 +1405,7 @@ public class Parser
             // Valid lvalues: identifiers and field access expressions
             if (_currentToken.Kind == TokenKind.Equals && IsValidLValue(left))
             {
-                _currentToken = _lexer.NextToken();
+                Advance();
                 var value = ParseExpression(); // Right-associative, so parse full expression
                 var assignSpan = SourceSpan.Combine(left.Span, value.Span);
                 return new AssignmentExpressionNode(assignSpan, left, value);
@@ -1399,7 +1420,7 @@ public class Parser
             // Special handling for range operator
             if (operatorToken.Kind == TokenKind.DotDot)
             {
-                _currentToken = _lexer.NextToken();
+                Advance();
 
                 // Check if end is omitted (x..) - next token is a delimiter
                 ExpressionNode? rangeEnd = null;
@@ -1418,7 +1439,7 @@ public class Parser
             // Special handling for null-coalescing operator (right-associative)
             if (operatorToken.Kind == TokenKind.QuestionQuestion)
             {
-                _currentToken = _lexer.NextToken();
+                Advance();
                 // Right-associative: parse with same precedence to allow chaining a ?? b ?? c
                 var coalesceRight = ParseBinaryExpression(precedence - 1);
                 var coalesceSpan = SourceSpan.Combine(left.Span, coalesceRight.Span);
@@ -1439,7 +1460,7 @@ public class Parser
                 return new IntegerLiteralNode(operatorToken.Span, 0);
             }
 
-            _currentToken = _lexer.NextToken();
+            Advance();
 
             var right = ParseBinaryExpression(precedence);
 
@@ -1785,7 +1806,7 @@ public class Parser
                 // If we didn't make progress (stuck on same token), skip it to prevent infinite loop
                 if (_currentToken.Kind == errorToken.Kind && _currentToken.Span.Index == errorToken.Span.Index)
                 {
-                    _currentToken = _lexer.NextToken();
+                    Advance();
                 }
                 _diagnostics.Add(Diagnostic.Error(
                     $"unexpected token '{errorToken.Text}' in expression",
@@ -2161,6 +2182,14 @@ public class Parser
                 // Try to parse as expression
                 var expr = ParseExpression();
 
+                // Semicolon makes it explicitly a statement (not a trailing expression)
+                if (_currentToken.Kind == TokenKind.Semicolon)
+                {
+                    Advance();
+                    statements.Add(new ExpressionStatementNode(expr.Span, expr));
+                    continue;
+                }
+
                 // If it's the last thing before }, it's a trailing expression
                 if (_currentToken.Kind == TokenKind.CloseBrace)
                 {
@@ -2357,7 +2386,7 @@ public class Parser
 
             // Consume the length token - check for integer type specifically for E1004
             var lengthToken = _currentToken;
-            _currentToken = _lexer.NextToken();
+            Advance();
 
             int length = 0;
             if (lengthToken.Kind != TokenKind.Integer || !int.TryParse(lengthToken.Text, out length))
@@ -2709,7 +2738,7 @@ public class Parser
             if (_currentToken.Kind == TokenKind.OpenBrace)
             {
                 braceDepth++;
-                _currentToken = _lexer.NextToken();
+                Advance();
                 continue;
             }
 
@@ -2718,18 +2747,18 @@ public class Parser
                 if (braceDepth > 0)
                 {
                     braceDepth--;
-                    _currentToken = _lexer.NextToken();
+                    Advance();
                     continue;
                 }
                 // Stray } at top level — skip it
-                _currentToken = _lexer.NextToken();
+                Advance();
                 continue;
             }
 
             if (braceDepth == 0 && IsTopLevelStart(_currentToken.Kind))
                 return;
 
-            _currentToken = _lexer.NextToken();
+            Advance();
         }
     }
 
@@ -2743,6 +2772,8 @@ public class Parser
     /// <summary>
     /// Synchronizes the parser to a statement boundary after encountering an error.
     /// Tracks brace depth so nested blocks are skipped entirely rather than stopping at inner braces.
+    /// Uses line boundaries as implicit statement separators: at brace depth 0, a new line
+    /// is treated as a potential statement boundary (similar to Kotlin/Go ASI).
     /// </summary>
     private void SynchronizeStatement()
     {
@@ -2752,7 +2783,7 @@ public class Parser
             if (_currentToken.Kind == TokenKind.OpenBrace)
             {
                 braceDepth++;
-                _currentToken = _lexer.NextToken();
+                Advance();
                 continue;
             }
 
@@ -2761,24 +2792,40 @@ public class Parser
                 if (braceDepth > 0)
                 {
                     braceDepth--;
-                    _currentToken = _lexer.NextToken();
+                    Advance();
                     continue;
                 }
                 // Depth 0: this } belongs to the caller (function body end) — stop without consuming
                 return;
             }
 
-            // Only consider recovery at depth 0 (back at the function body level)
-            if (braceDepth == 0 && IsStatementStart(_currentToken.Kind))
+            if (_currentToken.Kind == TokenKind.Semicolon)
+            {
+                // Explicit semicolon: consume it and stop — next token starts a new statement
+                Advance();
                 return;
+            }
 
-            _currentToken = _lexer.NextToken();
+            if (braceDepth == 0)
+            {
+                // Keyword-based recovery (always works)
+                if (IsStatementStart(_currentToken.Kind))
+                    return;
+
+                // Line-based recovery: if we've crossed a line boundary, the current token
+                // likely starts a new statement (e.g., an expression-statement like foo())
+                if (_currentToken.Span.Line > _previousToken.Span.Line)
+                    return;
+            }
+
+            Advance();
         }
     }
 
     /// <summary>
     /// Synchronizes the parser to an expression boundary after encountering an error.
     /// Tracks (), [], {} depth so nested delimiters are skipped rather than treated as recovery points.
+    /// Uses line boundaries as implicit expression terminators at depth 0.
     /// </summary>
     private void SynchronizeExpression()
     {
@@ -2791,7 +2838,7 @@ public class Parser
                 case TokenKind.OpenBracket:
                 case TokenKind.OpenBrace:
                     depth++;
-                    _currentToken = _lexer.NextToken();
+                    Advance();
                     continue;
 
                 case TokenKind.CloseParenthesis:
@@ -2800,7 +2847,7 @@ public class Parser
                     if (depth > 0)
                     {
                         depth--;
-                        _currentToken = _lexer.NextToken();
+                        Advance();
                         continue;
                     }
                     // Closing delimiter for the caller — stop without consuming
@@ -2813,9 +2860,13 @@ public class Parser
                     return;
                 if (IsStatementStart(_currentToken.Kind))
                     return;
+                // Line-based recovery: a new line at depth 0 likely means we've entered
+                // the next statement — stop so the caller can resume statement parsing
+                if (_currentToken.Span.Line > _previousToken.Span.Line)
+                    return;
             }
 
-            _currentToken = _lexer.NextToken();
+            Advance();
         }
     }
 
@@ -3020,7 +3071,7 @@ public class Parser
             throw new ParserException(diag);
         }
 
-        _currentToken = _lexer.NextToken();
+        Advance();
         return token;
     }
 

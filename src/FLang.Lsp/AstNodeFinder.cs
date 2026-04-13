@@ -2,6 +2,7 @@ using FLang.Frontend.Ast;
 using FLang.Frontend.Ast.Declarations;
 using FLang.Frontend.Ast.Expressions;
 using FLang.Frontend.Ast.Statements;
+using FLang.Frontend.Ast.Types;
 
 namespace FLang.Lsp;
 
@@ -270,9 +271,30 @@ public static class AstNodeFinder
                     yield return sp;
                 break;
 
+            // Type nodes: descend into compound types to reach the named type inside
+            case ReferenceTypeNode rt:
+                yield return rt.InnerType;
+                break;
+            case NullableTypeNode nt:
+                yield return nt.InnerType;
+                break;
+            case GenericTypeNode gt:
+                foreach (var ta in gt.TypeArguments) yield return ta;
+                break;
+            case ArrayTypeNode at:
+                yield return at.ElementType;
+                break;
+            case SliceTypeNode st:
+                yield return st.ElementType;
+                break;
+            case FunctionTypeNode ft:
+                foreach (var pt in ft.ParameterTypes) yield return pt;
+                yield return ft.ReturnType;
+                break;
+
             // Leaves: IdentifierExpressionNode, IntegerLiteralNode, StringLiteralNode,
             // BooleanLiteralNode, NullLiteralNode, ImportDeclarationNode,
-            // BreakStatementNode, ContinueStatementNode, TypeNodes, PatternNodes (leaf)
+            // BreakStatementNode, ContinueStatementNode, NamedTypeNode, PatternNodes (leaf)
             // — no children to yield
         }
     }

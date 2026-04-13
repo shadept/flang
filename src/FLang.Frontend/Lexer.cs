@@ -19,6 +19,7 @@ public class Lexer(Source source, int fileId)
     public Source Source => _source;
     private int _position;
     private int _start;
+    private int _line;
 
 
     /// <summary>
@@ -39,6 +40,7 @@ public class Lexer(Source source, int fileId)
             // Eat whitespace
             if (char.IsWhiteSpace(ch))
             {
+                if (ch == '\n') _line++;
                 _position++;
                 continue;
             }
@@ -49,7 +51,10 @@ public class Lexer(Source source, int fileId)
                 _position += 2; // Skip the "//"
                 while (_position < text.Length && text[_position] != '\n') _position++;
                 if (_position < text.Length)
-                    _position++; // Skip the newline character
+                {
+                    _line++; // Count the newline
+                    _position++;
+                }
                 continue; // Keep scanning for the next meaningful character
             }
 
@@ -180,6 +185,7 @@ public class Lexer(Source source, int fileId)
                 }
                 else
                 {
+                    if (text[_position] == '\n') _line++;
                     stringBuilder.Append(text[_position]);
                     _position++;
                 }
@@ -329,7 +335,7 @@ public class Lexer(Source source, int fileId)
     /// <returns>A <see cref="SourceSpan"/> covering the range from _start to _position.</returns>
     private SourceSpan CreateSpan()
     {
-        return new SourceSpan(_fileId, _start, _position - _start);
+        return new SourceSpan(_fileId, _start, _position - _start, _line);
     }
 
     /// <summary>
@@ -342,6 +348,7 @@ public class Lexer(Source source, int fileId)
         // Save current state
         var savedPosition = _position;
         var savedStart = _start;
+        var savedLine = _line;
 
         // Get next token
         var token = NextToken();
@@ -349,6 +356,7 @@ public class Lexer(Source source, int fileId)
         // Restore state
         _position = savedPosition;
         _start = savedStart;
+        _line = savedLine;
 
         return token;
     }

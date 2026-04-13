@@ -2,6 +2,7 @@
 //! COMPILE-ERROR: E1001
 
 pub fn main() i32 {
-    let x: i32 = 42;  // ERROR: unexpected token `;`
+    let x: i32 = 42
+    @ // ERROR: unexpected token `@`
     return x
 }

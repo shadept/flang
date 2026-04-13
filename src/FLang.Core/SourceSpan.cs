@@ -6,13 +6,13 @@ namespace FLang.Core;
 /// <param name="FileId">The unique identifier of the <see cref="Source"/> containing this span.</param>
 /// <param name="Index">The zero-based starting position of this span in the source text.</param>
 /// <param name="Length">The length of this span in characters.</param>
-public readonly record struct SourceSpan(int FileId, int Index, int Length)
+public readonly record struct SourceSpan(int FileId, int Index, int Length, int Line = 0)
 {
     /// <summary>
     /// Gets a special SourceSpan value representing no source location.
     /// Used when source information is unavailable (e.g., compiler-generated diagnostics).
     /// </summary>
-    public static SourceSpan None => new(-1, 0, 0);
+    public static SourceSpan None => new(-1, 0, 0, 0);
 
     /// <summary>
     /// Combines multiple spans into a single span that encompasses all of them.
@@ -32,6 +32,6 @@ public readonly record struct SourceSpan(int FileId, int Index, int Length)
         var endIndex = last.Index + last.Length;
         var length = endIndex - startIndex;
 
-        return new SourceSpan(first.FileId, startIndex, length);
+        return new SourceSpan(first.FileId, startIndex, length, first.Line);
     }
 }
