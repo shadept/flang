@@ -112,16 +112,21 @@ public class Compilation
     /// <returns>The resolved file path if found; otherwise, null.</returns>
     public string? TryResolveImportPath(IReadOnlyList<string> importPath, ISourceProvider? sourceProvider = null)
     {
-        // Convert import path to filepath: ["std", "io"] -> "stdlib/std/io.f"
+        // Convert import path to filepath: ["std", "io"] -> "std/io.f", ["vendor", "raylib"] -> "vendor/raylib.f"
         var relativePath = string.Join(Path.DirectorySeparatorChar, importPath) + ".f";
-        var fullPath = Path.Combine(StdlibPath, relativePath);
-        if (sourceProvider != null)
+
+        // Search all include paths (stdlib first, then user paths, then working dir)
+        foreach (var basePath in IncludePaths)
         {
-            if (sourceProvider.Exists(fullPath)) return fullPath;
-        }
-        else
-        {
-            if (File.Exists(fullPath)) return fullPath;
+            var fullPath = Path.Combine(basePath, relativePath);
+            if (sourceProvider != null)
+            {
+                if (sourceProvider.Exists(fullPath)) return fullPath;
+            }
+            else
+            {
+                if (File.Exists(fullPath)) return fullPath;
+            }
         }
         return null;
     }

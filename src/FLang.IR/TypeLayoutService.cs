@@ -45,6 +45,12 @@ public class TypeLayoutService(ITypeResolver engine, INominalTypeRegistry nomina
         _ => false
     };
 
+    /// <summary>
+    /// Returns true when the type uses C calling convention (passed by value, no implicit reference).
+    /// Foreign structs (#foreign struct) follow C ABI; regular FLang structs use FLang calling convention.
+    /// </summary>
+    public static bool UsesCCallingConvention(IrType type) => type is IrStruct { IsForeign: true };
+
     private static readonly Dictionary<string, IrPrimitive> PrimitiveLookup = new()
     {
         ["void"] = IrVoidPrim,
@@ -190,27 +196,29 @@ public class TypeLayoutService(ITypeResolver engine, INominalTypeRegistry nomina
                     foreach (var (fname, ftype) in sourceFields)
                         concreteFields.Add((fname, SubstituteTypeArgs(_engine.Resolve(ftype), subst)));
 
-                    concrete = new NominalType(nt.Name, template.Kind, nt.TypeArguments, concreteFields, template.IsSimd);
+                    concrete = new NominalType(nt.Name, template.Kind, nt.TypeArguments, concreteFields, template.IsSimd, template.IsForeign);
                 }
             }
         }
         else
         {
-            // Non-generic type — check if the template has IsSimd or more fields
+            // Non-generic type — check if the template has IsSimd/IsForeign or more fields
             var template = _nominalTypes.LookupNominalType(nt.Name);
             if (template != null)
             {
                 if (nt.FieldsOrVariants.Count == 0 && template.FieldsOrVariants.Count > 0)
                     concrete = template;
-                else if (template.IsSimd && !nt.IsSimd)
-                    concrete = new NominalType(nt.Name, nt.Kind, nt.TypeArguments, nt.FieldsOrVariants, template.IsSimd);
+                else if ((template.IsSimd && !nt.IsSimd) || (template.IsForeign && !nt.IsForeign))
+                    concrete = new NominalType(nt.Name, nt.Kind, nt.TypeArguments, nt.FieldsOrVariants, template.IsSimd, template.IsForeign);
             }
         }
 
         // Pre-register a stub to break recursive cycles (self-referencing types via pointers).
         // LowerStruct/LowerEnum will produce the real result and we update the cache.
-        // Use the cache key for the CName so each specialization gets a unique C identifier.
-        var cName = SanitizeCName(cacheKey);
+        // Foreign structs use their original C name; others get a mangled C identifier.
+        var cName = concrete.IsForeign
+            ? concrete.Name.Split('.').Last()
+            : SanitizeCName(cacheKey);
         IrType stub;
         if (concrete.Kind == NominalKind.Enum)
             stub = new IrEnum(concrete.Name, cName, 4, [], 4, 4);
@@ -233,7 +241,7 @@ public class TypeLayoutService(ITypeResolver engine, INominalTypeRegistry nomina
         int registerSize = 8;
 
         if (nt.FieldsOrVariants.Count == 0)
-            return new IrStruct(nt.Name, cName, [], 0, 1, registerSize);
+            return new IrStruct(nt.Name, cName, [], 0, 1, registerSize, nt.IsForeign);
 
         var fields = new IrField[nt.FieldsOrVariants.Count];
         int offset = 0;
@@ -258,7 +266,7 @@ public class TypeLayoutService(ITypeResolver engine, INominalTypeRegistry nomina
         }
 
         var totalSize = AlignUp(offset, maxAlignment);
-        return new IrStruct(nt.Name, cName, fields, totalSize, maxAlignment, registerSize);
+        return new IrStruct(nt.Name, cName, fields, totalSize, maxAlignment, registerSize, nt.IsForeign);
     }
 
     private static int NextPowerOfTwo(int v)
@@ -396,7 +404,7 @@ public class TypeLayoutService(ITypeResolver engine, INominalTypeRegistry nomina
         NominalType nt when nt.TypeArguments.Count > 0 => new NominalType(
             nt.Name, nt.Kind,
             nt.TypeArguments.Select(a => SubstituteRec(a, subst)).ToList(),
-            nt.FieldsOrVariants, nt.IsSimd),
+            nt.FieldsOrVariants, nt.IsSimd, nt.IsForeign),
         _ => type
     };
 

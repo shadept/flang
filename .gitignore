@@ -110,6 +110,9 @@ dist/
 *.generated.c
 *.generated.f
 
+# Generated FFI vendor bindings
+vendor/
+
 # Intermediate C files from compilation (but not hand-written stdlib .c files)
 examples/**/*.c
 tests/**/*.c

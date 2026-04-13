@@ -161,7 +161,7 @@ public class BasicBlock
         if (!skipAbi)
             MaterializeArgs(args, calleeParamTypes);
 
-        if (!skipAbi && TypeLayoutService.IsLargeValue(retType))
+        if (!skipAbi && TypeLayoutService.IsLargeValue(retType) && !TypeLayoutService.UsesCCallingConvention(retType))
         {
             var retSlot = EmitAlloca(retType);
             args.Insert(0, retSlot);
@@ -198,7 +198,7 @@ public class BasicBlock
     {
         MaterializeArgsByType(args);
 
-        if (TypeLayoutService.IsLargeValue(retType))
+        if (TypeLayoutService.IsLargeValue(retType) && !TypeLayoutService.UsesCCallingConvention(retType))
         {
             var retSlot = EmitAlloca(retType);
             args.Insert(0, retSlot);
@@ -252,7 +252,7 @@ public class BasicBlock
         foreach (var (name, paramType) in declaredParams)
         {
             var irParam = new IrParam(name, paramType);
-            if (TypeLayoutService.IsLargeValue(paramType))
+            if (TypeLayoutService.IsLargeValue(paramType) && !TypeLayoutService.UsesCCallingConvention(paramType))
             {
                 irParam = irParam with { IsByRef = true };
                 locals[name] = new LocalValue(name, new IrPointer(paramType));
@@ -266,7 +266,7 @@ public class BasicBlock
         }
 
         bool usesReturnSlot = false;
-        if (TypeLayoutService.IsLargeValue(returnType) && !isEntryPoint)
+        if (TypeLayoutService.IsLargeValue(returnType) && !TypeLayoutService.UsesCCallingConvention(returnType) && !isEntryPoint)
         {
             usesReturnSlot = true;
             var retPtrType = new IrPointer(returnType);
@@ -296,7 +296,7 @@ public class BasicBlock
         if (calleeParamTypes == null) return;
         for (int i = 0; i < args.Count && i < calleeParamTypes.Count; i++)
         {
-            if (TypeLayoutService.IsLargeValue(calleeParamTypes[i]) && args[i].IrType is not IrPointer)
+            if (TypeLayoutService.IsLargeValue(calleeParamTypes[i]) && !TypeLayoutService.UsesCCallingConvention(calleeParamTypes[i]) && args[i].IrType is not IrPointer)
             {
                 var argType = args[i].IrType ?? calleeParamTypes[i];
                 var temp = EmitAlloca(argType);
@@ -314,7 +314,7 @@ public class BasicBlock
     {
         for (int i = 0; i < args.Count; i++)
         {
-            if (TypeLayoutService.IsLargeValue(args[i].IrType) && args[i].IrType is not IrPointer)
+            if (TypeLayoutService.IsLargeValue(args[i].IrType) && !TypeLayoutService.UsesCCallingConvention(args[i].IrType) && args[i].IrType is not IrPointer)
             {
                 var argType = args[i].IrType ?? TypeLayoutService.IrVoidPrim;
                 var temp = EmitAlloca(argType);

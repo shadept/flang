@@ -876,11 +876,11 @@ public static class HmCCodeGenerator
     private static (IrType[] Params, IrType Return) GetAbiFunctionPtr(IrFunctionPtr fp)
     {
         var abiParams = new List<IrType>();
-        var usesRetSlot = TypeLayoutService.IsLargeValue(fp.Return);
+        var usesRetSlot = TypeLayoutService.IsLargeValue(fp.Return) && !TypeLayoutService.UsesCCallingConvention(fp.Return);
         if (usesRetSlot)
             abiParams.Add(new IrPointer(fp.Return));
         foreach (var p in fp.Params)
-            abiParams.Add(TypeLayoutService.IsLargeValue(p) ? new IrPointer(p) : p);
+            abiParams.Add(TypeLayoutService.IsLargeValue(p) && !TypeLayoutService.UsesCCallingConvention(p) ? new IrPointer(p) : p);
         return ([.. abiParams], usesRetSlot ? TypeLayoutService.IrVoidPrim : fp.Return);
     }
 

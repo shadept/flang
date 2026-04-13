@@ -135,7 +135,7 @@ public sealed record ArrayType(Type ElementType, int Length) : Type
 /// Equality is by name + type arguments (not fields/variants).
 /// </summary>
 public sealed record NominalType(string Name, NominalKind Kind, IReadOnlyList<Type> TypeArguments,
-    IReadOnlyList<(string Name, Type Type)> FieldsOrVariants, bool IsSimd) : Type
+    IReadOnlyList<(string Name, Type Type)> FieldsOrVariants, bool IsSimd, bool IsForeign = false) : Type
 {
     /// <summary>
     /// For naked enums (C-style enums with explicit tag values like Less = -1),

@@ -128,7 +128,7 @@ public partial class HmTypeChecker
                     : $"type `{generic.Name}` is deprecated";
                 ReportWarning(warning, generic.Span, "W2001");
             }
-            return new NominalType(nominal.Name, nominal.Kind, typeArgs, nominal.FieldsOrVariants, nominal.IsSimd);
+            return new NominalType(nominal.Name, nominal.Kind, typeArgs, nominal.FieldsOrVariants, nominal.IsSimd, nominal.IsForeign);
         }
 
         var candidates = _types.NominalTypes.Keys.Select(k => k.Contains('.') ? k[(k.LastIndexOf('.') + 1)..] : k);
@@ -221,7 +221,7 @@ public partial class HmTypeChecker
                 nominal.Name,
                 nominal.Kind,
                 nominal.TypeArguments.Select(a => SubstituteTypeVars(a, substMap)).ToArray(),
-                nominal.FieldsOrVariants, nominal.IsSimd),
+                nominal.FieldsOrVariants, nominal.IsSimd, nominal.IsForeign),
             _ => resolved
         };
     }

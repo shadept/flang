@@ -28,7 +28,8 @@ public record CompilerOptions(
     IReadOnlyList<string>? IncludePaths = null,
     bool RunTests = false,
     bool EmitCfg = false,
-    IReadOnlyList<string>? LinkFlags = null
+    IReadOnlyList<string>? LinkFlags = null,
+    IReadOnlyList<string>? HeaderPaths = null
 );
 
 public record CompilationResult(
@@ -107,6 +108,36 @@ public class Compiler
                     Microsoft.Extensions.Logging.Console.ConsoleFormatterOptions>();
             builder.AddConsole(o => o.FormatterName = "custom-debug");
         });
+
+        // 0. FFI Header Processing — generates vendor/*.f before module discovery
+        if (options.HeaderPaths is { Count: > 0 })
+        {
+            var headerParser = new FFI.CppAstHeaderParser();
+            var bindingGenerator = new FFI.FLangBindingGenerator();
+            var vendorDir = Path.Combine(workingDir, "vendor");
+            Directory.CreateDirectory(vendorDir);
+
+            foreach (var headerPath in options.HeaderPaths)
+            {
+                var fullHeaderPath = Path.GetFullPath(headerPath);
+                var result = headerParser.Parse(fullHeaderPath);
+
+                foreach (var warning in result.Warnings)
+                    allDiagnostics.Add(Diagnostic.Warning($"FFI: {warning}", SourceSpan.None));
+
+                if (result.Errors.Count > 0)
+                {
+                    foreach (var err in result.Errors)
+                        allDiagnostics.Add(Diagnostic.Error($"FFI: {err}", SourceSpan.None));
+                    continue;
+                }
+
+                var headerName = Path.GetFileNameWithoutExtension(headerPath);
+                var flangSource = bindingGenerator.Generate(result, headerName);
+                var vendorFile = Path.Combine(vendorDir, $"{headerName}.f");
+                File.WriteAllText(vendorFile, flangSource);
+            }
+        }
 
         // 1. Module Loading and Parsing
         var moduleCompilerLogger = loggerFactory.CreateLogger<ModuleCompiler>();

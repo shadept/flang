@@ -19,6 +19,7 @@ var dumpTemplates = false;
 var emitC = false;
 var emitCfg = false;
 var linkFlags = new List<string>();
+var headerPaths = new List<string>();
 
 // Handle "test" subcommand: flang test <file> or flang --flags test <file>
 {
@@ -58,6 +59,10 @@ for (var i = 0; i < args.Length; i++)
     else if (args[i] == "--emit-cfg")
         emitCfg = true;
     else if (args[i] == "--link" && i + 1 < args.Length)
+        linkFlags.Add(args[++i]);
+    else if (args[i] == "-I" && i + 1 < args.Length)
+        headerPaths.Add(args[++i]);
+    else if (args[i] == "-L" && i + 1 < args.Length)
         linkFlags.Add(args[++i]);
     else if (args[i] == "--version" || args[i] == "-v")
     {
@@ -102,6 +107,9 @@ if (inputFilePath == null)
     Console.WriteLine("  --release               Enable C backend optimization (passes -O2 /O2)");
     Console.WriteLine("  --test                  Run test blocks instead of main()");
     Console.WriteLine("  --lsp                   Start Language Server Protocol server over stdio");
+    Console.WriteLine("  -I <header>             Parse C header and generate FFI bindings in vendor/");
+    Console.WriteLine("  -L <lib>                Link against a C library (passed to the C compiler)");
+    Console.WriteLine("  --link <flags>          Additional linker flags");
     Console.WriteLine("  --debug-logging         Enable detailed logs for the compiler stages");
     Console.WriteLine("  --demo-diagnostics      Show diagnostic system demo");
     Console.WriteLine("  --find-compilers        Probe and list available C compilers on this machine, then exit");
@@ -145,7 +153,8 @@ var options = new CompilerOptions(
     DebugLogging: debugLogging,
     RunTests: runTests,
     EmitCfg: emitCfg,
-    LinkFlags: linkFlags.Count > 0 ? linkFlags : null
+    LinkFlags: linkFlags.Count > 0 ? linkFlags : null,
+    HeaderPaths: headerPaths.Count > 0 ? headerPaths : null
 );
 
 try

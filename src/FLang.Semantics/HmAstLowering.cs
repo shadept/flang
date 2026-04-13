@@ -1865,7 +1865,7 @@ public class HmAstLowering
             var isForeignCheck = call.ResolvedTarget != null &&
                                  (call.ResolvedTarget.Modifiers & FunctionModifiers.Foreign) != 0;
             var needsByRef = firstParamWantsPtr ||
-                             (!isForeignCheck && firstParamIrType != null && TypeLayoutService.IsLargeValue(firstParamIrType));
+                             (!isForeignCheck && firstParamIrType != null && TypeLayoutService.IsLargeValue(firstParamIrType) && !TypeLayoutService.UsesCCallingConvention(firstParamIrType));
 
             // When callee expects &self (or implicit by-ref) and receiver is a local variable
             // whose alloca type matches the expected param type, pass the alloca pointer directly
@@ -2012,7 +2012,7 @@ public class HmAstLowering
                         new IntConstantValue(0, TypeLayoutService.IrUSize), lenField.Type);
                     var loaded = _currentBlock.EmitLoad(tmpPtr, sliceStruct);
 
-                    if (!isForeign && TypeLayoutService.IsLargeValue(expectedParamType))
+                    if (!isForeign && TypeLayoutService.IsLargeValue(expectedParamType) && !TypeLayoutService.UsesCCallingConvention(expectedParamType))
                     {
                         var temp = _currentBlock.EmitAlloca(sliceStruct);
                         _currentBlock.EmitStorePtr(temp, loaded);
@@ -2028,8 +2028,12 @@ public class HmAstLowering
 
             var argVal = LowerExpression(callArguments[i], expectedParamType);
 
-            // Implicit by-ref: large value args to non-foreign functions need pointer materialization
-            if (!isForeign && expectedParamType != null && TypeLayoutService.IsLargeValue(expectedParamType) && argVal.IrType is not IrPointer)
+            // Implicit by-ref: large value args need pointer materialization under FLang calling convention.
+            // Foreign calls and types with C calling convention (#foreign struct) are always passed by value.
+            if (!isForeign && expectedParamType != null
+                && TypeLayoutService.IsLargeValue(expectedParamType)
+                && !TypeLayoutService.UsesCCallingConvention(expectedParamType)
+                && argVal.IrType is not IrPointer)
             {
                 var argIrType = argVal.IrType ?? expectedParamType;
                 var temp = _currentBlock.EmitAlloca(argIrType);
@@ -2060,7 +2064,7 @@ public class HmAstLowering
         }
 
         // Return slot: non-foreign, non-indirect call returning large value
-        if (!isForeign && !call.IsIndirectCall && TypeLayoutService.IsLargeValue(retIrType) && foreignOptionRet == null)
+        if (!isForeign && !call.IsIndirectCall && TypeLayoutService.IsLargeValue(retIrType) && !TypeLayoutService.UsesCCallingConvention(retIrType) && foreignOptionRet == null)
         {
             return _currentBlock.EmitCall(targetName, args, retIrType, calleeIrParamTypes);
         }
@@ -2852,7 +2856,7 @@ public class HmAstLowering
             // or if it's a large value type (implicit by-ref)
             var firstParamIsPtr = calleeIrParamTypes.Count > 0 && calleeIrParamTypes[0] is IrPointer;
             var firstParamNeedsByRef = firstParamIsPtr ||
-                (calleeIrParamTypes.Count > 0 && TypeLayoutService.IsLargeValue(calleeIrParamTypes[0]));
+                (calleeIrParamTypes.Count > 0 && TypeLayoutService.IsLargeValue(calleeIrParamTypes[0]) && !TypeLayoutService.UsesCCallingConvention(calleeIrParamTypes[0]));
             if (firstParamNeedsByRef && baseVal.IrType is not IrPointer)
             {
                 var baseIrType = baseVal.IrType ?? TypeLayoutService.IrVoidPrim;

@@ -44,7 +44,8 @@ public partial class HmTypeChecker
             }
 
             var isSimd = HasSimdDirective(structDecl.Directives);
-            var placeholder = new NominalType(fqn, NominalKind.Struct, [], [], isSimd);
+            var isForeign = HasForeignDirective(structDecl.Directives);
+            var placeholder = new NominalType(fqn, NominalKind.Struct, [], [], isSimd, isForeign);
             _types.NominalTypes[fqn] = placeholder;
             _types.NominalSpans[fqn] = structDecl.NameSpan;
             _types.FieldTypeNodes[fqn] = structDecl.Fields.Select(f => (f.Name, f.Type)).ToList();
@@ -58,6 +59,8 @@ public partial class HmTypeChecker
             ValidateDirectives(enumDecl.Directives);
             if (HasSimdDirective(enumDecl.Directives))
                 ReportError("`#simd` can only be applied to struct types", enumDecl.Span, "E1002");
+            if (HasForeignDirective(enumDecl.Directives))
+                ReportError("`#foreign` can only be applied to struct types", enumDecl.Span, "E1002");
             var fqn = $"{modulePath}.{enumDecl.Name}";
             if (_types.NominalTypes.ContainsKey(fqn))
             {
@@ -106,7 +109,7 @@ public partial class HmTypeChecker
             PopScope();
 
             var existing = _types.NominalTypes[fqn];
-            _types.NominalTypes[fqn] = new NominalType(fqn, NominalKind.Struct, typeArgs, fields, existing.IsSimd);
+            _types.NominalTypes[fqn] = new NominalType(fqn, NominalKind.Struct, typeArgs, fields, existing.IsSimd, existing.IsForeign);
         }
 
         // Make Type(T) share TypeInfo's fields so Type(T) values carry size/align/kind/etc.

@@ -386,12 +386,41 @@ Prefixed with `#`, precede declarations:
 
 | Directive | Purpose |
 |---|---|
-| `#foreign` | C FFI function (no body, not mangled) |
+| `#foreign` | C FFI function (no body, not mangled) or C-layout-locked struct |
 | `#deprecated("msg")` | Deprecation warning on usage |
 | `#inline` | Inlining hint |
 | `#intrinsic` | Compiler-recognized stdlib intrinsic |
+| `#simd` | SIMD-aligned struct (16+ byte alignment) |
 
 Unknown directives produce warning W2003.
+
+#### `#foreign` on structs
+
+`#foreign` on a struct declaration locks its memory layout to C ABI conventions. The compiler will never reorder fields or change padding. In generated C code, the struct typedef/definition is omitted — it is provided by the included C header.
+
+```
+pub type Color = #foreign struct {
+    r: u8,
+    g: u8,
+    b: u8,
+    a: u8,
+}
+```
+
+Note: `#foreign` and `#simd` must appear inline after `=` in type declarations (not as detached directives above the declaration).
+
+### 7.6.1 C FFI Binding Generation
+
+The compiler can automatically generate FLang FFI bindings from C headers:
+
+```
+flang -I raylib.h -L libraylib.a main.f
+```
+
+- `-I <header>` — parses the C header and generates `vendor/<name>.f` with `#foreign fn`, `#foreign struct`, and `pub const` declarations
+- `-L <lib>` — passes the library to the C linker
+
+**Type mapping:** C pointers map to `Option(&T)` (nullable). C enums map to `pub const: i32` values. C structs map to `#foreign struct` declarations. See `vendor/<name>.f` for the generated output.
 
 ### 7.7 Compile-Time Conditional `#if`
 

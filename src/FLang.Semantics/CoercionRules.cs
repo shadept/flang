@@ -259,7 +259,7 @@ public class AnonymousStructCoercionRule : IInferenceCoercionRule
             NominalType nominal => new NominalType(
                 nominal.Name, nominal.Kind,
                 nominal.TypeArguments.Select(a => SubstShallow(a, substMap)).ToArray(),
-                nominal.FieldsOrVariants, nominal.IsSimd),
+                nominal.FieldsOrVariants, nominal.IsSimd, nominal.IsForeign),
             _ => type
         };
     }

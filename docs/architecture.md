@@ -38,7 +38,24 @@ Both run iteratively between lowering and codegen.
 
 - **Name mangling only in codegen.** IR preserves base function names. `HmCCodeGenerator` applies `IrNameMangling.MangleFunctionName()` when emitting C. `main` is never mangled.
 - **Foreign/intrinsic symbols are not mangled.** `#foreign` and `#intrinsic` calls use their declared names directly.
+- **Foreign structs skip codegen.** `IrStruct.IsForeign` structs have no typedef or definition emitted — the `#include` of the original C header provides them. Their `CName` is the original C name (e.g. `Color`), not mangled.
 - **Intrinsics declared in `stdlib/core`** with `#intrinsic` directive.
+
+## C FFI Binding Generation
+
+The compiler can parse C headers and generate FLang bindings via the `-I` flag:
+
+```
+flang -I raylib.h -L libraylib.a main.f
+```
+
+**Pipeline:** CLI receives `-I <header>` → `ICHeaderParser` (CppAst implementation) parses the header → `FLangBindingGenerator` produces FLang source → written to `vendor/<name>.f` → module compiler discovers it via `import vendor.<name>`.
+
+**Architecture:**
+- `ICHeaderParser` (`src/FLang.CLI/FFI/`) is an abstraction interface returning intermediate model types (`CFunction`, `CStruct`, `CEnumConstant`). The CppAst implementation can be swapped.
+- `FLangBindingGenerator` converts the intermediate model to FLang source text.
+- C pointers map to `Option(&T)`. C enums map to `pub const: i32`. C structs map to `#foreign struct`.
+- Foreign header paths propagate through `IrModule.ForeignIncludes` and are emitted as `#include` directives in the generated C code.
 
 ## Source Generators
 

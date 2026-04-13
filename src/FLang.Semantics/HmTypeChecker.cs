@@ -275,6 +275,9 @@ public partial class HmTypeChecker : INominalTypeRegistry, ITemplateTypeProvider
     private static bool HasSimdDirective(IReadOnlyList<DirectiveNode> directives)
         => directives.Any(d => d.Name == "simd");
 
+    private static bool HasForeignDirective(IReadOnlyList<DirectiveNode> directives)
+        => directives.Any(d => d.Name == "foreign");
+
     /// <summary>
     /// Emit a deprecation warning if the resolved function has a #deprecated directive.
     /// </summary>

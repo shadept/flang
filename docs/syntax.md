@@ -84,6 +84,8 @@ fn greet(name: String, times: i32 = 1) {}   // default parameter
 struct Point { x: i32, y: i32 }
 struct Pair(T) { first: T, second: T }          // generic
 type Vec2 = struct { x: i32, y: i32 }           // alternative syntax
+type Color = #foreign struct { r: u8, g: u8, b: u8, a: u8 }  // C FFI struct
+type Vec128 = #simd struct { _data: [u8; 16] }               // SIMD-aligned
 
 let p = Point { x = 10, y = 20 }                // construction (= not :)
 let a = .{ x = 10, y = 20 }                     // anonymous (type from context)

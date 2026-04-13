@@ -5,8 +5,7 @@
 
 import std.test
 
-#simd
-pub type Vec128 = struct {
+pub type Vec128 = #simd struct {
     _data: [u8; 16]
 }
 

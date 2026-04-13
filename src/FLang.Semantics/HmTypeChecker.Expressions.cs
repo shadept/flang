@@ -1185,7 +1185,7 @@ public partial class HmTypeChecker
                             .ToArray()
                         : nominal.FieldsOrVariants;
 
-                    var instantiated = new NominalType(nominal.Name, nominal.Kind, typeArgs, fields, nominal.IsSimd);
+                    var instantiated = new NominalType(nominal.Name, nominal.Kind, typeArgs, fields, nominal.IsSimd, nominal.IsForeign);
                     call.IsTypeInstantiation = true;
                     return WrapInTypeStruct(instantiated);
                 }
@@ -1962,7 +1962,7 @@ public partial class HmTypeChecker
                 var freshFields = baseFields
                     .Select(f => (f.Name, SubstituteTypeVars(f.Type, subst)))
                     .ToArray();
-                nominal = new NominalType(nominal.Name, nominal.Kind, freshArgs, freshFields, nominal.IsSimd);
+                nominal = new NominalType(nominal.Name, nominal.Kind, freshArgs, freshFields, nominal.IsSimd, nominal.IsForeign);
             }
         }
 

@@ -16,6 +16,13 @@ When you discover a bug or limitation:
 
 ## Open Issues
 
+### Parser Crash: `while` Keyword Not Recognized
+
+**Status:** Open
+**Affected:** `Parser.cs`
+**Problem:** `while` is not a FLang keyword — the language uses `loop` with `break` for loops. Using `while` causes parse errors or crashes (e.g. `GenericTypeNode` crash when `{` is misinterpreted).
+**Workaround:** Use `loop { if condition { break } ... }` instead of `while condition { ... }`.
+
 ### Generic Parameter Binding Order Not Tracked
 
 **Status:** Deferred

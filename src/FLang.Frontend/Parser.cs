@@ -903,8 +903,28 @@ public class Parser
     /// <summary>
     /// Parses a type declaration: type Name = struct { ... } or type Name = enum { ... }
     /// </summary>
+    private static readonly HashSet<string> _inlineOnlyDirectives = ["simd", "foreign"];
+
     private object ParseTypeDeclaration(List<DirectiveNode>? directives = null)
     {
+        // Reject #simd/#foreign in detached position — they must be inline after `=`
+        if (directives != null)
+        {
+            foreach (var d in directives)
+            {
+                if (_inlineOnlyDirectives.Contains(d.Name))
+                {
+                    _diagnostics.Add(Diagnostic.Error(
+                        $"`#{d.Name}` must appear after `=` in type declarations",
+                        d.Span,
+                        hint: $"use `type Name = #{d.Name} struct {{ ... }}` instead",
+                        code: "E1001"));
+                }
+            }
+            // Keep only non-inline directives (e.g. #deprecated) flowing through
+            directives = directives.Where(d => !_inlineOnlyDirectives.Contains(d.Name)).ToList();
+        }
+
         var typeKeyword = Eat(TokenKind.Type);
         var nameToken = Eat(TokenKind.Identifier);
 
@@ -920,6 +940,13 @@ public class Parser
         }
 
         Eat(TokenKind.Equals);
+
+        // Parse inline directives: type X = #foreign struct { ... }
+        if (_currentToken.Kind == TokenKind.Hash)
+        {
+            var inlineDirectives = ParseDirectives();
+            directives = [..(directives ?? []), ..inlineDirectives];
+        }
 
         if (_currentToken.Kind == TokenKind.Struct)
         {

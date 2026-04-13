@@ -119,7 +119,7 @@ public class InferenceEngine : ITypeResolver
             if (!ReferenceEquals(resolvedArgs[i], n.TypeArguments[i])) changed = true;
         }
 
-        return changed ? new NominalType(n.Name, n.Kind, resolvedArgs, n.FieldsOrVariants, n.IsSimd) : n;
+        return changed ? new NominalType(n.Name, n.Kind, resolvedArgs, n.FieldsOrVariants, n.IsSimd, n.IsForeign) : n;
     }
 
     // =========================================================================
@@ -249,7 +249,7 @@ public class InferenceEngine : ITypeResolver
                     UnifyInternal(na.FieldsOrVariants[i].Type, nb.FieldsOrVariants[i].Type, span, ref cost);
             }
 
-            return new NominalType(na.Name, na.Kind, unifiedArgs, na.FieldsOrVariants, na.IsSimd);
+            return new NominalType(na.Name, na.Kind, unifiedArgs, na.FieldsOrVariants, na.IsSimd, na.IsForeign);
         }
 
         // Coercion fallback
@@ -386,7 +386,7 @@ public class InferenceEngine : ITypeResolver
             ArrayType a => new ArrayType(Substitute(a.ElementType, subs), a.Length),
             NominalType n => n.TypeArguments.Count == 0
                 ? n
-                : new NominalType(n.Name, n.Kind, [.. n.TypeArguments.Select(ta => Substitute(ta, subs))], n.FieldsOrVariants, n.IsSimd),
+                : new NominalType(n.Name, n.Kind, [.. n.TypeArguments.Select(ta => Substitute(ta, subs))], n.FieldsOrVariants, n.IsSimd, n.IsForeign),
             _ => type
         };
     }
@@ -409,7 +409,7 @@ public class InferenceEngine : ITypeResolver
             ArrayType a => new ArrayType(Zonk(a.ElementType), a.Length),
             NominalType n => n.TypeArguments.Count == 0
                 ? n
-                : new NominalType(n.Name, n.Kind, [.. n.TypeArguments.Select(Zonk)], n.FieldsOrVariants, n.IsSimd),
+                : new NominalType(n.Name, n.Kind, [.. n.TypeArguments.Select(Zonk)], n.FieldsOrVariants, n.IsSimd, n.IsForeign),
             PolymorphicType p => new PolymorphicType(p.QuantifiedVarIds, Zonk(p.Body)),
             _ => type
         };
