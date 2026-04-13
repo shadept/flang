@@ -1,7 +1,7 @@
 # FLang Examples
 
 Example projects that showcase FLang's capabilities and drive stdlib evolution.
-Each example is a standalone project in its own directory with a `main.f` entry point.
+Each example is a standalone project with a `flang.toml` and a `src/` directory.
 
 ## Roadmap
 
@@ -60,11 +60,12 @@ piping, file arguments, array filters, error reporting.
 # Build the compiler
 dotnet run build.cs
 
-# Compile an example
-dist/osx-x64/flang build examples/chess-fen/main.f -o examples/chess-fen/chess-fen
+# Build an example (from the example directory)
+cd examples/hello-world
+flang build
 
 # Run it
-examples/chess-fen/chess-fen
+./build/hello-world
 ```
 
 ## Future Ideas

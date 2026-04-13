@@ -48,6 +48,9 @@ public class ModuleCompiler
     public IReadOnlyList<Diagnostic> Diagnostics => _diagnostics;
 
     public Dictionary<string, ModuleNode> CompileModules(string entryPointPath)
+        => CompileModules([entryPointPath]);
+
+    public Dictionary<string, ModuleNode> CompileModules(IReadOnlyList<string> entryPointPaths)
     {
         _logger.LogDebug("Starting module compilation...");
 
@@ -63,12 +66,13 @@ public class ModuleCompiler
             _logger.LogDebug("Prelude not found: {PreludePath}", preludePath);
         }
 
-        // Normalize the entry point path
-        var normalizedPath = Path.GetFullPath(entryPointPath);
-        _logger.LogDebug("Queueing entry point: {EntryPoint}", normalizedPath);
-
-        // Queue the entry point for parsing
-        EnqueueModule(normalizedPath);
+        // Queue all entry points for parsing
+        foreach (var entryPointPath in entryPointPaths)
+        {
+            var normalizedPath = Path.GetFullPath(entryPointPath);
+            _logger.LogDebug("Queueing entry point: {EntryPoint}", normalizedPath);
+            EnqueueModule(normalizedPath);
+        }
 
         _logger.LogDebug("Starting work queue processing. Initial queue size: {QueueSize}", _workQueue.Count);
         int iteration = 0;

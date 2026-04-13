@@ -1,10 +1,29 @@
 using System.Diagnostics;
 using System.Runtime.InteropServices;
 using FLang.CLI;
+using FLang.CLI.Commands;
 using FLang.Core;
 using FLang.Lsp;
 
-// Parse command-line arguments
+// Project subcommands: init, build, test (project mode)
+if (args.Length > 0)
+{
+    switch (args[0])
+    {
+        case "init":
+            Environment.Exit(InitCommand.Run(args[1..]));
+            return;
+        case "build":
+            Environment.Exit(BuildCommand.Run(args[1..]));
+            return;
+        case "test" when !args.Skip(1).Any(a => a.EndsWith(".f")):
+            // Project test mode — no .f file means project mode
+            Environment.Exit(TestCommand.Run(args[1..]));
+            return;
+    }
+}
+
+// Parse command-line arguments (single-file mode)
 string? inputFilePath = null;
 string? stdlibPath = null;
 string? emitFir = null;
@@ -95,8 +114,11 @@ if (inputFilePath == null)
 {
     Console.WriteLine("FLang — an experimental language that transpiles to C");
     Console.WriteLine();
-    Console.WriteLine("Usage: flang [options] <file>");
-    Console.WriteLine("       flang test <file>          Compile and run test blocks");
+    Console.WriteLine("Usage: flang [options] <file>              Compile a single file");
+    Console.WriteLine("       flang init <name>                   Create a new project");
+    Console.WriteLine("       flang build [--release]             Build project from flang.toml");
+    Console.WriteLine("       flang test [filter] [--release]     Run test blocks from project");
+    Console.WriteLine("       flang test <file>                   Compile and run test blocks");
     Console.WriteLine();
     Console.WriteLine("Options:");
     Console.WriteLine("  -o, --output <path>     Output executable path (default: same as input with .exe)");
@@ -144,7 +166,7 @@ if (outputPath == null)
 
 var compiler = new Compiler();
 var options = new CompilerOptions(
-    InputFilePath: inputFilePath,
+    InputFilePaths: [inputFilePath],
     StdlibPath: stdlibPath,
     OutputPath: outputPath,
     ReleaseBuild: releaseBuild,

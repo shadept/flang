@@ -17,7 +17,7 @@ public record CompilerConfig(
     Dictionary<string, string>? Environment);
 
 public record CompilerOptions(
-    string InputFilePath,
+    IReadOnlyList<string> InputFilePaths,
     string StdlibPath,
     string? OutputPath = null,
     bool ReleaseBuild = false,
@@ -29,7 +29,8 @@ public record CompilerOptions(
     bool RunTests = false,
     bool EmitCfg = false,
     IReadOnlyList<string>? LinkFlags = null,
-    IReadOnlyList<string>? HeaderPaths = null
+    IReadOnlyList<string>? HeaderPaths = null,
+    IReadOnlyList<string>? CompilerFlags = null
 );
 
 public record CompilationResult(
@@ -43,9 +44,9 @@ public class Compiler
 {
     public CompilationResult Compile(CompilerOptions options)
     {
-        // Default working directory to the directory of the input file if not specified
+        // Default working directory to the directory of the first input file if not specified
         var workingDir = options.WorkingDirectory
-            ?? Path.GetDirectoryName(Path.GetFullPath(options.InputFilePath))
+            ?? Path.GetDirectoryName(Path.GetFullPath(options.InputFilePaths[0]))
             ?? Directory.GetCurrentDirectory();
 
         var compilation = new Compilation();
@@ -142,7 +143,7 @@ public class Compiler
         // 1. Module Loading and Parsing
         var moduleCompilerLogger = loggerFactory.CreateLogger<ModuleCompiler>();
         var moduleCompiler = new ModuleCompiler(compilation, moduleCompilerLogger, new FileSystemSourceProvider());
-        var parsedModules = moduleCompiler.CompileModules(options.InputFilePath);
+        var parsedModules = moduleCompiler.CompileModules(options.InputFilePaths);
         allDiagnostics.AddRange(moduleCompiler.Diagnostics);
 
         if (options.DumpTemplates)
@@ -294,7 +295,7 @@ public class Compiler
         {
             var cfgHtml = CfgHtmlExporter.Export(irModule);
             var cfgPath = Path.Combine(
-                Path.GetDirectoryName(Path.GetFullPath(options.InputFilePath))!,
+                Path.GetDirectoryName(Path.GetFullPath(options.InputFilePaths[0]))!,
                 "cfg.html");
             File.WriteAllText(cfgPath, cfgHtml);
         }
@@ -310,7 +311,7 @@ public class Compiler
         }
         else
         {
-            outputFilePath = Path.ChangeExtension(options.InputFilePath, ".exe");
+            outputFilePath = Path.ChangeExtension(options.InputFilePaths[0], ".exe");
             if (!RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
                 outputFilePath = Path.ChangeExtension(outputFilePath, null);
         }
@@ -342,7 +343,8 @@ public class Compiler
         var compilerConfig = CompilerDiscovery.GetCompilerForCompilation(
             cFilePath, outputFilePath, options.ReleaseBuild,
             extraCFiles.Count > 0 ? extraCFiles : null,
-            options.LinkFlags);
+            options.LinkFlags,
+            options.CompilerFlags);
 
         if (compilerConfig == null)
         {

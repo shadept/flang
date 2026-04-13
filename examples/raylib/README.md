@@ -19,25 +19,19 @@ sudo apt install libraylib-dev
 ## Build & Run
 
 ```bash
-# macOS with Homebrew
-flang -I $(brew --prefix raylib)/include/raylib.h \
-      -L $(brew --prefix raylib)/lib/libraylib.a \
-      --link "-framework CoreVideo" \
-      --link "-framework IOKit" \
-      --link "-framework Cocoa" \
-      --link "-framework GLUT" \
-      --link "-framework OpenGL" \
-      main.f
-./main
+# macOS — set RAYLIB_PATH to your raylib installation
+export RAYLIB_PATH=$(brew --prefix raylib)
+flang build
+./build/raylib-demo
 
 # Linux
-flang -I /usr/include/raylib.h -L /usr/lib/libraylib.a main.f
-./main
+flang build
+./build/raylib-demo
 ```
 
 The compiler automatically:
 1. Parses `raylib.h` and generates `vendor/raylib.f` with foreign bindings
-2. Compiles `main.f` (which imports the generated bindings)
+2. Compiles `src/main.f` (which imports the generated bindings)
 3. Links against `libraylib.a`
 
 ## What it does

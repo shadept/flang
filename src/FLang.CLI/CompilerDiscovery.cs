@@ -6,7 +6,8 @@ namespace FLang.CLI;
 public static class CompilerDiscovery
 {
     public static CompilerConfig? GetCompilerForCompilation(string cFilePath, string outputFilePath, bool releaseBuild,
-        IReadOnlyList<string>? extraCFiles = null, IReadOnlyList<string>? linkFlags = null)
+        IReadOnlyList<string>? extraCFiles = null, IReadOnlyList<string>? linkFlags = null,
+        IReadOnlyList<string>? compilerFlags = null)
     {
         var availableCompilers = FindCompilersOrderedByPreference();
         var selected = availableCompilers.FirstOrDefault(c => c.path != null);
@@ -26,6 +27,7 @@ public static class CompilerDiscovery
             var objFilePath = Path.ChangeExtension(Path.GetFullPath(outputFilePath), ".obj");
             var msvcArgs = new List<string> { "/nologo", "/Z7", "/WX" };
             if (releaseBuild) msvcArgs.Add("/O2");
+            if (compilerFlags != null) msvcArgs.AddRange(compilerFlags);
             msvcArgs.Add($"/Fo\"{objFilePath}\"");
             msvcArgs.Add($"/Fe\"{outputFilePath}\"");
             msvcArgs.Add($"\"{cFilePath}\"");
@@ -40,6 +42,7 @@ public static class CompilerDiscovery
         {
             var unixArgs = new List<string> { "-Werror", "-Wno-pointer-sign" };
             if (releaseBuild) unixArgs.Add("-O2");
+            if (compilerFlags != null) unixArgs.AddRange(compilerFlags);
             unixArgs.Add($"-g -o \"{outputFilePath}\"");
             unixArgs.Add($"\"{cFilePath}\"");
             if (extraCFiles != null)

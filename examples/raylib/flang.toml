@@ -1,0 +1,12 @@
+[project]
+name = "raylib-demo"
+version = "0.1.0"
+
+[build.macos]
+headers = ["${RAYLIB_PATH}/include/raylib.h"]
+libs = ["${RAYLIB_PATH}/lib/libraylib.a"]
+ldflags = ["-framework CoreVideo", "-framework IOKit", "-framework Cocoa", "-framework GLUT", "-framework OpenGL"]
+
+[build.linux]
+headers = ["/usr/include/raylib.h"]
+libs = ["/usr/lib/libraylib.a"]

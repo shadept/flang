@@ -196,7 +196,7 @@ public class TestHarness
         var cFilePath = Path.ChangeExtension(outputFilePath, ".c");
 
         var options = new CompilerOptions(
-            InputFilePath: absoluteTestFile,
+            InputFilePaths: [absoluteTestFile],
             StdlibPath: _stdlibPath,
             OutputPath: outputFilePath,
             ReleaseBuild: false,

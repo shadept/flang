@@ -1,0 +1,5 @@
+build/
+vendor/
+*.dSYM/
+*.generated.c
+*.generated.f
