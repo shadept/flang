@@ -274,3 +274,20 @@ pub fn next(it: &Chars) char? {
     it.idx = it.idx + res.1
     return res.0
 }
+
+// =============================================================================
+// Partition
+// =============================================================================
+
+// Split at the first occurrence of delimiter. Returns (before, after) as a tuple.
+// No heap allocation. If delimiter not found, returns (s, "").
+pub fn partition(s: String, delimiter: u8) (String, String) {
+    for i in 0..s.len {
+        if s[i] == delimiter {
+            const before = s[0..i] as String
+            const after = s[(i + 1)..s.len] as String
+            return (before, after)
+        }
+    }
+    return (s, "")
+}

@@ -20,9 +20,7 @@ fn kind_to_int(k: TypeKind) i32 {
     }
 }
 
-pub fn main() i32 {
-    let t = Point
-
+fn check_point(t: Type($T)) i32 {
     // Point has 2 fields
     if t.fields.len != 2 { return 1 }
 
@@ -42,4 +40,8 @@ pub fn main() i32 {
     if y_type.name != "i32" { return 6 }
 
     return 0
+}
+
+pub fn main() i32 {
+    return check_point(Point)
 }

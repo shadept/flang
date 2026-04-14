@@ -497,7 +497,7 @@ public class HmAstLowering
             changed = false;
             foreach (var type in allTypes.ToList())
             {
-                if (type is NominalType { Kind: NominalKind.Struct or NominalKind.Tuple } nt
+                if (type is NominalType { Kind: NominalKind.Struct or NominalKind.Tuple or NominalKind.Enum } nt
                     && !nt.Name.StartsWith(WellKnown.RttiPrefix) && nt.Name != WellKnown.String)
                 {
                     foreach (var (_, ft) in nt.FieldsOrVariants)
@@ -1811,8 +1811,9 @@ public class HmAstLowering
         {
             var suggestion = StringDistance.FindClosestMatch(variantName, irEnum.Variants.Select(v => v.Name));
             var hint = suggestion != null ? $"did you mean `{suggestion}`?" : null;
+            var fnContext = _currentFunction?.Name ?? "(unknown)";
             _diagnostics.Add(Diagnostic.Error(
-                $"Variant `{variantName}` not found in enum `{irEnum.Name}`",
+                $"Variant `{variantName}` not found in enum `{irEnum.Name}` (in function `{fnContext}`)",
                 default, hint, "E3037"));
             return new IntConstantValue(0, irEnum);
         }

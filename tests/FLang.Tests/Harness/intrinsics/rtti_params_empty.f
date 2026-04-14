@@ -10,14 +10,16 @@ type Vec2 = struct {
     y: i32
 }
 
+fn check_params_empty(t: Type($T)) bool {
+    return t.params.len == 0
+}
+
 pub fn main() i32 {
     // Primitive: params should be empty
-    let t1 = i32
-    if t1.params.len != 0 { return 1 }
+    if !check_params_empty(i32) { return 1 }
 
     // Struct: params should be empty
-    let t2 = Vec2
-    if t2.params.len != 0 { return 2 }
+    if !check_params_empty(Vec2) { return 2 }
 
     return 0
 }

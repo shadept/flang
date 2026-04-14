@@ -82,6 +82,9 @@ public partial class HmTypeChecker : INominalTypeRegistry, ITemplateTypeProvider
         engine.AddCoercionRule(new ArrayDecayCoercionRule());
         engine.AddCoercionRule(new SliceToReferenceCoercionRule());
         engine.AddCoercionRule(new AnonymousStructCoercionRule(name => _types.LookupNominalType(name, _ctx.CurrentModulePath)));
+        engine.AddCoercionRule(new NominalToTypeCoercionRule(
+            name => _types.LookupNominalType(name, _ctx.CurrentModulePath),
+            type => _results.InstantiatedTypes.Add(type)));
         _ctx = new InferenceContext(engine);
     }
 

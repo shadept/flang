@@ -165,7 +165,9 @@ public partial class HmTypeChecker
                 id.ResolvedParameterDeclaration = paramDeclNode;
 
             // If this name is an active type parameter (inside a generic specialization),
-            // it's being used as a type-as-value and should be wrapped in Type(T)
+            // it's being used as a type-as-value and must be eagerly wrapped in Type(T).
+            // This can't be deferred to coercion because the type parameter identity is lost
+            // after specialization — we only know it was a type param at this point.
             if (_ctx.ActiveTypeParams.ContainsKey(id.Name))
             {
                 var resolvedType = _ctx.Engine.Resolve(_ctx.Engine.Specialize(scheme));
@@ -183,30 +185,28 @@ public partial class HmTypeChecker
             return _ctx.Engine.Specialize(fns[0].Signature);
         }
 
-        // Check if it's a nominal type name
+        // Check if it's a nominal type name — returned as raw type.
+        // Coercion to Type(T) happens lazily via NominalToTypeCoercionRule
+        // when the context demands it (function args, assignments).
         var nominal = LookupNominalType(id.Name);
         if (nominal != null)
         {
-            // Structs/tuples in expression context are type-as-value (e.g., size_of(Point))
-            if (nominal.Kind == NominalKind.Struct || nominal.Kind == NominalKind.Tuple)
+            // Generic struct/tuple types used bare (without type args) are invalid in expression context.
+            // Generic enums are allowed bare for qualified variant access (e.g., Result.Ok(42)).
+            if (nominal.Kind != NominalKind.Enum
+                && nominal.TypeArguments.Count > 0
+                && nominal.TypeArguments.Any(a => _ctx.Engine.Resolve(a) is TypeVar))
             {
-                // Generic types used bare (without type args) are invalid in expression context
-                if (nominal.TypeArguments.Count > 0
-                    && nominal.TypeArguments.Any(a => _ctx.Engine.Resolve(a) is TypeVar))
-                {
-                    ReportError(
-                        $"generic type `{id.Name}` requires type arguments in expression context, use `{id.Name}(...)`",
-                        id.Span, "E2104");
-                    return _ctx.Engine.FreshVar();
-                }
-                return WrapInTypeStruct(nominal);
+                ReportError(
+                    $"generic type `{id.Name}` requires type arguments in expression context, use `{id.Name}(...)`",
+                    id.Span, "E2104");
+                return _ctx.Engine.FreshVar();
             }
-            // Enums returned directly for variant access (e.g., FileMode.Read)
             return nominal;
         }
 
-        // Check if it's a primitive type name in expression context (e.g., align_of(u8))
-        // Primitives are wrapped in Type(T) since they're only used as type-as-value args.
+        // Primitive type names are always type-as-value — eagerly wrap in Type(T).
+        // Unlike nominals, primitives can never be variable names.
         var primitive = ResolvePrimitive(id.Name);
         if (primitive != null)
             return WrapInTypeStruct(primitive);
@@ -1098,6 +1098,7 @@ public partial class HmTypeChecker
                         _ctx.DeferredSpecInfo = null;
                     }
                     BuildResolvedArguments(call, winner.Node, fnType, positionalArgs, namedArgs, ufcsOffset);
+                    FixUpCoercedArguments(fnType, positionalArgs, ufcsOffset);
                     CheckDeprecatedCall(node, call.Span);
                     return fnType.ReturnType;
                 }
@@ -1129,6 +1130,8 @@ public partial class HmTypeChecker
                         _pendingSpecializations.Add((scheme, dParams, dReturn, call.Span, call));
                         _ctx.DeferredSpecInfo = null;
                     }
+                    var ufcsOff2 = receiverType != null ? 1 : 0;
+                    FixUpCoercedArguments(fnType, positionalArgs, ufcsOff2);
                     CheckDeprecatedCall(node, call.Span);
                     return fnType.ReturnType;
                 }
@@ -1155,19 +1158,22 @@ public partial class HmTypeChecker
         if (receiverType == null && namedArgs.Count == 0)
         {
             var nominal = LookupNominalType(lookupName);
-            if (nominal != null && (nominal.Kind == NominalKind.Struct || nominal.Kind == NominalKind.Tuple))
+            if (nominal != null && (nominal.Kind == NominalKind.Struct || nominal.Kind == NominalKind.Tuple || nominal.Kind == NominalKind.Enum))
             {
-                var typeNominal = LookupNominalType("Type");
                 var typeArgs = new Type[positionalTypes.Length];
                 bool allTypeArgs = positionalTypes.Length > 0;
                 for (int i = 0; i < positionalTypes.Length; i++)
                 {
                     var resolved = _ctx.Engine.Resolve(positionalTypes[i]);
-                    // Unwrap Type(X) wrapper from type-as-value expressions
-                    if (typeNominal != null && resolved is NominalType nt
-                        && nt.Name == typeNominal.Name && nt.TypeArguments.Count == 1)
+                    // Type args can be raw types (nominal, primitive) or already-wrapped Type(X)
+                    if (resolved is NominalType { Name: "core.rtti.Type" } typeWrapped
+                        && typeWrapped.TypeArguments.Count == 1)
                     {
-                        typeArgs[i] = _ctx.Engine.Resolve(nt.TypeArguments[0]);
+                        typeArgs[i] = _ctx.Engine.Resolve(typeWrapped.TypeArguments[0]);
+                    }
+                    else if (resolved is NominalType or PrimitiveType)
+                    {
+                        typeArgs[i] = resolved;
                     }
                     else
                     {
@@ -1195,7 +1201,7 @@ public partial class HmTypeChecker
 
                     var instantiated = new NominalType(nominal.Name, nominal.Kind, typeArgs, fields, nominal.IsSimd, nominal.IsForeign);
                     call.IsTypeInstantiation = true;
-                    return WrapInTypeStruct(instantiated);
+                    return instantiated;
                 }
             }
         }
@@ -1221,6 +1227,35 @@ public partial class HmTypeChecker
                 namedArgs[0].Span, "E2065");
         }
         return TryIndirectCall(call, fullPositionalTypes);
+    }
+
+    /// <summary>
+    /// After successful overload resolution, fix up recorded types for arguments
+    /// where coercion changed the type (e.g., bare type name coerced to Type(T)).
+    /// The coercion rule fires during unification but doesn't update the AST node record.
+    /// </summary>
+    private void FixUpCoercedArguments(FunctionType fnType, List<ExpressionNode> positionalArgs,
+        int ufcsOffset)
+    {
+        for (int i = 0; i < positionalArgs.Count; i++)
+        {
+            var paramIdx = i + ufcsOffset;
+            if (paramIdx >= fnType.ParameterTypes.Count) break;
+
+            var paramType = _ctx.Engine.Resolve(fnType.ParameterTypes[paramIdx]);
+            var argType = _ctx.Engine.Resolve(_results.GetInferredType(positionalArgs[i]));
+
+            // If the parameter expects Type(T) but the arg was recorded as a raw nominal/primitive,
+            // re-record as the coerced Type(T)
+            if (paramType is NominalType { Name: "core.rtti.Type" } typeParam
+                && typeParam.TypeArguments.Count == 1
+                && argType is not NominalType { Name: "core.rtti.Type" }
+                && argType is NominalType or PrimitiveType)
+            {
+                var wrapped = WrapInTypeStruct(argType);
+                Record(positionalArgs[i], wrapped);
+            }
+        }
     }
 
     /// <summary>
@@ -1897,7 +1932,70 @@ public partial class HmTypeChecker
     private Type InferMemberAccess(MemberAccessExpressionNode member)
     {
         var targetType = InferExpression(member.Target);
+
+        // Check if the target is a type name used in member access position (e.g., Color.Red, Point.x)
+        if (member.Target is IdentifierExpressionNode targetId)
+        {
+            var nominal = LookupNominalType(targetId.Name);
+            if (nominal != null)
+            {
+                var resolved = _ctx.Engine.Resolve(targetType);
+                if (resolved is NominalType nomType)
+                {
+                    // Enum type name: resolve variant access (Color.Red)
+                    if (nomType.Kind == NominalKind.Enum)
+                        return ResolveEnumVariantAccess(nomType, member.FieldName, member);
+
+                    // Struct/tuple type name: not a valid expression (Point.x is meaningless)
+                    if (nomType.Kind == NominalKind.Struct || nomType.Kind == NominalKind.Tuple)
+                    {
+                        ReportError($"Cannot access field `{member.FieldName}` on type name `{targetId.Name}`; use an instance instead",
+                            member.Span, "E2014");
+                        return _ctx.Engine.FreshVar();
+                    }
+                }
+            }
+        }
+
         return ResolveFieldAccess(targetType, member.FieldName, member, 0);
+    }
+
+    /// <summary>
+    /// Resolve qualified enum variant access: EnumType.VariantName
+    /// Returns the enum type for payload-less variants, or a constructor function type for payload variants.
+    /// </summary>
+    private Type ResolveEnumVariantAccess(NominalType enumType, string variantName, MemberAccessExpressionNode member)
+    {
+        var fieldsSource = enumType;
+        if (enumType.FieldsOrVariants.Count == 0)
+        {
+            var template = LookupNominalType(enumType.Name);
+            if (template != null)
+                fieldsSource = template;
+        }
+
+        var variant = fieldsSource.FieldsOrVariants.FirstOrDefault(f => f.Name == variantName);
+        if (variant == default)
+        {
+            var suggestion = StringDistance.FindClosestMatch(variantName,
+                fieldsSource.FieldsOrVariants.Select(f => f.Name));
+            var hint = suggestion != null ? $"did you mean `{suggestion}`?" : null;
+            ReportError($"No variant `{variantName}` on enum `{enumType.Name}`", member.Span, "E2014", hint);
+            return _ctx.Engine.FreshVar();
+        }
+
+        var payloadType = variant.Type;
+        if (enumType.TypeArguments.Count > 0)
+        {
+            var tmpl = LookupNominalType(enumType.Name);
+            if (tmpl != null && tmpl.TypeArguments.Count == enumType.TypeArguments.Count)
+                payloadType = SubstituteTypeArgs(payloadType, tmpl.TypeArguments, enumType.TypeArguments);
+        }
+
+        if (payloadType is PrimitiveType { Name: "void" })
+            return enumType; // Payload-less variant: value IS the enum type
+
+        return new FunctionType([payloadType], enumType); // Payload variant: constructor fn
     }
 
     /// <summary>

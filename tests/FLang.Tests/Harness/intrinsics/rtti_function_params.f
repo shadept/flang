@@ -19,9 +19,7 @@ fn kind_to_int(k: TypeKind) i32 {
     }
 }
 
-pub fn main() i32 {
-    let t = Handler
-
+fn check_handler(t: Type($T)) i32 {
     // Handler has 1 field
     if t.fields.len != 1 { return 1 }
 
@@ -51,4 +49,8 @@ pub fn main() i32 {
     if ret.name != "bool" { return 10 }
 
     return 0
+}
+
+pub fn main() i32 {
+    return check_handler(Handler)
 }

@@ -2,7 +2,6 @@
 //! EXIT: 0
 
 // Test that structs with function fields have correct RTTI
-// and that the new params/return_type fields are accessible
 
 import core.rtti
 import core.string
@@ -22,9 +21,7 @@ fn kind_to_int(k: TypeKind) i32 {
     }
 }
 
-pub fn main() i32 {
-    let t = Handler
-
+fn check_handler(t: Type($T)) i32 {
     // Handler is a Struct
     if kind_to_int(t.kind) != 2 { return 1 }
 
@@ -42,4 +39,8 @@ pub fn main() i32 {
     if t.return_type as usize != 0 { return 6 }
 
     return 0
+}
+
+pub fn main() i32 {
+    return check_handler(Handler)
 }

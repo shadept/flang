@@ -2,7 +2,6 @@
 //! EXIT: 2
 
 // Test that Type(T).fields.len returns the correct field count
-// struct Point { x: i32, y: i32 } has 2 fields
 
 import core.rtti
 
@@ -11,7 +10,10 @@ type Point = struct {
     y: i32
 }
 
-pub fn main() i32 {
-    let t = Point
+fn field_count(t: Type($T)) i32 {
     return t.fields.len as i32
+}
+
+pub fn main() i32 {
+    return field_count(Point)
 }

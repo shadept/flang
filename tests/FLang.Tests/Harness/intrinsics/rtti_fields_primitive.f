@@ -5,7 +5,10 @@
 
 import core.rtti
 
-pub fn main() i32 {
-    let t = i32
+fn field_count(t: Type($T)) i32 {
     return t.fields.len as i32
+}
+
+pub fn main() i32 {
+    return field_count(i32)
 }

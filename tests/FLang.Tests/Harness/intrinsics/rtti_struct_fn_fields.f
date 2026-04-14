@@ -12,9 +12,7 @@ type MathOps = struct {
     negate: fn(i32) i32
 }
 
-pub fn main() i32 {
-    let t = MathOps
-
+fn check_math_ops(t: Type($T)) i32 {
     // Should have 3 fields
     if t.fields.len != 3 { return 1 }
 
@@ -24,4 +22,8 @@ pub fn main() i32 {
     if t.fields[2].name != "negate" { return 4 }
 
     return 0
+}
+
+pub fn main() i32 {
+    return check_math_ops(MathOps)
 }

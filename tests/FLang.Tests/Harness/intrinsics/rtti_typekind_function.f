@@ -26,15 +26,19 @@ fn is_primitive(k: TypeKind) bool {
     }
 }
 
+fn get_kind(t: Type($T)) TypeKind {
+    return t.kind
+}
+
 type Point = struct { x: i32, y: i32 }
 
 pub fn main() i32 {
-    if !is_primitive(i32.kind) { return 1 }
-    if !is_struct(Point.kind) { return 2 }
+    if !is_primitive(get_kind(i32)) { return 1 }
+    if !is_struct(get_kind(Point)) { return 2 }
 
     // Verify Function variant doesn't match for non-function types
-    if is_function(i32.kind) { return 3 }
-    if is_function(Point.kind) { return 4 }
+    if is_function(get_kind(i32)) { return 3 }
+    if is_function(get_kind(Point)) { return 4 }
 
     return 0
 }

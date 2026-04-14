@@ -287,3 +287,52 @@ public class SliceToReferenceCoercionRule : IInferenceCoercionRule
         return null;
     }
 }
+
+/// <summary>
+/// Coerce a bare type name (nominal or primitive) to Type(T) when the target expects it.
+/// This enables: size_of(Color), let t: Type(Point) = Point, allocator.new(Expr)
+/// </summary>
+public class NominalToTypeCoercionRule : IInferenceCoercionRule
+{
+    private readonly Func<string, NominalType?> _lookupNominalType;
+    private readonly Action<Type> _trackInstantiatedType;
+
+    public NominalToTypeCoercionRule(Func<string, NominalType?> lookupNominalType, Action<Type> trackInstantiatedType)
+    {
+        _lookupNominalType = lookupNominalType;
+        _trackInstantiatedType = trackInstantiatedType;
+    }
+
+    public Type? TryApply(Type from, Type to, InferenceEngine engine)
+    {
+        // Target must be Type($T)
+        if (to is not NominalType typeTarget || typeTarget.TypeArguments.Count != 1)
+            return null;
+        // Check the name ends with ".Type" or is exactly "Type" (handles both qualified and unqualified)
+        if (typeTarget.Name != "Type" && !typeTarget.Name.EndsWith(".Type"))
+            return null;
+
+        // Source must be a type (nominal, primitive, or reference), not already a Type(T)
+        if (from is NominalType fromNom && (fromNom.Name == "Type" || fromNom.Name.EndsWith(".Type"))) return null;
+        if (from is not (NominalType or PrimitiveType or ReferenceType or ArrayType or FunctionType)) return null;
+
+        // Unify the inner type arg with the source type
+        var innerTypeArg = engine.Resolve(typeTarget.TypeArguments[0]);
+        if (innerTypeArg is TypeVar)
+        {
+            // Type($T) — bind T to the source type
+            engine.Unify(innerTypeArg, from, default);
+        }
+        else if (!innerTypeArg.Equals(from))
+        {
+            return null; // Type(i32) but got Point — no match
+        }
+
+        // Wrap in Type(T)
+        var typeNominal = _lookupNominalType("Type");
+        if (typeNominal == null) return null;
+
+        _trackInstantiatedType(from);
+        return new NominalType(typeNominal.Name, typeNominal.Kind, [from], typeNominal.FieldsOrVariants, false);
+    }
+}

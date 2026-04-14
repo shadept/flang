@@ -10,16 +10,12 @@ type Point = struct {
     y: i32
 }
 
+fn check_return_null(t: Type($T)) bool {
+    return t.return_type as usize == 0
+}
+
 pub fn main() i32 {
-    let t1 = i32
-    let t2 = Point
-
-    // return_type is &TypeInfo — should be null for non-function types
-    let ptr1 = t1.return_type as usize
-    if ptr1 != 0 { return 1 }
-
-    let ptr2 = t2.return_type as usize
-    if ptr2 != 0 { return 2 }
-
+    if !check_return_null(i32) { return 1 }
+    if !check_return_null(Point) { return 2 }
     return 0
 }
