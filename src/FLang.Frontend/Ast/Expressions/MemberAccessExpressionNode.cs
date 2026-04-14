@@ -1,4 +1,6 @@
+using System.Collections.Generic;
 using FLang.Core;
+using FLang.Frontend.Ast.Declarations;
 
 namespace FLang.Frontend.Ast.Expressions;
 
@@ -19,4 +21,14 @@ public class MemberAccessExpressionNode : ExpressionNode
     /// 0 = target is struct directly, 1 = target is &amp;Struct, 2 = target is &amp;&amp;Struct, etc.
     /// </summary>
     public int AutoDerefCount { get; set; }
+
+    /// <summary>
+    /// Chain of op_deref functions to call before accessing the field.
+    /// For example, rc.x on Rc(Wrapper(Point)) produces a chain of two:
+    ///   [Rc(Wrapper(Point)).op_deref, Wrapper(Point).op_deref]
+    /// Lowering replays this chain: call each op_deref in order, deref the result,
+    /// then access the field on the final type.
+    /// Null or empty = no op_deref involved.
+    /// </summary>
+    public List<FunctionDeclarationNode>? OpDerefChain { get; set; }
 }

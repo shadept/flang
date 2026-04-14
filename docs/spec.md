@@ -262,6 +262,25 @@ This enables arena-based bulk deallocation: allocate many objects into an arena,
 
 All memory is zero-initialized by default. Variables declared without an initializer are memset to zero. The compiler may optimize this away when provably written before read.
 
+### 4.3 Reference Counting (Rc and Arc)
+
+`Rc(T)` provides shared ownership of a heap-allocated value. `Arc(T)` is the thread-safe variant using atomic operations on the reference count. Both live in `std.rc`.
+
+**Control block layout**: `RcInner(T) = { ref_count: usize, value: T }`. Single heap allocation — no separate allocation for the control block.
+
+**Construction**:
+- `rc(value, allocator?)` / `arc(value, allocator?)` — copies value into a new heap allocation.
+- `rc_alloc(allocator?)` / `arc_alloc(allocator?)` — zero-initializes for in-place fill via `op_deref`.
+
+**Operations**:
+- `.clone()` — explicit refcount bump. Returns a new handle to the same value. Shallow copy of an Rc/Arc is an alias (no hidden costs).
+- `.deinit()` — decrements refcount. At zero, calls `T.deinit()` (statically dispatched via monomorphization — no function pointer in the control block) then frees the allocation.
+- `.op_deref()` — returns `&T`, enabling transparent field access: `rc.field` instead of `rc.borrow().field`.
+
+**Arc atomics**: `Arc.clone()` uses `atomic_fetch_add`, `Arc.deinit()` uses `atomic_fetch_sub`. Backed by C11 `<stdatomic.h>` via `std.atomic`.
+
+**Conventions**: Internal fields use `__` prefix (`__inner`, `__allocator`). No `Weak` references yet — `RcInner` stays opaque for future addition.
+
 ---
 
 ## 5. Operators
@@ -301,6 +320,9 @@ Every operator desugars to a function call. The stdlib provides implementations 
 | `=` | `op_assign` |
 | `+=` | `op_add_assign` |
 | unary `-` / `!` | `op_neg` / `op_not` |
+| `.field` (fallback) | `op_deref` |
+
+**`op_deref`**: When `x.field` or `x.method()` fails to resolve on type `X`, the compiler looks for `fn op_deref(self: &X) &T`. If found, resolution retries on `T`. This applies to both field access and UFCS method calls. Chains through multiple layers: `Rc(Wrapper(Point)).x` resolves through two `op_deref` calls. Own fields and methods on `X` always take priority — `op_deref` is only consulted when direct resolution fails. This is a general-purpose language feature, not specific to smart pointers.
 
 **Auto-derivation:**
 - `op_eq` auto-derives `op_ne` (and vice versa) by negation.

@@ -1134,6 +1134,14 @@ public partial class HmTypeChecker
                 }
             }
 
+            // op_deref fallback: if UFCS resolution failed, try peeling through op_deref
+            // on the receiver and retry with the inner type
+            if (receiverType != null)
+            {
+                var opDerefResult = TryUfcsOpDerefCall(call, receiverType, lookupName, positionalArgs, positionalTypes, namedArgs, namedTypes);
+                if (opDerefResult != null) return opDerefResult;
+            }
+
             var displayName = call.MethodName ?? call.FunctionName;
             var ufcsOff = receiverType != null ? 1 : 0;
             ReportOverloadFailure(displayName, candidates, fullPositionalTypes, namedArgs, namedTypes, call.Span, ufcsOff);
@@ -1199,6 +1207,13 @@ public partial class HmTypeChecker
             if (variantType2 != null) return variantType2;
         }
 
+        // op_deref fallback for no-candidates case
+        if (receiverType != null)
+        {
+            var opDerefResult = TryUfcsOpDerefCall(call, receiverType, lookupName, positionalArgs, positionalTypes, namedArgs, namedTypes);
+            if (opDerefResult != null) return opDerefResult;
+        }
+
         // Try indirect call (variable with function type)
         if (namedArgs.Count > 0)
         {
@@ -1206,6 +1221,93 @@ public partial class HmTypeChecker
                 namedArgs[0].Span, "E2065");
         }
         return TryIndirectCall(call, fullPositionalTypes);
+    }
+
+    /// <summary>
+    /// Try resolving a UFCS call through op_deref on the receiver.
+    /// Peels through op_deref layers (up to depth 10) until a matching function is found.
+    /// On success, records the op_deref chain on the call node and returns the call's return type.
+    /// </summary>
+    private Type? TryUfcsOpDerefCall(CallExpressionNode call, Type receiverType, string lookupName,
+        List<ExpressionNode> positionalArgs, Type[] positionalTypes,
+        List<NamedArgumentExpressionNode> namedArgs, Dictionary<string, Type> namedTypes)
+    {
+        var derefChain = new List<FunctionDeclarationNode>();
+        var currentType = _ctx.Engine.Resolve(receiverType);
+
+        for (int depth = 0; depth < 10; depth++)
+        {
+            // Peel references to get to the nominal type
+            while (currentType is ReferenceType rt)
+                currentType = _ctx.Engine.Resolve(rt.InnerType);
+
+            if (currentType is not NominalType nominal) break;
+
+            // Try op_deref on this type
+            var refToNominal = new ReferenceType(nominal);
+            var returnType = TryResolveOperator("op_deref", [refToNominal], call.Span, out var derefNode);
+            if (returnType == null || derefNode == null) break;
+
+            var resolvedReturn = _ctx.Engine.Resolve(returnType);
+            if (resolvedReturn is not ReferenceType innerRef) break;
+
+            derefChain.Add(derefNode);
+            var innerType = _ctx.Engine.Resolve(innerRef.InnerType);
+
+            // Build new full positional types with the inner type as receiver
+            // Try both &T and T as the receiver (UFCS adapts value ↔ &T)
+            var candidates = LookupFunctions(lookupName);
+            if (candidates != null && candidates.Count > 0)
+            {
+                // Try with &T (the op_deref return type, reference to inner)
+                var withRef = new Type[positionalTypes.Length + 1];
+                withRef[0] = innerRef; // &T
+                Array.Copy(positionalTypes, 0, withRef, 1, positionalTypes.Length);
+
+                // Also try with T (value)
+                var withVal = new Type[positionalTypes.Length + 1];
+                withVal[0] = innerType; // T
+                Array.Copy(positionalTypes, 0, withVal, 1, positionalTypes.Length);
+
+                bool hasNamedOrDefaults = namedArgs.Count > 0
+                    || candidates.Any(c => c.Node.Parameters.Any(p => p.DefaultValue != null || p.IsVariadic));
+
+                (FunctionScheme Winner, FunctionType FnType, FunctionDeclarationNode Node)? result = null;
+
+                if (hasNamedOrDefaults)
+                {
+                    result = ResolveOverloadWithDefaults(candidates, withRef, namedArgs, namedTypes, call.Span, 1);
+                    result ??= ResolveOverloadWithDefaults(candidates, withVal, namedArgs, namedTypes, call.Span, 1);
+                }
+                else
+                {
+                    result = ResolveOverload(candidates, withRef, call.Span);
+                    result ??= ResolveOverload(candidates, withVal, call.Span);
+                }
+
+                if (result != null)
+                {
+                    var (winner, fnType, node) = result.Value;
+                    call.ResolvedTarget = node;
+                    call.UfcsOpDerefChain = derefChain;
+                    if (_ctx.DeferredSpecInfo != null)
+                    {
+                        var (scheme, dParams, dReturn) = _ctx.DeferredSpecInfo.Value;
+                        _pendingSpecializations.Add((scheme, dParams, dReturn, call.Span, call));
+                        _ctx.DeferredSpecInfo = null;
+                    }
+                    if (hasNamedOrDefaults)
+                        BuildResolvedArguments(call, winner.Node, fnType, positionalArgs, namedArgs, 1);
+                    CheckDeprecatedCall(node, call.Span);
+                    return fnType.ReturnType;
+                }
+            }
+
+            // No match at this depth — continue peeling
+            currentType = innerType;
+        }
+
+        return null;
     }
 
     /// <summary>
@@ -1768,6 +1870,22 @@ public partial class HmTypeChecker
             return resultType;
         }
 
+        // Try op_deref for nominal types: x.* calls op_deref(self: &X) &T, returns T
+        if (resolved is NominalType)
+        {
+            var refToType = new ReferenceType(resolved);
+            var returnType = TryResolveOperator("op_deref", [refToType], deref.Span, out var derefNode);
+            if (returnType != null && derefNode != null)
+            {
+                var resolvedReturn = _ctx.Engine.Resolve(returnType);
+                if (resolvedReturn is ReferenceType innerRef)
+                {
+                    deref.ResolvedOpDeref = derefNode;
+                    return innerRef.InnerType;
+                }
+            }
+        }
+
         ReportError("Cannot dereference non-reference type", deref.Span, "E2012");
         return _ctx.Engine.FreshVar();
     }
@@ -1786,7 +1904,7 @@ public partial class HmTypeChecker
     /// Resolve field access with auto-dereference through reference types.
     /// </summary>
     private Type ResolveFieldAccess(Type targetType, string fieldName,
-        MemberAccessExpressionNode member, int derefCount)
+        MemberAccessExpressionNode member, int derefCount, int opDerefDepth = 0)
     {
         var resolved = _ctx.Engine.Resolve(targetType);
 
@@ -1794,7 +1912,7 @@ public partial class HmTypeChecker
         if (resolved is ReferenceType refType)
         {
             member.AutoDerefCount = derefCount + 1;
-            return ResolveFieldAccess(refType.InnerType, fieldName, member, derefCount + 1);
+            return ResolveFieldAccess(refType.InnerType, fieldName, member, derefCount + 1, opDerefDepth);
         }
 
         if (resolved is NominalType nominal)
@@ -1857,6 +1975,24 @@ public partial class HmTypeChecker
                 }
 
                 return fieldType;
+            }
+
+            // op_deref fallback: field not found on this type, try op_deref(self: &ThisType) &T
+            if (opDerefDepth < 10)
+            {
+                var refToNominal = new ReferenceType(nominal);
+                var returnType = TryResolveOperator("op_deref", [refToNominal], member.Span, out var derefNode);
+                if (returnType != null && derefNode != null)
+                {
+                    var resolvedReturn = _ctx.Engine.Resolve(returnType);
+                    if (resolvedReturn is ReferenceType innerRef)
+                    {
+                        member.OpDerefChain ??= new List<FunctionDeclarationNode>();
+                        member.OpDerefChain.Add(derefNode);
+                        // Reset derefCount — the op_deref returns &T, auto-deref handles the rest
+                        return ResolveFieldAccess(innerRef.InnerType, fieldName, member, 0, opDerefDepth + 1);
+                    }
+                }
             }
         }
 

@@ -317,8 +317,7 @@ public partial class HmTypeChecker
             var param = fn.Parameters[i];
             if (param.DefaultValue != null)
             {
-                var cloned = CloneExpression(param.DefaultValue);
-                var defaultType = InferExpression(cloned);
+                var defaultType = InferExpression(param.DefaultValue);
                 using (_ctx.Engine.OverrideErrors("E2070", () => "default value for parameter `" + param.Name + "`: expected `{expected}`, got `{actual}`"))
                 {
                     _ctx.Engine.Unify(defaultType, paramTypes[i], param.DefaultValue.Span);

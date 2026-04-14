@@ -169,9 +169,15 @@ defer close(handle)
 
 ### Operator Overloading
 
-All operators desugar to function calls: `op_add`, `op_sub`, `op_multiply`, `op_divide`, `op_modulo`, `op_band`, `op_bor`, `op_bxor`, `op_bnot`, `op_eq`, `op_ne`, `op_lt`, `op_gt`, `op_le`, `op_ge`, `op_index`, `op_set_index`, `op_coalesce`, `op_assign`, `op_add_assign`.
+All operators desugar to function calls: `op_add`, `op_sub`, `op_multiply`, `op_divide`, `op_modulo`, `op_band`, `op_bor`, `op_bxor`, `op_bnot`, `op_eq`, `op_ne`, `op_lt`, `op_gt`, `op_le`, `op_ge`, `op_index`, `op_set_index`, `op_coalesce`, `op_assign`, `op_add_assign`, `op_deref`.
 
 `op_eq` auto-derives `op_ne`. `op_cmp(a, b) Ord` auto-derives all six comparison operators.
+
+`op_deref` enables transparent field access through wrapper types:
+```
+fn op_deref(self: &Wrapper($T)) &T { return &self.__value }
+// enables: wrapper.field  (transparently accesses inner T's fields)
+```
 
 ## References and UFCS
 

@@ -46,7 +46,7 @@ pub fn get_args() List(String) {
 
 // Returns the value of the environment variable with the given key,
 // or null if the variable is not set.
-pub fn get(key: String) String? {
+pub fn env(key: String) String? {
     const ptr = __flang_getenv(key.ptr)
     if ptr.is_none() { return null }
     const len = strlen(ptr.value)
@@ -286,14 +286,14 @@ test "get_args returns all args" {
     assert_true(s[0].len > 0, "program name should be non-empty")
 }
 
-test "get existing env var" {
-    const path = get("PATH")
+test "env existing env var" {
+    const path = env("PATH")
     assert_true(path.is_some(), "PATH should be set")
     assert_true(path.value.len > 0, "PATH should be non-empty")
 }
 
-test "get missing env var returns null" {
-    const val = get("__FLANG_NONEXISTENT_VAR_12345__")
+test "env missing env var returns null" {
+    const val = env("__FLANG_NONEXISTENT_VAR_12345__")
     assert_true(val.is_none(), "nonexistent var should return null")
 }
 

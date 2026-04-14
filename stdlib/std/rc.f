@@ -1,15 +1,16 @@
 // Reference-counted smart pointer.
 // Provides shared ownership of a heap-allocated value.
-// The inner value is freed when the last Rc is released.
+// The inner value is freed when the last Rc handle calls deinit().
 
 import std.allocator
+import std.atomic
 import std.mem
 import std.test
 
 // Reference-counted pointer to a heap-allocated value of type T.
 pub type Rc = struct(T) {
-    ptr: &RcInner(T)?
-    allocator: &Allocator?
+    __inner: &RcInner(T)?
+    __allocator: &Allocator?
 }
 
 // Internal control block: ref count + value, allocated on the heap.
@@ -18,191 +19,138 @@ type RcInner = struct(T) {
     value: T
 }
 
-// Allocate an RcInner(T) on the heap using raw alloc + cast.
-fn alloc_inner(value: $T, allocator: &Allocator) &RcInner(T) {
-    const inner = allocator.new(RcInner(T))
-    inner.ref_count = 1
-    inner.value = value
-    return inner
-}
-
-// Free an RcInner(T) through the allocator.
-fn free_inner(inner: &RcInner($T), allocator: &Allocator) {
-    allocator.free(inner)
-}
-
 // Create a new Rc wrapping the given value. Allocates an RcInner on the heap.
 pub fn rc(value: $T, allocator: &Allocator? = null) Rc(T) {
     const alloc = allocator.or_global()
-    const inner = alloc_inner(value, alloc)
-    return .{ ptr = inner, allocator = allocator }
+    const inner = alloc.new(RcInner(T))
+    inner.ref_count = 1
+    inner.value = value
+    return .{ __inner = inner, __allocator = alloc }
+}
+
+// Allocate an Rc with zero-initialized value for in-place fill via op_deref.
+pub fn rc_alloc(allocator: &Allocator? = null) Rc($T) {
+    const alloc = allocator.or_global()
+    const inner = alloc.new(RcInner(T))
+    inner.ref_count = 1
+    return .{ __inner = inner, __allocator = alloc }
 }
 
 // Increment the reference count and return a new handle to the same value.
 pub fn clone(self: &Rc($T)) Rc(T) {
-    if self.ptr.is_none() {
-        panic("Rc.clone: use after release")
+    if self.__inner.is_none() {
+        panic("Rc.clone: use after deinit")
     }
-    self.ptr.value.ref_count = self.ptr.value.ref_count + 1
-    return .{ ptr = self.ptr, allocator = self.allocator }
+    self.__inner.value.ref_count = self.__inner.value.ref_count + 1
+    return .{ __inner = self.__inner, __allocator = self.__allocator }
 }
 
 // Decrement the reference count. Frees the inner value when it reaches zero.
-// Intended to be used with defer: `defer r.release()`
-pub fn release(self: &Rc($T)) {
-    if self.ptr.is_none() {
+// Calls T.deinit() before freeing (statically dispatched via monomorphization).
+pub fn deinit(self: &Rc($T)) {
+    if self.__inner.is_none() {
         return
     }
 
-    let inner = self.ptr.value
+    let inner = self.__inner.value
     inner.ref_count = inner.ref_count - 1
 
     if inner.ref_count == 0 {
-        free_inner(inner, self.allocator.or_global())
+        let val_ptr: &T = (inner as &u8 + size_of(usize)) as &T
+        val_ptr.deinit()
+        self.__allocator.or_global().free(inner)
     }
 
-    self.ptr = null
+    self.__inner = null
 }
 
-// Get a read-only reference to the inner value.
-pub fn borrow(self: &Rc($T)) &T {
-    if self.ptr.is_none() {
-        panic("Rc.borrow: use after release")
+// Transparent access to the inner value via field syntax (e.g., rc.field).
+pub fn op_deref(self: &Rc($T)) &T {
+    if self.__inner.is_none() {
+        panic("Rc.op_deref: use after deinit")
     }
-    // Compute pointer to value field: inner_ptr + offset_of(ref_count)
-    let inner = self.ptr.value
+    let inner = self.__inner.value
     return (inner as &u8 + size_of(usize)) as &T
 }
 
-// Get a mutable reference to the inner value.
-// Panics if ref_count > 1 (shared state must not be mutated).
-pub fn borrow_mut(self: &Rc($T)) &T {
-    if self.ptr.is_none() {
-        panic("Rc.borrow_mut: use after release")
-    }
-    if self.ptr.value.ref_count > 1 {
-        panic("Rc.borrow_mut: cannot mutate shared Rc (ref_count > 1)")
-    }
-    let inner = self.ptr.value
-    return (inner as &u8 + size_of(usize)) as &T
-}
-
-// Return the current reference count. Returns 0 if released.
+// Return the current reference count. Returns 0 if deinit'd.
 pub fn ref_count(self: &Rc($T)) usize {
-    if self.ptr.is_none() {
+    if self.__inner.is_none() {
         return 0
     }
-    return self.ptr.value.ref_count
+    return self.__inner.value.ref_count
 }
 
-// Return true if this Rc has been released.
+// Return true if this Rc has been deinit'd.
 pub fn is_released(self: &Rc($T)) bool {
-    return self.ptr.is_none()
-}
-
-// Assignment operator — currently a no-op stub.
-// When the compiler supports op_assign, this will auto-clone on copy.
-pub fn op_assign(lhs: &Rc($T), rhs: Rc(T)) {
-    // TODO: implement when compiler supports op_assign
-    // lhs.release()
-    // lhs.ptr = rhs.ptr
-    // lhs.allocator = rhs.allocator
-    // if lhs.ptr.is_some() {
-    //     lhs.ptr.value.ref_count = lhs.ptr.value.ref_count + 1
-    // }
+    return self.__inner.is_none()
 }
 
 // =============================================================================
 // Tests
 // =============================================================================
 
-test "rc create and borrow" {
+test "rc create and op_deref" {
     let r = rc(42i32)
-    defer r.release()
+    defer r.deinit()
 
-    assert_eq(r.borrow().*, 42i32, "borrow should return inner value")
+    assert_eq(r.*, 42i32, "op_deref should return inner value")
     assert_eq(r.ref_count(), 1usize, "initial ref_count should be 1")
 }
 
 test "rc clone increments ref_count" {
     let r = rc(10i32)
-    defer r.release()
+    defer r.deinit()
 
     let r2 = r.clone()
-    defer r2.release()
+    defer r2.deinit()
 
     assert_eq(r.ref_count(), 2usize, "ref_count should be 2 after clone")
     assert_eq(r2.ref_count(), 2usize, "cloned ref_count should match")
-    assert_eq(r2.borrow().*, 10i32, "cloned value should match")
+    assert_eq(r2.*, 10i32, "cloned value should match")
 }
 
-test "rc release decrements ref_count" {
+test "rc deinit decrements ref_count" {
     let r = rc(99i32)
     let r2 = r.clone()
 
     assert_eq(r.ref_count(), 2usize, "ref_count should be 2")
-    r2.release()
-    assert_eq(r.ref_count(), 1usize, "ref_count should be 1 after release")
+    r2.deinit()
+    assert_eq(r.ref_count(), 1usize, "ref_count should be 1 after deinit")
     assert_true(r2.is_released(), "r2 should be released")
 
-    r.release()
+    r.deinit()
     assert_true(r.is_released(), "r should be released")
 }
 
-test "rc release frees when last ref dropped" {
+test "rc deinit frees when last ref dropped" {
     let r = rc(123i32)
     let r2 = r.clone()
     let r3 = r.clone()
 
     assert_eq(r.ref_count(), 3usize, "ref_count should be 3")
-    r3.release()
+    r3.deinit()
     assert_eq(r.ref_count(), 2usize, "ref_count should be 2")
-    r2.release()
+    r2.deinit()
     assert_eq(r.ref_count(), 1usize, "ref_count should be 1")
-    r.release()
-    // All released, inner freed — no leak, no double free
-}
-
-test "rc borrow_mut works when sole owner" {
-    let r = rc(5i32)
-    defer r.release()
-
-    r.borrow_mut().* = 42
-    assert_eq(r.borrow().*, 42i32, "value should be mutated")
-}
-
-test "rc shared value visible through all handles" {
-    let r = rc(0i32)
-    defer r.release()
-
-    let r2 = r.clone()
-    defer r2.release()
-
-    // Mutate through r (would need sole ownership, so release r2 first)
-    r2.release()
-    r.borrow_mut().* = 77
-
-    // Re-clone and check
-    let r3 = r.clone()
-    defer r3.release()
-
-    assert_eq(r3.borrow().*, 77i32, "cloned handle should see mutated value")
+    r.deinit()
+    // All deinit'd, inner freed — no leak, no double free
 }
 
 // Test helper type for struct tests
 type RcTestPoint = struct { x: i32, y: i32 }
 
-test "rc with struct value" {
+test "rc with struct value via op_deref" {
     let r = rc(RcTestPoint { x = 3, y = 4 })
-    defer r.release()
+    defer r.deinit()
 
-    assert_eq(r.borrow().x, 3i32, "x should be 3")
-    assert_eq(r.borrow().y, 4i32, "y should be 4")
+    assert_eq(r.x, 3i32, "x should be 3")
+    assert_eq(r.y, 4i32, "y should be 4")
 
     let r2 = r.clone()
-    defer r2.release()
+    defer r2.deinit()
 
-    assert_eq(r2.borrow().x, 3i32, "cloned x should be 3")
+    assert_eq(r2.x, 3i32, "cloned x should be 3")
 }
 
 test "rc with custom allocator" {
@@ -211,31 +159,155 @@ test "rc with custom allocator" {
     defer arena_state.deinit()
 
     let r = rc(42i32, &arena)
-    defer r.release()
+    defer r.deinit()
 
-    assert_eq(r.borrow().*, 42i32, "value through arena allocator")
+    assert_eq(r.*, 42i32, "value through arena allocator")
     assert_eq(r.ref_count(), 1usize, "ref_count with arena")
 }
 
-// Tests that motivate op_assign support — these test the DESIRED behavior
-// once the compiler wires up op_assign for Rc. Until then, these use
-// explicit clone/release.
+test "rc mutate through op_deref" {
+    let r = rc(5i32)
+    defer r.deinit()
 
-// DESIRED: let r2 = r  →  auto-clones, bumps ref_count
-// CURRENT: let r2 = r  →  byte copy, ref_count not bumped (WRONG)
-// So for now we use r.clone() to get correct behavior.
+    let ptr: &i32 = r.op_deref()
+    ptr.* = 42
+    assert_eq(r.*, 42i32, "value should be mutated through op_deref")
+}
 
-test "rc clone via explicit clone (op_assign motivation)" {
-    let r = rc(42i32)
-    defer r.release()
+test "rc_alloc zero-initialized" {
+    let r: Rc(i32) = rc_alloc()
+    defer r.deinit()
 
-    // DESIRED (once op_assign works):
-    //   let r2 = r          // op_assign auto-clones
-    //   defer r2.release()
-    //   assert_eq(r.ref_count(), 2usize, "op_assign should bump ref_count")
+    assert_eq(r.*, 0i32, "rc_alloc should zero-initialize")
+    assert_eq(r.ref_count(), 1usize, "ref_count should be 1")
+}
 
-    // CURRENT (explicit):
-    let r2 = r.clone()
-    defer r2.release()
-    assert_eq(r.ref_count(), 2usize, "explicit clone should bump ref_count")
+// =============================================================================
+// Arc — Thread-safe reference counting (atomic operations)
+// =============================================================================
+
+// Atomically reference-counted pointer to a heap-allocated value of type T.
+// Same control block as Rc, but clone/deinit use atomic operations on ref_count.
+pub type Arc = struct(T) {
+    __inner: &RcInner(T)?
+    __allocator: &Allocator?
+}
+
+// Create a new Arc wrapping the given value.
+pub fn arc(value: $T, allocator: &Allocator? = null) Arc(T) {
+    const alloc = allocator.or_global()
+    const inner = alloc.new(RcInner(T))
+    inner.ref_count = 1
+    inner.value = value
+    return .{ __inner = inner, __allocator = alloc }
+}
+
+// Allocate an Arc with zero-initialized value for in-place fill via op_deref.
+pub fn arc_alloc(allocator: &Allocator? = null) Arc($T) {
+    const alloc = allocator.or_global()
+    const inner = alloc.new(RcInner(T))
+    inner.ref_count = 1
+    return .{ __inner = inner, __allocator = alloc }
+}
+
+// Atomically increment the reference count and return a new handle.
+pub fn clone(self: &Arc($T)) Arc(T) {
+    if self.__inner.is_none() {
+        panic("Arc.clone: use after deinit")
+    }
+    __flang_atomic_add(&self.__inner.value.ref_count, 1usize)
+    return .{ __inner = self.__inner, __allocator = self.__allocator }
+}
+
+// Atomically decrement the reference count. Frees when it reaches zero.
+pub fn deinit(self: &Arc($T)) {
+    if self.__inner.is_none() {
+        return
+    }
+
+    let inner = self.__inner.value
+    let old = __flang_atomic_sub(&inner.ref_count, 1usize)
+
+    if old == 1 {
+        let val_ptr: &T = (inner as &u8 + size_of(usize)) as &T
+        val_ptr.deinit()
+        self.__allocator.or_global().free(inner)
+    }
+
+    self.__inner = null
+}
+
+// Transparent access to the inner value via field syntax.
+pub fn op_deref(self: &Arc($T)) &T {
+    if self.__inner.is_none() {
+        panic("Arc.op_deref: use after deinit")
+    }
+    let inner = self.__inner.value
+    return (inner as &u8 + size_of(usize)) as &T
+}
+
+// Return the current reference count (atomic load). Returns 0 if deinit'd.
+pub fn ref_count(self: &Arc($T)) usize {
+    if self.__inner.is_none() {
+        return 0
+    }
+    return __flang_atomic_load(&self.__inner.value.ref_count)
+}
+
+// Return true if this Arc has been deinit'd.
+pub fn is_released(self: &Arc($T)) bool {
+    return self.__inner.is_none()
+}
+
+// =============================================================================
+// Arc Tests
+// =============================================================================
+
+test "arc create and op_deref" {
+    let a = arc(42i32)
+    defer a.deinit()
+
+    assert_eq(a.*, 42i32, "arc op_deref should return inner value")
+    assert_eq(a.ref_count(), 1usize, "arc initial ref_count should be 1")
+}
+
+test "arc clone increments ref_count" {
+    let a = arc(10i32)
+    defer a.deinit()
+
+    let a2 = a.clone()
+    defer a2.deinit()
+
+    assert_eq(a.ref_count(), 2usize, "arc ref_count should be 2 after clone")
+    assert_eq(a2.ref_count(), 2usize, "arc cloned ref_count should match")
+    assert_eq(a2.*, 10i32, "arc cloned value should match")
+}
+
+test "arc deinit decrements ref_count" {
+    let a = arc(99i32)
+    let a2 = a.clone()
+
+    assert_eq(a.ref_count(), 2usize, "arc ref_count should be 2")
+    a2.deinit()
+    assert_eq(a.ref_count(), 1usize, "arc ref_count should be 1 after deinit")
+    assert_true(a2.is_released(), "arc a2 should be released")
+
+    a.deinit()
+    assert_true(a.is_released(), "arc a should be released")
+}
+
+test "arc with struct value via op_deref" {
+    let a = arc(RcTestPoint { x = 7, y = 8 })
+    defer a.deinit()
+
+    assert_eq(a.x, 7i32, "arc x should be 7")
+    assert_eq(a.y, 8i32, "arc y should be 8")
+}
+
+test "arc_alloc zero-initialized" {
+    let a: Arc(i32) = arc_alloc()
+    defer a.deinit()
+
+    assert_eq(a.*, 0i32, "arc_alloc should zero-initialize")
+    assert_eq(a.ref_count(), 1usize, "arc ref_count should be 1")
 }

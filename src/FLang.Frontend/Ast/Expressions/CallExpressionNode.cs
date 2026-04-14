@@ -58,4 +58,13 @@ public class CallExpressionNode : ExpressionNode
     /// instead of a function call.
     /// </summary>
     public bool IsTypeInstantiation { get; set; }
+
+    /// <summary>
+    /// Chain of op_deref functions to apply to the UFCS receiver before the call.
+    /// For example, rc.length() on Rc(Point) where length takes &amp;Point:
+    ///   [Rc(Point).op_deref] — lowering calls op_deref on the receiver first,
+    ///   then passes the result as the first argument to length.
+    /// Null or empty = no op_deref involved.
+    /// </summary>
+    public List<FunctionDeclarationNode>? UfcsOpDerefChain { get; set; }
 }

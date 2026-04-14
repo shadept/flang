@@ -22,3 +22,8 @@ pub fn deinit(self: &f64) {}
 
 // String is a non-owning view (ptr + len), no memory to free.
 pub fn deinit(self: &String) {}
+
+// Generic fallback: types without an explicit deinit are no-ops.
+// Overload resolution prefers concrete signatures (fewer generic params),
+// so types with their own deinit still get their specific version called.
+pub fn deinit(self: &$T) {}

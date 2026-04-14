@@ -1853,6 +1853,39 @@ public class HmAstLowering
         // UFCS: prepend receiver as first arg
         if (call.UfcsReceiver != null)
         {
+            // op_deref chain: transform receiver through op_deref calls before passing to callee
+            if (call.UfcsOpDerefChain is { Count: > 0 })
+            {
+                var receiverVal = LowerExpression(call.UfcsReceiver);
+
+                foreach (var derefFn in call.UfcsOpDerefChain)
+                {
+                    // op_deref expects &Self — ensure we have a pointer
+                    if (receiverVal.IrType is not IrPointer)
+                    {
+                        var temp = _currentBlock.EmitAlloca(receiverVal.IrType ?? TypeLayoutService.IrVoidPrim);
+                        _currentBlock.EmitStorePtr(temp, receiverVal);
+                        receiverVal = temp;
+                    }
+
+                    var calleeParams = new List<IrType>();
+                    foreach (var param in derefFn.Parameters)
+                        calleeParams.Add(GetIrType(param));
+
+                    var derefHmType = GetFunctionHmType(derefFn);
+                    var derefRetIrType = _layout.Lower(derefHmType.ReturnType);
+
+                    var isForeignDeref = (derefFn.Modifiers & FunctionModifiers.Foreign) != 0;
+                    receiverVal = _currentBlock.EmitCall(derefFn.Name, [receiverVal], derefRetIrType, calleeParams,
+                        isForeign: isForeignDeref);
+                }
+
+                // receiverVal is now &T from the last op_deref. Pass it directly as the first arg.
+                args.Add(receiverVal);
+                // Skip the normal receiver processing below
+                goto AfterUfcsReceiver;
+            }
+
             // Check if callee's first param expects a pointer (i.e. &self)
             // or if it's a non-foreign function with a large value param (implicit by-ref)
             var firstParamWantsPtr = false;
@@ -1953,6 +1986,7 @@ public class HmAstLowering
                 }
             }
         }
+        AfterUfcsReceiver:
 
         // Resolve target function name
         var targetName = call.ResolvedTarget?.Name ?? call.FunctionName;
@@ -2375,6 +2409,55 @@ public class HmAstLowering
             }
         }
 
+        // op_deref chain: call each op_deref function to transparently unwrap smart pointers
+        if (member.OpDerefChain is { Count: > 0 })
+        {
+            foreach (var derefFn in member.OpDerefChain)
+            {
+                // op_deref expects &Self — ensure baseVal is a pointer
+                if (baseVal.IrType is not IrPointer)
+                {
+                    var temp = _currentBlock.EmitAlloca(baseVal.IrType ?? TypeLayoutService.IrVoidPrim);
+                    _currentBlock.EmitStorePtr(temp, baseVal);
+                    baseVal = temp;
+                }
+
+                // Build callee param types for name mangling
+                var calleeParams = new List<IrType>();
+                foreach (var param in derefFn.Parameters)
+                    calleeParams.Add(GetIrType(param));
+
+                // Get return type (&T)
+                var fnHmType = GetFunctionHmType(derefFn);
+                var retIrType = _layout.Lower(fnHmType.ReturnType);
+
+                var isForeign = (derefFn.Modifiers & FunctionModifiers.Foreign) != 0;
+                baseVal = _currentBlock.EmitCall(derefFn.Name, [baseVal], retIrType, calleeParams,
+                    isForeign: isForeign);
+                baseIrType = retIrType;
+
+                // Result is &T (a pointer). For the next op_deref or for GEP field access,
+                // we need the pointee. If pointee is a struct, GEP operates on the pointer directly.
+                if (baseIrType is IrPointer derefPtr)
+                {
+                    if (derefPtr.Pointee is IrStruct or IrEnum)
+                    {
+                        baseIrType = derefPtr.Pointee;
+                        // Keep baseVal as pointer — GEP needs pointer base
+                    }
+                    else
+                    {
+                        // Peel through to get the struct pointer for next iteration
+                        baseVal = _currentBlock.EmitLoad(baseVal, derefPtr.Pointee);
+                        baseIrType = derefPtr.Pointee;
+                    }
+                }
+            }
+
+            // Refresh fieldIrType — the type checker resolved it after the full chain
+            fieldIrType = GetIrType(member);
+        }
+
         // Niche-optimized Option[&T]: .has_value -> ptr != NULL, .value -> cast to non-nullable
         if (IsNicheOption(baseIrType))
         {
@@ -2595,6 +2678,93 @@ public class HmAstLowering
             return _currentBlock.EmitGEP(basePtr, byteOffset, elemIrType);
         }
 
+        // &target.field — compute a GEP pointer to the field in-place instead of
+        // loading the field value and taking its address (which would be a dangling pointer).
+        if (addrOf.Target is MemberAccessExpressionNode memberTarget)
+        {
+            var targetVal = LowerExpression(memberTarget.Target);
+            var baseVal = targetVal;
+            var baseIrType = targetVal.IrType;
+
+            // Auto-deref through pointer layers (keep the last struct pointer)
+            for (int i = 0; i < memberTarget.AutoDerefCount; i++)
+            {
+                if (baseIrType is IrPointer derefPtrType)
+                {
+                    if (derefPtrType.Pointee is IrStruct or IrEnum)
+                    {
+                        baseIrType = derefPtrType.Pointee;
+                        break;
+                    }
+                    baseVal = _currentBlock.EmitLoad(baseVal, derefPtrType.Pointee);
+                    baseIrType = derefPtrType.Pointee;
+                }
+            }
+
+            // op_deref chain
+            if (memberTarget.OpDerefChain is { Count: > 0 })
+            {
+                foreach (var derefFn in memberTarget.OpDerefChain)
+                {
+                    if (baseVal.IrType is not IrPointer)
+                    {
+                        var temp = _currentBlock.EmitAlloca(baseVal.IrType ?? TypeLayoutService.IrVoidPrim);
+                        _currentBlock.EmitStorePtr(temp, baseVal);
+                        baseVal = temp;
+                    }
+
+                    var calleeParams = new List<IrType>();
+                    foreach (var param in derefFn.Parameters)
+                        calleeParams.Add(GetIrType(param));
+
+                    var derefHmType = GetFunctionHmType(derefFn);
+                    var derefRetIrType = _layout.Lower(derefHmType.ReturnType);
+
+                    var isForeignDeref = (derefFn.Modifiers & FunctionModifiers.Foreign) != 0;
+                    baseVal = _currentBlock.EmitCall(derefFn.Name, [baseVal], derefRetIrType, calleeParams,
+                        isForeign: isForeignDeref);
+                    baseIrType = derefRetIrType;
+
+                    if (baseIrType is IrPointer dp && dp.Pointee is IrStruct or IrEnum)
+                        baseIrType = dp.Pointee;
+                }
+            }
+
+            // Ensure we have a pointer base for GEP
+            if (baseVal.IrType is not IrPointer && baseIrType is IrStruct or IrEnum)
+            {
+                // value on stack — use original alloca if possible
+                if (memberTarget.Target is IdentifierExpressionNode tid
+                    && _locals.TryGetValue(tid.Name, out var lp)
+                    && lp.IrType is IrPointer
+                    && (!_parameters.Contains(tid.Name) || _byRefParams.Contains(tid.Name))
+                    && memberTarget.AutoDerefCount == 0
+                    && memberTarget.OpDerefChain is null or { Count: 0 })
+                {
+                    baseVal = lp;
+                }
+                else
+                {
+                    var tmp = _currentBlock.EmitAlloca(baseVal.IrType ?? TypeLayoutService.IrVoidPrim);
+                    _currentBlock.EmitStorePtr(tmp, baseVal);
+                    baseVal = tmp;
+                }
+            }
+
+            IrStruct? structType = baseIrType switch
+            {
+                IrStruct s => s,
+                IrPointer { Pointee: IrStruct s } => s,
+                _ => null
+            };
+
+            if (structType != null)
+            {
+                var field = FindField(structType, memberTarget.FieldName);
+                return _currentBlock.EmitGEP(baseVal, field.ByteOffset, field.Type);
+            }
+        }
+
         // Temporary promotion: if target is a call result, materialize on the stack
         // so we can take its address (same pattern as UFCS temp materialization).
         if (addrOf.Target is CallExpressionNode)
@@ -2612,11 +2782,40 @@ public class HmAstLowering
         return _currentBlock.EmitAddressOf(targetVal2.Name, irType is IrPointer ptr2 ? ptr2.Pointee : irType);
     }
 
-    private LocalValue LowerDereference(DereferenceExpressionNode deref)
+    private Value LowerDereference(DereferenceExpressionNode deref)
     {
-        var targetVal = LowerExpression(deref.Target);
+        // op_deref: call the resolved function instead of pointer load
+        if (deref.ResolvedOpDeref is { } opDerefFn)
+        {
+            var targetVal = LowerExpression(deref.Target);
+
+            // op_deref expects &Self — ensure target is a pointer
+            if (targetVal.IrType is not IrPointer)
+            {
+                var temp = _currentBlock.EmitAlloca(targetVal.IrType ?? TypeLayoutService.IrVoidPrim);
+                _currentBlock.EmitStorePtr(temp, targetVal);
+                targetVal = temp;
+            }
+
+            var calleeParams = new List<IrType>();
+            foreach (var param in opDerefFn.Parameters)
+                calleeParams.Add(GetIrType(param));
+
+            var fnHmType = GetFunctionHmType(opDerefFn);
+            var retIrType = _layout.Lower(fnHmType.ReturnType);
+
+            var isForeign = (opDerefFn.Modifiers & FunctionModifiers.Foreign) != 0;
+            var callResult = _currentBlock.EmitCall(opDerefFn.Name, [targetVal], retIrType, calleeParams,
+                isForeign: isForeign);
+
+            // op_deref returns &T, load to get T (the dereference)
+            var resultIrType = GetIrType(deref);
+            return _currentBlock.EmitLoad(callResult, resultIrType);
+        }
+
+        var ptrVal = LowerExpression(deref.Target);
         var irType = GetIrType(deref);
-        return _currentBlock.EmitLoad(targetVal, irType);
+        return _currentBlock.EmitLoad(ptrVal, irType);
     }
 
     private IntConstantValue LowerAssignment(AssignmentExpressionNode assign)
