@@ -125,6 +125,7 @@ tests/FLang.Tests/Harness/**
 !tests/FLang.Tests/Harness/**/*.f
 tests/FLang.Tests/Harness/**/*.generated.f
 
-# Compiled binaries in examples (extensionless executables on Linux/macOS)
-examples/**/*
-!examples/**/*.*
+# Build artifacts in examples
+examples/**/build/
+examples/**/*.dSYM/
+examples/**/*.c

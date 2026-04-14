@@ -30,7 +30,9 @@ public record CompilerOptions(
     bool EmitCfg = false,
     IReadOnlyList<string>? LinkFlags = null,
     IReadOnlyList<string>? HeaderPaths = null,
-    IReadOnlyList<string>? CompilerFlags = null
+    IReadOnlyList<string>? CompilerFlags = null,
+    string? ProjectName = null,
+    string? ProjectSourceRoot = null
 );
 
 public record CompilationResult(
@@ -61,6 +63,10 @@ public class Compiler
                 compilation.IncludePaths.Add(path);
         }
         compilation.IncludePaths.Add(workingDir);  // Working dir last (fallback for entry point)
+
+        // Project-name-based import resolution
+        compilation.ProjectName = options.ProjectName;
+        compilation.ProjectSourceRoot = options.ProjectSourceRoot;
 
         // Build structured compile-time context for #if directives
         var ctx = compilation.CompileTimeContext;
@@ -185,7 +191,7 @@ public class Compiler
 
         foreach (var kvp in parsedModules)
         {
-            var modulePath = TemplateExpander.DeriveModulePath(kvp.Key, compilation.IncludePaths, compilation.WorkingDirectory);
+            var modulePath = TemplateExpander.DeriveModulePath(kvp.Key, compilation);
             hmChecker.CollectNominalTypes(kvp.Value, modulePath);
         }
 
@@ -199,7 +205,7 @@ public class Compiler
         string ResolveModulePath(string key) =>
             syntheticModulePaths.TryGetValue(key, out var path)
                 ? path
-                : TemplateExpander.DeriveModulePath(key, compilation.IncludePaths, compilation.WorkingDirectory);
+                : TemplateExpander.DeriveModulePath(key, compilation);
 
         foreach (var kvp in parsedModules)
             hmChecker.ResolveNominalTypes(kvp.Value, ResolveModulePath(kvp.Key));

@@ -184,9 +184,23 @@ public partial class HmTypeChecker : INominalTypeRegistry, ITemplateTypeProvider
     // Module path
     // =========================================================================
 
-    public static string DeriveModulePath(string filePath, IReadOnlyList<string> includePaths, string workingDirectory)
+    public static string DeriveModulePath(string filePath, IReadOnlyList<string> includePaths, string workingDirectory,
+        string? projectName = null, string? projectSourceRoot = null)
     {
         var normalizedFile = Path.GetFullPath(filePath);
+
+        // If in project mode and file is under source root, prefix with project name
+        if (projectName != null && projectSourceRoot != null)
+        {
+            var normalizedSourceRoot = Path.GetFullPath(projectSourceRoot);
+            if (normalizedFile.StartsWith(normalizedSourceRoot + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase)
+                || normalizedFile.Equals(normalizedSourceRoot, StringComparison.OrdinalIgnoreCase))
+            {
+                var relativePath = Path.GetRelativePath(normalizedSourceRoot, normalizedFile);
+                var withoutExtension = Path.ChangeExtension(relativePath, null);
+                return projectName + "." + withoutExtension.Replace(Path.DirectorySeparatorChar, '.');
+            }
+        }
 
         foreach (var includePath in includePaths)
         {

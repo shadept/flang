@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Runtime.InteropServices;
 using FLang.CLI.Project;
 using FLang.Core;
+using FLang.Core.Project;
 
 namespace FLang.CLI.Commands;
 
@@ -91,7 +92,7 @@ public static class TestCommand
         var compilerFlags = platformConfig?.Cflags?.ToList();
 
         // Build include paths
-        var sourceRoot = ResolveSourceRoot(project.Project.Source, projectRoot);
+        var sourceRoot = ProjectLoader.ResolveSourceRoot(project.Project.Source, projectRoot);
         var includePaths = new List<string>();
         if (sourceRoot != null)
             includePaths.Add(sourceRoot);
@@ -106,7 +107,9 @@ public static class TestCommand
             IncludePaths: includePaths.Count > 0 ? includePaths : null,
             LinkFlags: linkFlags.Count > 0 ? linkFlags : null,
             HeaderPaths: headerPaths is { Count: > 0 } ? headerPaths : null,
-            CompilerFlags: compilerFlags is { Count: > 0 } ? compilerFlags : null
+            CompilerFlags: compilerFlags is { Count: > 0 } ? compilerFlags : null,
+            ProjectName: project.Project.Name,
+            ProjectSourceRoot: sourceRoot
         );
 
         var compiler = new Compiler();
@@ -161,17 +164,4 @@ public static class TestCommand
         return Path.GetFullPath(Path.Combine(projectRoot, path));
     }
 
-    private static string? ResolveSourceRoot(string sourceGlob, string projectRoot)
-    {
-        var parts = sourceGlob.Replace('\\', '/').Split('/');
-        var staticParts = new List<string>();
-        foreach (var part in parts)
-        {
-            if (part.Contains('*') || part.Contains('?')) break;
-            staticParts.Add(part);
-        }
-        if (staticParts.Count == 0) return null;
-        var root = Path.Combine(projectRoot, Path.Combine(staticParts.ToArray()));
-        return Directory.Exists(root) ? root : null;
-    }
 }

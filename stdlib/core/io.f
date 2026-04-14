@@ -35,6 +35,10 @@ pub fn println(value: u32) i32 {
     return printf("%ud\n".ptr, value)
 }
 
+pub fn println(value: i64) i32 {
+    return printf("%lld\n".ptr, value)
+}
+
 pub fn println(value: isize) i32 {
     return printf("%lld\n".ptr, value as i64)
 }
@@ -43,12 +47,12 @@ pub fn println(value: usize) i32 {
     return printf("%llu\n".ptr, value as u64)
 }
 
-pub fn println(value: f64) i32 {
-    return printf("%f\n".ptr, value)
+pub fn println(value: f32) i32 {
+    return printf("%g\n".ptr, value as f64)
 }
 
-pub fn println(value: f32) i32 {
-    return printf("%f\n".ptr, value as f64)
+pub fn println(value: f64) i32 {
+    return printf("%g\n".ptr, value)
 }
 
 pub fn println(value: String) i32 {

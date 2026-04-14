@@ -1,4 +1,4 @@
-namespace FLang.CLI.Project;
+namespace FLang.Core.Project;
 
 public record FlangProject(
     ProjectInfo Project,

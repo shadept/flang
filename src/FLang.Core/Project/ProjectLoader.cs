@@ -3,7 +3,7 @@ using System.Text.RegularExpressions;
 using Tomlyn;
 using Tomlyn.Model;
 
-namespace FLang.CLI.Project;
+namespace FLang.Core.Project;
 
 public static partial class ProjectLoader
 {
@@ -60,6 +60,24 @@ public static partial class ProjectLoader
         if (RuntimeInformation.IsOSPlatform(OSPlatform.Linux)) return "linux";
         if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows)) return "windows";
         return "unknown";
+    }
+
+    /// <summary>
+    /// Extracts the static directory prefix from a source glob pattern.
+    /// E.g., "src/**/*.f" → "src", "lib/core/**/*.f" → "lib/core"
+    /// </summary>
+    public static string? ResolveSourceRoot(string sourceGlob, string projectRoot)
+    {
+        var parts = sourceGlob.Replace('\\', '/').Split('/');
+        var staticParts = new List<string>();
+        foreach (var part in parts)
+        {
+            if (part.Contains('*') || part.Contains('?')) break;
+            staticParts.Add(part);
+        }
+        if (staticParts.Count == 0) return null;
+        var root = Path.Combine(projectRoot, Path.Combine(staticParts.ToArray()));
+        return Directory.Exists(root) ? root : null;
     }
 
     public static string ExpandEnvVars(string value)

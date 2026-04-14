@@ -1740,8 +1740,18 @@ public partial class HmTypeChecker
             return;
         }
 
-        // Find the variant in the enum's FieldsOrVariants
-        var variant = enumType.FieldsOrVariants
+        // Find the variant in the enum's FieldsOrVariants.
+        // Fall back to the registered template if the instance has no variants
+        // (can happen when the type flows through cross-module inference).
+        var fieldsSource = enumType;
+        if (enumType.FieldsOrVariants.Count == 0)
+        {
+            var template = LookupNominalType(enumType.Name);
+            if (template != null)
+                fieldsSource = template;
+        }
+
+        var variant = fieldsSource.FieldsOrVariants
             .FirstOrDefault(f => f.Name == pattern.VariantName);
 
         if (variant == default)

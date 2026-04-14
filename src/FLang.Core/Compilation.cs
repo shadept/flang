@@ -56,6 +56,18 @@ public class Compilation
     public List<string> IncludePaths { get; set; } = [];
 
     /// <summary>
+    /// The project name from flang.toml (e.g., "calc"). When set, the first import
+    /// segment matching this name resolves relative to <see cref="ProjectSourceRoot"/>.
+    /// </summary>
+    public string? ProjectName { get; set; }
+
+    /// <summary>
+    /// The resolved source root directory for the project (e.g., /path/to/calc/src).
+    /// Used with <see cref="ProjectName"/> for project-name-based import resolution.
+    /// </summary>
+    public string? ProjectSourceRoot { get; set; }
+
+    /// <summary>
     /// Structured compile-time context for #if directives.
     /// Evaluated as a tree: platform.os, runtime.testing, runtime.env["KEY"], etc.
     /// Values can be strings, bools, longs, or nested Dictionary&lt;string, object&gt;.
@@ -112,21 +124,25 @@ public class Compilation
     /// <returns>The resolved file path if found; otherwise, null.</returns>
     public string? TryResolveImportPath(IReadOnlyList<string> importPath, ISourceProvider? sourceProvider = null)
     {
-        // Convert import path to filepath: ["std", "io"] -> "std/io.f", ["vendor", "raylib"] -> "vendor/raylib.f"
-        var relativePath = string.Join(Path.DirectorySeparatorChar, importPath) + ".f";
+        // Project-name-based resolution: if the first segment matches the project name,
+        // resolve the rest relative to the project source root.
+        // e.g., import calc.ast -> <ProjectSourceRoot>/ast.f
+        if (ProjectName != null && ProjectSourceRoot != null
+            && importPath.Count > 1 && importPath[0] == ProjectName)
+        {
+            var projectRelativePath = string.Join(Path.DirectorySeparatorChar, importPath.Skip(1)) + ".f";
+            var fullPath = Path.Combine(ProjectSourceRoot, projectRelativePath);
+            if (sourceProvider != null ? sourceProvider.Exists(fullPath) : File.Exists(fullPath))
+                return fullPath;
+        }
 
-        // Search all include paths (stdlib first, then user paths, then working dir)
+        // Filesystem-based resolution: search include paths in order (stdlib, working dir)
+        var relativePath = string.Join(Path.DirectorySeparatorChar, importPath) + ".f";
         foreach (var basePath in IncludePaths)
         {
             var fullPath = Path.Combine(basePath, relativePath);
-            if (sourceProvider != null)
-            {
-                if (sourceProvider.Exists(fullPath)) return fullPath;
-            }
-            else
-            {
-                if (File.Exists(fullPath)) return fullPath;
-            }
+            if (sourceProvider != null ? sourceProvider.Exists(fullPath) : File.Exists(fullPath))
+                return fullPath;
         }
         return null;
     }

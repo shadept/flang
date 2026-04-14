@@ -72,6 +72,10 @@ public class TextDocumentSyncHandler : TextDocumentSyncHandlerBase
         if (IsGeneratedFile(filePath)) return Unit.Task;
         FLangLanguageServer.Log($"didSave: {filePath}");
 
+        // Invalidate project cache when flang.toml changes
+        if (filePath.EndsWith("flang.toml", StringComparison.OrdinalIgnoreCase))
+            _workspace.InvalidateProjectCache();
+
         var task = Task.Run(() => _workspace.AnalyzeFile(filePath), cancellationToken);
         _workspace.SetPendingAnalysis(filePath, task);
 

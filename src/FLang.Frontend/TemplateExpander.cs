@@ -35,9 +35,29 @@ public static class TemplateExpander
     /// Derive a module path from a file path and include paths.
     /// Duplicated from HmTypeChecker.DeriveModulePath to avoid the Semantics dependency.
     /// </summary>
-    public static string DeriveModulePath(string filePath, IReadOnlyList<string> includePaths, string workingDirectory)
+    public static string DeriveModulePath(string filePath, Compilation compilation)
+    {
+        return DeriveModulePath(filePath, compilation.IncludePaths, compilation.WorkingDirectory,
+            compilation.ProjectName, compilation.ProjectSourceRoot);
+    }
+
+    public static string DeriveModulePath(string filePath, IReadOnlyList<string> includePaths, string workingDirectory,
+        string? projectName = null, string? projectSourceRoot = null)
     {
         var normalizedFile = Path.GetFullPath(filePath);
+
+        // If in project mode and file is under source root, prefix with project name
+        if (projectName != null && projectSourceRoot != null)
+        {
+            var normalizedSourceRoot = Path.GetFullPath(projectSourceRoot);
+            if (normalizedFile.StartsWith(normalizedSourceRoot + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase)
+                || normalizedFile.Equals(normalizedSourceRoot, StringComparison.OrdinalIgnoreCase))
+            {
+                var relativePath = Path.GetRelativePath(normalizedSourceRoot, normalizedFile);
+                var withoutExtension = Path.ChangeExtension(relativePath, null);
+                return projectName + "." + withoutExtension.Replace(Path.DirectorySeparatorChar, '.');
+            }
+        }
 
         foreach (var includePath in includePaths)
         {
@@ -101,7 +121,7 @@ public static class TemplateExpander
                 if (syntheticModulePaths.TryGetValue(kvp.Key, out var storedPath))
                     modulePath = storedPath;
                 else
-                    modulePath = DeriveModulePath(kvp.Key, compilation.IncludePaths, compilation.WorkingDirectory);
+                    modulePath = DeriveModulePath(kvp.Key, compilation);
 
                 for (var i = 0; i < mod.GeneratorInvocations.Count; i++)
                 {

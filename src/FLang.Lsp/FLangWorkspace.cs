@@ -1,5 +1,6 @@
 using System.Runtime.InteropServices;
 using FLang.Core;
+using FLang.Core.Project;
 using FLang.Frontend;
 using FLang.Frontend.Ast.Declarations;
 using FLang.Semantics;
@@ -34,6 +35,7 @@ public class FLangWorkspace
     private readonly Lock _lock = new();
     private readonly ILogger _logger;
     private readonly ILanguageServerFacade _server;
+    private readonly Dictionary<string, FlangProject> _projectCache = [];
 
     public string? StdlibPath { get; set; }
     public string? WorkingDirectory { get; set; }
@@ -107,6 +109,39 @@ public class FLangWorkspace
 
     public void AnalyzeFile(string filePath) => AnalyzeFileInternal(filePath, cascade: true);
 
+    public void InvalidateProjectCache()
+    {
+        lock (_lock) { _projectCache.Clear(); }
+    }
+
+    private (FlangProject Project, string ProjectRoot)? FindProjectForFile(string filePath)
+    {
+        var dir = Path.GetDirectoryName(filePath);
+        if (dir == null) return null;
+
+        var tomlPath = ProjectLoader.FindProjectFile(dir);
+        if (tomlPath == null) return null;
+
+        lock (_lock)
+        {
+            if (!_projectCache.TryGetValue(tomlPath, out var project))
+            {
+                try
+                {
+                    project = ProjectLoader.Load(tomlPath);
+                    _projectCache[tomlPath] = project;
+                }
+                catch (Exception ex)
+                {
+                    FLangLanguageServer.Log($"  Failed to load {tomlPath}: {ex.Message}");
+                    return null;
+                }
+            }
+
+            return (project, Path.GetDirectoryName(tomlPath)!);
+        }
+    }
+
     private void AnalyzeFileInternal(string filePath, bool cascade)
     {
         var normalized = Path.GetFullPath(filePath);
@@ -118,11 +153,31 @@ public class FLangWorkspace
         {
             var compilation = new Compilation();
             compilation.StdlibPath = StdlibPath ?? "";
-            compilation.WorkingDirectory = WorkingDirectory
-                ?? Path.GetDirectoryName(normalized)
-                ?? Directory.GetCurrentDirectory();
-            compilation.IncludePaths.Add(compilation.StdlibPath);
-            compilation.IncludePaths.Add(compilation.WorkingDirectory);
+
+            // Try to find project config for this file
+            var projectInfo = FindProjectForFile(normalized);
+            if (projectInfo is { } pi)
+            {
+                compilation.WorkingDirectory = pi.ProjectRoot;
+                compilation.ProjectName = pi.Project.Project.Name;
+                var sourceRoot = ProjectLoader.ResolveSourceRoot(pi.Project.Project.Source, pi.ProjectRoot);
+                compilation.ProjectSourceRoot = sourceRoot;
+
+                compilation.IncludePaths.Add(compilation.StdlibPath);
+                if (sourceRoot != null)
+                    compilation.IncludePaths.Add(sourceRoot);
+                compilation.IncludePaths.Add(pi.ProjectRoot);
+
+                FLangLanguageServer.Log($"  project={pi.Project.Project.Name}, sourceRoot={sourceRoot}");
+            }
+            else
+            {
+                compilation.WorkingDirectory = WorkingDirectory
+                    ?? Path.GetDirectoryName(normalized)
+                    ?? Directory.GetCurrentDirectory();
+                compilation.IncludePaths.Add(compilation.StdlibPath);
+                compilation.IncludePaths.Add(compilation.WorkingDirectory);
+            }
 
             // Build compile-time context for #if directives (same as CLI)
             var ctx = compilation.CompileTimeContext;
@@ -180,7 +235,7 @@ public class FLangWorkspace
                 lap = sw.ElapsedMilliseconds;
                 foreach (var kvp in parsedModules)
                 {
-                    var modulePath = TemplateExpander.DeriveModulePath(kvp.Key, compilation.IncludePaths, compilation.WorkingDirectory);
+                    var modulePath = TemplateExpander.DeriveModulePath(kvp.Key, compilation);
                     hmChecker.CollectNominalTypes(kvp.Value, modulePath);
                 }
                 FLangLanguageServer.Log($"  [collectNominals] {sw.ElapsedMilliseconds - lap}ms");
@@ -197,7 +252,7 @@ public class FLangWorkspace
                 string ResolveModulePath(string key) =>
                     syntheticModulePaths.TryGetValue(key, out var path)
                         ? path
-                        : TemplateExpander.DeriveModulePath(key, compilation.IncludePaths, compilation.WorkingDirectory);
+                        : TemplateExpander.DeriveModulePath(key, compilation);
 
                 lap = sw.ElapsedMilliseconds;
                 foreach (var kvp in parsedModules)
