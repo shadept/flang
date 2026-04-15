@@ -11,8 +11,16 @@
 #include <stdint.h>
 #include <string.h>
 
+#ifdef _MSC_VER
+#define FLANG_ALIGN_PRE(n) __declspec(align(n))
+#define FLANG_ALIGN_POST(n)
+#else
+#define FLANG_ALIGN_PRE(n)
+#define FLANG_ALIGN_POST(n) __attribute__((aligned(n)))
+#endif
+
 /* Struct definition matches what the FLang codegen emits */
-struct __attribute__((aligned(16))) std_simd_Vec128 { uint8_t _data[16]; };
+FLANG_ALIGN_PRE(16) struct FLANG_ALIGN_POST(16) std_simd_Vec128 { uint8_t _data[16]; };
 typedef struct std_simd_Vec128 std_simd_Vec128;
 
 #if defined(__x86_64__) || defined(_M_X64)

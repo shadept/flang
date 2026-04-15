@@ -51,6 +51,14 @@ public static class HmCCodeGenerator
         sb.AppendLine("#include <arm_neon.h>");
         sb.AppendLine("#endif");
         sb.AppendLine();
+        sb.AppendLine("#ifdef _MSC_VER");
+        sb.AppendLine("#define FLANG_ALIGN_PRE(n) __declspec(align(n))");
+        sb.AppendLine("#define FLANG_ALIGN_POST(n)");
+        sb.AppendLine("#else");
+        sb.AppendLine("#define FLANG_ALIGN_PRE(n)");
+        sb.AppendLine("#define FLANG_ALIGN_POST(n) __attribute__((aligned(n)))");
+        sb.AppendLine("#endif");
+        sb.AppendLine();
 
         // Runtime globals: argc/argv capture for std.env
         sb.AppendLine("/* Runtime: argc/argv */");
@@ -258,7 +266,7 @@ public static class HmCCodeGenerator
         switch (type)
         {
             case IrStruct s:
-                sb.AppendLine($"struct __attribute__((aligned({s.Alignment}))) {s.CName} {{");
+                sb.AppendLine($"FLANG_ALIGN_PRE({s.Alignment}) struct FLANG_ALIGN_POST({s.Alignment}) {s.CName} {{");
                 foreach (var f in s.Fields)
                 {
                     sb.AppendLine($"    {EmitFieldDecl(f.Type, f.Name)};");
@@ -272,7 +280,7 @@ public static class HmCCodeGenerator
                 break;
 
             case IrEnum e:
-                sb.AppendLine($"struct __attribute__((aligned({e.Alignment}))) {e.CName} {{");
+                sb.AppendLine($"FLANG_ALIGN_PRE({e.Alignment}) struct FLANG_ALIGN_POST({e.Alignment}) {e.CName} {{");
                 sb.AppendLine("    int32_t tag;");
                 // Find largest payload; add padding if payload needs alignment > tag alignment
                 var maxPayload = 0;
