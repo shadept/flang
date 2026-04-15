@@ -50,10 +50,46 @@ public partial class HmTypeChecker
             NullPropagationExpressionNode nullProp => InferNullPropagation(nullProp),
             AnonymousStructExpressionNode anon => InferAnonymousStruct(anon),
             NamedArgumentExpressionNode namedArg => InferExpression(namedArg.Value),
+            ReturnNode ret => InferReturn(ret),
+            BreakNode => WellKnown.Never,
+            ContinueNode => WellKnown.Never,
             _ => InferUnknownExpression(expr)
         };
 
         return Record(expr, type);
+    }
+
+    private Type InferReturn(ReturnNode ret)
+    {
+        if (_ctx.FunctionStack.Count == 0)
+        {
+            ReportError("Return statement outside of function", ret.Span);
+            return WellKnown.Never;
+        }
+
+        var ctx = _ctx.FunctionStack.Peek();
+
+        if (ret.Expression != null)
+        {
+            var exprType = InferExpression(ret.Expression);
+
+            using (_ctx.Engine.OverrideErrors("E2071",
+                () => "function `" + ctx.Node.Name + "` returns `{expected}`, but got `{actual}`"))
+            {
+                _ctx.Engine.Unify(ctx.ReturnType, exprType, ret.Expression.Span);
+            }
+        }
+        else
+        {
+            // Bare return: return type must be void
+            using (_ctx.Engine.OverrideErrors("E2071",
+                () => "function `" + ctx.Node.Name + "` must return `{expected}`, but got bare return"))
+            {
+                _ctx.Engine.Unify(ctx.ReturnType, WellKnown.Void, ret.Span);
+            }
+        }
+
+        return WellKnown.Never;
     }
 
     private TypeVar InferUnknownExpression(ExpressionNode expr)
@@ -2527,10 +2563,11 @@ public partial class HmTypeChecker
         // 5. Implicit return: rewrite tail expression to return statement
         if (lambda.Body.Count > 0
             && lambda.Body[^1] is ExpressionStatementNode tailExpr
+            && tailExpr.Expression is not ReturnNode
             && lambda.Body is List<StatementNode> bodyList)
         {
-            var returnStmt = new ReturnStatementNode(tailExpr.Span, tailExpr.Expression);
-            bodyList[^1] = returnStmt;
+            var returnNode = new ReturnNode(tailExpr.Span, tailExpr.Expression);
+            bodyList[^1] = new ExpressionStatementNode(tailExpr.Span, returnNode);
             // Unify tail expression type with return type
             var tailType = _checker_GetInferredTypeOrFresh(tailExpr.Expression);
             _ctx.Engine.Unify(tailType, returnType, tailExpr.Span);

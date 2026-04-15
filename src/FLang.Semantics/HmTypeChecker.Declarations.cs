@@ -632,7 +632,7 @@ public partial class HmTypeChecker
 
         foreach (var stmt in statements)
         {
-            if (stmt is ReturnStatementNode)
+            if (stmt is ExpressionStatementNode { Expression: ReturnNode })
                 return true;
 
             if (stmt is ExpressionStatementNode { Expression: IfExpressionNode ifExpr })
@@ -671,6 +671,7 @@ public partial class HmTypeChecker
     {
         return expr switch
         {
+            ReturnNode => true,
             BlockExpressionNode block => HasReturnOrImplicitReturn(block.Statements),
             IfExpressionNode ifExpr => ifExpr.ElseBranch != null
                 && HasReturnInExpression(ifExpr.ThenBranch)

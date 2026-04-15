@@ -216,7 +216,31 @@ pub fn main() i32 {
 
 ---
 
-<!-- E1006 removed: expression statements are now supported generally -->
+### E1006: Break Outside Loop
+
+`break` can only appear inside a `loop` or `for` body.
+
+```flang
+pub fn main() i32 {
+    break  // E1006: break can only be used inside loop/for
+    return 0
+}
+```
+
+---
+
+### E1007: Continue Outside Loop
+
+`continue` can only appear inside a `loop` or `for` body.
+
+```flang
+pub fn main() i32 {
+    continue  // E1007: continue can only be used inside loop/for
+    return 0
+}
+```
+
+---
 
 ## E2XXX: Semantic Analysis Errors
 
@@ -2632,6 +2656,8 @@ Report the issue with sample code that reproduces the error.
 | **E1002** | Parsing           | Expected token mismatch                      |
 | **E1004** | Parsing           | Invalid array length (non-integer)           |
 | **E1005** | Parsing           | Invalid array repeat count (non-integer)     |
+| **E1006** | Parsing           | `break` outside of loop                      |
+| **E1007** | Parsing           | `continue` outside of loop                   |
 
 ### E2XXX: Semantic Analysis
 

@@ -25,9 +25,6 @@ public partial class HmTypeChecker
             case VariableDeclarationNode varDecl:
                 CheckVariableDeclaration(varDecl);
                 break;
-            case ReturnStatementNode ret:
-                CheckReturn(ret);
-                break;
             case ExpressionStatementNode { Expression: IfExpressionNode ifStmt }:
                 InferIfAsStatement(ifStmt);
                 break;
@@ -39,9 +36,6 @@ public partial class HmTypeChecker
                 break;
             case LoopNode loop:
                 CheckLoop(loop);
-                break;
-            case BreakStatementNode:
-            case ContinueStatementNode:
                 break;
             case DeferStatementNode defer:
                 InferExpression(defer.Expression);
@@ -133,37 +127,6 @@ public partial class HmTypeChecker
     // =========================================================================
     // Return statement
     // =========================================================================
-
-    private void CheckReturn(ReturnStatementNode ret)
-    {
-        if (_ctx.FunctionStack.Count == 0)
-        {
-            ReportError("Return statement outside of function", ret.Span);
-            return;
-        }
-
-        var ctx = _ctx.FunctionStack.Peek();
-
-        if (ret.Expression != null)
-        {
-            var exprType = InferExpression(ret.Expression);
-
-            using (_ctx.Engine.OverrideErrors("E2071",
-                () => "function `" + ctx.Node.Name + "` returns `{expected}`, but got `{actual}`"))
-            {
-                _ctx.Engine.Unify(ctx.ReturnType, exprType, ret.Expression.Span);
-            }
-        }
-        else
-        {
-            // Bare return: return type must be void
-            using (_ctx.Engine.OverrideErrors("E2071",
-                () => "function `" + ctx.Node.Name + "` must return `{expected}`, but got bare return"))
-            {
-                _ctx.Engine.Unify(ctx.ReturnType, WellKnown.Void, ret.Span);
-            }
-        }
-    }
 
     // =========================================================================
     // For loop — iterator protocol: iter(&T) -> next(&Iter) -> Option[E]

@@ -35,6 +35,15 @@ Complex constructs (`for`, `if` expressions, `defer`, `match`) are desugared int
 
 Both run iteratively between lowering and codegen.
 
+### Future IR optimizations
+
+The following are redundancies in the generated IR that Clang eliminates at `-O2` but could be addressed in FIR for better unoptimized debug builds and reduced C output size. `match_arm_control_flow.f` is a good test case — Clang collapses `loop_break()` to `ret i32 33` and `early_return()` to a branchless `select`.
+
+- **Constant enum construction:** `Action.Stop` (payload-less) generates 3 allocas + load + store; could emit a single constant struct.
+- **Redundant scrutinee copy:** match lowers the scrutinee into a second alloca for tag extraction even when the original is already addressable.
+- **Dead block elimination:** `break`/`continue`/`return` in expression position emit a `dead` basic block for subsequent unreachable code; these could be pruned.
+- **Dead stores / unused allocas:** DCE removes allocas with zero uses, but allocas that are only stored to (never loaded) survive because `StorePointerInstruction` is not side-effect-free, keeping the alloca alive. Requires dead-store elimination: detect allocas that are stored to but never loaded, then remove both the stores and the alloca.
+
 ## C99 Backend
 
 - **Name mangling only in codegen.** IR preserves base function names. `HmCCodeGenerator` applies `IrNameMangling.MangleFunctionName()` when emitting C. `main` is never mangled.

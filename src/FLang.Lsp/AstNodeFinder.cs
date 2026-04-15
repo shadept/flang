@@ -243,13 +243,13 @@ public static class AstNodeFinder
                 yield return ic.Inner;
                 break;
 
+            case ReturnNode ret:
+                if (ret.Expression != null) yield return ret.Expression;
+                break;
+
             // === Statements ===
             case ExpressionStatementNode es:
                 yield return es.Expression;
-                break;
-
-            case ReturnStatementNode ret:
-                if (ret.Expression != null) yield return ret.Expression;
                 break;
 
             case DeferStatementNode def:
@@ -294,7 +294,7 @@ public static class AstNodeFinder
 
             // Leaves: IdentifierExpressionNode, IntegerLiteralNode, StringLiteralNode,
             // BooleanLiteralNode, NullLiteralNode, ImportDeclarationNode,
-            // BreakStatementNode, ContinueStatementNode, NamedTypeNode, PatternNodes (leaf)
+            // BreakNode, ContinueNode, NamedTypeNode, PatternNodes (leaf)
             // — no children to yield
         }
     }

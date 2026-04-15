@@ -200,8 +200,6 @@ public partial class HmTypeChecker
 
     private static StatementNode CloneStatement(StatementNode stmt) => stmt switch
     {
-        ReturnStatementNode ret => new ReturnStatementNode(ret.Span,
-            ret.Expression != null ? CloneExpression(ret.Expression) : null),
         ExpressionStatementNode es => new ExpressionStatementNode(es.Span,
             CloneExpression(es.Expression)),
         VariableDeclarationNode vd => new VariableDeclarationNode(vd.Span, vd.NameSpan, vd.Name, vd.Type,
@@ -209,8 +207,6 @@ public partial class HmTypeChecker
         ForLoopNode fl => new ForLoopNode(fl.Span, fl.IteratorVariable,
             CloneExpression(fl.IterableExpression), CloneExpression(fl.Body)),
         LoopNode loop => new LoopNode(loop.Span, CloneExpression(loop.Body)),
-        BreakStatementNode br => new BreakStatementNode(br.Span),
-        ContinueStatementNode cont => new ContinueStatementNode(cont.Span),
         DeferStatementNode df => new DeferStatementNode(df.Span, CloneExpression(df.Expression)),
         _ => throw new NotSupportedException(
             $"Cloning not implemented for statement type: {stmt.GetType().Name}")
@@ -273,6 +269,10 @@ public partial class HmTypeChecker
             CloneExpression(un.Operand)),
         LambdaExpressionNode lambda => new LambdaExpressionNode(lambda.Span,
             lambda.Parameters, lambda.ReturnType, CloneStatements(lambda.Body)),
+        ReturnNode ret => new ReturnNode(ret.Span,
+            ret.Expression != null ? CloneExpression(ret.Expression) : null),
+        BreakNode br => new BreakNode(br.Span),
+        ContinueNode cont => new ContinueNode(cont.Span),
         _ => throw new NotSupportedException(
             $"Cloning not implemented for expression type: {expr.GetType().Name}")
     };

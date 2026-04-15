@@ -218,8 +218,9 @@ public class HoverHandler : HoverHandlerBase
                     if (node is TypeNode typeNode)
                         return FormatTypeNode(typeNode);
 
-                    // Generic expression type display
-                    if (node is ExpressionNode && tc.NodeTypes.TryGetValue(node, out var type))
+                    // Generic expression type display (skip control flow keywords)
+                    if (node is ExpressionNode and not (BreakNode or ContinueNode or ReturnNode)
+                        && tc.NodeTypes.TryGetValue(node, out var type))
                         return FormatHmType(tc.Resolve(type), tc);
                     break;
                 }

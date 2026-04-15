@@ -333,7 +333,7 @@ public class InlayHintHandler : InlayHintsHandlerBase
                 yield return es.Expression;
                 break;
 
-            case ReturnStatementNode ret:
+            case ReturnNode ret:
                 if (ret.Expression != null) yield return ret.Expression;
                 break;
 

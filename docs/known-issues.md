@@ -71,7 +71,7 @@ fn make_wrapper(data: u8[]) Wrapper {
 **Status:** Minor
 **Affected:** Error reporting
 
-1. **E3006/E3007:** `break`/`continue` outside loop is caught during lowering (E3006/E3007), not semantic analysis (E2006/E2007). Documentation and implementation are out of sync.
+1. **E3006/E3007:** `break`/`continue` outside loop is now caught during parsing (E1006/E1007). E3006/E3007 remain in lowering as safety net but should be deprecated once parser validation is proven reliable.
 2. **E2015:** Used for both "intrinsic requires one type argument" and "missing field in struct construction". E2019 (documented for missing fields) is never emitted.
 
 ---
@@ -146,28 +146,20 @@ When `Option(T).map(f: fn(T) U)` is specialized with an enum type (e.g., `T = Js
 
 ---
 
-### Break, Continue, and Return Cannot Appear in Expression Position
+### ~~Break, Continue, and Return Cannot Appear in Expression Position~~
 
-**Status:** Open
-**Affected:** Parser, type checker — control flow in expressions
+**Status:** Fixed
+**Affected:** Parser, type checker, lowering — control flow in expressions
 
-`break`, `continue`, and `return` are statement-only constructs and cannot appear in expression position (e.g., as match arm results). This prevents patterns like:
+`break`, `continue`, and `return` are now `ExpressionNode` subclasses with type `never`. They can appear in match arm bodies (and continue to work in statement position via `ExpressionStatementNode` wrapping). The parser restricts placement — they are not valid in arbitrary sub-expression positions (e.g., function arguments). `break`/`continue` outside loops are caught at parse time (E1006/E1007); lowering retains E3006/E3007 as safety net.
 
-```flang
-let x = value match {
-    Done => break,        // Error: break is a statement, not an expression
-    Value(v) => v
-}
+**Fixed by:**
+- `BreakNode`, `ContinueNode`, `ReturnNode` extend `ExpressionNode` (replacing old `StatementNode` subclasses)
+- Parser recognizes them in statement position and match arm bodies, with `_loopDepth` tracking for break/continue validation
+- Type checker infers all three as `never`, which unifies with other arm types via existing never-unification rule
+- Lowering handles them in `LowerExpression`, emitting control flow IR and returning `IrNeverPrim`
 
-let y = flag match {
-    true => 42,
-    false => return 0     // Error: return is a statement, not an expression
-}
-```
-
-This is related to the never-type gap — `break`, `continue`, and `return` would need to produce `never` type to be used in expression position.
-
-**Future:** Consider making `break`/`continue`/`return` expressions of type `never`, or keep them as statements only and rely on other patterns (like early `if` checks before the match).
+**Test:** `tests/FLang.Tests/Harness/match/match_arm_control_flow.f`
 
 ---
 

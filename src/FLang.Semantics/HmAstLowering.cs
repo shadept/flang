@@ -976,7 +976,8 @@ public class HmAstLowering
         for (int si = 0; si < fn.Body.Count; si++)
         {
             var stmt = fn.Body[si];
-            if (si == fn.Body.Count - 1 && isNonVoid && stmt is ExpressionStatementNode lastExpr)
+            if (si == fn.Body.Count - 1 && isNonVoid && stmt is ExpressionStatementNode lastExpr
+                && lastExpr.Expression is not ReturnNode)
             {
                 var val = LowerExpression(lastExpr.Expression, retIrType);
                 _ctx.Span = stmt.Span;
@@ -1017,9 +1018,6 @@ public class HmAstLowering
         _ctx.Span = stmt.Span;
         switch (stmt)
         {
-            case ReturnStatementNode ret:
-                LowerReturn(ret);
-                break;
             case ExpressionStatementNode exprStmt:
                 LowerExpression(exprStmt.Expression);
                 break;
@@ -1028,12 +1026,6 @@ public class HmAstLowering
                 break;
             case LoopNode loop:
                 LowerLoop(loop);
-                break;
-            case BreakStatementNode brk:
-                LowerBreak(brk);
-                break;
-            case ContinueStatementNode cont:
-                LowerContinue(cont);
                 break;
             case ForLoopNode forLoop:
                 LowerForLoop(forLoop);
@@ -1050,25 +1042,6 @@ public class HmAstLowering
                         LowerStatement(s);
                 break;
             }
-        }
-    }
-
-    private void LowerReturn(ReturnStatementNode ret)
-    {
-        // Emit deferred expressions before returning
-        EmitDeferredExpressions();
-
-        if (ret.Expression != null)
-        {
-            var fnRetType = _currentFunction.ReturnType;
-            var val = LowerExpression(ret.Expression, fnRetType);
-            _currentBlock.EmitFunctionReturn(val, _currentFunction,
-                _currentFunction.UsesReturnSlot ? _locals["__ret"] : null);
-        }
-        else
-        {
-            var voidVal = new IntConstantValue(0, TypeLayoutService.IrVoidPrim);
-            _currentBlock.EmitReturn(voidVal);
         }
     }
 
@@ -1304,12 +1277,33 @@ public class HmAstLowering
         _currentBlock = exitBlock;
     }
 
-    private void LowerBreak(BreakStatementNode _)
+    private Value LowerReturnExpr(ReturnNode ret)
+    {
+        // Emit deferred expressions before returning
+        EmitDeferredExpressions();
+
+        if (ret.Expression != null)
+        {
+            var fnRetType = _currentFunction.ReturnType;
+            var val = LowerExpression(ret.Expression, fnRetType);
+            _currentBlock.EmitFunctionReturn(val, _currentFunction,
+                _currentFunction.UsesReturnSlot ? _locals["__ret"] : null);
+        }
+        else
+        {
+            var voidVal = new IntConstantValue(0, TypeLayoutService.IrVoidPrim);
+            _currentBlock.EmitReturn(voidVal);
+        }
+
+        return new IntConstantValue(0, TypeLayoutService.IrNeverPrim);
+    }
+
+    private Value LowerBreakExpr(BreakNode brk)
     {
         if (_loopStack.Count == 0)
         {
-            _diagnostics.Add(Diagnostic.Error("break outside of loop", _.Span, "break can only be used inside for/while loops", "E3006"));
-            return;
+            _diagnostics.Add(Diagnostic.Error("break outside of loop", brk.Span, "break can only be used inside for/while loops", "E3006"));
+            return new IntConstantValue(0, TypeLayoutService.IrNeverPrim);
         }
 
         var (_, exitBlock) = _loopStack.Peek();
@@ -1318,14 +1312,16 @@ public class HmAstLowering
         // Start a dead block — subsequent code is unreachable but we need a valid block
         var deadBlock = CreateBlock("dead");
         _currentBlock = deadBlock;
+
+        return new IntConstantValue(0, TypeLayoutService.IrNeverPrim);
     }
 
-    private void LowerContinue(ContinueStatementNode _)
+    private Value LowerContinueExpr(ContinueNode cont)
     {
         if (_loopStack.Count == 0)
         {
-            _diagnostics.Add(Diagnostic.Error("continue outside of loop", _.Span, "continue can only be used inside for/while loops", "E3007"));
-            return;
+            _diagnostics.Add(Diagnostic.Error("continue outside of loop", cont.Span, "continue can only be used inside for/while loops", "E3007"));
+            return new IntConstantValue(0, TypeLayoutService.IrNeverPrim);
         }
 
         var (bodyBlock, _2) = _loopStack.Peek();
@@ -1334,6 +1330,8 @@ public class HmAstLowering
         // Start a dead block
         var deadBlock = CreateBlock("dead");
         _currentBlock = deadBlock;
+
+        return new IntConstantValue(0, TypeLayoutService.IrNeverPrim);
     }
 
     private void LowerForLoop(ForLoopNode forLoop)
@@ -1618,6 +1616,9 @@ public class HmAstLowering
             NullPropagationExpressionNode nullProp => LowerNullPropagation(nullProp),
             LambdaExpressionNode lambda => LowerLambda(lambda),
             NamedArgumentExpressionNode na => LowerExpression(na.Value, expectedType),
+            ReturnNode ret => LowerReturnExpr(ret),
+            BreakNode brk => LowerBreakExpr(brk),
+            ContinueNode cont => LowerContinueExpr(cont),
             _ => throw new InternalCompilerError($"Lowering of expression type {expr.GetType()} is not implemented.", expr.Span)
         };
 
@@ -4122,9 +4123,6 @@ public class HmAstLowering
             case ExpressionStatementNode es:
                 CollectMutatedParamsExpr(es.Expression, mutated);
                 break;
-            case ReturnStatementNode ret:
-                if (ret.Expression != null) CollectMutatedParamsExpr(ret.Expression, mutated);
-                break;
             case VariableDeclarationNode vd:
                 if (vd.Initializer != null) CollectMutatedParamsExpr(vd.Initializer, mutated);
                 break;
@@ -4169,6 +4167,9 @@ public class HmAstLowering
             case MatchExpressionNode match:
                 foreach (var arm in match.Arms)
                     CollectMutatedParamsExpr(arm.ResultExpr, mutated);
+                break;
+            case ReturnNode ret:
+                if (ret.Expression != null) CollectMutatedParamsExpr(ret.Expression, mutated);
                 break;
         }
     }

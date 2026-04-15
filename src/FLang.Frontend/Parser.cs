@@ -18,6 +18,7 @@ public class Parser
     private Token _previousToken;
     private readonly List<Diagnostic> _diagnostics = [];
     private bool _stopAtBrace; // When true, '{' terminates expression parsing (used for if/for conditions)
+    private int _loopDepth; // Tracks nesting depth of loops for break/continue validation
     private readonly List<StructDeclarationNode> _hoistedStructs = [];
     private readonly List<EnumDeclarationNode> _hoistedEnums = [];
     private static readonly HashSet<string> _knownDirectiveNames = ["foreign", "inline", "deprecated", "simd"];
@@ -1224,23 +1225,31 @@ public class Parser
                     // Allow bare `return` for void functions - check if next token can't start an expression
                     if (IsBareReturn(_currentToken.Kind))
                     {
-                        return new ReturnStatementNode(returnKeyword.Span, null);
+                        var node = new ReturnNode(returnKeyword.Span, null);
+                        return new ExpressionStatementNode(returnKeyword.Span, node);
                     }
                     var expression = ParseExpression();
                     var span = SourceSpan.Combine(returnKeyword.Span, expression.Span);
-                    return new ReturnStatementNode(span, expression);
+                    var returnNode = new ReturnNode(span, expression);
+                    return new ExpressionStatementNode(span, returnNode);
                 }
 
             case TokenKind.Break:
                 {
                     var breakKeyword = Eat(TokenKind.Break);
-                    return new BreakStatementNode(breakKeyword.Span);
+                    if (_loopDepth == 0)
+                        _diagnostics.Add(Diagnostic.Error("break outside of loop", breakKeyword.Span, "break can only be used inside loop/for", "E1006"));
+                    var breakNode = new BreakNode(breakKeyword.Span);
+                    return new ExpressionStatementNode(breakKeyword.Span, breakNode);
                 }
 
             case TokenKind.Continue:
                 {
                     var continueKeyword = Eat(TokenKind.Continue);
-                    return new ContinueStatementNode(continueKeyword.Span);
+                    if (_loopDepth == 0)
+                        _diagnostics.Add(Diagnostic.Error("continue outside of loop", continueKeyword.Span, "continue can only be used inside loop/for", "E1007"));
+                    var continueNode = new ContinueNode(continueKeyword.Span);
+                    return new ExpressionStatementNode(continueKeyword.Span, continueNode);
                 }
 
             case TokenKind.Defer:
@@ -2241,7 +2250,9 @@ public class Parser
         }
 
         // Body must be a block
+        _loopDepth++;
         var body = ParseBlockExpression();
+        _loopDepth--;
 
         var span = SourceSpan.Combine(forKeyword.Span, body.Span);
         return new ForLoopNode(span, iterator.Text, iterable, body);
@@ -2254,7 +2265,9 @@ public class Parser
     private LoopNode ParseLoop()
     {
         var loopKeyword = Eat(TokenKind.Loop);
+        _loopDepth++;
         var body = ParseBlockExpression();
+        _loopDepth--;
         return new LoopNode(loopKeyword.Span, body);
     }
 
@@ -2892,8 +2905,39 @@ public class Parser
             // Expect =>
             Eat(TokenKind.FatArrow);
 
-            // Parse result expression
-            var resultExpr = ParseExpression();
+            // Parse result expression (or control flow expression)
+            ExpressionNode resultExpr;
+            if (_currentToken.Kind == TokenKind.Return)
+            {
+                var returnKeyword = Eat(TokenKind.Return);
+                if (IsBareReturn(_currentToken.Kind))
+                {
+                    resultExpr = new ReturnNode(returnKeyword.Span, null);
+                }
+                else
+                {
+                    var retExpr = ParseExpression();
+                    resultExpr = new ReturnNode(SourceSpan.Combine(returnKeyword.Span, retExpr.Span), retExpr);
+                }
+            }
+            else if (_currentToken.Kind == TokenKind.Break)
+            {
+                var breakKeyword = Eat(TokenKind.Break);
+                if (_loopDepth == 0)
+                    _diagnostics.Add(Diagnostic.Error("break outside of loop", breakKeyword.Span, "break can only be used inside loop/for", "E1006"));
+                resultExpr = new BreakNode(breakKeyword.Span);
+            }
+            else if (_currentToken.Kind == TokenKind.Continue)
+            {
+                var continueKeyword = Eat(TokenKind.Continue);
+                if (_loopDepth == 0)
+                    _diagnostics.Add(Diagnostic.Error("continue outside of loop", continueKeyword.Span, "continue can only be used inside loop/for", "E1007"));
+                resultExpr = new ContinueNode(continueKeyword.Span);
+            }
+            else
+            {
+                resultExpr = ParseExpression();
+            }
 
             var armSpan = SourceSpan.Combine(armStart, resultExpr.Span);
             arms.Add(new MatchArmNode(armSpan, pattern, resultExpr));
