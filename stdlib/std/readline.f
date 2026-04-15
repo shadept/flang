@@ -9,17 +9,27 @@
 //       process(line.value)
 //   }
 
+import std.option
 import std.mem
 
 // =============================================================================
 // FFI
 // =============================================================================
 
-#foreign fn tcgetattr(fd: i32, termios_p: &u8) i32
-#foreign fn tcsetattr(fd: i32, actions: i32, termios_p: &u8) i32
+// Cross-platform
 #foreign fn isatty(fd: i32) i32
 #foreign fn read(fd: i32, buf: &u8, len: usize) isize
 #foreign fn write(fd: i32, buf: &u8, len: usize) isize
+
+// POSIX terminal control (unused on Windows — externs emitted but unreferenced)
+#foreign fn tcgetattr(fd: i32, termios_p: &u8) i32
+#foreign fn tcsetattr(fd: i32, actions: i32, termios_p: &u8) i32
+
+// Windows console API (unused on POSIX — externs emitted but unreferenced)
+#foreign fn GetStdHandle(nStdHandle: u32) usize
+#foreign fn GetConsoleMode(hConsole: usize, lpMode: &u32) i32
+#foreign fn SetConsoleMode(hConsole: usize, dwMode: u32) i32
+#foreign fn ReadFile(hFile: usize, lpBuffer: &u8, nBytes: u32, lpBytesRead: &u32, lpOverlapped: usize) i32
 
 const TCSAFLUSH: i32 = 2
 
@@ -44,6 +54,15 @@ const ISIG: u64 = 128
 // c_cc indices
 const VMIN: usize = 16
 const VTIME: usize = 17
+
+// Windows console mode constants
+const WIN_STD_INPUT_HANDLE: u32 = 0xFFFFFFF6
+const WIN_STD_OUTPUT_HANDLE: u32 = 0xFFFFFFF5
+const WIN_ENABLE_PROCESSED_INPUT: u32 = 1
+const WIN_ENABLE_LINE_INPUT: u32 = 2
+const WIN_ENABLE_ECHO_INPUT: u32 = 4
+const WIN_ENABLE_VIRTUAL_TERMINAL_INPUT: u32 = 512
+const WIN_ENABLE_VIRTUAL_TERMINAL_PROCESSING: u32 = 4
 
 // =============================================================================
 // Key codes
@@ -177,29 +196,64 @@ fn enable_raw(rl: &Readline) {
     if rl.is_raw { return }
     if isatty(0) == 0 { return }
 
-    // Save original termios
-    tcgetattr(0, &rl.raw_buf[0])
+    #if(platform.os == "windows") {
+        // Save original console modes (stdin in bytes 0..3, stdout in bytes 4..7)
+        const hIn = GetStdHandle(WIN_STD_INPUT_HANDLE)
+        let in_mode: u32 = 0
+        GetConsoleMode(hIn, &in_mode)
+        const p_in = &rl.raw_buf[0] as &u32
+        p_in.* = in_mode
 
-    // Copy and modify
-    let raw = [0u8; 72]
-    memcpy(&raw[0], &rl.raw_buf[0], TERMIOS_SIZE)
+        const hOut = GetStdHandle(WIN_STD_OUTPUT_HANDLE)
+        let out_mode: u32 = 0
+        GetConsoleMode(hOut, &out_mode)
+        const p_out = &rl.raw_buf[4] as &u32
+        p_out.* = out_mode
 
-    // Clear ECHO, ICANON, ISIG from c_lflag
-    let lflag = read_u64(&raw[LFLAG_OFFSET])
-    lflag = lflag & (0xFFFFFFFFFFFFFFFF - ECHO - ICANON - ISIG)
-    write_u64(&raw[LFLAG_OFFSET], lflag)
+        // Disable echo and line input, enable VT input for escape sequences
+        const new_in = (in_mode & (0xFFFFFFFF - WIN_ENABLE_ECHO_INPUT - WIN_ENABLE_LINE_INPUT - WIN_ENABLE_PROCESSED_INPUT)) | WIN_ENABLE_VIRTUAL_TERMINAL_INPUT
+        SetConsoleMode(hIn, new_in)
 
-    // Set VMIN=1, VTIME=0
-    raw[CC_OFFSET + VMIN] = 1
-    raw[CC_OFFSET + VTIME] = 0
+        // Enable VT processing on stdout for ANSI escape codes
+        SetConsoleMode(hOut, out_mode | WIN_ENABLE_VIRTUAL_TERMINAL_PROCESSING)
+    } else {
+        // Save original termios
+        tcgetattr(0, &rl.raw_buf[0])
 
-    tcsetattr(0, TCSAFLUSH, &raw[0])
+        // Copy and modify
+        let raw = [0u8; 72]
+        memcpy(&raw[0], &rl.raw_buf[0], TERMIOS_SIZE)
+
+        // Clear ECHO, ICANON, ISIG from c_lflag
+        let lflag = read_u64(&raw[LFLAG_OFFSET])
+        lflag = lflag & (0xFFFFFFFFFFFFFFFF - ECHO - ICANON - ISIG)
+        write_u64(&raw[LFLAG_OFFSET], lflag)
+
+        // Set VMIN=1, VTIME=0
+        raw[CC_OFFSET + VMIN] = 1
+        raw[CC_OFFSET + VTIME] = 0
+
+        tcsetattr(0, TCSAFLUSH, &raw[0])
+    }
+
     rl.is_raw = true
 }
 
 fn disable_raw(rl: &Readline) {
     if !rl.is_raw { return }
-    tcsetattr(0, TCSAFLUSH, &rl.raw_buf[0])
+
+    #if(platform.os == "windows") {
+        const hIn = GetStdHandle(WIN_STD_INPUT_HANDLE)
+        const p_in = &rl.raw_buf[0] as &u32
+        SetConsoleMode(hIn, p_in.*)
+
+        const hOut = GetStdHandle(WIN_STD_OUTPUT_HANDLE)
+        const p_out = &rl.raw_buf[4] as &u32
+        SetConsoleMode(hOut, p_out.*)
+    } else {
+        tcsetattr(0, TCSAFLUSH, &rl.raw_buf[0])
+    }
+
     rl.is_raw = false
 }
 
@@ -219,8 +273,16 @@ fn write_u64(ptr: &u8, val: u64) {
 
 fn read_byte() u8? {
     let c: u8 = 0
-    const n = read(0, &c, 1)
-    if n <= 0 { return null }
+    #if(platform.os == "windows") {
+        // Use ReadFile directly — CRT _read ignores SetConsoleMode changes
+        const hIn = GetStdHandle(WIN_STD_INPUT_HANDLE)
+        let bytes_read: u32 = 0
+        const ok = ReadFile(hIn, &c, 1, &bytes_read, 0)
+        if ok == 0 or bytes_read == 0 { return null }
+    } else {
+        const n = read(0, &c, 1)
+        if n <= 0 { return null }
+    }
     return c
 }
 
