@@ -11,6 +11,8 @@ namespace FLang.IR;
 public class TypeLayoutService(ITypeResolver engine, INominalTypeRegistry nominalTypes)
 {
     private readonly Dictionary<string, IrType> _cache = [];
+    private readonly List<(string Key, NominalType Nt, string CName)> _deferredRelower = [];
+    private int _loweringDepth;
     private readonly ITypeResolver _engine = engine;
     private readonly INominalTypeRegistry _nominalTypes = nominalTypes;
 
@@ -85,6 +87,21 @@ public class TypeLayoutService(ITypeResolver engine, INominalTypeRegistry nomina
                 return cs;
         }
         return s; // Genuinely empty struct
+    }
+
+    /// <summary>
+    /// Resolve an IrEnum that may be stale (from cycle-breaking or deferred re-lowering)
+    /// to the canonical version from the cache. Returns the input if it is already canonical.
+    /// </summary>
+    public IrEnum ResolveEnum(IrEnum e)
+    {
+        // Look up by CName in the cache — always prefer the cached version
+        foreach (var cached in _cache.Values)
+        {
+            if (cached is IrEnum ce && ce.CName == e.CName && ce.Size >= e.Size)
+                return ce;
+        }
+        return e;
     }
 
     /// <summary>
@@ -213,8 +230,13 @@ public class TypeLayoutService(ITypeResolver engine, INominalTypeRegistry nomina
             }
         }
 
-        // Pre-register a stub to break recursive cycles (self-referencing types via pointers).
-        // LowerStruct/LowerEnum will produce the real result and we update the cache.
+        // Pre-register a stub in the cache as an "already being lowered" sentinel.
+        // Without this, mutually-recursive types (e.g., Expr → List(Expr) → &Expr → Expr)
+        // would infinite-loop. The stub's size is meaningless — it exists only to make
+        // the cache lookup at line 140 return early instead of recursing. Pointer fields
+        // (&T) don't need the pointee's size so the stub is harmless for them. By-value
+        // fields that hit the stub will get incorrect sizes; _deferredRelower fixes those
+        // up after all dependencies have their final sizes (see re-lower pass below).
         // Foreign structs use their original C name; others get a mangled C identifier.
         var cName = concrete.IsForeign
             ? concrete.Name.Split('.').Last()
@@ -225,6 +247,7 @@ public class TypeLayoutService(ITypeResolver engine, INominalTypeRegistry nomina
         else
             stub = new IrStruct(concrete.Name, cName, [], 0, 1, 8);
         _cache[cacheKey] = stub;
+        _loweringDepth++;
 
         IrType result;
         if (concrete.Kind == NominalKind.Enum)
@@ -233,6 +256,24 @@ public class TypeLayoutService(ITypeResolver engine, INominalTypeRegistry nomina
             result = LowerStruct(concrete, cacheKey, cName);
 
         _cache[cacheKey] = result;
+        _loweringDepth--;
+
+        // When we return to the outermost lowering call, re-lower any types that
+        // were computed while a dependency's stub was still in the cache.
+        if (_loweringDepth == 0 && _deferredRelower.Count > 0)
+        {
+            var toRelower = new List<(string Key, NominalType Nt, string CName)>(_deferredRelower);
+            _deferredRelower.Clear();
+            foreach (var (key, nt2, cn) in toRelower)
+            {
+                _cache.Remove(key);
+                if (nt2.Kind == NominalKind.Enum)
+                    _cache[key] = LowerEnum(nt2, key, cn);
+                else
+                    _cache[key] = LowerStruct(nt2, key, cn);
+            }
+        }
+
         return result;
     }
 
@@ -246,17 +287,26 @@ public class TypeLayoutService(ITypeResolver engine, INominalTypeRegistry nomina
         var fields = new IrField[nt.FieldsOrVariants.Count];
         int offset = 0;
         int maxAlignment = 1;
+        bool usedStub = false;
 
         for (int i = 0; i < nt.FieldsOrVariants.Count; i++)
         {
             var (name, fieldHmType) = nt.FieldsOrVariants[i];
             var fieldIrType = LowerResolved(_engine.Resolve(fieldHmType));
+            // Detect if we got a stub (incomplete type from cycle-breaking)
+            if (fieldIrType is IrStruct { Size: 0, Fields.Length: 0 }
+                || fieldIrType is IrEnum { Variants.Length: 0 })
+                usedStub = true;
             var alignment = fieldIrType.Alignment;
             maxAlignment = Math.Max(maxAlignment, alignment);
             offset = AlignUp(offset, alignment);
             fields[i] = new IrField(name, fieldIrType, offset);
             offset += fieldIrType.Size;
         }
+
+        // If any field resolved to a stub, schedule this type for re-lowering
+        if (usedStub)
+            _deferredRelower.Add((cacheKey, nt, cName));
 
         if (nt.IsSimd)
         {
@@ -298,6 +348,7 @@ public class TypeLayoutService(ITypeResolver engine, INominalTypeRegistry nomina
         int largestPayload = 0;
         int maxPayloadAlignment = 1;
         bool allPayloadless = true;
+        bool usedStub = false;
 
         for (int i = 0; i < nt.FieldsOrVariants.Count; i++)
         {
@@ -317,11 +368,20 @@ public class TypeLayoutService(ITypeResolver engine, INominalTypeRegistry nomina
             {
                 payloadIrType = LowerResolved(resolved);
                 allPayloadless = false;
+                // Detect if we got a stub (incomplete type from cycle-breaking)
+                if (payloadIrType is IrStruct { Size: 0, Fields.Length: 0 }
+                    || payloadIrType is IrEnum { Variants.Length: 0 })
+                    usedStub = true;
                 largestPayload = Math.Max(largestPayload, payloadIrType.Size);
                 maxPayloadAlignment = Math.Max(maxPayloadAlignment, payloadIrType.Alignment);
                 variants[i] = new IrVariant(variantName, tag, payloadIrType, tagSize);
             }
         }
+
+        // If any payload resolved to a stub, schedule this type for re-lowering
+        // once all dependencies have their final sizes.
+        if (usedStub)
+            _deferredRelower.Add((cacheKey, nt, cName));
 
         int alignment;
         int totalSize;
@@ -335,8 +395,16 @@ public class TypeLayoutService(ITypeResolver engine, INominalTypeRegistry nomina
         else
         {
             alignment = Math.Max(4, maxPayloadAlignment);
-            totalSize = tagSize + largestPayload;
+            var payloadOffset = AlignUp(tagSize, maxPayloadAlignment);
+            totalSize = payloadOffset + largestPayload;
             totalSize = AlignUp(totalSize, alignment);
+
+            // Update PayloadOffset in variants if padding was added
+            if (payloadOffset > tagSize)
+            {
+                for (int i = 0; i < variants.Length; i++)
+                    variants[i] = variants[i] with { PayloadOffset = payloadOffset };
+            }
         }
 
         return new IrEnum(nt.Name, cName, tagSize, variants, totalSize, alignment);

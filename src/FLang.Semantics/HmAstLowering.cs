@@ -882,12 +882,13 @@ public class HmAstLowering
                 }
                 break;
             case IrEnum e:
-                if (collected.Add(e.CName))
+                var resolvedEnum = _layout.ResolveEnum(e);
+                if (collected.Add(resolvedEnum.CName))
                 {
-                    foreach (var v in e.Variants)
+                    foreach (var v in resolvedEnum.Variants)
                         if (v.PayloadType != null)
                             CollectIrType(v.PayloadType, collected);
-                    _module.TypeDefs.Add(e);
+                    _module.TypeDefs.Add(resolvedEnum);
                 }
                 break;
             case IrPointer p:

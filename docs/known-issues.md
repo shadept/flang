@@ -87,19 +87,32 @@ Foreign function declarations (`#foreign fn`) rely on the C codegen preamble (`H
 
 ---
 
-### C Codegen Fails for Recursive Enum Types (json.f)
+### ~~Recursive Enum Type Layout Incorrect When Containing Generic Containers~~
+
+**Status:** Fixed
+**Affected:** TypeLayoutService, C codegen — recursive enum types with generic containers
+
+Recursive enums containing generic containers (e.g., `enum Expr { Add(List(Expr)) }`) had incorrect payload sizes in generated C. The type layout cache's stub-breaking mechanism for recursive types caused stale size=0 stubs to be used when computing enum payload sizes, resulting in undersized `payload[]` arrays and segfaults at runtime. Additionally, enum codegen did not emit alignment padding between tag and payload, causing C `sizeof` to disagree with the IR's computed size.
+
+**Fixed by:**
+- Deferred re-lowering: types computed with stale stubs are re-lowered after all dependencies have final sizes
+- `ResolveEnum` in `CollectIrType` to prefer the canonical cached version
+- Enum C codegen now emits `__attribute__((aligned(N)))` and `__pad[]` when payload alignment exceeds tag alignment
+
+**Tests:** `enum_recursive_via_list.f`, `struct_recursive_via_list.f`
+
+---
+
+### json.f Cannot Compile Due to writer.f Duplicate Definitions
 
 **Status:** Open
-**Affected:** C codegen — recursive enum types with generic containers
+**Affected:** stdlib — `std/io/writer.f`, `std/encoding/json.f`
 
-`JsonValue` (a recursive enum containing `List(JsonValue)` and `Dict(OwnedString, JsonValue)`) passes semantic analysis but generates invalid C:
-- Incomplete type errors (forward-declared struct used by value)
-- Undeclared variable errors (`elem_N` references emitted before declarations)
-- Incompatible pointer type errors in serialization functions
+`json.f` imports `writer.f`, which fails type checking with E2103 (duplicate definition of `write_byte` and `write_str`). This blocks all json.f compilation and testing. The recursive type layout issue that previously affected `JsonValue` is now fixed — the remaining blocker is the writer.f duplicate function problem.
 
-**Blocked:** `flang test stdlib/std/encoding/json.f` cannot run due to codegen failures.
+**Workaround:** None.
 
-**Workaround:** None. Requires compiler fix for recursive type C emission ordering and variable scoping in generated C.
+---
 
 ---
 

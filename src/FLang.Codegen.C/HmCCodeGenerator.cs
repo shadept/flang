@@ -258,10 +258,7 @@ public static class HmCCodeGenerator
         switch (type)
         {
             case IrStruct s:
-                if (s.RegisterSize > 8)
-                    sb.AppendLine($"struct __attribute__((aligned({s.RegisterSize}))) {s.CName} {{");
-                else
-                    sb.AppendLine($"struct {s.CName} {{");
+                sb.AppendLine($"struct __attribute__((aligned({s.Alignment}))) {s.CName} {{");
                 foreach (var f in s.Fields)
                 {
                     sb.AppendLine($"    {EmitFieldDecl(f.Type, f.Name)};");
@@ -275,15 +272,27 @@ public static class HmCCodeGenerator
                 break;
 
             case IrEnum e:
-                sb.AppendLine($"struct {e.CName} {{");
+                sb.AppendLine($"struct __attribute__((aligned({e.Alignment}))) {e.CName} {{");
                 sb.AppendLine("    int32_t tag;");
-                // Find largest payload
+                // Find largest payload; add padding if payload needs alignment > tag alignment
                 var maxPayload = 0;
+                var maxPayloadAlign = 1;
                 foreach (var v in e.Variants)
-                    if (v.PayloadType != null && v.PayloadType.Size > maxPayload)
-                        maxPayload = v.PayloadType.Size;
+                {
+                    if (v.PayloadType != null)
+                    {
+                        maxPayload = Math.Max(maxPayload, v.PayloadType.Size);
+                        maxPayloadAlign = Math.Max(maxPayloadAlign, v.PayloadType.Alignment);
+                    }
+                }
                 if (maxPayload > 0)
+                {
+                    // Pad between tag and payload to respect payload alignment
+                    var payloadOffset = (4 + maxPayloadAlign - 1) / maxPayloadAlign * maxPayloadAlign;
+                    if (payloadOffset > 4)
+                        sb.AppendLine($"    uint8_t __pad[{payloadOffset - 4}];");
                     sb.AppendLine($"    uint8_t payload[{maxPayload}];");
+                }
                 sb.AppendLine("};");
                 // Tag constants
                 foreach (var v in e.Variants)

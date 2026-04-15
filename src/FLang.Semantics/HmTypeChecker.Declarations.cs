@@ -108,6 +108,13 @@ public partial class HmTypeChecker
 
             PopScope();
 
+            // E2035: Check for infinite-size recursive fields (direct self-reference without indirection)
+            foreach (var field in structDecl.Fields)
+            {
+                if (ContainsDirectSelfReference(field.Type, structDecl.Name))
+                    ReportError($"Recursive field `{field.Name}` creates infinite-size type (use `&{structDecl.Name}` for indirection)", field.Span, "E2035");
+            }
+
             var existing = _types.NominalTypes[fqn];
             _types.NominalTypes[fqn] = new NominalType(fqn, NominalKind.Struct, typeArgs, fields, existing.IsSimd, existing.IsForeign);
         }

@@ -125,7 +125,10 @@ tests/FLang.Tests/Harness/**
 !tests/FLang.Tests/Harness/**/*.f
 tests/FLang.Tests/Harness/**/*.generated.f
 
-# Build artifacts in examples
-examples/**/build/
-examples/**/*.dSYM/
-examples/**/*.c
+# Build artifacts in examples — ignore everything except source and project files
+examples/**
+!examples/**/
+!examples/**/*.f
+!examples/**/*.toml
+!examples/**/*.md
+!examples/**/.gitignore
