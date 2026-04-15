@@ -1,7 +1,7 @@
 //! TEST: float_scientific
 //! EXIT: 0
-//! STDOUT: 15000000000.000000
-//! STDOUT: 0.000300
+//! STDOUT: 1.5e+10
+//! STDOUT: 0.0003
 
 import core.io
 

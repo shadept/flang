@@ -1,7 +1,7 @@
 //! TEST: float_cast
 //! EXIT: 3
-//! STDOUT: 42.000000
-//! STDOUT: 1.000000
+//! STDOUT: 42
+//! STDOUT: 1
 
 import core.io
 

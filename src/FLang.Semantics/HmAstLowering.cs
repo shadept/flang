@@ -1084,6 +1084,8 @@ public class HmAstLowering
     {
         var actualType = val.IrType;
         if (actualType == null || actualType == expectedType) return val;
+        // Never-returning expressions need no coercion — code after them is unreachable
+        if (actualType == TypeLayoutService.IrNeverPrim) return val;
         // Same C name means same concrete type
         if (actualType is IrStruct aS && expectedType is IrStruct eS && aS.CName == eS.CName) return val;
 
@@ -3930,11 +3932,13 @@ public class HmAstLowering
 
             // Lower arm result expression
             var armResultVal = LowerExpression(arm.ResultExpr, isVoid ? null : resultIrType);
-            if (!isVoid && resultPtr != null)
+            var armIsNever = armResultVal.IrType == TypeLayoutService.IrNeverPrim;
+            if (!isVoid && !armIsNever && resultPtr != null)
                 _currentBlock.EmitStorePtr(resultPtr, armResultVal);
 
-            // Jump to merge
-            _currentBlock.EmitJumpIfNotTerminated(mergeBlock);
+            // Jump to merge (unreachable after never-returning calls)
+            if (!armIsNever)
+                _currentBlock.EmitJumpIfNotTerminated(mergeBlock);
         }
 
         // 7. Merge block
@@ -4009,10 +4013,12 @@ public class HmAstLowering
 
             // Lower arm result
             var armResultVal = LowerExpression(arm.ResultExpr, isVoid ? null : resultIrType);
-            if (!isVoid && resultPtr != null)
+            var armIsNever = armResultVal.IrType == TypeLayoutService.IrNeverPrim;
+            if (!isVoid && !armIsNever && resultPtr != null)
                 _currentBlock.EmitStorePtr(resultPtr, armResultVal);
 
-            _currentBlock.EmitJumpIfNotTerminated(mergeBlock);
+            if (!armIsNever)
+                _currentBlock.EmitJumpIfNotTerminated(mergeBlock);
         }
 
         _currentBlock = mergeBlock;

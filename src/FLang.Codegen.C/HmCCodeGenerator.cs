@@ -619,6 +619,7 @@ public static class HmCCodeGenerator
             case ReturnInstruction ret:
                 {
                     if (ret.Value.IrType == TypeLayoutService.IrVoidPrim ||
+                        ret.Value.IrType == TypeLayoutService.IrNeverPrim ||
                         ret.Value.IrType == null)
                         sb.AppendLine(isEntryPoint ? "    return 0;" : "    return;");
                     else
@@ -687,7 +688,7 @@ public static class HmCCodeGenerator
                             ?? (IReadOnlyList<IrType>)call.Arguments.Select(a => a.IrType ?? TypeLayoutService.IrI32).ToArray(),
                             call.CalleeIrReturnType);
 
-                    if (resultType == TypeLayoutService.IrVoidPrim)
+                    if (resultType == TypeLayoutService.IrVoidPrim || resultType == TypeLayoutService.IrNeverPrim)
                         sb.AppendLine($"    {fnName}({args});");
                     else
                         sb.AppendLine($"    {EmitVarDecl(resultType, resultName)} = {fnName}({args});");
@@ -701,7 +702,7 @@ public static class HmCCodeGenerator
                     var resultName = indirectCall.Result.Name;
                     var resultType = indirectCall.Result.IrType ?? TypeLayoutService.IrVoidPrim;
 
-                    if (resultType == TypeLayoutService.IrVoidPrim)
+                    if (resultType == TypeLayoutService.IrVoidPrim || resultType == TypeLayoutService.IrNeverPrim)
                         sb.AppendLine($"    {funcPtrExpr}({args});");
                     else
                         sb.AppendLine($"    {EmitVarDecl(resultType, resultName)} = {funcPtrExpr}({args});");

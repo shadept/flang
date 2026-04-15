@@ -129,34 +129,45 @@ When `Option(T).map(f: fn(T) U)` is specialized with an enum type (e.g., `T = Js
 
 ---
 
-### Never Type Not Implemented as Bottom Type
+### ~~Never Type Not Implemented as Bottom Type~~
 
-**Status:** Open
+**Status:** Fixed
 **Affected:** Type inference, match expressions, control flow expressions
 
-The `never` type exists (`WellKnown.Never`) but is not implemented as a proper bottom type. It does not unify with all other types, meaning expressions like `return`, `panic()`, or diverging paths cannot be used in positions requiring a specific type. For example, a match arm that panics cannot coexist with arms returning `i32` without explicit workarounds.
+`never` is now a proper bottom type. It unifies with any type `T` (resolving to `T`), so diverging expressions like `panic()` and `exit()` can appear in match arms alongside concrete types. The lowering and C codegen skip unreachable code after `never`-returning calls.
 
-**Future:** Add unification rule: `never` unifies with any type `T` (resolving to `T`). This enables natural control flow in match arms and if/else branches.
+**Fixed by:**
+- Unification rule in `InferenceEngine.UnifyInternal`: `never` unifies with any type
+- `panic()` and `exit()` return types changed to `never` in `stdlib/core/panic.f`
+- Lowering skips coercions and dead stores after `never`-typed expressions
+- C codegen treats `IrNeverPrim` like `IrVoidPrim` for call/return emission
+
+**Test:** `tests/FLang.Tests/Harness/generics/never_type_basic.f`
 
 ---
 
-### Break and Continue Cannot Appear in Expression Position
+### Break, Continue, and Return Cannot Appear in Expression Position
 
 **Status:** Open
 **Affected:** Parser, type checker — control flow in expressions
 
-`break` and `continue` are statement-only constructs and cannot appear in expression position (e.g., as match arm results). This prevents patterns like:
+`break`, `continue`, and `return` are statement-only constructs and cannot appear in expression position (e.g., as match arm results). This prevents patterns like:
 
 ```flang
 let x = value match {
-    Done => break,     // Error: break is a statement, not an expression
+    Done => break,        // Error: break is a statement, not an expression
     Value(v) => v
+}
+
+let y = flag match {
+    true => 42,
+    false => return 0     // Error: return is a statement, not an expression
 }
 ```
 
-This is related to the never-type gap — `break` and `continue` would need to produce `never` type to be used in expression position. Changing them to expressions would also require removing their statement form to avoid ambiguity.
+This is related to the never-type gap — `break`, `continue`, and `return` would need to produce `never` type to be used in expression position.
 
-**Future:** Consider making `break`/`continue` expressions of type `never`, or keep them as statements only and rely on other patterns (like early `if` checks before the match).
+**Future:** Consider making `break`/`continue`/`return` expressions of type `never`, or keep them as statements only and rely on other patterns (like early `if` checks before the match).
 
 ---
 
@@ -217,19 +228,6 @@ Call result locals from `#foreign fn` are still typed as `int` in generated C. F
 Slices (`T[]`) have runtime bounds checking via `op_index` in `core/slice.f`. Built-in array (`[T; N]`) indexing uses unchecked pointer arithmetic.
 
 **Future:** Emit bounds checks for array indexing, add `--no-bounds-check` flag for release builds.
-
----
-
-### Nested Generics Not Supported in Type Positions
-
-**Status:** Open
-**Affected:** Parser — type expressions
-
-Nested generic types like `Result(Option(u64), Error)` cause parse errors (`expected CloseParenthesis`). The parser cannot distinguish nested generic arguments from function call syntax when type parameters themselves have type parameters.
-
-Additionally, tuples inside enum variants are flattened: `Result((i64, usize), E)` treats `Ok` as having 2 bindings instead of 1 tuple, breaking `unwrap()` and pattern matching.
-
-**Workaround:** Use concrete wrapper structs instead of nested generics or tuples in generic type parameters.
 
 ---
 

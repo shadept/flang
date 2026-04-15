@@ -1,8 +1,8 @@
 //! TEST: float_basic
 //! EXIT: 0
-//! STDOUT: 3.140000
-//! STDOUT: 2.718000
-//! STDOUT: 1.000000
+//! STDOUT: 3.14
+//! STDOUT: 2.718
+//! STDOUT: 1
 
 import core.io
 

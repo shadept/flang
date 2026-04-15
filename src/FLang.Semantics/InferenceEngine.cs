@@ -138,6 +138,10 @@ public class InferenceEngine : ITypeResolver
         a = Resolve(a);
         b = Resolve(b);
 
+        // Bottom type: never unifies with any type T, resolving to T
+        if (a.Equals(WellKnown.Never)) return b;
+        if (b.Equals(WellKnown.Never)) return a;
+
         // Identity
         if (a.Equals(b))
         {

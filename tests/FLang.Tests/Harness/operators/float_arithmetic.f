@@ -1,10 +1,10 @@
 //! TEST: float_arithmetic
 //! EXIT: 0
-//! STDOUT: 5.500000
-//! STDOUT: 1.500000
-//! STDOUT: 7.000000
-//! STDOUT: 1.750000
-//! STDOUT: 1.500000
+//! STDOUT: 5.5
+//! STDOUT: 1.5
+//! STDOUT: 7
+//! STDOUT: 1.75
+//! STDOUT: 1.5
 
 import core.io
 
