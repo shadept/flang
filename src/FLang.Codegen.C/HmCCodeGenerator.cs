@@ -723,7 +723,22 @@ public static class HmCCodeGenerator
                     var resultIrType = cast.Result.IrType ?? TypeLayoutService.IrI32;
                     var resultType = IrTypeToCType(resultIrType);
                     var src = EmitValue(cast.Source);
-                    sb.AppendLine($"    {EmitVarDecl(resultIrType, resultName)} = ({resultType}){src};");
+                    var srcIrType = cast.Source.IrType;
+
+                    // Enum ↔ integer: enums are `struct { tag, payload[] }` so a plain
+                    // C cast does not work. Read/write the tag field explicitly.
+                    if (srcIrType is IrEnum && resultIrType is IrPrimitive)
+                    {
+                        sb.AppendLine($"    {EmitVarDecl(resultIrType, resultName)} = ({resultType}){src}.tag;");
+                    }
+                    else if (srcIrType is IrPrimitive && resultIrType is IrEnum)
+                    {
+                        sb.AppendLine($"    {EmitVarDecl(resultIrType, resultName)} = ({resultType}){{ .tag = (int32_t){src} }};");
+                    }
+                    else
+                    {
+                        sb.AppendLine($"    {EmitVarDecl(resultIrType, resultName)} = ({resultType}){src};");
+                    }
                     break;
                 }
 

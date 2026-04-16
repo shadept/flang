@@ -2437,7 +2437,22 @@ public partial class HmTypeChecker
         if (resolvedInner is not TypeVar && resolvedTarget is not TypeVar)
         {
             if (!IsCastValid(resolvedInner, resolvedTarget))
-                ReportError($"Invalid cast from `{resolvedInner}` to `{resolvedTarget}`", cast.Span, "E2020");
+            {
+                // Targeted diagnostic: integer → payload-carrying enum. The cast would
+                // leave payload bytes zero-initialized, silently producing an invalid value.
+                if (resolvedInner is PrimitiveType && resolvedTarget is NominalType { Kind: NominalKind.Enum } enumTy
+                    && enumTy.FieldsOrVariants.Any(v => v.Type is not PrimitiveType { Name: "void" }))
+                {
+                    var badVariant = enumTy.FieldsOrVariants.First(v => v.Type is not PrimitiveType { Name: "void" }).Name;
+                    ReportError(
+                        $"Cannot cast `{resolvedInner}` to `{resolvedTarget}`: variant `{badVariant}` has a payload. Integer→enum casts are only allowed for bare enums (no payloads).",
+                        cast.Span, "E2020");
+                }
+                else
+                {
+                    ReportError($"Invalid cast from `{resolvedInner}` to `{resolvedTarget}`", cast.Span, "E2020");
+                }
+            }
         }
 
         return targetType;
@@ -2473,9 +2488,21 @@ public partial class HmTypeChecker
         // Array -> nominal (array -> slice cast)
         if (from is ArrayType && to is NominalType) return true;
 
-        // Enum -> primitive (tag extraction) or primitive -> enum
+        // Enum -> primitive: tag extraction, always valid.
         if (from is NominalType { Kind: NominalKind.Enum } && to is PrimitiveType) return true;
-        if (from is PrimitiveType && to is NominalType { Kind: NominalKind.Enum }) return true;
+
+        // Primitive -> enum: only valid when the enum is bare (no variant has a
+        // payload). A payload-carrying enum constructed from a tag alone would
+        // have uninitialized payload bytes — silently wrong.
+        if (from is PrimitiveType && to is NominalType { Kind: NominalKind.Enum } toEnum)
+        {
+            foreach (var (_, variantType) in toEnum.FieldsOrVariants)
+            {
+                if (variantType is not PrimitiveType { Name: "void" })
+                    return false;
+            }
+            return true;
+        }
 
         return false;
     }

@@ -99,13 +99,19 @@ enum Result(T, E) { Ok(T), Err(E) }
 type JsonError = enum { UnexpectedChar, UnexpectedEnd }
 ```
 
-Variants can carry zero or more payload types. Tags assigned sequentially (0, 1, 2...).
+Variants can carry zero or more payload types. Tags assigned sequentially starting at 0 (first variant = 0, next = 1, ...).
 
 **Naked enums** (C-style): when any variant has `= value`, all variants are integer-tagged with no payloads. Tags auto-increment from previous value.
 
 ```
 enum Ord { Less = -1, Equal = 0, Greater = 1 }
 ```
+
+**Enum ↔ integer casts:**
+- `e as i32` extracts the tag. Valid for any enum.
+- `(n as MyEnum)` constructs a variant by tag value. **Only allowed for bare enums** — enums where every variant is payload-less. Allowing this on a payload-carrying enum would leave payload bytes uninitialized; the type checker rejects it with E2020.
+
+Useful for FFI where a C shim returns an error code that matches the FLang discriminant layout. If a niche optimization later shifts bare-enum discriminants (see §2.7), both sides of the FFI boundary must update together — keep the C constants and the FLang enum declaration in the same file or adjacent files.
 
 **Variant construction**: `Color.Red` (qualified), `Result.Ok(42)` (with payload), `Ok(42)` (short form when unambiguous).
 
@@ -140,6 +146,15 @@ pub type Option = struct(T) { has_value: bool, value: T }
 - `null` represents the absent value.
 - `&T?` models nullable references.
 - Methods: `is_some()`, `is_none()`, `unwrap_or(fallback)`, `expect(msg)`, `map(fn(T) U)`.
+
+**Layout:**
+
+| Inner type | Representation | Rationale |
+|---|---|---|
+| `&T` (reference) | `IrPointer(T, IsNullable: true)` — a nullable pointer | Niche: `null` is encoded as a 0 pointer. Zero overhead vs. raw `&T`. |
+| Anything else | Full `{ has_value: bool, value: T }` struct | No niche available by default. |
+
+**Planned niche for bare enums (not yet implemented):** when `T` is a payload-less enum, shifting discriminants to start at 1 lets `Option(E)` encode `null` as tag 0 in a single-word representation — matching the nullable-pointer trick. This would change discriminant values, which is why FFI code must never hard-code them (see §2.5).
 
 ### 2.8 Result
 

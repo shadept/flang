@@ -114,21 +114,6 @@ Recursive enums containing generic containers (e.g., `enum Expr { Add(List(Expr)
 
 ---
 
----
-
-### Option.map Resolves Function Param as Enum Variant
-
-**Status:** Workaround applied
-**Affected:** Semantic analysis — generic function specialization with enum types
-
-When `Option(T).map(f: fn(T) U)` is specialized with an enum type (e.g., `T = JsonValue`), the compiler incorrectly resolves the function parameter `f` as an enum variant constructor call instead of a function call. Produces `E3037: Variant 'f' not found in enum`.
-
-**Workaround:** `List.get` rewritten to avoid calling `Option.map`, preventing the specialization from being triggered.
-
-**Future:** Fix name resolution in generic specialization to prefer function parameters over enum variant lookup.
-
----
-
 ### ~~Never Type Not Implemented as Bottom Type~~
 
 **Status:** Fixed
@@ -281,3 +266,18 @@ Large structs/enums (size > 8 bytes) are now passed by implicit reference and re
 **Status:** Post-self-hosting consideration
 
 FIR uses named local variables (not SSA). Would simplify optimizations. Keep current design until self-hosting.
+
+---
+
+### Niche Optimization for `Option(BareEnum)`
+
+**Status:** Not implemented
+**Affected:** `TypeLayoutService` — Option layout for payload-less enum types
+
+Today only `Option(&T)` has a niche-based layout (null pointer encodes `None`). Every other `Option(T)` — including `Option(E)` where `E` is a payload-less enum — uses the full `{ has_value: bool, value: T }` struct.
+
+**Proposal:** when `E` is a bare enum (no variants have payloads), shift discriminants to start at 1 instead of 0 so tag 0 can represent `None`. `Option(E)` collapses to a single enum-sized word. Matches the nullable-pointer trick from `Option(&T)`.
+
+**Impact:** discriminant values of bare enums change. FFI code must continue to map between C integer codes and FLang variants *by name* — never cast raw discriminants. This is now documented in spec.md §2.5 and §2.7.
+
+**Related:** `TypeLayoutService.LowerNominal` (where `Option(&T)` niche lives), `HmTypeChecker.Declarations.cs` `nextTag` assignment.
