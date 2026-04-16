@@ -30,10 +30,21 @@ Complex constructs (`for`, `if` expressions, `defer`, `match`) are desugared int
 
 ## Optimization Passes
 
-- **Inlining** (`InliningPass`): Multi-pass function inlining with cascading until no opportunities remain.
-- **Peephole** (`PeepholeOptimizer`): Store-load forwarding, copy fusion, dead code elimination.
+Entry point: `IrOptimizer.Run(module)`. The compiler does not manage passes or cascade loops directly — `IrOptimizer` owns the full lifecycle and iterates internally until the module is stable. Adding, removing, or reordering passes is transparent to `Compiler.cs`.
 
-Both run iteratively between lowering and codegen.
+Each orchestrator iteration runs **function-level optimizations first, then the inliner**. This order matters: the inliner's heuristic uses raw instruction count against a fixed threshold, so shrinking a function before the inliner sees it can turn an ineligible call into an eligible one. It also saves cascade iterations — a shrunk function reaches the inliner the same round it was produced.
+
+Individual passes are **single-pass** and do not iterate internally. Each pass returns `bool` so the orchestrator knows whether to re-run. Cascading eliminations fall to the next orchestrator iteration (capped at 10 iterations as a safety net against oscillation).
+
+- **Inlining** (`InliningPass`): Function inlining with its own internal cascade (leaves first).
+- **Peephole** (`PeepholeOptimizer`): Local, sliding-window patterns only — store-load forwarding and copy fusion (load+store → `CopyInstruction`, GEP+load → `CopyFromOffsetInstruction`, GEP+store → `CopyToOffsetInstruction`).
+- **Dead code elimination** (`DeadCodeElimination`): Removes side-effect-free instructions with zero-use results.
+- **Dead store elimination** (`DeadStoreElimination`): Removes writes to non-escaped allocas whose contents are never read. Alloca identity is tracked by name (`LocalValue` instances aren't reliably reference-equal across the IR).
+- **Shared helpers** (`IrInstructionHelpers`): `Resolve`, `GetOperands`, `GetResult`, `RewriteOperands`. Used by all passes and the inliner.
+
+Per-function order inside `IrOptimizer.OptimizeFunction`: Peephole → DCE → DSE → DCE, then a single final `Rebuild` that applies substitutions and removes dead instructions. The second DCE sweeps orphans exposed by DSE in the same iteration; deeper cascades fall to the next orchestrator iteration.
+
+`IrOptimizer` is also the place to gate passes on future compiler flags (`--O0`, `--O2`, debug builds).
 
 ### Future IR optimizations
 
@@ -42,7 +53,7 @@ The following are redundancies in the generated IR that Clang eliminates at `-O2
 - **Constant enum construction:** `Action.Stop` (payload-less) generates 3 allocas + load + store; could emit a single constant struct.
 - **Redundant scrutinee copy:** match lowers the scrutinee into a second alloca for tag extraction even when the original is already addressable.
 - **Dead block elimination:** `break`/`continue`/`return` in expression position emit a `dead` basic block for subsequent unreachable code; these could be pruned.
-- **Dead stores / unused allocas:** DCE removes allocas with zero uses, but allocas that are only stored to (never loaded) survive because `StorePointerInstruction` is not side-effect-free, keeping the alloca alive. Requires dead-store elimination: detect allocas that are stored to but never loaded, then remove both the stores and the alloca.
+- ~~**Dead stores / unused allocas**~~ — Implemented. See `DeadStoreElimination`. Limitations: (a) large allocas that go through a `memset`-zero-init call are kept alive because the call is treated as a generic escape; recognising `memset`/`memcpy` as writes-only-to-arg would unlock these. (b) Partial dead stores (one field read, another written and never read) conservatively keep the whole alloca live.
 
 ## C99 Backend
 

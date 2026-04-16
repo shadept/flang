@@ -217,7 +217,7 @@ public static class InliningPass
     {
         foreach (var inst in instructions)
         {
-            foreach (var operand in PeepholeOptimizer.GetOperands(inst))
+            foreach (var operand in IrInstructionHelpers.GetOperands(inst))
             {
                 if (operand is LocalValue lv
                     && paramNameToArg.TryGetValue(lv.Name, out var arg)
@@ -349,7 +349,7 @@ public static class InliningPass
     private static Instruction RewriteOperands(Instruction inst, Dictionary<Value, Value> subs)
     {
         bool anyChanged = false;
-        foreach (var op in PeepholeOptimizer.GetOperands(inst))
+        foreach (var op in IrInstructionHelpers.GetOperands(inst))
         {
             if (subs.ContainsKey(op)) { anyChanged = true; break; }
         }
@@ -418,7 +418,7 @@ public static class InliningPass
                         referenced.Add(call.CalleeSemanticKey ?? call.FunctionName);
 
                     // Function pointer references — use semantic key from name + type info
-                    foreach (var op in PeepholeOptimizer.GetOperands(inst))
+                    foreach (var op in IrInstructionHelpers.GetOperands(inst))
                         if (op is FunctionReferenceValue fref)
                         {
                             if (fref.IrType is IrFunctionPtr fp)

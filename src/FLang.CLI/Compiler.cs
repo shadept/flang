@@ -272,14 +272,7 @@ public class Compiler
             return new CompilationResult(false, null, allDiagnostics, compilation);
         }
 
-        // Optimization passes: iterate inline+peephole until no more cascading opportunities
-        for (int i = 0; i < 3; i++)
-        {
-            int fnCountBefore = irModule.Functions.Count;
-            InliningPass.Run(irModule);
-            PeepholeOptimizer.Optimize(irModule);
-            if (irModule.Functions.Count == fnCountBefore) break;
-        }
+        IrOptimizer.Run(irModule);
 
         // 4. Emit FIR (optional)
         if (options.EmitFir != null)
