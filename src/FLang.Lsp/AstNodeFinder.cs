@@ -41,15 +41,30 @@ public static class AstNodeFinder
 
     public static AstNode? FindDeepestNodeAt(ModuleNode module, int fileId, int position)
     {
-        AstNode? best = null;
+        var path = FindDeepestNodePathAt(module, fileId, position);
+        return path.Count == 0 ? null : path[^1];
+    }
+
+    /// <summary>
+    /// Returns the AST path from the module root down to the deepest node containing the position.
+    /// The deepest node is the last element. Intermediate ancestors are the real AST parents
+    /// (which may themselves not contain the position — e.g. FunctionDeclarationNode whose span
+    /// covers only its signature). Returns an empty list if no node contains the position.
+    /// </summary>
+    public static IReadOnlyList<AstNode> FindDeepestNodePathAt(ModuleNode module, int fileId, int position)
+    {
+        var stack = new List<AstNode>();
+        List<AstNode>? best = null;
 
         void Visit(AstNode? node)
         {
             if (node == null) return;
 
+            stack.Add(node);
+
             var contained = Contains(node, fileId, position);
             if (contained)
-                best = node;
+                best = [.. stack];
 
             // Always recurse into containers whose children may have independent spans
             // (e.g. FunctionDeclarationNode span covers only the signature, not the body)
@@ -58,10 +73,12 @@ public static class AstNodeFinder
                 foreach (var child in GetChildren(node))
                     Visit(child);
             }
+
+            stack.RemoveAt(stack.Count - 1);
         }
 
         Visit(module);
-        return best;
+        return best ?? [];
     }
 
     private static bool Contains(AstNode node, int fileId, int position)
@@ -292,10 +309,10 @@ public static class AstNodeFinder
                 yield return ft.ReturnType;
                 break;
 
-            // Leaves: IdentifierExpressionNode, IntegerLiteralNode, StringLiteralNode,
-            // BooleanLiteralNode, NullLiteralNode, ImportDeclarationNode,
-            // BreakNode, ContinueNode, NamedTypeNode, PatternNodes (leaf)
-            // — no children to yield
+                // Leaves: IdentifierExpressionNode, IntegerLiteralNode, StringLiteralNode,
+                // BooleanLiteralNode, NullLiteralNode, ImportDeclarationNode,
+                // BreakNode, ContinueNode, NamedTypeNode, PatternNodes (leaf)
+                // — no children to yield
         }
     }
 }

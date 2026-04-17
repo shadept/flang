@@ -3,6 +3,7 @@ using FLang.Core.Types;
 using FLang.Frontend.Ast;
 using FLang.Frontend.Ast.Declarations;
 using FLang.Frontend.Ast.Expressions;
+using FLang.Frontend.Ast.Statements;
 using FLang.Frontend.Ast.Types;
 using FLang.Semantics;
 using Microsoft.Extensions.Logging;
@@ -59,14 +60,15 @@ public class HoverHandler : HoverHandlerBase
         var lap = sw.ElapsedMilliseconds;
         var source = analysis.Compilation.Sources[fileId.Value];
         var position = PositionUtil.ToSourcePosition(request.Position, source);
-        var node = AstNodeFinder.FindDeepestNodeAt(module, fileId.Value, position);
+        var path = AstNodeFinder.FindDeepestNodePathAt(module, fileId.Value, position);
+        var node = path.Count == 0 ? null : path[^1];
         FLangLanguageServer.Log($"  [findNode] {sw.ElapsedMilliseconds - lap}ms -> {node?.GetType().Name ?? "null"}");
 
         if (node == null)
             return null;
 
         lap = sw.ElapsedMilliseconds;
-        var hoverText = GetHoverText(node, analysis, position);
+        var hoverText = GetHoverText(node, path, analysis, position);
         FLangLanguageServer.Log($"  [getHoverText] {sw.ElapsedMilliseconds - lap}ms -> {(hoverText != null ? $"\"{hoverText}\"" : "null")}");
 
         if (hoverText == null)
@@ -86,7 +88,7 @@ public class HoverHandler : HoverHandlerBase
         };
     }
 
-    private static string? GetHoverText(AstNode node, FileAnalysisResult analysis, int position)
+    private static string? GetHoverText(AstNode node, IReadOnlyList<AstNode> path, FileAnalysisResult analysis, int position)
     {
         // Import hover: show resolved file path (only when cursor is on the module path)
         if (node is ImportDeclarationNode import
@@ -218,8 +220,13 @@ public class HoverHandler : HoverHandlerBase
                     if (node is TypeNode typeNode)
                         return FormatTypeNode(typeNode);
 
-                    // Generic expression type display (skip control flow keywords)
+                    // Generic expression type display (skip control flow keywords).
+                    // Also skip when the expression is the root of an ExpressionStatementNode —
+                    // its value is discarded, so the type isn't meaningful at the cursor.
+                    // This avoids showing types when hovering on `if`/`match`/`{` keywords of
+                    // expressions used in statement position.
                     if (node is ExpressionNode and not (BreakNode or ContinueNode or ReturnNode)
+                        && !IsDiscardedExpressionStatement(path)
                         && tc.NodeTypes.TryGetValue(node, out var type))
                         return FormatHmType(tc.Resolve(type), tc);
                     break;
@@ -327,6 +334,19 @@ public class HoverHandler : HoverHandlerBase
         AnonymousEnumTypeNode anonEnum => $"enum {{ {string.Join(", ", anonEnum.Variants.Select(v => v.PayloadTypes.Count == 0 ? v.Name : $"{v.Name}({string.Join(", ", v.PayloadTypes.Select(FormatTypeNode))})"))} }}",
         _ => type.GetType().Name
     };
+
+    /// <summary>
+    /// True when the deepest node on the hover path is the expression of an ExpressionStatementNode,
+    /// meaning the value is discarded (e.g. an `if` used as a statement). In that case the
+    /// "result type" isn't useful hover info — the construct is being used for its effects only.
+    /// </summary>
+    private static bool IsDiscardedExpressionStatement(IReadOnlyList<AstNode> path)
+    {
+        if (path.Count < 2) return false;
+        var last = path[^1];
+        var parent = path[^2];
+        return parent is ExpressionStatementNode es && ReferenceEquals(es.Expression, last);
+    }
 
     internal static SourceSpan GetNameSpan(AstNode node) => node switch
     {
