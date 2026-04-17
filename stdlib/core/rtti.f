@@ -23,8 +23,8 @@ pub type ParamInfo = struct {
 
 pub type TypeInfo = struct {
     name: String
-    size: u8
-    align: u8
+    size: usize
+    align: usize
     kind: TypeKind
     type_params: String[]
     type_args: &TypeInfo[]

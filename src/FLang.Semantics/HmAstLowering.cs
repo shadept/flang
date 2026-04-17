@@ -1377,9 +1377,19 @@ public class HmAstLowering
             iterCalleeParamTypes.Add(GetIrType(p));
         var iterResult = _currentBlock.EmitCall("iter", [iterableVal], iteratorIrType, iterCalleeParamTypes);
 
-        // 3. Allocate iterator state on stack
-        var iteratorPtr = _currentBlock.EmitAlloca(iteratorIrType);
-        _currentBlock.EmitStorePtr(iteratorPtr, iterResult);
+        // 3. Set up the pointer we pass to next(). If iter returned a reference,
+        //    the returned value IS the pointer — use it directly. Otherwise
+        //    allocate a stack slot, store the returned struct, and pass &slot.
+        Value iteratorPtr;
+        if (iteratorIrType is IrPointer)
+        {
+            iteratorPtr = iterResult;
+        }
+        else
+        {
+            iteratorPtr = _currentBlock.EmitAlloca(iteratorIrType);
+            _currentBlock.EmitStorePtr(iteratorPtr, iterResult);
+        }
 
         // 4. Allocate loop variable on stack
         var loopVarPtr = _currentBlock.EmitAlloca(elementIrType);

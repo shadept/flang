@@ -56,6 +56,21 @@ static int is_dot_or_dotdot(const char* s) {
            (s[1] == '\0' || (s[1] == '.' && s[2] == '\0'));
 }
 
+/* POSIX errno → FsError. Shared with the Windows branch because the CRT's
+ * _stat64 sets errno with POSIX codes on Windows too. */
+static int32_t fs_err_from_errno(int e) {
+    switch (e) {
+        case ENOENT:       return FS_NOT_FOUND;
+        case EACCES:
+        case EPERM:        return FS_PERMISSION_DENIED;
+        case ENOTDIR:      return FS_NOT_A_DIRECTORY;
+        case ENAMETOOLONG: return FS_NAME_TOO_LONG;
+        case ENOSYS:       return FS_NOT_SUPPORTED;
+        case EINVAL:       return FS_INVALID_ARGUMENT;
+        default:           return FS_IO_ERROR;
+    }
+}
+
 #ifdef _WIN32
 
 #define WIN32_LEAN_AND_MEAN
@@ -183,23 +198,35 @@ int __flang_fs_closedir(void* dir, int32_t* out_err) {
     return rc;
 }
 
+#include <sys/types.h>
+#include <sys/stat.h>
+
+int __flang_fs_stat(const char* path,
+                    int32_t* out_kind,
+                    uint64_t* out_size,
+                    int32_t* out_err) {
+    if (!path) { *out_err = FS_INVALID_ARGUMENT; return R_ERR; }
+    struct __stat64 st;
+    if (_stat64(path, &st) != 0) {
+        /* _stat64 is a CRT function — reports via errno, not GetLastError. */
+        *out_err = fs_err_from_errno(errno ? errno : EIO);
+        return R_ERR;
+    }
+    if (st.st_mode & _S_IFDIR) {
+        *out_kind = 1;
+    } else if (st.st_mode & _S_IFREG) {
+        *out_kind = 0;
+    } else {
+        *out_kind = 3;
+    }
+    *out_size = (uint64_t)st.st_size;
+    return R_OK;
+}
+
 #else
 
 #include <dirent.h>
 #include <sys/stat.h>
-
-static int32_t fs_err_from_errno(int e) {
-    switch (e) {
-        case ENOENT:       return FS_NOT_FOUND;
-        case EACCES:
-        case EPERM:        return FS_PERMISSION_DENIED;
-        case ENOTDIR:      return FS_NOT_A_DIRECTORY;
-        case ENAMETOOLONG: return FS_NAME_TOO_LONG;
-        case ENOSYS:       return FS_NOT_SUPPORTED;
-        case EINVAL:       return FS_INVALID_ARGUMENT;
-        default:           return FS_IO_ERROR;
-    }
-}
 
 int __flang_fs_opendir(const char* path, void** out_dir, int32_t* out_err) {
     DIR* d = opendir(path);
@@ -246,6 +273,26 @@ int __flang_fs_closedir(void* dir, int32_t* out_err) {
     if (closedir((DIR*)dir) == 0) return R_OK;
     *out_err = fs_err_from_errno(errno ? errno : EIO);
     return R_ERR;
+}
+
+int __flang_fs_stat(const char* path,
+                    int32_t* out_kind,
+                    uint64_t* out_size,
+                    int32_t* out_err) {
+    if (!path) { *out_err = FS_INVALID_ARGUMENT; return R_ERR; }
+    struct stat st;
+    if (stat(path, &st) != 0) {
+        *out_err = fs_err_from_errno(errno ? errno : EIO);
+        return R_ERR;
+    }
+    if (S_ISDIR(st.st_mode))       *out_kind = 1;
+    else if (S_ISREG(st.st_mode))  *out_kind = 0;
+#ifdef S_ISLNK
+    else if (S_ISLNK(st.st_mode))  *out_kind = 2;  /* unreachable: stat follows */
+#endif
+    else                           *out_kind = 3;
+    *out_size = (uint64_t)st.st_size;
+    return R_OK;
 }
 
 #endif

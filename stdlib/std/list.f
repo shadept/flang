@@ -165,13 +165,15 @@ pub fn op_index(list: List($T), index: usize) T {
     return elem.*
 }
 
-pub fn op_index(list: &List($T), index: usize) T {
+// Index into a list through a reference — returns a reference to the
+// element. Enables safe in-place mutation (`list[i].field = ...`) without
+// exposing `list.ptr + i` pointer arithmetic at call sites. The reference
+// is valid until the list is reallocated (push/reserve) or deinit'd.
+pub fn op_index(list: &List($T), index: usize) &T {
     if index >= list.len {
         panic("List: index out of bounds")
     }
-
-    let elem: &T = list.ptr + index
-    return elem.*
+    return list.ptr + index
 }
 
 pub fn op_set_index(list: &List($T), index: usize, value: T) {

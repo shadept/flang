@@ -88,7 +88,10 @@ fn reserve(sb: &StringBuilder, additional: usize) {
 }
 
 pub fn ensure_capacity(sb: &StringBuilder, capacity: usize) {
-    sb.reserve(capacity - sb.cap)
+    if capacity <= sb.cap {
+        return
+    }
+    sb.reserve(capacity - sb.len)
 }
 
 // Return a copy of the current contents as a null-terminated OwnedString.
