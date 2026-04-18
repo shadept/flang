@@ -200,7 +200,12 @@ public class TestHarness
             StdlibPath: _stdlibPath,
             OutputPath: outputFilePath,
             ReleaseBuild: false,
-            DebugLogging: false
+            DebugLogging: false,
+            // Pin the build cache to a single shared directory so parallel
+            // harness workers don't each cold-recompile the stdlib companion
+            // .c files. Without this override, BuildCache colocates with each
+            // test's output dir and we'd recompile simd.c/bits.c/... per test.
+            CacheDirectory: Path.Combine(_projectRoot, "build", "cache")
         );
 
         CompilationResult result;

@@ -1,69 +1,160 @@
-﻿using System.Diagnostics;
+using System.Diagnostics;
 using System.Runtime.InteropServices;
 
 namespace FLang.CLI;
 
+/// <summary>
+/// Selected compiler plus its environment. Selection happens once per build;
+/// argument construction (for compile-only or compile+link) is layered on top.
+/// </summary>
+public record SelectedCompiler(string Name, string ExecutablePath, Dictionary<string, string>? Environment)
+{
+    public bool IsMsvc => Name.Contains("cl.exe");
+    public bool IsXcrun => Name.Contains("xcrun");
+}
+
 public static class CompilerDiscovery
 {
-    public static CompilerConfig? GetCompilerForCompilation(string cFilePath, string outputFilePath, bool releaseBuild,
-        IReadOnlyList<string>? extraCFiles = null, IReadOnlyList<string>? linkFlags = null,
-        IReadOnlyList<string>? compilerFlags = null)
+    /// <summary>
+    /// Picks the best available C compiler, returning the binary path plus the
+    /// environment it requires (cl.exe needs INCLUDE/LIB/PATH). Returns
+    /// <c>null</c> when no toolchain is available.
+    /// </summary>
+    public static SelectedCompiler? SelectCompiler()
     {
-        var availableCompilers = FindCompilersOrderedByPreference();
-        var selected = availableCompilers.FirstOrDefault(c => c.path != null);
+        var available = FindCompilersOrderedByPreference();
+        var pick = available.FirstOrDefault(c => c.path != null);
+        if (pick.path == null) return null;
 
-        if (selected.path == null)
-            return null;
-
-        string executablePath = selected.path;
-        string arguments;
-        Dictionary<string, string>? environment = null;
-
-        if (selected.name.Contains("cl.exe"))
+        Dictionary<string, string>? env = null;
+        string exe = pick.path;
+        if (pick.name.Contains("cl.exe"))
         {
             var (clPath, clEnv) = FindClExeWithEnvironment();
-            environment = clEnv;
+            env = clEnv;
+            if (clPath != null) exe = clPath;
+        }
+        return new SelectedCompiler(pick.name, exe, env);
+    }
 
+    /// <summary>
+    /// Back-compat wrapper: select + build compile+link arguments in one call.
+    /// Prefer <see cref="SelectCompiler"/> + <see cref="BuildCompileAndLinkArgs"/>
+    /// in new code so the same selection can feed both the object-cache compile
+    /// and the final link.
+    /// </summary>
+    public static CompilerConfig? GetCompilerForCompilation(string cFilePath, string outputFilePath, bool releaseBuild,
+        IReadOnlyList<string>? extraCFiles = null, IReadOnlyList<string>? linkFlags = null,
+        IReadOnlyList<string>? compilerFlags = null, IReadOnlyList<string>? extraObjFiles = null)
+    {
+        var selected = SelectCompiler();
+        if (selected == null) return null;
+
+        var args = BuildCompileAndLinkArgs(selected, cFilePath, outputFilePath, releaseBuild,
+            extraCFiles, extraObjFiles, linkFlags, compilerFlags);
+
+        var execPath = selected.IsXcrun ? "xcrun" : selected.ExecutablePath;
+        var finalArgs = selected.IsXcrun ? "clang " + args : args;
+        return new CompilerConfig(selected.Name, execPath, finalArgs, selected.Environment);
+    }
+
+    /// <summary>
+    /// Builds the compile+link command: main <c>.c</c> plus any still-to-compile
+    /// extras (<paramref name="extraCFiles"/>) plus any pre-compiled objects
+    /// (<paramref name="extraObjFiles"/>, from <see cref="BuildCache"/>).
+    /// </summary>
+    public static string BuildCompileAndLinkArgs(
+        SelectedCompiler selected,
+        string cFilePath,
+        string outputFilePath,
+        bool releaseBuild,
+        IReadOnlyList<string>? extraCFiles,
+        IReadOnlyList<string>? extraObjFiles,
+        IReadOnlyList<string>? linkFlags,
+        IReadOnlyList<string>? compilerFlags)
+    {
+        if (selected.IsMsvc)
+        {
             var objFilePath = Path.ChangeExtension(Path.GetFullPath(outputFilePath), ".obj");
             var msvcArgs = new List<string> { "/nologo", "/Z7", "/WX" };
             if (releaseBuild) msvcArgs.Add("/O2");
             if (compilerFlags != null) msvcArgs.AddRange(compilerFlags);
-            msvcArgs.Add($"/Fo\"{objFilePath}\"");
+
+            // cl.exe /Fo<file> is only valid for a single source file; with
+            // multiple sources we must pass a directory. Also, cl derives
+            // .obj names from source basenames, so concurrent compilations
+            // that share a companion .c file (e.g. stdlib fs.c) would
+            // collide on the same fs.obj. When we have non-cached .c extras,
+            // use a per-output intermediate directory to keep parallel test
+            // runs isolated. Pre-compiled .obj extras bypass this entirely.
+            if (extraCFiles is { Count: > 0 })
+            {
+                var parentDir = Path.GetDirectoryName(objFilePath) ?? ".";
+                var outputStem = Path.GetFileNameWithoutExtension(outputFilePath);
+                var objDir = Path.Combine(parentDir, outputStem + ".objs");
+                Directory.CreateDirectory(objDir);
+                msvcArgs.Add($"/Fo\"{objDir}{Path.DirectorySeparatorChar}{Path.DirectorySeparatorChar}\"");
+            }
+            else
+            {
+                msvcArgs.Add($"/Fo\"{objFilePath}\"");
+            }
             msvcArgs.Add($"/Fe\"{outputFilePath}\"");
             msvcArgs.Add($"\"{cFilePath}\"");
             if (extraCFiles != null)
                 foreach (var f in extraCFiles)
                     msvcArgs.Add($"\"{f}\"");
-            if (linkFlags != null)
-                msvcArgs.AddRange(linkFlags);
-            arguments = string.Join(" ", msvcArgs);
+            if (extraObjFiles != null)
+                foreach (var o in extraObjFiles)
+                    msvcArgs.Add($"\"{o}\"");
+            if (linkFlags != null) msvcArgs.AddRange(linkFlags);
+            return string.Join(" ", msvcArgs);
         }
-        else
+
+        var unixArgs = new List<string> { "-Werror", "-Wno-pointer-sign" };
+        if (releaseBuild) unixArgs.Add("-O2");
+        if (compilerFlags != null) unixArgs.AddRange(compilerFlags);
+        unixArgs.Add($"-g -o \"{outputFilePath}\"");
+        unixArgs.Add($"\"{cFilePath}\"");
+        if (extraCFiles != null)
+            foreach (var f in extraCFiles)
+                unixArgs.Add($"\"{f}\"");
+        if (extraObjFiles != null)
+            foreach (var o in extraObjFiles)
+                unixArgs.Add($"\"{o}\"");
+        unixArgs.Add("-lm");
+        if (linkFlags != null) unixArgs.AddRange(linkFlags);
+        return string.Join(" ", unixArgs);
+    }
+
+    /// <summary>
+    /// Builds a compile-only command (<c>cl /c</c> or <c>cc -c</c>) for a
+    /// single source → single object, matching the flag set that
+    /// <see cref="BuildCompileAndLinkArgs"/> would use.
+    /// </summary>
+    public static string BuildCompileOnlyArgs(
+        SelectedCompiler selected,
+        string sourcePath,
+        string objPath,
+        bool releaseBuild,
+        IReadOnlyList<string>? compilerFlags)
+    {
+        if (selected.IsMsvc)
         {
-            var unixArgs = new List<string> { "-Werror", "-Wno-pointer-sign" };
-            if (releaseBuild) unixArgs.Add("-O2");
-            if (compilerFlags != null) unixArgs.AddRange(compilerFlags);
-            unixArgs.Add($"-g -o \"{outputFilePath}\"");
-            unixArgs.Add($"\"{cFilePath}\"");
-            if (extraCFiles != null)
-                foreach (var f in extraCFiles)
-                    unixArgs.Add($"\"{f}\"");
-            unixArgs.Add("-lm");
-            if (linkFlags != null)
-                unixArgs.AddRange(linkFlags);
-
-            if (selected.name.Contains("xcrun"))
-            {
-                executablePath = "xcrun";
-                arguments = "clang " + string.Join(" ", unixArgs);
-            }
-            else
-            {
-                arguments = string.Join(" ", unixArgs);
-            }
+            var msvcArgs = new List<string> { "/nologo", "/Z7", "/WX", "/c" };
+            if (releaseBuild) msvcArgs.Add("/O2");
+            if (compilerFlags != null) msvcArgs.AddRange(compilerFlags);
+            msvcArgs.Add($"/Fo\"{objPath}\"");
+            msvcArgs.Add($"\"{sourcePath}\"");
+            return string.Join(" ", msvcArgs);
         }
 
-        return new CompilerConfig(selected.name, executablePath, arguments, environment);
+        var unixArgs = new List<string> { "-Werror", "-Wno-pointer-sign", "-g", "-c" };
+        if (releaseBuild) unixArgs.Add("-O2");
+        if (compilerFlags != null) unixArgs.AddRange(compilerFlags);
+        unixArgs.Add($"-o \"{objPath}\"");
+        unixArgs.Add($"\"{sourcePath}\"");
+        return string.Join(" ", unixArgs);
     }
 
     public static List<(string name, string? path, string source)> FindCompilersOrderedByPreference()

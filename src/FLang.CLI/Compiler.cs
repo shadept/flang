@@ -16,6 +16,11 @@ public record CompilerConfig(
     string Arguments,
     Dictionary<string, string>? Environment);
 
+public static class FlangVersion
+{
+    public const string Current = "0.1.0-alpha";
+}
+
 public record CompilerOptions(
     IReadOnlyList<string> InputFilePaths,
     string StdlibPath,
@@ -32,7 +37,8 @@ public record CompilerOptions(
     IReadOnlyList<string>? HeaderPaths = null,
     IReadOnlyList<string>? CompilerFlags = null,
     string? ProjectName = null,
-    string? ProjectSourceRoot = null
+    string? ProjectSourceRoot = null,
+    string? CacheDirectory = null
 );
 
 public record CompilationResult(
@@ -339,17 +345,66 @@ public class Compiler
         }
 
         // 7. Invoke C Compiler
-        var compilerConfig = CompilerDiscovery.GetCompilerForCompilation(
-            cFilePath, outputFilePath, options.ReleaseBuild,
-            extraCFiles.Count > 0 ? extraCFiles : null,
-            options.LinkFlags,
-            options.CompilerFlags);
-
-        if (compilerConfig == null)
+        var selected = CompilerDiscovery.SelectCompiler();
+        if (selected == null)
         {
             allDiagnostics.Add(Diagnostic.Error("No C compiler configuration provided.", SourceSpan.None, "E0000"));
             return new CompilationResult(false, null, allDiagnostics, compilation);
         }
+
+        // 7a. Pre-compile native companion .c files through the build cache.
+        //     This turns the final C-compiler invocation into "compile main.c +
+        //     link a handful of pre-built .obj files", which is both faster on
+        //     warm cache and eliminates the cl.exe basename-collision
+        //     workaround (the .objs/ scratch directory) in steady state.
+        var cachedObjs = new List<string>();
+        if (extraCFiles.Count > 0)
+        {
+            // Cache colocates with build outputs by default. Callers can pin
+            // an explicit shared cache (the test harness does this so parallel
+            // workers don't each cold-recompile the stdlib companions).
+            var cacheRoot = options.CacheDirectory ?? DefaultCacheRoot(options, workingDir);
+            var flagsHash = BuildCache.ComputeFlagsHash(
+                new CompilerConfig(selected.Name, selected.ExecutablePath, "", selected.Environment),
+                options.ReleaseBuild, FlangVersion.Current, options.CompilerFlags);
+            var cache = new BuildCache(cacheRoot, flagsHash);
+
+            var stdlibFull = Path.GetFullPath(options.StdlibPath);
+            foreach (var cSrc in extraCFiles)
+            {
+                var depName = ClassifyDep(cSrc, stdlibFull, options.ProjectName);
+                var objPath = cache.GetOrCompile(depName, cSrc, (src, obj) =>
+                {
+                    var compileArgs = CompilerDiscovery.BuildCompileOnlyArgs(
+                        selected, src, obj, options.ReleaseBuild, options.CompilerFlags);
+                    return RunCompiler(selected, compileArgs);
+                }, out var cacheError);
+
+                if (cacheError != null)
+                {
+                    allDiagnostics.Add(Diagnostic.Error(
+                        $"C compiler ({selected.Name}) failed: {cacheError}",
+                        SourceSpan.None, "E0000"));
+                    return new CompilationResult(false, null, allDiagnostics, compilation);
+                }
+                cachedObjs.Add(objPath);
+            }
+        }
+
+        // 7b. Build the compile+link command for main.c + the cached .obj set.
+        var linkArgs = CompilerDiscovery.BuildCompileAndLinkArgs(
+            selected,
+            cFilePath,
+            outputFilePath,
+            options.ReleaseBuild,
+            extraCFiles: null,            // all extras pre-compiled via the cache
+            extraObjFiles: cachedObjs.Count > 0 ? cachedObjs : null,
+            options.LinkFlags,
+            options.CompilerFlags);
+
+        var execPath = selected.IsXcrun ? "xcrun" : selected.ExecutablePath;
+        var finalArgs = selected.IsXcrun ? "clang " + linkArgs : linkArgs;
+        var compilerConfig = new CompilerConfig(selected.Name, execPath, finalArgs, selected.Environment);
 
         var startInfo = new ProcessStartInfo
         {
@@ -416,4 +471,74 @@ public class Compiler
         }
     }
 
+    /// <summary>
+    /// Decide which <c>deps/&lt;name&gt;/</c> bucket a companion <c>.c</c> file
+    /// lives under. Anything inside the stdlib tree goes under
+    /// <c>stdlib</c>; everything else is keyed by project name (or
+    /// <c>local</c> for single-file builds).
+    /// </summary>
+    private static string ClassifyDep(string cSourcePath, string stdlibFullPath, string? projectName)
+    {
+        var full = Path.GetFullPath(cSourcePath);
+        if (!string.IsNullOrEmpty(stdlibFullPath) &&
+            full.StartsWith(stdlibFullPath, StringComparison.OrdinalIgnoreCase))
+            return "stdlib";
+        return string.IsNullOrWhiteSpace(projectName) ? "local" : projectName;
+    }
+
+    /// <summary>
+    /// Default cache root colocates with build outputs: <c>&lt;outputDir&gt;/cache</c>.
+    /// Falls back to <c>&lt;workingDir&gt;/cache</c> when no explicit OutputPath
+    /// is set (single-file mode).
+    /// </summary>
+    private static string DefaultCacheRoot(CompilerOptions options, string workingDir)
+    {
+        if (!string.IsNullOrEmpty(options.OutputPath))
+        {
+            var outDir = Path.GetDirectoryName(Path.GetFullPath(options.OutputPath));
+            if (!string.IsNullOrEmpty(outDir))
+                return Path.Combine(outDir, "cache");
+        }
+        return Path.Combine(workingDir, "cache");
+    }
+
+    /// <summary>
+    /// Run the selected compiler with the given argument string, returning
+    /// the result in a shape the build cache's <c>CompileFn</c> expects.
+    /// </summary>
+    private static BuildCache.CompileResult RunCompiler(SelectedCompiler selected, string arguments)
+    {
+        var execPath = selected.IsXcrun ? "xcrun" : selected.ExecutablePath;
+        var finalArgs = selected.IsXcrun ? "clang " + arguments : arguments;
+
+        var psi = new ProcessStartInfo
+        {
+            FileName = execPath,
+            Arguments = finalArgs,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+            CreateNoWindow = true
+        };
+
+        if (selected.Environment != null)
+            foreach (var (k, v) in selected.Environment)
+                psi.EnvironmentVariables[k] = v;
+
+        try
+        {
+            using var p = Process.Start(psi);
+            if (p == null)
+                return new BuildCache.CompileResult(false, "", "failed to start compiler process");
+
+            var stdout = p.StandardOutput.ReadToEnd();
+            var stderr = p.StandardError.ReadToEnd();
+            p.WaitForExit();
+            return new BuildCache.CompileResult(p.ExitCode == 0, stdout, stderr);
+        }
+        catch (Exception ex)
+        {
+            return new BuildCache.CompileResult(false, "", ex.Message);
+        }
+    }
 }

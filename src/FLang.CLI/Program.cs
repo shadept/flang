@@ -85,7 +85,7 @@ for (var i = 0; i < args.Length; i++)
         linkFlags.Add(args[++i]);
     else if (args[i] == "--version" || args[i] == "-v")
     {
-        Console.WriteLine("flang 0.1.0-alpha");
+        Console.WriteLine("flang " + FlangVersion.Current);
         return;
     }
     else if (!args[i].StartsWith('-')) inputFilePath = args[i];

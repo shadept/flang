@@ -55,6 +55,33 @@ The following are redundancies in the generated IR that Clang eliminates at `-O2
 - **Dead block elimination:** `break`/`continue`/`return` in expression position emit a `dead` basic block for subsequent unreachable code; these could be pruned.
 - ~~**Dead stores / unused allocas**~~ — Implemented. See `DeadStoreElimination`. Limitations: (a) large allocas that go through a `memset`-zero-init call are kept alive because the call is treated as a generic escape; recognising `memset`/`memcpy` as writes-only-to-arg would unlock these. (b) Partial dead stores (one field read, another written and never read) conservatively keep the whole alloca live.
 
+## Build Cache
+
+Companion `.c` files that ship alongside `.f` sources (stdlib's `simd.c`, `bits.c`, `io/fs.c`, `atomic.c`, plus any project-local C) are pre-compiled to `.obj` via `BuildCache` before the final link. Warm builds skip the C compile and just link the cached objects.
+
+**Layout.** Colocated with build outputs at `<outputDir>/cache/`:
+
+```
+build/
+  fcsv.exe
+  cache/
+    stdlib/simd.obj
+    stdlib/bits.obj
+    cache.json
+```
+
+- Objects live under `<dep>/<basename>.obj`. `dep` is `stdlib` for files under the stdlib tree, else the project name (or `local` for single-file builds).
+- `cache.json` is the only metadata. Schema: `{ version, flags_hash, entries: { "<dep>/<basename>.obj": { src, src_mtime_unix, src_size, src_hash } } }`.
+
+**Invalidation.** Two scopes:
+
+- `flags_hash` at the top of `cache.json` — SHA-256 over compiler path + name, profile (release/debug), cflags, target triple (`<os>-<arch>`), and `FlangVersion.Current`. Mismatch on load wipes the cache contents and starts fresh. This is the only thing that triggers a bulk invalidation.
+- Per-entry `src_mtime_unix` + `src_size` — cheap freshness check on every lookup. On mismatch we fall back to a content hash before declaring a miss; this tolerates `git checkout`, `cp` without `-p`, NFS clock skew, etc., without forcing a recompile when the bytes are actually unchanged.
+
+**Writes.** Object publication uses atomic temp+rename so a torn write leaves the old `.obj` in place and the next run notices via the freshness check. The manifest is read-modify-written without cross-process coordination — under concurrent writers (test harness) the natural failure mode is a lost manifest entry, which causes one redundant recompile on the next miss. Bounded, self-healing, no correctness risk.
+
+**Lifecycle.** The cache lives inside `build/`; `flang clean` (or `rm -rf build/`) reclaims it. There are no separate `flang cache` subcommands and no TTL/pruning machinery — the build directory is the unit of truth.
+
 ## C99 Backend
 
 - **Name mangling only in codegen.** IR preserves base function names. `HmCCodeGenerator` applies `IrNameMangling.MangleFunctionName()` when emitting C. `main` is never mangled.
