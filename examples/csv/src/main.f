@@ -3,12 +3,14 @@
 // Usage:
 //   fcsv data.csv name,age 0..10
 //   cat data.csv | fcsv name,age 0..10
+//   fcsv --count data.csv      # SIMD-accelerated newline count
 
 import std.encoding.csv
 import std.io.file
 import std.io.reader
 import std.env
 import std.list
+import std.simd
 import std.string
 import std.string_builder
 import std.conv
@@ -22,9 +24,33 @@ fn print_usage() {
     println("  start..end Row range (e.g. 0..10, 5..)")
     println("  ..end      First N rows (e.g. ..5)")
     println("  -N         Last N rows (e.g. -5)")
+    println("")
+    println("Modes:")
+    println("  --count    Print number of newlines via SIMD and exit")
 }
 
 const MAX_ROWS: usize = 0xFFFF_FFFF_FFFF_FFFF
+
+// SIMD-accelerated count of `target` bytes in `data`.
+// Processes 16 bytes per iteration via 128-bit vectors, then a scalar tail.
+fn simd_count_byte(data: String, target: u8) usize {
+    let count: usize = 0
+    let i: usize = 0
+    const splat = v128_splat_u8(target)
+    loop {
+        if i + 16 > data.len { break }
+        const chunk = v128_load(data.ptr + i)
+        const eq = v128_cmpeq_u8(chunk, splat)
+        count = count + v128_count_true(eq) as usize
+        i = i + 16
+    }
+    loop {
+        if i >= data.len { break }
+        if data[i] == target { count = count + 1 }
+        i = i + 1
+    }
+    return count
+}
 
 fn parse_range(s: String) (usize, usize)? {
     const dot_pos = s.find("..")
@@ -162,6 +188,30 @@ fn run(reader: &CsvReader, columns_arg: String, range_start: usize, range_end: u
     return 0
 }
 
+fn run_count(file_path: String) i32 {
+    const result = open_file(file_path, FileMode.Read)
+    if result.is_err() {
+        print("fcsv: cannot open ")
+        println(file_path)
+        return 1
+    }
+    let file = result.unwrap()
+    const data = read_all(&file)
+    close_file(&file)
+    if data.is_err() {
+        println("fcsv: read failed")
+        return 1
+    }
+    let owned = data.unwrap()
+    const n = simd_count_byte(owned.as_view(), b'\n')
+    let sb = string_builder(32)
+    sb.append(n)
+    println(sb.as_view())
+    sb.deinit()
+    owned.deinit()
+    return 0
+}
+
 pub fn main() i32 {
     const argc = args_count()
 
@@ -172,6 +222,7 @@ pub fn main() i32 {
     let has_range = false
     let tail_count: usize = 0
     let has_tail = false
+    let count_mode = false
 
     for (i in 1..argc) {
         const a = arg(i)
@@ -181,6 +232,11 @@ pub fn main() i32 {
         if argv == "--help" or argv == "-h" {
             print_usage()
             return 0
+        }
+
+        if argv == "--count" {
+            count_mode = true
+            continue
         }
 
         const tail = parse_tail(argv)
@@ -210,6 +266,14 @@ pub fn main() i32 {
         } else if columns_arg.len == 0 {
             columns_arg = argv
         }
+    }
+
+    if count_mode {
+        if file_path.len == 0 {
+            println("fcsv: --count requires a file argument")
+            return 1
+        }
+        return run_count(file_path)
     }
 
     if file_path.len > 0 {
