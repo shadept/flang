@@ -16,6 +16,46 @@ When you discover a bug or limitation:
 
 ## Open Issues
 
+### Generic Tuple Types Leak TypeVars Across Call Sites
+
+**Status:** Open
+**Affected:** `InferenceEngine.cs`, tuple type handling in overload resolution
+
+Generic `op_cmp` over anonymous tuples of arity ≥ 2 — `fn op_cmp(a: ($T1, $T2), b: (T1, T2)) Ord` — corrupts type inference in unrelated code once the signature is registered. Concretely, `std.conv`'s `parse_f64` fails to typecheck with *"returns `f64`, got `u64`"* on `return Ok((result, pos))`, where `result: f64` but the tuple is inferred as `(u64, usize)`. Single-element generic `($T,)` works.
+
+**Partial fixes already landed:** four `NominalType` traversals were blind to `FieldsOrVariants` when `TypeArguments.Count == 0` — the path anonymous tuples use to encode their structure. Fixed in `InferenceEngine.cs`: `CollectFreeVars` (tuple field TypeVars now get generalized), `Substitute` (fresh-replaced on `Specialize`), `Zonk` (resolved at the end of inference), `ResolveNominal` (bound TypeVars surface through union-find). The single-arity case started working after these.
+
+**Reproduction gap:** minimal standalone repros (separate test file with `Result((u64, usize), E)` + `Result((f64, usize), E)` plus the generic tuple `op_cmp`) pass. Only `std.conv` triggers the failure when compiled as part of the stdlib. Next step is bisecting `std.conv` down until the error disappears.
+
+**Leads — further paths that read anon tuple `FieldsOrVariants` without going through `Resolve` first:**
+
+1. **`AnonymousStructCoercionRule.TryApply`** at [CoercionRules.cs:190-222](src/FLang.Semantics/CoercionRules.cs:190). Reads `fromStruct.FieldsOrVariants[i].Type` and unifies against target fields. If the tuple field is a TypeVar already bound via union-find, the coercion rule sees the unresolved TypeVar; binding it again could misbind.
+
+2. **`UnifyInternal` for anon types** at [InferenceEngine.cs:248-256](src/FLang.Semantics/InferenceEngine.cs:248) — recurses into fields via `UnifyInternal`, but `return new NominalType(..., na.FieldsOrVariants, ...)` returns the *first operand's* fields verbatim. If callers cache that returned type on an AST node and later read its fields without a fresh `Resolve`, they see stale TypeVars that were bound by a later unification to a different concrete type.
+
+3. **Identity short-circuit** at [InferenceEngine.cs:146-161](src/FLang.Semantics/InferenceEngine.cs:146) — `a.Equals(b)` treats TypeVars in anon-type fields as wildcards, so `(T1, T2)` "equals" `(f64, usize)`. Fields unify, then `return a` — so the signature's tuple NominalType (with original TypeVar IDs) propagates back to the caller instead of the concrete one. If the signature instance is shared across call sites, those original TypeVar IDs accumulate bindings across calls.
+
+4. **Specialization caching** at [HmTypeChecker.Specialization.cs](src/FLang.Semantics/HmTypeChecker.Specialization.cs) — the key function (`AppendTypeSpecKey`) correctly distinguishes anon tuple instances by field types, but worth sanity-checking that `EnsureSpecialization` isn't reusing a spec across incompatible concrete type bindings.
+
+Most-likely culprit: #3 combined with the signature's NominalType instance being shared across all call sites of `op_cmp` (one object per `pub fn op_cmp(...)` declaration, reused for every call).
+
+**Workaround:** `std.cmp` does not ship generic tuple `op_cmp` overloads yet. Define `op_cmp` on your concrete tuple type (`fn op_cmp(a: (i32, String), b: (i32, String)) Ord`) until the root cause is fixed. The `std.sort` public API is already compatible — adding tuple overloads later is additive.
+
+---
+
+### Overloaded Functions Can't Be Used As First-Class Values
+
+**Status:** Open
+**Affected:** Type inference when a bare function name is passed as a `fn(...)` value
+
+`op_cmp` is overloaded across many types. Passing it as a function-typed argument — e.g. `_quicksort_range(s, 0, s.len, op_cmp)` — fails because overload resolution has no expected type at the point the name is taken as a value, and the compiler picks the first registered overload (typically `op_cmp(String, String)`) regardless of context.
+
+**Workaround:** Wrap in an inline lambda: `fn(a: T, b: T) Ord { return op_cmp(a, b) }`. This defers overload resolution until the call site, where T is concrete. The `std.sort` wrappers (`sort(s)`, `quicksort(s)`, etc.) use this pattern internally.
+
+**Future:** Context-directed overload resolution — when a bare function name is coerced to a `fn(...)` type, pick the overload whose signature matches.
+
+---
+
 ### Parser Crash: `while` Keyword Not Recognized
 
 **Status:** Open

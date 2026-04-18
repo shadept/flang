@@ -229,34 +229,8 @@ pub fn reverse(s: $T[]) {
     }
 }
 
-// Sorts the slice in ascending order using quicksort.
-// Requires that `<` and `<=` are defined for T.
-pub fn sort(s: $T[]) {
-    if s.len <= 1 {
-        return
-    }
-    _quicksort(s, 0, s.len - 1)
-}
-
-fn _quicksort(s: $T[], lo: usize, hi: usize) {
-    if lo >= hi {
-        return
-    }
-    let pivot = s[hi]
-    let i = lo
-    for j in lo..hi {
-        if s[j] <= pivot {
-            swap(&s[i], &s[j])
-            i = i + 1
-        }
-    }
-    swap(&s[i], &s[hi])
-
-    if i > lo {
-        _quicksort(s, lo, i - 1)
-    }
-    _quicksort(s, i + 1, hi)
-}
+// `sort` now lives in `std.sort` — see that module for insertion_sort,
+// quicksort, powersort, and the stable default `sort`.
 
 // =============================================================================
 // Copy

@@ -9,6 +9,7 @@
 //   - ptr: pointer to first byte (null-terminated for C FFI)
 //   - len: length in bytes (does not include null terminator)
 
+import core.cmp
 import core.option
 import core.slice
 
@@ -70,6 +71,26 @@ pub fn op_eq(a: String, b: String) bool {
     }
 
     return true
+}
+
+// Lexicographic byte-wise comparison. Shorter strings compare less than
+// longer strings with the shorter as a prefix (standard lexicographic order).
+pub fn op_cmp(a: String, b: String) Ord {
+    if a.ptr == b.ptr and a.len == b.len {
+        return Ord.Equal
+    }
+
+    const min_len = if a.len < b.len { a.len } else { b.len }
+    for idx in 0..min_len {
+        const ab = a[idx]
+        const bb = b[idx]
+        if ab < bb { return Ord.Less }
+        if ab > bb { return Ord.Greater }
+    }
+
+    if a.len < b.len { return Ord.Less }
+    if a.len > b.len { return Ord.Greater }
+    return Ord.Equal
 }
 
 pub fn hash(s: String) usize {

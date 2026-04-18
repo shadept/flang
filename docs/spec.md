@@ -342,6 +342,9 @@ Every operator desugars to a function call. The stdlib provides implementations 
 **Auto-derivation:**
 - `op_eq` auto-derives `op_ne` (and vice versa) by negation.
 - `op_cmp(a, b) Ord` auto-derives all six comparison operators. Explicitly defined operators take priority.
+- **Primitive short-circuit**: `==`, `!=`, `<`, `>`, `<=`, `>=` on two values of the same primitive type (`i32`, `u64`, `f64`, `bool`, `char`, etc.) always use the hardware comparison. User-defined `op_cmp` on primitives is still callable as a regular function (required for generic algorithms like `std.sort`), but it never intercepts the built-in operators. This prevents recursion (an `op_cmp` body that uses `<` would otherwise call itself) and keeps comparisons on the hot path inlinable.
+
+`Ord` lives in `core.cmp` (auto-imported via the prelude) with `op_cmp` overloads for all primitive types and `String`. Tuple `op_cmp` is not provided yet — define it on your concrete tuple type if you need ordered tuples.
 
 ### 5.3 Null Operators
 

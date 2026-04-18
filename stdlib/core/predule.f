@@ -1,3 +1,4 @@
+import core.cmp
 import core.deinit
 import core.hash
 import core.io
