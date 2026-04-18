@@ -25,6 +25,12 @@ typedef struct std_simd_Vec128 std_simd_Vec128;
 
 #if defined(__x86_64__) || defined(_M_X64)
 #include <immintrin.h>
+#ifdef _MSC_VER
+#include <intrin.h>
+#define FLANG_POPCOUNT32(x) ((uint32_t)__popcnt((unsigned)(x)))
+#else
+#define FLANG_POPCOUNT32(x) ((uint32_t)__builtin_popcount((unsigned)(x)))
+#endif
 
 std_simd_Vec128 v128_load(const void* p) {
     std_simd_Vec128 v;
@@ -71,8 +77,7 @@ std_simd_Vec128 v128_andnot(std_simd_Vec128 a, std_simd_Vec128 b) {
 }
 
 uint32_t v128_count_true(std_simd_Vec128 a) {
-    return (uint32_t)__builtin_popcount(
-        (unsigned)_mm_movemask_epi8(_mm_loadu_si128((const __m128i*)&a)));
+    return FLANG_POPCOUNT32(_mm_movemask_epi8(_mm_loadu_si128((const __m128i*)&a)));
 }
 
 uint32_t v128_movemask(std_simd_Vec128 a) {
