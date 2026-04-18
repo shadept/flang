@@ -19,12 +19,13 @@ public static class InliningPass
     /// </summary>
     private const int MaxPasses = 10;
 
+    // Monotonically increasing across every call in the process. Resetting per
+    // Run would collide prefixes when IrOptimizer re-runs inlining within the
+    // same module — different call sites would land on the same `_inlN_` id.
     private static int _inlineCounter;
 
     public static void Run(IrModule module)
     {
-        _inlineCounter = 0;
-
         // Build function lookup by semantic key
         var functionMap = new Dictionary<string, IrFunction>();
         foreach (var fn in module.Functions)
