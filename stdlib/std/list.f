@@ -165,11 +165,11 @@ pub fn op_index(list: List($T), index: usize) T {
     return elem.*
 }
 
-// Index into a list through a reference — returns a reference to the
-// element. Enables safe in-place mutation (`list[i].field = ...`) without
-// exposing `list.ptr + i` pointer arithmetic at call sites. The reference
-// is valid until the list is reallocated (push/reserve) or deinit'd.
-pub fn op_index(list: &List($T), index: usize) &T {
+// Borrow the element at `index` — returns `&T` and panics on out-of-bounds.
+// Use this when you need to read or mutate the element in place without
+// copying. The reference is valid until the list is reallocated
+// (push/reserve) or deinit'd.
+pub fn at_ref(list: &List($T), index: usize) &T {
     if index >= list.len {
         panic("List: index out of bounds")
     }

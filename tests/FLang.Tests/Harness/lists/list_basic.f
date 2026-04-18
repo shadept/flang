@@ -16,13 +16,13 @@ pub fn main() i32 {
         return 1
     }
 
-    // Test get — op_index on &List returns a reference, deref with .* for the value.
-    let first: i32 = list[0].*
-    let second: i32 = list[1].*
+    // Test get — op_index returns the element by value.
+    let first: i32 = list[0]
+    let second: i32 = list[1]
 
     // Test set
     list.set(0, 7)
-    let updated: i32 = list[0].*
+    let updated: i32 = list[0]
     if (updated != 7) {
         return 2
     }

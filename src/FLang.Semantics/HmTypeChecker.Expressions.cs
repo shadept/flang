@@ -2403,10 +2403,13 @@ public partial class HmTypeChecker
             return sliceType.TypeArguments[0];
         }
 
-        // Try op_index for user-defined types (Dict, String, etc.)
-        var refBaseType = new ReferenceType(baseType);
-        var opResult = TryResolveOperator("op_index", [refBaseType, indexType], idx.Span, out var resolvedNode)
-                    ?? TryResolveOperator("op_index", [baseType, indexType], idx.Span, out resolvedNode);
+        // Try op_index for user-defined types (Dict, String, etc.).
+        // Prefer the exact-match (value) overload first so `const a = list[i]`
+        // yields `T`, not `&T`. The `&base` variant is only tried as a fallback
+        // for types that expose indexing through a reference (e.g. Range, or
+        // List's mutation-oriented `op_index(&List($T), usize) &T` overload).
+        var opResult = TryResolveOperator("op_index", [baseType, indexType], idx.Span, out var resolvedNode)
+                    ?? TryResolveOperator("op_index", [new ReferenceType(baseType), indexType], idx.Span, out resolvedNode);
         if (opResult != null)
         {
             _results.ResolvedOperators[idx] = new ResolvedOperator(resolvedNode!);
