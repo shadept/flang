@@ -283,6 +283,21 @@ public partial class HmTypeChecker
             return WellKnown.Bool;
         }
 
+        // Comparison operators on identical primitive types always use the builtin.
+        // User-defined `op_cmp(i32, i32)` etc. is still callable as a regular function
+        // (required for generic sorting over primitives), but `<`/`>`/`==` on primitives
+        // bypass user-defined/derived resolution to avoid recursion and keep hardware
+        // compares on the hot path.
+        if (bin.Operator is BinaryOperatorKind.Equal or BinaryOperatorKind.NotEqual or
+            BinaryOperatorKind.LessThan or BinaryOperatorKind.GreaterThan or
+            BinaryOperatorKind.LessThanOrEqual or BinaryOperatorKind.GreaterThanOrEqual)
+        {
+            var resolvedLeft = _ctx.Engine.Resolve(left);
+            var resolvedRight = _ctx.Engine.Resolve(right);
+            if (resolvedLeft is PrimitiveType lp && resolvedRight is PrimitiveType rp && lp.Name == rp.Name)
+                return InferBuiltinBinary(bin.Operator, left, right, bin.Span);
+        }
+
         // Try user-defined operator function
         var opName = OperatorFunctions.GetFunctionName(bin.Operator);
         var opResult = TryResolveOperator(opName, [left, right], bin.Span, out var resolvedNode);
@@ -1490,12 +1505,20 @@ public partial class HmTypeChecker
         var resolved = _ctx.Engine.Resolve(specialized);
 
         // Payload-less variant: just the enum type
-        if (resolved is NominalType && argTypes.Length == 0)
-            return resolved;
-
-        // Payload variant: function type whose return is a nominal (enum) type
-        if (resolved is FunctionType fnType && fnType.ReturnType is NominalType)
+        if (resolved is NominalType payloadless && argTypes.Length == 0)
         {
+            if (!IsActualEnumVariant(payloadless, name)) return null;
+            return resolved;
+        }
+
+        // Payload variant: function type whose return is a nominal (enum) type.
+        // Must actually correspond to a variant of that enum — otherwise an arbitrary
+        // fn-typed scope binding that returns an enum (e.g. a user-defined comparator
+        // parameter returning Ord) would be misidentified as a constructor.
+        if (resolved is FunctionType fnType && fnType.ReturnType is NominalType returnNominal)
+        {
+            if (!IsActualEnumVariant(returnNominal, name)) return null;
+
             if (fnType.ParameterTypes.Count != argTypes.Length)
                 return null;
 
@@ -1514,6 +1537,15 @@ public partial class HmTypeChecker
         }
 
         return null;
+    }
+
+    private bool IsActualEnumVariant(NominalType maybeEnum, string variantName)
+    {
+        if (maybeEnum.Kind != NominalKind.Enum) return false;
+        var enumDef = LookupNominalType(maybeEnum.Name) ?? maybeEnum;
+        foreach (var v in enumDef.FieldsOrVariants)
+            if (v.Name == variantName) return true;
+        return false;
     }
 
     /// <summary>

@@ -110,7 +110,12 @@ public class InferenceEngine : ITypeResolver
 
     private NominalType ResolveNominal(NominalType n)
     {
-        if (n.TypeArguments.Count == 0) return n;
+        // Anonymous types (tuples, anon structs) carry structure in FieldsOrVariants;
+        // resolve those too so bound TypeVars in field positions surface concrete types.
+        var isAnon = n.Name.StartsWith("__anon_") && n.FieldsOrVariants.Count > 0;
+
+        if (n.TypeArguments.Count == 0 && !isAnon) return n;
+
         var changed = false;
         var resolvedArgs = new Type[n.TypeArguments.Count];
         for (var i = 0; i < n.TypeArguments.Count; i++)
@@ -119,7 +124,20 @@ public class InferenceEngine : ITypeResolver
             if (!ReferenceEquals(resolvedArgs[i], n.TypeArguments[i])) changed = true;
         }
 
-        return changed ? new NominalType(n.Name, n.Kind, resolvedArgs, n.FieldsOrVariants, n.IsSimd, n.IsForeign) : n;
+        var resolvedFields = n.FieldsOrVariants;
+        if (isAnon)
+        {
+            var newFields = new (string, Type)[n.FieldsOrVariants.Count];
+            for (var i = 0; i < n.FieldsOrVariants.Count; i++)
+            {
+                var resolvedFieldType = Resolve(n.FieldsOrVariants[i].Type);
+                newFields[i] = (n.FieldsOrVariants[i].Name, resolvedFieldType);
+                if (!ReferenceEquals(resolvedFieldType, n.FieldsOrVariants[i].Type)) changed = true;
+            }
+            resolvedFields = newFields;
+        }
+
+        return changed ? new NominalType(n.Name, n.Kind, resolvedArgs, resolvedFields, n.IsSimd, n.IsForeign) : n;
     }
 
     // =========================================================================
@@ -343,6 +361,10 @@ public class InferenceEngine : ITypeResolver
                 break;
             case NominalType n:
                 foreach (var ta in n.TypeArguments) CollectFreeVars(ta, vars);
+                // Anonymous types (tuples, anon structs) carry their structure in
+                // FieldsOrVariants, so TypeVars in field positions must also be generalized.
+                if (n.Name.StartsWith("__anon_") && n.FieldsOrVariants.Count > 0)
+                    foreach (var f in n.FieldsOrVariants) CollectFreeVars(f.Type, vars);
                 break;
         }
     }
@@ -388,11 +410,29 @@ public class InferenceEngine : ITypeResolver
                 Substitute(f.ReturnType, subs)),
             ReferenceType r => new ReferenceType(Substitute(r.InnerType, subs)),
             ArrayType a => new ArrayType(Substitute(a.ElementType, subs), a.Length),
-            NominalType n => n.TypeArguments.Count == 0
-                ? n
-                : new NominalType(n.Name, n.Kind, [.. n.TypeArguments.Select(ta => Substitute(ta, subs))], n.FieldsOrVariants, n.IsSimd, n.IsForeign),
+            NominalType n => SubstituteNominal(n, subs),
             _ => type
         };
+    }
+
+    private static NominalType SubstituteNominal(NominalType n, Dictionary<int, TypeVar> subs)
+    {
+        // Anonymous types (tuples, anon structs) carry their structure in FieldsOrVariants,
+        // not in TypeArguments. Specialize must descend into those fields so each instantiation
+        // of a generic tuple signature gets fresh TypeVars.
+        if (n.Name.StartsWith("__anon_") && n.FieldsOrVariants.Count > 0)
+        {
+            var newFields = new (string, Type)[n.FieldsOrVariants.Count];
+            for (var i = 0; i < n.FieldsOrVariants.Count; i++)
+                newFields[i] = (n.FieldsOrVariants[i].Name, Substitute(n.FieldsOrVariants[i].Type, subs));
+            return new NominalType(n.Name, n.Kind, n.TypeArguments, newFields, n.IsSimd, n.IsForeign);
+        }
+
+        if (n.TypeArguments.Count == 0)
+            return n;
+
+        return new NominalType(n.Name, n.Kind, [.. n.TypeArguments.Select(ta => Substitute(ta, subs))],
+            n.FieldsOrVariants, n.IsSimd, n.IsForeign);
     }
 
     // =========================================================================
@@ -411,12 +451,28 @@ public class InferenceEngine : ITypeResolver
             FunctionType f => new FunctionType([.. f.ParameterTypes.Select(Zonk)], Zonk(f.ReturnType)),
             ReferenceType r => new ReferenceType(Zonk(r.InnerType)),
             ArrayType a => new ArrayType(Zonk(a.ElementType), a.Length),
-            NominalType n => n.TypeArguments.Count == 0
-                ? n
-                : new NominalType(n.Name, n.Kind, [.. n.TypeArguments.Select(Zonk)], n.FieldsOrVariants, n.IsSimd, n.IsForeign),
+            NominalType n => ZonkNominal(n),
             PolymorphicType p => new PolymorphicType(p.QuantifiedVarIds, Zonk(p.Body)),
             _ => type
         };
+    }
+
+    private NominalType ZonkNominal(NominalType n)
+    {
+        // Anonymous types carry structure in FieldsOrVariants — zonk those too so TypeVars
+        // resolve to their concrete bindings (mirrors Substitute for consistency).
+        if (n.Name.StartsWith("__anon_") && n.FieldsOrVariants.Count > 0)
+        {
+            var newFields = new (string, Type)[n.FieldsOrVariants.Count];
+            for (var i = 0; i < n.FieldsOrVariants.Count; i++)
+                newFields[i] = (n.FieldsOrVariants[i].Name, Zonk(n.FieldsOrVariants[i].Type));
+            return new NominalType(n.Name, n.Kind, n.TypeArguments, newFields, n.IsSimd, n.IsForeign);
+        }
+
+        if (n.TypeArguments.Count == 0)
+            return n;
+
+        return new NominalType(n.Name, n.Kind, [.. n.TypeArguments.Select(Zonk)], n.FieldsOrVariants, n.IsSimd, n.IsForeign);
     }
 
     private Type ZonkVar(TypeVar tv)
