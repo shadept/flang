@@ -24,3 +24,13 @@ You own and maintain these docs. They are the source of truth for the project. W
 - `docs/spec.md` is authoritative. If a request conflicts with it, flag the conflict — don't silently deviate.
 - `docs/architecture.md` constraints are non-negotiable without explicit approval.
 - Language feature tests go in `tests/FLang.Tests/Harness/` using lit-style `.flang` files. Stdlib tests are colocated in the `.f` source file using `test "name" { ... }` blocks.
+
+## Core Priorities
+
+- **Performance first.** Keep compile times in check, avoid unnecessary allocations in hot paths, and watch for accidental O(n²) behavior in compiler passes and generated C.
+- **Reliability first.** Keep behavior predictable under malformed input and edge cases. Handle error paths explicitly; never leave the compiler in an ambiguous state or emit silently-wrong C.
+- If a tradeoff is required, choose correctness and robustness over short-term convenience.
+
+## Maintainability
+
+Long term maintainability is a core priority. If you add new functionality, first check if there is shared logic that can be extracted to a separate module. Duplicate logic across multiple files is a code smell and should be avoided. Don't be afraid to change existing code. Don't take shortcuts by just adding local logic to solve a problem.
