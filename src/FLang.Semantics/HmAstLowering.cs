@@ -1743,6 +1743,30 @@ public class HmAstLowering
         return new IntConstantValue(0, _layout.Lower(resolvedType));
     }
 
+    /// <summary>
+    /// Lower a large-value argument. Returns an <c>IrPointer</c> when the
+    /// source expression is already backed by a stack slot (local variable or
+    /// by-ref parameter) so the call site can forward that pointer directly.
+    /// For rvalue expressions falls back to <see cref="LowerExpression"/> — the
+    /// caller then allocas a slot and stores the value into it.
+    /// </summary>
+    private Value LowerLargeValueArg(ExpressionNode expr, IrType expectedType)
+    {
+        if (expr is IdentifierExpressionNode id
+            && _locals.TryGetValue(id.Name, out var localVal)
+            && localVal.IrType is IrPointer ptrType
+            && ptrType.Pointee.Equals(expectedType))
+        {
+            // Local variables, by-ref parameters, and parameters promoted by
+            // PromoteMutatedParameters all store an IrPointer in _locals. We
+            // can forward it directly only when the pointed-to type matches
+            // the callee's expected param type — mismatches (e.g. array → slice
+            // coercion) must go through LowerExpression so coercions still fire.
+            return localVal;
+        }
+        return LowerExpression(expr, expectedType);
+    }
+
     private Value LowerIdentifier(IdentifierExpressionNode id)
     {
         if (_locals.TryGetValue(id.Name, out var localVal))
@@ -2075,16 +2099,23 @@ public class HmAstLowering
                 }
             }
 
-            var argVal = LowerExpression(callArguments[i], expectedParamType);
-
-            // Implicit by-ref: large value args need pointer materialization under FLang calling convention.
-            // Foreign calls and types with C calling convention (#foreign struct) are always passed by value.
-            if (!isForeign && expectedParamType != null
+            var needsByRef = !isForeign && expectedParamType != null
                 && TypeLayoutService.IsLargeValue(expectedParamType)
-                && !TypeLayoutService.UsesCCallingConvention(expectedParamType)
-                && argVal.IrType is not IrPointer)
+                && !TypeLayoutService.UsesCCallingConvention(expectedParamType);
+
+            // Fast path for large-value arguments: if the expression is already
+            // backed by a stack slot (local variable, by-ref parameter), forward
+            // that pointer directly instead of loading and re-materializing into
+            // a fresh alloca. The callee's copy-before-mutate semantics make this
+            // safe — reads go through the pointer directly, writes trigger a COW
+            // copy inside the callee.
+            var argVal = needsByRef
+                ? LowerLargeValueArg(callArguments[i], expectedParamType!)
+                : LowerExpression(callArguments[i], expectedParamType);
+
+            if (needsByRef && argVal.IrType is not IrPointer)
             {
-                var argIrType = argVal.IrType ?? expectedParamType;
+                var argIrType = argVal.IrType ?? expectedParamType!;
                 var temp = _currentBlock.EmitAlloca(argIrType);
                 _currentBlock.EmitStorePtr(temp, argVal);
                 args.Add(temp);
@@ -2194,8 +2225,9 @@ public class HmAstLowering
 
         // Lower arguments
         var args = new List<Value>();
-        foreach (var arg in call.Arguments)
-            args.Add(LowerExpression(arg));
+        var fnPtrSig = funcPtrVal.IrType as IrFunctionPtr;
+        for (int i = 0; i < call.Arguments.Count; i++)
+            args.Add(LowerIndirectArg(call.Arguments[i], fnPtrSig, i));
 
         return _currentBlock.EmitIndirectCall(funcPtrVal, args, retIrType);
     }
@@ -2223,10 +2255,22 @@ public class HmAstLowering
 
         // Lower arguments
         var args = new List<Value>();
-        foreach (var arg in call.Arguments)
-            args.Add(LowerExpression(arg));
+        var fnPtrSig = funcPtrVal.IrType as IrFunctionPtr;
+        for (int i = 0; i < call.Arguments.Count; i++)
+            args.Add(LowerIndirectArg(call.Arguments[i], fnPtrSig, i));
 
         return _currentBlock.EmitIndirectCall(funcPtrVal, args, retIrType);
+    }
+
+    private Value LowerIndirectArg(ExpressionNode arg, IrFunctionPtr? sig, int paramIdx)
+    {
+        if (sig != null && paramIdx < sig.Params.Length)
+        {
+            var expected = sig.Params[paramIdx];
+            if (TypeLayoutService.IsLargeValue(expected) && !TypeLayoutService.UsesCCallingConvention(expected))
+                return LowerLargeValueArg(arg, expected);
+        }
+        return LowerExpression(arg);
     }
 
     private Value LowerShortCircuitLogical(BinaryExpressionNode binary)
