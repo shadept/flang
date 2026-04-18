@@ -3,6 +3,7 @@
 
 import std.allocator
 import std.option
+import std.sort
 
 pub type List = struct(T) {
     ptr: &T
@@ -183,6 +184,14 @@ pub fn op_set_index(list: &List($T), index: usize, value: T) {
 // Remove all elements from the list without freeing memory.
 pub fn clear(list: &List($T)) {
     list.len = 0
+}
+
+pub fn sort(list: &List($T)) {
+    sort(list.as_slice())
+}
+
+pub fn sort(list: &List($T), cmp: fn(T, T) Ord) {
+    sort(list.as_slice(), cmp)
 }
 
 // =============================================================================
