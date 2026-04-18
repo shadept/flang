@@ -350,6 +350,11 @@ public class InlayHintHandler : InlayHintsHandlerBase
                 yield return loop.Body;
                 break;
 
+            case WhileNode whileLoop:
+                yield return whileLoop.Condition;
+                yield return whileLoop.Body;
+                break;
+
             case EnumVariantPatternNode evp:
                 foreach (var sp in evp.SubPatterns)
                     yield return sp;

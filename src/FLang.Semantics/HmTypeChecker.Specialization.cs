@@ -207,6 +207,7 @@ public partial class HmTypeChecker
         ForLoopNode fl => new ForLoopNode(fl.Span, fl.IteratorVariable,
             CloneExpression(fl.IterableExpression), CloneExpression(fl.Body)),
         LoopNode loop => new LoopNode(loop.Span, CloneExpression(loop.Body)),
+        WhileNode wh => new WhileNode(wh.Span, CloneExpression(wh.Condition), CloneExpression(wh.Body)),
         DeferStatementNode df => new DeferStatementNode(df.Span, CloneExpression(df.Expression)),
         _ => throw new NotSupportedException(
             $"Cloning not implemented for statement type: {stmt.GetType().Name}")

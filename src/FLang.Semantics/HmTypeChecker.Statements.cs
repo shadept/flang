@@ -37,6 +37,9 @@ public partial class HmTypeChecker
             case LoopNode loop:
                 CheckLoop(loop);
                 break;
+            case WhileNode whileLoop:
+                CheckWhileLoop(whileLoop);
+                break;
             case DeferStatementNode defer:
                 InferExpression(defer.Expression);
                 break;
@@ -219,5 +222,16 @@ public partial class HmTypeChecker
     private void CheckLoop(LoopNode loop)
     {
         InferExpression(loop.Body);
+    }
+
+    // =========================================================================
+    // While loop — condition must be bool
+    // =========================================================================
+
+    private void CheckWhileLoop(WhileNode whileLoop)
+    {
+        var condType = InferExpression(whileLoop.Condition);
+        _ctx.Engine.Unify(condType, WellKnown.Bool, whileLoop.Condition.Span);
+        InferExpression(whileLoop.Body);
     }
 }

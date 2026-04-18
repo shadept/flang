@@ -1027,6 +1027,9 @@ public class HmAstLowering
             case LoopNode loop:
                 LowerLoop(loop);
                 break;
+            case WhileNode whileLoop:
+                LowerWhileLoop(whileLoop);
+                break;
             case ForLoopNode forLoop:
                 LowerForLoop(forLoop);
                 break;
@@ -1272,6 +1275,34 @@ public class HmAstLowering
 
         // Back-edge: jump back to loop body (if not already terminated)
         _currentBlock.EmitJumpIfNotTerminated(bodyBlock);
+
+        // Continue after the loop
+        _currentBlock = exitBlock;
+    }
+
+    private void LowerWhileLoop(WhileNode whileLoop)
+    {
+        var condBlock = CreateBlock("while_cond");
+        var bodyBlock = CreateBlock("while_body");
+        var exitBlock = CreateBlock("while_exit");
+
+        // Jump into condition check
+        _currentBlock.EmitJump(condBlock);
+
+        // Condition block: evaluate cond, branch to body or exit
+        _currentBlock = condBlock;
+        var condVal = LowerExpression(whileLoop.Condition);
+        _currentBlock.EmitBranch(condVal, bodyBlock, exitBlock);
+
+        // Body block
+        _currentBlock = bodyBlock;
+        // continue -> re-check condition, break -> exit
+        _loopStack.Push((condBlock, exitBlock));
+        LowerExpression(whileLoop.Body);
+        _loopStack.Pop();
+
+        // Back-edge to condition
+        _currentBlock.EmitJumpIfNotTerminated(condBlock);
 
         // Continue after the loop
         _currentBlock = exitBlock;
@@ -4182,6 +4213,10 @@ public class HmAstLowering
                 break;
             case LoopNode loop:
                 CollectMutatedParamsExpr(loop.Body, mutated);
+                break;
+            case WhileNode whileLoop:
+                CollectMutatedParamsExpr(whileLoop.Condition, mutated);
+                CollectMutatedParamsExpr(whileLoop.Body, mutated);
                 break;
             case ForLoopNode forLoop:
                 CollectMutatedParamsExpr(forLoop.Body, mutated);

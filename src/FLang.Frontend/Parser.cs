@@ -1266,6 +1266,9 @@ public class Parser
             case TokenKind.Loop:
                 return ParseLoop();
 
+            case TokenKind.While:
+                return ParseWhileLoop();
+
             case TokenKind.OpenBrace:
                 {
                     // Block statement - parse as expression statement
@@ -1927,7 +1930,7 @@ public class Parser
     {
         return kind is TokenKind.Let or TokenKind.Const or TokenKind.Return
             or TokenKind.Break or TokenKind.Continue or TokenKind.Defer
-            or TokenKind.For or TokenKind.If or TokenKind.Loop
+            or TokenKind.For or TokenKind.If or TokenKind.Loop or TokenKind.While
             or TokenKind.OpenBrace or TokenKind.Type;
     }
 
@@ -2185,6 +2188,7 @@ public class Parser
                 _currentToken.Kind != TokenKind.Continue &&
                 _currentToken.Kind != TokenKind.Defer &&
                 _currentToken.Kind != TokenKind.Loop &&
+                _currentToken.Kind != TokenKind.While &&
                 _currentToken.Kind != TokenKind.OpenBrace &&
                 _currentToken.Kind != TokenKind.If)
             {
@@ -2269,6 +2273,38 @@ public class Parser
         var body = ParseBlockExpression();
         _loopDepth--;
         return new LoopNode(loopKeyword.Span, body);
+    }
+
+    /// <summary>
+    /// Parses a while loop statement: while cond { body }
+    /// </summary>
+    /// <returns>A <see cref="WhileNode"/> representing the while loop.</returns>
+    private WhileNode ParseWhileLoop()
+    {
+        var whileKeyword = Eat(TokenKind.While);
+
+        ExpressionNode condition;
+        if (_currentToken.Kind == TokenKind.OpenParenthesis)
+        {
+            // Parenthesized: while (cond) { ... }
+            Eat(TokenKind.OpenParenthesis);
+            condition = ParseExpression();
+            Eat(TokenKind.CloseParenthesis);
+        }
+        else
+        {
+            // Bare: while cond { ... } — stop expression parsing at `{` so the body brace isn't consumed
+            _stopAtBrace = true;
+            condition = ParseExpression();
+            _stopAtBrace = false;
+        }
+
+        _loopDepth++;
+        var body = ParseBlockExpression();
+        _loopDepth--;
+
+        var span = SourceSpan.Combine(whileKeyword.Span, body.Span);
+        return new WhileNode(span, condition, body);
     }
 
     /// <summary>

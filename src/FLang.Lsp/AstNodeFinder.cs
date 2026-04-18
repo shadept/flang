@@ -103,6 +103,7 @@ public static class AstNodeFinder
         IfExpressionNode or
         ForLoopNode or
         LoopNode or
+        WhileNode or
         LambdaExpressionNode;
 
     private static IEnumerable<AstNode> GetChildren(AstNode node)
@@ -280,6 +281,11 @@ public static class AstNodeFinder
 
             case LoopNode loop:
                 yield return loop.Body;
+                break;
+
+            case WhileNode whileLoop:
+                yield return whileLoop.Condition;
+                yield return whileLoop.Body;
                 break;
 
             // === Patterns ===

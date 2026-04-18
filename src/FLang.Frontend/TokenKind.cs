@@ -26,6 +26,7 @@ public enum TokenKind
     Else,
     For,
     Loop,
+    While,
     In,
     Break,
     Continue,

@@ -230,6 +230,7 @@ public class Lexer(Source source, int fileId)
                 "else" => TokenKind.Else,
                 "for" => TokenKind.For,
                 "loop" => TokenKind.Loop,
+                "while" => TokenKind.While,
                 "in" => TokenKind.In,
                 "break" => TokenKind.Break,
                 "continue" => TokenKind.Continue,

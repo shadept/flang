@@ -14,8 +14,7 @@ If something is not listed here, it does not exist in FLang.
 | Optionals | `T?` or `&T?`, null value is `null` | `Option<T>`, `None` |
 | Deref | `ptr.*` | `*ptr` |
 | Methods | UFCS — free functions with `self: &T` first param | `impl` blocks |
-| No semicolons | Statements end at newline | `;` required |
-| No `while` | Use `loop` + `break` | `while cond { }` |
+| Optional semicolons | Statements end at newline | `;` required |
 | No `mut` keyword | `let` is already mutable | `let mut` |
 | No `impl` blocks | UFCS resolves methods from free functions | `impl Type { }` |
 | No traits | `#interface` / `#implement` source generators | `trait Foo { }` |
@@ -125,6 +124,9 @@ for i in 0..5 { /* 0,1,2,3,4 */ }
 
 // loop (infinite, use break/continue)
 loop { if done { break } }
+
+// while (predicate at loop head, condition must be bool)
+while n < 10 { n = n + 1 }
 
 // match (postfix)
 let result = cmd match {
