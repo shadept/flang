@@ -255,8 +255,12 @@ public partial class HmTypeChecker
             CloneExpression(match.Scrutinee),
             [.. match.Arms.Select(a => new MatchArmNode(a.Span, a.Pattern,
                 CloneExpression(a.ResultExpr)))]),
-        ArrayLiteralExpressionNode arr => new ArrayLiteralExpressionNode(arr.Span,
-            [.. arr.Elements!.Select(CloneExpression)]),
+        ArrayLiteralExpressionNode arr => arr.IsRepeatSyntax
+            ? new ArrayLiteralExpressionNode(arr.Span,
+                CloneExpression(arr.RepeatValue!),
+                CloneExpression(arr.RepeatCountExpression!))
+            : new ArrayLiteralExpressionNode(arr.Span,
+                [.. arr.Elements!.Select(CloneExpression)]),
         AnonymousStructExpressionNode anon => new AnonymousStructExpressionNode(anon.Span,
             anon.Fields.Select(f => (f.FieldName, CloneExpression(f.Value))).ToList()),
         StructConstructionExpressionNode sc => new StructConstructionExpressionNode(sc.Span,
