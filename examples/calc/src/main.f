@@ -36,15 +36,12 @@ fn run_args() {
     defer sb.deinit()
 
     const count = args_count()
-    let i: usize = 1
-    loop {
-        if i >= count { break }
+    for i in 1..count {
         if i > 1 { sb.append(" ") }
         const a = arg(i)
         if a.is_some() {
             sb.append(a.value)
         }
-        i = i + 1
     }
 
     eval_line(sb.as_view())

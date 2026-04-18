@@ -92,8 +92,7 @@ pub fn pow(base: $T, exp: u32) T {
     let result: T = 1
     let b = base
     let e = exp
-    loop {
-        if e == 0 { break }
+    while e != 0 {
         if e % 2 == 1 {
             result = result * b
         }
@@ -114,8 +113,7 @@ pub fn is_power_of_two(x: $T) bool {
 pub fn log2(x: $T) u32 {
     let result: u32 = 0
     let v = x
-    loop {
-        if v <= 1 { break }
+    while v > 1 {
         v = v >> 1
         result = result + 1
     }
@@ -131,8 +129,7 @@ pub fn log2(x: $T) u32 {
 pub fn gcd(a: $T, b: T) T {
     let x = abs(a)
     let y = abs(b)
-    loop {
-        if y == 0 { break }
+    while y != 0 {
         let temp = y
         y = x % y
         x = temp

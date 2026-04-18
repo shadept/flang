@@ -32,14 +32,11 @@ pub fn arg(index: usize) String? {
 pub fn get_args() List(String) {
     const count = args_count()
     let result: List(String) = list(count)
-    let i: usize = 0
-    loop {
-        if i >= count { break }
+    for i in 0..count {
         const a = arg(i)
         if a.is_some() {
             result.push(a.value)
         }
-        i = i + 1
     }
     return result
 }
@@ -97,19 +94,14 @@ pub fn getopts(format: String, args: String[]) GetOpt {
 // Look up short option in format. Returns 0=not found, 1=flag, 2=takes arg.
 fn lookup_short(format: String, ch: u8) u8 {
     let i: usize = 0
-    loop {
-        if i >= format.len { return 0 }
+    while i < format.len {
         let c = format[i]
         if c == b'(' {
             i = i + 1
-            loop {
-                if i >= format.len { return 0 }
-                if format[i] == b')' {
-                    i = i + 1
-                    break
-                }
+            while i < format.len and format[i] != b')' {
                 i = i + 1
             }
+            if i < format.len { i = i + 1 }
             continue
         }
         if c == b':' {
@@ -121,14 +113,11 @@ fn lookup_short(format: String, ch: u8) u8 {
             let j = i + 1
             if j < format.len and format[j] == b'(' {
                 j = j + 1
-                loop {
-                    if j >= format.len { return 1 }
-                    if format[j] == b')' {
-                        j = j + 1
-                        break
-                    }
+                while j < format.len and format[j] != b')' {
                     j = j + 1
                 }
+                if j >= format.len { return 1 }
+                j = j + 1
             }
             if j < format.len and format[j] == b':' { return 2 }
             return 1
@@ -142,17 +131,15 @@ fn lookup_short(format: String, ch: u8) u8 {
 fn lookup_long(format: String, name: String) u8 {
     let i: usize = 0
     let last_opt: u8 = 0
-    loop {
-        if i >= format.len { return 0 }
+    while i < format.len {
         let c = format[i]
         if c == b'(' {
             let start = i + 1
             i = start
-            loop {
-                if i >= format.len { return 0 }
-                if format[i] == b')' { break }
+            while i < format.len and format[i] != b')' {
                 i = i + 1
             }
+            if i >= format.len { return 0 }
             const long = slice_from_raw_parts(format.ptr + start, i - start) as String
             i = i + 1
             if long == name { return last_opt }
@@ -173,8 +160,7 @@ pub fn iter(self: &GetOpt) GetOpt {
 }
 
 pub fn next(self: &GetOpt) OptResult? {
-    loop {
-        if self.index >= self.args.len { return null }
+    while self.index < self.args.len {
         const a = self.args[self.index]
 
         // Inside combined short flags: -lwc
@@ -221,9 +207,7 @@ pub fn next(self: &GetOpt) OptResult? {
             self.index = self.index + 1
             // Find '=' for inline value
             let eq_pos = 2usize
-            loop {
-                if eq_pos >= a.len { break }
-                if a[eq_pos] == b'=' { break }
+            while eq_pos < a.len and a[eq_pos] != b'=' {
                 eq_pos = eq_pos + 1
             }
             const name = slice_from_raw_parts(a.ptr + 2usize, eq_pos - 2usize) as String

@@ -151,10 +151,7 @@ pub fn flush(w: &BufferedWriter) {
 // Handles partial writes by looping until all bytes are written.
 fn flush_all(w: &BufferedWriter) {
     let flushed: usize = 0
-    loop {
-        if flushed >= w.pos {
-            break
-        }
+    while flushed < w.pos {
         const chunk = slice_from_raw_parts(w.buf.ptr + flushed, w.pos - flushed)
         const n = w.inner.write(chunk)
         if n == 0 {

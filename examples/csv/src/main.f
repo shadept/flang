@@ -37,15 +37,13 @@ fn simd_count_byte(data: String, target: u8) usize {
     let count: usize = 0
     let i: usize = 0
     const splat = v128_splat_u8(target)
-    loop {
-        if i + 16 > data.len { break }
+    while i + 16 <= data.len {
         const chunk = v128_load(data.ptr + i)
         const eq = v128_cmpeq_u8(chunk, splat)
         count = count + v128_count_true(eq) as usize
         i = i + 16
     }
-    loop {
-        if i >= data.len { break }
+    while i < data.len {
         if data[i] == target { count = count + 1 }
         i = i + 1
     }

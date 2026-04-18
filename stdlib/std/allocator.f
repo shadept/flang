@@ -167,8 +167,7 @@ fn test_realloc(impl: &u8, memory: u8[], new_size: usize) u8[]? {
 
     // Update the tracking entry for this pointer
     let entry = state.head
-    loop {
-        if entry.is_none() { break }
+    while entry.is_some() {
         if entry.value.ptr as usize == old_ptr as usize {
             entry.value.ptr = ptr.value
             entry.value.size = new_size
@@ -189,8 +188,7 @@ fn test_dealloc(impl: &u8, memory: u8[]) {
     // Remove from tracking list
     let prev: &TestAllocEntry? = null
     let entry = state.head
-    loop {
-        if entry.is_none() { break }
+    while entry.is_some() {
         if entry.value.ptr as usize == target {
             // Unlink
             if prev.is_some() {
@@ -215,8 +213,7 @@ pub fn check_leaks(state: &TestAllocatorState) usize {
     let count: usize = 0
     let leaked_bytes: usize = 0
     let entry = state.head
-    loop {
-        if entry.is_none() { break }
+    while entry.is_some() {
         count = count + 1
         leaked_bytes = leaked_bytes + entry.value.size
         print("  leak: address=")
@@ -237,8 +234,7 @@ pub fn check_leaks(state: &TestAllocatorState) usize {
 // Free all remaining tracked allocations and the tracking nodes themselves.
 pub fn deinit(state: &TestAllocatorState) {
     let entry = state.head
-    loop {
-        if entry.is_none() { break }
+    while entry.is_some() {
         let next = entry.value.next
         free(entry.value.ptr)
         free(entry.value as &u8)
@@ -497,8 +493,7 @@ pub fn arena_allocator(backing: &Allocator, page_size: usize = 4096) ArenaAlloca
 pub fn deinit(state: &ArenaAllocatorState) {
     const header_size = size_of(ArenaPage)
     let page = state.first_page
-    loop {
-        if page.is_none() { break }
+    while page.is_some() {
         let next = page.value.next
         let total = page.value.size + header_size
         let raw = slice_from_raw_parts(page.value as &u8, total)
@@ -512,8 +507,7 @@ pub fn deinit(state: &ArenaAllocatorState) {
 // Reset all pages to offset 0 — keeps pages allocated for reuse.
 pub fn reset(state: &ArenaAllocatorState) {
     let page = state.first_page
-    loop {
-        if page.is_none() { break }
+    while page.is_some() {
         page.value.offset = 0
         page = page.value.next
     }

@@ -510,13 +510,10 @@ fn expect_string(self: &JsonDecoder, expected: String) bool {
 }
 
 fn skip_whitespace(self: &JsonDecoder) {
-    loop {
-        let c = self.peek()
-        if c.is_none() { return }
-        if c.value != ' ' and c.value != '\t' and c.value != '\n' and c.value != '\r' {
-            return
-        }
+    let c = self.peek()
+    while c.is_some() and (c.value == ' ' or c.value == '\t' or c.value == '\n' or c.value == '\r') {
         self.advance()
+        c = self.peek()
     }
 }
 

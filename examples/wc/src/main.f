@@ -92,16 +92,13 @@ pub fn main() i32 {
         count(stdin.reader(), &lines, &words, &bytes_count)
         print_counts(&sb, lines, words, bytes_count, show_lines, show_words, show_bytes, "")
     } else {
-        let i: usize = 0
-        loop {
-            if i >= files.len { break }
+        for i in 0..files.len {
             const a = files[i]
             const f = open_file(a, FileMode.Read)
             if f.is_err() {
                 print("wc: ")
                 print(a)
                 println(": No such file or directory")
-                i = i + 1
                 continue
             }
             const file = f.unwrap()
@@ -114,7 +111,6 @@ pub fn main() i32 {
             total_lines = total_lines + lines
             total_words = total_words + words
             total_bytes = total_bytes + bytes_count
-            i = i + 1
         }
         if files.len > 1 {
             print_counts(&sb, total_lines, total_words, total_bytes, show_lines, show_words, show_bytes, "total")

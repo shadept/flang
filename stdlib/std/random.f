@@ -109,8 +109,7 @@ pub fn fill_bytes(r: &Random, buf: u8[]) {
     let i = 0usize
 
     // Fill 8 bytes at a time from a single u64
-    loop {
-        if (i + 8 > buf.len) { break }
+    while i + 8 <= buf.len {
         let val = r.next_u64()
         buf[i]     = val as u8
         buf[i + 1] = (val >> 8) as u8
@@ -124,8 +123,7 @@ pub fn fill_bytes(r: &Random, buf: u8[]) {
     }
 
     // Fill remaining bytes
-    loop {
-        if (i >= buf.len) { break }
+    while i < buf.len {
         buf[i] = r.next_u8()
         i = i + 1
     }
@@ -153,12 +151,9 @@ test "deterministic with same seed" {
 
 test "next_range stays in bounds" {
     let rng = random(123)
-    let i: i64 = 0
-    loop {
-        if (i >= 100) { break }
+    for i in 0..100 {
         const val = rng.next_range(0, 10)
         assert_true(val >= 0 and val < 10, "range value out of bounds")
-        i = i + 1
     }
 }
 
@@ -172,44 +167,32 @@ test "next_bool works" {
 
 test "next_f64 in [0, 1)" {
     let rng = random(42)
-    let i: i64 = 0
-    loop {
-        if (i >= 100) { break }
+    for i in 0..100 {
         const val = rng.next_f64()
         assert_true(val >= 0.0 and val < 1.0, "f64 should be in [0, 1)")
-        i = i + 1
     }
 }
 
 test "next_f32 in [0, 1)" {
     let rng = random(42)
-    let i: i64 = 0
-    loop {
-        if (i >= 100) { break }
+    for i in 0..100 {
         const val = rng.next_f32()
         assert_true(val >= 0.0f32 and val < 1.0f32, "f32 should be in [0, 1)")
-        i = i + 1
     }
 }
 
 test "next_f64_range stays in bounds" {
     let rng = random(77)
-    let i: i64 = 0
-    loop {
-        if (i >= 100) { break }
+    for i in 0..100 {
         const val = rng.next_f64_range(5.0, 10.0)
         assert_true(val >= 5.0 and val < 10.0, "f64 range value out of bounds")
-        i = i + 1
     }
 }
 
 test "next_f32_range stays in bounds" {
     let rng = random(77)
-    let i: i64 = 0
-    loop {
-        if (i >= 100) { break }
+    for i in 0..100 {
         const val = rng.next_f32_range(5.0f32, 10.0f32)
         assert_true(val >= 5.0f32 and val < 10.0f32, "f32 range value out of bounds")
-        i = i + 1
     }
 }

@@ -13,11 +13,10 @@ pub fn lexer(input: String) Lexer {
 
 pub fn next_token(self: &Lexer) Token {
     // Skip whitespace
-    loop {
-        if self.pos >= self.input.len { return Token.End }
-        if !is_whitespace(self.input[self.pos]) { break }
+    while self.pos < self.input.len and is_whitespace(self.input[self.pos]) {
         self.pos = self.pos + 1
     }
+    if self.pos >= self.input.len { return Token.End }
 
     const c = self.input[self.pos]
 

@@ -96,8 +96,7 @@ pub fn rfind(s: String, needle: String) usize? {
 
     // Reverse linear scan
     let i = h.len - n.len + 1
-    loop {
-        if i == 0 { break }
+    while i != 0 {
         i = i - 1
 
         let found = true
@@ -142,9 +141,7 @@ fn is_ascii_whitespace(c: u8) bool {
 pub fn trim_start(s: String) String {
     let h = s.as_raw_bytes()
     let start: usize = 0
-    loop {
-        if start >= h.len { break }
-        if !is_ascii_whitespace(h[start]) { break }
+    while start < h.len and is_ascii_whitespace(h[start]) {
         start = start + 1
     }
     return .{ ptr = s.ptr + start, len = s.len - start }
@@ -153,9 +150,7 @@ pub fn trim_start(s: String) String {
 pub fn trim_end(s: String) String {
     let h = s.as_raw_bytes()
     let end = h.len
-    loop {
-        if end == 0 { break }
-        if !is_ascii_whitespace(h[end - 1]) { break }
+    while end != 0 and is_ascii_whitespace(h[end - 1]) {
         end = end - 1
     }
     return .{ ptr = s.ptr, len = end }

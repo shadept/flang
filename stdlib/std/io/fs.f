@@ -332,8 +332,7 @@ pub fn err(self: &WalkIter) FsError? {
 }
 
 pub fn deinit(self: &WalkIter) {
-    loop {
-        if self.stack.len == 0 { break }
+    while self.stack.len != 0 {
         const top: &WalkFrame = self.stack.at_ref(self.stack.len - 1)
         top.dir.deinit()
         const _popped = self.stack.pop()

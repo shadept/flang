@@ -202,9 +202,7 @@ fn process_chunk(
         }
     }
 
-    loop {
-        if pos >= data_len { break }
-
+    while pos < data_len {
         const byte = data[pos]
         const bit = 1u32 << (pos as u32)
 
@@ -698,8 +696,7 @@ fn parse_all(self: &CsvReader) {
     // --- Parse headers ---
     if self.options.has_headers {
         field_start = 0
-        loop {
-            if pos >= data_len { break }
+        while pos < data_len {
             const remaining = data_len - pos
             const chunk_size = if remaining < 16 { remaining } else { 16usize }
 
@@ -806,8 +803,7 @@ fn parse_all(self: &CsvReader) {
         }
 
         // Process ALL structural characters in this chunk
-        loop {
-            if structural == 0 { break }
+        while structural != 0 {
             const bit_pos = trailing_zeros_u32(structural) as usize
             const abs_pos = pos + bit_pos
             const byte = data[abs_pos]

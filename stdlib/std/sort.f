@@ -12,9 +12,8 @@
 //     quicksort       -- unstable, average O(n log n); small-range cutoff to insertion sort.
 //     powersort       -- stable, O(n log n); nearly-optimal merge policy on natural runs.
 
-import std.test
-import std.list
 import std.allocator
+import std.test
 
 // =============================================================================
 // Tuning
@@ -38,9 +37,7 @@ pub fn insertion_sort(s: $T[], cmp: fn(T, T) Ord) {
 // Stable in-place insertion sort over `s[lo..hi]` (hi exclusive).
 fn _insertion_sort_range(s: $T[], lo: usize, hi: usize, cmp: fn(T, T) Ord) {
     if hi - lo < 2 { return }
-    let i = lo + 1
-    loop {
-        if i >= hi { break }
+    for i in (lo + 1)..hi {
         let j = i
         loop {
             if j <= lo { break }
@@ -51,7 +48,6 @@ fn _insertion_sort_range(s: $T[], lo: usize, hi: usize, cmp: fn(T, T) Ord) {
             s[j] = prev
             j = j - 1
         }
-        i = i + 1
     }
 }
 
@@ -163,18 +159,15 @@ fn _powersort_impl(s: $T[], cmp: fn(T, T) Ord) {
     // merge pairs of blocks with doubling width.
     let block = INSERTION_CUTOFF
     let start: usize = 0
-    loop {
-        if start >= s.len { break }
+    while start < s.len {
         const end = if start + block < s.len { start + block } else { s.len }
         _insertion_sort_range(s, start, end, cmp)
         start = start + block
     }
 
-    loop {
-        if block >= s.len { break }
+    while block < s.len {
         let lo: usize = 0
-        loop {
-            if lo >= s.len { break }
+        while lo < s.len {
             const mid = if lo + block < s.len { lo + block } else { s.len }
             const hi = if lo + 2 * block < s.len { lo + 2 * block } else { s.len }
             if mid < hi {
@@ -192,18 +185,14 @@ fn _powersort_impl(s: $T[], cmp: fn(T, T) Ord) {
 fn _merge(s: $T[], scratch: $T[], lo: usize, mid: usize, hi: usize, cmp: fn(T, T) Ord) {
     // Copy left half into scratch[lo..mid]. Right half stays in place; we fill
     // s[lo..hi] left-to-right from scratch (left) and s (right).
-    let i = lo
-    loop {
-        if i >= mid { break }
+    for i in lo..mid {
         scratch[i] = s[i]
-        i = i + 1
     }
 
     let l = lo
     let r = mid
     let w = lo
-    loop {
-        if l >= mid or r >= hi { break }
+    while l < mid and r < hi {
         const lv = scratch[l]
         const rv = s[r]
         if cmp(rv, lv) == Ord.Less {
@@ -217,8 +206,7 @@ fn _merge(s: $T[], scratch: $T[], lo: usize, mid: usize, hi: usize, cmp: fn(T, T
     }
 
     // Drain remaining left half (right half, if any, is already in place).
-    loop {
-        if l >= mid { break }
+    while l < mid {
         s[w] = scratch[l]
         l = l + 1
         w = w + 1
@@ -235,42 +223,6 @@ pub fn sort(s: $T[]) {
 
 pub fn sort(s: $T[], cmp: fn(T, T) Ord) {
     powersort(s, cmp)
-}
-
-// =============================================================================
-// List convenience
-// =============================================================================
-
-pub fn sort(list: &List($T)) {
-    powersort(list.as_slice())
-}
-
-pub fn sort(list: &List($T), cmp: fn(T, T) Ord) {
-    powersort(list.as_slice(), cmp)
-}
-
-pub fn insertion_sort(list: &List($T)) {
-    insertion_sort(list.as_slice())
-}
-
-pub fn insertion_sort(list: &List($T), cmp: fn(T, T) Ord) {
-    insertion_sort(list.as_slice(), cmp)
-}
-
-pub fn quicksort(list: &List($T)) {
-    quicksort(list.as_slice())
-}
-
-pub fn quicksort(list: &List($T), cmp: fn(T, T) Ord) {
-    quicksort(list.as_slice(), cmp)
-}
-
-pub fn powersort(list: &List($T)) {
-    powersort(list.as_slice())
-}
-
-pub fn powersort(list: &List($T), cmp: fn(T, T) Ord) {
-    powersort(list.as_slice(), cmp)
 }
 
 // =============================================================================

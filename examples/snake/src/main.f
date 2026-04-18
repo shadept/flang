@@ -179,8 +179,7 @@ pub fn main() i32 {
 
         // Shift body (from tail toward head)
         let t: i32 = if ate { slen } else { slen - 1 }
-        loop {
-            if t <= 0 { break }
+        while t > 0 {
             sx[t as usize] = sx[(t - 1) as usize]
             sy[t as usize] = sy[(t - 1) as usize]
             t = t - 1

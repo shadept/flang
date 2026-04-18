@@ -204,9 +204,7 @@ fn parse_int_spec(spec: String) FormatSpec {
 
     // Parse width digits
     let width: usize = 0
-    loop {
-        if pos >= spec.len { break }
-        if spec[pos] < b'0' or spec[pos] > b'9' { break }
+    while pos < spec.len and spec[pos] >= b'0' and spec[pos] <= b'9' {
         width = width * 10 + (spec[pos] - b'0') as usize
         pos = pos + 1
     }
@@ -232,11 +230,8 @@ fn parse_int_spec(spec: String) FormatSpec {
 
 // Write pad_count copies of fill_char into sb.
 fn repeat_fill(sb: &StringBuilder, fill_char: u8, pad_count: usize) {
-    let k = 0usize
-    loop {
-        if k >= pad_count { break }
+    for k in 0..pad_count {
         sb.append_byte(fill_char)
-        k = k + 1
     }
 }
 
@@ -283,13 +278,10 @@ fn apply_int_padding(sb: &StringBuilder, tmp: u8[], len: usize, fmt: &FormatSpec
 fn format_unsigned_into(tmp: u8[], value: u64, base: u64, uppercase: bool) usize {
     const len = format_u64(value, tmp, base as u8).unwrap()
     if uppercase {
-        let i = 0usize
-        loop {
-            if i >= len { break }
+        for i in 0..len {
             if tmp[i] >= b'a' and tmp[i] <= b'f' {
                 tmp[i] = tmp[i] - (b'a' - b'A')
             }
-            i = i + 1
         }
     }
     return len
@@ -367,9 +359,7 @@ fn parse_float_spec(spec: String) FloatFormatSpec {
 
     // Parse width digits before '.'
     let width: usize = 0
-    loop {
-        if pos >= spec.len { break }
-        if spec[pos] < b'0' or spec[pos] > b'9' { break }
+    while pos < spec.len and spec[pos] >= b'0' and spec[pos] <= b'9' {
         width = width * 10 + (spec[pos] - b'0') as usize
         pos = pos + 1
     }
@@ -379,9 +369,7 @@ fn parse_float_spec(spec: String) FloatFormatSpec {
     if pos < spec.len and spec[pos] == b'.' {
         pos = pos + 1
         let prec: usize = 0
-        loop {
-            if pos >= spec.len { break }
-            if spec[pos] < b'0' or spec[pos] > b'9' { break }
+        while pos < spec.len and spec[pos] >= b'0' and spec[pos] <= b'9' {
             prec = prec * 10 + (spec[pos] - b'0') as usize
             pos = pos + 1
         }

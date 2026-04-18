@@ -38,14 +38,11 @@ fn set_square_fg(w: Writer, rank: i32, col: i32) {
 // ▀ = upper half block: fg paints top half, bg paints bottom half.
 fn emit_border(sb: &StringBuilder, w: Writer, top_rank: i32, bot_rank: i32) {
     sb.append("  ")
-    let c: i32 = 0
-    loop {
-        if c >= 8 { break }
+    for c in 0..8i32 {
         set_square_bg(w, top_rank, c)
         set_square_fg(w, bot_rank, c)
         sb.append("▄▄▄▄")
         reset(w)
-        c = c + 1
     }
     println(sb.as_view())
     sb.clear()
@@ -64,13 +61,10 @@ fn display_board(fen: String) {
 
     // Top border: ▄ with default bg (top half) and rank 8 colors (bottom half)
     sb.append("  ")
-    let c: i32 = 0
-    loop {
-        if c >= 8 { break }
+    for c in 0..8i32 {
         set_square_fg(w, rank, c)
         sb.append("▄▄▄▄")
         reset(w)
-        c = c + 1
     }
     println(sb.as_view())
     sb.clear()
@@ -138,13 +132,10 @@ fn display_board(fen: String) {
 
     // Bottom border: ▀ with rank 1 colors (top half) and default bg (bottom half)
     sb.append("  ")
-    c = 0
-    loop {
-        if c >= 8 { break }
+    for c in 0..8i32 {
         set_square_fg(w, rank, c)
         sb.append("▀▀▀▀")
         reset(w)
-        c = c + 1
     }
     println(sb.as_view())
     sb.clear()

@@ -375,8 +375,7 @@ pub fn read_line(rl: &Readline) String? {
                     if cursor < len {
                         // Shift right
                         let i = len
-                        loop {
-                            if i <= cursor { break }
+                        while i > cursor {
                             buf[i] = buf[i - 1]
                             i = i - 1
                         }
@@ -526,16 +525,14 @@ fn write_uint_to_buf(buf: [u8; 2048], start: usize, value: u32) usize {
     let digits = [0u8; 10]
     let count: usize = 0
     let v = value
-    loop {
-        if v == 0 { break }
+    while v != 0 {
         digits[count] = b'0' + (v % 10) as u8
         v = v / 10
         count = count + 1
     }
     let pos = start
     let i = count
-    loop {
-        if i == 0 { break }
+    while i != 0 {
         i = i - 1
         buf[pos] = digits[i]
         pos = pos + 1

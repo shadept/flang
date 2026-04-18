@@ -53,15 +53,14 @@ pub fn format_u64(val: u64, buf: u8[], base: u8 = 10) Result(usize, ConvError) {
     let pos = tmp.len
     const base_u64 = base as u64
 
-    loop {
-        if val == 0 { break }
+    while val != 0 {
         const digit = (val % base_u64) as u8
         val = val / base_u64
         pos = pos - 1
-        if digit < 10 {
-            tmp[pos] = b'0' + digit
+        tmp[pos] = if digit < 10 {
+            '0' + digit
         } else {
-            tmp[pos] = b'a' - 10 + digit
+            'a' - 10 + digit
         }
     }
 
@@ -71,11 +70,8 @@ pub fn format_u64(val: u64, buf: u8[], base: u8 = 10) Result(usize, ConvError) {
     }
 
     // Copy to front of caller buffer
-    let i = 0
-    loop {
-        if i >= len { break }
+    for i in 0..len {
         buf[i] = tmp[pos + i]
-        i = i + 1
     }
 
     return Ok(len)
@@ -141,11 +137,8 @@ pub fn format_f64(val: f64, buf: u8[], precision: usize = 6, trim_zeros: bool = 
 
     // Round by adding 0.5 * 10^-precision so truncation rounds correctly.
     let round = 0.5
-    let r: usize = 0
-    loop {
-        if r >= precision { break }
+    for r in 0..precision {
         round = round / 10.0
-        r = r + 1
     }
     abs_val = abs_val + round
 
@@ -157,21 +150,16 @@ pub fn format_f64(val: f64, buf: u8[], precision: usize = 6, trim_zeros: bool = 
     let frac = abs_val - (int_part as f64)
     let frac_buf = [0u8; 20]
     let frac_len: usize = 0
-    let i: usize = 0
-    loop {
-        if i >= precision { break }
+    for i in 0..precision {
         frac = frac * 10.0
         let digit: u64 = frac as u64
         frac_buf[frac_len] = (48u64 + digit) as u8
         frac_len = frac_len + 1
         frac = frac - (digit as f64)
-        i = i + 1
     }
 
     if trim_zeros {
-        loop {
-            if frac_len == 0 { break }
-            if frac_buf[frac_len - 1] != b'0' { break }
+        while frac_len != 0 and frac_buf[frac_len - 1] == b'0' {
             frac_len = frac_len - 1
         }
     }
@@ -188,22 +176,16 @@ pub fn format_f64(val: f64, buf: u8[], precision: usize = 6, trim_zeros: bool = 
         buf[pos] = b'-'
         pos = pos + 1
     }
-    let j: usize = 0
-    loop {
-        if j >= int_len { break }
+    for j in 0..int_len {
         buf[pos] = int_buf[j]
         pos = pos + 1
-        j = j + 1
     }
     if frac_len > 0 {
         buf[pos] = b'.'
         pos = pos + 1
-        j = 0
-        loop {
-            if j >= frac_len { break }
+        for j in 0..frac_len {
             buf[pos] = frac_buf[j]
             pos = pos + 1
-            j = j + 1
         }
     }
 
@@ -229,8 +211,7 @@ pub fn parse_u64(s: u8[], base: u8 = 10) Result((u64, usize), ConvError) {
     let value: u64 = 0
     let consumed = 0
 
-    loop {
-        if consumed >= s.len { break }
+    while consumed < s.len {
         const c = s[consumed]
 
         let digit_val: u64 = 0
@@ -405,11 +386,8 @@ pub fn parse_f64(s: u8[]) Result((f64, usize), ConvError) {
     // Integer part
     let result: f64 = 0.0
     let has_digits = false
-    loop {
-        if pos >= s.len { break }
-        const c = s[pos]
-        if c < b'0' or c > b'9' { break }
-        result = result * 10.0 + (c - b'0') as f64
+    while pos < s.len and s[pos] >= b'0' and s[pos] <= b'9' {
+        result = result * 10.0 + (s[pos] - b'0') as f64
         has_digits = true
         pos = pos + 1
     }
@@ -419,11 +397,8 @@ pub fn parse_f64(s: u8[]) Result((f64, usize), ConvError) {
         if s[pos] == b'.' {
             pos = pos + 1
             let frac_mul = 0.1
-            loop {
-                if pos >= s.len { break }
-                const c = s[pos]
-                if c < b'0' or c > b'9' { break }
-                result = result + (c - b'0') as f64 * frac_mul
+            while pos < s.len and s[pos] >= b'0' and s[pos] <= b'9' {
+                result = result + (s[pos] - b'0') as f64 * frac_mul
                 frac_mul = frac_mul * 0.1
                 has_digits = true
                 pos = pos + 1
@@ -450,11 +425,8 @@ pub fn parse_f64(s: u8[]) Result((f64, usize), ConvError) {
             }
             let exp: i64 = 0
             let has_exp_digits = false
-            loop {
-                if pos >= s.len { break }
-                const c = s[pos]
-                if c < b'0' or c > b'9' { break }
-                exp = exp * 10 + (c - b'0') as i64
+            while pos < s.len and s[pos] >= b'0' and s[pos] <= b'9' {
+                exp = exp * 10 + (s[pos] - b'0') as i64
                 has_exp_digits = true
                 pos = pos + 1
             }
@@ -465,11 +437,8 @@ pub fn parse_f64(s: u8[]) Result((f64, usize), ConvError) {
             // Apply 10^exp
             let abs_exp = if exp < 0 { 0 - exp } else { exp }
             let mul = 1.0
-            let i: i64 = 0
-            loop {
-                if i >= abs_exp { break }
+            for i in 0..abs_exp {
                 mul = mul * 10.0
-                i = i + 1
             }
             if exp >= 0 {
                 result = result * mul
@@ -494,18 +463,18 @@ pub fn parse_f64(s: u8[]) Result((f64, usize), ConvError) {
 pub fn format_bool(val: bool, buf: u8[]) Result(usize, ConvError) {
     if val {
         if buf.len < 4 { return Err(ConvError.BufferTooSmall) }
-        buf[0] = b't'
-        buf[1] = b'r'
-        buf[2] = b'u'
-        buf[3] = b'e'
+        buf[0] = 't'
+        buf[1] = 'r'
+        buf[2] = 'u'
+        buf[3] = 'e'
         return Ok(4usize)
     }
     if buf.len < 5 { return Err(ConvError.BufferTooSmall) }
-    buf[0] = b'f'
-    buf[1] = b'a'
-    buf[2] = b'l'
-    buf[3] = b's'
-    buf[4] = b'e'
+    buf[0] = 'f'
+    buf[1] = 'a'
+    buf[2] = 'l'
+    buf[3] = 's'
+    buf[4] = 'e'
     return Ok(5usize)
 }
 
