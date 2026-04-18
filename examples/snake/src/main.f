@@ -96,8 +96,8 @@ pub fn main() i32 {
     defer sb.deinit()
     let w = sb.writer()
 
-    hide_cursor(&w)
-    clear_screen(&w)
+    hide_cursor(w)
+    clear_screen(w)
     flush_output(&sb)
 
     // --- Game state ---
@@ -214,19 +214,19 @@ pub fn main() i32 {
         }
         grid[(sy[0] * BOARD_W + sx[0]) as usize] = CELL_HEAD
 
-        move_to(&w, 1, 1)
+        move_to(w, 1, 1)
 
         // Title bar
         sb.append("  ")
-        set_style(&w, Style.Bold)
-        set_fg(&w, Color.Yellow)
+        set_style(w, Style.Bold)
+        set_fg(w, Color.Yellow)
         sb.append("SNAKE")
-        reset(&w)
+        reset(w)
         sb.append("  Score: ")
-        set_style(&w, Style.Bold)
+        set_style(w, Style.Bold)
         sb.append(score)
-        reset(&w)
-        clear_line_right(&w)
+        reset(w)
+        clear_line_right(w)
         sb.append("\n")
 
         // Top border
@@ -242,19 +242,19 @@ pub fn main() i32 {
             for (col in 0..BOARD_W) {
                 const cell = grid[(row * BOARD_W + col) as usize]
                 if cell == CELL_HEAD {
-                    set_fg(&w, Color.Green)
-                    set_style(&w, Style.Bold)
+                    set_fg(w, Color.Green)
+                    set_style(w, Style.Bold)
                     sb.append("██")
-                    reset(&w)
+                    reset(w)
                 } else if cell == CELL_BODY {
-                    set_fg(&w, Color.Green)
+                    set_fg(w, Color.Green)
                     sb.append("░░")
-                    reset(&w)
+                    reset(w)
                 } else if cell == CELL_FOOD {
-                    set_fg(&w, Color.Red)
-                    set_style(&w, Style.Bold)
+                    set_fg(w, Color.Red)
+                    set_style(w, Style.Bold)
                     sb.append("██")
-                    reset(&w)
+                    reset(w)
                 } else {
                     sb.append("  ")
                 }
@@ -270,10 +270,10 @@ pub fn main() i32 {
         sb.append("┘\n")
 
         // Controls hint
-        set_style(&w, Style.Dim)
+        set_style(w, Style.Dim)
         sb.append("  WASD/Arrows: move  Q: quit")
-        reset(&w)
-        clear_line_right(&w)
+        reset(w)
+        clear_line_right(w)
 
         // Flush frame
         flush_output(&sb)
@@ -282,20 +282,20 @@ pub fn main() i32 {
     }
 
     // --- Cleanup ---
-    show_cursor(&w)
-    reset(&w)
-    clear_screen(&w)
-    move_to(&w, 1, 1)
+    show_cursor(w)
+    reset(w)
+    clear_screen(w)
+    move_to(w, 1, 1)
     flush_output(&sb)
 
     // Restore terminal
     ioctl(0, TIOCSETA, old_term.ptr)
 
     // Game over message
-    set_fg(&w, Color.Red)
-    set_style(&w, Style.Bold)
+    set_fg(w, Color.Red)
+    set_style(w, Style.Bold)
     sb.append("Game Over!")
-    reset(&w)
+    reset(w)
     sb.append(" Final score: ")
     sb.append(score)
     sb.append("\n")
