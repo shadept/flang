@@ -90,6 +90,29 @@ public class DefinitionHandler : DefinitionHandlerBase
             case CallExpressionNode call when call.ResolvedTarget != null:
                 return call.ResolvedTarget.NameSpan;
 
+            case CallExpressionNode call:
+                {
+                    // ResolvedTarget is null here. If this is a genuine type
+                    // instantiation (e.g. `Some(42)`), fall through to type
+                    // resolution. Otherwise overload resolution failed — try
+                    // to find any function with a matching name so the user
+                    // lands on a plausible target instead of the return type.
+                    if (call.IsTypeInstantiation)
+                        return ResolveTypeDefinition(call, analysis);
+                    var name = call.MethodName ?? call.FunctionName;
+                    if (!string.IsNullOrEmpty(name))
+                    {
+                        foreach (var module in analysis.ParsedModules.Values)
+                        {
+                            foreach (var fn in module.Functions)
+                            {
+                                if (fn.Name == name) return fn.NameSpan;
+                            }
+                        }
+                    }
+                    return null;
+                }
+
             case NamedArgumentExpressionNode namedArg:
                 {
                     // Navigate from named argument to the parameter declaration
