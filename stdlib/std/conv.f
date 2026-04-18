@@ -25,8 +25,16 @@ const I64_MIN_ABS: u64 = 0x8000_0000_0000_0000
 // Integer → Buffer
 // =============================================================================
 
-// Format an unsigned 64-bit integer into buf. Returns bytes written.
+// Format an unsigned 64-bit integer into `buf`. Returns bytes written.
 // Supports bases 2–16. Lowercase a–f for hex.
+//
+// Required buffer capacity (upper bounds):
+//   base 10:  20 bytes  (u64 max = 18_446_744_073_709_551_615)
+//   base 16:  16 bytes
+//   base 8:   22 bytes
+//   base 2:   64 bytes
+// When unsure, a 64-byte buffer fits any supported base. Returns
+// `Err(BufferTooSmall)` if `buf` is too short.
 pub fn format_u64(val: u64, buf: u8[], base: u8 = 10) Result(usize, ConvError) {
     if base < 2 or base > 16 {
         return Err(ConvError.InvalidBase)
@@ -73,8 +81,18 @@ pub fn format_u64(val: u64, buf: u8[], base: u8 = 10) Result(usize, ConvError) {
     return Ok(len)
 }
 
-// Format a signed 64-bit integer into buf. Returns bytes written.
-// Supports bases 2–16. Lowercase a–f for hex.
+// Format a signed 64-bit integer into `buf`. Returns bytes written.
+// Supports bases 2–16. Lowercase a–f for hex. A leading '-' is emitted for
+// negative values in every base (the absolute magnitude is rendered in the
+// requested base — no two's-complement bit pattern).
+//
+// Required buffer capacity (upper bounds, includes room for the sign):
+//   base 10:  21 bytes
+//   base 16:  17 bytes
+//   base 8:   23 bytes
+//   base 2:   65 bytes
+// A 65-byte buffer fits any supported base. Returns `Err(BufferTooSmall)` if
+// `buf` is too short.
 pub fn format_i64(val: i64, buf: u8[], base: u8 = 10) Result(usize, ConvError) {
     if base < 2 or base > 16 {
         return Err(ConvError.InvalidBase)
@@ -97,6 +115,99 @@ pub fn format_i64(val: i64, buf: u8[], base: u8 = 10) Result(usize, ConvError) {
         Ok(written) => Ok(offset + written),
         Err(e) => Err(e)
     }
+}
+
+// Format an f64 into `buf` as `[-]int[.frac]`. Returns bytes written.
+//
+// `precision` caps the fractional digits (default 6). When `trim_zeros` is
+// true, trailing zeros are removed and the decimal point is omitted if the
+// fractional part collapses to empty.
+//
+// Required buffer capacity: `23 + precision` bytes in the worst case
+// (1 sign + 21 integer digits + '.' + precision fractional digits). The
+// default precision of 6 fits in 29 bytes; 48 bytes is a safe default for
+// any precision up to ~25. Returns `Err(BufferTooSmall)` if `buf` is short.
+//
+// Caveat: the integer portion is extracted via `as u64`, so values whose
+// magnitude exceeds 2^64 aren't representable and will truncate. Non-finite
+// inputs (NaN, infinity) aren't handled specially.
+pub fn format_f64(val: f64, buf: u8[], precision: usize = 6, trim_zeros: bool = true) Result(usize, ConvError) {
+    let abs_val = val
+    let negative = false
+    if val < 0.0 {
+        negative = true
+        abs_val = 0.0 - val
+    }
+
+    // Round by adding 0.5 * 10^-precision so truncation rounds correctly.
+    let round = 0.5
+    let r: usize = 0
+    loop {
+        if r >= precision { break }
+        round = round / 10.0
+        r = r + 1
+    }
+    abs_val = abs_val + round
+
+    let int_part: u64 = abs_val as u64
+    let int_buf = [0u8; 21]
+    const int_len = format_u64(int_part, int_buf).unwrap()
+
+    // Fractional digits.
+    let frac = abs_val - (int_part as f64)
+    let frac_buf = [0u8; 20]
+    let frac_len: usize = 0
+    let i: usize = 0
+    loop {
+        if i >= precision { break }
+        frac = frac * 10.0
+        let digit: u64 = frac as u64
+        frac_buf[frac_len] = (48u64 + digit) as u8
+        frac_len = frac_len + 1
+        frac = frac - (digit as f64)
+        i = i + 1
+    }
+
+    if trim_zeros {
+        loop {
+            if frac_len == 0 { break }
+            if frac_buf[frac_len - 1] != b'0' { break }
+            frac_len = frac_len - 1
+        }
+    }
+
+    let needed: usize = int_len + frac_len
+    if negative { needed = needed + 1 }
+    if frac_len > 0 { needed = needed + 1 } // '.'
+    if buf.len < needed {
+        return Err(ConvError.BufferTooSmall)
+    }
+
+    let pos: usize = 0
+    if negative {
+        buf[pos] = b'-'
+        pos = pos + 1
+    }
+    let j: usize = 0
+    loop {
+        if j >= int_len { break }
+        buf[pos] = int_buf[j]
+        pos = pos + 1
+        j = j + 1
+    }
+    if frac_len > 0 {
+        buf[pos] = b'.'
+        pos = pos + 1
+        j = 0
+        loop {
+            if j >= frac_len { break }
+            buf[pos] = frac_buf[j]
+            pos = pos + 1
+            j = j + 1
+        }
+    }
+
+    return Ok(pos)
 }
 
 // =============================================================================

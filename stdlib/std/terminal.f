@@ -1,7 +1,7 @@
 // Terminal management: ANSI escape codes, cursor control, colors, styles.
 //
-// All output functions write escape sequences to a BufferedWriter, so they work
-// with any output target (stdout, file, StringBuilder, etc.).
+// All output functions write escape sequences to a Writer, so they work with
+// any output target (stdout, file, StringBuilder, BufferedWriter, etc.).
 
 import std.io.writer
 import std.string_builder
@@ -43,64 +43,64 @@ pub fn get_terminal_size() TerminalSize {
 // =============================================================================
 
 // Move cursor to absolute position (1-based).  ESC [ row ; col H
-pub fn move_to(w: &BufferedWriter, row: u32, col: u32) {
+pub fn move_to(w: Writer, row: u32, col: u32) {
     write_csi(w)
     write_uint(w, row)
-    w.write(b';')
+    w.write_byte(b';')
     write_uint(w, col)
-    w.write(b'H')
+    w.write_byte(b'H')
 }
 
 // Move cursor up by n lines.  ESC [ n A
-pub fn move_up(w: &BufferedWriter, n: u32) {
+pub fn move_up(w: Writer, n: u32) {
     write_csi(w)
     write_uint(w, n)
-    w.write(b'A')
+    w.write_byte(b'A')
 }
 
 // Move cursor down by n lines.  ESC [ n B
-pub fn move_down(w: &BufferedWriter, n: u32) {
+pub fn move_down(w: Writer, n: u32) {
     write_csi(w)
     write_uint(w, n)
-    w.write(b'B')
+    w.write_byte(b'B')
 }
 
 // Move cursor right by n columns.  ESC [ n C
-pub fn move_right(w: &BufferedWriter, n: u32) {
+pub fn move_right(w: Writer, n: u32) {
     write_csi(w)
     write_uint(w, n)
-    w.write(b'C')
+    w.write_byte(b'C')
 }
 
 // Move cursor left by n columns.  ESC [ n D
-pub fn move_left(w: &BufferedWriter, n: u32) {
+pub fn move_left(w: Writer, n: u32) {
     write_csi(w)
     write_uint(w, n)
-    w.write(b'D')
+    w.write_byte(b'D')
 }
 
 // Save cursor position.  ESC [ s
-pub fn save_cursor(w: &BufferedWriter) {
+pub fn save_cursor(w: Writer) {
     write_csi(w)
-    w.write(b's')
+    w.write_byte(b's')
 }
 
 // Restore cursor position.  ESC [ u
-pub fn restore_cursor(w: &BufferedWriter) {
+pub fn restore_cursor(w: Writer) {
     write_csi(w)
-    w.write(b'u')
+    w.write_byte(b'u')
 }
 
 // Hide cursor.  ESC [ ? 25 l
-pub fn hide_cursor(w: &BufferedWriter) {
+pub fn hide_cursor(w: Writer) {
     write_csi(w)
-    w.write("?25l")
+    w.write_str("?25l")
 }
 
 // Show cursor.  ESC [ ? 25 h
-pub fn show_cursor(w: &BufferedWriter) {
+pub fn show_cursor(w: Writer) {
     write_csi(w)
-    w.write("?25h")
+    w.write_str("?25h")
 }
 
 // =============================================================================
@@ -119,7 +119,7 @@ pub type Color = enum {
     Default = 9
 }
 
-fn write_color_code(w: &BufferedWriter, color: Color) {
+fn write_color_code(w: Writer, color: Color) {
     const code: u32 = color match {
         Black => 0,
         Red => 1,
@@ -135,35 +135,35 @@ fn write_color_code(w: &BufferedWriter, color: Color) {
 }
 
 // Set foreground color.  ESC [ 3{c} m
-pub fn set_fg(w: &BufferedWriter, color: Color) {
+pub fn set_fg(w: Writer, color: Color) {
     write_csi(w)
-    w.write(b'3')
+    w.write_byte(b'3')
     write_color_code(w, color)
-    w.write(b'm')
+    w.write_byte(b'm')
 }
 
 // Set background color.  ESC [ 4{c} m
-pub fn set_bg(w: &BufferedWriter, color: Color) {
+pub fn set_bg(w: Writer, color: Color) {
     write_csi(w)
-    w.write(b'4')
+    w.write_byte(b'4')
     write_color_code(w, color)
-    w.write(b'm')
+    w.write_byte(b'm')
 }
 
 // Set bright foreground color.  ESC [ 9{c} m
-pub fn set_bright_fg(w: &BufferedWriter, color: Color) {
+pub fn set_bright_fg(w: Writer, color: Color) {
     write_csi(w)
-    w.write(b'9')
+    w.write_byte(b'9')
     write_color_code(w, color)
-    w.write(b'm')
+    w.write_byte(b'm')
 }
 
 // Set bright background color.  ESC [ 10{c} m
-pub fn set_bright_bg(w: &BufferedWriter, color: Color) {
+pub fn set_bright_bg(w: Writer, color: Color) {
     write_csi(w)
     write_uint(w, 10)
     write_color_code(w, color)
-    w.write(b'm')
+    w.write_byte(b'm')
 }
 
 // =============================================================================
@@ -182,7 +182,7 @@ pub type Style = enum {
 }
 
 // Enable a text style.  ESC [ {code} m
-pub fn set_style(w: &BufferedWriter, style: Style) {
+pub fn set_style(w: Writer, style: Style) {
     const code: u32 = style match {
         Bold => 1,
         Dim => 2,
@@ -195,14 +195,14 @@ pub fn set_style(w: &BufferedWriter, style: Style) {
     }
     write_csi(w)
     write_uint(w, code)
-    w.write(b'm')
+    w.write_byte(b'm')
 }
 
 // Reset all attributes (color + style).  ESC [ 0 m
-pub fn reset(w: &BufferedWriter) {
+pub fn reset(w: Writer) {
     write_csi(w)
-    w.write(b'0')
-    w.write(b'm')
+    w.write_byte(b'0')
+    w.write_byte(b'm')
 }
 
 // =============================================================================
@@ -210,39 +210,39 @@ pub fn reset(w: &BufferedWriter) {
 // =============================================================================
 
 // Clear entire screen.  ESC [ 2 J
-pub fn clear_screen(w: &BufferedWriter) {
+pub fn clear_screen(w: Writer) {
     write_csi(w)
-    w.write("2J")
+    w.write_str("2J")
 }
 
 // Clear from cursor to end of screen.  ESC [ 0 J
-pub fn clear_below(w: &BufferedWriter) {
+pub fn clear_below(w: Writer) {
     write_csi(w)
-    w.write("0J")
+    w.write_str("0J")
 }
 
 // Clear from cursor to beginning of screen.  ESC [ 1 J
-pub fn clear_above(w: &BufferedWriter) {
+pub fn clear_above(w: Writer) {
     write_csi(w)
-    w.write("1J")
+    w.write_str("1J")
 }
 
 // Clear entire line.  ESC [ 2 K
-pub fn clear_line(w: &BufferedWriter) {
+pub fn clear_line(w: Writer) {
     write_csi(w)
-    w.write("2K")
+    w.write_str("2K")
 }
 
 // Clear from cursor to end of line.  ESC [ 0 K
-pub fn clear_line_right(w: &BufferedWriter) {
+pub fn clear_line_right(w: Writer) {
     write_csi(w)
-    w.write("0K")
+    w.write_str("0K")
 }
 
 // Clear from cursor to beginning of line.  ESC [ 1 K
-pub fn clear_line_left(w: &BufferedWriter) {
+pub fn clear_line_left(w: Writer) {
     write_csi(w)
-    w.write("1K")
+    w.write_str("1K")
 }
 
 // =============================================================================
@@ -256,30 +256,9 @@ const ESC: u8 = 27
 // =============================================================================
 
 // Write CSI (Control Sequence Introducer): ESC [
-fn write_csi(w: &BufferedWriter) {
-    w.write(ESC)
-    w.write(b'[')
-}
-
-// Write an unsigned integer as decimal digits to a BufferedWriter.
-fn write_uint(w: &BufferedWriter, value: u32) {
-    if value == 0 {
-        w.write(b'0')
-        return
-    }
-
-    let buf = [0u8; 10]
-    let pos: usize = 10
-    let v = value
-
-    loop {
-        if v == 0 { break }
-        pos = pos - 1
-        buf[pos] = b'0' + (v % 10) as u8
-        v = v / 10
-    }
-
-    w.write(buf[pos..])
+fn write_csi(w: Writer) {
+    w.write_byte(ESC)
+    w.write_byte(b'[')
 }
 
 // =============================================================================
@@ -288,11 +267,10 @@ fn write_uint(w: &BufferedWriter, value: u32) {
 
 test "escape codes" {
     let sb = string_builder(64)
-    let w = sb.buffered_writer()
+    let w = sb.writer()
 
     // move_to(3, 5) -> ESC [ 3 ; 5 H
-    move_to(&w, 3, 5)
-    w.flush()
+    move_to(w, 3, 5)
     let view = sb.as_view()
     assert_eq(view.len as i32, 6, "move_to len")
     assert_eq(view[0], 27u8, "ESC")
@@ -304,8 +282,7 @@ test "escape codes" {
     sb.clear()
 
     // reset -> ESC [ 0 m
-    reset(&w)
-    w.flush()
+    reset(w)
     let view2 = sb.as_view()
     assert_eq(view2.len as i32, 4, "reset len")
     assert_eq(view2[0], 27u8, "ESC")
@@ -315,8 +292,7 @@ test "escape codes" {
     sb.clear()
 
     // move_up(1) -> ESC [ 1 A
-    move_up(&w, 1)
-    w.flush()
+    move_up(w, 1)
     let view3 = sb.as_view()
     assert_eq(view3.len as i32, 4, "move_up len")
     assert_eq(view3[2], 49u8, "1")
@@ -324,8 +300,7 @@ test "escape codes" {
     sb.clear()
 
     // clear_screen -> ESC [ 2 J
-    clear_screen(&w)
-    w.flush()
+    clear_screen(w)
     let view4 = sb.as_view()
     assert_eq(view4.len as i32, 4, "clear_screen len")
     assert_eq(view4[2], 50u8, "2")
@@ -336,11 +311,10 @@ test "escape codes" {
 
 test "colors" {
     let sb = string_builder(64)
-    let w = sb.buffered_writer()
+    let w = sb.writer()
 
     // set_fg(Color.Red) -> ESC [ 3 1 m
-    set_fg(&w, Color.Red)
-    w.flush()
+    set_fg(w, Color.Red)
     let view = sb.as_view()
     assert_eq(view.len as i32, 5, "set_fg len")
     assert_eq(view[0], 27u8, "ESC")
@@ -351,8 +325,7 @@ test "colors" {
     sb.clear()
 
     // set_bg(Color.Blue) -> ESC [ 4 4 m
-    set_bg(&w, Color.Blue)
-    w.flush()
+    set_bg(w, Color.Blue)
     let view2 = sb.as_view()
     assert_eq(view2.len as i32, 5, "set_bg len")
     assert_eq(view2[2], 52u8, "4")
@@ -361,8 +334,7 @@ test "colors" {
     sb.clear()
 
     // set_style(Style.Bold) -> ESC [ 1 m
-    set_style(&w, Style.Bold)
-    w.flush()
+    set_style(w, Style.Bold)
     let view3 = sb.as_view()
     assert_eq(view3.len as i32, 4, "set_style len")
     assert_eq(view3[2], 49u8, "1")
@@ -370,8 +342,7 @@ test "colors" {
     sb.clear()
 
     // set_fg(Color.Default) -> ESC [ 3 9 m
-    set_fg(&w, Color.Default)
-    w.flush()
+    set_fg(w, Color.Default)
     let view4 = sb.as_view()
     assert_eq(view4.len as i32, 5, "set_fg default len")
     assert_eq(view4[2], 51u8, "3")

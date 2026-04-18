@@ -9,6 +9,7 @@
 
 import std.mem
 import std.interface
+import std.conv
 
 // Writer: raw write interface.
 // Returns the number of bytes actually written.
@@ -25,6 +26,37 @@ pub fn write_byte(self: Writer, b: u8) {
 // Write a string as raw bytes.
 pub fn write_str(self: Writer, s: String) {
     self.write(s.as_raw_bytes())
+}
+
+// Write an unsigned integer as decimal digits.
+pub fn write_uint(self: Writer, value: u64) {
+    let buf = [0u8; 20]
+    const n = format_u64(value, buf).unwrap()
+    self.write(buf[0..n])
+}
+
+pub fn write_uint(self: Writer, value: u32) { self.write_uint(value as u64) }
+pub fn write_uint(self: Writer, value: usize) { self.write_uint(value as u64) }
+
+// Write a signed integer as decimal digits. Emits a leading '-' for negatives.
+pub fn write_int(self: Writer, value: i64) {
+    let buf = [0u8; 21]
+    const n = format_i64(value, buf).unwrap()
+    self.write(buf[0..n])
+}
+
+pub fn write_int(self: Writer, value: i32) { self.write_int(value as i64) }
+pub fn write_int(self: Writer, value: isize) { self.write_int(value as i64) }
+
+// Write an f64 as decimal digits with up to 6 fractional digits, trailing
+// zeros trimmed. For control over width, precision, or alignment, format
+// through a StringBuilder instead.
+pub fn write_f64(self: Writer, value: f64) {
+    // 48 bytes covers `format_f64` at the default precision of 6 (needs 29)
+    // with slack for any reasonable precision bump.
+    let buf = [0u8; 48]
+    const n = format_f64(value, buf).unwrap()
+    self.write(buf[0..n])
 }
 
 // Buffered writer over caller-provided storage.

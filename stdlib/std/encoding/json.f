@@ -159,22 +159,6 @@ pub fn deinit(self: &JsonValue) {
 // Writer helpers
 // =============================================================================
 
-fn write_str(w: Writer, s: String) {
-    w.write(slice_from_raw_parts(s.ptr, s.len))
-}
-
-fn write_byte(w: Writer, b: u8) {
-    let byte = b
-    w.write(slice_from_raw_parts(&byte, 1))
-}
-
-fn write_f64(w: Writer, v: f64) {
-    let tmp = string_builder(32)
-    tmp.append(v)
-    w.write(slice_from_raw_parts(tmp.ptr, tmp.len))
-    tmp.deinit()
-}
-
 fn write_escaped_string(s: String, w: Writer) {
     for i in 0..s.len {
         const c = s[i]

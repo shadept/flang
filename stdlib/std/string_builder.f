@@ -392,113 +392,49 @@ fn parse_float_spec(spec: String) FloatFormatSpec {
     return result
 }
 
-fn append_float_impl(sb: &StringBuilder, val: f64, spec: String) {
-    const fmt = parse_float_spec(spec)
-
-    // Format into a temp buffer: sign + digits + '.' + frac digits
-    let tmp = [0u8; 80]
-    let len = 0usize
-
-    let abs_val = val
-    let negative = false
-    if val < 0.0 {
-        negative = true
-        abs_val = 0.0 - val
+// Emit content (in tmp[0..len]) with alignment/padding per fmt. Mirrors
+// `apply_int_padding` — the sign-aware zero-pad branch handles "-003.14".
+fn apply_float_padding(sb: &StringBuilder, tmp: u8[], len: usize, fmt: &FloatFormatSpec) {
+    if fmt.width <= len {
+        sb.append_bytes(tmp[0..len])
+        return
     }
+    const pad_count = fmt.width - len
 
-    // Round: add 0.5 * 10^-precision so truncation produces correct rounding
-    let round = 0.5
-    let r = 0usize
-    loop {
-        if r >= fmt.precision { break }
-        round = round / 10.0
-        r = r + 1
-    }
-    abs_val = abs_val + round
-
-    // Integer part into a small buffer
-    let int_part: u64 = abs_val as u64
-    let int_buf = [0u8; 21]
-    const int_len = format_u64(int_part, int_buf).unwrap()
-
-    // Fractional digits
-    let frac = abs_val - (int_part as f64)
-    let frac_buf = [0u8; 20]
-    let frac_len = 0usize
-    let i = 0usize
-    loop {
-        if i >= fmt.precision { break }
-        frac = frac * 10.0
-        let digit: u64 = frac as u64
-        frac_buf[frac_len] = (48u64 + digit) as u8
-        frac_len = frac_len + 1
-        frac = frac - (digit as f64)
-        i = i + 1
-    }
-
-    // Trim trailing zeros only when no explicit precision was given
-    if fmt.has_precision == false {
-        loop {
-            if frac_len == 0 { break }
-            if frac_buf[frac_len - 1] != b'0' { break }
-            frac_len = frac_len - 1
-        }
-    }
-
-    // Assemble into tmp: ['-'] int_digits ['.' frac_digits]
-    if negative {
-        tmp[len] = b'-'
-        len = len + 1
-    }
-    let j = 0usize
-    loop {
-        if j >= int_len { break }
-        tmp[len] = int_buf[j]
-        len = len + 1
-        j = j + 1
-    }
-    if frac_len > 0 {
-        tmp[len] = b'.'
-        len = len + 1
-        j = 0
-        loop {
-            if j >= frac_len { break }
-            tmp[len] = frac_buf[j]
-            len = len + 1
-            j = j + 1
-        }
-    }
-
-    // Apply width padding with alignment
-    if fmt.width > len {
-        const pad_count = fmt.width - len
-
-        if fmt.pad_zero and fmt.align == b'>' and negative {
-            // Zero-pad after sign: "-003.14"
+    if fmt.pad_zero and fmt.align == b'>' {
+        // Zero-pad after sign: "-003.14"
+        if len > 0 and tmp[0] == b'-' {
             sb.append_byte(b'-')
             repeat_fill(sb, b'0', pad_count)
             sb.append_bytes(tmp[1..len])
-        } else if fmt.align == b'<' {
-            sb.append_bytes(tmp[0..len])
-            repeat_fill(sb, fmt.fill, pad_count)
-        } else if fmt.align == b'^' {
-            const left = pad_count / 2
-            const right = pad_count - left
-            repeat_fill(sb, fmt.fill, left)
-            sb.append_bytes(tmp[0..len])
-            repeat_fill(sb, fmt.fill, right)
         } else {
-            // Right-align (default)
-            if fmt.pad_zero {
-                repeat_fill(sb, b'0', pad_count)
-            } else {
-                repeat_fill(sb, fmt.fill, pad_count)
-            }
+            repeat_fill(sb, b'0', pad_count)
             sb.append_bytes(tmp[0..len])
         }
+        return
+    }
+
+    if fmt.align == b'<' {
+        sb.append_bytes(tmp[0..len])
+        repeat_fill(sb, fmt.fill, pad_count)
+    } else if fmt.align == b'^' {
+        const left = pad_count / 2
+        const right = pad_count - left
+        repeat_fill(sb, fmt.fill, left)
+        sb.append_bytes(tmp[0..len])
+        repeat_fill(sb, fmt.fill, right)
     } else {
+        // Right-align (default)
+        repeat_fill(sb, fmt.fill, pad_count)
         sb.append_bytes(tmp[0..len])
     }
+}
+
+fn append_float_impl(sb: &StringBuilder, val: f64, spec: String) {
+    const fmt = parse_float_spec(spec)
+    let tmp = [0u8; 64]
+    const len = format_f64(val, tmp, fmt.precision, fmt.has_precision == false).unwrap()
+    apply_float_padding(sb, tmp, len, &fmt)
 }
 
 // =============================================================================
