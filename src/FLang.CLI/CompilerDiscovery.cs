@@ -76,7 +76,9 @@ public static class CompilerDiscovery
         if (selected.IsMsvc)
         {
             var objFilePath = Path.ChangeExtension(Path.GetFullPath(outputFilePath), ".obj");
-            var msvcArgs = new List<string> { "/nologo", "/Z7", "/WX" };
+            // /std:c11 enables <stdatomic.h> (used by stdlib/std/atomic.c). MSVC
+            // defaults to an older dialect where the C11 atomics header errors out.
+            var msvcArgs = new List<string> { "/nologo", "/Z7", "/WX", "/std:c11", "/experimental:c11atomics" };
             if (releaseBuild) msvcArgs.Add("/O2");
             if (compilerFlags != null) msvcArgs.AddRange(compilerFlags);
 
@@ -141,7 +143,9 @@ public static class CompilerDiscovery
     {
         if (selected.IsMsvc)
         {
-            var msvcArgs = new List<string> { "/nologo", "/Z7", "/WX", "/c" };
+            // /std:c11 keeps this in sync with the main compile+link args —
+            // companion .c files (e.g. stdlib/std/atomic.c) rely on it.
+            var msvcArgs = new List<string> { "/nologo", "/Z7", "/WX", "/std:c11", "/experimental:c11atomics", "/c" };
             if (releaseBuild) msvcArgs.Add("/O2");
             if (compilerFlags != null) msvcArgs.AddRange(compilerFlags);
             msvcArgs.Add($"/Fo\"{objPath}\"");
