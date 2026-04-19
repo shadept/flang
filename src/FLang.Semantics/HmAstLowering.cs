@@ -1657,6 +1657,8 @@ public class HmAstLowering
             NullPropagationExpressionNode nullProp => LowerNullPropagation(nullProp),
             LambdaExpressionNode lambda => LowerLambda(lambda),
             NamedArgumentExpressionNode na => LowerExpression(na.Value, expectedType),
+            InterpolatedStringExpressionNode interp when interp.DesugaredBlock != null
+                => LowerExpression(interp.DesugaredBlock, expectedType),
             ReturnNode ret => LowerReturnExpr(ret),
             BreakNode brk => LowerBreakExpr(brk),
             ContinueNode cont => LowerContinueExpr(cont),

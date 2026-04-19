@@ -16,6 +16,21 @@ When you discover a bug or limitation:
 
 ## Open Issues
 
+### Nested `$"..."` Leaks the Inner OwnedString
+
+**Status:** Open
+**Affected:** String interpolation (RFC-004) desugar
+
+`$"outer {$"inner"} end"` desugars the inner interp to a `string_builder().to_string()` expression whose result — an `OwnedString` temporary — is passed to the outer `append`. The temporary's buffer is never reclaimed because FLang has no value-destructor (Drop) mechanism today. Output is correct; memory is not. Same shape as any `sb.append(from_view(...))` call.
+
+**Workaround:** bind the inner to a `let` with explicit `defer deinit()`, or use form 3 (`$sb"..."`) to write directly into an outer builder.
+
+**Fix direction:** either (a) have the outer desugar allocate with a scope-tied allocator and skip per-temporary frees, or (b) introduce destructors for `OwnedString` (wider language change).
+
+**Test:** `tests/FLang.Tests/Harness/interpolation/nested_interp.f` (pins output, not memory).
+
+---
+
 ### Generic Tuple Types Leak TypeVars Across Call Sites
 
 **Status:** Open
@@ -140,17 +155,6 @@ Recursive enums containing generic containers (e.g., `enum Expr { Add(List(Expr)
 - Enum C codegen now emits `__attribute__((aligned(N)))` and `__pad[]` when payload alignment exceeds tag alignment
 
 **Tests:** `enum_recursive_via_list.f`, `struct_recursive_via_list.f`
-
----
-
-### json.f Cannot Compile Due to writer.f Duplicate Definitions
-
-**Status:** Open
-**Affected:** stdlib — `std/io/writer.f`, `std/encoding/json.f`
-
-`json.f` imports `writer.f`, which fails type checking with E2103 (duplicate definition of `write_byte` and `write_str`). This blocks all json.f compilation and testing. The recursive type layout issue that previously affected `JsonValue` is now fixed — the remaining blocker is the writer.f duplicate function problem.
-
-**Workaround:** None.
 
 ---
 

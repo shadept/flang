@@ -1812,6 +1812,9 @@ public class Parser
             case TokenKind.Fn:
                 return ParseLambdaExpression();
 
+            case TokenKind.Dollar:
+                return ParseInterpolatedString();
+
             default:
                 var errorToken = _currentToken;
                 SynchronizeExpression();
@@ -1828,6 +1831,144 @@ public class Parser
                 // Return a dummy literal to allow further parsing
                 return new IntegerLiteralNode(errorToken.Span, 0);
         }
+    }
+
+    /// <summary>
+    /// Parses an interpolated string expression per RFC-004. Three forms:
+    ///   $"..."            — build a fresh OwnedString
+    ///   $(args)"..."      — build with custom builder args (capacity/allocator)
+    ///   $ident"..."       — append into an existing StringBuilder/Writer
+    /// Segments and holes are produced as distinct token kinds by the lexer;
+    /// this method stitches them into an InterpolatedStringExpressionNode.
+    /// </summary>
+    private ExpressionNode ParseInterpolatedString()
+    {
+        var dollarToken = Eat(TokenKind.Dollar);
+        IdentifierExpressionNode? target = null;
+        List<ExpressionNode>? builderArgs = null;
+
+        // Disambiguate between the three forms based on the token adjacent to `$`.
+        if (_currentToken.Kind == TokenKind.InterpStringStart)
+        {
+            // Form 1: $"..." — nothing to consume, lexer already flipped into interp mode.
+        }
+        else if (_currentToken.Kind == TokenKind.OpenParenthesis)
+        {
+            // Form 2: $(args)"..." — parse builder args, then mark the lexer so
+            // the `"` immediately after `)` becomes an InterpStringStart.
+            Eat(TokenKind.OpenParenthesis);
+            builderArgs = ParseCallArguments();
+            _lexer.MarkNextStringInterp();
+            Eat(TokenKind.CloseParenthesis);
+        }
+        else if (_currentToken.Kind == TokenKind.Identifier)
+        {
+            // Form 3: $ident"..." — capture the target, mark, advance.
+            var identToken = _currentToken;
+            target = new IdentifierExpressionNode(identToken.Span, identToken.Text);
+            _lexer.MarkNextStringInterp();
+            Eat(TokenKind.Identifier);
+        }
+        else
+        {
+            _diagnostics.Add(Diagnostic.Error(
+                "expected `\"`, `(`, or identifier after `$`",
+                _currentToken.Span,
+                null,
+                "E1020"));
+            return new StringLiteralNode(dollarToken.Span, "");
+        }
+
+        if (_currentToken.Kind != TokenKind.InterpStringStart)
+        {
+            _diagnostics.Add(Diagnostic.Error(
+                "expected `\"` to begin interpolated string",
+                _currentToken.Span,
+                "no whitespace is allowed between `$`, `(...)`, or the target identifier and the opening `\"`",
+                "E1021"));
+            return new StringLiteralNode(dollarToken.Span, "");
+        }
+        Eat(TokenKind.InterpStringStart);
+
+        var parts = new List<InterpPart>();
+        while (_currentToken.Kind != TokenKind.InterpStringEnd &&
+               _currentToken.Kind != TokenKind.EndOfFile &&
+               _currentToken.Kind != TokenKind.BadToken)
+        {
+            if (_currentToken.Kind == TokenKind.InterpSegment)
+            {
+                var segToken = Eat(TokenKind.InterpSegment);
+                parts.Add(new InterpSegmentPart(segToken.Span, segToken.Text));
+                continue;
+            }
+
+            if (_currentToken.Kind == TokenKind.InterpHoleStart)
+            {
+                var holeStartToken = Eat(TokenKind.InterpHoleStart);
+                // Holes are full expressions. Reset _stopAtBrace so nested
+                // block/struct expressions don't mis-terminate here.
+                var savedStop = _stopAtBrace;
+                _stopAtBrace = false;
+                var expr = ParseExpression();
+                _stopAtBrace = savedStop;
+
+                string? spec = null;
+                if (_currentToken.Kind == TokenKind.InterpFormatSep)
+                {
+                    Eat(TokenKind.InterpFormatSep);
+                    if (_currentToken.Kind == TokenKind.InterpFormatSpec)
+                    {
+                        var specToken = Eat(TokenKind.InterpFormatSpec);
+                        spec = specToken.Text;
+                    }
+                    else
+                    {
+                        spec = "";
+                    }
+                }
+
+                if (_currentToken.Kind == TokenKind.InterpHoleEnd)
+                {
+                    Eat(TokenKind.InterpHoleEnd);
+                }
+                else
+                {
+                    _diagnostics.Add(Diagnostic.Error(
+                        "expected `}` to close interpolation hole",
+                        _currentToken.Span,
+                        null,
+                        "E1022"));
+                    break;
+                }
+
+                var holeSpan = SourceSpan.Combine(holeStartToken.Span, expr.Span);
+                parts.Add(new InterpExpressionPart(holeSpan, expr, spec));
+                continue;
+            }
+
+            _diagnostics.Add(Diagnostic.Error(
+                $"unexpected token in interpolated string",
+                _currentToken.Span,
+                null,
+                "E1023"));
+            break;
+        }
+
+        if (_currentToken.Kind == TokenKind.InterpStringEnd)
+        {
+            Eat(TokenKind.InterpStringEnd);
+        }
+        else
+        {
+            _diagnostics.Add(Diagnostic.Error(
+                "unterminated interpolated string",
+                dollarToken.Span,
+                null,
+                "E1024"));
+        }
+
+        var fullSpan = SourceSpan.Combine(dollarToken.Span, _previousToken.Span);
+        return new InterpolatedStringExpressionNode(fullSpan, target, builderArgs, parts);
     }
 
     private LambdaExpressionNode ParseLambdaExpression()

@@ -50,6 +50,7 @@ public partial class HmTypeChecker
             NullPropagationExpressionNode nullProp => InferNullPropagation(nullProp),
             AnonymousStructExpressionNode anon => InferAnonymousStruct(anon),
             NamedArgumentExpressionNode namedArg => InferExpression(namedArg.Value),
+            InterpolatedStringExpressionNode interp => InferInterpolation(interp),
             ReturnNode ret => InferReturn(ret),
             BreakNode => WellKnown.Never,
             ContinueNode => WellKnown.Never,
@@ -2744,5 +2745,184 @@ public partial class HmTypeChecker
 
         ReportError("Null propagation `?.` requires Option type", nullProp.Span);
         return _ctx.Engine.FreshVar();
+    }
+
+    // =========================================================================
+    // String interpolation (RFC-004) — desugar to StringBuilder calls
+    // =========================================================================
+
+    private int _interpCounter;
+
+    /// <summary>
+    /// Desugar a `$"..."` / `$(args)"..."` / `$sb"..."` expression into an
+    /// equivalent block that uses the existing StringBuilder API, then infer it.
+    /// Type inference, overload resolution, and the format-spec fallback (via
+    /// the generic `append(sb, val: $T, spec)` overload) are all free.
+    /// </summary>
+    private Type InferInterpolation(InterpolatedStringExpressionNode interp)
+    {
+        if (interp.TargetIdentifier != null)
+        {
+            return InferInterpolationIntoTarget(interp, interp.TargetIdentifier);
+        }
+
+        return InferInterpolationOwned(interp);
+    }
+
+    /// <summary>
+    /// Forms 1 and 2: build a fresh StringBuilder, append each part, then
+    /// `to_string()` it. `defer __sb.deinit()` ensures no leak on panic; on
+    /// the happy path `to_string()` zeroes cap so deinit is a no-op.
+    /// </summary>
+    private Type InferInterpolationOwned(InterpolatedStringExpressionNode interp)
+    {
+        var span = interp.Span;
+        var sbName = $"__interp_sb_{System.Threading.Interlocked.Increment(ref _interpCounter)}";
+
+        // Resolve the builder-constructor args (Form 2 with single positional
+        // allocator arg is rewritten as a named arg via type-directed dispatch).
+        var builderArgs = ResolveBuilderArgs(interp.BuilderArgs, span);
+
+        var statements = new List<StatementNode>();
+
+        // let __sb = string_builder(<args>)
+        var builderCall = new CallExpressionNode(span, "string_builder", builderArgs);
+        var sbDecl = new VariableDeclarationNode(span, span, sbName, type: null, initializer: builderCall);
+        statements.Add(sbDecl);
+
+        // defer __sb.deinit()
+        var sbIdentForDefer = new IdentifierExpressionNode(span, sbName);
+        var deinitCall = new CallExpressionNode(
+            span,
+            functionName: $"{sbName}.deinit",
+            arguments: new List<ExpressionNode>(),
+            ufcsReceiver: sbIdentForDefer,
+            methodName: "deinit");
+        statements.Add(new DeferStatementNode(span, deinitCall));
+
+        // One __sb.append(...) per non-empty segment / each hole.
+        foreach (var part in interp.Parts)
+        {
+            var appendStmt = BuildAppendStatement(sbName, part);
+            if (appendStmt != null)
+                statements.Add(appendStmt);
+        }
+
+        // Trailing: __sb.to_string()
+        var sbIdentForResult = new IdentifierExpressionNode(span, sbName);
+        var toStringCall = new CallExpressionNode(
+            span,
+            functionName: $"{sbName}.to_string",
+            arguments: new List<ExpressionNode>(),
+            ufcsReceiver: sbIdentForResult,
+            methodName: "to_string");
+
+        var block = new BlockExpressionNode(span, statements, toStringCall);
+        interp.DesugaredBlock = block;
+        return InferExpression(block);
+    }
+
+    /// <summary>
+    /// Form 3: `$sb"..."` — append each part into the existing target. The
+    /// block has no trailing expression and evaluates to void.
+    /// </summary>
+    private Type InferInterpolationIntoTarget(
+        InterpolatedStringExpressionNode interp,
+        IdentifierExpressionNode target)
+    {
+        var span = interp.Span;
+        var statements = new List<StatementNode>();
+
+        foreach (var part in interp.Parts)
+        {
+            var appendStmt = BuildAppendStatementOnTarget(target, part);
+            if (appendStmt != null)
+                statements.Add(appendStmt);
+        }
+
+        var block = new BlockExpressionNode(span, statements, trailingExpression: null);
+        interp.DesugaredBlock = block;
+        return InferExpression(block);
+    }
+
+    /// <summary>
+    /// Build `__sb.append(<part>)` as a statement. Empty segments produce null
+    /// (skipped — the empty-segment optimization from the RFC).
+    /// </summary>
+    private StatementNode? BuildAppendStatement(string sbName, InterpPart part)
+    {
+        var receiver = new IdentifierExpressionNode(part.Span, sbName);
+        return BuildAppendStatementCore(receiver, $"{sbName}.append", part);
+    }
+
+    private StatementNode? BuildAppendStatementOnTarget(IdentifierExpressionNode target, InterpPart part)
+    {
+        var receiver = new IdentifierExpressionNode(target.Span, target.Name);
+        return BuildAppendStatementCore(receiver, $"{target.Name}.append", part);
+    }
+
+    private StatementNode? BuildAppendStatementCore(
+        IdentifierExpressionNode receiver,
+        string syntheticName,
+        InterpPart part)
+    {
+        switch (part)
+        {
+            case InterpSegmentPart seg:
+            {
+                if (seg.Text.Length == 0) return null; // skip no-op appends
+                var literal = new StringLiteralNode(seg.Span, seg.Text);
+                var call = new CallExpressionNode(
+                    seg.Span,
+                    syntheticName,
+                    new List<ExpressionNode> { literal },
+                    ufcsReceiver: receiver,
+                    methodName: "append");
+                return new ExpressionStatementNode(seg.Span, call);
+            }
+            case InterpExpressionPart expr:
+            {
+                var args = new List<ExpressionNode> { expr.Expression };
+                if (expr.FormatSpec != null)
+                {
+                    args.Add(new StringLiteralNode(expr.Span, expr.FormatSpec));
+                }
+                var call = new CallExpressionNode(
+                    expr.Span,
+                    syntheticName,
+                    args,
+                    ufcsReceiver: receiver,
+                    methodName: "append");
+                return new ExpressionStatementNode(expr.Span, call);
+            }
+            default:
+                return null;
+        }
+    }
+
+    /// <summary>
+    /// Resolve builder-constructor args for Form 2. `string_builder` is
+    /// `(capacity: usize = 0, allocator: &Allocator? = null)` — a lone `&expr`
+    /// arg routes to the `allocator=` slot; anything else stays positional
+    /// (so integer literals land in `capacity`). Callers wanting the
+    /// allocator path for a non-AddressOf expression must write
+    /// `$(allocator=x)"..."` explicitly, matching idiomatic stdlib usage.
+    /// </summary>
+    private List<ExpressionNode> ResolveBuilderArgs(List<ExpressionNode>? builderArgs, SourceSpan span)
+    {
+        if (builderArgs == null || builderArgs.Count == 0)
+            return new List<ExpressionNode>();
+
+        if (builderArgs.Count != 1 || builderArgs[0] is NamedArgumentExpressionNode)
+            return new List<ExpressionNode>(builderArgs);
+
+        var soleArg = builderArgs[0];
+        if (soleArg is AddressOfExpressionNode)
+        {
+            var named = new NamedArgumentExpressionNode(soleArg.Span, soleArg.Span, "allocator", soleArg);
+            return new List<ExpressionNode> { named };
+        }
+
+        return new List<ExpressionNode> { soleArg };
     }
 }

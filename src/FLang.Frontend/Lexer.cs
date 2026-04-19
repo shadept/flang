@@ -21,6 +21,47 @@ public class Lexer(Source source, int fileId)
     private int _start;
     private int _line;
 
+    // Interpolated string state (RFC-004). Each frame tracks one level of an
+    // active `$"..."`. Nested interp strings push new frames.
+    private sealed class InterpFrame
+    {
+        public bool InSegment;      // true = lexing segment text between holes
+        public bool InFormatSpec;   // true = lexing raw format-spec text after `:`
+        public int BraceDepth;      // `{` depth inside the current hole
+        public int ParenDepth;      // `(` depth inside the current hole
+        public int BracketDepth;    // `[` depth inside the current hole
+
+        public InterpFrame Clone() => new()
+        {
+            InSegment = InSegment,
+            InFormatSpec = InFormatSpec,
+            BraceDepth = BraceDepth,
+            ParenDepth = ParenDepth,
+            BracketDepth = BracketDepth
+        };
+    }
+
+    private readonly List<InterpFrame> _interpStack = new();
+
+    // When set, the next `"` begins an interpolated string rather than a normal
+    // string literal. Set inline by the lexer on `$"` (no whitespace) and by the
+    // parser before eating the prefix token for `$(args)"` / `$ident"` forms.
+    private bool _markNextStringInterp;
+
+    // Up to one pending token emitted ahead (e.g. after a segment token we
+    // queue the hole-start, or after a format-spec we queue the hole-end).
+    private Token? _pendingToken;
+
+    /// <summary>
+    /// Signal that the next `"` should start an interpolated string. Called by
+    /// the parser immediately before `Eat(...)` of the closing `)` or the
+    /// identifier in `$(args)"..."` and `$ident"..."` forms. Cleared on the next
+    /// call to <see cref="NextToken"/> whether or not a `"` is actually found.
+    /// </summary>
+    public void MarkNextStringInterp()
+    {
+        _markNextStringInterp = true;
+    }
 
     /// <summary>
     /// Advances the lexer to the next token in the source stream.
@@ -29,7 +70,59 @@ public class Lexer(Source source, int fileId)
     /// <returns>The next token from the source code, or an EndOfFile token if the end is reached.</returns>
     public Token NextToken()
     {
+        // Deliver any queued token first (used to emit two tokens for one
+        // source event, e.g. InterpSegment followed by InterpHoleStart).
+        if (_pendingToken is not null)
+        {
+            var pending = _pendingToken;
+            _pendingToken = null;
+            return pending;
+        }
+
         var text = _source.Text.AsSpan();
+
+        // Dispatch on active interp frame. Segment and format-spec modes have
+        // their own scanners; hole mode falls through to normal lexing and
+        // post-processes the token to intercept hole-closing `}` and `:`.
+        if (_interpStack.Count > 0)
+        {
+            var topFrame = _interpStack[^1];
+            if (topFrame.InSegment) return LexSegment(text, topFrame);
+            if (topFrame.InFormatSpec) return LexFormatSpec(text, topFrame);
+        }
+
+        // `$"` — the lexer emitted Dollar adjacent to `"`, set the flag, and now
+        // needs to begin the interp string. `$(args)"` / `$ident"` — parser has
+        // set the flag after eating the prefix. Either way, next char must be
+        // `"` with no intervening whitespace; otherwise the flag is discarded
+        // and the caller gets a parse error on the mismatched token kinds.
+        if (_markNextStringInterp)
+        {
+            _markNextStringInterp = false;
+            if (_position < text.Length && text[_position] == '"')
+            {
+                return BeginInterpString();
+            }
+        }
+
+        var baseToken = LexNormalToken(text);
+
+        // In hole mode, track bracket depth and intercept the hole-closing
+        // `}` and format-spec-opening `:` before they reach the parser.
+        if (_interpStack.Count > 0)
+        {
+            var frame = _interpStack[^1];
+            if (!frame.InSegment && !frame.InFormatSpec)
+            {
+                return AdjustForHoleMode(baseToken, frame);
+            }
+        }
+
+        return baseToken;
+    }
+
+    private Token LexNormalToken(ReadOnlySpan<char> text)
+    {
         char ch;
 
         // Skip all whitespace and single-line comments up-front
@@ -323,7 +416,7 @@ public class Lexer(Source source, int fileId)
             '>' => CreateToken(TokenKind.GreaterThan),
             '.' => CreateToken(TokenKind.Dot),
             '#' => CreateToken(TokenKind.Hash),
-            '$' => CreateToken(TokenKind.Dollar),
+            '$' => CreateDollarToken(text),
             '!' => CreateToken(TokenKind.Bang),
             '~' => CreateToken(TokenKind.Tilde),
             _ => CreateToken(TokenKind.BadToken)
@@ -346,20 +439,241 @@ public class Lexer(Source source, int fileId)
     /// <returns>The next token that would be returned by <see cref="NextToken"/>.</returns>
     public Token PeekNextToken()
     {
-        // Save current state
+        // Save full state (including interp-mode bookkeeping — NextToken may
+        // push/pop frames, set pending tokens, and mutate frame depths).
         var savedPosition = _position;
         var savedStart = _start;
         var savedLine = _line;
+        var savedMark = _markNextStringInterp;
+        var savedPending = _pendingToken;
+        var savedStackDepth = _interpStack.Count;
+        var savedFrames = new InterpFrame[savedStackDepth];
+        for (var i = 0; i < savedStackDepth; i++)
+            savedFrames[i] = _interpStack[i].Clone();
 
-        // Get next token
         var token = NextToken();
 
-        // Restore state
         _position = savedPosition;
         _start = savedStart;
         _line = savedLine;
+        _markNextStringInterp = savedMark;
+        _pendingToken = savedPending;
+        _interpStack.Clear();
+        _interpStack.AddRange(savedFrames);
 
         return token;
+    }
+
+    /// <summary>
+    /// Emit the Dollar token and, if the very next character is `"`, set the
+    /// interp-start flag so the next NextToken() call enters segment mode.
+    /// Strict adjacency (no intervening whitespace) prevents accidental interp
+    /// triggering from bare `$` in other contexts.
+    /// </summary>
+    private Token CreateDollarToken(ReadOnlySpan<char> text)
+    {
+        var token = CreateToken(TokenKind.Dollar);
+        if (_position < text.Length && text[_position] == '"')
+        {
+            _markNextStringInterp = true;
+        }
+        return token;
+    }
+
+    /// <summary>
+    /// Consume the opening `"` of an interpolated string, push a new segment-mode
+    /// frame, and return the InterpStringStart token.
+    /// </summary>
+    private Token BeginInterpString()
+    {
+        _start = _position;
+        _position++; // consume `"`
+        _interpStack.Add(new InterpFrame { InSegment = true });
+        return CreateToken(TokenKind.InterpStringStart);
+    }
+
+    /// <summary>
+    /// Scan a segment: text between interp boundaries. Emits InterpSegment and
+    /// (depending on what terminated it) queues InterpHoleStart or InterpStringEnd.
+    /// Handles normal string escapes plus segment-only `{{` / `}}` doubling.
+    /// </summary>
+    private Token LexSegment(ReadOnlySpan<char> text, InterpFrame frame)
+    {
+        _start = _position;
+        var sb = new StringBuilder();
+
+        while (_position < text.Length)
+        {
+            var c = text[_position];
+
+            if (c == '"')
+            {
+                // End of the interpolated string. Emit segment first, queue end.
+                var segSpan = CreateSpan();
+                var segText = sb.ToString();
+                _start = _position;
+                _position++; // consume `"`
+                var endToken = new Token(TokenKind.InterpStringEnd, CreateSpan(), "\"");
+                // Pop this interp frame.
+                _interpStack.RemoveAt(_interpStack.Count - 1);
+                _pendingToken = endToken;
+                return new Token(TokenKind.InterpSegment, segSpan, segText);
+            }
+
+            if (c == '{')
+            {
+                if (_position + 1 < text.Length && text[_position + 1] == '{')
+                {
+                    sb.Append('{');
+                    _position += 2;
+                    continue;
+                }
+                // Start of a hole. Flush segment, queue hole-start, switch to hole mode.
+                var segSpan = CreateSpan();
+                var segText = sb.ToString();
+                _start = _position;
+                _position++; // consume `{`
+                var holeStartToken = new Token(TokenKind.InterpHoleStart, CreateSpan(), "{");
+                frame.InSegment = false;
+                frame.BraceDepth = 0;
+                frame.ParenDepth = 0;
+                frame.BracketDepth = 0;
+                _pendingToken = holeStartToken;
+                return new Token(TokenKind.InterpSegment, segSpan, segText);
+            }
+
+            if (c == '}')
+            {
+                if (_position + 1 < text.Length && text[_position + 1] == '}')
+                {
+                    sb.Append('}');
+                    _position += 2;
+                    continue;
+                }
+                // Bare `}` in a segment is an error — treated as a BadToken so
+                // the parser/diagnostics can report it.
+                _start = _position;
+                _position++;
+                return CreateTokenWithValue(TokenKind.BadToken, "}");
+            }
+
+            if (c == '\\' && _position + 1 < text.Length)
+            {
+                _position++;
+                var escChar = text[_position];
+                if (escChar == 'u')
+                {
+                    _position++;
+                    var cp = ReadUnicodeEscape(text);
+                    if (cp < 0)
+                        return CreateTokenWithValue(TokenKind.BadToken, "");
+                    sb.Append(char.ConvertFromUtf32(cp));
+                    continue;
+                }
+                var escaped = escChar switch
+                {
+                    'n' => '\n',
+                    't' => '\t',
+                    'r' => '\r',
+                    '\\' => '\\',
+                    '"' => '"',
+                    '0' => '\0',
+                    _ => escChar
+                };
+                sb.Append(escaped);
+                _position++;
+                continue;
+            }
+
+            if (c == '\n') _line++;
+            sb.Append(c);
+            _position++;
+        }
+
+        // EOF with unterminated segment.
+        _interpStack.Clear();
+        return CreateTokenWithValue(TokenKind.BadToken, "");
+    }
+
+    /// <summary>
+    /// Scan a format spec: raw characters between `:` and the matching `}` of
+    /// the current hole. No escape handling, no parsing. Emits InterpFormatSpec
+    /// and queues InterpHoleEnd for the closing `}`.
+    /// </summary>
+    private Token LexFormatSpec(ReadOnlySpan<char> text, InterpFrame frame)
+    {
+        _start = _position;
+        while (_position < text.Length && text[_position] != '}' && text[_position] != '"')
+        {
+            if (text[_position] == '\n') _line++;
+            _position++;
+        }
+
+        if (_position >= text.Length || text[_position] == '"')
+        {
+            // Unterminated hole — bail out.
+            _interpStack.Clear();
+            return CreateTokenWithValue(TokenKind.BadToken, "");
+        }
+
+        var specText = text[_start.._position].ToString();
+        var specSpan = CreateSpan();
+
+        _start = _position;
+        _position++; // consume `}`
+        var holeEndToken = new Token(TokenKind.InterpHoleEnd, CreateSpan(), "}");
+        frame.InFormatSpec = false;
+        frame.InSegment = true;
+        _pendingToken = holeEndToken;
+
+        return new Token(TokenKind.InterpFormatSpec, specSpan, specText);
+    }
+
+    /// <summary>
+    /// Track bracket depth and intercept the `}` that closes the current hole
+    /// and the `:` that starts a format spec. Everything else falls through as
+    /// the lexer emitted it.
+    /// </summary>
+    private Token AdjustForHoleMode(Token token, InterpFrame frame)
+    {
+        switch (token.Kind)
+        {
+            case TokenKind.OpenBrace:
+                frame.BraceDepth++;
+                return token;
+            case TokenKind.OpenParenthesis:
+                frame.ParenDepth++;
+                return token;
+            case TokenKind.OpenBracket:
+                frame.BracketDepth++;
+                return token;
+            case TokenKind.CloseBrace:
+                if (frame.BraceDepth == 0)
+                {
+                    // This `}` closes the current hole.
+                    frame.InSegment = true;
+                    return new Token(TokenKind.InterpHoleEnd, token.Span, "}");
+                }
+                frame.BraceDepth--;
+                return token;
+            case TokenKind.CloseParenthesis:
+                if (frame.ParenDepth > 0) frame.ParenDepth--;
+                return token;
+            case TokenKind.CloseBracket:
+                if (frame.BracketDepth > 0) frame.BracketDepth--;
+                return token;
+            case TokenKind.Colon:
+                if (frame.BraceDepth == 0 && frame.ParenDepth == 0 && frame.BracketDepth == 0)
+                {
+                    // Format-spec separator. Switch mode; the raw spec and
+                    // closing `}` are lexed by LexFormatSpec on the next call.
+                    frame.InFormatSpec = true;
+                    return new Token(TokenKind.InterpFormatSep, token.Span, ":");
+                }
+                return token;
+            default:
+                return token;
+        }
     }
 
     /// <summary>

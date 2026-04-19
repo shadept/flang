@@ -242,6 +242,70 @@ pub fn main() i32 {
 
 ---
 
+### E1020: Invalid Interpolation Prefix
+
+`$` in expression position must be immediately followed by `"`, `(`, or an identifier to form a string interpolation (RFC-004). Anything else is a syntax error.
+
+```flang
+pub fn main() i32 {
+    let bad = $123"bad"  // E1020: expected `"`, `(`, or identifier after `$`
+    return 0
+}
+```
+
+#### Solution
+
+Write one of the valid forms: `$"..."`, `$(args)"..."`, or `$ident"..."`. No whitespace is allowed between `$` and its suffix.
+
+---
+
+### E1021: Missing Opening Quote in Interpolation
+
+After `$ident` or `$(args)`, the next token must be `"` with no intervening whitespace. This diagnoses cases where the interpolation prefix is not followed by a string.
+
+```flang
+pub fn main() i32 {
+    let sb = string_builder()
+    $sb 42            // E1021: expected `"` to begin interpolated string
+    return 0
+}
+```
+
+---
+
+### E1022: Unterminated Interpolation Hole
+
+A `{expr...` inside an interpolated string was not closed with `}`.
+
+```flang
+pub fn main() i32 {
+    let name = "x"
+    let bad = $"{name"   // E1022: expected `}` to close interpolation hole
+    return 0
+}
+```
+
+---
+
+### E1023: Unexpected Token in Interpolated String
+
+The lexer produced a token that isn't a segment, hole-start, or string-end inside an interpolation. Usually caused by a bare `}` in a segment (use `}}` to emit a literal `}`).
+
+---
+
+### E1024: Unterminated Interpolated String
+
+An interpolated string ran to EOF without a closing `"`.
+
+```flang
+pub fn main() i32 {
+    let bad = $"hello   // E1024: unterminated interpolated string
+    return 0
+}
+```
+
+---
+
 ## E2XXX: Semantic Analysis Errors
 
 ### E2001: Cannot Infer Type

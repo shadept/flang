@@ -49,6 +49,27 @@ If something is not listed here, it does not exist in FLang.
 
 Escape sequences: `\n` `\t` `\r` `\\` `\"` `\0`
 
+## String Interpolation
+
+Prefix a string with `$` to embed expressions. Three forms:
+
+```
+$"hello {name}"              // OwnedString via fresh StringBuilder (global allocator)
+$(64)"hi {who}"              // fresh builder with initial capacity
+$(&alloc)"k={k}"             // fresh builder with custom allocator
+$(cap, &alloc)"x={x}"        // both capacity and allocator positional
+$(allocator=&alloc)"..."     // named builder args work
+$sb"append {x} into sb"      // void — appends into existing builder/writer
+```
+
+Segments and holes use different lexing rules:
+
+- **Segments** (text between holes) use normal string escapes (`\n \t \r \\ \" \0 \uXXXX`), plus `{{` → `{` and `}}` → `}`.
+- **Holes** (`{ expr }`) contain full expressions with the normal grammar. Strings inside a hole use their own quoting: `$"{msg.contains("foo")}"` works; `\"` at the hole's top level is invalid.
+- **Format specs** (text after `:` inside a hole) are captured verbatim and passed as a `String` to `append(sb, val, spec)`. `{x:04}` pads `x` to 4 digits.
+
+No whitespace is allowed between `$` and its `(`, identifier, or `"`. The expression desugars to `StringBuilder.append(...)` calls — user types gain format support by defining `fn format(self: T, sb: &StringBuilder, spec: String)`.
+
 ## Variables
 
 ```

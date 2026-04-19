@@ -136,6 +136,20 @@ Conversions are always explicit — no implicit coercions between string types.
 
 **Formattable protocol**: Types implement `fn format(self: T, sb: &StringBuilder)` to produce text. Users call `sb.append(value)` — primitive overloads write directly, generic fallback dispatches to `format()`.
 
+**String interpolation** (RFC-004): `$"..."`, `$(args)"..."`, and `$sb"..."` are pure syntactic sugar over `StringBuilder.append` and `to_string`. The forms desugar as follows:
+
+- `$"seg0{e1}seg1{e2}seg2"` becomes (roughly):
+  ```
+  ({ let __sb = string_builder(); defer __sb.deinit();
+     __sb.append("seg0"); __sb.append(e1);
+     __sb.append("seg1"); __sb.append(e2);
+     __sb.append("seg2"); __sb.to_string() })
+  ```
+  — yields an `OwnedString`. Empty segments are skipped. Because `to_string()` transfers ownership and zeroes the builder, the deferred `deinit` is a no-op on success but still frees on panic.
+- `$(args)"..."` forwards `args` to `string_builder(capacity: usize = 0, allocator: &Allocator? = null)`. A lone `&alloc` argument routes to the `allocator` slot; any other single positional arg lands in `capacity`.
+- `$sb"seg0{e1}seg1"` becomes `({ sb.append("seg0"); sb.append(e1); sb.append("seg1") })` — type `void`. Works with any receiver that has a matching `append` overload (including a `Writer`).
+- A hole `{expr:spec}` desugars to `sb.append(expr, "spec")`, dispatching to the primitive or generic `append` overload for `expr`'s type.
+
 ### 2.7 Option and Nullability
 
 ```

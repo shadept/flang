@@ -88,7 +88,16 @@ public enum TokenKind
     Underscore,
 
     // Identifier
-    Identifier
+    Identifier,
+
+    // Interpolated string tokens (see RFC-004)
+    InterpStringStart,
+    InterpSegment,
+    InterpHoleStart,
+    InterpHoleEnd,
+    InterpFormatSep,
+    InterpFormatSpec,
+    InterpStringEnd
 }
 
 public static class TokenKindExtensions

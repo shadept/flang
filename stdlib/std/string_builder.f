@@ -94,10 +94,30 @@ pub fn ensure_capacity(sb: &StringBuilder, capacity: usize) {
     sb.reserve(capacity - sb.len)
 }
 
-// Return a copy of the current contents as a null-terminated OwnedString.
-// Allocates from the builder's own allocator.
+// Transfer ownership of the current buffer as a null-terminated OwnedString.
+// No allocation, no copy: the builder's buffer becomes the OwnedString's buffer
+// and the builder is reset to empty (cap=0) so a subsequent deinit() is a no-op.
+// Enables the `let sb = string_builder(); defer sb.deinit(); ... sb.to_string()`
+// pattern — defer fires on panic before to_string, otherwise transfers cleanly.
 pub fn to_string(sb: &StringBuilder) OwnedString {
-    return sb.to_string(sb.allocator.or_global())
+    const alloc = sb.allocator.or_global()
+
+    // Ensure room for the null terminator. StringBuilder grows in powers of two,
+    // so cap > len is the common case and reserve is a no-op.
+    if (sb.cap == sb.len) {
+        sb.reserve(1)
+    }
+
+    const term = sb.ptr + sb.len
+    term.* = 0
+
+    const result = OwnedString { ptr = sb.ptr, len = sb.len, allocator = alloc }
+
+    let zero: usize = 0
+    sb.ptr = zero as &u8
+    sb.len = 0
+    sb.cap = 0
+    return result
 }
 
 // Return a copy of the current contents as a null-terminated OwnedString.
