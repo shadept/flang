@@ -36,12 +36,12 @@ pub fn main() i32 {
     println(sb.as_view())
 
     const some_point = rc(Vector2{x=1f32, y=2})
-    defer some_point.release()
+    defer some_point.deinit()
 
     print("ref_count: ")
     println(some_point.ref_count())
 
-    const p = some_point.borrow()
+    const p = some_point.*
     print("value: ")
     println(p)  // from derive(debug)
     print("hash: ")
