@@ -3170,6 +3170,14 @@ public class Parser
             return new LiteralPatternNode(byteToken.Span, literal);
         }
 
+        if (_currentToken.Kind == TokenKind.CharLiteral)
+        {
+            var charToken = Eat(TokenKind.CharLiteral);
+            var codepoint = BigInteger.Parse(charToken.Text);
+            var literal = new IntegerLiteralNode(charToken.Span, codepoint, "char");
+            return new LiteralPatternNode(charToken.Span, literal);
+        }
+
         if (_currentToken.Kind == TokenKind.True)
         {
             var trueToken = Eat(TokenKind.True);

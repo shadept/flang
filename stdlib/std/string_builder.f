@@ -185,11 +185,11 @@ type FormatSpec = struct {
 }
 
 fn is_align_char(c: u8) bool {
-    return c == b'<' or c == b'>' or c == b'^'
+    return c == '<' or c == '>' or c == '^'
 }
 
 fn is_base_char(c: u8) bool {
-    return c == b'x' or c == b'X' or c == b'b' or c == b'o'
+    return c == 'x' or c == 'X' or c == 'b' or c == 'o'
 }
 
 // Parse format spec: [fill][align][0][width][type]
@@ -197,7 +197,7 @@ fn is_base_char(c: u8) bool {
 fn parse_int_spec(spec: String) FormatSpec {
     let result = FormatSpec {
         base = 10, uppercase = false,
-        width = 0, fill = b' ', align = b'>', pad_zero = false
+        width = 0, fill = ' ', align = '>', pad_zero = false
     }
     if spec.len == 0 { return result }
 
@@ -216,16 +216,16 @@ fn parse_int_spec(spec: String) FormatSpec {
     }
 
     // '0' flag for zero-padding (only meaningful with right-align)
-    if pos < spec.len and spec[pos] == b'0' and pos + 1 < spec.len {
+    if pos < spec.len and spec[pos] == '0' and pos + 1 < spec.len {
         result.pad_zero = true
-        result.fill = b'0'
+        result.fill = '0'
         pos = pos + 1
     }
 
     // Parse width digits
     let width: usize = 0
-    while pos < spec.len and spec[pos] >= b'0' and spec[pos] <= b'9' {
-        width = width * 10 + (spec[pos] - b'0') as usize
+    while pos < spec.len and spec[pos] >= '0' and spec[pos] <= '9' {
+        width = width * 10 + (spec[pos] - '0') as usize
         pos = pos + 1
     }
     result.width = width
@@ -233,14 +233,14 @@ fn parse_int_spec(spec: String) FormatSpec {
     // Parse base type char
     if pos < spec.len {
         const c = spec[pos]
-        if c == b'X' {
+        if c == 'X' {
             result.base = 16
             result.uppercase = true
-        } else if c == b'x' {
+        } else if c == 'x' {
             result.base = 16
-        } else if c == b'b' {
+        } else if c == 'b' {
             result.base = 2
-        } else if c == b'o' {
+        } else if c == 'o' {
             result.base = 8
         }
     }
@@ -264,24 +264,24 @@ fn apply_int_padding(sb: &StringBuilder, tmp: u8[], len: usize, fmt: &FormatSpec
     }
     const pad_count = fmt.width - len
 
-    if fmt.pad_zero and fmt.align == b'>' {
+    if fmt.pad_zero and fmt.align == '>' {
         // Zero-pad after sign: "-007"
-        if len > 0 and tmp[0] == b'-' {
-            sb.append_byte(b'-')
-            repeat_fill(sb, b'0', pad_count)
+        if len > 0 and tmp[0] == '-' {
+            sb.append_byte('-')
+            repeat_fill(sb, '0', pad_count)
             sb.append_bytes(tmp[1..len])
         } else {
-            repeat_fill(sb, b'0', pad_count)
+            repeat_fill(sb, '0', pad_count)
             sb.append_bytes(tmp[0..len])
         }
         return
     }
 
-    if fmt.align == b'<' {
+    if fmt.align == '<' {
         // Left-align: content then padding
         sb.append_bytes(tmp[0..len])
         repeat_fill(sb, fmt.fill, pad_count)
-    } else if fmt.align == b'^' {
+    } else if fmt.align == '^' {
         // Center: split padding
         const left = pad_count / 2
         const right = pad_count - left
@@ -299,8 +299,8 @@ fn format_unsigned_into(tmp: u8[], value: u64, base: u64, uppercase: bool) usize
     const len = format_u64(value, tmp, base as u8).unwrap()
     if uppercase {
         for i in 0..len {
-            if tmp[i] >= b'a' and tmp[i] <= b'f' {
-                tmp[i] = tmp[i] - (b'a' - b'A')
+            if tmp[i] >= 'a' and tmp[i] <= 'f' {
+                tmp[i] = tmp[i] - ('a' - 'A')
             }
         }
     }
@@ -354,7 +354,7 @@ fn parse_float_spec(spec: String) FloatFormatSpec {
     let result = FloatFormatSpec {
         precision = 6, has_precision = false,
         width = 0, pad_zero = false,
-        fill = b' ', align = b'>'
+        fill = ' ', align = '>'
     }
     if spec.len == 0 { return result }
 
@@ -371,26 +371,26 @@ fn parse_float_spec(spec: String) FloatFormatSpec {
     }
 
     // '0' flag for zero-padding
-    if pos < spec.len and spec[pos] == b'0' and pos + 1 < spec.len {
+    if pos < spec.len and spec[pos] == '0' and pos + 1 < spec.len {
         result.pad_zero = true
-        result.fill = b'0'
+        result.fill = '0'
         pos = pos + 1
     }
 
     // Parse width digits before '.'
     let width: usize = 0
-    while pos < spec.len and spec[pos] >= b'0' and spec[pos] <= b'9' {
-        width = width * 10 + (spec[pos] - b'0') as usize
+    while pos < spec.len and spec[pos] >= '0' and spec[pos] <= '9' {
+        width = width * 10 + (spec[pos] - '0') as usize
         pos = pos + 1
     }
     result.width = width
 
     // '.' followed by precision digits
-    if pos < spec.len and spec[pos] == b'.' {
+    if pos < spec.len and spec[pos] == '.' {
         pos = pos + 1
         let prec: usize = 0
-        while pos < spec.len and spec[pos] >= b'0' and spec[pos] <= b'9' {
-            prec = prec * 10 + (spec[pos] - b'0') as usize
+        while pos < spec.len and spec[pos] >= '0' and spec[pos] <= '9' {
+            prec = prec * 10 + (spec[pos] - '0') as usize
             pos = pos + 1
         }
         result.precision = prec
@@ -409,23 +409,23 @@ fn apply_float_padding(sb: &StringBuilder, tmp: u8[], len: usize, fmt: &FloatFor
     }
     const pad_count = fmt.width - len
 
-    if fmt.pad_zero and fmt.align == b'>' {
+    if fmt.pad_zero and fmt.align == '>' {
         // Zero-pad after sign: "-003.14"
-        if len > 0 and tmp[0] == b'-' {
-            sb.append_byte(b'-')
-            repeat_fill(sb, b'0', pad_count)
+        if len > 0 and tmp[0] == '-' {
+            sb.append_byte('-')
+            repeat_fill(sb, '0', pad_count)
             sb.append_bytes(tmp[1..len])
         } else {
-            repeat_fill(sb, b'0', pad_count)
+            repeat_fill(sb, '0', pad_count)
             sb.append_bytes(tmp[0..len])
         }
         return
     }
 
-    if fmt.align == b'<' {
+    if fmt.align == '<' {
         sb.append_bytes(tmp[0..len])
         repeat_fill(sb, fmt.fill, pad_count)
-    } else if fmt.align == b'^' {
+    } else if fmt.align == '^' {
         const left = pad_count / 2
         const right = pad_count - left
         repeat_fill(sb, fmt.fill, left)

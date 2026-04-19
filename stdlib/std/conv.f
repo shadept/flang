@@ -44,7 +44,7 @@ pub fn format_u64(val: u64, buf: u8[], base: u8 = 10) Result(usize, ConvError) {
         if buf.len < 1 {
             return Err(ConvError.BufferTooSmall)
         }
-        buf[0] = b'0'
+        buf[0] = '0'
         return Ok(1usize)
     }
 
@@ -95,14 +95,14 @@ pub fn format_i64(val: i64, buf: u8[], base: u8 = 10) Result(usize, ConvError) {
     }
 
     const is_negative = val < 0
-    let abs_val: u64 = if is_negative { (0 - val) as u64 } else { val as u64 }
+    let abs_val = if is_negative { (0 - val) as u64 } else { val as u64 }
 
-    let offset = 0usize
+    let offset = 0
     if is_negative {
         if buf.len < 2 {
             return Err(ConvError.BufferTooSmall)
         }
-        buf[0] = b'-'
+        buf[0] = '-'
         offset = 1
     }
 
@@ -142,7 +142,7 @@ pub fn format_f64(val: f64, buf: u8[], precision: usize = 6, trim_zeros: bool = 
     }
     abs_val = abs_val + round
 
-    let int_part: u64 = abs_val as u64
+    let int_part = abs_val as u64
     let int_buf = [0u8; 21]
     const int_len = format_u64(int_part, int_buf).unwrap()
 
@@ -153,13 +153,13 @@ pub fn format_f64(val: f64, buf: u8[], precision: usize = 6, trim_zeros: bool = 
     for i in 0..precision {
         frac = frac * 10.0
         let digit: u64 = frac as u64
-        frac_buf[frac_len] = (48u64 + digit) as u8
+        frac_buf[frac_len] = '0' + digit as u8
         frac_len = frac_len + 1
         frac = frac - (digit as f64)
     }
 
     if trim_zeros {
-        while frac_len != 0 and frac_buf[frac_len - 1] == b'0' {
+        while frac_len != 0 and frac_buf[frac_len - 1] == '0' {
             frac_len = frac_len - 1
         }
     }
@@ -173,7 +173,7 @@ pub fn format_f64(val: f64, buf: u8[], precision: usize = 6, trim_zeros: bool = 
 
     let pos: usize = 0
     if negative {
-        buf[pos] = b'-'
+        buf[pos] = '-'
         pos = pos + 1
     }
     for j in 0..int_len {
@@ -181,7 +181,7 @@ pub fn format_f64(val: f64, buf: u8[], precision: usize = 6, trim_zeros: bool = 
         pos = pos + 1
     }
     if frac_len > 0 {
-        buf[pos] = b'.'
+        buf[pos] = '.'
         pos = pos + 1
         for j in 0..frac_len {
             buf[pos] = frac_buf[j]
@@ -217,14 +217,14 @@ pub fn parse_u64(s: u8[], base: u8 = 10) Result((u64, usize), ConvError) {
         let digit_val: u64 = 0
         let valid = false
 
-        if c >= b'0' and c <= b'9' {
-            digit_val = (c - b'0') as u64
+        if c >= '0' and c <= '9' {
+            digit_val = (c - '0') as u64
             valid = digit_val < base_u64
-        } else if c >= b'a' and c <= b'f' {
-            digit_val = (c - b'a' + 10) as u64
+        } else if c >= 'a' and c <= 'f' {
+            digit_val = (c - 'a' + 10) as u64
             valid = digit_val < base_u64
-        } else if c >= b'A' and c <= b'F' {
-            digit_val = (c - b'A' + 10) as u64
+        } else if c >= 'A' and c <= 'F' {
+            digit_val = (c - 'A' + 10) as u64
             valid = digit_val < base_u64
         }
 
@@ -262,7 +262,7 @@ pub fn parse_i64(s: u8[], base: u8 = 10) Result((i64, usize), ConvError) {
     let negative = false
     let offset = 0usize
 
-    if s[0] == b'-' {
+    if s[0] == '-' {
         negative = true
         offset = 1
         if offset >= s.len {
@@ -376,29 +376,29 @@ pub fn parse_f64(s: u8[]) Result((f64, usize), ConvError) {
     let negative = false
 
     // Optional sign
-    if s[0] == b'-' {
+    if s[0] == '-' {
         negative = true
         pos = 1
-    } else if s[0] == b'+' {
+    } else if s[0] == '+' {
         pos = 1
     }
 
     // Integer part
     let result: f64 = 0.0
     let has_digits = false
-    while pos < s.len and s[pos] >= b'0' and s[pos] <= b'9' {
-        result = result * 10.0 + (s[pos] - b'0') as f64
+    while pos < s.len and s[pos] >= '0' and s[pos] <= '9' {
+        result = result * 10.0 + (s[pos] - '0') as f64
         has_digits = true
         pos = pos + 1
     }
 
     // Fractional part
     if pos < s.len {
-        if s[pos] == b'.' {
+        if s[pos] == '.' {
             pos = pos + 1
             let frac_mul = 0.1
-            while pos < s.len and s[pos] >= b'0' and s[pos] <= b'9' {
-                result = result + (s[pos] - b'0') as f64 * frac_mul
+            while pos < s.len and s[pos] >= '0' and s[pos] <= '9' {
+                result = result + (s[pos] - '0') as f64 * frac_mul
                 frac_mul = frac_mul * 0.1
                 has_digits = true
                 pos = pos + 1
@@ -412,21 +412,21 @@ pub fn parse_f64(s: u8[]) Result((f64, usize), ConvError) {
 
     // Exponent part
     if pos < s.len {
-        if s[pos] == b'e' or s[pos] == b'E' {
+        if s[pos] == 'e' or s[pos] == 'E' {
             pos = pos + 1
             let exp_negative = false
             if pos < s.len {
-                if s[pos] == b'-' {
+                if s[pos] == '-' {
                     exp_negative = true
                     pos = pos + 1
-                } else if s[pos] == b'+' {
+                } else if s[pos] == '+' {
                     pos = pos + 1
                 }
             }
             let exp: i64 = 0
             let has_exp_digits = false
-            while pos < s.len and s[pos] >= b'0' and s[pos] <= b'9' {
-                exp = exp * 10 + (s[pos] - b'0') as i64
+            while pos < s.len and s[pos] >= '0' and s[pos] <= '9' {
+                exp = exp * 10 + (s[pos] - '0') as i64
                 has_exp_digits = true
                 pos = pos + 1
             }
@@ -480,10 +480,10 @@ pub fn format_bool(val: bool, buf: u8[]) Result(usize, ConvError) {
 
 // Parse a boolean from a byte buffer. Returns (value, bytes_consumed).
 pub fn parse_bool(s: u8[]) Result((bool, usize), ConvError) {
-    if s.len >= 4 and s[0] == b't' and s[1] == b'r' and s[2] == b'u' and s[3] == b'e' {
+    if s.len >= 4 and s[0] == 't' and s[1] == 'r' and s[2] == 'u' and s[3] == 'e' {
         return Ok((true, 4usize))
     }
-    if s.len >= 5 and s[0] == b'f' and s[1] == b'a' and s[2] == b'l' and s[3] == b's' and s[4] == b'e' {
+    if s.len >= 5 and s[0] == 'f' and s[1] == 'a' and s[2] == 'l' and s[3] == 's' and s[4] == 'e' {
         return Ok((false, 5usize))
     }
     return Err(ConvError.InvalidInput)
@@ -497,44 +497,44 @@ test "format_u64 zero" {
     let buf = [0u8; 64]
     const len = format_u64(0, buf).unwrap()
     assert_eq(len, 1usize, "zero should be 1 byte")
-    assert_eq(buf[0], b'0', "zero should be '0'")
+    assert_eq(buf[0], '0', "zero should be '0'")
 }
 
 test "format_u64 decimal" {
     let buf = [0u8; 64]
     const len = format_u64(12345, buf).unwrap()
     assert_eq(len, 5usize, "12345 is 5 digits")
-    assert_eq(buf[0], b'1', "first digit")
-    assert_eq(buf[1], b'2', "second digit")
-    assert_eq(buf[2], b'3', "third digit")
-    assert_eq(buf[3], b'4', "fourth digit")
-    assert_eq(buf[4], b'5', "fifth digit")
+    assert_eq(buf[0], '1', "first digit")
+    assert_eq(buf[1], '2', "second digit")
+    assert_eq(buf[2], '3', "third digit")
+    assert_eq(buf[3], '4', "fourth digit")
+    assert_eq(buf[4], '5', "fifth digit")
 }
 
 test "format_u64 hex" {
     let buf = [0u8; 64]
     const len = format_u64(255, buf, 16).unwrap()
     assert_eq(len, 2usize, "0xff is 2 hex digits")
-    assert_eq(buf[0], b'f', "first hex digit")
-    assert_eq(buf[1], b'f', "second hex digit")
+    assert_eq(buf[0], 'f', "first hex digit")
+    assert_eq(buf[1], 'f', "second hex digit")
 }
 
 test "format_u64 binary" {
     let buf = [0u8; 64]
     const len = format_u64(10, buf, 2).unwrap()
     assert_eq(len, 4usize, "10 in binary is 4 digits")
-    assert_eq(buf[0], b'1', "bit 3")
-    assert_eq(buf[1], b'0', "bit 2")
-    assert_eq(buf[2], b'1', "bit 1")
-    assert_eq(buf[3], b'0', "bit 0")
+    assert_eq(buf[0], '1', "bit 3")
+    assert_eq(buf[1], '0', "bit 2")
+    assert_eq(buf[2], '1', "bit 1")
+    assert_eq(buf[3], '0', "bit 0")
 }
 
 test "format_u64 octal" {
     let buf = [0u8; 64]
     const len = format_u64(8, buf, 8).unwrap()
     assert_eq(len, 2usize, "8 in octal is 10")
-    assert_eq(buf[0], b'1', "octal digit 1")
-    assert_eq(buf[1], b'0', "octal digit 0")
+    assert_eq(buf[0], '1', "octal digit 1")
+    assert_eq(buf[1], '0', "octal digit 0")
 }
 
 test "format_u64 u64 max" {
@@ -559,25 +559,25 @@ test "format_i64 positive" {
     let buf = [0u8; 64]
     const len = format_i64(42, buf).unwrap()
     assert_eq(len, 2usize, "42 is 2 digits")
-    assert_eq(buf[0], b'4', "first digit")
-    assert_eq(buf[1], b'2', "second digit")
+    assert_eq(buf[0], '4', "first digit")
+    assert_eq(buf[1], '2', "second digit")
 }
 
 test "format_i64 zero" {
     let buf = [0u8; 64]
     const len = format_i64(0, buf).unwrap()
     assert_eq(len, 1usize, "0 is 1 digit")
-    assert_eq(buf[0], b'0', "zero")
+    assert_eq(buf[0], '0', "zero")
 }
 
 test "format_i64 negative" {
     let buf = [0u8; 64]
     const len = format_i64(-123, buf).unwrap()
     assert_eq(len, 4usize, "-123 is 4 chars")
-    assert_eq(buf[0], b'-', "minus sign")
-    assert_eq(buf[1], b'1', "first digit")
-    assert_eq(buf[2], b'2', "second digit")
-    assert_eq(buf[3], b'3', "third digit")
+    assert_eq(buf[0], '-', "minus sign")
+    assert_eq(buf[1], '1', "first digit")
+    assert_eq(buf[2], '2', "second digit")
+    assert_eq(buf[3], '3', "third digit")
 }
 
 test "format_i64 i64 min" {
@@ -585,7 +585,7 @@ test "format_i64 i64 min" {
     const min_val: i64 = 0 - 9223372036854775807 - 1
     const len = format_i64(min_val, buf).unwrap()
     assert_eq(len, 20usize, "i64 min is 20 chars including minus")
-    assert_eq(buf[0], b'-', "minus sign")
+    assert_eq(buf[0], '-', "minus sign")
 }
 
 test "parse_u64 basic" {
@@ -678,21 +678,21 @@ test "format_bool true" {
     let buf = [0u8; 8]
     const len = format_bool(true, buf).unwrap()
     assert_eq(len, 4usize, "true is 4 bytes")
-    assert_eq(buf[0], b't', "t")
-    assert_eq(buf[1], b'r', "r")
-    assert_eq(buf[2], b'u', "u")
-    assert_eq(buf[3], b'e', "e")
+    assert_eq(buf[0], 't', "t")
+    assert_eq(buf[1], 'r', "r")
+    assert_eq(buf[2], 'u', "u")
+    assert_eq(buf[3], 'e', "e")
 }
 
 test "format_bool false" {
     let buf = [0u8; 8]
     const len = format_bool(false, buf).unwrap()
     assert_eq(len, 5usize, "false is 5 bytes")
-    assert_eq(buf[0], b'f', "f")
-    assert_eq(buf[1], b'a', "a")
-    assert_eq(buf[2], b'l', "l")
-    assert_eq(buf[3], b's', "s")
-    assert_eq(buf[4], b'e', "e")
+    assert_eq(buf[0], 'f', "f")
+    assert_eq(buf[1], 'a', "a")
+    assert_eq(buf[2], 'l', "l")
+    assert_eq(buf[3], 's', "s")
+    assert_eq(buf[4], 'e', "e")
 }
 
 test "parse_bool true" {

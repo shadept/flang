@@ -106,14 +106,31 @@ public partial class HmTypeChecker
         }
 
         // E2005: Prevent redeclaration of global constants.
-        // Local let-rebinding (same-scope shadowing) is allowed in function bodies.
-        if (_ctx.Scopes.Depth == 1 && _ctx.Scopes.ExistsInCurrentScope(varDecl.Name))
+        // Local same-scope re-declaration is permitted (for flexibility) but
+        // flagged as W1002 so readers notice the earlier binding is shadowed.
+        if (_ctx.Scopes.ExistsInCurrentScope(varDecl.Name)
+            && !varDecl.Name.StartsWith('_'))
         {
-            var diag = Diagnostic.Error($"Global `{varDecl.Name}` is already declared", varDecl.Span, code: "E2005");
-            var existingDecl = _ctx.Scopes.LookupDeclaration(varDecl.Name);
-            if (existingDecl != null)
-                diag.Notes.Add(Diagnostic.Info($"`{varDecl.Name}` first declared here", existingDecl.Span));
-            _diagnostics.Add(diag);
+            if (_ctx.Scopes.Depth == 1)
+            {
+                var diag = Diagnostic.Error($"Global `{varDecl.Name}` is already declared", varDecl.Span, code: "E2005");
+                var existingDecl = _ctx.Scopes.LookupDeclaration(varDecl.Name);
+                if (existingDecl != null)
+                    diag.Notes.Add(Diagnostic.Info($"`{varDecl.Name}` first declared here", existingDecl.Span));
+                _diagnostics.Add(diag);
+            }
+            else
+            {
+                var diag = Diagnostic.Warning(
+                    $"`{varDecl.Name}` shadows an earlier declaration in the same scope",
+                    varDecl.Span,
+                    hint: "rename one of the bindings or prefix with `_` to suppress",
+                    code: "W1002");
+                var existingDecl = _ctx.Scopes.LookupDeclaration(varDecl.Name);
+                if (existingDecl != null)
+                    diag.Notes.Add(Diagnostic.Info($"`{varDecl.Name}` first declared here", existingDecl.Span));
+                _diagnostics.Add(diag);
+            }
         }
 
         _ctx.Scopes.Bind(varDecl.Name, varType, varDecl);

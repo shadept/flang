@@ -96,30 +96,30 @@ fn lookup_short(format: String, ch: u8) u8 {
     let i: usize = 0
     while i < format.len {
         let c = format[i]
-        if c == b'(' {
+        if c == '(' {
             i = i + 1
-            while i < format.len and format[i] != b')' {
+            while i < format.len and format[i] != ')' {
                 i = i + 1
             }
             if i < format.len { i = i + 1 }
             continue
         }
-        if c == b':' {
+        if c == ':' {
             i = i + 1
             continue
         }
         if c == ch {
             // Check for ':' after option char, skipping over optional '(long)' alias
             let j = i + 1
-            if j < format.len and format[j] == b'(' {
+            if j < format.len and format[j] == '(' {
                 j = j + 1
-                while j < format.len and format[j] != b')' {
+                while j < format.len and format[j] != ')' {
                     j = j + 1
                 }
                 if j >= format.len { return 1 }
                 j = j + 1
             }
-            if j < format.len and format[j] == b':' { return 2 }
+            if j < format.len and format[j] == ':' { return 2 }
             return 1
         }
         i = i + 1
@@ -133,10 +133,10 @@ fn lookup_long(format: String, name: String) u8 {
     let last_opt: u8 = 0
     while i < format.len {
         let c = format[i]
-        if c == b'(' {
+        if c == '(' {
             let start = i + 1
             i = start
-            while i < format.len and format[i] != b')' {
+            while i < format.len and format[i] != ')' {
                 i = i + 1
             }
             if i >= format.len { return 0 }
@@ -145,7 +145,7 @@ fn lookup_long(format: String, name: String) u8 {
             if long == name { return last_opt }
             continue
         }
-        if c == b':' {
+        if c == ':' {
             i = i + 1
             continue
         }
@@ -176,7 +176,7 @@ pub fn next(self: &GetOpt) OptResult? {
             if kind == 2 {
                 if self.pos > 0 {
                     // Rest of arg is the value: -ofilename
-                    const val = slice_from_raw_parts(a.ptr + self.pos, a.len - self.pos) as String
+                    const val = a[self.pos..]
                     self.pos = 0
                     self.index = self.index + 1
                     return OptResult.OptArg(ch, val)
@@ -207,16 +207,16 @@ pub fn next(self: &GetOpt) OptResult? {
             self.index = self.index + 1
             // Find '=' for inline value
             let eq_pos = 2usize
-            while eq_pos < a.len and a[eq_pos] != b'=' {
+            while eq_pos < a.len and a[eq_pos] != '=' {
                 eq_pos = eq_pos + 1
             }
-            const name = slice_from_raw_parts(a.ptr + 2usize, eq_pos - 2usize) as String
+            const name = a[2..]
             const ch = lookup_long(self.format, name)
-            if ch == 0 { return OptResult.Error(b'?') }
+            if ch == 0 { return OptResult.Error('?') }
             const kind = lookup_short(self.format, ch)
             if kind == 2 {
                 if eq_pos < a.len {
-                    const val = slice_from_raw_parts(a.ptr + eq_pos + 1usize, a.len - eq_pos - 1usize) as String
+                    const val = a[eq_pos + 1..]
                     return OptResult.OptArg(ch, val)
                 }
                 if self.index >= self.args.len { return OptResult.MissingArg(ch) }
@@ -228,7 +228,7 @@ pub fn next(self: &GetOpt) OptResult? {
         }
 
         // Short option(s): -x or -xyz
-        if a.len > 1 and a[0] == b'-' {
+        if a.len > 1 and a[0] == '-' {
             self.pos = 1
             continue
         }
@@ -306,60 +306,60 @@ fn expect_done(r: OptResult?, msg: String) {
 test "getopts simple flags" {
     let args = ["-l", "-w", "-c"]
     let opts = getopts("lwc", args)
-    expect_opt(opts.next(), b'l', "flag l")
-    expect_opt(opts.next(), b'w', "flag w")
-    expect_opt(opts.next(), b'c', "flag c")
+    expect_opt(opts.next(), 'l', "flag l")
+    expect_opt(opts.next(), 'w', "flag w")
+    expect_opt(opts.next(), 'c', "flag c")
     expect_done(opts.next(), "done")
 }
 
 test "getopts combined flags" {
     let args = ["-lwc"]
     let opts = getopts("lwc", args)
-    expect_opt(opts.next(), b'l', "combined l")
-    expect_opt(opts.next(), b'w', "combined w")
-    expect_opt(opts.next(), b'c', "combined c")
+    expect_opt(opts.next(), 'l', "combined l")
+    expect_opt(opts.next(), 'w', "combined w")
+    expect_opt(opts.next(), 'c', "combined c")
     expect_done(opts.next(), "done")
 }
 
 test "getopts option with argument" {
     let args = ["-o", "file.txt"]
     let opts = getopts("o:", args)
-    expect_optarg(opts.next(), b'o', "file.txt", "opt with arg")
+    expect_optarg(opts.next(), 'o', "file.txt", "opt with arg")
     expect_done(opts.next(), "done")
 }
 
 test "getopts option with inline argument" {
     let args = ["-ofile.txt"]
     let opts = getopts("o:", args)
-    expect_optarg(opts.next(), b'o', "file.txt", "inline arg")
+    expect_optarg(opts.next(), 'o', "file.txt", "inline arg")
     expect_done(opts.next(), "done")
 }
 
 test "getopts long option" {
     let args = ["--verbose"]
     let opts = getopts("v(verbose)", args)
-    expect_opt(opts.next(), b'v', "long verbose")
+    expect_opt(opts.next(), 'v', "long verbose")
     expect_done(opts.next(), "done")
 }
 
 test "getopts long option with value" {
     let args = ["--output=file.txt"]
     let opts = getopts("o(output):", args)
-    expect_optarg(opts.next(), b'o', "file.txt", "long with =")
+    expect_optarg(opts.next(), 'o', "file.txt", "long with =")
     expect_done(opts.next(), "done")
 }
 
 test "getopts long option with next arg value" {
     let args = ["--output", "file.txt"]
     let opts = getopts("o(output):", args)
-    expect_optarg(opts.next(), b'o', "file.txt", "long next arg")
+    expect_optarg(opts.next(), 'o', "file.txt", "long next arg")
     expect_done(opts.next(), "done")
 }
 
 test "getopts non-option args" {
     let args = ["-l", "foo.txt", "bar.txt"]
     let opts = getopts("lwc", args)
-    expect_opt(opts.next(), b'l', "flag")
+    expect_opt(opts.next(), 'l', "flag")
     expect_nonopt(opts.next(), "foo.txt", "file 1")
     expect_nonopt(opts.next(), "bar.txt", "file 2")
     expect_done(opts.next(), "done")
@@ -368,7 +368,7 @@ test "getopts non-option args" {
 test "getopts double dash stops options" {
     let args = ["-l", "--", "-w"]
     let opts = getopts("lwc", args)
-    expect_opt(opts.next(), b'l', "flag before --")
+    expect_opt(opts.next(), 'l', "flag before --")
     expect_nonopt(opts.next(), "-w", "-w is non-opt after --")
     expect_done(opts.next(), "done")
 }
@@ -376,8 +376,8 @@ test "getopts double dash stops options" {
 test "getopts mixed short long and files" {
     let args = ["-v", "--output=out.txt", "input.f"]
     let opts = getopts("v(verbose)o(output):", args)
-    expect_opt(opts.next(), b'v', "short v")
-    expect_optarg(opts.next(), b'o', "out.txt", "long output")
+    expect_opt(opts.next(), 'v', "short v")
+    expect_optarg(opts.next(), 'o', "out.txt", "long output")
     expect_nonopt(opts.next(), "input.f", "file arg")
     expect_done(opts.next(), "done")
 }
@@ -386,7 +386,7 @@ test "getopts with index skip" {
     let args = ["prog", "-v", "file.txt"]
     let opts = getopts("v", args)
     opts.index = 1
-    expect_opt(opts.next(), b'v', "flag v")
+    expect_opt(opts.next(), 'v', "flag v")
     expect_nonopt(opts.next(), "file.txt", "file arg")
     expect_done(opts.next(), "done")
 }

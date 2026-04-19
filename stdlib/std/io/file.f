@@ -88,14 +88,14 @@ pub fn read_all_inplace(file: &File, allocator: &Allocator) Result(OwnedString, 
     let sb = string_builder(PAGE_SIZE, allocator)
     let buf = [0u8; PAGE_SIZE]
     loop {
-        const n = read(file.handle.fd, buf.ptr, buf.len)
-        if n == -1 {
+        const read_n = read(file.handle.fd, buf.ptr, buf.len)
+        if read_n == -1 {
             return Err(FileError.IOError)
         }
         const buf_slice = buf as u8[]
-        const n = n as usize
+        const n = read_n as usize
         sb.append_bytes(buf_slice[..n])
-        if n as usize < PAGE_SIZE {
+        if n < PAGE_SIZE {
             break
         }
     }

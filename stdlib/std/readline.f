@@ -299,22 +299,22 @@ fn read_key() Key {
     if b == 27 {
         const c2 = read_byte()
         if c2.is_none() { return Key.Unknown }
-        if c2.value != b'[' { return Key.Unknown }
+        if c2.value != '[' { return Key.Unknown }
 
         const c3 = read_byte()
         if c3.is_none() { return Key.Unknown }
 
-        if c3.value == b'A' { return Key.Up }
-        if c3.value == b'B' { return Key.Down }
-        if c3.value == b'C' { return Key.Right }
-        if c3.value == b'D' { return Key.Left }
-        if c3.value == b'H' { return Key.Home }
-        if c3.value == b'F' { return Key.End }
+        if c3.value == 'A' { return Key.Up }
+        if c3.value == 'B' { return Key.Down }
+        if c3.value == 'C' { return Key.Right }
+        if c3.value == 'D' { return Key.Left }
+        if c3.value == 'H' { return Key.Home }
+        if c3.value == 'F' { return Key.End }
 
         // ESC [ 3 ~ = Delete
-        if c3.value == b'3' {
+        if c3.value == '3' {
             const c4 = read_byte()
-            if c4.is_some() and c4.value == b'~' { return Key.Delete }
+            if c4.is_some() and c4.value == '~' { return Key.Delete }
         }
 
         return Key.Unknown
@@ -500,18 +500,18 @@ fn refresh_line(rl: &Readline, buf: [u8; 1024], len: usize, cursor: usize) {
 
     // Clear to end of line: ESC [ K
     out[pos] = 27; pos = pos + 1
-    out[pos] = b'['; pos = pos + 1
-    out[pos] = b'K'; pos = pos + 1
+    out[pos] = '['; pos = pos + 1
+    out[pos] = 'K'; pos = pos + 1
 
     // Move cursor to correct position: \r then ESC [ {n} C
     out[pos] = 13; pos = pos + 1
     const target = rl.prompt.len + cursor
     if target > 0 {
         out[pos] = 27; pos = pos + 1
-        out[pos] = b'['; pos = pos + 1
+        out[pos] = '['; pos = pos + 1
         // Write target as decimal digits
         pos = write_uint_to_buf(out, pos, target as u32)
-        out[pos] = b'C'; pos = pos + 1
+        out[pos] = 'C'; pos = pos + 1
     }
 
     write(1, &out[0], pos)
@@ -519,14 +519,14 @@ fn refresh_line(rl: &Readline, buf: [u8; 1024], len: usize, cursor: usize) {
 
 fn write_uint_to_buf(buf: [u8; 2048], start: usize, value: u32) usize {
     if value == 0 {
-        buf[start] = b'0'
+        buf[start] = '0'
         return start + 1
     }
     let digits = [0u8; 10]
     let count: usize = 0
     let v = value
     while v != 0 {
-        digits[count] = b'0' + (v % 10) as u8
+        digits[count] = '0' + (v % 10) as u8
         v = v / 10
         count = count + 1
     }
@@ -555,7 +555,7 @@ fn read_line_simple(rl: &Readline) String? {
             if len == 0 { return null }
             break
         }
-        if c == b'\n' { break }
+        if c == '\n' { break }
         if len < 1023 {
             rl.line_buf[len] = c
             len = len + 1

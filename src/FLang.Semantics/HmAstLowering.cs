@@ -2748,6 +2748,40 @@ public class HmAstLowering
             return gv;
         }
 
+        // &container[i] with a ref-form op_index — call op_index(&base, idx) &T
+        // directly and return the resulting pointer, skipping the temporary
+        // that a value-returning op_index would produce.
+        if (addrOf.Target is IndexExpressionNode refIdxTarget
+            && refIdxTarget.ResolvedRefOpIndex is { } refFn)
+        {
+            // If the base is already a reference, its value IS the pointer we
+            // want to pass. Otherwise take its address (or materialize a temp).
+            var baseSemType = _types.GetResolvedType(refIdxTarget.Base);
+            Value baseLv;
+            if (baseSemType is Core.Types.ReferenceType)
+            {
+                baseLv = LowerExpression(refIdxTarget.Base);
+            }
+            else
+            {
+                baseLv = LowerLValue(refIdxTarget.Base) ?? LowerExpression(refIdxTarget.Base);
+                if (baseLv.IrType is not IrPointer)
+                {
+                    var baseIrType = baseLv.IrType ?? TypeLayoutService.IrVoidPrim;
+                    var temp = _currentBlock.EmitAlloca(baseIrType);
+                    _currentBlock.EmitStorePtr(temp, baseLv);
+                    baseLv = temp;
+                }
+            }
+            var idxV = LowerExpression(refIdxTarget.Index);
+            var retIrType = GetIrType(addrOf);
+            var calleeParamTypes = new List<IrType>();
+            foreach (var param in refFn.Parameters)
+                calleeParamTypes.Add(GetIrType(param));
+            var isForeign = (refFn.Modifiers & FunctionModifiers.Foreign) != 0;
+            return _currentBlock.EmitCall(refFn.Name, [baseLv, idxV], retIrType, calleeParamTypes, isForeign: isForeign);
+        }
+
         // &arr[i] — compute element address directly via GEP instead of load+address-of
         if (addrOf.Target is IndexExpressionNode indexTarget
             && _types.GetResolvedOperator(indexTarget) == null)

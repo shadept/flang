@@ -63,13 +63,13 @@ fn parse_range(s: String) (usize, usize)? {
     if start_str.len > 0 {
         const parsed = parse_usize(start_str)
         if parsed.is_err() { return null }
-        start_val = parsed.unwrap()._0 as usize
+        start_val = parsed.unwrap().0 as usize
     }
 
     if end_str.len > 0 {
         const parsed = parse_usize(end_str)
         if parsed.is_err() { return null }
-        end_val = parsed.unwrap()._0 as usize
+        end_val = parsed.unwrap().0 as usize
     }
 
     return (start_val, end_val)
@@ -77,17 +77,17 @@ fn parse_range(s: String) (usize, usize)? {
 
 fn parse_tail(s: String) usize? {
     if s.len < 2 { return null }
-    if s[0] != b'-' { return null }
+    if s[0] != '-' { return null }
     const num_str = s[1..s.len]
     const parsed = parse_usize(num_str)
     if parsed.is_err() { return null }
-    return parsed.unwrap()._0 as usize
+    return parsed.unwrap().0 as usize
 }
 
 fn split_columns(s: String, cols: &List(String)) {
     let start: usize = 0
     for (i in 0..s.len) {
-        if s[i] == b',' {
+        if s[i] == ',' {
             if i > start {
                 cols.push(s[start..i])
             }
@@ -104,7 +104,7 @@ fn print_record(sb: &StringBuilder, record: &CsvRecord, indices: &List(usize), h
     if has_columns {
         for (i in 0..indices.len) {
             if i > 0 { sb.append_byte(delimiter) }
-            const field = record.get(indices.as_slice()[i])
+            const field = record.get(indices[i])
             if field.is_some() { sb.append(field.value) }
         }
     } else {
@@ -133,7 +133,7 @@ fn run(reader: &CsvReader, columns_arg: String, range_start: usize, range_end: u
         for (c in 0..col_names.len) {
             let found = false
             for (h in 0..hdrs.len) {
-                if hdrs.as_slice()[h] == col_names.as_slice()[c] {
+                if hdrs[h] == col_names[c] {
                     col_indices.push(h)
                     found = true
                     break
@@ -141,7 +141,7 @@ fn run(reader: &CsvReader, columns_arg: String, range_start: usize, range_end: u
             }
             if !found {
                 print("fcsv: unknown column: ")
-                println(col_names.as_slice()[c])
+                println(col_names[c])
                 return 1
             }
         }
@@ -156,12 +156,12 @@ fn run(reader: &CsvReader, columns_arg: String, range_start: usize, range_end: u
     if has_columns {
         for (i in 0..col_indices.len) {
             if i > 0 { sb.append_byte(delimiter) }
-            sb.append(hdrs.as_slice()[col_indices.as_slice()[i]])
+            sb.append(hdrs[col_indices[i]])
         }
     } else {
         for (i in 0..hdrs.len) {
             if i > 0 { sb.append_byte(delimiter) }
-            sb.append(hdrs.as_slice()[i])
+            sb.append(hdrs[i])
         }
     }
     println(sb.as_view())
@@ -179,7 +179,7 @@ fn run(reader: &CsvReader, columns_arg: String, range_start: usize, range_end: u
 
     // Print rows
     for (i in start..end) {
-        print_record(&sb, &rows.as_slice()[i], &col_indices, has_columns, delimiter)
+        print_record(&sb, &rows[i], &col_indices, has_columns, delimiter)
     }
 
     sb.deinit()
@@ -201,7 +201,7 @@ fn run_count(file_path: String) i32 {
         return 1
     }
     let owned = data.unwrap()
-    const n = simd_count_byte(owned.as_view(), b'\n')
+    const n = simd_count_byte(owned.as_view(), '\n')
     let sb = string_builder(32)
     sb.append(n)
     println(sb.as_view())
@@ -246,8 +246,8 @@ pub fn main() i32 {
 
         const range = parse_range(argv)
         if range.is_some() {
-            range_start = range.value._0
-            range_end = range.value._1
+            range_start = range.value.0
+            range_end = range.value.1
             has_range = true
             continue
         }

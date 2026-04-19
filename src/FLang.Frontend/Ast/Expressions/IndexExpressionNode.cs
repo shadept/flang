@@ -35,4 +35,12 @@ public class IndexExpressionNode : ExpressionNode
     /// The result type is a slice of the base array/slice element type.
     /// </summary>
     public bool IsRangeIndex { get; set; }
+
+    /// <summary>
+    /// Ref-form op_index used when this index expression is the target of an
+    /// <c>&amp;</c>. When set, <c>&amp;base[idx]</c> lowers to a direct call
+    /// <c>op_index(&amp;base, idx) -&gt; &amp;T</c> instead of taking the address
+    /// of a value-returning op_index's temporary result.
+    /// </summary>
+    public FunctionDeclarationNode? ResolvedRefOpIndex { get; set; }
 }

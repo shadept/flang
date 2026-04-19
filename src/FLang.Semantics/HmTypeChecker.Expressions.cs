@@ -1964,6 +1964,26 @@ public partial class HmTypeChecker
         }
 
         var inner = InferExpression(addrOf.Target);
+
+        // `&container[i]` — if the container defines `op_index_ref(&Base, Idx) &T`,
+        // call it directly instead of taking the address of a value-returning
+        // op_index's temporary result.
+        if (addrOf.Target is IndexExpressionNode idxTarget
+            && _ctx.Engine.Resolve(inner) is not ReferenceType
+            && _results.InferredTypes.TryGetValue(idxTarget.Base, out var baseT)
+            && _results.InferredTypes.TryGetValue(idxTarget.Index, out var idxT))
+        {
+            var resolvedBase = _ctx.Engine.Resolve(baseT);
+            var refBase = resolvedBase is ReferenceType ? resolvedBase : new ReferenceType(resolvedBase);
+            var refRet = TryResolveOperator("op_index_ref", [refBase, _ctx.Engine.Resolve(idxT)], addrOf.Span, out var refNode);
+            if (refRet != null && refNode != null
+                && _ctx.Engine.Resolve(refRet) is ReferenceType refTy)
+            {
+                idxTarget.ResolvedRefOpIndex = refNode;
+                return refTy;
+            }
+        }
+
         return new ReferenceType(inner);
     }
 
@@ -2441,8 +2461,14 @@ public partial class HmTypeChecker
         // yields `T`, not `&T`. The `&base` variant is only tried as a fallback
         // for types that expose indexing through a reference (e.g. Range, or
         // List's mutation-oriented `op_index(&List($T), usize) &T` overload).
+        // If the base is already a reference, auto-deref to the pointee so
+        // `(&list)[i]` works without writing `(*lst)[i]`.
         var opResult = TryResolveOperator("op_index", [baseType, indexType], idx.Span, out var resolvedNode)
                     ?? TryResolveOperator("op_index", [new ReferenceType(baseType), indexType], idx.Span, out resolvedNode);
+        if (opResult == null && resolvedBase is ReferenceType baseRef)
+        {
+            opResult = TryResolveOperator("op_index", [baseRef.InnerType, indexType], idx.Span, out resolvedNode);
+        }
         if (opResult != null)
         {
             _results.ResolvedOperators[idx] = new ResolvedOperator(resolvedNode!);

@@ -272,7 +272,7 @@ pub fn next(self: &WalkIter) WalkEntry? {
         }
 
         // Borrow the top frame in place — we need to mutate its DirIter.
-        const top: &WalkFrame = self.stack.at_ref(self.stack.len - 1)
+        const top: &WalkFrame = &self.stack[self.stack.len - 1]
 
         const entry_opt = top.dir.next()
         if entry_opt.has_value == false {
@@ -333,7 +333,7 @@ pub fn err(self: &WalkIter) FsError? {
 
 pub fn deinit(self: &WalkIter) {
     while self.stack.len != 0 {
-        const top: &WalkFrame = self.stack.at_ref(self.stack.len - 1)
+        const top: &WalkFrame = &self.stack[self.stack.len - 1]
         top.dir.deinit()
         const _popped = self.stack.pop()
     }

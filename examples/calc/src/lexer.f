@@ -21,16 +21,16 @@ pub fn next_token(self: &Lexer) Token {
     const c = self.input[self.pos]
 
     // Single-character tokens
-    if c == b'+' { self.pos = self.pos + 1; return Token.Plus }
-    if c == b'-' { self.pos = self.pos + 1; return Token.Minus }
-    if c == b'*' { self.pos = self.pos + 1; return Token.Star }
-    if c == b'/' { self.pos = self.pos + 1; return Token.Slash }
-    if c == b'%' { self.pos = self.pos + 1; return Token.Percent }
-    if c == b'(' { self.pos = self.pos + 1; return Token.LParen }
-    if c == b')' { self.pos = self.pos + 1; return Token.RParen }
+    if c == '+' { self.pos = self.pos + 1; return Token.Plus }
+    if c == '-' { self.pos = self.pos + 1; return Token.Minus }
+    if c == '*' { self.pos = self.pos + 1; return Token.Star }
+    if c == '/' { self.pos = self.pos + 1; return Token.Slash }
+    if c == '%' { self.pos = self.pos + 1; return Token.Percent }
+    if c == '(' { self.pos = self.pos + 1; return Token.LParen }
+    if c == ')' { self.pos = self.pos + 1; return Token.RParen }
 
     // Number (integer or decimal)
-    if is_digit(c) or c == b'.' {
+    if is_digit(c) or c == '.' {
         const remaining = self.input[self.pos..self.input.len]
         const result = parse_f64(remaining)
         if result.is_ok() {

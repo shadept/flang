@@ -7,8 +7,8 @@ import std.test
 
 // Split a string by a byte delimiter. Returns a List of non-owning String views.
 // max controls the maximum number of splits: -1 = unlimited.
-// split("a,b,c", b',')    → ["a", "b", "c"]
-// split("a,b,c", b',', 1) → ["a", "b,c"]
+// split("a,b,c", ',')    → ["a", "b", "c"]
+// split("a,b,c", ',', 1) → ["a", "b,c"]
 pub fn split(s: String, delimiter: u8, max: i32 = -1) List(String) {
     let result = list(String)
     let start: usize = 0
@@ -29,7 +29,7 @@ pub fn split(s: String, delimiter: u8, max: i32 = -1) List(String) {
 }
 
 test "split basic" {
-    let parts = split("a,b,c", b',')
+    let parts = split("a,b,c", ',')
     defer parts.deinit()
 
     assert_eq(parts.len, 3usize, "should have 3 parts")
@@ -39,7 +39,7 @@ test "split basic" {
 }
 
 test "split with max" {
-    let parts = split("a,b,c,d", b',', 1)
+    let parts = split("a,b,c,d", ',', 1)
     defer parts.deinit()
 
     assert_eq(parts.len, 2usize, "should have 2 parts")
@@ -48,7 +48,7 @@ test "split with max" {
 }
 
 test "split no delimiter" {
-    let parts = split("hello", b',')
+    let parts = split("hello", ',')
     defer parts.deinit()
 
     assert_eq(parts.len, 1usize, "should have 1 part")
@@ -56,7 +56,7 @@ test "split no delimiter" {
 }
 
 test "split empty segments" {
-    let parts = split("a,,b", b',')
+    let parts = split("a,,b", ',')
     defer parts.deinit()
 
     assert_eq(parts.len, 3usize, "should have 3 parts")
@@ -66,19 +66,19 @@ test "split empty segments" {
 }
 
 test "partition basic" {
-    const result = partition("key=value", b'=')
+    const result = partition("key=value", '=')
     assert_eq(result.0, "key", "before")
     assert_eq(result.1, "value", "after")
 }
 
 test "partition not found" {
-    const result = partition("hello", b'=')
+    const result = partition("hello", '=')
     assert_eq(result.0, "hello", "whole string")
     assert_eq(result.1, "", "empty after")
 }
 
 test "partition first occurrence" {
-    const result = partition("a=b=c", b'=')
+    const result = partition("a=b=c", '=')
     assert_eq(result.0, "a", "before first =")
     assert_eq(result.1, "b=c", "after first =")
 }

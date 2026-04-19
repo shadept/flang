@@ -89,25 +89,25 @@ pub fn main() i32 {
         let n = snake_read_key(input.ptr, 3) as isize
 
         if n == 1 {
-            if input[0] == b'q' or input[0] == b'Q' { break }
-            if input[0] == b'w' or input[0] == b'W' {
+            if input[0] == 'q' or input[0] == 'Q' { break }
+            if input[0] == 'w' or input[0] == 'W' {
                 if dir != DIR_DOWN { dir = DIR_UP }
             }
-            if input[0] == b's' or input[0] == b'S' {
+            if input[0] == 's' or input[0] == 'S' {
                 if dir != DIR_UP { dir = DIR_DOWN }
             }
-            if input[0] == b'a' or input[0] == b'A' {
+            if input[0] == 'a' or input[0] == 'A' {
                 if dir != DIR_RIGHT { dir = DIR_LEFT }
             }
-            if input[0] == b'd' or input[0] == b'D' {
+            if input[0] == 'd' or input[0] == 'D' {
                 if dir != DIR_LEFT { dir = DIR_RIGHT }
             }
         }
-        if n == 3 and input[0] == 27 and input[1] == b'[' {
-            if input[2] == b'A' and dir != DIR_DOWN { dir = DIR_UP }
-            if input[2] == b'B' and dir != DIR_UP { dir = DIR_DOWN }
-            if input[2] == b'D' and dir != DIR_RIGHT { dir = DIR_LEFT }
-            if input[2] == b'C' and dir != DIR_LEFT { dir = DIR_RIGHT }
+        if n == 3 and input[0] == 27 and input[1] == '[' {
+            if input[2] == 'A' and dir != DIR_DOWN { dir = DIR_UP }
+            if input[2] == 'B' and dir != DIR_UP { dir = DIR_DOWN }
+            if input[2] == 'D' and dir != DIR_RIGHT { dir = DIR_LEFT }
+            if input[2] == 'C' and dir != DIR_LEFT { dir = DIR_RIGHT }
         }
 
         // --- Move ---

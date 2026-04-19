@@ -2951,6 +2951,31 @@ pub fn main() i32 {
 
 ---
 
+### W1002: Shadowed Variable in Same Scope
+
+**Category**: Code Quality
+**Severity**: Warning
+
+#### Description
+
+A `let`/`const` declaration re-uses a name that's already bound in the *same* scope. Cross-scope shadowing (inner block shadowing outer) is still allowed without a warning — this warning only fires when the earlier binding becomes unreachable in the same block.
+
+#### Example
+
+```flang
+pub fn main() i32 {
+    const val: i32 = 1
+    const val: i32 = 2  // warning[W1002]: `val` shadows an earlier declaration in the same scope
+    return val
+}
+```
+
+#### Solution
+
+Rename one of the bindings. If the shadow is intentional (e.g., narrowing an option to its inner value), prefix the new name with `_` to suppress the warning.
+
+---
+
 ## W2XXX: Semantic Analysis Warnings
 
 ### W2001: Deprecated Type Usage

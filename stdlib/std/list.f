@@ -166,15 +166,35 @@ pub fn op_index(list: List($T), index: usize) T {
     return elem.*
 }
 
-// Borrow the element at `index` — returns `&T` and panics on out-of-bounds.
-// Use this when you need to read or mutate the element in place without
-// copying. The reference is valid until the list is reallocated
-// (push/reserve) or deinit'd.
-pub fn at_ref(list: &List($T), index: usize) &T {
+// Range indexing: returns a sub-slice of the list's live elements.
+// Out-of-bounds indices are clamped; an invalid range yields an empty slice.
+pub fn op_index(list: List($T), range: Range(usize)) T[] {
+    let start = range.start
+    let end = range.end
+    if start > list.len { start = list.len }
+    if end > list.len { end = list.len }
+    if start > end { end = start }
+    return .{ ptr = list.ptr + start, len = end - start }
+}
+
+// Ref-form indexer, selected by the compiler when the list is addressed via
+// `&list[i]`. Returns a pointer to the live element so callers can read or
+// mutate it without copying. Panics on out-of-bounds.
+pub fn op_index_ref(list: &List($T), index: usize) &T {
     if index >= list.len {
         panic("List: index out of bounds")
     }
     return list.ptr + index
+}
+
+// Borrow the element at `index` — returns `&T` and panics on out-of-bounds.
+// Use this when you need to read or mutate the element in place without
+// copying. The reference is valid until the list is reallocated
+// (push/reserve) or deinit'd.
+// Prefer `&list[i]` which resolves to `op_index_ref` — this function is kept
+// for callers that want an explicit method form.
+pub fn at_ref(list: &List($T), index: usize) &T {
+    return list.op_index_ref(index)
 }
 
 pub fn op_set_index(list: &List($T), index: usize, value: T) {

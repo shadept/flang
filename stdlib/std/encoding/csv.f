@@ -56,7 +56,7 @@ pub type CsvOptions = struct {
 }
 
 pub fn csv_options() CsvOptions {
-    return .{ delimiter = b',', quote = b'"', has_headers = true }
+    return .{ delimiter = ',', quote = '"', has_headers = true }
 }
 
 // =============================================================================
@@ -183,8 +183,8 @@ fn process_chunk(
 
     const masks = classify_chunk(chunk_ptr, options.delimiter, options.quote)
     const parity_result = compute_quote_parity(masks.quotes, state.quote_carry)
-    const inside_quotes = parity_result._0
-    state.quote_carry = parity_result._1
+    const inside_quotes = parity_result.0
+    state.quote_carry = parity_result.1
     const filtered = filter_by_quotes(masks, inside_quotes)
 
     const valid_mask = (1u32 << (data_len as u32)) - 1
@@ -415,7 +415,7 @@ pub fn decode_int(self: &CsvDecoder, width: u8) i64 {
     self.current_field = self.current_field + 1
     if val.len == 0 { return 0 }
     const parsed = parse_i64(val)
-    if parsed.is_ok() { return parsed.unwrap()._0 }
+    if parsed.is_ok() { return parsed.unwrap().0 }
     return 0
 }
 
@@ -425,7 +425,7 @@ pub fn decode_uint(self: &CsvDecoder, width: u8) u64 {
     self.current_field = self.current_field + 1
     if val.len == 0 { return 0 }
     const parsed = parse_u64(val)
-    if parsed.is_ok() { return parsed.unwrap()._0 }
+    if parsed.is_ok() { return parsed.unwrap().0 }
     return 0
 }
 
@@ -435,7 +435,7 @@ pub fn decode_float(self: &CsvDecoder, width: u8) f64 {
     self.current_field = self.current_field + 1
     if val.len == 0 { return 0.0 }
     const parsed = parse_f64(val)
-    if parsed.is_ok() { return parsed.unwrap()._0 }
+    if parsed.is_ok() { return parsed.unwrap().0 }
     return 0.0
 }
 
@@ -708,8 +708,8 @@ fn parse_all(self: &CsvReader) {
             const cptr = if chunk_size < 16 { &chunk_buf[0] } else { data_ptr + pos }
             const masks = classify_chunk(cptr, self.options.delimiter, self.options.quote)
             const parity = compute_quote_parity(masks.quotes, quote_carry)
-            const inside = parity._0
-            quote_carry = parity._1
+            const inside = parity.0
+            quote_carry = parity.1
             const filtered = filter_by_quotes(masks, inside)
             const valid = (1u32 << (chunk_size as u32)) - 1
 
@@ -788,8 +788,8 @@ fn parse_all(self: &CsvReader) {
         if has_quotes or carry_odd {
             // Need full quote parity computation
             const parity = compute_quote_parity(masks.quotes, quote_carry)
-            const inside = parity._0
-            quote_carry = parity._1
+            const inside = parity.0
+            quote_carry = parity.1
             const filtered = filter_by_quotes(masks, inside)
             structural = (filtered.delimiters | filtered.newlines) & valid
         } else {

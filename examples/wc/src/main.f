@@ -7,7 +7,7 @@ import std.env
 import std.option
 
 fn is_whitespace(c: u8) bool {
-    return c == b' ' or c == b'\t' or c == b'\n' or c == b'\r'
+    return c == ' ' or c == '\t' or c == '\n' or c == '\r'
 }
 
 fn count(r: Reader, lines: &usize, words: &usize, bytes_count: &usize) {
@@ -21,7 +21,7 @@ fn count(r: Reader, lines: &usize, words: &usize, bytes_count: &usize) {
 
         bytes_count.* = bytes_count.* + 1
 
-        if c.value == b'\n' {
+        if c.value == '\n' {
             lines.* = lines.* + 1
         }
 
@@ -62,9 +62,9 @@ pub fn main() i32 {
 
     for (r in opts) {
         r match {
-            Opt(b'l') => { show_lines = true }
-            Opt(b'w') => { show_words = true }
-            Opt(b'c') => { show_bytes = true }
+            Opt('l') => { show_lines = true }
+            Opt('w') => { show_words = true }
+            Opt('c') => { show_bytes = true }
             NonOpt(s) => { if s.len > 0 { files.push(s) } }
             _ => {}
         }

@@ -81,9 +81,9 @@ fn display_board(fen: String) {
 
         const ch = fen[pos]
 
-        if ch == b' ' {
+        if ch == ' ' {
             break
-        } else if ch == b'/' {
+        } else if ch == '/' {
             // Finish content line
             println(sb.as_view())
             sb.clear()
@@ -99,8 +99,8 @@ fn display_board(fen: String) {
             sb.append(rank)
             reset(w)
             sb.append(" ")
-        } else if ch >= b'1' and ch <= b'8' {
-            const count = (ch - b'0') as i32
+        } else if ch >= '1' and ch <= '8' {
+            const count = (ch - '0') as i32
             for (j in 0..count) {
                 set_square_bg(w, rank, col)
                 sb.append("    ")
@@ -109,7 +109,7 @@ fn display_board(fen: String) {
             }
         } else {
             set_square_bg(w, rank, col)
-            const is_white_piece = ch >= b'A' and ch <= b'Z'
+            const is_white_piece = ch >= 'A' and ch <= 'Z'
             if is_white_piece {
                 set_style(w, Style.Bold)
                 set_bright_fg(w, Color.White)
@@ -151,7 +151,7 @@ fn display_board(fen: String) {
     pos = pos + 1
     if (pos < fen.len) {
         sb.append("  ")
-        if (fen[pos] == b'w') {
+        if (fen[pos] == 'w') {
             set_style(w, Style.Bold)
             set_bright_fg(w, Color.White)
             sb.append("White")
@@ -169,7 +169,7 @@ fn display_board(fen: String) {
 }
 
 pub fn main() i32 {
-    let sb = string_builder_with_capacity(64)
+    let sb = string_builder(64)
     let w = sb.writer()
 
     set_style(w, Style.Bold)

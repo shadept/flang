@@ -46,49 +46,49 @@ pub fn get_terminal_size() TerminalSize {
 pub fn move_to(w: Writer, row: u32, col: u32) {
     write_csi(w)
     write_uint(w, row)
-    w.write_byte(b';')
+    w.write_byte(';')
     write_uint(w, col)
-    w.write_byte(b'H')
+    w.write_byte('H')
 }
 
 // Move cursor up by n lines.  ESC [ n A
 pub fn move_up(w: Writer, n: u32) {
     write_csi(w)
     write_uint(w, n)
-    w.write_byte(b'A')
+    w.write_byte('A')
 }
 
 // Move cursor down by n lines.  ESC [ n B
 pub fn move_down(w: Writer, n: u32) {
     write_csi(w)
     write_uint(w, n)
-    w.write_byte(b'B')
+    w.write_byte('B')
 }
 
 // Move cursor right by n columns.  ESC [ n C
 pub fn move_right(w: Writer, n: u32) {
     write_csi(w)
     write_uint(w, n)
-    w.write_byte(b'C')
+    w.write_byte('C')
 }
 
 // Move cursor left by n columns.  ESC [ n D
 pub fn move_left(w: Writer, n: u32) {
     write_csi(w)
     write_uint(w, n)
-    w.write_byte(b'D')
+    w.write_byte('D')
 }
 
 // Save cursor position.  ESC [ s
 pub fn save_cursor(w: Writer) {
     write_csi(w)
-    w.write_byte(b's')
+    w.write_byte('s')
 }
 
 // Restore cursor position.  ESC [ u
 pub fn restore_cursor(w: Writer) {
     write_csi(w)
-    w.write_byte(b'u')
+    w.write_byte('u')
 }
 
 // Hide cursor.  ESC [ ? 25 l
@@ -137,25 +137,25 @@ fn write_color_code(w: Writer, color: Color) {
 // Set foreground color.  ESC [ 3{c} m
 pub fn set_fg(w: Writer, color: Color) {
     write_csi(w)
-    w.write_byte(b'3')
+    w.write_byte('3')
     write_color_code(w, color)
-    w.write_byte(b'm')
+    w.write_byte('m')
 }
 
 // Set background color.  ESC [ 4{c} m
 pub fn set_bg(w: Writer, color: Color) {
     write_csi(w)
-    w.write_byte(b'4')
+    w.write_byte('4')
     write_color_code(w, color)
-    w.write_byte(b'm')
+    w.write_byte('m')
 }
 
 // Set bright foreground color.  ESC [ 9{c} m
 pub fn set_bright_fg(w: Writer, color: Color) {
     write_csi(w)
-    w.write_byte(b'9')
+    w.write_byte('9')
     write_color_code(w, color)
-    w.write_byte(b'm')
+    w.write_byte('m')
 }
 
 // Set bright background color.  ESC [ 10{c} m
@@ -163,7 +163,7 @@ pub fn set_bright_bg(w: Writer, color: Color) {
     write_csi(w)
     write_uint(w, 10)
     write_color_code(w, color)
-    w.write_byte(b'm')
+    w.write_byte('m')
 }
 
 // =============================================================================
@@ -195,14 +195,14 @@ pub fn set_style(w: Writer, style: Style) {
     }
     write_csi(w)
     write_uint(w, code)
-    w.write_byte(b'm')
+    w.write_byte('m')
 }
 
 // Reset all attributes (color + style).  ESC [ 0 m
 pub fn reset(w: Writer) {
     write_csi(w)
-    w.write_byte(b'0')
-    w.write_byte(b'm')
+    w.write_byte('0')
+    w.write_byte('m')
 }
 
 // =============================================================================
@@ -258,7 +258,7 @@ const ESC: u8 = 27
 // Write CSI (Control Sequence Introducer): ESC [
 fn write_csi(w: Writer) {
     w.write_byte(ESC)
-    w.write_byte(b'[')
+    w.write_byte('[')
 }
 
 // =============================================================================
@@ -274,11 +274,11 @@ test "escape codes" {
     let view = sb.as_view()
     assert_eq(view.len as i32, 6, "move_to len")
     assert_eq(view[0], 27u8, "ESC")
-    assert_eq(view[1], 91u8, "[")
-    assert_eq(view[2], 51u8, "3")
-    assert_eq(view[3], 59u8, ";")
-    assert_eq(view[4], 53u8, "5")
-    assert_eq(view[5], 72u8, "H")
+    assert_eq(view[1], '[', "[")
+    assert_eq(view[2], '3', "3")
+    assert_eq(view[3], ';', ";")
+    assert_eq(view[4], '5', "5")
+    assert_eq(view[5], 'H', "H")
     sb.clear()
 
     // reset -> ESC [ 0 m
@@ -286,25 +286,25 @@ test "escape codes" {
     let view2 = sb.as_view()
     assert_eq(view2.len as i32, 4, "reset len")
     assert_eq(view2[0], 27u8, "ESC")
-    assert_eq(view2[1], 91u8, "[")
-    assert_eq(view2[2], 48u8, "0")
-    assert_eq(view2[3], 109u8, "m")
+    assert_eq(view2[1], '[', "[")
+    assert_eq(view2[2], '0', "0")
+    assert_eq(view2[3], 'm', "m")
     sb.clear()
 
     // move_up(1) -> ESC [ 1 A
     move_up(w, 1)
     let view3 = sb.as_view()
     assert_eq(view3.len as i32, 4, "move_up len")
-    assert_eq(view3[2], 49u8, "1")
-    assert_eq(view3[3], 65u8, "A")
+    assert_eq(view3[2], '1', "1")
+    assert_eq(view3[3], 'A', "A")
     sb.clear()
 
     // clear_screen -> ESC [ 2 J
     clear_screen(w)
     let view4 = sb.as_view()
     assert_eq(view4.len as i32, 4, "clear_screen len")
-    assert_eq(view4[2], 50u8, "2")
-    assert_eq(view4[3], 74u8, "J")
+    assert_eq(view4[2], '2', "2")
+    assert_eq(view4[3], 'J', "J")
 
     sb.deinit()
 }
@@ -318,35 +318,35 @@ test "colors" {
     let view = sb.as_view()
     assert_eq(view.len as i32, 5, "set_fg len")
     assert_eq(view[0], 27u8, "ESC")
-    assert_eq(view[1], 91u8, "[")
-    assert_eq(view[2], 51u8, "3")
-    assert_eq(view[3], 49u8, "1")
-    assert_eq(view[4], 109u8, "m")
+    assert_eq(view[1], '[', "[")
+    assert_eq(view[2], '3', "3")
+    assert_eq(view[3], '1', "1")
+    assert_eq(view[4], 'm', "m")
     sb.clear()
 
     // set_bg(Color.Blue) -> ESC [ 4 4 m
     set_bg(w, Color.Blue)
     let view2 = sb.as_view()
     assert_eq(view2.len as i32, 5, "set_bg len")
-    assert_eq(view2[2], 52u8, "4")
-    assert_eq(view2[3], 52u8, "4")
-    assert_eq(view2[4], 109u8, "m")
+    assert_eq(view2[2], '4', "4")
+    assert_eq(view2[3], '4', "4")
+    assert_eq(view2[4], 'm', "m")
     sb.clear()
 
     // set_style(Style.Bold) -> ESC [ 1 m
     set_style(w, Style.Bold)
     let view3 = sb.as_view()
     assert_eq(view3.len as i32, 4, "set_style len")
-    assert_eq(view3[2], 49u8, "1")
-    assert_eq(view3[3], 109u8, "m")
+    assert_eq(view3[2], '1', "1")
+    assert_eq(view3[3], 'm', "m")
     sb.clear()
 
     // set_fg(Color.Default) -> ESC [ 3 9 m
     set_fg(w, Color.Default)
     let view4 = sb.as_view()
     assert_eq(view4.len as i32, 5, "set_fg default len")
-    assert_eq(view4[2], 51u8, "3")
-    assert_eq(view4[3], 57u8, "9")
+    assert_eq(view4[2], '3', "3")
+    assert_eq(view4[3], '9', "9")
 
     sb.deinit()
 }
