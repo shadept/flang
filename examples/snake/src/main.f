@@ -9,16 +9,6 @@ import std.terminal
 import std.mem
 
 // =============================================================================
-// Foreign functions (POSIX + C stdlib)
-// =============================================================================
-
-#foreign fn ioctl(fd: i32, request: u64, argp: &u8) i32
-#foreign fn read(fd: i32, buf: &u8, count: usize) isize
-#foreign fn write(fd: i32, buf: &u8, count: usize) isize
-#foreign fn usleep(usec: u32) i32
-#foreign fn arc4random_uniform(upper_bound: u32) u32
-
-// =============================================================================
 // Constants
 // =============================================================================
 
@@ -37,34 +27,17 @@ const CELL_FOOD: u8 = 1
 const CELL_BODY: u8 = 2
 const CELL_HEAD: u8 = 3
 
-// macOS arm64 termios layout (72 bytes):
-//   offset  0: c_iflag  (u64)
-//   offset  8: c_oflag  (u64)
-//   offset 16: c_cflag  (u64)
-//   offset 24: c_lflag  (u64)
-//   offset 32: c_cc[20] (20 bytes)
-//   offset 52: padding  (4 bytes)
-//   offset 56: c_ispeed (u64)
-//   offset 64: c_ospeed (u64)
-
-// ioctl requests for terminal attributes (macOS arm64)
-const TIOCGETA: u64 = 0x40487413  // get termios
-const TIOCSETA: u64 = 0x80487414  // set termios
-
-// ~(ICANON 0x100 | ECHO 0x8) pre-computed AND mask for c_lflag
-const LFLAG_MASK: u64 = 0xFFFF_FFFF_FFFF_FEF7
-
 // =============================================================================
 // Helpers
 // =============================================================================
 
 fn rand_range(lo: i32, hi: i32) i32 {
-    return lo + arc4random_uniform((hi - lo) as u32) as i32
+    return lo + snake_random_upper((hi - lo) as u32) as i32
 }
 
 fn flush_output(sb: &StringBuilder) {
     let view = sb.as_view()
-    write(1, view.ptr, view.len)
+    snake_write_stdout(view.ptr, view.len)
     sb.clear()
 }
 
@@ -73,23 +46,8 @@ fn flush_output(sb: &StringBuilder) {
 // =============================================================================
 
 pub fn main() i32 {
-    // --- Raw terminal mode (macOS arm64 termios: 72 bytes) ---
-    let old_term = [0u8; 72]
-    let new_term = [0u8; 72]
-    ioctl(0, TIOCGETA, old_term.ptr)
-    memcpy(new_term.ptr, old_term.ptr, 72)
-
-    // Clear ICANON and ECHO in c_lflag (offset 24)
-    let lflag = (new_term.ptr + 24usize) as &u64
-    lflag.* = lflag.* & LFLAG_MASK
-
-    // VMIN=0, VTIME=0: non-blocking reads (c_cc[16], c_cc[17])
-    let vmin = new_term.ptr + 48usize
-    vmin.* = 0
-    let vtime = new_term.ptr + 49usize
-    vtime.* = 0
-
-    ioctl(0, TIOCSETA, new_term.ptr)
+    snake_enter_raw_mode()
+    defer snake_exit_raw_mode()
 
     // --- Output buffer ---
     let sb = string_builder(8192)
@@ -128,7 +86,7 @@ pub fn main() i32 {
 
         // --- Input (non-blocking) ---
         let input = [0u8; 3]
-        let n = read(0, input.ptr, 3)
+        let n = snake_read_key(input.ptr, 3) as isize
 
         if n == 1 {
             if input[0] == b'q' or input[0] == b'Q' { break }
@@ -277,7 +235,7 @@ pub fn main() i32 {
         // Flush frame
         flush_output(&sb)
 
-        usleep(120000) // ~120ms per frame
+        snake_sleep_us(120000) // ~120ms per frame
     }
 
     // --- Cleanup ---
@@ -286,9 +244,6 @@ pub fn main() i32 {
     clear_screen(w)
     move_to(w, 1, 1)
     flush_output(&sb)
-
-    // Restore terminal
-    ioctl(0, TIOCSETA, old_term.ptr)
 
     // Game over message
     set_fg(w, Color.Red)

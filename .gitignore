@@ -132,6 +132,8 @@ tests/FLang.Tests/Harness/**/*.generated.f
 examples/**
 !examples/**/
 !examples/**/*.f
+!examples/**/src/**/*.c
+examples/**/*.generated.f
 !examples/**/*.toml
 !examples/**/*.md
 !examples/**/.gitignore
