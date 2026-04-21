@@ -172,7 +172,9 @@ pub fn next(self: &GetOpt) OptResult? {
                 self.index = self.index + 1
             }
             const kind = lookup_short(self.format, ch)
-            if kind == 0 { return OptResult.Error(ch) }
+            if kind == 0 {
+                return OptResult.Error(ch)
+            }
             if kind == 2 {
                 if self.pos > 0 {
                     // Rest of arg is the value: -ofilename
@@ -205,14 +207,17 @@ pub fn next(self: &GetOpt) OptResult? {
         // Long option: --name or --name=value
         if a.starts_with("--") {
             self.index = self.index + 1
-            // Find '=' for inline value
+            // Find '=' for inline value; the name ends there (or at end of arg).
             let eq_pos = 2usize
             while eq_pos < a.len and a[eq_pos] != '=' {
                 eq_pos = eq_pos + 1
             }
-            const name = a[2..]
+            const name = a[2..eq_pos]
             const ch = lookup_long(self.format, name)
-            if ch == 0 { return OptResult.Error('?') }
+            if ch == 0 {
+                return OptResult.Error('?')
+            }
+
             const kind = lookup_short(self.format, ch)
             if kind == 2 {
                 if eq_pos < a.len {

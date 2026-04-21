@@ -102,8 +102,10 @@ pub fn read_dir(path: String) Result(DirIter, FsError) {
     return Ok(it)
 }
 
-pub fn iter(self: &DirIter) DirIter {
-    return self.*
+pub fn iter(self: &DirIter) &DirIter {
+    // Returning `&self` (not a copy) means `for entry in it { ... }` mutates
+    // the original — so `it.err()` / `it.done` stay meaningful afterward.
+    return self
 }
 
 pub fn next(self: &DirIter) DirEntry? {

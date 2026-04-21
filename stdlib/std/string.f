@@ -171,7 +171,7 @@ pub type OwnedString = struct {
     allocator: &Allocator?
 }
 
-pub fn from_view(s: String, allocator: &Allocator?) OwnedString {
+pub fn from_view(s: String, allocator: &Allocator? = null) OwnedString {
     // TODO optimize
     const sb = string_builder(s.len, allocator)
     sb.append(s)
