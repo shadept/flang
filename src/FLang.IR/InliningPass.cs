@@ -126,16 +126,21 @@ public static class InliningPass
     {
         bool anyInlined = false;
 
+        // Substitutions are function-scoped, not block-scoped: when a for-loop's
+        // `iter()` call in block N produces `call_K` and the loop's condition
+        // block N+1 references it via `next(call_K)`, the rewrite of `call_K`
+        // has to reach across the block boundary. Keeping the map per-block
+        // would leave the later use dangling on an identifier whose defining
+        // instruction was just deleted by the inliner.
+        var substitutions = new Dictionary<Value, Value>();
+
         foreach (var block in caller.BasicBlocks)
         {
-            // We need to handle substitutions: when a call is inlined, references to the
-            // call's result in subsequent instructions must be rewritten to the inlined return value.
-            var substitutions = new Dictionary<Value, Value>();
             var newInstructions = new List<Instruction>(block.Instructions.Count);
 
             foreach (var inst in block.Instructions)
             {
-                // Apply any pending substitutions to this instruction
+                // Apply any pending substitutions (from this block or earlier blocks)
                 var processedInst = substitutions.Count > 0 ? RewriteOperands(inst, substitutions) : inst;
 
                 if (processedInst is CallInstruction call

@@ -225,6 +225,23 @@ Non-pub helper functions using `let buf: [u8; 1] = [0; 1]` followed by vtable di
 
 ---
 
+### ~~`defer` in a Nested Block Escapes Its C Scope~~
+
+**Status:** Fixed
+**Affected:** C codegen — `defer` lowering across nested blocks
+
+A `defer` registered inside a nested lexical block (e.g. inside an `if` branch or a `for` body) used to be emitted only at the outer function's exit path. The deinit call ended up past the closing `}` of the block that declared its allocas, so the generated C referenced undeclared identifiers (`error C2065: 'alloca_33': undeclared identifier`) — and on targets that accepted it, the deinit fired long past the resource's live range.
+
+**Fix** (in `HmAstLowering`): every `BlockExpressionNode` is now a defer scope. `PushDeferScope`/`PopDeferScope` bracket each block; the `_deferStack` records defers in LIFO, and a parallel `_deferScopeMarks` stack records the stack depth at each scope entry. On a normal scope exit the scope's defers are emitted and popped. `return` emits every active defer (down to depth 0); `break`/`continue` emit defers from the top down to the depth recorded when the loop was entered. All emissions respect `_currentBlock.IsTerminated`.
+
+**Regression tests** (under `tests/FLang.Tests/Harness/defer/`):
+- `defer_nested_block_heap.f` — the exact shape that crashed `examples/tree`.
+- `defer_{break,continue,return}_unwinds.f` — pins the LIFO unwind order.
+- `defer_{break,continue,return}_no_fallthrough.f` — pins that code after these jumps never runs, using a side-effect counter returned as the exit code.
+- `defer_nested_loops.f` — pins that inner `break` fires only the innermost loop's defers.
+
+---
+
 ## Deferred Features
 
 ### FFI Pointer Returns and Casts

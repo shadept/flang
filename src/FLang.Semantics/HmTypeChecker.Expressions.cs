@@ -289,6 +289,12 @@ public partial class HmTypeChecker
         // (required for generic sorting over primitives), but `<`/`>`/`==` on primitives
         // bypass user-defined/derived resolution to avoid recursion and keep hardware
         // compares on the hot path.
+        //
+        // Bare enums (no variant payloads) also get the builtin fast path for `==`/`!=`,
+        // compared tag-against-tag. This means every enum like `FileKind` gets structural
+        // equality for free, without a per-type `op_eq` boilerplate function. Ordering
+        // operators stay off — tag values aren't a meaningful total order without the
+        // user's intent (`op_cmp` can still be defined if they want one).
         if (bin.Operator is BinaryOperatorKind.Equal or BinaryOperatorKind.NotEqual or
             BinaryOperatorKind.LessThan or BinaryOperatorKind.GreaterThan or
             BinaryOperatorKind.LessThanOrEqual or BinaryOperatorKind.GreaterThanOrEqual)
@@ -297,6 +303,17 @@ public partial class HmTypeChecker
             var resolvedRight = _ctx.Engine.Resolve(right);
             if (resolvedLeft is PrimitiveType lp && resolvedRight is PrimitiveType rp && lp.Name == rp.Name)
                 return InferBuiltinBinary(bin.Operator, left, right, bin.Span);
+
+            if (bin.Operator is BinaryOperatorKind.Equal or BinaryOperatorKind.NotEqual
+                && resolvedLeft is NominalType { Kind: NominalKind.Enum } le
+                && resolvedRight is NominalType { Kind: NominalKind.Enum } re
+                && le.Name == re.Name
+                && le.FieldsOrVariants.All(v => v.Type.Equals(WellKnown.Void))
+                && re.FieldsOrVariants.All(v => v.Type.Equals(WellKnown.Void)))
+            {
+                _ctx.Engine.Unify(left, right, bin.Span);
+                return WellKnown.Bool;
+            }
         }
 
         // Try user-defined operator function

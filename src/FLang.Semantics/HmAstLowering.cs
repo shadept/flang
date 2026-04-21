@@ -34,11 +34,16 @@ public class HmAstLowering
     private BlockBuildContext _ctx = null!;
     private readonly Dictionary<string, int> _stringTableIndices = [];
 
-    // Loop control flow
-    private readonly Stack<(BasicBlock BodyBlock, BasicBlock ExitBlock)> _loopStack = new();
+    // Loop control flow. `DeferDepthAtEntry` is the defer-stack count when the
+    // loop body was entered, used by `break`/`continue` to fire only the defers
+    // belonging to scopes they escape.
+    private readonly Stack<(BasicBlock BodyBlock, BasicBlock ExitBlock, int DeferDepthAtEntry)> _loopStack = new();
 
-    // Defer stack — per-function, stores deferred expressions in LIFO order
+    // Defer stack — per-function, stores deferred expressions in LIFO order.
+    // `_deferScopeMarks` records the defer-stack count at each block-scope
+    // entry, so a scope exit knows which defers to emit and pop.
     private readonly Stack<ExpressionNode> _deferStack = new();
+    private readonly Stack<int> _deferScopeMarks = new();
 
     // Global constants — name -> lowered Value
     private readonly Dictionary<string, Value> _globalConstants = [];
@@ -206,6 +211,7 @@ public class HmAstLowering
         _shadowCounter.Clear();
         _loopStack.Clear();
         _deferStack.Clear();
+        _deferScopeMarks.Clear();
 
         var fnName = $"__test_{index}__";
         var irFn = new IrFunction(fnName, TypeLayoutService.IrVoidPrim);
@@ -217,10 +223,11 @@ public class HmAstLowering
         foreach (var stmt in test.Body)
             LowerStatement(stmt);
 
-        // Emit deferred expressions
+        // Fire any defers registered directly in the test body (not inside a
+        // nested block — those have already been handled by `PopDeferScope`).
         if (!_currentBlock.IsTerminated)
         {
-            EmitDeferredExpressions();
+            EmitDefersDownTo(0);
         }
 
         // Add implicit void return to unterminated blocks
@@ -241,6 +248,7 @@ public class HmAstLowering
         _shadowCounter.Clear();
         _loopStack.Clear();
         _deferStack.Clear();
+        _deferScopeMarks.Clear();
 
         var irFn = new IrFunction("main", TypeLayoutService.IrI32);
         irFn.IsEntryPoint = true;
@@ -933,6 +941,7 @@ public class HmAstLowering
         _shadowCounter.Clear();
         _loopStack.Clear();
         _deferStack.Clear();
+        _deferScopeMarks.Clear();
 
         var fnType = GetFunctionHmType(fn);
         var retIrType = _layout.Lower(fnType.ReturnType);
@@ -988,11 +997,13 @@ public class HmAstLowering
             LowerStatement(stmt);
         }
 
-        // Emit deferred expressions at function epilogue (before implicit return),
-        // but only if the current block isn't already terminated by a return/jump.
+        // Fire any defers registered directly in the function body (i.e. not
+        // inside a nested block — inner-block defers already fired via their
+        // own `PopDeferScope`). Skip if the final statement already terminated
+        // the block with `return`.
         if (!_currentBlock.IsTerminated)
         {
-            EmitDeferredExpressions();
+            EmitDefersDownTo(0);
         }
 
         // Add implicit return to any unterminated block
@@ -1265,7 +1276,7 @@ public class HmAstLowering
         _currentBlock = bodyBlock;
 
         // Push loop context for break/continue
-        _loopStack.Push((bodyBlock, exitBlock));
+        _loopStack.Push((bodyBlock, exitBlock, _deferStack.Count));
 
         // Lower loop body — the body is an ExpressionNode (typically a BlockExpression)
         LowerExpression(loop.Body);
@@ -1297,7 +1308,7 @@ public class HmAstLowering
         // Body block
         _currentBlock = bodyBlock;
         // continue -> re-check condition, break -> exit
-        _loopStack.Push((condBlock, exitBlock));
+        _loopStack.Push((condBlock, exitBlock, _deferStack.Count));
         LowerExpression(whileLoop.Body);
         _loopStack.Pop();
 
@@ -1310,8 +1321,8 @@ public class HmAstLowering
 
     private Value LowerReturnExpr(ReturnNode ret)
     {
-        // Emit deferred expressions before returning
-        EmitDeferredExpressions();
+        // `return` unwinds every active defer scope, innermost first.
+        EmitDefersDownTo(0);
 
         if (ret.Expression != null)
         {
@@ -1337,7 +1348,10 @@ public class HmAstLowering
             return new IntConstantValue(0, TypeLayoutService.IrNeverPrim);
         }
 
-        var (_, exitBlock) = _loopStack.Peek();
+        var (_, exitBlock, deferDepth) = _loopStack.Peek();
+        // Fire every defer registered after the loop was entered — i.e. all
+        // defers belonging to scopes this `break` escapes through.
+        EmitDefersDownTo(deferDepth);
         _currentBlock.EmitJump(exitBlock);
 
         // Start a dead block — subsequent code is unreachable but we need a valid block
@@ -1355,7 +1369,9 @@ public class HmAstLowering
             return new IntConstantValue(0, TypeLayoutService.IrNeverPrim);
         }
 
-        var (bodyBlock, _2) = _loopStack.Peek();
+        var (bodyBlock, _2, deferDepth) = _loopStack.Peek();
+        // Same reasoning as `break`: escape fires the defers we're jumping past.
+        EmitDefersDownTo(deferDepth);
         _currentBlock.EmitJump(bodyBlock);
 
         // Start a dead block
@@ -1391,15 +1407,35 @@ public class HmAstLowering
         var exitBlock = CreateBlock("for_exit");
 
         // 1. Lower iterable expression
-        var iterableVal = LowerExpression(forLoop.IterableExpression);
-
-        // Materialize iterable to alloca if not already a pointer (iter takes &T)
-        if (iterableVal.IrType is not IrPointer)
+        //
+        // If the iterable is a plain local (`for x in it`), pass its alloca
+        // pointer directly to `iter()` rather than loading its value and
+        // stuffing it into a fresh temp. This matters whenever the iterator's
+        // `iter(&Self)` returns `&Self` (the conventional pattern for in-place
+        // iterators like `DirIter` / `WalkIter` / `GlobIter`): callers can
+        // inspect post-iteration state on the same variable they looped over
+        // (`it.err()`, `it.done`). With the old copy-based lowering those
+        // fields stayed frozen at their pre-loop values, silently swallowing
+        // iterator errors.
+        Value iterableVal;
+        if (forLoop.IterableExpression is IdentifierExpressionNode idExpr
+            && _locals.TryGetValue(idExpr.Name, out var idLocal)
+            && !_parameters.Contains(idExpr.Name))
         {
-            var iterableIrType = iterableVal.IrType ?? TypeLayoutService.IrVoidPrim;
-            var temp = _currentBlock.EmitAlloca(iterableIrType);
-            _currentBlock.EmitStorePtr(temp, iterableVal);
-            iterableVal = temp;
+            iterableVal = idLocal;
+        }
+        else
+        {
+            iterableVal = LowerExpression(forLoop.IterableExpression);
+
+            // Materialize iterable to alloca if not already a pointer (iter takes &T)
+            if (iterableVal.IrType is not IrPointer)
+            {
+                var iterableIrType = iterableVal.IrType ?? TypeLayoutService.IrVoidPrim;
+                var temp = _currentBlock.EmitAlloca(iterableIrType);
+                _currentBlock.EmitStorePtr(temp, iterableVal);
+                iterableVal = temp;
+            }
         }
 
         // 2. Call iter(&iterable) -> IteratorStruct
@@ -1447,7 +1483,7 @@ public class HmAstLowering
 
             // Body: cast to non-nullable, store to loop var
             _currentBlock = bodyBlock;
-            _loopStack.Push((condBlock, exitBlock));
+            _loopStack.Push((condBlock, exitBlock, _deferStack.Count));
 
             var stripped = StripNullable(nichePtr);
             var castVal = _currentBlock.EmitCast(nextResult, stripped);
@@ -1479,7 +1515,7 @@ public class HmAstLowering
 
             // 6. Body block: extract value, store to loop var, lower body, jump back to cond
             _currentBlock = bodyBlock;
-            _loopStack.Push((condBlock, exitBlock));
+            _loopStack.Push((condBlock, exitBlock, _deferStack.Count));
 
             // Extract value field from Option
             var valField = FindField(optionStruct, "value");
@@ -1569,7 +1605,7 @@ public class HmAstLowering
         // Body block: GEP to array[index], load element, store to loop var
         _currentBlock = bodyBlock;
 
-        _loopStack.Push((condBlock, exitBlock));
+        _loopStack.Push((condBlock, exitBlock, _deferStack.Count));
 
         // Compute byte offset: index * element_size
         var elemSize = new IntConstantValue(elementIrType.Size, usizeType);
@@ -1599,20 +1635,57 @@ public class HmAstLowering
 
     private void LowerDefer(DeferStatementNode defer)
     {
-        // Push the expression onto the defer stack; it will be emitted before returns
+        // Register the expression in the active scope; it fires at scope exit
+        // (block fall-through) and at any escaping jump that passes through
+        // this scope (return/break/continue).
         _deferStack.Push(defer.Expression);
     }
 
     /// <summary>
-    /// Emit all deferred expressions in LIFO order. Does not clear the stack
-    /// (so multiple returns each emit all defers).
+    /// Mark the start of a defer scope. Every `BlockExpressionNode` opens one;
+    /// the matching <see cref="PopDeferScope"/> fires and drops the scope's
+    /// defers on normal fall-through.
     /// </summary>
-    private void EmitDeferredExpressions()
+    private void PushDeferScope()
     {
-        if (_deferStack.Count == 0) return;
-        // Emit in LIFO order (stack iteration is LIFO)
-        foreach (var expr in _deferStack)
+        _deferScopeMarks.Push(_deferStack.Count);
+    }
+
+    /// <summary>
+    /// End the current defer scope on a normal (fall-through) exit path: emit
+    /// the scope's defers in LIFO order, then pop them off the stack.
+    ///
+    /// If the current block is already terminated (e.g. by an early `return`
+    /// or `break` inside the scope), defers already fired at that transition
+    /// — skip emission but still pop the stack slots so outer scopes stay in
+    /// sync.
+    /// </summary>
+    private void PopDeferScope()
+    {
+        var mark = _deferScopeMarks.Pop();
+        EmitDefersDownTo(mark);
+        while (_deferStack.Count > mark)
+            _deferStack.Pop();
+    }
+
+    /// <summary>
+    /// Emit every defer from the top of the stack down to (exclusive)
+    /// <paramref name="targetDepth"/>, in LIFO order. Does NOT mutate the
+    /// stack — callers decide whether a transition is a pop (scope exit) or
+    /// just a traversal (`return`/`break`/`continue`, which terminate the
+    /// current block but leave the stack for the enclosing scopes' own
+    /// exits).
+    /// </summary>
+    private void EmitDefersDownTo(int targetDepth)
+    {
+        if (_currentBlock.IsTerminated) return;
+        if (_deferStack.Count <= targetDepth) return;
+
+        // Stack<T> enumerates top-to-bottom — LIFO is the natural iteration.
+        var count = _deferStack.Count - targetDepth;
+        foreach (var expr in _deferStack.Take(count))
         {
+            if (_currentBlock.IsTerminated) break;
             LowerExpression(expr);
         }
     }
@@ -2348,10 +2421,42 @@ public class HmAstLowering
         var left = LowerExpression(binary.Left);
         var right = LowerExpression(binary.Right);
 
+        // Bare-enum `==` / `!=`: extract and compare tags (i32 at offset 0).
+        // The typechecker only routes this path for bare enums (no payloads),
+        // so the enum value is just its tag — no need to compare payload bytes.
+        if (binary.Operator is BinaryOperatorKind.Equal or BinaryOperatorKind.NotEqual
+            && left.IrType is IrEnum && right.IrType is IrEnum)
+        {
+            var lt = ExtractEnumTag(left, "eq_tag_l");
+            var rt = ExtractEnumTag(right, "eq_tag_r");
+            var cmpOp = binary.Operator == BinaryOperatorKind.Equal ? BinaryOp.Equal : BinaryOp.NotEqual;
+            return _currentBlock.EmitBinary(cmpOp, lt, rt, TypeLayoutService.IrBool);
+        }
+
         var irType = GetIrType(binary);
 
         var op = MapBinaryOp(binary.Operator);
         return _currentBlock.EmitBinary(op, left, right, irType);
+    }
+
+    /// <summary>
+    /// Materialize an enum value to stack if needed, then load its tag field
+    /// (always i32 at offset 0). Used by bare-enum equality and other call
+    /// sites that need to peek the discriminant.
+    /// </summary>
+    private Value ExtractEnumTag(Value enumVal, string label)
+    {
+        Value ptr;
+        if (enumVal.IrType is IrPointer)
+        {
+            ptr = enumVal;
+        }
+        else
+        {
+            ptr = _currentBlock.EmitAlloca(enumVal.IrType!);
+            _currentBlock.EmitStorePtr(ptr, enumVal);
+        }
+        return EmitLoadFromOffset(ptr, 0, TypeLayoutService.IrI32, label);
     }
 
     /// <summary>
@@ -2672,12 +2777,35 @@ public class HmAstLowering
 
     private Value LowerBlock(BlockExpressionNode block)
     {
-        foreach (var stmt in block.Statements)
-            LowerStatement(stmt);
+        // Each block is a defer scope: defers registered inside it fire on
+        // exit (normal fall-through, or on any escaping jump). `PopDeferScope`
+        // handles both cases — it emits+pops on fall-through, and just pops
+        // if the block is already terminated by an inner return/break/continue.
+        PushDeferScope();
+        try
+        {
+            foreach (var stmt in block.Statements)
+                LowerStatement(stmt);
 
-        if (block.TrailingExpression != null)
-            return LowerExpression(block.TrailingExpression);
+            if (block.TrailingExpression != null)
+            {
+                var result = LowerExpression(block.TrailingExpression);
+                PopDeferScope();
+                return result;
+            }
+        }
+        catch
+        {
+            // Keep the scope stack balanced on lowering errors.
+            if (_deferScopeMarks.Count > 0)
+            {
+                var mark = _deferScopeMarks.Pop();
+                while (_deferStack.Count > mark) _deferStack.Pop();
+            }
+            throw;
+        }
 
+        PopDeferScope();
         return new IntConstantValue(0, TypeLayoutService.IrVoidPrim);
     }
 
