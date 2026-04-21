@@ -1857,6 +1857,40 @@ Check that all template expressions use valid member accesses and that reference
 
 ---
 
+### E2077: Ambiguous Index Operator
+
+**Category**: Type Checking / Operators
+**Severity**: Error
+
+#### Description
+
+A type defines **both** `op_index_ref` (ref-form) and a value-form indexing operator (`op_index` or `op_set_index`) for the same `(Self, Idx)` pair. The two patterns are mutually exclusive — pick one:
+
+- **Ref-form** (`op_index_ref(&Self, Idx) &T`): one function covers reads, writes, and `&x[i]`. Use for containers backed by real storage (`List`, `Slice`, …).
+- **Value-form** (`op_index(Self, Idx) T` plus optional `op_set_index(&Self, Idx, V)`): computed reads. Use when the indexed result is genuinely derived (e.g. `Dict` → `Option(V)`).
+
+Different `Idx` types are independent — `List` legally defines ref-form `op_index_ref(&List, usize) &T` alongside value-form `op_index(List, Range) T[]`. The conflict is only between operators with the same `(Self, Idx)` signature.
+
+#### Example
+
+```flang
+type MyVec = struct { a: i32, b: i32 }
+
+fn op_index(v: MyVec, i: usize) i32 { return v.a }           // value-form
+fn op_index_ref(v: &MyVec, i: usize) &i32 { return &v.a }    // ref-form
+
+pub fn main() i32 {
+    let v: MyVec = .{ a = 1, b = 2 }
+    return v[0usize]  // ERROR E2077: ambiguous — both op_index and op_index_ref are defined
+}
+```
+
+#### Solution
+
+Delete whichever pattern doesn't fit the container's semantics. For lvalue storage, keep `op_index_ref` and remove `op_index` / `op_set_index`. For computed indexing, keep `op_index` (and `op_set_index` if writes are supported) and remove `op_index_ref`.
+
+---
+
 ### E2076: Duplicate Struct Field Name
 
 **Category**: Type Checking / Structs
@@ -2781,6 +2815,7 @@ Report the issue with sample code that reproduces the error.
 | **E2072** | Source Generators | Source generator argument kind mismatch      |
 | **E2073** | Source Generators | Template expansion error                     |
 | **E2076** | Type Checking     | Duplicate struct field name                   |
+| **E2077** | Operators         | Ambiguous index operator                       |
 | **E2102** | Generics          | Conflicting generic type bindings            |
 
 ### E3XXX: Code Generation

@@ -33,7 +33,8 @@ public record FunctionContext(FunctionDeclarationNode Node, Type ReturnType);
 public record ResolvedOperator(
     FunctionDeclarationNode Function,
     bool NegateResult = false,
-    BinaryOperatorKind? CmpDerivedOperator = null);
+    BinaryOperatorKind? CmpDerivedOperator = null,
+    bool IsRefForm = false);
 
 /// <summary>
 /// Hindley-Milner type checker. Drives InferenceEngine over the AST.

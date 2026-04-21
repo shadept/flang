@@ -344,7 +344,8 @@ Every operator desugars to a function call. The stdlib provides implementations 
 | `+` `-` `*` `/` `%` | `op_add` `op_sub` `op_multiply` `op_divide` `op_modulo` |
 | `==` `!=` `<` `>` `<=` `>=` | `op_eq` `op_ne` `op_lt` `op_gt` `op_le` `op_ge` |
 | `&` `\|` `^` | `op_band` `op_bor` `op_bxor` |
-| `[]` read / `[]=` write | `op_index` / `op_set_index` |
+| `[]` (ref-form) | `op_index_ref` |
+| `[]` read (value-form) / `[]=` write (value-form) | `op_index` / `op_set_index` |
 | `??` | `op_coalesce` |
 | `=` | `op_assign` |
 | `+=` | `op_add_assign` |
@@ -352,6 +353,24 @@ Every operator desugars to a function call. The stdlib provides implementations 
 | `.field` (fallback) | `op_deref` |
 
 **`op_deref`**: When `x.field` or `x.method()` fails to resolve on type `X`, the compiler looks for `fn op_deref(self: &X) &T`. If found, resolution retries on `T`. This applies to both field access and UFCS method calls. Chains through multiple layers: `Rc(Wrapper(Point)).x` resolves through two `op_deref` calls. Own fields and methods on `X` always take priority — `op_deref` is only consulted when direct resolution fails. This is a general-purpose language feature, not specific to smart pointers.
+
+**Indexing (`[]`)** — two mutually exclusive patterns for user-defined types:
+
+| Pattern | Signature | Enabled syntax |
+|---|---|---|
+| **Ref-form** (lvalue storage) | `fn op_index_ref(self: &Self, idx: Idx) &T` | `x[i]` read, `x[i] = v` write, `&x[i]` address-of |
+| **Value-form** (computed read) | `fn op_index(self, idx: Idx) T` (any return shape: `T`, `T?`, `T[]`, ...) | `x[i]` read only |
+| **Value-form** (optional setter) | `fn op_set_index(self: &Self, idx: Idx, v: V)` | `x[i] = v` write |
+
+*Dispatch rules:*
+
+- `x[i]` (read): ref-form if declared, else value-form `op_index`.
+- `x[i] = v` (write): ref-form if declared (store through returned pointer), else value-form `op_set_index`.
+- `&x[i]` (address-of): ref-form required. Rejected on value-form with E2040 — computed results have no stable storage.
+
+*Ambiguity:* for any given `(Self, Idx)` pair, declaring **both** `op_index_ref` and any value-form operator (`op_index` / `op_set_index`) is rejected with **E2077**. The two patterns are mutually exclusive. Different `Idx` types are independent overloads — `List` legally declares ref-form `op_index_ref(&List, usize) &T` alongside value-form `op_index(List, Range) T[]`.
+
+*Choosing a pattern:* use **ref-form** for containers backed by real storage (`List`, `Slice`, custom vectors) — one function covers all three contexts, and reads/writes hit the underlying memory without temporary copies. Use **value-form** when the indexed result is genuinely computed (`Dict` returning `Option(V)`, `String` returning `u8`, `Range` returning `T?`, slicing into a new slice). Built-in arrays `[T; N]` and slices `T[]` use compiler-provided ref-form semantics automatically — no operator declaration needed.
 
 **Auto-derivation:**
 - `op_eq` auto-derives `op_ne` (and vice versa) by negation.

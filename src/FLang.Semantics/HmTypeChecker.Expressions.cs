@@ -1932,13 +1932,39 @@ public partial class HmTypeChecker
             return WellKnown.Void;
         }
 
-        // Try op_set_index(&base, index, value) for user-defined types
-        var refBaseType = new ReferenceType(baseType);
-        var opResult = TryResolveOperator("op_set_index", [refBaseType, indexType, valueType], assign.Span, out var setNode);
-        if (opResult == null)
-            opResult = TryResolveOperator("op_set_index", [baseType, indexType, valueType], assign.Span, out setNode);
+        // User-defined: two mutually exclusive patterns.
+        //   Ref-form:   op_index_ref(&Self, Idx) &T  — store lowers to call + *p = v
+        //   Value-form: op_set_index(&Self, Idx, V) (or by-value Self) — explicit setter
+        // Declaring both for the same (Self, Idx) pair is an error (E2077).
+        var refBase = resolvedBase is ReferenceType ? baseType : new ReferenceType(baseType);
+        var refRet = TryResolveOperator("op_index_ref", [refBase, indexType], idx.Span, out var refNode);
+        ReferenceType? refRetTy = null;
+        if (refRet != null && _ctx.Engine.Resolve(refRet) is ReferenceType rt)
+            refRetTy = rt;
 
-        if (opResult != null)
+        var setRet = TryResolveOperator("op_set_index", [refBase, indexType, valueType], assign.Span, out var setNode);
+        if (setRet == null)
+            setRet = TryResolveOperator("op_set_index", [baseType, indexType, valueType], assign.Span, out setNode);
+
+        if (refRetTy != null && setRet != null)
+        {
+            ReportError(
+                "Ambiguous indexed assignment: both `op_index_ref` and `op_set_index` are defined. "
+                + "Declare only one — the two patterns are mutually exclusive.",
+                assign.Span, "E2077");
+        }
+
+        if (refRetTy != null)
+        {
+            // Ref-form: store through the pointer. Record on idx so lowering
+            // and address-of consult the same resolution.
+            _results.ResolvedOperators[idx] = new ResolvedOperator(refNode!, IsRefForm: true);
+            _ctx.Engine.Unify(valueType, refRetTy.InnerType, assign.Value.Span);
+            Record(idx, refRetTy.InnerType);
+            return WellKnown.Void;
+        }
+
+        if (setRet != null)
         {
             _results.ResolvedOperators[assign] = new ResolvedOperator(setNode!);
             Record(idx, valueType);
@@ -1965,22 +1991,21 @@ public partial class HmTypeChecker
 
         var inner = InferExpression(addrOf.Target);
 
-        // `&container[i]` — if the container defines `op_index_ref(&Base, Idx) &T`,
-        // call it directly instead of taking the address of a value-returning
-        // op_index's temporary result.
-        if (addrOf.Target is IndexExpressionNode idxTarget
-            && _ctx.Engine.Resolve(inner) is not ReferenceType
-            && _results.InferredTypes.TryGetValue(idxTarget.Base, out var baseT)
-            && _results.InferredTypes.TryGetValue(idxTarget.Index, out var idxT))
+        // &container[i] — the ref-form `op_index_ref` resolution (and ambiguity
+        // check) already ran inside InferIndex. Here we only validate that the
+        // target supports address-of: built-in array/slice indexing (no recorded
+        // operator) or a ref-form op_index_ref (IsRefForm = true) are both OK.
+        // A value-form op_index result is a computed temporary and cannot be
+        // addressed — declare `op_index_ref` instead.
+        if (addrOf.Target is IndexExpressionNode idxTarget)
         {
-            var resolvedBase = _ctx.Engine.Resolve(baseT);
-            var refBase = resolvedBase is ReferenceType ? resolvedBase : new ReferenceType(resolvedBase);
-            var refRet = TryResolveOperator("op_index_ref", [refBase, _ctx.Engine.Resolve(idxT)], addrOf.Span, out var refNode);
-            if (refRet != null && refNode != null
-                && _ctx.Engine.Resolve(refRet) is ReferenceType refTy)
+            var opInfo = _results.GetResolvedOperator(idxTarget);
+            if (opInfo != null && !opInfo.IsRefForm)
             {
-                idxTarget.ResolvedRefOpIndex = refNode;
-                return refTy;
+                ReportError(
+                    "Cannot take address of `[]` result: type uses value-form `op_index`. "
+                    + "Declare `op_index_ref(&Self, Idx) &T` to enable `&x[i]`.",
+                    addrOf.Span, "E2040");
             }
         }
 
@@ -2456,23 +2481,45 @@ public partial class HmTypeChecker
             return sliceType.TypeArguments[0];
         }
 
-        // Try op_index for user-defined types (Dict, String, etc.).
-        // Prefer the exact-match (value) overload first so `const a = list[i]`
-        // yields `T`, not `&T`. The `&base` variant is only tried as a fallback
-        // for types that expose indexing through a reference (e.g. Range, or
-        // List's mutation-oriented `op_index(&List($T), usize) &T` overload).
-        // If the base is already a reference, auto-deref to the pointee so
-        // `(&list)[i]` works without writing `(*lst)[i]`.
-        var opResult = TryResolveOperator("op_index", [baseType, indexType], idx.Span, out var resolvedNode)
-                    ?? TryResolveOperator("op_index", [new ReferenceType(baseType), indexType], idx.Span, out resolvedNode);
-        if (opResult == null && resolvedBase is ReferenceType baseRef)
+        // User-defined indexing: two mutually exclusive patterns.
+        //   Ref-form:  fn op_index_ref(&Self, Idx) &T   — lvalue semantics
+        //                                                  (read / write / &x[i])
+        //   Value-form: fn op_index(Self|&Self, Idx) T  — computed read only
+        //               + optional fn op_set_index(&Self, Idx, T) for writes
+        //
+        // Declaring both for the same (Self, Idx) pair is an error (E2077).
+        var refBase = resolvedBase is ReferenceType ? baseType : new ReferenceType(baseType);
+        var refRet = TryResolveOperator("op_index_ref", [refBase, indexType], idx.Span, out var refNode);
+        ReferenceType? refRetTy = null;
+        if (refRet != null && _ctx.Engine.Resolve(refRet) is ReferenceType rt)
+            refRetTy = rt;
+
+        // Value form: try (Self, Idx), (&Self, Idx), and auto-deref (&Self -> Self, Idx)
+        var valueRet = TryResolveOperator("op_index", [baseType, indexType], idx.Span, out var valueNode)
+                    ?? TryResolveOperator("op_index", [new ReferenceType(baseType), indexType], idx.Span, out valueNode);
+        if (valueRet == null && resolvedBase is ReferenceType baseRef)
         {
-            opResult = TryResolveOperator("op_index", [baseRef.InnerType, indexType], idx.Span, out resolvedNode);
+            valueRet = TryResolveOperator("op_index", [baseRef.InnerType, indexType], idx.Span, out valueNode);
         }
-        if (opResult != null)
+
+        if (refRetTy != null && valueRet != null)
         {
-            _results.ResolvedOperators[idx] = new ResolvedOperator(resolvedNode!);
-            return opResult;
+            ReportError(
+                "Ambiguous indexing: both `op_index` and `op_index_ref` are defined for this type. "
+                + "Declare only one — the two patterns are mutually exclusive.",
+                idx.Span, "E2077");
+        }
+
+        if (refRetTy != null)
+        {
+            _results.ResolvedOperators[idx] = new ResolvedOperator(refNode!, IsRefForm: true);
+            return refRetTy.InnerType;
+        }
+
+        if (valueRet != null)
+        {
+            _results.ResolvedOperators[idx] = new ResolvedOperator(valueNode!);
+            return valueRet;
         }
 
         ReportError("Type does not support indexing", idx.Span, "E2028");

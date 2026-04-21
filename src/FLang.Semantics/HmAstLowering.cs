@@ -2748,38 +2748,13 @@ public class HmAstLowering
             return gv;
         }
 
-        // &container[i] with a ref-form op_index — call op_index(&base, idx) &T
-        // directly and return the resulting pointer, skipping the temporary
-        // that a value-returning op_index would produce.
+        // &container[i] with a ref-form op_index_ref — call op_index_ref(&base, idx) &T
+        // directly and return the resulting pointer, skipping the dereference
+        // that LowerIndex would perform in read position.
         if (addrOf.Target is IndexExpressionNode refIdxTarget
-            && refIdxTarget.ResolvedRefOpIndex is { } refFn)
+            && _types.GetResolvedOperator(refIdxTarget) is { IsRefForm: true } refResolved)
         {
-            // If the base is already a reference, its value IS the pointer we
-            // want to pass. Otherwise take its address (or materialize a temp).
-            var baseSemType = _types.GetResolvedType(refIdxTarget.Base);
-            Value baseLv;
-            if (baseSemType is Core.Types.ReferenceType)
-            {
-                baseLv = LowerExpression(refIdxTarget.Base);
-            }
-            else
-            {
-                baseLv = LowerLValue(refIdxTarget.Base) ?? LowerExpression(refIdxTarget.Base);
-                if (baseLv.IrType is not IrPointer)
-                {
-                    var baseIrType = baseLv.IrType ?? TypeLayoutService.IrVoidPrim;
-                    var temp = _currentBlock.EmitAlloca(baseIrType);
-                    _currentBlock.EmitStorePtr(temp, baseLv);
-                    baseLv = temp;
-                }
-            }
-            var idxV = LowerExpression(refIdxTarget.Index);
-            var retIrType = GetIrType(addrOf);
-            var calleeParamTypes = new List<IrType>();
-            foreach (var param in refFn.Parameters)
-                calleeParamTypes.Add(GetIrType(param));
-            var isForeign = (refFn.Modifiers & FunctionModifiers.Foreign) != 0;
-            return _currentBlock.EmitCall(refFn.Name, [baseLv, idxV], retIrType, calleeParamTypes, isForeign: isForeign);
+            return LowerIndexAddress(refIdxTarget, refResolved);
         }
 
         // &arr[i] — compute element address directly via GEP instead of load+address-of
@@ -2946,9 +2921,22 @@ public class HmAstLowering
 
     private IntConstantValue LowerAssignment(AssignmentExpressionNode assign)
     {
-        // Indexed assignment with op_set_index
+        // Indexed assignment — two paths:
+        //   ref-form:    op_index_ref(&base, idx) returns &T; store through it.
+        //   value-form:  op_set_index(&base, idx, v) is an explicit setter call.
+        // The type checker records the choice; ambiguity is rejected with E2077.
         if (assign.Target is IndexExpressionNode idx)
         {
+            var idxResolved = _types.GetResolvedOperator(idx);
+            if (idxResolved is { IsRefForm: true })
+            {
+                var ptrRef = LowerIndexAddress(idx, idxResolved);
+                var pointeeIrType = (ptrRef.IrType as IrPointer)?.Pointee ?? GetIrType(idx);
+                var rhsVal = LowerExpression(assign.Value, pointeeIrType);
+                _currentBlock.EmitStorePtr(ptrRef, rhsVal);
+                return new IntConstantValue(0, TypeLayoutService.IrVoidPrim);
+            }
+
             var resolved = _types.GetResolvedOperator(assign);
             if (resolved != null)
                 return LowerSetIndexCall(idx, assign.Value, resolved);
@@ -3162,16 +3150,64 @@ public class HmAstLowering
         return new LocalValue(allocaResult.Name, irType);
     }
 
+    /// <summary>
+    /// Emit a call to a ref-form <c>op_index_ref(&amp;Self, Idx) &amp;T</c> and return
+    /// the resulting pointer. Shared by read position (load after), assignment
+    /// (store through), and address-of (use pointer directly). Materializes
+    /// the base as a pointer when it isn't already one.
+    /// </summary>
+    private Value LowerIndexAddress(IndexExpressionNode index, ResolvedOperator resolved)
+    {
+        var baseSemType = _types.GetResolvedType(index.Base);
+        Value baseLv;
+        if (baseSemType is Core.Types.ReferenceType)
+        {
+            baseLv = LowerExpression(index.Base);
+        }
+        else
+        {
+            baseLv = LowerLValue(index.Base) ?? LowerExpression(index.Base);
+            if (baseLv.IrType is not IrPointer)
+            {
+                var baseIrType = baseLv.IrType ?? TypeLayoutService.IrVoidPrim;
+                var temp = _currentBlock.EmitAlloca(baseIrType);
+                _currentBlock.EmitStorePtr(temp, baseLv);
+                baseLv = temp;
+            }
+        }
+
+        var idxV = LowerExpression(index.Index);
+        var calleeParamTypes = new List<IrType>();
+        foreach (var param in resolved.Function.Parameters)
+            calleeParamTypes.Add(GetIrType(param));
+
+        var fnHmType = GetFunctionHmType(resolved.Function);
+        var retIrType = _layout.Lower(fnHmType.ReturnType);
+
+        var isForeign = (resolved.Function.Modifiers & FunctionModifiers.Foreign) != 0;
+        return _currentBlock.EmitCall(resolved.Function.Name, [baseLv, idxV], retIrType, calleeParamTypes,
+            isForeign: isForeign);
+    }
+
     private Value LowerIndex(IndexExpressionNode index)
     {
-        // If resolved to an op_index function, emit as call
+        // If resolved to an op_index / op_index_ref function, emit as call
         var resolved = _types.GetResolvedOperator(index);
         if (resolved != null)
         {
+            // Ref-form path: emit call that returns &T, then load *p for the value.
+            if (resolved.IsRefForm)
+            {
+                var ptr = LowerIndexAddress(index, resolved);
+                var retIrType = GetIrType(index);
+                return _currentBlock.EmitLoad(ptr, retIrType);
+            }
+
+            // Value-form path: emit the call directly and use its return value.
             var baseVal = LowerExpression(index.Base);
             var indexVal = LowerExpression(index.Index);
 
-            var retIrType = GetIrType(index);
+            var retIrTypeV = GetIrType(index);
 
             var calleeIrParamTypes = new List<IrType>();
             foreach (var param in resolved.Function.Parameters)
@@ -3190,7 +3226,7 @@ public class HmAstLowering
                 baseVal = temp;
             }
 
-            return _currentBlock.EmitCall(resolved.Function.Name, [baseVal, indexVal], retIrType, calleeIrParamTypes);
+            return _currentBlock.EmitCall(resolved.Function.Name, [baseVal, indexVal], retIrTypeV, calleeIrParamTypes);
         }
 
         // Built-in array/slice indexing

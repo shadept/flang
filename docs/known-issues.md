@@ -276,29 +276,6 @@ The parser only accepts `import` statements before any declarations. Cannot plac
 
 ## Future Architectural Changes
 
-### `op_index` Should Return a Reference (C/Rust-Style)
-
-**Status:** Design gap — current behavior is opposite of C's convention
-**Affected:** `op_index`, `op_index_ref`, `op_set_index`; `stdlib/std/list.f`, `core/slice.f`, `HmAstLowering.cs`, `HmTypeChecker.Expressions.cs`
-
-Today `list[i]` calls `op_index(List, usize) T` and returns a copy. Taking a reference requires `&list[i]`, which is rewritten to a separate `op_index_ref(&List, usize) &T`. Assignment goes through a third function, `op_set_index`. Three functions, one operator, and the default is copy.
-
-C and Rust do the opposite. `a[i]` is sugar for `*(a + i)` (C) or `*v.index(i)` (Rust) — always a dereferenced pointer. `&a[i]` cancels the deref. `a[i] = x` stores through the hidden pointer. One function (`op_index(&Self) &T`), three context-dependent desugarings of the `[]` operator, no copy in the default path.
-
-**Agreed direction.** Align with C. A single `op_index(&Self, Idx) &T` primitive. The `[]` operator desugars by context:
-
-- Value position: `list[i]` → `op_index(&list, i).*` (load, which for non-POD `T` matters).
-- Address position: `&list[i]` → `op_index(&list, i)` (no deref).
-- Assignment target: `list[i] = v` → `op_index(&list, i).* = v` (store through pointer).
-
-`op_index_ref` and `op_set_index` both disappear. Containers whose lookup genuinely returns a computed value (e.g., `Dict` returning `Option(V)`) keep a separate `get()`/value-returning overload — Rust splits the same way.
-
-**Migration cost.** Breaking change for every stdlib container that implements indexing (`List`, `Slice`, `Dict`, `String`, dense collections in `std.encoding.csv`). Each site needs its `op_index` signature flipped to return `&T` and take `&Self`. User code that reads `list[i]` doesn't change; user code that wrote `op_set_index` or `op_index_ref` impls does.
-
-**Related:** current `op_index_ref` infra in `IndexExpressionNode.ResolvedRefOpIndex` and `LowerAddressOf`'s ref-form branch would collapse into the normal `op_index` path once the signatures flip. The `InferAddressOf` rewrite that matches `&expr[idx]` would become unnecessary.
-
----
-
 ### Generic Instantiation: AST Cloning vs Side Table
 
 **Status:** Technical debt
