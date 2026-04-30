@@ -218,6 +218,15 @@ pub fn op_index(self: Dict($K, $V), key: K) V? {
 
 // Get the value associated with a key, or null if not found.
 pub fn get(self: Dict($K, $V), key: K) V? {
+    const value_ref = self.get_ref(key)
+    if value_ref.is_none() {
+        return null
+    }
+    return value_ref.value.*
+}
+
+// Get a reference to the value associated with a key, or null if not found.
+pub fn get_ref(self: Dict($K, $V), key: K) &V? {
     if (self.cap == 0) {
         return null
     }
@@ -235,7 +244,7 @@ pub fn get(self: Dict($K, $V), key: K) V? {
         if (entry.state == 1) {
             if (entry.hash == h) {
                 if (entry.key == key) {
-                    return entry.value
+                    return &entry.value
                 }
             }
         }
@@ -246,8 +255,16 @@ pub fn get(self: Dict($K, $V), key: K) V? {
 }
 
 pub fn get(self: Dict(OwnedString, $V), key: String) V? {
+    const value_ref = self.get_ref(key)
+    if value_ref.is_none() {
+        return null
+    }
+    return value_ref.value.*
+}
+
+pub fn get_ref(self: Dict(OwnedString, $V), key: String) &V? {
     const fake = OwnedString{ptr=key.ptr, len=key.len, allocator=null}
-    return get(self, fake)
+    return get_ref(self, fake)
 }
 
 // Check if a key exists in the dict.

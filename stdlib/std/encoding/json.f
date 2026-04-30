@@ -134,6 +134,10 @@ pub fn json_get(self: &Dict(OwnedString, JsonValue), key: String) JsonValue? {
     return self.get(key)
 }
 
+pub fn json_get_ref(self: &Dict(OwnedString, JsonValue), key: String) &JsonValue? {
+    return self.get_ref(key)
+}
+
 pub fn json_set(self: &Dict(OwnedString, JsonValue), key: String, value: JsonValue) {
     self.set(key, value)
 }
@@ -1294,6 +1298,22 @@ test "json_object builder" {
     let obj = val.as_object().value
     obj.json_set("key", json_string("value"))
     assert_true(obj.json_contains("key"), "should contain key")
+    val.deinit()
+}
+
+test "json_object get_ref" {
+    let val = json_object()
+    let obj = val.as_object().value
+    obj.json_set("count", json_number(7.0))
+
+    const got = obj.json_get_ref("count")
+    assert_true(got.is_some(), "should return reference for existing key")
+    assert_true(got.value.is_number(), "referenced value should be number")
+    assert_eq(got.value.as_number().value, 7.0, "referenced value should equal 7")
+
+    const missing = obj.json_get_ref("missing")
+    assert_true(missing.is_none(), "missing key should return null")
+
     val.deinit()
 }
 

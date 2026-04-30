@@ -44,16 +44,16 @@ Command-line argument parsing, stdin piping, robust file I/O.
 | `tree` | Recursive directory tree viewer (like `tree(1)`) | `std.io.fs`, `std.env`, `std.list`, `std.sort` |
 | `hexdump` | Hex dump utility (like `xxd`) | `std.cli`, `std.io` |
 
-### Phase 5: `fq` — The Capstone
+### Phase 5: `fq`
 
-A `jq`-like JSON query tool combining every stdlib module.
+A tiny `jq`-style JSON field selector focused on dot-path lookup.
 
 | Example | Description | Stdlib modules |
 |---------|-------------|----------------|
-| `fq` | JSON query, filter, and transform with syntax highlighting | all of the above |
+| `fq` | Query nested object fields with dot paths (`.user.name`) | `std.encoding.json`, `std.io.file`, `std.env` |
 
-Features: dot-path queries (`.users[0].name`), pretty-print with colors, stdin
-piping, file arguments, array filters, error reporting.
+Features: dot-path queries (`.user.name`), stdin piping, file arguments,
+pretty-printed JSON output.
 
 ## Building & Running
 
