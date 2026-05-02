@@ -76,7 +76,7 @@ pub fn get(record: &CsvRecord, index: usize) String? {
 pub fn get(record: &CsvRecord, name: String) String? {
     if record.headers.is_none() { return null }
     const hdrs = record.headers.value
-    for (i in 0..hdrs.len) {
+    for i in 0..hdrs.len {
         if hdrs.as_slice()[i] == name {
             return record.get(i)
         }
@@ -342,7 +342,7 @@ fn parse_decoder_row(self: &CsvDecoder) bool {
             if consumed < self.chunk_len {
                 const remaining = self.chunk_len - consumed
                 let src_pos = consumed
-                for (i in 0..remaining) {
+                for i in 0..remaining {
                     self.chunk[i] = self.chunk[src_pos]
                     src_pos = src_pos + 1
                 }
@@ -378,7 +378,7 @@ fn ensure_decoder_headers(self: &CsvDecoder) {
 
     if self.parse_decoder_row() {
         // Copy header values into header_buf so they persist
-        for (i in 0..self.spans.len) {
+        for i in 0..self.spans.len {
             const field_val = self.get_decoder_field(i)
             self.header_buf.append(field_val)
             // String views resolved after all headers are added
@@ -386,7 +386,7 @@ fn ensure_decoder_headers(self: &CsvDecoder) {
         // Now create String views into header_buf
         const buf_ptr = self.header_buf.ptr
         let offset: usize = 0
-        for (i in 0..self.spans.len) {
+        for i in 0..self.spans.len {
             const span = self.spans.as_slice()[i]
             const len = span.end - span.start
             const view = .{ ptr = buf_ptr + offset, len = len } as String
@@ -515,7 +515,7 @@ pub fn csv_encoder(w: Writer, options: CsvOptions = csv_options()) CsvEncoder {
 }
 
 fn needs_quoting(self: &CsvEncoder, s: String) bool {
-    for (i in 0..s.len) {
+    for i in 0..s.len {
         const c = s[i]
         if c == self.options.delimiter { return true }
         if c == self.options.quote { return true }
@@ -531,7 +531,7 @@ fn write_csv_field(self: &CsvEncoder, s: String) {
     }
     if self.needs_quoting(s) {
         self.w.write_byte(self.options.quote)
-        for (i in 0..s.len) {
+        for i in 0..s.len {
             const c = s[i]
             if c == self.options.quote {
                 self.w.write_byte(self.options.quote)
@@ -611,12 +611,12 @@ pub fn begin_map(self: &CsvEncoder, len: usize) usize {
 pub fn end_map(self: &CsvEncoder) usize {
     if self.header_written == false {
         self.header_written = true
-        for (i in 0..self.current_keys.len) {
+        for i in 0..self.current_keys.len {
             if i > 0 { self.w.write_byte(self.options.delimiter) }
             self.w.write_str(self.current_keys.as_slice()[i].as_view())
         }
         self.w.write_byte(0x0A)
-        for (i in 0..self.first_row_values.len) {
+        for i in 0..self.first_row_values.len {
             if i > 0 { self.w.write_byte(self.options.delimiter) }
             const val = self.first_row_values.as_slice()[i].as_view()
             self.field_index = i
@@ -645,7 +645,7 @@ pub fn is_human_readable(self: &CsvEncoder) bool { return true }
 #implement(CsvEncoder, Encoder)
 
 pub fn deinit(self: &CsvEncoder) {
-    for (i in 0..self.current_keys.len) {
+    for i in 0..self.current_keys.len {
         self.current_keys.as_slice()[i].deinit()
     }
     self.current_keys.deinit()
@@ -918,7 +918,7 @@ pub fn select_rows(table: &CsvTable, start: usize, end: usize) CsvTable {
 
     // Share headers (String views — still valid as long as original table lives)
     let sel_headers = list(table.headers.len)
-    for (i in 0..table.headers.len) {
+    for i in 0..table.headers.len {
         sel_headers.push(table.headers.as_slice()[i])
     }
     result.headers = sel_headers
@@ -926,11 +926,11 @@ pub fn select_rows(table: &CsvTable, start: usize, end: usize) CsvTable {
     const actual_end = if end > table.rows.len { table.rows.len } else { end }
     const actual_start = if start > actual_end { actual_end } else { start }
     let sel_rows = list(actual_end - actual_start)
-    for (i in actual_start..actual_end) {
+    for i in actual_start..actual_end {
         const src = table.rows.as_slice()[i]
         let rec: CsvRecord
         let copied_fields = list(src.fields.len)
-        for (fi in 0..src.fields.len) {
+        for fi in 0..src.fields.len {
             copied_fields.push(src.fields.as_slice()[fi])
         }
         rec.fields = copied_fields
@@ -948,8 +948,8 @@ pub fn select_columns(table: &CsvTable, names: String[]) CsvTable {
 
     // Find column indices
     let indices = list(names.len)
-    for (n in 0..names.len) {
-        for (i in 0..table.headers.len) {
+    for n in 0..names.len {
+        for i in 0..table.headers.len {
             if table.headers.as_slice()[i] == names[n] {
                 indices.push(i)
                 break
@@ -959,7 +959,7 @@ pub fn select_columns(table: &CsvTable, names: String[]) CsvTable {
 
     // Copy selected headers
     let col_headers = list(indices.len)
-    for (i in 0..indices.len) {
+    for i in 0..indices.len {
         const idx = indices.as_slice()[i]
         col_headers.push(table.headers.as_slice()[idx])
     }
@@ -967,12 +967,12 @@ pub fn select_columns(table: &CsvTable, names: String[]) CsvTable {
 
     // Copy rows with selected columns
     let col_rows = list(table.rows.len)
-    for (r in 0..table.rows.len) {
+    for r in 0..table.rows.len {
         const src = table.rows.as_slice()[r]
         let rec: CsvRecord
         rec.headers = &result.headers
         let rec_fields = list(indices.len)
-        for (j in 0..indices.len) {
+        for j in 0..indices.len {
             const idx = indices.as_slice()[j]
             if idx < src.fields.len {
                 rec_fields.push(src.fields.as_slice()[idx])

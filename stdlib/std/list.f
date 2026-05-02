@@ -57,7 +57,7 @@ pub fn list(source: List($T), allocator: &Allocator? = null) List(T) {
 pub fn deinit(self: &List($T)) {
     if self.cap > 0 {
         // Deinit all live elements
-        for (i in 0..self.len as isize) {
+        for i in 0..self.len as isize {
             const elem: &T = self.ptr + (i as usize)
             elem.deinit()
         }

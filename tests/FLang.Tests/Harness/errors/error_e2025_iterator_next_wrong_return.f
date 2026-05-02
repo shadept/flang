@@ -15,7 +15,7 @@ fn next(x: &BadIterator) i32 {  // Should return i32?, not i32
 
 pub fn main() i32 {
     let x: BadIterator = .{ value = 42 }
-    for (i in x) {
+    for i in x {
         return i
     }
     return 0

@@ -52,7 +52,9 @@ FLang is a statically-typed compiled language designed for explicit control, str
 | `fn(T1, T2) R` | Function type |
 | `Type(T)` | Runtime type descriptor |
 
-**Tuples** desugar to anonymous structs: `(A, B)` → `{ _0: A, _1: B }`, access via `t.0` → `t._0`. Trailing comma distinguishes single-element tuple `(x,)` from grouped expression `(x)`.
+**Tuples** desugar to anonymous structs with a double-underscore prefix to avoid collisions with user fields: `(A, B)` → `{ __0: A, __1: B }`, access via `t.0` → `t.__0`. User-defined fields named `_0`, `_1`, etc. remain valid. Trailing comma distinguishes single-element tuple `(x,)` from grouped expression `(x)`.
+
+**Anonymous struct types** (`struct { ... }` written inline) appear only as the right-hand side of a `type` alias and as generator arguments. They are not first-class type expressions in arbitrary positions. Anonymous struct *values* (`.{ ... }`) require a target type from context — context-less `.{}` errors with a hint to add a type annotation.
 
 **Anonymous type expressions**: `struct { ... }` and `enum { ... }` are valid anywhere a type appears — parameters, return types, variable annotations, function fields.
 
@@ -90,6 +92,7 @@ type Vec2 = struct { x: f32, y: f32 }       // alternative syntax
 - Construction: `Point { x = 10, y = 20 }` (uses `=`, not `:`).
 - Anonymous construction: `.{ x = 10, y = 20 }` (type from context).
 - Field shorthand: `.{ x, y = 20 }` equivalent to `.{ x = x, y = 20 }`.
+- **Strict construction**: every field must be assigned. `Point { x = 10 }` errors with E2050 ("struct literal missing field `<name>`") if `Point` has more fields. `Marker { }` is valid only when `Marker` has zero fields. Context-less `.{}` is invalid.
 
 ### 2.5 Enums (Tagged Unions)
 
@@ -153,22 +156,27 @@ Conversions are always explicit — no implicit coercions between string types.
 ### 2.7 Option and Nullability
 
 ```
-pub type Option = struct(T) { has_value: bool, value: T }
+pub type Option = enum(T) {
+    Some(T),
+    None,
+}
 ```
 
 - `T?` is sugar for `Option(T)`.
-- `null` represents the absent value.
-- `&T?` models nullable references.
+- `null` is sugar for `Option.None`. The inner `T` is filled by inference from context. With no constraint, `null` is an error (E2095 — "type of `null` cannot be inferred; add a type annotation").
+- `null` is **not** a pointer value. `&T` is non-null by type; `let p: &i32 = null` errors with E2096 ("`null` is `Option.None`; use `&T?` for a nullable reference").
+- `&T?` is `Option(&T)`. The niche optimization (a 0-pointer encodes `None`) is unchanged — same wire format.
+- Variant constructors: `Some(v)` and `None` work as canonical constructors.
 - Methods: `is_some()`, `is_none()`, `unwrap_or(fallback)`, `expect(msg)`, `map(fn(T) U)`.
 
 **Layout:**
 
 | Inner type | Representation | Rationale |
 |---|---|---|
-| `&T` (reference) | `IrPointer(T, IsNullable: true)` — a nullable pointer | Niche: `null` is encoded as a 0 pointer. Zero overhead vs. raw `&T`. |
-| Anything else | Full `{ has_value: bool, value: T }` struct | No niche available by default. |
+| `&T` (reference) | `IrPointer(T, IsNullable: true)` — a nullable pointer | Niche: `None` encoded as 0 pointer. Zero overhead vs. raw `&T`. |
+| Anything else | Tagged enum with `Some` and `None` variants | Generic enum layout. |
 
-**Planned niche for bare enums (not yet implemented):** when `T` is a payload-less enum, shifting discriminants to start at 1 lets `Option(E)` encode `null` as tag 0 in a single-word representation — matching the nullable-pointer trick. This would change discriminant values, which is why FFI code must never hard-code them (see §2.5).
+**Planned niche for bare enums (not yet implemented):** when `T` is a payload-less enum, shifting discriminants to start at 1 lets `Option(E)` encode `None` as tag 0 in a single-word representation — matching the nullable-pointer trick. This would change discriminant values, which is why FFI code must never hard-code them (see §2.5).
 
 ### 2.8 Result
 
@@ -195,11 +203,21 @@ let a = align_of(Point)
 
 ### 2.11 Integer and Float Literals
 
-- Type suffix: `42i32`, `0xffu8`, `3.14f32`. Valid suffixes: all integer primitives, `f32`, `f64`.
+- **Closed suffix list** — exactly the primitive integer/float type names: `i8 i16 i32 i64 isize u8 u16 u32 u64 usize f32 f64`. No others are recognized.
+- `_` is a separator anywhere inside a number (between digits, before a suffix). Leading `_` is not allowed (would be an identifier).
+- A digit-led identifier is a lexer error — `42_pixels` is not a number with a `pixels` suffix; it is an invalid identifier.
 - Hex: `0xff`, `0xDEAD_BEEF`.
 - Underscore separators: `1_000_000`, `0xff_ff`.
 - Scientific notation: `1.5e10`, `3e-4`.
 - Unsuffixed integers and floats are inferred from context.
+
+### 2.12 Trailing Commas
+
+Comma-separated lists accept a trailing comma uniformly: function-call arguments, struct/enum literal fields, parameter lists, generic type parameters, enum variant declarations, match arms (when commas are used as separators inside a single arm body), array literals, etc. The single-element tuple `(x,)` keeps its distinct meaning — the trailing comma is what makes `(x,)` a 1-tuple rather than a grouped expression.
+
+### 2.13 Comments
+
+`// line comment to end of line` is the only comment form. There is no `/* */` block comment, no `///` doc comment. Editor tooling handles "comment out a block" by inserting `//` per line.
 
 ---
 
@@ -318,6 +336,7 @@ All memory is zero-initialized by default. Variables declared without an initial
 
 | Level | Operators |
 |---|---|
+| 13 | `as` (postfix typed cast) |
 | 12 | `*` `/` `%` |
 | 11 | `+` `-` |
 | 10 | `<<` `>>` `>>>` |
@@ -330,7 +349,10 @@ All memory is zero-initialized by default. Variables declared without an initial
 | 3 | `and` |
 | 2 | `or` |
 | 1 | `??` (right-assoc) |
+| 0 | `match` (postfix, lowest) |
 
+- `as` is a postfix typed operator that binds tighter than every binary operator: `a + b as i32` parses as `a + (b as i32)`.
+- Postfix `match` binds looser than every binary operator: `a + b match { ... }` parses as `(a + b) match { ... }`.
 - `and`/`or` are keywords, short-circuit, bool operands only.
 - `!expr` logical NOT, `&expr` address-of (prefix unary).
 - `>>` arithmetic right shift (sign-preserving). `>>>` logical right shift (zero-fills).
@@ -404,8 +426,12 @@ Implicit: `String` automatically accepted where `u8[]` expected. Reverse (`u8[]`
 
 ## 6. Modules and Visibility
 
-- Each source file is a module. `import path` brings a module into scope.
+- Each source file is a module. `import path` brings the module's `pub` items into scope as bare names.
+- **Imports are flat and non-transitive**: importing module B does *not* expose B's own imports. Each file lists its dependencies explicitly.
+- **Overload resolution handles same-named imports**. Two different imports may bring in functions with the same name; the type checker resolves the call by parameter types. Genuinely ambiguous calls (no unique strictest overload) error at the call site.
+- **No aliases, no selective imports, no relative paths.** To re-export a folder's worth of items, the recommended pattern is an `all.f` file in that folder that imports each sibling and re-exports via `pub use` (or simply `import`s, since all `pub` items are then re-exposed when `all` itself is imported, by overload).
 - `pub` exposes declarations outside the file. Without `pub`: file-private.
+- Visibility is two-level only — there is no `pub` on individual fields, and there are no property declarations. External "mutation" of a struct happens by re-construction (return a new value, or have the defining file expose mutating functions).
 - Struct fields readable from any file, writable only in defining file (see scoped mutability in Section 8).
 - Cyclic imports are compile errors.
 - Core modules are auto-imported.
@@ -428,19 +454,28 @@ Any function with first parameter `T` or `&T` can be called as `value.func(args)
 
 ### 7.3 Lambdas
 
-`fn(x: i32, y: i32) i32 { x + y }` — anonymous, non-capturing. Desugars to a synthesized module-level function. Parameter types inferred when context available. Cannot capture enclosing scope variables.
+`fn(x: i32, y: i32) i32 { x + y }` — anonymous, non-capturing. Desugars to a synthesized module-level function. Cannot capture enclosing scope variables.
+
+**Parameter type inference** mirrors anonymous-struct rules. Each unannotated parameter must have its type inferable from one of:
+- the corresponding parameter type at the call site (typed callback parameter, e.g. passing the lambda to `map(fn(T) U)`),
+- the return type of the enclosing function when the lambda is `return`ed,
+- an explicit `let x: fn(T) U = fn(p) { ... }` binding annotation,
+- explicit annotations on the lambda parameters (`fn(p: T) { ... }`).
+
+A no-context lambda is an error — diagnostic recommends adding annotations to the parameters or the binding site.
 
 ### 7.4 Iterator Protocol
 
-`for x in collection` desugars to:
+`for x in collection` desugars to (conceptually — the compiler emits IR directly):
 
 ```
 let it = iter(&collection)
 loop {
-    let n = next(&it)      // returns T?
-    if n == null { break }
-    let x = n.value
-    // body
+    let n = next(&it)              // returns Element?
+    n match {
+        Some(x) => { /* body uses x */ }
+        None    => { break }
+    }
 }
 ```
 
@@ -448,7 +483,7 @@ Make a type iterable by defining `fn iter(self: &T) Iterator` and `fn next(self:
 
 ### 7.5 Match Expression
 
-Postfix syntax: `expr match { pattern => result, ... }`.
+Postfix syntax: `expr match { pattern => result, ... }`. Postfix `match` is the lowest-precedence operator — `a + b match { ... }` parses as `(a + b) match { ... }`.
 
 **Patterns**: unit variant (`Quit`), payload binding (`Move(x, y)`), qualified (`Color.Red`), nested (`Some(Ok(x))`), wildcard (`_`), literal (`42`, `b'A'`, `true`), `else` (default).
 

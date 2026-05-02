@@ -242,6 +242,25 @@ pub fn main() i32 {
 
 ---
 
+### E1010: Parentheses Around `for` Header
+
+The `for` header takes no parentheses. `for x in xs { ... }` is the only form (RFC-006).
+
+```flang
+pub fn main() i32 {
+    for (i in 0..5) {       // E1010: parentheses around the `for` header are not allowed
+        return i
+    }
+    return 0
+}
+```
+
+#### Solution
+
+Drop the parens: `for i in 0..5 { ... }`. Parens around `if` and `while` headers remain valid because they parenthesize the condition expression itself, not the keyword form.
+
+---
+
 ### E1020: Invalid Interpolation Prefix
 
 `$` in expression position must be immediately followed by `"`, `(`, or an identifier to form a string interpolation (RFC-004). Anything else is a syntax error.
@@ -2247,6 +2266,83 @@ fn compute(x: i32) i32 {
     x + 1
 }
 ```
+
+---
+
+### E2050: Struct Literal Missing Field
+
+**Category**: Semantic Analysis
+**Severity**: Error
+**Status**: Reserved (RFC-006 — strict struct construction; not yet enforced)
+
+#### Description
+
+Every field of a struct must be assigned in a struct literal. Reserved by RFC-006 for the strict-construction check; the type checker today still permits partial literals (missing fields are zero-initialised) and tracks this as an open item alongside RFC-007's Option enum migration.
+
+#### Example (Future Error)
+
+```flang
+type Point = struct { x: i32, y: i32 }
+
+pub fn main() i32 {
+    let p = Point { x = 10 }   // E2050 (planned): struct literal missing field `y`
+    return p.x
+}
+```
+
+#### Solution
+
+Assign every field, or — once field-level defaults land as a separate feature — declare a default for the omitted field.
+
+---
+
+### E2095: Type of `null` Cannot Be Inferred
+
+**Category**: Semantic Analysis
+**Severity**: Error
+**Status**: Reserved (RFC-007 — Option enum migration; not yet emitted)
+
+#### Description
+
+`null` is sugar for `Option.None` with the inner type filled by inference from context. When no context is available, the inner type is undetermined and the literal is an error. Reserved by RFC-007.
+
+#### Example (Future Error)
+
+```flang
+pub fn main() i32 {
+    let x = null   // E2095 (planned): type of `null` cannot be inferred; add a type annotation
+    return 0
+}
+```
+
+#### Solution
+
+Annotate the binding (`let x: i32? = null`) or pass `null` to a typed parameter so inference can fill the type.
+
+---
+
+### E2096: `null` Used Where Non-Null Reference Expected
+
+**Category**: Semantic Analysis
+**Severity**: Error
+**Status**: Reserved (RFC-007 — Option enum migration; not yet emitted)
+
+#### Description
+
+`&T` is non-null by type. Assigning `null` to a `&T` is rejected — `null` is `Option.None`, not a pointer value. Reserved by RFC-007.
+
+#### Example (Future Error)
+
+```flang
+pub fn main() i32 {
+    let p: &i32 = null   // E2096 (planned): `null` is `Option.None`; use `&T?` for a nullable reference
+    return 0
+}
+```
+
+#### Solution
+
+Use a nullable reference (`&i32?` — sugar for `Option(&i32)`) when you need to express "may be absent."
 
 ---
 

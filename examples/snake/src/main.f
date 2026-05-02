@@ -125,7 +125,7 @@ pub fn main() i32 {
         }
 
         // Self collision
-        for (i in 0..slen) {
+        for i in 0..slen {
             if sx[i as usize] == hx and sy[i as usize] == hy {
                 game_over = true
             }
@@ -153,7 +153,7 @@ pub fn main() i32 {
                 food_x = rand_range(0, BOARD_W)
                 food_y = rand_range(0, BOARD_H)
                 let ok = true
-                for (j in 0..slen) {
+                for j in 0..slen {
                     if sx[j as usize] == food_x and sy[j as usize] == food_y {
                         ok = false
                     }
@@ -166,7 +166,7 @@ pub fn main() i32 {
         // Populate grid
         memset(grid.ptr, 0, 300)
         grid[(food_y * BOARD_W + food_x) as usize] = CELL_FOOD
-        for (i in 1..slen) {
+        for i in 1..slen {
             grid[(sy[i as usize] * BOARD_W + sx[i as usize]) as usize] = CELL_BODY
         }
         grid[(sy[0] * BOARD_W + sx[0]) as usize] = CELL_HEAD
@@ -188,15 +188,15 @@ pub fn main() i32 {
 
         // Top border
         sb.append("  ┌")
-        for (c in 0..BOARD_W) {
+        for c in 0..BOARD_W {
             sb.append("──")
         }
         sb.append("┐\n")
 
         // Board rows
-        for (row in 0..BOARD_H) {
+        for row in 0..BOARD_H {
             sb.append("  │")
-            for (col in 0..BOARD_W) {
+            for col in 0..BOARD_W {
                 const cell = grid[(row * BOARD_W + col) as usize]
                 if cell == CELL_HEAD {
                     set_fg(w, Color.Green)
@@ -221,7 +221,7 @@ pub fn main() i32 {
 
         // Bottom border
         sb.append("  └")
-        for (c in 0..BOARD_W) {
+        for c in 0..BOARD_W {
             sb.append("──")
         }
         sb.append("┘\n")

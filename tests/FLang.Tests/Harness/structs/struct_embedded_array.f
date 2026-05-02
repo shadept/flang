@@ -17,7 +17,7 @@ fn push(b: &Buffer, val: u8) {
 
 fn sum(b: &Buffer) i32 {
     let total: i32 = 0
-    for (i in 0..b.len as isize) {
+    for i in 0..b.len as isize {
         total = total + b.data[i as usize] as i32
     }
     return total

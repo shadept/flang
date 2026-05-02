@@ -11,7 +11,7 @@ fn iter(x: &IncompleteIterator) IncompleteIterator {
 
 pub fn main() i32 {
     let x: IncompleteIterator = .{ value = 42 }
-    for (i in x) {
+    for i in x {
         return i
     }
     return 0

@@ -34,7 +34,7 @@ pub fn find(s: String, needle: String) usize? {
     // Would need to support dynamic stack allocated arrays
     let table = [0usize; 1024] // TODO support dynamic stack allocations and replace 1024 with n.len
     let j: usize = 0 // TODO handle multi statement inference
-    for (i in 1..n.len) {
+    for i in 1..n.len {
         loop {
             if n[i] == n[j] {
                 j = j + 1
@@ -51,7 +51,7 @@ pub fn find(s: String, needle: String) usize? {
 
     // Search
     j = 0
-    for (i in 0..h.len) {
+    for i in 0..h.len {
         loop {
             if h[i] == n[j] {
                 j = j + 1
@@ -74,7 +74,7 @@ pub fn starts_with(s: String, prefix: String) bool {
     if (s.len < prefix.len) {
         return false
     }
-    for (i in 0..prefix.len) {
+    for i in 0..prefix.len {
         const i = i as usize
         if (s[i] != prefix[i]) {
             return false
@@ -100,7 +100,7 @@ pub fn rfind(s: String, needle: String) usize? {
         i = i - 1
 
         let found = true
-        for (j in 0..n.len) {
+        for j in 0..n.len {
             const j = j as usize
             if h[i + j] != n[j] {
                 found = false
@@ -125,7 +125,7 @@ pub fn ends_with(s: String, suffix: String) bool {
     let h = s.as_raw_bytes()
     let n = suffix.as_raw_bytes()
     let start = s.len - suffix.len
-    for (i in 0..suffix.len) {
+    for i in 0..suffix.len {
         const i = i as usize
         if h[start + i] != n[i] {
             return false

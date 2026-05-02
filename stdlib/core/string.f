@@ -95,7 +95,7 @@ pub fn op_cmp(a: String, b: String) Ord {
 
 pub fn hash(s: String) usize {
     let h: usize = 14695981039346656037
-    for (i in 0..s.len as isize) {
+    for i in 0..s.len as isize {
         const byte: &u8 = s.ptr + (i as usize)
         h = (h ^ (byte.* as usize)) * 1099511628211
     }

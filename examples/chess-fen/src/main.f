@@ -101,7 +101,7 @@ fn display_board(fen: String) {
             sb.append(" ")
         } else if ch >= '1' and ch <= '8' {
             const count = (ch - '0') as i32
-            for (j in 0..count) {
+            for j in 0..count {
                 set_square_bg(w, rank, col)
                 sb.append("    ")
                 reset(w)

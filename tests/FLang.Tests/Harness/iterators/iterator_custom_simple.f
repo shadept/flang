@@ -22,7 +22,7 @@ fn next(c: &Countdown) i32? {
 pub fn main() i32 {
     let cd: Countdown = .{ from = 5 }
     let sum: i32 = 0
-    for (x in cd) {
+    for x in cd {
         sum = sum + x
     }
     return sum  // 5 + 4 + 3 + 2 + 1 = 15

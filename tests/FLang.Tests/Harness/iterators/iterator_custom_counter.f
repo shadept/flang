@@ -28,7 +28,7 @@ fn next(state: &CounterState) i32? {
 pub fn main() i32 {
     let c: Counter = .{ start = 10, count = 3 }
     let sum: i32 = 0
-    for (x in c) {
+    for x in c {
         sum = sum + x
     }
     return sum  // 10 + 11 + 12 = 33

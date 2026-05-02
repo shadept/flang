@@ -2378,8 +2378,8 @@ public partial class HmTypeChecker
         }
 
         var name = $"__anon_{string.Join("_", fields.Select(f => f.Name))}";
-        // Detect tuples: field names are _0, _1, _2, ... (from parser desugaring)
-        var isTuple = fields.Length == 0 || fields.Select((f, i) => f.Name == $"_{i}").All(b => b);
+        // Detect tuples: field names are __0, __1, __2, ... (from parser desugaring)
+        var isTuple = fields.Length == 0 || fields.Select((f, i) => f.Name == $"__{i}").All(b => b);
         return new NominalType(name, isTuple ? NominalKind.Tuple : NominalKind.Struct, [], fields, false);
     }
 

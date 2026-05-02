@@ -14,7 +14,7 @@ pub fn hash(val: $T) usize {
     const bytes: &u8 = &val as &u8
     const size: usize = size_of(T)
     let h: usize = 14695981039346656037
-    for (i in 0..size) {
+    for i in 0..size {
         const byte: &u8 = bytes + i as usize
         h = (h ^ (byte.* as usize)) * 1099511628211
     }

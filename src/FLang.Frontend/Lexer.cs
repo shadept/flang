@@ -151,6 +151,14 @@ public class Lexer(Source source, int fileId)
                 continue; // Keep scanning for the next meaningful character
             }
 
+            // Reject block comments explicitly (RFC-006 #18: `//` is the only comment form).
+            if (ch == '/' && _position + 1 < text.Length && text[_position + 1] == '*')
+            {
+                _start = _position;
+                _position += 2; // skip "/*"
+                return CreateTokenWithValue(TokenKind.BadToken, "/*");
+            }
+
             break; // Non-whitespace, non-comment character found
         }
 

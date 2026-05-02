@@ -19,7 +19,7 @@ fn next(x: &BadIterator) WrongReturn {  // Should return WrongReturn?, not Wrong
 
 pub fn main() i32 {
     let x: BadIterator = .{ value = 42 }
-    for (i in x) {
+    for i in x {
         return i.val
     }
     return 0

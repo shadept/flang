@@ -1,6 +1,8 @@
 # FLang Syntax Reference
 
-If something is not listed here, it does not exist in FLang.
+This document is a derived quick reference. The canonical source of truth is
+[spec.md](spec.md) — when the two disagree, spec.md wins. If something is not
+listed here, it does not exist in FLang.
 
 ## FLang is NOT Rust
 
@@ -23,7 +25,7 @@ If something is not listed here, it does not exist in FLang.
 
 ## Types
 
-**Primitives:** `i8` `i16` `i32` `i64` `u8` `u16` `u32` `u64` `usize` `isize` `f32` `f64` `bool`
+**Primitives:** `i8` `i16` `i32` `i64` `isize` `u8` `u16` `u32` `u64` `usize` `f32` `f64` `bool` `char` `void` `never`
 
 | Syntax | Meaning |
 |---|---|
@@ -139,9 +141,9 @@ let x = if a > b { a } else { b }
 if condition { do_thing() }
 if a { foo } else if b { bar } else { baz }
 
-// for-in (only kind of for loop)
+// for-in (only kind of for loop). Parens around the header are NOT permitted.
 for item in collection { process(item) }
-for i in 0..5 { /* 0,1,2,3,4 */ }
+for i in 0..5 { /* 0,1,2,3,4 */ }    // half-open: `..` only, no `..=`
 
 // loop (infinite, use break/continue)
 loop { if done { break } }
@@ -171,8 +173,10 @@ defer close(handle)
 
 | Precedence | Operators |
 |---|---|
-| 11 | `*` `/` `%` |
-| 10 | `+` `-` |
+| 13 | `as` (postfix typed cast) |
+| 12 | `*` `/` `%` |
+| 11 | `+` `-` |
+| 10 | `<<` `>>` `>>>` |
 | 9 | `&` (bitwise AND) |
 | 8 | `^` (XOR) |
 | 7 | `\|` (OR) |
@@ -182,7 +186,11 @@ defer close(handle)
 | 3 | `and` |
 | 2 | `or` |
 | 1 | `??` (right-assoc) |
+| 0 | `match` (postfix, lowest) |
 
+- `as` binds tighter than every binary operator: `a + b as i32` is `a + (b as i32)`.
+- `match` binds looser than every binary operator: `a + b match { ... }` is `(a + b) match { ... }`.
+- `>>` is arithmetic shift (sign-preserving); `>>>` is logical shift (zero-fills).
 - `and`/`or` are keywords, short-circuit, bool only
 - `!expr` logical NOT, `~expr` bitwise NOT, `&expr` address-of (all prefix unary)
 - `~` is integer-only (error on `bool` and floats); `!` is `bool`-only
@@ -232,11 +240,15 @@ test "name" {
 
 Module-scoped, not exported. Run with `--test`. Requires `import std.test`.
 
+## Comments
+
+`// line comment to end of line` is the only comment form. There is no `/* */` block comment and no `///` doc comment.
+
 ## Tuples
 
 ```
 let t: (i32, bool) = (42, true)
-let x = t.0            // desugars to t._0
+let x = t.0            // desugars to t.__0 (double-underscore avoids colliding with user fields)
 ```
 
 ## Source Generators

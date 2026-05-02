@@ -86,7 +86,7 @@ fn parse_tail(s: String) usize? {
 
 fn split_columns(s: String, cols: &List(String)) {
     let start: usize = 0
-    for (i in 0..s.len) {
+    for i in 0..s.len {
         if s[i] == ',' {
             if i > start {
                 cols.push(s[start..i])
@@ -102,13 +102,13 @@ fn split_columns(s: String, cols: &List(String)) {
 fn print_record(sb: &StringBuilder, record: &CsvRecord, indices: &List(usize), has_columns: bool, delimiter: u8) {
     sb.clear()
     if has_columns {
-        for (i in 0..indices.len) {
+        for i in 0..indices.len {
             if i > 0 { sb.append_byte(delimiter) }
             const field = record.get(indices[i])
             if field.is_some() { sb.append(field.value) }
         }
     } else {
-        for (i in 0..record.field_count()) {
+        for i in 0..record.field_count() {
             if i > 0 { sb.append_byte(delimiter) }
             const field = record.get(i)
             if field.is_some() { sb.append(field.value) }
@@ -130,9 +130,9 @@ fn run(reader: &CsvReader, columns_arg: String, range_start: usize, range_end: u
         let col_names = list(16)
         split_columns(columns_arg, &col_names)
 
-        for (c in 0..col_names.len) {
+        for c in 0..col_names.len {
             let found = false
-            for (h in 0..hdrs.len) {
+            for h in 0..hdrs.len {
                 if hdrs[h] == col_names[c] {
                     col_indices.push(h)
                     found = true
@@ -154,12 +154,12 @@ fn run(reader: &CsvReader, columns_arg: String, range_start: usize, range_end: u
     // Print header row
     sb.clear()
     if has_columns {
-        for (i in 0..col_indices.len) {
+        for i in 0..col_indices.len {
             if i > 0 { sb.append_byte(delimiter) }
             sb.append(hdrs[col_indices[i]])
         }
     } else {
-        for (i in 0..hdrs.len) {
+        for i in 0..hdrs.len {
             if i > 0 { sb.append_byte(delimiter) }
             sb.append(hdrs[i])
         }
@@ -178,7 +178,7 @@ fn run(reader: &CsvReader, columns_arg: String, range_start: usize, range_end: u
     }
 
     // Print rows
-    for (i in start..end) {
+    for i in start..end {
         print_record(&sb, &rows[i], &col_indices, has_columns, delimiter)
     }
 
@@ -222,7 +222,7 @@ pub fn main() i32 {
     let has_tail = false
     let count_mode = false
 
-    for (i in 1..argc) {
+    for i in 1..argc {
         const a = arg(i)
         if a.is_none() { continue }
         const argv = a.value

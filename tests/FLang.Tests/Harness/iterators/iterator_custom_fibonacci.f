@@ -25,7 +25,7 @@ fn next(fib: &Fibonacci) u64? {
 pub fn main() i32 {
     let f: Fibonacci = .{ a = 1, b = 1, max = 10 }
     let sum: u64 = 0
-    for (x in f) {
+    for x in f {
         sum = sum + x
     }
     return sum as i32  // 1 + 1 + 2 + 3 + 5 + 8 = 20

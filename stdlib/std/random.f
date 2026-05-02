@@ -151,7 +151,7 @@ test "deterministic with same seed" {
 
 test "next_range stays in bounds" {
     let rng = random(123)
-    for i in 0..100 {
+    for i in 0..100usize {
         const val = rng.next_range(0, 10)
         assert_true(val >= 0 and val < 10, "range value out of bounds")
     }
@@ -167,7 +167,7 @@ test "next_bool works" {
 
 test "next_f64 in [0, 1)" {
     let rng = random(42)
-    for i in 0..100 {
+    for i in 0..100usize {
         const val = rng.next_f64()
         assert_true(val >= 0.0 and val < 1.0, "f64 should be in [0, 1)")
     }
@@ -175,7 +175,7 @@ test "next_f64 in [0, 1)" {
 
 test "next_f32 in [0, 1)" {
     let rng = random(42)
-    for i in 0..100 {
+    for i in 0..100usize {
         const val = rng.next_f32()
         assert_true(val >= 0.0f32 and val < 1.0f32, "f32 should be in [0, 1)")
     }
@@ -183,7 +183,7 @@ test "next_f32 in [0, 1)" {
 
 test "next_f64_range stays in bounds" {
     let rng = random(77)
-    for i in 0..100 {
+    for i in 0..100usize {
         const val = rng.next_f64_range(5.0, 10.0)
         assert_true(val >= 5.0 and val < 10.0, "f64 range value out of bounds")
     }
@@ -191,7 +191,7 @@ test "next_f64_range stays in bounds" {
 
 test "next_f32_range stays in bounds" {
     let rng = random(77)
-    for i in 0..100 {
+    for i in 0..100usize {
         const val = rng.next_f32_range(5.0f32, 10.0f32)
         assert_true(val >= 5.0f32 and val < 10.0f32, "f32 range value out of bounds")
     }

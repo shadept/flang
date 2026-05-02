@@ -60,7 +60,7 @@ pub fn main() i32 {
     let files: List(String) = list(0)
     defer files.deinit()
 
-    for (r in opts) {
+    for r in opts {
         r match {
             Opt('l') => { show_lines = true }
             Opt('w') => { show_words = true }

@@ -31,7 +31,7 @@ pub type Dict = struct(K, V) {
 pub fn deinit(self: &Dict($K, $V)) {
     if (self.cap > 0) {
         // Deinit all occupied keys and values
-        for (i in 0..self.cap as isize) {
+        for i in 0..self.cap as isize {
             const entry: &Entry(K, V) = self.entries + (i as usize)
             if (entry.state == 1) {
                 entry.key.deinit()
@@ -106,7 +106,7 @@ fn ensure_capacity(self: &Dict($K, $V)) {
 
     // Re-insert old entries
     if (old_cap > 0) {
-        for (i in 0..old_cap as isize) {
+        for i in 0..old_cap as isize {
             const old_entry: &Entry(K, V) = old_entries + (i as usize)
             if (old_entry.state == 1) {
                 self.set(old_entry.key, old_entry.value)
@@ -128,7 +128,7 @@ pub fn set(self: &Dict($K, $V), key: K, value: V) {
     const h: usize = hash_key(key)
     let tombstone_idx: usize = self.cap  // sentinel: no tombstone found
 
-    for (i in 0..self.cap as isize) {
+    for i in 0..self.cap as isize {
         const idx: usize = (h + (i as usize)) % self.cap
         const entry: &Entry(K, V) = self.entries + idx
 
@@ -176,7 +176,7 @@ pub fn set(self: &Dict(OwnedString, $V), key: String, value: V) {
     const h: usize = hash_key(fake)
     let tombstone_idx: usize = self.cap
 
-    for (i in 0..self.cap as isize) {
+    for i in 0..self.cap as isize {
         const idx: usize = (h + (i as usize)) % self.cap
         const entry: &Entry(OwnedString, V) = self.entries + idx
 
@@ -233,7 +233,7 @@ pub fn get_ref(self: Dict($K, $V), key: K) &V? {
 
     const h: usize = hash_key(key)
 
-    for (i in 0..self.cap as isize) {
+    for i in 0..self.cap as isize {
         const idx: usize = (h + (i as usize)) % self.cap
         const entry: &Entry(K, V) = self.entries + idx
 
@@ -275,7 +275,7 @@ pub fn contains(self: Dict($K, $V), key: K) bool {
 
     const h: usize = hash_key(key)
 
-    for (i in 0..self.cap as isize) {
+    for i in 0..self.cap as isize {
         const idx: usize = (h + (i as usize)) % self.cap
         const entry: &Entry(K, V) = self.entries + idx
 
@@ -308,7 +308,7 @@ pub fn remove(self: &Dict($K, $V), key: K) V? {
 
     const h: usize = hash_key(key)
 
-    for (i in 0..self.cap as isize) {
+    for i in 0..self.cap as isize {
         const idx: usize = (h + (i as usize)) % self.cap
         const entry: &Entry(K, V) = self.entries + idx
 
@@ -336,7 +336,7 @@ pub fn remove(self: &Dict($K, $V), key: K) V? {
 // Deinits all stored keys and values.
 pub fn clear(self: &Dict($K, $V)) {
     if (self.cap > 0) {
-        for (i in 0..self.cap as isize) {
+        for i in 0..self.cap as isize {
             const entry: &Entry(K, V) = self.entries + (i as usize)
             if (entry.state == 1) {
                 entry.key.deinit()
@@ -365,7 +365,7 @@ pub fn iter(dict: &Dict($K, $V)) DictIterator(K, V) {
 
 // Advance iterator and return next occupied entry
 pub fn next(it: &DictIterator($K, $V)) Entry(K, V)? {
-    for (idx in it.current..it.dict.cap) {
+    for idx in it.current..it.dict.cap {
         const entry: &Entry(K, V) = it.dict.entries + idx
         if (entry.state == 1) {
             it.current = idx + 1

@@ -61,7 +61,7 @@ pub fn env(key: String) String? {
 //   let a = get_args()
 //   defer a.deinit()
 //   let opts = getopts("vho(output):", a.as_slice())
-//   for (r in opts) {
+//   for r in opts {
 //       r match { Opt(ch) => ..., OptArg(ch, val) => ..., _ => {} }
 //   }
 

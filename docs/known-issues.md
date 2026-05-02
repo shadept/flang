@@ -16,6 +16,29 @@ When you discover a bug or limitation:
 
 ## Open Issues
 
+### RFC-007: Option Enum Migration Pending
+
+**Status:** Spec landed, implementation deferred
+**Affected:** `stdlib/core/option.f`, `src/FLang.Core/TypeRegistry.cs`, `src/FLang.Semantics/HmAstLowering.cs`, `src/FLang.Semantics/HmTypeChecker.Expressions.cs`, `src/FLang.Semantics/CoercionRules.cs`
+
+The spec ([spec.md §2.7](spec.md)) now describes `Option` as `enum(T) { Some(T), None }` per [RFC-007](tickets/007-option-as-enum.md), but the compiler and stdlib still implement it as `struct(T) { has_value: bool, value: T }`. The struct representation is hard-coded in `TypeRegistry.MakeOption` and the lowering paths for `null`, `??`, and `?.` look up `has_value`/`value` fields directly. A migration touches:
+
+1. `TypeRegistry.MakeOption` — return an enum-shaped layout (or remove and let the source `option.f` definition flow through normal type collection).
+2. `HmAstLowering` paths: `LowerNullLiteral`, `LowerCoalesce`, `LowerNullPropagation`, the iterator `next() T?` consumer in `LowerForLoop`, the niche helpers, and the foreign-Option-return wrap path. Each must dispatch on enum tag/payload instead of struct fields.
+3. `CoercionRules` — `T → Option(T)` wrap becomes `Some(value)` construction.
+4. `HmTypeChecker.Expressions` — Option-related coercion checks at lines 1763, 1770, 2770, 2812, 2825 need updating.
+5. `stdlib/std/option.f` — methods (`is_some`, `is_none`, `map`, `expect`, `unwrap_or`, `op_coalesce`) rewritten with `match self { Some(v) => ..., None => ... }`.
+6. Examples and tests touching `Option` field access (none today rely on `.has_value`/`.value` directly except via compiler).
+7. Remove the dead `has_value`-write check (`E3005`) at HmAstLowering.cs:4567.
+
+**Two new error codes documented in spec but not yet emitted:**
+- E2095 — "type of `null` cannot be inferred; add a type annotation"
+- E2096 — "`null` is `Option.None`; use `&T?` for a nullable reference"
+
+The RFC's own implementation phases (1–5) call for a flag-gated migration. Worth tackling as a dedicated session.
+
+---
+
 ### Nested `$"..."` Leaks the Inner OwnedString
 
 **Status:** Open

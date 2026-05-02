@@ -1535,11 +1535,14 @@ public class Parser
                     continue;
                 }
 
-                // Tuple field access: t.0, t.1, etc. - desugars to t._0, t._1, etc.
+                // Tuple field access: t.0, t.1, etc. - desugars to t.__0, t.__1, etc.
+                // The `__` prefix matches the convention used elsewhere for compiler-
+                // synthesized fields (`__inner`, `__allocator`) and avoids colliding
+                // with user-defined fields named `_0`, `_1`, etc.
                 if (_currentToken.Kind == TokenKind.Integer)
                 {
                     var indexToken = Eat(TokenKind.Integer);
-                    var fieldName = $"_{indexToken.Text}";
+                    var fieldName = $"__{indexToken.Text}";
                     var span = SourceSpan.Combine(expr.Span, indexToken.Span);
                     expr = new MemberAccessExpressionNode(span, expr, fieldName);
                     continue;
@@ -2377,12 +2380,18 @@ public class Parser
 
         if (_currentToken.Kind == TokenKind.OpenParenthesis)
         {
-            // Parenthesized: for (i in expr) { ... }
+            _diagnostics.Add(Diagnostic.Error(
+                "parentheses around the `for` header are not allowed",
+                _currentToken.Span,
+                "use `for x in xs { ... }` (no parens)",
+                "E1010"));
+            // Parse defensively so we still produce an AST and downstream errors are sensible.
             Eat(TokenKind.OpenParenthesis);
             iterator = Eat(TokenKind.Identifier);
             Eat(TokenKind.In);
             iterable = ParseExpression();
-            Eat(TokenKind.CloseParenthesis);
+            if (_currentToken.Kind == TokenKind.CloseParenthesis)
+                Eat(TokenKind.CloseParenthesis);
         }
         else
         {
@@ -2689,11 +2698,12 @@ public class Parser
             return types[0];
         }
 
-        // Convert to anonymous struct with _0, _1, _2, ... field names
+        // Convert to anonymous struct with __0, __1, __2, ... field names.
+        // Double-underscore matches the compiler-synthesized-field convention.
         var fields = new List<(string FieldName, TypeNode FieldType)>();
         for (int i = 0; i < types.Count; i++)
         {
-            fields.Add(($"_{i}", types[i]));
+            fields.Add(($"__{i}", types[i]));
         }
 
         return new AnonymousStructTypeNode(span, fields);
@@ -2813,11 +2823,12 @@ public class Parser
             return expressions[0];
         }
 
-        // Convert to anonymous struct with _0, _1, _2, ... field names
+        // Convert to anonymous struct with __0, __1, __2, ... field names.
+        // Double-underscore matches the compiler-synthesized-field convention.
         var fields = new List<(string FieldName, ExpressionNode Value)>();
         for (int i = 0; i < expressions.Count; i++)
         {
-            fields.Add(($"_{i}", expressions[i]));
+            fields.Add(($"__{i}", expressions[i]));
         }
 
         return new AnonymousStructExpressionNode(span, fields);

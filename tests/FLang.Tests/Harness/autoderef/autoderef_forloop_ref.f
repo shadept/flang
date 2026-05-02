@@ -18,7 +18,7 @@ pub fn main() i32 {
     list.push(&c)
 
     let sum: i32 = 0
-    for (node in list) {
+    for node in list {
         // node is &&Node, should auto-deref to access value
         sum = sum + node.value
     }

@@ -24,7 +24,7 @@ fn push_stack(d: &Decoder, val: u8) {
 
 fn buf_sum(d: &Decoder) i32 {
     let total: i32 = 0
-    for (i in 0..d.buf_len as isize) {
+    for i in 0..d.buf_len as isize {
         total = total + d.buf[i as usize] as i32
     }
     return total

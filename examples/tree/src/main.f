@@ -312,7 +312,7 @@ pub fn main() i32 {
     const opts_fmt = "a(all)d(dirs-only)f(full-path)F(classify)s(size)h(human)I(ignore):L(level):?(help)A(ascii)N(noreport)"
     let opts = getopts(opts_fmt, argv.as_slice()[1..])
 
-    for (r in opts) {
+    for r in opts {
         r match {
             Opt('a') => { state.show_hidden = true }
             Opt('d') => { state.dirs_only = true }

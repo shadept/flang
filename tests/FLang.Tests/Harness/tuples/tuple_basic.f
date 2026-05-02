@@ -2,8 +2,8 @@
 //! EXIT: 30
 
 // Basic tuple creation and access
-// (10, 20) desugars to .{ _0 = 10, _1 = 20 }
-// t.0 desugars to t._0
+// (10, 20) desugars to .{ __0 = 10, __1 = 20 }
+// t.0 desugars to t.__0
 
 pub fn main() i32 {
     let t = (10, 20)
