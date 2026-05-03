@@ -41,7 +41,9 @@ public partial class HmTypeChecker
                 CheckWhileLoop(whileLoop);
                 break;
             case DeferStatementNode defer:
-                InferExpression(defer.Expression);
+                _ctx.DeferDepth++;
+                try { InferExpression(defer.Expression); }
+                finally { _ctx.DeferDepth--; }
                 break;
             case IfDirectiveStatementNode directive:
             {
@@ -81,8 +83,8 @@ public partial class HmTypeChecker
                 // Unspecified fields are zero-initialized (codegen memsets the struct to 0)
 
                 var unifySpan = varDecl.Initializer?.Span ?? varDecl.Span;
-                var unified = _ctx.Engine.Unify(annotationType, initType, unifySpan);
-                varType = unified.Type;
+                _ctx.Engine.Unify(initType, annotationType, unifySpan);
+                varType = annotationType;
             }
             else
             {

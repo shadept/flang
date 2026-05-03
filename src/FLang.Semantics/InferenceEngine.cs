@@ -144,14 +144,39 @@ public class InferenceEngine : ITypeResolver
     // Unify
     // =========================================================================
 
-    public UnifyResult Unify(Type a, Type b, SourceSpan span)
+    /// <summary>
+    /// Unify two types under a directional convention: <paramref name="actual"/>
+    /// flows into <paramref name="expected"/>. Coercion rules are tried in the
+    /// <c>actual → expected</c> direction only. This mirrors how integer
+    /// widening is meant to work (i32 → i64 implicit, i64 → i32 rejected) and
+    /// applies the same model uniformly to T → Option(T) wrapping and every
+    /// other implicit conversion.
+    ///
+    /// Callers that need a genuinely symmetric "find a common type" operation
+    /// — match-arm join, if/else branch join — must use <see cref="UnifyJoin"/>.
+    /// </summary>
+    public UnifyResult Unify(Type actual, Type expected, SourceSpan span)
     {
         var cost = 0;
-        var result = UnifyInternal(a, b, span, ref cost);
+        var result = UnifyInternal(actual, expected, span, ref cost, directional: true);
         return new UnifyResult(result, cost);
     }
 
-    private Type UnifyInternal(Type a, Type b, SourceSpan span, ref int cost)
+    /// <summary>
+    /// Symmetric unification for join contexts (if/else branches, match arm
+    /// bodies). Coercion rules are tried in both directions, so a `T` branch
+    /// and an `Option(T)` branch settle on `Option(T)` regardless of branch
+    /// order. Use only when neither side is "the slot" — for value→slot flow
+    /// use <see cref="Unify"/> instead.
+    /// </summary>
+    public UnifyResult UnifyJoin(Type a, Type b, SourceSpan span)
+    {
+        var cost = 0;
+        var result = UnifyInternal(a, b, span, ref cost, directional: false);
+        return new UnifyResult(result, cost);
+    }
+
+    private Type UnifyInternal(Type a, Type b, SourceSpan span, ref int cost, bool directional = true)
     {
         a = Resolve(a);
         b = Resolve(b);
@@ -203,7 +228,7 @@ public class InferenceEngine : ITypeResolver
             if (fa.ParameterTypes.Count != fb.ParameterTypes.Count)
             {
                 ReportError(
-                    $"Function parameter count mismatch: expected {fa.ParameterTypes.Count}, got {fb.ParameterTypes.Count}",
+                    $"Function parameter count mismatch: expected {fb.ParameterTypes.Count}, got {fa.ParameterTypes.Count}",
                     span);
                 return a;
             }
@@ -238,7 +263,7 @@ public class InferenceEngine : ITypeResolver
         {
             if (aa.Length != ab.Length)
             {
-                ReportError($"Array length mismatch: expected {aa.Length}, got {ab.Length}", span);
+                ReportError($"Array length mismatch: expected {ab.Length}, got {aa.Length}", span);
                 return a;
             }
 
@@ -275,13 +300,17 @@ public class InferenceEngine : ITypeResolver
         }
 
         // Coercion fallback
-        return TryCoerce(a, b, span, ref cost);
+        return TryCoerce(a, b, span, ref cost, directional);
     }
 
-    private Type TryCoerce(Type a, Type b, SourceSpan span, ref int cost)
+    private Type TryCoerce(Type a, Type b, SourceSpan span, ref int cost, bool directional = false)
     {
         foreach (var rule in _coercionRules)
         {
+            // In directional mode `a` is the "from" (actual value) and `b` is
+            // the "to" (expected slot). Skip the reverse direction so widening
+            // rules like `T → Option(T)` can't be applied backwards to mask a
+            // mismatch when the value is actually wider than the slot.
             var result = rule.TryApply(a, b, this);
             if (result != null)
             {
@@ -289,16 +318,19 @@ public class InferenceEngine : ITypeResolver
                 return result;
             }
 
-            result = rule.TryApply(b, a, this);
-            if (result != null)
+            if (!directional)
             {
-                cost++;
-                return result;
+                result = rule.TryApply(b, a, this);
+                if (result != null)
+                {
+                    cost++;
+                    return result;
+                }
             }
         }
 
-        ReportError($"Type mismatch: expected `{a}`, got `{b}`", span, expected: a, actual: b);
-        return a;
+        ReportError($"Type mismatch: expected `{b}`, got `{a}`", span, expected: b, actual: a);
+        return b;
     }
 
     // =========================================================================

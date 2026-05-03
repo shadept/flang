@@ -77,7 +77,7 @@ public partial class HmTypeChecker
             using (_ctx.Engine.OverrideErrors("E2071",
                 () => "function `" + ctx.Node.Name + "` returns `{expected}`, but got `{actual}`"))
             {
-                _ctx.Engine.Unify(ctx.ReturnType, exprType, ret.Expression.Span);
+                _ctx.Engine.Unify(exprType, ctx.ReturnType, ret.Expression.Span);
             }
         }
         else
@@ -1698,7 +1698,7 @@ public partial class HmTypeChecker
             using (_ctx.Engine.OverrideErrors("E2074",
                 () => "if/else branches have different types: then is `{expected}`, else is `{actual}`"))
             {
-                var unified = _ctx.Engine.Unify(thenType, elseType, ifExpr.Span);
+                var unified = _ctx.Engine.UnifyJoin(thenType, elseType, ifExpr.Span);
                 return unified.Type;
             }
         }
@@ -1725,7 +1725,7 @@ public partial class HmTypeChecker
 
             if (_ctx.Engine.TryUnify(thenType, elseType) != null)
             {
-                var unified = _ctx.Engine.Unify(thenType, elseType, ifExpr.Span);
+                var unified = _ctx.Engine.UnifyJoin(thenType, elseType, ifExpr.Span);
                 Record(ifExpr, unified.Type);
                 return;
             }
@@ -1782,7 +1782,7 @@ public partial class HmTypeChecker
             using (_ctx.Engine.OverrideErrors("E2075",
                 () => "match arm returns `{actual}`, but previous arms return `{expected}`"))
             {
-                var unified = _ctx.Engine.Unify(resultType, armType, arm.Span);
+                var unified = _ctx.Engine.UnifyJoin(resultType, armType, arm.Span);
                 resultType = unified.Type;
             }
 

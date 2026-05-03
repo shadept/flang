@@ -249,7 +249,7 @@ pub fn copy_to(src: $T[], dest: T[]) usize {
 pub fn reinterpret(src: $T[]) $U[] {
     const total_bytes = src.len * size_of(T)
     const size_of_u = size_of(U)
-    if total_bytes % size_of(U) {
+    if total_bytes % size_of(U) != 0 {
         panic("Alignment/Size mismatch")
     }
     return .{ ptr=src.ptr as &U, len=total_bytes / size_of_u }
