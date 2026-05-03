@@ -31,8 +31,17 @@ public static class DeadCodeElimination
                 if (!dead.Contains(inst) && inst is AddressOfInstruction ao)
                     addressOfTargets.Add(ao.VariableName);
 
+        // Identity is name-keyed for LocalValues — see the note on DeadStoreElimination
+        // for why: a LocalValue produced by one instruction may be a separate object
+        // instance from the LocalValue used downstream, even though both refer to the
+        // same SSA name (e.g. an empty array literal returns `new LocalValue(allocaName,
+        // IrArray)` while the alloca's Result is `LocalValue(allocaName, IrPointer)` —
+        // reference equality misses the use entirely and the alloca is wrongly DCE'd).
+        // Constants and other non-Local values fall back to reference identity.
+        static object KeyOf(Value v) => v is LocalValue && v.Name is { } n ? n : v;
+
         // Count uses across all blocks
-        var useCounts = new Dictionary<Value, int>();
+        var useCounts = new Dictionary<object, int>();
         foreach (var block in fn.BasicBlocks)
         {
             foreach (var inst in block.Instructions)
@@ -41,8 +50,9 @@ public static class DeadCodeElimination
                 foreach (var op in IrInstructionHelpers.GetOperands(inst))
                 {
                     var resolved = IrInstructionHelpers.Resolve(substitutions, op);
-                    useCounts.TryGetValue(resolved, out int count);
-                    useCounts[resolved] = count + 1;
+                    var key = KeyOf(resolved);
+                    useCounts.TryGetValue(key, out int count);
+                    useCounts[key] = count + 1;
                 }
             }
         }
@@ -59,7 +69,7 @@ public static class DeadCodeElimination
                 if (result == null) continue;
 
                 var resolvedResult = IrInstructionHelpers.Resolve(substitutions, result);
-                useCounts.TryGetValue(resolvedResult, out int uses);
+                useCounts.TryGetValue(KeyOf(resolvedResult), out int uses);
                 if (uses != 0) continue;
 
                 // Protect variables referenced by AddressOf instructions
