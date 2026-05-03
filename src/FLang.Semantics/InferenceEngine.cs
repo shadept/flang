@@ -610,6 +610,7 @@ public static class WellKnown
     // Well-known nominal type FQNs
     public const string String = "core.string.String";
     public const string Option = "core.option.Option";
+    public const string TryResult = "core.try.TryResult";
     public const string Slice = "core.slice.Slice";
     public const string Range = "core.range.Range";
     public const string TypeInfo = "core.rtti.Type";

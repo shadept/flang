@@ -58,7 +58,7 @@ pub fn main() i32 {
 
     let argv = get_args()
     defer argv.deinit()
-    let opts = getopts("l(lines)w(words)c(bytes)", argv.as_slice()[1..])
+    let opts = getopts("l(lines)w(words)c(bytes)", argv[1..])
     let files: List(String) = list(0)
     defer files.deinit()
 

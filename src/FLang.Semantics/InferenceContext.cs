@@ -44,6 +44,16 @@ internal sealed class InferenceContext
     /// <summary>Tracks variable usages in the current function for unused variable warnings.</summary>
     public HashSet<string>? CurrentFnUsedVars { get; set; }
 
+    /// <summary>
+    /// Depth of `defer` bodies currently being checked. The postfix `?` operator
+    /// (RFC-009) is forbidden inside defer because the early `return` would
+    /// short-circuit out of a scope that has already begun unwinding.
+    /// </summary>
+    public int DeferDepth { get; set; }
+
+    /// <summary>Counter for synthesizing temporary names in `?` desugaring (RFC-009).</summary>
+    public int NextTryId { get; set; }
+
     // Scope management helpers
 
     public void PushScope()

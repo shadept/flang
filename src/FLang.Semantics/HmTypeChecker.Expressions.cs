@@ -51,6 +51,7 @@ public partial class HmTypeChecker
             AnonymousStructExpressionNode anon => InferAnonymousStruct(anon),
             NamedArgumentExpressionNode namedArg => InferExpression(namedArg.Value),
             InterpolatedStringExpressionNode interp => InferInterpolation(interp),
+            TryExpressionNode tryExpr => InferTry(tryExpr),
             ReturnNode ret => InferReturn(ret),
             BreakNode => WellKnown.Never,
             ContinueNode => WellKnown.Never,
@@ -2910,6 +2911,94 @@ public partial class HmTypeChecker
 
         ReportError("Null propagation `?.` requires Option type", nullProp.Span);
         return _ctx.Engine.FreshVar();
+    }
+
+    // =========================================================================
+    // Postfix try operator (RFC-009) — `expr?`
+    // =========================================================================
+
+    /// <summary>
+    /// Desugar `expr?` to:
+    ///   op_try(expr) match {
+    ///       Continue(__try_v) => __try_v,
+    ///       Return(__try_r)   => return __try_r,
+    ///   }
+    /// The `op_try` overload is resolved against the operand's type; its
+    /// `TryResult(T, R)` return type fixes the bindings for `T` (the value the
+    /// `?` expression evaluates to) and `R` (the value early-returned). `R`
+    /// is then unified with the enclosing function's declared return type.
+    /// </summary>
+    private Type InferTry(TryExpressionNode tryExpr)
+    {
+        // E2090: `?` only makes sense inside a function — we need a return slot.
+        if (_ctx.FunctionStack.Count == 0)
+        {
+            ReportError("`?` operator outside of function", tryExpr.Span, "E2090");
+            return _ctx.Engine.FreshVar();
+        }
+
+        // E2091: `?` inside a `defer` body would early-return from the enclosing
+        // scope mid-cleanup. Forbid for now; revisit if a clean semantic emerges.
+        if (_ctx.DeferDepth > 0)
+        {
+            ReportError(
+                "`?` is not allowed inside a `defer` body — early return from a deferred "
+                + "expression is ambiguous",
+                tryExpr.Span, "E2091");
+            return _ctx.Engine.FreshVar();
+        }
+
+        var span = tryExpr.Span;
+
+        // Unique id per `?` site so synthesized identifiers don't clash when
+        // multiple `?` appear in the same block.
+        var tryId = _ctx.NextTryId++;
+
+        // Build the call `op_try(expr)` — overload resolution handles dispatch.
+        var opTryCall = new CallExpressionNode(
+            span,
+            functionName: "op_try",
+            arguments: new List<ExpressionNode> { tryExpr.Operand });
+
+        // Continue(__try_v_N) => __try_v_N
+        var contValueName = $"__try_v_{tryId}";
+        var contPattern = new EnumVariantPatternNode(
+            span,
+            enumName: null,
+            variantName: "Continue",
+            subPatterns: new List<PatternNode> { new VariablePatternNode(span, contValueName) });
+        var contBody = new IdentifierExpressionNode(span, contValueName);
+        var contArm = new MatchArmNode(span, contPattern, contBody);
+
+        // Return(__try_r_N) => return __try_r_N
+        var retValueName = $"__try_r_{tryId}";
+        var retPattern = new EnumVariantPatternNode(
+            span,
+            enumName: null,
+            variantName: "Return",
+            subPatterns: new List<PatternNode> { new VariablePatternNode(span, retValueName) });
+        var retBody = new ReturnNode(span, new IdentifierExpressionNode(span, retValueName));
+        var retArm = new MatchArmNode(span, retPattern, retBody);
+
+        var match = new MatchExpressionNode(
+            span, opTryCall, new List<MatchArmNode> { contArm, retArm });
+
+        tryExpr.DesugaredMatch = match;
+
+        var matchType = InferExpression(match);
+
+        // E2092: surface a clear error when no op_try produced a TryResult.
+        // The synthesized match doesn't have its own diagnostic for that case.
+        var opTryCallType = _ctx.Engine.Resolve(_checker_GetInferredTypeOrFresh(opTryCall));
+        if (opTryCallType is not NominalType { Name: WellKnown.TryResult })
+        {
+            ReportError(
+                "the `?` operator requires an `op_try` overload for the operand type — "
+                + "either none is in scope or the available overloads don't match",
+                tryExpr.Span, "E2092");
+        }
+
+        return matchType;
     }
 
     // =========================================================================

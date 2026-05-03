@@ -1,8 +1,37 @@
 # RFC-009: `op_try` Early-Return Operator
 
 **Type:** Language feature (operator + stdlib)
-**Status:** Proposed
+**Status:** Implemented (optimization phase deferred)
 **Depends on:** RFC-007 (Option as enum)
+
+## Implementation notes
+
+Phases 1–5 and 7 from the original plan landed; the optimization phase (phase 6) is deliberately out of scope for v1.
+
+- **Resolved open questions:**
+  1. `TryResult` lives in `core.try`, re-exported via [stdlib/core/predule.f](../../stdlib/core/predule.f). Auto-imported through the prelude.
+  2. Bare `expr?` as a statement is **not** allowed yet — it must currently appear in a context where its `T` is consumed (e.g. RHS of `let`, argument, return). Will be revisited.
+  3. `?` inside a closure returns from the **lambda**, not the enclosing function. The type checker peeks the top of `FunctionStack`, which lambdas push.
+  4. `?` inside `defer` is forbidden (E2091). Tracked via `InferenceContext.DeferDepth`. Can be revisited if a clean semantics emerges.
+
+- **Code map:**
+  - AST: [TryExpressionNode.cs](../../src/FLang.Frontend/Ast/Expressions/TryExpressionNode.cs) — carries the operand and the synthesized desugar.
+  - Parser: postfix `?` in `ParsePostfixOperators` ([Parser.cs](../../src/FLang.Frontend/Parser.cs)). `?.` is still a single `QuestionDot` token, so the bare `Question` branch is unambiguous.
+  - Type checker: `InferTry` in [HmTypeChecker.Expressions.cs](../../src/FLang.Semantics/HmTypeChecker.Expressions.cs) — builds `op_try(operand) match { Continue(v) => v, Return(r) => return r }`, runs inference on it, then explicitly checks the `R` slot against the enclosing function's return type (see "Type-checker quirk" below).
+  - Lowering: [HmAstLowering.cs](../../src/FLang.Semantics/HmAstLowering.cs) just dispatches `TryExpressionNode` to its `DesugaredMatch`.
+  - Stdlib impls: `op_try` for `Option` in [core/option.f](../../stdlib/core/option.f); for `Result` in [std/result.f](../../stdlib/std/result.f).
+
+- **Diagnostics:**
+  - `E2090`: `?` outside a function.
+  - `E2091`: `?` inside a `defer` body.
+  - `E2092`: no `op_try` overload accepts the operand type.
+  - `E2071` (reused): `?` early-returns a type incompatible with the enclosing function's return type.
+
+- **R-type compatibility check:** unification flows naturally through the synthesized `return r` arm body.
+
+- **Stdlib `op_try` signatures:** both `Option` and `Result` use the same `T` for input and `R`'s payload — i.e. `?` on `Option(i32)` requires the enclosing fn to return `Option(i32)` exactly, not `Option(U)` for arbitrary `U`. The RFC's "`Option(?)`" sketch (cross-T early returns) would require unbound generics inferred purely from call-site context; deferred until there's a concrete user need.
+
+- **Optimization phase deferred:** the desugar produces a real `TryResult` allocation and match. The C compiler will inline the small functions, but FLang itself does no special-casing for known stdlib types yet. Real-world impact: extra struct copy and a tag dispatch per `?`. Revisit when profiling demands it.
 
 ## Summary
 

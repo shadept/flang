@@ -118,16 +118,15 @@ fn free_entries(entries: &List(Entry)) {
 // -----------------------------------------------------------------------------
 
 fn collect_entries(path: String, state: &State) Result(List(Entry), FsError) {
-    let entries: List(Entry) = list(16)
-
     const it_r = read_dir(path)
     if it_r.is_err() {
-        entries.deinit()
         return Err(it_r.unwrap_err())
     }
+
     let it = it_r.unwrap()
     defer it.deinit()
 
+    let entries: List(Entry) = list(16)
     for e in it {
         if !state.show_hidden and e.name.len > 0 and e.name[0] == '.' { continue }
 

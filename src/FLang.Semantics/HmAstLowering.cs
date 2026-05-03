@@ -1826,6 +1826,8 @@ public class HmAstLowering
             NamedArgumentExpressionNode na => LowerExpression(na.Value, expectedType),
             InterpolatedStringExpressionNode interp when interp.DesugaredBlock != null
                 => LowerExpression(interp.DesugaredBlock, expectedType),
+            TryExpressionNode tryExpr when tryExpr.DesugaredMatch != null
+                => LowerExpression(tryExpr.DesugaredMatch, expectedType),
             ReturnNode ret => LowerReturnExpr(ret),
             BreakNode brk => LowerBreakExpr(brk),
             ContinueNode cont => LowerContinueExpr(cont),

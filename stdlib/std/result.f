@@ -9,6 +9,17 @@ pub type Result = enum(T, E) {
     Err(E)
 }
 
+// `op_try` for Result: `Ok(v)` → continue with `v`, `Err(e)` → return `Err(e)`.
+// Lets `expr?` work in any function whose return type is `Result(_, E)`. The
+// enclosing function's error type must match `E` exactly — there is no
+// implicit error conversion (RFC-009).
+pub fn op_try(self: Result($T, $E)) TryResult(T, Result(T, E)) {
+    return self match {
+        Ok(v) => TryResult.Continue(v),
+        Err(e) => TryResult.Return(Err(e)),
+    }
+}
+
 // Check if the result is Ok
 pub fn is_ok(self: Result($T, $E)) bool {
     return self match {

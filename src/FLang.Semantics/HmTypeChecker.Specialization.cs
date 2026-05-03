@@ -276,6 +276,13 @@ public partial class HmTypeChecker
             lambda.Parameters, lambda.ReturnType, CloneStatements(lambda.Body)),
         ReturnNode ret => new ReturnNode(ret.Span,
             ret.Expression != null ? CloneExpression(ret.Expression) : null),
+        TryExpressionNode tryExpr => new TryExpressionNode(tryExpr.Span,
+            CloneExpression(tryExpr.Operand))
+        {
+            DesugaredMatch = tryExpr.DesugaredMatch != null
+                ? CloneExpression(tryExpr.DesugaredMatch)
+                : null
+        },
         BreakNode br => new BreakNode(br.Span),
         ContinueNode cont => new ContinueNode(cont.Span),
         _ => throw new NotSupportedException(

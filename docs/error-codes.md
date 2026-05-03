@@ -3049,6 +3049,76 @@ Move the type parameters from the name to after the `struct`/`enum` keyword.
 
 ---
 
+## E209X: Postfix Try Operator (RFC-009)
+
+### E2090: `?` Outside Function
+
+**Category**: Type Checking
+**Severity**: Error
+
+#### Description
+
+The postfix `?` operator early-returns from the enclosing function. It can only appear inside a function body.
+
+#### Solution
+
+Move the expression into a function with a compatible return type.
+
+---
+
+### E2091: `?` Inside `defer`
+
+**Category**: Type Checking
+**Severity**: Error
+
+#### Description
+
+The postfix `?` operator is forbidden inside a `defer` body — early-returning from a deferred expression while the enclosing scope is already unwinding has no clean semantics.
+
+#### Example
+
+```flang
+fn caller() i32? {
+    defer {
+        let x = maybe()?   // error E2091
+    }
+    return Some(0)
+}
+```
+
+#### Solution
+
+Match on the value explicitly inside `defer` instead of using `?`. Future versions may revisit this.
+
+---
+
+### E2092: `?` Has No Matching `op_try`
+
+**Category**: Type Checking
+**Severity**: Error
+
+#### Description
+
+The postfix `?` operator desugars to `op_try(operand) match { ... }`. The compiler reports E2092 when no `op_try` overload in scope accepts the operand's type.
+
+#### Example
+
+```flang
+type Plain = struct { x: i32 }
+
+fn caller() i32 {
+    let p = Plain { x = 1 }
+    let v = p?            // error E2092 — no op_try for Plain
+    return v.x
+}
+```
+
+#### Solution
+
+Either define `fn op_try(self: Plain) TryResult(T, R)` for the operand type, or import a module that provides one (`core.option`, `std.result`).
+
+---
+
 ## W1XXX: Code Quality Warnings
 
 ### W1001: Unused Variable

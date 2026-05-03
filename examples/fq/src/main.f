@@ -43,15 +43,8 @@ fn apply_query(root: &JsonValue, query: String) &JsonValue? {
 
         const key = query[segment_start..i]
         current.* match {
-            Object(obj) => {
-                current = obj.json_get_ref(key) match {
-                    Some(n) => n,
-                    None => return null
-                }
-            }
-            else => {
-                return null
-            }
+            Object(obj) => { current = obj.json_get_ref(key)? }
+            else => { return null }
         }
 
         if at_end {

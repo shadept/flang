@@ -53,7 +53,7 @@ fn simd_count_byte(data: String, target: u8) usize {
 fn parse_range(s: String) (usize, usize)? {
     const dp = s.find("..") match {
         Some(p) => p,
-        None => return null
+        None => return null // TODO no convertion between different Option(T).None
     }
 
     const start_str = s[0..dp]

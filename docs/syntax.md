@@ -195,11 +195,12 @@ defer close(handle)
 - `~` is integer-only (error on `bool` and floats); `!` is `bool`-only
 - `a ?? b` unwraps optional or uses fallback
 - `a?.field` optional chaining
+- `expr?` postfix early-return — desugars to `op_try(expr) match { Continue(v) => v, Return(r) => return r }`. `?.` (single token) always wins over `?` followed by `.`; use `(expr?).field` for "early-return then access". Forbidden inside `defer`. See RFC-009.
 - `expr as Type` casting (numeric, pointer, String/u8[])
 
 ### Operator Overloading
 
-All operators desugar to function calls: `op_add`, `op_sub`, `op_multiply`, `op_divide`, `op_modulo`, `op_band`, `op_bor`, `op_bxor`, `op_bnot`, `op_eq`, `op_ne`, `op_lt`, `op_gt`, `op_le`, `op_ge`, `op_index`, `op_set_index`, `op_coalesce`, `op_assign`, `op_add_assign`, `op_deref`.
+All operators desugar to function calls: `op_add`, `op_sub`, `op_multiply`, `op_divide`, `op_modulo`, `op_band`, `op_bor`, `op_bxor`, `op_bnot`, `op_eq`, `op_ne`, `op_lt`, `op_gt`, `op_le`, `op_ge`, `op_index`, `op_set_index`, `op_coalesce`, `op_assign`, `op_add_assign`, `op_deref`, `op_try`.
 
 `op_eq` auto-derives `op_ne`. `op_cmp(a, b) Ord` auto-derives all six comparison operators.
 

@@ -1587,6 +1587,17 @@ public class Parser
                 continue;
             }
 
+            // Handle postfix early-return operator: expr? (RFC-009).
+            // Note: `?.` is a separate token (QuestionDot) handled above as
+            // null-propagation, so a bare `Question` here is unambiguous.
+            if (_currentToken.Kind == TokenKind.Question)
+            {
+                var questionToken = Eat(TokenKind.Question);
+                var span = SourceSpan.Combine(expr.Span, questionToken.Span);
+                expr = new TryExpressionNode(span, expr);
+                continue;
+            }
+
             break;
         }
 

@@ -10,3 +10,4 @@ import core.rtti
 import core.runtime
 import core.slice
 import core.string
+import core.try

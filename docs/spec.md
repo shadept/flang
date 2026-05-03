@@ -378,6 +378,7 @@ Every operator desugars to a function call. The stdlib provides implementations 
 | `[]` (ref-form) | `op_index_ref` |
 | `[]` read (value-form) / `[]=` write (value-form) | `op_index` / `op_set_index` |
 | `??` | `op_coalesce` |
+| postfix `?` | `op_try` |
 | `=` | `op_assign` |
 | `+=` | `op_add_assign` |
 | unary `-` / `!` | `op_neg` / `op_not` |
@@ -417,7 +418,23 @@ Every operator desugars to a function call. The stdlib provides implementations 
 
 **Safe member access `?.`**: `opt?.field` yields `Option(field_type)` — the field value if present, `null` otherwise. Chainable: `a?.b?.c`.
 
-**Early return `?`** (planned): `expr?` on `Option(U)` early-returns `null` if absent, otherwise unwraps. On `Result(U, E)` early-returns `Err(e)` if error, otherwise unwraps. Enclosing function must return compatible `Option` or `Result`.
+**Early return `?`** (RFC-009): `expr?` desugars to
+
+```
+op_try(expr) match {
+    Continue(v) => v,
+    Return(r)   => return r,
+}
+```
+
+`op_try(self) TryResult(T, R)` is a user-extensible operator. The expression evaluates to `T` (the `Continue` payload) on the happy path; otherwise the synthesized `return r` short-circuits the enclosing function. `TryResult` lives in `core.try` and is re-exported via the prelude. Stdlib provides:
+
+- `op_try` for `Option(T)` in [stdlib/core/option.f](../stdlib/core/option.f) — `Some(v)` continues with `v`, `None` early-returns `None`.
+- `op_try` for `Result(T, E)` in [stdlib/std/result.f](../stdlib/std/result.f) — `Ok(v)` continues with `v`, `Err(e)` early-returns `Err(e)`.
+
+The `R` type produced by `op_try` must match the enclosing function's declared return type exactly — there is no implicit error-type conversion. `?` is forbidden inside `defer` bodies (E2091) and outside any function (E2090). When no matching `op_try` exists for the operand type, the compiler emits E2092.
+
+Lexer disambiguation: `?.` is a single token (safe member access) and always wins over `?` followed by `.`. Use `(expr?).field` to early-return then access. Postfix `?` binds at the same level as method calls — tighter than every binary operator (`a + b?` parses as `a + (b?)`).
 
 ### 5.4 Casting
 
