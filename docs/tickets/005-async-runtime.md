@@ -44,6 +44,7 @@ FLang needs concurrency to be a viable systems language. The bar:
 |---|---|
 | OS threads only | No cheap concurrency for I/O fan-out; doesn't solve "same code sync/async". |
 | Stackless futures (Rust-style `async fn`) | Requires a compiler state-machine transform, forces function coloring at signature level, conflicts with "code doesn't know it's async". |
+| Stackless state-machine coroutines (SFEX-style, see §3.10) | Compelling: zero-stack, deterministic, allocation can be hidden inside a parent struct or arena, and (with compiler support) we could lower transparently *without* coloring at the signature level. Kept as a serious alternative to evaluate before implementation — see §3.10. |
 | Fully colorless stackful (Go-style, no `Future`) | Can't express `race` / `all` / `timeout` as first-class combinators — the deferred value has no handle. Forces every composition through `spawn` + `chan` + `select`. |
 | Callback-based futures, no await | Ugly for sequential flows, re-introduces colored continuations. |
 
@@ -87,8 +88,8 @@ pub type Future = struct(T) {
 **Methods:**
 
 ```flang
-fn Future(T).await(self)                          T                    // also: await(timeout=ms, ctx=&Context)
-fn Future(T).cancel(self)                         void                 // requests cancellation
+fn Future(T).await(self)                          T                    // also: await(timeout=ms, ctx=&Context, cancel=&CancelToken)
+fn Future(T).cancel(self)                         void                 // requests cancellation of this specific future
 fn Future(T).detach(self)                         void                 // consume handle; coroutine runs to completion, result discarded
 fn Future(T).is_ready(self)                       bool                 // non-blocking peek
 fn Future(T).deinit(self)                         void                 // see §3.9
@@ -112,6 +113,7 @@ fn Future(T).or_else(self, f: fn(E) Future(T))    Future(T)             // on Fu
 fut.await()                              // block until done
 fut.await(timeout = 5_000)               // → Result(T, Timeout)
 fut.await(ctx = my_ctx)                  // override inherited context for this await
+fut.await(cancel = &tok)                 // → Result(T, Cancelled); see §3.7
 ```
 
 `.await()` yields the current coroutine to the scheduler. Scheduler registers current coroutine as the waker on the Future, switches to another runnable coroutine (or parks). When the Future resolves, the waiter is enqueued and eventually resumed — possibly on a different worker.
@@ -119,10 +121,12 @@ fut.await(ctx = my_ctx)                  // override inherited context for this 
 ### 3.3 `spawn`
 
 ```flang
-fn spawn(alloc: &Allocator, args..., f: fn(args...) T) Future(T)
+fn spawn(alloc: &Allocator, args..., f: fn(args...) T,
+         cancel_with: &CancelToken? = null) Future(T)
 ```
 
-- `alloc` is the coroutine's allocator. Bound to the coroutine's context slot; `or_global()` inside the coroutine returns `alloc`. Must be safe under the caller's concurrency discipline (§3.7).
+- `alloc` is the coroutine's allocator. Bound to the coroutine's context slot; `or_global()` inside the coroutine returns `alloc`. Must be safe under the caller's concurrency discipline (§3.8).
+- `cancel_with` (optional) wires the spawned coroutine to a cancellation token (§3.7). If `tok.cancel()` fires, this coroutine observes the cancellation at its next suspension point and unwinds. If `null`, the coroutine is only cancellable via its own `Future.cancel()`.
 - `args...` are passed explicitly. **Lambdas remain non-capturing (§7.3).** This is a *soundness feature* in this RFC, not just a limitation: the only boundary crossings are `spawn`, `send`, `recv`, which are all stdlib choke points that can enforce isolation.
 - `args` are **deep-copied** into `alloc` at spawn time. After spawn returns, the child owns its copies; the parent's originals are untouched. Rationale: eliminates arg-aliasing races by construction. Reference args (`&T`) are preserved as-is and carry §3.6 "your problem" semantics — use them deliberately.
 - Returns `Future(T)` bound to `alloc`'s lifetime. Since the caller owns `alloc`, return-value lifetime is automatic.
@@ -188,16 +192,43 @@ fn current_context() &Context                     // returns current coroutine's
 
 ### 3.7 Cancellation
 
-Every `Future(T)` is cancellable. A cancelled Future resolves (its `.await()` returns) with a cancellation signal; the producing coroutine, at its next suspension point, observes the signal and may unwind.
+Cancellation is **token-based**. A `CancelToken` is a first-class value that can be observed by *both* the producer side (a coroutine that wants to bail when cancelled) and the consumer side (an `.await()` call that wants to bail when cancelled). The same token can be shared across many futures and many awaiters — cancellation is a fan-out signal, not a per-future flag.
 
-**Required capability — decided:**
-- `fut.cancel()` exists and signals cancellation.
-- `race` cancels the losing side before returning.
-- `.timeout(ms)` cancels the underlying Future when the deadline fires.
-- Cancellation propagates through `.then` / `.map` / `all` chains.
-- Cancellation checks occur at every suspension point (`.await()`, channel `send`/`recv`, `sleep`) — i.e., nothing is cancelled mid-computation, only at yield points. Compute-bound coroutines that never yield are effectively uninterruptible (matches Go, Kotlin).
+```flang
+pub type CancelToken = struct { /* opaque, internally an atomic flag + waker list */ }
 
-**Mechanism — [OPEN, see §7].** Specific questions: error type (`Cancelled` enum vs `Result`), whether cancellation is cooperative (flag) vs forced (unwind), how `defer` interacts with cancel-during-defer, whether dropping a Future cancels or detaches.
+fn cancel_token()                                CancelToken
+fn CancelToken.cancel(self)                      void                  // idempotent; signals all observers
+fn CancelToken.is_cancelled(self)                bool                  // non-blocking peek
+fn CancelToken.deinit(self)                      void
+```
+
+**Two observation points:**
+
+1. **Consumer-side** — `.await(cancel = &tok)` returns `Err(Cancelled)` immediately when `tok` fires. The producer is *not* affected — the running coroutine continues. This is "I'll wait, but only this long / under this condition."
+
+2. **Producer-side** — `spawn(..., cancel_with = &tok)` makes the spawned coroutine observe `tok`. When `tok.cancel()` fires, the running coroutine sees cancellation at its next suspension point and unwinds. This is "stop the work."
+
+The two are independent. A typical pattern uses both: spawn with `cancel_with = &tok` so the work stops, await with `cancel = &tok` so the wait also returns. Cancelling the token does both at once.
+
+**Decided:**
+
+- `CancelToken` is a value type bound to its creator's allocator (typed-key context entry, inheritable).
+- `tok.cancel()` is idempotent and thread-safe (atomic flag + waker fan-out).
+- `.await(cancel = &tok)` returns `Result(T, Cancelled)`; `.await()` with no token returns `T` directly. (See §7 q2 — every `.await()` overload returns either `T` or `Result(T, Cancelled)` based on whether you opt in.)
+- `Future(T).cancel(self)` remains for the simple "cancel this one future" case — it's equivalent to spawning with a private token and cancelling that token.
+- `race(a, b)` internally uses a token: spawn each side with `cancel_with = &internal_tok`, when one wins, fire the token, the loser unwinds.
+- `.timeout(ms)` is a one-liner: spawn a timer that calls `tok.cancel()`; await with the same token.
+- Cancellation checks occur at every suspension point (`.await()`, channel `send`/`recv`, `sleep`). Compute-bound coroutines that never yield are uninterruptible (matches Go, Kotlin).
+- Cancellation is **cooperative** (flag, checked at yield points) — not a forced stack unwind. `defer` runs in normal order during the cooperative unwind.
+
+**Why tokens beat per-Future cancellation:**
+- Cancel a tree of work with one call (`tok.cancel()` stops every coroutine spawned with that token).
+- Same future can be awaited by multiple consumers with different cancellation policies.
+- Maps cleanly to the established "request context" pattern (Go's `context.Context`) without inventing a parallel mechanism — the token can live as a slot in the `Context` chain (§3.5).
+- `.timeout` and `race` collapse to library code with no runtime magic.
+
+**Still open — [§7]:** Whether dropping a Future without `await`/`detach` cancels its associated token or detaches; precise interaction of cancel-during-defer.
 
 ### 3.8 Soundness model
 
@@ -219,6 +250,26 @@ No changes to existing discipline:
 - Memory allocated inside a coroutine using `or_global()` is allocated from the spawn-supplied allocator. If the coroutine leaks it (forgets to `deinit`), the leak is charged to the spawn-supplied allocator, freed when that allocator is destroyed.
 - Async does not introduce "free cleanup via coroutine exit." Async is not gc-via-scope.
 - Recommendation: provide a `TracingAllocator` in stdlib that wraps another allocator and reports outstanding allocations on `reset()` / `deinit()`. Fits the existing `AllocatorVTable` model (§4.1). Not blocking for this RFC; bolt on as a debug aid.
+
+### 3.10 Inspiration: SFEX-style stackless state machines (alternative model under consideration)
+
+Reference: <https://vittorioromeo.com/index/blog/sfex_coroutine.html>.
+
+The SFEX post describes a stackless coroutine model where a coroutine *is* a struct, state *is* one integer, and suspension *is* a controlled return. The macro layer expands to a `switch` over `__COUNTER__`-derived state values; persistent state lives as struct members; no heap allocation, no compiler scaffolding hidden from the user. Composition (`SFEX_CO_AWAIT`) is sub-coroutine ownership: the child is a member, the parent runs it to completion and propagates yields.
+
+**Why this is interesting for FLang specifically.** Our previous discussions on this RFC repeatedly came back to allocation cost — every `Future(T)` heap-allocates its `FutureState`, every `spawn` allocates a 64 KiB stack, every combinator (`race`, `all`) allocates more state. SFEX inverts that: the coroutine frame is the struct, allocation strategy is whatever the parent chose, and a `Future(T)`-equivalent can live inline in the awaiter's frame, in an arena, in a pool — same flexibility we already give every other type via explicit allocators.
+
+**Compiler support is the unlock.** The C / hand-written-macro version forces awkward expression-level encoding (no locals across yield points unless promoted to struct members). With compiler support we can do the lowering ourselves: take a function containing `.await()` calls, lift its locals into a generated state struct, lower the body into a `switch`-driven resume function. This is the Rust/C++20 lowering, but **without function coloring at the signature level** — the lowering is performed on any function that transitively calls a yielding primitive, the resulting state struct *is* the `Future(T)`, and call sites see no signature change. Colorless async via stackless lowering, paid for in compiler complexity instead of stack memory.
+
+**What this would change vs. the current design:**
+
+- `Future(T)` becomes a value type (the lowered state struct) instead of a refcounted handle. Allocation strategy becomes the awaiter's choice — inline, arena, heap — same shape as every other FLang type.
+- `spawn` no longer allocates a stack. It allocates the lowered state struct (size known at compile time per coroutine type) and registers it with the scheduler.
+- Combinators (`race`, `all`) compose state structs rather than heap-allocating fresh ones — the `race(a, b)` Future contains `a` and `b` by value.
+- Cancellation, `defer`-on-unwind, and the netpoller integration become a runtime-controlled state-transition rather than a stack manipulation.
+- We lose the "any C function can yield transparently" property — yielding requires a lowered call site. This is the trade.
+
+**Status: open design question, not yet a decision.** Locking the stackful model in the RFC body remains the conservative path because it requires no compiler work. Before implementing this RFC (which is gated on self-host anyway, §6 Phase 0), we will revisit and decide between (a) stackful as currently specified and (b) stackless-with-compiler-lowering as sketched here. The stdlib API surface in §3.2–§3.5 is intentionally compatible with either choice — `Future(T)`, `spawn`, `Channel(T)`, `Context` all describe the same observable contract regardless of the lowering strategy underneath.
 
 ---
 
@@ -399,7 +450,7 @@ New directory: `stdlib/std/runtime/`. Companion `.c` files follow the existing B
 1. **Coroutine context switching.** Start with `ucontext.h` (POSIX, portable). Plan: replace with fcontext-style assembly (x86_64, arm64) for speed in a follow-up. Windows: Fibers API.
 2. **Stack allocation.** mmap 64 KiB + 4 KiB guard page per coroutine. Stack overflow = SIGSEGV on guard, fail-fast with a diagnostic. Growable stacks deferred.
 3. **Scheduler.** `Worker` struct per OS thread. Local run queue = fixed-size Chase–Lev deque (256 slots); overflow pushes to shared global queue. Idle workers steal from a random sibling's tail; failed steal rounds park on `pthread_cond_t` / `WaitForSingleObject`.
-4. **Netpoller.** `epoll` (Linux), `kqueue` (macOS, BSD), `IOCP` (Windows). Dedicated poller thread per platform's native idiom (Linux runs inline on an idle worker; Windows IOCP gets a pool). Events translate to waker invocations on registered Futures.
+4. **Netpoller.** `io_uring` (Linux ≥5.6, primary; falls back to `epoll` on older kernels), `kqueue` (macOS, BSD), `IOCP` (Windows). Detection is runtime: probe `io_uring_setup` at startup and select epoll if unavailable or if a feature flag forces it. The netpoller abstraction is **completion-oriented** (matching io_uring and IOCP); readiness-based backends (kqueue, epoll fallback) emulate completion on top — read/write happen on the worker side after the readiness event, with the result delivered to the registered Future. Dedicated poller per platform's native idiom (Linux runs inline on an idle worker; Windows IOCP gets a pool). Events translate to waker invocations on registered Futures. Future work: linked SQE chains for fused submit-and-await on io_uring.
 5. **Timer wheel.** Hierarchical (tick = 1 ms). Per-worker local wheel; global merge on idle. Used by `sleep` and `.timeout`.
 6. **Atomic primitives.** Reuse existing `stdlib/std/atomic.c`. Future state uses `atomic_fetch_add` on the internal ref count and `atomic_compare_exchange` on the readiness flag.
 

@@ -3,7 +3,7 @@
 **Type:** Language semantics + stdlib migration
 **Status:** Landed (with transitional shims; see `docs/known-issues.md` "RFC-007 Follow-ups")
 **Depends on:** None
-**Blocks:** RFC-009 (`op_try`), RFC-010 (smart casting on Option, `?.` flattening generalization), Q20 (`is`/`matches!` shorthand)
+**Blocks:** RFC-009 (`op_try`), RFC-010 (`?.` flattening generalization, pattern grammar extensions), Q20 (`is`/`matches!` shorthand)
 
 ## Summary
 

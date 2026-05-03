@@ -153,5 +153,5 @@ These items got their own RFCs from the same review:
 - RFC-007: Option-to-enum migration + `null` as `Option.None` (Q7)
 - RFC-008: Single declaration form `type Name = struct(T) { ... }` (Q6)
 - RFC-009: `op_try` early-return operator (Q8)
-- RFC-010: `?.` lifts and flattens; smart casting; pattern grammar extensions (Q12, Q18, Q20)
+- RFC-010: `?.` lifts and flattens; pattern grammar extensions (Q12, Q18). Smart casting deferred to a future RFC.
 - RFC-011: Template DSL extensions — `#elif`, `#let`, `#match` (Q26)
