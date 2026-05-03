@@ -115,8 +115,13 @@ public partial class HmTypeChecker
         _results.Specializations.Add(newFn);
         _results.EmittedSpecs[key] = newFn;
 
-        // Save and set module path for nominal type resolution
+        // Save and set module path for nominal type resolution.
+        // Also push the caller's module onto the specialization stack so
+        // visibility lookups can find user-defined overloads that the generic's
+        // defining module doesn't import.
         var savedModulePath = _ctx.CurrentModulePath;
+        if (savedModulePath != null)
+            _ctx.SpecializationCallers.Push(savedModulePath);
         _ctx.CurrentModulePath = scheme.ModulePath;
 
         // Type-check the specialized body
@@ -186,6 +191,8 @@ public partial class HmTypeChecker
         }
 
         _ctx.CurrentModulePath = savedModulePath;
+        if (savedModulePath != null)
+            _ctx.SpecializationCallers.Pop();
         return newFn;
     }
 

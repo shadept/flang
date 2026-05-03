@@ -25,6 +25,7 @@ import std.enum
 import std.interface
 import std.list
 import std.mem
+import std.option
 import std.result
 import std.string
 import std.string_builder

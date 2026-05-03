@@ -82,9 +82,9 @@ public partial class HmTypeChecker : INominalTypeRegistry, ITemplateTypeProvider
         engine.AddCoercionRule(new StringToByteSliceCoercionRule());
         engine.AddCoercionRule(new ArrayDecayCoercionRule());
         engine.AddCoercionRule(new SliceToReferenceCoercionRule());
-        engine.AddCoercionRule(new AnonymousStructCoercionRule(name => _types.LookupNominalType(name, _ctx.CurrentModulePath)));
+        engine.AddCoercionRule(new AnonymousStructCoercionRule(name => _types.LookupNominalType(name, _ctx.CurrentModulePath, GetVisibleModules())));
         engine.AddCoercionRule(new NominalToTypeCoercionRule(
-            name => _types.LookupNominalType(name, _ctx.CurrentModulePath),
+            name => _types.LookupNominalType(name, _ctx.CurrentModulePath, GetVisibleModules()),
             type => _results.InstantiatedTypes.Add(type)));
         _ctx = new InferenceContext(engine);
     }
@@ -164,7 +164,27 @@ public partial class HmTypeChecker : INominalTypeRegistry, ITemplateTypeProvider
         => _fns.Register(scheme, ReportError);
 
     private List<FunctionScheme>? LookupFunctions(string name)
-        => _fns.Lookup(name, _ctx.CurrentModulePath);
+        => _fns.Lookup(name, _ctx.CurrentModulePath, GetVisibleModules());
+
+    /// <summary>
+    /// Effective visibility for the current type-checking context.
+    /// Equals <see cref="Compilation.GetVisibleModules"/> for the current module,
+    /// unioned with the visibility of each in-progress specialization caller.
+    /// The union ensures generic bodies can dispatch to user-defined overloads
+    /// (the caller imported them; the generic's defining module did not).
+    /// </summary>
+    private HashSet<string>? GetVisibleModules()
+    {
+        if (_ctx.CurrentModulePath == null) return null;
+
+        var baseSet = _compilation.GetVisibleModules(_ctx.CurrentModulePath);
+        if (_ctx.SpecializationCallers.Count == 0) return baseSet;
+
+        var union = new HashSet<string>(baseSet);
+        foreach (var caller in _ctx.SpecializationCallers)
+            union.UnionWith(_compilation.GetVisibleModules(caller));
+        return union;
+    }
 
     /// <summary>
     /// When overload resolution fails during generic body checking, guess the return type
@@ -226,10 +246,21 @@ public partial class HmTypeChecker : INominalTypeRegistry, ITemplateTypeProvider
     // =========================================================================
 
     /// <summary>
-    /// Look up a nominal type by FQN or short name.
+    /// Look up a nominal type by FQN or short name. Honors import visibility:
+    /// short-name matches are restricted to types whose module is in
+    /// <see cref="Compilation.GetVisibleModules"/> for the current module.
     /// </summary>
     public NominalType? LookupNominalType(string name)
-        => _types.LookupNominalType(name, _ctx.CurrentModulePath);
+        => _types.LookupNominalType(name, _ctx.CurrentModulePath, GetVisibleModules());
+
+    /// <summary>
+    /// Look up a nominal type from the perspective of <paramref name="fromModule"/>.
+    /// Used by TemplateExpander, which expands invocations across many modules
+    /// in a single batch and needs to evaluate visibility per-invocation rather
+    /// than relying on the type checker's transient current-module state.
+    /// </summary>
+    public NominalType? LookupNominalTypeFrom(string name, string fromModule)
+        => _types.LookupNominalType(name, fromModule, _compilation.GetVisibleModules(fromModule));
 
     // =========================================================================
     // Directive validation

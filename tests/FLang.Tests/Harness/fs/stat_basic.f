@@ -6,6 +6,8 @@
 // "/" is a known directory on POSIX; the tests that need it skip on Windows.
 
 import std.io.fs
+import std.option
+import std.result
 
 fn kind_is_dir(k: FileKind) bool {
     k match {

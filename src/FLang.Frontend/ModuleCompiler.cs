@@ -47,6 +47,17 @@ public class ModuleCompiler
 
     public IReadOnlyList<Diagnostic> Diagnostics => _diagnostics;
 
+    private ModuleOrigin ClassifyOrigin(string normalizedFilePath)
+    {
+        var stdlibFull = Path.GetFullPath(_compilation.StdlibPath);
+        if (!string.IsNullOrEmpty(stdlibFull)
+            && normalizedFilePath.StartsWith(stdlibFull + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
+            return ModuleOrigin.Stdlib;
+
+        // Reserved: a future package system will tag third-party paths as External here.
+        return ModuleOrigin.Project;
+    }
+
     public Dictionary<string, ModuleNode> CompileModules(string entryPointPath)
         => CompileModules([entryPointPath]);
 
@@ -54,8 +65,8 @@ public class ModuleCompiler
     {
         _logger.LogDebug("Starting module compilation...");
 
-        // Always include core prelude (imports all core modules)
-        var preludePath = Path.Combine(_compilation.StdlibPath, "core", "predule.f");
+        // Always include core prelude (re-exports all core modules via `pub import`)
+        var preludePath = Path.Combine(_compilation.StdlibPath, "core", "prelude.f");
         if (_sourceProvider.Exists(preludePath))
         {
             _logger.LogDebug("Queueing prelude: {PreludePath}", preludePath);
@@ -64,6 +75,26 @@ public class ModuleCompiler
         else
         {
             _logger.LogDebug("Prelude not found: {PreludePath}", preludePath);
+        }
+
+        // Project-level globals from flang.toml `[imports].global` — load each
+        // referenced module so its symbols are available to project files.
+        // These do NOT propagate to stdlib or third-party modules; that scoping
+        // is enforced when imports are registered (see Compiler.cs / FLangWorkspace.cs).
+        foreach (var globalImport in _compilation.ProjectGlobalImports)
+        {
+            var segments = globalImport.Split('.');
+            var resolved = _compilation.TryResolveImportPath(segments, _sourceProvider);
+            if (resolved == null)
+            {
+                _diagnostics.Add(Diagnostic.Error(
+                    $"Could not resolve project-level global import `{globalImport}` from flang.toml [imports].global",
+                    SourceSpan.None,
+                    "Check that the module path is correct and the file exists.",
+                    "E0001"));
+                continue;
+            }
+            EnqueueModule(Path.GetFullPath(resolved));
         }
 
         // Queue all entry points for parsing
@@ -117,6 +148,10 @@ public class ModuleCompiler
 
             _parsedModules[modulePath] = moduleNode;
             _queuedModules.Remove(modulePath);
+
+            // Tag origin so project-level features (e.g. `[imports].global`) only
+            // apply to project files, not stdlib or third-party deps.
+            _compilation.ModuleOrigins[modulePath] = ClassifyOrigin(modulePath);
 
             _logger.LogDebug("  Found {ImportCount} imports", moduleNode.Imports.Count);
 

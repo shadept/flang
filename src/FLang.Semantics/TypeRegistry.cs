@@ -17,13 +17,20 @@ internal sealed class TypeRegistry : INominalTypeRegistry
 
     /// <summary>
     /// Look up a nominal type by FQN, module-prefixed name, or short name.
+    /// When <paramref name="visibleModules"/> is provided, the short-name fallback
+    /// only matches types whose defining module is visible to the caller.
+    /// FQN-style references (containing a dot) bypass visibility — the whole
+    /// point of an FQN is to be unambiguous.
     /// </summary>
-    public NominalType? LookupNominalType(string name, string? currentModulePath = null)
+    public NominalType? LookupNominalType(string name, string? currentModulePath = null, HashSet<string>? visibleModules = null)
     {
+        // Direct FQN hit — always succeeds when the name contains a dot.
+        // Visibility scoping only constrains bare-name resolution; an explicit
+        // dotted reference is unambiguous and self-authorizing.
         if (NominalTypes.TryGetValue(name, out var type))
             return type;
 
-        // Try with current module prefix
+        // Current-module-prefixed match.
         if (currentModulePath != null)
         {
             var fqn = $"{currentModulePath}.{name}";
@@ -31,16 +38,32 @@ internal sealed class TypeRegistry : INominalTypeRegistry
                 return type;
         }
 
-        // Try all registered types for short name match
+        // Short-name fallback. Restrict to types whose module is visible
+        // when a visibility set is provided.
         foreach (var (fqn, nominal) in NominalTypes)
         {
-            var shortName = fqn.Contains('.') ? fqn[(fqn.LastIndexOf('.') + 1)..] : fqn;
-            if (shortName == name)
+            var dot = fqn.LastIndexOf('.');
+            var shortName = dot >= 0 ? fqn[(dot + 1)..] : fqn;
+            if (shortName != name) continue;
+
+            if (visibleModules == null) return nominal;
+
+            var modulePath = dot >= 0 ? fqn[..dot] : null;
+            if (modulePath == null
+                || modulePath == currentModulePath
+                || visibleModules.Contains(modulePath))
                 return nominal;
         }
 
         return null;
     }
+
+    /// <summary>
+    /// Like <see cref="LookupNominalType"/> but ignores visibility scoping.
+    /// Used for diagnostics ("type exists in module X but is not imported here").
+    /// </summary>
+    public NominalType? LookupNominalTypeAny(string name)
+        => LookupNominalType(name, currentModulePath: null, visibleModules: null);
 
     /// <summary>
     /// INominalTypeRegistry implementation — used by TypeLayoutService.

@@ -72,9 +72,10 @@ public class TextDocumentSyncHandler : TextDocumentSyncHandlerBase
         if (IsGeneratedFile(filePath)) return Unit.Task;
         FLangLanguageServer.Log($"didSave: {filePath}");
 
-        // Invalidate project cache when flang.toml changes
-        if (filePath.EndsWith("flang.toml", StringComparison.OrdinalIgnoreCase))
-            _workspace.InvalidateProjectCache();
+        // flang.toml saves never reach here — the document-sync registration
+        // filters to the flang language only. The workspace re-checks the
+        // toml's mtime on every FindProjectForFile call, so any subsequent
+        // .f-file analysis will pick up edits to the project file.
 
         var task = Task.Run(() => _workspace.AnalyzeFile(filePath), cancellationToken);
         _workspace.SetPendingAnalysis(filePath, task);

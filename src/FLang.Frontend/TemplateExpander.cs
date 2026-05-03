@@ -20,6 +20,15 @@ public record TemplateExpansionResult(
 public interface ITemplateTypeProvider
 {
     NominalType? LookupNominalType(string name);
+
+    /// <summary>
+    /// Look up a nominal type from the perspective of <paramref name="fromModule"/>.
+    /// Honors the importing module's visibility set rather than the type checker's
+    /// transient "current module" — required by TemplateExpander, which expands
+    /// invocations across many modules in a single batch.
+    /// </summary>
+    NominalType? LookupNominalTypeFrom(string name, string fromModule);
+
     IReadOnlyDictionary<string, IReadOnlyList<(string Name, TypeNode TypeNode)>> FieldTypeNodes { get; }
     void CollectNominalTypes(ModuleNode module, string modulePath);
     void ResolveNominalTypes(ModuleNode module, string modulePath);
@@ -216,7 +225,7 @@ public static class TemplateExpander
                         var typeName = arg.Identifier;
                         var fqn = $"{modulePath}.{typeName}";
                         if (typeProvider.LookupNominalType(fqn) == null &&
-                            typeProvider.LookupNominalType(typeName) == null)
+                            typeProvider.LookupNominalTypeFrom(typeName, modulePath) == null)
                         {
                             // Type not found — allow retry on next round in case
                             // another generator produces it
@@ -235,7 +244,7 @@ public static class TemplateExpander
                         var fqn = $"{modulePath}.{name}";
                         var result = typeProvider.LookupNominalType(fqn);
                         if (result != null) return result;
-                        return typeProvider.LookupNominalType(name);
+                        return typeProvider.LookupNominalTypeFrom(name, modulePath);
                     }
 
                     IReadOnlyList<(string, TypeNode)>? FieldNodeLookup(string fqn)

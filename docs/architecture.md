@@ -8,6 +8,16 @@ Source → Lexer → Parser → Source Generators → HmTypeChecker → HmAstLow
 
 All phases communicate through a central `Compilation` context object — phases never reference each other directly. `Compilation` owns source files, type registries (structs, enums, specializations), module metadata, and global constants.
 
+### Imports and visibility
+
+`Compilation.ModuleImports[M]` records the modules `M` imports (private + public); `ModuleReExports[M]` is the subset declared with `pub import`. `GetVisibleModules(M)` is a cached transitive closure: starting from `{M} ∪ ModuleImports[M]`, follow `ModuleReExports` edges only — never `ModuleImports` — and union the result. This implements the spec's rule that bare imports are non-transitive while `pub import` re-exports propagate.
+
+Lookup is filtered through this set: `FunctionRegistry.Lookup` and `TypeRegistry.LookupNominalType` accept a `visibleModules` argument; symbols defined outside the visible set are excluded from candidates. FQN-style references (containing a dot) bypass the filter — an explicit dotted name is unambiguous.
+
+Generic body checking pushes the call-site module onto `InferenceContext.SpecializationCallers`. `GetVisibleModules()` unions this stack with the current module's visibility, so a generic body can dispatch to user-defined overloads imported by the caller (e.g. UFCS extensions) even when the generic's defining module does not import them.
+
+Module origin (`Stdlib`, `Project`, `External`) is tagged at load time in `ModuleOrigins` and used to scope project-level features. `flang.toml [imports].global` lists modules that are injected as implicit private imports into every `Project`-origin file; stdlib and (future) third-party modules are unaffected.
+
 ## AST Design
 
 - **Top-down only.** No parent pointers. Context is passed down during traversal, never looked up.

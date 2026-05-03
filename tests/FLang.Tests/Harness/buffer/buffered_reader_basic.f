@@ -2,6 +2,7 @@
 //! EXIT: 0
 
 import std.io.reader
+import std.mem
 import std.option
 
 type Source = struct {

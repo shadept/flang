@@ -103,7 +103,8 @@ public static class BuildCommand
             HeaderPaths: headerPaths is { Count: > 0 } ? headerPaths : null,
             CompilerFlags: compilerFlags is { Count: > 0 } ? compilerFlags : null,
             ProjectName: project.Project.Name,
-            ProjectSourceRoot: sourceRoot
+            ProjectSourceRoot: sourceRoot,
+            ProjectGlobalImports: project.Imports?.Global
         );
 
         var compiler = new Compiler();

@@ -1,10 +1,8 @@
 import calc.ast
 import calc.parser
 import calc.eval
-import std.allocator
 import std.env
 import std.readline
-import std.string_builder
 
 fn eval_line(input: String) {
     if input.len == 0 { return }

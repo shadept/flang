@@ -9,7 +9,7 @@
 Phases 1–5 and 7 from the original plan landed; the optimization phase (phase 6) is deliberately out of scope for v1.
 
 - **Resolved open questions:**
-  1. `TryResult` lives in `core.try`, re-exported via [stdlib/core/predule.f](../../stdlib/core/predule.f). Auto-imported through the prelude.
+  1. `TryResult` lives in `core.try`, re-exported via [stdlib/core/prelude.f](../../stdlib/core/prelude.f). Auto-imported through the prelude.
   2. Bare `expr?` as a statement is **not** allowed yet — it must currently appear in a context where its `T` is consumed (e.g. RHS of `let`, argument, return). Will be revisited.
   3. `?` inside a closure returns from the **lambda**, not the enclosing function. The type checker peeks the top of `FunctionStack`, which lambdas push.
   4. `?` inside `defer` is forbidden (E2091). Tracked via `InferenceContext.DeferDepth`. Can be revisited if a clean semantics emerges.

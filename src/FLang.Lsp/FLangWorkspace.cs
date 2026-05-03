@@ -35,7 +35,11 @@ public class FLangWorkspace
     private readonly Lock _lock = new();
     private readonly ILogger _logger;
     private readonly ILanguageServerFacade _server;
-    private readonly Dictionary<string, FlangProject> _projectCache = [];
+    // Cache entries are invalidated when flang.toml's mtime changes — the LSP
+    // does not see TOML saves through its flang-only document handler, so an
+    // mtime check is required to pick up edits made outside or via clients
+    // that don't forward non-flang saves.
+    private readonly Dictionary<string, (FlangProject Project, DateTime LastWriteUtc)> _projectCache = [];
 
     public string? StdlibPath { get; set; }
     public string? WorkingDirectory { get; set; }
@@ -122,14 +126,19 @@ public class FLangWorkspace
         var tomlPath = ProjectLoader.FindProjectFile(dir);
         if (tomlPath == null) return null;
 
+        DateTime currentMtime;
+        try { currentMtime = File.GetLastWriteTimeUtc(tomlPath); }
+        catch { currentMtime = DateTime.MinValue; }
+
         lock (_lock)
         {
-            if (!_projectCache.TryGetValue(tomlPath, out var project))
+            if (!_projectCache.TryGetValue(tomlPath, out var entry) || entry.LastWriteUtc != currentMtime)
             {
                 try
                 {
-                    project = ProjectLoader.Load(tomlPath);
-                    _projectCache[tomlPath] = project;
+                    var loaded = ProjectLoader.Load(tomlPath);
+                    entry = (loaded, currentMtime);
+                    _projectCache[tomlPath] = entry;
                 }
                 catch (Exception ex)
                 {
@@ -138,7 +147,7 @@ public class FLangWorkspace
                 }
             }
 
-            return (project, Path.GetDirectoryName(tomlPath)!);
+            return (entry.Project, Path.GetDirectoryName(tomlPath)!);
         }
     }
 
@@ -162,6 +171,7 @@ public class FLangWorkspace
                 compilation.ProjectName = pi.Project.Project.Name;
                 var sourceRoot = ProjectLoader.ResolveSourceRoot(pi.Project.Project.Source, pi.ProjectRoot);
                 compilation.ProjectSourceRoot = sourceRoot;
+                compilation.ProjectGlobalImports = pi.Project.Imports?.Global ?? [];
 
                 compilation.IncludePaths.Add(compilation.StdlibPath);
                 if (sourceRoot != null)
@@ -231,6 +241,32 @@ public class FLangWorkspace
             try
             {
                 hmChecker = new HmTypeChecker(compilation);
+
+                // Register imports into Compilation.ModuleImports/ModuleReExports.
+                const string preludeModulePath = "core.prelude";
+                foreach (var kvp in parsedModules)
+                {
+                    var modulePath = TemplateExpander.DeriveModulePath(kvp.Key, compilation);
+
+                    // Auto-import core.prelude into every module (except the prelude itself).
+                    if (modulePath != preludeModulePath)
+                        compilation.RegisterImport(modulePath, preludeModulePath, isPublic: false);
+
+                    foreach (var import in kvp.Value.Imports)
+                    {
+                        var importedPath = string.Join(".", import.Path);
+                        compilation.RegisterImport(modulePath, importedPath, import.IsPublic);
+                    }
+
+                    // Project-level globals — Project-origin modules only.
+                    if (compilation.ProjectGlobalImports.Count > 0
+                        && compilation.ModuleOrigins.TryGetValue(Path.GetFullPath(kvp.Key), out var origin)
+                        && origin == ModuleOrigin.Project)
+                    {
+                        foreach (var g in compilation.ProjectGlobalImports)
+                            compilation.RegisterImport(modulePath, g, isPublic: false);
+                    }
+                }
 
                 lap = sw.ElapsedMilliseconds;
                 foreach (var kvp in parsedModules)

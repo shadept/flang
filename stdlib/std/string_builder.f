@@ -6,6 +6,10 @@ import std.io.writer
 import std.allocator
 import std.string
 import std.conv
+import std.encoding.utf8
+import std.mem
+import std.option
+import std.result
 import std.test
 
 pub type StringBuilder = struct {

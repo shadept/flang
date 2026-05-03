@@ -3,6 +3,7 @@
 
 import std.test
 import std.result
+import std.option
 
 // =============================================================================
 // Types

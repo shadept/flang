@@ -1,6 +1,5 @@
 import calc.ast
 import calc.lexer
-import std.allocator
 
 pub type Parser = struct {
     lex: Lexer

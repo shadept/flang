@@ -5,6 +5,7 @@
 
 import std.string
 import std.allocator
+import std.option
 
 pub fn main() i32 {
     // Create an OwnedString wrapping a string literal (no heap allocation needed)

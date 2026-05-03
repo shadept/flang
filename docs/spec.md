@@ -453,14 +453,18 @@ Implicit: `String` automatically accepted where `u8[]` expected. Reverse (`u8[]`
 ## 6. Modules and Visibility
 
 - Each source file is a module. `import path` brings the module's `pub` items into scope as bare names.
-- **Imports are flat and non-transitive**: importing module B does *not* expose B's own imports. Each file lists its dependencies explicitly.
+- **Imports are flat and non-transitive by default**: a plain `import B` from module A makes B's `pub` items visible inside A only — anyone importing A does **not** see B.
+- **`pub import path`** opts into re-export. Anyone importing the current module also sees the `pub` items of the re-exported module. Re-exports compose transitively along chains of `pub import`. This is the only re-export mechanism — no aliases, no selective re-exports.
 - **Overload resolution handles same-named imports**. Two different imports may bring in functions with the same name; the type checker resolves the call by parameter types. Genuinely ambiguous calls (no unique strictest overload) error at the call site.
-- **No aliases, no selective imports, no relative paths.** To re-export a folder's worth of items, the recommended pattern is an `all.f` file in that folder that imports each sibling and re-exports via `pub use` (or simply `import`s, since all `pub` items are then re-exposed when `all` itself is imported, by overload).
+- **No aliases, no selective imports, no relative paths.**
+- **Auto-imported core prelude.** Every module implicitly imports [`core.prelude`](../stdlib/core/prelude.f), a curated barrel that `pub import`s the core modules (`core.option`, `core.string`, `core.io`, `core.cmp`, etc.). All core symbols are therefore visible without an explicit import. The prelude itself is the only module exempt from the auto-import.
+- **Project-level globals.** A project may declare `[imports].global = ["std.prelude", ...]` in `flang.toml`; each entry is injected as an implicit private import into every project file. Project globals never propagate to stdlib or third-party modules.
 - `pub` exposes declarations outside the file. Without `pub`: file-private.
 - Visibility is two-level only — there is no `pub` on individual fields, and there are no property declarations. External "mutation" of a struct happens by re-construction (return a new value, or have the defining file expose mutating functions).
 - Struct fields readable from any file, writable only in defining file (see scoped mutability in Section 8).
-- Cyclic imports are compile errors.
-- Core modules are auto-imported.
+- Cyclic imports (including `pub import` cycles) are compile errors.
+- A symbol is visible in module M iff it is defined in M, OR it is `pub` and defined in a module reachable from M via `import` plus the `pub import` transitive closure.
+- FQN-style references (e.g. `core.option.Option`) bypass visibility — an explicit dotted name is unambiguous and self-authorizing.
 
 ---
 

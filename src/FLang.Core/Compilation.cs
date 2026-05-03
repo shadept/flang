@@ -3,6 +3,20 @@ using System.Collections.Concurrent;
 namespace FLang.Core;
 
 /// <summary>
+/// Classifies a module by where it was loaded from. Used to scope project-level
+/// features (project-global imports) so they apply only to project files.
+/// </summary>
+public enum ModuleOrigin
+{
+    /// <summary>Loaded from <see cref="Compilation.StdlibPath"/>.</summary>
+    Stdlib,
+    /// <summary>Loaded from the current project (entry point + <see cref="Compilation.ProjectSourceRoot"/>).</summary>
+    Project,
+    /// <summary>Reserved for future package system — third-party dependencies.</summary>
+    External,
+}
+
+/// <summary>
 /// Represents a compilation unit that manages source files, module resolution, and compilation-wide state.
 /// Serves as the context object for passing state between compilation phases (Parser -> HmTypeChecker -> HmAstLowering).
 /// </summary>
@@ -28,8 +42,101 @@ public class Compilation
     public Dictionary<string, Dictionary<string, EnumType>> EnumsByModule { get; } = [];
     public Dictionary<string, EnumType> EnumsByFqn { get; } = [];
 
-    // Module imports
+    // Module origin — classifies each module by where it was loaded from.
+    // Used to scope project-level features (e.g. `[imports].global` from flang.toml)
+    // so they apply only to project files, never to stdlib or third-party packages.
+    public Dictionary<string, ModuleOrigin> ModuleOrigins { get; } = [];
+
+    // Project-level imports injected into every Project-origin file's import list
+    // before resolution. Sourced from flang.toml `[imports].global`.
+    // Each entry is a dotted module path (e.g. "std.prelude").
+    public IReadOnlyList<string> ProjectGlobalImports { get; set; } = [];
+
+    // Module imports — module path -> set of imported module paths (private + public).
+    // Populated by ModuleCompiler. A module always implicitly imports itself
+    // (its own path is included).
     public Dictionary<string, HashSet<string>> ModuleImports { get; } = [];
+
+    // Module re-exports — module path -> set of `pub import`ed module paths.
+    // Subset of ModuleImports. Used to compute Visible[M].
+    public Dictionary<string, HashSet<string>> ModuleReExports { get; } = [];
+
+    // Cached visibility closure: module -> set of modules whose `pub` symbols are
+    // visible to it. Computed lazily by GetVisibleModules. Includes the module
+    // itself, its direct imports, and the transitive closure of pub-imports
+    // through those imports.
+    private readonly Dictionary<string, HashSet<string>> _visibleModulesCache = [];
+
+    /// <summary>
+    /// Returns the set of modules whose `pub` symbols are visible from
+    /// <paramref name="modulePath"/>. Always includes the module itself.
+    /// Result is cached. Returns an empty set if the module has no recorded imports.
+    /// </summary>
+    public HashSet<string> GetVisibleModules(string modulePath)
+    {
+        if (_visibleModulesCache.TryGetValue(modulePath, out var cached))
+            return cached;
+
+        var visible = new HashSet<string> { modulePath };
+        if (!ModuleImports.TryGetValue(modulePath, out var direct))
+        {
+            _visibleModulesCache[modulePath] = visible;
+            return visible;
+        }
+
+        foreach (var d in direct)
+            visible.Add(d);
+
+        // Transitive closure over `pub import` edges only.
+        // Starting from each direct import, follow only pub-imports recursively.
+        var stack = new Stack<string>(direct);
+        var explored = new HashSet<string>(direct);
+        while (stack.Count > 0)
+        {
+            var m = stack.Pop();
+            if (!ModuleReExports.TryGetValue(m, out var reexports)) continue;
+            foreach (var r in reexports)
+            {
+                if (visible.Add(r) && explored.Add(r))
+                    stack.Push(r);
+            }
+        }
+
+        _visibleModulesCache[modulePath] = visible;
+        return visible;
+    }
+
+    /// <summary>
+    /// Invalidates the visibility cache. Call after modifying ModuleImports / ModuleReExports.
+    /// </summary>
+    public void InvalidateVisibilityCache() => _visibleModulesCache.Clear();
+
+    /// <summary>
+    /// Records that <paramref name="modulePath"/> imports <paramref name="importedPath"/>.
+    /// If <paramref name="isPublic"/> is true, this is a `pub import` re-export.
+    /// Idempotent. Invalidates the visibility cache.
+    /// </summary>
+    public void RegisterImport(string modulePath, string importedPath, bool isPublic)
+    {
+        if (!ModuleImports.TryGetValue(modulePath, out var imports))
+        {
+            imports = [];
+            ModuleImports[modulePath] = imports;
+        }
+        imports.Add(importedPath);
+
+        if (isPublic)
+        {
+            if (!ModuleReExports.TryGetValue(modulePath, out var reexports))
+            {
+                reexports = [];
+                ModuleReExports[modulePath] = reexports;
+            }
+            reexports.Add(importedPath);
+        }
+
+        InvalidateVisibilityCache();
+    }
 
     // All instantiated types (for global type table generation)
     public HashSet<TypeBase> InstantiatedTypes { get; } = [];

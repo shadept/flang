@@ -288,7 +288,7 @@ Slices (`T[]`) have runtime bounds checking via `op_index` in `core/slice.f`. Bu
 
 **Status:** Open (parser limitation)
 
-The parser only accepts `import` statements before any declarations. Cannot place imports closer to where they're used or before test blocks at the bottom of a file.
+The parser only accepts `import` statements (including `pub import`) before any declarations. Cannot place imports closer to where they're used or before test blocks at the bottom of a file.
 
 **Workaround:** Place all imports at the top.
 

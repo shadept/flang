@@ -38,19 +38,37 @@ internal sealed class FunctionRegistry
         overloads.Add(scheme);
     }
 
-    public List<FunctionScheme>? Lookup(string name, string? currentModulePath)
+    public List<FunctionScheme>? Lookup(string name, string? currentModulePath, HashSet<string>? visibleModules = null)
     {
         if (!Functions.TryGetValue(name, out var overloads)) return null;
 
-        // Filter out non-public functions from other modules
-        if (currentModulePath != null)
+        // No module context: return everything (used by codegen / template expansion).
+        if (currentModulePath == null) return overloads;
+
+        // With visibility scoping: function is visible iff defined in the current
+        // module, OR public AND its module is in the visible set (direct imports
+        // + transitively re-exported `pub import`s).
+        if (visibleModules != null)
         {
-            var visible = overloads.Where(f => f.IsPublic || f.ModulePath == currentModulePath).ToList();
+            var visible = overloads.Where(f =>
+                f.ModulePath == currentModulePath
+                || (f.IsPublic && f.ModulePath != null && visibleModules.Contains(f.ModulePath))
+                || f.ModulePath == null  // synthesized / lambda-host fns are not module-scoped
+            ).ToList();
             return visible.Count > 0 ? visible : null;
         }
 
-        return overloads;
+        // Fallback: legacy behavior — public-from-anywhere or same-module.
+        var fallback = overloads.Where(f => f.IsPublic || f.ModulePath == currentModulePath).ToList();
+        return fallback.Count > 0 ? fallback : null;
     }
+
+    /// <summary>
+    /// Lookup ignoring visibility — returns all overloads regardless of imports.
+    /// Used to produce helpful diagnostics ("function exists in module X but is not imported").
+    /// </summary>
+    public List<FunctionScheme>? LookupAny(string name)
+        => Functions.TryGetValue(name, out var overloads) ? overloads : null;
 
     /// <summary>
     /// Checks whether two function declarations have the same parameter signature

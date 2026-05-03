@@ -7,6 +7,8 @@
 // "." / ".." are filtered out.
 
 import std.io.fs
+import std.option
+import std.result
 
 pub fn main() i32 {
     let it = read_dir("/").unwrap()

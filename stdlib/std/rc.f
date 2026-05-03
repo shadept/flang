@@ -5,6 +5,7 @@
 import std.allocator
 import std.atomic
 import std.mem
+import std.option
 import std.test
 
 // Reference-counted pointer to a heap-allocated value of type T.

@@ -64,8 +64,9 @@ public class Parser
         var generatorDefs = new List<SourceGeneratorDefinitionNode>();
         var generatorInvocations = new List<SourceGeneratorInvocationNode>();
 
-        // Parse imports
-        while (_currentToken.Kind == TokenKind.Import)
+        // Parse imports (including `pub import` re-exports).
+        while (_currentToken.Kind == TokenKind.Import
+               || (_currentToken.Kind == TokenKind.Pub && PeekNextToken().Kind == TokenKind.Import))
         {
             try
             {
@@ -716,6 +717,10 @@ public class Parser
     /// <returns>An <see cref="ImportDeclarationNode"/> representing the import statement.</returns>
     private ImportDeclarationNode ParseImport()
     {
+        Token? pubKeyword = null;
+        if (_currentToken.Kind == TokenKind.Pub)
+            pubKeyword = Eat(TokenKind.Pub);
+
         var importKeyword = Eat(TokenKind.Import);
         var path = new List<string>();
 
@@ -733,8 +738,9 @@ public class Parser
         }
 
         var moduleSpan = SourceSpan.Combine(firstIdentifier.Span, lastIdentifier.Span);
-        var span = SourceSpan.Combine(importKeyword.Span, lastIdentifier.Span);
-        return new ImportDeclarationNode(span, moduleSpan, path);
+        var startSpan = pubKeyword?.Span ?? importKeyword.Span;
+        var span = SourceSpan.Combine(startSpan, lastIdentifier.Span);
+        return new ImportDeclarationNode(span, moduleSpan, path, isPublic: pubKeyword != null);
     }
 
     /// <summary>

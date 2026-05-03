@@ -38,7 +38,13 @@ public record CompilerOptions(
     IReadOnlyList<string>? CompilerFlags = null,
     string? ProjectName = null,
     string? ProjectSourceRoot = null,
-    string? CacheDirectory = null
+    string? CacheDirectory = null,
+    /// <summary>
+    /// Modules to inject as implicit private imports into every Project-origin
+    /// file. Sourced from `[imports].global` in flang.toml. Never applied to
+    /// stdlib or third-party modules.
+    /// </summary>
+    IReadOnlyList<string>? ProjectGlobalImports = null
 );
 
 public record CompilationResult(
@@ -73,6 +79,7 @@ public class Compiler
         // Project-name-based import resolution
         compilation.ProjectName = options.ProjectName;
         compilation.ProjectSourceRoot = options.ProjectSourceRoot;
+        compilation.ProjectGlobalImports = options.ProjectGlobalImports ?? [];
 
         // Build structured compile-time context for #if directives
         var ctx = compilation.CompileTimeContext;
@@ -184,6 +191,37 @@ public class Compiler
         if (allDiagnostics.Any(d => d.Severity == DiagnosticSeverity.Error))
         {
             return new CompilationResult(false, null, allDiagnostics, compilation);
+        }
+
+        // Register imports into Compilation.ModuleImports/ModuleReExports.
+        // This drives Visible[M] for symbol resolution.
+        const string preludeModulePath = "core.prelude";
+        foreach (var kvp in parsedModules)
+        {
+            var modulePath = TemplateExpander.DeriveModulePath(kvp.Key, compilation);
+
+            // Auto-import core.prelude into every module (except the prelude itself).
+            // The prelude is a curated re-export wall: `pub import core.option`, etc.
+            // so this single private edge makes all core symbols visible.
+            if (modulePath != preludeModulePath)
+                compilation.RegisterImport(modulePath, preludeModulePath, isPublic: false);
+
+            foreach (var import in kvp.Value.Imports)
+            {
+                var importedPath = string.Join(".", import.Path);
+                compilation.RegisterImport(modulePath, importedPath, import.IsPublic);
+            }
+
+            // Project-level globals are injected as implicit private imports —
+            // applied only to Project-origin modules so stdlib and (future)
+            // third-party packages stay isolated from per-project config.
+            if (compilation.ProjectGlobalImports.Count > 0
+                && compilation.ModuleOrigins.TryGetValue(Path.GetFullPath(kvp.Key), out var origin)
+                && origin == ModuleOrigin.Project)
+            {
+                foreach (var g in compilation.ProjectGlobalImports)
+                    compilation.RegisterImport(modulePath, g, isPublic: false);
+            }
         }
 
         // Wrap type checking, lowering, and codegen in a try-catch to convert

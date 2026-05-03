@@ -23,6 +23,15 @@ internal sealed class InferenceContext
     /// <summary>Module currently being checked.</summary>
     public string? CurrentModulePath { get; set; }
 
+    /// <summary>
+    /// Stack of caller module paths for in-progress generic specializations.
+    /// Visibility lookup for symbol resolution unions the current module's
+    /// visibility with each entry's visibility, so a generic body can dispatch
+    /// to user-defined overloads that the caller imports but the generic's
+    /// defining module does not.
+    /// </summary>
+    public Stack<string> SpecializationCallers { get; } = new();
+
     /// <summary>True during CheckGenericFunctionBody.</summary>
     public bool IsCheckingGenericBody { get; set; }
 

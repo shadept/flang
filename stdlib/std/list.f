@@ -2,6 +2,7 @@
 // Uses raw malloc/free for simplicity (allocator support to be added later).
 
 import std.allocator
+import std.mem
 import std.option
 import std.sort
 

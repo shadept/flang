@@ -3,6 +3,7 @@
 
 import std.derive
 import std.string_builder
+import std.string
 
 type Pair = struct {
     a: i32

@@ -354,8 +354,12 @@ public partial class HmTypeChecker
         if (GetDeprecatedMessage(fn.Directives, out var depMsg))
             _fns.DeprecatedFunctions[fn.Name] = depMsg;
 
-        // Also bind in scope for recursive calls and identifier references
-        _ctx.Scopes.Bind(fn.Name, scheme);
+        // NOTE: do NOT bind the function in the type scope. Scopes are shared
+        // across modules during the multi-pass check, so binding here would
+        // make every function globally visible regardless of imports — bypassing
+        // the visibility filter in FunctionRegistry.Lookup. Function-name
+        // resolution goes through LookupFunctions (CallExpression, UFCS, and
+        // InferIdentifier fallback), which is visibility-aware.
     }
 
     // =========================================================================

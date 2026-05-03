@@ -10,6 +10,8 @@
 // the test runner's working directory (the repo root). `stdlib/` fits both.
 
 import std.io.fs
+import std.option
+import std.result
 
 pub fn main() i32 {
     let w = walk_dir("stdlib").unwrap()

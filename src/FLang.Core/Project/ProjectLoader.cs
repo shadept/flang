@@ -41,7 +41,17 @@ public static partial class ProjectLoader
         if (model.TryGetValue("build", out var buildObj) && buildObj is TomlTable buildTable)
             build = ParseBuildSection(buildTable);
 
-        return new FlangProject(projectInfo, build);
+        ImportsSection? imports = null;
+        if (model.TryGetValue("imports", out var importsObj) && importsObj is TomlTable importsTable)
+            imports = ParseImportsSection(importsTable);
+
+        return new FlangProject(projectInfo, build, imports);
+    }
+
+    private static ImportsSection ParseImportsSection(TomlTable table)
+    {
+        return new ImportsSection(
+            Global: GetOptionalStringArray(table, "global"));
     }
 
     public static PlatformBuildConfig? GetCurrentPlatformConfig(BuildSection? build)

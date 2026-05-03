@@ -10,6 +10,8 @@
 import std.mem
 import std.interface
 import std.conv
+import std.option
+import std.result
 
 // Writer: raw write interface.
 // Returns the number of bytes actually written.

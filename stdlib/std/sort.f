@@ -13,6 +13,7 @@
 //     powersort       -- stable, O(n log n); near-optimal merge policy on natural runs.
 
 import std.allocator
+import std.option
 import std.test
 
 // =============================================================================
