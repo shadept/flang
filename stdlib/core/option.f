@@ -15,9 +15,8 @@ pub type Option = enum(T) {
     Some(T),
 }
 
-// `op_try` for Option: `Some(v)` → continue with `v`, `None` → return `None`.
-// Lets `expr?` work in any function whose return type is `Option(_)`.
-pub fn op_try(self: Option($T)) TryResult(T, Option(T)) {
+// `?` on Option(T) works inside any fn returning Option(U): None is shape-only.
+pub fn op_try(self: Option($T)) TryResult(T, Option($U)) {
     return self match {
         Some(v) => TryResult.Continue(v),
         None => TryResult.Return(None),

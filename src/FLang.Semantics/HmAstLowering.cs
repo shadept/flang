@@ -2009,6 +2009,15 @@ public class HmAstLowering
             return LowerBareVariant(id.Name, irEnum);
         }
 
+        // `None` of an Option(&T) lowers to a NULL nullable pointer (niche
+        // representation). Without this branch, niche-typed `None` falls
+        // through to the E3002 path because `idIrType` is IrPointer, not
+        // IrEnum.
+        if (id.Name == "None" && IsAnyOption(idIrType))
+        {
+            return EmitOptionNone(idIrType);
+        }
+
         _diagnostics.Add(Diagnostic.Error(
             $"Unresolved identifier `{id.Name}`", id.Span, null, "E3002"));
         return new IntConstantValue(0, TypeLayoutService.IrVoidPrim);
