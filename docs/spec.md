@@ -68,11 +68,11 @@ FLang is a statically-typed compiled language designed for explicit control, str
 fn identity(x: $T) T { return x }
 ```
 
-Generic structs and enums use parentheses:
+Generic structs and enums use parentheses on the `struct` / `enum` keyword:
 
 ```
-struct Pair(T) { first: T, second: T }
-enum Result(T, E) { Ok(T), Err(E) }
+type Pair = struct(T) { first: T, second: T }
+type Result = enum(T, E) { Ok(T), Err(E) }
 ```
 
 **Instantiation uses parentheses**: `Option(i32)`, `List(String)`, `Result(JsonValue, JsonError)`.
@@ -82,9 +82,11 @@ Inference is multi-phase: constraints flow bidirectionally from return positions
 ### 2.4 Structs
 
 ```
-struct Point { x: i32, y: i32 }
-type Vec2 = struct { x: f32, y: f32 }       // alternative syntax
+type Point = struct { x: i32, y: i32 }
+type Vec2 = struct { x: f32, y: f32 }
 ```
+
+Structs are always declared as a `type` alias whose RHS is a `struct(...) { ... }` builder. The legacy `struct Name { ... }` form has been removed (RFC-008, error E1050).
 
 - All fields public (readable from any file).
 - Field writes restricted to the defining file (scoped mutability — planned, not yet enforced).
@@ -97,17 +99,19 @@ type Vec2 = struct { x: f32, y: f32 }       // alternative syntax
 ### 2.5 Enums (Tagged Unions)
 
 ```
-enum Color { Red, Green, Blue }
-enum Result(T, E) { Ok(T), Err(E) }
+type Color = enum { Red, Green, Blue }
+type Result = enum(T, E) { Ok(T), Err(E) }
 type JsonError = enum { UnexpectedChar, UnexpectedEnd }
 ```
+
+Enums are always declared as a `type` alias whose RHS is an `enum(...) { ... }` builder. The legacy `enum Name { ... }` form has been removed (RFC-008, error E1051).
 
 Variants can carry zero or more payload types. Tags assigned sequentially starting at 0 (first variant = 0, next = 1, ...).
 
 **Naked enums** (C-style): when any variant has `= value`, all variants are integer-tagged with no payloads. Tags auto-increment from previous value.
 
 ```
-enum Ord { Less = -1, Equal = 0, Greater = 1 }
+type Ord = enum { Less = -1, Equal = 0, Greater = 1 }
 ```
 
 **Enum ↔ integer casts:**

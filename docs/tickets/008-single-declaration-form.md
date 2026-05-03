@@ -1,8 +1,17 @@
 # RFC-008: Single Declaration Form for Structs and Enums
 
 **Type:** Syntax / parser change + project-wide migration
-**Status:** Proposed
+**Status:** Implemented
 **Depends on:** None
+
+## Implementation notes
+
+Landed alongside RFC-006 syntax cleanup.
+
+- Parser rejects the legacy declaration forms with `E1050` (struct), `E1051` (enum), and rejects type parameters on the type-name with `E1052` ([Parser.cs:766-985](../../src/FLang.Frontend/Parser.cs:766)).
+- Inline directives on the RHS work (`type X = #foreign struct { ... }`); detached `#foreign` / `#simd` on the type alias is rejected and points users at the inline form.
+- Stdlib (`std/`, `core/`), examples (`examples/*/src/*.f`), and harness tests are all in form 2. The only form-1 occurrences in the tree are the deliberate negative-test fixtures `tests/FLang.Tests/Harness/warnings/deprecated_struct_syntax.f` and `deprecated_enum_syntax.f`, which assert E1050/E1051 fire.
+- Spec (§2.3, §2.4, §2.5) and `docs/syntax.md` rewritten to show form 2 only.
 
 ## Summary
 

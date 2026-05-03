@@ -103,9 +103,8 @@ fn greet(name: String, times: i32 = 1) {}   // default parameter
 ## Structs
 
 ```
-struct Point { x: i32, y: i32 }
-struct Pair(T) { first: T, second: T }          // generic
-type Vec2 = struct { x: i32, y: i32 }           // alternative syntax
+type Point = struct { x: i32, y: i32 }
+type Pair = struct(T) { first: T, second: T }                // generic
 type Color = #foreign struct { r: u8, g: u8, b: u8, a: u8 }  // C FFI struct
 type Vec128 = #simd struct { _data: [u8; 16] }               // SIMD-aligned
 
@@ -114,24 +113,24 @@ let a = .{ x = 10, y = 20 }                     // anonymous (type from context)
 let p2 = Point { x, y = 20 }                    // shorthand: x = x
 ```
 
-Commas between fields optional. Field assignment uses `=`.
+Commas between fields optional. Field assignment uses `=`. The legacy `struct Name { ... }` declaration form has been removed (E1050) — see RFC-008.
 
 ## Enums
 
 ```
-enum Color { Red, Green, Blue }
-enum Result(T, E) { Ok(T), Err(E) }             // generic with payloads
-type JsonError = enum { UnexpectedChar, UnexpectedEnd }  // alternative syntax
+type Color = enum { Red, Green, Blue }
+type Result = enum(T, E) { Ok(T), Err(E) }                   // generic with payloads
+type JsonError = enum { UnexpectedChar, UnexpectedEnd }
 
 // Naked enum (C-style integers, no payloads allowed):
-enum Ord { Less = -1, Equal = 0, Greater = 1 }
+type Ord = enum { Less = -1, Equal = 0, Greater = 1 }
 
 let c = Color.Red          // qualified
 let r = Result.Ok(42)      // with payload
 let r2 = Ok(42)            // short form when unambiguous
 ```
 
-Commas between variants optional.
+Commas between variants optional. The legacy `enum Name { ... }` declaration form has been removed (E1051) — see RFC-008.
 
 ## Control Flow
 
