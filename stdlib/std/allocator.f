@@ -6,6 +6,14 @@ import core.rtti
 import std.mem
 import std.option
 
+
+pub fn or_global(alloc: &Allocator?) &Allocator {
+    #if(runtime.testing) {
+        return alloc.unwrap_or(&test_allocator)
+    }
+    return alloc.unwrap_or(&global_allocator)
+}
+
 // =============================================================================
 // Allocator - interface for memory management
 // =============================================================================
@@ -49,7 +57,7 @@ pub fn new(allocator: &Allocator, ty: Type($T)) &T {
     if buffer.is_none() {
         panic("Unable to allocate")
     }
-    return buffer.value.ptr as &T
+    return buffer.unwrap().ptr as &T
 }
 
 pub fn free(allocator: &Allocator, value: &$T) {
@@ -73,7 +81,7 @@ fn global_alloc(impl: &u8, size: usize, alignment: usize) u8[]? {
     if ptr.is_none() {
         return null
     }
-    return slice_from_raw_parts(ptr.value, size)
+    return slice_from_raw_parts(ptr.unwrap(), size)
 }
 
 fn global_realloc(impl: &u8, memory: u8[], new_size: usize) u8[]? {
@@ -82,7 +90,7 @@ fn global_realloc(impl: &u8, memory: u8[], new_size: usize) u8[]? {
         return null
     }
 
-    return slice_from_raw_parts(ptr.value, new_size)
+    return slice_from_raw_parts(ptr.unwrap(), new_size)
 }
 
 fn global_dealloc(impl: &u8, memory: u8[]) {
@@ -101,13 +109,6 @@ const global_allocator_state = GlobalAllocatorState { _unused = 0 }
 pub const global_allocator = Allocator {
     impl = &global_allocator_state as &u8,
     vtable = &global_allocator_vtable
-}
-
-pub fn or_global(alloc: &Allocator?) &Allocator {
-    #if(runtime.testing) {
-        return alloc.unwrap_or(&test_allocator)
-    }
-    return alloc.unwrap_or(&global_allocator)
 }
 
 // =============================================================================
@@ -143,8 +144,8 @@ fn test_alloc(impl: &u8, size: usize, alignment: usize) u8[]? {
     // Record this allocation in the tracking list
     const entry_raw = malloc(size_of(TestAllocEntry))
     if entry_raw.is_some() {
-        const entry = entry_raw.value as &TestAllocEntry
-        entry.ptr = ptr.value
+        const entry = entry_raw.unwrap() as &TestAllocEntry
+        entry.ptr = ptr.unwrap()
         entry.size = size
         entry.next = state.head
         state.head = entry
@@ -153,7 +154,7 @@ fn test_alloc(impl: &u8, size: usize, alignment: usize) u8[]? {
     state.alloc_count = state.alloc_count + 1
     state.total_bytes = state.total_bytes + size
 
-    return slice_from_raw_parts(ptr.value, size)
+    return slice_from_raw_parts(ptr.unwrap(), size)
 }
 
 fn test_realloc(impl: &u8, memory: u8[], new_size: usize) u8[]? {
@@ -168,17 +169,18 @@ fn test_realloc(impl: &u8, memory: u8[], new_size: usize) u8[]? {
     // Update the tracking entry for this pointer
     let entry = state.head
     while entry.is_some() {
-        if entry.value.ptr as usize == old_ptr as usize {
-            entry.value.ptr = ptr.value
-            entry.value.size = new_size
+        let e = entry.unwrap()
+        if e.ptr as usize == old_ptr as usize {
+            e.ptr = ptr.unwrap()
+            e.size = new_size
             break
         }
-        entry = entry.value.next
+        entry = e.next
     }
 
     state.total_bytes = state.total_bytes - old_size + new_size
 
-    return slice_from_raw_parts(ptr.value, new_size)
+    return slice_from_raw_parts(ptr.unwrap(), new_size)
 }
 
 fn test_dealloc(impl: &u8, memory: u8[]) {
@@ -189,19 +191,19 @@ fn test_dealloc(impl: &u8, memory: u8[]) {
     let prev: &TestAllocEntry? = null
     let entry = state.head
     while entry.is_some() {
-        if entry.value.ptr as usize == target {
+        let e = entry.unwrap()
+        if e.ptr as usize == target {
             // Unlink
-            if prev.is_some() {
-                prev.value.next = entry.value.next
-            } else {
-                state.head = entry.value.next
+            prev match {
+                Some(p) => { p.next = e.next },
+                None => { state.head = e.next }
             }
-            state.total_bytes = state.total_bytes - entry.value.size
-            free(entry.value as &u8)
+            state.total_bytes = state.total_bytes - e.size
+            free(e as &u8)
             break
         }
         prev = entry
-        entry = entry.value.next
+        entry = e.next
     }
 
     state.dealloc_count = state.dealloc_count + 1
@@ -214,13 +216,14 @@ pub fn check_leaks(state: &TestAllocatorState) usize {
     let leaked_bytes: usize = 0
     let entry = state.head
     while entry.is_some() {
+        let e = entry.unwrap()
         count = count + 1
-        leaked_bytes = leaked_bytes + entry.value.size
+        leaked_bytes = leaked_bytes + e.size
         print("  leak: address=")
-        println(entry.value.ptr as usize)
+        println(e.ptr as usize)
         print(" size=")
-        println(entry.value.size)
-        entry = entry.value.next
+        println(e.size)
+        entry = e.next
     }
     if count > 0 {
         print("test allocator: leaked allocations=")
@@ -235,9 +238,10 @@ pub fn check_leaks(state: &TestAllocatorState) usize {
 pub fn deinit(state: &TestAllocatorState) {
     let entry = state.head
     while entry.is_some() {
-        let next = entry.value.next
-        free(entry.value.ptr)
-        free(entry.value as &u8)
+        let e = entry.unwrap()
+        let next = e.next
+        free(e.ptr)
+        free(e as &u8)
         entry = next
     }
     state.head = null
@@ -336,7 +340,7 @@ fn fixed_realloc(impl: &u8, memory: u8[], new_size: usize) u8[]? {
 
     // Copy old data
     let copy_size = if memory.len < new_size { memory.len } else { new_size }
-    memcpy(new_mem.value.ptr, memory.ptr, copy_size)
+    memcpy(new_mem.unwrap().ptr, memory.ptr, copy_size)
     return new_mem
 }
 
@@ -406,14 +410,15 @@ fn arena_new_page(state: &ArenaAllocatorState, min_size: usize) &ArenaPage? {
         return null
     }
 
-    const page = raw.value.ptr as &ArenaPage
+    const page = raw.unwrap().ptr as &ArenaPage
     page.next = null
     page.size = total - header_size
     page.offset = 0
 
     // Link into chain
-    if state.current_page.is_some() {
-        state.current_page.value.next = page
+    state.current_page match {
+        Some(cp) => { cp.next = page },
+        None => {}
     }
     if state.first_page.is_none() {
         state.first_page = page
@@ -429,7 +434,7 @@ fn arena_alloc(impl: &u8, size: usize, alignment: usize) u8[]? {
 
     // Try current page first
     if state.current_page.is_some() {
-        let page = state.current_page.value
+        let page = state.current_page.unwrap()
         let aligned_offset = align_up(page.offset, alignment)
 
         if aligned_offset + size <= page.size {
@@ -447,7 +452,7 @@ fn arena_alloc(impl: &u8, size: usize, alignment: usize) u8[]? {
         return null
     }
 
-    let page = new_page.value
+    let page = new_page.unwrap()
     let aligned_offset = align_up(0, alignment)
     let base = page as &u8
     let ptr = (base as usize + header_size + aligned_offset) as &u8
@@ -464,7 +469,7 @@ fn arena_realloc(impl: &u8, memory: u8[], new_size: usize) u8[]? {
 
     let copy_size = if memory.len < new_size { memory.len } else { new_size }
     if copy_size > 0 {
-        memcpy(new_mem.value.ptr, memory.ptr, copy_size)
+        memcpy(new_mem.unwrap().ptr, memory.ptr, copy_size)
     }
     return new_mem
 }
@@ -494,9 +499,10 @@ pub fn deinit(state: &ArenaAllocatorState) {
     const header_size = size_of(ArenaPage)
     let page = state.first_page
     while page.is_some() {
-        let next = page.value.next
-        let total = page.value.size + header_size
-        let raw = slice_from_raw_parts(page.value as &u8, total)
+        let p = page.unwrap()
+        let next = p.next
+        let total = p.size + header_size
+        let raw = slice_from_raw_parts(p as &u8, total)
         state.backing.dealloc(raw)
         page = next
     }
@@ -508,8 +514,9 @@ pub fn deinit(state: &ArenaAllocatorState) {
 pub fn reset(state: &ArenaAllocatorState) {
     let page = state.first_page
     while page.is_some() {
-        page.value.offset = 0
-        page = page.value.next
+        let p = page.unwrap()
+        p.offset = 0
+        page = p.next
     }
     state.current_page = state.first_page
 }

@@ -23,7 +23,7 @@ pub fn main() i32 {
     }
 
     const e = it.err()
-    if e.has_value {
+    if e.is_some() {
         println("iteration_error")
         return 2
     }

@@ -38,7 +38,7 @@ pub fn main() i32 {
 
     // Remove non-existent key returns null
     let removed2: i32? = dict.remove(99)
-    if (removed2.has_value == true) {
+    if (removed2.is_some()) {
         return 5
     }
 

@@ -51,11 +51,13 @@ fn simd_count_byte(data: String, target: u8) usize {
 }
 
 fn parse_range(s: String) (usize, usize)? {
-    const dot_pos = s.find("..")
-    if dot_pos.is_none() { return null }
+    const dp = s.find("..") match {
+        Some(p) => p,
+        None => return null
+    }
 
-    const start_str = s[0..dot_pos.value]
-    const end_str = s[dot_pos.value + 2..s.len]
+    const start_str = s[0..dp]
+    const end_str = s[dp + 2..s.len]
 
     let start_val: usize = 0
     let end_val: usize = MAX_ROWS
@@ -104,14 +106,18 @@ fn print_record(sb: &StringBuilder, record: &CsvRecord, indices: &List(usize), h
     if has_columns {
         for i in 0..indices.len {
             if i > 0 { sb.append_byte(delimiter) }
-            const field = record.get(indices[i])
-            if field.is_some() { sb.append(field.value) }
+            record.get(indices[i]) match {
+                Some(f) => sb.append(f),
+                None => {}
+            }
         }
     } else {
         for i in 0..record.field_count() {
             if i > 0 { sb.append_byte(delimiter) }
-            const field = record.get(i)
-            if field.is_some() { sb.append(field.value) }
+            record.get(i) match {
+                Some(f) => sb.append(f),
+                None => {}
+            }
         }
     }
     println(sb.as_view())
@@ -223,9 +229,10 @@ pub fn main() i32 {
     let count_mode = false
 
     for i in 1..argc {
-        const a = arg(i)
-        if a.is_none() { continue }
-        const argv = a.value
+        const argv = arg(i) match {
+            Some(v) => v,
+            None => continue
+        }
 
         if argv == "--help" or argv == "-h" {
             print_usage()
@@ -237,19 +244,23 @@ pub fn main() i32 {
             continue
         }
 
-        const tail = parse_tail(argv)
-        if tail.is_some() {
-            tail_count = tail.value
-            has_tail = true
-            continue
+        parse_tail(argv) match {
+            Some(t) => {
+                tail_count = t
+                has_tail = true
+                continue
+            },
+            None => {}
         }
 
-        const range = parse_range(argv)
-        if range.is_some() {
-            range_start = range.value.0
-            range_end = range.value.1
-            has_range = true
-            continue
+        parse_range(argv) match {
+            Some(r) => {
+                range_start = r.0
+                range_end = r.1
+                has_range = true
+                continue
+            },
+            None => {}
         }
 
         // First non-range arg: try as file, fall back to columns

@@ -14,11 +14,10 @@ pub fn iter(self: &FilterIter($I, $T)) FilterIter(I, T) {
 }
 
 pub fn next(self: &FilterIter($I, $T)) T? {
-    const el = self.it.next()
-    if el.has_value and self.f(el.value) {
-        return el
+    return self.it.next() match {
+        Some(v) => if self.f(v) { Some(v) } else { null },
+        None => null
     }
-    return null
 }
 
 pub fn filter(it: $I, f: fn($T) bool) FilterIter(I, T) {
@@ -39,11 +38,10 @@ pub fn iter(self: &MapIter($I, $T, $U)) MapIter(I, T, U) {
 }
 
 pub fn next(self: &MapIter($I, $T, $U)) U? {
-    const el = self.it.next()
-    if el.has_value {
-        return self.f(el.value)
+    return self.it.next() match {
+        Some(v) => self.f(v),
+        None => null
     }
-    return null
 }
 
 pub fn map(it: $I, f: fn($T) $U) MapIter(I, T, U) {
@@ -64,9 +62,8 @@ pub fn reduce(it: $I, init: $A, f: fn(A, $T) A) A {
 }
 
 pub fn reduce(it: $I, f: fn($A, $T) A) A? {
-    const first = it.next()
-    if !first.has_value {
-         return null
+    return it.next() match {
+        Some(first) => reduce(it, first, f),
+        None => null
     }
-    return it.reduce(first, f)
 }

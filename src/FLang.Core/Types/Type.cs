@@ -130,7 +130,7 @@ public sealed record ArrayType(Type ElementType, int Length) : Type
 ///     This does NOT mean the variant "has type void" — void here means "no payload data."
 ///     The actual constructor types of variants (e.g. forall ?1. Option[?1] for None,
 ///     forall ?1. fn(?1) -> Option[?1] for Some) live in TypeScopes, not here.
-///     Using the enum type itself would be cyclic (Option[T] contains None whose type is Option[T]).
+///     Using the enum type itself would be cyclic (Option(T) contains None whose type is Option(T)).
 ///
 /// Equality is by name + type arguments (not fields/variants).
 /// </summary>

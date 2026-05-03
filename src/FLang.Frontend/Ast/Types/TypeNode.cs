@@ -77,7 +77,7 @@ public class ReferenceTypeNode(SourceSpan span, TypeNode innerType) : TypeNode(s
 }
 
 /// <summary>
-/// Represents a nullable type like `T?` (sugar for `Option[T]`).
+/// Represents a nullable type like `T?` (sugar for `Option(T)`).
 /// </summary>
 public class NullableTypeNode(SourceSpan span, TypeNode innerType) : TypeNode(span)
 {

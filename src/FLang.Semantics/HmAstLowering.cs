@@ -60,18 +60,158 @@ public class HmAstLowering
     }
 
     // =========================================================================
-    // Niche optimization helpers: Option[&T] -> nullable pointer
+    // Niche optimization helpers: Option(&T) -> nullable pointer
     // =========================================================================
 
     /// <summary>
-    /// Returns true when the IrType is a niche-optimized Option[&T] (nullable pointer).
+    /// Returns true when the IrType is a niche-optimized Option(&T) (nullable pointer).
     /// </summary>
     private static bool IsNicheOption(IrType? t) => t is IrPointer { IsNullable: true };
+
+    /// <summary>
+    /// Returns true when the IrType is the tagged-enum form of Option(T)
+    /// (i.e. an IrEnum produced from `core.option.Option`).
+    /// </summary>
+    private static bool IsEnumOption(IrType? t) =>
+        t is IrEnum e && e.Name == WellKnown.Option;
+
+    /// <summary>
+    /// True when the IrType is an Option(T) in either niche-optimized or
+    /// tagged-enum form.
+    /// </summary>
+    private static bool IsAnyOption(IrType? t) => IsNicheOption(t) || IsEnumOption(t);
 
     /// <summary>
     /// Strip the nullable flag from a nullable pointer to get the non-nullable equivalent.
     /// </summary>
     private static IrPointer StripNullable(IrPointer p) => new(p.Pointee, false);
+
+    /// <summary>
+    /// Look up a variant by name in an IrEnum, throwing if missing.
+    /// </summary>
+    private static IrVariant FindVariant(IrEnum e, string name)
+    {
+        foreach (var v in e.Variants)
+            if (v.Name == name) return v;
+        throw new InvalidOperationException($"Variant `{name}` not found in enum `{e.Name}`");
+    }
+
+    // =========================================================================
+    // Option enum construction / inspection helpers
+    //
+    // These centralize the Some/None construction and tag-checking logic so
+    // we don't repeat the niche-vs-tagged-enum branching at every call site.
+    // =========================================================================
+
+    /// <summary>
+    /// Construct an Option(T) holding `payload`. Handles both niche-optimized
+    /// (nullable pointer) and tagged-enum representations.
+    /// </summary>
+    private Value EmitOptionSome(Value payload, IrType optionIrType)
+    {
+        if (optionIrType is IrPointer { IsNullable: true } nichePtr)
+        {
+            // Niche: just retype the pointer as nullable.
+            payload.IrType = nichePtr;
+            return payload;
+        }
+
+        if (optionIrType is IrEnum optionEnum)
+        {
+            var someVariant = FindVariant(optionEnum, "Some");
+            var enumPtr = _currentBlock.EmitAlloca(optionEnum);
+            EmitStoreToOffset(enumPtr, 0,
+                new IntConstantValue(someVariant.TagValue, TypeLayoutService.IrI32),
+                TypeLayoutService.IrI32);
+            if (someVariant.PayloadType != null)
+                EmitStoreToOffset(enumPtr, someVariant.PayloadOffset, payload, someVariant.PayloadType);
+            return _currentBlock.EmitLoad(enumPtr, optionEnum);
+        }
+
+        throw new InvalidOperationException($"EmitOptionSome: unsupported Option representation `{optionIrType}`");
+    }
+
+    /// <summary>
+    /// Construct an Option(T) holding None.
+    /// </summary>
+    private Value EmitOptionNone(IrType optionIrType)
+    {
+        if (optionIrType is IrPointer { IsNullable: true })
+            return new IntConstantValue(0, optionIrType);
+
+        if (optionIrType is IrEnum optionEnum)
+        {
+            var noneVariant = FindVariant(optionEnum, "None");
+            var enumPtr = _currentBlock.EmitAlloca(optionEnum);
+            EmitStoreToOffset(enumPtr, 0,
+                new IntConstantValue(noneVariant.TagValue, TypeLayoutService.IrI32),
+                TypeLayoutService.IrI32);
+            return _currentBlock.EmitLoad(enumPtr, optionEnum);
+        }
+
+        throw new InvalidOperationException($"EmitOptionNone: unsupported Option representation `{optionIrType}`");
+    }
+
+    /// <summary>
+    /// Materialize an Option value to a pointer (for tag-loading / payload-extracting).
+    /// If `optionVal` is already a pointer to the option type, returns it as-is.
+    /// Otherwise, allocates a slot, stores the value, returns the slot pointer.
+    /// </summary>
+    private Value MaterializeOptionPtr(Value optionVal, IrType optionIrType)
+    {
+        if (optionVal.IrType is IrPointer p && p.Pointee.Equals(optionIrType))
+            return optionVal;
+        var slot = _currentBlock.EmitAlloca(optionIrType);
+        _currentBlock.EmitStorePtr(slot, optionVal);
+        return slot;
+    }
+
+    /// <summary>
+    /// Emit a bool: is this Option a Some?
+    /// Handles niche (ptr != NULL) and tagged-enum (tag == Some.TagValue).
+    /// </summary>
+    private Value EmitOptionIsSome(Value optionVal, IrType optionIrType)
+    {
+        if (optionIrType is IrPointer { IsNullable: true } nichePtr)
+        {
+            var nullVal = new IntConstantValue(0, nichePtr);
+            return _currentBlock.EmitBinary(BinaryOp.NotEqual, optionVal, nullVal, TypeLayoutService.IrBool);
+        }
+
+        if (optionIrType is IrEnum optionEnum)
+        {
+            var someVariant = FindVariant(optionEnum, "Some");
+            var optPtr = MaterializeOptionPtr(optionVal, optionEnum);
+            var tag = EmitLoadFromOffset(optPtr, 0, TypeLayoutService.IrI32, "opt_tag");
+            return _currentBlock.EmitBinary(BinaryOp.Equal, tag,
+                new IntConstantValue(someVariant.TagValue, TypeLayoutService.IrI32),
+                TypeLayoutService.IrBool);
+        }
+
+        throw new InvalidOperationException($"EmitOptionIsSome: unsupported Option representation `{optionIrType}`");
+    }
+
+    /// <summary>
+    /// Extract the payload of a Some Option. Caller must have already
+    /// checked IsSome (otherwise behavior is undefined for None).
+    /// </summary>
+    private Value EmitOptionUnwrap(Value optionVal, IrType optionIrType, IrType payloadIrType)
+    {
+        if (optionIrType is IrPointer { IsNullable: true } nichePtr)
+        {
+            var stripped = StripNullable(nichePtr);
+            return _currentBlock.EmitCast(optionVal, stripped);
+        }
+
+        if (optionIrType is IrEnum optionEnum)
+        {
+            var someVariant = FindVariant(optionEnum, "Some");
+            var optPtr = MaterializeOptionPtr(optionVal, optionEnum);
+            return EmitLoadFromOffset(optPtr, someVariant.PayloadOffset, payloadIrType, "opt_payload");
+        }
+
+        throw new InvalidOperationException($"EmitOptionUnwrap: unsupported Option representation `{optionIrType}`");
+    }
 
     // =========================================================================
     // Fused offset helpers — emit CopyFromOffset / CopyToOffset directly
@@ -1060,12 +1200,10 @@ public class HmAstLowering
     }
 
     /// <summary>
-    /// If the target type is an Option-like struct (has_value + value fields) and the
-    /// source value's type matches the value field, wrap it in Some(val).
-    /// </summary>
-    /// <summary>
     /// Apply implicit coercions when the lowered value doesn't match the expected type.
     /// Mirrors the coercion rules in the type checker (CoercionRules.cs).
+    /// Includes Option wrapping (T -> Option(T) via Some(val)) and the niche-pointer
+    /// short-circuit for Option(&T).
     /// </summary>
     private Value ApplyCoercions(Value val, IrType expectedType)
     {
@@ -1119,29 +1257,26 @@ public class HmAstLowering
             return val;
         }
 
-        // 5. T -> Option[T]: wrap in Some
+        // 5. T -> Option(T): wrap in Some
         //    Handles: same-size value, integer widening, pointer->Option[pointer]
-        if (expectedType is IrStruct optStruct)
+        if (IsEnumOption(expectedType))
         {
-            var hvField = optStruct.Fields.FirstOrDefault(f => f.Name == "has_value");
-            var valField = optStruct.Fields.FirstOrDefault(f => f.Name == "value");
-            if (hvField.Type != null && valField.Type != null
-                && hvField.Type == TypeLayoutService.IrBool)
+            var optionEnum = (IrEnum)expectedType;
+            var someVariant = FindVariant(optionEnum, "Some");
+            var payloadType = someVariant.PayloadType;
+            if (payloadType != null)
             {
-                // Exact size match — wrap directly
-                if (actualType.Size == valField.Type.Size)
-                    return CoerceToOption(val, optStruct, hvField, valField);
+                if (actualType.Size == payloadType.Size)
+                    return EmitOptionSome(val, optionEnum);
 
-                // Integer widening then wrap: e.g. i32 -> usize -> Option[usize]
-                if (actualType is IrPrimitive && valField.Type is IrPrimitive)
+                if (actualType is IrPrimitive && payloadType is IrPrimitive)
                 {
-                    var widened = _currentBlock.EmitCast(val, valField.Type);
-                    return CoerceToOption(widened, optStruct, hvField, valField);
+                    var widened = _currentBlock.EmitCast(val, payloadType);
+                    return EmitOptionSome(widened, optionEnum);
                 }
 
-                // Pointer -> Option[pointer]: e.g. &Allocator -> Option[&Allocator]
-                if (actualType is IrPointer && valField.Type is IrPointer)
-                    return CoerceToOption(val, optStruct, hvField, valField);
+                if (actualType is IrPointer && payloadType is IrPointer)
+                    return EmitOptionSome(val, optionEnum);
             }
         }
 
@@ -1186,40 +1321,6 @@ public class HmAstLowering
         var tmpPtr = _currentBlock.EmitAlloca(srcType);
         _currentBlock.EmitStorePtr(tmpPtr, val);
         return _currentBlock.EmitLoad(tmpPtr, dstType);
-    }
-
-    private Value CoerceToOption(Value val, IrStruct optStruct, IrField hvField, IrField valField)
-    {
-        var tmpPtr = _currentBlock.EmitAlloca(optStruct);
-
-        // has_value = true
-        EmitStoreToOffset(tmpPtr, hvField.ByteOffset, new IntConstantValue(1, TypeLayoutService.IrBool), TypeLayoutService.IrBool);
-
-        // value = val
-        EmitStoreToOffset(tmpPtr, valField.ByteOffset, val, valField.Type);
-
-        return _currentBlock.EmitLoad(tmpPtr, optStruct);
-    }
-
-    /// <summary>
-    /// Wrap a raw pointer from a foreign call into Option[&T].
-    /// has_value = (ptr != NULL), value = ptr.
-    /// </summary>
-    private Value WrapPointerInOption(Value rawPtr, IrStruct optStruct, IrField hvField, IrField valField)
-    {
-        // has_value = (rawPtr != 0)
-        var nullVal = new IntConstantValue(0, rawPtr.IrType!);
-        var hvResult = _currentBlock.EmitBinary(BinaryOp.NotEqual, rawPtr, nullVal, TypeLayoutService.IrBool);
-
-        var tmpPtr = _currentBlock.EmitAlloca(optStruct);
-
-        // has_value field
-        EmitStoreToOffset(tmpPtr, hvField.ByteOffset, hvResult, TypeLayoutService.IrBool);
-
-        // value field = raw pointer
-        EmitStoreToOffset(tmpPtr, valField.ByteOffset, rawPtr, valField.Type);
-
-        return _currentBlock.EmitLoad(tmpPtr, optStruct);
     }
 
     private void LowerVariableDeclaration(VariableDeclarationNode varDecl)
@@ -1465,7 +1566,7 @@ public class HmAstLowering
         // Jump to condition block
         _currentBlock.EmitJump(condBlock);
 
-        // 5. Condition block: call next(&iterator), check has_value
+        // 5. Condition block: call next(&iterator), check is_some
         _currentBlock = condBlock;
 
         var nextCalleeParamTypes = new List<IrType>();
@@ -1476,15 +1577,14 @@ public class HmAstLowering
         if (IsNicheOption(optionIrType))
         {
             // Niche-optimized: nextResult is a nullable pointer; NULL = None
-            var nichePtr = (IrPointer)optionIrType;
-            var nullVal = new IntConstantValue(0, nichePtr);
-            var isNonNull = _currentBlock.EmitBinary(BinaryOp.NotEqual, nextResult, nullVal, TypeLayoutService.IrBool);
-            _currentBlock.EmitBranch(isNonNull, bodyBlock, exitBlock);
+            var isSome = EmitOptionIsSome(nextResult, optionIrType);
+            _currentBlock.EmitBranch(isSome, bodyBlock, exitBlock);
 
-            // Body: cast to non-nullable, store to loop var
+            // Body: extract payload (non-nullable pointer), store to loop var
             _currentBlock = bodyBlock;
             _loopStack.Push((condBlock, exitBlock, _deferStack.Count));
 
+            var nichePtr = (IrPointer)optionIrType;
             var stripped = StripNullable(nichePtr);
             var castVal = _currentBlock.EmitCast(nextResult, stripped);
             // If element type differs from stripped pointer (e.g. loop var is the inner pointee), load
@@ -1498,29 +1598,23 @@ public class HmAstLowering
                 _currentBlock.EmitStorePtr(loopVarPtr, loaded);
             }
         }
-        else
+        else if (IsEnumOption(optionIrType))
         {
-            // Materialize next result to alloca so we can GEP into it
-            var nextPtr = _currentBlock.EmitAlloca(optionIrType);
-            _currentBlock.EmitStorePtr(nextPtr, nextResult);
+            // Tagged-enum Option: branch on tag, extract payload from Some variant.
+            var nextPtr = MaterializeOptionPtr(nextResult, optionIrType);
+            var isSome = EmitOptionIsSome(nextPtr, optionIrType);
+            _currentBlock.EmitBranch(isSome, bodyBlock, exitBlock);
 
-            // Load has_value field
-            var optionStruct = (IrStruct)optionIrType;
-            var hvField = FindField(optionStruct, "has_value");
-
-            var hvVal = EmitLoadFromOffset(nextPtr, hvField.ByteOffset, TypeLayoutService.IrBool, "for_hv");
-
-            // Branch: has_value -> body, else -> exit
-            _currentBlock.EmitBranch(hvVal, bodyBlock, exitBlock);
-
-            // 6. Body block: extract value, store to loop var, lower body, jump back to cond
             _currentBlock = bodyBlock;
             _loopStack.Push((condBlock, exitBlock, _deferStack.Count));
 
-            // Extract value field from Option
-            var valField = FindField(optionStruct, "value");
-            var valLoaded = EmitLoadFromOffset(nextPtr, valField.ByteOffset, elementIrType, "for_val");
-            _currentBlock.EmitStorePtr(loopVarPtr, valLoaded);
+            var payload = EmitOptionUnwrap(nextPtr, optionIrType, elementIrType);
+            _currentBlock.EmitStorePtr(loopVarPtr, payload);
+        }
+        else
+        {
+            throw new InvalidOperationException(
+                $"For-loop iterator next() returned non-Option type `{optionIrType}`");
         }
 
         // Lower loop body
@@ -1797,33 +1891,15 @@ public class HmAstLowering
 
     private Value LowerNullLiteral(NullLiteralNode nullLit)
     {
-        // Null is an Option with has_value = false
+        // `null` desugars to Option.None. The expected type was filled in
+        // by inference; here we emit the appropriate None representation.
         var irType = GetIrType(nullLit);
+        if (IsAnyOption(irType))
+            return EmitOptionNone(irType);
 
-        // Niche-optimized Option[&T]: null = 0 (NULL pointer)
-        if (IsNicheOption(irType))
-            return new IntConstantValue(0, irType);
-
-        if (irType is IrStruct optionStruct && optionStruct.Fields.Length > 0)
-        {
-            // Alloca the option struct, store has_value = false (0)
-            var allocaResult = _currentBlock.EmitAlloca(irType);
-
-            // Find has_value field and store 0
-            foreach (var f in optionStruct.Fields)
-            {
-                if (f.Name == "has_value")
-                {
-                    EmitStoreToOffset(allocaResult, f.ByteOffset,
-                        new IntConstantValue(0, TypeLayoutService.IrBool), TypeLayoutService.IrBool);
-                    break;
-                }
-            }
-
-            // Load and return the struct
-            return _currentBlock.EmitLoad(allocaResult, irType);
-        }
-
+        // Fallback: unable to resolve as Option (should have been caught
+        // by the type checker — emits zero of the expected type to keep
+        // codegen well-formed).
         return new IntConstantValue(0, irType);
     }
 
@@ -2232,25 +2308,26 @@ public class HmAstLowering
             }
         }
 
-        // For foreign calls returning Option[&T], the C function returns a raw pointer.
-        // Emit the call with pointer return type, then wrap in Option.
+        // For foreign calls returning Option(T) in the tagged-enum form,
+        // wrap the raw pointer return in Some/None based on null check.
+        // Option(&T) is already niche-optimized to IrPointer{IsNullable:true}
+        // so no wrap is needed there — the C function returns a raw pointer
+        // and the IR type is already the nullable pointer.
+        IrEnum? foreignOptionEnum = null;
         var actualRetType = retIrType;
-        IrStruct? foreignOptionRet = null;
-        IrField foreignValField = default;
-        if (isForeign && retIrType is IrStruct optRet)
+        if (isForeign && IsEnumOption(retIrType))
         {
-            var hvF = optRet.Fields.FirstOrDefault(f => f.Name == "has_value");
-            var vF = optRet.Fields.FirstOrDefault(f => f.Name == "value");
-            if (hvF.Type == TypeLayoutService.IrBool && vF.Type is IrPointer)
+            var optionEnum = (IrEnum)retIrType;
+            var someVariant = FindVariant(optionEnum, "Some");
+            if (someVariant.PayloadType is IrPointer payloadPtr)
             {
-                actualRetType = vF.Type; // raw pointer
-                foreignOptionRet = optRet;
-                foreignValField = vF;
+                actualRetType = payloadPtr;
+                foreignOptionEnum = optionEnum;
             }
         }
 
         // Return slot: non-foreign, non-indirect call returning large value
-        if (!isForeign && !call.IsIndirectCall && TypeLayoutService.IsLargeValue(retIrType) && !TypeLayoutService.UsesCCallingConvention(retIrType) && foreignOptionRet == null)
+        if (!isForeign && !call.IsIndirectCall && TypeLayoutService.IsLargeValue(retIrType) && !TypeLayoutService.UsesCCallingConvention(retIrType) && foreignOptionEnum == null)
         {
             return _currentBlock.EmitCall(targetName, args, retIrType, calleeIrParamTypes);
         }
@@ -2258,11 +2335,35 @@ public class HmAstLowering
         var result = _currentBlock.EmitCall(targetName, args, actualRetType, calleeIrParamTypes,
             isForeign: isForeign, isIndirect: call.IsIndirectCall);
 
-        // Wrap foreign raw-pointer return in Option[&T]
-        if (foreignOptionRet != null)
+        // Wrap foreign raw-pointer return into Option enum: ptr != NULL -> Some(ptr), else None.
+        if (foreignOptionEnum != null)
         {
-            var hvField = foreignOptionRet.Fields.First(f => f.Name == "has_value");
-            return WrapPointerInOption(result, foreignOptionRet, hvField, foreignValField);
+            var someVariant = FindVariant(foreignOptionEnum, "Some");
+            var noneVariant = FindVariant(foreignOptionEnum, "None");
+            var nullVal = new IntConstantValue(0, result.IrType!);
+            var isNonNull = _currentBlock.EmitBinary(BinaryOp.NotEqual, result, nullVal, TypeLayoutService.IrBool);
+
+            var slot = _currentBlock.EmitAlloca(foreignOptionEnum);
+            var thenBlock = CreateBlock("foreign_opt_some");
+            var elseBlock = CreateBlock("foreign_opt_none");
+            var contBlock = CreateBlock("foreign_opt_cont");
+            _currentBlock.EmitBranch(isNonNull, thenBlock, elseBlock);
+
+            _currentBlock = thenBlock;
+            EmitStoreToOffset(slot, 0,
+                new IntConstantValue(someVariant.TagValue, TypeLayoutService.IrI32),
+                TypeLayoutService.IrI32);
+            EmitStoreToOffset(slot, someVariant.PayloadOffset, result, someVariant.PayloadType!);
+            _currentBlock.EmitJump(contBlock);
+
+            _currentBlock = elseBlock;
+            EmitStoreToOffset(slot, 0,
+                new IntConstantValue(noneVariant.TagValue, TypeLayoutService.IrI32),
+                TypeLayoutService.IrI32);
+            _currentBlock.EmitJump(contBlock);
+
+            _currentBlock = contBlock;
+            return _currentBlock.EmitLoad(slot, foreignOptionEnum);
         }
 
         return result;
@@ -2653,22 +2754,6 @@ public class HmAstLowering
 
             // Refresh fieldIrType — the type checker resolved it after the full chain
             fieldIrType = GetIrType(member);
-        }
-
-        // Niche-optimized Option[&T]: .has_value -> ptr != NULL, .value -> cast to non-nullable
-        if (IsNicheOption(baseIrType))
-        {
-            var nichePtr = (IrPointer)baseIrType;
-            if (fieldName == "has_value")
-            {
-                var nullVal = new IntConstantValue(0, nichePtr);
-                return _currentBlock.EmitBinary(BinaryOp.NotEqual, baseVal, nullVal, TypeLayoutService.IrBool);
-            }
-            if (fieldName == "value")
-            {
-                var stripped = StripNullable(nichePtr);
-                return _currentBlock.EmitCast(baseVal, stripped);
-            }
         }
 
         // Find the IrStruct to get field offset
@@ -3573,29 +3658,9 @@ public class HmAstLowering
 
             case CoercionKind.Wrap:
                 {
-                    // Niche-optimized Option[&T]: retype inner pointer as nullable
-                    if (IsNicheOption(targetIrType))
-                    {
-                        innerVal.IrType = targetIrType;
-                        return innerVal;
-                    }
-
-                    // Wrap T -> Option(T): construct Option struct with has_value=true, value=inner
-                    if (targetIrType is IrStruct optionStruct && optionStruct.Fields.Length >= 2)
-                    {
-                        var resultPtr = _currentBlock.EmitAlloca(optionStruct);
-
-                        // Store has_value = true
-                        var hvField = FindField(optionStruct, "has_value");
-                        EmitStoreToOffset(resultPtr, hvField.ByteOffset,
-                            new IntConstantValue(1, TypeLayoutService.IrBool), TypeLayoutService.IrBool);
-
-                        // Store value = inner
-                        var valField = FindField(optionStruct, "value");
-                        EmitStoreToOffset(resultPtr, valField.ByteOffset, innerVal, valField.Type);
-
-                        return _currentBlock.EmitLoad(resultPtr, optionStruct);
-                    }
+                    // Wrap T -> Option(T) — handles both niche-optimized and tagged-enum forms.
+                    if (IsAnyOption(targetIrType))
+                        return EmitOptionSome(innerVal, targetIrType);
 
                     // Fallback: just return inner with target type
                     innerVal.IrType = targetIrType;
@@ -3625,67 +3690,51 @@ public class HmAstLowering
             return _currentBlock.EmitCall(resolved.Function.Name, [leftVal, rightVal], retIrType, calleeIrParamTypes);
         }
 
-        // Inline Option[T] ?? T: if left.has_value then left.value else right
+        // Inline Option(T) ?? T: if Some(v) then v else right
         var leftOption = LowerExpression(coalesce.Left);
         var resultIrType = GetIrType(coalesce);
 
-        // Niche-optimized Option[&T]: ptr != NULL ? ptr : right
+        // Niche-optimized Option(&T): ptr != NULL ? ptr : right
         if (IsNicheOption(leftOption.IrType))
             return LowerCoalesceNiche(coalesce, leftOption, resultIrType);
 
-        IrStruct? optionStruct = leftOption.IrType as IrStruct;
-        if (optionStruct == null && leftOption.IrType is IrPointer { Pointee: IrStruct s })
-            optionStruct = s;
+        var leftIrType = leftOption.IrType;
+        if (leftIrType is IrPointer ptrToOpt && ptrToOpt.Pointee is IrEnum)
+            leftIrType = ptrToOpt.Pointee;
 
-        if (optionStruct == null)
+        if (!IsEnumOption(leftIrType))
             throw new InternalCompilerError(
-                $"Coalesce left operand is not an Option struct: `{leftOption.IrType}`", coalesce.Span);
+                $"Coalesce left operand is not an Option: `{leftOption.IrType}`", coalesce.Span);
 
-        // Materialize left to alloca
-        Value leftPtr;
-        if (leftOption.IrType is IrPointer)
-        {
-            leftPtr = leftOption;
-        }
-        else
-        {
-            leftPtr = _currentBlock.EmitAlloca(optionStruct);
-            _currentBlock.EmitStorePtr(leftPtr, leftOption);
-        }
+        var optionEnum = (IrEnum)leftIrType!;
+        var leftPtr = MaterializeOptionPtr(leftOption, optionEnum);
+        var isSome = EmitOptionIsSome(leftPtr, optionEnum);
 
-        // Load has_value
-        var hvField = FindField(optionStruct, "has_value");
-        var hvVal = EmitLoadFromOffset(leftPtr, hvField.ByteOffset, TypeLayoutService.IrBool, "coal_hv");
-
-        // Alloca for result
         var resultPtr = _currentBlock.EmitAlloca(resultIrType);
 
         var thenBlock = CreateBlock("coal_then");
         var elseBlock = CreateBlock("coal_else");
         var mergeBlock = CreateBlock("coal_merge");
 
-        _currentBlock.EmitBranch(hvVal, thenBlock, elseBlock);
+        _currentBlock.EmitBranch(isSome, thenBlock, elseBlock);
 
-        // Then: left has value
+        // Then: left is Some
         _currentBlock = thenBlock;
 
-        // Check if result is also Option (Option[T] ?? Option[T] -> Option[T])
-        // In that case, store the whole left Option, don't unwrap
-        bool resultIsOption = resultIrType is IrStruct resultStruct
-            && resultStruct.Name == WellKnown.Option;
+        // Result is also Option => store the whole left Option (don't unwrap).
+        bool resultIsOption = IsAnyOption(resultIrType);
 
         if (resultIsOption)
         {
-            // Store entire left Option into result
-            var leftLoaded = _currentBlock.EmitLoad(leftPtr, optionStruct);
+            var leftLoaded = _currentBlock.EmitLoad(leftPtr, optionEnum);
             _currentBlock.EmitStorePtr(resultPtr, leftLoaded);
         }
         else
         {
-            // Unwrap: store left.value into result
-            var valField = FindField(optionStruct, "value");
-            var valLoaded = EmitLoadFromOffset(leftPtr, valField.ByteOffset, valField.Type, "coal_val");
-            _currentBlock.EmitStorePtr(resultPtr, valLoaded);
+            var someVariant = FindVariant(optionEnum, "Some");
+            var payloadType = someVariant.PayloadType ?? resultIrType;
+            var payload = EmitOptionUnwrap(leftPtr, optionEnum, payloadType);
+            _currentBlock.EmitStorePtr(resultPtr, payload);
         }
         _currentBlock.EmitJump(mergeBlock);
 
@@ -3740,77 +3789,54 @@ public class HmAstLowering
 
     private LocalValue LowerNullPropagation(NullPropagationExpressionNode nullProp)
     {
-        // target?.field
-        // if target.has_value: Some(target.value.field) else: null
+        // target?.field — if target is Some(v): Some(v.field), else None
         var targetVal = LowerExpression(nullProp.Target);
 
         var resultIrType = GetIrType(nullProp);
 
-        // Niche-optimized Option[&T]: ptr != NULL ? ptr.field : null
+        // Niche-optimized Option(&T): ptr != NULL ? ptr.field : null
         if (IsNicheOption(targetVal.IrType))
             return LowerNullPropagationNiche(nullProp, targetVal, resultIrType);
 
-        // Get the target's Option type
+        // Resolve the target Option enum (possibly via pointer-to-enum).
         var targetIrType = targetVal.IrType;
-        IrStruct? optionStruct = targetIrType as IrStruct;
-        if (optionStruct == null && targetIrType is IrPointer { Pointee: IrStruct s })
-            optionStruct = s;
+        IrEnum? optionEnum = targetIrType as IrEnum;
+        if (optionEnum == null && targetIrType is IrPointer { Pointee: IrEnum pe })
+            optionEnum = pe;
 
-        if (optionStruct == null)
+        if (optionEnum == null || !IsEnumOption(optionEnum))
             throw new InternalCompilerError(
-                $"Null propagation target is not an Option type: `{targetIrType}`", nullProp.Span);
+                $"Null propagation target is not an Option: `{targetIrType}`", nullProp.Span);
 
-        // Materialize target to alloca if not already a pointer
-        Value targetPtr;
-        if (targetIrType is IrPointer)
-        {
-            targetPtr = targetVal;
-        }
-        else
-        {
-            targetPtr = _currentBlock.EmitAlloca(optionStruct);
-            _currentBlock.EmitStorePtr(targetPtr, targetVal);
-        }
+        var targetPtr = MaterializeOptionPtr(targetVal, optionEnum);
+        var isSome = EmitOptionIsSome(targetPtr, optionEnum);
 
-        // Load has_value field
-        var hvField = FindField(optionStruct, "has_value");
-        var hvVal = EmitLoadFromOffset(targetPtr, hvField.ByteOffset, TypeLayoutService.IrBool, "np_hv");
-
-        // Branch on has_value
         var thenBlock = CreateBlock("np_then");
         var elseBlock = CreateBlock("np_else");
         var mergeBlock = CreateBlock("np_merge");
 
-        // Alloca for result
         var resultPtr = _currentBlock.EmitAlloca(resultIrType);
-        _currentBlock.EmitBranch(hvVal, thenBlock, elseBlock);
+        _currentBlock.EmitBranch(isSome, thenBlock, elseBlock);
 
-        // Then: access target.value.field, wrap in new Option
+        // Then: access payload.field, wrap in new Option (if result is Option)
         _currentBlock = thenBlock;
+        var someVariant = FindVariant(optionEnum, "Some");
+        var payloadType = someVariant.PayloadType ?? throw new InternalCompilerError(
+            $"Option.Some has no payload in `{optionEnum.Name}`", nullProp.Span);
 
-        // GEP to value field
-        var valField = FindField(optionStruct, "value");
-        var valPtr = _currentBlock.EmitGEP(targetPtr, valField.ByteOffset, valField.Type);
+        var payloadPtr = _currentBlock.EmitGEP(targetPtr, someVariant.PayloadOffset, payloadType);
 
-        // Access the member on value
-        var innerStruct = (IrStruct)valField.Type;
+        if (payloadType is not IrStruct innerStruct)
+            throw new InternalCompilerError(
+                $"Null propagation payload `{payloadType}` is not a struct", nullProp.Span);
+
         var memberField = FindField(innerStruct, nullProp.MemberName);
-        var memberVal = EmitLoadFromOffset(valPtr, memberField.ByteOffset, memberField.Type, "np_member");
+        var memberVal = EmitLoadFromOffset(payloadPtr, memberField.ByteOffset, memberField.Type, "np_member");
 
-        // Wrap in Option if result is Option type
-        if (resultIrType is IrStruct resultOptionStruct && resultOptionStruct.Fields.Length >= 2)
+        if (IsAnyOption(resultIrType))
         {
-            var somePtr = _currentBlock.EmitAlloca(resultOptionStruct);
-
-            var someHvField = FindField(resultOptionStruct, "has_value");
-            EmitStoreToOffset(somePtr, someHvField.ByteOffset,
-                new IntConstantValue(1, TypeLayoutService.IrBool), TypeLayoutService.IrBool);
-
-            var someValField = FindField(resultOptionStruct, "value");
-            EmitStoreToOffset(somePtr, someValField.ByteOffset, memberVal, someValField.Type);
-
-            var someLoaded = _currentBlock.EmitLoad(somePtr, resultOptionStruct);
-            _currentBlock.EmitStorePtr(resultPtr, someLoaded);
+            var someResult = EmitOptionSome(memberVal, resultIrType);
+            _currentBlock.EmitStorePtr(resultPtr, someResult);
         }
         else
         {
@@ -3818,18 +3844,12 @@ public class HmAstLowering
         }
         _currentBlock.EmitJump(mergeBlock);
 
-        // Else: return null Option
+        // Else: return None Option
         _currentBlock = elseBlock;
-        if (resultIrType is IrStruct nullOptionStruct)
+        if (IsAnyOption(resultIrType))
         {
-            var nullPtr = _currentBlock.EmitAlloca(nullOptionStruct);
-
-            var nullHvField = FindField(nullOptionStruct, "has_value");
-            EmitStoreToOffset(nullPtr, nullHvField.ByteOffset,
-                new IntConstantValue(0, TypeLayoutService.IrBool), TypeLayoutService.IrBool);
-
-            var nullLoaded = _currentBlock.EmitLoad(nullPtr, nullOptionStruct);
-            _currentBlock.EmitStorePtr(resultPtr, nullLoaded);
+            var noneResult = EmitOptionNone(resultIrType);
+            _currentBlock.EmitStorePtr(resultPtr, noneResult);
         }
         _currentBlock.EmitJump(mergeBlock);
 
@@ -3862,24 +3882,10 @@ public class HmAstLowering
             var memberField = FindField(innerStruct, nullProp.MemberName);
             var memberVal = EmitLoadFromOffset(castVal, memberField.ByteOffset, memberField.Type, "np_member");
 
-            if (IsNicheOption(resultIrType))
+            if (IsAnyOption(resultIrType))
             {
-                memberVal.IrType = resultIrType;
-                _currentBlock.EmitStorePtr(resultPtr, memberVal);
-            }
-            else if (resultIrType is IrStruct resultOptionStruct && resultOptionStruct.Fields.Length >= 2)
-            {
-                var somePtr = _currentBlock.EmitAlloca(resultOptionStruct);
-
-                var someHvField = FindField(resultOptionStruct, "has_value");
-                EmitStoreToOffset(somePtr, someHvField.ByteOffset,
-                    new IntConstantValue(1, TypeLayoutService.IrBool), TypeLayoutService.IrBool);
-
-                var someValField = FindField(resultOptionStruct, "value");
-                EmitStoreToOffset(somePtr, someValField.ByteOffset, memberVal, someValField.Type);
-
-                var someLoaded = _currentBlock.EmitLoad(somePtr, resultOptionStruct);
-                _currentBlock.EmitStorePtr(resultPtr, someLoaded);
+                var someResult = EmitOptionSome(memberVal, resultIrType);
+                _currentBlock.EmitStorePtr(resultPtr, someResult);
             }
             else
             {
@@ -3888,22 +3894,12 @@ public class HmAstLowering
         }
         _currentBlock.EmitJump(mergeBlock);
 
-        // Else: return null
+        // Else: return None
         _currentBlock = elseBlock;
-        if (IsNicheOption(resultIrType))
+        if (IsAnyOption(resultIrType))
         {
-            _currentBlock.EmitStorePtr(resultPtr, new IntConstantValue(0, resultIrType));
-        }
-        else if (resultIrType is IrStruct nullOptionStruct)
-        {
-            var nullPtr2 = _currentBlock.EmitAlloca(nullOptionStruct);
-
-            var nullHvField = FindField(nullOptionStruct, "has_value");
-            EmitStoreToOffset(nullPtr2, nullHvField.ByteOffset,
-                new IntConstantValue(0, TypeLayoutService.IrBool), TypeLayoutService.IrBool);
-
-            var nullLoaded = _currentBlock.EmitLoad(nullPtr2, nullOptionStruct);
-            _currentBlock.EmitStorePtr(resultPtr, nullLoaded);
+            var noneResult = EmitOptionNone(resultIrType);
+            _currentBlock.EmitStorePtr(resultPtr, noneResult);
         }
         _currentBlock.EmitJump(mergeBlock);
 
@@ -4265,6 +4261,9 @@ public class HmAstLowering
 
         var mergeBlock = _currentBlock.CreateBlock("match_merge");
 
+        // Niche-Option scrutinee: Some/None patterns route through nullability check.
+        bool isNicheOption = IsNicheOption(scrutineeIrType);
+
         for (int armIndex = 0; armIndex < match.Arms.Count; armIndex++)
         {
             var arm = match.Arms[armIndex];
@@ -4279,6 +4278,20 @@ public class HmAstLowering
             else if (arm.Pattern is VariablePatternNode)
             {
                 _currentBlock.EmitJump(armBlock);
+            }
+            else if (isNicheOption && arm.Pattern is EnumVariantPatternNode evpNiche)
+            {
+                // ptr != NULL ? Some-arm : None-arm
+                var isSome = EmitOptionIsSome(scrutineeValue, scrutineeIrType);
+                var elseTarget = armIndex < match.Arms.Count - 1
+                    ? checkBlocks[armIndex]
+                    : mergeBlock;
+                if (evpNiche.VariantName == "Some")
+                    _currentBlock.EmitBranch(isSome, armBlock, elseTarget);
+                else if (evpNiche.VariantName == "None")
+                    _currentBlock.EmitBranch(isSome, elseTarget, armBlock);
+                else
+                    _currentBlock.EmitJump(elseTarget); // Unknown variant — diagnostic emitted in TC
             }
             else if (arm.Pattern is LiteralPatternNode litPat)
             {
@@ -4296,6 +4309,21 @@ public class HmAstLowering
             // Bind variable pattern
             if (arm.Pattern is VariablePatternNode varPat)
                 _locals[varPat.Name] = scrutineePtr;
+
+            // Niche Some(x): bind x to the stripped (non-nullable) pointer.
+            if (isNicheOption
+                && arm.Pattern is EnumVariantPatternNode evp
+                && evp.VariantName == "Some"
+                && evp.SubPatterns.Count == 1
+                && evp.SubPatterns[0] is VariablePatternNode someBind)
+            {
+                var stripped = StripNullable((IrPointer)scrutineeIrType);
+                var castVal = _currentBlock.EmitCast(scrutineeValue, stripped);
+                // Materialize the cast value to a slot so _locals has a pointer-to-payload.
+                var bindSlot = _currentBlock.EmitAlloca(stripped);
+                _currentBlock.EmitStorePtr(bindSlot, castVal);
+                _locals[someBind.Name] = bindSlot;
+            }
 
             // Lower arm result
             var armResultVal = LowerExpression(arm.ResultExpr, isVoid ? null : resultIrType);
@@ -4545,30 +4573,6 @@ public class HmAstLowering
                                 baseVal = _currentBlock.EmitLoad(baseVal, ptrType.Pointee);
                                 baseIrType = ptrType.Pointee;
                             }
-                        }
-                    }
-
-                    // Niche-optimized Option[&T]: .value lvalue is the pointer itself.
-                    // Only applies to Option-specific fields (value/has_value), not to
-                    // struct fields accessed through a nullable pointer after unwrap.
-                    // Check both direct niche option (from LowerExpression fallback) and
-                    // pointer-to-niche-option (from LowerLValue, which adds an extra indirection).
-                    if (member.FieldName is "value" or "has_value")
-                    {
-                        var isNiche = IsNicheOption(baseIrType);
-                        var isNicheViaPtr = !isNiche
-                            && baseIrType is IrPointer { Pointee: var innerPt }
-                            && IsNicheOption(innerPt);
-                        if (isNiche || isNicheViaPtr)
-                        {
-                            if (member.FieldName == "has_value")
-                            {
-                                _diagnostics.Add(Diagnostic.Error(
-                                    "Cannot assign to `has_value` on niche-optimized Option", member.Span, null, "E3005"));
-                                return null;
-                            }
-                            // .value — the nullable pointer IS the value; return the lvalue holding it
-                            return baseVal;
                         }
                     }
 

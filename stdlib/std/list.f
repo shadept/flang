@@ -147,6 +147,7 @@ pub fn get_ref(list: List($T), index: usize) &T? {
 
 // Set the element at the given index.
 // Panics if index is out of bounds.
+#deprecated("Prefer index syntax: list[idx] = value")
 pub fn set(list: &List($T), index: usize, value: T) {
     if index >= list.len {
         panic("List: index out of bounds")
@@ -177,7 +178,7 @@ pub fn op_index(list: List($T), range: Range(usize)) T[] {
     if start > list.len { start = list.len }
     if end > list.len { end = list.len }
     if start > end { end = start }
-    return .{ ptr = list.ptr + start, len = end - start }
+    return slice_from_raw_parts(list.ptr + start, end - start)
 }
 
 // Remove all elements from the list without freeing memory.

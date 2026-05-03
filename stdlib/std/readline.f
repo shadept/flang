@@ -287,9 +287,10 @@ fn read_byte() u8? {
 }
 
 fn read_key() Key {
-    const c = read_byte()
-    if c.is_none() { return Key.Eof }
-    const b = c.value
+    const b = read_byte() match {
+        Some(v) => v,
+        None => return Key.Eof
+    }
 
     if b == 13 or b == 10 { return Key.Enter }
     if b == 127 or b == 8 { return Key.Backspace }
@@ -297,24 +298,32 @@ fn read_key() Key {
 
     // Escape sequences
     if b == 27 {
-        const c2 = read_byte()
-        if c2.is_none() { return Key.Unknown }
-        if c2.value != '[' { return Key.Unknown }
+        const b2 = read_byte() match {
+            Some(v) => v,
+            None => return Key.Unknown
+        }
+        // TODO prime example for if conf guard in pattern matching
+        if b2 != '[' { return Key.Unknown }
 
-        const c3 = read_byte()
-        if c3.is_none() { return Key.Unknown }
+        const b3 = read_byte() match {
+            Some(v) => v,
+            None => return Key.Unknown
+        }
 
-        if c3.value == 'A' { return Key.Up }
-        if c3.value == 'B' { return Key.Down }
-        if c3.value == 'C' { return Key.Right }
-        if c3.value == 'D' { return Key.Left }
-        if c3.value == 'H' { return Key.Home }
-        if c3.value == 'F' { return Key.End }
+        if b3 == 'A' { return Key.Up }
+        if b3 == 'B' { return Key.Down }
+        if b3 == 'C' { return Key.Right }
+        if b3 == 'D' { return Key.Left }
+        if b3 == 'H' { return Key.Home }
+        if b3 == 'F' { return Key.End }
 
         // ESC [ 3 ~ = Delete
-        if c3.value == '3' {
+        if b3 == '3' {
             const c4 = read_byte()
-            if c4.is_some() and c4.value == '~' { return Key.Delete }
+            c4 match {
+                Some(v) => { if v == '~' { return Key.Delete } },
+                None => {}
+            }
         }
 
         return Key.Unknown
@@ -348,9 +357,7 @@ pub fn read_line(rl: &Readline) String? {
     let saved_len: usize = 0
 
     loop {
-        const key = read_key()
-
-        key match {
+        read_key() match {
             Enter => {
                 write_str("\r\n")
                 disable_raw(rl)

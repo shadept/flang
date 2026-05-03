@@ -144,9 +144,12 @@ fn collect_entries(path: String, state: &State) Result(List(Entry), FsError) {
     }
 
     const err = it.err()
-    if err.has_value {
-        free_entries(&entries)
-        return Err(err.value)
+    err match {
+        Some(e) => {
+            free_entries(&entries)
+            return Err(e)
+        },
+        None => {}
     }
 
     entries.sort(entry_cmp)

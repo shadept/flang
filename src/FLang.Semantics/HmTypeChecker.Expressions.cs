@@ -1123,7 +1123,16 @@ public partial class HmTypeChecker
                 var isGeneric = enumNominal.TypeArguments.Any(a => _ctx.Engine.Resolve(a) is TypeVar);
                 Type? variantType;
                 if (isGeneric)
-                    variantType = TryResolveVariantConstruction(lookupName, positionalTypes, call.Span);
+                {
+                    // Generic-enum qualified construction `EnumName.Variant(args)`:
+                    // try the qualified path first so the variant is taken from THIS
+                    // specific enum (not the first scope-bound `Variant` with that name).
+                    // Critical when multiple enums in scope share variant names — e.g.
+                    // user-defined `Option` collides with stdlib `Option.Some`.
+                    variantType = TryResolveGenericQualifiedVariant(enumNominal, lookupName, positionalTypes, call.Span);
+                    if (variantType == null)
+                        variantType = TryResolveVariantConstruction(lookupName, positionalTypes, call.Span);
+                }
                 else
                     variantType = TryResolveQualifiedVariant(enumNominal, lookupName, positionalTypes, call.Span);
                 if (variantType != null) return variantType;
@@ -1471,6 +1480,72 @@ public partial class HmTypeChecker
     /// Uses the enum type's FieldsOrVariants directly to avoid name collisions with
     /// variants of other enums in scope.
     /// </summary>
+    /// <summary>
+    /// Resolve `EnumName.Variant(args)` for a generic enum directly from the
+    /// registered template — bypassing scope lookup. Each call mints fresh
+    /// TypeVars for the enum's type parameters, substitutes them into the
+    /// chosen variant's payload type, then unifies with the call args.
+    /// Returns the resulting `EnumName(freshArgs...)`.
+    ///
+    /// Needed because scope-based variant lookup picks the first `Variant`
+    /// with a matching name, which collides when two generic enums share
+    /// variant names (e.g. user-defined `Option` and stdlib `Option`).
+    /// </summary>
+    private Type? TryResolveGenericQualifiedVariant(NominalType enumType, string variantName, Type[] argTypes, SourceSpan span)
+    {
+        var template = LookupNominalType(enumType.Name) ?? enumType;
+        if (template.Kind != NominalKind.Enum) return null;
+
+        var variant = template.FieldsOrVariants.FirstOrDefault(f => f.Name == variantName);
+        if (variant == default) return null;
+
+        // Fresh TypeVars for each generic parameter of the enum.
+        var freshArgs = new Type[template.TypeArguments.Count];
+        for (int i = 0; i < freshArgs.Length; i++)
+            freshArgs[i] = _ctx.Engine.FreshVar();
+
+        var payloadType = template.TypeArguments.Count > 0
+            ? SubstituteTypeArgs(variant.Type, template.TypeArguments, freshArgs)
+            : variant.Type;
+
+        var resultEnum = new NominalType(template.Name, NominalKind.Enum,
+            freshArgs, template.FieldsOrVariants, template.IsSimd, template.IsForeign);
+
+        // Payload-less
+        if (payloadType.Equals(WellKnown.Void))
+        {
+            if (argTypes.Length != 0) return null;
+            return resultEnum;
+        }
+
+        // Single-payload
+        if (argTypes.Length == 1
+            && !(payloadType is NominalType { Kind: NominalKind.Tuple } tupleSingle && tupleSingle.Name.StartsWith("__tuple_")))
+        {
+            if (_ctx.Engine.TryUnify(argTypes[0], payloadType) == null)
+                return null;
+            _ctx.Engine.Unify(argTypes[0], payloadType, span);
+            return resultEnum;
+        }
+
+        // Multi-payload (synthetic tuple)
+        if (payloadType is NominalType { Kind: NominalKind.Tuple } tupleType)
+        {
+            if (tupleType.FieldsOrVariants.Count != argTypes.Length)
+                return null;
+            for (int i = 0; i < argTypes.Length; i++)
+            {
+                if (_ctx.Engine.TryUnify(argTypes[i], tupleType.FieldsOrVariants[i].Type) == null)
+                    return null;
+            }
+            for (int i = 0; i < argTypes.Length; i++)
+                _ctx.Engine.Unify(argTypes[i], tupleType.FieldsOrVariants[i].Type, span);
+            return resultEnum;
+        }
+
+        return null;
+    }
+
     private Type? TryResolveQualifiedVariant(NominalType enumType, string variantName, Type[] argTypes, SourceSpan span)
     {
         // Look up the registered enum (may have more complete field info)
@@ -2766,7 +2841,7 @@ public partial class HmTypeChecker
         var leftType = InferExpression(coal.Left);
         var resolved = _ctx.Engine.Resolve(leftType);
 
-        // Left must be Option[T]
+        // Left must be Option(T)
         if (resolved is NominalType { Name: WellKnown.Option } optType
             && optType.TypeArguments.Count > 0)
         {
@@ -2774,15 +2849,15 @@ public partial class HmTypeChecker
             var rightType = InferExpression(coal.Right);
             var resolvedRight = _ctx.Engine.Resolve(rightType);
 
-            // Option[T] ?? Option[T] -> Option[T]
+            // Option(T) ?? Option(T) -> Option(T)
             if (resolvedRight is NominalType { Name: WellKnown.Option } rightOpt
                 && rightOpt.TypeArguments.Count > 0)
             {
                 _ctx.Engine.Unify(innerType, rightOpt.TypeArguments[0], coal.Right.Span);
-                return resolved; // return Option[T]
+                return resolved; // return Option(T)
             }
 
-            // Option[T] ?? T -> T
+            // Option(T) ?? T -> T
             _ctx.Engine.Unify(rightType, innerType, coal.Right.Span);
             return innerType;
         }

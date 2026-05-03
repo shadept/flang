@@ -74,8 +74,10 @@ pub fn get(record: &CsvRecord, index: usize) String? {
 }
 
 pub fn get(record: &CsvRecord, name: String) String? {
-    if record.headers.is_none() { return null }
-    const hdrs = record.headers.value
+    const hdrs = record.headers match {
+        Some(h) => h,
+        None => return null
+    }
     for i in 0..hdrs.len {
         if hdrs.as_slice()[i] == name {
             return record.get(i)
@@ -87,11 +89,6 @@ pub fn get(record: &CsvRecord, name: String) String? {
 pub fn field_count(record: &CsvRecord) usize {
     return record.fields.len
 }
-
-// =============================================================================
-// Internal helpers
-// =============================================================================
-
 
 // =============================================================================
 // SIMD classifier — shared core for delimiter detection
@@ -1001,7 +998,7 @@ test "parse simple CSV" {
     reader.parse_all()
     assert_eq(reader.row_count(), 1usize, "1 row")
     const rows = reader.get_rows()
-    assert_eq(rows.as_slice()[0].get(0usize).value, "1", "field 0")
+    assert_eq(rows.as_slice()[0].get(0usize).unwrap(), "1", "field 0")
     reader.deinit()
 }
 
@@ -1022,9 +1019,9 @@ test "get by index" {
     csv_reader_init(&reader, mr.reader())
     reader.parse_all()
     const rows = reader.get_rows()
-    assert_eq(rows.as_slice()[0].get(0usize).value, "1", "index 0")
-    assert_eq(rows.as_slice()[0].get(1usize).value, "2", "index 1")
-    assert_eq(rows.as_slice()[0].get(2usize).value, "3", "index 2")
+    assert_eq(rows.as_slice()[0].get(0usize).unwrap(), "1", "index 0")
+    assert_eq(rows.as_slice()[0].get(1usize).unwrap(), "2", "index 1")
+    assert_eq(rows.as_slice()[0].get(2usize).unwrap(), "3", "index 2")
     assert_true(rows.as_slice()[0].get(3usize).is_none(), "index 3 out of bounds")
     reader.deinit()
 }

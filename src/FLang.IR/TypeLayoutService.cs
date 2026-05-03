@@ -157,7 +157,7 @@ public class TypeLayoutService(ITypeResolver engine, INominalTypeRegistry nomina
         if (_cache.TryGetValue(cacheKey, out var cached))
             return cached;
 
-        // Niche optimization: Option[&T] -> IrPointer(T, IsNullable: true)
+        // Niche optimization: Option(&T) -> IrPointer(T, IsNullable: true)
         // Only applies when the type argument is a reference/pointer type.
         if (nt.Name == "core.option.Option" && nt.TypeArguments.Count == 1)
         {

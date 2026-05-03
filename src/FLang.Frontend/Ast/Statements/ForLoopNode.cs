@@ -23,7 +23,7 @@ public class ForLoopNode : StatementNode
     /// <summary>Semantic: The element type returned by next() method.</summary>
     public TypeBase? ElementType { get; set; }
 
-    /// <summary>Semantic: The Option[T] type wrapping next() result.</summary>
+    /// <summary>Semantic: The Option(T) type wrapping next() result.</summary>
     public StructType? NextResultOptionType { get; set; }
 
     /// <summary>Semantic (HM pipeline): Resolved iter() function declaration.</summary>

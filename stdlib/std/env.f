@@ -21,10 +21,12 @@ pub fn args_count() usize {
 // Returns the command-line argument at the given index, or null if out of bounds.
 // Index 0 is the program name.
 pub fn arg(index: usize) String? {
-    const ptr = __flang_get_arg(index as i32)
-    if ptr.is_none() { return null }
-    const len = strlen(ptr.value)
-    return slice_from_raw_parts(ptr.value, len) as String
+    const p = __flang_get_arg(index as i32) match {
+        Some(p) => p,
+        None => return null
+    }
+    const len = strlen(p)
+    return slice_from_raw_parts(p, len) as String
 }
 
 // Returns all command-line arguments as a List(String).
@@ -33,9 +35,9 @@ pub fn get_args() List(String) {
     const count = args_count()
     let result: List(String) = list(count)
     for i in 0..count {
-        const a = arg(i)
-        if a.is_some() {
-            result.push(a.value)
+        arg(i) match {
+            Some(a) => result.push(a),
+            None => {}
         }
     }
     return result
@@ -44,10 +46,12 @@ pub fn get_args() List(String) {
 // Returns the value of the environment variable with the given key,
 // or null if the variable is not set.
 pub fn env(key: String) String? {
-    const ptr = __flang_getenv(key.ptr)
-    if ptr.is_none() { return null }
-    const len = strlen(ptr.value)
-    return slice_from_raw_parts(ptr.value, len) as String
+    const p = __flang_getenv(key.ptr) match {
+        Some(p) => p,
+        None => return null
+    }
+    const len = strlen(p)
+    return slice_from_raw_parts(p, len) as String
 }
 
 // =============================================================================
@@ -258,7 +262,7 @@ test "args_count returns at least 1" {
 test "arg 0 is program name" {
     const a = arg(0)
     assert_true(a.is_some(), "arg 0 should exist")
-    assert_true(a.value.len > 0, "program name should be non-empty")
+    assert_true(a.unwrap().len > 0, "program name should be non-empty")
 }
 
 test "arg out of bounds returns null" {
@@ -278,7 +282,7 @@ test "get_args returns all args" {
 test "env existing env var" {
     const path = env("PATH")
     assert_true(path.is_some(), "PATH should be set")
-    assert_true(path.value.len > 0, "PATH should be non-empty")
+    assert_true(path.unwrap().len > 0, "PATH should be non-empty")
 }
 
 test "env missing env var returns null" {
@@ -288,19 +292,19 @@ test "env missing env var returns null" {
 
 fn expect_opt(r: OptResult?, expected: u8, msg: String) {
     assert_true(r.is_some(), msg)
-    const ch = r.value match { Opt(c) => c, _ => 0 }
+    const ch = r.unwrap() match { Opt(c) => c, _ => 0 }
     assert_eq(ch, expected, msg)
 }
 
 fn expect_optarg(r: OptResult?, expected_ch: u8, expected_val: String, msg: String) {
     assert_true(r.is_some(), msg)
-    const ch = r.value match { OptArg(c, _) => c, _ => 0 }
+    const ch = r.unwrap() match { OptArg(c, _) => c, _ => 0 }
     assert_eq(ch, expected_ch, msg)
 }
 
 fn expect_nonopt(r: OptResult?, expected: String, msg: String) {
     assert_true(r.is_some(), msg)
-    const val = r.value match { NonOpt(s) => s, _ => "" }
+    const val = r.unwrap() match { NonOpt(s) => s, _ => "" }
     assert_eq(val, expected, msg)
 }
 

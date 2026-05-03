@@ -2,6 +2,7 @@
 //! EXIT: 0
 
 import std.io.reader
+import std.option
 
 type Source = struct {
     data: u8[],
@@ -31,12 +32,12 @@ pub fn main() i32 {
     let br = buffered_reader(src.reader(), storage)
 
     let b0 = br.read_byte()
-    if (b0.has_value == false) { return 1 }
-    if (b0.value != 10) { return 2 }
+    let b0v = b0 match { Some(v) => v, None => return 1 }
+    if (b0v != 10) { return 2 }
 
     let b1 = br.read_byte()
-    if (b1.has_value == false) { return 3 }
-    if (b1.value != 20) { return 4 }
+    let b1v = b1 match { Some(v) => v, None => return 3 }
+    if (b1v != 20) { return 4 }
 
     let dst: [u8; 3]
     let n = br.read(dst)
@@ -46,7 +47,7 @@ pub fn main() i32 {
     if (dst[2] != 50) { return 8 }
 
     let eof = br.read_byte()
-    if (eof.has_value == true) { return 9 }
+    if (eof.is_some()) { return 9 }
 
     return 0
 }

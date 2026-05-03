@@ -2,6 +2,7 @@
 //! EXIT: 0
 
 import std.enum
+import std.option
 
 type Color = enum {
     Red
@@ -19,13 +20,13 @@ pub fn main() i32 {
 
     // from_string
     let r = from_string("Red")
-    if r.has_value == false { return 4 }
+    if r.is_none() { return 4 }
 
     let g = from_string("Green")
-    if g.has_value == false { return 5 }
+    if g.is_none() { return 5 }
 
     let bad = from_string("Yellow")
-    if bad.has_value == true { return 6 }
+    if bad.is_some() { return 6 }
 
     return 0
 }

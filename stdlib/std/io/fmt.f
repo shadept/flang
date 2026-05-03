@@ -31,8 +31,8 @@ pub fn println(value: char) i32 {
 }
 
 pub fn println(value: Option($T)) i32 {
-    if value.has_value {
-        return println(value.value)
+    return value match {
+        Some(v) => println(v),
+        None => println("null")
     }
-    return println("null")
 }

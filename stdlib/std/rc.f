@@ -38,21 +38,21 @@ pub fn rc_alloc(allocator: &Allocator? = null) Rc($T) {
 
 // Increment the reference count and return a new handle to the same value.
 pub fn clone(self: &Rc($T)) Rc(T) {
-    if self.__inner.is_none() {
-        panic("Rc.clone: use after deinit")
+    const inner = self.__inner match {
+        Some(p) => p,
+        None => panic("Rc.clone: use after deinit")
     }
-    self.__inner.value.ref_count = self.__inner.value.ref_count + 1
+    inner.ref_count = inner.ref_count + 1
     return .{ __inner = self.__inner, __allocator = self.__allocator }
 }
 
 // Decrement the reference count. Frees the inner value when it reaches zero.
 // Calls T.deinit() before freeing (statically dispatched via monomorphization).
 pub fn deinit(self: &Rc($T)) {
-    if self.__inner.is_none() {
-        return
+    let inner = self.__inner match {
+        Some(p) => p,
+        None => return
     }
-
-    let inner = self.__inner.value
     inner.ref_count = inner.ref_count - 1
 
     if inner.ref_count == 0 {
@@ -66,19 +66,19 @@ pub fn deinit(self: &Rc($T)) {
 
 // Transparent access to the inner value via field syntax (e.g., rc.field).
 pub fn op_deref(self: &Rc($T)) &T {
-    if self.__inner.is_none() {
-        panic("Rc.op_deref: use after deinit")
+    const inner = self.__inner match {
+        Some(p) => p,
+        None => panic("Rc.op_deref: use after deinit")
     }
-    let inner = self.__inner.value
     return (inner as &u8 + size_of(usize)) as &T
 }
 
 // Return the current reference count. Returns 0 if deinit'd.
 pub fn ref_count(self: &Rc($T)) usize {
-    if self.__inner.is_none() {
-        return 0
+    return self.__inner match {
+        Some(p) => p.ref_count,
+        None => 0
     }
-    return self.__inner.value.ref_count
 }
 
 // Return true if this Rc has been deinit'd.
@@ -212,20 +212,20 @@ pub fn arc_alloc(allocator: &Allocator? = null) Arc($T) {
 
 // Atomically increment the reference count and return a new handle.
 pub fn clone(self: &Arc($T)) Arc(T) {
-    if self.__inner.is_none() {
-        panic("Arc.clone: use after deinit")
+    const inner = self.__inner match {
+        Some(p) => p,
+        None => panic("Arc.clone: use after deinit")
     }
-    __flang_atomic_add(&self.__inner.value.ref_count, 1usize)
+    __flang_atomic_add(&inner.ref_count, 1usize)
     return .{ __inner = self.__inner, __allocator = self.__allocator }
 }
 
 // Atomically decrement the reference count. Frees when it reaches zero.
 pub fn deinit(self: &Arc($T)) {
-    if self.__inner.is_none() {
-        return
+    let inner = self.__inner match {
+        Some(p) => p,
+        None => return
     }
-
-    let inner = self.__inner.value
     let old = __flang_atomic_sub(&inner.ref_count, 1usize)
 
     if old == 1 {
@@ -239,19 +239,19 @@ pub fn deinit(self: &Arc($T)) {
 
 // Transparent access to the inner value via field syntax.
 pub fn op_deref(self: &Arc($T)) &T {
-    if self.__inner.is_none() {
-        panic("Arc.op_deref: use after deinit")
+    const inner = self.__inner match {
+        Some(p) => p,
+        None => panic("Arc.op_deref: use after deinit")
     }
-    let inner = self.__inner.value
     return (inner as &u8 + size_of(usize)) as &T
 }
 
 // Return the current reference count (atomic load). Returns 0 if deinit'd.
 pub fn ref_count(self: &Arc($T)) usize {
-    if self.__inner.is_none() {
-        return 0
+    return self.__inner match {
+        Some(p) => __flang_atomic_load(&p.ref_count),
+        None => 0
     }
-    return __flang_atomic_load(&self.__inner.value.ref_count)
 }
 
 // Return true if this Arc has been deinit'd.

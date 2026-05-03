@@ -44,11 +44,10 @@ fn apply_query(root: &JsonValue, query: String) &JsonValue? {
         const key = query[segment_start..i]
         current.* match {
             Object(obj) => {
-                const next = obj.json_get_ref(key)
-                if next.is_none() {
-                    return null
+                current = obj.json_get_ref(key) match {
+                    Some(n) => n,
+                    None => return null
                 }
-                current = next.value
             }
             else => {
                 return null
@@ -73,7 +72,7 @@ fn print_selected(root: &JsonValue, query: String) {
         return
     }
 
-    stringify_pretty(selected.value, stdout.writer(), 2)
+    stringify_pretty(selected.unwrap(), stdout.writer(), 2)
     println("")
 }
 
@@ -88,10 +87,10 @@ pub fn main() i32 {
     let query = ""
 
     if argc == 2 {
-        query = arg(1).value
+        query = arg(1).unwrap()
     } else {
-        file_path = arg(1).value
-        query = arg(2).value
+        file_path = arg(1).unwrap()
+        query = arg(2).unwrap()
     }
 
     if file_path.len == 0 {

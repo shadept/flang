@@ -24,9 +24,11 @@ fn run_repl() {
     defer rl.deinit()
 
     loop {
-        const line = rl.read_line()
-        if line.is_none() { break }
-        eval_line(line.value)
+        const l = rl.read_line() match {
+            Some(v) => v,
+            None => break
+        }
+        eval_line(l)
     }
 }
 
@@ -38,9 +40,9 @@ fn run_args() {
     const count = args_count()
     for i in 1..count {
         if i > 1 { sb.append(" ") }
-        const a = arg(i)
-        if a.is_some() {
-            sb.append(a.value)
+        arg(i) match {
+            Some(s) => sb.append(s),
+            None => {}
         }
     }
 

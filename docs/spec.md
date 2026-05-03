@@ -157,24 +157,29 @@ Conversions are always explicit — no implicit coercions between string types.
 
 ```
 pub type Option = enum(T) {
-    Some(T),
     None,
+    Some(T),
 }
 ```
 
 - `T?` is sugar for `Option(T)`.
-- `null` is sugar for `Option.None`. The inner `T` is filled by inference from context. With no constraint, `null` is an error (E2095 — "type of `null` cannot be inferred; add a type annotation").
-- `null` is **not** a pointer value. `&T` is non-null by type; `let p: &i32 = null` errors with E2096 ("`null` is `Option.None`; use `&T?` for a nullable reference").
+- `null` is sugar for `Option.None`. The inner `T` is filled by inference from context; with no constraint the compiler reports a type-mismatch error.
+- `null` is **not** a pointer value. `&T` is non-null by type; `let p: &i32 = null` errors. Use `&T?` for a nullable reference.
 - `&T?` is `Option(&T)`. The niche optimization (a 0-pointer encodes `None`) is unchanged — same wire format.
 - Variant constructors: `Some(v)` and `None` work as canonical constructors.
-- Methods: `is_some()`, `is_none()`, `unwrap_or(fallback)`, `expect(msg)`, `map(fn(T) U)`.
+- Methods: `is_some()`, `is_none()`, `unwrap()`, `unwrap_or(fallback)`, `expect(msg)`, `map(fn(T) U)`.
+- Pattern-match with `match opt { Some(v) => …, None => … }`. The compiler knows about Option's representation and lowers Some/None match arms through both the niche-pointer and tagged-enum forms.
+
+**Variant order matters:** `None` is declared first so it gets discriminant tag `0`. Struct fields of type `Option(T)` and zero-initialized memory therefore default to `None`, which is what every existing call site expects.
+
+The legacy field-access shims (`opt.has_value` / `opt.value`) have been removed; access the payload through `match`, `is_some()` / `is_none()`, `unwrap()` / `unwrap_or(...)`, or `?.`.
 
 **Layout:**
 
 | Inner type | Representation | Rationale |
 |---|---|---|
 | `&T` (reference) | `IrPointer(T, IsNullable: true)` — a nullable pointer | Niche: `None` encoded as 0 pointer. Zero overhead vs. raw `&T`. |
-| Anything else | Tagged enum with `Some` and `None` variants | Generic enum layout. |
+| Anything else | Tagged enum with `None` (tag `0`) and `Some(T)` variants | Generic enum layout. |
 
 **Planned niche for bare enums (not yet implemented):** when `T` is a payload-less enum, shifting discriminants to start at 1 lets `Option(E)` encode `None` as tag 0 in a single-word representation — matching the nullable-pointer trick. This would change discriminant values, which is why FFI code must never hard-code them (see §2.5).
 

@@ -16,16 +16,18 @@ fn count(r: Reader, lines: &usize, words: &usize, bytes_count: &usize) {
     let in_word = false
 
     loop {
-        let c = br.read_byte()
-        if c.is_none() { break }
+        let b = br.read_byte() match {
+            Some(v) => v,
+            None => break
+        }
 
         bytes_count.* = bytes_count.* + 1
 
-        if c.value == '\n' {
+        if b == '\n' {
             lines.* = lines.* + 1
         }
 
-        if is_whitespace(c.value) {
+        if is_whitespace(b) {
             in_word = false
         } else {
             if !in_word {

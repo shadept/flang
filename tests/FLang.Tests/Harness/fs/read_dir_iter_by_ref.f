@@ -22,7 +22,7 @@ pub fn main() i32 {
     if it.done { println("done=true") } else { println("FAIL: done=false") }
 
     const e = it.err()
-    if e.has_value { println("FAIL: err=yes") } else { println("err=no") }
+    if e.is_some() { println("FAIL: err=yes") } else { println("err=no") }
 
     return 0
 }

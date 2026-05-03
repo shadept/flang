@@ -277,9 +277,9 @@ pub fn next(self: &WalkIter) WalkEntry? {
         const top: &WalkFrame = &self.stack[self.stack.len - 1]
 
         const entry_opt = top.dir.next()
-        if entry_opt.has_value == false {
+        if entry_opt.is_none() {
             // DirIter exhausted (or errored). Capture its error if any.
-            if top.dir.last_error.has_value and self.last_error.has_value == false {
+            if top.dir.last_error.is_some() and self.last_error.is_none() {
                 self.last_error = top.dir.last_error
             }
             // Restore path_buf to this frame's prefix, then pop.
@@ -288,8 +288,7 @@ pub fn next(self: &WalkIter) WalkEntry? {
             const _popped = self.stack.pop()
             continue
         }
-
-        const entry = entry_opt.value
+        const entry = entry_opt.unwrap()
 
         // Reset builder to this frame's base, then append "/<name>".
         self.path_buf.len = top.path_len_before
@@ -318,7 +317,7 @@ pub fn next(self: &WalkIter) WalkEntry? {
                     dir = child_r.unwrap(),
                     path_len_before = self.path_buf.len,
                 })
-            } else if self.last_error.has_value == false {
+            } else if self.last_error.is_none() {
                 self.last_error = child_r.unwrap_err()
             }
         }
@@ -414,12 +413,12 @@ pub fn next(self: &GlobIter) String? {
     if self.done { return null }
     const pat_full = self.pattern.as_view()
     loop {
-        const entry_opt = self.walk.next()
-        if entry_opt.has_value == false {
+        const opt = self.walk.next()
+        if opt.is_none() {
             self.done = true
             return null
         }
-        const entry = entry_opt.value
+        const entry = opt.unwrap()
         if match_glob(pat_full, entry.path) {
             return entry.path
         }

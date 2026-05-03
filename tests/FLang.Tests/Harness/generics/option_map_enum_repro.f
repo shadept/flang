@@ -22,8 +22,8 @@ fn extract(v: MyVal) i32 {
 pub fn main() i32 {
     const opt: MyVal? = MyVal.Num(2.0)
     const mapped = opt.map(extract)
-    if mapped.has_value {
-        println(mapped.value)
+    if mapped.is_some() {
+        println(mapped.unwrap())
     }
     return 0
 }

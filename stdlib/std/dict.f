@@ -222,7 +222,7 @@ pub fn get(self: Dict($K, $V), key: K) V? {
     if value_ref.is_none() {
         return null
     }
-    return value_ref.value.*
+    return value_ref.unwrap().*
 }
 
 // Get a reference to the value associated with a key, or null if not found.
@@ -259,7 +259,7 @@ pub fn get(self: Dict(OwnedString, $V), key: String) V? {
     if value_ref.is_none() {
         return null
     }
-    return value_ref.value.*
+    return value_ref.unwrap().*
 }
 
 pub fn get_ref(self: Dict(OwnedString, $V), key: String) &V? {

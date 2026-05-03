@@ -83,7 +83,7 @@ fn reserve(sb: &StringBuilder, additional: usize) {
         panic("StringBuilder.reserve: realloc failed")
     }
 
-    sb.ptr = resized.value.ptr
+    sb.ptr = resized.unwrap().ptr
     sb.cap = new_cap
 }
 
