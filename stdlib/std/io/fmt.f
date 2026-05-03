@@ -32,7 +32,7 @@ pub fn println(value: char) i32 {
 
 pub fn println(value: Option($T)) i32 {
     return value match {
-        Some(v) => println(v),
-        None => println("null")
+        Some(v) => { println(v) }
+        None => { println("null") }
     }
 }

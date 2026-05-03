@@ -77,20 +77,11 @@ pub type GlobalAllocatorState = struct {
 fn global_alloc(impl: &u8, size: usize, alignment: usize) u8[]? {
     // malloc typically returns suitably aligned memory for any type.
     // For now we ignore alignment and rely on malloc's default alignment.
-    const ptr = malloc(size)
-    if ptr.is_none() {
-        return null
-    }
-    return slice_from_raw_parts(ptr.unwrap(), size)
+    return slice_from_raw_parts(malloc(size)?, size)
 }
 
 fn global_realloc(impl: &u8, memory: u8[], new_size: usize) u8[]? {
-    const ptr = realloc(memory.ptr, new_size)
-    if ptr.is_none() {
-        return null
-    }
-
-    return slice_from_raw_parts(ptr.unwrap(), new_size)
+    return slice_from_raw_parts(realloc(memory.ptr, new_size)?, new_size)
 }
 
 fn global_dealloc(impl: &u8, memory: u8[]) {
@@ -333,14 +324,11 @@ fn fixed_realloc(impl: &u8, memory: u8[], new_size: usize) u8[]? {
     }
 
     // Cannot extend in place - allocate new and copy
-    let new_mem = fixed_alloc(impl, new_size, 1)
-    if new_mem.is_none() {
-        return null
-    }
+    let new_mem = fixed_alloc(impl, new_size, 1)?
 
     // Copy old data
     let copy_size = if memory.len < new_size { memory.len } else { new_size }
-    memcpy(new_mem.unwrap().ptr, memory.ptr, copy_size)
+    memcpy(new_mem.ptr, memory.ptr, copy_size)
     return new_mem
 }
 
@@ -405,12 +393,8 @@ fn arena_new_page(state: &ArenaAllocatorState, min_size: usize) &ArenaPage? {
     const needed = min_size + header_size
     const total = align_up(needed, state.page_size)
 
-    const raw = state.backing.alloc(total, 8)
-    if raw.is_none() {
-        return null
-    }
-
-    const page = raw.unwrap().ptr as &ArenaPage
+    const raw = state.backing.alloc(total, 8)?
+    const page = raw.ptr as &ArenaPage
     page.next = null
     page.size = total - header_size
     page.offset = 0

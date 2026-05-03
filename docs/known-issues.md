@@ -237,6 +237,7 @@ Non-pub helper functions using `let buf: [u8; 1] = [0; 1]` followed by vtable di
 
 ---
 
+
 ### ~~`defer` in a Nested Block Escapes Its C Scope~~
 
 **Status:** Fixed

@@ -70,7 +70,7 @@ fn ends_with_sep(s: String) bool {
 // inside std.io.fs.walk_dir.
 fn ensure_nul_term(sb: &StringBuilder) {
     sb.ensure_capacity(sb.len + 1)
-    const term: &u8 = sb.ptr + sb.len
+    const term = sb.ptr + sb.len
     term.* = 0
 }
 
@@ -92,7 +92,7 @@ fn append_human_size(sb: &StringBuilder, n: u64) {
         return
     }
     let value = n as f64 / 1024.0
-    let unit_idx: usize = 0
+    let unit_idx = 0u8
     while value >= 1024.0 and unit_idx < 5 {
         value = value / 1024.0
         unit_idx = unit_idx + 1
@@ -118,23 +118,22 @@ fn free_entries(entries: &List(Entry)) {
 // -----------------------------------------------------------------------------
 
 fn collect_entries(path: String, state: &State) Result(List(Entry), FsError) {
-    const it_r = read_dir(path)
-    if it_r.is_err() {
-        return Err(it_r.unwrap_err())
-    }
-
-    let it = it_r.unwrap()
+    let it = read_dir(path)?
     defer it.deinit()
 
     let entries: List(Entry) = list(16)
     for e in it {
-        if !state.show_hidden and e.name.len > 0 and e.name[0] == '.' { continue }
+        if !state.show_hidden and e.name.len > 0 and e.name[0] == '.' {
+            continue
+        }
 
         if state.ignore_pattern.len > 0 and match_glob(state.ignore_pattern, e.name) {
             continue
         }
 
-        if state.dirs_only and e.kind != FileKind.Dir { continue }
+        if state.dirs_only and e.kind != FileKind.Dir {
+            continue
+        }
 
         // `e.name` is a view into the iterator's internal buffer — invalidated
         // on the next next() call, so take an owning copy.
@@ -165,9 +164,11 @@ fn render_line(prefix: String, is_last: bool, path: String, entry: &Entry, state
 
     sb.append(prefix)
     if state.ascii {
-        if is_last { sb.append("`-- ") } else { sb.append("|-- ") }
+        if is_last { sb.append("`-- ") }
+        else { sb.append("|-- ") }
     } else {
-        if is_last { sb.append("└── ") } else { sb.append("├── ") }
+        if is_last { sb.append("└── ") }
+        else { sb.append("├── ") }
     }
 
     if state.full_path {
@@ -312,7 +313,7 @@ pub fn main() i32 {
     // that aren't advertised in the usage text. Users who type `-?`/`-A`/`-N`
     // still work — harmless, and conventional in many CLIs.
     const opts_fmt = "a(all)d(dirs-only)f(full-path)F(classify)s(size)h(human)I(ignore):L(level):?(help)A(ascii)N(noreport)"
-    let opts = getopts(opts_fmt, argv.as_slice()[1..])
+    let opts = getopts(opts_fmt, argv[1..])
 
     for r in opts {
         r match {

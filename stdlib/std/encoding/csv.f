@@ -70,16 +70,13 @@ pub type CsvRecord = struct {
 
 pub fn get(record: &CsvRecord, index: usize) String? {
     if index >= record.fields.len { return null }
-    return record.fields.as_slice()[index]
+    return record.fields[index]
 }
 
 pub fn get(record: &CsvRecord, name: String) String? {
-    const hdrs = record.headers match {
-        Some(h) => h,
-        None => return null
-    }
+    const hdrs = record.headers?
     for i in 0..hdrs.len {
-        if hdrs.as_slice()[i] == name {
+        if hdrs[i] == name {
             return record.get(i)
         }
     }
@@ -361,7 +358,7 @@ fn get_decoder_field(self: &CsvDecoder, index: usize) String {
     if index >= self.spans.len {
         return ""
     }
-    const span = self.spans.as_slice()[index]
+    const span = self.spans[index]
     if span.end <= span.start { return "" }
     const len = span.end - span.start
     const ptr = self.field_buf.ptr + span.start
@@ -384,7 +381,7 @@ fn ensure_decoder_headers(self: &CsvDecoder) {
         const buf_ptr = self.header_buf.ptr
         let offset: usize = 0
         for i in 0..self.spans.len {
-            const span = self.spans.as_slice()[i]
+            const span = self.spans[i]
             const len = span.end - span.start
             const view = .{ ptr = buf_ptr + offset, len = len } as String
             self.headers.push(view)
@@ -468,7 +465,7 @@ pub fn end_map(self: &CsvDecoder) bool {
 
 pub fn next_key(self: &CsvDecoder, sb: &StringBuilder) bool {
     if self.current_field >= self.headers.len { return false }
-    sb.append(self.headers.as_slice()[self.current_field])
+    sb.append(self.headers[self.current_field])
     return true
 }
 
@@ -610,12 +607,12 @@ pub fn end_map(self: &CsvEncoder) usize {
         self.header_written = true
         for i in 0..self.current_keys.len {
             if i > 0 { self.w.write_byte(self.options.delimiter) }
-            self.w.write_str(self.current_keys.as_slice()[i].as_view())
+            self.w.write_str(self.current_keys[i].as_view())
         }
         self.w.write_byte(0x0A)
         for i in 0..self.first_row_values.len {
             if i > 0 { self.w.write_byte(self.options.delimiter) }
-            const val = self.first_row_values.as_slice()[i].as_view()
+            const val = self.first_row_values[i].as_view()
             self.field_index = i
             self.write_csv_field(val)
         }
@@ -643,7 +640,7 @@ pub fn is_human_readable(self: &CsvEncoder) bool { return true }
 
 pub fn deinit(self: &CsvEncoder) {
     for i in 0..self.current_keys.len {
-        self.current_keys.as_slice()[i].deinit()
+        self.current_keys[i].deinit()
     }
     self.current_keys.deinit()
 }
@@ -916,7 +913,7 @@ pub fn select_rows(table: &CsvTable, start: usize, end: usize) CsvTable {
     // Share headers (String views — still valid as long as original table lives)
     let sel_headers = list(table.headers.len)
     for i in 0..table.headers.len {
-        sel_headers.push(table.headers.as_slice()[i])
+        sel_headers.push(table.headers[i])
     }
     result.headers = sel_headers
 
@@ -924,11 +921,11 @@ pub fn select_rows(table: &CsvTable, start: usize, end: usize) CsvTable {
     const actual_start = if start > actual_end { actual_end } else { start }
     let sel_rows = list(actual_end - actual_start)
     for i in actual_start..actual_end {
-        const src = table.rows.as_slice()[i]
+        const src = table.rows[i]
         let rec: CsvRecord
         let copied_fields = list(src.fields.len)
         for fi in 0..src.fields.len {
-            copied_fields.push(src.fields.as_slice()[fi])
+            copied_fields.push(src.fields[fi])
         }
         rec.fields = copied_fields
         rec.headers = &result.headers
@@ -947,7 +944,7 @@ pub fn select_columns(table: &CsvTable, names: String[]) CsvTable {
     let indices = list(names.len)
     for n in 0..names.len {
         for i in 0..table.headers.len {
-            if table.headers.as_slice()[i] == names[n] {
+            if table.headers[i] == names[n] {
                 indices.push(i)
                 break
             }
@@ -957,22 +954,22 @@ pub fn select_columns(table: &CsvTable, names: String[]) CsvTable {
     // Copy selected headers
     let col_headers = list(indices.len)
     for i in 0..indices.len {
-        const idx = indices.as_slice()[i]
-        col_headers.push(table.headers.as_slice()[idx])
+        const idx = indices[i]
+        col_headers.push(table.headers[idx])
     }
     result.headers = col_headers
 
     // Copy rows with selected columns
     let col_rows = list(table.rows.len)
     for r in 0..table.rows.len {
-        const src = table.rows.as_slice()[r]
+        const src = table.rows[r]
         let rec: CsvRecord
         rec.headers = &result.headers
         let rec_fields = list(indices.len)
         for j in 0..indices.len {
-            const idx = indices.as_slice()[j]
+            const idx = indices[j]
             if idx < src.fields.len {
-                rec_fields.push(src.fields.as_slice()[idx])
+                rec_fields.push(src.fields[idx])
             } else {
                 rec_fields.push("")
             }
@@ -998,7 +995,7 @@ test "parse simple CSV" {
     reader.parse_all()
     assert_eq(reader.row_count(), 1usize, "1 row")
     const rows = reader.get_rows()
-    assert_eq(rows.as_slice()[0].get(0usize).unwrap(), "1", "field 0")
+    assert_eq(rows[0].get(0usize).unwrap(), "1", "field 0")
     reader.deinit()
 }
 
@@ -1019,10 +1016,10 @@ test "get by index" {
     csv_reader_init(&reader, mr.reader())
     reader.parse_all()
     const rows = reader.get_rows()
-    assert_eq(rows.as_slice()[0].get(0usize).unwrap(), "1", "index 0")
-    assert_eq(rows.as_slice()[0].get(1usize).unwrap(), "2", "index 1")
-    assert_eq(rows.as_slice()[0].get(2usize).unwrap(), "3", "index 2")
-    assert_true(rows.as_slice()[0].get(3usize).is_none(), "index 3 out of bounds")
+    assert_eq(rows[0].get(0usize).unwrap(), "1", "index 0")
+    assert_eq(rows[0].get(1usize).unwrap(), "2", "index 1")
+    assert_eq(rows[0].get(2usize).unwrap(), "3", "index 2")
+    assert_true(rows[0].get(3usize).is_none(), "index 3 out of bounds")
     reader.deinit()
 }
 
@@ -1033,7 +1030,7 @@ test "CRLF line endings" {
     csv_reader_init(&reader, mr.reader())
     const hdrs = reader.get_headers()
     assert_eq(hdrs.len, 2usize, "2 headers")
-    assert_eq(hdrs.as_slice()[0], "a", "header a")
+    assert_eq(hdrs[0], "a", "header a")
     reader.deinit()
 }
 
@@ -1044,6 +1041,6 @@ test "CR only line endings" {
     csv_reader_init(&reader, mr.reader())
     const hdrs = reader.get_headers()
     assert_eq(hdrs.len, 2usize, "2 headers")
-    assert_eq(hdrs.as_slice()[0], "a", "header a")
+    assert_eq(hdrs[0], "a", "header a")
     reader.deinit()
 }

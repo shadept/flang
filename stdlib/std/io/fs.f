@@ -386,13 +386,13 @@ pub fn glob(pattern: String, allocator: &Allocator? = null) Result(GlobIter, FsE
 
     // Build a NUL-terminated root path for read_dir.
     let root_buf = string_builder(root_str.len + 1, allocator)
+    defer root_buf.deinit()
     root_buf.append(root_str)
     root_buf.ensure_capacity(root_buf.len + 1)
     const term: &u8 = root_buf.ptr + root_buf.len
     term.* = 0
 
     const w_r = walk_dir(root_buf.as_view(), allocator)
-    root_buf.deinit()
     if w_r.is_err() {
         pat_buf.deinit()
         return Err(w_r.unwrap_err())

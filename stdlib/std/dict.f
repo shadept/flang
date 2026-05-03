@@ -218,11 +218,7 @@ pub fn op_index(self: Dict($K, $V), key: K) V? {
 
 // Get the value associated with a key, or null if not found.
 pub fn get(self: Dict($K, $V), key: K) V? {
-    const value_ref = self.get_ref(key)
-    if value_ref.is_none() {
-        return null
-    }
-    return value_ref.unwrap().*
+    return (self.get_ref(key)?).*
 }
 
 // Get a reference to the value associated with a key, or null if not found.
@@ -255,11 +251,7 @@ pub fn get_ref(self: Dict($K, $V), key: K) &V? {
 }
 
 pub fn get(self: Dict(OwnedString, $V), key: String) V? {
-    const value_ref = self.get_ref(key)
-    if value_ref.is_none() {
-        return null
-    }
-    return value_ref.unwrap().*
+    return (self.get_ref(key)?).*
 }
 
 pub fn get_ref(self: Dict(OwnedString, $V), key: String) &V? {

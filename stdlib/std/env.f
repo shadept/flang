@@ -21,10 +21,7 @@ pub fn args_count() usize {
 // Returns the command-line argument at the given index, or null if out of bounds.
 // Index 0 is the program name.
 pub fn arg(index: usize) String? {
-    const p = __flang_get_arg(index as i32) match {
-        Some(p) => p,
-        None => return null
-    }
+    const p = __flang_get_arg(index as i32)?
     const len = strlen(p)
     return slice_from_raw_parts(p, len) as String
 }
@@ -46,10 +43,7 @@ pub fn get_args() List(String) {
 // Returns the value of the environment variable with the given key,
 // or null if the variable is not set.
 pub fn env(key: String) String? {
-    const p = __flang_getenv(key.ptr) match {
-        Some(p) => p,
-        None => return null
-    }
+    const p = __flang_getenv(key.ptr)?
     const len = strlen(p)
     return slice_from_raw_parts(p, len) as String
 }
