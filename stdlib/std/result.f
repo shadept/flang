@@ -13,15 +13,15 @@ pub type Result = enum(T, E) {
 // can differ, error type must match.
 pub fn op_try(self: Result($T, $E)) TryResult(T, Result($U, E)) {
     return self match {
-        Ok(v) => TryResult.Continue(v),
-        Err(e) => TryResult.Return(Err(e)),
+        Ok(v) => TryResult.Continue(v)
+        Err(e) => TryResult.Return(Err(e))
     }
 }
 
 // Check if the result is Ok
 pub fn is_ok(self: Result($T, $E)) bool {
     return self match {
-        Ok(_) => true,
+        Ok(_) => true
         Err(_) => false
     }
 }
@@ -29,31 +29,21 @@ pub fn is_ok(self: Result($T, $E)) bool {
 // Check if the result is Err
 pub fn is_err(self: Result($T, $E)) bool {
     return self match {
-        Ok(_) => false,
+        Ok(_) => false
         Err(_) => true
     }
 }
 
 pub fn except(self: Result($T, $E), msg: String) T {
     return self match {
-        Ok(value) => value,
-        Err(_) => {
-            panic(msg)
-            // unreachable but needed for type checker
-            let fake: T // zero init
-            fake
-        }
+        Ok(value) => value
+        Err(_) => panic(msg)
     }
 }
 
 pub fn expect_err(self: Result($T, $E), msg: String) E {
     return self match {
-        Ok(_) => {
-            panic(msg)
-            // unreachable but needed for type checker
-            let fake: E // zero init
-            fake
-        },
+        Ok(_) => panic(msg)
         Err(error) => error
     }
 }
@@ -61,20 +51,15 @@ pub fn expect_err(self: Result($T, $E), msg: String) E {
 // Unwrap the Ok value, panic if Err
 pub fn unwrap(self: Result($T, $E)) T {
     return self match {
-        Ok(value) => value,
-        Err(_) => {
-            panic("called unwrap on an Err value")
-            // unreachable but needed for type checker
-            let fake: T // zero init
-            fake
-        }
+        Ok(value) => value
+        Err(_) => panic("called unwrap on an Err value")
     }
 }
 
 // Unwrap the Ok value, or return a default if Err
 pub fn unwrap_or(self: Result($T, $E), default: T) T {
     return self match {
-        Ok(value) => value,
+        Ok(value) => value
         Err(_) => default
     }
 }
@@ -82,12 +67,7 @@ pub fn unwrap_or(self: Result($T, $E), default: T) T {
 // Unwrap the Err value, panic if Ok
 pub fn unwrap_err(self: Result($T, $E)) E {
     return self match {
-        Ok(_) => {
-            panic("called unwrap_err on an Ok value")
-            // unreachable but needed for type checker
-            let fake: E // zero init
-            fake
-        },
+        Ok(_) => panic("called unwrap_err on an Ok value")
         Err(error) => error
     }
 }
