@@ -1,41 +1,48 @@
 import std.test
 
 pub fn lower(c: char) char {
-    const a = 'a'
-    const A = 'A'
-    const Z = 'Z'
-    if c >= A and c <= Z {
-        c + (a - A)
-    } else {
-        c
+    return c match {
+        'A'..='Z' => c + ('a' - 'A'),
+        _         => c,
     }
 }
 
 pub fn upper(c: char) char {
-    const a = 'a'
-    const z = 'z'
-    const A = 'A'
-    if c >= a and c <= z {
-        c - (a - A)
-    } else {
-        c
+    return c match {
+        'a'..='z' => c - ('a' - 'A'),
+        _         => c,
     }
 }
 
 pub fn is_digit(c: u8) bool {
-    return c >= '0' and c <= '9'
+    return c match {
+        '0'..='9' => true,
+        _         => false,
+    }
 }
 
 pub fn is_alpha(c: u8) bool {
-    return (c >= 'A' and c <= 'Z') or (c >= 'a' and c <= 'z')
+    return c match {
+        'A'..='Z' => true,
+        'a'..='z' => true,
+        _         => false,
+    }
 }
 
 pub fn is_alnum(c: u8) bool {
-    return is_digit(c) or is_alpha(c)
+    return c match {
+        '0'..='9' => true,
+        'A'..='Z' => true,
+        'a'..='z' => true,
+        _         => false,
+    }
 }
 
 pub fn is_whitespace(c: u8) bool {
-    return c == ' ' or c == '\t' or c == '\n' or c == '\r'
+    return c match {
+        ' ' | '\t' | '\n' | '\r' => true,
+        _                        => false,
+    }
 }
 
 test "is_digit" {

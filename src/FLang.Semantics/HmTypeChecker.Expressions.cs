@@ -1772,6 +1772,13 @@ public partial class HmTypeChecker
             // Bind pattern variables
             CheckPattern(arm.Pattern, scrutineeType);
 
+            // Guard expression must be bool (RFC-010).
+            if (arm.Guard != null)
+            {
+                var guardType = InferExpression(arm.Guard);
+                _ctx.Engine.Unify(guardType, WellKnown.Bool, arm.Guard.Span);
+            }
+
             // Infer arm body and unify with result type
             var armType = InferExpression(arm.ResultExpr);
 
@@ -1798,15 +1805,16 @@ public partial class HmTypeChecker
 
         if (resolvedScrutinee is NominalType { Kind: NominalKind.Enum } enumScrutinee)
         {
-            // Check exhaustiveness only if there are variant patterns and no catch-all
-            bool hasElse = match.Arms.Any(a => a.Pattern is ElsePatternNode or VariablePatternNode or WildcardPatternNode);
+            // Check exhaustiveness only if there are variant patterns and no catch-all.
+            // Guarded arms (RFC-010) don't contribute since the guard may fail.
+            bool hasElse = match.Arms.Any(a => IsCatchAllPattern(a.Pattern) && a.Guard == null);
             if (!hasElse)
             {
                 var coveredVariants = new HashSet<string>();
                 foreach (var arm in match.Arms)
                 {
-                    if (arm.Pattern is EnumVariantPatternNode vp)
-                        coveredVariants.Add(vp.VariantName);
+                    if (arm.Guard != null) continue;
+                    CollectCoveredVariants(arm.Pattern, coveredVariants);
                 }
 
                 var allVariants = enumScrutinee.FieldsOrVariants.Select(f => f.Name).ToHashSet();
@@ -1815,7 +1823,7 @@ public partial class HmTypeChecker
                     ReportError($"Non-exhaustive match: missing variant(s) {string.Join(", ", missing.Select(m => $"`{m}`"))}", match.Span, "E2031");
             }
         }
-        else if (resolvedScrutinee is not TypeVar && match.Arms.Any(a => a.Pattern is EnumVariantPatternNode))
+        else if (resolvedScrutinee is not TypeVar && HasVariantPattern(match.Arms))
         {
             // E2030: Match variant pattern on non-enum type
             ReportError($"Cannot match on non-enum type `{resolvedScrutinee}`", match.Span, "E2030");
@@ -1852,14 +1860,69 @@ public partial class HmTypeChecker
     }
 
     /// <summary>
-    /// Check a pattern against the expected type and bind variables in scope.
+    /// True if the pattern matches every value of the scrutinee type unconditionally.
     /// </summary>
-    private void CheckPattern(PatternNode pattern, Type scrutineeType)
+    private static bool IsCatchAllPattern(PatternNode pattern)
+    {
+        return pattern switch
+        {
+            ElsePatternNode or WildcardPatternNode or VariablePatternNode => true,
+            OrPatternNode op => op.Alternatives.Any(IsCatchAllPattern),
+            _ => false,
+        };
+    }
+
+    private static bool HasVariantPattern(IEnumerable<MatchArmNode> arms)
+    {
+        foreach (var arm in arms)
+            if (PatternMentionsVariant(arm.Pattern))
+                return true;
+        return false;
+    }
+
+    private static bool PatternMentionsVariant(PatternNode pattern)
+    {
+        return pattern switch
+        {
+            EnumVariantPatternNode => true,
+            OrPatternNode op => op.Alternatives.Any(PatternMentionsVariant),
+            _ => false,
+        };
+    }
+
+    /// <summary>
+    /// Collect the set of variant names covered by a pattern (for ad-hoc
+    /// exhaustiveness check). Or-patterns contribute the union of their
+    /// alternatives' variants.
+    /// </summary>
+    private static void CollectCoveredVariants(PatternNode pattern, HashSet<string> covered)
+    {
+        switch (pattern)
+        {
+            case EnumVariantPatternNode vp:
+                covered.Add(vp.VariantName);
+                break;
+            case OrPatternNode op:
+                foreach (var alt in op.Alternatives)
+                    CollectCoveredVariants(alt, covered);
+                break;
+        }
+    }
+
+    /// <summary>
+    /// Check a pattern against the expected type and bind variables in scope.
+    /// When <paramref name="bindings"/> is non-null, names are written there
+    /// instead of the scope (used to validate or-pattern alternatives).
+    /// </summary>
+    private void CheckPattern(PatternNode pattern, Type scrutineeType, Dictionary<string, Type>? bindings = null)
     {
         switch (pattern)
         {
             case VariablePatternNode varPat:
-                _ctx.Scopes.Bind(varPat.Name, scrutineeType);
+                if (bindings != null)
+                    bindings[varPat.Name] = scrutineeType;
+                else
+                    _ctx.Scopes.Bind(varPat.Name, scrutineeType);
                 Record(varPat, scrutineeType);
                 break;
 
@@ -1869,7 +1932,7 @@ public partial class HmTypeChecker
                 break;
 
             case EnumVariantPatternNode variantPat:
-                CheckEnumVariantPattern(variantPat, scrutineeType);
+                CheckEnumVariantPattern(variantPat, scrutineeType, bindings);
                 break;
 
             case LiteralPatternNode litPat:
@@ -1882,13 +1945,280 @@ public partial class HmTypeChecker
                 Record(litPat, scrutineeType);
                 break;
 
+            case OrPatternNode orPat:
+                CheckOrPattern(orPat, scrutineeType, bindings);
+                break;
+
+            case TuplePatternNode tupPat:
+                CheckTuplePattern(tupPat, scrutineeType, bindings);
+                break;
+
+            case StructPatternNode structPat:
+                CheckStructPattern(structPat, scrutineeType, bindings);
+                break;
+
+            case RangePatternNode rangePat:
+                CheckRangePattern(rangePat, scrutineeType);
+                break;
+
             default:
                 ReportError($"Unsupported pattern kind: {pattern.GetType().Name}", pattern.Span);
                 break;
         }
     }
 
-    private void CheckEnumVariantPattern(EnumVariantPatternNode pattern, Type scrutineeType)
+    /// <summary>
+    /// Type-check a range pattern (RFC-010). Scrutinee must be a totally-ordered
+    /// scalar type (int, char, byte, but NOT float or string). Bounds must
+    /// unify with the scrutinee type and be compile-time literals.
+    /// </summary>
+    private void CheckRangePattern(RangePatternNode pattern, Type scrutineeType)
+    {
+        var resolved = _ctx.Engine.Resolve(scrutineeType);
+        while (resolved is ReferenceType refType)
+            resolved = _ctx.Engine.Resolve(refType.InnerType);
+
+        // Validate scrutinee type is range-compatible.
+        bool ok = false;
+        if (resolved is PrimitiveType prim)
+        {
+            ok = prim.Name is "i8" or "i16" or "i32" or "i64"
+                       or "u8" or "u16" or "u32" or "u64"
+                       or "usize" or "isize"
+                       or "char" or "byte";
+        }
+        if (!ok)
+        {
+            ReportError(
+                $"Range pattern not allowed on `{resolved}`; only integer, char, and byte types are supported",
+                pattern.Span, "E2108");
+            return;
+        }
+
+        if (pattern.Lo != null)
+        {
+            var loType = InferExpression(pattern.Lo);
+            _ctx.Engine.Unify(loType, scrutineeType, pattern.Lo.Span);
+        }
+        if (pattern.Hi != null)
+        {
+            var hiType = InferExpression(pattern.Hi);
+            _ctx.Engine.Unify(hiType, scrutineeType, pattern.Hi.Span);
+        }
+
+        // Empty / inverted ranges (5..3, 5..=4) are a compile error.
+        if (pattern.Lo is IntegerLiteralNode loLit && pattern.Hi is IntegerLiteralNode hiLit)
+        {
+            bool empty = pattern.IsInclusive ? loLit.Value > hiLit.Value : loLit.Value >= hiLit.Value;
+            if (empty)
+            {
+                var sep = pattern.IsInclusive ? "..=" : "..";
+                ReportError(
+                    $"Range pattern `{loLit.Value}{sep}{hiLit.Value}` is empty",
+                    pattern.Span, "E2109");
+            }
+        }
+
+        Record(pattern, scrutineeType);
+    }
+
+    /// <summary>
+    /// Type-check a struct destructuring pattern. The scrutinee must be a
+    /// struct nominal whose name matches the pattern's type name. Without
+    /// `..`, every field of the struct must be mentioned (RFC-010 / Q17).
+    /// </summary>
+    private void CheckStructPattern(StructPatternNode pattern, Type scrutineeType, Dictionary<string, Type>? bindings)
+    {
+        var resolved = _ctx.Engine.Resolve(scrutineeType);
+        while (resolved is ReferenceType refType)
+            resolved = _ctx.Engine.Resolve(refType.InnerType);
+
+        if (resolved is not NominalType { Kind: NominalKind.Struct } structType)
+        {
+            ReportError(
+                $"Struct pattern requires a struct scrutinee, found `{resolved}`",
+                pattern.Span, "E2107");
+            return;
+        }
+
+        // Compare on the simple name (strip module prefix).
+        var simple = structType.Name.Contains('.')
+            ? structType.Name[(structType.Name.LastIndexOf('.') + 1)..]
+            : structType.Name;
+        if (pattern.TypeName != simple && pattern.TypeName != structType.Name)
+        {
+            ReportError(
+                $"Struct pattern type `{pattern.TypeName}` does not match scrutinee type `{structType.Name}`",
+                pattern.Span, "E2107");
+            return;
+        }
+
+        // Resolve fields source — fall back to the registered template if
+        // this nominal instance has no fields (cross-module inference).
+        var fieldsSource = structType;
+        if (structType.FieldsOrVariants.Count == 0)
+        {
+            var template = LookupNominalType(structType.Name);
+            if (template != null)
+                fieldsSource = template;
+        }
+
+        var fieldNames = fieldsSource.FieldsOrVariants.Select(f => f.Name).ToHashSet();
+        var seenFieldNames = new HashSet<string>();
+
+        foreach (var fieldPat in pattern.Fields)
+        {
+            if (!seenFieldNames.Add(fieldPat.FieldName))
+            {
+                ReportError(
+                    $"Field `{fieldPat.FieldName}` mentioned twice in struct pattern",
+                    fieldPat.Span, "E2107");
+                continue;
+            }
+
+            var field = fieldsSource.FieldsOrVariants.FirstOrDefault(f => f.Name == fieldPat.FieldName);
+            if (field == default)
+            {
+                ReportError(
+                    $"Unknown field `{fieldPat.FieldName}` for struct `{structType.Name}`",
+                    fieldPat.Span, "E2107");
+                continue;
+            }
+
+            // Substitute generic parameters if applicable.
+            var fieldType = field.Type;
+            if (structType.TypeArguments.Count > 0)
+            {
+                var template = LookupNominalType(structType.Name);
+                if (template != null && template.TypeArguments.Count == structType.TypeArguments.Count)
+                    fieldType = SubstituteTypeArgs(fieldType, template.TypeArguments, structType.TypeArguments);
+            }
+
+            CheckPattern(fieldPat.Pattern, fieldType, bindings);
+        }
+
+        // Strict construction: without `..`, every field must be mentioned.
+        if (!pattern.HasRest)
+        {
+            var missing = fieldNames.Except(seenFieldNames).ToList();
+            if (missing.Count > 0)
+            {
+                ReportError(
+                    $"Struct pattern missing field(s) {string.Join(", ", missing.Select(m => $"`{m}`"))}; use `..` to ignore",
+                    pattern.Span, "E2107");
+            }
+        }
+
+        Record(pattern, scrutineeType);
+    }
+
+    /// <summary>
+    /// Type-check a tuple destructuring pattern. The scrutinee must be a
+    /// tuple-shaped nominal (FLang tuples desugar to anonymous structs with
+    /// `__0`, `__1`, ... fields). Element count must match.
+    /// </summary>
+    private void CheckTuplePattern(TuplePatternNode pattern, Type scrutineeType, Dictionary<string, Type>? bindings)
+    {
+        var resolved = _ctx.Engine.Resolve(scrutineeType);
+        while (resolved is ReferenceType refType)
+            resolved = _ctx.Engine.Resolve(refType.InnerType);
+
+        if (resolved is not NominalType { Kind: NominalKind.Tuple } tupleType)
+        {
+            ReportError(
+                $"Tuple pattern requires a tuple scrutinee, found `{resolved}`",
+                pattern.Span, "E2106");
+            return;
+        }
+
+        if (tupleType.FieldsOrVariants.Count != pattern.Elements.Count)
+        {
+            ReportError(
+                $"Tuple pattern has {pattern.Elements.Count} element(s), but tuple type has {tupleType.FieldsOrVariants.Count}",
+                pattern.Span, "E2032");
+            return;
+        }
+
+        for (int i = 0; i < pattern.Elements.Count; i++)
+            CheckPattern(pattern.Elements[i], tupleType.FieldsOrVariants[i].Type, bindings);
+
+        Record(pattern, scrutineeType);
+    }
+
+    /// <summary>
+    /// Check an or-pattern: every alternative must bind the same names with the
+    /// same types. Records bindings once (in scope or in <paramref name="bindings"/>).
+    ///
+    /// Phase-1 limit: alternatives that bind variables are not yet supported by
+    /// lowering — reported as E2105 until the binding-slot lowering lands.
+    /// </summary>
+    private void CheckOrPattern(OrPatternNode orPat, Type scrutineeType, Dictionary<string, Type>? bindings)
+    {
+        if (orPat.Alternatives.Count == 0)
+        {
+            ReportError("Or-pattern has no alternatives", orPat.Span);
+            return;
+        }
+
+        var first = new Dictionary<string, Type>();
+        CheckPattern(orPat.Alternatives[0], scrutineeType, first);
+
+        for (int i = 1; i < orPat.Alternatives.Count; i++)
+        {
+            var alt = new Dictionary<string, Type>();
+            CheckPattern(orPat.Alternatives[i], scrutineeType, alt);
+
+            // Same name set?
+            foreach (var name in first.Keys)
+            {
+                if (!alt.ContainsKey(name))
+                {
+                    ReportError(
+                        $"Or-pattern alternative does not bind `{name}` (bound by another alternative)",
+                        orPat.Alternatives[i].Span, "E2104");
+                }
+            }
+            foreach (var name in alt.Keys)
+            {
+                if (!first.ContainsKey(name))
+                {
+                    ReportError(
+                        $"Or-pattern alternative binds `{name}` (not bound by another alternative)",
+                        orPat.Alternatives[i].Span, "E2104");
+                }
+                else if (_ctx.Engine.TryUnify(first[name], alt[name]) == null)
+                {
+                    ReportError(
+                        $"Or-pattern alternatives bind `{name}` with different types: `{first[name]}` vs `{alt[name]}`",
+                        orPat.Alternatives[i].Span, "E2104");
+                }
+            }
+        }
+
+        // E2105: variable bindings inside or-patterns are not yet supported by lowering.
+        if (first.Count > 0)
+        {
+            ReportError(
+                "Variable bindings are not yet supported in or-patterns",
+                orPat.Span, "E2105");
+        }
+
+        // Commit bindings (so downstream typechecking still works even with the error)
+        if (bindings != null)
+        {
+            foreach (var (name, type) in first)
+                bindings[name] = type;
+        }
+        else
+        {
+            foreach (var (name, type) in first)
+                _ctx.Scopes.Bind(name, type);
+        }
+
+        Record(orPat, scrutineeType);
+    }
+
+    private void CheckEnumVariantPattern(EnumVariantPatternNode pattern, Type scrutineeType, Dictionary<string, Type>? bindings = null)
     {
         var resolved = _ctx.Engine.Resolve(scrutineeType);
 
@@ -1952,13 +2282,13 @@ public partial class HmTypeChecker
             {
                 // Multi-payload: bind each sub-pattern to tuple field
                 for (int i = 0; i < pattern.SubPatterns.Count; i++)
-                    CheckPattern(pattern.SubPatterns[i], tupleType.FieldsOrVariants[i].Type);
+                    CheckPattern(pattern.SubPatterns[i], tupleType.FieldsOrVariants[i].Type, bindings);
             }
         }
         else if (pattern.SubPatterns.Count == 1)
         {
             // Single payload: bind directly
-            CheckPattern(pattern.SubPatterns[0], variantType);
+            CheckPattern(pattern.SubPatterns[0], variantType, bindings);
         }
         else if (pattern.SubPatterns.Count > 1)
         {
@@ -2898,15 +3228,38 @@ public partial class HmTypeChecker
 
                 if (field != default)
                 {
+                    var fieldType = field.Type;
+                    if (nominal.TypeArguments.Count > 0)
+                    {
+                        var template = LookupNominalType(nominal.Name);
+                        if (template != null && template.TypeArguments.Count == nominal.TypeArguments.Count)
+                            fieldType = SubstituteTypeArgs(fieldType, template.TypeArguments, nominal.TypeArguments);
+                    }
+
+                    // RFC-010 §"`?.` lifts and flattens": if the projected
+                    // field is already Option(U), return Option(U) directly
+                    // rather than re-wrapping into Option(Option(U)).
+                    if (_ctx.Engine.Resolve(fieldType) is NominalType { Name: WellKnown.Option } innerOpt)
+                        return innerOpt;
+
                     var opt = LookupNominalType(WellKnown.Option)
                               ?? throw new InvalidOperationException(
                                   $"Well-known type `{WellKnown.Option}` not registered");
-                    return new NominalType(opt.Name, opt.Kind, [field.Type], opt.FieldsOrVariants, false);
+                    return new NominalType(opt.Name, opt.Kind, [fieldType], opt.FieldsOrVariants, false);
                 }
 
                 ReportError($"No field `{nullProp.MemberName}` on inner type", nullProp.Span);
                 return _ctx.Engine.FreshVar();
             }
+        }
+
+        // RFC-010: `?.` is only valid on Option(T). Hint users on Result(T,E).
+        if (resolved is NominalType { Name: var n } && n.EndsWith(".Result"))
+        {
+            ReportError(
+                "`?.` cannot be used on `Result(T, E)` — use `.map(...)` instead",
+                nullProp.Span, "E2110");
+            return _ctx.Engine.FreshVar();
         }
 
         ReportError("Null propagation `?.` requires Option type", nullProp.Span);

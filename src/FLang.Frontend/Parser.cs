@@ -3107,6 +3107,14 @@ public class Parser
             // Parse pattern
             var pattern = ParsePattern();
 
+            // Optional guard: `pattern if cond => expr` (RFC-010).
+            ExpressionNode? guard = null;
+            if (_currentToken.Kind == TokenKind.If)
+            {
+                Eat(TokenKind.If);
+                guard = ParseExpression();
+            }
+
             // Expect =>
             Eat(TokenKind.FatArrow);
 
@@ -3145,7 +3153,7 @@ public class Parser
             }
 
             var armSpan = SourceSpan.Combine(armStart, resultExpr.Span);
-            arms.Add(new MatchArmNode(armSpan, pattern, resultExpr));
+            arms.Add(new MatchArmNode(armSpan, pattern, resultExpr, guard));
 
             // Arms can be separated by commas (optional)
             if (_currentToken.Kind == TokenKind.Comma)
@@ -3159,13 +3167,53 @@ public class Parser
     }
 
     /// <summary>
-    /// Parses a pattern for use in match expressions (literals, wildcards, enum variants, destructuring).
+    /// Parses a pattern for use in match expressions, including or-patterns (`A | B | C`).
     /// </summary>
     /// <param name="isSubPattern">True if parsing a sub-pattern within a larger pattern.</param>
     /// <returns>A <see cref="PatternNode"/> representing the parsed pattern.</returns>
     private PatternNode ParsePattern(bool isSubPattern = false)
     {
+        var first = ParseSinglePattern(isSubPattern);
+
+        if (_currentToken.Kind != TokenKind.Pipe)
+            return first;
+
+        var alternatives = new List<PatternNode> { first };
+        while (_currentToken.Kind == TokenKind.Pipe)
+        {
+            Eat(TokenKind.Pipe);
+            alternatives.Add(ParseSinglePattern(isSubPattern));
+        }
+
+        var orSpan = SourceSpan.Combine(first.Span, alternatives[^1].Span);
+        return new OrPatternNode(orSpan, alternatives);
+    }
+
+    /// <summary>
+    /// Parses a single (non-or) pattern: literals, wildcards, enum variants, destructuring.
+    /// </summary>
+    private PatternNode ParseSinglePattern(bool isSubPattern = false)
+    {
         var start = _currentToken.Span;
+
+        // Tuple destructuring pattern: `(p1, p2, ..., pN)` (RFC-010).
+        // Single element with no trailing comma is grouping (returns the inner pattern).
+        if (_currentToken.Kind == TokenKind.OpenParenthesis)
+            return ParseTuplePattern();
+
+        // Open-bottom range pattern: `..hi` (half-open) or `..=hi` (closed).
+        if (_currentToken.Kind is TokenKind.DotDot or TokenKind.DotDotEquals)
+        {
+            bool inclusive = _currentToken.Kind == TokenKind.DotDotEquals;
+            var rangeTok = _currentToken;
+            Advance();
+            var hi = ParsePatternLiteralExpression()
+                     ?? throw new ParserException(Diagnostic.Error(
+                         $"expected literal after `{(inclusive ? "..=" : "..")}` in range pattern",
+                         _currentToken.Span, null, "E1001"));
+            var rspan = SourceSpan.Combine(rangeTok.Span, hi.Span);
+            return new RangePatternNode(rspan, lo: null, hi: hi, isInclusive: inclusive);
+        }
 
         // Check for wildcard pattern: _
         if (_currentToken.Kind == TokenKind.Underscore)
@@ -3181,56 +3229,39 @@ public class Parser
             return new ElsePatternNode(elseToken.Span);
         }
 
-        // Check for literal patterns: 42, b'x', true, false, "hello"
-        if (_currentToken.Kind == TokenKind.Integer)
+        // Check for literal patterns: 42, b'x', true, false, "hello", -42.
+        // Range patterns (RFC-010) extend numeric/char/byte literals.
+        var lit = ParsePatternLiteralExpression();
+        if (lit != null)
         {
-            var integerToken = Eat(TokenKind.Integer);
-            var (value, suffix) = ParseIntegerLiteralValue(integerToken.Text);
-            var literal = new IntegerLiteralNode(integerToken.Span, value, suffix);
-            return new LiteralPatternNode(integerToken.Span, literal);
+            // Range pattern: `lo..hi` / `lo..=hi` (bounded) or `lo..` (open-top).
+            // `lo..=` (open-top inclusive) is a parse error since it's equivalent to `lo..`.
+            if (_currentToken.Kind is TokenKind.DotDot or TokenKind.DotDotEquals)
+            {
+                bool inclusive = _currentToken.Kind == TokenKind.DotDotEquals;
+                Advance();
+                var hi = ParsePatternLiteralExpression();
+                if (inclusive && hi == null)
+                {
+                    _diagnostics.Add(Diagnostic.Error(
+                        "`..=` requires an upper bound; use `..` for an open-top range",
+                        _currentToken.Span, null, "E1001"));
+                }
+                var endSpan = hi?.Span ?? lit.Span;
+                var rspan = SourceSpan.Combine(lit.Span, endSpan);
+                return new RangePatternNode(rspan, lo: lit, hi: hi, isInclusive: inclusive);
+            }
+            return new LiteralPatternNode(lit.Span, lit);
         }
 
-        if (_currentToken.Kind == TokenKind.ByteLiteral)
-        {
-            var byteToken = Eat(TokenKind.ByteLiteral);
-            var byteValue = BigInteger.Parse(byteToken.Text);
-            var literal = new IntegerLiteralNode(byteToken.Span, byteValue, "u8");
-            return new LiteralPatternNode(byteToken.Span, literal);
-        }
-
-        if (_currentToken.Kind == TokenKind.CharLiteral)
-        {
-            var charToken = Eat(TokenKind.CharLiteral);
-            var codepoint = BigInteger.Parse(charToken.Text);
-            var literal = new IntegerLiteralNode(charToken.Span, codepoint, "char");
-            return new LiteralPatternNode(charToken.Span, literal);
-        }
-
-        if (_currentToken.Kind == TokenKind.True)
-        {
-            var trueToken = Eat(TokenKind.True);
-            var literal = new BooleanLiteralNode(trueToken.Span, true);
-            return new LiteralPatternNode(trueToken.Span, literal);
-        }
-
-        if (_currentToken.Kind == TokenKind.False)
-        {
-            var falseToken = Eat(TokenKind.False);
-            var literal = new BooleanLiteralNode(falseToken.Span, false);
-            return new LiteralPatternNode(falseToken.Span, literal);
-        }
-
-        if (_currentToken.Kind == TokenKind.StringLiteral)
-        {
-            var stringToken = Eat(TokenKind.StringLiteral);
-            var literal = new StringLiteralNode(stringToken.Span, stringToken.Text);
-            return new LiteralPatternNode(stringToken.Span, literal);
-        }
-
-        // Check for identifier pattern (variable binding or enum variant)
+        // Check for identifier pattern (variable binding or enum variant or struct destructure)
         if (_currentToken.Kind == TokenKind.Identifier)
         {
             var firstIdent = Eat(TokenKind.Identifier);
+
+            // Struct destructuring: `TypeName { ... }` (RFC-010).
+            if (_currentToken.Kind == TokenKind.OpenBrace)
+                return ParseStructPattern(firstIdent.Text, start);
 
             // Check for qualified variant: EnumName.Variant
             if (_currentToken.Kind == TokenKind.Dot)
@@ -3306,6 +3337,154 @@ public class Parser
             "patterns can be: _, identifier, or EnumName.Variant",
             "E1001"));
         return new WildcardPatternNode(_currentToken.Span);
+    }
+
+    /// <summary>
+    /// Parse a literal expression usable in a pattern position (literal pattern
+    /// or range pattern bound). Supports integer, byte, char, bool, string,
+    /// and unary-minus on integers (e.g., <c>-5..0</c>). Returns null when the
+    /// current token is not a literal.
+    /// </summary>
+    private ExpressionNode? ParsePatternLiteralExpression()
+    {
+        var t = _currentToken;
+        switch (t.Kind)
+        {
+            case TokenKind.Integer:
+                {
+                    Eat(TokenKind.Integer);
+                    var (value, suffix) = ParseIntegerLiteralValue(t.Text);
+                    return new IntegerLiteralNode(t.Span, value, suffix);
+                }
+            case TokenKind.ByteLiteral:
+                {
+                    Eat(TokenKind.ByteLiteral);
+                    var byteValue = BigInteger.Parse(t.Text);
+                    return new IntegerLiteralNode(t.Span, byteValue, "u8");
+                }
+            case TokenKind.CharLiteral:
+                {
+                    Eat(TokenKind.CharLiteral);
+                    var codepoint = BigInteger.Parse(t.Text);
+                    return new IntegerLiteralNode(t.Span, codepoint, "char");
+                }
+            case TokenKind.True:
+                Eat(TokenKind.True);
+                return new BooleanLiteralNode(t.Span, true);
+            case TokenKind.False:
+                Eat(TokenKind.False);
+                return new BooleanLiteralNode(t.Span, false);
+            case TokenKind.StringLiteral:
+                Eat(TokenKind.StringLiteral);
+                return new StringLiteralNode(t.Span, t.Text);
+            case TokenKind.Minus when PeekNextToken().Kind == TokenKind.Integer:
+                {
+                    Eat(TokenKind.Minus);
+                    var intTok = Eat(TokenKind.Integer);
+                    var (value, suffix) = ParseIntegerLiteralValue(intTok.Text);
+                    var span = SourceSpan.Combine(t.Span, intTok.Span);
+                    return new IntegerLiteralNode(span, -value, suffix);
+                }
+            default:
+                return null;
+        }
+    }
+
+    /// <summary>
+    /// Parse a struct destructuring pattern (RFC-010): `TypeName { f1, f2 = pat, .. }`.
+    /// </summary>
+    private PatternNode ParseStructPattern(string typeName, SourceSpan startSpan)
+    {
+        Eat(TokenKind.OpenBrace);
+
+        var fields = new List<StructFieldPattern>();
+        bool hasRest = false;
+
+        while (_currentToken.Kind != TokenKind.CloseBrace
+               && _currentToken.Kind != TokenKind.EndOfFile)
+        {
+            // Rest marker `..`.
+            if (_currentToken.Kind == TokenKind.DotDot)
+            {
+                Eat(TokenKind.DotDot);
+                hasRest = true;
+                if (_currentToken.Kind == TokenKind.Comma)
+                    Eat(TokenKind.Comma);
+                break;
+            }
+
+            var fieldNameToken = Eat(TokenKind.Identifier);
+            var fieldStart = fieldNameToken.Span;
+
+            PatternNode fieldPat;
+            SourceSpan fieldSpan;
+            if (_currentToken.Kind == TokenKind.Equals)
+            {
+                Eat(TokenKind.Equals);
+                fieldPat = ParsePattern(isSubPattern: true);
+                fieldSpan = SourceSpan.Combine(fieldStart, fieldPat.Span);
+            }
+            else
+            {
+                // Bare identifier binds the field value to a variable of the same name.
+                fieldPat = new VariablePatternNode(fieldNameToken.Span, fieldNameToken.Text);
+                fieldSpan = fieldNameToken.Span;
+            }
+
+            fields.Add(new StructFieldPattern(fieldNameToken.Text, fieldPat, fieldSpan));
+
+            if (_currentToken.Kind == TokenKind.Comma)
+                Eat(TokenKind.Comma);
+            else if (_currentToken.Kind != TokenKind.CloseBrace)
+                break;
+        }
+
+        var closeBrace = Eat(TokenKind.CloseBrace);
+        var span = SourceSpan.Combine(startSpan, closeBrace.Span);
+        return new StructPatternNode(span, typeName, fields, hasRest);
+    }
+
+    /// <summary>
+    /// Parse a tuple destructuring pattern (RFC-010). `(p1, p2, ...)` matches
+    /// a tuple value element-wise. `(p,)` is a 1-tuple pattern (trailing comma);
+    /// `(p)` is grouping and returns the inner pattern unchanged.
+    /// </summary>
+    private PatternNode ParseTuplePattern()
+    {
+        var openParen = Eat(TokenKind.OpenParenthesis);
+
+        // Empty tuple pattern: `()` matches the unit tuple.
+        if (_currentToken.Kind == TokenKind.CloseParenthesis)
+        {
+            var closeEmpty = Eat(TokenKind.CloseParenthesis);
+            var emptySpan = SourceSpan.Combine(openParen.Span, closeEmpty.Span);
+            return new TuplePatternNode(emptySpan, new List<PatternNode>());
+        }
+
+        var elements = new List<PatternNode>();
+        bool hasTrailingComma = false;
+
+        elements.Add(ParsePattern(isSubPattern: true));
+
+        while (_currentToken.Kind == TokenKind.Comma)
+        {
+            Eat(TokenKind.Comma);
+            if (_currentToken.Kind == TokenKind.CloseParenthesis)
+            {
+                hasTrailingComma = true;
+                break;
+            }
+            elements.Add(ParsePattern(isSubPattern: true));
+        }
+
+        var closeParen = Eat(TokenKind.CloseParenthesis);
+        var span = SourceSpan.Combine(openParen.Span, closeParen.Span);
+
+        // Single element without trailing comma is grouping, not a 1-tuple.
+        if (elements.Count == 1 && !hasTrailingComma)
+            return elements[0];
+
+        return new TuplePatternNode(span, elements);
     }
 
     /// <summary>

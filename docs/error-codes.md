@@ -3092,6 +3092,191 @@ Match on the value explicitly inside `defer` instead of using `?`. Future versio
 
 ---
 
+### E2104: Or-Pattern Alternatives Disagree on Bindings
+
+**Category**: Type Checking
+**Severity**: Error
+
+#### Description
+
+Every alternative of an or-pattern (`A | B | C`) must bind the same set of variable names with the same types (RFC-010). E2104 fires when one alternative binds a name another does not, or when the same name has different types across alternatives.
+
+#### Example
+
+```flang
+type Tagged = enum { A(i32), B(bool), C }
+
+fn classify(t: Tagged) i32 {
+    return t match {
+        A(x) | B(x) => x,    // error E2104: A binds x:i32, B binds x:bool
+        C => 0i32,
+    }
+}
+```
+
+#### Solution
+
+Either change the alternatives to bind compatible types, or split into separate arms with distinct bodies.
+
+---
+
+### E2105: Variable Bindings Not Yet Supported in Or-Patterns
+
+**Category**: Type Checking
+**Severity**: Error
+
+#### Description
+
+Phase-1 implementation limit. Or-patterns whose alternatives introduce variable bindings (e.g., `Some(x) | Other(x)`) are temporarily rejected — the lowering still needs binding-slot allocation. Non-binding alternatives (unit variants, literals, ranges) work today.
+
+#### Example
+
+```flang
+let r = result match {
+    Ok(v) | Recovered(v) => v,    // error E2105
+    Err(_) => default,
+}
+```
+
+#### Solution
+
+Split the or-pattern into separate arms that share a helper function or repeated body, until the binding-slot lowering lands. Tracked in `docs/known-issues.md` under "RFC-010 Follow-ups".
+
+---
+
+### E2106: Tuple Pattern on Non-Tuple Type
+
+**Category**: Type Checking
+**Severity**: Error
+
+#### Description
+
+Tuple destructuring (`(a, b)`) requires the scrutinee to be a tuple value (anonymous struct produced by tuple syntax `(x, y)`). Element count must match the tuple arity.
+
+#### Example
+
+```flang
+let p: i32 = 5
+let r = p match {
+    (a, b) => a + b,    // error E2106: scrutinee is i32, not a tuple
+}
+```
+
+#### Solution
+
+Use a literal, range, wildcard, or variable pattern for non-tuple scrutinees. For struct destructuring use `Type { … }` syntax instead.
+
+---
+
+### E2107: Invalid Struct Pattern
+
+**Category**: Type Checking
+**Severity**: Error
+
+#### Description
+
+Covers all problems with struct destructuring (`Type { f1, f2, .. }`): scrutinee is not a struct, type name does not match, unknown field, duplicate field, or — without `..` — a missing field. Per RFC-010 strict construction, every field must be mentioned unless `..` opts out.
+
+#### Example
+
+```flang
+type Point = struct { x: i32, y: i32 }
+
+let p = Point { x = 1, y = 2 }
+let r = p match {
+    Point { x } => x,        // error E2107: missing field `y`; use `..` to ignore
+}
+```
+
+#### Solution
+
+Add the missing fields, or use the rest marker:
+
+```flang
+let r = p match {
+    Point { x, .. } => x,
+}
+```
+
+---
+
+### E2108: Range Pattern on Disallowed Type
+
+**Category**: Type Checking
+**Severity**: Error
+
+#### Description
+
+Range patterns (`a..b`, `a..`, `..b`) require a totally-ordered scalar scrutinee: `i8`/`i16`/`i32`/`i64`, `u8`/`u16`/`u32`/`u64`, `usize`/`isize`, `char`, or `byte`. Floating-point types are forbidden because NaN breaks total ordering; strings are forbidden because they have no compile-time-checkable ordering.
+
+#### Example
+
+```flang
+fn classify(f: f32) i32 {
+    return f match {
+        0.0..1.0 => 1i32,    // error E2108
+        _        => 0i32,
+    }
+}
+```
+
+#### Solution
+
+Use a guard with explicit comparisons (`if f >= 0.0 and f < 1.0`), or convert the value to an integer first.
+
+---
+
+### E2109: Empty Range Pattern
+
+**Category**: Type Checking
+**Severity**: Error
+
+#### Description
+
+A range pattern's lower bound is greater than or equal to its upper bound, so it can never match. FLang ranges are half-open (`a..b` matches `a <= x < b`) — `5..5` and `5..3` are both empty.
+
+#### Example
+
+```flang
+let r = n match {
+    5..3 => "small",    // error E2109
+    _    => "other",
+}
+```
+
+#### Solution
+
+Fix the bounds. If you wanted an inclusive range, write `lo..(hi + 1)`.
+
+---
+
+### E2110: `?.` Used on `Result(T, E)`
+
+**Category**: Type Checking
+**Severity**: Error
+
+#### Description
+
+The null-propagation operator `?.` is defined only on `Option(T)` (RFC-010). Result types use `.map(...)` for value propagation and `?` for early return.
+
+#### Example
+
+```flang
+fn read_name(r: Result(User, IoError)) Option(String) {
+    return r?.name    // error E2110
+}
+```
+
+#### Solution
+
+Use `.map(...)` to project through `Result`, or convert via `.ok()` to drop the error and chain `?.`:
+
+```flang
+return r.map(fn(u) u.name).ok()
+```
+
+---
+
 ### E2092: `?` Has No Matching `op_try`
 
 **Category**: Type Checking

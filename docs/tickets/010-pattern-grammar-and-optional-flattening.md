@@ -1,7 +1,7 @@
 # RFC-010: Pattern Grammar Extensions and `?.` Flattening
 
 **Type:** Language semantics + type checker
-**Status:** Proposed
+**Status:** Implemented (phases 1–5, 7); phase 6 deferred — see `docs/known-issues.md`
 **Depends on:** RFC-007 (Option as enum), RFC-006 §5 (match arm syntax)
 
 ## Summary
@@ -243,13 +243,13 @@ Sub-rules:
 
 ## Implementation phases
 
-1. **Or-patterns first.** Smallest, immediately useful. Type checker validates same-binding rule.
-2. **Guards.** Parser + type checker. Cleanly orthogonal to exhaustiveness once the guards-don't-count rule is set.
-3. **Tuple destructuring.** Trivial given tuples desugar to anonymous structs.
-4. **Struct destructuring.** Largest grammar chunk; field-position pattern syntax.
-5. **Range patterns.** New `..=` token (lexer change), pattern-position parser branch shared with the existing range expression code, range-aware coverage in the exhaustiveness checker.
-6. **Maranget-style exhaustiveness checker.** Replace the current ad-hoc check with the matrix algorithm so the new pattern forms get correct coverage and witness reporting in one pass.
-7. **`?.` flattening.** Modify the lowering of `?.` to inspect projected type and skip re-wrap when already `Option`. Extend to method-call form (`opt?.foo()`).
+1. **Or-patterns first.** ✅ Landed. Type checker validates same-binding rule. **Limit:** alternatives that introduce variable bindings (`Some(x) | Other(x)`) report E2105 until binding-slot lowering grows; non-binding alts (`Red | Green | Blue`, `1 | 2 | 3`) work today.
+2. **Guards.** ✅ Landed. Guard expression must be `bool`; checked after pattern bindings; failure falls through to next arm. Guards do not contribute to exhaustiveness.
+3. **Tuple destructuring.** ✅ Landed. `(p1, p2, ..., pN)` element-wise; `(p,)` is a 1-tuple via trailing comma; `(p)` is grouping.
+4. **Struct destructuring.** ✅ Landed. `Type { x, y, .. }` syntax; bare ident binds, `=` recurses; without `..`, every field must be mentioned (E2107).
+5. **Range patterns.** ✅ Landed. Forms: `a..b` (half-open), `a..=b` (inclusive), `a..` (open-top), `..b` / `..=b` (open-bottom). `..=` is a **pattern-only** token — `for i in 0..N` and other non-pattern range expressions still use `..`. Range bounds must be compile-time literals over a totally-ordered scalar (int / `char` / `byte`) — floats and strings are rejected (E2108). Empty / inverted ranges (`5..3`, `5..=4`) report E2109.
+6. **Maranget-style exhaustiveness checker.** ⏸ Deferred to a follow-up. The existing ad-hoc check still gates enum exhaustiveness with respect to guards and or-patterns; tuple / struct / range / non-enum coverage is **not** checked. See `docs/known-issues.md` "RFC-010 Follow-ups" for the gap and the rationale.
+7. **`?.` flattening.** ✅ Landed. Both regular and niche-Option lowering paths skip the `Some(_)` re-wrap when the projected field is itself an `Option`. Cross-`Result(T, E)` use of `?.` reports E2110 with a hint to use `.map(...)`.
 
 ## Open questions
 

@@ -3844,7 +3844,9 @@ public class HmAstLowering
         var memberField = FindField(innerStruct, nullProp.MemberName);
         var memberVal = EmitLoadFromOffset(payloadPtr, memberField.ByteOffset, memberField.Type, "np_member");
 
-        if (IsAnyOption(resultIrType))
+        // RFC-010 flattening: if the projected field is already an Option of
+        // the right shape, store it directly instead of wrapping in Some(...).
+        if (IsAnyOption(resultIrType) && !IsAnyOption(memberField.Type))
         {
             var someResult = EmitOptionSome(memberVal, resultIrType);
             _currentBlock.EmitStorePtr(resultPtr, someResult);
@@ -3893,7 +3895,8 @@ public class HmAstLowering
             var memberField = FindField(innerStruct, nullProp.MemberName);
             var memberVal = EmitLoadFromOffset(castVal, memberField.ByteOffset, memberField.Type, "np_member");
 
-            if (IsAnyOption(resultIrType))
+            // RFC-010 flattening: skip Some-wrap when the field is itself Option.
+            if (IsAnyOption(resultIrType) && !IsAnyOption(memberField.Type))
             {
                 var someResult = EmitOptionSome(memberVal, resultIrType);
                 _currentBlock.EmitStorePtr(resultPtr, someResult);
@@ -4105,6 +4108,10 @@ public class HmAstLowering
             _currentBlock = checkBlock;
 
             // Emit condition check
+            var armMissTarget = armIndex < match.Arms.Count - 1
+                ? checkBlocks[armIndex]
+                : mergeBlock;
+
             if (arm.Pattern is ElsePatternNode or WildcardPatternNode)
             {
                 // Unconditional match
@@ -4117,32 +4124,11 @@ public class HmAstLowering
             }
             else if (arm.Pattern is EnumVariantPatternNode evpCheck)
             {
-                // Find variant and compare tag
-                IrVariant? checkVariant = null;
-                foreach (var v in irEnum.Variants)
-                {
-                    if (v.Name == evpCheck.VariantName)
-                    {
-                        checkVariant = v;
-                        break;
-                    }
-                }
-
-                if (checkVariant != null)
-                {
-                    var expectedTag = new IntConstantValue(checkVariant.Value.TagValue, TypeLayoutService.IrI32);
-                    var cmpResult = _currentBlock.EmitBinary(BinaryOp.Equal, tagValue, expectedTag, TypeLayoutService.IrBool);
-
-                    var elseTarget = armIndex < match.Arms.Count - 1
-                        ? checkBlocks[armIndex]
-                        : mergeBlock;
-                    _currentBlock.EmitBranch(cmpResult, armBlock, elseTarget);
-                }
-                else
-                {
-                    // Unknown variant — unconditional jump (error already caught in TC)
-                    _currentBlock.EmitJump(armBlock);
-                }
+                EmitEnumVariantTagCheck(evpCheck, irEnum, tagValue, armBlock, armMissTarget);
+            }
+            else if (arm.Pattern is OrPatternNode orArmEnum)
+            {
+                EmitEnumOrPatternCheck(orArmEnum, irEnum, tagValue, scrutineePtr, scrutineeValue, armBlock, armMissTarget, armIndex);
             }
 
             // Fill in arm block
@@ -4197,23 +4183,11 @@ public class HmAstLowering
                     }
                     else if (evp.SubPatterns.Count > 0)
                     {
-                        // Single payload
+                        // Single payload — recurse via the unified sub-pattern
+                        // binder so tuple / struct / range / wildcard / nested
+                        // forms work as variant payloads (RFC-010).
                         var payloadPtr = _currentBlock.EmitGEP(scrutineePtr, armVariant.Value.PayloadOffset, armVariant.Value.PayloadType);
-
-                        if (evp.SubPatterns[0] is VariablePatternNode vp)
-                        {
-                            _locals[vp.Name] = payloadPtr;
-                        }
-                        else if (evp.SubPatterns[0] is LiteralPatternNode litSubPat)
-                        {
-                            var payloadVal = _currentBlock.EmitLoad(payloadPtr, armVariant.Value.PayloadType);
-                            var literalVal = LowerExpression(litSubPat.Literal);
-                            var cmp = EmitPatternComparison(litSubPat, payloadVal, literalVal);
-
-                            var contBlock = _currentBlock.CreateBlock($"match_arm_{armIndex}_body");
-                            _currentBlock.EmitBranch(cmp, contBlock, litFallthrough);
-                            _currentBlock = contBlock;
-                        }
+                        EmitTupleSubPatternBind(evp.SubPatterns[0], payloadPtr, armVariant.Value.PayloadType, litFallthrough);
                     }
                 }
             }
@@ -4221,6 +4195,16 @@ public class HmAstLowering
             {
                 // Bind entire scrutinee to variable
                 _locals[varPat.Name] = scrutineePtr;
+            }
+
+            // Guard (RFC-010): `pat if cond => body` evaluates `cond` after the
+            // pattern matches and bindings are in scope. False falls through.
+            if (arm.Guard != null)
+            {
+                var guardVal = LowerExpression(arm.Guard);
+                var bodyBlock = _currentBlock.CreateBlock($"match_arm_{armIndex}_body");
+                _currentBlock.EmitBranch(guardVal, bodyBlock, armMissTarget);
+                _currentBlock = bodyBlock;
             }
 
             // Lower arm result expression
@@ -4282,6 +4266,10 @@ public class HmAstLowering
             var checkBlock = armIndex == 0 ? _currentBlock : checkBlocks[armIndex - 1];
             _currentBlock = checkBlock;
 
+            var elseTarget = armIndex < match.Arms.Count - 1
+                ? checkBlocks[armIndex]
+                : mergeBlock;
+
             if (arm.Pattern is ElsePatternNode or WildcardPatternNode)
             {
                 _currentBlock.EmitJump(armBlock);
@@ -4292,27 +4280,26 @@ public class HmAstLowering
             }
             else if (isNicheOption && arm.Pattern is EnumVariantPatternNode evpNiche)
             {
-                // ptr != NULL ? Some-arm : None-arm
-                var isSome = EmitOptionIsSome(scrutineeValue, scrutineeIrType);
-                var elseTarget = armIndex < match.Arms.Count - 1
-                    ? checkBlocks[armIndex]
-                    : mergeBlock;
-                if (evpNiche.VariantName == "Some")
-                    _currentBlock.EmitBranch(isSome, armBlock, elseTarget);
-                else if (evpNiche.VariantName == "None")
-                    _currentBlock.EmitBranch(isSome, elseTarget, armBlock);
-                else
-                    _currentBlock.EmitJump(elseTarget); // Unknown variant — diagnostic emitted in TC
+                EmitNicheOptionTagCheck(evpNiche, scrutineeValue, scrutineeIrType, armBlock, elseTarget);
             }
             else if (arm.Pattern is LiteralPatternNode litPat)
             {
-                var literalVal = LowerExpression(litPat.Literal);
-                var cmp = EmitPatternComparison(litPat, scrutineeValue, literalVal);
-
-                var elseTarget = armIndex < match.Arms.Count - 1
-                    ? checkBlocks[armIndex]
-                    : mergeBlock;
-                _currentBlock.EmitBranch(cmp, armBlock, elseTarget);
+                EmitLiteralCheck(litPat, scrutineeValue, armBlock, elseTarget);
+            }
+            else if (arm.Pattern is RangePatternNode rangePat)
+            {
+                EmitRangeCheck(rangePat, scrutineeValue, scrutineeIrType, armBlock, elseTarget);
+            }
+            else if (arm.Pattern is OrPatternNode orArmNonEnum)
+            {
+                EmitNonEnumOrPatternCheck(orArmNonEnum, scrutineeValue, scrutineeIrType, isNicheOption, armBlock, elseTarget, armIndex);
+            }
+            else if (arm.Pattern is TuplePatternNode or StructPatternNode)
+            {
+                // Tuple/struct patterns are shape-checked at TC; jump
+                // unconditionally. Sub-pattern literal checks happen inside
+                // armBlock and may jump back to elseTarget on miss.
+                _currentBlock.EmitJump(armBlock);
             }
 
             _currentBlock = armBlock;
@@ -4336,6 +4323,30 @@ public class HmAstLowering
                 _locals[someBind.Name] = bindSlot;
             }
 
+            // Tuple pattern bindings: GEP each element, recurse on sub-patterns.
+            // Literal sub-patterns may branch to elseTarget on miss.
+            if (arm.Pattern is TuplePatternNode tupPat
+                && scrutineeIrType is IrStruct tupleIrStruct)
+            {
+                EmitTuplePatternBindings(tupPat, scrutineePtr, tupleIrStruct, elseTarget);
+            }
+
+            // Struct pattern bindings: GEP each named field, recurse.
+            if (arm.Pattern is StructPatternNode structPat
+                && scrutineeIrType is IrStruct structIrType)
+            {
+                EmitStructPatternBindings(structPat, scrutineePtr, structIrType, elseTarget);
+            }
+
+            // Guard (RFC-010): `pat if cond => body`.
+            if (arm.Guard != null)
+            {
+                var guardVal = LowerExpression(arm.Guard);
+                var bodyBlock = _currentBlock.CreateBlock($"match_arm_{armIndex}_body");
+                _currentBlock.EmitBranch(guardVal, bodyBlock, elseTarget);
+                _currentBlock = bodyBlock;
+            }
+
             // Lower arm result
             var armResultVal = LowerExpression(arm.ResultExpr, isVoid ? null : resultIrType);
             var armIsNever = armResultVal.IrType == TypeLayoutService.IrNeverPrim;
@@ -4352,6 +4363,312 @@ public class HmAstLowering
             return _currentBlock.EmitLoad(resultPtr, resultIrType);
 
         return new IntConstantValue(0, TypeLayoutService.IrVoidPrim);
+    }
+
+    /// <summary>
+    /// Emit `tag == variant.tag ? matchBlock : missBlock`. Used for both
+    /// single-arm tag checks and or-pattern alternatives.
+    /// </summary>
+    private void EmitEnumVariantTagCheck(
+        EnumVariantPatternNode pat,
+        IrEnum irEnum,
+        Value tagValue,
+        BasicBlock matchBlock,
+        BasicBlock missBlock)
+    {
+        IrVariant? variant = null;
+        foreach (var v in irEnum.Variants)
+        {
+            if (v.Name == pat.VariantName)
+            {
+                variant = v;
+                break;
+            }
+        }
+
+        if (variant == null)
+        {
+            // Unknown variant — diagnostic emitted in type checker
+            _currentBlock.EmitJump(matchBlock);
+            return;
+        }
+
+        var expectedTag = new IntConstantValue(variant.Value.TagValue, TypeLayoutService.IrI32);
+        var cmp = _currentBlock.EmitBinary(BinaryOp.Equal, tagValue, expectedTag, TypeLayoutService.IrBool);
+        _currentBlock.EmitBranch(cmp, matchBlock, missBlock);
+    }
+
+    /// <summary>
+    /// Niche-Option tag check: pointer != null ? Some-arm : None-arm.
+    /// </summary>
+    private void EmitNicheOptionTagCheck(
+        EnumVariantPatternNode pat,
+        Value scrutineeValue,
+        IrType scrutineeIrType,
+        BasicBlock matchBlock,
+        BasicBlock missBlock)
+    {
+        var isSome = EmitOptionIsSome(scrutineeValue, scrutineeIrType);
+        if (pat.VariantName == "Some")
+            _currentBlock.EmitBranch(isSome, matchBlock, missBlock);
+        else if (pat.VariantName == "None")
+            _currentBlock.EmitBranch(isSome, missBlock, matchBlock);
+        else
+            _currentBlock.EmitJump(missBlock); // Unknown variant — diagnostic emitted in TC
+    }
+
+    /// <summary>
+    /// Emit a literal-pattern check: scrutinee == literal ? matchBlock : missBlock.
+    /// </summary>
+    private void EmitLiteralCheck(
+        LiteralPatternNode litPat,
+        Value scrutineeValue,
+        BasicBlock matchBlock,
+        BasicBlock missBlock)
+    {
+        var literalVal = LowerExpression(litPat.Literal);
+        var cmp = EmitPatternComparison(litPat, scrutineeValue, literalVal);
+        _currentBlock.EmitBranch(cmp, matchBlock, missBlock);
+    }
+
+    /// <summary>
+    /// Lower an or-pattern arm against an enum scrutinee. Each alternative is
+    /// a separate check that jumps to <paramref name="armBlock"/> on match;
+    /// the chain falls through to <paramref name="missBlock"/> when none match.
+    ///
+    /// Phase-1 limit: alternatives must not introduce variable bindings
+    /// (enforced by E2105 in the type checker).
+    /// </summary>
+    private void EmitEnumOrPatternCheck(
+        OrPatternNode orPat,
+        IrEnum irEnum,
+        Value tagValue,
+        Value scrutineePtr,
+        Value scrutineeValue,
+        BasicBlock armBlock,
+        BasicBlock missBlock,
+        int armIndex)
+    {
+        for (int altIdx = 0; altIdx < orPat.Alternatives.Count; altIdx++)
+        {
+            var alt = orPat.Alternatives[altIdx];
+            var nextMiss = altIdx < orPat.Alternatives.Count - 1
+                ? _currentBlock.CreateBlock($"or_alt_{armIndex}_{altIdx + 1}_check")
+                : missBlock;
+
+            switch (alt)
+            {
+                case ElsePatternNode:
+                case WildcardPatternNode:
+                    _currentBlock.EmitJump(armBlock);
+                    break;
+
+                case EnumVariantPatternNode evp:
+                    EmitEnumVariantTagCheck(evp, irEnum, tagValue, armBlock, nextMiss);
+                    break;
+
+                case LiteralPatternNode litPat:
+                    EmitLiteralCheck(litPat, scrutineeValue, armBlock, nextMiss);
+                    break;
+
+                default:
+                    // Unsupported alternative — diagnostic emitted in TC; fall through.
+                    _currentBlock.EmitJump(nextMiss);
+                    break;
+            }
+
+            _currentBlock = nextMiss;
+        }
+    }
+
+    /// <summary>
+    /// Lower an or-pattern arm against a non-enum scrutinee.
+    /// </summary>
+    private void EmitNonEnumOrPatternCheck(
+        OrPatternNode orPat,
+        Value scrutineeValue,
+        IrType scrutineeIrType,
+        bool isNicheOption,
+        BasicBlock armBlock,
+        BasicBlock missBlock,
+        int armIndex)
+    {
+        for (int altIdx = 0; altIdx < orPat.Alternatives.Count; altIdx++)
+        {
+            var alt = orPat.Alternatives[altIdx];
+            var nextMiss = altIdx < orPat.Alternatives.Count - 1
+                ? _currentBlock.CreateBlock($"or_alt_{armIndex}_{altIdx + 1}_check")
+                : missBlock;
+
+            switch (alt)
+            {
+                case ElsePatternNode:
+                case WildcardPatternNode:
+                    _currentBlock.EmitJump(armBlock);
+                    break;
+
+                case LiteralPatternNode litPat:
+                    EmitLiteralCheck(litPat, scrutineeValue, armBlock, nextMiss);
+                    break;
+
+                case RangePatternNode rangePat:
+                    EmitRangeCheck(rangePat, scrutineeValue, scrutineeIrType, armBlock, nextMiss);
+                    break;
+
+                case EnumVariantPatternNode evp when isNicheOption:
+                    EmitNicheOptionTagCheck(evp, scrutineeValue, scrutineeIrType, armBlock, nextMiss);
+                    break;
+
+                default:
+                    _currentBlock.EmitJump(nextMiss);
+                    break;
+            }
+
+            _currentBlock = nextMiss;
+        }
+    }
+
+    /// <summary>
+    /// Emit a range-pattern check (RFC-010, half-open). All forms reduce to
+    /// a chain of comparisons: lower bound (when present) `scrut &gt;= lo`,
+    /// upper bound (when present) `scrut &lt; hi`. Empty/missing-both is
+    /// rejected at type-check time.
+    /// </summary>
+    private void EmitRangeCheck(
+        RangePatternNode rangePat,
+        Value scrutineeValue,
+        IrType scrutineeIrType,
+        BasicBlock matchBlock,
+        BasicBlock missBlock)
+    {
+        // Upper-bound comparison: `<=` for inclusive (`..=hi`), `<` for half-open (`..hi`).
+        var upperOp = rangePat.IsInclusive ? BinaryOp.LessThanOrEqual : BinaryOp.LessThan;
+
+        if (rangePat.Lo != null && rangePat.Hi != null)
+        {
+            var loVal = LowerExpression(rangePat.Lo);
+            var loCmp = _currentBlock.EmitBinary(BinaryOp.GreaterThanOrEqual, scrutineeValue, loVal, TypeLayoutService.IrBool);
+            var checkHi = _currentBlock.CreateBlock("range_check_hi");
+            _currentBlock.EmitBranch(loCmp, checkHi, missBlock);
+            _currentBlock = checkHi;
+
+            var hiVal = LowerExpression(rangePat.Hi);
+            var hiCmp = _currentBlock.EmitBinary(upperOp, scrutineeValue, hiVal, TypeLayoutService.IrBool);
+            _currentBlock.EmitBranch(hiCmp, matchBlock, missBlock);
+        }
+        else if (rangePat.Lo != null)
+        {
+            var loVal = LowerExpression(rangePat.Lo);
+            var loCmp = _currentBlock.EmitBinary(BinaryOp.GreaterThanOrEqual, scrutineeValue, loVal, TypeLayoutService.IrBool);
+            _currentBlock.EmitBranch(loCmp, matchBlock, missBlock);
+        }
+        else if (rangePat.Hi != null)
+        {
+            var hiVal = LowerExpression(rangePat.Hi);
+            var hiCmp = _currentBlock.EmitBinary(upperOp, scrutineeValue, hiVal, TypeLayoutService.IrBool);
+            _currentBlock.EmitBranch(hiCmp, matchBlock, missBlock);
+        }
+        else
+        {
+            _currentBlock.EmitJump(matchBlock); // Bare `..` — diagnostic emitted at parse.
+        }
+    }
+
+    /// <summary>
+    /// Emit bindings and inline literal-checks for a tuple destructuring
+    /// pattern (RFC-010). On any literal sub-pattern miss, jumps to
+    /// <paramref name="missBlock"/>. Variable sub-patterns bind to the
+    /// element's GEP'd pointer; nested tuple sub-patterns recurse.
+    /// </summary>
+    private void EmitTuplePatternBindings(
+        TuplePatternNode tupPat,
+        Value tuplePtr,
+        IrStruct tupleStruct,
+        BasicBlock missBlock)
+    {
+        for (int i = 0; i < tupPat.Elements.Count && i < tupleStruct.Fields.Length; i++)
+        {
+            var field = tupleStruct.Fields[i];
+            var fieldPtr = _currentBlock.EmitGEP(tuplePtr, field.ByteOffset, field.Type);
+            EmitTupleSubPatternBind(tupPat.Elements[i], fieldPtr, field.Type, missBlock);
+        }
+    }
+
+    private void EmitTupleSubPatternBind(
+        PatternNode sub,
+        Value slotPtr,
+        IrType slotType,
+        BasicBlock missBlock)
+    {
+        switch (sub)
+        {
+            case VariablePatternNode vp:
+                _locals[vp.Name] = slotPtr;
+                break;
+
+            case WildcardPatternNode:
+            case ElsePatternNode:
+                break;
+
+            case LiteralPatternNode litPat:
+                var actual = _currentBlock.EmitLoad(slotPtr, slotType);
+                var literal = LowerExpression(litPat.Literal);
+                var cmp = EmitPatternComparison(litPat, actual, literal);
+                var cont = _currentBlock.CreateBlock("subpat_cont");
+                _currentBlock.EmitBranch(cmp, cont, missBlock);
+                _currentBlock = cont;
+                break;
+
+            case RangePatternNode rangePat:
+                var rangeVal = _currentBlock.EmitLoad(slotPtr, slotType);
+                var rangeCont = _currentBlock.CreateBlock("subpat_range_cont");
+                EmitRangeCheck(rangePat, rangeVal, slotType, rangeCont, missBlock);
+                _currentBlock = rangeCont;
+                break;
+
+            case TuplePatternNode innerTup:
+                if (slotType is IrStruct innerStruct)
+                    EmitTuplePatternBindings(innerTup, slotPtr, innerStruct, missBlock);
+                break;
+
+            case StructPatternNode innerStructPat:
+                if (slotType is IrStruct innerStructTy)
+                    EmitStructPatternBindings(innerStructPat, slotPtr, innerStructTy, missBlock);
+                break;
+
+            // Other sub-pattern kinds in tuples are not supported in this phase.
+        }
+    }
+
+    /// <summary>
+    /// Emit bindings and inline literal-checks for a struct destructuring
+    /// pattern (RFC-010). On any literal sub-pattern miss, jumps to
+    /// <paramref name="missBlock"/>.
+    /// </summary>
+    private void EmitStructPatternBindings(
+        StructPatternNode structPat,
+        Value structPtr,
+        IrStruct structIrType,
+        BasicBlock missBlock)
+    {
+        foreach (var fieldPat in structPat.Fields)
+        {
+            int fieldIdx = -1;
+            for (int i = 0; i < structIrType.Fields.Length; i++)
+            {
+                if (structIrType.Fields[i].Name == fieldPat.FieldName)
+                {
+                    fieldIdx = i;
+                    break;
+                }
+            }
+            if (fieldIdx < 0)
+                continue; // Diagnostic emitted in TC.
+
+            var field = structIrType.Fields[fieldIdx];
+            var fieldPtr = _currentBlock.EmitGEP(structPtr, field.ByteOffset, field.Type);
+            EmitTupleSubPatternBind(fieldPat.Pattern, fieldPtr, field.Type, missBlock);
+        }
     }
 
     /// <summary>

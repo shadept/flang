@@ -513,11 +513,31 @@ Make a type iterable by defining `fn iter(self: &T) Iterator` and `fn next(self:
 
 ### 7.5 Match Expression
 
-Postfix syntax: `expr match { pattern => result, ... }`. Postfix `match` is the lowest-precedence operator — `a + b match { ... }` parses as `(a + b) match { ... }`.
+Postfix syntax: `expr match { pattern [if guard] => result, ... }`. Postfix `match` is the lowest-precedence operator — `a + b match { ... }` parses as `(a + b) match { ... }`.
 
-**Patterns**: unit variant (`Quit`), payload binding (`Move(x, y)`), qualified (`Color.Red`), nested (`Some(Ok(x))`), wildcard (`_`), literal (`42`, `b'A'`, `true`), `else` (default).
+**Patterns** (RFC-010):
 
-All variants must be covered or `else` required. Match is an expression — all arms unify to a common type. Enum references auto-deref during matching.
+- **Unit variant** — `Quit`. Naked identifier resolves to enum variant in match position.
+- **Qualified variant** — `Color.Red`. Disambiguates when the variant name conflicts.
+- **Payload binding** — `Move(x, y)`, `Some(v)`. Variable sub-patterns bind the payload.
+- **Nested** — `Some(Ok(x))`. Recursive payload destructuring.
+- **Literal** — `42`, `b'A'`, `true`, `"hi"`, `-7`. Equality check via `op_eq`.
+- **Range** — `0..10` (half-open), `0..=9` (inclusive), `..0`, `..=0`, `1..`. The `..=` token is pattern-only; non-pattern range expressions still use `..`.
+- **Or-pattern** — `Red | Green | Blue`. Matches if any alternative matches.
+- **Tuple** — `(a, b)`, `(0, _)`. Element-wise destructuring.
+- **Struct** — `Point { x, y }`, `Point { x, .. }`. Strict construction; `..` ignores rest.
+- **Wildcard** — `_`. Matches any value, no binding.
+- **`else`** — Catch-all default arm.
+
+**Guards** — `pat if cond => body` matches only if the pattern matches AND the bool guard evaluates true. Guards do not contribute to exhaustiveness (they may fail at runtime).
+
+**Or-pattern bindings**: alternatives must bind the same variable names with the same types. Alternatives that introduce bindings (e.g., `Some(x) | Other(x)`) are not yet supported by lowering — see `docs/known-issues.md` "RFC-010 Follow-ups". Non-binding cases (`Red | Green | Blue`, `1 | 2 | 3`) work today.
+
+**Range bounds**: must be compile-time literals of an integer, `char`, or `byte` type. Floats and strings are rejected (E2108) because they have no compile-time-checkable total ordering. Empty ranges (`5..3`) are rejected (E2109).
+
+**Exhaustiveness**: enum scrutinees still require every variant covered (or a catch-all). Guarded arms don't count. Tuple/struct/range scrutinee exhaustiveness is not yet checked — provide an explicit catch-all until Phase 6 (Maranget) lands.
+
+Match is an expression — all arms unify to a common type. Enum references auto-deref during matching.
 
 ### 7.6 Directives
 

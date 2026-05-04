@@ -150,12 +150,35 @@ loop { if done { break } }
 // while (predicate at loop head, condition must be bool)
 while n < 10 { n = n + 1 }
 
-// match (postfix)
+// match (postfix) — see RFC-010 for the full pattern grammar
 let result = cmd match {
-    Quit => 0
-    Move(x, y) => x + y
-    Write(s) => s.len as i32
-    else => -1
+    Quit | Halt        => 0,                    // or-pattern
+    Move(x, y) if x > 0 => x + y,               // guard
+    Move(x, y)         => -x - y,               // same pattern, no guard
+    Write(s)           => s.len as i32,
+    else               => -1
+}
+
+// tuple destructuring
+let dispatch = (op, n) match {
+    (Op.Add, 0)   => "noop",
+    (Op.Add, n)   => "add",
+    (_, _)        => "other",
+}
+
+// struct destructuring (strict — every field, or `..`)
+let area = rect match {
+    Rect { width = 0, .. }      => 0,
+    Rect { width, height }      => width * height,
+}
+
+// range patterns — `..` half-open, `..=` inclusive (pattern-only token)
+let bucket = n match {
+    ..0      => -1,
+    0        => 0,
+    1..=9    => 1,
+    10..=99  => 2,
+    100..    => 3,
 }
 
 // defer (LIFO at scope exit)

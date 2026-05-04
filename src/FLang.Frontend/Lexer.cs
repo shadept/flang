@@ -366,6 +366,12 @@ public class Lexer(Source source, int fileId)
                 _position += 3;
                 return CreateToken(TokenKind.UnsignedShiftRight);
             }
+            if (ch == '.' && text[_position + 1] == '.' && text[_position + 2] == '=')
+            {
+                // RFC-010 inclusive upper bound: `..=` (range patterns only).
+                _position += 3;
+                return CreateToken(TokenKind.DotDotEquals);
+            }
         }
 
         // Check for two-character operators

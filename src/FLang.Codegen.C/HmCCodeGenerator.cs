@@ -630,6 +630,13 @@ public static class HmCCodeGenerator
                         ret.Value.IrType == TypeLayoutService.IrNeverPrim ||
                         ret.Value.IrType == null)
                         sb.AppendLine(isEntryPoint ? "    return 0;" : "    return;");
+                    // Synthetic `return IntConstantValue(0, aggregate)` from
+                    // unreachable-block fallthrough (e.g. after a `panic` that
+                    // inlines to `exit(1)`). C requires a typed zero for
+                    // struct/enum/array returns, not a bare `0`.
+                    else if (ret.Value is IntConstantValue iv && iv.IntValue.IsZero
+                             && ret.Value.IrType is IrStruct or IrEnum or IrArray)
+                        sb.AppendLine($"    return ({IrTypeToCType(ret.Value.IrType)}){{0}};");
                     else
                         sb.AppendLine($"    return {EmitValue(ret.Value)};");
                     break;

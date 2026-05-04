@@ -20,28 +20,30 @@ pub fn next_token(self: &Lexer) Token {
 
     const c = self.input[self.pos]
 
-    // Single-character tokens
-    if c == '+' { self.pos = self.pos + 1; return Token.Plus }
-    if c == '-' { self.pos = self.pos + 1; return Token.Minus }
-    if c == '*' { self.pos = self.pos + 1; return Token.Star }
-    if c == '/' { self.pos = self.pos + 1; return Token.Slash }
-    if c == '%' { self.pos = self.pos + 1; return Token.Percent }
-    if c == '(' { self.pos = self.pos + 1; return Token.LParen }
-    if c == ')' { self.pos = self.pos + 1; return Token.RParen }
+    return c match {
+        '+' => { self.pos = self.pos + 1; Token.Plus }
+        '-' => { self.pos = self.pos + 1; Token.Minus }
+        '*' => { self.pos = self.pos + 1; Token.Star }
+        '/' => { self.pos = self.pos + 1; Token.Slash }
+        '%' => { self.pos = self.pos + 1; Token.Percent }
+        '(' => { self.pos = self.pos + 1; Token.LParen }
+        ')' => { self.pos = self.pos + 1; Token.RParen }
 
-    // Number (integer or decimal)
-    if is_digit(c) or c == '.' {
-        const remaining = self.input[self.pos..self.input.len]
-        const result = parse_f64(remaining)
-        if result.is_ok() {
-            const pair = result.unwrap()
-            self.pos = self.pos + pair.1
-            return Token.Number(pair.0)
+        // Number (integer or decimal): digit or leading `.`
+        '0'..='9' | '.' => {
+            const remaining = self.input[self.pos..self.input.len]
+            parse_f64(remaining) match {
+                Ok((value, consumed)) => {
+                    self.pos = self.pos + consumed
+                    Token.Number(value)
+                }
+                Err(_) => {
+                    self.pos = self.pos + 1
+                    Token.Error
+                }
+            }
         }
-        self.pos = self.pos + 1
-        return Token.Error
-    }
 
-    self.pos = self.pos + 1
-    return Token.Error
+        _ => { self.pos = self.pos + 1; Token.Error }
+    }
 }

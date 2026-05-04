@@ -207,6 +207,7 @@ public static class AstNodeFinder
 
             case MatchArmNode arm:
                 yield return arm.Pattern;
+                if (arm.Guard != null) yield return arm.Guard;
                 yield return arm.ResultExpr;
                 break;
 
@@ -292,6 +293,18 @@ public static class AstNodeFinder
             case EnumVariantPatternNode evp:
                 foreach (var sp in evp.SubPatterns)
                     yield return sp;
+                break;
+            case OrPatternNode orp:
+                foreach (var alt in orp.Alternatives)
+                    yield return alt;
+                break;
+            case TuplePatternNode tupp:
+                foreach (var el in tupp.Elements)
+                    yield return el;
+                break;
+            case StructPatternNode strp:
+                foreach (var f in strp.Fields)
+                    yield return f.Pattern;
                 break;
 
             // Type nodes: descend into compound types to reach the named type inside

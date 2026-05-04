@@ -49,6 +49,7 @@ public enum TokenKind
     Percent,
     Dot,
     DotDot,
+    DotDotEquals,
     Ampersand,
     Pipe,
     Caret,
