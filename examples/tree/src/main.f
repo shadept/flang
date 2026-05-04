@@ -17,14 +17,8 @@
 //       --help        Show this help and exit
 
 import std.io.fs
-import std.env
-import std.list
-import std.string
-import std.string_builder
-import std.option
-import std.result
-import std.allocator
 import std.conv
+import std.env
 import std.sort
 
 // -----------------------------------------------------------------------------
@@ -141,8 +135,7 @@ fn collect_entries(path: String, state: &State) Result(List(Entry), FsError) {
         entries.push(Entry { name = owned, kind = e.kind })
     }
 
-    const err = it.err()
-    err match {
+    it.err() match {
         Some(e) => {
             free_entries(&entries)
             return Err(e)
@@ -189,7 +182,7 @@ fn render_line(prefix: String, is_last: bool, path: String, entry: &Entry, state
         ensure_nul_term(&stat_sb)
 
         const info_r = stat(stat_sb.as_view())
-        let size: u64 = 0
+        let size = 0
         info_r match {
             Ok(info) => { size = info.size }
             Err(_) => {}

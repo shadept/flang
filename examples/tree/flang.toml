@@ -1,3 +1,7 @@
 [project]
 name = "ftree"
 version = "0.1.0"
+
+[imports]
+global = ["std.prelude"]
+

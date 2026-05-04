@@ -20,7 +20,7 @@ fn apply_query(root: &JsonValue, query: String) &JsonValue? {
 
     let current = root
 
-    let i: usize = 0
+    let i = 0
     if query[0] == '.' {
         i = 1
     }

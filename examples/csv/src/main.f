@@ -8,12 +8,9 @@
 import std.encoding.csv
 import std.io.file
 import std.io.reader
-import std.env
-import std.list
-import std.simd
-import std.string
-import std.string_builder
 import std.conv
+import std.env
+import std.simd
 
 fn print_usage() {
     println("Usage: fcsv [file] [columns] [range]")
@@ -34,8 +31,8 @@ const MAX_ROWS: usize = 0xFFFF_FFFF_FFFF_FFFF
 // SIMD-accelerated count of `target` bytes in `data`.
 // Processes 16 bytes per iteration via 128-bit vectors, then a scalar tail.
 fn simd_count_byte(data: String, target: u8) usize {
-    let count: usize = 0
-    let i: usize = 0
+    let count = 0
+    let i = 0
     const splat = v128_splat_u8(target)
     while i + 16 <= data.len {
         const chunk = v128_load(data.ptr + i)

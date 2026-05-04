@@ -1,10 +1,6 @@
 import std.io.file
 import std.io.reader
-import std.list
-import std.string_builder
-import std.string
 import std.env
-import std.option
 
 fn is_whitespace(c: u8) bool {
     return c == ' ' or c == '\t' or c == '\n' or c == '\r'
@@ -82,15 +78,15 @@ pub fn main() i32 {
     let sb = string_builder(64)
     defer sb.deinit()
 
-    let total_lines: usize = 0
-    let total_words: usize = 0
-    let total_bytes: usize = 0
+    let total_lines = 0
+    let total_words = 0
+    let total_bytes = 0
 
     if files.len == 0 {
         // Read from stdin
-        let lines: usize = 0
-        let words: usize = 0
-        let bytes_count: usize = 0
+        let lines = 0
+        let words = 0
+        let bytes_count = 0
         count(stdin.reader(), &lines, &words, &bytes_count)
         print_counts(&sb, lines, words, bytes_count, show_lines, show_words, show_bytes, "")
     } else {
@@ -104,9 +100,9 @@ pub fn main() i32 {
                 continue
             }
             const file = f.unwrap()
-            let lines: usize = 0
-            let words: usize = 0
-            let bytes_count: usize = 0
+            let lines = 0
+            let words = 0
+            let bytes_count = 0
             count(file.reader(), &lines, &words, &bytes_count)
             close_file(&file)
             print_counts(&sb, lines, words, bytes_count, show_lines, show_words, show_bytes, a)
