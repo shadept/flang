@@ -33,7 +33,7 @@ pub fn assert_seq_eq(a: List($T), b: List(T), msg: String) {
         sb.append(")")
         panic(sb.as_view())
     }
-    for i in 0..a.len {
+    for i in ..a.len {
         let eq: bool = a[i] == b[i]
         if eq == false {
             let sb = string_builder(64)
@@ -58,17 +58,17 @@ pub fn assert_set_eq(a: List($T), b: List(T), msg: String) {
         sb.append(")")
         panic(sb.as_view())
     }
+
     // Check every element in a exists in b
-    for i in 0..a.len {
+    for i in ..a.len {
         let found = false
-        for j in 0..b.len {
-            let eq: bool = a[i] == b[j]
-            if eq {
+        for j in ..b.len {
+            if a[i] == b[j] {
                 found = true
                 break
             }
         }
-        if found == false {
+        if !found {
             let sb = string_builder(64)
             sb.append(msg)
             sb.append(": element at index ")
@@ -77,17 +77,17 @@ pub fn assert_set_eq(a: List($T), b: List(T), msg: String) {
             panic(sb.as_view())
         }
     }
+
     // Check every element in b exists in a
-    for i in 0..b.len {
+    for i in ..b.len {
         let found = false
-        for j in 0..a.len {
-            let eq: bool = b[i] == a[j]
-            if eq {
+        for j in ..a.len {
+            if  b[i] == a[j] {
                 found = true
                 break
             }
         }
-        if found == false {
+        if !found {
             let sb = string_builder(64)
             sb.append(msg)
             sb.append(": element at index ")
