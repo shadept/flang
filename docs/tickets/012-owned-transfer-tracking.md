@@ -1,7 +1,7 @@
 # RFC-012: `Owned(T)` — transfer-aware cleanup helper
 
 **Type:** Stdlib addition
-**Status:** Proposed
+**Status:** Implemented
 **Depends on:** RFC-009 (op_try) — composes with `?` but doesn't require it
 
 ## Summary
@@ -58,27 +58,38 @@ state encoded in the value (`Option(T)`), where it's visible at every line.
 
 ```
 pub type Owned = struct(T) {
-    value: T?,
-    cleanup: fn(&T) void,
+    __value: &T?,
+    __cleanup: fn(&T) void,
 }
 ```
 
-`value` carries the ownership state: `Some(_)` means we own, `None` means we
-transferred. `cleanup` runs on `deinit` if we still own.
+`Owned(T)` wraps a heap pointer. `__value: &T?` niche-optimizes to a single
+nullable pointer (per spec.md §2.7) — the same wire size as `&T`. `Some(p)`
+means we own the pointer; `None` means we transferred. `cleanup` runs on
+`deinit` if we still own.
+
+**Implementation note (deviation from original draft):** the first draft
+spec'd `value: T?` (T by-value). That doesn't fit FLang's ownership model:
+stack values are owned by the frame, so wrapping them in `Owned` is
+redundant; container types like `StringBuilder` / `List` / `Dict` already
+own their internal heap via the header. `Owned` is specifically for raw
+heap pointers from an allocator, where the cleanup contract is "free this
+pointer once." Storing `&T?` makes the type's purpose explicit and avoids
+the language gap around extracting `&T` from inline `Option(T)` storage.
 
 ### API
 
 ```
-pub fn owned(value: $T, cleanup: fn(&T) void) Owned(T)
+pub fn owned(value: &$T, cleanup: fn(&T) void) Owned(T)
 
 // Take ownership out. The Owned becomes empty; deinit becomes a no-op.
 // Panics if the Owned is already empty.
-pub fn transfer(self: &Owned($T)) T
+pub fn transfer(self: &Owned($T)) &T
 
 // Run cleanup if still owned, otherwise no-op. Idempotent.
 pub fn deinit(self: &Owned($T))
 
-// True if we still own a value.
+// True if we still own a pointer.
 pub fn is_owned(self: &Owned($T)) bool
 
 // Transparent access to the inner T. Panics if the Owned is empty.

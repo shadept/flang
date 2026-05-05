@@ -22,6 +22,7 @@
 // FsError with no translation table.
 
 import std.option
+import std.owned
 import std.result
 import std.string
 import std.string_builder
@@ -381,7 +382,10 @@ pub fn glob(pattern: String, allocator: &Allocator? = null) Result(GlobIter, FsE
         root_str = String { ptr = pattern.ptr, len = prefix_end }
     }
 
-    let pat_buf = string_builder(pattern.len + 1, allocator)
+    // Wrap pat_buf in Owned so cleanup-on-error / transfer-on-success is
+    // symmetric with the `?` exit below.
+    let pat_buf = owned(string_builder(pattern.len + 1, allocator))
+    defer pat_buf.deinit()
     pat_buf.append(pattern)
 
     // Build a NUL-terminated root path for read_dir.
@@ -392,17 +396,13 @@ pub fn glob(pattern: String, allocator: &Allocator? = null) Result(GlobIter, FsE
     const term: &u8 = root_buf.ptr + root_buf.len
     term.* = 0
 
-    const w_r = walk_dir(root_buf.as_view(), allocator)
-    if w_r.is_err() {
-        pat_buf.deinit()
-        return Err(w_r.unwrap_err())
-    }
+    let walk = walk_dir(root_buf.as_view(), allocator)?
 
-    let g: GlobIter
-    g.walk = w_r.unwrap()
-    g.pattern = pat_buf
-    g.done = false
-    return Ok(g)
+    return Ok(.{
+        walk = walk,
+        pattern = pat_buf.transfer(),
+        done = false,
+    })
 }
 
 pub fn iter(self: &GlobIter) &GlobIter {

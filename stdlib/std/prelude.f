@@ -10,6 +10,7 @@ pub import std.iter
 pub import std.list
 pub import std.mem
 pub import std.option
+pub import std.owned
 pub import std.result
 pub import std.string
 pub import std.string_builder
