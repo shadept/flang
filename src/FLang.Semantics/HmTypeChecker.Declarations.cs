@@ -377,7 +377,14 @@ public partial class HmTypeChecker
             CheckStatement(globalConst);
     }
 
-    public void CheckModuleBodies(ModuleNode module, string modulePath)
+    /// <summary>
+    /// Type-check non-generic function bodies and (when <paramref name="checkTests"/>
+    /// is true) test blocks. Test blocks are scoped, importer-invisible code that
+    /// only the test runner and LSP need to type-check; normal `flang build`
+    /// passes <c>checkTests = false</c> so test-body specializations don't enter
+    /// the lowering pipeline alongside non-test code.
+    /// </summary>
+    public void CheckModuleBodies(ModuleNode module, string modulePath, bool checkTests = true)
     {
         _ctx.CurrentModulePath = modulePath;
 
@@ -389,9 +396,12 @@ public partial class HmTypeChecker
             CheckFunctionBody(fn);
         }
 
-        // Check tests
-        foreach (var test in module.Tests)
-            CheckTestBody(test);
+        // Check tests (skipped during non-test compilation)
+        if (checkTests)
+        {
+            foreach (var test in module.Tests)
+                CheckTestBody(test);
+        }
     }
 
     private void CheckFunctionBody(FunctionDeclarationNode fn)

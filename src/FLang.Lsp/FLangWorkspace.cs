@@ -306,8 +306,10 @@ public class FLangWorkspace
                 FLangLanguageServer.Log($"  [checkGlobals] {sw.ElapsedMilliseconds - lap}ms");
 
                 lap = sw.ElapsedMilliseconds;
+                // LSP always type-checks test bodies for hover / go-to-definition
+                // / diagnostics inside `test "..." { ... }` blocks.
                 foreach (var kvp in parsedModules)
-                    hmChecker.CheckModuleBodies(kvp.Value, ResolveModulePath(kvp.Key));
+                    hmChecker.CheckModuleBodies(kvp.Value, ResolveModulePath(kvp.Key), checkTests: true);
                 FLangLanguageServer.Log($"  [checkBodies] {sw.ElapsedMilliseconds - lap}ms");
 
                 hmChecker.ResolvePendingSpecializations();

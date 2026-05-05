@@ -223,6 +223,17 @@ public partial class HmTypeChecker
             return _ctx.Engine.Specialize(fns[0].Signature);
         }
 
+        // Multiple overloads as a value: defer resolution. Return a fresh
+        // TypeVar and queue the node for a post-pass that picks the matching
+        // candidate once usage has constrained the type — same shape as how
+        // `list()` infers its element type from later `push()` calls.
+        if (fns is { Count: > 1 })
+        {
+            var fresh = _ctx.Engine.FreshVar();
+            _pendingFnRefResolutions.Add((id, fns, fresh));
+            return fresh;
+        }
+
         // Check if it's a nominal type name — returned as raw type.
         // Coercion to Type(T) happens lazily via NominalToTypeCoercionRule
         // when the context demands it (function args, assignments).

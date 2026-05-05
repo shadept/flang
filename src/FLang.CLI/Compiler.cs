@@ -273,13 +273,17 @@ public class Compiler
             hmChecker.CheckGlobalConstants(kvp.Value, ResolveModulePath(kvp.Key));
 
         foreach (var kvp in parsedModules)
-            hmChecker.CheckModuleBodies(kvp.Value, ResolveModulePath(kvp.Key));
+            hmChecker.CheckModuleBodies(kvp.Value, ResolveModulePath(kvp.Key), checkTests: options.RunTests);
 
         // Resolve specializations deferred due to unresolved TypeVars
         hmChecker.ResolvePendingSpecializations();
 
         foreach (var kvp in parsedModules)
             hmChecker.CheckGenericBodies(kvp.Value, ResolveModulePath(kvp.Key));
+
+        // Resolve overloaded function references used as values
+        // (e.g. `owned(p, deinit)` — picks the deinit matching the param type)
+        hmChecker.ResolvePendingFnRefs();
 
         // Post-inference validation (unsuffixed literal checks: E2001, E2029, E2102)
         hmChecker.ValidatePostInference();

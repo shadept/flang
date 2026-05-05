@@ -70,6 +70,15 @@ public partial class HmTypeChecker : INominalTypeRegistry, ITemplateTypeProvider
     /// </summary>
     private readonly List<(FunctionScheme Scheme, Type[] ParamTypes, Type ReturnType, SourceSpan CallSpan, CallExpressionNode CallNode)> _pendingSpecializations = [];
 
+    /// <summary>
+    /// Identifier nodes referring to overloaded functions used as values
+    /// (`owned(p, deinit)`). Resolved post-inference: once usage has
+    /// constrained the TypeVar to a concrete fn type, pick the matching
+    /// candidate. Same shape as `_unsuffixedLiterals` — collect during
+    /// inference, resolve after.
+    /// </summary>
+    private readonly List<(IdentifierExpressionNode Node, List<FunctionScheme> Candidates, Type TypeVar)> _pendingFnRefResolutions = [];
+
     public HashSet<Type> InstantiatedTypes => _results.InstantiatedTypes;
 
     public HmTypeChecker(Compilation compilation)
@@ -349,6 +358,126 @@ public partial class HmTypeChecker : INominalTypeRegistry, ITemplateTypeProvider
         ["i8", "i16", "i32", "i64", "u8", "u16", "u32", "u64", "isize", "usize", "char"];
 
     private static readonly HashSet<string> _floatTypeNames = ["f32", "f64"];
+
+    /// <summary>
+    /// Resolve overloaded function references used as values. Each pending node
+    /// has a TypeVar that should now be bound (via usage — call site, struct
+    /// field assignment, etc.) to a concrete fn type. Walk the candidates and
+    /// pick the one whose signature unifies with the resolved type.
+    /// Run after CheckModuleBodies + CheckGenericBodies, before ValidatePostInference.
+    /// </summary>
+    public void ResolvePendingFnRefs()
+    {
+        foreach (var (id, candidates, typeVar) in _pendingFnRefResolutions)
+        {
+            // If the AST node already got resolved (e.g. by a sibling pass),
+            // skip — id.ResolvedFunctionTarget is the source of truth.
+            if (id.ResolvedFunctionTarget != null) continue;
+
+            var resolved = _ctx.Engine.Resolve(typeVar);
+            if (resolved is not Core.Types.FunctionType expectedFn)
+            {
+                ReportError(
+                    $"Cannot determine which overload of `{id.Name}` to use — no function-typed context",
+                    id.Span, "E2004");
+                continue;
+            }
+
+            // If the expected type still has unresolved TypeVars (e.g. inside
+            // a generic body before specialization), every candidate unifies
+            // vacuously — defer. The specialization clone will re-run
+            // inference and re-queue this node with concrete types.
+            if (ContainsUnboundTypeVar(expectedFn))
+                continue;
+
+            // Score candidates the same way as call-site overload resolution
+            // (HmTypeChecker.Expressions.cs `ResolveOverload`): prefer the
+            // candidate with fewer quantified TypeVars (more specific), then
+            // lower coercion cost. This makes `deinit(&$T) {}` (the universal
+            // no-op fallback in core/deinit.f) lose to a concrete `deinit(&X)`.
+            FunctionScheme? best = null;
+            int bestGenericCount = int.MaxValue;
+            int bestCost = int.MaxValue;
+            foreach (var c in candidates)
+            {
+                var sig = _ctx.Engine.Specialize(c.Signature);
+                if (sig is not Core.Types.FunctionType fnSig) continue;
+                if (fnSig.ParameterTypes.Count != expectedFn.ParameterTypes.Count) continue;
+
+                int totalCost = 0;
+                bool ok = true;
+                for (int i = 0; i < fnSig.ParameterTypes.Count; i++)
+                {
+                    var u = _ctx.Engine.TryUnify(fnSig.ParameterTypes[i], expectedFn.ParameterTypes[i]);
+                    if (u == null) { ok = false; break; }
+                    totalCost += u.Value.Cost;
+                }
+                if (!ok) continue;
+
+                int genericCount = c.Signature.QuantifiedVarIds.Count;
+                if (genericCount < bestGenericCount
+                    || (genericCount == bestGenericCount && totalCost < bestCost))
+                {
+                    best = c;
+                    bestGenericCount = genericCount;
+                    bestCost = totalCost;
+                }
+            }
+
+            if (best == null)
+            {
+                ReportError(
+                    $"No overload of `{id.Name}` matches type `{expectedFn}`",
+                    id.Span, "E2004");
+                continue;
+            }
+
+            // Commit: re-specialize, unify with expected, then monomorphize
+            // the chosen candidate if it's generic.
+            var winnerSpec = _ctx.Engine.Specialize(best.Signature);
+            if (winnerSpec is not Core.Types.FunctionType winnerFn) continue;
+            for (int i = 0; i < winnerFn.ParameterTypes.Count; i++)
+                _ctx.Engine.Unify(winnerFn.ParameterTypes[i], expectedFn.ParameterTypes[i], id.Span);
+            _ctx.Engine.Unify(winnerFn.ReturnType, expectedFn.ReturnType, id.Span);
+            _ctx.Engine.Unify(typeVar, winnerFn, id.Span);
+
+            FunctionDeclarationNode node = best.Node;
+            if (best.Signature.QuantifiedVarIds.Count > 0)
+            {
+                var concreteParams = winnerFn.ParameterTypes
+                    .Select(p => _ctx.Engine.Resolve(p)).ToArray();
+                var concreteReturn = _ctx.Engine.Resolve(winnerFn.ReturnType);
+                if (!concreteParams.Any(p => p is Core.Types.TypeVar)
+                    && concreteReturn is not Core.Types.TypeVar)
+                {
+                    var specialized = EnsureSpecialization(best, concreteParams, concreteReturn, id.Span);
+                    if (specialized != null) node = specialized;
+                }
+            }
+            id.ResolvedFunctionTarget = node;
+        }
+        _pendingFnRefResolutions.Clear();
+    }
+
+    /// <summary>
+    /// Walks a (resolved) type checking whether any leaf is still an unbound
+    /// TypeVar. Used to defer fn-ref resolution inside generic templates until
+    /// the specialization clone re-runs inference with concrete arguments.
+    /// </summary>
+    private bool ContainsUnboundTypeVar(Core.Types.Type type)
+    {
+        type = _ctx.Engine.Resolve(type);
+        return type switch
+        {
+            Core.Types.TypeVar => true,
+            Core.Types.FunctionType f =>
+                f.ParameterTypes.Any(ContainsUnboundTypeVar) || ContainsUnboundTypeVar(f.ReturnType),
+            Core.Types.ReferenceType r => ContainsUnboundTypeVar(r.InnerType),
+            Core.Types.ArrayType a => ContainsUnboundTypeVar(a.ElementType),
+            Core.Types.NominalType n => n.TypeArguments.Any(ContainsUnboundTypeVar),
+            _ => false,
+        };
+    }
 
     /// <summary>
     /// Validate unsuffixed integer literals after all inference is complete.
