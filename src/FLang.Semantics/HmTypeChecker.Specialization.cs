@@ -232,7 +232,7 @@ public partial class HmTypeChecker
         CallExpressionNode call => new CallExpressionNode(call.Span, call.FunctionName,
             [.. call.Arguments.Select(CloneExpression)],
             call.UfcsReceiver != null ? CloneExpression(call.UfcsReceiver) : null,
-            call.MethodName),
+            call.MethodName, call.FunctionNameSpan),
         IfExpressionNode ie => new IfExpressionNode(ie.Span, CloneExpression(ie.Condition),
             CloneExpression(ie.ThenBranch),
             ie.ElseBranch != null ? CloneExpression(ie.ElseBranch) : null),

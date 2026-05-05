@@ -85,10 +85,27 @@ public class DefinitionHandler : DefinitionHandlerBase
 
     private static SourceSpan? ResolveDefinitionTarget(AstNode node, FileAnalysisResult analysis)
     {
+        // For any operator-overload node (`a + b`, `a == b`, `-a`, `a[i]`, `a ?? b`,
+        // and pattern literal compares) the type checker stores the resolved function
+        // in TypeCheckResult.ResolvedOperators. Surfacing it via goto-def lets the
+        // user navigate from the operator symbol straight into the impl, the same
+        // way they can already navigate from a call's `.method` to its target.
+        if (node is BinaryExpressionNode or UnaryExpressionNode or IndexExpressionNode
+            or AssignmentExpressionNode or CoalesceExpressionNode)
+        {
+            var op = analysis.TypeChecker?.GetResolvedOperator(node);
+            if (op != null) return op.Function.NameSpan;
+        }
+
         switch (node)
         {
             case CallExpressionNode call when call.ResolvedTarget != null:
                 return call.ResolvedTarget.NameSpan;
+
+            case CallExpressionNode call when call.CalleeDeclaration != null:
+                // Indirect call through a local/parameter (`let f = …; f(args)`).
+                // No named function to land on — navigate to the binding instead.
+                return GetDeclarationNameSpan(call.CalleeDeclaration);
 
             case CallExpressionNode call:
                 {
@@ -181,6 +198,11 @@ public class DefinitionHandler : DefinitionHandlerBase
                             }
                         }
                     }
+                    // op_deref-resolved access (e.g. `rc.x` going through Rc.op_deref):
+                    // no own field matched, navigate to the first op_deref function so
+                    // the user lands somewhere meaningful instead of nothing.
+                    if (ma.OpDerefChain is { Count: > 0 } chain)
+                        return chain[0].NameSpan;
                     break;
                 }
         }
@@ -238,6 +260,14 @@ public class DefinitionHandler : DefinitionHandlerBase
         }
         return null;
     }
+
+    private static SourceSpan? GetDeclarationNameSpan(AstNode decl) => decl switch
+    {
+        VariableDeclarationNode v => v.NameSpan,
+        FunctionParameterNode p => p.NameSpan,
+        FunctionDeclarationNode f => f.NameSpan,
+        _ => null
+    };
 
     private static string? GetNominalTypeName(FLang.Core.Types.Type type)
     {

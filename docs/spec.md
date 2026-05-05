@@ -383,6 +383,9 @@ Every operator desugars to a function call. The stdlib provides implementations 
 | `+=` | `op_add_assign` |
 | unary `-` / `!` | `op_neg` / `op_not` |
 | `.field` (fallback) | `op_deref` |
+| `t(args)` (callable types) | `op_call` |
+
+**`op_call`** (RFC-014): when `t(args)` is invoked and `t`'s type defines `fn op_call(self: T, ...)` or `fn op_call(self: &T, ...)`, the call rewrites to `op_call(t, args...)` (or `op_call(&t, args...)`). Any type can become callable — comparators with state, function objects, iterator-like wrappers, and (Phase 2) capturing closures. Multiple `op_call` overloads on the same type are resolved by the existing overload mechanism. `op_call` resolution chains through `op_deref`: `Owned(F)` is callable when `F` is, no special-casing required.
 
 **`op_deref`**: When `x.field` or `x.method()` fails to resolve on type `X`, the compiler looks for `fn op_deref(self: &X) &T`. If found, resolution retries on `T`. This applies to both field access and UFCS method calls. Chains through multiple layers: `Rc(Wrapper(Point)).x` resolves through two `op_deref` calls. Own fields and methods on `X` always take priority — `op_deref` is only consulted when direct resolution fails. This is a general-purpose language feature, not specific to smart pointers.
 

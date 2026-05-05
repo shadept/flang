@@ -1670,8 +1670,17 @@ public partial class HmTypeChecker
                     for (int i = 0; i < argTypes.Length; i++)
                         _ctx.Engine.Unify(argTypes[i], fnType.ParameterTypes[i], call.Span);
                     call.IsIndirectCall = true;
+                    call.CalleeDeclaration = _ctx.Scopes.LookupDeclaration(call.FunctionName);
                     return fnType.ReturnType;
                 }
+            }
+            else if (resolved is NominalType receiverNominal && call.UfcsReceiver == null)
+            {
+                // RFC-014 Phase 1: `c(args)` where `c`'s type defines `op_call`.
+                // Rewrite the call as a UFCS dispatch through `op_call`, so existing
+                // UFCS lowering carries the receiver prepend + by-ref handling.
+                var opCallResult = TryResolveOpCall(call, receiverNominal, argTypes);
+                if (opCallResult != null) return opCallResult;
             }
         }
 
@@ -1684,6 +1693,93 @@ public partial class HmTypeChecker
                 return GuessReturnTypeFromCandidates(fallbackCandidates);
         }
         return _ctx.Engine.FreshVar();
+    }
+
+    /// <summary>
+    /// RFC-014: resolve `c(args)` against `op_call` overloads on `c`'s type.
+    /// Tries `op_call(&T, args...)` first (the recommended receiver form),
+    /// then `op_call(T, args...)` for value-receiver overloads. Falls through
+    /// op_deref if the type wraps another type that defines op_call (e.g.
+    /// Owned(Counter) → Counter::op_call).
+    ///
+    /// On match: rewrites the call into UFCS shape — synthesizes an identifier
+    /// receiver, sets MethodName="op_call" and ResolvedTarget so existing
+    /// UFCS lowering path handles the prepend + receiver by-ref/value adapt.
+    /// </summary>
+    private Type? TryResolveOpCall(CallExpressionNode call, NominalType receiverType, Type[] argTypes)
+    {
+        var candidates = LookupFunctions("op_call");
+        if (candidates == null || candidates.Count == 0) return null;
+
+        // Try with &T (preferred for stateful callables) then with T (consume-receiver).
+        var withRef = new Type[argTypes.Length + 1];
+        withRef[0] = new ReferenceType(receiverType);
+        Array.Copy(argTypes, 0, withRef, 1, argTypes.Length);
+
+        var withVal = new Type[argTypes.Length + 1];
+        withVal[0] = receiverType;
+        Array.Copy(argTypes, 0, withVal, 1, argTypes.Length);
+
+        var result = ResolveOverload(candidates, withRef, call.Span)
+                     ?? ResolveOverload(candidates, withVal, call.Span);
+
+        // op_deref fallback: peel through op_deref layers and retry op_call lookup
+        // on the inner type. Mirrors TryUfcsOpDerefCall but without UFCS framing.
+        var derefChain = new List<FunctionDeclarationNode>();
+        if (result == null)
+        {
+            var current = (Type)receiverType;
+            for (int depth = 0; depth < 10 && result == null; depth++)
+            {
+                while (current is ReferenceType rt2)
+                    current = _ctx.Engine.Resolve(rt2.InnerType);
+                if (current is not NominalType currentNominal) break;
+
+                var refToCurrent = new ReferenceType(currentNominal);
+                var derefRet = TryResolveOperator("op_deref", [refToCurrent], call.Span, out var derefNode);
+                if (derefRet == null || derefNode == null) break;
+
+                var resolvedRet = _ctx.Engine.Resolve(derefRet);
+                if (resolvedRet is not ReferenceType innerRef) break;
+
+                derefChain.Add(derefNode);
+                var innerType = _ctx.Engine.Resolve(innerRef.InnerType);
+
+                var innerWithRef = new Type[argTypes.Length + 1];
+                innerWithRef[0] = innerRef;
+                Array.Copy(argTypes, 0, innerWithRef, 1, argTypes.Length);
+                var innerWithVal = new Type[argTypes.Length + 1];
+                innerWithVal[0] = innerType;
+                Array.Copy(argTypes, 0, innerWithVal, 1, argTypes.Length);
+
+                result = ResolveOverload(candidates, innerWithRef, call.Span)
+                         ?? ResolveOverload(candidates, innerWithVal, call.Span);
+                if (result != null) break;
+
+                current = innerType;
+            }
+        }
+
+        if (result == null) return null;
+
+        var (_, fnType, node) = result.Value;
+
+        // Synthesize an identifier expression for the receiver and infer it
+        // through the normal path so its type, declaration link, and usage
+        // tracking are all set correctly for downstream lowering / LSP.
+        // Span tracks just the variable name — using the full call span would
+        // make AstNodeFinder pick this synth node when the cursor lands on
+        // `(`/`)`/args, hijacking goto-definition away from `op_call`.
+        var receiverNode = new IdentifierExpressionNode(call.FunctionNameSpan, call.FunctionName);
+        InferExpression(receiverNode);
+
+        call.UfcsReceiver = receiverNode;
+        call.MethodName = "op_call";
+        call.ResolvedTarget = node;
+        if (derefChain.Count > 0)
+            call.UfcsOpDerefChain = derefChain;
+        CheckDeprecatedCall(node, call.Span);
+        return fnType.ReturnType;
     }
 
     // =========================================================================

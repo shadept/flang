@@ -33,6 +33,24 @@ When you discover a bug or limitation:
 
 ---
 
+### RFC-014 Phase 2 (Capturing Closures) Not Yet Implemented
+
+**Status:** Phase 1 (`op_call`) landed. Phase 2 (capturing lambdas) is the next step.
+
+**What works:** any type with `fn op_call(self: T, ...)` or `fn op_call(self: &T, ...)` is callable as `t(args)`. Resolution chains through `op_deref`. Multiple `op_call` overloads on the same type are dispatched by argument type. Tests in `tests/FLang.Tests/Harness/op_call/`.
+
+**What's deferred:**
+
+1. **Capturing lambdas.** The lambda scope barrier (`_ctx.LambdaScopeBarrier`) still forbids referencing outer scope inside `fn(...) { ... }`. Per the RFC, this barrier should be replaced with a capture-detection pass that:
+    - Identifies free variables in the lambda body.
+    - Synthesizes an anonymous `__Closure_N` struct holding captures by value.
+    - Synthesizes an `op_call(self: &__Closure_N, ...lambda_params)` function with the body's capture references rewritten to `self.<name>`.
+    - Emits a struct literal at the lambda site.
+2. **Coercion of capturing closures to bare `fn(...) ret`** — must error with E2XXX ("closure captures variables; cannot coerce to bare function pointer"). Empty captures still decay to a plain function pointer (current behavior).
+3. **Stdlib follow-ups** — making `FilterIter` / `MapIter` generic over the callable type, and adding `box(allocator, callable)` to `std.owned`, both unblocked once Phase 2 lands.
+
+---
+
 ### `match` on Value-Type Optional Doesn't Yield Ref Bindings
 
 **Status:** Open (low priority — workarounds exist for current consumers)

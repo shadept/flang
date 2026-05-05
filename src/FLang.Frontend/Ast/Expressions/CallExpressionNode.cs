@@ -6,7 +6,8 @@ namespace FLang.Frontend.Ast.Expressions;
 public class CallExpressionNode : ExpressionNode
 {
     public CallExpressionNode(SourceSpan span, string functionName, IReadOnlyList<ExpressionNode> arguments,
-        ExpressionNode? ufcsReceiver = null, string? methodName = null) :
+        ExpressionNode? ufcsReceiver = null, string? methodName = null,
+        SourceSpan? functionNameSpan = null) :
         base(span)
     {
         FunctionName = functionName;
@@ -14,22 +15,34 @@ public class CallExpressionNode : ExpressionNode
         Arguments = arguments is List<ExpressionNode> list ? list : new List<ExpressionNode>(arguments);
         UfcsReceiver = ufcsReceiver;
         MethodName = methodName;
+        FunctionNameSpan = functionNameSpan ?? span;
     }
 
     public string FunctionName { get; }
     public List<ExpressionNode> Arguments { get; }
 
     /// <summary>
-    /// For UFCS calls (obj.method(args)), this holds the receiver expression (obj).
-    /// Null for regular function calls.
+    /// Span covering just the called name (the identifier or `.method` part), not the
+    /// arguments or surrounding parens. Used by LSP and any synthesized AST that needs
+    /// to refer back to the original name location without claiming the entire call's
+    /// span. Falls back to the full call span when the parser didn't supply one.
     /// </summary>
-    public ExpressionNode? UfcsReceiver { get; }
+    public SourceSpan FunctionNameSpan { get; }
+
+    /// <summary>
+    /// For UFCS calls (obj.method(args)), this holds the receiver expression (obj).
+    /// Null for regular function calls. Settable so the type checker can re-shape an
+    /// op_call dispatch (`c(args)` where `c` is a value with an `op_call` method) into
+    /// UFCS form, reusing the existing UFCS lowering path without special-casing op_call.
+    /// </summary>
+    public ExpressionNode? UfcsReceiver { get; set; }
 
     /// <summary>
     /// For UFCS calls, this holds the method name (just the method part, not "obj.method").
-    /// Null for regular function calls.
+    /// Null for regular function calls. Settable for the same op_call rewrite reason as
+    /// <see cref="UfcsReceiver"/>.
     /// </summary>
-    public string? MethodName { get; }
+    public string? MethodName { get; set; }
 
     /// <summary>
     /// Semantic: The resolved target function declaration.
@@ -67,4 +80,13 @@ public class CallExpressionNode : ExpressionNode
     /// Null or empty = no op_deref involved.
     /// </summary>
     public List<FunctionDeclarationNode>? UfcsOpDerefChain { get; set; }
+
+    /// <summary>
+    /// Declaration of the local variable or parameter being called, when the callee is
+    /// a value rather than a named function (i.e. <see cref="IsIndirectCall"/> is true).
+    /// Lets goto-definition navigate from `f(args)` to `let f = …` instead of trying to
+    /// find a function named `f`. Null for direct calls and for op_call dispatch (where
+    /// the synthesized <see cref="UfcsReceiver"/> identifier already carries the link).
+    /// </summary>
+    public AstNode? CalleeDeclaration { get; set; }
 }

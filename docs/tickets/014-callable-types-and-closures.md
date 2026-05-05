@@ -1,7 +1,7 @@
 # RFC-014: `op_call` and closure literals
 
 **Type:** Language feature
-**Status:** Proposed
+**Status:** Phase 1 landed (op_call). Phase 2 (capturing lambdas) deferred — see [known-issues.md](../known-issues.md#rfc-014-phase-2-capturing-closures-not-yet-implemented).
 **Depends on:** RFC-007 (Option as enum) — only as background; not load-bearing
 
 ## Summary

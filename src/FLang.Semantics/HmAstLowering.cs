@@ -2088,7 +2088,23 @@ public class HmAstLowering
             // op_deref chain: transform receiver through op_deref calls before passing to callee
             if (call.UfcsOpDerefChain is { Count: > 0 })
             {
-                var receiverVal = LowerExpression(call.UfcsReceiver);
+                // For local-variable receivers, pass the alloca pointer directly to the first
+                // op_deref so mutations through the chain (e.g. RFC-014 op_call on Owned(Counter))
+                // hit the original storage. LowerExpression(id) loads the value, which would
+                // make op_deref operate on a copy.
+                Value receiverVal;
+                if (call.UfcsReceiver is IdentifierExpressionNode receiverIdent
+                    && _locals.TryGetValue(receiverIdent.Name, out var receiverAlloca)
+                    && (!_parameters.Contains(receiverIdent.Name) || _byRefParams.Contains(receiverIdent.Name))
+                    && receiverAlloca.IrType is IrPointer recvPtrTy
+                    && recvPtrTy.Pointee is not IrPointer)
+                {
+                    receiverVal = receiverAlloca;
+                }
+                else
+                {
+                    receiverVal = LowerExpression(call.UfcsReceiver);
+                }
 
                 foreach (var derefFn in call.UfcsOpDerefChain)
                 {

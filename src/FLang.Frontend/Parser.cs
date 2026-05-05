@@ -1531,7 +1531,8 @@ public class Parser
                         var syntheticName =
                             $"{(expr is IdentifierExpressionNode id ? id.Name : "_")}.{fieldToken.Text}";
                         expr = new CallExpressionNode(callSpan, syntheticName, arguments,
-                            ufcsReceiver: expr, methodName: fieldToken.Text);
+                            ufcsReceiver: expr, methodName: fieldToken.Text,
+                            functionNameSpan: fieldToken.Span);
                         continue;
                     }
 
@@ -1808,7 +1809,8 @@ public class Parser
                             return ParseStructConstruction(typeName);
                         }
 
-                        return new CallExpressionNode(callSpan, identifierToken.Text, arguments);
+                        return new CallExpressionNode(callSpan, identifierToken.Text, arguments,
+                            functionNameSpan: identifierToken.Span);
                     }
 
                     return new IdentifierExpressionNode(identifierToken.Span, identifierToken.Text);
