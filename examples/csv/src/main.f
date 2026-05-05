@@ -123,10 +123,12 @@ fn run(reader: &CsvReader, columns_arg: String, range_start: usize, range_end: u
 
     // Resolve column indices
     let col_indices = list(16)
+    defer col_indices.deinit()
     let has_columns = false
 
     if columns_arg.len > 0 {
         let col_names = list(16)
+        defer col_names.deinit()
         split_columns(columns_arg, &col_names)
 
         for c in 0..col_names.len {
@@ -148,6 +150,7 @@ fn run(reader: &CsvReader, columns_arg: String, range_start: usize, range_end: u
     }
 
     let sb = string_builder(256)
+    defer sb.deinit()
     const delimiter = reader.options.delimiter
 
     // Print header row
@@ -181,7 +184,6 @@ fn run(reader: &CsvReader, columns_arg: String, range_start: usize, range_end: u
         print_record(&sb, &rows[i], &col_indices, has_columns, delimiter)
     }
 
-    sb.deinit()
     return 0
 }
 

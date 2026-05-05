@@ -95,8 +95,8 @@ pub fn main() i32 {
         }
 
         let root = parsed.unwrap()
+        defer root.deinit()
         print_selected(&root, query)
-        root.deinit()
         return 0
     }
 
@@ -118,8 +118,8 @@ pub fn main() i32 {
     }
 
     let root = parsed.unwrap()
+    defer root.deinit()
     print_selected(&root, query)
-    root.deinit()
 
     return 0
 }

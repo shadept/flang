@@ -168,6 +168,7 @@ fn display_board(fen: String) {
 
 pub fn main() i32 {
     let sb = string_builder(64)
+    defer sb.deinit()
     let w = sb.writer()
 
     set_style(w, Style.Bold)
@@ -175,7 +176,6 @@ pub fn main() i32 {
     sb.append("♚ FEN Chess Board Display ♔")
     reset(w)
     println(sb.as_view())
-    sb.deinit()
 
     println("")
 
