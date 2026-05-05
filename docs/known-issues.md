@@ -33,6 +33,19 @@ When you discover a bug or limitation:
 
 ---
 
+### `match` on Value-Type Optional Doesn't Yield Ref Bindings
+
+**Status:** Open (low priority — workarounds exist for current consumers)
+**Affected:** any future wrapper that wants `&T` access into an inline `Option(T)` field where `T` is a value type
+
+When a `match` arm binds a payload, the binding is always **by value**. `match self.field { Some(v) => &v, … }` over a struct field of type `Option(T)` gives a stack-temp pointer, not a pointer into the field — verified by mutation test.
+
+**Workaround:** `Owned(T)` originally hit this when the RFC spec'd `value: T?`; the production design switched to `value: &T?` (niche-optimized to a nullable pointer), where the payload IS a `&T` and `Some(p) => p` works without ref-binding. Generalizes: any wrapper that needs `&T` access should store `&T?` rather than `T?`. For container types that own internal heap (`StringBuilder`, `List`, `Dict`), use the `take(&self) T` pattern instead — defer + take handles transfer without needing to wrap.
+
+**If we ever need it:** Rust-style default binding modes (when scrutinee descends through `&`, flip pattern bindings to ByRef) is the principled fix. ~2 days in `HmTypeChecker.CheckPattern` + pattern lowering. Not currently blocking anything, so deferred.
+
+---
+
 ### RFC-007 Follow-ups
 
 **Status:** Phase 5 of [RFC-007](tickets/007-option-as-enum.md) deferred

@@ -22,6 +22,10 @@ _Avoid_: type resolver, semantic analyzer
 The unification engine inside `HmTypeChecker`. Short-lived per function scope; holds active generic substitutions; applies `IInferenceCoercionRule` for built-in coercions.
 _Avoid_: unifier, solver
 
+**Constrain-then-resolve**:
+The standing pattern for delayed type decisions in `HmTypeChecker`. When a piece of syntax can't pick its type until usage informs it (unsuffixed integer literals, generic `list()` learning `T` from `push`, overloaded function names used as values), the inference path returns a fresh `TypeVar`, queues the AST node into a pending list (`_unsuffixedLiterals`, `_pendingFnRefResolutions`, `_pendingSpecializations`), and resolves it in a post-pass once unification has constrained the variable. Prefer this over plumbing an `expectedType` parameter through `InferExpression` — adding hint-threading creates one-off mechanisms that don't compose with the rest of HM, biases toward the call-site context that originated the hint, and grows the surface area of every inference rule. The pending-list approach instead works in any context where the TypeVar gets unified, including struct field assignments, returns, and indirect calls — and falls out of the same machinery that already handles `list()` learning its `T`.
+_Avoid_: bidirectional inference, expected-type plumbing, type hints (when the actual lever is a deferred TypeVar)
+
 **Specialization**:
 A concrete instantiation of a generic function or type produced by `HmTypeChecker.EnsureSpecialization()`. FLang uses **eager monomorphization**: generic templates are deep-cloned and type-checked per call site and never reach the IR.
 _Avoid_: instantiation, monomorph
@@ -77,6 +81,10 @@ _Avoid_: heap string, allocated string
 **StringBuilder**:
 An owning, mutable, growable buffer. `to_string()` transfers the buffer into a fresh `OwnedString` (move semantics — the builder resets).
 _Avoid_: rope, buffer
+
+**Owned(T)**:
+A heap-pointer wrapper with explicit transfer tracking — `__value: &T?` plus a cleanup callback. Pair with `defer buf.deinit()` for cleanup-on-error and `buf.transfer()` for hand-off-on-success. **Strictly for raw heap pointers** from an allocator; stack values are owned by their frame, and header-owns-heap types (`StringBuilder`, `List`, `Dict`) carry their own lifecycle through the header without wrapping. Doubles as FLang's `Box`-shaped abstraction — a single owning pointer with a destructor — so a separate `Box` type would be redundant.
+_Avoid_: Box, scope guard, smart pointer (use **Owned**)
 
 ### Stdlib conventions
 
