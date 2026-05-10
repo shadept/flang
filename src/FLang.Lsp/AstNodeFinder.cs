@@ -106,7 +106,18 @@ public static class AstNodeFinder
         WhileNode or
         LambdaExpressionNode;
 
-    private static IEnumerable<AstNode> GetChildren(AstNode node)
+    /// <summary>
+    /// Recursively visit every node in the tree rooted at <paramref name="root"/>.
+    /// </summary>
+    public static void Walk(AstNode? root, Action<AstNode> visit)
+    {
+        if (root == null) return;
+        visit(root);
+        foreach (var child in GetChildren(root))
+            Walk(child, visit);
+    }
+
+    public static IEnumerable<AstNode> GetChildren(AstNode node)
     {
         switch (node)
         {

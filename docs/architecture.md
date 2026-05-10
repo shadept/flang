@@ -125,7 +125,9 @@ flang -I raylib.h -L libraylib.a main.f
 
 ## Language Server (LSP)
 
-The compiler includes an in-process LSP server (`FLang.Lsp`) invoked via `--lsp`. It reuses the same compilation pipeline — parser, source generators, type checker — so editor diagnostics match compiler output exactly. Features: hover, go-to-definition, type definition, document symbols, inlay hints (inferred types), signature help, and live diagnostics. `FLangWorkspace` manages document state with incremental re-analysis on file changes.
+The compiler includes an in-process LSP server (`FLang.Lsp`) invoked via `--lsp`. It reuses the same compilation pipeline — parser, source generators, type checker — so editor diagnostics match compiler output exactly. Features: hover, go-to-definition, type definition, find-references, document symbols, inlay hints (inferred types), signature help, and live diagnostics. `FLangWorkspace` manages document state with incremental re-analysis on file changes.
+
+Find-references inverts the resolved-target edges the type checker stores on each usage node (e.g. `IdentifierExpressionNode.ResolvedVariableDeclaration`, `CallExpressionNode.ResolvedTarget`, `TypeCheckResult.ResolvedOperators`). `ReferenceFinder` resolves the cursor to a `ReferenceTarget` (function / local-decl / struct-field / nominal-type), then walks every parsed module via `AstNodeFinder.Walk` looking for nodes that point back at that target. Functions are identified by `NameSpan` so generic specializations — which clone the declaration but preserve the original `NameSpan` — match the same target as the generic itself.
 
 ## Diagnostics
 

@@ -32,6 +32,7 @@ public static class FLangLanguageServer
                 .WithHandler<HoverHandler>()
                 .WithHandler<DefinitionHandler>()
                 .WithHandler<TypeDefinitionHandler>()
+                .WithHandler<ReferencesHandler>()
                 .WithHandler<DocumentSymbolHandler>()
                 .WithHandler<InlayHintHandler>()
                 .WithHandler<SignatureHelpHandler>()
