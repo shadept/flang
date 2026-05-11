@@ -24,35 +24,59 @@ public class ReferencesHandler : ReferencesHandlerBase
         var filePath = request.TextDocument.Uri.GetFileSystemPath();
         FLangLanguageServer.Log($"References: {filePath} @ {request.Position.Line}:{request.Position.Character}");
 
-        var analysis = await _workspace.GetAnalysisAsync(filePath);
-        if (analysis == null) return null;
+        var cursorAnalysis = await _workspace.GetAnalysisAsync(filePath);
+        if (cursorAnalysis == null) return null;
 
-        var fileId = PositionUtil.FindFileId(filePath, analysis.Compilation);
+        var fileId = PositionUtil.FindFileId(filePath, cursorAnalysis.Compilation);
         if (fileId == null) return null;
 
         var normalizedPath = Path.GetFullPath(filePath);
-        if (!analysis.ParsedModules.TryGetValue(normalizedPath, out var module))
+        if (!cursorAnalysis.ParsedModules.TryGetValue(normalizedPath, out var module))
             return null;
 
-        var source = analysis.Compilation.Sources[fileId.Value];
+        var source = cursorAnalysis.Compilation.Sources[fileId.Value];
         var position = PositionUtil.ToSourcePosition(request.Position, source);
 
         var lap = sw.ElapsedMilliseconds;
-        var target = ReferenceFinder.ResolveTargetAt(module, fileId.Value, position, analysis);
+        var target = ReferenceFinder.ResolveTargetAt(module, fileId.Value, position, cursorAnalysis);
         FLangLanguageServer.Log($"  [resolveTarget] {sw.ElapsedMilliseconds - lap}ms -> {target?.GetType().Name ?? "null"}");
         if (target == null) return null;
 
         var includeDecl = request.Context?.IncludeDeclaration ?? false;
-        lap = sw.ElapsedMilliseconds;
-        var spans = ReferenceFinder.FindReferences(target, analysis, includeDecl);
-        FLangLanguageServer.Log($"  [findRefs] {sw.ElapsedMilliseconds - lap}ms -> {spans.Count} hits");
 
-        var locations = new List<Location>(spans.Count);
-        foreach (var span in spans)
+        // Locals are scoped to a single function body — only the originating
+        // analysis has the AST instance we're comparing against by reference.
+        // Functions / types / fields need the workspace-wide sweep so callers in
+        // unrelated open files (e.g. fs.f calling stdlib's string_builder) are
+        // found from a cursor on the defining file.
+        var analyses = target is LocalDeclRefTarget
+            ? [cursorAnalysis]
+            : _workspace.GetAllAnalyses();
+
+        // Dedup across analyses: each analysis parses every reachable module so
+        // the same source location surfaces multiple times with different
+        // SourceSpan.FileId values. Key on (path, range) instead.
+        var seen = new HashSet<(string, int, int, int, int)>();
+        var locations = new List<Location>();
+        var totalRaw = 0;
+
+        lap = sw.ElapsedMilliseconds;
+        foreach (var analysis in analyses)
         {
-            var loc = SpanToLocation(span, analysis.Compilation);
-            if (loc != null) locations.Add(loc);
+            var spans = ReferenceFinder.FindReferences(target, analysis, includeDecl);
+            totalRaw += spans.Count;
+            foreach (var span in spans)
+            {
+                var loc = SpanToLocation(span, analysis.Compilation);
+                if (loc == null) continue;
+                var key = (
+                    loc.Uri.ToString(),
+                    loc.Range.Start.Line, loc.Range.Start.Character,
+                    loc.Range.End.Line, loc.Range.End.Character);
+                if (seen.Add(key)) locations.Add(loc);
+            }
         }
+        FLangLanguageServer.Log($"  [findRefs] {sw.ElapsedMilliseconds - lap}ms — {analyses.Count} analyses, {totalRaw} raw / {locations.Count} unique");
 
         FLangLanguageServer.Log($"  [total] {sw.ElapsedMilliseconds}ms");
         return new LocationContainer(locations);

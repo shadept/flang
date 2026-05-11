@@ -80,6 +80,20 @@ public class FLangWorkspace
     }
 
     /// <summary>
+    /// Snapshot of every cached analysis. Used by find-references / workspace
+    /// symbols to cover the union of all open files' transitive module graphs —
+    /// a function defined in stdlib is only known to be called by fs.f from
+    /// inside fs.f's analysis, not from stdlib's analysis.
+    /// </summary>
+    public IReadOnlyList<FileAnalysisResult> GetAllAnalyses()
+    {
+        lock (_lock)
+        {
+            return [.. _analysisResults.Values];
+        }
+    }
+
+    /// <summary>
     /// Returns the analysis result, waiting for any pending analysis to complete first.
     /// Use this in handlers that need up-to-date results (InlayHint, Hover, etc.).
     /// </summary>

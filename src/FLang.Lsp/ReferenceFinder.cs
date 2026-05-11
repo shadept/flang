@@ -19,16 +19,20 @@ namespace FLang.Lsp;
 public abstract record ReferenceTarget;
 
 /// <summary>
-/// A function or method. Identified by <see cref="FunctionDeclarationNode.NameSpan"/>
-/// because generic specializations clone the function but preserve the original
-/// NameSpan — so a single NameSpan covers the generic and all its specializations.
+/// A function or method. Identified by (file-path, char-offset, length) — *not*
+/// by <see cref="SourceSpan"/>, because <see cref="SourceSpan.FileId"/> is
+/// per-<see cref="Compilation"/>: the same source file gets different FileIds in
+/// each open file's analysis, so a SourceSpan-keyed identity wouldn't match a
+/// resolved-target read from another analysis. Generic specializations preserve
+/// the original NameSpan, so this identity also covers them.
 /// </summary>
-public sealed record FunctionRefTarget(SourceSpan NameSpan, string Name) : ReferenceTarget;
+public sealed record FunctionRefTarget(string FilePath, int Index, int Length, string Name) : ReferenceTarget;
 
 /// <summary>
-/// A local variable or function parameter. Identified by object reference because
-/// these declarations aren't cloned during semantic analysis (their bodies may be,
-/// but find-references runs over the original source AST).
+/// A local variable or function parameter. Identified by object reference, which
+/// constrains the search to a single analysis (different analyses produce different
+/// AST instances for the same source file). Locals only refer within their own
+/// function body, so cross-analysis search isn't needed.
 /// </summary>
 public sealed record LocalDeclRefTarget(AstNode Decl) : ReferenceTarget;
 
@@ -58,15 +62,12 @@ public static class ReferenceFinder
         if (path.Count == 0) return null;
 
         // === Cursor on a declaration's NAME span ===
-        // Walk the path from leaf to root: the deepest node containing the cursor
-        // may be the declaration itself, or one of its children whose span happens
-        // to overlap the name (rare, but possible with adjacent type annotations).
         for (var i = path.Count - 1; i >= 0; i--)
         {
             switch (path[i])
             {
                 case FunctionDeclarationNode fn when ContainsPos(fn.NameSpan, fileId, position):
-                    return new FunctionRefTarget(fn.NameSpan, fn.Name);
+                    return MakeFunctionTarget(fn.NameSpan, fn.Name, analysis.Compilation);
                 case VariableDeclarationNode v when ContainsPos(v.NameSpan, fileId, position):
                     return new LocalDeclRefTarget(v);
                 case FunctionParameterNode p when ContainsPos(p.NameSpan, fileId, position):
@@ -92,22 +93,19 @@ public static class ReferenceFinder
         // === Cursor on a USAGE ===
         var node = path[^1];
 
-        // Operator overloads are stored on the type checker side, not on the node.
-        // Surface them so the user can navigate from any operator usage to all
-        // other usages of the underlying op_xxx function.
         if (analysis.TypeChecker != null
             && node is BinaryExpressionNode or UnaryExpressionNode or IndexExpressionNode
                 or AssignmentExpressionNode or CoalesceExpressionNode)
         {
             var op = analysis.TypeChecker.GetResolvedOperator(node);
             if (op != null)
-                return new FunctionRefTarget(op.Function.NameSpan, op.Function.Name);
+                return MakeFunctionTarget(op.Function.NameSpan, op.Function.Name, analysis.Compilation);
         }
 
         switch (node)
         {
             case IdentifierExpressionNode id when id.ResolvedFunctionTarget != null:
-                return new FunctionRefTarget(id.ResolvedFunctionTarget.NameSpan, id.ResolvedFunctionTarget.Name);
+                return MakeFunctionTarget(id.ResolvedFunctionTarget.NameSpan, id.ResolvedFunctionTarget.Name, analysis.Compilation);
 
             case IdentifierExpressionNode id when id.ResolvedVariableDeclaration != null:
                 return new LocalDeclRefTarget(id.ResolvedVariableDeclaration);
@@ -122,7 +120,7 @@ public static class ReferenceFinder
                 }
 
             case CallExpressionNode call when call.ResolvedTarget != null:
-                return new FunctionRefTarget(call.ResolvedTarget.NameSpan, call.ResolvedTarget.Name);
+                return MakeFunctionTarget(call.ResolvedTarget.NameSpan, call.ResolvedTarget.Name, analysis.Compilation);
 
             case CallExpressionNode call when call.CalleeDeclaration is VariableDeclarationNode v:
                 return new LocalDeclRefTarget(v);
@@ -132,8 +130,6 @@ public static class ReferenceFinder
 
             case CallExpressionNode call:
                 {
-                    // Unresolved call — best effort: try treating the name as a type
-                    // (e.g. `Some(42)` is a type instantiation).
                     var name = call.MethodName ?? call.FunctionName;
                     if (!string.IsNullOrEmpty(name))
                     {
@@ -173,19 +169,21 @@ public static class ReferenceFinder
     }
 
     /// <summary>
-    /// Walk every parsed module in the analysis and collect spans of all references
-    /// to <paramref name="target"/>. When <paramref name="includeDeclaration"/> is
-    /// true, the declaration's own name span is included.
+    /// Walk every parsed module in <paramref name="analysis"/> and collect spans
+    /// of all references to <paramref name="target"/>. Call this once per open
+    /// analysis to find cross-file references — callers in fs.f only show up in
+    /// fs.f's analysis, not in the defining file's analysis.
     /// </summary>
     public static List<SourceSpan> FindReferences(
         ReferenceTarget target, FileAnalysisResult analysis, bool includeDeclaration)
     {
         var results = new HashSet<SourceSpan>();
         var tc = analysis.TypeChecker;
+        var comp = analysis.Compilation;
 
         foreach (var module in analysis.ParsedModules.Values)
         {
-            AstNodeFinder.Walk(module, node => CollectReference(node, target, tc, results));
+            AstNodeFinder.Walk(module, node => CollectReference(node, target, tc, comp, results));
         }
 
         if (includeDeclaration)
@@ -200,12 +198,12 @@ public static class ReferenceFinder
     // ─── per-node check ────────────────────────────────────────────────────
 
     private static void CollectReference(
-        AstNode node, ReferenceTarget target, TypeCheckResult? tc, HashSet<SourceSpan> results)
+        AstNode node, ReferenceTarget target, TypeCheckResult? tc, Compilation comp, HashSet<SourceSpan> results)
     {
         switch (target)
         {
             case FunctionRefTarget fn:
-                CollectFunctionRef(node, fn, tc, results);
+                CollectFunctionRef(node, fn, tc, comp, results);
                 break;
             case LocalDeclRefTarget local:
                 CollectLocalRef(node, local, results);
@@ -220,26 +218,25 @@ public static class ReferenceFinder
     }
 
     private static void CollectFunctionRef(
-        AstNode node, FunctionRefTarget target, TypeCheckResult? tc, HashSet<SourceSpan> results)
+        AstNode node, FunctionRefTarget target, TypeCheckResult? tc, Compilation comp, HashSet<SourceSpan> results)
     {
         switch (node)
         {
-            case IdentifierExpressionNode id when id.ResolvedFunctionTarget?.NameSpan == target.NameSpan:
+            case IdentifierExpressionNode id when id.ResolvedFunctionTarget is { } rt
+                && MatchesFunctionTarget(rt.NameSpan, target, comp):
                 results.Add(id.Span);
                 return;
-            case CallExpressionNode call when call.ResolvedTarget?.NameSpan == target.NameSpan:
+            case CallExpressionNode call when call.ResolvedTarget is { } rt
+                && MatchesFunctionTarget(rt.NameSpan, target, comp):
                 results.Add(call.FunctionNameSpan);
                 return;
         }
 
-        // Operator overloads — stored on the type checker, keyed by the expression
-        // node we're visiting now. Emit the whole expression's span as the reference
-        // site since there's no separate operator-only span.
         if (tc != null && node is BinaryExpressionNode or UnaryExpressionNode
             or IndexExpressionNode or AssignmentExpressionNode or CoalesceExpressionNode)
         {
             var op = tc.GetResolvedOperator(node);
-            if (op != null && op.Function.NameSpan == target.NameSpan)
+            if (op != null && MatchesFunctionTarget(op.Function.NameSpan, target, comp))
                 results.Add(node.Span);
         }
     }
@@ -271,7 +268,6 @@ public static class ReferenceFinder
         var fqn = GetNominalFqn(tc.Resolve(targetType));
         if (fqn != target.TypeFqn) return;
 
-        // Highlight only the field-name portion at the tail of `target.field`.
         var nameSpan = new SourceSpan(
             ma.Span.FileId,
             ma.Span.Index + ma.Span.Length - target.FieldName.Length,
@@ -289,7 +285,6 @@ public static class ReferenceFinder
                 results.Add(nt.Span);
                 return;
             case GenericTypeNode gt when gt.Name == target.ShortName || gt.Name == target.Fqn:
-                // Span covers `Name[args]`; trim to just `Name`.
                 results.Add(new SourceSpan(gt.Span.FileId, gt.Span.Index, gt.Name.Length, gt.Span.Line));
                 return;
             case IdentifierExpressionNode id
@@ -297,7 +292,6 @@ public static class ReferenceFinder
                     && id.ResolvedFunctionTarget == null
                     && id.ResolvedVariableDeclaration == null
                     && id.ResolvedParameterDeclaration == null:
-                // Bare identifier used as a type-value (e.g. `Some` constructor reference).
                 results.Add(id.Span);
                 return;
         }
@@ -305,11 +299,33 @@ public static class ReferenceFinder
 
     // ─── helpers ───────────────────────────────────────────────────────────
 
+    private static FunctionRefTarget MakeFunctionTarget(SourceSpan nameSpan, string name, Compilation comp)
+    {
+        var path = GetSourcePath(nameSpan, comp) ?? "";
+        return new FunctionRefTarget(path, nameSpan.Index, nameSpan.Length, name);
+    }
+
+    private static bool MatchesFunctionTarget(SourceSpan candidate, FunctionRefTarget target, Compilation comp)
+    {
+        if (candidate.Index != target.Index || candidate.Length != target.Length) return false;
+        var path = GetSourcePath(candidate, comp);
+        return path != null && PathsEqual(path, target.FilePath);
+    }
+
+    private static string? GetSourcePath(SourceSpan span, Compilation comp)
+    {
+        if (span.FileId < 0 || span.FileId >= comp.Sources.Count) return null;
+        return Path.GetFullPath(comp.Sources[span.FileId].FileName);
+    }
+
+    private static bool PathsEqual(string a, string b)
+        => string.Equals(a, b, OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal);
+
     private static SourceSpan? GetDeclarationNameSpan(ReferenceTarget target, FileAnalysisResult analysis)
     {
         return target switch
         {
-            FunctionRefTarget fn => fn.NameSpan,
+            FunctionRefTarget fn => FindFunctionDeclSpan(fn, analysis),
             LocalDeclRefTarget local => local.Decl switch
             {
                 VariableDeclarationNode v => v.NameSpan,
@@ -323,15 +339,25 @@ public static class ReferenceFinder
         };
     }
 
+    private static SourceSpan? FindFunctionDeclSpan(FunctionRefTarget target, FileAnalysisResult analysis)
+    {
+        // The declaration site is defined by (path, index, length). Reconstruct a
+        // SourceSpan within *this* analysis only when the analysis actually parses
+        // the defining file — otherwise let another analysis surface it.
+        for (var i = 0; i < analysis.Compilation.Sources.Count; i++)
+        {
+            if (PathsEqual(Path.GetFullPath(analysis.Compilation.Sources[i].FileName), target.FilePath))
+                return new SourceSpan(i, target.Index, target.Length, 0);
+        }
+        return null;
+    }
+
     private static SourceSpan? FindStructFieldNameSpan(StructFieldRefTarget target, FileAnalysisResult analysis)
     {
         if (analysis.TypeChecker == null) return null;
         if (!analysis.TypeChecker.NominalSpans.TryGetValue(target.TypeFqn, out var typeSpan))
             return null;
 
-        // Walk every module; find the struct whose NameSpan matches typeSpan, then
-        // its field by name. Cheaper than maintaining a parallel index, since this
-        // path runs once per find-references invocation.
         foreach (var module in analysis.ParsedModules.Values)
         {
             foreach (var sd in module.Structs)

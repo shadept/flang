@@ -232,6 +232,118 @@ public class ReferenceFinderTests
     }
 
     [Fact]
+    public void Function_target_matches_across_separate_analyses()
+    {
+        // Regression: when the cursor is on a function decl in file A, downstream
+        // callers in file B only exist in B's own analysis (which transitively
+        // includes A). The two analyses have different Compilations, so the same
+        // logical source location gets different SourceSpan.FileId values.
+        // FunctionRefTarget uses path-based identity so matches still succeed.
+        var libDir = Path.Combine(Path.GetTempPath(), $"flang_refs_lib_{Guid.NewGuid():N}");
+        Directory.CreateDirectory(libDir);
+        var libPath = Path.Combine(libDir, "mylib.f");
+        File.WriteAllText(libPath, "pub fn add_o|ne(x: i32) i32 { return x + 1 }\n");
+
+        var (libAnalysis, libFileId, libCursor, _) = AnalyzeExistingFile(libPath);
+        var libModule = libAnalysis.ParsedModules[Path.GetFullPath(libPath)];
+        var target = ReferenceFinder.ResolveTargetAt(libModule, libFileId, libCursor, libAnalysis);
+        Assert.IsType<FunctionRefTarget>(target);
+        var fnTarget = (FunctionRefTarget)target!;
+        Assert.Equal(Path.GetFullPath(libPath), fnTarget.FilePath);
+
+        // Second file imports the first, calling the function twice.
+        var callerSrc = $$"""
+            import mylib
+            pub fn main() i32 { return add_one(1) + add_one(2) }
+            """;
+        var callerPath = Path.Combine(libDir, "caller.f");
+        File.WriteAllText(callerPath, callerSrc);
+        var (callerAnalysis, _, _, _) = AnalyzeExistingFile(callerPath, extraIncludePath: libDir);
+
+        // Sanity: the two analyses have different Compilations.
+        Assert.NotSame(libAnalysis.Compilation, callerAnalysis.Compilation);
+
+        var libRefs = ReferenceFinder.FindReferences(target!, libAnalysis, includeDeclaration: false);
+        var callerRefs = ReferenceFinder.FindReferences(target!, callerAnalysis, includeDeclaration: false);
+
+        Assert.Empty(libRefs); // no callers inside the lib itself
+        Assert.Equal(2, callerRefs.Count); // both calls resolve across analyses
+
+        try { Directory.Delete(libDir, recursive: true); } catch { /* ignore */ }
+    }
+
+    private static (FileAnalysisResult Analysis, int FileId, int Cursor, string TempPath) AnalyzeExistingFile(
+        string path, string? extraIncludePath = null)
+    {
+        var raw = File.ReadAllText(path);
+        var cursorIdx = raw.IndexOf('|');
+        if (cursorIdx >= 0)
+        {
+            File.WriteAllText(path, raw.Remove(cursorIdx, 1));
+        }
+        else
+        {
+            cursorIdx = 0;
+        }
+
+        var compilation = new Compilation
+        {
+            StdlibPath = StdlibPath,
+            WorkingDirectory = Path.GetDirectoryName(path)!,
+        };
+        compilation.IncludePaths.Add(StdlibPath);
+        if (extraIncludePath != null) compilation.IncludePaths.Add(extraIncludePath);
+        compilation.IncludePaths.Add(compilation.WorkingDirectory);
+
+        var moduleCompiler = new ModuleCompiler(compilation, NullLogger<ModuleCompiler>.Instance);
+        var parsedModules = moduleCompiler.CompileModules(path);
+
+        var checker = new HmTypeChecker(compilation);
+        const string preludeModulePath = "core.prelude";
+        foreach (var kvp in parsedModules)
+        {
+            var modulePath = HmTypeChecker.DeriveModulePath(
+                kvp.Key, compilation.IncludePaths, compilation.WorkingDirectory);
+            if (modulePath != preludeModulePath)
+                compilation.RegisterImport(modulePath, preludeModulePath, isPublic: false);
+            foreach (var import in kvp.Value.Imports)
+            {
+                var importedPath = string.Join(".", import.Path);
+                compilation.RegisterImport(modulePath, importedPath, import.IsPublic);
+            }
+        }
+
+        foreach (var phase in new Action<Frontend.Ast.Declarations.ModuleNode, string>[] {
+            checker.CollectNominalTypes,
+            checker.ResolveNominalTypes,
+            checker.CollectFunctionSignatures,
+            (m, p) => checker.CheckModuleBodies(m, p),
+        })
+        {
+            foreach (var kvp in parsedModules)
+            {
+                var modulePath = HmTypeChecker.DeriveModulePath(
+                    kvp.Key, compilation.IncludePaths, compilation.WorkingDirectory);
+                phase(kvp.Value, modulePath);
+            }
+        }
+
+        var result = checker.BuildResult();
+        var analysis = new FileAnalysisResult(
+            [.. moduleCompiler.Diagnostics, .. checker.Diagnostics], compilation, parsedModules, result);
+
+        var fileId = -1;
+        var normalized = Path.GetFullPath(path);
+        for (var i = 0; i < compilation.Sources.Count; i++)
+        {
+            if (Path.GetFullPath(compilation.Sources[i].FileName) == normalized) { fileId = i; break; }
+        }
+        Assert.True(fileId >= 0);
+
+        return (analysis, fileId, cursorIdx, path);
+    }
+
+    [Fact]
     public void Cursor_on_nothing_returns_null()
     {
         var src = """
