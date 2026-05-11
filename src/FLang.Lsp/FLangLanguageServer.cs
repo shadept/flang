@@ -43,10 +43,23 @@ public static class FLangLanguageServer
                     var workspace = server.Services.GetService<FLangWorkspace>();
                     if (workspace != null)
                     {
-                        if (request.RootPath != null)
+                        if (request.RootPath is not null)
                             workspace.WorkingDirectory = request.RootPath;
-                        else if (request.RootUri != null)
+                        else if (request.RootUri is not null)
                             workspace.WorkingDirectory = request.RootUri.GetFileSystemPath();
+
+                        // Fire-and-forget eager indexing so workspace/symbol and
+                        // find-references see the full project + stdlib without
+                        // requiring the user to open each file first. Done off
+                        // the initialize callback so we don't stall the handshake.
+                        // We deliberately don't forward `ct` — that token is
+                        // scoped to the initialize *request*, and we want the
+                        // indexer to keep running after that request returns.
+                        _ = Task.Run(() =>
+                        {
+                            try { workspace.IndexWorkspace(); }
+                            catch (Exception ex) { Log($"IndexWorkspace crashed: {ex}"); }
+                        }, CancellationToken.None);
                     }
                     return Task.CompletedTask;
                 });

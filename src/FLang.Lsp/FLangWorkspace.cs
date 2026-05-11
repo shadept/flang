@@ -127,6 +127,196 @@ public class FLangWorkspace
 
     public void AnalyzeFile(string filePath) => AnalyzeFileInternal(filePath, cascade: true);
 
+    /// <summary>
+    /// Eagerly analyze every <c>.f</c> file the project(s) under the workspace
+    /// can see, populating the workspace-wide picture needed by
+    /// <c>workspace/symbol</c> and find-references. Without this, only files
+    /// transitively reachable from already-opened editor documents are visible.
+    /// <para>
+    /// Strategy: find every <c>flang.toml</c> at or under <c>WorkingDirectory</c>
+    /// (plus any ancestor toml that contains the workspace), and index each
+    /// project's source root. Stdlib is deliberately <i>not</i> scanned directly
+    /// — modules from <c>StdlibPath</c> are only pulled in when a project
+    /// transitively imports them (e.g. via the auto-imported prelude), so a
+    /// project that doesn't use stdlib doesn't pay for it.
+    /// </para>
+    /// <para>
+    /// Falls back to scanning <c>WorkingDirectory</c> directly when no project
+    /// file is discoverable, so non-project workspaces still get indexed.
+    /// Runs synchronously; callers should dispatch onto a background task if
+    /// they don't want to block.
+    /// </para>
+    /// </summary>
+    public void IndexWorkspace()
+    {
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        if (string.IsNullOrEmpty(WorkingDirectory))
+        {
+            FLangLanguageServer.Log("IndexWorkspace: no WorkingDirectory set, skipping");
+            return;
+        }
+
+        var roots = new List<string>();
+        var projects = DiscoverProjectSourceRoots(WorkingDirectory);
+        if (projects.Count > 0)
+        {
+            roots.AddRange(projects);
+            FLangLanguageServer.Log($"IndexWorkspace: {projects.Count} project source root(s) -> {string.Join(", ", projects)}");
+        }
+        else
+        {
+            roots.Add(WorkingDirectory);
+            FLangLanguageServer.Log($"IndexWorkspace: no flang.toml found, falling back to scan of {WorkingDirectory}");
+        }
+
+        var seen = new HashSet<string>(OperatingSystem.IsWindows()
+            ? StringComparer.OrdinalIgnoreCase
+            : StringComparer.Ordinal);
+        var analyzed = 0;
+        var skipped = 0;
+
+        foreach (var root in roots)
+        {
+            if (!Directory.Exists(root)) continue;
+
+            IEnumerable<string> files;
+            try { files = EnumerateFlangFiles(root); }
+            catch (Exception ex)
+            {
+                FLangLanguageServer.Log($"  enumerate failed for {root}: {ex.Message}");
+                continue;
+            }
+
+            foreach (var file in files)
+            {
+                var full = Path.GetFullPath(file);
+                if (!seen.Add(full)) continue;
+
+                lock (_lock)
+                {
+                    if (_analysisResults.ContainsKey(full)) { skipped++; continue; }
+                }
+
+                try
+                {
+                    AnalyzeFileInternal(full, cascade: false);
+                    analyzed++;
+                }
+                catch (Exception ex)
+                {
+                    FLangLanguageServer.Log($"  index analyze failed for {full}: {ex.Message}");
+                }
+            }
+        }
+
+        FLangLanguageServer.Log($"IndexWorkspace: {analyzed} analyzed, {skipped} already-cached in {sw.ElapsedMilliseconds}ms");
+    }
+
+    /// <summary>
+    /// Returns every project source root (absolute) reachable from <paramref
+    /// name="workspaceDir"/>: any <c>flang.toml</c> at or under it (monorepo
+    /// case), and any ancestor toml that already contains it (user opened a
+    /// subdirectory of a project). When a project's source glob can't be
+    /// resolved to a static prefix (e.g. <c>**/*.f</c> with no leading
+    /// directory), the project root itself is used.
+    /// </summary>
+    private static List<string> DiscoverProjectSourceRoots(string workspaceDir)
+    {
+        var found = new List<string>();
+        var addedProjectRoots = new HashSet<string>(OperatingSystem.IsWindows()
+            ? StringComparer.OrdinalIgnoreCase
+            : StringComparer.Ordinal);
+
+        void TryAddProject(string tomlPath)
+        {
+            var projectRoot = Path.GetFullPath(Path.GetDirectoryName(tomlPath)!);
+            if (!addedProjectRoots.Add(projectRoot)) return;
+            try
+            {
+                var project = ProjectLoader.Load(tomlPath);
+                var sourceRoot = ProjectLoader.ResolveSourceRoot(project.Project.Source, projectRoot);
+                found.Add(sourceRoot ?? projectRoot);
+            }
+            catch (Exception ex)
+            {
+                FLangLanguageServer.Log($"  failed to load {tomlPath}: {ex.Message}");
+            }
+        }
+
+        // Walk-up: workspaceDir may be inside a project.
+        var ancestorToml = ProjectLoader.FindProjectFile(workspaceDir);
+        if (ancestorToml != null) TryAddProject(ancestorToml);
+
+        // Walk-down: monorepo or "workspace folder with multiple projects".
+        foreach (var toml in EnumerateProjectFiles(workspaceDir))
+            TryAddProject(toml);
+
+        return found;
+    }
+
+    private static IEnumerable<string> EnumerateProjectFiles(string root)
+    {
+        var stack = new Stack<string>();
+        stack.Push(root);
+        while (stack.Count > 0)
+        {
+            var dir = stack.Pop();
+            string candidate;
+            try { candidate = Path.Combine(dir, ProjectLoader.ProjectFileName); }
+            catch { continue; }
+            if (File.Exists(candidate)) yield return candidate;
+
+            string[] subdirs;
+            try { subdirs = Directory.GetDirectories(dir); }
+            catch { subdirs = []; }
+            foreach (var sub in subdirs)
+            {
+                var name = Path.GetFileName(sub);
+                if (IsIgnoredDirectory(name)) continue;
+                stack.Push(sub);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Yield every <c>.f</c> file under <paramref name="root"/>, skipping build
+    /// artifact and version control directories. Done as a recursive walk
+    /// (rather than <c>SearchOption.AllDirectories</c>) so we can prune
+    /// uninteresting subtrees up-front instead of paying the IO to enumerate them.
+    /// </summary>
+    private static IEnumerable<string> EnumerateFlangFiles(string root)
+    {
+        var stack = new Stack<string>();
+        stack.Push(root);
+        while (stack.Count > 0)
+        {
+            var dir = stack.Pop();
+            string[] entries;
+            try { entries = Directory.GetFiles(dir, "*.f"); }
+            catch { entries = []; }
+            foreach (var f in entries) yield return f;
+
+            string[] subdirs;
+            try { subdirs = Directory.GetDirectories(dir); }
+            catch { subdirs = []; }
+            foreach (var sub in subdirs)
+            {
+                var name = Path.GetFileName(sub);
+                if (IsIgnoredDirectory(name)) continue;
+                stack.Push(sub);
+            }
+        }
+    }
+
+    private static bool IsIgnoredDirectory(string name) => name switch
+    {
+        "bin" or "obj" or "dist" or "node_modules"
+            or ".git" or ".vs" or ".vscode" or ".idea"
+            or ".test-artifacts" or ".scratch" or ".claude"
+            or "packages" => true,
+        _ => name.StartsWith('.'),
+    };
+
     public void InvalidateProjectCache()
     {
         lock (_lock) { _projectCache.Clear(); }
