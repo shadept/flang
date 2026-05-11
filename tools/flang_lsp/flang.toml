@@ -1,0 +1,9 @@
+[project]
+name = "flang_lsp"
+version = "0.1.0"
+source = "src/**/*.f"
+output = "build"
+
+[dependencies]
+flang_parser = { path = "../../lib/flang_parser" }
+flang_core = { path = "../../lib/flang_core" }

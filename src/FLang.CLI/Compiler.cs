@@ -44,7 +44,19 @@ public record CompilerOptions(
     /// file. Sourced from `[imports].global` in flang.toml. Never applied to
     /// stdlib or third-party modules.
     /// </summary>
-    IReadOnlyList<string>? ProjectGlobalImports = null
+    IReadOnlyList<string>? ProjectGlobalImports = null,
+    /// <summary>
+    /// Direct dependencies' (name → source-root) mapping. An import whose first
+    /// segment matches a key here resolves the remainder against the value
+    /// (same shape as <see cref="ProjectName"/> / <see cref="ProjectSourceRoot"/>).
+    /// </summary>
+    IReadOnlyDictionary<string, string>? DependencySourceRoots = null,
+    /// <summary>
+    /// Per-project metadata (consuming project + each direct dep). Threaded into
+    /// <see cref="Compilation.ProjectMetadata"/> so the `project_info()` intrinsic
+    /// can resolve name + version for the call site's owning project.
+    /// </summary>
+    IReadOnlyDictionary<string, ProjectMetadata>? ProjectMetadata = null
 );
 
 public record CompilationResult(
@@ -80,6 +92,12 @@ public class Compiler
         compilation.ProjectName = options.ProjectName;
         compilation.ProjectSourceRoot = options.ProjectSourceRoot;
         compilation.ProjectGlobalImports = options.ProjectGlobalImports ?? [];
+        if (options.DependencySourceRoots != null)
+            foreach (var (name, root) in options.DependencySourceRoots)
+                compilation.DependencySourceRoots[name] = root;
+        if (options.ProjectMetadata != null)
+            foreach (var (name, meta) in options.ProjectMetadata)
+                compilation.ProjectMetadata[name] = meta;
 
         // Build structured compile-time context for #if directives
         var ctx = compilation.CompileTimeContext;
@@ -298,7 +316,7 @@ public class Compiler
         // 3. Lowering to IrModule
         var layoutService = new TypeLayoutService(hmChecker.Engine, hmChecker);
         var typeCheckResult = hmChecker.BuildResult();
-        var lowering = new HmAstLowering(typeCheckResult, layoutService);
+        var lowering = new HmAstLowering(typeCheckResult, layoutService, compilation);
 
         var moduleEntries = parsedModules.Select(kvp =>
         {

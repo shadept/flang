@@ -382,7 +382,29 @@ public class FLangWorkspace
                     compilation.IncludePaths.Add(sourceRoot);
                 compilation.IncludePaths.Add(pi.ProjectRoot);
 
-                FLangLanguageServer.Log($"  project={pi.Project.Project.Name}, sourceRoot={sourceRoot}");
+                // Resolve [dependencies] so imports like `flang_parser.lexer` reach the
+                // dep's source root the same way they do under `flang build`. Failures
+                // are logged but non-fatal — the file may still parse usefully, and
+                // surfacing the toml error here would clobber diagnostics on every
+                // analysis pass.
+                if (sourceRoot != null)
+                    compilation.ProjectMetadata[pi.Project.Project.Name] = new ProjectMetadata(
+                        pi.Project.Project.Name, pi.Project.Project.Version, sourceRoot);
+                try
+                {
+                    foreach (var dep in DependencyResolver.ResolveDirect(pi.Project, pi.ProjectRoot))
+                    {
+                        compilation.DependencySourceRoots[dep.Name] = dep.SourceRoot;
+                        compilation.ProjectMetadata[dep.Name] = new ProjectMetadata(
+                            dep.Name, dep.Project.Project.Version, dep.SourceRoot);
+                    }
+                }
+                catch (Exception ex)
+                {
+                    FLangLanguageServer.Log($"  dependency resolution failed: {ex.Message}");
+                }
+
+                FLangLanguageServer.Log($"  project={pi.Project.Project.Name}, sourceRoot={sourceRoot}, deps={compilation.DependencySourceRoots.Count}");
             }
             else
             {

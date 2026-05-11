@@ -45,7 +45,29 @@ public static partial class ProjectLoader
         if (model.TryGetValue("imports", out var importsObj) && importsObj is TomlTable importsTable)
             imports = ParseImportsSection(importsTable);
 
-        return new FlangProject(projectInfo, build, imports);
+        DependenciesSection? dependencies = null;
+        if (model.TryGetValue("dependencies", out var depsObj) && depsObj is TomlTable depsTable)
+            dependencies = ParseDependenciesSection(depsTable, tomlPath);
+
+        return new FlangProject(projectInfo, build, imports, dependencies);
+    }
+
+    private static DependenciesSection ParseDependenciesSection(TomlTable table, string context)
+    {
+        var items = new List<DependencySpec>();
+        foreach (var (key, value) in table)
+        {
+            if (value is not TomlTable depTable)
+                throw new InvalidOperationException(
+                    $"{context}: [dependencies].{key} must be a table (e.g. `{key} = {{ path = \"...\" }}`)");
+
+            if (!depTable.TryGetValue("path", out var pathObj) || pathObj is not string pathStr)
+                throw new InvalidOperationException(
+                    $"{context}: [dependencies].{key} requires a `path` field (string)");
+
+            items.Add(new DependencySpec(key, ExpandEnvVars(pathStr)));
+        }
+        return new DependenciesSection(items.ToArray());
     }
 
     private static ImportsSection ParseImportsSection(TomlTable table)

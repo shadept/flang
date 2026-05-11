@@ -47,11 +47,13 @@ public static class TemplateExpander
     public static string DeriveModulePath(string filePath, Compilation compilation)
     {
         return DeriveModulePath(filePath, compilation.IncludePaths, compilation.WorkingDirectory,
-            compilation.ProjectName, compilation.ProjectSourceRoot);
+            compilation.ProjectName, compilation.ProjectSourceRoot,
+            compilation.DependencySourceRoots);
     }
 
     public static string DeriveModulePath(string filePath, IReadOnlyList<string> includePaths, string workingDirectory,
-        string? projectName = null, string? projectSourceRoot = null)
+        string? projectName = null, string? projectSourceRoot = null,
+        IReadOnlyDictionary<string, string>? dependencySourceRoots = null)
     {
         var normalizedFile = Path.GetFullPath(filePath);
 
@@ -65,6 +67,23 @@ public static class TemplateExpander
                 var relativePath = Path.GetRelativePath(normalizedSourceRoot, normalizedFile);
                 var withoutExtension = Path.ChangeExtension(relativePath, null);
                 return projectName + "." + withoutExtension.Replace(Path.DirectorySeparatorChar, '.');
+            }
+        }
+
+        // Dependency files: prefix with the dep's declared name (its import namespace).
+        // Same shape as the project-mode branch above, one entry per direct dep.
+        if (dependencySourceRoots != null)
+        {
+            foreach (var (depName, depRoot) in dependencySourceRoots)
+            {
+                var normalizedDepRoot = Path.GetFullPath(depRoot);
+                if (normalizedFile.StartsWith(normalizedDepRoot + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase)
+                    || normalizedFile.Equals(normalizedDepRoot, StringComparison.OrdinalIgnoreCase))
+                {
+                    var relativePath = Path.GetRelativePath(normalizedDepRoot, normalizedFile);
+                    var withoutExtension = Path.ChangeExtension(relativePath, null);
+                    return depName + "." + withoutExtension.Replace(Path.DirectorySeparatorChar, '.');
+                }
             }
         }
 

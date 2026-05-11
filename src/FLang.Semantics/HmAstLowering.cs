@@ -21,6 +21,7 @@ public class HmAstLowering
 {
     private readonly TypeCheckResult _types;
     private readonly TypeLayoutService _layout;
+    private readonly Compilation _compilation;
     private readonly IrModule _module = new();
     private readonly List<Diagnostic> _diagnostics = [];
 
@@ -51,12 +52,18 @@ public class HmAstLowering
     // Type table — maps type cache key -> GlobalValue for Type(T) RTTI
     private Dictionary<string, GlobalValue>? _typeTableGlobals;
 
+    // Project info table — one GlobalValue per project participating in this
+    // compilation (the consuming project + each direct dep + a `stdlib` fallback).
+    // Populated lazily the first time a call to `project_info()` is lowered.
+    private Dictionary<string, GlobalValue>? _projectInfoGlobals;
+
     public IReadOnlyList<Diagnostic> Diagnostics => _diagnostics;
 
-    public HmAstLowering(TypeCheckResult types, TypeLayoutService layout)
+    public HmAstLowering(TypeCheckResult types, TypeLayoutService layout, Compilation compilation)
     {
         _types = types;
         _layout = layout;
+        _compilation = compilation;
     }
 
     // =========================================================================
@@ -595,6 +602,102 @@ public class HmAstLowering
         }
 
         return null;
+    }
+
+    // =========================================================================
+    // Project info intrinsic — `project_info()` returns metadata for the
+    // project the call site lexically lives in.
+    // =========================================================================
+
+    private bool IsProjectInfoIntrinsic(CallExpressionNode call)
+    {
+        if (call.ResolvedTarget == null) return false;
+        if (call.ResolvedTarget.Name != WellKnown.ProjectInfoFn) return false;
+        if (call.ResolvedTarget.Parameters.Count != 0) return false;
+
+        // Confirm the resolved target was declared in core.rtti — guards
+        // against name collisions with a user function called `project_info`.
+        var fileId = call.ResolvedTarget.Span.FileId;
+        if (fileId < 0 || fileId >= _compilation.Sources.Count) return false;
+        var declFile = _compilation.Sources[fileId].FileName;
+        var declModule = TemplateExpander.DeriveModulePath(declFile, _compilation);
+        return declModule == WellKnown.RttiModulePath;
+    }
+
+    private Value LowerProjectInfoIntrinsic(CallExpressionNode call, IrType retIrType)
+    {
+        EnsureProjectInfoTableExists();
+
+        var key = ResolveProjectKeyForSpan(call.Span);
+        if (_projectInfoGlobals != null && _projectInfoGlobals.TryGetValue(key, out var global))
+            return _currentBlock.EmitLoad(global, retIrType);
+
+        // Fallback should be unreachable — EnsureProjectInfoTableExists always
+        // creates the `stdlib` sentinel. Returning zero is defensive only.
+        return new IntConstantValue(0, retIrType);
+    }
+
+    private string ResolveProjectKeyForSpan(SourceSpan span)
+    {
+        if (span.FileId < 0 || span.FileId >= _compilation.Sources.Count) return "stdlib";
+        var file = Path.GetFullPath(_compilation.Sources[span.FileId].FileName);
+        var cmp = OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
+        foreach (var (name, meta) in _compilation.ProjectMetadata)
+        {
+            var root = Path.GetFullPath(meta.SourceRoot);
+            if (file.Equals(root, cmp) || file.StartsWith(root + Path.DirectorySeparatorChar, cmp))
+                return name;
+        }
+        return "stdlib";
+    }
+
+    private void EnsureProjectInfoTableExists()
+    {
+        if (_projectInfoGlobals != null) return;
+        _projectInfoGlobals = new Dictionary<string, GlobalValue>();
+
+        var projectInfoNominal = _types.LookupNominal(WellKnown.ProjectInfo);
+        if (projectInfoNominal == null) return;
+        if (_layout.Lower(projectInfoNominal) is not IrStruct projectInfoIr) return;
+
+        var stringNominal = _types.LookupNominal(WellKnown.String);
+        if (stringNominal == null || _layout.Lower(stringNominal) is not IrStruct stringIr) return;
+
+        StructConstantValue MakeStringConstant(string text)
+        {
+            var bytes = System.Text.Encoding.UTF8.GetBytes(text + "\0");
+            var arr = new ArrayConstantValue(bytes, TypeLayoutService.IrU8)
+            {
+                StringRepresentation = text,
+            };
+            return new StructConstantValue(stringIr, new Dictionary<string, Value>
+            {
+                ["ptr"] = arr,
+                ["len"] = new IntConstantValue(text.Length, TypeLayoutService.IrUSize),
+            });
+        }
+
+        void AddGlobal(string key, string name, string version)
+        {
+            if (_projectInfoGlobals!.ContainsKey(key)) return;
+            var fields = new Dictionary<string, Value>
+            {
+                ["name"] = MakeStringConstant(name),
+                ["version"] = MakeStringConstant(version),
+            };
+            var konst = new StructConstantValue(projectInfoIr, fields);
+            var global = new GlobalValue($"__project_info_{key}", konst, projectInfoIr);
+            _projectInfoGlobals[key] = global;
+            _module.GlobalValues.Add(global);
+        }
+
+        foreach (var (name, meta) in _compilation.ProjectMetadata)
+            AddGlobal(name, meta.Name, meta.Version);
+
+        // Always provide a sentinel for stdlib (or any module outside a known
+        // project). Callers fall back to this key when source-root matching
+        // returns nothing.
+        AddGlobal("stdlib", "stdlib", "");
     }
 
     // =========================================================================
@@ -2062,6 +2165,13 @@ public class HmAstLowering
     private Value LowerCall(CallExpressionNode call)
     {
         var retIrType = GetIrType(call);
+
+        // Intrinsic: `core.rtti.project_info()` — substituted at lowering with
+        // a load of the global ProjectInfo constant for the project that owns
+        // this call site's source file. The function's declared body is never
+        // executed.
+        if (IsProjectInfoIntrinsic(call))
+            return LowerProjectInfoIntrinsic(call, retIrType);
 
         // Handle field-access-then-call (vtable pattern): obj.field(args)
         // where field is a function pointer within a struct

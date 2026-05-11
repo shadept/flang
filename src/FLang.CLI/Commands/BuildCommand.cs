@@ -92,6 +92,49 @@ public static class BuildCommand
         if (sourceRoot != null)
             includePaths.Add(sourceRoot);
 
+        // Resolve direct dependencies and append their source roots to the include
+        // path set. Each dep's `<src_root>/<name>/...` becomes reachable as
+        // `import <name>.foo` from the consuming project.
+        List<ResolvedDependency> resolvedDeps;
+        try { resolvedDeps = DependencyResolver.ResolveDirect(project, projectRoot); }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"error: {ex.Message}");
+            return 1;
+        }
+
+        // Each dep's name → source-root mapping. ModuleCompiler resolves
+        // `import <dep_name>.foo` to `<dep_source_root>/foo.f` — the dep's
+        // `[project].name` IS its import namespace; files live directly under
+        // the source root, not inside a redundant `<name>/` subfolder.
+        var depSourceRoots = new Dictionary<string, string>();
+        var projectMetadata = new Dictionary<string, ProjectMetadata>();
+        if (sourceRoot != null)
+            projectMetadata[project.Project.Name] = new ProjectMetadata(
+                project.Project.Name, project.Project.Version, sourceRoot);
+        foreach (var dep in resolvedDeps)
+        {
+            depSourceRoots[dep.Name] = dep.SourceRoot;
+            projectMetadata[dep.Name] = new ProjectMetadata(
+                dep.Name, dep.Project.Project.Version, dep.SourceRoot);
+
+            // Carry per-dep build flags (libs/cflags/etc.) from the dep's own
+            // [build.<os>] into our link/header lists so headers and native
+            // libs travel with the dep.
+            var depPlatform = ProjectLoader.GetCurrentPlatformConfig(dep.Project.Build);
+            if (depPlatform?.Libs != null)
+                foreach (var lib in depPlatform.Libs)
+                    linkFlags.Add(ResolvePath(lib, dep.ProjectRoot));
+            if (depPlatform?.Ldflags != null)
+                linkFlags.AddRange(depPlatform.Ldflags);
+            if (depPlatform?.Headers != null)
+            {
+                headerPaths ??= new List<string>();
+                foreach (var h in depPlatform.Headers)
+                    headerPaths.Add(ResolvePath(h, dep.ProjectRoot));
+            }
+        }
+
         var options = new CompilerOptions(
             InputFilePaths: sourceFiles,
             StdlibPath: stdlibPath,
@@ -104,7 +147,9 @@ public static class BuildCommand
             CompilerFlags: compilerFlags is { Count: > 0 } ? compilerFlags : null,
             ProjectName: project.Project.Name,
             ProjectSourceRoot: sourceRoot,
-            ProjectGlobalImports: project.Imports?.Global
+            ProjectGlobalImports: project.Imports?.Global,
+            DependencySourceRoots: depSourceRoots.Count > 0 ? depSourceRoots : null,
+            ProjectMetadata: projectMetadata.Count > 0 ? projectMetadata : null
         );
 
         var compiler = new Compiler();

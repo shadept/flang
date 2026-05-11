@@ -205,6 +205,8 @@ let a = align_of(Point)
 
 `Type(T)` is a built-in generic struct carrying runtime metadata. Type names used as values become `Type(T)` instances. The compiler generates a global type metadata table for all instantiated types.
 
+**Project metadata**: `core.rtti` also exposes `ProjectInfo { name: String, version: String }` and `project_info() ProjectInfo`. The compiler substitutes each call with the metadata of the project that *lexically owns* the call site — sourced from that project's `flang.toml`. A library calling `project_info()` inside its own module sees its own name and version; the same call inside a consumer returns the consumer's. Call sites in stdlib modules fall back to `("stdlib", "")`. See `docs/architecture.md` for implementation details.
+
 ### 2.10 Char and Byte Literals
 
 - `'x'` — char literal (type `char`, 4 bytes). Supports `\n`, `\t`, `\r`, `\\`, `\'`, `\0`, `\uXXXX` (1-6 hex digits).

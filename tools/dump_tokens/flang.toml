@@ -1,0 +1,8 @@
+[project]
+name = "dump_tokens"
+version = "0.1.0"
+source = "src/**/*.f"
+output = "build"
+
+[dependencies]
+flang_parser = { path = "../../lib/flang_parser" }

@@ -50,3 +50,21 @@ pub fn size_of(t: Type($T)) usize {
 pub fn align_of(t: Type($T)) usize {
     return t.align
 }
+
+// Project metadata, sourced from the flang.toml of the project a call site
+// lexically lives in. The compiler intercepts `project_info()` during
+// lowering and substitutes a constant for that project's name and version;
+// the body below is never actually executed.
+//
+// Each library and binary gets its own answer: `project_info()` called
+// inside flang_parser returns flang_parser's metadata; the same call
+// inside a consumer project returns the consumer's. Stdlib call sites
+// receive `("stdlib", "")` as a fallback.
+pub type ProjectInfo = struct {
+    name: String
+    version: String
+}
+
+pub fn project_info() ProjectInfo {
+    return .{ name = "", version = "" }
+}

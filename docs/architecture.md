@@ -18,6 +18,22 @@ Generic body checking pushes the call-site module onto `InferenceContext.Special
 
 Module origin (`Stdlib`, `Project`, `External`) is tagged at load time in `ModuleOrigins` and used to scope project-level features. `flang.toml [imports].global` lists modules that are injected as implicit private imports into every `Project`-origin file; stdlib and (future) third-party modules are unaffected.
 
+### Dependencies (`[dependencies]`)
+
+Path-based libraries are declared under `[dependencies]` in `flang.toml`:
+
+```toml
+[dependencies]
+flang_parser = { path = "../lib/flang_parser" }
+```
+
+`DependencyResolver.ResolveDirect` loads each dep's own `flang.toml`, validates that `[project].name` matches the table key, and resolves the dep's source root. The mapping `(dep_name → source_root)` is threaded into `Compilation.DependencySourceRoots` and consumed by two symmetric paths:
+
+- `Compilation.TryResolveImportPath` — when the first segment of an import path matches a dep name, the remainder resolves against the dep's source root (`import flang_parser.lexer` → `<dep_src>/lexer.f`).
+- `TemplateExpander.DeriveModulePath` — when a parsed file is under a dep's source root, its module path is prefixed with the dep's name (so the symbol registry agrees with the import side).
+
+The dep's `[project].name` IS its import namespace; library files live directly under the source root, never inside a redundant `<source_root>/<name>/` subfolder. This mirrors how the current project resolves its own imports. Resolution is flat (no transitive deps), path-only (no registry, semver, or lockfile). Per-dep `[build.<os>]` libs/cflags/headers carry through to the consuming project's link line.
+
 ## AST Design
 
 - **Top-down only.** No parent pointers. Context is passed down during traversal, never looked up.
@@ -118,6 +134,16 @@ flang -I raylib.h -L libraylib.a main.f
 ## Source Generators
 
 `TemplateExpander` (referred to as "source generators") runs between type collection and resolution. Generates source-level expansions (e.g., operator overloads, protocol implementations) before type checking.
+
+## Project Metadata (`project_info()` intrinsic)
+
+`core.rtti` declares `ProjectInfo { name, version }` and `project_info() ProjectInfo`. The function body is a stub — `HmAstLowering` intercepts every call and substitutes a load from a per-project `GlobalValue` carrying the name + version sourced from that project's `flang.toml`.
+
+Semantics: a call lexically inside module M returns the metadata of the project that owns M. Each project's source root is recorded in `Compilation.ProjectMetadata` (populated by `BuildCommand` and the LSP from each direct dep plus the consuming project). Resolution at lowering time walks `ProjectMetadata` and matches the call site's source file by source-root prefix. Stdlib call sites (and any module outside a known project) fall back to a `("stdlib", "")` sentinel global.
+
+Implementation: see `HmAstLowering.IsProjectInfoIntrinsic` / `LowerProjectInfoIntrinsic` / `EnsureProjectInfoTableExists`. The intercept verifies the resolved target was declared in `core.rtti` to prevent a user-defined `project_info` from being captured. Per-project globals are emitted lazily — no global is added unless something actually calls the intrinsic.
+
+This is how a library exposes its own version without hand-rolling a constant: `pub fn version() String { return project_info().version }`.
 
 ## Compile-Time Context
 

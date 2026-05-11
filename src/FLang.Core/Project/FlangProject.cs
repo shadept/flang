@@ -3,7 +3,8 @@ namespace FLang.Core.Project;
 public record FlangProject(
     ProjectInfo Project,
     BuildSection? Build = null,
-    ImportsSection? Imports = null);
+    ImportsSection? Imports = null,
+    DependenciesSection? Dependencies = null);
 
 public record ProjectInfo(
     string Name,
@@ -28,3 +29,18 @@ public record BuildSection(
 /// </summary>
 public record ImportsSection(
     string[]? Global = null);
+
+/// <summary>
+/// A single entry under `[dependencies]`. Path-based only for now — no registry,
+/// no semver, no lockfile. The dep's flang.toml must declare `[project].name`
+/// equal to <see cref="Name"/>; its sources must live under
+/// `&lt;source_root&gt;/&lt;name&gt;/...` so `import &lt;name&gt;.foo` resolves
+/// cleanly across the include-path search.
+/// </summary>
+public record DependencySpec(string Name, string Path);
+
+/// <summary>
+/// `[dependencies]` table in flang.toml. Each entry is path-based and resolved
+/// against the consuming project's root at build time.
+/// </summary>
+public record DependenciesSection(DependencySpec[] Items);

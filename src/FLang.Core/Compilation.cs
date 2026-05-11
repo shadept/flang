@@ -17,6 +17,13 @@ public enum ModuleOrigin
 }
 
 /// <summary>
+/// Metadata for one project participating in a compilation — the consuming
+/// project itself and each direct dependency. Surfaced at runtime through the
+/// `project_info()` intrinsic.
+/// </summary>
+public sealed record ProjectMetadata(string Name, string Version, string SourceRoot);
+
+/// <summary>
 /// Represents a compilation unit that manages source files, module resolution, and compilation-wide state.
 /// Serves as the context object for passing state between compilation phases (Parser -> HmTypeChecker -> HmAstLowering).
 /// </summary>
@@ -175,6 +182,26 @@ public class Compilation
     public string? ProjectSourceRoot { get; set; }
 
     /// <summary>
+    /// Direct dependencies' name → source-root map. An import whose first segment
+    /// matches a key here resolves the remainder against the corresponding source
+    /// root — same shape as <see cref="ProjectName"/> / <see cref="ProjectSourceRoot"/>,
+    /// just one entry per dep. Library files live directly under the source root
+    /// (no `<source_root>/<name>/` nesting); the dep's name IS the namespace.
+    /// </summary>
+    public Dictionary<string, string> DependencySourceRoots { get; set; } = [];
+
+    /// <summary>
+    /// Project metadata, keyed by project name. One entry per project participating
+    /// in this compilation: the consuming project plus every direct dependency.
+    /// Consumed by the `project_info()` intrinsic — lowering looks up the project
+    /// owning each call site (by source root prefix match on the call's file) and
+    /// emits a constant carrying that project's name + version.
+    ///
+    /// Stdlib call sites have no entry; the intrinsic falls back to ("stdlib", "").
+    /// </summary>
+    public Dictionary<string, ProjectMetadata> ProjectMetadata { get; set; } = [];
+
+    /// <summary>
     /// Structured compile-time context for #if directives.
     /// Evaluated as a tree: platform.os, runtime.testing, runtime.env["KEY"], etc.
     /// Values can be strings, bools, longs, or nested Dictionary&lt;string, object&gt;.
@@ -239,6 +266,17 @@ public class Compilation
         {
             var projectRelativePath = string.Join(Path.DirectorySeparatorChar, importPath.Skip(1)) + ".f";
             var fullPath = Path.Combine(ProjectSourceRoot, projectRelativePath);
+            if (sourceProvider != null ? sourceProvider.Exists(fullPath) : File.Exists(fullPath))
+                return fullPath;
+        }
+
+        // Dependency-name-based resolution: same shape, one entry per direct dep.
+        // e.g., import flang_parser.lexer -> <dep_source_root>/lexer.f
+        if (importPath.Count > 1
+            && DependencySourceRoots.TryGetValue(importPath[0], out var depSourceRoot))
+        {
+            var depRelativePath = string.Join(Path.DirectorySeparatorChar, importPath.Skip(1)) + ".f";
+            var fullPath = Path.Combine(depSourceRoot, depRelativePath);
             if (sourceProvider != null ? sourceProvider.Exists(fullPath) : File.Exists(fullPath))
                 return fullPath;
         }

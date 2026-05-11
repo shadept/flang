@@ -741,4 +741,10 @@ public static class WellKnown
     public const string Range = "core.range.Range";
     public const string TypeInfo = "core.rtti.Type";
     public const string RttiPrefix = "core.rtti.";
+
+    // Built-in project metadata intrinsic — lowering replaces calls to
+    // `project_info()` with a struct constant for the call site's project.
+    public const string ProjectInfo = "core.rtti.ProjectInfo";
+    public const string ProjectInfoFn = "project_info";
+    public const string RttiModulePath = "core.rtti";
 }

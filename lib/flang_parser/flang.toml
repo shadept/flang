@@ -1,0 +1,4 @@
+[project]
+name = "flang_parser"
+version = "0.2.0"
+source = "src/**/*.f"

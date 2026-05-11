@@ -267,6 +267,27 @@ Module-scoped, not exported. Run with `--test`. Requires `import std.test`.
 
 `// line comment to end of line` is the only comment form. There is no `/* */` block comment and no `///` doc comment.
 
+### Doc comments
+
+A contiguous block of `//` lines immediately preceding a declaration is its **doc comment**. No special prefix (`///` etc.); the position attaches the meaning. Tooling treats it as the canonical authored documentation for the declaration.
+
+```
+// Token — the lexer's output unit, carrying its own trivia.
+//
+// Every byte of the source belongs to exactly one Token's leading trivia,
+// text, or trailing trivia.
+pub type Token = struct { ... }
+```
+
+A blank line between the comment block and the declaration breaks the attachment — that comment becomes a free-floating note. Trailing comments after the same-line declaration are not doc comments.
+
+Surfaced by:
+- The self-hosted LSP (`tools/lsp`) on hover, completion items, and signature help.
+- The doc generator (planned `tools/doc`).
+- The formatter, which preserves doc-comment formatting verbatim.
+
+Doc comments live on the CST as leading trivia of the declaration's first token (see `lib/flang_parser/src/trivia.f`). Any tool can recover them from the CST without re-parsing.
+
 ## Tuples
 
 ```
