@@ -33,6 +33,7 @@ public static class FLangLanguageServer
                 .WithHandler<DefinitionHandler>()
                 .WithHandler<TypeDefinitionHandler>()
                 .WithHandler<ReferencesHandler>()
+                .WithHandler<WorkspaceSymbolsHandler>()
                 .WithHandler<DocumentSymbolHandler>()
                 .WithHandler<InlayHintHandler>()
                 .WithHandler<SignatureHelpHandler>()
