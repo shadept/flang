@@ -3277,6 +3277,92 @@ return r.map(fn(u) u.name).ok()
 
 ---
 
+### E2111: Capturing Closure Cannot Coerce to Bare Function Pointer
+
+**Category**: Type Checking
+**Severity**: Error
+
+#### Description
+
+A `fn(...) Ret` value-position type is a bare function pointer with no env storage. RFC-014 captures by value, so a closure with a non-empty capture set cannot decay to that representation — it would lose the captured environment. Empty-capture lambdas decay normally.
+
+#### Example
+
+```flang
+fn apply(f: fn(i32) i32, x: i32) i32 { return f(x) }
+
+pub fn main() i32 {
+    let k = 7
+    return apply(fn(x: i32) i32 { x * k }, 5)   // error E2111
+}
+```
+
+#### Solution
+
+Either remove the capture (pass `k` as an extra argument), make the higher-order function generic over the callable type, or wrap the closure with an explicit boxing helper.
+
+```flang
+fn apply(f: $F, x: i32) i32 { return f(x) }   // generic over the closure type
+```
+
+---
+
+### E2112: Assignment to Captured Variable
+
+**Category**: Type Checking
+**Severity**: Error
+
+#### Description
+
+Closures capture by value (RFC-014). Assigning to a captured name from inside the closure body cannot affect the outer scope — the write would only mutate the closure's own field, which is misleading and rejected up-front.
+
+#### Example
+
+```flang
+pub fn main() i32 {
+    let k = 5
+    let f = fn() i32 {
+        k = 10            // error E2112 — outer `k` is unchanged
+        return k
+    }
+    return f()
+}
+```
+
+#### Solution
+
+Reshape the closure to return the new value (`fn() i32 { 10 }` then `let k = f()`), or move the state to a dedicated callable type with an `op_call(self: &T, ...)` that mutates `self.k` explicitly.
+
+---
+
+### E2113: Nested Capturing Closures Not Yet Supported
+
+**Category**: Type Checking
+**Severity**: Error
+
+#### Description
+
+A closure captures a name that an enclosing closure also captures. The transitive-capture lowering (the inner closure pulling its env field from the outer's env field) is not yet implemented. Nested closures whose captures don't overlap with the outer closure work fine.
+
+#### Example
+
+```flang
+pub fn main() i32 {
+    let base = 10
+    let outer = fn(x: i32) i32 {
+        let inner = fn(y: i32) i32 { y + base }   // error E2113
+        return inner(x) + base
+    }
+    return outer(10)
+}
+```
+
+#### Solution
+
+Extract the shared state to a callable type (`type Adder = struct { base: i32 } ; fn op_call(self: &Adder, y: i32) i32 { ... }`), or restructure so only one of the closures captures the shared name.
+
+---
+
 ### E2092: `?` Has No Matching `op_try`
 
 **Category**: Type Checking

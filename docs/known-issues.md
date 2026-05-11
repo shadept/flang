@@ -33,21 +33,15 @@ When you discover a bug or limitation:
 
 ---
 
-### RFC-014 Phase 2 (Capturing Closures) Not Yet Implemented
+### RFC-014 Phase 2 Follow-ups
 
-**Status:** Phase 1 (`op_call`) landed. Phase 2 (capturing lambdas) is the next step.
-
-**What works:** any type with `fn op_call(self: T, ...)` or `fn op_call(self: &T, ...)` is callable as `t(args)`. Resolution chains through `op_deref`. Multiple `op_call` overloads on the same type are dispatched by argument type. Tests in `tests/FLang.Tests/Harness/op_call/`.
+**Status:** Phase 1 (`op_call`) and Phase 2 (capturing lambdas, by-value) landed. Single-level capturing closures synthesise an anonymous `__Closure_N` struct holding captures by value, and an `op_call(self: &__Closure_N, ...)` body with capture references projected through `self`. Tests in `tests/FLang.Tests/Harness/closures/`. Coercion of capturing closures into bare `fn(...) ret` slots is rejected with **E2111**; assignment to a captured name from inside the body is rejected with **E2112** (capture is by value, so the write would only mutate the closure's own field, which is misleading).
 
 **What's deferred:**
 
-1. **Capturing lambdas.** The lambda scope barrier (`_ctx.LambdaScopeBarrier`) still forbids referencing outer scope inside `fn(...) { ... }`. Per the RFC, this barrier should be replaced with a capture-detection pass that:
-    - Identifies free variables in the lambda body.
-    - Synthesizes an anonymous `__Closure_N` struct holding captures by value.
-    - Synthesizes an `op_call(self: &__Closure_N, ...lambda_params)` function with the body's capture references rewritten to `self.<name>`.
-    - Emits a struct literal at the lambda site.
-2. **Coercion of capturing closures to bare `fn(...) ret`** — must error with E2XXX ("closure captures variables; cannot coerce to bare function pointer"). Empty captures still decay to a plain function pointer (current behavior).
-3. **Stdlib follow-ups** — making `FilterIter` / `MapIter` generic over the callable type, and adding `box(allocator, callable)` to `std.owned`, both unblocked once Phase 2 lands.
+1. **Nested capturing closures (E2113).** A closure that captures a name an enclosing closure also captures requires transitive-capture lowering (the inner closure pulls its env field from the outer's env field). Today this is rejected up-front with E2113. Closures nested inside non-capturing closures (or whose captures don't overlap with the outer closure's) work fine.
+2. **Capture-by-reference (`&local`).** RFC §"Out of scope". Initial implementation captures only by value; explicit `&local` capture syntax + lifetime story is a follow-up.
+3. **Stdlib follow-ups.** Making `FilterIter` / `MapIter` generic over the callable type, and adding `box(allocator, callable)` to `std.owned`, are unblocked by Phase 2 but tracked separately. The generic-over-callable iterator change requires call resolution to handle `f(args)` where `f`'s type is a TypeVar bound to a closure NominalType — not yet wired.
 
 ---
 

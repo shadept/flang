@@ -1,6 +1,7 @@
 using FLang.Core;
 using FLang.Core.Types;
 using FLang.Frontend.Ast.Declarations;
+using FLang.Frontend.Ast.Expressions;
 using Type = FLang.Core.Types.Type;
 
 namespace FLang.Semantics;
@@ -38,8 +39,14 @@ internal sealed class InferenceContext
     /// <summary>Lambda synthesis counter.</summary>
     public int NextLambdaId { get; set; }
 
-    /// <summary>Scope barrier for non-capturing lambda enforcement.</summary>
-    public int LambdaScopeBarrier { get; set; }
+    /// <summary>
+    /// Stack of in-progress lambda inferences. Each frame records the scope
+    /// depth at which the lambda's params were bound — names found at that
+    /// depth or shallower are captures. Replaces the old `LambdaScopeBarrier`
+    /// scalar (RFC-014 Phase 2): instead of forbidding outer references,
+    /// they are routed into the active frame's capture set.
+    /// </summary>
+    public Stack<LambdaFrame> LambdaFrames { get; } = new();
 
     /// <summary>Active generic type parameter names (during specialization).</summary>
     public Dictionary<string, int> ActiveTypeParams { get; } = [];
@@ -96,5 +103,23 @@ internal sealed class InferenceContext
     {
         Engine = engine;
         Scopes = new TypeScopes();
+    }
+}
+
+/// <summary>
+/// One entry in <see cref="InferenceContext.LambdaFrames"/>. Tracks the
+/// boundary scope-depth (the depth at which the lambda body's own scope was
+/// pushed) and the set of names captured from outside that boundary.
+/// </summary>
+internal sealed class LambdaFrame
+{
+    public LambdaExpressionNode Lambda { get; }
+    public int BoundaryDepth { get; }
+    public Dictionary<string, Type> Captures { get; } = [];
+
+    public LambdaFrame(LambdaExpressionNode lambda, int boundaryDepth)
+    {
+        Lambda = lambda;
+        BoundaryDepth = boundaryDepth;
     }
 }

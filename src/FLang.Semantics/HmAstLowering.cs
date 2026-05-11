@@ -4717,14 +4717,64 @@ public class HmAstLowering
     // Lambda lowering
     // =========================================================================
 
-    private FunctionReferenceValue LowerLambda(LambdaExpressionNode lambda)
+    private Value LowerLambda(LambdaExpressionNode lambda)
     {
         if (lambda.SynthesizedFunction == null)
             throw new InternalCompilerError(
                 "Lambda has no synthesized function", lambda.Span);
 
-        var irType = GetIrType(lambda);
-        return new FunctionReferenceValue(lambda.SynthesizedFunction.Name, irType);
+        // Non-capturing lambda: same as before — function pointer to the synthesized body.
+        if (lambda.Captures.Count == 0)
+        {
+            var irType = GetIrType(lambda);
+            return new FunctionReferenceValue(lambda.SynthesizedFunction.Name, irType);
+        }
+
+        // Capturing closure: build the closure struct value by reading each
+        // captured name from the current lowering scope. The struct's IR type
+        // is the layout of the synthesized __Closure_N nominal.
+        var closureIrType = GetIrType(lambda);
+        if (closureIrType is not IrStruct closureStruct)
+            throw new InternalCompilerError(
+                $"Capturing lambda lowered to non-struct IR type `{closureIrType}`", lambda.Span);
+
+        var resultPtr = _currentBlock.EmitAlloca(closureStruct);
+        _currentBlock.EmitCall("memset",
+            [resultPtr, new IntConstantValue(0, TypeLayoutService.IrI32), new IntConstantValue(closureStruct.Size, TypeLayoutService.IrUSize)],
+            TypeLayoutService.IrVoidPrim, calleeParamTypes: null, isForeign: true);
+
+        foreach (var capture in lambda.Captures)
+        {
+            var irField = FindField(closureStruct, capture.Name);
+            var captureVal = LoadCapturedLocal(capture.Name, irField.Type, lambda.Span);
+            EmitStoreToOffset(resultPtr, irField.ByteOffset, captureVal, irField.Type);
+        }
+
+        return _currentBlock.EmitLoad(resultPtr, closureStruct);
+    }
+
+    /// <summary>
+    /// Reads a captured local for closure struct construction. Mirrors the
+    /// param/alloca handling in <see cref="LowerIdentifier"/> without needing
+    /// a synthetic AST node (which would lack a recorded inferred type).
+    /// </summary>
+    private Value LoadCapturedLocal(string name, IrType expectedType, SourceSpan span)
+    {
+        if (!_locals.TryGetValue(name, out var localVal))
+            throw new InternalCompilerError(
+                $"Captured local `{name}` not found at closure construction site", span);
+
+        if (_parameters.Contains(name))
+        {
+            if (_byRefParams.Contains(name))
+            {
+                var innerType = ((IrPointer)localVal.IrType!).Pointee;
+                return _currentBlock.EmitLoad(localVal, innerType);
+            }
+            return localVal;
+        }
+
+        return _currentBlock.EmitLoad(localVal, expectedType);
     }
 
     // =========================================================================

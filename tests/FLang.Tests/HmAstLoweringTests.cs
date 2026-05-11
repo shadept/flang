@@ -74,8 +74,9 @@ public class HmAstLoweringTests
 
             var allDiags = checker.Diagnostics.Concat(moduleCompiler.Diagnostics).ToList();
 
+            var typeCheckResult = checker.BuildResult();
             var layout = new TypeLayoutService(checker.Engine, checker);
-            var lowering = new HmAstLowering(checker, layout, checker.Engine);
+            var lowering = new HmAstLowering(typeCheckResult, layout);
 
             // Only lower user module, not stdlib
             var userModulePath = Path.GetFullPath(tempFile);

@@ -185,11 +185,29 @@ public partial class HmTypeChecker
 
     private Type InferIdentifier(IdentifierExpressionNode id)
     {
-        // Look up in type scope (local variables, parameters, variant constructors)
-        // With lambda scope barrier enforcement for non-capturing lambdas
-        var scheme = _ctx.LambdaScopeBarrier > 0
-            ? _ctx.Scopes.LookupWithBarrier(id.Name, _ctx.LambdaScopeBarrier)
-            : _ctx.Scopes.Lookup(id.Name);
+        // Look up in type scope (local variables, parameters, variant constructors).
+        // RFC-014 Phase 2: when the lookup crosses one or more in-progress
+        // lambda frames (i.e. the name is bound at-or-shallower than the
+        // outermost crossed frame's boundary), record it as a capture on each
+        // crossed frame. The lookup itself still succeeds — captures are
+        // by-value, so the captured field has the same type as the outer
+        // binding at the literal site.
+        var (scheme, foundDepth) = _ctx.Scopes.LookupWithDepth(id.Name);
+        if (scheme != null && _ctx.LambdaFrames.Count > 0)
+        {
+            // Walk frames outermost-to-innermost: any frame whose boundary is
+            // deeper than the binding's depth has crossed this name. Iterating
+            // the stack visits innermost first; we record on every crossed
+            // frame so nested closures propagate captures outward.
+            foreach (var frame in _ctx.LambdaFrames)
+            {
+                if (frame.BoundaryDepth > foundDepth)
+                {
+                    var capturedType = _ctx.Engine.Resolve(_ctx.Engine.Specialize(scheme));
+                    frame.Captures[id.Name] = capturedType;
+                }
+            }
+        }
         if (scheme != null)
         {
             // Track usage for unused variable warnings
@@ -627,6 +645,20 @@ public partial class HmTypeChecker
                         var resolvedArg = _ctx.Engine.Resolve(fullPositionalTypes[i]);
                         var resolvedParam = _ctx.Engine.Resolve(expectedType);
                         var paramName = i < fn.Parameters.Count ? fn.Parameters[i].Name : $"arg{i}";
+
+                        // E2111: a capturing closure cannot decay to a bare
+                        // function-pointer slot — there is no env storage on
+                        // the receiver side. Surface the specific reason so
+                        // the user knows to box or use a generic-typed slot.
+                        if (resolvedArg is NominalType { Kind: NominalKind.Struct } closureArg
+                            && closureArg.ShortName.StartsWith("__Closure_")
+                            && resolvedParam is FunctionType)
+                        {
+                            ReportError(
+                                $"closure captures variables; cannot coerce to bare function pointer `{resolvedParam}` for parameter `{paramName}` (wrap with a generic-typed slot or box, or remove captures)",
+                                span, "E2111");
+                        }
+
                         diag.Notes.Add(Diagnostic.Hint(
                             $"`{sig}`: parameter `{paramName}` expects `{resolvedParam}`, got `{resolvedArg}`",
                             fn.Span));
@@ -2421,6 +2453,30 @@ public partial class HmTypeChecker
         if (assign.Target is IdentifierExpressionNode targetId && IsConst(targetId.Name))
             ReportError($"Cannot assign to constant `{targetId.Name}`", assign.Span, "E2038");
 
+        // E2112: assigning to a captured name from inside a closure body has no
+        // visible effect on the outer scope (RFC-014 captures by value), so the
+        // write would only mutate the closure's own field — a misleading shape
+        // we reject up-front. Detection: target identifier resolves to a
+        // binding shallower than the innermost active lambda's boundary.
+        if (assign.Target is IdentifierExpressionNode lhsId
+            && _ctx.LambdaFrames.Count > 0)
+        {
+            var (_, depth) = _ctx.Scopes.LookupWithDepth(lhsId.Name);
+            if (depth > 0)
+            {
+                foreach (var frame in _ctx.LambdaFrames)
+                {
+                    if (frame.BoundaryDepth > depth)
+                    {
+                        ReportError(
+                            $"cannot assign to captured variable `{lhsId.Name}` (closures capture by value; this would only mutate the closure's own field, not the outer scope)",
+                            assign.Span, "E2112");
+                        break;
+                    }
+                }
+            }
+        }
+
         var targetType = InferExpression(assign.Target);
         var valueType = InferExpression(assign.Value);
         var diagCount = _ctx.Engine.DiagnosticCount;
@@ -3185,11 +3241,14 @@ public partial class HmTypeChecker
     // Lambda
     // =========================================================================
 
-    private FunctionType InferLambda(LambdaExpressionNode lambda)
+    private Type InferLambda(LambdaExpressionNode lambda)
     {
-        // Set scope barrier for non-capturing lambda (all FLang lambdas are non-capturing)
-        var savedBarrier = _ctx.LambdaScopeBarrier;
-        _ctx.LambdaScopeBarrier = _ctx.Scopes.Depth;
+        // RFC-014 Phase 2: capture analysis. Pushing a LambdaFrame here
+        // marks the boundary; InferIdentifier records any name bound
+        // shallower than this depth as a capture instead of erroring.
+        var lambdaId = _ctx.NextLambdaId++;
+        var frame = new LambdaFrame(lambda, _ctx.Scopes.Depth + 1);
+        _ctx.LambdaFrames.Push(frame);
 
         PushScope();
 
@@ -3215,14 +3274,14 @@ public partial class HmTypeChecker
             ? ResolveTypeNode(lambda.ReturnType)
             : _ctx.Engine.FreshVar();
 
-        // 3. Synthesize a FunctionDeclarationNode
-        var lambdaName = $"__lambda_{_ctx.NextLambdaId++}";
+        // 3. Synthesize a FunctionDeclarationNode (name finalised below)
+        var lambdaName = $"__lambda_{lambdaId}";
         var synthesized = new FunctionDeclarationNode(lambda.Span, lambda.Span, lambdaName, paramNodes, lambda.ReturnType, lambda.Body);
 
         // 4. Push function context for return statements inside lambda
         _ctx.FunctionStack.Push(new FunctionContext(synthesized, returnType));
 
-        // Check body statements
+        // Check body statements (this populates frame.Captures via InferIdentifier)
         foreach (var stmt in lambda.Body)
             CheckStatement(stmt);
 
@@ -3241,24 +3300,249 @@ public partial class HmTypeChecker
 
         _ctx.FunctionStack.Pop();
         PopScope();
-
-        // Restore scope barrier
-        _ctx.LambdaScopeBarrier = savedBarrier;
+        _ctx.LambdaFrames.Pop();
 
         // 6. Record inferred types on synthesized function parameters
         for (var i = 0; i < paramNodes.Count; i++)
             Record(paramNodes[i], paramTypes[i]);
 
-        // Record the synthesized function itself with its function type
-        var fnType = new FunctionType(paramTypes, returnType);
-        Record(synthesized, fnType);
+        // 7. Branch on capture set. Empty captures keep the legacy path
+        // (lambda lowers to a plain function pointer); non-empty captures
+        // synthesize a closure struct + op_call dispatch.
+        foreach (var (name, type) in frame.Captures)
+            lambda.Captures.Add(new LambdaExpressionNode.LambdaCapture(name, type));
 
-        // 7. Set lambda.SynthesizedFunction and register in _results.Specializations
-        lambda.SynthesizedFunction = synthesized;
-        _results.Specializations.Add(synthesized);
+        if (lambda.Captures.Count == 0)
+        {
+            var fnType = new FunctionType(paramTypes, returnType);
+            Record(synthesized, fnType);
+            lambda.SynthesizedFunction = synthesized;
+            _results.Specializations.Add(synthesized);
+            return fnType;
+        }
 
-        return fnType;
+        // Capturing closure: build the closure struct type, rewrite the body so
+        // captured names project through `self`, and emit an op_call function.
+        return SynthesizeClosure(lambda, lambdaId, paramNodes, paramTypes, returnType);
     }
+
+    /// <summary>
+    /// RFC-014 Phase 2 closure synthesis. The lambda has at least one capture;
+    /// build:
+    ///   1. an anonymous NominalType `__Closure_N` whose fields are the captures,
+    ///   2. an `op_call(self: &__Closure_N, ...lambda_params) Ret` function
+    ///      whose body is the lambda's body with captured-name references
+    ///      rewritten to `self.&lt;name&gt;`,
+    ///   3. wires both into the type/function registries so the existing
+    ///      <c>op_call</c> resolution path (Phase 1) handles the call site.
+    ///
+    /// Returns the closure NominalType — that becomes the lambda literal's
+    /// inferred type. Lowering uses <see cref="LowerLambda"/> + the captures
+    /// list to emit a struct literal at the literal site.
+    /// </summary>
+    private Type SynthesizeClosure(LambdaExpressionNode lambda, int lambdaId,
+        List<FunctionParameterNode> lambdaParamNodes, Type[] lambdaParamTypes, Type returnType)
+    {
+        // RFC-014 Phase 2: transitive captures (a closure capturing a name
+        // that an enclosing closure also captures) are not yet supported.
+        // Reject up-front rather than ICE'ing in the lowering pass.
+        foreach (var outerFrame in _ctx.LambdaFrames)
+        {
+            foreach (var capture in lambda.Captures)
+            {
+                if (outerFrame.Captures.ContainsKey(capture.Name))
+                {
+                    ReportError(
+                        $"nested capturing closures are not yet supported: `{capture.Name}` is captured by both this closure and an enclosing closure",
+                        lambda.Span, "E2113");
+                    return _ctx.Engine.FreshVar();
+                }
+            }
+        }
+
+        var modulePath = _ctx.CurrentModulePath ?? "__synthetic";
+        var shortName = $"__Closure_{lambdaId}";
+        var fqn = $"{modulePath}.{shortName}";
+
+        // Build the closure struct fields from captures (resolved by-value types).
+        var fields = new (string Name, Type Type)[lambda.Captures.Count];
+        for (int i = 0; i < lambda.Captures.Count; i++)
+        {
+            var cap = lambda.Captures[i];
+            fields[i] = (cap.Name, _ctx.Engine.Resolve(cap.Type));
+        }
+
+        var closureNominal = new NominalType(fqn, NominalKind.Struct, [], fields, false, false);
+        _types.NominalTypes[fqn] = closureNominal;
+        _types.NominalSpans[fqn] = lambda.Span;
+        _types.FieldTypeNodes[fqn] = fields
+            .Select(f => (f.Name, (TypeNode)new NamedTypeNode(lambda.Span, "_synthetic")))
+            .ToList();
+        InstantiatedTypes.Add(closureNominal);
+
+        // Rewrite the body so captured-name reads project through `self`.
+        // Cloning prevents the rewrite from affecting the original lambda body —
+        // IDE features (goto-def, hover) still see the original references.
+        var capturedNames = new HashSet<string>(lambda.Captures.Select(c => c.Name));
+        var rewrittenBody = RewriteCaptureReferences(CloneStatements(lambda.Body), capturedNames);
+
+        // op_call's parameter list: [self: &__Closure_N, ...lambda_params].
+        // self is a NamedTypeNode that resolves via the FQN we just registered.
+        var selfTypeNode = new ReferenceTypeNode(lambda.Span, new NamedTypeNode(lambda.Span, fqn));
+        var selfParam = new FunctionParameterNode(lambda.Span, lambda.Span, "self", selfTypeNode);
+        var allParamNodes = new List<FunctionParameterNode> { selfParam };
+        allParamNodes.AddRange(lambdaParamNodes);
+
+        var selfType = (Type)new ReferenceType(closureNominal);
+        var allParamTypes = new Type[lambdaParamTypes.Length + 1];
+        allParamTypes[0] = selfType;
+        Array.Copy(lambdaParamTypes, 0, allParamTypes, 1, lambdaParamTypes.Length);
+
+        var opCall = new FunctionDeclarationNode(lambda.Span, lambda.Span, "op_call",
+            allParamNodes, lambda.ReturnType, rewrittenBody, FunctionModifiers.Public);
+
+        var fnType = new FunctionType(allParamTypes, returnType);
+        Record(opCall, fnType);
+        Record(selfParam, selfType);
+        for (int i = 0; i < lambdaParamNodes.Count; i++)
+            Record(lambdaParamNodes[i], lambdaParamTypes[i]);
+
+        // Type-check the rewritten body in a fresh scope. self + lambda params
+        // are bound; capture-name reads now resolve through `self.<name>`
+        // member-access nodes (no longer free variables in the outer scope).
+        PushScope();
+        _ctx.Scopes.Bind("self", selfType, selfParam);
+        for (int i = 0; i < lambdaParamNodes.Count; i++)
+            _ctx.Scopes.Bind(lambdaParamNodes[i].Name, lambdaParamTypes[i], lambdaParamNodes[i]);
+
+        _ctx.FunctionStack.Push(new FunctionContext(opCall, returnType));
+
+        foreach (var stmt in rewrittenBody)
+            CheckStatement(stmt);
+
+        // Implicit-return rewrite for the cloned tail expression. Mirrors the
+        // tail-rewrite InferLambda already did on the original body — we redo
+        // it here so the cloned tree carries the same shape.
+        if (rewrittenBody.Count > 0
+            && rewrittenBody[^1] is ExpressionStatementNode tailExpr
+            && tailExpr.Expression is not ReturnNode)
+        {
+            var returnNode = new ReturnNode(tailExpr.Span, tailExpr.Expression);
+            rewrittenBody[^1] = new ExpressionStatementNode(tailExpr.Span, returnNode);
+            var tailType = _checker_GetInferredTypeOrFresh(tailExpr.Expression);
+            _ctx.Engine.Unify(tailType, returnType, tailExpr.Span);
+        }
+
+        _ctx.FunctionStack.Pop();
+        PopScope();
+
+        // Register op_call as a public function under no specific module so
+        // the existing op_call resolution (TryResolveOpCall) finds it. Mark
+        // public so visibility filters don't drop it across modules.
+        var scheme = _ctx.Engine.Generalize(fnType);
+        RegisterFunction(new FunctionScheme("op_call", scheme, opCall, IsForeign: false, IsPublic: true, ModulePath: modulePath));
+
+        _results.Specializations.Add(opCall);
+
+        lambda.SynthesizedFunction = opCall;
+        lambda.SynthesizedClosureType = closureNominal;
+        Record(lambda, closureNominal);
+
+        return closureNominal;
+    }
+
+    /// <summary>
+    /// Walks a cloned statement tree replacing identifier references whose name
+    /// is in <paramref name="capturedNames"/> with `self.&lt;name&gt;` member
+    /// accesses. Does NOT descend into nested lambda literals — each lambda's
+    /// own synthesis pass rewrites its own body.
+    /// </summary>
+    private static List<StatementNode> RewriteCaptureReferences(List<StatementNode> stmts, HashSet<string> capturedNames)
+    {
+        var result = new List<StatementNode>(stmts.Count);
+        foreach (var s in stmts)
+            result.Add(RewriteCaptureRefsStmt(s, capturedNames));
+        return result;
+    }
+
+    private static StatementNode RewriteCaptureRefsStmt(StatementNode stmt, HashSet<string> caps) => stmt switch
+    {
+        ExpressionStatementNode es => new ExpressionStatementNode(es.Span,
+            RewriteCaptureRefsExpr(es.Expression, caps)),
+        VariableDeclarationNode vd => new VariableDeclarationNode(vd.Span, vd.NameSpan, vd.Name, vd.Type,
+            vd.Initializer != null ? RewriteCaptureRefsExpr(vd.Initializer, caps) : null),
+        ForLoopNode fl => new ForLoopNode(fl.Span, fl.IteratorVariable,
+            RewriteCaptureRefsExpr(fl.IterableExpression, caps),
+            RewriteCaptureRefsExpr(fl.Body, caps)),
+        LoopNode loop => new LoopNode(loop.Span, RewriteCaptureRefsExpr(loop.Body, caps)),
+        WhileNode wh => new WhileNode(wh.Span,
+            RewriteCaptureRefsExpr(wh.Condition, caps),
+            RewriteCaptureRefsExpr(wh.Body, caps)),
+        DeferStatementNode df => new DeferStatementNode(df.Span,
+            RewriteCaptureRefsExpr(df.Expression, caps)),
+        _ => stmt
+    };
+
+    private static ExpressionNode RewriteCaptureRefsExpr(ExpressionNode expr, HashSet<string> caps) => expr switch
+    {
+        IdentifierExpressionNode id when caps.Contains(id.Name)
+            => new MemberAccessExpressionNode(id.Span,
+                new IdentifierExpressionNode(id.Span, "self"), id.Name),
+        BinaryExpressionNode bin => new BinaryExpressionNode(bin.Span,
+            RewriteCaptureRefsExpr(bin.Left, caps), bin.Operator,
+            RewriteCaptureRefsExpr(bin.Right, caps)),
+        CallExpressionNode call => new CallExpressionNode(call.Span, call.FunctionName,
+            [.. call.Arguments.Select(a => RewriteCaptureRefsExpr(a, caps))],
+            call.UfcsReceiver != null ? RewriteCaptureRefsExpr(call.UfcsReceiver, caps) : null,
+            call.MethodName, call.FunctionNameSpan),
+        IfExpressionNode ie => new IfExpressionNode(ie.Span,
+            RewriteCaptureRefsExpr(ie.Condition, caps),
+            RewriteCaptureRefsExpr(ie.ThenBranch, caps),
+            ie.ElseBranch != null ? RewriteCaptureRefsExpr(ie.ElseBranch, caps) : null),
+        BlockExpressionNode blk => new BlockExpressionNode(blk.Span,
+            RewriteCaptureReferences(CloneStatements(blk.Statements), caps),
+            blk.TrailingExpression != null ? RewriteCaptureRefsExpr(blk.TrailingExpression, caps) : null),
+        MemberAccessExpressionNode ma => new MemberAccessExpressionNode(ma.Span,
+            RewriteCaptureRefsExpr(ma.Target, caps), ma.FieldName),
+        IndexExpressionNode ix => new IndexExpressionNode(ix.Span,
+            RewriteCaptureRefsExpr(ix.Base, caps), RewriteCaptureRefsExpr(ix.Index, caps)),
+        AssignmentExpressionNode ae => new AssignmentExpressionNode(ae.Span,
+            RewriteCaptureRefsExpr(ae.Target, caps), RewriteCaptureRefsExpr(ae.Value, caps)),
+        AddressOfExpressionNode addr => new AddressOfExpressionNode(addr.Span,
+            RewriteCaptureRefsExpr(addr.Target, caps)),
+        DereferenceExpressionNode deref => new DereferenceExpressionNode(deref.Span,
+            RewriteCaptureRefsExpr(deref.Target, caps)),
+        CastExpressionNode cast => new CastExpressionNode(cast.Span,
+            RewriteCaptureRefsExpr(cast.Expression, caps), cast.TargetType),
+        RangeExpressionNode r => new RangeExpressionNode(r.Span,
+            r.Start != null ? RewriteCaptureRefsExpr(r.Start, caps) : null,
+            r.End != null ? RewriteCaptureRefsExpr(r.End, caps) : null),
+        CoalesceExpressionNode coal => new CoalesceExpressionNode(coal.Span,
+            RewriteCaptureRefsExpr(coal.Left, caps), RewriteCaptureRefsExpr(coal.Right, caps)),
+        NullPropagationExpressionNode np => new NullPropagationExpressionNode(np.Span,
+            RewriteCaptureRefsExpr(np.Target, caps), np.MemberName),
+        ArrayLiteralExpressionNode arr when arr.IsRepeatSyntax
+            => new ArrayLiteralExpressionNode(arr.Span,
+                RewriteCaptureRefsExpr(arr.RepeatValue!, caps),
+                RewriteCaptureRefsExpr(arr.RepeatCountExpression!, caps)),
+        ArrayLiteralExpressionNode arr
+            => new ArrayLiteralExpressionNode(arr.Span,
+                [.. arr.Elements!.Select(e => RewriteCaptureRefsExpr(e, caps))]),
+        AnonymousStructExpressionNode anon => new AnonymousStructExpressionNode(anon.Span,
+            anon.Fields.Select(f => (f.FieldName, RewriteCaptureRefsExpr(f.Value, caps))).ToList()),
+        StructConstructionExpressionNode sc => new StructConstructionExpressionNode(sc.Span,
+            sc.TypeName,
+            sc.Fields.Select(f => (f.FieldName, RewriteCaptureRefsExpr(f.Value, caps))).ToList()),
+        NamedArgumentExpressionNode na => new NamedArgumentExpressionNode(na.Span,
+            na.NameSpan, na.Name, RewriteCaptureRefsExpr(na.Value, caps)),
+        UnaryExpressionNode un => new UnaryExpressionNode(un.Span, un.Operator,
+            RewriteCaptureRefsExpr(un.Operand, caps)),
+        ReturnNode ret => new ReturnNode(ret.Span,
+            ret.Expression != null ? RewriteCaptureRefsExpr(ret.Expression, caps) : null),
+        // Nested lambdas are not descended into — they perform their own rewrite.
+        LambdaExpressionNode l => l,
+        _ => expr
+    };
 
     /// <summary>
     /// Get the inferred type for an expression node, or return a fresh var if not yet recorded.
