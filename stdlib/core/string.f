@@ -13,9 +13,19 @@ import core.cmp
 import core.option
 import core.slice
 
+#foreign fn __flang_strlen(ptr: &u8) usize
+
 pub type String = struct {
     ptr: &u8,
     len: usize
+}
+
+pub fn from_c_string(ptr: &u8, len: usize? = null) String {
+    let l = len match {
+        Some(l) => l
+        None => __flang_strlen(ptr)
+    }
+    return .{ ptr = ptr, len = l }
 }
 
 // Returns the string contents as a raw byte slice.

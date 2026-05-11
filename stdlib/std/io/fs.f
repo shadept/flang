@@ -122,7 +122,7 @@ pub fn next(self: &DirIter) DirEntry? {
     )
     if status == R_OK {
         return DirEntry {
-            name = String { ptr = self.name_buf.ptr, len = self.current_name_len },
+            name = from_c_string(self.name_buf.ptr, self.current_name_len),
             kind = self.current_kind as FileKind,
         }
     }
@@ -379,7 +379,7 @@ pub fn glob(pattern: String, allocator: &Allocator? = null) Result(GlobIter, FsE
     // Choose walk root. If there's no literal prefix at all, walk ".".
     let root_str: String = "."
     if prefix_end > 0 {
-        root_str = String { ptr = pattern.ptr, len = prefix_end }
+        root_str = pattern[..prefix_end]
     }
 
     // Wrap pat_buf in Owned so cleanup-on-error / transfer-on-success is
