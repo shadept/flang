@@ -125,9 +125,92 @@ pub fn op_cmp(a: char, b: char) Ord {
 // Tuple op_cmp (lexicographic, arity 1–8)
 // =============================================================================
 
-// TODO(tuple-opcmp): generic `op_cmp(a: ($T1, $T2, ...), ...)` overloads are not
-// provided yet. The inference engine currently mishandles TypeVars embedded in the
-// fields of anonymous tuple types at call sites that pass through enum variant
-// constructors (see conv.f regression). Users needing ordered tuples must define
-// `op_cmp` on their concrete tuple type until this is resolved, e.g.
-// `fn op_cmp(a: (i32, String), b: (i32, String)) Ord { ... }`.
+// Lexicographic comparison on tuples — `op_cmp` is auto-derived for `<`/`>`/`<=`/`>=`/`==`/`!=`,
+// so user types containing tuples become orderable for free.
+pub fn op_cmp(a: ($T,), b: (T,)) Ord {
+    return op_cmp(a.0, b.0)
+}
+
+pub fn op_cmp(a: ($T1, $T2), b: (T1, T2)) Ord {
+    const c0 = op_cmp(a.0, b.0)
+    if c0 != Ord.Equal { return c0 }
+    return op_cmp(a.1, b.1)
+}
+
+pub fn op_cmp(a: ($T1, $T2, $T3), b: (T1, T2, T3)) Ord {
+    const c0 = op_cmp(a.0, b.0)
+    if c0 != Ord.Equal { return c0 }
+    const c1 = op_cmp(a.1, b.1)
+    if c1 != Ord.Equal { return c1 }
+    return op_cmp(a.2, b.2)
+}
+
+pub fn op_cmp(a: ($T1, $T2, $T3, $T4), b: (T1, T2, T3, T4)) Ord {
+    const c0 = op_cmp(a.0, b.0)
+    if c0 != Ord.Equal { return c0 }
+    const c1 = op_cmp(a.1, b.1)
+    if c1 != Ord.Equal { return c1 }
+    const c2 = op_cmp(a.2, b.2)
+    if c2 != Ord.Equal { return c2 }
+    return op_cmp(a.3, b.3)
+}
+
+pub fn op_cmp(a: ($T1, $T2, $T3, $T4, $T5), b: (T1, T2, T3, T4, T5)) Ord {
+    const c0 = op_cmp(a.0, b.0)
+    if c0 != Ord.Equal { return c0 }
+    const c1 = op_cmp(a.1, b.1)
+    if c1 != Ord.Equal { return c1 }
+    const c2 = op_cmp(a.2, b.2)
+    if c2 != Ord.Equal { return c2 }
+    const c3 = op_cmp(a.3, b.3)
+    if c3 != Ord.Equal { return c3 }
+    return op_cmp(a.4, b.4)
+}
+
+pub fn op_cmp(a: ($T1, $T2, $T3, $T4, $T5, $T6), b: (T1, T2, T3, T4, T5, T6)) Ord {
+    const c0 = op_cmp(a.0, b.0)
+    if c0 != Ord.Equal { return c0 }
+    const c1 = op_cmp(a.1, b.1)
+    if c1 != Ord.Equal { return c1 }
+    const c2 = op_cmp(a.2, b.2)
+    if c2 != Ord.Equal { return c2 }
+    const c3 = op_cmp(a.3, b.3)
+    if c3 != Ord.Equal { return c3 }
+    const c4 = op_cmp(a.4, b.4)
+    if c4 != Ord.Equal { return c4 }
+    return op_cmp(a.5, b.5)
+}
+
+pub fn op_cmp(a: ($T1, $T2, $T3, $T4, $T5, $T6, $T7), b: (T1, T2, T3, T4, T5, T6, T7)) Ord {
+    const c0 = op_cmp(a.0, b.0)
+    if c0 != Ord.Equal { return c0 }
+    const c1 = op_cmp(a.1, b.1)
+    if c1 != Ord.Equal { return c1 }
+    const c2 = op_cmp(a.2, b.2)
+    if c2 != Ord.Equal { return c2 }
+    const c3 = op_cmp(a.3, b.3)
+    if c3 != Ord.Equal { return c3 }
+    const c4 = op_cmp(a.4, b.4)
+    if c4 != Ord.Equal { return c4 }
+    const c5 = op_cmp(a.5, b.5)
+    if c5 != Ord.Equal { return c5 }
+    return op_cmp(a.6, b.6)
+}
+
+pub fn op_cmp(a: ($T1, $T2, $T3, $T4, $T5, $T6, $T7, $T8), b: (T1, T2, T3, T4, T5, T6, T7, T8)) Ord {
+    const c0 = op_cmp(a.0, b.0)
+    if c0 != Ord.Equal { return c0 }
+    const c1 = op_cmp(a.1, b.1)
+    if c1 != Ord.Equal { return c1 }
+    const c2 = op_cmp(a.2, b.2)
+    if c2 != Ord.Equal { return c2 }
+    const c3 = op_cmp(a.3, b.3)
+    if c3 != Ord.Equal { return c3 }
+    const c4 = op_cmp(a.4, b.4)
+    if c4 != Ord.Equal { return c4 }
+    const c5 = op_cmp(a.5, b.5)
+    if c5 != Ord.Equal { return c5 }
+    const c6 = op_cmp(a.6, b.6)
+    if c6 != Ord.Equal { return c6 }
+    return op_cmp(a.7, b.7)
+}

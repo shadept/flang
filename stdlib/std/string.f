@@ -20,13 +20,6 @@ import std.string_reader
 // - Character classification (`is_digit`, `is_alpha`, `is_whitespace`)
 // - String-to-integer parsing (`parse_int`)
 
-// Note on overload ordering: the char-needle overloads are declared BEFORE the
-// String-needle ones. Char literals 0-255 currently bind to an unconstrained
-// type variable (see HmTypeChecker.Expressions.InferIntegerLiteral) so they
-// also unify with `String`, producing a tie in overload resolution; in a tie
-// the first-declared overload wins. Declaring the char form first keeps the
-// expected meaning of `find(s, '/')`.
-
 pub fn find(s: String, c: char) usize? {
     let buf = [0u8; 4]
     const n = encode_char(c, buf as u8[])

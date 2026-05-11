@@ -39,6 +39,19 @@ public class InferenceEngine : ITypeResolver
     private readonly List<Diagnostic> _diagnostics = [];
     private int _currentLevel;
 
+    // Primitive-name candidate sets keyed by TypeVar.Id. A TypeVar registered
+    // here can only unify with a PrimitiveType whose name is in the set, or
+    // with another TypeVar (whose constraint then becomes the intersection).
+    // Used to narrow char literals (codepoint 0-255) to `{u8, char}` so they
+    // can't accidentally bind to `String` etc. during overload resolution.
+    private readonly Dictionary<int, HashSet<string>> _primConstraints = [];
+
+    // Undo log for TryUnify's checkpoint/rollback. Each checkpoint records the
+    // set of constraint-dict mutations performed since it was pushed so they
+    // can be rewound when the speculative region is discarded.
+    private readonly Stack<List<ConstraintUndo>> _constraintUndoStack = new();
+    private readonly record struct ConstraintUndo(int Id, HashSet<string>? OldValue);
+
     // Scoped error override — set via OverrideErrors()
     private string? _errorCodeOverride;
     private Func<string>? _errorMessageTemplate;
@@ -67,6 +80,39 @@ public class InferenceEngine : ITypeResolver
     // =========================================================================
 
     public TypeVar FreshVar() => new(_currentLevel);
+
+    /// <summary>
+    /// Allocates a fresh TypeVar that may only be bound to a PrimitiveType
+    /// whose name is in <paramref name="allowedPrimitives"/>. Attempts to
+    /// unify against any other concrete type fail.
+    /// </summary>
+    public TypeVar FreshConstrainedVar(HashSet<string> allowedPrimitives)
+    {
+        var v = FreshVar();
+        _primConstraints[v.Id] = allowedPrimitives;
+        return v;
+    }
+
+    /// <summary>
+    /// Returns the primitive-name candidate set bound to the representative of
+    /// <paramref name="v"/>, or null if unconstrained.
+    /// </summary>
+    private HashSet<string>? GetConstraint(TypeVar v)
+    {
+        var rep = _unionFind.Find(v);
+        if (rep is TypeVar tv && _primConstraints.TryGetValue(tv.Id, out var set))
+            return set;
+        return null;
+    }
+
+    private void SetConstraint(int id, HashSet<string>? value)
+    {
+        _primConstraints.TryGetValue(id, out var old);
+        if (_constraintUndoStack.Count > 0)
+            _constraintUndoStack.Peek().Add(new ConstraintUndo(id, old));
+        if (value == null) _primConstraints.Remove(id);
+        else _primConstraints[id] = value;
+    }
 
     // =========================================================================
     // Resolve — deep-resolve a type through the DisjointSet
@@ -217,6 +263,64 @@ public class InferenceEngine : ITypeResolver
                 return a;
             }
 
+            // Constraint check: if bVar (or another var in the merged group)
+            // carries a primitive-name candidate set, the value it binds to
+            // must respect it.
+            var bCons = GetConstraint(bVar);
+            if (a is TypeVar aVar)
+            {
+                // TypeVar-TypeVar: intersect any existing constraints.
+                var aCons = GetConstraint(aVar);
+                HashSet<string>? merged;
+                if (aCons == null && bCons == null) merged = null;
+                else if (aCons == null) merged = bCons;
+                else if (bCons == null) merged = aCons;
+                else
+                {
+                    merged = [.. aCons];
+                    merged.IntersectWith(bCons);
+                    if (merged.Count == 0)
+                    {
+                        ReportError(
+                            $"Type mismatch: incompatible primitive constraints `{FormatConstraint(aCons)}` and `{FormatConstraint(bCons)}`",
+                            span, expected: b, actual: a);
+                        return a;
+                    }
+                }
+
+                _unionFind.Merge(a, b);
+                // After merge, `a` is the rep. Move the merged constraint there
+                // and clear bVar's entry so we don't carry two copies.
+                if (merged != null) SetConstraint(aVar.Id, merged);
+                else if (aCons != null) SetConstraint(aVar.Id, null);
+                if (bCons != null) SetConstraint(bVar.Id, null);
+                return a;
+            }
+
+            // Concrete `a` into possibly-constrained `bVar`.
+            if (bCons != null)
+            {
+                if (a is PrimitiveType prim)
+                {
+                    if (!bCons.Contains(prim.Name))
+                    {
+                        ReportError(
+                            $"Type mismatch: expected one of `{FormatConstraint(bCons)}`, got `{prim.Name}`",
+                            span, expected: b, actual: a);
+                        return a;
+                    }
+                }
+                else
+                {
+                    ReportError(
+                        $"Type mismatch: expected one of `{FormatConstraint(bCons)}`, got `{a}`",
+                        span, expected: b, actual: a);
+                    return a;
+                }
+                // Constraint discharged — drop entry to keep the dict bounded.
+                SetConstraint(bVar.Id, null);
+            }
+
             // Merge: concrete type becomes the representative
             _unionFind.Merge(a, b);
             return a;
@@ -340,6 +444,7 @@ public class InferenceEngine : ITypeResolver
     public UnifyResult? TryUnify(Type a, Type b)
     {
         _unionFind.PushCheckpoint();
+        _constraintUndoStack.Push([]);
         var diagCount = _diagnostics.Count;
         try
         {
@@ -358,6 +463,15 @@ public class InferenceEngine : ITypeResolver
                 _diagnostics.RemoveRange(diagCount, _diagnostics.Count - diagCount);
 
             _unionFind.Rollback();
+
+            // Rewind constraint-dict mutations recorded since the checkpoint
+            var undo = _constraintUndoStack.Pop();
+            for (var i = undo.Count - 1; i >= 0; i--)
+            {
+                var entry = undo[i];
+                if (entry.OldValue == null) _primConstraints.Remove(entry.Id);
+                else _primConstraints[entry.Id] = entry.OldValue;
+            }
         }
     }
 
@@ -517,6 +631,18 @@ public class InferenceEngine : ITypeResolver
         }
 
         return Zonk(resolved);
+    }
+
+    // =========================================================================
+    // Constraint formatting
+    // =========================================================================
+
+    private static string FormatConstraint(HashSet<string> set)
+    {
+        // Stable ordering so error text is deterministic across runs.
+        var sorted = new List<string>(set);
+        sorted.Sort(StringComparer.Ordinal);
+        return string.Join(" | ", sorted);
     }
 
     // =========================================================================

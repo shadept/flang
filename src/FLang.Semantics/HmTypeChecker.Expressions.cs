@@ -108,10 +108,12 @@ public partial class HmTypeChecker
     {
         if (lit.Suffix != null)
         {
-            // Char literals with codepoints 0-255: allow contextual inference to u8 or char
+            // Char literals with codepoints 0-255: allow contextual inference to u8 or char.
+            // The TypeVar is constrained to the {u8, char} primitive candidate set so it
+            // can't unify with arbitrary types (e.g. String) during overload resolution.
             if (lit.Suffix == "char" && lit.Value >= 0 && lit.Value <= 255)
             {
-                var charTv = _ctx.Engine.FreshVar();
+                var charTv = _ctx.Engine.FreshConstrainedVar(["u8", "char"]);
                 _unsuffixedLiterals.Add((lit, charTv));
                 return charTv;
             }

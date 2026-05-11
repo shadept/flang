@@ -159,17 +159,19 @@ public sealed record NominalType(string Name, NominalKind Kind, IReadOnlyList<Ty
             if (!TypeArguments[i].Equals(other.TypeArguments[i])) return false;
 
         // Anonymous types share names based on field names only (e.g. __anon__0__1 for tuples).
-        // Two anonymous types with different concrete field types must NOT be considered equal.
-        // TypeVars act as wildcards — they'll be unified by the inference engine later.
+        // Two anonymous types with different field types must NOT be considered equal — any
+        // TypeVar in a field position has identity semantics (ReferenceEquals via TypeVar.Equals),
+        // so two distinct anon instances with different TypeVar IDs are correctly unequal and
+        // get routed through the structural unification path that binds them. Treating TypeVars
+        // as wildcards here would let the identity short-circuit `return a` past nested anon
+        // tuples in ArrayType/ReferenceType/etc., leaving wildcard fields unbound.
         if (Name.StartsWith("__anon_") && FieldsOrVariants.Count > 0)
         {
             if (other.FieldsOrVariants.Count != FieldsOrVariants.Count) return false;
             for (var i = 0; i < FieldsOrVariants.Count; i++)
             {
-                var fa = FieldsOrVariants[i].Type;
-                var fb = other.FieldsOrVariants[i].Type;
-                if (fa is TypeVar || fb is TypeVar) continue;
-                if (!fa.Equals(fb)) return false;
+                if (!FieldsOrVariants[i].Type.Equals(other.FieldsOrVariants[i].Type))
+                    return false;
             }
         }
 

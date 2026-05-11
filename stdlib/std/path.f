@@ -375,13 +375,9 @@ pub fn normalize(self: &Path) Path {
     const v = self.as_view()
 
     let sb = string_builder(v.len + 1, alloc)
-    // Components stored as parallel (start, end) byte offsets into v.
-    // Using List(usize) avoids a known generic-inference issue that
-    // surfaces with List(String) / List(u8[]) at this call site.
-    let starts: List(usize) = list(8, alloc)
-    defer starts.deinit()
-    let ends: List(usize) = list(8, alloc)
-    defer ends.deinit()
+    // Components stored as zero-copy String views into v.
+    let comps: List(String) = list(8, alloc)
+    defer comps.deinit()
 
     let has_root: bool = false
     let drive_end: usize = 0   // bytes consumed by Windows drive prefix
@@ -420,27 +416,23 @@ pub fn normalize(self: &Path) Path {
         if seg_len == 2 and v[start] == '.' and v[start + 1] == '.' {
             // ".." — pop unless top is also ".." (relative-only stack).
             let top_is_dotdot: bool = false
-            if starts.len > 0 {
-                const ts = starts[starts.len - 1]
-                const te = ends[ends.len - 1]
-                top_is_dotdot = (te - ts) == 2 and v[ts] == '.' and v[ts + 1] == '.'
+            if comps.len > 0 {
+                const top = comps[comps.len - 1]
+                top_is_dotdot = top.len == 2 and top[0] == '.' and top[1] == '.'
             }
-            const can_pop = starts.len > 0 and !top_is_dotdot
+            const can_pop = comps.len > 0 and !top_is_dotdot
             if can_pop {
-                const _ps = starts.pop()
-                const _pe = ends.pop()
+                const _popped = comps.pop()
                 continue
             }
             if has_root {
                 // ".." past root is a no-op.
                 continue
             }
-            starts.push(start)
-            ends.push(p)
+            comps.push(from_c_string(v.ptr + start, seg_len))
             continue
         }
-        starts.push(start)
-        ends.push(p)
+        comps.push(from_c_string(v.ptr + start, seg_len))
     }
 
     // Emit drive prefix, root, then components.
@@ -454,12 +446,11 @@ pub fn normalize(self: &Path) Path {
         sb.append_byte(sep())
     }
 
-    for k in 0..starts.len {
+    for k in 0..comps.len {
         if k > 0 {
             sb.append_byte(sep())
         }
-        const seg = from_c_string(v.ptr + starts[k], ends[k] - starts[k])
-        sb.append(seg)
+        sb.append(comps[k])
     }
 
     if sb.len == 0 {
