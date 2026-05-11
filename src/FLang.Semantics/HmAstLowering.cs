@@ -3646,20 +3646,55 @@ public class HmAstLowering
 
         var resultPtr = _currentBlock.EmitAlloca(rangeStruct);
 
-        // Store start
+        var startField = FindField(rangeStruct, "start");
+        var endField = FindField(rangeStruct, "end");
+
+        // Stack allocas are not zero-initialized at this layer. Omitted bounds
+        // in partial ranges (`..n`, `n..`, `..`) would otherwise read garbage —
+        // explicitly fill both fields with sensible defaults: 0 for missing
+        // start, the field-type's max value for missing end (so user-defined
+        // op_index that clamps `end` against `base.len` produces the slice the
+        // caller expects).
+        //
+        // CAVEAT: built-in slicing of a non-literal `Range` value goes through
+        // `LowerRangeSlicing`, which computes `len = end - start` with no
+        // clamp. A Range constructed with `..` or `0..` and later used as
+        // `arr[r]` therefore yields `len = USIZE_MAX`. The literal path
+        // (`arr[..n]` directly) is unaffected — it uses
+        // `LowerRangeSlicingWithBounds` with a properly-substituted end. Until
+        // `LowerRangeSlicing` learns to clamp at runtime, callers indexing
+        // built-in slices/arrays with stored Range values must provide
+        // explicit bounds.
         if (range.Start != null)
         {
             var startVal = LowerExpression(range.Start);
-            var startField = FindField(rangeStruct, "start");
             EmitStoreToOffset(resultPtr, startField.ByteOffset, startVal, startField.Type);
         }
+        else
+        {
+            var zero = new IntConstantValue(0, startField.Type);
+            EmitStoreToOffset(resultPtr, startField.ByteOffset, zero, startField.Type);
+        }
 
-        // Store end
         if (range.End != null)
         {
             var endVal = LowerExpression(range.End);
-            var endField = FindField(rangeStruct, "end");
             EmitStoreToOffset(resultPtr, endField.ByteOffset, endVal, endField.Type);
+        }
+        else
+        {
+            // Largest representable value for the end-field type. For unsigned
+            // ints that's all-ones; for signed it's the positive max. Either
+            // way, user op_index implementations clamp against `len`.
+            ulong maxBits = endField.Type.Size switch
+            {
+                1 => 0xFFUL,
+                2 => 0xFFFFUL,
+                4 => 0xFFFFFFFFUL,
+                _ => 0xFFFFFFFFFFFFFFFFUL,
+            };
+            var maxVal = new IntConstantValue((long)maxBits, endField.Type);
+            EmitStoreToOffset(resultPtr, endField.ByteOffset, maxVal, endField.Type);
         }
 
         return _currentBlock.EmitLoad(resultPtr, rangeStruct);

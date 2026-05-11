@@ -112,6 +112,42 @@ Most-likely culprit: #3 combined with the signature's NominalType instance being
 
 ---
 
+### Generic List Over Slice / String Element Type Poisons Inference
+
+**Status:** Open
+**Affected:** `InferenceEngine` / overload resolution interaction with `List($T)` where `T` is `u8[]` or `String`
+
+`let comps: List(u8[]) = list(8, alloc)` and `let comps: List(String) = list(8, alloc)` trip the type checker during the generic monomorphization of `list(capacity)` inside `normalize` (`stdlib/std/path.f`). The user-visible cascade is:
+
+- `error[E2001]: Cannot determine concrete type for integer literal '0'` at `comps.len > 0` and `for k in 0..comps.len`,
+- `error[E2001]: Cannot determine concrete type for integer literal '1'` inside `core/range.f`'s `next` (`it.current = it.current + 1`),
+- `error[E2071]: Cyclic type: Option(?N) contains ?N` at the `return val` in the same `next`.
+
+The root cause is the same `NominalType.FieldsOrVariants` leak documented in "Generic Tuple Types Leak TypeVars Across Call Sites" — once the `List(SliceType)` specialization fires, a TypeVar from the slice payload escapes and contaminates an unrelated `RangeIterator($T)` instance, eventually showing up as the cycle in `Option<?N>`. `List(usize)` and `List(MyStruct)` are unaffected; only element types whose own representation contains a TypeVar through anon-tuple-style channels (slices, `String` which is itself a `(ptr, len)` anon shape) trigger it.
+
+**Workaround:** in `normalize` we track components as parallel `List(usize)` of start/end byte offsets and reconstitute the `String` view at emit time. Zero runtime cost.
+
+**Fix direction:** part of the same investigation as the tuple-leak bug — most-likely culprit #3 (identity short-circuit in `UnifyInternal` treating TypeVars in anon-type fields as wildcards) combined with shared `NominalType` instances across call sites. A targeted reproduction inside `normalize` would help bisect.
+
+**Test:** Worked around in `stdlib/std/path.f`'s `normalize`. Standalone repro: declare `let xs: List(u8[]) = list(8)` inside a function that also iterates a `Range(usize)`.
+
+---
+
+### Char/Byte Literals Accept Any Slot In Overload Resolution
+
+**Status:** Open
+**Affected:** `HmTypeChecker.Expressions.InferIntegerLiteral`, overload resolution
+
+Char (`'x'`) and byte (`b'x'`) literals whose codepoint is in 0-255 currently return a fresh unconstrained `TypeVar` (so they can flow into either `char` or `u8` slots — see [`char_to_u8_inference.f`](tests/FLang.Tests/Harness/basics/char_to_u8_inference.f)). At an overload site that TypeVar will unify with *any* type, including `String`, with cost 0. Both `fn foo(s: String, c: char)` and `fn foo(s: String, n: String)` therefore score identically for `foo("a", 'b')`, and `ResolveOverload`'s strict-`<` tie-break leaves whichever overload was declared first as the winner. The lowering still passes the actual char value, so the C compiler then warns `int32_t *` vs `core_string_String *`.
+
+**Workaround:** declare the char/byte overload *before* the String overload. `std.string` does this for `find` / `rfind` / `count` and `split` with comments at the top of each block.
+
+**Fix direction:** narrow the literal's TypeVar to the set `{ u8, char }` so it cannot unify with arbitrary types. Either a "constrained TypeVar" mechanism or a dedicated coercion rule (`char-literal → u8` when the constant fits) plus making the literal default to `char`. The latter is simpler but touches all sites that currently rely on context-driven binding.
+
+**Test:** Triggered by [`stdlib/std/string.f`](stdlib/std/string.f)'s char-needle overloads; pinned by [`stdlib/path_basic.f`](tests/FLang.Tests/Harness/stdlib/path_basic.f) and [`stdlib/string_helpers.f`](tests/FLang.Tests/Harness/stdlib/string_helpers.f).
+
+---
+
 ### Overloaded Functions Can't Be Used As First-Class Values
 
 **Status:** Open
@@ -226,6 +262,21 @@ Recursive enums containing generic containers (e.g., `enum Expr { Add(List(Expr)
 - C codegen treats `IrNeverPrim` like `IrVoidPrim` for call/return emission
 
 **Test:** `tests/FLang.Tests/Harness/generics/never_type_basic.f`
+
+---
+
+### ~~Partial Range Bounds Left Uninitialized in User op_index~~
+
+**Status:** Fixed
+**Affected:** `HmAstLowering.LowerRange` — partial-range syntax (`..n`, `n..`, `..`) lowered for user-defined `op_index`
+
+`LowerRange` allocated a `Range` struct on the stack and only wrote the fields that the source explicitly specified. The built-in slice path (`base[..n]` on `u8[]`/arrays) handled this correctly by inlining default `start=0` / `end=base.len`, but the user-defined op_index path called `LowerExpression(index.Index)` which dispatched through `LowerRange` and produced a Range with one garbage field. `String[..3]` therefore read a garbage `start`, and the canonical clamp `if start > end { end = start }` turned the slice into an empty view at offset `len`.
+
+**Fixed by** explicitly writing `0` for a missing start and the field-type's max representable value for a missing end inside `LowerRange`. User op_index implementations clamp `end` against `base.len`, so the sentinel collapses to the correct length without `LowerRange` having to know the base.
+
+**Remaining caveat:** built-in slicing through `LowerRangeSlicing` (when a non-literal `Range` value is used as an index, e.g. `let r = 0..; arr[r]`) does **not** clamp `end` against `base.len`. With the sentinel fix above, such a stored open-ended Range now produces a slice with `len = USIZE_MAX` instead of the previous garbage-from-uninitialized-memory. Direct literal slicing (`arr[..n]`) is unaffected because it goes through `LowerRangeSlicingWithBounds` with a properly substituted end. The fix needs branch-emitting IR to add a runtime `min(end, base.len)` and was deferred.
+
+**Test:** `tests/FLang.Tests/Harness/stdlib/path_basic.f` exercises `[..n]` / `[n..]` on `String`.
 
 ---
 
