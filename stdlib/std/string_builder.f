@@ -599,6 +599,130 @@ pub fn append(sb: &StringBuilder, val: $T, spec: String) {
 }
 
 // =============================================================================
+// String-transforming appenders
+// =============================================================================
+//
+// Each of these reads from `s` (and friends) and writes the transformed result
+// onto `sb`. They never allocate beyond growing `sb`. Compose with `to_string()`
+// when an OwnedString result is wanted:
+//
+//   let sb = string_builder()
+//   defer sb.deinit()
+//   sb.append_replaced("hello world", "world", "FLang")
+//   let owned = sb.to_string()
+
+// Append `s` with every occurrence of `from` replaced by `to`. An empty `from`
+// is a no-op (just appends `s` unchanged).
+pub fn append_replaced(sb: &StringBuilder, s: String, from: String, to: String) {
+    if from.len == 0 or s.len == 0 {
+        sb.append(s)
+        return
+    }
+    let i: usize = 0
+    let start: usize = 0
+    loop {
+        if i + from.len > s.len { break }
+        let matched: bool = true
+        for k in 0..from.len {
+            if s[i + k] != from[k] { matched = false; break }
+        }
+        if matched {
+            sb.append(s[start..i])
+            sb.append(to)
+            i = i + from.len
+            start = i
+            continue
+        }
+        i = i + 1
+    }
+    sb.append(s[start..s.len])
+}
+
+// Append `parts` joined by `sep`.
+//   append_joined(sb, ["a", "b", "c"], ", ") -> "a, b, c"
+pub fn append_joined(sb: &StringBuilder, parts: String[], sep: String) {
+    for i in 0..parts.len {
+        if i > 0 { sb.append(sep) }
+        sb.append(parts[i])
+    }
+}
+
+// Append `s` repeated `n` times.
+pub fn append_repeated(sb: &StringBuilder, s: String, n: usize) {
+    if s.len == 0 or n == 0 { return }
+    sb.reserve(s.len * n)
+    for _i in 0..n {
+        sb.append(s)
+    }
+}
+
+// Append the bytes of `s` in reverse order. Note: byte-reversal of multi-byte
+// UTF-8 sequences produces invalid UTF-8 — use this only for ASCII content or
+// when reversing arbitrary bytes is the intent.
+pub fn append_reversed(sb: &StringBuilder, s: String) {
+    if s.len == 0 { return }
+    sb.reserve(s.len)
+    let i: usize = s.len
+    while i > 0 {
+        i = i - 1
+        sb.append_byte(s[i])
+    }
+}
+
+// Append `s` padded to at least `width` characters using `fill`. `align` is
+// one of '<' (left-justify, pad on right), '>' (right-justify, pad on left),
+// or '^' (center). When `s` is already at least `width` bytes wide, it is
+// appended unchanged. Width is measured in bytes, matching the format-spec
+// behavior for primitives.
+pub fn append_padded(sb: &StringBuilder, s: String, width: usize, align: char, fill: char) {
+    if s.len >= width {
+        sb.append(s)
+        return
+    }
+    const pad = width - s.len
+    if align == '<' {
+        sb.append(s)
+        for _i in 0..pad { sb.append(fill) }
+    } else if align == '^' {
+        const left = pad / 2
+        const right = pad - left
+        for _i in 0..left { sb.append(fill) }
+        sb.append(s)
+        for _i in 0..right { sb.append(fill) }
+    } else {
+        // Default / '>' — right-justify.
+        for _i in 0..pad { sb.append(fill) }
+        sb.append(s)
+    }
+}
+
+// Append `s` with ASCII upper-case letters converted to lower-case. Non-ASCII
+// bytes are copied through unchanged.
+pub fn append_lower_ascii(sb: &StringBuilder, s: String) {
+    sb.reserve(s.len)
+    for i in 0..s.len {
+        const b = s[i]
+        if b >= 'A' and b <= 'Z' {
+            sb.append_byte(b + 32)
+        } else {
+            sb.append_byte(b)
+        }
+    }
+}
+
+pub fn append_upper_ascii(sb: &StringBuilder, s: String) {
+    sb.reserve(s.len)
+    for i in 0..s.len {
+        const b = s[i]
+        if b >= 'a' and b <= 'z' {
+            sb.append_byte(b - 32)
+        } else {
+            sb.append_byte(b)
+        }
+    }
+}
+
+// =============================================================================
 // StringWriter
 // =============================================================================
 

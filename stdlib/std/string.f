@@ -4,6 +4,7 @@ import core.string // explicit import for clarity
 
 import std.encoding.utf8
 import std.allocator
+import std.list
 import std.option
 import std.string_builder
 import std.string_reader
@@ -18,6 +19,25 @@ import std.string_reader
 // - Substring search
 // - Character classification (`is_digit`, `is_alpha`, `is_whitespace`)
 // - String-to-integer parsing (`parse_int`)
+
+// Note on overload ordering: the char-needle overloads are declared BEFORE the
+// String-needle ones. Char literals 0-255 currently bind to an unconstrained
+// type variable (see HmTypeChecker.Expressions.InferIntegerLiteral) so they
+// also unify with `String`, producing a tie in overload resolution; in a tie
+// the first-declared overload wins. Declaring the char form first keeps the
+// expected meaning of `find(s, '/')`.
+
+pub fn find(s: String, c: char) usize? {
+    let buf = [0u8; 4]
+    const n = encode_char(c, buf as u8[])
+    if n == 1 {
+        for i in 0..s.len {
+            if s[i] == buf[0] { return i }
+        }
+        return null
+    }
+    return find(s, from_c_string(buf.ptr, n))
+}
 
 pub fn find(s: String, needle: String) usize? {
     let h = s.as_raw_bytes()
@@ -81,6 +101,20 @@ pub fn starts_with(s: String, prefix: String) bool {
         }
     }
     return true
+}
+
+pub fn rfind(s: String, c: char) usize? {
+    let buf = [0u8; 4]
+    const n = encode_char(c, buf as u8[])
+    if n == 1 {
+        let i: usize = s.len
+        while i > 0 {
+            i = i - 1
+            if s[i] == buf[0] { return i }
+        }
+        return null
+    }
+    return rfind(s, from_c_string(buf.ptr, n))
 }
 
 pub fn rfind(s: String, needle: String) usize? {
@@ -158,6 +192,206 @@ pub fn trim_end(s: String) String {
 
 pub fn trim(s: String) String {
     return trim_end(trim_start(s))
+}
+
+// =============================================================================
+// Split
+// =============================================================================
+//
+// Byte- and String-delimiter overloads. Byte form is declared first for the
+// same overload-resolution reason documented above (char literals bind to an
+// unconstrained type variable and tie with the String overload — first wins).
+
+// Split a string by a byte delimiter. Returns a List of non-owning views.
+//   split("a,b,c", ',')    → ["a", "b", "c"]
+//   split("a,b,c", ',', 1) → ["a", "b,c"]
+pub fn split(s: String, delimiter: u8, max: i32 = -1) List(String) {
+    let result: List(String) = list(0)
+    let start: usize = 0
+    let splits: i32 = 0
+    for i in 0..s.len {
+        if s[i] == delimiter and (max < 0 or splits < max) {
+            result.push(s[start..i])
+            start = i + 1
+            splits = splits + 1
+        }
+    }
+    result.push(s[start..s.len])
+    return result
+}
+
+// Split a string by a String delimiter. Returns a List of non-owning views.
+// An empty delimiter is treated as "no split" — the result is one element.
+//   split("a::b::c", "::")    → ["a", "b", "c"]
+//   split("a::b::c", "::", 1) → ["a", "b::c"]
+pub fn split(s: String, sep: String, max: i32 = -1) List(String) {
+    let result: List(String) = list(0)
+    if sep.len == 0 {
+        result.push(s)
+        return result
+    }
+    let start: usize = 0
+    let i: usize = 0
+    let splits: i32 = 0
+    loop {
+        if i + sep.len > s.len { break }
+        if max >= 0 and splits >= max { break }
+        let matched: bool = true
+        for k in 0..sep.len {
+            if s[i + k] != sep[k] { matched = false; break }
+        }
+        if matched {
+            result.push(s[start..i])
+            start = i + sep.len
+            i = start
+            splits = splits + 1
+            continue
+        }
+        i = i + 1
+    }
+    result.push(s[start..s.len])
+    return result
+}
+
+// =============================================================================
+// Char-overload count (find / rfind already declared above the String overloads)
+// =============================================================================
+
+pub fn count(s: String, c: char) usize {
+    let buf = [0u8; 4]
+    const n = encode_char(c, buf as u8[])
+    if n == 1 {
+        let total: usize = 0
+        for i in 0..s.len {
+            if s[i] == buf[0] { total = total + 1 }
+        }
+        return total
+    }
+    return count(s, from_c_string(buf.ptr, n))
+}
+
+pub fn count(s: String, needle: String) usize {
+    if needle.len == 0 { return 0 }
+    let total: usize = 0
+    let i: usize = 0
+    loop {
+        if i + needle.len > s.len { break }
+        const tail = s[i..s.len]
+        const f = find(tail, needle)
+        f match {
+            Some(off) => {
+                total = total + 1
+                i = i + off + needle.len
+            },
+            None => break,
+        }
+    }
+    return total
+}
+
+// =============================================================================
+// Prefix / suffix
+// =============================================================================
+
+// Returns the remainder after `prefix` if `s` starts with `prefix`, else null.
+//   "core.option".strip_prefix("core.") -> Some("option")
+//   "std.io".strip_prefix("core.")      -> None
+pub fn strip_prefix(s: String, prefix: String) String? {
+    if !s.starts_with(prefix) { return null }
+    return s[prefix.len..s.len]
+}
+
+pub fn strip_suffix(s: String, suffix: String) String? {
+    if !s.ends_with(suffix) { return null }
+    return s[0..s.len - suffix.len]
+}
+
+// =============================================================================
+// Bisect / classification
+// =============================================================================
+
+// Splits `s` into (left, right) at byte index `i`. `i` is clamped to s.len.
+pub fn split_at(s: String, i: usize) (String, String) {
+    let cut: usize = i
+    if cut > s.len { cut = s.len }
+    return (s[0..cut], s[cut..s.len])
+}
+
+pub fn is_ascii(s: String) bool {
+    for i in 0..s.len {
+        if s[i] >= 0x80 { return false }
+    }
+    return true
+}
+
+fn ascii_lower(b: u8) u8 {
+    if b >= 'A' and b <= 'Z' { return b + 32 }
+    return b
+}
+
+pub fn eq_ignore_ascii_case(a: String, b: String) bool {
+    if a.len != b.len { return false }
+    for i in 0..a.len {
+        if ascii_lower(a[i]) != ascii_lower(b[i]) { return false }
+    }
+    return true
+}
+
+// =============================================================================
+// Lines iterator
+// =============================================================================
+//
+// Yields each line of `s` as a non-owning String view. The trailing newline is
+// stripped — both `\n` and `\r\n` produce the same line content. A final line
+// without a trailing newline is still yielded.
+//
+//   for line in s.lines() { ... }
+
+pub type Lines = struct {
+    buf: u8[]
+    pos: usize
+    done: bool
+}
+
+pub fn lines(s: String) Lines {
+    return .{
+        buf = slice_from_raw_parts(s.ptr, s.len),
+        pos = 0,
+        done = false,
+    }
+}
+
+pub fn iter(self: &Lines) &Lines {
+    return self
+}
+
+pub fn next(self: &Lines) String? {
+    if self.done { return null }
+    if self.pos > self.buf.len { return null }
+
+    const start = self.pos
+    let i: usize = start
+    while i < self.buf.len and self.buf[i] != '\n' {
+        i = i + 1
+    }
+
+    let line_end: usize = i
+    // Strip trailing \r from CRLF.
+    if line_end > start and self.buf[line_end - 1] == '\r' {
+        line_end = line_end - 1
+    }
+    const line = from_c_string(self.buf.ptr + start, line_end - start)
+
+    if i >= self.buf.len {
+        // Final segment without trailing \n. Yield once more only if non-empty;
+        // otherwise yield empty and stop (so "a\n" yields just "a", "a" yields "a").
+        self.done = true
+        if start == self.buf.len { return null }
+        return line
+    }
+
+    self.pos = i + 1
+    return line
 }
 
 
