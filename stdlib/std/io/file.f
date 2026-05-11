@@ -38,12 +38,8 @@ pub fn open_file(path: String, mode: FileMode) Result(File, FileError) {
 }
 
 pub fn open_file(path: String, mode: FileMode, encoding: FileEncoding) Result(File, FileError) {
-    let flags = mode match {
-        FileMode.Read => O_RDONLY,
-        FileMode.Write => O_WRONLY + O_CREAT + O_TRUNC,
-        FileMode.Append => O_WRONLY + O_CREAT + O_APPEND,
-    }
-    const fd = open(path.ptr, flags)
+    const flags = open_flags(mode)
+    const fd = open(path.ptr, flags, 420)
     if fd == -1 {
         return Err(FileError.IOError)
     }
@@ -51,6 +47,21 @@ pub fn open_file(path: String, mode: FileMode, encoding: FileEncoding) Result(Fi
     let handle = FileHandle { fd = fd }
     const file = File { path = path, mode = mode, encoding = encoding, handle = handle }
     return Ok(file)
+}
+
+fn open_flags(mode: FileMode) i32 {
+    #if(platform.os == "windows") {
+        return mode match {
+            FileMode.Read => 0 + 0x8000,
+            FileMode.Write => 1 + 0x100 + 0x200 + 0x8000,
+            FileMode.Append => 1 + 0x100 + 0x08 + 0x8000,
+        }
+    }
+    return mode match {
+        FileMode.Read => O_RDONLY,
+        FileMode.Write => O_WRONLY + O_CREAT + O_TRUNC,
+        FileMode.Append => O_WRONLY + O_CREAT + O_APPEND,
+    }
 }
 
 pub fn close_file(file: &File) Result((), FileError) {
@@ -63,15 +74,15 @@ pub fn close_file(file: &File) Result((), FileError) {
 pub fn read_all(file: &File, allocator: &Allocator? = null) Result(OwnedString, FileError) {
     const PAGE_SIZE = 4096
     let sb = string_builder(PAGE_SIZE, allocator)
-    defer sb.deinit()
     loop {
         const buf = sb.ptr + sb.len
         const len = sb.cap - sb.len
         const n = read(file.handle.fd, buf, len)
         if n < 0 {
+            sb.deinit()
             return Err(FileError.IOError)
         }
-        sb.len = n as usize // XXX: this will not be possible after we implement scoped mutability
+        sb.len = sb.len + n as usize
         if n as usize < len {
             break
         }
@@ -87,11 +98,11 @@ pub fn read_all(file: &File, allocator: &Allocator? = null) Result(OwnedString, 
 pub fn read_all_inplace(file: &File, allocator: &Allocator) Result(OwnedString, FileError) {
     const PAGE_SIZE = 4096
     let sb = string_builder(PAGE_SIZE, allocator)
-    defer sb.deinit()
     let buf = [0u8; PAGE_SIZE]
     loop {
         const read_n = read(file.handle.fd, buf.ptr, buf.len)
         if read_n == -1 {
+            sb.deinit()
             return Err(FileError.IOError)
         }
         const buf_slice = buf as u8[]
@@ -188,7 +199,7 @@ const O_CREAT: i32 = 64
 const O_TRUNC: i32 = 512
 const O_APPEND: i32 = 1024
 
-#foreign fn open(path: &u8, flags: i32) i32
+#foreign fn open(path: &u8, flags: i32, mode: i32) i32
 #foreign fn close(fd: i32) i32
 
 #foreign fn read(fd: i32, buf: &u8, len: usize) isize

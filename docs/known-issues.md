@@ -16,6 +16,59 @@ When you discover a bug or limitation:
 
 ## Open Issues
 
+### `defer x.deinit()` + `return x.to_string()` Double-frees
+
+**Status:** Open — workaround in place across stdlib and bootstrap
+**Affected:** `StringBuilder.to_string`, `OwnedString`, any builder-style transfer
+
+`defer` captures arguments at the defer statement (per RFC-006). Calling
+`defer sb.deinit()` then `return sb.to_string()` is intended to be safe —
+`to_string` resets `sb.cap = 0` so the deferred `deinit` becomes a no-op.
+In practice the deferred call sees the StringBuilder's pre-`to_string`
+state, frees the buffer the returned `OwnedString` points at, and the
+caller observes `owned.len == 0` (the OwnedString struct lives on the
+freed stack slot or its bytes are clobbered).
+
+**Workaround:** drop the `defer` whenever the function returns the
+transferred OwnedString. Bind locals explicitly and `deinit()` them after
+the return value is built. Example:
+
+```
+const a = strip_carriage_returns(src)
+const b = trim_lines(a.as_view())
+const result = ensure_trailing_newline(b.as_view())
+a.deinit()
+b.deinit()
+return result
+```
+
+**Fix direction:** decide capture semantics — either document defer as
+by-reference (and adjust codegen) or honour the snapshot semantics and
+drop the comment in `string_builder.to_string` that claims the
+defer-then-transfer pattern works.
+
+### `std.io.file` Was Cross-Platform-Broken in Two Ways
+
+**Status:** Fixed in `stdlib/std/io/file.f`
+
+1. **`open(path, O_WRONLY|O_CREAT|O_TRUNC)` deleted files on Windows.** The
+   Linux constant `O_CREAT = 64` is `_O_TEMPORARY` on Windows — files
+   opened with it disappear on `close`. Flags now go through
+   `open_flags(mode)` which switches on `platform.os`. Windows reads and
+   writes also force `_O_BINARY`, so CRLF translation never corrupts
+   byte-exact round-trips.
+2. **`read_all` overwrote length on each iteration** (`sb.len = n` instead
+   of `sb.len += n`), so any file larger than one read window was
+   truncated. The same function used `defer sb.deinit()` with a final
+   `return Ok(sb.to_string())`, hitting the defer bug above and returning
+   zero-length OwnedStrings even for small files. Both fixed; the loop
+   accumulates and the function deinits manually on error paths.
+
+`open(path, flags)` now takes a third `mode` argument (POSIX requires it
+when `O_CREAT` is set). Callers were already going through `open_file`.
+
+---
+
 ### RFC-010 Follow-ups
 
 **Status:** Phases 1–5 and Phase 7 of [RFC-010](tickets/010-pattern-grammar-and-optional-flattening.md) landed. Phase 6 (proper Maranget-style exhaustiveness) deferred.

@@ -5,6 +5,7 @@
 // they're attached to the nearest token so the CST can round-trip to source
 // byte-for-byte. See trivia.f for the trivia model.
 
+import std.enum
 import std.list
 import flang_parser.trivia
 
@@ -136,6 +137,8 @@ pub type TokenKind = enum {
     InterpFormatSpec
     InterpStringEnd
 }
+
+#enum_utils(TokenKind)
 
 // A lexer-produced token. `text` is a view into the source buffer covering
 // exactly the token's bytes — no leading/trailing trivia. `leading` and
