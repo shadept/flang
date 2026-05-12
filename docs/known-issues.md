@@ -47,6 +47,58 @@ by-reference (and adjust codegen) or honour the snapshot semantics and
 drop the comment in `string_builder.to_string` that claims the
 defer-then-transfer pattern works.
 
+### `defer x.deinit()` + Return Expression Reading `x` (Second Form)
+
+**Status:** Open — same root cause as the "defer + to_string" entry
+above; manifests through any field/method read on `x` inside a return
+expression, not just `to_string`
+**Affected:** `defer owned.deinit()` followed by any expression that
+materialises a view or field of `owned` (e.g. `owned.as_view()`,
+`owned.ptr`, `owned.len`) in the function's return value
+
+Reproduced with `tests/FLang.Tests/Harness/`-shaped single-file
+fixtures (see `/tmp/repro/case_a.f` shape):
+
+```
+pub fn main() i32 {
+    let s = make_hello()
+    defer s.deinit()
+    return len_of(s.as_view())   // len_of receives empty String
+}
+```
+
+The emitted C orders `deinit(s)` BEFORE the call argument evaluation:
+
+```c
+deinit__...(s);                  // defer fired
+as_view__...(__ret, s);          // s.ptr = NULL, s.len = 0 — view is empty
+len_of__...(__ret);              // sees len = 0
+```
+
+`OwnedString.deinit` zeroes `ptr`/`len`/`allocator` (see
+`stdlib/std/string.f` `deinit`), so the subsequent reads observe the
+post-deinit state, not the pre-deinit one. Identical mechanism to the
+documented `defer sb.deinit()` + `return sb.to_string()` zero-length
+case: the defer fires before the return expression evaluates.
+
+**Workaround:** drop the `defer` and call `deinit()` explicitly after
+the return value has been materialised:
+
+```
+const result = len_of(s.as_view())
+s.deinit()
+return result
+```
+
+**Fix direction:** same as the parent entry — defer's snapshot
+semantics need to be decided. Either defer captures at the point of
+return (so the value passed to the inner call has already been
+read by then), or codegen must emit the deferred call after every
+sub-expression of the return statement has been evaluated. The
+current ordering — defer-then-return-expression — is consistent with
+"defer fires when the function is about to return," but it fires too
+early relative to the return expression's operand evaluation.
+
 ### `std.io.file` Was Cross-Platform-Broken in Two Ways
 
 **Status:** Fixed in `stdlib/std/io/file.f`
