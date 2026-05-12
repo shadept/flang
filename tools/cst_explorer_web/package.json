@@ -1,0 +1,17 @@
+{
+  "name": "cst_explorer_web",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Browser-based CST visualiser for FLang. Drop a JSON dump produced by `flang cst --json` to render the syntax tree side-by-side with source.",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview --port 4173"
+  },
+  "devDependencies": {
+    "@sveltejs/vite-plugin-svelte": "^5.0.3",
+    "svelte": "^5.16.0",
+    "vite": "^6.0.5"
+  }
+}
