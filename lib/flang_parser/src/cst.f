@@ -7,6 +7,7 @@
 // tooling. The semantic AST (see ast.f) is a typed view computed on demand
 // from the CST and is what the type checker consumes.
 
+import std.enum
 import std.list
 import flang_parser.token
 
@@ -192,6 +193,8 @@ pub type NodeKind = enum {
     // syntax — partial trees stay editable.
     Error
 }
+
+#enum_utils(NodeKind)
 
 // Child of a CST node: either a sub-node or a leaf token. CST nodes
 // alternate between these freely; a `CallExpr` for example has a child
