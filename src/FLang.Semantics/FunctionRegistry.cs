@@ -21,15 +21,21 @@ internal sealed class FunctionRegistry
             Functions[scheme.Name] = overloads;
         }
 
-        // Check for duplicate overloads (same name + same parameter types)
-        // Allow duplicate foreign declarations (extern decls across modules)
+        // Check for duplicate overloads. The full signature is
+        // (parameter types, return type) — overload resolution already
+        // considers the return type when picking a candidate, so two
+        // functions sharing only parameter types but differing in
+        // return type are legitimately distinct (e.g. parallel
+        // `from_string(s: String) NodeKind?` / `… TokenKind?` emitted
+        // by `#enum_utils`). Allow duplicate foreign declarations
+        // (extern decls across modules).
         foreach (var existing in overloads)
         {
             if (existing.IsForeign && scheme.IsForeign) continue;
-            if (HasSameParameterSignature(existing.Node, scheme.Node))
+            if (HasSameFullSignature(existing.Node, scheme.Node))
             {
                 reportError(
-                    $"duplicate definition of function `{scheme.Name}` with the same parameter types",
+                    $"duplicate definition of function `{scheme.Name}` with the same signature",
                     scheme.Node.NameSpan, "E2103");
                 break;
             }
@@ -71,10 +77,20 @@ internal sealed class FunctionRegistry
         => Functions.TryGetValue(name, out var overloads) ? overloads : null;
 
     /// <summary>
-    /// Checks whether two function declarations have the same parameter signature
-    /// by comparing their AST type nodes structurally.
+    /// Checks whether two function declarations share parameter AND return
+    /// type signatures by comparing their AST type nodes structurally.
+    /// Return type counts: FLang treats the full signature (params + return)
+    /// as the function's identity, so two functions sharing only parameter
+    /// types but differing in return type are legitimately distinct
+    /// declarations (e.g. parallel `from_string(s: String) E?` emitted by
+    /// `#enum_utils` for sibling enums). They register here without error;
+    /// call-site disambiguation by expected return type is a separate
+    /// concern in <c>ResolveOverload</c> and must be context-driven —
+    /// uncontextualised ambiguous calls remain a hard-to-disambiguate
+    /// hole today, but registering them is a prerequisite to ever
+    /// fixing that.
     /// </summary>
-    private static bool HasSameParameterSignature(FunctionDeclarationNode a, FunctionDeclarationNode b)
+    private static bool HasSameFullSignature(FunctionDeclarationNode a, FunctionDeclarationNode b)
     {
         if (a.Parameters.Count != b.Parameters.Count) return false;
         for (var i = 0; i < a.Parameters.Count; i++)
@@ -82,7 +98,12 @@ internal sealed class FunctionRegistry
             if (!TypeNodeEquals(a.Parameters[i].Type, b.Parameters[i].Type))
                 return false;
         }
-        return true;
+        // A missing return type on either side means "infer / unit" —
+        // treat them as equal so the duplicate check still catches the
+        // common case of two `fn foo()` declarations with no annotation.
+        if (a.ReturnType == null && b.ReturnType == null) return true;
+        if (a.ReturnType == null || b.ReturnType == null) return false;
+        return TypeNodeEquals(a.ReturnType, b.ReturnType);
     }
 
     /// <summary>
