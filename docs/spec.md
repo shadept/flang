@@ -489,7 +489,14 @@ Any function with first parameter `T` or `&T` can be called as `value.func(args)
 
 ### 7.3 Lambdas
 
-`fn(x: i32, y: i32) i32 { x + y }` — anonymous, non-capturing. Desugars to a synthesized module-level function. Cannot capture enclosing scope variables.
+`fn(x: i32, y: i32) i32 { x + y }` — anonymous. A lambda with no captured names desugars to a synthesised module-level function (effectively a bare function pointer). A lambda that references names from the enclosing scope is a **capturing closure** (RFC-014): the compiler synthesises an anonymous `__Closure_N` struct holding the captures *by value* and an `op_call(self: &__Closure_N, ...)` body that projects each capture reference through `self`.
+
+**Capture rules** (RFC-014, Phase 2):
+- Capture is by value at the point the lambda is constructed; later mutation of the outer name is invisible inside the closure.
+- Captured names are read-only inside the body; assigning to one is **E2112**.
+- A capturing closure has an anonymous nominal type and **cannot decay into a bare `fn(...) Ret` slot** (E2111) — that slot has no env storage. Pass capturing closures through a generic parameter (`fn apply(f: $F, x: i32) i32 { return f(x) }`) which dispatches via `op_call`.
+- Single-level capture only. A nested closure that captures a name an enclosing closure also captures is rejected with **E2113** until transitive-capture lowering lands.
+- `&local` capture-by-reference syntax is not yet implemented; explicit reference captures are a follow-up.
 
 **Parameter type inference** mirrors anonymous-struct rules. Each unannotated parameter must have its type inferable from one of:
 - the corresponding parameter type at the call site (typed callback parameter, e.g. passing the lambda to `map(fn(T) U)`),

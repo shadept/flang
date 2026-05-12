@@ -123,6 +123,17 @@ When a `match` arm binds a payload, the binding is always **by value**. `match s
 
 ---
 
+### Bootstrap Lexer Can't Reach `$(args)"..."` / `$ident"..."` From `tokenize()`
+
+**Status:** Open
+**Affected:** `lib/flang_parser/src/lexer.f`, bootstrap parser
+
+`mark_next_string_interp()` requires the parser to call it between tokens. The current bootstrap parser drains `tokenize()` into a `List(Token)` upfront, so the hook is unreachable and only the inline `$"..."` form is recognised. The other two forms fall back to `Dollar + (group / identifier) + StringLiteral`.
+
+**Fix direction:** drive `next_token()` from the parser instead of pre-tokenising.
+
+---
+
 ### Nested `$"..."` Leaks the Inner OwnedString
 
 **Status:** Open

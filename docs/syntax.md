@@ -20,7 +20,7 @@ listed here, it does not exist in FLang.
 | No `mut` keyword | `let` is already mutable | `let mut` |
 | No `impl` blocks | UFCS resolves methods from free functions | `impl Type { }` |
 | No traits | `#interface` / `#implement` source generators | `trait Foo { }` |
-| No closures | Lambdas exist but cannot capture | closures capture env |
+| Closures by value only | Lambdas capture by value (RFC-014); no `move`/`&local` syntax | `move`, capture-by-ref |
 | No `elif`/`else if` | Chain `else if` (two keywords) | `elif` |
 
 ## Types
@@ -98,7 +98,7 @@ fn greet(name: String, times: i32 = 1) {}   // default parameter
 
 **Foreign:** `#foreign fn malloc(size: usize) &u8?` — no body, C calling convention, not mangled.
 
-**Lambda:** `fn(x: i32, y: i32) i32 { x + y }` — no name after `fn`. Cannot capture. Parameter types inferred when context available.
+**Lambda:** `fn(x: i32, y: i32) i32 { x + y }` — no name after `fn`. Captures enclosing names by value (RFC-014); each capture is read-only inside the body. Capturing lambdas synthesise an anonymous callable type and cannot decay into a bare `fn(...) Ret` slot — pass them through a generic parameter (`fn apply(f: $F, ...)`) instead. Parameter types inferred when context available.
 
 ## Structs
 

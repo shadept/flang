@@ -127,7 +127,7 @@ fn spawn(alloc: &Allocator, args..., f: fn(args...) T,
 
 - `alloc` is the coroutine's allocator. Bound to the coroutine's context slot; `or_global()` inside the coroutine returns `alloc`. Must be safe under the caller's concurrency discipline (§3.8).
 - `cancel_with` (optional) wires the spawned coroutine to a cancellation token (§3.7). If `tok.cancel()` fires, this coroutine observes the cancellation at its next suspension point and unwinds. If `null`, the coroutine is only cancellable via its own `Future.cancel()`.
-- `args...` are passed explicitly. **Lambdas remain non-capturing (§7.3).** This is a *soundness feature* in this RFC, not just a limitation: the only boundary crossings are `spawn`, `send`, `recv`, which are all stdlib choke points that can enforce isolation.
+- `args...` are passed explicitly. **`spawn`'s `f` parameter is typed as a bare `fn(args...) T` — capturing closures don't coerce into that slot (§7.3, E2111), so the entry lambda is forced to be non-capturing.** Now that RFC-014 lets lambdas capture by default, this is a *deliberate* RFC-005 isolation rule rather than a language-wide limitation: the only boundary crossings are `spawn`, `send`, `recv`, which are all stdlib choke points that can enforce isolation by typing their callable parameters as bare fn pointers.
 - `args` are **deep-copied** into `alloc` at spawn time. After spawn returns, the child owns its copies; the parent's originals are untouched. Rationale: eliminates arg-aliasing races by construction. Reference args (`&T`) are preserved as-is and carry §3.6 "your problem" semantics — use them deliberately.
 - Returns `Future(T)` bound to `alloc`'s lifetime. Since the caller owns `alloc`, return-value lifetime is automatic.
 
@@ -234,7 +234,7 @@ The two are independent. A typical pattern uses both: spawn with `cancel_with = 
 
 The existing §3.6 "memory safety is programmer's responsibility" posture extends into concurrency with the following **added rules** enforced by convention and stdlib API shape, not the type checker:
 
-1. **No captures in coroutine entry lambdas.** Enforced by existing §7.3 (lambdas are non-capturing). Not relaxed by this RFC.
+1. **No captures in coroutine entry lambdas.** Enforced by typing `spawn`'s `f` parameter as a bare `fn(args...) T`: per §7.3 / E2111, a capturing closure has an anonymous nominal type and cannot decay into a bare fn pointer slot. RFC-014 made captures the default for lambdas elsewhere; `spawn` keeps them out by signature.
 2. **`spawn` deep-copies positional non-reference args.** Enforced by stdlib `spawn` implementation.
 3. **Reference args (`&T`) passed to `spawn` carry §3.6 liability.** Same rule as any other shared reference.
 4. **The allocator passed to `spawn` must tolerate concurrent use**, if the caller continues to allocate from it while the child runs. Two practical choices:
