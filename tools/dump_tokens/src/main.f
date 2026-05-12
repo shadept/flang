@@ -1,6 +1,12 @@
 // dump_tokens — load a .f file, run the lexer, print the token stream.
 //
-//   <offset>  <KindName>  <text-or-summary>  (leading=<n> trailing=<m>)
+//   <offset>:L<line>  <KindName>  <text>
+//       leading:  <n piece(s)>  <text>
+//       trailing: <n piece(s)>  <text>
+//
+// Each piece is one whitespace run or one line comment; the printed
+// text is the full preserved trivia content (escaped). Omitted when
+// there is no trivia on that side.
 
 import std.env
 import std.io.file
@@ -61,16 +67,58 @@ fn print_token(tok: &Token) {
     let line = string_builder(96)
     defer line.deinit()
     line.append(tok.offset)
+    line.append(":L")
+    line.append(tok.line + 1)
     line.append("  ")
     line.append(tok.kind.to_string())
     line.append("  ")
     append_token_text_preview(&line, tok.text)
-    line.append("  (leading=")
-    line.append(tok.leading.len)
-    line.append(" trailing=")
-    line.append(tok.trailing.len)
-    line.append(")")
     println(line.as_view())
+
+    if tok.leading.len > 0 {
+        print_trivia_line("    leading: ", tok.leading)
+    }
+    if tok.trailing.len > 0 {
+        print_trivia_line("    trailing:", tok.trailing)
+    }
+}
+
+fn print_trivia_line(label: String, pieces: Trivia[]) {
+    let line = string_builder(96)
+    defer line.deinit()
+    line.append(label)
+    line.append(" ")
+    line.append(pieces.len)
+    line.append(if pieces.len == 1 { " piece   "} else { " pieces  "})
+    append_trivia_text(&line, pieces)
+    println(line.as_view())
+}
+
+fn append_trivia_text(sb: &StringBuilder, pieces: Trivia[]) {
+    let total: usize = 0
+    for i in 0..pieces.len {
+        total = total + pieces[i].text.len
+    }
+    if total == 0 {
+        sb.append("<empty>")
+        return
+    }
+    sb.append_byte('`' as u8)
+    let printed: usize = 0
+    for i in 0..pieces.len {
+        const text = pieces[i].text
+        if printed + text.len > TEXT_PREVIEW_LIMIT {
+            const room = if printed >= TEXT_PREVIEW_LIMIT { 0usize } else { TEXT_PREVIEW_LIMIT - printed }
+            if room > 0 {
+                append_escaped(sb, text[0..room])
+            }
+            sb.append("...`")
+            return
+        }
+        append_escaped(sb, text)
+        printed = printed + text.len
+    }
+    sb.append_byte('`' as u8)
 }
 
 fn append_token_text_preview(sb: &StringBuilder, text: String) {
