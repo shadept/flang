@@ -56,6 +56,8 @@ pub fn main() i32 {
         "build" => run_build(argv, cli.rest_index, cli.verbose)
         "fmt" => spawn_tool("flang_fmt", argv, cli.rest_index, cli.verbose)
         "lsp" => spawn_tool("flang_lsp", argv, cli.rest_index, cli.verbose)
+        "cst" => spawn_tool("cst_explorer", argv, cli.rest_index, cli.verbose)
+        "tokens" => spawn_tool("dump_tokens", argv, cli.rest_index, cli.verbose)
         else => unknown_subcommand(cli.subcommand)
     }
 }
@@ -116,9 +118,11 @@ fn print_help() {
     println("usage: bootstrap [options] <command> [args...]")
     println("")
     println("commands:")
-    println("  build <file.f>      compile a FLang source file")
-    println("  fmt   <file.f>...   format source files (spawns flang_fmt)")
-    println("  lsp                 start the language server (spawns flang_lsp)")
+    println("  build  <file.f>      compile a FLang source file")
+    println("  fmt    <file.f>...   format source files (spawns flang_fmt)")
+    println("  lsp                  start the language server (spawns flang_lsp)")
+    println("  cst    <file.f>      print the CST tree (spawns cst_explorer)")
+    println("  tokens <file.f>      print the token stream (spawns dump_tokens)")
     println("")
     println("options:")
     println("  -h, --help          show this help")
