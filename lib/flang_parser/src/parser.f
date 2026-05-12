@@ -4,7 +4,9 @@
 // preserve their child tokens so the formatter can still round-trip broken
 // source.
 
+import std.allocator
 import std.list
+import std.option
 import flang_parser.token
 import flang_parser.lexer
 import flang_parser.cst
@@ -12,14 +14,28 @@ import flang_parser.cst
 pub type Parser = struct {
     tokens: List(Token)
     position: usize
+    // Backs every CST node's child list. Resolved at construction so
+    // internal call sites just forward `self.allocator` without
+    // re-resolving.
+    allocator: &Allocator
 }
 
-pub fn parser(tokens: List(Token)) Parser {
-    return .{ tokens = tokens, position = 0 }
+// Construct a Parser over the given token list. The list is borrowed
+// — every CST node will reference the original tokens, so `tokens`
+// must outlive the produced tree. `allocator` backs every CST child
+// list; pass `null` to default to the global allocator (resolved once
+// here via `or_global()`).
+pub fn parser(tokens: List(Token), allocator: &Allocator? = null) Parser {
+    return .{ tokens = tokens, position = 0, allocator = allocator.or_global() }
 }
 
+// Parse the entire token stream as a top-level module: imports,
+// declarations, tests. Always returns a `Module` CST node, even on
+// malformed input — bad subtrees are wrapped in `NodeKind.Error` so
+// the formatter and CST consumers can still round-trip the source.
+// Consumes every token up to and including `Eof`.
 pub fn parse_module(self: &Parser) CstNode {
-    let children: List(CstChild) = list(self.tokens.len)
+    let children: List(CstChild) = list(self.tokens.len, self.allocator)
     let start = 0usize
     let end = 0usize
 

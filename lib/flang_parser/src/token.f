@@ -5,6 +5,7 @@
 // they're attached to the nearest token so the CST can round-trip to source
 // byte-for-byte. See trivia.f for the trivia model.
 
+import std.allocator
 import std.enum
 import std.list
 import flang_parser.trivia
@@ -146,16 +147,35 @@ pub type TokenKind = enum {
 // invariant is that concatenating `t.leading + t.text + t.trailing` across
 // every token in order reproduces the source file exactly.
 //
-// `offset` is the byte offset of `text` from the start of the source. Line
-// and column numbers are derived on demand from a precomputed line-endings
-// table on the Source value (see core.string or the future
-// flang_parser.source module) — not stored per-token to keep tokens cheap.
+// `offset` is the byte offset of `text` from the start of the source.
+// `line` is the 0-based line of `text`'s first byte — newlines inside
+// the token's own bytes advance the lexer's cursor but do not change
+// this token's `line`. Column is derived on demand from a line-endings
+// table on the source.
+//
+// `leading` and `trailing` are owned, shrunk-to-fit slices produced by
+// `List.to_owned_slice` at lex time — there is no excess capacity per
+// token. Both slices share `allocator` (every trivia list a Token
+// produces comes from the same Lexer), so it lives once on the Token.
 pub type Token = struct {
     kind: TokenKind
     text: String
     offset: usize
-    leading: List(Trivia)
-    trailing: List(Trivia)
+    line: usize
+    leading: Trivia[]
+    trailing: Trivia[]
+    allocator: &Allocator
+}
+
+// Free the trivia slices owned by this token. Called automatically when
+// the enclosing `List(Token)` is deinit'd (List walks its elements and
+// invokes `.deinit()` on each). The `text` field is a borrow from the
+// source buffer and is not freed; Trivia entries are themselves
+// non-owning (their `text` is a borrow), so no per-element deinit is
+// needed.
+pub fn deinit(self: &Token) {
+    self.allocator.free(self.leading)
+    self.allocator.free(self.trailing)
 }
 
 // True for any keyword token — useful for syntax highlighting and the
