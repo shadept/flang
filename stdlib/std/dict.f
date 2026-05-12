@@ -38,9 +38,8 @@ pub fn deinit(self: &Dict($K, $V)) {
                 entry.value.deinit()
             }
         }
-        const bytes = self.cap * self.entry_byte_size()
         self.allocator.or_global()
-            .dealloc(slice_from_raw_parts(self.entries as &u8, bytes))
+            .free(slice_from_raw_parts(self.entries, self.cap))
     }
 
     let zero: usize = 0
@@ -112,8 +111,7 @@ fn ensure_capacity(self: &Dict($K, $V)) {
                 self.set(old_entry.key, old_entry.value)
             }
         }
-        const old_bytes: usize = old_cap * esize
-        self.allocator.or_global().dealloc(slice_from_raw_parts(old_entries as &u8, old_bytes))
+        self.allocator.or_global().free(slice_from_raw_parts(old_entries, old_cap))
     }
 }
 

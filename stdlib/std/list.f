@@ -62,8 +62,7 @@ pub fn deinit(self: &List($T)) {
             const elem: &T = self.ptr + (i as usize)
             elem.deinit()
         }
-        const slice = slice_from_raw_parts(self.ptr as &u8, self.cap * size_of(T))
-        self.allocator.or_global().dealloc(slice)
+        self.allocator.or_global().free(slice_from_raw_parts(self.ptr, self.cap))
     }
 
     self.ptr = 0usize as &T
@@ -73,6 +72,52 @@ pub fn deinit(self: &List($T)) {
 
 pub fn as_slice(self: List($T)) T[] {
     return slice_from_raw_parts(self.ptr, self.len)
+}
+
+// Transfer ownership of the list's buffer as a `(T[], &Allocator)` pair.
+// The slice is shrunk-to-fit (`cap == len` after the call) so no excess
+// capacity is leaked. The list is reset to empty (ptr=null, cap=0) so a
+// subsequent `deinit()` is a no-op — pair this with the
+// `let l = list(...); defer l.deinit(); ...; l.to_owned_slice()` pattern.
+//
+// The returned `&Allocator` is the resolved allocator (global by default)
+// — the caller frees the slice via
+// `alloc.dealloc(slice_from_raw_parts(s.ptr as &u8, s.len * size_of(T)))`
+// when done. Element `deinit()` is *not* called here; callers that own
+// non-trivial elements must walk the slice and deinit each element
+// before freeing the buffer.
+pub fn to_owned_slice(self: &List($T)) (T[], &Allocator) {
+    const alloc = self.allocator.or_global()
+    const elem_size: usize = size_of(T)
+
+    if self.len == 0 {
+        if self.cap > 0 {
+            alloc.free(slice_from_raw_parts(self.ptr, self.cap))
+        }
+        let zero: usize = 0
+        self.ptr = zero as &T
+        self.cap = 0
+        const empty: T[] = slice_from_raw_parts(zero as &T, 0)
+        return (empty, alloc)
+    }
+
+    if self.cap > self.len {
+        const old_bytes = self.cap * elem_size
+        const new_bytes = self.len * elem_size
+        const old_slice = slice_from_raw_parts(self.ptr as &u8, old_bytes)
+        const resized = alloc.realloc(old_slice, new_bytes)
+        if resized.is_some() {
+            self.ptr = resized.unwrap().ptr as &T
+            self.cap = self.len
+        }
+    }
+
+    const result_slice = slice_from_raw_parts(self.ptr, self.len)
+    let zero: usize = 0
+    self.ptr = zero as &T
+    self.len = 0
+    self.cap = 0
+    return (result_slice, alloc)
 }
 
 pub fn reserve(self: &List($T), capacity: usize) {
@@ -102,7 +147,7 @@ pub fn reserve(self: &List($T), capacity: usize) {
 
     // Free old buffer if it existed
     if self.cap > 0 {
-        self.allocator.or_global().dealloc(slice_from_raw_parts(self.ptr as &u8, self.cap * elem_size))
+        self.allocator.or_global().free(slice_from_raw_parts(self.ptr, self.cap))
     }
 
     self.ptr = new_ptr

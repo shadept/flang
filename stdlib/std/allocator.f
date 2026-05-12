@@ -65,6 +65,16 @@ pub fn free(allocator: &Allocator, value: &$T) {
     allocator.dealloc(slice)
 }
 
+// Free a typed slice. The slice's `len` is taken as the count of T
+// elements to release (use the slice's full backing extent — for a
+// `List`/`Dict` buffer that means slicing over `cap`, not `len`).
+// No-op on empty slices so callers don't need a guard.
+pub fn free(allocator: &Allocator, items: $T[]) {
+    if items.len == 0 { return }
+    const bytes = slice_from_raw_parts(items.ptr as &u8, items.len * size_of(T))
+    allocator.dealloc(bytes)
+}
+
 // =============================================================================
 // GlobalAllocator - wraps malloc/free from std.mem
 // =============================================================================
