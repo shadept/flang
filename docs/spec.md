@@ -316,6 +316,8 @@ defer sb.deinit()
 
 This enables arena-based bulk deallocation: allocate many objects into an arena, free them all by resetting the arena.
 
+**Defer ordering on `return`.** A `return expr` evaluates `expr` first, then fires the active defers in LIFO order, then transfers control. This lets `defer x.deinit()` coexist with a return expression that reads `x` (`return x.as_view().len`, `return sb.to_string()`, etc.) — the read observes `x`'s pre-deinit state, and the deferred call sees whatever state the return expression left behind (e.g. `to_string` zeroes the builder so the deferred `deinit` is a no-op). Returning `x` itself by value while a `defer x.deinit()` is active still frees the buffer the copy points at — defer fires after the copy is materialised but before the function returns. Don't defer-deinit a value you're returning by value; drop the defer in that case.
+
 ### 4.2 Zero Initialization
 
 All memory is zero-initialized by default. Variables declared without an initializer are memset to zero. The compiler may optimize this away when provably written before read.

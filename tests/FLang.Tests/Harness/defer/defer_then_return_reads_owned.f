@@ -1,15 +1,11 @@
 //! TEST: defer_then_return_reads_owned
 //! EXIT: 5
-//! SKIP: defer fires before return-expression evaluates — see docs/known-issues.md ("defer x.deinit() + Return Expression Reading x")
 
-// `defer s.deinit()` followed by a return expression that reads any
-// field/method of `s` observes the post-deinit zeroed state. Same root
-// cause as the `defer sb.deinit()` + `return sb.to_string()` zero-
-// length case — reproduced through `OwnedString.as_view()` instead of
-// `StringBuilder.to_string()`.
-//
-// Workaround in current code: drop the `defer` and call `deinit()`
-// explicitly after the return value has been materialised.
+// `defer s.deinit()` followed by a return expression that reads
+// `s` is honoured: the return expression evaluates first, then the
+// deferred call fires. Pins ordering against the regression where
+// defers fired before the return-expression's operand evaluation
+// (zero-length OwnedString observed in `as_view()`).
 
 import std.string
 import std.string_builder

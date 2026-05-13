@@ -1525,18 +1525,24 @@ public class HmAstLowering
 
     private Value LowerReturnExpr(ReturnNode ret)
     {
-        // `return` unwinds every active defer scope, innermost first.
-        EmitDefersDownTo(0);
-
+        // Lower the return expression FIRST, then fire defers, then emit the
+        // return instruction. Firing defers before the return expression is
+        // evaluated lets a `defer x.deinit()` zero `x` before a subsequent
+        // `return x.as_view()` reads its fields — observed as zero-length
+        // OwnedStrings (see docs/known-issues.md). For large returns the
+        // value has already been stored into `__ret` by `LowerExpression`,
+        // so defers running afterwards cannot clobber it.
         if (ret.Expression != null)
         {
             var fnRetType = _currentFunction.ReturnType;
             var val = LowerExpression(ret.Expression, fnRetType);
+            EmitDefersDownTo(0);
             _currentBlock.EmitFunctionReturn(val, _currentFunction,
                 _currentFunction.UsesReturnSlot ? _locals["__ret"] : null);
         }
         else
         {
+            EmitDefersDownTo(0);
             var voidVal = new IntConstantValue(0, TypeLayoutService.IrVoidPrim);
             _currentBlock.EmitReturn(voidVal);
         }
@@ -1868,7 +1874,7 @@ public class HmAstLowering
     /// <summary>
     /// Emit every defer from the top of the stack down to (exclusive)
     /// <paramref name="targetDepth"/>, in LIFO order. Does NOT mutate the
-    /// stack — callers decide whether a transition is a pop (scope exit) or
+    /// stack - callers decide whether a transition is a pop (scope exit) or
     /// just a traversal (`return`/`break`/`continue`, which terminate the
     /// current block but leave the stack for the enclosing scopes' own
     /// exits).
