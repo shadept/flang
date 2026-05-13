@@ -70,8 +70,7 @@ pub fn json_array(allocator: &Allocator? = null) JsonValue {
 }
 
 pub fn json_object(allocator: &Allocator? = null) JsonValue {
-    let d: Dict(OwnedString, JsonValue)
-    d.allocator = allocator
+    let d: Dict(OwnedString, JsonValue) = dict(allocator)
     return JsonValue.Object(d)
 }
 
@@ -738,8 +737,7 @@ fn scan_object(self: &JsonDecoder) Result(JsonValue, JsonError) {
     self.expect_char('{')
     self.skip_whitespace()
 
-    let obj: Dict(OwnedString, JsonValue)
-    obj.allocator = self.allocator
+    let obj: Dict(OwnedString, JsonValue) = dict(self.allocator)
 
     let c = self.peek()
     if c.is_some() {

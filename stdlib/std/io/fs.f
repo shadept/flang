@@ -27,6 +27,7 @@ import std.result
 import std.string
 import std.string_builder
 import std.list
+import std.stack
 import std.allocator
 
 // =============================================================================
@@ -224,7 +225,7 @@ type WalkFrame = struct {
 }
 
 pub type WalkIter = struct {
-    stack: List(WalkFrame)
+    stack: Stack(WalkFrame)
     path_buf: StringBuilder
     last_error: FsError?
     done: bool
@@ -242,12 +243,12 @@ pub fn walk_dir(root: String, allocator: &Allocator? = null) Result(WalkIter, Fs
     if sb.len > 0 {
         const last: &u8 = sb.ptr + (sb.len - 1)
         if last.* == '/' or last.* == '\\' {
-            sb.len = sb.len - 1
+            sb.truncate(sb.len - 1)
         }
     }
     const root_len = sb.len
 
-    let stack: List(WalkFrame) = list(8, allocator)
+    let stack: Stack(WalkFrame) = stack(8, allocator)
     stack.push(WalkFrame {
         dir = root_iter_r.unwrap(),
         path_len_before = root_len,
@@ -269,13 +270,13 @@ pub fn next(self: &WalkIter) WalkEntry? {
     if self.done { return null }
 
     loop {
-        if self.stack.len == 0 {
+        if self.stack.is_empty() {
             self.done = true
             return null
         }
 
         // Borrow the top frame in place — we need to mutate its DirIter.
-        const top: &WalkFrame = &self.stack[self.stack.len - 1]
+        const top: &WalkFrame = self.stack.peek_ref().unwrap()
 
         const entry_opt = top.dir.next()
         if entry_opt.is_none() {
@@ -284,7 +285,7 @@ pub fn next(self: &WalkIter) WalkEntry? {
                 self.last_error = top.dir.last_error
             }
             // Restore path_buf to this frame's prefix, then pop.
-            self.path_buf.len = top.path_len_before
+            self.path_buf.truncate(top.path_len_before)
             top.dir.deinit()
             const _popped = self.stack.pop()
             continue
@@ -292,12 +293,12 @@ pub fn next(self: &WalkIter) WalkEntry? {
         const entry = entry_opt.unwrap()
 
         // Reset builder to this frame's base, then append "/<name>".
-        self.path_buf.len = top.path_len_before
+        self.path_buf.truncate(top.path_len_before)
         if self.path_buf.len > 0 {
             self.path_buf.append('/')
         }
         self.path_buf.append_bytes(entry.name.as_raw_bytes())
-        const depth = self.stack.len - 1
+        const depth = self.stack.len() - 1
 
         const path_view = self.path_buf.as_view()
         const result = WalkEntry {
@@ -334,8 +335,8 @@ pub fn err(self: &WalkIter) FsError? {
 }
 
 pub fn deinit(self: &WalkIter) {
-    while self.stack.len != 0 {
-        const top: &WalkFrame = &self.stack[self.stack.len - 1]
+    while !self.stack.is_empty() {
+        const top: &WalkFrame = self.stack.peek_ref().unwrap()
         top.dir.deinit()
         const _popped = self.stack.pop()
     }

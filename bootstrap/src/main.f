@@ -70,8 +70,7 @@ pub fn main() i32 {
 // argument as the subcommand. Index 0 is the program name and is skipped.
 fn parse_cli(argv: String[]) Cli {
     let cli: Cli
-    let opts = getopts("h(help)V(version)v(verbose)", argv)
-    opts.index = 1
+    let opts = getopts("h(help)V(version)v(verbose)", argv, 1)
 
     // Drive opts.next() manually rather than `for r in opts` — std.env's
     // `iter(&GetOpt)` returns a *copy* of the iterator state, so a

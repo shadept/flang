@@ -16,6 +16,37 @@ When you discover a bug or limitation:
 
 ## Open Issues
 
+### Dict Entry Stride Ignores Alignment Padding
+
+**Status:** Open — `Set(T)` works around by storing `u8` instead of `()`
+**Affected:** `stdlib/std/dict.f` — `entry_byte_size`, every iteration / probe site
+
+`Dict.entry_byte_size` returns `16 + size_of(K) + size_of(V)`, which is the raw entry size *before* trailing alignment padding. The actual entry layout includes padding so that the next entry's `hash: usize` lands on an 8-byte boundary. When the raw sum isn't already a multiple of 8 (e.g. `K = String` (16 bytes) + `V = i32` (4 bytes) → 36 raw, 40 actual; `K = OwnedString` + `V = ()` → 40 raw, 48 actual on platforms where `size_of(()) > 0`), pointer arithmetic in the iterator / probe loops walks off-stride and reads misaligned memory → heap corruption / `STATUS_STACK_BUFFER_OVERRUN` on first iter.
+
+**Reproducer:**
+
+```flang
+let d: Dict(OwnedString, ()) = dict()
+defer d.deinit()
+d.set("a", ())
+let it = d.iter()
+let _ = it.next()        // crashes here
+```
+
+**Workaround:** avoid `Dict(K, V)` where `16 + size_of(K) + size_of(V)` isn't a multiple of 8. `Set(T)` chose `Dict(T, u8)` over `Dict(T, ())` for this reason (storing one byte instead of zero is the cheaper fix than rewriting `entry_byte_size`).
+
+**Fix direction:** compute stride via the actual struct layout, e.g.:
+
+```csharp
+const align: usize = align_of(Entry(K, V))
+const raw = 16 + size_of(K) + size_of(V)
+return (raw + align - 1) / align * align
+```
+
+…or, simpler, just call `size_of(Entry(K, V))` if the type system supports it for the parameterised Entry. The current hand-rolled formula loses the trailing padding the C compiler implicitly emits.
+
+---
+
 ### `std.io.file` Was Cross-Platform-Broken in Two Ways
 
 **Status:** Fixed in `stdlib/std/io/file.f`

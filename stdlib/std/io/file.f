@@ -75,15 +75,14 @@ pub fn read_all(file: &File, allocator: &Allocator? = null) Result(OwnedString, 
     const PAGE_SIZE = 4096
     let sb = string_builder(PAGE_SIZE, allocator)
     loop {
-        const buf = sb.ptr + sb.len
-        const len = sb.cap - sb.len
-        const n = read(file.handle.fd, buf, len)
+        const tail = sb.unwritten_buf()
+        const n = read(file.handle.fd, tail.ptr, tail.len)
         if n < 0 {
             sb.deinit()
             return Err(FileError.IOError)
         }
-        sb.len = sb.len + n as usize
-        if n as usize < len {
+        sb.commit(n as usize)
+        if n as usize < tail.len {
             break
         }
         // Grow capacity by one page. StringBuilder doubles capacity on each growth,

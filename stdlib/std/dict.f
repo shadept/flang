@@ -26,6 +26,15 @@ pub type Dict = struct(K, V) {
     allocator: &Allocator?
 }
 
+// Construct an empty Dict. Storage is allocated lazily on the first
+// `set` / `op_set_index`. `K` and `V` are inferred from the call's
+// expected type (e.g. `let d: Dict(String, i32) = dict()`).
+pub fn dict(allocator: &Allocator? = null) Dict($K, $V) {
+    let result: Dict(K, V)
+    result.allocator = allocator
+    return result
+}
+
 // Free the backing storage. The dict should not be used after this.
 // Calls deinit on all stored keys and values before freeing.
 pub fn deinit(self: &Dict($K, $V)) {
@@ -288,6 +297,14 @@ pub fn contains(self: Dict($K, $V), key: K) bool {
 pub fn contains(self: Dict(OwnedString, $V), key: String) bool {
     const fake = OwnedString{ptr=key.ptr, len=key.len, allocator=null}
     return contains(self, fake)
+}
+
+// String-key removal for `Dict(OwnedString, V)`: take a `String` view,
+// fabricate a non-owning OwnedString just for the hash/compare, and
+// delegate. Mirrors the `set`/`contains` overload above.
+pub fn remove(self: &Dict(OwnedString, $V), key: String) V? {
+    const fake = OwnedString{ptr=key.ptr, len=key.len, allocator=null}
+    return remove(self, fake)
 }
 
 // Remove a key from the dict. Returns the removed value, or null if not found.

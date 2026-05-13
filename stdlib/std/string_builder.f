@@ -98,6 +98,32 @@ pub fn ensure_capacity(sb: &StringBuilder, capacity: usize) {
     sb.reserve(capacity - sb.len)
 }
 
+// Shrink the builder's logical length, discarding any trailing bytes.
+// `new_len` is clamped to the current length, so this never grows. Backing
+// storage is retained for reuse.
+pub fn truncate(sb: &StringBuilder, new_len: usize) {
+    if new_len < sb.len {
+        sb.len = new_len
+    }
+}
+
+// Slice over the unused tail of the backing buffer — bytes from `sb.len`
+// to `sb.cap`. Use with `commit(n)` to fill the buffer in place (e.g.
+// from a syscall) without going through `append`.
+pub fn unwritten_buf(sb: &StringBuilder) u8[] {
+    return slice_from_raw_parts(sb.ptr + sb.len, sb.cap - sb.len)
+}
+
+// Extend the logical length by `n` bytes, claiming bytes already written
+// into the tail of the buffer (typically via `unwritten_buf()`). Panics
+// if `n` exceeds the unwritten capacity.
+pub fn commit(sb: &StringBuilder, n: usize) {
+    if sb.len + n > sb.cap {
+        panic("StringBuilder.commit: n exceeds unwritten capacity")
+    }
+    sb.len = sb.len + n
+}
+
 // Transfer ownership of the current buffer as a null-terminated OwnedString.
 // No allocation, no copy: the builder's buffer becomes the OwnedString's buffer
 // and the builder is reset to empty (cap=0) so a subsequent deinit() is a no-op.

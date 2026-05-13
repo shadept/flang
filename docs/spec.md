@@ -89,7 +89,7 @@ type Vec2 = struct { x: f32, y: f32 }
 Structs are always declared as a `type` alias whose RHS is a `struct(...) { ... }` builder. The legacy `struct Name { ... }` form has been removed (RFC-008, error E1050).
 
 - All fields public (readable from any file).
-- Field writes restricted to the defining file (scoped mutability — planned, not yet enforced).
+- Field writes restricted to the defining file — see §8 *Scoped mutability* (E2114).
 - Layout optimized by compiler; declaration order ≠ memory order.
 - Construction: `Point { x = 10, y = 20 }` (uses `=`, not `:`).
 - Anonymous construction: `.{ x = 10, y = 20 }` (type from context).
@@ -663,7 +663,7 @@ Complex constructs (`for`, `if` expressions, `defer`, `match`) are desugared to 
 - **Integer overflow**: Wrapping arithmetic (two's complement), no overflow detection.
 - **Bounds checking** (planned): Optional runtime bounds checking for array and slice indexing. Not yet implemented — out-of-bounds access is currently undefined behavior.
 - **Null safety**: `&T` is non-null by type. `&T?` requires explicit handling. The type system prevents accidental null dereference on non-optional references.
-- **Scoped mutability** (planned): Struct fields writable only in the defining file, read-only externally. Not yet enforced by the type checker.
+- **Scoped mutability**: Struct fields are writable only in the file that defines the struct; reads are unrestricted. Enforced by the type checker (E2114). Tuples (structural / anonymous) are exempt — they have no defining module. The rule applies to direct assignment (`x.field = v`); indexed assignment through a field (`x.list[i] = v`) goes through `op_index_ref` and is not a field write. Mutation across modules must go through the defining type's own functions.
 - **String interpolation** (planned): `"text ${expr} more"` desugars to `StringBuilder.append()` calls — one builder, one allocation. Types without `format()` are a compile error in interpolation context.
 
 ---

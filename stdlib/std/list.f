@@ -166,7 +166,10 @@ pub fn push(self: &List($T), value: T) {
     // memcpy(dest, &value as &u8, type.size as usize)
 }
 
-// Remove and return the last element, or null if empty.
+// Remove and return the last element, or null if empty. Prefer `Stack(T)`
+// in new code when the access pattern is LIFO — this primitive exists so
+// `Stack.pop` can mutate the underlying length without breaching scoped
+// mutability (planned, see spec.md §8).
 pub fn pop(list: &List($T)) T? {
     if list.len == 0 {
         return null

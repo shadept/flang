@@ -80,10 +80,16 @@ pub type GetOpt = struct {
 }
 
 pub fn getopts(format: String, args: String[]) GetOpt {
+    return getopts(format, args, 0)
+}
+
+// Start parsing from `start_index` instead of 0. Use this to skip the
+// program name when passing a full `argv` (start_index = 1).
+pub fn getopts(format: String, args: String[], start_index: usize) GetOpt {
     let result: GetOpt
     result.format = format
     result.args = args
-    result.index = 0
+    result.index = start_index
     result.pos = 0
     result.done = false
     return result

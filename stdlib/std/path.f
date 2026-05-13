@@ -20,6 +20,7 @@ import std.allocator
 import std.list
 import std.option
 import std.result
+import std.stack
 import std.string
 import std.string_builder
 import std.test
@@ -376,7 +377,7 @@ pub fn normalize(self: &Path) Path {
 
     let sb = string_builder(v.len + 1, alloc)
     // Components stored as zero-copy String views into v.
-    let comps: List(String) = list(8, alloc)
+    let comps: Stack(String) = stack(8, alloc)
     defer comps.deinit()
 
     let has_root: bool = false
@@ -415,13 +416,11 @@ pub fn normalize(self: &Path) Path {
         }
         if seg_len == 2 and v[start] == '.' and v[start + 1] == '.' {
             // ".." — pop unless top is also ".." (relative-only stack).
-            let top_is_dotdot: bool = false
-            if comps.len > 0 {
-                const top = comps[comps.len - 1]
-                top_is_dotdot = top.len == 2 and top[0] == '.' and top[1] == '.'
+            const top_is_dotdot = comps.peek() match {
+                Some(top) => top.len == 2 and top[0] == '.' and top[1] == '.',
+                None => false
             }
-            const can_pop = comps.len > 0 and !top_is_dotdot
-            if can_pop {
+            if !comps.is_empty() and !top_is_dotdot {
                 const _popped = comps.pop()
                 continue
             }
@@ -446,11 +445,12 @@ pub fn normalize(self: &Path) Path {
         sb.append_byte(sep())
     }
 
-    for k in 0..comps.len {
+    const comp_slice = comps.as_slice()
+    for k in 0..comp_slice.len {
         if k > 0 {
             sb.append_byte(sep())
         }
-        sb.append(comps[k])
+        sb.append(comp_slice[k])
     }
 
     if sb.len == 0 {

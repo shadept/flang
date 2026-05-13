@@ -3363,6 +3363,52 @@ Extract the shared state to a callable type (`type Adder = struct { base: i32 } 
 
 ---
 
+### E2114: Scoped Mutability Violation
+
+**Category**: Type Checking
+**Severity**: Error
+
+#### Description
+
+A struct field was assigned from outside the module that defines the struct. Struct fields are publicly readable but writable only in the defining file (spec.md §8 *Scoped mutability*). The defining module owns the type's invariants; cross-module field writes would let any caller break them.
+
+The check fires on direct assignment of the form `expr.field = value` whose receiver resolves to a `NominalType` with `Kind = Struct`. References auto-deref through the chain. Tuples are exempt (structural / anonymous, no defining module). Indexed assignment (`x.list[i] = v`) does not go through this check — it lowers to `op_index_ref`, which is a defined-by-design escape hatch on container types.
+
+#### Example
+
+```flang
+// stdlib/std/list.f defines List.
+pub type List = struct(T) {
+    ptr: &T
+    len: usize
+    cap: usize
+    allocator: &Allocator?
+}
+
+pub fn pop(list: &List($T)) T? {
+    if list.len == 0 { return null }
+    list.len = list.len - 1                          // OK — same module
+    let last: &T = list.ptr + list.len
+    return last.*
+}
+
+// stdlib/std/stack.f wraps List.
+pub type Stack = struct(T) { inner: List(T) }
+
+pub fn pop(self: &Stack($T)) T? {
+    if self.inner.len == 0 { return null }
+    self.inner.len = self.inner.len - 1              // error E2114
+    let last: &T = self.inner.ptr + self.inner.len
+    return last.*
+}
+```
+
+#### Solution
+
+Mutate through the defining type's own API. In the example, `Stack.pop` should delegate to `List.pop` (which is allowed to mutate `len` because it lives in `list.f`) instead of writing `self.inner.len` directly. When the API doesn't exist yet, add it to the defining module — that's the normal way the invariant boundary stays intact.
+
+---
+
 ### E2092: `?` Has No Matching `op_try`
 
 **Category**: Type Checking

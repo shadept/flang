@@ -2491,7 +2491,40 @@ public partial class HmTypeChecker
                 _ctx.Engine.GetDiagnostic(diagCount).Notes.Add(
                     Diagnostic.Info($"`{targetId2.Name}` declared here", decl.Span));
         }
+
+        // E2114: scoped mutability. Writing to a field of a struct defined in
+        // another module is forbidden — the defining module owns its
+        // invariants. Reads stay unrestricted; mutate through the type's own
+        // API instead.
+        if (assign.Target is MemberAccessExpressionNode member)
+            CheckScopedMutability(member, assign.Span);
+
         return WellKnown.Void;
+    }
+
+    private void CheckScopedMutability(MemberAccessExpressionNode member, SourceSpan span)
+    {
+        if (_ctx.CurrentModulePath is null) return;
+
+        var receiverType = _ctx.Engine.Resolve(_results.GetInferredType(member.Target));
+        while (receiverType is ReferenceType refType)
+            receiverType = _ctx.Engine.Resolve(refType.InnerType);
+
+        if (receiverType is not NominalType nominal) return;
+        // Tuples are structural anonymous types — no defining module to scope to.
+        if (nominal.Kind != NominalKind.Struct) return;
+
+        var fqn = nominal.Name;
+        var dot = fqn.LastIndexOf('.');
+        if (dot < 0) return; // built-in / synthetic types without module qualifier
+        var definingModule = fqn[..dot];
+
+        if (definingModule == _ctx.CurrentModulePath) return;
+
+        var shortName = nominal.Name[(dot + 1)..];
+        ReportError(
+            $"cannot assign to field `{member.FieldName}` of `{shortName}` from outside its defining module — `{shortName}` is defined in `{definingModule}` (scoped mutability)",
+            span, "E2114");
     }
 
     private PrimitiveType InferIndexedAssignment(AssignmentExpressionNode assign, IndexExpressionNode idx)
