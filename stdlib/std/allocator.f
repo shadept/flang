@@ -60,6 +60,14 @@ pub fn new(allocator: &Allocator, ty: Type($T)) &T {
     return buffer.unwrap().ptr as &T
 }
 
+// Allocate a slot for `T` and copy `value` into it. Returns a reference
+// to the heap-allocated value.
+#inline pub fn box(allocator: &Allocator, value: $T) &T {
+    const ptr = allocator.new(Type(T))
+    ptr.* = value
+    return ptr
+}
+
 pub fn free(allocator: &Allocator, value: &$T) {
     const slice = slice_from_raw_parts(value as &u8, size_of(T))
     allocator.dealloc(slice)
@@ -389,7 +397,7 @@ type ArenaPage = struct {
     offset: usize
 }
 
-pub type ArenaAllocatorState = struct {
+pub type ArenaAllocator = struct {
     backing: &Allocator,
     page_size: usize,
     first_page: &ArenaPage?,
@@ -398,7 +406,7 @@ pub type ArenaAllocatorState = struct {
 
 pub const DEFAULT_ARENA_PAGE_SIZE: usize = 4096
 
-fn arena_new_page(state: &ArenaAllocatorState, min_size: usize) &ArenaPage? {
+fn arena_new_page(state: &ArenaAllocator, min_size: usize) &ArenaPage? {
     const header_size = size_of(ArenaPage)
     const needed = min_size + header_size
     const total = align_up(needed, state.page_size)
@@ -423,7 +431,7 @@ fn arena_new_page(state: &ArenaAllocatorState, min_size: usize) &ArenaPage? {
 }
 
 fn arena_alloc(impl: &u8, size: usize, alignment: usize) u8[]? {
-    let state = impl as &ArenaAllocatorState
+    let state = impl as &ArenaAllocator
     const header_size = size_of(ArenaPage)
 
     // Try current page first
@@ -479,7 +487,7 @@ const arena_allocator_vtable = AllocatorVTable {
 }
 
 // Create an arena allocator backed by the given allocator.
-pub fn arena_allocator(backing: &Allocator, page_size: usize = 4096) ArenaAllocatorState {
+pub fn arena_allocator(backing: &Allocator, page_size: usize = 4096) ArenaAllocator {
     return .{
         backing = backing,
         page_size = page_size,
@@ -489,7 +497,7 @@ pub fn arena_allocator(backing: &Allocator, page_size: usize = 4096) ArenaAlloca
 }
 
 // Free all pages through the backing allocator.
-pub fn deinit(state: &ArenaAllocatorState) {
+pub fn deinit(state: &ArenaAllocator) {
     const header_size = size_of(ArenaPage)
     let page = state.first_page
     while page.is_some() {
@@ -505,7 +513,7 @@ pub fn deinit(state: &ArenaAllocatorState) {
 }
 
 // Reset all pages to offset 0 — keeps pages allocated for reuse.
-pub fn reset(state: &ArenaAllocatorState) {
+pub fn reset(state: &ArenaAllocator) {
     let page = state.first_page
     while page.is_some() {
         let p = page.unwrap()
@@ -515,7 +523,7 @@ pub fn reset(state: &ArenaAllocatorState) {
     state.current_page = state.first_page
 }
 
-pub fn allocator(state: &ArenaAllocatorState) Allocator {
+pub fn allocator(state: &ArenaAllocator) Allocator {
     return Allocator {
         impl = state as &u8,
         vtable = &arena_allocator_vtable
