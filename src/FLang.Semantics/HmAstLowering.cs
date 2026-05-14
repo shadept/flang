@@ -4213,8 +4213,11 @@ public class HmAstLowering
         var scrutineeHmType = _types.GetResolvedType(match.Scrutinee);
         var scrutineeIrType = _layout.Lower(scrutineeHmType);
 
-        // Dereference if scrutinee is a pointer/reference to get the enum value
-        if (scrutineeIrType is IrPointer ptrType && ptrType.Pointee is IrEnum)
+        // Auto-deref `&MyEnum`. Skip nullable IrPointers — those are niche
+        // `Option(&T)` and must keep their Option semantics for the tag check.
+        if (scrutineeIrType is IrPointer ptrType
+            && ptrType.Pointee is IrEnum
+            && !ptrType.IsNullable)
         {
             if (originalEnumPtr == null)
                 originalEnumPtr = scrutineeValue;

@@ -68,7 +68,7 @@ pub type Decl = enum {
 // flag-shaped; `Deprecated(msg?)` carries an optional reason string.
 // Several directives may attach to the same declaration; order is
 // source order.
-pub type Directive = enum {
+pub type DeclAttribute = enum {
     Foreign
     Inline
     Intrinsic
@@ -89,7 +89,7 @@ pub type ImportDecl = struct {
 pub type FunctionDecl = struct {
     span: SourceSpan
     is_pub: bool
-    directives: List(Directive)
+    directives: List(DeclAttribute)
     name: String
     params: List(FunctionParam)
     return_type: TypeExpr?
@@ -118,7 +118,7 @@ pub type FunctionParam = struct {
 pub type TypeDecl = struct {
     span: SourceSpan
     is_pub: bool
-    directives: List(Directive)
+    directives: List(DeclAttribute)
     name: String
     body: TypeExpr
 }
@@ -322,12 +322,12 @@ pub type Expr = enum {
 // enum where the grammar is narrower.
 pub type LiteralExpr = struct {
     span: SourceSpan
-    value: Literal
+    value: LiteralValue
 }
 
 // Shared literal payload between expressions and patterns. `Null` has
 // no payload — there is only one null literal value.
-pub type Literal = enum {
+pub type LiteralValue = enum {
     Int(IntLiteral)
     Float(FloatLiteral)
     String(StringLiteral)
@@ -621,8 +621,10 @@ pub type IfExpr = struct {
 }
 
 // Tail of an `if`: missing, a block, or another chained if-else.
+// `NoElse` rather than `None` to avoid the unqualified-variant clash
+// against `Option.None` (see docs/known-issues.md).
 pub type ElseBranch = enum {
-    None
+    NoElse
     Block(BlockExpr)
     If(&IfExpr)
 }
@@ -695,7 +697,7 @@ pub type VariablePattern = struct {
 // seven literal forms via the `Literal` enum (same as `LiteralExpr`).
 pub type LiteralPattern = struct {
     span: SourceSpan
-    value: Literal
+    value: LiteralValue
 }
 
 // `Some(x)`, `Move(x, y)`, `Color.Red`, `Red`. `qualifier` is the

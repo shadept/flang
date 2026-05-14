@@ -12,6 +12,10 @@ public class TypeLayoutService(ITypeResolver engine, INominalTypeRegistry nomina
 {
     private readonly Dictionary<string, IrType> _cache = [];
     private readonly List<(string Key, NominalType Nt, string CName)> _deferredRelower = [];
+    // CNames currently queued for re-lower. A type whose by-value field is
+    // tentative (sized against a stub) must itself be re-flagged, otherwise
+    // it caches the wrong size and never gets fixed.
+    private readonly HashSet<string> _deferredCNames = [];
     private int _loweringDepth;
     private readonly ITypeResolver _engine = engine;
     private readonly INominalTypeRegistry _nominalTypes = nominalTypes;
@@ -258,20 +262,70 @@ public class TypeLayoutService(ITypeResolver engine, INominalTypeRegistry nomina
         _cache[cacheKey] = result;
         _loweringDepth--;
 
-        // When we return to the outermost lowering call, re-lower any types that
-        // were computed while a dependency's stub was still in the cache.
+        // Iterate the re-lower queue. Cycles like Stmt ↔ Expr need multiple
+        // passes: a re-lowered type's new size invalidates consumers whose
+        // captured PayloadType.Size referenced the old value. We keep stale
+        // cache entries during a pass so nested LowerResolved doesn't see
+        // a cache miss and reinsert a stub. Bounded for termination.
         if (_loweringDepth == 0 && _deferredRelower.Count > 0)
         {
-            var toRelower = new List<(string Key, NominalType Nt, string CName)>(_deferredRelower);
-            _deferredRelower.Clear();
-            foreach (var (key, nt2, cn) in toRelower)
+            const int maxIterations = 16;
+            for (int iter = 0; iter < maxIterations && _deferredRelower.Count > 0; iter++)
             {
-                _cache.Remove(key);
-                if (nt2.Kind == NominalKind.Enum)
-                    _cache[key] = LowerEnum(nt2, key, cn);
-                else
-                    _cache[key] = LowerStruct(nt2, key, cn);
+                var toRelower = new List<(string Key, NominalType Nt, string CName)>(_deferredRelower);
+                _deferredRelower.Clear();
+                _deferredCNames.Clear();
+
+                var oldSizes = new Dictionary<string, int>(toRelower.Count);
+                foreach (var (k, _, cn) in toRelower)
+                {
+                    if (_cache.TryGetValue(k, out var oldT))
+                        oldSizes[k] = IrTypeSize(oldT);
+                    _deferredCNames.Add(cn);
+                }
+
+                foreach (var (key, nt2, cn) in toRelower)
+                {
+                    // Drop self so we don't re-flag ourselves; consumers
+                    // still in the set stay tentative.
+                    _deferredCNames.Remove(cn);
+                    IrType newResult = nt2.Kind == NominalKind.Enum
+                        ? LowerEnum(nt2, key, cn)
+                        : LowerStruct(nt2, key, cn);
+                    _cache[key] = newResult;
+                }
+
+                // Fan out: by-value consumers of size-changed types are stale.
+                var changedCNames = new HashSet<string>();
+                foreach (var (k, _, cn) in toRelower)
+                {
+                    if (oldSizes.TryGetValue(k, out var oldSize)
+                        && _cache.TryGetValue(k, out var newT)
+                        && IrTypeSize(newT) != oldSize)
+                        changedCNames.Add(cn);
+                }
+                if (changedCNames.Count > 0)
+                {
+                    foreach (var kvp in _cache.ToList())
+                    {
+                        NominalType? consumerNt = null;
+                        string? consumerCName = null;
+                        if (kvp.Value is IrStruct s && AnyFieldReferencesCName(s, changedCNames))
+                        {
+                            consumerNt = _nominalTypes.LookupNominalType(s.Name);
+                            consumerCName = s.CName;
+                        }
+                        else if (kvp.Value is IrEnum e && AnyVariantReferencesCName(e, changedCNames))
+                        {
+                            consumerNt = _nominalTypes.LookupNominalType(e.Name);
+                            consumerCName = e.CName;
+                        }
+                        if (consumerNt != null && consumerCName != null)
+                            QueueRelower(kvp.Key, consumerNt, consumerCName);
+                    }
+                }
             }
+            _deferredCNames.Clear();
         }
 
         return result;
@@ -293,9 +347,10 @@ public class TypeLayoutService(ITypeResolver engine, INominalTypeRegistry nomina
         {
             var (name, fieldHmType) = nt.FieldsOrVariants[i];
             var fieldIrType = LowerResolved(_engine.Resolve(fieldHmType));
-            // Detect if we got a stub (incomplete type from cycle-breaking)
+            // Stub (cycle-break) or already-queued tentative type: size is provisional.
             if (fieldIrType is IrStruct { Size: 0, Fields.Length: 0 }
-                || fieldIrType is IrEnum { Variants.Length: 0 })
+                || fieldIrType is IrEnum { Variants.Length: 0 }
+                || IsTentative(fieldIrType))
                 usedStub = true;
             var alignment = fieldIrType.Alignment;
             maxAlignment = Math.Max(maxAlignment, alignment);
@@ -306,7 +361,7 @@ public class TypeLayoutService(ITypeResolver engine, INominalTypeRegistry nomina
 
         // If any field resolved to a stub, schedule this type for re-lowering
         if (usedStub)
-            _deferredRelower.Add((cacheKey, nt, cName));
+            QueueRelower(cacheKey, nt, cName);
 
         if (nt.IsSimd)
         {
@@ -368,9 +423,10 @@ public class TypeLayoutService(ITypeResolver engine, INominalTypeRegistry nomina
             {
                 payloadIrType = LowerResolved(resolved);
                 allPayloadless = false;
-                // Detect if we got a stub (incomplete type from cycle-breaking)
+                // Stub (cycle-break) or already-queued tentative type: size is provisional.
                 if (payloadIrType is IrStruct { Size: 0, Fields.Length: 0 }
-                    || payloadIrType is IrEnum { Variants.Length: 0 })
+                    || payloadIrType is IrEnum { Variants.Length: 0 }
+                    || IsTentative(payloadIrType))
                     usedStub = true;
                 largestPayload = Math.Max(largestPayload, payloadIrType.Size);
                 maxPayloadAlignment = Math.Max(maxPayloadAlignment, payloadIrType.Alignment);
@@ -381,7 +437,7 @@ public class TypeLayoutService(ITypeResolver engine, INominalTypeRegistry nomina
         // If any payload resolved to a stub, schedule this type for re-lowering
         // once all dependencies have their final sizes.
         if (usedStub)
-            _deferredRelower.Add((cacheKey, nt, cName));
+            QueueRelower(cacheKey, nt, cName);
 
         int alignment;
         int totalSize;
@@ -408,6 +464,51 @@ public class TypeLayoutService(ITypeResolver engine, INominalTypeRegistry nomina
         }
 
         return new IrEnum(nt.Name, cName, tagSize, variants, totalSize, alignment);
+    }
+
+    // Provisional size — consumers laying out next to this by value must
+    // re-lower once the queued entry settles.
+    private bool IsTentative(IrType t) => t switch
+    {
+        IrStruct s => _deferredCNames.Contains(s.CName),
+        IrEnum e => _deferredCNames.Contains(e.CName),
+        _ => false,
+    };
+
+    private void QueueRelower(string cacheKey, NominalType nt, string cName)
+    {
+        if (_deferredCNames.Add(cName))
+            _deferredRelower.Add((cacheKey, nt, cName));
+    }
+
+    private static int IrTypeSize(IrType t) => t switch
+    {
+        IrStruct s => s.Size,
+        IrEnum e => e.Size,
+        IrPrimitive p => p.Size,
+        IrPointer => 8,
+        IrArray { Length: not null } a => (a.Length ?? 0) * IrTypeSize(a.Element),
+        _ => 0,
+    };
+
+    private static bool AnyFieldReferencesCName(IrStruct s, HashSet<string> changedCNames)
+    {
+        foreach (var f in s.Fields)
+        {
+            if (f.Type is IrStruct fs && changedCNames.Contains(fs.CName)) return true;
+            if (f.Type is IrEnum fe && changedCNames.Contains(fe.CName)) return true;
+        }
+        return false;
+    }
+
+    private static bool AnyVariantReferencesCName(IrEnum e, HashSet<string> changedCNames)
+    {
+        foreach (var v in e.Variants)
+        {
+            if (v.PayloadType is IrStruct ps && changedCNames.Contains(ps.CName)) return true;
+            if (v.PayloadType is IrEnum pe && changedCNames.Contains(pe.CName)) return true;
+        }
+        return false;
     }
 
     private string BuildCacheKey(NominalType nt)

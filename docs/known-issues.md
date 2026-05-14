@@ -16,6 +16,45 @@ When you discover a bug or limitation:
 
 ## Open Issues
 
+### Unqualified Enum Variants Shadow Same-Named Types
+
+**Status:** Open — workaround via renaming the type
+**Affected:** name resolution; surfaces when a top-level type and a variant of another enum share a name
+
+FLang lets you write a variant in shorthand form (no enum prefix) when the type is inferred from context — `Some(v)`, `NodeChild(n)`, etc. The resolver picks up bare `X` as an unqualified variant lookup whenever some in-scope enum has a variant called `X`. When a top-level **type** also named `X` exists, the variant wins and the type is shadowed: `X.Y` is parsed as "the `Y` member of the variant value `X`", not "the `Y` variant of the type `X`".
+
+**Reproducer (current AST + CST):**
+
+```flang
+// flang_parser.cst:
+pub type NodeKind = enum { ..., Directive, ... }
+
+// flang_parser.ast:
+pub type DeclAttribute = enum { Foreign, Inline, ... }
+// (was `pub type Directive` — renamed precisely to dodge this issue)
+```
+
+With the original name `Directive`, `Directive.Inline` errored as `No variant Inline on enum NodeKind`, because `Directive` resolved to `NodeKind.Directive` first. Same shape with the AST's old `Literal` enum vs `Pattern.Literal` variant.
+
+**Workaround (active):** rename the type when it would collide. `Directive` → `DeclAttribute`, `Literal` → `LiteralValue` in `lib/flang_parser/src/ast.f`.
+
+**Fix direction:** replace the unqualified-variant shorthand with a leading-dot syntax — `.Some(v)` instead of `Some(v)` — modelled on `.{ ... }` for context-inferred struct literals. Bare names then always mean identifiers or types; `.Variant` always means "the named variant of whatever enum the context expects." Requires parser support for `.Ident` as a primary expression, resolver changes to drop unqualified-variant lookup, formatter emission, and a mechanical migration of every match arm + shorthand construction across stdlib / lib / tools / bootstrap / tests. Track as its own RFC before scheduling.
+
+---
+
+### Niche `Option(&Enum)` Match-Arm Auto-Deref Stripped the Option
+
+**Status:** Fixed in `src/FLang.Semantics/HmAstLowering.cs`
+**Affected:** `match` on `Option(&T)` where `T` is a tagged enum
+
+`LowerMatch` had a pre-check that auto-dereferenced an `IrPointer { Pointee: IrEnum }` scrutinee so `e.* match { … }` and `e match { … }` could share the same pattern path. That check fired for niche-optimised `Option(&T)` too (also an `IrPointer { Pointee: IrEnum }`), stripping the nullable pointer down to its pointee. The match then went into the regular tagged-enum path looking for variants `Some`/`None` on the *underlying* enum — which doesn't have them — so the `Some(p)` payload binding never made it into `_locals` and any reference to `p` in the arm body emitted `E3002 Unresolved identifier`.
+
+**Fix:** the auto-deref skips nullable pointers — only `IrPointer { Pointee: IrEnum, IsNullable: false }` is auto-dereffed. Niche `Option(&T)` keeps its IrPointer typing all the way into `LowerMatchNonEnum`, which already had a `Some(x)` binding path that strips the nullable bit and allocates a slot for `x`.
+
+**Test:** `tests/FLang.Tests/Harness/enums/enum_match_niche_option_ref.f`
+
+---
+
 ### Dict Entry Stride Ignores Alignment Padding
 
 **Status:** Open — `Set(T)` works around by storing `u8` instead of `()`
@@ -66,6 +105,49 @@ return (raw + align - 1) / align * align
 
 `open(path, flags)` now takes a third `mode` argument (POSIX requires it
 when `O_CREAT` is set). Callers were already going through `open_file`.
+
+---
+
+### `Option(T)` Layout-Smashed When `T` Was Cycle-Broken
+
+**Status:** Fixed in `src/FLang.IR/TypeLayoutService.cs`
+**Affected:** mutually-recursive struct/enum chains where a struct holds the enum by value AND the enum's payload struct contains the by-value containing type through a generic indirection (`List(SubExpr)` inside `NamedInfo` inside `SubExpr.Named(NamedInfo)`).
+
+The deferred-relower for cycle-broken layouts only re-queued types that
+saw a fully-empty stub (`Size: 0, Fields.Length: 0`). It did not re-queue
+types that saw a partially-laid-out type — a struct that had already
+returned from `LowerStruct` with `usedStub = true` and a provisional size
+computed against an inner stub. In the AST case, `NamedInfo` finished
+with size 32 (its `List(SubExpr)` field had read the List stub mid-cycle
+and stopped at the wrong size). `SubExpr` then sized its `Named` payload
+against that 32-byte `NamedInfo`, so `sizeof(SubExpr)` was 40 — but the
+C codegen later emitted `uint8_t payload[N]` from the same per-variant
+size data, so the C struct definition also got `payload[32]` instead of
+`payload[64]`. Every consumer that wrote a 64-byte `NamedInfo` into the
+32-byte payload (`*(NamedInfo*)(&t + 8) = info`) smashed 32 bytes past
+the end of the enclosing struct into the next stack local, corrupting
+later reads of `n.generic_args.len` / `.cap` / `.allocator`.
+
+Two changes fixed it:
+
+1. `_deferredCNames: HashSet<string>` and `IsTentative(IrType)` —
+   propagate "tentatively-laid-out" status through dependencies.
+   `LowerStruct`/`LowerEnum` flag `usedStub = true` not only when a
+   field type is a fully-empty stub but also when the field type's
+   `CName` is currently in the deferred queue.
+2. Re-lower pass writes new sizes into the cache without first removing
+   the existing entries. Nested `LowerNominal` calls during a re-lower
+   used to cache-miss and start a fresh stub cycle, sometimes pinging
+   the same type back onto the queue and looping. Keeping the stale
+   entry around means recursive lookups hit the cache (possibly with
+   a stale size, fixed up next iteration) instead of inserting a new
+   stub.
+
+The deferred queue is in DFS post-order — dependencies before their
+consumers — so a single forward pass converges. Iterating to fixpoint
+isn't needed.
+
+**Test:** `tests/FLang.Tests/Harness/enums/enum_mutual_recursion_by_value.f`
 
 ---
 

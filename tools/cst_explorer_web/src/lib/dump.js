@@ -1,7 +1,7 @@
-// Normalize the raw JSON produced by `flang cst --json` into a shape
-// the UI can lean on directly: every node gets a stable `id`, token
-// references are resolved into objects, and child arrays are
-// flattened so a renderer can iterate without re-dispatching.
+// Normalize the raw `cst_explorer --json` dump. Both `tree` (CST) and
+// `ast` are mapped to the same tree node shape so one renderer handles
+// either pane. Every node gets a stable `id`; CST tokens are resolved
+// from indexes into objects.
 
 /**
  * @typedef {{ kind: string, text: string, offset: number, line: number,
@@ -38,10 +38,8 @@ export function indexDump(raw) {
       if (child.token !== undefined) {
         const tok = tokens[child.token]
         if (!tok) throw new Error(`token index ${child.token} out of range`)
-        // Stamp the token with its position in the tree. Tokens are
-        // shared by reference across the dump (the same token appears
-        // once in the flat `tokens[]` array AND as a leaf in `tree`),
-        // so the id pinned here works in both contexts.
+        // Same token instance appears in both `tokens[]` and the tree;
+        // pinning ids on it makes both contexts share row identity.
         tok.id = childId
         tok.parentId = id
         return tok
@@ -61,6 +59,10 @@ export function indexDump(raw) {
 
   const tree = indexNode(raw.tree, 'r')
 
+  // AST is optional — older dumps may only carry the CST.
+  const ast = raw.ast ? indexAst(raw.ast, 'a') : null
+  const astNodeCount = ast ? countNodes(ast) : 0
+
   const diagnostics = (raw.diagnostics ?? []).map((d) => ({
     ...d,
     end: d.start + (d.length ?? 0),
@@ -71,9 +73,81 @@ export function indexDump(raw) {
     source: raw.source,
     tokens,
     tree,
+    ast,
     diagnostics,
     nodeCount,
+    astNodeCount,
   }
+}
+
+// Map a raw AST node to the same shape `indexNode` produces for CST,
+// plus `scalars` for primitive fields and `label` on labelled children.
+// Arrays expand inline (each element becomes a labelled child); null
+// fields are skipped.
+function indexAst(node, path) {
+  if (!node || typeof node !== 'object') return null
+  const id = path
+  const [start, length] = Array.isArray(node.span) ? node.span : [0, 0]
+  const scalars = []
+  const children = []
+
+  for (const [key, value] of Object.entries(node)) {
+    if (key === 'kind' || key === 'span') continue
+    appendAstField(scalars, children, key, value, id)
+  }
+
+  return {
+    id,
+    isToken: false,
+    isAst: true,
+    kind: node.kind ?? '?',
+    start,
+    end: start + length,
+    scalars,
+    children,
+  }
+}
+
+function appendAstField(scalars, children, key, value, parentId) {
+  if (value === null || value === undefined) return
+  if (typeof value === 'string' || typeof value === 'boolean' || typeof value === 'number') {
+    scalars.push({ key, value: String(value) })
+    return
+  }
+  if (Array.isArray(value)) {
+    if (value.length === 0) {
+      // Surface empty arrays so absence is visible.
+      scalars.push({ key, value: '[]' })
+      return
+    }
+    value.forEach((item, i) => {
+      if (item === null || typeof item !== 'object') {
+        scalars.push({ key: `${key}[${i}]`, value: String(item) })
+        return
+      }
+      const childId = `${parentId}.${key}[${i}]`
+      const childNode = indexAst(item, childId)
+      if (childNode) {
+        childNode.label = `${key}[${i}]`
+        children.push(childNode)
+      }
+    })
+    return
+  }
+  // Nested AST node.
+  const childId = `${parentId}.${key}`
+  const childNode = indexAst(value, childId)
+  if (childNode) {
+    childNode.label = key
+    children.push(childNode)
+  }
+}
+
+function countNodes(node) {
+  if (!node) return 0
+  let n = 1
+  for (const c of node.children ?? []) n += countNodes(c)
+  return n
 }
 
 export function isToken(child) {

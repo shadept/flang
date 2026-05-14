@@ -9,22 +9,21 @@
    * }} */
   let { node, depth, focusedId, onSelectNode } = $props()
 
-  // Initial expansion state depends on the depth this row was mounted
-  // at; we don't want it to flip back when Svelte re-reads `depth`.
-  let open = $state(untrack(() => depth) < 3)
+  // `open` priority: autoOpen (focus on descendant) wins over userOpen,
+  // which overrides the depth default. Derived rather than state-via-effect
+  // so deep auto-expand cascades in one synchronous render pass — with the
+  // effect form, each level had to mount before its own auto-expand ran.
+  let userOpen = $state(/** @type {boolean | null} */ (null))
+  let autoOpen = $derived(
+    !!(focusedId && typeof focusedId === 'string' && focusedId.startsWith(node.id + '.'))
+  )
+  let defaultOpen = untrack(() => depth) < 3
+  let open = $derived(autoOpen || (userOpen !== null ? userOpen : defaultOpen))
   let isFocused = $derived(focusedId === node.id)
-
-  // Auto-expand ancestors when focus lands on us (or a descendant —
-  // tokens included, since their id is `<node-id>.<idx>`).
-  $effect(() => {
-    if (focusedId && typeof focusedId === 'string' && focusedId.startsWith(node.id + '.')) {
-      open = true
-    }
-  })
 
   function toggle(e) {
     e.stopPropagation()
-    open = !open
+    userOpen = !open
   }
   function select(e) {
     e.stopPropagation()
@@ -48,8 +47,14 @@
     {:else if open}▾{:else}▸{/if}
   </button>
   <button class="label" onclick={select}>
+    {#if node.label}<span class="field">{node.label}:</span>{/if}
     <span class="kind">{node.kind}</span>
     <span class="range">[{node.start}..{node.end}]</span>
+    {#if node.scalars}
+      {#each node.scalars as s}
+        <span class="scalar"><span class="scalar-key">{s.key}</span>=<span class="scalar-val">{s.value}</span></span>
+      {/each}
+    {/if}
   </button>
 </div>
 
@@ -116,7 +121,11 @@
   }
   .label:hover { background: var(--bg-elev) }
   .kind { color: var(--accent); font-weight: 600 }
+  .field { color: var(--fg-dim); font-weight: 500; margin-right: 4px }
   .range { color: var(--fg-muted); margin-left: 6px; font-size: 11px }
+  .scalar { color: var(--fg-dim); margin-left: 8px; font-size: 11px }
+  .scalar-key { color: var(--fg-muted) }
+  .scalar-val { color: var(--str) }
   .children { display: contents }
 
   .row.tok { opacity: 0.92 }

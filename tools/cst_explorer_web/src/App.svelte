@@ -13,6 +13,10 @@
   let highlight = $state(null)
   /** Set of node ids to focus / scroll into view in the tree. */
   let focusedNodeId = $state(null)
+  /** Which tree to render in the right pane: 'cst' or 'ast'. */
+  let pane = $state('cst')
+
+  let activeTree = $derived(pane === 'ast' ? dump?.ast : dump?.tree)
 
   async function loadFile(file) {
     error = ''
@@ -21,6 +25,7 @@
       const raw = JSON.parse(text)
       dump = indexDump(raw)
       highlight = null
+      pane = 'cst'
       focusedNodeId = dump.tree?.id ?? null
     } catch (e) {
       error = e?.message ?? String(e)
@@ -35,9 +40,20 @@
       .then((raw) => {
         dump = indexDump(raw)
         highlight = null
+        pane = 'cst'
         focusedNodeId = dump.tree?.id ?? null
       })
       .catch((e) => { error = `couldn't load sample: ${e}` })
+  }
+
+  function selectPane(next) {
+    if (pane === next) return
+    pane = next
+    // Read the new tree directly — `activeTree` ($derived) hasn't
+    // re-evaluated yet inside this synchronous handler.
+    const newTree = next === 'ast' ? dump?.ast : dump?.tree
+    focusedNodeId = newTree?.id ?? null
+    highlight = null
   }
 
   onMount(() => {
@@ -60,13 +76,9 @@
     focusedNodeId = node.id ?? null
   }
 
-  // Source-pane click: descend to the deepest token/node containing
-  // the click offset, then surface it as the focus target. The tree's
-  // ancestor-expansion effect (TreeNode.svelte) opens collapsed nodes
-  // on the path so the row becomes visible.
   function onClickAtOffset(offset) {
-    if (!dump) return
-    const hit = findAtOffset(dump.tree, offset)
+    if (!activeTree) return
+    const hit = findAtOffset(activeTree, offset)
     if (hit) onSelectNode(hit)
   }
 
@@ -79,9 +91,9 @@
 
 <header>
   <div class="title">
-    <strong>FLang CST Explorer</strong>
+    <strong>FLang Syntax Explorer</strong>
     <span class="dim">— drop a JSON dump produced by</span>
-    <code class="dim">flang cst --json &lt;file&gt; &gt; out.json</code>
+    <code class="dim">cst_explorer &lt;file&gt; --json &gt; out.json</code>
   </div>
   {#if dump}
     <div class="meta">
@@ -124,13 +136,39 @@
       />
     </section>
     <section class="tree">
-      <h2>CST</h2>
-      <TreeView
-        tree={dump.tree}
-        tokens={dump.tokens}
-        focusedId={focusedNodeId}
-        onSelectNode={onSelectNode}
-      />
+      <div class="tree-header">
+        <div class="pane-tabs" role="tablist">
+          <button
+            role="tab"
+            aria-selected={pane === 'cst'}
+            class:active={pane === 'cst'}
+            onclick={() => selectPane('cst')}
+          >CST <span class="count">{dump.nodeCount}</span></button>
+          <button
+            role="tab"
+            aria-selected={pane === 'ast'}
+            class:active={pane === 'ast'}
+            disabled={!dump.ast}
+            title={dump.ast ? '' : 'AST not present in this dump'}
+            onclick={() => selectPane('ast')}
+          >AST <span class="count">{dump.astNodeCount}</span></button>
+        </div>
+      </div>
+      {#if activeTree}
+        <!-- Remount on pane switch so per-node `open` state doesn't leak between trees. -->
+        {#key pane}
+          <TreeView
+            tree={activeTree}
+            tokens={dump.tokens}
+            focusedId={focusedNodeId}
+            onSelectNode={onSelectNode}
+          />
+        {/key}
+      {:else}
+        <div class="empty-pane">
+          {pane === 'ast' ? 'AST not present in this dump.' : 'No tree.'}
+        </div>
+      {/if}
     </section>
   </main>
   {#if dump.diagnostics.length > 0}
@@ -171,6 +209,53 @@
     color: var(--fg-dim);
     border-bottom: 1px solid var(--border);
     background: var(--bg-elev);
+  }
+
+  .tree-header {
+    border-bottom: 1px solid var(--border);
+    background: var(--bg-elev);
+  }
+  .pane-tabs {
+    display: flex;
+    gap: 0;
+  }
+  .pane-tabs button {
+    background: transparent;
+    border: none;
+    border-right: 1px solid var(--border);
+    color: var(--fg-dim);
+    cursor: pointer;
+    padding: 6px 14px;
+    font: inherit;
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    border-bottom: 2px solid transparent;
+    margin-bottom: -1px;
+  }
+  .pane-tabs button:hover:not(:disabled) { color: var(--fg) }
+  .pane-tabs button.active {
+    color: var(--accent);
+    border-bottom-color: var(--accent);
+    background: var(--bg);
+  }
+  .pane-tabs button:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+  }
+  .pane-tabs .count {
+    color: var(--fg-muted);
+    margin-left: 6px;
+    font-weight: 400;
+  }
+  .empty-pane {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--fg-dim);
+    font-size: 12px;
+    padding: 20px;
   }
 
   .empty {

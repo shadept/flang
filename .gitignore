@@ -103,6 +103,12 @@ fabric.properties
 
 dist/
 .test-artifacts/
+
+# Claude Code session state
+.claude/
+
+# cst_explorer ad-hoc diagnostic dumps
+tools/cst_explorer/out.json
 *.obj
 *.exe
 *.fir

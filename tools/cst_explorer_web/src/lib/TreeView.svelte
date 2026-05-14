@@ -12,17 +12,24 @@
 
   let scroller
 
-  // Scroll the focused row into view after Svelte flushes the
-  // ancestor-open effects (which may add new rows to the DOM). We use
-  // a tick so collapsed ancestors have a chance to render their
-  // children before we measure.
+  // Poll across ticks — deeply-nested rows mount one level per render
+  // pass as `{#if open}` cascades, so the row may not exist on tick 1.
   $effect(() => {
     const id = focusedId
     if (!id || !scroller) return
-    tick().then(() => {
-      const row = scroller.querySelector(`[data-row-id="${cssEscape(id)}"]`)
-      if (row) row.scrollIntoView({ block: 'center', behavior: 'smooth' })
-    })
+    let cancelled = false
+    const tryScroll = async () => {
+      for (let attempt = 0; attempt < 8 && !cancelled; attempt++) {
+        await tick()
+        const row = scroller.querySelector(`[data-row-id="${cssEscape(id)}"]`)
+        if (row) {
+          row.scrollIntoView({ block: 'center', behavior: 'smooth' })
+          return
+        }
+      }
+    }
+    tryScroll()
+    return () => { cancelled = true }
   })
 
   function cssEscape(s) {

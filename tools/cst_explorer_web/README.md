@@ -1,15 +1,18 @@
 # cst_explorer_web
 
-Browser-based CST visualiser for FLang — astexplorer-style. Loads a
-JSON dump produced by `cst_explorer --json` (the FLang CLI tool under
+Browser-based CST + AST visualiser for FLang — astexplorer-style. Loads
+a JSON dump produced by `cst_explorer --json` (the FLang CLI tool under
 `tools/cst_explorer/`) and renders an interactive syntax tree
-side-by-side with the source.
+side-by-side with the source. The tree pane has a toggle between **CST**
+(lossless, every keyword/punctuation token) and **AST** (projected,
+category-typed: Decl / Stmt / Expr / Pattern / TypeExpr).
 
 ## Workflow
 
 ```sh
-# 1. Emit a CST dump from any .f file
-flang cst --json examples/hello-world/src/main.f > /tmp/hello.json
+# 1. Emit a dump from any .f file. --json always emits both
+#    CST and AST in the same document.
+cst_explorer.exe examples/hello-world/src/main.f --json > /tmp/hello.json
 
 # 2. Open the viewer
 cd tools/cst_explorer_web
@@ -20,9 +23,12 @@ npm run dev   # → http://localhost:5173
 In the browser:
 
 - Drop the `.json` file onto the page (or click to pick).
+- Toggle between **CST** and **AST** at the top of the tree pane.
 - Hover a token in the source pane → it highlights and shows kind/range.
 - Click a tree node → the corresponding source range lights up; ancestor
-  nodes auto-expand and the row scrolls into view.
+  nodes auto-expand and the row scrolls into view. Source clicks
+  descend the *active* pane's tree, so the same offset can target a CST
+  token (lossless) or its AST ancestor (semantic).
 - Diagnostics (parse errors) collapse into a panel at the bottom and
   underline the offending range in the source pane. Click a diagnostic
   to focus its range.
