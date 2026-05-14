@@ -180,6 +180,49 @@ isn't needed.
 
 ---
 
+### Field-List `.push()` Silently No-Ops Through Some Access Paths
+
+**Status:** Open
+**Affected:** any caller mutating a nested `List` field through `obj.field.list.push(…)` or through a value-struct local — silent data loss
+
+`List.push(self: &List(T), v: T)` mutates through a `&List` receiver. When the receiver expression chains through one or more struct field accesses, FLang sometimes resolves the chain as a temporary rvalue rather than an lvalue, so `push` mutates a copy that immediately disappears. The call compiles, runs, and is observable as a no-op at runtime.
+
+Two reproducers, both from `lib/flang_codegen` builder development:
+
+```flang
+// (A) Local value struct, one level: m is `Module` by value.
+let m = module()
+m.functions.push(some_function())   // m.functions.len stays 0
+```
+
+```flang
+// (B) Reference struct, two levels: self is `&FunctionBuilder`.
+fn block_internal(self: &FunctionBuilder, ...) BlockBuilder {
+    ...
+    self.func.blocks.push(new_block)   // self.func.blocks.len stays 0
+}
+```
+
+The matching one-level pattern through a reference works fine — `self.words.push(0u64)` in `stdlib/std/bitset.f` and `self.__args.push(...)` in `stdlib/std/process.f` are exercised by tests.
+
+**Workaround:** define a small mutator on the defining type and call that. The method-call form preserves the place-ness:
+
+```flang
+// in fir.f, where Module is defined:
+pub fn add_function(self: &Module, f: Function) {
+    self.functions.push(f)
+}
+
+// caller — now mutates correctly:
+m.add_function(some_function())
+```
+
+`lib/flang_codegen/src/fir.f` uses this pattern (`add_block`, `add_function`, `add_foreign`, `add_global`, `set_terminator`, `fresh_value_id`) so the builder in `builder.f` never has to reach into nested fields.
+
+**Fix direction:** in lowering, audit the desugaring of `expr.field.method(...)` where `method` takes `&Self`. The compiler needs to thread the place through every intermediate field access, not materialise an rvalue copy at any step. Likely candidate: the auto-`&` insertion in UFCS / method-call lowering only fires on the outermost receiver, not on each intermediate field access. Worth a focused repro test (`tests/FLang.Tests/Harness/...`) before fixing.
+
+---
+
 ### `match` on Value-Type Optional Doesn't Yield Ref Bindings
 
 **Status:** Open (low priority — workarounds exist for current consumers)

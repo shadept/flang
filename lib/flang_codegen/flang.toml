@@ -1,0 +1,7 @@
+[project]
+name = "flang_codegen"
+version = "0.1.0"
+source = "src/**/*.f"
+
+[dependencies]
+flang_core = { path = "../flang_core" }

@@ -22,28 +22,35 @@ src/main.f       — CLI entry point
 
 - [x] Project skeleton + dependency on `flang_parser` and `flang_core`
 - [x] CLI argument parsing via `std.env.getopts`
-- [x] Subcommand dispatch (`build`, `fmt`, `lsp`)
+- [x] Subcommand dispatch (`build`, `fmt`, `lsp`, `cst`, `tokens`)
 - [x] Trivia-attached lexer (`flang_parser.lexer.tokenize`)
-- [x] Flat-Module CST construction (`flang_parser.parser.parse_module`)
+- [x] Structured CST (decls, blocks, expressions, patterns)
 - [x] `flang_fmt` round-trip + trivia normalization (in-place rewrite)
 - [x] `dump_tokens` debug tool for the lexer
-- [ ] Structured CST (decls, blocks, expressions) — currently flat
-- [ ] AST projection
-- [ ] Type checker
-- [ ] Lowering
-- [ ] C codegen
+- [x] AST projection (`flang_parser.projector.project_module`)
+- [ ] Codegen library (FIR + backends — see "Strategy" below)
+- [ ] Name resolution + symbol tables
+- [ ] Hindley-Milner type inference
+- [ ] Lowering to FIR
 - [ ] Self-host
 
 ## Status
 
-`flang_fmt` walks the CST and applies trivia-only normalization:
-CRLF/CR → LF, trailing horizontal whitespace stripped, runs of 3+ newlines
-collapsed to 2, single trailing newline. The 11 bootstrap source files
-(`bootstrap/`, `lib/flang_parser/`, `lib/flang_core/`, `tools/flang_fmt/`,
-`tools/dump_tokens/`) round-trip byte-identical through fmt — once a file
-is normalized, fmt is a fixed point.
+The frontend stack (lex → CST → AST) is complete in flang. `flang_fmt`
+round-trips every bootstrap source file byte-identical. `cst_explorer`
+emits a JSON dump of source + tokens + CST + AST + diagnostics, consumed
+by `cst_explorer_web` for visualization. The `bootstrap` CLI parses args
+and dispatches to sibling tools; the `build` subcommand is still a stub.
 
-The parser currently produces a flat Module: every token becomes a direct
-child. That's enough for trivia-only normalization. Real grammar rules
-(imports → decls → expressions) land once the formatter needs structural
-information (indentation rewriting, expression alignment).
+The C# reference compiler (`src/FLang.*`) is the source of truth for
+semantics today. The self-host work is being done outside-in: pull each
+stage out as a reusable library, validate it under the existing pipeline,
+then wire it into `bootstrap build`.
+
+## Strategy
+
+Stages are split into reusable libraries (`lib/flang_parser`,
+`lib/flang_core`, future `lib/flang_codegen`) so each piece is testable
+in isolation and reusable by tools (`cst_explorer`, `flang_fmt`, LSP).
+The hard work — type inference, FIR lowering — stays in the bootstrap
+crate until it stabilises, then moves out.
