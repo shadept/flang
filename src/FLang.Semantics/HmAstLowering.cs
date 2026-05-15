@@ -4162,15 +4162,17 @@ public class HmAstLowering
                 // Multi-payload (synthetic tuple): each arg maps to a field in the payload struct
                 for (int i = 0; i < call.Arguments.Count && i < payloadStruct.Fields.Length; i++)
                 {
-                    var argVal = LowerExpression(call.Arguments[i]);
+                    var argVal = LowerExpression(call.Arguments[i], payloadStruct.Fields[i].Type);
                     var fieldOffset = variant.PayloadOffset + payloadStruct.Fields[i].ByteOffset;
                     EmitStoreToOffset(enumPtr, fieldOffset, argVal, payloadStruct.Fields[i].Type);
                 }
             }
             else
             {
-                // Single payload
-                var argVal = LowerExpression(call.Arguments[0]);
+                // Single payload — pass payload type as expected so an anonymous
+                // struct literal coerces into the variant's nominal payload type
+                // instead of falling back to its synthesized __anon_* struct.
+                var argVal = LowerExpression(call.Arguments[0], variant.PayloadType);
                 EmitStoreToOffset(enumPtr, variant.PayloadOffset, argVal, variant.PayloadType);
             }
         }

@@ -7,6 +7,7 @@ public class ModuleNode(
     IReadOnlyList<ImportDeclarationNode> imports,
     IReadOnlyList<StructDeclarationNode> structs,
     IReadOnlyList<EnumDeclarationNode> enums,
+    IReadOnlyList<TypeAliasDeclarationNode> typeAliases,
     IReadOnlyList<FunctionDeclarationNode> functions,
     IReadOnlyList<TestDeclarationNode> tests,
     IReadOnlyList<VariableDeclarationNode> globalConstants,
@@ -17,6 +18,7 @@ public class ModuleNode(
     public IReadOnlyList<VariableDeclarationNode> GlobalConstants { get; } = globalConstants;
     public IReadOnlyList<StructDeclarationNode> Structs { get; } = structs;
     public IReadOnlyList<EnumDeclarationNode> Enums { get; } = enums;
+    public IReadOnlyList<TypeAliasDeclarationNode> TypeAliases { get; } = typeAliases;
     public IReadOnlyList<FunctionDeclarationNode> Functions { get; } = functions;
     public IReadOnlyList<TestDeclarationNode> Tests { get; } = tests;
     public IReadOnlyList<SourceGeneratorDefinitionNode> GeneratorDefinitions { get; } = generatorDefinitions;

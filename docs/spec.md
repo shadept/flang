@@ -54,9 +54,7 @@ FLang is a statically-typed compiled language designed for explicit control, str
 
 **Tuples** desugar to anonymous structs with a double-underscore prefix to avoid collisions with user fields: `(A, B)` → `{ __0: A, __1: B }`, access via `t.0` → `t.__0`. User-defined fields named `_0`, `_1`, etc. remain valid. Trailing comma distinguishes single-element tuple `(x,)` from grouped expression `(x)`.
 
-**Anonymous struct types** (`struct { ... }` written inline) appear only as the right-hand side of a `type` alias and as generator arguments. They are not first-class type expressions in arbitrary positions. Anonymous struct *values* (`.{ ... }`) require a target type from context — context-less `.{}` errors with a hint to add a type annotation.
-
-**Anonymous type expressions**: `struct { ... }` and `enum { ... }` are valid anywhere a type appears — parameters, return types, variable annotations, function fields.
+**Anonymous type expressions**: `struct { ... }` and `enum { ... }` are valid anywhere a type appears — parameters, return types, variable annotations, function fields, and the right-hand side of a `type` alias. Anonymous struct *values* (`.{ ... }`) require a target type from context — context-less `.{}` errors with a hint to add a type annotation.
 
 **Structural typing**: FLang is nominally typed for named structs and enums. However, tuples and anonymous structs are structurally typed — compatibility is determined by field names and types, not by declaration identity. A function accepting `{ _0: i32, _1: i32 }` will accept a tuple `(i32, i32)`. This is the foundation for planned broader structural typing: anonymous structs will serve as the entry point for TypeScript-style structural compatibility, where any value with matching fields satisfies an anonymous struct type constraint.
 
@@ -78,6 +76,19 @@ type Result = enum(T, E) { Ok(T), Err(E) }
 **Instantiation uses parentheses**: `Option(i32)`, `List(String)`, `Result(JsonValue, JsonError)`.
 
 Inference is multi-phase: constraints flow bidirectionally from return positions, parameter annotations, and assignment targets. Untyped integer and float literals are placeholders that must unify with a concrete type before compilation completes.
+
+### 2.3.1 Transparent type aliases
+
+```
+type VarId = u32
+type NodeId = usize
+type Buf = [u8; 4]
+pub type Pair = (i32, i32)
+```
+
+`type Name = <type-expression>` where the RHS is anything other than a `struct(...) { ... }` or `enum(...) { ... }` builder declares a **transparent alias**: `Name` resolves to the RHS type everywhere it appears. No nominal identity is introduced and no conversion is required at use sites — `let v: VarId = 7u32` and `let n: u32 = v` are both valid without any cast.
+
+Aliases participate in module visibility like struct/enum declarations (`pub type` is exported, bare `type` is module-private). Cyclic aliases — `type A = B; type B = A` — are rejected with **E2036**. Generic aliases (`type Pair(T, U) = (T, U)`) are not yet supported; use a `struct` or `enum` wrapper if you need a polymorphic named type.
 
 ### 2.4 Structs
 
@@ -141,7 +152,7 @@ Three types with explicit ownership. All share layout `{ ptr: &u8, len: usize }`
 
 Conversions are always explicit — no implicit coercions between string types.
 
-**Formattable protocol**: Types implement `fn format(self: T, sb: &StringBuilder)` to produce text. Users call `sb.append(value)` — primitive overloads write directly, generic fallback dispatches to `format()`.
+**Formattable protocol**: Types implement `fn format(self: T, sb: &StringBuilder, spec: String)` to produce text. Users call `sb.append(value)` — primitive overloads write directly, generic fallback dispatches to `format()`.
 
 **String interpolation** (RFC-004): `$"..."`, `$(args)"..."`, and `$sb"..."` are pure syntactic sugar over `StringBuilder.append` and `to_string`. The forms desugar as follows:
 

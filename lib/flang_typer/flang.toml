@@ -1,0 +1,8 @@
+[project]
+name = "flang_typer"
+version = "0.1.0"
+source = "src/**/*.f"
+
+[dependencies]
+flang_core = { path = "../flang_core" }
+flang_parser = { path = "../flang_parser" }

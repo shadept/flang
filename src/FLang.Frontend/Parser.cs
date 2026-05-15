@@ -21,6 +21,7 @@ public class Parser
     private int _loopDepth; // Tracks nesting depth of loops for break/continue validation
     private readonly List<StructDeclarationNode> _hoistedStructs = [];
     private readonly List<EnumDeclarationNode> _hoistedEnums = [];
+    private readonly List<TypeAliasDeclarationNode> _hoistedTypeAliases = [];
     private static readonly HashSet<string> _knownDirectiveNames = ["foreign", "inline", "deprecated", "simd"];
 
     /// <summary>
@@ -58,6 +59,7 @@ public class Parser
         var imports = new List<ImportDeclarationNode>();
         var structs = new List<StructDeclarationNode>();
         var enums = new List<EnumDeclarationNode>();
+        var typeAliases = new List<TypeAliasDeclarationNode>();
         var functions = new List<FunctionDeclarationNode>();
         var tests = new List<TestDeclarationNode>();
         var globalConstants = new List<VariableDeclarationNode>();
@@ -134,9 +136,10 @@ public class Parser
                     else if (nextToken.Kind == TokenKind.Type)
                     {
                         Eat(TokenKind.Pub);
-                        var decl = ParseTypeDeclaration(directives);
+                        var decl = ParseTypeDeclaration(directives, isPublic: true);
                         if (decl is StructDeclarationNode s) structs.Add(s);
                         else if (decl is EnumDeclarationNode e) enums.Add(e);
+                        else if (decl is TypeAliasDeclarationNode a) typeAliases.Add(a);
                     }
                     else if (nextToken.Kind == TokenKind.Fn)
                     {
@@ -175,9 +178,10 @@ public class Parser
                 }
                 else if (_currentToken.Kind == TokenKind.Type)
                 {
-                    var decl = ParseTypeDeclaration(directives);
+                    var decl = ParseTypeDeclaration(directives, isPublic: false);
                     if (decl is StructDeclarationNode s) structs.Add(s);
                     else if (decl is EnumDeclarationNode e) enums.Add(e);
+                    else if (decl is TypeAliasDeclarationNode a) typeAliases.Add(a);
                 }
                 else if (_currentToken.Kind == TokenKind.Fn)
                 {
@@ -238,10 +242,11 @@ public class Parser
         // Add any types hoisted from local scopes (e.g., type declarations inside functions/tests)
         structs.AddRange(_hoistedStructs);
         enums.AddRange(_hoistedEnums);
+        typeAliases.AddRange(_hoistedTypeAliases);
 
         var endSpan = _currentToken.Span;
         var span = SourceSpan.Combine(startSpan, endSpan);
-        return new ModuleNode(span, imports, structs, enums, functions, tests, globalConstants,
+        return new ModuleNode(span, imports, structs, enums, typeAliases, functions, tests, globalConstants,
             generatorDefs, generatorInvocations);
     }
 
@@ -923,7 +928,7 @@ public class Parser
     /// </summary>
     private static readonly HashSet<string> _inlineOnlyDirectives = ["simd", "foreign"];
 
-    private object ParseTypeDeclaration(List<DirectiveNode>? directives = null)
+    private object ParseTypeDeclaration(List<DirectiveNode>? directives = null, bool isPublic = false)
     {
         // Reject #simd/#foreign in detached position — they must be inline after `=`
         if (directives != null)
@@ -946,7 +951,9 @@ public class Parser
         var typeKeyword = Eat(TokenKind.Type);
         var nameToken = Eat(TokenKind.Identifier);
 
-        // Type parameters on the name is now an error — they belong on struct/enum
+        // Type parameters on the name is now an error — they belong on struct/enum.
+        // (Generic type aliases — `type Pair(T, U) = (T, U)` — are not supported yet;
+        // when added, this guard should move inside the struct/enum branches.)
         if (_currentToken.Kind == TokenKind.OpenParenthesis)
         {
             _diagnostics.Add(Diagnostic.Error(
@@ -980,14 +987,14 @@ public class Parser
             return ParseEnumBody(nameToken.Text, nameToken.Span, typeParameters, typeKeyword.Span, directives);
         }
 
-        _diagnostics.Add(Diagnostic.Error(
-            $"expected `struct` or `enum` after `=` in type declaration",
-            _currentToken.Span,
-            $"found '{_currentToken.Text}'",
-            "E1002"));
-
-        // Return a dummy struct node to avoid null
-        return ParseStructBody(nameToken.Text, nameToken.Span, [], typeKeyword.Span, directives);
+        // Transparent type alias: `type Name = <any type expression>`.
+        // No struct/enum keyword — parse the RHS as a type expression and
+        // emit a `TypeAliasDeclarationNode`. Resolves transparently at use
+        // site; no nominal identity introduced.
+        var aliasedType = ParseType();
+        var aliasSpan = SourceSpan.Combine(typeKeyword.Span, aliasedType.Span);
+        return new TypeAliasDeclarationNode(
+            aliasSpan, nameToken.Span, nameToken.Text, aliasedType, isPublic, directives);
     }
 
     /// <summary>
@@ -1220,6 +1227,7 @@ public class Parser
                     var decl = ParseTypeDeclaration();
                     if (decl is StructDeclarationNode s) _hoistedStructs.Add(s);
                     else if (decl is EnumDeclarationNode e) _hoistedEnums.Add(e);
+                    else if (decl is TypeAliasDeclarationNode a) _hoistedTypeAliases.Add(a);
                     // Return a no-op expression statement
                     return new ExpressionStatementNode(typeSpan,
                         new IntegerLiteralNode(typeSpan, 0));

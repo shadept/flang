@@ -1,11 +1,68 @@
 using FLang.Core.Types;
 using FLang.Frontend.Ast.Types;
+using SourceSpan = FLang.Core.SourceSpan;
 using Type = FLang.Core.Types.Type;
 
 namespace FLang.Semantics;
 
 public partial class HmTypeChecker
 {
+    /// <summary>
+    /// FQNs of type aliases currently being resolved, used to detect cycles
+    /// like `type A = B; type B = A`. An entry is added on entry to
+    /// <see cref="TryResolveTypeAlias"/> and removed on exit; re-entry
+    /// reports E2036 and returns a fresh TypeVar to keep checking going.
+    /// </summary>
+    private readonly HashSet<string> _aliasResolutionStack = [];
+
+    /// <summary>
+    /// Look up a type alias by short or fully-qualified name from the
+    /// current module's perspective, then resolve its RHS to a concrete
+    /// <see cref="Type"/>. Memoised in <see cref="TypeRegistry.ResolvedAliases"/>.
+    /// Returns null if no alias by that name is in scope.
+    /// </summary>
+    private Type? TryResolveTypeAlias(string name, SourceSpan refSpan)
+    {
+        var decl = _types.LookupAlias(name, _ctx.CurrentModulePath, GetVisibleModules());
+        if (decl == null) return null;
+
+        if (_types.ResolvedAliases.TryGetValue(decl.Fqn, out var cached))
+        {
+            EmitAliasDeprecationWarning(decl.Fqn, name, refSpan);
+            return cached;
+        }
+
+        if (!_aliasResolutionStack.Add(decl.Fqn))
+        {
+            ReportError(
+                $"Cyclic type alias `{name}`",
+                refSpan, "E2036",
+                hint: "alias bodies must not transitively reference themselves");
+            return _ctx.Engine.FreshVar();
+        }
+
+        try
+        {
+            var resolved = ResolveTypeNode(decl.RhsTypeNode);
+            _types.ResolvedAliases[decl.Fqn] = resolved;
+            EmitAliasDeprecationWarning(decl.Fqn, name, refSpan);
+            return resolved;
+        }
+        finally
+        {
+            _aliasResolutionStack.Remove(decl.Fqn);
+        }
+    }
+
+    private void EmitAliasDeprecationWarning(string fqn, string usedName, SourceSpan span)
+    {
+        if (!_types.DeprecatedTypes.TryGetValue(fqn, out var msg)) return;
+        var warning = msg != null
+            ? $"type `{usedName}` is deprecated: {msg}"
+            : $"type `{usedName}` is deprecated";
+        ReportWarning(warning, span, "W2001");
+    }
+
     /// <summary>
     /// Resolve a parser TypeNode to an inference Type.
     /// </summary>
@@ -61,12 +118,18 @@ public partial class HmTypeChecker
             return nominal;
         }
 
+        // Transparent type alias (`type Name = <type-expr>`)
+        var aliased = TryResolveTypeAlias(named.Name, named.Span);
+        if (aliased != null) return aliased;
+
         // Check scope for type parameters (bare T from generic context)
         var scheme = _ctx.Scopes.Lookup(named.Name);
         if (scheme != null)
             return _ctx.Engine.Specialize(scheme);
 
-        var candidates = _types.NominalTypes.Keys.Select(k => k.Contains('.') ? k[(k.LastIndexOf('.') + 1)..] : k);
+        var candidates = _types.NominalTypes.Keys
+            .Concat(_types.TypeAliasDecls.Keys)
+            .Select(k => k.Contains('.') ? k[(k.LastIndexOf('.') + 1)..] : k);
         var suggestion = FLang.Core.StringDistance.FindClosestMatch(named.Name, candidates);
         var hint = suggestion != null ? $"did you mean `{suggestion}`?" : null;
         ReportError($"Unknown type `{named.Name}`", named.Span, "E2003", hint);

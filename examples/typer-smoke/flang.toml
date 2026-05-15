@@ -1,0 +1,11 @@
+[project]
+name = "typer_smoke"
+version = "0.1.0"
+
+[imports]
+global = ["std.prelude"]
+
+[dependencies]
+flang_core = { path = "../../lib/flang_core" }
+flang_parser = { path = "../../lib/flang_parser" }
+flang_typer = { path = "../../lib/flang_typer" }

@@ -100,6 +100,16 @@ fn greet(name: String, times: i32 = 1) {}   // default parameter
 
 **Lambda:** `fn(x: i32, y: i32) i32 { x + y }` — no name after `fn`. Captures enclosing names by value (RFC-014); each capture is read-only inside the body. Capturing lambdas synthesise an anonymous callable type and cannot decay into a bare `fn(...) Ret` slot — pass them through a generic parameter (`fn apply(f: $F, ...)`) instead. Parameter types inferred when context available.
 
+## Type Aliases
+
+```
+type VarId = u32                 // transparent — VarId and u32 are interchangeable
+type Buf = [u8; 16]
+pub type Pair = (i32, i32)       // pub follows module visibility rules
+```
+
+`type Name = <type-expr>` introduces a transparent alias when the RHS is not a `struct(...) { ... }` / `enum(...) { ... }` builder. No nominal identity, no conversion at use sites. Cyclic aliases (`type A = B; type B = A`) error with E2036.
+
 ## Structs
 
 ```

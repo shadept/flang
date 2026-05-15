@@ -80,6 +80,39 @@ public partial class HmTypeChecker
             if (GetDeprecatedMessage(enumDecl.Directives, out var msg))
                 _types.DeprecatedTypes[fqn] = msg;
         }
+
+        // Transparent type aliases. Registered alongside nominal types so a
+        // collision with a struct/enum of the same FQN reports E2005. The
+        // RHS is *not* resolved here — resolution is lazy at the first
+        // use site (see TryResolveTypeAlias) so order within a module and
+        // cross-module references both work without a topological pass.
+        foreach (var aliasDecl in module.TypeAliases)
+        {
+            ValidateDirectives(aliasDecl.Directives);
+            if (HasSimdDirective(aliasDecl.Directives))
+                ReportError("`#simd` can only be applied to struct types", aliasDecl.Span, "E1002");
+            if (HasForeignDirective(aliasDecl.Directives))
+                ReportError("`#foreign` cannot be applied to a type alias", aliasDecl.Span, "E1002");
+
+            var fqn = $"{modulePath}.{aliasDecl.Name}";
+
+            if (_types.NominalTypes.ContainsKey(fqn) || _types.TypeAliasDecls.ContainsKey(fqn))
+            {
+                var diag = Diagnostic.Error($"Duplicate type declaration `{aliasDecl.Name}`", aliasDecl.Span, code: "E2005");
+                if (_types.NominalSpans.TryGetValue(fqn, out var nominalSpan))
+                    diag.Notes.Add(Diagnostic.Info($"`{aliasDecl.Name}` first declared here", nominalSpan));
+                else if (_types.TypeAliasDecls.TryGetValue(fqn, out var existingAlias))
+                    diag.Notes.Add(Diagnostic.Info($"`{aliasDecl.Name}` first declared here", existingAlias.NameSpan));
+                _diagnostics.Add(diag);
+                continue;
+            }
+
+            _types.TypeAliasDecls[fqn] = new TypeAliasDecl(
+                fqn, modulePath, aliasDecl.IsPublic, aliasDecl.AliasedType, aliasDecl.NameSpan);
+
+            if (GetDeprecatedMessage(aliasDecl.Directives, out var msg))
+                _types.DeprecatedTypes[fqn] = msg;
+        }
     }
 
     // =========================================================================

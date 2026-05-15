@@ -1745,6 +1745,28 @@ enum Good {
 
 ---
 
+### E2036: Cyclic Type Alias
+
+**Category**: Type Aliases
+**Severity**: Error
+
+#### Description
+
+A transparent type alias (`type Name = ...`) transitively references itself, so its body cannot be resolved.
+
+#### Example
+
+```flang
+type A = B
+type B = A   // ERROR: cyclic type alias `A`
+```
+
+#### Solution
+
+Break the cycle. If you need self-referential structure, use a `struct` or `enum` (which introduce nominal identity and can host `&Self` references safely), not a transparent alias.
+
+---
+
 ### E2037: Unknown Enum Variant
 
 **Category**: Pattern Matching
@@ -2891,6 +2913,7 @@ Report the issue with sample code that reproduces the error.
 | **E2032** | Pattern Matching  | Match pattern arity mismatch                 |
 | **E2034** | Enums             | Duplicate enum variant name                  |
 | **E2035** | Enums             | Recursive type without indirection           |
+| **E2036** | Type Aliases      | Cyclic type alias                            |
 | **E2037** | Pattern Matching  | Unknown enum variant in pattern              |
 | **E2038** | Variables         | Cannot assign to const variable              |
 | **E2039** | Variables         | Const declaration missing initializer        |
