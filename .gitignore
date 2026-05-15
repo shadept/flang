@@ -7,6 +7,9 @@ bin/
 obj/
 packages.lock.json
 
+# Roslyn/MSBuild language-service cache (emitted next to each .csproj by .NET 10 SDK)
+*.csproj.lscache
+
 # FLang harness build artifacts (BuildCache lives in build/cache/)
 tests/FLang.Tests/build/
 

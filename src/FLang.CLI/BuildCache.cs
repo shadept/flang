@@ -140,7 +140,7 @@ public sealed class BuildCache
 
         try
         {
-            File.Move(tmpObj, objPath, overwrite: true);
+            PublishAtomic(tmpObj, objPath);
             var hash = "sha256:" + HashFile(sourcePath);
             UpsertEntry(key, sourcePath, srcMtime, srcSize, hash);
             return objPath;
@@ -274,6 +274,40 @@ public sealed class BuildCache
         catch
         {
             SafeDelete(tmp);
+        }
+    }
+
+    /// <summary>
+    /// Move <paramref name="tmp"/> over <paramref name="dst"/> atomically.
+    /// On Windows the destination can be held open for read by a concurrent
+    /// <c>cl.exe</c> link, which fails <c>MoveFileEx</c> with access-denied
+    /// even though the existing file is already a valid, fully-published copy
+    /// (every writer publishes via temp+rename, so a present destination is
+    /// always complete). In that case we adopt the existing file: deterministic
+    /// compilation of the same source under the same flags produces an
+    /// equivalent <c>.obj</c>, and our caller links against whichever copy is
+    /// there.
+    /// </summary>
+    private static void PublishAtomic(string tmp, string dst)
+    {
+        const int maxAttempts = 5;
+        for (int attempt = 0; ; attempt++)
+        {
+            try
+            {
+                File.Move(tmp, dst, overwrite: true);
+                return;
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                if (File.Exists(dst) && new FileInfo(dst).Length > 0)
+                {
+                    SafeDelete(tmp);
+                    return;
+                }
+                if (attempt >= maxAttempts - 1) throw;
+                Thread.Sleep(10 * (1 << attempt));
+            }
         }
     }
 
