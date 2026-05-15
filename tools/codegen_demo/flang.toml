@@ -1,0 +1,8 @@
+[project]
+name = "codegen_demo"
+version = "0.1.0"
+source = "src/**/*.f"
+output = "build"
+
+[dependencies]
+flang_codegen = { path = "../../lib/flang_codegen" }

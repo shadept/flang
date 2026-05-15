@@ -436,6 +436,79 @@ The phi-from-block-params transform for LLVM: at each `br target(args)`,
 for each `(arg_i, param_i)` pair, add an incoming edge `[arg_i,
 current_block]` to a phi placed at the top of `target`.
 
+## C backend (lib/flang_codegen)
+
+The C backend lives in `lib/flang_codegen/src/`:
+
+- `backend.f` — backend-agnostic types: `BuildOptions`, `BuildResult`,
+  `BuildError`, `CompilerInfo`. The compilation model (extra `.c` files,
+  libraries, include paths, link flags) is shared across backends.
+- `c_backend.f` — `translate(&Module, &StringBuilder)` walks FIR and
+  emits a C99 translation unit; `compile(&Module, &BuildOptions)` runs
+  discovery, writes the `.c`, invokes the C compiler, and returns a
+  `BuildResult` with the executable path.
+
+Lowering choices:
+
+- Block parameters hoist to function-scope locals. `br target(args)`
+  emits a brace-scoped two-phase write — temps first, then assignments
+  — to handle parallel-move corner cases (loop rotations etc.).
+- `load.<ty>` / `store.<ty>` round-trip through `memcpy` to dodge
+  strict-aliasing UB. The optimiser folds it back to a direct load on
+  naturally-aligned access at `-O1`.
+- `stack_slot size, align` becomes `_Alignas(align) unsigned char __slotN[size]`
+  followed by a `void*` alias for the SSA result.
+- `bitcast` round-trips through `memcpy` for the same aliasing reason.
+
+Runtime preamble + main wrapping:
+
+The C backend emits a small runtime block at the top of every
+translation unit:
+
+```c
+static int __flang_argc = 0;
+static char** __flang_argv = 0;
+int32_t __flang_get_argc(void);
+unsigned char* __flang_get_arg(int32_t index);
+unsigned char* __flang_getenv(const unsigned char* name);
+```
+
+These are the foreign symbols `stdlib/std/env.f` declares, so user code
+that calls `std.env.args_count()` / `arg(i)` / `env(key)` resolves
+directly to the C-runtime helpers.
+
+The FIR function named `main` is treated as the program entry point.
+Its C signature is rewritten to `int main(int __flang_argc_, char**
+__flang_argv_)` and the body is prefixed with two assignments that
+copy argc/argv into the runtime globals before any user code runs.
+Foreign decls for the three `__flang_*` accessors are filtered out at
+emission time so they don't conflict with the preamble definitions.
+
+Compiler discovery (`discover_compiler`):
+
+- **Windows** — first try MSVC: locate `vswhere.exe` under
+  `%ProgramFiles(x86)%\Microsoft Visual Studio\Installer`, spawn it with
+  `-latest -requires VC.Tools.x86.x64 -property installationPath`, then
+  walk `VC\Tools\MSVC\<toolset>\bin\Hostx64\x64\cl.exe`. Windows SDK
+  include/lib roots come from `C:\Program Files (x86)\Windows Kits\10`.
+  The discovered `INCLUDE`, `LIB`, and `PATH` env vars are attached to
+  the spawned `cl.exe` so it works outside a developer prompt. Falls
+  back to `cl.exe` / `clang` / `gcc` on `PATH`.
+- **macOS** — `$CC` → `xcrun --find clang` → `clang` / `cc` / `gcc`.
+- **Linux** — `$CC` → `clang` → `cc` → `gcc`.
+
+The C# implementation in `src/FLang.CLI/CompilerDiscovery.cs` follows the
+same algorithm; the self-hosted port is the new source of truth as we
+migrate.
+
+## Optimization pipeline
+
+Planned passes that run on FIR before backend translation — principles,
+tier-1 cleanup, the shim inliner that catches FLang's mutator-wrapper
+pattern, mem2reg / SROA on non-escaping `stack_slot`s, dead-function
+elimination, and the verifier — are specified in
+[RFC-015](tickets/015-fir-inliner-and-dce.md).
+
 ## Open questions
 
 - Function attributes (`noinline`, `cold`, `noreturn`) — defer until we

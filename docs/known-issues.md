@@ -42,19 +42,6 @@ With the original name `Directive`, `Directive.Inline` errored as `No variant In
 
 ---
 
-### Niche `Option(&Enum)` Match-Arm Auto-Deref Stripped the Option
-
-**Status:** Fixed in `src/FLang.Semantics/HmAstLowering.cs`
-**Affected:** `match` on `Option(&T)` where `T` is a tagged enum
-
-`LowerMatch` had a pre-check that auto-dereferenced an `IrPointer { Pointee: IrEnum }` scrutinee so `e.* match { … }` and `e match { … }` could share the same pattern path. That check fired for niche-optimised `Option(&T)` too (also an `IrPointer { Pointee: IrEnum }`), stripping the nullable pointer down to its pointee. The match then went into the regular tagged-enum path looking for variants `Some`/`None` on the *underlying* enum — which doesn't have them — so the `Some(p)` payload binding never made it into `_locals` and any reference to `p` in the arm body emitted `E3002 Unresolved identifier`.
-
-**Fix:** the auto-deref skips nullable pointers — only `IrPointer { Pointee: IrEnum, IsNullable: false }` is auto-dereffed. Niche `Option(&T)` keeps its IrPointer typing all the way into `LowerMatchNonEnum`, which already had a `Some(x)` binding path that strips the nullable bit and allocates a slot for `x`.
-
-**Test:** `tests/FLang.Tests/Harness/enums/enum_match_niche_option_ref.f`
-
----
-
 ### Dict Entry Stride Ignores Alignment Padding
 
 **Status:** Open — `Set(T)` works around by storing `u8` instead of `()`
@@ -83,71 +70,6 @@ return (raw + align - 1) / align * align
 ```
 
 …or, simpler, just call `size_of(Entry(K, V))` if the type system supports it for the parameterised Entry. The current hand-rolled formula loses the trailing padding the C compiler implicitly emits.
-
----
-
-### `std.io.file` Was Cross-Platform-Broken in Two Ways
-
-**Status:** Fixed in `stdlib/std/io/file.f`
-
-1. **`open(path, O_WRONLY|O_CREAT|O_TRUNC)` deleted files on Windows.** The
-   Linux constant `O_CREAT = 64` is `_O_TEMPORARY` on Windows — files
-   opened with it disappear on `close`. Flags now go through
-   `open_flags(mode)` which switches on `platform.os`. Windows reads and
-   writes also force `_O_BINARY`, so CRLF translation never corrupts
-   byte-exact round-trips.
-2. **`read_all` overwrote length on each iteration** (`sb.len = n` instead
-   of `sb.len += n`), so any file larger than one read window was
-   truncated. The same function used `defer sb.deinit()` with a final
-   `return Ok(sb.to_string())`, hitting the defer bug above and returning
-   zero-length OwnedStrings even for small files. Both fixed; the loop
-   accumulates and the function deinits manually on error paths.
-
-`open(path, flags)` now takes a third `mode` argument (POSIX requires it
-when `O_CREAT` is set). Callers were already going through `open_file`.
-
----
-
-### `Option(T)` Layout-Smashed When `T` Was Cycle-Broken
-
-**Status:** Fixed in `src/FLang.IR/TypeLayoutService.cs`
-**Affected:** mutually-recursive struct/enum chains where a struct holds the enum by value AND the enum's payload struct contains the by-value containing type through a generic indirection (`List(SubExpr)` inside `NamedInfo` inside `SubExpr.Named(NamedInfo)`).
-
-The deferred-relower for cycle-broken layouts only re-queued types that
-saw a fully-empty stub (`Size: 0, Fields.Length: 0`). It did not re-queue
-types that saw a partially-laid-out type — a struct that had already
-returned from `LowerStruct` with `usedStub = true` and a provisional size
-computed against an inner stub. In the AST case, `NamedInfo` finished
-with size 32 (its `List(SubExpr)` field had read the List stub mid-cycle
-and stopped at the wrong size). `SubExpr` then sized its `Named` payload
-against that 32-byte `NamedInfo`, so `sizeof(SubExpr)` was 40 — but the
-C codegen later emitted `uint8_t payload[N]` from the same per-variant
-size data, so the C struct definition also got `payload[32]` instead of
-`payload[64]`. Every consumer that wrote a 64-byte `NamedInfo` into the
-32-byte payload (`*(NamedInfo*)(&t + 8) = info`) smashed 32 bytes past
-the end of the enclosing struct into the next stack local, corrupting
-later reads of `n.generic_args.len` / `.cap` / `.allocator`.
-
-Two changes fixed it:
-
-1. `_deferredCNames: HashSet<string>` and `IsTentative(IrType)` —
-   propagate "tentatively-laid-out" status through dependencies.
-   `LowerStruct`/`LowerEnum` flag `usedStub = true` not only when a
-   field type is a fully-empty stub but also when the field type's
-   `CName` is currently in the deferred queue.
-2. Re-lower pass writes new sizes into the cache without first removing
-   the existing entries. Nested `LowerNominal` calls during a re-lower
-   used to cache-miss and start a fresh stub cycle, sometimes pinging
-   the same type back onto the queue and looping. Keeping the stale
-   entry around means recursive lookups hit the cache (possibly with
-   a stale size, fixed up next iteration) instead of inserting a new
-   stub.
-
-The deferred queue is in DFS post-order — dependencies before their
-consumers — so a single forward pass converges. Iterating to fixpoint
-isn't needed.
-
-**Test:** `tests/FLang.Tests/Harness/enums/enum_mutual_recursion_by_value.f`
 
 ---
 
@@ -425,28 +347,73 @@ Currently deep-clones function body AST for each generic instantiation so each h
 
 ---
 
-### Implicit Reference Passing for Large Structs
-
-**Status:** Implemented
-**Affected:** HmAstLowering, HmCCodeGenerator, IrModule, TypeLayoutService
-
-Large structs/enums (size > 8 bytes) are now passed by implicit reference and returned via caller-provided hidden slot:
-- **Params:** `IrParam.IsByRef = true`, callee receives pointer; reads load through pointer, writes use copy-on-write (alloca + load + store)
-- **Returns:** `IrFunction.UsesReturnSlot = true`, hidden `__ret` pointer prepended to params; callee stores result through `__ret` and returns void
-- **Call sites:** Caller alloca + store for large value args; alloca return slot + load for large returns
-- **Function pointers:** `IrFunctionPtr` stores original types (for name mangling); C codegen applies ABI transformation via `GetAbiFunctionPtr()` when emitting C function pointer types
-- **Direct calls, indirect calls (vtable), for-loop iter/next, operator overloads** all handled uniformly via `EmitFLangCall` helper
-- **Foreign functions** excluded from transformation (C ABI preserved)
-
-**Test:** `tests/FLang.Tests/Harness/structs/struct_large_pass_return.f`
-
----
-
 ### Move to SSA Form
 
 **Status:** Post-self-hosting consideration
 
 FIR uses named local variables (not SSA). Would simplify optimizations. Keep current design until self-hosting.
+
+---
+
+### FIR `Global` Can't Encode Pointer Initializers — Blocks Self-Hosting
+
+**Status:** Open — required before the self-hosted compiler can compile its own stdlib
+**Affected:** `lib/flang_codegen/src/fir.f::Global`, every backend that consumes it
+
+FIR's `Global` carries `init_bytes: u8[]?` — a flat byte image of the static buffer's initial value. That works for primitive constants and value structs (`Point { x = 3, y = 4 }` → 8 bytes, read back through `gep` + `load.i32`). It does **not** work the moment a global aggregate contains a pointer to another symbol: addresses aren't known until link time, so the frontend has no byte image to serialise.
+
+This is the cost of FIR being type-erased on aggregates (`docs/fir.md`: "Aggregates… are byte buffers"). The C# pipeline doesn't have this gap because its IR globals are **typed** (`GlobalValue` carrying `StructConstantValue` / `ArrayConstantValue` / `FunctionReferenceValue`), and `HmCCodeGenerator.EmitGlobalValue` lowers them to C99 designated initializers — `static struct stdout_File stdout = { .path = { (uint8_t*)"<stdout>", 8 }, ... };`. Pointer fields fall out for free as `&g_other` / `(void*)"…"` etc.
+
+**Concrete stdlib code that hits this today** (not hypothetical — these are already on disk and the self-hosted backend cannot reproduce them):
+
+- `stdlib/std/io/file.f` — `pub const stdin / stdout / stderr` are `File` structs whose `path: String` field is a `(ptr, len)` pair pointing at a literal byte buffer.
+- `stdlib/std/allocator.f` — the global allocator is a struct holding vtable function-pointers.
+- Any `#interface` vtable wired up as a `pub const` (Reader / Writer impls baked in at compile time).
+
+**Two viable directions:**
+
+1. **Runtime init function (simpler, no FIR change).** Frontend lowers `pub const stdout = …` into:
+   - A zero-filled `Global { name="stdout", init_bytes=None }`.
+   - Statements appended to a generated `__flang_init_globals` FIR function that writes pointer fields via `store.ptr @stdout_path_buf, gep(@stdout, 0)`.
+   - The C backend's main wrapper calls `__flang_init_globals()` before user code.
+
+   Cost: a one-time pass at startup; trivial. Loses the "true const" guarantee (memory is mutable until init runs), but `const` semantics live in the frontend type system, not FIR.
+
+2. **Structured init payload on `Global` (matches C# pipeline).** Replace `init_bytes: u8[]?` with:
+
+   ```flang
+   pub type GlobalInit = enum {
+       Bytes(u8[])               // raw bytes at offset
+       PtrTo(String, i64)        // address of named global/function + offset
+       ZeroFill(u64)             // skip N bytes
+   }
+   pub type Global = struct {
+       ...
+       init: List(GlobalInit)?   // ordered, sums to `size`
+   }
+   ```
+
+   C backend emits these as designated-initialized struct literals — same shape the C# codegen produces today. LLVM/Cranelift backends emit relocations directly. Preserves true static init but pushes structural knowledge back into FIR (mild violation of the "FIR is type-erased on aggregates" principle, but only at the global-boundary).
+
+Approach 1 is the cheaper bridge; approach 2 is the structurally cleaner long-term answer. Either way the self-hosted stdlib needs one of them before `pub const stdout` can survive the trip through `flang_codegen.c_backend`.
+
+---
+
+### `flang_codegen.c_backend` Hard-Codes FLang's Runtime Preamble
+
+**Status:** Open — known design wart
+**Affected:** `lib/flang_codegen/src/c_backend.f::emit_preamble`
+
+The C backend emits an unconditional runtime block at the top of every translation unit: `__flang_argc` / `__flang_argv` globals plus the three `__flang_get_argc` / `__flang_get_arg` / `__flang_getenv` accessor functions that `stdlib/std/env.f` declares as foreigns. The FIR function named `main` is then rewritten to capture argv into those globals.
+
+This bakes one specific language's runtime contract into a library that's supposed to be reusable by any FLang-implemented language. The preamble (and what counts as "the entry point") will change as FLang evolves, and any other frontend targeting FIR is forced to inherit FLang's choices.
+
+**Proposal:** push the preamble out of the backend. Options:
+- Add a `preamble: String?` (or `extra_includes: List(String)`, `runtime_decls: String?`) field to `BuildOptions` so callers inject whatever C glue their language needs.
+- Or take a closure / strategy object that the backend invokes during emission with the module in hand, letting the frontend decide based on what the module actually uses.
+- Either way: the entry-point rewriting (`is_entry_point` check, argv capture prologue) should also move into a caller-provided hook, since "what is main and how does it start" is a language decision.
+
+Until this lands, anyone reusing `flang_codegen.c_backend` inherits FLang's runtime conventions whether they want to or not.
 
 ---
 
