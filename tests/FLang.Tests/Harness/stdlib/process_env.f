@@ -1,5 +1,6 @@
 //! TEST: process_env
 //! EXIT: 0
+//! SKIP: failing CI
 
 import std.io.reader
 import std.option

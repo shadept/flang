@@ -57,12 +57,6 @@ pub fn deinit(self: &Dict($K, $V)) {
     self.cap = 0
 }
 
-// Compute the byte size of a single Entry(K, V) from component sizes.
-fn entry_byte_size(self: Dict($K, $V)) usize {
-    // Entry layout: state (u8) + padding + hash (usize) + key (K) + value (V)
-    return 16 + size_of(K) + size_of(V)
-}
-
 // Hash a key using the public hash() function.
 // Types with custom hash semantics (e.g. String, OwnedString) provide their
 // own hash() overload, so Dict automatically uses content-aware hashing.
@@ -102,8 +96,7 @@ fn ensure_capacity(self: &Dict($K, $V)) {
     const new_cap: usize = if (old_cap == 0) { 8 } else { old_cap * 2 }
 
     // Allocate new entry array, zero-initialized (all states = empty)
-    const esize: usize = self.entry_byte_size()
-    const alloc_size: usize = new_cap * esize
+    const alloc_size: usize = new_cap * size_of(Entry(K, V))
     const raw: u8[] = self.allocator.or_global().alloc(alloc_size, 8)
         .expect("dict: allocation failed")
     memset(raw.ptr, 0, alloc_size)
@@ -350,7 +343,7 @@ pub fn clear(self: &Dict($K, $V)) {
                 entry.value.deinit()
             }
         }
-        const bytes: usize = self.cap * self.entry_byte_size()
+        const bytes: usize = self.cap * size_of(Entry(K, V))
         memset(self.entries as &u8, 0, bytes)
     }
     self.length = 0

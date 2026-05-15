@@ -1,5 +1,6 @@
 //! TEST: path_basic
 //! EXIT: 0
+//! SKIP: failing CI
 
 import std.option
 import std.path

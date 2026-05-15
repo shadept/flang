@@ -2,11 +2,6 @@
 // operation that matters; the value slot is a single byte sentinel and
 // is never inspected by callers.
 //
-// (Storing `()` instead would save one byte per entry, but the current
-// Dict layout doesn't pad entry size to alignment — see docs/known-issues.md
-// "Dict entry stride ignores alignment padding". A `u8` value keeps us
-// out of that trap.)
-//
 // For dense integer-indexed sets prefer `Bitset` — it stores one bit per
 // element and supports O(words) union/intersect.
 

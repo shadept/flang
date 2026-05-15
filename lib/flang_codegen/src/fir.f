@@ -449,9 +449,34 @@ pub fn fresh_value_id(self: &Function) u32 {
     return id
 }
 
-// Replace the block's terminator. Overwrites whatever was there.
+// Replace the block's terminator. Overwrites whatever was there —
+// callers building a block from scratch start with `Unreachable` and
+// call this once, so the discarded value owns no heap. Pair with
+// `replace_terminator` (below) when the previous terminator may own
+// `BlockTarget` args that need freeing.
 pub fn set_terminator(self: &Block, t: Terminator) {
     self.terminator = t
+}
+
+// Replace the block's instruction list, returning the prior list so
+// the caller can free its embedded storage. Used by IR transforms
+// (e.g. the shim inliner) that rebuild blocks instruction-by-
+// instruction; using direct field assignment is blocked by scoped
+// mutability outside this module.
+pub fn replace_instrs(self: &Block, instrs: List(Instr)) List(Instr) {
+    let old = self.instrs
+    self.instrs = instrs
+    return old
+}
+
+// Replace the block's terminator, returning the previous one. Mirrors
+// `replace_instrs`: lets external transforms swap terminators while
+// keeping ownership of the discarded value so they can deinit its
+// `BlockTarget` args.
+pub fn replace_terminator(self: &Block, t: Terminator) Terminator {
+    let old = self.terminator
+    self.terminator = t
+    return old
 }
 
 // Append a function parameter.

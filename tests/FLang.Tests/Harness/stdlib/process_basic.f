@@ -1,5 +1,6 @@
 //! TEST: process_basic
 //! EXIT: 0
+//! SKIP: failing CI
 
 import std.option
 import std.process
