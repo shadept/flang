@@ -16,21 +16,6 @@ When you discover a bug or limitation:
 
 ## Open Issues
 
-### RTTI Emits Template Typeinfo for Generic Struct Fields
-
-**Status:** Open — blocks consuming `flang_typer` from a project; lib itself compiles
-**Affected:** C codegen RTTI emission (`TypeLayoutService` / `HmCCodeGenerator`)
-
-When a generic struct is *referenced* (as a struct field, function parameter, etc.) but never actually instantiated by user code, the C# compiler's RTTI emission still walks it and produces `__flang__typeinfo_*` entries for the un-instantiated template. The generated C contains identifiers like `__flang__typeinfo_std_dict_Entry_$K_$V` and `__flang__typeinfo_std_dict_Dict_?25_u8` — `$K`/`$V` are unsubstituted generic parameter names and `?N` are unresolved inference TypeVar ids. Both are illegal in C identifiers, so `cl.exe` rejects the output.
-
-**Reproducer:** `examples/typer-smoke/src/main.f` importing `flang_typer.env` (which transitively reaches `Stack(Scope)` and `Dict(String, Binding)`). Just the `import` statement is enough; no use of the imported types is required.
-
-**Workaround:** none in user code. The `flang_typer` library itself compiles cleanly when standalone (the lib has no `main`, so it stops at link-time with `LNK1561` after the C side compiles fine).
-
-**Solution:** the RTTI walker should skip a type when any of its type arguments is a `TypeVar` or a generic parameter placeholder. Concrete instantiations get RTTI; templates don't.
-
----
-
 ### Unqualified Enum Variants Shadow Same-Named Types
 
 **Status:** Open — workaround via renaming the type

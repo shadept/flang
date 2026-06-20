@@ -117,3 +117,12 @@ pub fn record_target(self: &InferenceResults, id: NodeId, target: ResolvedTarget
 pub fn record_instantiated(self: &InferenceResults, ty: Ty) {
     self.instantiated_types.push(ty)
 }
+
+// Reset the transferred side tables to empty so a later `deinit()` can't
+// double-free; `node_types` is kept.
+pub fn reset_side_tables(self: &InferenceResults) {
+    self.resolved_ops = dict(self.allocator)
+    self.resolved_targets = dict(self.allocator)
+    self.instantiated_types = list(0, self.allocator)
+    self.specializations = list(0, self.allocator)
+}

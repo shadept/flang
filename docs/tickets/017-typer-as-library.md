@@ -1,7 +1,7 @@
 # RFC-017: `flang_typer` — type system as a library
 
 **Type:** Self-hosting / library extraction
-**Status:** Phase 1 landed — every module from the layout is implemented and the lib compiles cleanly. Consumer-side import is blocked by a C# RTTI codegen bug ([known-issues.md](../known-issues.md#rtti-emits-template-typeinfo-for-generic-struct-fields)); engine + coercion exercised via [examples/typer-smoke](../../examples/typer-smoke/) (30 checks pass).
+**Status:** Phase 1 landed — every module from the layout is implemented and the lib compiles cleanly. The RTTI codegen blocker is fixed, so the lib is consumable: `flang_typer` is linked into [bootstrap](../../bootstrap/) and its `checker` pipeline now type-checks as part of the bootstrap build. Engine + coercion also exercised via [examples/typer-smoke](../../examples/typer-smoke/) (30 checks pass).
 **Depends on:** `flang_parser`, `flang_core` (the lib, for `SourceSpan` / `Diagnostic`)
 **Follows:** `flang_parser` (lex/parse + AST), `flang_codegen` (FIR + C backend) as the third self-hosted compiler library.
 

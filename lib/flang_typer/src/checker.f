@@ -753,7 +753,7 @@ fn check_block(self: &Checker, blk: &BlockExpr) Ty {
 fn check_stmt(self: &Checker, stmt: &Stmt) {
     stmt.* match {
         Let(ls) => check_let(self, &ls),
-        Expression(es) => { let _r =check_expr(self, &es.expr) },
+        Expression(es) => { let _r = check_expr(self, &es.expr) },
         Return(rs) => check_return(self, &rs),
         _ => {},
     }
@@ -803,8 +803,8 @@ fn check_return(self: &Checker, rs: &ReturnStmt) {
 }
 
 fn check_binary(self: &Checker, bin: &BinaryExpr) Ty {
-    let _r =check_expr(self, bin.lhs)
-    let _r =check_expr(self, bin.rhs)
+    let _r = check_expr(self, bin.lhs)
+    let _r = check_expr(self, bin.rhs)
     // First slice: defer to a fresh var; real op-overload resolution
     // and primitive instruction emission lands in `checker_expr.f`
     // alongside the operator-name → function-registry lookup.
@@ -816,7 +816,7 @@ fn check_call(self: &Checker, call: &CallExpr) Ty {
         let a = &call.args[i]
         check_call_arg(self, a)
     }
-    let _r =check_expr(self, call.callee)
+    let _r = check_expr(self, call.callee)
     return self.engine.fresh_var()
 }
 
@@ -828,7 +828,7 @@ fn check_call_arg(self: &Checker, arg: &CallArgument) {
 }
 
 fn check_if(self: &Checker, if_expr: &IfExpr) Ty {
-    let _r =check_expr(self, if_expr.condition)
+    let _r = check_expr(self, if_expr.condition)
     let then_ty = check_block(self, &if_expr.then_branch)
     let else_ty = if_expr.else_branch match {
         NoElse => Ty.Void,
@@ -874,10 +874,7 @@ pub fn check_all(self: &Checker, modules: &List(Module), paths: &List(String)) T
     let out_nominals = self.nominals
     let out_functions = self.functions
 
-    self.results.resolved_ops = dict(self.allocator)
-    self.results.resolved_targets = dict(self.allocator)
-    self.results.instantiated_types = list(0, self.allocator)
-    self.results.specializations = list(0, self.allocator)
+    self.results.reset_side_tables()
     self.nominals = nominal_registry(self.allocator)
     self.functions = function_registry(self.allocator)
 

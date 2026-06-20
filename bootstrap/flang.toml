@@ -7,3 +7,4 @@ output = "build"
 [dependencies]
 flang_parser = { path = "../lib/flang_parser" }
 flang_core = { path = "../lib/flang_core" }
+flang_typer = { path = "../lib/flang_typer" }

@@ -704,6 +704,21 @@ public class HmAstLowering
     // Type table (RTTI) — builds GlobalValue entries for each Type(T)
     // =========================================================================
 
+    /// <summary>
+    /// True when a type is fully concrete and safe to emit RTTI for; generic
+    /// templates with unresolved parameters must never reach C codegen as a
+    /// type name, since their identifiers are illegal in C.
+    /// </summary>
+    private bool IsRttiConcrete(Type type) => _types.Resolve(type) switch
+    {
+        Core.Types.TypeVar => false,
+        NominalType nt => !nt.Name.StartsWith('$') && nt.TypeArguments.All(IsRttiConcrete),
+        Core.Types.ReferenceType rt => IsRttiConcrete(rt.InnerType),
+        Core.Types.ArrayType at => IsRttiConcrete(at.ElementType),
+        FunctionType ft => ft.ParameterTypes.All(IsRttiConcrete) && IsRttiConcrete(ft.ReturnType),
+        _ => true,
+    };
+
     private void EnsureTypeTableExists()
     {
         if (_typeTableGlobals != null) return;
@@ -838,6 +853,7 @@ public class HmAstLowering
         foreach (var (key, innerType) in typeKeys.OrderBy(kv => kv.Key))
         {
             if (_typeTableGlobals.ContainsKey(key)) continue;
+            if (!IsRttiConcrete(innerType)) continue;
 
             var innerIr = _layout.Lower(innerType);
             var typeName = innerType switch

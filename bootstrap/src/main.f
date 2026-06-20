@@ -20,6 +20,7 @@ import std.string
 import std.string_builder
 import flang_parser.lexer
 import flang_core.diagnostic
+import flang_typer.checker
 
 // Parsed CLI state. `subcommand` is the first positional argument; the
 // remainder of argv after the subcommand is passed through to whatever
@@ -112,7 +113,7 @@ fn parse_cli(argv: String[]) Cli {
 }
 
 fn print_help() {
-    println("bootstrap — FLang compiler")
+    println("bootstrap - FLang compiler")
     println("")
     println("usage: bootstrap [options] <command> [args...]")
     println("")
