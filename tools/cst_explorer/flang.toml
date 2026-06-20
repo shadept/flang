@@ -1,6 +1,7 @@
 [project]
 name = "cst_explorer"
 version = "0.1.0"
+kind = "exe"
 source = "src/**/*.f"
 output = "build"
 

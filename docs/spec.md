@@ -687,7 +687,7 @@ Complex constructs (`for`, `if` expressions, `defer`, `match`) are desugared to 
 pub fn main() i32
 ```
 
-Returns exit code. `0` indicates success.
+Returns exit code. `0` indicates success. An entry point is required for an executable project (`kind = "exe"`) but not for a library (`kind = "lib"`), which is consumed by source and never linked. Every `flang.toml` must declare `[project].kind` as `"exe"` or `"lib"`.
 
 ### 9.2 Testing
 
@@ -698,7 +698,7 @@ test "name" {
 }
 ```
 
-Requires `import std.test`. Test blocks are module-scoped, not exported. Run with `--test` flag. `panic(msg)` terminates with exit code 1.
+Requires `import std.test`. Test blocks are module-scoped, not exported. Run with `flang test`, optionally narrowed by a positional path filter and/or `--name <substr>` to select individual blocks by name. `panic(msg)` terminates with exit code 1; under `flang test` a panic is caught per-test (the runner reports it as a failure and continues).
 
 ### 9.3 Source Files
 

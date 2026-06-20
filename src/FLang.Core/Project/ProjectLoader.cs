@@ -32,10 +32,11 @@ public static partial class ProjectLoader
 
         var name = GetRequiredString(projectTable, "name", tomlPath);
         var version = GetRequiredString(projectTable, "version", tomlPath);
+        var kind = ParseKind(GetRequiredString(projectTable, "kind", tomlPath), tomlPath);
         var source = GetOptionalString(projectTable, "source") ?? "src/**/*.f";
         var output = GetOptionalString(projectTable, "output") ?? "build";
 
-        var projectInfo = new ProjectInfo(name, version, ExpandEnvVars(source), ExpandEnvVars(output));
+        var projectInfo = new ProjectInfo(name, version, kind, ExpandEnvVars(source), ExpandEnvVars(output));
 
         BuildSection? build = null;
         if (model.TryGetValue("build", out var buildObj) && buildObj is TomlTable buildTable)
@@ -96,7 +97,8 @@ public static partial class ProjectLoader
 
     /// <summary>
     /// Extracts the static directory prefix from a source glob pattern.
-    /// E.g., "src/**/*.f" → "src", "lib/core/**/*.f" → "lib/core"
+    /// E.g., "src/**/*.f" → "src", "lib/core/**/*.f" → "lib/core".
+    /// A glob with no static prefix (e.g. "**/*.f" or "*.f") roots at the project itself.
     /// </summary>
     public static string? ResolveSourceRoot(string sourceGlob, string projectRoot)
     {
@@ -107,7 +109,8 @@ public static partial class ProjectLoader
             if (part.Contains('*') || part.Contains('?')) break;
             staticParts.Add(part);
         }
-        if (staticParts.Count == 0) return null;
+        if (staticParts.Count == 0)
+            return Directory.Exists(projectRoot) ? projectRoot : null;
         var root = Path.Combine(projectRoot, Path.Combine(staticParts.ToArray()));
         return Directory.Exists(root) ? root : null;
     }
@@ -163,6 +166,14 @@ public static partial class ProjectLoader
             throw new InvalidOperationException($"{context}: missing required field 'project.{key}'");
         return s;
     }
+
+    private static ProjectKind ParseKind(string value, string context) => value switch
+    {
+        "exe" => ProjectKind.Exe,
+        "lib" => ProjectKind.Lib,
+        _ => throw new InvalidOperationException(
+            $"{context}: invalid project.kind '{value}' (expected \"exe\" or \"lib\")")
+    };
 
     private static string? GetOptionalString(TomlTable table, string key)
     {

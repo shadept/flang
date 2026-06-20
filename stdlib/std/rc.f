@@ -33,6 +33,7 @@ pub fn rc(value: $T, allocator: &Allocator? = null) Rc(T) {
 pub fn rc_alloc(allocator: &Allocator? = null) Rc($T) {
     const alloc = allocator.or_global()
     const inner = alloc.new(RcInner(T))
+    memset(inner as &u8, 0, size_of(RcInner(T)))
     inner.ref_count = 1
     return .{ __inner = inner, __allocator = alloc }
 }
@@ -207,6 +208,7 @@ pub fn arc(value: $T, allocator: &Allocator? = null) Arc(T) {
 pub fn arc_alloc(allocator: &Allocator? = null) Arc($T) {
     const alloc = allocator.or_global()
     const inner = alloc.new(RcInner(T))
+    memset(inner as &u8, 0, size_of(RcInner(T)))
     inner.ref_count = 1
     return .{ __inner = inner, __allocator = alloc }
 }

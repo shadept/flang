@@ -1,6 +1,7 @@
 [project]
 name = "fq"
 version = "0.1.0"
+kind = "exe"
 
 [imports]
 global = ["std.prelude"]

@@ -18,6 +18,7 @@ tests/FLang.Tests/build/
 bootstrap/build/
 tools/*/build/
 lib/*/build/
+stdlib/std/build/
 
 # Common node modules locations
 /node_modules

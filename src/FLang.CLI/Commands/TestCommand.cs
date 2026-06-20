@@ -12,17 +12,19 @@ public static class TestCommand
     {
         var releaseBuild = false;
         string? filter = null;
+        string? nameFilter = null;
         string? stdlibPath = null;
 
         for (var i = 0; i < args.Length; i++)
         {
             if (args[i] == "--release") releaseBuild = true;
             else if (args[i] == "--stdlib-path" && i + 1 < args.Length) stdlibPath = args[++i];
+            else if ((args[i] == "--name" || args[i] == "-k") && i + 1 < args.Length) nameFilter = args[++i];
             else if (!args[i].StartsWith('-')) filter = args[i];
             else
             {
                 Console.Error.WriteLine($"error: unknown option '{args[i]}'");
-                Console.Error.WriteLine("Usage: flang test [filter] [--release]");
+                Console.Error.WriteLine("Usage: flang test [path-filter] [--name <substr>] [--release]");
                 return 1;
             }
         }
@@ -174,6 +176,8 @@ public static class TestCommand
                     UseShellExecute = false,
                     WorkingDirectory = projectRoot
                 };
+                if (nameFilter != null)
+                    psi.EnvironmentVariables["FLANG_TEST_FILTER"] = nameFilter;
 
                 using var process = Process.Start(psi);
                 if (process != null)

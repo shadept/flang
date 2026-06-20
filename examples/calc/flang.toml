@@ -1,6 +1,7 @@
 [project]
 name = "calc"
 version = "0.1.0"
+kind = "exe"
 
 [imports]
 global = ["std.prelude"]

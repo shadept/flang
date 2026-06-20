@@ -510,9 +510,6 @@ public static class HmCCodeGenerator
             sb.AppendLine("    __flang_argv = __flang_argv_;");
         }
 
-        // In test mode, intercept the panic function: replace exit(1) with longjmp
-        var isPanicFn = isTestMode && fn.Name == "panic";
-
         var lineState = new LineState { Line = -1, FileId = -1 };
         foreach (var block in fn.BasicBlocks)
         {
@@ -521,8 +518,8 @@ public static class HmCCodeGenerator
             {
                 EmitLineDirective(sb, inst.Span, module.SourceFiles, ref lineState);
 
-                // In test mode, replace exit() in panic with longjmp
-                if (isPanicFn && inst is CallInstruction { IsForeignCall: true, FunctionName: "exit" })
+                // panic is often inlined, so intercept the exit call, not the function.
+                if (isTestMode && inst is CallInstruction { IsForeignCall: true, FunctionName: "exit" })
                 {
                     sb.AppendLine("    if (__flang_test_active) { longjmp(__flang_test_jmpbuf, 1); }");
                     EmitInstruction(sb, inst, fn.IsEntryPoint);
@@ -1156,8 +1153,11 @@ public static class HmCCodeGenerator
         sb.AppendLine("int main(int __flang_argc_, char** __flang_argv_) {");
         sb.AppendLine("    __flang_argc = __flang_argc_;");
         sb.AppendLine("    __flang_argv = __flang_argv_;");
-        sb.AppendLine($"    int __passed = 0, __failed = 0;");
-        sb.AppendLine($"    printf(\"Running {total} test(s)...\\n\");");
+        // Optional case-sensitive substring filter on the test name, via env var
+        // so it never perturbs the argv that std.env tests observe. An empty
+        // filter matches every name (strstr returns the haystack), i.e. run all.
+        sb.AppendLine("    const char* __filter = getenv(\"FLANG_TEST_FILTER\");");
+        sb.AppendLine($"    int __passed = 0, __failed = 0, __ran = 0;");
         sb.AppendLine();
 
         for (int i = 0; i < total; i++)
@@ -1166,38 +1166,43 @@ public static class HmCCodeGenerator
             var escapedName = EscapeString(entry.DisplayName);
 
             sb.AppendLine($"    /* test {i + 1}/{total}: {escapedName} */");
-            sb.AppendLine($"    __flang_current_test = \"{escapedName}\";");
-            sb.AppendLine($"    printf(\"test {i + 1}/{total}: {escapedName}... \");");
-            sb.AppendLine($"    __flang_test_active = 1;");
-            sb.AppendLine($"    if (setjmp(__flang_test_jmpbuf) == 0) {{");
-            sb.AppendLine($"        {entry.CFunctionName}();");
-            sb.AppendLine($"        __flang_test_active = 0;");
-            sb.AppendLine($"        printf(\"ok\\n\");");
-            sb.AppendLine($"        __passed++;");
-            sb.AppendLine($"    }} else {{");
-            sb.AppendLine($"        __flang_test_active = 0;");
-            sb.AppendLine($"        printf(\"FAILED\\n\");");
-            sb.AppendLine($"        __failed++;");
-            sb.AppendLine($"    }}");
+            sb.AppendLine($"    if (!__filter || strstr(\"{escapedName}\", __filter)) {{");
+            sb.AppendLine($"        __ran++;");
+            sb.AppendLine($"        __flang_current_test = \"{escapedName}\";");
+            sb.AppendLine($"        printf(\"test {i + 1}/{total}: {escapedName}... \");");
+            sb.AppendLine($"        __flang_test_active = 1;");
+            sb.AppendLine($"        if (setjmp(__flang_test_jmpbuf) == 0) {{");
+            sb.AppendLine($"            {entry.CFunctionName}();");
+            sb.AppendLine($"            __flang_test_active = 0;");
+            sb.AppendLine($"            printf(\"ok\\n\");");
+            sb.AppendLine($"            __passed++;");
+            sb.AppendLine($"        }} else {{");
+            sb.AppendLine($"            __flang_test_active = 0;");
+            sb.AppendLine($"            printf(\"FAILED\\n\");");
+            sb.AppendLine($"            __failed++;");
+            sb.AppendLine($"        }}");
 
             // After each test: check for leaks, then reset the test allocator
             if (testAllocState != null && checkLeaksFn != null && deinitFn != null)
             {
-                sb.AppendLine($"    if ({checkLeaksFn}(&{testAllocState.Name}) > 0) {{");
-                sb.AppendLine($"        printf(\"  ^ in test: {escapedName}\\n\");");
-                sb.AppendLine($"    }}");
-                sb.AppendLine($"    {deinitFn}(&{testAllocState.Name});");
+                sb.AppendLine($"        if ({checkLeaksFn}(&{testAllocState.Name}) > 0) {{");
+                sb.AppendLine($"            printf(\"  ^ in test: {escapedName}\\n\");");
+                sb.AppendLine($"        }}");
+                sb.AppendLine($"        {deinitFn}(&{testAllocState.Name});");
             }
 
-            sb.AppendLine($"    fflush(stdout);");
+            sb.AppendLine($"        fflush(stdout);");
+            sb.AppendLine($"    }}");
             sb.AppendLine();
         }
 
         sb.AppendLine("    printf(\"\\n\");");
-        sb.AppendLine("    if (__failed == 0) {");
-        sb.AppendLine($"        printf(\"All {total} test(s) passed.\\n\");");
+        sb.AppendLine("    if (__ran == 0) {");
+        sb.AppendLine("        printf(\"no tests matched filter '%s'.\\n\", __filter ? __filter : \"\");");
+        sb.AppendLine("    } else if (__failed == 0) {");
+        sb.AppendLine("        printf(\"All %d test(s) passed.\\n\", __ran);");
         sb.AppendLine("    } else {");
-        sb.AppendLine("        printf(\"%d passed, %d failed out of %d test(s).\\n\", __passed, __failed, __passed + __failed);");
+        sb.AppendLine("        printf(\"%d passed, %d failed out of %d test(s).\\n\", __passed, __failed, __ran);");
         sb.AppendLine("    }");
         sb.AppendLine("    fflush(stdout);");
         sb.AppendLine("    return __failed > 0 ? 1 : 0;");

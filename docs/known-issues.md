@@ -16,12 +16,21 @@ When you discover a bug or limitation:
 
 ## Open Issues
 
-### `path.join` emits `/` instead of `\` on Windows
+### Inliner returned the last `return` of a single-block callee, not the first (fixed)
 
-**Status:** Open
-**Affected:** `std/path.f` separator handling; a colocated `test "join simple"` block fails on Windows
+**Status:** Fixed
+**Affected:** `InliningPass`; surfaced as `std/path.f`'s `join`/`normalize` emitting `/` instead of `\` on Windows (`test "join simple"` etc.)
 
-`path("src").join("foo.f")` yields `src/foo.f` on Windows, but the header contract (and the test) say new joins insert `\`. `sep()` — `#if(platform.os == "windows")` → `'\\'` — returns `\` (92) when called directly from a project module, yet `join` (in `std/path.f`) writes `/` (47). The compile-time `#if(platform.os)` appears to resolve inconsistently depending on the call site / whether the enclosing function is in a stdlib module. Pre-existing — reproduces in a normal `flang build`, not specific to compiling std as a project. Surfaced for the first time by running `std`'s colocated `test {}` blocks (the harness's `path_basic.f` integration test doesn't assert the Windows separator).
+`sep()` (`#if(platform.os == "windows") { return '\\' } else { return '/' }` followed by a trailing `return '/'`) returns `\` (92) when called directly, yet `join` — which calls `sep()` — wrote `/` (47). Not a compile-time `#if` inconsistency: lowering emits the `#if`'s live branch (`return 92`) *and* the unreachable trailing `return 47` into one basic block (a block with two terminators — dead code after the first). `InliningPass` flattened the single-block callee and used `continue` on each `ReturnInstruction`, so the **last** return seen (the dead `47`) overwrote the live one. Fixed by `break`-ing at the first return — a terminator ends the block; everything after it is dead. The standalone function was always correct because C executes the first `return` and never reaches the tail.
+
+**Latent follow-on:** lowering still emits instructions after a terminating `return` within the same block (malformed IR — a block should have one terminator). Harmless to the C backend (the first `return` wins) and now defended against in the inliner, but other IR passes should not assume a single trailing terminator per block.
+
+### Panic in a test aborted the whole run instead of failing one test (fixed)
+
+**Status:** Fixed
+**Affected:** test-mode codegen (`HmCCodeGenerator.EmitTestMain` / `exit` interception)
+
+The test runner catches a failing `test {}` via `setjmp`/`longjmp`, rewriting `panic`'s `exit(1)` into a `longjmp` back to the runner. The rewrite only fired for an `exit` call inside a function literally named `panic` — but `panic` is small and routinely **inlined**, so the inlined `exit(1)` copies kept terminating the process. The first assertion failure (e.g. a single Windows `path` test) printed its message and then killed the run with no summary, masking every later test. Fixed by guarding *every* `exit` foreign call in test mode with `if (__flang_test_active) longjmp(...)`; the flag already scopes it to an active test, so panics outside tests still terminate normally.
 
 ### Foreign functions not visible across modules (fixed)
 

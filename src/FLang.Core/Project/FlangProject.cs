@@ -6,9 +6,13 @@ public record FlangProject(
     ImportsSection? Imports = null,
     DependenciesSection? Dependencies = null);
 
+/// Whether a project builds to a linked executable or is consumed by source as a library.
+public enum ProjectKind { Exe, Lib }
+
 public record ProjectInfo(
     string Name,
     string Version,
+    ProjectKind Kind,
     string Source = "src/**/*.f",
     string Output = "build");
 

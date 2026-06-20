@@ -1,6 +1,7 @@
 [project]
 name = "flang_codegen"
 version = "0.1.0"
+kind = "lib"
 source = "src/**/*.f"
 
 [dependencies]

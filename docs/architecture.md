@@ -18,6 +18,17 @@ Generic body checking pushes the call-site module onto `InferenceContext.Special
 
 Module origin (`Stdlib`, `Project`, `External`) is tagged at load time in `ModuleOrigins` and used to scope project-level features. `flang.toml [imports].global` lists modules that are injected as implicit private imports into every `Project`-origin file; stdlib and (future) third-party modules are unaffected.
 
+### Project kind (`[project].kind`)
+
+`kind` is a **mandatory** field in `[project]`, one of `"exe"` or `"lib"`:
+
+- `exe` — `flang build` compiles and links a native executable. A `main` entry point is required (the C linker errors otherwise).
+- `lib` — `flang build` compiles the generated C to an object for validation but does **not** link, and no entry point is required. A library is consumed by *source* (see Dependencies), so no binary artifact is needed; the object is the proof it compiles. The output lands at `<output>/<name>.obj` (or `.o`).
+
+`flang init` writes `kind = "exe"` and a `src/main.f`; `flang init <name> --lib` writes `kind = "lib"` and a `src/<name>.f` exporting a `pub fn`. `flang test` is kind-agnostic — it always synthesizes a test runner with its own entry point.
+
+The source root for a `**/*.f`-style glob with no static prefix is the project directory itself; this is what lets a project (e.g. `std`) whose files sit directly under its root resolve its own `import <name>.foo` to source rather than re-loading a packaged copy off the stdlib path.
+
 ### Dependencies (`[dependencies]`)
 
 Path-based libraries are declared under `[dependencies]` in `flang.toml`:
@@ -180,6 +191,8 @@ The harness compiles and runs each test, asserting exit code, stdout, and stderr
 **Test placement:** Language feature tests go in `tests/FLang.Tests/Harness/`. Stdlib and self-hosted library tests (flang_core, flang_parser, flang_typer) are colocated in `.f` source files using `test "name" { ... }` blocks, run by `flang test` from the project directory. `flang test` resolves `[dependencies]` the same way `flang build` does, so a library's blocks can import its sibling libs.
 
 `flang test` runs **only the project's own** `test {}` blocks — those whose source file is one of the compilation's entry inputs. A dependency's (and stdlib's) blocks are that dependency's concern, tested from its own directory; otherwise every consumer re-runs the whole transitive suite. A project with no blocks of its own links to an empty runner and reports zero tests rather than failing on a missing entry point.
+
+**Filtering.** Two independent narrowing knobs: a positional `path-filter` selects which source files compile (`flang test path` builds only files whose path contains `path`), and `--name <substr>` (alias `-k`) selects which compiled `test {}` blocks actually run. The name filter is delivered to the synthesized runner via the `FLANG_TEST_FILTER` environment variable — kept out of `argv` so it never perturbs the arguments `std.env` tests observe — and matched as a case-sensitive substring of the test's display name.
 
 **Driver model.** The self-hosted libraries are FLang source; their `test {}` blocks are compiled and executed by the **C# compiler** (`flang build`/`flang test`) — that is the test driver until the bootstrap compiler can self-host codegen, at which point the same suites run unchanged through the new pipeline.
 

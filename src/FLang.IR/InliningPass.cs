@@ -202,8 +202,9 @@ public static class InliningPass
         {
             if (inst is ReturnInstruction ret)
             {
+                // First return wins; a terminator makes the rest of the block dead.
                 returnValue = Remap(ret.Value, valueMap);
-                continue;
+                break;
             }
 
             output.Add(CloneInstruction(inst, valueMap, prefix, paramNameToArg));

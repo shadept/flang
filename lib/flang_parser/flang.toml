@@ -1,6 +1,7 @@
 [project]
 name = "flang_parser"
 version = "0.3.0"
+kind = "lib"
 source = "src/**/*.f"
 
 [dependencies]

@@ -67,8 +67,9 @@ public static class BuildCommand
         var outputDir = Path.Combine(projectRoot, project.Project.Output);
         Directory.CreateDirectory(outputDir);
 
+        var isLibrary = project.Project.Kind == ProjectKind.Lib;
         var exeName = project.Project.Name;
-        if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+        if (!isLibrary && RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
             exeName += ".exe";
         var outputPath = Path.Combine(outputDir, exeName);
 
@@ -149,7 +150,8 @@ public static class BuildCommand
             ProjectSourceRoot: sourceRoot,
             ProjectGlobalImports: project.Imports?.Global,
             DependencySourceRoots: depSourceRoots.Count > 0 ? depSourceRoots : null,
-            ProjectMetadata: projectMetadata.Count > 0 ? projectMetadata : null
+            ProjectMetadata: projectMetadata.Count > 0 ? projectMetadata : null,
+            EmitLibrary: isLibrary
         );
 
         var compiler = new Compiler();
@@ -177,7 +179,10 @@ public static class BuildCommand
             }
 
             stopwatch.Stop();
-            Console.WriteLine($"Built {outputPath} in {stopwatch.ElapsedMilliseconds}ms");
+            var artifact = result.ExecutablePath ?? outputPath;
+            Console.WriteLine(isLibrary
+                ? $"Compiled library {project.Project.Name} ({artifact}) in {stopwatch.ElapsedMilliseconds}ms"
+                : $"Built {artifact} in {stopwatch.ElapsedMilliseconds}ms");
             return 0;
         }
         catch (Exception ex)

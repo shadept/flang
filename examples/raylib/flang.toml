@@ -1,6 +1,7 @@
 [project]
 name = "raylib-demo"
 version = "0.1.0"
+kind = "exe"
 
 [build.macos]
 headers = ["${RAYLIB_PATH}/include/raylib.h"]

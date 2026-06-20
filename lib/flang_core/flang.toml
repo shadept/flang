@@ -1,4 +1,5 @@
 [project]
 name = "flang_core"
 version = "0.1.0"
+kind = "lib"
 source = "src/**/*.f"

@@ -56,7 +56,12 @@ public record CompilerOptions(
     /// <see cref="Compilation.ProjectMetadata"/> so the `project_info()` intrinsic
     /// can resolve name + version for the call site's owning project.
     /// </summary>
-    IReadOnlyDictionary<string, ProjectMetadata>? ProjectMetadata = null
+    IReadOnlyDictionary<string, ProjectMetadata>? ProjectMetadata = null,
+    /// <summary>
+    /// Library build: compile the generated C to an object for validation but
+    /// do not link. No entry point is required — consumers compile the source.
+    /// </summary>
+    bool EmitLibrary = false
 );
 
 public record CompilationResult(
@@ -467,19 +472,35 @@ public class Compiler
             }
         }
 
-        // 7b. Build the compile+link command for main.c + the cached .obj set.
-        var linkArgs = CompilerDiscovery.BuildCompileAndLinkArgs(
-            selected,
-            cFilePath,
-            outputFilePath,
-            options.ReleaseBuild,
-            extraCFiles: null,            // all extras pre-compiled via the cache
-            extraObjFiles: cachedObjs.Count > 0 ? cachedObjs : null,
-            options.LinkFlags,
-            options.CompilerFlags);
+        // 7b. Build the final C-compiler command.
+        //   exe: compile main.c + link the cached .obj set into the output binary.
+        //   lib: compile-check main.c to an object — consumers compile from source,
+        //        so there is no link step and no entry point is required.
+        string finalArgs;
+        string outputArtifact;
+        if (options.EmitLibrary)
+        {
+            outputArtifact = Path.ChangeExtension(outputFilePath, selected.IsMsvc ? ".obj" : ".o");
+            var compileArgs = CompilerDiscovery.BuildCompileOnlyArgs(
+                selected, cFilePath, outputArtifact, options.ReleaseBuild, options.CompilerFlags);
+            finalArgs = selected.IsXcrun ? "clang " + compileArgs : compileArgs;
+        }
+        else
+        {
+            outputArtifact = outputFilePath;
+            var linkArgs = CompilerDiscovery.BuildCompileAndLinkArgs(
+                selected,
+                cFilePath,
+                outputFilePath,
+                options.ReleaseBuild,
+                extraCFiles: null,            // all extras pre-compiled via the cache
+                extraObjFiles: cachedObjs.Count > 0 ? cachedObjs : null,
+                options.LinkFlags,
+                options.CompilerFlags);
+            finalArgs = selected.IsXcrun ? "clang " + linkArgs : linkArgs;
+        }
 
         var execPath = selected.IsXcrun ? "xcrun" : selected.ExecutablePath;
-        var finalArgs = selected.IsXcrun ? "clang " + linkArgs : linkArgs;
         var compilerConfig = new CompilerConfig(selected.Name, execPath, finalArgs, selected.Environment);
 
         var startInfo = new ProcessStartInfo
@@ -515,12 +536,16 @@ public class Compiler
                 return new CompilationResult(false, null, allDiagnostics, compilation);
             }
 
-            // Clean up intermediate files
-            var objFilePath = Path.ChangeExtension(cFilePath, ".obj");
-            if (File.Exists(objFilePath)) File.Delete(objFilePath);
+            // Clean up intermediate object files — but for a library build the
+            // object IS the deliverable, so leave it in place.
+            if (!options.EmitLibrary)
+            {
+                var objFilePath = Path.ChangeExtension(cFilePath, ".obj");
+                if (File.Exists(objFilePath)) File.Delete(objFilePath);
 
-            var cwdObj = Path.GetFileNameWithoutExtension(cFilePath) + ".obj";
-            if (File.Exists(cwdObj)) File.Delete(cwdObj);
+                var cwdObj = Path.GetFileNameWithoutExtension(cFilePath) + ".obj";
+                if (File.Exists(cwdObj)) File.Delete(cwdObj);
+            }
         }
         catch (Exception ex)
         {
@@ -528,7 +553,7 @@ public class Compiler
             return new CompilationResult(false, null, allDiagnostics, compilation);
         }
 
-        return new CompilationResult(true, outputFilePath, allDiagnostics, compilation);
+        return new CompilationResult(true, outputArtifact, allDiagnostics, compilation);
 
         }
         catch (InternalCompilerError ice)
