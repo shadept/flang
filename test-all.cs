@@ -45,6 +45,7 @@ if (string.IsNullOrEmpty(flang))
     ("lib/flang_core", []),
     ("lib/flang_parser", []),
     ("lib/flang_typer", []),
+    ("lib/flang_driver", []),
     ("bootstrap", []),
     ("stdlib/std", ["--stdlib-path", Path.Combine(root, "stdlib")]),
 ];

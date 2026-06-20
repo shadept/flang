@@ -2,12 +2,12 @@
 //
 // Three layers in this file:
 //
-//   1. `translate(&Module, &StringBuilder)` — emit C source from FIR.
+//   1. `translate(&IrModule, &StringBuilder)` — emit C source from FIR.
 //      Mechanical 1:1 walk; the mapping table lives in `docs/fir.md`.
 //   2. `discover_compiler(...)` — locate a working C toolchain.
 //      Windows: MSVC via vswhere; POSIX: $CC / clang / cc / gcc;
 //      macOS: also xcrun clang.
-//   3. `compile(&Module, &BuildOptions)` — top-level entry point.
+//   3. `compile(&IrModule, &BuildOptions)` — top-level entry point.
 //      Translates, writes the .c file to disk, invokes the discovered
 //      compiler, returns a `BuildResult`.
 //
@@ -33,7 +33,7 @@ import flang_codegen.fir
 // =============================================================================
 
 // Lower the module to a C translation unit. Caller owns `sb`.
-pub fn translate(m: &Module, sb: &StringBuilder) {
+pub fn translate(m: &IrModule, sb: &StringBuilder) {
     emit_preamble(sb)
     for i in 0..m.foreigns.len {
         // The runtime preamble already defines these — re-emitting them
@@ -69,7 +69,7 @@ pub fn translate(m: &Module, sb: &StringBuilder) {
 // End-to-end: FIR -> .c -> executable. The .c file is written next to
 // the output executable (or to `options.emit_c_path` when set) and is
 // cleaned up unless `keep_temps` is true.
-pub fn compile(m: &Module, options: &BuildOptions) Result(BuildResult, BuildError) {
+pub fn compile(m: &IrModule, options: &BuildOptions) Result(BuildResult, BuildError) {
     const alloc = options.allocator
 
     // 1. Discover (or accept override of) the compiler. Fail fast before

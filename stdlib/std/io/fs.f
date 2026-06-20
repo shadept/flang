@@ -399,7 +399,7 @@ pub fn glob(pattern: String, allocator: &Allocator? = null) Result(GlobIter, FsE
 
     let walk = walk_dir(root_buf.as_view(), allocator)?
 
-    return Ok(.{
+    return Ok(GlobIter {
         walk = walk,
         pattern = pat_buf.transfer(),
         done = false,

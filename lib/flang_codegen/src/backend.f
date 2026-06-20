@@ -4,7 +4,7 @@
 //
 // The contract is a single function:
 //
-//   compile(module: &Module, options: &BuildOptions) -> Result(BuildResult, BuildError)
+//   compile(module: &IrModule, options: &BuildOptions) -> Result(BuildResult, BuildError)
 //
 // It performs FIR -> target lowering, invokes the platform toolchain,
 // and produces an executable at `options.output_path`. Extra .c files,

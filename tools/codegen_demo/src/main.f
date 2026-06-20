@@ -147,7 +147,7 @@ fn pick_output_path() OwnedString {
 //   }
 // -------------------------------------------------------------------------
 
-fn build_demo_module() Module {
+fn build_demo_module() IrModule {
     let m = module()
 
     // foreign fn puts(s: ptr) -> i32

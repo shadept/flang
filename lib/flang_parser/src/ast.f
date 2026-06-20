@@ -663,6 +663,37 @@ pub type ErrorExpr = struct {
     span: SourceSpan
 }
 
+// The source span of any expression. Used as node identity for type-check
+// results and lowering.
+pub fn expr_span(e: &Expr) SourceSpan {
+    return e.* match {
+        Lit(x) => x.span,
+        InterpolatedString(x) => x.span,
+        ArrayLit(x) => x.span,
+        TupleLit(x) => x.span,
+        StructLit(x) => x.span,
+        Identifier(x) => x.span,
+        MemberAccess(x) => x.span,
+        AddressOf(x) => x.span,
+        Dereference(x) => x.span,
+        NullPropagation(x) => x.span,
+        Index(x) => x.span,
+        Call(x) => x.span,
+        Cast(x) => x.span,
+        Binary(x) => x.span,
+        Unary(x) => x.span,
+        Range(x) => x.span,
+        Coalesce(x) => x.span,
+        Try(x) => x.span,
+        Assignment(x) => x.span,
+        Block(x) => x.span,
+        If(x) => x.span,
+        Match(x) => x.span,
+        Lambda(x) => x.span,
+        Error(x) => x.span,
+    }
+}
+
 // ─────────────────────────────────────────────────────────────────────────
 // Patterns — only appear in match arms
 // ─────────────────────────────────────────────────────────────────────────

@@ -1,4 +1,4 @@
-// bootstrap — the FLang compiler, written in FLang.
+// bootstrap - the FLang compiler, written in FLang.
 //
 //   bootstrap [--help] [--version] [-v|--verbose] <command> [args...]
 //
@@ -8,7 +8,7 @@
 //     lsp                   start the language server via tools/flang_lsp
 //
 // The fmt/lsp subcommands shell out to sibling tool binaries via
-// std.process — they're separate projects that also depend on
+// std.process - they're separate projects that also depend on
 // flang_parser + flang_core.
 
 import std.dict
@@ -19,8 +19,12 @@ import std.process
 import std.result
 import std.string
 import std.string_builder
+import std.io.fs
 import flang_parser.lexer
+import flang_codegen.backend
 import flang_driver.driver
+import flang_driver.compile
+import flang_driver.project
 import bootstrap.frontend
 
 // Parsed CLI state. `subcommand` is the first positional argument; the
@@ -64,9 +68,7 @@ pub fn main() i32 {
     }
 }
 
-// ─────────────────────────────────────────────────────────────────────────
 // CLI parsing
-// ─────────────────────────────────────────────────────────────────────────
 
 // Drive std.env.getopts over `argv[1..]`, then pick the first non-option
 // argument as the subcommand. Index 0 is the program name and is skipped.
@@ -74,7 +76,7 @@ fn parse_cli(argv: String[]) Cli {
     let cli: Cli
     let opts = getopts("h(help)V(version)v(verbose)", argv, 1)
 
-    // Drive opts.next() manually rather than `for r in opts` — std.env's
+    // Drive opts.next() manually rather than `for r in opts` - std.env's
     // `iter(&GetOpt)` returns a *copy* of the iterator state, so a
     // for-loop's mutations don't flow back into `opts` and we lose
     // `rest_index()` after the subcommand is consumed.
@@ -119,7 +121,7 @@ fn print_help() {
     println("usage: bootstrap [options] <command> [args...]")
     println("")
     println("commands:")
-    println("  build  <file.f>      compile a FLang source file")
+    println("  build  [file.f]      build the project (flang.toml), or a single file")
     println("  fmt    <file.f>...   format source files (spawns flang_fmt)")
     println("  lsp                  start the language server (spawns flang_lsp)")
     println("  cst    <file.f>      print the CST tree (spawns cst_explorer)")
@@ -146,27 +148,72 @@ fn unknown_subcommand(name: String) i32 {
     return 1
 }
 
-// ─────────────────────────────────────────────────────────────────────────
 // Subcommand handlers
-// ─────────────────────────────────────────────────────────────────────────
 
 // build: analyse a single file through the shared `flang_driver` pipeline
-// and report every diagnostic. The driver (lex → parse → project → check)
+// and report every diagnostic. The driver (lex -> parse -> project -> check)
 // is invoked here in `main.f`; `frontend` owns file reading and rendering.
+// build: a `<file>.f` argument compiles that single file; with no
+// argument, load `flang.toml` from the current directory and build the
+// project. Both share `build_source_file` for the analyse->lower->link tail.
 fn run_build(argv: String[], rest: usize, verbose: bool) i32 {
-    if rest >= argv.len {
-        println("bootstrap: `build` requires an input file")
+    if rest < argv.len {
+        const path = argv[rest]
+        if ends_with(path, ".f") {
+            const out = output_path_for(path)
+            return build_source_file(path, out, verbose)
+        }
+        const msg = $"bootstrap: `build` takes a `.f` file or no argument (got `{path}`)"
+        defer msg.deinit()
+        println(msg.as_view())
         return 1
     }
-    const path = argv[rest]
+    return build_project(verbose)
+}
 
+// Project mode: parse `flang.toml`, glob its sources, and build.
+fn build_project(verbose: bool) i32 {
+    if !exists("flang.toml") {
+        println("bootstrap: no flang.toml in the current directory")
+        return 1
+    }
+    const toml_opt = read_source("flang.toml")
+    if toml_opt.is_none() { return 1 }
+    let toml = toml_opt.unwrap()
+    defer toml.deinit()
+
+    let proj = parse_project(toml.as_view())
+    defer proj.deinit()
+
+    let sources = glob_sources(proj.source.as_view())
+    defer deinit_source_list(&sources)
+
+    if sources.len == 0 {
+        const m = $"bootstrap: no sources match `{proj.source.as_view()}`"
+        defer m.deinit()
+        println(m.as_view())
+        return 1
+    }
+    if sources.len > 1 {
+        const m = $"bootstrap: {sources.len} source files - multi-module builds need import resolution (not yet wired)"
+        defer m.deinit()
+        println(m.as_view())
+        return 1
+    }
+
+    const out = $"{proj.output.as_view()}/{proj.name.as_view()}"
+    defer out.deinit()
+    return build_source_file(sources[0].as_view(), out.as_view(), verbose)
+}
+
+// Read, analyse, report diagnostics, then lower + link to `out`.
+fn build_source_file(path: String, out: String, verbose: bool) i32 {
     const source_opt = read_source(path)
     if source_opt.is_none() { return 1 }
     let unit = analyze(source_opt.unwrap(), path)
     defer unit.deinit()
-    const src = unit.source.as_view()
 
-    render_diagnostics(&unit.diagnostics, path, src)
+    render_diagnostics(&unit.diagnostics, path, unit.source.as_view())
 
     const errs = error_count(&unit)
     if verbose {
@@ -177,10 +224,42 @@ fn run_build(argv: String[], rest: usize, verbose: bool) i32 {
     if errs > 0 {
         return build_failed(path, errs)
     }
-    const ok = $"ok: {path} ({unit.module.decls.len} decls, {unit.result.node_types.len()} nodes typed)"
-    defer ok.deinit()
-    println(ok.as_view())
+
+    let result = build_unit(&unit, out)
+    if result.is_err() {
+        report_build_error(&result.unwrap_err(), path)
+        return 1
+    }
+    let artifact = result.unwrap()
+    defer artifact.deinit()
+    const msg = $"built {artifact.executable_path.as_view()}"
+    defer msg.deinit()
+    println(msg.as_view())
     return 0
+}
+
+// Derive the output artifact path from the input: strip a trailing `.f`
+// so `hello.f` builds to `hello` (the backend adds any platform suffix).
+fn output_path_for(path: String) String {
+    if path.len >= 2 {
+        if path[path.len - 2] == '.' and path[path.len - 1] == 'f' {
+            return path[0..(path.len - 2)]
+        }
+    }
+    return path
+}
+
+fn report_build_error(e: &BuildError, path: String) {
+    const label = e.* match {
+        NoCompilerFound => "no C compiler found",
+        CompilerFailed(_) => "the C compiler returned an error",
+        SpawnFailed => "could not spawn the C compiler",
+        IOError => "I/O error while writing build artifacts",
+        LowerFailed => "IR lowering rejected the module",
+    }
+    const m = $"build failed: {label} ({path})"
+    defer m.deinit()
+    println(m.as_view())
 }
 
 fn build_failed(path: String, errs: usize) i32 {
@@ -209,7 +288,7 @@ fn spawn_tool(tool: String, argv: String[], rest: usize, verbose: bool) i32 {
 
     const spawn_result = cmd.spawn()
     if spawn_result.is_err() {
-        const msg = $"bootstrap: failed to spawn `{tool}` — is it on PATH?"
+        const msg = $"bootstrap: failed to spawn `{tool}` - is it on PATH?"
         defer msg.deinit()
         println(msg.as_view())
         return 1

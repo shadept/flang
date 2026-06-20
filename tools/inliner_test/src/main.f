@@ -131,10 +131,10 @@ pub fn main() i32 {
 }
 
 // ─────────────────────────────────────────────────────────────────────
-// Module builder
+// IrModule builder
 // ─────────────────────────────────────────────────────────────────────
 
-fn build_module() Module {
+fn build_module() IrModule {
     let m = module()
 
     let printf_params: List(IrType) = list(1)
@@ -226,7 +226,7 @@ fn build_main() Function {
 // any of the shim wrappers we expected the inliner to collapse. (`main`
 // is exempted as a caller — calls *from* main are not inlined; that's
 // the RFC-015 §3.3 default.)
-fn verify_no_residual_calls(m: &Module) bool {
+fn verify_no_residual_calls(m: &IrModule) bool {
     for fi in 0..m.functions.len {
         const f = &m.functions[fi]
         if f.name == "main" { continue }

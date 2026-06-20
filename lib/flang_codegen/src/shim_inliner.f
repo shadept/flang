@@ -52,7 +52,7 @@ pub type InlineStats = struct {
 // Run the inliner over `m` to fixed point. The module is mutated in
 // place; functions that became uncalled by inlining stay in the
 // module (dead-function elimination is a separate pass — RFC-015 §4).
-pub fn inline_shims(m: &Module, allocator: &Allocator? = null) InlineStats {
+pub fn inline_shims(m: &IrModule, allocator: &Allocator? = null) InlineStats {
     const alloc = allocator.or_global()
     let stats = InlineStats {
         passes = 0,
@@ -142,7 +142,7 @@ fn contains_indirect_or_foreign(instrs: &List(Instr), foreigns: &Set(OwnedString
     return false
 }
 
-fn collect_foreign_names(m: &Module, alloc: &Allocator) Set(OwnedString) {
+fn collect_foreign_names(m: &IrModule, alloc: &Allocator) Set(OwnedString) {
     let s: Set(OwnedString) = set(alloc)
     for i in 0..m.foreigns.len {
         s.add(m.foreigns[i].name)
@@ -157,7 +157,7 @@ fn collect_foreign_names(m: &Module, alloc: &Allocator) Set(OwnedString) {
 // O(V * (V + E)) on the call graph; V is hundreds even on big modules.
 // ─────────────────────────────────────────────────────────────────────
 
-fn find_recursive(m: &Module, foreigns: &Set(OwnedString), alloc: &Allocator) Set(OwnedString) {
+fn find_recursive(m: &IrModule, foreigns: &Set(OwnedString), alloc: &Allocator) Set(OwnedString) {
     let name_to_idx: Dict(OwnedString, usize) = dict(alloc)
     defer name_to_idx.deinit()
     for i in 0..m.functions.len {
@@ -254,7 +254,7 @@ fn reaches_self(adj: &List(List(usize)), start: usize, alloc: &Allocator) bool {
 //     to the operand to substitute in the cloned instruction.
 // ─────────────────────────────────────────────────────────────────────
 
-fn inline_calls_in(m: &Module, caller_idx: usize, inlinable: &Dict(OwnedString, usize), alloc: &Allocator) usize {
+fn inline_calls_in(m: &IrModule, caller_idx: usize, inlinable: &Dict(OwnedString, usize), alloc: &Allocator) usize {
     let inlined_count: usize = 0
     let result_subst: Dict(u32, Operand) = dict(alloc)
     defer result_subst.deinit()
@@ -337,7 +337,7 @@ fn inline_calls_in(m: &Module, caller_idx: usize, inlinable: &Dict(OwnedString, 
 // to `out`, and returns the operand replacing the call's result (or
 // `None` for void).
 fn splice_callee(
-    m: &Module,
+    m: &IrModule,
     callee_idx: usize,
     caller: &Function,
     args: &List(Operand),

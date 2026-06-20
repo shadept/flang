@@ -334,7 +334,7 @@ pub type Function = struct {
 }
 
 // ─────────────────────────────────────────────────────────────────────────
-// Module-level declarations
+// IrModule-level declarations
 // ─────────────────────────────────────────────────────────────────────────
 
 // Named static buffer in the data segment. `init_bytes = null` is BSS
@@ -357,7 +357,7 @@ pub type ForeignDecl = struct {
 }
 
 // Unit of compilation.
-pub type Module = struct {
+pub type IrModule = struct {
     globals: List(Global)
     foreigns: List(ForeignDecl)
     functions: List(Function)
@@ -367,18 +367,18 @@ pub type Module = struct {
 // Constructors
 // ─────────────────────────────────────────────────────────────────────────
 
-pub fn module(allocator: &Allocator? = null) Module {
+pub fn module(allocator: &Allocator? = null) IrModule {
     let globals: List(Global) = list(0, allocator)
     let foreigns: List(ForeignDecl) = list(0, allocator)
     let functions: List(Function) = list(0, allocator)
-    return Module {
+    return IrModule {
         globals = globals,
         foreigns = foreigns,
         functions = functions,
     }
 }
 
-pub fn deinit(self: &Module) {
+pub fn deinit(self: &IrModule) {
     for i in 0..self.functions.len {
         self.functions[i].deinit()
     }
@@ -490,14 +490,14 @@ pub fn add_block(self: &Function, b: Block) usize {
     return self.blocks.len - 1
 }
 
-pub fn add_function(self: &Module, f: Function) {
+pub fn add_function(self: &IrModule, f: Function) {
     self.functions.push(f)
 }
 
-pub fn add_foreign(self: &Module, f: ForeignDecl) {
+pub fn add_foreign(self: &IrModule, f: ForeignDecl) {
     self.foreigns.push(f)
 }
 
-pub fn add_global(self: &Module, g: Global) {
+pub fn add_global(self: &IrModule, g: Global) {
     self.globals.push(g)
 }

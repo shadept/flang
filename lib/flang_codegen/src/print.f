@@ -8,7 +8,7 @@ import std.string_builder
 import flang_codegen.fir
 
 // Render a whole module.
-pub fn print(m: &Module, sb: &StringBuilder) {
+pub fn print(m: &IrModule, sb: &StringBuilder) {
     let need_blank = false
 
     for i in 0..m.globals.len {
@@ -30,7 +30,7 @@ pub fn print(m: &Module, sb: &StringBuilder) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────
-// Module-level declarations
+// IrModule-level declarations
 // ─────────────────────────────────────────────────────────────────────────
 
 fn print_global(g: &Global, sb: &StringBuilder) {

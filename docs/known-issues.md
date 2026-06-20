@@ -16,6 +16,27 @@ When you discover a bug or limitation:
 
 ## Open Issues
 
+### Anonymous Struct in `Ok(...)`/`Some(...)` Doesn't Coerce to a Nominal Payload
+
+**Status:** Open — worked around at the call site
+**Affected:** C# codegen (generic instantiation); surfaced building `bootstrap` against `std.io.fs.glob`
+
+Returning `Ok(.{ ... })` from a function whose declared return is `Result(Nominal, E)` makes the compiler instantiate `Result(<anon record>, E)` and then fail to convert it to `Result(Nominal, E)` in generated C (`error C2440`). The fix is to name the nominal at the return site — `Ok(Nominal { ... })`.
+
+**Workaround applied:** `stdlib/std/io/fs.f` `glob` returns `Ok(GlobIter { ... })`.
+**Solution:** in codegen, coerce an anonymous-record payload to the nominal type argument of the enclosing generic call (the same anon→nominal coercion already applied to fn-field args).
+
+### Bootstrap and C# Compilers Disagree on Auto Struct Layout
+
+**Status:** Open — intentional, bootstrap leads
+**Affected:** struct memory layout; bootstrap `flang_driver.layout` vs C# `FLang.IR.TypeLayoutService`
+
+Per spec §2.4, the default (`auto`) struct representation lets the compiler reorder fields by descending alignment to minimise size. The bootstrap layout (`lib/flang_driver/src/layout.f`) implements this; the C# reference compiler still lays every struct out in declaration order (C-order). So a non-`#foreign` struct gets different field offsets and total size from the two toolchains.
+
+Safe for self-host (stage2 and stage3 are both bootstrap-compiled, so they agree) and for the harness-via-bootstrap path (all code in a run is bootstrap-compiled). It only bites if C#-compiled and bootstrap-compiled objects of the same struct are linked together. `#foreign` structs (`Repr.C`) lay out identically in both.
+
+**Solution:** port the auto-layout algorithm into `TypeLayoutService` (place fields by descending alignment, offsets keyed by declaration index) so the two converge.
+
 ### Unqualified Enum Variants Shadow Same-Named Types
 
 **Status:** Open — workaround via renaming the type

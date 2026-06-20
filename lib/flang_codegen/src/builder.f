@@ -3,7 +3,7 @@
 // `function()` starts a `FunctionBuilder`. Add blocks via `.entry()` /
 // `.block()`. Each returns a `BlockBuilder` that emits instructions and
 // terminators. `.finish()` hands back the underlying `Function` for
-// inclusion in a `Module`.
+// inclusion in a `IrModule`.
 //
 // Instruction emitters return `Operand` (the just-produced SSA value)
 // so results chain directly into the next call. Terminators (`ret`,
