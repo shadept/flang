@@ -556,7 +556,7 @@ public class TypeLayoutService(ITypeResolver engine, INominalTypeRegistry nomina
     /// <summary>
     /// Replace TypeVars in a type according to the substitution map.
     /// </summary>
-    private static Type SubstituteTypeArgs(Type type, Dictionary<int, Type>? subst)
+    public static Type SubstituteTypeArgs(Type type, Dictionary<int, Type>? subst)
     {
         if (subst == null || subst.Count == 0) return type;
         return SubstituteRec(type, subst);

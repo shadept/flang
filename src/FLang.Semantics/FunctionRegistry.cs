@@ -60,12 +60,13 @@ internal sealed class FunctionRegistry
                 f.ModulePath == currentModulePath
                 || (f.IsPublic && f.ModulePath != null && visibleModules.Contains(f.ModulePath))
                 || f.ModulePath == null  // synthesized / lambda-host fns are not module-scoped
+                || f.IsForeign  // extern C symbols are globally linkable, not module-scoped
             ).ToList();
             return visible.Count > 0 ? visible : null;
         }
 
         // Fallback: legacy behavior — public-from-anywhere or same-module.
-        var fallback = overloads.Where(f => f.IsPublic || f.ModulePath == currentModulePath).ToList();
+        var fallback = overloads.Where(f => f.IsPublic || f.ModulePath == currentModulePath || f.IsForeign).ToList();
         return fallback.Count > 0 ? fallback : null;
     }
 

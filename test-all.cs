@@ -37,8 +37,17 @@ if (string.IsNullOrEmpty(flang))
     }
 }
 
-// Self-hosted projects whose `test {}` blocks should run. Skipped if absent.
-string[] projects = ["lib/flang_core", "lib/flang_parser", "lib/flang_typer", "bootstrap"];
+// Self-hosted projects whose `test {}` blocks should run, with any extra
+// `flang test` args. Skipped if absent. `std` IS the stdlib, so it must resolve
+// against the source tree rather than the bundled copy under dist.
+(string Dir, string[] Args)[] projects =
+[
+    ("lib/flang_core", []),
+    ("lib/flang_parser", []),
+    ("lib/flang_typer", []),
+    ("bootstrap", []),
+    ("stdlib/std", ["--stdlib-path", Path.Combine(root, "stdlib")]),
+];
 
 var results = new List<(string Name, bool Ok)>();
 
@@ -46,11 +55,11 @@ var results = new List<(string Name, bool Ok)>();
 // results.Add(("harness (dotnet test.cs)", Run("dotnet", ["test.cs"], root)));
 
 // Step 2 — per-project test blocks.
-foreach (var proj in projects)
+foreach (var (proj, extra) in projects)
 {
     var dir = Path.Combine(root, proj);
     if (!File.Exists(Path.Combine(dir, "flang.toml"))) continue;
-    results.Add(($"flang test {proj}", Run(flang, ["test"], dir)));
+    results.Add(($"flang test {proj}", Run(flang, ["test", .. extra], dir)));
 }
 
 // Summary.

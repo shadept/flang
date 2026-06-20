@@ -16,15 +16,29 @@ When you discover a bug or limitation:
 
 ## Open Issues
 
-### Generic Monomorphization Collides Across Instantiations (anon-struct coercion)
+### `path.join` emits `/` instead of `\` on Windows
 
-**Status:** Partially fixed — type-checker layer fixed; a lowering-stage layer remains
-**Affected:** generic specialization / anonymous-struct → nominal coercion; surfaces when one generic is instantiated for two distinct types in a single compilation unit (e.g. testing a whole library's `test {}` blocks at once)
+**Status:** Open
+**Affected:** `std/path.f` separator handling; a colocated `test "join simple"` block fails on Windows
 
-A generic whose nominal carries a **function-pointer field over the type parameter** (`fn(&T)`), constructed via an anonymous struct literal `.{…}` coerced to the nominal, mis-specializes when instantiated for two types. Surfaced trying to run all of `std`'s colocated `test {}` blocks as one unit (`std.owned`'s `Owned(T)`).
+`path("src").join("foo.f")` yields `src/foo.f` on Windows, but the header contract (and the test) say new joins insert `\`. `sep()` — `#if(platform.os == "windows")` → `'\\'` — returns `\` (92) when called directly from a project module, yet `join` (in `std/path.f`) writes `/` (47). The compile-time `#if(platform.os)` appears to resolve inconsistently depending on the call site / whether the enclosing function is in a stdlib module. Pre-existing — reproduces in a normal `flang build`, not specific to compiling std as a project. Surfaced for the first time by running `std`'s colocated `test {}` blocks (the harness's `path_basic.f` integration test doesn't assert the Windows separator).
 
-- **Layer 1 (fixed):** `SubstShallow` in `CoercionRules.cs` substituted template `T → concrete` for `TypeVar`/`ReferenceType`/`NominalType` fields but not `FunctionType`/`ArrayType` (silent `_ => type` default). The unsubstituted `fn(&T)` field then unified against the concrete call-site type, **binding the shared template `TypeVar`** and contaminating every other instantiation (`E2071 returns Bar, but got Foo`). Fixed by adding the missing cases. Regression: [`tests/.../generics/anon_struct_fn_field_two_instantiations.f`](../tests/FLang.Tests/Harness/generics/anon_struct_fn_field_two_instantiations.f).
-- **Layer 2 (open):** with **reference** type args (`T = &X`) via an imported generic (`std.owned`), the type-checker now passes but lowering leaves `$T` un-monomorphized in generated C (`core_option_Option_$T`, `void(*)($T*)`). A project-local generic with the same shape lowers fine, so the gap is specific to monomorphizing an imported generic's `Option(T)` / `fn(&T)` fields under two instantiations. This blocks full-suite `flang test` on `std`; per-module `flang test <file>` works.
+### Foreign functions not visible across modules (fixed)
+
+**Status:** Fixed
+**Affected:** any module calling a `#foreign fn` declared (non-`pub`) in another module — surfaced compiling `std` as one unit (`std/rc.f` → `std/atomic.f`'s `__flang_atomic_*`)
+
+`#foreign` declarations map to single extern C symbols, but `FunctionRegistry.Lookup` filtered them by the normal `pub`-and-imported visibility rule, so a non-`pub` foreign fn was invisible to other modules. `Arc.clone`/`deinit` (which call `std.atomic`'s non-`pub` foreign fns) failed with `E2004 Unresolved function` whenever specialised — a latent bug that simply had no caller (`Arc` was untested). Fixed by treating foreign fns as globally visible (`|| f.IsForeign`), matching C linkage and the registry's existing allowance for duplicate foreign decls.
+
+### Generic `fn(&T)` field calls corrupted monomorphisation (fixed)
+
+**Status:** Fixed
+**Affected:** generic specialisation; surfaced instantiating a generic with a `fn(&T)` field for ≥2 types in one unit (e.g. `std.owned`'s `Owned(T)`)
+
+A generic struct with a function-pointer field over its own type parameter leaked the placeholder `$T` into generated C, or collided two instantiations, because the **shared definition-level `TypeVar` got bound** to a concrete/placeholder type:
+
+- Anonymous-struct coercion didn't substitute `FunctionType` / `ArrayType` fields (`CoercionRules.SubstShallow`'s silent `_ => type`). The raw `fn(&T)` field then unified against the call-site type. Fixed by adding the missing cases. Regression: [`anon_struct_fn_field_two_instantiations.f`](../tests/FLang.Tests/Harness/generics/anon_struct_fn_field_two_instantiations.f).
+- Calling a `fn(&T)` field (`self.cleanup(&v)`) unified the args against the definition's shared type-param `TypeVar` rather than the instance's concrete arg — corrupting that type's later monomorphisation. Fixed by substituting the field type with the instance's type args at the indirect-call site (`HmTypeChecker.Expressions`, reusing `TypeLayoutService.SubstituteTypeArgs`). Regression: [`generic_fn_field_call_two_instantiations.f`](../tests/FLang.Tests/Harness/generics/generic_fn_field_call_two_instantiations.f).
 
 ### Unqualified Enum Variants Shadow Same-Named Types
 

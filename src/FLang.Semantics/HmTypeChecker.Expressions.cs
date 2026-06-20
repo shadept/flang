@@ -1496,8 +1496,24 @@ public partial class HmTypeChecker
         var field = fieldsSource.FieldsOrVariants.FirstOrDefault(f => f.Name == fieldName);
         if (field == default) return null;
 
-        // Check if it's a function type
+        // Substitute the struct's type params with this instance's type args so an
+        // `fn(&T)` field call unifies against the concrete arg, not the definition's
+        // shared type-param TypeVar — binding that var corrupts later monomorphisation.
         var fieldType = _ctx.Engine.Resolve(field.Type);
+        if (nominal.TypeArguments.Count > 0)
+        {
+            var template = LookupNominalType(nominal.Name);
+            if (template != null && template.TypeArguments.Count == nominal.TypeArguments.Count)
+            {
+                var subst = new Dictionary<int, Type>();
+                for (var i = 0; i < template.TypeArguments.Count; i++)
+                    if (_ctx.Engine.Resolve(template.TypeArguments[i]) is TypeVar tv)
+                        subst[tv.Id] = _ctx.Engine.Resolve(nominal.TypeArguments[i]);
+                if (subst.Count > 0)
+                    fieldType = IR.TypeLayoutService.SubstituteTypeArgs(fieldType, subst);
+            }
+        }
+
         if (fieldType is not FunctionType fnType)
         {
             // E2011: Field exists but is not callable
