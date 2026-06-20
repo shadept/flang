@@ -177,4 +177,10 @@ Data-driven lit-style tests. Self-contained `.f` files with embedded metadata:
 
 The harness compiles and runs each test, asserting exit code, stdout, and stderr match metadata. `COMPILE-ERROR`/`COMPILE-WARNING` tests assert compilation fails or warns with the specified error code.
 
-**Test placement:** Language feature tests go in `tests/FLang.Tests/Harness/`. Stdlib tests are colocated in `.f` source files using `test "name" { ... }` blocks.
+**Test placement:** Language feature tests go in `tests/FLang.Tests/Harness/`. Stdlib and self-hosted library tests (flang_core, flang_parser, flang_typer) are colocated in `.f` source files using `test "name" { ... }` blocks, run by `flang test` from the project directory. `flang test` resolves `[dependencies]` the same way `flang build` does, so a library's blocks can import its sibling libs.
+
+`flang test` runs **only the project's own** `test {}` blocks — those whose source file is one of the compilation's entry inputs. A dependency's (and stdlib's) blocks are that dependency's concern, tested from its own directory; otherwise every consumer re-runs the whole transitive suite. A project with no blocks of its own links to an empty runner and reports zero tests rather than failing on a missing entry point.
+
+**Driver model.** The self-hosted libraries are FLang source; their `test {}` blocks are compiled and executed by the **C# compiler** (`flang build`/`flang test`) — that is the test driver until the bootstrap compiler can self-host codegen, at which point the same suites run unchanged through the new pipeline.
+
+**Run everything:** `dotnet test-all.cs` runs the C# harness plus `flang test` in each self-hosted project. It uses `$FLANG` if set, else `dist/<rid>/flang.exe`; point `$FLANG` at the bootstrap compiler to test the same suites through it.

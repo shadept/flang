@@ -262,7 +262,7 @@ public class HmAstLowering
     // Module lowering
     // =========================================================================
 
-    public IrModule LowerModule(IEnumerable<(string ModulePath, ModuleNode Module)> modules, bool runTests = false)
+    public IrModule LowerModule(IEnumerable<(string ModulePath, ModuleNode Module)> modules, bool runTests = false, IReadOnlySet<ModuleNode>? testModules = null)
     {
         // Materialize so we can iterate multiple times
         var moduleList = modules.ToList();
@@ -318,6 +318,9 @@ public class HmAstLowering
             int testIndex = 0;
             foreach (var (modulePath, module) in moduleList)
             {
+                // Only the project's own modules contribute test blocks; a
+                // dependency's tests run from the dependency's own directory.
+                if (testModules != null && !testModules.Contains(module)) continue;
                 foreach (var test in module.Tests)
                 {
                     var irFn = LowerTestBlock(test, testIndex++);
@@ -326,14 +329,13 @@ public class HmAstLowering
                 }
             }
 
-            if (testFunctions.Count > 0)
-            {
-                var mainFn = GenerateTestMain(testFunctions);
-                // Remove any existing entry point (test files shouldn't have main)
-                foreach (var fn in _module.Functions)
-                    fn.IsEntryPoint = false;
-                _module.Functions.Add(mainFn);
-            }
+            // Emit the test entry point even with no blocks, so a project with
+            // no tests of its own still links and reports an empty run rather
+            // than failing on a missing main.
+            var mainFn = GenerateTestMain(testFunctions);
+            foreach (var fn in _module.Functions)
+                fn.IsEntryPoint = false;
+            _module.Functions.Add(mainFn);
         }
 
         // Collect struct/enum types referenced in function signatures

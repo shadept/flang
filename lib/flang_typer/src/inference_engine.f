@@ -31,6 +31,8 @@ import flang_typer.substitution
 import flang_typer.union_find
 import flang_typer.coercion
 import flang_typer.nominal_registry
+import flang_typer.well_known
+import std.test
 
 // ─────────────────────────────────────────────────────────────────────
 // UnifyOutcome — structured result, no diagnostics
@@ -959,4 +961,84 @@ fn record_level_undo(self: &Engine, var_id: VarId) {
         }),
         None => {},
     }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// Tests — unification, the coercion ladder, generalisation
+// ─────────────────────────────────────────────────────────────────────
+
+test "fresh vars are unique and bind to concrete types" {
+    let eng = engine()
+    let fv1 = eng.fresh_var()
+    let fv2 = eng.fresh_var()
+    let id1 = fv1 match { Var(tv) => tv.id, _ => 999u32 }
+    let id2 = fv2 match { Var(tv) => tv.id, _ => 999u32 }
+    assert_true(id1 != id2, "fresh vars have distinct ids")
+
+    let out = eng.unify(fv1, ty_i32())
+    assert_true(out.is_ok(), "var unifies with i32")
+    let resolved = eng.resolve(fv1)
+    assert_true(equals(&resolved, &ty_i32()), "var resolves to i32 after bind")
+}
+
+test "integer widening succeeds, narrowing fails" {
+    let eng = engine()
+    let widen = eng.unify(ty_i8(), ty_i32())
+    assert_true(widen.is_ok(), "i8 widens to i32")
+    let cost = widen match { Unified(uo) => uo.cost, _ => 0u32 }
+    assert_eq(cost, 1u32, "widening costs one coercion")
+
+    assert_true(!eng.unify(ty_i64(), ty_i32()).is_ok(), "i64 does not narrow to i32")
+}
+
+test "float widening is one-directional" {
+    let eng = engine()
+    assert_true(eng.unify(ty_f32(), ty_f64()).is_ok(), "f32 widens to f64")
+    assert_true(!eng.unify(ty_f64(), ty_f32()).is_ok(), "f64 does not narrow to f32")
+}
+
+test "cross-signedness widens only to a strictly larger signed rank" {
+    let eng = engine()
+    assert_true(eng.unify(ty_u8(), ty_i32()).is_ok(), "u8 widens to i32")
+    assert_true(!eng.unify(ty_u32(), ty_i32()).is_ok(), "u32 does not widen to i32 at equal rank")
+}
+
+test "occurs check rejects infinite types" {
+    let eng = engine()
+    let fv = eng.fresh_var()
+    let wrapping = eng.mk_ref(fv)
+    let outcome = eng.unify(fv, wrapping)
+    let is_occurs = outcome match { UniOccursCheck(_) => true, _ => false }
+    assert_true(is_occurs, "unifying v with &v is an occurs-check failure")
+}
+
+test "tuple arity mismatch is reported" {
+    let eng = engine()
+    let t2: List(Ty) = list(2); t2.push(ty_i32()); t2.push(ty_bool())
+    let t3: List(Ty) = list(3); t3.push(ty_i32()); t3.push(ty_bool()); t3.push(ty_i64())
+    let outcome = eng.unify(Ty.Tuple(t2), Ty.Tuple(t3))
+    let is_arity = outcome match { UniArityMismatch(_) => true, _ => false }
+    assert_true(is_arity, "2-tuple vs 3-tuple is an arity mismatch")
+}
+
+test "try_unify rolls back on success" {
+    let eng = engine()
+    let fv = eng.fresh_var()
+    assert_true(eng.try_unify(fv, ty_i32()).is_ok(), "speculative unify succeeds")
+    let after = eng.resolve(fv)
+    let still_unbound = after match { Var(_) => true, _ => false }
+    assert_true(still_unbound, "var stays unbound after try_unify")
+}
+
+test "generalize then specialize yields a fresh quantified var" {
+    let eng = engine()
+    eng.enter_level()
+    let inner = eng.fresh_var()
+    eng.exit_level()
+    let scheme = eng.generalize(inner)
+    assert_true(scheme.quantified.len() == 1, "one quantified var")
+    let inst = eng.specialize(&scheme)
+    let inst_id = inst match { Var(tv) => tv.id, _ => 999u32 }
+    let orig_id = inner match { Var(tv) => tv.id, _ => 998u32 }
+    assert_true(inst_id != orig_id, "specialised var is fresh")
 }

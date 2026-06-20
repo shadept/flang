@@ -97,6 +97,41 @@ public static class TestCommand
         if (sourceRoot != null)
             includePaths.Add(sourceRoot);
 
+        // Without dependency resolution, test blocks cannot import the project's
+        // libraries — same resolution path as `flang build`.
+        List<ResolvedDependency> resolvedDeps;
+        try { resolvedDeps = DependencyResolver.ResolveDirect(project, projectRoot); }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"error: {ex.Message}");
+            return 1;
+        }
+
+        var depSourceRoots = new Dictionary<string, string>();
+        var projectMetadata = new Dictionary<string, ProjectMetadata>();
+        if (sourceRoot != null)
+            projectMetadata[project.Project.Name] = new ProjectMetadata(
+                project.Project.Name, project.Project.Version, sourceRoot);
+        foreach (var dep in resolvedDeps)
+        {
+            depSourceRoots[dep.Name] = dep.SourceRoot;
+            projectMetadata[dep.Name] = new ProjectMetadata(
+                dep.Name, dep.Project.Project.Version, dep.SourceRoot);
+
+            var depPlatform = ProjectLoader.GetCurrentPlatformConfig(dep.Project.Build);
+            if (depPlatform?.Libs != null)
+                foreach (var lib in depPlatform.Libs)
+                    linkFlags.Add(ResolvePath(lib, dep.ProjectRoot));
+            if (depPlatform?.Ldflags != null)
+                linkFlags.AddRange(depPlatform.Ldflags);
+            if (depPlatform?.Headers != null)
+            {
+                headerPaths ??= new List<string>();
+                foreach (var h in depPlatform.Headers)
+                    headerPaths.Add(ResolvePath(h, dep.ProjectRoot));
+            }
+        }
+
         var options = new CompilerOptions(
             InputFilePaths: sourceFiles,
             StdlibPath: stdlibPath,
@@ -109,7 +144,10 @@ public static class TestCommand
             HeaderPaths: headerPaths is { Count: > 0 } ? headerPaths : null,
             CompilerFlags: compilerFlags is { Count: > 0 } ? compilerFlags : null,
             ProjectName: project.Project.Name,
-            ProjectSourceRoot: sourceRoot
+            ProjectSourceRoot: sourceRoot,
+            ProjectGlobalImports: project.Imports?.Global,
+            DependencySourceRoots: depSourceRoots.Count > 0 ? depSourceRoots : null,
+            ProjectMetadata: projectMetadata.Count > 0 ? projectMetadata : null
         );
 
         var compiler = new Compiler();

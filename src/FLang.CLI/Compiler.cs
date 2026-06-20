@@ -3,7 +3,7 @@ using System.Runtime.InteropServices;
 using FLang.Codegen.C;
 using FLang.Core;
 using FLang.Frontend;
-using FLang.Frontend.Ast;
+using FLang.Frontend.Ast.Declarations;
 using FLang.IR;
 using FLang.Semantics;
 using Microsoft.Extensions.Logging;
@@ -183,6 +183,22 @@ public class Compiler
         var parsedModules = moduleCompiler.CompileModules(options.InputFilePaths);
         allDiagnostics.AddRange(moduleCompiler.Diagnostics);
 
+        // `flang test` runs only the project's own `test {}` blocks. A dependency's
+        // (and stdlib's) blocks are that project's concern, run from its directory —
+        // otherwise every consumer re-runs the whole transitive suite. The project's
+        // own sources are exactly the compilation's entry inputs; deps arrive via
+        // module resolution, not this list.
+        var testModules = new HashSet<ModuleNode>();
+        if (options.RunTests)
+        {
+            var ownSources = new HashSet<string>(
+                (options.InputFilePaths ?? []).Select(Path.GetFullPath),
+                StringComparer.OrdinalIgnoreCase);
+            foreach (var kvp in parsedModules)
+                if (ownSources.Contains(Path.GetFullPath(kvp.Key)))
+                    testModules.Add(kvp.Value);
+        }
+
         if (options.DumpTemplates)
         {
             foreach (var kvp in parsedModules)
@@ -291,7 +307,7 @@ public class Compiler
             hmChecker.CheckGlobalConstants(kvp.Value, ResolveModulePath(kvp.Key));
 
         foreach (var kvp in parsedModules)
-            hmChecker.CheckModuleBodies(kvp.Value, ResolveModulePath(kvp.Key), checkTests: options.RunTests);
+            hmChecker.CheckModuleBodies(kvp.Value, ResolveModulePath(kvp.Key), checkTests: testModules.Contains(kvp.Value));
 
         // Resolve specializations deferred due to unresolved TypeVars
         hmChecker.ResolvePendingSpecializations();
@@ -323,7 +339,7 @@ public class Compiler
             return (ResolveModulePath(kvp.Key), kvp.Value);
         });
 
-        var irModule = lowering.LowerModule(moduleEntries, options.RunTests);
+        var irModule = lowering.LowerModule(moduleEntries, options.RunTests, testModules);
         irModule.SourceFiles = compilation.Sources;
         allDiagnostics.AddRange(lowering.Diagnostics);
 

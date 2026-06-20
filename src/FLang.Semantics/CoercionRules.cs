@@ -256,6 +256,10 @@ public class AnonymousStructCoercionRule : IInferenceCoercionRule
         {
             TypeVar tv when substMap.TryGetValue(tv.Id, out var repl) => repl,
             ReferenceType refType => new ReferenceType(SubstShallow(refType.InnerType, substMap)),
+            FunctionType fn => new FunctionType(
+                [.. fn.ParameterTypes.Select(p => SubstShallow(p, substMap))],
+                SubstShallow(fn.ReturnType, substMap)),
+            ArrayType arr => new ArrayType(SubstShallow(arr.ElementType, substMap), arr.Length),
             NominalType nominal => new NominalType(
                 nominal.Name, nominal.Kind,
                 nominal.TypeArguments.Select(a => SubstShallow(a, substMap)).ToArray(),

@@ -16,6 +16,16 @@ When you discover a bug or limitation:
 
 ## Open Issues
 
+### Generic Monomorphization Collides Across Instantiations (anon-struct coercion)
+
+**Status:** Partially fixed — type-checker layer fixed; a lowering-stage layer remains
+**Affected:** generic specialization / anonymous-struct → nominal coercion; surfaces when one generic is instantiated for two distinct types in a single compilation unit (e.g. testing a whole library's `test {}` blocks at once)
+
+A generic whose nominal carries a **function-pointer field over the type parameter** (`fn(&T)`), constructed via an anonymous struct literal `.{…}` coerced to the nominal, mis-specializes when instantiated for two types. Surfaced trying to run all of `std`'s colocated `test {}` blocks as one unit (`std.owned`'s `Owned(T)`).
+
+- **Layer 1 (fixed):** `SubstShallow` in `CoercionRules.cs` substituted template `T → concrete` for `TypeVar`/`ReferenceType`/`NominalType` fields but not `FunctionType`/`ArrayType` (silent `_ => type` default). The unsubstituted `fn(&T)` field then unified against the concrete call-site type, **binding the shared template `TypeVar`** and contaminating every other instantiation (`E2071 returns Bar, but got Foo`). Fixed by adding the missing cases. Regression: [`tests/.../generics/anon_struct_fn_field_two_instantiations.f`](../tests/FLang.Tests/Harness/generics/anon_struct_fn_field_two_instantiations.f).
+- **Layer 2 (open):** with **reference** type args (`T = &X`) via an imported generic (`std.owned`), the type-checker now passes but lowering leaves `$T` un-monomorphized in generated C (`core_option_Option_$T`, `void(*)($T*)`). A project-local generic with the same shape lowers fine, so the gap is specific to monomorphizing an imported generic's `Option(T)` / `fn(&T)` fields under two instantiations. This blocks full-suite `flang test` on `std`; per-module `flang test <file>` works.
+
 ### Unqualified Enum Variants Shadow Same-Named Types
 
 **Status:** Open — workaround via renaming the type
