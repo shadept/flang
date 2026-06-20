@@ -16,39 +16,6 @@ When you discover a bug or limitation:
 
 ## Open Issues
 
-### Inliner returned the last `return` of a single-block callee, not the first (fixed)
-
-**Status:** Fixed
-**Affected:** `InliningPass`; surfaced as `std/path.f`'s `join`/`normalize` emitting `/` instead of `\` on Windows (`test "join simple"` etc.)
-
-`sep()` (`#if(platform.os == "windows") { return '\\' } else { return '/' }` followed by a trailing `return '/'`) returns `\` (92) when called directly, yet `join` — which calls `sep()` — wrote `/` (47). Not a compile-time `#if` inconsistency: lowering emits the `#if`'s live branch (`return 92`) *and* the unreachable trailing `return 47` into one basic block (a block with two terminators — dead code after the first). `InliningPass` flattened the single-block callee and used `continue` on each `ReturnInstruction`, so the **last** return seen (the dead `47`) overwrote the live one. Fixed by `break`-ing at the first return — a terminator ends the block; everything after it is dead. The standalone function was always correct because C executes the first `return` and never reaches the tail.
-
-**Latent follow-on:** lowering still emits instructions after a terminating `return` within the same block (malformed IR — a block should have one terminator). Harmless to the C backend (the first `return` wins) and now defended against in the inliner, but other IR passes should not assume a single trailing terminator per block.
-
-### Panic in a test aborted the whole run instead of failing one test (fixed)
-
-**Status:** Fixed
-**Affected:** test-mode codegen (`HmCCodeGenerator.EmitTestMain` / `exit` interception)
-
-The test runner catches a failing `test {}` via `setjmp`/`longjmp`, rewriting `panic`'s `exit(1)` into a `longjmp` back to the runner. The rewrite only fired for an `exit` call inside a function literally named `panic` — but `panic` is small and routinely **inlined**, so the inlined `exit(1)` copies kept terminating the process. The first assertion failure (e.g. a single Windows `path` test) printed its message and then killed the run with no summary, masking every later test. Fixed by guarding *every* `exit` foreign call in test mode with `if (__flang_test_active) longjmp(...)`; the flag already scopes it to an active test, so panics outside tests still terminate normally.
-
-### Foreign functions not visible across modules (fixed)
-
-**Status:** Fixed
-**Affected:** any module calling a `#foreign fn` declared (non-`pub`) in another module — surfaced compiling `std` as one unit (`std/rc.f` → `std/atomic.f`'s `__flang_atomic_*`)
-
-`#foreign` declarations map to single extern C symbols, but `FunctionRegistry.Lookup` filtered them by the normal `pub`-and-imported visibility rule, so a non-`pub` foreign fn was invisible to other modules. `Arc.clone`/`deinit` (which call `std.atomic`'s non-`pub` foreign fns) failed with `E2004 Unresolved function` whenever specialised — a latent bug that simply had no caller (`Arc` was untested). Fixed by treating foreign fns as globally visible (`|| f.IsForeign`), matching C linkage and the registry's existing allowance for duplicate foreign decls.
-
-### Generic `fn(&T)` field calls corrupted monomorphisation (fixed)
-
-**Status:** Fixed
-**Affected:** generic specialisation; surfaced instantiating a generic with a `fn(&T)` field for ≥2 types in one unit (e.g. `std.owned`'s `Owned(T)`)
-
-A generic struct with a function-pointer field over its own type parameter leaked the placeholder `$T` into generated C, or collided two instantiations, because the **shared definition-level `TypeVar` got bound** to a concrete/placeholder type:
-
-- Anonymous-struct coercion didn't substitute `FunctionType` / `ArrayType` fields (`CoercionRules.SubstShallow`'s silent `_ => type`). The raw `fn(&T)` field then unified against the call-site type. Fixed by adding the missing cases. Regression: [`anon_struct_fn_field_two_instantiations.f`](../tests/FLang.Tests/Harness/generics/anon_struct_fn_field_two_instantiations.f).
-- Calling a `fn(&T)` field (`self.cleanup(&v)`) unified the args against the definition's shared type-param `TypeVar` rather than the instance's concrete arg — corrupting that type's later monomorphisation. Fixed by substituting the field type with the instance's type args at the indirect-call site (`HmTypeChecker.Expressions`, reusing `TypeLayoutService.SubstituteTypeArgs`). Regression: [`generic_fn_field_call_two_instantiations.f`](../tests/FLang.Tests/Harness/generics/generic_fn_field_call_two_instantiations.f).
-
 ### Unqualified Enum Variants Shadow Same-Named Types
 
 **Status:** Open — workaround via renaming the type

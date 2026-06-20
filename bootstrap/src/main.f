@@ -11,6 +11,7 @@
 // std.process — they're separate projects that also depend on
 // flang_parser + flang_core.
 
+import std.dict
 import std.env
 import std.list
 import std.option
@@ -19,8 +20,8 @@ import std.result
 import std.string
 import std.string_builder
 import flang_parser.lexer
-import flang_core.diagnostic
-import flang_typer.checker
+import flang_driver.driver
+import bootstrap.frontend
 
 // Parsed CLI state. `subcommand` is the first positional argument; the
 // remainder of argv after the subcommand is passed through to whatever
@@ -149,22 +150,44 @@ fn unknown_subcommand(name: String) i32 {
 // Subcommand handlers
 // ─────────────────────────────────────────────────────────────────────────
 
+// build: analyse a single file through the shared `flang_driver` pipeline
+// and report every diagnostic. The driver (lex → parse → project → check)
+// is invoked here in `main.f`; `frontend` owns file reading and rendering.
 fn run_build(argv: String[], rest: usize, verbose: bool) i32 {
     if rest >= argv.len {
         println("bootstrap: `build` requires an input file")
         return 1
     }
     const path = argv[rest]
-    const msg = $"would compile: {path}"
-    defer msg.deinit()
-    println(msg.as_view())
+
+    const source_opt = read_source(path)
+    if source_opt.is_none() { return 1 }
+    let unit = analyze(source_opt.unwrap(), path)
+    defer unit.deinit()
+    const src = unit.source.as_view()
+
+    render_diagnostics(&unit.diagnostics, path, src)
+
+    const errs = error_count(&unit)
     if verbose {
-        const me = project_info()
-        const v = $"  (bootstrap {me.version}, parser {parser_version()})"
+        const v = $"  ({unit.module.decls.len} decls, {unit.result.node_types.len()} nodes typed)"
         defer v.deinit()
         println(v.as_view())
     }
+    if errs > 0 {
+        return build_failed(path, errs)
+    }
+    const ok = $"ok: {path} ({unit.module.decls.len} decls, {unit.result.node_types.len()} nodes typed)"
+    defer ok.deinit()
+    println(ok.as_view())
     return 0
+}
+
+fn build_failed(path: String, errs: usize) i32 {
+    const m = $"build failed: {errs} error(s) in {path}"
+    defer m.deinit()
+    println(m.as_view())
+    return 1
 }
 
 // Spawn the sibling tool with our trailing argv. Tool binaries are

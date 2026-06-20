@@ -31,6 +31,10 @@ internal sealed class FunctionRegistry
         // (extern decls across modules).
         foreach (var existing in overloads)
         {
+            // A duplicate definition is a same-module concern; the same
+            // signature in another module is a distinct function, resolved
+            // by visibility at the call site, not rejected here.
+            if (existing.ModulePath != scheme.ModulePath) continue;
             if (existing.IsForeign && scheme.IsForeign) continue;
             if (HasSameFullSignature(existing.Node, scheme.Node))
             {

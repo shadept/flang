@@ -536,8 +536,11 @@ public class TypeLayoutService(ITypeResolver engine, INominalTypeRegistry nomina
                     AppendTypeCacheKey(sb, _engine.Resolve(nt.TypeArguments[i]));
                 }
             }
-            else if (nt.Name.StartsWith("__anon_") && nt.FieldsOrVariants.Count > 0)
+            else if ((nt.Name.StartsWith("__anon_") || nt.Name.StartsWith("__tuple_")) && nt.FieldsOrVariants.Count > 0)
             {
+                // `__tuple_N` is named by arity alone, so `(u8, String)` and
+                // `(u32, u32)` would share a key and collide in the layout
+                // cache — key tuples (and anon structs) by their element types.
                 sb.Append('{');
                 for (int i = 0; i < nt.FieldsOrVariants.Count; i++)
                 {

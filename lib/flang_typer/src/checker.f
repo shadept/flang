@@ -272,6 +272,14 @@ pub fn push_diag_e(self: &Checker, span: SourceSpan, code: String, message: Owne
     })
 }
 
+// Translate a unify outcome into a diagnostic anchored at `span`. A
+// `Unified` outcome produces nothing; every mismatch produces one
+// diagnostic on the checker's list.
+fn report_unify(self: &Checker, outcome: &UnifyOutcome, code: String, span: SourceSpan) {
+    let ctx = report_ctx(code, span)
+    report(outcome, &ctx, &self.diagnostics, self.allocator)
+}
+
 pub fn current_visibility(self: &Checker) Visibility {
     return self.current_module match {
         Some(m) => {
@@ -639,10 +647,17 @@ fn check_function_body(self: &Checker, fd: &FunctionDecl) {
     self.fn_stack.push(frame)
 
     let body_ty = check_block(self, &body)
-    // Unify the body's value with the declared return type. A void
-    // function may end in a non-void expression; the user's
-    // declaration wins.
-    let _r =self.engine.unify(body_ty, ret)
+    // Only the implicit-return path is checked here: a block whose final
+    // expression is the function's value. A block that ends in an explicit
+    // `return` yields Void and is covered by `check_return`, so Void is
+    // skipped to avoid a spurious "expected T, got void".
+    body_ty match {
+        Void => {},
+        _ => {
+            const o = self.engine.unify(body_ty, ret)
+            report_unify(self, &o, E_RETURN_MISMATCH, fd.span)
+        },
+    }
 
     let _r =self.fn_stack.pop()
     self.engine.exit_level()
@@ -771,7 +786,7 @@ fn check_let(self: &Checker, ls: &LetStmt) {
     let bound_ty = annotated match {
         Some(a) => {
             inferred match {
-                Some(i) => { let _r =self.engine.unify(i, a); a },
+                Some(i) => { const o = self.engine.unify(i, a); report_unify(self, &o, E_TYPE_MISMATCH, ls.span); a },
                 None => a,
             }
         },
@@ -794,10 +809,12 @@ fn check_return(self: &Checker, rs: &ReturnStmt) {
     rs.value match {
         Some(e) => {
             let v = check_expr(self, &e)
-            let _r =self.engine.unify(v, frame.return_ty)
+            const o = self.engine.unify(v, frame.return_ty)
+            report_unify(self, &o, E_RETURN_MISMATCH, rs.span)
         },
         None => {
-            let _r =self.engine.unify(Ty.Void, frame.return_ty)
+            const o = self.engine.unify(Ty.Void, frame.return_ty)
+            report_unify(self, &o, E_RETURN_MISMATCH, rs.span)
         },
     }
 }
@@ -835,7 +852,8 @@ fn check_if(self: &Checker, if_expr: &IfExpr) Ty {
         Block(b) => check_block(self, &b),
         If(nested) => check_if(self, nested),
     }
-    let _r =self.engine.unify(then_ty, else_ty)
+    const o = self.engine.unify(then_ty, else_ty)
+    report_unify(self, &o, E_TYPE_MISMATCH, if_expr.span)
     return then_ty
 }
 

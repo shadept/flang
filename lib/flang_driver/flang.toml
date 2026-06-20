@@ -1,0 +1,10 @@
+[project]
+name = "flang_driver"
+version = "0.1.0"
+kind = "lib"
+source = "src/**/*.f"
+
+[dependencies]
+flang_core = { path = "../flang_core" }
+flang_parser = { path = "../flang_parser" }
+flang_typer = { path = "../flang_typer" }
