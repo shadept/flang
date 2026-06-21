@@ -2,9 +2,12 @@
 // The back half of the pipeline `flang_driver.analyze` opens.
 
 import std.allocator
+import std.list
 import std.option
 import std.result
 import std.string
+import flang_parser.ast
+import flang_typer.result
 import flang_codegen.fir
 import flang_codegen.backend
 import flang_codegen.c_backend
@@ -18,6 +21,19 @@ import flang_driver.lower
 pub fn build_unit(unit: &AnalyzedUnit, output_path: String, allocator: &Allocator? = null) Result(BuildResult, BuildError) {
     let alloc = allocator.or_global()
     let m = lower_module(&unit.module, &unit.result, alloc)
+    let opts = build_options(output_path, alloc)
+    let r = compile(&m, &opts)
+    opts.deinit()
+    m.deinit()
+    return r
+}
+
+// Lower a checked multi-module project to one FIR program and compile+link
+// it to an executable at `output_path`. The project must be error-free —
+// callers check `project_error_count` first.
+pub fn build_program(modules: &List(Module), result: &TypeCheckResult, output_path: String, allocator: &Allocator? = null) Result(BuildResult, BuildError) {
+    let alloc = allocator.or_global()
+    let m = lower_program(modules, result, alloc)
     let opts = build_options(output_path, alloc)
     let r = compile(&m, &opts)
     opts.deinit()

@@ -1,10 +1,10 @@
 // Checker driver — wires the engine, registries, env, and results
 // into the three public phases:
 //
-//   - `collect_nominals(modules)` builds the `NominalRegistry`.
-//     Phase ordering: every type-decl is registered before any field
-//     or variant payload is resolved, so forward references between
-//     types in the same module just work.
+//   - `collect_nominal_names` then `resolve_nominal_bodies` build the
+//     `NominalRegistry`. Every type-decl across every module is registered
+//     before any field or variant payload is resolved, so references
+//     between types resolve regardless of declaration or module order.
 //
 //   - `collect_signatures(modules, &nominals, &diags)` builds the
 //     `FunctionRegistry`. Type-decl bodies are already resolved by
@@ -74,6 +74,12 @@ pub type Checker = struct {
     current_module: String?
     fn_stack: List(FnFrame)
 
+    // Module FQN -> the set of module FQNs whose `pub` declarations are
+    // visible from it. Built once per `check_all` from the modules'
+    // imports: direct imports plus the transitive `pub import` closure,
+    // plus the auto-imported core prelude.
+    visible_by_module: Dict(OwnedString, Set(String))
+
     allocator: &Allocator
 }
 
@@ -89,6 +95,7 @@ pub fn checker(allocator: &Allocator? = null) Checker {
         diagnostics = list(0, alloc),
         current_module = null,
         fn_stack = list(0, alloc),
+        visible_by_module = dict(alloc),
         allocator = alloc,
     }
 }
@@ -102,6 +109,7 @@ pub fn deinit(self: &Checker) {
     self.results.deinit()
     self.diagnostics.deinit()
     self.fn_stack.deinit()
+    self.visible_by_module.deinit()
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -283,15 +291,156 @@ fn report_unify(self: &Checker, outcome: &UnifyOutcome, code: String, span: Sour
 pub fn current_visibility(self: &Checker) Visibility {
     return self.current_module match {
         Some(m) => {
-            let s: Set(String) = set(self.allocator)
-            // For first slice: visibility = current module only.
-            // Import graph wiring lands when the checker is hooked into
-            // a full project driver.
-            s.add(m)
-            visibility(Some(m), s)
+            let fresh: Set(String) = set(self.allocator)
+            let got = self.visible_by_module.get(m)
+            got match {
+                Some(src) => copy_set_into(&fresh, &src),
+                None => fresh.add(m),
+            }
+            visibility(Some(m), fresh)
         },
         None => open(self.allocator),
     }
+}
+
+// ponytail: rebuilds the returned set per lookup; cache on the checker if
+// profiling flags it. The reads stay O(visible-module-count), which is small.
+fn copy_set_into(dst: &Set(String), src: &Set(String)) {
+    let it = src.iter()
+    loop {
+        let n = it.next()
+        if n.is_none() { break }
+        dst.add(n.unwrap())
+    }
+}
+
+// Build `visible_by_module` from the modules' import declarations: each
+// module sees itself, its direct imports, the `pub import` transitive
+// closure reachable through them, and the auto-imported core prelude.
+fn build_visibility(self: &Checker, modules: &List(Module), paths: &List(String)) {
+    let alloc = self.allocator
+    let n = modules.len
+
+    // Per-module edge lists (views into `paths`): all imports, and the
+    // `pub import` subset that re-exports transitively.
+    let imports: List(List(String)) = list(0, alloc)
+    let reexports: List(List(String)) = list(0, alloc)
+    for i in 0..n {
+        let imps: List(String) = list(0, alloc)
+        let reexps: List(String) = list(0, alloc)
+        collect_edges(&modules[i], paths, &imps, &reexps, alloc)
+        if paths[i] != "core.prelude" {
+            let pre = find_fqn(paths, "core.prelude")
+            if pre.is_some() {
+                let pv = pre.unwrap()
+                if !contains_view(&imps, pv) { imps.push(pv) }
+            }
+        }
+        imports.push(imps)
+        reexports.push(reexps)
+    }
+
+    for i in 0..n {
+        let vis: Set(String) = set(alloc)
+        compute_visible(i, paths, &imports, &reexports, &vis, alloc)
+        self.visible_by_module.set(paths[i], vis)
+    }
+
+    for i in 0..n {
+        imports[i].deinit()
+        reexports[i].deinit()
+    }
+    imports.deinit()
+    reexports.deinit()
+}
+
+// Record module `m`'s imports as views into `paths`. An import whose
+// dotted path names no loaded module is silently dropped here; the
+// unresolved-import diagnostic is the loader's job.
+fn collect_edges(m: &Module, paths: &List(String), imps: &List(String), reexps: &List(String), alloc: &Allocator) {
+    for j in 0..m.decls.len {
+        let d = &m.decls[j]
+        d.* match {
+            Import(id) => {
+                let dotted = dot_join(&id.path, alloc)
+                let fv = find_fqn(paths, dotted.as_view())
+                dotted.deinit()
+                if fv.is_some() {
+                    let v = fv.unwrap()
+                    if !contains_view(imps, v) { imps.push(v) }
+                    if id.is_pub {
+                        if !contains_view(reexps, v) { reexps.push(v) }
+                    }
+                }
+            },
+            _ => {},
+        }
+    }
+}
+
+// `{idx} ∪ imports(idx)` then a BFS that follows only `pub import` edges,
+// per the spec's non-transitive-import / transitive-re-export rule.
+fn compute_visible(idx: usize, paths: &List(String), imports: &List(List(String)), reexports: &List(List(String)), out: &Set(String), alloc: &Allocator) {
+    out.add(paths[idx])
+    let work: List(String) = list(0, alloc)
+    let imps = &imports[idx]
+    for k in 0..imps.len {
+        let im = imps[k]
+        if !out.contains(im) {
+            out.add(im)
+            work.push(im)
+        }
+    }
+    let head: usize = 0
+    while head < work.len {
+        let node = work[head]
+        head = head + 1
+        let ni = find_index(paths, node)
+        if ni.is_some() {
+            let re = &reexports[ni.unwrap()]
+            for k in 0..re.len {
+                let rv = re[k]
+                if !out.contains(rv) {
+                    out.add(rv)
+                    work.push(rv)
+                }
+            }
+        }
+    }
+    work.deinit()
+}
+
+fn dot_join(segs: &List(String), alloc: &Allocator) OwnedString {
+    let sb = string_builder(0, alloc)
+    for i in 0..segs.len {
+        if i > 0 { sb.append('.') }
+        sb.append(segs[i])
+    }
+    let out = sb.to_string()
+    sb.deinit()
+    return out
+}
+
+// ponytail: linear scans over `paths`; index by FQN if module counts grow.
+fn find_fqn(paths: &List(String), name: String) String? {
+    for i in 0..paths.len {
+        if paths[i] == name { return Some(paths[i]) }
+    }
+    return null
+}
+
+fn find_index(paths: &List(String), name: String) usize? {
+    for i in 0..paths.len {
+        if paths[i] == name { return Some(i) }
+    }
+    return null
+}
+
+fn contains_view(list: &List(String), v: String) bool {
+    for i in 0..list.len {
+        if list[i] == v { return true }
+    }
+    return false
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -303,16 +452,22 @@ pub fn current_visibility(self: &Checker) Visibility {
 // is known.
 // ─────────────────────────────────────────────────────────────────────
 
-pub fn collect_nominals(self: &Checker, module: &Module, module_path: String) {
+// Register one module's type *names* (struct/enum placeholders). Bodies are
+// resolved in a separate pass — see `resolve_nominal_bodies` — so a field or
+// variant payload can reference a type declared in any module, in any order.
+pub fn collect_nominal_names(self: &Checker, module: &Module, module_path: String) {
     self.current_module = Some(module_path)
-
-    // Pass 1: register names.
     for i in 0..module.decls.len {
         let decl = &module.decls[i]
         collect_one_name(self, decl, module_path)
     }
+}
 
-    // Pass 2: resolve bodies.
+// Resolve one module's type bodies (struct fields, enum payloads). Runs only
+// after every module's names are registered, so cross-module references in a
+// body resolve regardless of module order.
+pub fn resolve_nominal_bodies(self: &Checker, module: &Module, module_path: String) {
+    self.current_module = Some(module_path)
     for i in 0..module.decls.len {
         let decl = &module.decls[i]
         resolve_one_body(self, decl, module_path)
@@ -688,6 +843,8 @@ fn check_expr_kind(self: &Checker, expr: &Expr) Ty {
         Binary(bin) => check_binary(self, &bin),
         Call(call) => check_call(self, &call),
         If(if_expr) => check_if(self, &if_expr),
+        StructLit(lit) => check_struct_lit(self, &lit),
+        MemberAccess(ma) => check_member(self, &ma),
         _ => self.engine.fresh_var(),
     }
 }
@@ -857,15 +1014,92 @@ fn check_if(self: &Checker, if_expr: &IfExpr) Ty {
     return then_ty
 }
 
+// `S { f = v, ... }` — the literal's type is the resolved nominal `S`; each
+// initializer is unified against its declared field type (so an unsuffixed
+// literal resolves and a mismatch is reported). An anonymous `.{ … }` (no
+// type) defers to a fresh var until record literals land.
+fn check_struct_lit(self: &Checker, lit: &StructLiteralExpr) Ty {
+    if lit.type_expr.is_none() {
+        for i in 0..lit.fields.len {
+            let _v = check_field_value(self, &lit.fields[i])
+        }
+        return self.engine.fresh_var()
+    }
+    let ty = resolve_type_expr(self, lit.type_expr.unwrap())
+    for i in 0..lit.fields.len {
+        let fi = &lit.fields[i]
+        let v = check_field_value(self, fi)
+        let fty = struct_field_lookup(self, &ty, fi.name)
+        if fty.is_some() {
+            const o = self.engine.unify(v, fty.unwrap())
+            report_unify(self, &o, E_TYPE_MISMATCH, fi.span)
+        }
+    }
+    return ty
+}
+
+// The value of a field initializer: the explicit `f = expr`, or — for
+// shorthand `S { f }` — the in-scope binding named like the field.
+fn check_field_value(self: &Checker, fi: &StructFieldInit) Ty {
+    if fi.value.is_some() { return check_expr(self, fi.value.unwrap()) }
+    let id = IdentifierExpr { span = fi.span, name = fi.name }
+    return check_identifier(self, &id)
+}
+
+// `recv.member` — when the receiver is a struct with a field of that name,
+// the access yields the field's (substituted) type. Otherwise it defers to
+// a fresh var: member syntax also bases UFCS calls, which resolve elsewhere.
+fn check_member(self: &Checker, ma: &MemberAccessExpr) Ty {
+    let recv = check_expr(self, ma.receiver)
+    let fty = struct_field_lookup(self, &recv, ma.member)
+    if fty.is_some() { return fty.unwrap() }
+    return self.engine.fresh_var()
+}
+
+// A struct field's declared type by name. Null when the (zonked,
+// one-reference-peeled) type is not a struct or has no such field. The field
+// type is returned verbatim — generic field substitution lands with generics.
+fn struct_field_lookup(self: &Checker, recv: &Ty, name: String) Ty? {
+    let z = self.engine.zonk(recv.*)
+    let peeled = z match {
+        Ref(inner) => inner.*,
+        _ => z,
+    }
+    let nr_opt = peeled match {
+        Nominal(n) => Some(n),
+        _ => null,
+    }
+    if nr_opt.is_none() { return null }
+    let nr = nr_opt.unwrap()
+    let def_node = self.nominals.get(nr.id)
+    let sd_opt = def_node.* match {
+        NomStruct(s) => Some(s),
+        _ => null,
+    }
+    if sd_opt.is_none() { return null }
+    let sd = sd_opt.unwrap()
+    for i in 0..sd.fields.len {
+        if sd.fields[i].name == name { return Some(sd.fields[i].ty) }
+    }
+    return null
+}
+
 // ─────────────────────────────────────────────────────────────────────
 // Top-level driver
 // ─────────────────────────────────────────────────────────────────────
 
 pub fn check_all(self: &Checker, modules: &List(Module), paths: &List(String)) TypeCheckResult {
-    // Phase 1: every module's types are registered before any field
-    // resolution starts, so cross-module references work.
+    // Wire the import graph before any name resolution runs.
+    build_visibility(self, modules, paths)
+
+    // Phase 1: every module's type names are registered before any body
+    // resolves, so a struct field or enum payload can name a type from
+    // another module regardless of the order modules are checked in.
     for i in 0..modules.len {
-        collect_nominals(self, &modules[i], paths[i])
+        collect_nominal_names(self, &modules[i], paths[i])
+    }
+    for i in 0..modules.len {
+        resolve_nominal_bodies(self, &modules[i], paths[i])
     }
     // Phase 2: signatures.
     for i in 0..modules.len {

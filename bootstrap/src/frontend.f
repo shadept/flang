@@ -38,6 +38,23 @@ pub fn render_diagnostics(diags: &List(Diagnostic), path: String, source: String
     }
 }
 
+// Render diagnostics across a multi-module project, selecting each one's
+// source and path by its span's file id. Spanless diagnostics fall back to
+// the first source.
+pub fn render_project_diagnostics(diags: &List(Diagnostic), paths: &List(OwnedString), sources: &List(OwnedString)) {
+    for i in 0..diags.len {
+        let d = &diags[i]
+        let fid = d.span.file_id
+        if fid >= 0i32 and (fid as usize) < sources.len {
+            print_diagnostic(paths[fid as usize].as_view(), sources[fid as usize].as_view(), d)
+        } else {
+            if sources.len > 0 {
+                print_diagnostic(paths[0].as_view(), sources[0].as_view(), d)
+            }
+        }
+    }
+}
+
 pub fn print_diagnostic(path: String, source: String, d: &Diagnostic) {
     const lc = line_col(source, d.span.start)
     const ln = lc.0

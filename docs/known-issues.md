@@ -14,7 +14,57 @@ When you discover a bug or limitation:
 
 ---
 
+### Bootstrap Segfaulted Type-Checking a `struct` Declaration — RESOLVED
+
+**Status:** Resolved — `HmAstLowering` lexical-scope fix
+**Affected:** `FLang.Semantics/HmAstLowering` block lowering (the C# reference compiler that builds the bootstrap)
+
+The bootstrap crashed type-checking any source containing a `struct` declaration (enums were fine). The fault was **not** in the FLang typer. `HmAstLowering` kept a single flat name→slot map (`_locals`) with no lexical scoping, so a `let` inside a block permanently overwrote any outer binding of the same name. `resolve_struct_body` (`lib/flang_typer/src/checker.f`) binds the nominal id as `let id = …`, then shadows it with `let id = …` inside the generics loop; the post-loop `nominals.get(id)` then read the loop-local slot, which is uninitialised when the struct has no generics (the loop never runs) → out-of-bounds index → segfault. Enums were immune only because `resolve_enum_body` names its loop-local `vid`. The reference compiler's own type-check never reproduced it because it doesn't run the FLang typer.
+
+**Fix:** `LowerBlock` now opens a lexical scope and, on exit, undoes the `let`/`const` bindings it introduced, restoring any shadowed outer binding. Copy-on-write parameter promotions and pattern bindings deliberately stay function-scoped. Regression test: `tests/FLang.Tests/Harness/scoping/shadow_let_in_loop_body.f`.
+
+---
+
+### Struct Field Reads Through the Bootstrap — RESOLVED
+
+**Status:** Resolved — minimal struct/member typing + lowering in the bootstrap
+**Affected:** bootstrap `flang_typer` (struct-literal / member typing) and `flang_driver` AST->FIR lowering
+
+Once the type-check segfault was gone, a bootstrap-built `let p = Pt { x = 7, y = 4 } return p.x` returned `0`. This was **not** a wrong-offset miscompile: struct-literal and member-access expressions were simply unbuilt. The bootstrap typer left both as fresh inference variables (`check_expr_kind`), and the M1 lowering stubbed both to `IntConst(0)`, so the whole body folded to `return 0`.
+
+**Fix (minimal M4):**
+- Typer (`lib/flang_typer/src/checker.f`): `check_struct_lit` resolves the literal's named type to its nominal and unifies each initializer against the declared field type; `check_member` returns a struct field's declared type, and falls back to a fresh var for non-struct receivers so UFCS bases are untouched (generic field substitution lands with generics).
+- Lowering (`lib/flang_driver/src/lower.f`): a struct literal allocates a stack slot and stores each field at its `layout.struct_layout` offset (aggregate fields copy their bytes, scalars store by value); member access geps to the field offset and loads. A struct value is its slot pointer — FIR addresses aggregates by pointer — so nested `a.b.c` chains geps without an intermediate copy.
+
+**Verified:** bootstrap-built first / non-first / arithmetic reads, plus 3-field and out-of-order-init structs, return the right values. Store and load both take offsets from the shared `layout.f`, so they always agree. Regression tests: `tests/FLang.Tests/Harness/structs/struct_field_return_first.f` and `struct_field_return_nonfirst.f` (reference compiler), and a lowering block in `lib/flang_driver/src/lower.f`.
+
+**Still milestone-gated:** struct-typed parameters and returns skip the lowering signature gate (`type_expr_to_ir` accepts only primitives), so a function that takes or returns a struct by value is type-checked but not lowered yet; field assignment, pattern destructuring, and `&struct.field` arrive with later milestones.
+
+**Reference compiler:** the companion `(void*)(0 + 0)` const-fold symptom does not reproduce in the current tree. `HmAstLowering.LowerMemberAccess` always spills a struct value to an alloca and loads at the field's byte offset; the minimal repro and its variants (non-first field in a return, in arithmetic, off a call result, 3-field structs) all compile and run, and the full struct harness passes. Pinned by the two new harness tests above.
+
+---
+
+### Bootstrap Typer Resolved Type Bodies Per-Module (cross-module `unknown type`) — RESOLVED
+
+**Status:** Resolved — split name registration from body resolution in `check_all`
+**Affected:** bootstrap `flang_typer` nominal collection (`lib/flang_typer/src/checker.f`)
+
+Running the bootstrap on any stdlib-using project (including itself) reported `unknown type` for cross-module types — `String`, `Allocator`, `SourceSpan`, `Module`, `TypeCheckResult`, `Token`, and more. `check_all` called `collect_nominals` once per module, and that routine registered the module's type *names* **and** resolved their *bodies* before moving to the next module. So a struct field or enum payload that named a type from a not-yet-processed module (e.g. `core.rtti`'s `ParamInfo { name: String }`, processed before `core.string`) failed to resolve, even though the top-level comment claimed all names were registered first.
+
+**Fix:** `collect_nominals` is split into `collect_nominal_names` and `resolve_nominal_bodies`; `check_all` runs the first across every module, then the second across every module, so a body resolves against the complete name set regardless of module order. Verified: a full bootstrap-on-itself run now type-checks 79 modules and every cross-module struct/enum type resolves. Covered by the existing `flang_typer` / `flang_driver` `test {}` suites.
+
+---
+
 ## Open Issues
+
+### Bootstrap Self-Host: Remaining Typer Gaps
+
+**Status:** Open — milestone-gated; surfaced by `bootstrap build` on the compiler itself
+**Affected:** bootstrap `flang_typer` type resolution and expression checking
+
+With cross-module nominal resolution fixed, a full self-host run still fails on distinct, unported typer features (counts from one run): **type aliases** (`type VarId = u32`, `NodeId`, `NominalId`, `Level`) are registered as neither struct nor enum, so `resolve_named` cannot find them (~130 `unknown type`); the builtin **`void`/`never`** type names are not mapped to `Ty.Void`/`Ty.Never` (~7); **enum-value access** (`Ord.Less`) is not typed, surfacing as `unknown identifier` (~1000); and the `std.io.reader`/`writer` modules live in `*.generated.f` files that `import std.io.reader` does not resolve to. None are import-resolution bugs — they are the next milestones of the lowering/typing port.
+
+### Anonymous Struct in `Ok(...)`/`Some(...)` Doesn't Coerce to a Nominal Payload
 
 ### Anonymous Struct in `Ok(...)`/`Some(...)` Doesn't Coerce to a Nominal Payload
 

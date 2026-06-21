@@ -27,6 +27,11 @@ public class HmAstLowering
 
     // Per-function state
     private readonly Dictionary<string, Value> _locals = [];
+
+    // Per-block undo log for lexical `let`/`const` scoping. Each entry is the
+    // (name, prior slot) pairs a block must restore on exit; prior == null means
+    // the name was unbound before the block introduced it.
+    private readonly Stack<List<(string Name, Value? Prev)>> _localScopes = new();
     private readonly HashSet<string> _parameters = [];
     private readonly HashSet<string> _byRefParams = [];
     private readonly Dictionary<string, int> _shadowCounter = [];
@@ -355,6 +360,7 @@ public class HmAstLowering
     {
         // Reset per-function state
         _locals.Clear();
+        _localScopes.Clear();
         _parameters.Clear();
         _byRefParams.Clear();
         _shadowCounter.Clear();
@@ -392,6 +398,7 @@ public class HmAstLowering
     private IrFunction GenerateTestMain(List<(string Name, IrFunction Function)> testFunctions)
     {
         _locals.Clear();
+        _localScopes.Clear();
         _parameters.Clear();
         _byRefParams.Clear();
         _shadowCounter.Clear();
@@ -1197,6 +1204,7 @@ public class HmAstLowering
     {
         // Reset per-function state
         _locals.Clear();
+        _localScopes.Clear();
         _parameters.Clear();
         _byRefParams.Clear();
         _shadowCounter.Clear();
@@ -1464,7 +1472,7 @@ public class HmAstLowering
         if (isArray && varDecl.Initializer != null)
         {
             var initVal = LowerExpression(varDecl.Initializer, irType);
-            _locals[varDecl.Name] = new LocalValue(initVal.Name, new IrPointer(irType));
+            DeclareLocal(varDecl.Name, new LocalValue(initVal.Name, new IrPointer(irType)));
             return;
         }
 
@@ -1485,7 +1493,7 @@ public class HmAstLowering
                 TypeLayoutService.IrVoidPrim, calleeParamTypes: null, isForeign: true);
         }
 
-        _locals[varDecl.Name] = allocaResult;
+        DeclareLocal(varDecl.Name, allocaResult);
     }
 
     private void LowerLoop(LoopNode loop)
@@ -3023,6 +3031,13 @@ public class HmAstLowering
 
     private Value LowerBlock(BlockExpressionNode block)
     {
+        // A block is a lexical scope: a `let` inside it must not outlive the
+        // block, or a later use of a shadowed outer name would resolve to the
+        // inner slot. Only `let`/`const` bindings are tracked here — parameter
+        // promotions re-home a param's storage for the rest of the function and
+        // must stay visible after the block.
+        PushLocalScope();
+
         // Each block is a defer scope: defers registered inside it fire on
         // exit (normal fall-through, or on any escaping jump). `PopDeferScope`
         // handles both cases — it emits+pops on fall-through, and just pops
@@ -3037,6 +3052,7 @@ public class HmAstLowering
             {
                 var result = LowerExpression(block.TrailingExpression);
                 PopDeferScope();
+                PopLocalScope();
                 return result;
             }
         }
@@ -3048,11 +3064,42 @@ public class HmAstLowering
                 var mark = _deferScopeMarks.Pop();
                 while (_deferStack.Count > mark) _deferStack.Pop();
             }
+            PopLocalScope();
             throw;
         }
 
         PopDeferScope();
+        PopLocalScope();
         return new IntConstantValue(0, TypeLayoutService.IrVoidPrim);
+    }
+
+    // Lexical scoping for `let`/`const` bindings. A block records each binding it
+    // introduces, plus any outer name that binding shadows, so the entry can be
+    // undone when the block exits. Parameter promotions and pattern bindings
+    // write `_locals` directly and are deliberately not tracked — they belong to
+    // the whole function. `_shadowCounter` is likewise never rewound: emitted C
+    // names must stay unique for the function's lifetime.
+    private void PushLocalScope() => _localScopes.Push([]);
+
+    private void PopLocalScope()
+    {
+        var undo = _localScopes.Pop();
+        for (int k = undo.Count - 1; k >= 0; k--)
+        {
+            var (name, prev) = undo[k];
+            if (prev is null) _locals.Remove(name);
+            else _locals[name] = prev;
+        }
+    }
+
+    private void DeclareLocal(string name, Value value)
+    {
+        if (_localScopes.Count > 0)
+        {
+            _locals.TryGetValue(name, out var prev);
+            _localScopes.Peek().Add((name, prev));
+        }
+        _locals[name] = value;
     }
 
     private Value LowerIf(IfExpressionNode ifExpr)

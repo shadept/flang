@@ -1,0 +1,18 @@
+{
+  "version": 1,
+  "flags_hash": "sha256:206a508c743ab861b744a448b5a06bcded27f67d4720e40ee9b072652ec51628",
+  "entries": {
+    "local/probe.obj": {
+      "src": "C:\\Users\\Shade\\Projects\\flang\\probe.c",
+      "src_mtime_unix": 1782052116,
+      "src_size": 862,
+      "src_hash": "sha256:a608cd9083afc3d4863a819ee20a95499014ff1dd8fe64bf7e19f4471f766b12"
+    },
+    "stdlib/string.obj": {
+      "src": "C:\\Users\\Shade\\Projects\\flang\\dist\\win-x64\\stdlib\\core\\string.c",
+      "src_mtime_unix": 1778507859,
+      "src_size": 207,
+      "src_hash": "sha256:07e725908b4a42b44f82ea8f01b8f950686605a6172ca9ff464128100ec5ca6f"
+    }
+  }
+}

@@ -1,6 +1,6 @@
-// bootstrap - the FLang compiler, written in FLang.
+// the FLang compiler, written in FLang.
 //
-//   bootstrap [--help] [--version] [-v|--verbose] <command> [args...]
+//   flang [--help] [--version] [-v|--verbose] <command> [args...]
 //
 //   commands:
 //     build <file.f>        compile a source file
@@ -25,7 +25,8 @@ import flang_codegen.backend
 import flang_driver.driver
 import flang_driver.compile
 import flang_driver.project
-import bootstrap.frontend
+import flang_driver.resolver
+import flang.frontend
 
 // Parsed CLI state. `subcommand` is the first positional argument; the
 // remainder of argv after the subcommand is passed through to whatever
@@ -36,6 +37,7 @@ type Cli = struct {
     verbose: bool
     subcommand: String
     rest_index: usize
+    stdlib_path: String
 }
 
 pub fn main() i32 {
@@ -59,7 +61,7 @@ pub fn main() i32 {
     }
 
     return cli.subcommand match {
-        "build" => run_build(argv, cli.rest_index, cli.verbose)
+        "build" => run_build(argv, cli.rest_index, cli.verbose, cli.stdlib_path)
         "fmt" => spawn_tool("flang_fmt", argv, cli.rest_index, cli.verbose)
         "lsp" => spawn_tool("flang_lsp", argv, cli.rest_index, cli.verbose)
         "cst" => spawn_tool("cst_explorer", argv, cli.rest_index, cli.verbose)
@@ -74,7 +76,7 @@ pub fn main() i32 {
 // argument as the subcommand. Index 0 is the program name and is skipped.
 fn parse_cli(argv: String[]) Cli {
     let cli: Cli
-    let opts = getopts("h(help)V(version)v(verbose)", argv, 1)
+    let opts = getopts("h(help)V(version)v(verbose)s(stdlib-path):", argv, 1)
 
     // Drive opts.next() manually rather than `for r in opts` - std.env's
     // `iter(&GetOpt)` returns a *copy* of the iterator state, so a
@@ -88,6 +90,9 @@ fn parse_cli(argv: String[]) Cli {
                 if c == 'h' { cli.show_help = true }
                 if c == 'V' { cli.show_version = true }
                 if c == 'v' { cli.verbose = true }
+            }
+            OptArg(c, val) => {
+                if c == 's' { cli.stdlib_path = val }
             }
             NonOpt(s) => {
                 cli.subcommand = s
@@ -156,7 +161,7 @@ fn unknown_subcommand(name: String) i32 {
 // build: a `<file>.f` argument compiles that single file; with no
 // argument, load `flang.toml` from the current directory and build the
 // project. Both share `build_source_file` for the analyse->lower->link tail.
-fn run_build(argv: String[], rest: usize, verbose: bool) i32 {
+fn run_build(argv: String[], rest: usize, verbose: bool, stdlib_path: String) i32 {
     if rest < argv.len {
         const path = argv[rest]
         if ends_with(path, ".f") {
@@ -168,11 +173,13 @@ fn run_build(argv: String[], rest: usize, verbose: bool) i32 {
         println(msg.as_view())
         return 1
     }
-    return build_project(verbose)
+    return build_project(verbose, stdlib_path)
 }
 
-// Project mode: parse `flang.toml`, glob its sources, and build.
-fn build_project(verbose: bool) i32 {
+// Project mode: parse `flang.toml`, glob its sources, resolve imports
+// across the whole project (plus the auto-imported prelude), type-check
+// every module together, then lower the lot to one executable.
+fn build_project(verbose: bool, stdlib_path: String) i32 {
     if !exists("flang.toml") {
         println("bootstrap: no flang.toml in the current directory")
         return 1
@@ -194,8 +201,23 @@ fn build_project(verbose: bool) i32 {
         println(m.as_view())
         return 1
     }
-    if sources.len > 1 {
-        const m = $"bootstrap: {sources.len} source files - multi-module builds need import resolution (not yet wired)"
+
+    let ctx = resolve_ctx(&proj, stdlib_path)
+    defer ctx.deinit()
+
+    let unit = analyze_project(&ctx, &sources)
+    defer unit.deinit()
+
+    render_project_diagnostics(&unit.diagnostics, &unit.file_paths, &unit.sources)
+
+    const errs = project_error_count(&unit)
+    if verbose {
+        const v = $"  ({unit.modules.len} modules, {unit.result.node_types.len()} nodes typed)"
+        defer v.deinit()
+        println(v.as_view())
+    }
+    if errs > 0 {
+        const m = $"build failed: {errs} error(s)"
         defer m.deinit()
         println(m.as_view())
         return 1
@@ -203,7 +225,17 @@ fn build_project(verbose: bool) i32 {
 
     const out = $"{proj.output.as_view()}/{proj.name.as_view()}"
     defer out.deinit()
-    return build_source_file(sources[0].as_view(), out.as_view(), verbose)
+    let result = build_program(&unit.modules, &unit.result, out.as_view())
+    if result.is_err() {
+        report_build_error(&result.unwrap_err(), proj.name.as_view())
+        return 1
+    }
+    let artifact = result.unwrap()
+    defer artifact.deinit()
+    const msg = $"built {artifact.executable_path.as_view()}"
+    defer msg.deinit()
+    println(msg.as_view())
+    return 0
 }
 
 // Read, analyse, report diagnostics, then lower + link to `out`.

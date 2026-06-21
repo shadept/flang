@@ -45,6 +45,12 @@ flang_parser = { path = "../lib/flang_parser" }
 
 The dep's `[project].name` IS its import namespace; library files live directly under the source root, never inside a redundant `<source_root>/<name>/` subfolder. This mirrors how the current project resolves its own imports. Resolution is flat (no transitive deps), path-only (no registry, semver, or lockfile). Per-dep `[build.<os>]` libs/cflags/headers carry through to the consuming project's link line.
 
+### Self-hosted import resolution (`flang_driver`)
+
+The bootstrap compiler reimplements the same machinery in FLang. `flang_driver/resolver.f` is the port: `resolve_import` mirrors `TryResolveImportPath` (project-name, dependency-name, then include-path rules — stdlib root via the `--stdlib-path` flag, then the working dir), and `module_fqn` mirrors `DeriveModulePath` (the inverse, classifying a file path under the project / dependency / stdlib roots). Dependency source roots are derived exactly as the C# does — read each dep's `flang.toml`, take the static prefix of its `source` glob.
+
+`flang_driver/driver.f::analyze_project` is the BFS loader: it seeds the queue with the project's globbed entry sources plus the auto-imported `core.prelude`, follows each module's imports, deduplicates by file path, and type-checks the whole set through a single `check_all`. The module FQNs (not file paths) are passed as the per-module paths so symbol registration and visibility agree. Visibility is built in `flang_typer/checker.f::build_visibility` from the modules' `ImportDecl`s — `{M} ∪ imports(M)` then the `pub import` re-export closure, matching `GetVisibleModules`. `compile.f::build_program` lowers every module into one FIR program for a single link. `examples/multimod` is the end-to-end witness. (Known gap: structs crash the bootstrap typer — see [known-issues.md](known-issues.md).)
+
 ## AST Design
 
 - **Top-down only.** No parent pointers. Context is passed down during traversal, never looked up.
@@ -64,6 +70,8 @@ The dep's `[project].name` IS its import namespace; library files live directly 
 Linear IR: `IrModule` → `IrFunction` → `BasicBlock` → `Instruction`. Merge points use phi-via-alloca (allocate slot, store from each branch).
 
 Complex constructs (`for`, `if` expressions, `defer`, `match`) are desugared into basic blocks and branches during AST → FIR lowering.
+
+Lowering keys locals by name (`HmAstLowering._locals`). A block is a lexical scope: it tracks the `let`/`const` bindings it introduces and undoes them on exit, so a name shadowed inside a block resolves back to the outer binding afterwards. Parameter copy-on-write promotions and pattern bindings are deliberately function-scoped and survive block exit.
 
 ## Optimization Passes
 

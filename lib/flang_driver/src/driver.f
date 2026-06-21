@@ -17,14 +17,18 @@
 import std.allocator
 import std.list
 import std.option
+import std.set
 import std.string
+import std.string_builder
 import flang_parser.lexer
 import flang_parser.parser
 import flang_parser.projector
 import flang_parser.ast
 import flang_core.diagnostic
+import flang_core.span
 import flang_typer.checker
 import flang_typer.result
+import flang_driver.resolver
 
 // A fully analysed compilation unit. `checked` is false when the source
 // failed to parse — `result` is then an empty placeholder.
@@ -117,4 +121,191 @@ fn count_errors(diags: &List(Diagnostic)) usize {
         if diags[i].severity == Severity.Error { n = n + 1 }
     }
     return n
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// Multi-module project analysis
+//
+// `analyze_project` discovers the full module set by following imports
+// from the entry sources (plus the auto-imported core prelude), resolving
+// each against `ctx`, then type-checks every module together via one
+// `check_all`. Each module's source is owned by the returned unit; the
+// AST views into it (flang_parser/projector.f), so the sources outlive
+// the modules.
+// ─────────────────────────────────────────────────────────────────────
+
+// A type-checked multi-module project. Parallel lists are keyed by file
+// id (a module's index): `sources[i]` / `file_paths[i]` back `modules[i]`,
+// whose registered FQN is `fqns[i]`.
+pub type AnalyzedProject = struct {
+    sources: List(OwnedString)
+    fqns: List(OwnedString)
+    file_paths: List(OwnedString)
+    modules: List(Module)
+    result: TypeCheckResult
+    checked: bool
+    diagnostics: List(Diagnostic)
+}
+
+pub fn analyze_project(ctx: &ResolveCtx, entries: &List(OwnedString), allocator: &Allocator? = null) AnalyzedProject {
+    let alloc = allocator.or_global()
+    let diagnostics: List(Diagnostic) = list(0, alloc)
+    let sources: List(OwnedString) = list(0, alloc)
+    let fqns: List(OwnedString) = list(0, alloc)
+    let file_paths: List(OwnedString) = list(0, alloc)
+    let modules: List(Module) = list(0, alloc)
+
+    // BFS over the import graph, deduplicated by file path.
+    let queue: List(OwnedString) = list(0, alloc)
+    let seen: Set(String) = set(alloc)
+    for i in 0..entries.len {
+        enqueue_copy(&queue, &seen, entries[i].as_view())
+    }
+    seed_prelude(ctx, &queue, &seen, alloc)
+
+    let qi: usize = 0
+    while qi < queue.len {
+        let path = queue[qi].as_view()
+        qi = qi + 1
+        let src_opt = read_text(path)
+        if src_opt.is_none() {
+            const msg = $"cannot read source `{path}`"
+            diagnostics.push(error("E0001", msg, none_span()))
+            continue
+        }
+        let src = src_opt.unwrap()
+        let fid = modules.len as i32
+        let module = parse_to_module(src.as_view(), fid, &diagnostics, alloc)
+        let fqn = module_fqn(ctx, path, alloc)
+        enqueue_imports(ctx, &module, &queue, &seen, &diagnostics, alloc)
+        sources.push(src)
+        file_paths.push(from_view(path))
+        fqns.push(fqn)
+        modules.push(module)
+    }
+
+    deinit_owned_list(&queue)
+    seen.deinit()
+
+    let checked = count_errors(&diagnostics) == 0
+    let result = empty_result(alloc)
+    if checked {
+        let path_views: List(String) = list(modules.len, alloc)
+        for i in 0..fqns.len {
+            path_views.push(fqns[i].as_view())
+        }
+        let chk = checker(alloc)
+        result = check_all(&chk, &modules, &path_views)
+        drain_diagnostics(&diagnostics, &chk.diagnostics)
+        chk.deinit()
+        path_views.deinit()
+    }
+
+    return AnalyzedProject {
+        sources = sources,
+        fqns = fqns,
+        file_paths = file_paths,
+        modules = modules,
+        result = result,
+        checked = checked,
+        diagnostics = diagnostics,
+    }
+}
+
+pub fn deinit(self: &AnalyzedProject) {
+    self.diagnostics.deinit()
+    for i in 0..self.modules.len {
+        self.modules[i].deinit()
+    }
+    self.modules.deinit()
+    deinit_owned_list(&self.fqns)
+    deinit_owned_list(&self.file_paths)
+    deinit_owned_list(&self.sources)
+    // ponytail: the TypeCheckResult is leaked — same as AnalyzedUnit, no
+    // result.deinit() yet. Fine for one-shot build. See docs/known-issues.md.
+}
+
+// Total error-severity diagnostics across every module.
+pub fn project_error_count(self: &AnalyzedProject) usize {
+    return count_errors(&self.diagnostics)
+}
+
+fn parse_to_module(src: String, file_id: i32, diags: &List(Diagnostic), alloc: &Allocator) Module {
+    let lx = lexer(src, alloc)
+    let tokens = lx.tokenize()
+    let p = parser(tokens, alloc)
+    const cst = p.parse_module()
+    const module = project_module(cst, file_id, alloc)
+    drain_diagnostics(diags, &p.diagnostics)
+    p.deinit()
+    tokens.deinit()
+    return module
+}
+
+fn enqueue_imports(ctx: &ResolveCtx, m: &Module, queue: &List(OwnedString), seen: &Set(String), diags: &List(Diagnostic), alloc: &Allocator) {
+    for j in 0..m.decls.len {
+        let d = &m.decls[j]
+        d.* match {
+            Import(id) => {
+                let r = resolve_import(ctx, &id.path, alloc)
+                r match {
+                    Some(p) => enqueue_owned(queue, seen, p),
+                    None => push_unresolved(diags, &id, alloc),
+                }
+            },
+            _ => {},
+        }
+    }
+}
+
+fn seed_prelude(ctx: &ResolveCtx, queue: &List(OwnedString), seen: &Set(String), alloc: &Allocator) {
+    let segs: List(String) = list(2, alloc)
+    segs.push("core")
+    segs.push("prelude")
+    let r = resolve_import(ctx, &segs, alloc)
+    segs.deinit()
+    r match {
+        Some(p) => enqueue_owned(queue, seen, p),
+        None => {},
+    }
+}
+
+fn enqueue_copy(queue: &List(OwnedString), seen: &Set(String), path: String) {
+    if seen.contains(path) { return }
+    queue.push(from_view(path))
+    seen.add(queue[queue.len - 1].as_view())
+}
+
+fn enqueue_owned(queue: &List(OwnedString), seen: &Set(String), owned: OwnedString) {
+    if seen.contains(owned.as_view()) {
+        owned.deinit()
+        return
+    }
+    queue.push(owned)
+    seen.add(queue[queue.len - 1].as_view())
+}
+
+fn push_unresolved(diags: &List(Diagnostic), id: &ImportDecl, alloc: &Allocator) {
+    let dotted = join_dotted(&id.path, alloc)
+    const msg = $"unresolved import `{dotted.as_view()}`"
+    dotted.deinit()
+    diags.push(error("E0001", msg, id.span))
+}
+
+fn join_dotted(segs: &List(String), alloc: &Allocator) OwnedString {
+    let sb = string_builder(0, alloc)
+    for i in 0..segs.len {
+        if i > 0 { sb.append('.') }
+        sb.append(segs[i])
+    }
+    let out = sb.to_string()
+    sb.deinit()
+    return out
+}
+
+fn deinit_owned_list(l: &List(OwnedString)) {
+    for i in 0..l.len {
+        l[i].deinit()
+    }
+    l.deinit()
 }

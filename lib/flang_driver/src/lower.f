@@ -19,23 +19,43 @@ import flang_parser.ast
 import flang_typer.type
 import flang_typer.node_id
 import flang_typer.result
+import flang_typer.nominal_registry
 import flang_codegen.fir
 import flang_codegen.builder
 import flang_driver.driver
+import flang_driver.layout
 
 // Lower every supported top-level function in `ast_module` into a fresh
 // `IrModule`. Non-function decls and unsupported functions are skipped.
 pub fn lower_module(ast_module: &Module, result: &TypeCheckResult, allocator: &Allocator? = null) IrModule {
     let alloc = allocator.or_global()
     let m = module(alloc)
+    lower_into(&m, ast_module, result, alloc)
+    return m
+}
+
+// Lower every supported module of a checked project into one `IrModule`,
+// sharing the project-wide `TypeCheckResult`. Cross-module references
+// resolve through that result; every function lands in one program so the
+// backend links it in a single pass.
+pub fn lower_program(modules: &List(Module), result: &TypeCheckResult, allocator: &Allocator? = null) IrModule {
+    let alloc = allocator.or_global()
+    let m = module(alloc)
+    for i in 0..modules.len {
+        lower_into(&m, &modules[i], result, alloc)
+    }
+    return m
+}
+
+// Lower `ast_module`'s supported functions into the existing `m`.
+fn lower_into(m: &IrModule, ast_module: &Module, result: &TypeCheckResult, alloc: &Allocator) {
     for i in 0..ast_module.decls.len {
         let d = &ast_module.decls[i]
         d.* match {
-            Function(fd) => lower_function(result, &m, &fd, alloc),
+            Function(fd) => lower_function(result, m, &fd, alloc),
             _ => {},
         }
     }
-    return m
 }
 
 // Lower one function declaration and append it to `m`. Returns without
@@ -137,8 +157,127 @@ fn lower_expr(result: &TypeCheckResult, bb: &BlockBuilder, env: &Dict(String, Op
         Identifier(id) => lower_identifier(env, &id),
         Binary(b) => lower_binary(result, bb, env, &b, alloc),
         Unary(u) => lower_unary(result, bb, env, &u, alloc),
+        StructLit(s) => lower_struct_lit(result, bb, env, &s, alloc),
+        MemberAccess(m) => lower_member(result, bb, env, &m, alloc),
         // ponytail: M1 placeholder; real lowering lands with later milestones.
         _ => Operand.IntConst(0),
+    }
+}
+
+// Structs and member access (M4, minimal)
+//
+// FIR is flat - aggregates are opaque byte buffers addressed by pointer. A
+// struct value is therefore the pointer to its bytes: a literal allocates a
+// stack slot and stores each field at its layout offset, and a member access
+// geps to the field's offset and loads it. Field offsets come from
+// `layout.struct_layout` (auto-repr reorders fields, but offsets stay keyed by
+// declaration index, so a field's declared position addresses them directly).
+
+// A struct value's registry definition (field names and types) paired with
+// its computed byte layout (per-field offsets, total size, alignment).
+type StructTarget = struct {
+    def: StructDef
+    layout: StructLayout
+}
+
+// `S { f = v, ... }` - allocate a slot the size of the struct and store each
+// initializer at its field offset. The value is the slot pointer. Aggregate
+// fields copy their bytes; scalar fields store by value.
+fn lower_struct_lit(result: &TypeCheckResult, bb: &BlockBuilder, env: &Dict(String, Operand), lit: &StructLiteralExpr, alloc: &Allocator) Operand {
+    let reg = &result.nominals
+    let ty = node_ty(result, lit.span)
+    let target = resolve_struct(&ty, reg, alloc)
+    if target.is_none() { return Operand.IntConst(0) }
+    let st = target.unwrap()
+
+    let slot = bb.stack_slot(st.layout.size as u64, st.layout.align as u64)
+    for i in 0..lit.fields.len {
+        let fi = &lit.fields[i]
+        let di = field_index(&st.def, fi.name)
+        if di < 0 { continue }
+        let didx = di as usize
+        let off = st.layout.offsets[didx]
+        let fty = &st.def.fields[didx].ty
+        let v = lower_field_init(result, bb, env, fi, alloc)
+        let fp = bb.gep(slot, Operand.IntConst(off as i64))
+        if is_aggregate(fty) {
+            bb.memcpy(fp, v, Operand.IntConst(layout_of(fty, reg, alloc).size as i64))
+        } else {
+            bb.store(ty_to_ir(fty), v, fp)
+        }
+    }
+    return slot
+}
+
+// The value of a field initializer: the explicit expression, or - for
+// shorthand `S { x }` - the in-scope binding named like the field.
+fn lower_field_init(result: &TypeCheckResult, bb: &BlockBuilder, env: &Dict(String, Operand), fi: &StructFieldInit, alloc: &Allocator) Operand {
+    if fi.value.is_some() {
+        return lower_expr(result, bb, env, fi.value.unwrap(), alloc)
+    }
+    let got = env.get(fi.name)
+    if got.is_some() { return got.unwrap() }
+    return Operand.IntConst(0)
+}
+
+// `recv.field` - gep to the field's offset off the receiver pointer, then
+// load a scalar. An aggregate member yields its address (so nested `a.b.c`
+// chains geps without an intermediate copy).
+fn lower_member(result: &TypeCheckResult, bb: &BlockBuilder, env: &Dict(String, Operand), ma: &MemberAccessExpr, alloc: &Allocator) Operand {
+    let reg = &result.nominals
+    let recv_ty = node_ty(result, expr_span(ma.receiver))
+    let target = resolve_struct(&recv_ty, reg, alloc)
+    if target.is_none() { return Operand.IntConst(0) }
+    let st = target.unwrap()
+    let di = field_index(&st.def, ma.member)
+    if di < 0 { return Operand.IntConst(0) }
+    let off = st.layout.offsets[di as usize]
+
+    let base = lower_expr(result, bb, env, ma.receiver, alloc)
+    let fp = bb.gep(base, Operand.IntConst(off as i64))
+    let mty = node_ty(result, ma.span)
+    if is_aggregate(&mty) { return fp }
+    return bb.load(ty_to_ir(&mty), fp)
+}
+
+// Resolve a value's static type to the struct it names, peeling one
+// reference. Null for enums, scalars, and unresolved types - the caller
+// emits its placeholder rather than crash.
+fn resolve_struct(ty: &Ty, reg: &NominalRegistry, alloc: &Allocator) StructTarget? {
+    let peeled = ty.* match {
+        Ref(inner) => inner.*,
+        _ => ty.*,
+    }
+    let nr = peeled match {
+        Nominal(n) => n,
+        _ => return null,
+    }
+    return reg.get(nr.id).* match {
+        NomStruct(s) => Some(StructTarget { def = s, layout = struct_layout(&s, &nr.args, reg, alloc) }),
+        _ => null,
+    }
+}
+
+// Declaration index of a named field, or -1 when absent (an already-reported
+// checker error - the caller emits a placeholder rather than index past the
+// list).
+fn field_index(def: &StructDef, name: String) i64 {
+    for i in 0..def.fields.len {
+        if def.fields[i].name == name { return i as i64 }
+    }
+    return -1
+}
+
+// Whether a type is addressed by pointer in FIR. Aggregates yield their
+// address on member access and copy their bytes when stored into a field;
+// scalars (including references and function values) are held by value.
+fn is_aggregate(ty: &Ty) bool {
+    return ty.* match {
+        Nominal(_) => true,
+        Record(_) => true,
+        Tuple(_) => true,
+        Array(_) => true,
+        _ => false,
     }
 }
 
@@ -415,4 +554,24 @@ test "skips a function with an unsupported signature type" {
     assert_eq(m.functions.len, 1 as usize, "only the scalar function is lowered")
     let f = &m.functions[0]
     assert_true(f.name == "ok", "the slice-taking function was skipped")
+}
+
+test "lowers a struct field read to a slot store and an offset load" {
+    let unit = analyze(from_view("type Pt = struct { x: i32, y: i32 }\nfn main() i32 { let p = Pt { x = 7, y = 4 } return p.y }"), "test.f")
+    let m = lower_module(&unit.module, &unit.result)
+    assert_eq(m.functions.len, 1 as usize, "one function lowered")
+    let f = &m.functions[0]
+
+    let has_slot = false
+    let has_load = false
+    let instrs = &f.blocks[0].instrs
+    for i in 0..instrs.len {
+        instrs[i] match {
+            StackSlot(_) => has_slot = true,
+            Load(_) => has_load = true,
+            _ => {},
+        }
+    }
+    assert_true(has_slot, "struct literal allocated a stack slot")
+    assert_true(has_load, "field read emitted an offset load")
 }
