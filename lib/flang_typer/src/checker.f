@@ -33,9 +33,13 @@ import std.option
 import std.set
 import std.string
 import std.string_builder
+import std.test
 import flang_core.diagnostic
 import flang_core.span
 import flang_parser.ast
+import flang_parser.lexer
+import flang_parser.parser
+import flang_parser.projector
 import flang_typer.type
 import flang_typer.well_known
 import flang_typer.scheme
@@ -43,6 +47,7 @@ import flang_typer.env
 import flang_typer.inference_engine
 import flang_typer.inference_results
 import flang_typer.nominal_registry
+import flang_typer.alias_registry
 import flang_typer.function_registry
 import flang_typer.specialization
 import flang_typer.visibility
@@ -65,6 +70,7 @@ pub type Checker = struct {
     engine: Engine
     env: TypeEnv
     nominals: NominalRegistry
+    aliases: AliasRegistry
     functions: FunctionRegistry
     specs: SpecializationRegistry
     results: InferenceResults
@@ -89,6 +95,7 @@ pub fn checker(allocator: &Allocator? = null) Checker {
         engine = engine(alloc),
         env = type_env(alloc),
         nominals = nominal_registry(alloc),
+        aliases = alias_registry(alloc),
         functions = function_registry(alloc),
         specs = specialization_registry(alloc),
         results = inference_results(alloc),
@@ -104,6 +111,7 @@ pub fn deinit(self: &Checker) {
     self.engine.deinit()
     self.env.deinit()
     self.nominals.deinit()
+    self.aliases.deinit()
     self.functions.deinit()
     self.specs.deinit()
     self.results.deinit()
@@ -121,9 +129,10 @@ pub fn deinit(self: &Checker) {
 // `GenericBind` (the `$T` introducer), and `Error`. The resolver
 // walks this and produces a `Ty`.
 //
-// Type aliases would resolve transparently here — for the first slice
-// we don't carry an alias registry, so a `Named` reference falls
-// through to a nominal / primitive lookup.
+// Type aliases resolve transparently here: `resolve_named` consults the
+// alias registry after the primitive and nominal lookups and expands the
+// stored body lazily, so alias chains and cross-module targets resolve
+// regardless of declaration order.
 // ─────────────────────────────────────────────────────────────────────
 
 pub fn resolve_type_expr(self: &Checker, te: &TypeExpr) Ty {
@@ -145,6 +154,10 @@ fn resolve_named(self: &Checker, n: &NamedType) Ty {
     let prim = prim_from_name(n.name)
     if prim.is_some() { return Ty.Prim(prim.unwrap()) }
 
+    // Builtin non-primitive types.
+    if n.name == "void" { return Ty.Void }
+    if n.name == "never" { return Ty.Never }
+
     // Nominal?
     let vis = current_visibility(self)
     let look = self.nominals.lookup(n.name, &vis)
@@ -156,6 +169,17 @@ fn resolve_named(self: &Checker, n: &NamedType) Ty {
     if found_id.is_some() {
         let args = resolve_generic_args(self, n)
         return Ty.Nominal(NominalRef { id = found_id.unwrap(), args = args })
+    }
+
+    // Alias? Expand its stored body lazily. Resolving the body here (rather
+    // than at registration) handles alias chains and cross-module targets
+    // without ordering concerns.
+    // ponytail: non-generic aliases only; no cycle guard (the self-host
+    // sources have none). Generic aliases and cycle detection are follow-ups.
+    let alias_body = self.aliases.lookup(n.name, &vis)
+    if alias_body.is_some() {
+        let body = alias_body.unwrap()
+        return resolve_type_expr(self, &body)
     }
 
     let hidden_info: NomHiddenInfo? = look match {
@@ -478,21 +502,21 @@ fn collect_one_name(self: &Checker, decl: &Decl, module_path: String) {
     decl.* match {
         Type(td) => {
             let fqn_owned = $"{module_path}.{td.name}"
-            if self.nominals.contains(fqn_owned.as_view()) {
+            if self.nominals.contains(fqn_owned.as_view()) or self.aliases.contains(fqn_owned.as_view()) {
                 push_diag_e(self, td.span, E_DUP_TYPE_DECL,
                     $"duplicate type declaration `{td.name}`")
                 fqn_owned.deinit()
                 return
             }
             // Decide nominal vs alias by inspecting the body. The
-            // OwnedString is consumed by the registry on the struct/enum
-            // branches; the alias branch has no use for it yet so it
-            // gets freed here.
+            // OwnedString is consumed by whichever registry takes it: the
+            // nominal registry for struct/enum, the alias registry for an
+            // alias body (stored unresolved for lazy expansion at use).
             let kind = nominal_kind_of(td.body)
             kind match {
                 NkStruct => register_struct_placeholder(self, &td, fqn_owned),
                 NkEnum => register_enum_placeholder(self, &td, fqn_owned),
-                NkAlias => fqn_owned.deinit(),
+                NkAlias => self.aliases.register(fqn_owned, td.body),
             }
         },
         _ => {},
@@ -1050,10 +1074,55 @@ fn check_field_value(self: &Checker, fi: &StructFieldInit) Ty {
 // the access yields the field's (substituted) type. Otherwise it defers to
 // a fresh var: member syntax also bases UFCS calls, which resolve elsewhere.
 fn check_member(self: &Checker, ma: &MemberAccessExpr) Ty {
+    // Qualified enum-variant access (`Ord.Less`) is resolved before the
+    // receiver is checked as a value: a type name has no value binding, so
+    // checking it would wrongly report `unknown identifier`.
+    let ev = enum_variant_access(self, ma)
+    if ev.is_some() { return ev.unwrap() }
+
     let recv = check_expr(self, ma.receiver)
     let fty = struct_field_lookup(self, &recv, ma.member)
     if fty.is_some() { return fty.unwrap() }
     return self.engine.fresh_var()
+}
+
+// Qualified enum-variant access `EnumName.Variant`: a bare receiver naming an
+// in-scope enum whose `member` is one of its payload-less variants yields the
+// enum's nominal type. Null for every other shape, leaving field access and
+// UFCS untouched.
+// ponytail: payload-less variants only; payload variants and bare-variant
+// shorthand are later milestones.
+fn enum_variant_access(self: &Checker, ma: &MemberAccessExpr) Ty? {
+    let name = ma.receiver.* match {
+        Identifier(id) => Some(id.name),
+        _ => null,
+    }
+    if name.is_none() { return null }
+
+    let vis = current_visibility(self)
+    let nid = self.nominals.lookup(name.unwrap(), &vis) match {
+        NomLookFound(id) => Some(id),
+        _ => null,
+    }
+    if nid.is_none() { return null }
+    let id = nid.unwrap()
+
+    let ed = self.nominals.get(id).* match {
+        NomEnum(e) => Some(e),
+        _ => null,
+    }
+    if ed.is_none() { return null }
+    let e = ed.unwrap()
+
+    for i in 0..e.variants.len {
+        let v = &e.variants[i]
+        if v.name == ma.member and v.payloads.len == 0 {
+            let args: List(Ty) = list(e.type_params.len, self.allocator)
+            for k in 0..e.type_params.len { args.push(self.engine.fresh_var()) }
+            return Some(Ty.Nominal(NominalRef { id = id, args = args }))
+        }
+    }
+    return null
 }
 
 // A struct field's declared type by name. Null when the (zonked,
@@ -1139,4 +1208,79 @@ pub fn check_all(self: &Checker, modules: &List(Module), paths: &List(String)) T
         nominals = out_nominals,
         functions = out_functions,
     }
+}
+
+// ---------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------
+
+fn parse_src(src: String, fid: i32) Module {
+    let lx = lexer(src)
+    let tokens = lx.tokenize()
+    let p = parser(tokens)
+    let cst = p.parse_module()
+    let m = project_module(cst, fid)
+    p.deinit()
+    tokens.deinit()
+    return m
+}
+
+test "non-generic type alias resolves cross-module" {
+    // `alias_a` declares `type VarId = u32`; `alias_b` imports it and uses
+    // the alias in a signature. Before the alias registry, `VarId` surfaced
+    // as E2003 unknown type, so a clean run (zero errors) is the regression.
+    let a = parse_src("pub type VarId = u32\n", 0i32)
+    let b = parse_src("import alias_a\nfn f(x: VarId) u32 { return x }\n", 1i32)
+
+    let mods: List(Module) = list(2)
+    mods.push(a)
+    mods.push(b)
+    let paths: List(String) = list(2)
+    paths.push("alias_a")
+    paths.push("alias_b")
+
+    let chk = checker()
+    let _res = check_all(&chk, &mods, &paths)
+
+    let errors: usize = 0
+    for i in 0..chk.diagnostics.len {
+        if chk.diagnostics[i].severity == Severity.Error { errors = errors + 1 }
+    }
+    assert_true(errors == 0, "cross-module alias program type-checks with no errors")
+
+    chk.deinit()
+    let m0 = &mods[0]
+    m0.deinit()
+    let m1 = &mods[1]
+    m1.deinit()
+    mods.deinit()
+    paths.deinit()
+}
+
+test "qualified payload-less enum variant access type-checks" {
+    // `Ord.Less` is a MemberAccess on a type-name receiver. Before this fix
+    // the receiver checked as a value and surfaced E2004 unknown identifier;
+    // a clean run (zero errors) returning the enum type is the regression.
+    let src = "pub type Ord = enum { Less = -1\nEqual = 0\nGreater = 1 }\nfn f() Ord { return Ord.Less }\n"
+    let a = parse_src(src, 0i32)
+
+    let mods: List(Module) = list(1)
+    mods.push(a)
+    let paths: List(String) = list(1)
+    paths.push("cmp")
+
+    let chk = checker()
+    let _res = check_all(&chk, &mods, &paths)
+
+    let errors: usize = 0
+    for i in 0..chk.diagnostics.len {
+        if chk.diagnostics[i].severity == Severity.Error { errors = errors + 1 }
+    }
+    assert_true(errors == 0, "qualified enum variant access type-checks with no errors")
+
+    chk.deinit()
+    let m0 = &mods[0]
+    m0.deinit()
+    mods.deinit()
+    paths.deinit()
 }

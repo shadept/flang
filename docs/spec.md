@@ -179,6 +179,7 @@ pub type Option = enum(T) {
 
 - `T?` is sugar for `Option(T)`.
 - `null` is sugar for `Option.None`. The inner `T` is filled by inference from context; with no constraint the compiler reports a type-mismatch error.
+- A present value coerces to its optional: a `T` is accepted where `T?` is expected. The wrap is directional and single-level — it fires only where the expected type is already a concrete `Option(T)` (return value, annotated binding, struct field, argument), never against an unbound inference variable, and `T -> T??` requires an explicit `Some`. See [ADR-0002](adr/0002-optional-wrapping-as-directional-coercion.md).
 - `null` is **not** a pointer value. `&T` is non-null by type; `let p: &i32 = null` errors. Use `&T?` for a nullable reference.
 - `&T?` is `Option(&T)`. The niche optimization (a 0-pointer encodes `None`) is unchanged — same wire format.
 - Variant constructors: `Some(v)` and `None` work as canonical constructors.
@@ -215,6 +216,8 @@ let a = align_of(Point)
 ```
 
 `Type(T)` is a built-in generic struct carrying runtime metadata. Type names used as values become `Type(T)` instances. The compiler generates a global type metadata table for all instantiated types.
+
+> `Type(T)` is the generic (phantom-`T`) view of the raw `TypeInfo`, à la Java `Class<T>` / `Class`; `Type(T)` -> `TypeInfo` is implicit phantom erasure. Descriptors are interned, so `&TypeInfo` pointer identity is type identity. See [ADR-0001](adr/0001-type-t-is-the-generic-view-of-typeinfo.md).
 
 **Project metadata**: `core.rtti` also exposes `ProjectInfo { name: String, version: String }` and `project_info() ProjectInfo`. The compiler substitutes each call with the metadata of the project that *lexically owns* the call site — sourced from that project's `flang.toml`. A library calling `project_info()` inside its own module sees its own name and version; the same call inside a consumer returns the consumer's. Call sites in stdlib modules fall back to `("stdlib", "")`. See `docs/architecture.md` for implementation details.
 

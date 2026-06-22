@@ -219,7 +219,8 @@ pub fn lookup(self: &NominalRegistry, name: String, vis: &Visibility) NomLookup 
 // Helpers
 // ─────────────────────────────────────────────────────────────────────
 
-fn last_dot(s: String) isize {
+// Index of the final `.` in an FQN, or -1 when the name is unqualified.
+pub fn last_dot(s: String) isize {
     let i: isize = (s.len as isize) - 1
     loop {
         if i < 0 { break }
@@ -229,12 +230,15 @@ fn last_dot(s: String) isize {
     return -1
 }
 
-fn short_name_of(fqn: String, dot: isize) String {
+// The short (module-less) name of an FQN, given its `last_dot` index.
+pub fn short_name_of(fqn: String, dot: isize) String {
     if dot < 0 { return fqn }
     return fqn[((dot as usize) + 1)..fqn.len]
 }
 
-fn module_of(fqn: String, dot: isize) String {
+// The owning module prefix of an FQN, given its `last_dot` index; empty
+// when the name is unqualified.
+pub fn module_of(fqn: String, dot: isize) String {
     if dot < 0 { return "" }
     return fqn[0..(dot as usize)]
 }

@@ -89,6 +89,25 @@ pub fn resolve_import(ctx: &ResolveCtx, segs: &List(String), allocator: &Allocat
     return null
 }
 
+// The template-expansion sidecar of a source file: `foo.f` -> `foo.generated.f`
+// when that file exists on disk. Null when `file_path` is itself a generated
+// file, isn't a `.f` source, or has no sidecar. The bootstrap loads the
+// sidecar as an extra source of the same module, standing in for the template
+// expansion the C# compiler runs in memory (`#interface`, `#derive`, ...).
+pub fn generated_sidecar(file_path: String, allocator: &Allocator? = null) OwnedString? {
+    let alloc = allocator.or_global()
+    if ends_with(file_path, ".generated.f") { return null }
+    if !ends_with(file_path, ".f") { return null }
+    let sb = string_builder(0, alloc)
+    sb.append(file_path[0..(file_path.len - 2)])
+    sb.append(".generated.f")
+    let cand = sb.to_string()
+    sb.deinit()
+    if exists(cand.as_view()) { return Some(cand) }
+    cand.deinit()
+    return null
+}
+
 // Derive the dotted module name a source file's symbols register under.
 // Classifies the path under project / dependency / stdlib roots in the
 // same order `resolve_import` tries them; an unclassified path falls back
@@ -147,14 +166,14 @@ pub fn resolve_ctx(proj: &Project, stdlib_root: String, allocator: &Allocator? =
     let deps: List(DepRoot) = list(0, alloc)
     for i in 0..proj.deps.len {
         let d = &proj.deps[i]
-        let root = dep_source_root(d.path.as_view(), alloc)
+        let root = normalized_owned(dep_source_root(d.path.as_view(), alloc), alloc)
         deps.push(DepRoot { name = from_view(d.name.as_view()), root = root })
     }
     return ResolveCtx {
         project_name = from_view(proj.name.as_view()),
-        project_source_root = source_root(".", proj.source.as_view(), alloc),
+        project_source_root = normalized_owned(source_root(".", proj.source.as_view(), alloc), alloc),
         deps = deps,
-        stdlib_root = from_view(stdlib_root),
+        stdlib_root = normalize_sep(stdlib_root, alloc),
         cwd = from_view("."),
     }
 }
@@ -225,6 +244,16 @@ fn normalize_sep(path: String, alloc: &Allocator) OwnedString {
     return out
 }
 
+// Normalise an owned path to forward slashes, freeing the input. Keeps the
+// `ResolveCtx` roots in the single separator convention `strip_root` compares
+// against, so an absolute or backslashed root (e.g. an argv[0]-derived stdlib
+// path on Windows) classifies the same as a forward-slash one.
+fn normalized_owned(s: OwnedString, alloc: &Allocator) OwnedString {
+    let n = normalize_sep(s.as_view(), alloc)
+    s.deinit()
+    return n
+}
+
 // The part of `path` beneath `root`, or null when `path` is not strictly
 // inside `root`. A separator boundary is required so `src` never matches
 // `src2/x.f`.
@@ -236,7 +265,7 @@ fn strip_root(path: String, root: String) String? {
     return Some(path[(root.len + 1)..path.len])
 }
 
-// Last path component of `path` with a trailing `.f` dropped.
+// Last path component of `path` with its source extension dropped.
 fn basename(path: String) String {
     let start: usize = 0
     let i: usize = 0
@@ -244,7 +273,15 @@ fn basename(path: String) String {
         if path[i] == '/' { start = i + 1 }
         i = i + 1
     }
-    let name = path[start..path.len]
+    return strip_source_ext(path[start..path.len])
+}
+
+// A source file's module stem: a trailing `.generated.f` (a template
+// expansion) or plain `.f` removed. The bootstrap treats `x.generated.f`
+// as another source of module `x`, mirroring how the C# compiler registers
+// generated content under its origin module path.
+fn strip_source_ext(name: String) String {
+    if ends_with(name, ".generated.f") { return name[0..(name.len - 12)] }
     if ends_with(name, ".f") { return name[0..(name.len - 2)] }
     return name
 }
@@ -267,10 +304,9 @@ fn dotted_with_prefix(prefix: String, rel: String, alloc: &Allocator) OwnedStrin
     return out
 }
 
-// Append `rel` with `/` rewritten to `.` and a trailing `.f` dropped.
+// Append `rel` with `/` rewritten to `.` and the source extension dropped.
 fn append_dotted(sb: &StringBuilder, rel: String) {
-    let body = rel
-    if ends_with(rel, ".f") { body = rel[0..(rel.len - 2)] }
+    let body = strip_source_ext(rel)
     let i: usize = 0
     while i < body.len {
         let c = body[i]
@@ -361,4 +397,45 @@ test "join_module_path: builds base/seg/seg.f from segments" {
     let p2 = join_module_path("dep/src", &segs, 1)
     defer p2.deinit()
     assert_true(p2.as_view() == "dep/src/io/file.f", "skips leading segment")
+}
+
+test "module_fqn: generated stdlib file registers under its origin module" {
+    let ctx = fixture_ctx()
+    defer ctx.deinit()
+    let f = module_fqn(&ctx, "stdlib/std/io/reader.generated.f")
+    defer f.deinit()
+    assert_true(f.as_view() == "std.io.reader", "strips .generated.f")
+}
+
+test "module_fqn: generated dependency file keeps its dep prefix" {
+    let ctx = fixture_ctx()
+    defer ctx.deinit()
+    let f = module_fqn(&ctx, "lib/flang_parser/src/token.generated.f")
+    defer f.deinit()
+    assert_true(f.as_view() == "flang_parser.token", "dep-prefixed, .generated.f stripped")
+}
+
+test "generated_sidecar: a generated file has no sidecar of its own" {
+    let s = generated_sidecar("stdlib/std/io/reader.generated.f")
+    assert_true(s.is_none(), "no sidecar-of-sidecar")
+}
+
+test "generated_sidecar: a non-source path has no sidecar" {
+    let s = generated_sidecar("stdlib/std/io/reader.txt")
+    assert_true(s.is_none(), "only .f sources have sidecars")
+}
+
+test "resolve_ctx normalises a backslash stdlib root" {
+    // An absolute argv[0]-derived path on Windows arrives with `\` separators;
+    // roots must be stored forward-slashed so strip_root classifies stdlib
+    // files instead of falling back to their bare stem.
+    let proj = parse_project("[project]\nname = \"p\"\nkind = \"exe\"\nsource = \"src/**/*.f\"\n")
+    defer proj.deinit()
+    let ctx = resolve_ctx(&proj, "C:\\x\\build\\stdlib")
+    defer ctx.deinit()
+    assert_true(ctx.stdlib_root.as_view() == "C:/x/build/stdlib", "backslashes -> forward slashes")
+
+    let f = module_fqn(&ctx, "C:\\x\\build\\stdlib\\core\\string.f")
+    defer f.deinit()
+    assert_true(f.as_view() == "core.string", "stdlib file under a backslash root")
 }

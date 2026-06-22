@@ -173,7 +173,11 @@ pub fn analyze_project(ctx: &ResolveCtx, entries: &List(OwnedString), allocator:
             diagnostics.push(error("E0001", msg, none_span()))
             continue
         }
-        let src = src_opt.unwrap()
+        // Fold a template-expansion sidecar (`x.generated.f`) into the same
+        // module as its origin. The bootstrap can't expand templates, so the
+        // checked-in expansion stands in; merging into one module (rather than
+        // a second module under the same FQN) keeps a single import scope.
+        let src = combine_with_sidecar(path, src_opt.unwrap(), alloc)
         let fid = modules.len as i32
         let module = parse_to_module(src.as_view(), fid, &diagnostics, alloc)
         let fqn = module_fqn(ctx, path, alloc)
@@ -228,6 +232,37 @@ pub fn deinit(self: &AnalyzedProject) {
 // Total error-severity diagnostics across every module.
 pub fn project_error_count(self: &AnalyzedProject) usize {
     return count_errors(&self.diagnostics)
+}
+
+// Append a `.generated.f` sidecar's text to its origin's source so the two
+// parse as one module under one import scope. Returns `src` untouched when the
+// origin has no `#interface`, no sidecar exists, or the sidecar can't be read;
+// otherwise returns a fresh combined buffer and frees `src`. Generated files
+// carry no imports, so appending keeps imports file-top.
+//
+// Only `#interface` origins are merged: that generator emits a struct the
+// origin references by name (the `unknown type` cause). Function-only
+// expansions (`#enum_utils`, `#derive`) are the unrelated function-resolution
+// gap, so they stay out and this fix stays independent of it.
+fn combine_with_sidecar(path: String, src: OwnedString, alloc: &Allocator) OwnedString {
+    if !contains(src.as_view(), "#interface(") { return src }
+    let sc = generated_sidecar(path, alloc)
+    if sc.is_none() { return src }
+    let sp = sc.unwrap()
+    defer sp.deinit()
+    let gen = read_text(sp.as_view())
+    if gen.is_none() { return src }
+    let g = gen.unwrap()
+    defer g.deinit()
+
+    let sb = string_builder(0, alloc)
+    sb.append(src.as_view())
+    sb.append('\n')
+    sb.append(g.as_view())
+    let out = sb.to_string()
+    sb.deinit()
+    src.deinit()
+    return out
 }
 
 fn parse_to_module(src: String, file_id: i32, diags: &List(Diagnostic), alloc: &Allocator) Module {

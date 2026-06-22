@@ -119,6 +119,29 @@ if (Directory.Exists(stdlibDir))
 else
     Console.WriteLine($"Note: stdlib folder not found at {stdlibDir}");
 
+// Build the self-host bootstrap with the freshly published compiler and
+// deploy a stdlib copy next to its binary, so `bootstrap/build/flang.exe
+// build` resolves std.* without --stdlib-path (mirrors the dist stdlib
+// deploy). Best-effort: a self-host regression must not fail this build.
+var bootstrapDir = Path.Combine(scriptDir, "bootstrap");
+if (File.Exists(Path.Combine(bootstrapDir, "flang.toml")))
+{
+    Console.WriteLine();
+    Console.WriteLine("=== Building bootstrap (self-host) ===");
+    if (Run(finalExe, "build", bootstrapDir) == 0)
+    {
+        var bootstrapStdlib = Path.Combine(bootstrapDir, "build", "stdlib");
+        CopyDir(Path.Combine(scriptDir, "stdlib"), bootstrapStdlib);
+        Console.WriteLine($"Bootstrap built; stdlib deployed to: {bootstrapStdlib}");
+    }
+    else
+    {
+        Console.ForegroundColor = ConsoleColor.Yellow;
+        Console.WriteLine("Note: bootstrap build did not succeed; skipping stdlib deploy (self-host is WIP).");
+        Console.ResetColor();
+    }
+}
+
 Console.WriteLine();
 Console.ForegroundColor = ConsoleColor.Green;
 Console.WriteLine("Done.");
@@ -127,17 +150,30 @@ return 0;
 
 // --- Helpers ---
 
-int Run(string fileName, string arguments)
+int Run(string fileName, string arguments, string? workingDir = null)
 {
     var psi = new ProcessStartInfo
     {
         FileName = fileName,
         Arguments = arguments,
         UseShellExecute = false,
-        WorkingDirectory = scriptDir
+        WorkingDirectory = workingDir ?? scriptDir
     };
 
     using var process = Process.Start(psi)!;
     process.WaitForExit();
     return process.ExitCode;
+}
+
+void CopyDir(string src, string dst)
+{
+    if (!Directory.Exists(src)) return;
+    if (Directory.Exists(dst)) Directory.Delete(dst, true);
+    Directory.CreateDirectory(dst);
+    foreach (var file in Directory.GetFiles(src, "*", SearchOption.AllDirectories))
+    {
+        var target = Path.Combine(dst, Path.GetRelativePath(src, file));
+        Directory.CreateDirectory(Path.GetDirectoryName(target)!);
+        File.Copy(file, target, true);
+    }
 }

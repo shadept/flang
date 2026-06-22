@@ -136,6 +136,7 @@ fn print_help() {
     println("  -h, --help          show this help")
     println("  -V, --version       show version")
     println("  -v, --verbose       verbose output")
+    println("  -s, --stdlib-path <dir>  stdlib root (default: <exe dir>/stdlib)")
 }
 
 fn print_version() {
@@ -173,7 +174,35 @@ fn run_build(argv: String[], rest: usize, verbose: bool, stdlib_path: String) i3
         println(msg.as_view())
         return 1
     }
-    return build_project(verbose, stdlib_path)
+    let stdlib = effective_stdlib(stdlib_path, argv)
+    defer stdlib.deinit()
+    return build_project(verbose, stdlib.as_view())
+}
+
+// The stdlib include root: the explicit `--stdlib-path` when given, else
+// `<dir of argv[0]>/stdlib`, mirroring the reference compiler's
+// `AppContext.BaseDirectory/stdlib` so `build` works without the flag (the
+// build deploys a `stdlib` copy next to the compiler binary).
+fn effective_stdlib(given: String, argv: String[]) OwnedString {
+    if given.len > 0 { return from_view(given) }
+    let exe = if argv.len > 0 { argv[0] } else { "" }
+    let dir = dir_of(exe)
+    if dir.len == 0 { return from_view("stdlib") }
+    return $"{dir}/stdlib"
+}
+
+// Directory portion of a path, or "" when it has no separator. Handles both
+// `/` and `\` since argv[0] carries the OS-native form.
+fn dir_of(path: String) String {
+    let cut: usize? = null
+    let fwd = rfind(path, '/')
+    if fwd.is_some() { cut = fwd }
+    let back = rfind(path, '\\')
+    if back.is_some() and (cut.is_none() or back.unwrap() > cut.unwrap()) { cut = back }
+    return cut match {
+        Some(i) => path[0..i],
+        None => "",
+    }
 }
 
 // Project mode: parse `flang.toml`, glob its sources, resolve imports
