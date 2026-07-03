@@ -159,26 +159,24 @@ fn unknown_subcommand(name: String) i32 {
 
 // Subcommand handlers
 
-// build: analyse a single file through the shared `flang_driver` pipeline
-// and report every diagnostic. The driver (lex -> parse -> project -> check)
-// is invoked here in `main.f`; `frontend` owns file reading and rendering.
-// build: a `<file>.f` argument compiles that single file; with no
-// argument, load `flang.toml` from the current directory and build the
-// project. Both share `build_source_file` for the analyse->lower->link tail.
+// build: a `<file>.f` argument compiles that single file through the same
+// multi-module pipeline as project mode, so its imports and the stdlib
+// resolve; with no argument, load `flang.toml` from the current directory
+// and build the project.
 fn run_build(argv: String[], rest: usize, verbose: bool, stdlib_path: String, check_only: bool) i32 {
+    let stdlib = effective_stdlib(stdlib_path, argv)
+    defer stdlib.deinit()
     if rest < argv.len {
         const path = argv[rest]
         if ends_with(path, ".f") {
             const out = output_path_for(path)
-            return build_source_file(path, out, verbose, check_only)
+            return build_single_file(path, out, verbose, stdlib.as_view(), check_only)
         }
         const msg = $"bootstrap: `build` takes a `.f` file or no argument (got `{path}`)"
         defer msg.deinit()
         println(msg.as_view())
         return 1
     }
-    let stdlib = effective_stdlib(stdlib_path, argv)
-    defer stdlib.deinit()
     return build_project(verbose, stdlib.as_view(), check_only)
 }
 
@@ -240,72 +238,51 @@ fn build_project(verbose: bool, stdlib_path: String, check_only: bool) i32 {
     let unit = analyze_project(&ctx, &sources)
     defer unit.deinit()
 
+    const out = $"{proj.output.as_view()}/{proj.name.as_view()}"
+    defer out.deinit()
+    return finish_build(&unit, proj.name.as_view(), out.as_view(), verbose, check_only)
+}
+
+// Single-file mode: the file is the sole entry of a project-less build, so
+// its imports resolve against the stdlib and the working directory.
+fn build_single_file(path: String, out: String, verbose: bool, stdlib_path: String, check_only: bool) i32 {
+    let ctx = single_file_ctx(stdlib_path)
+    defer ctx.deinit()
+
+    let entries: List(OwnedString) = list(1)
+    entries.push(from_view(path))
+    defer deinit_source_list(&entries)
+
+    let unit = analyze_project(&ctx, &entries)
+    defer unit.deinit()
+
+    return finish_build(&unit, path, out, verbose, check_only)
+}
+
+// Shared render -> gate -> lower -> link tail for both build modes.
+fn finish_build(unit: &AnalyzedProject, label: String, out: String, verbose: bool, check_only: bool) i32 {
     render_project_diagnostics(&unit.diagnostics, &unit.file_paths, &unit.sources)
 
-    const errs = project_error_count(&unit)
+    const errs = project_error_count(unit)
     if verbose {
         const v = $"  ({unit.modules.len} modules, {unit.result.node_types.len()} nodes typed)"
         defer v.deinit()
         println(v.as_view())
     }
     if errs > 0 {
-        const m = $"build failed: {errs} error(s)"
-        defer m.deinit()
-        println(m.as_view())
-        return 1
+        return build_failed(label, errs)
     }
 
     if check_only {
-        const m = $"checked {proj.name.as_view()} ({unit.modules.len} modules)"
+        const m = $"checked {label} ({unit.modules.len} modules)"
         defer m.deinit()
         println(m.as_view())
         return 0
     }
 
-    const out = $"{proj.output.as_view()}/{proj.name.as_view()}"
-    defer out.deinit()
-    let result = build_program(&unit.modules, &unit.result, out.as_view())
+    let result = build_program(&unit.modules, &unit.result, out)
     if result.is_err() {
-        report_build_error(&result.unwrap_err(), proj.name.as_view())
-        return 1
-    }
-    let artifact = result.unwrap()
-    defer artifact.deinit()
-    const msg = $"built {artifact.executable_path.as_view()}"
-    defer msg.deinit()
-    println(msg.as_view())
-    return 0
-}
-
-// Read, analyse, report diagnostics, then lower + link to `out`.
-fn build_source_file(path: String, out: String, verbose: bool, check_only: bool) i32 {
-    const source_opt = read_source(path)
-    if source_opt.is_none() { return 1 }
-    let unit = analyze(source_opt.unwrap(), path)
-    defer unit.deinit()
-
-    render_diagnostics(&unit.diagnostics, path, unit.source.as_view())
-
-    const errs = error_count(&unit)
-    if verbose {
-        const v = $"  ({unit.module.decls.len} decls, {unit.result.node_types.len()} nodes typed)"
-        defer v.deinit()
-        println(v.as_view())
-    }
-    if errs > 0 {
-        return build_failed(path, errs)
-    }
-
-    if check_only {
-        const m = $"checked {path}"
-        defer m.deinit()
-        println(m.as_view())
-        return 0
-    }
-
-    let result = build_unit(&unit, out)
-    if result.is_err() {
-        report_build_error(&result.unwrap_err(), path)
+        report_build_error(&result.unwrap_err(), label)
         return 1
     }
     let artifact = result.unwrap()

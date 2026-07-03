@@ -234,7 +234,7 @@ For capturing lambdas stored via `box(allocator, fn(...) { ... })`, `Owned`'s ex
 ## Tests
 
 `op_call` (Phase 1):
-- `tests/FLang.Tests/Harness/op_call/op_call_basic.f` — Counter example, observable state.
+- `tests/harness/op_call/op_call_basic.f` — Counter example, observable state.
 - `op_call_overloads.f` — multiple `op_call` overloads on the same type.
 - `op_call_through_deref.f` — `Owned(Counter)` dispatches `c()` through op_deref.
 - `op_call_value_receiver.f` — `op_call(self: T, ...)`.

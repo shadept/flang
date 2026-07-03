@@ -539,7 +539,7 @@ The runtime is always live. `main` runs as coroutine 0 on worker 0.
 
 1. **Phase 0 — Self-host first.** Per the decision in the design discussion, do not implement this RFC until the C# compiler is retired. This RFC is a design lock; implementation is gated on self-host readiness.
 2. **Phase 1 — Runtime skeleton (C).** `ucontext` + simple round-robin scheduler on a single worker. No I/O integration, no timers. Enough to spawn, yield, await, complete. Unit tests in C.
-3. **Phase 2 — FLang bindings.** `Future(T)` with `await` / `cancel` / `detach`. `spawn` with deep-copy args. Tests in `tests/FLang.Tests/Harness/async/`.
+3. **Phase 2 — FLang bindings.** `Future(T)` with `await` / `cancel` / `detach`. `spawn` with deep-copy args. Tests in `tests/harness/async/`.
 4. **Phase 3 — Context + allocator slot.** `Context` type, `current_context`, `current_coroutine_allocator`. Update `or_global` (§3.5). Verify existing stdlib continues to pass without modification.
 5. **Phase 4 — Channels.** `Channel(T)`, `send`/`recv`/`close`. Rendezvous + buffered.
 6. **Phase 5 — Combinators.** `race`, `all`, `any`, `.map`, `.then`, `.or_else`, `.timeout`. (`.timeout` depends on Phase 6.)

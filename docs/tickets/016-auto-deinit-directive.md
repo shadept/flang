@@ -130,7 +130,7 @@ Embedded in `stdlib/std/rc.f`:
 - `test "rc deinit underflow panics"` — construct two Rc bit-aliases without clone, deinit both, expect panic on the second.
 - `test "arc deinit underflow panics"` — same for `Arc`.
 
-Under `tests/FLang.Tests/Harness/directives/`:
+Under `tests/harness/directives/`:
 - `auto_deinit_parses.f` — directive parses on a type declaration; binary compiles.
 - `auto_deinit_requires_deinit.f` — type with `#auto_deinit` but no `deinit` in scope is a compile error.
 

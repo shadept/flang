@@ -45,6 +45,11 @@ public class TestHarness
     private readonly string _stdlibPath;
     private readonly string _harnessDir;
 
+    // When set, tests compile by subprocessing this compiler binary instead
+    // of the in-process C# compiler. Same test files, same expectations.
+    public static string? FlangBinary { get; } =
+        Environment.GetEnvironmentVariable("FLANG") is { Length: > 0 } v ? v : null;
+
     public TestHarness(string? projectRoot = null)
     {
         DiagnosticPrinter.EnableColors = false;
@@ -60,7 +65,7 @@ public class TestHarness
         }
 
         _stdlibPath = Path.GetFullPath(Path.Combine(_projectRoot, "..", "..", "stdlib"));
-        _harnessDir = Path.Combine(_projectRoot, "Harness");
+        _harnessDir = Path.GetFullPath(Path.Combine(_projectRoot, "..", "harness"));
     }
 
     /// <summary>
@@ -176,6 +181,11 @@ public class TestHarness
                 stopwatch.Elapsed,
                 Skipped: true,
                 SkipReason: metadata.SkipReason);
+        }
+
+        if (FlangBinary != null)
+        {
+            return RunTestViaFlang(absoluteTestFile, metadata, timeout.Value, stopwatch);
         }
 
         // 2. Resolve output paths
@@ -331,7 +341,20 @@ public class TestHarness
                 stopwatch.Elapsed);
         }
 
-        // 3. Run the generated executable
+        return RunExecutableAndValidate(absoluteTestFile, metadata, generatedExePath, cFilePath, cleanupFiles, timeout.Value, stopwatch);
+    }
+
+    // Runs the compiled test executable and validates exit code and
+    // stdout/stderr expectations. Shared by the in-process and $FLANG paths.
+    private static TestResult RunExecutableAndValidate(
+        string absoluteTestFile,
+        TestMetadata metadata,
+        string generatedExePath,
+        string cFilePath,
+        bool cleanupFiles,
+        TimeSpan timeout,
+        Stopwatch stopwatch)
+    {
         try
         {
             var exeProcess = new Process
@@ -358,7 +381,7 @@ public class TestHarness
             stdoutThread.Start();
             stderrThread.Start();
 
-            var exited = exeProcess.WaitForExit((int)timeout.Value.TotalMilliseconds);
+            var exited = exeProcess.WaitForExit((int)timeout.TotalMilliseconds);
 
             if (!exited)
             {
@@ -370,7 +393,7 @@ public class TestHarness
                     absoluteTestFile,
                     metadata.TestName,
                     false,
-                    $"Test execution timed out after {timeout.Value.TotalSeconds}s",
+                    $"Test execution timed out after {timeout.TotalSeconds}s",
                     stopwatch.Elapsed);
             }
 
@@ -436,6 +459,167 @@ public class TestHarness
         }
     }
 
+    // Compiles the test by subprocessing the $FLANG binary, then runs the
+    // produced executable against the same expectations as the in-process
+    // path. The external CLI offers no output-path control, so artifacts
+    // land next to the test file and are always cleaned up.
+    private TestResult RunTestViaFlang(string absoluteTestFile, TestMetadata metadata, TimeSpan timeout, Stopwatch stopwatch)
+    {
+        var testFileName = Path.GetFileNameWithoutExtension(absoluteTestFile);
+        var testDirectory = Path.GetDirectoryName(absoluteTestFile)!;
+        var exePath = GetGeneratedExecutablePath(testDirectory, testFileName);
+        var cFilePath = Path.ChangeExtension(exePath, ".c");
+
+        var psi = new ProcessStartInfo
+        {
+            FileName = FlangBinary!,
+            WorkingDirectory = testDirectory,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+            CreateNoWindow = true
+        };
+        psi.ArgumentList.Add("--stdlib-path");
+        psi.ArgumentList.Add(_stdlibPath);
+        psi.ArgumentList.Add("build");
+        psi.ArgumentList.Add(absoluteTestFile);
+
+        int exitCode;
+        string stdout = "", stderr = "";
+        try
+        {
+            using var proc = new Process { StartInfo = psi };
+            proc.Start();
+            var stdoutThread = new Thread(() => stdout = proc.StandardOutput.ReadToEnd());
+            var stderrThread = new Thread(() => stderr = proc.StandardError.ReadToEnd());
+            stdoutThread.Start();
+            stderrThread.Start();
+
+            // Compile timeout is independent of the (short) run timeout: the
+            // external compiler re-analyzes the full stdlib per invocation.
+            if (!proc.WaitForExit((int)TimeSpan.FromMinutes(2).TotalMilliseconds))
+            {
+                try { proc.Kill(); } catch { }
+                stdoutThread.Join(1000);
+                stderrThread.Join(1000);
+                CleanupGeneratedFiles(cFilePath, exePath, cleanup: true);
+                return new TestResult(
+                    absoluteTestFile,
+                    metadata.TestName,
+                    false,
+                    "$FLANG compilation timed out after 120s",
+                    stopwatch.Elapsed);
+            }
+            stdoutThread.Join();
+            stderrThread.Join();
+            exitCode = proc.ExitCode;
+        }
+        catch (Exception ex)
+        {
+            CleanupGeneratedFiles(cFilePath, exePath, cleanup: true);
+            return new TestResult(
+                absoluteTestFile,
+                metadata.TestName,
+                false,
+                $"Failed to run $FLANG compiler '{FlangBinary}': {ex.Message}",
+                stopwatch.Elapsed);
+        }
+
+        var compilerOutput = string.IsNullOrWhiteSpace(stderr) ? stdout : $"{stdout}\n--- stderr ---\n{stderr}";
+
+        if (metadata.ExpectedCompileErrors.Count > 0)
+        {
+            if (exitCode == 0)
+            {
+                CleanupGeneratedFiles(cFilePath, exePath, cleanup: true);
+                return new TestResult(
+                    absoluteTestFile,
+                    metadata.TestName,
+                    false,
+                    $"Expected compilation to fail with errors [{string.Join(", ", metadata.ExpectedCompileErrors.Select(e => e.Code))}] but it succeeded",
+                    stopwatch.Elapsed);
+            }
+
+            foreach (var expected in metadata.ExpectedCompileErrors)
+            {
+                if (!ContainsDiagnostic(compilerOutput, expected))
+                {
+                    CleanupGeneratedFiles(cFilePath, exePath, cleanup: true);
+                    var expectDesc = expected.MessageContains != null
+                        ? $"{expected.Code} containing \"{expected.MessageContains}\""
+                        : expected.Code;
+                    return new TestResult(
+                        absoluteTestFile,
+                        metadata.TestName,
+                        false,
+                        $"Expected error {expectDesc} not found in compiler output:\n{compilerOutput}",
+                        stopwatch.Elapsed);
+                }
+            }
+
+            CleanupGeneratedFiles(cFilePath, exePath, cleanup: true);
+            return new TestResult(absoluteTestFile, metadata.TestName, true, null, stopwatch.Elapsed);
+        }
+
+        foreach (var expected in metadata.ExpectedCompileWarnings)
+        {
+            if (!ContainsDiagnostic(compilerOutput, expected))
+            {
+                CleanupGeneratedFiles(cFilePath, exePath, cleanup: true);
+                var expectDesc = expected.MessageContains != null
+                    ? $"{expected.Code} containing \"{expected.MessageContains}\""
+                    : expected.Code;
+                return new TestResult(
+                    absoluteTestFile,
+                    metadata.TestName,
+                    false,
+                    $"Expected warning {expectDesc} not found in compiler output:\n{compilerOutput}",
+                    stopwatch.Elapsed);
+            }
+        }
+
+        if (exitCode != 0)
+        {
+            CleanupGeneratedFiles(cFilePath, exePath, cleanup: true);
+            return new TestResult(
+                absoluteTestFile,
+                metadata.TestName,
+                false,
+                $"Compilation failed (exit {exitCode}):\n{compilerOutput}",
+                stopwatch.Elapsed);
+        }
+
+        // Trust the compiler's own "built <path>" report over the derived path.
+        var builtLine = stdout.Split('\n').Select(s => s.Trim())
+            .LastOrDefault(s => s.StartsWith("built ", StringComparison.Ordinal));
+        if (builtLine != null)
+        {
+            var reported = Path.GetFullPath(builtLine[6..].Trim(), testDirectory);
+            if (File.Exists(reported)) exePath = reported;
+        }
+
+        if (!File.Exists(exePath))
+        {
+            CleanupGeneratedFiles(cFilePath, null, cleanup: true);
+            return new TestResult(
+                absoluteTestFile,
+                metadata.TestName,
+                false,
+                $"Compiler reported success but did not produce an executable at {exePath}:\n{compilerOutput}",
+                stopwatch.Elapsed);
+        }
+
+        return RunExecutableAndValidate(absoluteTestFile, metadata, exePath, cFilePath, cleanupFiles: true, timeout, stopwatch);
+    }
+
+    // Text-level stand-in for the in-process diagnostic match: the external
+    // compiler renders "severity[CODE]: message" lines.
+    private static bool ContainsDiagnostic(string output, ExpectedDiagnostic expected)
+    {
+        return output.Contains($"[{expected.Code}]", StringComparison.Ordinal)
+            && (expected.MessageContains == null || output.Contains(expected.MessageContains, StringComparison.Ordinal));
+    }
+
     private static string GetGeneratedExecutablePath(string testDirectory, string testFileName)
     {
         if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
@@ -452,9 +636,11 @@ public class TestHarness
             if (File.Exists(cFilePath)) File.Delete(cFilePath);
             if (exePath != null && File.Exists(exePath)) File.Delete(exePath);
 
-            // Also clean up .pdb files on Windows
+            // Also clean up .pdb/.obj files on Windows
             var pdbPath = Path.ChangeExtension(cFilePath, ".pdb");
             if (File.Exists(pdbPath)) File.Delete(pdbPath);
+            var objPath = Path.ChangeExtension(cFilePath, ".obj");
+            if (File.Exists(objPath)) File.Delete(objPath);
         }
         catch
         {

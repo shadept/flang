@@ -8,6 +8,7 @@
 
 #:project src/FLang.CLI/FLang.CLI.csproj
 
+using System.Diagnostics;
 using FLang.CLI;
 
 // ============================================================================
@@ -128,6 +129,8 @@ if (listOnly)
 // Run tests
 var parallelism = (sequential || verbose) ? 1 : Environment.ProcessorCount;
 Console.ForegroundColor = ConsoleColor.Cyan;
+if (TestHarness.FlangBinary != null)
+    Console.WriteLine($"Compiling via FLANG={TestHarness.FlangBinary}");
 Console.WriteLine($"Running {testFiles.Count} test(s){(parallelism > 1 ? $" in parallel ({parallelism} workers)" : "")}...");
 Console.ResetColor();
 
@@ -141,6 +144,7 @@ var current = 0;
 
 var lockObj = new object();
 var results = new (string RelativePath, TestResult Result)[total];
+var wall = Stopwatch.StartNew();
 
 Parallel.For(0, total, new ParallelOptions { MaxDegreeOfParallelism = parallelism },
     // Thread-local factory: each thread gets its own TestHarness to avoid shared state
@@ -196,6 +200,8 @@ Parallel.For(0, total, new ParallelOptions { MaxDegreeOfParallelism = parallelis
     _ => { } // No cleanup needed
 );
 
+wall.Stop();
+
 if (!noProgress && !verbose)
 {
     ClearProgressLine();
@@ -217,14 +223,12 @@ foreach (var (relativePath, result) in results)
     {
         failed++;
         failedTests.Add((relativePath, result.TestName, result.FailureMessage ?? "Unknown error"));
-        if (!verbose)
+        // Detail blocks for the first 10 only; the recap list below covers the rest.
+        if (!verbose && failedTests.Count <= 10)
         {
             Console.ForegroundColor = ConsoleColor.Red;
             Console.WriteLine($"[FAIL] {relativePath}");
-            if (failedTests.Count <= 10)
-            {
-                Console.WriteLine($"       {result.FailureMessage}");
-            }
+            Console.WriteLine($"       {result.FailureMessage}");
             Console.ResetColor();
         }
     }
@@ -233,21 +237,35 @@ foreach (var (relativePath, result) in results)
 // Summary
 Console.WriteLine();
 Console.ForegroundColor = ConsoleColor.Cyan;
-if (skipped > 0)
+if (skipped > 0 || TestHarness.FlangBinary != null)
     Console.WriteLine($"Test Results: {passed} passed, {failed} failed, {skipped} skipped, {total} total");
 else
     Console.WriteLine($"Test Results: {passed} passed, {failed} failed, {total} total");
+
+var ran = results.Where(r => !r.Result.Skipped).ToList();
+if (ran.Count > 0)
+{
+    var testTimeMs = ran.Sum(r => r.Result.Duration.TotalMilliseconds);
+    var slowest = ran.MaxBy(r => r.Result.Duration);
+    Console.WriteLine($"Time: {wall.Elapsed.TotalSeconds:F1}s wall, {testTimeMs / 1000:F1}s test time, mean {testTimeMs / ran.Count:F0}ms, slowest {slowest.Result.Duration.TotalMilliseconds:F0}ms ({slowest.RelativePath})");
+}
 Console.ResetColor();
 
 if (failed > 0)
 {
-    Console.ForegroundColor = ConsoleColor.Red;
-    Console.WriteLine("\nFailed tests:");
-    foreach (var (path, name, _) in failedTests)
+    // Skip the recap when every failure was already shown in full just above.
+    if (verbose || failedTests.Count > 10)
     {
-        Console.WriteLine($"  - {path}");
+        Console.ForegroundColor = ConsoleColor.Red;
+        Console.WriteLine(verbose
+            ? "\nFailed tests:"
+            : $"\nFailed tests (details above for first 10):");
+        foreach (var (path, _, _) in failedTests)
+        {
+            Console.WriteLine($"  - {path}");
+        }
+        Console.ResetColor();
     }
-    Console.ResetColor();
     return 1;
 }
 

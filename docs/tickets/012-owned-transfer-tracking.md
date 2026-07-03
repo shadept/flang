@@ -192,7 +192,7 @@ intentional.
 
 ## Tests
 
-Under `tests/FLang.Tests/Harness/owned/`:
+Under `tests/harness/owned/`:
 
 - `owned_basic.f` — construct, deinit fires.
 - `owned_transfer.f` — transfer, then deinit is a no-op.

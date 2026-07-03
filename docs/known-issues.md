@@ -21,7 +21,7 @@ When you discover a bug or limitation:
 
 The bootstrap crashed type-checking any source containing a `struct` declaration (enums were fine). The fault was **not** in the FLang typer. `HmAstLowering` kept a single flat name→slot map (`_locals`) with no lexical scoping, so a `let` inside a block permanently overwrote any outer binding of the same name. `resolve_struct_body` (`lib/flang_typer/src/checker.f`) binds the nominal id as `let id = …`, then shadows it with `let id = …` inside the generics loop; the post-loop `nominals.get(id)` then read the loop-local slot, which is uninitialised when the struct has no generics (the loop never runs) → out-of-bounds index → segfault. Enums were immune only because `resolve_enum_body` names its loop-local `vid`. The reference compiler's own type-check never reproduced it because it doesn't run the FLang typer.
 
-**Fix:** `LowerBlock` now opens a lexical scope and, on exit, undoes the `let`/`const` bindings it introduced, restoring any shadowed outer binding. Copy-on-write parameter promotions and pattern bindings deliberately stay function-scoped. Regression test: `tests/FLang.Tests/Harness/scoping/shadow_let_in_loop_body.f`.
+**Fix:** `LowerBlock` now opens a lexical scope and, on exit, undoes the `let`/`const` bindings it introduced, restoring any shadowed outer binding. Copy-on-write parameter promotions and pattern bindings deliberately stay function-scoped. Regression test: `tests/harness/scoping/shadow_let_in_loop_body.f`.
 
 ---
 
@@ -36,7 +36,7 @@ Once the type-check segfault was gone, a bootstrap-built `let p = Pt { x = 7, y 
 - Typer (`lib/flang_typer/src/checker.f`): `check_struct_lit` resolves the literal's named type to its nominal and unifies each initializer against the declared field type; `check_member` returns a struct field's declared type, and falls back to a fresh var for non-struct receivers so UFCS bases are untouched (generic field substitution lands with generics).
 - Lowering (`lib/flang_driver/src/lower.f`): a struct literal allocates a stack slot and stores each field at its `layout.struct_layout` offset (aggregate fields copy their bytes, scalars store by value); member access geps to the field offset and loads. A struct value is its slot pointer — FIR addresses aggregates by pointer — so nested `a.b.c` chains geps without an intermediate copy.
 
-**Verified:** bootstrap-built first / non-first / arithmetic reads, plus 3-field and out-of-order-init structs, return the right values. Store and load both take offsets from the shared `layout.f`, so they always agree. Regression tests: `tests/FLang.Tests/Harness/structs/struct_field_return_first.f` and `struct_field_return_nonfirst.f` (reference compiler), and a lowering block in `lib/flang_driver/src/lower.f`.
+**Verified:** bootstrap-built first / non-first / arithmetic reads, plus 3-field and out-of-order-init structs, return the right values. Store and load both take offsets from the shared `layout.f`, so they always agree. Regression tests: `tests/harness/structs/struct_field_return_first.f` and `struct_field_return_nonfirst.f` (reference compiler), and a lowering block in `lib/flang_driver/src/lower.f`.
 
 **Still milestone-gated:** struct-typed parameters and returns skip the lowering signature gate (`type_expr_to_ir` accepts only primitives), so a function that takes or returns a struct by value is type-checked but not lowered yet; field assignment, pattern destructuring, and `&struct.field` arrive with later milestones.
 
@@ -97,6 +97,8 @@ With cross-module nominal resolution fixed, a full self-host run still fails on 
 - **Whole-stdlib loading + lenient type resolution**: the driver BFS now seeds every stdlib source (mirroring the C# `SourceGlobber`), and `resolve_named` resolves registered-but-not-imported types instead of erroring (the reference compiler resolves type names program-wide; `core.io` references `StringBuilder` without importing it). Identifier visibility stays import-strict. Non-`pub` `#foreign` fns are visible wherever their module is (they name global link-time symbols; mirrors the earlier C#-side fix).
 
 **Next blocker (lowering, not typing):** `lower_program` merges all modules' functions under bare names, so same-named fns from different modules (`rollback` in `inference_engine` vs `union_find`) collide in the generated C (`error C2084: function already has a body`). Needs FQN-based symbol mangling — the cut explicitly deferred when multi-module lowering landed. After that: lowering milestones M2/M3/M5 (calls, control flow, match) and the FIR `Global` pointer-initializer work below.
+
+**Harness scoreboard (first run through the bootstrap, 2026-07-03).** The lit-style corpus runs through any compiler binary via `$FLANG` (see docs/architecture.md, "Execution mode"): `FLANG=bootstrap/build/flang.exe dotnet test.cs` → **9 passed / 507 failed / 14 skipped of 530**. The red mass is the bare-name collision blocker above — single-file builds seed the whole stdlib, so the generated C dies on `end_seq`/`end_map` redefinitions before any test-specific code runs. All 9 greens are `COMPILE-ERROR` tests whose expected code the bootstrap already emits (E1001 x4, E1002, E2003, E2004 x2, E2071). Diagnostic coverage on *invalid* code is its own gap, distinct from the clean self-host typecheck: only 9 of 94 `COMPILE-ERROR` tests see their expected code — e.g. `tests/harness/errors/error_char_literal_rejects_string.f` expects E2011, but the bootstrap type-checks the file clean and proceeds to codegen.
 
 **Resolved in this pass — non-generic type aliases.** `type VarId = u32`, `NodeId`, `NominalId`, `Level` and friends were registered as neither struct nor enum, so `resolve_named` could not find them (~130 `unknown type`). A new alias registry (since folded into the generic `lib/flang_typer/src/fqn_map.f`) is populated during the name-registration pass (`collect_one_name`) and expanded lazily in `resolve_named` — after the primitive and nominal lookups, reusing nominal-lookup visibility — so alias chains and cross-module targets resolve regardless of declaration order. Self-host `unknown type` dropped 156 -> 24 and the total error count 1205 -> 1073 (the residual 24 are all the `Writer`/`Reader` `*.generated.f` issue above). Covered by a cross-module `test {}` in `checker.f` plus the existing `flang_typer` / `flang_driver` suites. Generic aliases (`type Result(T, E) = ...`) and alias-cycle detection remain follow-ups.
 
@@ -172,7 +174,7 @@ With the original name `Directive`, `Directive.Inline` errored as `No variant In
 
 ### RFC-014 Phase 2 Follow-ups
 
-**Status:** Phase 1 (`op_call`) and Phase 2 (capturing lambdas, by-value) landed. Single-level capturing closures synthesise an anonymous `__Closure_N` struct holding captures by value, and an `op_call(self: &__Closure_N, ...)` body with capture references projected through `self`. Tests in `tests/FLang.Tests/Harness/closures/`. Coercion of capturing closures into bare `fn(...) ret` slots is rejected with **E2111**; assignment to a captured name from inside the body is rejected with **E2112** (capture is by value, so the write would only mutate the closure's own field, which is misleading).
+**Status:** Phase 1 (`op_call`) and Phase 2 (capturing lambdas, by-value) landed. Single-level capturing closures synthesise an anonymous `__Closure_N` struct holding captures by value, and an `op_call(self: &__Closure_N, ...)` body with capture references projected through `self`. Tests in `tests/harness/closures/`. Coercion of capturing closures into bare `fn(...) ret` slots is rejected with **E2111**; assignment to a captured name from inside the body is rejected with **E2112** (capture is by value, so the write would only mutate the closure's own field, which is misleading).
 
 **What's deferred:**
 
@@ -221,7 +223,7 @@ m.add_function(some_function())
 
 `lib/flang_codegen/src/fir.f` uses this pattern (`add_block`, `add_function`, `add_foreign`, `add_global`, `set_terminator`, `fresh_value_id`) so the builder in `builder.f` never has to reach into nested fields.
 
-**Fix direction:** in lowering, audit the desugaring of `expr.field.method(...)` where `method` takes `&Self`. The compiler needs to thread the place through every intermediate field access, not materialise an rvalue copy at any step. Likely candidate: the auto-`&` insertion in UFCS / method-call lowering only fires on the outermost receiver, not on each intermediate field access. Worth a focused repro test (`tests/FLang.Tests/Harness/...`) before fixing.
+**Fix direction:** in lowering, audit the desugaring of `expr.field.method(...)` where `method` takes `&Self`. The compiler needs to thread the place through every intermediate field access, not materialise an rvalue copy at any step. Likely candidate: the auto-`&` insertion in UFCS / method-call lowering only fires on the outermost receiver, not on each intermediate field access. Worth a focused repro test (`tests/harness/...`) before fixing.
 
 ---
 
@@ -272,7 +274,7 @@ When a `match` arm binds a payload, the binding is always **by value**. `match s
 
 **Fix direction:** either (a) have the outer desugar allocate with a scope-tied allocator and skip per-temporary frees, or (b) introduce destructors for `OwnedString` (wider language change).
 
-**Test:** `tests/FLang.Tests/Harness/interpolation/nested_interp.f` (pins output, not memory).
+**Test:** `tests/harness/interpolation/nested_interp.f` (pins output, not memory).
 
 ---
 
@@ -328,7 +330,7 @@ fn make_wrapper(data: u8[]) Wrapper {
 }
 ```
 
-**Test:** `tests/FLang.Tests/Harness/structs/struct_slice_field_init.f` (SKIP)
+**Test:** `tests/harness/structs/struct_slice_field_init.f` (SKIP)
 
 ---
 
@@ -375,9 +377,9 @@ Call result locals from `#foreign fn` are still typed as `int` in generated C. F
 
 **Tests blocked:**
 
-- `tests/FLang.Tests/Harness/memory/malloc_free.f`
-- `tests/FLang.Tests/Harness/memory/memcpy_basic.f`
-- `tests/FLang.Tests/Harness/memory/memset_basic.f`
+- `tests/harness/memory/malloc_free.f`
+- `tests/harness/memory/memcpy_basic.f`
+- `tests/harness/memory/memset_basic.f`
 
 ---
 

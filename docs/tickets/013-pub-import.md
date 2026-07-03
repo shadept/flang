@@ -36,7 +36,7 @@ Generic specialization is handled by tracking a stack of caller modules in `Infe
 4. `ModuleOrigin` tagging in `ModuleCompiler`. `[imports].global` parsing in `ProjectLoader`. Synthetic-import injection in `Compiler` and `FLangWorkspace`.
 5. Flip the lookup filter to honor `Visible[M]`. Bypass for FQN-style references. Specialization-caller visibility union for generics. Remove the cross-module function-name leak via `_ctx.Scopes.Bind` (functions resolve through `LookupFunctions`, which is visibility-aware).
 6. Validate: stdlib files were silently relying on transitive leaks for `std.option`, `std.result`, `std.mem`, `std.encoding.utf8`, etc. Added explicit imports.
-7. Test matrix in `tests/FLang.Tests/Harness/imports/`:
+7. Test matrix in `tests/harness/imports/`:
    - `transitive_leak_regression.f` — non-transitive enforcement (expects `E2004`).
    - `pub_import_parses.f` — parser sanity check.
    - `pub_import_reexport.f` — single-step re-export.

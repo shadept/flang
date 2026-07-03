@@ -119,7 +119,7 @@ _Avoid_: cache key, fingerprint
 ### Test harness
 
 **Lit-style harness**:
-The data-driven `.f` test format consumed by `dotnet test.cs`. Tests live in `tests/FLang.Tests/Harness/` and embed `//! TEST:`, `//! EXIT:`, `//! STDOUT:`, `//! STDERR:`, `//! COMPILE-ERROR:`, `//! COMPILE-WARNING:`, `//! SKIP:` directives.
+The data-driven `.f` test format consumed by `dotnet test.cs`. Tests live in `tests/harness/` and embed `//! TEST:`, `//! EXIT:`, `//! STDOUT:`, `//! STDERR:`, `//! COMPILE-ERROR:`, `//! COMPILE-WARNING:`, `//! SKIP:` directives. Setting the `FLANG` environment variable to a compiler binary runs the same corpus through that compiler instead of the in-process C# one.
 _Avoid_: integration tests, end-to-end tests
 
 **Test block**:

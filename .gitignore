@@ -139,10 +139,10 @@ tests/**/*.c
 !src/FLang.Codegen.C/
 
 # Ignore all files in test harness except source files (.f, not .generated.f)
-tests/FLang.Tests/Harness/**
-!tests/FLang.Tests/Harness/**/
-!tests/FLang.Tests/Harness/**/*.f
-tests/FLang.Tests/Harness/**/*.generated.f
+tests/harness/**
+!tests/harness/**/
+!tests/harness/**/*.f
+tests/harness/**/*.generated.f
 
 # Build artifacts in examples — ignore everything except source and project files
 examples/**

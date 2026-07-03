@@ -23,7 +23,7 @@ You own and maintain these docs. They are the source of truth for the project. W
 
 - `docs/spec.md` is authoritative. If a request conflicts with it, flag the conflict — don't silently deviate.
 - `docs/architecture.md` constraints are non-negotiable without explicit approval.
-- Language feature tests go in `tests/FLang.Tests/Harness/` using lit-style `.flang` files. Stdlib tests are colocated in the `.f` source file using `test "name" { ... }` blocks.
+- Language feature tests go in `tests/harness/` using lit-style `.flang` files. Stdlib tests are colocated in the `.f` source file using `test "name" { ... }` blocks.
 
 ## Core Priorities
 

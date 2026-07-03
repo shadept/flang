@@ -196,7 +196,9 @@ Data-driven lit-style tests. Self-contained `.f` files with embedded metadata:
 
 The harness compiles and runs each test, asserting exit code, stdout, and stderr match metadata. `COMPILE-ERROR`/`COMPILE-WARNING` tests assert compilation fails or warns with the specified error code.
 
-**Test placement:** Language feature tests go in `tests/FLang.Tests/Harness/`. Stdlib and self-hosted library tests (flang_core, flang_parser, flang_typer) are colocated in `.f` source files using `test "name" { ... }` blocks, run by `flang test` from the project directory. `flang test` resolves `[dependencies]` the same way `flang build` does, so a library's blocks can import its sibling libs.
+**Execution mode.** By default the harness compiles in-process with the C# compiler. When the `FLANG` environment variable names a compiler binary, each test instead compiles by subprocessing `$FLANG --stdlib-path <repo>/stdlib build <test.f>` and running the produced executable against the same expectations — this is how the self-hosted bootstrap is scored against the corpus. Compile-diagnostic expectations match textually against the external compiler's rendered `severity[CODE]` output; a failing test's message includes the compiler's full stdout/stderr. With `FLANG` unset, behavior is unchanged.
+
+**Test placement:** Language feature tests go in `tests/harness/`. Stdlib and self-hosted library tests (flang_core, flang_parser, flang_typer) are colocated in `.f` source files using `test "name" { ... }` blocks, run by `flang test` from the project directory. `flang test` resolves `[dependencies]` the same way `flang build` does, so a library's blocks can import its sibling libs.
 
 `flang test` runs **only the project's own** `test {}` blocks — those whose source file is one of the compilation's entry inputs. A dependency's (and stdlib's) blocks are that dependency's concern, tested from its own directory; otherwise every consumer re-runs the whole transitive suite. A project with no blocks of its own links to an empty runner and reports zero tests rather than failing on a missing entry point.
 

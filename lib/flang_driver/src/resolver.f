@@ -172,6 +172,19 @@ pub fn resolve_ctx(proj: &Project, stdlib_root: String, allocator: &Allocator? =
     }
 }
 
+// A resolution context for a single-file build: no project name or deps,
+// so only the stdlib and working-directory include rules apply.
+pub fn single_file_ctx(stdlib_root: String, allocator: &Allocator? = null) ResolveCtx {
+    let deps: List(DepRoot) = list(0, allocator)
+    return ResolveCtx {
+        project_name = from_view(""),
+        project_source_root = from_view(""),
+        deps = deps,
+        stdlib_root = normalize_sep(stdlib_root, allocator),
+        cwd = from_view("."),
+    }
+}
+
 // A dependency's source root: read its manifest and take the static
 // prefix of its `source` glob; fall back to `<dep>/src` when unreadable.
 fn dep_source_root(dep_dir: String, allocator: &Allocator?) OwnedString {

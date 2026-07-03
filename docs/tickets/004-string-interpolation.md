@@ -321,7 +321,7 @@ With `sb.cap = 0` after transfer, the desugar can emit `defer __sb.deinit()` imm
 - **Happy path**: `to_string()` transfers ownership, `sb.cap = 0`, the deferred `deinit` short-circuits on `sb.cap > 0`.
 - **Panic path**: if a hole expression panics before `to_string()` runs, defer fires on the live SB, freeing the buffer. No leak on exceptional exit.
 
-### Phase 6 — Tests (tests/FLang.Tests/Harness/interpolation/)
+### Phase 6 — Tests (tests/harness/interpolation/)
 
 New harness directory. At minimum:
 
@@ -348,12 +348,12 @@ New harness directory. At minimum:
   - `error_unescaped_quote_in_hole.flang`
   - `error_bad_prefix.flang` (e.g. `$123"..."`)
 
-**Phase 5 tests** (in `tests/FLang.Tests/Harness/string_builder/`):
+**Phase 5 tests** (in `tests/harness/string_builder/`):
 - `to_string_transfers_ownership.f` — build SB with `test_allocator`, call `to_string()`, assert `sb.cap == 0` and `test_allocator.alloc_count` unchanged across the call (transfer, not copy).
 - `deinit_after_to_string_is_noop.f` — `sb.to_string()` then `sb.deinit()`, assert `test_allocator.dealloc_count` unchanged (nothing for sb to free).
 - `owned_string_full_lifecycle.f` — SB → OwnedString via `to_string()` → `OwnedString.deinit()`, assert `check_leaks() == 0`.
 
-Follow existing `.f` / `.flang` test conventions (see `tests/FLang.Tests/Harness/string_builder/` for reference, and `tests/FLang.Tests/Harness/basics/` for basic conventions).
+Follow existing `.f` / `.flang` test conventions (see `tests/harness/string_builder/` for reference, and `tests/harness/basics/` for basic conventions).
 
 ### Phase 7 — Docs
 
