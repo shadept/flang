@@ -476,6 +476,8 @@ fn try_coercion(self: &Engine, from: Ty, to: Ty) Coercion? {
     if r1.is_some() { return r1 }
     let r2 = try_float_widening(from, to, self.allocator)
     if r2.is_some() { return r2 }
+    let r8 = try_char_to_u8(from, to, self.allocator)
+    if r8.is_some() { return r8 }
     self.nominals match {
         Some(reg) => {
             let r3 = try_option_wrapping(from, to, reg, self.allocator)
@@ -488,6 +490,8 @@ fn try_coercion(self: &Engine, from: Ty, to: Ty) Coercion? {
             if r6.is_some() { return r6 }
             let r7 = try_nominal_to_type(from, to, reg, self.allocator)
             if r7.is_some() { return r7 }
+            let r9 = try_type_to_typeinfo(from, to, reg, self.allocator)
+            if r9.is_some() { return r9 }
         },
         None => {},
     }

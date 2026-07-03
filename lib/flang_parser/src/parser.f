@@ -1355,9 +1355,10 @@ fn parse_anonymous_struct(self: &Parser) CstNode {
 // surface different node kinds yet — both become a parenthesised run
 // of expressions / commas under one node.
 fn parse_paren_expression(self: &Parser) CstNode {
-    // Empty `()` → unit.
+    // Empty `()` → unit, modelled as the zero-element tuple expression so
+    // it projects (and type-checks) like any other tuple literal.
     if self.peek_kind(1) == TokenKind.CloseParenthesis {
-        let b = self.open(NodeKind.TupleType)
+        let b = self.open(NodeKind.AnonymousStructExpr)
         self.eat_into(&b)
         self.eat_into(&b)
         return finish(b)

@@ -24,7 +24,11 @@ import flang_typer.type
 // and to grow returned `List` storage. Callers should pass the engine's
 // allocator so substituted types share its arena lifetime.
 pub fn substitute(ty: &Ty, subst: &Dict(VarId, Ty), allocator: &Allocator? = null) Ty {
-    let alloc = allocator.or_global()
+    // Resolved once; the recursion below stays on the non-optional path.
+    return substitute_r(ty, subst, allocator.or_global())
+}
+
+fn substitute_r(ty: &Ty, subst: &Dict(VarId, Ty), alloc: &Allocator) Ty {
     return ty.* match {
         Var(v) => substitute_var(&v, subst),
         Prim(p) => Ty.Prim(p),
@@ -48,13 +52,13 @@ fn substitute_var(v: &TyVar, subst: &Dict(VarId, Ty)) Ty {
 }
 
 fn substitute_ref(inner: &Ty, subst: &Dict(VarId, Ty), alloc: &Allocator) Ty {
-    let new_inner = substitute(inner, subst, alloc)
+    let new_inner = substitute_r(inner, subst, alloc)
     let boxed = box(alloc, new_inner)
     return Ty.Ref(boxed)
 }
 
 fn substitute_array(arr: &ArrayTy, subst: &Dict(VarId, Ty), alloc: &Allocator) Ty {
-    let new_elem = substitute(arr.elem, subst, alloc)
+    let new_elem = substitute_r(arr.elem, subst, alloc)
     let boxed = box(alloc, new_elem)
     return Ty.Array(.{ elem = boxed, length = arr.length })
 }
@@ -63,9 +67,9 @@ fn substitute_func(fn_ty: &FunctionTy, subst: &Dict(VarId, Ty), alloc: &Allocato
     let new_params = list(fn_ty.params.len, alloc)
     for i in 0..fn_ty.params.len {
         let p = &fn_ty.params[i]
-        new_params.push(substitute(p, subst, alloc))
+        new_params.push(substitute_r(p, subst, alloc))
     }
-    let new_ret = substitute(fn_ty.ret, subst, alloc)
+    let new_ret = substitute_r(fn_ty.ret, subst, alloc)
     let boxed_ret = box(alloc, new_ret)
     return Ty.Func(.{ params = new_params, ret = boxed_ret })
 }
@@ -74,7 +78,7 @@ fn substitute_tuple(elems: &List(Ty), subst: &Dict(VarId, Ty), alloc: &Allocator
     let new_elems = list(elems.len, alloc)
     for i in 0..elems.len {
         let e = &elems[i]
-        new_elems.push(substitute(e, subst, alloc))
+        new_elems.push(substitute_r(e, subst, alloc))
     }
     return Ty.Tuple(new_elems)
 }
@@ -83,7 +87,7 @@ fn substitute_record(fields: &List(Field), subst: &Dict(VarId, Ty), alloc: &Allo
     let new_fields = list(fields.len, alloc)
     for i in 0..fields.len {
         let f = &fields[i]
-        let new_ty = substitute(&f.ty, subst, alloc)
+        let new_ty = substitute_r(&f.ty, subst, alloc)
         new_fields.push(.{ name = f.name, ty = new_ty })
     }
     return Ty.Record(new_fields)
@@ -96,7 +100,7 @@ fn substitute_nominal(nr: &NominalRef, subst: &Dict(VarId, Ty), alloc: &Allocato
     let new_args: List(Ty) = list(nr.args.len, alloc)
     for i in 0..nr.args.len {
         let a = &nr.args[i]
-        new_args.push(substitute(a, subst, alloc))
+        new_args.push(substitute_r(a, subst, alloc))
     }
     return Ty.Nominal(.{ id = nr.id, args = new_args })
 }

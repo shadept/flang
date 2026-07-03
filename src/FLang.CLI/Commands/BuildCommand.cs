@@ -12,17 +12,19 @@ public static class BuildCommand
     {
         var releaseBuild = false;
         var emitC = false;
+        var checkOnly = false;
         string? stdlibPath = null;
 
         for (var i = 0; i < args.Length; i++)
         {
             if (args[i] == "--release") releaseBuild = true;
             else if (args[i] == "--emit-c") emitC = true;
+            else if (args[i] == "--check") checkOnly = true;
             else if (args[i] == "--stdlib-path" && i + 1 < args.Length) stdlibPath = args[++i];
             else
             {
                 Console.Error.WriteLine($"error: unknown option '{args[i]}'");
-                Console.Error.WriteLine("Usage: flang build [--release] [--emit-c]");
+                Console.Error.WriteLine("Usage: flang build [--release] [--emit-c] [--check]");
                 return 1;
             }
         }
@@ -151,7 +153,8 @@ public static class BuildCommand
             ProjectGlobalImports: project.Imports?.Global,
             DependencySourceRoots: depSourceRoots.Count > 0 ? depSourceRoots : null,
             ProjectMetadata: projectMetadata.Count > 0 ? projectMetadata : null,
-            EmitLibrary: isLibrary
+            EmitLibrary: isLibrary,
+            CheckOnly: checkOnly
         );
 
         var compiler = new Compiler();
@@ -179,6 +182,11 @@ public static class BuildCommand
             }
 
             stopwatch.Stop();
+            if (checkOnly)
+            {
+                Console.WriteLine($"Checked {project.Project.Name} in {stopwatch.ElapsedMilliseconds}ms");
+                return 0;
+            }
             var artifact = result.ExecutablePath ?? outputPath;
             Console.WriteLine(isLibrary
                 ? $"Compiled library {project.Project.Name} ({artifact}) in {stopwatch.ElapsedMilliseconds}ms"

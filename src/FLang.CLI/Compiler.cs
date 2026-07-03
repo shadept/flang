@@ -26,6 +26,8 @@ public record CompilerOptions(
     string StdlibPath,
     string? OutputPath = null,
     bool ReleaseBuild = false,
+    /// <summary>Stop after type checking — no lowering, codegen, or linking.</summary>
+    bool CheckOnly = false,
     string? EmitFir = null,
     bool DumpTemplates = false,
     bool DebugLogging = false,
@@ -333,6 +335,9 @@ public class Compiler
         {
             return new CompilationResult(false, null, allDiagnostics, compilation);
         }
+
+        if (options.CheckOnly)
+            return new CompilationResult(true, null, allDiagnostics, compilation);
 
         // 3. Lowering to IrModule
         var layoutService = new TypeLayoutService(hmChecker.Engine, hmChecker);

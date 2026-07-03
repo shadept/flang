@@ -292,6 +292,20 @@ public partial class HmTypeChecker
         },
         BreakNode br => new BreakNode(br.Span),
         ContinueNode cont => new ContinueNode(cont.Span),
+        // Segments are immutable and shareable; expression parts are mutable
+        // (the checker rewrites Expression) so each gets a fresh part. The
+        // desugared block is rebuilt when the specialization is checked.
+        InterpolatedStringExpressionNode interp => new InterpolatedStringExpressionNode(
+            interp.Span,
+            interp.TargetIdentifier != null
+                ? (IdentifierExpressionNode)CloneExpression(interp.TargetIdentifier)
+                : null,
+            interp.BuilderArgs?.Select(CloneExpression).ToList(),
+            [.. interp.Parts.Select(p => p switch
+            {
+                InterpExpressionPart ep => new InterpExpressionPart(ep.Span, CloneExpression(ep.Expression), ep.FormatSpec),
+                _ => p,
+            })]),
         _ => throw new NotSupportedException(
             $"Cloning not implemented for expression type: {expr.GetType().Name}")
     };

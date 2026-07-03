@@ -116,7 +116,7 @@ if (inputFilePath == null)
     Console.WriteLine();
     Console.WriteLine("Usage: flang [options] <file>              Compile a single file");
     Console.WriteLine("       flang init <name>                   Create a new project");
-    Console.WriteLine("       flang build [--release]             Build project from flang.toml");
+    Console.WriteLine("       flang build [--release] [--check]   Build project from flang.toml (--check: type-check only)");
     Console.WriteLine("       flang test [filter] [--release]     Run test blocks from project");
     Console.WriteLine("       flang test <file>                   Compile and run test blocks");
     Console.WriteLine();

@@ -29,6 +29,7 @@ import flang_core.span
 import flang_typer.checker
 import flang_typer.result
 import flang_driver.resolver
+import flang_driver.project
 
 // A fully analysed compilation unit. `checked` is false when the source
 // failed to parse — `result` is then an empty placeholder.
@@ -162,6 +163,7 @@ pub fn analyze_project(ctx: &ResolveCtx, entries: &List(OwnedString), allocator:
         enqueue_copy(&queue, &seen, entries[i].as_view())
     }
     seed_prelude(ctx, &queue, &seen, alloc)
+    seed_stdlib(ctx, &queue, &seen, alloc)
 
     let qi: usize = 0
     while qi < queue.len {
@@ -303,6 +305,27 @@ fn seed_prelude(ctx: &ResolveCtx, queue: &List(OwnedString), seen: &Set(String),
         Some(p) => enqueue_owned(queue, seen, p),
         None => {},
     }
+}
+
+// The reference compiler compiles every program against the whole stdlib
+// regardless of imports, and lenient type resolution in the checker relies
+// on every stdlib nominal being registered — so the BFS seeds the full
+// stdlib tree. Generated sidecars are folded into their origin module
+// during the walk, never loaded standalone.
+// ponytail: typechecks all of std on every build; prune to the import
+// closure once stdlib type visibility turns strict.
+fn seed_stdlib(ctx: &ResolveCtx, queue: &List(OwnedString), seen: &Set(String), alloc: &Allocator) {
+    if ctx.stdlib_root.as_view().len == 0 { return }
+    let pattern = $"{ctx.stdlib_root.as_view()}/**/*.f"
+    let found = glob_sources(pattern.as_view(), alloc)
+    pattern.deinit()
+    for i in 0..found.len {
+        let p = found[i].as_view()
+        if ends_with(p, ".generated.f") { continue }
+        let norm = normalize_sep(p, alloc)
+        enqueue_owned(queue, seen, norm)
+    }
+    deinit_source_list(&found)
 }
 
 fn enqueue_copy(queue: &List(OwnedString), seen: &Set(String), path: String) {

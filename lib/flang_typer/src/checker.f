@@ -47,9 +47,10 @@ import flang_typer.env
 import flang_typer.inference_engine
 import flang_typer.inference_results
 import flang_typer.nominal_registry
-import flang_typer.alias_registry
+import flang_typer.fqn_map
 import flang_typer.function_registry
 import flang_typer.specialization
+import flang_typer.substitution
 import flang_typer.visibility
 import flang_typer.node_id
 import flang_typer.error_codes
@@ -70,7 +71,10 @@ pub type Checker = struct {
     engine: Engine
     env: TypeEnv
     nominals: NominalRegistry
-    aliases: AliasRegistry
+    // Type-alias bodies (expanded lazily at use) and module-level constant
+    // types, both FQN-keyed with import-visibility lookup.
+    aliases: FqnMap(TypeExpr)
+    constants: FqnMap(Ty)
     functions: FunctionRegistry
     specs: SpecializationRegistry
     results: InferenceResults
@@ -95,7 +99,8 @@ pub fn checker(allocator: &Allocator? = null) Checker {
         engine = engine(alloc),
         env = type_env(alloc),
         nominals = nominal_registry(alloc),
-        aliases = alias_registry(alloc),
+        aliases = fqn_map(alloc),
+        constants = fqn_map(alloc),
         functions = function_registry(alloc),
         specs = specialization_registry(alloc),
         results = inference_results(alloc),
@@ -112,6 +117,7 @@ pub fn deinit(self: &Checker) {
     self.env.deinit()
     self.nominals.deinit()
     self.aliases.deinit()
+    self.constants.deinit()
     self.functions.deinit()
     self.specs.deinit()
     self.results.deinit()
@@ -182,15 +188,18 @@ fn resolve_named(self: &Checker, n: &NamedType) Ty {
         return resolve_type_expr(self, &body)
     }
 
+    // A registered type outside the import scope still resolves: the
+    // reference compiler resolves type names program-wide regardless of
+    // imports, and the stdlib depends on it. Import-strict type visibility
+    // is a future tightening (identifiers stay strict).
     let hidden_info: NomHiddenInfo? = look match {
         NomLookHidden(info) => Some(info),
         _ => null,
     }
     if hidden_info.is_some() {
         let info = hidden_info.unwrap()
-        push_diag_e(self, n.span, E_UNKNOWN_TYPE,
-            $"type `{n.name}` exists in module `{info.module}` but is not imported here")
-        return Ty.Error
+        let args = resolve_generic_args(self, n)
+        return Ty.Nominal(NominalRef { id = info.id, args = args })
     }
 
     // Type-parameter in scope (from a generic-aware lookup)?
@@ -726,8 +735,22 @@ pub fn collect_signatures(self: &Checker, module: &Module, module_path: String) 
 fn collect_one_signature(self: &Checker, decl: &Decl) {
     decl.* match {
         Function(fd) => register_function_sig(self, &fd),
+        Const(cd) => register_constant(self, &cd),
         _ => {},
     }
+}
+
+// A module-level constant registers its declared type in the signature
+// pass; without an annotation it gets a fresh variable the body pass
+// binds from the initializer. Uses in any module unify against the same
+// entry, so cross-module reads work regardless of check order.
+fn register_constant(self: &Checker, cd: &ConstDecl) {
+    let ty = cd.type_annotation match {
+        Some(t) => resolve_type_expr(self, &t),
+        None => self.engine.fresh_var(),
+    }
+    let fqn = $"{self.current_module.unwrap()}.{cd.name}"
+    self.constants.register(fqn, ty)
 }
 
 fn register_function_sig(self: &Checker, fd: &FunctionDecl) {
@@ -795,8 +818,17 @@ pub fn check_module_bodies(self: &Checker, module: &Module, module_path: String)
 fn check_one_decl(self: &Checker, decl: &Decl) {
     decl.* match {
         Function(fd) => check_function_body(self, &fd),
+        Const(cd) => check_constant_init(self, &cd),
         _ => {},
     }
+}
+
+fn check_constant_init(self: &Checker, cd: &ConstDecl) {
+    let fqn = $"{self.current_module.unwrap()}.{cd.name}"
+    let reg = self.constants.get_fqn(fqn.as_view())
+    fqn.deinit()
+    let v = check_expr(self, &cd.value)
+    unify_expected(self, v, reg.unwrap(), E_TYPE_MISMATCH, cd.span)
 }
 
 fn check_function_body(self: &Checker, fd: &FunctionDecl) {
@@ -832,10 +864,7 @@ fn check_function_body(self: &Checker, fd: &FunctionDecl) {
     // skipped to avoid a spurious "expected T, got void".
     body_ty match {
         Void => {},
-        _ => {
-            const o = self.engine.unify(body_ty, ret)
-            report_unify(self, &o, E_RETURN_MISMATCH, fd.span)
-        },
+        _ => unify_expected(self, body_ty, ret, E_RETURN_MISMATCH, fd.span),
     }
 
     let _r =self.fn_stack.pop()
@@ -869,8 +898,20 @@ fn check_expr_kind(self: &Checker, expr: &Expr) Ty {
         If(if_expr) => check_if(self, &if_expr),
         StructLit(lit) => check_struct_lit(self, &lit),
         MemberAccess(ma) => check_member(self, &ma),
+        TupleLit(t) => check_tuple_lit(self, &t),
         _ => self.engine.fresh_var(),
     }
+}
+
+// `()` is unit — the empty tuple and `void` are the same type.
+fn check_tuple_lit(self: &Checker, t: &TupleLiteralExpr) Ty {
+    if t.elements.len == 0 { return Ty.Void }
+    let elems = list(t.elements.len, self.allocator)
+    for i in 0..t.elements.len {
+        let e = &t.elements[i]
+        elems.push(check_expr(self, e))
+    }
+    return Ty.Tuple(elems)
 }
 
 fn check_literal(self: &Checker, lit: &LiteralExpr) Ty {
@@ -927,9 +968,41 @@ fn check_identifier(self: &Checker, id: &IdentifierExpr) Ty {
         return self.engine.fresh_var()
     }
 
+    // Module-level constant?
+    let cty = self.constants.lookup(id.name, &vis)
+    if cty.is_some() { return cty.unwrap() }
+
+    // Bare payload-less variant (`None`) — locals and functions win first.
+    let vid = self.nominals.lookup_variant(id.name, 0usize, &vis)
+    if vid.is_some() {
+        let vt = construct_nullary(self, vid.unwrap(), id.name, id.span)
+        if vt.is_some() { return vt.unwrap() }
+    }
+
+    // Bare type name in value position (`size_of(ArenaPage)`, `Type(u8)`):
+    // the identifier types as the named type itself; the `Type(T)` coercion
+    // lifts it where a reified type parameter expects it.
+    let prim = prim_from_name(id.name)
+    if prim.is_some() { return Ty.Prim(prim.unwrap()) }
+    let tn = self.nominals.lookup(id.name, &vis) match {
+        NomLookFound(n) => Some(n),
+        _ => null,
+    }
+    if tn.is_some() { return nominal_with_fresh_args(self, tn.unwrap()) }
+
     push_diag_e(self, id.span, E_UNKNOWN_IDENT,
         $"unknown identifier `{id.name}`")
     return Ty.Error
+}
+
+fn nominal_with_fresh_args(self: &Checker, id: NominalId) Ty {
+    let n = self.nominals.get(id).* match {
+        NomStruct(s) => s.type_params.len,
+        NomEnum(e) => e.type_params.len,
+    }
+    let args = list(n, self.allocator)
+    for k in 0..n { args.push(self.engine.fresh_var()) }
+    return Ty.Nominal(NominalRef { id = id, args = args })
 }
 
 fn check_block(self: &Checker, blk: &BlockExpr) Ty {
@@ -967,7 +1040,7 @@ fn check_let(self: &Checker, ls: &LetStmt) {
     let bound_ty = annotated match {
         Some(a) => {
             inferred match {
-                Some(i) => { const o = self.engine.unify(i, a); report_unify(self, &o, E_TYPE_MISMATCH, ls.span); a },
+                Some(i) => { unify_expected(self, i, a, E_TYPE_MISMATCH, ls.span); a },
                 None => a,
             }
         },
@@ -983,6 +1056,45 @@ fn check_let(self: &Checker, ls: &LetStmt) {
     })
 }
 
+// A value flowing into an optional context (`x: T? = value`, `return value`
+// against `T?`) prefers the payload interpretation: when the value unifies
+// with the option's payload, the context wraps it rather than rewriting the
+// value's type. Keeps an inference variable from a call result (or a generic
+// param) from being absorbed into the option, which would poison its other
+// uses (or trip the occurs check).
+fn unify_expected(self: &Checker, inferred: Ty, annotated: Ty, code: String, span: SourceSpan) {
+    let payload = option_payload(self, annotated)
+    payload match {
+        Some(p) => {
+            let probe = self.engine.try_unify(inferred, p)
+            if probe.is_ok() {
+                const o = self.engine.unify(inferred, p)
+                report_unify(self, &o, code, span)
+                return
+            }
+        },
+        None => {},
+    }
+    const o = self.engine.unify(inferred, annotated)
+    report_unify(self, &o, code, span)
+}
+
+// The payload type when `t` is the well-known Option nominal.
+fn option_payload(self: &Checker, t: Ty) Ty? {
+    let z = self.engine.zonk(t)
+    let nr = z match {
+        Nominal(n) => Some(n),
+        _ => null,
+    }
+    if nr.is_none() { return null }
+    let n = nr.unwrap()
+    let opt_id = self.nominals.by_fqn.get(FQN_OPTION)
+    if opt_id.is_none() { return null }
+    if opt_id.unwrap() != n.id { return null }
+    if n.args.len != 1 { return null }
+    return Some(n.args[0])
+}
+
 fn check_return(self: &Checker, rs: &ReturnStmt) {
     let frame_idx = self.fn_stack.len
     if frame_idx == 0 { return }
@@ -990,8 +1102,7 @@ fn check_return(self: &Checker, rs: &ReturnStmt) {
     rs.value match {
         Some(e) => {
             let v = check_expr(self, &e)
-            const o = self.engine.unify(v, frame.return_ty)
-            report_unify(self, &o, E_RETURN_MISMATCH, rs.span)
+            unify_expected(self, v, frame.return_ty, E_RETURN_MISMATCH, rs.span)
         },
         None => {
             const o = self.engine.unify(Ty.Void, frame.return_ty)
@@ -1010,19 +1121,99 @@ fn check_binary(self: &Checker, bin: &BinaryExpr) Ty {
 }
 
 fn check_call(self: &Checker, call: &CallExpr) Ty {
+    let pos_tys = list(call.args.len, self.allocator)
+    let named_seen = false
     for i in 0..call.args.len {
         let a = &call.args[i]
-        check_call_arg(self, a)
+        a.* match {
+            Positional(e) => pos_tys.push(check_expr(self, e)),
+            Named(named) => { let _r = check_expr(self, named.value); named_seen = true },
+        }
     }
+    // Variant constructors take no named arguments, so their presence
+    // rules the variant interpretation out before any lookup.
+    if !named_seen {
+        let vt = variant_call(self, call, &pos_tys)
+        if vt.is_some() {
+            pos_tys.deinit()
+            return vt.unwrap()
+        }
+        let ti = call.callee.* match {
+            Identifier(ide) => type_instantiation_call(self, &ide, &pos_tys),
+            _ => null,
+        }
+        if ti.is_some() {
+            pos_tys.deinit()
+            return ti.unwrap()
+        }
+    }
+    pos_tys.deinit()
     let _r = check_expr(self, call.callee)
     return self.engine.fresh_var()
 }
 
-fn check_call_arg(self: &Checker, arg: &CallArgument) {
-    arg.* match {
-        Positional(e) => { let _r = check_expr(self, e) },
-        Named(named) => { let _r = check_expr(self, named.value) },
+// `Enum.Variant(args)` or bare `Variant(args)` — payload-carrying enum
+// variant construction. Null for every other call shape; the caller
+// falls through to function/indirect call handling. The callee is NOT
+// checked as a value on the variant path — a type name has no value
+// binding, so checking it would wrongly report `unknown identifier`.
+fn variant_call(self: &Checker, call: &CallExpr, arg_tys: &List(Ty)) Ty? {
+    let node = node_id_of(call.span)
+    return call.callee.* match {
+        MemberAccess(ma) => {
+            let id = enum_receiver(self, ma.receiver)
+            id match {
+                Some(i) => construct_variant(self, i, ma.member, arg_tys, call.span, node),
+                None => null,
+            }
+        },
+        Identifier(ide) => unqualified_variant_call(self, &ide, arg_tys, call.span, node),
+        _ => null,
     }
+}
+
+// Bare `Variant(args)`: locals and functions win over variant names, so
+// the constructor interpretation only fires when the name has neither a
+// value binding nor a visible function candidate.
+fn unqualified_variant_call(self: &Checker, ide: &IdentifierExpr, arg_tys: &List(Ty), span: SourceSpan, node: NodeId) Ty? {
+    if name_is_value_bound(self, ide.name) { return null }
+    let vis = current_visibility(self)
+    let nid = self.nominals.lookup_variant(ide.name, arg_tys.len, &vis)
+    if nid.is_none() { return null }
+    return construct_variant(self, nid.unwrap(), ide.name, arg_tys, span, node)
+}
+
+// True when the name resolves as a value — a local binding or a visible
+// function. Values always win over variant and type-name interpretations.
+fn name_is_value_bound(self: &Checker, name: String) bool {
+    if self.env.lookup(name).is_some() { return true }
+    let vis = current_visibility(self)
+    return self.functions.lookup(name, &vis) match {
+        FnLookFound(_) => true,
+        _ => false,
+    }
+}
+
+// `Entry(K, V)` — a visible nominal called with type arguments yields the
+// instantiated nominal itself; the `Type(T)` coercion lifts it where a
+// reified type parameter expects it.
+fn type_instantiation_call(self: &Checker, ide: &IdentifierExpr, arg_tys: &List(Ty)) Ty? {
+    if name_is_value_bound(self, ide.name) { return null }
+    let vis = current_visibility(self)
+    let nid = self.nominals.lookup(ide.name, &vis) match {
+        NomLookFound(n) => Some(n),
+        _ => null,
+    }
+    if nid.is_none() { return null }
+    let id = nid.unwrap()
+    let n_params = self.nominals.get(id).* match {
+        NomStruct(s) => s.type_params.len,
+        NomEnum(e) => e.type_params.len,
+    }
+    if n_params != arg_tys.len { return null }
+    let args = list(arg_tys.len, self.allocator)
+    for i in 0..arg_tys.len { args.push(arg_tys[i]) }
+    return Some(Ty.Nominal(NominalRef { id = id, args = args }))
 }
 
 fn check_if(self: &Checker, if_expr: &IfExpr) Ty {
@@ -1089,24 +1280,46 @@ fn check_member(self: &Checker, ma: &MemberAccessExpr) Ty {
 // Qualified enum-variant access `EnumName.Variant`: a bare receiver naming an
 // in-scope enum whose `member` is one of its payload-less variants yields the
 // enum's nominal type. Null for every other shape, leaving field access and
-// UFCS untouched.
-// ponytail: payload-less variants only; payload variants and bare-variant
-// shorthand are later milestones.
+// UFCS untouched. Payload-carrying variants only construct through call
+// syntax — see `variant_call`.
 fn enum_variant_access(self: &Checker, ma: &MemberAccessExpr) Ty? {
-    let name = ma.receiver.* match {
-        Identifier(id) => Some(id.name),
+    let id = enum_receiver(self, ma.receiver)
+    if id.is_none() { return null }
+    return construct_nullary(self, id.unwrap(), ma.member, ma.span)
+}
+
+// The nominal a bare-identifier receiver names, when it is not shadowed
+// by a value binding. Locals win: `x.foo` on a local `x` is field access
+// or UFCS even if a type `x` is also in scope.
+fn enum_receiver(self: &Checker, recv: &Expr) NominalId? {
+    let name = recv.* match {
+        Identifier(ide) => Some(ide.name),
         _ => null,
     }
     if name.is_none() { return null }
+    if self.env.lookup(name.unwrap()).is_some() { return null }
 
     let vis = current_visibility(self)
-    let nid = self.nominals.lookup(name.unwrap(), &vis) match {
+    return self.nominals.lookup(name.unwrap(), &vis) match {
         NomLookFound(id) => Some(id),
         _ => null,
     }
-    if nid.is_none() { return null }
-    let id = nid.unwrap()
+}
 
+fn construct_nullary(self: &Checker, id: NominalId, vname: String, span: SourceSpan) Ty? {
+    let empty = list(0, self.allocator)
+    let out = construct_variant(self, id, vname, &empty, span, node_id_of(span))
+    empty.deinit()
+    return out
+}
+
+// Construct an enum variant: fresh type args for the enum's params, the
+// variant's payload types substituted against them, and each argument
+// unified with its payload. Null when the nominal is not an enum, names
+// no such variant, or the argument count differs — callers fall through
+// to the other call forms. On success the variant target is recorded
+// for lowering and go-to-definition.
+fn construct_variant(self: &Checker, id: NominalId, vname: String, arg_tys: &List(Ty), span: SourceSpan, node: NodeId) Ty? {
     let ed = self.nominals.get(id).* match {
         NomEnum(e) => Some(e),
         _ => null,
@@ -1114,15 +1327,33 @@ fn enum_variant_access(self: &Checker, ma: &MemberAccessExpr) Ty? {
     if ed.is_none() { return null }
     let e = ed.unwrap()
 
+    let vnum = 0u32
+    let found = false
     for i in 0..e.variants.len {
-        let v = &e.variants[i]
-        if v.name == ma.member and v.payloads.len == 0 {
-            let args: List(Ty) = list(e.type_params.len, self.allocator)
-            for k in 0..e.type_params.len { args.push(self.engine.fresh_var()) }
-            return Some(Ty.Nominal(NominalRef { id = id, args = args }))
+        if !found and e.variants[i].name == vname {
+            vnum = i as u32
+            found = true
         }
     }
-    return null
+    if !found { return null }
+    let payloads = &e.variants[vnum as usize].payloads
+    if payloads.len != arg_tys.len { return null }
+
+    let subst = dict(self.allocator)
+    let args = list(e.type_params.len, self.allocator)
+    for k in 0..e.type_params.len {
+        let fresh = self.engine.fresh_var()
+        subst.set(e.type_params[k], fresh)
+        args.push(fresh)
+    }
+    for i in 0..payloads.len {
+        let pty = substitute(&payloads[i], &subst, self.allocator)
+        const o = self.engine.unify(arg_tys[i], pty)
+        report_unify(self, &o, E_TYPE_MISMATCH, span)
+    }
+    subst.deinit()
+    self.results.record_target(node, ResolvedTarget.RtEnumVariant(id, vnum))
+    return Some(Ty.Nominal(NominalRef { id = id, args = args }))
 }
 
 // A struct field's declared type by name. Null when the (zonked,
@@ -1225,62 +1456,89 @@ fn parse_src(src: String, fid: i32) Module {
     return m
 }
 
+// Parse each source as its own module, run check_all over them, and count
+// error diagnostics.
+fn count_check_errors(srcs: String[], paths: String[]) usize {
+    let mods = list(srcs.len)
+    for i in 0..srcs.len {
+        mods.push(parse_src(srcs[i], i as i32))
+    }
+    let ps = list(paths.len)
+    for i in 0..paths.len { ps.push(paths[i]) }
+
+    let chk = checker()
+    let _res = check_all(&chk, &mods, &ps)
+    let errors = 0usize
+    for i in 0..chk.diagnostics.len {
+        if chk.diagnostics[i].severity == Severity.Error { errors = errors + 1 }
+    }
+
+    chk.deinit()
+    for i in 0..mods.len {
+        let m = &mods[i]
+        m.deinit()
+    }
+    mods.deinit()
+    ps.deinit()
+    return errors
+}
+
 test "non-generic type alias resolves cross-module" {
     // `alias_a` declares `type VarId = u32`; `alias_b` imports it and uses
     // the alias in a signature. Before the alias registry, `VarId` surfaced
     // as E2003 unknown type, so a clean run (zero errors) is the regression.
-    let a = parse_src("pub type VarId = u32\n", 0i32)
-    let b = parse_src("import alias_a\nfn f(x: VarId) u32 { return x }\n", 1i32)
-
-    let mods: List(Module) = list(2)
-    mods.push(a)
-    mods.push(b)
-    let paths: List(String) = list(2)
-    paths.push("alias_a")
-    paths.push("alias_b")
-
-    let chk = checker()
-    let _res = check_all(&chk, &mods, &paths)
-
-    let errors: usize = 0
-    for i in 0..chk.diagnostics.len {
-        if chk.diagnostics[i].severity == Severity.Error { errors = errors + 1 }
-    }
+    let errors = count_check_errors(
+        ["pub type VarId = u32\n", "import alias_a\nfn f(x: VarId) u32 { return x }\n"],
+        ["alias_a", "alias_b"])
     assert_true(errors == 0, "cross-module alias program type-checks with no errors")
+}
 
-    chk.deinit()
-    let m0 = &mods[0]
-    m0.deinit()
-    let m1 = &mods[1]
-    m1.deinit()
-    mods.deinit()
-    paths.deinit()
+test "payload variant construction type-checks" {
+    // Qualified single- and multi-payload construction on a non-generic
+    // enum. Before this fix the callee's receiver checked as a value and
+    // surfaced E2004 unknown identifier.
+    let errors = count_check_errors(
+        ["pub type Shape = enum { Dot\nCircle(i32)\nRect(i32, i32) }\nfn f() Shape { return Shape.Circle(3) }\nfn g() Shape { return Shape.Rect(1, 2) }\n"],
+        ["shapes"])
+    assert_true(errors == 0, "payload variant construction type-checks with no errors")
+}
+
+test "generic and unqualified variant construction type-checks" {
+    // Generic enum: qualified `Opt.S(3)`, unqualified `S(3)`, and bare
+    // payload-less `N` in expression position — each instantiates the
+    // enum's type param fresh and unifies it via the declared return.
+    let errors = count_check_errors(
+        ["pub type Opt = enum(T) { N\nS(T) }\nfn f() Opt(i32) { return Opt.S(3) }\nfn g() Opt(i32) { return S(3) }\nfn h() Opt(i32) { return N }\n"],
+        ["opts"])
+    assert_true(errors == 0, "generic and unqualified variant construction type-checks with no errors")
+}
+
+test "variant payload type mismatch is reported" {
+    // A float payload against an i32 variant — no coercion path exists
+    // (bool would widen: bool coerces to any integer by design; a string
+    // literal resolves to Error poison in these stdlib-less tests).
+    let errors = count_check_errors(
+        ["pub type Shape = enum { Circle(i32) }\nfn f(x: f64) Shape { return Shape.Circle(x) }\n"],
+        ["shapes"])
+    assert_true(errors > 0, "f64 payload against i32 variant reports a type error")
+}
+
+test "module-level constants resolve cross-module" {
+    // An imported `pub const` and a same-module unannotated const both
+    // resolve as identifiers; before the constant registry each surfaced
+    // E2004 unknown identifier.
+    let errors = count_check_errors(
+        ["pub const LIMIT: u32 = 8\n", "import consts_a\nconst LOCAL = 3\nfn f() u32 { return LIMIT }\nfn g() u32 { return LOCAL }\n"],
+        ["consts_a", "consts_b"])
+    assert_true(errors == 0, "constant reads type-check with no errors")
 }
 
 test "qualified payload-less enum variant access type-checks" {
     // `Ord.Less` is a MemberAccess on a type-name receiver. Before this fix
     // the receiver checked as a value and surfaced E2004 unknown identifier;
     // a clean run (zero errors) returning the enum type is the regression.
-    let src = "pub type Ord = enum { Less = -1\nEqual = 0\nGreater = 1 }\nfn f() Ord { return Ord.Less }\n"
-    let a = parse_src(src, 0i32)
-
-    let mods: List(Module) = list(1)
-    mods.push(a)
-    let paths: List(String) = list(1)
-    paths.push("cmp")
-
-    let chk = checker()
-    let _res = check_all(&chk, &mods, &paths)
-
-    let errors: usize = 0
-    for i in 0..chk.diagnostics.len {
-        if chk.diagnostics[i].severity == Severity.Error { errors = errors + 1 }
-    }
+    let errors = count_check_errors(
+        ["pub type Ord = enum { Less = -1\nEqual = 0\nGreater = 1 }\nfn f() Ord { return Ord.Less }\n"],
+        ["cmp"])
     assert_true(errors == 0, "qualified enum variant access type-checks with no errors")
-
-    chk.deinit()
-    let m0 = &mods[0]
-    m0.deinit()
-    mods.deinit()
-    paths.deinit()
 }

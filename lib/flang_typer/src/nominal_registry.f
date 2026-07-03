@@ -215,6 +215,31 @@ pub fn lookup(self: &NominalRegistry, name: String, vis: &Visibility) NomLookup 
     return NomLookup.NomLookMissing
 }
 
+// First visible enum declaring a variant `name` with exactly `arity`
+// payloads. Registration order breaks ties — qualify with the enum name
+// when two visible enums share a variant shape.
+// ponytail: linear scan over every def per call; index variant names if
+// checker profiles flag it.
+pub fn lookup_variant(self: &NominalRegistry, name: String, arity: usize, vis: &Visibility) NominalId? {
+    for i in 0..self.defs.len {
+        let d = &self.defs[i]
+        let ed = d.* match {
+            NomEnum(e) => Some(e),
+            _ => null,
+        }
+        if ed.is_none() { continue }
+        let e = ed.unwrap()
+        if !vis.allows(e.module) { continue }
+        for j in 0..e.variants.len {
+            let v = &e.variants[j]
+            if v.name == name and v.payloads.len == arity {
+                return Some(i as u32)
+            }
+        }
+    }
+    return null
+}
+
 // ─────────────────────────────────────────────────────────────────────
 // Helpers
 // ─────────────────────────────────────────────────────────────────────

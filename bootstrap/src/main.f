@@ -35,6 +35,7 @@ type Cli = struct {
     show_help: bool
     show_version: bool
     verbose: bool
+    check: bool
     subcommand: String
     rest_index: usize
     stdlib_path: String
@@ -61,7 +62,7 @@ pub fn main() i32 {
     }
 
     return cli.subcommand match {
-        "build" => run_build(argv, cli.rest_index, cli.verbose, cli.stdlib_path)
+        "build" => run_build(argv, cli.rest_index, cli.verbose, cli.stdlib_path, cli.check)
         "fmt" => spawn_tool("flang_fmt", argv, cli.rest_index, cli.verbose)
         "lsp" => spawn_tool("flang_lsp", argv, cli.rest_index, cli.verbose)
         "cst" => spawn_tool("cst_explorer", argv, cli.rest_index, cli.verbose)
@@ -76,7 +77,7 @@ pub fn main() i32 {
 // argument as the subcommand. Index 0 is the program name and is skipped.
 fn parse_cli(argv: String[]) Cli {
     let cli: Cli
-    let opts = getopts("h(help)V(version)v(verbose)s(stdlib-path):", argv, 1)
+    let opts = getopts("h(help)V(version)v(verbose)c(check)s(stdlib-path):", argv, 1)
 
     // Drive opts.next() manually rather than `for r in opts` - std.env's
     // `iter(&GetOpt)` returns a *copy* of the iterator state, so a
@@ -90,6 +91,7 @@ fn parse_cli(argv: String[]) Cli {
                 if c == 'h' { cli.show_help = true }
                 if c == 'V' { cli.show_version = true }
                 if c == 'v' { cli.verbose = true }
+                if c == 'c' { cli.check = true }
             }
             OptArg(c, val) => {
                 if c == 's' { cli.stdlib_path = val }
@@ -136,6 +138,7 @@ fn print_help() {
     println("  -h, --help          show this help")
     println("  -V, --version       show version")
     println("  -v, --verbose       verbose output")
+    println("  -c, --check         type-check only (no codegen or link)")
     println("  -s, --stdlib-path <dir>  stdlib root (default: <exe dir>/stdlib)")
 }
 
@@ -162,12 +165,12 @@ fn unknown_subcommand(name: String) i32 {
 // build: a `<file>.f` argument compiles that single file; with no
 // argument, load `flang.toml` from the current directory and build the
 // project. Both share `build_source_file` for the analyse->lower->link tail.
-fn run_build(argv: String[], rest: usize, verbose: bool, stdlib_path: String) i32 {
+fn run_build(argv: String[], rest: usize, verbose: bool, stdlib_path: String, check_only: bool) i32 {
     if rest < argv.len {
         const path = argv[rest]
         if ends_with(path, ".f") {
             const out = output_path_for(path)
-            return build_source_file(path, out, verbose)
+            return build_source_file(path, out, verbose, check_only)
         }
         const msg = $"bootstrap: `build` takes a `.f` file or no argument (got `{path}`)"
         defer msg.deinit()
@@ -176,7 +179,7 @@ fn run_build(argv: String[], rest: usize, verbose: bool, stdlib_path: String) i3
     }
     let stdlib = effective_stdlib(stdlib_path, argv)
     defer stdlib.deinit()
-    return build_project(verbose, stdlib.as_view())
+    return build_project(verbose, stdlib.as_view(), check_only)
 }
 
 // The stdlib include root: the explicit `--stdlib-path` when given, else
@@ -208,7 +211,7 @@ fn dir_of(path: String) String {
 // Project mode: parse `flang.toml`, glob its sources, resolve imports
 // across the whole project (plus the auto-imported prelude), type-check
 // every module together, then lower the lot to one executable.
-fn build_project(verbose: bool, stdlib_path: String) i32 {
+fn build_project(verbose: bool, stdlib_path: String, check_only: bool) i32 {
     if !exists("flang.toml") {
         println("bootstrap: no flang.toml in the current directory")
         return 1
@@ -252,6 +255,13 @@ fn build_project(verbose: bool, stdlib_path: String) i32 {
         return 1
     }
 
+    if check_only {
+        const m = $"checked {proj.name.as_view()} ({unit.modules.len} modules)"
+        defer m.deinit()
+        println(m.as_view())
+        return 0
+    }
+
     const out = $"{proj.output.as_view()}/{proj.name.as_view()}"
     defer out.deinit()
     let result = build_program(&unit.modules, &unit.result, out.as_view())
@@ -268,7 +278,7 @@ fn build_project(verbose: bool, stdlib_path: String) i32 {
 }
 
 // Read, analyse, report diagnostics, then lower + link to `out`.
-fn build_source_file(path: String, out: String, verbose: bool) i32 {
+fn build_source_file(path: String, out: String, verbose: bool, check_only: bool) i32 {
     const source_opt = read_source(path)
     if source_opt.is_none() { return 1 }
     let unit = analyze(source_opt.unwrap(), path)
@@ -284,6 +294,13 @@ fn build_source_file(path: String, out: String, verbose: bool) i32 {
     }
     if errs > 0 {
         return build_failed(path, errs)
+    }
+
+    if check_only {
+        const m = $"checked {path}"
+        defer m.deinit()
+        println(m.as_view())
+        return 0
     }
 
     let result = build_unit(&unit, out)

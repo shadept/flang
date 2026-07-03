@@ -56,11 +56,9 @@ pub fn deinit(self: &ResolveCtx) {
 // Resolve a dotted import to an existing file path, or null when no rule
 // matches an existing file. The returned string is owned by the caller.
 pub fn resolve_import(ctx: &ResolveCtx, segs: &List(String), allocator: &Allocator? = null) OwnedString? {
-    let alloc = allocator.or_global()
-
     // Project rule: first segment is the project name.
     if segs.len > 1 and segs[0] == ctx.project_name.as_view() {
-        let p = join_module_path(ctx.project_source_root.as_view(), segs, 1, alloc)
+        let p = join_module_path(ctx.project_source_root.as_view(), segs, 1, allocator)
         if exists(p.as_view()) { return Some(p) }
         p.deinit()
     }
@@ -70,7 +68,7 @@ pub fn resolve_import(ctx: &ResolveCtx, segs: &List(String), allocator: &Allocat
         for i in 0..ctx.deps.len {
             let d = &ctx.deps[i]
             if segs[0] == d.name.as_view() {
-                let p = join_module_path(d.root.as_view(), segs, 1, alloc)
+                let p = join_module_path(d.root.as_view(), segs, 1, allocator)
                 if exists(p.as_view()) { return Some(p) }
                 p.deinit()
             }
@@ -78,11 +76,11 @@ pub fn resolve_import(ctx: &ResolveCtx, segs: &List(String), allocator: &Allocat
     }
 
     // Include rule: stdlib first, then the working directory.
-    let p1 = join_module_path(ctx.stdlib_root.as_view(), segs, 0, alloc)
+    let p1 = join_module_path(ctx.stdlib_root.as_view(), segs, 0, allocator)
     if exists(p1.as_view()) { return Some(p1) }
     p1.deinit()
 
-    let p2 = join_module_path(ctx.cwd.as_view(), segs, 0, alloc)
+    let p2 = join_module_path(ctx.cwd.as_view(), segs, 0, allocator)
     if exists(p2.as_view()) { return Some(p2) }
     p2.deinit()
 
@@ -95,10 +93,9 @@ pub fn resolve_import(ctx: &ResolveCtx, segs: &List(String), allocator: &Allocat
 // sidecar as an extra source of the same module, standing in for the template
 // expansion the C# compiler runs in memory (`#interface`, `#derive`, ...).
 pub fn generated_sidecar(file_path: String, allocator: &Allocator? = null) OwnedString? {
-    let alloc = allocator.or_global()
     if ends_with(file_path, ".generated.f") { return null }
     if !ends_with(file_path, ".f") { return null }
-    let sb = string_builder(0, alloc)
+    let sb = string_builder(0, allocator)
     sb.append(file_path[0..(file_path.len - 2)])
     sb.append(".generated.f")
     let cand = sb.to_string()
@@ -113,39 +110,37 @@ pub fn generated_sidecar(file_path: String, allocator: &Allocator? = null) Owned
 // same order `resolve_import` tries them; an unclassified path falls back
 // to its bare file stem.
 pub fn module_fqn(ctx: &ResolveCtx, path: String, allocator: &Allocator? = null) OwnedString {
-    let alloc = allocator.or_global()
-    let norm = normalize_sep(path, alloc)
+    let norm = normalize_sep(path, allocator)
     defer norm.deinit()
     let np = norm.as_view()
 
     let pr = strip_root(np, ctx.project_source_root.as_view())
     if pr.is_some() {
-        return dotted_with_prefix(ctx.project_name.as_view(), pr.unwrap(), alloc)
+        return dotted_with_prefix(ctx.project_name.as_view(), pr.unwrap(), allocator)
     }
 
     for i in 0..ctx.deps.len {
         let dr = strip_root(np, ctx.deps[i].root.as_view())
         if dr.is_some() {
-            return dotted_with_prefix(ctx.deps[i].name.as_view(), dr.unwrap(), alloc)
+            return dotted_with_prefix(ctx.deps[i].name.as_view(), dr.unwrap(), allocator)
         }
     }
 
     let sr = strip_root(np, ctx.stdlib_root.as_view())
     if sr.is_some() {
-        return dotted(sr.unwrap(), alloc)
+        return dotted(sr.unwrap(), allocator)
     }
 
     let cr = strip_root(np, ctx.cwd.as_view())
     if cr.is_some() {
-        return dotted(cr.unwrap(), alloc)
+        return dotted(cr.unwrap(), allocator)
     }
-    return dotted(basename(np), alloc)
+    return dotted(basename(np), allocator)
 }
 
 // `base/seg.../tail.f` from import segments, joining with forward slashes.
 pub fn join_module_path(base: String, segs: &List(String), start: usize, allocator: &Allocator? = null) OwnedString {
-    let alloc = allocator.or_global()
-    let sb = string_builder(0, alloc)
+    let sb = string_builder(0, allocator)
     sb.append(base)
     for i in start..segs.len {
         sb.append('/')
@@ -162,45 +157,44 @@ pub fn join_module_path(base: String, segs: &List(String), start: usize, allocat
 // the build's `--stdlib-path`). Each dependency's source root is derived
 // from its own manifest, exactly as the C# compiler does.
 pub fn resolve_ctx(proj: &Project, stdlib_root: String, allocator: &Allocator? = null) ResolveCtx {
-    let alloc = allocator.or_global()
-    let deps: List(DepRoot) = list(0, alloc)
+    let deps = list(0, allocator)
     for i in 0..proj.deps.len {
         let d = &proj.deps[i]
-        let root = normalized_owned(dep_source_root(d.path.as_view(), alloc), alloc)
+        let root = normalized_owned(dep_source_root(d.path.as_view(), allocator), allocator)
         deps.push(DepRoot { name = from_view(d.name.as_view()), root = root })
     }
     return ResolveCtx {
         project_name = from_view(proj.name.as_view()),
-        project_source_root = normalized_owned(source_root(".", proj.source.as_view(), alloc), alloc),
+        project_source_root = normalized_owned(source_root(".", proj.source.as_view(), allocator), allocator),
         deps = deps,
-        stdlib_root = normalize_sep(stdlib_root, alloc),
+        stdlib_root = normalize_sep(stdlib_root, allocator),
         cwd = from_view("."),
     }
 }
 
 // A dependency's source root: read its manifest and take the static
 // prefix of its `source` glob; fall back to `<dep>/src` when unreadable.
-fn dep_source_root(dep_dir: String, alloc: &Allocator) OwnedString {
+fn dep_source_root(dep_dir: String, allocator: &Allocator?) OwnedString {
     let manifest = $"{dep_dir}/flang.toml"
     defer manifest.deinit()
     let text = read_text(manifest.as_view())
     if text.is_none() {
-        return source_root(dep_dir, "src/**/*.f", alloc)
+        return source_root(dep_dir, "src/**/*.f", allocator)
     }
     let t = text.unwrap()
     defer t.deinit()
-    let dp = parse_project(t.as_view(), alloc)
+    let dp = parse_project(t.as_view(), allocator)
     defer dp.deinit()
-    return source_root(dep_dir, dp.source.as_view(), alloc)
+    return source_root(dep_dir, dp.source.as_view(), allocator)
 }
 
 // The static (glob-free) prefix of `source_glob` under `project_dir`.
 // `.` as the directory means "relative to here", so it is not prefixed;
 // a glob with no static prefix resolves to the directory itself.
-fn source_root(project_dir: String, source_glob: String, alloc: &Allocator) OwnedString {
+fn source_root(project_dir: String, source_glob: String, allocator: &Allocator?) OwnedString {
     let segs = split(source_glob, '/')
     defer segs.deinit()
-    let sb = string_builder(0, alloc)
+    let sb = string_builder(0, allocator)
     let wrote = false
     if project_dir != "." and project_dir.len > 0 {
         sb.append(project_dir)
@@ -236,8 +230,10 @@ pub fn read_text(path: String) OwnedString? {
 
 // Internal helpers
 
-fn normalize_sep(path: String, alloc: &Allocator) OwnedString {
-    let sb = string_builder(0, alloc)
+// Normalise a path to the forward-slash convention every `ResolveCtx`
+// comparison assumes.
+pub fn normalize_sep(path: String, allocator: &Allocator? = null) OwnedString {
+    let sb = string_builder(0, allocator)
     sb.append_replaced(path, "\\", "/")
     let out = sb.to_string()
     sb.deinit()
@@ -248,8 +244,8 @@ fn normalize_sep(path: String, alloc: &Allocator) OwnedString {
 // `ResolveCtx` roots in the single separator convention `strip_root` compares
 // against, so an absolute or backslashed root (e.g. an argv[0]-derived stdlib
 // path on Windows) classifies the same as a forward-slash one.
-fn normalized_owned(s: OwnedString, alloc: &Allocator) OwnedString {
-    let n = normalize_sep(s.as_view(), alloc)
+fn normalized_owned(s: OwnedString, allocator: &Allocator?) OwnedString {
+    let n = normalize_sep(s.as_view(), allocator)
     s.deinit()
     return n
 }
@@ -286,16 +282,16 @@ fn strip_source_ext(name: String) String {
     return name
 }
 
-fn dotted(rel: String, alloc: &Allocator) OwnedString {
-    let sb = string_builder(0, alloc)
+fn dotted(rel: String, allocator: &Allocator?) OwnedString {
+    let sb = string_builder(0, allocator)
     append_dotted(&sb, rel)
     let out = sb.to_string()
     sb.deinit()
     return out
 }
 
-fn dotted_with_prefix(prefix: String, rel: String, alloc: &Allocator) OwnedString {
-    let sb = string_builder(0, alloc)
+fn dotted_with_prefix(prefix: String, rel: String, allocator: &Allocator?) OwnedString {
+    let sb = string_builder(0, allocator)
     sb.append(prefix)
     sb.append('.')
     append_dotted(&sb, rel)
