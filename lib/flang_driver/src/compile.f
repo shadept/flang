@@ -19,9 +19,8 @@ import flang_driver.lower
 // The unit must be error-free - callers check `error_count` first; a unit
 // that failed to type-check has no usable types to lower.
 pub fn build_unit(unit: &AnalyzedUnit, output_path: String, allocator: &Allocator? = null) Result(BuildResult, BuildError) {
-    let alloc = allocator.or_global()
-    let m = lower_module(&unit.module, &unit.result, alloc)
-    let opts = build_options(output_path, alloc)
+    let m = lower_module(&unit.module, &unit.result, allocator)
+    let opts = build_options(output_path, allocator)
     let r = compile(&m, &opts)
     opts.deinit()
     m.deinit()
@@ -31,10 +30,9 @@ pub fn build_unit(unit: &AnalyzedUnit, output_path: String, allocator: &Allocato
 // Lower a checked multi-module project to one FIR program and compile+link
 // it to an executable at `output_path`. The project must be error-free —
 // callers check `project_error_count` first.
-pub fn build_program(modules: &List(Module), result: &TypeCheckResult, output_path: String, allocator: &Allocator? = null) Result(BuildResult, BuildError) {
-    let alloc = allocator.or_global()
-    let m = lower_program(modules, result, alloc)
-    let opts = build_options(output_path, alloc)
+pub fn build_program(modules: &List(Module), fqns: &List(OwnedString), result: &TypeCheckResult, output_path: String, allocator: &Allocator? = null) Result(BuildResult, BuildError) {
+    let m = lower_program(modules, fqns, result, allocator)
+    let opts = build_options(output_path, allocator)
     let r = compile(&m, &opts)
     opts.deinit()
     m.deinit()

@@ -20,11 +20,11 @@
 //     phases and zonks the engine into an immutable result. The
 //     engine is dropped before this returns.
 //
-// Expression / statement / declaration handling is split across
-// `checker_expr.f`, `checker_stmt.f`, `checker_decl.f`, and
-// `checker_pattern.f` so the dispatchers stay small. Module-level
-// state (engine, env, ctx) is bundled into a `Checker` struct passed
-// by reference to every sub-routine — no global state.
+// Expression, statement, and declaration handling all live in this
+// file today; split into per-category modules when match/pattern
+// checking lands and the dispatchers stop fitting in one screen.
+// Module-level state (engine, env, ctx) is bundled into a `Checker`
+// struct passed by reference to every sub-routine — no global state.
 
 import std.allocator
 import std.dict
@@ -83,6 +83,10 @@ pub type Checker = struct {
     // Working state — reset between modules.
     current_module: String?
     fn_stack: List(FnFrame)
+    // True while checking a generic function's body: overload resolution
+    // over unbound type params is unreliable there, so failures stay
+    // silent (the reference checker re-checks per specialization instead).
+    in_generic_body: bool
 
     // Module FQN -> the set of module FQNs whose `pub` declarations are
     // visible from it. Built once per `check_all` from the modules'
@@ -107,6 +111,7 @@ pub fn checker(allocator: &Allocator? = null) Checker {
         diagnostics = list(0, alloc),
         current_module = null,
         fn_stack = list(0, alloc),
+        in_generic_body = false,
         visible_by_module = dict(alloc),
         allocator = alloc,
     }
@@ -773,26 +778,29 @@ fn register_function_sig(self: &Checker, fd: &FunctionDecl) {
     let scheme = self.engine.generalize(fn_ty)
     self.env.pop_scope()
 
+    // Trailing defaulted params and the variadic tail may be omitted at
+    // call sites.
+    let required = fd.params.len
+    loop {
+        if required == 0 { break }
+        let p = &fd.params[required - 1]
+        if p.default_value.is_none() and !p.is_variadic { break }
+        required = required - 1
+    }
+
     let scheme_obj = FunctionScheme {
         name = fd.name,
         signature = scheme,
         module = self.current_module,
         is_pub = fd.is_pub,
         is_foreign = is_foreign_directive(&fd.directives),
+        required_params = required,
+        has_variadic = fd.params.len > 0 and fd.params[fd.params.len - 1].is_variadic,
         decl_span = fd.span,
         deprecation = null,
         id = 0u32,           // filled in by registry.register
     }
     let _r =self.functions.register(scheme_obj)
-}
-
-fn is_foreign_directive(ds: &List(DeclAttribute)) bool {
-    for i in 0..ds.len {
-        let d = &ds[i]
-        let f = d.* match { Foreign => true, _ => false }
-        if f { return true }
-    }
-    return false
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -854,6 +862,14 @@ fn check_function_body(self: &Checker, fd: &FunctionDecl) {
         None => Ty.Void,
     }
 
+    let q: Set(VarId) = set(self.allocator)
+    for i in 0..params.len {
+        free_vars(&params[i], 0u32, &q)
+    }
+    free_vars(&ret, 0u32, &q)
+    self.in_generic_body = q.len() > 0
+    q.deinit()
+
     let frame = FnFrame { name = fd.name, return_ty = ret, decl_span = fd.span }
     self.fn_stack.push(frame)
 
@@ -861,13 +877,20 @@ fn check_function_body(self: &Checker, fd: &FunctionDecl) {
     // Only the implicit-return path is checked here: a block whose final
     // expression is the function's value. A block that ends in an explicit
     // `return` yields Void and is covered by `check_return`, so Void is
-    // skipped to avoid a spurious "expected T, got void".
+    // skipped to avoid a spurious "expected T, got void". A void function
+    // discards its trailing expression's value entirely.
+    let ret_is_void = ret match { Void => true, _ => false }
     body_ty match {
         Void => {},
-        _ => unify_expected(self, body_ty, ret, E_RETURN_MISMATCH, fd.span),
+        _ => {
+            if !ret_is_void {
+                unify_expected(self, body_ty, ret, E_RETURN_MISMATCH, fd.span)
+            }
+        },
     }
 
     let _r =self.fn_stack.pop()
+    self.in_generic_body = false
     self.engine.exit_level()
     self.env.pop_scope()
 }
@@ -899,8 +922,16 @@ fn check_expr_kind(self: &Checker, expr: &Expr) Ty {
         StructLit(lit) => check_struct_lit(self, &lit),
         MemberAccess(ma) => check_member(self, &ma),
         TupleLit(t) => check_tuple_lit(self, &t),
+        Cast(c) => check_cast(self, &c),
         _ => self.engine.fresh_var(),
     }
+}
+
+// `expr as T` yields `T`; cast validity (representability, pointer
+// compatibility) is a later pass, matching the reference checker.
+fn check_cast(self: &Checker, c: &CastExpr) Ty {
+    let _v = check_expr(self, c.operand)
+    return resolve_type_expr(self, c.target)
 }
 
 // `()` is unit — the empty tuple and `void` are the same type.
@@ -1019,12 +1050,41 @@ fn check_block(self: &Checker, blk: &BlockExpr) Ty {
     return final_ty
 }
 
+// An expression statement discards its value; statement ifs get their
+// own inference (branch types need not agree, mirroring the reference
+// checker's statement-context if handling).
 fn check_stmt(self: &Checker, stmt: &Stmt) {
     stmt.* match {
         Let(ls) => check_let(self, &ls),
-        Expression(es) => { let _r = check_expr(self, &es.expr) },
+        Expression(es) => {
+            let handled = es.expr match {
+                If(ife) => {
+                    check_if_stmt(self, &ife)
+                    self.results.record_type(node_id_of(expr_span(&es.expr)), Ty.Void)
+                    true
+                },
+                _ => false,
+            }
+            if !handled { let _r = check_expr(self, &es.expr) }
+        },
         Return(rs) => check_return(self, &rs),
         _ => {},
+    }
+}
+
+// Statement-context if: branches unify only when they agree — a mismatch
+// is silently void, never an error.
+fn check_if_stmt(self: &Checker, if_expr: &IfExpr) {
+    let _c = check_expr(self, if_expr.condition)
+    let then_ty = check_block(self, &if_expr.then_branch)
+    if_expr.else_branch match {
+        NoElse => {},
+        Block(b) => {
+            let else_ty = check_block(self, &b)
+            let probe = self.engine.try_unify(then_ty, else_ty)
+            if probe.is_ok() { let _o = self.engine.unify(then_ty, else_ty) }
+        },
+        If(nested) => check_if_stmt(self, nested),
     }
 }
 
@@ -1146,10 +1206,344 @@ fn check_call(self: &Checker, call: &CallExpr) Ty {
             pos_tys.deinit()
             return ti.unwrap()
         }
+        let rc = resolve_call(self, call, &pos_tys)
+        if rc.is_some() {
+            pos_tys.deinit()
+            return rc.unwrap()
+        }
     }
     pos_tys.deinit()
+    // Named-argument calls keep the fresh-var fallback — see
+    // docs/known-issues.md (Bootstrap Self-Host).
     let _r = check_expr(self, call.callee)
     return self.engine.fresh_var()
+}
+
+// Resolve a call to its target: registry overloads (direct, or UFCS with
+// the receiver as first argument), a Func-typed struct field, or a
+// Func-typed value. Some(ty) is the call's type — failures inside report
+// a diagnostic and yield a fresh var so inference continues. Null means
+// the callee shape has no resolution path; the caller falls back.
+fn resolve_call(self: &Checker, call: &CallExpr, arg_tys: &List(Ty)) Ty? {
+    return call.callee.* match {
+        Identifier(ide) => resolve_direct_call(self, call, &ide, arg_tys),
+        MemberAccess(ma) => resolve_method_call(self, call, &ma, arg_tys),
+        _ => null,
+    }
+}
+
+// `foo(args)` — registry overloads win over value bindings, mirroring
+// the reference checker's call order; a value binding of function type
+// is the fallback.
+fn resolve_direct_call(self: &Checker, call: &CallExpr, ide: &IdentifierExpr, arg_tys: &List(Ty)) Ty? {
+    let vis = current_visibility(self)
+    let cands = self.functions.lookup(ide.name, &vis) match {
+        FnLookFound(c) => Some(c),
+        _ => null,
+    }
+    if cands.is_some() {
+        let candidates = cands.unwrap()
+        let pick = resolve_overload(self, &candidates, arg_tys, call.span)
+        candidates.deinit()
+        return Some(commit_pick(self, pick, ide.name, arg_tys.len, call.span))
+    }
+    let callee_ty = check_expr(self, call.callee)
+    return Some(indirect_call(self, callee_ty, arg_tys, call.span))
+}
+
+// `recv.method(args)` — a Func-typed struct field dispatches directly
+// (the vtable pattern wins over UFCS, as in the reference checker);
+// otherwise the receiver becomes the first argument of a registry
+// overload, retried with the receiver adapted between value and
+// reference forms.
+fn resolve_method_call(self: &Checker, call: &CallExpr, ma: &MemberAccessExpr, arg_tys: &List(Ty)) Ty? {
+    let recv_ty = check_expr(self, ma.receiver)
+
+    let fc = field_call(self, &recv_ty, ma.member, arg_tys, call.span)
+    if fc.is_some() { return fc }
+
+    let vis = current_visibility(self)
+    let cands = self.functions.lookup(ma.member, &vis) match {
+        FnLookFound(c) => Some(c),
+        _ => null,
+    }
+    if cands.is_none() {
+        push_call_diag(self, call.span, E_UNKNOWN_IDENT,
+            $"unresolved function `{ma.member}`")
+        return Some(self.engine.fresh_var())
+    }
+    let candidates = cands.unwrap()
+
+    // A still-unbound receiver (a construct inference doesn't cover yet)
+    // cannot arbitrate an overload set — committing the first match would
+    // bind it arbitrarily. Leave the call untyped until the receiver is
+    // known.
+    let recv_unbound = self.engine.resolve(recv_ty) match { Var(_) => true, _ => false }
+    if recv_unbound and candidates.len > 1 {
+        candidates.deinit()
+        return Some(self.engine.fresh_var())
+    }
+
+    let pick = receiver_overload(self, &candidates, recv_ty, arg_tys, call.span)
+    if pick.is_none() {
+        // Receiver adaptation: a value receiver retries the `&T` overload
+        // and a reference receiver retries the value overload.
+        let r = self.engine.resolve(recv_ty)
+        let adapted = r match {
+            Ref(inner) => inner.*,
+            _ => self.engine.mk_ref(r),
+        }
+        pick = receiver_overload(self, &candidates, adapted, arg_tys, call.span)
+    }
+    if pick.is_none() {
+        pick = deref_retry(self, &candidates, recv_ty, arg_tys, call.span)
+    }
+    candidates.deinit()
+    return Some(commit_pick(self, pick, ma.member, arg_tys.len, call.span))
+}
+
+// One overload-resolution attempt with `recv` prepended as the first
+// argument.
+fn receiver_overload(self: &Checker, candidates: &List(FunctionScheme), recv: Ty, arg_tys: &List(Ty), span: SourceSpan) OverloadPick? {
+    let full = list(arg_tys.len + 1, self.allocator)
+    full.push(recv)
+    full.push_all(arg_tys.as_slice())
+    let pick = resolve_overload(self, candidates, &full, span)
+    full.deinit()
+    return pick
+}
+
+// Peel `op_deref` wrappers: a receiver whose type defines it retries the
+// method against the wrapped inner value, both by reference and by value
+// (mirrors the reference checker's UFCS deref chain, with the same depth
+// bound). The deref chain is not yet recorded for lowering. A dead-end
+// chain leaves its committed deref unifications behind — parity with the
+// reference checker, which also resolves each hop non-speculatively.
+fn deref_retry(self: &Checker, candidates: &List(FunctionScheme), recv_ty: Ty, arg_tys: &List(Ty), span: SourceSpan) OverloadPick? {
+    let vis = current_visibility(self)
+    let dcands = self.functions.lookup("op_deref", &vis) match {
+        FnLookFound(c) => Some(c),
+        _ => null,
+    }
+    if dcands.is_none() { return null }
+    let dc = dcands.unwrap()
+    defer dc.deinit()
+
+    let current = self.engine.resolve(recv_ty)
+    let depth = 0usize
+    loop {
+        if depth >= 10 { return null }
+        depth = depth + 1
+
+        let peeled = current match {
+            Ref(inner) => self.engine.resolve(inner.*),
+            _ => current,
+        }
+        let is_nominal = peeled match { Nominal(_) => true, _ => false }
+        if !is_nominal { return null }
+
+        let dargs = list(1, self.allocator)
+        dargs.push(self.engine.mk_ref(peeled))
+        let dpick = resolve_overload(self, &dc, &dargs, span)
+        dargs.deinit()
+        if dpick.is_none() { return null }
+
+        let dret = self.engine.resolve(dpick.unwrap().ret)
+        let inner = dret match {
+            Ref(i) => self.engine.resolve(i.*),
+            _ => return null,
+        }
+
+        let pick = receiver_overload(self, candidates, dret, arg_tys, span)
+        if pick.is_none() {
+            pick = receiver_overload(self, candidates, inner, arg_tys, span)
+        }
+        if pick.is_some() { return pick }
+
+        current = inner
+    }
+    return null
+}
+
+// Call-resolution diagnostics stay silent in generic bodies, where
+// unbound type params make resolution unreliable (the reference checker
+// re-checks those per specialization instead).
+fn push_call_diag(self: &Checker, span: SourceSpan, code: String, message: OwnedString) {
+    if self.in_generic_body {
+        message.deinit()
+        return
+    }
+    push_diag_e(self, span, code, message)
+}
+
+// Record the winner on the call node and return its instantiated return
+// type; report when no overload matched.
+fn commit_pick(self: &Checker, pick: OverloadPick?, name: String, n_args: usize, span: SourceSpan) Ty {
+    return pick match {
+        Some(p) => {
+            self.results.record_target(node_id_of(span), ResolvedTarget.RtFunction(p.id))
+            p.ret
+        },
+        None => {
+            push_call_diag(self, span, E_NO_OVERLOAD,
+                $"no matching overload for `{name}` with {n_args} argument(s)")
+            self.engine.fresh_var()
+        },
+    }
+}
+
+// `recv.field(args)` where `field` is a Func-typed struct field — the
+// vtable-dispatch pattern. Null when the receiver is not a struct or has
+// no Func field by that name — the UFCS path takes over.
+fn field_call(self: &Checker, recv_ty: &Ty, name: String, arg_tys: &List(Ty), span: SourceSpan) Ty? {
+    let fty = struct_field_lookup(self, recv_ty, name)
+    if fty.is_none() { return null }
+    let f = self.engine.resolve(fty.unwrap()) match {
+        Func(ft) => ft,
+        _ => return null,
+    }
+    if f.params.len != arg_tys.len {
+        push_call_diag(self, span, E_NO_OVERLOAD,
+            $"no matching overload for `{name}` with {arg_tys.len} argument(s)")
+        return Some(self.engine.fresh_var())
+    }
+    for i in 0..arg_tys.len {
+        const o = self.engine.unify(arg_tys[i], f.params[i])
+        report_unify(self, &o, E_TYPE_MISMATCH, span)
+    }
+    return Some(f.ret.*)
+}
+
+// A callee that is a value: a Func-typed binding calls directly; an
+// unresolved binding is constrained to a function of the call's shape
+// (so lambda-typed locals infer); anything else is not callable.
+fn indirect_call(self: &Checker, callee_ty: Ty, arg_tys: &List(Ty), span: SourceSpan) Ty {
+    let z = self.engine.resolve(callee_ty)
+    let ft = z match {
+        Func(f) => Some(f),
+        _ => null,
+    }
+    if ft.is_some() {
+        let f = ft.unwrap()
+        if f.params.len != arg_tys.len {
+            push_call_diag(self, span, E_NO_OVERLOAD,
+                $"no matching overload with {arg_tys.len} argument(s)")
+            return self.engine.fresh_var()
+        }
+        for i in 0..arg_tys.len {
+            const o = self.engine.unify(arg_tys[i], f.params[i])
+            report_unify(self, &o, E_TYPE_MISMATCH, span)
+        }
+        return f.ret.*
+    }
+    if z.is_error() { return Ty.Error }
+    let is_var = z match { Var(_) => true, _ => false }
+    if is_var {
+        let ps = list(arg_tys.len, self.allocator)
+        ps.push_all(arg_tys.as_slice())
+        let ret = self.engine.fresh_var()
+        const o = self.engine.unify(callee_ty, self.engine.mk_func(ps, ret))
+        report_unify(self, &o, E_TYPE_MISMATCH, span)
+        return ret
+    }
+    push_call_diag(self, span, E_NO_OVERLOAD,
+        $"expression of non-function type is not callable")
+    return self.engine.fresh_var()
+}
+
+// The winning overload for a call site: registry id plus instantiated
+// return type.
+type OverloadPick = struct {
+    id: u32
+    ret: Ty
+}
+
+// Pick the best candidate for the argument types and commit its
+// unification. Each candidate is probed inside an engine checkpoint that
+// is rolled back, so losing candidates leave no bindings. Arity accepts
+// [required, total]: trailing defaulted params may be omitted and a
+// variadic tail takes any surplus. Preference: fewer quantified vars,
+// then lower coercion cost, then registration order.
+fn resolve_overload(self: &Checker, candidates: &List(FunctionScheme), arg_tys: &List(Ty), span: SourceSpan) OverloadPick? {
+    let best: usize? = null
+    let best_cost = 0u32
+    let best_generics = 0usize
+
+    for ci in 0..candidates.len {
+        let c = &candidates[ci]
+        let probed = probe_candidate(self, c, arg_tys)
+        if probed.is_some() {
+            let cost = probed.unwrap()
+            let generics = c.signature.quantified.len()
+            let better = best.is_none() or generics < best_generics
+                or (generics == best_generics and cost < best_cost)
+            if better {
+                best = Some(ci)
+                best_cost = cost
+                best_generics = generics
+            }
+        }
+    }
+    if best.is_none() { return null }
+
+    let w = &candidates[best.unwrap()]
+    let f = scheme_fn_ty(self, &w.signature) match {
+        Some(ft) => ft,
+        None => return null,
+    }
+    let checked = non_variadic_arg_count(w, &f, arg_tys.len)
+    for i in 0..checked {
+        const o = self.engine.unify(arg_tys[i], f.params[i])
+        report_unify(self, &o, E_TYPE_MISMATCH, span)
+    }
+    return Some(OverloadPick { id = w.id, ret = f.ret.* })
+}
+
+// Speculatively check one candidate: null when it cannot take these
+// arguments, else the total coercion cost plus a penalty per omitted
+// defaulted param (fuller matches win, as in the reference checker).
+fn probe_candidate(self: &Checker, c: &FunctionScheme, arg_tys: &List(Ty)) u32? {
+    let f = scheme_fn_ty(self, &c.signature) match {
+        Some(ft) => ft,
+        None => return null,
+    }
+    if arg_tys.len < c.required_params { return null }
+    if !c.has_variadic and arg_tys.len > f.params.len { return null }
+
+    let checked = non_variadic_arg_count(c, &f, arg_tys.len)
+    self.engine.push_checkpoint()
+    let ok = true
+    let cost = 0u32
+    let i = 0usize
+    while ok and i < checked {
+        self.engine.unify(arg_tys[i], f.params[i]) match {
+            Unified(u) => cost = cost + u.cost,
+            _ => ok = false,
+        }
+        i = i + 1
+    }
+    self.engine.rollback()
+    if !ok { return null }
+
+    let omitted = if arg_tys.len < f.params.len { f.params.len - arg_tys.len } else { 0usize }
+    if c.has_variadic and omitted > 0 { omitted = omitted - 1 }
+    return Some(cost + (omitted as u32) * 100u32)
+}
+
+// A candidate's signature specialized fresh and viewed as a function.
+fn scheme_fn_ty(self: &Checker, s: &Scheme) FunctionTy? {
+    return self.engine.resolve(self.engine.specialize(s)) match {
+        Func(ft) => Some(ft),
+        _ => null,
+    }
+}
+
+// How many leading args unify against declared params: everything up to
+// the variadic tail. Surplus variadic args are not element-checked yet —
+// see docs/known-issues.md (Bootstrap Self-Host).
+fn non_variadic_arg_count(c: &FunctionScheme, f: &FunctionTy, n_args: usize) usize {
+    let non_variadic = if c.has_variadic { f.params.len - 1 } else { f.params.len }
+    return if n_args < non_variadic { n_args } else { non_variadic }
 }
 
 // `Enum.Variant(args)` or bare `Variant(args)` — payload-carrying enum
@@ -1212,15 +1606,17 @@ fn type_instantiation_call(self: &Checker, ide: &IdentifierExpr, arg_tys: &List(
     }
     if n_params != arg_tys.len { return null }
     let args = list(arg_tys.len, self.allocator)
-    for i in 0..arg_tys.len { args.push(arg_tys[i]) }
+    args.push_all(arg_tys.as_slice())
     return Some(Ty.Nominal(NominalRef { id = id, args = args }))
 }
 
+// Expression-context if. Without an else the value is void and the then
+// branch's value is discarded; with one, the branches must agree.
 fn check_if(self: &Checker, if_expr: &IfExpr) Ty {
     let _r = check_expr(self, if_expr.condition)
     let then_ty = check_block(self, &if_expr.then_branch)
     let else_ty = if_expr.else_branch match {
-        NoElse => Ty.Void,
+        NoElse => return Ty.Void,
         Block(b) => check_block(self, &b),
         If(nested) => check_if(self, nested),
     }
@@ -1356,9 +1752,10 @@ fn construct_variant(self: &Checker, id: NominalId, vname: String, arg_tys: &Lis
     return Some(Ty.Nominal(NominalRef { id = id, args = args }))
 }
 
-// A struct field's declared type by name. Null when the (zonked,
-// one-reference-peeled) type is not a struct or has no such field. The field
-// type is returned verbatim — generic field substitution lands with generics.
+// A struct field's declared type by name, substituted against the
+// receiver instance's type arguments — a read must never bind the
+// definition's shared type-param vars. Null when the (zonked,
+// one-reference-peeled) type is not a struct or has no such field.
 fn struct_field_lookup(self: &Checker, recv: &Ty, name: String) Ty? {
     let z = self.engine.zonk(recv.*)
     let peeled = z match {
@@ -1379,7 +1776,16 @@ fn struct_field_lookup(self: &Checker, recv: &Ty, name: String) Ty? {
     if sd_opt.is_none() { return null }
     let sd = sd_opt.unwrap()
     for i in 0..sd.fields.len {
-        if sd.fields[i].name == name { return Some(sd.fields[i].ty) }
+        if sd.fields[i].name == name {
+            if sd.type_params.len == 0 or sd.type_params.len != nr.args.len {
+                return Some(sd.fields[i].ty)
+            }
+            let subst = dict(self.allocator)
+            for k in 0..sd.type_params.len { subst.set(sd.type_params[k], nr.args[k]) }
+            let out = substitute(&sd.fields[i].ty, &subst, self.allocator)
+            subst.deinit()
+            return Some(out)
+        }
     }
     return null
 }
@@ -1464,7 +1870,7 @@ fn count_check_errors(srcs: String[], paths: String[]) usize {
         mods.push(parse_src(srcs[i], i as i32))
     }
     let ps = list(paths.len)
-    for i in 0..paths.len { ps.push(paths[i]) }
+    ps.push_all(paths)
 
     let chk = checker()
     let _res = check_all(&chk, &mods, &ps)
@@ -1541,4 +1947,55 @@ test "qualified payload-less enum variant access type-checks" {
         ["pub type Ord = enum { Less = -1\nEqual = 0\nGreater = 1 }\nfn f() Ord { return Ord.Less }\n"],
         ["cmp"])
     assert_true(errors == 0, "qualified enum variant access type-checks with no errors")
+}
+
+test "direct call unifies args and returns the instantiated type" {
+    let errors = count_check_errors(
+        ["fn add(a: i32, b: i32) i32 { return a }\nfn f() i32 { return add(1, 2) }\n"],
+        ["calls_direct"])
+    assert_true(errors == 0, "direct call type-checks with no errors")
+}
+
+test "overloads pick the arity-matching candidate" {
+    let errors = count_check_errors(
+        ["fn pick(a: i32) i32 { return a }\nfn pick(a: i32, b: i32) i32 { return b }\nfn f() i32 { return pick(1) }\nfn g() i32 { return pick(1, 2) }\n"],
+        ["calls_arity"])
+    assert_true(errors == 0, "arity overload resolution type-checks with no errors")
+}
+
+test "trailing default params may be omitted at the call site" {
+    let errors = count_check_errors(
+        ["fn scaled(a: i32, k: i32 = 2) i32 { return a }\nfn f() i32 { return scaled(3) }\nfn g() i32 { return scaled(3, 4) }\n"],
+        ["calls_defaults"])
+    assert_true(errors == 0, "defaulted-param calls type-check with no errors")
+}
+
+test "ufcs receiver becomes the first argument, adapted between value and ref" {
+    let errors = count_check_errors(
+        ["pub type Pt = struct { x: i32 }\nfn shift(p: &Pt, d: i32) i32 { return d }\nfn f(p: &Pt) i32 { return p.shift(2) }\nfn g(p: Pt) i32 { return p.shift(2) }\n"],
+        ["calls_ufcs"])
+    assert_true(errors == 0, "ufcs calls type-check with no errors")
+}
+
+test "func-typed struct field dispatches as an indirect call" {
+    let errors = count_check_errors(
+        ["pub type Ops = struct { scale: fn(i32) i32 }\nfn f(o: &Ops) i32 { return o.scale(3) }\n"],
+        ["calls_field"])
+    assert_true(errors == 0, "field call type-checks with no errors")
+}
+
+test "func-typed param called by name is an indirect call" {
+    let errors = count_check_errors(
+        ["fn apply(op: fn(i32) i32, x: i32) i32 { return op(x) }\n"],
+        ["calls_indirect"])
+    assert_true(errors == 0, "indirect call through a param type-checks with no errors")
+}
+
+test "wrong argument type in a call is reported" {
+    // f64 against i32 has no coercion path (bool would widen by design;
+    // string literals are Error poison in these stdlib-less tests).
+    let errors = count_check_errors(
+        ["fn takes(a: i32) i32 { return a }\nfn f(x: f64) i32 { return takes(x) }\n"],
+        ["calls_mismatch"])
+    assert_true(errors > 0, "f64 argument against i32 param reports an error")
 }

@@ -8,6 +8,7 @@ import std.allocator
 import std.mem
 import std.option
 import std.string
+import std.test
 
 // Entry states: 0 = empty, 1 = occupied, 2 = tombstone
 
@@ -22,6 +23,10 @@ pub type Entry = struct(K, V) {
 pub type Dict = struct(K, V) {
     entries: &Entry(K, V)
     length: usize
+    // Tombstones left by removals. They occupy probe slots until the next
+    // rehash, so the load factor must count them or a delete-heavy dict
+    // fills up while `length` stays low.
+    dead: usize
     cap: usize
     allocator: &Allocator?
 }
@@ -54,6 +59,7 @@ pub fn deinit(self: &Dict($K, $V)) {
     let zero: usize = 0
     self.entries = zero as &Entry(K, V)
     self.length = 0
+    self.dead = 0
     self.cap = 0
 }
 
@@ -82,7 +88,7 @@ fn ensure_capacity(self: &Dict($K, $V)) {
         needs_grow = true
     }
     if (needs_grow == false) {
-        if ((self.length + 1) * 4 > self.cap * 3) {
+        if ((self.length + self.dead + 1) * 4 > self.cap * 3) {
             needs_grow = true
         }
     }
@@ -93,7 +99,12 @@ fn ensure_capacity(self: &Dict($K, $V)) {
 
     const old_cap: usize = self.cap
     const old_entries: &Entry(K, V) = self.entries
-    const new_cap: usize = if (old_cap == 0) { 8 } else { old_cap * 2 }
+    // A rehash that mostly clears tombstones keeps its capacity; only
+    // live-entry pressure grows the table.
+    let new_cap: usize = 8
+    if (old_cap > 0) {
+        new_cap = if (self.length * 2 <= old_cap) { old_cap } else { old_cap * 2 }
+    }
 
     // Allocate new entry array, zero-initialized (all states = empty)
     const alloc_size: usize = new_cap * size_of(Entry(K, V))
@@ -104,6 +115,7 @@ fn ensure_capacity(self: &Dict($K, $V)) {
     self.entries = raw.ptr as &Entry(K, V)
     self.cap = new_cap
     self.length = 0
+    self.dead = 0
 
     // Re-insert old entries
     if (old_cap > 0) {
@@ -135,6 +147,9 @@ pub fn set(self: &Dict($K, $V), key: K, value: V) {
         if (entry.state == 0) {
             // Empty slot: use tombstone slot if we passed one, otherwise this slot
             const target_idx: usize = if (tombstone_idx < self.cap) { tombstone_idx } else { idx }
+            if (tombstone_idx < self.cap) {
+                self.dead = self.dead - 1
+            }
             const target: &Entry(K, V) = self.entries + target_idx
             target.state = 1
             target.hash = h
@@ -183,6 +198,9 @@ pub fn set(self: &Dict(OwnedString, $V), key: String, value: V) {
         if (entry.state == 0) {
             // Empty slot: allocate owned key and insert
             const target_idx: usize = if (tombstone_idx < self.cap) { tombstone_idx } else { idx }
+            if (tombstone_idx < self.cap) {
+                self.dead = self.dead - 1
+            }
             const target: &Entry(OwnedString, V) = self.entries + target_idx
             target.state = 1
             target.hash = h
@@ -323,6 +341,7 @@ pub fn remove(self: &Dict($K, $V), key: K) V? {
                     entry.key.deinit()
                     entry.state = 2
                     self.length = self.length - 1
+                    self.dead = self.dead + 1
                     return val
                 }
             }
@@ -347,6 +366,7 @@ pub fn clear(self: &Dict($K, $V)) {
         memset(self.entries as &u8, 0, bytes)
     }
     self.length = 0
+    self.dead = 0
 }
 
 // =============================================================================
@@ -374,4 +394,17 @@ pub fn next(it: &DictIterator($K, $V)) Entry(K, V)? {
     }
     it.current = it.dict.cap
     return null
+}
+
+test "delete-heavy churn never fills the table" {
+    let d: Dict(u32, u32) = dict()
+    defer d.deinit()
+    for i in 0..64 {
+        d.set(i as u32, 1u32)
+        let _r = d.remove(i as u32)
+    }
+    d.set(7u32, 2u32)
+    assert_eq(d.len(), 1 as usize, "one live entry after churn")
+    assert_eq(d.get(7u32).unwrap(), 2u32, "the surviving entry reads back")
+    assert_eq(d.cap, 8 as usize, "tombstone rehashes keep the capacity")
 }

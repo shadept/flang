@@ -13,6 +13,7 @@ import std.dict
 import std.list
 import std.option
 import std.string
+import std.string_builder
 import std.test
 import flang_core.span
 import flang_parser.ast
@@ -28,40 +29,90 @@ import flang_driver.layout
 // Lower every supported top-level function in `ast_module` into a fresh
 // `IrModule`. Non-function decls and unsupported functions are skipped.
 pub fn lower_module(ast_module: &Module, result: &TypeCheckResult, allocator: &Allocator? = null) IrModule {
-    let alloc = allocator.or_global()
-    let m = module(alloc)
-    lower_into(&m, ast_module, result, alloc)
+    let m = module(allocator)
+    let seen = dict(allocator)
+    lower_into(&m, ast_module, "", &seen, result, allocator)
+    seen.deinit()
     return m
 }
 
 // Lower every supported module of a checked project into one `IrModule`,
 // sharing the project-wide `TypeCheckResult`. Cross-module references
 // resolve through that result; every function lands in one program so the
-// backend links it in a single pass.
-pub fn lower_program(modules: &List(Module), result: &TypeCheckResult, allocator: &Allocator? = null) IrModule {
-    let alloc = allocator.or_global()
-    let m = module(alloc)
+// backend links it in a single pass. `fqns` is parallel to `modules`; each
+// function's symbol is namespaced by its module so merged same-named
+// functions cannot collide.
+pub fn lower_program(modules: &List(Module), fqns: &List(OwnedString), result: &TypeCheckResult, allocator: &Allocator? = null) IrModule {
+    let m = module(allocator)
+    let seen = dict(allocator)
     for i in 0..modules.len {
-        lower_into(&m, &modules[i], result, alloc)
+        lower_into(&m, &modules[i], fqns[i].as_view(), &seen, result, allocator)
     }
+    seen.deinit()
     return m
 }
 
 // Lower `ast_module`'s supported functions into the existing `m`.
-fn lower_into(m: &IrModule, ast_module: &Module, result: &TypeCheckResult, alloc: &Allocator) {
+fn lower_into(m: &IrModule, ast_module: &Module, fqn: String, seen: &Dict(String, i64), result: &TypeCheckResult, allocator: &Allocator?) {
     for i in 0..ast_module.decls.len {
         let d = &ast_module.decls[i]
         d.* match {
-            Function(fd) => lower_function(result, m, &fd, alloc),
+            Function(fd) => lower_function(result, m, &fd, fqn, seen, allocator),
             _ => {},
         }
     }
 }
 
+// The C symbol a function lowers to. The entry point and foreign
+// functions keep their declared names (the backend's entry wiring and
+// the C linker expect them); everything else is prefixed by its module
+// path so merged modules stay link-clean. Call sites must derive callee
+// symbols through this same helper.
+fn mangle_symbol(fqn: String, name: String, is_foreign: bool, allocator: &Allocator? = null) String {
+    if is_foreign { return name }
+    if name == "main" { return name }
+    if fqn.len == 0 { return name }
+    let sb = string_builder(fqn.len + name.len + fqn.len, allocator)
+    for i in 0..fqn.len {
+        if fqn[i] == '.' {
+            sb.append("__")
+        } else {
+            sb.append_byte(fqn[i])
+        }
+    }
+    sb.append("__")
+    sb.append(name)
+    // ponytail: symbol strings are leaked - one-shot builds exit before it
+    // matters; arena-own IrModule names if the LSP ever lowers.
+    let owned = sb.to_string()
+    sb.deinit()
+    return owned.as_view()
+}
+
+// Overload sets share one mangled name; every repeat after the first
+// gets an ordinal suffix so definitions stay unique. Positional and
+// stable only within a single lowering walk.
+fn disambiguate(seen: &Dict(String, i64), sym: String, allocator: &Allocator? = null) String {
+    let n = seen.get(sym)
+    if n.is_none() {
+        seen.set(sym, 1)
+        return sym
+    }
+    let count = n.unwrap() + 1
+    seen.set(sym, count)
+    let sb = string_builder(sym.len + 4, allocator)
+    sb.append(sym)
+    sb.append("__")
+    sb.append(count)
+    let owned = sb.to_string()
+    sb.deinit()
+    return owned.as_view()
+}
+
 // Lower one function declaration and append it to `m`. Returns without
 // emitting when the body is absent (`#foreign`) or the signature uses a
 // type this milestone can't lower yet.
-fn lower_function(result: &TypeCheckResult, m: &IrModule, decl: &FunctionDecl, alloc: &Allocator) {
+fn lower_function(result: &TypeCheckResult, m: &IrModule, decl: &FunctionDecl, fqn: String, seen: &Dict(String, i64), allocator: &Allocator?) {
     if decl.body.is_none() { return }
 
     let return_ir: IrType? = null
@@ -72,8 +123,9 @@ fn lower_function(result: &TypeCheckResult, m: &IrModule, decl: &FunctionDecl, a
         return_ir = r
     }
 
-    let fb = function(decl.name, return_ir, alloc)
-    let env: Dict(String, Operand) = dict(alloc)
+    let sym = disambiguate(seen, mangle_symbol(fqn, decl.name, is_foreign_directive(&decl.directives), allocator), allocator)
+    let fb = function(sym, return_ir, allocator)
+    let env: Dict(String, Operand) = dict(allocator)
     for i in 0..decl.params.len {
         let p = &decl.params[i]
         let pir = type_expr_to_ir(&p.type_expr)
@@ -84,7 +136,7 @@ fn lower_function(result: &TypeCheckResult, m: &IrModule, decl: &FunctionDecl, a
 
     let entry = fb.entry()
     let body = decl.body.unwrap()
-    let terminated = lower_block(result, &entry, &env, &body, alloc)
+    let terminated = lower_block(result, &entry, &env, &body, allocator)
     if !terminated {
         if return_ir.is_none() {
             entry.ret_void()
@@ -99,13 +151,13 @@ fn lower_function(result: &TypeCheckResult, m: &IrModule, decl: &FunctionDecl, a
 
 // Lower a block's statements then its trailing expression (the implicit
 // return value). Returns whether a terminator was emitted.
-fn lower_block(result: &TypeCheckResult, bb: &BlockBuilder, env: &Dict(String, Operand), block: &BlockExpr, alloc: &Allocator) bool {
+fn lower_block(result: &TypeCheckResult, bb: &BlockBuilder, env: &Dict(String, Operand), block: &BlockExpr, allocator: &Allocator?) bool {
     for i in 0..block.stmts.len {
-        if lower_stmt(result, bb, env, &block.stmts[i], alloc) { return true }
+        if lower_stmt(result, bb, env, &block.stmts[i], allocator) { return true }
     }
     if block.trailing.is_some() {
         let e = block.trailing.unwrap()
-        let v = lower_expr(result, bb, env, e, alloc)
+        let v = lower_expr(result, bb, env, e, allocator)
         bb.ret(v)
         return true
     }
@@ -113,25 +165,25 @@ fn lower_block(result: &TypeCheckResult, bb: &BlockBuilder, env: &Dict(String, O
 }
 
 // Returns whether the statement emitted a block terminator.
-fn lower_stmt(result: &TypeCheckResult, bb: &BlockBuilder, env: &Dict(String, Operand), stmt: &Stmt, alloc: &Allocator) bool {
+fn lower_stmt(result: &TypeCheckResult, bb: &BlockBuilder, env: &Dict(String, Operand), stmt: &Stmt, allocator: &Allocator?) bool {
     stmt.* match {
         Return(r) => {
-            lower_return(result, bb, env, &r, alloc)
+            lower_return(result, bb, env, &r, allocator)
             return true
         },
-        Let(l) => lower_let(result, bb, env, &l, alloc),
+        Let(l) => lower_let(result, bb, env, &l, allocator),
         Expression(e) => {
-            let _u = lower_expr(result, bb, env, &e.expr, alloc)
+            let _u = lower_expr(result, bb, env, &e.expr, allocator)
         },
         _ => {},
     }
     return false
 }
 
-fn lower_return(result: &TypeCheckResult, bb: &BlockBuilder, env: &Dict(String, Operand), r: &ReturnStmt, alloc: &Allocator) {
+fn lower_return(result: &TypeCheckResult, bb: &BlockBuilder, env: &Dict(String, Operand), r: &ReturnStmt, allocator: &Allocator?) {
     if r.value.is_some() {
         let e = r.value.unwrap()
-        let v = lower_expr(result, bb, env, &e, alloc)
+        let v = lower_expr(result, bb, env, &e, allocator)
         bb.ret(v)
     } else {
         bb.ret_void()
@@ -141,24 +193,24 @@ fn lower_return(result: &TypeCheckResult, bb: &BlockBuilder, env: &Dict(String, 
 // `let name = init` - immutable scalar binding: the initializer's SSA
 // value is bound directly to the name. Mutated or address-taken locals
 // (which need a stack slot) arrive with the rest of memory lowering.
-fn lower_let(result: &TypeCheckResult, bb: &BlockBuilder, env: &Dict(String, Operand), l: &LetStmt, alloc: &Allocator) {
+fn lower_let(result: &TypeCheckResult, bb: &BlockBuilder, env: &Dict(String, Operand), l: &LetStmt, allocator: &Allocator?) {
     if l.init.is_some() {
         let e = l.init.unwrap()
-        let v = lower_expr(result, bb, env, &e, alloc)
+        let v = lower_expr(result, bb, env, &e, allocator)
         env.set(l.name, v)
     }
 }
 
 // Expressions
 
-fn lower_expr(result: &TypeCheckResult, bb: &BlockBuilder, env: &Dict(String, Operand), expr: &Expr, alloc: &Allocator) Operand {
+fn lower_expr(result: &TypeCheckResult, bb: &BlockBuilder, env: &Dict(String, Operand), expr: &Expr, allocator: &Allocator?) Operand {
     return expr.* match {
         Lit(l) => lower_literal(&l),
         Identifier(id) => lower_identifier(env, &id),
-        Binary(b) => lower_binary(result, bb, env, &b, alloc),
-        Unary(u) => lower_unary(result, bb, env, &u, alloc),
-        StructLit(s) => lower_struct_lit(result, bb, env, &s, alloc),
-        MemberAccess(m) => lower_member(result, bb, env, &m, alloc),
+        Binary(b) => lower_binary(result, bb, env, &b, allocator),
+        Unary(u) => lower_unary(result, bb, env, &u, allocator),
+        StructLit(s) => lower_struct_lit(result, bb, env, &s, allocator),
+        MemberAccess(m) => lower_member(result, bb, env, &m, allocator),
         // ponytail: M1 placeholder; real lowering lands with later milestones.
         _ => Operand.IntConst(0),
     }
@@ -183,10 +235,10 @@ type StructTarget = struct {
 // `S { f = v, ... }` - allocate a slot the size of the struct and store each
 // initializer at its field offset. The value is the slot pointer. Aggregate
 // fields copy their bytes; scalar fields store by value.
-fn lower_struct_lit(result: &TypeCheckResult, bb: &BlockBuilder, env: &Dict(String, Operand), lit: &StructLiteralExpr, alloc: &Allocator) Operand {
+fn lower_struct_lit(result: &TypeCheckResult, bb: &BlockBuilder, env: &Dict(String, Operand), lit: &StructLiteralExpr, allocator: &Allocator?) Operand {
     let reg = &result.nominals
     let ty = node_ty(result, lit.span)
-    let target = resolve_struct(&ty, reg, alloc)
+    let target = resolve_struct(&ty, reg, allocator)
     if target.is_none() { return Operand.IntConst(0) }
     let st = target.unwrap()
 
@@ -198,10 +250,10 @@ fn lower_struct_lit(result: &TypeCheckResult, bb: &BlockBuilder, env: &Dict(Stri
         let didx = di as usize
         let off = st.layout.offsets[didx]
         let fty = &st.def.fields[didx].ty
-        let v = lower_field_init(result, bb, env, fi, alloc)
+        let v = lower_field_init(result, bb, env, fi, allocator)
         let fp = bb.gep(slot, Operand.IntConst(off as i64))
         if is_aggregate(fty) {
-            bb.memcpy(fp, v, Operand.IntConst(layout_of(fty, reg, alloc).size as i64))
+            bb.memcpy(fp, v, Operand.IntConst(layout_of(fty, reg, allocator).size as i64))
         } else {
             bb.store(ty_to_ir(fty), v, fp)
         }
@@ -211,9 +263,9 @@ fn lower_struct_lit(result: &TypeCheckResult, bb: &BlockBuilder, env: &Dict(Stri
 
 // The value of a field initializer: the explicit expression, or - for
 // shorthand `S { x }` - the in-scope binding named like the field.
-fn lower_field_init(result: &TypeCheckResult, bb: &BlockBuilder, env: &Dict(String, Operand), fi: &StructFieldInit, alloc: &Allocator) Operand {
+fn lower_field_init(result: &TypeCheckResult, bb: &BlockBuilder, env: &Dict(String, Operand), fi: &StructFieldInit, allocator: &Allocator?) Operand {
     if fi.value.is_some() {
-        return lower_expr(result, bb, env, fi.value.unwrap(), alloc)
+        return lower_expr(result, bb, env, fi.value.unwrap(), allocator)
     }
     let got = env.get(fi.name)
     if got.is_some() { return got.unwrap() }
@@ -223,17 +275,17 @@ fn lower_field_init(result: &TypeCheckResult, bb: &BlockBuilder, env: &Dict(Stri
 // `recv.field` - gep to the field's offset off the receiver pointer, then
 // load a scalar. An aggregate member yields its address (so nested `a.b.c`
 // chains geps without an intermediate copy).
-fn lower_member(result: &TypeCheckResult, bb: &BlockBuilder, env: &Dict(String, Operand), ma: &MemberAccessExpr, alloc: &Allocator) Operand {
+fn lower_member(result: &TypeCheckResult, bb: &BlockBuilder, env: &Dict(String, Operand), ma: &MemberAccessExpr, allocator: &Allocator?) Operand {
     let reg = &result.nominals
     let recv_ty = node_ty(result, expr_span(ma.receiver))
-    let target = resolve_struct(&recv_ty, reg, alloc)
+    let target = resolve_struct(&recv_ty, reg, allocator)
     if target.is_none() { return Operand.IntConst(0) }
     let st = target.unwrap()
     let di = field_index(&st.def, ma.member)
     if di < 0 { return Operand.IntConst(0) }
     let off = st.layout.offsets[di as usize]
 
-    let base = lower_expr(result, bb, env, ma.receiver, alloc)
+    let base = lower_expr(result, bb, env, ma.receiver, allocator)
     let fp = bb.gep(base, Operand.IntConst(off as i64))
     let mty = node_ty(result, ma.span)
     if is_aggregate(&mty) { return fp }
@@ -243,7 +295,7 @@ fn lower_member(result: &TypeCheckResult, bb: &BlockBuilder, env: &Dict(String, 
 // Resolve a value's static type to the struct it names, peeling one
 // reference. Null for enums, scalars, and unresolved types - the caller
 // emits its placeholder rather than crash.
-fn resolve_struct(ty: &Ty, reg: &NominalRegistry, alloc: &Allocator) StructTarget? {
+fn resolve_struct(ty: &Ty, reg: &NominalRegistry, allocator: &Allocator?) StructTarget? {
     let peeled = ty.* match {
         Ref(inner) => inner.*,
         _ => ty.*,
@@ -253,7 +305,7 @@ fn resolve_struct(ty: &Ty, reg: &NominalRegistry, alloc: &Allocator) StructTarge
         _ => return null,
     }
     return reg.get(nr.id).* match {
-        NomStruct(s) => Some(StructTarget { def = s, layout = struct_layout(&s, &nr.args, reg, alloc) }),
+        NomStruct(s) => Some(StructTarget { def = s, layout = struct_layout(&s, &nr.args, reg, allocator) }),
         _ => null,
     }
 }
@@ -298,9 +350,9 @@ fn lower_identifier(env: &Dict(String, Operand), id: &IdentifierExpr) Operand {
     return Operand.IntConst(0)
 }
 
-fn lower_binary(result: &TypeCheckResult, bb: &BlockBuilder, env: &Dict(String, Operand), b: &BinaryExpr, alloc: &Allocator) Operand {
-    let lhs = lower_expr(result, bb, env, b.lhs, alloc)
-    let rhs = lower_expr(result, bb, env, b.rhs, alloc)
+fn lower_binary(result: &TypeCheckResult, bb: &BlockBuilder, env: &Dict(String, Operand), b: &BinaryExpr, allocator: &Allocator?) Operand {
+    let lhs = lower_expr(result, bb, env, b.lhs, allocator)
+    let rhs = lower_expr(result, bb, env, b.rhs, allocator)
     let ty = node_ty(result, b.span)
     let ir = ty_to_ir(&ty)
     let p = prim_of(&ty)
@@ -340,14 +392,26 @@ fn mul_op(bb: &BlockBuilder, ir: IrType, fl: bool, lhs: Operand, rhs: Operand) O
 }
 
 fn div_op(bb: &BlockBuilder, ir: IrType, fl: bool, sg: bool, lhs: Operand, rhs: Operand) Operand {
+    if is_const_zero(&rhs) { return Operand.IntConst(0) }
     if fl { return bb.fdiv(ir, lhs, rhs) }
     if sg { return bb.sdiv(ir, lhs, rhs) }
     return bb.udiv(ir, lhs, rhs)
 }
 
 fn mod_op(bb: &BlockBuilder, ir: IrType, sg: bool, lhs: Operand, rhs: Operand) Operand {
+    if is_const_zero(&rhs) { return Operand.IntConst(0) }
     if sg { return bb.srem(ir, lhs, rhs) }
     return bb.urem(ir, lhs, rhs)
+}
+
+// A literal zero divisor is a constant expression C refuses to compile;
+// placeholder lowering produces them, so dividing by one lowers to a
+// placeholder value too.
+fn is_const_zero(op: &Operand) bool {
+    return op.* match {
+        IntConst(n) => n == 0,
+        _ => false,
+    }
 }
 
 fn shr_op(bb: &BlockBuilder, ir: IrType, sg: bool, lhs: Operand, rhs: Operand) Operand {
@@ -355,8 +419,8 @@ fn shr_op(bb: &BlockBuilder, ir: IrType, sg: bool, lhs: Operand, rhs: Operand) O
     return bb.ushr(ir, lhs, rhs)
 }
 
-fn lower_unary(result: &TypeCheckResult, bb: &BlockBuilder, env: &Dict(String, Operand), u: &UnaryExpr, alloc: &Allocator) Operand {
-    let v = lower_expr(result, bb, env, u.operand, alloc)
+fn lower_unary(result: &TypeCheckResult, bb: &BlockBuilder, env: &Dict(String, Operand), u: &UnaryExpr, allocator: &Allocator?) Operand {
+    let v = lower_expr(result, bb, env, u.operand, allocator)
     let ty = node_ty(result, u.span)
     let ir = ty_to_ir(&ty)
     let p = prim_of(&ty)
@@ -383,14 +447,16 @@ fn node_ty(result: &TypeCheckResult, span: SourceSpan) Ty {
     return Ty.Prim(PrimitiveKind.I32)
 }
 
-// A resolved `Ty` to its FIR scalar type. Aggregates are addressed by
-// pointer (M1 never produces aggregate-typed values directly).
+// A resolved `Ty` to its FIR scalar type. References and function values
+// are pointers; anything outside this milestone's subset folds to `i64`
+// so placeholder arithmetic over it still emits compilable C (a pointer
+// operand inside a float op does not).
 fn ty_to_ir(ty: &Ty) IrType {
     return ty.* match {
         Prim(p) => prim_ir(p),
         Ref(_) => IrType.Ptr,
         Func(_) => IrType.Ptr,
-        _ => IrType.Ptr,
+        _ => IrType.I64,
     }
 }
 
@@ -554,6 +620,22 @@ test "skips a function with an unsupported signature type" {
     assert_eq(m.functions.len, 1 as usize, "only the scalar function is lowered")
     let f = &m.functions[0]
     assert_true(f.name == "ok", "the slice-taking function was skipped")
+}
+
+test "mangles symbols by module fqn, keeping main and foreigns bare" {
+    assert_true(mangle_symbol("flang_typer.checker", "deinit", false) == "flang_typer__checker__deinit", "dotted fqn separates with double underscores")
+    assert_true(mangle_symbol("core.io", "printf", true) == "printf", "foreign names pass through")
+    assert_true(mangle_symbol("app.entry", "main", false) == "main", "main stays bare")
+    assert_true(mangle_symbol("", "add", false) == "add", "no fqn, bare name")
+}
+
+test "repeated symbols in one lowering walk get ordinal suffixes" {
+    let seen = dict()
+    defer seen.deinit()
+    assert_true(disambiguate(&seen, "m__deinit") == "m__deinit", "first keeps the plain name")
+    assert_true(disambiguate(&seen, "m__deinit") == "m__deinit__2", "second gets an ordinal")
+    assert_true(disambiguate(&seen, "m__deinit") == "m__deinit__3", "third increments")
+    assert_true(disambiguate(&seen, "m__push") == "m__push", "distinct names stay bare")
 }
 
 test "lowers a struct field read to a slot store and an offset load" {

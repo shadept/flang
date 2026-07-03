@@ -280,7 +280,7 @@ fn finish_build(unit: &AnalyzedProject, label: String, out: String, verbose: boo
         return 0
     }
 
-    let result = build_program(&unit.modules, &unit.result, out)
+    let result = build_program(&unit.modules, &unit.fqns, &unit.result, out)
     if result.is_err() {
         report_build_error(&result.unwrap_err(), label)
         return 1

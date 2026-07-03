@@ -5,6 +5,7 @@ import std.allocator
 import std.mem
 import std.option
 import std.sort
+import std.test
 
 pub type List = struct(T) {
     ptr: &T
@@ -166,6 +167,17 @@ pub fn push(self: &List($T), value: T) {
     // memcpy(dest, &value as &u8, type.size as usize)
 }
 
+// Append every element of `xs` to the end of the list, in order. Both
+// buffers are contiguous, so the copy is a single memcpy; `xs` must not
+// alias the list's own storage — growth may reallocate (and free) that
+// storage before the copy, so no copy primitive makes self-append safe.
+pub fn push_all(self: &List($T), xs: T[]) {
+    if xs.len == 0 { return }
+    self.reserve(self.len + xs.len)
+    memcpy((self.ptr + self.len) as &u8, xs.ptr as &u8, xs.len * size_of(T))
+    self.len = self.len + xs.len
+}
+
 // Remove and return the last element, or null if empty. Prefer `Stack(T)`
 // in new code when the access pattern is LIFO — this primitive exists so
 // `Stack.pop` can mutate the underlying length without breaching scoped
@@ -266,4 +278,23 @@ pub fn next(it: &ListIterator($T)) T? {
     const elem = it.list.get(it.current)
     it.current = it.current + 1
     return elem
+}
+
+test "push_all appends a slice in order" {
+    let xs: List(u32) = list(0)
+    defer xs.deinit()
+    xs.push(1u32)
+    let more: List(u32) = list(2)
+    defer more.deinit()
+    more.push(2u32)
+    more.push(3u32)
+    xs.push_all(more.as_slice())
+    assert_eq(xs.len, 3 as usize, "three elements after push_all")
+    assert_eq(xs[0], 1u32, "existing element untouched")
+    assert_eq(xs[2], 3u32, "order preserved")
+
+    let none: List(u32) = list(0)
+    defer none.deinit()
+    xs.push_all(none.as_slice())
+    assert_eq(xs.len, 3 as usize, "empty source is a no-op")
 }

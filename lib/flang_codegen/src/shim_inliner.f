@@ -419,9 +419,7 @@ fn clone_operand_list(args: &List(Operand), subst: &Dict(u32, Operand), alloc: &
 
 fn clone_ir_type_list(tys: &List(IrType), alloc: &Allocator) List(IrType) {
     let out: List(IrType) = list(tys.len, alloc)
-    for i in 0..tys.len {
-        out.push(tys[i])
-    }
+    out.push_all(tys.as_slice())
     return out
 }
 

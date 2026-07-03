@@ -25,6 +25,7 @@ import std.process
 import std.result
 import std.string
 import std.string_builder
+import std.test
 import flang_codegen.backend
 import flang_codegen.fir
 
@@ -39,6 +40,7 @@ pub fn translate(m: &IrModule, sb: &StringBuilder) {
         // The runtime preamble already defines these — re-emitting them
         // as `extern` would conflict.
         if is_runtime_provided_symbol(m.foreigns[i].name) { continue }
+        if repeats_earlier_foreign(m, i) { continue }
         emit_foreign(&m.foreigns[i], sb)
         sb.append("\n")
     }
@@ -180,6 +182,16 @@ fn emit_preamble(sb: &StringBuilder) {
     sb.append("    return (unsigned char*)getenv((const char*)name);\n")
     sb.append("}\n")
     sb.append("\n")
+}
+
+// Merged modules re-declare the same external symbol, and overload sets
+// map many declarations onto one; only the first declaration survives.
+// ponytail: O(n^2) scan; switch to a set if foreign counts grow.
+fn repeats_earlier_foreign(m: &IrModule, i: usize) bool {
+    for j in 0..i {
+        if m.foreigns[j].name == m.foreigns[i].name { return true }
+    }
+    return false
 }
 
 // Names of foreign decls that the runtime preamble already provides.
@@ -1380,6 +1392,24 @@ fn build_compiler_argv(info: &CompilerInfo, c_path: String, options: &BuildOptio
         argv.push(from_view(options.ldflags[i], alloc))
     }
     return argv
+}
+
+test "emits each foreign symbol at most once" {
+    let m = module()
+    defer m.deinit()
+    let p1 = list(1)
+    p1.push(IrType.I32)
+    m.add_foreign(ForeignDecl { name = "putchar", return_ty = Some(IrType.I32), param_types = p1, variadic = false, cc = CallConv.C })
+    let p2 = list(2)
+    p2.push(IrType.I32)
+    p2.push(IrType.I32)
+    m.add_foreign(ForeignDecl { name = "putchar", return_ty = Some(IrType.I32), param_types = p2, variadic = false, cc = CallConv.C })
+
+    let sb = string_builder(256)
+    defer sb.deinit()
+    translate(&m, &sb)
+    assert_true(contains(sb.as_view(), "putchar(int32_t)"), "first declaration emitted")
+    assert_true(!contains(sb.as_view(), "putchar(int32_t, int32_t)"), "repeat declaration dropped")
 }
 
 // Spawn the compiler with the prepared argv + env. Returns the exit code.

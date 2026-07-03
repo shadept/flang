@@ -110,9 +110,7 @@ pub fn error_count(self: &AnalyzedUnit) usize {
 // length without deiniting elements, so the moved OwnedString messages are
 // owned once (by `dst`) and never double-freed.
 fn drain_diagnostics(dst: &List(Diagnostic), src: &List(Diagnostic)) {
-    for i in 0..src.len {
-        dst.push(src[i])
-    }
+    dst.push_all(src.as_slice())
     src.clear()
 }
 
@@ -237,17 +235,13 @@ pub fn project_error_count(self: &AnalyzedProject) usize {
 }
 
 // Append a `.generated.f` sidecar's text to its origin's source so the two
-// parse as one module under one import scope. Returns `src` untouched when the
-// origin has no `#interface`, no sidecar exists, or the sidecar can't be read;
-// otherwise returns a fresh combined buffer and frees `src`. Generated files
-// carry no imports, so appending keeps imports file-top.
-//
-// Only `#interface` origins are merged: that generator emits a struct the
-// origin references by name (the `unknown type` cause). Function-only
-// expansions (`#enum_utils`, `#derive`) are the unrelated function-resolution
-// gap, so they stay out and this fix stays independent of it.
+// parse as one module under one import scope. Returns `src` untouched when
+// no sidecar exists or it can't be read; otherwise returns a fresh combined
+// buffer and frees `src`. Generated files carry no imports, so appending
+// keeps imports file-top. Every checked-in expansion merges — the types
+// (`#interface`) and the functions (`#implement`, `#enum_utils`, `#derive`)
+// both resolve now that calls check against the registry.
 fn combine_with_sidecar(path: String, src: OwnedString, alloc: &Allocator) OwnedString {
-    if !contains(src.as_view(), "#interface(") { return src }
     let sc = generated_sidecar(path, alloc)
     if sc.is_none() { return src }
     let sp = sc.unwrap()

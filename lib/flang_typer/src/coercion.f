@@ -213,6 +213,20 @@ pub fn try_string_to_byte_slice(from: Ty, to: Ty, reg: &NominalRegistry, allocat
     return simple(to, allocator)
 }
 
+// `Slice(u8) → String` — the inverse binary-compatible view cast. The
+// reference engine applies its rules in both directions; this pair keeps
+// byte views and strings interchangeable.
+pub fn try_byte_slice_to_string(from: Ty, to: Ty, reg: &NominalRegistry, allocator: &Allocator? = null) Coercion? {
+    let c = try_string_to_byte_slice(to, from, reg, allocator)
+    return c match {
+        Some(inner) => {
+            inner.side_unifications.deinit()
+            Some(simple(to, allocator))
+        },
+        None => null,
+    }
+}
+
 // Array decay rules. Four variants, distinguished by whether `from`
 // is `Array` or `&Array` and whether `to` is `Slice(T)` or `&T`.
 //   - `[T; N] → Slice(T)`

@@ -76,6 +76,16 @@ pub type DeclAttribute = enum {
     Deprecated(String?)
 }
 
+// Whether a declaration's directives mark it as a foreign import.
+pub fn is_foreign_directive(ds: &List(DeclAttribute)) bool {
+    for i in 0..ds.len {
+        let d = &ds[i]
+        let f = d.* match { Foreign => true, _ => false }
+        if f { return true }
+    }
+    return false
+}
+
 // `[pub] import path.to.module`
 pub type ImportDecl = struct {
     span: SourceSpan

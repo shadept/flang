@@ -26,6 +26,10 @@ pub type FunctionScheme = struct {
     module: String?           // null for synthesised (lambda host) fns
     is_pub: bool
     is_foreign: bool
+    // Call-site arity window: params beyond `required_params` are
+    // defaulted (or the variadic tail) and may be omitted.
+    required_params: usize
+    has_variadic: bool
     decl_span: SourceSpan
     deprecation: String?
     // The id consumers cite when resolving a call. Stable across a
@@ -84,6 +88,8 @@ pub fn register(self: &FunctionRegistry, scheme: FunctionScheme) u32 {
         module = scheme.module,
         is_pub = scheme.is_pub,
         is_foreign = scheme.is_foreign,
+        required_params = scheme.required_params,
+        has_variadic = scheme.has_variadic,
         decl_span = scheme.decl_span,
         deprecation = scheme.deprecation,
         id = id,

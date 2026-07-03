@@ -309,6 +309,11 @@ fn resolve_var(self: &Engine, v: TyVar) Ty {
     }
 }
 
+// ponytail: zonk memoizes nothing - every call re-resolves and re-allocates
+// the whole tree (the C# engine does the same). If profiling flags it, write
+// fully-ground results back into the var's binding (binding writes are
+// undo-logged, so checkpoints roll them back); a result that still contains
+// unbound vars must never be cached - they can bind later.
 pub fn zonk(self: &Engine, t: Ty) Ty {
     let r = self.resolve(t)
     return r match {
@@ -471,19 +476,40 @@ fn unify_concrete(self: &Engine, a: Ty, b: Ty) UnifyOutcome {
 // then nominal-aware rules in the order most callers expect (option
 // wrapping has the highest hit rate, then string→byte-slice, then
 // array decay and slice-to-ref, then the `Type(T)` lift).
-fn try_coercion(self: &Engine, from: Ty, to: Ty) Coercion? {
-    let r1 = try_integer_widening(from, to, self.allocator)
+fn try_coercion(self: &Engine, raw_from: Ty, raw_to: Ty) Coercion? {
+    // Prim rules match on the (already top-resolved) raw shapes, so the
+    // common failed probe pays no allocation.
+    let r1 = try_integer_widening(raw_from, raw_to, self.allocator)
     if r1.is_some() { return r1 }
-    let r2 = try_float_widening(from, to, self.allocator)
+    let r2 = try_float_widening(raw_from, raw_to, self.allocator)
     if r2.is_some() { return r2 }
-    let r8 = try_char_to_u8(from, to, self.allocator)
+    let r8 = try_char_to_u8(raw_from, raw_to, self.allocator)
     if r8.is_some() { return r8 }
     self.nominals match {
         Some(reg) => {
+            // Nominal-aware rules are engine-free and match structurally,
+            // so bound vars inside the types must be collapsed first.
+            // ponytail: zonk deep-copies both trees per attempt; resolve
+            // rule inputs in place if coercion shows up in a profile.
+            let from = self.zonk(raw_from)
+            let to = self.zonk(raw_to)
             let r3 = try_option_wrapping(from, to, reg, self.allocator)
-            if r3.is_some() { return r3 }
+            if r3.is_some() {
+                // Wrapping only fires into a known payload type. An unbound
+                // payload would swallow anything — `Option($T)` params in
+                // overload sets must not absorb unrelated arguments (the
+                // reference rule requires the payload to equal the source).
+                let c = r3.unwrap()
+                if c.side_unifications.len == 0 { return r3 }
+                self.resolve(c.side_unifications[0].b) match {
+                    Var(_) => c.side_unifications.deinit(),
+                    _ => return r3,
+                }
+            }
             let r4 = try_string_to_byte_slice(from, to, reg, self.allocator)
             if r4.is_some() { return r4 }
+            let r10 = try_byte_slice_to_string(from, to, reg, self.allocator)
+            if r10.is_some() { return r10 }
             let r5 = try_array_decay(from, to, reg, self.allocator)
             if r5.is_some() { return r5 }
             let r6 = try_slice_to_reference(from, to, reg, self.allocator)
