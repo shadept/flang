@@ -2309,7 +2309,10 @@ public class HmAstLowering
                 // UFCS on a field: self.field.method() where method wants &self.
                 // Compute a pointer to the field in-place (avoid copying the field value,
                 // which would lose mutation semantics for iterators, etc.).
-                var targetVal = LowerExpression(memberReceiver.Target);
+                // A nested path (`self.mid.c.method()`) must address its base, or
+                // the callee mutates a temporary. Same rule as `&base.field` and
+                // `base.arr[i] = v` — see LowerBaseAddress.
+                var targetVal = LowerBaseAddress(memberReceiver.Target);
                 var baseVal = targetVal;
                 var baseIrType = targetVal.IrType;
 
@@ -3182,18 +3185,12 @@ public class HmAstLowering
         if (addrOf.Target is IndexExpressionNode indexTarget
             && _types.GetResolvedOperator(indexTarget) == null)
         {
-            var arrVal = LowerExpression(indexTarget.Base);
+            // Same rule as the member case: address the base, don't copy it.
+            var arrVal = LowerBaseAddress(indexTarget.Base);
             var idxVal = LowerExpression(indexTarget.Index);
             var elemIrType = GetIrType(indexTarget);
 
-            // If base is a Slice struct, extract .ptr field
-            var basePtr = arrVal;
-            if (arrVal.IrType is IrStruct sliceBase2)
-            {
-                var ptrField = sliceBase2.Fields.FirstOrDefault(f => f.Name == "ptr");
-                if (ptrField.Type != null)
-                    basePtr = CoerceSliceToPointer(arrVal, sliceBase2, ptrField);
-            }
+            var basePtr = ResolveElementStorage(arrVal);
 
             var elementSize = new IntConstantValue(elemIrType.Size, TypeLayoutService.IrUSize);
             var byteOffset = _currentBlock.EmitBinary(BinaryOp.Multiply, idxVal, elementSize, TypeLayoutService.IrUSize);
@@ -3204,7 +3201,10 @@ public class HmAstLowering
         // loading the field value and taking its address (which would be a dangling pointer).
         if (addrOf.Target is MemberAccessExpressionNode memberTarget)
         {
-            var targetVal = LowerExpression(memberTarget.Target);
+            // Address the base rather than copying it — for a nested path
+            // (`&outer.mid.inner`) a value-lowered base is a temporary, and the
+            // GEP below would hand back a pointer into dead stack.
+            var targetVal = LowerBaseAddress(memberTarget.Target);
             var baseVal = targetVal;
             var baseIrType = targetVal.IrType;
 
@@ -5114,6 +5114,61 @@ public class HmAstLowering
     /// Returns a pointer Value for an assignable expression (lvalue).
     /// Returns null if the expression cannot be assigned to.
     /// </summary>
+    /// <summary>
+    /// The address of the aggregate a field or element access reads from — a
+    /// pointer to the place itself, never a copy of it.
+    ///
+    /// A nested path (`a.b.c`, `a.b[i]`) has a member access or index as its
+    /// base. Lowering that base as a *value* spills the intermediate aggregate
+    /// to a temporary alloca and loads it, so any GEP taken from the result
+    /// addresses the copy: writes through it are silently dropped, and `&` on
+    /// it yields a pointer into dead stack. Recursing through LowerLValue keeps
+    /// the address chain intact.
+    ///
+    /// The recursion deliberately stops at identifiers. `_locals` stores a
+    /// local's slot address, so LowerExpression already yields the pointer;
+    /// LowerLValue would hand back one level too many (`&&T`) and would also
+    /// promote by-ref parameters copy-on-write, which is wrong in a read-only
+    /// base position.
+    ///
+    /// Every place that needs the address of a base must go through here — see
+    /// docs/spec.md "Place Expressions" and docs/adr/0003.
+    /// </summary>
+    private Value LowerBaseAddress(ExpressionNode baseExpr) =>
+        baseExpr is MemberAccessExpressionNode or IndexExpressionNode
+            ? (LowerLValue(baseExpr) ?? LowerExpression(baseExpr))
+            : LowerExpression(baseExpr);
+
+    /// <summary>
+    /// Normalise a base address for element indexing. `LowerBaseAddress` may
+    /// return the aggregate by value (identifier bases) or by pointer (nested
+    /// paths); a slice carries its storage in a `ptr` field either way, while
+    /// an inline array *is* its storage.
+    /// </summary>
+    private Value ResolveElementStorage(Value baseVal)
+    {
+        // Slice held by value — extract .ptr (existing behaviour).
+        if (baseVal.IrType is IrStruct sliceStruct)
+        {
+            var ptrField = sliceStruct.Fields.FirstOrDefault(f => f.Name == "ptr");
+            if (ptrField.Type != null)
+                return CoerceSliceToPointer(baseVal, sliceStruct, ptrField);
+            return baseVal;
+        }
+
+        // Pointer to a slice struct — load its data pointer. Reached when the
+        // base was a nested path, so the slice itself is addressed in place.
+        if (baseVal.IrType is IrPointer { Pointee: IrStruct pointeeStruct })
+        {
+            var ptrField = pointeeStruct.Fields.FirstOrDefault(f => f.Name == "ptr");
+            if (ptrField.Type != null)
+                return EmitLoadFromOffset(baseVal, ptrField.ByteOffset, ptrField.Type, "slice_data_ptr");
+        }
+
+        // Pointer to an inline array, or a raw pointer — already the storage.
+        return baseVal;
+    }
+
     private Value? LowerLValue(ExpressionNode expr)
     {
         switch (expr)
@@ -5216,17 +5271,13 @@ public class HmAstLowering
 
             case IndexExpressionNode index:
                 {
-                    var arrVal = LowerExpression(index.Base);
+                    // The base must be addressed, not copied: for a nested path
+                    // (`outer.holder.arr[i] = v`) lowering it as a value stores
+                    // into a temporary and drops the write.
+                    var arrVal = LowerBaseAddress(index.Base);
                     var idxVal = LowerExpression(index.Index);
 
-                    // If base is a Slice struct, extract .ptr for pointer arithmetic
-                    var basePtr = arrVal;
-                    if (arrVal.IrType is IrStruct sliceBase2)
-                    {
-                        var ptrField2 = sliceBase2.Fields.FirstOrDefault(f => f.Name == "ptr");
-                        if (ptrField2.Type != null)
-                            basePtr = CoerceSliceToPointer(arrVal, sliceBase2, ptrField2);
-                    }
+                    var basePtr = ResolveElementStorage(arrVal);
 
                     var elementIrType = GetIrType(index);
 

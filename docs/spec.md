@@ -278,6 +278,44 @@ This is transparent to the programmer — `return expr` works uniformly.
 - `ptr.*` explicit dereference (produces a copy).
 - `ptr.field` auto-dereference (reads/writes through pointer, no copy). Recursive through `&&T`.
 
+### 3.4.1 Place Expressions
+
+A **place expression** (lvalue) denotes a storage location. A **value expression** (rvalue) denotes a value with no location of its own. Every expression is lowered in exactly one of these two modes, and which mode applies is a property of the *context*, not of the expression.
+
+**The place forms.** These, and only these, denote places:
+
+| Form | Place when |
+|---|---|
+| `x` | `x` is a local, parameter, or global |
+| `p.*` | always — the pointer already is the address |
+| `base.field` | `base` is a place, or is a reference |
+| `base[i]` | `base` is a place, or is a reference or slice |
+
+Everything else — call results, literals, arithmetic, struct literals, `match` results — is a value expression. A place is also usable as a value (by loading it); a value is not usable as a place.
+
+**Place contexts.** An expression must be lowered as a place when it appears as:
+
+1. the target of an assignment — `place = v`, and the base of a compound target
+2. the operand of `&` — `&place`
+3. the receiver of a call whose corresponding parameter is `&T`, including UFCS — `place.method()`
+4. the base of a field or element access that is itself in a place context
+
+Rule 4 is the recursive one, and it is the rule that matters: **place-ness propagates leftward through a path.** In `a.b.c = v`, the assignment target `a.b.c` is a place, so its base `a.b` must be a place, so its base `a` must be a place. A path of any depth is addressed end to end; no intermediate is ever materialized.
+
+**The invariant.** *Lowering a base in a place context must never copy the aggregate.* Copying an intermediate produces a temporary, and everything derived from it is then wrong in a way that compiles silently:
+
+```flang
+outer.mid.inner.incr()   // mutation lands in the temporary and is lost
+let p = &outer.mid.inner // pointer into dead stack
+outer.mid.arr[0] = 1     // store discarded
+```
+
+**Value contexts** are the complement: reading `a.b.c` for its value, passing by value, arithmetic operands. There a copy is correct and expected — FLang is a value-semantics language (§3.1).
+
+**Rvalue materialization.** When a value expression appears where an address is required — `&f()`, or a by-value call result used as a `&T` receiver — it is materialized into a fresh temporary whose address is taken. The temporary lives to the end of the enclosing statement. This is the *only* case in which a place context operates on a temporary, and it applies exclusively to expressions that were never places; a genuine place is never materialized.
+
+**Diagnostic.** Using a value expression where a place is required is an error (`E3005`, "expression is not assignable"). An assignment target is never silently materialized instead.
+
 ### 3.5 Scope and Lifetime
 
 Variables are valid from declaration to end of enclosing block. No move semantics, no consume semantics. Accessing a variable always succeeds if in scope (C-like).
@@ -498,6 +536,27 @@ Implicit: `String` automatically accepted where `u8[]` expected. Reverse (`u8[]`
 - **Named arguments**: `foo(y = 20, x = 10)`. Positional args first. Not supported for indirect calls.
 - **Variadic parameters**: `fn bar(..args: i32)`. Received as `i32[]` slice. One variadic, must be last. Foreign functions use C-style `...`.
 - All three are caller-side transformations — lowering sees a normal positional argument list.
+
+### 7.1.1 Symbol Naming
+
+FLang permits overloading, generic specialization, and same-named functions in different modules; the target object format does not. Every function therefore has a **symbol** — the single, globally unique name it links under — distinct from its source **name**.
+
+**A symbol is fixed before code generation.** By the time a program reaches a backend, every function definition carries its final symbol and every call names its callee's symbol directly. A backend emits symbols; it does not compute them.
+
+This keeps code generation *overload-independent*. Deciding how two functions with the same source name are told apart requires overload resolution, default and variadic handling, generic specialization, and knowledge of the return-value ABI. That decision belongs to one place in a compiler, not to each backend — otherwise every target must reproduce it identically.
+
+**Required properties.** A symbol must be:
+
+1. **Unique** — distinct functions never collide, including same-named overloads and same-named functions in different modules.
+2. **Deterministic** — a function's symbol depends only on the function itself: its module, name, and parameter types. Recompiling an unchanged declaration yields an unchanged symbol, and adding or removing an unrelated function never renames it. Builds are reproducible and separately-compiled units agree without coordination.
+3. **Consistent** — a definition and every call to it name the same symbol.
+4. **A valid target identifier** — for targets in the C family, matching `[A-Za-z_][A-Za-z0-9_]*`.
+
+**The encoding is unspecified.** Programs cannot observe it, and targets with different identifier rules may need different encodings. Any encoding satisfying the four properties conforms.
+
+Two names are exempt and keep their source spelling, because something outside the language already fixes them: the **entry point** (`main`) and **`#foreign` functions**, which name symbols defined elsewhere.
+
+**Overloading and separate compilation.** Property 2 rules out schemes that number overloads in declaration order. A counter makes a symbol depend on how many same-named functions were seen first, so inserting a declaration renames later ones and independent compilation units cannot agree without sharing the counter. Encoding the parameter types instead makes each symbol self-contained.
 
 ### 7.2 UFCS
 

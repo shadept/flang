@@ -57,6 +57,88 @@ Running the bootstrap on any stdlib-using project (including itself) reported `u
 
 ## Open Issues
 
+### C# Backend Re-Derives Link Symbols At Codegen Instead Of Consuming Them
+
+**Status:** Open — specified deviation, migration in ADR 0004
+**Affected:** `src/FLang.Codegen.C/HmCCodeGenerator.cs`, `src/FLang.IR/IrModule.cs`, `src/FLang.Semantics/HmAstLowering.cs`
+
+`docs/spec.md` §7.1.1 makes lowering responsible for assigning link symbols so backends stay overload- and mangling-independent. The self-hosted compiler complies (`lower.f::mangle_symbol` + `SymbolTable`; `c_backend.f` emits `c.callee` verbatim). The C# compiler does not: the IR carries unmangled names and `HmCCodeGenerator` re-encodes the signature at emit time, separately at the definition (`MangleFunctionName(IrFunction)`) and at every call site.
+
+**Concrete hazard.** The two derivations read different inputs. The definition mangles from `fn.Params`, skipping the sret parameter when `fn.UsesReturnSlot`. The call site mangles from `call.CalleeIrParamTypes`, which is only assigned `if (calleeParamTypes != null)` (`BasicBlock.cs:171,185`) and otherwise **falls back to argument types**, defaulting untyped arguments to `i32`. Parameter and argument types diverge precisely where FLang inserts a coercion; when they do, the call names a symbol nothing defines and the build fails at C link time, far from the cause. Currently latent — the harness is green — but latent by luck, not by construction.
+
+**Related smell.** A third identity scheme already exists: `IrFunction.SemanticKey` / `CallInstruction.CalleeSemanticKey` (`name|params|ret`), invented so `InliningPass` could match callers to callees. It solves the same problem as the mangled symbol in a different encoding, because the IR carries no authoritative function identity.
+
+Full analysis and a five-step migration in `docs/adr/0004-symbol-assignment-belongs-to-lowering.md`.
+
+### Mutation Through a Multi-Hop UFCS Receiver Was Silently Dropped — RESOLVED
+
+**Status:** Resolved — `HmAstLowering` lowers a member-access receiver as an lvalue
+**Affected:** C# `HmAstLowering` UFCS receiver lowering; found while building the M2 symbol table
+
+A method call whose receiver was a **two-or-more-hop field path** passed a copy instead of a reference, so the callee's mutations were discarded. It compiled clean and emitted no diagnostic — the "silently-wrong code" failure mode.
+
+```flang
+type Counter = struct { n: i32 }
+fn incr(self: &Counter) { self.n = self.n + 1 }
+
+type Mid   = struct { c: Counter }
+type Outer = struct { mid: Mid }
+
+fn via1(self: &Mid)   { self.c.incr() }        // one hop  — worked
+fn via2(self: &Outer) { self.mid.c.incr() }    // two hops — silent no-op
+```
+
+Scope was narrower than it first appeared: nested *assignment* (`self.mid.inner.n = …`) was always correct, because assignment goes through `LowerLValue`, which recurses and keeps the address chain. Only the **UFCS receiver** path was wrong.
+
+**Cause:** the receiver branch lowered its target with `LowerExpression(memberReceiver.Target)`. For a nested path the target is itself a member access, and `LowerMemberAccess` spills the intermediate struct to a temporary alloca and loads it. The following `EmitGEP` then addressed that copy. With a one-hop receiver the target is a plain identifier already held as a pointer, which is why depth one always worked.
+
+**Fix:** lower a member-access target as an lvalue (`LowerLValue(...) ?? LowerExpression(...)`), matching what assignment and index-base lowering already do. The recursion is deliberately **not** applied to identifier targets: `_locals` stores a parameter's slot address, so `LowerLValue` on a bare identifier yields one pointer level too many (`&&T`) — the first attempt at this fix did exactly that and broke the one-hop case plus the whole stdlib with `Allocator**` vs `Allocator*` C errors. `LowerLValue`'s pointer-level bookkeeping lives on its member-access branch, so only that branch is used.
+
+**Regression test:** `tests/harness/ufcs/ufcs_nested_receiver_mutates.f` pins one-, two-, and three-hop receivers together so the depths cannot diverge again. Full harness: 517 passed / 0 failed / 14 skipped of 531.
+
+**Note:** the M2 `SymbolBuilder` workaround (flat dicts rather than a nested `SymbolTable`) is no longer strictly required, but is kept — it is simpler than the nested form regardless.
+
+### `dotnet test-all.cs` Fails Type-Checking `core/range.f` (E2071 Cyclic Type)
+
+**Status:** Open — pre-existing; blocks the `stdlib/std` leg of `test-all`
+**Affected:** C# `HmTypeChecker` occurs-check / optional inference
+
+`flang test` in `stdlib/std` fails to compile with:
+
+```
+error[E2071]: Cyclic type: Option(?4844) contains ?4844
+  --> stdlib/core/range.f:46:12
+```
+
+on the `return val` of:
+
+```flang
+pub fn next(it: &RangeIterator($T)) T? {
+    if it.current >= it.end { return null }
+    let val = it.current
+    it.current = it.current + 1
+    return val               // E2071
+}
+```
+
+Returning a bare `T` from a function declared `T?` makes the checker unify `?X` with `Option(?X)` and trip the occurs check, instead of applying the `T → Option(T)` wrapping coercion. This is the same class the self-host typer hit and fixed on its side — see ADR 0002 (optional wrapping as a directional coercion) and `checker.f::unify_expected`, which tries the payload interpretation first. The C# checker needs the equivalent: in return position against a declared `Option(T)`, attempt the payload interpretation before unifying the value against the optional itself.
+
+The C# harness (`dotnet test.cs`, 517 passed / 0 failed / 14 skipped of 531) does not cover this — it is only reachable through the colocated stdlib `test {}` blocks. Confirmed pre-existing by rebuilding from the committed `HmAstLowering.cs` and reproducing.
+
+### `std.process` Spawn Fails For Every Program — Blocks The Bootstrap's C Backend
+
+**Status:** Open — blocks all end-to-end measurement through the bootstrap
+**Affected:** `stdlib/std/process.f::spawn` / `stdlib/std/process.c::__flang_proc_spawn`, and through them `lib/flang_codegen/src/c_backend.f`'s compiler probe
+
+Any `Command.spawn()` returns `Err(ProcessError.NotFound)`, including for an absolute path to a binary that exists (`/usr/bin/clang`). Reproduced with a *reference-compiled* binary, so this is not a bootstrap-codegen issue. It is also not the sandbox: it reproduces with sandboxing disabled.
+
+Consequence: `c_backend`'s probe calls `can_spawn("clang")` / `cc` / `gcc` / `xcrun`, every one fails, and the bootstrap reports `no C compiler found` for every build. **The self-hosted compiler currently cannot produce a binary on this machine**, which is why the harness-through-bootstrap score collapsed (see the corrected scoreboard below) — the failures are not compile errors or wrong exit codes, they are the backend never running.
+
+**Diagnosis so far:** `PROC_NOT_FOUND` is `0` (`process.c:22`) and `ProcessError.NotFound` is the first enum variant, also `0`. `process.f::spawn` initialises `err_code: i32 = 0` and only reads it when the C call returns non-zero. So a C path that returns `R_ERR` *without* writing `*out_err` — or an out-parameter that never makes it back across the call — is indistinguishable from a genuine `NotFound`. Every error path in `process.c` does assign `*out_err`, which points at the write-back across the 15-argument foreign call rather than at the process logic.
+
+**Next step:** confirm whether `*out_err` reaches the caller — have the C side write a sentinel (e.g. `99`) at entry and see whether `spawn` reports it. If the sentinel is lost, this is a foreign-call ABI bug for pointer out-parameters at high argument counts, not a `std.process` bug. Either way `spawn` should not conflate "unset" with `NotFound`: give `ProcessError` a non-zero first variant, or have the C side initialise `*out_err` at entry.
+
+
 ### `as` Cast Mis-Typed When the Operand Comes From a Generic Function Result
 
 **Status:** Open — workaround: avoid casting a generic call's result directly
@@ -82,7 +164,7 @@ fn main() i32 {
 
 ### Bootstrap Self-Host: Remaining Typer Gaps
 
-**Status:** Typechecking CLEAN with real call resolution — `bootstrap --check build` on the compiler + full stdlib reports 0 errors (97 modules, ~1.5s wall vs ~1.2s before call resolution); the build stops in lowering (see below)
+**Status:** Was recorded as typechecking CLEAN (0 errors, 97 modules). **Re-measured 2026-08-16: 2 errors**, both in the bootstrap's own `src/main.f` — `no matching overload for output_path_for with 1 argument(s)` and `... build_single_file with 5 argument(s)`, for functions defined lower in that same file. Confirmed pre-existing at `ac9c7e5` by rebuilding the bootstrap from the committed `lower.f` and reproducing them, so this is not fallout from the M2 lowering work. The reference compiler checks the same project clean, so it is a bootstrap typer gap. Both call sites take an argument from `argv[rest]` — an `Index` expression, which `check_expr_kind` does not handle and types as an unconstrained fresh var, which is the likely reason overload resolution finds no match. That makes this an early, concrete instance of the coverage gap recorded below rather than a separate bug.
 **Affected:** bootstrap `flang_typer` type resolution and expression checking
 
 With cross-module nominal resolution fixed, a full self-host run still fails on distinct, unported typer features (counts from one run): ~~**type aliases** (`type VarId = u32`, `NodeId`, `NominalId`, `Level`) are registered as neither struct nor enum, so `resolve_named` cannot find them (~130 `unknown type`)~~ (fixed: see below); ~~the builtin **`void`/`never`** type names are not mapped to `Ty.Void`/`Ty.Never` (~7)~~ (fixed: `resolve_named` now maps both); ~~**qualified enum-value access** (`Ord.Less`) is not typed, surfacing as `unknown identifier` (~700 after the fixes below)~~ (fixed for payload-less variants: see below); and ~~the `std.io.reader`/`writer` modules live in `*.generated.f` files that `import std.io.reader` does not resolve to (the residual ~24 `unknown type` for `Writer`/`Reader`)~~ (fixed: see below). ~~The next milestones are **payload-carrying variant construction** (`Expr.Identifier(...)`, `Ty.Nominal(...)`, `Ok(...)`/`Err(...)`/`Some(...)`) and **module-level constants** — both still surfacing as `unknown identifier`.~~ (both fixed: see below).
@@ -96,13 +178,46 @@ With cross-module nominal resolution fixed, a full self-host run still fails on 
 - **Optional-context unification** (`checker.f::unify_expected`, 4 errors incl. two occurs-check failures): a value flowing into `T?` (let-annotation or return) first tries the payload interpretation, so a generic param or call-result inference var is wrapped rather than absorbed into the Option (which poisoned later uses or tripped the occurs check on `return val` in `fn(...) T?`).
 - **Whole-stdlib loading + lenient type resolution**: the driver BFS now seeds every stdlib source (mirroring the C# `SourceGlobber`), and `resolve_named` resolves registered-but-not-imported types instead of erroring (the reference compiler resolves type names program-wide; `core.io` references `StringBuilder` without importing it). Identifier visibility stays import-strict. Non-`pub` `#foreign` fns are visible wherever their module is (they name global link-time symbols; mirrors the earlier C#-side fix).
 
-~~**Next blocker (lowering, not typing):** `lower_program` merges all modules' functions under bare names, so same-named fns from different modules (`rollback` in `inference_engine` vs `union_find`) collide in the generated C (`error C2084: function already has a body`). Needs FQN-based symbol mangling — the cut explicitly deferred when multi-module lowering landed.~~ (fixed: see below). **Next blocker (lowering semantics):** the merged program now compiles and links — a self-host `build` emits a `flang.exe` — but every out-of-M1-subset expression (calls, control flow, match, indexing) still lowers to a placeholder zero, so binaries built by the bootstrap run and return wrong values. That is milestones M2/M3/M5 (calls, control flow, match), plus the FIR `Global` pointer-initializer work below.
+~~**Next blocker (lowering, not typing):** `lower_program` merges all modules' functions under bare names, so same-named fns from different modules (`rollback` in `inference_engine` vs `union_find`) collide in the generated C (`error C2084: function already has a body`). Needs FQN-based symbol mangling — the cut explicitly deferred when multi-module lowering landed.~~ (fixed: see below). ~~**Next blocker (lowering semantics):** the merged program now compiles and links — a self-host `build` emits a `flang.exe` — but every out-of-M1-subset expression (calls, control flow, match, indexing) still lowers to a placeholder zero.~~ (M2 landed: see below. Control flow, match, indexing, and assignment remain placeholders — M3/M5 — plus the FIR `Global` pointer-initializer work below.)
+
+**Resolved in this pass — M2, direct and UFCS call lowering.** `lower_expr` now has a `Call` arm. Lowering re-resolves nothing: the checker already settled the overload, the UFCS receiver, and defaults, and records the winner on the call node as `RtFunction(id)`, so `lower_call` maps that id to a symbol and emits the arguments in order. A member-access callee contributes its receiver as argument 0 (UFCS); named-argument calls, variant constructors, and indirect calls carry no `RtFunction` and stay placeholders.
+
+The ordinal fragility flagged when mangling landed is gone. Symbols are no longer assigned during the definition walk — a **pre-pass** (`SymbolBuilder`) assigns every callable function its symbol up front, keyed by `FunctionScheme.id`, and both definitions and call sites read that one table. Definitions find their id by fingerprinting the decl span (`node_id_of`), which is what the checker registers as `decl_span`. Table membership doubles as the callability gate: a function whose signature is outside the lowerable subset is simply absent, so calls to it fall back to a placeholder instead of naming a symbol the module never defines. That keeps the merged module link-clean by construction rather than by coincidence.
+
+Two companion fixes: body-less declarations now reach the module as `ForeignDecl`s (`add_foreign` existed and the backend emitted them, but **lowering never called it** — so any call to `printf` would have emitted undeclared C); and the lowering walk now threads a single `LowerCtx` (checker result + symbol table + allocator) instead of three separate parameters, giving M3's loop labels and M5's arm state somewhere to live.
+
+Covered by six `test {}` blocks in `lower.f`, including one pinning that a call site names the *same* ordinal-suffixed symbol its definition was given (`f__2`) and that the symbol is defined in the module. Not yet lowered: variadic callees (the variadic tail needs per-argument types the call site doesn't carry), and `&expr` arguments, which still lower to a placeholder zero.
+
+**This is unverified end-to-end.** The harness cannot exercise it while `std.process` spawn is broken (see Open Issues) — the bootstrap never reaches its backend, so M2 is currently proven only by unit tests against the FIR, not by running a produced binary.
 
 **Resolved in this pass — real function-call resolution (self-host --check back to 0 errors, now with calls checked).** `check_call` no longer falls back to a fresh var: after the variant / type-instantiation attempts (precedence unchanged), it resolves **direct calls** against `FunctionRegistry` overloads, **UFCS calls** (receiver prepended as first argument, retried with the receiver adapted value↔`&T`, then through a bounded `op_deref` peel chain — the `Owned(T)` dispatch pattern), **Func-typed field calls** (`self.alloc_fn(...)` vtable dispatch; field types now substitute the instance's type args), and **indirect calls** through Func-typed bindings (an unbound callee is constrained to a fn type so lambda-typed locals infer). Winners are committed via `engine.specialize` + per-arg `unify` and recorded as `RtFunction(id)` on the call node for M2 lowering; failures report E2011/E2004. Overload choice mirrors the C# `ResolveOverload(WithDefaults)`: each candidate probes inside an engine checkpoint that rolls back, arity accepts `[required, total]` (`FunctionScheme` now carries the trailing-default count and variadic flag), preference is fewer quantified vars, then coercion cost (omitted defaults cost extra), then registration order. Turning calls real exposed and fixed seven latent bugs (64 self-host errors → 0): **void functions discard their trailing expression's value**; **statement-context ifs never require branch agreement** and no-else ifs are `void` (mirrors `InferIfAsStatement`); the **`T → Option(T)` coercion no longer fires into an unbound payload var** (it let `unwrap(Option($T))` swallow `Result` receivers — the C# rule requires payload equality); the missing **`Slice(u8) → String` reverse view cast** (the C# engine applies rules in both directions); **coercion inputs are zonked** so rules see through bound vars; **struct field reads substitute the instance's type args** (a `List(usize).ptr` read used to bind the definition's shared `T` globally); and **cast expressions are typed** (`x as &u8` yields the target type). One stdlib bug: `std.dict` counted only live entries in its load factor, so delete-heavy churn (the engine's checkpoint rollbacks) filled the table with tombstones and panicked — a `dead` counter now triggers the rehash (regression `test {}` in `dict.f`). Sidecar loading now merges **every** checked-in `.generated.f` (previously `#interface` origins only), so `#implement` expansions like `reader(&File)` resolve. Deliberate cuts, all silent (no false errors): **named-argument calls** keep the fresh-var fallback; **variadic surplus args** are not element-checked; **receivers left unbound by unchecked constructs** (match expressions) skip UFCS arbitration instead of letting the first overload bind them; **generic bodies** silence resolution failures (the reference checker re-checks them per specialization — deferred with the generics milestone); **op_deref chains are not recorded** for lowering. Covered by seven call-resolution `test {}` blocks in `checker.f`.
 
 **Resolved in this pass — FQN symbol mangling (link-clean merged module).** `lower_program` now takes the project's module FQNs (parallel to `modules`, from `AnalyzedProject.fqns`) and `lower.f::mangle_symbol` derives each function's C symbol: dots become double underscores and the module path prefixes the name (`flang_typer.checker` fn `deinit` → `flang_typer__checker__deinit`). `main` and `#foreign` fns keep their bare names (entry wiring / real C symbols); M2 call lowering must derive callee symbols through the same helper. Three companion fixes were needed before the probe linked: (1) *same-module overload sets* share one mangled name, so `lower.f::disambiguate` appends an ordinal to every repeat within one lowering walk (`std__allocator__deinit__2`) — positional, so M2 call sites will need a scheme-keyed mapping; (2) the C backend emits each *foreign declaration* at most once — merged modules re-declare the same symbol, and `core.io`'s many `printf` overloads all map to one; (3) two placeholder-arithmetic C errors: out-of-subset types now fold to `i64` instead of `ptr` (a pointer operand inside a float op is invalid C), and division by a literal-zero (placeholder) divisor lowers to a placeholder value instead of a constant `0 % 0` C rejects. Covered by `test {}` blocks in `lower.f` and `c_backend.f`.
 
-**Harness scoreboard (through the bootstrap, 2026-07-03, post-mangling).** The lit-style corpus runs through any compiler binary via `$FLANG` (see docs/architecture.md, "Execution mode"): `FLANG=bootstrap/build/flang.exe dotnet test.cs` → **131 passed / 385 failed / 14 skipped of 530** (from 9 / 507 / 14 on the first run, where the generated C died on bare-name redefinitions before any test-specific code ran). Failures now reach the run/compare stage and report wrong exit codes (typically 0) — the placeholder-lowering blocker above, not compile errors. Diagnostic coverage on *invalid* code is its own gap, distinct from the clean self-host typecheck: only a fraction of the `COMPILE-ERROR` tests see their expected code — e.g. `tests/harness/errors/error_char_literal_rejects_string.f` expects E2011, but the bootstrap type-checks the file clean and proceeds to codegen.
+**Coverage boundary — what "0 errors" measures.** A zero here means "nothing the checker looks at is wrong", not "the program is well-typed". The walk skips most of a function body:
+
+- `check_expr_kind` (`checker.f`) handles **10 of 24** `Expr` variants. Its `_ => fresh_var()` catch-all returns without recursing, so the whole subtree under an unhandled node is never visited. Unhandled: `Match`, `Lambda`, `Assignment`, `Index`, `Unary`, `AddressOf`, `Dereference`, `ArrayLit`, `InterpolatedString`, `NullPropagation`, `Range`, `Coalesce`, `Try`, `Error`.
+- `check_stmt` handles **3 of 10** `Stmt` variants (`Let`, `Expression`, `Return`) with `_ => {}`. `For`, `While`, `Loop`, and `Defer` bodies are never walked at all.
+- `check_binary` recurses into both operands and then returns a fresh var with no unification, so `1 + "hello"` type-checks clean.
+
+`ForStmt`, `WhileStmt`, `LoopStmt`, `DeferStmt`, `MatchExpr`, `LambdaExpr`, `IndexExpr`, `TryExpr`, `AssignmentExpr`, and `UnaryExpr` appear nowhere in `checker.f` — they are unmentioned, not stubbed. For scale, the self-host corpus (`lib/` + `stdlib/`, ~33.5k lines) contains ~435 `for` loops, ~137 `while`, ~499 `match` expressions, ~2175 assignments and ~1651 index expressions, all inside the never-visited set. What is genuinely validated is declarations, signatures, and the call graph — which is the hard part and is real — but expression-level checking inside statement bodies is largely absent. The two `main.f` errors above are the gap surfacing.
+
+**Harness scoreboard (through the bootstrap).** The lit-style corpus runs through any compiler binary via `$FLANG` (see docs/architecture.md, "Execution mode"): `FLANG=bootstrap/build/flang dotnet test.cs`.
+
+- *2026-07-03, post-mangling:* recorded as **131 passed / 385 failed / 14 skipped of 530**, with failures said to reach the run/compare stage and report wrong exit codes.
+- *2026-08-16, re-baselined:* **15 passed / 501 failed / 14 skipped**. The 131 figure does **not** reproduce in this tree. The reference compiler is green over the same corpus (516 / 0 / 14), so the corpus and the C# pipeline are healthy; the collapse is entirely on the bootstrap side, and it is not a lowering regression. Two causes, both since diagnosed:
+  1. `std.process` spawn fails for every program, so the bootstrap's C-compiler probe finds nothing and no build ever reaches the backend (see its own entry under Open Issues). This alone accounts for nearly all of it.
+  2. Missing template sidecars (below) failed every compilation at type-check time with ~92 errors before that.
+
+  Because cause 1 stops the backend outright, **the harness cannot currently measure lowering work through the bootstrap at all.** Fix spawn before treating any harness delta as a signal about codegen.
+
+Diagnostic coverage on *invalid* code is its own gap, distinct from the clean self-host typecheck: only a fraction of the `COMPILE-ERROR` tests see their expected code — e.g. `tests/harness/errors/error_char_literal_rejects_string.f` expects E2011, but the bootstrap type-checks the file clean and proceeds to codegen.
+
+**Template sidecars are build artifacts, not checked-in files.** Earlier notes in this document describe `reader.generated.f` / `writer.generated.f` and friends as "checked-in". They are not: `.gitignore:130` ignores `*.generated.f` globally, and `git ls-files 'stdlib/**/*.generated.f'` returns nothing. They exist only because a previous reference-compiler build wrote them (`src/FLang.CLI/Compiler.cs:299`, best-effort). This is load-bearing for the bootstrap, which cannot expand `#interface` / `#implement` itself.
+
+The failure mode is asymmetric and bites on a clean tree: the reference compiler expands only the modules an entry point actually imports, while the bootstrap's driver BFS seeds **every** stdlib source. So any stdlib module that nothing imports never gets a sidecar written, yet the bootstrap still loads it and fails on its unexpanded types. `stdlib/std/encoding/codec.f` (`#interface(Encoder, …)`, `#interface(Decoder, …)`) hit exactly this — 72 of the 92 errors — as did `std/io/file.f` (`#implement(File, Reader)`), with no `file.generated.f` on disk. Regenerating them all requires compiling a file that imports every stdlib module. **A fresh clone has zero sidecars and the bootstrap fails on everything.**
+
+**Fix directions:** either drop `*.generated.f` from `.gitignore` for `stdlib/` and commit them (makes the bootstrap's input reproducible, at the cost of generated files in review), or make sidecar generation an explicit build step that walks the whole stdlib rather than a side effect of whatever happened to be imported. The durable answer is teaching the bootstrap to expand templates itself, which removes the dependency entirely.
 
 **Resolved in this pass — non-generic type aliases.** `type VarId = u32`, `NodeId`, `NominalId`, `Level` and friends were registered as neither struct nor enum, so `resolve_named` could not find them (~130 `unknown type`). A new alias registry (since folded into the generic `lib/flang_typer/src/fqn_map.f`) is populated during the name-registration pass (`collect_one_name`) and expanded lazily in `resolve_named` — after the primitive and nominal lookups, reusing nominal-lookup visibility — so alias chains and cross-module targets resolve regardless of declaration order. Self-host `unknown type` dropped 156 -> 24 and the total error count 1205 -> 1073 (the residual 24 are all the `Writer`/`Reader` `*.generated.f` issue above). Covered by a cross-module `test {}` in `checker.f` plus the existing `flang_typer` / `flang_driver` suites. Generic aliases (`type Result(T, E) = ...`) and alias-cycle detection remain follow-ups.
 
