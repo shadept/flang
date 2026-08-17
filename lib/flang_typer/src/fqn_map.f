@@ -1,4 +1,4 @@
-// FQN-keyed map with import-visibility lookup — the shared shape behind
+// FQN-keyed map with import-visibility lookup - the shared shape behind
 // the alias and constant registries (type-alias bodies, module-level
 // constant types), and any future "named thing per module" table.
 //

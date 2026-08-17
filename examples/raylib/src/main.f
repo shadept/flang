@@ -1,4 +1,4 @@
-// Raylib demo — demonstrates FLang's C FFI binding generation.
+// Raylib demo - demonstrates FLang's C FFI binding generation.
 //
 // Build (macOS with Homebrew):
 //   brew install raylib

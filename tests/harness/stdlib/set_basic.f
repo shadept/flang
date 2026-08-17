@@ -14,7 +14,7 @@ pub fn main() i32 {
 
     s.add("hello")
     s.add("world")
-    s.add("hello")           // duplicate — no-op
+    s.add("hello")           // duplicate - no-op
     if s.len() != 2 { return 3 }
     if !s.contains("hello") { return 4 }
     if !s.contains("world") { return 5 }
@@ -26,7 +26,7 @@ pub fn main() i32 {
     if s.contains("hello") { return 9 }
     if s.len() != 1 { return 10 }
 
-    // iter — verify exactly the remaining element is yielded.
+    // iter - verify exactly the remaining element is yielded.
     let it = s.iter()
     let first = it.next()
     if first.is_none() { return 11 }

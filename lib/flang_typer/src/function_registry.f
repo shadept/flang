@@ -1,4 +1,4 @@
-// Function registry — overload sets indexed by name.
+// Function registry - overload sets indexed by name.
 //
 // `FunctionScheme` carries the polymorphic signature plus the
 // metadata the resolver needs (origin module, public visibility,
@@ -38,7 +38,7 @@ pub type FunctionScheme = struct {
 }
 
 // Multi-payload variants where one payload is a generic-typed value
-// (`List(FunctionScheme)`) confuse the FLang parser — the comma inside
+// (`List(FunctionScheme)`) confuse the FLang parser - the comma inside
 // the generic argument list is ambiguous with the variant-payload
 // separator. Wrapping the multi-payload case in its own struct keeps
 // the variant payload list unambiguous.
@@ -77,7 +77,7 @@ pub fn deinit(self: &FunctionRegistry) {
 }
 
 // Register `scheme` under `scheme.name`. Returns the assigned id.
-// Duplicate-signature detection is the caller's responsibility — the
+// Duplicate-signature detection is the caller's responsibility - the
 // registry stores whatever is pushed.
 pub fn register(self: &FunctionRegistry, scheme: FunctionScheme) u32 {
     let id = self.next_id
@@ -153,7 +153,7 @@ fn visibility_for(f: &FunctionScheme, vis: &Visibility) bool {
                 None => {},
             }
             // A foreign fn names a global link-time symbol; an import of its
-            // module suffices — `pub` is not required.
+            // module suffices - `pub` is not required.
             if !f.is_pub and !f.is_foreign { return false }
             return vis.visible.contains(m)
         },

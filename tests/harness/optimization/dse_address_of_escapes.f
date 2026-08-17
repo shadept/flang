@@ -1,7 +1,7 @@
 //! TEST: dse_address_of_escapes
 //! EXIT: 42
 
-// Taking a reference to a local causes the alloca to "escape" — its
+// Taking a reference to a local causes the alloca to "escape" - its
 // address is observable elsewhere. DSE must NOT eliminate stores to
 // such allocas even if the current function never reads them directly.
 

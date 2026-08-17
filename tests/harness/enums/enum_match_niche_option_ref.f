@@ -4,7 +4,7 @@
 // Regression for the niche-Option-match strip bug: matching `Option(&T)` where
 // `T` is a tagged enum used to fail with `E3002 Unresolved identifier` for
 // the `Some(p)` payload binding. LowerMatch was treating any IrPointer
-// scrutinee whose pointee is an IrEnum as "auto-deref before matching" —
+// scrutinee whose pointee is an IrEnum as "auto-deref before matching" -
 // which is the right move for a plain `&MyEnum` scrutinee, but wrong for
 // niche-optimised `Option(&MyEnum)` (also an IrPointer whose pointee is an
 // IrEnum). The fix: skip the auto-deref when the pointer is nullable, so

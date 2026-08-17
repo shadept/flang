@@ -1,9 +1,9 @@
 // Reusable #interface and #implement source generators.
 //
-// #interface(Name, Spec) — generates a vtable struct, wrapper struct, and
+// #interface(Name, Spec) - generates a vtable struct, wrapper struct, and
 //   forwarding dispatch methods for a trait-like interface.
 //
-// #implement(Impl, Iface) — generates shim functions, a static vtable
+// #implement(Impl, Iface) - generates shim functions, a static vtable
 //   constant, and a conversion function (lower-cased interface name) on the
 //   implementing type.
 

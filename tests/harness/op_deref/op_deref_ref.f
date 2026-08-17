@@ -1,7 +1,7 @@
 //! TEST: op_deref_ref
 //! EXIT: 7
 
-// op_deref on &Wrapper — auto-deref through the reference, then op_deref.
+// op_deref on &Wrapper - auto-deref through the reference, then op_deref.
 
 type Box = struct(T) { __value: T }
 

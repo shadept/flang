@@ -1,12 +1,12 @@
 // Phase 3 of the FIR optimization pipeline (RFC-015): inline small,
 // non-recursive, single-block callees into their callers. The point
-// isn't general perf — at -O2 the C compiler unwraps shim wrappers
+// isn't general perf - at -O2 the C compiler unwraps shim wrappers
 // itself. The point is collapsing FLang's scoped-mutability mutator
 // pattern (`pub fn add_function(self, f) { self.functions.push(f) }`)
 // so:
 //   1. Debug builds emit readable C.
 //   2. Stack-local structs stop having their addresses escape into
-//      opaque calls — making mem2reg's escape analysis tractable in
+//      opaque calls - making mem2reg's escape analysis tractable in
 //      the later pipeline phases.
 //
 // Phase 3 handles single-block callees only. Multi-block (`Result`-
@@ -15,7 +15,7 @@
 //
 // TODO(rfc-015 §8 Q6): once we emit `#line` directives the splice
 // needs to preserve the callee's source spans rather than reusing
-// the call site's. Flag-only for now — there are no line directives
+// the call site's. Flag-only for now - there are no line directives
 // to corrupt yet.
 
 import std.allocator
@@ -27,7 +27,7 @@ import std.set
 import std.string
 import flang_codegen.fir
 
-// Empirical lower bound on the FLang corpus — matches the C# pre-
+// Empirical lower bound on the FLang corpus - matches the C# pre-
 // decessor (`InliningPass.MaxInlineInstructions = 15`). Tune from
 // `InlineStats.bail_size` data when it accumulates.
 pub const MAX_INLINE_INSTRS: usize = 15
@@ -37,7 +37,7 @@ pub const MAX_INLINE_INSTRS: usize = 15
 pub const MAX_PASSES: i32 = 10
 
 // Telemetry returned to the caller. Bail counters are recorded on the
-// first pass only — later passes operate on whatever the first pass
+// first pass only - later passes operate on whatever the first pass
 // didn't already absorb and double-counting would be misleading.
 pub type InlineStats = struct {
     passes: i32
@@ -51,7 +51,7 @@ pub type InlineStats = struct {
 
 // Run the inliner over `m` to fixed point. The module is mutated in
 // place; functions that became uncalled by inlining stay in the
-// module (dead-function elimination is a separate pass — RFC-015 §4).
+// module (dead-function elimination is a separate pass - RFC-015 §4).
 pub fn inline_shims(m: &IrModule, allocator: &Allocator? = null) InlineStats {
     const alloc = allocator.or_global()
     let stats = InlineStats {
@@ -151,7 +151,7 @@ fn collect_foreign_names(m: &IrModule, alloc: &Allocator) Set(OwnedString) {
 }
 
 // ─────────────────────────────────────────────────────────────────────
-// Call-graph reachability — a function is recursive iff its own direct
+// Call-graph reachability - a function is recursive iff its own direct
 // callees can reach it transitively. Covers self-loops and mutual
 // recursion (A → B → A) uniformly without a stack-based SCC pass.
 // O(V * (V + E)) on the call graph; V is hundreds even on big modules.
@@ -204,7 +204,7 @@ fn find_recursive(m: &IrModule, foreigns: &Set(OwnedString), alloc: &Allocator) 
 }
 
 fn reaches_self(adj: &List(List(usize)), start: usize, alloc: &Allocator) bool {
-    // Dense integer membership — Bitset is one bit per element vs
+    // Dense integer membership - Bitset is one bit per element vs
     // Set(usize)'s ~32 bytes/entry hash table. set.f's preamble
     // explicitly points at Bitset for this case.
     let visited = bitset(adj.len, alloc)
@@ -239,7 +239,7 @@ fn reaches_self(adj: &List(List(usize)), start: usize, alloc: &Allocator) bool {
 }
 
 // ─────────────────────────────────────────────────────────────────────
-// Per-caller pass — rebuild every block with inlinable calls spliced
+// Per-caller pass - rebuild every block with inlinable calls spliced
 // in place. Uses two substitution maps:
 //
 //   result_subst : Dict(u32, Operand)
@@ -260,7 +260,7 @@ fn inline_calls_in(m: &IrModule, caller_idx: usize, inlinable: &Dict(OwnedString
     defer result_subst.deinit()
 
     // Chained access (m.functions[i].blocks[j].something = …) writes to
-    // a temp copy in flang's lowering today — bind the caller once and
+    // a temp copy in flang's lowering today - bind the caller once and
     // use that ref for all reads/writes inside the loop.
     let caller = &m.functions[caller_idx]
     const block_count = caller.blocks.len
@@ -380,13 +380,13 @@ fn splice_callee(
 // Operand / instruction / terminator cloning. Each instruction variant
 // has two cloning paths:
 //
-//   clone_callee_instr — used while splicing a callee body. Mints a
+//   clone_callee_instr - used while splicing a callee body. Mints a
 //     fresh result id via `caller.fresh_value_id()` for every value-
 //     producing instruction and records `old_id → Local(new_id)` in
 //     the splice-local substitution map. Operands are remapped first
 //     (SSA forbids forward-references to one's own result).
 //
-//   rewrite_instr — used for caller instructions that aren't being
+//   rewrite_instr - used for caller instructions that aren't being
 //     inlined. Preserves result ids; only remaps operands through the
 //     function-scoped result substitution.
 //

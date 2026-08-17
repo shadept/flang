@@ -2,7 +2,7 @@
 //! EXIT: 77
 
 // When only one field of a struct is read, the current (conservative) DSE
-// keeps the whole alloca alive. The important invariant is correctness —
+// keeps the whole alloca alive. The important invariant is correctness -
 // the program must still produce the right answer.
 
 type Pair = struct {

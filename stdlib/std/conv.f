@@ -81,7 +81,7 @@ pub fn format_u64(val: u64, buf: u8[], base: u8 = 10) Result(usize, ConvError) {
 // Format a signed 64-bit integer into `buf`. Returns bytes written.
 // Supports bases 2–16. Lowercase a–f for hex. A leading '-' is emitted for
 // negative values in every base (the absolute magnitude is rendered in the
-// requested base — no two's-complement bit pattern).
+// requested base - no two's-complement bit pattern).
 //
 // Required buffer capacity (upper bounds, includes room for the sign):
 //   base 10:  21 bytes

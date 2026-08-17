@@ -1,7 +1,7 @@
 //! TEST: let_reassign
 //! EXIT: 0
 
-// let bindings are mutable — reassignment is allowed.
+// let bindings are mutable - reassignment is allowed.
 
 pub fn main() i32 {
     let x: i32 = 10

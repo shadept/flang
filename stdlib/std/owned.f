@@ -1,7 +1,7 @@
-// Owned(T) — value-by-value ownership with explicit transfer tracking.
+// Owned(T) - value-by-value ownership with explicit transfer tracking.
 //
 // Pair with `defer buf.deinit()` to clean up on error and `buf.transfer()`
-// to hand off on success — the transfer disarms the defer so the caller
+// to hand off on success - the transfer disarms the defer so the caller
 // owns the value cleanly.
 //
 // Works for any T with `deinit(&T)` in scope: header-types like
@@ -54,7 +54,7 @@ pub fn is_owned(self: &Owned($T)) bool {
 }
 
 // Field/method access through the wrapper: `pat_buf.append(...)` dispatches
-// to StringBuilder.append. Returns a stable pointer into the inline payload —
+// to StringBuilder.append. Returns a stable pointer into the inline payload -
 // mutations through it persist (unlike a match-bound copy of the Some value).
 //
 // The pointer is computed by stepping past `Option`'s 4-byte tag plus padding

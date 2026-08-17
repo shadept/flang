@@ -1,12 +1,12 @@
 // Reusable #derive source generator.
 //
-// #derive(T, eq)          — field-by-field equality (op_eq)
-// #derive(T, clone)       — field-by-field copy
-// #derive(T, debug)       — format(self, sb, spec) for StringBuilder integration
-// #derive(T, hash)        — recursive FNV-1a hash combining field hashes
-// #derive(T, serialize)   — encode struct fields to an Encoder
-// #derive(T, deserialize) — decode struct fields from a Decoder
-// #derive(T, eq, clone)   — multiple traits via variadic params
+// #derive(T, eq)          - field-by-field equality (op_eq)
+// #derive(T, clone)       - field-by-field copy
+// #derive(T, debug)       - format(self, sb, spec) for StringBuilder integration
+// #derive(T, hash)        - recursive FNV-1a hash combining field hashes
+// #derive(T, serialize)   - encode struct fields to an Encoder
+// #derive(T, deserialize) - decode struct fields from a Decoder
+// #derive(T, eq, clone)   - multiple traits via variadic params
 //
 // serialize/deserialize require: import std.encoding.codec
 

@@ -1,4 +1,4 @@
-// std.process — spawn and manage child processes.
+// std.process - spawn and manage child processes.
 //
 // Usage:
 //   let cmd = command("clang")
@@ -16,7 +16,7 @@
 //
 // Environment:
 //   Default env is empty. `env(k, v)` adds one pair. `envs(pairs)` adds many.
-//   `inherit_env()` snapshots the parent process environment — call this
+//   `inherit_env()` snapshots the parent process environment - call this
 //   before any explicit `env()` overrides if you want both.
 
 import std.allocator
@@ -104,7 +104,7 @@ pub type ChildStdin = struct { __fd: i32 }
 // =============================================================================
 
 // Create a new Command for `prog`. By default no env vars are passed to the
-// child — call `inherit_env()` if your child needs PATH and friends.
+// child - call `inherit_env()` if your child needs PATH and friends.
 pub fn command(prog: String, allocator: &Allocator? = null) Command {
     let argv: List(OwnedString) = list(4, allocator)
     argv.push(from_view(prog, allocator))
@@ -222,7 +222,7 @@ pub fn spawn(self: &Command) Result(Child, ProcessError) {
         return Err(ProcessError.InvalidArgument)
     }
 
-    // Pack argv pointers as a usize array — matches char** on the C side.
+    // Pack argv pointers as a usize array - matches char** on the C side.
     let argv_ptrs: List(usize) = list(self.__args.len, self.__allocator)
     defer argv_ptrs.deinit()
     for i in 0..self.__args.len {
@@ -306,7 +306,7 @@ pub fn wait(self: &Child) Result(i32, ProcessError) {
     return Ok(exit)
 }
 
-// Terminate the child. Does not wait — call wait() to reap.
+// Terminate the child. Does not wait - call wait() to reap.
 pub fn kill(self: &Child) Result((), ProcessError) {
     let err: i32 = 0
     const status = __flang_proc_kill(self.__handle, &err)

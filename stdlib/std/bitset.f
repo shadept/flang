@@ -2,7 +2,7 @@
 //
 // Use for dense integer-indexed sets: liveness, reachability,
 // optimization-pass change tracking, variant-tag presence. The API
-// mirrors `Set(usize)` — `add` / `remove` / `contains` / `iter` — so a
+// mirrors `Set(usize)` - `add` / `remove` / `contains` / `iter` - so a
 // caller can switch between the two when density assumptions change.
 //
 // `union` / `intersect` are O(words/64) per call, the killer feature
@@ -124,7 +124,7 @@ pub fn difference(self: &Bitset, other: Bitset) {
 }
 
 // =============================================================================
-// Iterator — yields indices of set bits in ascending order.
+// Iterator - yields indices of set bits in ascending order.
 // Skips entire zero words via `trailing_zeros_u64` so sparse bitsets are
 // O(set bits) rather than O(capacity).
 // =============================================================================

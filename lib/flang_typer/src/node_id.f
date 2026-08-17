@@ -1,4 +1,4 @@
-// NodeId — stable identity for an AST node across the checker, the
+// NodeId - stable identity for an AST node across the checker, the
 // inference results, the reporter, and the LSP.
 //
 // The parser hands every AST node a `SourceSpan`. Spans are stable

@@ -2,7 +2,7 @@
 //! EXIT: 42
 
 // Variant construction with an anonymous-struct literal at the payload
-// position must coerce to the variant's nominal payload type — the
+// position must coerce to the variant's nominal payload type - the
 // lowering pass passes the payload type as the expected type so the
 // `.{ ... }` materialises as the named struct, not its `__anon_*`
 // synthesis.

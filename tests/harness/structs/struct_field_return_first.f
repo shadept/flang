@@ -2,7 +2,7 @@
 //! EXIT: 7
 
 // The first field (offset 0) of a never-address-taken struct literal must
-// load correctly too — the companion to struct_field_return_nonfirst, so the
+// load correctly too - the companion to struct_field_return_nonfirst, so the
 // pair pins both the offset-0 and offset-!=0 field loads in a bare return.
 
 type Pt = struct {

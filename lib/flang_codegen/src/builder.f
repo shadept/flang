@@ -61,7 +61,7 @@ pub fn fresh(self: &FunctionBuilder) u32 {
 }
 
 // Declare a function parameter and return its SSA operand. Call before
-// `.entry()` — order determines argument order at call sites.
+// `.entry()` - order determines argument order at call sites.
 pub fn param(self: &FunctionBuilder, ty: IrType) Operand {
     const id = self.fresh()
     self.func.add_param(BlockParam { id = id, ty = ty })
@@ -138,7 +138,7 @@ pub fn param(self: &BlockBuilder, i: usize) Operand {
     return Operand.Local(id)
 }
 
-// Label of this block — useful when building `BlockTarget`s.
+// Label of this block - useful when building `BlockTarget`s.
 pub fn label(self: &BlockBuilder) String {
     return self.fb.func.blocks[self.block_idx].label
 }

@@ -1,4 +1,4 @@
-// Concrete Syntax Tree — the lossless tree built directly from the token
+// Concrete Syntax Tree - the lossless tree built directly from the token
 // stream. Every byte of the source is reachable through some Token in the
 // CST; reconstructing source is a depth-first walk emitting each token's
 // leading + text + trailing trivia in order.
@@ -42,7 +42,7 @@ pub type NodeKind = enum {
     EnumDecl
     // Variant inside an enum declaration.
     EnumVariant
-    // `type Alias = SomeType` — pure type alias with no struct/enum body.
+    // `type Alias = SomeType` - pure type alias with no struct/enum body.
     TypeAliasDecl
     // `test "name" { ... }` block.
     TestDecl
@@ -75,17 +75,17 @@ pub type NodeKind = enum {
     // Expressions
     // ─────────────────────────────────────────────────────────────────────
 
-    // `a + b`, `a == b`, etc. — every infix operator.
+    // `a + b`, `a == b`, etc. - every infix operator.
     BinaryExpr
-    // `-a`, `!a`, `~a` — prefix unary.
+    // `-a`, `!a`, `~a` - prefix unary.
     UnaryExpr
     // `&a`.
     AddressOfExpr
     // `a.*`.
     DereferenceExpr
-    // `a.b` and `a.b()` — field access or UFCS method dispatch.
+    // `a.b` and `a.b()` - field access or UFCS method dispatch.
     MemberAccessExpr
-    // `a[i]` and `a[i] = v` — index read/write.
+    // `a[i]` and `a[i] = v` - index read/write.
     IndexExpr
     // `f(a, b)`, including UFCS calls and op_call dispatch.
     CallExpr
@@ -97,19 +97,24 @@ pub type NodeKind = enum {
     CoalesceExpr
     // `a?.b`.
     NullPropagationExpr
-    // `expr?` — postfix try.
+    // `expr?` - postfix try.
     TryExpr
     // `0..10`, `0..=9`, `..0`, `1..`.
     RangeExpr
-    // `[1, 2, 3]` literal — distinct from `[T; N]` type expressions.
+    // `[1, 2, 3]` literal - distinct from `[T; N]` type expressions.
     ArrayLiteralExpr
-    // `.{ x = 1, y = 2 }` — needs target type from context.
+    // `.{ x = 1, y = 2 }` - needs target type from context.
     AnonymousStructExpr
-    // `Point { x = 1, y = 2 }` — nominal struct literal.
+    // `Point { x = 1, y = 2 }` - nominal struct literal.
     StructConstructionExpr
-    // `{ ... }` — block expression with optional trailing value.
+    // `{ ... }` - block expression with optional trailing value.
     BlockExpr
-    // `if cond { ... } else { ... }` — also valid in expression position.
+    // `( expr )` - a parenthesised group. Kept as its own node so the CST
+    // retains the parens, but it carries no semantics of its own: it
+    // projects to the inner expression, not to a block (which would add a
+    // scope the source never asked for).
+    ParenExpr
+    // `if cond { ... } else { ... }` - also valid in expression position.
     IfExpr
     // `for x in iter { ... }`.
     ForLoopExpr
@@ -121,7 +126,7 @@ pub type NodeKind = enum {
     MatchExpr
     // One arm inside a match expression.
     MatchArm
-    // `fn(x: T) U { ... }` — anonymous function literal (may capture).
+    // `fn(x: T) U { ... }` - anonymous function literal (may capture).
     LambdaExpr
     // `$"text {expr} more"` and friends.
     InterpolatedStringExpr
@@ -130,7 +135,7 @@ pub type NodeKind = enum {
     // Bare identifier reference.
     IdentifierExpr
 
-    // Literal expressions — one kind per literal shape.
+    // Literal expressions - one kind per literal shape.
     IntegerLiteralExpr
     FloatLiteralExpr
     StringLiteralExpr
@@ -143,23 +148,23 @@ pub type NodeKind = enum {
     // Patterns (match arms and destructuring)
     // ─────────────────────────────────────────────────────────────────────
 
-    // `_` — matches anything, no binding.
+    // `_` - matches anything, no binding.
     WildcardPattern
     // Bare identifier binding any value.
     VariablePattern
-    // `42`, `"x"`, `true` — equality via op_eq.
+    // `42`, `"x"`, `true` - equality via op_eq.
     LiteralPattern
-    // `Some(x)`, `Move(x, y)` — enum-variant destructure.
+    // `Some(x)`, `Move(x, y)` - enum-variant destructure.
     EnumVariantPattern
     // `A | B | C`.
     OrPattern
-    // `0..10`, `0..=9` — pattern-only `..=` token allowed here.
+    // `0..10`, `0..=9` - pattern-only `..=` token allowed here.
     RangePattern
     // `Point { x, y, .. }`.
     StructPattern
     // `(a, b)`.
     TuplePattern
-    // `else` arm — catch-all default.
+    // `else` arm - catch-all default.
     ElsePattern
 
     // ─────────────────────────────────────────────────────────────────────
@@ -176,9 +181,9 @@ pub type NodeKind = enum {
     ArrayType
     // `T[]`.
     SliceType
-    // `T?` — sugar for Option(T).
+    // `T?` - sugar for Option(T).
     OptionalType
-    // `(A, B)` — sugar for anonymous struct `{ __0: A, __1: B }`.
+    // `(A, B)` - sugar for anonymous struct `{ __0: A, __1: B }`.
     TupleType
     // Inline `struct { ... }` and `enum { ... }` in type position.
     AnonymousStructType
@@ -190,7 +195,7 @@ pub type NodeKind = enum {
 
     // Parser produced this where the grammar rejected input. Preserves
     // child tokens so the formatter can still re-emit source on broken
-    // syntax — partial trees stay editable.
+    // syntax - partial trees stay editable.
     Error
 }
 
@@ -199,7 +204,7 @@ pub type NodeKind = enum {
 // Child of a CST node: either a sub-node or a leaf token. CST nodes
 // alternate between these freely; a `CallExpr` for example has a child
 // token for `(`, a list of argument node children separated by `,` tokens,
-// and a closing `)` token — every byte accounted for.
+// and a closing `)` token - every byte accounted for.
 pub type CstChild = enum {
     NodeChild(CstNode)
     TokenChild(Token)
@@ -207,7 +212,7 @@ pub type CstChild = enum {
 
 // A node in the CST. `start` and `end` cover every child token's byte
 // range (including the trivia attached to the first and last tokens).
-// Children are stored in source order — iterating them and concatenating
+// Children are stored in source order - iterating them and concatenating
 // their bytes yields a substring of the original source.
 pub type CstNode = struct {
     kind: NodeKind

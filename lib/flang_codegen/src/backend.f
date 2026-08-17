@@ -1,4 +1,4 @@
-// Backend interface — shared types and contract that every codegen
+// Backend interface - shared types and contract that every codegen
 // backend implements. The C backend lives in `c_backend.f`. Future
 // backends (LLVM, QBE, Cranelift) plug in the same shape.
 //
@@ -37,7 +37,7 @@ pub type BuildMode = enum {
 // backend honours every field.
 //
 // Lifetime: `BuildOptions` owns the inner lists; call `deinit()` when
-// done. String fields are *borrowed* views — the caller keeps backing
+// done. String fields are *borrowed* views - the caller keeps backing
 // storage alive for the duration of `compile()`.
 pub type BuildOptions = struct {
     // Final artifact path (executable). On Windows, the backend appends
@@ -78,7 +78,7 @@ pub type BuildOptions = struct {
 
     // Force a specific compiler binary instead of running discovery.
     // The path is taken verbatim; required env vars (e.g. MSVC
-    // INCLUDE/LIB) are *not* synthesised — caller is responsible.
+    // INCLUDE/LIB) are *not* synthesised - caller is responsible.
     compiler_override: String?
 
     // Allocator used for everything the backend allocates on behalf of
@@ -119,7 +119,7 @@ pub fn deinit(self: &BuildOptions) {
     self.ldflags.deinit()
 }
 
-// Fluent helpers — let callers chain configuration without juggling the
+// Fluent helpers - let callers chain configuration without juggling the
 // inner lists.
 pub fn add_c_file(self: &BuildOptions, p: String) &BuildOptions {
     self.extra_c_files.push(p)
@@ -200,7 +200,7 @@ pub type BuildError = enum {
 }
 
 // ─────────────────────────────────────────────────────────────────────────
-// Compiler info — populated by each backend's discovery routine
+// Compiler info - populated by each backend's discovery routine
 // ─────────────────────────────────────────────────────────────────────────
 
 pub type CompilerKind = enum {

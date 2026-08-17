@@ -2,7 +2,7 @@
 //! EXIT: 7
 
 // `dict(allocator?)` zero-inits a Dict and resolves the allocator once.
-// Same shape as `list(capacity, allocator?)` — K and V are inferred from
+// Same shape as `list(capacity, allocator?)` - K and V are inferred from
 // the call's expected type. Replaces the prior `let d: Dict(...); d.allocator = ...`
 // pattern, which is now forbidden by E2114.
 

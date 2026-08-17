@@ -17,7 +17,7 @@
 // Pins that `break` and `continue` target only the innermost loop: when the
 // inner loop breaks, only defers inside the inner body fire. The outer-loop
 // `defer emit("outer-body")` and the function-level `defer emit("function-defer")`
-// must NOT fire during the inner break — they fire at their own scope exits
+// must NOT fire during the inner break - they fire at their own scope exits
 // (each outer iteration end, and the final function return, respectively).
 
 import core.io

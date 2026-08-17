@@ -1,7 +1,7 @@
-// Parser — turns a Token stream into a CstNode tree.
+// Parser - turns a Token stream into a CstNode tree.
 //
 // Recursive descent. Every Token from the input stream lands somewhere in
-// the produced tree — error recovery wraps unrecognised runs in `Error`
+// the produced tree - error recovery wraps unrecognised runs in `Error`
 // subtrees rather than dropping tokens, so the formatter can still
 // round-trip broken source. Diagnostics accumulate on `self.diagnostics`
 // for tooling to consume.
@@ -42,7 +42,7 @@ pub type Parser = struct {
     // internal call sites just forward `self.allocator` without
     // re-resolving.
     allocator: &Allocator
-    // Accumulated parse-time diagnostics. The parser never throws — it
+    // Accumulated parse-time diagnostics. The parser never throws - it
     // records an error here, recovers, and keeps going. Callers may
     // read after `parse_module()`.
     diagnostics: List(Diagnostic)
@@ -51,13 +51,13 @@ pub type Parser = struct {
     // `parse_module()` so spans reach back to the source.
     file_id: i32
     // True while parsing the condition of an `if`/`for`/`while` without
-    // parens — `{` then terminates the expression instead of starting a
+    // parens - `{` then terminates the expression instead of starting a
     // struct construction or block literal.
     stop_at_brace: bool
 }
 
 // Construct a Parser over the given token list. The list is borrowed
-// — every CST node will reference the original tokens, so `tokens`
+// - every CST node will reference the original tokens, so `tokens`
 // must outlive the produced tree. `allocator` backs every CST child
 // list and the diagnostics list; pass `null` to default to the global
 // allocator (resolved once here via `or_global()`).
@@ -75,7 +75,7 @@ pub fn parser(tokens: List(Token), allocator: &Allocator? = null) Parser {
 
 // Release the parser's diagnostics list. The token list is borrowed
 // from the caller and is NOT freed here. Each `Diagnostic` owns its
-// `message` / `hint` OwnedStrings — those are freed by the list's
+// `message` / `hint` OwnedStrings - those are freed by the list's
 // element walk inside `deinit()`.
 pub fn deinit(self: &Parser) {
     self.diagnostics.deinit()
@@ -89,7 +89,7 @@ fn current(self: &Parser) Token {
     if self.position < self.tokens.len {
         return self.tokens[self.position]
     }
-    // Past Eof — should not happen if the lexer terminates with Eof — but
+    // Past Eof - should not happen if the lexer terminates with Eof - but
     // synthesise one as a guard so misuse doesn't index out of bounds.
     return synth_eof(self)
 }
@@ -98,7 +98,7 @@ fn synth_eof(self: &Parser) Token {
     if self.tokens.len > 0 {
         return self.tokens[self.tokens.len - 1]
     }
-    // Zero-token input — caller misuse. Hand back a degenerate Eof.
+    // Zero-token input - caller misuse. Hand back a degenerate Eof.
     let zero: usize = 0
     return Token {
         kind = TokenKind.Eof,
@@ -204,7 +204,7 @@ fn record_error_here(self: &Parser, code: String, message: OwnedString) {
 
 // Parse the entire token stream as a top-level module: imports,
 // declarations, tests. Always returns a `Module` CST node, even on
-// malformed input — bad subtrees are wrapped in `NodeKind.Error` so
+// malformed input - bad subtrees are wrapped in `NodeKind.Error` so
 // the formatter and CST consumers can still round-trip the source.
 // Consumes every token up to and including `Eof`.
 pub fn parse_module(self: &Parser) CstNode {
@@ -235,7 +235,7 @@ pub fn parse_module(self: &Parser) CstNode {
         push_node_into(&b, node)
     }
 
-    // Trailing Eof token rounds out the module — consume it into the
+    // Trailing Eof token rounds out the module - consume it into the
     // node so trailing trivia attached to it is preserved.
     if self.current_kind() == TokenKind.Eof {
         self.eat_into(&b)
@@ -280,14 +280,14 @@ fn parse_top_level(self: &Parser) CstNode {
         if next == TokenKind.Const { return self.parse_variable_decl_with_directives(leading) }
         if next == TokenKind.Import {
             // `pub import` should have been consumed in parse_module's
-            // header. If it reaches us, hoist it anyway — but it counts
+            // header. If it reaches us, hoist it anyway - but it counts
             // as an out-of-order import.
             self.record_error_here(
                 "E1003",
                 $"imports must precede declarations")
             return self.parse_import()
         }
-        // Unknown form after `pub` — recover by wrapping the run in Error.
+        // Unknown form after `pub` - recover by wrapping the run in Error.
         return self.recover_unexpected_top_level(leading)
     }
 
@@ -373,7 +373,7 @@ fn eat_identifier_or_keyword(self: &Parser, b: &NodeBuilder) {
 // ─────────────────────────────────────────────────────────────────────────
 
 // `#name` or `#name(arg, arg, ...)`. Args inside parens are parsed
-// loosely — any tokens until matched `)` are accepted, since directive
+// loosely - any tokens until matched `)` are accepted, since directive
 // arguments cover identifiers, literals, types, and anonymous-struct
 // shapes.
 fn parse_directive(self: &Parser) CstNode {
@@ -440,7 +440,7 @@ fn parse_generator_def(self: &Parser) CstNode {
 
 // `#name(args)` standalone at top level (not preceded by `#define`,
 // and `name` not in the known-directive set). Arguments captured
-// balanced — same shape as a directive call.
+// balanced - same shape as a directive call.
 fn parse_generator_invocation(self: &Parser) CstNode {
     let b = self.open(NodeKind.GeneratorInvocation)
     self.eat_into(&b)                                                       // `#`
@@ -463,7 +463,7 @@ fn parse_function_with_directives(self: &Parser, leading: List(CstNode)) CstNode
     return finish(b)
 }
 
-// Function body builder — fills `b` with: [pub] fn name(params) ret_type? { body }
+// Function body builder - fills `b` with: [pub] fn name(params) ret_type? { body }
 // or [pub] fn name(params) ret_type (no body, for `#foreign`).
 fn parse_function_into(self: &Parser, b: &NodeBuilder) {
     if self.current_kind() == TokenKind.Pub { self.eat_into(b) }
@@ -482,7 +482,7 @@ fn parse_function_into(self: &Parser, b: &NodeBuilder) {
         const body = self.parse_block_expr()
         push_node_into(b, body)
     }
-    // No body? Foreign functions go without one — that's fine, we just
+    // No body? Foreign functions go without one - that's fine, we just
     // stop here. Anything else (a stray statement) bubbles up to the
     // top-level error recovery.
 }
@@ -568,7 +568,7 @@ fn parse_type_decl_with_directives(self: &Parser, leading: List(CstNode)) CstNod
         self.eat_into(&b)
         self.parse_enum_body_into(&b)
     } else {
-        // Plain alias `type T = OtherType` — parse a type expression.
+        // Plain alias `type T = OtherType` - parse a type expression.
         const t = self.parse_type()
         push_node_into(&b, t)
     }
@@ -735,7 +735,7 @@ fn parse_statement(self: &Parser) CstNode {
         return finish(b)
     }
     if k == TokenKind.Type {
-        // Local type decl — wrap in TypeAliasDecl (kind may be rewritten
+        // Local type decl - wrap in TypeAliasDecl (kind may be rewritten
         // by parse_type_decl_with_directives). We bypass directive
         // collection because the spec disallows them on local types.
         let empty: List(CstNode) = list(0, self.allocator)
@@ -755,7 +755,7 @@ fn parse_statement(self: &Parser) CstNode {
         if self.peek_kind(1) == TokenKind.If {
             return self.parse_if_directive_stmt()
         }
-        // Free-floating directive — treat as a directive node and continue.
+        // Free-floating directive - treat as a directive node and continue.
         return self.parse_directive()
     }
     // Default: expression statement.
@@ -811,7 +811,7 @@ fn parse_defer_stmt(self: &Parser) CstNode {
 }
 
 // `#if(cond) { … } [else { … }]`. Condition tokens are consumed
-// structurally — the template-expression grammar lives one layer up
+// structurally - the template-expression grammar lives one layer up
 // and isn't surfaced in the CST yet.
 fn parse_if_directive_stmt(self: &Parser) CstNode {
     let b = self.open(NodeKind.IfDirectiveStmt)
@@ -919,7 +919,7 @@ fn parse_while_loop(self: &Parser) CstNode {
     return finish(b)
 }
 
-// `expr match { pat => result, ... }` — postfix, parsed after a unary
+// `expr match { pat => result, ... }` - postfix, parsed after a unary
 // expression in parse_binary_expression. `scrutinee` is the left-hand
 // side; this method consumes the `match` keyword and arms.
 fn parse_match_tail(self: &Parser, scrutinee: CstNode) CstNode {
@@ -940,7 +940,7 @@ fn parse_match_tail(self: &Parser, scrutinee: CstNode) CstNode {
 }
 
 // Pattern is parsed as a token run up to the `=>` arrow (with optional
-// `if guard`) — full pattern grammar (RFC-010) isn't structurally
+// `if guard`) - full pattern grammar (RFC-010) isn't structurally
 // surfaced yet, but every token stays accounted for.
 fn parse_match_arm(self: &Parser) CstNode {
     let b = self.open(NodeKind.MatchArm)
@@ -950,7 +950,7 @@ fn parse_match_arm(self: &Parser) CstNode {
         if k == TokenKind.FatArrow { break }
         if k == TokenKind.CloseBrace { break }
         if k == TokenKind.Comma { break }
-        // `if cond` guard — eat `if` then parse a regular expression so
+        // `if cond` guard - eat `if` then parse a regular expression so
         // the guard sits in the arm with full structure preserved.
         if k == TokenKind.If {
             self.eat_into(&b)
@@ -982,7 +982,7 @@ fn parse_match_arm(self: &Parser) CstNode {
     return finish(b)
 }
 
-// Match arm RHS — accepts `return expr`, bare `break` / `continue`, a
+// Match arm RHS - accepts `return expr`, bare `break` / `continue`, a
 // block expression, or a plain expression. These divergent forms are
 // expressions of type `never` in spec terms but the recursive-descent
 // path through parse_expression doesn't enter them directly.
@@ -996,7 +996,7 @@ fn parse_arm_body(self: &Parser) CstNode {
 }
 
 // ─────────────────────────────────────────────────────────────────────────
-// Expressions — Pratt parser
+// Expressions - Pratt parser
 // ─────────────────────────────────────────────────────────────────────────
 
 pub fn parse_expression(self: &Parser) CstNode {
@@ -1023,7 +1023,7 @@ fn parse_binary_expression(self: &Parser, parent_precedence: i32) CstNode {
 
     loop {
         const k = self.current_kind()
-        // Assignment is right-associative and only at the top level — we
+        // Assignment is right-associative and only at the top level - we
         // detect it here before falling through to the precedence ladder.
         if k == TokenKind.Equals and parent_precedence == 0i32 {
             let b = self.open(NodeKind.AssignmentExpr)
@@ -1037,7 +1037,7 @@ fn parse_binary_expression(self: &Parser, parent_precedence: i32) CstNode {
         const prec = binary_op_precedence(k)
         if prec == 0i32 or prec <= parent_precedence { break }
         if k == TokenKind.DotDot {
-            // Range — right side optional.
+            // Range - right side optional.
             let b = self.open(NodeKind.RangeExpr)
             b.start = left.start
             push_node_into(&b, left)
@@ -1142,7 +1142,7 @@ fn parse_postfix_chain(self: &Parser, expr: CstNode) CstNode {
         if k == TokenKind.OpenParenthesis {
             // Call against an expression value (e.g. `(get())(x)`). For
             // simple `name(args)` calls the identifier branch in
-            // parse_primary_expression already wraps them — this handles
+            // parse_primary_expression already wraps them - this handles
             // the chained / parenthesised cases.
             let b = self.open(NodeKind.CallExpr)
             b.start = cur.start
@@ -1181,7 +1181,7 @@ fn parse_member_or_call_or_deref(self: &Parser, recv: CstNode) CstNode {
         self.eat_into(&b)
         return finish(b)
     }
-    // `.identifier` — may be followed by `(args)` for UFCS call.
+    // `.identifier` - may be followed by `(args)` for UFCS call.
     if next == TokenKind.Identifier {
         self.position = dot_pos
         let b = self.open(NodeKind.MemberAccessExpr)
@@ -1196,7 +1196,7 @@ fn parse_member_or_call_or_deref(self: &Parser, recv: CstNode) CstNode {
         }
         return finish(b)
     }
-    // Stray `.` — record error and return a member-access shell.
+    // Stray `.` - record error and return a member-access shell.
     self.position = dot_pos
     let b = self.open(NodeKind.MemberAccessExpr)
     b.start = recv.start
@@ -1332,7 +1332,7 @@ fn parse_struct_construction_body(self: &Parser, b: &NodeBuilder) {
                 const value = self.parse_expression()
                 push_node_into(b, value)
             }
-            // Shorthand `field` — no `=`, name speaks for itself.
+            // Shorthand `field` - no `=`, name speaks for itself.
             if self.current_kind() == TokenKind.Comma { self.eat_into(b) }
         } else {
             self.record_expected(TokenKind.Identifier, "E1002")
@@ -1352,7 +1352,7 @@ fn parse_anonymous_struct(self: &Parser) CstNode {
 }
 
 // `(a)` grouped expression, `(a, b)` tuple, `(a,)` 1-tuple. We don't
-// surface different node kinds yet — both become a parenthesised run
+// surface different node kinds yet - both become a parenthesised run
 // of expressions / commas under one node.
 fn parse_paren_expression(self: &Parser) CstNode {
     // Empty `()` → unit, modelled as the zero-element tuple expression so
@@ -1363,7 +1363,7 @@ fn parse_paren_expression(self: &Parser) CstNode {
         self.eat_into(&b)
         return finish(b)
     }
-    let b = self.open(NodeKind.BlockExpr)                                   // placeholder kind
+    let b = self.open(NodeKind.ParenExpr)
     self.eat_into(&b)                                                       // `(`
     let count = 0usize
     let saw_comma = false
@@ -1379,9 +1379,8 @@ fn parse_paren_expression(self: &Parser) CstNode {
         break
     }
     self.expect_into(&b, TokenKind.CloseParenthesis, "E1002")
-    // Single expression with no trailing comma → grouped; otherwise tuple.
-    // We model both as BlockExpr / AnonymousStructExpr respectively —
-    // a follow-up may introduce dedicated kinds.
+    // A single expression with no trailing comma is a grouped expression;
+    // anything else (a comma, zero elements, or several) is a tuple.
     if saw_comma or count != 1 {
         b.kind = NodeKind.AnonymousStructExpr
     }
@@ -1396,7 +1395,7 @@ fn parse_array_literal(self: &Parser) CstNode {
         push_node_into(&b, e)
         if self.current_kind() == TokenKind.Comma { self.eat_into(&b) }
         else if self.current_kind() == TokenKind.Semicolon {
-            // `[T; N]` size syntax in expression position — preserve it.
+            // `[T; N]` size syntax in expression position - preserve it.
             self.eat_into(&b)
             const size_expr = self.parse_expression()
             push_node_into(&b, size_expr)
@@ -1437,7 +1436,7 @@ fn parse_lambda_expression(self: &Parser) CstNode {
 }
 
 // `$"…"` / `$(args)"…"` / `$ident"…"`. Forms 2 and 3 only resolve when
-// the parser drives the lexer one token at a time (see known-issues —
+// the parser drives the lexer one token at a time (see known-issues -
 // the bootstrap parser pre-tokenises, so 2 and 3 fall back to plain
 // string literals with a leading `$`/`$ident`/`$(args)` run).
 fn parse_interpolated_string(self: &Parser) CstNode {
@@ -1489,7 +1488,7 @@ fn parse_interp_body_into(self: &Parser, b: &NodeBuilder) {
             if self.current_kind() == TokenKind.InterpHoleEnd { self.eat_into(b) }
             continue
         }
-        // Unknown — eat it to keep position progressing.
+        // Unknown - eat it to keep position progressing.
         self.eat_into(b)
     }
     if self.current_kind() == TokenKind.InterpStringEnd { self.eat_into(b) }
@@ -1546,7 +1545,7 @@ fn parse_primary_type(self: &Parser) CstNode {
         return finish(b)
     }
     if k == TokenKind.Dollar {
-        // Generic type-parameter binder `$T` — single Dollar + identifier.
+        // Generic type-parameter binder `$T` - single Dollar + identifier.
         let b = self.open(NodeKind.NamedType)
         self.eat_into(&b)
         if self.current_kind() == TokenKind.Identifier { self.eat_into(&b) }
@@ -1585,7 +1584,7 @@ fn parse_primary_type(self: &Parser) CstNode {
         if self.current_kind() == TokenKind.OpenParenthesis {
             self.eat_into(&b)
             while !self.at_eof() and self.current_kind() != TokenKind.CloseParenthesis {
-                // Optional parameter name: `fn(x: T)` — peek `ident :`
+                // Optional parameter name: `fn(x: T)` - peek `ident :`
                 // then eat both before falling through to the type expr.
                 if self.current_kind() == TokenKind.Identifier
                     and self.peek_kind(1) == TokenKind.Colon {
@@ -1621,7 +1620,7 @@ fn parse_primary_type(self: &Parser) CstNode {
         }
         return finish(b)
     }
-    // Fall through — wrap into Error so the formatter still has the bytes.
+    // Fall through - wrap into Error so the formatter still has the bytes.
     let b = self.open(NodeKind.Error)
     self.record_error_here("E1002", $"expected a type, found `{self.current().text}`")
     if !self.at_eof() { self.eat_into(&b) }
@@ -1640,7 +1639,7 @@ fn parse_type_args_into(self: &Parser, b: &NodeBuilder) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────
-// Precedence table — mirrors docs/syntax.md operator table.
+// Precedence table - mirrors docs/syntax.md operator table.
 // ─────────────────────────────────────────────────────────────────────────
 
 fn binary_op_precedence(kind: TokenKind) i32 {

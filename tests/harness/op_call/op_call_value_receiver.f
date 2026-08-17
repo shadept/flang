@@ -1,7 +1,7 @@
 //! TEST: op_call_value_receiver
 //! EXIT: 42
 
-// op_call with value receiver (self: T, not &T) — consumes the receiver.
+// op_call with value receiver (self: T, not &T) - consumes the receiver.
 
 type Doubler = struct { factor: i32 }
 

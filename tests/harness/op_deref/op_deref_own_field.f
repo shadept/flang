@@ -1,7 +1,7 @@
 //! TEST: op_deref_own_field
 //! EXIT: 99
 
-// Own fields take priority over op_deref — accessing 'tag' should
+// Own fields take priority over op_deref - accessing 'tag' should
 // return the wrapper's own field, not look through op_deref.
 
 type Tagged = struct(T) { tag: i32, __value: T }

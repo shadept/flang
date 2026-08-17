@@ -1,7 +1,7 @@
 //! TEST: closure_capture_value_semantics
 //! EXIT: 5
 
-// Captures are by value — the closure's `k` is a *copy* of the local at the
+// Captures are by value - the closure's `k` is a *copy* of the local at the
 // literal site, so reassigning the outer `k` after construction must not
 // change what the closure observes.
 

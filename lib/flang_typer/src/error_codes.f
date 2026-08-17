@@ -19,6 +19,10 @@ pub const E_CYCLIC_ALIAS: String = "E2036"
 pub const E_UNKNOWN_VARIANT: String = "E2037"
 pub const E_UNINFERRED: String = "E2001"
 pub const E_DUP_SIGNATURE: String = "E2103"
+// A pattern form the front end cannot yet represent. Reported rather than
+// ignored: an unrepresented pattern would otherwise be indistinguishable
+// from a wildcard and silently match everything.
+pub const E_UNSUPPORTED_PATTERN: String = "E2115"
 
 pub const W_DEPRECATED: String = "W2001"
 pub const W_DEPRECATED_FN: String = "W2002"

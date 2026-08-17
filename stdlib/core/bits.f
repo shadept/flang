@@ -1,4 +1,4 @@
-// core.bits — scalar bit manipulation intrinsics.
+// core.bits - scalar bit manipulation intrinsics.
 //
 // Portable wrappers for hardware bit-counting instructions:
 //   - x86_64: LZCNT, TZCNT, POPCNT

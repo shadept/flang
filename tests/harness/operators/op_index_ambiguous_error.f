@@ -2,7 +2,7 @@
 //! COMPILE-ERROR: E2077
 
 // Declaring both ref-form `op_index_ref` and value-form `op_index` for the
-// same (Self, Idx) pair is an error — the two patterns are mutually exclusive.
+// same (Self, Idx) pair is an error - the two patterns are mutually exclusive.
 
 pub type MyVec = struct {
     a: i32

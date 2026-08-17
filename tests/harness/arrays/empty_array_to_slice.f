@@ -5,7 +5,7 @@
 // `use of undeclared identifier 'alloca_N'`. The empty-array literal's
 // alloca was being kept alive only via a downstream cast that referenced it
 // by name through a freshly-constructed LocalValue, but DCE counted uses by
-// reference identity and removed the alloca — leaving the cast pointing at
+// reference identity and removed the alloca - leaving the cast pointing at
 // an undeclared symbol.
 
 fn count(xs: i32[]) usize {

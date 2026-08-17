@@ -6,7 +6,7 @@
 // `unwrap`. Keying specializations by the type's SHORT name made them
 // collide: the second call site reused the function specialized over the
 // first module's `Thing`, and since IR struct names are FQN-derived the
-// emitted call named a symbol nothing defined — reported as E3002 against
+// emitted call named a symbol nothing defined - reported as E3002 against
 // an unrelated file, far from the cause.
 
 import std.option

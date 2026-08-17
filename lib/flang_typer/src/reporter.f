@@ -1,4 +1,4 @@
-// Reporter — translates `UnifyOutcome` into `Diagnostic`.
+// Reporter - translates `UnifyOutcome` into `Diagnostic`.
 //
 // The engine never builds diagnostics directly. Callers (the checker)
 // hand the outcome to one of these helpers along with a `ReportCtx`
@@ -43,7 +43,7 @@ pub fn report_ctx(code: String, span: SourceSpan) ReportCtx {
 // Emit zero or one diagnostic depending on the outcome. `Unified`
 // produces nothing. Every other variant produces exactly one
 // diagnostic on `out`. Caller owns the message strings appended to
-// the diagnostic — they aren't reclaimed by anything in this file.
+// the diagnostic - they aren't reclaimed by anything in this file.
 pub fn report(outcome: &UnifyOutcome, ctx: &ReportCtx, out: &List(Diagnostic), allocator: &Allocator? = null) {
     let alloc = allocator.or_global()
     outcome.* match {

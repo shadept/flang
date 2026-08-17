@@ -5,7 +5,7 @@
 //! STDOUT: k!=m
 
 // Bare enums (no variant payloads) get built-in `==` / `!=` compiled down to
-// a tag compare — no user-defined `op_eq` required. Ordering operators still
+// a tag compare - no user-defined `op_eq` required. Ordering operators still
 // error (see `error_e2017_bare_enum_no_ordering.f`), and tagged enums still
 // require a user-defined `op_eq` (see `error_e2017_tagged_enum_no_eq.f`).
 

@@ -3,7 +3,7 @@
 // Smoke covers the data layer + engine + coercion. The higher layers
 // (env, nominal_registry, function_registry, inference_results,
 // specialization, checker, result) compile cleanly as a library but
-// cannot yet be imported into a consuming project — the C# compiler's
+// cannot yet be imported into a consuming project - the C# compiler's
 // RTTI emission walks generic structs declared as struct fields
 // (e.g. `Stack(Scope)` with `Scope.bindings: Dict(String, Binding)`)
 // and emits typeinfo entries for the *un-instantiated* templates,

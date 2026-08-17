@@ -12,7 +12,7 @@ fn parse_pos(n: i32) Result(i32, String) {
     return Ok(n)
 }
 
-// Caller returns Result((i32, i32), String) — different success type, same error.
+// Caller returns Result((i32, i32), String) - different success type, same error.
 fn parse_pair(a: i32, b: i32) Result((i32, i32), String) {
     let av = parse_pos(a)?
     let bv = parse_pos(b)?

@@ -1,4 +1,4 @@
-// std.simd — portable 128-bit SIMD operations.
+// std.simd - portable 128-bit SIMD operations.
 //
 // Vec128 is a 16-byte value type passed in XMM (x86) or NEON (aarch64) registers.
 // Operations map to single instructions on both architectures.

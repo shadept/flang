@@ -1,4 +1,4 @@
-// std.env — runtime access to command-line arguments and environment variables.
+// std.env - runtime access to command-line arguments and environment variables.
 //
 // Arguments are views into the process's argv strings (no allocation).
 // Environment variable lookups return views into the C runtime's storage.
@@ -49,7 +49,7 @@ pub fn env(key: String) String? {
 }
 
 // =============================================================================
-// getopt — command-line option parsing
+// getopt - command-line option parsing
 // =============================================================================
 //
 // Format string: each char is a short option. ':' after = takes argument.

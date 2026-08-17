@@ -1,7 +1,7 @@
 // Source generator that produces forwarding overloads for any type T that has
 // an `as_view() String` method.  Invoke as:  #string_reader(MyType)
 //
-// Also provides MemReader — a Reader implementation over a byte slice in memory.
+// Also provides MemReader - a Reader implementation over a byte slice in memory.
 // Any type with #string_reader gets a reader() method returning a MemReader.
 
 import std.string

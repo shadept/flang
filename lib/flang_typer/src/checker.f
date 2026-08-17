@@ -1,4 +1,4 @@
-// Checker driver — wires the engine, registries, env, and results
+// Checker driver - wires the engine, registries, env, and results
 // into the three public phases:
 //
 //   - `collect_nominal_names` then `resolve_nominal_bodies` build the
@@ -16,7 +16,7 @@
 //
 // Plus the convenience entry point:
 //
-//   - `check_all(modules, &diags) TypeCheckResult` — runs the three
+//   - `check_all(modules, &diags) TypeCheckResult` - runs the three
 //     phases and zonks the engine into an immutable result. The
 //     engine is dropped before this returns.
 //
@@ -24,7 +24,7 @@
 // file today; split into per-category modules when match/pattern
 // checking lands and the dispatchers stop fitting in one screen.
 // Module-level state (engine, env, ctx) is bundled into a `Checker`
-// struct passed by reference to every sub-routine — no global state.
+// struct passed by reference to every sub-routine - no global state.
 
 import std.allocator
 import std.dict
@@ -80,7 +80,7 @@ pub type Checker = struct {
     results: InferenceResults
     diagnostics: List(Diagnostic)
 
-    // Working state — reset between modules.
+    // Working state - reset between modules.
     current_module: String?
     fn_stack: List(FnFrame)
     // True while checking a generic function's body: overload resolution
@@ -242,14 +242,14 @@ fn resolve_array(self: &Checker, a: &ArrayType) Ty {
     let elem = resolve_type_expr(self, a.element)
     // Array length is an expr in the parser AST; for first slice we
     // only handle integer-literal lengths. Anything else surfaces as
-    // a `0`-sized array — the parser would already have surfaced the
+    // a `0`-sized array - the parser would already have surfaced the
     // expression-evaluation error.
     let length = array_length_of(a.length)
     return self.engine.mk_array(elem, length)
 }
 
 fn array_length_of(e: &Expr) usize {
-    // Array-length expressions are arbitrary integer-valued exprs —
+    // Array-length expressions are arbitrary integer-valued exprs -
     // parsing `text` here would re-implement integer parsing. For the
     // first slice we report the array as 0-length when the AST carries
     // anything other than a trivially-zero value; later slices will
@@ -304,7 +304,7 @@ fn resolve_generic_bind(self: &Checker, g: &GenericBindType) Ty {
 }
 
 // ─────────────────────────────────────────────────────────────────────
-// Diagnostic helpers — small, lift to reporter when complexity grows.
+// Diagnostic helpers - small, lift to reporter when complexity grows.
 // ─────────────────────────────────────────────────────────────────────
 
 pub fn push_diag_e(self: &Checker, span: SourceSpan, code: String, message: OwnedString) {
@@ -482,7 +482,7 @@ fn contains_view(list: &List(String), v: String) bool {
 }
 
 // ─────────────────────────────────────────────────────────────────────
-// Phase 1 — collect nominal types
+// Phase 1 - collect nominal types
 //
 // First pass: register every struct/enum/alias by FQN with a
 // placeholder definition (empty fields/variants). Second pass: resolve
@@ -491,7 +491,7 @@ fn contains_view(list: &List(String), v: String) bool {
 // ─────────────────────────────────────────────────────────────────────
 
 // Register one module's type *names* (struct/enum placeholders). Bodies are
-// resolved in a separate pass — see `resolve_nominal_bodies` — so a field or
+// resolved in a separate pass - see `resolve_nominal_bodies` - so a field or
 // variant payload can reference a type declared in any module, in any order.
 pub fn collect_nominal_names(self: &Checker, module: &Module, module_path: String) {
     self.current_module = Some(module_path)
@@ -568,7 +568,7 @@ fn nominal_kind_of(body: TypeExpr) Nk {
 fn register_struct_placeholder(self: &Checker, td: &TypeDecl, fqn: OwnedString) {
     let empty_params: List(VarId) = list(0, self.allocator)
     let empty_fields: List(Field) = list(0, self.allocator)
-    // `fqn` field is a placeholder — `register` overwrites it with the
+    // `fqn` field is a placeholder - `register` overwrites it with the
     // stable view it owns. The OwnedString is transferred to the registry.
     let sd = StructDef {
         fqn = "",
@@ -718,12 +718,12 @@ fn resolve_enum_body(self: &Checker, td: &TypeDecl, module_path: String) {
 }
 
 // ─────────────────────────────────────────────────────────────────────
-// Phase 2 — collect function signatures
+// Phase 2 - collect function signatures
 //
 // Every `pub fn` and `fn` is registered with its polymorphic scheme
 // before any body is checked. Forward references between functions in
 // the same module just work; cross-module references depend on import
-// visibility (out of scope for the first slice — visibility is
+// visibility (out of scope for the first slice - visibility is
 // "current module only").
 // ─────────────────────────────────────────────────────────────────────
 
@@ -804,7 +804,7 @@ fn register_function_sig(self: &Checker, fd: &FunctionDecl) {
 }
 
 // ─────────────────────────────────────────────────────────────────────
-// Phase 3 — check function bodies
+// Phase 3 - check function bodies
 //
 // For each function with a body, push the function's frame, push a
 // scope for its parameters, walk the block expression, and unify the
@@ -896,7 +896,7 @@ fn check_function_body(self: &Checker, fd: &FunctionDecl) {
 }
 
 // ─────────────────────────────────────────────────────────────────────
-// Expression / statement inference — minimal subset.
+// Expression / statement inference - minimal subset.
 //
 // First slice covers: literals, identifiers, binary primitive ops on
 // matching numeric types, calls (direct lookup against
@@ -926,28 +926,205 @@ fn check_expr_kind(self: &Checker, expr: &Expr) Ty {
         Assignment(a) => check_assignment(self, &a),
         AddressOf(a) => check_address_of(self, &a),
         Dereference(d) => check_deref(self, &d),
+        Match(m) => check_match(self, &m),
         _ => self.engine.fresh_var(),
     }
 }
 
-// `lhs = rhs` — an expression that yields no value. Both sides are checked
-// so their nodes carry recorded types; lowering reads the left side's type
-// to choose between a typed store and a byte copy. Unifying the two sides
-// (and rejecting a non-place left side) belongs with the rest of operator
-// checking and is not done here.
+// `scrutinee match { pat => body, ... }`. Each arm's pattern is checked
+// against the scrutinee's type, its bindings live for that arm only, and
+// every arm body unifies to one result type.
+//
+// Exhaustiveness is not checked here.
+fn check_match(self: &Checker, m: &MatchExpr) Ty {
+    let scrutinee = check_expr(self, m.scrutinee)
+    let result = self.engine.fresh_var()
+    for i in 0..m.arms.len {
+        let arm = &m.arms[i]
+        self.env.push_scope()
+        check_pattern(self, &arm.pattern, scrutinee)
+        arm.guard match {
+            Some(g) => { let _g = check_expr(self, g) },
+            None => {},
+        }
+        let body_ty = check_expr(self, arm.body)
+        unify_expected(self, body_ty, result, E_TYPE_MISMATCH, arm.span)
+        self.env.pop_scope()
+    }
+    return result
+}
+
+// Check `pat` against `expected`, binding the variables it introduces into
+// the current scope. Every sub-pattern is walked even when the shape can't
+// be resolved, so a binding always exists - unconstrained beats absent,
+// which would surface later as a bogus `unknown identifier`.
+fn check_pattern(self: &Checker, pat: &Pattern, expected: Ty) {
+    pat.* match {
+        Wildcard(_) => {},
+        Variable(v) => check_variable_pattern(self, &v, expected),
+        Literal(l) => {
+            let lt = literal_value_ty(self, l.value)
+            unify_expected(self, lt, expected, E_TYPE_MISMATCH, l.span)
+        },
+        EnumVariant(ev) => check_variant_pattern(self, &ev, expected),
+        Or(o) => check_or_pattern(self, &o, expected),
+        Range(r) => {
+            let bound = check_range_bounds(self, &r)
+            unify_expected(self, bound, expected, E_TYPE_MISMATCH, r.span)
+        },
+        // Struct and tuple destructuring bind their sub-patterns but do not
+        // yet constrain them against the scrutinee's field types.
+        Struct(s) => check_struct_pattern(self, &s),
+        Tuple(t) => bind_unconstrained(self, &t.elements),
+        // The front end could not represent this pattern (or-patterns,
+        // ranges, struct and tuple destructuring - see the projector). It
+        // must be reported: left silent it is indistinguishable from a
+        // wildcard, and the arm would match everything.
+        Error(e) => push_diag_e(self, e.span, E_UNSUPPORTED_PATTERN,
+            from_view("unsupported pattern form: or-patterns, ranges, and struct/tuple destructuring are not implemented yet")),
+    }
+}
+
+fn check_or_pattern(self: &Checker, o: &OrPattern, expected: Ty) {
+    for i in 0..o.alternatives.len {
+        check_pattern(self, &o.alternatives[i], expected)
+    }
+}
+
+fn check_struct_pattern(self: &Checker, s: &StructPattern) {
+    for i in 0..s.fields.len {
+        let f = &s.fields[i]
+        f.binding match {
+            Some(p) => check_pattern(self, p, self.engine.fresh_var()),
+            None => bind_pattern_var(self, f.name, self.engine.fresh_var(), f.span),
+        }
+    }
+}
+
+fn bind_unconstrained(self: &Checker, pats: &List(Pattern)) {
+    for i in 0..pats.len {
+        check_pattern(self, &pats[i], self.engine.fresh_var())
+    }
+}
+
+// `Some(x)` / `Color.Red` in pattern position. Resolves the variant against
+// the scrutinee's enum, binds each payload sub-pattern to its declared type,
+// and records `RtEnumVariant` on the pattern node so lowering can read the
+// variant index without re-resolving - the same seam calls use for
+// `RtFunction`.
+fn check_variant_pattern(self: &Checker, ev: &EnumVariantPattern, expected: Ty) {
+    let nr = self.engine.resolve(expected) match {
+        Nominal(n) => Some(n),
+        _ => null,
+    }
+    if nr.is_none() { bind_unconstrained(self, &ev.payloads); return }
+    let n = nr.unwrap()
+
+    let ed = self.nominals.get(n.id).* match {
+        NomEnum(e) => Some(e),
+        _ => null,
+    }
+    if ed.is_none() { bind_unconstrained(self, &ev.payloads); return }
+    let e = ed.unwrap()
+
+    let vnum = 0u32
+    let found = false
+    for i in 0..e.variants.len {
+        if !found and e.variants[i].name == ev.name {
+            vnum = i as u32
+            found = true
+        }
+    }
+    if !found { bind_unconstrained(self, &ev.payloads); return }
+    self.results.record_target(node_id_of(ev.span), ResolvedTarget.RtEnumVariant(n.id, vnum))
+
+    let payloads = &e.variants[vnum as usize].payloads
+    if payloads.len != ev.payloads.len { bind_unconstrained(self, &ev.payloads); return }
+
+    // Payload types are written against the enum's own type params; the
+    // scrutinee's type arguments give them concrete meaning.
+    let sub = dict(self.allocator)
+    for k in 0..e.type_params.len {
+        if k < n.args.len { sub.set(e.type_params[k], n.args[k]) }
+    }
+    for i in 0..payloads.len {
+        let pty = substitute(&payloads[i], &sub, self.allocator)
+        check_pattern(self, &ev.payloads[i], pty)
+    }
+    sub.deinit()
+}
+
+// A bare identifier in pattern position is either a binding or a
+// payload-less enum variant (`None`, `Red`). Only scope tells them apart:
+// if the scrutinee is an enum with a nullary variant of that name, the
+// identifier names the variant. Otherwise it binds.
+//
+// Getting this backwards is silent: a variant read as a binding is
+// irrefutable, so `c match { Red => 1, Green => 2 }` would always take the
+// first arm. Lowering reads the decision back off the node as
+// `RtEnumVariant`, so it never has to re-derive it.
+fn check_variable_pattern(self: &Checker, v: &VariablePattern, expected: Ty) {
+    let nr = self.engine.resolve(expected) match {
+        Nominal(n) => Some(n),
+        _ => null,
+    }
+    if nr.is_some() {
+        let n = nr.unwrap()
+        let idx = nullary_variant_index(self, n.id, v.name)
+        if idx.is_some() {
+            self.results.record_target(node_id_of(v.span), ResolvedTarget.RtEnumVariant(n.id, idx.unwrap()))
+            return
+        }
+    }
+    bind_pattern_var(self, v.name, expected, v.span)
+}
+
+// The index of `name` among `id`'s variants, when that variant carries no
+// payload. Null when `id` is not an enum or has no such variant.
+fn nullary_variant_index(self: &Checker, id: NominalId, name: String) u32? {
+    let ed = self.nominals.get(id).* match {
+        NomEnum(e) => Some(e),
+        _ => null,
+    }
+    if ed.is_none() { return null }
+    let e = ed.unwrap()
+    for i in 0..e.variants.len {
+        let vd = &e.variants[i]
+        if vd.name == name and vd.payloads.len == 0 { return Some(i as u32) }
+    }
+    return null
+}
+
+fn bind_pattern_var(self: &Checker, name: String, ty: Ty, span: SourceSpan) {
+    self.env.bind(name, Binding {
+        scheme = mono(ty, self.allocator),
+        decl = node_id_of(span),
+        is_const = true,
+    })
+    // Lowering reads the binding's type off the pattern node.
+    self.results.record_type(node_id_of(span), ty)
+}
+
+// `lhs = rhs` - an expression that yields no value. The right side must fit
+// the left's type, so lowering can pick a store width from the destination.
+//
+// ponytail: a non-place left side (`f() = 1`) is still not rejected here;
+// lowering refuses to emit the function instead of writing somewhere
+// arbitrary, so the failure is loud but the diagnostic is not precise.
 fn check_assignment(self: &Checker, a: &AssignmentExpr) Ty {
-    let _l = check_expr(self, a.lhs)
-    let _r = check_expr(self, a.rhs)
+    let lhs = check_expr(self, a.lhs)
+    let rhs = check_expr(self, a.rhs)
+    unify_expected(self, rhs, lhs, E_TYPE_MISMATCH, a.span)
     return Ty.Void
 }
 
-// `&operand` — a reference to whatever the operand is.
+// `&operand` - a reference to whatever the operand is.
 fn check_address_of(self: &Checker, a: &AddressOfExpr) Ty {
     let inner = check_expr(self, a.operand)
     return self.engine.mk_ref(inner)
 }
 
-// `operand.*` — peels one reference. A non-reference operand defers to a
+// `operand.*` - peels one reference. A non-reference operand defers to a
 // fresh var so an already-reported error does not cascade.
 fn check_deref(self: &Checker, d: &DereferenceExpr) Ty {
     let t = self.engine.resolve(check_expr(self, d.operand))
@@ -964,7 +1141,7 @@ fn check_cast(self: &Checker, c: &CastExpr) Ty {
     return resolve_type_expr(self, c.target)
 }
 
-// `()` is unit — the empty tuple and `void` are the same type.
+// `()` is unit - the empty tuple and `void` are the same type.
 fn check_tuple_lit(self: &Checker, t: &TupleLiteralExpr) Ty {
     if t.elements.len == 0 { return Ty.Void }
     let elems = list(t.elements.len, self.allocator)
@@ -976,8 +1153,14 @@ fn check_tuple_lit(self: &Checker, t: &TupleLiteralExpr) Ty {
 }
 
 fn check_literal(self: &Checker, lit: &LiteralExpr) Ty {
-    return lit.value match {
-        Int(_) => self.engine.fresh_var(),       // unsuffixed — context resolves
+    return literal_value_ty(self, lit.value)
+}
+
+// The type of a literal form. Shared with pattern checking, where the same
+// seven forms appear without an enclosing expression node.
+fn literal_value_ty(self: &Checker, value: LiteralValue) Ty {
+    return value match {
+        Int(_) => self.engine.fresh_var(),       // unsuffixed - context resolves
         Float(_) => self.engine.fresh_var(),
         Bool(_) => Ty.Prim(PrimitiveKind.Bool),
         String(_) => string_type(self),
@@ -1025,7 +1208,7 @@ fn check_identifier(self: &Checker, id: &IdentifierExpr) Ty {
                 ResolvedTarget.RtFunction(c.id))
             return self.engine.specialize(&c.signature)
         }
-        // Multiple overloads as a value — needs context to pick.
+        // Multiple overloads as a value - needs context to pick.
         return self.engine.fresh_var()
     }
 
@@ -1033,7 +1216,7 @@ fn check_identifier(self: &Checker, id: &IdentifierExpr) Ty {
     let cty = self.constants.lookup(id.name, &vis)
     if cty.is_some() { return cty.unwrap() }
 
-    // Bare payload-less variant (`None`) — locals and functions win first.
+    // Bare payload-less variant (`None`) - locals and functions win first.
     let vid = self.nominals.lookup_variant(id.name, 0usize, &vis)
     if vid.is_some() {
         let vt = construct_nullary(self, vid.unwrap(), id.name, id.span)
@@ -1068,22 +1251,36 @@ fn nominal_with_fresh_args(self: &Checker, id: NominalId) Ty {
 
 fn check_block(self: &Checker, blk: &BlockExpr) Ty {
     self.env.push_scope()
+    // A block containing a diverging statement produces no value: `never`
+    // is the bottom type and unifies with anything, so a `match` arm or `if`
+    // branch that returns does not drag the result type to `void`. Without
+    // it, `x match { A => return 1, B => false }` types as void and a
+    // `bool`-returning function rejects its own body.
+    //
+    // ponytail: divergence is tracked per statement, so an `if` whose every
+    // branch returns is not itself treated as diverging. Add that when a
+    // case needs it - it is a strictly larger analysis, not a different one.
+    let diverges = false
     for i in 0..blk.stmts.len {
         let stmt = &blk.stmts[i]
-        check_stmt(self, stmt)
+        if check_stmt(self, stmt) { diverges = true }
     }
     let final_ty = blk.trailing match {
         Some(e) => check_expr(self, e),
         None => Ty.Void,
     }
     self.env.pop_scope()
+    if diverges { return Ty.Never }
     return final_ty
 }
 
 // An expression statement discards its value; statement ifs get their
 // own inference (branch types need not agree, mirroring the reference
 // checker's statement-context if handling).
-fn check_stmt(self: &Checker, stmt: &Stmt) {
+// Returns whether the statement diverges - `return`, `break` and
+// `continue` transfer control away, so nothing after them is reached and
+// the enclosing block produces no value.
+fn check_stmt(self: &Checker, stmt: &Stmt) bool {
     stmt.* match {
         Let(ls) => check_let(self, &ls),
         Expression(es) => {
@@ -1097,12 +1294,72 @@ fn check_stmt(self: &Checker, stmt: &Stmt) {
             }
             if !handled { let _r = check_expr(self, &es.expr) }
         },
-        Return(rs) => check_return(self, &rs),
+        Return(rs) => { check_return(self, &rs); return true },
+        Break(_) => return true,
+        Continue(_) => return true,
+        For(fs) => check_for(self, &fs),
+        While(ws) => {
+            let _c = check_expr(self, ws.condition)
+            let _b = check_block(self, &ws.body)
+        },
+        Loop(ls) => { let _b = check_block(self, &ls.body) },
+        Defer(ds) => { let _e = check_expr(self, &ds.expr) },
         _ => {},
+    }
+    return false
+}
+
+// `for name in iterable { body }`. The loop variable is bound for the
+// body's scope only. A range yields its bound type; any other iterable
+// needs the iterator protocol, so the variable stays an unconstrained var
+// rather than being wrongly constrained.
+fn check_for(self: &Checker, fs: &ForStmt) {
+    let elem = check_iterable_element(self, fs.iterable)
+    self.env.push_scope()
+    self.env.bind(fs.var_name, Binding {
+        scheme = mono(elem, self.allocator),
+        decl = node_id_of(fs.span),
+        is_const = true,
+    })
+    let _b = check_block(self, &fs.body)
+    self.env.pop_scope()
+}
+
+fn check_iterable_element(self: &Checker, iterable: &Expr) Ty {
+    return iterable.* match {
+        Range(r) => check_range_bounds(self, &r),
+        _ => {
+            let _i = check_expr(self, iterable)
+            self.engine.fresh_var()
+        },
     }
 }
 
-// Statement-context if: branches unify only when they agree — a mismatch
+fn check_range_bounds(self: &Checker, r: &RangeExpr) Ty {
+    return unify_range_bounds(self, r.start, r.end, r.span)
+}
+
+fn check_range_bounds(self: &Checker, r: &RangePattern) Ty {
+    return unify_range_bounds(self, r.start, r.end, r.span)
+}
+
+// Both bounds of a range share one type; that is its element type. The
+// expression and pattern forms are separate AST types with identical shape
+// (the grammar restricts where each may appear), so both funnel here.
+fn unify_range_bounds(self: &Checker, start: &Expr?, end: &Expr?, span: SourceSpan) Ty {
+    let elem = self.engine.fresh_var()
+    start match {
+        Some(e) => { unify_expected(self, check_expr(self, e), elem, E_TYPE_MISMATCH, span) },
+        None => {},
+    }
+    end match {
+        Some(e) => { unify_expected(self, check_expr(self, e), elem, E_TYPE_MISMATCH, span) },
+        None => {},
+    }
+    return elem
+}
+
+// Statement-context if: branches unify only when they agree - a mismatch
 // is silently void, never an error.
 fn check_if_stmt(self: &Checker, if_expr: &IfExpr) {
     let _c = check_expr(self, if_expr.condition)
@@ -1139,6 +1396,11 @@ fn check_let(self: &Checker, ls: &LetStmt) {
             None => self.engine.fresh_var(),
         },
     }
+    // Lowering reads the binding's type off this node. `let x` with neither
+    // annotation nor initializer is legal - the type comes from later use -
+    // so the annotation is not the source of truth and lowering must not
+    // re-derive one from it.
+    self.results.record_type(node_id_of(ls.span), bound_ty)
     self.env.bind(ls.name, Binding {
         scheme = mono(bound_ty, self.allocator),
         decl = node_id_of(ls.span),
@@ -1201,13 +1463,80 @@ fn check_return(self: &Checker, rs: &ReturnStmt) {
     }
 }
 
+// Both operands of a binary operator share one type - shifts excepted,
+// since a shift count need not match the value's width. Comparisons and the
+// logical connectives produce `bool`; everything else produces the operand
+// type.
+//
+// Unifying the operands is also right for the `op_add(self: T, other: T) T`
+// overload shape, so user types are no worse off than before. What it
+// replaces is a bare fresh var, which let `1 + "hello"` type-check clean and
+// left every arithmetic node unconstrained - so lowering saw no primitive
+// and emitted the default width, compiling `i32` arithmetic at 64 bits.
+//
+// ponytail: operator *overload resolution* (looking `op_add` up in the
+// function registry) still is not done here; the operand types are
+// constrained, the callee is not.
 fn check_binary(self: &Checker, bin: &BinaryExpr) Ty {
-    let _r = check_expr(self, bin.lhs)
-    let _r = check_expr(self, bin.rhs)
-    // First slice: defer to a fresh var; real op-overload resolution
-    // and primitive instruction emission lands in `checker_expr.f`
-    // alongside the operator-name → function-registry lookup.
-    return self.engine.fresh_var()
+    let lhs = check_expr(self, bin.lhs)
+    let rhs = check_expr(self, bin.rhs)
+    return bin.op match {
+        Eq => compare_result(self, lhs, rhs, bin.span),
+        Ne => compare_result(self, lhs, rhs, bin.span),
+        Lt => compare_result(self, lhs, rhs, bin.span),
+        Gt => compare_result(self, lhs, rhs, bin.span),
+        Le => compare_result(self, lhs, rhs, bin.span),
+        Ge => compare_result(self, lhs, rhs, bin.span),
+        And => logical_result(self, lhs, rhs, bin.span),
+        Or => logical_result(self, lhs, rhs, bin.span),
+        Shl => lhs,
+        Shr => lhs,
+        UShr => lhs,
+        _ => arith_result(self, lhs, rhs, bin.span),
+    }
+}
+
+fn compare_result(self: &Checker, lhs: Ty, rhs: Ty, span: SourceSpan) Ty {
+    unify_either(self, lhs, rhs, span)
+    return Ty.Prim(PrimitiveKind.Bool)
+}
+
+// `a op b` imposes no direction, but the coercion ladder has one: a `char`
+// coerces to `u8`, not the reverse. Probe both ways before reporting, so
+// `c == 'h'` with `c: u8` is accepted exactly as `'h' == c` is.
+fn unify_either(self: &Checker, a: Ty, b: Ty, span: SourceSpan) {
+    let probe = self.engine.try_unify(a, b)
+    if probe.is_ok() {
+        const o = self.engine.unify(a, b)
+        report_unify(self, &o, E_TYPE_MISMATCH, span)
+        return
+    }
+    const o = self.engine.unify(b, a)
+    report_unify(self, &o, E_TYPE_MISMATCH, span)
+}
+
+fn logical_result(self: &Checker, lhs: Ty, rhs: Ty, span: SourceSpan) Ty {
+    let b = Ty.Prim(PrimitiveKind.Bool)
+    const o1 = self.engine.unify(lhs, b)
+    report_unify(self, &o1, E_TYPE_MISMATCH, span)
+    const o2 = self.engine.unify(rhs, b)
+    report_unify(self, &o2, E_TYPE_MISMATCH, span)
+    return b
+}
+
+// Pointer arithmetic: `p + n` and `p - n` offset a reference by an integer
+// count, so the operands deliberately do NOT unify and the result is the
+// pointer type. Unifying them here is what made `s.ptr + idx` - the shape
+// every slice and hash routine in the stdlib uses - fail to check.
+//
+// ponytail: `p - q` between two references should yield an integer
+// distance, not a pointer. It currently yields the pointer type. Nothing in
+// the corpus does it; fix when something does.
+fn arith_result(self: &Checker, lhs: Ty, rhs: Ty, span: SourceSpan) Ty {
+    let lhs_is_ref = self.engine.resolve(lhs) match { Ref(_) => true, _ => false }
+    if lhs_is_ref { return lhs }
+    unify_either(self, lhs, rhs, span)
+    return lhs
 }
 
 fn check_call(self: &Checker, call: &CallExpr) Ty {
@@ -1243,7 +1572,7 @@ fn check_call(self: &Checker, call: &CallExpr) Ty {
         }
     }
     pos_tys.deinit()
-    // Named-argument calls keep the fresh-var fallback — see
+    // Named-argument calls keep the fresh-var fallback - see
     // docs/known-issues.md (Bootstrap Self-Host).
     let _r = check_expr(self, call.callee)
     return self.engine.fresh_var()
@@ -1251,7 +1580,7 @@ fn check_call(self: &Checker, call: &CallExpr) Ty {
 
 // Resolve a call to its target: registry overloads (direct, or UFCS with
 // the receiver as first argument), a Func-typed struct field, or a
-// Func-typed value. Some(ty) is the call's type — failures inside report
+// Func-typed value. Some(ty) is the call's type - failures inside report
 // a diagnostic and yield a fresh var so inference continues. Null means
 // the callee shape has no resolution path; the caller falls back.
 fn resolve_call(self: &Checker, call: &CallExpr, arg_tys: &List(Ty)) Ty? {
@@ -1262,7 +1591,7 @@ fn resolve_call(self: &Checker, call: &CallExpr, arg_tys: &List(Ty)) Ty? {
     }
 }
 
-// `foo(args)` — registry overloads win over value bindings, mirroring
+// `foo(args)` - registry overloads win over value bindings, mirroring
 // the reference checker's call order; a value binding of function type
 // is the fallback.
 fn resolve_direct_call(self: &Checker, call: &CallExpr, ide: &IdentifierExpr, arg_tys: &List(Ty)) Ty? {
@@ -1281,7 +1610,7 @@ fn resolve_direct_call(self: &Checker, call: &CallExpr, ide: &IdentifierExpr, ar
     return Some(indirect_call(self, callee_ty, arg_tys, call.span))
 }
 
-// `recv.method(args)` — a Func-typed struct field dispatches directly
+// `recv.method(args)` - a Func-typed struct field dispatches directly
 // (the vtable pattern wins over UFCS, as in the reference checker);
 // otherwise the receiver becomes the first argument of a registry
 // overload, retried with the receiver adapted between value and
@@ -1305,7 +1634,7 @@ fn resolve_method_call(self: &Checker, call: &CallExpr, ma: &MemberAccessExpr, a
     let candidates = cands.unwrap()
 
     // A still-unbound receiver (a construct inference doesn't cover yet)
-    // cannot arbitrate an overload set — committing the first match would
+    // cannot arbitrate an overload set - committing the first match would
     // bind it arbitrarily. Leave the call untyped until the receiver is
     // known.
     let recv_unbound = self.engine.resolve(recv_ty) match { Var(_) => true, _ => false }
@@ -1347,7 +1676,7 @@ fn receiver_overload(self: &Checker, candidates: &List(FunctionScheme), recv: Ty
 // method against the wrapped inner value, both by reference and by value
 // (mirrors the reference checker's UFCS deref chain, with the same depth
 // bound). The deref chain is not yet recorded for lowering. A dead-end
-// chain leaves its committed deref unifications behind — parity with the
+// chain leaves its committed deref unifications behind - parity with the
 // reference checker, which also resolves each hop non-speculatively.
 fn deref_retry(self: &Checker, candidates: &List(FunctionScheme), recv_ty: Ty, arg_tys: &List(Ty), span: SourceSpan) OverloadPick? {
     let vis = current_visibility(self)
@@ -1422,9 +1751,9 @@ fn commit_pick(self: &Checker, pick: OverloadPick?, name: String, n_args: usize,
     }
 }
 
-// `recv.field(args)` where `field` is a Func-typed struct field — the
+// `recv.field(args)` where `field` is a Func-typed struct field - the
 // vtable-dispatch pattern. Null when the receiver is not a struct or has
-// no Func field by that name — the UFCS path takes over.
+// no Func field by that name - the UFCS path takes over.
 fn field_call(self: &Checker, recv_ty: &Ty, name: String, arg_tys: &List(Ty), span: SourceSpan) Ty? {
     let fty = struct_field_lookup(self, recv_ty, name)
     if fty.is_none() { return null }
@@ -1569,17 +1898,17 @@ fn scheme_fn_ty(self: &Checker, s: &Scheme) FunctionTy? {
 }
 
 // How many leading args unify against declared params: everything up to
-// the variadic tail. Surplus variadic args are not element-checked yet —
+// the variadic tail. Surplus variadic args are not element-checked yet -
 // see docs/known-issues.md (Bootstrap Self-Host).
 fn non_variadic_arg_count(c: &FunctionScheme, f: &FunctionTy, n_args: usize) usize {
     let non_variadic = if c.has_variadic { f.params.len - 1 } else { f.params.len }
     return if n_args < non_variadic { n_args } else { non_variadic }
 }
 
-// `Enum.Variant(args)` or bare `Variant(args)` — payload-carrying enum
+// `Enum.Variant(args)` or bare `Variant(args)` - payload-carrying enum
 // variant construction. Null for every other call shape; the caller
 // falls through to function/indirect call handling. The callee is NOT
-// checked as a value on the variant path — a type name has no value
+// checked as a value on the variant path - a type name has no value
 // binding, so checking it would wrongly report `unknown identifier`.
 fn variant_call(self: &Checker, call: &CallExpr, arg_tys: &List(Ty)) Ty? {
     let node = node_id_of(call.span)
@@ -1607,7 +1936,7 @@ fn unqualified_variant_call(self: &Checker, ide: &IdentifierExpr, arg_tys: &List
     return construct_variant(self, nid.unwrap(), ide.name, arg_tys, span, node)
 }
 
-// True when the name resolves as a value — a local binding or a visible
+// True when the name resolves as a value - a local binding or a visible
 // function. Values always win over variant and type-name interpretations.
 fn name_is_value_bound(self: &Checker, name: String) bool {
     if self.env.lookup(name).is_some() { return true }
@@ -1618,7 +1947,7 @@ fn name_is_value_bound(self: &Checker, name: String) bool {
     }
 }
 
-// `Entry(K, V)` — a visible nominal called with type arguments yields the
+// `Entry(K, V)` - a visible nominal called with type arguments yields the
 // instantiated nominal itself; the `Type(T)` coercion lifts it where a
 // reified type parameter expects it.
 fn type_instantiation_call(self: &Checker, ide: &IdentifierExpr, arg_tys: &List(Ty)) Ty? {
@@ -1655,7 +1984,7 @@ fn check_if(self: &Checker, if_expr: &IfExpr) Ty {
     return then_ty
 }
 
-// `S { f = v, ... }` — the literal's type is the resolved nominal `S`; each
+// `S { f = v, ... }` - the literal's type is the resolved nominal `S`; each
 // initializer is unified against its declared field type (so an unsuffixed
 // literal resolves and a mismatch is reported). An anonymous `.{ … }` (no
 // type) defers to a fresh var until record literals land.
@@ -1679,15 +2008,15 @@ fn check_struct_lit(self: &Checker, lit: &StructLiteralExpr) Ty {
     return ty
 }
 
-// The value of a field initializer: the explicit `f = expr`, or — for
-// shorthand `S { f }` — the in-scope binding named like the field.
+// The value of a field initializer: the explicit `f = expr`, or - for
+// shorthand `S { f }` - the in-scope binding named like the field.
 fn check_field_value(self: &Checker, fi: &StructFieldInit) Ty {
     if fi.value.is_some() { return check_expr(self, fi.value.unwrap()) }
     let id = IdentifierExpr { span = fi.span, name = fi.name }
     return check_identifier(self, &id)
 }
 
-// `recv.member` — when the receiver is a struct with a field of that name,
+// `recv.member` - when the receiver is a struct with a field of that name,
 // the access yields the field's (substituted) type. Otherwise it defers to
 // a fresh var: member syntax also bases UFCS calls, which resolve elsewhere.
 fn check_member(self: &Checker, ma: &MemberAccessExpr) Ty {
@@ -1707,7 +2036,7 @@ fn check_member(self: &Checker, ma: &MemberAccessExpr) Ty {
 // in-scope enum whose `member` is one of its payload-less variants yields the
 // enum's nominal type. Null for every other shape, leaving field access and
 // UFCS untouched. Payload-carrying variants only construct through call
-// syntax — see `variant_call`.
+// syntax - see `variant_call`.
 fn enum_variant_access(self: &Checker, ma: &MemberAccessExpr) Ty? {
     let id = enum_receiver(self, ma.receiver)
     if id.is_none() { return null }
@@ -1742,7 +2071,7 @@ fn construct_nullary(self: &Checker, id: NominalId, vname: String, span: SourceS
 // Construct an enum variant: fresh type args for the enum's params, the
 // variant's payload types substituted against them, and each argument
 // unified with its payload. Null when the nominal is not an enum, names
-// no such variant, or the argument count differs — callers fall through
+// no such variant, or the argument count differs - callers fall through
 // to the other call forms. On success the variant target is recorded
 // for lowering and go-to-definition.
 fn construct_variant(self: &Checker, id: NominalId, vname: String, arg_tys: &List(Ty), span: SourceSpan, node: NodeId) Ty? {
@@ -1783,7 +2112,7 @@ fn construct_variant(self: &Checker, id: NominalId, vname: String, arg_tys: &Lis
 }
 
 // A struct field's declared type by name, substituted against the
-// receiver instance's type arguments — a read must never bind the
+// receiver instance's type arguments - a read must never bind the
 // definition's shared type-param vars. Null when the (zonked,
 // one-reference-peeled) type is not a struct or has no such field.
 fn struct_field_lookup(self: &Checker, recv: &Ty, name: String) Ty? {
@@ -1941,7 +2270,7 @@ test "payload variant construction type-checks" {
 
 test "generic and unqualified variant construction type-checks" {
     // Generic enum: qualified `Opt.S(3)`, unqualified `S(3)`, and bare
-    // payload-less `N` in expression position — each instantiates the
+    // payload-less `N` in expression position - each instantiates the
     // enum's type param fresh and unifies it via the declared return.
     let errors = count_check_errors(
         ["pub type Opt = enum(T) { N\nS(T) }\nfn f() Opt(i32) { return Opt.S(3) }\nfn g() Opt(i32) { return S(3) }\nfn h() Opt(i32) { return N }\n"],
@@ -1950,7 +2279,7 @@ test "generic and unqualified variant construction type-checks" {
 }
 
 test "variant payload type mismatch is reported" {
-    // A float payload against an i32 variant — no coercion path exists
+    // A float payload against an i32 variant - no coercion path exists
     // (bool would widen: bool coerces to any integer by design; a string
     // literal resolves to Error poison in these stdlib-less tests).
     let errors = count_check_errors(

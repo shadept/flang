@@ -30,7 +30,7 @@ pub fn main() i32 {
     if first(data) != 10 { return 2 }
     if last(data) != 30 { return 3 }
 
-    // Call multiple times — must be consistent
+    // Call multiple times - must be consistent
     if sum_fields(data) != 60 { return 4 }
 
     return 0

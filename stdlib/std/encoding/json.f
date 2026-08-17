@@ -1,11 +1,11 @@
 // JSON encoding, decoding, and DOM manipulation.
 //
-//   JsonEncoder  — implements Encoder for JSON output to a Writer
-//   JsonDecoder  — implements Decoder for JSON input from a Reader;
+//   JsonEncoder  - implements Encoder for JSON output to a Writer
+//   JsonDecoder  - implements Decoder for JSON input from a Reader;
 //                  also handles DOM parsing (parse_value)
-//   JsonValue    — recursive tagged union with custom serialize/deserialize
-//   parse()      — DOM-level parse from Reader or String
-//   stringify()  — DOM-level serialize via JsonEncoder
+//   JsonValue    - recursive tagged union with custom serialize/deserialize
+//   parse()      - DOM-level parse from Reader or String
+//   stringify()  - DOM-level serialize via JsonEncoder
 
 import std.encoding.codec
 import std.io.reader
@@ -127,7 +127,7 @@ pub fn as_object(self: &JsonValue) &Dict(OwnedString, JsonValue)? {
 }
 
 // =============================================================================
-// JSON Object convenience — String-key access for Dict(OwnedString, JsonValue)
+// JSON Object convenience - String-key access for Dict(OwnedString, JsonValue)
 // =============================================================================
 
 pub fn json_get(self: &Dict(OwnedString, JsonValue), key: String) JsonValue? {
@@ -209,7 +209,7 @@ pub fn parse(input: String, allocator: &Allocator? = null) Result(JsonValue, Jso
 // DOM Serialization
 // =============================================================================
 
-// Custom serialize for JsonValue — walks the DOM tree via the Encoder interface.
+// Custom serialize for JsonValue - walks the DOM tree via the Encoder interface.
 // This is the single implementation; stringify/stringify_pretty are thin wrappers.
 pub fn serialize(self: &JsonValue, enc: &Encoder) {
     self.* match {
@@ -261,7 +261,7 @@ pub fn stringify_pretty(value: &JsonValue, w: Writer, indent: usize = 2) {
     value.serialize(&enc.encoder())
 }
 
-// Format protocol — compact by default, "p" for pretty.
+// Format protocol - compact by default, "p" for pretty.
 pub fn format(self: JsonValue, sb: &StringBuilder, spec: String) {
     let w = sb.writer()
     if spec == "p" { stringify_pretty(&self, w) }
@@ -269,7 +269,7 @@ pub fn format(self: JsonValue, sb: &StringBuilder, spec: String) {
 }
 
 // =============================================================================
-// JsonEncoder — implements Encoder for JSON output to a Writer
+// JsonEncoder - implements Encoder for JSON output to a Writer
 // =============================================================================
 
 pub type JsonEncoder = struct {
@@ -426,7 +426,7 @@ pub fn is_human_readable(self: &JsonEncoder) bool { return true }
 #implement(JsonEncoder, Encoder)
 
 // =============================================================================
-// JsonDecoder — implements Decoder for JSON input from a Reader
+// JsonDecoder - implements Decoder for JSON input from a Reader
 // =============================================================================
 
 // Unified JSON decoder: handles both DOM parsing (parse_value) and streaming

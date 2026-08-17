@@ -63,7 +63,7 @@ pub fn main() i32 {
     if multi.extension().unwrap() != "gz" { return 38 }
     if multi.file_stem().unwrap() != "foo.tar" { return 39 }
 
-    // join — absolute replaces; trailing-sep no-dup
+    // join - absolute replaces; trailing-sep no-dup
     let s = path("src")
     defer s.deinit()
     let j = s.join("foo.f")

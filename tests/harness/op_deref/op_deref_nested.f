@@ -1,7 +1,7 @@
 //! TEST: op_deref_nested
 //! EXIT: 42
 
-// Two layers of wrappers — chained op_deref resolves through both.
+// Two layers of wrappers - chained op_deref resolves through both.
 
 type Outer = struct(T) { __inner: T }
 type Inner = struct(T) { __value: T }

@@ -74,7 +74,7 @@ pub fn free(allocator: &Allocator, value: &$T) {
 }
 
 // Free a typed slice. The slice's `len` is taken as the count of T
-// elements to release (use the slice's full backing extent — for a
+// elements to release (use the slice's full backing extent - for a
 // `List`/`Dict` buffer that means slicing over `cap`, not `len`).
 // No-op on empty slices so callers don't need a guard.
 pub fn free(allocator: &Allocator, items: $T[]) {
@@ -129,7 +129,7 @@ pub const global_allocator = Allocator {
 // then deinit() to tear down the tracker and free all remaining memory.
 
 // Linked-list node tracking a single live allocation.
-// Allocated via raw malloc — never goes through the Allocator interface.
+// Allocated via raw malloc - never goes through the Allocator interface.
 type TestAllocEntry = struct {
     ptr: &u8
     size: usize
@@ -448,7 +448,7 @@ fn arena_alloc(impl: &u8, size: usize, alignment: usize) u8[]? {
         }
     }
 
-    // Current page doesn't fit — allocate a new page
+    // Current page doesn't fit - allocate a new page
     let new_page = arena_new_page(state, size)
     if new_page.is_none() {
         return null
@@ -477,7 +477,7 @@ fn arena_realloc(impl: &u8, memory: u8[], new_size: usize) u8[]? {
 }
 
 fn arena_dealloc(impl: &u8, memory: u8[]) {
-    // Arena does not support individual frees — no-op.
+    // Arena does not support individual frees - no-op.
 }
 
 const arena_allocator_vtable = AllocatorVTable {
@@ -512,7 +512,7 @@ pub fn deinit(state: &ArenaAllocator) {
     state.current_page = null
 }
 
-// Reset all pages to offset 0 — keeps pages allocated for reuse.
+// Reset all pages to offset 0 - keeps pages allocated for reuse.
 pub fn reset(state: &ArenaAllocator) {
     let page = state.first_page
     while page.is_some() {

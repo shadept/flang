@@ -3,7 +3,7 @@
 
 // A `let` inside a loop body is scoped to that body: a read of the same name
 // after the loop must resolve to the outer binding, not the loop-local slot.
-// Regression — lowering reused one storage slot for both, so the post-loop read
+// Regression - lowering reused one storage slot for both, so the post-loop read
 // returned the inner value (or uninitialised garbage when the body never ran).
 
 fn pick() i32 {

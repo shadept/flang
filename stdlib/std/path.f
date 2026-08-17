@@ -1,8 +1,8 @@
-// std.path — cross-platform path manipulation.
+// std.path - cross-platform path manipulation.
 //
 // `Path` is an owning newtype wrapping a byte buffer. Queries (parent,
 // file_name, file_stem, extension, components) return zero-alloc String
-// views into the path's own storage — they remain valid until the Path
+// views into the path's own storage - they remain valid until the Path
 // is mutated or deinitialized. Operations that produce a new path (join,
 // with_extension, normalize, to_absolute, cwd) may allocate.
 //
@@ -79,7 +79,7 @@ pub fn path(s: String, allocator: &Allocator? = null) Path {
     return .{ __sb = sb }
 }
 
-// Takes ownership of `s` — the OwnedString is deinitialized on return.
+// Takes ownership of `s` - the OwnedString is deinitialized on return.
 // OwnedString and StringBuilder have different shapes (no cap field on
 // OwnedString), so the bytes are copied rather than re-attached. Callers
 // that care about avoiding the copy should build into a StringBuilder
@@ -162,7 +162,7 @@ pub fn parent(self: &Path) String? {
         end = end - 1
     }
     if end == 0 {
-        // Pure separators (e.g. "/" or "\\\\") — no parent.
+        // Pure separators (e.g. "/" or "\\\\") - no parent.
         return null
     }
 
@@ -206,7 +206,7 @@ pub fn file_name(self: &Path) String? {
 }
 
 // Returns the file name without its trailing extension.
-// Dotfiles ("/.bashrc") are considered to have no extension — the stem is
+// Dotfiles ("/.bashrc") are considered to have no extension - the stem is
 // the whole file name.
 pub fn file_stem(self: &Path) String? {
     const fname_opt = self.file_name()
@@ -219,7 +219,7 @@ pub fn file_stem(self: &Path) String? {
         i = i - 1
         if fname[i] == '.' {
             if i == 0 {
-                // Dotfile (".bashrc") — no extension.
+                // Dotfile (".bashrc") - no extension.
                 return fname
             }
             return fname[..i]
@@ -255,7 +255,7 @@ pub fn extension(self: &Path) String? {
 // =============================================================================
 //
 // Yields each non-empty path segment as a String view into the path's
-// storage. Consecutive separators (and any leading root) are skipped — use
+// storage. Consecutive separators (and any leading root) are skipped - use
 // is_absolute() if you need to distinguish "/foo/bar" from "foo/bar".
 //
 //   for c in p.components() { ... }
@@ -366,7 +366,7 @@ pub fn with_extension(self: &Path, ext: String) Path {
 
 // Pure lexical normalization. Collapses "./" and resolves "../" against the
 // preceding component without touching the filesystem. Symlinks are not
-// resolved — use to_absolute for that level of canonicalization.
+// resolved - use to_absolute for that level of canonicalization.
 //
 //   "a/./b/../c" -> "a/c"
 //   "/../a"      -> "/a"
@@ -411,11 +411,11 @@ pub fn normalize(self: &Path) Path {
         const seg_len: usize = p - start
 
         if seg_len == 1 and v[start] == '.' {
-            // "." — skip
+            // "." - skip
             continue
         }
         if seg_len == 2 and v[start] == '.' and v[start + 1] == '.' {
-            // ".." — pop unless top is also ".." (relative-only stack).
+            // ".." - pop unless top is also ".." (relative-only stack).
             const top_is_dotdot = comps.peek() match {
                 Some(top) => top.len == 2 and top[0] == '.' and top[1] == '.',
                 None => false

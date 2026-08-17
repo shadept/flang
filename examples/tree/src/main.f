@@ -1,4 +1,4 @@
-// ftree — directory tree viewer, modelled on GNU `tree(1)`.
+// ftree - directory tree viewer, modelled on GNU `tree(1)`.
 //
 // Usage:
 //   ftree [options] [path ...]
@@ -129,7 +129,7 @@ fn collect_entries(path: String, state: &State) Result(List(Entry), FsError) {
             continue
         }
 
-        // `e.name` is a view into the iterator's internal buffer — invalidated
+        // `e.name` is a view into the iterator's internal buffer - invalidated
         // on the next next() call, so take an owning copy.
         const owned = from_view(e.name)
         entries.push(Entry { name = owned, kind = e.kind })
@@ -197,7 +197,7 @@ fn render_line(prefix: String, is_last: bool, path: String, entry: &Entry, state
     println(sb.as_view())
 }
 
-// Depth-first pre-order walk. `path` must be null-terminated — callers pass
+// Depth-first pre-order walk. `path` must be null-terminated - callers pass
 // either the original argv string (already NUL-terminated by the C runtime)
 // or a StringBuilder-built path run through `ensure_nul_term`.
 fn walk(path: String, prefix: String, depth: usize, state: &State) {
@@ -304,7 +304,7 @@ pub fn main() i32 {
     // getopts doesn't support long-only flags directly, so --help / --ascii /
     // --noreport are dispatched through internal short chars ('?', 'A', 'N')
     // that aren't advertised in the usage text. Users who type `-?`/`-A`/`-N`
-    // still work — harmless, and conventional in many CLIs.
+    // still work - harmless, and conventional in many CLIs.
     const opts_fmt = "a(all)d(dirs-only)f(full-path)F(classify)s(size)h(human)I(ignore):L(level):?(help)A(ascii)N(noreport)"
     let opts = getopts(opts_fmt, argv[1..])
 

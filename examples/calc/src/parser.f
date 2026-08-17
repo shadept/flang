@@ -23,7 +23,7 @@ fn alloc_expr(self: &Parser, expr: Expr) &Expr {
     return ptr
 }
 
-// parse: entry point — parses a full expression, expects End token after
+// parse: entry point - parses a full expression, expects End token after
 pub fn parse(self: &Parser) &Expr {
     const expr = parse_additive(self)
 

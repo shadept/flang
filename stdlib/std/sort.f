@@ -38,7 +38,7 @@ pub fn insertion_sort(s: $T[], cmp: fn(T, T) Ord) {
 
 // Stable in-place insertion sort over `s[lo..hi]` (hi exclusive).
 // Uses shifts rather than swaps: one write per displaced element instead of
-// three — materially faster for any T larger than a register.
+// three - materially faster for any T larger than a register.
 fn _insertion_sort_range(s: $T[], lo: usize, hi: usize, cmp: fn(T, T) Ord) {
     if hi - lo < 2 { return }
     for i in (lo + 1)..hi {
@@ -64,7 +64,7 @@ pub fn quicksort(s: $T[], cmp: fn(T, T) Ord) {
     _quicksort_range(s, 0, s.len, cmp)
 }
 
-// Iterative on the larger side, recursive on the smaller — keeps stack depth
+// Iterative on the larger side, recursive on the smaller - keeps stack depth
 // bounded to O(log n) even on adversarial inputs.
 fn _quicksort_range(s: $T[], lo: usize, hi: usize, cmp: fn(T, T) Ord) {
     let l = lo
@@ -123,7 +123,7 @@ fn _partition(s: $T[], lo: usize, hi: usize, cmp: fn(T, T) Ord) usize {
 }
 
 // Sorts s[a], s[b], s[c] in ascending order under cmp.
-// Three comparisons, up to three swaps — classical 3-element insertion sort.
+// Three comparisons, up to three swaps - classical 3-element insertion sort.
 fn _sort3(s: $T[], a: usize, b: usize, c: usize, cmp: fn(T, T) Ord) {
     if cmp(s[b], s[a]) == Ord.Less { swap(&s[a], &s[b]) }
     if cmp(s[c], s[b]) == Ord.Less { swap(&s[b], &s[c]) }
@@ -136,10 +136,10 @@ fn _sort3(s: $T[], a: usize, b: usize, c: usize, cmp: fn(T, T) Ord) {
 //
 // Munro-Wild powersort (2018). Stable, O(n log n) worst case, O(n) on already
 // sorted input. Scans the input once to identify natural runs (ascending runs
-// are kept, strictly descending runs are reversed — strict to preserve
+// are kept, strictly descending runs are reversed - strict to preserve
 // stability). Short runs are extended to INSERTION_CUTOFF with insertion sort.
 //
-// Runs are kept on a stack. Each run carries a "power" — the depth in an
+// Runs are kept on a stack. Each run carries a "power" - the depth in an
 // idealised balanced merge tree where the boundary between this run and the
 // previous one would live. When a new run arrives with power P, we merge off
 // any stack entries whose power is strictly greater than P before pushing.
@@ -188,7 +188,7 @@ fn _powersort_impl(s: $T[], cmp: fn(T, T) Ord) {
         // Power of the boundary between the current run and the next one.
         const p = _node_power(n, run_start, next_start, next_end)
 
-        // Drain any pending runs whose own boundary power exceeds p — those
+        // Drain any pending runs whose own boundary power exceeds p - those
         // boundaries live deeper in the merge tree than this one and must
         // resolve first.
         while top >= 1 and stack_power[top - 1] > p {
@@ -224,7 +224,7 @@ fn _next_run(s: $T[], lo: usize, hi: usize, cmp: fn(T, T) Ord) usize {
     if hi - lo <= 1 { return hi }
     let end = lo + 1
     if cmp(s[end], s[lo]) == Ord.Less {
-        // Strictly descending — scan, then reverse in place.
+        // Strictly descending - scan, then reverse in place.
         while end < hi and cmp(s[end], s[end - 1]) == Ord.Less { end = end + 1 }
         _reverse_range(s, lo, end)
     } else {
@@ -259,7 +259,7 @@ fn _reverse_range(s: $T[], lo: usize, hi: usize) {
 // The canonical formulation: let m_A = midpoint(A)/n and m_B = midpoint(B)/n,
 // both in [0, 1). The power is the index of the first binary digit where
 // m_A and m_B differ. We compute this via long division without ever
-// materialising a floating-point value — a/n and b/n are compared bit by bit.
+// materialising a floating-point value - a/n and b/n are compared bit by bit.
 fn _node_power(n: usize, start_a: usize, start_b: usize, end_b: usize) u32 {
     // `a` and `b` hold twice the midpoint of each run; doubling avoids a
     // rounding error from dividing run lengths by 2 before the shift.
@@ -288,7 +288,7 @@ fn _merge(s: $T[], scratch: $T[], lo: usize, mid: usize, hi: usize, cmp: fn(T, T
     if lo >= mid or mid >= hi { return }
 
     // Copy the left half into scratch and stream results back into s. The right
-    // half stays put — we only race to overwrite it once its elements have been
+    // half stays put - we only race to overwrite it once its elements have been
     // consumed, and that pointer (r) never lags behind the write head (w).
     for i in lo..mid { scratch[i] = s[i] }
 
@@ -445,7 +445,7 @@ test "powersort large mixed" {
 }
 
 test "powersort two ascending runs" {
-    // Input with two already-sorted runs — exercises the merge path.
+    // Input with two already-sorted runs - exercises the merge path.
     let arr = [
         1i32, 3, 5, 7, 9, 11, 13, 15, 17, 19,
         21, 23, 25, 27, 29, 31, 33, 35, 37, 39,
@@ -476,7 +476,7 @@ test "powersort descending run reversal" {
 }
 
 test "powersort many runs" {
-    // Alternating pattern creates many short runs — exercises the run-stack
+    // Alternating pattern creates many short runs - exercises the run-stack
     // merge scheduling.
     let arr = [
         10i32, 20, 5, 15, 25, 1, 11, 21, 31, 3,

@@ -1,4 +1,4 @@
-// flang_fmt — FLang source formatter.
+// flang_fmt - FLang source formatter.
 //
 //   flang_fmt <file.f> [...]    rewrite each input in place
 //

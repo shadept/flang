@@ -1,4 +1,4 @@
-// Ty ADT — the closed set of value shapes the inference engine reasons
+// Ty ADT - the closed set of value shapes the inference engine reasons
 // about. Pure data: every constructor is plain; the engine owns all
 // allocator-bearing operations (`mk_ref`, `mk_array`, `mk_func`, etc.)
 // so this file has no allocator dependencies and can be unit-tested in
@@ -7,7 +7,7 @@
 // The recursion is broken by `&Ty` inside `Ref`, `ArrayTy.elem`, and
 // `FunctionTy.ret`. `Tuple(List(Ty))`, `Record(List(Field))`, and
 // `Nominal(NominalRef.args)` all rely on `List`'s heap-buffered storage
-// — no inline cycles.
+// - no inline cycles.
 //
 // Identity rules:
 //   - `TyVar` is by `id` (the level/`generation` is metadata). Two
@@ -15,7 +15,7 @@
 //     variable regardless of level.
 //   - `Prim`, `Never`, `Void`, `Error` are by tag.
 //   - `Ref`, `Array`, `Func`, `Tuple`, `Record`, `Nominal` are by their
-//     structural payload — see `equals(...)`.
+//     structural payload - see `equals(...)`.
 //
 // `Error` is poison. Unification with `Error` on either side resolves
 // to `Error` and emits no diagnostic, so a single upstream failure does
@@ -27,7 +27,7 @@ import std.string
 import std.string_builder
 
 // ─────────────────────────────────────────────────────────────────────
-// Handles — transparent aliases over plain integers so APIs read at a
+// Handles - transparent aliases over plain integers so APIs read at a
 // glance and the engine pays no wrapping overhead.
 // ─────────────────────────────────────────────────────────────────────
 
@@ -55,7 +55,7 @@ pub type TyVar = struct {
 }
 
 // ─────────────────────────────────────────────────────────────────────
-// Primitives — tagged, not stringly typed
+// Primitives - tagged, not stringly typed
 // ─────────────────────────────────────────────────────────────────────
 
 // The 14 FLang scalar primitives. Compared by tag; no string names
@@ -82,7 +82,7 @@ pub type PrimitiveKind = enum {
 // Compound shapes
 // ─────────────────────────────────────────────────────────────────────
 
-// `[elem; length]` — fixed-size array. `length` is resolved (no Expr
+// `[elem; length]` - fixed-size array. `length` is resolved (no Expr
 // in the type model); array-length errors are already reported at the
 // declaration site.
 pub type ArrayTy = struct {
@@ -121,28 +121,28 @@ pub type Ty = enum {
     Var(TyVar)
     // Built-in scalar.
     Prim(PrimitiveKind)
-    // `&T` — non-null reference.
+    // `&T` - non-null reference.
     Ref(&Ty)
-    // `[T; N]` — fixed-size array.
+    // `[T; N]` - fixed-size array.
     Array(ArrayTy)
-    // `fn(args) ret` — function value.
+    // `fn(args) ret` - function value.
     Func(FunctionTy)
-    // `(T0, T1, …)` — positional tuple. Distinct from `Record`; field
+    // `(T0, T1, …)` - positional tuple. Distinct from `Record`; field
     // names are positional and live in the consumer (`format`, codegen
     // tuple-field lookup), not here.
     Tuple(List(Ty))
-    // Anonymous struct — name-addressed fields. The structural cousin
+    // Anonymous struct - name-addressed fields. The structural cousin
     // of `Nominal` for unnamed values. Field order matters: `equals`
     // and codegen both walk positionally.
     Record(List(Field))
     // User-declared struct or enum, parameterised by `args`.
     Nominal(NominalRef)
-    // Bottom — diverging computations. Unifies with everything.
+    // Bottom - diverging computations. Unifies with everything.
     Never
-    // Unit — the empty-tuple type. Distinct from `Tuple([])` only by
+    // Unit - the empty-tuple type. Distinct from `Tuple([])` only by
     // convention; the engine treats them as equal in `equals`.
     Void
-    // Poison — propagated by the checker when an upstream error has
+    // Poison - propagated by the checker when an upstream error has
     // already been reported. Unification with `Error` resolves to
     // `Error` and emits no diagnostic so failures don't cascade.
     Error
@@ -327,7 +327,7 @@ fn format_nominal(nr: &NominalRef, sb: &StringBuilder) {
     }
 }
 
-// Lower-case lexical name of a primitive — same spelling used in source
+// Lower-case lexical name of a primitive - same spelling used in source
 // for type annotations (`i32`, `bool`, `char`, …). Diagnostics for
 // `Prim(...)` types use this directly.
 pub fn prim_name(p: PrimitiveKind) String {
@@ -350,7 +350,7 @@ pub fn prim_name(p: PrimitiveKind) String {
 }
 
 // ─────────────────────────────────────────────────────────────────────
-// Shape predicates — small helpers consumers reach for repeatedly.
+// Shape predicates - small helpers consumers reach for repeatedly.
 // ─────────────────────────────────────────────────────────────────────
 
 pub fn is_var(self: &Ty) bool {

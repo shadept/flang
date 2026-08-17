@@ -107,7 +107,7 @@ pub fn truncate(sb: &StringBuilder, new_len: usize) {
     }
 }
 
-// Slice over the unused tail of the backing buffer — bytes from `sb.len`
+// Slice over the unused tail of the backing buffer - bytes from `sb.len`
 // to `sb.cap`. Use with `commit(n)` to fill the buffer in place (e.g.
 // from a syscall) without going through `append`.
 pub fn unwritten_buf(sb: &StringBuilder) u8[] {
@@ -128,7 +128,7 @@ pub fn commit(sb: &StringBuilder, n: usize) {
 // No allocation, no copy: the builder's buffer becomes the OwnedString's buffer
 // and the builder is reset to empty (cap=0) so a subsequent deinit() is a no-op.
 // Enables the `let sb = string_builder(); defer sb.deinit(); ... sb.to_string()`
-// pattern — defer fires on panic before to_string, otherwise transfers cleanly.
+// pattern - defer fires on panic before to_string, otherwise transfers cleanly.
 pub fn to_string(sb: &StringBuilder) OwnedString {
     const alloc = sb.allocator.or_global()
 
@@ -431,7 +431,7 @@ fn parse_float_spec(spec: String) FloatFormatSpec {
 }
 
 // Emit content (in tmp[0..len]) with alignment/padding per fmt. Mirrors
-// `apply_int_padding` — the sign-aware zero-pad branch handles "-003.14".
+// `apply_int_padding` - the sign-aware zero-pad branch handles "-003.14".
 fn apply_float_padding(sb: &StringBuilder, tmp: u8[], len: usize, fmt: &FloatFormatSpec) {
     if fmt.width <= len {
         sb.append_bytes(tmp[0..len])
@@ -683,7 +683,7 @@ pub fn append_repeated(sb: &StringBuilder, s: String, n: usize) {
 }
 
 // Append the bytes of `s` in reverse order. Note: byte-reversal of multi-byte
-// UTF-8 sequences produces invalid UTF-8 — use this only for ASCII content or
+// UTF-8 sequences produces invalid UTF-8 - use this only for ASCII content or
 // when reversing arbitrary bytes is the intent.
 pub fn append_reversed(sb: &StringBuilder, s: String) {
     if s.len == 0 { return }
@@ -716,7 +716,7 @@ pub fn append_padded(sb: &StringBuilder, s: String, width: usize, align: char, f
         sb.append(s)
         for _i in 0..right { sb.append(fill) }
     } else {
-        // Default / '>' — right-justify.
+        // Default / '>' - right-justify.
         for _i in 0..pad { sb.append(fill) }
         sb.append(s)
     }

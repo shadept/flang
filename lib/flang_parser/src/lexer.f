@@ -1,4 +1,4 @@
-// Lexer — turns a source buffer into a stream of Tokens with trivia.
+// Lexer - turns a source buffer into a stream of Tokens with trivia.
 //
 // Trivia attachment policy:
 //   - Leading trivia: every whitespace and line-comment chunk between the
@@ -30,7 +30,7 @@ pub fn parser_version() String {
 
 // One level of an active `$"..."`. Nested interp pushes another frame.
 // Exactly one of in_segment / in_format_spec is true, or both are false
-// (hole mode — the lexer runs as a normal token scanner with the bracket
+// (hole mode - the lexer runs as a normal token scanner with the bracket
 // counters tracking which `}` closes the hole).
 type InterpFrame = struct {
     in_segment: bool
@@ -47,7 +47,7 @@ pub type Lexer = struct {
     source: String
     position: usize
     line: usize
-    // Backs every list the lexer allocates — interp_stack, per-token
+    // Backs every list the lexer allocates - interp_stack, per-token
     // trivia lists, and the result of `tokenize()`. Resolved at
     // construction (the optional `allocator` argument to `lexer()` is
     // run through `or_global()` once), so internal call sites just
@@ -90,7 +90,7 @@ pub fn lexer(source: String, allocator: &Allocator? = null) Lexer {
 
 // Release the lexer's own bookkeeping: the interp frame stack and any
 // token queued ahead (only relevant if the caller abandons the lexer
-// between `next_token()` calls — `tokenize()` always drains the queue
+// between `next_token()` calls - `tokenize()` always drains the queue
 // before returning). Tokens already handed to the caller are
 // independent; deinit the returned `List(Token)` to free them.
 pub fn deinit(self: &Lexer) {
@@ -107,7 +107,7 @@ pub fn deinit(self: &Lexer) {
 // `InterpStringStart`; otherwise the flag is silently dropped and a
 // normal token is produced.
 //
-// Drives the `$(args)"..."` and `$ident"..."` interp forms — the
+// Drives the `$(args)"..."` and `$ident"..."` interp forms - the
 // parser calls this immediately before eating the closing `)` or the
 // prefix identifier. The `$"..."` form is recognised inline by the
 // lexer (Dollar adjacent to `"`) and does not need this hook.
@@ -115,8 +115,8 @@ pub fn mark_next_string_interp(self: &Lexer) {
     self.mark_next_string_interp = true
 }
 
-// Drive `next_token()` to completion and collect every token —
-// including the terminating `Eof` — into a list. The returned list
+// Drive `next_token()` to completion and collect every token -
+// including the terminating `Eof` - into a list. The returned list
 // owns its storage; callers must `deinit()` it. The lexer's position
 // is at end-of-source on return.
 //
@@ -136,13 +136,13 @@ pub fn tokenize(self: &Lexer) List(Token) {
 }
 
 // Produce the next token from the source, advancing the lexer's
-// position. Always returns a token — once the source is exhausted,
+// position. Always returns a token - once the source is exhausted,
 // every call returns `Eof` (the formatter / parser are expected to
 // stop at the first `Eof`).
 //
 // Dispatch order:
 //   1. Drain a queued token (segment boundaries fan out into two).
-//   2. Inside an interp segment / format-spec, scan raw characters —
+//   2. Inside an interp segment / format-spec, scan raw characters -
 //      these modes do not eat trivia.
 //   3. If a `"` was marked as the next interp opener, consume it.
 //   4. Otherwise: leading trivia → token text → (hole-mode intercept)
@@ -221,7 +221,7 @@ pub fn next_token(self: &Lexer) Token {
 // Trivia
 // ─────────────────────────────────────────────────────────────────────────
 
-// Empty `Trivia[]` — no allocation, ptr=null, len=0. Used everywhere a
+// Empty `Trivia[]` - no allocation, ptr=null, len=0. Used everywhere a
 // token is known to have no leading or trailing trivia (interp
 // boundaries, BadToken recovery exits, the EOF placeholder).
 fn empty_trivia() Trivia[] {
@@ -367,7 +367,7 @@ fn lex_token_text(self: &Lexer) TokenKind {
 
     self.position = start + 1
     if ch == '$' {
-        // Strict adjacency only — a stray `$` next to whitespace must not
+        // Strict adjacency only - a stray `$` next to whitespace must not
         // arm the interp scanner.
         if self.position < text.len and text[self.position] == '"' {
             self.mark_next_string_interp = true
@@ -562,7 +562,7 @@ fn lex_char_literal(self: &Lexer, kind: TokenKind) TokenKind {
     self.position = self.position + 1
     if self.position >= text.len { return TokenKind.BadToken }
     if text[self.position] == '\'' {
-        // Empty literal — eat the closing quote so recovery doesn't loop.
+        // Empty literal - eat the closing quote so recovery doesn't loop.
         self.position = self.position + 1
         return TokenKind.BadToken
     }
@@ -612,7 +612,7 @@ fn lex_char_literal(self: &Lexer, kind: TokenKind) TokenKind {
 
     if self.position < text.len and text[self.position] != '\'' {
         bad = true
-        // Stop at newline — single-quoted literals never span lines.
+        // Stop at newline - single-quoted literals never span lines.
         while self.position < text.len and text[self.position] != '\'' and text[self.position] != '\n' {
             self.position = self.position + 1
         }
@@ -752,7 +752,7 @@ fn begin_interp_string(self: &Lexer) Token {
 
 // Scan raw segment bytes. `{` queues InterpHoleStart and switches to
 // hole mode; `"` queues InterpStringEnd and pops the frame. `{{` / `}}`
-// are doubling escapes (consumed here as raw bytes — the segment keeps
+// are doubling escapes (consumed here as raw bytes - the segment keeps
 // its raw shape; decode_interp_segment expands them).
 fn lex_segment(self: &Lexer) Token {
     const text = self.source
@@ -874,7 +874,7 @@ fn lex_segment(self: &Lexer) Token {
         self.position = self.position + 1
     }
 
-    // Unterminated segment — outer interp frames are unrecoverable too.
+    // Unterminated segment - outer interp frames are unrecoverable too.
     while self.interp_stack.len > 0 { self.interp_stack.pop() }
     return Token {
         kind = TokenKind.BadToken,
@@ -887,7 +887,7 @@ fn lex_segment(self: &Lexer) Token {
     }
 }
 
-// Scan raw format-spec bytes between `:` and `}`. No escape handling —
+// Scan raw format-spec bytes between `:` and `}`. No escape handling -
 // `{x:.2}` yields spec text `.2`. Closes the hole; queues InterpHoleEnd.
 fn lex_format_spec(self: &Lexer) Token {
     const text = self.source
@@ -1005,7 +1005,7 @@ fn empty_token(allocator: &Allocator) Token {
 }
 
 // ─────────────────────────────────────────────────────────────────────────
-// Literal decoders — CST holds raw source slices; AST projection calls
+// Literal decoders - CST holds raw source slices; AST projection calls
 // these to materialise the runtime value of a literal.
 // ─────────────────────────────────────────────────────────────────────────
 
@@ -1020,7 +1020,7 @@ fn empty_token(allocator: &Allocator) Token {
 // The same conditions cause the lexer to mark the token `BadToken`,
 // so well-formed `StringLiteral` tokens always decode to `Some`.
 //
-// The returned `OwnedString` owns its buffer — caller must `.deinit()`.
+// The returned `OwnedString` owns its buffer - caller must `.deinit()`.
 // `allocator` backs that buffer; pass `null` to default to the global
 // allocator (or the test allocator under test).
 pub fn decode_string_literal(raw: String, allocator: &Allocator? = null) OwnedString? {
@@ -1113,7 +1113,7 @@ pub fn decode_char_literal(raw: String) u32? {
 // Materialise an `InterpSegment` token's runtime bytes. Same escape
 // vocabulary as `decode_string_literal`, plus segment-only `{{` and
 // `}}` doubling that decode to a single `{` / `}`. `raw` is the
-// segment text exactly as the lexer captured it (no quotes — segments
+// segment text exactly as the lexer captured it (no quotes - segments
 // have no surrounding delimiters).
 //
 // Returns `null` on a malformed `\uXXXX` escape; otherwise the

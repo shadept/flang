@@ -18,7 +18,7 @@ pub fn main() i32 {
     if q.x != 42 { return 1 }
     if q.y != 99 { return 2 }
 
-    // Mutate original — clone should be independent
+    // Mutate original - clone should be independent
     p.x = 0
     if q.x != 42 { return 3 }
 

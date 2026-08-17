@@ -21,7 +21,7 @@ fn mk(v: $T, c: fn(&T) void) Wrap(T) {
     return .{ val = some, cleanup = c }
 }
 
-// Uncalled, but its body is still validated — `self.cleanup(&v)` is the trigger.
+// Uncalled, but its body is still validated - `self.cleanup(&v)` is the trigger.
 fn dispose(self: &Wrap($T)) {
     self.val match {
         Some(v) => self.cleanup(&v),

@@ -1,4 +1,4 @@
-// SourceSpan — a byte range inside a known source file.
+// SourceSpan - a byte range inside a known source file.
 //
 // `file_id` is workspace-stable: the same logical file keeps the same id
 // across compilations, which is what makes cross-file find-references
@@ -6,7 +6,7 @@
 
 // A source location, identified by workspace-stable file id and a byte
 // range within that file. Line and column are derived on demand from the
-// owning Source's line-endings table — not stored here.
+// owning Source's line-endings table - not stored here.
 pub type SourceSpan = struct {
     file_id: i32
     // Inclusive byte offset of the first character.

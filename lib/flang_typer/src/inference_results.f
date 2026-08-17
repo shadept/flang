@@ -1,16 +1,16 @@
-// InferenceResults — mutable accumulator the checker fills in.
+// InferenceResults - mutable accumulator the checker fills in.
 //
 // Three primary side tables, all keyed by `NodeId`:
 //
 //   - `node_types`      every expression / pattern / type-expr node's
 //                       final resolved type. Coerced types land here
-//                       *before the engine is discarded* — lowering
+//                       *before the engine is discarded* - lowering
 //                       reads this dict and never inspects the slot.
 //
 //   - `resolved_ops`    resolved operator binding for each operator
 //                       node (the function the `+`, `==`, `[]`, …
 //                       desugared to). Null entries mean "no overload
-//                       — primitive IR instruction".
+//                       - primitive IR instruction".
 //
 //   - `resolved_targets` resolved function / variant / field / local
 //                       declaration that each name reference points

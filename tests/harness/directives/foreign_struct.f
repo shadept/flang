@@ -2,7 +2,7 @@
 //! STDOUT: 30
 //! EXIT: 0
 
-// Foreign struct — layout locked to C ABI, uses inline directive syntax.
+// Foreign struct - layout locked to C ABI, uses inline directive syntax.
 // Without -I headers, the struct is emitted in the generated C code.
 pub type Point = #foreign struct {
     x: i32,

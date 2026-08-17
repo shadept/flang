@@ -1,4 +1,4 @@
-// Visibility — one value passed through every name lookup.
+// Visibility - one value passed through every name lookup.
 //
 // Replaces the C# checker's pattern of threading a `HashSet<string>?`
 // alongside an optional current-module path through every registry
@@ -15,7 +15,7 @@
 //     `current_module` itself.
 //
 // Lookups consult `visible` only for short-name resolution. FQN-style
-// references (containing a dot) bypass visibility entirely — an
+// references (containing a dot) bypass visibility entirely - an
 // explicit dotted name is unambiguous and self-authorising.
 
 import std.allocator
@@ -35,7 +35,7 @@ pub fn visibility(current_module: String?, visible: Set(String)) Visibility {
     return .{ current_module = current_module, visible = visible }
 }
 
-// Empty visibility — used by tests and by codegen-time lookups that
+// Empty visibility - used by tests and by codegen-time lookups that
 // don't need filtering (the source code has already been validated).
 pub fn open(allocator: &Allocator? = null) Visibility {
     let alloc = allocator.or_global()

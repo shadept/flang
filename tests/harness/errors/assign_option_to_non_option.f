@@ -14,6 +14,6 @@ fn maybe() i32? { return Some(1) }
 
 pub fn main() i32 {
     let x: i32 = 0
-    x = maybe()    // assigning Option(i32) into an i32 slot — must error
+    x = maybe()    // assigning Option(i32) into an i32 slot - must error
     return x
 }

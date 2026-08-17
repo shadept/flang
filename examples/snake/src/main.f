@@ -1,4 +1,4 @@
-// Snake game — demonstrates terminal control, raw input, and game loops.
+// Snake game - demonstrates terminal control, raw input, and game loops.
 //
 // Controls: WASD or arrow keys to move, Q to quit.
 // If interrupted with Ctrl+C, run `reset` to restore terminal settings.

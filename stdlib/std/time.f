@@ -1,16 +1,16 @@
-// std.time — high-resolution monotonic clock for measuring intervals.
+// std.time - high-resolution monotonic clock for measuring intervals.
 //
 // `monotonic_ns()` returns nanoseconds since an unspecified epoch that
 // is stable for the lifetime of the process. The reading IS NOT
-// wall-clock time — it doesn't jump under NTP corrections, daylight
-// saving, or manual clock changes — and IS NOT persistable across
+// wall-clock time - it doesn't jump under NTP corrections, daylight
+// saving, or manual clock changes - and IS NOT persistable across
 // process restarts. Use it to time blocks of code, nothing else.
 //
 // Backed by `QueryPerformanceCounter` on Windows and
 // `clock_gettime(CLOCK_MONOTONIC, ...)` on POSIX via time.c.
 //
 // A first-class `Time` / `Duration` value type, wall-clock readings,
-// formatting, and parsing will live elsewhere when needed — this
+// formatting, and parsing will live elsewhere when needed - this
 // module is intentionally narrow.
 //
 // Typical use:
@@ -29,7 +29,7 @@
 #foreign fn __flang_monotonic_ns() u64
 
 // Read the monotonic clock. Returns nanoseconds since the process's
-// monotonic epoch (unspecified — only differences are meaningful).
+// monotonic epoch (unspecified - only differences are meaningful).
 pub fn monotonic_ns() u64 {
     return __flang_monotonic_ns()
 }
@@ -45,7 +45,7 @@ pub fn elapsed_ns(start: u64) u64 {
 }
 
 // Convert a nanosecond duration to seconds as f64. Convenience for
-// formatting — internal math should stay in ns to avoid float drift.
+// formatting - internal math should stay in ns to avoid float drift.
 pub fn ns_to_seconds(ns: u64) f64 {
     return (ns as f64) / 1000000000.0
 }

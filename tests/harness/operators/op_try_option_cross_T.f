@@ -2,7 +2,7 @@
 //! EXIT: 0
 
 // `?` on `Option(T)` must work inside any function returning `Option(U)`
-// for any `U` — `None` is shape-only. The Return slot's type variable
+// for any `U` - `None` is shape-only. The Return slot's type variable
 // is bound from the enclosing function's return type via inference, no
 // per-call wrapping needed.
 
@@ -13,7 +13,7 @@ fn first_nonzero(xs: i32[]) i32? {
     return None
 }
 
-// Caller returns Option of a TUPLE — different `T` from the source.
+// Caller returns Option of a TUPLE - different `T` from the source.
 fn first_nonzero_doubled(xs: i32[]) (i32, i32)? {
     let v = first_nonzero(xs)?
     return Some((v, v * 2))

@@ -1,7 +1,7 @@
 //! TEST: error_op_call_no_match
 //! COMPILE-ERROR: E2004
 
-// `c` has no `op_call` defined and isn't a function pointer — call must error.
+// `c` has no `op_call` defined and isn't a function pointer - call must error.
 // Today this surfaces as "Unresolved function" (E2004); the diagnostic could be
 // upgraded later, but the failure mode is what matters.
 

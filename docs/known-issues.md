@@ -57,6 +57,73 @@ Running the bootstrap on any stdlib-using project (including itself) reported `u
 
 ## Open Issues
 
+### Higher-Order Stdlib Functions Cannot Thread an Allocator Into the Callback
+
+**Status:** Open — design decision needed before the combinator set grows
+**Affected:** `stdlib/std/list.f` (`flat_map` today; any future `group_by`, `partition_map`, `permutations`, `combinations`)
+
+A callback that returns a container has to allocate it, and the caller has no
+way to say where from. `List.flat_map` therefore does one allocation and one
+free per element for values that are pure scratch — nothing outlives the
+iteration that produced it. For small results that allocator traffic is the
+entire cost of the call.
+
+The same shape will dominate anything built on top: `permutations` and
+`combinations` produce many short-lived intermediate sequences, so the
+allocation pattern matters more there than in `flat_map` itself.
+
+**Options, none chosen:**
+
+1. **Thread an allocator into the callback** — `f: fn(T, &Allocator) List(U)`,
+   with a temporary arena created once per call and reset at the end.
+   Intermediates become bump allocations reclaimed in one shot. Costs: every
+   callback signature grows an argument, and the arena's lifetime becomes part
+   of the contract.
+2. **Let the callback append into the output** — `f: fn(T, &List(U))`. No
+   intermediates at all, which is strictly the least work, but the callback
+   stops being a pure function and cannot be reused as a mapper.
+3. **Keep the current shape** and accept the traffic where results are large
+   enough that the copy dominates anyway.
+
+Worth settling before the utility set grows, since the choice sets the
+convention every later combinator follows.
+
+
+
+### TEMPORARY: Lowering Refuses Functions It Cannot Fully Lower
+
+**Status:** Deliberate scaffold — scheduled for removal, not a design feature
+**Affected:** `lib/flang_driver/src/lower.f` (`unlowerable`, `LowerCtx.blocked`), `lib/flang_codegen/src/fir.f` (`IrModule.skipped`)
+
+Lowering covers a subset of FLang. Every construct outside it used to lower to
+a placeholder zero, so the function was still emitted, linked, and run — and
+silently computed the wrong answer. `defer` statements were dropped outright,
+and a `for` over a non-range iterable vanished.
+
+Now `unlowerable(ctx)` marks the function and `lower_function` refuses to emit
+it, recording the symbol in `IrModule.skipped`. A missing function fails loudly
+at link time; a wrong one never fails at all.
+
+**This is a crutch for the milestone period.** The end state is that every
+construct either lowers or produces a diagnostic — never a quietly dropped
+function.
+
+**Removal condition.** When `lower_expr` and `lower_stmt` no longer need a
+catch-all placeholder arm (every `Expr` and `Stmt` variant lowers), delete:
+`unlowerable`, `LowerCtx.blocked`, the skip branch in `lower_function`,
+`IrModule.skipped`, the `was_skipped` test helper, and every call site. The
+tests that assert refusal (`a caller of an out-of-subset callee is refused…`,
+`a for over a non-range iterable refuses the function`, and the two
+unrepresentable-pattern tests) go with them.
+
+**Interim gap:** the skip is not yet surfaced to the user. `IrModule.skipped`
+is populated but no driver diagnostic reads it, so today the failure appears as
+a link error naming a mangled symbol rather than a message naming the
+unsupported construct. That should be wired up before the scaffold outlives
+this milestone series.
+
+
+
 ### Same-Named Types From Different Modules Collided In Generic Specialization — RESOLVED
 
 **Status:** Resolved — specialization keys use the FQN; self-hosted compiler was never affected
@@ -548,6 +615,51 @@ Non-pub helper functions using `let buf: [u8; 1] = [0; 1]` followed by vtable di
 ---
 
 ## Deferred Features
+
+### Lazy Combinator Set Over Slices and Iterators
+
+**Status:** Future work — shape decided, not implemented
+**Affected:** `stdlib/std/list.f`, `stdlib/core/slice.f`, `stdlib/std/iter.f`
+
+`List` has an eager set (`map`, `flat_map`, `filter`, `remove`, `fold`,
+`fold_right`, `drop_first`) that allocates a new list per step. The same
+operations over slices and iterators would return **iterators**, giving a lazy
+set that fuses a chain into one pass with no intermediate containers — which is
+also an answer to the allocator traffic recorded under Open Issues.
+
+**Decision — the eager set lives on `List`, the lazy set on `Slice` and
+`Iterator`, and `xs.iter()` is the explicit entry into the lazy world.**
+
+**Rule: no implicit conversion from `List` to `Iterator`.** Entering the lazy
+world is always written out. The sole exception is the `for` loop, which
+iterates a list directly — that is exactly what a `for` loop does, so nothing
+is being hidden there.
+
+This is what makes the apparent ambiguity — a `List` where `xs.map(f)` could
+mean either set — impossible rather than merely unlikely. With no conversion,
+a `List` receiver has exactly **one** candidate: the `List` overload. The
+`Slice` and `Iterator` overloads are not applicable, so there is no contest to
+resolve and no reliance on return-type disambiguation (which overload
+resolution cannot do anyway).
+
+The constraint holds today by construction. The engine's coercion ladder is
+`integer widening`, `float widening`, `char → u8`, `option wrapping`,
+`string ↔ byte slice`, `array decay` (`[T; N]` → slice), `slice → reference`,
+and `nominal → Type`. None of them produce a `Slice` or an `Iterator` from a
+`List`; `as_slice()` and `iter()` are both explicit calls. This entry records
+that as intentional, so no one adds such a rule later for convenience.
+
+**Invariants to hold:**
+
+1. Do not add an implicit `List → Iterator` (or `List → Slice`) coercion.
+2. Do not define a lazy variant with a `List` receiver. Two overloads differing
+   only in return type is the one case overload resolution cannot settle.
+
+**Not scheduled.** The compiler sticks to `List` and the eager set: it is the
+main consumer, it works over lists throughout, and iterator machinery would
+enlarge the subset that has to lower before self-hosting completes.
+
+---
 
 ### FFI Pointer Returns and Casts
 

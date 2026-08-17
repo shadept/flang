@@ -1,4 +1,4 @@
-// inliner_test — exercises lib/flang_codegen.shim_inliner on a
+// inliner_test - exercises lib/flang_codegen.shim_inliner on a
 // hand-built module that mimics the canonical FLang shim pattern
 // (RFC-015 §3.1). Prints FIR before and after the pass, asserts the
 // shim wrappers were collapsed, then lowers the inlined module to C
@@ -8,14 +8,14 @@
 //   outer(n)  -> inner(n)                 (1-call shim;  inlinable)
 //   caller(n) -> outer(n)                 (1-call shim;  inlinable, only
 //                                          inlined when invoked from a
-//                                          non-`main` caller — main is
+//                                          non-`main` caller - main is
 //                                          exempted by design)
 //   middle(n) -> caller(n)                (non-main caller; here is
 //                                          where outer+inner collapse)
 //   main      -> printf("%d", middle(10))
 //
 // After the inliner runs, every non-`main` body should contain only
-// arithmetic + ret — no `call @inner` / `call @outer` left.
+// arithmetic + ret - no `call @inner` / `call @outer` left.
 
 import std.allocator
 import std.io.file
@@ -34,7 +34,7 @@ import flang_codegen.print
 import flang_codegen.shim_inliner
 
 pub fn main() i32 {
-    // Smoke 1: empty module — verifies the pass never touches anything
+    // Smoke 1: empty module - verifies the pass never touches anything
     // when there are no functions to consider.
     let m0 = module()
     defer m0.deinit()
@@ -64,10 +64,10 @@ pub fn main() i32 {
     println(after_sb.as_view())
 
     if !verify_no_residual_calls(&m) {
-        println("inliner_test: FAIL — residual calls to shim wrappers remain in non-main bodies")
+        println("inliner_test: FAIL - residual calls to shim wrappers remain in non-main bodies")
         return 1
     }
-    println("inliner_test: OK — non-main bodies are free of @inner / @outer / @caller calls")
+    println("inliner_test: OK - non-main bodies are free of @inner / @outer / @caller calls")
 
     println("inliner_test: lowering to C and running the artifact …")
     let out_path = pick_output_path()
@@ -224,7 +224,7 @@ fn build_main() Function {
 
 // Walk every non-`main` function and check it has no direct call to
 // any of the shim wrappers we expected the inliner to collapse. (`main`
-// is exempted as a caller — calls *from* main are not inlined; that's
+// is exempted as a caller - calls *from* main are not inlined; that's
 // the RFC-015 §3.3 default.)
 fn verify_no_residual_calls(m: &IrModule) bool {
     for fi in 0..m.functions.len {

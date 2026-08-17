@@ -229,7 +229,7 @@ pub fn reverse(s: $T[]) {
     }
 }
 
-// `sort` now lives in `std.sort` — see that module for insertion_sort,
+// `sort` now lives in `std.sort` - see that module for insertion_sort,
 // quicksort, powersort, and the stable default `sort`.
 
 // =============================================================================

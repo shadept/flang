@@ -1,13 +1,13 @@
-// Nominal type registry — struct and enum declarations indexed by FQN.
+// Nominal type registry - struct and enum declarations indexed by FQN.
 //
 // Distinct from the C# `TypeRegistry`: struct fields and enum variants
 // have their own first-class shapes (`StructDef` / `EnumDef`) instead
 // of being lumped into a `FieldsOrVariants` list discriminated by an
 // enum `Kind`. Payload-less enum variants carry an empty `payloads`
-// list — no `void` sentinel.
+// list - no `void` sentinel.
 //
 // Lookups return `RegLookup` instead of `Option` so the caller can
-// distinguish "not found" from "found but not visible" — that
+// distinguish "not found" from "found but not visible" - that
 // distinction drives a better diagnostic ("type exists in module X
 // but is not imported here").
 
@@ -59,7 +59,7 @@ pub type NominalDef = enum {
 
 // Result of looking up a name in the registry. `NomLookFound` returns
 // the index; `NomLookHidden` means the entry exists but its defining
-// module is outside the caller's visibility scope — used to emit a
+// module is outside the caller's visibility scope - used to emit a
 // "did you forget `import X`?" hint. `NomLookMissing` means no entry
 // by that name exists anywhere.
 pub type NomHiddenInfo = struct {
@@ -108,12 +108,12 @@ pub fn deinit(self: &NominalRegistry) {
 }
 
 // Register a new nominal. The caller transfers ownership of `fqn_owned`
-// to the registry — the heap buffer keeps the `String` views in both
+// to the registry - the heap buffer keeps the `String` views in both
 // `def.fqn` and `by_fqn` stable for the registry's lifetime. The `fqn`
 // field on `def` is overwritten with the stable view, so the caller can
 // pass a placeholder there.
 //
-// Caller is responsible for checking duplicates first — registering an
+// Caller is responsible for checking duplicates first - registering an
 // FQN twice overwrites the index and leaks the previous definition.
 pub fn register(self: &NominalRegistry, def: NominalDef, fqn_owned: OwnedString) NominalId {
     let id: NominalId = self.defs.len as u32
@@ -170,9 +170,9 @@ pub fn lookup_fqn(self: &NominalRegistry, fqn: String) NominalId? {
 }
 
 // Resolve a name in the caller's visibility scope. `name` may be:
-//   - a full FQN (`mod.sub.Type`) — bypasses visibility,
+//   - a full FQN (`mod.sub.Type`) - bypasses visibility,
 //   - a current-module-prefixed name (`Type` resolved against `vis.current_module`),
-//   - a bare short name — scanned across every FQN with the matching
+//   - a bare short name - scanned across every FQN with the matching
 //     short name, restricted to visible modules.
 pub fn lookup(self: &NominalRegistry, name: String, vis: &Visibility) NomLookup {
     // Direct FQN hit.
@@ -216,7 +216,7 @@ pub fn lookup(self: &NominalRegistry, name: String, vis: &Visibility) NomLookup 
 }
 
 // First visible enum declaring a variant `name` with exactly `arity`
-// payloads. Registration order breaks ties — qualify with the enum name
+// payloads. Registration order breaks ties - qualify with the enum name
 // when two visible enums share a variant shape.
 // ponytail: linear scan over every def per call; index variant names if
 // checker profiles flag it.

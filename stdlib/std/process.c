@@ -28,8 +28,13 @@
 #define STDIO_NULL    1
 #define STDIO_PIPE    2
 
-#define R_OK  0
-#define R_ERR 1
+// NOT `R_OK` / `R_ERR`: POSIX <unistd.h> defines `R_OK` as 4 (the
+// read-permission bit for `access()`), and it is included below by the
+// platform branch. The system macro won, so every successful spawn returned
+// 4, the caller read a non-zero status, and reported failure on a process
+// that had in fact started.
+#define PROC_R_OK  0
+#define PROC_R_ERR 1
 
 static int32_t proc_err_from_errno(int e) {
     switch (e) {
@@ -184,13 +189,13 @@ int __flang_proc_spawn(
     (void)prog; /* argv[0] is the program; Windows pulls it from the command line */
     *out_handle = 0;
     *out_stdin_fd = -1; *out_stdout_fd = -1; *out_stderr_fd = -1;
-    if (argc == 0) { *out_err = PROC_INVALID_ARGUMENT; return R_ERR; }
+    if (argc == 0) { *out_err = PROC_INVALID_ARGUMENT; return PROC_R_ERR; }
 
     char** argv_z = materialize_argv(argv, argc);
     char** envp_z = materialize_argv(envp, envc);
     if (!argv_z || !envp_z) {
         free(argv_z); free(envp_z);
-        *out_err = PROC_IO_ERROR; return R_ERR;
+        *out_err = PROC_IO_ERROR; return PROC_R_ERR;
     }
 
     char* cmdline = build_command_line(argv_z);
@@ -198,7 +203,7 @@ int __flang_proc_spawn(
     char* env_block = build_env_block(envp_z, envc, &env_len);
     if (!cmdline || !env_block) {
         free(argv_z); free(envp_z); free(cmdline); free(env_block);
-        *out_err = PROC_IO_ERROR; return R_ERR;
+        *out_err = PROC_IO_ERROR; return PROC_R_ERR;
     }
 
     HANDLE child_stdin_r = NULL, child_stdin_w = NULL;
@@ -220,7 +225,7 @@ int __flang_proc_spawn(
     sa_inherit.nLength = sizeof(sa_inherit);
     sa_inherit.bInheritHandle = TRUE;
 
-    int rc = R_OK;
+    int rc = PROC_R_OK;
 
     switch (stdin_mode) {
         case STDIO_INHERIT: in_h = GetStdHandle(STD_INPUT_HANDLE); break;
@@ -277,7 +282,7 @@ int __flang_proc_spawn(
     );
     if (!ok) {
         *out_err = proc_err_from_win32(GetLastError());
-        rc = R_ERR;
+        rc = PROC_R_ERR;
         goto cleanup;
     }
 
@@ -304,9 +309,9 @@ cleanup:
     if (child_stdout_w) CloseHandle(child_stdout_w);
     if (child_stderr_w) CloseHandle(child_stderr_w);
     /* Close other ends that were left over (only on failure paths). */
-    if (child_stdin_w && rc != R_OK) CloseHandle(child_stdin_w);
-    if (child_stdout_r && rc != R_OK) CloseHandle(child_stdout_r);
-    if (child_stderr_r && rc != R_OK) CloseHandle(child_stderr_r);
+    if (child_stdin_w && rc != PROC_R_OK) CloseHandle(child_stdin_w);
+    if (child_stdout_r && rc != PROC_R_OK) CloseHandle(child_stdout_r);
+    if (child_stderr_r && rc != PROC_R_OK) CloseHandle(child_stderr_r);
     if (null_in_h != INVALID_HANDLE_VALUE) CloseHandle(null_in_h);
     if (null_out_h != INVALID_HANDLE_VALUE) CloseHandle(null_out_h);
     if (null_err_h != INVALID_HANDLE_VALUE) CloseHandle(null_err_h);
@@ -315,7 +320,7 @@ cleanup:
 
 fail_pipe:
     *out_err = PROC_IO_ERROR;
-    rc = R_ERR;
+    rc = PROC_R_ERR;
     goto cleanup;
 }
 
@@ -324,23 +329,23 @@ int __flang_proc_wait(uintptr_t handle, int32_t* out_exit, int32_t* out_err) {
     DWORD r = WaitForSingleObject(h, INFINITE);
     if (r != WAIT_OBJECT_0) {
         *out_err = proc_err_from_win32(GetLastError());
-        return R_ERR;
+        return PROC_R_ERR;
     }
     DWORD code = 0;
     if (!GetExitCodeProcess(h, &code)) {
         *out_err = proc_err_from_win32(GetLastError());
-        return R_ERR;
+        return PROC_R_ERR;
     }
     *out_exit = (int32_t)code;
-    return R_OK;
+    return PROC_R_OK;
 }
 
 int __flang_proc_kill(uintptr_t handle, int32_t* out_err) {
     if (!TerminateProcess((HANDLE)handle, 1)) {
         *out_err = proc_err_from_win32(GetLastError());
-        return R_ERR;
+        return PROC_R_ERR;
     }
-    return R_OK;
+    return PROC_R_OK;
 }
 
 void __flang_proc_release(uintptr_t handle) {
@@ -407,13 +412,13 @@ int __flang_proc_spawn(
 ) {
     *out_handle = 0;
     *out_stdin_fd = -1; *out_stdout_fd = -1; *out_stderr_fd = -1;
-    if (argc == 0 || !prog) { *out_err = PROC_INVALID_ARGUMENT; return R_ERR; }
+    if (argc == 0 || !prog) { *out_err = PROC_INVALID_ARGUMENT; return PROC_R_ERR; }
 
     char** argv_z = materialize_argv(argv, argc);
     char** envp_z = materialize_argv(envp, envc);
     if (!argv_z || !envp_z) {
         free(argv_z); free(envp_z);
-        *out_err = PROC_IO_ERROR; return R_ERR;
+        *out_err = PROC_IO_ERROR; return PROC_R_ERR;
     }
 
     int stdin_pipe[2] = {-1, -1};
@@ -497,7 +502,7 @@ int __flang_proc_spawn(
     }
     *out_handle = (uintptr_t)pid;
     free(argv_z); free(envp_z);
-    return R_OK;
+    return PROC_R_OK;
 
 fail_pipe:
     *out_err = PROC_IO_ERROR;
@@ -509,7 +514,7 @@ fail_close_all:
     if (stderr_pipe[0] >= 0) close(stderr_pipe[0]);
     if (stderr_pipe[1] >= 0) close(stderr_pipe[1]);
     free(argv_z); free(envp_z);
-    return R_ERR;
+    return PROC_R_ERR;
 }
 
 int __flang_proc_wait(uintptr_t handle, int32_t* out_exit, int32_t* out_err) {
@@ -521,21 +526,21 @@ int __flang_proc_wait(uintptr_t handle, int32_t* out_exit, int32_t* out_err) {
         if (r < 0 && errno == EINTR) continue;
         if (r < 0) {
             *out_err = proc_err_from_errno(errno);
-            return R_ERR;
+            return PROC_R_ERR;
         }
     }
     if (WIFEXITED(status)) *out_exit = WEXITSTATUS(status);
     else if (WIFSIGNALED(status)) *out_exit = 128 + WTERMSIG(status);
     else *out_exit = -1;
-    return R_OK;
+    return PROC_R_OK;
 }
 
 int __flang_proc_kill(uintptr_t handle, int32_t* out_err) {
     if (kill((pid_t)handle, SIGKILL) != 0) {
         *out_err = proc_err_from_errno(errno);
-        return R_ERR;
+        return PROC_R_ERR;
     }
-    return R_OK;
+    return PROC_R_OK;
 }
 
 void __flang_proc_release(uintptr_t handle) {

@@ -2,7 +2,7 @@
 // operation that matters; the value slot is a single byte sentinel and
 // is never inspected by callers.
 //
-// For dense integer-indexed sets prefer `Bitset` — it stores one bit per
+// For dense integer-indexed sets prefer `Bitset` - it stores one bit per
 // element and supports O(words) union/intersect.
 
 import std.allocator
@@ -35,7 +35,7 @@ pub fn is_empty(self: Set($T)) bool {
 }
 
 // Insert a value. No-op when the value is already present (no allocation
-// or replacement). Returns nothing — the value-add idempotence is the
+// or replacement). Returns nothing - the value-add idempotence is the
 // expected behavior; callers that want to know whether it was new should
 // `contains()` first.
 pub fn add(self: &Set($T), value: T) {
@@ -52,7 +52,7 @@ pub fn remove(self: &Set($T), value: T) bool {
     return self.inner.remove(value).is_some()
 }
 
-// Drop every element. Element `deinit()` is NOT called — clear is a fast
+// Drop every element. Element `deinit()` is NOT called - clear is a fast
 // reset, not a full release. Use `deinit()` followed by a fresh
 // `set(...)` when elements own heap.
 pub fn clear(self: &Set($T)) {

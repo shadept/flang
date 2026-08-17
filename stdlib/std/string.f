@@ -193,7 +193,7 @@ pub fn trim(s: String) String {
 //
 // Byte- and String-delimiter overloads. Byte form is declared first for the
 // same overload-resolution reason documented above (char literals bind to an
-// unconstrained type variable and tie with the String overload — first wins).
+// unconstrained type variable and tie with the String overload - first wins).
 
 // Split a string by a byte delimiter. Returns a List of non-owning views.
 //   split("a,b,c", ',')    → ["a", "b", "c"]
@@ -214,7 +214,7 @@ pub fn split(s: String, delimiter: u8, max: i32 = -1) List(String) {
 }
 
 // Split a string by a String delimiter. Returns a List of non-owning views.
-// An empty delimiter is treated as "no split" — the result is one element.
+// An empty delimiter is treated as "no split" - the result is one element.
 //   split("a::b::c", "::")    → ["a", "b", "c"]
 //   split("a::b::c", "::", 1) → ["a", "b::c"]
 pub fn split(s: String, sep: String, max: i32 = -1) List(String) {
@@ -335,7 +335,7 @@ pub fn eq_ignore_ascii_case(a: String, b: String) bool {
 // =============================================================================
 //
 // Yields each line of `s` as a non-owning String view. The trailing newline is
-// stripped — both `\n` and `\r\n` produce the same line content. A final line
+// stripped - both `\n` and `\r\n` produce the same line content. A final line
 // without a trailing newline is still yielded.
 //
 //   for line in s.lines() { ... }

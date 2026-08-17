@@ -14,8 +14,8 @@
 // runtime the exit code goes non-zero and the test fails.
 //
 // Also checks that defers registered *before* the `break` fire innermost
-// first, and that nothing after the `break` — including a trailing `defer`
-// — ever registers or emits at runtime.
+// first, and that nothing after the `break` - including a trailing `defer`
+// - ever registers or emits at runtime.
 
 import core.io
 

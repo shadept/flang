@@ -1,6 +1,6 @@
 // Comparison primitives.
 //
-// Defines `Ord` — the total-order result type — and `op_cmp` overloads for
+// Defines `Ord` - the total-order result type - and `op_cmp` overloads for
 // all primitive types, plus tuples of arity 1–8. Together with the compiler's
 // auto-derivation of `<`, `>`, `<=`, `>=`, `==`, `!=` from `op_cmp`, this lets
 // user types become orderable by defining a single `op_cmp` function.
@@ -96,7 +96,7 @@ pub fn op_cmp(a: usize, b: usize) Ord {
 
 // NaN is not ordered by IEEE 754. Here, any NaN input yields `Ord.Equal`
 // because both `<` and `>` return false for NaN. Sorting a slice containing
-// NaN is therefore not well-defined — filter or replace NaNs beforehand.
+// NaN is therefore not well-defined - filter or replace NaNs beforehand.
 pub fn op_cmp(a: f32, b: f32) Ord {
     if a < b { return Ord.Less }
     if a > b { return Ord.Greater }
@@ -125,7 +125,7 @@ pub fn op_cmp(a: char, b: char) Ord {
 // Tuple op_cmp (lexicographic, arity 1–8)
 // =============================================================================
 
-// Lexicographic comparison on tuples — `op_cmp` is auto-derived for `<`/`>`/`<=`/`>=`/`==`/`!=`,
+// Lexicographic comparison on tuples - `op_cmp` is auto-derived for `<`/`>`/`<=`/`>=`/`==`/`!=`,
 // so user types containing tuples become orderable for free.
 pub fn op_cmp(a: ($T,), b: (T,)) Ord {
     return op_cmp(a.0, b.0)

@@ -1,5 +1,5 @@
 //! TEST: import_helper_leaker_outer
-//! SKIP: helper module for transitive_leak_regression — not run directly
+//! SKIP: helper module for transitive_leak_regression - not run directly
 
 import _leaker_inner
 

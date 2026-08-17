@@ -1,4 +1,4 @@
-// Generic LIFO stack — thin convenience wrapper over `List(T)`.
+// Generic LIFO stack - thin convenience wrapper over `List(T)`.
 //
 // Push/pop both act on the top of the stack; `peek` reads the top
 // without removing it. The underlying `List(T)` owns the backing
@@ -62,7 +62,7 @@ pub fn peek_ref(self: &Stack($T)) &T? {
 }
 
 // Drop every element. Backing storage is retained so subsequent pushes
-// reuse it. Element `deinit()` is NOT called — clear is a fast reset,
+// reuse it. Element `deinit()` is NOT called - clear is a fast reset,
 // not a full release. Use `deinit()` followed by a fresh `stack(...)`
 // when elements own heap.
 pub fn clear(self: &Stack($T)) {

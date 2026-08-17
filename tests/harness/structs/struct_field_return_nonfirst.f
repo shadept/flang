@@ -2,7 +2,7 @@
 //! EXIT: 4
 
 // Reading a non-first field of a never-address-taken struct literal must load
-// at the field's byte offset, not constant-fold to zero. Regression — a field
+// at the field's byte offset, not constant-fold to zero. Regression - a field
 // load at offset != 0 once mis-typed to `void*` and folded to `(void*)(0 + 0)`,
 // so `return p.y` returned 0 while `return p.x` (offset 0) was correct.
 

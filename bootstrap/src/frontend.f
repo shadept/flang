@@ -1,4 +1,4 @@
-// frontend — bootstrap's terminal-side helpers: read a source file and
+// frontend - bootstrap's terminal-side helpers: read a source file and
 // render diagnostics over `flang_core.Diagnostic`. The analysis pipeline
 // itself is `flang_driver`; this is just the CLI's I/O and rendering edge.
 

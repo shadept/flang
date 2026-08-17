@@ -1,6 +1,6 @@
 // Core optional value support. `Option(T)` is the canonical sum type used
 // for "either a value of type T or nothing". The preferred surface syntax
-// uses `T?` and `null` — the latter desugars to `Option.None` with `T`
+// uses `T?` and `null` - the latter desugars to `Option.None` with `T`
 // inferred from context.
 //
 // Layout note: `Option(&T)` is niche-optimized to a nullable pointer

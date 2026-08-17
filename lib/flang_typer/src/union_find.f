@@ -6,7 +6,7 @@
 // inserting `k` (singleton) on first sight; path halving on each hop
 // keeps amortised lookups near constant.
 //
-// `merge(a, b)` is **first-argument-wins** — `a`'s representative
+// `merge(a, b)` is **first-argument-wins** - `a`'s representative
 // becomes the rep of the unioned partition. The inference engine
 // relies on this so concrete types stay as reps and unbound variables
 // become children when a `Var` is unified with a concrete `Ty`.
@@ -24,7 +24,7 @@ import std.stack
 
 // One partition's bookkeeping: the parent pointer (self-referential at
 // the root) plus the size of the partition rooted here. Size doesn't
-// drive balancing — see `merge` below — but it's exposed for debug /
+// drive balancing - see `merge` below - but it's exposed for debug /
 // statistics consumers.
 pub type UnionFindNode = struct(K) {
     parent: K
@@ -89,7 +89,7 @@ pub fn find(self: &UnionFind($K), k: K) K {
     loop {
         let node = self.nodes.get(cur).unwrap()
         if node.parent == cur { return cur }
-        // Path halving — repoint `cur` at its grandparent.
+        // Path halving - repoint `cur` at its grandparent.
         let parent_node = self.nodes.get(node.parent).unwrap()
         if parent_node.parent != node.parent {
             record_undo(self, cur, node.parent, node.size, false)

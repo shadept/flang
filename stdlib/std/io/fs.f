@@ -1,9 +1,9 @@
-// std.io.fs — portable filesystem operations.
+// std.io.fs - portable filesystem operations.
 //
 // Directory listing is iterator-based and zero-alloc per entry: the iterator
 // owns a 256-byte name buffer and yields `DirEntry` whose `name` is a String
 // view into that buffer. The view is invalidated on the next `next()` call.
-// Ownership is explicit — callers clone into an OwnedString if they need to
+// Ownership is explicit - callers clone into an OwnedString if they need to
 // accumulate entries.
 //
 //     let it = read_dir(".").unwrap()
@@ -14,7 +14,7 @@
 //     const e = it.err()
 //     if e.has_value { eprintln("read failed") }
 //
-// "." and ".." are filtered at the syscall layer — callers never see them.
+// "." and ".." are filtered at the syscall layer - callers never see them.
 //
 // Platform errors (POSIX errno, Win32 GetLastError) are translated into
 // FsError discriminants directly inside the C shim. Status and error values
@@ -106,7 +106,7 @@ pub fn read_dir(path: String) Result(DirIter, FsError) {
 
 pub fn iter(self: &DirIter) &DirIter {
     // Returning `&self` (not a copy) means `for entry in it { ... }` mutates
-    // the original — so `it.err()` / `it.done` stay meaningful afterward.
+    // the original - so `it.err()` / `it.done` stay meaningful afterward.
     return self
 }
 
@@ -150,7 +150,7 @@ pub fn deinit(self: &DirIter) {
 // Stat + convenience queries
 // =============================================================================
 
-// Fetches metadata for `path`. Follows symlinks — the reported kind is the
+// Fetches metadata for `path`. Follows symlinks - the reported kind is the
 // target's kind, not the link's.
 pub fn stat(path: String) Result(FileInfo, FsError) {
     let kind: i32 = 0
@@ -196,7 +196,7 @@ pub fn is_file(path: String) bool {
 }
 
 // =============================================================================
-// Recursive walk — WalkIter
+// Recursive walk - WalkIter
 // =============================================================================
 //
 // DFS walk, built on top of DirIter. Yields each entry (including dirs) in
@@ -275,7 +275,7 @@ pub fn next(self: &WalkIter) WalkEntry? {
             return null
         }
 
-        // Borrow the top frame in place — we need to mutate its DirIter.
+        // Borrow the top frame in place - we need to mutate its DirIter.
         const top: &WalkFrame = self.stack.peek_ref().unwrap()
 
         const entry_opt = top.dir.next()
@@ -307,7 +307,7 @@ pub fn next(self: &WalkIter) WalkEntry? {
             depth = depth,
         }
 
-        // Descend into directories (not symlinks — avoid cycles).
+        // Descend into directories (not symlinks - avoid cycles).
         if is_kind_dir(entry.kind) {
             // NUL-terminate the path for the syscall without bumping len.
             self.path_buf.ensure_capacity(self.path_buf.len + 1)
@@ -352,14 +352,14 @@ fn is_kind_dir(k: FileKind) bool {
 }
 
 // =============================================================================
-// Glob — built on top of walk_dir
+// Glob - built on top of walk_dir
 // =============================================================================
 //
 // Supported pattern syntax:
 //   *   matches any run of non-separator bytes within a single path segment
 //   ?   matches a single non-separator byte
 //   **  matches any number of path segments (including zero)
-//   /   segment separator (on any platform — the shim normalizes internally)
+//   /   segment separator (on any platform - the shim normalizes internally)
 //
 // Character classes ([abc], [a-z], [!abc]) are not supported yet.
 //

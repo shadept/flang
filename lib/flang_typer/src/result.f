@@ -1,8 +1,8 @@
-// TypeCheckResult — immutable snapshot consumed by lowering and the LSP.
+// TypeCheckResult - immutable snapshot consumed by lowering and the LSP.
 //
 // Constructed by `checker.check_all` once every phase has run and the
 // final zonk pass has substituted every bound variable. The engine is
-// dropped before the result is returned — there is no live
+// dropped before the result is returned - there is no live
 // `_resolver` for callers to fall back to. If a type isn't in
 // `node_types`, the checker simply never visited that node.
 
@@ -30,7 +30,7 @@ pub type TypeCheckResult = struct {
 // never visited (synthesised AST, unreachable arms, etc.). Callers
 // that expect every node to have a type should treat `null` as a bug,
 // not silently fall back to a fresh var.
-// An empty result — every table empty, registries fresh. Handed back when
+// An empty result - every table empty, registries fresh. Handed back when
 // a source failed to parse and was never type-checked.
 pub fn empty_result(allocator: &Allocator? = null) TypeCheckResult {
     let alloc = allocator.or_global()

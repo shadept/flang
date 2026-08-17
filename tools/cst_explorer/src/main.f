@@ -1,4 +1,4 @@
-// cst_explorer — load a .f file, lex + parse, emit JSON or timing info.
+// cst_explorer - load a .f file, lex + parse, emit JSON or timing info.
 //
 //   cst_explorer <file.f> [-t|--time] [-n|--iterations N]
 //
@@ -102,7 +102,7 @@ fn print_usage() {
     println("usage: cst_explorer <file.f> [-t|--time] [-n|--iterations N]")
     println("")
     println("  (default)             emit JSON dump (source + tokens + CST + AST + diagnostics)")
-    println("                        to stdout — consumed by tools/cst_explorer_web")
+    println("                        to stdout - consumed by tools/cst_explorer_web")
     println("  -t, --time            measure lex + parse latency instead of dumping;")
     println("                        min/avg/max are reported on stderr")
     println("  -n, --iterations N    iteration count for --time (default 1)")
@@ -165,7 +165,7 @@ fn parse_args(argv: String[], opts: &Options) bool {
 
 // Owns the source read so the OwnedString lives for the duration of
 // the measured loop. Passing the view from main's frame produced an
-// empty view at the call boundary — keeping the OwnedString local to
+// empty view at the call boundary - keeping the OwnedString local to
 // this frame dodges the issue.
 fn run_timing(path: String, iterations: usize) i32 {
     const source_opt = read_source(path)
@@ -245,7 +245,7 @@ fn eprintln(line: String) {
 }
 
 fn print_timing_banner(path: String, bytes: usize, tokens: usize, diagnostics: usize, iterations: usize) {
-    const banner = $"{path}: {bytes} bytes, {tokens} tokens, {diagnostics} diagnostics — {iterations} iter"
+    const banner = $"{path}: {bytes} bytes, {tokens} tokens, {diagnostics} diagnostics - {iterations} iter"
     defer banner.deinit()
     eprintln(banner.as_view())
 }
@@ -326,7 +326,7 @@ fn emit_node_json(sb: &StringBuilder, node: &CstNode, tokens: &List(Token)) {
     sb.append("]}")
 }
 
-// Linear scan — fine for a diagnostic tool, not a hot path.
+// Linear scan - fine for a diagnostic tool, not a hot path.
 fn find_token_index(tokens: &List(Token), tok: &Token) usize {
     for i in 0..tokens.len {
         if tokens[i].offset == tok.offset and tokens[i].text.len == tok.text.len {

@@ -10,7 +10,7 @@ pub fn main() i32 {
 
     if !bs.is_empty() { return 1 }
     if bs.contains(0) { return 2 }
-    if bs.contains(1000) { return 3 }       // way past capacity — must not crash
+    if bs.contains(1000) { return 3 }       // way past capacity - must not crash
 
     bs.add(3)
     bs.add(64)                              // forces a second word
@@ -27,7 +27,7 @@ pub fn main() i32 {
     if bs.contains(64) { return 11 }
     if bs.len() != 2 { return 12 }
 
-    // iter — bits yielded in ascending order.
+    // iter - bits yielded in ascending order.
     let it = bs.iter()
     let a = it.next()
     let b = it.next()

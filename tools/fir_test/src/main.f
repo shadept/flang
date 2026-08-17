@@ -1,4 +1,4 @@
-// fir_test — exercises lib/flang_codegen by hand-building example FIR
+// fir_test - exercises lib/flang_codegen by hand-building example FIR
 // modules and printing them. Acts as a regression check against the
 // canonical text format in `docs/fir.md` until colocated-test running
 // is wired up.
@@ -60,7 +60,7 @@ fn build_factorial() Function {
 //     return Some(v)
 // }
 //
-// `iter` is the required entry point for `for v in it` — for types that
+// `iter` is the required entry point for `for v in it` - for types that
 // are already iterators it just returns a copy of self. Inlined away by
 // the time we get to FIR, so only `next` is built here.
 //

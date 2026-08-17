@@ -21,7 +21,7 @@ pub fn main() i32 {
     if count("abxabxab", "ab") != 3 { return 6 }
     if count("aaaa", "aa") != 2 { return 7 }  // non-overlapping
 
-    // multi-byte char find — 'é' is 0xC3 0xA9 in UTF-8
+    // multi-byte char find - 'é' is 0xC3 0xA9 in UTF-8
     const f4 = find("café-bar", 'é')
     if f4.unwrap() != 3 { return 8 }
 

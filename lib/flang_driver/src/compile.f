@@ -28,7 +28,7 @@ pub fn build_unit(unit: &AnalyzedUnit, output_path: String, allocator: &Allocato
 }
 
 // Lower a checked multi-module project to one FIR program and compile+link
-// it to an executable at `output_path`. The project must be error-free —
+// it to an executable at `output_path`. The project must be error-free -
 // callers check `project_error_count` first.
 pub fn build_program(modules: &List(Module), fqns: &List(OwnedString), result: &TypeCheckResult, output_path: String, allocator: &Allocator? = null) Result(BuildResult, BuildError) {
     let m = lower_program(modules, fqns, result, allocator)

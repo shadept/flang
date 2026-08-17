@@ -2,7 +2,7 @@
 //! COMPILE-ERROR: E2020
 
 // Casting an integer to an enum that has any payload-carrying variant is
-// rejected — the resulting payload bytes would be uninitialized.
+// rejected - the resulting payload bytes would be uninitialized.
 
 type E = enum {
     A

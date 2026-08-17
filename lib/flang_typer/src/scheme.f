@@ -1,9 +1,9 @@
-// Scheme — `forall {vars}. body`. Polymorphism is a property of
+// Scheme - `forall {vars}. body`. Polymorphism is a property of
 // bindings (function signatures, let-generalised locals), not of the
 // `Ty` itself, so this lives in its own module and `Ty` stays a
 // monotype.
 //
-// Quantifier sets are `Set(VarId)` — `VarId` is a `u32` alias so the
+// Quantifier sets are `Set(VarId)` - `VarId` is a `u32` alias so the
 // default `hash` works without any custom overload.
 //
 // Generalisation collects free variables of `body` whose `level` is
@@ -18,7 +18,7 @@ import std.set
 import flang_typer.type
 
 // `forall {quantified}. body`. A scheme with empty `quantified` is
-// monomorphic — `specialize` short-circuits.
+// monomorphic - `specialize` short-circuits.
 pub type Scheme = struct {
     quantified: Set(VarId)
     body: Ty
@@ -31,7 +31,7 @@ pub fn mono(body: Ty, allocator: &Allocator? = null) Scheme {
     return .{ quantified = q, body = body }
 }
 
-// Monomorphic — `quantified.len == 0`. A `Scheme` is the engine's
+// Monomorphic - `quantified.len == 0`. A `Scheme` is the engine's
 // canonical "binding" type even for monotypes; this predicate covers
 // the let-binding fast path.
 pub fn is_monomorphic(self: &Scheme) bool {

@@ -2,7 +2,7 @@
 //! EXIT: 0
 
 // Returning large structs through nested function calls.
-// Each return uses a hidden return slot — must not corrupt other slots.
+// Each return uses a hidden return slot - must not corrupt other slots.
 
 type Point3D = struct {
     x: i32,

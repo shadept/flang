@@ -5,7 +5,7 @@
 //
 // Per spec.md §6, imports are non-transitive: importing _leaker_outer must NOT
 // expose _leaker_inner's pub items. This test imports only _leaker_outer and
-// then calls leaked_value() — defined in _leaker_inner. Must fail to resolve.
+// then calls leaked_value() - defined in _leaker_inner. Must fail to resolve.
 
 import _leaker_outer
 

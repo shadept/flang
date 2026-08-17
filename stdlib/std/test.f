@@ -46,7 +46,7 @@ pub fn assert_seq_eq(a: List($T), b: List(T), msg: String) {
 }
 
 // Assert that two lists have the same elements regardless of order.
-// Uses == on elements. O(n^2) — intended for small test collections.
+// Uses == on elements. O(n^2) - intended for small test collections.
 pub fn assert_set_eq(a: List($T), b: List(T), msg: String) {
     if a.len != b.len {
         let sb = string_builder(64)

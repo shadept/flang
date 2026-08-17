@@ -136,7 +136,7 @@ test "rc deinit frees when last ref dropped" {
     r2.deinit()
     assert_eq(r.ref_count(), 1usize, "ref_count should be 1")
     r.deinit()
-    // All deinit'd, inner freed — no leak, no double free
+    // All deinit'd, inner freed - no leak, no double free
 }
 
 // Test helper type for struct tests
@@ -185,7 +185,7 @@ test "rc_alloc zero-initialized" {
 }
 
 // =============================================================================
-// Arc — Thread-safe reference counting (atomic operations)
+// Arc - Thread-safe reference counting (atomic operations)
 // =============================================================================
 
 // Atomically reference-counted pointer to a heap-allocated value of type T.

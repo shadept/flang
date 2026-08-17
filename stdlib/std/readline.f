@@ -21,11 +21,11 @@ import std.mem
 #foreign fn read(fd: i32, buf: &u8, len: usize) isize
 #foreign fn write(fd: i32, buf: &u8, len: usize) isize
 
-// POSIX terminal control (unused on Windows — externs emitted but unreferenced)
+// POSIX terminal control (unused on Windows - externs emitted but unreferenced)
 #foreign fn tcgetattr(fd: i32, termios_p: &u8) i32
 #foreign fn tcsetattr(fd: i32, actions: i32, termios_p: &u8) i32
 
-// Windows console API (unused on POSIX — externs emitted but unreferenced)
+// Windows console API (unused on POSIX - externs emitted but unreferenced)
 #foreign fn GetStdHandle(nStdHandle: u32) usize
 #foreign fn GetConsoleMode(hConsole: usize, lpMode: &u32) i32
 #foreign fn SetConsoleMode(hConsole: usize, dwMode: u32) i32
@@ -274,7 +274,7 @@ fn write_u64(ptr: &u8, val: u64) {
 fn read_byte() u8? {
     let c: u8 = 0
     #if(platform.os == "windows") {
-        // Use ReadFile directly — CRT _read ignores SetConsoleMode changes
+        // Use ReadFile directly - CRT _read ignores SetConsoleMode changes
         const hIn = GetStdHandle(WIN_STD_INPUT_HANDLE)
         let bytes_read: u32 = 0
         const ok = ReadFile(hIn, &c, 1, &bytes_read, 0)
@@ -492,7 +492,7 @@ fn refresh_line(rl: &Readline, buf: [u8; 1024], len: usize, cursor: usize) {
     let out = [0u8; 2048]
     let pos: usize = 0
 
-    // \r — carriage return
+    // \r - carriage return
     out[pos] = 13; pos = pos + 1
 
     // Write prompt

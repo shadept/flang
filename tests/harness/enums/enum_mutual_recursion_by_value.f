@@ -20,7 +20,7 @@ import std.list
 //
 // With the fix, sizeof(SubExpr) covers the full NamedInfo payload
 // and a round-trip through `SubExpr.Named(info)` + match preserves
-// every field — including the late-laid-out `generic_args: List(SubExpr)`.
+// every field - including the late-laid-out `generic_args: List(SubExpr)`.
 
 type SubExpr = enum {
     Named(NamedInfo)

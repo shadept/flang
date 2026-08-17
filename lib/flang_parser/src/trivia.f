@@ -1,4 +1,4 @@
-// Trivia — whitespace, comments, blank lines.
+// Trivia - whitespace, comments, blank lines.
 //
 // Non-semantic byte ranges attached to adjacent tokens as leading or
 // trailing. Concatenating every token's leading + text + trailing

@@ -13,7 +13,7 @@ type Pair = struct {
 pub fn main() i32 {
     let x = Pair { a = 10, b = 20 }
     let y = x          // shallow copy
-    y.a = 42            // mutate y — must NOT affect x
+    y.a = 42            // mutate y - must NOT affect x
 
     println(x.a)          // should still be 10
     println(y.a)          // should be 42

@@ -2936,6 +2936,27 @@ Report the issue with sample code that reproduces the error.
 | **E2076** | Type Checking     | Duplicate struct field name                   |
 | **E2077** | Operators         | Ambiguous index operator                       |
 | **E2102** | Generics          | Conflicting generic type bindings            |
+| **E2115** | Pattern Matching  | Unsupported pattern form                     |
+
+### E2115: Unsupported Pattern Form
+
+A pattern the front end cannot yet represent: or-patterns (`1 | 2`), range
+patterns (`1..5`), and struct/tuple destructuring in match position.
+
+```flang
+x match {
+    1 | 2 => "low",   // ERROR E2115: unsupported pattern form
+    _     => "other",
+}
+```
+
+Reported rather than ignored. An unrepresented pattern is indistinguishable
+from a wildcard, so accepting it silently would make the arm match
+everything and take the wrong branch at runtime — a miscompile instead of a
+diagnostic.
+
+Applies to the self-hosted front end. Use an explicit arm per value until
+these forms land.
 
 ### E3XXX: Code Generation
 

@@ -7,7 +7,7 @@
 // order then decided the winner.
 //
 // The constrained-TypeVar fix narrows char literals to `{u8, char}` so
-// the String overload is filtered out entirely — the char overload
+// the String overload is filtered out entirely - the char overload
 // always wins, regardless of declaration order.
 
 // Declare the String overload FIRST. Before the fix this would win and
@@ -17,7 +17,7 @@ fn kind(s: String, c: char) i32 { return 2 }
 fn kind(s: String, b: u8) i32 { return 3 }
 
 pub fn main() i32 {
-    // 'a' is a char literal — must pick the char overload (2).
+    // 'a' is a char literal - must pick the char overload (2).
     if kind("x", 'a') != 2 { return 11 }
 
     // Explicit u8 context picks the u8 overload (3).

@@ -1,7 +1,7 @@
-// flang_driver — the compile pipeline as a library: source text in, a
+// flang_driver - the compile pipeline as a library: source text in, a
 // checked `AnalyzedUnit` out (AST + type-check result + combined parse and
 // check diagnostics). This is the single analysis entry point shared by
-// every front-end exe — `flang build`, `flang test`, and the LSP — each of
+// every front-end exe - `flang build`, `flang test`, and the LSP - each of
 // which is a thin `main` over `analyze`.
 //
 // The library owns the pipeline but not its edges: file reading and
@@ -32,7 +32,7 @@ import flang_driver.resolver
 import flang_driver.project
 
 // A fully analysed compilation unit. `checked` is false when the source
-// failed to parse — `result` is then an empty placeholder.
+// failed to parse - `result` is then an empty placeholder.
 pub type AnalyzedUnit = struct {
     source: OwnedString
     module: Module
@@ -55,7 +55,7 @@ pub fn analyze(source: OwnedString, path: String, allocator: &Allocator? = null)
     const cst = p.parse_module()
     const module = project_module(cst, 0i32, alloc)
 
-    // The AST views `source`, not the token structs — tokens and the parser
+    // The AST views `source`, not the token structs - tokens and the parser
     // are dead once the Module exists. Drain parse diagnostics first so they
     // survive `p.deinit()`.
     drain_diagnostics(&diagnostics, &p.diagnostics)
@@ -96,12 +96,12 @@ pub fn deinit(self: &AnalyzedUnit) {
     self.diagnostics.deinit()
     self.module.deinit()
     self.source.deinit()
-    // ponytail: the TypeCheckResult is leaked — flang_typer has no
+    // ponytail: the TypeCheckResult is leaked - flang_typer has no
     // result.deinit() yet. Fine for one-shot build/test; add result.deinit()
     // before the LSP re-analyses on every keystroke. See docs/known-issues.md.
 }
 
-// Error-severity diagnostics only — warnings and hints don't fail a build.
+// Error-severity diagnostics only - warnings and hints don't fail a build.
 pub fn error_count(self: &AnalyzedUnit) usize {
     return count_errors(&self.diagnostics)
 }
@@ -225,7 +225,7 @@ pub fn deinit(self: &AnalyzedProject) {
     deinit_owned_list(&self.fqns)
     deinit_owned_list(&self.file_paths)
     deinit_owned_list(&self.sources)
-    // ponytail: the TypeCheckResult is leaked — same as AnalyzedUnit, no
+    // ponytail: the TypeCheckResult is leaked - same as AnalyzedUnit, no
     // result.deinit() yet. Fine for one-shot build. See docs/known-issues.md.
 }
 
@@ -238,7 +238,7 @@ pub fn project_error_count(self: &AnalyzedProject) usize {
 // parse as one module under one import scope. Returns `src` untouched when
 // no sidecar exists or it can't be read; otherwise returns a fresh combined
 // buffer and frees `src`. Generated files carry no imports, so appending
-// keeps imports file-top. Every checked-in expansion merges — the types
+// keeps imports file-top. Every checked-in expansion merges - the types
 // (`#interface`) and the functions (`#implement`, `#enum_utils`, `#derive`)
 // both resolve now that calls check against the registry.
 fn combine_with_sidecar(path: String, src: OwnedString, alloc: &Allocator) OwnedString {
@@ -303,7 +303,7 @@ fn seed_prelude(ctx: &ResolveCtx, queue: &List(OwnedString), seen: &Set(String),
 
 // The reference compiler compiles every program against the whole stdlib
 // regardless of imports, and lenient type resolution in the checker relies
-// on every stdlib nominal being registered — so the BFS seeds the full
+// on every stdlib nominal being registered - so the BFS seeds the full
 // stdlib tree. Generated sidecars are folded into their origin module
 // during the walk, never loaded standalone.
 // ponytail: typechecks all of std on every build; prune to the import

@@ -1,7 +1,7 @@
 // Hindley-Milner unification, fresh-var allocation, level tracking,
 // generalisation, specialisation.
 //
-// The engine returns `UnifyOutcome` values — never diagnostics. Callers
+// The engine returns `UnifyOutcome` values - never diagnostics. Callers
 // translate outcomes via `reporter.f` and attach their own context
 // (span, error code, message template).
 //
@@ -35,7 +35,7 @@ import flang_typer.well_known
 import std.test
 
 // ─────────────────────────────────────────────────────────────────────
-// UnifyOutcome — structured result, no diagnostics
+// UnifyOutcome - structured result, no diagnostics
 // ─────────────────────────────────────────────────────────────────────
 
 pub type UnifyOk = struct {
@@ -44,7 +44,7 @@ pub type UnifyOk = struct {
 }
 
 // Two concrete types disagreed at a leaf. The engine returns the
-// originating pair — not the sub-types of nested mismatches — so the
+// originating pair - not the sub-types of nested mismatches - so the
 // reporter can present "expected `T`, got `U`" with the values the
 // caller actually wrote. Nested unifications stop at the first leaf
 // failure and propagate this same outcome upward.
@@ -135,7 +135,7 @@ pub type Engine = struct {
     // level is the *minimum* of every member's original level so that
     // `generalize` doesn't accidentally quantify a var that was unified
     // with a shallower-scope var. Without this, `resolve_var` would
-    // return whatever level the caller happened to pass in — soundness
+    // return whatever level the caller happened to pass in - soundness
     // bug for let-polymorphism.
     levels: Dict(VarId, Level)
 
@@ -190,7 +190,7 @@ pub fn deinit(self: &Engine) {
     self.bindings.deinit()
     self.prim_constraints.deinit()
     self.levels.deinit()
-    // Drain undo stacks — each frame is its own list with its own buffer.
+    // Drain undo stacks - each frame is its own list with its own buffer.
     loop {
         self.binding_undo.pop() match {
             Some(frame) => { let f = frame; f.deinit() },
@@ -215,7 +215,7 @@ pub fn deinit(self: &Engine) {
 }
 
 // ─────────────────────────────────────────────────────────────────────
-// Level management — let-generalisation cursor
+// Level management - let-generalisation cursor
 // ─────────────────────────────────────────────────────────────────────
 
 pub fn enter_level(self: &Engine) {
@@ -371,7 +371,7 @@ fn zonk_nominal(self: &Engine, nr: &NominalRef) Ty {
 }
 
 // ─────────────────────────────────────────────────────────────────────
-// Occurs check — does `v` appear anywhere inside `t`?
+// Occurs check - does `v` appear anywhere inside `t`?
 // ─────────────────────────────────────────────────────────────────────
 
 pub fn occurs_in(self: &Engine, v: VarId, t: Ty) bool {
@@ -417,7 +417,7 @@ fn occurs_in_record(self: &Engine, v: VarId, fields: &List(Field)) bool {
 // ─────────────────────────────────────────────────────────────────────
 
 // Unify `actual` into `expected`. Returns `Ok(UnifyOk { ty, cost })`
-// on success — `ty` is the unified type and `cost` counts applied
+// on success - `ty` is the unified type and `cost` counts applied
 // coercions (always 0 in this pure-structural pass; coercion rules
 // land in a follow-up). Any failure short-circuits and returns a
 // structured outcome without mutating engine state.
@@ -432,13 +432,13 @@ pub fn unify(self: &Engine, actual: Ty, expected: Ty) UnifyOutcome {
 }
 
 fn unify_resolved(self: &Engine, a: Ty, b: Ty) UnifyOutcome {
-    // Error is poison — absorbs anything silently.
+    // Error is poison - absorbs anything silently.
     if a.is_error() or b.is_error() { return UnifyOutcome.Unified(.{ ty = Ty.Error, cost = 0 }) }
-    // Never is bottom — unifies with everything, taking the other type.
+    // Never is bottom - unifies with everything, taking the other type.
     if a.is_never() { return UnifyOutcome.Unified(.{ ty = b, cost = 0 }) }
     if b.is_never() { return UnifyOutcome.Unified(.{ ty = a, cost = 0 }) }
 
-    // Both vars — merge their partitions. The first arg's rep wins
+    // Both vars - merge their partitions. The first arg's rep wins
     // (matches the union-find contract) so concrete types accumulated
     // by earlier unifications stay reachable.
     return a match {
@@ -469,7 +469,7 @@ fn unify_concrete(self: &Engine, a: Ty, b: Ty) UnifyOutcome {
 
 // Walk the hardcoded coercion ladder for `(from, to)`. First rule that
 // fires wins; ordering matters when two rules could both apply. Returns
-// `null` when nothing matches — the caller propagates the original
+// `null` when nothing matches - the caller propagates the original
 // structural failure.
 //
 // Order: pure prim rules first (integer widening, float widening),
@@ -496,7 +496,7 @@ fn try_coercion(self: &Engine, raw_from: Ty, raw_to: Ty) Coercion? {
             let r3 = try_option_wrapping(from, to, reg, self.allocator)
             if r3.is_some() {
                 // Wrapping only fires into a known payload type. An unbound
-                // payload would swallow anything — `Option($T)` params in
+                // payload would swallow anything - `Option($T)` params in
                 // overload sets must not absorb unrelated arguments (the
                 // reference rule requires the payload to equal the source).
                 let c = r3.unwrap()
@@ -527,7 +527,7 @@ fn try_coercion(self: &Engine, raw_from: Ty, raw_to: Ty) Coercion? {
 // Commit a coercion atomically: open a checkpoint, run every side-
 // unification through the main `unify` loop, commit on full success,
 // roll back on any failure. The checkpoint guarantees a partially-
-// applied coercion can never leak state — whether or not the caller
+// applied coercion can never leak state - whether or not the caller
 // has its own outer checkpoint open.
 //
 // On rollback the original `fallback` outcome is returned so the
@@ -562,7 +562,7 @@ fn unify_var_var(self: &Engine, va: TyVar, vb: TyVar) UnifyOutcome {
         })
     }
 
-    // Compute the merged level *before* the merge — both reps still
+    // Compute the merged level *before* the merge - both reps still
     // have their own slots at this point. Use the min so the partition
     // stays generalisable only from the outer-most binding scope.
     let level_a = self.levels.get(ra) match { Some(l) => l, None => self.level }
@@ -803,13 +803,13 @@ fn unify_nominal(self: &Engine, na: &NominalRef, nb: &NominalRef, a: Ty, b: Ty) 
 }
 
 // ─────────────────────────────────────────────────────────────────────
-// try_unify — speculative, always rolled back
+// try_unify - speculative, always rolled back
 // ─────────────────────────────────────────────────────────────────────
 
 // Run `unify` inside a fresh checkpoint and discard every mutation
 // regardless of outcome. Used by overload resolution and coercion-rule
 // scoring to probe a candidate without committing. The returned
-// `UnifyOutcome` is informational only — vars are not actually bound.
+// `UnifyOutcome` is informational only - vars are not actually bound.
 pub fn try_unify(self: &Engine, a: Ty, b: Ty) UnifyOutcome {
     self.push_checkpoint()
     let outcome = self.unify(a, b)
@@ -887,7 +887,7 @@ pub fn rollback(self: &Engine) {
 }
 
 // ─────────────────────────────────────────────────────────────────────
-// Scheme operations — generalise and specialise
+// Scheme operations - generalise and specialise
 // ─────────────────────────────────────────────────────────────────────
 
 // Quantify every free variable of `t` whose level is deeper than the
@@ -901,7 +901,7 @@ pub fn generalize(self: &Engine, t: Ty) Scheme {
 }
 
 // Instantiate `s` with engine-fresh variables substituted for every
-// quantified id. The fresh vars carry the engine's current level —
+// quantified id. The fresh vars carry the engine's current level -
 // they're eligible for further unification but won't be re-quantified
 // by `generalize` at the same level.
 pub fn specialize(self: &Engine, s: &Scheme) Ty {
@@ -915,7 +915,7 @@ pub fn specialize(self: &Engine, s: &Scheme) Ty {
 }
 
 // ─────────────────────────────────────────────────────────────────────
-// Internal — prim-constraint bookkeeping
+// Internal - prim-constraint bookkeeping
 // ─────────────────────────────────────────────────────────────────────
 
 fn set_prim_constraint(self: &Engine, var_id: VarId, allowed: List(PrimitiveKind)) {
@@ -932,7 +932,7 @@ fn clear_prim_constraint(self: &Engine, var_id: VarId) {
 // Intersect the prim-constraint sets attached to two rep vars. Returns
 // `None` when neither var is constrained (so the merge places no
 // further restriction on the partition), `Some(intersection)` otherwise
-// — the intersection may be empty, signalling an incompatible merge.
+// - the intersection may be empty, signalling an incompatible merge.
 fn intersect_prim_constraints(self: &Engine, ra: VarId, rb: VarId) List(PrimitiveKind)? {
     let ca = self.prim_constraints.get(ra)
     let cb = self.prim_constraints.get(rb)
@@ -994,7 +994,7 @@ fn record_level_undo(self: &Engine, var_id: VarId) {
 }
 
 // ─────────────────────────────────────────────────────────────────────
-// Tests — unification, the coercion ladder, generalisation
+// Tests - unification, the coercion ladder, generalisation
 // ─────────────────────────────────────────────────────────────────────
 
 test "fresh vars are unique and bind to concrete types" {

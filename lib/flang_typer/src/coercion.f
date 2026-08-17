@@ -1,7 +1,7 @@
 // Coercion rules.
 //
 // A coercion turns an `actual` type into an `expected` type by means
-// other than direct structural unification — integer widening, float
+// other than direct structural unification - integer widening, float
 // widening, optional wrapping, and so on. Rules are *directional*:
 // `from → to`, mirroring `unify(actual, expected)`.
 //
@@ -12,7 +12,7 @@
 // leaks past the type checker: lowering reads the result type from the
 // side-table and never inspects the surrounding slot.
 //
-// Rules in this file are pure prim-on-prim — no registry dependency,
+// Rules in this file are pure prim-on-prim - no registry dependency,
 // no engine reference. Nominal-aware rules (option wrapping, string
 // to byte-slice, array decay, anon-struct to nominal, etc.) live next
 // to `nominal_registry.f` because they need the registry to resolve
@@ -142,7 +142,7 @@ pub fn try_float_widening(from: Ty, to: Ty, allocator: &Allocator? = null) Coerc
 }
 
 // ─────────────────────────────────────────────────────────────────────
-// Nominal-aware rules — require the `NominalRegistry` to resolve the
+// Nominal-aware rules - require the `NominalRegistry` to resolve the
 // FQNs of well-known sugar types (`Option`, `String`, `Slice`).
 //
 // Each rule's `apply` either returns a `Coercion` whose `result_ty`
@@ -170,7 +170,7 @@ pub fn try_option_wrapping(from: Ty, to: Ty, reg: &NominalRegistry, allocator: &
     return Coercion { result_ty = to, cost = 1u32, side_unifications = side }
 }
 
-// `Type(T) → TypeInfo` — a reified type handle flows wherever the
+// `Type(T) → TypeInfo` - a reified type handle flows wherever the
 // erased runtime type-info record is expected.
 pub fn try_type_to_typeinfo(from: Ty, to: Ty, reg: &NominalRegistry, allocator: &Allocator? = null) Coercion? {
     let fn_n = from match { Nominal(n) => n, _ => return null }
@@ -188,7 +188,7 @@ pub fn try_type_to_typeinfo(from: Ty, to: Ty, reg: &NominalRegistry, allocator: 
     return simple(to, allocator)
 }
 
-// `String → Slice(u8)` — binary-compatible view cast.
+// `String → Slice(u8)` - binary-compatible view cast.
 pub fn try_string_to_byte_slice(from: Ty, to: Ty, reg: &NominalRegistry, allocator: &Allocator? = null) Coercion? {
     let fn_n = from match { Nominal(n) => n, _ => return null }
     let tn = to match { Nominal(n) => n, _ => return null }
@@ -213,7 +213,7 @@ pub fn try_string_to_byte_slice(from: Ty, to: Ty, reg: &NominalRegistry, allocat
     return simple(to, allocator)
 }
 
-// `Slice(u8) → String` — the inverse binary-compatible view cast. The
+// `Slice(u8) → String` - the inverse binary-compatible view cast. The
 // reference engine applies its rules in both directions; this pair keeps
 // byte views and strings interchangeable.
 pub fn try_byte_slice_to_string(from: Ty, to: Ty, reg: &NominalRegistry, allocator: &Allocator? = null) Coercion? {
@@ -284,7 +284,7 @@ fn decay_to_ref(to: Ty, target_inner: &Ty, elem: Ty, allocator: &Allocator?) Coe
     return Coercion { result_ty = to, cost = 1u32, side_unifications = side }
 }
 
-// `Slice(T) → &T` — extract the pointer from a slice.
+// `Slice(T) → &T` - extract the pointer from a slice.
 pub fn try_slice_to_reference(from: Ty, to: Ty, reg: &NominalRegistry, allocator: &Allocator? = null) Coercion? {
     let fn_n = from match { Nominal(n) => n, _ => return null }
     let ref_inner = to match { Ref(inner) => inner, _ => return null }
@@ -310,7 +310,7 @@ pub fn try_nominal_to_type(from: Ty, to: Ty, reg: &NominalRegistry, allocator: &
         None => return null,
     }
     if tn.args.len != 1 { return null }
-    // `from` must be a concrete type — not a Type(T) itself, not a
+    // `from` must be a concrete type - not a Type(T) itself, not a
     // bare TypeVar (the bare-var case is caught at the engine level
     // and never reaches coercion).
     let valid_from = from match {

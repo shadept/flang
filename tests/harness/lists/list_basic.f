@@ -16,7 +16,7 @@ pub fn main() i32 {
         return 1
     }
 
-    // Test get — op_index returns the element by value.
+    // Test get - op_index returns the element by value.
     let first: i32 = list[0]
     let second: i32 = list[1]
 

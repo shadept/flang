@@ -5,7 +5,7 @@
 // Hand-written equivalent of `expr?` desugar (no syntactic sugar).
 // The match's `Return(r)` arm tries to `return r` where `r` is bound by the
 // pattern to `Option(i32)`, but the enclosing function returns `i32`. This
-// must be caught by the type checker — not deferred to the C compiler.
+// must be caught by the type checker - not deferred to the C compiler.
 
 import std.option
 

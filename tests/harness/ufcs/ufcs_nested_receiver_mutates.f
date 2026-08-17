@@ -4,7 +4,7 @@
 // A UFCS receiver that is a multi-hop field path must be passed by
 // address, not as a copy. Lowering the intermediate member access as a
 // value spills it to a temp, so the callee mutates the temp and the
-// write is silently lost — with no diagnostic.
+// write is silently lost - with no diagnostic.
 //
 // One hop always worked; two and three hops did not. All three are
 // pinned here so the depths cannot diverge again.
@@ -18,12 +18,12 @@ fn incr(self: &Counter) {
 type Mid   = struct { c: Counter }
 type Outer = struct { mid: Mid }
 
-// receiver `self.c` — one hop
+// receiver `self.c` - one hop
 fn via1(self: &Mid) {
     self.c.incr()
 }
 
-// receiver `self.mid.c` — two hops
+// receiver `self.mid.c` - two hops
 fn via2(self: &Outer) {
     self.mid.c.incr()
 }

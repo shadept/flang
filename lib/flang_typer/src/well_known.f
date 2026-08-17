@@ -1,4 +1,4 @@
-// Well-known constants — primitive `Ty` constructors and the FQN
+// Well-known constants - primitive `Ty` constructors and the FQN
 // strings of nominal types the inference engine special-cases (Option,
 // String, Slice, Range, the RTTI `Type(T)` handle, the project-info
 // struct).
@@ -14,7 +14,7 @@ import flang_typer.type
 // ─────────────────────────────────────────────────────────────────────
 // Primitive `Ty` constructors
 //
-// Returning by value is cheap — `Ty` is a tagged union with all
+// Returning by value is cheap - `Ty` is a tagged union with all
 // fixed-size payloads, so each call boils down to one struct return.
 // No allocation, no engine state.
 // ─────────────────────────────────────────────────────────────────────

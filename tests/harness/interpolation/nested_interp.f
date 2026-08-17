@@ -4,7 +4,7 @@
 
 // Nested `$"..."` inside a hole. The inner interp evaluates to an OwnedString
 // temporary; the outer `append` copies its bytes. The inner temporary's
-// buffer is currently not reclaimed (see known-issues) — this test pins the
+// buffer is currently not reclaimed (see known-issues) - this test pins the
 // output behavior, not the memory behavior.
 
 import std.string_builder

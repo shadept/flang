@@ -1,4 +1,4 @@
-// fcsv — CSV column/row selector
+// fcsv - CSV column/row selector
 //
 // Usage:
 //   fcsv data.csv name,age 0..10

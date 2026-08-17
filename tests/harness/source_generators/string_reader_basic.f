@@ -16,7 +16,7 @@ pub fn main() i32 {
     const idx: usize = owned.find("world") ?? 999
     if idx != 8 { return 2 }
 
-    // find — not found
+    // find - not found
     const miss = owned.find("xyz")
     if miss.is_some() { return 3 }
 

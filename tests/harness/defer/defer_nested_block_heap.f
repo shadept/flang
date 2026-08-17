@@ -7,7 +7,7 @@
 // Regression: a `defer` that owns a heap resource allocated INSIDE a nested
 // block (here an `if` body nested inside a `for` body) used to lower to a
 // function-exit cleanup. The generated C referenced an `alloca_N` declared
-// in the nested scope — C rejected it as `undeclared identifier`, and on
+// in the nested scope - C rejected it as `undeclared identifier`, and on
 // targets that accepted it the deinit fired past the StringBuilder's live
 // range, scrambling memory.
 //

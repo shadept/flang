@@ -78,11 +78,11 @@ pub fn as_slice(self: List($T)) T[] {
 // Transfer ownership of the list's buffer as a `(T[], &Allocator)` pair.
 // The slice is shrunk-to-fit (`cap == len` after the call) so no excess
 // capacity is leaked. The list is reset to empty (ptr=null, cap=0) so a
-// subsequent `deinit()` is a no-op — pair this with the
+// subsequent `deinit()` is a no-op - pair this with the
 // `let l = list(...); defer l.deinit(); ...; l.to_owned_slice()` pattern.
 //
 // The returned `&Allocator` is the resolved allocator (global by default)
-// — the caller frees the slice via
+// - the caller frees the slice via
 // `alloc.dealloc(slice_from_raw_parts(s.ptr as &u8, s.len * size_of(T)))`
 // when done. Element `deinit()` is *not* called here; callers that own
 // non-trivial elements must walk the slice and deinit each element
@@ -169,7 +169,7 @@ pub fn push(self: &List($T), value: T) {
 
 // Append every element of `xs` to the end of the list, in order. Both
 // buffers are contiguous, so the copy is a single memcpy; `xs` must not
-// alias the list's own storage — growth may reallocate (and free) that
+// alias the list's own storage - growth may reallocate (and free) that
 // storage before the copy, so no copy primitive makes self-append safe.
 pub fn push_all(self: &List($T), xs: T[]) {
     if xs.len == 0 { return }
@@ -179,7 +179,7 @@ pub fn push_all(self: &List($T), xs: T[]) {
 }
 
 // Remove and return the last element, or null if empty. Prefer `Stack(T)`
-// in new code when the access pattern is LIFO — this primitive exists so
+// in new code when the access pattern is LIFO - this primitive exists so
 // `Stack.pop` can mutate the underlying length without breaching scoped
 // mutability (planned, see spec.md §8).
 pub fn pop(list: &List($T)) T? {
@@ -219,7 +219,7 @@ pub fn set(list: &List($T), index: usize, value: T) {
     memcpy(dest, &value as &u8, size_of(T))
 }
 
-// Scalar indexing — ref-form. One function covers reads, writes, and
+// Scalar indexing - ref-form. One function covers reads, writes, and
 // address-of; the compiler desugars `list[i]`, `list[i] = v`, and `&list[i]`
 // all through this. Panics on out-of-bounds.
 pub fn op_index_ref(list: &List($T), index: usize) &T {
@@ -297,4 +297,177 @@ test "push_all appends a slice in order" {
     defer none.deinit()
     xs.push_all(none.as_slice())
     assert_eq(xs.len, 3 as usize, "empty source is a no-op")
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// Transformations
+//
+// Each of these returns a fresh `List` and leaves the receiver untouched.
+// The result inherits the receiver's allocator unless one is passed, so a
+// derived list is freed by the same arena as the list it came from.
+// ─────────────────────────────────────────────────────────────────────────
+
+// The allocator a derived list should use: the caller's if given, otherwise
+// the receiver's.
+fn derived_allocator(own: &Allocator?, override: &Allocator?) &Allocator {
+    if override.is_some() { return override.unwrap() }
+    return own.or_global()
+}
+
+// Apply `f` to every element, in order.
+pub fn map(self: &List($T), f: fn(T) $U, allocator: &Allocator? = null) List(U) {
+    let out: List(U) = list(self.len, derived_allocator(self.allocator, allocator))
+    for i in 0..self.len {
+        out.push(f(self[i]))
+    }
+    return out
+}
+
+// Apply `f` to every element and concatenate the results. Each intermediate
+// list is consumed: `f` hands over ownership, and this frees it.
+//
+// ponytail: one allocation and one free per element, plus a copy into `out`.
+// The intermediates are pure scratch - nothing outlives the loop iteration
+// that made it - so the allocator traffic is the whole cost of the call for
+// small results. Upgrade path: thread an allocator into `f` and hand it a
+// temporary arena created once per call, so the intermediates are bump
+// allocations reclaimed in one shot; better still, let `f` append directly
+// into `out` and drop the intermediates entirely. Both need an API decision
+// about the callback's shape, not just an implementation change - see
+// docs/known-issues.md.
+pub fn flat_map(self: &List($T), f: fn(T) List($U), allocator: &Allocator? = null) List(U) {
+    let out: List(U) = list(self.len, derived_allocator(self.allocator, allocator))
+    for i in 0..self.len {
+        let part = f(self[i])
+        out.push_all(part.as_slice())
+        part.deinit()
+    }
+    return out
+}
+
+// The elements `keep` accepts, in order.
+pub fn filter(self: &List($T), keep: fn(T) bool, allocator: &Allocator? = null) List(T) {
+    let out: List(T) = list(self.len, derived_allocator(self.allocator, allocator))
+    for i in 0..self.len {
+        if keep(self[i]) { out.push(self[i]) }
+    }
+    return out
+}
+
+// The elements `drop` rejects - `filter` with the predicate negated, spelled
+// the way the intent usually reads.
+pub fn remove(self: &List($T), drop: fn(T) bool, allocator: &Allocator? = null) List(T) {
+    let out: List(T) = list(self.len, derived_allocator(self.allocator, allocator))
+    for i in 0..self.len {
+        if !drop(self[i]) { out.push(self[i]) }
+    }
+    return out
+}
+
+// Combine left to right: `f(f(f(init, x0), x1), x2)`.
+pub fn fold(self: &List($T), init: $A, f: fn(A, T) A) A {
+    let acc = init
+    for i in 0..self.len {
+        acc = f(acc, self[i])
+    }
+    return acc
+}
+
+// Combine right to left: `f(x0, f(x1, f(x2, init)))`. The accumulator is the
+// second argument, mirroring the direction of travel.
+pub fn fold_right(self: &List($T), init: $A, f: fn(T, A) A) A {
+    let acc = init
+    let i = self.len
+    while i > 0 {
+        i = i - 1
+        acc = f(self[i], acc)
+    }
+    return acc
+}
+
+// Everything after the first `n` elements. Fewer than `n` elements yields an
+// empty list rather than an error.
+pub fn drop_first(self: &List($T), n: usize, allocator: &Allocator? = null) List(T) {
+    let out: List(T) = list(self.len, derived_allocator(self.allocator, allocator))
+    let start = if n > self.len { self.len } else { n }
+    for i in start..self.len {
+        out.push(self[i])
+    }
+    return out
+}
+
+test "map applies f in order and leaves the receiver alone" {
+    let xs: List(i32) = list(0)
+    defer xs.deinit()
+    xs.push(1); xs.push(2); xs.push(3)
+
+    let doubled = xs.map(fn(v: i32) i32 { v * 2 })
+    defer doubled.deinit()
+    assert_eq(doubled.len, 3 as usize, "same length")
+    assert_eq(doubled[0], 2, "first doubled")
+    assert_eq(doubled[2], 6, "last doubled")
+    assert_eq(xs[0], 1, "receiver untouched")
+}
+
+test "flat_map concatenates and frees the intermediates" {
+    let xs: List(i32) = list(0)
+    defer xs.deinit()
+    xs.push(1); xs.push(2)
+
+    let out = xs.flat_map(fn(v: i32) List(i32) {
+        let part: List(i32) = list(2)
+        part.push(v)
+        part.push(v * 10)
+        part
+    })
+    defer out.deinit()
+    assert_eq(out.len, 4 as usize, "two elements each")
+    assert_eq(out[1], 10, "second of the first pair")
+    assert_eq(out[2], 2, "first of the second pair")
+}
+
+test "filter keeps matches, remove keeps the rest" {
+    let xs: List(i32) = list(0)
+    defer xs.deinit()
+    for i in 0..6 { xs.push(i as i32) }
+
+    let evens = xs.filter(fn(v: i32) bool { v % 2 == 0 })
+    defer evens.deinit()
+    let odds = xs.remove(fn(v: i32) bool { v % 2 == 0 })
+    defer odds.deinit()
+
+    assert_eq(evens.len, 3 as usize, "three evens")
+    assert_eq(odds.len, 3 as usize, "three odds")
+    assert_eq(evens[0], 0, "first even")
+    assert_eq(odds[0], 1, "first odd")
+    assert_eq(evens.len + odds.len, xs.len, "the two partitions cover the input")
+}
+
+test "fold and fold_right differ in association" {
+    let xs: List(i32) = list(0)
+    defer xs.deinit()
+    xs.push(1); xs.push(2); xs.push(3)
+
+    // Subtraction is not associative, so the two directions disagree:
+    // left  ((0-1)-2)-3 = -6
+    // right 1-(2-(3-0)) = 2
+    let l = xs.fold(0, fn(acc: i32, v: i32) i32 { acc - v })
+    let r = xs.fold_right(0, fn(v: i32, acc: i32) i32 { v - acc })
+    assert_eq(l, -6, "left-associated")
+    assert_eq(r, 2, "right-associated")
+}
+
+test "drop_first skips a prefix and clamps past the end" {
+    let xs: List(i32) = list(0)
+    defer xs.deinit()
+    for i in 0..4 { xs.push(i as i32) }
+
+    let tail = xs.drop_first(2 as usize)
+    defer tail.deinit()
+    assert_eq(tail.len, 2 as usize, "two remain")
+    assert_eq(tail[0], 2, "starts after the prefix")
+
+    let past = xs.drop_first(99 as usize)
+    defer past.deinit()
+    assert_eq(past.len, 0 as usize, "dropping past the end is empty, not an error")
 }

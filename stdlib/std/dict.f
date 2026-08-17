@@ -186,7 +186,7 @@ pub fn set(self: &Dict($K, $V), key: K, value: V) {
 pub fn set(self: &Dict(OwnedString, $V), key: String, value: V) {
     self.ensure_capacity()
 
-    // Fake OwnedString for comparison — no allocation for lookups.
+    // Fake OwnedString for comparison - no allocation for lookups.
     const fake = OwnedString{ptr=key.ptr, len=key.len, allocator=null}
     const h: usize = hash_key(fake)
     let tombstone_idx: usize = self.cap

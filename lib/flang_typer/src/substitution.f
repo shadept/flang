@@ -1,4 +1,4 @@
-// Substitution — replace `Var(id)` occurrences inside a `Ty` with
+// Substitution - replace `Var(id)` occurrences inside a `Ty` with
 // the corresponding entry from a `Dict(VarId, Ty)`. Pure: no engine
 // state, no diagnostics. Used by `specialize`, by generic-function
 // instantiation, and by `Ty` zonking when a fresh monotype is needed.
@@ -18,7 +18,7 @@ import flang_typer.type
 
 // Apply `subst` to `ty`. Each `Var(v)` with `v.id` in `subst` becomes
 // the mapped type; everything else recurses structurally. Returns a
-// fresh `Ty` value — `ty` is not mutated.
+// fresh `Ty` value - `ty` is not mutated.
 //
 // `allocator` is used to box new `Ref`/`Array.elem`/`Func.ret` payloads
 // and to grow returned `List` storage. Callers should pass the engine's

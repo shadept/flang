@@ -1,11 +1,11 @@
-// Projector — turns a CST tree into the semantic AST (see ast.f).
+// Projector - turns a CST tree into the semantic AST (see ast.f).
 //
 // The CST is lossless and shape-preserving; the AST is meaning-preserving
 // and category-typed. The projector walks each `CstNode`, dispatches on
 // `NodeKind`, and produces the corresponding AST node. Recursive children
 // are boxed into the Module's arena; non-recursive children are stored by
 // value. Strings (names, literal texts) are reused as views into the
-// original `Token.text` — the source buffer must outlive the Module.
+// original `Token.text` - the source buffer must outlive the Module.
 //
 // Tokens that exist only for shape (`(`, `,`, `;`, keywords like `fn` /
 // `import` / `else` / `=`) are skipped. Tokens carrying meaning (names,
@@ -42,7 +42,7 @@ type Projector = struct {
 // Project a parsed CST `Module` node into the typed AST `Module`.
 // `allocator` is the backing allocator for the arena (defaults to the
 // global allocator). `file_id` is forwarded into every produced
-// `SourceSpan` — pass the workspace-stable id, or `-1` for "none".
+// `SourceSpan` - pass the workspace-stable id, or `-1` for "none".
 pub fn project_module(cst: CstNode, file_id: i32, allocator: &Allocator? = null) Module {
     const backing = allocator.or_global()
     let arena = arena_allocator(backing)
@@ -221,7 +221,7 @@ fn project_directives(self: &Projector, cst: CstNode) List(DeclAttribute) {
 }
 
 // `#foreign`, `#inline`, `#intrinsic`, `#simd`, `#deprecated("…")`. Other
-// directive identifiers are flattened to `Inline` as a non-fatal default —
+// directive identifiers are flattened to `Inline` as a non-fatal default -
 // validation belongs to a later pass.
 fn project_directive(self: &Projector, cst: CstNode) DeclAttribute {
     let name: String = ""
@@ -250,7 +250,7 @@ fn project_directive(self: &Projector, cst: CstNode) DeclAttribute {
     if name == "intrinsic" { return DeclAttribute.Intrinsic }
     if name == "simd" { return DeclAttribute.Simd }
     if name == "deprecated" { return DeclAttribute.Deprecated(arg_text) }
-    // Unknown directive — fold to Inline so the AST stays in a known shape.
+    // Unknown directive - fold to Inline so the AST stays in a known shape.
     // The parser already filed a warning for unknown directives.
     return DeclAttribute.Inline
 }
@@ -705,7 +705,7 @@ fn project_generator_invocation(self: &Projector, cst: CstNode) GenInvoke {
                     name = tok.text
                 }
                 // Inner argument tokens are consumed loosely by the parser's
-                // `consume_balanced` — surfaced as a flat token stream
+                // `consume_balanced` - surfaced as a flat token stream
                 // without sub-expressions. Until the parser exposes
                 // structured generator args, we leave `args` empty rather
                 // than fabricate placeholder expressions.
@@ -726,7 +726,7 @@ fn project_generator_invocation(self: &Projector, cst: CstNode) GenInvoke {
 
 fn project_if_directive_decl(self: &Projector, cst: CstNode) IfDirectiveDecl {
     // The parser's `parse_if_directive_stmt` consumes the condition as a
-    // balanced run of tokens — no structured expr surfaced. We default
+    // balanced run of tokens - no structured expr surfaced. We default
     // the condition to an Error expression for now.
     let then_decls: List(Decl) = list(0, self.alloc)
     let else_decls: List(Decl) = list(0, self.alloc)
@@ -1007,7 +1007,8 @@ fn collect_block_stmts(self: &Projector, block: CstNode, out: &List(Stmt)) {
 // ─────────────────────────────────────────────────────────────────────────
 
 fn is_expr_kind(kind: NodeKind) bool {
-    return kind == NodeKind.BinaryExpr
+    return kind == NodeKind.ParenExpr
+        or kind == NodeKind.BinaryExpr
         or kind == NodeKind.UnaryExpr
         or kind == NodeKind.AddressOfExpr
         or kind == NodeKind.DereferenceExpr
@@ -1080,6 +1081,7 @@ fn project_expr(self: &Projector, cst: CstNode) Expr {
                 None => Expr.Error(ErrorExpr { span = self.span_from(cst) }),
             }
         }
+        ParenExpr => self.project_paren(cst),
         IfExpr => Expr.If(self.project_if_expr(cst)),
         MatchExpr => Expr.Match(self.project_match_expr(cst)),
         LambdaExpr => Expr.Lambda(self.project_lambda_expr(cst)),
@@ -1167,7 +1169,7 @@ fn project_byte_literal(self: &Projector, cst: CstNode) LiteralExpr {
         Some(t) => { raw = t.text }
         None => {}
     }
-    // `b'X'` — drop leading `b'` and trailing `'`.
+    // `b'X'` - drop leading `b'` and trailing `'`.
     let text = raw
     if text.len >= 3 and text[0] == b'b' and text[1] == b'\'' {
         text = slice_str(text, 2, text.len - 1)
@@ -1654,6 +1656,20 @@ fn project_array_literal(self: &Projector, cst: CstNode) Expr {
 // grouped expression. The CST reuses `AnonymousStructExpr` for the
 // tuple form (see parser `parse_paren_expression`); we distinguish by
 // the leading token kind.
+// `( expr )` - the parens only group; the value is the inner expression.
+// The CST keeps them (the formatter needs the tokens), the AST does not.
+fn project_paren(self: &Projector, cst: CstNode) Expr {
+    for i in 0..cst.children.len {
+        cst.children[i] match {
+            NodeChild(child) => {
+                if is_expr_kind(child.kind) { return self.project_expr(child) }
+            }
+            TokenChild(_) => {}
+        }
+    }
+    return Expr.Error(ErrorExpr { span = self.span_from(cst) })
+}
+
 fn project_anon_struct_or_tuple(self: &Projector, cst: CstNode) Expr {
     let leads_with_dot = false
     let leads_with_paren = false
@@ -1831,13 +1847,13 @@ fn struct_construction_type(self: &Projector, cst: CstNode) TypeExpr? {
 
 // Block: walks statements; last statement-expr without a terminator
 // becomes `trailing`. The parser doesn't currently tag the trailing
-// expression explicitly — we identify it as a final ExpressionStmt that
+// expression explicitly - we identify it as a final ExpressionStmt that
 // the parser produced without a trailing semicolon.
 fn project_block_node(self: &Projector, cst: CstNode) BlockExpr? {
     if cst.kind != NodeKind.BlockExpr { return null }
     let stmts: List(Stmt) = list(0, self.alloc)
     let trailing: Expr? = null
-    // First pass: identify the last NodeChild — candidate for trailing.
+    // First pass: identify the last NodeChild - candidate for trailing.
     let last_child_idx: usize = 0
     let have_last = false
     for i in 0..cst.children.len {
@@ -1985,7 +2001,7 @@ fn project_match_expr(self: &Projector, cst: CstNode) MatchExpr {
 }
 
 // `pat (if guard)? => body`. The parser doesn't surface pattern sub-nodes
-// — it consumes pattern tokens loosely, then a `=>` token, then a body
+// - it consumes pattern tokens loosely, then a `=>` token, then a body
 // expression. The guard, if present, appears as a sub-node BEFORE `=>`.
 // We extract: pattern from tokens, guard from the optional sub-node
 // preceding `=>`, body from the sub-node AFTER `=>`.
@@ -2097,14 +2113,14 @@ fn project_lambda_expr(self: &Projector, cst: CstNode) LambdaExpr {
                     continue
                 }
                 if !saw_open_paren or after_close_paren {
-                    // Either before `(` (shouldn't happen) or after `)` —
+                    // Either before `(` (shouldn't happen) or after `)` -
                     // type-expression role: return type.
                     if after_close_paren and is_type_kind(child.kind) and return_type.is_none() {
                         return_type = self.project_type_expr(child)
                     }
                     continue
                 }
-                // Inside the param list — a type-node attaches to the
+                // Inside the param list - a type-node attaches to the
                 // pending identifier.
                 if is_type_kind(child.kind) and pending_active {
                     const t = self.project_type_expr(child)
@@ -2390,7 +2406,7 @@ fn project_function_type(self: &Projector, cst: CstNode) TypeExpr {
     })
 }
 
-// Inline `struct { ... }` in type position — parser consumes the body as
+// Inline `struct { ... }` in type position - parser consumes the body as
 // loose tokens. We surface generics from `(...)` and a best-effort scan
 // of `name : type` pairs inside the braces; type-side cannot be recovered
 // faithfully without re-parsing.
@@ -2417,7 +2433,7 @@ fn project_anon_enum_type(self: &Projector, cst: CstNode) TypeExpr {
 }
 
 // ─────────────────────────────────────────────────────────────────────────
-// Patterns — best-effort projection from a loose token run
+// Patterns - best-effort projection from a loose token run
 // ─────────────────────────────────────────────────────────────────────────
 //
 // The parser does not surface pattern sub-nodes (see parse_match_arm).
@@ -2426,7 +2442,12 @@ fn project_anon_enum_type(self: &Projector, cst: CstNode) TypeExpr {
 //   - single identifier → Variable
 //   - integer / float / string / char / byte / true / false / null → Literal
 //   - `Name(...)` or `Enum.Variant(...)` token-shape → EnumVariant
-//   - anything else → an error-flavoured Wildcard (preserves span only)
+//   - anything else → `Error`, NOT a wildcard
+//
+// The last case matters: or-patterns (`1 | 2`), ranges (`1..5`), struct and
+// tuple destructuring all land there. Projecting them to `Wildcard` would
+// make them match everything, so a match would silently take the wrong arm.
+// `Error` instead makes consumers refuse the match outright.
 
 fn project_pattern_from_tokens(self: &Projector, tokens: List(Token), start: usize, end: usize) Pattern {
     const span: SourceSpan = .{ file_id = self.file_id, start = start, length = end - start }
@@ -2502,7 +2523,7 @@ fn literal_pattern_for(self: &Projector, tok: Token, span: SourceSpan) Pattern {
     if tok.kind == TokenKind.Null {
         return Pattern.Literal(LiteralPattern { span = span, value = LiteralValue.Null })
     }
-    return Pattern.Wildcard(WildcardPattern { span = span })
+    return Pattern.Error(ErrorPattern { span = span })
 }
 
 fn enum_variant_pattern_from_tokens(self: &Projector, tokens: List(Token), span: SourceSpan) Pattern {
@@ -2533,9 +2554,9 @@ fn enum_variant_pattern_from_tokens(self: &Projector, tokens: List(Token), span:
             payloads = payloads,
         })
     }
-    // Expect `(` — otherwise fall back to a wildcard pattern.
+    // Expect `(` - anything else is a shape this projector cannot read.
     if tokens[idx].kind != TokenKind.OpenParenthesis {
-        return Pattern.Wildcard(WildcardPattern { span = span })
+        return Pattern.Error(ErrorPattern { span = span })
     }
     idx = idx + 1
     let depth: i32 = 1

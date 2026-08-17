@@ -2,16 +2,16 @@
 //
 // Three separate components sharing a common SIMD classifier:
 //
-//   SIMD classifier  — shared core: classifies 16-byte chunks into delimiter bitmasks,
+//   SIMD classifier  - shared core: classifies 16-byte chunks into delimiter bitmasks,
 //                      computes quote parity via carryless multiply
-//   CsvDecoder       — implements Decoder for #derive(T, deserialize);
+//   CsvDecoder       - implements Decoder for #derive(T, deserialize);
 //                      reads from a Reader, decodes fields directly without materializing records
-//   CsvEncoder       — implements Encoder for #derive(T, serialize);
+//   CsvEncoder       - implements Encoder for #derive(T, serialize);
 //                      writes CSV rows to a Writer
-//   CsvReader        — reads entire file into memory, produces CsvRecord with String views;
+//   CsvReader        - reads entire file into memory, produces CsvRecord with String views;
 //                      feeds CsvTable for column/row selection
-//   CsvRecord        — single row with String views into a backing buffer
-//   CsvTable         — materialized table owning its buffer, with select_columns/select_rows
+//   CsvRecord        - single row with String views into a backing buffer
+//   CsvTable         - materialized table owning its buffer, with select_columns/select_rows
 //
 // The parser handles RFC 4180 with lenient line endings (LF, CR, CRLF).
 // Quoting and delimiter characters are configurable via CsvOptions.
@@ -61,7 +61,7 @@ pub fn csv_options() CsvOptions {
 }
 
 // =============================================================================
-// CsvRecord — single row with String views into a backing buffer
+// CsvRecord - single row with String views into a backing buffer
 // =============================================================================
 
 pub type CsvRecord = struct {
@@ -89,7 +89,7 @@ pub fn field_count(record: &CsvRecord) usize {
 }
 
 // =============================================================================
-// SIMD classifier — shared core for delimiter detection
+// SIMD classifier - shared core for delimiter detection
 // =============================================================================
 
 // Bitmasks for structural characters in a 16-byte chunk.
@@ -148,7 +148,7 @@ type FieldSpan = struct {
 }
 
 // =============================================================================
-// Shared row parsing — extracts field spans from a buffer
+// Shared row parsing - extracts field spans from a buffer
 // =============================================================================
 
 // Parse state for CsvDecoder's streaming row parser.
@@ -261,7 +261,7 @@ fn process_chunk(
 }
 
 // =============================================================================
-// CsvDecoder — streaming decoder for #derive(T, deserialize)
+// CsvDecoder - streaming decoder for #derive(T, deserialize)
 // =============================================================================
 
 pub type CsvDecoder = struct {
@@ -485,7 +485,7 @@ pub fn deinit(self: &CsvDecoder) {
 #implement(CsvDecoder, Decoder)
 
 // =============================================================================
-// CsvEncoder — streaming CSV writer for #derive(T, serialize)
+// CsvEncoder - streaming CSV writer for #derive(T, serialize)
 // =============================================================================
 
 pub type CsvEncoder = struct {
@@ -647,7 +647,7 @@ pub fn deinit(self: &CsvEncoder) {
 }
 
 // =============================================================================
-// CsvReader — reads entire file into memory, produces CsvRecord with String views
+// CsvReader - reads entire file into memory, produces CsvRecord with String views
 // =============================================================================
 
 pub type CsvReader = struct {
@@ -752,7 +752,7 @@ fn parse_all(self: &CsvReader) {
 
     loop {
         if pos >= data_len {
-            // EOF — flush remaining field
+            // EOF - flush remaining field
             if field_start < data_len {
                 current_fields.push(self.extract_field(data, field_start, data_len))
                 let rec: CsvRecord
@@ -788,7 +788,7 @@ fn parse_all(self: &CsvReader) {
             const filtered = filter_by_quotes(masks, inside)
             structural = (filtered.delimiters | filtered.newlines) & valid
         } else {
-            // No quotes anywhere — all delimiters are real
+            // No quotes anywhere - all delimiters are real
             structural = (masks.delimiters | masks.newlines) & valid
         }
 
@@ -835,11 +835,11 @@ fn parse_all(self: &CsvReader) {
 // Strips surrounding quotes and unescapes doubled quotes.
 fn extract_field(self: &CsvReader, data: String, start: usize, end: usize) String {
     if start >= end { return "" }
-    // Fast path: unquoted field — just a pointer+length view (vast majority of fields)
+    // Fast path: unquoted field - just a pointer+length view (vast majority of fields)
     if data[start] != self.options.quote {
         return .{ ptr = data.ptr + start, len = end - start } as String
     }
-    // Quoted field — strip surrounding quotes
+    // Quoted field - strip surrounding quotes
     const quote = self.options.quote
     if end > start + 1 {
         if data[end - 1] == quote {
@@ -849,7 +849,7 @@ fn extract_field(self: &CsvReader, data: String, start: usize, end: usize) Strin
             return .{ ptr = data.ptr + start + 1usize, len = len } as String
         }
     }
-    // Fallback — return as-is
+    // Fallback - return as-is
     return .{ ptr = data.ptr + start, len = end - start } as String
 }
 
@@ -873,7 +873,7 @@ pub fn deinit(self: &CsvReader) {
 }
 
 // =============================================================================
-// CsvTable — materialized table owning its buffer
+// CsvTable - materialized table owning its buffer
 // =============================================================================
 
 pub type CsvTable = struct {
@@ -891,7 +891,7 @@ pub fn csv_table(r: Reader, options: CsvOptions = csv_options(), allocator: &All
     table.headers = reader.headers
     table.rows = reader.rows
     table.buffer = reader.buffer
-    // Don't deinit reader — table took ownership of buffer
+    // Don't deinit reader - table took ownership of buffer
     return Result.Ok(table)
 }
 
@@ -911,7 +911,7 @@ pub fn select_rows(table: &CsvTable, start: usize, end: usize) CsvTable {
     let result: CsvTable
     result.buffer = string_builder(0)
 
-    // Share headers (String views — still valid as long as original table lives)
+    // Share headers (String views - still valid as long as original table lives)
     let sel_headers = list(table.headers.len)
     for i in 0..table.headers.len {
         sel_headers.push(table.headers[i])

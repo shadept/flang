@@ -1,8 +1,8 @@
 // Reusable #enum_utils source generator.
 //
 // #enum_utils(E) generates:
-//   - to_string(self: E) String — match-based variant name
-//   - from_string(s: String) E? — if-chain lookup by name
+//   - to_string(self: E) String - match-based variant name
+//   - from_string(s: String) E? - if-chain lookup by name
 //
 // Works with payload-less enums only.
 

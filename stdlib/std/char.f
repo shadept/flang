@@ -1,48 +1,35 @@
 import std.test
 
+// ASCII classification. Written as explicit bound checks rather than range
+// and or patterns: those are the only two uses of either form in the whole
+// self-host corpus, and the self-hosted front end does not parse them yet
+// (docs/known-issues.md). The comparisons are exactly equivalent and read
+// no worse for predicates like these.
+
 pub fn lower(c: char) char {
-    return c match {
-        'A'..='Z' => c + ('a' - 'A'),
-        _         => c,
-    }
+    if c >= 'A' and c <= 'Z' { return c + ('a' - 'A') }
+    return c
 }
 
 pub fn upper(c: char) char {
-    return c match {
-        'a'..='z' => c - ('a' - 'A'),
-        _         => c,
-    }
+    if c >= 'a' and c <= 'z' { return c - ('a' - 'A') }
+    return c
 }
 
 pub fn is_digit(c: u8) bool {
-    return c match {
-        '0'..='9' => true,
-        _         => false,
-    }
+    return c >= '0' and c <= '9'
 }
 
 pub fn is_alpha(c: u8) bool {
-    return c match {
-        'A'..='Z' => true,
-        'a'..='z' => true,
-        _         => false,
-    }
+    return (c >= 'A' and c <= 'Z') or (c >= 'a' and c <= 'z')
 }
 
 pub fn is_alnum(c: u8) bool {
-    return c match {
-        '0'..='9' => true,
-        'A'..='Z' => true,
-        'a'..='z' => true,
-        _         => false,
-    }
+    return is_digit(c) or is_alpha(c)
 }
 
 pub fn is_whitespace(c: u8) bool {
-    return c match {
-        ' ' | '\t' | '\n' | '\r' => true,
-        _                        => false,
-    }
+    return c == ' ' or c == '\t' or c == '\n' or c == '\r'
 }
 
 test "is_digit" {

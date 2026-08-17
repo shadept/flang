@@ -5,8 +5,8 @@
 //! STDOUT: outer-defer
 
 // Pins that `return` has no fall-through. `run()` returns 7 directly from
-// inside a nested if; any statement after the `return` — including the
-// trailing `defer` — must not execute. If they did, `poisoned` would be 1
+// inside a nested if; any statement after the `return` - including the
+// trailing `defer` - must not execute. If they did, `poisoned` would be 1
 // and exit code would be 8 instead of 7.
 //
 // Defers registered before the `return` still fire, innermost first.

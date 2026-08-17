@@ -1,4 +1,4 @@
-// codegen_demo — exercises the full codegen pipeline end-to-end.
+// codegen_demo - exercises the full codegen pipeline end-to-end.
 //
 //   1. Hand-build a small FIR module (calls `puts`, prints a few sums).
 //   2. Lower it to C via flang_codegen.c_backend.translate.
@@ -67,7 +67,7 @@ pub fn main() i32 {
 
     println("codegen_demo: running …")
     println("----- program output -----")
-    // Windows won't search cwd for executables — prefix with ".\\" so
+    // Windows won't search cwd for executables - prefix with ".\\" so
     // the OS treats it as a relative path and looks where we wrote it.
     let exe_sb = string_builder(result.executable_path.len + 4)
     defer exe_sb.deinit()
@@ -142,7 +142,7 @@ fn pick_output_path() OwnedString {
 //       %s10:  i32 = call @sum_to(10)
 //       %s100: i32 = call @sum_to(100)
 //       %m:    i32 = imul %s10, %s100
-//       (print s10, s100, product via printf — see build_main)
+//       (print s10, s100, product via printf - see build_main)
 //       ret 0
 //   }
 // -------------------------------------------------------------------------
@@ -223,7 +223,7 @@ fn build_demo_module() IrModule {
         init_bytes = prod_fmt.as_raw_bytes(),
     })
 
-    // argv format strings — used to prove the runtime captures argv.
+    // argv format strings - used to prove the runtime captures argv.
     const argc_fmt: String = "argc      = %d\n\0"
     m.add_global(Global {
         name = "argc_fmt",
@@ -305,7 +305,7 @@ fn build_main() Function {
     const s10 = entry.call_one("sum_to", IrType.I32, int(10))
     const s100 = entry.call_one("sum_to", IrType.I32, int(100))
 
-    // printf(@sum_fmt, 10, s10) — variadic with explicit arg types.
+    // printf(@sum_fmt, 10, s10) - variadic with explicit arg types.
     let sum_fixed_a: List(Operand) = list(1)
     sum_fixed_a.push(global("sum_fmt"))
     let sum_extras_a: List((IrType, Operand)) = list(2)
@@ -328,7 +328,7 @@ fn build_main() Function {
     entry.call_variadic("printf", IrType.I32, prod_fixed, prod_extras)
 
     // Prove the runtime captured argv. We call the same helpers std.env
-    // calls under the hood — the values come from the globals populated
+    // calls under the hood - the values come from the globals populated
     // by the wrapper main the C backend emits.
     let argc_args: List(Operand) = list(0)
     const argc = entry.call("__flang_get_argc", IrType.I32, argc_args)

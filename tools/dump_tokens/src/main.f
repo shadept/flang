@@ -1,4 +1,4 @@
-// dump_tokens — load a .f file, run the lexer, print the token stream.
+// dump_tokens - load a .f file, run the lexer, print the token stream.
 //
 //   <offset>:L<line>  <KindName>  <text>
 //       leading:  <n piece(s)>  <text>
@@ -146,4 +146,3 @@ fn append_escaped(sb: &StringBuilder, s: String) {
         else { sb.append_byte(c) }
     }
 }
-

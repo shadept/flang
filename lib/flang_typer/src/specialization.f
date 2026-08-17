@@ -1,4 +1,4 @@
-// Specialization registry — eager monomorphisation of generic functions.
+// Specialization registry - eager monomorphisation of generic functions.
 //
 // Each call site to a generic function with a concrete type-arg vector
 // triggers `ensure_specialization`. The first time a given vector is
@@ -10,7 +10,7 @@
 // The clone-and-resubstitute pass lives in the checker; this module is
 // the dedup cache + the public API the checker hands back to consumers
 // through `InferenceResults.specializations`. Generic templates never
-// reach the IR — every monomorphisation that appears in `result.f`'s
+// reach the IR - every monomorphisation that appears in `result.f`'s
 // `specializations` list is a fully-type-checked, concrete function.
 
 import std.allocator
@@ -111,7 +111,7 @@ pub fn get(self: &SpecializationRegistry, id: u32) &Specialization {
 test "specialization keys separate same-named types from different modules" {
     // Two modules may each declare a `Binding`; the key must tell their
     // specializations apart. Nominals are keyed by registry id, which is
-    // unique per declaration — keying by a type's short name is what made
+    // unique per declaration - keying by a type's short name is what made
     // the reference compiler fuse two specializations into one and emit a
     // call to a symbol nothing defined (docs/known-issues.md).
     let a_args: List(Ty) = list(0)

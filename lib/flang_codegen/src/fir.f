@@ -1,4 +1,4 @@
-// FIR — typed, SSA, block-based IR. See `docs/fir.md` for the design
+// FIR - typed, SSA, block-based IR. See `docs/fir.md` for the design
 // and canonical text format.
 
 import std.allocator
@@ -11,7 +11,7 @@ import std.string
 // ─────────────────────────────────────────────────────────────────────────
 
 // The seven FIR primitives. Aggregates (structs, enums, arrays, slices)
-// are not FIR types — they live in memory as opaque byte buffers,
+// are not FIR types - they live in memory as opaque byte buffers,
 // addressed via `gep` + `load`/`store`. The lowering pass resolves all
 // aggregate layouts before FIR is emitted.
 pub type IrType = enum {
@@ -361,6 +361,15 @@ pub type IrModule = struct {
     globals: List(Global)
     foreigns: List(ForeignDecl)
     functions: List(Function)
+    // TEMPORARY SCAFFOLD - symbols the front end declined to emit because
+    // their bodies used a construct it cannot yet represent. Recorded rather
+    // than dropped silently: a program missing a function fails loudly at
+    // link time, whereas one built from placeholder values does not fail at
+    // all. Exists only while lowering covers a subset of the language;
+    // remove together with `lower.f::unlowerable` once lowering is total.
+    //
+    // ponytail: milestone-period crutch; delete once lowering is total.
+    skipped: List(String)
 }
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -371,10 +380,12 @@ pub fn module(allocator: &Allocator? = null) IrModule {
     let globals: List(Global) = list(0, allocator)
     let foreigns: List(ForeignDecl) = list(0, allocator)
     let functions: List(Function) = list(0, allocator)
+    let skipped: List(String) = list(0, allocator)
     return IrModule {
         globals = globals,
         foreigns = foreigns,
         functions = functions,
+        skipped = skipped,
     }
 }
 
@@ -449,7 +460,7 @@ pub fn fresh_value_id(self: &Function) u32 {
     return id
 }
 
-// Replace the block's terminator. Overwrites whatever was there —
+// Replace the block's terminator. Overwrites whatever was there -
 // callers building a block from scratch start with `Unreachable` and
 // call this once, so the discarded value owns no heap. Pair with
 // `replace_terminator` (below) when the previous terminator may own

@@ -137,7 +137,7 @@ pub fn peek_back(self: Deque($T)) T? {
 }
 
 // Drop every element. Backing storage is retained for reuse. Element
-// `deinit()` is NOT called — use `deinit()` for a full release.
+// `deinit()` is NOT called - use `deinit()` for a full release.
 pub fn clear(self: &Deque($T)) {
     self.head = 0
     self.len = 0

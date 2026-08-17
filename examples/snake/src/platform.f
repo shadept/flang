@@ -1,4 +1,4 @@
-// Platform shim for snake — see platform.c for the POSIX / Windows bodies.
+// Platform shim for snake - see platform.c for the POSIX / Windows bodies.
 
 #foreign pub fn snake_enter_raw_mode()
 #foreign pub fn snake_exit_raw_mode()

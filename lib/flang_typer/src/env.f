@@ -1,4 +1,4 @@
-// TypeEnv — scoped `name → Binding` map for the checker.
+// TypeEnv - scoped `name → Binding` map for the checker.
 //
 // Scopes stack: `push_scope` opens a fresh inner scope, `pop_scope`
 // drops it. `lookup` searches from innermost to outermost. The
