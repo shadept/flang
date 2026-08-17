@@ -143,6 +143,15 @@ pub fn label(self: &BlockBuilder) String {
     return self.fb.func.blocks[self.block_idx].label
 }
 
+// Re-point this builder at another block of the same function. A
+// `BlockBuilder` is (function, block index), so a consumer can hold one as
+// a cursor: emitting control flow moves the cursor, and every frame holding
+// a reference to it keeps emitting into the live block without threading a
+// continuation back up.
+pub fn move_to(self: &BlockBuilder, target: &BlockBuilder) {
+    self.block_idx = target.block_idx
+}
+
 // ─────────────────────────────────────────────────────────────────────────
 // Two-operand arithmetic / bitwise
 // ─────────────────────────────────────────────────────────────────────────

@@ -19,6 +19,7 @@ import std.list
 import std.option
 import std.string
 import std.string_builder
+import std.test
 import flang_typer.type
 import flang_typer.node_id
 
@@ -105,4 +106,51 @@ pub fn register(self: &SpecializationRegistry, spec: Specialization) u32 {
 
 pub fn get(self: &SpecializationRegistry, id: u32) &Specialization {
     return &self.specs[id as usize]
+}
+
+test "specialization keys separate same-named types from different modules" {
+    // Two modules may each declare a `Binding`; the key must tell their
+    // specializations apart. Nominals are keyed by registry id, which is
+    // unique per declaration — keying by a type's short name is what made
+    // the reference compiler fuse two specializations into one and emit a
+    // call to a symbol nothing defined (docs/known-issues.md).
+    let a_args: List(Ty) = list(0)
+    let b_args: List(Ty) = list(0)
+    let a = Ty.Nominal(NominalRef { id = 7 as NominalId, args = a_args })
+    let b = Ty.Nominal(NominalRef { id = 9 as NominalId, args = b_args })
+
+    let pa: List(Ty) = list(1)
+    pa.push(a)
+    let pb: List(Ty) = list(1)
+    pb.push(b)
+
+    let ka = key_for(3 as u32, &pa, a)
+    let kb = key_for(3 as u32, &pb, b)
+    assert_true(ka.as_view() != kb.as_view(), "distinct nominal ids give distinct keys")
+
+    ka.deinit()
+    kb.deinit()
+    pa.deinit()
+    pb.deinit()
+}
+
+test "specialization keys reuse one entry for the same type" {
+    let a_args: List(Ty) = list(0)
+    let b_args: List(Ty) = list(0)
+    let a = Ty.Nominal(NominalRef { id = 7 as NominalId, args = a_args })
+    let b = Ty.Nominal(NominalRef { id = 7 as NominalId, args = b_args })
+
+    let pa: List(Ty) = list(1)
+    pa.push(a)
+    let pb: List(Ty) = list(1)
+    pb.push(b)
+
+    let ka = key_for(3 as u32, &pa, a)
+    let kb = key_for(3 as u32, &pb, b)
+    assert_true(ka.as_view() == kb.as_view(), "the same type keys to the same specialization")
+
+    ka.deinit()
+    kb.deinit()
+    pa.deinit()
+    pb.deinit()
 }

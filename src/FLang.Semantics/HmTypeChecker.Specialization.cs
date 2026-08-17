@@ -36,36 +36,73 @@ public partial class HmTypeChecker
     /// For anonymous types (tuples), includes resolved field types to distinguish
     /// e.g. (i64, usize) from (u64, usize) which share the name __anon__0__1.
     /// </summary>
+    /// <remarks>
+    /// Nominals are keyed by FQN, never <see cref="NominalType.ShortName"/>: two
+    /// modules may each declare a `Binding`, and a short-name key makes their
+    /// specializations collide. The second call site then silently reuses a
+    /// function specialized over the *first* module's type, and since IR struct
+    /// names are FQN-derived, the emitted call names a symbol nothing defines —
+    /// surfacing much later as E3002 against an unrelated file.
+    ///
+    /// Structural types recurse for the same reason: `Type.ToString()` renders
+    /// nominals by short name, so `&a.Thing` and `&b.Thing` would collide too.
+    /// </remarks>
     private void AppendTypeSpecKey(System.Text.StringBuilder sb, Type type)
     {
-        if (type is NominalType nt)
+        switch (type)
         {
-            if (nt.Name.StartsWith("__anon_") && nt.FieldsOrVariants.Count > 0 && nt.TypeArguments.Count == 0)
-            {
-                sb.Append(nt.ShortName);
-                sb.Append('{');
-                for (int i = 0; i < nt.FieldsOrVariants.Count; i++)
+            case NominalType nt:
+                sb.Append(nt.Name);
+                if (nt.Name.StartsWith("__anon_") && nt.FieldsOrVariants.Count > 0 && nt.TypeArguments.Count == 0)
                 {
-                    if (i > 0) sb.Append(',');
-                    AppendTypeSpecKey(sb, _ctx.Engine.Resolve(nt.FieldsOrVariants[i].Type));
+                    sb.Append('{');
+                    for (int i = 0; i < nt.FieldsOrVariants.Count; i++)
+                    {
+                        if (i > 0) sb.Append(',');
+                        AppendTypeSpecKey(sb, _ctx.Engine.Resolve(nt.FieldsOrVariants[i].Type));
+                    }
+                    sb.Append('}');
                 }
-                sb.Append('}');
+                else if (nt.TypeArguments.Count > 0)
+                {
+                    sb.Append('(');
+                    for (int i = 0; i < nt.TypeArguments.Count; i++)
+                    {
+                        if (i > 0) sb.Append(", ");
+                        AppendTypeSpecKey(sb, _ctx.Engine.Resolve(nt.TypeArguments[i]));
+                    }
+                    sb.Append(')');
+                }
                 return;
-            }
-            if (nt.TypeArguments.Count > 0)
-            {
-                sb.Append(nt.ShortName);
-                sb.Append('(');
-                for (int i = 0; i < nt.TypeArguments.Count; i++)
+
+            case FLang.Core.Types.ReferenceType rt:
+                sb.Append('&');
+                AppendTypeSpecKey(sb, _ctx.Engine.Resolve(rt.InnerType));
+                return;
+
+            case FLang.Core.Types.ArrayType at:
+                sb.Append('[');
+                AppendTypeSpecKey(sb, _ctx.Engine.Resolve(at.ElementType));
+                sb.Append(';');
+                sb.Append(at.Length);
+                sb.Append(']');
+                return;
+
+            case FunctionType ft:
+                sb.Append("fn(");
+                for (int i = 0; i < ft.ParameterTypes.Count; i++)
                 {
                     if (i > 0) sb.Append(", ");
-                    AppendTypeSpecKey(sb, _ctx.Engine.Resolve(nt.TypeArguments[i]));
+                    AppendTypeSpecKey(sb, _ctx.Engine.Resolve(ft.ParameterTypes[i]));
                 }
-                sb.Append(')');
+                sb.Append(")->");
+                AppendTypeSpecKey(sb, _ctx.Engine.Resolve(ft.ReturnType));
                 return;
-            }
+
+            default:
+                sb.Append(type);
+                return;
         }
-        sb.Append(type);
     }
 
     /// <summary>

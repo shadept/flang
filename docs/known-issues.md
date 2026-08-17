@@ -57,6 +57,67 @@ Running the bootstrap on any stdlib-using project (including itself) reported `u
 
 ## Open Issues
 
+### Same-Named Types From Different Modules Collided In Generic Specialization — RESOLVED
+
+**Status:** Resolved — specialization keys use the FQN; self-hosted compiler was never affected
+**Affected:** `src/FLang.Semantics/HmTypeChecker.Specialization.cs`
+
+Two modules may each declare a `pub type Thing`. Instantiating the same generic
+over both — e.g. `Option(Thing)` — produced **one** specialization for what are
+two distinct types. The second call site silently reused the function specialized
+over the first module's type.
+
+**Root cause.** `AppendTypeSpecKey` keyed nominals by `NominalType.ShortName`, and
+fell through to `sb.Append(type)` for structural types — whose `ToString()` also
+renders nominals by short name, so `&a.Thing` and `&b.Thing` collided too. IR
+struct C names are FQN-derived (`TypeLayoutService` keys the layout cache by
+`nt.Name`), so the emitted call named a symbol nothing defined.
+
+The failure surfaced far from the cause: `E3002 Unknown call target 'unwrap'`
+reported against `stdlib/core/prelude.f:1:1` rather than the offending type,
+declaration, or call site. Nothing in the message named either type.
+
+Hit while adding assignment lowering: `lib/flang_driver/src/lower.f` declared a
+private `Binding` while `lib/flang_typer/src/env.f` exports a `pub type Binding`.
+
+**Fix.** `AppendTypeSpecKey` now appends `nt.Name` (the FQN) and recurses through
+`ReferenceType`, `ArrayType` and `FunctionType` instead of relying on `ToString()`.
+Pinned by `tests/harness/generics/generic_specialization_same_type_name.f`,
+verified to fail on the pre-fix compiler.
+
+**The self-hosted compiler never had this bug.** `specialization.f::key_for`
+formats types via `type.f::format`, and `format_nominal` emits the nominal's
+*registry id* (`#7`), which is unique per declaration; `lower.f::nominal_name`
+likewise uses the declaration's FQN. Two `test {}` blocks in `specialization.f`
+now pin both halves — distinct ids give distinct keys, the same id reuses one.
+
+### Optional-of-Reference Field Read Off a By-Value Struct Emits a Double Pointer
+
+**Status:** Open — caught by the C compiler, not silent
+**Affected:** `src/FLang.Semantics/HmAstLowering.cs`
+
+An `Option(&T)` is represented as the bare (nullable) pointer, so `is_none`/`unwrap`
+take a `T*`. Reading such a field off a struct held **by value** passes the field's
+address instead of its contents — `T**` where `T*` is expected. The same field read
+through a `&Struct` parameter is fine.
+
+```flang
+type Holder = struct { e: &i32? }
+
+fn by_value(h: Holder) bool { return h.e.is_none() }   // C error: int32_t** vs int32_t*
+fn by_ref(h: &Holder) bool { return h.e.is_none() }    // fine
+```
+
+The lowering unconditionally materializes the by-value struct into a slot and hands
+back the field's address — correct for an aggregate field, wrong for one whose
+representation is already a pointer.
+
+**Impact is contained:** clang rejects the generated C with
+`incompatible pointer types ... dereference with *`, so this fails the build rather
+than miscompiling. Workaround is to keep the struct behind a reference; `lower_for`
+in `lib/flang_driver/src/lower.f` splits into `lower_for_range(… rng: &RangeExpr)`
+for exactly this reason.
+
 ### C# Backend Re-Derives Link Symbols At Codegen Instead Of Consuming Them
 
 **Status:** Open — specified deviation, migration in ADR 0004
@@ -178,7 +239,7 @@ With cross-module nominal resolution fixed, a full self-host run still fails on 
 - **Optional-context unification** (`checker.f::unify_expected`, 4 errors incl. two occurs-check failures): a value flowing into `T?` (let-annotation or return) first tries the payload interpretation, so a generic param or call-result inference var is wrapped rather than absorbed into the Option (which poisoned later uses or tripped the occurs check on `return val` in `fn(...) T?`).
 - **Whole-stdlib loading + lenient type resolution**: the driver BFS now seeds every stdlib source (mirroring the C# `SourceGlobber`), and `resolve_named` resolves registered-but-not-imported types instead of erroring (the reference compiler resolves type names program-wide; `core.io` references `StringBuilder` without importing it). Identifier visibility stays import-strict. Non-`pub` `#foreign` fns are visible wherever their module is (they name global link-time symbols; mirrors the earlier C#-side fix).
 
-~~**Next blocker (lowering, not typing):** `lower_program` merges all modules' functions under bare names, so same-named fns from different modules (`rollback` in `inference_engine` vs `union_find`) collide in the generated C (`error C2084: function already has a body`). Needs FQN-based symbol mangling — the cut explicitly deferred when multi-module lowering landed.~~ (fixed: see below). ~~**Next blocker (lowering semantics):** the merged program now compiles and links — a self-host `build` emits a `flang.exe` — but every out-of-M1-subset expression (calls, control flow, match, indexing) still lowers to a placeholder zero.~~ (M2 landed: see below. Control flow, match, indexing, and assignment remain placeholders — M3/M5 — plus the FIR `Global` pointer-initializer work below.)
+~~**Next blocker (lowering, not typing):** `lower_program` merges all modules' functions under bare names, so same-named fns from different modules (`rollback` in `inference_engine` vs `union_find`) collide in the generated C (`error C2084: function already has a body`). Needs FQN-based symbol mangling — the cut explicitly deferred when multi-module lowering landed.~~ (fixed: see below). ~~**Next blocker (lowering semantics):** the merged program now compiles and links — a self-host `build` emits a `flang.exe` — but every out-of-M1-subset expression (calls, control flow, match, indexing) still lowers to a placeholder zero.~~ (M2 landed: see below. M3 landed control flow — comparisons, short-circuit `and`/`or`, `if`, `while`/`loop`/`for`-over-range, `break`/`continue`. M4 landed assignment, address-of and dereference, which made every local a slotted place. Match and indexing remain placeholders — M5 — plus the FIR `Global` pointer-initializer work below.)
 
 **Resolved in this pass — M2, direct and UFCS call lowering.** `lower_expr` now has a `Call` arm. Lowering re-resolves nothing: the checker already settled the overload, the UFCS receiver, and defaults, and records the winner on the call node as `RtFunction(id)`, so `lower_call` maps that id to a symbol and emits the arguments in order. A member-access callee contributes its receiver as argument 0 (UFCS); named-argument calls, variant constructors, and indirect calls carry no `RtFunction` and stay placeholders.
 
@@ -196,7 +257,8 @@ Covered by six `test {}` blocks in `lower.f`, including one pinning that a call 
 
 **Coverage boundary — what "0 errors" measures.** A zero here means "nothing the checker looks at is wrong", not "the program is well-typed". The walk skips most of a function body:
 
-- `check_expr_kind` (`checker.f`) handles **10 of 24** `Expr` variants. Its `_ => fresh_var()` catch-all returns without recursing, so the whole subtree under an unhandled node is never visited. Unhandled: `Match`, `Lambda`, `Assignment`, `Index`, `Unary`, `AddressOf`, `Dereference`, `ArrayLit`, `InterpolatedString`, `NullPropagation`, `Range`, `Coalesce`, `Try`, `Error`.
+- `check_expr_kind` (`checker.f`) handles **13 of 24** `Expr` variants. Its `_ => fresh_var()` catch-all returns without recursing, so the whole subtree under an unhandled node is never visited. Unhandled: `Match`, `Lambda`, `Index`, `Unary`, `ArrayLit`, `InterpolatedString`, `NullPropagation`, `Range`, `Coalesce`, `Try`, `Error`.
+- `Assignment`, `AddressOf` and `Dereference` were added for assignment lowering, but only far enough to *recurse* — `check_assignment` checks both sides and yields `void` without unifying them and without rejecting a non-place left side, so `x = "hello"` where `x: i32` still type-checks clean. Their value is that the subtree now gets recorded types at all, which is what lowering reads.
 - `check_stmt` handles **3 of 10** `Stmt` variants (`Let`, `Expression`, `Return`) with `_ => {}`. `For`, `While`, `Loop`, and `Defer` bodies are never walked at all.
 - `check_binary` recurses into both operands and then returns a fresh var with no unification, so `1 + "hello"` type-checks clean.
 

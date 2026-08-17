@@ -4,8 +4,16 @@
 // Milestone 1 scope: straight-line single-block scalar functions - params,
 // immutable `let`, int/bool literals, arithmetic/bitwise ops, `return`.
 // Milestone 2 adds direct and UFCS calls to functions whose signatures
-// lower. Out-of-subset exprs lower to a placeholder; unsupported
-// signatures skip.
+// lower. Milestone 3 adds branching: comparisons, short-circuit `and`/`or`,
+// `if` (as expression and statement), `while` / `loop` / `for` over an
+// integer range, and `break` / `continue`. Milestone 4 adds assignment,
+// address-of and dereference, which is what makes every local a slotted
+// place (see `LocalSlot`). Out-of-subset exprs lower to a placeholder;
+// unsupported signatures skip.
+//
+// Still out of subset: indexed assignment (`xs[i] = v`), which needs the
+// `op_index_ref` / `op_set_index` resolution the checker does not record
+// yet, and compound paths through arrays and slices.
 //
 // `ast` and `fir` both export `BinaryOp`/`UnaryOp`; neither is named here
 // (operators match AST variants and emit through builder methods).
@@ -169,6 +177,132 @@ type LowerCtx = struct {
     result: &TypeCheckResult
     syms: &SymbolTable
     allocator: &Allocator
+    loops: List(LoopFrame)
+}
+
+// Enclosing loops, innermost last, so `break` and `continue` can name the
+// block they branch to. Both fields are FIR block labels — non-owning
+// `String` views of labels the `FunctionBuilder` owns, which is the form
+// `br`/`br_if` take.
+type LoopFrame = struct {
+    // Where `continue` goes: the block that performs one iteration's
+    // bookkeeping and closes the back edge. For `while` and `loop` that is
+    // the loop head itself; for `for` it is the block that advances the
+    // induction variable before re-entering the head.
+    latch: String
+    // Where `break` goes: the first block after the loop.
+    exit: String
+}
+
+// Lexical environment: a stack of bindings, innermost last. A block marks
+// the stack on entry and pops back to the mark on exit, so a `let` inside a
+// branch or loop body cannot outlive it and an inner binding shadows an
+// outer one of the same name. Linear scan — function scopes are small, and
+// a `Dict` cannot pop a scope.
+// A local's storage. Every local is a place: it has an address, so `x = v`,
+// `&x`, and mutation across a loop back edge all work the same way and need
+// no "which locals escape SSA" analysis — an analysis whose gaps would be
+// silent wrong code rather than a diagnostic.
+//
+// Slots are not about registers: FIR is an infinite-register SSA IR, and
+// choosing real registers is the backend's job. A slot exists because an SSA
+// value has no address and cannot be reassigned, and some locals need both.
+//
+// ponytail: slotting *every* local overshoots — one that is never assigned
+// nor address-taken could stay a plain SSA value. The cost is that FIR passes
+// cannot see through the slot's load/store traffic to the value inside. The
+// upgrade path is a mem2reg pass over FIR, which is also what makes the
+// merge-point cases (loop-carried locals) fall out as block parameters.
+type LocalSlot = struct {
+    // The local's address. Scalars load and store through it; an aggregate
+    // *is* its address, so reading one hands the address straight back.
+    addr: Operand
+    // FIR type of the stored scalar. Unused for aggregates, which move by
+    // byte copy rather than by typed load.
+    ty: IrType
+    aggregate: bool
+}
+
+type Env = struct {
+    names: List(String)
+    bindings: List(LocalSlot)
+}
+
+fn new_env(allocator: &Allocator) Env {
+    let n: List(String) = list(8, allocator)
+    let b: List(LocalSlot) = list(8, allocator)
+    return Env { names = n, bindings = b }
+}
+
+// Bind `name` to a stack slot holding a scalar of `ty`.
+fn bind_slot(self: &Env, name: String, addr: Operand, ty: IrType) {
+    self.names.push(name)
+    self.bindings.push(LocalSlot { addr = addr, ty = ty, aggregate = false })
+}
+
+// Bind `name` to an aggregate at `addr`.
+fn bind_aggregate(self: &Env, name: String, addr: Operand) {
+    self.names.push(name)
+    self.bindings.push(LocalSlot { addr = addr, ty = IrType.Ptr, aggregate = true })
+}
+
+fn mark(self: &Env) usize {
+    return self.names.len
+}
+
+fn release(self: &Env, m: usize) {
+    while self.names.len > m {
+        let _n = self.names.pop()
+        let _b = self.bindings.pop()
+    }
+}
+
+fn get(self: &Env, name: String) LocalSlot? {
+    let i = self.names.len
+    while i > 0 {
+        i = i - 1
+        if self.names[i] == name { return Some(self.bindings[i]) }
+    }
+    return null
+}
+
+fn deinit(self: &Env) {
+    self.names.deinit()
+    self.bindings.deinit()
+}
+
+// A stack slot sized for one FIR scalar.
+fn alloc_slot(bb: &BlockBuilder, ty: IrType) Operand {
+    let n = ir_size(ty)
+    return bb.stack_slot(n, n)
+}
+
+fn ir_size(ty: IrType) u64 {
+    return ty match {
+        I8 => 1u64,
+        I16 => 2u64,
+        I32 => 4u64,
+        I64 => 8u64,
+        F32 => 4u64,
+        F64 => 8u64,
+        Ptr => 8u64,
+    }
+}
+
+// A block label unique within the function: `fresh()` is the function's SSA
+// id counter, so the suffix never repeats.
+//
+// ponytail: the label string is leaked, same as symbol names — one-shot
+// builds exit before it matters.
+fn fresh_label(bb: &BlockBuilder, prefix: String, allocator: &Allocator) String {
+    let fb = bb.fb
+    let n = fb.fresh()
+    let sb = string_builder(prefix.len + 8, allocator)
+    sb.append(prefix)
+    sb.append(n)
+    let owned = sb.to_string()
+    sb.deinit()
+    return owned.as_view()
 }
 
 // Lower every supported top-level function in `ast_module` into a fresh
@@ -179,7 +313,8 @@ pub fn lower_module(ast_module: &Module, result: &TypeCheckResult, allocator: &A
     let sb = symbol_builder(result, alloc)
     sb.add_module(ast_module, "")
     let syms = sb.finish()
-    let ctx = LowerCtx { result = result, syms = &syms, allocator = alloc }
+    let loop_stack: List(LoopFrame) = list(0, alloc)
+    let ctx = LowerCtx { result = result, syms = &syms, allocator = alloc, loops = loop_stack }
     lower_into(&m, &ctx, ast_module, "")
     syms.deinit()
     return m
@@ -199,7 +334,8 @@ pub fn lower_program(modules: &List(Module), fqns: &List(OwnedString), result: &
         sb.add_module(&modules[i], fqns[i].as_view())
     }
     let syms = sb.finish()
-    let ctx = LowerCtx { result = result, syms = &syms, allocator = alloc }
+    let loop_stack: List(LoopFrame) = list(0, alloc)
+    let ctx = LowerCtx { result = result, syms = &syms, allocator = alloc, loops = loop_stack }
     for i in 0..modules.len {
         lower_into(&m, &ctx, &modules[i], fqns[i].as_view())
     }
@@ -417,47 +553,87 @@ fn lower_function(m: &IrModule, ctx: &LowerCtx, decl: &FunctionDecl) {
     }
 
     let fb = function(sym, return_ir, ctx.allocator)
-    let env: Dict(String, Operand) = dict(ctx.allocator)
+    let env = new_env(ctx.allocator)
+    let param_ops: List(Operand) = list(decl.params.len, ctx.allocator)
+    let param_irs: List(IrType) = list(decl.params.len, ctx.allocator)
     for i in 0..decl.params.len {
         let p = &decl.params[i]
         let pir = type_expr_to_ir(&p.type_expr)
         if pir.is_none() { return }
-        let op = fb.param(pir.unwrap())
-        env.set(p.name, op)
+        param_ops.push(fb.param(pir.unwrap()))
+        param_irs.push(pir.unwrap())
     }
 
-    let entry = fb.entry()
+    // `cur` is the block cursor: control flow moves it, so the body's final
+    // terminator lands on whatever block lowering ended in, not the entry.
+    let cur = fb.entry()
+
+    // Parameters spill to slots like any other local, so assigning one — or
+    // taking its address — needs no special case.
+    for i in 0..decl.params.len {
+        let ir = param_irs[i]
+        let slot = alloc_slot(&cur, ir)
+        cur.store(ir, param_ops[i], slot)
+        env.bind_slot(decl.params[i].name, slot, ir)
+    }
+    param_ops.deinit()
+    param_irs.deinit()
     let body = decl.body.unwrap()
-    let terminated = lower_block(ctx, &entry, &env, &body)
-    if !terminated {
-        if return_ir.is_none() {
-            entry.ret_void()
+    let r = lower_block(ctx, &cur, &env, &body)
+    if !r.terminated {
+        if r.value.is_some() {
+            cur.ret(r.value.unwrap())
+        } else if return_ir.is_none() {
+            cur.ret_void()
         } else {
             // A value function with no return path is a checker error.
-            entry.unreachable()
+            cur.unreachable()
         }
     }
+    env.deinit()
 
     m.add_function(fb.finish())
 }
 
-// Lower a block's statements then its trailing expression (the implicit
-// return value). Returns whether a terminator was emitted.
-fn lower_block(ctx: &LowerCtx, bb: &BlockBuilder, env: &Dict(String, Operand), block: &BlockExpr) bool {
+// What lowering a block produced: whether it ended in a terminator (so the
+// caller must not append one of its own — `set_terminator` overwrites) and
+// the value of its trailing expression, if any.
+type BlockResult = struct {
+    terminated: bool
+    value: Operand?
+}
+
+// Lower a block's statements then its trailing expression. The block's own
+// scope is popped on the way out, so bindings introduced here do not leak
+// into the code that follows.
+fn lower_block(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, block: &BlockExpr) BlockResult {
+    let scope = env.mark()
+    let r = BlockResult { terminated = false, value = null }
     for i in 0..block.stmts.len {
-        if lower_stmt(ctx, bb, env, &block.stmts[i]) { return true }
+        if lower_stmt(ctx, bb, env, &block.stmts[i]) {
+            r.terminated = true
+            env.release(scope)
+            return r
+        }
     }
     if block.trailing.is_some() {
         let e = block.trailing.unwrap()
-        let v = lower_expr(ctx, bb, env, e)
-        bb.ret(v)
-        return true
+        r.value = Some(lower_expr(ctx, bb, env, e))
     }
-    return false
+    env.release(scope)
+    return r
+}
+
+// A block in expression position: its value, or the placeholder when it
+// yields nothing.
+fn lower_block_value(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, block: &BlockExpr) Operand {
+    let r = lower_block(ctx, bb, env, block)
+    if r.value.is_some() { return r.value.unwrap() }
+    return Operand.IntConst(0)
 }
 
 // Returns whether the statement emitted a block terminator.
-fn lower_stmt(ctx: &LowerCtx, bb: &BlockBuilder, env: &Dict(String, Operand), stmt: &Stmt) bool {
+fn lower_stmt(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, stmt: &Stmt) bool {
     stmt.* match {
         Return(r) => {
             lower_return(ctx, bb, env, &r)
@@ -467,12 +643,26 @@ fn lower_stmt(ctx: &LowerCtx, bb: &BlockBuilder, env: &Dict(String, Operand), st
         Expression(e) => {
             let _u = lower_expr(ctx, bb, env, &e.expr)
         },
+        While(w) => lower_while(ctx, bb, env, &w),
+        Loop(l) => lower_loop(ctx, bb, env, &l),
+        For(f) => lower_for(ctx, bb, env, &f),
+        Break(_) => return lower_jump(ctx, bb, true),
+        Continue(_) => return lower_jump(ctx, bb, false),
         _ => {},
     }
     return false
 }
 
-fn lower_return(ctx: &LowerCtx, bb: &BlockBuilder, env: &Dict(String, Operand), r: &ReturnStmt) {
+// `break` / `continue`. Outside a loop both are checker errors; lowering
+// emits nothing rather than branching to a label that does not exist.
+fn lower_jump(ctx: &LowerCtx, bb: &BlockBuilder, is_break: bool) bool {
+    if ctx.loops.len == 0 { return false }
+    let frame = &ctx.loops[ctx.loops.len - 1]
+    if is_break { bb.br(frame.exit) } else { bb.br(frame.latch) }
+    return true
+}
+
+fn lower_return(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, r: &ReturnStmt) {
     if r.value.is_some() {
         let e = r.value.unwrap()
         let v = lower_expr(ctx, bb, env, &e)
@@ -482,31 +672,257 @@ fn lower_return(ctx: &LowerCtx, bb: &BlockBuilder, env: &Dict(String, Operand), 
     }
 }
 
-// `let name = init` - immutable scalar binding: the initializer's SSA
-// value is bound directly to the name. Mutated or address-taken locals
-// (which need a stack slot) arrive with the rest of memory lowering.
-fn lower_let(ctx: &LowerCtx, bb: &BlockBuilder, env: &Dict(String, Operand), l: &LetStmt) {
-    if l.init.is_some() {
-        let e = l.init.unwrap()
-        let v = lower_expr(ctx, bb, env, &e)
-        env.set(l.name, v)
+// `let name = init` — the local gets a stack slot and the initializer is
+// stored into it. An aggregate initializer already produced its own
+// storage, so the name binds to that address instead of copying it.
+//
+// `let x: T` with no initializer zero-initializes (spec 3.3).
+fn lower_let(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, l: &LetStmt) {
+    if l.init.is_none() {
+        if l.type_annotation.is_none() { return }
+        let te = l.type_annotation.unwrap()
+        let ir = type_expr_to_ir(&te)
+        if ir.is_none() { return }
+        let zero_slot = alloc_slot(bb, ir.unwrap())
+        bb.store(ir.unwrap(), Operand.IntConst(0), zero_slot)
+        env.bind_slot(l.name, zero_slot, ir.unwrap())
+        return
     }
+
+    let e = l.init.unwrap()
+    let ty = node_ty(ctx.result, expr_span(&e))
+    let v = lower_expr(ctx, bb, env, &e)
+    if is_aggregate(&ty) {
+        env.bind_aggregate(l.name, v)
+        return
+    }
+    let ir = ty_to_ir(&ty)
+    let slot = alloc_slot(bb, ir)
+    bb.store(ir, v, slot)
+    env.bind_slot(l.name, slot, ir)
 }
 
 // Expressions
 
-fn lower_expr(ctx: &LowerCtx, bb: &BlockBuilder, env: &Dict(String, Operand), expr: &Expr) Operand {
+fn lower_expr(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, expr: &Expr) Operand {
     return expr.* match {
         Lit(l) => lower_literal(&l),
-        Identifier(id) => lower_identifier(env, &id),
+        Identifier(id) => lower_identifier(bb, env, &id),
+        Assignment(a) => lower_assignment(ctx, bb, env, &a),
+        AddressOf(a) => lower_address_of(ctx, bb, env, &a),
+        Dereference(d) => lower_deref(ctx, bb, env, &d),
         Binary(b) => lower_binary(ctx, bb, env, &b),
         Unary(u) => lower_unary(ctx, bb, env, &u),
         StructLit(s) => lower_struct_lit(ctx, bb, env, &s),
         MemberAccess(m) => lower_member(ctx, bb, env, &m),
         Call(c) => lower_call(ctx, bb, env, &c),
+        If(f) => lower_if(ctx, bb, env, &f),
+        Block(b) => lower_block_value(ctx, bb, env, &b),
         // ponytail: M1 placeholder; real lowering lands with later milestones.
         _ => Operand.IntConst(0),
     }
+}
+
+// Control flow (M3)
+//
+// FIR is block-based with block parameters, so a construct that joins two
+// paths passes its value along the edges instead of writing to a stack
+// slot: no allocas, no phi nodes, and nothing to promote later. Loops use
+// the same mechanism for the induction variable.
+//
+// A local mutated across a back edge would need a slot (or a loop-carried
+// block parameter the walk does not compute yet), so assignment stays out
+// of the subset — see `lower_place`. A loop reading an outer binding is
+// fine: that value dominates the loop.
+
+// `if` in expression position. The join block takes the result as a block
+// parameter and each arm passes its own; an arm that terminated (returned,
+// broke) contributes no edge. An `if` with no `else` cannot yield a value,
+// whatever the checker recorded for the node.
+fn lower_if(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, ife: &IfExpr) Operand {
+    let ty = node_ty(ctx.result, ife.span)
+    let yields = yields_value(&ty) and !is_no_else(&ife.else_branch)
+    let ir = ty_to_ir(&ty)
+
+    let cond = lower_expr(ctx, bb, env, ife.condition)
+
+    let fb = bb.fb
+    let then_bb = fb.block(fresh_label(bb, "then", ctx.allocator))
+    let else_bb = fb.block(fresh_label(bb, "else", ctx.allocator))
+    let join = if yields {
+        fb.block(fresh_label(bb, "join", ctx.allocator), ir)
+    } else {
+        fb.block(fresh_label(bb, "join", ctx.allocator))
+    }
+    bb.br_if(cond, then_bb.label(), else_bb.label())
+
+    bb.move_to(&then_bb)
+    let tr = lower_block(ctx, bb, env, &ife.then_branch)
+    join_from(ctx, bb, join.label(), yields, &tr)
+
+    bb.move_to(&else_bb)
+    let er = lower_else(ctx, bb, env, &ife.else_branch)
+    join_from(ctx, bb, join.label(), yields, &er)
+
+    bb.move_to(&join)
+    if yields { return join.param(0) }
+    return Operand.IntConst(0)
+}
+
+// Branch an arm's fall-through edge into the join block, carrying its value
+// when the `if` yields one. A terminated arm contributes no edge.
+fn join_from(ctx: &LowerCtx, bb: &BlockBuilder, label: String, yields: bool, r: &BlockResult) {
+    if r.terminated { return }
+    if !yields {
+        bb.br(label)
+        return
+    }
+    let args: List(Operand) = list(1, ctx.allocator)
+    if r.value.is_some() { args.push(r.value.unwrap()) } else { args.push(Operand.IntConst(0)) }
+    bb.br_args(label, args)
+}
+
+fn lower_else(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, eb: &ElseBranch) BlockResult {
+    return eb.* match {
+        Block(b) => lower_block(ctx, bb, env, &b),
+        If(i) => BlockResult { terminated = false, value = Some(lower_if(ctx, bb, env, i)) },
+        NoElse => BlockResult { terminated = false, value = null },
+    }
+}
+
+fn is_no_else(eb: &ElseBranch) bool {
+    return eb.* match {
+        NoElse => true,
+        _ => false,
+    }
+}
+
+// Whether a node in expression position produces a usable value. `Never`
+// and `Error` do not: nothing reaches the join through them.
+fn yields_value(ty: &Ty) bool {
+    return ty.* match {
+        Void => false,
+        Never => false,
+        Error => false,
+        _ => true,
+    }
+}
+
+// `while cond { body }` — the head re-evaluates the condition, so it is
+// also the `continue` target.
+fn lower_while(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, w: &WhileStmt) {
+    let fb = bb.fb
+    let head = fb.block(fresh_label(bb, "while_head", ctx.allocator))
+    let body = fb.block(fresh_label(bb, "while_body", ctx.allocator))
+    let exit = fb.block(fresh_label(bb, "while_exit", ctx.allocator))
+
+    bb.br(head.label())
+    bb.move_to(&head)
+    let cond = lower_expr(ctx, bb, env, w.condition)
+    bb.br_if(cond, body.label(), exit.label())
+
+    bb.move_to(&body)
+    ctx.loops.push(LoopFrame { latch = head.label(), exit = exit.label() })
+    let r = lower_block(ctx, bb, env, &w.body)
+    let _f = ctx.loops.pop()
+    if !r.terminated { bb.br(head.label()) }
+
+    bb.move_to(&exit)
+}
+
+// `loop { body }` — exits only through `break` or `return`, so the exit
+// block is reachable only from a `break`.
+fn lower_loop(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, l: &LoopStmt) {
+    let fb = bb.fb
+    let head = fb.block(fresh_label(bb, "loop_head", ctx.allocator))
+    let exit = fb.block(fresh_label(bb, "loop_exit", ctx.allocator))
+
+    bb.br(head.label())
+    bb.move_to(&head)
+    ctx.loops.push(LoopFrame { latch = head.label(), exit = exit.label() })
+    let r = lower_block(ctx, bb, env, &l.body)
+    let _f = ctx.loops.pop()
+    if !r.terminated { bb.br(head.label()) }
+
+    bb.move_to(&exit)
+}
+
+// `for i in a..b { body }` — the induction variable is the head block's
+// parameter, so it needs no stack slot. The latch (which advances it) is
+// the `continue` target, not the head.
+//
+// Only bounded integer ranges lower. Any other iterable needs the iterator
+// protocol, which is outside this milestone; the loop is skipped, matching
+// how out-of-subset expressions lower to a placeholder.
+fn lower_for(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, f: &ForStmt) {
+    // The range is matched into a reference rather than copied out: an
+    // optional-of-reference field (`start: &Expr?`) read off a by-value
+    // local mis-lowers in the reference compiler (docs/known-issues.md).
+    f.iterable.* match {
+        Range(r) => lower_for_range(ctx, bb, env, f, &r),
+        _ => {},
+    }
+}
+
+fn lower_for_range(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, f: &ForStmt, rng: &RangeExpr) {
+    if rng.start.is_none() { return }
+    if rng.end.is_none() { return }
+    let start_e = rng.start.unwrap()
+    let end_e = rng.end.unwrap()
+
+    let ity = node_ty(ctx.result, expr_span(start_e))
+    let p = prim_of(&ity)
+    if is_float(p) { return }
+    let ir = ty_to_ir(&ity)
+    let sg = is_signed_integer(p)
+
+    let start = lower_expr(ctx, bb, env, start_e)
+    let stop = lower_expr(ctx, bb, env, end_e)
+
+    let fb = bb.fb
+    let head = fb.block(fresh_label(bb, "for_head", ctx.allocator), ir)
+    let body = fb.block(fresh_label(bb, "for_body", ctx.allocator))
+    let latch = fb.block(fresh_label(bb, "for_latch", ctx.allocator))
+    let exit = fb.block(fresh_label(bb, "for_exit", ctx.allocator))
+
+    let init: List(Operand) = list(1, ctx.allocator)
+    init.push(start)
+    bb.br_args(head.label(), init)
+
+    bb.move_to(&head)
+    let iv = head.param(0)
+    let cond = range_cond(bb, ir, sg, rng.inclusive, iv, stop)
+    bb.br_if(cond, body.label(), exit.label())
+
+    bb.move_to(&body)
+    let scope = env.mark()
+    // The induction variable is a fresh binding per iteration, so it gets
+    // its own slot: assigning it inside the body cannot perturb the loop.
+    let iv_slot = alloc_slot(bb, ir)
+    bb.store(ir, iv, iv_slot)
+    env.bind_slot(f.var_name, iv_slot, ir)
+    ctx.loops.push(LoopFrame { latch = latch.label(), exit = exit.label() })
+    let r = lower_block(ctx, bb, env, &f.body)
+    let _fr = ctx.loops.pop()
+    env.release(scope)
+    if !r.terminated { bb.br(latch.label()) }
+
+    bb.move_to(&latch)
+    let next = bb.iadd(ir, iv, Operand.IntConst(1))
+    let step: List(Operand) = list(1, ctx.allocator)
+    step.push(next)
+    bb.br_args(head.label(), step)
+
+    bb.move_to(&exit)
+}
+
+fn range_cond(bb: &BlockBuilder, ir: IrType, sg: bool, inclusive: bool, iv: Operand, stop: Operand) Operand {
+    if inclusive {
+        if sg { return bb.icmp_sle(ir, iv, stop) }
+        return bb.icmp_ule(ir, iv, stop)
+    }
+    if sg { return bb.icmp_slt(ir, iv, stop) }
+    return bb.icmp_ult(ir, iv, stop)
 }
 
 // Calls (M2)
@@ -522,7 +938,7 @@ fn lower_expr(ctx: &LowerCtx, bb: &BlockBuilder, env: &Dict(String, Operand), ex
 // checker's deliberate fresh-var fallbacks such as named arguments), or
 // when the callee's signature was outside the lowerable subset — in that
 // case there is no definition in the module to link against.
-fn lower_call(ctx: &LowerCtx, bb: &BlockBuilder, env: &Dict(String, Operand), call: &CallExpr) Operand {
+fn lower_call(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, call: &CallExpr) Operand {
     let sym_opt = callee_symbol(ctx, call)
     if sym_opt.is_none() { return Operand.IntConst(0) }
     let sym = sym_opt.unwrap()
@@ -588,7 +1004,7 @@ type StructTarget = struct {
 // `S { f = v, ... }` - allocate a slot the size of the struct and store each
 // initializer at its field offset. The value is the slot pointer. Aggregate
 // fields copy their bytes; scalar fields store by value.
-fn lower_struct_lit(ctx: &LowerCtx, bb: &BlockBuilder, env: &Dict(String, Operand), lit: &StructLiteralExpr) Operand {
+fn lower_struct_lit(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, lit: &StructLiteralExpr) Operand {
     let reg = &ctx.result.nominals
     let ty = node_ty(ctx.result, lit.span)
     let target = resolve_struct(&ty, reg, ctx.allocator)
@@ -616,13 +1032,11 @@ fn lower_struct_lit(ctx: &LowerCtx, bb: &BlockBuilder, env: &Dict(String, Operan
 
 // The value of a field initializer: the explicit expression, or - for
 // shorthand `S { x }` - the in-scope binding named like the field.
-fn lower_field_init(ctx: &LowerCtx, bb: &BlockBuilder, env: &Dict(String, Operand), fi: &StructFieldInit) Operand {
+fn lower_field_init(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, fi: &StructFieldInit) Operand {
     if fi.value.is_some() {
         return lower_expr(ctx, bb, env, fi.value.unwrap())
     }
-    let got = env.get(fi.name)
-    if got.is_some() { return got.unwrap() }
-    return Operand.IntConst(0)
+    return read_binding(bb, env, fi.name)
 }
 
 // Place lowering (docs/spec.md 3.4.1, docs/adr/0003)
@@ -639,7 +1053,51 @@ fn lower_field_init(ctx: &LowerCtx, bb: &BlockBuilder, env: &Dict(String, Operan
 // member — `lower_expr` loads it — which is exactly what assignment (M3), `&`,
 // and element stores need. The split is established now, before those land, so
 // the C# archaeology is not repeated here.
-fn lower_place(ctx: &LowerCtx, bb: &BlockBuilder, env: &Dict(String, Operand), expr: &Expr) Operand? {
+// Assignment and address-of
+
+// `lhs = rhs` — resolve the destination's address, then evaluate the right
+// side and store through it. Destination first, matching the reference
+// compiler's order; the two are independent for every expression in the
+// subset, but the order is fixed rather than incidental.
+//
+// A left side with no address is an already-reported checker error (or an
+// expression this milestone can't place); the store is dropped rather than
+// written somewhere arbitrary. Assignment is an expression that yields no
+// value, so the result is the unit placeholder.
+fn lower_assignment(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, a: &AssignmentExpr) Operand {
+    let dst = lower_place(ctx, bb, env, a.lhs)
+    let v = lower_expr(ctx, bb, env, a.rhs)
+    if dst.is_none() { return Operand.IntConst(0) }
+
+    let ty = node_ty(ctx.result, expr_span(a.lhs))
+    if is_aggregate(&ty) {
+        // Aggregates are addressed by pointer, so `v` is the source address
+        // and the assignment is a byte copy.
+        let lay = layout_of(&ty, &ctx.result.nominals, ctx.allocator)
+        bb.memcpy(dst.unwrap(), v, Operand.IntConst(lay.size as i64))
+    } else {
+        bb.store(ty_to_ir(&ty), v, dst.unwrap())
+    }
+    return Operand.IntConst(0)
+}
+
+// `&place` — the address itself, with nothing to load or copy.
+fn lower_address_of(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, a: &AddressOfExpr) Operand {
+    let p = lower_place(ctx, bb, env, a.operand)
+    if p.is_some() { return p.unwrap() }
+    return Operand.IntConst(0)
+}
+
+// `p.*` in value position — the pointer is already the address, so reading
+// through it is one load. An aggregate pointee stays a pointer.
+fn lower_deref(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, d: &DereferenceExpr) Operand {
+    let p = lower_expr(ctx, bb, env, d.operand)
+    let ty = node_ty(ctx.result, d.span)
+    if is_aggregate(&ty) { return p }
+    return bb.load(ty_to_ir(&ty), p)
+}
+
+fn lower_place(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, expr: &Expr) Operand? {
     return expr.* match {
         Identifier(id) => place_of_identifier(env, &id),
         MemberAccess(ma) => member_address(ctx, bb, env, &ma),
@@ -650,27 +1108,38 @@ fn lower_place(ctx: &LowerCtx, bb: &BlockBuilder, env: &Dict(String, Operand), e
 }
 
 // The address of a base in a place context. Place-ness propagates leftward
-// through a path (spec 3.4.1), so a base that is itself a place is addressed
-// rather than copied; anything else falls back to its value.
-fn lower_base_address(ctx: &LowerCtx, bb: &BlockBuilder, env: &Dict(String, Operand), base: &Expr) Operand {
-    let p = lower_place(ctx, bb, env, base)
-    if p.is_some() { return p.unwrap() }
+// through a path (spec 3.4.1), so a base reached by another path operator is
+// addressed rather than copied.
+//
+// It propagates through *path operators only*. An identifier base yields its
+// value, which is already the right thing in both cases: an aggregate local's
+// value IS its address, and a reference's value is the pointer to follow.
+// Addressing the identifier instead would hand back its slot — one level of
+// indirection too many.
+fn lower_base_address(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, base: &Expr) Operand {
+    let nested = base.* match {
+        MemberAccess(_) => true,
+        Index(_) => true,
+        Dereference(_) => true,
+        _ => false,
+    }
+    if nested {
+        let p = lower_place(ctx, bb, env, base)
+        if p.is_some() { return p.unwrap() }
+    }
     return lower_expr(ctx, bb, env, base)
 }
 
-// A local's storage. Aggregate locals are bound to their slot pointer, so the
-// binding is already the address.
-//
-// ponytail: scalar locals are bound as SSA values with no stack slot (M1), so
-// they have no address to hand back. M3 must give mutated and address-taken
-// locals a slot; until then `x = v` and `&x` on a scalar are out of subset.
-fn place_of_identifier(env: &Dict(String, Operand), id: &IdentifierExpr) Operand? {
-    return env.get(id.name)
+// A local's storage. Every local is slotted, so a name always has an address.
+fn place_of_identifier(env: &Env, id: &IdentifierExpr) Operand? {
+    let b = env.get(id.name)
+    if b.is_none() { return null }
+    return Some(b.unwrap().addr)
 }
 
 // The address of `ma`'s field: gep to the field offset off the receiver's
 // address. Null when the receiver isn't a resolvable struct.
-fn member_address(ctx: &LowerCtx, bb: &BlockBuilder, env: &Dict(String, Operand), ma: &MemberAccessExpr) Operand? {
+fn member_address(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, ma: &MemberAccessExpr) Operand? {
     let reg = &ctx.result.nominals
     let recv_ty = node_ty(ctx.result, expr_span(ma.receiver))
     let target = resolve_struct(&recv_ty, reg, ctx.allocator)
@@ -687,7 +1156,7 @@ fn member_address(ctx: &LowerCtx, bb: &BlockBuilder, env: &Dict(String, Operand)
 // `recv.field` in VALUE position - address the field, then load a scalar. An
 // aggregate member yields its address (FIR addresses aggregates by pointer),
 // so nested `a.b.c` chains gep without an intermediate copy.
-fn lower_member(ctx: &LowerCtx, bb: &BlockBuilder, env: &Dict(String, Operand), ma: &MemberAccessExpr) Operand {
+fn lower_member(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, ma: &MemberAccessExpr) Operand {
     let fpo = member_address(ctx, bb, env, ma)
     if fpo.is_none() { return Operand.IntConst(0) }
     let fp = fpo.unwrap()
@@ -747,14 +1216,30 @@ fn lower_literal(l: &LiteralExpr) Operand {
     }
 }
 
-fn lower_identifier(env: &Dict(String, Operand), id: &IdentifierExpr) Operand {
-    let v = env.get(id.name)
-    if v.is_some() { return v.unwrap() }
-    // ponytail: globals and function references resolve in M2.
-    return Operand.IntConst(0)
+// Reading a name: a scalar loads from its slot; an aggregate yields its
+// address, since FIR addresses aggregates by pointer.
+fn read_binding(bb: &BlockBuilder, env: &Env, name: String) Operand {
+    let found = env.get(name)
+    // ponytail: globals and function references still lower to a placeholder.
+    if found.is_none() { return Operand.IntConst(0) }
+    let b = found.unwrap()
+    if b.aggregate { return b.addr }
+    return bb.load(b.ty, b.addr)
 }
 
-fn lower_binary(ctx: &LowerCtx, bb: &BlockBuilder, env: &Dict(String, Operand), b: &BinaryExpr) Operand {
+fn lower_identifier(bb: &BlockBuilder, env: &Env, id: &IdentifierExpr) Operand {
+    return read_binding(bb, env, id.name)
+}
+
+fn lower_binary(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, b: &BinaryExpr) Operand {
+    // `and`/`or` branch, so the right operand must not be lowered into the
+    // current block alongside the left.
+    b.op match {
+        And => return lower_short_circuit(ctx, bb, env, b, true),
+        Or => return lower_short_circuit(ctx, bb, env, b, false),
+        _ => {},
+    }
+
     let lhs = lower_expr(ctx, bb, env, b.lhs)
     let rhs = lower_expr(ctx, bb, env, b.rhs)
     let ty = node_ty(ctx.result, b.span)
@@ -762,6 +1247,12 @@ fn lower_binary(ctx: &LowerCtx, bb: &BlockBuilder, env: &Dict(String, Operand), 
     let p = prim_of(&ty)
     let fl = is_float(p)
     let sg = is_signed_integer(p)
+    // A comparison is typed by its operands, not by its `bool` result.
+    let oty = node_ty(ctx.result, expr_span(b.lhs))
+    let op_ir = ty_to_ir(&oty)
+    let op_p = prim_of(&oty)
+    let ofl = is_float(op_p)
+    let osg = is_signed_integer(op_p)
     return b.op match {
         Add => bb.add_op(ir, fl, lhs, rhs),
         Sub => bb.sub_op(ir, fl, lhs, rhs),
@@ -774,10 +1265,69 @@ fn lower_binary(ctx: &LowerCtx, bb: &BlockBuilder, env: &Dict(String, Operand), 
         Shl => bb.ishl(ir, lhs, rhs),
         Shr => bb.shr_op(ir, sg, lhs, rhs),
         UShr => bb.ushr(ir, lhs, rhs),
-        // Comparisons and short-circuit `and`/`or` need an i8 result and
-        // control flow - they arrive with branching in M3.
-        _ => bb.iadd(ir, lhs, rhs),
+        Eq => if ofl { bb.fcmp_eq(op_ir, lhs, rhs) } else { bb.icmp_eq(op_ir, lhs, rhs) },
+        Ne => if ofl { bb.fcmp_ne(op_ir, lhs, rhs) } else { bb.icmp_ne(op_ir, lhs, rhs) },
+        Lt => bb.lt_op(op_ir, ofl, osg, lhs, rhs),
+        Le => bb.le_op(op_ir, ofl, osg, lhs, rhs),
+        Gt => bb.gt_op(op_ir, ofl, osg, lhs, rhs),
+        Ge => bb.ge_op(op_ir, ofl, osg, lhs, rhs),
+        // Handled above; unreachable.
+        And => Operand.IntConst(0),
+        Or => Operand.IntConst(0),
     }
+}
+
+// `a and b` / `a or b`. `b` is evaluated only when `a` leaves the result
+// undecided; the deciding constant (false for `and`, true for `or`) rides
+// the short-circuit edge into the join as a block argument.
+fn lower_short_circuit(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, b: &BinaryExpr, is_and: bool) Operand {
+    let lhs = lower_expr(ctx, bb, env, b.lhs)
+
+    let fb = bb.fb
+    let rhs_bb = fb.block(fresh_label(bb, "sc_rhs", ctx.allocator))
+    let join = fb.block(fresh_label(bb, "sc_join", ctx.allocator), IrType.I8)
+
+    let decided: List(Operand) = list(1, ctx.allocator)
+    decided.push(Operand.IntConst(if is_and { 0 } else { 1 }))
+    let no_args: List(Operand) = list(0, ctx.allocator)
+    if is_and {
+        bb.br_if_args(lhs, rhs_bb.label(), no_args, join.label(), decided)
+    } else {
+        bb.br_if_args(lhs, join.label(), decided, rhs_bb.label(), no_args)
+    }
+
+    bb.move_to(&rhs_bb)
+    let rhs = lower_expr(ctx, bb, env, b.rhs)
+    let carried: List(Operand) = list(1, ctx.allocator)
+    carried.push(rhs)
+    bb.br_args(join.label(), carried)
+
+    bb.move_to(&join)
+    return join.param(0)
+}
+
+fn lt_op(bb: &BlockBuilder, ir: IrType, fl: bool, sg: bool, lhs: Operand, rhs: Operand) Operand {
+    if fl { return bb.fcmp_lt(ir, lhs, rhs) }
+    if sg { return bb.icmp_slt(ir, lhs, rhs) }
+    return bb.icmp_ult(ir, lhs, rhs)
+}
+
+fn le_op(bb: &BlockBuilder, ir: IrType, fl: bool, sg: bool, lhs: Operand, rhs: Operand) Operand {
+    if fl { return bb.fcmp_le(ir, lhs, rhs) }
+    if sg { return bb.icmp_sle(ir, lhs, rhs) }
+    return bb.icmp_ule(ir, lhs, rhs)
+}
+
+fn gt_op(bb: &BlockBuilder, ir: IrType, fl: bool, sg: bool, lhs: Operand, rhs: Operand) Operand {
+    if fl { return bb.fcmp_gt(ir, lhs, rhs) }
+    if sg { return bb.icmp_sgt(ir, lhs, rhs) }
+    return bb.icmp_ugt(ir, lhs, rhs)
+}
+
+fn ge_op(bb: &BlockBuilder, ir: IrType, fl: bool, sg: bool, lhs: Operand, rhs: Operand) Operand {
+    if fl { return bb.fcmp_ge(ir, lhs, rhs) }
+    if sg { return bb.icmp_sge(ir, lhs, rhs) }
+    return bb.icmp_uge(ir, lhs, rhs)
 }
 
 fn add_op(bb: &BlockBuilder, ir: IrType, fl: bool, lhs: Operand, rhs: Operand) Operand {
@@ -823,7 +1373,7 @@ fn shr_op(bb: &BlockBuilder, ir: IrType, sg: bool, lhs: Operand, rhs: Operand) O
     return bb.ushr(ir, lhs, rhs)
 }
 
-fn lower_unary(ctx: &LowerCtx, bb: &BlockBuilder, env: &Dict(String, Operand), u: &UnaryExpr) Operand {
+fn lower_unary(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, u: &UnaryExpr) Operand {
     let v = lower_expr(ctx, bb, env, u.operand)
     let ty = node_ty(ctx.result, u.span)
     let ir = ty_to_ir(&ty)
@@ -831,8 +1381,8 @@ fn lower_unary(ctx: &LowerCtx, bb: &BlockBuilder, env: &Dict(String, Operand), u
     return u.op match {
         Neg => bb.neg_op(ir, is_float(p), v),
         BitNot => bb.ixor(ir, v, Operand.IntConst(-1)),
-        // `!` on bool lowers via a compare in M3.
-        _ => v,
+        // `!b` is `b == 0`; bool is a byte in FIR, so no widening.
+        Not => bb.icmp_eq(ir, v, Operand.IntConst(0)),
     }
 }
 
@@ -1247,4 +1797,358 @@ test "lowers a struct field read to a slot store and an offset load" {
     }
     assert_true(has_slot, "struct literal allocated a stack slot")
     assert_true(has_load, "field read emitted an offset load")
+}
+
+// Control flow test helpers.
+
+// Index of the first block whose label starts with `prefix`, or the block
+// count when there is none.
+fn block_starting(f: &Function, prefix: String) usize {
+    for i in 0..f.blocks.len {
+        let l = f.blocks[i].label
+        if l.len >= prefix.len {
+            if l[0..prefix.len] == prefix { return i }
+        }
+    }
+    return f.blocks.len
+}
+
+// Whether block `i` ends in a conditional branch.
+fn ends_in_br_if(f: &Function, i: usize) bool {
+    return f.blocks[i].terminator match { BrIf(_) => true, _ => false }
+}
+
+// The label an unconditional branch out of block `i` targets, or "".
+fn br_target(f: &Function, i: usize) String {
+    return f.blocks[i].terminator match { Br(t) => t.label, _ => "" }
+}
+
+// How many block arguments an unconditional branch out of block `i` carries.
+fn br_argc(f: &Function, i: usize) usize {
+    return f.blocks[i].terminator match { Br(t) => t.args.len, _ => 0 as usize }
+}
+
+fn compare_count(f: &Function) usize {
+    let n: usize = 0
+    for b in 0..f.blocks.len {
+        let instrs = &f.blocks[b].instrs
+        for i in 0..instrs.len {
+            instrs[i] match { Compare(_) => n = n + 1, _ => {} }
+        }
+    }
+    return n
+}
+
+fn block_compare_count(f: &Function, b: usize) usize {
+    let n: usize = 0
+    let instrs = &f.blocks[b].instrs
+    for i in 0..instrs.len {
+        instrs[i] match { Compare(_) => n = n + 1, _ => {} }
+    }
+    return n
+}
+
+// Every stack slot's SSA id, in emission order.
+fn collect_slots(f: &Function, out: &List(u32)) {
+    for b in 0..f.blocks.len {
+        let instrs = &f.blocks[b].instrs
+        for i in 0..instrs.len {
+            instrs[i] match { StackSlot(s) => out.push(s.result), _ => {} }
+        }
+    }
+}
+
+fn operand_local(op: Operand) u32 {
+    return op match { Local(id) => id, _ => 0u32 }
+}
+
+// The SSA id block `b` returns, or 0 when it does not return a value.
+fn ret_local(f: &Function, b: usize) u32 {
+    return f.blocks[b].terminator match {
+        Ret(v) => if v.is_some() { operand_local(v.unwrap()) } else { 0u32 },
+        _ => 0u32,
+    }
+}
+
+// The slot a load producing `id` reads from, or 0 when `id` is not a load.
+fn load_ptr(f: &Function, id: u32) u32 {
+    for b in 0..f.blocks.len {
+        let instrs = &f.blocks[b].instrs
+        for i in 0..instrs.len {
+            let hit = instrs[i] match {
+                Load(l) => if l.result == id { Some(operand_local(l.ptr)) } else { null },
+                _ => null,
+            }
+            if hit.is_some() { return hit.unwrap() }
+        }
+    }
+    return 0u32
+}
+
+fn compare_operand_ty(f: &Function) IrType {
+    for b in 0..f.blocks.len {
+        let instrs = &f.blocks[b].instrs
+        for i in 0..instrs.len {
+            let hit = instrs[i] match { Compare(c) => Some(c.operand_ty), _ => null }
+            if hit.is_some() { return hit.unwrap() }
+        }
+    }
+    return IrType.Ptr
+}
+
+test "an if expression joins its arms through a block parameter" {
+    let unit = analyze(from_view("fn pick(a: i32) i32 { return if a > 0 { 1 } else { 2 } }"), "test.f")
+    let m = lower_module(&unit.module, &unit.result)
+    let f = &m.functions[find_fn(&m, "pick__i32")]
+    assert_eq(f.blocks.len, 4 as usize, "entry, then, else and join")
+    assert_true(ends_in_br_if(f, 0), "entry ends in a conditional branch")
+
+    let join = block_starting(f, "join")
+    assert_true(join < f.blocks.len, "a join block exists")
+    assert_eq(f.blocks[join].params.len, 1 as usize, "the join carries the result as a parameter")
+
+    let then_b = block_starting(f, "then")
+    assert_eq(br_argc(f, then_b), 1 as usize, "the then arm passes its value along the edge")
+}
+
+test "an if with no else yields nothing and needs no join parameter" {
+    let unit = analyze(from_view("fn f(a: i32) i32 { if a > 0 { return 1 } return 0 }"), "test.f")
+    let m = lower_module(&unit.module, &unit.result)
+    let f = &m.functions[find_fn(&m, "f__i32")]
+    let join = block_starting(f, "join")
+    assert_true(join < f.blocks.len, "a join block exists")
+    assert_eq(f.blocks[join].params.len, 0 as usize, "no value crosses the join")
+}
+
+test "an arm that returns contributes no edge to the join" {
+    let unit = analyze(from_view("fn f(a: i32) i32 { if a > 0 { return 1 } else { return 2 } }"), "test.f")
+    let m = lower_module(&unit.module, &unit.result)
+    let f = &m.functions[find_fn(&m, "f__i32")]
+    let then_b = block_starting(f, "then")
+    let else_b = block_starting(f, "else")
+    let t_ret = f.blocks[then_b].terminator match { Ret(_) => true, _ => false }
+    let e_ret = f.blocks[else_b].terminator match { Ret(_) => true, _ => false }
+    assert_true(t_ret, "the then arm keeps its own return")
+    assert_true(e_ret, "the else arm keeps its own return")
+}
+
+test "a while loop branches back to its head" {
+    let unit = analyze(from_view("fn f(n: i32) i32 { while n > 0 { let x = n } return n }"), "test.f")
+    let m = lower_module(&unit.module, &unit.result)
+    let f = &m.functions[find_fn(&m, "f__i32")]
+    let head = block_starting(f, "while_head")
+    let body = block_starting(f, "while_body")
+    assert_true(head < f.blocks.len, "a loop head exists")
+    assert_true(ends_in_br_if(f, head), "the head tests the condition")
+    assert_true(br_target(f, body) == f.blocks[head].label, "the body branches back to the head")
+}
+
+test "a for over a range carries the induction variable as a block parameter" {
+    let unit = analyze(from_view("fn f(n: i32) i32 { for i in 0..n { let x = i } return n }"), "test.f")
+    let m = lower_module(&unit.module, &unit.result)
+    let f = &m.functions[find_fn(&m, "f__i32")]
+    let head = block_starting(f, "for_head")
+    let latch = block_starting(f, "for_latch")
+    assert_true(head < f.blocks.len, "a loop head exists")
+    assert_eq(f.blocks[head].params.len, 1 as usize, "the head takes the induction variable")
+    assert_eq(br_argc(f, 0), 1 as usize, "entry seeds it with the range start")
+    assert_eq(br_argc(f, latch), 1 as usize, "the latch passes the advanced value back")
+    assert_true(br_target(f, latch) == f.blocks[head].label, "the latch closes the back edge")
+}
+
+// `..=` is pattern-only in FLang, so a range expression is always
+// half-open; `range_cond` still honours the flag in case that changes.
+test "a range bound is half-open" {
+    let unit = analyze(from_view("fn f(n: i32) i32 { for i in 0..n { let x = i } return n }"), "test.f")
+    let m = lower_module(&unit.module, &unit.result)
+    let f = &m.functions[find_fn(&m, "f__i32")]
+    let head = block_starting(f, "for_head")
+    let instrs = &f.blocks[head].instrs
+    let slt = false
+    for i in 0..instrs.len {
+        instrs[i] match {
+            Compare(c) => c.op match { IcmpSlt => slt = true, _ => {} },
+            _ => {},
+        }
+    }
+    assert_true(slt, "the upper bound is exclusive")
+}
+
+test "break exits the loop and continue re-enters the latch" {
+    let unit = analyze(from_view("fn f(n: i32) i32 { for i in 0..n { if i > 2 { break } else { continue } } return n }"), "test.f")
+    let m = lower_module(&unit.module, &unit.result)
+    let f = &m.functions[find_fn(&m, "f__i32")]
+    let exit = f.blocks[block_starting(f, "for_exit")].label
+    let latch = f.blocks[block_starting(f, "for_latch")].label
+    assert_true(br_target(f, block_starting(f, "then")) == exit, "break leaves the loop")
+    assert_true(br_target(f, block_starting(f, "else")) == latch, "continue advances the induction variable")
+}
+
+test "a for over a non-range iterable is skipped rather than mislowered" {
+    let unit = analyze(from_view("fn f(xs: &i32) i32 { for x in xs { let y = 1 } return 0 }"), "test.f")
+    let m = lower_module(&unit.module, &unit.result)
+    let f = &m.functions[find_fn(&m, "f__ref_i32")]
+    assert_eq(f.blocks.len, 1 as usize, "no loop blocks emitted")
+}
+
+test "and evaluates its right operand in its own block" {
+    let unit = analyze(from_view("fn f(a: i32, b: i32) bool { return a > 0 and b > 0 }"), "test.f")
+    let m = lower_module(&unit.module, &unit.result)
+    let f = &m.functions[find_fn(&m, "f__i32__i32")]
+    let rhs = block_starting(f, "sc_rhs")
+    let join = block_starting(f, "sc_join")
+    assert_true(rhs < f.blocks.len, "the right operand got its own block")
+    assert_eq(f.blocks[join].params.len, 1 as usize, "the result crosses the join as a parameter")
+    assert_eq(compare_count(f), 2 as usize, "one compare per operand, neither duplicated")
+    assert_eq(block_compare_count(f, rhs), 1 as usize, "the right operand's test is not in the entry block")
+    assert_eq(block_compare_count(f, 0), 1 as usize, "and the left operand's test is not duplicated into it")
+}
+
+test "a comparison is typed by its operands, not by its bool result" {
+    let unit = analyze(from_view("fn f(a: i64, b: i64) bool { return a < b }"), "test.f")
+    let m = lower_module(&unit.module, &unit.result)
+    let f = &m.functions[find_fn(&m, "f__i64__i64")]
+    let ty = compare_operand_ty(f)
+    let is_i64 = ty match { I64 => true, _ => false }
+    assert_true(is_i64, "compares the i64 operands, not the i8 result")
+}
+
+test "a binding made inside a branch does not leak past it" {
+    let unit = analyze(from_view("fn f(a: i32) i32 { let x = 1 if a > 0 { let x = 2 } return x }"), "test.f")
+    let m = lower_module(&unit.module, &unit.result)
+    let f = &m.functions[find_fn(&m, "f__i32")]
+    // Slots in emission order: the parameter, the outer `x`, then the
+    // shadowing `x` inside the branch.
+    let slots: List(u32) = list(4)
+    collect_slots(f, &slots)
+    assert_eq(slots.len, 3 as usize, "the shadowing let gets storage of its own")
+
+    let join = block_starting(f, "join")
+    let returned = ret_local(f, join)
+    assert_eq(load_ptr(f, returned) as usize, slots[1] as usize, "the return reads the outer x")
+    slots.deinit()
+}
+
+// Assignment test helpers.
+
+fn store_count(f: &Function) usize {
+    let n: usize = 0
+    for b in 0..f.blocks.len {
+        let instrs = &f.blocks[b].instrs
+        for i in 0..instrs.len {
+            instrs[i] match { Store(_) => n = n + 1, _ => {} }
+        }
+    }
+    return n
+}
+
+// The slot the last store in `f` writes to, or 0 when it emits none.
+fn last_store_ptr(f: &Function) u32 {
+    let dst: u32 = 0
+    for b in 0..f.blocks.len {
+        let instrs = &f.blocks[b].instrs
+        for i in 0..instrs.len {
+            instrs[i] match { Store(s) => dst = operand_local(s.ptr), _ => {} }
+        }
+    }
+    return dst
+}
+
+// Whether `id` was produced by a gep — i.e. names a field, not a slot.
+fn is_gep_result(f: &Function, id: u32) bool {
+    for b in 0..f.blocks.len {
+        let instrs = &f.blocks[b].instrs
+        for i in 0..instrs.len {
+            let hit = instrs[i] match { Gep(g) => g.result == id, _ => false }
+            if hit { return true }
+        }
+    }
+    return false
+}
+
+fn memcpy_count(f: &Function) usize {
+    let n: usize = 0
+    for b in 0..f.blocks.len {
+        let instrs = &f.blocks[b].instrs
+        for i in 0..instrs.len {
+            instrs[i] match { Memcpy(_) => n = n + 1, _ => {} }
+        }
+    }
+    return n
+}
+
+test "every local and parameter gets a slot it can be assigned through" {
+    let unit = analyze(from_view("fn f(a: i32) i32 { let b = a return b }"), "test.f")
+    let m = lower_module(&unit.module, &unit.result)
+    let f = &m.functions[find_fn(&m, "f__i32")]
+    let slots: List(u32) = list(4)
+    collect_slots(f, &slots)
+    assert_eq(slots.len, 2 as usize, "the parameter and the let each get storage")
+    assert_eq(store_count(f), 2 as usize, "each is initialized by a store")
+    slots.deinit()
+}
+
+test "assigning a local stores through its slot" {
+    let unit = analyze(from_view("fn f(a: i32) i32 { let x = 1 x = a return x }"), "test.f")
+    let m = lower_module(&unit.module, &unit.result)
+    let f = &m.functions[find_fn(&m, "f__i32")]
+    let slots: List(u32) = list(4)
+    collect_slots(f, &slots)
+    assert_eq(slots.len, 2 as usize, "no extra slot for the assignment")
+    assert_eq(last_store_ptr(f) as usize, slots[1] as usize, "the assignment writes x's slot")
+    assert_eq(store_count(f), 3 as usize, "param init, let init, then the assignment")
+    slots.deinit()
+}
+
+test "a local mutated across a loop back edge keeps one slot" {
+    let unit = analyze(from_view("fn f(n: i32) i32 { let t = 0 for i in 0..n { t = t + i } return t }"), "test.f")
+    let m = lower_module(&unit.module, &unit.result)
+    let f = &m.functions[find_fn(&m, "f__i32")]
+    let slots: List(u32) = list(4)
+    collect_slots(f, &slots)
+    // n, t, and the induction variable's per-iteration copy.
+    assert_eq(slots.len, 3 as usize, "the accumulator is not re-slotted per iteration")
+    assert_eq(last_store_ptr(f) as usize, slots[1] as usize, "the loop body writes the accumulator's slot")
+    slots.deinit()
+}
+
+test "taking a local's address hands back its slot, with no load" {
+    let unit = analyze(from_view("fn f(a: i32) i32 { let x = a let p = &x return p.* }"), "test.f")
+    let m = lower_module(&unit.module, &unit.result)
+    let f = &m.functions[find_fn(&m, "f__i32")]
+    let slots: List(u32) = list(4)
+    collect_slots(f, &slots)
+    // a, x, p — `&x` produces no instruction of its own.
+    assert_eq(slots.len, 3 as usize, "address-of allocates nothing")
+    slots.deinit()
+}
+
+test "assigning through a dereference stores to the pointee" {
+    let unit = analyze(from_view("fn f(p: &i32) i32 { p.* = 9 return p.* }"), "test.f")
+    let m = lower_module(&unit.module, &unit.result)
+    let f = &m.functions[find_fn(&m, "f__ref_i32")]
+    let slots: List(u32) = list(4)
+    collect_slots(f, &slots)
+    assert_eq(slots.len, 1 as usize, "only the parameter is slotted")
+    // The store target is the loaded pointer, not the parameter's own slot.
+    assert_true(last_store_ptr(f) != slots[0], "the write goes through the pointer, not over it")
+    slots.deinit()
+}
+
+test "assigning a struct field writes through a gep, not a copy" {
+    let unit = analyze(from_view("type P = struct { x: i32 y: i32 }\nfn f() i32 { let p = P { x = 1, y = 2 } p.x = 7 return p.x }"), "test.f")
+    let m = lower_module(&unit.module, &unit.result)
+    let f = &m.functions[find_fn(&m, "f")]
+    assert_eq(memcpy_count(f), 0 as usize, "a scalar field assignment is a store, not a byte copy")
+    // The struct literal also geps to initialize its fields, so counting
+    // geps proves nothing; what matters is that the *assignment*'s store
+    // targets a field address rather than the local's own slot.
+    assert_true(is_gep_result(f, last_store_ptr(f)), "the write goes through a field address")
+}
+
+test "assigning an aggregate copies its bytes" {
+    let unit = analyze(from_view("type P = struct { x: i32 y: i32 }\nfn f() i32 { let a = P { x = 1, y = 2 } let b = P { x = 3, y = 4 } b = a return b.x }"), "test.f")
+    let m = lower_module(&unit.module, &unit.result)
+    let f = &m.functions[find_fn(&m, "f")]
+    assert_eq(memcpy_count(f), 1 as usize, "the aggregate assignment is a byte copy")
 }

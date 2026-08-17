@@ -923,6 +923,36 @@ fn check_expr_kind(self: &Checker, expr: &Expr) Ty {
         MemberAccess(ma) => check_member(self, &ma),
         TupleLit(t) => check_tuple_lit(self, &t),
         Cast(c) => check_cast(self, &c),
+        Assignment(a) => check_assignment(self, &a),
+        AddressOf(a) => check_address_of(self, &a),
+        Dereference(d) => check_deref(self, &d),
+        _ => self.engine.fresh_var(),
+    }
+}
+
+// `lhs = rhs` — an expression that yields no value. Both sides are checked
+// so their nodes carry recorded types; lowering reads the left side's type
+// to choose between a typed store and a byte copy. Unifying the two sides
+// (and rejecting a non-place left side) belongs with the rest of operator
+// checking and is not done here.
+fn check_assignment(self: &Checker, a: &AssignmentExpr) Ty {
+    let _l = check_expr(self, a.lhs)
+    let _r = check_expr(self, a.rhs)
+    return Ty.Void
+}
+
+// `&operand` — a reference to whatever the operand is.
+fn check_address_of(self: &Checker, a: &AddressOfExpr) Ty {
+    let inner = check_expr(self, a.operand)
+    return self.engine.mk_ref(inner)
+}
+
+// `operand.*` — peels one reference. A non-reference operand defers to a
+// fresh var so an already-reported error does not cascade.
+fn check_deref(self: &Checker, d: &DereferenceExpr) Ty {
+    let t = self.engine.resolve(check_expr(self, d.operand))
+    return t match {
+        Ref(inner) => inner.*,
         _ => self.engine.fresh_var(),
     }
 }
