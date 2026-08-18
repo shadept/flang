@@ -43,5 +43,10 @@ pub fn next(it: &RangeIterator($T)) T? {
     }
     let val = it.current
     it.current = it.current + 1
-    return val
+    // Wrapped explicitly rather than leaning on the `T -> Option(T)`
+    // coercion: that rule is deliberately skipped when the payload is an
+    // unbound var, so under a generic instantiation this fell through to a
+    // structural unify of `T` against `Option(T)` and tripped the occurs
+    // check (E2071).
+    return Some(val)
 }

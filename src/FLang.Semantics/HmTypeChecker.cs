@@ -87,7 +87,10 @@ public partial class HmTypeChecker : INominalTypeRegistry, ITemplateTypeProvider
         var engine = new InferenceEngine();
         engine.AddCoercionRule(new IntegerWideningCoercionRule(true));
         engine.AddCoercionRule(new FloatWideningCoercionRule());
-        engine.AddCoercionRule(new OptionWrappingCoercionRule());
+        // `[lang].implicit_option_wrap` in flang.toml. Off means a bare `T`
+        // never becomes `Option(T)` on its own and every site says `Some(x)`.
+        if (compilation.ImplicitOptionWrap)
+            engine.AddCoercionRule(new OptionWrappingCoercionRule());
         engine.AddCoercionRule(new StringToByteSliceCoercionRule());
         engine.AddCoercionRule(new ArrayDecayCoercionRule());
         engine.AddCoercionRule(new SliceToReferenceCoercionRule());

@@ -50,7 +50,11 @@ public static partial class ProjectLoader
         if (model.TryGetValue("dependencies", out var depsObj) && depsObj is TomlTable depsTable)
             dependencies = ParseDependenciesSection(depsTable, tomlPath);
 
-        return new FlangProject(projectInfo, build, imports, dependencies);
+        LangSection? lang = null;
+        if (model.TryGetValue("lang", out var langObj) && langObj is TomlTable langTable)
+            lang = ParseLangSection(langTable);
+
+        return new FlangProject(projectInfo, build, imports, dependencies, lang);
     }
 
     private static DependenciesSection ParseDependenciesSection(TomlTable table, string context)
@@ -70,6 +74,15 @@ public static partial class ProjectLoader
         }
         return new DependenciesSection(items.ToArray());
     }
+
+    private static LangSection ParseLangSection(TomlTable table)
+    {
+        return new LangSection(
+            ImplicitOptionWrap: GetOptionalBool(table, "implicit_option_wrap") ?? true);
+    }
+
+    private static bool? GetOptionalBool(TomlTable table, string key)
+        => table.TryGetValue(key, out var v) && v is bool b ? b : null;
 
     private static ImportsSection ParseImportsSection(TomlTable table)
     {

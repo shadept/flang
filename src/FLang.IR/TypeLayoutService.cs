@@ -141,8 +141,16 @@ public class TypeLayoutService(ITypeResolver engine, INominalTypeRegistry nomina
                 return LowerNominal(nt);
 
             case TypeVar tv:
-                // Unresolved type variable — default to i32 (unsuffixed integer literals)
-                return IrI32;
+                // No defaulting. An unresolved type variable reaching lowering
+                // means inference did not finish or a generic body was lowered
+                // without substituting its instance type arguments. Silently
+                // picking i32 produced a program that compiled and ran with the
+                // wrong types — the failure surfaced as a C pointer mismatch in
+                // an unrelated file, if the C compiler was strict enough to
+                // notice at all.
+                throw new InvalidOperationException(
+                    $"internal: unresolved type variable ?{tv.Id} reached lowering; " +
+                    "inference must resolve every type before codegen (no defaulting)");
 
             default:
                 return IrVoidPrim;

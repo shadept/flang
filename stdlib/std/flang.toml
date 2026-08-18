@@ -3,3 +3,13 @@ name = "std"
 version = "0.1.0"
 kind = "lib"
 source = "**/*.f"
+
+[lang]
+# The implicit `T -> Option(T)` wrap is on its way out as a language feature
+# (docs/known-issues.md). Migration is partial: the `return` sites are done,
+# call sites passing a bare `T` to an `Option(T)` parameter are not.
+#
+# Flip this to `false` to get the exact remaining worklist - the compiler
+# reports every site that still relies on the coercion instead of silently
+# applying it.
+implicit_option_wrap = true

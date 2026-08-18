@@ -57,6 +57,61 @@ Running the bootstrap on any stdlib-using project (including itself) reported `u
 
 ## Open Issues
 
+### Implicit `T -> Option(T)` Coercion Is Being Removed
+
+**Status:** Deprecated - gated behind `[lang].implicit_option_wrap`, migration partial
+**Affected:** `src/FLang.Semantics/CoercionRules.cs` (`OptionWrappingCoercionRule`), all of `stdlib/`
+
+A bare `T` is implicitly wrapped where `Option(T)` is expected, so
+`fn f() T? { return value }` compiles without saying `Some(value)`. Convenient,
+and it has caused repeated, hard-to-read failures.
+
+**Why it misbehaves.** The rule is deliberately skipped when the target's
+payload is an unbound type variable - without that guard, an `Option($T)`
+parameter would swallow any argument at all. But inside a generic function
+returning `T?`, the payload *is* an unbound var, so the rule declines and the
+checker falls through to a structural unify of `T` against `Option(T)`. That
+trips the occurs check and reports `E2071 Cyclic type: Option(?N) contains ?N`
+at the `return`, naming neither the real cause nor a fix.
+
+Three separate failures traced back to this in one session:
+`core/range.f::next`, `std/dict.f::next`, and `std/allocator.f::test_alloc` -
+the last two only surfaced after the first was fixed. Each looked like an
+unrelated inference bug.
+
+**The flag.** `flang.toml` gained a `[lang]` section:
+
+```toml
+[lang]
+implicit_option_wrap = false
+```
+
+Default is `true`, so nothing changes for existing projects and single-file
+builds. Setting it to `false` unregisters the coercion rule, which turns every
+remaining reliance into a reported error rather than a silent wrap - so the
+flag doubles as the migration worklist. Threaded through `BuildCommand`,
+`TestCommand` and the LSP workspace.
+
+**Migration state.** Barely started, deliberately. Six sites are converted -
+the ones that were actively breaking builds: `core/range.f::next`,
+`std/dict.f::next`, both `std/dict.f::get` overloads, and
+`std/allocator.f::test_alloc`.
+
+Flipping the flag to `false` for `stdlib/std` reports **~124 remaining**. They
+are not all `return` sites: a large share are **call sites** passing a bare `T`
+to an `Option(T)` *parameter* (`free(memory)` where the parameter is `u8[]?`),
+which surface as `E2011 No matching overload` rather than a return-type
+mismatch. Any migration script that only rewrites `return` statements will miss
+them, and cannot distinguish `return get_ref(k)` (already an `Option`, must stay
+bare) from `return (get_ref(k)?).*` (unwrapped by `?`, needs `Some`) without
+type information. The compiler with the flag off is the only reliable worklist.
+
+**End state.** Remove the rule and the flag together once `stdlib/` and the
+harness are clean with it off. Not scheduled - the flag makes the work
+deferrable, which is the point of adding it.
+
+
+
 ### Higher-Order Stdlib Functions Cannot Thread an Allocator Into the Callback
 
 **Status:** Open — design decision needed before the combinator set grows

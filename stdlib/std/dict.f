@@ -236,7 +236,7 @@ pub fn op_index(self: Dict($K, $V), key: K) V? {
 
 // Get the value associated with a key, or null if not found.
 pub fn get(self: Dict($K, $V), key: K) V? {
-    return (self.get_ref(key)?).*
+    return Some((self.get_ref(key)?).*)
 }
 
 // Get a reference to the value associated with a key, or null if not found.
@@ -269,7 +269,7 @@ pub fn get_ref(self: Dict($K, $V), key: K) &V? {
 }
 
 pub fn get(self: Dict(OwnedString, $V), key: String) V? {
-    return (self.get_ref(key)?).*
+    return Some((self.get_ref(key)?).*)
 }
 
 pub fn get_ref(self: Dict(OwnedString, $V), key: String) &V? {
@@ -342,7 +342,7 @@ pub fn remove(self: &Dict($K, $V), key: K) V? {
                     entry.state = 2
                     self.length = self.length - 1
                     self.dead = self.dead + 1
-                    return val
+                    return Some(val)
                 }
             }
         }
@@ -389,7 +389,8 @@ pub fn next(it: &DictIterator($K, $V)) Entry(K, V)? {
         const entry: &Entry(K, V) = it.dict.entries + idx
         if (entry.state == 1) {
             it.current = idx + 1
-            return entry.*
+            // Wrapped explicitly - see the note in core/range.f::next.
+            return Some(entry.*)
         }
     }
     it.current = it.dict.cap

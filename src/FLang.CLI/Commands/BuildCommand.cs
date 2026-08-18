@@ -151,6 +151,7 @@ public static class BuildCommand
             ProjectName: project.Project.Name,
             ProjectSourceRoot: sourceRoot,
             ProjectGlobalImports: project.Imports?.Global,
+            ImplicitOptionWrap: project.Lang?.ImplicitOptionWrap ?? true,
             DependencySourceRoots: depSourceRoots.Count > 0 ? depSourceRoots : null,
             ProjectMetadata: projectMetadata.Count > 0 ? projectMetadata : null,
             EmitLibrary: isLibrary,

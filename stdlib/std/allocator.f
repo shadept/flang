@@ -163,7 +163,8 @@ fn test_alloc(impl: &u8, size: usize, alignment: usize) u8[]? {
     state.alloc_count = state.alloc_count + 1
     state.total_bytes = state.total_bytes + size
 
-    return slice_from_raw_parts(ptr.unwrap(), size)
+    // Wrapped explicitly - see the note in core/range.f::next.
+    return Some(slice_from_raw_parts(ptr.unwrap(), size))
 }
 
 fn test_realloc(impl: &u8, memory: u8[], new_size: usize) u8[]? {

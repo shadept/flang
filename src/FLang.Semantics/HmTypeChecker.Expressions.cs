@@ -1373,11 +1373,18 @@ public partial class HmTypeChecker
             // re-record as the coerced Type(T)
             if (paramType is NominalType { Name: "core.rtti.Type" } typeParam
                 && typeParam.TypeArguments.Count == 1
-                && argType is not NominalType { Name: "core.rtti.Type" }
-                && argType is NominalType or PrimitiveType)
+                && argType is not NominalType { Name: "core.rtti.Type" })
             {
-                var wrapped = WrapInTypeStruct(argType);
-                Record(positionalArgs[i], wrapped);
+                // A bare type name in value position (`size_of(TestAllocEntry)`)
+                // is inferred as an unconstrained var, so recover the type it
+                // names from the identifier itself. Without this the var reaches
+                // lowering unresolved — it used to be silently defaulted there.
+                Type? named = argType;
+                if (argType is TypeVar && positionalArgs[i] is IdentifierExpressionNode typeId)
+                    named = LookupNominalType(typeId.Name);
+
+                if (named is NominalType or PrimitiveType)
+                    Record(positionalArgs[i], WrapInTypeStruct(named));
             }
         }
     }
@@ -1917,6 +1924,23 @@ public partial class HmTypeChecker
     // Match expression
     // =========================================================================
 
+    /// <summary>
+    /// Whether evaluating this expression always transfers control away, so it
+    /// never produces a value. Used to recognise a `match` whose every arm
+    /// diverges.
+    /// </summary>
+    private static bool AlwaysDiverges(ExpressionNode e) => e switch
+    {
+        ReturnNode or BreakNode or ContinueNode => true,
+        BlockExpressionNode b =>
+            b.TrailingExpression is not null
+                ? AlwaysDiverges(b.TrailingExpression)
+                : b.Statements.Count > 0
+                  && b.Statements[^1] is ExpressionStatementNode es
+                  && AlwaysDiverges(es.Expression),
+        _ => false,
+    };
+
     private Type InferMatch(MatchExpressionNode match)
     {
         var scrutineeType = InferExpression(match.Scrutinee);
@@ -1952,6 +1976,22 @@ public partial class HmTypeChecker
             }
 
             PopScope();
+        }
+
+        // When every arm diverges — each one `return`s, `break`s or
+        // `continue`s — no arm ever contributes a value, so `resultType` is
+        // still the fresh var it started as. The match produces nothing, so it
+        // is unit. Leaving it unbound sent a TypeVar all the way to lowering,
+        // which used to silently default it to i32.
+        //
+        // FLang has a bottom type (`never`) that is the precise answer here;
+        // this checker has no representation for one. Unit is correct for
+        // everything that reaches lowering, since a fully diverging match has
+        // no reachable value to consume.
+        if (match.Arms.Count > 0 && match.Arms.All(a => AlwaysDiverges(a.ResultExpr))
+            && _ctx.Engine.Resolve(resultType) is TypeVar)
+        {
+            _ctx.Engine.Unify(resultType, new PrimitiveType("void"), match.Span);
         }
 
         // E2030/E2031: Check match exhaustiveness for enum types

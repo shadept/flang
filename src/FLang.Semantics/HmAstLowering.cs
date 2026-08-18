@@ -1202,6 +1202,22 @@ public class HmAstLowering
 
     private IrFunction LowerFunction(FunctionDeclarationNode fn)
     {
+        try
+        {
+            return LowerFunctionCore(fn);
+        }
+        catch (InvalidOperationException ex) when (ex.Message.StartsWith("internal:"))
+        {
+            // Re-thrown with the function and its span attached. The layout
+            // service has neither, and an internal error with no location is
+            // barely better than the silent default it replaced.
+            throw new InvalidOperationException(
+                $"{ex.Message}\n  while lowering `{fn.Name}` at line {fn.Span.Line}", ex);
+        }
+    }
+
+    private IrFunction LowerFunctionCore(FunctionDeclarationNode fn)
+    {
         // Reset per-function state
         _locals.Clear();
         _localScopes.Clear();
@@ -1924,6 +1940,22 @@ public class HmAstLowering
     // =========================================================================
 
     private Value LowerExpression(ExpressionNode expr, IrType? expectedType = null)
+    {
+        try
+        {
+            return LowerExpressionCore(expr, expectedType);
+        }
+        catch (InvalidOperationException ex) when (ex.Message.StartsWith("internal:") && !ex.Message.Contains("  at "))
+        {
+            // Attach the innermost expression that tripped it. Only the first
+            // frame annotates, so the message names the actual site rather than
+            // every enclosing expression.
+            throw new InvalidOperationException(
+                $"{ex.Message}\n  at {expr.GetType().Name} on line {expr.Span.Line}", ex);
+        }
+    }
+
+    private Value LowerExpressionCore(ExpressionNode expr, IrType? expectedType = null)
     {
         _ctx.Span = expr.Span;
         var result = expr switch
