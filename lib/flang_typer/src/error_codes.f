@@ -23,6 +23,14 @@ pub const E_DUP_SIGNATURE: String = "E2103"
 // ignored: an unrepresented pattern would otherwise be indistinguishable
 // from a wildcard and silently match everything.
 pub const E_UNSUPPORTED_PATTERN: String = "E2115"
+// Indexing. `bool` is never a valid index; a type with neither
+// `op_index_ref` nor `op_index` cannot be indexed at all.
+// Branch joins: if/else branches, and match arms, that cannot agree on
+// one type.
+pub const E_BRANCH_MISMATCH: String = "E2074"
+pub const E_ARM_MISMATCH: String = "E2075"
+pub const E_BAD_INDEX_TYPE: String = "E2027"
+pub const E_NOT_INDEXABLE: String = "E2028"
 
 pub const W_DEPRECATED: String = "W2001"
 pub const W_DEPRECATED_FN: String = "W2002"

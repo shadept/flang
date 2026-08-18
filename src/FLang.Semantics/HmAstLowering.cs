@@ -3638,8 +3638,55 @@ public class HmAstLowering
         var retIrType = _layout.Lower(fnHmType.ReturnType);
 
         var isForeign = (resolved.Function.Modifiers & FunctionModifiers.Foreign) != 0;
-        return _currentBlock.EmitCall(resolved.Function.Name, [baseLv, idxV], retIrType, calleeParamTypes,
+        if (calleeParamTypes.Count > 0)
+            baseLv = DecayIndexBase(baseLv, index.Base, calleeParamTypes[0]);
+        var args = CoerceOperatorArgs([baseLv, idxV], calleeParamTypes);
+        return _currentBlock.EmitCall(resolved.Function.Name, args, retIrType, calleeParamTypes,
             isForeign: isForeign);
+    }
+
+    /// <summary>
+    /// Apply the implicit coercions an operator call's arguments need. An
+    /// index operator is resolved through the same coercion ladder as any
+    /// other call — `xs[i]` on a `&[T; N]` picks `op_index(Slice(T), usize)`
+    /// via array decay — but the operator paths build their call directly
+    /// instead of going through the argument-lowering that materializes it,
+    /// so the decay was type-checked and never emitted.
+    /// </summary>
+    private List<Value> CoerceOperatorArgs(List<Value> args, List<IrType> paramTypes)
+    {
+        var result = new List<Value>(args.Count);
+        for (var i = 0; i < args.Count; i++)
+            result.Add(i < paramTypes.Count ? ApplyCoercions(args[i], paramTypes[i]) : args[i]);
+        return result;
+    }
+
+    /// <summary>
+    /// Decay an indexing receiver that is an array, or a reference to one, into
+    /// the slice the chosen operator expects.
+    /// </summary>
+    /// <remarks>
+    /// The length has to come from the <em>semantic</em> type: `&amp;[T; N]`
+    /// lowers to a plain `T*` (an array is already the address of its storage,
+    /// so the reference adds no indirection), which means the IR type alone no
+    /// longer says how many elements there are. Every other coercion reads the
+    /// IR type; this one cannot.
+    /// </remarks>
+    private Value DecayIndexBase(Value baseVal, ExpressionNode baseNode, IrType paramType)
+    {
+        if (paramType is not IrStruct sliceStruct || sliceStruct.Name != WellKnown.Slice)
+            return baseVal;
+
+        var semantic = _types.GetResolvedType(baseNode);
+        if (semantic is Core.Types.ReferenceType semRef) semantic = semRef.InnerType;
+        if (semantic is not Core.Types.ArrayType arr) return baseVal;
+
+        var ptrField = sliceStruct.Fields.FirstOrDefault(f => f.Name == "ptr");
+        var lenField = sliceStruct.Fields.FirstOrDefault(f => f.Name == "len");
+        if (ptrField.Type == null || lenField.Type == null) return baseVal;
+
+        var irArray = new IrArray(_layout.Lower(arr.ElementType), arr.Length);
+        return CoerceArrayToSlice(baseVal, irArray, sliceStruct, ptrField, lenField);
     }
 
     private Value LowerIndex(IndexExpressionNode index)
@@ -3679,7 +3726,10 @@ public class HmAstLowering
                 baseVal = temp;
             }
 
-            return _currentBlock.EmitCall(resolved.Function.Name, [baseVal, indexVal], retIrTypeV, calleeIrParamTypes);
+            if (calleeIrParamTypes.Count > 0)
+                baseVal = DecayIndexBase(baseVal, index.Base, calleeIrParamTypes[0]);
+            var valueArgs = CoerceOperatorArgs([baseVal, indexVal], calleeIrParamTypes);
+            return _currentBlock.EmitCall(resolved.Function.Name, valueArgs, retIrTypeV, calleeIrParamTypes);
         }
 
         // Built-in array/slice indexing

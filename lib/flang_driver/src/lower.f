@@ -11,9 +11,15 @@
 // place (see `LocalSlot`). Out-of-subset exprs lower to a placeholder;
 // unsupported signatures skip.
 //
-// Still out of subset: indexed assignment (`xs[i] = v`), which needs the
-// `op_index_ref` / `op_set_index` resolution the checker does not record
-// yet, and compound paths through arrays and slices.
+// Milestone 5 adds `match` and indexing - the latter as calls to the
+// operator the checker picked (`op_index_ref` is a place, `op_index` is
+// not) and as `base + i * stride` for built-in arrays and slices.
+//
+// Still out of subset: range slicing over a built-in base (`xs[a..b]`),
+// which has to build a `Slice` with bounds clamped against the base's
+// length; `op_set_index`, so a value-form index stays unassignable; and
+// aggregate parameters and returns, which is what still refuses the
+// stdlib's own `String` and `Slice` indexing operators.
 //
 // `ast` and `fir` both export `BinaryOp`/`UnaryOp`; neither is named here
 // (operators match AST variants and emit through builder methods).
@@ -34,6 +40,7 @@ import flang_typer.nominal_registry
 import flang_typer.function_registry
 import flang_typer.inference_results
 import flang_typer.scheme
+import flang_typer.well_known
 import flang_codegen.fir
 import flang_codegen.builder
 import flang_driver.driver
@@ -377,7 +384,73 @@ pub fn lower_program(modules: &List(Module), fqns: &List(OwnedString), result: &
         lower_into(&m, &ctx, &modules[i], fqns[i].as_view())
     }
     syms.deinit()
+    drop_callers_of_refused(&m, alloc)
     return m
+}
+
+// TEMPORARY SCAFFOLD (see `unlowerable`): delete with the skip mechanism.
+//
+// A symbol gets its name when the *signature* lowers, but the body is
+// refused separately and later - so a call can name a function that was
+// never emitted. That is a link error, which is loud, but it takes the
+// whole program down rather than the one function that cannot be built.
+//
+// Refusal has to be transitive to be worth anything: dropping a function
+// leaves its own callers naming a symbol that just disappeared. So this
+// runs to a fixpoint. It is the counterpart, across the call graph, of
+// `blocked` within a body - and it is what makes the milestone property
+// ("everything emitted is correct; the rest is absent") hold for calls to
+// generic functions, whose bodies stay unlowerable until monomorphization.
+fn drop_callers_of_refused(m: &IrModule, alloc: &Allocator?) {
+    let defined: Dict(String, bool) = dict(alloc)
+    for i in 0..m.functions.len { defined.set(m.functions[i].name, true) }
+    for i in 0..m.foreigns.len { defined.set(m.foreigns[i].name, true) }
+
+    // Fixpoint over names only - dropping a function strands its own
+    // callers, and they have to go too.
+    let changed = true
+    while changed {
+        changed = false
+        for i in 0..m.functions.len {
+            let f = &m.functions[i]
+            if defined.get(f.name).is_none() { continue }
+            if first_undefined_callee(f, &defined).is_some() {
+                let _d = defined.remove(f.name)
+                m.skipped.push(f.name)
+                changed = true
+            }
+        }
+    }
+
+    // Compact once the set has settled.
+    let keep: List(Function) = list(m.functions.len, alloc)
+    for i in 0..m.functions.len {
+        let f = &m.functions[i]
+        if defined.get(f.name).is_some() { keep.push(f.*) }
+    }
+    m.functions.clear()
+    m.functions.push_all(keep.as_slice())
+    keep.clear()
+    keep.deinit()
+    defined.deinit()
+}
+
+// The first direct callee of `f` that has no definition in the module.
+// Indirect calls carry no symbol and are not checked here.
+fn first_undefined_callee(f: &Function, defined: &Dict(String, bool)) String? {
+    for b in 0..f.blocks.len {
+        let instrs = &f.blocks[b].instrs
+        for i in 0..instrs.len {
+            let callee = instrs[i] match {
+                Call(c) => c.callee,
+                _ => "",
+            }
+            if callee.len > 0 {
+                if defined.get(callee).is_none() { return Some(callee) }
+            }
+        }
+    }
+    return null
 }
 
 // Lower `ast_module`'s supported functions into the existing `m`.
@@ -575,6 +648,17 @@ fn mangle_symbol(fqn: String, name: String, is_foreign: bool, params: &List(Ty),
 // when the symbol pre-pass didn't register one - the two gates are the
 // same test, so a skipped definition is also an uncallable one.
 fn lower_function(m: &IrModule, ctx: &LowerCtx, decl: &FunctionDecl) {
+    // A generic function has no single body to emit: `List($T)` is a
+    // different layout per `T`, and lowering one shape would bake it into
+    // the symbol every instantiation shares. Monomorphization is a later
+    // milestone; until then the definition is absent and the transitive
+    // refusal pass (`drop_callers_of_refused`) takes its callers with it.
+    //
+    // This gate is separate from `type_expr_to_ir` on purpose: a `$T`
+    // behind a reference (`&List($T)`) lowers to a plain pointer, so the
+    // scalar gate waves it straight through.
+    if declares_generic(decl) { return }
+
     let fid = ctx.syms.decl_fn_id(decl)
     if fid.is_none() { return }
     let sym_opt = ctx.syms.lookup_symbol(fid.unwrap())
@@ -619,10 +703,16 @@ fn lower_function(m: &IrModule, ctx: &LowerCtx, decl: &FunctionDecl) {
     let body = decl.body.unwrap()
     let r = lower_block(ctx, &cur, &env, &body)
     if !r.terminated {
-        if r.value.is_some() {
-            cur.ret(r.value.unwrap())
-        } else if return_ir.is_none() {
+        if return_ir.is_none() {
+            // A void function DISCARDS its trailing expression's value -
+            // the expression is already emitted, for its effects. Returning
+            // it instead put `return 0` in a `void` C function, which is
+            // what an assignment in trailing position (`self.f = v`) looks
+            // like: `lower_assignment` yields the unit placeholder. The
+            // checker has the mirror of this rule.
             cur.ret_void()
+        } else if r.value.is_some() {
+            cur.ret(r.value.unwrap())
         } else {
             // A value function with no return path is a checker error.
             cur.unreachable()
@@ -796,9 +886,7 @@ fn lower_expr(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, expr: &Expr) Operand
         // adding an `Expr` variant is a compile error here instead of a
         // silent refusal that looks like a deliberate one.
 
-        // `xs[i]` - needs the `op_index` / `op_index_ref` choice the checker
-        // does not record yet, plus element-stride addressing.
-        Index(_) => unlowerable(ctx),
+        Index(ix) => lower_index(ctx, bb, env, &ix),
         // `x as T` - needs the full conversion matrix (trunc/ext/fp casts,
         // pointer casts); FIR has the instructions, the mapping is unwritten.
         Cast(_) => unlowerable(ctx),
@@ -1454,11 +1542,7 @@ fn resolved_variant(ctx: &LowerCtx, span: SourceSpan) u32? {
 
 // The enum a scrutinee type names, peeling one reference.
 fn resolve_enum(ty: &Ty, reg: &NominalRegistry) EnumTarget? {
-    let peeled = ty.* match {
-        Ref(inner) => inner.*,
-        _ => ty.*,
-    }
-    let nr = peeled match {
+    let nr = peel_ref(ty).* match {
         Nominal(n) => n,
         _ => return null,
     }
@@ -1537,6 +1621,7 @@ fn lower_place(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, expr: &Expr) Operan
         MemberAccess(ma) => member_address(ctx, bb, env, &ma),
         // `p.*` - the pointer already is the address.
         Dereference(d) => Some(lower_expr(ctx, bb, env, d.operand)),
+        Index(ix) => index_address(ctx, bb, env, &ix),
         _ => null,
     }
 }
@@ -1599,15 +1684,165 @@ fn lower_member(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, ma: &MemberAccessE
     return bb.load(ty_to_ir(&mty), fp)
 }
 
+// Indexing (M5)
+//
+// `xs[i]` has three lowerings, picked by what the checker recorded on the
+// index node:
+//
+//   - ref-form `op_index_ref(&Self, Idx) &T`: call it. The result IS the
+//     element's address, so `xs[i]`, `xs[i] = v` and `&xs[i]` all work off
+//     the one call.
+//   - value-form `op_index(Self, Idx) T`: call it. The result is a
+//     computed temporary - it has no address and is not a place.
+//   - nothing recorded: built-in indexing over a fixed array or a slice.
+//     The address is `base + i * stride`, which is a place.
+//
+// Only element indexing is lowered. Range slicing over a built-in base
+// (`xs[a..b]`) has to build a new `Slice` value with bounds clamped
+// against the base's length; that is unwritten, and a guess would emit an
+// unclamped view that reads past the end. It is refused instead. A *user*
+// type's range indexing is an ordinary call and needs nothing extra here -
+// though the two in the stdlib (`String`, `Slice`) take their receiver by
+// value, so their signatures are outside the lowerable subset for now and
+// the call refuses one step later.
+
+fn lower_index(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, ix: &IndexExpr) Operand {
+    // A value-form operator is emitted directly: its result is the value,
+    // with nothing to load through.
+    let op = ctx.result.get_operator(node_id_of(ix.span))
+    if op.is_some() {
+        let o = op.unwrap()
+        if !o.is_ref_form {
+            return index_operator_call(ctx, bb, env, ix, &o)
+        }
+    }
+
+    let addr = index_address(ctx, bb, env, ix)
+    if addr.is_none() { return unlowerable(ctx) }
+    let ty = node_ty(ctx.result, ix.span)
+    // FIR addresses aggregates by pointer, so an aggregate element is its
+    // own address - `xs[i].f` geps on without an intermediate copy.
+    if is_aggregate(&ty) { return addr.unwrap() }
+    return bb.load(ty_to_ir(&ty), addr.unwrap())
+}
+
+// The element's address, when it has one. Null for a value-form operator
+// (a computed temporary) and for every form still refused.
+fn index_address(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, ix: &IndexExpr) Operand? {
+    let op = ctx.result.get_operator(node_id_of(ix.span))
+    if op.is_some() {
+        let o = op.unwrap()
+        if !o.is_ref_form { return null }
+        return Some(index_operator_call(ctx, bb, env, ix, &o))
+    }
+    return builtin_element_address(ctx, bb, env, ix)
+}
+
+// The checker already picked the overload, so an indexing operator is an
+// ordinary two-argument call. The receiver is passed the way the chosen
+// shape needs it: a ref-form takes the address, a value form takes what
+// `lower_expr` yields - which for an aggregate IS its address, matching
+// how `lower_call` passes aggregate arguments.
+fn index_operator_call(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, ix: &IndexExpr, o: &ResolvedOperator) Operand {
+    let sym = ctx.syms.lookup_symbol(o.function_id)
+    if sym.is_none() { return unlowerable(ctx) }
+    let recv = if o.is_ref_form {
+        lower_base_address(ctx, bb, env, ix.receiver)
+    } else {
+        lower_expr(ctx, bb, env, ix.receiver)
+    }
+    let idx = lower_expr(ctx, bb, env, ix.index)
+    let ret = if o.is_ref_form { IrType.Ptr } else { ty_to_ir(&node_ty(ctx.result, ix.span)) }
+    return bb.call_two(sym.unwrap(), ret, recv, idx)
+}
+
+// `base + i * sizeof(elem)` for a fixed array or a slice.
+fn builtin_element_address(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, ix: &IndexExpr) Operand? {
+    let base_ty = node_ty(ctx.result, expr_span(ix.receiver))
+    let elem = builtin_elem_ty(ctx, &base_ty)
+    if elem.is_none() { return null }
+
+    // See the header: slicing a built-in base is refused rather than
+    // emitted unclamped. Both the syntactic form and a `Range`-typed
+    // index reach here.
+    if is_range_index(ctx, ix) { return null }
+
+    let base = builtin_base_pointer(ctx, bb, env, ix.receiver, &base_ty)
+    if base.is_none() { return null }
+
+    let stride = layout_of(&elem.unwrap(), &ctx.result.nominals, ctx.allocator).size
+    let i = lower_expr(ctx, bb, env, ix.index)
+    let off = bb.imul(IrType.I64, i, Operand.IntConst(stride as i64))
+    return Some(bb.gep(base.unwrap(), off))
+}
+
+// The address the elements start at. A fixed array's own address is it; a
+// slice is a `{ptr, len}` view, so the pointer is loaded out of its field.
+fn builtin_base_pointer(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, recv: &Expr, base_ty: &Ty) Operand? {
+    let addr = lower_base_address(ctx, bb, env, recv)
+    let is_array = peel_ref(base_ty).* match { Array(_) => true, _ => false }
+    if is_array { return Some(addr) }
+
+    // Field offsets come from the layout rather than being assumed zero:
+    // `auto` repr is free to reorder a struct'''s fields.
+    let st = resolve_struct(base_ty, &ctx.result.nominals, ctx.allocator)
+    if st.is_none() { return null }
+    let s = st.unwrap()
+    let fi = field_index(&s.def, "ptr")
+    if fi < 0 { return null }
+    let fp = bb.gep(addr, Operand.IntConst(s.layout.offsets[fi as usize] as i64))
+    return Some(bb.load(IrType.Ptr, fp))
+}
+
+// The element type of a built-in indexable base - a fixed array, or the
+// well-known `Slice`. Null for everything else, which means the checker
+// either resolved an operator or reported the type as non-indexable.
+fn builtin_elem_ty(ctx: &LowerCtx, ty: &Ty) Ty? {
+    return peel_ref(ty).* match {
+        Array(a) => Some(a.elem.*),
+        Nominal(n) => slice_element_ty(ctx, &n),
+        _ => null,
+    }
+}
+
+fn slice_element_ty(ctx: &LowerCtx, n: &NominalRef) Ty? {
+    let id = ctx.result.nominals.by_fqn.get(FQN_SLICE)
+    if id.is_none() { return null }
+    if id.unwrap() != n.id { return null }
+    if n.args.len != 1 { return null }
+    return Some(n.args[0])
+}
+
+// True when the index selects a sub-range rather than one element. Both
+// the literal `a..b` form and an index of `Range` type count.
+fn is_range_index(ctx: &LowerCtx, ix: &IndexExpr) bool {
+    let syntactic = ix.index.* match { Range(_) => true, _ => false }
+    if syntactic { return true }
+    let n = node_ty(ctx.result, expr_span(ix.index)) match {
+        Nominal(nr) => nr,
+        _ => return false,
+    }
+    let id = ctx.result.nominals.by_fqn.get(FQN_RANGE)
+    if id.is_none() { return false }
+    return id.unwrap() == n.id
+}
+
+// One reference peeled off, as a borrow. The payload of `Ref` is already
+// a `&Ty` into the same arena as `ty`, so both arms outlive the call - and
+// returning by value would copy a `Nominal`'s argument list on every
+// layout query.
+fn peel_ref(ty: &Ty) &Ty {
+    return ty.* match {
+        Ref(inner) => inner,
+        _ => ty,
+    }
+}
+
 // Resolve a value's static type to the struct it names, peeling one
 // reference. Null for enums, scalars, and unresolved types - the caller
 // emits its placeholder rather than crash.
 fn resolve_struct(ty: &Ty, reg: &NominalRegistry, allocator: &Allocator?) StructTarget? {
-    let peeled = ty.* match {
-        Ref(inner) => inner.*,
-        _ => ty.*,
-    }
-    let nr = peeled match {
+    let nr = peel_ref(ty).* match {
         Nominal(n) => n,
         _ => return null,
     }
@@ -1875,6 +2110,51 @@ fn prim_ir(p: PrimitiveKind) IrType {
         F32 => IrType.F32,
         F64 => IrType.F64,
     }
+}
+
+// Whether the declaration introduces a generic parameter (`$T`) anywhere
+// in its signature. `$T` binds at its first appearance in a parameter
+// type, so this is the whole test - a use of an already-bound `T` reads
+// as a plain `Named("T")`, which the scalar gate rejects on its own.
+fn declares_generic(decl: &FunctionDecl) bool {
+    for i in 0..decl.params.len {
+        if mentions_generic(&decl.params[i].type_expr) { return true }
+    }
+    return decl.return_type match {
+        Some(rt) => mentions_generic(&rt),
+        None => false,
+    }
+}
+
+fn mentions_generic(te: &TypeExpr) bool {
+    return te.* match {
+        GenericBind(_) => true,
+        Named(n) => any_generic(&n.generic_args),
+        Reference(r) => mentions_generic(r.inner),
+        Optional(o) => mentions_generic(o.inner),
+        Array(a) => mentions_generic(a.element),
+        Slice(sl) => mentions_generic(sl.element),
+        Tuple(t) => any_generic(&t.elements),
+        Function(f) => function_mentions_generic(&f),
+        AnonStruct(_) => false,
+        AnonEnum(_) => false,
+        Error(_) => false,
+    }
+}
+
+fn function_mentions_generic(f: &FunctionType) bool {
+    if any_generic(&f.params) { return true }
+    return f.return_type match {
+        Some(rt) => mentions_generic(rt),
+        None => false,
+    }
+}
+
+fn any_generic(tes: &List(TypeExpr)) bool {
+    for i in 0..tes.len {
+        if mentions_generic(&tes[i]) { return true }
+    }
+    return false
 }
 
 // A signature `TypeExpr` to its FIR scalar type, or null when the type is
@@ -2534,6 +2814,54 @@ fn is_gep_result(f: &Function, id: u32) bool {
     return false
 }
 
+// Whether `id` was produced by a call - i.e. names an operator's result.
+fn is_call_result(f: &Function, id: u32) bool {
+    for b in 0..f.blocks.len {
+        let instrs = &f.blocks[b].instrs
+        for i in 0..instrs.len {
+            let hit = instrs[i] match { Call(c) => c.result match { Some(r) => r == id, None => false }, _ => false }
+            if hit { return true }
+        }
+    }
+    return false
+}
+
+fn call_count(f: &Function) usize {
+    let n: usize = 0
+    for b in 0..f.blocks.len {
+        let instrs = &f.blocks[b].instrs
+        for i in 0..instrs.len {
+            instrs[i] match { Call(_) => n = n + 1, _ => {} }
+        }
+    }
+    return n
+}
+
+// The local the function's last `ret` hands back, or 0 when it returns
+// nothing or returns a constant.
+fn returned_local(f: &Function) u32 {
+    let id: u32 = 0
+    for b in 0..f.blocks.len {
+        f.blocks[b].terminator match {
+            Ret(v) => v match { Some(o) => id = operand_local(o), None => {} },
+            _ => {},
+        }
+    }
+    return id
+}
+
+// Whether `id` was produced by a load.
+fn is_load_result(f: &Function, id: u32) bool {
+    for b in 0..f.blocks.len {
+        let instrs = &f.blocks[b].instrs
+        for i in 0..instrs.len {
+            let hit = instrs[i] match { Load(l) => l.result == id, _ => false }
+            if hit { return true }
+        }
+    }
+    return false
+}
+
 fn memcpy_count(f: &Function) usize {
     let n: usize = 0
     for b in 0..f.blocks.len {
@@ -2768,4 +3096,58 @@ test "a tuple pattern in a lowerable function degrades to a placeholder" {
     // A single wildcard arm still lowers - the gate is per-pattern, and a
     // wildcard is supported.
     assert_true(block_count_starting(f, "m_arm") == 1 as usize, "the supported match still lowers")
+}
+
+// Indexing (M5).
+//
+// `analyze` checks one module with no stdlib, so `Slice` and `Range` are
+// not registered and the built-in element path has no type to reach it
+// with. It is covered by the self-host run instead (`--check` over the
+// stdlib, where every `xs[i]` on a slice takes it). What is testable here
+// is the part that decides between call, load, and refusal.
+
+test "a ref-form index operator is called, and its result is the address to load from" {
+    let unit = analyze(from_view("type Box = struct { v: i32 }\nfn op_index_ref(b: &Box, i: usize) &i32 { return &b.v }\nfn f(b: &Box) i32 { return b[0usize] }"), "test.f")
+    let m = lower_module(&unit.module, &unit.result)
+    let f = &m.functions[find_fn_starting(&m, "f__ref")]
+    assert_eq(call_count(f), 1 as usize, "the operator is called once")
+    assert_eq(first_call_argc(f), 2 as usize, "receiver and index")
+    assert_true(is_load_result(f, returned_local(f)), "the value is loaded, not the pointer itself")
+}
+
+test "a ref-form index is a place: assignment stores through the operator's result" {
+    let unit = analyze(from_view("type Box = struct { v: i32 }\nfn op_index_ref(b: &Box, i: usize) &i32 { return &b.v }\nfn f(b: &Box) { b[0usize] = 7 }"), "test.f")
+    let m = lower_module(&unit.module, &unit.result)
+    let f = &m.functions[find_fn_starting(&m, "f__ref")]
+    assert_true(is_call_result(f, last_store_ptr(f)), "the write goes to the address the operator returned")
+}
+
+test "a value-form index operator yields its call result with nothing loaded through it" {
+    let unit = analyze(from_view("type Box = struct { v: i32 }\nfn op_index(b: &Box, i: usize) i32 { return b.v }\nfn f(b: &Box) i32 { return b[0usize] }"), "test.f")
+    let m = lower_module(&unit.module, &unit.result)
+    let f = &m.functions[find_fn_starting(&m, "f__ref")]
+    assert_eq(call_count(f), 1 as usize, "the operator is called once")
+    assert_true(is_call_result(f, returned_local(f)), "the call result IS the value")
+}
+
+// The refusal that matters: a value-form result is a computed temporary,
+// so writing through it would discard the write. Refusing the function is
+// the only honest option until `op_set_index` lands.
+test "a value-form index is not a place: assigning through it refuses the function" {
+    let unit = analyze(from_view("type Box = struct { v: i32 }\nfn op_index(b: &Box, i: usize) i32 { return b.v }\nfn f(b: &Box) { b[0usize] = 7 }"), "test.f")
+    let m = lower_module(&unit.module, &unit.result)
+    assert_true(was_skipped(&m, "f__ref"), "the assignment has no place to store to")
+}
+
+// A by-value struct receiver puts the operator itself outside the
+// lowerable subset, so it has no symbol to call. The index must refuse
+// rather than name a function that was never emitted.
+test "an index whose operator has an unlowerable signature refuses rather than guessing a symbol" {
+    let unit = analyze(from_view("type Box = struct { v: i32 }\nfn op_index(b: &Box, i: usize) i32 { return b.v }\nfn g(b: &Box) i32 { return b[0usize] }"), "test.f")
+    let with_op = lower_module(&unit.module, &unit.result)
+    assert_true(find_fn_starting(&with_op, "g__ref") < with_op.functions.len, "the lowerable operator does emit")
+
+    let unit2 = analyze(from_view("type Box = struct { v: i32 }\nfn op_index(b: Box, i: usize) i32 { return b.v }\nfn g(b: &Box) i32 { return b[0usize] }"), "test.f")
+    let m = lower_module(&unit2.module, &unit2.result)
+    assert_true(was_skipped(&m, "g__ref"), "the caller refuses when the operator has no symbol")
 }

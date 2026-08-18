@@ -60,6 +60,25 @@ Running the bootstrap on any stdlib-using project (including itself) reported `u
 ### Implicit `T -> Option(T)` Coercion Is Being Removed
 
 **Status:** Deprecated - gated behind `[lang].implicit_option_wrap`, migration partial
+
+**Why it is being removed, stated structurally (2026-08-18).** The wrap is not a coercion that unification can apply at one place. It is a rule that *every* piece of type logic has to independently know about, because the wrap has to happen **during** unification — `bool` in one match arm and `null` in another only meet if `Option(?V)`'s payload is chosen while the two are being unified, not before or after.
+
+The consequence is visible as a census. Option-wrapping awareness currently lives in **20 references across 6 files**, spanning checker, coercion rules, engine, and lowering:
+
+- C# checker: `PreBindOptionTypeVar` called at three separate sites (if-expression, if-statement, match arms), plus `UnifyJoin` — an entire second unification mode that exists because the directional one cannot express this.
+- Self-hosted checker: `prebind_option_payload` / `try_prebind` in `join_types`, and a second payload special case in `unify_expected` for let/return annotations.
+- Self-hosted engine: a guard at `inference_engine.f:498` refusing the rule when the payload is unbound — correct in argument position, wrong in a join, which is precisely why `prebind_option_payload` exists to defeat it.
+- C# engine: a branch in `UnifyInternal` letting a constrained literal reach the wrap.
+
+Each of those is a place where someone had to remember the feature exists. The failure mode when they don't is silence.
+
+**A concrete instance of that, found and fixed the same day it was introduced.** The `UnifyInternal` branch above was added for an unrelated reason — constrained numeric literals could not reach the wrapping rule, because TypeVar binding runs before coercion rules. The branch fixed that. It also **bypassed the feature flag**: `[lang].implicit_option_wrap = false` disables the rule by not registering it, and a branch that performs the wrap by a different route never consults the registry. So `fn f() i64? { return 7 }` kept compiling with the feature switched off, for literals only.
+
+Nothing would have caught this. The harness runs with the flag on; the flag's own worklist procedure would have under-reported and looked like migration progress. It is now gated on `OptionWrappingCoercionRule` actually being registered.
+
+That is the argument for removal in one sentence: a rule that has to be re-implemented in every new piece of unification logic will be silently forgotten by some of them, and the flag that is supposed to measure the migration is itself one of the things that gets forgotten.
+
+
 **Affected:** `src/FLang.Semantics/CoercionRules.cs` (`OptionWrappingCoercionRule`), all of `stdlib/`
 
 A bare `T` is implicitly wrapped where `Option(T)` is expected, so
@@ -377,14 +396,32 @@ Covered by six `test {}` blocks in `lower.f`, including one pinning that a call 
 
 **Resolved in this pass — FQN symbol mangling (link-clean merged module).** `lower_program` now takes the project's module FQNs (parallel to `modules`, from `AnalyzedProject.fqns`) and `lower.f::mangle_symbol` derives each function's C symbol: dots become double underscores and the module path prefixes the name (`flang_typer.checker` fn `deinit` → `flang_typer__checker__deinit`). `main` and `#foreign` fns keep their bare names (entry wiring / real C symbols); M2 call lowering must derive callee symbols through the same helper. Three companion fixes were needed before the probe linked: (1) *same-module overload sets* share one mangled name, so `lower.f::disambiguate` appends an ordinal to every repeat within one lowering walk (`std__allocator__deinit__2`) — positional, so M2 call sites will need a scheme-keyed mapping; (2) the C backend emits each *foreign declaration* at most once — merged modules re-declare the same symbol, and `core.io`'s many `printf` overloads all map to one; (3) two placeholder-arithmetic C errors: out-of-subset types now fold to `i64` instead of `ptr` (a pointer operand inside a float op is invalid C), and division by a literal-zero (placeholder) divisor lowers to a placeholder value instead of a constant `0 % 0` C rejects. Covered by `test {}` blocks in `lower.f` and `c_backend.f`.
 
-**Coverage boundary — what "0 errors" measures.** A zero here means "nothing the checker looks at is wrong", not "the program is well-typed". The walk skips most of a function body:
+**Resolved in this pass — M5 completed: indexing, plus four bugs it uncovered (self-host `--check` 12 errors → 0).**
 
-- `check_expr_kind` (`checker.f`) handles **13 of 24** `Expr` variants. Its `_ => fresh_var()` catch-all returns without recursing, so the whole subtree under an unhandled node is never visited. Unhandled: `Match`, `Lambda`, `Index`, `Unary`, `ArrayLit`, `InterpolatedString`, `NullPropagation`, `Range`, `Coalesce`, `Try`, `Error`.
-- `Assignment`, `AddressOf` and `Dereference` were added for assignment lowering, but only far enough to *recurse* — `check_assignment` checks both sides and yields `void` without unifying them and without rejecting a non-place left side, so `x = "hello"` where `x: i32` still type-checks clean. Their value is that the subtree now gets recorded types at all, which is what lowering reads.
-- `check_stmt` handles **3 of 10** `Stmt` variants (`Let`, `Expression`, `Return`) with `_ => {}`. `For`, `While`, `Loop`, and `Defer` bodies are never walked at all.
-- `check_binary` recurses into both operands and then returns a fresh var with no unification, so `1 + "hello"` type-checks clean.
+*Indexing, typing.* `check_index` mirrors the reference checker's order: built-in array and slice indexing is tried **before** the user operators, because `String` and `Slice(u8)` coerce to each other in both directions and `op_index(String, Range)` would otherwise capture `Slice(u8)[range]`. A user type then dispatches to one of two mutually exclusive shapes — ref-form `op_index_ref(&Self, Idx) &T` (a place: read, write, `&x[i]`) or value-form `op_index(Self|&Self, Idx) T` (a computed read) — and the winner is recorded on the node with `is_ref_form`. `check_range` types `a..b` as `Range(T)`, partial ranges included: the bound that is written fixes the element, `..` leaves it free, and whether a missing bound can be supplied is the index site's problem, not the type's. Operator lookup probes before it resolves, since `resolve_overload` commits its unifications and reports mismatches — a losing shape would pollute the substitution and emit a diagnostic the caller is about to supersede.
 
-`ForStmt`, `WhileStmt`, `LoopStmt`, `DeferStmt`, `MatchExpr`, `LambdaExpr`, `IndexExpr`, `TryExpr`, `AssignmentExpr`, and `UnaryExpr` appear nowhere in `checker.f` — they are unmentioned, not stubbed. For scale, the self-host corpus (`lib/` + `stdlib/`, ~33.5k lines) contains ~435 `for` loops, ~137 `while`, ~499 `match` expressions, ~2175 assignments and ~1651 index expressions, all inside the never-visited set. What is genuinely validated is declarations, signatures, and the call graph — which is the hard part and is real — but expression-level checking inside statement bodies is largely absent. The two `main.f` errors above are the gap surfacing.
+*Indexing, lowering.* Three paths, picked by what the checker recorded: a ref-form operator call (whose result IS the element's address, so one call serves value, assignment and address-of), a value-form call (a temporary, and therefore not a place — `lower_place` returns null and an indexed assignment refuses the function), and built-in `base + i * stride` for arrays and slices, where a slice's base pointer is loaded out of its `ptr` field at the layout's offset rather than an assumed zero. Range slicing over a built-in base is refused: it needs a `Slice` built with bounds clamped against the base's length, and a guess would emit an unclamped view that reads past the end.
+
+*Four bugs this surfaced, all pre-existing and all in the "would have miscompiled" class:*
+
+1. **Branch joins were order-dependent.** `check_match` unified each arm into one fixed var and `check_if` returned the *then* branch's type, so `X(v) => v, else => null` typed clean and `else => null, X(v) => v` did not. Both now go through `join_types`, which tries coercion in **both** directions and returns the *joined* type, with a pre-bind step for `T` against `Option($V)` (the `T → Option(T)` rule requires payload equality and will not bind a free payload itself — correct in argument position, wrong in a join, which is the one place where picking the payload IS the intended answer). `Never` is the join's identity, so a diverging arm stays out of it and a fully diverging `match` types as `Never` rather than needing the `void` special case the C# checker requires — the self-hosted checker has a bottom type and the reference one does not. New codes: **E2074** (if/else), **E2075** (match arms).
+2. **A call could name a function that was never emitted.** A symbol is assigned when the *signature* lowers, but the body is refused separately and later, so `lower_call` could emit a call to a refused function — a link error that takes the whole program down instead of the one function that cannot be built. `drop_callers_of_refused` now runs to a fixpoint after lowering: any function calling an undefined symbol joins `skipped`, which strands its own callers, and so on. It is the counterpart across the call graph of `blocked` within a body.
+3. **Generic function bodies were being lowered with guessed layouts.** `fn op_index_ref(list: &List($T), …)` passes the scalar signature gate — a `$T` behind a reference is just a pointer — so its body lowered, and `layout_of` sized the unresolved `T` as 4 bytes (`Var(_) => lay(4, 4)`, the same invent-a-plausible-value pattern removed from the C# side). Every field offset past that point was wrong. Generic declarations are now refused up front by `declares_generic`, which walks the signature for `$T` at any depth; monomorphization is a later milestone, and until then the definition is simply absent and rule 2 takes its callers with it.
+4. **Void functions returned their trailing expression's value.** `self.f = v` in trailing position yields `lower_assignment`'s unit placeholder, which became `return 0` in a `void` C function. A void function now discards the trailing value — the expression is still emitted, for its effects. The checker has had the mirror of this rule since M2.
+
+*Where the self-host build stands.* `--check` is clean over 97 modules and the backend now emits a nearly-complete `flang.c` for the compiler itself. What remains is **22 C errors, all in foreign-declaration fidelity** — the emitted prototypes for libc symbols (`memset`, `memmove`, `printf`, `strlen`) conflict with the system headers the preamble includes, plus one unresolved type name. That is a distinct workstream from lowering: the front end is producing the calls correctly and the declarations are wrong.
+
+*Still out of subset after M5:* range slicing over a built-in base; `op_set_index`, so a value-form index stays unassignable; and aggregate parameters and returns — which is what still refuses the stdlib's own `String` and `Slice` indexing operators, since both take their receiver by value.
+
+**Coverage boundary — what "0 errors" measures.** Re-measured 2026-08-18, after M5: the boundary has moved a long way, and the caveat is now much narrower than it was.
+
+- `check_expr_kind` (`checker.f`) handles **16 of 24** `Expr` variants. The `_ => fresh_var()` catch-all still returns without recursing, so the subtree under an unhandled node is never visited. Unhandled: `Lambda`, `Unary`, `ArrayLit`, `InterpolatedString`, `NullPropagation`, `Coalesce`, `Try`, `Error`.
+- `check_stmt` handles **all 10** `Stmt` variants — `For`, `While`, `Loop` and `Defer` bodies are walked, and `check_stmt` reports divergence so a `return` inside a branch does not drag a block's type to `void`.
+- `check_binary` really unifies its operands (pointer arithmetic deliberately excepted, where the operands must *not* unify), so `1 + "hello"` is rejected.
+- `check_assignment` unifies right into left. A non-place left side (`f() = 1`) is still not rejected here; lowering refuses the function instead, so the failure is loud but the diagnostic is imprecise.
+- `check_index` resolves built-in array/slice indexing and user `op_index_ref` / `op_index`, and records the pick. It does not report **E2077** (a type declaring both operator forms), which would need a non-committing probe of the losing shape; the winner is the same either way, only the diagnostic is missing.
+
+What that leaves: lambdas and the optional-flavoured operators (`?.`, `??`, `?`) are the remaining unvisited subtrees. Declarations, signatures, the call graph, control flow, assignment, `match` and indexing are all genuinely checked.
 
 **Harness scoreboard (through the bootstrap).** The lit-style corpus runs through any compiler binary via `$FLANG` (see docs/architecture.md, "Execution mode"): `FLANG=bootstrap/build/flang dotnet test.cs`.
 
@@ -618,6 +655,18 @@ Calls to `#foreign fn` may bypass strict argument type checking, allowing implic
 
 ---
 
+### `&[T; N]` Indexing (RESOLVED)
+
+`fn first(xs: &[i32; 4]) i32 { return xs[0usize] }` type-checked and then failed to compile, for two independent reasons — both fixed 2026-08-18, with `tests/harness/places/index_ref_to_array.f` pinning them.
+
+1. **`&[T; N]` lowered to `T**`.** A reference wrapped the array's IR type, but an array value is *already* the address of its storage (`IrArray` lowers to `T*`, and an array alloca yields `T*`), so every caller passed `T*` to a parameter declared `T**`. `ReferenceType(ArrayType)` now lowers to `IrPointer(elementType)`.
+
+   The cost of that is real and worth knowing: the IR type no longer carries `N`. Anything needing the length of such a value reads it off the semantic type instead — today that is `HmAstLowering.DecayIndexBase`.
+
+2. **Index operators never applied argument coercions.** `xs[i]` on an array resolves, through the array-decay coercion, to `op_index(Slice(T), usize)` — but `LowerIndex` and `LowerIndexAddress` build their call directly rather than through the argument lowering that materializes coercions, so the decay was type-checked and never emitted. The raw pointer went straight into a parameter expecting a `Slice`. Both paths now run their arguments through `CoerceOperatorArgs`.
+
+Both surfaced as C compile errors rather than wrong answers, and only because C is typed: the same two gaps between same-width types would have been silent.
+
 ### Array-to-Slice Coercion in Struct Construction
 
 **Status:** Open (1 SKIP test)
@@ -636,6 +685,48 @@ fn make_wrapper(data: u8[]) Wrapper {
 **Test:** `tests/harness/structs/struct_slice_field_init.f` (SKIP)
 
 ---
+
+### Unsuffixed Numeric Literals and Overload Order
+
+**Status:** FIXED 2026-08-18, in two parts — the candidate set stops arbitrary types, and preferred-type tie-breaking stops declaration order deciding within the set.
+
+```flang
+let l = list(4)
+l.push(10)
+println($"{l[0usize]}")     // prints a control character, not `10`
+```
+
+`l` infers as `List(char)`. The element type is decided by `append`, not by anything the programmer wrote: `std.string_builder` declares `append(&StringBuilder, char)` before `append(&StringBuilder, usize)`, the two tie on every ranking key for an unbound argument, and ties fall through to declaration order. `l.push(10i32)` or `let l: List(i32) = list(4)` both give the right answer.
+
+**Mechanism.** `InferIntegerLiteral` gives an unsuffixed integer a bare `FreshVar()` — no primitive candidate set at all. A char literal in the same position gets `FreshConstrainedVar(["u8", "char"])`, and the comment there says exactly why ("so it can't unify with arbitrary types (e.g. String) during overload resolution"). The unsuffixed integer path never got the same treatment, so `10` will unify with `char`, `String`, or anything else a candidate happens to take.
+
+**Why the obvious fix is not enough.** Constraining the literal to the integer primitives closes the `String` class of leak but not this one: `let c: char = 65`, `let f: f64 = 1` and `let f: f32 = 2` are all legal today and work by plain unification, so `char` and the floats would have to stay in the candidate set — and `char` in the set is what lets `append(char)` win.
+
+**Partly fixed 2026-08-18.** The literal now carries a candidate set, which closes the "binds to an arbitrary type" half. The declaration-order half is still open.
+
+**Fixed — literals are constrained.** Both unsuffixed integer and unsuffixed float literals now get `FreshConstrainedVar` instead of a bare `FreshVar`. `ValidatePostInference` was *already* checking exactly this rule (E2102 / E2001); enforcing it at unification time is what stops a wrong overload being **selected**, rather than complaining once the choice is committed — and the post-hoc check only ever looked at `PrimitiveType`, so it could not see `String` at all.
+
+The float case was the worse of the two: `3.14` bound to `String` type-checked clean and failed only at the C compiler, because `double*` and `String*` differ. Between two same-width types it would have compiled and produced garbage.
+
+This needed one change in `InferenceEngine.UnifyInternal` first. A constrained var meeting anything that was not a `PrimitiveType` reported a mismatch immediately, so a constrained literal could never reach the `T -> Option(T)` wrapping rule — TypeVar binding runs before the coercion rules and never gave them a turn. `fn f() f64? { return 3.14 }` became a type error. A constrained var meeting `Option(T)` now recurses on the payload, which is the right reading: the constraint describes what the *literal* becomes, and the literal becomes the payload, not the Option. `Option(String)` is still rejected, one level in. Without that fix the integer constraint failed 88 of 535 harness tests; with it, 0.
+
+Constraint violations found during unification now report **E2102**, matching the code the post-inference check already used for the same rule, rather than the generic E2002.
+
+Covered by `tests/harness/basics/literal_candidate_sets.f`.
+
+**Also fixed — ties within the candidate set no longer fall to declaration order.** The first attempt at this rejected *every* tie that would bind an unbound argument differently, and failed 89 of 535 tests. That rule was wrong, not the principle: it conflated two cases.
+
+A **char literal** ties between `char` and `u8`, but it has a *preferred* type — `char` is what `'a'` means and `u8` is the alternative. That tie is resolvable, and `tests/harness/basics/char_literal_overload_order.f` pins it.
+
+An **unsuffixed integer or float** has no preferred type, because FLang does not default literals. A tie between two members of its candidate set is genuinely undetermined, and picking the first-declared silently decides a type the program never states.
+
+`TieVerdict` now distinguishes them: a preferred type settles the tie (and wins regardless of declaration order, which the char test only ever passed by luck of ordering); no preferred type reports E2011. **0 of 536 tests fail.**
+
+One trap in wiring this: calls whose candidates have no named args, defaults, or variadics take a **fast path** through `ResolveOverload` rather than `ResolveOverloadWithDefaults`. Putting the check in only one of them silently misses most direct calls.
+
+Covered by `tests/harness/errors/error_e2011_undetermined_literal.f`.
+
+Both halves are now closed: a literal cannot be given a type outside its candidate set, and cannot have a type inside the set chosen for it by declaration order.
 
 ### Error Code Inconsistencies
 

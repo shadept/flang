@@ -48,6 +48,20 @@ pub fn expect(self: Option($T), msg: String) T {
     }
 }
 
+// Keep a present value only when it satisfies `pred`, otherwise `None`.
+// The narrowing counterpart of `map`: `map` changes what the optional
+// holds, `filter` changes whether it holds anything. `pred` never runs on
+// `None`.
+//
+// Chains where each step is a separate reason to give up read as one
+// expression rather than a stack of early returns.
+pub fn filter(self: Option($T), pred: fn(T) bool) Option(T) {
+    return self match {
+        Some(v) => if pred(v) { self } else { None }
+        None => None
+    }
+}
+
 // Unwrap the Some payload, panicking on None. Use `unwrap_or` / `match` when
 // None is reachable; reserve `unwrap` for invariants you've already checked
 // (e.g. inside an `if x.is_some()` branch).
@@ -102,4 +116,16 @@ test "flat_map chains a fallible step without nesting" {
 fn halve(v: i32) Option(i32) {
     if v % 2 == 0 { return Some(v / 2) }
     return null
+}
+
+test "filter keeps a value that passes and drops one that fails" {
+    let kept: Option(i32) = Some(4)
+    let dropped: Option(i32) = Some(3)
+    assert_eq(kept.filter(fn(v: i32) bool { v % 2 == 0 }).unwrap_or(-1), 4, "an even value survives")
+    assert_eq(dropped.filter(fn(v: i32) bool { v % 2 == 0 }).unwrap_or(-1), -1, "an odd value is filtered out")
+}
+
+test "filter never runs its predicate on None" {
+    let none: Option(i32) = null
+    assert_true(none.filter(fn(v: i32) bool { true }).is_none(), "None stays None, predicate untouched")
 }

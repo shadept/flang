@@ -1932,6 +1932,37 @@ Delete whichever pattern doesn't fit the container's semantics. For lvalue stora
 
 ---
 
+### E2074: If/Else Branches Disagree
+
+The two branches of an `if` used as an expression must join to one type. Coercion is tried in **both** directions, so branch order does not decide the answer — a `T` branch and a `null` branch settle on `Option(T)` either way round.
+
+```flang
+fn pick(c: bool, v: i32) i32? {
+    return if c { v } else { null }     // OK: joins to Option(i32)
+}
+
+fn bad(c: bool) i32 {
+    return if c { 1 } else { "two" }    // ERROR E2074: no common type
+}
+```
+
+A branch that diverges (`return`, `break`, `continue`) has type `never` and stays out of the join entirely.
+
+### E2075: Match Arms Disagree
+
+Every arm of a `match` used as an expression must join to one type, under the same both-directions rule as E2074.
+
+```flang
+fn as_bool(self: &JsonValue) bool? {
+    return self.* match {
+        Bool(v) => v,           // bool
+        else => null,           // Option(?) — joins to Option(bool)
+    }
+}
+```
+
+A `match` whose every arm diverges has type `never`.
+
 ### E2076: Duplicate Struct Field Name
 
 **Category**: Type Checking / Structs
@@ -2934,6 +2965,8 @@ Report the issue with sample code that reproduces the error.
 | **E2072** | Source Generators | Source generator argument kind mismatch      |
 | **E2073** | Source Generators | Template expansion error                     |
 | **E2076** | Type Checking     | Duplicate struct field name                   |
+| **E2074** | Type Checking     | If/else branches disagree                    |
+| **E2075** | Type Checking     | Match arms disagree                          |
 | **E2077** | Operators         | Ambiguous index operator                       |
 | **E2102** | Generics          | Conflicting generic type bindings            |
 | **E2115** | Pattern Matching  | Unsupported pattern form                     |

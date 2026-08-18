@@ -94,6 +94,18 @@ public class InferenceEngine : ITypeResolver
     }
 
     /// <summary>
+    /// The primitive candidate set attached to <paramref name="t"/>'s
+    /// representative, or null when it carries none. Overload resolution uses
+    /// it to tell a literal with a preferred type (a char literal: `char`)
+    /// from one with none (an unsuffixed integer), which decides whether a
+    /// tie is resolvable or genuinely ambiguous.
+    /// </summary>
+    public HashSet<string>? ConstraintOf(Type t)
+    {
+        return Resolve(t) is TypeVar tv ? GetConstraint(tv) : null;
+    }
+
+    /// <summary>
     /// Returns the primitive-name candidate set bound to the representative of
     /// <paramref name="v"/>, or null if unconstrained.
     /// </summary>
@@ -283,7 +295,7 @@ public class InferenceEngine : ITypeResolver
                     {
                         ReportError(
                             $"Type mismatch: incompatible primitive constraints `{FormatConstraint(aCons)}` and `{FormatConstraint(bCons)}`",
-                            span, expected: b, actual: a);
+                            span, expected: b, actual: a, codeOverride: "E2102");
                         return a;
                     }
                 }
@@ -306,15 +318,37 @@ public class InferenceEngine : ITypeResolver
                     {
                         ReportError(
                             $"Type mismatch: expected one of `{FormatConstraint(bCons)}`, got `{prim.Name}`",
-                            span, expected: b, actual: a);
+                            span, expected: b, actual: a, codeOverride: "E2102");
                         return a;
                     }
+                }
+                else if (a is NominalType { Name: WellKnown.Option, TypeArguments.Count: 1 } optA
+                         && _coercionRules.Any(r => r is OptionWrappingCoercionRule))
+                {
+                    // `T -> Option(T)` wrapping, reached through a constrained
+                    // variable. The constraint must not veto here: it describes
+                    // what the *literal* may become, and the literal becomes the
+                    // payload, not the Option. Vetoing made `fn f() f64? {
+                    // return 3.14 }` a type error, because TypeVar binding runs
+                    // before the coercion rules and never gave them a turn.
+                    //
+                    // Recursing re-applies the constraint against the payload,
+                    // so `Option(String)` is still rejected — one level in.
+                    //
+                    // Gated on the wrapping rule actually being registered:
+                    // this branch IS the wrap, reached by a different route, so
+                    // running it unconditionally would re-enable the feature for
+                    // literals after `[lang].implicit_option_wrap = false` turned
+                    // it off everywhere else.
+                    UnifyInternal(optA.TypeArguments[0], b, span, ref cost, directional);
+                    cost += 1;
+                    return a;
                 }
                 else
                 {
                     ReportError(
                         $"Type mismatch: expected one of `{FormatConstraint(bCons)}`, got `{a}`",
-                        span, expected: b, actual: a);
+                        span, expected: b, actual: a, codeOverride: "E2102");
                     return a;
                 }
                 // Constraint discharged — drop entry to keep the dict bounded.
@@ -667,9 +701,10 @@ public class InferenceEngine : ITypeResolver
     // Diagnostics
     // =========================================================================
 
-    private void ReportError(string message, SourceSpan span, Type? expected = null, Type? actual = null)
+    private void ReportError(string message, SourceSpan span, Type? expected = null, Type? actual = null,
+                             string? codeOverride = null)
     {
-        var code = _errorCodeOverride ?? "E2002";
+        var code = _errorCodeOverride ?? codeOverride ?? "E2002";
         var msg = message;
         if (_errorMessageTemplate != null && expected != null && actual != null)
             msg = _errorMessageTemplate()

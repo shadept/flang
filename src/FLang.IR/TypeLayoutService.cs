@@ -126,6 +126,16 @@ public class TypeLayoutService(ITypeResolver engine, INominalTypeRegistry nomina
                 return LowerPrimitive(pt);
 
             case ReferenceType rt:
+                // `&[T; N]` is a pointer to the array's storage, which is
+                // already what an array value IS: `IrArray` lowers to `T*`,
+                // and an array alloca yields `T*`. Wrapping it again gave a
+                // parameter of type `T**` while every caller passed `T*`.
+                //
+                // The cost is that the IR type no longer carries `N`, so the
+                // array-to-slice decay for such a value reads the length off
+                // the semantic type instead (`HmAstLowering.DecayIndexBase`).
+                if (_engine.Resolve(rt.InnerType) is ArrayType refArr)
+                    return new IrPointer(LowerResolved(refArr.ElementType));
                 return new IrPointer(LowerResolved(rt.InnerType));
 
             case ArrayType at:

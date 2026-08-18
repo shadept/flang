@@ -927,6 +927,8 @@ fn check_expr_kind(self: &Checker, expr: &Expr) Ty {
         AddressOf(a) => check_address_of(self, &a),
         Dereference(d) => check_deref(self, &d),
         Match(m) => check_match(self, &m),
+        Index(ix) => check_index(self, &ix),
+        Range(r) => check_range(self, &r),
         _ => self.engine.fresh_var(),
     }
 }
@@ -938,7 +940,11 @@ fn check_expr_kind(self: &Checker, expr: &Expr) Ty {
 // Exhaustiveness is not checked here.
 fn check_match(self: &Checker, m: &MatchExpr) Ty {
     let scrutinee = check_expr(self, m.scrutinee)
-    let result = self.engine.fresh_var()
+    // `Never` is the identity of the arm join - it takes the other side -
+    // so the first arm sets the type and a match whose every arm diverges
+    // stays `Never`. That is the honest answer: such a match has no value
+    // to consume, and `Never` unifies with whatever the context wants.
+    let result = Ty.Never
     for i in 0..m.arms.len {
         let arm = &m.arms[i]
         self.env.push_scope()
@@ -948,7 +954,7 @@ fn check_match(self: &Checker, m: &MatchExpr) Ty {
             None => {},
         }
         let body_ty = check_expr(self, arm.body)
-        unify_expected(self, body_ty, result, E_TYPE_MISMATCH, arm.span)
+        result = join_types(self, result, body_ty, E_ARM_MISMATCH, arm.span)
         self.env.pop_scope()
     }
     return result
@@ -1132,6 +1138,207 @@ fn check_deref(self: &Checker, d: &DereferenceExpr) Ty {
         Ref(inner) => inner.*,
         _ => self.engine.fresh_var(),
     }
+}
+
+// `a..b` - a half-open `Range(T)`. Both bounds unify with each other, so
+// `0..n` takes `n`'s type. A partial range (`a..`, `..b`, `..`) still has
+// a `Range` type: the bound that is written fixes the element, and `..`
+// leaves it free. Whether the missing bound can be supplied is the index
+// site's problem, not the type's.
+fn check_range(self: &Checker, r: &RangeExpr) Ty {
+    let s = r.start match { Some(e) => Some(check_expr(self, e)), None => null }
+    let e = r.end match { Some(x) => Some(check_expr(self, x)), None => null }
+    let elem = s match {
+        Some(st) => {
+            e match {
+                Some(en) => unify_expected(self, en, st, E_TYPE_MISMATCH, r.span),
+                None => {},
+            }
+            st
+        },
+        None => e match {
+            Some(en) => en,
+            None => self.engine.fresh_var(),
+        },
+    }
+    return mk_range(self, elem)
+}
+
+fn mk_range(self: &Checker, elem: Ty) Ty {
+    let id = self.nominals.by_fqn.get(FQN_RANGE)
+    if id.is_none() { return Ty.Error }
+    let args: List(Ty) = list(1, self.allocator)
+    args.push(elem)
+    return Ty.Nominal(NominalRef { id = id.unwrap(), args = args })
+}
+
+fn mk_slice_ty(self: &Checker, elem: Ty) Ty {
+    let id = self.nominals.by_fqn.get(FQN_SLICE)
+    if id.is_none() { return Ty.Error }
+    let args: List(Ty) = list(1, self.allocator)
+    args.push(elem)
+    return Ty.Nominal(NominalRef { id = id.unwrap(), args = args })
+}
+
+// True when `t` is the well-known `Range` nominal. An index of range type
+// selects the slicing form of indexing rather than element access.
+fn is_range_ty(self: &Checker, t: &Ty) bool {
+    let n = t.* match { Nominal(nr) => nr, _ => return false }
+    let id = self.nominals.by_fqn.get(FQN_RANGE)
+    if id.is_none() { return false }
+    return id.unwrap() == n.id
+}
+
+// The element of a built-in indexable base: a fixed array, or the
+// well-known `Slice` nominal. Null for everything else, which routes the
+// index through the user-defined operators.
+fn builtin_element(self: &Checker, t: &Ty) Ty? {
+    return t.* match {
+        Array(a) => Some(a.elem.*),
+        Nominal(n) => slice_element(self, &n),
+        _ => null,
+    }
+}
+
+fn slice_element(self: &Checker, n: &NominalRef) Ty? {
+    let id = self.nominals.by_fqn.get(FQN_SLICE)
+    if id.is_none() { return null }
+    if id.unwrap() != n.id { return null }
+    if n.args.len != 1 { return null }
+    return Some(n.args[0])
+}
+
+// `base[index]`.
+//
+// Built-in array and slice indexing is tried BEFORE the user-defined
+// operators, mirroring the reference checker. The order is not cosmetic:
+// `String` and `Slice(u8)` coerce to each other in both directions, so
+// `op_index(String, Range)` would otherwise capture `Slice(u8)[range]`.
+//
+// User types dispatch to one of two mutually exclusive operator shapes:
+//   ref-form   `op_index_ref(&Self, Idx) &T` - a place: read, write, `&x[i]`
+//   value-form `op_index(Self|&Self, Idx) T` - a computed read
+// The winner is recorded on the index node with `is_ref_form` set, so
+// lowering emits a call plus a load, or the call alone.
+fn check_index(self: &Checker, idx: &IndexExpr) Ty {
+    let base_ty = check_expr(self, idx.receiver)
+    let index_ty = check_expr(self, idx.index)
+
+    let rbase = self.engine.resolve(base_ty)
+    let rindex = self.engine.resolve(index_ty)
+    let ranged = is_range_ty(self, &rindex)
+
+    if !ranged {
+        let is_bool = rindex match { Prim(p) => p == PrimitiveKind.Bool, _ => false }
+        if is_bool {
+            push_diag_e(self, expr_span(idx.index), E_BAD_INDEX_TYPE,
+                from_view("cannot use `bool` as an index type"))
+            return self.engine.fresh_var()
+        }
+    }
+
+    let elem = builtin_element(self, &rbase)
+    if elem.is_some() {
+        // `xs[a..b]` yields a view of the same element type; the bounds
+        // are `usize`. `xs[i]` yields the element.
+        if ranged {
+            constrain_range_usize(self, &rindex, idx.span)
+            return mk_slice_ty(self, elem.unwrap())
+        }
+        unify_expected(self, index_ty, ty_usize(), E_TYPE_MISMATCH, expr_span(idx.index))
+        return elem.unwrap()
+    }
+
+    return user_index(self, idx, base_ty, &rbase, index_ty)
+}
+
+// A range used as an index counts in elements, so its bounds are `usize`.
+fn constrain_range_usize(self: &Checker, rindex: &Ty, span: SourceSpan) {
+    let n = rindex.* match { Nominal(nr) => nr, _ => return }
+    if n.args.len != 1 { return }
+    unify_expected(self, n.args[0], ty_usize(), E_TYPE_MISMATCH, span)
+}
+
+// User-defined indexing. Ref-form wins when it resolves; the reference
+// checker additionally reports E2077 when a type declares both forms,
+// which needs a non-committing probe of the loser and is not done here -
+// the pick is the same either way, only the diagnostic is missing.
+fn user_index(self: &Checker, idx: &IndexExpr, base_ty: Ty, rbase: &Ty, index_ty: Ty) Ty {
+    // An unresolved base cannot arbitrate an overload set; committing the
+    // first match would bind it arbitrarily.
+    let base_unbound = rbase.* match { Var(_) => true, _ => false }
+    if base_unbound { return self.engine.fresh_var() }
+
+    let already_ref = rbase.* match { Ref(_) => true, _ => false }
+    let ref_base = if already_ref { base_ty } else { self.engine.mk_ref(base_ty) }
+
+    let ref_pick = index_operator(self, "op_index_ref", ref_base, index_ty, idx.span)
+    if ref_pick.is_some() {
+        let p = ref_pick.unwrap()
+        // The declared return is `&T`; the expression's type is `T`.
+        let inner = self.engine.resolve(p.ret) match {
+            Ref(i) => i.*,
+            _ => self.engine.fresh_var(),
+        }
+        self.results.record_operator(node_id_of(idx.span), ResolvedOperator {
+            function_id = p.id, negate_result = false,
+            cmp_derived_op = null, is_ref_form = true,
+        })
+        return inner
+    }
+
+    // Value form, tried against the base as written, as `&Self`, and -
+    // for a reference base - against the pointee.
+    let value_pick = index_operator(self, "op_index", base_ty, index_ty, idx.span)
+    if value_pick.is_none() and !already_ref {
+        value_pick = index_operator(self, "op_index", self.engine.mk_ref(base_ty), index_ty, idx.span)
+    }
+    if value_pick.is_none() and already_ref {
+        let inner = rbase.* match { Ref(i) => i.*, _ => base_ty }
+        value_pick = index_operator(self, "op_index", inner, index_ty, idx.span)
+    }
+    if value_pick.is_some() {
+        let p = value_pick.unwrap()
+        self.results.record_operator(node_id_of(idx.span), ResolvedOperator {
+            function_id = p.id, negate_result = false,
+            cmp_derived_op = null, is_ref_form = false,
+        })
+        return p.ret
+    }
+
+    push_call_diag(self, idx.span, E_NOT_INDEXABLE,
+        from_view("type does not support indexing: declare `op_index_ref(&Self, Idx) &T` or `op_index(Self, Idx) T`"))
+    return self.engine.fresh_var()
+}
+
+// Resolve one indexing operator against the visible registry candidates.
+// Unlike a call site this must not report on failure - the caller tries
+// several shapes and reports once at the end.
+fn index_operator(self: &Checker, name: String, self_ty: Ty, index_ty: Ty, span: SourceSpan) OverloadPick? {
+    let vis = current_visibility(self)
+    let cands = self.functions.lookup(name, &vis) match {
+        FnLookFound(c) => Some(c),
+        _ => null,
+    }
+    if cands.is_none() { return null }
+    let candidates = cands.unwrap()
+
+    let args: List(Ty) = list(2, self.allocator)
+    args.push(self_ty)
+    args.push(index_ty)
+
+    // Probe first: `resolve_overload` commits its unifications and reports
+    // mismatches, so a losing shape would both pollute the substitution and
+    // emit a diagnostic the caller is about to supersede.
+    let viable = false
+    for i in 0..candidates.len {
+        if probe_candidate(self, &candidates[i], &args).is_some() { viable = true }
+    }
+    let pick = if viable { resolve_overload(self, &candidates, &args, span) } else { null }
+
+    args.deinit()
+    candidates.deinit()
+    return pick
 }
 
 // `expr as T` yields `T`; cast validity (representability, pointer
@@ -1429,6 +1636,62 @@ fn unify_expected(self: &Checker, inferred: Ty, annotated: Ty, code: String, spa
     }
     const o = self.engine.unify(inferred, annotated)
     report_unify(self, &o, code, span)
+}
+
+// Join two branch types: match arms, if/else branches.
+//
+// Distinct from `unify_expected`, where one side is the slot and the other
+// flows into it. Here neither side is the slot, so coercion is tried in
+// both directions and the *result* is the joined type rather than one of
+// the inputs. Without that, arm order decides the answer: `T` then `null`
+// would fix the type at `T` and reject the `null`.
+//
+// `Never` is the identity - it takes the other side - which is how a
+// diverging arm stays out of the join entirely.
+fn join_types(self: &Checker, a: Ty, b: Ty, code: String, span: SourceSpan) Ty {
+    prebind_option_payload(self, a, b)
+    let forward = self.engine.try_unify(a, b).is_ok()
+    const o = if forward {
+        self.engine.unify(a, b)
+    } else {
+        self.engine.unify(b, a)
+    }
+    report_unify(self, &o, code, span)
+    return o match {
+        Unified(u) => u.ty,
+        // The branches have no common type, and `report_unify` has just said
+        // so. `Error` is the engine's poison: it absorbs into anything
+        // silently, so the one diagnostic does not cascade into every later
+        // use of the result. Returning one of the operands instead would
+        // carry a type the program does not actually have.
+        _ => Ty.Error,
+    }
+}
+
+// `T` joined with `Option($V)` where `$V` is still free: bind `$V` to `T`
+// so the `T -> Option(T)` coercion, which requires payload equality, can
+// fire. The unbound payload is the whole reason it cannot - the rule
+// refuses to bind one itself, because in argument position that would let
+// `Option($V)` swallow any type at all. A join is the one place where
+// picking the payload IS the intended answer.
+fn prebind_option_payload(self: &Checker, a: Ty, b: Ty) {
+    if try_prebind(self, a, b) { return }
+    let _r = try_prebind(self, b, a)
+}
+
+// Bind the free payload of `opt` to `concrete`, if that is the shape.
+fn try_prebind(self: &Checker, concrete: Ty, opt: Ty) bool {
+    let payload = option_payload(self, opt)
+    if payload.is_none() { return false }
+    let free = self.engine.resolve(payload.unwrap()) match { Var(_) => true, _ => false }
+    if !free { return false }
+    // A type variable carries no information to bind with, and an
+    // `Option` on both sides unifies structurally without help.
+    let c = self.engine.resolve(concrete)
+    let opaque = c match { Var(_) => true, _ => false }
+    if opaque or option_payload(self, c).is_some() { return false }
+    const o = self.engine.unify(c, payload.unwrap())
+    return o.is_ok()
 }
 
 // The payload type when `t` is the well-known Option nominal.
@@ -1979,9 +2242,7 @@ fn check_if(self: &Checker, if_expr: &IfExpr) Ty {
         Block(b) => check_block(self, &b),
         If(nested) => check_if(self, nested),
     }
-    const o = self.engine.unify(then_ty, else_ty)
-    report_unify(self, &o, E_TYPE_MISMATCH, if_expr.span)
-    return then_ty
+    return join_types(self, then_ty, else_ty, E_BRANCH_MISMATCH, if_expr.span)
 }
 
 // `S { f = v, ... }` - the literal's type is the resolved nominal `S`; each
@@ -2357,4 +2618,50 @@ test "wrong argument type in a call is reported" {
         ["fn takes(a: i32) i32 { return a }\nfn f(x: f64) i32 { return takes(x) }\n"],
         ["calls_mismatch"])
     assert_true(errors > 0, "f64 argument against i32 param reports an error")
+}
+
+test "a ref-form index operator types as its pointee" {
+    let errors = count_check_errors(
+        ["type Box = struct { v: i32 }\nfn op_index_ref(b: &Box, i: usize) &i32 { return &b.v }\nfn f(b: &Box) i32 { return b[0usize] }\n"],
+        ["ix_ref"])
+    assert_true(errors == 0, "`&T` return means the index yields `T`")
+}
+
+test "a value-form index operator types as its return" {
+    let errors = count_check_errors(
+        ["type Box = struct { v: i32 }\nfn op_index(b: &Box, i: usize) i32 { return b.v }\nfn f(b: &Box) i32 { return b[0usize] }\n"],
+        ["ix_val"])
+    assert_true(errors == 0, "the operator's return type is the index's type")
+}
+
+test "indexing a type with no operator is reported" {
+    let errors = count_check_errors(
+        ["type Box = struct { v: i32 }\nfn f(b: &Box) i32 { return b[0usize] }\n"],
+        ["ix_none"])
+    assert_true(errors == 1, "a non-indexable base is E2028, not a silent fresh var")
+}
+
+test "a bool index is rejected before any operator lookup" {
+    let errors = count_check_errors(
+        ["type Box = struct { v: i32 }\nfn op_index(b: &Box, i: bool) i32 { return b.v }\nfn f(b: &Box) i32 { return b[true] }\n"],
+        ["ix_bool"])
+    assert_true(errors == 1, "`bool` never indexes, even where an overload would take it")
+}
+
+// The join, not the operator: `T` in one arm and `null` in another must
+// settle on `Option(T)` whichever order they appear in. Left to a
+// directional unification the first arm fixes the type and the second is
+// reported against it.
+test "match arms join a value arm and a null arm into an optional" {
+    let errors = count_check_errors(
+        ["type E = enum { A(i32) B }\nfn f(e: &E) i32? { return e.* match { A(v) => v, B => null } }\nfn g(e: &E) i32? { return e.* match { B => null, A(v) => v } }\n"],
+        ["arm_join"])
+    assert_true(errors == 0, "arm order does not decide the joined type")
+}
+
+test "if/else branches join the same way match arms do" {
+    let errors = count_check_errors(
+        ["fn f(c: bool, v: i32) i32? { if c { return v } else { return null } }\nfn g(c: bool, v: i32) i32? { return if c { v } else { null } }\n"],
+        ["branch_join"])
+    assert_true(errors == 0, "a `T` branch and a `null` branch settle on `Option(T)`")
 }

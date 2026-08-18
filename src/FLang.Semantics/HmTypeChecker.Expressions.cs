@@ -104,6 +104,33 @@ public partial class HmTypeChecker
     // Literals
     // =========================================================================
 
+    /// <summary>
+    /// What an unsuffixed integer literal is allowed to become. Every member is
+    /// a target that resolves by unification alone today; narrowing the set
+    /// further needs coercion rules to replace the identities it removes.
+    /// </summary>
+    private static readonly HashSet<string> _unsuffixedIntegerCandidates =
+    [
+        "i8", "i16", "i32", "i64", "isize",
+        "u8", "u16", "u32", "u64", "usize",
+        "char", "f32", "f64"
+    ];
+
+    /// <summary>
+    /// The type a literal settles on when overload candidates tie. A char
+    /// literal has one — `char`; `u8` is the alternative, not the default.
+    /// An unsuffixed integer or float has none: FLang does not default
+    /// literals, so a tie between two members of its candidate set is
+    /// genuinely undetermined and must be reported rather than guessed.
+    /// </summary>
+    private static string? PreferredLiteralType(HashSet<string>? constraint)
+    {
+        if (constraint == null) return null;
+        if (constraint.Count == 2 && constraint.Contains("char") && constraint.Contains("u8"))
+            return "char";
+        return null;
+    }
+
     private Type InferIntegerLiteral(IntegerLiteralNode lit)
     {
         if (lit.Suffix != null)
@@ -129,8 +156,18 @@ public partial class HmTypeChecker
             ReportError($"Unknown integer suffix `{lit.Suffix}`", lit.Span);
         }
 
-        // Unsuffixed integer: fresh type variable (constrained by context)
-        var tv = _ctx.Engine.FreshVar();
+        // Unsuffixed integer: a type variable constrained to the primitives an
+        // integer literal can actually become — the same rule
+        // `ValidatePostInference` already enforces, moved early enough to stop
+        // a wrong overload being *selected* rather than only complaining
+        // afterwards. Unconstrained, `10` would unify with anything a
+        // candidate happened to take, `String` included.
+        //
+        // The set is wide because every member resolves by plain unification
+        // today (`let c: char = 65`, `let f: f64 = 1`, `let n: u8 = 3`).
+        // Ties between two members are still settled by declaration order —
+        // see docs/known-issues.md, "Unsuffixed Integer Literals".
+        var tv = _ctx.Engine.FreshConstrainedVar(_unsuffixedIntegerCandidates);
         _unsuffixedLiterals.Add((lit, tv));
         return tv;
     }
@@ -149,8 +186,13 @@ public partial class HmTypeChecker
             ReportError($"Unknown float suffix `{lit.Suffix}`", lit.Span);
         }
 
-        // Unsuffixed float: fresh type variable (constrained by context)
-        var tv = _ctx.Engine.FreshVar();
+        // Unsuffixed float: a type variable constrained to the two types a
+        // float literal can become. Unconstrained, `3.14` would unify with
+        // anything an overload happened to take — including `String`, which
+        // type-checked clean and only failed at the C compiler because
+        // `double*` and `String*` differ. On a same-width target it would
+        // have compiled and produced garbage.
+        var tv = _ctx.Engine.FreshConstrainedVar(["f32", "f64"]);
         _unsuffixedFloatLiterals.Add((lit, tv));
         return tv;
     }
@@ -704,11 +746,22 @@ public partial class HmTypeChecker
     /// and wiring up the resolved target.
     /// </summary>
     private (FunctionScheme Winner, FunctionType FnType, FunctionDeclarationNode Node)?
-        ResolveOverload(List<FunctionScheme> candidates, Type[] argTypes, SourceSpan span)
+        ResolveOverload(List<FunctionScheme> candidates, Type[] argTypes, SourceSpan span,
+                        bool reportAmbiguity = false)
+    {
+        return ResolveOverload(candidates, argTypes, span, reportAmbiguity, out _);
+    }
+
+    private (FunctionScheme Winner, FunctionType FnType, FunctionDeclarationNode Node)?
+        ResolveOverload(List<FunctionScheme> candidates, Type[] argTypes, SourceSpan span,
+                        bool reportAmbiguity, out bool reportedAmbiguity)
     {
         FunctionScheme? bestCandidate = null;
         int bestCost = int.MaxValue;
         int bestGenericCount = int.MaxValue;
+        FunctionType? bestFnType = null;
+        bool ambiguousOnUndetermined = false;
+        reportedAmbiguity = false;
 
         foreach (var candidate in candidates)
         {
@@ -742,10 +795,42 @@ public partial class HmTypeChecker
                 bestCandidate = candidate;
                 bestCost = totalCost;
                 bestGenericCount = genericCount;
+                bestFnType = fnType;
+                ambiguousOnUndetermined = false;
+            }
+            else if (bestCandidate != null && genericCount == bestGenericCount && totalCost == bestCost)
+            {
+                var verdict = TieVerdict(argTypes, bestFnType, fnType);
+                if (verdict == TieOutcome.PreferChallenger)
+                {
+                    bestCandidate = candidate;
+                    bestFnType = fnType;
+                    ambiguousOnUndetermined = false;
+                }
+                else if (verdict == TieOutcome.Undetermined)
+                {
+                    ambiguousOnUndetermined = true;
+                }
             }
         }
 
         if (bestCandidate == null) return null;
+
+        // Not reported on the operator-probe path: that caller tries several
+        // receiver shapes and reports once itself.
+        if (ambiguousOnUndetermined)
+        {
+            if (reportAmbiguity)
+            {
+                ReportError(
+                    "Ambiguous call: several overloads match equally well and an argument is an "
+                    + "unsuffixed literal with no preferred type, so the choice would be arbitrary. "
+                    + "Add a literal suffix or annotate the value.",
+                    span, "E2011");
+                reportedAmbiguity = true;
+            }
+            return null;
+        }
 
         // Re-specialize and commit unification
         var winnerSpec = _ctx.Engine.Specialize(bestCandidate.Signature);
@@ -787,6 +872,45 @@ public partial class HmTypeChecker
     /// Try to resolve an operator function by name. Returns null on no match.
     /// Thin wrapper: LookupFunctions + ResolveOverload.
     /// </summary>
+    private enum TieOutcome { KeepIncumbent, PreferChallenger, Undetermined }
+
+    /// <summary>
+    /// How to settle two candidates that ranked identically. Only positions
+    /// where the argument is still an unbound variable matter — elsewhere the
+    /// call is being checked, not decided.
+    /// </summary>
+    /// <remarks>
+    /// A literal with a preferred type settles it (a char literal picks `char`
+    /// over `u8`). One without — an unsuffixed integer or float, since FLang
+    /// does not default literals — leaves the call genuinely undetermined, and
+    /// falling through to declaration order there is what let `list(4)` +
+    /// `push(65)` become a `List(char)`.
+    /// </remarks>
+    private TieOutcome TieVerdict(Type[] argTypes, FunctionType? incumbent, FunctionType? challenger)
+    {
+        if (incumbent == null || challenger == null) return TieOutcome.KeepIncumbent;
+        var outcome = TieOutcome.KeepIncumbent;
+        for (var i = 0; i < argTypes.Length; i++)
+        {
+            if (_ctx.Engine.Resolve(argTypes[i]) is not TypeVar) continue;
+            if (i >= incumbent.ParameterTypes.Count || i >= challenger.ParameterTypes.Count) continue;
+            var pa = _ctx.Engine.Resolve(incumbent.ParameterTypes[i]);
+            var pb = _ctx.Engine.Resolve(challenger.ParameterTypes[i]);
+            if (pa is TypeVar || pb is TypeVar) continue;
+            if (pa.Equals(pb)) continue;
+
+            var preferred = PreferredLiteralType(_ctx.Engine.ConstraintOf(argTypes[i]));
+            if (preferred != null)
+            {
+                if (pa is PrimitiveType incPrim && incPrim.Name == preferred) return TieOutcome.KeepIncumbent;
+                if (pb is PrimitiveType chalPrim && chalPrim.Name == preferred) { outcome = TieOutcome.PreferChallenger; continue; }
+                continue;
+            }
+            return TieOutcome.Undetermined;
+        }
+        return outcome;
+    }
+
     private Type? TryResolveOperator(string opName, Type[] argTypes, SourceSpan span, out FunctionDeclarationNode? resolvedNode)
     {
         resolvedNode = null;
@@ -825,6 +949,8 @@ public partial class HmTypeChecker
         FunctionScheme? bestCandidate = null;
         int bestCost = int.MaxValue;
         int bestGenericCount = int.MaxValue;
+        FunctionType? bestFnType = null;
+        bool ambiguousOnUndetermined = false;
 
         foreach (var candidate in candidates)
         {
@@ -923,10 +1049,36 @@ public partial class HmTypeChecker
                 bestCandidate = candidate;
                 bestCost = totalCost;
                 bestGenericCount = genericCount;
+                bestFnType = fnType;
+                ambiguousOnUndetermined = false;
+            }
+            else if (bestCandidate != null && genericCount == bestGenericCount && totalCost == bestCost)
+            {
+                var verdict = TieVerdict(fullPositionalTypes, bestFnType, fnType);
+                if (verdict == TieOutcome.PreferChallenger)
+                {
+                    bestCandidate = candidate;
+                    bestFnType = fnType;
+                    ambiguousOnUndetermined = false;
+                }
+                else if (verdict == TieOutcome.Undetermined)
+                {
+                    ambiguousOnUndetermined = true;
+                }
             }
         }
 
         if (bestCandidate == null) return null;
+
+        if (ambiguousOnUndetermined)
+        {
+            ReportError(
+                "Ambiguous call: several overloads match equally well and an argument is an "
+                + "unsuffixed literal with no preferred type, so the choice would be arbitrary. "
+                + "Add a literal suffix or annotate the value.",
+                span, "E2011");
+            return null;
+        }
 
         // Re-specialize and commit unification
         var winnerSpec = _ctx.Engine.Specialize(bestCandidate.Signature);
@@ -1193,6 +1345,7 @@ public partial class HmTypeChecker
                 || candidates.Any(c => c.Node.Parameters.Any(p => p.DefaultValue != null || p.IsVariadic));
 
             (FunctionScheme Winner, FunctionType FnType, FunctionDeclarationNode Node)? result;
+            var ambiguityReported = false;
 
             if (hasNamedOrDefaults)
             {
@@ -1230,7 +1383,8 @@ public partial class HmTypeChecker
             else
             {
                 // Fast path: no named args or defaults — use original overload resolution
-                result = ResolveOverload(candidates, fullPositionalTypes, call.Span);
+                result = ResolveOverload(candidates, fullPositionalTypes, call.Span,
+                                         reportAmbiguity: true, out ambiguityReported);
 
                 // For UFCS, try adapting receiver (value ↔ &T) if direct match failed
                 if (result == null && receiverType != null && fullPositionalTypes.Length > 0)
@@ -1269,9 +1423,14 @@ public partial class HmTypeChecker
                 if (opDerefResult != null) return opDerefResult;
             }
 
-            var displayName = call.MethodName ?? call.FunctionName;
-            var ufcsOff = receiverType != null ? 1 : 0;
-            ReportOverloadFailure(displayName, candidates, fullPositionalTypes, namedArgs, namedTypes, call.Span, ufcsOff);
+            // An ambiguity has already been reported with a precise message;
+            // the generic "no matching overload" would only add noise.
+            if (!ambiguityReported)
+            {
+                var displayName = call.MethodName ?? call.FunctionName;
+                var ufcsOff = receiverType != null ? 1 : 0;
+                ReportOverloadFailure(displayName, candidates, fullPositionalTypes, namedArgs, namedTypes, call.Span, ufcsOff);
+            }
             return _ctx.IsCheckingGenericBody
                 ? GuessReturnTypeFromCandidates(candidates)
                 : _ctx.Engine.FreshVar();
