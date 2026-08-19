@@ -37,11 +37,9 @@ pub fn slice_from_raw_parts(ptr: &$T, len: usize) T[] {
 
 // Returns the element at `idx`, or null if `idx` is out of bounds.
 pub fn get(s: $T[], idx: usize) T? {
-    if idx >= s.len {
-        return null
-    }
+    if idx >= s.len { return null }
     const ptr = s.ptr + idx
-    return ptr.*
+    return Some(ptr.*)
 }
 
 // Returns the element at `idx`. Panics if `idx >= s.len`.
@@ -65,10 +63,7 @@ pub fn op_index(s: $T[], range: Range(usize)) T[] {
     if end > s.len { end = s.len }
     if start > end { end = start }
 
-    return .{
-        ptr = s.ptr + start,
-        len = end - start
-    }
+    return slice_from_raw_parts(s.ptr + start, end - start)
 }
 
 // Sets the element at `index` to `value`. Panics if `index >= s.len`.
@@ -273,9 +268,7 @@ pub fn iter(slice: &$T[]) SliceIterator(T) {
 
 // Advances the iterator and returns the next element, or null if exhausted.
 pub fn next(iter: &SliceIterator($T)) T? {
-    if iter.index >= iter.slice.len {
-        return null
-    }
+    if iter.index >= iter.slice.len { return null }
     let val: T = iter.slice[iter.index]
     iter.index = iter.index + 1
     return Some(val)

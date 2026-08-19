@@ -6,6 +6,7 @@ import std.list
 import std.option
 import std.result
 import std.string
+import std.string_builder
 import flang_parser.ast
 import flang_typer.result
 import flang_codegen.fir
@@ -13,6 +14,7 @@ import flang_codegen.backend
 import flang_codegen.c_backend
 import flang_driver.driver
 import flang_driver.lower
+import flang_driver.project
 
 // Lower `unit` to FIR and compile+link it to an executable at
 // `output_path` (the backend appends a platform extension if missing).
@@ -29,12 +31,29 @@ pub fn build_unit(unit: &AnalyzedUnit, output_path: String, allocator: &Allocato
 
 // Lower a checked multi-module project to one FIR program and compile+link
 // it to an executable at `output_path`. The project must be error-free -
-// callers check `project_error_count` first.
-pub fn build_program(modules: &List(Module), fqns: &List(OwnedString), result: &TypeCheckResult, output_path: String, allocator: &Allocator? = null) Result(BuildResult, BuildError) {
+// callers check `project_error_count` first. When `stdlib_root` is given,
+// the stdlib's C runtime sidecars (`**/*.c`: fs, time, process, ...) are
+// compiled and linked in, matching what the reference compiler links -
+// without them every `#foreign __flang_*` call is an undefined symbol.
+pub fn build_program(modules: &List(Module), fqns: &List(OwnedString), result: &TypeCheckResult, output_path: String, stdlib_root: String = "", allocator: &Allocator? = null) Result(BuildResult, BuildError) {
     let m = lower_program(modules, fqns, result, allocator)
     let opts = build_options(output_path, allocator)
+
+    let runtime_c: List(OwnedString) = list(0, allocator)
+    if stdlib_root.len > 0 {
+        const pattern = $"{stdlib_root}/**/*.c"
+        runtime_c = glob_sources(pattern.as_view(), allocator)
+        pattern.deinit()
+        for i in 0..runtime_c.len {
+            let _o = opts.add_c_file(runtime_c[i].as_view())
+        }
+    }
+
     let r = compile(&m, &opts)
     opts.deinit()
     m.deinit()
+    // deinit contents
+    for i in 0..runtime_c.len { runtime_c[i].deinit() }
+    runtime_c.deinit()
     return r
 }

@@ -1199,14 +1199,14 @@ Ensure the target type is a struct, or provide a type annotation for anonymous s
 
 ---
 
-### E2019: Struct Construction - Missing Fields
+### E2019: Struct Construction - Missing Fields / Missing Type Arguments
 
 **Category**: Type Checking / Structs
 **Severity**: Error
 
 #### Description
 
-This error occurs when a struct construction is missing one or more required fields.
+This error occurs when a struct construction is missing one or more required fields, or when a generic struct is constructed by name without its type arguments (`Pair { ... }` where `Pair` is `struct(T)` — write `Pair(i64) { ... }`, or use the anonymous `.{ ... }` form to infer them). Both compilers report the generic-arguments case.
 
 #### Example
 

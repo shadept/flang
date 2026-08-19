@@ -19,6 +19,27 @@ pub fn is_none(self: Option($T)) bool {
     }
 }
 
+pub fn expect(self: Option($T), msg: String) T {
+    return self match {
+        Some(v) => v
+        None => panic(msg)
+    }
+}
+
+// Unwrap the Some payload, panicking on None. Use `unwrap_or` / `match` when
+// None is reachable; reserve `unwrap` for invariants you've already checked
+// (e.g. inside an `if x.is_some()` branch).
+pub fn unwrap(self: Option($T)) T {
+    return self.expect("called `unwrap` on a `None` value")
+}
+
+pub fn unwrap_or(self: Option($T), fallback: T) T {
+    return self match {
+        Some(v) => v
+        None => fallback
+    }
+}
+
 // Apply `f` to a present value, leaving `None` untouched. Use it to
 // transform what an optional holds without unwrapping and re-wrapping; `f`
 // never runs on `None`. When `f` itself returns an `Option`, use `flat_map`
@@ -41,13 +62,6 @@ pub fn flat_map(self: Option($T), f: fn(T) Option($U)) Option(U) {
     }
 }
 
-pub fn expect(self: Option($T), msg: String) T {
-    return self match {
-        Some(v) => v
-        None => panic(msg)
-    }
-}
-
 // Keep a present value only when it satisfies `pred`, otherwise `None`.
 // The narrowing counterpart of `map`: `map` changes what the optional
 // holds, `filter` changes whether it holds anything. `pred` never runs on
@@ -59,23 +73,6 @@ pub fn filter(self: Option($T), pred: fn(T) bool) Option(T) {
     return self match {
         Some(v) => if pred(v) { self } else { None }
         None => None
-    }
-}
-
-// Unwrap the Some payload, panicking on None. Use `unwrap_or` / `match` when
-// None is reachable; reserve `unwrap` for invariants you've already checked
-// (e.g. inside an `if x.is_some()` branch).
-pub fn unwrap(self: Option($T)) T {
-    return self match {
-        Some(v) => v
-        None => panic("called `unwrap` on a `None` value")
-    }
-}
-
-pub fn unwrap_or(self: Option($T), fallback: T) T {
-    return self match {
-        Some(v) => v
-        None => fallback
     }
 }
 

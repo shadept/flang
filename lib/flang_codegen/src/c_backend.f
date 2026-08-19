@@ -162,6 +162,7 @@ fn emit_preamble(sb: &StringBuilder) {
     sb.append("#include <stddef.h>\n")
     sb.append("#include <string.h>\n")
     sb.append("#include <stdlib.h>\n")
+    sb.append("#include <stdio.h>\n")
     sb.append("\n")
     // FIR-mandated invariant: arithmetic right shift on signed integers.
     // The standard left this implementation-defined until C23.
@@ -194,13 +195,38 @@ fn repeats_earlier_foreign(m: &IrModule, i: usize) bool {
     return false
 }
 
-// Names of foreign decls that the runtime preamble already provides.
-// Emitting `extern` decls for these conflicts with the definitions
-// above, so we skip them.
+// Names of foreign decls that the runtime preamble or an included header
+// (<string.h>, <stdlib.h>) already provides. Emitting `extern` decls for
+// these conflicts with those definitions - the FIR-flavoured signature
+// (`void memset(void*, int8_t, int64_t)`) clashes with the header's
+// prototype and its fortify macros - so we skip them; call sites then
+// compile against the header's own prototype, whose C conversions cover
+// the width differences.
 fn is_runtime_provided_symbol(name: String) bool {
     if name == "__flang_get_argc" { return true }
     if name == "__flang_get_arg" { return true }
     if name == "__flang_getenv" { return true }
+    // <string.h>
+    if name == "memset" { return true }
+    if name == "memmove" { return true }
+    if name == "memcpy" { return true }
+    if name == "memcmp" { return true }
+    if name == "strlen" { return true }
+    // <stdlib.h>
+    if name == "malloc" { return true }
+    if name == "free" { return true }
+    if name == "realloc" { return true }
+    if name == "calloc" { return true }
+    if name == "exit" { return true }
+    if name == "abort" { return true }
+    if name == "getenv" { return true }
+    // <stdio.h>. The stdlib declares printf as several fixed-arity
+    // overloads that all keep the bare C name; the real prototype is
+    // variadic, and clang rejects any redeclaration of it.
+    if name == "printf" { return true }
+    if name == "puts" { return true }
+    if name == "putchar" { return true }
+    if name == "fflush" { return true }
     return false
 }
 
@@ -796,7 +822,12 @@ fn emit_terminator(t: &Terminator, f: &Function, sb: &StringBuilder) {
         Br(tgt) => emit_br(&tgt, f, sb),
         BrIf(b) => emit_br_if(&b, f, sb),
         Ret(v) => emit_ret(v, f, sb),
-        Unreachable => sb.append("    /* unreachable */\n"),
+        // `abort()` keeps the C honest: falling off the end of a value-
+        // returning function is undefined behaviour (and an error under
+        // -Werror=return-type), and FIR `unreachable` promises the path
+        // is never taken - trapping if it somehow is beats returning
+        // garbage.
+        Unreachable => sb.append("    abort(); /* unreachable */\n"),
     }
 }
 
@@ -1399,17 +1430,17 @@ test "emits each foreign symbol at most once" {
     defer m.deinit()
     let p1 = list(1)
     p1.push(IrType.I32)
-    m.add_foreign(ForeignDecl { name = "putchar", return_ty = Some(IrType.I32), param_types = p1, variadic = false, cc = CallConv.C })
+    m.add_foreign(ForeignDecl { name = "isatty", return_ty = Some(IrType.I32), param_types = p1, variadic = false, cc = CallConv.C })
     let p2 = list(2)
     p2.push(IrType.I32)
     p2.push(IrType.I32)
-    m.add_foreign(ForeignDecl { name = "putchar", return_ty = Some(IrType.I32), param_types = p2, variadic = false, cc = CallConv.C })
+    m.add_foreign(ForeignDecl { name = "isatty", return_ty = Some(IrType.I32), param_types = p2, variadic = false, cc = CallConv.C })
 
     let sb = string_builder(256)
     defer sb.deinit()
     translate(&m, &sb)
-    assert_true(contains(sb.as_view(), "putchar(int32_t)"), "first declaration emitted")
-    assert_true(!contains(sb.as_view(), "putchar(int32_t, int32_t)"), "repeat declaration dropped")
+    assert_true(contains(sb.as_view(), "isatty(int32_t)"), "first declaration emitted")
+    assert_true(!contains(sb.as_view(), "isatty(int32_t, int32_t)"), "repeat declaration dropped")
 }
 
 // Spawn the compiler with the prepared argv + env. Returns the exit code.

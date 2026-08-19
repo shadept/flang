@@ -2195,6 +2195,26 @@ fn check_struct_lit(self: &Checker, lit: &StructLiteralExpr) Ty {
         return self.engine.fresh_var()
     }
     let ty = resolve_type_expr(self, lit.type_expr.unwrap())
+
+    // A generic struct constructed by NAME must spell its type arguments:
+    // `Pair(i64) { ... }`. Inference from fields belongs to the anonymous
+    // `.{ ... }` form. Without this check the literal records an
+    // under-instantiated nominal (`Pair` with no arguments), which no
+    // downstream layout query can size - the reference checker rejects
+    // the same shape with E2019.
+    let missing = generic_struct_missing_args(self, &ty)
+    if missing.is_some() {
+        let n = missing.unwrap()
+        const msg = $"generic struct `{n}` requires type arguments, use `{n}(...)` or `.{{ ... }}`"
+        push_diag_e(self, lit.span, E_GENERIC_NEEDS_ARGS, msg)
+        // Field expressions still check for their own errors; the literal
+        // itself has no usable type.
+        for i in 0..lit.fields.len {
+            let _v = check_field_value(self, &lit.fields[i])
+        }
+        return Ty.Error
+    }
+
     for i in 0..lit.fields.len {
         let fi = &lit.fields[i]
         let v = check_field_value(self, fi)
@@ -2205,6 +2225,22 @@ fn check_struct_lit(self: &Checker, lit: &StructLiteralExpr) Ty {
         }
     }
     return ty
+}
+
+// The struct's display name when `ty` is a nominal struct instantiated
+// with fewer (or more) type arguments than its declaration has parameters;
+// null when the instantiation is well-formed or `ty` isn't a struct.
+fn generic_struct_missing_args(self: &Checker, ty: &Ty) String? {
+    let nr = ty.* match {
+        Nominal(n) => n,
+        _ => return null,
+    }
+    let sd = self.nominals.get(nr.id).* match {
+        NomStruct(s) => s,
+        _ => return null,
+    }
+    if nr.args.len == sd.type_params.len { return null }
+    return Some(short_name_of(sd.fqn, last_dot(sd.fqn)))
 }
 
 // The value of a field initializer: the explicit `f = expr`, or - for
@@ -2577,6 +2613,20 @@ test "indexing a type with no operator is reported" {
         ["type Box = struct { v: i32 }\nfn f(b: &Box) i32 { return b[0usize] }\n"],
         ["ix_none"])
     assert_true(errors == 1, "a non-indexable base is E2028, not a silent fresh var")
+}
+
+test "a generic struct literal named without type arguments is E2019" {
+    let errors = count_check_errors(
+        ["type Pair = struct(T) { a: T, b: T }\nfn f() i64 { let p = Pair { a = 1i64, b = 2i64 } return p.a }\n"],
+        ["underinst"])
+    assert_true(errors >= 1, "a named generic literal must spell its arguments (or use `.{ ... }`)")
+}
+
+test "a generic struct literal with explicit arguments checks clean" {
+    let errors = count_check_errors(
+        ["type Pair = struct(T) { a: T, b: T }\nfn f() i64 { let p = Pair(i64) { a = 1, b = 2 } return p.a }\n"],
+        ["inst"])
+    assert_true(errors == 0, "explicit arguments instantiate the literal")
 }
 
 test "a bool index is rejected before any operator lookup" {

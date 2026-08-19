@@ -14,10 +14,7 @@ pub fn iter(self: &FilterIter($I, $T)) FilterIter(I, T) {
 }
 
 pub fn next(self: &FilterIter($I, $T)) T? {
-    return self.it.next() match {
-        Some(v) => if self.f(v) { Some(v) } else { null }
-        None => null
-    }
+    return self.it.next().filter(self.f)
 }
 
 pub fn filter(it: $I, f: fn($T) bool) FilterIter(I, T) {
@@ -38,10 +35,7 @@ pub fn iter(self: &MapIter($I, $T, $U)) MapIter(I, T, U) {
 }
 
 pub fn next(self: &MapIter($I, $T, $U)) U? {
-    return self.it.next() match {
-        Some(v) => self.f(v)
-        None => null
-    }
+    return self.it.next().map(self.f)
 }
 
 pub fn map(it: $I, f: fn($T) $U) MapIter(I, T, U) {
@@ -61,9 +55,12 @@ pub fn reduce(it: $I, init: $A, f: fn(A, $T) A) A {
     return acc
 }
 
+// Not `.map(...)`: the mapping would capture `it` and `f`, and a
+// capturing closure cannot decay into `map`'s bare `fn` parameter
+// (E2111, RFC-014).
 pub fn reduce(it: $I, f: fn($A, $T) A) A? {
     return it.next() match {
-        Some(first) => reduce(it, first, f)
+        Some(first) => Some(reduce(it, first, f))
         None => null
     }
 }

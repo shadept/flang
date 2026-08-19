@@ -18,6 +18,7 @@ You own and maintain these docs. They are the source of truth for the project. W
 - `docs/architecture.md` — compiler pipeline, AST design, IR, optimization passes, LSP, testing strategy
 - `docs/error-codes.md` — error code registry (add entries when creating new error codes)
 - `docs/known-issues.md` — known bugs, limitations, technical debt (add entries when discovering issues)
+- `docs/self-host.md` — self-host feature coverage matrix and milestone roadmap (update in the same commit as any lowering-coverage change)
 
 ## Rules
 

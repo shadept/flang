@@ -1833,6 +1833,14 @@ fn struct_construction_type(self: &Projector, cst: CstNode) TypeExpr? {
             NodeChild(child) => {
                 if in_generic and is_type_kind(child.kind) {
                     generic_args.push(self.project_type_expr(child))
+                } else if in_generic {
+                    // `Pair(i64) { ... }` parses its parenthesised args in
+                    // EXPRESSION position (the parser rewrites a call into
+                    // a construction on seeing the brace), so a type
+                    // argument arrives as an IdentifierExpr or CallExpr
+                    // and must be reinterpreted as a type.
+                    let t = self.type_expr_from_expr_cst(child)
+                    if t.is_some() { generic_args.push(t.unwrap()) }
                 }
             }
         }
@@ -1843,6 +1851,58 @@ fn struct_construction_type(self: &Projector, cst: CstNode) TypeExpr? {
         name = name,
         generic_args = generic_args,
     }))
+}
+
+// Reinterpret an expression-position CST node as a type expression: a bare
+// identifier is a type name, a call is a generic instantiation whose
+// arguments reinterpret recursively (`List(u8)`). Anything else - and any
+// call argument that doesn't reinterpret - yields null, so the caller
+// drops it and the checker reports the under-instantiated type rather
+// than a wrong one.
+fn type_expr_from_expr_cst(self: &Projector, cst: CstNode) TypeExpr? {
+    if cst.kind == NodeKind.IdentifierExpr {
+        let name: String = ""
+        let span = self.span_from(cst)
+        for i in 0..cst.children.len {
+            cst.children[i] match {
+                TokenChild(tok) => {
+                    if tok.kind == TokenKind.Identifier and name.len == 0 {
+                        name = tok.text
+                        span = self.span_from_token(tok)
+                    }
+                }
+                NodeChild(_) => {}
+            }
+        }
+        if name.len == 0 { return null }
+        let no_args: List(TypeExpr) = list(0, Some(self.alloc))
+        return Some(TypeExpr.Named(NamedType { span = span, name = name, generic_args = no_args }))
+    }
+    if cst.kind == NodeKind.CallExpr {
+        let name: String = ""
+        let span = self.span_from(cst)
+        let args: List(TypeExpr) = list(0, Some(self.alloc))
+        for i in 0..cst.children.len {
+            cst.children[i] match {
+                TokenChild(tok) => {
+                    if tok.kind == TokenKind.Identifier and name.len == 0 {
+                        name = tok.text
+                        span = self.span_from_token(tok)
+                    }
+                }
+                NodeChild(child) => {
+                    let t = self.type_expr_from_expr_cst(child)
+                    t match {
+                        Some(te) => args.push(te),
+                        None => return null,
+                    }
+                }
+            }
+        }
+        if name.len == 0 { return null }
+        return Some(TypeExpr.Named(NamedType { span = span, name = name, generic_args = args }))
+    }
+    return null
 }
 
 // Block: walks statements; last statement-expr without a terminator

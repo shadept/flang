@@ -161,5 +161,5 @@ pub fn next(it: &DequeIterator($T)) T? {
     const idx = (it.deque.head + it.current) % it.deque.cap
     const slot: &T = it.deque.ptr + idx
     it.current = it.current + 1
-    return slot.*
+    return Some(slot.*)
 }

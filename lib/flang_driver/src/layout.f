@@ -66,9 +66,14 @@ pub fn repr_of(def: &StructDef) Repr {
 
 // Public API
 
-// Size and alignment of any resolved `Ty`. The type must be zonked -
-// unresolved variables are sized as `i32` (a defensive fallback for
-// already-erroneous input, mirroring the reference compiler).
+// Size and alignment of any resolved `Ty`. The type must be zonked and
+// concrete: a `Var` reaching layout is a compiler bug (lowering's
+// contract - docs/self-host.md). The `Var => 4 bytes` arm below is a
+// TRANSITIONAL fallback while the specialization pass is unfed and
+// `lower.f`'s gates keep generic bodies out; when specialization lands
+// it must become a hard failure, matching the reference compiler's
+// `TypeLayoutService` no-defaulting throw (the reference used to guess
+// i32 here too, and that guess is exactly what its throw replaced).
 pub fn layout_of(ty: &Ty, reg: &NominalRegistry, allocator: &Allocator? = null) Layout {
     return layout_rec(ty, reg, allocator)
 }
@@ -82,6 +87,15 @@ pub fn struct_layout(def: &StructDef, args: &List(Ty), reg: &NominalRegistry, al
 // Layout of an enum instantiation. Recognises the `Option(&T)` niche.
 pub fn enum_layout(def: &EnumDef, args: &List(Ty), reg: &NominalRegistry, allocator: &Allocator? = null) EnumLayout {
     return enum_layout_impl(def, args, reg, allocator)
+}
+
+// The declared type of field `index` with the instantiation's type
+// arguments substituted in (the raw definition stores generic fields
+// against the declaration's type parameters). Scratch - see `subst`: the
+// result aliases the definition's storage and arena-boxed nodes; never
+// deinit it.
+pub fn field_ty(def: &StructDef, index: usize, args: &List(Ty), allocator: &Allocator? = null) Ty {
+    return subst(&def.fields[index].ty, &def.type_params, args, allocator)
 }
 
 // Core walk
@@ -355,6 +369,21 @@ fn next_pow2(v: usize) usize {
     let n: usize = 1
     while n < v { n = n * 2 }
     return n
+}
+
+// Whether a type is SPELLED as an aggregate. Purely syntactic - the
+// pointer-niche `Option(&T)` is nominal and so counts, even though its
+// runtime value is a bare pointer. Use `is_by_ref` for the runtime
+// classification; this stays the right test for `ir_of`, where the niche
+// form is `ptr` either way.
+pub fn is_aggregate(ty: &Ty) bool {
+    return ty.* match {
+        Nominal(_) => true,
+        Record(_) => true,
+        Tuple(_) => true,
+        Array(_) => true,
+        _ => false,
+    }
 }
 
 // Tests

@@ -89,6 +89,53 @@ in its fixtures so the assertions are no longer vacuous.
 
 ## Open Issues
 
+### Self-Host: Unary Expressions Are Never Type-Checked (and Lower on a Fallback)
+
+**Status:** Open — silent-wrong-code risk
+**Affected:** `lib/flang_typer/src/checker.f::check_expr_kind` (`_ => fresh_var()` catch-all), `lib/flang_driver/src/lower.f::lower_unary`
+
+`Unary` is one of the 8 `Expr` variants `check_expr_kind` does not handle (see docs/self-host.md §Type checking): `-x`, `!x`, `~x` type as unconstrained fresh vars and their operand subtree is never visited. Lowering then reads the node's type, gets the `i64` fallback, and emits integer FIR regardless of the operand: `-x` on an `f64` parameter emits `ineg(i64)` over a double — C's implicit conversions make it *compile* and truncate. Integer and bool cases mostly work by luck (consumers re-type by their own width). Fix is a small `check_unary` (Neg → operand's numeric type, Not → bool, BitNot → integer), after which `lower_unary`'s existing type reads become real; until then, any unary over floats through the bootstrap is wrong.
+
+---
+
+### Reference: Coexisting `Dict(u32, Ty)` and `Dict(u32, List(Ty))` ICE at Lowering
+
+**Status:** Open — worked around in `lib/flang_driver/src/symbol_table.f`
+**Affected:** reference compiler generic specialization (same family as the resolved "Same-Named Types ... Collided In Generic Specialization" entry)
+
+A module whose one struct holds both a `Dict(u32, Ty)` and a `Dict(u32, List(Ty))` field dies at reference-compiler lowering with `internal: unresolved type variable ?N reached lowering` — reported against an unrelated function (the first one in the file that touches any `Dict.get`). Each instantiation compiles fine alone; only the pair trips it. A `Dict` whose value type is a struct that itself carries a `List` (e.g. `Dict(u32, FnSig)` with `FnSig = { params: List(Ty), ret: Ty }`) hits the same ICE.
+
+**Workaround:** `SymbolTable` stores the return type as a singleton `List(Ty)` so both dicts share one instantiation. Once fixed, collapse `by_fn_params`/`by_fn_ret` back into one `Dict(u32, FnSig)`.
+
+---
+
+### Reference: Dict Field of a By-Value Local Loses Writes
+
+**Status:** Open — silent wrong code
+**Affected:** reference compiler place lowering (ADR-0003 family)
+
+```flang
+type Table = struct { by_a: Dict(u32, String), by_b: Dict(u64, u32) }
+fn lookup(self: &Table, k: u32) String? { return self.by_a.get(k) }
+// in a test:
+let t = Table { by_a = dict(), by_b = dict() }
+t.by_a.set(1u32, "x")
+t.lookup(1u32).is_some()   // false - the set through the local's field did not stick
+```
+
+A single dict as a plain local works; the write is lost when the dict is a field of a by-value local struct (with more than one dict field) and later read through a `&self` method. The self-host sources avoid the shape (dicts are built as locals and moved into structs on return), so nothing in-tree currently miscompiles — but it is a trap.
+
+---
+
+### Bootstrap `build` Overwrites Its Own Binary
+
+**Status:** Open — annoyance
+**Affected:** `bootstrap/src/main.f::build_project`
+
+The bootstrap project's output path is `build/flang` — the same path the running compiler was loaded from, and the same `build/flang.c` the reference stage-0 writes. A failed self-host link therefore deletes the stage-1 binary, and inspecting the two compilers' emitted C requires copying one aside first. Stage the self-host output under a distinct name (`build/flang-stage2`) or a separate directory.
+
+---
+
 ### `flang test` on `stdlib/std` ICEs in Lowering (pre-existing, now unmasked)
 
 **Status:** Open — reproduced at the commit before the Option-wrap removal; unrelated to it

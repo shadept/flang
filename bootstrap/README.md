@@ -20,18 +20,15 @@ src/main.f       — CLI entry point
 
 ## Roadmap
 
-- [x] Project skeleton + dependency on `flang_parser` and `flang_core`
-- [x] CLI argument parsing via `std.env.getopts`
-- [x] Subcommand dispatch (`build`, `fmt`, `lsp`, `cst`, `tokens`)
-- [x] Trivia-attached lexer (`flang_parser.lexer.tokenize`)
-- [x] Structured CST (decls, blocks, expressions, patterns)
-- [x] `flang_fmt` round-trip + trivia normalization (in-place rewrite)
-- [x] `dump_tokens` debug tool for the lexer
-- [x] AST projection (`flang_parser.projector.project_module`)
-- [ ] Codegen library (FIR + backends — see "Strategy" below)
-- [ ] Name resolution + symbol tables
-- [ ] Hindley-Milner type inference
-- [ ] Lowering to FIR
+The detailed, per-feature coverage matrix lives in
+[`docs/self-host.md`](../docs/self-host.md) — the source of truth for
+what lowers, what refuses, and what's next. High level:
+
+- [x] Frontend: lexer, CST, `flang_fmt` round-trip, AST projection
+- [x] Codegen library (`lib/flang_codegen`: FIR + C backend)
+- [x] Name resolution + symbol tables
+- [x] Hindley-Milner type inference (`lib/flang_typer`, 0 `-c` errors)
+- [ ] Lowering to FIR (see the matrix; scalars through aggregates done)
 - [ ] Self-host
 
 ## Status
@@ -39,18 +36,30 @@ src/main.f       — CLI entry point
 The frontend stack (lex → CST → AST) is complete in flang. `flang_fmt`
 round-trips every bootstrap source file byte-identical. `cst_explorer`
 emits a JSON dump of source + tokens + CST + AST + diagnostics, consumed
-by `cst_explorer_web` for visualization. The `bootstrap` CLI parses args
-and dispatches to sibling tools; the `build` subcommand is still a stub.
+by `cst_explorer_web` for visualization.
+
+`bootstrap build` runs end-to-end: it resolves the project, type-checks
+it with `flang_typer` — 0 `-c` errors across the compiler + stdlib
+(98 modules) — lowers to FIR via `flang_driver`, and emits native
+executables through `flang_codegen`, linking the stdlib's C runtime
+sidecars. Lowering covers a growing subset (milestones M1–M6: scalars,
+calls, control flow, assignment/places, match, indexing, and aggregate
+parameters/returns — by-pointer with callee copy, sret returns);
+anything outside it is refused rather than miscompiled. On the full
+self-build, every emitted function compiles and links; `main` itself
+still refuses (string interpolation, enum construction, defaulted
+arguments), so no stage-1 binary yet — see the header of
+`lib/flang_driver/src/lower.f` for what's next.
 
 The C# reference compiler (`src/FLang.*`) is the source of truth for
-semantics today. The self-host work is being done outside-in: pull each
-stage out as a reusable library, validate it under the existing pipeline,
-then wire it into `bootstrap build`.
+semantics today.
 
 ## Strategy
 
-Stages are split into reusable libraries (`lib/flang_parser`,
-`lib/flang_core`, future `lib/flang_codegen`) so each piece is testable
-in isolation and reusable by tools (`cst_explorer`, `flang_fmt`, LSP).
-The hard work — type inference, FIR lowering — stays in the bootstrap
-crate until it stabilises, then moves out.
+Stages are split into reusable libraries so each piece is testable in
+isolation and reusable by tools (`cst_explorer`, `flang_fmt`, LSP):
+`lib/flang_parser` (lex → CST → AST), `lib/flang_core` (shared
+primitives), `lib/flang_typer` (type inference), `lib/flang_codegen`
+(FIR + C backend), and `lib/flang_driver` (name resolution, AST → FIR
+lowering, project builds). The bootstrap crate is just the CLI shell
+over these libraries.

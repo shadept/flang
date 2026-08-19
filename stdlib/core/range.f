@@ -15,10 +15,8 @@ pub type Range = struct(T) {
 }
 
 pub fn op_index(r: &Range($T), index: usize) T? {
-    if index < 0 or index >= r.end - r.start {
-        return null
-    }
-    return r.start + index
+    if index < 0 or index >= r.end - r.start { return null }
+    return Some(r.start + index)
 }
 
 // =============================================================================
@@ -38,15 +36,8 @@ pub fn iter(r: &Range($T)) RangeIterator(T) {
 
 // Advance iterator and return next value
 pub fn next(it: &RangeIterator($T)) T? {
-    if it.current >= it.end {
-        return null
-    }
+    if it.current >= it.end { return null }
     let val = it.current
     it.current = it.current + 1
-    // Wrapped explicitly rather than leaning on the `T -> Option(T)`
-    // coercion: that rule is deliberately skipped when the payload is an
-    // unbound var, so under a generic instantiation this fell through to a
-    // structural unify of `T` against `Option(T)` and tripped the occurs
-    // check (E2071).
     return Some(val)
 }
