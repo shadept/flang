@@ -11,6 +11,13 @@ namespace FLang.IR;
 public class TypeLayoutService(ITypeResolver engine, INominalTypeRegistry nominalTypes)
 {
     private readonly Dictionary<string, IrType> _cache = [];
+    // The concrete NominalType each cache entry was lowered FROM (type args
+    // and fields fully substituted). The re-lower fan-out re-queues consumers
+    // from here: looking the consumer up in the registry instead hands back
+    // the generic TEMPLATE, whose raw fields only resolve while inference
+    // happens to have its vars bound - a layout computed from whatever the
+    // engine currently binds, and an ICE once the bindings roll back.
+    private readonly Dictionary<string, NominalType> _loweredNominals = [];
     private readonly List<(string Key, NominalType Nt, string CName)> _deferredRelower = [];
     // CNames currently queued for re-lower. A type whose by-value field is
     // tentative (sized against a stub) must itself be re-flagged, otherwise
@@ -215,12 +222,20 @@ public class TypeLayoutService(ITypeResolver engine, INominalTypeRegistry nomina
             var template = _nominalTypes.LookupNominalType(nt.Name);
             if (template != null && template.TypeArguments.Count == nt.TypeArguments.Count)
             {
-                // Build substitution: template TypeVar id -> concrete type arg
+                // Build substitution: template TypeVar id -> concrete type arg.
+                // The template's own parameters are matched RAW, without
+                // resolving them first: inference can have them temporarily
+                // bound (checking a use like `Dict(OwnedString, JsonValue)`
+                // binds the shared template vars), and resolving would then
+                // yield a non-var, leave `subst` empty, and skip the field
+                // substitution below — the layout would silently lean on live
+                // engine bindings that roll back before the deferred re-lower
+                // pass runs, handing that pass a template whose unresolved
+                // vars it then throws on.
                 var subst = new Dictionary<int, Type>();
                 for (int i = 0; i < template.TypeArguments.Count; i++)
                 {
-                    var templateArg = _engine.Resolve(template.TypeArguments[i]);
-                    if (templateArg is TypeVar tv)
+                    if (template.TypeArguments[i] is TypeVar tv)
                         subst[tv.Id] = _engine.Resolve(nt.TypeArguments[i]);
                 }
 
@@ -269,6 +284,7 @@ public class TypeLayoutService(ITypeResolver engine, INominalTypeRegistry nomina
         else
             stub = new IrStruct(concrete.Name, cName, [], 0, 1, 8);
         _cache[cacheKey] = stub;
+        _loweredNominals[cacheKey] = concrete;
         _loweringDepth++;
 
         IrType result;
@@ -326,19 +342,15 @@ public class TypeLayoutService(ITypeResolver engine, INominalTypeRegistry nomina
                 {
                     foreach (var kvp in _cache.ToList())
                     {
-                        NominalType? consumerNt = null;
                         string? consumerCName = null;
                         if (kvp.Value is IrStruct s && AnyFieldReferencesCName(s, changedCNames))
-                        {
-                            consumerNt = _nominalTypes.LookupNominalType(s.Name);
                             consumerCName = s.CName;
-                        }
                         else if (kvp.Value is IrEnum e && AnyVariantReferencesCName(e, changedCNames))
-                        {
-                            consumerNt = _nominalTypes.LookupNominalType(e.Name);
                             consumerCName = e.CName;
-                        }
-                        if (consumerNt != null && consumerCName != null)
+                        // Re-queue the consumer as the concrete nominal it was
+                        // lowered from (see _loweredNominals) - never the
+                        // registry template.
+                        if (consumerCName != null && _loweredNominals.TryGetValue(kvp.Key, out var consumerNt))
                             QueueRelower(kvp.Key, consumerNt, consumerCName);
                     }
                 }

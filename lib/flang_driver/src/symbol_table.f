@@ -45,14 +45,7 @@ import flang_driver.layout
 pub type SymbolTable = struct {
     by_fn_id: Dict(u32, String)
     by_decl: Dict(NodeId, u32)
-    // One signature, two parallel dicts, and the return type stored as a
-    // singleton list: the reference compiler ICEs (unresolved-var at
-    // lowering) when `Dict(u32, Ty)` and `Dict(u32, List(Ty))` coexist -
-    // a generic-specialization collision - so both dicts use the one
-    // instantiation and `FnSig` is assembled on lookup. See
-    // docs/known-issues.md.
-    by_fn_params: Dict(u32, List(Ty))
-    by_fn_ret: Dict(u32, List(Ty))
+    by_fn_sig: Dict(u32, FnSig)
 }
 
 // The declared signature lowering works from: the checker's parameter and
@@ -75,31 +68,24 @@ pub fn decl_fn_id(self: &SymbolTable, decl: &FunctionDecl) u32? {
 
 // The declared signature of a registered lowerable function.
 pub fn sig_of(self: &SymbolTable, fn_id: u32) FnSig? {
-    let params = self.by_fn_params.get(fn_id)
-    if params.is_none() { return null }
-    let ret = self.by_fn_ret.get(fn_id)
-    if ret.is_none() { return null }
-    let rl = ret.unwrap()
-    return Some(FnSig { params = params.unwrap(), ret = rl[0] })
+    return self.by_fn_sig.get(fn_id)
 }
 
 pub fn deinit(self: &SymbolTable) {
     self.by_fn_id.deinit()
     self.by_decl.deinit()
-    self.by_fn_params.deinit()
-    self.by_fn_ret.deinit()
+    self.by_fn_sig.deinit()
 }
 
 // Assigns symbols across a whole program. `seen` carries the ordinal
 // counter across modules, so the walk order fixes the ordinals - which is
 // why symbols are assigned before any body lowers, not during.
-// The two tables are held flat rather than as a nested `SymbolTable`:
+// The tables are held flat rather than as a nested `SymbolTable`:
 // mutating a dict two field-hops deep through a reference does not stick.
 pub type SymbolBuilder = struct {
     by_fn_id: Dict(u32, String)
     by_decl: Dict(NodeId, u32)
-    by_fn_params: Dict(u32, List(Ty))
-    by_fn_ret: Dict(u32, List(Ty))
+    by_fn_sig: Dict(u32, FnSig)
     nominals: &NominalRegistry
     allocator: &Allocator?
 }
@@ -111,8 +97,7 @@ pub type SymbolBuilder = struct {
 pub fn symbol_builder(result: &TypeCheckResult, allocator: &Allocator? = null) SymbolBuilder {
     let by_fn_id: Dict(u32, String) = dict(allocator)
     let by_decl: Dict(NodeId, u32) = dict(allocator)
-    let by_fn_params: Dict(u32, List(Ty)) = dict(allocator)
-    let by_fn_ret: Dict(u32, List(Ty)) = dict(allocator)
+    let by_fn_sig: Dict(u32, FnSig) = dict(allocator)
     for entry in result.functions.by_name {
         let overloads = entry.value
         for i in 0..overloads.len {
@@ -126,17 +111,13 @@ pub fn symbol_builder(result: &TypeCheckResult, allocator: &Allocator? = null) S
             let s = sig.unwrap()
             if !sig_lowerable(&s, f.is_foreign) { continue }
             by_decl.set(node_id_of(f.decl_span), f.id)
-            by_fn_params.set(f.id, s.params)
-            let rl: List(Ty) = list(1, allocator)
-            rl.push(s.ret)
-            by_fn_ret.set(f.id, rl)
+            by_fn_sig.set(f.id, s)
         }
     }
     return .{
         by_fn_id = by_fn_id,
         by_decl = by_decl,
-        by_fn_params = by_fn_params,
-        by_fn_ret = by_fn_ret,
+        by_fn_sig = by_fn_sig,
         nominals = &result.nominals,
         allocator = allocator,
     }
@@ -229,11 +210,11 @@ pub fn add_module(self: &SymbolBuilder, ast_module: &Module, fqn: String) {
 fn add_function_symbol(self: &SymbolBuilder, decl: &FunctionDecl, fqn: String) {
     let fid = self.by_decl.get(node_id_of(decl.span))
     if fid.is_none() { return }
-    let params = self.by_fn_params.get(fid.unwrap())
-    if params.is_none() { return }
-    let p = params.unwrap()
+    let sig = self.by_fn_sig.get(fid.unwrap())
+    if sig.is_none() { return }
+    let s = sig.unwrap()
     let sym = mangle_symbol(fqn, decl.name, is_foreign_directive(&decl.directives),
-        &p, self.nominals, self.allocator)
+        &s.params, self.nominals, self.allocator)
     self.by_fn_id.set(fid.unwrap(), sym)
 }
 
@@ -241,8 +222,7 @@ pub fn finish(self: &SymbolBuilder) SymbolTable {
     return SymbolTable {
         by_fn_id = self.by_fn_id,
         by_decl = self.by_decl,
-        by_fn_params = self.by_fn_params,
-        by_fn_ret = self.by_fn_ret,
+        by_fn_sig = self.by_fn_sig,
     }
 }
 

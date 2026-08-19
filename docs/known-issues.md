@@ -89,19 +89,16 @@ in its fixtures so the assertions are no longer vacuous.
 
 ## Open Issues
 
-### Self-Host: Unary Expressions Are Never Type-Checked (and Lower on a Fallback)
+### Self-Host: Unary Expressions Are Never Type-Checked (and Lower on a Fallback) — RESOLVED
 
-**Status:** Open — silent-wrong-code risk
-**Affected:** `lib/flang_typer/src/checker.f::check_expr_kind` (`_ => fresh_var()` catch-all), `lib/flang_driver/src/lower.f::lower_unary`
-
-`Unary` is one of the 8 `Expr` variants `check_expr_kind` does not handle (see docs/self-host.md §Type checking): `-x`, `!x`, `~x` type as unconstrained fresh vars and their operand subtree is never visited. Lowering then reads the node's type, gets the `i64` fallback, and emits integer FIR regardless of the operand: `-x` on an `f64` parameter emits `ineg(i64)` over a double — C's implicit conversions make it *compile* and truncate. Integer and bool cases mostly work by luck (consumers re-type by their own width). Fix is a small `check_unary` (Neg → operand's numeric type, Not → bool, BitNot → integer), after which `lower_unary`'s existing type reads become real; until then, any unary over floats through the bootstrap is wrong.
+**Status:** Resolved 2026-08-19 (M7) — `checker.f::check_unary` visits the operand and types the node (`!` unifies both sides with `bool`; `-`/`~` type as their operand), so `lower_unary`'s width/float reads are now real and `-x` on an `f64` emits `fneg`. Numeric-ness of `-`/`~` operands is still not *enforced* (an eventual rejection-power item, tracked in docs/self-host.md), but the silent-wrong-code path is gone. Self-check stayed at 0 errors across the 98 modules with the operand subtrees newly visited.
 
 ---
 
-### Reference: Coexisting `Dict(u32, Ty)` and `Dict(u32, List(Ty))` ICE at Lowering
+### Reference: Coexisting `Dict(u32, Ty)` and `Dict(u32, List(Ty))` ICE at Lowering — RESOLVED
 
-**Status:** Open — worked around in `lib/flang_driver/src/symbol_table.f`
-**Affected:** reference compiler generic specialization (same family as the resolved "Same-Named Types ... Collided In Generic Specialization" entry)
+**Status:** Resolved 2026-08-19 — same root cause as the stdlib/std ICE entry below (the re-lower fan-out re-queuing registry templates); repro compiles and runs correctly now. The `symbol_table.f` workaround (`by_fn_params`/`by_fn_ret` split) has been collapsed back into one `Dict(u32, FnSig)`, which now compiles through the reference compiler as the fix's in-tree proof.
+**Affected (was):** reference compiler generic specialization (same family as the resolved "Same-Named Types ... Collided In Generic Specialization" entry)
 
 A module whose one struct holds both a `Dict(u32, Ty)` and a `Dict(u32, List(Ty))` field dies at reference-compiler lowering with `internal: unresolved type variable ?N reached lowering` — reported against an unrelated function (the first one in the file that touches any `Dict.get`). Each instantiation compiles fine alone; only the pair trips it. A `Dict` whose value type is a struct that itself carries a `List` (e.g. `Dict(u32, FnSig)` with `FnSig = { params: List(Ty), ret: Ty }`) hits the same ICE.
 
@@ -136,32 +133,35 @@ The bootstrap project's output path is `build/flang` — the same path the runni
 
 ---
 
-### `flang test` on `stdlib/std` ICEs in Lowering (pre-existing, now unmasked)
+### `flang test` on `stdlib/std` ICEs in Lowering — RESOLVED
 
-**Status:** Open — reproduced at the commit before the Option-wrap removal; unrelated to it
-**Affected:** `flang test` in `stdlib/std`; `src/FLang.IR/TypeLayoutService.cs` (throw site), `src/FLang.Semantics/HmTypeChecker.Expressions.cs::FixUpCoercedArguments`
+**Status:** Resolved 2026-08-19 — `test-all` is 6/6 green for the first time.
+**Affected (was):** `src/FLang.IR/TypeLayoutService.cs`; `stdlib/std/path.c`
 
-Running `flang test --stdlib-path <repo>/stdlib` from `stdlib/std` dies with
-`E0000 internal: unresolved type variable ?3 reached lowering` while lowering
-`allocator.f::test_alloc`. The unresolved var is the bare type-name argument of
-a `size_of(...)` call — replacing one such call moves the ICE to the next one
-(`arena_new_page`'s `size_of(ArenaPage)`), so `FixUpCoercedArguments` (which
-re-records a bare type name as `Type(T)` after overload resolution) is not
-taking effect for `allocator.f` under this configuration.
+Two independent bugs, the second unmasked by fixing the first:
 
-Minimal repro: a project containing just `allocator.f` and `encoding/json.f`
-(even with json's `test` blocks stripped), compiled with `--stdlib-path`.
-Either file alone is fine. Suspected: the std-project-compiled-against-itself
-setup loads a module under two origins and type-checks one AST instance while
-lowering the other, with json.f's import graph flipping the order.
+1. **`TypeLayoutService`'s deferred re-lower queue re-lowered generic
+   *templates*.** The original suspicion (`FixUpCoercedArguments` not firing,
+   dual module origins) was wrong — the fixup worked; the throw came from
+   `EnsureTypeTableExists`'s layout walk draining the re-lower queue. Two
+   defects fed it: (a) the size-change fan-out re-queued consumers via
+   `LookupNominalType(name)`, which returns the registry **template** (raw
+   type-param vars in its fields) while keeping the concrete instantiation's
+   cache key; and (b) `LowerNominal` built its substitution from the
+   *resolved* template params, so while inference had them temporarily bound
+   (json.f checking `Dict(OwnedString, JsonValue)` binds the shared template
+   vars) the subst came out empty and layout silently leaned on live engine
+   bindings — which had rolled back by drain time, leaving `?3` to throw.
+   Fixed by matching template params raw and by snapshotting the concrete
+   nominal each cache entry was lowered from (`_loweredNominals`) so the
+   fan-out re-queues that, never the template. Also fixes the "Coexisting
+   `Dict(u32, Ty)` and `Dict(u32, List(Ty))`" entry above — same root cause.
 
-Two facts establish it as pre-existing: the identical ICE (`?3`, `test_alloc`,
-line 145) reproduces with the HEAD-built compiler on the HEAD stdlib, and it
-was masked until now only by an *earlier* pre-existing type-check error —
-`std/terminal.f`'s `write_uint(w, 10)` ambiguity (fixed in this pass with a
-`u32` suffix) stopped compilation before lowering ever ran. Every other suite
-(`flang_core`, `flang_parser`, `flang_typer`, `flang_driver`, `bootstrap`,
-and the full C# harness) is green.
+2. **`path.c` returned POSIX's `R_OK` (4) as its success code.** The sidecar
+   `#define`d `R_OK 0` and then included `<unistd.h>`, which redefines `R_OK`
+   to 4 (the `access()` read bit) — every successful `__flang_path_getcwd`
+   returned 4 and read as an error. Renamed to `PATH_R_OK`/`PATH_R_ERR`,
+   the prefixed convention process.c already documents for this exact trap.
 
 ---
 
@@ -361,7 +361,7 @@ Scope was narrower than it first appeared: nested *assignment* (`self.mid.inner.
 
 ### `dotnet test-all.cs` Fails Type-Checking `core/range.f` (E2071 Cyclic Type) — RESOLVED
 
-**Status:** Resolved 2026-08-18 — obsoleted by the removal of the implicit wrap (ADR-0005): `range.f::next` says `return Some(val)` and the coercion class this bug lived in no longer exists. The `stdlib/std` leg of `test-all` is now blocked only by the lowering ICE entry above.
+**Status:** Resolved 2026-08-18 — obsoleted by the removal of the implicit wrap (ADR-0005): `range.f::next` says `return Some(val)` and the coercion class this bug lived in no longer exists. The `stdlib/std` leg of `test-all` was then blocked by the lowering ICE entry above until 2026-08-19; `test-all` is 6/6 green now.
 **Affected:** C# `HmTypeChecker` occurs-check / optional inference
 
 `flang test` in `stdlib/std` fails to compile with:
@@ -474,13 +474,13 @@ Covered by six `test {}` blocks in `lower.f`, including one pinning that a call 
 
 **Coverage boundary — what "0 errors" measures.** Re-measured 2026-08-18, after M5: the boundary has moved a long way, and the caveat is now much narrower than it was.
 
-- `check_expr_kind` (`checker.f`) handles **16 of 24** `Expr` variants. The `_ => fresh_var()` catch-all still returns without recursing, so the subtree under an unhandled node is never visited. Unhandled: `Lambda`, `Unary`, `ArrayLit`, `InterpolatedString`, `NullPropagation`, `Coalesce`, `Try`, `Error`.
+- `check_expr_kind` (`checker.f`) handles **19 of 24** `Expr` variants (M7 added `Unary`; M8 added `Coalesce` and `Try`). The `_ => fresh_var()` catch-all still returns without recursing, so the subtree under an unhandled node is never visited. Unhandled: `Lambda`, `ArrayLit`, `InterpolatedString`, `NullPropagation`, `Error`.
 - `check_stmt` handles **all 10** `Stmt` variants — `For`, `While`, `Loop` and `Defer` bodies are walked, and `check_stmt` reports divergence so a `return` inside a branch does not drag a block's type to `void`.
 - `check_binary` really unifies its operands (pointer arithmetic deliberately excepted, where the operands must *not* unify), so `1 + "hello"` is rejected.
 - `check_assignment` unifies right into left. A non-place left side (`f() = 1`) is still not rejected here; lowering refuses the function instead, so the failure is loud but the diagnostic is imprecise.
 - `check_index` resolves built-in array/slice indexing and user `op_index_ref` / `op_index`, and records the pick. It does not report **E2077** (a type declaring both operator forms), which would need a non-committing probe of the losing shape; the winner is the same either way, only the diagnostic is missing.
 
-What that leaves: lambdas and the optional-flavoured operators (`?.`, `??`, `?`) are the remaining unvisited subtrees. Declarations, signatures, the call graph, control flow, assignment, `match` and indexing are all genuinely checked.
+What that leaves: lambdas, array literals, interpolated strings and `?.` are the remaining unvisited subtrees (M8 closed `?` and `??`). Declarations, signatures, the call graph, control flow, assignment, `match`, indexing, unary and the optional operators are all genuinely checked.
 
 **Harness scoreboard (through the bootstrap).** The lit-style corpus runs through any compiler binary via `$FLANG` (see docs/architecture.md, "Execution mode"): `FLANG=bootstrap/build/flang dotnet test.cs`.
 

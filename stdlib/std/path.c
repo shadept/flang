@@ -26,8 +26,12 @@
 #define PATH_PERMISSION_DENIED 3
 #define PATH_INVALID_ARGUMENT  4
 
-#define R_OK  0
-#define R_ERR 1
+/* Prefixed, NOT bare `R_OK`/`R_ERR`: POSIX <unistd.h> defines `R_OK` as 4
+ * (the access() read-permission bit) and silently redefines a bare macro
+ * after the include below - `return R_OK` then returns 4 and every success
+ * reads as an error on the FLang side. Same trap process.c documents. */
+#define PATH_R_OK  0
+#define PATH_R_ERR 1
 
 static int32_t path_err_from_errno(int e) {
     switch (e) {
@@ -49,7 +53,7 @@ static int32_t path_err_from_errno(int e) {
 #include <windows.h>
 
 int __flang_path_getcwd(uint8_t* buf, size_t cap, size_t* out_len, int32_t* out_err) {
-    if (!buf || cap == 0) { *out_err = PATH_INVALID_ARGUMENT; return R_ERR; }
+    if (!buf || cap == 0) { *out_err = PATH_INVALID_ARGUMENT; return PATH_R_ERR; }
 
     /* GetCurrentDirectoryA returns the length without the terminator on success;
      * if the buffer is too small it returns the required length INCLUDING the
@@ -66,15 +70,15 @@ int __flang_path_getcwd(uint8_t* buf, size_t cap, size_t* out_len, int32_t* out_
             case ERROR_FILENAME_EXCED_RANGE: *out_err = PATH_NAME_TOO_LONG; break;
             default: *out_err = PATH_IOERR; break;
         }
-        return R_ERR;
+        return PATH_R_ERR;
     }
     if ((size_t)n >= cap) {
         /* Required buffer didn't fit. */
         *out_err = PATH_NAME_TOO_LONG;
-        return R_ERR;
+        return PATH_R_ERR;
     }
     *out_len = (size_t)n;
-    return R_OK;
+    return PATH_R_OK;
 }
 
 #else
@@ -82,13 +86,13 @@ int __flang_path_getcwd(uint8_t* buf, size_t cap, size_t* out_len, int32_t* out_
 #include <unistd.h>
 
 int __flang_path_getcwd(uint8_t* buf, size_t cap, size_t* out_len, int32_t* out_err) {
-    if (!buf || cap == 0) { *out_err = PATH_INVALID_ARGUMENT; return R_ERR; }
+    if (!buf || cap == 0) { *out_err = PATH_INVALID_ARGUMENT; return PATH_R_ERR; }
     if (!getcwd((char*)buf, cap)) {
         *out_err = path_err_from_errno(errno ? errno : EIO);
-        return R_ERR;
+        return PATH_R_ERR;
     }
     *out_len = strlen((const char*)buf);
-    return R_OK;
+    return PATH_R_OK;
 }
 
 #endif
