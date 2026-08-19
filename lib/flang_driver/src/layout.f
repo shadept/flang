@@ -98,6 +98,14 @@ pub fn field_ty(def: &StructDef, index: usize, args: &List(Ty), allocator: &Allo
     return subst(&def.fields[index].ty, &def.type_params, args, allocator)
 }
 
+// The declared type of variant `vnum`'s payload `index` with the
+// instantiation's type arguments substituted in - the enum-side mirror of
+// `field_ty`. Scratch - see `subst`: the result aliases the definition's
+// storage and arena-boxed nodes; never deinit it.
+pub fn variant_payload_ty(def: &EnumDef, vnum: usize, index: usize, args: &List(Ty), allocator: &Allocator? = null) Ty {
+    return subst(&def.variants[vnum].payloads[index], &def.type_params, args, allocator)
+}
+
 // Core walk
 
 fn layout_rec(ty: &Ty, reg: &NominalRegistry, alloc: &Allocator?) Layout {

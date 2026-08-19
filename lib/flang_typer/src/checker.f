@@ -928,6 +928,9 @@ fn check_expr_kind(self: &Checker, expr: &Expr) Ty {
         Match(m) => check_match(self, &m),
         Index(ix) => check_index(self, &ix),
         Range(r) => check_range(self, &r),
+        Unary(u) => check_unary(self, &u),
+        Coalesce(co) => check_coalesce(self, &co),
+        Try(tr) => check_try(self, &tr),
         _ => self.engine.fresh_var(),
     }
 }
@@ -1129,6 +1132,125 @@ fn check_address_of(self: &Checker, a: &AddressOfExpr) Ty {
     return self.engine.mk_ref(inner)
 }
 
+// `-x`, `!x`, `~x`. `!` fixes both sides to bool; `-` and `~` type as
+// their operand, so a suffix-less literal operand stays open for the
+// context to resolve. Numeric-ness of `-`/`~` operands is not enforced
+// yet - rejection power lags the reference here (docs/self-host.md) -
+// but the operand subtree is visited and the node gets a real type,
+// which is what lowering's width/float decisions read.
+fn check_unary(self: &Checker, u: &UnaryExpr) Ty {
+    let inner = check_expr(self, u.operand)
+    return u.op match {
+        Not => {
+            unify_expected(self, inner, Ty.Prim(PrimitiveKind.Bool), E_TYPE_MISMATCH, u.span)
+            Ty.Prim(PrimitiveKind.Bool)
+        },
+        Neg => inner,
+        BitNot => inner,
+    }
+}
+
+// The `T` of an `Option(T)`, or null when `ty` is not the well-known
+// Option nominal.
+fn option_inner(self: &Checker, ty: &Ty) Ty? {
+    let nr = ty.* match {
+        Nominal(n) => n,
+        _ => return null,
+    }
+    let id = self.nominals.by_fqn.get(FQN_OPTION)
+    if id.is_none() { return null }
+    if id.unwrap() != nr.id { return null }
+    if nr.args.len != 1 { return null }
+    return Some(nr.args[0])
+}
+
+// `a ?? b` - `a` must be `Option(T)`. Two result shapes, matching the
+// reference checker: `Option(T) ?? Option(T)` chains and keeps the
+// Option; `Option(T) ?? T` unwraps to `T`. The stdlib's `op_coalesce`
+// overloads exist only for Option and are shadowed by these built-in
+// paths, so no operator dispatch happens here (the reference resolves
+// the same way).
+fn check_coalesce(self: &Checker, c: &CoalesceExpr) Ty {
+    let lhs = self.engine.resolve(check_expr(self, c.lhs))
+    // Poison absorbs: the operand's error is already reported.
+    let is_err = lhs match { Error => true, _ => false }
+    if is_err {
+        let _r = check_expr(self, c.rhs)
+        return Ty.Error
+    }
+    let inner = option_inner(self, &lhs)
+    if inner.is_none() {
+        let _r = check_expr(self, c.rhs)
+        push_diag_e(self, c.span, E_TYPE_MISMATCH,
+            from_view("left operand of `??` must be an Option"))
+        return self.engine.fresh_var()
+    }
+    let t = inner.unwrap()
+    let rhs = check_expr(self, c.rhs)
+    let rres = self.engine.resolve(rhs)
+    let rinner = option_inner(self, &rres)
+    if rinner.is_some() {
+        unify_expected(self, rinner.unwrap(), t, E_TYPE_MISMATCH, c.span)
+        return lhs
+    }
+    unify_expected(self, rhs, t, E_TYPE_MISMATCH, c.span)
+    return t
+}
+
+// `expr?` (RFC-009). The reference desugars into a synthesized
+// `op_try(expr) match { Continue(v) => v, Return(r) => return r }` AST
+// and infers over that; node ids here are span-keyed, so synthesized
+// nodes would collide with real ones. The shape is checked directly
+// instead - resolve `op_try` against the operand, require its return to
+// be `TryResult(T, R)`, take `T` as the expression's type, and unify `R`
+// with the enclosing function's declared return - exactly what inference
+// over the desugar concludes. The pick is recorded for lowering, which
+// emits the call, the tag branch, and the early return itself.
+fn check_try(self: &Checker, t: &TryExpr) Ty {
+    let operand = check_expr(self, t.operand)
+    if self.fn_stack.len == 0 {
+        push_diag_e(self, t.span, E_TRY_OUTSIDE_FN,
+            from_view("`?` operator outside of a function"))
+        return self.engine.fresh_var()
+    }
+
+    let args: List(Ty) = list(1, self.allocator)
+    args.push(operand)
+    let pick = operator_pick(self, "op_try", &args, t.span)
+    args.deinit()
+    if pick.is_none() {
+        push_diag_e(self, t.span, E_NO_OP_TRY,
+            from_view("the `?` operator requires an `op_try` overload for the operand type"))
+        return self.engine.fresh_var()
+    }
+    let p = pick.unwrap()
+
+    let nr = self.engine.resolve(p.ret) match {
+        Nominal(n) => Some(n),
+        _ => null,
+    }
+    let tr_id = self.nominals.by_fqn.get(FQN_TRY_RESULT)
+    let ok = nr.is_some() and tr_id.is_some()
+    if ok { ok = nr.unwrap().id == tr_id.unwrap() and nr.unwrap().args.len == 2 }
+    if !ok {
+        push_diag_e(self, t.span, E_NO_OP_TRY,
+            from_view("`op_try` must return `TryResult(T, R)`"))
+        return self.engine.fresh_var()
+    }
+    let n = nr.unwrap()
+
+    // The early-returned `R` must fit the enclosing function's declared
+    // return type - the constraint the desugar's `return r` arm imposes.
+    let frame = &self.fn_stack[self.fn_stack.len - 1]
+    unify_expected(self, n.args[1], frame.return_ty, E_RETURN_MISMATCH, t.span)
+
+    self.results.record_operator(node_id_of(t.span), ResolvedOperator {
+        function_id = p.id, negate_result = false,
+        cmp_derived_op = null, is_ref_form = false,
+    })
+    return n.args[0]
+}
+
 // `operand.*` - peels one reference. A non-reference operand defers to a
 // fresh var so an already-reported error does not cascade.
 fn check_deref(self: &Checker, d: &DereferenceExpr) Ty {
@@ -1314,6 +1436,19 @@ fn user_index(self: &Checker, idx: &IndexExpr, base_ty: Ty, rbase: &Ty, index_ty
 // Unlike a call site this must not report on failure - the caller tries
 // several shapes and reports once at the end.
 fn index_operator(self: &Checker, name: String, self_ty: Ty, index_ty: Ty, span: SourceSpan) OverloadPick? {
+    let args: List(Ty) = list(2, self.allocator)
+    args.push(self_ty)
+    args.push(index_ty)
+    let pick = operator_pick(self, name, &args, span)
+    args.deinit()
+    return pick
+}
+
+// Resolve one operator function (`op_index`, `op_try`, ...) against the
+// visible registry candidates. Unlike a call site this must not report on
+// failure - callers try several shapes, or supply their own diagnostic,
+// and report once at the end.
+fn operator_pick(self: &Checker, name: String, args: &List(Ty), span: SourceSpan) OverloadPick? {
     let vis = current_visibility(self)
     let cands = self.functions.lookup(name, &vis) match {
         FnLookFound(c) => Some(c),
@@ -1322,20 +1457,15 @@ fn index_operator(self: &Checker, name: String, self_ty: Ty, index_ty: Ty, span:
     if cands.is_none() { return null }
     let candidates = cands.unwrap()
 
-    let args: List(Ty) = list(2, self.allocator)
-    args.push(self_ty)
-    args.push(index_ty)
-
     // Probe first: `resolve_overload` commits its unifications and reports
     // mismatches, so a losing shape would both pollute the substitution and
     // emit a diagnostic the caller is about to supersede.
     let viable = false
     for i in 0..candidates.len {
-        if probe_candidate(self, &candidates[i], &args).is_some() { viable = true }
+        if probe_candidate(self, &candidates[i], args).is_some() { viable = true }
     }
-    let pick = if viable { resolve_overload(self, &candidates, &args, span) } else { null }
+    let pick = if viable { resolve_overload(self, &candidates, args, span) } else { null }
 
-    args.deinit()
     candidates.deinit()
     return pick
 }
@@ -2669,4 +2799,75 @@ test "a bare value branch does not implicitly wrap into an optional" {
         [OPTION_SRC, "import core.option\nfn f(c: bool, v: i32) i32? { if c { return v } else { return null } }\n"],
         ["core.option", "branch_bare"])
     assert_true(errors > 0, "return of bare `T` against `T?` is an error")
+}
+
+test "unary operators type from their operand, not a fresh var" {
+    // `-x` on f64 must record f64 - the fresh-var fallback made lowering
+    // emit integer negation over a double (docs/known-issues.md). The
+    // wrong-result-type variants prove the node carries the operand's
+    // type rather than an unconstrained var that unifies with anything.
+    let errors = count_check_errors(
+        ["fn f(x: f64) f64 { return -x }\nfn g(x: u32) u32 { return ~x }\nfn h(b: bool) bool { return !b }\n"],
+        ["unary_ok"])
+    assert_true(errors == 0, "neg/bitnot/not over matching operand types check clean")
+
+    let neg_errors = count_check_errors(
+        ["fn f(x: f64) i32 { return -x }\n"],
+        ["unary_neg_ty"])
+    assert_true(neg_errors > 0, "`-f64` returned as i32 is a mismatch, not a silent fresh var")
+}
+
+test "logical not requires a bool operand" {
+    let errors = count_check_errors(
+        ["fn f(x: i32) bool { return !x }\n"],
+        ["unary_not_i32"])
+    assert_true(errors > 0, "`!` over i32 is rejected")
+}
+
+// M8: `??` and `?`.
+
+test "coalesce unwraps or chains by the right operand's shape" {
+    let errors = count_check_errors(
+        [OPTION_SRC, "import core.option\nfn f(o: i32?, d: i32) i32 { return o ?? d }\nfn g(a: i32?, b: i32?) i32? { return a ?? b }\n"],
+        ["core.option", "coalesce_ok"])
+    assert_true(errors == 0, "Option(T) ?? T and Option(T) ?? Option(T) both check clean")
+}
+
+test "coalesce rejects a mismatched fallback and a non-Option left side" {
+    let mismatch = count_check_errors(
+        [OPTION_SRC, "import core.option\nfn f(o: i32?, d: f64) i32 { return o ?? d }\n"],
+        ["core.option", "coalesce_bad_rhs"])
+    assert_true(mismatch > 0, "f64 fallback against Option(i32) is a mismatch")
+
+    let bare = count_check_errors(
+        [OPTION_SRC, "import core.option\nfn g(x: i32) i32 { return x ?? 0 }\n"],
+        ["core.option", "coalesce_bad_lhs"])
+    assert_true(bare > 0, "`??` over a non-Option left side is rejected")
+}
+
+// The `?` fixtures register the real well-known modules: `core.try` for
+// `TryResult` and `core.option` for `Option` plus its `op_try`, copied
+// from the stdlib.
+const TRY_SRC: String = "pub type TryResult = enum(T, R) {\n    Continue(T),\n    Return(R),\n}\n"
+const OPTION_TRY_SRC: String = "import core.try\npub type Option = enum(T) {\n    None,\n    Some(T),\n}\npub fn op_try(self: Option($T)) TryResult(T, Option($U)) {\n    return self match {\n        Some(v) => TryResult.Continue(v),\n        None => TryResult.Return(None),\n    }\n}\n"
+
+test "postfix ? types as the Continue payload and constrains the return" {
+    let errors = count_check_errors(
+        [TRY_SRC, OPTION_TRY_SRC, "import core.option\nfn f(o: i32?) i32? { let v = o? return Some(v + 1) }\n"],
+        ["core.try", "core.option", "try_ok"])
+    assert_true(errors == 0, "`o?` continues with i32 inside a fn returning i32?")
+}
+
+test "postfix ? in a function with an incompatible return is rejected" {
+    let errors = count_check_errors(
+        [TRY_SRC, OPTION_TRY_SRC, "import core.option\nfn f(o: i32?) i32 { let v = o? return v }\n"],
+        ["core.try", "core.option", "try_bad_ret"])
+    assert_true(errors > 0, "the early-returned Option cannot fit a bare i32 return")
+}
+
+test "postfix ? without an op_try overload is E2092" {
+    let errors = count_check_errors(
+        [TRY_SRC, OPTION_TRY_SRC, "import core.option\ntype Plain = struct { v: i32 }\nfn f(p: Plain) i32 { let v = p? return v }\n"],
+        ["core.try", "core.option", "try_none"])
+    assert_true(errors > 0, "`?` on a type with no op_try is rejected")
 }

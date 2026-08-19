@@ -26,15 +26,23 @@
 // a value's true source type checks it against the node type before
 // handing bytes over - see `repr_compatible`.
 //
+// Milestone 7 adds enum variant construction (`Some(x)`, `Color.Red`,
+// bare `None`) - the tagged form builds tag-then-payload into a fresh
+// slot, the pointer-niche `Option(&T)` is a retype (`None` is the null
+// pointer, `Some(p)`'s value IS its payload pointer). Multi-payload
+// construction refuses, matching the pattern side.
+//
+// Milestone 8 adds the optional operators: `a ?? b` as a built-in Option
+// branch (short-circuit right side, niche and tagged, unwrap and chain
+// forms) and `a?` as the checker-recorded `op_try` call plus a tag
+// branch and an early return - the reference's desugar, emitted directly.
+//
 // Still out of subset: range slicing over a built-in base (`xs[a..b]`),
 // which has to build a `Slice` with bounds clamped against the base's
 // length; `op_set_index`, so a value-form index stays unassignable;
-// enum variant construction (`Some(x)`, `Color.Red`), so tagged values
-// can be received and matched but not built (the `null` literal is the
-// one exception - `None` is tag 0, a zeroed buffer); calls that omit
-// defaulted arguments; and binary/unary operators over aggregates, whose
-// user-defined operator functions the checker does not record on the
-// node.
+// calls that omit defaulted arguments; and binary/unary operators over
+// aggregates, whose user-defined operator functions the checker does not
+// record on the node.
 //
 // The complete per-feature coverage matrix is docs/self-host.md - keep
 // it in sync with any change to what lowers or refuses here.
@@ -744,11 +752,11 @@ fn lower_expr(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, expr: &Expr) Operand
         // `$"…"` - needs the data segment for the literal pieces and a
         // formatting call per interpolation.
         InterpolatedString(_) => unlowerable(ctx),
-        // `a?.b`, `a ?? b`, `a?` - each is a branch on an optional plus a
-        // desugaring the checker has not recorded.
+        // `a?.b` - a branch on an optional plus a desugaring the checker
+        // has not recorded (3 measured sites - rewritable-away).
         NullPropagation(_) => unlowerable(ctx),
-        Coalesce(_) => unlowerable(ctx),
-        Try(_) => unlowerable(ctx),
+        Coalesce(co) => lower_coalesce(ctx, bb, env, &co),
+        Try(tr) => lower_try(ctx, bb, env, &tr),
         // `a..b` outside a `for` header has no value representation yet;
         // `for` handles its own range directly (see `lower_for_range`).
         Range(_) => unlowerable(ctx),
@@ -981,6 +989,13 @@ fn range_cond(bb: &BlockBuilder, ir: IrType, sg: bool, inclusive: bool, iv: Oper
 // when the callee's signature was outside the lowerable subset - in that
 // case there is no definition in the module to link against.
 fn lower_call(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, call: &CallExpr) Operand {
+    // A call the checker resolved to an enum variant (`Some(x)`,
+    // `Color.Red(x)`) is construction, not a function call - there is no
+    // callee symbol, and a member-access callee's receiver names a type,
+    // not a value to evaluate.
+    let vnum = resolved_variant(ctx, call.span)
+    if vnum.is_some() { return lower_variant_call(ctx, bb, env, call, vnum.unwrap()) }
+
     let fid = callee_fn_id(ctx, call)
     if fid.is_none() { return unlowerable(ctx) }
     let sym_opt = ctx.syms.lookup_symbol(fid.unwrap())
@@ -1478,6 +1493,208 @@ fn payload_offset(ctx: &LowerCtx, ty: &Ty) usize {
     return enum_layout(&et.def, &et.args, &ctx.result.nominals, ctx.allocator).payload_offset
 }
 
+// Enum variant construction (M7)
+//
+// The checker resolved the variant and recorded `RtEnumVariant` on the
+// node - the same seam patterns use - so lowering only builds the value.
+// Three node shapes construct: a call (`Some(x)`, `Color.Red(x)`), a bare
+// identifier (`None`, an unqualified `Red`), and a qualified member
+// access (`Color.Red`). The niche `Option(&T)` is a retype, not a build:
+// `None` is the null pointer and `Some(p)`'s value IS its payload
+// pointer. The tagged form builds into a fresh slot - discriminant first
+// (the layout `discriminant_test` reads), payload at the layout's offset.
+
+// `Some(x)` / `Color.Red(x)` - construction with a payload.
+fn lower_variant_call(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, call: &CallExpr, vnum: u32) Operand {
+    if call.args.len == 0 { return lower_variant_nullary(ctx, bb, call.span, vnum) }
+    // A multi-payload variant needs per-payload offsets from the variant's
+    // internal field layout. Measured near-zero in the self-host sources
+    // (docs/self-host.md); refused, matching the pattern side.
+    if call.args.len > 1 { return unlowerable(ctx) }
+    let payload = call.args[0] match {
+        Positional(e) => e,
+        // Named arguments never resolve to a variant - the checker leaves
+        // those calls unresolved.
+        Named(_) => return unlowerable(ctx),
+    }
+
+    let ty = node_ty(ctx.result, call.span)
+    let t = resolve_enum(&ty, &ctx.result.nominals)
+    if t.is_none() { return unlowerable(ctx) }
+    let et = t.unwrap()
+    let el = enum_layout(&et.def, &et.args, &ctx.result.nominals, ctx.allocator)
+
+    // Niche `Some(p)`: the payload pointer is the whole value.
+    if el.is_niche { return lower_expr(ctx, bb, env, payload) }
+
+    // The slot stores by the variant's DECLARED payload type (substituted
+    // through the instantiation) - the memory's truth. A coercion that
+    // rewrote the argument node's representation refuses - see
+    // `repr_compatible`.
+    let pty = variant_payload_ty(&et.def, vnum as usize, 0, &et.args, ctx.allocator)
+    let aty = node_ty(ctx.result, expr_span(payload))
+    if !repr_compatible(ctx, &aty, &pty) { return unlowerable(ctx) }
+
+    let v = lower_expr(ctx, bb, env, payload)
+    let slot = bb.stack_slot(el.size as u64, el.align as u64)
+    bb.store(IrType.I32, Operand.IntConst(vnum as i64), slot)
+    let fp = bb.gep(slot, Operand.IntConst(el.payload_offset as i64))
+    if is_by_ref(ctx, &pty) {
+        let psize = layout_of(&pty, &ctx.result.nominals, ctx.allocator).size
+        bb.memcpy(fp, v, Operand.IntConst(psize as i64))
+    } else {
+        bb.store(ir_of(&pty), v, fp)
+    }
+    return slot
+}
+
+// A payload-less variant in value position: `None`, `Red`, `Color.Red`.
+// The tagged form zero-fills the whole slot before the tag store so a
+// later whole-value copy never reads uninitialized bytes - the same
+// zeroed-buffer form `lower_null` emits.
+fn lower_variant_nullary(ctx: &LowerCtx, bb: &BlockBuilder, span: SourceSpan, vnum: u32) Operand {
+    let ty = node_ty(ctx.result, span)
+    let t = resolve_enum(&ty, &ctx.result.nominals)
+    if t.is_none() { return unlowerable(ctx) }
+
+    let et = t.unwrap()
+    let el = enum_layout(&et.def, &et.args, &ctx.result.nominals, ctx.allocator)
+
+    // The only nullary variant of the niche form is `None` - the null
+    // pointer by definition.
+    if el.is_niche { return Operand.NullPtr }
+
+    let slot = bb.stack_slot(el.size as u64, el.align as u64)
+    bb.memset(slot, Operand.IntConst(0), Operand.IntConst(el.size as i64))
+    if vnum != 0u32 {
+        bb.store(IrType.I32, Operand.IntConst(vnum as i64), slot)
+    }
+    return slot
+}
+
+// Optional operators (M8)
+
+// `a ?? b` - `a` is an Option (the checker enforced it); yield its
+// payload when present, else evaluate `b` - and only then, the right
+// side short-circuits like `or`. Two result shapes, set by the checker:
+// the unwrap form (`Option(T) ?? T`) yields `T`, the chain form
+// (`Option(T) ?? Option(T)`) yields the Option itself. The niche form
+// needs no payload addressing: the pointer IS the payload, and the chain
+// result is the same pointer either way.
+fn lower_coalesce(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, c: &CoalesceExpr) Operand {
+    let lty = node_ty(ctx.result, expr_span(c.lhs))
+    let t = resolve_enum(&lty, &ctx.result.nominals)
+    if t.is_none() { return unlowerable(ctx) }
+    let et = t.unwrap()
+    let el = enum_layout(&et.def, &et.args, &ctx.result.nominals, ctx.allocator)
+
+    let result_ty = node_ty(ctx.result, c.span)
+    let ir = ir_of(&result_ty)
+    let chains = equals(&result_ty, &lty)
+
+    let lhs = lower_expr(ctx, bb, env, c.lhs)
+    let present = if el.is_niche {
+        bb.icmp_ne(IrType.Ptr, lhs, Operand.NullPtr)
+    } else {
+        let tag = bb.load(IrType.I32, lhs)
+        bb.icmp_ne(IrType.I32, tag, Operand.IntConst(0))
+    }
+
+    let fb = bb.fb
+    let some_bb = fb.block(fresh_label(bb, "co_some", ctx.allocator))
+    let else_bb = fb.block(fresh_label(bb, "co_else", ctx.allocator))
+    let join = fb.block(fresh_label(bb, "co_join", ctx.allocator), ir)
+    bb.br_if(present, some_bb.label(), else_bb.label())
+
+    bb.move_to(&some_bb)
+    // The kept value: the option itself for the chain and niche forms,
+    // the payload behind the tag otherwise.
+    let kept = lhs
+    if !chains and !el.is_niche {
+        let addr = bb.gep(lhs, Operand.IntConst(el.payload_offset as i64))
+        if is_by_ref(ctx, &result_ty) { kept = addr } else { kept = bb.load(ir_of(&result_ty), addr) }
+    }
+    let some_args: List(Operand) = list(1, ctx.allocator)
+    some_args.push(kept)
+    bb.br_args(join.label(), some_args)
+
+    bb.move_to(&else_bb)
+    let rhs = lower_expr(ctx, bb, env, c.rhs)
+    let else_args: List(Operand) = list(1, ctx.allocator)
+    else_args.push(rhs)
+    bb.br_args(join.label(), else_args)
+
+    bb.move_to(&join)
+    return join.param(0)
+}
+
+// `expr?` (RFC-009) - the checker resolved `op_try`, proved its return
+// is `TryResult(T, R)`, and unified `R` with the enclosing function's
+// return. Lowering emits what the reference's desugar produces: call
+// `op_try(operand)`, branch on the result's tag, early-return the
+// `Return` payload, continue with the `Continue` payload (`Continue` is
+// declared first in core.try, so its tag is 0). A generic `op_try` - the
+// stdlib's Option/Result forms - has no monomorphic symbol until
+// specialization (M10), so the lookup refuses and the transitive pass
+// takes the caller with it, like every other generic call today.
+fn lower_try(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, t: &TryExpr) Operand {
+    let op = ctx.result.get_operator(node_id_of(t.span))
+    if op.is_none() { return unlowerable(ctx) }
+    let o = op.unwrap()
+    let sym = ctx.syms.lookup_symbol(o.function_id)
+    let sig_opt = ctx.syms.sig_of(o.function_id)
+    if sym.is_none() { return unlowerable(ctx) }
+    if sig_opt.is_none() { return unlowerable(ctx) }
+    let sig = sig_opt.unwrap()
+    if sig.params.len != 1 { return unlowerable(ctx) }
+
+    // The TryResult instantiation comes from the callee's declared return
+    // - the memory's truth for the tag test and payload access. TryResult
+    // is never niche, so the tagged layout always applies.
+    let tr = resolve_enum(&sig.ret, &ctx.result.nominals)
+    if tr.is_none() { return unlowerable(ctx) }
+    let et = tr.unwrap()
+    if et.def.fqn != FQN_TRY_RESULT { return unlowerable(ctx) }
+    if et.args.len != 2 { return unlowerable(ctx) }
+    let el = enum_layout(&et.def, &et.args, &ctx.result.nominals, ctx.allocator)
+
+    let cont_ty = et.args[0]
+    let ret_ty = et.args[1]
+    let want = node_ty(ctx.result, t.span)
+    if !repr_compatible(ctx, &cont_ty, &want) { return unlowerable(ctx) }
+    // An aggregate early return needs the sret buffer; its absence means
+    // the checker already reported the return mismatch.
+    if is_by_ref(ctx, &ret_ty) and ctx.sret.is_none() { return unlowerable(ctx) }
+
+    let v = lower_expr(ctx, bb, env, t.operand)
+    let args: List(Operand) = list(2, ctx.allocator)
+    args.push(v)
+    let res = emit_call(ctx, bb, sym.unwrap(), &sig, args)
+
+    let tag = bb.load(IrType.I32, res)
+    let is_cont = bb.icmp_eq(IrType.I32, tag, Operand.IntConst(0))
+    let fb = bb.fb
+    let cont_bb = fb.block(fresh_label(bb, "try_cont", ctx.allocator))
+    let ret_bb = fb.block(fresh_label(bb, "try_ret", ctx.allocator))
+    bb.br_if(is_cont, cont_bb.label(), ret_bb.label())
+
+    // The early return, mirroring `lower_return`'s sret/scalar split.
+    // Both variants' single payloads sit at the shared payload offset.
+    bb.move_to(&ret_bb)
+    let raddr = bb.gep(res, Operand.IntConst(el.payload_offset as i64))
+    if ctx.sret.is_some() {
+        bb.memcpy(ctx.sret.unwrap(), raddr, Operand.IntConst(ctx.ret_size as i64))
+        bb.ret_void()
+    } else {
+        bb.ret(bb.load(ir_of(&ret_ty), raddr))
+    }
+
+    bb.move_to(&cont_bb)
+    let paddr = bb.gep(res, Operand.IntConst(el.payload_offset as i64))
+    if is_by_ref(ctx, &cont_ty) { return paddr }
+    return bb.load(ir_of(&cont_ty), paddr)
+}
+
 // Assignment and address-of
 
 // `lhs = rhs` - resolve the destination's address, then evaluate the right
@@ -1607,6 +1824,10 @@ fn member_address(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, ma: &MemberAcces
 // width comes from the field's declared type - the memory's truth - and a
 // representation change against the node type (a coercion) refuses.
 fn lower_member(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, ma: &MemberAccessExpr) Operand {
+    // `Color.Red` - a qualified payload-less variant is construction, not
+    // field access; the receiver names a type, not a value to address.
+    let vnum = resolved_variant(ctx, ma.span)
+    if vnum.is_some() { return lower_variant_nullary(ctx, bb, ma.span, vnum.unwrap()) }
     let f = member_field(ctx, bb, env, ma)
     if f.is_none() { return unlowerable(ctx) }
     let mf = f.unwrap()
@@ -1950,6 +2171,11 @@ fn read_binding(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, name: String, expe
 }
 
 fn lower_identifier(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, id: &IdentifierExpr) Operand {
+    // A bare payload-less variant (`None`, an unqualified `Red`) is
+    // construction, not a binding read. Locals shadow variants in the
+    // checker, so a shadowed name carries `RtLocal` and falls through.
+    let vnum = resolved_variant(ctx, id.span)
+    if vnum.is_some() { return lower_variant_nullary(ctx, bb, id.span, vnum.unwrap()) }
     let want = node_ty(ctx.result, id.span)
     return read_binding(ctx, bb, env, id.name, &want)
 }
@@ -3359,4 +3585,217 @@ test "a generic struct literal named without its arguments is a checker error, n
     assert_true(unit.error_count() > 0 as usize, "the checker rejects the literal")
     let m = lower_module(&unit.module, &unit.result)
     assert_true(was_skipped(&m, "main"), "the Error-typed literal refuses the function")
+}
+
+// M7: enum variant construction
+
+// How many stores in `f` write the constant `v`.
+fn store_const_count(f: &Function, v: i64) usize {
+    let n: usize = 0
+    for b in 0..f.blocks.len {
+        let instrs = &f.blocks[b].instrs
+        for i in 0..instrs.len {
+            instrs[i] match {
+                Store(s) => {
+                    s.value match {
+                        IntConst(c) => { if c == v { n = n + 1 } },
+                        _ => {},
+                    }
+                },
+                _ => {},
+            }
+        }
+    }
+    return n
+}
+
+fn memset_count(f: &Function) usize {
+    let n: usize = 0
+    for b in 0..f.blocks.len {
+        let instrs = &f.blocks[b].instrs
+        for i in 0..instrs.len {
+            instrs[i] match {
+                Memset(_) => n = n + 1,
+                _ => {},
+            }
+        }
+    }
+    return n
+}
+
+fn gep_count(f: &Function) usize {
+    let n: usize = 0
+    for b in 0..f.blocks.len {
+        let instrs = &f.blocks[b].instrs
+        for i in 0..instrs.len {
+            instrs[i] match {
+                Gep(_) => n = n + 1,
+                _ => {},
+            }
+        }
+    }
+    return n
+}
+
+test "constructing a payload variant stores the tag, then the payload past it" {
+    let unit = analyze(from_view("type E = enum { A, B(i32) }\nfn f(x: i32) E { return B(x) }"), "test.f")
+    let m = lower_module(&unit.module, &unit.result)
+    let fi = find_fn_starting(&m, "f__")
+    assert_true(fi < m.functions.len, "payload construction lowers")
+    let f = &m.functions[fi]
+    // Tag 1 for B, stored at the slot base; the payload store goes through
+    // a gep to the layout's payload offset.
+    assert_eq(store_const_count(f, 1), 1 as usize, "the discriminant store writes B's index")
+    assert_true(gep_count(f) >= 1 as usize, "the payload is addressed past the tag")
+}
+
+test "a bare payload-less variant builds a zeroed slot with its tag" {
+    let unit = analyze(from_view("type Color = enum { Red, Green, Blue }\nfn f() Color { return Green }"), "test.f")
+    let m = lower_module(&unit.module, &unit.result)
+    let fi = find_fn(&m, "f")
+    assert_true(fi < m.functions.len, "bare variant construction lowers")
+    let f = &m.functions[fi]
+    assert_true(memset_count(f) >= 1 as usize, "the slot is zero-filled first")
+    assert_eq(store_const_count(f, 1), 1 as usize, "Green's tag is stored over the zeros")
+}
+
+test "a qualified variant constructs - the receiver is a type, not a value" {
+    let unit = analyze(from_view("type Color = enum { Red, Green, Blue }\nfn f() Color { return Color.Blue }"), "test.f")
+    let m = lower_module(&unit.module, &unit.result)
+    let fi = find_fn(&m, "f")
+    assert_true(fi < m.functions.len, "Color.Blue lowers as construction, not member access")
+    assert_eq(store_const_count(&m.functions[fi], 2), 1 as usize, "Blue's tag is stored")
+}
+
+test "a generic variant payload stores at its substituted width" {
+    // `S(9)` into `Opt(i64)`: the raw payload type is the type parameter,
+    // and storing at its placeholder width would write 4 of the 8 bytes.
+    let unit = analyze(from_view("type Opt = enum(T) { N, S(T) }\nfn f(x: i64) Opt(i64) { return S(x) }"), "test.f")
+    let m = lower_module(&unit.module, &unit.result)
+    let fi = find_fn_starting(&m, "f__")
+    assert_true(fi < m.functions.len, "generic instantiation construction lowers")
+    let f = &m.functions[fi]
+    assert_true(store_ty_count(f, IrType.I64) >= 1 as usize, "the payload store is 8 bytes wide")
+}
+
+test "an aggregate payload copies its bytes into the slot" {
+    let unit = analyze(from_view("type Pt = struct { x: i64, y: i64 }\ntype E = enum { N, P(Pt) }\nfn f(p: Pt) E { return P(p) }"), "test.f")
+    let m = lower_module(&unit.module, &unit.result)
+    let fi = find_fn_starting(&m, "f__")
+    assert_true(fi < m.functions.len, "aggregate payload construction lowers")
+    // Param copy, payload copy, sret copy - at least the payload's own
+    // memcpy must be there.
+    assert_true(memcpy_count(&m.functions[fi]) >= 2 as usize, "the payload travels by memcpy")
+}
+
+// The niche tests need the REAL well-known Option: `is_option_niche`
+// matches on the `core.option.Option` FQN, so each test module defines
+// the enum itself and is labelled `core.option`, like the checker's own
+// Option tests.
+test "niche Some is a retype: the payload pointer IS the value" {
+    let unit = analyze(from_view("pub type Option = enum(T) { None, Some(T) }\nfn f(x: &i32) &i32? { return Some(x) }"), "core.option")
+    let m = lower_module(&unit.module, &unit.result)
+    let fi = find_fn_starting(&m, "f__")
+    assert_true(fi < m.functions.len, "niche Some lowers")
+    let f = &m.functions[fi]
+    // No enum slot is built: no memset, no gep - the loaded parameter is
+    // returned as-is.
+    assert_eq(memset_count(f), 0 as usize, "no zeroed buffer for the niche form")
+    assert_eq(gep_count(f), 0 as usize, "no payload addressing for the niche form")
+}
+
+test "niche None is the null pointer" {
+    let unit = analyze(from_view("pub type Option = enum(T) { None, Some(T) }\nfn f() &i32? { return None }"), "core.option")
+    let m = lower_module(&unit.module, &unit.result)
+    let fi = find_fn(&m, "f")
+    assert_true(fi < m.functions.len, "niche None lowers")
+    let f = &m.functions[fi]
+    let ret_null = f.blocks[0].terminator match {
+        Ret(r) => r match {
+            Some(v) => v match { NullPtr => true, _ => false },
+            None => false,
+        },
+        _ => false,
+    }
+    assert_true(ret_null, "None of Option(&T) returns the null pointer directly")
+}
+
+test "multi-payload variant construction refuses, matching the pattern side" {
+    let unit = analyze(from_view("type P = enum { A, B(i32, i32) }\nfn f(x: i32) P { return B(x, x) }"), "test.f")
+    let m = lower_module(&unit.module, &unit.result)
+    assert_true(was_skipped(&m, "f__"), "per-payload offsets are unwritten - refuse, don't guess")
+}
+
+test "a constructed variant round-trips through a match in the same function" {
+    let unit = analyze(from_view("type E = enum { A, B(i32) }\nfn f(x: i32) i32 { return B(x) match { B(v) => v, A => 0 } }"), "test.f")
+    let m = lower_module(&unit.module, &unit.result)
+    let fi = find_fn_starting(&m, "f__")
+    assert_true(fi < m.functions.len, "construct-then-match lowers end to end")
+}
+
+test "an anonymous literal follows its coerced nominal type" {
+    // `.{ ... }` types as a fresh var the nominal coercion resolves; the
+    // zonked node type is what lowering reads, so the literal must build
+    // into a correctly-sized slot with per-field stores like a named one.
+    let unit = analyze(from_view("type Pt = struct { x: i32, y: i32 }\nfn f() Pt { return .{ x = 1, y = 2 } }\nfn g() i32 { let p: Pt = .{ x = 3, y = 4 } return p.y }"), "test.f")
+    let m = lower_module(&unit.module, &unit.result)
+    let fi = find_fn(&m, "f")
+    assert_true(fi < m.functions.len, "an anonymous literal in return position lowers")
+    assert_eq(store_const_count(&m.functions[fi], 2), 1 as usize, "both fields store their values")
+    let gi = find_fn(&m, "g")
+    assert_true(gi < m.functions.len, "an annotated let binds an anonymous literal")
+    assert_eq(store_const_count(&m.functions[gi], 4), 1 as usize, "the second field stores through its offset")
+}
+
+// M8: `??` and `?`.
+
+test "coalesce unwraps the payload or falls through to the right side" {
+    let unit = analyze(from_view("pub type Option = enum(T) { None, Some(T) }\nfn f(o: i32?, d: i32) i32 { return o ?? d }"), "core.option")
+    let m = lower_module(&unit.module, &unit.result)
+    let fi = find_fn_starting(&m, "f__")
+    assert_true(fi < m.functions.len, "the unwrap form lowers")
+    let f = &m.functions[fi]
+    assert_true(compare_count(f) >= 1 as usize, "the tag is tested")
+    assert_true(gep_count(f) >= 1 as usize, "the payload is addressed past the tag")
+    assert_eq(block_count_starting(f, "co_join"), 1 as usize, "both paths meet at one join")
+}
+
+test "coalesce chains keep the whole option" {
+    let unit = analyze(from_view("pub type Option = enum(T) { None, Some(T) }\nfn g(a: i32?, b: i32?) i32? { return a ?? b }"), "core.option")
+    let m = lower_module(&unit.module, &unit.result)
+    let fi = find_fn_starting(&m, "g__")
+    assert_true(fi < m.functions.len, "the chain form lowers")
+    // The kept value is the option's own address - no payload gep on the
+    // taken path (parameter spills still gep nothing).
+    assert_eq(gep_count(&m.functions[fi]), 0 as usize, "no payload addressing when the option itself is the result")
+}
+
+test "coalesce over the niche form tests the pointer against null" {
+    let unit = analyze(from_view("pub type Option = enum(T) { None, Some(T) }\nfn h(p: &i32?, q: &i32) &i32 { return p ?? q }"), "core.option")
+    let m = lower_module(&unit.module, &unit.result)
+    let fi = find_fn_starting(&m, "h__")
+    assert_true(fi < m.functions.len, "the niche form lowers")
+    let f = &m.functions[fi]
+    assert_eq(gep_count(f), 0 as usize, "the pointer IS the payload - nothing to address")
+    assert_eq(memset_count(f), 0 as usize, "and no tagged buffer is built")
+}
+
+test "postfix ? on a monomorphic op_try lowers the call, the branch, and the early return" {
+    let unit = analyze(from_view("pub type TryResult = enum(T, R) { Continue(T), Return(R) }\ntype Res = enum { Bad, Good(i32) }\nfn op_try(self: Res) TryResult(i32, Res) { return self match { Good(v) => TryResult.Continue(v), Bad => TryResult.Return(Bad) } }\nfn f(r: Res) Res { let v = r? return Good(v + 1) }"), "core.try")
+    let m = lower_module(&unit.module, &unit.result)
+    let fi = find_fn_starting(&m, "f__")
+    assert_true(fi < m.functions.len, "construct, op_try, ? and re-construct all lower end to end")
+    let f = &m.functions[fi]
+    assert_true(first_callee(f).len > 0 as usize, "op_try is called, not inlined")
+    // The early-return block ends in its own ret (through the sret copy).
+    let rb = block_starting(f, "try_ret")
+    assert_true(rb < f.blocks.len, "the return arm has its block")
+    let ret_terminated = f.blocks[rb].terminator match { Ret(_) => true, _ => false }
+    assert_true(ret_terminated, "the Return arm early-returns")
+}
+
+test "postfix ? through a generic op_try refuses until specialization" {
+    let unit = analyze(from_view("pub type TryResult = enum(T, R) { Continue(T), Return(R) }\ntype Box = enum(T) { Empty, Full(T) }\nfn op_try(self: Box($T)) TryResult(T, Box($U)) { return self match { Full(v) => TryResult.Continue(v), Empty => TryResult.Return(Empty) } }\nfn f(b: Box(i32)) Box(i32) { let v = b? return Full(v) }"), "core.try")
+    let m = lower_module(&unit.module, &unit.result)
+    assert_true(was_skipped(&m, "f__"), "a generic op_try has no symbol yet - the caller refuses, it does not guess")
 }

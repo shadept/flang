@@ -35,6 +35,11 @@ pub const E_BRANCH_MISMATCH: String = "E2074"
 pub const E_ARM_MISMATCH: String = "E2075"
 pub const E_BAD_INDEX_TYPE: String = "E2027"
 pub const E_NOT_INDEXABLE: String = "E2028"
+// RFC-009 postfix `?`: outside a function there is no return slot to
+// early-return through; without a viable `op_try` the operand type does
+// not participate in `?` at all. Same codes as the reference.
+pub const E_TRY_OUTSIDE_FN: String = "E2090"
+pub const E_NO_OP_TRY: String = "E2092"
 
 pub const W_DEPRECATED: String = "W2001"
 pub const W_DEPRECATED_FN: String = "W2002"

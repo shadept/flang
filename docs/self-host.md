@@ -22,6 +22,19 @@ the specialization pass is not fed yet; once it is, the fallbacks must
 become hard failures, mirroring the reference's `TypeLayoutService`
 no-defaulting throw.
 
+The same contract has a *nominal* half that is not honored yet: a
+concrete instantiation like `Pair(i64)` reaches lowering with concrete
+type arguments, but the registry stores one var-bearing definition per
+generic type, so `layout.f` re-substitutes (`subst`, `field_ty`,
+`variant_payload_ty`) on every field/payload query — machinery that by
+the contract's own logic belongs typer-side. It is also a standing bug
+surface: forgetting one substitution site reads a field at the type
+parameter's placeholder width (the M6 "generic field reads at
+substituted width" fix was exactly that). When M10 feeds the
+specialization pass, it should intern pre-substituted nominal
+instantiations too, so layout becomes pure lookup and `subst` leaves
+the lowering side entirely.
+
 **Self-host need** is measured, not guessed: occurrence counts across
 the 98 modules the self-build compiles (`bootstrap/src`, `lib/*/src`,
 `stdlib`, sidecars excluded), formatted `uses/files`. Counts are from
@@ -38,7 +51,7 @@ cheaper than implementing it.
 | CST parsing | ✅ | round-trips every in-tree source byte-identical via `flang_fmt` |
 | AST projection | ✅ | `flang_parser.projector` |
 | Name resolution + imports | ✅ | project-wide; type names resolve program-wide (import-strict later) |
-| Type inference (HM) | ⚠️ | 0 errors self-checking compiler + stdlib (98 modules), but 8 of 24 expression forms are unvisited and rejection power lags the reference — see the type-checking section below |
+| Type inference (HM) | ⚠️ | 0 errors self-checking compiler + stdlib (98 modules), but 5 of 24 expression forms are unvisited and rejection power lags the reference — see the type-checking section below |
 | AST → FIR lowering | ⚠️ | the subset below; everything outside refuses, never miscompiles |
 | C backend (FIR → C99 → exe) | ✅ | for all FIR the lowering emits; links stdlib C runtime sidecars |
 | Full self-build | ❌ | every lowered function compiles and links; `main` still refuses (see below) |
@@ -62,11 +75,12 @@ not mean it *rejects* what the reference rejects. Two axes:
 | Struct literals, member access (substituted generic fields) | ✅ | everywhere | named generic literal without args is E2019 |
 | `if`/`match` joins (order-independent, `Never` identity) | ✅ | everywhere | E2074/E2075 |
 | Assignment, address-of, deref, casts, tuples, ranges, indexing | ✅ | `as` casts: 845/75 | index operator pick recorded with `is_ref_form` |
-| Unary ops (`-x`, `!x`, `~x`) | ❌ | `!` 191/28, `~` 35/12, neg ~5 | falls to `_ => fresh_var()`; operand subtree never visited — see known-issues.md (float-neg miscompile risk) |
+| Unary ops (`-x`, `!x`, `~x`) | ✅ | `!` 191/28, `~` 35/12, neg ~5 | M7: `!` unifies with bool; `-`/`~` type as their operand. Numeric-ness of `-`/`~` not yet *enforced* (rejection-power gap); no `op_neg`/`op_not`/`op_bnot` dispatch to user types (M11, with binary — zero in-tree users today) |
 | Lambdas | ❌ | 23/5 | unvisited subtree |
 | Array literals `[a, b]` | ❌ | ~52/9 | unvisited subtree |
 | Interpolated strings `$"…"` | ❌ | 60/15 | unvisited subtree |
-| `a?.b`, `a ?? b`, `a?` | ❌ | `?` (op_try) 28/13 · `??` 5/4 · `?.` 3/3 | unvisited subtrees; `??`/`?.` nearly rewritable-away, `?` is wanted (ticket 009) |
+| `a?` (op_try), `a ?? b` | ✅ | `?` 28/13 · `??` 5/4 | M8: `?` resolves `op_try`, requires `TryResult(T, R)`, unifies `R` with the enclosing return (E2090/E2092); `??` has the reference's two built-in Option shapes (unwrap and chain) |
+| `a?.b` | ❌ | 3/3 — rewritable-away | unvisited subtree |
 | Specialization (eager monomorphization of generic fns) | ❌ | everywhere (`List`/`Dict`) | `SpecializationRegistry` exists (dedup cache, clone-and-requeue design) but **nothing calls `ensure_specialization` yet** — `result.specializations` is always empty. Generic bodies are checked once, generically, with call-resolution diagnostics *silenced*; per-clone re-checking un-silences them |
 | Templates (`#interface`, `#derive`, …) expanded natively | ❌ | every `.generated.f` sidecar | relies on sidecars from a reference-compiler run |
 | `#if` compile-time conditionals evaluated | ❌ | 27/10 (incl. `file.f::open_flags`, in `main`'s graph) | |
@@ -134,14 +148,14 @@ current-state summary.
 | String literals | ❌ | ~6700 (largest count in the codebase) | needs the data segment |
 | String interpolation `$"…"` | ❌ | 60/15 | data segment + formatting calls |
 | Arithmetic / bitwise / comparison / short-circuit on primitives | ✅ | everywhere | |
-| Unary ops | ⚠️ | `!` 191/28 | lowered, but on unchecked (fresh-var) types — see known-issues |
+| Unary ops | ✅ | `!` 191/28 | M7: operands are checked now, so the width/float reads are real (`-x` on f64 emits `fneg`) |
 | Operators dispatching to user `op_*` fns (aggregate operands) | ❌ | String `==` everywhere | checker records `ResolvedOperator` only on index nodes today |
 | Struct literals (concrete, incl. explicit generic args) | ✅ | everywhere | `Pair { … }` without args is E2019 |
-| Anonymous `.{ … }` literals | ⚠️ | **192/50** | typed via nominal coercion; lowering follows the node type — verify end-to-end when construction lands |
+| Anonymous `.{ … }` literals | ✅ | **192/50** | typed via nominal coercion; node types are zonked, so lowering follows the coerced nominal — verified end-to-end (M7 tests) |
 | Member access (nested paths, place + value) | ✅ | everywhere | generic fields load at substituted widths |
 | Address-of `&x`, dereference `p.*` | ✅ | everywhere | |
 | Direct calls, UFCS, overloads | ✅ | everywhere | |
-| Enum variant construction (`Some(x)`, `Color.Red`, `None`) | ❌ | **~1550/60+ — the single biggest blocker** | proposed next (M7) |
+| Enum variant construction (`Some(x)`, `Color.Red`, `None`) | ✅ | ~1550/60+ | M7: tagged form builds tag-then-payload into a fresh slot; niche `Option(&T)` is a retype (`None` = null ptr, `Some(p)` = its payload ptr). Multi-payload construction refuses (2 sites, matching the pattern side) |
 | Indexing: `op_index_ref` / `op_index` / built-in | ✅ | everywhere | |
 | `op_set_index` (value-form indexed assignment) | ❌ | **0 sites in `main`'s graph** — all 172 `x[i] = v` sites are places (arrays/slices via the built-in path, `List` via `op_index_ref`); dict sugar `d[k] = v` is unused (`.set(...)` throughout) | keep refused until a use appears |
 | Range slicing `xs[a..b]` on built-in bases | ❌ | 105/21 | needs bounds-clamped Slice construction |
@@ -149,8 +163,8 @@ current-state summary.
 | Casts `x as T` | ❌ | 845/75 | conversion matrix unwritten (FIR has the instructions) |
 | Array literals `[a, b]` | ❌ | ~52/9 | element layout + slot construction |
 | Tuple literals `(a, b)` | ❌ | 9/6 — small; rewritable to structs if cheaper | |
-| `a?` (op_try early return) | ❌ | 28/13 | ticket 009; desugars through `TryResult` |
-| `a ?? b` (coalesce) | ❌ | 5/4 | small |
+| `a?` (op_try early return) | ✅ | 28/13 | M8: call + tag branch + early return, no AST desugar. The stdlib's `op_try` impls are generic, so those sites still refuse through the generic-symbol gate until M10 — the operator machinery itself is done |
+| `a ?? b` (coalesce) | ✅ | 5/4 | M8: built-in Option branch, short-circuit right side; niche and tagged, unwrap and chain forms |
 | `a?.b` (null propagation) | ❌ | **3/3 — rewritable-away** | |
 | Bare ranges `a..b` as values | ❌ | only as index/slice args | no value representation outside `for` |
 
@@ -191,13 +205,15 @@ before (or with) the milestone that lowers it — lowering an unchecked
 node reads a fresh-var type and guesses (see the unary entry in
 docs/known-issues.md for the live instance of that failure).
 
-1. **M7 — construction**: enum variant construction (`Some(x)`,
-   `Color.Red`, `None`; niche form is a retype) **and** anonymous
-   `.{ … }` literals verified end-to-end. ~1,700 measured sites — the
-   single biggest unlock. Pair with the small `check_unary` typer fix.
-2. **M8 — optional operators**: `a?` (op_try early return, ticket 009,
-   through `TryResult`) and `a ?? b`. Small surface, high ergonomic
-   value, and exercises M7's construction paths immediately.
+1. ~~**M7 — construction**~~ ✅ landed 2026-08-19: enum variant
+   construction (call / bare identifier / qualified member; niche form
+   is a retype), anonymous `.{ … }` literals verified end-to-end, and
+   the `check_unary` typer fix. Self-check stayed at 0 errors with the
+   unary operand subtrees newly visited.
+2. ~~**M8 — optional operators**~~ ✅ landed 2026-08-19: `a?` checks
+   and lowers through the recorded `op_try` pick (generic impls refuse
+   until M10, like every generic call); `a ?? b` checks and lowers
+   fully. Self-check stayed at 0 errors with both subtrees visited.
 3. **M9 — data segment**: string literals (6,700 sites), float
    literals, then interpolation (typer: `InterpolatedString` too).
 4. **M10 — specialization**: feed the existing

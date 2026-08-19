@@ -424,11 +424,11 @@ All memory is zero-initialized by default. Variables declared without an initial
 
 ### 5.2 Operator Functions
 
-Every operator desugars to a function call. The stdlib provides implementations for primitives; user types define their own.
+Operators on primitive types are compiler built-ins, resolved and emitted directly as arithmetic — no function call is involved. For user types, an operator resolves to the corresponding `op_*` function below (recorded on the node by the checker, emitted as an ordinary call by lowering); a user type enables an operator by defining that function.
 
 | Operator | Function |
 |---|---|
-| `+` `-` `*` `/` `%` | `op_add` `op_sub` `op_multiply` `op_divide` `op_modulo` |
+| `+` `-` `*` `/` `%` | `op_add` `op_sub` `op_mul` `op_div` `op_mod` |
 | `==` `!=` `<` `>` `<=` `>=` | `op_eq` `op_ne` `op_lt` `op_gt` `op_le` `op_ge` |
 | `&` `\|` `^` | `op_band` `op_bor` `op_bxor` |
 | `[]` (ref-form) | `op_index_ref` |
@@ -437,7 +437,7 @@ Every operator desugars to a function call. The stdlib provides implementations 
 | postfix `?` | `op_try` |
 | `=` | `op_assign` |
 | `+=` | `op_add_assign` |
-| unary `-` / `!` | `op_neg` / `op_not` |
+| unary `-` / `!` / `~` | `op_neg` / `op_not` / `op_bnot` |
 | `.field` (fallback) | `op_deref` |
 | `t(args)` (callable types) | `op_call` |
 

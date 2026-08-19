@@ -42,14 +42,14 @@ by `cst_explorer_web` for visualization.
 it with `flang_typer` — 0 `-c` errors across the compiler + stdlib
 (98 modules) — lowers to FIR via `flang_driver`, and emits native
 executables through `flang_codegen`, linking the stdlib's C runtime
-sidecars. Lowering covers a growing subset (milestones M1–M6: scalars,
-calls, control flow, assignment/places, match, indexing, and aggregate
-parameters/returns — by-pointer with callee copy, sret returns);
-anything outside it is refused rather than miscompiled. On the full
-self-build, every emitted function compiles and links; `main` itself
-still refuses (string interpolation, enum construction, defaulted
-arguments), so no stage-1 binary yet — see the header of
-`lib/flang_driver/src/lower.f` for what's next.
+sidecars. Lowering covers a growing subset (milestones M1–M8: scalars,
+calls, control flow, assignment/places, match, indexing, aggregate
+parameters/returns — by-pointer with callee copy, sret returns — enum
+variant construction, and the `?`/`??` optional operators); anything
+outside it is refused rather than miscompiled. On the full self-build, every emitted function compiles
+and links; `main` itself still refuses (string literals and
+interpolation, defaulted arguments), so no stage-1 binary yet — see
+the header of `lib/flang_driver/src/lower.f` for what's next.
 
 The C# reference compiler (`src/FLang.*`) is the source of truth for
 semantics today.
