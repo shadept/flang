@@ -52,8 +52,7 @@ pub type Project = struct {
 // defaults (`kind = exe`, `source = "src/**/*.f"`, `output = "build"`);
 // callers that require a field validate it themselves.
 pub fn parse_project(text: String, allocator: &Allocator? = null) Project {
-    let alloc = allocator.or_global()
-    let proj = new_project(alloc)
+    let proj = new_project(allocator)
     let section: String = ""
     let pos: usize = 0
     while pos < text.len {
@@ -67,7 +66,7 @@ pub fn parse_project(text: String, allocator: &Allocator? = null) Project {
         }
         let kv = split_kv(line)
         if kv.2 {
-            apply_kv(&proj, section, kv.0, kv.1, alloc)
+            apply_kv(&proj, section, kv.0, kv.1, allocator)
         }
     }
     return proj
@@ -101,9 +100,8 @@ pub fn current_platform(self: &Project) &PlatformConfig {
 // Expand a source glob (e.g. `src/**/*.f`) into owned file paths, relative
 // to the current directory. Returns an empty list on a glob error.
 pub fn glob_sources(pattern: String, allocator: &Allocator? = null) List(OwnedString) {
-    let alloc = allocator.or_global()
-    let out: List(OwnedString) = list(0, alloc)
-    let r = glob(pattern, alloc)
+    let out: List(OwnedString) = list(0, allocator)
+    let r = glob(pattern, allocator)
     if r.is_err() { return out }
     let it = r.unwrap()
     defer it.deinit()
@@ -120,7 +118,7 @@ pub fn deinit_source_list(self: &List(OwnedString)) {
 
 // Construction / teardown helpers
 
-fn new_project(alloc: &Allocator) Project {
+fn new_project(alloc: &Allocator?) Project {
     return Project {
         name = from_view(""),
         version = from_view(""),
@@ -135,7 +133,7 @@ fn new_project(alloc: &Allocator) Project {
     }
 }
 
-fn new_platform(alloc: &Allocator) PlatformConfig {
+fn new_platform(alloc: &Allocator?) PlatformConfig {
     return PlatformConfig {
         headers = list(0, alloc),
         libs = list(0, alloc),
@@ -164,7 +162,7 @@ fn deinit_strings(list: &List(OwnedString)) {
 
 // Dispatch
 
-fn apply_kv(proj: &Project, section: String, key: String, val: String, alloc: &Allocator) {
+fn apply_kv(proj: &Project, section: String, key: String, val: String, alloc: &Allocator?) {
     if section == "project" {
         set_project_field(proj, key, val)
         return
@@ -199,7 +197,7 @@ fn set_project_field(proj: &Project, key: String, val: String) {
     if key == "output" { proj.output = from_view(unquote(val)) }
 }
 
-fn set_platform_field(pc: &PlatformConfig, key: String, val: String, alloc: &Allocator) {
+fn set_platform_field(pc: &PlatformConfig, key: String, val: String, alloc: &Allocator?) {
     if key == "headers" { pc.headers = parse_array(val, alloc) }
     if key == "libs" { pc.libs = parse_array(val, alloc) }
     if key == "cflags" { pc.cflags = parse_array(val, alloc) }
@@ -285,7 +283,7 @@ fn parse_inline_path(val: String) String {
 }
 
 // `["a", "b"]` -> owned copies of each element.
-fn parse_array(val: String, alloc: &Allocator) List(OwnedString) {
+fn parse_array(val: String, alloc: &Allocator?) List(OwnedString) {
     let out: List(OwnedString) = list(0, alloc)
     let inner = strip_brackets(trim(val))
     let start: usize = 0

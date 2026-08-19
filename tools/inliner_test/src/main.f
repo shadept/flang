@@ -139,7 +139,7 @@ fn build_module() IrModule {
 
     let printf_params: List(IrType) = list(1)
     printf_params.push(IrType.Ptr)
-    let printf_ret: IrType? = IrType.I32
+    let printf_ret: IrType? = Some(IrType.I32)
     m.add_foreign(ForeignDecl {
         name = "printf",
         return_ty = printf_ret,
@@ -153,7 +153,7 @@ fn build_module() IrModule {
         name = "fmt",
         size = fmt.len as u64,
         align = 1u64,
-        init_bytes = fmt.as_raw_bytes(),
+        init_bytes = Some(fmt.as_raw_bytes()),
     })
 
     m.add_function(build_inner())
@@ -166,7 +166,7 @@ fn build_module() IrModule {
 
 // inner(n) -> n + 1
 fn build_inner() Function {
-    let fb = function("inner", IrType.I32)
+    let fb = function("inner", Some(IrType.I32))
     const n = fb.param(IrType.I32)
     let entry = fb.entry()
     const t = entry.iadd(IrType.I32, n, int(1))
@@ -176,7 +176,7 @@ fn build_inner() Function {
 
 // outer(n) -> inner(n)
 fn build_outer() Function {
-    let fb = function("outer", IrType.I32)
+    let fb = function("outer", Some(IrType.I32))
     const n = fb.param(IrType.I32)
     let entry = fb.entry()
     const r = entry.call_one("inner", IrType.I32, n)
@@ -186,7 +186,7 @@ fn build_outer() Function {
 
 // caller(n) -> outer(n)
 fn build_caller() Function {
-    let fb = function("caller", IrType.I32)
+    let fb = function("caller", Some(IrType.I32))
     const n = fb.param(IrType.I32)
     let entry = fb.entry()
     const r = entry.call_one("outer", IrType.I32, n)
@@ -196,7 +196,7 @@ fn build_caller() Function {
 
 // middle(n) -> caller(n)        (non-main caller; expect inlining here)
 fn build_middle() Function {
-    let fb = function("middle", IrType.I32)
+    let fb = function("middle", Some(IrType.I32))
     const n = fb.param(IrType.I32)
     let entry = fb.entry()
     const r = entry.call_one("caller", IrType.I32, n)
@@ -206,7 +206,7 @@ fn build_middle() Function {
 
 // main() -> printf(fmt, middle(10))
 fn build_main() Function {
-    let fb = function("main", IrType.I32)
+    let fb = function("main", Some(IrType.I32))
     let entry = fb.entry()
     const v = entry.call_one("middle", IrType.I32, int(10))
     let fixed: List(Operand) = list(1)

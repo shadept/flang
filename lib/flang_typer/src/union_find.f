@@ -48,19 +48,18 @@ pub type UnionFind = struct(K) {
     // for mutations performed inside it. `push_checkpoint` adds a
     // frame; `rollback` consumes it; `commit` discards it.
     undo_stack: Stack(List(UnionFindUndo(K)))
-    allocator: &Allocator
+    allocator: &Allocator?
 }
 
-// Construct an empty `UnionFind`. `allocator` resolves to the global
-// allocator when null and is stored non-optional on the struct.
+// Construct an empty `UnionFind`. `allocator` is stored optional and
+// forwarded to the containers, which resolve it at their own leaves.
 pub fn union_find(allocator: &Allocator? = null) UnionFind($K) {
-    let alloc = allocator.or_global()
-    let nodes: Dict(K, UnionFindNode(K)) = dict(alloc)
-    let undo = stack(0, alloc)
+    let nodes: Dict(K, UnionFindNode(K)) = dict(allocator)
+    let undo = stack(0, allocator)
     return .{
         nodes = nodes,
         undo_stack = undo,
-        allocator = alloc,
+        allocator = allocator,
     }
 }
 

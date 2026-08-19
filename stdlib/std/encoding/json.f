@@ -107,23 +107,23 @@ pub fn is_object(self: &JsonValue) bool {
 // =============================================================================
 
 pub fn as_bool(self: &JsonValue) bool? {
-    return self.* match { Bool(v) => v, else => null }
+    return self.* match { Bool(v) => Some(v), else => null }
 }
 
 pub fn as_number(self: &JsonValue) f64? {
-    return self.* match { Number(v) => v, else => null }
+    return self.* match { Number(v) => Some(v), else => null }
 }
 
 pub fn as_string(self: &JsonValue) String? {
-    return self.* match { Str(s) => s.as_view(), else => null }
+    return self.* match { Str(s) => Some(s.as_view()), else => null }
 }
 
 pub fn as_array(self: &JsonValue) &List(JsonValue)? {
-    return self.* match { Array(arr) => &arr, else => null }
+    return self.* match { Array(arr) => Some(&arr), else => null }
 }
 
 pub fn as_object(self: &JsonValue) &Dict(OwnedString, JsonValue)? {
-    return self.* match { Object(obj) => &obj, else => null }
+    return self.* match { Object(obj) => Some(&obj), else => null }
 }
 
 // =============================================================================
@@ -453,7 +453,7 @@ pub fn json_decoder(r: Reader, allocator: &Allocator? = null) JsonDecoder {
 pub fn get_error(self: &JsonDecoder) JsonError? { return self.error }
 
 fn set_error(self: &JsonDecoder, err: JsonError) {
-    if self.error.is_none() { self.error = err }
+    if self.error.is_none() { self.error = Some(err) }
 }
 
 // ---- Low-level scanning ----
@@ -474,7 +474,7 @@ fn read_next_byte(self: &JsonDecoder) u8? {
     }
     let b = self.buf[self.buf_pos]
     self.buf_pos = self.buf_pos + 1
-    return b
+    return Some(b)
 }
 
 fn peek(self: &JsonDecoder) u8? {

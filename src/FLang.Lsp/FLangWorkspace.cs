@@ -376,7 +376,6 @@ public class FLangWorkspace
                 var sourceRoot = ProjectLoader.ResolveSourceRoot(pi.Project.Project.Source, pi.ProjectRoot);
                 compilation.ProjectSourceRoot = sourceRoot;
                 compilation.ProjectGlobalImports = pi.Project.Imports?.Global ?? [];
-                compilation.ImplicitOptionWrap = pi.Project.Lang?.ImplicitOptionWrap ?? true;
 
                 compilation.IncludePaths.Add(compilation.StdlibPath);
                 if (sourceRoot != null)

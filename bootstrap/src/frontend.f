@@ -27,7 +27,7 @@ pub fn read_source(path: String) OwnedString? {
         println(msg.as_view())
         return null
     }
-    return read_result.unwrap()
+    return Some(read_result.unwrap())
 }
 
 // ── diagnostic rendering (terminal) ────────────────────────────────────

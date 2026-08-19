@@ -45,15 +45,14 @@ pub type AnalyzedUnit = struct {
 // `source` (the unit owns it). `path` labels the module for FQN
 // construction and diagnostics; it need not name a real file.
 pub fn analyze(source: OwnedString, path: String, allocator: &Allocator? = null) AnalyzedUnit {
-    let alloc = allocator.or_global()
-    let diagnostics: List(Diagnostic) = list(0, alloc)
+    let diagnostics: List(Diagnostic) = list(0, allocator)
     const src = source.as_view()
 
-    let lx = lexer(src, alloc)
+    let lx = lexer(src, allocator)
     let tokens = lx.tokenize()
-    let p = parser(tokens, alloc)
+    let p = parser(tokens, allocator)
     const cst = p.parse_module()
-    const module = project_module(cst, 0i32, alloc)
+    const module = project_module(cst, 0i32, allocator)
 
     // The AST views `source`, not the token structs - tokens and the parser
     // are dead once the Module exists. Drain parse diagnostics first so they
@@ -64,14 +63,14 @@ pub fn analyze(source: OwnedString, path: String, allocator: &Allocator? = null)
 
     // A file that didn't parse is not type-checked.
     let checked = count_errors(&diagnostics) == 0
-    let result = empty_result(alloc)
+    let result = empty_result(allocator)
     if checked {
-        let modules: List(Module) = list(1, alloc)
+        let modules: List(Module) = list(1, allocator)
         modules.push(module)
-        let paths: List(String) = list(1, alloc)
+        let paths: List(String) = list(1, allocator)
         paths.push(path)
 
-        let chk = checker(alloc)
+        let chk = checker(allocator)
         result = check_all(&chk, &modules, &paths)
         drain_diagnostics(&diagnostics, &chk.diagnostics)
         chk.deinit()
@@ -147,21 +146,20 @@ pub type AnalyzedProject = struct {
 }
 
 pub fn analyze_project(ctx: &ResolveCtx, entries: &List(OwnedString), allocator: &Allocator? = null) AnalyzedProject {
-    let alloc = allocator.or_global()
-    let diagnostics: List(Diagnostic) = list(0, alloc)
-    let sources: List(OwnedString) = list(0, alloc)
-    let fqns: List(OwnedString) = list(0, alloc)
-    let file_paths: List(OwnedString) = list(0, alloc)
-    let modules: List(Module) = list(0, alloc)
+    let diagnostics: List(Diagnostic) = list(0, allocator)
+    let sources: List(OwnedString) = list(0, allocator)
+    let fqns: List(OwnedString) = list(0, allocator)
+    let file_paths: List(OwnedString) = list(0, allocator)
+    let modules: List(Module) = list(0, allocator)
 
     // BFS over the import graph, deduplicated by file path.
-    let queue: List(OwnedString) = list(0, alloc)
-    let seen: Set(String) = set(alloc)
+    let queue: List(OwnedString) = list(0, allocator)
+    let seen: Set(String) = set(allocator)
     for i in 0..entries.len {
         enqueue_copy(&queue, &seen, entries[i].as_view())
     }
-    seed_prelude(ctx, &queue, &seen, alloc)
-    seed_stdlib(ctx, &queue, &seen, alloc)
+    seed_prelude(ctx, &queue, &seen, allocator)
+    seed_stdlib(ctx, &queue, &seen, allocator)
 
     let qi: usize = 0
     while qi < queue.len {
@@ -177,11 +175,11 @@ pub fn analyze_project(ctx: &ResolveCtx, entries: &List(OwnedString), allocator:
         // module as its origin. The bootstrap can't expand templates, so the
         // checked-in expansion stands in; merging into one module (rather than
         // a second module under the same FQN) keeps a single import scope.
-        let src = combine_with_sidecar(path, src_opt.unwrap(), alloc)
+        let src = combine_with_sidecar(path, src_opt.unwrap(), allocator)
         let fid = modules.len as i32
-        let module = parse_to_module(src.as_view(), fid, &diagnostics, alloc)
-        let fqn = module_fqn(ctx, path, alloc)
-        enqueue_imports(ctx, &module, &queue, &seen, &diagnostics, alloc)
+        let module = parse_to_module(src.as_view(), fid, &diagnostics, allocator)
+        let fqn = module_fqn(ctx, path, allocator)
+        enqueue_imports(ctx, &module, &queue, &seen, &diagnostics, allocator)
         sources.push(src)
         file_paths.push(from_view(path))
         fqns.push(fqn)
@@ -192,13 +190,13 @@ pub fn analyze_project(ctx: &ResolveCtx, entries: &List(OwnedString), allocator:
     seen.deinit()
 
     let checked = count_errors(&diagnostics) == 0
-    let result = empty_result(alloc)
+    let result = empty_result(allocator)
     if checked {
-        let path_views: List(String) = list(modules.len, alloc)
+        let path_views: List(String) = list(modules.len, allocator)
         for i in 0..fqns.len {
             path_views.push(fqns[i].as_view())
         }
-        let chk = checker(alloc)
+        let chk = checker(allocator)
         result = check_all(&chk, &modules, &path_views)
         drain_diagnostics(&diagnostics, &chk.diagnostics)
         chk.deinit()
@@ -241,7 +239,7 @@ pub fn project_error_count(self: &AnalyzedProject) usize {
 // keeps imports file-top. Every checked-in expansion merges - the types
 // (`#interface`) and the functions (`#implement`, `#enum_utils`, `#derive`)
 // both resolve now that calls check against the registry.
-fn combine_with_sidecar(path: String, src: OwnedString, alloc: &Allocator) OwnedString {
+fn combine_with_sidecar(path: String, src: OwnedString, alloc: &Allocator?) OwnedString {
     let sc = generated_sidecar(path, alloc)
     if sc.is_none() { return src }
     let sp = sc.unwrap()
@@ -261,7 +259,7 @@ fn combine_with_sidecar(path: String, src: OwnedString, alloc: &Allocator) Owned
     return out
 }
 
-fn parse_to_module(src: String, file_id: i32, diags: &List(Diagnostic), alloc: &Allocator) Module {
+fn parse_to_module(src: String, file_id: i32, diags: &List(Diagnostic), alloc: &Allocator?) Module {
     let lx = lexer(src, alloc)
     let tokens = lx.tokenize()
     let p = parser(tokens, alloc)
@@ -273,7 +271,7 @@ fn parse_to_module(src: String, file_id: i32, diags: &List(Diagnostic), alloc: &
     return module
 }
 
-fn enqueue_imports(ctx: &ResolveCtx, m: &Module, queue: &List(OwnedString), seen: &Set(String), diags: &List(Diagnostic), alloc: &Allocator) {
+fn enqueue_imports(ctx: &ResolveCtx, m: &Module, queue: &List(OwnedString), seen: &Set(String), diags: &List(Diagnostic), alloc: &Allocator?) {
     for j in 0..m.decls.len {
         let d = &m.decls[j]
         d.* match {
@@ -289,7 +287,7 @@ fn enqueue_imports(ctx: &ResolveCtx, m: &Module, queue: &List(OwnedString), seen
     }
 }
 
-fn seed_prelude(ctx: &ResolveCtx, queue: &List(OwnedString), seen: &Set(String), alloc: &Allocator) {
+fn seed_prelude(ctx: &ResolveCtx, queue: &List(OwnedString), seen: &Set(String), alloc: &Allocator?) {
     let segs: List(String) = list(2, alloc)
     segs.push("core")
     segs.push("prelude")
@@ -308,7 +306,7 @@ fn seed_prelude(ctx: &ResolveCtx, queue: &List(OwnedString), seen: &Set(String),
 // during the walk, never loaded standalone.
 // ponytail: typechecks all of std on every build; prune to the import
 // closure once stdlib type visibility turns strict.
-fn seed_stdlib(ctx: &ResolveCtx, queue: &List(OwnedString), seen: &Set(String), alloc: &Allocator) {
+fn seed_stdlib(ctx: &ResolveCtx, queue: &List(OwnedString), seen: &Set(String), alloc: &Allocator?) {
     if ctx.stdlib_root.as_view().len == 0 { return }
     let pattern = $"{ctx.stdlib_root.as_view()}/**/*.f"
     let found = glob_sources(pattern.as_view(), alloc)
@@ -337,14 +335,14 @@ fn enqueue_owned(queue: &List(OwnedString), seen: &Set(String), owned: OwnedStri
     seen.add(queue[queue.len - 1].as_view())
 }
 
-fn push_unresolved(diags: &List(Diagnostic), id: &ImportDecl, alloc: &Allocator) {
+fn push_unresolved(diags: &List(Diagnostic), id: &ImportDecl, alloc: &Allocator?) {
     let dotted = join_dotted(&id.path, alloc)
     const msg = $"unresolved import `{dotted.as_view()}`"
     dotted.deinit()
     diags.push(error("E0001", msg, id.span))
 }
 
-fn join_dotted(segs: &List(String), alloc: &Allocator) OwnedString {
+fn join_dotted(segs: &List(String), alloc: &Allocator?) OwnedString {
     let sb = string_builder(0, alloc)
     for i in 0..segs.len {
         if i > 0 { sb.append('.') }

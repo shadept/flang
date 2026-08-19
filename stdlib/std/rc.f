@@ -26,7 +26,7 @@ pub fn rc(value: $T, allocator: &Allocator? = null) Rc(T) {
     const inner = alloc.new(RcInner(T))
     inner.ref_count = 1
     inner.value = value
-    return .{ __inner = inner, __allocator = alloc }
+    return .{ __inner = Some(inner), __allocator = allocator }
 }
 
 // Allocate an Rc with zero-initialized value for in-place fill via op_deref.
@@ -35,7 +35,7 @@ pub fn rc_alloc(allocator: &Allocator? = null) Rc($T) {
     const inner = alloc.new(RcInner(T))
     memset(inner as &u8, 0, size_of(RcInner(T)))
     inner.ref_count = 1
-    return .{ __inner = inner, __allocator = alloc }
+    return .{ __inner = Some(inner), __allocator = allocator }
 }
 
 // Increment the reference count and return a new handle to the same value.
@@ -160,7 +160,7 @@ test "rc with custom allocator" {
     let arena = arena_state.allocator()
     defer arena_state.deinit()
 
-    let r = rc(42i32, &arena)
+    let r = rc(42i32, Some(&arena))
     defer r.deinit()
 
     assert_eq(r.*, 42i32, "value through arena allocator")
@@ -201,7 +201,7 @@ pub fn arc(value: $T, allocator: &Allocator? = null) Arc(T) {
     const inner = alloc.new(RcInner(T))
     inner.ref_count = 1
     inner.value = value
-    return .{ __inner = inner, __allocator = alloc }
+    return .{ __inner = Some(inner), __allocator = allocator }
 }
 
 // Allocate an Arc with zero-initialized value for in-place fill via op_deref.
@@ -210,7 +210,7 @@ pub fn arc_alloc(allocator: &Allocator? = null) Arc($T) {
     const inner = alloc.new(RcInner(T))
     memset(inner as &u8, 0, size_of(RcInner(T)))
     inner.ref_count = 1
-    return .{ __inner = inner, __allocator = alloc }
+    return .{ __inner = Some(inner), __allocator = allocator }
 }
 
 // Atomically increment the reference count and return a new handle.

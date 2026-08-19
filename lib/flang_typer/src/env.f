@@ -30,16 +30,15 @@ pub type Scope = struct {
 
 pub type TypeEnv = struct {
     scopes: Stack(Scope)
-    allocator: &Allocator
+    allocator: &Allocator?
 }
 
 pub fn type_env(allocator: &Allocator? = null) TypeEnv {
-    let alloc = allocator.or_global()
-    let scopes: Stack(Scope) = stack(0, alloc)
-    let bindings: Dict(String, Binding) = dict(alloc)
+    let scopes: Stack(Scope) = stack(0, allocator)
+    let bindings: Dict(String, Binding) = dict(allocator)
     let initial: Scope = .{ bindings = bindings }
     scopes.push(initial)
-    return .{ scopes = scopes, allocator = alloc }
+    return .{ scopes = scopes, allocator = allocator }
 }
 
 pub fn deinit(self: &TypeEnv) {

@@ -161,7 +161,7 @@ pub fn set_bright_fg(w: Writer, color: Color) {
 // Set bright background color.  ESC [ 10{c} m
 pub fn set_bright_bg(w: Writer, color: Color) {
     write_csi(w)
-    write_uint(w, 10)
+    write_uint(w, 10u32)
     write_color_code(w, color)
     w.write_byte('m')
 }

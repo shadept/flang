@@ -7,8 +7,8 @@ type Color = enum { Red, Green, Blue }
 
 fn get_value(c: Color) i32? {
     return c match {
-        Red => 1,
-        Green => 2,
+        Red => Some(1),
+        Green => Some(2),
         else => null
     }
 }

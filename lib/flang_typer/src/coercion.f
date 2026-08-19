@@ -93,22 +93,22 @@ pub fn try_integer_widening(from: Ty, to: Ty, allocator: &Allocator? = null) Coe
     // bool → any integer
     if pf == PrimitiveKind.Bool {
         if signed_rank(pt) > 0i32 or unsigned_rank(pt) > 0i32 {
-            return simple(to, allocator)
+            return Some(simple(to, allocator))
         }
         return null
     }
 
     let sf = signed_rank(pf)
     let st = signed_rank(pt)
-    if sf > 0i32 and st > 0i32 and sf <= st { return simple(to, allocator) }
+    if sf > 0i32 and st > 0i32 and sf <= st { return Some(simple(to, allocator)) }
 
     let uf = unsigned_rank(pf)
     let ut = unsigned_rank(pt)
-    if uf > 0i32 and ut > 0i32 and uf <= ut { return simple(to, allocator) }
+    if uf > 0i32 and ut > 0i32 and uf <= ut { return Some(simple(to, allocator)) }
 
     // Unsigned → signed with strictly larger rank (so the unsigned range
     // fits without truncation or sign reinterpretation).
-    if uf > 0i32 and st > 0i32 and uf < st { return simple(to, allocator) }
+    if uf > 0i32 and st > 0i32 and uf < st { return Some(simple(to, allocator)) }
 
     return null
 }
@@ -123,7 +123,7 @@ pub fn try_char_to_u8(from: Ty, to: Ty, allocator: &Allocator? = null) Coercion?
     let pf = from match { Prim(p) => p, _ => return null }
     let pt = to match { Prim(p) => p, _ => return null }
     if pf == PrimitiveKind.Char and pt == PrimitiveKind.U8 {
-        return simple(to, allocator)
+        return Some(simple(to, allocator))
     }
     return null
 }
@@ -136,7 +136,7 @@ pub fn try_float_widening(from: Ty, to: Ty, allocator: &Allocator? = null) Coerc
     let pf = from match { Prim(p) => p, _ => return null }
     let pt = to match { Prim(p) => p, _ => return null }
     if pf == PrimitiveKind.F32 and pt == PrimitiveKind.F64 {
-        return simple(to, allocator)
+        return Some(simple(to, allocator))
     }
     return null
 }
@@ -155,21 +155,6 @@ fn lookup_well_known(reg: &NominalRegistry, fqn: String) NominalId? {
     return reg.lookup_fqn(fqn)
 }
 
-// `T → Option(T)`. The Option's payload type-arg unifies with `from`.
-pub fn try_option_wrapping(from: Ty, to: Ty, reg: &NominalRegistry, allocator: &Allocator? = null) Coercion? {
-    let nr = to match { Nominal(n) => n, _ => return null }
-    let opt_id = lookup_well_known(reg, FQN_OPTION)
-    opt_id match {
-        Some(id) => if id != nr.id { return null },
-        None => return null,
-    }
-    if nr.args.len != 1 { return null }
-    let inner = nr.args[0]
-    let side = list(1, allocator)
-    side.push(Constraint { a = from, b = inner })
-    return Coercion { result_ty = to, cost = 1u32, side_unifications = side }
-}
-
 // `Type(T) → TypeInfo` - a reified type handle flows wherever the
 // erased runtime type-info record is expected.
 pub fn try_type_to_typeinfo(from: Ty, to: Ty, reg: &NominalRegistry, allocator: &Allocator? = null) Coercion? {
@@ -185,7 +170,7 @@ pub fn try_type_to_typeinfo(from: Ty, to: Ty, reg: &NominalRegistry, allocator: 
         Some(iid) => if iid != tn.id { return null },
         None => return null,
     }
-    return simple(to, allocator)
+    return Some(simple(to, allocator))
 }
 
 // `String → Slice(u8)` - binary-compatible view cast.
@@ -210,7 +195,7 @@ pub fn try_string_to_byte_slice(from: Ty, to: Ty, reg: &NominalRegistry, allocat
         _ => false,
     }
     if !is_u8 { return null }
-    return simple(to, allocator)
+    return Some(simple(to, allocator))
 }
 
 // `Slice(u8) → String` - the inverse binary-compatible view cast. The
@@ -275,13 +260,13 @@ fn decay_to_slice(to: Ty, n: &NominalRef, elem: Ty, reg: &NominalRegistry, alloc
     if n.args.len != 1 { return null }
     let side = list(1, allocator)
     side.push(Constraint { a = elem, b = n.args[0] })
-    return Coercion { result_ty = to, cost = 1u32, side_unifications = side }
+    return Some(Coercion { result_ty = to, cost = 1u32, side_unifications = side })
 }
 
 fn decay_to_ref(to: Ty, target_inner: &Ty, elem: Ty, allocator: &Allocator?) Coercion? {
     let side = list(1, allocator)
     side.push(Constraint { a = elem, b = target_inner.* })
-    return Coercion { result_ty = to, cost = 1u32, side_unifications = side }
+    return Some(Coercion { result_ty = to, cost = 1u32, side_unifications = side })
 }
 
 // `Slice(T) → &T` - extract the pointer from a slice.
@@ -296,7 +281,7 @@ pub fn try_slice_to_reference(from: Ty, to: Ty, reg: &NominalRegistry, allocator
     if fn_n.args.len != 1 { return null }
     let side = list(1, allocator)
     side.push(Constraint { a = fn_n.args[0], b = ref_inner.* })
-    return Coercion { result_ty = to, cost = 1u32, side_unifications = side }
+    return Some(Coercion { result_ty = to, cost = 1u32, side_unifications = side })
 }
 
 // `T → Type(T)` for RTTI handles. The result wraps `from` in a
@@ -327,5 +312,5 @@ pub fn try_nominal_to_type(from: Ty, to: Ty, reg: &NominalRegistry, allocator: &
     if !valid_from { return null }
     let side = list(1, allocator)
     side.push(Constraint { a = from, b = tn.args[0] })
-    return Coercion { result_ty = to, cost = 1u32, side_unifications = side }
+    return Some(Coercion { result_ty = to, cost = 1u32, side_unifications = side })
 }

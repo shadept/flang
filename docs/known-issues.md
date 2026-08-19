@@ -55,81 +55,93 @@ Running the bootstrap on any stdlib-using project (including itself) reported `u
 
 ---
 
+### Implicit `T -> Option(T)` Coercion — REMOVED (RESOLVED)
+
+**Status:** Resolved 2026-08-18 — the coercion and its `[lang].implicit_option_wrap` flag are gone; see [ADR-0005](adr/0005-remove-implicit-option-wrapping.md)
+
+The wrap could not be one rule in one place: it had to fire *during*
+unification, so checker after checker grew private knowledge of it (the C#
+`PreBindOptionTypeVar` at three join sites, the self-hosted
+`prebind_option_payload` / `unify_expected` payload case / engine guard, a
+`UnifyInternal` literal branch that silently bypassed the migration flag).
+Every such site was a place the feature could be forgotten, and the failure
+mode was silence.
+
+**Removed:** `OptionWrappingCoercionRule` and its registration,
+`PreBindOptionTypeVar`, the `UnifyInternal` constrained-literal branch, the
+whole `ImplicitOptionWrap` / `LangSection` plumbing (flag, loader, manifest
+section), and the self-hosted typer's `try_option_wrapping`,
+`prebind_option_payload` / `try_prebind`, `option_payload`, and
+`unify_expected` payload special case.
+
+**Migrated:** ~800 sites to explicit `Some(...)` across `stdlib/` (including
+generics only instantiated by the harness), the `#enum_utils` `from_string`
+template, the self-host compiler (`lib/`, `bootstrap/`), harness tests,
+examples, and tools. Two compiler fixes fell out: lowering now recognizes
+`Some(x)` for niche-optimized `Option(&T)` as variant construction (a retype),
+and the string-interpolation desugar wraps an `&alloc` builder argument in
+`Some(...)` itself. Tests asserting the old wrap were inverted to pin the new
+semantics (bare `T` against `T?` is an error), in both the C# harness and the
+self-hosted typer suite — the latter now registers a real `core.option` module
+in its fixtures so the assertions are no longer vacuous.
+
+---
+
 ## Open Issues
 
-### Implicit `T -> Option(T)` Coercion Is Being Removed
+### `flang test` on `stdlib/std` ICEs in Lowering (pre-existing, now unmasked)
 
-**Status:** Deprecated - gated behind `[lang].implicit_option_wrap`, migration partial
+**Status:** Open — reproduced at the commit before the Option-wrap removal; unrelated to it
+**Affected:** `flang test` in `stdlib/std`; `src/FLang.IR/TypeLayoutService.cs` (throw site), `src/FLang.Semantics/HmTypeChecker.Expressions.cs::FixUpCoercedArguments`
 
-**Why it is being removed, stated structurally (2026-08-18).** The wrap is not a coercion that unification can apply at one place. It is a rule that *every* piece of type logic has to independently know about, because the wrap has to happen **during** unification — `bool` in one match arm and `null` in another only meet if `Option(?V)`'s payload is chosen while the two are being unified, not before or after.
+Running `flang test --stdlib-path <repo>/stdlib` from `stdlib/std` dies with
+`E0000 internal: unresolved type variable ?3 reached lowering` while lowering
+`allocator.f::test_alloc`. The unresolved var is the bare type-name argument of
+a `size_of(...)` call — replacing one such call moves the ICE to the next one
+(`arena_new_page`'s `size_of(ArenaPage)`), so `FixUpCoercedArguments` (which
+re-records a bare type name as `Type(T)` after overload resolution) is not
+taking effect for `allocator.f` under this configuration.
 
-The consequence is visible as a census. Option-wrapping awareness currently lives in **20 references across 6 files**, spanning checker, coercion rules, engine, and lowering:
+Minimal repro: a project containing just `allocator.f` and `encoding/json.f`
+(even with json's `test` blocks stripped), compiled with `--stdlib-path`.
+Either file alone is fine. Suspected: the std-project-compiled-against-itself
+setup loads a module under two origins and type-checks one AST instance while
+lowering the other, with json.f's import graph flipping the order.
 
-- C# checker: `PreBindOptionTypeVar` called at three separate sites (if-expression, if-statement, match arms), plus `UnifyJoin` — an entire second unification mode that exists because the directional one cannot express this.
-- Self-hosted checker: `prebind_option_payload` / `try_prebind` in `join_types`, and a second payload special case in `unify_expected` for let/return annotations.
-- Self-hosted engine: a guard at `inference_engine.f:498` refusing the rule when the payload is unbound — correct in argument position, wrong in a join, which is precisely why `prebind_option_payload` exists to defeat it.
-- C# engine: a branch in `UnifyInternal` letting a constrained literal reach the wrap.
+Two facts establish it as pre-existing: the identical ICE (`?3`, `test_alloc`,
+line 145) reproduces with the HEAD-built compiler on the HEAD stdlib, and it
+was masked until now only by an *earlier* pre-existing type-check error —
+`std/terminal.f`'s `write_uint(w, 10)` ambiguity (fixed in this pass with a
+`u32` suffix) stopped compilation before lowering ever ran. Every other suite
+(`flang_core`, `flang_parser`, `flang_typer`, `flang_driver`, `bootstrap`,
+and the full C# harness) is green.
 
-Each of those is a place where someone had to remember the feature exists. The failure mode when they don't is silence.
+---
 
-**A concrete instance of that, found and fixed the same day it was introduced.** The `UnifyInternal` branch above was added for an unrelated reason — constrained numeric literals could not reach the wrapping rule, because TypeVar binding runs before coercion rules. The branch fixed that. It also **bypassed the feature flag**: `[lang].implicit_option_wrap = false` disables the rule by not registering it, and a branch that performs the wrap by a different route never consults the registry. So `fn f() i64? { return 7 }` kept compiling with the feature switched off, for literals only.
+### Composite Structs Duplicate the Allocator Pointer Per Child Container
 
-Nothing would have caught this. The harness runs with the flag on; the flag's own worklist procedure would have under-reported and looked like migration progress. It is now gated on `OptionWrappingCoercionRule` actually being registered.
+**Status:** Future work — noted 2026-08-19, explicitly not a priority
+**Affected:** any struct composing several allocator-carrying containers — `UnionFind` (nodes Dict + undo Stack of Lists + own field), `Engine`, `Checker`, and every similar composite
 
-That is the argument for removal in one sentence: a rule that has to be re-implemented in every new piece of unification logic will be silently forgotten by some of them, and the flag that is supposed to measure the migration is itself one of the things that gets forgotten.
+Header-owned allocators mean a composite stores the same `&Allocator?` once
+per child container plus once for itself — `UnionFind` carries four copies of
+one pointer. Today this is the accepted trade (8 niche-packed bytes per
+header, and each container frees against exactly the allocator that fed it,
+no cross-field invariants), but the duplication is conceptual debt that grows
+with every composite.
 
+**Direction chosen when this gets picked up:** combine the arena-owning-parent
+pattern with Zig-style explicit parameters — the composite stores a *single*
+allocator (or owns an arena over the caller's), its child containers store
+none, and the allocator is passed as an argument to the children's allocating
+methods (`nodes.set(alloc, k, v)`, `undo.push(alloc, frame)`). One stored
+pointer, still fully explicit at every allocating call, and bulk-lifetime
+composites get one-shot deinit via the arena. Requires parameter-taking
+variants of the container APIs (or a parallel "unmanaged" container flavor),
+so it is an stdlib API design piece, not a local refactor. `Projector`
+already demonstrates the arena half of the pattern.
 
-**Affected:** `src/FLang.Semantics/CoercionRules.cs` (`OptionWrappingCoercionRule`), all of `stdlib/`
-
-A bare `T` is implicitly wrapped where `Option(T)` is expected, so
-`fn f() T? { return value }` compiles without saying `Some(value)`. Convenient,
-and it has caused repeated, hard-to-read failures.
-
-**Why it misbehaves.** The rule is deliberately skipped when the target's
-payload is an unbound type variable - without that guard, an `Option($T)`
-parameter would swallow any argument at all. But inside a generic function
-returning `T?`, the payload *is* an unbound var, so the rule declines and the
-checker falls through to a structural unify of `T` against `Option(T)`. That
-trips the occurs check and reports `E2071 Cyclic type: Option(?N) contains ?N`
-at the `return`, naming neither the real cause nor a fix.
-
-Three separate failures traced back to this in one session:
-`core/range.f::next`, `std/dict.f::next`, and `std/allocator.f::test_alloc` -
-the last two only surfaced after the first was fixed. Each looked like an
-unrelated inference bug.
-
-**The flag.** `flang.toml` gained a `[lang]` section:
-
-```toml
-[lang]
-implicit_option_wrap = false
-```
-
-Default is `true`, so nothing changes for existing projects and single-file
-builds. Setting it to `false` unregisters the coercion rule, which turns every
-remaining reliance into a reported error rather than a silent wrap - so the
-flag doubles as the migration worklist. Threaded through `BuildCommand`,
-`TestCommand` and the LSP workspace.
-
-**Migration state.** Barely started, deliberately. Six sites are converted -
-the ones that were actively breaking builds: `core/range.f::next`,
-`std/dict.f::next`, both `std/dict.f::get` overloads, and
-`std/allocator.f::test_alloc`.
-
-Flipping the flag to `false` for `stdlib/std` reports **~124 remaining**. They
-are not all `return` sites: a large share are **call sites** passing a bare `T`
-to an `Option(T)` *parameter* (`free(memory)` where the parameter is `u8[]?`),
-which surface as `E2011 No matching overload` rather than a return-type
-mismatch. Any migration script that only rewrites `return` statements will miss
-them, and cannot distinguish `return get_ref(k)` (already an `Option`, must stay
-bare) from `return (get_ref(k)?).*` (unwrapped by `?`, needs `Some`) without
-type information. The compiler with the flag off is the only reliable worklist.
-
-**End state.** Remove the rule and the flag together once `stdlib/` and the
-harness are clean with it off. Not scheduled - the flag makes the work
-deferrable, which is the point of adding it.
-
-
+---
 
 ### Higher-Order Stdlib Functions Cannot Thread an Allocator Into the Callback
 
@@ -300,9 +312,9 @@ Scope was narrower than it first appeared: nested *assignment* (`self.mid.inner.
 
 **Note:** the M2 `SymbolBuilder` workaround (flat dicts rather than a nested `SymbolTable`) is no longer strictly required, but is kept — it is simpler than the nested form regardless.
 
-### `dotnet test-all.cs` Fails Type-Checking `core/range.f` (E2071 Cyclic Type)
+### `dotnet test-all.cs` Fails Type-Checking `core/range.f` (E2071 Cyclic Type) — RESOLVED
 
-**Status:** Open — pre-existing; blocks the `stdlib/std` leg of `test-all`
+**Status:** Resolved 2026-08-18 — obsoleted by the removal of the implicit wrap (ADR-0005): `range.f::next` says `return Some(val)` and the coercion class this bug lived in no longer exists. The `stdlib/std` leg of `test-all` is now blocked only by the lowering ICE entry above.
 **Affected:** C# `HmTypeChecker` occurs-check / optional inference
 
 `flang test` in `stdlib/std` fails to compile with:

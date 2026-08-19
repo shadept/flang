@@ -94,26 +94,25 @@ pub type Checker = struct {
     // plus the auto-imported core prelude.
     visible_by_module: Dict(OwnedString, Set(String))
 
-    allocator: &Allocator
+    allocator: &Allocator?
 }
 
 pub fn checker(allocator: &Allocator? = null) Checker {
-    let alloc = allocator.or_global()
     return .{
-        engine = engine(alloc),
-        env = type_env(alloc),
-        nominals = nominal_registry(alloc),
-        aliases = fqn_map(alloc),
-        constants = fqn_map(alloc),
-        functions = function_registry(alloc),
-        specs = specialization_registry(alloc),
-        results = inference_results(alloc),
-        diagnostics = list(0, alloc),
+        engine = engine(allocator),
+        env = type_env(allocator),
+        nominals = nominal_registry(allocator),
+        aliases = fqn_map(allocator),
+        constants = fqn_map(allocator),
+        functions = function_registry(allocator),
+        specs = specialization_registry(allocator),
+        results = inference_results(allocator),
+        diagnostics = list(0, allocator),
         current_module = null,
-        fn_stack = list(0, alloc),
+        fn_stack = list(0, allocator),
         in_generic_body = false,
-        visible_by_module = dict(alloc),
-        allocator = alloc,
+        visible_by_module = dict(allocator),
+        allocator = allocator,
     }
 }
 
@@ -395,7 +394,7 @@ fn build_visibility(self: &Checker, modules: &List(Module), paths: &List(String)
 // Record module `m`'s imports as views into `paths`. An import whose
 // dotted path names no loaded module is silently dropped here; the
 // unresolved-import diagnostic is the loader's job.
-fn collect_edges(m: &Module, paths: &List(String), imps: &List(String), reexps: &List(String), alloc: &Allocator) {
+fn collect_edges(m: &Module, paths: &List(String), imps: &List(String), reexps: &List(String), alloc: &Allocator?) {
     for j in 0..m.decls.len {
         let d = &m.decls[j]
         d.* match {
@@ -418,7 +417,7 @@ fn collect_edges(m: &Module, paths: &List(String), imps: &List(String), reexps: 
 
 // `{idx} ∪ imports(idx)` then a BFS that follows only `pub import` edges,
 // per the spec's non-transitive-import / transitive-re-export rule.
-fn compute_visible(idx: usize, paths: &List(String), imports: &List(List(String)), reexports: &List(List(String)), out: &Set(String), alloc: &Allocator) {
+fn compute_visible(idx: usize, paths: &List(String), imports: &List(List(String)), reexports: &List(List(String)), out: &Set(String), alloc: &Allocator?) {
     out.add(paths[idx])
     let work: List(String) = list(0, alloc)
     let imps = &imports[idx]
@@ -448,7 +447,7 @@ fn compute_visible(idx: usize, paths: &List(String), imports: &List(List(String)
     work.deinit()
 }
 
-fn dot_join(segs: &List(String), alloc: &Allocator) OwnedString {
+fn dot_join(segs: &List(String), alloc: &Allocator?) OwnedString {
     let sb = string_builder(0, alloc)
     for i in 0..segs.len {
         if i > 0 { sb.append('.') }
@@ -1615,25 +1614,7 @@ fn check_let(self: &Checker, ls: &LetStmt) {
     })
 }
 
-// A value flowing into an optional context (`x: T? = value`, `return value`
-// against `T?`) prefers the payload interpretation: when the value unifies
-// with the option's payload, the context wraps it rather than rewriting the
-// value's type. Keeps an inference variable from a call result (or a generic
-// param) from being absorbed into the option, which would poison its other
-// uses (or trip the occurs check).
 fn unify_expected(self: &Checker, inferred: Ty, annotated: Ty, code: String, span: SourceSpan) {
-    let payload = option_payload(self, annotated)
-    payload match {
-        Some(p) => {
-            let probe = self.engine.try_unify(inferred, p)
-            if probe.is_ok() {
-                const o = self.engine.unify(inferred, p)
-                report_unify(self, &o, code, span)
-                return
-            }
-        },
-        None => {},
-    }
     const o = self.engine.unify(inferred, annotated)
     report_unify(self, &o, code, span)
 }
@@ -1649,7 +1630,6 @@ fn unify_expected(self: &Checker, inferred: Ty, annotated: Ty, code: String, spa
 // `Never` is the identity - it takes the other side - which is how a
 // diverging arm stays out of the join entirely.
 fn join_types(self: &Checker, a: Ty, b: Ty, code: String, span: SourceSpan) Ty {
-    prebind_option_payload(self, a, b)
     let forward = self.engine.try_unify(a, b).is_ok()
     const o = if forward {
         self.engine.unify(a, b)
@@ -1666,48 +1646,6 @@ fn join_types(self: &Checker, a: Ty, b: Ty, code: String, span: SourceSpan) Ty {
         // carry a type the program does not actually have.
         _ => Ty.Error,
     }
-}
-
-// `T` joined with `Option($V)` where `$V` is still free: bind `$V` to `T`
-// so the `T -> Option(T)` coercion, which requires payload equality, can
-// fire. The unbound payload is the whole reason it cannot - the rule
-// refuses to bind one itself, because in argument position that would let
-// `Option($V)` swallow any type at all. A join is the one place where
-// picking the payload IS the intended answer.
-fn prebind_option_payload(self: &Checker, a: Ty, b: Ty) {
-    if try_prebind(self, a, b) { return }
-    let _r = try_prebind(self, b, a)
-}
-
-// Bind the free payload of `opt` to `concrete`, if that is the shape.
-fn try_prebind(self: &Checker, concrete: Ty, opt: Ty) bool {
-    let payload = option_payload(self, opt)
-    if payload.is_none() { return false }
-    let free = self.engine.resolve(payload.unwrap()) match { Var(_) => true, _ => false }
-    if !free { return false }
-    // A type variable carries no information to bind with, and an
-    // `Option` on both sides unifies structurally without help.
-    let c = self.engine.resolve(concrete)
-    let opaque = c match { Var(_) => true, _ => false }
-    if opaque or option_payload(self, c).is_some() { return false }
-    const o = self.engine.unify(c, payload.unwrap())
-    return o.is_ok()
-}
-
-// The payload type when `t` is the well-known Option nominal.
-fn option_payload(self: &Checker, t: Ty) Ty? {
-    let z = self.engine.zonk(t)
-    let nr = z match {
-        Nominal(n) => Some(n),
-        _ => null,
-    }
-    if nr.is_none() { return null }
-    let n = nr.unwrap()
-    let opt_id = self.nominals.by_fqn.get(FQN_OPTION)
-    if opt_id.is_none() { return null }
-    if opt_id.unwrap() != n.id { return null }
-    if n.args.len != 1 { return null }
-    return Some(n.args[0])
 }
 
 fn check_return(self: &Checker, rs: &ReturnStmt) {
@@ -2648,20 +2586,37 @@ test "a bool index is rejected before any operator lookup" {
     assert_true(errors == 1, "`bool` never indexes, even where an overload would take it")
 }
 
-// The join, not the operator: `T` in one arm and `null` in another must
-// settle on `Option(T)` whichever order they appear in. Left to a
-// directional unification the first arm fixes the type and the second is
-// reported against it.
-test "match arms join a value arm and a null arm into an optional" {
+// There is no implicit `T -> Option(T)` wrap: a value arm joining a
+// `null` arm must say `Some(v)` explicitly, in either arm order. A real
+// `core.option` module is part of each test program — without it the
+// registry has no Option, `null` types as `Ty.Error`, and every outcome
+// passes vacuously.
+const OPTION_SRC: String = "pub type Option = enum(T) {\n    None,\n    Some(T),\n}\n"
+
+test "match arms join a Some arm and a null arm into an optional" {
     let errors = count_check_errors(
-        ["type E = enum { A(i32) B }\nfn f(e: &E) i32? { return e.* match { A(v) => v, B => null } }\nfn g(e: &E) i32? { return e.* match { B => null, A(v) => v } }\n"],
-        ["arm_join"])
-    assert_true(errors == 0, "arm order does not decide the joined type")
+        [OPTION_SRC, "import core.option\ntype E = enum { A(i32) B }\nfn f(e: &E) i32? { return e.* match { A(v) => Some(v), B => null } }\nfn g(e: &E) i32? { return e.* match { B => null, A(v) => Some(v) } }\n"],
+        ["core.option", "arm_join"])
+    assert_true(errors == 0, "explicit Some joins with null in either arm order")
+}
+
+test "a bare value arm does not implicitly wrap into an optional" {
+    let errors = count_check_errors(
+        [OPTION_SRC, "import core.option\ntype E = enum { A(i32) B }\nfn f(e: &E) i32? { return e.* match { A(v) => v, B => null } }\n"],
+        ["core.option", "arm_bare"])
+    assert_true(errors > 0, "`T` never becomes `Option(T)` without `Some`")
 }
 
 test "if/else branches join the same way match arms do" {
     let errors = count_check_errors(
-        ["fn f(c: bool, v: i32) i32? { if c { return v } else { return null } }\nfn g(c: bool, v: i32) i32? { return if c { v } else { null } }\n"],
-        ["branch_join"])
-    assert_true(errors == 0, "a `T` branch and a `null` branch settle on `Option(T)`")
+        [OPTION_SRC, "import core.option\nfn f(c: bool, v: i32) i32? { if c { return Some(v) } else { return null } }\nfn g(c: bool, v: i32) i32? { return if c { Some(v) } else { null } }\n"],
+        ["core.option", "branch_join"])
+    assert_true(errors == 0, "a `Some` branch and a `null` branch settle on `Option(T)`")
+}
+
+test "a bare value branch does not implicitly wrap into an optional" {
+    let errors = count_check_errors(
+        [OPTION_SRC, "import core.option\nfn f(c: bool, v: i32) i32? { if c { return v } else { return null } }\n"],
+        ["core.option", "branch_bare"])
+    assert_true(errors > 0, "return of bare `T` against `T?` is an error")
 }

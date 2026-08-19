@@ -48,11 +48,11 @@ pub type Lexer = struct {
     position: usize
     line: usize
     // Backs every list the lexer allocates - interp_stack, per-token
-    // trivia lists, and the result of `tokenize()`. Resolved at
-    // construction (the optional `allocator` argument to `lexer()` is
-    // run through `or_global()` once), so internal call sites just
-    // forward `self.allocator` without re-resolving.
-    allocator: &Allocator
+    // trivia lists, and the result of `tokenize()`. Stored as-passed
+    // (`null` = global allocator) and forwarded to the optional
+    // allocator slots of lists and Tokens; only a leaf that actually
+    // allocates resolves it via `or_global()`.
+    allocator: &Allocator?
     interp_stack: List(InterpFrame)
     // Set inline on `$"` (Dollar adjacent to quote) and by the parser
     // before eating the prefix for the `$(args)"..."` / `$ident"..."`
@@ -72,19 +72,18 @@ pub type Lexer = struct {
 // `allocator` backs every list the lexer (and the tokens it produces)
 // allocates. Pass `null` to default to the global allocator; pass an
 // arena / fixed-buffer allocator when you want all lex output to share
-// a single lifetime that can be dropped in one shot. Resolved once
-// here so the rest of the lexer can use `self.allocator` directly.
+// a single lifetime that can be dropped in one shot. Stored as-passed;
+// allocation leaves resolve it per use.
 pub fn lexer(source: String, allocator: &Allocator? = null) Lexer {
-    const resolved = allocator.or_global()
     return .{
         source = source,
         position = 0,
         line = 0,
-        allocator = resolved,
-        interp_stack = list(0, resolved),
+        allocator = allocator,
+        interp_stack = list(0, allocator),
         mark_next_string_interp = false,
         has_pending = false,
-        pending_token = empty_token(resolved),
+        pending_token = empty_token(allocator),
     }
 }
 
@@ -378,16 +377,16 @@ fn lex_token_text(self: &Lexer) TokenKind {
 }
 
 fn match_two_char(a: u8, b: u8) TokenKind? {
-    if a == '.' and b == '.' { return TokenKind.DotDot }
-    if a == '=' and b == '=' { return TokenKind.EqualsEquals }
-    if a == '=' and b == '>' { return TokenKind.FatArrow }
-    if a == '!' and b == '=' { return TokenKind.NotEquals }
-    if a == '<' and b == '<' { return TokenKind.ShiftLeft }
-    if a == '<' and b == '=' { return TokenKind.LessThanOrEqual }
-    if a == '>' and b == '>' { return TokenKind.ShiftRight }
-    if a == '>' and b == '=' { return TokenKind.GreaterThanOrEqual }
-    if a == '?' and b == '?' { return TokenKind.QuestionQuestion }
-    if a == '?' and b == '.' { return TokenKind.QuestionDot }
+    if a == '.' and b == '.' { return Some(TokenKind.DotDot) }
+    if a == '=' and b == '=' { return Some(TokenKind.EqualsEquals) }
+    if a == '=' and b == '>' { return Some(TokenKind.FatArrow) }
+    if a == '!' and b == '=' { return Some(TokenKind.NotEquals) }
+    if a == '<' and b == '<' { return Some(TokenKind.ShiftLeft) }
+    if a == '<' and b == '=' { return Some(TokenKind.LessThanOrEqual) }
+    if a == '>' and b == '>' { return Some(TokenKind.ShiftRight) }
+    if a == '>' and b == '=' { return Some(TokenKind.GreaterThanOrEqual) }
+    if a == '?' and b == '?' { return Some(TokenKind.QuestionQuestion) }
+    if a == '?' and b == '.' { return Some(TokenKind.QuestionDot) }
     return null
 }
 
@@ -643,7 +642,7 @@ fn consume_unicode_escape_value(self: &Lexer) u32? {
     }
     if count == 0 { return null }
     if value > 0x10FFFF { return null }
-    return value
+    return Some(value)
 }
 
 fn hex_digit_value(c: u8) u8 {
@@ -958,7 +957,7 @@ fn adjust_for_hole_mode(self: &Lexer, kind: TokenKind, frame_idx: usize) TokenKi
     if kind == TokenKind.CloseBrace {
         if self.interp_stack[frame_idx].brace_depth == 0 {
             self.interp_stack[frame_idx].in_segment = true
-            return TokenKind.InterpHoleEnd
+            return Some(TokenKind.InterpHoleEnd)
         }
         self.interp_stack[frame_idx].brace_depth = self.interp_stack[frame_idx].brace_depth - 1
         return null
@@ -980,7 +979,7 @@ fn adjust_for_hole_mode(self: &Lexer, kind: TokenKind, frame_idx: usize) TokenKi
             and self.interp_stack[frame_idx].paren_depth == 0
             and self.interp_stack[frame_idx].bracket_depth == 0 {
             self.interp_stack[frame_idx].in_format_spec = true
-            return TokenKind.InterpFormatSep
+            return Some(TokenKind.InterpFormatSep)
         }
         return null
     }
@@ -992,7 +991,7 @@ fn queue_token(self: &Lexer, tok: Token) {
     self.pending_token = tok
 }
 
-fn empty_token(allocator: &Allocator) Token {
+fn empty_token(allocator: &Allocator?) Token {
     return Token {
         kind = TokenKind.Eof,
         text = "",
@@ -1107,7 +1106,7 @@ pub fn decode_char_literal(raw: String) u32? {
 
     if kind_is_byte and cp > 255 { return null }
     if cp > 0x10FFFF { return null }
-    return cp
+    return Some(cp)
 }
 
 // Materialise an `InterpSegment` token's runtime bytes. Same escape
@@ -1147,7 +1146,7 @@ pub fn decode_interp_segment(raw: String, allocator: &Allocator? = null) OwnedSt
         sb.append_byte(c)
         i = i + 1
     }
-    return sb.to_string()
+    return Some(sb.to_string())
 }
 
 fn decode_quoted_run(raw: String, lo: usize, hi: usize, allocator: &Allocator?) OwnedString? {
@@ -1172,7 +1171,7 @@ fn decode_quoted_run(raw: String, lo: usize, hi: usize, allocator: &Allocator?) 
         sb.append_byte(c)
         i = i + 1
     }
-    return sb.to_string()
+    return Some(sb.to_string())
 }
 
 fn append_unicode_escape(sb: &StringBuilder, raw: String, lo: usize, hi: usize) bool {

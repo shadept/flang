@@ -92,24 +92,23 @@ type SymbolBuilder = struct {
     by_decl: Dict(NodeId, u32)
     by_decl_params: Dict(NodeId, List(Ty))
     nominals: &NominalRegistry
-    allocator: &Allocator
+    allocator: &Allocator?
 }
 
 // Index every registered scheme by its declaration span up front, together
 // with the declared parameter types the symbol is derived from; the
 // per-module walk then maps each decl to its id with one lookup.
 fn symbol_builder(result: &TypeCheckResult, allocator: &Allocator? = null) SymbolBuilder {
-    let alloc = allocator.or_global()
-    let by_fn_id: Dict(u32, String) = dict(alloc)
-    let by_decl: Dict(NodeId, u32) = dict(alloc)
-    let by_decl_params: Dict(NodeId, List(Ty)) = dict(alloc)
+    let by_fn_id: Dict(u32, String) = dict(allocator)
+    let by_decl: Dict(NodeId, u32) = dict(allocator)
+    let by_decl_params: Dict(NodeId, List(Ty)) = dict(allocator)
     for entry in result.functions.by_name {
         let overloads = entry.value
         for i in 0..overloads.len {
             let f = &overloads[i]
             let nid = node_id_of(f.decl_span)
             by_decl.set(nid, f.id)
-            by_decl_params.set(nid, scheme_params(&f.signature, alloc))
+            by_decl_params.set(nid, scheme_params(&f.signature, allocator))
         }
     }
     return .{
@@ -117,13 +116,13 @@ fn symbol_builder(result: &TypeCheckResult, allocator: &Allocator? = null) Symbo
         by_decl = by_decl,
         by_decl_params = by_decl_params,
         nominals = &result.nominals,
-        allocator = alloc,
+        allocator = allocator,
     }
 }
 
 // The declared parameter types of a function scheme. A scheme whose body
 // isn't a function type has no parameters to encode.
-fn scheme_params(s: &Scheme, allocator: &Allocator) List(Ty) {
+fn scheme_params(s: &Scheme, allocator: &Allocator?) List(Ty) {
     return s.body match {
         Func(ft) => ft.params,
         _ => list(0, allocator),
@@ -183,7 +182,7 @@ fn is_callable_signature(decl: &FunctionDecl) bool {
 type LowerCtx = struct {
     result: &TypeCheckResult
     syms: &SymbolTable
-    allocator: &Allocator
+    allocator: &Allocator?
     loops: List(LoopFrame)
     // TEMPORARY SCAFFOLD - see `unlowerable`. Delete with it.
     blocked: bool
@@ -266,7 +265,7 @@ type Env = struct {
     bindings: List(LocalSlot)
 }
 
-fn new_env(allocator: &Allocator) Env {
+fn new_env(allocator: &Allocator?) Env {
     let n: List(String) = list(8, allocator)
     let b: List(LocalSlot) = list(8, allocator)
     return Env { names = n, bindings = b }
@@ -332,7 +331,7 @@ fn ir_size(ty: IrType) u64 {
 //
 // ponytail: the label string is leaked, same as symbol names - one-shot
 // builds exit before it matters.
-fn fresh_label(bb: &BlockBuilder, prefix: String, allocator: &Allocator) String {
+fn fresh_label(bb: &BlockBuilder, prefix: String, allocator: &Allocator?) String {
     let fb = bb.fb
     let n = fb.fresh()
     let sb = string_builder(prefix.len + 8, allocator)
@@ -346,16 +345,15 @@ fn fresh_label(bb: &BlockBuilder, prefix: String, allocator: &Allocator) String 
 // Lower every supported top-level function in `ast_module` into a fresh
 // `IrModule`. Non-function decls and unsupported functions are skipped.
 pub fn lower_module(ast_module: &Module, result: &TypeCheckResult, allocator: &Allocator? = null) IrModule {
-    let alloc = allocator.or_global()
-    let m = module(alloc)
-    let sb = symbol_builder(result, alloc)
+    let m = module(allocator)
+    let sb = symbol_builder(result, allocator)
     sb.add_module(ast_module, "")
     let syms = sb.finish()
-    let loop_stack: List(LoopFrame) = list(0, alloc)
+    let loop_stack: List(LoopFrame) = list(0, allocator)
     let ctx = LowerCtx {
         result = result,
         syms = &syms,
-        allocator = alloc,
+        allocator = allocator,
         loops = loop_stack,
         blocked = false
     }
@@ -371,20 +369,19 @@ pub fn lower_module(ast_module: &Module, result: &TypeCheckResult, allocator: &A
 // function's symbol is namespaced by its module so merged same-named
 // functions cannot collide.
 pub fn lower_program(modules: &List(Module), fqns: &List(OwnedString), result: &TypeCheckResult, allocator: &Allocator? = null) IrModule {
-    let alloc = allocator.or_global()
-    let m = module(alloc)
-    let sb = symbol_builder(result, alloc)
+    let m = module(allocator)
+    let sb = symbol_builder(result, allocator)
     for i in 0..modules.len {
         sb.add_module(&modules[i], fqns[i].as_view())
     }
     let syms = sb.finish()
-    let loop_stack: List(LoopFrame) = list(0, alloc)
-    let ctx = LowerCtx { result = result, syms = &syms, allocator = alloc, loops = loop_stack, blocked = false }
+    let loop_stack: List(LoopFrame) = list(0, allocator)
+    let ctx = LowerCtx { result = result, syms = &syms, allocator = allocator, loops = loop_stack, blocked = false }
     for i in 0..modules.len {
         lower_into(&m, &ctx, &modules[i], fqns[i].as_view())
     }
     syms.deinit()
-    drop_callers_of_refused(&m, alloc)
+    drop_callers_of_refused(&m, allocator)
     return m
 }
 
@@ -480,7 +477,7 @@ fn lower_decl(m: &IrModule, ctx: &LowerCtx, decl: &FunctionDecl, fqn: String) {
 // the return type is outside the subset - the backend can't spell it, and
 // nothing can call it. The variadic tail is dropped from `param_types`
 // and flagged, matching C's `(fixed..., ...)` shape.
-fn foreign_decl_of(decl: &FunctionDecl, allocator: &Allocator) ForeignDecl? {
+fn foreign_decl_of(decl: &FunctionDecl, allocator: &Allocator?) ForeignDecl? {
     let ret: IrType? = null
     if decl.return_type.is_some() {
         let rt = decl.return_type.unwrap()
@@ -503,13 +500,13 @@ fn foreign_decl_of(decl: &FunctionDecl, allocator: &Allocator) ForeignDecl? {
         }
         ptys.push(pir.unwrap())
     }
-    return ForeignDecl {
+    return Some(ForeignDecl {
         name = decl.name,
         return_ty = ret,
         param_types = ptys,
         variadic = variadic,
         cc = CallConv.C,
-    }
+    })
 }
 
 // Symbol mangling (docs/spec.md 7.1.1, docs/adr/0004)
@@ -2162,26 +2159,26 @@ fn any_generic(tes: &List(TypeExpr)) bool {
 fn type_expr_to_ir(te: &TypeExpr) IrType? {
     return te.* match {
         Named(n) => named_to_ir(n.name),
-        Reference(_) => IrType.Ptr,
+        Reference(_) => Some(IrType.Ptr),
         _ => null,
     }
 }
 
 fn named_to_ir(name: String) IrType? {
-    if name == "i8" { return IrType.I8 }
-    if name == "u8" { return IrType.I8 }
-    if name == "bool" { return IrType.I8 }
-    if name == "i16" { return IrType.I16 }
-    if name == "u16" { return IrType.I16 }
-    if name == "i32" { return IrType.I32 }
-    if name == "u32" { return IrType.I32 }
-    if name == "char" { return IrType.I32 }
-    if name == "i64" { return IrType.I64 }
-    if name == "u64" { return IrType.I64 }
-    if name == "isize" { return IrType.I64 }
-    if name == "usize" { return IrType.I64 }
-    if name == "f32" { return IrType.F32 }
-    if name == "f64" { return IrType.F64 }
+    if name == "i8" { return Some(IrType.I8) }
+    if name == "u8" { return Some(IrType.I8) }
+    if name == "bool" { return Some(IrType.I8) }
+    if name == "i16" { return Some(IrType.I16) }
+    if name == "u16" { return Some(IrType.I16) }
+    if name == "i32" { return Some(IrType.I32) }
+    if name == "u32" { return Some(IrType.I32) }
+    if name == "char" { return Some(IrType.I32) }
+    if name == "i64" { return Some(IrType.I64) }
+    if name == "u64" { return Some(IrType.I64) }
+    if name == "isize" { return Some(IrType.I64) }
+    if name == "usize" { return Some(IrType.I64) }
+    if name == "f32" { return Some(IrType.F32) }
+    if name == "f64" { return Some(IrType.F64) }
     return null
 }
 

@@ -166,7 +166,7 @@ pub fn cwd(self: &Command, dir: String) &Command {
             None => {},
         }
     }
-    self.__cwd = from_view(dir, self.__allocator)
+    self.__cwd = Some(from_view(dir, self.__allocator))
     self.__has_cwd = true
     return self
 }
@@ -244,7 +244,7 @@ pub fn spawn(self: &Command) Result(Child, ProcessError) {
     if self.__has_cwd {
         self.__cwd match {
             Some(c) => {
-                cwd_ptr = c.ptr
+                cwd_ptr = Some(c.ptr)
                 has_cwd = 1
             },
             None => {},
@@ -345,21 +345,21 @@ pub fn stdout(self: &Child) ChildStdout? {
     if self.__stdout_fd < 0 { return null }
     const s = ChildStdout { __fd = self.__stdout_fd }
     self.__stdout_fd = -1
-    return s
+    return Some(s)
 }
 
 pub fn stderr(self: &Child) ChildStderr? {
     if self.__stderr_fd < 0 { return null }
     const s = ChildStderr { __fd = self.__stderr_fd }
     self.__stderr_fd = -1
-    return s
+    return Some(s)
 }
 
 pub fn stdin(self: &Child) ChildStdin? {
     if self.__stdin_fd < 0 { return null }
     const s = ChildStdin { __fd = self.__stdin_fd }
     self.__stdin_fd = -1
-    return s
+    return Some(s)
 }
 
 // =============================================================================

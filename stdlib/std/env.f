@@ -23,7 +23,7 @@ pub fn args_count() usize {
 pub fn arg(index: usize) String? {
     const p = __flang_get_arg(index as i32)?
     const len = strlen(p)
-    return slice_from_raw_parts(p, len) as String
+    return Some(slice_from_raw_parts(p, len) as String)
 }
 
 // Returns all command-line arguments as a List(String).
@@ -45,7 +45,7 @@ pub fn get_args() List(String) {
 pub fn env(key: String) String? {
     const p = __flang_getenv(key.ptr)?
     const len = strlen(p)
-    return slice_from_raw_parts(p, len) as String
+    return Some(slice_from_raw_parts(p, len) as String)
 }
 
 // =============================================================================
@@ -177,7 +177,7 @@ pub fn next(self: &GetOpt) OptResult? {
             }
             const kind = lookup_short(self.format, ch)
             if kind == 0 {
-                return OptResult.Error(ch)
+                return Some(OptResult.Error(ch))
             }
             if kind == 2 {
                 if self.pos > 0 {
@@ -185,21 +185,21 @@ pub fn next(self: &GetOpt) OptResult? {
                     const val = a[self.pos..]
                     self.pos = 0
                     self.index = self.index + 1
-                    return OptResult.OptArg(ch, val)
+                    return Some(OptResult.OptArg(ch, val))
                 }
                 // Next arg is the value
-                if self.index >= self.args.len { return OptResult.MissingArg(ch) }
+                if self.index >= self.args.len { return Some(OptResult.MissingArg(ch)) }
                 const val = self.args[self.index]
                 self.index = self.index + 1
-                return OptResult.OptArg(ch, val)
+                return Some(OptResult.OptArg(ch, val))
             }
-            return OptResult.Opt(ch)
+            return Some(OptResult.Opt(ch))
         }
 
         // -- stops option processing
         if self.done {
             self.index = self.index + 1
-            return OptResult.NonOpt(a)
+            return Some(OptResult.NonOpt(a))
         }
 
         if a == "--" {
@@ -219,21 +219,21 @@ pub fn next(self: &GetOpt) OptResult? {
             const name = a[2..eq_pos]
             const ch = lookup_long(self.format, name)
             if ch == 0 {
-                return OptResult.Error('?')
+                return Some(OptResult.Error('?'))
             }
 
             const kind = lookup_short(self.format, ch)
             if kind == 2 {
                 if eq_pos < a.len {
                     const val = a[eq_pos + 1..]
-                    return OptResult.OptArg(ch, val)
+                    return Some(OptResult.OptArg(ch, val))
                 }
-                if self.index >= self.args.len { return OptResult.MissingArg(ch) }
+                if self.index >= self.args.len { return Some(OptResult.MissingArg(ch)) }
                 const val = self.args[self.index]
                 self.index = self.index + 1
-                return OptResult.OptArg(ch, val)
+                return Some(OptResult.OptArg(ch, val))
             }
-            return OptResult.Opt(ch)
+            return Some(OptResult.Opt(ch))
         }
 
         // Short option(s): -x or -xyz
@@ -244,7 +244,7 @@ pub fn next(self: &GetOpt) OptResult? {
 
         // Non-option argument
         self.index = self.index + 1
-        return OptResult.NonOpt(a)
+        return Some(OptResult.NonOpt(a))
     }
     return null
 }

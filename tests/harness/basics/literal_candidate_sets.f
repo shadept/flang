@@ -32,11 +32,11 @@ fn widths() bool {
     return c == 65 and n == 3 and s == 4 and f == 2.5 and d == 1.0
 }
 
-// A constrained literal still has to reach the `T -> Option(T)` wrap. The
-// constraint describes what the literal becomes, which is the payload - not
-// the Option - so it must not veto the coercion.
-fn opt_int() i64? { return 7 }
-fn opt_float() f64? { return 3.5 }
+// A constrained literal inside `Some(...)` binds against the Option's
+// payload: the constraint describes what the literal becomes, which is the
+// payload - not the Option.
+fn opt_int() i64? { return Some(7) }
+fn opt_float() f64? { return Some(3.5) }
 
 pub fn main() i32 {
     if ikind(10) != 2 { return 11 }

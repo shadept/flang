@@ -16,7 +16,7 @@ fn next(c: &Countdown) i32? {
     }
     let val = c.from
     c.from = c.from - 1
-    return val
+    return Some(val)
 }
 
 pub fn main() i32 {

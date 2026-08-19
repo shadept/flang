@@ -20,7 +20,7 @@ fn extract(v: MyVal) i32 {
 }
 
 pub fn main() i32 {
-    const opt: MyVal? = MyVal.Num(2.0)
+    const opt: MyVal? = Some(MyVal.Num(2.0))
     const mapped = opt.map(extract)
     if mapped.is_some() {
         println(mapped.unwrap())

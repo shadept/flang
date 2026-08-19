@@ -83,25 +83,6 @@ public class FloatWideningCoercionRule : IInferenceCoercionRule
 }
 
 /// <summary>
-/// Implicit wrapping: T -> Option(T).
-/// </summary>
-public class OptionWrappingCoercionRule : IInferenceCoercionRule
-{
-    public Type? TryApply(Type from, Type to, InferenceEngine engine)
-    {
-        // to is Option(T) and from equals T (resolving through union-find)
-        if (to is NominalType { Name: WellKnown.Option } stTo && stTo.TypeArguments.Count > 0)
-        {
-            var innerType = engine.Resolve(stTo.TypeArguments[0]);
-            if (from.Equals(innerType))
-                return to;
-        }
-
-        return null;
-    }
-}
-
-/// <summary>
 /// String -> Slice(u8) (binary-compatible view cast).
 /// </summary>
 public class StringToByteSliceCoercionRule : IInferenceCoercionRule

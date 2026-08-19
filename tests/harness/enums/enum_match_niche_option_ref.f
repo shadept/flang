@@ -29,7 +29,7 @@ fn unwrap_lit(e: &Expr) i32 {
 
 pub fn main() i32 {
     let lit: Expr = Expr.Lit(42)
-    let opt: &Expr? = &lit
+    let opt: &Expr? = Some(&lit)
     return opt match {
         Some(p) => unwrap_lit(p),
         None => 0,

@@ -33,7 +33,7 @@ const SB_DEFAULT_CAPACITY: usize = 16
 // Create a new empty StringBuilder with the given initial capacity.
 pub fn string_builder(capacity: usize = 0, allocator: &Allocator? = null) StringBuilder {
     let sb: StringBuilder
-    sb.allocator = allocator.or_global()
+    sb.allocator = allocator
     if (capacity > 0) {
         sb.reserve(capacity)
     }
@@ -49,7 +49,7 @@ pub fn string_builder_with_capacity(capacity: usize) StringBuilder {
 // Create a new empty StringBuilder with default capacity.
 #deprecated("use string_builder(allocator=allocator)")
 pub fn string_builder_with_allocator(allocator: &Allocator) StringBuilder {
-    return string_builder(0, allocator)
+    return string_builder(0, Some(allocator))
 }
 
 // Create a new empty StringBuilder with the given initial capacity.
@@ -130,7 +130,6 @@ pub fn commit(sb: &StringBuilder, n: usize) {
 // Enables the `let sb = string_builder(); defer sb.deinit(); ... sb.to_string()`
 // pattern - defer fires on panic before to_string, otherwise transfers cleanly.
 pub fn to_string(sb: &StringBuilder) OwnedString {
-    const alloc = sb.allocator.or_global()
 
     // Ensure room for the null terminator. StringBuilder grows in powers of two,
     // so cap > len is the common case and reserve is a no-op.
@@ -141,7 +140,7 @@ pub fn to_string(sb: &StringBuilder) OwnedString {
     const term = sb.ptr + sb.len
     term.* = 0
 
-    const result = OwnedString { ptr = sb.ptr, len = sb.len, allocator = alloc }
+    const result = OwnedString { ptr = sb.ptr, len = sb.len, allocator = sb.allocator }
 
     let zero: usize = 0
     sb.ptr = zero as &u8
@@ -161,7 +160,7 @@ pub fn to_string(sb: &StringBuilder, allocator: &Allocator) OwnedString {
     // Null-terminate for C FFI compatibility
     const term = buf.ptr + sb.len
     term.* = 0
-    const result = OwnedString { ptr = buf.ptr, len = sb.len, allocator }
+    const result = OwnedString { ptr = buf.ptr, len = sb.len, allocator = Some(allocator) }
     sb.ptr = 0usize as &u8
     sb.len = 0
     return result
@@ -780,7 +779,7 @@ test "append integers" {
     let buf = [0u8; 256]
     let fba = fixed_buffer_allocator(buf)
     let alloc = fba.allocator()
-    let sb = string_builder(allocator=&alloc)
+    let sb = string_builder(allocator=Some(&alloc))
 
     sb.append(0i32)
     expect_view(&sb, "0", "zero")
@@ -818,7 +817,7 @@ test "append bool and string" {
     let buf = [0u8; 256]
     let fba = fixed_buffer_allocator(buf)
     let alloc = fba.allocator()
-    let sb = string_builder(allocator=&alloc)
+    let sb = string_builder(allocator=Some(&alloc))
 
     sb.append(true)
     expect_view(&sb, "true", "bool true")
@@ -842,7 +841,7 @@ test "append all int sizes" {
     let buf = [0u8; 512]
     let fba = fixed_buffer_allocator(buf)
     let alloc = fba.allocator()
-    let sb = string_builder(allocator=&alloc)
+    let sb = string_builder(allocator=Some(&alloc))
 
     sb.append("u8: ")
     sb.append(0u8)
@@ -902,7 +901,7 @@ test "append format hex" {
     let buf = [0u8; 256]
     let fba = fixed_buffer_allocator(buf)
     let alloc = fba.allocator()
-    let sb = string_builder(allocator=&alloc)
+    let sb = string_builder(allocator=Some(&alloc))
 
     sb.append(255u8, "x")
     expect_view(&sb, "ff", "u8 hex lower")
@@ -932,7 +931,7 @@ test "append format octal binary" {
     let buf = [0u8; 256]
     let fba = fixed_buffer_allocator(buf)
     let alloc = fba.allocator()
-    let sb = string_builder(allocator=&alloc)
+    let sb = string_builder(allocator=Some(&alloc))
 
     sb.append(255u8, "o")
     expect_view(&sb, "377", "u8 octal")
@@ -962,7 +961,7 @@ test "append signed hex" {
     let buf = [0u8; 256]
     let fba = fixed_buffer_allocator(buf)
     let alloc = fba.allocator()
-    let sb = string_builder(allocator=&alloc)
+    let sb = string_builder(allocator=Some(&alloc))
 
     sb.append(-1i32, "x")
     expect_view(&sb, "ffffffff", "i32 -1 hex")
@@ -980,7 +979,7 @@ test "append signed hex all sizes" {
     let buf = [0u8; 512]
     let fba = fixed_buffer_allocator(buf)
     let alloc = fba.allocator()
-    let sb = string_builder(allocator=&alloc)
+    let sb = string_builder(allocator=Some(&alloc))
 
     sb.append(-1i8, "x")
     expect_view(&sb, "ff", "i8 -1 hex")
@@ -1018,7 +1017,7 @@ test "append unsigned hex all sizes" {
     let buf = [0u8; 512]
     let fba = fixed_buffer_allocator(buf)
     let alloc = fba.allocator()
-    let sb = string_builder(allocator=&alloc)
+    let sb = string_builder(allocator=Some(&alloc))
 
     sb.append(255u8, "x")
     expect_view(&sb, "ff", "u8 max hex")
@@ -1052,7 +1051,7 @@ test "append floats" {
     let buf = [0u8; 256]
     let fba = fixed_buffer_allocator(buf)
     let alloc = fba.allocator()
-    let sb = string_builder(allocator=&alloc)
+    let sb = string_builder(allocator=Some(&alloc))
 
     sb.append(3.14f64)
     expect_view(&sb, "3.14", "f64 3.14")
@@ -1082,7 +1081,7 @@ test "append floats with precision" {
     let buf = [0u8; 256]
     let fba = fixed_buffer_allocator(buf)
     let alloc = fba.allocator()
-    let sb = string_builder(allocator=&alloc)
+    let sb = string_builder(allocator=Some(&alloc))
 
     sb.append(3.14f64, ".2")
     expect_view(&sb, "3.14", "f64 .2 precision")
@@ -1105,7 +1104,7 @@ test "append floats with width" {
     let buf = [0u8; 256]
     let fba = fixed_buffer_allocator(buf)
     let alloc = fba.allocator()
-    let sb = string_builder(allocator=&alloc)
+    let sb = string_builder(allocator=Some(&alloc))
 
     sb.append(3.14f64, "8.2")
     expect_view(&sb, "    3.14", "f64 width 8")
@@ -1124,7 +1123,7 @@ test "append binary octal all sizes" {
     let buf = [0u8; 512]
     let fba = fixed_buffer_allocator(buf)
     let alloc = fba.allocator()
-    let sb = string_builder(allocator=&alloc)
+    let sb = string_builder(allocator=Some(&alloc))
 
     sb.append(255u8, "b")
     expect_view(&sb, "11111111", "u8 max binary")
@@ -1162,7 +1161,7 @@ test "int width right align" {
     let buf = [0u8; 256]
     let fba = fixed_buffer_allocator(buf)
     let alloc = fba.allocator()
-    let sb = string_builder(allocator=&alloc)
+    let sb = string_builder(allocator=Some(&alloc))
 
     sb.append(42usize, "8")
     expect_view(&sb, "      42", "usize width 8")
@@ -1189,7 +1188,7 @@ test "int width left align" {
     let buf = [0u8; 256]
     let fba = fixed_buffer_allocator(buf)
     let alloc = fba.allocator()
-    let sb = string_builder(allocator=&alloc)
+    let sb = string_builder(allocator=Some(&alloc))
 
     sb.append(42usize, "<8")
     expect_view(&sb, "42      ", "usize left 8")
@@ -1204,7 +1203,7 @@ test "int width center align" {
     let buf = [0u8; 256]
     let fba = fixed_buffer_allocator(buf)
     let alloc = fba.allocator()
-    let sb = string_builder(allocator=&alloc)
+    let sb = string_builder(allocator=Some(&alloc))
 
     sb.append(42usize, "^8")
     expect_view(&sb, "   42   ", "usize center 8")
@@ -1223,7 +1222,7 @@ test "int zero pad" {
     let buf = [0u8; 256]
     let fba = fixed_buffer_allocator(buf)
     let alloc = fba.allocator()
-    let sb = string_builder(allocator=&alloc)
+    let sb = string_builder(allocator=Some(&alloc))
 
     sb.append(42usize, "08")
     expect_view(&sb, "00000042", "usize zero-pad 8")
@@ -1246,7 +1245,7 @@ test "int custom fill" {
     let buf = [0u8; 256]
     let fba = fixed_buffer_allocator(buf)
     let alloc = fba.allocator()
-    let sb = string_builder(allocator=&alloc)
+    let sb = string_builder(allocator=Some(&alloc))
 
     sb.append(42usize, "-<8")
     expect_view(&sb, "42------", "dash left-fill")
@@ -1265,7 +1264,7 @@ test "int width with base" {
     let buf = [0u8; 256]
     let fba = fixed_buffer_allocator(buf)
     let alloc = fba.allocator()
-    let sb = string_builder(allocator=&alloc)
+    let sb = string_builder(allocator=Some(&alloc))
 
     sb.append(255u8, ">8x")
     expect_view(&sb, "      ff", "hex right width 8")
@@ -1284,7 +1283,7 @@ test "float alignment" {
     let buf = [0u8; 256]
     let fba = fixed_buffer_allocator(buf)
     let alloc = fba.allocator()
-    let sb = string_builder(allocator=&alloc)
+    let sb = string_builder(allocator=Some(&alloc))
 
     sb.append(3.14f64, "<10.2")
     expect_view(&sb, "3.14      ", "f64 left 10")

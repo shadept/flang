@@ -32,15 +32,14 @@ pub fn func_ref(name: String) Operand { return Operand.FuncRef(name) }
 
 pub type FunctionBuilder = struct {
     func: Function
-    allocator: &Allocator
+    allocator: &Allocator?
 }
 
 // Start a new function. `return_ty = null` is void return. Add params
 // via `.param(ty)` before calling `.entry()`.
 pub fn function(name: String, return_ty: IrType?, allocator: &Allocator? = null) FunctionBuilder {
-    const alloc = allocator.or_global()
-    let params: List(BlockParam) = list(0, alloc)
-    let blocks: List(Block) = list(0, alloc)
+    let params: List(BlockParam) = list(0, allocator)
+    let blocks: List(Block) = list(0, allocator)
     return FunctionBuilder {
         func = Function {
             name = name,
@@ -51,7 +50,7 @@ pub fn function(name: String, return_ty: IrType?, allocator: &Allocator? = null)
             cc = CallConv.C,
             next_value_id = 0u32,
         },
-        allocator = alloc,
+        allocator = allocator,
     }
 }
 
@@ -418,8 +417,8 @@ pub fn call(self: &BlockBuilder, callee: String, return_ty: IrType, args: List(O
     const id = self.fb.fresh()
     let block = &self.fb.func.blocks[self.block_idx]
     let var_types: List(IrType) = list(0, self.fb.allocator)
-    let result: u32? = id
-    let result_ty: IrType? = return_ty
+    let result: u32? = Some(id)
+    let result_ty: IrType? = Some(return_ty)
     block.instrs.push(Instr.Call(CallInstr {
         result = result,
         result_ty = result_ty,
@@ -470,8 +469,8 @@ pub fn call_variadic(self: &BlockBuilder, callee: String, return_ty: IrType, fix
         var_types.push(extras[i].0)
     }
     extras.deinit()
-    let result: u32? = id
-    let result_ty: IrType? = return_ty
+    let result: u32? = Some(id)
+    let result_ty: IrType? = Some(return_ty)
     block.instrs.push(Instr.Call(CallInstr {
         result = result,
         result_ty = result_ty,
@@ -489,7 +488,7 @@ pub fn call_variadic(self: &BlockBuilder, callee: String, return_ty: IrType, fix
 // Return a value.
 pub fn ret(self: &BlockBuilder, value: Operand) {
     let block = &self.fb.func.blocks[self.block_idx]
-    let v: Operand? = value
+    let v: Operand? = Some(value)
     block.set_terminator(Terminator.Ret(v))
 }
 

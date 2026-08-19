@@ -4244,17 +4244,28 @@ public class HmAstLowering
     /// Detect whether a CallExpressionNode is an enum variant construction.
     /// Variant constructors have no ResolvedTarget (they're scope-bound types,
     /// not function declarations) and their inferred type resolves to an IrEnum.
+    /// `Some(x)` where the Option is niche-optimized to a nullable pointer is
+    /// also a variant construction, even though its IR type is not an IrEnum.
     /// </summary>
     private bool IsVariantConstruction(CallExpressionNode call)
     {
         if (call.ResolvedTarget != null || call.IsIndirectCall) return false;
         var hmType = _types.GetResolvedType(call);
         var irType = _layout.Lower(hmType);
-        return irType is IrEnum;
+        if (irType is IrEnum) return true;
+        var name = call.MethodName ?? call.FunctionName;
+        return IsNicheOption(irType) && (name == "Some" || name.EndsWith(".Some"));
     }
 
     private Value LowerEnumConstruction(CallExpressionNode call)
     {
+        // Niche-optimized Option(&T): `Some(ptr)` is a retype, not an enum build.
+        if (GetIrType(call) is IrPointer { IsNullable: true } nicheOpt)
+        {
+            var payload = LowerExpression(call.Arguments[0], StripNullable(nicheOpt));
+            return EmitOptionSome(payload, nicheOpt);
+        }
+
         var irEnum = (IrEnum)GetIrType(call);
 
         // Parse variant name: may be "EnumName.VariantName" or just "VariantName"

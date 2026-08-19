@@ -122,14 +122,14 @@ pub fn next(self: &DirIter) DirEntry? {
         &err,
     )
     if status == R_OK {
-        return DirEntry {
-            name = from_c_string(self.name_buf.ptr, self.current_name_len),
+        return Some(DirEntry {
+            name = from_c_string(self.name_buf.ptr, Some(self.current_name_len)),
             kind = self.current_kind as FileKind,
-        }
+        })
     }
     self.done = true
     if status == R_ERR {
-        self.last_error = err as FsError
+        self.last_error = Some(err as FsError)
     }
     return null
 }
@@ -320,11 +320,11 @@ pub fn next(self: &WalkIter) WalkEntry? {
                     path_len_before = self.path_buf.len,
                 })
             } else if self.last_error.is_none() {
-                self.last_error = child_r.unwrap_err()
+                self.last_error = Some(child_r.unwrap_err())
             }
         }
 
-        return result
+        return Some(result)
     }
     // Unreachable
     return null
@@ -421,7 +421,7 @@ pub fn next(self: &GlobIter) String? {
         }
         const entry = opt.unwrap()
         if match_glob(pat_full, entry.path) {
-            return entry.path
+            return Some(entry.path)
         }
     }
     return null

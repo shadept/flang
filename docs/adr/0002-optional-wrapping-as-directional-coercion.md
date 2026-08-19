@@ -1,6 +1,7 @@
 # ADR-0002: `T` -> `T?` is a directional coercion, not a unification rule
 
-**Status:** Accepted — 2026-06-21
+**Status:** Superseded by [ADR-0005](0005-remove-implicit-option-wrapping.md) — 2026-08-18. The implicit wrap is removed entirely; `Some(v)` is always explicit.
+**Original status:** Accepted — 2026-06-21
 **Affects:** `docs/spec.md` Sec 2.7 (Option and Nullability); the self-host typer port
 
 ## Context

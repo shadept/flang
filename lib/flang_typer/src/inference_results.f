@@ -71,18 +71,17 @@ pub type InferenceResults = struct {
     // Specialized generic-function bodies the checker emitted, in
     // order of first need. Indexed by `RtSpecialized.0`.
     specializations: List(NodeId)
-    allocator: &Allocator
+    allocator: &Allocator?
 }
 
 pub fn inference_results(allocator: &Allocator? = null) InferenceResults {
-    let alloc = allocator.or_global()
     return .{
-        node_types = dict(alloc),
-        resolved_ops = dict(alloc),
-        resolved_targets = dict(alloc),
-        instantiated_types = list(0, alloc),
-        specializations = list(0, alloc),
-        allocator = alloc,
+        node_types = dict(allocator),
+        resolved_ops = dict(allocator),
+        resolved_targets = dict(allocator),
+        instantiated_types = list(0, allocator),
+        specializations = list(0, allocator),
+        allocator = allocator,
     }
 }
 

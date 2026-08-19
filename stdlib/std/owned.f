@@ -24,7 +24,7 @@ pub fn owned(value: $T) Owned(T) {
 }
 
 pub fn owned(value: $T, cleanup: fn(&T) void) Owned(T) {
-    let some: T? = value
+    let some: T? = Some(value)
     return .{ __value = some, __cleanup = cleanup }
 }
 

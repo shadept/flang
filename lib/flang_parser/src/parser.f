@@ -38,10 +38,10 @@ type NodeBuilder = struct {
 pub type Parser = struct {
     tokens: List(Token)
     position: usize
-    // Backs every CST node's child list. Resolved at construction so
-    // internal call sites just forward `self.allocator` without
-    // re-resolving.
-    allocator: &Allocator
+    // Backs every CST node's child list. Stored as-passed (`null` =
+    // global allocator) and forwarded to the optional allocator slots
+    // of lists and Tokens; leaves that allocate resolve it per use.
+    allocator: &Allocator?
     // Accumulated parse-time diagnostics. The parser never throws - it
     // records an error here, recovers, and keeps going. Callers may
     // read after `parse_module()`.
@@ -60,14 +60,13 @@ pub type Parser = struct {
 // - every CST node will reference the original tokens, so `tokens`
 // must outlive the produced tree. `allocator` backs every CST child
 // list and the diagnostics list; pass `null` to default to the global
-// allocator (resolved once here via `or_global()`).
+// allocator (resolved per use at the allocation leaves).
 pub fn parser(tokens: List(Token), allocator: &Allocator? = null) Parser {
-    const a = allocator.or_global()
     return .{
         tokens = tokens,
         position = 0,
-        allocator = a,
-        diagnostics = list(0, a),
+        allocator = allocator,
+        diagnostics = list(0, allocator),
         file_id = -1,
         stop_at_brace = false,
     }

@@ -19,7 +19,7 @@ fn next(fib: &Fibonacci) u64? {
     let tmp = fib.a + fib.b
     fib.a = fib.b
     fib.b = tmp
-    return result
+    return Some(result)
 }
 
 pub fn main() i32 {

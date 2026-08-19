@@ -7,7 +7,7 @@ import std.option
 // Function returning optional reference: (&i32)?
 pub fn get_ref_opt(ptr: &i32, has_value: bool) &i32? {
     if (has_value) {
-        return ptr
+        return Some(ptr)
     }
     return null
 }

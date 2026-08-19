@@ -207,8 +207,7 @@ public class InferenceEngine : ITypeResolver
     /// flows into <paramref name="expected"/>. Coercion rules are tried in the
     /// <c>actual → expected</c> direction only. This mirrors how integer
     /// widening is meant to work (i32 → i64 implicit, i64 → i32 rejected) and
-    /// applies the same model uniformly to T → Option(T) wrapping and every
-    /// other implicit conversion.
+    /// applies the same model uniformly to every other implicit conversion.
     ///
     /// Callers that need a genuinely symmetric "find a common type" operation
     /// — match-arm join, if/else branch join — must use <see cref="UnifyJoin"/>.
@@ -321,28 +320,6 @@ public class InferenceEngine : ITypeResolver
                             span, expected: b, actual: a, codeOverride: "E2102");
                         return a;
                     }
-                }
-                else if (a is NominalType { Name: WellKnown.Option, TypeArguments.Count: 1 } optA
-                         && _coercionRules.Any(r => r is OptionWrappingCoercionRule))
-                {
-                    // `T -> Option(T)` wrapping, reached through a constrained
-                    // variable. The constraint must not veto here: it describes
-                    // what the *literal* may become, and the literal becomes the
-                    // payload, not the Option. Vetoing made `fn f() f64? {
-                    // return 3.14 }` a type error, because TypeVar binding runs
-                    // before the coercion rules and never gave them a turn.
-                    //
-                    // Recursing re-applies the constraint against the payload,
-                    // so `Option(String)` is still rejected — one level in.
-                    //
-                    // Gated on the wrapping rule actually being registered:
-                    // this branch IS the wrap, reached by a different route, so
-                    // running it unconditionally would re-enable the feature for
-                    // literals after `[lang].implicit_option_wrap = false` turned
-                    // it off everywhere else.
-                    UnifyInternal(optA.TypeArguments[0], b, span, ref cost, directional);
-                    cost += 1;
-                    return a;
                 }
                 else
                 {

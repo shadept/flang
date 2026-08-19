@@ -30,7 +30,7 @@ pub fn main() i32 {
 
 // fn factorial(n: i32) i32 { if n <= 1 { 1 } else { n * factorial(n - 1) } }
 fn build_factorial() Function {
-    let fb = function("factorial", IrType.I32)
+    let fb = function("factorial", Some(IrType.I32))
     const n = fb.param(IrType.I32)
     let entry = fb.entry()
     let base = fb.block("base")
@@ -110,7 +110,7 @@ fn build_next() Function {
 // iteration and matches on the returned `Option`: `Some(v) => body`,
 // `None => break`. That's the structure of the FIR below.
 fn build_sum_range() Function {
-    let fb = function("sum_range", IrType.I32)
+    let fb = function("sum_range", Some(IrType.I32))
     const start = fb.param(IrType.I32)
     const end_p = fb.param(IrType.I32)
     let entry = fb.entry()

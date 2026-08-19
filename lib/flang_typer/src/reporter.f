@@ -72,7 +72,7 @@ fn report_mismatch(m: &Mismatch, ctx: &ReportCtx, out: &List(Diagnostic), alloc:
 }
 
 fn report_occurs(o: &OccursDetails, ctx: &ReportCtx, out: &List(Diagnostic), alloc: &Allocator) {
-    let sb = string_builder(64, alloc)
+    let sb = string_builder(64, Some(alloc))
     sb.append("recursive type: variable ?")
     sb.append(o.var_id)
     sb.append(" occurs inside ")
@@ -89,7 +89,7 @@ fn report_occurs(o: &OccursDetails, ctx: &ReportCtx, out: &List(Diagnostic), all
 }
 
 fn report_arity(a: &ArityDetails, ctx: &ReportCtx, out: &List(Diagnostic), alloc: &Allocator) {
-    let sb = string_builder(64, alloc)
+    let sb = string_builder(64, Some(alloc))
     sb.append(arity_label(a.what))
     sb.append(" mismatch: expected ")
     sb.append(a.expected)
@@ -107,7 +107,7 @@ fn report_arity(a: &ArityDetails, ctx: &ReportCtx, out: &List(Diagnostic), alloc
 }
 
 fn report_prim_constraint(p: &PrimViolation, ctx: &ReportCtx, out: &List(Diagnostic), alloc: &Allocator) {
-    let sb = string_builder(64, alloc)
+    let sb = string_builder(64, Some(alloc))
     sb.append("type mismatch: expected one of ")
     for i in 0..p.allowed.len {
         if i > 0 { sb.append(" | ") }
@@ -128,7 +128,7 @@ fn report_prim_constraint(p: &PrimViolation, ctx: &ReportCtx, out: &List(Diagnos
 }
 
 fn format_mismatch(m: &Mismatch, alloc: &Allocator) OwnedString {
-    let sb = string_builder(64, alloc)
+    let sb = string_builder(64, Some(alloc))
     sb.append("type mismatch: expected `")
     format(&m.expected, &sb, "")
     sb.append("`, got `")

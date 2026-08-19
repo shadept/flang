@@ -58,13 +58,12 @@ pub type FunctionRegistry = struct {
     // preserved so overload resolution scoring is deterministic.
     by_name: Dict(String, List(FunctionScheme))
     next_id: u32
-    allocator: &Allocator
+    allocator: &Allocator?
 }
 
 pub fn function_registry(allocator: &Allocator? = null) FunctionRegistry {
-    let alloc = allocator.or_global()
-    let by_name: Dict(String, List(FunctionScheme)) = dict(alloc)
-    return .{ by_name = by_name, next_id = 0u32, allocator = alloc }
+    let by_name: Dict(String, List(FunctionScheme)) = dict(allocator)
+    return .{ by_name = by_name, next_id = 0u32, allocator = allocator }
 }
 
 pub fn deinit(self: &FunctionRegistry) {

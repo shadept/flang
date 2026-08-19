@@ -71,7 +71,7 @@ pub type CsvRecord = struct {
 
 pub fn get(record: &CsvRecord, index: usize) String? {
     if index >= record.fields.len { return null }
-    return record.fields[index]
+    return Some(record.fields[index])
 }
 
 pub fn get(record: &CsvRecord, name: String) String? {
@@ -756,7 +756,7 @@ fn parse_all(self: &CsvReader) {
             if field_start < data_len {
                 current_fields.push(self.extract_field(data, field_start, data_len))
                 let rec: CsvRecord
-                rec.headers = &self.headers
+                rec.headers = Some(&self.headers)
                 rec.fields = current_fields
                 rows.push(rec)
             }
@@ -806,7 +806,7 @@ fn parse_all(self: &CsvReader) {
             if byte == 0x0A or byte == 0x0D {
                 current_fields.push(self.extract_field(data, field_start, abs_pos))
                 let rec: CsvRecord
-                rec.headers = &self.headers
+                rec.headers = Some(&self.headers)
                 rec.fields = current_fields
                 rows.push(rec)
 
@@ -929,7 +929,7 @@ pub fn select_rows(table: &CsvTable, start: usize, end: usize) CsvTable {
             copied_fields.push(src.fields[fi])
         }
         rec.fields = copied_fields
-        rec.headers = &result.headers
+        rec.headers = Some(&result.headers)
         sel_rows.push(rec)
     }
     result.rows = sel_rows
@@ -965,7 +965,7 @@ pub fn select_columns(table: &CsvTable, names: String[]) CsvTable {
     for r in 0..table.rows.len {
         const src = table.rows[r]
         let rec: CsvRecord
-        rec.headers = &result.headers
+        rec.headers = Some(&result.headers)
         let rec_fields = list(indices.len)
         for j in 0..indices.len {
             const idx = indices[j]

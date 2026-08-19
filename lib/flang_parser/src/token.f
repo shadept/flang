@@ -157,6 +157,8 @@ pub type TokenKind = enum {
 // `List.to_owned_slice` at lex time - there is no excess capacity per
 // token. Both slices share `allocator` (every trivia list a Token
 // produces comes from the same Lexer), so it lives once on the Token.
+// `null` means the global allocator, resolved at the free site - the
+// same convention the stdlib containers use.
 pub type Token = struct {
     kind: TokenKind
     text: String
@@ -164,7 +166,7 @@ pub type Token = struct {
     line: usize
     leading: Trivia[]
     trailing: Trivia[]
-    allocator: &Allocator
+    allocator: &Allocator?
 }
 
 // Free the trivia slices owned by this token. Called automatically when
@@ -174,8 +176,9 @@ pub type Token = struct {
 // non-owning (their `text` is a borrow), so no per-element deinit is
 // needed.
 pub fn deinit(self: &Token) {
-    self.allocator.free(self.leading)
-    self.allocator.free(self.trailing)
+    const a = self.allocator.or_global()
+    a.free(self.leading)
+    a.free(self.trailing)
 }
 
 // True for any keyword token - useful for syntax highlighting and the

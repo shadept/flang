@@ -283,7 +283,7 @@ fn read_byte() u8? {
         const n = read(0, &c, 1)
         if n <= 0 { return null }
     }
-    return c
+    return Some(c)
 }
 
 fn read_key() Key {
@@ -365,7 +365,7 @@ pub fn read_line(rl: &Readline) String? {
                 memcpy(&rl.line_buf[0], &buf[0], len)
                 const line = slice_from_raw_parts(&rl.line_buf[0], len) as String
                 if len > 0 { history_add(&rl.hist, line) }
-                return line
+                return Some(line)
             },
 
             Eof => {
@@ -569,5 +569,5 @@ fn read_line_simple(rl: &Readline) String? {
         }
     }
 
-    return slice_from_raw_parts(&rl.line_buf[0], len) as String
+    return Some(slice_from_raw_parts(&rl.line_buf[0], len) as String)
 }

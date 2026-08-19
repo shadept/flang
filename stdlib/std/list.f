@@ -189,21 +189,21 @@ pub fn pop(list: &List($T)) T? {
 
     list.len = list.len - 1
     let last: &T = list.ptr + list.len
-    return last.*
+    return Some(last.*)
 }
 
 // Get the element at the given index.
 pub fn get(list: List($T), index: usize) T? {
     if index >= list.len { return null }
     let elem: &T = list.ptr + index
-    return elem.*
+    return Some(elem.*)
 }
 
 // Get the element at the given index.
 pub fn get_ref(list: List($T), index: usize) &T? {
     if index >= list.len { return null }
     let elem: &T = list.ptr + index
-    return elem
+    return Some(elem)
 }
 
 // Set the element at the given index.
@@ -316,7 +316,7 @@ fn derived_allocator(own: &Allocator?, override: &Allocator?) &Allocator {
 
 // Apply `f` to every element, in order.
 pub fn map(self: &List($T), f: fn(T) $U, allocator: &Allocator? = null) List(U) {
-    let out: List(U) = list(self.len, derived_allocator(self.allocator, allocator))
+    let out: List(U) = list(self.len, Some(derived_allocator(self.allocator, allocator)))
     for i in 0..self.len {
         out.push(f(self[i]))
     }
@@ -336,7 +336,7 @@ pub fn map(self: &List($T), f: fn(T) $U, allocator: &Allocator? = null) List(U) 
 // about the callback's shape, not just an implementation change - see
 // docs/known-issues.md.
 pub fn flat_map(self: &List($T), f: fn(T) List($U), allocator: &Allocator? = null) List(U) {
-    let out: List(U) = list(self.len, derived_allocator(self.allocator, allocator))
+    let out: List(U) = list(self.len, Some(derived_allocator(self.allocator, allocator)))
     for i in 0..self.len {
         let part = f(self[i])
         out.push_all(part.as_slice())
@@ -347,7 +347,7 @@ pub fn flat_map(self: &List($T), f: fn(T) List($U), allocator: &Allocator? = nul
 
 // The elements `keep` accepts, in order.
 pub fn filter(self: &List($T), keep: fn(T) bool, allocator: &Allocator? = null) List(T) {
-    let out: List(T) = list(self.len, derived_allocator(self.allocator, allocator))
+    let out: List(T) = list(self.len, Some(derived_allocator(self.allocator, allocator)))
     for i in 0..self.len {
         if keep(self[i]) { out.push(self[i]) }
     }
@@ -357,7 +357,7 @@ pub fn filter(self: &List($T), keep: fn(T) bool, allocator: &Allocator? = null) 
 // The elements `drop` rejects - `filter` with the predicate negated, spelled
 // the way the intent usually reads.
 pub fn remove(self: &List($T), drop: fn(T) bool, allocator: &Allocator? = null) List(T) {
-    let out: List(T) = list(self.len, derived_allocator(self.allocator, allocator))
+    let out: List(T) = list(self.len, Some(derived_allocator(self.allocator, allocator)))
     for i in 0..self.len {
         if !drop(self[i]) { out.push(self[i]) }
     }
@@ -388,7 +388,7 @@ pub fn fold_right(self: &List($T), init: $A, f: fn(T, A) A) A {
 // Everything after the first `n` elements. Fewer than `n` elements yields an
 // empty list rather than an error.
 pub fn drop_first(self: &List($T), n: usize, allocator: &Allocator? = null) List(T) {
-    let out: List(T) = list(self.len, derived_allocator(self.allocator, allocator))
+    let out: List(T) = list(self.len, Some(derived_allocator(self.allocator, allocator)))
     let start = if n > self.len { self.len } else { n }
     for i in start..self.len {
         out.push(self[i])

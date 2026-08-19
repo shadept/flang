@@ -98,7 +98,7 @@ pub fn contains(s: $T[], value: T) bool {
 pub fn index_of(s: $T[], value: T) usize? {
     for i in 0..s.len {
         if s[i] == value {
-            return i
+            return Some(i)
         }
     }
     return null
@@ -110,7 +110,7 @@ pub fn last_index_of(s: $T[], value: T) usize? {
     for _i in 0..s.len {
         i = i - 1
         if s[i] == value {
-            return i
+            return Some(i)
         }
     }
     return null
@@ -140,7 +140,7 @@ pub fn binary_search(s: $T[], value: T) usize? {
         const mid = lo + (hi - lo) / 2
         const elem = s[mid]
         if elem == value {
-            return mid
+            return Some(mid)
         }
         if elem < value {
             lo = mid + 1
@@ -278,7 +278,7 @@ pub fn next(iter: &SliceIterator($T)) T? {
     }
     let val: T = iter.slice[iter.index]
     iter.index = iter.index + 1
-    return val
+    return Some(val)
 }
 
 // =============================================================================

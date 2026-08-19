@@ -50,7 +50,7 @@ fn display_board(fen: String) {
     const buf = [0; 256]
     const fba = fixed_buffer_allocator(buf)
     const alloc = fba.allocator()
-    let sb = string_builder(256, &alloc)
+    let sb = string_builder(256, Some(&alloc))
     defer sb.deinit()
     let w = sb.writer()
 

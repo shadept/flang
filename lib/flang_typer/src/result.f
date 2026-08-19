@@ -33,15 +33,14 @@ pub type TypeCheckResult = struct {
 // An empty result - every table empty, registries fresh. Handed back when
 // a source failed to parse and was never type-checked.
 pub fn empty_result(allocator: &Allocator? = null) TypeCheckResult {
-    let alloc = allocator.or_global()
     return .{
-        node_types = dict(alloc),
-        resolved_ops = dict(alloc),
-        resolved_targets = dict(alloc),
-        instantiated_types = list(0, alloc),
-        specializations = list(0, alloc),
-        nominals = nominal_registry(alloc),
-        functions = function_registry(alloc),
+        node_types = dict(allocator),
+        resolved_ops = dict(allocator),
+        resolved_targets = dict(allocator),
+        instantiated_types = list(0, allocator),
+        specializations = list(0, allocator),
+        nominals = nominal_registry(allocator),
+        functions = function_registry(allocator),
     }
 }
 

@@ -48,12 +48,6 @@ public record CompilerOptions(
     /// </summary>
     IReadOnlyList<string>? ProjectGlobalImports = null,
     /// <summary>
-    /// `[lang].implicit_option_wrap` from flang.toml. When false a bare `T` is
-    /// never wrapped into `Option(T)` implicitly and every site must say
-    /// `Some(x)`. Defaults to true so single-file builds are unaffected.
-    /// </summary>
-    bool ImplicitOptionWrap = true,
-    /// <summary>
     /// Direct dependencies' (name → source-root) mapping. An import whose first
     /// segment matches a key here resolves the remainder against the value
     /// (same shape as <see cref="ProjectName"/> / <see cref="ProjectSourceRoot"/>).
@@ -105,7 +99,6 @@ public class Compiler
         compilation.ProjectName = options.ProjectName;
         compilation.ProjectSourceRoot = options.ProjectSourceRoot;
         compilation.ProjectGlobalImports = options.ProjectGlobalImports ?? [];
-        compilation.ImplicitOptionWrap = options.ImplicitOptionWrap;
         if (options.DependencySourceRoots != null)
             foreach (var (name, root) in options.DependencySourceRoots)
                 compilation.DependencySourceRoots[name] = root;

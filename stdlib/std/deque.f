@@ -109,7 +109,7 @@ pub fn pop_front(self: &Deque($T)) T? {
     const v = slot.*
     self.head = (self.head + 1) % self.cap
     self.len = self.len - 1
-    return v
+    return Some(v)
 }
 
 // Remove and return the back element, or `null` when empty (stack pop).
@@ -118,14 +118,14 @@ pub fn pop_back(self: &Deque($T)) T? {
     self.len = self.len - 1
     const tail = (self.head + self.len) % self.cap
     const slot: &T = self.ptr + tail
-    return slot.*
+    return Some(slot.*)
 }
 
 // Read the front element without removing it.
 pub fn peek_front(self: Deque($T)) T? {
     if self.len == 0 { return null }
     const slot: &T = self.ptr + self.head
-    return slot.*
+    return Some(slot.*)
 }
 
 // Read the back element without removing it.
@@ -133,7 +133,7 @@ pub fn peek_back(self: Deque($T)) T? {
     if self.len == 0 { return null }
     const tail = (self.head + self.len - 1) % self.cap
     const slot: &T = self.ptr + tail
-    return slot.*
+    return Some(slot.*)
 }
 
 // Drop every element. Backing storage is retained for reuse. Element

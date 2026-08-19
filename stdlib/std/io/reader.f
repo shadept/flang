@@ -53,7 +53,7 @@ pub fn read_byte(r: &BufferedReader) u8? {
         if n == 0 {
             return null
         }
-        return b
+        return Some(b)
     }
 
     if r.pos == r.end {
@@ -65,7 +65,7 @@ pub fn read_byte(r: &BufferedReader) u8? {
     const src = r.buf.ptr + r.pos
     let b: u8 = src.*
     r.pos = r.pos + 1
-    return b
+    return Some(b)
 }
 
 // Read up to dst.len bytes into dst.

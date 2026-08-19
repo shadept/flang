@@ -64,7 +64,7 @@ fn substitute_array(arr: &ArrayTy, subst: &Dict(VarId, Ty), alloc: &Allocator) T
 }
 
 fn substitute_func(fn_ty: &FunctionTy, subst: &Dict(VarId, Ty), alloc: &Allocator) Ty {
-    let new_params = list(fn_ty.params.len, alloc)
+    let new_params = list(fn_ty.params.len, Some(alloc))
     for i in 0..fn_ty.params.len {
         let p = &fn_ty.params[i]
         new_params.push(substitute_r(p, subst, alloc))
@@ -75,7 +75,7 @@ fn substitute_func(fn_ty: &FunctionTy, subst: &Dict(VarId, Ty), alloc: &Allocato
 }
 
 fn substitute_tuple(elems: &List(Ty), subst: &Dict(VarId, Ty), alloc: &Allocator) Ty {
-    let new_elems = list(elems.len, alloc)
+    let new_elems = list(elems.len, Some(alloc))
     for i in 0..elems.len {
         let e = &elems[i]
         new_elems.push(substitute_r(e, subst, alloc))
@@ -84,7 +84,7 @@ fn substitute_tuple(elems: &List(Ty), subst: &Dict(VarId, Ty), alloc: &Allocator
 }
 
 fn substitute_record(fields: &List(Field), subst: &Dict(VarId, Ty), alloc: &Allocator) Ty {
-    let new_fields = list(fields.len, alloc)
+    let new_fields = list(fields.len, Some(alloc))
     for i in 0..fields.len {
         let f = &fields[i]
         let new_ty = substitute_r(&f.ty, subst, alloc)
@@ -97,7 +97,7 @@ fn substitute_nominal(nr: &NominalRef, subst: &Dict(VarId, Ty), alloc: &Allocato
     if nr.args.len == 0 {
         return Ty.Nominal(.{ id = nr.id, args = nr.args })
     }
-    let new_args: List(Ty) = list(nr.args.len, alloc)
+    let new_args: List(Ty) = list(nr.args.len, Some(alloc))
     for i in 0..nr.args.len {
         let a = &nr.args[i]
         new_args.push(substitute_r(a, subst, alloc))

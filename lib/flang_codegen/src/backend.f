@@ -82,18 +82,18 @@ pub type BuildOptions = struct {
     compiler_override: String?
 
     // Allocator used for everything the backend allocates on behalf of
-    // the call (temp strings, argv lists, the result struct, …).
-    allocator: &Allocator
+    // the call (temp strings, argv lists, the result struct, …). Null
+    // means the global allocator, resolved at each allocating leaf.
+    allocator: &Allocator?
 }
 
 pub fn build_options(output_path: String, allocator: &Allocator? = null) BuildOptions {
-    const alloc = allocator.or_global()
-    let extra_c: List(String) = list(0, alloc)
-    let extra_obj: List(String) = list(0, alloc)
-    let includes: List(String) = list(0, alloc)
-    let libs: List(String) = list(0, alloc)
-    let cflags: List(String) = list(0, alloc)
-    let ldflags: List(String) = list(0, alloc)
+    let extra_c: List(String) = list(0, allocator)
+    let extra_obj: List(String) = list(0, allocator)
+    let includes: List(String) = list(0, allocator)
+    let libs: List(String) = list(0, allocator)
+    let cflags: List(String) = list(0, allocator)
+    let ldflags: List(String) = list(0, allocator)
     return BuildOptions {
         output_path = output_path,
         mode = BuildMode.Debug,
@@ -106,7 +106,7 @@ pub fn build_options(output_path: String, allocator: &Allocator? = null) BuildOp
         emit_c_path = null,
         keep_temps = false,
         compiler_override = null,
-        allocator = alloc,
+        allocator = allocator,
     }
 }
 
@@ -157,7 +157,7 @@ pub fn set_mode(self: &BuildOptions, m: BuildMode) &BuildOptions {
 }
 
 pub fn set_emit_c_path(self: &BuildOptions, p: String) &BuildOptions {
-    self.emit_c_path = p
+    self.emit_c_path = Some(p)
     return self
 }
 
@@ -225,7 +225,7 @@ pub type CompilerInfo = struct {
     path: OwnedString
     extra_env_keys: List(OwnedString)
     extra_env_vals: List(OwnedString)
-    allocator: &Allocator
+    allocator: &Allocator?
 }
 
 pub fn deinit(self: &CompilerInfo) {

@@ -38,7 +38,7 @@ pub fn get(s: String, idx: usize) u8? {
         return null
     }
     const ptr = s.ptr + idx
-    return ptr.*
+    return Some(ptr.*)
 }
 
 // Returns the byte at the given index. Panics if out of bounds.

@@ -154,5 +154,5 @@ pub fn next(it: &BitsetIterator) usize? {
     if it.word_residual == 0u64 {
         it.word_idx = it.word_idx + 1
     }
-    return result
+    return Some(result)
 }

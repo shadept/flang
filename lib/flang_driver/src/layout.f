@@ -70,23 +70,23 @@ pub fn repr_of(def: &StructDef) Repr {
 // unresolved variables are sized as `i32` (a defensive fallback for
 // already-erroneous input, mirroring the reference compiler).
 pub fn layout_of(ty: &Ty, reg: &NominalRegistry, allocator: &Allocator? = null) Layout {
-    return layout_rec(ty, reg, allocator.or_global())
+    return layout_rec(ty, reg, allocator)
 }
 
 // Layout of a struct instantiation: `args` substitutes the struct's type
 // parameters (empty for non-generic structs).
 pub fn struct_layout(def: &StructDef, args: &List(Ty), reg: &NominalRegistry, allocator: &Allocator? = null) StructLayout {
-    return struct_layout_impl(def, args, reg, allocator.or_global())
+    return struct_layout_impl(def, args, reg, allocator)
 }
 
 // Layout of an enum instantiation. Recognises the `Option(&T)` niche.
 pub fn enum_layout(def: &EnumDef, args: &List(Ty), reg: &NominalRegistry, allocator: &Allocator? = null) EnumLayout {
-    return enum_layout_impl(def, args, reg, allocator.or_global())
+    return enum_layout_impl(def, args, reg, allocator)
 }
 
 // Core walk
 
-fn layout_rec(ty: &Ty, reg: &NominalRegistry, alloc: &Allocator) Layout {
+fn layout_rec(ty: &Ty, reg: &NominalRegistry, alloc: &Allocator?) Layout {
     return ty.* match {
         Var(_) => lay(4, 4),
         Prim(p) => prim_layout(p),
@@ -121,7 +121,7 @@ fn prim_layout(p: PrimitiveKind) Layout {
     }
 }
 
-fn array_layout(a: &ArrayTy, reg: &NominalRegistry, alloc: &Allocator) Layout {
+fn array_layout(a: &ArrayTy, reg: &NominalRegistry, alloc: &Allocator?) Layout {
     let el = layout_rec(a.elem, reg, alloc)
     return lay(el.size * a.length, el.align)
 }
@@ -130,7 +130,7 @@ fn array_layout(a: &ArrayTy, reg: &NominalRegistry, alloc: &Allocator) Layout {
 // Fields are placed in `field_order` (declaration order for `C`, descending
 // alignment for `Auto`), but `offsets` is written back indexed by
 // declaration order so callers address it with a field's declared index.
-fn fields_layout(tys: &List(Ty), repr: Repr, reg: &NominalRegistry, alloc: &Allocator) StructLayout {
+fn fields_layout(tys: &List(Ty), repr: Repr, reg: &NominalRegistry, alloc: &Allocator?) StructLayout {
     let n = tys.len
     let fls: List(Layout) = list(n, alloc)
     let max_align: usize = 1
@@ -164,7 +164,7 @@ fn fields_layout(tys: &List(Ty), repr: Repr, reg: &NominalRegistry, alloc: &Allo
 // this packs each field at its natural offset with zero internal padding -
 // the minimal-size layout. Alignments are powers of two, so a halving scan
 // from `max_align` down to 1 buckets them without a sort.
-fn field_order(fls: &List(Layout), repr: Repr, max_align: usize, alloc: &Allocator) List(usize) {
+fn field_order(fls: &List(Layout), repr: Repr, max_align: usize, alloc: &Allocator?) List(usize) {
     let n = fls.len
     let order: List(usize) = list(n, alloc)
     let is_c = repr match { C => true, Auto => false }
@@ -187,7 +187,7 @@ fn field_order(fls: &List(Layout), repr: Repr, max_align: usize, alloc: &Allocat
 // Size/align of a positional tuple or anonymous record (offsets
 // discarded). These have no declaration to lock them, so they take the
 // default auto layout.
-fn aggregate_size(elems: &List(Ty), reg: &NominalRegistry, alloc: &Allocator) Layout {
+fn aggregate_size(elems: &List(Ty), reg: &NominalRegistry, alloc: &Allocator?) Layout {
     let sl = fields_layout(elems, Repr.Auto, reg, alloc)
     let r = lay(sl.size, sl.align)
     sl.offsets.deinit()
@@ -195,7 +195,7 @@ fn aggregate_size(elems: &List(Ty), reg: &NominalRegistry, alloc: &Allocator) La
 }
 
 // Size/align of an anonymous struct (offsets discarded).
-fn record_size(fields: &List(Field), reg: &NominalRegistry, alloc: &Allocator) Layout {
+fn record_size(fields: &List(Field), reg: &NominalRegistry, alloc: &Allocator?) Layout {
     let tys: List(Ty) = list(fields.len, alloc)
     for i in 0..fields.len { tys.push(fields[i].ty) }
     let r = aggregate_size(&tys, reg, alloc)
@@ -203,7 +203,7 @@ fn record_size(fields: &List(Field), reg: &NominalRegistry, alloc: &Allocator) L
     return r
 }
 
-fn nominal_layout(nr: &NominalRef, reg: &NominalRegistry, alloc: &Allocator) Layout {
+fn nominal_layout(nr: &NominalRef, reg: &NominalRegistry, alloc: &Allocator?) Layout {
     let def = reg.get(nr.id)
     return def.* match {
         NomStruct(s) => struct_size(&s, &nr.args, reg, alloc),
@@ -211,21 +211,21 @@ fn nominal_layout(nr: &NominalRef, reg: &NominalRegistry, alloc: &Allocator) Lay
     }
 }
 
-fn struct_size(def: &StructDef, args: &List(Ty), reg: &NominalRegistry, alloc: &Allocator) Layout {
+fn struct_size(def: &StructDef, args: &List(Ty), reg: &NominalRegistry, alloc: &Allocator?) Layout {
     let sl = struct_layout_impl(def, args, reg, alloc)
     let r = lay(sl.size, sl.align)
     sl.offsets.deinit()
     return r
 }
 
-fn enum_size(def: &EnumDef, args: &List(Ty), reg: &NominalRegistry, alloc: &Allocator) Layout {
+fn enum_size(def: &EnumDef, args: &List(Ty), reg: &NominalRegistry, alloc: &Allocator?) Layout {
     let el = enum_layout_impl(def, args, reg, alloc)
     return lay(el.size, el.align)
 }
 
 // Aggregates
 
-fn struct_layout_impl(def: &StructDef, args: &List(Ty), reg: &NominalRegistry, alloc: &Allocator) StructLayout {
+fn struct_layout_impl(def: &StructDef, args: &List(Ty), reg: &NominalRegistry, alloc: &Allocator?) StructLayout {
     let tys: List(Ty) = list(def.fields.len, alloc)
     for i in 0..def.fields.len {
         tys.push(subst(&def.fields[i].ty, &def.type_params, args, alloc))
@@ -244,7 +244,7 @@ fn simd_layout(sl: StructLayout) StructLayout {
     return .{ size = align_up(sl.size, align), align = align, offsets = sl.offsets }
 }
 
-fn enum_layout_impl(def: &EnumDef, args: &List(Ty), reg: &NominalRegistry, alloc: &Allocator) EnumLayout {
+fn enum_layout_impl(def: &EnumDef, args: &List(Ty), reg: &NominalRegistry, alloc: &Allocator?) EnumLayout {
     if is_option_niche(def, args) {
         return .{ size = 8, align = 8, tag_size = 0, payload_offset = 0, is_niche = true }
     }
@@ -296,12 +296,12 @@ fn is_option_niche(def: &EnumDef, args: &List(Ty)) bool {
 // buffers and the freshly-boxed nodes live in `alloc` - so the caller must
 // pass an arena and must never deinit the results.
 
-fn subst(ty: &Ty, params: &List(VarId), args: &List(Ty), alloc: &Allocator) Ty {
+fn subst(ty: &Ty, params: &List(VarId), args: &List(Ty), alloc: &Allocator?) Ty {
     if params.len == 0 { return ty.* }
     return ty.* match {
         Var(v) => subst_var(v, params, args),
-        Ref(inner) => Ty.Ref(box(alloc, subst(inner, params, args, alloc))),
-        Array(a) => Ty.Array(.{ elem = box(alloc, subst(a.elem, params, args, alloc)), length = a.length }),
+        Ref(inner) => Ty.Ref(box(alloc.or_global(), subst(inner, params, args, alloc))),
+        Array(a) => Ty.Array(.{ elem = box(alloc.or_global(), subst(a.elem, params, args, alloc)), length = a.length }),
         Func(f) => subst_func(&f, params, args, alloc),
         Tuple(elems) => Ty.Tuple(subst_list(&elems, params, args, alloc)),
         Record(fields) => Ty.Record(subst_fields(&fields, params, args, alloc)),
@@ -317,7 +317,7 @@ fn subst_var(v: TyVar, params: &List(VarId), args: &List(Ty)) Ty {
     return Ty.Var(v)
 }
 
-fn subst_list(tys: &List(Ty), params: &List(VarId), args: &List(Ty), alloc: &Allocator) List(Ty) {
+fn subst_list(tys: &List(Ty), params: &List(VarId), args: &List(Ty), alloc: &Allocator?) List(Ty) {
     let out: List(Ty) = list(tys.len, alloc)
     for ty in tys {
         out.push(subst(&ty, params, args, alloc))
@@ -325,7 +325,7 @@ fn subst_list(tys: &List(Ty), params: &List(VarId), args: &List(Ty), alloc: &All
     return out
 }
 
-fn subst_fields(fields: &List(Field), params: &List(VarId), args: &List(Ty), alloc: &Allocator) List(Field) {
+fn subst_fields(fields: &List(Field), params: &List(VarId), args: &List(Ty), alloc: &Allocator?) List(Field) {
     let out: List(Field) = list(fields.len, alloc)
     for i in 0..fields.len {
         out.push(Field { name = fields[i].name, ty = subst(&fields[i].ty, params, args, alloc) })
@@ -333,9 +333,9 @@ fn subst_fields(fields: &List(Field), params: &List(VarId), args: &List(Ty), all
     return out
 }
 
-fn subst_func(f: &FunctionTy, params: &List(VarId), args: &List(Ty), alloc: &Allocator) Ty {
+fn subst_func(f: &FunctionTy, params: &List(VarId), args: &List(Ty), alloc: &Allocator?) Ty {
     let ps = subst_list(&f.params, params, args, alloc)
-    let ret = box(alloc, subst(f.ret, params, args, alloc))
+    let ret = box(alloc.or_global(), subst(f.ret, params, args, alloc))
     return Ty.Func(.{ params = ps, ret = ret })
 }
 

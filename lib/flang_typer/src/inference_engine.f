@@ -150,18 +150,17 @@ pub type Engine = struct {
     // `set_nominal_registry` after `collect_nominals` finishes; until
     // then nominal-aware rules silently no-op.
     nominals: &NominalRegistry?
-    allocator: &Allocator
+    allocator: &Allocator?
 }
 
 pub fn engine(allocator: &Allocator? = null) Engine {
-    let alloc = allocator.or_global()
-    let uf: UnionFind(VarId) = union_find(alloc)
-    let bindings: Dict(VarId, Ty) = dict(alloc)
-    let prim_constraints: Dict(VarId, List(PrimitiveKind)) = dict(alloc)
-    let levels: Dict(VarId, Level) = dict(alloc)
-    let bu: Stack(List(BindingUndo)) = stack(0, alloc)
-    let pu: Stack(List(PrimConstraintUndo)) = stack(0, alloc)
-    let lu: Stack(List(LevelUndo)) = stack(0, alloc)
+    let uf: UnionFind(VarId) = union_find(allocator)
+    let bindings: Dict(VarId, Ty) = dict(allocator)
+    let prim_constraints: Dict(VarId, List(PrimitiveKind)) = dict(allocator)
+    let levels: Dict(VarId, Level) = dict(allocator)
+    let bu: Stack(List(BindingUndo)) = stack(0, allocator)
+    let pu: Stack(List(PrimConstraintUndo)) = stack(0, allocator)
+    let lu: Stack(List(LevelUndo)) = stack(0, allocator)
     return .{
         uf = uf,
         bindings = bindings,
@@ -173,7 +172,7 @@ pub fn engine(allocator: &Allocator? = null) Engine {
         var_counter = 0u32,
         level = 0u32,
         nominals = null,
-        allocator = alloc,
+        allocator = allocator,
     }
 }
 
@@ -182,7 +181,7 @@ pub fn engine(allocator: &Allocator? = null) Engine {
 // after this is set; before, they silently no-op so plain
 // HM-without-sugar works in isolation.
 pub fn set_nominal_registry(self: &Engine, reg: &NominalRegistry) {
-    self.nominals = reg
+    self.nominals = Some(reg)
 }
 
 pub fn deinit(self: &Engine) {
@@ -261,17 +260,17 @@ pub fn fresh_constrained_var(self: &Engine, allowed: List(PrimitiveKind)) Ty {
 // ─────────────────────────────────────────────────────────────────────
 
 pub fn mk_ref(self: &Engine, inner: Ty) Ty {
-    let boxed = box(self.allocator, inner)
+    let boxed = box(self.allocator.or_global(), inner)
     return Ty.Ref(boxed)
 }
 
 pub fn mk_array(self: &Engine, elem: Ty, length: usize) Ty {
-    let boxed = box(self.allocator, elem)
+    let boxed = box(self.allocator.or_global(), elem)
     return Ty.Array(.{ elem = boxed, length = length })
 }
 
 pub fn mk_func(self: &Engine, params: List(Ty), ret: Ty) Ty {
-    let boxed_ret = box(self.allocator, ret)
+    let boxed_ret = box(self.allocator.or_global(), ret)
     return Ty.Func(.{ params = params, ret = boxed_ret })
 }
 
@@ -473,9 +472,9 @@ fn unify_concrete(self: &Engine, a: Ty, b: Ty) UnifyOutcome {
 // structural failure.
 //
 // Order: pure prim rules first (integer widening, float widening),
-// then nominal-aware rules in the order most callers expect (option
-// wrapping has the highest hit rate, then string→byte-slice, then
-// array decay and slice-to-ref, then the `Type(T)` lift).
+// then nominal-aware rules in the order most callers expect
+// (string→byte-slice first, then array decay and slice-to-ref, then
+// the `Type(T)` lift).
 fn try_coercion(self: &Engine, raw_from: Ty, raw_to: Ty) Coercion? {
     // Prim rules match on the (already top-resolved) raw shapes, so the
     // common failed probe pays no allocation.
@@ -493,19 +492,6 @@ fn try_coercion(self: &Engine, raw_from: Ty, raw_to: Ty) Coercion? {
             // rule inputs in place if coercion shows up in a profile.
             let from = self.zonk(raw_from)
             let to = self.zonk(raw_to)
-            let r3 = try_option_wrapping(from, to, reg, self.allocator)
-            if r3.is_some() {
-                // Wrapping only fires into a known payload type. An unbound
-                // payload would swallow anything - `Option($T)` params in
-                // overload sets must not absorb unrelated arguments (the
-                // reference rule requires the payload to equal the source).
-                let c = r3.unwrap()
-                if c.side_unifications.len == 0 { return r3 }
-                self.resolve(c.side_unifications[0].b) match {
-                    Var(_) => c.side_unifications.deinit(),
-                    _ => return r3,
-                }
-            }
             let r4 = try_string_to_byte_slice(from, to, reg, self.allocator)
             if r4.is_some() { return r4 }
             let r10 = try_byte_slice_to_string(from, to, reg, self.allocator)
@@ -617,10 +603,10 @@ fn check_prim_constraint(allowed: &List(PrimitiveKind), concrete: Ty) UnifyOutco
         _ => false,
     }
     if satisfied { return null }
-    return UnifyOutcome.UniPrimConstraint(PrimViolation {
+    return Some(UnifyOutcome.UniPrimConstraint(PrimViolation {
         got = concrete,
         allowed = allowed.*,
-    })
+    }))
 }
 
 fn prim_set_contains(allowed: &List(PrimitiveKind), p: PrimitiveKind) bool {
@@ -949,7 +935,7 @@ fn intersect_prim_constraints(self: &Engine, ra: VarId, rb: VarId) List(Primitiv
             if k == k2 { out.push(k); break }
         }
     }
-    return out
+    return Some(out)
 }
 
 fn record_binding_undo(self: &Engine, var_id: VarId) {

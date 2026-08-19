@@ -26,11 +26,11 @@ fn read_inner(mid: Option(Middle)) String {
 pub fn main() i32 {
     let pass = true
 
-    let m_some = Middle { inner = Inner { name = "alice" } }
+    let m_some = Middle { inner = Some(Inner { name = "alice" }) }
     let m_none: Middle = Middle { inner = null }
 
-    if read_inner(m_some) != "alice" { println("FAIL: outer Some, inner Some"); pass = false }
-    if read_inner(m_none) != "missing" { println("FAIL: outer Some, inner None"); pass = false }
+    if read_inner(Some(m_some)) != "alice" { println("FAIL: outer Some, inner Some"); pass = false }
+    if read_inner(Some(m_none)) != "missing" { println("FAIL: outer Some, inner None"); pass = false }
     if read_inner(null) != "missing" { println("FAIL: outer None"); pass = false }
 
     if pass { println("PASS") }

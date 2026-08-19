@@ -39,15 +39,14 @@ pub type Specialization = struct {
 pub type SpecializationRegistry = struct {
     by_key: Dict(String, u32)
     specs: List(Specialization)
-    allocator: &Allocator
+    allocator: &Allocator?
 }
 
 pub fn specialization_registry(allocator: &Allocator? = null) SpecializationRegistry {
-    let alloc = allocator.or_global()
     return .{
-        by_key = dict(alloc),
-        specs = list(0, alloc),
-        allocator = alloc,
+        by_key = dict(allocator),
+        specs = list(0, allocator),
+        allocator = allocator,
     }
 }
 
@@ -64,8 +63,7 @@ pub fn deinit(self: &SpecializationRegistry) {
 // Canonical key for `(function_id, concrete_params)`. Two
 // specialisations with identical signatures share an id.
 pub fn key_for(function_id: u32, params: &List(Ty), ret: Ty, allocator: &Allocator? = null) OwnedString {
-    let alloc = allocator.or_global()
-    let sb = string_builder(64, alloc)
+    let sb = string_builder(64, allocator)
     sb.append(function_id)
     sb.append("@")
     for i in 0..params.len {

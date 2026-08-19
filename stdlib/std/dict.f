@@ -258,7 +258,7 @@ pub fn get_ref(self: Dict($K, $V), key: K) &V? {
         if (entry.state == 1) {
             if (entry.hash == h) {
                 if (entry.key == key) {
-                    return &entry.value
+                    return Some(&entry.value)
                 }
             }
         }

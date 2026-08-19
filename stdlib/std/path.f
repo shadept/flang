@@ -173,9 +173,9 @@ pub fn parent(self: &Path) String? {
         if is_separator(v[i]) {
             if i == 0 {
                 // Path was rooted: "/foo" -> "/"
-                return v[..1]
+                return Some(v[..1])
             }
-            return v[..i]
+            return Some(v[..i])
         }
     }
     return null
@@ -192,17 +192,17 @@ pub fn file_name(self: &Path) String? {
     while i > 0 {
         i = i - 1
         if is_separator(v[i]) {
-            return v[i + 1..]
+            return Some(v[i + 1..])
         }
     }
     // No separator: whole path is the file name. Skip a leading drive letter
     // ("C:foo" -> "foo") on Windows.
     #if(platform.os == "windows") {
         if v.len >= 2 and is_drive_letter(v[0]) and v[1] == ':' {
-            return v[2..]
+            return Some(v[2..])
         }
     }
-    return v
+    return Some(v)
 }
 
 // Returns the file name without its trailing extension.
@@ -220,12 +220,12 @@ pub fn file_stem(self: &Path) String? {
         if fname[i] == '.' {
             if i == 0 {
                 // Dotfile (".bashrc") - no extension.
-                return fname
+                return Some(fname)
             }
-            return fname[..i]
+            return Some(fname[..i])
         }
     }
-    return fname
+    return Some(fname)
 }
 
 // Returns the extension (without the dot) or null when there is none.
@@ -244,7 +244,7 @@ pub fn extension(self: &Path) String? {
         i = i - 1
         if fname[i] == '.' {
             if i == 0 { return null }
-            return fname[i + 1..]
+            return Some(fname[i + 1..])
         }
     }
     return null
@@ -286,7 +286,7 @@ pub fn next(self: &PathComponents) String? {
     while self.pos < self.bytes.len and !is_separator(self.bytes[self.pos]) {
         self.pos = self.pos + 1
     }
-    return from_c_string(self.bytes.ptr + start, self.pos - start)
+    return Some(from_c_string(self.bytes.ptr + start, Some(self.pos - start)))
 }
 
 // =============================================================================
@@ -428,10 +428,10 @@ pub fn normalize(self: &Path) Path {
                 // ".." past root is a no-op.
                 continue
             }
-            comps.push(from_c_string(v.ptr + start, seg_len))
+            comps.push(from_c_string(v.ptr + start, Some(seg_len)))
             continue
         }
-        comps.push(from_c_string(v.ptr + start, seg_len))
+        comps.push(from_c_string(v.ptr + start, Some(seg_len)))
     }
 
     // Emit drive prefix, root, then components.
@@ -490,7 +490,7 @@ pub fn cwd(allocator: &Allocator? = null) Result(Path, PathError) {
         return Err(err as PathError)
     }
     let sb = string_builder(out_len + 1, allocator)
-    const view = from_c_string(buf.ptr, out_len)
+    const view = from_c_string(buf.ptr, Some(out_len))
     sb.append(view)
     return Ok(.{ __sb = sb })
 }

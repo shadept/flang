@@ -2016,9 +2016,6 @@ public partial class HmTypeChecker
             // Both branches: unify
             var elseType = InferExpression(ifExpr.ElseBranch);
 
-            // Pre-bind Option TypeVars for T vs null coercion
-            PreBindOptionTypeVar(thenType, elseType, ifExpr.Span);
-
             using (_ctx.Engine.OverrideErrors("E2074",
                 () => "if/else branches have different types: then is `{expected}`, else is `{actual}`"))
             {
@@ -2045,7 +2042,6 @@ public partial class HmTypeChecker
         if (ifExpr.ElseBranch != null)
         {
             var elseType = InferExpression(ifExpr.ElseBranch);
-            PreBindOptionTypeVar(thenType, elseType, ifExpr.Span);
 
             if (_ctx.Engine.TryUnify(thenType, elseType) != null)
             {
@@ -2122,11 +2118,6 @@ public partial class HmTypeChecker
             // Infer arm body and unify with result type
             var armType = InferExpression(arm.ResultExpr);
 
-            // Pre-bind Option TypeVars for T vs null coercion:
-            // When one side is concrete T and the other is Option(TypeVar), bind the
-            // TypeVar so the OptionWrappingCoercionRule can match T -> Option(T).
-            PreBindOptionTypeVar(resultType, armType, arm.Span);
-
             using (_ctx.Engine.OverrideErrors("E2075",
                 () => "match arm returns `{actual}`, but previous arms return `{expected}`"))
             {
@@ -2186,33 +2177,6 @@ public partial class HmTypeChecker
         }
 
         return resultType;
-    }
-
-    /// <summary>
-    /// When one side is a concrete type T and the other is Option(TypeVar),
-    /// pre-bind the TypeVar to T so the OptionWrappingCoercionRule can match.
-    /// This enables T-to-Option(T) coercion in match arms and if/else branches
-    /// where one branch returns T and another returns null.
-    /// </summary>
-    private void PreBindOptionTypeVar(Type a, Type b, SourceSpan span)
-    {
-        a = _ctx.Engine.Resolve(a);
-        b = _ctx.Engine.Resolve(b);
-
-        // a is concrete T, b is Option(TypeVar) → bind TypeVar = T
-        if (b is NominalType { Name: WellKnown.Option } optB && optB.TypeArguments.Count > 0)
-        {
-            var inner = _ctx.Engine.Resolve(optB.TypeArguments[0]);
-            if (inner is TypeVar && a is not TypeVar && !(a is NominalType { Name: WellKnown.Option }))
-                _ctx.Engine.Unify(a, inner, span);
-        }
-        // b is concrete T, a is Option(TypeVar) → bind TypeVar = T
-        else if (a is NominalType { Name: WellKnown.Option } optA && optA.TypeArguments.Count > 0)
-        {
-            var inner = _ctx.Engine.Resolve(optA.TypeArguments[0]);
-            if (inner is TypeVar && b is not TypeVar && !(b is NominalType { Name: WellKnown.Option }))
-                _ctx.Engine.Unify(b, inner, span);
-        }
     }
 
     /// <summary>
@@ -4155,22 +4119,39 @@ public partial class HmTypeChecker
     /// (so integer literals land in `capacity`). Callers wanting the
     /// allocator path for a non-AddressOf expression must write
     /// `$(allocator=x)"..."` explicitly, matching idiomatic stdlib usage.
+    /// An `&expr` allocator is wrapped in `Some(...)` here, because the
+    /// parameter is `&Allocator?` and there is no implicit `T -> Option(T)`
+    /// coercion — the sugar owes its user the explicit wrap.
     /// </summary>
     private List<ExpressionNode> ResolveBuilderArgs(List<ExpressionNode>? builderArgs, SourceSpan span)
     {
         if (builderArgs == null || builderArgs.Count == 0)
             return new List<ExpressionNode>();
 
-        if (builderArgs.Count != 1 || builderArgs[0] is NamedArgumentExpressionNode)
-            return new List<ExpressionNode>(builderArgs);
-
-        var soleArg = builderArgs[0];
-        if (soleArg is AddressOfExpressionNode)
+        var resolved = new List<ExpressionNode>(builderArgs.Count);
+        foreach (var arg in builderArgs)
         {
-            var named = new NamedArgumentExpressionNode(soleArg.Span, soleArg.Span, "allocator", soleArg);
-            return new List<ExpressionNode> { named };
+            switch (arg)
+            {
+                case AddressOfExpressionNode addr:
+                {
+                    var wrapped = WrapInSome(addr);
+                    resolved.Add(builderArgs.Count == 1
+                        ? new NamedArgumentExpressionNode(addr.Span, addr.Span, "allocator", wrapped)
+                        : wrapped);
+                    break;
+                }
+                case NamedArgumentExpressionNode { Name: "allocator", Value: AddressOfExpressionNode namedAddr } named:
+                    resolved.Add(new NamedArgumentExpressionNode(named.Span, named.Span, "allocator", WrapInSome(namedAddr)));
+                    break;
+                default:
+                    resolved.Add(arg);
+                    break;
+            }
         }
+        return resolved;
 
-        return new List<ExpressionNode> { soleArg };
+        static CallExpressionNode WrapInSome(ExpressionNode inner) =>
+            new(inner.Span, "Some", new List<ExpressionNode> { inner });
     }
 }

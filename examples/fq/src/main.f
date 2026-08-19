@@ -15,7 +15,7 @@ fn print_usage() {
 
 fn apply_query(root: &JsonValue, query: String) &JsonValue? {
     if query.len == 0 or query == "." {
-        return root
+        return Some(root)
     }
 
     let current = root
@@ -26,7 +26,7 @@ fn apply_query(root: &JsonValue, query: String) &JsonValue? {
     }
 
     if i >= query.len {
-        return current
+        return Some(current)
     }
 
     let segment_start = i
@@ -55,7 +55,7 @@ fn apply_query(root: &JsonValue, query: String) &JsonValue? {
         segment_start = i
     }
 
-    return current
+    return Some(current)
 }
 
 fn print_selected(root: &JsonValue, query: String) {

@@ -96,7 +96,7 @@ pub fn read_all(file: &File, allocator: &Allocator? = null) Result(OwnedString, 
 
 pub fn read_all_inplace(file: &File, allocator: &Allocator) Result(OwnedString, FileError) {
     const PAGE_SIZE = 4096
-    let sb = string_builder(PAGE_SIZE, allocator)
+    let sb = string_builder(PAGE_SIZE, Some(allocator))
     let buf = [0u8; PAGE_SIZE]
     loop {
         const read_n = read(file.handle.fd, buf.ptr, buf.len)

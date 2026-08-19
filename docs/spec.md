@@ -164,7 +164,7 @@ Conversions are always explicit — no implicit coercions between string types.
      __sb.append("seg2"); __sb.to_string() })
   ```
   — yields an `OwnedString`. Empty segments are skipped. Because `to_string()` transfers ownership and zeroes the builder, the deferred `deinit` is a no-op on success but still frees on panic.
-- `$(args)"..."` forwards `args` to `string_builder(capacity: usize = 0, allocator: &Allocator? = null)`. A lone `&alloc` argument routes to the `allocator` slot; any other single positional arg lands in `capacity`.
+- `$(args)"..."` forwards `args` to `string_builder(capacity: usize = 0, allocator: &Allocator? = null)`. A lone `&alloc` argument routes to the `allocator` slot; any other single positional arg lands in `capacity`. An `&alloc` allocator argument (lone, positional, or `allocator=&alloc`) is wrapped in `Some(...)` by the desugar — the sugar owes its user the explicit wrap now that there is no implicit `T -> Option(T)` coercion.
 - `$sb"seg0{e1}seg1"` becomes `({ sb.append("seg0"); sb.append(e1); sb.append("seg1") })` — type `void`. Works with any receiver that has a matching `append` overload (including a `Writer`).
 - A hole `{expr:spec}` desugars to `sb.append(expr, "spec")`, dispatching to the primitive or generic `append` overload for `expr`'s type.
 
@@ -179,7 +179,7 @@ pub type Option = enum(T) {
 
 - `T?` is sugar for `Option(T)`.
 - `null` is sugar for `Option.None`. The inner `T` is filled by inference from context; with no constraint the compiler reports a type-mismatch error.
-- A present value coerces to its optional: a `T` is accepted where `T?` is expected. The wrap is directional and single-level — it fires only where the expected type is already a concrete `Option(T)` (return value, annotated binding, struct field, argument), never against an unbound inference variable, and `T -> T??` requires an explicit `Some`. See [ADR-0002](adr/0002-optional-wrapping-as-directional-coercion.md).
+- There is **no implicit `T -> Option(T)` coercion**: a present value must be wrapped explicitly with `Some(v)` wherever `T?` is expected (return value, annotated binding, struct field, argument, match arm / branch joining a `null` arm). Only `null` / `None` is implicit — the literal has no other possible type. See [ADR-0005](adr/0005-remove-implicit-option-wrapping.md), which supersedes ADR-0002.
 - `null` is **not** a pointer value. `&T` is non-null by type; `let p: &i32 = null` errors. Use `&T?` for a nullable reference.
 - `&T?` is `Option(&T)`. The niche optimization (a 0-pointer encodes `None`) is unchanged — same wire format.
 - Variant constructors: `Some(v)` and `None` work as canonical constructors.

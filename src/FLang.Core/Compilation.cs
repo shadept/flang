@@ -59,11 +59,6 @@ public class Compilation
     // Each entry is a dotted module path (e.g. "std.prelude").
     public IReadOnlyList<string> ProjectGlobalImports { get; set; } = [];
 
-    // Language behaviour opted into by the project, from flang.toml `[lang]`.
-    // Defaults match the manifest defaults so a compilation without a project
-    // file (single-file builds, tests) behaves as it always has.
-    public bool ImplicitOptionWrap { get; set; } = true;
-
     // Module imports — module path -> set of imported module paths (private + public).
     // Populated by ModuleCompiler. A module always implicitly imports itself
     // (its own path is included).

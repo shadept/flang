@@ -17,7 +17,7 @@ type Wrap = struct(T) {
 }
 
 fn mk(v: $T, c: fn(&T) void) Wrap(T) {
-    let some: T? = v
+    let some: T? = Some(v)
     return .{ val = some, cleanup = c }
 }
 

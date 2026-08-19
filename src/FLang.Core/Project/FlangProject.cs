@@ -4,23 +4,7 @@ public record FlangProject(
     ProjectInfo Project,
     BuildSection? Build = null,
     ImportsSection? Imports = null,
-    DependenciesSection? Dependencies = null,
-    LangSection? Lang = null);
-
-/// <summary>
-/// `[lang]` table in flang.toml — per-project language behaviour, the knobs a
-/// project opts into rather than the compiler deciding for everyone.
-/// </summary>
-/// <param name="ImplicitOptionWrap">
-/// Whether a bare `T` may be returned or assigned where `Option(T)` is
-/// expected, wrapping implicitly. Default true for compatibility; the coercion
-/// is on its way out. It interacts badly with generic instantiation — the rule
-/// is skipped when the payload is an unbound var, so a `return value` inside a
-/// generic function returning `T?` falls through to a structural unify of `T`
-/// against `Option(T)` and trips the occurs check. Turning it off makes every
-/// such site say `Some(value)` and the failure disappears.
-/// </param>
-public record LangSection(bool ImplicitOptionWrap = true);
+    DependenciesSection? Dependencies = null);
 
 /// Whether a project builds to a linked executable or is consumed by source as a library.
 public enum ProjectKind { Exe, Lib }

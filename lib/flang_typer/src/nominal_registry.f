@@ -81,19 +81,18 @@ pub type NominalRegistry = struct {
     // are heap-allocated by `OwnedString` and do not move when the list
     // re-allocates, so the views stay valid for the registry's life.
     owned_fqns: List(OwnedString)
-    allocator: &Allocator
+    allocator: &Allocator?
 }
 
 pub fn nominal_registry(allocator: &Allocator? = null) NominalRegistry {
-    let alloc = allocator.or_global()
-    let defs: List(NominalDef) = list(0, alloc)
-    let by_fqn: Dict(String, NominalId) = dict(alloc)
-    let owned_fqns: List(OwnedString) = list(0, alloc)
+    let defs: List(NominalDef) = list(0, allocator)
+    let by_fqn: Dict(String, NominalId) = dict(allocator)
+    let owned_fqns: List(OwnedString) = list(0, allocator)
     return .{
         defs = defs,
         by_fqn = by_fqn,
         owned_fqns = owned_fqns,
-        allocator = alloc,
+        allocator = allocator,
     }
 }
 

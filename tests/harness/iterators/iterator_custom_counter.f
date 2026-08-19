@@ -22,7 +22,7 @@ fn next(state: &CounterState) i32? {
     let val = state.current
     state.current = state.current + 1
     state.remaining = state.remaining - 1
-    return val
+    return Some(val)
 }
 
 pub fn main() i32 {

@@ -53,7 +53,6 @@ pub type InlineStats = struct {
 // place; functions that became uncalled by inlining stay in the
 // module (dead-function elimination is a separate pass - RFC-015 §4).
 pub fn inline_shims(m: &IrModule, allocator: &Allocator? = null) InlineStats {
-    const alloc = allocator.or_global()
     let stats = InlineStats {
         passes = 0,
         inlined = 0,
@@ -65,12 +64,12 @@ pub fn inline_shims(m: &IrModule, allocator: &Allocator? = null) InlineStats {
     }
 
     for pass in 0..MAX_PASSES {
-        let foreigns = collect_foreign_names(m, alloc)
+        let foreigns = collect_foreign_names(m, allocator)
         defer foreigns.deinit()
-        let recursive = find_recursive(m, &foreigns, alloc)
+        let recursive = find_recursive(m, &foreigns, allocator)
         defer recursive.deinit()
 
-        let inlinable_idx: Dict(OwnedString, usize) = dict(alloc)
+        let inlinable_idx: Dict(OwnedString, usize) = dict(allocator)
         defer inlinable_idx.deinit()
 
         let any_eligible = false
@@ -107,7 +106,7 @@ pub fn inline_shims(m: &IrModule, allocator: &Allocator? = null) InlineStats {
         let any_inlined = false
         for j in 0..m.functions.len {
             if m.functions[j].name == "main" { continue }
-            const did = inline_calls_in(m, j, &inlinable_idx, alloc)
+            const did = inline_calls_in(m, j, &inlinable_idx, allocator)
             if did > 0 {
                 any_inlined = true
                 stats.inlined = stats.inlined + did
@@ -142,7 +141,7 @@ fn contains_indirect_or_foreign(instrs: &List(Instr), foreigns: &Set(OwnedString
     return false
 }
 
-fn collect_foreign_names(m: &IrModule, alloc: &Allocator) Set(OwnedString) {
+fn collect_foreign_names(m: &IrModule, alloc: &Allocator?) Set(OwnedString) {
     let s: Set(OwnedString) = set(alloc)
     for i in 0..m.foreigns.len {
         s.add(m.foreigns[i].name)
@@ -157,7 +156,7 @@ fn collect_foreign_names(m: &IrModule, alloc: &Allocator) Set(OwnedString) {
 // O(V * (V + E)) on the call graph; V is hundreds even on big modules.
 // ─────────────────────────────────────────────────────────────────────
 
-fn find_recursive(m: &IrModule, foreigns: &Set(OwnedString), alloc: &Allocator) Set(OwnedString) {
+fn find_recursive(m: &IrModule, foreigns: &Set(OwnedString), alloc: &Allocator?) Set(OwnedString) {
     let name_to_idx: Dict(OwnedString, usize) = dict(alloc)
     defer name_to_idx.deinit()
     for i in 0..m.functions.len {
@@ -203,7 +202,7 @@ fn find_recursive(m: &IrModule, foreigns: &Set(OwnedString), alloc: &Allocator) 
     return recursive
 }
 
-fn reaches_self(adj: &List(List(usize)), start: usize, alloc: &Allocator) bool {
+fn reaches_self(adj: &List(List(usize)), start: usize, alloc: &Allocator?) bool {
     // Dense integer membership - Bitset is one bit per element vs
     // Set(usize)'s ~32 bytes/entry hash table. set.f's preamble
     // explicitly points at Bitset for this case.
@@ -254,7 +253,7 @@ fn reaches_self(adj: &List(List(usize)), start: usize, alloc: &Allocator) bool {
 //     to the operand to substitute in the cloned instruction.
 // ─────────────────────────────────────────────────────────────────────
 
-fn inline_calls_in(m: &IrModule, caller_idx: usize, inlinable: &Dict(OwnedString, usize), alloc: &Allocator) usize {
+fn inline_calls_in(m: &IrModule, caller_idx: usize, inlinable: &Dict(OwnedString, usize), alloc: &Allocator?) usize {
     let inlined_count: usize = 0
     let result_subst: Dict(u32, Operand) = dict(alloc)
     defer result_subst.deinit()
@@ -342,7 +341,7 @@ fn splice_callee(
     caller: &Function,
     args: &List(Operand),
     out: &List(Instr),
-    alloc: &Allocator,
+    alloc: &Allocator?,
 ) Operand? {
     let local_subst: Dict(u32, Operand) = dict(alloc)
     defer local_subst.deinit()
@@ -367,7 +366,7 @@ fn splice_callee(
     cb.terminator match {
         Ret(v) => {
             v match {
-                Some(op) => result = remap_operand(op, &local_subst),
+                Some(op) => result = Some(remap_operand(op, &local_subst)),
                 None => {},
             }
         },
@@ -409,7 +408,7 @@ fn remap_operand(op: Operand, subst: &Dict(u32, Operand)) Operand {
     }
 }
 
-fn clone_operand_list(args: &List(Operand), subst: &Dict(u32, Operand), alloc: &Allocator) List(Operand) {
+fn clone_operand_list(args: &List(Operand), subst: &Dict(u32, Operand), alloc: &Allocator?) List(Operand) {
     let out: List(Operand) = list(args.len, alloc)
     for i in 0..args.len {
         out.push(remap_operand(args[i], subst))
@@ -417,13 +416,13 @@ fn clone_operand_list(args: &List(Operand), subst: &Dict(u32, Operand), alloc: &
     return out
 }
 
-fn clone_ir_type_list(tys: &List(IrType), alloc: &Allocator) List(IrType) {
+fn clone_ir_type_list(tys: &List(IrType), alloc: &Allocator?) List(IrType) {
     let out: List(IrType) = list(tys.len, alloc)
     out.push_all(tys.as_slice())
     return out
 }
 
-fn clone_block_target(t: &BlockTarget, subst: &Dict(u32, Operand), alloc: &Allocator) BlockTarget {
+fn clone_block_target(t: &BlockTarget, subst: &Dict(u32, Operand), alloc: &Allocator?) BlockTarget {
     return BlockTarget {
         label = t.label,
         args = clone_operand_list(&t.args, subst, alloc),
@@ -434,7 +433,7 @@ fn clone_callee_instr(
     inst: &Instr,
     subst: &Dict(u32, Operand),
     caller: &Function,
-    alloc: &Allocator,
+    alloc: &Allocator?,
 ) Instr {
     return inst.* match {
         Binary(b) => {
@@ -529,10 +528,10 @@ fn clone_callee_instr(
             c.result match {
                 Some(old_id) => {
                     const fresh_id = caller.fresh_value_id()
-                    new_result = fresh_id
+                    new_result = Some(fresh_id)
                     subst.set(old_id, Operand.Local(fresh_id))
                     c.result_ty match {
-                        Some(ty) => new_result_ty = ty,
+                        Some(ty) => new_result_ty = Some(ty),
                         None => {},
                     }
                 },
@@ -556,10 +555,10 @@ fn clone_callee_instr(
             c.result match {
                 Some(old_id) => {
                     const fresh_id = caller.fresh_value_id()
-                    new_result = fresh_id
+                    new_result = Some(fresh_id)
                     subst.set(old_id, Operand.Local(fresh_id))
                     c.result_ty match {
-                        Some(ty) => new_result_ty = ty,
+                        Some(ty) => new_result_ty = Some(ty),
                         None => {},
                     }
                 },
@@ -578,7 +577,7 @@ fn clone_callee_instr(
     }
 }
 
-fn rewrite_instr(inst: &Instr, subst: &Dict(u32, Operand), alloc: &Allocator) Instr {
+fn rewrite_instr(inst: &Instr, subst: &Dict(u32, Operand), alloc: &Allocator?) Instr {
     return inst.* match {
         Binary(b) => Instr.Binary(BinaryInstr {
             result = b.result, op = b.op, ty = b.ty,
@@ -644,7 +643,7 @@ fn rewrite_instr(inst: &Instr, subst: &Dict(u32, Operand), alloc: &Allocator) In
     }
 }
 
-fn rewrite_terminator(t: &Terminator, subst: &Dict(u32, Operand), alloc: &Allocator) Terminator {
+fn rewrite_terminator(t: &Terminator, subst: &Dict(u32, Operand), alloc: &Allocator?) Terminator {
     return t.* match {
         Br(target) => Terminator.Br(clone_block_target(&target, subst, alloc)),
         BrIf(b) => Terminator.BrIf(BrIfTerm {
@@ -655,7 +654,7 @@ fn rewrite_terminator(t: &Terminator, subst: &Dict(u32, Operand), alloc: &Alloca
         Ret(v) => {
             let new_v: Operand? = null
             v match {
-                Some(op) => new_v = remap_operand(op, subst),
+                Some(op) => new_v = Some(remap_operand(op, subst)),
                 None => {},
             }
             Terminator.Ret(new_v)

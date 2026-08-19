@@ -17,7 +17,7 @@
 
     pub fn from_string(s: String) #(E.name)? {
         #for v in type_of(E.name).fields {
-            if s == #("\"" + v.name + "\"") { return #(E.name).#(v.name) }
+            if s == #("\"" + v.name + "\"") { return Some(#(E.name).#(v.name)) }
         }
         return null
     }

@@ -38,8 +38,7 @@ pub fn visibility(current_module: String?, visible: Set(String)) Visibility {
 // Empty visibility - used by tests and by codegen-time lookups that
 // don't need filtering (the source code has already been validated).
 pub fn open(allocator: &Allocator? = null) Visibility {
-    let alloc = allocator.or_global()
-    let s: Set(String) = set(alloc)
+    let s: Set(String) = set(allocator)
     return .{ current_module = null, visible = s }
 }
 

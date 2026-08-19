@@ -141,7 +141,7 @@ pub fn compile(m: &IrModule, options: &BuildOptions) Result(BuildResult, BuildEr
     let exe_path = from_view(options.output_path, alloc)
     let c_kept: OwnedString? = null
     if keep_c {
-        c_kept = c_path_owned
+        c_kept = Some(c_path_owned)
     } else {
         remove_file_quiet(c_path_owned.as_view())
         c_path_owned.deinit()
@@ -891,7 +891,7 @@ fn c_hex_nibble(n: u8) u8 {
 
 // Try discovery unless the caller overrode the compiler. Override skips
 // env synthesis (caller is responsible).
-fn discover_or_override(options: &BuildOptions, allocator: &Allocator) Result(CompilerInfo, BuildError) {
+fn discover_or_override(options: &BuildOptions, allocator: &Allocator?) Result(CompilerInfo, BuildError) {
     options.compiler_override match {
         Some(p) => {
             let env_keys: List(OwnedString) = list(0, allocator)
@@ -919,7 +919,7 @@ fn guess_kind_from_name(name: String) CompilerKind {
 }
 
 // Pick the first toolchain that exists, in platform-preferred order.
-pub fn discover_compiler(allocator: &Allocator) Result(CompilerInfo, BuildError) {
+pub fn discover_compiler(allocator: &Allocator? = null) Result(CompilerInfo, BuildError) {
     #if(platform.os == "windows") {
         // 1. MSVC via vswhere (sets INCLUDE/LIB/PATH so the spawn works
         //    outside a developer prompt).
@@ -977,7 +977,7 @@ pub fn discover_compiler(allocator: &Allocator) Result(CompilerInfo, BuildError)
     return Err(BuildError.NoCompilerFound)
 }
 
-fn make_simple_info(kind: CompilerKind, name: String, allocator: &Allocator) CompilerInfo {
+fn make_simple_info(kind: CompilerKind, name: String, allocator: &Allocator?) CompilerInfo {
     let env_keys: List(OwnedString) = list(0, allocator)
     let env_vals: List(OwnedString) = list(0, allocator)
     return CompilerInfo {
@@ -992,7 +992,7 @@ fn make_simple_info(kind: CompilerKind, name: String, allocator: &Allocator) Com
 
 // Spawn `prog --version`, redirect stdio to Null, wait. exit==0 means
 // the binary is on PATH and runnable.
-fn can_spawn(prog: String, allocator: &Allocator) bool {
+fn can_spawn(prog: String, allocator: &Allocator?) bool {
     let cmd = command(prog, allocator)
     defer cmd.deinit()
     cmd.arg("--version")
@@ -1019,7 +1019,7 @@ fn can_spawn(prog: String, allocator: &Allocator) bool {
 // it to locate the active VS install dir, then walk the toolset layout
 // to find cl.exe + matching INCLUDE / LIB directories.
 
-fn discover_msvc(allocator: &Allocator) CompilerInfo? {
+fn discover_msvc(allocator: &Allocator?) CompilerInfo? {
     // ProgramFiles(x86) is the conventional location; fall back to the
     // hard-coded path when the env var is missing (some CI shells don't
     // forward it).
@@ -1163,19 +1163,19 @@ fn discover_msvc(allocator: &Allocator) CompilerInfo? {
         None => {},
     }
 
-    return CompilerInfo {
+    return Some(CompilerInfo {
         kind = CompilerKind.Msvc,
         name = from_view("cl.exe", allocator),
         path = from_view(cl.as_view(), allocator),
         extra_env_keys = env_keys,
         extra_env_vals = env_vals,
         allocator = allocator,
-    }
+    })
 }
 
 // Spawn `vswhere -latest ... -property installationPath` and capture
 // the first line of stdout.
-fn run_vswhere(vswhere_path: String, allocator: &Allocator) OwnedString? {
+fn run_vswhere(vswhere_path: String, allocator: &Allocator?) OwnedString? {
     let cmd = command(vswhere_path, allocator)
     defer cmd.deinit()
     cmd.arg("-latest")
@@ -1210,7 +1210,7 @@ fn run_vswhere(vswhere_path: String, allocator: &Allocator) OwnedString? {
     }
     let result = from_view(trimmed, allocator)
     raw.deinit()
-    return result
+    return Some(result)
 }
 
 // Write a trailing 0 byte without bumping the StringBuilder's logical
@@ -1233,7 +1233,7 @@ fn dir_exists(p: String) bool {
 // Returns the lexicographically largest subdirectory name, which for
 // MSVC toolset versions and Windows SDK versions corresponds to the
 // most recent install.
-fn newest_subdir(parent: String, allocator: &Allocator) OwnedString? {
+fn newest_subdir(parent: String, allocator: &Allocator?) OwnedString? {
     // read_dir's C shim wants a NUL-terminated path. Copy into a builder
     // we control so callers can pass plain views.
     let pbuf = string_builder(parent.len + 1, allocator)
@@ -1257,11 +1257,11 @@ fn newest_subdir(parent: String, allocator: &Allocator) OwnedString? {
                 if e.name > b.as_view() {
                     let bb = b
                     bb.deinit()
-                    best = from_view(e.name, allocator)
+                    best = Some(from_view(e.name, allocator))
                 }
             }
             None => {
-                best = from_view(e.name, allocator)
+                best = Some(from_view(e.name, allocator))
             }
         }
     }
@@ -1272,7 +1272,7 @@ fn newest_subdir(parent: String, allocator: &Allocator) OwnedString? {
 // Build orchestration
 // =============================================================================
 
-fn write_c_file(path: String, contents: String, allocator: &Allocator) Result((), FileError) {
+fn write_c_file(path: String, contents: String, allocator: &Allocator?) Result((), FileError) {
     // open() expects a NUL-terminated path; copy into a builder we control.
     let pbuf = string_builder(path.len + 1, allocator)
     defer pbuf.deinit()
@@ -1413,7 +1413,7 @@ test "emits each foreign symbol at most once" {
 }
 
 // Spawn the compiler with the prepared argv + env. Returns the exit code.
-fn run_compiler(info: &CompilerInfo, argv: &List(OwnedString), allocator: &Allocator) Result(i32, BuildError) {
+fn run_compiler(info: &CompilerInfo, argv: &List(OwnedString), allocator: &Allocator?) Result(i32, BuildError) {
     let cmd = command(info.path.as_view(), allocator)
     defer cmd.deinit()
     for i in 0..argv.len {

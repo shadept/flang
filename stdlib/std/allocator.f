@@ -95,15 +95,15 @@ pub type GlobalAllocatorState = struct {
 fn global_alloc(impl: &u8, size: usize, alignment: usize) u8[]? {
     // malloc typically returns suitably aligned memory for any type.
     // For now we ignore alignment and rely on malloc's default alignment.
-    return slice_from_raw_parts(malloc(size)?, size)
+    return Some(slice_from_raw_parts(malloc(size)?, size))
 }
 
 fn global_realloc(impl: &u8, memory: u8[], new_size: usize) u8[]? {
-    return slice_from_raw_parts(realloc(memory.ptr, new_size)?, new_size)
+    return Some(slice_from_raw_parts(realloc(Some(memory.ptr), new_size)?, new_size))
 }
 
 fn global_dealloc(impl: &u8, memory: u8[]) {
-    free(memory.ptr)
+    free(Some(memory.ptr))
 }
 
 // VTable instance for GlobalAllocator
@@ -157,7 +157,7 @@ fn test_alloc(impl: &u8, size: usize, alignment: usize) u8[]? {
         entry.ptr = ptr.unwrap()
         entry.size = size
         entry.next = state.head
-        state.head = entry
+        state.head = Some(entry)
     }
 
     state.alloc_count = state.alloc_count + 1
@@ -171,7 +171,7 @@ fn test_realloc(impl: &u8, memory: u8[], new_size: usize) u8[]? {
     let state = impl as &TestAllocatorState
     const old_ptr = memory.ptr
     const old_size = memory.len
-    const ptr = realloc(old_ptr, new_size)
+    const ptr = realloc(Some(old_ptr), new_size)
     if ptr.is_none() {
         return null
     }
@@ -190,7 +190,7 @@ fn test_realloc(impl: &u8, memory: u8[], new_size: usize) u8[]? {
 
     state.total_bytes = state.total_bytes - old_size + new_size
 
-    return slice_from_raw_parts(ptr.unwrap(), new_size)
+    return Some(slice_from_raw_parts(ptr.unwrap(), new_size))
 }
 
 fn test_dealloc(impl: &u8, memory: u8[]) {
@@ -209,7 +209,7 @@ fn test_dealloc(impl: &u8, memory: u8[]) {
                 None => { state.head = e.next }
             }
             state.total_bytes = state.total_bytes - e.size
-            free(e as &u8)
+            free(Some(e as &u8))
             break
         }
         prev = entry
@@ -217,7 +217,7 @@ fn test_dealloc(impl: &u8, memory: u8[]) {
     }
 
     state.dealloc_count = state.dealloc_count + 1
-    free(memory.ptr)
+    free(Some(memory.ptr))
 }
 
 // Returns the number of live (leaked) allocations.
@@ -250,8 +250,8 @@ pub fn deinit(state: &TestAllocatorState) {
     while entry.is_some() {
         let e = entry.unwrap()
         let next = e.next
-        free(e.ptr)
-        free(e as &u8)
+        free(Some(e.ptr))
+        free(Some(e as &u8))
         entry = next
     }
     state.head = null
@@ -314,7 +314,7 @@ fn fixed_alloc(impl: &u8, size: usize, alignment: usize) u8[]? {
     let new_memory = state.buffer[aligned_offset..end_offset]
     state.offset = end_offset
 
-    return new_memory
+    return Some(new_memory)
 }
 
 fn fixed_realloc(impl: &u8, memory: u8[], new_size: usize) u8[]? {
@@ -338,7 +338,7 @@ fn fixed_realloc(impl: &u8, memory: u8[], new_size: usize) u8[]? {
         if (new_end <= buf_end) {
             // Can extend in place
             state.offset = new_end - buf_start
-            return slice_from_raw_parts(memory.ptr, new_size)
+            return Some(slice_from_raw_parts(memory.ptr, new_size))
         }
     }
 
@@ -348,7 +348,7 @@ fn fixed_realloc(impl: &u8, memory: u8[], new_size: usize) u8[]? {
     // Copy old data
     let copy_size = if memory.len < new_size { memory.len } else { new_size }
     memcpy(new_mem.ptr, memory.ptr, copy_size)
-    return new_mem
+    return Some(new_mem)
 }
 
 fn fixed_dealloc(impl: &u8, memory: u8[]) {
@@ -420,15 +420,15 @@ fn arena_new_page(state: &ArenaAllocator, min_size: usize) &ArenaPage? {
 
     // Link into chain
     state.current_page match {
-        Some(cp) => { cp.next = page },
+        Some(cp) => { cp.next = Some(page) },
         None => {}
     }
     if state.first_page.is_none() {
-        state.first_page = page
+        state.first_page = Some(page)
     }
-    state.current_page = page
+    state.current_page = Some(page)
 
-    return page
+    return Some(page)
 }
 
 fn arena_alloc(impl: &u8, size: usize, alignment: usize) u8[]? {
@@ -445,7 +445,7 @@ fn arena_alloc(impl: &u8, size: usize, alignment: usize) u8[]? {
             let base = page as &u8
             let ptr = (base as usize + header_size + aligned_offset) as &u8
             page.offset = aligned_offset + size
-            return slice_from_raw_parts(ptr, size)
+            return Some(slice_from_raw_parts(ptr, size))
         }
     }
 
@@ -460,7 +460,7 @@ fn arena_alloc(impl: &u8, size: usize, alignment: usize) u8[]? {
     let base = page as &u8
     let ptr = (base as usize + header_size + aligned_offset) as &u8
     page.offset = aligned_offset + size
-    return slice_from_raw_parts(ptr, size)
+    return Some(slice_from_raw_parts(ptr, size))
 }
 
 fn arena_realloc(impl: &u8, memory: u8[], new_size: usize) u8[]? {

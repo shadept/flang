@@ -21,15 +21,14 @@ pub type FqnMap = struct(V) {
     // allocator).
     entries: Dict(String, V)
     owned_fqns: List(OwnedString)
-    allocator: &Allocator
+    allocator: &Allocator?
 }
 
 pub fn fqn_map(allocator: &Allocator? = null) FqnMap($V) {
-    let alloc = allocator.or_global()
     return .{
-        entries = dict(alloc),
-        owned_fqns = list(0, alloc),
-        allocator = alloc,
+        entries = dict(allocator),
+        owned_fqns = list(0, allocator),
+        allocator = allocator,
     }
 }
 

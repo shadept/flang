@@ -25,11 +25,11 @@ pub fn find(s: String, c: char) usize? {
     const n = encode_char(c, buf as u8[])
     if n == 1 {
         for i in 0..s.len {
-            if s[i] == buf[0] { return i }
+            if s[i] == buf[0] { return Some(i) }
         }
         return null
     }
-    return find(s, from_c_string(buf.ptr, n))
+    return find(s, from_c_string(buf.ptr, Some(n)))
 }
 
 pub fn find(s: String, needle: String) usize? {
@@ -37,7 +37,7 @@ pub fn find(s: String, needle: String) usize? {
     let n = needle.as_raw_bytes()
 
     if n.len == 0 {
-        return 0
+        return Some(0)
     }
     if n.len > h.len {
         return null
@@ -69,7 +69,7 @@ pub fn find(s: String, needle: String) usize? {
             if h[i] == n[j] {
                 j = j + 1
                 if j == n.len {
-                    return i - n.len + 1
+                    return Some(i - n.len + 1)
                 }
                 break
             }
@@ -103,11 +103,11 @@ pub fn rfind(s: String, c: char) usize? {
         let i: usize = s.len
         while i > 0 {
             i = i - 1
-            if s[i] == buf[0] { return i }
+            if s[i] == buf[0] { return Some(i) }
         }
         return null
     }
-    return rfind(s, from_c_string(buf.ptr, n))
+    return rfind(s, from_c_string(buf.ptr, Some(n)))
 }
 
 pub fn rfind(s: String, needle: String) usize? {
@@ -115,7 +115,7 @@ pub fn rfind(s: String, needle: String) usize? {
     let n = needle.as_raw_bytes()
 
     if n.len == 0 {
-        return s.len
+        return Some(s.len)
     }
     if n.len > h.len {
         return null
@@ -135,7 +135,7 @@ pub fn rfind(s: String, needle: String) usize? {
             }
         }
         if found {
-            return i
+            return Some(i)
         }
     }
     return null
@@ -260,7 +260,7 @@ pub fn count(s: String, c: char) usize {
         }
         return total
     }
-    return count(s, from_c_string(buf.ptr, n))
+    return count(s, from_c_string(buf.ptr, Some(n)))
 }
 
 pub fn count(s: String, needle: String) usize {
@@ -291,12 +291,12 @@ pub fn count(s: String, needle: String) usize {
 //   "std.io".strip_prefix("core.")      -> None
 pub fn strip_prefix(s: String, prefix: String) String? {
     if !s.starts_with(prefix) { return null }
-    return s[prefix.len..s.len]
+    return Some(s[prefix.len..s.len])
 }
 
 pub fn strip_suffix(s: String, suffix: String) String? {
     if !s.ends_with(suffix) { return null }
-    return s[0..s.len - suffix.len]
+    return Some(s[0..s.len - suffix.len])
 }
 
 // =============================================================================
@@ -373,18 +373,18 @@ pub fn next(self: &Lines) String? {
     if line_end > start and self.buf[line_end - 1] == '\r' {
         line_end = line_end - 1
     }
-    const line = from_c_string(self.buf.ptr + start, line_end - start)
+    const line = from_c_string(self.buf.ptr + start, Some(line_end - start))
 
     if i >= self.buf.len {
         // Final segment without trailing \n. Yield once more only if non-empty;
         // otherwise yield empty and stop (so "a\n" yields just "a", "a" yields "a").
         self.done = true
         if start == self.buf.len { return null }
-        return line
+        return Some(line)
     }
 
     self.pos = i + 1
-    return line
+    return Some(line)
 }
 
 
@@ -459,7 +459,7 @@ pub fn next(it: &Bytes) u8? {
 
     const elem = it.buf[it.idx]
     it.idx = it.idx + 1
-    return elem
+    return Some(elem)
 }
 
 // =============================================================================
@@ -494,7 +494,7 @@ pub fn next(it: &Chars) char? {
 
     const res = decode_char(it.buf[it.idx..])
     it.idx = it.idx + res.1
-    return res.0
+    return Some(res.0)
 }
 
 // =============================================================================

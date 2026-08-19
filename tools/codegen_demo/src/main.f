@@ -153,7 +153,7 @@ fn build_demo_module() IrModule {
     // foreign fn puts(s: ptr) -> i32
     let puts_params: List(IrType) = list(1)
     puts_params.push(IrType.Ptr)
-    let puts_ret: IrType? = IrType.I32
+    let puts_ret: IrType? = Some(IrType.I32)
     m.add_foreign(ForeignDecl {
         name = "puts",
         return_ty = puts_ret,
@@ -165,7 +165,7 @@ fn build_demo_module() IrModule {
     // foreign fn printf(fmt: ptr, ...) -> i32  (variadic)
     let printf_params: List(IrType) = list(1)
     printf_params.push(IrType.Ptr)
-    let printf_ret: IrType? = IrType.I32
+    let printf_ret: IrType? = Some(IrType.I32)
     m.add_foreign(ForeignDecl {
         name = "printf",
         return_ty = printf_ret,
@@ -177,7 +177,7 @@ fn build_demo_module() IrModule {
     // Runtime helpers wired up in the C backend's preamble. Declaring
     // them as foreigns here proves the backend skips re-emitting them.
     let argc_params: List(IrType) = list(0)
-    let argc_ret: IrType? = IrType.I32
+    let argc_ret: IrType? = Some(IrType.I32)
     m.add_foreign(ForeignDecl {
         name = "__flang_get_argc",
         return_ty = argc_ret,
@@ -187,7 +187,7 @@ fn build_demo_module() IrModule {
     })
     let getarg_params: List(IrType) = list(1)
     getarg_params.push(IrType.I32)
-    let getarg_ret: IrType? = IrType.Ptr
+    let getarg_ret: IrType? = Some(IrType.Ptr)
     m.add_foreign(ForeignDecl {
         name = "__flang_get_arg",
         return_ty = getarg_ret,
@@ -202,7 +202,7 @@ fn build_demo_module() IrModule {
         name = "hello",
         size = hello.len as u64,
         align = 1u64,
-        init_bytes = hello.as_raw_bytes(),
+        init_bytes = Some(hello.as_raw_bytes()),
     })
 
     // printf format string: "sum_to(%d) = %d\n\0"
@@ -211,7 +211,7 @@ fn build_demo_module() IrModule {
         name = "sum_fmt",
         size = sum_fmt.len as u64,
         align = 1u64,
-        init_bytes = sum_fmt.as_raw_bytes(),
+        init_bytes = Some(sum_fmt.as_raw_bytes()),
     })
 
     // product format string: "product = %d\n\0"
@@ -220,7 +220,7 @@ fn build_demo_module() IrModule {
         name = "prod_fmt",
         size = prod_fmt.len as u64,
         align = 1u64,
-        init_bytes = prod_fmt.as_raw_bytes(),
+        init_bytes = Some(prod_fmt.as_raw_bytes()),
     })
 
     // argv format strings - used to prove the runtime captures argv.
@@ -229,14 +229,14 @@ fn build_demo_module() IrModule {
         name = "argc_fmt",
         size = argc_fmt.len as u64,
         align = 1u64,
-        init_bytes = argc_fmt.as_raw_bytes(),
+        init_bytes = Some(argc_fmt.as_raw_bytes()),
     })
     const argv0_fmt: String = "argv[0]   = %s\n\0"
     m.add_global(Global {
         name = "argv0_fmt",
         size = argv0_fmt.len as u64,
         align = 1u64,
-        init_bytes = argv0_fmt.as_raw_bytes(),
+        init_bytes = Some(argv0_fmt.as_raw_bytes()),
     })
 
     m.add_function(build_sum_to())
@@ -246,7 +246,7 @@ fn build_demo_module() IrModule {
 
 // fn sum_to(n: i32) -> i32 { let i = 0; let acc = 0; while i < n { acc += i; i++ }; ret acc }
 fn build_sum_to() Function {
-    let fb = function("sum_to", IrType.I32)
+    let fb = function("sum_to", Some(IrType.I32))
     const n = fb.param(IrType.I32)
     let entry = fb.entry()
     let loop_blk = fb.block("loop_head", IrType.I32, IrType.I32)
@@ -297,7 +297,7 @@ fn build_sum_to() Function {
 //     ret 0
 // }
 fn build_main() Function {
-    let fb = function("main", IrType.I32)
+    let fb = function("main", Some(IrType.I32))
     let entry = fb.entry()
 
     entry.call_one("puts", IrType.I32, global("hello"))

@@ -67,7 +67,7 @@ fn parse_range(s: String) (usize, usize)? {
         end_val = parsed.unwrap().0 as usize
     }
 
-    return (start_val, end_val)
+    return Some((start_val, end_val))
 }
 
 fn parse_tail(s: String) usize? {
@@ -76,7 +76,7 @@ fn parse_tail(s: String) usize? {
     const num_str = s[1..s.len]
     const parsed = parse_usize(num_str)
     if parsed.is_err() { return null }
-    return parsed.unwrap().0 as usize
+    return Some(parsed.unwrap().0 as usize)
 }
 
 fn split_columns(s: String, cols: &List(String)) {
