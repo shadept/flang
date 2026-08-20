@@ -227,33 +227,36 @@ public partial class HmTypeChecker
     // Identifiers
     // =========================================================================
 
+    /// <summary>
+    /// RFC-014 Phase 2: when a scope lookup crosses one or more in-progress
+    /// lambda frames (i.e. the name is bound at-or-shallower than a crossed
+    /// frame's boundary), record it as a capture on each crossed frame.
+    /// Walks frames outermost-to-innermost: any frame whose boundary is
+    /// deeper than the binding's depth has crossed this name; recording on
+    /// every crossed frame propagates captures outward through nested closures.
+    /// The lookup itself still succeeds — captures are by-value, so the
+    /// captured field has the same type as the outer binding.
+    /// </summary>
+    private void RecordCrossedFrameCaptures(string name, PolymorphicType scheme, int foundDepth)
+    {
+        foreach (var frame in _ctx.LambdaFrames)
+        {
+            if (frame.BoundaryDepth > foundDepth)
+            {
+                var capturedType = _ctx.Engine.Resolve(_ctx.Engine.Specialize(scheme));
+                frame.Captures[name] = capturedType;
+            }
+        }
+    }
+
     private Type InferIdentifier(IdentifierExpressionNode id)
     {
         // Look up in type scope (local variables, parameters, variant constructors).
-        // RFC-014 Phase 2: when the lookup crosses one or more in-progress
-        // lambda frames (i.e. the name is bound at-or-shallower than the
-        // outermost crossed frame's boundary), record it as a capture on each
-        // crossed frame. The lookup itself still succeeds — captures are
-        // by-value, so the captured field has the same type as the outer
-        // binding at the literal site.
         var (scheme, foundDepth) = _ctx.Scopes.LookupWithDepth(id.Name);
-        if (scheme != null && _ctx.LambdaFrames.Count > 0)
-        {
-            // Walk frames outermost-to-innermost: any frame whose boundary is
-            // deeper than the binding's depth has crossed this name. Iterating
-            // the stack visits innermost first; we record on every crossed
-            // frame so nested closures propagate captures outward.
-            foreach (var frame in _ctx.LambdaFrames)
-            {
-                if (frame.BoundaryDepth > foundDepth)
-                {
-                    var capturedType = _ctx.Engine.Resolve(_ctx.Engine.Specialize(scheme));
-                    frame.Captures[id.Name] = capturedType;
-                }
-            }
-        }
         if (scheme != null)
         {
+            RecordCrossedFrameCaptures(id.Name, scheme, foundDepth);
+
             // Track usage for unused variable warnings
             _ctx.CurrentFnUsedVars?.Add(id.Name);
 
@@ -1949,12 +1952,16 @@ public partial class HmTypeChecker
     /// </summary>
     private Type TryIndirectCall(CallExpressionNode call, Type[] argTypes)
     {
-        var scheme = _ctx.Scopes.Lookup(call.FunctionName);
+        var (scheme, calleeDepth) = _ctx.Scopes.LookupWithDepth(call.FunctionName);
         if (scheme != null)
         {
             // Callee position is a use — the scope lookup here bypasses
             // InferIdentifier, which is where uses are normally marked (W1001)
+            // and where lambda captures are normally recorded. A captured
+            // callable used only as a callee must still become a capture,
+            // or the closure would miscompile to a direct call.
             _ctx.CurrentFnUsedVars?.Add(call.FunctionName);
+            RecordCrossedFrameCaptures(call.FunctionName, scheme, calleeDepth);
             var specialized = _ctx.Engine.Specialize(scheme);
             var resolved = _ctx.Engine.Resolve(specialized);
             if (resolved is FunctionType fnType)
@@ -3784,6 +3791,15 @@ public partial class HmTypeChecker
         BinaryExpressionNode bin => new BinaryExpressionNode(bin.Span,
             RewriteCaptureRefsExpr(bin.Left, caps), bin.Operator,
             RewriteCaptureRefsExpr(bin.Right, caps)),
+        // A bare call to a captured callable must project through self:
+        // `g(x)` becomes the field-call `self.g(x)`. TryFieldCall then calls
+        // fn-pointer fields indirectly and dispatches closure-typed fields
+        // through their op_call.
+        CallExpressionNode call when call.UfcsReceiver == null && caps.Contains(call.FunctionName)
+            => new CallExpressionNode(call.Span, call.FunctionName,
+                [.. call.Arguments.Select(a => RewriteCaptureRefsExpr(a, caps))],
+                new IdentifierExpressionNode(call.FunctionNameSpan, "self"),
+                call.FunctionName, call.FunctionNameSpan),
         CallExpressionNode call => new CallExpressionNode(call.Span, call.FunctionName,
             [.. call.Arguments.Select(a => RewriteCaptureRefsExpr(a, caps))],
             call.UfcsReceiver != null ? RewriteCaptureRefsExpr(call.UfcsReceiver, caps) : null,
