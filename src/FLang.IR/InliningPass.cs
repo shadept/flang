@@ -44,6 +44,7 @@ public static class InliningPass
                 if (fn.SemanticKey == null || recursive.Contains(fn.SemanticKey)) continue;
                 if (fn.BasicBlocks.Count != 1) continue;
                 if (fn.BasicBlocks[0].Instructions.Count > MaxInlineInstructions) continue;
+                if (TakesAddressOfParameter(fn)) continue;
                 inlineable[fn.SemanticKey] = fn;
             }
 
@@ -65,6 +66,28 @@ public static class InliningPass
         }
 
         EliminateDeadFunctions(module);
+    }
+
+    /// <summary>
+    /// A function that takes the address of one of its own parameters cannot be
+    /// inlined. Parameters are by-value copies, and the call site has no variable
+    /// to stand in for the copy: keeping the parameter's name references an
+    /// identifier that does not exist at the inline site (or accidentally captures
+    /// a same-named caller local), and substituting the caller's argument variable
+    /// would alias — a write through the pointer would corrupt the caller's value.
+    /// Materializing a fresh named copy at the inline site is the upgrade path if
+    /// such functions ever matter for performance.
+    /// </summary>
+    private static bool TakesAddressOfParameter(IrFunction fn)
+    {
+        if (fn.Params.Count == 0) return false;
+        var paramNames = new HashSet<string>();
+        foreach (var p in fn.Params) paramNames.Add(p.Name);
+        foreach (var block in fn.BasicBlocks)
+            foreach (var inst in block.Instructions)
+                if (inst is AddressOfInstruction ao && paramNames.Contains(ao.VariableName))
+                    return true;
+        return false;
     }
 
     private static HashSet<string> FindRecursiveFunctions(IrModule module)
@@ -322,12 +345,10 @@ public static class InliningPass
                 return new CastInstruction(ca.Span, R(ca.Source), Fresh(ca.Result));
 
             case AddressOfInstruction ao:
-                {
-                    var varName = paramNameToArg.ContainsKey(ao.VariableName)
-                        ? ao.VariableName  // parameter — keep original name
-                        : prefix + ao.VariableName;  // local — prefix it
-                    return new AddressOfInstruction(ao.Span, varName, Fresh(ao.Result));
-                }
+                // Address-of-parameter callees never reach here — they are
+                // filtered out of the inlineable set (TakesAddressOfParameter) —
+                // so the name is a callee local: prefix it like its declaration.
+                return new AddressOfInstruction(ao.Span, prefix + ao.VariableName, Fresh(ao.Result));
 
             case CopyInstruction cp:
                 return new CopyInstruction(cp.Span, R(cp.SrcPtr), R(cp.DstPtr), cp.ValueType);
