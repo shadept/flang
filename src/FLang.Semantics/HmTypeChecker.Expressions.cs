@@ -1919,6 +1919,9 @@ public partial class HmTypeChecker
         var scheme = _ctx.Scopes.Lookup(call.FunctionName);
         if (scheme != null)
         {
+            // Callee position is a use — the scope lookup here bypasses
+            // InferIdentifier, which is where uses are normally marked (W1001)
+            _ctx.CurrentFnUsedVars?.Add(call.FunctionName);
             var specialized = _ctx.Engine.Specialize(scheme);
             var resolved = _ctx.Engine.Resolve(specialized);
             if (resolved is FunctionType fnType)

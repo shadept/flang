@@ -20,6 +20,7 @@ public record TestMetadata(
     List<string> ExpectedStderr,
     List<ExpectedDiagnostic> ExpectedCompileErrors,
     List<ExpectedDiagnostic> ExpectedCompileWarnings,
+    List<ExpectedDiagnostic> ForbiddenCompileWarnings,
     string? SkipReason);
 
 /// <summary>
@@ -99,6 +100,7 @@ public class TestHarness
         var stderr = new List<string>();
         var compileErrors = new List<ExpectedDiagnostic>();
         var compileWarnings = new List<ExpectedDiagnostic>();
+        var forbiddenWarnings = new List<ExpectedDiagnostic>();
         string? skipReason = null;
 
         foreach (var line in lines)
@@ -118,13 +120,15 @@ public class TestHarness
                 stderr.Add(content[7..].Trim());
             else if (content.StartsWith("COMPILE-ERROR:"))
                 compileErrors.Add(ParseExpectedDiagnostic(content[14..].Trim()));
+            else if (content.StartsWith("NO-COMPILE-WARNING:"))
+                forbiddenWarnings.Add(ParseExpectedDiagnostic(content[19..].Trim()));
             else if (content.StartsWith("COMPILE-WARNING:"))
                 compileWarnings.Add(ParseExpectedDiagnostic(content[16..].Trim()));
             else if (content.StartsWith("SKIP:"))
                 skipReason = content[5..].Trim();
         }
 
-        return new TestMetadata(testName, exitCode, stdout, stderr, compileErrors, compileWarnings, skipReason);
+        return new TestMetadata(testName, exitCode, stdout, stderr, compileErrors, compileWarnings, forbiddenWarnings, skipReason);
     }
 
     /// <summary>
@@ -308,6 +312,26 @@ public class TestHarness
                         $"Expected warning {expectDesc} not found in diagnostics:\n{sb}",
                         stopwatch.Elapsed);
                 }
+            }
+        }
+
+        // Handle forbidden compile warnings
+        foreach (var forbidden in metadata.ForbiddenCompileWarnings)
+        {
+            var match = result.Diagnostics.FirstOrDefault(d =>
+                d.Code == forbidden.Code
+                && d.Severity == DiagnosticSeverity.Warning
+                && (forbidden.MessageContains == null || d.Message.Contains(forbidden.MessageContains, StringComparison.Ordinal)));
+
+            if (match != null)
+            {
+                CleanupGeneratedFiles(cFilePath, result.Success ? result.ExecutablePath : null, cleanupFiles);
+                return new TestResult(
+                    absoluteTestFile,
+                    metadata.TestName,
+                    false,
+                    $"Forbidden warning {forbidden.Code} was emitted: {DiagnosticPrinter.Print(match, result.CompilationContext)}",
+                    stopwatch.Elapsed);
             }
         }
 
@@ -574,6 +598,20 @@ public class TestHarness
                     metadata.TestName,
                     false,
                     $"Expected warning {expectDesc} not found in compiler output:\n{compilerOutput}",
+                    stopwatch.Elapsed);
+            }
+        }
+
+        foreach (var forbidden in metadata.ForbiddenCompileWarnings)
+        {
+            if (ContainsDiagnostic(compilerOutput, forbidden))
+            {
+                CleanupGeneratedFiles(cFilePath, exePath, cleanup: true);
+                return new TestResult(
+                    absoluteTestFile,
+                    metadata.TestName,
+                    false,
+                    $"Forbidden warning {forbidden.Code} found in compiler output:\n{compilerOutput}",
                     stopwatch.Elapsed);
             }
         }

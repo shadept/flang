@@ -191,10 +191,11 @@ Data-driven lit-style tests. Self-contained `.f` files with embedded metadata:
 //! STDERR: expected error
 //! COMPILE-ERROR: E0001
 //! COMPILE-WARNING: W0001
+//! NO-COMPILE-WARNING: W0001
 //! SKIP: reason
 ```
 
-The harness compiles and runs each test, asserting exit code, stdout, and stderr match metadata. `COMPILE-ERROR`/`COMPILE-WARNING` tests assert compilation fails or warns with the specified error code.
+The harness compiles and runs each test, asserting exit code, stdout, and stderr match metadata. `COMPILE-ERROR`/`COMPILE-WARNING` tests assert compilation fails or warns with the specified error code; `NO-COMPILE-WARNING` asserts the given warning code is *not* emitted (regression guard for false-positive warnings).
 
 **Execution mode.** By default the harness compiles in-process with the C# compiler. When the `FLANG` environment variable names a compiler binary, each test instead compiles by subprocessing `$FLANG --stdlib-path <repo>/stdlib build <test.f>` and running the produced executable against the same expectations — this is how the self-hosted bootstrap is scored against the corpus. Compile-diagnostic expectations match textually against the external compiler's rendered `severity[CODE]` output; a failing test's message includes the compiler's full stdout/stderr. With `FLANG` unset, behavior is unchanged.
 
