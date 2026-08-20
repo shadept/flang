@@ -962,7 +962,7 @@ fn guess_kind_from_name(name: String) CompilerKind {
 
 // Pick the first toolchain that exists, in platform-preferred order.
 pub fn discover_compiler(allocator: &Allocator? = null) Result(CompilerInfo, BuildError) {
-    #if(platform.os == "windows") {
+    #if platform.os == "windows" {
         // 1. MSVC via vswhere (sets INCLUDE/LIB/PATH so the spawn works
         //    outside a developer prompt).
         const msvc_r = discover_msvc(allocator)
@@ -1002,7 +1002,7 @@ pub fn discover_compiler(allocator: &Allocator? = null) Result(CompilerInfo, Bui
         }
         None => {}
     }
-    #if(platform.os == "macos") {
+    #if platform.os == "macos" {
         if can_spawn("xcrun", allocator) {
             return Ok(make_simple_info(CompilerKind.XcrunClang, "xcrun", allocator))
         }

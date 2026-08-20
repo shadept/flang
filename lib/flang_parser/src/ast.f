@@ -39,6 +39,13 @@ pub type Module = struct {
     arena: ArenaAllocator
 }
 
+// Scoped mutability: `decls` is writable only in this file. Installs the
+// resolved decl list after decl-level #if flattening (see comptime.f).
+// The old list's buffer stays in the arena; it is reclaimed with it.
+pub fn set_decls(self: &Module, decls: List(Decl)) {
+    self.decls = decls
+}
+
 pub fn deinit(self: &Module) {
     // Every AST allocation - the decls list's buffer and every nested
     // list in the tree - lives in the arena, so ONE bulk free reclaims
@@ -180,7 +187,7 @@ pub type GenInvoke = struct {
     args: List(Expr)
 }
 
-// `#if(cond) { decls... } else { decls... }` at file/module level.
+// `#if cond { decls... } else { decls... }` at file/module level.
 pub type IfDirectiveDecl = struct {
     span: SourceSpan
     condition: Expr
@@ -279,7 +286,7 @@ pub type LoopStmt = struct {
     body: BlockExpr
 }
 
-// `#if(cond) { stmts... } else { stmts... }` inside a function body.
+// `#if cond { stmts... } else { stmts... }` inside a function body.
 pub type IfDirectiveStmt = struct {
     span: SourceSpan
     condition: Expr

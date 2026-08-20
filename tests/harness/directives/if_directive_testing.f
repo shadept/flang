@@ -5,7 +5,7 @@
 
 pub fn main() i32 {
     let result: i32 = 10
-    #if(runtime.testing) {
+    #if runtime.testing {
         result = 99
     } else {
         result = 0

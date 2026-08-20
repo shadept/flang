@@ -93,8 +93,14 @@ public class TemplateEngine
             case TemplateStringLiteral str:
                 return str.Value;
 
+            case TemplateBoolLiteral boolean:
+                return boolean.Value;
+
             case TemplateIntLiteral num:
                 return num.Value;
+
+            case TemplateUnaryExpr unary:
+                return !IsTruthy(EvalExpr(unary.Operand));
 
             case TemplateNameExpr name:
                 if (_env.TryGetValue(name.Name, out var val))
@@ -293,6 +299,11 @@ public class TemplateEngine
 
     private object EvalBinary(object left, string op, object right)
     {
+        // Logical operators (loose template semantics: truthiness-based)
+        if (op == "or") return IsTruthy(left) || IsTruthy(right);
+        if (op == "and") return IsTruthy(left) && IsTruthy(right);
+        if (op == "??") return left ?? right;
+
         // String concatenation
         if (op == "+")
         {

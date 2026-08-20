@@ -597,13 +597,31 @@ public partial class HmTypeChecker : INominalTypeRegistry, ITemplateTypeProvider
     /// </summary>
     public void ResolvePendingSpecializations()
     {
-        foreach (var (scheme, paramTypes, returnType, callSpan, callNode) in _pendingSpecializations)
+        // Index-based: resolving one specialization can re-check a template
+        // body and enqueue further pendings — those are drained here too.
+        for (var i = 0; i < _pendingSpecializations.Count; i++)
         {
+            var (scheme, paramTypes, returnType, callSpan, callNode) = _pendingSpecializations[i];
+
+            // Breadth backstop: an unresolvable signature (e.g. an unknown type
+            // in a fn's declared return, E2003) can make every re-check enqueue
+            // fresh pendings forever. Report instead of spinning; the underlying
+            // diagnostics explain the cause.
+            if (i == 20000)
+            {
+                ReportError($"specialization of `{scheme.Name}` did not converge; " +
+                            "an earlier error in its signature likely prevents resolution", callSpan, "E2001");
+                break;
+            }
+
             var resolvedParams = paramTypes.Select(p => _ctx.Engine.Resolve(p)).ToArray();
             var resolvedReturn = _ctx.Engine.Resolve(returnType);
 
-            // If any param is still a TypeVar, skip — ValidatePostInference will report E2001
-            if (resolvedParams.Any(p => p is Core.Types.TypeVar) || resolvedReturn is Core.Types.TypeVar)
+            // If anything is still (or contains) a TypeVar, skip —
+            // ValidatePostInference will report E2001. The deep check matters:
+            // a nested var (`Result(T, $E)`) would mint a unique spec key every
+            // round and the drain would never converge.
+            if (resolvedParams.Any(ContainsUnboundTypeVar) || ContainsUnboundTypeVar(resolvedReturn))
                 continue;
 
             var specialized = EnsureSpecialization(scheme, resolvedParams, resolvedReturn, callSpan);

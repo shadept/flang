@@ -37,6 +37,7 @@ import std.test
 import flang_core.diagnostic
 import flang_core.span
 import flang_parser.ast
+import flang_parser.comptime
 import flang_parser.lexer
 import flang_parser.parser
 import flang_parser.projector
@@ -141,6 +142,9 @@ pub type Checker = struct {
     specs: SpecializationRegistry
     results: InferenceResults
     diagnostics: List(Diagnostic)
+    // Compile-time context for #if condition evaluation. Host by default;
+    // a cross-target build installs the target's via `set_comptime_ctx`.
+    comptime: ComptimeCtx
 
     // Working state - reset between modules.
     current_module: String?
@@ -216,6 +220,7 @@ pub fn checker(allocator: &Allocator? = null) Checker {
         specs = specialization_registry(allocator),
         results = inference_results(allocator),
         diagnostics = list(0, allocator),
+        comptime = host_ctx(),
         current_module = null,
         fn_stack = list(0, allocator),
         templates = dict(allocator),
@@ -446,6 +451,12 @@ fn resolve_generic_bind(self: &Checker, g: &GenericBindType) Ty {
 // ─────────────────────────────────────────────────────────────────────
 // Diagnostic helpers - small, lift to reporter when complexity grows.
 // ─────────────────────────────────────────────────────────────────────
+
+// Scoped mutability: installs the target platform's compile-time context
+// (cross-target builds). Fields are writable only in the defining file.
+pub fn set_comptime_ctx(self: &Checker, ctx: ComptimeCtx) {
+    self.comptime = ctx
+}
 
 pub fn push_diag_e(self: &Checker, span: SourceSpan, code: String, message: OwnedString) {
     let empty_hint: OwnedString
@@ -2657,7 +2668,31 @@ fn check_stmt(self: &Checker, stmt: &Stmt) bool {
         },
         Loop(ls) => { let _b = check_block(self, &ls.body) },
         Defer(ds) => { let _e = check_expr(self, &ds.expr) },
+        IfDirective(ifd) => return check_if_directive_stmt(self, &ifd),
         _ => {},
+    }
+    return false
+}
+
+// `#if cond { … } else { … }` - the condition resolves against the
+// host's compile-time context; only the active branch is checked (the
+// inactive one parses but is never validated). Diverges exactly when
+// the active branch diverges - the branch is a statement splice, not a
+// runtime conditional.
+fn check_if_directive_stmt(self: &Checker, ifd: &IfDirectiveStmt) bool {
+    eval_condition(&self.comptime, &ifd.condition) match {
+        Active(active) => {
+            const stmts: &List(Stmt) = if active { &ifd.then_stmts } else { &ifd.else_stmts }
+            let diverges = false
+            for i in 0..stmts.len {
+                if check_stmt(self, &stmts[i]) { diverges = true }
+            }
+            return diverges
+        },
+        Invalid(err) => {
+            push_diag_e(self, err.span, err.code, err.message)
+            return false
+        },
     }
     return false
 }

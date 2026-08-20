@@ -47,22 +47,20 @@ pub type PathError = enum {
 
 // Native separator written by join / with_extension on this platform.
 pub fn sep() u8 {
-    #if(platform.os == "windows") {
+    #if platform.os == "windows" {
         return '\\'
     } else {
         return '/'
     }
-    return '/'
 }
 
 // Returns true if `b` is recognized as a path separator on this platform.
 pub fn is_separator(b: u8) bool {
-    #if(platform.os == "windows") {
+    #if platform.os == "windows" {
         return b == '/' or b == '\\'
     } else {
         return b == '/'
     }
-    return false
 }
 
 fn is_drive_letter(b: u8) bool {
@@ -132,7 +130,7 @@ pub fn is_absolute(self: &Path) bool {
     const v = self.as_view()
     if v.len == 0 { return false }
     if is_separator(v[0]) { return true }
-    #if(platform.os == "windows") {
+    #if platform.os == "windows" {
         // Drive-letter path: "C:\foo" or "C:/foo". A bare "C:" is treated as
         // drive-relative, not absolute.
         if v.len >= 3 and is_drive_letter(v[0]) and v[1] == ':' and is_separator(v[2]) {
@@ -197,7 +195,7 @@ pub fn file_name(self: &Path) String? {
     }
     // No separator: whole path is the file name. Skip a leading drive letter
     // ("C:foo" -> "foo") on Windows.
-    #if(platform.os == "windows") {
+    #if platform.os == "windows" {
         if v.len >= 2 and is_drive_letter(v[0]) and v[1] == ':' {
             return Some(v[2..])
         }
@@ -383,7 +381,7 @@ pub fn normalize(self: &Path) Path {
     let has_root: bool = false
     let drive_end: usize = 0   // bytes consumed by Windows drive prefix
 
-    #if(platform.os == "windows") {
+    #if platform.os == "windows" {
         if v.len >= 2 and is_drive_letter(v[0]) and v[1] == ':' {
             drive_end = 2
             if v.len >= 3 and is_separator(v[2]) {
@@ -435,7 +433,7 @@ pub fn normalize(self: &Path) Path {
     }
 
     // Emit drive prefix, root, then components.
-    #if(platform.os == "windows") {
+    #if platform.os == "windows" {
         if drive_end >= 2 {
             sb.append_byte(v[0])
             sb.append_byte(':')
@@ -464,7 +462,7 @@ pub fn normalize(self: &Path) Path {
 fn string_is_absolute(s: String) bool {
     if s.len == 0 { return false }
     if is_separator(s[0]) { return true }
-    #if(platform.os == "windows") {
+    #if platform.os == "windows" {
         if s.len >= 3 and is_drive_letter(s[0]) and s[1] == ':' and is_separator(s[2]) {
             return true
         }
@@ -541,7 +539,7 @@ test "is_absolute on relative paths" {
 test "is_absolute on rooted paths" {
     let p = path("/src/foo")
     defer p.deinit()
-    #if(platform.os == "windows") {
+    #if platform.os == "windows" {
         // On Windows '/' alone is still treated as a rooted path.
         assert_true(p.is_absolute(), "/src/foo is absolute on Windows")
     } else {
@@ -617,7 +615,7 @@ test "join simple" {
     defer p.deinit()
     let j = p.join("foo.f")
     defer j.deinit()
-    #if(platform.os == "windows") {
+    #if platform.os == "windows" {
         assert_eq(j.as_view(), "src\\foo.f", "windows join")
     } else {
         assert_eq(j.as_view(), "src/foo.f", "posix join")
@@ -669,7 +667,7 @@ test "normalize collapses dots" {
     defer p.deinit()
     let n = p.normalize()
     defer n.deinit()
-    #if(platform.os == "windows") {
+    #if platform.os == "windows" {
         assert_eq(n.as_view(), "a\\c", "windows normalize")
     } else {
         assert_eq(n.as_view(), "a/c", "posix normalize")
@@ -681,7 +679,7 @@ test "normalize past root" {
     defer p.deinit()
     let n = p.normalize()
     defer n.deinit()
-    #if(platform.os == "windows") {
+    #if platform.os == "windows" {
         assert_eq(n.as_view(), "\\a", "windows normalize past root")
     } else {
         assert_eq(n.as_view(), "/a", ".. past root is no-op")

@@ -251,6 +251,11 @@ fn parse_top_level(self: &Parser) CstNode {
     // are recognised before generic-directive parsing because they take
     // no leading directives themselves.
     if self.current_kind() == TokenKind.Hash {
+        // Decl-level `#if` before generic-directive collection - `if` is a
+        // keyword token, so it can never be a directive name.
+        if self.peek_kind(1) == TokenKind.If {
+            return self.parse_if_directive_decl()
+        }
         const next = self.peek_kind(1)
         if next == TokenKind.Identifier {
             const ident = self.tokens[self.position + 1].text
@@ -750,7 +755,7 @@ fn parse_statement(self: &Parser) CstNode {
     if k == TokenKind.If { return self.parse_if_expr() }
     if k == TokenKind.OpenBrace { return self.parse_block_expr() }
     if k == TokenKind.Hash {
-        // `#if(...) { ... } else { ... }` directive-driven branch.
+        // `#if ... { ... } else { ... }` directive-driven branch.
         if self.peek_kind(1) == TokenKind.If {
             return self.parse_if_directive_stmt()
         }
@@ -809,16 +814,15 @@ fn parse_defer_stmt(self: &Parser) CstNode {
     return finish(b)
 }
 
-// `#if(cond) { … } [else { … }]`. Condition tokens are consumed
-// structurally - the template-expression grammar lives one layer up
-// and isn't surfaced in the CST yet.
+// `#if cond { … } [else { … }]`. The condition is an ordinary FLang
+// expression (the #if condition language is a FLang expression subset),
+// parsed structurally so the projector can surface it for evaluation.
+// Parens are optional — `#if(cond)` parses as a parenthesized expression.
 fn parse_if_directive_stmt(self: &Parser) CstNode {
     let b = self.open(NodeKind.IfDirectiveStmt)
     self.eat_into(&b)                                                       // `#`
     self.eat_into(&b)                                                       // `if`
-    if self.current_kind() == TokenKind.OpenParenthesis {
-        self.consume_balanced(&b, TokenKind.OpenParenthesis, TokenKind.CloseParenthesis)
-    }
+    self.parse_if_directive_condition_into(&b)
     if self.current_kind() == TokenKind.OpenBrace {
         const then_block = self.parse_block_expr()
         push_node_into(&b, then_block)
@@ -830,6 +834,59 @@ fn parse_if_directive_stmt(self: &Parser) CstNode {
             push_node_into(&b, else_block)
         }
     }
+    return finish(b)
+}
+
+// The shared condition grammar of both #if forms: parenthesized, or
+// bare with the struct-literal ambiguity suppressed (`stop_at_brace`).
+fn parse_if_directive_condition_into(self: &Parser, b: &NodeBuilder) {
+    if self.current_kind() == TokenKind.OpenParenthesis {
+        self.eat_into(b)                                                    // `(`
+        const cond = self.parse_expression()
+        push_node_into(b, cond)
+        self.expect_into(b, TokenKind.CloseParenthesis, "E1002")
+    } else if self.current_kind() != TokenKind.OpenBrace {
+        const saved = self.stop_at_brace
+        self.stop_at_brace = true
+        const cond = self.parse_expression()
+        self.stop_at_brace = saved
+        push_node_into(b, cond)
+    }
+}
+
+// Decl-level `#if cond { decls… } [else { decls… }]`. Same node kind as
+// the statement form - the projector decides by position (module child
+// vs block child). Branch bodies hold top-level items, not statements.
+fn parse_if_directive_decl(self: &Parser) CstNode {
+    let b = self.open(NodeKind.IfDirectiveStmt)
+    self.eat_into(&b)                                                       // `#`
+    self.eat_into(&b)                                                       // `if`
+    self.parse_if_directive_condition_into(&b)
+    if self.current_kind() == TokenKind.OpenBrace {
+        const then_block = self.parse_decl_block()
+        push_node_into(&b, then_block)
+    }
+    if self.current_kind() == TokenKind.Else {
+        self.eat_into(&b)
+        if self.current_kind() == TokenKind.OpenBrace {
+            const else_block = self.parse_decl_block()
+            push_node_into(&b, else_block)
+        }
+    }
+    return finish(b)
+}
+
+// `{ top-level items… }` - a decl-level #if branch body.
+fn parse_decl_block(self: &Parser) CstNode {
+    let b = self.open(NodeKind.BlockExpr)
+    self.eat_into(&b)                                                       // `{`
+    loop {
+        if self.at_eof() { break }
+        if self.current_kind() == TokenKind.CloseBrace { break }
+        const node = self.parse_top_level()
+        push_node_into(&b, node)
+    }
+    self.expect_into(&b, TokenKind.CloseBrace, "E1002")
     return finish(b)
 }
 

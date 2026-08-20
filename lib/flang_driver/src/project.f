@@ -92,8 +92,8 @@ pub fn deinit(self: &Project) {
 
 // The `[build.<os>]` config for the host platform.
 pub fn current_platform(self: &Project) &PlatformConfig {
-    #if(platform.os == "windows") { return &self.windows }
-    #if(platform.os == "macos") { return &self.macos }
+    #if platform.os == "windows" { return &self.windows }
+    #if platform.os == "macos" { return &self.macos }
     return &self.linux
 }
 

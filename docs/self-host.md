@@ -84,7 +84,7 @@ not mean it *rejects* what the reference rejects. Two axes:
 | `a?.b` | ❌ | 3/3 — rewritable-away | unvisited subtree |
 | Specialization (eager monomorphization of generic fns) | ✅ | everywhere (`List`/`Dict`) | M10, **no AST clone**: node ids are span fingerprints, so instantiations of one template share every node id — each instantiation re-checks the ORIGINAL body with `$T` names bound to concrete types, recording into a private `InferenceResults` overlay (`Specialization.overlay`). Committed generic picks (calls, operators, `op_try`, indexing) become `PendingSpec`s; each body scope drains its own pendings after inference settles (register-before-check breaks self-recursion; depth cap 64 diagnoses runaway chains; un-inferable type args are E2001 at the call site). Function lookups during a re-check see the template module's imports UNIONED with the caller chain's (`fn_visibility`) — the deliberate loaded-context rule that lets `hash()` resolve for `Dict`; nominal/variant lookups do NOT widen (a caller's `Decl.Type(...)` variant must not capture `Type(T)`). Generic template bodies are otherwise **never validated** — errors surface per instantiation |
 | Templates (`#interface`, `#derive`, …) expanded natively | ❌ | every `.generated.f` sidecar | relies on sidecars from a reference-compiler run |
-| `#if` compile-time conditionals evaluated | ❌ | 27/10 (incl. `file.f::open_flags`, in `main`'s graph) | |
+| `#if` compile-time conditionals evaluated | ✅ | 27/10 (incl. `file.f::open_flags`, in `main`'s graph) | landed 2026-08-20: conditions parse as real FLang expressions (`parse_expression` + `stop_at_brace`, paren-free `#if cond {` canonical), evaluated strictly (`flang_parser.comptime`: E2116 unknown name, E2117 non-bool, E2118 operand misuse — reference parity); only the active branch is checked; divergence = active branch's. Decl-level flattens once post-projection (`flatten_module_decls`, active decls spliced via `Module.set_decls`). `--target-os`/`--target-arch` override the context (threaded `ResolveCtx.comptime` → `Checker.comptime`/`LowerCtx.comptime`) |
 
 An unvisited subtree (`a?.b`) types as an unconstrained
 fresh var: the code around it may still check clean while errors
@@ -130,7 +130,7 @@ current-state summary.
 | Global `const` declarations | ❌ | 101/17 | `read_binding` covers locals only |
 | `test` blocks (self-host `flang test`) | ❌ | dev workflow, not `main`'s graph | bootstrap CLI has no `test` subcommand |
 | Template directives (`#enum_utils`, `#derive`, `#interface`, …) | ⚠️ | every sidecar | not expanded; checked-in `.generated.f` sidecars stand in |
-| `#if` compile-time conditionals | ❌ | 27/10 | statement- and decl-level |
+| `#if` compile-time conditionals | ✅ | 27/10 | statement-level splices the active branch's statements at `lower_stmt`; decl-level is already flattened before lowering. The `comptime.f` evaluator itself joins the M11 emission frontier (`String ==` dispatch), like most of the checker |
 
 ## Lowering — statements
 
@@ -275,8 +275,8 @@ docs/known-issues.md for the live instance of that failure).
 7. Then: globals/consts, for-over-iterators
    (M10 supplies the specializations; the checker still needs to
    resolve the `iter()`/`next()` protocol instead of typing the loop
-   var as a fresh var), array-literal lowering, range slicing, `#if`
-   resolution, template expansion, match exhaustiveness and the other
+   var as a fresh var), array-literal lowering, range slicing,
+   template expansion, match exhaustiveness and the other
    rejection-power gaps. The "not needed" list above
    stays refused until a real use appears.
 

@@ -47,8 +47,13 @@ public partial class HmTypeChecker
                 break;
             case IfDirectiveStatementNode directive:
             {
-                var active = TemplateEngine.EvaluateCondition(directive.Condition, _compilation.CompileTimeContext);
-                var branch = active ? directive.ThenBody : directive.ElseBody;
+                var result = DirectiveConditionEvaluator.Evaluate(directive.Condition, _compilation.CompileTimeContext);
+                if (result.IsError)
+                {
+                    ReportError(result.ErrorMessage!, result.ErrorSpan, result.ErrorCode!);
+                    break; // neither branch is checked
+                }
+                var branch = result.Value ? directive.ThenBody : directive.ElseBody;
                 if (branch != null)
                     foreach (var s in branch)
                         CheckStatement(s);

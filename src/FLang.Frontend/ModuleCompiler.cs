@@ -146,6 +146,10 @@ public class ModuleCompiler
             foreach (var d in parser.Diagnostics)
                 _diagnostics.Add(d);
 
+            // Resolve decl-level #if directives before anything sees the module:
+            // only the active branch's declarations survive into collection.
+            moduleNode = IfDirectiveDeclarations.Flatten(moduleNode, _compilation.CompileTimeContext, _diagnostics);
+
             _parsedModules[modulePath] = moduleNode;
             _queuedModules.Remove(modulePath);
 

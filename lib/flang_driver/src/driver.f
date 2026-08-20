@@ -24,6 +24,7 @@ import flang_parser.lexer
 import flang_parser.parser
 import flang_parser.projector
 import flang_parser.ast
+import flang_parser.comptime
 import flang_core.diagnostic
 import flang_core.span
 import flang_typer.checker
@@ -52,7 +53,12 @@ pub fn analyze(source: OwnedString, path: String, allocator: &Allocator? = null)
     let tokens = lx.tokenize()
     let p = parser(tokens, allocator)
     const cst = p.parse_module()
-    const module = project_module(cst, 0i32, allocator)
+    let module = project_module(cst, 0i32, allocator)
+
+    // Decl-level #if resolves once, before anything walks the decls:
+    // only the active branch's declarations survive into collection.
+    const cctx = host_ctx()
+    flatten_module_decls(&module, &cctx, &diagnostics, allocator)
 
     // The AST views `source`, not the token structs - tokens and the parser
     // are dead once the Module exists. Drain parse diagnostics first so they
@@ -177,7 +183,7 @@ pub fn analyze_project(ctx: &ResolveCtx, entries: &List(OwnedString), allocator:
         // a second module under the same FQN) keeps a single import scope.
         let src = combine_with_sidecar(path, src_opt.unwrap(), allocator)
         let fid = modules.len as i32
-        let module = parse_to_module(src.as_view(), fid, &diagnostics, allocator)
+        let module = parse_to_module(src.as_view(), fid, &ctx.comptime, &diagnostics, allocator)
         let fqn = module_fqn(ctx, path, allocator)
         enqueue_imports(ctx, &module, &queue, &seen, &diagnostics, allocator)
         sources.push(src)
@@ -197,6 +203,7 @@ pub fn analyze_project(ctx: &ResolveCtx, entries: &List(OwnedString), allocator:
             path_views.push(fqns[i].as_view())
         }
         let chk = checker(allocator)
+        chk.set_comptime_ctx(ctx.comptime)
         result = check_all(&chk, &modules, &path_views)
         drain_diagnostics(&diagnostics, &chk.diagnostics)
         chk.deinit()
@@ -224,8 +231,9 @@ pub fn analyze_source_set(srcs: List(OwnedString), fqns: &List(String), allocato
     let owned_fqns: List(OwnedString) = list(fqns.len, allocator)
     let file_paths: List(OwnedString) = list(fqns.len, allocator)
     let modules: List(Module) = list(srcs.len, allocator)
+    const host = host_ctx()
     for i in 0..srcs.len {
-        modules.push(parse_to_module(srcs[i].as_view(), i as i32, &diagnostics, allocator))
+        modules.push(parse_to_module(srcs[i].as_view(), i as i32, &host, &diagnostics, allocator))
         owned_fqns.push(from_view(fqns[i]))
         file_paths.push(from_view(fqns[i]))
     }
@@ -291,12 +299,13 @@ fn combine_with_sidecar(path: String, src: OwnedString, alloc: &Allocator?) Owne
     return sb.to_string()
 }
 
-fn parse_to_module(src: String, file_id: i32, diags: &List(Diagnostic), alloc: &Allocator?) Module {
+fn parse_to_module(src: String, file_id: i32, target: &ComptimeCtx, diags: &List(Diagnostic), alloc: &Allocator?) Module {
     let lx = lexer(src, alloc)
     let tokens = lx.tokenize()
     let p = parser(tokens, alloc)
     const cst = p.parse_module()
-    const module = project_module(cst, file_id, alloc)
+    let module = project_module(cst, file_id, alloc)
+    flatten_module_decls(&module, target, diags, alloc)
     drain_diagnostics(diags, &p.diagnostics)
     p.deinit()
     tokens.deinit()

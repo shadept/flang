@@ -724,10 +724,24 @@ fn project_generator_invocation(self: &Projector, cst: CstNode) GenInvoke {
     }
 }
 
+// The condition is the first expression child that is not a BlockExpr
+// (the branch bodies are BlockExpr nodes). Absent (malformed source) it
+// stays an Error expression, which evaluation rejects.
+fn project_if_directive_condition(self: &Projector, cst: CstNode) Expr {
+    for i in 0..cst.children.len {
+        cst.children[i] match {
+            NodeChild(child) => {
+                if child.kind != NodeKind.BlockExpr and is_expr_kind(child.kind) {
+                    return self.project_expr(child)
+                }
+            }
+            TokenChild(_) => {}
+        }
+    }
+    return Expr.Error(ErrorExpr { span = self.span_from(cst) })
+}
+
 fn project_if_directive_decl(self: &Projector, cst: CstNode) IfDirectiveDecl {
-    // The parser's `parse_if_directive_stmt` consumes the condition as a
-    // balanced run of tokens - no structured expr surfaced. We default
-    // the condition to an Error expression for now.
     let then_decls: List(Decl) = list(0, Some(self.alloc))
     let else_decls: List(Decl) = list(0, Some(self.alloc))
     let blocks_seen: usize = 0
@@ -756,7 +770,7 @@ fn project_if_directive_decl(self: &Projector, cst: CstNode) IfDirectiveDecl {
     }
     return .{
         span = self.span_from(cst),
-        condition = Expr.Error(ErrorExpr { span = self.span_from(cst) }),
+        condition = self.project_if_directive_condition(cst),
         then_decls = then_decls,
         else_decls = else_decls,
     }
@@ -981,7 +995,7 @@ fn project_if_directive_stmt(self: &Projector, cst: CstNode) IfDirectiveStmt {
     }
     return .{
         span = self.span_from(cst),
-        condition = Expr.Error(ErrorExpr { span = self.span_from(cst) }),
+        condition = self.project_if_directive_condition(cst),
         then_stmts = then_stmts,
         else_stmts = else_stmts,
     }

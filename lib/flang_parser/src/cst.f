@@ -68,7 +68,7 @@ pub type NodeKind = enum {
     // `break` and `continue`.
     BreakStmt
     ContinueStmt
-    // `#if(cond) { ... } else { ... }` directive-driven compile-time branch.
+    // `#if cond { ... } else { ... }` directive-driven compile-time branch.
     IfDirectiveStmt
 
     // ─────────────────────────────────────────────────────────────────────

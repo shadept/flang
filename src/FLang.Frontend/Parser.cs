@@ -57,12 +57,7 @@ public class Parser
     {
         var startSpan = _currentToken.Span;
         var imports = new List<ImportDeclarationNode>();
-        var structs = new List<StructDeclarationNode>();
-        var enums = new List<EnumDeclarationNode>();
-        var typeAliases = new List<TypeAliasDeclarationNode>();
-        var functions = new List<FunctionDeclarationNode>();
-        var tests = new List<TestDeclarationNode>();
-        var globalConstants = new List<VariableDeclarationNode>();
+        var group = new DeclarationGroup();
         var generatorDefs = new List<SourceGeneratorDefinitionNode>();
         var generatorInvocations = new List<SourceGeneratorInvocationNode>();
 
@@ -116,121 +111,7 @@ public class Parser
                     }
                 }
 
-                // Parse leading directives (e.g., #foreign, #deprecated("msg"))
-                var directives = ParseDirectives();
-
-                if (_currentToken.Kind == TokenKind.Pub)
-                {
-                    // Could be struct, enum, type, function, or const - peek ahead
-                    var nextToken = PeekNextToken();
-                    if (nextToken.Kind == TokenKind.Struct)
-                    {
-                        Eat(TokenKind.Pub);
-                        structs.Add(ParseStruct(directives));
-                    }
-                    else if (nextToken.Kind == TokenKind.Enum)
-                    {
-                        Eat(TokenKind.Pub);
-                        enums.Add(ParseEnumDeclaration(directives));
-                    }
-                    else if (nextToken.Kind == TokenKind.Type)
-                    {
-                        Eat(TokenKind.Pub);
-                        var decl = ParseTypeDeclaration(directives, isPublic: true);
-                        if (decl is StructDeclarationNode s) structs.Add(s);
-                        else if (decl is EnumDeclarationNode e) enums.Add(e);
-                        else if (decl is TypeAliasDeclarationNode a) typeAliases.Add(a);
-                    }
-                    else if (nextToken.Kind == TokenKind.Fn)
-                    {
-                        functions.Add(ParseFunction(directives: directives));
-                    }
-                    else if (nextToken.Kind == TokenKind.Const)
-                    {
-                        if (directives.Count > 0)
-                        {
-                            _diagnostics.Add(Diagnostic.Error(
-                                "directives are not supported on const declarations",
-                                directives[0].Span,
-                                code: "E1001"));
-                        }
-                        Eat(TokenKind.Pub);
-                        globalConstants.Add(ParseVariableDeclaration(isPublic: true));
-                    }
-                    else
-                    {
-                        _diagnostics.Add(Diagnostic.Error(
-                            $"expected `struct`, `enum`, `type`, `fn`, or `const` after `pub`",
-                            _currentToken.Span,
-                            $"found '{nextToken.Text}'",
-                            "E1002"));
-                        // Consume `pub` to prevent infinite loop and continue
-                        Advance();
-                    }
-                }
-                else if (_currentToken.Kind == TokenKind.Struct)
-                {
-                    structs.Add(ParseStruct(directives));
-                }
-                else if (_currentToken.Kind == TokenKind.Enum)
-                {
-                    enums.Add(ParseEnumDeclaration(directives));
-                }
-                else if (_currentToken.Kind == TokenKind.Type)
-                {
-                    var decl = ParseTypeDeclaration(directives, isPublic: false);
-                    if (decl is StructDeclarationNode s) structs.Add(s);
-                    else if (decl is EnumDeclarationNode e) enums.Add(e);
-                    else if (decl is TypeAliasDeclarationNode a) typeAliases.Add(a);
-                }
-                else if (_currentToken.Kind == TokenKind.Fn)
-                {
-                    functions.Add(ParseFunction(directives: directives));
-                }
-                else if (_currentToken.Kind == TokenKind.Test)
-                {
-                    if (directives.Count > 0)
-                    {
-                        _diagnostics.Add(Diagnostic.Error(
-                            "directives are not supported on test blocks",
-                            directives[0].Span,
-                            code: "E1001"));
-                    }
-                    tests.Add(ParseTest());
-                }
-                else if (_currentToken.Kind == TokenKind.Const)
-                {
-                    if (directives.Count > 0)
-                    {
-                        _diagnostics.Add(Diagnostic.Error(
-                            "directives are not supported on const declarations",
-                            directives[0].Span,
-                            code: "E1001"));
-                    }
-                    globalConstants.Add(ParseVariableDeclaration());
-                }
-                else if (directives.Count > 0)
-                {
-                    // Directives were parsed but no declaration follows
-                    _diagnostics.Add(Diagnostic.Error(
-                        "expected declaration after directive(s)",
-                        _currentToken.Span,
-                        "directives must precede `struct`, `enum`, `type`, or `fn`",
-                        "E1001"));
-                    // Skip token to avoid infinite loop
-                    if (_currentToken.Kind != TokenKind.EndOfFile)
-                        Advance();
-                }
-                else
-                {
-                    // Unexpected token: report and attempt to recover by skipping it
-                    _diagnostics.Add(Diagnostic.Error(
-                        $"unexpected token '{_currentToken.Text}'",
-                        _currentToken.Span,
-                        "expected `struct`, `enum`, `type`, `pub fn`, `fn`, `test`, `const`, or directive",
-                        "E1001"));
-                    Advance();
-                }
+                ParseTopLevelItem(group);
             }
             catch (ParserException ex)
             {
@@ -240,14 +121,191 @@ public class Parser
         }
 
         // Add any types hoisted from local scopes (e.g., type declarations inside functions/tests)
-        structs.AddRange(_hoistedStructs);
-        enums.AddRange(_hoistedEnums);
-        typeAliases.AddRange(_hoistedTypeAliases);
+        group.Structs.AddRange(_hoistedStructs);
+        group.Enums.AddRange(_hoistedEnums);
+        group.TypeAliases.AddRange(_hoistedTypeAliases);
 
         var endSpan = _currentToken.Span;
         var span = SourceSpan.Combine(startSpan, endSpan);
-        return new ModuleNode(span, imports, structs, enums, typeAliases, functions, tests, globalConstants,
-            generatorDefs, generatorInvocations);
+        return new ModuleNode(span, imports, group.Structs, group.Enums, group.TypeAliases, group.Functions,
+            group.Tests, group.GlobalConstants, generatorDefs, generatorInvocations, group.IfDirectives);
+    }
+
+    /// <summary>
+    /// Parses one top-level item — a declaration, a decl-level #if directive, or
+    /// leading directives followed by a declaration — into <paramref name="group"/>.
+    /// Shared between <see cref="ParseModule"/> and #if directive branch bodies.
+    /// </summary>
+    private void ParseTopLevelItem(DeclarationGroup group)
+    {
+        // Decl-level compile-time conditional: #if(cond) { decls } [else { decls }]
+        if (_currentToken.Kind == TokenKind.Hash && PeekNextToken().Kind == TokenKind.If)
+        {
+            group.IfDirectives.Add(ParseIfDirectiveDeclaration());
+            return;
+        }
+
+        // Parse leading directives (e.g., #foreign, #deprecated("msg"))
+        var directives = ParseDirectives();
+
+        if (_currentToken.Kind == TokenKind.Pub)
+        {
+            // Could be struct, enum, type, function, or const - peek ahead
+            var nextToken = PeekNextToken();
+            if (nextToken.Kind == TokenKind.Struct)
+            {
+                Eat(TokenKind.Pub);
+                group.Structs.Add(ParseStruct(directives));
+            }
+            else if (nextToken.Kind == TokenKind.Enum)
+            {
+                Eat(TokenKind.Pub);
+                group.Enums.Add(ParseEnumDeclaration(directives));
+            }
+            else if (nextToken.Kind == TokenKind.Type)
+            {
+                Eat(TokenKind.Pub);
+                var decl = ParseTypeDeclaration(directives, isPublic: true);
+                if (decl is StructDeclarationNode s) group.Structs.Add(s);
+                else if (decl is EnumDeclarationNode e) group.Enums.Add(e);
+                else if (decl is TypeAliasDeclarationNode a) group.TypeAliases.Add(a);
+            }
+            else if (nextToken.Kind == TokenKind.Fn)
+            {
+                group.Functions.Add(ParseFunction(directives: directives));
+            }
+            else if (nextToken.Kind == TokenKind.Const)
+            {
+                if (directives.Count > 0)
+                {
+                    _diagnostics.Add(Diagnostic.Error(
+                        "directives are not supported on const declarations",
+                        directives[0].Span,
+                        code: "E1001"));
+                }
+                Eat(TokenKind.Pub);
+                group.GlobalConstants.Add(ParseVariableDeclaration(isPublic: true));
+            }
+            else
+            {
+                _diagnostics.Add(Diagnostic.Error(
+                    $"expected `struct`, `enum`, `type`, `fn`, or `const` after `pub`",
+                    _currentToken.Span,
+                    $"found '{nextToken.Text}'",
+                    "E1002"));
+                // Consume `pub` to prevent infinite loop and continue
+                Advance();
+            }
+        }
+        else if (_currentToken.Kind == TokenKind.Struct)
+        {
+            group.Structs.Add(ParseStruct(directives));
+        }
+        else if (_currentToken.Kind == TokenKind.Enum)
+        {
+            group.Enums.Add(ParseEnumDeclaration(directives));
+        }
+        else if (_currentToken.Kind == TokenKind.Type)
+        {
+            var decl = ParseTypeDeclaration(directives, isPublic: false);
+            if (decl is StructDeclarationNode s) group.Structs.Add(s);
+            else if (decl is EnumDeclarationNode e) group.Enums.Add(e);
+            else if (decl is TypeAliasDeclarationNode a) group.TypeAliases.Add(a);
+        }
+        else if (_currentToken.Kind == TokenKind.Fn)
+        {
+            group.Functions.Add(ParseFunction(directives: directives));
+        }
+        else if (_currentToken.Kind == TokenKind.Test)
+        {
+            if (directives.Count > 0)
+            {
+                _diagnostics.Add(Diagnostic.Error(
+                    "directives are not supported on test blocks",
+                    directives[0].Span,
+                    code: "E1001"));
+            }
+            group.Tests.Add(ParseTest());
+        }
+        else if (_currentToken.Kind == TokenKind.Const)
+        {
+            if (directives.Count > 0)
+            {
+                _diagnostics.Add(Diagnostic.Error(
+                    "directives are not supported on const declarations",
+                    directives[0].Span,
+                    code: "E1001"));
+            }
+            group.GlobalConstants.Add(ParseVariableDeclaration());
+        }
+        else if (directives.Count > 0)
+        {
+            // Directives were parsed but no declaration follows
+            _diagnostics.Add(Diagnostic.Error(
+                "expected declaration after directive(s)",
+                _currentToken.Span,
+                "directives must precede `struct`, `enum`, `type`, or `fn`",
+                "E1001"));
+            // Skip token to avoid infinite loop
+            if (_currentToken.Kind != TokenKind.EndOfFile)
+                Advance();
+        }
+        else
+        {
+            // Unexpected token: report and attempt to recover by skipping it
+            _diagnostics.Add(Diagnostic.Error(
+                $"unexpected token '{_currentToken.Text}'",
+                _currentToken.Span,
+                "expected `struct`, `enum`, `type`, `pub fn`, `fn`, `test`, `const`, or directive",
+                "E1001"));
+            Advance();
+        }
+    }
+
+    /// <summary>
+    /// Parses a declaration-level compile-time conditional:
+    /// #if(cond) { decls... } [else { decls... }]
+    /// Both branches must parse; only the active branch is later collected
+    /// (see IfDirectiveDeclarations.Flatten).
+    /// </summary>
+    private IfDirectiveDeclarationNode ParseIfDirectiveDeclaration()
+    {
+        var hashToken = Eat(TokenKind.Hash);
+        Eat(TokenKind.If);
+        // No parens required — see ParseIfDirectiveStatement.
+        var condition = ParseTemplateExpression();
+
+        var thenGroup = ParseDeclarationGroup();
+
+        DeclarationGroup? elseGroup = null;
+        if (_currentToken.Kind == TokenKind.Else)
+        {
+            Eat(TokenKind.Else);
+            elseGroup = ParseDeclarationGroup();
+        }
+
+        var span = SourceSpan.Combine(hashToken.Span, _previousToken.Span);
+        return new IfDirectiveDeclarationNode(span, condition, thenGroup, elseGroup);
+    }
+
+    /// <summary>Parses `{ top-level-items... }` into a DeclarationGroup.</summary>
+    private DeclarationGroup ParseDeclarationGroup()
+    {
+        var group = new DeclarationGroup();
+        Eat(TokenKind.OpenBrace);
+        while (_currentToken.Kind != TokenKind.CloseBrace && _currentToken.Kind != TokenKind.EndOfFile)
+        {
+            try { ParseTopLevelItem(group); }
+            catch (ParserException ex)
+            {
+                _diagnostics.Add(ex.Diagnostic);
+                // Guarantee progress; ParseTopLevelItem's own fallbacks handle most garbage
+                if (_currentToken.Kind != TokenKind.CloseBrace && _currentToken.Kind != TokenKind.EndOfFile)
+                    Advance();
+            }
+        }
+        Eat(TokenKind.CloseBrace);
+        return group;
     }
 
     /// <summary>
@@ -515,7 +573,44 @@ public class Parser
     /// <summary>Top-level template expression: comparison precedence.</summary>
     private TemplateExpr ParseTemplateExpression()
     {
-        return ParseTemplateComparison();
+        // Mirrors FLang expression precedence: ?? < or < and < comparisons < + - < * / %
+        return ParseTemplateNullCoalesce();
+    }
+
+    private TemplateExpr ParseTemplateNullCoalesce()
+    {
+        var left = ParseTemplateOr();
+        if (_currentToken.Kind == TokenKind.QuestionQuestion)
+        {
+            Advance();
+            var right = ParseTemplateNullCoalesce(); // right-associative, like FLang
+            return new TemplateBinaryExpr(SourceSpan.Combine(left.Span, right.Span), left, "??", right);
+        }
+        return left;
+    }
+
+    private TemplateExpr ParseTemplateOr()
+    {
+        var left = ParseTemplateAnd();
+        while (_currentToken.Kind == TokenKind.Or)
+        {
+            Advance();
+            var right = ParseTemplateAnd();
+            left = new TemplateBinaryExpr(SourceSpan.Combine(left.Span, right.Span), left, "or", right);
+        }
+        return left;
+    }
+
+    private TemplateExpr ParseTemplateAnd()
+    {
+        var left = ParseTemplateComparison();
+        while (_currentToken.Kind == TokenKind.And)
+        {
+            Advance();
+            var right = ParseTemplateComparison();
+            left = new TemplateBinaryExpr(SourceSpan.Combine(left.Span, right.Span), left, "and", right);
+        }
+        return left;
     }
 
     private TemplateExpr ParseTemplateComparison()
@@ -548,15 +643,27 @@ public class Parser
 
     private TemplateExpr ParseTemplateMultiplicative()
     {
-        var left = ParseTemplatePostfix();
+        var left = ParseTemplateUnary();
         while (_currentToken.Kind is TokenKind.Star or TokenKind.Slash or TokenKind.Percent)
         {
             var op = _currentToken.Text;
             Advance();
-            var right = ParseTemplatePostfix();
+            var right = ParseTemplateUnary();
             left = new TemplateBinaryExpr(SourceSpan.Combine(left.Span, right.Span), left, op, right);
         }
         return left;
+    }
+
+    private TemplateExpr ParseTemplateUnary()
+    {
+        if (_currentToken.Kind == TokenKind.Bang)
+        {
+            var bangToken = _currentToken;
+            Advance();
+            var operand = ParseTemplateUnary();
+            return new TemplateUnaryExpr(SourceSpan.Combine(bangToken.Span, operand.Span), "!", operand);
+        }
+        return ParseTemplatePostfix();
     }
 
     private TemplateExpr ParseTemplatePostfix()
@@ -633,6 +740,22 @@ public class Parser
                 Advance();
                 long.TryParse(token.Text, out var value);
                 return new TemplateIntLiteral(token.Span, value);
+            }
+
+            case TokenKind.True:
+            case TokenKind.False:
+            {
+                var token = _currentToken;
+                Advance();
+                return new TemplateBoolLiteral(token.Span, token.Kind == TokenKind.True);
+            }
+
+            case TokenKind.OpenParenthesis:
+            {
+                Advance();
+                var inner = ParseTemplateExpression();
+                Eat(TokenKind.CloseParenthesis);
+                return inner;
             }
 
             case TokenKind.Identifier:
@@ -1319,12 +1442,11 @@ public class Parser
         var hashToken = Eat(TokenKind.Hash);
         var ifToken = Eat(TokenKind.If);
 
-        Eat(TokenKind.OpenParenthesis);
-
-        // Reuse the template expression parser for the condition
+        // `#if cond { … }` — no parens, mirroring FLang's `if`. The legacy
+        // `#if(cond)` form parses identically: `(cond)` is a parenthesized
+        // expression. The condition grammar has no struct literals, so the
+        // `{` opening the body is unambiguous.
         var condition = ParseTemplateExpression();
-
-        Eat(TokenKind.CloseParenthesis);
 
         // Parse then body
         Eat(TokenKind.OpenBrace);
@@ -2361,7 +2483,8 @@ public class Parser
                 _currentToken.Kind != TokenKind.Loop &&
                 _currentToken.Kind != TokenKind.While &&
                 _currentToken.Kind != TokenKind.OpenBrace &&
-                _currentToken.Kind != TokenKind.If)
+                _currentToken.Kind != TokenKind.If &&
+                _currentToken.Kind != TokenKind.Hash)
             {
                 // Try to parse as expression
                 var expr = ParseExpression();

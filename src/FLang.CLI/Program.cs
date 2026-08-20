@@ -39,6 +39,8 @@ var emitC = false;
 var emitCfg = false;
 var linkFlags = new List<string>();
 var headerPaths = new List<string>();
+string? targetOs = null;
+string? targetArch = null;
 
 // Handle "test" subcommand: flang test <file> or flang --flags test <file>
 {
@@ -77,6 +79,10 @@ for (var i = 0; i < args.Length; i++)
         emitC = true;
     else if (args[i] == "--emit-cfg")
         emitCfg = true;
+    else if (args[i] == "--target-os" && i + 1 < args.Length)
+        targetOs = args[++i];
+    else if (args[i] == "--target-arch" && i + 1 < args.Length)
+        targetArch = args[++i];
     else if (args[i] == "--link" && i + 1 < args.Length)
         linkFlags.Add(args[++i]);
     else if (args[i] == "-I" && i + 1 < args.Length)
@@ -170,6 +176,8 @@ var options = new CompilerOptions(
     StdlibPath: stdlibPath,
     OutputPath: outputPath,
     ReleaseBuild: releaseBuild,
+    TargetOs: targetOs,
+    TargetArch: targetArch,
     EmitFir: emitFir,
     DumpTemplates: dumpTemplates,
     DebugLogging: debugLogging,

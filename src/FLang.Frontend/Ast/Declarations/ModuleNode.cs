@@ -12,7 +12,8 @@ public class ModuleNode(
     IReadOnlyList<TestDeclarationNode> tests,
     IReadOnlyList<VariableDeclarationNode> globalConstants,
     IReadOnlyList<SourceGeneratorDefinitionNode> generatorDefinitions,
-    IReadOnlyList<SourceGeneratorInvocationNode> generatorInvocations) : AstNode(span)
+    IReadOnlyList<SourceGeneratorInvocationNode> generatorInvocations,
+    IReadOnlyList<IfDirectiveDeclarationNode>? ifDirectives = null) : AstNode(span)
 {
     public IReadOnlyList<ImportDeclarationNode> Imports { get; } = imports;
     public IReadOnlyList<VariableDeclarationNode> GlobalConstants { get; } = globalConstants;
@@ -23,4 +24,11 @@ public class ModuleNode(
     public IReadOnlyList<TestDeclarationNode> Tests { get; } = tests;
     public IReadOnlyList<SourceGeneratorDefinitionNode> GeneratorDefinitions { get; } = generatorDefinitions;
     public IReadOnlyList<SourceGeneratorInvocationNode> GeneratorInvocations { get; } = generatorInvocations;
+
+    /// <summary>
+    /// Declaration-level #if directives, present only between parsing and the
+    /// flatten pass (<c>IfDirectiveDeclarations.Flatten</c>). Empty afterwards:
+    /// the active branches' declarations are merged into the lists above.
+    /// </summary>
+    public IReadOnlyList<IfDirectiveDeclarationNode> IfDirectives { get; } = ifDirectives ?? [];
 }

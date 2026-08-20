@@ -8,7 +8,7 @@ import std.option
 
 
 pub fn or_global(alloc: &Allocator?) &Allocator {
-    #if(runtime.testing) {
+    #if runtime.testing {
         return alloc.unwrap_or(&test_allocator)
     }
     return alloc.unwrap_or(&global_allocator)

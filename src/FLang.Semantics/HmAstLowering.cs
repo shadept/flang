@@ -385,12 +385,7 @@ public class HmAstLowering
             EmitDefersDownTo(0);
         }
 
-        // Add implicit void return to unterminated blocks
-        foreach (var block in irFn.BasicBlocks)
-        {
-            if (!block.IsTerminated)
-                block.EmitReturn(new IntConstantValue(0, TypeLayoutService.IrVoidPrim));
-        }
+        FinishBlocks(irFn, TypeLayoutService.IrVoidPrim);
 
         return irFn;
     }
@@ -1291,18 +1286,41 @@ public class HmAstLowering
             EmitDefersDownTo(0);
         }
 
-        // Add implicit return to any unterminated block
+        FinishBlocks(irFn, irFn.UsesReturnSlot ? TypeLayoutService.IrVoidPrim
+            : (isNonVoid ? retIrType : TypeLayoutService.IrVoidPrim));
+
+        return irFn;
+    }
+
+    /// <summary>
+    /// Finalizes a lowered function's CFG: drops unreachable blocks, then
+    /// gives every remaining unterminated block an implicit return.
+    ///
+    /// The drop is load-bearing, not an optimization: a merge block nothing
+    /// jumps to (a match or if whose arms all return) would otherwise get a
+    /// placeholder return — type-valid C only for scalar return types, and
+    /// invalid for aggregate-returning functions ("assigning struct from int"
+    /// / bare `return;` in a non-void function).
+    /// </summary>
+    private static void FinishBlocks(IrFunction irFn, IrType implicitRetType)
+    {
+        if (irFn.BasicBlocks.Count > 0)
+        {
+            var reachable = new HashSet<BasicBlock> { irFn.BasicBlocks[0] };
+            var work = new Stack<BasicBlock>();
+            work.Push(irFn.BasicBlocks[0]);
+            while (work.Count > 0)
+                foreach (var succ in work.Pop().Successors)
+                    if (reachable.Add(succ))
+                        work.Push(succ);
+            irFn.BasicBlocks.RemoveAll(b => !reachable.Contains(b));
+        }
+
         foreach (var block in irFn.BasicBlocks)
         {
             if (!block.IsTerminated)
-            {
-                var retType = irFn.UsesReturnSlot ? TypeLayoutService.IrVoidPrim
-                    : (isNonVoid ? retIrType : TypeLayoutService.IrVoidPrim);
-                block.EmitReturn(new IntConstantValue(0, retType));
-            }
+                block.EmitReturn(new IntConstantValue(0, implicitRetType));
         }
-
-        return irFn;
     }
 
     // =========================================================================
@@ -1334,7 +1352,8 @@ public class HmAstLowering
                 break;
             case IfDirectiveStatementNode directive:
             {
-                var active = TemplateEngine.EvaluateCondition(directive.Condition, _types.CompileTimeContext);
+                // The checker already validated the condition; evaluation cannot error here.
+                var active = DirectiveConditionEvaluator.Evaluate(directive.Condition, _types.CompileTimeContext).Value;
                 var branch = active ? directive.ThenBody : directive.ElseBody;
                 if (branch != null)
                     foreach (var s in branch)
@@ -5162,7 +5181,8 @@ public class HmAstLowering
                 break;
             case IfDirectiveStatementNode directive:
             {
-                var active = TemplateEngine.EvaluateCondition(directive.Condition, _types.CompileTimeContext);
+                // The checker already validated the condition; evaluation cannot error here.
+                var active = DirectiveConditionEvaluator.Evaluate(directive.Condition, _types.CompileTimeContext).Value;
                 var branch = active ? directive.ThenBody : directive.ElseBody;
                 if (branch != null)
                     CollectMutatedParams(branch, mutated);

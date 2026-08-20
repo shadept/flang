@@ -71,6 +71,7 @@ import std.string_builder
 import std.test
 import flang_core.span
 import flang_parser.ast
+import flang_parser.comptime
 import flang_parser.lexer
 import flang_typer.type
 import flang_typer.node_id
@@ -135,6 +136,9 @@ type LowerCtx = struct {
     // module-level functions after the main walk (a body can enqueue
     // nested lambdas, so the drain is index-based).
     pending_lambdas: List(PendingLambda)
+    // Compile-time context #if conditions evaluate against. Host by
+    // default; a cross-target build overrides it at construction.
+    comptime: ComptimeCtx
 }
 
 // A lambda body awaiting emission. `lam`/`info` are shallow copies
@@ -337,7 +341,8 @@ pub fn lower_module(ast_module: &Module, result: &TypeCheckResult, allocator: &A
         defer_marks = defer_marks,
         flushing = false,
         blocked = false,
-        pending_lambdas = list(0, allocator)
+        pending_lambdas = list(0, allocator),
+        comptime = host_ctx()
     }
     lower_into(&m, &ctx, ast_module, "")
     lower_specializations(&m, &ctx)
@@ -368,7 +373,7 @@ pub fn lower_program(modules: &List(Module), fqns: &List(OwnedString), result: &
     let str_globals: List(Global) = list(0, allocator)
     let defer_stack: List(Expr) = list(0, allocator)
     let defer_marks: List(usize) = list(0, allocator)
-    let ctx = LowerCtx { result = result, overlay = null, syms = &syms, allocator = allocator, loops = loop_stack, sret = null, ret_size = 0u64, strings = interner, str_globals = str_globals, defers = defer_stack, defer_marks = defer_marks, flushing = false, blocked = false, pending_lambdas = list(0, allocator) }
+    let ctx = LowerCtx { result = result, overlay = null, syms = &syms, allocator = allocator, loops = loop_stack, sret = null, ret_size = 0u64, strings = interner, str_globals = str_globals, defers = defer_stack, defer_marks = defer_marks, flushing = false, blocked = false, pending_lambdas = list(0, allocator), comptime = host_ctx() }
     for i in 0..modules.len {
         lower_into(&m, &ctx, &modules[i], fqns[i].as_view())
     }
@@ -842,10 +847,20 @@ fn lower_stmt(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, stmt: &Stmt) bool {
         // silent skip.
 
 
-        // `#if(cond) { … } else { … }` - a compile-time conditional that
-        // should have been resolved before lowering. Reaching here means it
-        // was never expanded, and picking either branch would be a guess.
-        IfDirective(_) => { let _u = unlowerable(ctx) },
+        // `#if cond { … } else { … }` - the checker validated the
+        // condition; re-evaluate against the same host context and splice
+        // the active branch's statements in place.
+        IfDirective(ifd) => {
+            eval_condition(&ctx.comptime, &ifd.condition) match {
+                Active(active) => {
+                    const stmts: &List(Stmt) = if active { &ifd.then_stmts } else { &ifd.else_stmts }
+                    for i in 0..stmts.len {
+                        if lower_stmt(ctx, bb, env, &stmts[i]) { return true }
+                    }
+                },
+                Invalid(_) => { let _u = unlowerable(ctx) },
+            }
+        },
     }
     return false
 }

@@ -196,7 +196,7 @@ fn enable_raw(rl: &Readline) {
     if rl.is_raw { return }
     if isatty(0) == 0 { return }
 
-    #if(platform.os == "windows") {
+    #if platform.os == "windows" {
         // Save original console modes (stdin in bytes 0..3, stdout in bytes 4..7)
         const hIn = GetStdHandle(WIN_STD_INPUT_HANDLE)
         let in_mode: u32 = 0
@@ -242,7 +242,7 @@ fn enable_raw(rl: &Readline) {
 fn disable_raw(rl: &Readline) {
     if !rl.is_raw { return }
 
-    #if(platform.os == "windows") {
+    #if platform.os == "windows" {
         const hIn = GetStdHandle(WIN_STD_INPUT_HANDLE)
         const p_in = &rl.raw_buf[0] as &u32
         SetConsoleMode(hIn, p_in.*)
@@ -273,7 +273,7 @@ fn write_u64(ptr: &u8, val: u64) {
 
 fn read_byte() u8? {
     let c: u8 = 0
-    #if(platform.os == "windows") {
+    #if platform.os == "windows" {
         // Use ReadFile directly - CRT _read ignores SetConsoleMode changes
         const hIn = GetStdHandle(WIN_STD_INPUT_HANDLE)
         let bytes_read: u32 = 0

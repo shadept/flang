@@ -21,7 +21,8 @@ public record TestMetadata(
     List<ExpectedDiagnostic> ExpectedCompileErrors,
     List<ExpectedDiagnostic> ExpectedCompileWarnings,
     List<ExpectedDiagnostic> ForbiddenCompileWarnings,
-    string? SkipReason);
+    string? SkipReason,
+    string? TargetOs = null);
 
 /// <summary>
 /// Result of running a single test.
@@ -102,6 +103,7 @@ public class TestHarness
         var compileWarnings = new List<ExpectedDiagnostic>();
         var forbiddenWarnings = new List<ExpectedDiagnostic>();
         string? skipReason = null;
+        string? targetOs = null;
 
         foreach (var line in lines)
         {
@@ -126,9 +128,11 @@ public class TestHarness
                 compileWarnings.Add(ParseExpectedDiagnostic(content[16..].Trim()));
             else if (content.StartsWith("SKIP:"))
                 skipReason = content[5..].Trim();
+            else if (content.StartsWith("TARGET-OS:"))
+                targetOs = content[10..].Trim();
         }
 
-        return new TestMetadata(testName, exitCode, stdout, stderr, compileErrors, compileWarnings, forbiddenWarnings, skipReason);
+        return new TestMetadata(testName, exitCode, stdout, stderr, compileErrors, compileWarnings, forbiddenWarnings, skipReason, targetOs);
     }
 
     /// <summary>
@@ -214,6 +218,7 @@ public class TestHarness
             StdlibPath: _stdlibPath,
             OutputPath: outputFilePath,
             ReleaseBuild: false,
+            TargetOs: metadata.TargetOs,
             DebugLogging: false,
             // Pin the build cache to a single shared directory so parallel
             // harness workers don't each cold-recompile the stdlib companion

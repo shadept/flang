@@ -89,6 +89,21 @@ in its fixtures so the assertions are no longer vacuous.
 
 ## Open Issues
 
+### Reference: A Statement-Position `match`/`if` Whose Arms All Diverge Emits Invalid C — RESOLVED
+
+**Status:** Resolved 2026-08-20 (same day as discovery, while writing `flang_parser/comptime.f`)
+**Affected (was):** reference compiler C lowering
+
+A statement-position `match` or `if/else` where **every** arm returns leaves a merge block nothing jumps to; the implicit-return pass then gave that dead block a placeholder return — type-valid C only for scalar return types, so aggregate-returning functions produced `return;` in a non-void C function (or "assigning struct from int"). Fixed by `HmAstLowering.FinishBlocks`: unreachable blocks are dropped from the CFG before implicit returns are added (regression: `tests/harness/enums/match_all_arms_diverge_aggregate.f`). `comptime.f`'s evaluator was written in value-form matches to sidestep this; that style stays (it reads better), but the constraint is gone.
+
+---
+
+### Reference: Pending-Specialization Drain Assumed Resolution Never Enqueues — RESOLVED
+
+**Status:** Resolved 2026-08-20 — `ResolvePendingSpecializations` iterated with `foreach` while `EnsureSpecialization`'s template-body re-checks could append new pendings ("Collection was modified" ICE), and its TypeVar skip was shallow, so a *nested* unresolved var (`Result(T, $E)` from a signature naming an unknown type, e.g. a missing `import std.result`) minted a unique spec key every round and the drain never converged (7+ minutes at 75% CPU). Now: index-based drain that also processes appends, deep `ContainsUnboundTypeVar` skip, and a 20k-iteration backstop that reports E2001 instead of spinning.
+
+---
+
 ### Self-Host: Unary Expressions Are Never Type-Checked (and Lower on a Fallback) — RESOLVED
 
 **Status:** Resolved 2026-08-19 (M7) — `checker.f::check_unary` visits the operand and types the node (`!` unifies both sides with `bool`; `-`/`~` type as their operand), so `lower_unary`'s width/float reads are now real and `-x` on an `f64` emits `fneg`. Numeric-ness of `-`/`~` operands is still not *enforced* (an eventual rejection-power item, tracked in docs/self-host.md), but the silent-wrong-code path is gone. Self-check stayed at 0 errors across the 98 modules with the operand subtrees newly visited.

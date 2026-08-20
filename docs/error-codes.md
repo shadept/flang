@@ -2976,6 +2976,9 @@ Report the issue with sample code that reproduces the error.
 | **E2077** | Operators         | Ambiguous index operator                       |
 | **E2102** | Generics          | Conflicting generic type bindings            |
 | **E2115** | Pattern Matching  | Unsupported pattern form                     |
+| **E2116** | Directives        | Unknown compile-time name in #if condition   |
+| **E2117** | Directives        | #if condition is not a bool                  |
+| **E2118** | Directives        | Invalid operand in #if condition             |
 
 ### E2115: Unsupported Pattern Form
 
@@ -3516,6 +3519,84 @@ fn caller() i32 {
 #### Solution
 
 Either define `fn op_try(self: Plain) TryResult(T, R)` for the operand type, or import a module that provides one (`core.option`, `std.result`).
+
+---
+
+### E2116: Unknown Compile-Time Name in #if Condition
+
+**Category**: Directives
+**Severity**: Error
+
+#### Description
+
+A `#if` condition referenced a compile-time name or member that does not exist in the closed, compiler-supplied context. The context is fully known, so an unknown name is always a mistake — it is never silently false. Valid roots are `platform` (`os`, `arch`) and `runtime` (`testing`, `release`, `env`).
+
+#### Example
+
+```flang
+pub fn main() i32 {
+    #if platform.oss == "windows" {  // error E2116: unknown compile-time member `oss`
+        return 1
+    }
+    return 0
+}
+```
+
+#### Solution
+
+Fix the typo. Valid paths: `platform.os`, `platform.arch`, `runtime.testing`, `runtime.release`, `runtime.env["KEY"]`.
+
+---
+
+### E2117: #if Condition Is Not a Bool
+
+**Category**: Directives
+**Severity**: Error
+
+#### Description
+
+`#if` conditions follow FLang expression semantics and must evaluate to a bool. A bare string or integer is an error, exactly as `if platform.os { }` is invalid FLang.
+
+#### Example
+
+```flang
+pub fn main() i32 {
+    #if platform.os {  // error E2117: #if condition must be a bool
+        return 1
+    }
+    return 0
+}
+```
+
+#### Solution
+
+Compare against a value: `#if(platform.os == "windows")`.
+
+---
+
+### E2118: Invalid Operand in #if Condition
+
+**Category**: Directives
+**Severity**: Error
+
+#### Description
+
+An operand in a `#if` condition was misused: an optional (`runtime.env["KEY"]` yields `String?`, following FLang `Dict` semantics) used or compared without unwrapping via `??`, non-bool operands to `and`/`or`/`!`, mismatched comparison operands, or an expression form the condition language does not allow (calls, casts, ranges, etc.).
+
+#### Example
+
+```flang
+pub fn main() i32 {
+    #if runtime.env["MODE"] == "release" {  // error E2118: unwrap with `??` first
+        return 1
+    }
+    return 0
+}
+```
+
+#### Solution
+
+Unwrap optionals before comparing: `#if((runtime.env["MODE"] ?? "") == "release")`.
 
 ---
 

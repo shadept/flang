@@ -6,7 +6,7 @@
 
 fn get_os_name() i32 {
     let result: i32 = 0
-    #if(platform.os == "macos") {
+    #if platform.os == "macos" {
         result = 1
     } else {
         result = 2

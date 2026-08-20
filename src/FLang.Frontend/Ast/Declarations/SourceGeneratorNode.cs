@@ -66,6 +66,11 @@ public class TemplateStringLiteral(SourceSpan span, string value) : TemplateExpr
 }
 
 /// <summary>Integer literal: 123</summary>
+public class TemplateBoolLiteral(SourceSpan span, bool value) : TemplateExpr(span)
+{
+    public bool Value { get; } = value;
+}
+
 public class TemplateIntLiteral(SourceSpan span, long value) : TemplateExpr(span)
 {
     public long Value { get; } = value;
@@ -90,6 +95,13 @@ public class TemplateBinaryExpr(SourceSpan span, TemplateExpr left, string op, T
     public TemplateExpr Left { get; } = left;
     public string Operator { get; } = op;
     public TemplateExpr Right { get; } = right;
+}
+
+/// <summary>Unary operator: !a</summary>
+public class TemplateUnaryExpr(SourceSpan span, string op, TemplateExpr operand) : TemplateExpr(span)
+{
+    public string Operator { get; } = op;
+    public TemplateExpr Operand { get; } = operand;
 }
 
 /// <summary>Single index: obj[expr]</summary>

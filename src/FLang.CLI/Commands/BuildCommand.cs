@@ -14,6 +14,8 @@ public static class BuildCommand
         var emitC = false;
         var checkOnly = false;
         string? stdlibPath = null;
+        string? targetOs = null;
+        string? targetArch = null;
 
         for (var i = 0; i < args.Length; i++)
         {
@@ -21,10 +23,12 @@ public static class BuildCommand
             else if (args[i] == "--emit-c") emitC = true;
             else if (args[i] == "--check") checkOnly = true;
             else if (args[i] == "--stdlib-path" && i + 1 < args.Length) stdlibPath = args[++i];
+            else if (args[i] == "--target-os" && i + 1 < args.Length) targetOs = args[++i];
+            else if (args[i] == "--target-arch" && i + 1 < args.Length) targetArch = args[++i];
             else
             {
                 Console.Error.WriteLine($"error: unknown option '{args[i]}'");
-                Console.Error.WriteLine("Usage: flang build [--release] [--emit-c] [--check]");
+                Console.Error.WriteLine("Usage: flang build [--release] [--emit-c] [--check] [--target-os <os>] [--target-arch <arch>]");
                 return 1;
             }
         }
@@ -143,6 +147,8 @@ public static class BuildCommand
             StdlibPath: stdlibPath,
             OutputPath: outputPath,
             ReleaseBuild: releaseBuild,
+            TargetOs: targetOs,
+            TargetArch: targetArch,
             WorkingDirectory: projectRoot,
             IncludePaths: includePaths.Count > 0 ? includePaths : null,
             LinkFlags: linkFlags.Count > 0 ? linkFlags : null,

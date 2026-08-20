@@ -26,6 +26,10 @@ public record CompilerOptions(
     string StdlibPath,
     string? OutputPath = null,
     bool ReleaseBuild = false,
+    /// <summary>Target OS for #if evaluation (windows/linux/macos); host when null.</summary>
+    string? TargetOs = null,
+    /// <summary>Target architecture for #if evaluation (x86_64/arm64/x86); host when null.</summary>
+    string? TargetArch = null,
     /// <summary>Stop after type checking — no lowering, codegen, or linking.</summary>
     bool CheckOnly = false,
     string? EmitFir = null,
@@ -124,10 +128,25 @@ public class Compiler
             _ => RuntimeInformation.OSArchitecture.ToString().ToLowerInvariant()
         };
 
+        // A --target-os/--target-arch override makes #if evaluate for the
+        // TARGET platform, so any host can emit any platform's C (the
+        // cross-bootstrap story). The C toolchain target is a separate concern.
+        if (options.TargetOs is not (null or "windows" or "linux" or "macos"))
+        {
+            return new CompilationResult(false, null,
+                [Diagnostic.Error($"unknown --target-os `{options.TargetOs}` (expected windows, linux, or macos)",
+                    SourceSpan.None, code: "E0001")], compilation);
+        }
+        if (options.TargetArch is not (null or "x86_64" or "arm64" or "x86"))
+        {
+            return new CompilationResult(false, null,
+                [Diagnostic.Error($"unknown --target-arch `{options.TargetArch}` (expected x86_64, arm64, or x86)",
+                    SourceSpan.None, code: "E0001")], compilation);
+        }
         ctx["platform"] = new Dictionary<string, object>
         {
-            ["os"] = os,
-            ["arch"] = arch
+            ["os"] = options.TargetOs ?? os,
+            ["arch"] = options.TargetArch ?? arch
         };
 
         // runtime.testing, runtime.release, runtime.env
@@ -571,7 +590,7 @@ public class Compiler
         catch (Exception ex) when (ex is not OutOfMemoryException and not StackOverflowException)
         {
             allDiagnostics.Add(Diagnostic.Error(
-                $"internal compiler error: {ex.Message}",
+                $"internal compiler error: {ex.Message}\n{ex.StackTrace}",
                 SourceSpan.None, "Please report this bug.", "E0000"));
             return new CompilationResult(false, null, allDiagnostics, compilation);
         }

@@ -689,14 +689,45 @@ flang -I raylib.h -L libraylib.a main.f
 ### 7.7 Compile-Time Conditional `#if`
 
 ```
-#if(platform.os == "windows") {
+#if platform.os == "windows" {
     // windows-only code
 } else {
     // other platforms
 }
 ```
 
-Only the active branch is type-checked and lowered.
+`#if` is *selection, not computation*: it chooses between alternatives
+based on a closed, compiler-supplied context. It never computes code.
+
+**Contract.** Both branches of a `#if` must always parse. Only the
+active branch is type-checked and lowered; the inactive branch is
+invisible to name resolution and semantic analysis. Consequently `#if`
+gates *semantics* (platform APIs, foreign declarations, testing hooks),
+never *syntax* — a parse error in either branch breaks the build on
+every platform, by design.
+
+**Positions.** `#if` is valid at statement level (inside function
+bodies, including nested blocks) and at declaration level (top level of
+a file). A declaration-level `#if` may contain type declarations,
+functions, constants, tests, and nested `#if` directives — not imports
+or generator definitions. It resolves once, at collection time: only
+the active branch's declarations are collected, so the same names may
+be declared in both branches without conflict.
+
+**Divergence.** A `#if` statement diverges exactly when its active
+branch diverges — an exhaustive `#if/else` whose branches both `return`
+satisfies the missing-return check with no trailing dead code.
+
+**Condition language.** Conditions follow FLang expression semantics,
+evaluated at compile time over the context below: comparisons
+(`==`, `!=`), logical `and` / `or` / `!`, `??`, parentheses, and
+string/bool literals — the context holds only strings, bools, and
+env lookups, so no other operand forms exist to compute with.
+The syntax mirrors FLang's `if` — `#` means compile-time,
+the rest is ordinary FLang: `#if cond { }`, no parens required
+(`#if(cond)` still parses — `(cond)` is a parenthesized expression).
+A condition must evaluate to a bool — `#if platform.os { }` is an
+error, exactly as `if platform.os { }` is invalid FLang.
 
 | Path | Type | Values |
 |---|---|---|
@@ -705,6 +736,25 @@ Only the active branch is type-checked and lowered.
 | `runtime.testing` | bool | true when compiling with `test` |
 | `runtime.release` | bool | true when compiling with `--release` |
 | `runtime.env` | dict | Build-time environment variables |
+
+`platform.os` / `platform.arch` describe the **target**, which defaults
+to the host; `--target-os` and `--target-arch` override them so any host
+can emit any platform's code (cross-bootstrap). Unknown target values
+are hard errors.
+
+`runtime.env` follows FLang `Dict` semantics: indexing yields an
+optional (`String?`), so an absent variable is a value, not an error —
+unwrap with `??` before comparing:
+
+```
+#if (runtime.env["MODE"] ?? "") == "release" { ... }
+```
+
+**Strictness.** Invalid conditions are hard errors, never silently
+false: an unknown context name or member (`platform.oss`) is E2116, a
+non-bool condition is E2117, and operand misuse (an optional compared
+without `??`, non-bool `and`/`or` operands, a disallowed expression
+form) is E2118.
 
 ### 7.8 Source Generators
 

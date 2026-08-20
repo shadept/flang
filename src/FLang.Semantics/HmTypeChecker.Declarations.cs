@@ -1,5 +1,6 @@
 using FLang.Core;
 using FLang.Core.Types;
+using FLang.Frontend;
 using FLang.Frontend.Ast;
 using FLang.Frontend.Ast.Declarations;
 using FLang.Frontend.Ast.Expressions;
@@ -673,7 +674,7 @@ public partial class HmTypeChecker
     /// <summary>
     /// Check if a block has a return statement or ends with an implicit return (trailing expression).
     /// </summary>
-    private static bool HasReturnOrImplicitReturn(IReadOnlyList<StatementNode> statements)
+    private bool HasReturnOrImplicitReturn(IReadOnlyList<StatementNode> statements)
     {
         if (statements.Count == 0) return false;
 
@@ -681,6 +682,15 @@ public partial class HmTypeChecker
         {
             if (stmt is ExpressionStatementNode { Expression: ReturnNode })
                 return true;
+
+            // A #if directive diverges exactly when its active branch diverges.
+            if (stmt is IfDirectiveStatementNode directive)
+            {
+                var result = DirectiveConditionEvaluator.Evaluate(directive.Condition, _compilation.CompileTimeContext);
+                var branch = result.IsError ? null : result.Value ? directive.ThenBody : directive.ElseBody;
+                if (branch != null && HasReturnOrImplicitReturn(branch))
+                    return true;
+            }
 
             if (stmt is ExpressionStatementNode { Expression: IfExpressionNode ifExpr })
             {
@@ -714,7 +724,7 @@ public partial class HmTypeChecker
         return false;
     }
 
-    private static bool HasReturnInExpression(ExpressionNode expr)
+    private bool HasReturnInExpression(ExpressionNode expr)
     {
         return expr switch
         {

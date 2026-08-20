@@ -50,14 +50,14 @@ pub fn open_file(path: String, mode: FileMode, encoding: FileEncoding) Result(Fi
 }
 
 fn open_flags(mode: FileMode) i32 {
-    #if(platform.os == "windows") {
+    #if platform.os == "windows" {
         return mode match {
             FileMode.Read => 0 + 0x8000,
             FileMode.Write => 1 + 0x100 + 0x200 + 0x8000,
             FileMode.Append => 1 + 0x100 + 0x08 + 0x8000,
         }
     }
-    #if(platform.os == "macos") {
+    #if platform.os == "macos" {
         // Darwin's fcntl values differ from Linux's: using the Linux
         // constants here opened Write WITHOUT O_TRUNC (512 is O_CREAT on
         // darwin), so rewrites of a shorter file left the old tail in

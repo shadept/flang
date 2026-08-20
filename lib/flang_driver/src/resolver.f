@@ -22,6 +22,7 @@ import std.io.fs
 import std.io.file
 import std.test
 import flang_driver.project
+import flang_parser.comptime
 
 // One direct dependency: its `[project].name` (its import namespace) and
 // its resolved source root.
@@ -38,6 +39,15 @@ pub type ResolveCtx = struct {
     deps: List(DepRoot)
     stdlib_root: OwnedString
     cwd: OwnedString
+    // Compile-time context #if conditions evaluate against during this
+    // build. Host by default; `--target-os`/`--target-arch` override it.
+    comptime: ComptimeCtx
+}
+
+// Scoped mutability: installs the build's compile-time context (a
+// `--target-os`/`--target-arch` override). Fields are writable only here.
+pub fn set_comptime(self: &ResolveCtx, c: ComptimeCtx) {
+    self.comptime = c
 }
 
 pub fn deinit(self: &ResolveCtx) {
@@ -168,6 +178,7 @@ pub fn resolve_ctx(proj: &Project, stdlib_root: String, allocator: &Allocator? =
         deps = deps,
         stdlib_root = normalize_sep(stdlib_root, allocator),
         cwd = from_view("."),
+        comptime = host_ctx(),
     }
 }
 
@@ -181,6 +192,7 @@ pub fn single_file_ctx(stdlib_root: String, allocator: &Allocator? = null) Resol
         deps = deps,
         stdlib_root = normalize_sep(stdlib_root, allocator),
         cwd = from_view("."),
+        comptime = host_ctx(),
     }
 }
 
@@ -338,6 +350,7 @@ fn fixture_ctx() ResolveCtx {
         deps = deps,
         stdlib_root = from_view("stdlib"),
         cwd = from_view("."),
+        comptime = host_ctx(),
     }
 }
 
