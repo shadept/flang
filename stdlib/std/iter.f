@@ -1,3 +1,5 @@
+import std.list
+import std.test
 import std.option
 
 // =============================================================================
@@ -14,7 +16,18 @@ pub fn iter(self: &FilterIter($I, $T)) FilterIter(I, T) {
 }
 
 pub fn next(self: &FilterIter($I, $T)) T? {
-    return self.it.next().filter(self.f)
+    loop {
+        self.it.next() match {
+            Some(v) => if self.f(v) { return Some(v) } else { continue }
+            None => return null
+        }
+        // once guards are supported
+        // self.it.next() match {
+        //     Some(v) if self.f(v) => return Some(v)
+        //     None => return null
+        //     _ => continue
+        // }
+    }
 }
 
 pub fn filter(it: $I, f: fn($T) bool) FilterIter(I, T) {
@@ -63,4 +76,42 @@ pub fn reduce(it: $I, f: fn($A, $T) A) A? {
         Some(first) => Some(reduce(it, first, f))
         None => null
     }
+}
+
+// =============================================================================
+// Tests
+// =============================================================================
+
+fn is_even(x: i32) bool { return x % 2 == 0 }
+
+test "filter advances past non-matching elements" {
+    // The non-matching head is the interesting case: `next` must skip
+    // it and keep pulling, not report the iterator empty.
+    let xs: List(i32) = list(3)
+    defer xs.deinit()
+    xs.push(1i32)
+    xs.push(2i32)
+    xs.push(3i32)
+
+    let it = xs.iter().filter(is_even)
+    const first = it.next()
+    assert_true(first.is_some(), "the 2 is found behind the non-matching 1")
+    assert_eq(first.unwrap(), 2i32, "the first even element is 2")
+    assert_true(it.next().is_none(), "and nothing follows it")
+}
+
+test "filter over an all-matching and an empty list" {
+    let xs: List(i32) = list(2)
+    defer xs.deinit()
+    xs.push(4i32)
+    xs.push(6i32)
+    let it = xs.iter().filter(is_even)
+    assert_eq(it.next().unwrap(), 4i32, "all-matching yields in order")
+    assert_eq(it.next().unwrap(), 6i32, "second element follows")
+    assert_true(it.next().is_none(), "then exhausts")
+
+    let empty: List(i32) = list(0)
+    defer empty.deinit()
+    let e = empty.iter().filter(is_even)
+    assert_true(e.next().is_none(), "empty stays empty")
 }

@@ -2,9 +2,12 @@
 // Uses raw malloc/free for simplicity (allocator support to be added later).
 
 import std.allocator
+import std.dict
 import std.mem
 import std.option
 import std.sort
+import std.string
+import std.string_builder
 import std.test
 
 pub type List = struct(T) {
@@ -385,6 +388,66 @@ pub fn fold_right(self: &List($T), init: $A, f: fn(T, A) A) A {
     return acc
 }
 
+// ─── Search / query ──────────────────────────────────────────────────
+//
+// Predicate-taking forms (`find`, `find_index`, `any`, `all`) take a
+// bare `fn(T) bool`. Value-taking forms (`contains`, `index_of`)
+// compare with `==`, so they require an element type that supports it.
+
+// First element, or null when empty.
+pub fn first(self: List($T)) T? {
+    if self.len == 0 { return null }
+    return Some(self[0])
+}
+
+// Last element, or null when empty.
+pub fn last(self: List($T)) T? {
+    if self.len == 0 { return null }
+    return Some(self[self.len - 1])
+}
+
+// Whether any element equals `value`.
+pub fn contains(self: List($T), value: T) bool {
+    return self.index_of(value).is_some()
+}
+
+// Index of the first element equal to `value`, or null.
+pub fn index_of(self: List($T), value: T) usize? {
+    for i in 0..self.len {
+        if self[i] == value { return Some(i) }
+    }
+    return null
+}
+
+// First element satisfying `pred`, or null.
+pub fn find(self: &List($T), pred: fn(T) bool) T? {
+    for i in 0..self.len {
+        if pred(self[i]) { return Some(self[i]) }
+    }
+    return null
+}
+
+// Index of the first element satisfying `pred`, or null.
+pub fn find_index(self: &List($T), pred: fn(T) bool) usize? {
+    for i in 0..self.len {
+        if pred(self[i]) { return Some(i) }
+    }
+    return null
+}
+
+// Whether any element satisfies `pred`. False for an empty list.
+pub fn any(self: &List($T), pred: fn(T) bool) bool {
+    return self.find_index(pred).is_some()
+}
+
+// Whether every element satisfies `pred`. True for an empty list.
+pub fn all(self: &List($T), pred: fn(T) bool) bool {
+    for i in 0..self.len {
+        if !pred(self[i]) { return false }
+    }
+    return true
+}
+
 // Everything after the first `n` elements. Fewer than `n` elements yields an
 // empty list rather than an error.
 pub fn drop_first(self: &List($T), n: usize, allocator: &Allocator? = null) List(T) {
@@ -470,4 +533,80 @@ test "drop_first skips a prefix and clamps past the end" {
     let past = xs.drop_first(99 as usize)
     defer past.deinit()
     assert_eq(past.len, 0 as usize, "dropping past the end is empty, not an error")
+}
+
+fn test_is_even(x: i32) bool { return x % 2 == 0 }
+
+test "search utilities: contains, index_of, first, last" {
+    let xs: List(i32) = list(3)
+    defer xs.deinit()
+    xs.push(10i32)
+    xs.push(20i32)
+    xs.push(30i32)
+
+    assert_true(xs.contains(20i32), "present value is found")
+    assert_true(!xs.contains(99i32), "absent value is not")
+    assert_eq(xs.index_of(30i32).unwrap(), 2 as usize, "index of the last element")
+    assert_true(xs.index_of(99i32).is_none(), "absent value has no index")
+    assert_eq(xs.first().unwrap(), 10i32, "first element")
+    assert_eq(xs.last().unwrap(), 30i32, "last element")
+
+    let empty: List(i32) = list(0)
+    defer empty.deinit()
+    assert_true(empty.first().is_none(), "empty list has no first")
+    assert_true(empty.last().is_none(), "empty list has no last")
+}
+
+test "search utilities: find, find_index, any, all" {
+    let xs: List(i32) = list(3)
+    defer xs.deinit()
+    xs.push(1i32)
+    xs.push(2i32)
+    xs.push(4i32)
+
+    assert_eq(xs.find(test_is_even).unwrap(), 2i32, "first even element")
+    assert_eq(xs.find_index(test_is_even).unwrap(), 1 as usize, "its index")
+    assert_true(xs.any(test_is_even), "any is true when one matches")
+    assert_true(!xs.all(test_is_even), "all is false when one does not")
+
+    let evens: List(i32) = list(2)
+    defer evens.deinit()
+    evens.push(2i32)
+    evens.push(4i32)
+    assert_true(evens.all(test_is_even), "all is true when every element matches")
+
+    let empty: List(i32) = list(0)
+    defer empty.deinit()
+    assert_true(!empty.any(test_is_even), "any is false on empty")
+    assert_true(empty.all(test_is_even), "all is vacuously true on empty")
+}
+
+test "deinit is idempotent on every core container" {
+    // Any deinit may run twice: state nulls on the first call, so the
+    // second is a no-op, not a double free.
+    let xs: List(OwnedString) = list(2)
+    xs.push(from_view("alpha"))
+    xs.push(from_view("beta"))
+    xs.deinit()
+    xs.deinit()
+    assert_eq(xs.len, 0 as usize, "list is empty after deinit")
+
+    let d: Dict(OwnedString, i32) = dict()
+    d.set("k", 1i32)
+    d.deinit()
+    d.deinit()
+
+    let s = from_view("gamma")
+    s.deinit()
+    s.deinit()
+
+    let sb = string_builder(8)
+    sb.append("x")
+    sb.deinit()
+    sb.deinit()
+
+    let o: OwnedString? = Some(from_view("delta"))
+    o.deinit()
+    o.deinit()
+    assert_true(o.is_none(), "option resets to None on deinit")
 }

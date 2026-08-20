@@ -10,22 +10,30 @@ import std.allocator
 import std.dict
 import std.list
 import std.option
+import std.string
 import flang_parser.ast
 import flang_typer.type
 import flang_typer.node_id
 import flang_typer.inference_results
 import flang_typer.nominal_registry
 import flang_typer.function_registry
+import flang_typer.specialization
 
 pub type TypeCheckResult = struct {
     node_types: Dict(NodeId, Ty)             // every entry zonked
     resolved_ops: Dict(NodeId, ResolvedOperator)
     resolved_targets: Dict(NodeId, ResolvedTarget)
     instantiated_types: List(Ty)
-    specializations: List(NodeId)
+    // Every generic instantiation the checker emitted, in first-need
+    // order, each with its private overlay tables - indexed by
+    // `RtSpecialized.0` / `ResolvedOperator.spec_id`. Lowering emits one
+    // function per entry.
+    specializations: List(Specialization)
     // Checker-synthesized replacement AST (interpolation's StringBuilder
     // desugar) keyed by the replaced node - see InferenceResults.desugars.
     desugars: Dict(NodeId, &BlockExpr)
+    // Owned buffers the desugars' name/text views point into.
+    synth_strings: List(OwnedString)
     nominals: NominalRegistry
     functions: FunctionRegistry
 }
@@ -44,9 +52,25 @@ pub fn empty_result(allocator: &Allocator? = null) TypeCheckResult {
         instantiated_types = list(0, allocator),
         specializations = list(0, allocator),
         desugars = dict(allocator),
+        synth_strings = list(0, allocator),
         nominals = nominal_registry(allocator),
         functions = function_registry(allocator),
     }
+}
+
+// Free everything the snapshot owns. The desugars' AST blocks are
+// global-allocator boxes deliberately leaked (see checker.f synth
+// helpers).
+pub fn deinit(self: &TypeCheckResult) {
+    self.node_types.deinit()
+    self.resolved_ops.deinit()
+    self.resolved_targets.deinit()
+    self.instantiated_types.deinit()
+    self.specializations.deinit()
+    self.desugars.deinit()
+    self.synth_strings.deinit()
+    self.nominals.deinit()
+    self.functions.deinit()
 }
 
 pub fn get_type(self: &TypeCheckResult, id: NodeId) Ty? {

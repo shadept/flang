@@ -40,7 +40,12 @@ pub type Module = struct {
 }
 
 pub fn deinit(self: &Module) {
-    self.decls.deinit()
+    // Every AST allocation - the decls list's buffer and every nested
+    // list in the tree - lives in the arena, so ONE bulk free reclaims
+    // it all. Do not walk the tree element-wise: the nested lists carry
+    // allocator pointers into the (stack-local) arena view they were
+    // built with, which does not survive the Module being moved (see
+    // docs/known-issues.md on allocator identity).
     self.arena.deinit()
 }
 
@@ -940,4 +945,56 @@ pub type GenericParam = struct {
 // Recovery placeholder for unrecognised type-expression tokens.
 pub type ErrorType = struct {
     span: SourceSpan
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// Signature predicates
+// ─────────────────────────────────────────────────────────────────────────
+
+// Whether the declaration introduces a generic parameter (`$T`) anywhere
+// in its signature. `$T` binds at its first appearance in a parameter
+// type, so this is the whole test - a use of an already-bound `T` reads
+// as a plain `Named("T")`. Shared by the checker (generic templates are
+// only validated per instantiation) and lowering (templates never emit).
+pub fn declares_generic(decl: &FunctionDecl) bool {
+    for i in 0..decl.params.len {
+        if mentions_generic(&decl.params[i].type_expr) { return true }
+    }
+    return decl.return_type match {
+        Some(rt) => mentions_generic(&rt),
+        None => false,
+    }
+}
+
+pub fn mentions_generic(te: &TypeExpr) bool {
+    return te.* match {
+        GenericBind(_) => true,
+        Named(n) => any_generic(&n.generic_args),
+        Reference(r) => mentions_generic(r.inner),
+        Optional(o) => mentions_generic(o.inner),
+        Array(a) => mentions_generic(a.element),
+        Slice(sl) => mentions_generic(sl.element),
+        Tuple(t) => any_generic(&t.elements),
+        Function(f) => function_mentions_generic(&f),
+        AnonStruct(_) => false,
+        AnonEnum(_) => false,
+        Error(_) => false,
+    }
+}
+
+fn function_mentions_generic(f: &FunctionType) bool {
+    if any_generic(&f.params) { return true }
+    return f.return_type match {
+        Some(rt) => mentions_generic(rt),
+        None => false,
+    }
+}
+
+fn any_generic(tes: &List(TypeExpr)) bool {
+    return tes.any(mentions_generic_value)
+}
+
+// `any` takes elements by value; adapt the reference-taking walk.
+fn mentions_generic_value(te: TypeExpr) bool {
+    return mentions_generic(&te)
 }

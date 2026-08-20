@@ -331,6 +331,9 @@ pub type Function = struct {
     variadic: bool
     cc: CallConv
     next_value_id: u32
+    // Owned backing buffers for builder-minted block labels; every
+    // `Block.label` and branch target is a view into one of these.
+    label_storage: List(OwnedString)
 }
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -390,32 +393,18 @@ pub fn module(allocator: &Allocator? = null) IrModule {
 }
 
 pub fn deinit(self: &IrModule) {
-    for i in 0..self.functions.len {
-        self.functions[i].deinit()
-    }
-    for i in 0..self.foreigns.len {
-        self.foreigns[i].deinit()
-    }
-    for i in 0..self.globals.len {
-        self.globals[i].deinit()
-    }
     self.functions.deinit()
     self.foreigns.deinit()
     self.globals.deinit()
 }
 
 pub fn deinit(self: &Function) {
-    for i in 0..self.blocks.len {
-        self.blocks[i].deinit()
-    }
     self.blocks.deinit()
     self.params.deinit()
+    self.label_storage.deinit()
 }
 
 pub fn deinit(self: &Block) {
-    for i in 0..self.instrs.len {
-        self.instrs[i].deinit()
-    }
     self.instrs.deinit()
     self.params.deinit()
     self.terminator.deinit()
@@ -452,6 +441,14 @@ pub fn deinit(self: &Global) {
 // ─────────────────────────────────────────────────────────────────────────
 // Mutators
 // ─────────────────────────────────────────────────────────────────────────
+
+// Take ownership of a minted label buffer; returns the stable view the
+// caller stores in blocks and branch targets.
+pub fn add_label(self: &Function, owned: OwnedString) String {
+    let view = owned.as_view()
+    self.label_storage.push(owned)
+    return view
+}
 
 // Hand out the next SSA value id and bump the counter.
 pub fn fresh_value_id(self: &Function) u32 {

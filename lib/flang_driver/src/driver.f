@@ -186,7 +186,7 @@ pub fn analyze_project(ctx: &ResolveCtx, entries: &List(OwnedString), allocator:
         modules.push(module)
     }
 
-    deinit_owned_list(&queue)
+    queue.deinit()
     seen.deinit()
 
     let checked = count_errors(&diagnostics) == 0
@@ -252,13 +252,10 @@ pub fn analyze_source_set(srcs: List(OwnedString), fqns: &List(String), allocato
 
 pub fn deinit(self: &AnalyzedProject) {
     self.diagnostics.deinit()
-    for i in 0..self.modules.len {
-        self.modules[i].deinit()
-    }
     self.modules.deinit()
-    deinit_owned_list(&self.fqns)
-    deinit_owned_list(&self.file_paths)
-    deinit_owned_list(&self.sources)
+    self.fqns.deinit()
+    self.file_paths.deinit()
+    self.sources.deinit()
     // ponytail: the TypeCheckResult is leaked - same as AnalyzedUnit, no
     // result.deinit() yet. Fine for one-shot build. See docs/known-issues.md.
 }
@@ -286,13 +283,12 @@ fn combine_with_sidecar(path: String, src: OwnedString, alloc: &Allocator?) Owne
     defer g.deinit()
 
     let sb = string_builder(0, alloc)
+    defer sb.deinit()
     sb.append(src.as_view())
     sb.append('\n')
     sb.append(g.as_view())
-    let out = sb.to_string()
-    sb.deinit()
     src.deinit()
-    return out
+    return sb.to_string()
 }
 
 fn parse_to_module(src: String, file_id: i32, diags: &List(Diagnostic), alloc: &Allocator?) Module {
@@ -372,26 +368,10 @@ fn enqueue_owned(queue: &List(OwnedString), seen: &Set(String), owned: OwnedStri
 }
 
 fn push_unresolved(diags: &List(Diagnostic), id: &ImportDecl, alloc: &Allocator?) {
-    let dotted = join_dotted(&id.path, alloc)
+    let dotted = dot_join(&id.path, alloc)
     const msg = $"unresolved import `{dotted.as_view()}`"
     dotted.deinit()
     diags.push(error("E0001", msg, id.span))
 }
 
-fn join_dotted(segs: &List(String), alloc: &Allocator?) OwnedString {
-    let sb = string_builder(0, alloc)
-    for i in 0..segs.len {
-        if i > 0 { sb.append('.') }
-        sb.append(segs[i])
-    }
-    let out = sb.to_string()
-    sb.deinit()
-    return out
-}
 
-fn deinit_owned_list(l: &List(OwnedString)) {
-    for i in 0..l.len {
-        l[i].deinit()
-    }
-    l.deinit()
-}

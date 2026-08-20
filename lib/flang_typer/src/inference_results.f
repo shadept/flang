@@ -50,6 +50,10 @@ pub type ResolvedOperator = struct {
     // null when the operator is not derived from a comparison.
     cmp_derived_op: BinaryOpDerived?
     is_ref_form: bool
+    // When the picked operator function is generic, the specialization
+    // the call site instantiated (M10). Lowering calls the
+    // specialization's symbol; `function_id` then names the template.
+    spec_id: u32?
 }
 
 pub type BinaryOpDerived = enum {
@@ -69,9 +73,11 @@ pub type InferenceResults = struct {
     // checker finishes; consumed by codegen to emit the runtime
     // type-info table.
     instantiated_types: List(Ty)
-    // Specialized generic-function bodies the checker emitted, in
-    // order of first need. Indexed by `RtSpecialized.0`.
-    specializations: List(NodeId)
+    // Owned backing buffers for checker-synthesized names and literal
+    // texts (interpolation's builder locals, re-escaped segment text).
+    // The synthesized AST in `desugars` references them as views, so
+    // they live and die with this result set.
+    synth_strings: List(OwnedString)
     // Checker-synthesized AST keyed by the node it replaces - today
     // only interpolation's StringBuilder desugar (RFC-004). Lowering
     // lowers the stored block instead of the original node. The blocks
@@ -86,7 +92,7 @@ pub fn inference_results(allocator: &Allocator? = null) InferenceResults {
         resolved_ops = dict(allocator),
         resolved_targets = dict(allocator),
         instantiated_types = list(0, allocator),
-        specializations = list(0, allocator),
+        synth_strings = list(0, allocator),
         desugars = dict(allocator),
         allocator = allocator,
     }
@@ -97,7 +103,7 @@ pub fn deinit(self: &InferenceResults) {
     self.resolved_ops.deinit()
     self.resolved_targets.deinit()
     self.instantiated_types.deinit()
-    self.specializations.deinit()
+    self.synth_strings.deinit()
     self.desugars.deinit()
 }
 
@@ -125,8 +131,43 @@ pub fn record_instantiated(self: &InferenceResults, ty: Ty) {
     self.instantiated_types.push(ty)
 }
 
+// Take ownership of a synthesized string's buffer; returns the stable
+// view the synthesized AST stores (an OwnedString's heap bytes do not
+// move when the list grows).
+pub fn add_synth_string(self: &InferenceResults, owned: OwnedString) String {
+    let view = owned.as_view()
+    self.synth_strings.push(owned)
+    return view
+}
+
 pub fn record_desugar(self: &InferenceResults, id: NodeId, block: &BlockExpr) {
     self.desugars.set(id, block)
+}
+
+// Replace the node-type table wholesale - the zonk passes rebuild it
+// (scoped mutability keeps the field itself module-private).
+pub fn replace_node_types(self: &InferenceResults, nt: Dict(NodeId, Ty)) {
+    self.node_types = nt
+}
+
+// Append another result set's RTTI instantiations - used when a
+// specialization overlay's entries surface into the program tables.
+pub fn merge_instantiated(self: &InferenceResults, other: &InferenceResults) {
+    let merged = self.instantiated_types
+    merged.push_all(other.instantiated_types.as_slice())
+    self.instantiated_types = merged
+}
+
+// `op` with its specialization set - `ResolvedOperator` fields are
+// module-private under scoped mutability.
+pub fn with_spec(op: &ResolvedOperator, spec_id: u32) ResolvedOperator {
+    return .{
+        function_id = op.function_id,
+        negate_result = op.negate_result,
+        cmp_derived_op = op.cmp_derived_op,
+        is_ref_form = op.is_ref_form,
+        spec_id = Some(spec_id),
+    }
 }
 
 // Reset the transferred side tables to empty so a later `deinit()` can't
@@ -135,6 +176,6 @@ pub fn reset_side_tables(self: &InferenceResults) {
     self.resolved_ops = dict(self.allocator)
     self.resolved_targets = dict(self.allocator)
     self.instantiated_types = list(0, self.allocator)
-    self.specializations = list(0, self.allocator)
+    self.synth_strings = list(0, self.allocator)
     self.desugars = dict(self.allocator)
 }

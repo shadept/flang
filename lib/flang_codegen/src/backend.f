@@ -231,15 +231,7 @@ pub type CompilerInfo = struct {
 pub fn deinit(self: &CompilerInfo) {
     self.name.deinit()
     self.path.deinit()
-    for i in 0..self.extra_env_keys.len {
-        let k = self.extra_env_keys[i]
-        k.deinit()
-    }
     self.extra_env_keys.deinit()
-    for i in 0..self.extra_env_vals.len {
-        let v = self.extra_env_vals[i]
-        v.deinit()
-    }
     self.extra_env_vals.deinit()
 }
 

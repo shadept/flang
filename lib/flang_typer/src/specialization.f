@@ -1,17 +1,21 @@
 // Specialization registry - eager monomorphisation of generic functions.
 //
-// Each call site to a generic function with a concrete type-arg vector
-// triggers `ensure_specialization`. The first time a given vector is
-// seen, the registry clones the generic body, substitutes type-params
-// for concrete args, and queues the clone for re-type-checking. Later
-// call sites with the same vector reuse the existing clone via a
-// `(function_id, args_hash)` lookup.
+// Each call site to a generic function whose instantiated signature
+// settles to concrete types triggers one specialization. The first time
+// a given `(function_id, concrete signature)` is seen, the checker
+// re-checks the template's body - the ORIGINAL AST, no clone - with the
+// signature's type params bound to the concrete arguments, recording
+// every node type / resolved target / resolved operator into a private
+// `overlay` of the result tables. Node ids are span fingerprints, so
+// several instantiations of one body share ids; the overlay is what
+// keeps their entries apart. Later call sites with the same signature
+// reuse the existing specialization via the keyed lookup.
 //
-// The clone-and-resubstitute pass lives in the checker; this module is
-// the dedup cache + the public API the checker hands back to consumers
-// through `InferenceResults.specializations`. Generic templates never
-// reach the IR - every monomorphisation that appears in `result.f`'s
-// `specializations` list is a fully-type-checked, concrete function.
+// The instantiation pass lives in the checker; this module is the dedup
+// cache plus the record lowering consumes: each entry lowers the
+// template's declaration once per concrete signature, reading through
+// its overlay, under a symbol mangled from the concrete parameter
+// types. Generic templates never reach the IR.
 
 import std.allocator
 import std.dict
@@ -20,20 +24,37 @@ import std.option
 import std.string
 import std.string_builder
 import std.test
+import flang_parser.ast
 import flang_typer.type
 import flang_typer.node_id
+import flang_typer.inference_results
 
-// One queued (or already-checked) specialization. `key` is the unique
-// signature the registry hashed on; `body_node` points at the cloned
-// AST. Concrete signatures live on the registry so the checker can
-// re-emit them as if they were ordinary monomorphic functions.
+// One instantiated generic function. `key` is the unique signature the
+// registry hashed on; `decl` is a shallow copy of the template's
+// declaration (children stay in the module's arena, which outlives the
+// check). `overlay` holds the instantiation's private result tables -
+// empty at registration, filled in by `set_overlay` once the body
+// re-check completes (registration happens first so a self-recursive
+// generic finds its own key instead of recursing forever).
 pub type Specialization = struct {
     id: u32
     function_id: u32              // FunctionRegistry id of the generic template
     key: OwnedString              // canonical "fn_id@arg_tys" identity
-    body_node: NodeId             // the cloned AST root
+    name: String                  // template function name
+    module: String                // template's defining module FQN
+    decl: FunctionDecl            // template declaration (shared AST)
     concrete_params: List(Ty)
     concrete_return: Ty
+    overlay: InferenceResults
+}
+
+// What one specialization owns: the key buffer, the overlay tables,
+// and the concrete-params list. `decl` is a shallow copy into the
+// module arena and the name/module strings are views - not ours.
+pub fn deinit(self: &Specialization) {
+    self.key.deinit()
+    self.overlay.deinit()
+    self.concrete_params.deinit()
 }
 
 pub type SpecializationRegistry = struct {
@@ -51,11 +72,6 @@ pub fn specialization_registry(allocator: &Allocator? = null) SpecializationRegi
 }
 
 pub fn deinit(self: &SpecializationRegistry) {
-    for i in 0..self.specs.len {
-        let s = &self.specs[i]
-        let k = s.key
-        k.deinit()
-    }
     self.by_key.deinit()
     self.specs.deinit()
 }
@@ -64,6 +80,7 @@ pub fn deinit(self: &SpecializationRegistry) {
 // specialisations with identical signatures share an id.
 pub fn key_for(function_id: u32, params: &List(Ty), ret: Ty, allocator: &Allocator? = null) OwnedString {
     let sb = string_builder(64, allocator)
+    defer sb.deinit()
     sb.append(function_id)
     sb.append("@")
     for i in 0..params.len {
@@ -81,17 +98,22 @@ pub fn lookup(self: &SpecializationRegistry, key: String) u32? {
     return self.by_key.get(key)
 }
 
-// Register a freshly-cloned specialization. Returns the assigned id.
-// The caller is expected to type-check the clone immediately after.
+// Register a fresh specialization. Returns the assigned id. The caller
+// is expected to re-check the template body immediately after and hand
+// the resulting tables back via `set_overlay` - registration comes
+// first so a recursive instantiation finds its own key.
 pub fn register(self: &SpecializationRegistry, spec: Specialization) u32 {
     let id: u32 = self.specs.len as u32
     let with_id = Specialization {
         id = id,
         function_id = spec.function_id,
         key = spec.key,
-        body_node = spec.body_node,
+        name = spec.name,
+        module = spec.module,
+        decl = spec.decl,
         concrete_params = spec.concrete_params,
         concrete_return = spec.concrete_return,
+        overlay = spec.overlay,
     }
     // `spec.key` was moved into `with_id.key` on construction; the
     // OwnedString's heap buffer stays put across the later `specs.push`,
@@ -100,6 +122,11 @@ pub fn register(self: &SpecializationRegistry, spec: Specialization) u32 {
     self.by_key.set(stable_view, id)
     self.specs.push(with_id)
     return id
+}
+
+// Attach the completed instantiation's result tables to `id`.
+pub fn set_overlay(self: &SpecializationRegistry, id: u32, overlay: InferenceResults) {
+    self.specs[id as usize].overlay = overlay
 }
 
 pub fn get(self: &SpecializationRegistry, id: u32) &Specialization {

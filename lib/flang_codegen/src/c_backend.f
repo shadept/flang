@@ -117,13 +117,7 @@ pub fn compile(m: &IrModule, options: &BuildOptions) Result(BuildResult, BuildEr
 
     // 5. Build the argv and spawn the compiler.
     let argv = build_compiler_argv(&info, c_path_owned.as_view(), options)
-    defer {
-        for i in 0..argv.len {
-            let a = argv[i]
-            a.deinit()
-        }
-        argv.deinit()
-    }
+    defer argv.deinit()
 
     let spawn_r = run_compiler(&info, &argv, alloc)
     if spawn_r.is_err() {

@@ -1127,6 +1127,7 @@ pub fn decode_char_literal(raw: String) u32? {
 // `null` to default to the global allocator.
 pub fn decode_interp_segment(raw: String, allocator: &Allocator? = null) OwnedString? {
     let sb = string_builder(raw.len, allocator)
+    defer sb.deinit()
     let i = 0usize
     while i < raw.len {
         const c = raw[i]
@@ -1140,7 +1141,6 @@ pub fn decode_interp_segment(raw: String, allocator: &Allocator? = null) OwnedSt
             const esc = raw[i + 1]
             if esc == 'u' {
                 if !append_unicode_escape(&sb, raw, i + 2, raw.len) {
-                    sb.deinit()
                     return null
                 }
                 i = advance_past_unicode_escape(raw, i + 2, raw.len)
@@ -1158,6 +1158,7 @@ pub fn decode_interp_segment(raw: String, allocator: &Allocator? = null) OwnedSt
 
 fn decode_quoted_run(raw: String, lo: usize, hi: usize, allocator: &Allocator?) OwnedString? {
     let sb = string_builder(hi - lo, allocator)
+    defer sb.deinit()
     let i = lo
     while i < hi {
         const c = raw[i]
@@ -1165,7 +1166,6 @@ fn decode_quoted_run(raw: String, lo: usize, hi: usize, allocator: &Allocator?) 
             const esc = raw[i + 1]
             if esc == 'u' {
                 if !append_unicode_escape(&sb, raw, i + 2, hi) {
-                    sb.deinit()
                     return null
                 }
                 i = advance_past_unicode_escape(raw, i + 2, hi)

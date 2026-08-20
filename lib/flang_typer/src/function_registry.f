@@ -67,11 +67,6 @@ pub fn function_registry(allocator: &Allocator? = null) FunctionRegistry {
 }
 
 pub fn deinit(self: &FunctionRegistry) {
-    // Each overload-set list owns its buffer.
-    for entry in self.by_name {
-        let lst = entry.value
-        let l = lst; l.deinit()
-    }
     self.by_name.deinit()
 }
 
@@ -93,15 +88,17 @@ pub fn register(self: &FunctionRegistry, scheme: FunctionScheme) u32 {
         deprecation = scheme.deprecation,
         id = id,
     }
-    let existing_opt = self.by_name.get(scheme.name)
-    if existing_opt.is_some() {
-        let updated = existing_opt.unwrap()
-        updated.push(with_id)
-        self.by_name.set(scheme.name, updated)
-    } else {
-        let fresh: List(FunctionScheme) = list(1, self.allocator)
-        fresh.push(with_id)
-        self.by_name.set(scheme.name, fresh)
+    // In place through the stored list: the get-copy-push-set dance
+    // both leaked and double-freed once `Dict.set` started deiniting
+    // overwritten values (the copy shares the stored buffer).
+    let existing = self.by_name.get_ref(scheme.name)
+    existing match {
+        Some(lst) => lst.push(with_id),
+        None => {
+            let fresh: List(FunctionScheme) = list(1, self.allocator)
+            fresh.push(with_id)
+            self.by_name.set(scheme.name, fresh)
+        },
     }
     return id
 }

@@ -96,10 +96,10 @@ pub fn generated_sidecar(file_path: String, allocator: &Allocator? = null) Owned
     if ends_with(file_path, ".generated.f") { return null }
     if !ends_with(file_path, ".f") { return null }
     let sb = string_builder(0, allocator)
+    defer sb.deinit()
     sb.append(file_path[0..(file_path.len - 2)])
     sb.append(".generated.f")
     let cand = sb.to_string()
-    sb.deinit()
     if exists(cand.as_view()) { return Some(cand) }
     cand.deinit()
     return null
@@ -141,15 +141,14 @@ pub fn module_fqn(ctx: &ResolveCtx, path: String, allocator: &Allocator? = null)
 // `base/seg.../tail.f` from import segments, joining with forward slashes.
 pub fn join_module_path(base: String, segs: &List(String), start: usize, allocator: &Allocator? = null) OwnedString {
     let sb = string_builder(0, allocator)
+    defer sb.deinit()
     sb.append(base)
     for i in start..segs.len {
         sb.append('/')
         sb.append(segs[i])
     }
     sb.append(".f")
-    let out = sb.to_string()
-    sb.deinit()
-    return out
+    return sb.to_string()
 }
 
 // Build a resolution context for `proj` under the current directory.
@@ -208,6 +207,7 @@ fn source_root(project_dir: String, source_glob: String, allocator: &Allocator?)
     let segs = split(source_glob, '/')
     defer segs.deinit()
     let sb = string_builder(0, allocator)
+    defer sb.deinit()
     let wrote = false
     if project_dir != "." and project_dir.len > 0 {
         sb.append(project_dir)
@@ -222,7 +222,6 @@ fn source_root(project_dir: String, source_glob: String, allocator: &Allocator?)
         wrote = true
     }
     let out = sb.to_string()
-    sb.deinit()
     if !wrote {
         out.deinit()
         return from_view(".")
@@ -247,10 +246,9 @@ pub fn read_text(path: String) OwnedString? {
 // comparison assumes.
 pub fn normalize_sep(path: String, allocator: &Allocator? = null) OwnedString {
     let sb = string_builder(0, allocator)
+    defer sb.deinit()
     sb.append_replaced(path, "\\", "/")
-    let out = sb.to_string()
-    sb.deinit()
-    return out
+    return sb.to_string()
 }
 
 // Normalise an owned path to forward slashes, freeing the input. Keeps the
@@ -297,20 +295,18 @@ fn strip_source_ext(name: String) String {
 
 fn dotted(rel: String, allocator: &Allocator?) OwnedString {
     let sb = string_builder(0, allocator)
+    defer sb.deinit()
     append_dotted(&sb, rel)
-    let out = sb.to_string()
-    sb.deinit()
-    return out
+    return sb.to_string()
 }
 
 fn dotted_with_prefix(prefix: String, rel: String, allocator: &Allocator?) OwnedString {
     let sb = string_builder(0, allocator)
+    defer sb.deinit()
     sb.append(prefix)
     sb.append('.')
     append_dotted(&sb, rel)
-    let out = sb.to_string()
-    sb.deinit()
-    return out
+    return sb.to_string()
 }
 
 // Append `rel` with `/` rewritten to `.` and the source extension dropped.

@@ -52,8 +52,6 @@ pub fn build_program(modules: &List(Module), fqns: &List(OwnedString), result: &
     let r = compile(&m, &opts)
     opts.deinit()
     m.deinit()
-    // deinit contents
-    for i in 0..runtime_c.len { runtime_c[i].deinit() }
     runtime_c.deinit()
     return r
 }

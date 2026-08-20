@@ -14,6 +14,7 @@ import std.allocator
 import std.list
 import std.option
 import std.string
+import std.string_builder
 import flang_codegen.fir
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -40,6 +41,7 @@ pub type FunctionBuilder = struct {
 pub fn function(name: String, return_ty: IrType?, allocator: &Allocator? = null) FunctionBuilder {
     let params: List(BlockParam) = list(0, allocator)
     let blocks: List(Block) = list(0, allocator)
+    let labels: List(OwnedString) = list(0, allocator)
     return FunctionBuilder {
         func = Function {
             name = name,
@@ -49,9 +51,22 @@ pub fn function(name: String, return_ty: IrType?, allocator: &Allocator? = null)
             variadic = false,
             cc = CallConv.C,
             next_value_id = 0u32,
+            label_storage = labels,
         },
         allocator = allocator,
     }
+}
+
+// Mint a function-unique block label: `prefix` + a fresh SSA id. The
+// buffer transfers into the function's `label_storage`, so the returned
+// view stays valid for the function's life (an OwnedString's heap bytes
+// do not move when the list grows).
+pub fn fresh_label(self: &FunctionBuilder, prefix: String) String {
+    let sb = string_builder(prefix.len + 8, self.allocator)
+    defer sb.deinit()
+    sb.append(prefix)
+    sb.append(self.fresh())
+    return self.func.add_label(sb.to_string())
 }
 
 // Hand out a fresh SSA value id.

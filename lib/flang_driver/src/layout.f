@@ -110,7 +110,11 @@ pub fn variant_payload_ty(def: &EnumDef, vnum: usize, index: usize, args: &List(
 
 fn layout_rec(ty: &Ty, reg: &NominalRegistry, alloc: &Allocator?) Layout {
     return ty.* match {
-        Var(_) => lay(4, 4),
+        // Since M10 every type reaching layout is concrete - templates
+        // never lower and specializations substitute real types. A Var
+        // here means a checker bug; guessing a width corrupts every
+        // downstream offset silently, so fail loudly instead.
+        Var(_) => panic("unresolved type variable reached layout - checker bug"),
         Prim(p) => prim_layout(p),
         Ref(_) => lay(8, 8),
         Func(_) => lay(8, 8),

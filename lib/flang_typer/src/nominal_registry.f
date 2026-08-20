@@ -99,10 +99,6 @@ pub fn nominal_registry(allocator: &Allocator? = null) NominalRegistry {
 pub fn deinit(self: &NominalRegistry) {
     self.defs.deinit()
     self.by_fqn.deinit()
-    for i in 0..self.owned_fqns.len {
-        let s = &self.owned_fqns[i]
-        s.deinit()
-    }
     self.owned_fqns.deinit()
 }
 

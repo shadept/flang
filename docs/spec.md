@@ -77,6 +77,17 @@ type Result = enum(T, E) { Ok(T), Err(E) }
 
 Inference is multi-phase: constraints flow bidirectionally from return positions, parameter annotations, and assignment targets. Untyped integer and float literals are placeholders that must unify with a concrete type before compilation completes.
 
+A type parameter in scope **shadows** any nominal of the same name: inside `fn wrap(e: $E) Result(T, E)`, `E` is the parameter even if a type named `E` is visible.
+
+#### 2.3.0 Monomorphization
+
+Generic functions are **monomorphized at their call sites**:
+
+- A generic function's body is validated **only when instantiated**. Each call site whose instantiated signature settles to concrete types produces (or reuses) one specialization; the body is re-checked with the type parameters bound to those concrete types, and body errors are reported per instantiation. A generic function nothing ever calls is never validated.
+- Each function is instantiated **once per concrete signature** (parameter types plus return type). Two call sites with the same concrete signature share one specialization, and one emitted symbol.
+- A call site whose type arguments cannot be inferred (nothing pins them) is an error (E2001) at that call site.
+- **Loaded-context resolution (deliberate, and deliberately sharp):** while a specialization's body is checked, *function* overload lookups see the defining module's imports unioned with the instantiating call site's — this is what lets a generic container call a `hash()` or `deinit()` overload that only the caller imports. Because specializations dedup by signature, the **first** instantiation of a signature fixes the winning overloads for every later same-signature call site, regardless of what those sites import. Code that depends on different call sites resolving the same instantiation differently is undefined. The union applies to function lookups only; type and enum-variant names resolve against the defining module's own visibility.
+
 ### 2.3.1 Transparent type aliases
 
 ```
@@ -234,7 +245,8 @@ let a = align_of(Point)
 - Hex: `0xff`, `0xDEAD_BEEF`.
 - Underscore separators: `1_000_000`, `0xff_ff`.
 - Scientific notation: `1.5e10`, `3e-4`.
-- Unsuffixed integers and floats are inferred from context.
+- A suffixed literal **is** its suffix's type: `0u32` is a `u32` value, and unifying it against an incompatible expected type is an error.
+- Unsuffixed integers and floats are inferred from context. A bare literal as a cast operand takes the cast's target type (`0xFFFF_FFFF as u64` is a `u64` constant, not an `i32` converted). A literal that no context ever pins is an error (**E2001**).
 
 ### 2.12 Trailing Commas
 
@@ -359,7 +371,10 @@ pub type AllocatorVTable = struct {
 2. Null allocator falls back to `global_allocator` (wraps `malloc`/`free`) via `or_global()`.
 3. All allocation/realloc/free go through the allocator — never raw `malloc`/`free`.
 4. Types that allocate provide `deinit()` for deterministic cleanup.
-5. Callers use `defer x.deinit()` for scope-based cleanup.
+5. Callers use `defer x.deinit()` for scope-based cleanup, registered right after the value is created.
+6. **Every `deinit()` is idempotent**: the first call nulls the value's owning state (pointer/cap/payload), so a second call is a no-op — never a double free. A type either only calls deinits that are themselves safe, or resets its own state so later calls no-op.
+7. **Containers cascade**: `List.deinit`, `Dict.deinit`, `Option.deinit`, etc. call `deinit()` on their live elements (keys and values for dicts) before freeing their storage; the universal no-op fallback (`core.deinit`) makes this unconditional. Do not hand-loop element deinits before a container deinit — and never deinit values obtained from container *iteration* or by-value indexing, which yield copies whose cleanup leaves the stored element pointing at freed memory. Mutate stored values in place through `get_ref`/`op_index_ref`.
+8. **`Dict.set` on an existing key deinits the overwritten value** (and the unused new key for owned-key dicts). The read-copy-modify-`set` pattern is therefore unsound for owned values; update through `get_ref` instead.
 
 ```
 let sb = string_builder(64)
@@ -514,7 +529,7 @@ Implicit: `String` automatically accepted where `u8[]` expected. Reverse (`u8[]`
 - Each source file is a module. `import path` brings the module's `pub` items into scope as bare names.
 - **Imports are flat and non-transitive by default**: a plain `import B` from module A makes B's `pub` items visible inside A only — anyone importing A does **not** see B.
 - **`pub import path`** opts into re-export. Anyone importing the current module also sees the `pub` items of the re-exported module. Re-exports compose transitively along chains of `pub import`. This is the only re-export mechanism — no aliases, no selective re-exports.
-- **Overload resolution handles same-named imports**. Two different imports may bring in functions with the same name; the type checker resolves the call by parameter types. Genuinely ambiguous calls (no unique strictest overload) error at the call site.
+- **Overload resolution handles same-named imports**. Two different imports may bring in functions with the same name; the type checker resolves the call by parameter types. Candidates are ranked by: fewer quantified type parameters (concrete beats generic), then lower coercion cost, then **structural specificity** — the candidate whose declared parameters carry more concrete type structure wins, so `deinit(&List($T))` beats the universal `deinit(&$T)` fallback for a list receiver. Remaining ties fall to literal-preference arbitration and finally declaration order. Genuinely ambiguous calls (no unique strictest overload) error at the call site.
 - **No aliases, no selective imports, no relative paths.**
 - **Auto-imported core prelude.** Every module implicitly imports [`core.prelude`](../stdlib/core/prelude.f), a curated barrel that `pub import`s the core modules (`core.option`, `core.string`, `core.io`, `core.cmp`, etc.). All core symbols are therefore visible without an explicit import. The prelude itself is the only module exempt from the auto-import.
 - **Project-level globals.** A project may declare `[imports].global = ["std.prelude", ...]` in `flang.toml`; each entry is injected as an implicit private import into every project file. Project globals never propagate to stdlib or third-party modules.

@@ -893,11 +893,22 @@ pub fn generalize(self: &Engine, t: Ty) Scheme {
 pub fn specialize(self: &Engine, s: &Scheme) Ty {
     if s.quantified.len() == 0 { return s.body }
     let subst: Dict(VarId, Ty) = dict(self.allocator)
+    let t = self.specialize_capture(s, &subst)
+    subst.deinit()
+    return t
+}
+
+// `specialize`, but records the quantified-id → fresh-var mapping into
+// `out` (untouched for a monomorphic scheme). The specialization pass
+// zonks those fresh vars once inference settles to learn the concrete
+// type each signature parameter was instantiated at (M10).
+pub fn specialize_capture(self: &Engine, s: &Scheme, out: &Dict(VarId, Ty)) Ty {
+    if s.quantified.len() == 0 { return s.body }
     for old_id in s.quantified {
         let fresh = self.fresh_var()
-        subst.set(old_id, fresh)
+        out.set(old_id, fresh)
     }
-    return substitute(&s.body, &subst, self.allocator)
+    return substitute(&s.body, out, self.allocator)
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -906,6 +917,10 @@ pub fn specialize(self: &Engine, s: &Scheme) Ty {
 
 fn set_prim_constraint(self: &Engine, var_id: VarId, allowed: List(PrimitiveKind)) {
     record_prim_undo(self, var_id)
+    // Remove first: `Dict.set` deinits an overwritten value, but the
+    // undo frame just recorded a copy of that value's header - the old
+    // list must stay alive for rollback, so move it out instead.
+    let _old = self.prim_constraints.remove(var_id)
     self.prim_constraints.set(var_id, allowed)
 }
 

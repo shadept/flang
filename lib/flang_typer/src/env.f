@@ -22,6 +22,9 @@ pub type Binding = struct {
     scheme: Scheme
     decl: NodeId
     is_const: bool
+    // True for `$T` signature/nominal type parameters. Type resolution
+    // lets these shadow nominals; value lookups ignore the flag.
+    is_type_param: bool
 }
 
 pub type Scope = struct {

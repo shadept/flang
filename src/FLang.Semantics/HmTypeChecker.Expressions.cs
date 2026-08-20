@@ -759,6 +759,7 @@ public partial class HmTypeChecker
         FunctionScheme? bestCandidate = null;
         int bestCost = int.MaxValue;
         int bestGenericCount = int.MaxValue;
+        int bestSpecificity = -1;
         FunctionType? bestFnType = null;
         bool ambiguousOnUndetermined = false;
         reportedAmbiguity = false;
@@ -787,18 +788,24 @@ public partial class HmTypeChecker
             if (!success) continue;
 
             int genericCount = candidate.Signature.QuantifiedVarIds.Count;
+            int specificity = SignatureSpecificity(candidate.Signature);
 
-            // Prefer fewer quantified type vars (0 = non-generic), then lower coercion cost
+            // Prefer fewer quantified type vars (0 = non-generic), then lower
+            // coercion cost, then the structurally more specific declaration.
             if (genericCount < bestGenericCount
-                || (genericCount == bestGenericCount && totalCost < bestCost))
+                || (genericCount == bestGenericCount && totalCost < bestCost)
+                || (genericCount == bestGenericCount && totalCost == bestCost
+                    && specificity > bestSpecificity))
             {
                 bestCandidate = candidate;
                 bestCost = totalCost;
                 bestGenericCount = genericCount;
+                bestSpecificity = specificity;
                 bestFnType = fnType;
                 ambiguousOnUndetermined = false;
             }
-            else if (bestCandidate != null && genericCount == bestGenericCount && totalCost == bestCost)
+            else if (bestCandidate != null && genericCount == bestGenericCount && totalCost == bestCost
+                     && specificity == bestSpecificity)
             {
                 var verdict = TieVerdict(argTypes, bestFnType, fnType);
                 if (verdict == TieOutcome.PreferChallenger)
@@ -875,6 +882,34 @@ public partial class HmTypeChecker
     private enum TieOutcome { KeepIncumbent, PreferChallenger, Undetermined }
 
     /// <summary>
+    /// Structural specificity of a candidate's declared parameter list: the
+    /// count of concrete type constructors, with type variables contributing
+    /// nothing. Breaks quantifier-count/cost ties toward the more specific
+    /// declaration — `deinit(&List($T))` (Ref+Nominal = 2) must beat the
+    /// universal `deinit(&$T)` fallback (Ref = 1) for a List receiver.
+    /// Before this tie-break, declaration order decided, and the prelude's
+    /// fallback (registered first) silently won every container deinit.
+    /// </summary>
+    private static int SignatureSpecificity(PolymorphicType signature)
+    {
+        if (signature.Body is not FunctionType fn) return 0;
+        int total = 0;
+        foreach (var p in fn.ParameterTypes) total += TypeSpecificity(p);
+        return total;
+    }
+
+    private static int TypeSpecificity(Core.Types.Type t) => t switch
+    {
+        TypeVar => 0,
+        ReferenceType r => 1 + TypeSpecificity(r.InnerType),
+        ArrayType a => 1 + TypeSpecificity(a.ElementType),
+        FunctionType f => 1 + f.ParameterTypes.Sum(TypeSpecificity) + TypeSpecificity(f.ReturnType),
+        NominalType n => 1 + n.TypeArguments.Sum(TypeSpecificity),
+        PolymorphicType p => TypeSpecificity(p.Body),
+        _ => 1,
+    };
+
+    /// <summary>
     /// How to settle two candidates that ranked identically. Only positions
     /// where the argument is still an unbound variable matter — elsewhere the
     /// call is being checked, not decided.
@@ -949,6 +984,7 @@ public partial class HmTypeChecker
         FunctionScheme? bestCandidate = null;
         int bestCost = int.MaxValue;
         int bestGenericCount = int.MaxValue;
+        int bestSpecificity = -1;
         FunctionType? bestFnType = null;
         bool ambiguousOnUndetermined = false;
 
@@ -1041,18 +1077,24 @@ public partial class HmTypeChecker
             totalCost += defaultsUsed * 100;
 
             int genericCount = candidate.Signature.QuantifiedVarIds.Count;
+            int specificity = SignatureSpecificity(candidate.Signature);
 
-            // Prefer fewer quantified type vars (0 = non-generic), then lower coercion cost
+            // Prefer fewer quantified type vars (0 = non-generic), then lower
+            // coercion cost, then the structurally more specific declaration.
             if (genericCount < bestGenericCount
-                || (genericCount == bestGenericCount && totalCost < bestCost))
+                || (genericCount == bestGenericCount && totalCost < bestCost)
+                || (genericCount == bestGenericCount && totalCost == bestCost
+                    && specificity > bestSpecificity))
             {
                 bestCandidate = candidate;
                 bestCost = totalCost;
                 bestGenericCount = genericCount;
+                bestSpecificity = specificity;
                 bestFnType = fnType;
                 ambiguousOnUndetermined = false;
             }
-            else if (bestCandidate != null && genericCount == bestGenericCount && totalCost == bestCost)
+            else if (bestCandidate != null && genericCount == bestGenericCount && totalCost == bestCost
+                     && specificity == bestSpecificity)
             {
                 var verdict = TieVerdict(fullPositionalTypes, bestFnType, fnType);
                 if (verdict == TieOutcome.PreferChallenger)

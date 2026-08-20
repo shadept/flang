@@ -122,25 +122,10 @@ pub fn command(prog: String, allocator: &Allocator? = null) Command {
 }
 
 pub fn deinit(self: &Command) {
-    for i in 0..self.__args.len {
-        let a = self.__args[i]
-        a.deinit()
-    }
     self.__args.deinit()
-    for i in 0..self.__env_pairs.len {
-        let e = self.__env_pairs[i]
-        e.deinit()
-    }
     self.__env_pairs.deinit()
-    if self.__has_cwd {
-        self.__cwd match {
-            Some(c) => {
-                let cc = c
-                cc.deinit()
-            },
-            None => {},
-        }
-    }
+    self.__cwd.deinit()
+    self.__has_cwd = false
 }
 
 pub fn arg(self: &Command, a: String) &Command {

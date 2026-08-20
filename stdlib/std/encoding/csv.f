@@ -640,9 +640,6 @@ pub fn is_human_readable(self: &CsvEncoder) bool { return true }
 #implement(CsvEncoder, Encoder)
 
 pub fn deinit(self: &CsvEncoder) {
-    for i in 0..self.current_keys.len {
-        self.current_keys[i].deinit()
-    }
     self.current_keys.deinit()
 }
 

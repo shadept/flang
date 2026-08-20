@@ -153,6 +153,7 @@ public static class TestCommand
         );
 
         var compiler = new Compiler();
+        var keepArtifacts = false;
 
         try
         {
@@ -183,6 +184,14 @@ public static class TestCommand
                 if (process != null)
                 {
                     process.WaitForExit();
+                    // A signal exit (>= 128) is a crash, not a test failure —
+                    // keep the binary and artifacts so it can be debugged.
+                    if (process.ExitCode >= 128)
+                    {
+                        keepArtifacts = true;
+                        Console.Error.WriteLine(
+                            $"test runner crashed (exit {process.ExitCode}); artifacts kept at {tempDir}");
+                    }
                     return process.ExitCode;
                 }
             }
@@ -196,7 +205,8 @@ public static class TestCommand
         }
         finally
         {
-            try { Directory.Delete(tempDir, recursive: true); } catch { }
+            if (!keepArtifacts)
+                try { Directory.Delete(tempDir, recursive: true); } catch { }
         }
     }
 

@@ -33,10 +33,6 @@ pub fn fqn_map(allocator: &Allocator? = null) FqnMap($V) {
 }
 
 pub fn deinit(self: &FqnMap($V)) {
-    for i in 0..self.owned_fqns.len {
-        let s = &self.owned_fqns[i]
-        s.deinit()
-    }
     self.owned_fqns.deinit()
     self.entries.deinit()
 }

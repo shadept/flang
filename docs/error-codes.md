@@ -357,6 +357,12 @@ pub fn main() i32 {
 }
 ```
 
+#### Also emitted for
+
+- An unsuffixed numeric literal that no context ever pins (both compilers; the self-hosted checker reports it in a post-inference sweep).
+- A generic call site whose type arguments cannot be inferred — the self-hosted checker reports `cannot infer the type arguments of generic function ...` at the call span (the reference instead skips the specialization silently and fails later at symbol validation).
+- A generic instantiation chain deeper than 64 (infinitely recursive polymorphism), self-hosted checker only.
+
 ---
 
 ### E2002: Mismatched Types

@@ -600,7 +600,22 @@ public static class HmCCodeGenerator
                     var ptr = EmitValue(store.Pointer);
                     var val = EmitValue(store.Value);
                     var pointeeType = store.Pointer.IrType is IrPointer p ? p.Pointee : null;
-                    if (pointeeType != null)
+                    // A checker coercion can retype an aggregate (e.g. an
+                    // __anon_* record standing in for a nominal with the same
+                    // layout), leaving the value's C type different from the
+                    // destination's declared pointee. C rejects the mismatched
+                    // struct assignment, so pun the destination through the
+                    // VALUE's type — the store is a byte copy of identical
+                    // layouts either way. (Scalars keep the pointee cast: the
+                    // implicit conversion there is intended.)
+                    if (store.Value.IrType is IrStruct or IrEnum
+                        && pointeeType is IrStruct or IrEnum
+                        && !store.Value.IrType.Equals(pointeeType))
+                    {
+                        var punType = IrTypeToCType(new IrPointer(store.Value.IrType));
+                        sb.AppendLine($"    *({punType}){ptr} = {val};");
+                    }
+                    else if (pointeeType != null)
                     {
                         // Use IrPointer wrapper to handle function pointer syntax correctly
                         var castType = IrTypeToCType(new IrPointer(pointeeType));

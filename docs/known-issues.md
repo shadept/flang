@@ -686,7 +686,9 @@ When a `match` arm binds a payload, the binding is always **by value**. `match s
 
 **Workaround:** Wrap in an inline lambda: `fn(a: T, b: T) Ord { return op_cmp(a, b) }`. This defers overload resolution until the call site, where T is concrete. The `std.sort` wrappers (`sort(s)`, `quicksort(s)`, etc.) use this pattern internally.
 
-**Future:** Context-directed overload resolution — when a bare function name is coerced to a `fn(...)` type, pick the overload whose signature matches.
+**Concrete case (2026-08-20):** `self.__cwd.map(deinit)` for `__cwd: OwnedString?` ICEs at lowering ("unresolved type variable reached lowering") — `deinit` has ~40 overloads and nothing picks `deinit(&OwnedString)` from `map`'s `fn(T) $U` parameter. Functions as values are a first-class feature of the language; overload resolution here is a compiler bug, not a design limit — the expected parameter type names the overload unambiguously. The rewritten site uses `Option.deinit` instead (`self.__cwd.deinit()`), which is the better idiom regardless.
+
+**Future:** Context-directed overload resolution — when a bare function name is coerced to a `fn(...)` type, pick the overload whose signature unifies with the expected type (and report ambiguity when several do). Note the by-ref wrinkle: most `deinit` overloads take `&T` while combinators like `map` pass `T` by value, so the fix needs either reference-adapting decay or an explicit rule that `fn(T)` slots do not accept `fn(&T)` candidates.
 
 ---
 
@@ -1022,3 +1024,152 @@ Today only `Option(&T)` has a niche-based layout (null pointer encodes `None`). 
 **Impact:** discriminant values of bare enums change. FFI code must continue to map between C integer codes and FLang variants *by name* — never cast raw discriminants. This is now documented in spec.md §2.5 and §2.7.
 
 **Related:** `TypeLayoutService.LowerNominal` (where `Option(&T)` niche lives), `HmTypeChecker.Declarations.cs` `nextTag` assignment.
+
+---
+
+### M10 Fallout: Latent Checker Gaps Surfaced by Specialization — RESOLVED
+
+**Status:** Resolved (2026-08-20, with M10)
+**Affected:** `lib/flang_typer/src/checker.f`, `stdlib/std/iter.f`
+
+Un-silencing generic bodies (every instantiation re-checks with concrete
+types) and hard-failing on `Var` at lowering exposed a stack of latent
+bugs that had been hiding behind fresh-var fallbacks. All fixed with M10:
+
+- **Literal suffixes were ignored.** `0u32` typed as a bare fresh var
+  resolved only by context; `let x = 0u32` with no further use was
+  silently untyped (and lowered at a guessed width). Suffixed literals
+  now ARE their suffix type; unsuffixed literals that nothing pins are
+  E2001 in a post-inference sweep (reference parity).
+- **Declared array lengths resolved to 0.** `array_length_of` was a
+  stub; `entries: u8[16384]` sized to 0, visible the moment array
+  literals got real `[T; N]` types.
+- **Anonymous-literal fields never unified.** `.{ len = 0, ... }`
+  checked its initializers but never constrained them against the
+  nominal's field types; mismatches passed and unsuffixed fields stayed
+  unpinned. `resolve_anon_literals` now runs per body scope, before
+  that scope's specialization drain.
+- **Shift counts were unchecked.** `x << 13` returned `lhs` without
+  visiting the count; now shifts unify like arithmetic (reference
+  parity).
+- **Type parameters did not shadow nominals.** `resolve_named` tried
+  the program-wide nominal fallback before the env, so a project type
+  named `E` captured `$E` in `stdlib`'s `Result(T, E)` declaration and
+  poisoned every `Err(...)` in the program. `Binding.is_type_param` now
+  marks `$T` bindings and they win first (regression test: "a generic
+  member call inside a partially-fixed generic instantiates").
+- **`FilterIter.next` dropped non-matching heads.** It tested only the
+  single next element (`Option.filter`), so `[1,2,3]` filtered to evens
+  looked empty. It now advances until a match or exhaustion; this made
+  `declares_generic` (via `List.any`) misreport nested-generic
+  signatures as concrete, which is how it was found.
+
+### Self-Host: Loaded-Context Overload Resolution in Instantiated Bodies
+
+**Status:** By design (documented), sharp edge worth knowing
+**Affected:** `checker.f` `fn_visibility` / `instantiate`
+
+A template body under instantiation resolves FUNCTION lookups against
+its own module's imports unioned with the caller chain's — that is what
+lets `Dict`'s internals call a `hash()` overload only the call site
+imports. Consequences:
+
+- The FIRST instantiation of a given concrete signature fixes the
+  winning targets for every later call site with the same signature,
+  whatever those sites can see. Deliberate; inherently
+  caller-dependent.
+- The union applies to function lookups only. Nominal/variant lookups
+  stay on the template module's own visibility — widening them let the
+  projector's `Decl.Type(TypeDecl)` variant capture `Type(T)` inside
+  `std.allocator.box` (expected `TypeDecl`, got `Expr` — found the hard
+  way).
+
+### Self-Host: `unify_either` Accepts Mixed bool/int Arithmetic
+
+**Status:** Open (rejection-power gap, pre-existing)
+**Affected:** `checker.f` coercion ladder (`try_integer_widening`)
+
+`fn f(x: i32) i32 { return x + true }` checks clean: `bool` widens to
+any integer in the coercion ladder, so `unify_either` accepts the
+operands. The reference rejects it. Discovered while writing M10 tests
+(an instantiated body with `x + true` was expected to error and did
+not); the M10 test switched to an unresolved-function body instead.
+
+### Self-Host: Non-Literal Array Repeat Counts Refuse
+
+**Status:** Open (subset gap)
+**Affected:** `checker.f` `check_array_literal`, `lower.f` `lower_let`
+
+`[0u8; PAGE_SIZE]` (const-named count) cannot be sized without a
+const-eval pass, so the literal stays an unconstrained var and the
+enclosing `let` refuses the function at lowering (the one sanctioned
+`Var`-at-lowering shape — it routes to the subset gate, not a guessed
+width). Literal counts (`[0u8; 4096]`, underscores allowed) work.
+`std.io.file.read_all_inplace` is the in-tree instance.
+
+### Self-Host: For-Over-Iterator Loop Variables Are Untyped
+
+**Status:** Open (checker gap; M10 removed the other half)
+**Affected:** `checker.f` `check_for` / `check_iterable_element`
+
+A `for x in xs` over a non-range iterable types `x` as an unconstrained
+fresh var — the iterator protocol (`iter()`/`next()`) is not resolved
+checker-side yet, even though M10 can now instantiate the generic
+`next()`. Downstream uses of `x` that would pin literals fail (E2001);
+`symbol_table.f` carries one annotation workaround
+(`let overloads: List(FunctionScheme) = entry.value`). Fix is protocol
+resolution in `check_iterable_element`, which also unlocks
+for-over-iterator lowering.
+
+---
+
+### Container `deinit` Was Silently a No-Op Everywhere — RESOLVED
+
+**Status:** Resolved (2026-08-20)
+**Affected:** overload resolution (both compilers), every `List`/`Dict`/`Set`/`Deque` cleanup in the language
+
+`xs.deinit()` on any container resolved to the universal no-op fallback
+`deinit(&$T)` (core/deinit.f), not the container's own overload: both
+candidates carry exactly one quantified var at zero cost, and the tie
+fell to declaration order — the prelude registers first, so the fallback
+won every time. Container cleanup throughout the language was dead code;
+nothing ever freed. Found via a go-to-definition oddity (the LSP linked
+`label_storage.deinit()` to the generic fallback) and confirmed with a
+tracking-allocator probe: 0 deallocs, everything leaked.
+
+**Fix:** a structural-specificity tie-break in overload scoring (fewer
+quantified vars → lower cost → **more concrete parameter structure** →
+literal preference → declaration order), in the reference
+(`HmTypeChecker.Expressions.cs SignatureSpecificity`) and the self-hosted
+checker (`resolve_overload`). Regression:
+`tests/harness/stdlib/list_deinit_frees.f` asserts real dealloc counts.
+
+**Fallout fixed in the same pass** — cleanup becoming real exposed a
+stack of latent memory bugs, all of the same few shapes:
+
+- *Copy-then-deinit*: `let a = xs[i]; a.deinit()` (or dict-iteration
+  copies) frees the buffer while the stored element still points at it;
+  the container's own cascade then double-frees. Every such hand loop
+  was deleted — containers cascade (see spec §4).
+- *Read-copy-modify-`set`*: `Dict.set` deinits the overwritten value, so
+  re-storing a modified COPY of it froze/double-freed
+  (`FunctionRegistry.register`); update in place via `get_ref` instead.
+  The engine's prim-constraint overwrite now removes-then-sets so undo
+  frames keep the old buffer alive.
+- *Arena-backed AST*: every nested AST list carries an allocator pointer
+  into a stack-local arena view that does not survive the `Module` being
+  moved; `Module.deinit` is now arena-bulk-free only. The general
+  allocator-identity problem remains open (see "Composite Structs
+  Duplicate the Allocator Pointer Per Child Container").
+- *Reference lowering, defer + aggregate return*: with a `defer` before
+  a `return` of a coerced aggregate (an `__anon_*` record standing in
+  for a nominal), the return value materialized into a temp of the
+  VALUE's C type but stored through a pointer cast to the DECLARED
+  type — a C type error. `StorePointerInstruction` emission now puns
+  aggregate stores through the value's type (layouts are identical by
+  the coercion contract).
+
+`deinit` is now contractually idempotent (spec §4) and `Option(T)` has
+its own cascading `deinit`. `flang test` keeps its temp artifacts when
+the test runner exits on a signal, which is how the fallout was
+debugged.

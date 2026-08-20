@@ -22,6 +22,7 @@ import flang_typer.result
 import flang_typer.nominal_registry
 import flang_typer.function_registry
 import flang_typer.scheme
+import flang_typer.specialization
 import flang_driver.driver
 import flang_driver.layout
 
@@ -43,9 +44,20 @@ import flang_driver.layout
 // falls back to a placeholder rather than naming a symbol the module
 // never defines - which would fail to link.
 pub type SymbolTable = struct {
-    by_fn_id: Dict(u32, String)
+    // Symbol strings are OWNED by the table - lookups hand out views.
+    // The IrModule's function names borrow them, so the table must
+    // outlive the module (see the note in lower_program).
+    by_fn_id: Dict(u32, OwnedString)
     by_decl: Dict(NodeId, u32)
     by_fn_sig: Dict(u32, FnSig)
+    // Specializations (M10), keyed by `Specialization.id` - the id
+    // `RtSpecialized` / `ResolvedOperator.spec_id` carry. Symbols are
+    // mangled from the CONCRETE parameter types plus a return suffix
+    // (a return-only-polymorphic template's instantiations share every
+    // parameter token, and the suffix also keeps a specialization from
+    // colliding with a same-signature monomorphic overload).
+    by_spec_id: Dict(u32, OwnedString)
+    by_spec_sig: Dict(u32, FnSig)
 }
 
 // The declared signature lowering works from: the checker's parameter and
@@ -58,7 +70,10 @@ pub type FnSig = struct {
 }
 
 pub fn lookup_symbol(self: &SymbolTable, fn_id: u32) String? {
-    return self.by_fn_id.get(fn_id)
+    return self.by_fn_id.get(fn_id) match {
+        Some(s) => Some(s.as_view()),
+        None => null,
+    }
 }
 
 // The registry id of the function this declaration declares.
@@ -71,10 +86,23 @@ pub fn sig_of(self: &SymbolTable, fn_id: u32) FnSig? {
     return self.by_fn_sig.get(fn_id)
 }
 
+pub fn spec_symbol(self: &SymbolTable, spec_id: u32) String? {
+    return self.by_spec_id.get(spec_id) match {
+        Some(s) => Some(s.as_view()),
+        None => null,
+    }
+}
+
+pub fn spec_sig(self: &SymbolTable, spec_id: u32) FnSig? {
+    return self.by_spec_sig.get(spec_id)
+}
+
 pub fn deinit(self: &SymbolTable) {
     self.by_fn_id.deinit()
     self.by_decl.deinit()
     self.by_fn_sig.deinit()
+    self.by_spec_id.deinit()
+    self.by_spec_sig.deinit()
 }
 
 // Assigns symbols across a whole program. `seen` carries the ordinal
@@ -83,9 +111,11 @@ pub fn deinit(self: &SymbolTable) {
 // The tables are held flat rather than as a nested `SymbolTable`:
 // mutating a dict two field-hops deep through a reference does not stick.
 pub type SymbolBuilder = struct {
-    by_fn_id: Dict(u32, String)
+    by_fn_id: Dict(u32, OwnedString)
     by_decl: Dict(NodeId, u32)
     by_fn_sig: Dict(u32, FnSig)
+    by_spec_id: Dict(u32, OwnedString)
+    by_spec_sig: Dict(u32, FnSig)
     nominals: &NominalRegistry
     allocator: &Allocator?
 }
@@ -95,11 +125,14 @@ pub type SymbolBuilder = struct {
 // lookup. A scheme outside the lowerable subset is left out entirely -
 // membership in these tables IS the "is this callable?" gate.
 pub fn symbol_builder(result: &TypeCheckResult, allocator: &Allocator? = null) SymbolBuilder {
-    let by_fn_id: Dict(u32, String) = dict(allocator)
+    let by_fn_id: Dict(u32, OwnedString) = dict(allocator)
     let by_decl: Dict(NodeId, u32) = dict(allocator)
     let by_fn_sig: Dict(u32, FnSig) = dict(allocator)
     for entry in result.functions.by_name {
-        let overloads = entry.value
+        // Annotated: the self-hosted checker types for-over-iterator
+        // variables as unconstrained vars (protocol resolution is
+        // post-M10), so `entry.value` needs the pin.
+        let overloads: List(FunctionScheme) = entry.value
         for i in 0..overloads.len {
             let f = &overloads[i]
             // Variadic functions are declared (the backend still emits
@@ -114,10 +147,26 @@ pub fn symbol_builder(result: &TypeCheckResult, allocator: &Allocator? = null) S
             by_fn_sig.set(f.id, s)
         }
     }
+
+    // Specializations (M10): concrete by construction, so the callable
+    // gate only filters the shapes lowering cannot represent yet.
+    let by_spec_id: Dict(u32, OwnedString) = dict(allocator)
+    let by_spec_sig: Dict(u32, FnSig) = dict(allocator)
+    for i in 0..result.specializations.len {
+        let sp = &result.specializations[i]
+        let s = FnSig { params = sp.concrete_params, ret = sp.concrete_return }
+        if !sig_lowerable(&s, false) { continue }
+        let sym = mangle_spec_symbol(sp.module, sp.name, &s, &result.nominals, allocator)
+        by_spec_id.set(sp.id, sym)
+        by_spec_sig.set(sp.id, s)
+    }
+
     return .{
         by_fn_id = by_fn_id,
         by_decl = by_decl,
         by_fn_sig = by_fn_sig,
+        by_spec_id = by_spec_id,
+        by_spec_sig = by_spec_sig,
         nominals = &result.nominals,
         allocator = allocator,
     }
@@ -223,6 +272,8 @@ pub fn finish(self: &SymbolBuilder) SymbolTable {
         by_fn_id = self.by_fn_id,
         by_decl = self.by_decl,
         by_fn_sig = self.by_fn_sig,
+        by_spec_id = self.by_spec_id,
+        by_spec_sig = self.by_spec_sig,
     }
 }
 
@@ -332,29 +383,44 @@ fn prim_token(p: PrimitiveKind) String {
     }
 }
 
+// Shared mangling core: `module__name__param__param` into `sb`.
+fn append_mangled(sb: &StringBuilder, fqn: String, name: String, params: &List(Ty), reg: &NominalRegistry) {
+    if fqn.len > 0 {
+        append_module_path(sb, fqn)
+        sb.append("__")
+    }
+    append_escaped(sb, name)
+    for i in 0..params.len {
+        sb.append("__")
+        append_type_token(sb, &params[i], reg)
+    }
+}
+
 // The C symbol a function lowers to. The entry point and foreign functions
 // keep their declared names - both name symbols fixed outside the compiler
 // (the backend's entry wiring, and the C linker). Everything else is
 // qualified by module path and separated by parameter types.
-fn mangle_symbol(fqn: String, name: String, is_foreign: bool, params: &List(Ty), reg: &NominalRegistry, allocator: &Allocator? = null) String {
-    if is_foreign { return name }
-    if name == "main" { return name }
+fn mangle_symbol(fqn: String, name: String, is_foreign: bool, params: &List(Ty), reg: &NominalRegistry, allocator: &Allocator? = null) OwnedString {
+    if is_foreign or name == "main" { return from_view(name, allocator) }
 
     let sb = string_builder(fqn.len + name.len + 16, allocator)
-    if fqn.len > 0 {
-        append_module_path(&sb, fqn)
-        sb.append("__")
-    }
-    append_escaped(&sb, name)
-    for i in 0..params.len {
-        sb.append("__")
-        append_type_token(&sb, &params[i], reg)
-    }
-    // ponytail: symbol strings are leaked - one-shot builds exit before it
-    // matters; arena-own IrModule names if the LSP ever lowers.
-    let owned = sb.to_string()
-    sb.deinit()
-    return owned.as_view()
+    defer sb.deinit()
+    append_mangled(&sb, fqn, name, params, reg)
+    return sb.to_string()
+}
+
+// A specialization's C symbol: the ordinary mangle plus a `__ret_` token.
+// The return participates in the specialization key, so it has to
+// participate in the symbol too - a return-only-polymorphic template's
+// instantiations differ in nothing else - and the suffix keeps every
+// specialization distinct from same-parameter monomorphic overloads.
+fn mangle_spec_symbol(fqn: String, name: String, sig: &FnSig, reg: &NominalRegistry, allocator: &Allocator? = null) OwnedString {
+    let sb = string_builder(fqn.len + name.len + 24, allocator)
+    defer sb.deinit()
+    append_mangled(&sb, fqn, name, &sig.params, reg)
+    sb.append("__ret_")
+    append_type_token(&sb, &sig.ret, reg)
+    return sb.to_string()
 }
 
 // Tests
@@ -375,10 +441,18 @@ test "mangles symbols by module fqn, keeping main and foreigns bare" {
 
     // Source underscores escape to `_0`, so a lone `_` never appears inside a
     // segment and `__` is unambiguously the separator.
-    assert_true(mangle_symbol("flang_typer.checker", "deinit", false, &none, &reg) == "flang_0typer__checker__deinit", "dotted fqn separates, underscores escape")
-    assert_true(mangle_symbol("core.io", "printf", true, &none, &reg) == "printf", "foreign names pass through")
-    assert_true(mangle_symbol("app.entry", "main", false, &none, &reg) == "main", "main stays bare")
-    assert_true(mangle_symbol("", "add", false, &none, &reg) == "add", "no fqn, bare name")
+    let a = mangle_symbol("flang_typer.checker", "deinit", false, &none, &reg)
+    defer a.deinit()
+    let b = mangle_symbol("core.io", "printf", true, &none, &reg)
+    defer b.deinit()
+    let c = mangle_symbol("app.entry", "main", false, &none, &reg)
+    defer c.deinit()
+    let d = mangle_symbol("", "add", false, &none, &reg)
+    defer d.deinit()
+    assert_true(a.as_view() == "flang_0typer__checker__deinit", "dotted fqn separates, underscores escape")
+    assert_true(b.as_view() == "printf", "foreign names pass through")
+    assert_true(c.as_view() == "main", "main stays bare")
+    assert_true(d.as_view() == "add", "no fqn, bare name")
 }
 
 test "escaping keeps a dotted path distinct from an underscored name" {
@@ -391,10 +465,12 @@ test "escaping keeps a dotted path distinct from an underscored name" {
     defer none.deinit()
 
     let dotted = mangle_symbol("a.b", "c", false, &none, &reg)
+    defer dotted.deinit()
     let underscored = mangle_symbol("a", "b__c", false, &none, &reg)
-    assert_true(dotted == "a__b__c", "dotted path uses the separator")
-    assert_true(underscored == "a__b_0_0c", "source underscores escape")
-    assert_true(!(dotted == underscored), "the two no longer collide")
+    defer underscored.deinit()
+    assert_true(dotted.as_view() == "a__b__c", "dotted path uses the separator")
+    assert_true(underscored.as_view() == "a__b_0_0c", "source underscores escape")
+    assert_true(!(dotted.as_view() == underscored.as_view()), "the two no longer collide")
 }
 
 test "overloads separate by parameter type, with no counter" {
@@ -414,12 +490,16 @@ test "overloads separate by parameter type, with no counter" {
     two.push(Ty.Prim(PrimitiveKind.I32))
 
     let a = mangle_symbol("m", "f", false, &one, &reg)
+    defer a.deinit()
     let b = mangle_symbol("m", "f", false, &two, &reg)
-    assert_true(a == "m__f__i32", "one i32 parameter")
-    assert_true(b == "m__f__i32__i32", "two i32 parameters")
-    assert_true(!(a == b), "arities separate")
+    defer b.deinit()
+    assert_true(a.as_view() == "m__f__i32", "one i32 parameter")
+    assert_true(b.as_view() == "m__f__i32__i32", "two i32 parameters")
+    assert_true(!(a.as_view() == b.as_view()), "arities separate")
 
     // Re-mangling the same declaration yields the same symbol - the property
     // the ordinal scheme could not provide.
-    assert_true(mangle_symbol("m", "f", false, &one, &reg) == a, "deterministic across calls")
+    let again = mangle_symbol("m", "f", false, &one, &reg)
+    defer again.deinit()
+    assert_true(again.as_view() == a.as_view(), "deterministic across calls")
 }

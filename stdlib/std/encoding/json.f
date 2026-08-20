@@ -157,6 +157,10 @@ pub fn deinit(self: &JsonValue) {
         Object(obj) => obj.deinit(),
         else => {},
     }
+    // The match arms bound payload COPIES - the stored payload still
+    // holds the freed pointers. Overwrite with Null so a second deinit
+    // is a no-op instead of a double free.
+    self.* = JsonValue.Null
 }
 
 // =============================================================================

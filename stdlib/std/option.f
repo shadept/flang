@@ -5,6 +5,18 @@
 import core.option
 import std.test
 
+// Deinit the payload (if any) and reset to `None`. Lets options
+// participate in container cascades (`List(Option(T)).deinit` reaches
+// the payloads) and makes `opt.deinit()` the one-liner for owned
+// optional fields. Idempotent: the second call sees `None`.
+pub fn deinit(self: &Option($T)) {
+    self.* match {
+        Some(v) => { v.deinit() },
+        None => {},
+    }
+    self.* = None
+}
+
 pub fn is_some(self: Option($T)) bool {
     return self match {
         Some(_) => true

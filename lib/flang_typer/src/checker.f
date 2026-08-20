@@ -67,6 +67,68 @@ pub type FnFrame = struct {
     decl_span: SourceSpan
 }
 
+// What instantiating a generic template needs (M10): the declaration to
+// re-check, its defining module, and the signature's type params in
+// declaration order. `decl` is a shallow copy - children stay in the
+// module's arena, which outlives the check.
+type GenericTemplate = struct {
+    decl: FunctionDecl
+    module: String
+    tps: List(SigTypeParam)       // signature type params, declaration order
+}
+
+// One `$T` binding created while resolving the current signature -
+// collected by `resolve_generic_bind`, drained by `register_function_sig`.
+type SigTypeParam = struct {
+    name: String
+    var_id: VarId
+}
+
+// An unsuffixed numeric literal's fresh var, held for the post-inference
+// sweep: still unresolved once everything has settled means no context
+// ever pinned the literal - E2001, matching the reference.
+type PendingLit = struct {
+    span: SourceSpan
+    ty: Ty
+    text: String
+    is_float: bool
+}
+
+// An anonymous `.{ ... }` literal awaiting its nominal. The literal
+// types as a fresh var the surrounding context binds; once inference
+// settles, each field initializer unifies against the nominal's
+// declared (substituted) field type - which is what pins unsuffixed
+// numeric fields and rejects mismatched initializers.
+type PendingAnon = struct {
+    ty: Ty
+    fields: List(AnonFieldRec)
+}
+
+type AnonFieldRec = struct {
+    name: String
+    ty: Ty
+    span: SourceSpan
+}
+
+// A committed pick of a generic overload, awaiting instantiation. The
+// fresh vars inside `tp_binds` / `inst_params` / `inst_ret` zonk to
+// concrete types once the enclosing body's inference settles; the
+// post-pass then instantiates the template and rewrites the node's
+// table entry (`resolved_targets` for calls, `resolved_ops` for
+// operators) to cite the specialization.
+type PendingSpec = struct {
+    span: SourceSpan
+    is_operator: bool
+    function_id: u32
+    tp_binds: Dict(VarId, Ty)     // template quantified id → call-site fresh var
+    inst_params: List(Ty)
+    inst_ret: Ty
+    // The module whose body recorded the pick - unioned into visibility
+    // while the instantiation checks, so the template body resolves
+    // overloads the call site can see (the `hash()`-for-`Dict` contract).
+    caller_module: String
+}
+
 pub type Checker = struct {
     engine: Engine
     env: TypeEnv
@@ -83,10 +145,30 @@ pub type Checker = struct {
     // Working state - reset between modules.
     current_module: String?
     fn_stack: List(FnFrame)
-    // True while checking a generic function's body: overload resolution
-    // over unbound type params is unreliable there, so failures stay
-    // silent (the reference checker re-checks per specialization instead).
-    in_generic_body: bool
+
+    // M10 - specialization state.
+    // fn_id → what instantiation needs (generic functions only).
+    templates: Dict(u32, GenericTemplate)
+    // `$T` bindings of the signature currently being registered, in
+    // declaration order.
+    sig_tps: List(SigTypeParam)
+    // Generic picks recorded while checking the current body scope;
+    // drained after phase 3 (and, nested, after each instantiation's
+    // body check - `instantiate` swaps in a fresh list).
+    pending_specs: List(PendingSpec)
+    // Caller-module chain of the instantiations in progress - unioned
+    // into `current_visibility` so a template body resolves overloads
+    // its call sites can see.
+    spec_callers: List(String)
+    // Guard against runaway instantiation chains (infinitely recursive
+    // polymorphism).
+    spec_depth: usize
+    // Unsuffixed numeric literals awaiting the post-inference sweep.
+    pending_literals: List(PendingLit)
+    // Anonymous literals awaiting their nominal - resolved per body
+    // scope, before that scope's specialization drain (a pinned field
+    // can be what makes a generic pick's signature concrete).
+    pending_anons: List(PendingAnon)
 
     // Module FQN -> the set of module FQNs whose `pub` declarations are
     // visible from it. Built once per `check_all` from the modules'
@@ -115,7 +197,13 @@ pub fn checker(allocator: &Allocator? = null) Checker {
         diagnostics = list(0, allocator),
         current_module = null,
         fn_stack = list(0, allocator),
-        in_generic_body = false,
+        templates = dict(allocator),
+        sig_tps = list(0, allocator),
+        pending_specs = list(0, allocator),
+        spec_callers = list(0, allocator),
+        spec_depth = 0usize,
+        pending_literals = list(0, allocator),
+        pending_anons = list(0, allocator),
         visible_by_module = dict(allocator),
         next_synth = 0u32,
         allocator = allocator,
@@ -133,6 +221,12 @@ pub fn deinit(self: &Checker) {
     self.results.deinit()
     self.diagnostics.deinit()
     self.fn_stack.deinit()
+    self.templates.deinit()
+    self.sig_tps.deinit()
+    self.pending_specs.deinit()
+    self.spec_callers.deinit()
+    self.pending_literals.deinit()
+    self.pending_anons.deinit()
     self.visible_by_module.deinit()
 }
 
@@ -174,6 +268,17 @@ fn resolve_named(self: &Checker, n: &NamedType) Ty {
     if n.name == "void" { return Ty.Void }
     if n.name == "never" { return Ty.Never }
 
+    // A type parameter in scope shadows every nominal - it is the
+    // innermost binding. Without this, a project type named `E`
+    // captures the stdlib's `enum(T, E)` payload declarations through
+    // the program-wide nominal fallback below, poisoning the registry
+    // for the whole compilation.
+    let tp = self.env.lookup(n.name)
+    if tp.is_some() {
+        let b = tp.unwrap()
+        if b.is_type_param { return self.engine.specialize(&b.scheme) }
+    }
+
     // Nominal?
     let vis = current_visibility(self)
     let look = self.nominals.lookup(n.name, &vis)
@@ -212,10 +317,6 @@ fn resolve_named(self: &Checker, n: &NamedType) Ty {
         return Ty.Nominal(NominalRef { id = info.id, args = args })
     }
 
-    // Type-parameter in scope (from a generic-aware lookup)?
-    let bound = self.env.lookup(n.name)
-    if bound.is_some() { return self.engine.specialize(&bound.unwrap().scheme) }
-
     push_diag_e(self, n.span, E_UNKNOWN_TYPE, $"unknown type `{n.name}`")
     return Ty.Error
 }
@@ -253,13 +354,16 @@ fn resolve_array(self: &Checker, a: &ArrayType) Ty {
     return self.engine.mk_array(elem, length)
 }
 
+// A declared array length. Only plain integer-literal lengths evaluate
+// (the only form the corpus writes); anything else stays 0 until a
+// const_eval pass exists. M10 made this load-bearing: array literals
+// now type as `[T; len]`, so a declared `u8[1024]` must size to 1024 or
+// every literal-vs-declared unify fails on length.
 fn array_length_of(e: &Expr) usize {
-    // Array-length expressions are arbitrary integer-valued exprs -
-    // parsing `text` here would re-implement integer parsing. For the
-    // first slice we report the array as 0-length when the AST carries
-    // anything other than a trivially-zero value; later slices will
-    // route this through `const_eval`.
-    return 0usize
+    return literal_count_of(e) match {
+        Some(n) => n,
+        None => 0usize,
+    }
 }
 
 fn resolve_slice(self: &Checker, s: &SliceType) Ty {
@@ -296,14 +400,19 @@ fn resolve_function(self: &Checker, f: &FunctionType) Ty {
 fn resolve_generic_bind(self: &Checker, g: &GenericBindType) Ty {
     // `$T` introduces a type parameter. Each binding becomes a fresh
     // variable scoped to the function's signature; subsequent `T`
-    // references look it up from the env.
+    // references look it up from the env. During an instantiation's
+    // re-check the name is pre-bound to a concrete type, so the lookup
+    // path returns that instead of minting a var.
     let existing = self.env.lookup(g.name)
     if existing.is_some() { return self.engine.specialize(&existing.unwrap().scheme) }
     let fresh = self.engine.fresh_var()
+    let vid = fresh match { Var(v) => v.id, _ => 0u32 }
+    self.sig_tps.push(SigTypeParam { name = g.name, var_id = vid })
     self.env.bind(g.name, Binding {
         scheme = mono(fresh, self.allocator),
         decl = node_id_of(g.span),
         is_const = true,
+        is_type_param = true,
     })
     return fresh
 }
@@ -333,12 +442,43 @@ fn report_unify(self: &Checker, outcome: &UnifyOutcome, code: String, span: Sour
 
 pub fn current_visibility(self: &Checker) Visibility {
     return self.current_module match {
+        Some(m) => visibility(Some(m), base_visible_set(self, m)),
+        None => open(self.allocator),
+    }
+}
+
+// The modules visible from `m`, as a fresh caller-owned set.
+fn base_visible_set(self: &Checker, m: String) Set(String) {
+    let fresh: Set(String) = set(self.allocator)
+    self.visible_by_module.get(m) match {
+        Some(src) => copy_set_into(&fresh, &src),
+        None => fresh.add(m),
+    }
+    return fresh
+}
+
+// Visibility for FUNCTION lookups. A template body under instantiation
+// also dispatches to overloads its caller chain imports (`hash()` for
+// `Dict`) - deliberately caller-dependent: the FIRST instantiation of a
+// signature fixes the winning targets for everyone. The union applies
+// to functions ONLY: widening nominal/variant lookups the same way lets
+// a caller's `Decl.Type(...)` variant capture the template's
+// `Type(T)` RTTI expression (found the hard way in `std.allocator.box`
+// instantiated from the projector).
+fn fn_visibility(self: &Checker) Visibility {
+    if self.spec_callers.len == 0 { return current_visibility(self) }
+    return self.current_module match {
         Some(m) => {
-            let fresh: Set(String) = set(self.allocator)
-            let got = self.visible_by_module.get(m)
-            got match {
-                Some(src) => copy_set_into(&fresh, &src),
-                None => fresh.add(m),
+            // Built locally before wrapping - growing a set through a
+            // returned struct's field is the two-field-hop hazard.
+            let fresh = base_visible_set(self, m)
+            for i in 0..self.spec_callers.len {
+                let c = self.spec_callers[i]
+                fresh.add(c)
+                self.visible_by_module.get(c) match {
+                    Some(src) => copy_set_into(&fresh, &src),
+                    None => {},
+                }
             }
             visibility(Some(m), fresh)
         },
@@ -389,10 +529,6 @@ fn build_visibility(self: &Checker, modules: &List(Module), paths: &List(String)
         self.visible_by_module.set(paths[i], vis)
     }
 
-    for i in 0..n {
-        imports[i].deinit()
-        reexports[i].deinit()
-    }
     imports.deinit()
     reexports.deinit()
 }
@@ -453,15 +589,14 @@ fn compute_visible(idx: usize, paths: &List(String), imports: &List(List(String)
     work.deinit()
 }
 
-fn dot_join(segs: &List(String), alloc: &Allocator?) OwnedString {
+pub fn dot_join(segs: &List(String), alloc: &Allocator?) OwnedString {
     let sb = string_builder(0, alloc)
+    defer sb.deinit()
     for i in 0..segs.len {
         if i > 0 { sb.append('.') }
         sb.append(segs[i])
     }
-    let out = sb.to_string()
-    sb.deinit()
-    return out
+    return sb.to_string()
 }
 
 // ponytail: linear scans over `paths`; index by FQN if module counts grow.
@@ -631,6 +766,7 @@ fn resolve_struct_body(self: &Checker, td: &TypeDecl, module_path: String) {
             scheme = mono(fresh, self.allocator),
             decl = node_id_of(gp.span),
             is_const = true,
+            is_type_param = true,
         })
     }
 
@@ -688,6 +824,7 @@ fn resolve_enum_body(self: &Checker, td: &TypeDecl, module_path: String) {
             scheme = mono(fresh, self.allocator),
             decl = node_id_of(gp.span),
             is_const = true,
+            is_type_param = true,
         })
     }
 
@@ -764,6 +901,7 @@ fn register_constant(self: &Checker, cd: &ConstDecl) {
 }
 
 fn register_function_sig(self: &Checker, fd: &FunctionDecl) {
+    self.sig_tps.clear()
     self.env.push_scope()
     self.engine.enter_level()
 
@@ -805,7 +943,20 @@ fn register_function_sig(self: &Checker, fd: &FunctionDecl) {
         deprecation = null,
         id = 0u32,           // filled in by registry.register
     }
-    let _r =self.functions.register(scheme_obj)
+    let id = self.functions.register(scheme_obj)
+
+    // A generic signature also records its instantiation template: the
+    // declaration plus the `$T` bindings `resolve_generic_bind` just
+    // collected, in declaration order (M10). The list moves in; the
+    // checker keeps a fresh one for the next signature.
+    if scheme.quantified.len() > 0 {
+        self.templates.set(id, GenericTemplate {
+            decl = fd.*,
+            module = self.current_module.unwrap(),
+            tps = self.sig_tps,
+        })
+        self.sig_tps = list(0, self.allocator)
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -830,7 +981,13 @@ pub fn check_module_bodies(self: &Checker, module: &Module, module_path: String)
 
 fn check_one_decl(self: &Checker, decl: &Decl) {
     decl.* match {
-        Function(fd) => check_function_body(self, &fd),
+        Function(fd) => {
+            // A generic template's body is only validated per
+            // instantiation (M10) - with unbound type params, overload
+            // resolution is unreliable and node types are meaningless.
+            // An uninstantiated template is never checked at all.
+            if !declares_generic(&fd) { check_function_body(self, &fd) }
+        },
         Const(cd) => check_constant_init(self, &cd),
         _ => {},
     }
@@ -859,6 +1016,7 @@ fn check_function_body(self: &Checker, fd: &FunctionDecl) {
             scheme = mono(ty, self.allocator),
             decl = node_id_of(p.span),
             is_const = false,
+            is_type_param = false,
         })
         params.push(ty)
     }
@@ -866,14 +1024,6 @@ fn check_function_body(self: &Checker, fd: &FunctionDecl) {
         Some(rt) => resolve_type_expr(self, &rt),
         None => Ty.Void,
     }
-
-    let q: Set(VarId) = set(self.allocator)
-    for i in 0..params.len {
-        free_vars(&params[i], 0u32, &q)
-    }
-    free_vars(&ret, 0u32, &q)
-    self.in_generic_body = q.len() > 0
-    q.deinit()
 
     let frame = FnFrame { name = fd.name, return_ty = ret, decl_span = fd.span }
     self.fn_stack.push(frame)
@@ -895,9 +1045,228 @@ fn check_function_body(self: &Checker, fd: &FunctionDecl) {
     }
 
     let _r =self.fn_stack.pop()
-    self.in_generic_body = false
     self.engine.exit_level()
     self.env.pop_scope()
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// Phase 3.5 - generic specialization (M10)
+//
+// Every commit of a generic overload left a `PendingSpec` behind. Once
+// the surrounding inference has settled, each pending pick either
+// reuses an existing specialization (same template, same concrete
+// signature) or instantiates one: the template body is re-checked -
+// original AST, no clone - with its type params bound to the concrete
+// arguments, recording into a private overlay of the result tables.
+// The pick's node is then rewritten to cite the specialization, so
+// lowering never sees a generic callee.
+// ─────────────────────────────────────────────────────────────────────
+
+// A chain of instantiations this deep is infinitely recursive
+// polymorphism (each level must have a NEW concrete signature - plain
+// self-recursion reuses its own key and never recurses here). The
+// reference caps at 32 and skips silently; this reports.
+const MAX_SPEC_DEPTH: usize = 64
+
+// Drain the pending picks of the body scope that just finished.
+// `process_pending` never appends to this list: picks recorded during a
+// nested instantiation's body check land on that frame's own
+// (swapped-in) list and drain there.
+fn drain_pending_specs(self: &Checker) {
+    for i in 0..self.pending_specs.len {
+        let p = self.pending_specs[i]
+        process_pending(self, &p)
+    }
+    self.pending_specs.clear()
+}
+
+fn process_pending(self: &Checker, p: &PendingSpec) {
+    // The call site's instantiated signature, settled by now. Any var
+    // still free means inference never pinned a type argument.
+    let params: List(Ty) = list(p.inst_params.len, self.allocator)
+    for i in 0..p.inst_params.len {
+        params.push(self.engine.zonk(p.inst_params[i]))
+    }
+    let ret = self.engine.zonk(p.inst_ret)
+    if !sig_concrete(self, &params, &ret) {
+        let name = self.templates.get(p.function_id).unwrap().decl.name
+        push_diag_e(self, p.span, E_UNINFERRED,
+            $"cannot infer the type arguments of generic function `{name}` at this call site")
+        params.deinit()
+        return
+    }
+
+    let key = key_for(p.function_id, &params, ret, self.allocator)
+    let existing = self.specs.lookup(key.as_view())
+    let id = existing match {
+        Some(sid) => {
+            key.deinit()
+            params.deinit()
+            Some(sid)
+        },
+        None => instantiate(self, p, key, params, ret),
+    }
+    if id.is_none() { return }
+
+    // Rewrite the pick's table entry so lowering calls the
+    // specialization's symbol. `self.results` is the table set the pick
+    // was recorded into - the program tables at top level, the owning
+    // instantiation's overlay during a nested drain.
+    let node = node_id_of(p.span)
+    if p.is_operator {
+        let cur = self.results.resolved_ops.get(node)
+        if cur.is_some() {
+            let op = cur.unwrap()
+            self.results.record_operator(node, with_spec(&op, id.unwrap()))
+        }
+    } else {
+        self.results.record_target(node, ResolvedTarget.RtSpecialized(id.unwrap()))
+    }
+}
+
+// Unify every parked anonymous literal's field initializers against its
+// now-known nominal's declared field types. Reverse insertion order so
+// an outer literal's unifications bind the vars its nested literals
+// need (literals check bottom-up, so inner entries were pushed first).
+// A literal whose var never resolved to a struct is left alone - its
+// unpinned numeric fields fall through to `validate_literals`.
+fn resolve_anon_literals(self: &Checker) {
+    let i = self.pending_anons.len
+    while i > 0 {
+        i = i - 1
+        let pa = &self.pending_anons[i]
+        let z = self.engine.zonk(pa.ty)
+        for k in 0..pa.fields.len {
+            let rec = &pa.fields[k]
+            let fty = struct_field_lookup(self, &z, rec.name)
+            if fty.is_some() {
+                const o = self.engine.unify(rec.ty, fty.unwrap())
+                report_unify(self, &o, E_TYPE_MISMATCH, rec.span)
+            }
+        }
+    }
+    self.pending_anons.clear()
+}
+
+// Report every unsuffixed numeric literal whose var never resolved.
+// Runs after the specialization drain so literals inside instantiated
+// template bodies (whose vars bound during the re-check) count as
+// resolved; the engine's bindings are global, so one sweep covers the
+// program tables and every overlay alike.
+fn validate_literals(self: &Checker) {
+    for i in 0..self.pending_literals.len {
+        let pl = &self.pending_literals[i]
+        let z = self.engine.zonk(pl.ty)
+        let unresolved = z match { Var(_) => true, _ => false }
+        if unresolved {
+            let kind = if pl.is_float { "float" } else { "integer" }
+            push_diag_e(self, pl.span, E_UNINFERRED,
+                $"Cannot determine concrete type for {kind} literal `{pl.text}`")
+        }
+    }
+}
+
+// No free type variable anywhere in the instantiated signature.
+fn sig_concrete(self: &Checker, params: &List(Ty), ret: &Ty) bool {
+    let q: Set(VarId) = set(self.allocator)
+    for i in 0..params.len {
+        free_vars(&params[i], 0u32, &q)
+    }
+    free_vars(ret, 0u32, &q)
+    let n = q.len()
+    q.deinit()
+    return n == 0
+}
+
+// Register and check one new specialization. Registration happens
+// BEFORE the body re-check so a self-recursive generic resolves to its
+// own key instead of recursing forever. Returns null (with a
+// diagnostic) when the instantiation chain is implausibly deep.
+fn instantiate(self: &Checker, p: &PendingSpec, key: OwnedString, params: List(Ty), ret: Ty) u32? {
+    if self.spec_depth >= MAX_SPEC_DEPTH {
+        push_diag_e(self, p.span, E_UNINFERRED,
+            from_view("generic instantiation exceeds the depth limit - infinitely recursive polymorphism?"))
+        key.deinit()
+        params.deinit()
+        return null
+    }
+    // The pick's id came from the function registry; a generic scheme
+    // without a template entry is a compiler bug, not an input error.
+    let template = self.templates.get(p.function_id).unwrap()
+
+    let sid = self.specs.register(Specialization {
+        id = 0u32,               // assigned by register
+        function_id = p.function_id,
+        key = key,
+        name = template.decl.name,
+        module = template.module,
+        decl = template.decl,
+        concrete_params = params,
+        concrete_return = ret,
+        overlay = inference_results(self.allocator),
+    })
+
+    // The re-check runs in the template's own context: its module for
+    // name resolution (unioned with the caller chain - see
+    // `current_visibility`), a fresh overlay for the result tables, and
+    // a fresh pending list so nested generic picks drain inside this
+    // frame, while the overlay is still the active table set.
+    let saved_results = self.results
+    let saved_pending = self.pending_specs
+    let saved_anons = self.pending_anons
+    let saved_module = self.current_module
+    self.results = inference_results(self.allocator)
+    self.pending_specs = list(0, self.allocator)
+    self.pending_anons = list(0, self.allocator)
+    self.current_module = Some(template.module)
+    self.spec_callers.push(p.caller_module)
+    self.spec_depth = self.spec_depth + 1
+
+    // Bind each signature type param to its concrete argument; the
+    // body's `$T` / `T` occurrences resolve to these instead of minting
+    // fresh vars.
+    self.env.push_scope()
+    for i in 0..template.tps.len {
+        let bound = p.tp_binds.get(template.tps[i].var_id)
+        let conc = bound match {
+            Some(b) => self.engine.zonk(b),
+            None => Ty.Error,
+        }
+        self.env.bind(template.tps[i].name, Binding {
+            scheme = mono(conc, self.allocator),
+            decl = node_id_of(template.decl.span),
+            is_const = true,
+            is_type_param = true,
+        })
+    }
+
+    check_function_body(self, &template.decl)
+    resolve_anon_literals(self)
+    drain_pending_specs(self)
+
+    self.env.pop_scope()
+    self.spec_depth = self.spec_depth - 1
+    let _c = self.spec_callers.pop()
+
+    // The shared final zonk only walks the program tables; the overlay
+    // zonks here, while the engine is live.
+    let zonked: Dict(NodeId, Ty) = dict(self.allocator)
+    for entry in self.results.node_types {
+        zonked.set(entry.key, self.engine.zonk(entry.value))
+    }
+    self.results.replace_node_types(zonked)
+
+    let overlay = self.results
+    self.results = saved_results
+    self.pending_specs = saved_pending
+    self.pending_anons = saved_anons
+    self.current_module = saved_module
+
+    // RTTI instantiations surface program-wide, not per overlay.
+    self.results.merge_instantiated(&overlay)
+
+    self.specs.set_overlay(sid, overlay)
+    return Some(sid)
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -938,8 +1307,57 @@ fn check_expr_kind(self: &Checker, expr: &Expr) Ty {
         Coalesce(co) => check_coalesce(self, &co),
         Try(tr) => check_try(self, &tr),
         InterpolatedString(is) => check_interpolation(self, &is),
+        ArrayLit(al) => check_array_literal(self, &al),
         _ => self.engine.fresh_var(),
     }
+}
+
+// `[a, b, c]` and `[v; N]`. Elements unify to one type; the node types
+// as `[T; len]`. A repeat count must be a plain integer literal - the
+// only form the corpus writes - any other count expression leaves the
+// node untyped (fresh var), the pre-M10 behavior for unsizable shapes.
+fn check_array_literal(self: &Checker, al: &ArrayLiteralExpr) Ty {
+    return al.kind match {
+        Elements(es) => {
+            if es.len == 0 { return self.engine.mk_array(self.engine.fresh_var(), 0) }
+            let elem = check_expr(self, &es[0])
+            for i in 1..es.len {
+                let t = check_expr(self, &es[i])
+                unify_expected(self, t, elem, E_TYPE_MISMATCH, expr_span(&es[i]))
+            }
+            self.engine.mk_array(elem, es.len)
+        },
+        Repeat(r) => {
+            let elem = check_expr(self, r.value)
+            let n = literal_count_of(r.count)
+            n match {
+                Some(len) => self.engine.mk_array(elem, len),
+                None => self.engine.fresh_var(),
+            }
+        },
+    }
+}
+
+// The compile-time value of a repeat count written as a plain decimal
+// integer literal; null for any other expression.
+fn literal_count_of(e: &Expr) usize? {
+    let lit = e.* match { Lit(l) => l, _ => return null }
+    let il = lit.value match { Int(v) => v, _ => return null }
+    return parse_decimal(il.text)
+}
+
+// Plain decimal digits (underscore separators allowed) to a usize;
+// null for anything else.
+fn parse_decimal(s: String) usize? {
+    if s.len == 0 { return null }
+    let n: usize = 0
+    for i in 0..s.len {
+        let c = s[i]
+        if c == '_' { continue }
+        if c < '0' or c > '9' { return null }
+        n = n * 10 + ((c as usize) - 48)
+    }
+    return Some(n)
 }
 
 // String interpolation (RFC-004): desugar to StringBuilder calls, exactly
@@ -977,7 +1395,9 @@ fn check_interpolation(self: &Checker, interp: &InterpolatedStringExpr) Ty {
 }
 
 fn check_interp_owned(self: &Checker, interp: &InterpolatedStringExpr, given: &List(Expr)) Ty {
-    const name = fresh_builder_name(self)
+    // The synthesized AST stores the name as a view; the buffer parks
+    // with the result tables, which the desugar shares a lifetime with.
+    const name = self.results.add_synth_string(fresh_builder_name(self))
     let stmts: List(Stmt) = list(interp.parts.len + 1, self.allocator)
 
     const ctor = synth_free_call(self, "string_builder", builder_ctor_args(self, given))
@@ -1058,7 +1478,8 @@ fn push_append_stmts(self: &Checker, stmts: &List(Stmt), name: String, interp: &
                 args.push(CallArgument.Positional(h.expr))
                 h.format match {
                     Some(spec) => {
-                        const slit = synth_string_lit(self, escape_backslashes(self, spec))
+                        const slit = synth_string_lit(self,
+                            self.results.add_synth_string(escape_backslashes(self, spec)))
                         args.push(CallArgument.Positional(synth_box(self, slit)))
                     },
                     None => {},
@@ -1170,16 +1591,14 @@ fn synth_free_call(self: &Checker, name: String, args: List(CallArgument)) Expr 
     })
 }
 
-fn fresh_builder_name(self: &Checker) String {
+fn fresh_builder_name(self: &Checker) OwnedString {
     const n = self.next_synth
     self.next_synth = n + 1
     let sb = string_builder(20, self.allocator)
+    defer sb.deinit()
     sb.append("__interp_sb_")
     sb.append(n)
-    let owned = sb.to_string()
-    sb.deinit()
-    // Leaked with the synthesized AST that references it.
-    return owned.as_view()
+    return sb.to_string()
 }
 
 // A segment's bytes as string-literal text, such that lowering's
@@ -1197,31 +1616,27 @@ fn segment_literal_text(self: &Checker, raw: String) String {
     // Malformed escape - the lexer already reported it; keep the raw text.
     if decoded_opt.is_none() { return raw }
     let decoded = decoded_opt.unwrap()
-    const out = escape_backslashes(self, decoded.as_view())
-    // `escape_backslashes` copies when it rewrites; it returns its input
-    // view only when there is nothing to escape - in which case `decoded`
-    // must stay alive as the backing store (leaked, like the copies).
-    if out.ptr != decoded.as_view().ptr { decoded.deinit() }
+    const out = self.results.add_synth_string(escape_backslashes(self, decoded.as_view()))
+    decoded.deinit()
     return out
 }
 
 // Double every backslash so a later string-literal decode is the
-// identity on the remaining bytes. Returns the input when clean.
-fn escape_backslashes(self: &Checker, s: String) String {
+// identity on the remaining bytes. Always hands ownership out - a
+// clean input copies - so the caller decides where the buffer lives.
+fn escape_backslashes(self: &Checker, s: String) OwnedString {
     let has = false
     for i in 0..s.len {
         if s[i] == '\\' { has = true }
     }
-    if !has { return s }
+    if !has { return from_view(s, self.allocator) }
     let sb = string_builder(s.len + 4, self.allocator)
+    defer sb.deinit()
     for i in 0..s.len {
         if s[i] == '\\' { sb.append_byte('\\') }
         sb.append_byte(s[i])
     }
-    let owned = sb.to_string()
-    sb.deinit()
-    // Leaked with the synthesized AST that references it.
-    return owned.as_view()
+    return sb.to_string()
 }
 
 // `scrutinee match { pat => body, ... }`. Each arm's pattern is checked
@@ -1397,6 +1812,7 @@ fn bind_pattern_var(self: &Checker, name: String, ty: Ty, span: SourceSpan) {
         scheme = mono(ty, self.allocator),
         decl = node_id_of(span),
         is_const = true,
+        is_type_param = false,
     })
     // Lowering reads the binding's type off the pattern node.
     self.results.record_type(node_id_of(span), ty)
@@ -1535,8 +1951,9 @@ fn check_try(self: &Checker, t: &TryExpr) Ty {
 
     self.results.record_operator(node_id_of(t.span), ResolvedOperator {
         function_id = p.id, negate_result = false,
-        cmp_derived_op = null, is_ref_form = false,
+        cmp_derived_op = null, is_ref_form = false, spec_id = null,
     })
+    note_pending(self, t.span, true, &p)
     return n.args[0]
 }
 
@@ -1692,8 +2109,9 @@ fn user_index(self: &Checker, idx: &IndexExpr, base_ty: Ty, rbase: &Ty, index_ty
         }
         self.results.record_operator(node_id_of(idx.span), ResolvedOperator {
             function_id = p.id, negate_result = false,
-            cmp_derived_op = null, is_ref_form = true,
+            cmp_derived_op = null, is_ref_form = true, spec_id = null,
         })
+        note_pending(self, idx.span, true, &p)
         return inner
     }
 
@@ -1711,12 +2129,13 @@ fn user_index(self: &Checker, idx: &IndexExpr, base_ty: Ty, rbase: &Ty, index_ty
         let p = value_pick.unwrap()
         self.results.record_operator(node_id_of(idx.span), ResolvedOperator {
             function_id = p.id, negate_result = false,
-            cmp_derived_op = null, is_ref_form = false,
+            cmp_derived_op = null, is_ref_form = false, spec_id = null,
         })
+        note_pending(self, idx.span, true, &p)
         return p.ret
     }
 
-    push_call_diag(self, idx.span, E_NOT_INDEXABLE,
+    push_diag_e(self, idx.span, E_NOT_INDEXABLE,
         from_view("type does not support indexing: declare `op_index_ref(&Self, Idx) &T` or `op_index(Self, Idx) T`"))
     return self.engine.fresh_var()
 }
@@ -1738,7 +2157,7 @@ fn index_operator(self: &Checker, name: String, self_ty: Ty, index_ty: Ty, span:
 // failure - callers try several shapes, or supply their own diagnostic,
 // and report once at the end.
 fn operator_pick(self: &Checker, name: String, args: &List(Ty), span: SourceSpan) OverloadPick? {
-    let vis = current_visibility(self)
+    let vis = fn_visibility(self)
     let cands = self.functions.lookup(name, &vis) match {
         FnLookFound(c) => Some(c),
         _ => null,
@@ -1761,9 +2180,28 @@ fn operator_pick(self: &Checker, name: String, args: &List(Ty), span: SourceSpan
 
 // `expr as T` yields `T`; cast validity (representability, pointer
 // compatibility) is a later pass, matching the reference checker.
+// A BARE numeric literal operand takes the target type directly -
+// `0xFFFF_FFFF as u64` means a u64-typed constant, and without the pin
+// the literal's var would go unresolved (E2001). Non-literal operands
+// keep their own type; the cast converts.
 fn check_cast(self: &Checker, c: &CastExpr) Ty {
-    let _v = check_expr(self, c.operand)
-    return resolve_type_expr(self, c.target)
+    let v = check_expr(self, c.operand)
+    let target = resolve_type_expr(self, c.target)
+    let is_numeric_lit = c.operand.* match {
+        Lit(l) => l.value match {
+            Int(_) => true,
+            Float(_) => true,
+            _ => false,
+        },
+        _ => false,
+    }
+    if is_numeric_lit {
+        // Best-effort: a numeric target binds the literal; a failure
+        // (casting a literal to a pointer, say) is the cast's business,
+        // not a unification diagnostic.
+        let _o = self.engine.unify(v, target)
+    }
+    return target
 }
 
 // `()` is unit - the empty tuple and `void` are the same type.
@@ -1785,14 +2223,28 @@ fn check_literal(self: &Checker, lit: &LiteralExpr) Ty {
 // seven forms appear without an enclosing expression node.
 fn literal_value_ty(self: &Checker, value: LiteralValue) Ty {
     return value match {
-        Int(_) => self.engine.fresh_var(),       // unsuffixed - context resolves
-        Float(_) => self.engine.fresh_var(),
+        Int(il) => numeric_literal_ty(self, il.span, il.suffix, il.text, false),
+        Float(fl) => numeric_literal_ty(self, fl.span, fl.suffix, fl.text, true),
         Bool(_) => Ty.Prim(PrimitiveKind.Bool),
         String(_) => string_type(self),
         Char(_) => Ty.Prim(PrimitiveKind.Char),
         Byte(_) => Ty.Prim(PrimitiveKind.U8),
         Null => option_of_fresh(self),
     }
+}
+
+// A suffixed numeric literal IS its suffix's primitive; an unsuffixed one
+// is a fresh var the context resolves, recorded so `validate_literals`
+// can report the ones nothing ever pinned (E2001, as in the reference)
+// instead of letting an unresolved var drift into lowering.
+fn numeric_literal_ty(self: &Checker, span: SourceSpan, suffix: String, text: String, is_float: bool) Ty {
+    if suffix.len > 0 {
+        let p = prim_from_name(suffix)
+        if p.is_some() { return Ty.Prim(p.unwrap()) }
+    }
+    let v = self.engine.fresh_var()
+    self.pending_literals.push(PendingLit { span = span, ty = v, text = text, is_float = is_float })
+    return v
 }
 
 fn string_type(self: &Checker) Ty {
@@ -1819,7 +2271,7 @@ fn check_identifier(self: &Checker, id: &IdentifierExpr) Ty {
     }
 
     // Try function registry.
-    let vis = current_visibility(self)
+    let vis = fn_visibility(self)
     let look = self.functions.lookup(id.name, &vis)
     let found: List(FunctionScheme)? = look match {
         FnLookFound(candidates) => Some(candidates),
@@ -1945,6 +2397,7 @@ fn check_for(self: &Checker, fs: &ForStmt) {
         scheme = mono(elem, self.allocator),
         decl = node_id_of(fs.span),
         is_const = true,
+        is_type_param = false,
     })
     let _b = check_block(self, &fs.body)
     self.env.pop_scope()
@@ -2030,6 +2483,7 @@ fn check_let(self: &Checker, ls: &LetStmt) {
         scheme = mono(bound_ty, self.allocator),
         decl = node_id_of(ls.span),
         is_const = ls.is_const,
+        is_type_param = false,
     })
 }
 
@@ -2109,9 +2563,9 @@ fn check_binary(self: &Checker, bin: &BinaryExpr) Ty {
         Ge => compare_result(self, lhs, rhs, bin.span),
         And => logical_result(self, lhs, rhs, bin.span),
         Or => logical_result(self, lhs, rhs, bin.span),
-        Shl => lhs,
-        Shr => lhs,
-        UShr => lhs,
+        // Shifts land on the arith rule too: the count unifies with the
+        // shifted value's type, matching the reference's unified result
+        // for Shl/Shr/UShr - and pinning a literal count.
         _ => arith_result(self, lhs, rhs, bin.span),
     }
 }
@@ -2215,7 +2669,7 @@ fn resolve_call(self: &Checker, call: &CallExpr, arg_tys: &List(Ty)) Ty? {
 // the reference checker's call order; a value binding of function type
 // is the fallback.
 fn resolve_direct_call(self: &Checker, call: &CallExpr, ide: &IdentifierExpr, arg_tys: &List(Ty)) Ty? {
-    let vis = current_visibility(self)
+    let vis = fn_visibility(self)
     let cands = self.functions.lookup(ide.name, &vis) match {
         FnLookFound(c) => Some(c),
         _ => null,
@@ -2241,13 +2695,13 @@ fn resolve_method_call(self: &Checker, call: &CallExpr, ma: &MemberAccessExpr, a
     let fc = field_call(self, &recv_ty, ma.member, arg_tys, call.span)
     if fc.is_some() { return fc }
 
-    let vis = current_visibility(self)
+    let vis = fn_visibility(self)
     let cands = self.functions.lookup(ma.member, &vis) match {
         FnLookFound(c) => Some(c),
         _ => null,
     }
     if cands.is_none() {
-        push_call_diag(self, call.span, E_UNKNOWN_IDENT,
+        push_diag_e(self, call.span, E_UNKNOWN_IDENT,
             $"unresolved function `{ma.member}`")
         return Some(self.engine.fresh_var())
     }
@@ -2299,7 +2753,7 @@ fn receiver_overload(self: &Checker, candidates: &List(FunctionScheme), recv: Ty
 // chain leaves its committed deref unifications behind - parity with the
 // reference checker, which also resolves each hop non-speculatively.
 fn deref_retry(self: &Checker, candidates: &List(FunctionScheme), recv_ty: Ty, arg_tys: &List(Ty), span: SourceSpan) OverloadPick? {
-    let vis = current_visibility(self)
+    let vis = fn_visibility(self)
     let dcands = self.functions.lookup("op_deref", &vis) match {
         FnLookFound(c) => Some(c),
         _ => null,
@@ -2344,15 +2798,22 @@ fn deref_retry(self: &Checker, candidates: &List(FunctionScheme), recv_ty: Ty, a
     return null
 }
 
-// Call-resolution diagnostics stay silent in generic bodies, where
-// unbound type params make resolution unreliable (the reference checker
-// re-checks those per specialization instead).
-fn push_call_diag(self: &Checker, span: SourceSpan, code: String, message: OwnedString) {
-    if self.in_generic_body {
-        message.deinit()
-        return
-    }
-    push_diag_e(self, span, code, message)
+// A committed pick of a generic overload becomes a pending
+// specialization - drained once the enclosing body's inference has
+// settled (M10). `is_operator` selects which table the drain rewrites:
+// `resolved_ops` for operator nodes, `resolved_targets` for calls.
+fn note_pending(self: &Checker, span: SourceSpan, is_operator: bool, pick: &OverloadPick) {
+    if pick.inst.is_none() { return }
+    let inst = pick.inst.unwrap()
+    self.pending_specs.push(PendingSpec {
+        span = span,
+        is_operator = is_operator,
+        function_id = pick.id,
+        tp_binds = inst.tp_binds,
+        inst_params = inst.params,
+        inst_ret = inst.ret,
+        caller_module = self.current_module.unwrap(),
+    })
 }
 
 // Record the winner on the call node and return its instantiated return
@@ -2361,10 +2822,11 @@ fn commit_pick(self: &Checker, pick: OverloadPick?, name: String, n_args: usize,
     return pick match {
         Some(p) => {
             self.results.record_target(node_id_of(span), ResolvedTarget.RtFunction(p.id))
+            note_pending(self, span, false, &p)
             p.ret
         },
         None => {
-            push_call_diag(self, span, E_NO_OVERLOAD,
+            push_diag_e(self, span, E_NO_OVERLOAD,
                 $"no matching overload for `{name}` with {n_args} argument(s)")
             self.engine.fresh_var()
         },
@@ -2382,7 +2844,7 @@ fn field_call(self: &Checker, recv_ty: &Ty, name: String, arg_tys: &List(Ty), sp
         _ => return null,
     }
     if f.params.len != arg_tys.len {
-        push_call_diag(self, span, E_NO_OVERLOAD,
+        push_diag_e(self, span, E_NO_OVERLOAD,
             $"no matching overload for `{name}` with {arg_tys.len} argument(s)")
         return Some(self.engine.fresh_var())
     }
@@ -2405,7 +2867,7 @@ fn indirect_call(self: &Checker, callee_ty: Ty, arg_tys: &List(Ty), span: Source
     if ft.is_some() {
         let f = ft.unwrap()
         if f.params.len != arg_tys.len {
-            push_call_diag(self, span, E_NO_OVERLOAD,
+            push_diag_e(self, span, E_NO_OVERLOAD,
                 $"no matching overload with {arg_tys.len} argument(s)")
             return self.engine.fresh_var()
         }
@@ -2425,15 +2887,27 @@ fn indirect_call(self: &Checker, callee_ty: Ty, arg_tys: &List(Ty), span: Source
         report_unify(self, &o, E_TYPE_MISMATCH, span)
         return ret
     }
-    push_call_diag(self, span, E_NO_OVERLOAD,
+    push_diag_e(self, span, E_NO_OVERLOAD,
         $"expression of non-function type is not callable")
     return self.engine.fresh_var()
 }
 
 // The winning overload for a call site: registry id plus instantiated
-// return type.
+// return type. For a generic winner, `inst` carries the instantiation
+// the commit sites turn into a `PendingSpec` (M10); null for
+// monomorphic winners.
 type OverloadPick = struct {
     id: u32
+    ret: Ty
+    inst: PickInst?
+}
+
+// A generic winner's instantiated shape: the quantified-id → fresh-var
+// mapping plus the fresh-var-bearing parameter and return types. All
+// zonk to concrete types once the surrounding inference settles.
+type PickInst = struct {
+    tp_binds: Dict(VarId, Ty)
+    params: List(Ty)
     ret: Ty
 }
 
@@ -2466,16 +2940,29 @@ fn resolve_overload(self: &Checker, candidates: &List(FunctionScheme), arg_tys: 
     if best.is_none() { return null }
 
     let w = &candidates[best.unwrap()]
-    let f = scheme_fn_ty(self, &w.signature) match {
-        Some(ft) => ft,
-        None => return null,
+    let binds: Dict(VarId, Ty) = dict(self.allocator)
+    let inst_ty = self.engine.resolve(self.engine.specialize_capture(&w.signature, &binds))
+    let ft = inst_ty match {
+        Func(x) => Some(x),
+        _ => null,
     }
+    if ft.is_none() {
+        binds.deinit()
+        return null
+    }
+    let f = ft.unwrap()
     let checked = non_variadic_arg_count(w, &f, arg_tys.len)
     for i in 0..checked {
         const o = self.engine.unify(arg_tys[i], f.params[i])
         report_unify(self, &o, E_TYPE_MISMATCH, span)
     }
-    return Some(OverloadPick { id = w.id, ret = f.ret.* })
+    let inst: PickInst? = null
+    if w.signature.quantified.len() > 0 {
+        inst = Some(PickInst { tp_binds = binds, params = f.params, ret = f.ret.* })
+    } else {
+        binds.deinit()
+    }
+    return Some(OverloadPick { id = w.id, ret = f.ret.*, inst = inst })
 }
 
 // Speculatively check one candidate: null when it cannot take these
@@ -2560,7 +3047,7 @@ fn unqualified_variant_call(self: &Checker, ide: &IdentifierExpr, arg_tys: &List
 // function. Values always win over variant and type-name interpretations.
 fn name_is_value_bound(self: &Checker, name: String) bool {
     if self.env.lookup(name).is_some() { return true }
-    let vis = current_visibility(self)
+    let vis = fn_visibility(self)
     return self.functions.lookup(name, &vis) match {
         FnLookFound(_) => true,
         _ => false,
@@ -2608,10 +3095,20 @@ fn check_if(self: &Checker, if_expr: &IfExpr) Ty {
 // type) defers to a fresh var until record literals land.
 fn check_struct_lit(self: &Checker, lit: &StructLiteralExpr) Ty {
     if lit.type_expr.is_none() {
+        // The anonymous form types as a fresh var the context binds
+        // (return type, annotation, call parameter). Field constraints
+        // can't apply until that binding exists, so the initializers are
+        // parked and `resolve_anon_literals` unifies them against the
+        // nominal's field types once inference settles.
+        let recs: List(AnonFieldRec) = list(lit.fields.len, self.allocator)
         for i in 0..lit.fields.len {
-            let _v = check_field_value(self, &lit.fields[i])
+            let fi = &lit.fields[i]
+            let v = check_field_value(self, fi)
+            recs.push(AnonFieldRec { name = fi.name, ty = v, span = fi.span })
         }
-        return self.engine.fresh_var()
+        let anon_var = self.engine.fresh_var()
+        self.pending_anons.push(PendingAnon { ty = anon_var, fields = recs })
+        return anon_var
     }
     let ty = resolve_type_expr(self, lit.type_expr.unwrap())
 
@@ -2683,7 +3180,28 @@ fn check_member(self: &Checker, ma: &MemberAccessExpr) Ty {
     let recv = check_expr(self, ma.receiver)
     let fty = struct_field_lookup(self, &recv, ma.member)
     if fty.is_some() { return fty.unwrap() }
+    let tp = tuple_projection(self, &recv, ma.member)
+    if tp.is_some() { return tp.unwrap() }
     return self.engine.fresh_var()
+}
+
+// `t.0` / `t.1` - positional projection on a tuple-typed receiver (one
+// reference peeled). Null for non-tuples, non-numeric members, and
+// out-of-range indices - those fall through to UFCS resolution.
+fn tuple_projection(self: &Checker, recv: &Ty, member: String) Ty? {
+    let r = self.engine.resolve(recv.*)
+    let peeled = r match {
+        Ref(inner) => self.engine.resolve(inner.*),
+        _ => r,
+    }
+    let elems = peeled match {
+        Tuple(es) => es,
+        _ => return null,
+    }
+    let idx = parse_decimal(member)
+    if idx.is_none() { return null }
+    if idx.unwrap() >= elems.len { return null }
+    return Some(elems[idx.unwrap()])
 }
 
 // Qualified enum-variant access `EnumName.Variant`: a bare receiver naming an
@@ -2828,6 +3346,14 @@ pub fn check_all(self: &Checker, modules: &List(Module), paths: &List(String)) T
     for i in 0..modules.len {
         check_module_bodies(self, &modules[i], paths[i])
     }
+    // Phase 3.5: settle anonymous literals (their field pins can be
+    // what makes a generic pick concrete), then instantiate every
+    // generic pick the body pass recorded, transitively - a
+    // specialization's body enqueues its own picks.
+    resolve_anon_literals(self)
+    drain_pending_specs(self)
+    // Phase 3.6: any unsuffixed literal nothing ever pinned is E2001.
+    validate_literals(self)
 
     // Zonk every node-type entry so the result is final.
     let zonked: Dict(NodeId, Ty) = dict(self.allocator)
@@ -2841,14 +3367,18 @@ pub fn check_all(self: &Checker, modules: &List(Module), paths: &List(String)) T
     let out_resolved_ops = self.results.resolved_ops
     let out_resolved_targets = self.results.resolved_targets
     let out_instantiated_types = self.results.instantiated_types
-    let out_specializations = self.results.specializations
+    let out_specializations = self.specs.specs
     let out_desugars = self.results.desugars
+    let out_synth_strings = self.results.synth_strings
     let out_nominals = self.nominals
     let out_functions = self.functions
 
     self.results.reset_side_tables()
     self.nominals = nominal_registry(self.allocator)
     self.functions = function_registry(self.allocator)
+    // The moved-out spec list gets a fresh registry; the old `by_key`
+    // dict is abandoned to the allocator like the other snapshots.
+    self.specs = specialization_registry(self.allocator)
 
     return TypeCheckResult {
         node_types = zonked,
@@ -2857,6 +3387,7 @@ pub fn check_all(self: &Checker, modules: &List(Module), paths: &List(String)) T
         instantiated_types = out_instantiated_types,
         specializations = out_specializations,
         desugars = out_desugars,
+        synth_strings = out_synth_strings,
         nominals = out_nominals,
         functions = out_functions,
     }
@@ -3196,3 +3727,73 @@ test "a hole's format spec routes to the spec-taking append overload" {
         ["core.option", "core.string", "std.string_builder", "interp_spec"])
     assert_true(errors == 0, "append(sb, v, spec) resolves for `{x:04}`")
 }
+
+// ── M10 - specialization ─────────────────────────────────────────────
+
+// Check `srcs` and hand back the full result so tests can inspect the
+// specialization list. Leaks like the driver does - one-shot.
+fn check_result_of(srcs: String[], paths: String[]) TypeCheckResult {
+    let mods = list(srcs.len)
+    for i in 0..srcs.len {
+        mods.push(parse_src(srcs[i], i as i32))
+    }
+    let ps = list(paths.len)
+    ps.push_all(paths)
+    let chk = checker()
+    return check_all(&chk, &mods, &ps)
+}
+
+test "a generic call instantiates once per concrete signature" {
+    let res = check_result_of(
+        ["pub fn id(x: $T) T { return x }\nfn main() i32 { let a = id(1) let b = id(2) let c = id(true) if c { return a } return b }\n"],
+        ["m"])
+    // Two i32 calls share one specialization; the bool call adds one.
+    assert_eq(res.specializations.len, 2 as usize, "two concrete signatures, two specializations")
+    let s0 = &res.specializations[0]
+    assert_eq(s0.concrete_params.len, 1 as usize, "id takes one param")
+    assert_true(s0.name == "id", "specialization names the template")
+    // The instantiated bodies were re-checked: their overlays carry
+    // node types for the template body's nodes.
+    assert_true(s0.overlay.node_types.length > 0, "overlay recorded body node types")
+}
+
+test "generic template bodies only report when instantiated" {
+    // `bad`'s body calls a function that does not exist - uninstantiated
+    // the template is never validated, instantiated it reports.
+    let silent = count_check_errors(
+        ["pub fn bad(x: $T) T { return no_such_fn(x) }\n"],
+        ["m"])
+    assert_true(silent == 0, "an uninstantiated template is never validated")
+
+    let loud = count_check_errors(
+        ["pub fn bad(x: $T) T { return no_such_fn(x) }\nfn main() i32 { return bad(1) }\n"],
+        ["m"])
+    assert_true(loud > 0, "instantiating the template surfaces its body errors")
+}
+
+test "a nested generic call specializes transitively" {
+    let res = check_result_of(
+        ["pub fn inner(x: $T) T { return x }\npub fn outer(x: $T) T { return inner(x) }\nfn main() i32 { return outer(7) }\n"],
+        ["m"])
+    // outer(i32) instantiates, and its body's inner(x) pick drains into
+    // inner(i32).
+    assert_eq(res.specializations.len, 2 as usize, "outer and inner both specialize")
+}
+
+test "a self-recursive generic reuses its own specialization" {
+    let res = check_result_of(
+        ["pub fn rec(x: $T, n: i32) T { if n > 0 { return rec(x, n - 1) } return x }\nfn main() i32 { return rec(3, 2) }\n"],
+        ["m"])
+    assert_eq(res.specializations.len, 1 as usize, "recursion hits the registered key, no second entry")
+}
+test "a generic member call inside a partially-fixed generic instantiates" {
+    // Regression: `set2(self: &D(Key, $V), ...)` is generic only through
+    // a NESTED type argument. A broken `declares_generic` walked this as
+    // concrete, phase 3 checked the template with V unbound, and the
+    // stray pick could never infer `cap`'s type arguments.
+    let errors = count_check_errors(
+        ["type Key = struct { n: usize }\ntype D = struct(K, V) { n: usize\n    k: K\n    v: V\n}\nfn cap(self: &D($K, $V)) usize { return self.n }\nfn set2(self: &D(Key, $V), value: V) usize { return self.cap() }\nfn main() i32 {\n    let d: D(Key, i32) = D(Key, i32) { n = 0usize, k = Key { n = 1usize }, v = 3i32 }\n    const c = d.set2(5i32)\n    return 0\n}\n"],
+        ["m"])
+    assert_true(errors == 0, "cap's K and V pin from set2's concrete receiver")
+}
+
