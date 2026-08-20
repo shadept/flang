@@ -68,7 +68,7 @@ Segments and holes use different lexing rules:
 
 - **Segments** (text between holes) use normal string escapes (`\n \t \r \\ \" \0 \uXXXX`), plus `{{` → `{` and `}}` → `}`.
 - **Holes** (`{ expr }`) contain full expressions with the normal grammar. Strings inside a hole use their own quoting: `$"{msg.contains("foo")}"` works; `\"` at the hole's top level is invalid.
-- **Format specs** (text after `:` inside a hole) are captured verbatim and passed as a `String` to `append(sb, val, spec)`. `{x:04}` pads `x` to 4 digits.
+- **Format specs** (text after `:` inside a hole) are captured verbatim and passed as a `String` to `append(sb, val, spec)`. `{x:04}` pads `x` to 4 digits. Float specs take an optional trailing presentation type: `e` / `E` for scientific notation (`{x:.3e}` → `2.500e-03`) and `a` for the exact C99 hex-float form (`{x:a}` → `0x1.8p+0`, round-trips every bit); no type char is fixed-point.
 
 No whitespace is allowed between `$` and its `(`, identifier, or `"`. The expression desugars to `StringBuilder.append(...)` calls — user types gain format support by defining `fn format(self: T, sb: &StringBuilder, spec: String)`.
 

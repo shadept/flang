@@ -94,6 +94,11 @@ pub type Checker = struct {
     // plus the auto-imported core prelude.
     visible_by_module: Dict(OwnedString, Set(String))
 
+    // Monotonic counter behind `synth_span`: gives every checker-
+    // synthesized AST node (interpolation desugar) a node id no real
+    // node can collide with. Also names the desugar's builder locals.
+    next_synth: u32
+
     allocator: &Allocator?
 }
 
@@ -112,6 +117,7 @@ pub fn checker(allocator: &Allocator? = null) Checker {
         fn_stack = list(0, allocator),
         in_generic_body = false,
         visible_by_module = dict(allocator),
+        next_synth = 0u32,
         allocator = allocator,
     }
 }
@@ -931,8 +937,291 @@ fn check_expr_kind(self: &Checker, expr: &Expr) Ty {
         Unary(u) => check_unary(self, &u),
         Coalesce(co) => check_coalesce(self, &co),
         Try(tr) => check_try(self, &tr),
+        InterpolatedString(is) => check_interpolation(self, &is),
         _ => self.engine.fresh_var(),
     }
+}
+
+// String interpolation (RFC-004): desugar to StringBuilder calls, exactly
+// as the reference checker does - the feature is stdlib-dependent by
+// design. The desugar is synthesized as real AST and checked through the
+// ordinary machinery, so overload resolution picks each `append` (and the
+// format-spec fallback), the picks land on the synthetic nodes' ids, and
+// the result type is whatever `to_string` returns - resolved, not
+// assumed. The block is stored in `results.desugars` keyed by the
+// interpolation node; lowering replays it instead of the original node.
+//
+//   $"a{x}b"       => { let __interp_sb_N = string_builder(0, null)
+//                       defer __interp_sb_N.deinit()
+//                       __interp_sb_N.append("a")
+//                       __interp_sb_N.append(x)
+//                       __interp_sb_N.append("b")
+//                       __interp_sb_N.to_string() }
+//   $sb"a{x}"      => { sb.append("a") sb.append(x) }        (void)
+//
+// The deferred deinit is a no-op on the happy path (`to_string`
+// transfers ownership and zeroes the builder) and frees the buffer
+// when a hole's expression escapes early (`$"{f()?}"`).
+//
+// `$(…)` constructor args map onto `string_builder(capacity, allocator)`
+// at FULL arity - the defaults are spelled out as `0` / `null`, so the
+// desugared call never leans on defaulted-argument materialization,
+// which lowering does not do yet. A lone `&alloc` argument routes to the
+// allocator slot wrapped in `Some(...)` (no implicit T -> Option(T)).
+//
+fn check_interpolation(self: &Checker, interp: &InterpolatedStringExpr) Ty {
+    return interp.target match {
+        NewString(args) => check_interp_owned(self, interp, &args),
+        IntoBuilder(t) => check_interp_into(self, interp, t),
+    }
+}
+
+fn check_interp_owned(self: &Checker, interp: &InterpolatedStringExpr, given: &List(Expr)) Ty {
+    const name = fresh_builder_name(self)
+    let stmts: List(Stmt) = list(interp.parts.len + 1, self.allocator)
+
+    const ctor = synth_free_call(self, "string_builder", builder_ctor_args(self, given))
+    stmts.push(Stmt.Let(LetStmt {
+        span = synth_span(self),
+        is_const = false,
+        name = name,
+        type_annotation = null,
+        init = Some(ctor),
+    }))
+    let no_args: List(CallArgument) = list(0, self.allocator)
+    stmts.push(Stmt.Defer(DeferStmt {
+        span = synth_span(self),
+        expr = synth_method_call(self, name, "deinit", no_args),
+    }))
+    push_append_stmts(self, &stmts, name, interp)
+
+    let empty_args: List(CallArgument) = list(0, self.allocator)
+    const done = synth_method_call(self, name, "to_string", empty_args)
+    let block = box(or_global(self.allocator), BlockExpr {
+        span = synth_span(self),
+        stmts = stmts,
+        trailing = Some(synth_box(self, done)),
+    })
+    const ty = check_block(self, block)
+    self.results.record_desugar(node_id_of(interp.span), block)
+    return ty
+}
+
+// `$sb"…"` - append each part into the existing builder; void. The
+// parser only produces an identifier target; anything else is visited
+// so errors report, but gets no desugar (lowering refuses the node).
+fn check_interp_into(self: &Checker, interp: &InterpolatedStringExpr, target: &Expr) Ty {
+    let tname = ""
+    target.* match {
+        Identifier(ide) => { tname = ide.name },
+        _ => {},
+    }
+    if tname.len == 0 {
+        let _t = check_expr(self, target)
+        for i in 0..interp.parts.len {
+            interp.parts[i] match {
+                Hole(h) => { let _h = check_expr(self, h.expr) },
+                Text(_) => {},
+            }
+        }
+        return Ty.Void
+    }
+
+    let stmts: List(Stmt) = list(interp.parts.len, self.allocator)
+    push_append_stmts(self, &stmts, tname, interp)
+    let block = box(or_global(self.allocator), BlockExpr {
+        span = synth_span(self),
+        stmts = stmts,
+        trailing = null,
+    })
+    const ty = check_block(self, block)
+    self.results.record_desugar(node_id_of(interp.span), block)
+    return ty
+}
+
+// One `NAME.append(part)` statement per non-empty part. A hole with a
+// format spec passes it as a trailing String argument - overload
+// resolution finds the spec-taking `append`.
+fn push_append_stmts(self: &Checker, stmts: &List(Stmt), name: String, interp: &InterpolatedStringExpr) {
+    for i in 0..interp.parts.len {
+        interp.parts[i] match {
+            Text(t) => {
+                if t.len > 0 {
+                    let args: List(CallArgument) = list(1, self.allocator)
+                    const lit = synth_string_lit(self, segment_literal_text(self, t))
+                    args.push(CallArgument.Positional(synth_box(self, lit)))
+                    push_expr_stmt(self, stmts, synth_method_call(self, name, "append", args))
+                }
+            },
+            Hole(h) => {
+                let args: List(CallArgument) = list(2, self.allocator)
+                args.push(CallArgument.Positional(h.expr))
+                h.format match {
+                    Some(spec) => {
+                        const slit = synth_string_lit(self, escape_backslashes(self, spec))
+                        args.push(CallArgument.Positional(synth_box(self, slit)))
+                    },
+                    None => {},
+                }
+                push_expr_stmt(self, stmts, synth_method_call(self, name, "append", args))
+            },
+        }
+    }
+}
+
+fn push_expr_stmt(self: &Checker, stmts: &List(Stmt), e: Expr) {
+    stmts.push(Stmt.Expression(ExpressionStmt { span = synth_span(self), expr = e }))
+}
+
+// `$(…)` args onto `string_builder(capacity, allocator)`, full arity.
+fn builder_ctor_args(self: &Checker, given: &List(Expr)) List(CallArgument) {
+    let cap: Expr? = null
+    let alloc_arg: Expr? = null
+    if given.len >= 1 {
+        const first_is_addr = given[0] match { AddressOf(_) => true, _ => false }
+        if given.len == 1 and first_is_addr {
+            alloc_arg = Some(wrap_some(self, given[0]))
+        } else {
+            cap = Some(given[0])
+        }
+    }
+    if given.len >= 2 {
+        const second_is_addr = given[1] match { AddressOf(_) => true, _ => false }
+        if second_is_addr {
+            alloc_arg = Some(wrap_some(self, given[1]))
+        } else {
+            alloc_arg = Some(given[1])
+        }
+    }
+
+    let out: List(CallArgument) = list(2, self.allocator)
+    const cap_e = cap match { Some(e) => e, None => synth_int_lit(self, "0") }
+    out.push(CallArgument.Positional(synth_box(self, cap_e)))
+    const alloc_e = alloc_arg match { Some(e) => e, None => synth_null(self) }
+    out.push(CallArgument.Positional(synth_box(self, alloc_e)))
+    return out
+}
+
+fn wrap_some(self: &Checker, e: Expr) Expr {
+    let args: List(CallArgument) = list(1, self.allocator)
+    args.push(CallArgument.Positional(synth_box(self, e)))
+    return synth_free_call(self, "Some", args)
+}
+
+// ── desugar synthesis helpers ────────────────────────────────────────
+
+// A span no real AST node carries: `file_id = -2` marks checker-
+// synthesized nodes, and the monotonic `start` keeps every synthetic
+// node id unique (node ids pack (start, length, file_id) - node_id.f).
+// Diagnostics raised on a synthetic node render without a real source
+// location; hole expressions keep their own real spans, so user errors
+// still point at user code.
+fn synth_span(self: &Checker) SourceSpan {
+    const n = self.next_synth
+    self.next_synth = n + 1
+    return SourceSpan { file_id = -2, start = n as usize, length = 0 }
+}
+
+// Synthesized nodes live as long as the check result - allocated on the
+// global allocator and deliberately leaked with it.
+fn synth_box(self: &Checker, e: Expr) &Expr {
+    return box(or_global(self.allocator), e)
+}
+
+fn synth_ident(self: &Checker, name: String) Expr {
+    return Expr.Identifier(IdentifierExpr { span = synth_span(self), name = name })
+}
+
+fn synth_int_lit(self: &Checker, text: String) Expr {
+    const sp = synth_span(self)
+    return Expr.Lit(LiteralExpr {
+        span = sp,
+        value = LiteralValue.Int(IntLiteral { span = sp, text = text, suffix = "" }),
+    })
+}
+
+fn synth_null(self: &Checker) Expr {
+    return Expr.Lit(LiteralExpr { span = synth_span(self), value = LiteralValue.Null })
+}
+
+fn synth_string_lit(self: &Checker, text: String) Expr {
+    const sp = synth_span(self)
+    return Expr.Lit(LiteralExpr {
+        span = sp,
+        value = LiteralValue.String(StringLiteral { span = sp, text = text }),
+    })
+}
+
+// `recv_name.method(args)` as a UFCS call node.
+fn synth_method_call(self: &Checker, recv_name: String, method: String, args: List(CallArgument)) Expr {
+    const ma = Expr.MemberAccess(MemberAccessExpr {
+        span = synth_span(self),
+        receiver = synth_box(self, synth_ident(self, recv_name)),
+        member = method,
+    })
+    return Expr.Call(CallExpr { span = synth_span(self), callee = synth_box(self, ma), args = args })
+}
+
+fn synth_free_call(self: &Checker, name: String, args: List(CallArgument)) Expr {
+    return Expr.Call(CallExpr {
+        span = synth_span(self),
+        callee = synth_box(self, synth_ident(self, name)),
+        args = args,
+    })
+}
+
+fn fresh_builder_name(self: &Checker) String {
+    const n = self.next_synth
+    self.next_synth = n + 1
+    let sb = string_builder(20, self.allocator)
+    sb.append("__interp_sb_")
+    sb.append(n)
+    let owned = sb.to_string()
+    sb.deinit()
+    // Leaked with the synthesized AST that references it.
+    return owned.as_view()
+}
+
+// A segment's bytes as string-literal text, such that lowering's
+// string-literal decode yields exactly the segment's decoded bytes.
+// Segments share the string escape vocabulary and add `{{` / `}}`
+// doubling - so brace-free raw text passes through untouched, and
+// braced text is decoded (decode_interp_segment) then re-escaped.
+fn segment_literal_text(self: &Checker, raw: String) String {
+    let has_brace = false
+    for i in 0..raw.len {
+        if raw[i] == '{' or raw[i] == '}' { has_brace = true }
+    }
+    if !has_brace { return raw }
+    const decoded_opt = decode_interp_segment(raw, self.allocator)
+    // Malformed escape - the lexer already reported it; keep the raw text.
+    if decoded_opt.is_none() { return raw }
+    let decoded = decoded_opt.unwrap()
+    const out = escape_backslashes(self, decoded.as_view())
+    // `escape_backslashes` copies when it rewrites; it returns its input
+    // view only when there is nothing to escape - in which case `decoded`
+    // must stay alive as the backing store (leaked, like the copies).
+    if out.ptr != decoded.as_view().ptr { decoded.deinit() }
+    return out
+}
+
+// Double every backslash so a later string-literal decode is the
+// identity on the remaining bytes. Returns the input when clean.
+fn escape_backslashes(self: &Checker, s: String) String {
+    let has = false
+    for i in 0..s.len {
+        if s[i] == '\\' { has = true }
+    }
+    if !has { return s }
+    let sb = string_builder(s.len + 4, self.allocator)
+    for i in 0..s.len {
+        if s[i] == '\\' { sb.append_byte('\\') }
+        sb.append_byte(s[i])
+    }
+    let owned = sb.to_string()
+    sb.deinit()
+    // Leaked with the synthesized AST that references it.
+    return owned.as_view()
 }
 
 // `scrutinee match { pat => body, ... }`. Each arm's pattern is checked
@@ -2553,6 +2842,7 @@ pub fn check_all(self: &Checker, modules: &List(Module), paths: &List(String)) T
     let out_resolved_targets = self.results.resolved_targets
     let out_instantiated_types = self.results.instantiated_types
     let out_specializations = self.results.specializations
+    let out_desugars = self.results.desugars
     let out_nominals = self.nominals
     let out_functions = self.functions
 
@@ -2566,6 +2856,7 @@ pub fn check_all(self: &Checker, modules: &List(Module), paths: &List(String)) T
         resolved_targets = out_resolved_targets,
         instantiated_types = out_instantiated_types,
         specializations = out_specializations,
+        desugars = out_desugars,
         nominals = out_nominals,
         functions = out_functions,
     }
@@ -2870,4 +3161,38 @@ test "postfix ? without an op_try overload is E2092" {
         [TRY_SRC, OPTION_TRY_SRC, "import core.option\ntype Plain = struct { v: i32 }\nfn f(p: Plain) i32 { let v = p? return v }\n"],
         ["core.try", "core.option", "try_none"])
     assert_true(errors > 0, "`?` on a type with no op_try is rejected")
+}
+
+// M9: interpolation desugars to StringBuilder calls (RFC-004).
+
+// Minimal StringBuilder surface the desugar resolves against. `Owned`
+// stands in for OwnedString - the desugar hardcodes no type, it takes
+// whatever `to_string` returns.
+const INTERP_SB_SRC: String = "import core.string\nimport core.option\npub type StringBuilder = struct { n: usize }\npub type Owned = struct { n: usize }\npub fn string_builder(capacity: usize, allocator: &StringBuilder? = null) StringBuilder { return StringBuilder { n = capacity } }\npub fn append(sb: &StringBuilder, text: String) { sb.n = sb.n + text.len }\npub fn append(sb: &StringBuilder, v: i32) { sb.n = sb.n + 1 }\npub fn append(sb: &StringBuilder, v: i32, spec: String) { sb.n = sb.n + spec.len }\npub fn to_string(sb: &StringBuilder) Owned { return Owned { n = sb.n } }\npub fn deinit(sb: &StringBuilder) {}\npub fn deinit(s: &Owned) {}\n"
+const INTERP_STRING_SRC: String = "pub type String = struct { ptr: &u8, len: usize }\n"
+
+test "interpolation desugars: appends resolve and the result is to_string's type" {
+    let errors = count_check_errors(
+        [OPTION_SRC, INTERP_STRING_SRC, INTERP_SB_SRC, "import std.string_builder\nfn f(x: i32) i32 { const s = $\"got {x} ok\" s.deinit() return x }\n"],
+        ["core.option", "core.string", "std.string_builder", "interp_ok"])
+    assert_true(errors == 0, "segment and hole appends resolve; the result takes Owned's UFCS surface")
+
+    let hole_errors = count_check_errors(
+        [OPTION_SRC, INTERP_STRING_SRC, INTERP_SB_SRC, "import std.string_builder\nfn f() i32 { const s = $\"got {no_such_name}\" return 0 }\n"],
+        ["core.option", "core.string", "std.string_builder", "interp_bad_hole"])
+    assert_true(hole_errors > 0, "an unknown identifier inside a hole is reported")
+}
+
+test "into-builder interpolation appends onto the target and is void" {
+    let errors = count_check_errors(
+        [OPTION_SRC, INTERP_STRING_SRC, INTERP_SB_SRC, "import std.string_builder\nfn g(sb: &StringBuilder, x: i32) { $sb\"v={x}\" }\n"],
+        ["core.option", "core.string", "std.string_builder", "interp_into"])
+    assert_true(errors == 0, "the target's append overloads resolve; the statement is void")
+}
+
+test "a hole's format spec routes to the spec-taking append overload" {
+    let errors = count_check_errors(
+        [OPTION_SRC, INTERP_STRING_SRC, INTERP_SB_SRC, "import std.string_builder\nfn f(x: i32) i32 { const s = $\"n={x:04}\" s.deinit() return x }\n"],
+        ["core.option", "core.string", "std.string_builder", "interp_spec"])
+    assert_true(errors == 0, "append(sb, v, spec) resolves for `{x:04}`")
 }

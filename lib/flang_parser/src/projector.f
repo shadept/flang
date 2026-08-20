@@ -2250,6 +2250,24 @@ fn project_interp_string(self: &Projector, cst: CstNode) InterpolatedStringExpr 
                     parts.push(InterpolationPart.Text(tok.text))
                     continue
                 }
+                // `{expr:spec}` - the spec token follows the hole's expr
+                // node in the CST; attach it to the hole just pushed.
+                if in_body and tok.kind == TokenKind.InterpFormatSpec {
+                    if parts.len > 0 {
+                        const li = parts.len - 1
+                        parts[li] match {
+                            Hole(h) => {
+                                parts[li] = InterpolationPart.Hole(InterpolationHole {
+                                    span = h.span,
+                                    expr = h.expr,
+                                    format = Some(tok.text),
+                                })
+                            }
+                            _ => {}
+                        }
+                    }
+                    continue
+                }
             }
             NodeChild(child) => {
                 if in_body and is_expr_kind(child.kind) {

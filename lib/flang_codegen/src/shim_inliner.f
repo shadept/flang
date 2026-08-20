@@ -25,6 +25,8 @@ import std.list
 import std.option
 import std.set
 import std.string
+import std.test
+import flang_codegen.builder
 import flang_codegen.fir
 
 // Empirical lower bound on the FLang corpus - matches the C# pre-
@@ -661,4 +663,113 @@ fn rewrite_terminator(t: &Terminator, subst: &Dict(u32, Operand), alloc: &Alloca
         },
         Unreachable => Terminator.Unreachable,
     }
+}
+
+// Tests
+
+fn find_by_name(m: &IrModule, name: String) usize {
+    for i in 0..m.functions.len {
+        if m.functions[i].name == name { return i }
+    }
+    return m.functions.len
+}
+
+fn call_count(f: &Function) usize {
+    let n: usize = 0
+    for b in 0..f.blocks.len {
+        const instrs = &f.blocks[b].instrs
+        for i in 0..instrs.len {
+            instrs[i] match {
+                Call(_) => { n = n + 1 },
+                _ => {},
+            }
+        }
+    }
+    return n
+}
+
+fn slot_count(f: &Function) usize {
+    let n: usize = 0
+    for b in 0..f.blocks.len {
+        const instrs = &f.blocks[b].instrs
+        for i in 0..instrs.len {
+            instrs[i] match {
+                StackSlot(_) => { n = n + 1 },
+                _ => {},
+            }
+        }
+    }
+    return n
+}
+
+// How many stores in `f` write through the local with SSA id `slot_id`.
+fn stores_to(f: &Function, slot_id: u32) usize {
+    let n: usize = 0
+    for b in 0..f.blocks.len {
+        const instrs = &f.blocks[b].instrs
+        for i in 0..instrs.len {
+            const hit = instrs[i] match {
+                Store(s) => s.ptr match {
+                    Local(id) => id == slot_id,
+                    _ => false,
+                },
+                _ => false,
+            }
+            if hit { n = n + 1 }
+        }
+    }
+    return n
+}
+
+test "splicing a body that writes through its spilled parameter keeps value semantics" {
+    // The address-of-parameter shape, exactly as lowering emits it:
+    // every parameter spills to a stack slot at entry, so `&v` is the
+    // slot's address and a write through it mutates the callee's copy
+    // only. Splicing must clone that spill slot with fresh ids - wiring
+    // the pointer to the caller's own storage instead would let the
+    // callee's writes corrupt the caller's variable (the aliasing bug
+    // the reference inliner had; docs/known-issues.md "Inlined
+    // Address-of-Parameter Codegen").
+    let m = module()
+    defer m.deinit()
+
+    // bump(v: i64) i64 { let p = &v; p.* = p.* + 1; return p.* }
+    let bump = function("bump", Some(IrType.I64))
+    const v = bump.param(IrType.I64)
+    let bb = bump.entry()
+    const vslot = bb.stack_slot(8u64, 8u64)
+    bb.store(IrType.I64, v, vslot)
+    const t0 = bb.load(IrType.I64, vslot)
+    const t1 = bb.iadd(IrType.I64, t0, int(1))
+    bb.store(IrType.I64, t1, vslot)
+    const t2 = bb.load(IrType.I64, vslot)
+    bb.ret(t2)
+    m.add_function(bump.finish())
+
+    // run(x: i64) i64 { let r = bump(x); return r + x } - x spills to
+    // its own slot, the call reads it back out.
+    let run = function("run", Some(IrType.I64))
+    const x = run.param(IrType.I64)
+    let rb = run.entry()
+    const xslot = rb.stack_slot(8u64, 8u64)
+    rb.store(IrType.I64, x, xslot)
+    const xv = rb.load(IrType.I64, xslot)
+    const r = rb.call_one("bump", IrType.I64, xv)
+    const xv2 = rb.load(IrType.I64, xslot)
+    const sum = rb.iadd(IrType.I64, r, xv2)
+    rb.ret(sum)
+    m.add_function(run.finish())
+
+    const stats = inline_shims(&m)
+    assert_true(stats.inlined >= 1 as usize, "the call to bump was spliced")
+
+    const ri = find_by_name(&m, "run")
+    assert_true(ri < m.functions.len, "run is still in the module")
+    const f = &m.functions[ri]
+    assert_eq(call_count(f), 0 as usize, "no residual call to bump")
+    assert_eq(slot_count(f), 2 as usize, "the callee's spill slot was cloned alongside the caller's")
+
+    const xslot_id = xslot match { Local(id) => id, _ => 0u32 }
+    assert_eq(stores_to(f, xslot_id), 1 as usize,
+        "only run's own spill writes x's slot - the spliced body's writes hit the cloned copy")
 }

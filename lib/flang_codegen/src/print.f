@@ -360,7 +360,9 @@ fn print_operand(op: &Operand, sb: &StringBuilder) {
     op.* match {
         Local(id) => { sb.append("%v"); sb.append(id) },
         IntConst(n) => sb.append(n),
-        FloatConst(f) => sb.append(f),
+        // Exact hex-float form ("0x1.8p+0") so the text format
+        // round-trips the bits; `nan` / `inf` for non-finite.
+        FloatConst(f) => sb.append(f, "a"),
         NullPtr => sb.append("null"),
         GlobalRef(name) => { sb.append("@"); sb.append(name) },
         FuncRef(name) => { sb.append("@"); sb.append(name) },

@@ -37,6 +37,17 @@
 // forms) and `a?` as the checker-recorded `op_try` call plus a tag
 // branch and an early return - the reference's desugar, emitted directly.
 //
+// Milestone 9 adds the data segment: a string literal's decoded bytes are
+// interned program-wide into a null-terminated global, and each use
+// builds a `String { ptr, len }` view into a stack slot. Float literals
+// parse to `FloatConst` and work in patterns (ordered fcmp); a literal
+// whose node type never resolved refuses rather than emit a double into
+// integer arithmetic. M9 also adds `defer` (per-function schedule with
+// per-scope marks, mirroring the reference: normal exits pop and emit
+// their scope's suffix, escaping jumps emit down to their target depth
+// without popping) and string interpolation, which lowers by replaying
+// the checker-recorded StringBuilder desugar as an ordinary block.
+//
 // Still out of subset: range slicing over a built-in base (`xs[a..b]`),
 // which has to build a `Slice` with bounds clamped against the base's
 // length; `op_set_index`, so a value-form index stays unassignable;
@@ -59,6 +70,7 @@ import std.string_builder
 import std.test
 import flang_core.span
 import flang_parser.ast
+import flang_parser.lexer
 import flang_typer.type
 import flang_typer.node_id
 import flang_typer.result
@@ -88,8 +100,37 @@ type LowerCtx = struct {
     // Null while lowering a function with a scalar or void return.
     sret: Operand?
     ret_size: u64
+    // Data segment (M9). `strings` interns literals program-wide by their
+    // raw source text - two spellings of the same bytes ("A" vs "A")
+    // mint two globals, which is harmless duplication for zero decode work
+    // on repeat literals. `str_globals` collects the minted globals;
+    // `flush_strings` moves them into the IrModule after the walk.
+    strings: Dict(String, StrData)
+    str_globals: List(Global)
+    // Defer schedule, mirroring the reference's per-function stack +
+    // per-scope marks: `defers` holds every pending deferred expression
+    // (copies of the AST nodes - their children stay in the module's
+    // arena), `defer_marks` the stack depth at each open block scope.
+    // Normal scope exit emits and pops its own suffix; `return`, `break`,
+    // `continue` and `?` emit down to their target depth WITHOUT popping
+    // - they traverse scopes the owning blocks still close themselves.
+    defers: List(Expr)
+    defer_marks: List(usize)
+    // True while a defer flush is being emitted. An escaping construct
+    // inside a deferred expression (`defer { return }`, `?` in a defer -
+    // E2091 in the reference) would recurse into the flush forever;
+    // the guard refuses the function instead.
+    flushing: bool
     // TEMPORARY SCAFFOLD - see `unlowerable`. Delete with it.
     blocked: bool
+}
+
+// An interned string literal: the data-segment global holding its
+// null-terminated bytes, and the decoded length (terminator excluded) -
+// exactly the two fields a `String { ptr, len }` view needs.
+type StrData = struct {
+    name: String
+    len: usize
 }
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -133,6 +174,10 @@ type LoopFrame = struct {
     latch: String
     // Where `break` goes: the first block after the loop.
     exit: String
+    // `ctx.defers.len` when the loop was entered: `break` / `continue`
+    // fire every defer registered past this point - the scopes the jump
+    // escapes through - before branching.
+    defer_depth: usize
 }
 
 // Lexical environment: a stack of bindings, innermost last. A block marks
@@ -260,6 +305,10 @@ pub fn lower_module(ast_module: &Module, result: &TypeCheckResult, allocator: &A
     sb.add_module(ast_module, "")
     let syms = sb.finish()
     let loop_stack: List(LoopFrame) = list(0, allocator)
+    let interner: Dict(String, StrData) = dict(allocator)
+    let str_globals: List(Global) = list(0, allocator)
+    let defer_stack: List(Expr) = list(0, allocator)
+    let defer_marks: List(usize) = list(0, allocator)
     let ctx = LowerCtx {
         result = result,
         syms = &syms,
@@ -267,9 +316,15 @@ pub fn lower_module(ast_module: &Module, result: &TypeCheckResult, allocator: &A
         loops = loop_stack,
         sret = null,
         ret_size = 0u64,
+        strings = interner,
+        str_globals = str_globals,
+        defers = defer_stack,
+        defer_marks = defer_marks,
+        flushing = false,
         blocked = false
     }
     lower_into(&m, &ctx, ast_module, "")
+    flush_strings(&m, &ctx)
     syms.deinit()
     return m
 }
@@ -288,10 +343,15 @@ pub fn lower_program(modules: &List(Module), fqns: &List(OwnedString), result: &
     }
     let syms = sb.finish()
     let loop_stack: List(LoopFrame) = list(0, allocator)
-    let ctx = LowerCtx { result = result, syms = &syms, allocator = allocator, loops = loop_stack, sret = null, ret_size = 0u64, blocked = false }
+    let interner: Dict(String, StrData) = dict(allocator)
+    let str_globals: List(Global) = list(0, allocator)
+    let defer_stack: List(Expr) = list(0, allocator)
+    let defer_marks: List(usize) = list(0, allocator)
+    let ctx = LowerCtx { result = result, syms = &syms, allocator = allocator, loops = loop_stack, sret = null, ret_size = 0u64, strings = interner, str_globals = str_globals, defers = defer_stack, defer_marks = defer_marks, flushing = false, blocked = false }
     for i in 0..modules.len {
         lower_into(&m, &ctx, &modules[i], fqns[i].as_view())
     }
+    flush_strings(&m, &ctx)
     syms.deinit()
     drop_callers_of_refused(&m, allocator)
     return m
@@ -482,7 +542,12 @@ fn lower_function(m: &IrModule, ctx: &LowerCtx, decl: &FunctionDecl) {
     // taking its address - needs no special case. An aggregate parameter
     // arrives as a pointer to the caller's value; the callee copies it into
     // its own slot, so mutating a by-value parameter can never write
-    // through to the caller (value semantics).
+    // through to the caller (value semantics). The spill is also what makes
+    // `&param` inlining-safe: the slot is an ordinary instruction the shim
+    // inliner clones with the body, so the spliced copy keeps value
+    // semantics with no name resolution involved (the reference inliner's
+    // address-of-parameter bug cannot exist here); spills that never escape
+    // are mem2reg's to delete, not lowering's to avoid.
     for i in 0..decl.params.len {
         let pty = &sig.params[i]
         if is_by_ref(ctx, pty) {
@@ -548,23 +613,71 @@ type BlockResult = struct {
 
 // Lower a block's statements then its trailing expression. The block's own
 // scope is popped on the way out, so bindings introduced here do not leak
-// into the code that follows.
+// into the code that follows. Each block is also a defer scope: on normal
+// fall-through its defers fire (LIFO) after the trailing value is
+// computed; on a terminated path they already fired at the terminator, so
+// the scope only pops its stack slots.
 fn lower_block(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, block: &BlockExpr) BlockResult {
     let scope = env.mark()
+    ctx.defer_marks.push(ctx.defers.len)
     let r = BlockResult { terminated = false, value = null }
     for i in 0..block.stmts.len {
         if lower_stmt(ctx, bb, env, &block.stmts[i]) {
             r.terminated = true
+            pop_defer_scope(ctx, bb, env, true)
             env.release(scope)
             return r
         }
     }
     if block.trailing.is_some() {
         let e = block.trailing.unwrap()
-        r.value = Some(lower_expr(ctx, bb, env, e))
+        let v = lower_expr(ctx, bb, env, e)
+        // The scope's defers fire between the trailing value's computation
+        // and its use by the enclosing code (spec 4.1: value first, then
+        // defers). A scalar is an SSA value and immune; an aggregate is an
+        // address a defer could write through (`{ defer x.f = 9; x }`), so
+        // it is copied out before the flush - only when this scope actually
+        // has defers pending.
+        let mark = ctx.defer_marks[ctx.defer_marks.len - 1]
+        if ctx.defers.len > mark {
+            let ty = node_ty(ctx.result, expr_span(e))
+            if is_by_ref(ctx, &ty) {
+                let lay = layout_of(&ty, &ctx.result.nominals, ctx.allocator)
+                let slot = bb.stack_slot(lay.size as u64, lay.align as u64)
+                bb.memcpy(slot, v, Operand.IntConst(lay.size as i64))
+                v = slot
+            }
+        }
+        r.value = Some(v)
     }
+    pop_defer_scope(ctx, bb, env, false)
     env.release(scope)
     return r
+}
+
+// Close the innermost defer scope: emit its pending defers unless the
+// path already terminated (the terminator's own flush covered them),
+// then drop them from the stack.
+fn pop_defer_scope(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, terminated: bool) {
+    let mark = ctx.defer_marks.pop().unwrap()
+    if !terminated { emit_defers_down_to(ctx, bb, env, mark) }
+    while ctx.defers.len > mark {
+        let _d = ctx.defers.pop()
+    }
+}
+
+// Emit every pending defer above `target`, innermost first (LIFO),
+// WITHOUT popping - `return` / `break` / `continue` / `?` traverse
+// scopes they do not close; each block pops its own suffix.
+fn emit_defers_down_to(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, target: usize) {
+    let prev = ctx.flushing
+    ctx.flushing = true
+    let i = ctx.defers.len
+    while i > target {
+        i = i - 1
+        let _v = lower_expr(ctx, bb, env, &ctx.defers[i])
+    }
+    ctx.flushing = prev
 }
 
 // A block in expression position: its value, or the placeholder when it
@@ -589,17 +702,19 @@ fn lower_stmt(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, stmt: &Stmt) bool {
         While(w) => lower_while(ctx, bb, env, &w),
         Loop(l) => lower_loop(ctx, bb, env, &l),
         For(f) => lower_for(ctx, bb, env, &f),
-        Break(_) => return lower_jump(ctx, bb, true),
-        Continue(_) => return lower_jump(ctx, bb, false),
+        Break(_) => return lower_jump(ctx, bb, env, true),
+        Continue(_) => return lower_jump(ctx, bb, env, false),
+
+        // `defer expr` - registered on the schedule; it fires at the
+        // enclosing scope's exit and at every escaping jump that passes
+        // through it (`return`, `break`, `continue`, `?`). The pushed
+        // node is a copy; its children live in the module's arena.
+        Defer(d) => ctx.defers.push(d.expr),
 
         // Not lowered yet - named rather than caught by a wildcard, so
         // adding a `Stmt` variant is a compile error here instead of a
         // silent skip.
 
-        // `defer expr` - needs the scope-exit schedule (LIFO across sibling
-        // defers, and run on every exit edge including `return` and `break`).
-        // Dropping it would skip cleanup the source asked for.
-        Defer(_) => { let _u = unlowerable(ctx) },
 
         // `#if(cond) { … } else { … }` - a compile-time conditional that
         // should have been resolved before lowering. Reaching here means it
@@ -611,14 +726,32 @@ fn lower_stmt(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, stmt: &Stmt) bool {
 
 // `break` / `continue`. Outside a loop both are checker errors; lowering
 // emits nothing rather than branching to a label that does not exist.
-fn lower_jump(ctx: &LowerCtx, bb: &BlockBuilder, is_break: bool) bool {
+// The jump escapes every scope opened since loop entry, so their defers
+// fire first (the scopes still pop their own stack suffix - see
+// `emit_defers_down_to`).
+fn lower_jump(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, is_break: bool) bool {
+    // An escape from inside a deferred expression would re-enter the
+    // flush that is emitting it - refuse (see `LowerCtx.flushing`).
+    if ctx.flushing { let _u = unlowerable(ctx); return false }
     if ctx.loops.len == 0 { return false }
-    let frame = &ctx.loops[ctx.loops.len - 1]
+    let frame = ctx.loops[ctx.loops.len - 1]
+    emit_defers_down_to(ctx, bb, env, frame.defer_depth)
     if is_break { bb.br(frame.exit) } else { bb.br(frame.latch) }
     return true
 }
 
+// `return expr` evaluates `expr` FIRST, then fires every active defer
+// (LIFO), then transfers - spec 4.1 "Defer ordering on return". The
+// value is materialized before the flush: a scalar is an SSA value, an
+// aggregate is already copied into the caller's sret buffer.
 fn lower_return(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, r: &ReturnStmt) {
+    // A `return` inside a deferred expression would re-enter the flush
+    // that is emitting it - refuse (see `LowerCtx.flushing`).
+    if ctx.flushing {
+        let _u = unlowerable(ctx)
+        bb.ret_void()
+        return
+    }
     if r.value.is_some() {
         let e = r.value.unwrap()
         let v = lower_expr(ctx, bb, env, &e)
@@ -627,11 +760,14 @@ fn lower_return(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, r: &ReturnStmt) {
         // return slot for it.
         if ctx.sret.is_some() {
             bb.memcpy(ctx.sret.unwrap(), v, Operand.IntConst(ctx.ret_size as i64))
+            emit_defers_down_to(ctx, bb, env, 0)
             bb.ret_void()
             return
         }
+        emit_defers_down_to(ctx, bb, env, 0)
         bb.ret(v)
     } else {
+        emit_defers_down_to(ctx, bb, env, 0)
         bb.ret_void()
     }
 }
@@ -715,6 +851,9 @@ fn init_is_fresh(expr: &Expr) bool {
         StructLit(_) => true,
         Call(_) => true,
         Lit(_) => true,
+        // The desugared block's value is its trailing `to_string()`
+        // call's sret buffer - fresh by the `Call` rule above.
+        InterpolatedString(_) => true,
         _ => false,
     }
 }
@@ -749,9 +888,10 @@ fn lower_expr(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, expr: &Expr) Operand
         // and a slot to build into, like `StructLit` already has.
         ArrayLit(_) => unlowerable(ctx),
         TupleLit(_) => unlowerable(ctx),
-        // `$"…"` - needs the data segment for the literal pieces and a
-        // formatting call per interpolation.
-        InterpolatedString(_) => unlowerable(ctx),
+        // `$"…"` - the checker desugared it to a StringBuilder block
+        // (RFC-004); replay that block. No recorded desugar (a `$sb"…"`
+        // whose target wasn't an identifier) refuses.
+        InterpolatedString(is) => lower_interpolation(ctx, bb, env, &is),
         // `a?.b` - a branch on an optional plus a desugaring the checker
         // has not recorded (3 measured sites - rewritable-away).
         NullPropagation(_) => unlowerable(ctx),
@@ -767,6 +907,18 @@ fn lower_expr(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, expr: &Expr) Operand
         // part of the milestone scaffold - this one stays.
         Error(_) => { ctx.blocked = true; Operand.IntConst(0) },
     }
+}
+
+// `$"…"` / `$sb"…"` - lower the checker-recorded StringBuilder desugar
+// (see checker.f::check_interpolation). The block is ordinary AST whose
+// nodes carry checker-recorded types and call picks under synthetic ids,
+// so the normal block path does all the work; its value is the
+// `to_string()` result (an aggregate address) for the owned form, the
+// placeholder for the void into-builder form.
+fn lower_interpolation(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, is: &InterpolatedStringExpr) Operand {
+    let blk = ctx.result.get_desugar(node_id_of(is.span))
+    if blk.is_none() { return unlowerable(ctx) }
+    return lower_block_value(ctx, bb, env, blk.unwrap())
 }
 
 // Control flow (M3)
@@ -872,7 +1024,7 @@ fn lower_while(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, w: &WhileStmt) {
     bb.br_if(cond, body.label(), exit.label())
 
     bb.move_to(&body)
-    ctx.loops.push(LoopFrame { latch = head.label(), exit = exit.label() })
+    ctx.loops.push(LoopFrame { latch = head.label(), exit = exit.label(), defer_depth = ctx.defers.len })
     let r = lower_block(ctx, bb, env, &w.body)
     let _f = ctx.loops.pop()
     if !r.terminated { bb.br(head.label()) }
@@ -889,7 +1041,7 @@ fn lower_loop(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, l: &LoopStmt) {
 
     bb.br(head.label())
     bb.move_to(&head)
-    ctx.loops.push(LoopFrame { latch = head.label(), exit = exit.label() })
+    ctx.loops.push(LoopFrame { latch = head.label(), exit = exit.label(), defer_depth = ctx.defers.len })
     let r = lower_block(ctx, bb, env, &l.body)
     let _f = ctx.loops.pop()
     if !r.terminated { bb.br(head.label()) }
@@ -951,7 +1103,7 @@ fn lower_for_range(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, f: &ForStmt, rn
     let iv_slot = alloc_slot(bb, ir)
     bb.store(ir, iv, iv_slot)
     env.bind_slot(f.var_name, iv_slot, ir, ity)
-    ctx.loops.push(LoopFrame { latch = latch.label(), exit = exit.label() })
+    ctx.loops.push(LoopFrame { latch = latch.label(), exit = exit.label(), defer_depth = ctx.defers.len })
     let r = lower_block(ctx, bb, env, &f.body)
     let _fr = ctx.loops.pop()
     env.release(scope)
@@ -1291,9 +1443,12 @@ fn pattern_binds(pat: &Pattern) bool {
 }
 
 // Only the literal forms with a FIR constant can be compared against.
+// Strings are the exception with a value but no constant - comparing one
+// is a call to `String ==`, which operator dispatch does not record yet.
 fn literal_testable(v: &LiteralValue) bool {
     return v.* match {
         Int(_) => true,
+        Float(_) => true,
         Bool(_) => true,
         Char(_) => true,
         Byte(_) => true,
@@ -1638,6 +1793,9 @@ fn lower_coalesce(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, c: &CoalesceExpr
 // specialization (M10), so the lookup refuses and the transitive pass
 // takes the caller with it, like every other generic call today.
 fn lower_try(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, t: &TryExpr) Operand {
+    // `?` inside a deferred expression (E2091 in the reference) would
+    // re-enter the flush that is emitting it - refuse.
+    if ctx.flushing { return unlowerable(ctx) }
     let op = ctx.result.get_operator(node_id_of(t.span))
     if op.is_none() { return unlowerable(ctx) }
     let o = op.unwrap()
@@ -1678,15 +1836,20 @@ fn lower_try(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, t: &TryExpr) Operand 
     let ret_bb = fb.block(fresh_label(bb, "try_ret", ctx.allocator))
     bb.br_if(is_cont, cont_bb.label(), ret_bb.label())
 
-    // The early return, mirroring `lower_return`'s sret/scalar split.
+    // The early return, mirroring `lower_return`'s sret/scalar split -
+    // including the defer flush: `?` escapes every open scope, so the
+    // value materializes first, then all active defers fire.
     // Both variants' single payloads sit at the shared payload offset.
     bb.move_to(&ret_bb)
     let raddr = bb.gep(res, Operand.IntConst(el.payload_offset as i64))
     if ctx.sret.is_some() {
         bb.memcpy(ctx.sret.unwrap(), raddr, Operand.IntConst(ctx.ret_size as i64))
+        emit_defers_down_to(ctx, bb, env, 0)
         bb.ret_void()
     } else {
-        bb.ret(bb.load(ir_of(&ret_ty), raddr))
+        let rv = bb.load(ir_of(&ret_ty), raddr)
+        emit_defers_down_to(ctx, bb, env, 0)
+        bb.ret(rv)
     }
 
     bb.move_to(&cont_bb)
@@ -2115,13 +2278,104 @@ fn is_byte_slice_ty(ctx: &LowerCtx, ty: &Ty) bool {
 }
 
 fn lower_literal(ctx: &LowerCtx, bb: &BlockBuilder, l: &LiteralExpr) Operand {
-    let is_null = l.value match { Null => true, _ => false }
-    if is_null {
-        let ty = node_ty(ctx.result, l.span)
-        return lower_null(ctx, bb, &ty)
+    l.value match {
+        Null => {
+            let ty = node_ty(ctx.result, l.span)
+            return lower_null(ctx, bb, &ty)
+        },
+        String(s) => return lower_string_lit(ctx, bb, l.span, &s),
+        Float(_) => {
+            // The constant's consumers type their instructions from the
+            // node; a non-float node type (an unresolved var, typically)
+            // would wrap the double in integer arithmetic - silently wrong
+            // bytes, so refuse instead.
+            let ty = node_ty(ctx.result, l.span)
+            if !is_float(prim_of(&ty)) { return unlowerable(ctx) }
+        },
+        _ => {},
     }
     if !literal_testable(&l.value) { return unlowerable(ctx) }
     return lower_literal_value(ctx, &l.value)
+}
+
+// A string literal is a `String { ptr, len }` view over its bytes in the
+// data segment: intern the bytes as a global, then build the view into a
+// stack slot exactly like a struct literal - per-field stores at the
+// layout's offsets, the slot pointer is the value.
+fn lower_string_lit(ctx: &LowerCtx, bb: &BlockBuilder, sp: SourceSpan, s: &StringLiteral) Operand {
+    let ty = node_ty(ctx.result, sp)
+    // The node must actually be `core.string.String` - handing these two
+    // fields to any other recorded type would misread its layout.
+    if !is_string_ty(ctx, &ty) { return unlowerable(ctx) }
+    let interned = intern_string(ctx, s.text)
+    if interned.is_none() { return unlowerable(ctx) }
+    let e = interned.unwrap()
+
+    let st_opt = resolve_struct(&ty, &ctx.result.nominals, ctx.allocator)
+    if st_opt.is_none() { return unlowerable(ctx) }
+    let st = st_opt.unwrap()
+    let pi = field_index(&st.def, "ptr")
+    let li = field_index(&st.def, "len")
+    if pi < 0 or li < 0 { return unlowerable(ctx) }
+
+    let slot = bb.stack_slot(st.layout.size as u64, st.layout.align as u64)
+    let pp = bb.gep(slot, Operand.IntConst(st.layout.offsets[pi as usize] as i64))
+    bb.store(IrType.Ptr, Operand.GlobalRef(e.name), pp)
+    let lp = bb.gep(slot, Operand.IntConst(st.layout.offsets[li as usize] as i64))
+    bb.store(IrType.I64, Operand.IntConst(e.len as i64), lp)
+    return slot
+}
+
+// The data-segment global for a literal's decoded bytes, minting one on
+// first sight. Keyed by the RAW source text: repeat literals (the common
+// case - 6,700 sites, heavy repetition) intern with zero decode work, at
+// the cost of duplicate globals for two spellings of the same bytes.
+// Returns null only when the text has a malformed escape.
+//
+// The decoded buffer, the null-terminated copy, and the global's name are
+// deliberately leaked - the IrModule references them for the rest of the
+// build, same as `fresh_label`'s labels.
+fn intern_string(ctx: &LowerCtx, raw: String) StrData? {
+    let hit = ctx.strings.get(raw)
+    if hit.is_some() { return hit }
+
+    let decoded = decode_string_text(raw, ctx.allocator)
+    if decoded.is_none() { return null }
+    let d = decoded.unwrap()
+
+    // Data-segment bytes: decoded content plus a null terminator, so the
+    // `ptr` field satisfies String's C-FFI contract (core/string.f).
+    let buf = string_builder(d.len + 1, ctx.allocator)
+    buf.append(d.as_view())
+    buf.append_byte(0u8)
+    let bytes = buf.to_string()
+
+    let nb = string_builder(12, ctx.allocator)
+    nb.append("str_")
+    nb.append(ctx.strings.len())
+    let name = nb.to_string()
+    nb.deinit()
+
+    ctx.str_globals.push(Global {
+        name = name.as_view(),
+        size = (d.len + 1) as u64,
+        align = 1u64,
+        init_bytes = Some(bytes.as_view().as_raw_bytes()),
+    })
+    let entry = StrData { name = name.as_view(), len = d.len }
+    ctx.strings.set(raw, entry)
+    d.deinit()
+    return Some(entry)
+}
+
+// Move the interned string globals into the module once the walk is done.
+// Part of `lower_module` / `lower_program`, split out so both share it.
+fn flush_strings(m: &IrModule, ctx: &LowerCtx) {
+    for i in 0..ctx.str_globals.len {
+        m.add_global(ctx.str_globals[i])
+    }
+    ctx.str_globals.deinit()
+    ctx.strings.deinit()
 }
 
 // `null` is `Option.None` of the node's type. The niche form is the null
@@ -2145,11 +2399,12 @@ fn lower_null(ctx: &LowerCtx, bb: &BlockBuilder, ty: &Ty) Operand {
 fn lower_literal_value(ctx: &LowerCtx, v: &LiteralValue) Operand {
     return v.* match {
         Int(i) => Operand.IntConst(parse_int(i.text)),
+        Float(f) => Operand.FloatConst(parse_float(f.text)),
         Bool(b) => Operand.IntConst(if b.value { 1 } else { 0 }),
         Char(c) => char_const(ctx, c.text),
         Byte(by) => char_const(ctx, by.text),
-        // Float and String lower later (floats need a literal parser;
-        // strings need the data segment). Null is type-directed - see
+        // String is handled by `lower_string_lit` before this is reached
+        // (and is not testable in patterns). Null is type-directed - see
         // `lower_null` and the null arm of `literal_test`.
         _ => Operand.IntConst(0),
     }
@@ -2507,6 +2762,70 @@ fn digit_val(c: u8) i64 {
     if c >= 'a' and c <= 'f' { return ((c - 'a') + 10) as i64 }
     if c >= 'A' and c <= 'F' { return ((c - 'A') + 10) as i64 }
     return 0
+}
+
+// Parse a float literal's source text (`3.14`, `1.5e10`, `1_000.5`, with
+// `_` digit separators) into its f64 value. Suffixes are stripped by the
+// lexer, so `text` is the numeric form only.
+//
+// ponytail: digit-by-digit accumulation - exact while the mantissa fits
+// 2^53 and the power of ten stays within 10^22, which covers real source
+// literals; a 20-significant-digit literal may land an ulp or two off the
+// correctly-rounded value. Upgrade to a strtod-grade algorithm if a
+// literal ever needs that last ulp.
+fn parse_float(text: String) f64 {
+    let i: usize = 0
+    let mant: f64 = 0.0
+    while i < text.len {
+        const c = text[i]
+        if c == '_' { i = i + 1; continue }
+        if c < '0' or c > '9' { break }
+        mant = mant * 10.0 + (digit_val(c) as f64)
+        i = i + 1
+    }
+    let scale: i64 = 0
+    if i < text.len and text[i] == '.' {
+        i = i + 1
+        while i < text.len {
+            const c = text[i]
+            if c == '_' { i = i + 1; continue }
+            if c < '0' or c > '9' { break }
+            mant = mant * 10.0 + (digit_val(c) as f64)
+            scale = scale - 1
+            i = i + 1
+        }
+    }
+    if i < text.len and (text[i] == 'e' or text[i] == 'E') {
+        i = i + 1
+        let neg_exp = false
+        if i < text.len and (text[i] == '+' or text[i] == '-') {
+            neg_exp = text[i] == '-'
+            i = i + 1
+        }
+        let e: i64 = 0
+        while i < text.len {
+            const c = text[i]
+            if c == '_' { i = i + 1; continue }
+            if c < '0' or c > '9' { break }
+            e = e * 10 + digit_val(c)
+            i = i + 1
+        }
+        if neg_exp { scale = scale - e } else { scale = scale + e }
+    }
+    if scale == 0 { return mant }
+    // Divide for negative scales rather than multiply by a tiny power:
+    // 10^-k is inexact, 10^k (k <= 22) is exact, and one division rounds
+    // once.
+    let k = scale
+    if k < 0 { k = 0 - k }
+    let p: f64 = 1.0
+    let j: i64 = 0
+    while j < k {
+        p = p * 10.0
+        j = j + 1
+    }
+    if scale < 0 { return mant / p }
+    return mant * p
 }
 
 // A char/byte literal's codepoint constant. The lexer validates the form
@@ -3798,4 +4117,233 @@ test "postfix ? through a generic op_try refuses until specialization" {
     let unit = analyze(from_view("pub type TryResult = enum(T, R) { Continue(T), Return(R) }\ntype Box = enum(T) { Empty, Full(T) }\nfn op_try(self: Box($T)) TryResult(T, Box($U)) { return self match { Full(v) => TryResult.Continue(v), Empty => TryResult.Return(Empty) } }\nfn f(b: Box(i32)) Box(i32) { let v = b? return Full(v) }"), "core.try")
     let m = lower_module(&unit.module, &unit.result)
     assert_true(was_skipped(&m, "f__"), "a generic op_try has no symbol yet - the caller refuses, it does not guess")
+}
+
+// M9: the data segment - string and float literals.
+
+// How many stores in `f` write a global's address.
+fn store_global_count(f: &Function) usize {
+    let n: usize = 0
+    for b in 0..f.blocks.len {
+        let instrs = &f.blocks[b].instrs
+        for i in 0..instrs.len {
+            instrs[i] match {
+                Store(s) => {
+                    s.value match {
+                        GlobalRef(_) => { n = n + 1 },
+                        _ => {},
+                    }
+                },
+                _ => {},
+            }
+        }
+    }
+    return n
+}
+
+// The float constant `f` returns directly, or null.
+fn ret_float_const(f: &Function) f64? {
+    for b in 0..f.blocks.len {
+        let hit: f64? = f.blocks[b].terminator match {
+            Ret(r) => r match {
+                Some(v) => v match { FloatConst(x) => Some(x), _ => null },
+                None => null,
+            },
+            _ => null,
+        }
+        if hit.is_some() { return hit }
+    }
+    return null
+}
+
+test "a string literal builds a {ptr,len} view over a data-segment global" {
+    let unit = analyze(from_view("pub type String = struct { ptr: &u8, len: usize }\nfn f() String { return \"hi\" }"), "core.string")
+    let m = lower_module(&unit.module, &unit.result)
+    let fi = find_fn(&m, "f")
+    assert_true(fi < m.functions.len, "a function returning a string literal lowers")
+    assert_eq(m.globals.len, 1 as usize, "one global holds the bytes")
+    assert_true(m.globals[0].size == 3u64, "two content bytes plus the null terminator")
+    let bytes = m.globals[0].init_bytes.unwrap()
+    assert_true(bytes[0] == 'h', "the decoded content is in the data segment")
+    assert_true(bytes[2] == 0, "null-terminated for String's C-FFI contract")
+    let f = &m.functions[fi]
+    assert_eq(store_global_count(f), 1 as usize, "the ptr field stores the global's address")
+    assert_eq(store_const_count(f, 2), 1 as usize, "the len field stores the decoded length")
+}
+
+test "identical string literals share one global; distinct ones do not" {
+    let unit = analyze(from_view("pub type String = struct { ptr: &u8, len: usize }\nfn f() String { return \"hi\" }\nfn g() String { return \"hi\" }\nfn h() String { return \"yo\" }"), "core.string")
+    let m = lower_module(&unit.module, &unit.result)
+    assert_eq(m.globals.len, 2 as usize, "hi interns once across functions; yo gets its own global")
+}
+
+test "string escapes decode before reaching the data segment" {
+    let unit = analyze(from_view("pub type String = struct { ptr: &u8, len: usize }\nfn f() String { return \"a\\nb\" }"), "core.string")
+    let m = lower_module(&unit.module, &unit.result)
+    assert_eq(m.globals.len, 1 as usize, "one global")
+    assert_true(m.globals[0].size == 4u64, "three decoded bytes plus the terminator")
+    let bytes = m.globals[0].init_bytes.unwrap()
+    assert_true(bytes[1] == 10, "the escape became the raw newline byte")
+    let f = &m.functions[find_fn(&m, "f")]
+    assert_eq(store_const_count(f, 3), 1 as usize, "len counts decoded bytes, not source bytes")
+}
+
+test "a float literal lowers to its parsed constant" {
+    let unit = analyze(from_view("fn f() f64 { return 1.5 }\nfn g() f64 { return 3.5e2 }\nfn h() f64 { return 2.5e-2 }"), "test.f")
+    let m = lower_module(&unit.module, &unit.result)
+    let rf = ret_float_const(&m.functions[find_fn(&m, "f")])
+    assert_true(rf.is_some() and rf.unwrap() == 1.5, "1.5 parses exactly")
+    let rg = ret_float_const(&m.functions[find_fn(&m, "g")])
+    assert_true(rg.is_some() and rg.unwrap() == 350.0, "the exponent scales the mantissa")
+    let rh = ret_float_const(&m.functions[find_fn(&m, "h")])
+    assert_true(rh.is_some() and rh.unwrap() == 0.025, "a negative exponent divides once")
+}
+
+test "a float literal whose type never resolves refuses rather than guess" {
+    // `x` is never constrained, so the literal's node type stays a var -
+    // emitting the double into integer-typed arithmetic would be silently
+    // wrong bytes.
+    let unit = analyze(from_view("fn f() i32 { let x = 1.5 return 0 }"), "test.f")
+    let m = lower_module(&unit.module, &unit.result)
+    assert_true(was_skipped(&m, "f"), "an unresolved literal type refuses the function")
+}
+
+test "a float literal pattern compares with the scrutinee" {
+    let unit = analyze(from_view("fn f(x: f64) i32 { return x match { 1.5 => 1, _ => 0 } }"), "test.f")
+    let m = lower_module(&unit.module, &unit.result)
+    let fi = find_fn_starting(&m, "f__")
+    assert_true(fi < m.functions.len, "a float literal pattern lowers")
+    assert_true(compare_count(&m.functions[fi]) >= 1 as usize, "the arm tests the scrutinee")
+}
+
+// M9: defer.
+
+// Position of the first Store writing constant `v` across all blocks,
+// counting instructions in block order; or a large sentinel.
+fn store_const_pos(f: &Function, v: i64) usize {
+    let pos: usize = 0
+    for b in 0..f.blocks.len {
+        let instrs = &f.blocks[b].instrs
+        for i in 0..instrs.len {
+            let hit = instrs[i] match {
+                Store(s) => s.value match {
+                    IntConst(n) => n == v,
+                    _ => false,
+                },
+                _ => false,
+            }
+            if hit { return pos }
+            pos = pos + 1
+        }
+    }
+    return pos + 1000000
+}
+
+// Position of the Load producing SSA id `id`, same numbering.
+fn load_result_pos(f: &Function, id: u32) usize {
+    let pos: usize = 0
+    for b in 0..f.blocks.len {
+        let instrs = &f.blocks[b].instrs
+        for i in 0..instrs.len {
+            let hit = instrs[i] match {
+                Load(l) => l.result == id,
+                _ => false,
+            }
+            if hit { return pos }
+            pos = pos + 1
+        }
+    }
+    return pos + 1000000
+}
+
+fn call_count_in(f: &Function) usize {
+    let n: usize = 0
+    for b in 0..f.blocks.len {
+        let instrs = &f.blocks[b].instrs
+        for i in 0..instrs.len {
+            instrs[i] match {
+                Call(_) => { n = n + 1 },
+                _ => {},
+            }
+        }
+    }
+    return n
+}
+
+test "a defer fires on return, after the return value is read" {
+    let unit = analyze(from_view("fn f(p: &i32) i32 { defer p.* = 2 return p.* }"), "test.f")
+    let m = lower_module(&unit.module, &unit.result)
+    let fi = find_fn_starting(&m, "f__")
+    assert_true(fi < m.functions.len, "a function with defer lowers")
+    let f = &m.functions[fi]
+    assert_eq(store_const_count(f, 2), 1 as usize, "the deferred store is emitted once")
+    // Spec 4.1: `return expr` evaluates the expression first, then defers.
+    let ret_load = load_result_pos(f, returned_local(f))
+    assert_true(ret_load < store_const_pos(f, 2), "the returned load precedes the deferred store")
+}
+
+test "sibling defers fire in LIFO order at scope exit" {
+    let unit = analyze(from_view("fn f(p: &i32) { defer p.* = 1 defer p.* = 2 }"), "test.f")
+    let m = lower_module(&unit.module, &unit.result)
+    let f = &m.functions[find_fn_starting(&m, "f__")]
+    assert_true(store_const_pos(f, 2) < store_const_pos(f, 1), "the later defer fires first")
+}
+
+test "a defer in an inner block fires at that block's exit, not the function's" {
+    let unit = analyze(from_view("fn f(p: &i32) { { defer p.* = 1 } p.* = 3 }"), "test.f")
+    let m = lower_module(&unit.module, &unit.result)
+    let f = &m.functions[find_fn_starting(&m, "f__")]
+    assert_true(store_const_pos(f, 1) < store_const_pos(f, 3), "the inner scope's defer fires before later statements")
+}
+
+test "break fires the defers of the scopes it escapes" {
+    let unit = analyze(from_view("fn f(p: &i32, c: bool) { while c { defer p.* = 1 break } }"), "test.f")
+    let m = lower_module(&unit.module, &unit.result)
+    let fi = find_fn_starting(&m, "f__")
+    assert_true(fi < m.functions.len, "defer + break lowers")
+    assert_eq(store_const_count(&m.functions[fi], 1), 1 as usize, "the loop-body defer fires exactly once on the break edge")
+}
+
+test "the ? early return fires active defers on both paths" {
+    let unit = analyze(from_view("pub type TryResult = enum(T, R) { Continue(T), Return(R) }\ntype Res = enum { Bad, Good(i32) }\nfn op_try(self: Res) TryResult(i32, Res) { return self match { Good(v) => TryResult.Continue(v), Bad => TryResult.Return(Bad) } }\nfn f(r: Res, p: &i32) Res { defer p.* = 7 let v = r? return Good(v + 1) }"), "core.try")
+    let m = lower_module(&unit.module, &unit.result)
+    let fi = find_fn_starting(&m, "f__")
+    assert_true(fi < m.functions.len, "defer + ? lowers")
+    assert_eq(store_const_count(&m.functions[fi], 7), 2 as usize, "the defer fires on the early-return path and the normal path")
+}
+
+test "an escape from inside a deferred expression refuses" {
+    // `return` inside a defer would re-enter the flush emitting it - the
+    // reference rejects the `?` flavor as E2091; lowering refuses both
+    // rather than loop or emit a wrong schedule.
+    let unit = analyze(from_view("fn f() i32 { defer { return 1 } return 0 }"), "test.f")
+    let m = lower_module(&unit.module, &unit.result)
+    assert_true(was_skipped(&m, "f"), "return-inside-defer refuses the function")
+}
+
+// M9: interpolation lowers through the checker-recorded desugar.
+
+test "an interpolated string lowers through its recorded desugar" {
+    let srcs: List(OwnedString) = list(4)
+    srcs.push(from_view("pub type Option = enum(T) { None, Some(T) }"))
+    srcs.push(from_view("pub type String = struct { ptr: &u8, len: usize }"))
+    srcs.push(from_view("import core.string\nimport core.option\npub type SB = struct { n: usize }\npub fn string_builder(capacity: usize, allocator: &SB? = null) SB { return SB { n = capacity } }\npub fn append(sb: &SB, text: String) { sb.n = sb.n + text.len }\npub fn append(sb: &SB, v: i64) { sb.n = sb.n + 1 }\npub fn to_string(sb: &SB) String { return \"done\" }\npub fn deinit(sb: &SB) {}"))
+    srcs.push(from_view("import core.string\nimport builder\nfn f(x: i64) String { return $\"v={x}!\" }"))
+    let fqns: List(String) = list(4)
+    fqns.push("core.option")
+    fqns.push("core.string")
+    fqns.push("builder")
+    fqns.push("app")
+    let unit = analyze_source_set(srcs, &fqns)
+    assert_eq(project_error_count(&unit), 0 as usize, "the desugar checks clean")
+
+    let m = lower_program(&unit.modules, &unit.fqns, &unit.result)
+    assert_true(!was_skipped(&m, "app__f__"), "the interpolating function is not refused")
+    let fi = find_fn_starting(&m, "app__f__")
+    assert_true(fi < m.functions.len, "the interpolating function is emitted")
+    // ctor + append("v=") + append(x) + append("!") + to_string + the
+    // deferred deinit: the whole desugar is replayed.
+    assert_eq(call_count_in(&m.functions[fi]), 6 as usize, "all desugared calls emit, deinit included")
+    // "v=", "!", and to_string's own "done" intern like any literal.
+    assert_eq(m.globals.len, 3 as usize, "segment literals land in the data segment")
 }

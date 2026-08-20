@@ -90,7 +90,9 @@ Operands are one of:
 
 - Local SSA value `%v`
 - Integer immediate `42`, `0xff`, `-1`
-- Float immediate `3.14`, `0.0`
+- Float immediate `3.14`, `0.0`, or the hex-float form `0x1.8p+0` — the
+  printer emits the hex form exclusively (exact round-trip; `nan` /
+  `inf` for non-finite)
 - Null pointer `null` (type `ptr`)
 - Global reference `@name` (type `ptr`)
 - Function reference `@func` (type `ptr`)
@@ -459,6 +461,12 @@ Lowering choices:
 - `stack_slot size, align` becomes `_Alignas(align) unsigned char __slotN[size]`
   followed by a `void*` alias for the SSA result.
 - `bitcast` round-trips through `memcpy` for the same aliasing reason.
+- Float constants emit as C99 hexadecimal floating literals
+  (`0x1.921fb54442d18p+1`, via `std.conv.format_f64_hex` / the `a`
+  format spec) - exact by construction, where a decimal rendering would
+  need a shortest-round-trip formatter to preserve every ulp. The
+  generated C already requires C11, so hex floats add no new toolchain
+  demand. Non-finite constants use math.h's `NAN` / `INFINITY`.
 
 Runtime preamble + main wrapping:
 

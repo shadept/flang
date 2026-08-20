@@ -193,6 +193,191 @@ pub fn format_f64(val: f64, buf: u8[], precision: usize = 6, trim_zeros: bool = 
     return Ok(pos)
 }
 
+// The f64's IEEE-754 bit pattern.
+fn f64_bits(v: f64) u64 {
+    let p = &v
+    let q = p as &u64
+    return q.*
+}
+
+fn write_word(buf: u8[], w: String) Result(usize, ConvError) {
+    if buf.len < w.len {
+        return Err(ConvError.BufferTooSmall)
+    }
+    for i in 0..w.len {
+        buf[i] = w[i]
+    }
+    return Ok(w.len)
+}
+
+// Format an f64 as a C99 hexadecimal floating literal:
+// `[-]0x1.<mant>p<±exp>` (normal), `[-]0x0.<mant>p-1022` (denormal),
+// `[-]0x0p+0` (zero); non-finite values write `nan` / `inf` / `-inf`.
+//
+// This is the EXACT representation: the text encodes the bit pattern
+// directly (no decimal rounding anywhere), so parsing it - by a C99
+// compiler or `%a`-aware reader - recovers the identical value. Use it
+// wherever a double must round-trip; `format_f64` and `format_f64_exp`
+// are decimal renderings with finite precision.
+//
+// Required buffer capacity: 25 bytes worst case
+// (sign + "0x1." + 13 mantissa nibbles + "p-1022").
+pub fn format_f64_hex(val: f64, buf: u8[]) Result(usize, ConvError) {
+    const bits = f64_bits(val)
+    const negative = (bits >> 63) != 0
+    const biased = ((bits >> 52) & 0x7FF) as i64
+    let mant = bits & 0xF_FFFF_FFFF_FFFF
+
+    if biased == 0x7FF {
+        if mant != 0 { return write_word(buf, "nan") }
+        if negative { return write_word(buf, "-inf") }
+        return write_word(buf, "inf")
+    }
+
+    let tmp = [0u8; 32]
+    let pos: usize = 0
+    if negative { tmp[pos] = '-'; pos = pos + 1 }
+    tmp[pos] = '0'; pos = pos + 1
+    tmp[pos] = 'x'; pos = pos + 1
+
+    // Leading digit and unbiased exponent: normals are 1.<mant> * 2^(b-1023),
+    // denormals 0.<mant> * 2^-1022, zero is all-zero bits.
+    let exp: i64 = 0
+    if biased == 0 {
+        tmp[pos] = '0'; pos = pos + 1
+        exp = 0 - 1022
+        if mant == 0 { exp = 0 }
+    } else {
+        tmp[pos] = '1'; pos = pos + 1
+        exp = biased - 1023
+    }
+
+    // Mantissa nibbles, high to low, trailing zeros trimmed.
+    if mant != 0 {
+        let nibbles = 13usize
+        while nibbles > 0 and (mant & 0xF) == 0 {
+            mant = mant >> 4
+            nibbles = nibbles - 1
+        }
+        tmp[pos] = '.'; pos = pos + 1
+        let shift = (nibbles - 1) * 4
+        for i in 0..nibbles {
+            const n = ((mant >> ((shift - i * 4) as u64)) & 0xF) as u8
+            tmp[pos] = if n < 10 { '0' + n } else { 'a' - 10 + n }
+            pos = pos + 1
+        }
+    }
+
+    tmp[pos] = 'p'; pos = pos + 1
+    if exp < 0 {
+        tmp[pos] = '-'; pos = pos + 1
+        exp = 0 - exp
+    } else {
+        tmp[pos] = '+'; pos = pos + 1
+    }
+    const elen = format_u64(exp as u64, tmp[pos..]).unwrap()
+    pos = pos + elen
+
+    if buf.len < pos {
+        return Err(ConvError.BufferTooSmall)
+    }
+    let _n = copy_to(tmp[0..pos], buf)
+    return Ok(pos)
+}
+
+// Format an f64 in scientific notation: `[-]d.<precision digits>e±XX`
+// (two exponent digits minimum, more when needed); non-finite values
+// write `nan` / `inf` / `-inf`. `uppercase` selects `E`.
+//
+// Decimal, not exact: the value is scaled by powers of ten in binary
+// floating point, so the 16th-17th significant digit can be off by an
+// ulp or two at extreme magnitudes. 17 significant digits are the most
+// the scaling supports; a larger `precision` pads zeros. For a
+// guaranteed round-trip use `format_f64_hex`.
+//
+// Required buffer capacity: `precision + 9` bytes
+// (sign + digit + '.' + precision + 'e' + sign + 3 exponent digits).
+pub fn format_f64_exp(val: f64, buf: u8[], precision: usize = 6, uppercase: bool = false) Result(usize, ConvError) {
+    if val != val { return write_word(buf, "nan") }
+    if val > 1.7976931348623157e308 { return write_word(buf, "inf") }
+    if val < -1.7976931348623157e308 { return write_word(buf, "-inf") }
+
+    const negative = val < 0.0
+    let d = if negative { 0.0 - val } else { val }
+
+    // Scale into [1, 10). Big steps first so the whole walk is a handful
+    // of roundings (308 = 256 + 32 + 16 + 4), plus single-step loops for
+    // the remainder and for values the big steps overshoot.
+    let exp: i64 = 0
+    if d != 0.0 {
+        if d >= 1e256 { d = d / 1e256; exp = exp + 256 }
+        if d >= 1e128 { d = d / 1e128; exp = exp + 128 }
+        if d >= 1e64 { d = d / 1e64; exp = exp + 64 }
+        if d >= 1e32 { d = d / 1e32; exp = exp + 32 }
+        if d >= 1e16 { d = d / 1e16; exp = exp + 16 }
+        if d < 1e-255 { d = d * 1e256; exp = exp - 256 }
+        if d < 1e-127 { d = d * 1e128; exp = exp - 128 }
+        if d < 1e-63 { d = d * 1e64; exp = exp - 64 }
+        if d < 1e-31 { d = d * 1e32; exp = exp - 32 }
+        if d < 1e-15 { d = d * 1e16; exp = exp - 16 }
+        while d >= 10.0 { d = d / 10.0; exp = exp + 1 }
+        while d < 1.0 { d = d * 10.0; exp = exp - 1 }
+    }
+
+    // Half-ulp-of-last-digit rounding, then re-normalize the carry
+    // (9.9999… rounds up to 10.0).
+    const emit_digits = if precision > 16 { 16usize } else { precision }
+    let round = 0.5
+    for r in 0..emit_digits {
+        round = round / 10.0
+    }
+    if d != 0.0 {
+        d = d + round
+        if d >= 10.0 { d = d / 10.0; exp = exp + 1 }
+    }
+
+    let tmp = [0u8; 64]
+    let pos: usize = 0
+    if negative { tmp[pos] = '-'; pos = pos + 1 }
+    let lead = d as u64
+    tmp[pos] = '0' + (lead as u8); pos = pos + 1
+    d = d - (lead as f64)
+    if precision > 0 {
+        tmp[pos] = '.'; pos = pos + 1
+        for i in 0..precision {
+            if i < emit_digits {
+                d = d * 10.0
+                const digit = d as u64
+                tmp[pos] = '0' + (digit as u8)
+                d = d - (digit as f64)
+            } else {
+                tmp[pos] = '0'
+            }
+            pos = pos + 1
+        }
+    }
+
+    tmp[pos] = if uppercase { 'E' } else { 'e' }
+    pos = pos + 1
+    if exp < 0 {
+        tmp[pos] = '-'; pos = pos + 1
+        exp = 0 - exp
+    } else {
+        tmp[pos] = '+'; pos = pos + 1
+    }
+    if exp < 10 {
+        tmp[pos] = '0'; pos = pos + 1
+    }
+    const elen = format_u64(exp as u64, tmp[pos..]).unwrap()
+    pos = pos + elen
+
+    if buf.len < pos {
+        return Err(ConvError.BufferTooSmall)
+    }
+    let _n = copy_to(tmp[0..pos], buf)
+    return Ok(pos)
+}
+
 // =============================================================================
 // Buffer → Integer
 // =============================================================================

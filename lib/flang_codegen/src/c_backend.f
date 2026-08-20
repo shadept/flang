@@ -27,6 +27,7 @@ import std.string
 import std.string_builder
 import std.test
 import flang_codegen.backend
+import flang_codegen.builder
 import flang_codegen.fir
 
 // =============================================================================
@@ -163,6 +164,9 @@ fn emit_preamble(sb: &StringBuilder) {
     sb.append("#include <string.h>\n")
     sb.append("#include <stdlib.h>\n")
     sb.append("#include <stdio.h>\n")
+    // NAN / INFINITY for non-finite float constants (finite ones emit as
+    // C99 hex-float literals - see `emit_float_const`).
+    sb.append("#include <math.h>\n")
     sb.append("\n")
     // FIR-mandated invariant: arithmetic right shift on signed integers.
     // The standard left this implementation-defined until C23.
@@ -411,11 +415,24 @@ fn emit_operand(op: &Operand, sb: &StringBuilder) {
     op.* match {
         Local(id) => { sb.append("v"); sb.append(id) },
         IntConst(n) => sb.append(n),
-        FloatConst(f) => sb.append(f),
+        FloatConst(f) => emit_float_const(f, sb),
         NullPtr => sb.append("((void*)0)"),
         GlobalRef(name) => { sb.append("((void*)g_"); sb.append(name); sb.append(")") },
         FuncRef(name) => { sb.append("((void*)&"); sb.append(name); sb.append(")") },
     }
+}
+
+// A float constant as C source text. Finite values emit as C99
+// hexadecimal floating literals (`0x1.921fb54442d18p+1`) via the `a`
+// format spec - the exact bit pattern, no decimal rounding anywhere; the
+// generated C already requires C11 (`_Alignas`, `_Static_assert`), so
+// hex floats are free. Non-finite values (a literal can't produce them,
+// but an overflowing `parse_float` can) use math.h's macros.
+fn emit_float_const(v: f64, sb: &StringBuilder) {
+    if v != v { sb.append("NAN"); return }
+    if v > 1.7976931348623157e308 { sb.append("INFINITY"); return }
+    if v < -1.7976931348623157e308 { sb.append("(-INFINITY)"); return }
+    sb.append(v, "a")
 }
 
 // Cast an operand to a given C type. Used pervasively so that integer
@@ -1441,6 +1458,20 @@ test "emits each foreign symbol at most once" {
     translate(&m, &sb)
     assert_true(contains(sb.as_view(), "isatty(int32_t)"), "first declaration emitted")
     assert_true(!contains(sb.as_view(), "isatty(int32_t, int32_t)"), "repeat declaration dropped")
+}
+
+test "a float constant is emitted as an exact C99 hex-float literal" {
+    let fb = function("f", Some(IrType.F64))
+    let bb = fb.entry()
+    bb.ret(float(1.5))
+    let m = module()
+    defer m.deinit()
+    m.add_function(fb.finish())
+
+    let sb = string_builder(1024)
+    defer sb.deinit()
+    translate(&m, &sb)
+    assert_true(contains(sb.as_view(), "0x1.8p+0"), "1.5 travels as its exact bits, not a truncated decimal")
 }
 
 // Spawn the compiler with the prepared argv + env. Returns the exit code.

@@ -214,6 +214,42 @@ pub fn analyze_project(ctx: &ResolveCtx, entries: &List(OwnedString), allocator:
     }
 }
 
+// The multi-module analogue of `analyze` for in-memory sources: the given
+// sources ARE the module set - no import discovery, no file IO. `fqns[i]`
+// is both `srcs[i]`'s module FQN and its diagnostic label. Test support:
+// lowering suites use it to place well-known modules (core.option,
+// core.string) next to the module under test. Consumes `srcs`.
+pub fn analyze_source_set(srcs: List(OwnedString), fqns: &List(String), allocator: &Allocator? = null) AnalyzedProject {
+    let diagnostics: List(Diagnostic) = list(0, allocator)
+    let owned_fqns: List(OwnedString) = list(fqns.len, allocator)
+    let file_paths: List(OwnedString) = list(fqns.len, allocator)
+    let modules: List(Module) = list(srcs.len, allocator)
+    for i in 0..srcs.len {
+        modules.push(parse_to_module(srcs[i].as_view(), i as i32, &diagnostics, allocator))
+        owned_fqns.push(from_view(fqns[i]))
+        file_paths.push(from_view(fqns[i]))
+    }
+
+    let checked = count_errors(&diagnostics) == 0
+    let result = empty_result(allocator)
+    if checked {
+        let chk = checker(allocator)
+        result = check_all(&chk, &modules, fqns)
+        drain_diagnostics(&diagnostics, &chk.diagnostics)
+        chk.deinit()
+    }
+
+    return AnalyzedProject {
+        sources = srcs,
+        fqns = owned_fqns,
+        file_paths = file_paths,
+        modules = modules,
+        result = result,
+        checked = checked,
+        diagnostics = diagnostics,
+    }
+}
+
 pub fn deinit(self: &AnalyzedProject) {
     self.diagnostics.deinit()
     for i in 0..self.modules.len {

@@ -10,6 +10,7 @@ import std.allocator
 import std.dict
 import std.list
 import std.option
+import flang_parser.ast
 import flang_typer.type
 import flang_typer.node_id
 import flang_typer.inference_results
@@ -22,6 +23,9 @@ pub type TypeCheckResult = struct {
     resolved_targets: Dict(NodeId, ResolvedTarget)
     instantiated_types: List(Ty)
     specializations: List(NodeId)
+    // Checker-synthesized replacement AST (interpolation's StringBuilder
+    // desugar) keyed by the replaced node - see InferenceResults.desugars.
+    desugars: Dict(NodeId, &BlockExpr)
     nominals: NominalRegistry
     functions: FunctionRegistry
 }
@@ -39,6 +43,7 @@ pub fn empty_result(allocator: &Allocator? = null) TypeCheckResult {
         resolved_targets = dict(allocator),
         instantiated_types = list(0, allocator),
         specializations = list(0, allocator),
+        desugars = dict(allocator),
         nominals = nominal_registry(allocator),
         functions = function_registry(allocator),
     }
@@ -54,4 +59,8 @@ pub fn get_target(self: &TypeCheckResult, id: NodeId) ResolvedTarget? {
 
 pub fn get_operator(self: &TypeCheckResult, id: NodeId) ResolvedOperator? {
     return self.resolved_ops.get(id)
+}
+
+pub fn get_desugar(self: &TypeCheckResult, id: NodeId) &BlockExpr? {
+    return self.desugars.get(id)
 }

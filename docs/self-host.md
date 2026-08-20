@@ -51,7 +51,7 @@ cheaper than implementing it.
 | CST parsing | ✅ | round-trips every in-tree source byte-identical via `flang_fmt` |
 | AST projection | ✅ | `flang_parser.projector` |
 | Name resolution + imports | ✅ | project-wide; type names resolve program-wide (import-strict later) |
-| Type inference (HM) | ⚠️ | 0 errors self-checking compiler + stdlib (98 modules), but 5 of 24 expression forms are unvisited and rejection power lags the reference — see the type-checking section below |
+| Type inference (HM) | ⚠️ | 0 errors self-checking compiler + stdlib (98 modules), but 3 expression forms are unvisited and rejection power lags the reference — see the type-checking section below |
 | AST → FIR lowering | ⚠️ | the subset below; everything outside refuses, never miscompiles |
 | C backend (FIR → C99 → exe) | ✅ | for all FIR the lowering emits; links stdlib C runtime sidecars |
 | Full self-build | ❌ | every lowered function compiles and links; `main` still refuses (see below) |
@@ -78,7 +78,7 @@ not mean it *rejects* what the reference rejects. Two axes:
 | Unary ops (`-x`, `!x`, `~x`) | ✅ | `!` 191/28, `~` 35/12, neg ~5 | M7: `!` unifies with bool; `-`/`~` type as their operand. Numeric-ness of `-`/`~` not yet *enforced* (rejection-power gap); no `op_neg`/`op_not`/`op_bnot` dispatch to user types (M11, with binary — zero in-tree users today) |
 | Lambdas | ❌ | 23/5 | unvisited subtree |
 | Array literals `[a, b]` | ❌ | ~52/9 | unvisited subtree |
-| Interpolated strings `$"…"` | ❌ | 60/15 | unvisited subtree |
+| Interpolated strings `$"…"` | ✅ | 60/15 | M9: the reference's StringBuilder desugar, synthesized as real AST under collision-free synthetic node ids and checked through ordinary overload resolution (`append` picks recorded per part; format specs route to the spec-taking overload). The block is stored in `result.desugars`; lowering replays it. Stdlib- and import-dependent by design (`import std.string_builder`) |
 | `a?` (op_try), `a ?? b` | ✅ | `?` 28/13 · `??` 5/4 | M8: `?` resolves `op_try`, requires `TryResult(T, R)`, unifies `R` with the enclosing return (E2090/E2092); `??` has the reference's two built-in Option shapes (unwrap and chain) |
 | `a?.b` | ❌ | 3/3 — rewritable-away | unvisited subtree |
 | Specialization (eager monomorphization of generic fns) | ❌ | everywhere (`List`/`Dict`) | `SpecializationRegistry` exists (dedup cache, clone-and-requeue design) but **nothing calls `ensure_specialization` yet** — `result.specializations` is always empty. Generic bodies are checked once, generically, with call-resolution diagnostics *silenced*; per-clone re-checking un-silences them |
@@ -136,7 +136,7 @@ current-state summary.
 | `while`, `loop`, `break`, `continue` | ✅ | everywhere | |
 | `for` over integer ranges | ✅ | everywhere | induction var as block param |
 | `for` over iterators (iterator protocol) | ❌ | 25/19 | needs generic `next()` calls → monomorphization |
-| `defer` | ❌ | 190/20 | needs LIFO scope-exit schedule on every exit edge |
+| `defer` | ✅ | 190/20 | M9: per-function schedule + per-scope marks (the reference's model). Fires LIFO on scope exit; `return` / `break` / `continue` / `?` emit down to their target depth without popping; `return` evaluates its value first (spec 4.1). A block's trailing aggregate value is copied out before its own defers fire. Escapes from inside a deferred expression (`defer { return }`, `?` in defer - E2091) refuse |
 
 ## Lowering — expressions
 
@@ -144,9 +144,9 @@ current-state summary.
 |---|---|---|---|
 | Int / bool / char / byte literals | ✅ | everywhere | chars decode escapes + UTF-8 |
 | `null` | ✅ | everywhere | niche → null ptr; tagged Option → zeroed buffer (None = tag 0) |
-| Float literals | ❌ | 115/11 (dict load factor is in `main`'s graph) | needs a float literal parser |
-| String literals | ❌ | ~6700 (largest count in the codebase) | needs the data segment |
-| String interpolation `$"…"` | ❌ | 60/15 | data segment + formatting calls |
+| Float literals | ✅ | 115/11 | M9: digit-accumulation parser (exact for real-source literals); the C backend emits constants as exact C99 hex-float literals (`format_f64_hex` / the `a` spec), never a truncated decimal. A literal whose node type stays an unresolved var refuses |
+| String literals | ✅ | ~6700 (largest count in the codebase) | M9: decoded bytes interned program-wide into null-terminated data-segment globals (keyed by raw text); each use builds a `String {ptr,len}` view into a stack slot via the struct's real layout. A literal whose node type is not `String` refuses |
+| String interpolation `$"…"` | ✅ | 60/15 | M9: lowering replays the checker-recorded desugar block (`result.desugars`) - ctor at full arity, appends, deferred `deinit`, `to_string`. The mechanism is verified end-to-end with in-subset builder bodies; against the real stdlib the desugared calls refuse transitively until M10 lowers the builder's generic internals |
 | Arithmetic / bitwise / comparison / short-circuit on primitives | ✅ | everywhere | |
 | Unary ops | ✅ | `!` 191/28 | M7: operands are checked now, so the width/float reads are real (`-x` on f64 emits `fneg`) |
 | Operators dispatching to user `op_*` fns (aggregate operands) | ❌ | String `==` everywhere | checker records `ResolvedOperator` only on index nodes today |
@@ -173,7 +173,7 @@ current-state summary.
 | Feature | Status | Self-host need | Notes |
 |---|---|---|---|
 | Wildcard, variable bindings | ✅ | everywhere | aggregate bindings copy (value semantics) |
-| Int / bool / char / byte / `null` literals | ✅ | everywhere | |
+| Int / bool / char / byte / float / `null` literals | ✅ | everywhere | float patterns compare with ordered fcmp (M9); string patterns refuse — comparing one is a `String ==` call, which operator dispatch does not record yet |
 | Ranges `lo..hi` | ✅ | used | |
 | Enum variants, single payload | ✅ | everywhere | tagged + niche |
 | Enum variants, multi payload | ❌ | **2/2 — rewritable-away** (or implement with per-payload offsets) | |
@@ -214,8 +214,18 @@ docs/known-issues.md for the live instance of that failure).
    and lowers through the recorded `op_try` pick (generic impls refuse
    until M10, like every generic call); `a ?? b` checks and lowers
    fully. Self-check stayed at 0 errors with both subtrees visited.
-3. **M9 — data segment**: string literals (6,700 sites), float
-   literals, then interpolation (typer: `InterpolatedString` too).
+3. ~~**M9 — data segment**~~ ✅ landed 2026-08-19: string literals
+   (interned into null-terminated data-segment globals, `{ptr,len}`
+   view built per use — 565 globals in the self-build), float literals
+   (parser + exact bit-pattern C emission), `defer` (full scope-exit
+   schedule, all escape edges), and string interpolation via the
+   reference's check-time StringBuilder desugar (synthesized AST under
+   synthetic node ids, stored in `result.desugars`, replayed by
+   lowering; the desugar synthesizes the ctor at full arity so it needs
+   no defaulted-argument materialization). Also fixed along the way:
+   the projector dropped `{x:04}` format specs (never attached to the
+   hole). Self-check stayed at 0 errors — all 60 in-tree interpolation
+   sites resolve their desugars against the real stdlib.
 4. **M10 — specialization**: feed the existing
    `SpecializationRegistry` — every generic call site with a concrete
    type-arg vector calls `ensure_specialization`, the clone re-checks
@@ -227,7 +237,7 @@ docs/known-issues.md for the live instance of that failure).
    `i64` fold) into hard failures per the contract above.
 5. **M11 — call completeness**: defaulted args, casts, unary/binary
    user-operator dispatch (`String ==`).
-6. Then: defer (190 sites), globals/consts, closures + fn values,
+6. Then: globals/consts, closures + fn values,
    for-over-iterators (falls out of M10), array literals, range
    slicing, `#if` resolution, template expansion, match exhaustiveness
    and the other rejection-power gaps. The "not needed" list above

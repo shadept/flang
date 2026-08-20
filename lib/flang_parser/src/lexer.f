@@ -1028,6 +1028,13 @@ pub fn decode_string_literal(raw: String, allocator: &Allocator? = null) OwnedSt
     return decode_quoted_run(raw, 1, raw.len - 1, allocator)
 }
 
+// Same decode for text already stripped of its quotes - the form the AST
+// stores (`StringLiteral.text`). Escape vocabulary and failure conditions
+// match `decode_string_literal`.
+pub fn decode_string_text(raw: String, allocator: &Allocator? = null) OwnedString? {
+    return decode_quoted_run(raw, 0, raw.len, allocator)
+}
+
 // Materialise a `'c'` or `b'c'` literal to its codepoint (char) or
 // byte value. `raw` must be the full lexed slice including the
 // quotes (and the leading `b` for byte literals); pass `Token.text`

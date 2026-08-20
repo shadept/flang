@@ -467,10 +467,31 @@ fn apply_float_padding(sb: &StringBuilder, tmp: u8[], len: usize, fmt: &FloatFor
     }
 }
 
+// Float spec grammar: [fill][align][0][width][.precision][type], where
+// `type` is `e` / `E` (scientific, `format_f64_exp`) or `a` (exact C99
+// hex-float, `format_f64_hex` - the round-trip representation; width and
+// alignment apply, precision is inherent to the bits). No type char is
+// plain fixed-point (`format_f64`).
 fn append_float_impl(sb: &StringBuilder, val: f64, spec: String) {
-    const fmt = parse_float_spec(spec)
+    let kind: u8 = 'f'
+    let body = spec
+    if spec.len > 0 {
+        const last = spec[spec.len - 1]
+        if last == 'e' or last == 'E' or last == 'a' {
+            kind = last
+            body = spec[0..spec.len - 1]
+        }
+    }
+    const fmt = parse_float_spec(body)
     let tmp = [0u8; 64]
-    const len = format_f64(val, tmp, fmt.precision, fmt.has_precision == false).unwrap()
+    let len: usize = 0
+    if kind == 'a' {
+        len = format_f64_hex(val, tmp).unwrap()
+    } else if kind == 'f' {
+        len = format_f64(val, tmp, fmt.precision, fmt.has_precision == false).unwrap()
+    } else {
+        len = format_f64_exp(val, tmp, fmt.precision, kind == 'E').unwrap()
+    }
     apply_float_padding(sb, tmp, len, &fmt)
 }
 
@@ -1097,6 +1118,64 @@ test "append floats with precision" {
 
     sb.append(1.0f64, ".3")
     expect_view(&sb, "1.000", "f64 .3 precision")
+    sb.clear()
+}
+
+test "append floats scientific" {
+    let buf = [0u8; 256]
+    let fba = fixed_buffer_allocator(buf)
+    let alloc = fba.allocator()
+    let sb = string_builder(allocator=Some(&alloc))
+
+    sb.append(1.5f64, "e")
+    expect_view(&sb, "1.500000e+00", "default six digits")
+    sb.clear()
+
+    sb.append(-2.5e-3f64, ".3e")
+    expect_view(&sb, "-2.500e-03", "precision and negative exponent")
+    sb.clear()
+
+    sb.append(1.0e300f64, ".2e")
+    expect_view(&sb, "1.00e+300", "three-digit exponent")
+    sb.clear()
+
+    sb.append(9.9999f64, ".3E")
+    expect_view(&sb, "1.000E+01", "rounding carries into the exponent; E uppercases")
+    sb.clear()
+
+    sb.append(0.0f64, ".1e")
+    expect_view(&sb, "0.0e+00", "zero")
+    sb.clear()
+}
+
+test "append floats exact hex" {
+    let buf = [0u8; 256]
+    let fba = fixed_buffer_allocator(buf)
+    let alloc = fba.allocator()
+    let sb = string_builder(allocator=Some(&alloc))
+
+    sb.append(1.5f64, "a")
+    expect_view(&sb, "0x1.8p+0", "1.5 is 0x1.8p+0")
+    sb.clear()
+
+    sb.append(3.141592653589793f64, "a")
+    expect_view(&sb, "0x1.921fb54442d18p+1", "every mantissa bit survives")
+    sb.clear()
+
+    sb.append(0.0f64, "a")
+    expect_view(&sb, "0x0p+0", "zero")
+    sb.clear()
+
+    sb.append(-0.5f64, "a")
+    expect_view(&sb, "-0x1p-1", "sign and whole-power values omit the point")
+    sb.clear()
+
+    sb.append(5e-324f64, "a")
+    expect_view(&sb, "0x0.0000000000001p-1022", "the smallest denormal round-trips")
+    sb.clear()
+
+    sb.append(1.5f64, "12a")
+    expect_view(&sb, "    0x1.8p+0", "width applies around the exact form")
     sb.clear()
 }
 

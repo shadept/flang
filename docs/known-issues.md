@@ -474,13 +474,13 @@ Covered by six `test {}` blocks in `lower.f`, including one pinning that a call 
 
 **Coverage boundary — what "0 errors" measures.** Re-measured 2026-08-18, after M5: the boundary has moved a long way, and the caveat is now much narrower than it was.
 
-- `check_expr_kind` (`checker.f`) handles **19 of 24** `Expr` variants (M7 added `Unary`; M8 added `Coalesce` and `Try`). The `_ => fresh_var()` catch-all still returns without recursing, so the subtree under an unhandled node is never visited. Unhandled: `Lambda`, `ArrayLit`, `InterpolatedString`, `NullPropagation`, `Error`.
+- `check_expr_kind` (`checker.f`) handles **20 of 24** `Expr` variants (M7 added `Unary`; M8 added `Coalesce` and `Try`; M9 added `InterpolatedString` — the reference's full StringBuilder desugar, synthesized as AST under synthetic node ids, checked through ordinary overload resolution, and stored in `result.desugars` for lowering to replay). The `_ => fresh_var()` catch-all still returns without recursing, so the subtree under an unhandled node is never visited. Unhandled: `Lambda`, `ArrayLit`, `NullPropagation`, `Error`. Two interpolation-specific caveats: a diagnostic raised on a *synthesized* node (e.g. `string_builder` unresolved because `std.string_builder` isn't imported) carries a synthetic span and renders without a real source location, and `?` inside a `defer` is not rejected as E2091 (lowering refuses the function instead).
 - `check_stmt` handles **all 10** `Stmt` variants — `For`, `While`, `Loop` and `Defer` bodies are walked, and `check_stmt` reports divergence so a `return` inside a branch does not drag a block's type to `void`.
 - `check_binary` really unifies its operands (pointer arithmetic deliberately excepted, where the operands must *not* unify), so `1 + "hello"` is rejected.
 - `check_assignment` unifies right into left. A non-place left side (`f() = 1`) is still not rejected here; lowering refuses the function instead, so the failure is loud but the diagnostic is imprecise.
 - `check_index` resolves built-in array/slice indexing and user `op_index_ref` / `op_index`, and records the pick. It does not report **E2077** (a type declaring both operator forms), which would need a non-committing probe of the losing shape; the winner is the same either way, only the diagnostic is missing.
 
-What that leaves: lambdas, array literals, interpolated strings and `?.` are the remaining unvisited subtrees (M8 closed `?` and `??`). Declarations, signatures, the call graph, control flow, assignment, `match`, indexing, unary and the optional operators are all genuinely checked.
+What that leaves: lambdas, array literals and `?.` are the remaining unvisited subtrees (M8 closed `?` and `??`; M9 closed interpolation via the full desugar). Declarations, signatures, the call graph, control flow, assignment, `match`, indexing, unary and the optional operators are all genuinely checked.
 
 **Harness scoreboard (through the bootstrap).** The lit-style corpus runs through any compiler binary via `$FLANG` (see docs/architecture.md, "Execution mode"): `FLANG=bootstrap/build/flang dotnet test.cs`.
 
@@ -816,6 +816,19 @@ Foreign function declarations (`#foreign fn`) rely on the C codegen preamble (`H
 Non-pub helper functions using `let buf: [u8; 1] = [0; 1]` followed by vtable dispatch generate C code referencing undeclared `alloca_1` identifiers.
 
 **Workaround:** Use `let byte = b; w.write(slice_from_raw_parts(&byte, 1))` instead of local array pattern.
+
+---
+
+### Inlined Address-of-Parameter Codegen (RESOLVED)
+
+**Status:** Resolved — `InliningPass` no longer inlines functions that take the address of their own parameter
+**Affected:** C codegen — function inlining when the inlinee takes `&param`
+
+Same family as the stack-variable bug above: a non-pub helper that took the address of its own parameter (`fn f64_bits(v: f64) u64 { let p = &v ... }`) inlined into C that still referenced the parameter by its original name (`double* _inl1701_addr_2 = &v;` with no `v` in scope) — the inliner substituted the parameter's uses but not the address-of. Substituting the caller's argument variable instead would have been an aliasing bug: parameters are by-value copies, so a write through the pointer must never reach the caller's local.
+
+**Fix (reference compiler):** `InliningPass.TakesAddressOfParameter` excludes such functions from the inlineable set — the call stays a call, which is correct in every case. This is the conservative fix for the C# pipeline only; materializing a fresh named copy at the inline site is its upgrade path if these ever matter for performance. Tests: `tests/harness/references/address_of_param.f` (language feature: read + write through `&param`, copy semantics observed) and `tests/harness/optimization/inline_address_of_param.f` (the inline-eligible shape that miscompiled).
+
+**Self-hosted compiler — intended design (already in place, not the bail-out):** lowering spills every parameter to a stack slot at function entry (`lower.f`), so `&param` is just the slot's address — there is no by-name address-of in FIR to dangle. The shim inliner (`shim_inliner.f`) clones the spill slot and its store with fresh SSA ids when splicing, so the callee's by-value copy travels with the inlined body and writes through the pointer can never reach the caller's variable. Unnecessary spill copies (parameters whose address never escapes) are the later optimization pipeline's job — mem2reg/peephole after inlining deletes them (RFC-015); lowering never needs to special-case this. Pinned by `shim_inliner.f` test "splicing a body that writes through its spilled parameter keeps value semantics".
 
 ---
 

@@ -25,6 +25,7 @@ import std.list
 import std.option
 import std.set
 import std.string
+import flang_parser.ast
 import flang_typer.type
 import flang_typer.node_id
 
@@ -71,6 +72,11 @@ pub type InferenceResults = struct {
     // Specialized generic-function bodies the checker emitted, in
     // order of first need. Indexed by `RtSpecialized.0`.
     specializations: List(NodeId)
+    // Checker-synthesized AST keyed by the node it replaces - today
+    // only interpolation's StringBuilder desugar (RFC-004). Lowering
+    // lowers the stored block instead of the original node. The blocks
+    // are checker-allocated and share the result's lifetime.
+    desugars: Dict(NodeId, &BlockExpr)
     allocator: &Allocator?
 }
 
@@ -81,6 +87,7 @@ pub fn inference_results(allocator: &Allocator? = null) InferenceResults {
         resolved_targets = dict(allocator),
         instantiated_types = list(0, allocator),
         specializations = list(0, allocator),
+        desugars = dict(allocator),
         allocator = allocator,
     }
 }
@@ -91,6 +98,7 @@ pub fn deinit(self: &InferenceResults) {
     self.resolved_targets.deinit()
     self.instantiated_types.deinit()
     self.specializations.deinit()
+    self.desugars.deinit()
 }
 
 // Record (or overwrite) the inferred type for a node. The "overwrite"
@@ -117,6 +125,10 @@ pub fn record_instantiated(self: &InferenceResults, ty: Ty) {
     self.instantiated_types.push(ty)
 }
 
+pub fn record_desugar(self: &InferenceResults, id: NodeId, block: &BlockExpr) {
+    self.desugars.set(id, block)
+}
+
 // Reset the transferred side tables to empty so a later `deinit()` can't
 // double-free; `node_types` is kept.
 pub fn reset_side_tables(self: &InferenceResults) {
@@ -124,4 +136,5 @@ pub fn reset_side_tables(self: &InferenceResults) {
     self.resolved_targets = dict(self.allocator)
     self.instantiated_types = list(0, self.allocator)
     self.specializations = list(0, self.allocator)
+    self.desugars = dict(self.allocator)
 }
