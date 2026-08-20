@@ -52,7 +52,7 @@ cheaper than implementing it.
 | CST parsing | ✅ | round-trips every in-tree source byte-identical via `flang_fmt` |
 | AST projection | ✅ | `flang_parser.projector` |
 | Name resolution + imports | ✅ | project-wide; type names resolve program-wide (import-strict later) |
-| Type inference (HM) | ⚠️ | 0 errors self-checking compiler + stdlib (98 modules) *including every instantiated generic body* (M10); 2 expression forms are still unvisited and rejection power lags the reference — see the type-checking section below |
+| Type inference (HM) | ⚠️ | 0 errors self-checking compiler + stdlib (98 modules) *including every instantiated generic body* (M10); 1 expression form (`a?.b`) is still unvisited and rejection power lags the reference — see the type-checking section below |
 | AST → FIR lowering | ⚠️ | the subset below; everything outside refuses, never miscompiles |
 | C backend (FIR → C99 → exe) | ✅ | for all FIR the lowering emits; links stdlib C runtime sidecars |
 | Full self-build | ❌ | every lowered function compiles (840 C functions after RFC-014 lambdas + fn values/indirect calls landed, 2026-08-20); `main` still drops transitively — defaulted-argument calls (M11) and the `__flang_strlen` runtime shim are the frontier |
@@ -256,12 +256,23 @@ docs/known-issues.md for the live instance of that failure).
    named `E` poisoned `Result(T, E)` program-wide), and stdlib
    `FilterIter.next` dropped non-matching heads instead of advancing.
    Self-check: 0 errors across all 98 modules with every instantiated
-   generic body validated; the self-build emits 759 C functions (457
-   specializations), all of which compile — `main` still drops on M11
-   features (defaulted-argument calls) plus the `__flang_strlen` shim.
-5. **M11 — call completeness**: defaulted args, casts, unary/binary
+   generic body validated; the self-build emitted 759 C functions (457
+   specializations) at M10's landing, all of which compile — `main`
+   still drops on M11 features (defaulted-argument calls) plus the
+   `__flang_strlen` shim.
+5. **RFC-014 lambdas + fn values** (landed 2026-08-20): `check_lambda`
+   with in-place bodies (no clone), capture frames, closure-nominal
+   synthesis + a global dispatch table, E2111/E2112/E2113; lowering
+   emits enqueued lambda bodies post-walk, `CallIndirect` for fn-typed
+   callees, `FuncRef` decay for function names, and direct `op_call`
+   dispatch for closure values and fields. Specialization now admits
+   callable-slot vars (pinned by the instantiation's body re-check,
+   re-keyed on settle, twins deduped by symbol) — this is what lets
+   unannotated lambdas flow through `$F`. Self-build: still 0 check
+   errors; 840 C functions emit.
+6. **M11 — call completeness**: defaulted args, casts, unary/binary
    user-operator dispatch (`String ==`).
-6. Then: globals/consts, for-over-iterators
+7. Then: globals/consts, for-over-iterators
    (M10 supplies the specializations; the checker still needs to
    resolve the `iter()`/`next()` protocol instead of typing the loop
    var as a fresh var), array-literal lowering, range slicing, `#if`
