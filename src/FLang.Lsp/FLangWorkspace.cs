@@ -15,7 +15,9 @@ using DiagnosticSeverity = FLang.Core.DiagnosticSeverity;
 namespace FLang.Lsp;
 
 /// <summary>
-/// Analysis result for a single file.
+/// One shared whole-program analysis. Despite the historical name, this is
+/// per analysis root (a project, or the workspace directory for project-less
+/// files), never per file: every file of the root maps to the same instance.
 /// </summary>
 public record FileAnalysisResult(
     IReadOnlyList<Diagnostic> Diagnostics,
@@ -24,16 +26,26 @@ public record FileAnalysisResult(
     TypeCheckResult? TypeChecker);
 
 /// <summary>
-/// Manages open documents, compilation cache, and analysis results for the LSP.
+/// Manages open documents and analysis results for the LSP.
+///
+/// Memory model: exactly one <see cref="FileAnalysisResult"/> is retained per
+/// analysis root, replaced wholesale on re-analysis. The previous design kept
+/// one whole-program analysis per FILE (compilation + full module forest +
+/// inference tables each, nothing shared), which grew to gigabytes on any
+/// non-trivial workspace and made indexing O(files × whole-program checks).
 /// </summary>
 public class FLangWorkspace
 {
     private readonly Dictionary<string, string> _openDocuments = [];
-    private readonly CompilationCache _cache = new();
-    private readonly Dictionary<string, FileAnalysisResult> _analysisResults = [];
+    // Keyed by analysis root (project root, workspace dir, or a loose file's
+    // own path — see AnalysisKeyFor).
+    private readonly Dictionary<string, FileAnalysisResult> _projectAnalyses = [];
     private readonly Dictionary<string, Task> _pendingAnalyses = [];
+    // Debounce state for external (watched-file) changes, keyed by analysis
+    // root: agents and git checkouts touch many files in one burst, which must
+    // coalesce into a single re-analysis per root.
+    private readonly Dictionary<string, CancellationTokenSource> _watchDebounce = [];
     private readonly Lock _lock = new();
-    private readonly ILogger _logger;
     private readonly ILanguageServerFacade _server;
     // Cache entries are invalidated when flang.toml's mtime changes — the LSP
     // does not see TOML saves through its flang-only document handler, so an
@@ -44,9 +56,8 @@ public class FLangWorkspace
     public string? StdlibPath { get; set; }
     public string? WorkingDirectory { get; set; }
 
-    public FLangWorkspace(ILanguageServerFacade server, LspConfig config, ILogger<FLangWorkspace> logger)
+    public FLangWorkspace(ILanguageServerFacade server, LspConfig config)
     {
-        _logger = logger;
         _server = server;
         StdlibPath = config.StdlibPath;
     }
@@ -57,7 +68,6 @@ public class FLangWorkspace
         lock (_lock)
         {
             _openDocuments[normalized] = content;
-            _cache.InvalidateModule(normalized);
         }
     }
 
@@ -70,26 +80,49 @@ public class FLangWorkspace
         }
     }
 
+    /// <summary>
+    /// The analysis root a file belongs to: its project's root when one
+    /// exists, else the workspace directory when the file lives under it,
+    /// else the file itself (a truly loose file). One shared analysis is
+    /// kept per root.
+    /// </summary>
+    private string AnalysisKeyFor(string normalizedPath, out (FlangProject Project, string ProjectRoot)? projectInfo)
+    {
+        projectInfo = FindProjectForFile(normalizedPath);
+        if (projectInfo is { } pi)
+            return Path.GetFullPath(pi.ProjectRoot);
+
+        if (!string.IsNullOrEmpty(WorkingDirectory))
+        {
+            var workDir = Path.GetFullPath(WorkingDirectory);
+            if (normalizedPath.StartsWith(workDir + Path.DirectorySeparatorChar,
+                    OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal))
+                return workDir;
+        }
+
+        return normalizedPath;
+    }
+
     public FileAnalysisResult? GetAnalysis(string filePath)
     {
         var normalized = Path.GetFullPath(filePath);
+        var key = AnalysisKeyFor(normalized, out _);
         lock (_lock)
         {
-            return _analysisResults.GetValueOrDefault(normalized);
+            return _projectAnalyses.GetValueOrDefault(key);
         }
     }
 
     /// <summary>
-    /// Snapshot of every cached analysis. Used by find-references / workspace
-    /// symbols to cover the union of all open files' transitive module graphs —
-    /// a function defined in stdlib is only known to be called by fs.f from
-    /// inside fs.f's analysis, not from stdlib's analysis.
+    /// Snapshot of every retained analysis — one per analysis root. Used by
+    /// find-references / workspace symbols; each entry already spans its
+    /// root's whole module graph (project files, deps, reached stdlib).
     /// </summary>
     public IReadOnlyList<FileAnalysisResult> GetAllAnalyses()
     {
         lock (_lock)
         {
-            return [.. _analysisResults.Values];
+            return [.. _projectAnalyses.Values];
         }
     }
 
@@ -100,10 +133,11 @@ public class FLangWorkspace
     public async Task<FileAnalysisResult?> GetAnalysisAsync(string filePath)
     {
         var normalized = Path.GetFullPath(filePath);
+        var key = AnalysisKeyFor(normalized, out _);
         Task? pending;
         lock (_lock)
         {
-            _pendingAnalyses.TryGetValue(normalized, out pending);
+            _pendingAnalyses.TryGetValue(key, out pending);
         }
         if (pending != null)
         {
@@ -112,20 +146,79 @@ public class FLangWorkspace
         }
         lock (_lock)
         {
-            return _analysisResults.GetValueOrDefault(normalized);
+            return _projectAnalyses.GetValueOrDefault(key);
         }
     }
 
     public void SetPendingAnalysis(string filePath, Task task)
     {
         var normalized = Path.GetFullPath(filePath);
+        var key = AnalysisKeyFor(normalized, out _);
         lock (_lock)
         {
-            _pendingAnalyses[normalized] = task;
+            _pendingAnalyses[key] = task;
         }
     }
 
-    public void AnalyzeFile(string filePath) => AnalyzeFileInternal(filePath, cascade: true);
+    public void AnalyzeFile(string filePath)
+    {
+        var normalized = Path.GetFullPath(filePath);
+        var key = AnalysisKeyFor(normalized, out var projectInfo);
+        AnalyzeRootInternal(key, normalized, projectInfo);
+    }
+
+    /// <summary>
+    /// Called for filesystem changes reported by the client's watcher
+    /// (workspace/didChangeWatchedFiles) — edits made outside the editor:
+    /// external tools, agents, git operations. Open-document buffers still
+    /// win over disk during analysis, so events for open files are harmless.
+    /// Each affected root is re-analyzed once, after a short quiet period.
+    /// </summary>
+    public void NotifyWatchedFilesChanged(IReadOnlyList<string> changedPaths)
+    {
+        var tomlChanged = changedPaths.Any(p =>
+            Path.GetFileName(p).Equals("flang.toml", StringComparison.OrdinalIgnoreCase));
+        if (tomlChanged)
+            InvalidateProjectCache();
+
+        var roots = new Dictionary<string, (string Rep, (FlangProject Project, string ProjectRoot)? Project)>();
+        foreach (var path in changedPaths)
+        {
+            if (!path.EndsWith(".f", StringComparison.OrdinalIgnoreCase)) continue;
+            string normalized;
+            try { normalized = Path.GetFullPath(path); }
+            catch { continue; }
+            var key = AnalysisKeyFor(normalized, out var pi);
+            roots.TryAdd(key, (normalized, pi));
+        }
+
+        // A toml-only change with no .f edits: the config cache is already
+        // invalidated above and FindProjectForFile's mtime check picks the
+        // new config up on the next analysis of each root.
+        foreach (var (key, info) in roots)
+            ScheduleRootReanalysis(key, info.Rep, info.Project);
+    }
+
+    private void ScheduleRootReanalysis(string key, string representative, (FlangProject Project, string ProjectRoot)? projectInfo)
+    {
+        var cts = new CancellationTokenSource();
+        lock (_lock)
+        {
+            if (_watchDebounce.TryGetValue(key, out var previous))
+                previous.Cancel();
+            _watchDebounce[key] = cts;
+        }
+
+        var task = Task.Run(async () =>
+        {
+            try { await Task.Delay(400, cts.Token); }
+            catch (TaskCanceledException) { return; }
+            lock (_lock) { _watchDebounce.Remove(key); }
+            FLangLanguageServer.Log($"watched-file change: re-analyzing root {key}");
+            AnalyzeRootInternal(key, representative, projectInfo);
+        });
+        lock (_lock) { _pendingAnalyses[key] = task; }
+    }
 
     /// <summary>
     /// Eagerly analyze every <c>.f</c> file the project(s) under the workspace
@@ -169,47 +262,47 @@ public class FLangWorkspace
             FLangLanguageServer.Log($"IndexWorkspace: no flang.toml found, falling back to scan of {WorkingDirectory}");
         }
 
-        var seen = new HashSet<string>(OperatingSystem.IsWindows()
-            ? StringComparer.OrdinalIgnoreCase
-            : StringComparer.Ordinal);
+        // One shared whole-program analysis per root: the first file under a
+        // root determines its analysis key (project root or workspace dir),
+        // and the analysis itself pulls in every file of that root.
         var analyzed = 0;
         var skipped = 0;
-
         foreach (var root in roots)
         {
             if (!Directory.Exists(root)) continue;
 
-            IEnumerable<string> files;
-            try { files = EnumerateFlangFiles(root); }
+            string? representative = null;
+            try
+            {
+                representative = EnumerateFlangFiles(root)
+                    .FirstOrDefault(f => !f.EndsWith(".generated.f", StringComparison.OrdinalIgnoreCase));
+            }
             catch (Exception ex)
             {
                 FLangLanguageServer.Log($"  enumerate failed for {root}: {ex.Message}");
                 continue;
             }
+            if (representative == null) continue;
 
-            foreach (var file in files)
+            var normalized = Path.GetFullPath(representative);
+            var key = AnalysisKeyFor(normalized, out var projectInfo);
+            lock (_lock)
             {
-                var full = Path.GetFullPath(file);
-                if (!seen.Add(full)) continue;
+                if (_projectAnalyses.ContainsKey(key)) { skipped++; continue; }
+            }
 
-                lock (_lock)
-                {
-                    if (_analysisResults.ContainsKey(full)) { skipped++; continue; }
-                }
-
-                try
-                {
-                    AnalyzeFileInternal(full, cascade: false);
-                    analyzed++;
-                }
-                catch (Exception ex)
-                {
-                    FLangLanguageServer.Log($"  index analyze failed for {full}: {ex.Message}");
-                }
+            try
+            {
+                AnalyzeRootInternal(key, normalized, projectInfo);
+                analyzed++;
+            }
+            catch (Exception ex)
+            {
+                FLangLanguageServer.Log($"  index analyze failed for {root}: {ex.Message}");
             }
         }
 
-        FLangLanguageServer.Log($"IndexWorkspace: {analyzed} analyzed, {skipped} already-cached in {sw.ElapsedMilliseconds}ms");
+        FLangLanguageServer.Log($"IndexWorkspace: {analyzed} root(s) analyzed, {skipped} already-cached in {sw.ElapsedMilliseconds}ms");
     }
 
     /// <summary>
@@ -355,10 +448,14 @@ public class FLangWorkspace
         }
     }
 
-    private void AnalyzeFileInternal(string filePath, bool cascade)
+    /// <summary>
+    /// Runs the shared whole-program analysis for one root. Entry points are
+    /// every .f file under the root (so unimported files still get symbols and
+    /// diagnostics); the result replaces the root's previous analysis.
+    /// </summary>
+    private void AnalyzeRootInternal(string key, string normalized, (FlangProject Project, string ProjectRoot)? projectInfo)
     {
-        var normalized = Path.GetFullPath(filePath);
-        FLangLanguageServer.Log($"Analyzing: {normalized}");
+        FLangLanguageServer.Log($"Analyzing root: {key} (via {normalized})");
         FLangLanguageServer.Log($"  stdlibPath={StdlibPath}, workDir={WorkingDirectory}");
         var sw = System.Diagnostics.Stopwatch.StartNew();
 
@@ -367,8 +464,7 @@ public class FLangWorkspace
             var compilation = new Compilation();
             compilation.StdlibPath = StdlibPath ?? "";
 
-            // Try to find project config for this file
-            var projectInfo = FindProjectForFile(normalized);
+            string? entryRoot = null;
             if (projectInfo is { } pi)
             {
                 compilation.WorkingDirectory = pi.ProjectRoot;
@@ -405,6 +501,7 @@ public class FLangWorkspace
                 }
 
                 FLangLanguageServer.Log($"  project={pi.Project.Project.Name}, sourceRoot={sourceRoot}, deps={compilation.DependencySourceRoots.Count}");
+                entryRoot = sourceRoot ?? pi.ProjectRoot;
             }
             else
             {
@@ -413,6 +510,36 @@ public class FLangWorkspace
                     ?? Directory.GetCurrentDirectory();
                 compilation.IncludePaths.Add(compilation.StdlibPath);
                 compilation.IncludePaths.Add(compilation.WorkingDirectory);
+                // Workspace-dir root: analyze the whole directory as one unit.
+                // A truly loose file (key == its own path) stays single-entry.
+                if (key != normalized)
+                    entryRoot = key;
+            }
+
+            // Entry points: every .f file under the root, plus the requested
+            // file itself (it may live outside the source root).
+            var entries = new List<string> { normalized };
+            if (entryRoot != null && Directory.Exists(entryRoot))
+            {
+                var seen = new HashSet<string>(OperatingSystem.IsWindows()
+                    ? StringComparer.OrdinalIgnoreCase
+                    : StringComparer.Ordinal) { normalized };
+                try
+                {
+                    foreach (var f in EnumerateFlangFiles(entryRoot))
+                    {
+                        // Template-expansion sidecars are not standalone
+                        // modules — analyzed as entries they only produce
+                        // noise; they're pulled in through their origin.
+                        if (f.EndsWith(".generated.f", StringComparison.OrdinalIgnoreCase)) continue;
+                        var full = Path.GetFullPath(f);
+                        if (seen.Add(full)) entries.Add(full);
+                    }
+                }
+                catch (Exception ex)
+                {
+                    FLangLanguageServer.Log($"  entry enumeration failed for {entryRoot}: {ex.Message}");
+                }
             }
 
             // Build compile-time context for #if directives (same as CLI)
@@ -452,8 +579,8 @@ public class FLangWorkspace
             var moduleCompiler = new ModuleCompiler(compilation, moduleLogger, sourceProvider);
 
             var lap = sw.ElapsedMilliseconds;
-            var parsedModules = moduleCompiler.CompileModules(normalized);
-            FLangLanguageServer.Log($"  [parse] {sw.ElapsedMilliseconds - lap}ms — {parsedModules.Count} modules");
+            var parsedModules = moduleCompiler.CompileModules(entries);
+            FLangLanguageServer.Log($"  [parse] {sw.ElapsedMilliseconds - lap}ms — {parsedModules.Count} modules from {entries.Count} entries");
 
             var allDiagnostics = new List<Diagnostic>();
             allDiagnostics.AddRange(moduleCompiler.Diagnostics);
@@ -573,8 +700,8 @@ public class FLangWorkspace
             var result = new FileAnalysisResult(allDiagnostics, compilation, parsedModules, typeCheckResult);
             lock (_lock)
             {
-                _analysisResults[normalized] = result;
-                _pendingAnalyses.Remove(normalized);
+                _projectAnalyses[key] = result;
+                _pendingAnalyses.Remove(key);
             }
 
             sw.Stop();
@@ -582,21 +709,28 @@ public class FLangWorkspace
             var warnings = allDiagnostics.Count(d => d.Severity == DiagnosticSeverity.Warning);
             FLangLanguageServer.Log($"  [total] {sw.ElapsedMilliseconds}ms — {errors} errors, {warnings} warnings");
 
+            // Publish per-file diagnostics for every project-origin module (so
+            // the Problems panel covers the whole root, and files whose errors
+            // were just fixed get their stale diagnostics cleared), plus any
+            // open document in the graph. Stdlib/dep modules stay unpublished,
+            // as before. No cascade needed: one analysis IS all dependents.
             lap = System.Diagnostics.Stopwatch.GetTimestamp();
-            PublishDiagnostics(normalized, result);
-            var publishMs = (System.Diagnostics.Stopwatch.GetTimestamp() - lap) * 1000.0 / System.Diagnostics.Stopwatch.Frequency;
-            FLangLanguageServer.Log($"  [publishDiags] {publishMs:F1}ms — {allDiagnostics.Count} diagnostics");
-
-            // Re-analyze open files that depend on the changed file
-            if (cascade)
+            var comparer = OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal;
+            var openOrEntry = new HashSet<string>(entries, comparer);
+            lock (_lock) { openOrEntry.UnionWith(_openDocuments.Keys); }
+            var publishTargets = new HashSet<string>(comparer);
+            foreach (var path in parsedModules.Keys)
             {
-                var dependents = GetDependentFiles(normalized);
-                foreach (var dep in dependents)
-                {
-                    FLangLanguageServer.Log($"  cascade: re-analyzing {dep}");
-                    AnalyzeFileInternal(dep, cascade: false);
-                }
+                var full = Path.GetFullPath(path);
+                var isProjectFile = compilation.ModuleOrigins.TryGetValue(full, out var origin)
+                    && origin == ModuleOrigin.Project;
+                if (isProjectFile || openOrEntry.Contains(full))
+                    publishTargets.Add(full);
             }
+            foreach (var target in publishTargets)
+                PublishDiagnostics(target, result);
+            var publishMs = (System.Diagnostics.Stopwatch.GetTimestamp() - lap) * 1000.0 / System.Diagnostics.Stopwatch.Frequency;
+            FLangLanguageServer.Log($"  [publishDiags] {publishMs:F1}ms — {allDiagnostics.Count} diagnostics over {publishTargets.Count} files");
         }
         catch (Exception ex)
         {
@@ -604,30 +738,9 @@ public class FLangWorkspace
             FLangLanguageServer.Log($"  {ex.StackTrace}");
             lock (_lock)
             {
-                _pendingAnalyses.Remove(normalized);
+                _pendingAnalyses.Remove(key);
             }
         }
-    }
-
-    /// <summary>
-    /// Returns open files whose last analysis included the given file as a dependency.
-    /// </summary>
-    private List<string> GetDependentFiles(string normalizedPath)
-    {
-        var dependents = new List<string>();
-        lock (_lock)
-        {
-            foreach (var (file, result) in _analysisResults)
-            {
-                if (string.Equals(file, normalizedPath, StringComparison.OrdinalIgnoreCase))
-                    continue;
-                if (!_openDocuments.ContainsKey(file))
-                    continue;
-                if (result.ParsedModules.ContainsKey(normalizedPath))
-                    dependents.Add(file);
-            }
-        }
-        return dependents;
     }
 
     private void PublishDiagnostics(string filePath, FileAnalysisResult result)

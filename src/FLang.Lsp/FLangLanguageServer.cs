@@ -29,6 +29,7 @@ public static class FLangLanguageServer
                     services.AddSingleton<FLangWorkspace>();
                 })
                 .WithHandler<TextDocumentSyncHandler>()
+                .WithHandler<DidChangeWatchedFilesHandler>()
                 .WithHandler<HoverHandler>()
                 .WithHandler<DefinitionHandler>()
                 .WithHandler<TypeDefinitionHandler>()
