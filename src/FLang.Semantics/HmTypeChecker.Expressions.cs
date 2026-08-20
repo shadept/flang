@@ -1686,8 +1686,12 @@ public partial class HmTypeChecker
         var resolved = _ctx.Engine.Resolve(receiverType);
 
         // Auto-deref through references
+        var receiverDerefCount = 0;
         while (resolved is ReferenceType refType)
+        {
             resolved = _ctx.Engine.Resolve(refType.InnerType);
+            receiverDerefCount++;
+        }
 
         if (resolved is not NominalType { Kind: NominalKind.Struct or NominalKind.Tuple } nominal)
             return null;
@@ -1724,6 +1728,35 @@ public partial class HmTypeChecker
 
         if (fieldType is not FunctionType fnType)
         {
+            // The field may hold a callable value whose type defines op_call
+            // (capturing closures lower to __Closure_N structs; RFC-014 callable
+            // structs work the same way). Rewrite `h.f(x)` into UFCS
+            // `(h.f).op_call(x)` so the existing UFCS lowering handles the
+            // receiver's by-ref adapt (GEP to the field in-place).
+            if (_ctx.Engine.Resolve(fieldType) is NominalType fieldNominal)
+            {
+                var opResult = ResolveOpCallOverload(fieldNominal, argTypes, call.Span);
+                if (opResult != null)
+                {
+                    var (_, opFnType, opNode) = opResult.Value;
+                    var receiverNode = new MemberAccessExpressionNode(
+                        call.FunctionNameSpan, call.UfcsReceiver!, fieldName)
+                    {
+                        AutoDerefCount = receiverDerefCount
+                    };
+                    // The receiver expression was already inferred by InferCall;
+                    // record the synthesized member access directly instead of
+                    // re-inferring (re-inference of e.g. a call receiver would
+                    // duplicate its side effects).
+                    Record(receiverNode, fieldType);
+                    call.UfcsReceiver = receiverNode;
+                    call.MethodName = "op_call";
+                    call.ResolvedTarget = opNode;
+                    CheckDeprecatedCall(opNode, call.Span);
+                    return opFnType.ReturnType;
+                }
+            }
+
             // E2011: Field exists but is not callable
             ReportError($"Field `{fieldName}` is not a function and cannot be called", call.Span, "E2011");
             foreach (var arg in call.Arguments) InferExpression(arg);
@@ -1969,20 +2002,7 @@ public partial class HmTypeChecker
     /// </summary>
     private Type? TryResolveOpCall(CallExpressionNode call, NominalType receiverType, Type[] argTypes)
     {
-        var candidates = LookupFunctions("op_call");
-        if (candidates == null || candidates.Count == 0) return null;
-
-        // Try with &T (preferred for stateful callables) then with T (consume-receiver).
-        var withRef = new Type[argTypes.Length + 1];
-        withRef[0] = new ReferenceType(receiverType);
-        Array.Copy(argTypes, 0, withRef, 1, argTypes.Length);
-
-        var withVal = new Type[argTypes.Length + 1];
-        withVal[0] = receiverType;
-        Array.Copy(argTypes, 0, withVal, 1, argTypes.Length);
-
-        var result = ResolveOverload(candidates, withRef, call.Span)
-                     ?? ResolveOverload(candidates, withVal, call.Span);
+        var result = ResolveOpCallOverload(receiverType, argTypes, call.Span);
 
         // op_deref fallback: peel through op_deref layers and retry op_call lookup
         // on the inner type. Mirrors TryUfcsOpDerefCall but without UFCS framing.
@@ -2006,15 +2026,7 @@ public partial class HmTypeChecker
                 derefChain.Add(derefNode);
                 var innerType = _ctx.Engine.Resolve(innerRef.InnerType);
 
-                var innerWithRef = new Type[argTypes.Length + 1];
-                innerWithRef[0] = innerRef;
-                Array.Copy(argTypes, 0, innerWithRef, 1, argTypes.Length);
-                var innerWithVal = new Type[argTypes.Length + 1];
-                innerWithVal[0] = innerType;
-                Array.Copy(argTypes, 0, innerWithVal, 1, argTypes.Length);
-
-                result = ResolveOverload(candidates, innerWithRef, call.Span)
-                         ?? ResolveOverload(candidates, innerWithVal, call.Span);
+                result = ResolveOpCallOverload(innerType, argTypes, call.Span);
                 if (result != null) break;
 
                 current = innerType;
@@ -2041,6 +2053,28 @@ public partial class HmTypeChecker
             call.UfcsOpDerefChain = derefChain;
         CheckDeprecatedCall(node, call.Span);
         return fnType.ReturnType;
+    }
+
+    /// <summary>
+    /// Resolve `op_call` overloads for a receiver type: tries `op_call(&T, args...)`
+    /// first (the recommended stateful-callable form), then `op_call(T, args...)`.
+    /// </summary>
+    private (FunctionScheme Winner, FunctionType FnType, FunctionDeclarationNode Node)? ResolveOpCallOverload(
+        Type receiverType, Type[] argTypes, SourceSpan span)
+    {
+        var candidates = LookupFunctions("op_call");
+        if (candidates == null || candidates.Count == 0) return null;
+
+        var withRef = new Type[argTypes.Length + 1];
+        withRef[0] = new ReferenceType(receiverType);
+        Array.Copy(argTypes, 0, withRef, 1, argTypes.Length);
+
+        var withVal = new Type[argTypes.Length + 1];
+        withVal[0] = receiverType;
+        Array.Copy(argTypes, 0, withVal, 1, argTypes.Length);
+
+        return ResolveOverload(candidates, withRef, span)
+               ?? ResolveOverload(candidates, withVal, span);
     }
 
     // =========================================================================

@@ -579,7 +579,7 @@ With the original name `Directive`, `Directive.Inline` errored as `No variant In
 
 1. **Nested capturing closures (E2113).** A closure that captures a name an enclosing closure also captures requires transitive-capture lowering (the inner closure pulls its env field from the outer's env field). Today this is rejected up-front with E2113. Closures nested inside non-capturing closures (or whose captures don't overlap with the outer closure's) work fine.
 2. **Capture-by-reference (`&local`).** RFC §"Out of scope". Initial implementation captures only by value; explicit `&local` capture syntax + lifetime story is a follow-up.
-3. **Stdlib follow-ups.** Making `FilterIter` / `MapIter` generic over the callable type, and adding `box(allocator, callable)` to `std.owned`, are unblocked by Phase 2 but tracked separately. The generic-over-callable iterator change requires call resolution to handle `f(args)` where `f`'s type is a TypeVar bound to a closure NominalType — not yet wired.
+3. **Stdlib follow-ups.** Adding `box(allocator, callable)` to `std.owned` is unblocked by Phase 2 but tracked separately. ~~The generic-over-callable iterator change requires call resolution to handle `f(args)` where `f`'s type is a TypeVar bound to a closure NominalType~~ — done: `std.iter` adapters are generic over the callable and call `self.f(x)` directly. Field-position dispatch (`h.f(args)` where the field's type defines `op_call`) is wired in `TryFieldCall`, which rewrites to UFCS `op_call(&h.f, args...)` before the E2011 "not a function" error (test: `tests/harness/closures/closure_field_call.f`).
 
 ---
 
