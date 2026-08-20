@@ -690,7 +690,29 @@ When a `match` arm binds a payload, the binding is always **by value**. `match s
 
 **Concrete case (2026-08-20):** `self.__cwd.map(deinit)` for `__cwd: OwnedString?` ICEs at lowering ("unresolved type variable reached lowering") — `deinit` has ~40 overloads and nothing picks `deinit(&OwnedString)` from `map`'s `fn(T) $U` parameter. Functions as values are a first-class feature of the language; overload resolution here is a compiler bug, not a design limit — the expected parameter type names the overload unambiguously. The rewritten site uses `Option.deinit` instead (`self.__cwd.deinit()`), which is the better idiom regardless.
 
-**Future:** Context-directed overload resolution — when a bare function name is coerced to a `fn(...)` type, pick the overload whose signature unifies with the expected type (and report ambiguity when several do). Note the by-ref wrinkle: most `deinit` overloads take `&T` while combinators like `map` pass `T` by value, so the fix needs either reference-adapting decay or an explicit rule that `fn(T)` slots do not accept `fn(&T)` candidates.
+**Future (agreed direction, 2026-08-20):** With the stdlib combinators now duck-typed (`f: $F`), context-directed pick by expected type no longer applies — a `$F` slot carries no signature. The agreed design is **instantiation-time resolution**: bind the slot to an unresolved overload-set and resolve it against concrete argument types at the instantiation's internal call site (the same machinery that pins unannotated lambda params through `$F`). See docs/tickets/019 §4. The by-ref wrinkle stands: `deinit` overloads take `&T` and combinators invoke value-mode, so this also depends on the argument-adaptation decision (ticket 019 §1).
+
+---
+
+### Template-Eager-Check Limits on Duck-Typed Callables
+
+**Status:** Open (workarounds in tree)
+**Affected:** Reference checker; generic bodies using `$F`-typed callables
+
+Generic template bodies are checked eagerly at declaration, so operations
+needing a *resolved* type fail on the result of a `$F` call even though
+every instantiation would succeed: `!f(x)` ("No operator `!`"),
+`op_cmp(key(a), key(b))` (ambiguous on metavars), tuple-field access on a
+metavar-typed lambda parameter. Workarounds used by `std.list` /
+`std.iter` / `std.sort`: pin with `let ok: bool = f(x)`; compare keys
+with `<` instead of `op_cmp`. The self-hosted compiler is immune (it
+validates template bodies only at instantiation). Deferring these checks
+is ticket 019 §6.
+
+Related inference-order consequence: a value pinned *only* through an
+instantiation (e.g. `fold`'s seed with a duck-typed `f`) cannot resolve a
+bare numeric literal — the E2001 sweep runs per body, before the pins the
+instantiation would provide. Write `fold(0i32, …)`.
 
 ---
 
@@ -1139,12 +1161,24 @@ nothing ever freed. Found via a go-to-definition oddity (the LSP linked
 `label_storage.deinit()` to the generic fallback) and confirmed with a
 tracking-allocator probe: 0 deallocs, everything leaked.
 
-**Fix:** a structural-specificity tie-break in overload scoring (fewer
-quantified vars → lower cost → **more concrete parameter structure** →
-literal preference → declaration order), in the reference
-(`HmTypeChecker.Expressions.cs SignatureSpecificity`) and the self-hosted
-checker (`resolve_overload`). Regression:
+**Fix:** a structural-specificity tie-break in overload scoring, in the
+reference (`HmTypeChecker.Expressions.cs SignatureSpecificity`) and the
+self-hosted checker (`resolve_overload`). Regression:
 `tests/harness/stdlib/list_deinit_frees.f` asserts real dealloc counts.
+
+**Follow-up (2026-08-20):** the tie-break was ranked *after* quantifier
+count, so it only fired when var counts happened to tie (as in the deinit
+pair, 1 var each). Any structured generic with more vars than a catch-all
+still lost — `any(&Dict($K,$V), $F)` (3 vars) lost to std.iter's
+`any($I, $F)` (2 vars), breaking every dict method call in a module that
+imports both `std.dict` and `std.iter`. Specificity is now the **primary**
+key in both compilers (specificity → cost → quantifier count → literal
+preference → declaration order), and the self-hosted `resolve_overload` —
+which had never actually gained the specificity key despite the entry
+above — now has it (`scheme_specificity`/`ty_specificity` in checker.f).
+Defaulted params a call omits are excluded from the score so a padded
+overload can't out-rank an exact shorter one. Spec §Imports updated.
+Regression: `tests/harness/generics/overload_structural_specificity.f`.
 
 **Fallout fixed in the same pass** — cleanup becoming real exposed a
 stack of latent memory bugs, all of the same few shapes:

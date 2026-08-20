@@ -181,7 +181,28 @@ pub type Checker = struct {
     // node can collide with. Also names the desugar's builder locals.
     next_synth: u32
 
+    // RFC-014 lambdas: the open lambda literals, innermost last.
+    // `check_identifier` records an outer-local read as a by-value
+    // capture on every crossed frame.
+    lambda_frames: List(LambdaFrame)
+    // Synthesized closure nominal -> its call signature/symbol. Global,
+    // not overlay-scoped: a closure travels through `$F` slots into
+    // other bodies, which dispatch by the value's nominal id.
+    closures: Dict(NominalId, ClosureSig)
+    // Monotonic id behind lambda/closure symbols. Advances per *check*,
+    // so a template body's lambda mints a fresh symbol per instantiation.
+    next_lambda: u32
+
     allocator: &Allocator?
+}
+
+// One open lambda literal being checked. `boundary` is the scope index
+// of the lambda's own parameter scope: a name found at a shallower
+// index is an outer local, i.e. a capture.
+type LambdaFrame = struct {
+    boundary: usize
+    lam_span: SourceSpan
+    captures: List(CaptureRec)
 }
 
 pub fn checker(allocator: &Allocator? = null) Checker {
@@ -206,6 +227,9 @@ pub fn checker(allocator: &Allocator? = null) Checker {
         pending_anons = list(0, allocator),
         visible_by_module = dict(allocator),
         next_synth = 0u32,
+        lambda_frames = list(0, allocator),
+        closures = dict(allocator),
+        next_lambda = 0u32,
         allocator = allocator,
     }
 }
@@ -228,6 +252,8 @@ pub fn deinit(self: &Checker) {
     self.pending_literals.deinit()
     self.pending_anons.deinit()
     self.visible_by_module.deinit()
+    self.lambda_frames.deinit()
+    self.closures.deinit()
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -1089,11 +1115,17 @@ fn process_pending(self: &Checker, p: &PendingSpec) {
     }
     let ret = self.engine.zonk(p.inst_ret)
     if !sig_concrete(self, &params, &ret) {
-        let name = self.templates.get(p.function_id).unwrap().decl.name
-        push_diag_e(self, p.span, E_UNINFERRED,
-            $"cannot infer the type arguments of generic function `{name}` at this call site")
-        params.deinit()
-        return
+        // Vars confined to callable slots (`$F` bound to a lambda whose
+        // params nothing at the call site pins) are legitimate: the
+        // instantiation's body re-check unifies them at the indirect call
+        // (RFC-014). Anything else is a genuinely un-inferable argument.
+        if sig_has_var_outside_fn(&params, &ret) {
+            let name = self.templates.get(p.function_id).unwrap().decl.name
+            push_diag_e(self, p.span, E_UNINFERRED,
+                $"cannot infer the type arguments of generic function `{name}` at this call site")
+            params.deinit()
+            return
+        }
     }
 
     let key = key_for(p.function_id, &params, ret, self.allocator)
@@ -1178,6 +1210,41 @@ fn sig_concrete(self: &Checker, params: &List(Ty), ret: &Ty) bool {
     return n == 0
 }
 
+// True when a var sits anywhere OUTSIDE a Func type. Vars inside a Func
+// are the lambda-through-`$F` shape the instantiation body pins.
+fn ty_has_var_outside_fn(ty: &Ty) bool {
+    return ty.* match {
+        Var(_) => true,
+        Ref(inner) => ty_has_var_outside_fn(inner),
+        Array(a) => ty_has_var_outside_fn(a.elem),
+        Func(_) => false,
+        Tuple(es) => tys_have_var_outside_fn(&es),
+        Nominal(nr) => tys_have_var_outside_fn(&nr.args),
+        Record(fs) => {
+            let hit = false
+            for i in 0..fs.len {
+                if ty_has_var_outside_fn(&fs[i].ty) { hit = true }
+            }
+            hit
+        },
+        _ => false,
+    }
+}
+
+fn tys_have_var_outside_fn(tys: &List(Ty)) bool {
+    for i in 0..tys.len {
+        if ty_has_var_outside_fn(&tys[i]) { return true }
+    }
+    return false
+}
+
+fn sig_has_var_outside_fn(params: &List(Ty), ret: &Ty) bool {
+    for i in 0..params.len {
+        if ty_has_var_outside_fn(&params[i]) { return true }
+    }
+    return ty_has_var_outside_fn(ret)
+}
+
 // Register and check one new specialization. Registration happens
 // BEFORE the body re-check so a self-recursive generic resolves to its
 // own key instead of recursing forever. Returns null (with a
@@ -1249,12 +1316,15 @@ fn instantiate(self: &Checker, p: &PendingSpec, key: OwnedString, params: List(T
     let _c = self.spec_callers.pop()
 
     // The shared final zonk only walks the program tables; the overlay
-    // zonks here, while the engine is live.
+    // zonks here, while the engine is live. Lambda records checked inside
+    // this instantiation zonk with it (the global closure table waits for
+    // `check_all`'s final sweep - the engine outlives every overlay).
     let zonked: Dict(NodeId, Ty) = dict(self.allocator)
     for entry in self.results.node_types {
         zonked.set(entry.key, self.engine.zonk(entry.value))
     }
     self.results.replace_node_types(zonked)
+    zonk_lambda_table(self)
 
     let overlay = self.results
     self.results = saved_results
@@ -1264,6 +1334,20 @@ fn instantiate(self: &Checker, p: &PendingSpec, key: OwnedString, params: List(T
 
     // RTTI instantiations surface program-wide, not per overlay.
     self.results.merge_instantiated(&overlay)
+
+    // A signature that entered with callable-slot vars settled during
+    // the body check: store the final shape (spec symbols mangle from
+    // it) and re-key so identical final signatures dedup. A duplicate
+    // final key keeps its own entry; emission dedups by symbol.
+    let sp = self.specs.get(sid)
+    let fparams: List(Ty) = list(sp.concrete_params.len, self.allocator)
+    for i in 0..sp.concrete_params.len {
+        fparams.push(self.engine.zonk(sp.concrete_params[i]))
+    }
+    let fret = self.engine.zonk(sp.concrete_return)
+    let fkey = key_for(p.function_id, &fparams, fret, self.allocator)
+    self.specs.set_signature(sid, fparams, fret)
+    let _rk = self.specs.rekey(sid, fkey)
 
     self.specs.set_overlay(sid, overlay)
     return Some(sid)
@@ -1308,6 +1392,7 @@ fn check_expr_kind(self: &Checker, expr: &Expr) Ty {
         Try(tr) => check_try(self, &tr),
         InterpolatedString(is) => check_interpolation(self, &is),
         ArrayLit(al) => check_array_literal(self, &al),
+        Lambda(lam) => check_lambda(self, &lam),
         _ => self.engine.fresh_var(),
     }
 }
@@ -1825,6 +1910,23 @@ fn bind_pattern_var(self: &Checker, name: String, ty: Ty, span: SourceSpan) {
 // lowering refuses to emit the function instead of writing somewhere
 // arbitrary, so the failure is loud but the diagnostic is not precise.
 fn check_assignment(self: &Checker, a: &AssignmentExpr) Ty {
+    // RFC-014: captures are by value and read-only. Assigning to one
+    // would only mutate the closure's own copy - reject it (E2112).
+    // Writing *through* a captured reference (`p.* = v`) stays legal.
+    if self.lambda_frames.len > 0 {
+        let target = a.lhs.* match { Identifier(id) => Some(id.name), _ => null }
+        if target.is_some() {
+            let nm = target.unwrap()
+            let d = self.env.lookup_depth(nm)
+            if d.is_some() {
+                let innermost = &self.lambda_frames[self.lambda_frames.len - 1]
+                if d.unwrap() < innermost.boundary {
+                    push_diag_e(self, a.span, E_ASSIGN_CAPTURE,
+                        $"cannot assign to captured variable `{nm}` (closures capture by value; this would only mutate the closure's own copy, not the outer scope)")
+                }
+            }
+        }
+    }
     let lhs = check_expr(self, a.lhs)
     let rhs = check_expr(self, a.rhs)
     unify_expected(self, rhs, lhs, E_TYPE_MISMATCH, a.span)
@@ -2267,6 +2369,9 @@ fn check_identifier(self: &Checker, id: &IdentifierExpr) Ty {
     if b.is_some() {
         let binding = b.unwrap()
         self.results.record_target(node_id_of(id.span), ResolvedTarget.RtLocal(binding.decl))
+        if self.lambda_frames.len > 0 and !binding.is_type_param {
+            note_capture(self, id.name, &binding)
+        }
         return self.engine.specialize(&binding.scheme)
     }
 
@@ -2324,6 +2429,177 @@ fn nominal_with_fresh_args(self: &Checker, id: NominalId) Ty {
     let args = list(n, self.allocator)
     for k in 0..n { args.push(self.engine.fresh_var()) }
     return Ty.Nominal(NominalRef { id = id, args = args })
+}
+
+
+// ─────────────────────────────────────────────────────────────────────
+// Lambdas (RFC-014)
+//
+// No AST clone, mirroring M10: the literal's body is checked in place -
+// captured names resolve through the outer scopes they were bound in,
+// and the capture list is a side record (`LambdaInfo`) that lowering
+// uses to project reads through the closure environment. A lambda in a
+// generic template body records one LambdaInfo per instantiation (the
+// record lands in the active overlay), each with its own symbol.
+// ─────────────────────────────────────────────────────────────────────
+
+// A name read that crosses a lambda boundary is a by-value capture:
+// record it on every crossed frame, innermost included, so a nested
+// closure's transitive captures are visible to the E2113 check.
+fn note_capture(self: &Checker, name: String, binding: &Binding) {
+    let d = self.env.lookup_depth(name)
+    if d.is_none() { return }
+    let found = d.unwrap()
+    for i in 0..self.lambda_frames.len {
+        let fr = &self.lambda_frames[i]
+        if found >= fr.boundary { continue }
+        if captures_contain(fr, name) { continue }
+        let ty = self.engine.specialize(&binding.scheme)
+        fr.captures.push(CaptureRec { name = name, ty = ty })
+    }
+}
+
+fn captures_contain(fr: &LambdaFrame, name: String) bool {
+    for i in 0..fr.captures.len {
+        if fr.captures[i].name == name { return true }
+    }
+    return false
+}
+
+fn check_lambda(self: &Checker, lam: &LambdaExpr) Ty {
+    // Frame first, then the parameter scope: a binding at or above
+    // `boundary` is lambda-local, anything below it is a capture.
+    self.env.push_scope()
+    let boundary = self.env.depth() - 1
+    let caps: List(CaptureRec) = list(0, self.allocator)
+    self.lambda_frames.push(LambdaFrame {
+        boundary = boundary,
+        lam_span = lam.span,
+        captures = caps,
+    })
+
+    // Parameters: an annotation resolves; a bare name (the projector
+    // records its type as `TypeExpr.Error`) mints a fresh var the
+    // surrounding context - or an instantiation's body re-check - pins.
+    let params: List(Ty) = list(lam.params.len, self.allocator)
+    for i in 0..lam.params.len {
+        let p = &lam.params[i]
+        let unannotated = p.type_expr match { Error(_) => true, _ => false }
+        let ty = if unannotated { self.engine.fresh_var() }
+                 else { resolve_type_expr(self, &p.type_expr) }
+        self.env.bind(p.name, Binding {
+            scheme = mono(ty, self.allocator),
+            decl = node_id_of(p.span),
+            is_const = false,
+            is_type_param = false,
+        })
+        params.push(ty)
+    }
+    let ret = lam.return_type match {
+        Some(rt) => resolve_type_expr(self, &rt),
+        None => self.engine.fresh_var(),
+    }
+
+    self.fn_stack.push(FnFrame { name = "<lambda>", return_ty = ret, decl_span = lam.span })
+    let body_ty = check_block(self, &lam.body)
+    // The implicit-return rule of `check_function_body`, plus: an
+    // unannotated return type with a valueless body settles to void.
+    body_ty match {
+        Void => {
+            let unresolved = self.engine.resolve(ret) match { Var(_) => true, _ => false }
+            if unresolved { let _o = self.engine.unify(ret, Ty.Void) }
+        },
+        _ => {
+            let ret_is_void = self.engine.resolve(ret) match { Void => true, _ => false }
+            if !ret_is_void {
+                unify_expected(self, body_ty, ret, E_RETURN_MISMATCH, lam.span)
+            }
+        },
+    }
+    let _f = self.fn_stack.pop()
+    self.env.pop_scope()
+    let frame = self.lambda_frames.pop().unwrap()
+
+    // E2113: a name this closure captures that an enclosing open closure
+    // ALSO captures would need transitive-capture lowering.
+    if frame.captures.len > 0 and self.lambda_frames.len > 0 {
+        for i in 0..frame.captures.len {
+            let nm = frame.captures[i].name
+            for j in 0..self.lambda_frames.len {
+                let outer = &self.lambda_frames[j]
+                if captures_contain(outer, nm) {
+                    push_diag_e(self, lam.span, E_NESTED_CAPTURE,
+                        $"nested capturing closures are not yet supported: `{nm}` is captured by both this closure and an enclosing closure")
+                    frame.captures.deinit()
+                    params.deinit()
+                    return self.engine.fresh_var()
+                }
+            }
+        }
+    }
+
+    let node = node_id_of(lam.span)
+    let lid = self.next_lambda
+    self.next_lambda = lid + 1u32
+
+    if frame.captures.len == 0 {
+        // Bare function pointer: the body lowers as a module-level
+        // function under `symbol`; the literal is its address.
+        let fn_params: List(Ty) = list(params.len, self.allocator)
+        fn_params.push_all(params.as_slice())
+        self.results.record_lambda(node, LambdaInfo {
+            span = lam.span,
+            params = params,
+            ret = ret,
+            captures = frame.captures,
+            closure_id = null,
+            symbol = $"__flang_lambda_{lid}",
+        })
+        return self.engine.mk_func(fn_params, ret)
+    }
+
+    // Capturing closure: synthesize the environment struct (fields = the
+    // captures, by value) and record how to call it. The literal's type
+    // is the anonymous nominal - it can never unify with a bare fn type
+    // (E2111); it travels through generic `$F` slots instead.
+    let module_name = self.current_module.unwrap_or("__synthetic")
+    let fields: List(Field) = list(frame.captures.len, self.allocator)
+    for i in 0..frame.captures.len {
+        fields.push(Field { name = frame.captures[i].name, ty = frame.captures[i].ty })
+    }
+    let empty_tps: List(VarId) = list(0, self.allocator)
+    let sd = StructDef {
+        fqn = "",
+        module = module_name,
+        is_pub = true,
+        type_params = empty_tps,
+        fields = fields,
+        decl_span = lam.span,
+        deprecation = null,
+        is_simd = false,
+        is_foreign = false,
+    }
+    let nid = self.nominals.register(NominalDef.NomStruct(sd), $"{module_name}.__Closure_{lid}")
+
+    let sym = $"__flang_closure_call_{lid}"
+    let sig_params: List(Ty) = list(params.len, self.allocator)
+    sig_params.push_all(params.as_slice())
+    self.closures.set(nid, ClosureSig {
+        params = sig_params,
+        ret = ret,
+        symbol = from_view(sym.as_view()),
+        lambda_node = node,
+    })
+    self.results.record_lambda(node, LambdaInfo {
+        span = lam.span,
+        params = params,
+        ret = ret,
+        captures = frame.captures,
+        closure_id = Some(nid),
+        symbol = sym,
+    })
+    let no_args: List(Ty) = list(0, self.allocator)
+    return Ty.Nominal(NominalRef { id = nid, args = no_args })
 }
 
 fn check_block(self: &Checker, blk: &BlockExpr) Ty {
@@ -2678,6 +2954,9 @@ fn resolve_direct_call(self: &Checker, call: &CallExpr, ide: &IdentifierExpr, ar
         let candidates = cands.unwrap()
         let pick = resolve_overload(self, &candidates, arg_tys, call.span)
         candidates.deinit()
+        if pick.is_none() and closure_arg_hint(self, arg_tys, call.span) {
+            return Some(self.engine.fresh_var())
+        }
         return Some(commit_pick(self, pick, ide.name, arg_tys.len, call.span))
     }
     let callee_ty = check_expr(self, call.callee)
@@ -2692,7 +2971,7 @@ fn resolve_direct_call(self: &Checker, call: &CallExpr, ide: &IdentifierExpr, ar
 fn resolve_method_call(self: &Checker, call: &CallExpr, ma: &MemberAccessExpr, arg_tys: &List(Ty)) Ty? {
     let recv_ty = check_expr(self, ma.receiver)
 
-    let fc = field_call(self, &recv_ty, ma.member, arg_tys, call.span)
+    let fc = field_call(self, &recv_ty, ma.member, arg_tys, call.span, node_id_of(ma.span))
     if fc.is_some() { return fc }
 
     let vis = fn_visibility(self)
@@ -2717,31 +2996,34 @@ fn resolve_method_call(self: &Checker, call: &CallExpr, ma: &MemberAccessExpr, a
         return Some(self.engine.fresh_var())
     }
 
-    let pick = receiver_overload(self, &candidates, recv_ty, arg_tys, call.span)
-    if pick.is_none() {
-        // Receiver adaptation: a value receiver retries the `&T` overload
-        // and a reference receiver retries the value overload.
-        let r = self.engine.resolve(recv_ty)
-        let adapted = r match {
-            Ref(inner) => inner.*,
-            _ => self.engine.mk_ref(r),
-        }
-        pick = receiver_overload(self, &candidates, adapted, arg_tys, call.span)
+    // Receiver adaptation: a value receiver also matches `&T` overloads and
+    // a reference receiver also matches value overloads. The adapted shape
+    // competes inside the same resolution (see resolve_overload) rather than
+    // as a fallback pass.
+    let r = self.engine.resolve(recv_ty)
+    let adapted = r match {
+        Ref(inner) => inner.*,
+        _ => self.engine.mk_ref(r),
     }
+    let pick = receiver_overload(self, &candidates, recv_ty, arg_tys, call.span, Some(adapted))
     if pick.is_none() {
         pick = deref_retry(self, &candidates, recv_ty, arg_tys, call.span)
     }
     candidates.deinit()
+    if pick.is_none() and closure_arg_hint(self, arg_tys, call.span) {
+        return Some(self.engine.fresh_var())
+    }
     return Some(commit_pick(self, pick, ma.member, arg_tys.len, call.span))
 }
 
 // One overload-resolution attempt with `recv` prepended as the first
-// argument.
-fn receiver_overload(self: &Checker, candidates: &List(FunctionScheme), recv: Ty, arg_tys: &List(Ty), span: SourceSpan) OverloadPick? {
+// argument. `alt_recv` is its adapted value <-> &T shape, competing in the
+// same ranked set.
+fn receiver_overload(self: &Checker, candidates: &List(FunctionScheme), recv: Ty, arg_tys: &List(Ty), span: SourceSpan, alt_recv: Ty? = null) OverloadPick? {
     let full = list(arg_tys.len + 1, self.allocator)
     full.push(recv)
     full.push_all(arg_tys.as_slice())
-    let pick = resolve_overload(self, candidates, &full, span)
+    let pick = resolve_overload(self, candidates, &full, span, alt_recv)
     full.deinit()
     return pick
 }
@@ -2787,10 +3069,7 @@ fn deref_retry(self: &Checker, candidates: &List(FunctionScheme), recv_ty: Ty, a
             _ => return null,
         }
 
-        let pick = receiver_overload(self, candidates, dret, arg_tys, span)
-        if pick.is_none() {
-            pick = receiver_overload(self, candidates, inner, arg_tys, span)
-        }
+        let pick = receiver_overload(self, candidates, dret, arg_tys, span, Some(inner))
         if pick.is_some() { return pick }
 
         current = inner
@@ -2833,13 +3112,40 @@ fn commit_pick(self: &Checker, pick: OverloadPick?, name: String, n_args: usize,
     }
 }
 
+// E2111 (RFC-014): when an overload failed and one of the arguments is a
+// capturing closure, the likely cause is a bare `fn` parameter the
+// closure cannot decay into - say so instead of the generic message.
+fn closure_arg_hint(self: &Checker, arg_tys: &List(Ty), span: SourceSpan) bool {
+    for i in 0..arg_tys.len {
+        let z = self.engine.resolve(arg_tys[i])
+        let cls = closure_of(self, &z)
+        if cls.is_some() {
+            push_diag_e(self, span, E_CLOSURE_TO_FN,
+                from_view("a capturing closure cannot coerce to a bare `fn` parameter (it has no environment slot); pass it through a generic `$F` parameter instead"))
+            return true
+        }
+    }
+    return false
+}
+
 // `recv.field(args)` where `field` is a Func-typed struct field - the
 // vtable-dispatch pattern. Null when the receiver is not a struct or has
 // no Func field by that name - the UFCS path takes over.
-fn field_call(self: &Checker, recv_ty: &Ty, name: String, arg_tys: &List(Ty), span: SourceSpan) Ty? {
+fn field_call(self: &Checker, recv_ty: &Ty, name: String, arg_tys: &List(Ty), span: SourceSpan, callee_id: NodeId) Ty? {
     let fty = struct_field_lookup(self, recv_ty, name)
     if fty.is_none() { return null }
-    let f = self.engine.resolve(fty.unwrap()) match {
+    let zf = self.engine.resolve(fty.unwrap())
+    // The callee member-access node's type is what lowering classifies
+    // the dispatch by (closure -> direct op_call, fn value -> indirect);
+    // record it - the manual resolution here bypasses `check_expr`.
+    self.results.record_type(callee_id, zf)
+    // A field holding a capturing closure dispatches like any closure
+    // value - `self.f(x)` inside an adapter struct.
+    let cls = closure_of(self, &zf)
+    if cls.is_some() {
+        return Some(indirect_call(self, zf, arg_tys, span))
+    }
+    let f = zf match {
         Func(ft) => ft,
         _ => return null,
     }
@@ -2855,11 +3161,39 @@ fn field_call(self: &Checker, recv_ty: &Ty, name: String, arg_tys: &List(Ty), sp
     return Some(f.ret.*)
 }
 
+// The closure-call signature for a value of synthesized-closure type,
+// or null when the type is not a closure nominal.
+fn closure_of(self: &Checker, ty: &Ty) &ClosureSig? {
+    let nid = ty.* match {
+        Nominal(nr) => Some(nr.id),
+        _ => null,
+    }
+    if nid.is_none() { return null }
+    return self.closures.get_ref(nid.unwrap())
+}
+
 // A callee that is a value: a Func-typed binding calls directly; an
 // unresolved binding is constrained to a function of the call's shape
 // (so lambda-typed locals infer); anything else is not callable.
 fn indirect_call(self: &Checker, callee_ty: Ty, arg_tys: &List(Ty), span: SourceSpan) Ty {
     let z = self.engine.resolve(callee_ty)
+    // A capturing closure (RFC-014) dispatches through its synthesized
+    // op_call - the value's nominal id keys the global closure table, so
+    // this works in any body a closure reached through a `$F` slot.
+    let cls = closure_of(self, &z)
+    if cls.is_some() {
+        let c = cls.unwrap()
+        if c.params.len != arg_tys.len {
+            push_diag_e(self, span, E_NO_OVERLOAD,
+                $"no matching overload with {arg_tys.len} argument(s)")
+            return self.engine.fresh_var()
+        }
+        for i in 0..arg_tys.len {
+            const o = self.engine.unify(arg_tys[i], c.params[i])
+            report_unify(self, &o, E_TYPE_MISMATCH, span)
+        }
+        return c.ret
+    }
     let ft = z match {
         Func(f) => Some(f),
         _ => null,
@@ -2915,25 +3249,57 @@ type PickInst = struct {
 // unification. Each candidate is probed inside an engine checkpoint that
 // is rolled back, so losing candidates leave no bindings. Arity accepts
 // [required, total]: trailing defaulted params may be omitted and a
-// variadic tail takes any surplus. Preference: fewer quantified vars,
-// then lower coercion cost, then registration order.
-fn resolve_overload(self: &Checker, candidates: &List(FunctionScheme), arg_tys: &List(Ty), span: SourceSpan) OverloadPick? {
+// variadic tail takes any surplus. Preference: higher structural
+// specificity (each concrete type constructor is a constraint the
+// arguments satisfied - `Dict($K,$V)` beats the catch-all `$T`), then
+// lower coercion cost, then fewer quantified vars, then registration
+// order.
+fn resolve_overload(self: &Checker, candidates: &List(FunctionScheme), arg_tys: &List(Ty), span: SourceSpan, alt_recv: Ty? = null) OverloadPick? {
+    // `alt_recv` is the UFCS receiver's adapted value <-> &T shape. It rides
+    // along per candidate (+1 cost) instead of running as a second pass, so
+    // adapted candidates compete in the SAME ranked set: a catch-all that
+    // matches the un-adapted receiver must not preempt a structurally more
+    // specific overload that needs the adaptation.
+    let alt_args: List(Ty) = list(0, self.allocator)
+    defer alt_args.deinit()
+    let has_alt = alt_recv.is_some() and arg_tys.len > 0
+    if has_alt {
+        alt_args.push(alt_recv.unwrap())
+        for i in 1..arg_tys.len {
+            alt_args.push(arg_tys[i])
+        }
+    }
+
     let best: usize? = null
     let best_cost = 0u32
     let best_generics = 0usize
+    let best_spec = 0u32
+    let best_used_alt = false
 
     for ci in 0..candidates.len {
         let c = &candidates[ci]
+        let used_alt = false
         let probed = probe_candidate(self, c, arg_tys)
+        if probed.is_none() and has_alt {
+            let alt_probed = probe_candidate(self, c, &alt_args)
+            if alt_probed.is_some() {
+                used_alt = true
+                probed = Some(alt_probed.unwrap() + 1u32)
+            }
+        }
         if probed.is_some() {
             let cost = probed.unwrap()
             let generics = c.signature.quantified.len()
+            let spec = scheme_specificity(&c.signature, arg_tys.len)
             let better = best.is_none() or generics < best_generics
                 or (generics == best_generics and cost < best_cost)
+                or (generics == best_generics and cost == best_cost and spec > best_spec)
             if better {
                 best = Some(ci)
                 best_cost = cost
                 best_generics = generics
+                best_spec = spec
+                best_used_alt = used_alt
             }
         }
     }
@@ -2952,8 +3318,10 @@ fn resolve_overload(self: &Checker, candidates: &List(FunctionScheme), arg_tys: 
     }
     let f = ft.unwrap()
     let checked = non_variadic_arg_count(w, &f, arg_tys.len)
+    // Commit with the receiver shape the winner actually matched.
+    let commit_args = if best_used_alt { &alt_args } else { arg_tys }
     for i in 0..checked {
-        const o = self.engine.unify(arg_tys[i], f.params[i])
+        const o = self.engine.unify(commit_args[i], f.params[i])
         report_unify(self, &o, E_TYPE_MISMATCH, span)
     }
     let inst: PickInst? = null
@@ -2968,6 +3336,52 @@ fn resolve_overload(self: &Checker, candidates: &List(FunctionScheme), arg_tys: 
 // Speculatively check one candidate: null when it cannot take these
 // arguments, else the total coercion cost plus a penalty per omitted
 // defaulted param (fuller matches win, as in the reference checker).
+// Structural specificity of a candidate's declared parameters: the count
+// of concrete type constructors, with type variables contributing nothing.
+// The primary ranking key in `resolve_overload` - a stand-in for a real
+// constraint system. `deinit(&List($T))` (Ref+Nominal = 2) beats the
+// universal `deinit(&$T)` (Ref = 1), and `any(&Dict($K,$V), $F)` beats
+// the iterator catch-all `any($I, $F)`. Only the first `supplied` params
+// are scored: a defaulted param the call omitted is not a constraint its
+// arguments satisfied, and must not out-rank an exact shorter overload.
+fn scheme_specificity(s: &Scheme, supplied: usize) u32 {
+    let ft = s.body match {
+        Func(f) => Some(f),
+        _ => null,
+    }
+    if ft.is_none() { return 0 }
+    let f = ft.unwrap()
+    let n = if supplied < f.params.len { supplied } else { f.params.len }
+    let total = 0u32
+    for i in 0..n {
+        total = total + ty_specificity(f.params[i])
+    }
+    return total
+}
+
+fn ty_specificity(t: Ty) u32 {
+    return t match {
+        Var(_) => 0u32,
+        Ref(inner) => 1u32 + ty_specificity(inner.*),
+        Array(a) => 1u32 + ty_specificity(a.elem.*),
+        Func(f) => {
+            let sum = 1u32 + ty_specificity(f.ret.*)
+            for i in 0..f.params.len {
+                sum = sum + ty_specificity(f.params[i])
+            }
+            sum
+        },
+        Nominal(nr) => {
+            let sum = 1u32
+            for i in 0..nr.args.len {
+                sum = sum + ty_specificity(nr.args[i])
+            }
+            sum
+        },
+        _ => 1u32,
+    }
+}
+
 fn probe_candidate(self: &Checker, c: &FunctionScheme, arg_tys: &List(Ty)) u32? {
     let f = scheme_fn_ty(self, &c.signature) match {
         Some(ft) => ft,
@@ -3325,6 +3739,106 @@ fn struct_field_lookup(self: &Checker, recv: &Ty, name: String) Ty? {
 // Top-level driver
 // ─────────────────────────────────────────────────────────────────────
 
+
+// Zonk a lambda record's types once inference settled; a still-open
+// parameter or return type means nothing anywhere pinned the lambda -
+// the reference's "no-context lambda" error (E2001 here).
+fn zonk_lambda_info(self: &Checker, info: &LambdaInfo) LambdaInfo {
+    let ps: List(Ty) = list(info.params.len, self.allocator)
+    for i in 0..info.params.len {
+        ps.push(self.engine.zonk(info.params[i]))
+    }
+    let ret = self.engine.zonk(info.ret)
+    let caps: List(CaptureRec) = list(info.captures.len, self.allocator)
+    for i in 0..info.captures.len {
+        caps.push(CaptureRec {
+            name = info.captures[i].name,
+            ty = self.engine.zonk(info.captures[i].ty),
+        })
+    }
+    if !sig_concrete(self, &ps, &ret) {
+        push_diag_e(self, info.span, E_UNINFERRED,
+            from_view("cannot infer the lambda's parameter or return types; annotate them or use the lambda where the types are pinned"))
+    }
+    return LambdaInfo {
+        span = info.span,
+        params = ps,
+        ret = ret,
+        captures = caps,
+        closure_id = info.closure_id,
+        symbol = info.symbol,
+    }
+}
+
+// Rebuild the active result set's lambda table with zonked entries. The
+// old table is abandoned to the allocator, like `replace_node_types`;
+// the symbol buffers carry over by view-stable copy.
+fn zonk_lambda_table(self: &Checker) {
+    if self.results.lambdas.len() == 0 { return }
+    let zl: Dict(NodeId, LambdaInfo) = dict(self.allocator)
+    for e in self.results.lambdas {
+        // Annotated: the self-hosted checker types for-over-iterator
+        // variables as unconstrained vars (protocol resolution is
+        // post-M10), so the entry needs the pin.
+        let info: LambdaInfo = e.value
+        let key: NodeId = e.key
+        zl.set(key, zonk_lambda_info(self, &info))
+    }
+    self.results.replace_lambdas(zl)
+}
+
+// Zonk the global closure table and each closure nominal's registry
+// fields (capture types recorded mid-inference; layout reads the
+// registry). Runs once, at the end of `check_all`, while the engine is
+// still live.
+fn zonk_closures(self: &Checker) {
+    if self.closures.len() == 0 { return }
+    let zc: Dict(NominalId, ClosureSig) = dict(self.allocator)
+    for e in self.closures {
+        // Annotated pins for the self-hosted checker (see zonk_lambda_table).
+        let cs: ClosureSig = e.value
+        let key: NominalId = e.key
+        let ps: List(Ty) = list(cs.params.len, self.allocator)
+        for i in 0..cs.params.len {
+            ps.push(self.engine.zonk(cs.params[i]))
+        }
+        zc.set(key, ClosureSig {
+            params = ps,
+            ret = self.engine.zonk(cs.ret),
+            symbol = cs.symbol,
+            lambda_node = cs.lambda_node,
+        })
+
+        // Registry fields: rebuild the struct def with zonked capture types.
+        let d = self.nominals.get(key)
+        d.* match {
+            NomStruct(sd) => {
+                let zfields: List(Field) = list(sd.fields.len, self.allocator)
+                for i in 0..sd.fields.len {
+                    zfields.push(Field {
+                        name = sd.fields[i].name,
+                        ty = self.engine.zonk(sd.fields[i].ty),
+                    })
+                }
+                let updated = StructDef {
+                    fqn = sd.fqn,
+                    module = sd.module,
+                    is_pub = sd.is_pub,
+                    type_params = sd.type_params,
+                    fields = zfields,
+                    decl_span = sd.decl_span,
+                    deprecation = sd.deprecation,
+                    is_simd = sd.is_simd,
+                    is_foreign = sd.is_foreign,
+                }
+                self.nominals.defs[e.key as usize] = NominalDef.NomStruct(updated)
+            },
+            _ => {},
+        }
+    }
+    self.closures = zc
+}
+
 pub fn check_all(self: &Checker, modules: &List(Module), paths: &List(String)) TypeCheckResult {
     // Wire the import graph before any name resolution runs.
     build_visibility(self, modules, paths)
@@ -3355,6 +3869,11 @@ pub fn check_all(self: &Checker, modules: &List(Module), paths: &List(String)) T
     // Phase 3.6: any unsuffixed literal nothing ever pinned is E2001.
     validate_literals(self)
 
+    // RFC-014: settle the lambda/closure tables (the overlay-scoped
+    // lambda tables of instantiations were zonked inside `instantiate`).
+    zonk_lambda_table(self)
+    zonk_closures(self)
+
     // Zonk every node-type entry so the result is final.
     let zonked: Dict(NodeId, Ty) = dict(self.allocator)
     for entry in self.results.node_types {
@@ -3372,6 +3891,9 @@ pub fn check_all(self: &Checker, modules: &List(Module), paths: &List(String)) T
     let out_synth_strings = self.results.synth_strings
     let out_nominals = self.nominals
     let out_functions = self.functions
+    let out_lambdas = self.results.lambdas
+    let out_closures = self.closures
+    self.closures = dict(self.allocator)
 
     self.results.reset_side_tables()
     self.nominals = nominal_registry(self.allocator)
@@ -3390,6 +3912,8 @@ pub fn check_all(self: &Checker, modules: &List(Module), paths: &List(String)) T
         synth_strings = out_synth_strings,
         nominals = out_nominals,
         functions = out_functions,
+        lambdas = out_lambdas,
+        closures = out_closures,
     }
 }
 
@@ -3757,6 +4281,18 @@ test "a generic call instantiates once per concrete signature" {
     assert_true(s0.overlay.node_types.length > 0, "overlay recorded body node types")
 }
 
+test "structural specificity outranks quantifier count in overload ranking" {
+    // `pick(Pair($A,$B))` quantifies MORE vars (2) than the catch-all
+    // `pick($T)` (1), but its receiver carries a concrete constructor, so
+    // it must win. The overloads' return types differ (i32 vs bool): if
+    // the catch-all wins, `main` returns bool from an i32 function and
+    // the check errors — 0 errors proves the structured overload won.
+    let errs = count_check_errors(
+        ["pub type Pair = struct(A, B) { a: A b: B }\npub fn pick(x: Pair($A, $B)) i32 { return 1 }\npub fn pick(x: $T) bool { return true }\nfn main() i32 { let p: Pair(i32, u8) p.a = 1i32 p.b = 2u8 return pick(p) }\n"],
+        ["m"])
+    assert_eq(errs, 0 as usize, "the structured overload wins despite more quantified vars")
+}
+
 test "generic template bodies only report when instantiated" {
     // `bad`'s body calls a function that does not exist - uninstantiated
     // the template is never validated, instantiated it reports.
@@ -3797,3 +4333,91 @@ test "a generic member call inside a partially-fixed generic instantiates" {
     assert_true(errors == 0, "cap's K and V pin from set2's concrete receiver")
 }
 
+
+// ─────────────────────────────────────────────────────────────────────
+// Lambda / closure tests (RFC-014)
+// ─────────────────────────────────────────────────────────────────────
+
+test "a non-capturing lambda records a bare-fn lambda info" {
+    let src = "fn apply(f: fn(i32) i32, x: i32) i32 { return f(x) }\nfn main() i32 { return apply(fn(v: i32) i32 { v + 1 }, 4) }\n"
+    let errs = count_check_errors([src], ["m"])
+    assert_eq(errs, 0 as usize, "checks clean")
+    let res = check_result_of([src], ["m"])
+    assert_eq(res.lambdas.len(), 1 as usize, "one lambda record")
+    assert_eq(res.closures.len(), 0 as usize, "no captures, no closure table entry")
+    for e in res.lambdas {
+        assert_eq(e.value.captures.len, 0 as usize, "no captures")
+        assert_eq(e.value.params.len, 1 as usize, "one parameter")
+        assert_true(e.value.closure_id.is_none(), "no closure nominal")
+    }
+    res.deinit()
+}
+
+test "a capturing lambda synthesizes a closure and dispatches through $F" {
+    let src = "fn apply(f: $F, x: i32) i32 { return f(x) }\nfn main() i32 { let k = 40 return apply(fn(v: i32) i32 { v + k }, 2) }\n"
+    let errs = count_check_errors([src], ["m"])
+    assert_eq(errs, 0 as usize, "capturing closure through $F checks clean")
+    let res = check_result_of([src], ["m"])
+    assert_eq(res.closures.len(), 1 as usize, "one closure dispatch entry")
+    assert_eq(res.lambdas.len(), 1 as usize, "one lambda record")
+    for e in res.lambdas {
+        assert_eq(e.value.captures.len, 1 as usize, "captured k")
+        assert_true(e.value.closure_id.is_some(), "closure nominal synthesized")
+        assert_true(e.value.captures[0].name == "k", "capture is by name")
+    }
+    res.deinit()
+}
+
+test "unannotated lambda params pin through a generic callable slot" {
+    let src = "fn apply(f: $F, x: i32) i32 { return f(x) }\nfn main() i32 { return apply(fn(v) { v + 1 }, 4) }\n"
+    let errs = count_check_errors([src], ["m"])
+    assert_eq(errs, 0 as usize, "no-annotation lambda through $F checks clean")
+    let res = check_result_of([src], ["m"])
+    for e in res.lambdas {
+        // The instantiation's body re-check unified the fresh param var
+        // with i32; the zonked record must be concrete.
+        let is_i32 = e.value.params[0] match {
+            Prim(pk) => pk match { I32 => true, _ => false },
+            _ => false,
+        }
+        assert_true(is_i32, "param pinned to i32 through the instantiation")
+    }
+    res.deinit()
+}
+
+test "assigning to a captured variable is E2112" {
+    let errs = count_check_errors(
+        ["fn take(f: $F) i32 { return f(1) }\nfn main() i32 { let k = 1\n return take(fn(v: i32) i32 { k = 2\n v }) }\n"],
+        ["m"])
+    assert_true(errs > 0, "capture assignment reports")
+}
+
+test "nested transitive captures are E2113" {
+    let errs = count_check_errors(
+        ["fn take(f: $F) i32 { return f(1) }\nfn main() i32 { let a = 1\n return take(fn(x: i32) i32 { let g = fn(y: i32) i32 { y + a }\n g(x) + a }) }\n"],
+        ["m"])
+    assert_true(errs > 0, "shared capture across nested closures reports")
+}
+
+test "a capturing closure cannot fill a bare fn slot (E2111 hint)" {
+    let errs = count_check_errors(
+        ["fn apply(f: fn(i32) i32, x: i32) i32 { return f(x) }\nfn main() i32 { let k = 1\n return apply(fn(v: i32) i32 { v + k }, 2) }\n"],
+        ["m"])
+    assert_true(errs > 0, "closure into fn slot reports")
+}
+
+test "a lambda inside a generic template records per instantiation" {
+    let src = "fn scale(x: $T) T { let f = fn(v: T) T { v }\n return f(x) }\nfn main() i32 { let a = scale(1i32)\n let b = scale(2i64)\n if b == 2 { return a } return 0 }\n"
+    let errs = count_check_errors([src], ["m"])
+    assert_eq(errs, 0 as usize, "template lambda checks per instantiation")
+    let res = check_result_of([src], ["m"])
+    // The lambda lives in the template body: each instantiation's overlay
+    // carries its own record; the program table has none.
+    assert_eq(res.lambdas.len(), 0 as usize, "no program-table record")
+    let seen: usize = 0
+    for i in 0..res.specializations.len {
+        seen = seen + res.specializations[i].overlay.lambdas.len()
+    }
+    assert_eq(seen, 2 as usize, "one lambda record per instantiation")
+    res.deinit()
+}

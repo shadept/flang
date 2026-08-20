@@ -61,6 +61,7 @@
 // `ast` and `fir` both export `BinaryOp`/`UnaryOp`; neither is named here
 // (operators match AST variants and emit through builder methods).
 
+import std.set
 import std.allocator
 import std.dict
 import std.list
@@ -130,6 +131,28 @@ type LowerCtx = struct {
     flushing: bool
     // TEMPORARY SCAFFOLD - see `unlowerable`. Delete with it.
     blocked: bool
+    // RFC-014: lambda bodies enqueued at their literal sites, emitted as
+    // module-level functions after the main walk (a body can enqueue
+    // nested lambdas, so the drain is index-based).
+    pending_lambdas: List(PendingLambda)
+}
+
+// A lambda body awaiting emission. `lam`/`info` are shallow copies
+// (children stay in the module arena / the checker's tables); `overlay`
+// is the specialization overlay active at the literal site, so a lambda
+// inside an instantiated template body lowers against that
+// instantiation's node types.
+type PendingLambda = struct {
+    lam: LambdaExpr
+    info: LambdaInfo
+    overlay: &InferenceResults?
+}
+
+// Closure emission info for `lower_function_body`: the synthesized env
+// struct's type and the capture list whose fields it binds.
+type LoweredClosure = struct {
+    ty: Ty
+    captures: &List(CaptureRec)
 }
 
 // An interned string literal: the data-segment global holding its
@@ -313,10 +336,12 @@ pub fn lower_module(ast_module: &Module, result: &TypeCheckResult, allocator: &A
         defers = defer_stack,
         defer_marks = defer_marks,
         flushing = false,
-        blocked = false
+        blocked = false,
+        pending_lambdas = list(0, allocator)
     }
     lower_into(&m, &ctx, ast_module, "")
     lower_specializations(&m, &ctx)
+    lower_pending_lambdas(&m, &ctx)
     flush_strings(&m, &ctx)
     // ponytail: the symbol table leaks - the IrModule's function names
     // are views into its owned strings, so freeing it here would dangle
@@ -343,11 +368,12 @@ pub fn lower_program(modules: &List(Module), fqns: &List(OwnedString), result: &
     let str_globals: List(Global) = list(0, allocator)
     let defer_stack: List(Expr) = list(0, allocator)
     let defer_marks: List(usize) = list(0, allocator)
-    let ctx = LowerCtx { result = result, overlay = null, syms = &syms, allocator = allocator, loops = loop_stack, sret = null, ret_size = 0u64, strings = interner, str_globals = str_globals, defers = defer_stack, defer_marks = defer_marks, flushing = false, blocked = false }
+    let ctx = LowerCtx { result = result, overlay = null, syms = &syms, allocator = allocator, loops = loop_stack, sret = null, ret_size = 0u64, strings = interner, str_globals = str_globals, defers = defer_stack, defer_marks = defer_marks, flushing = false, blocked = false, pending_lambdas = list(0, allocator) }
     for i in 0..modules.len {
         lower_into(&m, &ctx, &modules[i], fqns[i].as_view())
     }
     lower_specializations(&m, &ctx)
+    lower_pending_lambdas(&m, &ctx)
     flush_strings(&m, &ctx)
     // ponytail: the symbol table leaks - the IrModule's names borrow its
     // strings (see lower_module).
@@ -512,6 +538,11 @@ fn lower_function(m: &IrModule, ctx: &LowerCtx, decl: &FunctionDecl) {
 // (return included because a return-only-polymorphic template's
 // instantiations share every parameter token).
 fn lower_specializations(m: &IrModule, ctx: &LowerCtx) {
+    // Two specs can settle to the SAME final signature when their
+    // signatures entered instantiation with callable-slot vars (RFC-014
+    // lambdas through `$F`) - their symbols then collide; emit the first
+    // and skip the twins.
+    let emitted: Set(String) = set(ctx.allocator)
     for i in 0..ctx.result.specializations.len {
         let s = &ctx.result.specializations[i]
         if s.decl.body.is_none() { continue }
@@ -519,14 +550,75 @@ fn lower_specializations(m: &IrModule, ctx: &LowerCtx) {
         let sig = ctx.syms.spec_sig(s.id)
         if sym.is_none() { continue }
         if sig.is_none() { continue }
+        if emitted.contains(sym.unwrap()) { continue }
+        emitted.add(sym.unwrap())
         let g = sig.unwrap()
         ctx.overlay = Some(&s.overlay)
         lower_function_body(m, ctx, &s.decl, sym.unwrap(), &g)
         ctx.overlay = null
     }
+    emitted.deinit()
 }
 
-fn lower_function_body(m: &IrModule, ctx: &LowerCtx, decl: &FunctionDecl, sym: String, sig: &FnSig) {
+// Emit every enqueued lambda body. Index-based on purpose: emitting one
+// can enqueue lambdas nested inside it.
+fn lower_pending_lambdas(m: &IrModule, ctx: &LowerCtx) {
+    let i: usize = 0
+    while i < ctx.pending_lambdas.len {
+        // Copy out: the list may grow (and reallocate) during emission.
+        let pl = ctx.pending_lambdas[i]
+        i = i + 1
+        let saved = ctx.overlay
+        ctx.overlay = pl.overlay
+        emit_lambda_fn(m, ctx, &pl)
+        ctx.overlay = saved
+    }
+}
+
+fn emit_lambda_fn(m: &IrModule, ctx: &LowerCtx, pl: &PendingLambda) {
+    let empty_dirs: List(DeclAttribute) = list(0, ctx.allocator)
+    let decl = FunctionDecl {
+        span = pl.lam.span,
+        is_pub = false,
+        directives = empty_dirs,
+        name = pl.info.symbol.as_view(),
+        params = pl.lam.params,
+        return_type = pl.lam.return_type,
+        body = Some(pl.lam.body),
+    }
+    let sig_params: List(Ty) = list(pl.info.params.len, ctx.allocator)
+    sig_params.push_all(pl.info.params.as_slice())
+    let sig = FnSig { params = sig_params, ret = pl.info.ret }
+    if pl.info.captures.len == 0 {
+        lower_function_body(m, ctx, &decl, pl.info.symbol.as_view(), &sig)
+        return
+    }
+    let cid = pl.info.closure_id.unwrap()
+    let no_args: List(Ty) = list(0, ctx.allocator)
+    let cty = Ty.Nominal(NominalRef { id = cid, args = no_args })
+    lower_function_body(m, ctx, &decl, pl.info.symbol.as_view(), &sig,
+        Some(LoweredClosure { ty = cty, captures = &pl.info.captures }))
+}
+
+fn bind_closure_captures(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, c: &LoweredClosure, self_val: Operand) {
+    let target = resolve_struct(&c.ty, &ctx.result.nominals, ctx.allocator)
+    if target.is_none() {
+        ctx.blocked = true
+        return
+    }
+    let st = target.unwrap()
+    for i in 0..c.captures.len {
+        let cap = &c.captures[i]
+        let addr = bb.gep(self_val, Operand.IntConst(st.layout.offsets[i] as i64))
+        if is_by_ref(ctx, &cap.ty) {
+            env.bind_aggregate(cap.name, addr, cap.ty)
+        } else {
+            env.bind_slot(cap.name, addr, ir_of(&cap.ty), cap.ty)
+        }
+    }
+}
+
+fn lower_function_body(m: &IrModule, ctx: &LowerCtx, decl: &FunctionDecl, sym: String, sig: &FnSig, closure: LoweredClosure? = null) {
     // The scheme and the decl are two views of one declaration; a length
     // mismatch is a violated contract, not a case to paper over.
     if sig.params.len != decl.params.len { return }
@@ -542,6 +634,12 @@ fn lower_function_body(m: &IrModule, ctx: &LowerCtx, decl: &FunctionDecl, sym: S
 
     let fb = function(sym, return_ir, ctx.allocator)
     let env = new_env(ctx.allocator)
+    // A closure op_call takes its environment struct's address as a
+    // leading parameter, before the lambda's own parameters (and before
+    // the sret slot, mirroring the call-site layout in
+    // `lower_callee_value_call`).
+    let self_op: Operand? = null
+    if closure.is_some() { self_op = Some(fb.param(IrType.Ptr)) }
     let param_ops: List(Operand) = list(decl.params.len + 1, ctx.allocator)
     for i in 0..sig.params.len {
         param_ops.push(fb.param(ir_of(&sig.params[i])))
@@ -584,6 +682,13 @@ fn lower_function_body(m: &IrModule, ctx: &LowerCtx, decl: &FunctionDecl, sym: S
         }
     }
     param_ops.deinit()
+    // Captured names bind to fields of the closure env - reads project
+    // through the caller's struct (captures are read-only, E2112, so
+    // aliasing it is safe; no copy).
+    if closure.is_some() {
+        let c = closure.unwrap()
+        bind_closure_captures(ctx, &cur, &env, &c, self_op.unwrap())
+    }
     let body = decl.body.unwrap()
     let r = lower_block(ctx, &cur, &env, &body)
     if !r.terminated {
@@ -932,8 +1037,7 @@ fn lower_expr(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, expr: &Expr) Operand
         // `a..b` outside a `for` header has no value representation yet;
         // `for` handles its own range directly (see `lower_for_range`).
         Range(_) => unlowerable(ctx),
-        // `fn(x) { … }` - needs closure conversion and a capture record.
-        Lambda(_) => unlowerable(ctx),
+        Lambda(lam) => lower_lambda(ctx, bb, env, &lam),
         // A parse or projection failure. Already diagnosed upstream; refusing
         // the function keeps a recovered AST from reaching the backend. Not
         // part of the milestone scaffold - this one stays.
@@ -1177,6 +1281,43 @@ fn range_cond(bb: &BlockBuilder, ir: IrType, sg: bool, inclusive: bool, iv: Oper
 // checker's deliberate fresh-var fallbacks such as named arguments), or
 // when the callee's signature was outside the lowerable subset - in that
 // case there is no definition in the module to link against.
+// `fn(params) { body }` at its literal site (RFC-014). Non-capturing:
+// the value is the synthesized function's address. Capturing: build the
+// env struct in a slot from the current values of the captured locals
+// (by value - later mutation of the outer local is invisible inside).
+// Either way the body's emission is enqueued for the post-walk drain.
+fn lower_lambda(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, lam: &LambdaExpr) Operand {
+    let info_opt = ctx_lambda(ctx, node_id_of(lam.span))
+    if info_opt.is_none() { return unlowerable(ctx) }
+    let info = info_opt.unwrap()
+    ctx.pending_lambdas.push(PendingLambda {
+        lam = lam.*,
+        info = info.*,
+        overlay = ctx.overlay,
+    })
+    if info.captures.len == 0 {
+        return Operand.FuncRef(info.symbol.as_view())
+    }
+    let cid = info.closure_id.unwrap()
+    let no_args: List(Ty) = list(0, ctx.allocator)
+    let cty = Ty.Nominal(NominalRef { id = cid, args = no_args })
+    let target = resolve_struct(&cty, &ctx.result.nominals, ctx.allocator)
+    if target.is_none() { return unlowerable(ctx) }
+    let st = target.unwrap()
+    let slot = bb.stack_slot(st.layout.size as u64, st.layout.align as u64)
+    for i in 0..info.captures.len {
+        let cap = &info.captures[i]
+        let v = read_binding(ctx, bb, env, cap.name, &cap.ty)
+        let fp = bb.gep(slot, Operand.IntConst(st.layout.offsets[i] as i64))
+        if is_by_ref(ctx, &cap.ty) {
+            bb.memcpy(fp, v, Operand.IntConst(layout_of(&cap.ty, &ctx.result.nominals, ctx.allocator).size as i64))
+        } else {
+            bb.store(ir_of(&cap.ty), v, fp)
+        }
+    }
+    return slot
+}
+
 fn lower_call(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, call: &CallExpr) Operand {
     // A call the checker resolved to an enum variant (`Some(x)`,
     // `Color.Red(x)`) is construction, not a function call - there is no
@@ -1205,8 +1346,11 @@ fn lower_call(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, call: &CallExpr) Ope
             _ => {},
         }
     }
-    if sym_opt.is_none() { return unlowerable(ctx) }
-    if sig_opt.is_none() { return unlowerable(ctx) }
+    if sym_opt.is_none() or sig_opt.is_none() {
+        // No resolved symbol: the callee may be a VALUE - a closure or a
+        // bare fn pointer (RFC-014).
+        return lower_callee_value_call(ctx, bb, env, call)
+    }
     let sym = sym_opt.unwrap()
     let sig = sig_opt.unwrap()
 
@@ -1272,6 +1416,95 @@ fn emit_call(ctx: &LowerCtx, bb: &BlockBuilder, sym: String, sig: &FnSig, args: 
         return Operand.IntConst(0)
     }
     return bb.call(sym, ir_of(&sig.ret), args)
+}
+
+// A call whose callee is a value rather than a resolved symbol. A
+// closure value dispatches directly to its synthesized op_call with the
+// value's address as the leading env argument; a bare fn-typed value
+// calls through `CallIndirect`. Anything else is a call the checker
+// left unresolved - refuse.
+fn lower_callee_value_call(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, call: &CallExpr) Operand {
+    let callee_ty = node_ty(ctx, expr_span(call.callee))
+
+    let nid = callee_ty match {
+        Nominal(nr) => Some(nr.id),
+        _ => null,
+    }
+    if nid.is_some() {
+        let cs = ctx.result.get_closure(nid.unwrap())
+        if cs.is_none() { return unlowerable(ctx) }
+        let c = cs.unwrap()
+        let args: List(Operand) = list(call.args.len + 2, ctx.allocator)
+        // The closure struct is an aggregate: lowering it yields its
+        // address, which IS the env pointer op_call expects.
+        args.push(lower_expr(ctx, bb, env, call.callee))
+        for i in 0..call.args.len {
+            call.args[i] match {
+                Positional(e) => args.push(lower_expr(ctx, bb, env, e)),
+                Named(_) => {},
+            }
+        }
+        if args.len != c.params.len + 1 {
+            args.deinit()
+            return unlowerable(ctx)
+        }
+        let want = node_ty(ctx, call.span)
+        if !repr_compatible(ctx, &c.ret, &want) {
+            args.deinit()
+            return unlowerable(ctx)
+        }
+        let sig_params: List(Ty) = list(0, ctx.allocator)
+        let sig = FnSig { params = sig_params, ret = c.ret }
+        return emit_call(ctx, bb, c.symbol.as_view(), &sig, args)
+    }
+
+    let ft = callee_ty match {
+        Func(f) => Some(f),
+        _ => null,
+    }
+    if ft.is_none() { return unlowerable(ctx) }
+    let f = ft.unwrap()
+    let fn_ptr = lower_expr(ctx, bb, env, call.callee)
+    let ptys: List(IrType) = list(f.params.len + 1, ctx.allocator)
+    for i in 0..f.params.len {
+        ptys.push(ir_of(&f.params[i]))
+    }
+    let args: List(Operand) = list(call.args.len + 1, ctx.allocator)
+    for i in 0..call.args.len {
+        call.args[i] match {
+            Positional(e) => args.push(lower_expr(ctx, bb, env, e)),
+            Named(_) => {},
+        }
+    }
+    if args.len != f.params.len {
+        args.deinit()
+        ptys.deinit()
+        return unlowerable(ctx)
+    }
+    let want = node_ty(ctx, call.span)
+    if !repr_compatible(ctx, f.ret, &want) {
+        args.deinit()
+        ptys.deinit()
+        return unlowerable(ctx)
+    }
+    if is_by_ref(ctx, f.ret) {
+        let lay = layout_of(f.ret, &ctx.result.nominals, ctx.allocator)
+        let tmp = bb.stack_slot(lay.size as u64, lay.align as u64)
+        args.push(tmp)
+        ptys.push(IrType.Ptr)
+        bb.call_indirect_void(fn_ptr, ptys, args)
+        return tmp
+    }
+    let returns_value = f.ret.* match {
+        Void => false,
+        Never => false,
+        _ => true,
+    }
+    if !returns_value {
+        bb.call_indirect_void(fn_ptr, ptys, args)
+        return Operand.IntConst(0)
+    }
+    return bb.call_indirect(fn_ptr, ptys, ir_of(f.ret), args)
 }
 
 // Structs and member access (M4, minimal)
@@ -2475,6 +2708,21 @@ fn lower_identifier(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, id: &Identifie
     let vnum = resolved_variant(ctx, id.span)
     if vnum.is_some() { return lower_variant_nullary(ctx, bb, id.span, vnum.unwrap()) }
     let want = node_ty(ctx, id.span)
+    // A function NAME in value position decays to its address (RFC-014
+    // fn values). Locals shadow functions, so the env is consulted first.
+    if env.get(id.name).is_none() {
+        let tgt = ctx_target(ctx, node_id_of(id.span))
+        if tgt.is_some() {
+            let fid = tgt.unwrap() match {
+                RtFunction(f) => Some(f),
+                _ => null,
+            }
+            if fid.is_some() {
+                let s = ctx.syms.lookup_symbol(fid.unwrap())
+                if s.is_some() { return Operand.FuncRef(s.unwrap()) }
+            }
+        }
+    }
     return read_binding(ctx, bb, env, id.name, &want)
 }
 
@@ -2677,6 +2925,20 @@ fn ctx_target(ctx: &LowerCtx, id: NodeId) ResolvedTarget? {
         None => {},
     }
     return ctx.result.get_target(id)
+}
+
+// The checked lambda record for the literal at `id`, through the
+// active overlay first (a template body's lambda records once per
+// instantiation).
+fn ctx_lambda(ctx: &LowerCtx, id: NodeId) &LambdaInfo? {
+    ctx.overlay match {
+        Some(ov) => {
+            let l = ov.lambdas.get_ref(id)
+            if l.is_some() { return l }
+        },
+        None => {},
+    }
+    return ctx.result.get_lambda(id)
 }
 
 fn ctx_operator(ctx: &LowerCtx, id: NodeId) ResolvedOperator? {
@@ -4489,4 +4751,90 @@ fn gep_offset_count(f: &Function, off: i64) usize {
         }
     }
     return n
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// Lambda / closure lowering tests (RFC-014)
+// ─────────────────────────────────────────────────────────────────────
+
+test "a non-capturing lambda emits a module-level function and a FuncRef" {
+    let unit = analyze(from_view("fn apply(f: fn(i32) i32, x: i32) i32 { return f(x) }\nfn main() i32 { return apply(fn(v: i32) i32 { v + 1 }, 4) }"), "test.f")
+    let m = lower_module(&unit.module, &unit.result)
+    assert_true(!was_skipped(&m, "main"), "main lowered")
+    assert_true(!was_skipped(&m, "apply"), "apply lowered")
+    let li = find_fn_starting(&m, "__flang_lambda_")
+    assert_true(li < m.functions.len, "the lambda body was emitted as a function")
+}
+
+test "a fn-typed parameter call lowers to CallIndirect" {
+    let unit = analyze(from_view("fn apply(f: fn(i32) i32, x: i32) i32 { return f(x) }\nfn main() i32 { return apply(fn(v: i32) i32 { v + 1 }, 4) }"), "test.f")
+    let m = lower_module(&unit.module, &unit.result)
+    let ai = find_fn(&m, "apply__ptr_i32")
+    if ai >= m.functions.len { ai = find_fn_starting(&m, "apply") }
+    assert_true(ai < m.functions.len, "apply emitted")
+    let saw_indirect = false
+    let f = &m.functions[ai]
+    for b in 0..f.blocks.len {
+        let instrs = &f.blocks[b].instrs
+        for i in 0..instrs.len {
+            let hit = instrs[i] match {
+                CallIndirect(_) => true,
+                _ => false,
+            }
+            if hit { saw_indirect = true }
+        }
+    }
+    assert_true(saw_indirect, "the call through f is indirect")
+}
+
+test "a capturing closure through $F lowers env struct, op_call, and dispatch" {
+    let unit = analyze(from_view("fn apply(f: $F, x: i32) i32 { return f(x) }\nfn main() i32 { let k = 40\n return apply(fn(v: i32) i32 { v + k }, 2) }"), "test.f")
+    let m = lower_module(&unit.module, &unit.result)
+    assert_true(!was_skipped(&m, "main"), "main lowered")
+    let ci = find_fn_starting(&m, "__flang_closure_call_")
+    assert_true(ci < m.functions.len, "the closure op_call was emitted")
+    // The instantiated apply calls the closure's op_call directly.
+    let ai = find_fn_starting(&m, "test__f__apply")
+    assert_true(ai < m.functions.len, "the specialization emitted")
+    let callee = first_callee(&m.functions[ai])
+    assert_true(callee.starts_with("__flang_closure_call_"), "dispatch is a direct call to op_call")
+}
+
+test "a named function through $F lowers via FuncRef + CallIndirect" {
+    let unit = analyze(from_view("fn double_it(x: i32) i32 { return x * 2 }\nfn apply(f: $F, x: i32) i32 { return f(x) }\nfn main() i32 { return apply(double_it, 5) }"), "test.f")
+    let m = lower_module(&unit.module, &unit.result)
+    assert_true(!was_skipped(&m, "main"), "main lowered")
+    let ai = find_fn_starting(&m, "test__f__apply")
+    assert_true(ai < m.functions.len, "specialization emitted")
+}
+
+test "two unannotated lambdas settling to one signature dedup the spec symbol" {
+    // Each pick enters instantiation with a var-bearing key (`fn(?a) ?b`);
+    // both settle to `fn(i32) i32`, so their final symbols collide -
+    // emission keeps the first and skips the twin. (Capturing closures
+    // never collide: each literal is its own nominal.)
+    let unit = analyze(from_view("fn apply(f: $F, x: i32) i32 { return f(x) }\nfn main() i32 { return apply(fn(v) { v + 1 }, 1) + apply(fn(v) { v * 2 }, 2) }"), "test.f")
+    let m = lower_module(&unit.module, &unit.result)
+    assert_true(!was_skipped(&m, "main"), "main lowered")
+    let seen: usize = 0
+    for i in 0..m.functions.len {
+        if m.functions[i].name.starts_with("test__f__apply") { seen = seen + 1 }
+    }
+    assert_eq(seen, 1 as usize, "one apply specialization emitted")
+    // Both lambda bodies still exist as separate functions.
+    let bodies: usize = 0
+    for i in 0..m.functions.len {
+        if m.functions[i].name.starts_with("__flang_lambda_") { bodies = bodies + 1 }
+    }
+    assert_eq(bodies, 2 as usize, "each lambda keeps its own body")
+}
+
+test "a closure stored in a generic struct field dispatches on h.f(x)" {
+    let unit = analyze(from_view("type Holder = struct(F) { f: F }\nfn hold(f: $F) Holder(F) { return .{ f = f } }\nfn invoke(h: &Holder($F), x: i32) i32 { return h.f(x) }\nfn main() i32 { let b = 5\n let h = hold(fn(v: i32) i32 { v + b })\n return invoke(&h, 1) }"), "test.f")
+    let m = lower_module(&unit.module, &unit.result)
+    assert_true(!was_skipped(&m, "main"), "main lowered")
+    let ii = find_fn_starting(&m, "test__f__invoke")
+    assert_true(ii < m.functions.len, "invoke specialization emitted")
+    let callee = first_callee(&m.functions[ii])
+    assert_true(callee.starts_with("__flang_closure_call_"), "field call dispatches to op_call")
 }

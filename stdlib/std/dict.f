@@ -383,6 +383,12 @@ pub fn iter(dict: &Dict($K, $V)) DictIterator(K, V) {
     return .{ dict = dict, current = 0 }
 }
 
+// An iterator is its own iterable, so `for e in d.iter()` and the
+// std.iter combinators can consume it.
+pub fn iter(it: &DictIterator($K, $V)) DictIterator(K, V) {
+    return it.*
+}
+
 // Advance iterator and return next occupied entry
 pub fn next(it: &DictIterator($K, $V)) Entry(K, V)? {
     for idx in it.current..it.dict.cap {
@@ -408,4 +414,220 @@ test "delete-heavy churn never fills the table" {
     assert_eq(d.len(), 1 as usize, "one live entry after churn")
     assert_eq(d.get(7u32).unwrap(), 2u32, "the surviving entry reads back")
     assert_eq(d.cap, 8 as usize, "tombstone rehashes keep the capacity")
+}
+
+// =============================================================================
+// Keys / values iterators
+//
+// Lightweight projections of DictIterator. Materialize with std.iter's
+// `to_list()`: `d.keys().to_list()`.
+// =============================================================================
+
+pub type KeysIter = struct(K, V) {
+    it: DictIterator(K, V)
+}
+
+pub fn iter(self: &KeysIter($K, $V)) KeysIter(K, V) {
+    return self.*
+}
+
+pub fn next(self: &KeysIter($K, $V)) K? {
+    let e = self.it.next()
+    if e.is_none() { return null }
+    return Some(e.unwrap().key)
+}
+
+pub fn keys(self: &Dict($K, $V)) KeysIter(K, V) {
+    return .{ it = self.iter() }
+}
+
+pub type ValuesIter = struct(K, V) {
+    it: DictIterator(K, V)
+}
+
+pub fn iter(self: &ValuesIter($K, $V)) ValuesIter(K, V) {
+    return self.*
+}
+
+pub fn next(self: &ValuesIter($K, $V)) V? {
+    let e = self.it.next()
+    if e.is_none() { return null }
+    return Some(e.unwrap().value)
+}
+
+pub fn values(self: &Dict($K, $V)) ValuesIter(K, V) {
+    return .{ it = self.iter() }
+}
+
+// =============================================================================
+// Functional utilities
+//
+// Callbacks are duck-typed `$F` (RFC-014): entry-wise callbacks take
+// `(key, value)` as two arguments. Derived dicts copy entries shallowly —
+// the same convention as List's transformations.
+// =============================================================================
+
+// The allocator a derived dict should use: the caller's if given, otherwise
+// the receiver's. Kept optional — resolution happens at the allocating leaf.
+fn dict_derived_allocator(own: &Allocator?, override: &Allocator?) &Allocator? {
+    if override.is_some() { return override }
+    return own
+}
+
+// A new dict with the same keys and `f(key, value)` as values.
+pub fn map_values(self: &Dict($K, $V), f: $F, allocator: &Allocator? = null) Dict(K, $U) {
+    let out: Dict(K, U) = dict(dict_derived_allocator(self.allocator, allocator))
+    for e in self.iter() {
+        out.set(e.key, f(e.key, e.value))
+    }
+    return out
+}
+
+// The entries `pred(key, value)` accepts.
+pub fn filter(self: &Dict($K, $V), pred: $F, allocator: &Allocator? = null) Dict(K, V) {
+    let out: Dict(K, V) = dict(dict_derived_allocator(self.allocator, allocator))
+    for e in self.iter() {
+        if pred(e.key, e.value) { out.set(e.key, e.value) }
+    }
+    return out
+}
+
+// Run `f(key, value)` on every entry. Iteration order is unspecified.
+pub fn each(self: &Dict($K, $V), f: $F) {
+    for e in self.iter() {
+        f(e.key, e.value)
+    }
+}
+
+// Whether any entry satisfies `pred(key, value)`. False for an empty dict.
+pub fn any(self: &Dict($K, $V), pred: $F) bool {
+    for e in self.iter() {
+        if pred(e.key, e.value) { return true }
+    }
+    return false
+}
+
+// Whether every entry satisfies `pred(key, value)`. True for an empty dict.
+pub fn all(self: &Dict($K, $V), pred: $F) bool {
+    for e in self.iter() {
+        let ok: bool = pred(e.key, e.value)
+        if !ok { return false }
+    }
+    return true
+}
+
+// Number of entries `pred(key, value)` accepts.
+pub fn count(self: &Dict($K, $V), pred: $F) usize {
+    let n: usize = 0
+    for e in self.iter() {
+        if pred(e.key, e.value) { n = n + 1 }
+    }
+    return n
+}
+
+// The value for `key`, or `fallback` when absent.
+pub fn get_or(self: Dict($K, $V), key: K, fallback: V) V {
+    let v = self.get(key)
+    if v.is_some() { return v.unwrap() }
+    return fallback
+}
+
+// The value for `key`, or `make()` when absent - the lazy counterpart of
+// `get_or`, for fallbacks that are expensive (or effectful) to build.
+pub fn get_or_else(self: Dict($K, $V), key: K, make: $F) V {
+    let v = self.get(key)
+    if v.is_some() { return v.unwrap() }
+    return make()
+}
+
+// Mutate the value for `key` in place via `f(&value)`. Returns whether the
+// key was present. In-place mutation (not get-modify-set) is the only sound
+// shape for owned values: `set` deinits the value it overwrites.
+pub fn update(self: &Dict($K, $V), key: K, f: $F) bool {
+    let r = self.get_ref(key)
+    if r.is_none() { return false }
+    f(r.unwrap())
+    return true
+}
+
+// Copy every entry of `other` into `self`, overwriting on key collisions.
+// Entries are copied shallowly: with owned keys or values, both dicts end
+// up referencing the same buffers — deinit only one of them.
+pub fn merge(self: &Dict($K, $V), other: &Dict(K, V)) {
+    for e in other.iter() {
+        self.set(e.key, e.value)
+    }
+}
+
+test "keys and values iterate the live entries" {
+    // std.iter (to_list etc.) can't be imported here — see the harness test
+    // stdlib_dict_iter_chain for combinator chains over keys()/values().
+    let d: Dict(u32, i32) = dict()
+    defer d.deinit()
+    d.set(1u32, 10i32)
+    d.set(2u32, 20i32)
+
+    let key_sum = 0u32
+    for k in d.keys() {
+        key_sum = key_sum + k
+    }
+    assert_eq(key_sum, 3u32, "both keys visited")
+
+    let value_sum = 0i32
+    for v in d.values() {
+        value_sum = value_sum + v
+    }
+    assert_eq(value_sum, 30i32, "both values visited")
+}
+
+test "map_values filter each any all count" {
+    let d: Dict(u32, i32) = dict()
+    defer d.deinit()
+    d.set(1u32, 1i32)
+    d.set(2u32, 2i32)
+    d.set(3u32, 3i32)
+
+    let scale = 10i32
+    let scaled = d.map_values(fn(k, v) { v * scale })
+    defer scaled.deinit()
+    assert_eq(scaled.get(2u32).unwrap(), 20i32, "value mapped, key kept")
+    assert_eq(scaled.len(), 3 as usize, "same entry count")
+
+    let evens = d.filter(fn(k, v) { v % 2 == 0 })
+    defer evens.deinit()
+    assert_eq(evens.len(), 1 as usize, "one even value")
+    assert_eq(evens.get(2u32).unwrap(), 2i32, "the right entry survived")
+
+    let sum = 0i32
+    let sum_ref = &sum
+    d.each(fn(k, v) { sum_ref.* = sum_ref.* + v })
+    assert_eq(sum, 6i32, "each visited every entry")
+
+    assert_true(d.any(fn(k, v) { v > 2 }), "one value exceeds 2")
+    assert_true(!d.all(fn(k, v) { v > 2 }), "not all do")
+    assert_eq(d.count(fn(k, v) { v > 1 }), 2 as usize, "two values exceed 1")
+}
+
+test "get_or update merge" {
+    let d: Dict(u32, i32) = dict()
+    defer d.deinit()
+    d.set(1u32, 5i32)
+
+    assert_eq(d.get_or(1u32, 0i32), 5i32, "present key reads its value")
+    assert_eq(d.get_or(9u32, -1i32), -1i32, "absent key reads the fallback")
+    assert_eq(d.get_or_else(1u32, fn() { 0i32 }), 5i32, "present key skips the fallback fn")
+    let expensive = 42i32
+    assert_eq(d.get_or_else(9u32, fn() { expensive }), 42i32, "absent key computes it")
+
+    assert_true(d.update(1u32, fn(v) { v.* = v.* + 1 }), "update hits the key")
+    assert_eq(d.get(1u32).unwrap(), 6i32, "mutated in place")
+    assert_true(!d.update(9u32, fn(v) { v.* = 0i32 }), "absent key reports false")
+
+    let other: Dict(u32, i32) = dict()
+    defer other.deinit()
+    other.set(1u32, 100i32)
+    other.set(2u32, 200i32)
+    d.merge(&other)
+    assert_eq(d.len(), 2 as usize, "merged entry added")
+    assert_eq(d.get(1u32).unwrap(), 100i32, "collision overwritten by other")
 }

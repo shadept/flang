@@ -459,6 +459,43 @@ pub fn call_void(self: &BlockBuilder, callee: String, args: List(Operand)) {
     }))
 }
 
+// Indirect call through a fn-pointer value. The inline signature is the
+// C cast the backend spells; aggregate params/returns already travel as
+// `ptr` operands, mirroring direct calls.
+pub fn call_indirect(self: &BlockBuilder, fn_ptr: Operand, param_types: List(IrType), return_ty: IrType, args: List(Operand)) Operand {
+    const id = self.fb.fresh()
+    let block = &self.fb.func.blocks[self.block_idx]
+    let var_types: List(IrType) = list(0, self.fb.allocator)
+    let result: u32? = Some(id)
+    let result_ty: IrType? = Some(return_ty)
+    block.instrs.push(Instr.CallIndirect(CallIndirectInstr {
+        result = result,
+        result_ty = result_ty,
+        fn_ptr = fn_ptr,
+        param_types = param_types,
+        args = args,
+        variadic_arg_types = var_types,
+        cc = CallConv.C,
+    }))
+    return Operand.Local(id)
+}
+
+pub fn call_indirect_void(self: &BlockBuilder, fn_ptr: Operand, param_types: List(IrType), args: List(Operand)) {
+    let block = &self.fb.func.blocks[self.block_idx]
+    let var_types: List(IrType) = list(0, self.fb.allocator)
+    let result: u32? = null
+    let result_ty: IrType? = null
+    block.instrs.push(Instr.CallIndirect(CallIndirectInstr {
+        result = result,
+        result_ty = result_ty,
+        fn_ptr = fn_ptr,
+        param_types = param_types,
+        args = args,
+        variadic_arg_types = var_types,
+        cc = CallConv.C,
+    }))
+}
+
 // One-arg direct call returning a value. Allocates the args list.
 pub fn call_one(self: &BlockBuilder, callee: String, return_ty: IrType, a0: Operand) Operand {
     let args: List(Operand) = list(1, self.fb.allocator)

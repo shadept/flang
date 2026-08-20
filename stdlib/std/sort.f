@@ -3,7 +3,7 @@
 // All algorithms share the same generalized signature:
 //
 //     pub fn <algo>(s: $T[])                           -- uses op_cmp
-//     pub fn <algo>(s: $T[], cmp: fn(T, T) Ord)        -- custom comparator
+//     pub fn <algo>(s: $T[], cmp: $F)  -- custom comparator: any callable fn(T, T) Ord
 //
 // `sort` aliases `powersort` (stable, O(n log n), fast on partially sorted input).
 // Direct algorithm calls remain available when a specific behavior is desired:
@@ -32,14 +32,14 @@ pub fn insertion_sort(s: $T[]) {
     _insertion_sort_range(s, 0, s.len, fn(a: T, b: T) Ord { return op_cmp(a, b) })
 }
 
-pub fn insertion_sort(s: $T[], cmp: fn(T, T) Ord) {
+pub fn insertion_sort(s: $T[], cmp: $F) {
     _insertion_sort_range(s, 0, s.len, cmp)
 }
 
 // Stable in-place insertion sort over `s[lo..hi]` (hi exclusive).
 // Uses shifts rather than swaps: one write per displaced element instead of
 // three - materially faster for any T larger than a register.
-fn _insertion_sort_range(s: $T[], lo: usize, hi: usize, cmp: fn(T, T) Ord) {
+fn _insertion_sort_range(s: $T[], lo: usize, hi: usize, cmp: $F) {
     if hi - lo < 2 { return }
     for i in (lo + 1)..hi {
         const cur = s[i]
@@ -60,13 +60,13 @@ pub fn quicksort(s: $T[]) {
     _quicksort_range(s, 0, s.len, fn(a: T, b: T) Ord { return op_cmp(a, b) })
 }
 
-pub fn quicksort(s: $T[], cmp: fn(T, T) Ord) {
+pub fn quicksort(s: $T[], cmp: $F) {
     _quicksort_range(s, 0, s.len, cmp)
 }
 
 // Iterative on the larger side, recursive on the smaller - keeps stack depth
 // bounded to O(log n) even on adversarial inputs.
-fn _quicksort_range(s: $T[], lo: usize, hi: usize, cmp: fn(T, T) Ord) {
+fn _quicksort_range(s: $T[], lo: usize, hi: usize, cmp: $F) {
     let l = lo
     let h = hi
     while h - l >= INSERTION_CUTOFF {
@@ -91,7 +91,7 @@ fn _quicksort_range(s: $T[], lo: usize, hi: usize, cmp: fn(T, T) Ord) {
 // Median-of-three leaves sentinels in place: s[lo] <= pivot and s[hi-1] >= pivot,
 // plus pivot itself at `pivot_slot`. These let the inner scans run without
 // explicit bounds checks.
-fn _partition(s: $T[], lo: usize, hi: usize, cmp: fn(T, T) Ord) usize {
+fn _partition(s: $T[], lo: usize, hi: usize, cmp: $F) usize {
     const mid = lo + (hi - lo) / 2
     const last = hi - 1
     _sort3(s, lo, mid, last, cmp)
@@ -124,7 +124,7 @@ fn _partition(s: $T[], lo: usize, hi: usize, cmp: fn(T, T) Ord) usize {
 
 // Sorts s[a], s[b], s[c] in ascending order under cmp.
 // Three comparisons, up to three swaps - classical 3-element insertion sort.
-fn _sort3(s: $T[], a: usize, b: usize, c: usize, cmp: fn(T, T) Ord) {
+fn _sort3(s: $T[], a: usize, b: usize, c: usize, cmp: $F) {
     if cmp(s[b], s[a]) == Ord.Less { swap(&s[a], &s[b]) }
     if cmp(s[c], s[b]) == Ord.Less { swap(&s[b], &s[c]) }
     if cmp(s[b], s[a]) == Ord.Less { swap(&s[a], &s[b]) }
@@ -153,11 +153,11 @@ pub fn powersort(s: $T[]) {
     _powersort_impl(s, fn(a: T, b: T) Ord { return op_cmp(a, b) })
 }
 
-pub fn powersort(s: $T[], cmp: fn(T, T) Ord) {
+pub fn powersort(s: $T[], cmp: $F) {
     _powersort_impl(s, cmp)
 }
 
-fn _powersort_impl(s: $T[], cmp: fn(T, T) Ord) {
+fn _powersort_impl(s: $T[], cmp: $F) {
     const n = s.len
     if n < 2 { return }
     if n < INSERTION_CUTOFF {
@@ -220,7 +220,7 @@ fn _powersort_impl(s: $T[], cmp: fn(T, T) Ord) {
 // to preserve stability on equal keys) are kept; strictly descending runs are
 // reversed. Short runs are padded up to INSERTION_CUTOFF with insertion sort.
 // Returns the exclusive end index of the finalised run.
-fn _next_run(s: $T[], lo: usize, hi: usize, cmp: fn(T, T) Ord) usize {
+fn _next_run(s: $T[], lo: usize, hi: usize, cmp: $F) usize {
     if hi - lo <= 1 { return hi }
     let end = lo + 1
     if cmp(s[end], s[lo]) == Ord.Less {
@@ -284,7 +284,7 @@ fn _node_power(n: usize, start_a: usize, start_b: usize, end_b: usize) u32 {
 }
 
 // Stable merge of s[lo..mid] and s[mid..hi] using `scratch` as staging.
-fn _merge(s: $T[], scratch: $T[], lo: usize, mid: usize, hi: usize, cmp: fn(T, T) Ord) {
+fn _merge(s: $T[], scratch: $T[], lo: usize, mid: usize, hi: usize, cmp: $F) {
     if lo >= mid or mid >= hi { return }
 
     // Copy the left half into scratch and stream results back into s. The right
@@ -326,7 +326,7 @@ pub fn sort(s: $T[]) {
     powersort(s)
 }
 
-pub fn sort(s: $T[], cmp: fn(T, T) Ord) {
+pub fn sort(s: $T[], cmp: $F) {
     powersort(s, cmp)
 }
 

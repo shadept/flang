@@ -179,3 +179,35 @@ test "specialization keys reuse one entry for the same type" {
     pa.deinit()
     pb.deinit()
 }
+
+// Replace a specialization's concrete signature - used when a signature
+// that entered instantiation with callable-slot vars (RFC-014 lambdas
+// through `$F`) settled during the body re-check.
+pub fn set_signature(self: &SpecializationRegistry, id: u32, params: List(Ty), ret: Ty) {
+    let s = &self.specs[id as usize]
+    s.concrete_params.deinit()
+    s.concrete_params = params
+    s.concrete_return = ret
+}
+
+// Re-key a specialization under its settled signature. Returns false -
+// and frees `new_key` - when a DIFFERENT spec already owns that key: the
+// caller's spec stays registered under its provisional key and its
+// emission dedups by symbol.
+pub fn rekey(self: &SpecializationRegistry, id: u32, new_key: OwnedString) bool {
+    let existing = self.by_key.get(new_key.as_view())
+    if existing.is_some() {
+        if existing.unwrap() != id {
+            new_key.deinit()
+            return false
+        }
+        new_key.deinit()
+        return true
+    }
+    let s = &self.specs[id as usize]
+    let _old = self.by_key.remove(s.key.as_view())
+    s.key.deinit()
+    s.key = new_key
+    self.by_key.set(s.key.as_view(), id)
+    return true
+}

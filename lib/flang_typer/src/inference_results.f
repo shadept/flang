@@ -25,6 +25,7 @@ import std.list
 import std.option
 import std.set
 import std.string
+import flang_core.span
 import flang_parser.ast
 import flang_typer.type
 import flang_typer.node_id
@@ -65,6 +66,56 @@ pub type BinaryOpDerived = enum {
     BodGe
 }
 
+// One by-value capture of a checked lambda (RFC-014): the outer local's
+// name and its (eventually zonked) type.
+pub type CaptureRec = struct {
+    name: String
+    ty: Ty
+}
+
+pub fn deinit(self: &CaptureRec) {
+    // name is a source view; ty is engine-owned structure shared with the
+    // type tables - neither is ours to free.
+}
+
+// One checked lambda literal, keyed by the LambdaExpr's node id in
+// `InferenceResults.lambdas`. Overlay-scoped on purpose: a lambda inside
+// a generic template gets one record - with its own types, captures, and
+// symbol - per instantiation. Empty `captures` = bare function pointer;
+// otherwise `closure_id` names the synthesized capture struct and
+// `symbol` its `op_call` function.
+pub type LambdaInfo = struct {
+    span: SourceSpan
+    params: List(Ty)
+    ret: Ty
+    captures: List(CaptureRec)
+    closure_id: NominalId?
+    symbol: OwnedString
+}
+
+pub fn deinit(self: &LambdaInfo) {
+    self.params.deinit()
+    self.captures.deinit()
+    self.symbol.deinit()
+}
+
+// Global (not overlay-scoped) closure dispatch record: how to call a
+// value whose type is the synthesized closure nominal. Keyed by
+// NominalId in `Checker.closures` / `TypeCheckResult.closures` so a
+// closure that traveled through a `$F` slot dispatches from any body.
+// `params` excludes the `self` env pointer.
+pub type ClosureSig = struct {
+    params: List(Ty)
+    ret: Ty
+    symbol: OwnedString
+    lambda_node: NodeId
+}
+
+pub fn deinit(self: &ClosureSig) {
+    self.params.deinit()
+    self.symbol.deinit()
+}
+
 pub type InferenceResults = struct {
     node_types: Dict(NodeId, Ty)
     resolved_ops: Dict(NodeId, ResolvedOperator)
@@ -83,6 +134,10 @@ pub type InferenceResults = struct {
     // lowers the stored block instead of the original node. The blocks
     // are checker-allocated and share the result's lifetime.
     desugars: Dict(NodeId, &BlockExpr)
+    // Checked lambda literals (RFC-014), keyed by the LambdaExpr node.
+    // Lives in the result set - not a global table - so a lambda inside a
+    // generic template records once per instantiation overlay.
+    lambdas: Dict(NodeId, LambdaInfo)
     allocator: &Allocator?
 }
 
@@ -94,6 +149,7 @@ pub fn inference_results(allocator: &Allocator? = null) InferenceResults {
         instantiated_types = list(0, allocator),
         synth_strings = list(0, allocator),
         desugars = dict(allocator),
+        lambdas = dict(allocator),
         allocator = allocator,
     }
 }
@@ -105,6 +161,7 @@ pub fn deinit(self: &InferenceResults) {
     self.instantiated_types.deinit()
     self.synth_strings.deinit()
     self.desugars.deinit()
+    self.lambdas.deinit()
 }
 
 // Record (or overwrite) the inferred type for a node. The "overwrite"
@@ -144,6 +201,16 @@ pub fn record_desugar(self: &InferenceResults, id: NodeId, block: &BlockExpr) {
     self.desugars.set(id, block)
 }
 
+pub fn record_lambda(self: &InferenceResults, id: NodeId, info: LambdaInfo) {
+    self.lambdas.set(id, info)
+}
+
+// Replace the lambda table wholesale - the zonk passes rebuild it (the
+// field itself is module-private under scoped mutability).
+pub fn replace_lambdas(self: &InferenceResults, ls: Dict(NodeId, LambdaInfo)) {
+    self.lambdas = ls
+}
+
 // Replace the node-type table wholesale - the zonk passes rebuild it
 // (scoped mutability keeps the field itself module-private).
 pub fn replace_node_types(self: &InferenceResults, nt: Dict(NodeId, Ty)) {
@@ -178,4 +245,5 @@ pub fn reset_side_tables(self: &InferenceResults) {
     self.instantiated_types = list(0, self.allocator)
     self.synth_strings = list(0, self.allocator)
     self.desugars = dict(self.allocator)
+    self.lambdas = dict(self.allocator)
 }

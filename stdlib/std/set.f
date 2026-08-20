@@ -6,6 +6,8 @@
 // element and supports O(words) union/intersect.
 
 import std.allocator
+import std.list
+import std.test
 import std.dict
 import std.option
 import std.string
@@ -90,9 +92,88 @@ pub fn iter(self: &Set($T)) SetIterator(T) {
     return .{ inner = self.inner.iter() }
 }
 
+// An iterator is its own iterable, so `for x in s.iter()` and the
+// std.iter combinators can consume it.
+pub fn iter(it: &SetIterator($T)) SetIterator(T) {
+    return it.*
+}
+
 pub fn next(it: &SetIterator($T)) T? {
     return it.inner.next() match {
         Some(entry) => Some(entry.key),
         None => None
     }
+}
+
+// =============================================================================
+// Functional utilities (callbacks are duck-typed $F, RFC-014)
+// =============================================================================
+
+// The elements `pred` accepts, as a new set.
+pub fn filter(self: &Set($T), pred: $F, allocator: &Allocator? = null) Set(T) {
+    let out: Set(T) = set(allocator)
+    for x in self.iter() {
+        if pred(x) { out.add(x) }
+    }
+    return out
+}
+
+// Run `f` on every element. Iteration order is unspecified.
+pub fn each(self: &Set($T), f: $F) {
+    for x in self.iter() {
+        f(x)
+    }
+}
+
+// Whether any element satisfies `pred`. False for an empty set.
+pub fn any(self: &Set($T), pred: $F) bool {
+    for x in self.iter() {
+        if pred(x) { return true }
+    }
+    return false
+}
+
+// Whether every element satisfies `pred`. True for an empty set.
+pub fn all(self: &Set($T), pred: $F) bool {
+    for x in self.iter() {
+        let ok: bool = pred(x)
+        if !ok { return false }
+    }
+    return true
+}
+
+// The elements as a fresh List, in unspecified order.
+pub fn to_list(self: &Set($T), allocator: &Allocator? = null) List(T) {
+    let out: List(T) = list(self.len(), allocator)
+    for x in self.iter() {
+        out.push(x)
+    }
+    return out
+}
+
+test "set functional utilities" {
+    let s: Set(i32) = set()
+    defer s.deinit()
+    s.add(1i32)
+    s.add(2i32)
+    s.add(3i32)
+
+    let evens = s.filter(fn(x) { x % 2 == 0 })
+    defer evens.deinit()
+    assert_eq(evens.len(), 1 as usize, "one even element")
+    assert_true(evens.contains(2i32), "the right one")
+
+    let sum = 0i32
+    let sum_ref = &sum
+    s.each(fn(x) { sum_ref.* = sum_ref.* + x })
+    assert_eq(sum, 6i32, "each visited every element")
+
+    assert_true(s.any(fn(x) { x > 2 }), "one element exceeds 2")
+    assert_true(!s.all(fn(x) { x > 2 }), "not all do")
+
+    let xs = s.to_list()
+    defer xs.deinit()
+    xs.sort()
+    assert_eq(xs.len, 3 as usize, "all elements collected")
+    assert_eq(xs[0], 1i32, "sorted view starts at the smallest")
 }

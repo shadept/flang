@@ -55,7 +55,7 @@ cheaper than implementing it.
 | Type inference (HM) | ⚠️ | 0 errors self-checking compiler + stdlib (98 modules) *including every instantiated generic body* (M10); 2 expression forms are still unvisited and rejection power lags the reference — see the type-checking section below |
 | AST → FIR lowering | ⚠️ | the subset below; everything outside refuses, never miscompiles |
 | C backend (FIR → C99 → exe) | ✅ | for all FIR the lowering emits; links stdlib C runtime sidecars |
-| Full self-build | ❌ | every lowered function compiles (759 C functions, 457 of them specializations); `main` still drops transitively — defaulted-argument calls (M11) and the `__flang_strlen` runtime shim are the frontier |
+| Full self-build | ❌ | every lowered function compiles (840 C functions after RFC-014 lambdas + fn values/indirect calls landed, 2026-08-20); `main` still drops transitively — defaulted-argument calls (M11) and the `__flang_strlen` runtime shim are the frontier |
 | Stage-2 = stage-3 fixpoint | ❌ | blocked on full lowering coverage |
 
 ## Type checking
@@ -77,7 +77,7 @@ not mean it *rejects* what the reference rejects. Two axes:
 | `if`/`match` joins (order-independent, `Never` identity) | ✅ | everywhere | E2074/E2075 |
 | Assignment, address-of, deref, casts, tuples, ranges, indexing | ✅ | `as` casts: 845/75 | index operator pick recorded with `is_ref_form`. M10: a BARE numeric literal cast operand takes the target type (`0xFFFF_FFFF as u64` is a u64 constant); tuple projection `t.0` types as the element |
 | Unary ops (`-x`, `!x`, `~x`) | ✅ | `!` 191/28, `~` 35/12, neg ~5 | M7: `!` unifies with bool; `-`/`~` type as their operand. Numeric-ness of `-`/`~` not yet *enforced* (rejection-power gap); no `op_neg`/`op_not`/`op_bnot` dispatch to user types (M11, with binary — zero in-tree users today) |
-| Lambdas | ❌ | 23/5 | unvisited subtree |
+| Lambdas / closures (RFC-014) | ✅ | 23/5 | landed 2026-08-20, no-clone: `check_lambda` checks the literal's body in place (captured names resolve through their outer scopes; no `self.x` rewrite). Unannotated params mint fresh vars pinned by context — including *through* a `$F` slot: `process_pending` admits signatures whose vars sit inside `Func` types, the instantiation's body re-check pins them at the indirect call, and the spec re-keys under its settled signature (`rekey`; twins that settle identical dedup at emission by symbol). Non-capturing → `LambdaInfo` (overlay-scoped: one record per instantiation) typed as a bare `fn`; capturing → synthesized env-struct nominal + entry in the global `closures` dispatch table, typed as the anonymous nominal. E2111 (closure into bare-fn slot, as an overload-failure hint), E2112 (assign to capture), E2113 (transitive nested captures) all report |
 | Array literals `[a, b]`, `[v; N]` | ⚠️ | ~52/9 | M10: checked — elements unify, the node types as `[T; len]`, declared `u8[N]` lengths evaluate (previously 0!). A non-literal repeat count (`[0u8; PAGE_SIZE]`) stays an unconstrained var and the enclosing `let` refuses at lowering |
 | Interpolated strings `$"…"` | ✅ | 60/15 | M9: the reference's StringBuilder desugar, synthesized as real AST under collision-free synthetic node ids and checked through ordinary overload resolution (`append` picks recorded per part; format specs route to the spec-taking overload). The block is stored in `result.desugars`; lowering replays it. Stdlib- and import-dependent by design (`import std.string_builder`) |
 | `a?` (op_try), `a ?? b` | ✅ | `?` 28/13 · `??` 5/4 | M8: `?` resolves `op_try`, requires `TryResult(T, R)`, unifies `R` with the enclosing return (E2090/E2092); `??` has the reference's two built-in Option shapes (unwrap and chain) |
@@ -86,7 +86,7 @@ not mean it *rejects* what the reference rejects. Two axes:
 | Templates (`#interface`, `#derive`, …) expanded natively | ❌ | every `.generated.f` sidecar | relies on sidecars from a reference-compiler run |
 | `#if` compile-time conditionals evaluated | ❌ | 27/10 (incl. `file.f::open_flags`, in `main`'s graph) | |
 
-An unvisited subtree (lambdas, `a?.b`) types as an unconstrained
+An unvisited subtree (`a?.b`) types as an unconstrained
 fresh var: the code around it may still check clean while errors
 inside it go unreported — the checker's biggest soundness caveat. The
 same applies to a generic template body that is never instantiated:
@@ -125,8 +125,8 @@ current-state summary.
 | Defaulted params at call sites | ❌ | ~500 decl sites; omitted at most calls | needs default-expr materialization from callee scope |
 | Named arguments | ❌ | **2/1 — rewritable-away** | checker leaves the call unresolved |
 | Variadic calls | ❌ | declarations only (printf family is fixed-arity overloads) — likely avoidable | needs per-argument types at the call site |
-| Function values / indirect calls / fn-typed fields | ❌ | fn-typed fields in checker/backend dispatch | `CallIndirect` exists in FIR; lowering never emits it |
-| Lambdas / closures | ❌ | 23/5 | needs closure conversion + capture record |
+| Function values / indirect calls / fn-typed fields | ✅ | fn-typed fields in checker/backend dispatch | landed with lambdas: a function NAME in value position decays to `Operand.FuncRef`; a fn-typed callee value emits `CallIndirect` (params/sret mirror direct calls); a closure-typed callee (local, param, or struct field — the checker records the callee member-access node's type for the classification) dispatches directly to its `op_call` symbol with the value's address prepended |
+| Lambdas / closures | ✅ | 23/5 | literal sites enqueue `PendingLambda` (with the active overlay) and emit after the main walk — non-capturing as a plain function, capturing as an `op_call` whose leading param is the env pointer and whose captured names bind to `gep`s into it (no copy; captures are read-only). The literal itself is a `FuncRef` or a stack-built env struct |
 | Global `const` declarations | ❌ | 101/17 | `read_binding` covers locals only |
 | `test` blocks (self-host `flang test`) | ❌ | dev workflow, not `main`'s graph | bootstrap CLI has no `test` subcommand |
 | Template directives (`#enum_utils`, `#derive`, `#interface`, …) | ⚠️ | every sidecar | not expanded; checked-in `.generated.f` sidecars stand in |
@@ -261,7 +261,7 @@ docs/known-issues.md for the live instance of that failure).
    features (defaulted-argument calls) plus the `__flang_strlen` shim.
 5. **M11 — call completeness**: defaulted args, casts, unary/binary
    user-operator dispatch (`String ==`).
-6. Then: globals/consts, closures + fn values, for-over-iterators
+6. Then: globals/consts, for-over-iterators
    (M10 supplies the specializations; the checker still needs to
    resolve the `iter()`/`next()` protocol instead of typing the loop
    var as a fresh var), array-literal lowering, range slicing, `#if`

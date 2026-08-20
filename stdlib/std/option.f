@@ -56,7 +56,7 @@ pub fn unwrap_or(self: Option($T), fallback: T) T {
 // transform what an optional holds without unwrapping and re-wrapping; `f`
 // never runs on `None`. When `f` itself returns an `Option`, use `flat_map`
 // so the result does not nest.
-pub fn map(self: Option($T), f: fn(T) $U) Option(U) {
+pub fn map(self: Option($T), f: $F) Option($U) {
     return self match {
         Some(v) => Some(f(v))
         None => None
@@ -67,7 +67,7 @@ pub fn map(self: Option($T), f: fn(T) $U) Option(U) {
 // result. Chains a fallible step onto a fallible one: passing such a
 // function to `map` would give `Option(Option(U))`, whereas this stays one
 // level deep. `None` short-circuits and `f` never runs.
-pub fn flat_map(self: Option($T), f: fn(T) Option($U)) Option(U) {
+pub fn flat_map(self: Option($T), f: $F) Option($U) {
     return self match {
         Some(v) => f(v)
         None => None
@@ -81,7 +81,7 @@ pub fn flat_map(self: Option($T), f: fn(T) Option($U)) Option(U) {
 //
 // Chains where each step is a separate reason to give up read as one
 // expression rather than a stack of early returns.
-pub fn filter(self: Option($T), pred: fn(T) bool) Option(T) {
+pub fn filter(self: Option($T), pred: $F) Option(T) {
     return self match {
         Some(v) => if pred(v) { self } else { None }
         None => None

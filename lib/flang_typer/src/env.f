@@ -86,6 +86,24 @@ pub fn lookup(self: &TypeEnv, name: String) Binding? {
     return null
 }
 
+// Number of open scopes. Lambda capture analysis compares a binding's
+// depth against the scope count at the lambda's boundary.
+pub fn depth(self: &TypeEnv) usize {
+    return self.scopes.len()
+}
+
+// The scope index `name` is bound at (0 = outermost), or null. Same walk
+// as `lookup`; capture analysis needs the depth, not the binding.
+pub fn lookup_depth(self: &TypeEnv, name: String) usize? {
+    let frames = self.scopes.as_slice()
+    let i = frames.len
+    while i > 0 {
+        i = i - 1
+        if frames[i].bindings.contains(name) { return Some(i) }
+    }
+    return null
+}
+
 // True iff `name` is bound in the *current* (innermost) scope. Used
 // to detect same-scope shadowing.
 pub fn exists_in_current(self: &TypeEnv, name: String) bool {

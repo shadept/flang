@@ -36,6 +36,12 @@ pub type TypeCheckResult = struct {
     synth_strings: List(OwnedString)
     nominals: NominalRegistry
     functions: FunctionRegistry
+    // RFC-014: checked lambda literals of the PROGRAM tables (a lambda in
+    // a generic template records per-instantiation, in that
+    // specialization's overlay instead), and the global closure dispatch
+    // table keyed by synthesized-nominal id.
+    lambdas: Dict(NodeId, LambdaInfo)
+    closures: Dict(NominalId, ClosureSig)
 }
 
 // Look up a node's resolved type. Returns `null` for nodes the checker
@@ -55,6 +61,8 @@ pub fn empty_result(allocator: &Allocator? = null) TypeCheckResult {
         synth_strings = list(0, allocator),
         nominals = nominal_registry(allocator),
         functions = function_registry(allocator),
+        lambdas = dict(allocator),
+        closures = dict(allocator),
     }
 }
 
@@ -71,6 +79,8 @@ pub fn deinit(self: &TypeCheckResult) {
     self.synth_strings.deinit()
     self.nominals.deinit()
     self.functions.deinit()
+    self.lambdas.deinit()
+    self.closures.deinit()
 }
 
 pub fn get_type(self: &TypeCheckResult, id: NodeId) Ty? {
@@ -87,4 +97,12 @@ pub fn get_operator(self: &TypeCheckResult, id: NodeId) ResolvedOperator? {
 
 pub fn get_desugar(self: &TypeCheckResult, id: NodeId) &BlockExpr? {
     return self.desugars.get(id)
+}
+
+pub fn get_lambda(self: &TypeCheckResult, id: NodeId) &LambdaInfo? {
+    return self.lambdas.get_ref(id)
+}
+
+pub fn get_closure(self: &TypeCheckResult, id: NominalId) &ClosureSig? {
+    return self.closures.get_ref(id)
 }
