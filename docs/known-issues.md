@@ -1147,6 +1147,37 @@ for-over-iterator lowering.
 
 ---
 
+### Self-Host: Lib-Mode Check Globbed `.generated.f` Sidecars as Separate Modules, Clobbering Visibility — RESOLVED
+
+**Status:** Resolved (2026-08-20)
+**Affected:** `flang_driver` project loading (`analyze_project` + project glob), any `kind = "lib"` project containing a template-expansion sidecar (e.g. `lib/flang_parser` with `token.generated.f`)
+
+In lib-mode (`flang -c build` on a project whose sources are globbed as
+entries), a `x.generated.f` sidecar was loaded **twice**: merged into
+`x.f`'s module by `combine_with_sidecar`, and *also* as its own entry
+from the source glob. Both parses map to the same module FQN
+(`module_fqn` derives it from the path), so `build_visibility` stored
+two entries under one key and the sidecar's import-less set won —
+`visible_by_module["flang_parser.token"]` ended up holding only the
+prelude, and every `std.*` call in token.f reported E2004
+("unresolved function `or_global`/`free`"). Build-mode (BFS from an
+entry point) never loads the sidecar as its own module, which is why
+`bootstrap` self-checked clean while `flang -c build` inside
+`lib/flang_parser` failed — even a comment-only sidecar triggered it.
+
+**Fix:** `glob_sources` (project.f) now excludes `*.generated.f`
+outright — sidecars are only ever folded into their origin module by
+`combine_with_sidecar`. The equivalent local skip in `seed_stdlib`
+(driver.f) became redundant and was removed; every source enumeration
+(project entries, stdlib seeding) routes through the one filter.
+Verified: `flang -c build` passes standalone in every lib project and
+the bootstrap self-check still reports 98 modules, 0 errors. No
+colocated unit test: `glob_sources` needs fixture files and the fs API
+has no mkdir/remove yet; the standalone lib-project checks are the
+regression surface.
+
+---
+
 ### Container `deinit` Was Silently a No-Op Everywhere — RESOLVED
 
 **Status:** Resolved (2026-08-20)
@@ -1176,9 +1207,23 @@ key in both compilers (specificity → cost → quantifier count → literal
 preference → declaration order), and the self-hosted `resolve_overload` —
 which had never actually gained the specificity key despite the entry
 above — now has it (`scheme_specificity`/`ty_specificity` in checker.f).
-Defaulted params a call omits are excluded from the score so a padded
-overload can't out-rank an exact shorter one. Spec §Imports updated.
-Regression: `tests/harness/generics/overload_structural_specificity.f`.
+Two guards make the key sound: only supplied positions are scored (a
+defaulted param the call omits can't out-rank an exact shorter overload),
+and only positions whose argument type is fully known are scored — an
+argument still containing an unresolved var (unsuffixed literal,
+half-inferred aggregate) unifies with anything at zero cost, so scoring
+it steered `s[0]` to `op_index(String, Range(usize))` over
+`op_index(String, usize)`. In the same pass, UFCS receiver adaptation
+(value ↔ `&T`) moved *inside* resolution as a per-candidate alternate
+receiver (+1 cost) in both compilers — the old adapted-retry second pass
+let a catch-all matching the un-adapted receiver preempt a more specific
+`&`-receiver method. Making list-element cleanup real for tuple-element
+lists also exposed that the self-hosted `T → Type(T)` rtti coercion
+rejected tuples (`size_of((A, B))` in `free($T[])` instantiations);
+`coercion.f try_nominal_to_type` now accepts them, matching the
+reference. Spec §Imports updated.
+Regression: `tests/harness/generics/overload_structural_specificity.f`,
+plus checker.f test "structural specificity outranks quantifier count".
 
 **Fallout fixed in the same pass** — cleanup becoming real exposed a
 stack of latent memory bugs, all of the same few shapes:

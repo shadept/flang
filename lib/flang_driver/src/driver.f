@@ -335,7 +335,7 @@ fn seed_prelude(ctx: &ResolveCtx, queue: &List(OwnedString), seen: &Set(String),
 // regardless of imports, and lenient type resolution in the checker relies
 // on every stdlib nominal being registered - so the BFS seeds the full
 // stdlib tree. Generated sidecars are folded into their origin module
-// during the walk, never loaded standalone.
+// during the walk, never loaded standalone (`glob_sources` excludes them).
 // ponytail: typechecks all of std on every build; prune to the import
 // closure once stdlib type visibility turns strict.
 fn seed_stdlib(ctx: &ResolveCtx, queue: &List(OwnedString), seen: &Set(String), alloc: &Allocator?) {
@@ -344,9 +344,7 @@ fn seed_stdlib(ctx: &ResolveCtx, queue: &List(OwnedString), seen: &Set(String), 
     let found = glob_sources(pattern.as_view(), alloc)
     pattern.deinit()
     for i in 0..found.len {
-        let p = found[i].as_view()
-        if ends_with(p, ".generated.f") { continue }
-        let norm = normalize_sep(p, alloc)
+        let norm = normalize_sep(found[i].as_view(), alloc)
         enqueue_owned(queue, seen, norm)
     }
     deinit_source_list(&found)
