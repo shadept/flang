@@ -750,19 +750,20 @@ public partial class HmTypeChecker
     /// </summary>
     private (FunctionScheme Winner, FunctionType FnType, FunctionDeclarationNode Node)?
         ResolveOverload(List<FunctionScheme> candidates, Type[] argTypes, SourceSpan span,
-                        bool reportAmbiguity = false)
+                        bool reportAmbiguity = false, Type? altReceiver = null)
     {
-        return ResolveOverload(candidates, argTypes, span, reportAmbiguity, out _);
+        return ResolveOverload(candidates, argTypes, span, reportAmbiguity, out _, altReceiver);
     }
 
     private (FunctionScheme Winner, FunctionType FnType, FunctionDeclarationNode Node)?
         ResolveOverload(List<FunctionScheme> candidates, Type[] argTypes, SourceSpan span,
-                        bool reportAmbiguity, out bool reportedAmbiguity)
+                        bool reportAmbiguity, out bool reportedAmbiguity, Type? altReceiver = null)
     {
         FunctionScheme? bestCandidate = null;
         int bestCost = int.MaxValue;
         int bestGenericCount = int.MaxValue;
         int bestSpecificity = -1;
+        bool bestUsedAltReceiver = false;
         FunctionType? bestFnType = null;
         bool ambiguousOnUndetermined = false;
         reportedAmbiguity = false;
@@ -774,36 +775,43 @@ public partial class HmTypeChecker
             if (fnType == null) continue;
             if (fnType.ParameterTypes.Count != argTypes.Length) continue;
 
-            // Try speculative unification of all arguments
+            // Try speculative unification of all arguments (the receiver's
+            // adapted shape competes here too — see TryUnifyPosition).
             int totalCost = 0;
             bool success = true;
+            bool usedAltReceiver = false;
             for (int i = 0; i < argTypes.Length; i++)
             {
-                var result = _ctx.Engine.TryUnify(argTypes[i], fnType.ParameterTypes[i]);
-                if (result == null)
+                var unified = TryUnifyPosition(argTypes[i], fnType.ParameterTypes[i],
+                    i == 0 ? altReceiver : null);
+                if (unified == null)
                 {
                     success = false;
                     break;
                 }
-                totalCost += result.Value.Cost;
+                totalCost += unified.Value.Cost;
+                usedAltReceiver |= unified.Value.UsedAlt;
             }
 
             if (!success) continue;
 
             int genericCount = candidate.Signature.QuantifiedVarIds.Count;
-            int specificity = SignatureSpecificity(candidate.Signature);
+            int specificity = SignatureSpecificity(candidate.Signature, argTypes);
 
-            // Prefer fewer quantified type vars (0 = non-generic), then lower
-            // coercion cost, then the structurally more specific declaration.
-            if (genericCount < bestGenericCount
-                || (genericCount == bestGenericCount && totalCost < bestCost)
-                || (genericCount == bestGenericCount && totalCost == bestCost
-                    && specificity > bestSpecificity))
+            // Prefer the structurally more specific declaration (each concrete
+            // type constructor is a constraint the arguments satisfied —
+            // `Dict($K,$V)` beats `$T`), then lower coercion cost, then fewer
+            // quantified type vars.
+            if (specificity > bestSpecificity
+                || (specificity == bestSpecificity && totalCost < bestCost)
+                || (specificity == bestSpecificity && totalCost == bestCost
+                    && genericCount < bestGenericCount))
             {
                 bestCandidate = candidate;
                 bestCost = totalCost;
                 bestGenericCount = genericCount;
                 bestSpecificity = specificity;
+                bestUsedAltReceiver = usedAltReceiver;
                 bestFnType = fnType;
                 ambiguousOnUndetermined = false;
             }
@@ -814,6 +822,7 @@ public partial class HmTypeChecker
                 if (verdict == TieOutcome.PreferChallenger)
                 {
                     bestCandidate = candidate;
+                    bestUsedAltReceiver = usedAltReceiver;
                     bestFnType = fnType;
                     ambiguousOnUndetermined = false;
                 }
@@ -848,7 +857,10 @@ public partial class HmTypeChecker
         if (winnerFn == null) return null;
 
         for (int i = 0; i < argTypes.Length; i++)
-            _ctx.Engine.Unify(argTypes[i], winnerFn.ParameterTypes[i], span);
+        {
+            var arg = i == 0 && bestUsedAltReceiver ? altReceiver! : argTypes[i];
+            _ctx.Engine.Unify(arg, winnerFn.ParameterTypes[i], span);
+        }
 
         // Generic monomorphization
         _ctx.DeferredSpecInfo = null;
@@ -887,19 +899,66 @@ public partial class HmTypeChecker
     /// <summary>
     /// Structural specificity of a candidate's declared parameter list: the
     /// count of concrete type constructors, with type variables contributing
-    /// nothing. Breaks quantifier-count/cost ties toward the more specific
-    /// declaration — `deinit(&List($T))` (Ref+Nominal = 2) must beat the
-    /// universal `deinit(&$T)` fallback (Ref = 1) for a List receiver.
-    /// Before this tie-break, declaration order decided, and the prelude's
-    /// fallback (registered first) silently won every container deinit.
+    /// nothing. Each constructor is a constraint the call's arguments had to
+    /// satisfy, so more structure means a stricter match — `deinit(&List($T))`
+    /// (Ref+Nominal = 2) beats the universal `deinit(&$T)` fallback (Ref = 1),
+    /// and `any(&Dict($K,$V), $F)` beats the iterator catch-all `any($I, $F)`.
+    /// This is the primary ranking key (a stand-in for a real constraint
+    /// system); coercion cost and quantifier count only break its ties.
+    /// A position is only scored when its argument has a fully-known shape:
+    /// params past the supplied args (defaults the call omitted) and params
+    /// whose argument still contains an unresolved type var (an unsuffixed
+    /// literal, a half-inferred tuple or container) are skipped — an unbound
+    /// arg unifies with anything at zero cost, so scoring its position would
+    /// steer `s[0]` toward `op_index(String, Range(usize))` over
+    /// `op_index(String, usize)`. Skipped positions fall back to the
+    /// cost/quantifier keys — the pre-specificity behavior.
     /// </summary>
-    private static int SignatureSpecificity(PolymorphicType signature)
+    private int SignatureSpecificity(PolymorphicType signature, Type[] argTypes)
     {
         if (signature.Body is not FunctionType fn) return 0;
         int total = 0;
-        foreach (var p in fn.ParameterTypes) total += TypeSpecificity(p);
+        int n = Math.Min(argTypes.Length, fn.ParameterTypes.Count);
+        for (int i = 0; i < n; i++)
+        {
+            if (ContainsFreeTypeVar(_ctx.Engine.Resolve(argTypes[i]))) continue;
+            total += TypeSpecificity(fn.ParameterTypes[i]);
+        }
         return total;
     }
+
+    /// <summary>
+    /// Speculatively unify one argument against its parameter. For the UFCS
+    /// receiver position, `alt` is its adapted value ↔ &amp;T shape, accepted at
+    /// +1 cost when the direct shape fails — adapting per candidate, instead
+    /// of a whole second resolution pass, keeps every candidate in ONE ranked
+    /// set: a catch-all matching the un-adapted receiver must not preempt a
+    /// structurally more specific overload that needs the adaptation.
+    /// </summary>
+    private (int Cost, bool UsedAlt)? TryUnifyPosition(Type arg, Type param, Type? alt)
+    {
+        var direct = _ctx.Engine.TryUnify(arg, param);
+        if (direct != null) return (direct.Value.Cost, false);
+        if (alt == null) return null;
+        var adapted = _ctx.Engine.TryUnify(alt, param);
+        return adapted == null ? null : (adapted.Value.Cost + 1, true);
+    }
+
+    /// <summary>
+    /// Whether a (resolved) type still contains an unbound inference var
+    /// anywhere in its structure.
+    /// </summary>
+    private bool ContainsFreeTypeVar(Type t) => t switch
+    {
+        TypeVar => true,
+        ReferenceType r => ContainsFreeTypeVar(_ctx.Engine.Resolve(r.InnerType)),
+        ArrayType a => ContainsFreeTypeVar(_ctx.Engine.Resolve(a.ElementType)),
+        FunctionType f => f.ParameterTypes.Any(p => ContainsFreeTypeVar(_ctx.Engine.Resolve(p)))
+                          || ContainsFreeTypeVar(_ctx.Engine.Resolve(f.ReturnType)),
+        NominalType nom => nom.TypeArguments.Any(a => ContainsFreeTypeVar(_ctx.Engine.Resolve(a))),
+        PolymorphicType p => ContainsFreeTypeVar(p.Body),
+        _ => false,
+    };
 
     private static int TypeSpecificity(Core.Types.Type t) => t switch
     {
@@ -982,12 +1041,14 @@ public partial class HmTypeChecker
             List<NamedArgumentExpressionNode> namedArgs,
             Dictionary<string, Type> namedTypes,
             SourceSpan span,
-            int ufcsOffset)
+            int ufcsOffset,
+            Type? altReceiver = null)
     {
         FunctionScheme? bestCandidate = null;
         int bestCost = int.MaxValue;
         int bestGenericCount = int.MaxValue;
         int bestSpecificity = -1;
+        bool bestUsedAltReceiver = false;
         FunctionType? bestFnType = null;
         bool ambiguousOnUndetermined = false;
 
@@ -1028,6 +1089,7 @@ public partial class HmTypeChecker
 
             int totalCost = 0;
             bool success = true;
+            bool usedAltReceiver = false;
 
             // Unify positional args with corresponding params
             for (int i = 0; i < fullPositionalTypes.Length && i < fnType.ParameterTypes.Count; i++)
@@ -1050,9 +1112,11 @@ public partial class HmTypeChecker
                 }
                 else if (i < fnType.ParameterTypes.Count)
                 {
-                    var result = _ctx.Engine.TryUnify(fullPositionalTypes[i], fnType.ParameterTypes[i]);
-                    if (result == null) { success = false; break; }
-                    totalCost += result.Value.Cost;
+                    var unified = TryUnifyPosition(fullPositionalTypes[i], fnType.ParameterTypes[i],
+                        i == 0 ? altReceiver : null);
+                    if (unified == null) { success = false; break; }
+                    totalCost += unified.Value.Cost;
+                    usedAltReceiver |= unified.Value.UsedAlt;
                 }
             }
             if (!success) continue;
@@ -1080,19 +1144,25 @@ public partial class HmTypeChecker
             totalCost += defaultsUsed * 100;
 
             int genericCount = candidate.Signature.QuantifiedVarIds.Count;
-            int specificity = SignatureSpecificity(candidate.Signature);
+            // Only supplied positions with shaped arguments count toward
+            // specificity (see SignatureSpecificity) — a defaulted param the
+            // call never passed must not out-rank an exact shorter overload.
+            int specificity = SignatureSpecificity(candidate.Signature, fullPositionalTypes);
 
-            // Prefer fewer quantified type vars (0 = non-generic), then lower
-            // coercion cost, then the structurally more specific declaration.
-            if (genericCount < bestGenericCount
-                || (genericCount == bestGenericCount && totalCost < bestCost)
-                || (genericCount == bestGenericCount && totalCost == bestCost
-                    && specificity > bestSpecificity))
+            // Prefer the structurally more specific declaration (each concrete
+            // type constructor is a constraint the arguments satisfied —
+            // `Dict($K,$V)` beats `$T`), then lower coercion cost, then fewer
+            // quantified type vars.
+            if (specificity > bestSpecificity
+                || (specificity == bestSpecificity && totalCost < bestCost)
+                || (specificity == bestSpecificity && totalCost == bestCost
+                    && genericCount < bestGenericCount))
             {
                 bestCandidate = candidate;
                 bestCost = totalCost;
                 bestGenericCount = genericCount;
                 bestSpecificity = specificity;
+                bestUsedAltReceiver = usedAltReceiver;
                 bestFnType = fnType;
                 ambiguousOnUndetermined = false;
             }
@@ -1103,6 +1173,7 @@ public partial class HmTypeChecker
                 if (verdict == TieOutcome.PreferChallenger)
                 {
                     bestCandidate = candidate;
+                    bestUsedAltReceiver = usedAltReceiver;
                     bestFnType = fnType;
                     ambiguousOnUndetermined = false;
                 }
@@ -1149,7 +1220,8 @@ public partial class HmTypeChecker
             }
             else if (i < winnerFn.ParameterTypes.Count)
             {
-                _ctx.Engine.Unify(fullPositionalTypes[i], winnerFn.ParameterTypes[i], span);
+                var arg = i == 0 && bestUsedAltReceiver ? altReceiver! : fullPositionalTypes[i];
+                _ctx.Engine.Unify(arg, winnerFn.ParameterTypes[i], span);
             }
         }
 
@@ -1392,22 +1464,24 @@ public partial class HmTypeChecker
             (FunctionScheme Winner, FunctionType FnType, FunctionDeclarationNode Node)? result;
             var ambiguityReported = false;
 
+            // For UFCS, the receiver may also match in its adapted value ↔ &T
+            // form. Passed into resolution (rather than run as a second pass)
+            // so adapted candidates compete in the same ranked set — a
+            // catch-all matching the un-adapted shape must not preempt a more
+            // specific overload that needs the adaptation.
+            Type? altReceiver = null;
+            if (receiverType != null && fullPositionalTypes.Length > 0)
+            {
+                var resolvedReceiver = _ctx.Engine.Resolve(fullPositionalTypes[0]);
+                altReceiver = resolvedReceiver is ReferenceType rt
+                    ? rt.InnerType
+                    : new ReferenceType(resolvedReceiver);
+            }
+
             if (hasNamedOrDefaults)
             {
                 var ufcsOffset = receiverType != null ? 1 : 0;
-                result = ResolveOverloadWithDefaults(candidates, fullPositionalTypes, namedArgs, namedTypes, call.Span, ufcsOffset);
-
-                // For UFCS, try adapting receiver (value ↔ &T) if direct match failed
-                if (result == null && receiverType != null && fullPositionalTypes.Length > 0)
-                {
-                    var resolvedReceiver = _ctx.Engine.Resolve(fullPositionalTypes[0]);
-                    var adapted = (Type[])fullPositionalTypes.Clone();
-                    if (resolvedReceiver is ReferenceType rt)
-                        adapted[0] = rt.InnerType;
-                    else
-                        adapted[0] = new ReferenceType(resolvedReceiver);
-                    result = ResolveOverloadWithDefaults(candidates, adapted, namedArgs, namedTypes, call.Span, ufcsOffset);
-                }
+                result = ResolveOverloadWithDefaults(candidates, fullPositionalTypes, namedArgs, namedTypes, call.Span, ufcsOffset, altReceiver);
 
                 if (result != null)
                 {
@@ -1429,19 +1503,7 @@ public partial class HmTypeChecker
             {
                 // Fast path: no named args or defaults — use original overload resolution
                 result = ResolveOverload(candidates, fullPositionalTypes, call.Span,
-                                         reportAmbiguity: true, out ambiguityReported);
-
-                // For UFCS, try adapting receiver (value ↔ &T) if direct match failed
-                if (result == null && receiverType != null && fullPositionalTypes.Length > 0)
-                {
-                    var resolvedReceiver = _ctx.Engine.Resolve(fullPositionalTypes[0]);
-                    var adapted = (Type[])fullPositionalTypes.Clone();
-                    if (resolvedReceiver is ReferenceType rt)
-                        adapted[0] = rt.InnerType;
-                    else
-                        adapted[0] = new ReferenceType(resolvedReceiver);
-                    result = ResolveOverload(candidates, adapted, call.Span);
-                }
+                                         reportAmbiguity: true, out ambiguityReported, altReceiver);
 
                 if (result != null)
                 {
@@ -1646,13 +1708,11 @@ public partial class HmTypeChecker
 
                 if (hasNamedOrDefaults)
                 {
-                    result = ResolveOverloadWithDefaults(candidates, withRef, namedArgs, namedTypes, call.Span, 1);
-                    result ??= ResolveOverloadWithDefaults(candidates, withVal, namedArgs, namedTypes, call.Span, 1);
+                    result = ResolveOverloadWithDefaults(candidates, withRef, namedArgs, namedTypes, call.Span, 1, altReceiver: innerType);
                 }
                 else
                 {
-                    result = ResolveOverload(candidates, withRef, call.Span);
-                    result ??= ResolveOverload(candidates, withVal, call.Span);
+                    result = ResolveOverload(candidates, withRef, call.Span, altReceiver: innerType);
                 }
 
                 if (result != null)
@@ -2063,8 +2123,10 @@ public partial class HmTypeChecker
     }
 
     /// <summary>
-    /// Resolve `op_call` overloads for a receiver type: tries `op_call(&T, args...)`
-    /// first (the recommended stateful-callable form), then `op_call(T, args...)`.
+    /// Resolve `op_call` overloads for a receiver type: `op_call(&T, args...)`
+    /// (the recommended stateful-callable form) and `op_call(T, args...)`
+    /// compete in one ranked set, the &-form preferred on ties via the
+    /// alt-receiver cost bump.
     /// </summary>
     private (FunctionScheme Winner, FunctionType FnType, FunctionDeclarationNode Node)? ResolveOpCallOverload(
         Type receiverType, Type[] argTypes, SourceSpan span)
@@ -2076,12 +2138,7 @@ public partial class HmTypeChecker
         withRef[0] = new ReferenceType(receiverType);
         Array.Copy(argTypes, 0, withRef, 1, argTypes.Length);
 
-        var withVal = new Type[argTypes.Length + 1];
-        withVal[0] = receiverType;
-        Array.Copy(argTypes, 0, withVal, 1, argTypes.Length);
-
-        return ResolveOverload(candidates, withRef, span)
-               ?? ResolveOverload(candidates, withVal, span);
+        return ResolveOverload(candidates, withRef, span, altReceiver: receiverType);
     }
 
     // =========================================================================

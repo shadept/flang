@@ -307,6 +307,7 @@ pub fn try_nominal_to_type(from: Ty, to: Ty, reg: &NominalRegistry, allocator: &
         Ref(_) => true,
         Array(_) => true,
         Func(_) => true,
+        Tuple(_) => true,
         _ => false,
     }
     if !valid_from { return null }

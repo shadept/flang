@@ -2980,8 +2980,7 @@ fn resolve_method_call(self: &Checker, call: &CallExpr, ma: &MemberAccessExpr, a
         _ => null,
     }
     if cands.is_none() {
-        push_diag_e(self, call.span, E_UNKNOWN_IDENT,
-            $"unresolved function `{ma.member}`")
+        push_diag_e(self, call.span, E_UNKNOWN_IDENT, $"unresolved function `{ma.member}`")
         return Some(self.engine.fresh_var())
     }
     let candidates = cands.unwrap()
@@ -3290,10 +3289,10 @@ fn resolve_overload(self: &Checker, candidates: &List(FunctionScheme), arg_tys: 
         if probed.is_some() {
             let cost = probed.unwrap()
             let generics = c.signature.quantified.len()
-            let spec = scheme_specificity(&c.signature, arg_tys.len)
-            let better = best.is_none() or generics < best_generics
-                or (generics == best_generics and cost < best_cost)
-                or (generics == best_generics and cost == best_cost and spec > best_spec)
+            let spec = scheme_specificity(self, &c.signature, arg_tys)
+            let better = best.is_none() or spec > best_spec
+                or (spec == best_spec and cost < best_cost)
+                or (spec == best_spec and cost == best_cost and generics < best_generics)
             if better {
                 best = Some(ci)
                 best_cost = cost
@@ -3318,10 +3317,10 @@ fn resolve_overload(self: &Checker, candidates: &List(FunctionScheme), arg_tys: 
     }
     let f = ft.unwrap()
     let checked = non_variadic_arg_count(w, &f, arg_tys.len)
-    // Commit with the receiver shape the winner actually matched.
-    let commit_args = if best_used_alt { &alt_args } else { arg_tys }
     for i in 0..checked {
-        const o = self.engine.unify(commit_args[i], f.params[i])
+        // Commit with the receiver shape the winner actually matched.
+        let arg = if i == 0 and best_used_alt { alt_args[0] } else { arg_tys[i] }
+        const o = self.engine.unify(arg, f.params[i])
         report_unify(self, &o, E_TYPE_MISMATCH, span)
     }
     let inst: PickInst? = null
@@ -3333,30 +3332,58 @@ fn resolve_overload(self: &Checker, candidates: &List(FunctionScheme), arg_tys: 
     return Some(OverloadPick { id = w.id, ret = f.ret.*, inst = inst })
 }
 
-// Speculatively check one candidate: null when it cannot take these
-// arguments, else the total coercion cost plus a penalty per omitted
-// defaulted param (fuller matches win, as in the reference checker).
 // Structural specificity of a candidate's declared parameters: the count
 // of concrete type constructors, with type variables contributing nothing.
 // The primary ranking key in `resolve_overload` - a stand-in for a real
 // constraint system. `deinit(&List($T))` (Ref+Nominal = 2) beats the
 // universal `deinit(&$T)` (Ref = 1), and `any(&Dict($K,$V), $F)` beats
-// the iterator catch-all `any($I, $F)`. Only the first `supplied` params
-// are scored: a defaulted param the call omitted is not a constraint its
-// arguments satisfied, and must not out-rank an exact shorter overload.
-fn scheme_specificity(s: &Scheme, supplied: usize) u32 {
+// the iterator catch-all `any($I, $F)`.
+//
+// A position is only scored when its ARGUMENT has a fully-known shape:
+// params past the supplied args (defaults the call omitted) and params
+// whose argument still contains an unresolved var (an unsuffixed
+// literal, a half-inferred tuple or container) are skipped. An unbound
+// arg unifies with anything at zero cost, so scoring its position would
+// steer `s[0]` to `op_index(String, Range(usize))` (spec 3) over
+// `op_index(String, usize)` (spec 2). Skipped positions fall back to
+// the cost/quantifier keys - the pre-specificity behavior.
+fn scheme_specificity(self: &Checker, s: &Scheme, arg_tys: &List(Ty)) u32 {
     let ft = s.body match {
         Func(f) => Some(f),
         _ => null,
     }
     if ft.is_none() { return 0 }
     let f = ft.unwrap()
-    let n = if supplied < f.params.len { supplied } else { f.params.len }
+    let n = if arg_tys.len < f.params.len { arg_tys.len } else { f.params.len }
     let total = 0u32
     for i in 0..n {
-        total = total + ty_specificity(f.params[i])
+        if !ty_has_free_var(self, self.engine.resolve(arg_tys[i])) {
+            total = total + ty_specificity(f.params[i])
+        }
     }
     return total
+}
+
+// Whether a (resolved) type still contains an unbound inference var
+// anywhere in its structure.
+fn ty_has_free_var(self: &Checker, t: Ty) bool {
+    return t match {
+        Var(_) => true,
+        Ref(inner) => ty_has_free_var(self, self.engine.resolve(inner.*)),
+        Array(a) => ty_has_free_var(self, self.engine.resolve(a.elem.*)),
+        Func(f) => ty_has_free_var(self, self.engine.resolve(f.ret.*))
+            or tys_have_free_var(self, &f.params),
+        Tuple(elems) => tys_have_free_var(self, &elems),
+        Nominal(nr) => tys_have_free_var(self, &nr.args),
+        _ => false,
+    }
+}
+
+fn tys_have_free_var(self: &Checker, tys: &List(Ty)) bool {
+    for i in 0..tys.len {
+        if ty_has_free_var(self, self.engine.resolve(tys[i])) { return true }
+    }
+    return false
 }
 
 fn ty_specificity(t: Ty) u32 {
@@ -3364,24 +3391,23 @@ fn ty_specificity(t: Ty) u32 {
         Var(_) => 0u32,
         Ref(inner) => 1u32 + ty_specificity(inner.*),
         Array(a) => 1u32 + ty_specificity(a.elem.*),
-        Func(f) => {
-            let sum = 1u32 + ty_specificity(f.ret.*)
-            for i in 0..f.params.len {
-                sum = sum + ty_specificity(f.params[i])
-            }
-            sum
-        },
-        Nominal(nr) => {
-            let sum = 1u32
-            for i in 0..nr.args.len {
-                sum = sum + ty_specificity(nr.args[i])
-            }
-            sum
-        },
+        Func(f) => 1u32 + ty_specificity(f.ret.*) + tys_specificity(&f.params),
+        Nominal(nr) => 1u32 + tys_specificity(&nr.args),
         _ => 1u32,
     }
 }
 
+fn tys_specificity(tys: &List(Ty)) u32 {
+    let sum = 0u32
+    for i in 0..tys.len {
+        sum = sum + ty_specificity(tys[i])
+    }
+    return sum
+}
+
+// Speculatively check one candidate: null when it cannot take these
+// arguments, else the total coercion cost plus a penalty per omitted
+// defaulted param (fuller matches win, as in the reference checker).
 fn probe_candidate(self: &Checker, c: &FunctionScheme, arg_tys: &List(Ty)) u32? {
     let f = scheme_fn_ty(self, &c.signature) match {
         Some(ft) => ft,
