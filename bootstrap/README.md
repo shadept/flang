@@ -40,16 +40,15 @@ by `cst_explorer_web` for visualization.
 
 `bootstrap build` runs end-to-end: it resolves the project, type-checks
 it with `flang_typer` — 0 `-c` errors across the compiler + stdlib
-(98 modules) — lowers to FIR via `flang_driver`, and emits native
+(99 modules) — lowers to FIR via `flang_driver`, and emits native
 executables through `flang_codegen`, linking the stdlib's C runtime
-sidecars. Lowering covers a growing subset (milestones M1–M8: scalars,
-calls, control flow, assignment/places, match, indexing, aggregate
-parameters/returns — by-pointer with callee copy, sret returns — enum
-variant construction, and the `?`/`??` optional operators); anything
-outside it is refused rather than miscompiled. On the full self-build, every emitted function compiles
-and links; `main` itself still refuses (string literals and
-interpolation, defaulted arguments), so no stage-1 binary yet — see
-the header of `lib/flang_driver/src/lower.f` for what's next.
+sidecars. As of M11 (2026-08-21) the full self-build LINKS: **stage-1
+exists** and compiles + runs single-file programs correctly. 15
+functions still refuse (all off `main`'s path — SIMD csv internals and
+a few IO helpers); refusal-over-miscompile still guards them. Stage-1
+segfaults on the full multi-module project build — that miscompile hunt
+is the stage-2 frontier (docs/known-issues.md). `-v` prints a
+per-function skip report with reasons.
 
 The C# reference compiler (`src/FLang.*`) is the source of truth for
 semantics today.

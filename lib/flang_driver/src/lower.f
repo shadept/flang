@@ -132,6 +132,9 @@ type LowerCtx = struct {
     flushing: bool
     // TEMPORARY SCAFFOLD - see `unlowerable`. Delete with it.
     blocked: bool
+    // First deep refusal reason for the current function, when a refusal
+    // site recorded one - surfaces in the skip note. Same scaffold.
+    blocked_note: String?
     // RFC-014: lambda bodies enqueued at their literal sites, emitted as
     // module-level functions after the main walk (a body can enqueue
     // nested lambdas, so the drain is index-based).
@@ -139,6 +142,29 @@ type LowerCtx = struct {
     // Compile-time context #if conditions evaluate against. Host by
     // default; a cross-target build overrides it at construction.
     comptime: ComptimeCtx
+    // M11 globals: module-level consts that lowered, keyed by the FQN the
+    // checker records in `RtConst`. Membership is the readable gate - a
+    // const whose initializer refused has no entry, so its readers refuse
+    // (absent, never silently zero).
+    consts: Dict(String, ConstInfo)
+    // Init-function symbols in emission order; `wire_const_inits` calls
+    // each at the top of `main`.
+    // ponytail: init order is declaration order, not dependency order - a
+    // const whose INITIALIZER reads another const's VALUE (not address)
+    // may read zeros. No such const exists in-tree; topo-sort when one does.
+    const_inits: List(String)
+    // Owned backing for const global/init symbol names; the IrModule and
+    // `consts` reference them as views. Leaks with the ctx, like `syms`.
+    owned_syms: List(OwnedString)
+}
+
+// One lowered module-level constant: its global's symbol, its init
+// function's symbol, and its declared (initializer) type. The symbol
+// views point into `LowerCtx.owned_syms`.
+type ConstInfo = struct {
+    sym: String
+    init_sym: String
+    ty: Ty
 }
 
 // A lambda body awaiting emission. `lam`/`info` are shallow copies
@@ -194,6 +220,13 @@ type StrData = struct {
 fn unlowerable(ctx: &LowerCtx) Operand {
     ctx.blocked = true
     return Operand.IntConst(0)
+}
+
+// `unlowerable` with a reason - the first one a function hits lands in
+// its skip note. Same temporary scaffold.
+fn unlowerable_why(ctx: &LowerCtx, why: String) Operand {
+    if !ctx.blocked { ctx.blocked_note = Some(why) }
+    return unlowerable(ctx)
 }
 
 // Enclosing loops, innermost last, so `break` and `continue` can name the
@@ -341,13 +374,19 @@ pub fn lower_module(ast_module: &Module, result: &TypeCheckResult, allocator: &A
         defer_marks = defer_marks,
         flushing = false,
         blocked = false,
+        blocked_note = null,
         pending_lambdas = list(0, allocator),
-        comptime = host_ctx()
+        comptime = host_ctx(),
+        consts = dict(allocator),
+        const_inits = list(0, allocator),
+        owned_syms = list(0, allocator)
     }
+    lower_consts(&m, &ctx, ast_module)
     lower_into(&m, &ctx, ast_module, "")
     lower_specializations(&m, &ctx)
     lower_pending_lambdas(&m, &ctx)
     flush_strings(&m, &ctx)
+    wire_const_inits(&m, &ctx)
     // ponytail: the symbol table leaks - the IrModule's function names
     // are views into its owned strings, so freeing it here would dangle
     // every name the backend is about to print. Upgrade path: arena-own
@@ -373,7 +412,12 @@ pub fn lower_program(modules: &List(Module), fqns: &List(OwnedString), result: &
     let str_globals: List(Global) = list(0, allocator)
     let defer_stack: List(Expr) = list(0, allocator)
     let defer_marks: List(usize) = list(0, allocator)
-    let ctx = LowerCtx { result = result, overlay = null, syms = &syms, allocator = allocator, loops = loop_stack, sret = null, ret_size = 0u64, strings = interner, str_globals = str_globals, defers = defer_stack, defer_marks = defer_marks, flushing = false, blocked = false, pending_lambdas = list(0, allocator), comptime = host_ctx() }
+    let ctx = LowerCtx { result = result, overlay = null, syms = &syms, allocator = allocator, loops = loop_stack, sret = null, ret_size = 0u64, strings = interner, str_globals = str_globals, defers = defer_stack, defer_marks = defer_marks, flushing = false, blocked = false, blocked_note = null, pending_lambdas = list(0, allocator), comptime = host_ctx(), consts = dict(allocator), const_inits = list(0, allocator), owned_syms = list(0, allocator) }
+    // Consts first: bodies in ANY module may read a const from any other,
+    // and the readable gate is `ctx.consts` membership.
+    for i in 0..modules.len {
+        lower_consts(&m, &ctx, &modules[i])
+    }
     for i in 0..modules.len {
         lower_into(&m, &ctx, &modules[i], fqns[i].as_view())
     }
@@ -382,7 +426,14 @@ pub fn lower_program(modules: &List(Module), fqns: &List(OwnedString), result: &
     flush_strings(&m, &ctx)
     // ponytail: the symbol table leaks - the IrModule's names borrow its
     // strings (see lower_module).
-    drop_callers_of_refused(&m, allocator)
+    //
+    // Drop FIRST, wire init calls after: an init function that survives
+    // the fixpoint is callable, and a const whose init died takes its
+    // READERS down inside the fixpoint (see `reads_dead_global`) - so
+    // `main` only ever calls inits that exist, instead of dying because
+    // some unrelated module's const could not initialize.
+    drop_callers_of_refused(&m, &ctx, allocator)
+    wire_const_inits(&m, &ctx)
     return m
 }
 
@@ -399,10 +450,18 @@ pub fn lower_program(modules: &List(Module), fqns: &List(OwnedString), result: &
 // `blocked` within a body - and it is what makes the milestone property
 // ("everything emitted is correct; the rest is absent") hold for calls to
 // generic functions, whose bodies stay unlowerable until monomorphization.
-fn drop_callers_of_refused(m: &IrModule, alloc: &Allocator?) {
+fn drop_callers_of_refused(m: &IrModule, ctx: &LowerCtx, alloc: &Allocator?) {
     let defined: Dict(String, bool) = dict(alloc)
     for i in 0..m.functions.len { defined.set(m.functions[i].name, true) }
     for i in 0..m.foreigns.len { defined.set(m.foreigns[i].name, true) }
+
+    // Const global -> its init function: a function READING a const whose
+    // init died would see zeros, so it must go too (M11 globals).
+    let init_of: Dict(String, String) = dict(alloc)
+    for entry in ctx.consts {
+        let ci: ConstInfo = entry.value
+        init_of.set(ci.sym, ci.init_sym)
+    }
 
     // Fixpoint over names only - dropping a function strands its own
     // callers, and they have to go too.
@@ -412,9 +471,19 @@ fn drop_callers_of_refused(m: &IrModule, alloc: &Allocator?) {
         for i in 0..m.functions.len {
             let f = &m.functions[i]
             if defined.get(f.name).is_none() { continue }
-            if first_undefined_callee(f, &defined).is_some() {
+            let missing = first_undefined_callee(f, &defined)
+            if missing.is_some() {
                 let _d = defined.remove(f.name)
                 m.skipped.push(f.name)
+                m.skip_notes.push($"{f.name}: calls undefined `{missing.unwrap()}`")
+                changed = true
+                continue
+            }
+            let dead = first_dead_global(f, &init_of, &defined)
+            if dead.is_some() {
+                let _d = defined.remove(f.name)
+                m.skipped.push(f.name)
+                m.skip_notes.push($"{f.name}: reads `{dead.unwrap()}` whose initializer was dropped")
                 changed = true
             }
         }
@@ -435,12 +504,108 @@ fn drop_callers_of_refused(m: &IrModule, alloc: &Allocator?) {
 
 // The first direct callee of `f` that has no definition in the module.
 // Indirect calls carry no symbol and are not checked here.
+// The first const global `f` touches whose init function is no longer
+// defined - the read would see zeros. TEMPORARY SCAFFOLD, removed with
+// the skip mechanism.
+fn first_dead_global(f: &Function, init_of: &Dict(String, String), defined: &Dict(String, bool)) String? {
+    for b in 0..f.blocks.len {
+        let blk = &f.blocks[b]
+        for i in 0..blk.instrs.len {
+            let g = instr_dead_global(&blk.instrs[i], init_of, defined)
+            if g.is_some() { return g }
+        }
+        let g2 = term_dead_global(&blk.terminator, init_of, defined)
+        if g2.is_some() { return g2 }
+    }
+    return null
+}
+
+fn instr_dead_global(ins: &Instr, init_of: &Dict(String, String), defined: &Dict(String, bool)) String? {
+    return ins.* match {
+        Binary(x) => two_dead(&x.lhs, &x.rhs, init_of, defined),
+        Unary(x) => one_dead(&x.operand, init_of, defined),
+        Compare(x) => two_dead(&x.lhs, &x.rhs, init_of, defined),
+        Convert(x) => one_dead(&x.operand, init_of, defined),
+        StackSlot(_) => null,
+        Load(x) => one_dead(&x.ptr, init_of, defined),
+        Store(x) => two_dead(&x.value, &x.ptr, init_of, defined),
+        Gep(x) => two_dead(&x.ptr, &x.offset, init_of, defined),
+        Memcpy(x) => {
+            let d = two_dead(&x.dst, &x.src, init_of, defined)
+            if d.is_some() { return d }
+            one_dead(&x.size, init_of, defined)
+        },
+        Memset(x) => two_dead(&x.dst, &x.size, init_of, defined),
+        Call(x) => list_dead(&x.args, init_of, defined),
+        CallIndirect(x) => {
+            let d = one_dead(&x.fn_ptr, init_of, defined)
+            if d.is_some() { return d }
+            list_dead(&x.args, init_of, defined)
+        },
+    }
+}
+
+fn term_dead_global(t: &Terminator, init_of: &Dict(String, String), defined: &Dict(String, bool)) String? {
+    return t.* match {
+        Br(bt) => list_dead(&bt.args, init_of, defined),
+        BrIf(bi) => {
+            let d = one_dead(&bi.cond, init_of, defined)
+            if d.is_some() { return d }
+            let d2 = list_dead(&bi.then_target.args, init_of, defined)
+            if d2.is_some() { return d2 }
+            list_dead(&bi.else_target.args, init_of, defined)
+        },
+        Ret(v) => v match {
+            Some(op) => one_dead(&op, init_of, defined),
+            None => null,
+        },
+        Unreachable => null,
+    }
+}
+
+fn one_dead(op: &Operand, init_of: &Dict(String, String), defined: &Dict(String, bool)) String? {
+    op.* match {
+        GlobalRef(g) => {
+            let ini = init_of.get(g)
+            ini match {
+                Some(isym) => {
+                    if defined.get(isym).is_none() { return Some(g) }
+                },
+                None => {},
+            }
+        },
+        _ => {},
+    }
+    return null
+}
+
+fn two_dead(a: &Operand, b: &Operand, init_of: &Dict(String, String), defined: &Dict(String, bool)) String? {
+    let d = one_dead(a, init_of, defined)
+    if d.is_some() { return d }
+    return one_dead(b, init_of, defined)
+}
+
+fn list_dead(ops: &List(Operand), init_of: &Dict(String, String), defined: &Dict(String, bool)) String? {
+    for i in 0..ops.len {
+        let d = one_dead(&ops[i], init_of, defined)
+        if d.is_some() { return d }
+    }
+    return null
+}
+
 fn first_undefined_callee(f: &Function, defined: &Dict(String, bool)) String? {
     for b in 0..f.blocks.len {
         let instrs = &f.blocks[b].instrs
         for i in 0..instrs.len {
             let callee = instrs[i] match {
                 Call(c) => c.callee,
+                // A stored function ADDRESS (a vtable field, a fn value)
+                // dangles just like a call if its function was refused -
+                // the emitted C names a symbol that does not exist.
+                Store(s) => s.value match {
+                    FuncRef(n) => n,
+                    _ => "",
+                },
                 _ => "",
             }
             if callee.len > 0 {
@@ -460,6 +625,143 @@ fn lower_into(m: &IrModule, ctx: &LowerCtx, ast_module: &Module, fqn: String) {
             _ => {},
         }
     }
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// Module-level constants (M11 globals)
+//
+// Each const becomes an aligned zero-initialized byte global plus a
+// synthesized nullary init function that lowers the initializer and
+// stores it - `wire_const_inits` calls every init at the top of `main`,
+// so vtables of function pointers and cross-global addresses need no
+// static-initializer support in the C emitter. A const whose initializer
+// refuses gets NO global and NO `ctx.consts` entry: its readers refuse,
+// and the program stays "absent, never silently wrong".
+// ─────────────────────────────────────────────────────────────────────────
+
+fn lower_consts(m: &IrModule, ctx: &LowerCtx, ast_module: &Module) {
+    for i in 0..ast_module.decls.len {
+        let d = &ast_module.decls[i]
+        d.* match {
+            Const(cd) => lower_const_decl(m, ctx, &cd),
+            _ => {},
+        }
+    }
+}
+
+fn lower_const_decl(m: &IrModule, ctx: &LowerCtx, cd: &ConstDecl) {
+    // The decl's own RtConst target names its FQN (recorded by
+    // check_constant_init) - the key every read site cites.
+    let fqn_opt: String? = null
+    ctx_target(ctx, node_id_of(cd.span)) match {
+        Some(t) => t match {
+            RtConst(f) => fqn_opt = Some(f),
+            _ => {},
+        },
+        None => {},
+    }
+    if fqn_opt.is_none() { return }
+    let fqn = fqn_opt.unwrap()
+    let tyo = ctx_type(ctx, node_id_of(expr_span(&cd.value)))
+    if tyo.is_none() {
+        m.skip_notes.push($"{fqn}: const initializer unchecked")
+        return
+    }
+    let t = tyo.unwrap()
+    if !ty_concrete(&t) {
+        m.skip_notes.push($"{fqn}: const type not concrete")
+        return
+    }
+    let lay = layout_of(&t, &ctx.result.nominals, ctx.allocator)
+    let gsym = park_sym(ctx, const_symbol("__fconst_", fqn, ctx.allocator))
+    let isym = park_sym(ctx, const_symbol("__finit_", fqn, ctx.allocator))
+
+    let fb = function(isym, null, ctx.allocator)
+    let env = new_env(ctx.allocator)
+    let cur = fb.entry()
+    ctx.blocked = false
+    ctx.blocked_note = null
+    let v = lower_expr(ctx, &cur, &env, &cd.value)
+    if is_by_ref(ctx, &t) {
+        cur.memcpy(Operand.GlobalRef(gsym), v, Operand.IntConst(lay.size as i64))
+    } else {
+        cur.store(ir_of(&t), v, Operand.GlobalRef(gsym))
+    }
+    cur.ret_void()
+    env.deinit()
+    if ctx.blocked {
+        m.skipped.push(isym)
+        m.skip_notes.push($"{fqn}: const initializer refused")
+        return
+    }
+    m.add_function(fb.finish())
+    m.add_global(Global { name = gsym, size = lay.size as u64, align = lay.align as u64, init_bytes = null })
+    ctx.consts.set(fqn, ConstInfo { sym = gsym, init_sym = isym, ty = t })
+    ctx.const_inits.push(isym)
+}
+
+// `prefix` + the escaped FQN. The prefix keeps const globals and their
+// init functions out of the function-symbol namespace (a const `m.NAME`
+// would otherwise collide with a nullary `fn NAME` in module `m`).
+fn const_symbol(prefix: String, fqn: String, allocator: &Allocator?) OwnedString {
+    let sb = string_builder(prefix.len + fqn.len + 8, allocator)
+    defer sb.deinit()
+    sb.append(prefix)
+    append_module_path(&sb, fqn)
+    return sb.to_string()
+}
+
+// Park an owned symbol string; the returned view stays valid because an
+// OwnedString's heap bytes do not move when the list grows.
+fn park_sym(ctx: &LowerCtx, s: OwnedString) String {
+    let v = s.as_view()
+    ctx.owned_syms.push(s)
+    return v
+}
+
+// Call every SURVIVING const init at the top of `main`, in registration
+// order, before any user instruction. Runs after the drop pass: an init
+// that died there already took every reader of its const with it, so
+// skipping its call cannot leave a live read of zeroed memory.
+fn wire_const_inits(m: &IrModule, ctx: &LowerCtx) {
+    if ctx.const_inits.len == 0 { return }
+    let live: Set(String) = set(ctx.allocator)
+    for i in 0..m.functions.len { live.add(m.functions[i].name) }
+    for i in 0..m.functions.len {
+        if !(m.functions[i].name == "main") { continue }
+        let old = m.functions[i].blocks[0].instrs
+        let merged: List(Instr) = list(old.len + ctx.const_inits.len, ctx.allocator)
+        for k in 0..ctx.const_inits.len {
+            if !live.contains(ctx.const_inits[k]) { continue }
+            let args: List(Operand) = list(0, ctx.allocator)
+            let var_types: List(IrType) = list(0, ctx.allocator)
+            let no_result: u32? = null
+            let no_ty: IrType? = null
+            merged.push(Instr.Call(CallInstr {
+                result = no_result,
+                result_ty = no_ty,
+                callee = ctx.const_inits[k],
+                args = args,
+                variadic_arg_types = var_types,
+            }))
+        }
+        merged.push_all(old.as_slice())
+        set_instrs(&m.functions[i].blocks[0], merged)
+        live.deinit()
+        return
+    }
+    live.deinit()
+}
+
+// The lowered global for a const read, loaded per its declared type. An
+// aggregate's value is the global's address; a scalar loads through it.
+fn read_const(ctx: &LowerCtx, bb: &BlockBuilder, fqn: String, want: &Ty) Operand {
+    let ci = ctx.consts.get(fqn)
+    if ci.is_none() { return unlowerable_why(ctx, fqn) }
+    let c = ci.unwrap()
+    if !repr_compatible(ctx, &c.ty, want) { return unlowerable_why(ctx, "const read repr mismatch") }
+    if is_by_ref(ctx, &c.ty) { return Operand.GlobalRef(c.sym) }
+    return bb.load(ir_of(&c.ty), Operand.GlobalRef(c.sym))
 }
 
 // A function declaration becomes a defined FIR function, or - when it has
@@ -482,9 +784,13 @@ fn foreign_decl_of(decl: &FunctionDecl, allocator: &Allocator?) ForeignDecl? {
     let ret: IrType? = null
     if decl.return_type.is_some() {
         let rt = decl.return_type.unwrap()
-        let r = type_expr_to_ir(&rt)
-        if r.is_none() { return null }
-        ret = r
+        // `never` (e.g. `#foreign fn exit(code: i32) never`) yields no
+        // value - the extern declares as void, same as no return type.
+        if !type_expr_is_never(&rt) {
+            let r = type_expr_to_ir(&rt)
+            if r.is_none() { return null }
+            ret = r
+        }
     }
     let ptys: List(IrType) = list(decl.params.len, allocator)
     let variadic = false
@@ -656,6 +962,7 @@ fn lower_function_body(m: &IrModule, ctx: &LowerCtx, decl: &FunctionDecl, sym: S
     // terminator lands on whatever block lowering ended in, not the entry.
     let cur = fb.entry()
     ctx.blocked = false
+    ctx.blocked_note = null
     ctx.sret = sret_op
     ctx.ret_size = 0u64
     if ret_agg {
@@ -729,6 +1036,11 @@ fn lower_function_body(m: &IrModule, ctx: &LowerCtx, decl: &FunctionDecl, sym: S
     // into a function that still links and runs.
     if ctx.blocked {
         m.skipped.push(sym)
+        let why = ctx.blocked_note match {
+            Some(w) => w,
+            None => "unsupported construct",
+        }
+        m.skip_notes.push($"{sym}: body refused ({why})")
         return
     }
     m.add_function(fb.finish())
@@ -1033,25 +1345,22 @@ fn lower_expr(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, expr: &Expr) Operand
         // silent refusal that looks like a deliberate one.
 
         Index(ix) => lower_index(ctx, bb, env, &ix),
-        // `x as T` - needs the full conversion matrix (trunc/ext/fp casts,
-        // pointer casts); FIR has the instructions, the mapping is unwritten.
-        Cast(_) => unlowerable(ctx),
-        // `[a, b, c]` and `(a, b)` - aggregate literals need element layout
-        // and a slot to build into, like `StructLit` already has.
-        ArrayLit(_) => unlowerable(ctx),
-        TupleLit(_) => unlowerable(ctx),
+        Cast(c) => lower_cast(ctx, bb, env, &c),
+        ArrayLit(al) => lower_array_lit(ctx, bb, env, &al),
+        TupleLit(tl) => lower_tuple_lit(ctx, bb, env, &tl),
         // `$"…"` - the checker desugared it to a StringBuilder block
         // (RFC-004); replay that block. No recorded desugar (a `$sb"…"`
         // whose target wasn't an identifier) refuses.
         InterpolatedString(is) => lower_interpolation(ctx, bb, env, &is),
         // `a?.b` - a branch on an optional plus a desugaring the checker
         // has not recorded (3 measured sites - rewritable-away).
-        NullPropagation(_) => unlowerable(ctx),
+        NullPropagation(_) => unlowerable_why(ctx, "`?.` null propagation"),
         Coalesce(co) => lower_coalesce(ctx, bb, env, &co),
         Try(tr) => lower_try(ctx, bb, env, &tr),
-        // `a..b` outside a `for` header has no value representation yet;
-        // `for` handles its own range directly (see `lower_for_range`).
-        Range(_) => unlowerable(ctx),
+        // `a..b` as a value: the `Range(T)` struct the slicing op_index
+        // overloads take (M11). `for` headers still handle their own
+        // range directly (see `lower_for_range`).
+        Range(rg) => lower_range_value(ctx, bb, env, &rg),
         Lambda(lam) => lower_lambda(ctx, bb, env, &lam),
         // A parse or projection failure. Already diagnosed upstream; refusing
         // the function keeps a recovered AST from reaching the backend. Not
@@ -1068,7 +1377,7 @@ fn lower_expr(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, expr: &Expr) Operand
 // placeholder for the void into-builder form.
 fn lower_interpolation(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, is: &InterpolatedStringExpr) Operand {
     let blk = ctx_desugar(ctx, node_id_of(is.span))
-    if blk.is_none() { return unlowerable(ctx) }
+    if blk.is_none() { return unlowerable_why(ctx, "interpolation without desugar") }
     return lower_block_value(ctx, bb, env, blk.unwrap())
 }
 
@@ -1218,8 +1527,114 @@ fn lower_for(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, f: &ForStmt) {
     // local mis-lowers in the reference compiler (docs/known-issues.md).
     f.iterable.* match {
         Range(r) => lower_for_range(ctx, bb, env, f, &r),
-        _ => { let _u = unlowerable(ctx) },
+        _ => lower_for_iter(ctx, bb, env, f),
     }
+}
+
+// `for x in xs` over the iterator protocol (M11): call the checker's
+// recorded `iter` pick once (the pick sits on the BODY block node),
+// then loop `next(&state)` (recorded on the FOR node), testing the
+// returned Option's discriminant. Each iteration copies the payload
+// into the loop variable's own slot (value semantics).
+fn lower_for_iter(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, f: &ForStmt) {
+    let iop = ctx_operator(ctx, node_id_of(f.body.span))
+    let nop = ctx_operator(ctx, node_id_of(f.span))
+    if iop.is_none() or nop.is_none() {
+        let _u = unlowerable_why(ctx, "for over an iterator (no protocol picks)")
+        return
+    }
+    let io = iop.unwrap()
+    let no = nop.unwrap()
+    let isym = op_symbol(ctx, &io)
+    let isig = op_sig(ctx, &io)
+    let nsym = op_symbol(ctx, &no)
+    let nsig = op_sig(ctx, &no)
+    if isym.is_none() or isig.is_none() {
+        let _u = unlowerable_why(ctx, "for-iter without iter symbol")
+        return
+    }
+    if nsym.is_none() or nsig.is_none() {
+        let _u = unlowerable_why(ctx, "for-iter without next symbol")
+        return
+    }
+    let ig = isig.unwrap()
+    let ng = nsig.unwrap()
+    if ig.params.len != 1 { let _u = unlowerable(ctx); return }
+    if ng.params.len != 1 { let _u = unlowerable(ctx); return }
+
+    // The Option geometry of `next`'s return, and the element type.
+    let t = resolve_enum(&ng.ret, &ctx.result.nominals)
+    if t.is_none() { let _u = unlowerable_why(ctx, "for-iter next() not an Option"); return }
+    let et = t.unwrap()
+    if et.args.len != 1 { let _u = unlowerable(ctx); return }
+    let ety = et.args[0]
+    let ol = enum_layout(&et.def, &et.args, &ctx.result.nominals, ctx.allocator)
+
+    // `iter(&xs)`: an aggregate iterable's value IS its address; a
+    // reference value is already the pointer the parameter wants.
+    let recv = lower_expr(ctx, bb, env, f.iterable)
+    let iargs: List(Operand) = list(2, ctx.allocator)
+    iargs.push(recv)
+    let state = emit_call(ctx, bb, isym.unwrap(), &ig, iargs)
+    // `next` takes the state as its parameter declares: a self-iterator
+    // (`iter -> &State`, `next(&State)`) passes it unchanged; otherwise
+    // the state's address (an aggregate's value IS one; a scalar spills).
+    let state_addr = state
+    if !repr_compatible(ctx, &ig.ret, &ng.params[0]) {
+        if !is_by_ref(ctx, &ig.ret) {
+            let sir = ir_of(&ig.ret)
+            let slot = alloc_slot(bb, sir)
+            bb.store(sir, state, slot)
+            state_addr = slot
+        }
+    }
+
+    let fb = bb.fb
+    let head = fb.block(fb.fresh_label("fit_head"))
+    let body = fb.block(fb.fresh_label("fit_body"))
+    let exit = fb.block(fb.fresh_label("fit_exit"))
+
+    bb.br(head.label())
+    bb.move_to(&head)
+    let nargs: List(Operand) = list(2, ctx.allocator)
+    nargs.push(state_addr)
+    let nxt = emit_call(ctx, bb, nsym.unwrap(), &ng, nargs)
+    let cond = if ol.is_niche {
+        bb.icmp_ne(IrType.Ptr, nxt, Operand.NullPtr)
+    } else {
+        bb.icmp_ne(IrType.I32, bb.load(IrType.I32, nxt), Operand.IntConst(0))
+    }
+    bb.br_if(cond, body.label(), exit.label())
+
+    bb.move_to(&body)
+    let scope = env.mark()
+    if ol.is_niche {
+        // The payload pointer IS the value; the loop var is a &T.
+        let slot = alloc_slot(bb, IrType.Ptr)
+        bb.store(IrType.Ptr, nxt, slot)
+        env.bind_slot(f.var_name, slot, IrType.Ptr, ety)
+    } else {
+        let pa = bb.gep(nxt, Operand.IntConst(ol.payload_offset as i64))
+        if is_by_ref(ctx, &ety) {
+            let elay = layout_of(&ety, &ctx.result.nominals, ctx.allocator)
+            let slot = bb.stack_slot(elay.size as u64, elay.align as u64)
+            bb.memcpy(slot, pa, Operand.IntConst(elay.size as i64))
+            env.bind_aggregate(f.var_name, slot, ety)
+        } else {
+            let ir = ir_of(&ety)
+            let v = bb.load(ir, pa)
+            let slot = alloc_slot(bb, ir)
+            bb.store(ir, v, slot)
+            env.bind_slot(f.var_name, slot, ir, ety)
+        }
+    }
+    ctx.loops.push(LoopFrame { latch = head.label(), exit = exit.label(), defer_depth = ctx.defers.len })
+    let r = lower_block(ctx, bb, env, &f.body)
+    let _f = ctx.loops.pop()
+    env.release(scope)
+    if !r.terminated { bb.br(head.label()) }
+
+    bb.move_to(&exit)
 }
 
 fn lower_for_range(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, f: &ForStmt, rng: &RangeExpr) {
@@ -1362,12 +1777,23 @@ fn lower_call(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, call: &CallExpr) Ope
         }
     }
     if sym_opt.is_none() or sig_opt.is_none() {
+        // `Type(T)` instantiation syntax is a reified-type VALUE, not a
+        // call (minimal RTTI, M11).
+        let cty = node_ty(ctx, call.span)
+        if nominal_fqn_is(ctx, &cty, FQN_TYPE) { return build_typeinfo_value(ctx, bb, &cty) }
         // No resolved symbol: the callee may be a VALUE - a closure or a
         // bare fn pointer (RFC-014).
         return lower_callee_value_call(ctx, bb, env, call)
     }
     let sym = sym_opt.unwrap()
     let sig = sig_opt.unwrap()
+
+    // `size_of(T)` / `align_of(T)` fold to layout constants (M11). Their
+    // stdlib bodies read a `Type(T)` RTTI value this lowering cannot
+    // build yet; the answer is a compile-time constant anyway. Same
+    // pattern as the reference's `project_info()` intercept.
+    let folded = intercept_rtti_layout(ctx, sym, &sig)
+    if folded.is_some() { return folded.unwrap() }
 
     let args: List(Operand) = list(call.args.len + 2, ctx.allocator)
     // A UFCS call `recv.f(a)` resolved to a free function takes the
@@ -1377,9 +1803,19 @@ fn lower_call(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, call: &CallExpr) Ope
     // a field holding a function value resolves indirectly and never
     // reaches here (no direct target, so the lookup above bailed).
     // An aggregate argument passes its address (what `lower_expr` yields
-    // for one); the callee copies - see `lower_function`.
+    // for one); the callee copies - see `lower_function`. The receiver
+    // is ADAPTED to the winner's first-parameter shape (value <-> &T),
+    // mirroring the checker's in-set receiver adaptation - pushing the
+    // raw value against an adapted pick was a silent scalar miscompile
+    // (an i8 handed to a `&u8` parameter).
     call.callee.* match {
-        MemberAccess(ma) => args.push(lower_expr(ctx, bb, env, ma.receiver)),
+        MemberAccess(ma) => {
+            if sig.params.len == 0 {
+                args.deinit()
+                return unlowerable(ctx)
+            }
+            args.push(lower_receiver(ctx, bb, env, ma.receiver, &sig.params[0]))
+        },
         _ => {},
     }
     for i in 0..call.args.len {
@@ -1392,9 +1828,27 @@ fn lower_call(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, call: &CallExpr) Ope
     }
 
     // A call that leaves defaulted parameters to the callee has fewer
-    // arguments than the definition has parameters. Materializing a
-    // default means lowering an expression from the callee's scope; until
-    // that lands, refuse rather than emit an arity C rejects.
+    // arguments than the definition has parameters. The checker recorded
+    // the omitted params' default expressions on the call node (M11,
+    // `materialize_default_args`) - lower them here, in parameter order,
+    // after the explicit arguments. A short call with no recorded
+    // defaults (named args, a `$T`-typed default, the variadic tail)
+    // refuses rather than emit an arity C rejects.
+    if args.len < sig.params.len {
+        let ds = ctx_default_args(ctx, node_id_of(call.span))
+        if ds.is_none() {
+            args.deinit()
+            return unlowerable_why(ctx, "short call without materialized defaults")
+        }
+        let defaults = ds.unwrap()
+        if args.len + defaults.len != sig.params.len {
+            args.deinit()
+            return unlowerable(ctx)
+        }
+        for i in 0..defaults.len {
+            args.push(lower_expr(ctx, bb, env, &defaults[i]))
+        }
+    }
     if args.len != sig.params.len {
         args.deinit()
         return unlowerable(ctx)
@@ -1409,6 +1863,391 @@ fn lower_call(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, call: &CallExpr) Ope
     }
 
     return emit_call(ctx, bb, sym, &sig, args)
+}
+
+// A `{ptr, len}` view slot over `ptr_op` with a constant length - the
+// shape both `[T; N]` decay and array literals coerced to slices need.
+// `want` must be the Slice (or String) nominal the node is typed as.
+fn build_slice_view(ctx: &LowerCtx, bb: &BlockBuilder, want: &Ty, ptr_op: Operand, len: usize) Operand {
+    let st_opt = resolve_struct(want, &ctx.result.nominals, ctx.allocator)
+    if st_opt.is_none() { return unlowerable(ctx) }
+    let st = st_opt.unwrap()
+    let pi = field_index(&st.def, "ptr")
+    let li = field_index(&st.def, "len")
+    if pi < 0 or li < 0 { return unlowerable(ctx) }
+    let slot = bb.stack_slot(st.layout.size as u64, st.layout.align as u64)
+    let pp = bb.gep(slot, Operand.IntConst(st.layout.offsets[pi as usize] as i64))
+    bb.store(IrType.Ptr, ptr_op, pp)
+    let lp = bb.gep(slot, Operand.IntConst(st.layout.offsets[li as usize] as i64))
+    bb.store(IrType.I64, Operand.IntConst(len as i64), lp)
+    return slot
+}
+
+// `[a, b]` / `[v; N]` (M11): the array builds into a stride-addressed
+// slot; the zero-repeat form (`[0u8; N]` - the dominant shape) is one
+// memset. A literal whose node the checker's decay coercion rewrote to
+// a Slice wraps the fresh array in a `{ptr, len}` view over it.
+fn lower_array_lit(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, al: &ArrayLiteralExpr) Operand {
+    let want = node_ty(ctx, al.span)
+    let arr = want match {
+        Array(a) => Some(a),
+        _ => null,
+    }
+    let slice_elem = want match {
+        Nominal(nr) => slice_elem_of(ctx, &nr),
+        _ => null,
+    }
+
+    let count: usize = al.kind match {
+        Elements(es) => es.len,
+        Repeat(_) => {
+            // The repeat count only survives checking as an array length
+            // (a non-literal count left the node an unconstrained var,
+            // which never reaches here); a decay-coerced repeat literal
+            // has nowhere to read the count from and refuses.
+            arr match {
+                Some(a) => a.length,
+                None => return unlowerable(ctx),
+            }
+        },
+    }
+    let elem = arr match {
+        Some(a) => a.elem.*,
+        None => slice_elem match {
+            Some(e) => e,
+            None => return unlowerable(ctx),
+        },
+    }
+    if !ty_concrete(&elem) { return unlowerable(ctx) }
+    let el = layout_of(&elem, &ctx.result.nominals, ctx.allocator)
+    let esize = el.size
+    let total = if count == 0 { 1 as usize } else { count * esize }
+    let slot = bb.stack_slot(total as u64, el.align as u64)
+
+    al.kind match {
+        Elements(es) => {
+            for i in 0..es.len {
+                let v = lower_expr(ctx, bb, env, &es[i])
+                let ep = bb.gep(slot, Operand.IntConst((i * esize) as i64))
+                if is_by_ref(ctx, &elem) {
+                    bb.memcpy(ep, v, Operand.IntConst(esize as i64))
+                } else {
+                    bb.store(ir_of(&elem), v, ep)
+                }
+            }
+        },
+        Repeat(r) => {
+            let v = lower_expr(ctx, bb, env, r.value)
+            let is_zero = v match {
+                IntConst(k) => k == 0,
+                NullPtr => true,
+                _ => false,
+            }
+            if is_zero {
+                bb.memset(slot, Operand.IntConst(0), Operand.IntConst((count * esize) as i64))
+            } else {
+                // Unrolled stores; a large non-zero repeat has no in-tree
+                // user - refuse rather than emit a thousand stores.
+                if count > 64 { return unlowerable(ctx) }
+                if is_by_ref(ctx, &elem) { return unlowerable(ctx) }
+                for i in 0..count {
+                    let ep = bb.gep(slot, Operand.IntConst((i * esize) as i64))
+                    bb.store(ir_of(&elem), v, ep)
+                }
+            }
+        },
+    }
+
+    if arr.is_some() { return slot }
+    return build_slice_view(ctx, bb, &want, slot, count)
+}
+
+// `(a, b)` (M11): the tuple builds into a slot, element stores at the
+// tuple layout's offsets - the same shape struct literals use. The
+// empty tuple is unit and never reaches value lowering.
+fn lower_tuple_lit(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, tl: &TupleLiteralExpr) Operand {
+    // `()` is unit - no value to build.
+    if tl.elements.len == 0 { return Operand.IntConst(0) }
+    let want = node_ty(ctx, tl.span)
+    let elems = want match {
+        Tuple(es) => Some(es),
+        _ => null,
+    }
+    if elems.is_none() { return unlowerable(ctx) }
+    let tys = elems.unwrap()
+    if tys.len != tl.elements.len { return unlowerable(ctx) }
+    if !ty_concrete(&want) { return unlowerable(ctx) }
+    let sl = tuple_layout(&tys, &ctx.result.nominals, ctx.allocator)
+    let slot = bb.stack_slot(sl.size as u64, sl.align as u64)
+    for i in 0..tl.elements.len {
+        let v = lower_expr(ctx, bb, env, &tl.elements[i])
+        let ep = bb.gep(slot, Operand.IntConst(sl.offsets[i] as i64))
+        let ety = &tys[i]
+        if is_by_ref(ctx, ety) {
+            let esz = layout_of(ety, &ctx.result.nominals, ctx.allocator).size
+            bb.memcpy(ep, v, Operand.IntConst(esz as i64))
+        } else {
+            bb.store(ir_of(ety), v, ep)
+        }
+    }
+    return slot
+}
+
+// The element type when `nr` is the well-known Slice; null otherwise.
+fn slice_elem_of(ctx: &LowerCtx, nr: &NominalRef) Ty? {
+    let is_slice = ctx.result.nominals.get(nr.id).* match {
+        NomStruct(s) => s.fqn == FQN_SLICE,
+        _ => false,
+    }
+    if !is_slice { return null }
+    if nr.args.len != 1 { return null }
+    return Some(nr.args[0])
+}
+
+// `a..b` in value position: build the checker-typed `Range(T)` struct
+// into a slot - two scalar stores at the layout's offsets, like the
+// string view build. This is the shape the stdlib's range-slicing
+// `op_index(s, Range(usize))` overloads consume, which is what unlocks
+// `xs[a..b]` (the checker records that pick like any indexing). A
+// partial range (`a..`, `..b`) has no value shape yet - zero in-tree
+// sites - and refuses; `for` headers never reach here.
+fn lower_range_value(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, r: &RangeExpr) Operand {
+    // A bare partial range has no bound to default from; only an INDEX
+    // position knows the receiver's length (`lower_index_arg`).
+    if r.start.is_none() or r.end.is_none() { return unlowerable(ctx) }
+    let sv = lower_expr(ctx, bb, env, r.start.unwrap())
+    let ev = lower_expr(ctx, bb, env, r.end.unwrap())
+    let ty = node_ty(ctx, r.span)
+    return build_range_slot(ctx, bb, &ty, sv, ev)
+}
+
+// The `Range(T)` struct built from already-lowered bounds.
+fn build_range_slot(ctx: &LowerCtx, bb: &BlockBuilder, ty: &Ty, sv: Operand, ev: Operand) Operand {
+    let st_opt = resolve_struct(ty, &ctx.result.nominals, ctx.allocator)
+    if st_opt.is_none() { return unlowerable(ctx) }
+    let st = st_opt.unwrap()
+    let si = field_index(&st.def, "start")
+    let ei = field_index(&st.def, "end")
+    if si < 0 or ei < 0 { return unlowerable(ctx) }
+    // The element type is the instantiation's single argument; the
+    // bounds are scalars (an aggregate-element range has no meaning).
+    let nr = ty.* match {
+        Nominal(n) => Some(n),
+        _ => null,
+    }
+    if nr.is_none() { return unlowerable(ctx) }
+    let n = nr.unwrap()
+    if n.args.len != 1 { return unlowerable(ctx) }
+    let elem = n.args[0]
+    if is_by_ref(ctx, &elem) { return unlowerable(ctx) }
+    let ir = ir_of(&elem)
+
+    let slot = bb.stack_slot(st.layout.size as u64, st.layout.align as u64)
+    let sp = bb.gep(slot, Operand.IntConst(st.layout.offsets[si as usize] as i64))
+    bb.store(ir, sv, sp)
+    let ep = bb.gep(slot, Operand.IntConst(st.layout.offsets[ei as usize] as i64))
+    bb.store(ir, ev, ep)
+    return slot
+}
+
+// A UFCS receiver adapted to the winner's first-parameter shape. The
+// checker commits value <-> &T adaptation in-set and REWRITES the
+// receiver node's recorded type to the adapted form, so the node table
+// cannot tell the two apart - the decision reads the receiver's MEMORY
+// type (a binding's declared type, a field's substituted declaration)
+// instead. Only scalar-&-primitive shapes need care: an aggregate's
+// value IS its address, so every aggregate combination coincides and
+// takes the plain path.
+//   - param `&prim`, memory holds the prim  -> the place's address
+//   - param `&prim`, memory holds `&prim`   -> the pointer value
+//   - param prim,    memory holds `&prim`   -> load through
+// Anything else scalar-adapted (a temporary receiver, an op_deref
+// chain) refuses - passing raw bytes at the wrong indirection was a
+// silent miscompile (an i8 handed to a `&u8` parameter).
+fn lower_receiver(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, recv: &Expr, want: &Ty) Operand {
+    let want_inner = want.* match {
+        Ref(i) => Some(i.*),
+        _ => null,
+    }
+    let want_ref_prim = want_inner.is_some() and is_prim(&want_inner.unwrap())
+
+    if want_ref_prim {
+        let inner = want_inner.unwrap()
+        let mem = receiver_place_mem(ctx, bb, env, recv)
+        if mem.is_none() { return unlowerable_why(ctx, "scalar &prim receiver with no place") }
+        let m = mem.unwrap()
+        if ref_prim_rep_eq(&m.ty, want) {
+            // The memory already holds the &prim - its value is the arg.
+            return bb.load(IrType.Ptr, m.addr)
+        }
+        if prim_rep_eq(&m.ty, &inner) { return m.addr }
+        return unlowerable_why(ctx, "scalar receiver adaptation mismatch")
+    }
+
+    if is_prim(want) {
+        let mem = receiver_place_mem(ctx, bb, env, recv)
+        if mem.is_some() {
+            let m = mem.unwrap()
+            let m_inner = m.ty match {
+                Ref(i) => Some(i.*),
+                _ => null,
+            }
+            if m_inner.is_some() and prim_rep_eq(&m_inner.unwrap(), want) {
+                // `&prim` memory adapted to a by-value prim: load through.
+                let p = bb.load(IrType.Ptr, m.addr)
+                return bb.load(ir_of(want), p)
+            }
+        }
+    }
+
+    return lower_expr(ctx, bb, env, recv)
+}
+
+// Same-scalar-representation compares: the checker may commit a pick
+// whose prim differs in NAME but not in machine representation (a
+// `&usize` receiver on a `deinit(&u64)` winner - equal specificity,
+// zero-cost coercion, declaration order arbitrates). The bytes are the
+// same; the call is sound.
+fn prim_rep_eq(a: &Ty, b: &Ty) bool {
+    let pa = a.* match {
+        Prim(p) => p,
+        _ => return false,
+    }
+    let pb = b.* match {
+        Prim(p) => p,
+        _ => return false,
+    }
+    return prim_ir(pa) == prim_ir(pb)
+}
+
+fn ref_prim_rep_eq(a: &Ty, b: &Ty) bool {
+    let ia = a.* match {
+        Ref(i) => i,
+        _ => return false,
+    }
+    let ib = b.* match {
+        Ref(i) => i,
+        _ => return false,
+    }
+    return prim_rep_eq(ia, ib)
+}
+
+fn is_prim(ty: &Ty) bool {
+    return ty.* match {
+        Prim(_) => true,
+        _ => false,
+    }
+}
+
+// A receiver's storage: its address and the type of what the memory
+// actually holds. Null when the receiver is not a place this lowering
+// can name (a temporary).
+type PlaceMem = struct {
+    addr: Operand
+    ty: Ty
+}
+
+fn receiver_place_mem(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, recv: &Expr) PlaceMem? {
+    return recv.* match {
+        Identifier(id) => {
+            let b = env.get(id.name)
+            b match {
+                Some(slot) => Some(PlaceMem { addr = slot.addr, ty = slot.src }),
+                None => {
+                    let tgt = ctx_target(ctx, node_id_of(id.span))
+                    if tgt.is_none() { return null }
+                    tgt.unwrap() match {
+                        RtConst(fqn) => {
+                            let ci = ctx.consts.get(fqn)
+                            ci match {
+                                Some(c) => Some(PlaceMem { addr = Operand.GlobalRef(c.sym), ty = c.ty }),
+                                None => null,
+                            }
+                        },
+                        _ => null,
+                    }
+                },
+            }
+        },
+        MemberAccess(ma) => {
+            let mf = member_field(ctx, bb, env, &ma)
+            mf match {
+                Some(f) => Some(PlaceMem { addr = f.addr, ty = f.fty }),
+                None => null,
+            }
+        },
+        _ => null,
+    }
+}
+
+// A `Type(T)` handle in value position (minimal RTTI, M11): a TypeInfo
+// slot with size, align, and kind filled from T's layout; every other
+// field zeroed (name is the empty string - populate when a consumer
+// needs it). `ty` is the node's `core.rtti.Type(T)` nominal.
+fn build_typeinfo_value(ctx: &LowerCtx, bb: &BlockBuilder, ty: &Ty) Operand {
+    let nr = ty.* match {
+        Nominal(n) => n,
+        _ => return unlowerable(ctx),
+    }
+    if nr.args.len != 1 { return unlowerable(ctx) }
+    let t = nr.args[0]
+    if !ty_concrete(&t) { return unlowerable_why(ctx, "Type(T) of a non-concrete T") }
+    let st_opt = resolve_struct(ty, &ctx.result.nominals, ctx.allocator)
+    if st_opt.is_none() { return unlowerable(ctx) }
+    let st = st_opt.unwrap()
+    let si = field_index(&st.def, "size")
+    let ai = field_index(&st.def, "align")
+    let ki = field_index(&st.def, "kind")
+    if si < 0 or ai < 0 or ki < 0 { return unlowerable(ctx) }
+    let lay = layout_of(&t, &ctx.result.nominals, ctx.allocator)
+    let slot = bb.stack_slot(st.layout.size as u64, st.layout.align as u64)
+    bb.memset(slot, Operand.IntConst(0), Operand.IntConst(st.layout.size as i64))
+    let sp = bb.gep(slot, Operand.IntConst(st.layout.offsets[si as usize] as i64))
+    bb.store(IrType.I64, Operand.IntConst(lay.size as i64), sp)
+    let ap = bb.gep(slot, Operand.IntConst(st.layout.offsets[ai as usize] as i64))
+    bb.store(IrType.I64, Operand.IntConst(lay.align as i64), ap)
+    let kp = bb.gep(slot, Operand.IntConst(st.layout.offsets[ki as usize] as i64))
+    bb.store(IrType.I32, Operand.IntConst(rtti_kind_tag(ctx, &t)), kp)
+    return slot
+}
+
+// TypeKind's declaration indices (Primitive, Array, Struct, Enum,
+// Function - the declared values coincide with the indices).
+fn rtti_kind_tag(ctx: &LowerCtx, t: &Ty) i64 {
+    return t.* match {
+        Array(_) => 1,
+        Func(_) => 4,
+        Nominal(nr) => ctx.result.nominals.get(nr.id).* match {
+            NomStruct(_) => 2,
+            NomEnum(_) => 3,
+        },
+        _ => 0,
+    }
+}
+
+// The constant for a `core.rtti.size_of`/`align_of` specialization call:
+// the instantiated `Type(T)` parameter names a concrete T whose layout
+// is known here. Null for every other callee - the call emits normally.
+fn intercept_rtti_layout(ctx: &LowerCtx, sym: String, sig: &FnSig) Operand? {
+    let is_size = starts_with(sym, "core__rtti__size_0of__")
+    let is_align = starts_with(sym, "core__rtti__align_0of__")
+    if !is_size and !is_align { return null }
+    if sig.params.len != 1 { return null }
+    let nr = sig.params[0] match {
+        Nominal(n) => n,
+        _ => return null,
+    }
+    let is_type_nominal = ctx.result.nominals.get(nr.id).* match {
+        NomStruct(s) => s.fqn == "core.rtti.Type",
+        _ => false,
+    }
+    if !is_type_nominal { return null }
+    if nr.args.len != 1 { return null }
+    let t = nr.args[0]
+    if !ty_concrete(&t) { return null }
+    let lay = layout_of(&t, &ctx.result.nominals, ctx.allocator)
+    if is_size { return Some(Operand.IntConst(lay.size as i64)) }
+    return Some(Operand.IntConst(lay.align as i64))
 }
 
 // Emit a direct call to `sym` with declared signature `sig`, handling the
@@ -1477,7 +2316,7 @@ fn lower_callee_value_call(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, call: &
         Func(f) => Some(f),
         _ => null,
     }
-    if ft.is_none() { return unlowerable(ctx) }
+    if ft.is_none() { return unlowerable_why(ctx, "callee is not a callable value") }
     let f = ft.unwrap()
     let fn_ptr = lower_expr(ctx, bb, env, call.callee)
     let ptys: List(IrType) = list(f.params.len + 1, ctx.allocator)
@@ -1616,7 +2455,9 @@ fn lower_field_init(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, fi: &StructFie
 
 fn lower_match(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, m: &MatchExpr) Operand {
     for i in 0..m.arms.len {
-        if !pattern_supported(ctx, &m.arms[i].pattern) { return unlowerable(ctx) }
+        if !pattern_supported(ctx, &m.arms[i].pattern) {
+            return unlowerable_why(ctx, "unsupported match pattern")
+        }
     }
 
     let ty = node_ty(ctx, m.span)
@@ -1713,10 +2554,6 @@ fn or_supported(ctx: &LowerCtx, o: &OrPattern) bool {
 
 fn variant_supported(ctx: &LowerCtx, ev: &EnumVariantPattern) bool {
     if resolved_variant(ctx, ev.span).is_none() { return false }
-    // Multi-payload variants need per-payload offsets, which only the
-    // enum's internal field layout knows; a single payload sits at the
-    // payload offset itself.
-    if ev.payloads.len > 1 { return false }
     for i in 0..ev.payloads.len {
         if !pattern_supported(ctx, &ev.payloads[i]) { return false }
     }
@@ -1744,6 +2581,9 @@ fn literal_testable(v: &LiteralValue) bool {
         Char(_) => true,
         Byte(_) => true,
         Null => true,
+        // Tests via the checker-recorded op_eq dispatch (M11); when the
+        // record is missing, `literal_test` itself refuses.
+        String(_) => true,
         _ => false,
     }
 }
@@ -1756,7 +2596,7 @@ fn pattern_test(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, pat: &Pattern, scr
         // A bare identifier is a binding (irrefutable) unless the checker
         // resolved it to a payload-less variant - see `check_variable_pattern`.
         Variable(v) => variable_test(ctx, bb, &v, scrut, scrut_ty),
-        Literal(l) => literal_test(ctx, bb, &l.value, scrut, scrut_ty),
+        Literal(l) => literal_test(ctx, bb, &l, scrut, scrut_ty),
         EnumVariant(ev) => variant_test(ctx, bb, &ev, scrut, scrut_ty),
         Or(o) => or_test(ctx, bb, env, &o, scrut, scrut_ty),
         Range(r) => range_test(ctx, bb, env, &r, scrut, scrut_ty),
@@ -1810,7 +2650,8 @@ fn range_test(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, r: &RangePattern, sc
     return acc
 }
 
-fn literal_test(ctx: &LowerCtx, bb: &BlockBuilder, v: &LiteralValue, scrut: Operand, scrut_ty: &Ty) Operand {
+fn literal_test(ctx: &LowerCtx, bb: &BlockBuilder, l: &LiteralPattern, scrut: Operand, scrut_ty: &Ty) Operand {
+    let v = &l.value
     // `null` is a None test: the niche form compares the pointer against
     // null, the tagged form compares the discriminant against None's tag
     // (0 by declaration order) - `discriminant_test` handles both.
@@ -1820,6 +2661,30 @@ fn literal_test(ctx: &LowerCtx, bb: &BlockBuilder, v: &LiteralValue, scrut: Oper
             return discriminant_test(ctx, bb, 0u32, scrut, scrut_ty)
         }
         return unlowerable(ctx)
+    }
+
+    // A String pattern is the checker-recorded `op_eq(String, String)`
+    // call (M11): build the literal's view and dispatch.
+    let sl = v.* match {
+        String(s) => Some(s),
+        _ => null,
+    }
+    if sl.is_some() {
+        let rop = ctx_operator(ctx, node_id_of(l.span))
+        if rop.is_none() { return unlowerable_why(ctx, "string pattern without op_eq pick") }
+        let op = rop.unwrap()
+        let sym = op_symbol(ctx, &op)
+        let sig = op_sig(ctx, &op)
+        if sym.is_none() or sig.is_none() { return unlowerable(ctx) }
+        let g = sig.unwrap()
+        if g.params.len != 2 { return unlowerable(ctx) }
+        if !repr_compatible(ctx, scrut_ty, &g.params[0]) { return unlowerable(ctx) }
+        let s = sl.unwrap()
+        let lit = build_string_view(ctx, bb, &g.params[1], &s)
+        let args: List(Operand) = list(2, ctx.allocator)
+        args.push(scrut)
+        args.push(lit)
+        return emit_call(ctx, bb, sym.unwrap(), &g, args)
     }
 
     let lit = lower_literal_value(ctx, v)
@@ -1882,20 +2747,42 @@ fn bind_matched(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, name: String, valu
 
 fn bind_variant_payload(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, ev: &EnumVariantPattern, scrut: Operand, scrut_ty: &Ty) {
     if ev.payloads.len == 0 { return }
-    let sub = &ev.payloads[0]
-    let pty = node_ty(ctx, pattern_span(sub))
 
     // A pointer-niche optional stores its payload *as* the scrutinee - there
     // is no separate payload slot to address.
     if niche_optional(ctx, scrut_ty) {
-        bind_pattern(ctx, bb, env, sub, scrut, &pty)
+        let sub0 = &ev.payloads[0]
+        let pty0 = node_ty(ctx, pattern_span(sub0))
+        bind_pattern(ctx, bb, env, sub0, scrut, &pty0)
         return
     }
 
-    let off = payload_offset(ctx, scrut_ty)
-    let addr = bb.gep(scrut, Operand.IntConst(off as i64))
-    let value = if is_by_ref(ctx, &pty) { addr } else { bb.load(ir_of(&pty), addr) }
-    bind_pattern(ctx, bb, env, sub, value, &pty)
+    // Each payload binds at its per-payload offset (M11 multi-payload).
+    let vnum = resolved_variant(ctx, ev.span)
+    let t = resolve_enum(scrut_ty, &ctx.result.nominals)
+    if vnum.is_none() or t.is_none() {
+        let _u = unlowerable(ctx)
+        return
+    }
+    let et = t.unwrap()
+    let offs = variant_payload_offsets(&et.def, vnum.unwrap() as usize, &et.args, &ctx.result.nominals, ctx.allocator)
+    if offs.len != ev.payloads.len {
+        offs.deinit()
+        let _u = unlowerable(ctx)
+        return
+    }
+    for j in 0..ev.payloads.len {
+        let sub = &ev.payloads[j]
+        // A unit payload (`Ok(())`) has no bytes to read or bind.
+        let dty = variant_payload_ty(&et.def, vnum.unwrap() as usize, j, &et.args, ctx.allocator)
+        let dvoid = dty match { Void => true, _ => false }
+        if dvoid { continue }
+        let pty = node_ty(ctx, pattern_span(sub))
+        let addr = bb.gep(scrut, Operand.IntConst(offs[j] as i64))
+        let value = if is_by_ref(ctx, &pty) { addr } else { bb.load(ir_of(&pty), addr) }
+        bind_pattern(ctx, bb, env, sub, value, &pty)
+    }
+    offs.deinit()
 }
 
 // The variant index the checker resolved for the pattern node at `span`.
@@ -1953,16 +2840,6 @@ fn payload_offset(ctx: &LowerCtx, ty: &Ty) usize {
 // `Some(x)` / `Color.Red(x)` - construction with a payload.
 fn lower_variant_call(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, call: &CallExpr, vnum: u32) Operand {
     if call.args.len == 0 { return lower_variant_nullary(ctx, bb, call.span, vnum) }
-    // A multi-payload variant needs per-payload offsets from the variant's
-    // internal field layout. Measured near-zero in the self-host sources
-    // (docs/self-host.md); refused, matching the pattern side.
-    if call.args.len > 1 { return unlowerable(ctx) }
-    let payload = call.args[0] match {
-        Positional(e) => e,
-        // Named arguments never resolve to a variant - the checker leaves
-        // those calls unresolved.
-        Named(_) => return unlowerable(ctx),
-    }
 
     let ty = node_ty(ctx, call.span)
     let t = resolve_enum(&ty, &ctx.result.nominals)
@@ -1971,26 +2848,53 @@ fn lower_variant_call(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, call: &CallE
     let el = enum_layout(&et.def, &et.args, &ctx.result.nominals, ctx.allocator)
 
     // Niche `Some(p)`: the payload pointer is the whole value.
-    if el.is_niche { return lower_expr(ctx, bb, env, payload) }
+    if el.is_niche {
+        let payload0 = call.args[0] match {
+            Positional(e) => e,
+            Named(_) => return unlowerable(ctx),
+        }
+        return lower_expr(ctx, bb, env, payload0)
+    }
 
-    // The slot stores by the variant's DECLARED payload type (substituted
-    // through the instantiation) - the memory's truth. A coercion that
-    // rewrote the argument node's representation refuses - see
-    // `repr_compatible`.
-    let pty = variant_payload_ty(&et.def, vnum as usize, 0, &et.args, ctx.allocator)
-    let aty = node_ty(ctx, expr_span(payload))
-    if !repr_compatible(ctx, &aty, &pty) { return unlowerable(ctx) }
-
-    let v = lower_expr(ctx, bb, env, payload)
+    // Tag first, then each payload at the variant's per-payload offset
+    // (M11 multi-payload). Each slot stores by the variant's DECLARED
+    // payload type (substituted through the instantiation) - the
+    // memory's truth; a coercion that rewrote an argument node's
+    // representation refuses - see `repr_compatible`.
+    let offs = variant_payload_offsets(&et.def, vnum as usize, &et.args, &ctx.result.nominals, ctx.allocator)
+    if offs.len != call.args.len {
+        offs.deinit()
+        return unlowerable(ctx)
+    }
     let slot = bb.stack_slot(el.size as u64, el.align as u64)
     bb.store(IrType.I32, Operand.IntConst(vnum as i64), slot)
-    let fp = bb.gep(slot, Operand.IntConst(el.payload_offset as i64))
-    if is_by_ref(ctx, &pty) {
-        let psize = layout_of(&pty, &ctx.result.nominals, ctx.allocator).size
-        bb.memcpy(fp, v, Operand.IntConst(psize as i64))
-    } else {
-        bb.store(ir_of(&pty), v, fp)
+    for j in 0..call.args.len {
+        // Named arguments never resolve to a variant - the checker
+        // leaves those calls unresolved. (The refusal path leaks `offs`
+        // - allocator-lifetime scratch, like the rest of lowering.)
+        let pj = call.args[j] match {
+            Positional(e) => e,
+            Named(_) => return unlowerable(ctx),
+        }
+        let pty = variant_payload_ty(&et.def, vnum as usize, j, &et.args, ctx.allocator)
+        // A unit payload (`Ok(())`) stores nothing - the tag is the value.
+        let pty_void = pty match { Void => true, _ => false }
+        if pty_void { continue }
+        let aty = node_ty(ctx, expr_span(pj))
+        if !repr_compatible(ctx, &aty, &pty) {
+            offs.deinit()
+            return unlowerable(ctx)
+        }
+        let v = lower_expr(ctx, bb, env, pj)
+        let fp = bb.gep(slot, Operand.IntConst(offs[j] as i64))
+        if is_by_ref(ctx, &pty) {
+            let psize = layout_of(&pty, &ctx.result.nominals, ctx.allocator).size
+            bb.memcpy(fp, v, Operand.IntConst(psize as i64))
+        } else {
+            bb.store(ir_of(&pty), v, fp)
+        }
     }
+    offs.deinit()
     return slot
 }
 
@@ -2016,6 +2920,148 @@ fn lower_variant_nullary(ctx: &LowerCtx, bb: &BlockBuilder, span: SourceSpan, vn
         bb.store(IrType.I32, Operand.IntConst(vnum as i64), slot)
     }
     return slot
+}
+
+// Casts (M11) - `x as T`.
+//
+// The conversion matrix over the checker-recorded source and target
+// types. FIR ops mirror what the reference's C emission does: trunc /
+// sign-directed extension between integers (the SOURCE's signedness
+// picks zext vs sext, C's conversion rule), fp<->int by the non-float
+// side's signedness, fp width changes, and ptr<->int. Pointer-shaped to
+// pointer-shaped (refs, fn values, the niche Option) is a no-op, as is
+// an aggregate cast between representation-compatible layouts (String
+// <-> u8[]). A tagged enum casts to and from integers through its I32
+// discriminant. Everything else refuses.
+fn lower_cast(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, c: &CastExpr) Operand {
+    let src = node_ty(ctx, expr_span(c.operand))
+    let dst = node_ty(ctx, c.span)
+    let was_blocked = ctx.blocked
+    let r = lower_cast_impl(ctx, bb, env, c, src, dst)
+    if ctx.blocked and !was_blocked and ctx.blocked_note.is_none() {
+        ctx.blocked_note = Some("cast shape")
+    }
+    return r
+}
+
+fn lower_cast_impl(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, c: &CastExpr, src: Ty, dst: Ty) Operand {
+    let v = lower_expr(ctx, bb, env, c.operand)
+    if equals(&src, &dst) { return v }
+
+    let s_ag = is_by_ref(ctx, &src)
+    let d_ag = is_by_ref(ctx, &dst)
+    if s_ag and d_ag {
+        // A retype between identical layouts; array decay builds the
+        // `{ptr, len}` view (`buf as u8[]`); anything else changes
+        // representation and refuses.
+        if repr_compatible(ctx, &src, &dst) { return v }
+        let arr = src match {
+            Array(a) => Some(a),
+            _ => null,
+        }
+        if arr.is_some() {
+            let a = arr.unwrap()
+            let de = dst match {
+                Nominal(nr) => slice_elem_of(ctx, &nr),
+                _ => null,
+            }
+            if de.is_some() {
+                if repr_compatible(ctx, a.elem, &de.unwrap()) {
+                    return build_slice_view(ctx, bb, &dst, v, a.length)
+                }
+            }
+        }
+        return unlowerable(ctx)
+    }
+    if s_ag {
+        // Tagged enum -> integer: the discriminant is the value.
+        if !is_int_prim(&dst) { return unlowerable(ctx) }
+        let t = resolve_enum(&src, &ctx.result.nominals)
+        if t.is_none() { return unlowerable(ctx) }
+        let tag = bb.load(IrType.I32, v)
+        return prim_cast(bb, PrimitiveKind.U32, prim_of(&dst), tag)
+    }
+    if d_ag {
+        // Integer -> tagged enum: a zeroed slot with the converted
+        // discriminant stored over it (payload variants read as zeroed).
+        if !is_int_prim(&src) { return unlowerable(ctx) }
+        let t = resolve_enum(&dst, &ctx.result.nominals)
+        if t.is_none() { return unlowerable(ctx) }
+        let et = t.unwrap()
+        let el = enum_layout(&et.def, &et.args, &ctx.result.nominals, ctx.allocator)
+        if el.is_niche { return unlowerable(ctx) }
+        let tag = prim_cast(bb, prim_of(&src), PrimitiveKind.U32, v)
+        let slot = bb.stack_slot(el.size as u64, el.align as u64)
+        bb.memset(slot, Operand.IntConst(0), Operand.IntConst(el.size as i64))
+        bb.store(IrType.I32, tag, slot)
+        return slot
+    }
+
+    // Scalar to scalar. Pointer-shaped scalars (refs, fn values, niche
+    // optionals) are all FIR `ptr`.
+    let s_ptr = ir_of(&src) match { Ptr => true, _ => false }
+    let d_ptr = ir_of(&dst) match { Ptr => true, _ => false }
+    if s_ptr and d_ptr { return v }
+    if s_ptr {
+        if !is_int_prim(&dst) { return unlowerable(ctx) }
+        return bb.ptrtoint(IrType.Ptr, prim_ir(prim_of(&dst)), v)
+    }
+    if d_ptr {
+        if !is_int_prim(&src) { return unlowerable(ctx) }
+        return bb.inttoptr(prim_ir(prim_of(&src)), IrType.Ptr, v)
+    }
+    let sp = src match { Prim(p) => Some(p), _ => null }
+    let dp = dst match { Prim(p) => Some(p), _ => null }
+    if sp.is_none() or dp.is_none() { return unlowerable(ctx) }
+    // `x as bool` would need C's `!= 0` semantics, not a truncation;
+    // zero in-tree sites - refuse rather than mis-lower.
+    let dst_is_bool = dp.unwrap() match { Bool => true, _ => false }
+    let src_is_bool = sp.unwrap() match { Bool => true, _ => false }
+    if dst_is_bool and !src_is_bool { return unlowerable(ctx) }
+    return prim_cast(bb, sp.unwrap(), dp.unwrap(), v)
+}
+
+fn is_int_prim(ty: &Ty) bool {
+    return ty.* match {
+        Prim(p) => p match {
+            F32 => false,
+            F64 => false,
+            _ => true,
+        },
+        _ => false,
+    }
+}
+
+// One primitive to another: the FIR convert op picked by float-ness,
+// width, and the C conversion rule's signedness direction.
+fn prim_cast(bb: &BlockBuilder, s: PrimitiveKind, d: PrimitiveKind, v: Operand) Operand {
+    if s == d { return v }
+    let si = prim_ir(s)
+    let di = prim_ir(d)
+    let sf = is_float(s)
+    let df = is_float(d)
+    if sf and df {
+        if ir_size(di) > ir_size(si) { return bb.fpext(si, di, v) }
+        return bb.fptrunc(si, di, v)
+    }
+    if sf {
+        if is_signed_integer(d) { return bb.fptosi(si, di, v) }
+        return bb.fptoui(si, di, v)
+    }
+    if df {
+        if is_signed_integer(s) { return bb.sitofp(si, di, v) }
+        return bb.uitofp(si, di, v)
+    }
+    let sw = ir_size(si)
+    let dw = ir_size(di)
+    if dw < sw { return bb.trunc(si, di, v) }
+    if dw > sw {
+        if is_signed_integer(s) { return bb.sext(si, di, v) }
+        return bb.zext(si, di, v)
+    }
+    // Same width, different kind (sign or char reinterpretation): the
+    // bits carry over; typed C use sites apply the meaning.
+    return v
 }
 
 // Optional operators (M8)
@@ -2088,12 +3134,12 @@ fn lower_try(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, t: &TryExpr) Operand 
     // re-enter the flush that is emitting it - refuse.
     if ctx.flushing { return unlowerable(ctx) }
     let op = ctx_operator(ctx, node_id_of(t.span))
-    if op.is_none() { return unlowerable(ctx) }
+    if op.is_none() { return unlowerable_why(ctx, "`?` without a recorded op_try") }
     let o = op.unwrap()
     let sym = op_symbol(ctx, &o)
     let sig_opt = op_sig(ctx, &o)
-    if sym.is_none() { return unlowerable(ctx) }
-    if sig_opt.is_none() { return unlowerable(ctx) }
+    if sym.is_none() { return unlowerable_why(ctx, "op_try without symbol") }
+    if sig_opt.is_none() { return unlowerable_why(ctx, "op_try without sig") }
     let sig = sig_opt.unwrap()
     if sig.params.len != 1 { return unlowerable(ctx) }
 
@@ -2163,7 +3209,7 @@ fn lower_try(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, t: &TryExpr) Operand 
 fn lower_assignment(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, a: &AssignmentExpr) Operand {
     let dst = lower_place(ctx, bb, env, a.lhs)
     let v = lower_expr(ctx, bb, env, a.rhs)
-    if dst.is_none() { return unlowerable(ctx) }
+    if dst.is_none() { return unlowerable_why(ctx, "assignment target is not a place") }
 
     let ty = node_ty(ctx, expr_span(a.lhs))
     if is_by_ref(ctx, &ty) {
@@ -2181,7 +3227,17 @@ fn lower_assignment(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, a: &Assignment
 fn lower_address_of(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, a: &AddressOfExpr) Operand {
     let p = lower_place(ctx, bb, env, a.operand)
     if p.is_some() { return p.unwrap() }
-    return unlowerable(ctx)
+    // A temporary (`&f()`): materialize it and address the slot. An
+    // aggregate's value already IS its buffer's address; a scalar
+    // spills. Slot lifetime is the whole function - safe for the
+    // argument-position uses this shape appears in.
+    let ty = node_ty(ctx, expr_span(a.operand))
+    let v = lower_expr(ctx, bb, env, a.operand)
+    if is_by_ref(ctx, &ty) { return v }
+    let ir = ir_of(&ty)
+    let slot = alloc_slot(bb, ir)
+    bb.store(ir, v, slot)
+    return slot
 }
 
 // `p.*` in value position - the pointer is already the address, so reading
@@ -2201,7 +3257,7 @@ fn lower_deref(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, d: &DereferenceExpr
 
 fn lower_place(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, expr: &Expr) Operand? {
     return expr.* match {
-        Identifier(id) => place_of_identifier(env, &id),
+        Identifier(id) => place_of_identifier(ctx, env, &id),
         MemberAccess(ma) => member_address(ctx, bb, env, &ma),
         // `p.*` - the pointer already is the address.
         Dereference(d) => Some(lower_expr(ctx, bb, env, d.operand)),
@@ -2228,16 +3284,37 @@ fn lower_base_address(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, base: &Expr)
     }
     if nested {
         let p = lower_place(ctx, bb, env, base)
-        if p.is_some() { return p.unwrap() }
+        if p.is_some() {
+            // A reference-typed path step holds a POINTER to the next
+            // struct: its place is the pointer's slot, so follow it -
+            // `a.vtable.alloc` must gep into the vtable, not into the
+            // field that stores its address.
+            let bty = node_ty(ctx, expr_span(base))
+            let is_ref = bty match { Ref(_) => true, _ => false }
+            if is_ref { return bb.load(IrType.Ptr, p.unwrap()) }
+            return p.unwrap()
+        }
     }
     return lower_expr(ctx, bb, env, base)
 }
 
-// A local's storage. Every local is slotted, so a name always has an address.
-fn place_of_identifier(env: &Env, id: &IdentifierExpr) Operand? {
+// A local's storage - every local is slotted, so a name always has an
+// address. A module const's place is its global (M11): `&global_allocator`
+// and const member paths address the storage directly.
+fn place_of_identifier(ctx: &LowerCtx, env: &Env, id: &IdentifierExpr) Operand? {
     let b = env.get(id.name)
-    if b.is_none() { return null }
-    return Some(b.unwrap().addr)
+    if b.is_some() { return Some(b.unwrap().addr) }
+    let tgt = ctx_target(ctx, node_id_of(id.span))
+    if tgt.is_some() {
+        tgt.unwrap() match {
+            RtConst(fqn) => {
+                let ci = ctx.consts.get(fqn)
+                if ci.is_some() { return Some(Operand.GlobalRef(ci.unwrap().sym)) }
+            },
+            _ => {},
+        }
+    }
+    return null
 }
 
 // A resolved member access: the field's address and its declared type,
@@ -2252,6 +3329,29 @@ type MemberField = struct {
 fn member_field(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, ma: &MemberAccessExpr) MemberField? {
     let reg = &ctx.result.nominals
     let recv_ty = node_ty(ctx, expr_span(ma.receiver))
+    // Tuple projection `t.0` (M11): the "field" is an element index into
+    // the tuple layout. Reference-peeled like struct receivers are.
+    let telems = recv_ty match {
+        Tuple(es) => Some(es),
+        Ref(inner) => inner.* match {
+            Tuple(es2) => Some(es2),
+            _ => null,
+        },
+        _ => null,
+    }
+    if telems.is_some() {
+        let tys = telems.unwrap()
+        let idx = digits_index(ma.member)
+        if idx.is_none() { return null }
+        let i = idx.unwrap()
+        if i >= tys.len { return null }
+        let sl = tuple_layout(&tys, reg, ctx.allocator)
+        let base = lower_base_address(ctx, bb, env, ma.receiver)
+        return Some(MemberField {
+            addr = bb.gep(base, Operand.IntConst(sl.offsets[i] as i64)),
+            fty = tys[i],
+        })
+    }
     let target = resolve_struct(&recv_ty, reg, ctx.allocator)
     if target.is_none() { return null }
     let st = target.unwrap()
@@ -2262,6 +3362,18 @@ fn member_field(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, ma: &MemberAccessE
 
     let base = lower_base_address(ctx, bb, env, ma.receiver)
     return Some(MemberField { addr = bb.gep(base, Operand.IntConst(off as i64)), fty = fty })
+}
+
+// `t.0`'s element index: the member name as plain digits, else null.
+fn digits_index(name: String) usize? {
+    if name.len == 0 { return null }
+    let n: usize = 0
+    for i in 0..name.len {
+        let c = name[i]
+        if c < '0' or c > '9' { return null }
+        n = n * 10 + ((c as usize) - 48)
+    }
+    return Some(n)
 }
 
 // The address of `ma`'s field: gep to the field offset off the receiver's
@@ -2282,11 +3394,25 @@ fn lower_member(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, ma: &MemberAccessE
     // field access; the receiver names a type, not a value to address.
     let vnum = resolved_variant(ctx, ma.span)
     if vnum.is_some() { return lower_variant_nullary(ctx, bb, ma.span, vnum.unwrap()) }
+    // `arr.len` on a fixed array is its compile-time length; `arr.ptr`
+    // is the array's address - which its value already is (M11).
+    if ma.member == "len" {
+        let rt = node_ty(ctx, expr_span(ma.receiver))
+        rt match {
+            Array(a) => return Operand.IntConst(a.length as i64),
+            _ => {},
+        }
+    }
+    if ma.member == "ptr" {
+        let rt2 = node_ty(ctx, expr_span(ma.receiver))
+        let is_arr = rt2 match { Array(_) => true, _ => false }
+        if is_arr { return lower_expr(ctx, bb, env, ma.receiver) }
+    }
     let f = member_field(ctx, bb, env, ma)
-    if f.is_none() { return unlowerable(ctx) }
+    if f.is_none() { return unlowerable_why(ctx, "member access unresolved") }
     let mf = f.unwrap()
     let mty = node_ty(ctx, ma.span)
-    if !repr_compatible(ctx, &mf.fty, &mty) { return unlowerable(ctx) }
+    if !repr_compatible(ctx, &mf.fty, &mty) { return unlowerable_why(ctx, "member repr mismatch") }
     if is_by_ref(ctx, &mf.fty) { return mf.addr }
     return bb.load(ir_of(&mf.fty), mf.addr)
 }
@@ -2367,8 +3493,8 @@ fn index_address(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, ix: &IndexExpr) O
 fn index_operator_call(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, ix: &IndexExpr, o: &ResolvedOperator) Operand {
     let sym = op_symbol(ctx, o)
     let sig_opt = op_sig(ctx, o)
-    if sym.is_none() { return unlowerable(ctx) }
-    if sig_opt.is_none() { return unlowerable(ctx) }
+    if sym.is_none() { return unlowerable_why(ctx, "index operator without symbol") }
+    if sig_opt.is_none() { return unlowerable_why(ctx, "index operator without sig") }
     let sig = sig_opt.unwrap()
     if sig.params.len != 2 { return unlowerable(ctx) }
     if !o.is_ref_form {
@@ -2382,11 +3508,63 @@ fn index_operator_call(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, ix: &IndexE
     } else {
         lower_expr(ctx, bb, env, ix.receiver)
     }
-    let idx = lower_expr(ctx, bb, env, ix.index)
+    let idx = lower_index_arg(ctx, bb, env, ix, recv)
     let args: List(Operand) = list(3, ctx.allocator)
     args.push(recv)
     args.push(idx)
     return emit_call(ctx, bb, sym.unwrap(), &sig, args)
+}
+
+// The index argument of an operator call. A PARTIAL range literal
+// (`a..`, `..b`, `..`) completes against the receiver - the only
+// context that knows its length: start defaults to 0, end to the
+// receiver's length (a slice/String `len` field, an array's constant).
+fn lower_index_arg(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, ix: &IndexExpr, recv: Operand) Operand {
+    return ix.index.* match {
+        Range(r) => lower_partial_range_arg(ctx, bb, env, ix, &r, recv),
+        _ => lower_expr(ctx, bb, env, ix.index),
+    }
+}
+
+fn lower_partial_range_arg(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, ix: &IndexExpr, r: &RangeExpr, recv: Operand) Operand {
+    let has_start = r.start.is_some()
+    let has_end = r.end.is_some()
+    if has_start and has_end { return lower_expr(ctx, bb, env, ix.index) }
+
+    let sv = Operand.IntConst(0)
+    if has_start {
+        let se = r.start.unwrap()
+        sv = lower_expr(ctx, bb, env, se)
+    }
+    let ev = Operand.IntConst(0)
+    if has_end {
+        let ee = r.end.unwrap()
+        ev = lower_expr(ctx, bb, env, ee)
+    } else {
+        let base_ty = node_ty(ctx, expr_span(ix.receiver))
+        let ln = receiver_len(ctx, bb, &base_ty, recv)
+        if ln.is_none() { return unlowerable(ctx) }
+        ev = ln.unwrap()
+    }
+    let rty = node_ty(ctx, r.span)
+    return build_range_slot(ctx, bb, &rty, sv, ev)
+}
+
+// The length of an indexable receiver value: an array's is a constant;
+// a slice-shaped nominal (Slice, String) loads its `len` field through
+// the receiver's address.
+fn receiver_len(ctx: &LowerCtx, bb: &BlockBuilder, base_ty: &Ty, recv: Operand) Operand? {
+    base_ty.* match {
+        Array(a) => return Some(Operand.IntConst(a.length as i64)),
+        _ => {},
+    }
+    let st_opt = resolve_struct(base_ty, &ctx.result.nominals, ctx.allocator)
+    if st_opt.is_none() { return null }
+    let st = st_opt.unwrap()
+    let li = field_index(&st.def, "len")
+    if li < 0 { return null }
+    let lp = bb.gep(recv, Operand.IntConst(st.layout.offsets[li as usize] as i64))
+    return Some(bb.load(IrType.I64, lp))
 }
 
 // `base + i * sizeof(elem)` for a fixed array or a slice.
@@ -2480,7 +3658,23 @@ fn resolve_struct(ty: &Ty, reg: &NominalRegistry, allocator: &Allocator?) Struct
         _ => return null,
     }
     return reg.get(nr.id).* match {
-        NomStruct(s) => Some(StructTarget { def = s, layout = struct_layout(&s, &nr.args, reg, allocator), args = nr.args }),
+        NomStruct(s) => {
+            // `Type(T)` values ARE TypeInfo (minimal RTTI, M11): field
+            // access and layout go through TypeInfo's definition.
+            if s.fqn == FQN_TYPE {
+                let ti = reg.by_fqn.get(FQN_TYPE_INFO)
+                if ti.is_some() {
+                    reg.get(ti.unwrap()).* match {
+                        NomStruct(ts) => {
+                            let no_args: List(Ty) = list(0, allocator)
+                            return Some(StructTarget { def = ts, layout = struct_layout(&ts, &no_args, reg, allocator), args = no_args })
+                        },
+                        _ => {},
+                    }
+                }
+            }
+            Some(StructTarget { def = s, layout = struct_layout(&s, &nr.args, reg, allocator), args = nr.args })
+        },
         _ => null,
     }
 }
@@ -2534,7 +3728,26 @@ fn repr_compatible(ctx: &LowerCtx, src: &Ty, dst: &Ty) bool {
     let da = is_by_ref(ctx, dst)
     if sa != da { return false }
     if !sa { return true }
-    return string_byte_slice_pair(ctx, src, dst)
+    if string_byte_slice_pair(ctx, src, dst) { return true }
+    // A `Type(T)` value IS a TypeInfo (minimal RTTI, M11).
+    return type_typeinfo_pair(ctx, src, dst)
+}
+
+fn type_typeinfo_pair(ctx: &LowerCtx, a: &Ty, b: &Ty) bool {
+    if nominal_fqn_is(ctx, a, FQN_TYPE) { return nominal_fqn_is(ctx, b, FQN_TYPE_INFO) }
+    if nominal_fqn_is(ctx, b, FQN_TYPE) { return nominal_fqn_is(ctx, a, FQN_TYPE_INFO) }
+    return false
+}
+
+fn nominal_fqn_is(ctx: &LowerCtx, ty: &Ty, fqn: String) bool {
+    let nr = ty.* match {
+        Nominal(n) => n,
+        _ => return false,
+    }
+    return ctx.result.nominals.get(nr.id).* match {
+        NomStruct(st) => st.fqn == fqn,
+        NomEnum(e) => e.fqn == fqn,
+    }
 }
 
 fn string_byte_slice_pair(ctx: &LowerCtx, a: &Ty, b: &Ty) bool {
@@ -2595,26 +3808,21 @@ fn lower_literal(ctx: &LowerCtx, bb: &BlockBuilder, l: &LiteralExpr) Operand {
 // layout's offsets, the slot pointer is the value.
 fn lower_string_lit(ctx: &LowerCtx, bb: &BlockBuilder, sp: SourceSpan, s: &StringLiteral) Operand {
     let ty = node_ty(ctx, sp)
-    // The node must actually be `core.string.String` - handing these two
+    return build_string_view(ctx, bb, &ty, s)
+}
+
+// Build the `String { ptr, len }` view for a literal at a KNOWN type -
+// shared between expression position (typed by the node) and pattern
+// position (typed by the scrutinee, whose pattern node has no recorded
+// type).
+fn build_string_view(ctx: &LowerCtx, bb: &BlockBuilder, ty: &Ty, s: &StringLiteral) Operand {
+    // The type must actually be `core.string.String` - handing these two
     // fields to any other recorded type would misread its layout.
-    if !is_string_ty(ctx, &ty) { return unlowerable(ctx) }
+    if !is_string_ty(ctx, ty) { return unlowerable(ctx) }
     let interned = intern_string(ctx, s.text)
     if interned.is_none() { return unlowerable(ctx) }
     let e = interned.unwrap()
-
-    let st_opt = resolve_struct(&ty, &ctx.result.nominals, ctx.allocator)
-    if st_opt.is_none() { return unlowerable(ctx) }
-    let st = st_opt.unwrap()
-    let pi = field_index(&st.def, "ptr")
-    let li = field_index(&st.def, "len")
-    if pi < 0 or li < 0 { return unlowerable(ctx) }
-
-    let slot = bb.stack_slot(st.layout.size as u64, st.layout.align as u64)
-    let pp = bb.gep(slot, Operand.IntConst(st.layout.offsets[pi as usize] as i64))
-    bb.store(IrType.Ptr, Operand.GlobalRef(e.name), pp)
-    let lp = bb.gep(slot, Operand.IntConst(st.layout.offsets[li as usize] as i64))
-    bb.store(IrType.I64, Operand.IntConst(e.len as i64), lp)
-    return slot
+    return build_slice_view(ctx, bb, ty, Operand.GlobalRef(e.name), e.len)
 }
 
 // The data-segment global for a literal's decoded bytes, minting one on
@@ -2708,8 +3916,7 @@ fn lower_literal_value(ctx: &LowerCtx, v: &LiteralValue) Operand {
 // rather than pass the binding's bytes off as something they are not.
 fn read_binding(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, name: String, expect: &Ty) Operand {
     let found = env.get(name)
-    // Globals and function references are not lowered yet.
-    if found.is_none() { return unlowerable(ctx) }
+    if found.is_none() { return unlowerable_why(ctx, "unbound name read") }
     let b = found.unwrap()
     if !repr_compatible(ctx, &b.src, expect) { return unlowerable(ctx) }
     if b.aggregate { return b.addr }
@@ -2724,21 +3931,100 @@ fn lower_identifier(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, id: &Identifie
     if vnum.is_some() { return lower_variant_nullary(ctx, bb, id.span, vnum.unwrap()) }
     let want = node_ty(ctx, id.span)
     // A function NAME in value position decays to its address (RFC-014
-    // fn values). Locals shadow functions, so the env is consulted first.
+    // fn values); a module-const read goes through its global (M11).
+    // Locals shadow both, so the env is consulted first.
     if env.get(id.name).is_none() {
         let tgt = ctx_target(ctx, node_id_of(id.span))
         if tgt.is_some() {
-            let fid = tgt.unwrap() match {
-                RtFunction(f) => Some(f),
-                _ => null,
-            }
-            if fid.is_some() {
-                let s = ctx.syms.lookup_symbol(fid.unwrap())
-                if s.is_some() { return Operand.FuncRef(s.unwrap()) }
+            tgt.unwrap() match {
+                RtFunction(f) => {
+                    let s = ctx.syms.lookup_symbol(f)
+                    if s.is_some() { return Operand.FuncRef(s.unwrap()) }
+                },
+                // An overloaded name resolved to a generic winner
+                // (ticket 019 §4) decays to its specialization.
+                RtSpecialized(sid) => {
+                    let s2 = ctx.syms.spec_symbol(sid)
+                    if s2.is_some() { return Operand.FuncRef(s2.unwrap()) }
+                },
+                RtConst(fqn) => return read_const(ctx, bb, fqn, &want),
+                _ => {},
             }
         }
+        // A bare type name in value position (`size_of(St)`-shape args
+        // that no intercept folded) is a reified-type handle.
+        if nominal_fqn_is(ctx, &want, FQN_TYPE) { return build_typeinfo_value(ctx, bb, &want) }
     }
     return read_binding(ctx, bb, env, id.name, &want)
+}
+
+// A comparison dispatched to a user operator function (M11): emit the
+// call, then apply the record's post-processing - negation (`!=` from
+// `op_eq`), or an Ord-tag compare (`<` etc. from `op_cmp`; Ord's tags
+// are fixed at Less=-1 / Equal=0 / Greater=1, so the derived compare is
+// the signed tag against zero).
+fn lower_operator_binary(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, b: &BinaryExpr, op: &ResolvedOperator) Operand {
+    let sym = op_symbol(ctx, op)
+    let sig = op_sig(ctx, op)
+    if sym.is_none() or sig.is_none() { return unlowerable_why(ctx, "binary operator without symbol") }
+    let g = sig.unwrap()
+    if g.params.len != 2 { return unlowerable(ctx) }
+    let lty = node_ty(ctx, expr_span(b.lhs))
+    let rty = node_ty(ctx, expr_span(b.rhs))
+    if !repr_compatible(ctx, &lty, &g.params[0]) { return unlowerable(ctx) }
+    if !repr_compatible(ctx, &rty, &g.params[1]) { return unlowerable(ctx) }
+
+    let args: List(Operand) = list(3, ctx.allocator)
+    args.push(lower_expr(ctx, bb, env, b.lhs))
+    args.push(lower_expr(ctx, bb, env, b.rhs))
+    let res = emit_call(ctx, bb, sym.unwrap(), &g, args)
+
+    if op.cmp_derived_op.is_some() {
+        // `op_cmp` returns Ord - an aggregate; its address came back from
+        // the sret path. The derived comparison reads the tag and tests
+        // it against the variant INDICES resolved from Ord's definition -
+        // this lowering stores declaration indices as tags (explicit
+        // variant values like `Less = -1` are not honored yet; see
+        // docs/known-issues.md), so the test must use the same scheme.
+        let t = resolve_enum(&g.ret, &ctx.result.nominals)
+        if t.is_none() { return unlowerable(ctx) }
+        let et = t.unwrap()
+        let less = variant_index_of(&et.def, "Less")
+        let equal = variant_index_of(&et.def, "Equal")
+        let greater = variant_index_of(&et.def, "Greater")
+        if less.is_none() or equal.is_none() or greater.is_none() { return unlowerable(ctx) }
+        let lo = Operand.IntConst(less.unwrap() as i64)
+        let eq = Operand.IntConst(equal.unwrap() as i64)
+        let hi = Operand.IntConst(greater.unwrap() as i64)
+        let tag = bb.load(IrType.I32, res)
+        return op.cmp_derived_op.unwrap() match {
+            BodEq => bb.icmp_eq(IrType.I32, tag, eq),
+            BodNe => bb.icmp_ne(IrType.I32, tag, eq),
+            BodLt => bb.icmp_eq(IrType.I32, tag, lo),
+            BodGt => bb.icmp_eq(IrType.I32, tag, hi),
+            // `<=` is "not Greater", `>=` is "not Less".
+            BodLe => bb.icmp_ne(IrType.I32, tag, hi),
+            BodGe => bb.icmp_ne(IrType.I32, tag, lo),
+        }
+    }
+    if op.negate_result {
+        return bb.icmp_eq(IrType.I8, res, Operand.IntConst(0))
+    }
+    return res
+}
+
+fn variant_index_of(def: &EnumDef, name: String) u32? {
+    for i in 0..def.variants.len {
+        if def.variants[i].name == name { return Some(i as u32) }
+    }
+    return null
+}
+
+fn payloadless_enum_ty(ctx: &LowerCtx, ty: &Ty) bool {
+    return ty.* match {
+        Nominal(nr) => enum_payloadless(&ctx.result.nominals, nr.id),
+        _ => false,
+    }
 }
 
 fn lower_binary(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, b: &BinaryExpr) Operand {
@@ -2750,13 +4036,54 @@ fn lower_binary(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, b: &BinaryExpr) Op
         _ => {},
     }
 
-    // An operator over aggregates dispatches to a user-defined operator
-    // function the checker records only for indexing today. Emitting FIR
-    // arithmetic over the operands' addresses would be silently wrong, so
-    // it refuses until binary nodes carry a `ResolvedOperator` too.
+    // A comparison the checker resolved to a user operator function (M11)
+    // dispatches as a call - `op_eq`/`op_cmp` and friends, with the
+    // negation and Ord-derivation the record carries.
+    let rop = ctx_operator(ctx, node_id_of(b.span))
+    if rop.is_some() { return lower_operator_binary(ctx, bb, env, b, &rop.unwrap()) }
+
     let lty = node_ty(ctx, expr_span(b.lhs))
     let rty = node_ty(ctx, expr_span(b.rhs))
-    if is_by_ref(ctx, &lty) or is_by_ref(ctx, &rty) { return unlowerable(ctx) }
+    if is_by_ref(ctx, &lty) or is_by_ref(ctx, &rty) {
+        // Builtin `==`/`!=` on a payload-less enum: tag compare (the
+        // checker's fast path records no operator for these).
+        let eq_shape = b.op match { Eq => true, Ne => true, _ => false }
+        if eq_shape and payloadless_enum_ty(ctx, &lty) and payloadless_enum_ty(ctx, &rty) {
+            let la = lower_expr(ctx, bb, env, b.lhs)
+            let ra = lower_expr(ctx, bb, env, b.rhs)
+            let lt = bb.load(IrType.I32, la)
+            let rt = bb.load(IrType.I32, ra)
+            let is_eq = b.op match { Eq => true, _ => false }
+            if is_eq { return bb.icmp_eq(IrType.I32, lt, rt) }
+            return bb.icmp_ne(IrType.I32, lt, rt)
+        }
+        // Any other operator over aggregates has no recorded dispatch -
+        // FIR arithmetic over the addresses would be silently wrong.
+        return unlowerable_why(ctx, "operator over aggregates without dispatch")
+    }
+
+    // Pointer arithmetic scales by the POINTEE size: `p + n` advances n
+    // ELEMENTS (spec 2.9). FIR geps are byte offsets - the C backend
+    // does char* math, so the scaling the reference gets from typed C
+    // pointers must be explicit here. Emitting an unscaled add was a
+    // silent miscompile for any pointee wider than a byte.
+    let l_inner = lty match {
+        Ref(i) => Some(i),
+        _ => null,
+    }
+    if l_inner.is_some() {
+        let is_addsub = b.op match { Add => true, Sub => true, _ => false }
+        let rhs_int = is_int_prim(&rty)
+        if is_addsub and rhs_int {
+            let esize = layout_of(l_inner.unwrap(), &ctx.result.nominals, ctx.allocator).size
+            let base = lower_expr(ctx, bb, env, b.lhs)
+            let count = lower_expr(ctx, bb, env, b.rhs)
+            let off = bb.imul(IrType.I64, count, Operand.IntConst(esize as i64))
+            let is_sub = b.op match { Sub => true, _ => false }
+            if is_sub { off = bb.isub(IrType.I64, Operand.IntConst(0), off) }
+            return bb.gep(base, off)
+        }
+    }
 
     let lhs = lower_expr(ctx, bb, env, b.lhs)
     let rhs = lower_expr(ctx, bb, env, b.rhs)
@@ -2983,6 +4310,20 @@ fn op_sig(ctx: &LowerCtx, o: &ResolvedOperator) FnSig? {
     }
 }
 
+// The materialized default arguments for the call at `id` (M11) -
+// through the active overlay first (a call inside a template body
+// records per instantiation).
+fn ctx_default_args(ctx: &LowerCtx, id: NodeId) &List(Expr)? {
+    ctx.overlay match {
+        Some(ov) => {
+            let d = ov.default_args.get_ref(id)
+            if d.is_some() { return d }
+        },
+        None => {},
+    }
+    return ctx.result.get_default_args(id)
+}
+
 fn ctx_desugar(ctx: &LowerCtx, id: NodeId) &BlockExpr? {
     ctx.overlay match {
         Some(ov) => {
@@ -3042,12 +4383,26 @@ fn prim_ir(p: PrimitiveKind) IrType {
     }
 }
 
+fn type_expr_is_never(te: &TypeExpr) bool {
+    return te.* match {
+        Named(n) => n.name == "never",
+        _ => false,
+    }
+}
+
 // A signature `TypeExpr` to its FIR scalar type, or null when the type is
 // outside this milestone's scope (aggregates, optionals, generics).
 fn type_expr_to_ir(te: &TypeExpr) IrType? {
     return te.* match {
         Named(n) => named_to_ir(n.name),
         Reference(_) => Some(IrType.Ptr),
+        // `&T?` - the pointer-niche Option is a nullable pointer, the C
+        // idiom foreign signatures actually mean (`malloc`'s return).
+        // The tagged form (`usize?`) stays unspellable for externs.
+        Optional(o) => o.inner.* match {
+            Reference(_) => Some(IrType.Ptr),
+            _ => null,
+        },
         _ => null,
     }
 }
@@ -3813,6 +5168,17 @@ fn is_load_result(f: &Function, id: u32) bool {
     return false
 }
 
+fn convert_count(f: &Function) usize {
+    let n: usize = 0
+    for b in 0..f.blocks.len {
+        let instrs = &f.blocks[b].instrs
+        for i in 0..instrs.len {
+            instrs[i] match { Convert(_) => n = n + 1, _ => {} }
+        }
+    }
+    return n
+}
+
 fn memcpy_count(f: &Function) usize {
     let n: usize = 0
     for b in 0..f.blocks.len {
@@ -4188,15 +5554,128 @@ test "binding an existing aggregate copies it - mutating the copy leaves the sou
     assert_eq(memcpy_count(f), 2 as usize, "param spill plus the let's own copy")
 }
 
-test "a call omitting a defaulted argument refuses rather than emit a short arity" {
+test "a call omitting a defaulted argument materializes the default (M11)" {
     let unit = analyze(from_view("fn add(a: i32, b: i32 = 2) i32 { return a + b }\nfn main() i32 { return add(1) }"), "test.f")
     let m = lower_module(&unit.module, &unit.result)
     assert_true(find_fn_starting(&m, "add__") < m.functions.len, "the callee itself lowers")
-    assert_true(was_skipped(&m, "main"), "the short call refuses - defaults are not materialized yet")
+    let mi = find_fn(&m, "main")
+    assert_true(mi < m.functions.len, "the short call lowers - the default is appended")
+    assert_eq(call_count(&m.functions[mi]), 1 as usize, "one call emitted at full arity")
 
     let unit2 = analyze(from_view("fn add(a: i32, b: i32 = 2) i32 { return a + b }\nfn main() i32 { return add(1, 5) }"), "test.f")
     let m2 = lower_module(&unit2.module, &unit2.result)
     assert_true(find_fn(&m2, "main") < m2.functions.len, "the full-arity call lowers")
+}
+
+test "a UFCS call omitting a defaulted argument materializes the default" {
+    // The receiver is prepended to the argument list; the omitted-count
+    // bookkeeping must account for it (`recv_extra` in commit_pick).
+    let unit = analyze(from_view("type Ctr = struct { n: i32 }\nfn bump(self: &Ctr, by: i32 = 3) i32 { return self.n + by }\nfn main() i32 { let c = Ctr { n = 1 } return c.bump() }"), "test.f")
+    let m = lower_module(&unit.module, &unit.result)
+    let mi = find_fn(&m, "main")
+    assert_true(mi < m.functions.len, "the receiver-only call lowers at full arity")
+    assert_eq(call_count(&m.functions[mi]), 1 as usize, "one call emitted")
+}
+
+test "an omitted `null` default on a tagged Option parameter lowers" {
+    // The `&Allocator? = null` shape - the dominant default in the
+    // self-host sources: null at Option(&T) is the niche retype, and at
+    // a tagged Option a zeroed buffer. Needs the REAL well-known Option
+    // (see the niche tests above), so the module is labelled core.option.
+    let unit = analyze(from_view("pub type Option = enum(T) { None, Some(T) }\nfn pick(v: i32, cap: usize? = null) i32 { return v }\nfn main() i32 { return pick(4) }"), "core.option")
+    let m = lower_module(&unit.module, &unit.result)
+    let mi = find_fn(&m, "main")
+    assert_true(mi < m.functions.len, "the short call lowers with a zeroed Option argument")
+}
+
+test "a specialized generic call omitting a defaulted argument lowers" {
+    // The generic winner becomes an RtSpecialized target; the default
+    // recorded at pick time must still be appended against the spec's
+    // full-arity signature.
+    let unit = analyze(from_view("fn wrap(v: $T, extra: i32 = 7) i32 { return extra }\nfn main() i32 { return wrap(true) }"), "test.f")
+    let m = lower_module(&unit.module, &unit.result)
+    let mi = find_fn(&m, "main")
+    assert_true(mi < m.functions.len, "the short generic call lowers via its specialization")
+    assert_eq(call_count(&m.functions[mi]), 1 as usize, "one call emitted")
+}
+
+test "a scalar module const reads through its global, initialized before main" {
+    let unit = analyze(from_view("const K: i32 = 7\nfn main() i32 { return K }"), "test.f")
+    let m = lower_module(&unit.module, &unit.result)
+    let mi = find_fn(&m, "main")
+    assert_true(mi < m.functions.len, "the const-reading main lowers")
+    assert_true(find_fn(&m, "__finit_test__f__K") < m.functions.len, "the init function emits")
+    assert_eq(m.globals.len, 1 as usize, "one global backs the const")
+    // The init call is wired before any user instruction.
+    let first_is_init = m.functions[mi].blocks[0].instrs[0] match {
+        Call(c) => c.callee == "__finit_test__f__K",
+        _ => false,
+    }
+    assert_true(first_is_init, "main's first instruction initializes the const")
+}
+
+test "an aggregate const supports member reads and address-of" {
+    let unit = analyze(from_view("type Pt = struct { x: i32, y: i32 }\nconst P = Pt { x = 3, y = 4 }\nfn main() i32 { let a = &P let b = P.x return b }"), "test.f")
+    let m = lower_module(&unit.module, &unit.result)
+    assert_true(find_fn(&m, "main") < m.functions.len, "member read + address-of on a const global lower")
+    assert_true(find_fn(&m, "__finit_test__f__P") < m.functions.len, "the struct initializer emits")
+}
+
+test "a const vtable of function pointers lowers and dispatches" {
+    let unit = analyze(from_view("type V = struct { f: fn(i32) i32 }\nfn double(x: i32) i32 { return x + x }\nconst T = V { f = double }\nfn main() i32 { let g = T.f return g(2) }"), "test.f")
+    let m = lower_module(&unit.module, &unit.result)
+    assert_true(find_fn(&m, "main") < m.functions.len, "reading a fn field from a const global lowers")
+    assert_true(find_fn(&m, "__finit_test__f__T") < m.functions.len, "the vtable init emits with a FuncRef store")
+}
+
+test "a const whose initializer cannot lower has no global, and its readers refuse" {
+    // A named-argument call stays unresolved (fresh-var fallback), so
+    // the initializer's type never settles - the const gets no global,
+    // and its reader must refuse, never read zeros.
+    let unit = analyze(from_view("fn mk(a: i32) i32 { return a }\nconst B2: i32 = mk(a = 1)\nfn main() i32 { let x = B2 return 0 }"), "test.f")
+    let m = lower_module(&unit.module, &unit.result)
+    assert_true(find_fn(&m, "__finit_test__f__B2") >= m.functions.len, "no init function for the unlowerable const")
+    assert_true(was_skipped(&m, "main"), "reading an unavailable const refuses the reader")
+}
+
+test "integer casts widen and narrow through convert instructions (M11)" {
+    let unit = analyze(from_view("fn f(x: i32) i64 { return x as i64 }\nfn g(x: u64) u8 { return x as u8 }\nfn h(x: u32) u64 { return x as u64 }"), "test.f")
+    let m = lower_module(&unit.module, &unit.result)
+    let fi = find_fn_starting(&m, "f__i32")
+    assert_true(fi < m.functions.len, "the widening cast lowers")
+    assert_eq(convert_count(&m.functions[fi]), 1 as usize, "one convert for i32 -> i64")
+    let gi = find_fn_starting(&m, "g__u64")
+    assert_true(gi < m.functions.len, "the narrowing cast lowers")
+    let hi = find_fn_starting(&m, "h__u32")
+    assert_true(hi < m.functions.len, "the unsigned widening cast lowers")
+}
+
+test "int/float and ptr/int casts lower; same-width sign casts are no-ops" {
+    let unit = analyze(from_view("fn f(x: i32) f64 { return x as f64 }\nfn g(x: f64) i32 { return x as i32 }\nfn p(x: usize) &u8 { return x as &u8 }\nfn q(x: &u8) usize { return x as usize }\nfn s(x: u32) i32 { return x as i32 }"), "test.f")
+    let m = lower_module(&unit.module, &unit.result)
+    assert_true(find_fn_starting(&m, "f__i32") < m.functions.len, "int -> float lowers")
+    assert_true(find_fn_starting(&m, "g__f64") < m.functions.len, "float -> int lowers")
+    assert_true(find_fn_starting(&m, "p__usize") < m.functions.len, "int -> ptr lowers")
+    assert_true(find_fn_starting(&m, "q__ref_u8") < m.functions.len, "ptr -> int lowers")
+    let si = find_fn_starting(&m, "s__u32")
+    assert_true(si < m.functions.len, "same-width sign cast lowers")
+    assert_eq(convert_count(&m.functions[si]), 0 as usize, "same width needs no instruction")
+}
+
+test "a tagged enum casts to and from an integer through its discriminant" {
+    let unit = analyze(from_view("type E = enum { A, B, C }\nfn f(e: E) i32 { return e as i32 }\nfn g(x: i32) E { return x as E }"), "test.f")
+    let m = lower_module(&unit.module, &unit.result)
+    let fi = find_fn_starting(&m, "f__")
+    assert_true(fi < m.functions.len, "enum -> int lowers via a tag load")
+    let gi = find_fn_starting(&m, "g__i32")
+    assert_true(gi < m.functions.len, "int -> enum lowers via a zeroed slot + tag store")
+    assert_true(memset_count(&m.functions[gi]) == 1 as usize, "the slot zero-fills before the tag store")
+}
+
+test "a cast to bool refuses - truncation is not C's != 0 semantics" {
+    let unit = analyze(from_view("fn f(x: i32) bool { return x as bool }"), "test.f")
+    let m = lower_module(&unit.module, &unit.result)
+    assert_true(was_skipped(&m, "f__"), "`as bool` needs a comparison, not a trunc")
 }
 
 test "a char literal lowers to its codepoint, not a placeholder zero" {
@@ -4204,6 +5683,42 @@ test "a char literal lowers to its codepoint, not a placeholder zero" {
     let m = lower_module(&unit.module, &unit.result)
     let f = &m.functions[find_fn_starting(&m, "f__char")]
     assert_true(compares_against(f, 65), "the comparison tests against 65, not 0")
+}
+
+test "String == dispatches to op_eq, and != negates it" {
+    let unit = analyze(from_view("pub type String = struct { ptr: &u8, len: usize }\npub fn op_eq(a: String, b: String) bool { return a.len == b.len }\nfn f(a: String, b: String) bool { return a == b }\nfn g(a: String, b: String) bool { return a != b }"), "core.string")
+    let m = lower_module(&unit.module, &unit.result)
+    let fi = find_fn_starting(&m, "f__")
+    assert_true(fi < m.functions.len, "== over Strings lowers via op_eq")
+    assert_eq(call_count(&m.functions[fi]), 1 as usize, "one dispatch call")
+    let gi = find_fn_starting(&m, "g__")
+    assert_true(gi < m.functions.len, "!= lowers as negated op_eq")
+    assert_eq(call_count(&m.functions[gi]), 1 as usize, "same dispatch, plus a negation")
+}
+
+test "a string match arm calls op_eq against the literal" {
+    let unit = analyze(from_view("pub type String = struct { ptr: &u8, len: usize }\npub fn op_eq(a: String, b: String) bool { return a.len == b.len }\nfn f(s: String) i32 { return s match { \"build\" => 1, \"fmt\" => 2, else => 0 } }"), "core.string")
+    let m = lower_module(&unit.module, &unit.result)
+    let fi = find_fn_starting(&m, "f__")
+    assert_true(fi < m.functions.len, "string patterns lower via op_eq dispatch")
+    assert_true(call_count(&m.functions[fi]) >= 2 as usize, "one call per string arm")
+}
+
+test "== and != on a payload-less enum compare tags with no dispatch" {
+    let unit = analyze(from_view("type Color = enum { Red, Green, Blue }\nfn f(a: Color, b: Color) bool { return a == b }\nfn g(a: Color) bool { return a != Color.Red }"), "test.f")
+    let m = lower_module(&unit.module, &unit.result)
+    let fi = find_fn_starting(&m, "f__")
+    assert_true(fi < m.functions.len, "enum == lowers as a tag compare")
+    assert_eq(call_count(&m.functions[fi]), 0 as usize, "no call - builtin tag compare")
+    assert_true(find_fn_starting(&m, "g__") < m.functions.len, "enum != against a variant value lowers")
+}
+
+test "an ordering comparison derives from op_cmp through Ord's tags" {
+    let unit = analyze(from_view("pub type Ord = enum { Less, Equal, Greater }\npub type Money = struct { cents: i64 }\npub fn op_cmp(a: Money, b: Money) Ord { return Less }\nfn f(a: Money, b: Money) bool { return a < b }"), "core.cmp")
+    let m = lower_module(&unit.module, &unit.result)
+    let fi = find_fn_starting(&m, "f__")
+    assert_true(fi < m.functions.len, "< over a user type lowers via op_cmp")
+    assert_eq(call_count(&m.functions[fi]), 1 as usize, "one op_cmp call, then a tag test")
 }
 
 test "a binary operator over aggregates refuses - its operator fn is not recorded" {
@@ -4389,10 +5904,11 @@ test "niche None is the null pointer" {
     assert_true(ret_null, "None of Option(&T) returns the null pointer directly")
 }
 
-test "multi-payload variant construction refuses, matching the pattern side" {
-    let unit = analyze(from_view("type P = enum { A, B(i32, i32) }\nfn f(x: i32) P { return B(x, x) }"), "test.f")
+test "a multi-payload variant constructs and its pattern binds both payloads (M11)" {
+    let unit = analyze(from_view("type P = enum { A, B(i32, i64) }\nfn f(x: i32) P { return B(x, 9i64) }\nfn g(p: P) i64 { return p match { B(a, b) => (a as i64) + b, A => 0 } }"), "test.f")
     let m = lower_module(&unit.module, &unit.result)
-    assert_true(was_skipped(&m, "f__"), "per-payload offsets are unwritten - refuse, don't guess")
+    assert_true(find_fn_starting(&m, "f__") < m.functions.len, "construction stores tag + both payloads")
+    assert_true(find_fn_starting(&m, "g__") < m.functions.len, "the pattern binds each payload at its offset")
 }
 
 test "a constructed variant round-trips through a match in the same function" {

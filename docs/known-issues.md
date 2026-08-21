@@ -89,6 +89,84 @@ in its fixtures so the assertions are no longer vacuous.
 
 ## Open Issues
 
+### Reference: Niche-Option Method Receiver Read From a Local Copy Passes the Alloca
+
+**Status:** Open (discovered 2026-08-21, twice, while building M11)
+**Affected:** reference compiler C lowering
+**Workaround in tree:** restructure the call site
+
+Calling `.is_some()` / `.is_none()` on an `Option(&T)`-typed field of a
+*by-value local* (typically a match-payload copy: `let r = rg.unwrap()`
+then `r.start.is_some()`) passes the option's **alloca** (`T**`) where
+the monomorphized method expects the niche VALUE (`T*`) — a C type
+error (`incompatible pointer types`), so at least it is loud. Two M11
+call sites hit it (`lower_index_arg`, `check_cast`'s anon-literal arm);
+both were restructured (pass `&payload` into a helper taking a
+reference, or replace the call with a `match`). Root-cause fix belongs
+in the reference's receiver lowering.
+
+---
+
+### Self-Host: Stage-1 Segfaults on the Full Project Build
+
+**Status:** Open (2026-08-21) — THE stage-2 frontier
+**Affected:** stage-1 (the self-compiled compiler)
+
+Stage-1 links, and compiles + runs single-file programs correctly
+(verified: string matching, range slicing, for-over-iterators, heap
+allocation through the allocator vtable). Building the full 99-module
+bootstrap project, it crashes with SIGSEGV before emitting anything.
+One earlier run appeared to complete and produced a binary that itself
+compiled programs — so the failure may be nondeterministic (dict
+iteration order / uninitialized memory are prime suspects). Hunt with
+`lldb` on a stage-1 `-v build`; suspect list: memory bugs in the
+lowered stdlib containers at scale, arena/allocator identity, the
+zero-page from an uninitialized read.
+
+---
+
+### Self-Host: Explicit Enum Variant Values Are Ignored
+
+**Status:** Open (noted 2026-08-21 while deriving comparisons from `op_cmp`)
+**Affected:** self-host checker + lowering (parity gap)
+
+`Ord` declares `Less = -1, Equal = 0, Greater = 1`, but the self-host
+registry does not record variant values and lowering stores DECLARATION
+INDICES as tags. Internally consistent (construction and tests agree),
+but a parity gap with the reference: anything comparing tags across the
+two compilers' outputs, or casting enums to ints expecting declared
+values, diverges. The `op_cmp` derivation resolves Less/Equal/Greater
+indices from the definition instead of assuming −1/0/1 for exactly this
+reason.
+
+---
+
+### Self-Host: Const Init Order Is Declaration Order, Not Dependency Order
+
+**Status:** Open ceiling (M11 globals design note)
+
+`main` calls every surviving `__finit_*` in declaration order. A const
+whose initializer reads another const's **value** (not address) may see
+zeros if declared first. No such const exists in tree; topo-sort the
+init calls when one appears. Address-of cross-references (the vtable
+pattern) are order-independent by construction.
+
+---
+
+### Self-Host: Minimal RTTI — TypeInfo Name/Fields Are Zeroed; `project_info` Unintercepted
+
+**Status:** Open (M11 scoped this deliberately)
+
+`size_of(T)` / `align_of(T)` fold to layout constants at call sites;
+`Type(T)` values materialize a TypeInfo with size, align, and kind
+filled and everything else zeroed (name is an empty/null String —
+printing it would crash). `project_info()` is not intercepted, so
+stage-1's `--version` prints garbage-adjacent output. Fill name (an
+interned string) when a consumer needs it; intercept `project_info`
+like the reference does.
+
+---
+
 ### Reference: A Statement-Position `match`/`if` Whose Arms All Diverge Emits Invalid C — RESOLVED
 
 **Status:** Resolved 2026-08-20 (same day as discovery, while writing `flang_parser/comptime.f`)

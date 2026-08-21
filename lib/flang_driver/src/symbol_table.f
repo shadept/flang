@@ -23,6 +23,7 @@ import flang_typer.nominal_registry
 import flang_typer.function_registry
 import flang_typer.scheme
 import flang_typer.specialization
+import flang_typer.well_known
 import flang_driver.driver
 import flang_driver.layout
 
@@ -142,7 +143,7 @@ pub fn symbol_builder(result: &TypeCheckResult, allocator: &Allocator? = null) S
             let sig = scheme_sig(&f.signature)
             if sig.is_none() { continue }
             let s = sig.unwrap()
-            if !sig_lowerable(&s, f.is_foreign) { continue }
+            if !sig_lowerable(&s, f.is_foreign, &result.nominals) { continue }
             by_decl.set(node_id_of(f.decl_span), f.id)
             by_fn_sig.set(f.id, s)
         }
@@ -155,7 +156,7 @@ pub fn symbol_builder(result: &TypeCheckResult, allocator: &Allocator? = null) S
     for i in 0..result.specializations.len {
         let sp = &result.specializations[i]
         let s = FnSig { params = sp.concrete_params, ret = sp.concrete_return }
-        if !sig_lowerable(&s, false) { continue }
+        if !sig_lowerable(&s, false, &result.nominals) { continue }
         let sym = mangle_spec_symbol(sp.module, sp.name, &s, &result.nominals, allocator)
         by_spec_id.set(sp.id, sym)
         by_spec_sig.set(sp.id, s)
@@ -185,14 +186,14 @@ fn scheme_sig(s: &Scheme) FnSig? {
 // parameter and the return type must be a FIR scalar or a concrete
 // aggregate. Foreign signatures stay scalar-only - a byte-buffer
 // aggregate has no C ABI spelling the backend could give an extern.
-fn sig_lowerable(sig: &FnSig, is_foreign: bool) bool {
+fn sig_lowerable(sig: &FnSig, is_foreign: bool, reg: &NominalRegistry) bool {
     for i in 0..sig.params.len {
-        if !ty_lowerable(&sig.params[i], is_foreign) { return false }
+        if !ty_lowerable(&sig.params[i], is_foreign, reg) { return false }
     }
     return sig.ret match {
         Void => true,
         Never => true,
-        _ => ty_lowerable(&sig.ret, is_foreign),
+        _ => ty_lowerable(&sig.ret, is_foreign, reg),
     }
 }
 
@@ -200,11 +201,36 @@ fn sig_lowerable(sig: &FnSig, is_foreign: bool) bool {
 // always can; aggregates only when concrete - a type variable inside one
 // would make `layout_of` guess a size, which is the M5 wrong-layout bug
 // class - and not foreign.
-fn ty_lowerable(ty: &Ty, is_foreign: bool) bool {
+fn ty_lowerable(ty: &Ty, is_foreign: bool, reg: &NominalRegistry) bool {
     if is_scalar_ty(ty) { return true }
     if !is_aggregate(ty) { return false }
+    // The pointer-niche `Option(&T)` IS a FIR scalar (`ptr`) - and the
+    // nullable-pointer C idiom, so foreign signatures may spell it
+    // (`#foreign fn malloc(size: usize) &u8?`).
+    if ty_is_niche_option(ty, reg) { return true }
     if is_foreign { return false }
     return ty_concrete(ty)
+}
+
+// Structural, layout-free (a generic scheme's args may still carry Vars,
+// and `enum_layout` hard-fails on those by design): `Option(&T)` exactly,
+// mirroring layout.f's `is_option_niche`.
+fn ty_is_niche_option(ty: &Ty, reg: &NominalRegistry) bool {
+    let nr = ty.* match {
+        Nominal(n) => n,
+        _ => return false,
+    }
+    let ed = reg.get(nr.id).* match {
+        NomEnum(e) => Some(e),
+        _ => null,
+    }
+    if ed.is_none() { return false }
+    if ed.unwrap().fqn != FQN_OPTION { return false }
+    if nr.args.len != 1 { return false }
+    return nr.args[0] match {
+        Ref(_) => true,
+        _ => false,
+    }
 }
 
 fn is_scalar_ty(ty: &Ty) bool {
@@ -218,8 +244,9 @@ fn is_scalar_ty(ty: &Ty) bool {
 
 // No unresolved type variable reachable by value. Recursion stops at
 // `Ref` and `Func` (pointers are opaque - `&List($T)` is 8 bytes whatever
-// `T` is), mirroring `layout_rec`.
-fn ty_concrete(ty: &Ty) bool {
+// `T` is), mirroring `layout_rec`. Public: the const-global pre-pass in
+// lower.f gates layout on it (M11 globals).
+pub fn ty_concrete(ty: &Ty) bool {
     return ty.* match {
         Var(_) => false,
         Error => false,
@@ -301,8 +328,9 @@ fn append_escaped(sb: &StringBuilder, s: String) {
 }
 
 // Append a module path: `.` becomes the segment separator, and source
-// underscores inside each segment are escaped, in one pass.
-fn append_module_path(sb: &StringBuilder, fqn: String) {
+// underscores inside each segment are escaped, in one pass. Public: the
+// const-global mangle in lower.f reuses it (M11 globals).
+pub fn append_module_path(sb: &StringBuilder, fqn: String) {
     for i in 0..fqn.len {
         if fqn[i] == '.' {
             sb.append("__")

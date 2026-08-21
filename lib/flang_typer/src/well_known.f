@@ -19,6 +19,9 @@ import flang_typer.type
 // No allocation, no engine state.
 // ─────────────────────────────────────────────────────────────────────
 
+#inline pub fn ty_error() Ty { return Ty.Error }
+#inline pub fn ty_never() Ty { return Ty.Never }
+#inline pub fn ty_void() Ty { return Ty.Void }
 #inline pub fn ty_bool() Ty { return Ty.Prim(PrimitiveKind.Bool) }
 #inline pub fn ty_i8() Ty { return Ty.Prim(PrimitiveKind.I8) }
 #inline pub fn ty_i16() Ty { return Ty.Prim(PrimitiveKind.I16) }
@@ -33,9 +36,6 @@ import flang_typer.type
 #inline pub fn ty_f32() Ty { return Ty.Prim(PrimitiveKind.F32) }
 #inline pub fn ty_f64() Ty { return Ty.Prim(PrimitiveKind.F64) }
 #inline pub fn ty_char() Ty { return Ty.Prim(PrimitiveKind.Char) }
-#inline pub fn ty_never() Ty { return Ty.Never }
-#inline pub fn ty_void() Ty { return Ty.Void }
-#inline pub fn ty_error() Ty { return Ty.Error }
 
 // Map a primitive lexical name (as it appears in source: "i32", "bool",
 // …) to its `PrimitiveKind`. Returns `None` for any other identifier.
@@ -71,14 +71,14 @@ pub fn prim_from_name(name: String) PrimitiveKind? {
 // their surface forms.
 // ─────────────────────────────────────────────────────────────────────
 
-pub const FQN_STRING: String = "core.string.String"
 pub const FQN_OPTION: String = "core.option.Option"
-pub const FQN_TRY_RESULT: String = "core.try.TryResult"
-pub const FQN_SLICE: String = "core.slice.Slice"
-pub const FQN_RANGE: String = "core.range.Range"
-pub const FQN_TYPE: String = "core.rtti.Type"
-pub const FQN_TYPE_INFO: String = "core.rtti.TypeInfo"
-pub const FQN_RTTI_PREFIX: String = "core.rtti."
 pub const FQN_PROJECT_INFO: String = "core.rtti.ProjectInfo"
 pub const FQN_PROJECT_INFO_FN: String = "project_info"
+pub const FQN_RANGE: String = "core.range.Range"
+pub const FQN_RTTI_PREFIX: String = "core.rtti."
 pub const FQN_RTTI_MODULE: String = "core.rtti"
+pub const FQN_SLICE: String = "core.slice.Slice"
+pub const FQN_STRING: String = "core.string.String"
+pub const FQN_TRY_RESULT: String = "core.try.TryResult"
+pub const FQN_TYPE: String = "core.rtti.Type"
+pub const FQN_TYPE_INFO: String = "core.rtti.TypeInfo"

@@ -2108,6 +2108,26 @@ fn project_match_arm(self: &Projector, cst: CstNode) MatchArm {
                 }
                 if saw_arrow and is_expr_kind(child.kind) {
                     body = self.project_expr(child)
+                    continue
+                }
+                // A bare statement arm body (`X => return v`, `X =>
+                // break`) wraps in a synthesized single-statement block
+                // - leaving it `Error` made the arm silently unlowerable
+                // (the checker types Error as a fresh var).
+                if saw_arrow {
+                    let st = self.project_stmt(child)
+                    st match {
+                        Some(stv) => {
+                            let stmts: List(Stmt) = list(1, Some(self.alloc))
+                            stmts.push(stv)
+                            body = Expr.Block(BlockExpr {
+                                span = self.span_from(child),
+                                stmts = stmts,
+                                trailing = null,
+                            })
+                        },
+                        None => {},
+                    }
                 }
             }
         }

@@ -318,6 +318,13 @@ pub type Block = struct {
     terminator: Terminator
 }
 
+// Replace a block's instruction list wholesale (scoped mutability keeps
+// the field module-private). Used by the const-init wiring in lower.f,
+// which prepends calls to `main`'s entry block after it is built.
+pub fn set_instrs(self: &Block, instrs: List(Instr)) {
+    self.instrs = instrs
+}
+
 // FIR function. `params` carries the SSA-named function parameters;
 // they're in scope across every block via dominance. `return_ty = null`
 // is void return. `variadic = true` is reserved for foreign decls; the
@@ -373,6 +380,10 @@ pub type IrModule = struct {
     //
     // ponytail: milestone-period crutch; delete once lowering is total.
     skipped: List(String)
+    // Human-readable reason per skip, in push order ("body refused" vs
+    // "calls undefined `x`"). Same lifetime and removal condition as
+    // `skipped`; the verbose CLI build prints it as the frontier report.
+    skip_notes: List(OwnedString)
 }
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -384,11 +395,13 @@ pub fn module(allocator: &Allocator? = null) IrModule {
     let foreigns: List(ForeignDecl) = list(0, allocator)
     let functions: List(Function) = list(0, allocator)
     let skipped: List(String) = list(0, allocator)
+    let skip_notes: List(OwnedString) = list(0, allocator)
     return IrModule {
         globals = globals,
         foreigns = foreigns,
         functions = functions,
         skipped = skipped,
+        skip_notes = skip_notes,
     }
 }
 
@@ -396,6 +409,7 @@ pub fn deinit(self: &IrModule) {
     self.functions.deinit()
     self.foreigns.deinit()
     self.globals.deinit()
+    self.skip_notes.deinit()
 }
 
 pub fn deinit(self: &Function) {

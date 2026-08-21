@@ -34,6 +34,9 @@ pub type TypeCheckResult = struct {
     desugars: Dict(NodeId, &BlockExpr)
     // Owned buffers the desugars' name/text views point into.
     synth_strings: List(OwnedString)
+    // M11: per call site, the callee's default expressions for omitted
+    // parameters, in parameter order - see InferenceResults.default_args.
+    default_args: Dict(NodeId, List(Expr))
     nominals: NominalRegistry
     functions: FunctionRegistry
     // RFC-014: checked lambda literals of the PROGRAM tables (a lambda in
@@ -59,6 +62,7 @@ pub fn empty_result(allocator: &Allocator? = null) TypeCheckResult {
         specializations = list(0, allocator),
         desugars = dict(allocator),
         synth_strings = list(0, allocator),
+        default_args = dict(allocator),
         nominals = nominal_registry(allocator),
         functions = function_registry(allocator),
         lambdas = dict(allocator),
@@ -77,6 +81,7 @@ pub fn deinit(self: &TypeCheckResult) {
     self.specializations.deinit()
     self.desugars.deinit()
     self.synth_strings.deinit()
+    self.default_args.deinit()
     self.nominals.deinit()
     self.functions.deinit()
     self.lambdas.deinit()
@@ -101,6 +106,10 @@ pub fn get_desugar(self: &TypeCheckResult, id: NodeId) &BlockExpr? {
 
 pub fn get_lambda(self: &TypeCheckResult, id: NodeId) &LambdaInfo? {
     return self.lambdas.get_ref(id)
+}
+
+pub fn get_default_args(self: &TypeCheckResult, id: NodeId) &List(Expr)? {
+    return self.default_args.get_ref(id)
 }
 
 pub fn get_closure(self: &TypeCheckResult, id: NominalId) &ClosureSig? {

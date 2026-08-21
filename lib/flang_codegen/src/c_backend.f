@@ -408,7 +408,16 @@ fn c_unsigned_type_name(ty: IrType) String {
 fn emit_operand(op: &Operand, sb: &StringBuilder) {
     op.* match {
         Local(id) => { sb.append("v"); sb.append(id) },
-        IntConst(n) => sb.append(n),
+        // i64::MIN cannot be spelled as one C literal: `-9223372036854775808`
+        // parses as negation OF a literal that overflows int64_t. The
+        // standard spelling subtracts one from MIN+1.
+        IntConst(n) => {
+            if n == -9223372036854775807 - 1 {
+                sb.append("(-9223372036854775807LL - 1)")
+            } else {
+                sb.append(n)
+            }
+        },
         FloatConst(f) => emit_float_const(f, sb),
         NullPtr => sb.append("((void*)0)"),
         GlobalRef(name) => { sb.append("((void*)g_"); sb.append(name); sb.append(")") },

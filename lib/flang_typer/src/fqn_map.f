@@ -56,17 +56,33 @@ pub fn get_fqn(self: &FqnMap($V), fqn: String) V? {
     return self.entries.get(fqn)
 }
 
-// Resolve a name in the caller's visibility scope.
-pub fn lookup(self: &FqnMap($V), name: String, vis: &Visibility) V? {
-    let direct = self.entries.get(name)
-    if direct.is_some() { return direct }
+// A visibility-scoped hit that also names the winning FQN. `fqn` is the
+// map's stable key view (owned_fqns-backed), valid for the map's lifetime.
+pub type FqnHit = struct(V) {
+    fqn: String
+    value: V
+}
+
+// Like `lookup`, but returns the stable FQN key alongside the value -
+// for consumers that need to cite WHICH constant won (RtConst). One
+// linear scan per case; these maps are small.
+pub fn lookup_entry(self: &FqnMap($V), name: String, vis: &Visibility) FqnHit($V)? {
+    // Dotted (or exact) name: match the stored key itself, so the
+    // returned view is the stable one, not the caller's transient buffer.
+    for entry in self.entries {
+        if entry.key == name { return Some(.{ fqn = entry.key, value = entry.value }) }
+    }
 
     if vis.current_module.is_some() {
         let cur = vis.current_module.unwrap()
         let qualified = $"{cur}.{name}"
-        let q = self.entries.get(qualified.as_view())
+        for entry in self.entries {
+            if entry.key == qualified.as_view() {
+                qualified.deinit()
+                return Some(.{ fqn = entry.key, value = entry.value })
+            }
+        }
         qualified.deinit()
-        if q.is_some() { return q }
     }
 
     for entry in self.entries {
@@ -75,7 +91,15 @@ pub fn lookup(self: &FqnMap($V), name: String, vis: &Visibility) V? {
         let short = short_name_of(fqn, dot)
         if short != name { continue }
         let module = module_of(fqn, dot)
-        if vis.allows(module) { return Some(entry.value) }
+        if vis.allows(module) { return Some(.{ fqn = entry.key, value = entry.value }) }
     }
     return null
+}
+
+// Resolve a name in the caller's visibility scope.
+pub fn lookup(self: &FqnMap($V), name: String, vis: &Visibility) V? {
+    return self.lookup_entry(name, vis) match {
+        Some(h) => Some(h.value),
+        None => null,
+    }
 }

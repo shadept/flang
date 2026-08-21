@@ -283,3 +283,18 @@ pub fn is_pub(def: &NominalDef) bool {
         NomEnum(e) => e.is_pub,
     }
 }
+
+// Whether every variant of the enum at `id` is payload-less - the shape
+// that gets builtin tag-compare `==`/`!=` (checker) and tag-compare
+// lowering (driver). False for structs.
+pub fn enum_payloadless(self: &NominalRegistry, id: NominalId) bool {
+    return self.get(id).* match {
+        NomEnum(e) => {
+            for i in 0..e.variants.len {
+                if e.variants[i].payloads.len > 0 { return false }
+            }
+            true
+        },
+        _ => false,
+    }
+}

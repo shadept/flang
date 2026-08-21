@@ -11,6 +11,7 @@
 // C-order always - see docs/known-issues.md.
 
 import std.allocator
+import std.dict
 import std.list
 import std.option
 import std.string
@@ -213,6 +214,12 @@ fn field_order(fls: &List(Layout), repr: Repr, max_align: usize, alloc: &Allocat
 // Size/align of a positional tuple or anonymous record (offsets
 // discarded). These have no declaration to lock them, so they take the
 // default auto layout.
+// A tuple's full layout - size, align, and per-element offsets (M11
+// tuple literals and `t.N` projection read them).
+pub fn tuple_layout(elems: &List(Ty), reg: &NominalRegistry, allocator: &Allocator? = null) StructLayout {
+    return fields_layout(elems, Repr.Auto, reg, allocator)
+}
+
 fn aggregate_size(elems: &List(Ty), reg: &NominalRegistry, alloc: &Allocator?) Layout {
     let sl = fields_layout(elems, Repr.Auto, reg, alloc)
     let r = lay(sl.size, sl.align)
@@ -232,7 +239,27 @@ fn record_size(fields: &List(Field), reg: &NominalRegistry, alloc: &Allocator?) 
 fn nominal_layout(nr: &NominalRef, reg: &NominalRegistry, alloc: &Allocator?) Layout {
     let def = reg.get(nr.id)
     return def.* match {
-        NomStruct(s) => struct_size(&s, &nr.args, reg, alloc),
+        NomStruct(s) => {
+            // `Type(T)` is declared empty but its VALUE is a TypeInfo
+            // (the reified-type handle - `type_of` returns it as one),
+            // so it lays out as TypeInfo (M11 minimal RTTI).
+            if s.fqn == FQN_TYPE {
+                let ti = reg.by_fqn.get(FQN_TYPE_INFO)
+                if ti.is_some() {
+                    let tdef = reg.get(ti.unwrap())
+                    tdef.* match {
+                        NomStruct(ts) => {
+                            let none: List(Ty) = list(0, alloc)
+                            let r = struct_size(&ts, &none, reg, alloc)
+                            none.deinit()
+                            return r
+                        },
+                        _ => {},
+                    }
+                }
+            }
+            struct_size(&s, &nr.args, reg, alloc)
+        },
         NomEnum(e) => enum_size(&e, &nr.args, reg, alloc),
     }
 }
@@ -264,6 +291,26 @@ fn struct_layout_impl(def: &StructDef, args: &List(Ty), reg: &NominalRegistry, a
 
 // SIMD vectors over-align to the next power-of-two of their byte size
 // (min 16), so the C backend can request vector alignment.
+// Per-payload byte offsets of one variant, relative to the ENUM's base:
+// the shared payload offset plus the variant's own struct-like internal
+// layout (M11 multi-payload variants). Never call for the niche form.
+pub fn variant_payload_offsets(def: &EnumDef, vnum: usize, args: &List(Ty), reg: &NominalRegistry, allocator: &Allocator? = null) List(usize) {
+    let el = enum_layout(def, args, reg, allocator)
+    let v = &def.variants[vnum]
+    let ptys: List(Ty) = list(v.payloads.len, allocator)
+    for j in 0..v.payloads.len {
+        ptys.push(subst(&v.payloads[j], &def.type_params, args, allocator))
+    }
+    let pl = fields_layout(&ptys, Repr.Auto, reg, allocator)
+    ptys.deinit()
+    let out: List(usize) = list(pl.offsets.len, allocator)
+    for j in 0..pl.offsets.len {
+        out.push(el.payload_offset + pl.offsets[j])
+    }
+    pl.offsets.deinit()
+    return out
+}
+
 fn simd_layout(sl: StructLayout) StructLayout {
     let want = next_pow2(sl.size)
     let align = if want > 16 { want } else { 16 }

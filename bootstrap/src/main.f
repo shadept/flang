@@ -19,6 +19,7 @@ import std.process
 import std.result
 import std.string
 import std.string_builder
+import std.io.file
 import std.io.fs
 import flang_parser.comptime
 import flang_parser.lexer
@@ -255,9 +256,12 @@ fn build_project(verbose: bool, stdlib_path: String, check_only: bool, target: C
         println("bootstrap: no flang.toml in the current directory")
         return 1
     }
-    const toml_opt = read_source("flang.toml")
-    if toml_opt.is_none() { return 1 }
-    let toml = toml_opt.unwrap()
+    const toml_res = read_source("flang.toml")
+    if toml_res.is_err() {
+        report_read_error("flang.toml", toml_res.unwrap_err())
+        return 1
+    }
+    let toml = toml_res.unwrap()
     defer toml.deinit()
 
     let proj = parse_project(toml.as_view())
@@ -323,7 +327,7 @@ fn finish_build(unit: &AnalyzedProject, label: String, out: String, verbose: boo
         return 0
     }
 
-    let result = build_program(&unit.modules, &unit.fqns, &unit.result, out, stdlib_path)
+    let result = build_program(&unit.modules, &unit.fqns, &unit.result, out, stdlib_path, verbose)
     if result.is_err() {
         report_build_error(&result.unwrap_err(), label)
         return 1
@@ -345,6 +349,18 @@ fn output_path_for(path: String) String {
         }
     }
     return path
+}
+
+// The CLI edge renders IO failures; `read_source` itself stays pure.
+fn report_read_error(path: String, e: FileError) {
+    const label = e match {
+        NotFound => "not found",
+        PermissionDenied => "permission denied",
+        IOError => "read failed",
+    }
+    const m = $"flang: cannot read `{path}`: {label}"
+    defer m.deinit()
+    println(m.as_view())
 }
 
 fn report_build_error(e: &BuildError, path: String) {

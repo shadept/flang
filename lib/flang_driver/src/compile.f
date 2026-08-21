@@ -35,8 +35,22 @@ pub fn build_unit(unit: &AnalyzedUnit, output_path: String, allocator: &Allocato
 // the stdlib's C runtime sidecars (`**/*.c`: fs, time, process, ...) are
 // compiled and linked in, matching what the reference compiler links -
 // without them every `#foreign __flang_*` call is an undefined symbol.
-pub fn build_program(modules: &List(Module), fqns: &List(OwnedString), result: &TypeCheckResult, output_path: String, stdlib_root: String = "", allocator: &Allocator? = null) Result(BuildResult, BuildError) {
+// `verbose` prints the skip report - one line per function lowering
+// refused (directly or transitively), with the reason. TEMPORARY
+// SCAFFOLD like `IrModule.skipped` itself: the frontier report for the
+// self-host milestones; delete together with the skip mechanism.
+pub fn build_program(modules: &List(Module), fqns: &List(OwnedString), result: &TypeCheckResult, output_path: String, stdlib_root: String = "", verbose: bool = false, allocator: &Allocator? = null) Result(BuildResult, BuildError) {
     let m = lower_program(modules, fqns, result, allocator)
+    if verbose and m.skip_notes.len > 0 {
+        const hdr = $"  {m.functions.len} function(s) emitted, {m.skip_notes.len} skipped:"
+        defer hdr.deinit()
+        println(hdr.as_view())
+        for i in 0..m.skip_notes.len {
+            const line = $"    {m.skip_notes[i].as_view()}"
+            defer line.deinit()
+            println(line.as_view())
+        }
+    }
     let opts = build_options(output_path, allocator)
 
     let runtime_c: List(OwnedString) = list(0, allocator)

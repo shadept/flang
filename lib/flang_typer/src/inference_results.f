@@ -39,6 +39,11 @@ pub type ResolvedTarget = enum {
     RtStructField(NominalId, u32)     // nominal + field index
     RtEnumVariant(NominalId, u32)     // nominal + variant index
     RtSpecialized(u32)                // SpecializationRegistry id
+    // Module-level constant, by FQN (M11 globals). The view is interned
+    // into the result's `synth_strings`, so it outlives the checker.
+    // Recorded on every const READ node and on the ConstDecl node itself
+    // (lowering's pre-pass reads the decl's own entry to name its global).
+    RtConst(String)
 }
 
 // Resolved operator dispatch. `function_id` indexes the function
@@ -138,6 +143,13 @@ pub type InferenceResults = struct {
     // Lives in the result set - not a global table - so a lambda inside a
     // generic template records once per instantiation overlay.
     lambdas: Dict(NodeId, LambdaInfo)
+    // M11: per call site, the callee's default expressions for the
+    // parameters the call omitted, in parameter order. The exprs are
+    // shallow copies of the callee declaration's AST (shared children),
+    // checked at the call site so their node types land in this result
+    // set. Lowering appends them after the explicit arguments. A call
+    // with no entry here that is short of the callee's arity refuses.
+    default_args: Dict(NodeId, List(Expr))
     allocator: &Allocator?
 }
 
@@ -150,6 +162,7 @@ pub fn inference_results(allocator: &Allocator? = null) InferenceResults {
         synth_strings = list(0, allocator),
         desugars = dict(allocator),
         lambdas = dict(allocator),
+        default_args = dict(allocator),
         allocator = allocator,
     }
 }
@@ -162,6 +175,7 @@ pub fn deinit(self: &InferenceResults) {
     self.synth_strings.deinit()
     self.desugars.deinit()
     self.lambdas.deinit()
+    self.default_args.deinit()
 }
 
 // Record (or overwrite) the inferred type for a node. The "overwrite"
@@ -205,6 +219,10 @@ pub fn record_lambda(self: &InferenceResults, id: NodeId, info: LambdaInfo) {
     self.lambdas.set(id, info)
 }
 
+pub fn record_default_args(self: &InferenceResults, id: NodeId, exprs: List(Expr)) {
+    self.default_args.set(id, exprs)
+}
+
 // Replace the lambda table wholesale - the zonk passes rebuild it (the
 // field itself is module-private under scoped mutability).
 pub fn replace_lambdas(self: &InferenceResults, ls: Dict(NodeId, LambdaInfo)) {
@@ -246,4 +264,5 @@ pub fn reset_side_tables(self: &InferenceResults) {
     self.synth_strings = list(0, self.allocator)
     self.desugars = dict(self.allocator)
     self.lambdas = dict(self.allocator)
+    self.default_args = dict(self.allocator)
 }

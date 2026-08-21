@@ -34,6 +34,13 @@ pub fn is_err(self: Result($T, $E)) bool {
     }
 }
 
+pub fn ok(self: Result($T, $E)) T? {
+    return self match {
+        Ok(v) => Some(v)
+        Err(_) => None
+    }
+}
+
 pub fn except(self: Result($T, $E), msg: String) T {
     return self match {
         Ok(value) => value

@@ -1,6 +1,7 @@
 // TODO file doc
 
 import core.string // explicit import for clarity
+import core.io
 
 import std.encoding.utf8
 import std.allocator
@@ -413,9 +414,24 @@ pub fn deinit(self: &OwnedString) {
     self.len = 0
 }
 
-
 pub fn as_view(self: OwnedString) String {
     return .{ ptr = self.ptr, len = self.len }
+}
+
+// Prints the OwnedString and TAKES OWNERSHIP (frees it), so the
+// `print($"...")` pattern needs no temporary + deinit dance. Lives here
+// rather than core.io because core cannot name OwnedString.
+pub fn print(value: OwnedString) i32 {
+    defer value.deinit()
+    return print(value.as_view())
+}
+
+// Prints the OwnedString and TAKES OWNERSHIP (frees it), so the
+// `println($"...")` pattern needs no temporary + deinit dance. Lives here
+// rather than core.io because core cannot name OwnedString.
+pub fn println(value: OwnedString) i32 {
+    defer value.deinit()
+    return println(value.as_view())
 }
 
 pub fn op_eq(a: OwnedString, b: OwnedString) bool {

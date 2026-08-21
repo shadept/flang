@@ -150,6 +150,17 @@ pub type Checker = struct {
     current_module: String?
     fn_stack: List(FnFrame)
 
+    // M11 - fn_id → declared parameter list, for functions with at least
+    // one defaulted parameter. `commit_pick` reads the omitted params'
+    // default exprs from here to materialize them at the call site. The
+    // wrapper struct keeps Dict's element-wise deinit away from the
+    // AST-arena-owned list buffer (no-op fallback, like GenericTemplate).
+    fn_defaults: Dict(u32, DeclParams)
+    // Re-entrancy depth of default materialization: a default expression
+    // whose own call omits defaults recurses through `check_expr`; a
+    // self-referential default would recurse forever, so cap it.
+    default_depth: usize
+
     // M10 - specialization state.
     // fn_id → what instantiation needs (generic functions only).
     templates: Dict(u32, GenericTemplate)
@@ -173,6 +184,12 @@ pub type Checker = struct {
     // scope, before that scope's specialization drain (a pinned field
     // can be what makes a generic pick's signature concrete).
     pending_anons: List(PendingAnon)
+    // Overloaded function NAMES in value position (`.map(deinit)`,
+    // `owned(v, deinit)`) awaiting instantiation-time resolution: once
+    // the surrounding inference pins the slot's Func shape, the overload
+    // resolves against it (ticket 019 §4). Drained per body scope with
+    // the other pendings.
+    pending_fn_names: List(PendingFnName)
 
     // Module FQN -> the set of module FQNs whose `pub` declarations are
     // visible from it. Built once per `check_all` from the modules'
@@ -200,6 +217,12 @@ pub type Checker = struct {
     allocator: &Allocator?
 }
 
+// A declaration's parameter list, shared with the AST (M11 defaults).
+// Deliberately no deinit: the list buffer lives in the module arena.
+type DeclParams = struct {
+    params: List(FunctionParam)
+}
+
 // One open lambda literal being checked. `boundary` is the scope index
 // of the lambda's own parameter scope: a name found at a shallower
 // index is an outer local, i.e. a capture.
@@ -207,6 +230,15 @@ type LambdaFrame = struct {
     boundary: usize
     lam_span: SourceSpan
     captures: List(CaptureRec)
+}
+
+// One overloaded-name-as-value site: the node, the fresh var its slot
+// got, the name, and the module whose visibility resolves it.
+type PendingFnName = struct {
+    span: SourceSpan
+    ty: Ty
+    name: String
+    module: String?
 }
 
 pub fn checker(allocator: &Allocator? = null) Checker {
@@ -223,6 +255,8 @@ pub fn checker(allocator: &Allocator? = null) Checker {
         comptime = host_ctx(),
         current_module = null,
         fn_stack = list(0, allocator),
+        fn_defaults = dict(allocator),
+        default_depth = 0usize,
         templates = dict(allocator),
         sig_tps = list(0, allocator),
         pending_specs = list(0, allocator),
@@ -230,6 +264,7 @@ pub fn checker(allocator: &Allocator? = null) Checker {
         spec_depth = 0usize,
         pending_literals = list(0, allocator),
         pending_anons = list(0, allocator),
+        pending_fn_names = list(0, allocator),
         visible_by_module = dict(allocator),
         next_synth = 0u32,
         lambda_frames = list(0, allocator),
@@ -250,12 +285,14 @@ pub fn deinit(self: &Checker) {
     self.results.deinit()
     self.diagnostics.deinit()
     self.fn_stack.deinit()
+    self.fn_defaults.deinit()
     self.templates.deinit()
     self.sig_tps.deinit()
     self.pending_specs.deinit()
     self.spec_callers.deinit()
     self.pending_literals.deinit()
     self.pending_anons.deinit()
+    self.pending_fn_names.deinit()
     self.visible_by_module.deinit()
     self.lambda_frames.deinit()
     self.closures.deinit()
@@ -982,6 +1019,17 @@ fn register_function_sig(self: &Checker, fd: &FunctionDecl) {
     }
     let id = self.functions.register(scheme_obj)
 
+    // M11: keep the declared parameter list around when any parameter
+    // carries a default, so call sites that omit trailing arguments can
+    // materialize the default expressions (`materialize_default_args`).
+    let has_default = false
+    for i in 0..fd.params.len {
+        if fd.params[i].default_value.is_some() { has_default = true }
+    }
+    if has_default {
+        self.fn_defaults.set(id, DeclParams { params = fd.params })
+    }
+
     // A generic signature also records its instantiation template: the
     // declaration plus the `$T` bindings `resolve_generic_bind` just
     // collected, in declaration order (M10). The list moves in; the
@@ -1033,7 +1081,11 @@ fn check_one_decl(self: &Checker, decl: &Decl) {
 fn check_constant_init(self: &Checker, cd: &ConstDecl) {
     let fqn = $"{self.current_module.unwrap()}.{cd.name}"
     let reg = self.constants.get_fqn(fqn.as_view())
-    fqn.deinit()
+    // The decl node carries its own FQN as an RtConst target - lowering's
+    // const pre-pass reads it to name the global (M11), so no module-path
+    // plumbing is needed lowering-side. Interned; outlives the checker.
+    let stable = self.results.add_synth_string(fqn)
+    self.results.record_target(node_id_of(cd.span), ResolvedTarget.RtConst(stable))
     let v = check_expr(self, &cd.value)
     unify_expected(self, v, reg.unwrap(), E_TYPE_MISMATCH, cd.span)
 }
@@ -1292,10 +1344,12 @@ fn instantiate(self: &Checker, p: &PendingSpec, key: OwnedString, params: List(T
     let saved_results = self.results
     let saved_pending = self.pending_specs
     let saved_anons = self.pending_anons
+    let saved_fn_names = self.pending_fn_names
     let saved_module = self.current_module
     self.results = inference_results(self.allocator)
     self.pending_specs = list(0, self.allocator)
     self.pending_anons = list(0, self.allocator)
+    self.pending_fn_names = list(0, self.allocator)
     self.current_module = Some(template.module)
     self.spec_callers.push(p.caller_module)
     self.spec_depth = self.spec_depth + 1
@@ -1320,6 +1374,7 @@ fn instantiate(self: &Checker, p: &PendingSpec, key: OwnedString, params: List(T
 
     check_function_body(self, &template.decl)
     resolve_anon_literals(self)
+    resolve_fn_name_values(self)
     drain_pending_specs(self)
 
     self.env.pop_scope()
@@ -1341,6 +1396,7 @@ fn instantiate(self: &Checker, p: &PendingSpec, key: OwnedString, params: List(T
     self.results = saved_results
     self.pending_specs = saved_pending
     self.pending_anons = saved_anons
+    self.pending_fn_names = saved_fn_names
     self.current_module = saved_module
 
     // RTTI instantiations surface program-wide, not per overlay.
@@ -1773,6 +1829,22 @@ fn check_pattern(self: &Checker, pat: &Pattern, expected: Ty) {
         Literal(l) => {
             let lt = literal_value_ty(self, l.value)
             unify_expected(self, lt, expected, E_TYPE_MISMATCH, l.span)
+            // A String pattern is an `op_eq(String, String)` call at
+            // match time - record the pick on the pattern node so
+            // lowering can dispatch it (M11), like binary `==` does.
+            let is_str = l.value match { String(_) => true, _ => false }
+            if is_str {
+                let pick = operator_pick_2(self, "op_eq",
+                    self.engine.resolve(expected), self.engine.resolve(lt), l.span)
+                if pick.is_some() {
+                    let p = pick.unwrap()
+                    self.results.record_operator(node_id_of(l.span), ResolvedOperator {
+                        function_id = p.id, negate_result = false,
+                        cmp_derived_op = null, is_ref_form = false, spec_id = null,
+                    })
+                    note_pending(self, l.span, true, &p)
+                }
+            }
         },
         EnumVariant(ev) => check_variant_pattern(self, &ev, expected),
         Or(o) => check_or_pattern(self, &o, expected),
@@ -2183,6 +2255,22 @@ fn check_index(self: &Checker, idx: &IndexExpr) Ty {
         // are `usize`. `xs[i]` yields the element.
         if ranged {
             constrain_range_usize(self, &rindex, idx.span)
+            // Route through the stdlib's clamping `op_index($T[], Range)`
+            // so lowering has a callable pick (M11). The base is already
+            // a built-in slice/array here, so the String overload cannot
+            // capture it (the concern that keeps builtin indexing FIRST).
+            // No visible overload - a prelude-less unit - falls back to
+            // the direct typing; such a site refuses at lowering.
+            let pick = operator_pick_2(self, "op_index", rbase, rindex, idx.span)
+            if pick.is_some() {
+                let p = pick.unwrap()
+                self.results.record_operator(node_id_of(idx.span), ResolvedOperator {
+                    function_id = p.id, negate_result = false,
+                    cmp_derived_op = null, is_ref_form = false, spec_id = null,
+                })
+                note_pending(self, idx.span, true, &p)
+                return p.ret
+            }
             return mk_slice_ty(self, elem.unwrap())
         }
         unify_expected(self, index_ty, ty_usize(), E_TYPE_MISMATCH, expr_span(idx.index))
@@ -2300,15 +2388,23 @@ fn operator_pick(self: &Checker, name: String, args: &List(Ty), span: SourceSpan
 fn check_cast(self: &Checker, c: &CastExpr) Ty {
     let v = check_expr(self, c.operand)
     let target = resolve_type_expr(self, c.target)
-    let is_numeric_lit = c.operand.* match {
+    let is_bindable_lit = c.operand.* match {
         Lit(l) => l.value match {
             Int(_) => true,
             Float(_) => true,
             _ => false,
         },
+        // `.{ ... } as T`: the cast IS the anonymous literal's context -
+        // without the pin its var never settles (M11). (Shaped as a match
+        // rather than `.is_none()`: the reference compiler mis-lowers a
+        // niche-option method receiver read from a match-payload copy.)
+        StructLit(sl) => sl.type_expr match {
+            Some(_) => false,
+            None => true,
+        },
         _ => false,
     }
-    if is_numeric_lit {
+    if is_bindable_lit {
         // Best-effort: a numeric target binds the literal; a failure
         // (casting a literal to a pointer, say) is the cast's business,
         // not a unification diagnostic.
@@ -2401,13 +2497,26 @@ fn check_identifier(self: &Checker, id: &IdentifierExpr) Ty {
                 ResolvedTarget.RtFunction(c.id))
             return self.engine.specialize(&c.signature)
         }
-        // Multiple overloads as a value - needs context to pick.
-        return self.engine.fresh_var()
+        // Multiple overloads as a value: mint a var the context pins,
+        // and park the site - `resolve_fn_name_values` picks the
+        // overload once the slot's Func shape settles (ticket 019 §4).
+        let slot = self.engine.fresh_var()
+        self.pending_fn_names.push(PendingFnName {
+            span = id.span, ty = slot, name = id.name, module = self.current_module,
+        })
+        return slot
     }
 
-    // Module-level constant?
-    let cty = self.constants.lookup(id.name, &vis)
-    if cty.is_some() { return cty.unwrap() }
+    // Module-level constant? Record which one won (M11 globals): the FQN
+    // is interned into the result's synth_strings so the view outlives
+    // the checker (lowering reads targets after `deinit`).
+    let chit = self.constants.lookup_entry(id.name, &vis)
+    if chit.is_some() {
+        let h = chit.unwrap()
+        let stable = self.results.add_synth_string(from_view(h.fqn, self.allocator))
+        self.results.record_target(node_id_of(id.span), ResolvedTarget.RtConst(stable))
+        return h.value
+    }
 
     // Bare payload-less variant (`None`) - locals and functions win first.
     let vid = self.nominals.lookup_variant(id.name, 0usize, &vis)
@@ -2702,7 +2811,7 @@ fn check_if_directive_stmt(self: &Checker, ifd: &IfDirectiveStmt) bool {
 // needs the iterator protocol, so the variable stays an unconstrained var
 // rather than being wrongly constrained.
 fn check_for(self: &Checker, fs: &ForStmt) {
-    let elem = check_iterable_element(self, fs.iterable)
+    let elem = check_iterable_element(self, fs)
     self.env.push_scope()
     self.env.bind(fs.var_name, Binding {
         scheme = mono(elem, self.allocator),
@@ -2714,13 +2823,65 @@ fn check_for(self: &Checker, fs: &ForStmt) {
     self.env.pop_scope()
 }
 
-fn check_iterable_element(self: &Checker, iterable: &Expr) Ty {
-    return iterable.* match {
+fn check_iterable_element(self: &Checker, fs: &ForStmt) Ty {
+    return fs.iterable.* match {
         Range(r) => check_range_bounds(self, &r),
         _ => {
-            let _i = check_expr(self, iterable)
-            self.engine.fresh_var()
+            let it_ty = check_expr(self, fs.iterable)
+            resolve_for_protocol(self, fs, it_ty)
         },
+    }
+}
+
+// The iterator protocol (M11): `iter(&Iterable) -> State`, then
+// `next(&State) -> Option(T)`; the loop variable is `T`. The `iter`
+// pick records on the BODY block's node (the iterable expr may already
+// carry its own operator - an indexing pick, say), the `next` pick on
+// the FOR node - the two hooks `lower_for_iter` reads. When the
+// protocol does not resolve, the loop variable stays a fresh var and
+// the `for` refuses at lowering (the state of the world before this).
+fn protocol_pick(self: &Checker, name: String, arg: Ty, span: SourceSpan) OverloadPick? {
+    let args = list(1, self.allocator)
+    args.push(arg)
+    let pick = operator_pick(self, name, &args, span)
+    args.deinit()
+    return pick
+}
+
+fn resolve_for_protocol(self: &Checker, fs: &ForStmt, it_ty: Ty) Ty {
+    let z = self.engine.resolve(it_ty)
+    let recv = z match {
+        Ref(_) => z,
+        _ => self.engine.mk_ref(z),
+    }
+    let ip = protocol_pick(self, "iter", recv, expr_span(fs.iterable))
+    if ip.is_none() { ip = protocol_pick(self, "iter", z, expr_span(fs.iterable)) }
+    if ip.is_none() { return self.engine.fresh_var() }
+    let p = ip.unwrap()
+    self.results.record_operator(node_id_of(fs.body.span), ResolvedOperator {
+        function_id = p.id, negate_result = false,
+        cmp_derived_op = null, is_ref_form = false, spec_id = null,
+    })
+    note_pending(self, fs.body.span, true, &p)
+
+    let state = self.engine.resolve(p.ret)
+    // A self-iterator's `iter` returns `&State`; `next(&State)` then
+    // takes it AS-IS - so try the wrapped shape first, the state
+    // unchanged second (reference parity).
+    let np = protocol_pick(self, "next", self.engine.mk_ref(state), fs.span)
+    if np.is_none() { np = protocol_pick(self, "next", state, fs.span) }
+    if np.is_none() { return self.engine.fresh_var() }
+    let n = np.unwrap()
+    self.results.record_operator(node_id_of(fs.span), ResolvedOperator {
+        function_id = n.id, negate_result = false,
+        cmp_derived_op = null, is_ref_form = false, spec_id = null,
+    })
+    note_pending(self, fs.span, true, &n)
+
+    let inner = option_inner(self, &self.engine.resolve(n.ret))
+    return inner match {
+        Some(t) => t,
+        None => self.engine.fresh_var(),
     }
 }
 
@@ -2866,12 +3027,12 @@ fn check_binary(self: &Checker, bin: &BinaryExpr) Ty {
     let lhs = check_expr(self, bin.lhs)
     let rhs = check_expr(self, bin.rhs)
     return bin.op match {
-        Eq => compare_result(self, lhs, rhs, bin.span),
-        Ne => compare_result(self, lhs, rhs, bin.span),
-        Lt => compare_result(self, lhs, rhs, bin.span),
-        Gt => compare_result(self, lhs, rhs, bin.span),
-        Le => compare_result(self, lhs, rhs, bin.span),
-        Ge => compare_result(self, lhs, rhs, bin.span),
+        Eq => comparison(self, bin, lhs, rhs),
+        Ne => comparison(self, bin, lhs, rhs),
+        Lt => comparison(self, bin, lhs, rhs),
+        Gt => comparison(self, bin, lhs, rhs),
+        Le => comparison(self, bin, lhs, rhs),
+        Ge => comparison(self, bin, lhs, rhs),
         And => logical_result(self, lhs, rhs, bin.span),
         Or => logical_result(self, lhs, rhs, bin.span),
         // Shifts land on the arith rule too: the count unifies with the
@@ -2884,6 +3045,110 @@ fn check_binary(self: &Checker, bin: &BinaryExpr) Ty {
 fn compare_result(self: &Checker, lhs: Ty, rhs: Ty, span: SourceSpan) Ty {
     unify_either(self, lhs, rhs, span)
     return Ty.Prim(PrimitiveKind.Bool)
+}
+
+// A comparison over nominal operands dispatches to a user operator
+// function (M11), mirroring the reference's ladder:
+//
+//   1. primitives (and unresolved operands) keep the builtin compare -
+//      the hardware path, and the recursion-breaker for `op_cmp(i32,i32)`;
+//   2. `==`/`!=` on a payload-less enum is a builtin tag compare
+//      (structural equality for free - lowering detects the shape);
+//   3. the direct operator fn (`op_eq`, `op_lt`, ...);
+//   4. derived: `!=` as negated `op_eq` (and `==` as negated `op_ne`),
+//      then any comparison from `op_cmp` against Ord's fixed tags.
+//
+// The winner lands on the node as a `ResolvedOperator` - the seam
+// indexing already uses - so lowering emits a call, not FIR arithmetic
+// over addresses. Value-form operands only: every in-tree operator fn
+// takes its operands by value.
+fn comparison(self: &Checker, bin: &BinaryExpr, lhs: Ty, rhs: Ty) Ty {
+    let l = self.engine.resolve(lhs)
+    let r = self.engine.resolve(rhs)
+    let l_nom = l match { Nominal(_) => true, _ => false }
+    let r_nom = r match { Nominal(_) => true, _ => false }
+    if !l_nom or !r_nom { return compare_result(self, lhs, rhs, bin.span) }
+
+    let is_eq_shape = bin.op match { Eq => true, Ne => true, _ => false }
+    if is_eq_shape and payloadless_enum(self, &l) and payloadless_enum(self, &r) {
+        return compare_result(self, lhs, rhs, bin.span)
+    }
+
+    let direct = operator_pick_2(self, direct_op_name(bin.op), l, r, bin.span)
+    if direct.is_some() {
+        let p = direct.unwrap()
+        self.results.record_operator(node_id_of(bin.span), ResolvedOperator {
+            function_id = p.id, negate_result = false,
+            cmp_derived_op = null, is_ref_form = false, spec_id = null,
+        })
+        note_pending(self, bin.span, true, &p)
+        return p.ret
+    }
+
+    if is_eq_shape {
+        let opposite = bin.op match { Eq => "op_ne", _ => "op_eq" }
+        let neg = operator_pick_2(self, opposite, l, r, bin.span)
+        if neg.is_some() {
+            let p = neg.unwrap()
+            self.results.record_operator(node_id_of(bin.span), ResolvedOperator {
+                function_id = p.id, negate_result = true,
+                cmp_derived_op = null, is_ref_form = false, spec_id = null,
+            })
+            note_pending(self, bin.span, true, &p)
+            return p.ret
+        }
+    }
+
+    let cmp = operator_pick_2(self, "op_cmp", l, r, bin.span)
+    if cmp.is_some() {
+        let p = cmp.unwrap()
+        self.results.record_operator(node_id_of(bin.span), ResolvedOperator {
+            function_id = p.id, negate_result = false,
+            cmp_derived_op = Some(bod_of(bin.op)), is_ref_form = false, spec_id = null,
+        })
+        note_pending(self, bin.span, true, &p)
+        return Ty.Prim(PrimitiveKind.Bool)
+    }
+
+    return compare_result(self, lhs, rhs, bin.span)
+}
+
+fn direct_op_name(op: BinaryOp) String {
+    return op match {
+        Eq => "op_eq",
+        Ne => "op_ne",
+        Lt => "op_lt",
+        Gt => "op_gt",
+        Le => "op_le",
+        _ => "op_ge",
+    }
+}
+
+fn bod_of(op: BinaryOp) BinaryOpDerived {
+    return op match {
+        Eq => BinaryOpDerived.BodEq,
+        Ne => BinaryOpDerived.BodNe,
+        Lt => BinaryOpDerived.BodLt,
+        Gt => BinaryOpDerived.BodGt,
+        Le => BinaryOpDerived.BodLe,
+        _ => BinaryOpDerived.BodGe,
+    }
+}
+
+fn operator_pick_2(self: &Checker, name: String, l: Ty, r: Ty, span: SourceSpan) OverloadPick? {
+    let args = list(2, self.allocator)
+    args.push(l)
+    args.push(r)
+    let pick = operator_pick(self, name, &args, span)
+    args.deinit()
+    return pick
+}
+
+fn payloadless_enum(self: &Checker, ty: &Ty) bool {
+    return ty.* match {
+        Nominal(nr) => enum_payloadless(&self.nominals, nr.id),
+        _ => false,
+    }
 }
 
 // `a op b` imposes no direction, but the coercion ladder has one: a `char`
@@ -2992,7 +3257,7 @@ fn resolve_direct_call(self: &Checker, call: &CallExpr, ide: &IdentifierExpr, ar
         if pick.is_none() and closure_arg_hint(self, arg_tys, call.span) {
             return Some(self.engine.fresh_var())
         }
-        return Some(commit_pick(self, pick, ide.name, arg_tys.len, call.span))
+        return Some(commit_pick(self, pick, ide.name, arg_tys.len, call.span, 0usize))
     }
     let callee_ty = check_expr(self, call.callee)
     return Some(indirect_call(self, callee_ty, arg_tys, call.span))
@@ -3047,7 +3312,7 @@ fn resolve_method_call(self: &Checker, call: &CallExpr, ma: &MemberAccessExpr, a
     if pick.is_none() and closure_arg_hint(self, arg_tys, call.span) {
         return Some(self.engine.fresh_var())
     }
-    return Some(commit_pick(self, pick, ma.member, arg_tys.len, call.span))
+    return Some(commit_pick(self, pick, ma.member, arg_tys.len, call.span, 1usize))
 }
 
 // One overload-resolution attempt with `recv` prepended as the first
@@ -3130,12 +3395,16 @@ fn note_pending(self: &Checker, span: SourceSpan, is_operator: bool, pick: &Over
 }
 
 // Record the winner on the call node and return its instantiated return
-// type; report when no overload matched.
-fn commit_pick(self: &Checker, pick: OverloadPick?, name: String, n_args: usize, span: SourceSpan) Ty {
+// type; report when no overload matched. `recv_extra` is 1 when a UFCS
+// receiver was prepended to the argument list (it counts toward the
+// winner's parameter arity but not toward `n_args`, which feeds the
+// user-facing diagnostic).
+fn commit_pick(self: &Checker, pick: OverloadPick?, name: String, n_args: usize, span: SourceSpan, recv_extra: usize) Ty {
     return pick match {
         Some(p) => {
             self.results.record_target(node_id_of(span), ResolvedTarget.RtFunction(p.id))
             note_pending(self, span, false, &p)
+            materialize_default_args(self, &p, n_args + recv_extra, span)
             p.ret
         },
         None => {
@@ -3143,6 +3412,63 @@ fn commit_pick(self: &Checker, pick: OverloadPick?, name: String, n_args: usize,
                 $"no matching overload for `{name}` with {n_args} argument(s)")
             self.engine.fresh_var()
         },
+    }
+}
+
+// M11: a call that supplied fewer arguments than the winner's arity left
+// the rest to defaults. The reference clones each omitted default
+// expression and infers it at the call site; node ids here are span
+// fingerprints, so a clone would collide with its source - instead the
+// declaration's own default exprs are checked in place (shallow copies
+// sharing the AST's children), unified against the winner's instantiated
+// parameter types, and the list is recorded on the call node for lowering
+// to append after the explicit arguments.
+//
+// Scope note: identifiers inside a default resolve in the CALLER's
+// context (reference parity). The in-tree corpus is literals, `null`,
+// and nullary calls, where caller and callee scope agree.
+//
+// Bail-outs (call lowers short and refuses, exactly the pre-M11 state):
+// an omitted param with no default (the variadic tail), a defaulted
+// param whose instantiated type still carries a free var (the shared
+// decl nodes must pin ONE type - a `$T`-typed default would record a
+// different type per call site), and materialization deeper than
+// MAX_DEFAULT_DEPTH (a default whose own call omits defaults recurses;
+// a self-referential default would never terminate).
+const MAX_DEFAULT_DEPTH: usize = 16
+
+fn materialize_default_args(self: &Checker, p: &OverloadPick, supplied: usize, span: SourceSpan) {
+    if supplied >= p.params.len { return }
+    if self.default_depth >= MAX_DEFAULT_DEPTH { return }
+    let dp = self.fn_defaults.get_ref(p.id)
+    if dp.is_none() { return }
+    let decl_params = &dp.unwrap().params
+    if decl_params.len != p.params.len { return }
+
+    self.default_depth = self.default_depth + 1
+    let exprs: List(Expr) = list(p.params.len - supplied, self.allocator)
+    let ok = true
+    for i in supplied..decl_params.len {
+        if !ok { continue }
+        if ty_has_free_var(self, self.engine.resolve(p.params[i])) {
+            ok = false
+            continue
+        }
+        decl_params[i].default_value match {
+            Some(e) => {
+                const t = check_expr(self, &e)
+                unify_expected(self, t, p.params[i], E_TYPE_MISMATCH, span)
+                exprs.push(e)
+            },
+            None => ok = false,
+        }
+    }
+    self.default_depth = self.default_depth - 1
+
+    if ok {
+        self.results.record_default_args(node_id_of(span), exprs)
+    } else {
+        exprs.deinit()
     }
 }
 
@@ -3267,6 +3593,9 @@ fn indirect_call(self: &Checker, callee_ty: Ty, arg_tys: &List(Ty), span: Source
 type OverloadPick = struct {
     id: u32
     ret: Ty
+    // The winner's instantiated parameter types (engine-owned storage),
+    // for unifying materialized default arguments (M11).
+    params: List(Ty)
     inst: PickInst?
 }
 
@@ -3364,7 +3693,7 @@ fn resolve_overload(self: &Checker, candidates: &List(FunctionScheme), arg_tys: 
     } else {
         binds.deinit()
     }
-    return Some(OverloadPick { id = w.id, ret = f.ret.*, inst = inst })
+    return Some(OverloadPick { id = w.id, ret = f.ret.*, params = f.params, inst = inst })
 }
 
 // Structural specificity of a candidate's declared parameters: the count
@@ -3774,6 +4103,22 @@ fn struct_field_lookup(self: &Checker, recv: &Ty, name: String) Ty? {
     }
     if nr_opt.is_none() { return null }
     let nr = nr_opt.unwrap()
+    // A `Type(T)` value IS a TypeInfo (minimal RTTI) - field access
+    // reads TypeInfo's definition, so `ty.size` types as usize.
+    let is_type_handle = self.nominals.get(nr.id).* match {
+        NomStruct(sd0) => sd0.fqn == FQN_TYPE,
+        _ => false,
+    }
+    if is_type_handle {
+        let ti = self.nominals.by_fqn.get(FQN_TYPE_INFO)
+        ti match {
+            Some(tid) => {
+                let no_args: List(Ty) = list(0, self.allocator)
+                nr = NominalRef { id = tid, args = no_args }
+            },
+            None => {},
+        }
+    }
     let def_node = self.nominals.get(nr.id)
     let sd_opt = def_node.* match {
         NomStruct(s) => Some(s),
@@ -3900,6 +4245,50 @@ fn zonk_closures(self: &Checker) {
     self.closures = zc
 }
 
+// Drain the parked overloaded-name-as-value sites of the scope that
+// just settled (ticket 019 §4): a slot whose var pinned to a concrete
+// Func shape picks the overload those parameter types select, records
+// the winner on the node, and unifies the return. A slot nothing
+// pinned stays a fresh var - its consumer refuses at lowering.
+fn resolve_fn_name_values(self: &Checker) {
+    let pend = self.pending_fn_names
+    self.pending_fn_names = list(0, self.allocator)
+    for i in 0..pend.len {
+        let pn = &pend[i]
+        let z = self.engine.resolve(pn.ty)
+        let ft = z match {
+            Func(f) => Some(f),
+            _ => null,
+        }
+        if ft.is_none() { continue }
+        let f = ft.unwrap()
+
+        let saved = self.current_module
+        self.current_module = pn.module
+        let vis = fn_visibility(self)
+        let cands = self.functions.lookup(pn.name, &vis) match {
+            FnLookFound(c) => Some(c),
+            _ => null,
+        }
+        if cands.is_some() {
+            let cl = cands.unwrap()
+            let pick = resolve_overload(self, &cl, &f.params, pn.span)
+            cl.deinit()
+            pick match {
+                Some(w) => {
+                    self.results.record_target(node_id_of(pn.span), ResolvedTarget.RtFunction(w.id))
+                    note_pending(self, pn.span, false, &w)
+                    const o = self.engine.unify(f.ret.*, w.ret)
+                    report_unify(self, &o, E_TYPE_MISMATCH, pn.span)
+                },
+                None => {},
+            }
+        }
+        self.current_module = saved
+    }
+    pend.deinit()
+}
+
 pub fn check_all(self: &Checker, modules: &List(Module), paths: &List(String)) TypeCheckResult {
     // Wire the import graph before any name resolution runs.
     build_visibility(self, modules, paths)
@@ -3926,6 +4315,7 @@ pub fn check_all(self: &Checker, modules: &List(Module), paths: &List(String)) T
     // generic pick the body pass recorded, transitively - a
     // specialization's body enqueues its own picks.
     resolve_anon_literals(self)
+    resolve_fn_name_values(self)
     drain_pending_specs(self)
     // Phase 3.6: any unsuffixed literal nothing ever pinned is E2001.
     validate_literals(self)
@@ -3950,6 +4340,7 @@ pub fn check_all(self: &Checker, modules: &List(Module), paths: &List(String)) T
     let out_specializations = self.specs.specs
     let out_desugars = self.results.desugars
     let out_synth_strings = self.results.synth_strings
+    let out_default_args = self.results.default_args
     let out_nominals = self.nominals
     let out_functions = self.functions
     let out_lambdas = self.results.lambdas
@@ -3971,6 +4362,7 @@ pub fn check_all(self: &Checker, modules: &List(Module), paths: &List(String)) T
         specializations = out_specializations,
         desugars = out_desugars,
         synth_strings = out_synth_strings,
+        default_args = out_default_args,
         nominals = out_nominals,
         functions = out_functions,
         lambdas = out_lambdas,

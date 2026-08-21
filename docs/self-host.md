@@ -52,11 +52,11 @@ cheaper than implementing it.
 | CST parsing | ✅ | round-trips every in-tree source byte-identical via `flang_fmt` |
 | AST projection | ✅ | `flang_parser.projector` |
 | Name resolution + imports | ✅ | project-wide; type names resolve program-wide (import-strict later) |
-| Type inference (HM) | ⚠️ | 0 errors self-checking compiler + stdlib (98 modules) *including every instantiated generic body* (M10); 1 expression form (`a?.b`) is still unvisited and rejection power lags the reference — see the type-checking section below |
-| AST → FIR lowering | ⚠️ | the subset below; everything outside refuses, never miscompiles |
+| Type inference (HM) | ⚠️ | 0 errors self-checking compiler + stdlib (99 modules) *including every instantiated generic body* (M10); 1 expression form (`a?.b`) is still unvisited and rejection power lags the reference — see the type-checking section below |
+| AST → FIR lowering | ✅* | M11 landed 2026-08-21: everything `main`'s graph needs lowers — 3550 functions emit, 15 refusals remain, all off the entry path (SIMD-intrinsic csv internals, `read_all_inplace`, `readline`); refusal (never miscompile) still guards those |
 | C backend (FIR → C99 → exe) | ✅ | for all FIR the lowering emits; links stdlib C runtime sidecars |
-| Full self-build | ❌ | every lowered function compiles (840 C functions after RFC-014 lambdas + fn values/indirect calls landed, 2026-08-20); `main` still drops transitively — defaulted-argument calls (M11) and the `__flang_strlen` runtime shim are the frontier |
-| Stage-2 = stage-3 fixpoint | ❌ | blocked on full lowering coverage |
+| Full self-build | ✅ | **STAGE-1 EXISTS** (2026-08-21): the self-build links and the resulting compiler builds and runs single-file programs correctly (string matching, slicing, iterators, heap allocation all verified end-to-end). `-v` prints the per-function skip report with reasons |
+| Stage-2 = stage-3 fixpoint | ❌ | stage-1 SEGFAULTS on the full multi-module project build (it handles single files) — a scale-triggered stage-1 miscompile is the new frontier; find it, then the byte-identical fixpoint |
 
 ## Type checking
 
@@ -78,9 +78,13 @@ not mean it *rejects* what the reference rejects. Two axes:
 | Assignment, address-of, deref, casts, tuples, ranges, indexing | ✅ | `as` casts: 845/75 | index operator pick recorded with `is_ref_form`. M10: a BARE numeric literal cast operand takes the target type (`0xFFFF_FFFF as u64` is a u64 constant); tuple projection `t.0` types as the element |
 | Unary ops (`-x`, `!x`, `~x`) | ✅ | `!` 191/28, `~` 35/12, neg ~5 | M7: `!` unifies with bool; `-`/`~` type as their operand. Numeric-ness of `-`/`~` not yet *enforced* (rejection-power gap); no `op_neg`/`op_not`/`op_bnot` dispatch to user types (M11, with binary — zero in-tree users today) |
 | Lambdas / closures (RFC-014) | ✅ | 23/5 | landed 2026-08-20, no-clone: `check_lambda` checks the literal's body in place (captured names resolve through their outer scopes; no `self.x` rewrite). Unannotated params mint fresh vars pinned by context — including *through* a `$F` slot: `process_pending` admits signatures whose vars sit inside `Func` types, the instantiation's body re-check pins them at the indirect call, and the spec re-keys under its settled signature (`rekey`; twins that settle identical dedup at emission by symbol). Non-capturing → `LambdaInfo` (overlay-scoped: one record per instantiation) typed as a bare `fn`; capturing → synthesized env-struct nominal + entry in the global `closures` dispatch table, typed as the anonymous nominal. E2111 (closure into bare-fn slot, as an overload-failure hint), E2112 (assign to capture), E2113 (transitive nested captures) all report |
-| Array literals `[a, b]`, `[v; N]` | ⚠️ | ~52/9 | M10: checked — elements unify, the node types as `[T; len]`, declared `u8[N]` lengths evaluate (previously 0!). A non-literal repeat count (`[0u8; PAGE_SIZE]`) stays an unconstrained var and the enclosing `let` refuses at lowering |
+| Array literals `[a, b]`, `[v; N]` | ⚠️ | ~52/9 | M10: checked — elements unify, the node types as `[T; len]`, declared `u8[N]` lengths evaluate (previously 0!). A non-literal repeat count (`[0u8; PAGE_SIZE]`) stays an unconstrained var and the enclosing `let` refuses at lowering. M11: `.{ … } as T` pins the anonymous literal to the cast target (previously the var never settled); bare STATEMENT arm bodies (`X => return v`) project as single-statement blocks (previously `Expr.Error`, silently unlowerable) |
 | Interpolated strings `$"…"` | ✅ | 60/15 | M9: the reference's StringBuilder desugar, synthesized as real AST under collision-free synthetic node ids and checked through ordinary overload resolution (`append` picks recorded per part; format specs route to the spec-taking overload). The block is stored in `result.desugars`; lowering replays it. Stdlib- and import-dependent by design (`import std.string_builder`) |
 | `a?` (op_try), `a ?? b` | ✅ | `?` 28/13 · `??` 5/4 | M8: `?` resolves `op_try`, requires `TryResult(T, R)`, unifies `R` with the enclosing return (E2090/E2092); `??` has the reference's two built-in Option shapes (unwrap and chain) |
+| Comparison operators over nominals | ✅ | String `==` everywhere | M11: the reference's ladder — primitives builtin, payload-less enum `==`/`!=` as tag compare, direct `op_eq`/`op_lt`/…, `!=` as negated `op_eq` (and vice versa), the rest derived from `op_cmp` — recorded as `ResolvedOperator` on the binary node. String literal PATTERNS record an `op_eq` pick on the pattern node the same way |
+| For-over-iterators (protocol) | ✅ | 25/19 | M11: `iter(&Iterable) → State` then `next(&State) → Option(T)` resolved like operators (self-iterators returning `&State` probe the unwrapped shapes second, reference parity); the `iter` pick records on the body-block node, `next` on the for node; the loop var is `T` |
+| Overloaded fn names as values | ✅ | `owned(v, deinit)`, `.map(deinit)` | M11, ticket 019 §4: a multi-candidate name in value position parks a fresh var; once context pins its Func shape, `resolve_fn_name_values` (drained per body scope, before the spec drain) picks the overload by those parameter types and records `RtFunction`/`RtSpecialized` |
+| Reified types (`Type(T)`, `size_of`) | ✅ (minimal) | 31 + 8 + 26 sites | M11: `Type(T)` values ARE TypeInfo — `struct_field_lookup` redirects `Type` field access to TypeInfo's definition, so `ty.size` types as usize instead of a fresh var |
 | `a?.b` | ❌ | 3/3 — rewritable-away | unvisited subtree |
 | Specialization (eager monomorphization of generic fns) | ✅ | everywhere (`List`/`Dict`) | M10, **no AST clone**: node ids are span fingerprints, so instantiations of one template share every node id — each instantiation re-checks the ORIGINAL body with `$T` names bound to concrete types, recording into a private `InferenceResults` overlay (`Specialization.overlay`). Committed generic picks (calls, operators, `op_try`, indexing) become `PendingSpec`s; each body scope drains its own pendings after inference settles (register-before-check breaks self-recursion; depth cap 64 diagnoses runaway chains; un-inferable type args are E2001 at the call site). Function lookups during a re-check see the template module's imports UNIONED with the caller chain's (`fn_visibility`) — the deliberate loaded-context rule that lets `hash()` resolve for `Dict`; nominal/variant lookups do NOT widen (a caller's `Decl.Type(...)` variant must not capture `Type(T)`). Generic template bodies are otherwise **never validated** — errors surface per instantiation |
 | Templates (`#interface`, `#derive`, …) expanded natively | ❌ | every `.generated.f` sidecar | relies on sidecars from a reference-compiler run |
@@ -118,17 +122,18 @@ current-state summary.
 | Free functions, scalar params/returns | ✅ | everywhere | |
 | Aggregate params/returns (structs, enums, tuples, arrays, String, slices) | ✅ | everywhere | by-pointer, callee copies; returns via trailing sret buffer |
 | `&T?` / niche `Option(&T)` params and returns | ✅ | everywhere (allocators) | classified scalar `ptr` |
-| Foreign (`#foreign`) scalar signatures | ✅ | everywhere | variadic declared but not callable |
+| Foreign (`#foreign`) scalar signatures | ✅ | everywhere | variadic declared but not callable. M11: `never` returns declare as void (`exit`); the pointer-niche `&T?` is a spellable nullable pointer (`malloc`), in both the extern and the symbol-table gate |
 | Foreign aggregate signatures | ❌ | 0 in `main`'s graph | byte-buffer aggregates have no C ABI spelling for externs |
 | Generic templates skipped (never lowered) | ✅ | by design | `declares_generic` — correct end-state behavior, templates have no single layout |
 | Specialized instantiations (from `result.specializations`) | ✅ | everywhere (`List`/`Dict`/iterators) | M10: `lower_specializations` re-lowers the template's declaration once per concrete signature, reading node types/targets/operators through the instantiation's overlay (`LowerCtx.overlay`, consulted before the program tables). Symbols mangle from the concrete parameter types plus a `__ret_` token (return-only-polymorphic templates differ in nothing else; the suffix also keeps specs distinct from same-parameter monomorphic overloads). Call sites route through `RtSpecialized`; operator sites through `ResolvedOperator.spec_id`. 457 specializations emit in the self-build |
-| Defaulted params at call sites | ❌ | ~500 decl sites; omitted at most calls | needs default-expr materialization from callee scope |
+| Defaulted params at call sites | ✅ | ~500 decl sites | M11: `materialize_default_args` — the checker checks the callee declaration's own default exprs at the call site (shallow shared AST, no clone; node ids are span fingerprints), unifies them against the winner's instantiated params, and records the omitted tail in `results.default_args` keyed by the call node; lowering appends them after the explicit args. Bails (call refuses) on `$T`-typed defaults, the variadic tail, and depth > 16 |
 | Named arguments | ❌ | **2/1 — rewritable-away** | checker leaves the call unresolved |
 | Variadic calls | ❌ | declarations only (printf family is fixed-arity overloads) — likely avoidable | needs per-argument types at the call site |
 | Function values / indirect calls / fn-typed fields | ✅ | fn-typed fields in checker/backend dispatch | landed with lambdas: a function NAME in value position decays to `Operand.FuncRef`; a fn-typed callee value emits `CallIndirect` (params/sret mirror direct calls); a closure-typed callee (local, param, or struct field — the checker records the callee member-access node's type for the classification) dispatches directly to its `op_call` symbol with the value's address prepended |
 | Lambdas / closures | ✅ | 23/5 | literal sites enqueue `PendingLambda` (with the active overlay) and emit after the main walk — non-capturing as a plain function, capturing as an `op_call` whose leading param is the env pointer and whose captured names bind to `gep`s into it (no copy; captures are read-only). The literal itself is a `FuncRef` or a stack-built env struct |
-| Global `const` declarations | ❌ | 101/17 | `read_binding` covers locals only |
+| Global `const` declarations | ✅ | 101/17 | M11: each const becomes an aligned zeroed byte global plus a synthesized `__finit_*` function lowering its initializer (so vtables of fn pointers and cross-global addresses need no static-initializer support); `main` calls every SURVIVING init first, wired AFTER the drop pass, which also poisons any reader of a const whose init died (`reads … whose initializer was dropped`) — absent, never silently zero. Reads resolve through `RtConst(fqn)` targets the checker records on both the decl and every read |
 | `test` blocks (self-host `flang test`) | ❌ | dev workflow, not `main`'s graph | bootstrap CLI has no `test` subcommand |
+| UFCS receiver adaptation | ✅ | everywhere | M11: the receiver is adapted to the winner's first-parameter shape by MEMORY type (binding/field declared types — node types are rewritten by the checker's adaptation, so they cannot arbitrate): value→`&prim` passes the place's address, `&prim`→value loads through, same-representation prims (`usize` vs `u64` — declaration order arbitrates equal picks) interchange. Pushing the raw value against an adapted pick was a silent scalar miscompile |
 | Template directives (`#enum_utils`, `#derive`, `#interface`, …) | ⚠️ | every sidecar | not expanded; checked-in `.generated.f` sidecars stand in |
 | `#if` compile-time conditionals | ✅ | 27/10 | statement-level splices the active branch's statements at `lower_stmt`; decl-level is already flattened before lowering. The `comptime.f` evaluator itself joins the M11 emission frontier (`String ==` dispatch), like most of the checker |
 
@@ -142,7 +147,7 @@ current-state summary.
 | `if` / `else` (stmt + expr) | ✅ | everywhere | block-parameter joins |
 | `while`, `loop`, `break`, `continue` | ✅ | everywhere | |
 | `for` over integer ranges | ✅ | everywhere | induction var as block param |
-| `for` over iterators (iterator protocol) | ❌ | 25/19 | M10 supplies the monomorphized `next()`; the checker-side protocol resolution is what remains (loop vars currently type as fresh vars — see the `symbol_table.f` annotation workaround) |
+| `for` over iterators (iterator protocol) | ✅ | 25/19 | M11: `iter` called once, `next(&state)` per iteration with the Option's discriminant (or niche pointer) as the loop test; the payload copies into the loop variable's own slot per iteration (value semantics). Self-iterator states (`iter → &State`) pass unchanged; verified end-to-end (`for x in xs` sums correctly) |
 | `defer` | ✅ | 190/20 | M9: per-function schedule + per-scope marks (the reference's model). Fires LIFO on scope exit; `return` / `break` / `continue` / `?` emit down to their target depth without popping; `return` evaluates its value first (spec 4.1). A block's trailing aggregate value is copied out before its own defers fire. Escapes from inside a deferred expression (`defer { return }`, `?` in defer - E2091) refuse |
 
 ## Lowering — expressions
@@ -156,7 +161,7 @@ current-state summary.
 | String interpolation `$"…"` | ✅ | 60/15 | M9: lowering replays the checker-recorded desugar block (`result.desugars`) - ctor at full arity, appends, deferred `deinit`, `to_string`. M10 unblocked the builder's generic internals; remaining refusals in the chain are M11 items (defaulted-arg calls inside the stdlib) |
 | Arithmetic / bitwise / comparison / short-circuit on primitives | ✅ | everywhere | |
 | Unary ops | ✅ | `!` 191/28 | M7: operands are checked now, so the width/float reads are real (`-x` on f64 emits `fneg`) |
-| Operators dispatching to user `op_*` fns (aggregate operands) | ❌ | String `==` everywhere | checker records `ResolvedOperator` only on index nodes today |
+| Operators dispatching to user `op_*` fns (aggregate operands) | ✅ (comparisons) | String `==` everywhere | M11: comparison dispatch lands (`lower_operator_binary`) with negation and `op_cmp`-derivation — the Ord tag test resolves Less/Equal/Greater INDICES from the definition, because this lowering stores declaration indices as tags (explicit variant values like `Less = -1` are not honored — docs/known-issues.md). Payload-less enum `==`/`!=` is a builtin tag compare. ARITHMETIC `op_add`-style dispatch stays unimplemented (zero in-tree users) |
 | Struct literals (concrete, incl. explicit generic args) | ✅ | everywhere | `Pair { … }` without args is E2019 |
 | Anonymous `.{ … }` literals | ✅ | **192/50** | typed via nominal coercion; M10 adds the deferred field pass (`resolve_anon_literals`) so initializers actually unify against the nominal's field types — mismatches report, unsuffixed numeric fields pin |
 | Member access (nested paths, place + value) | ✅ | everywhere | generic fields load at substituted widths |
@@ -165,15 +170,15 @@ current-state summary.
 | Enum variant construction (`Some(x)`, `Color.Red`, `None`) | ✅ | ~1550/60+ | M7: tagged form builds tag-then-payload into a fresh slot; niche `Option(&T)` is a retype (`None` = null ptr, `Some(p)` = its payload ptr). Multi-payload construction refuses (2 sites, matching the pattern side) |
 | Indexing: `op_index_ref` / `op_index` / built-in | ✅ | everywhere | |
 | `op_set_index` (value-form indexed assignment) | ❌ | **0 sites in `main`'s graph** — all 172 `x[i] = v` sites are places (arrays/slices via the built-in path, `List` via `op_index_ref`); dict sugar `d[k] = v` is unused (`.set(...)` throughout) | keep refused until a use appears |
-| Range slicing `xs[a..b]` on built-in bases | ❌ | 105/21 | needs bounds-clamped Slice construction |
+| Range slicing `xs[a..b]` on built-in bases | ✅ | 105/21 | M11: the checker routes builtin-base range indexing through the stdlib's clamping `op_index($T[], Range(usize))` overloads (String already went via user_index), so lowering is an ordinary operator call; `a..b` in value position builds the `Range(T)` struct. PARTIAL ranges (`a..`, `..b`, `..`) complete against the receiver in `lower_index_arg`: start 0, end the receiver's length |
 | `match` | ✅ | everywhere | see patterns below |
-| Casts `x as T` | ❌ | 845/75 | conversion matrix unwritten (FIR has the instructions) |
-| Array literals `[a, b]` | ❌ | ~52/9 | element layout + slot construction |
-| Tuple literals `(a, b)` | ❌ | 9/6 — small; rewritable to structs if cheaper | |
+| Casts `x as T` | ✅ | 845/75 | M11: trunc / sign-directed extension (source signedness picks zext/sext), fp↔int by the non-float side's sign, fp widths, ptr↔int, ptr↔ptr no-op, repr-compatible aggregate retypes, `[T; N] as T[]` decay (builds the `{ptr,len}` view), tagged-enum ↔ int through the I32 discriminant. `x as bool` refuses (needs C's `!= 0`, zero sites). The backend spells i64::MIN as `(-…807LL - 1)` |
+| Array literals `[a, b]`, `[v; N]` | ✅ | ~52/9 | M11: stride-addressed element stores into a slot; the zero-repeat form is one memset (non-zero repeats unroll, refused above 64 — no in-tree user); a decay-coerced literal wraps the fresh array in a Slice view. `arr.len` is the constant length; `arr.ptr` the array's address |
+| Tuple literals `(a, b)` | ✅ | 9/6 (+ std.conv return tuples) | M11: element stores at the tuple layout's offsets; `t.0` projection geps through `member_field`; the empty tuple is unit. A unit `()` variant payload (`Ok(())`) stores and binds nothing |
 | `a?` (op_try early return) | ✅ | 28/13 | M8 machinery + M10 specialization: a generic `op_try` now instantiates and the caller lowers against its specialization (test: "postfix ? through a generic op_try lowers via its specialization") |
 | `a ?? b` (coalesce) | ✅ | 5/4 | M8: built-in Option branch, short-circuit right side; niche and tagged, unwrap and chain forms |
 | `a?.b` (null propagation) | ❌ | **3/3 — rewritable-away** | |
-| Bare ranges `a..b` as values | ❌ | only as index/slice args | no value representation outside `for` |
+| Bare ranges `a..b` as values | ✅ | index/slice args | M11 `lower_range_value`; bare PARTIAL ranges outside index position still refuse (no bound to default from) |
 
 ## Lowering — match patterns
 
@@ -183,7 +188,7 @@ current-state summary.
 | Int / bool / char / byte / float / `null` literals | ✅ | everywhere | float patterns compare with ordered fcmp (M9); string patterns refuse — comparing one is a `String ==` call, which operator dispatch does not record yet |
 | Ranges `lo..hi` | ✅ | used | |
 | Enum variants, single payload | ✅ | everywhere | tagged + niche |
-| Enum variants, multi payload | ❌ | **2/2 — rewritable-away** (or implement with per-payload offsets) | |
+| Enum variants, multi payload | ✅ | `OptArg(c, val)` in getopt + 2 | M11: `variant_payload_offsets` (shared payload offset + the variant's struct-like internal layout) drives both construction and pattern binding |
 | Or-patterns (non-binding) | ✅ | used | binding alternatives refuse |
 | Struct / tuple destructuring patterns | ❌ | **0 sites — not needed** | keep refused until a use appears |
 | Guards | ✅ | used | |
@@ -196,14 +201,13 @@ need entirely:
 
 - struct/tuple destructuring patterns (0), `op_set_index` (0 — every
   indexed write in the sources is a place; dict sugar unused),
-  named arguments (2), multi-payload variant patterns (2),
-  `?.` null propagation (3), `??` coalesce (5), tuple literals (9),
+  named arguments (2), `?.` null propagation (3),
   variadic *calls* (0 — declarations only), foreign aggregate
-  signatures (0).
+  signatures (0), `x as bool` (0).
 
-`??` and `?` stay on the roadmap anyway because they are wanted
-language features (tickets 009/010), not because self-hosting needs
-them at today's counts.
+The 15 remaining refusals (2026-08-21, all off `main`'s path): the
+csv SIMD internals (`v128_*` intrinsic calls), `read_all_inplace`,
+`readline`'s `read_key`, and their transitive callers.
 
 ## Proposed milestone order (toward `main` lowering)
 
@@ -260,7 +264,7 @@ docs/known-issues.md for the live instance of that failure).
    specializations) at M10's landing, all of which compile — `main`
    still drops on M11 features (defaulted-argument calls) plus the
    `__flang_strlen` shim.
-5. **RFC-014 lambdas + fn values** (landed 2026-08-20): `check_lambda`
+5. ~~**RFC-014 lambdas + fn values**~~ ✅ (landed 2026-08-20): `check_lambda`
    with in-place bodies (no clone), capture frames, closure-nominal
    synthesis + a global dispatch table, E2111/E2112/E2113; lowering
    emits enqueued lambda bodies post-walk, `CallIndirect` for fn-typed
@@ -270,15 +274,32 @@ docs/known-issues.md for the live instance of that failure).
    re-keyed on settle, twins deduped by symbol) — this is what lets
    unannotated lambdas flow through `$F`. Self-build: still 0 check
    errors; 840 C functions emit.
-6. **M11 — call completeness**: defaulted args, casts, unary/binary
-   user-operator dispatch (`String ==`).
-7. Then: globals/consts, for-over-iterators
-   (M10 supplies the specializations; the checker still needs to
-   resolve the `iter()`/`next()` protocol instead of typing the loop
-   var as a fresh var), array-literal lowering, range slicing,
-   template expansion, match exhaustiveness and the other
-   rejection-power gaps. The "not needed" list above
-   stays refused until a real use appears.
+6. ~~**M11 — self-build completeness**~~ ✅ landed 2026-08-21, one
+   long push: defaulted-argument materialization, the cast matrix,
+   comparison-operator dispatch (String `==` + string patterns),
+   module consts as runtime-initialized globals, range slicing (via
+   the stdlib overloads) with partial-range completion, array and
+   tuple literals + `t.N` projection + array decay, multi-payload
+   variants, for-over-iterators, overloaded-fn-names-as-values
+   (ticket 019 §4), minimal RTTI (`size_of`/`align_of` layout folding;
+   `Type(T)` values as TypeInfo), `&temporary` spill, and a stack of
+   latent miscompiles the new coverage exposed: pointer arithmetic was
+   UNSCALED (byte-stepping `List(i32)`), a `&`-typed path step geped
+   into the field instead of following the pointer
+   (`allocator.vtable.alloc` called the vtable's address), adapted
+   UFCS receivers passed raw values at the wrong indirection, and
+   bare-statement match arms (`X => return v`) projected as
+   `Expr.Error`. Also: the `-v` build now prints a skip report with
+   per-function refusal REASONS — the debugging loop for everything
+   above.
+7. **Stage-2 correctness**: stage-1 builds and runs single-file
+   programs but segfaults on the full multi-module project build —
+   hunt the scale-triggered miscompile, then the stage-2 = stage-3
+   byte-identical fixpoint (dict-iteration emission order will need
+   determinizing). Then: template expansion, match exhaustiveness and
+   the other rejection-power gaps, `project_info()` interception, real
+   RTTI (name strings, fields). The "not needed" list above stays
+   refused until a real use appears.
 
 ## Dogfooding as language design
 
