@@ -7,11 +7,11 @@ using FLang.Frontend.Ast.Types;
 namespace FLang.Frontend;
 
 /// <summary>
-/// Result of template expansion: synthetic module paths and generated source files.
+/// Result of template expansion: the generated text per origin file
+/// (<c>origin.generated.f</c> path → text). Nothing reads these back; they exist
+/// for <c>--emit-generated</c>, diagnostics and LSP virtual documents.
 /// </summary>
-public record TemplateExpansionResult(
-    Dictionary<string, string> SyntheticModulePaths,
-    Dictionary<string, string> GeneratedFiles);
+public record TemplateExpansionResult(Dictionary<string, string> GeneratedFiles);
 
 /// <summary>
 /// Interface for the type information the template expander needs from the type checker.
@@ -35,7 +35,10 @@ public interface ITemplateTypeProvider
 }
 
 /// <summary>
-/// Expands source generator invocations into synthetic modules.
+/// Expands source generator invocations in one pass (RFC-021 §2): modules in
+/// import-topological order, invocations in source order, each expansion's
+/// declarations appended to the ORIGIN module and collected on the spot so
+/// later invocations see them. No synthetic modules, no rounds.
 /// Shared between the CLI compiler and the LSP workspace.
 /// </summary>
 public static class TemplateExpander
@@ -105,10 +108,11 @@ public static class TemplateExpander
     }
 
     /// <summary>
-    /// Expand all source generator invocations in the parsed modules.
-    /// Runs between CollectNominalTypes and ResolveNominalTypes so generated
-    /// types can be used as struct fields in the original modules.
-    /// Mutates <paramref name="parsedModules"/> by adding synthetic module entries.
+    /// Expand all source generator invocations. Runs between CollectNominalTypes
+    /// and ResolveNominalTypes so generators can inspect declared types and
+    /// generated types can be used as fields of original types.
+    /// Mutates <paramref name="parsedModules"/>: each origin module is replaced
+    /// by one with the generated declarations appended.
     /// </summary>
     public static TemplateExpansionResult ExpandAll(
         Dictionary<string, ModuleNode> parsedModules,
@@ -116,321 +120,272 @@ public static class TemplateExpander
         ITemplateTypeProvider typeProvider,
         List<Diagnostic> diagnostics)
     {
-        var syntheticModulePaths = new Dictionary<string, string>();
         var generatedFiles = new Dictionary<string, string>();
 
-        // Collect all generator definitions across all modules
         var allDefs = new Dictionary<string, SourceGeneratorDefinitionNode>();
-        foreach (var kvp in parsedModules)
-        {
-            foreach (var def in kvp.Value.GeneratorDefinitions)
+        foreach (var mod in parsedModules.Values)
+            foreach (var def in mod.GeneratorDefinitions)
                 allDefs[def.Name] = def;
+
+        if (allDefs.Count == 0 || parsedModules.Values.All(m => m.GeneratorInvocations.Count == 0))
+            return new TemplateExpansionResult(generatedFiles);
+
+        var modulePaths = parsedModules.Keys.ToDictionary(k => k, k => DeriveModulePath(k, compilation));
+        var origins = new Dictionary<string, OriginState>();
+
+        // One global worklist in import-topological + source order. An invocation
+        // whose `Type` argument is not collected yet is parked and retried only
+        // after some other expansion made progress (import cycles in the stdlib
+        // make a pure ordering impossible); with no progress left it fails E2003.
+        var work = new List<WorkItem>();
+        foreach (var key in ImportTopologicalOrder(parsedModules.Keys, modulePaths, compilation))
+        {
+            var origin = parsedModules[key];
+            if (origin.GeneratorInvocations.Count == 0) continue;
+            origins[key] = new OriginState(key, origin);
+            foreach (var inv in origin.GeneratorInvocations)
+                work.Add(new WorkItem(key, inv, 0));
         }
 
-        if (allDefs.Count == 0)
-            return new TemplateExpansionResult(syntheticModulePaths, generatedFiles);
-
-        var expandedInvocations = new HashSet<string>();
-        var generatedSources = new Dictionary<string, StringBuilder>();
-        // Track invocations that failed expansion so we can report errors after all rounds
-        var failedInvocations = new Dictionary<string, Diagnostic>();
-
-        const int maxRounds = 8;
-        for (var round = 0; round < maxRounds; round++)
+        while (work.Count > 0)
         {
-            var newModules = new List<(string key, ModuleNode module)>();
-
-            foreach (var kvp in parsedModules.ToList())
+            var parked = new List<WorkItem>();
+            var progress = false;
+            foreach (var item in work)
             {
-                var mod = kvp.Value;
-                if (mod.GeneratorInvocations.Count == 0) continue;
-
-                string modulePath;
-                if (syntheticModulePaths.TryGetValue(kvp.Key, out var storedPath))
-                    modulePath = storedPath;
-                else
-                    modulePath = DeriveModulePath(kvp.Key, compilation);
-
-                for (var i = 0; i < mod.GeneratorInvocations.Count; i++)
+                var state = origins[item.OriginKey];
+                if (item.Generation >= MaxGenerations)
                 {
-                    var inv = mod.GeneratorInvocations[i];
-                    var invocationKey = $"{kvp.Key}_{inv.Name}_{i}";
-                    if (!expandedInvocations.Add(invocationKey)) continue;
-
-                    if (!allDefs.TryGetValue(inv.Name, out var def))
-                    {
-                        diagnostics.Add(Diagnostic.Error(
-                            $"Unknown source generator `{inv.Name}`", inv.Span, "E2070"));
-                        continue;
-                    }
-
-                    // Arity check: account for variadic (last param may consume 0+ args)
-                    var hasVariadic = def.Parameters.Count > 0 && def.Parameters[^1].IsVariadic;
-                    var requiredCount = hasVariadic ? def.Parameters.Count - 1 : def.Parameters.Count;
-                    if (hasVariadic ? inv.Arguments.Count < requiredCount : inv.Arguments.Count != def.Parameters.Count)
-                    {
-                        var expectMsg = hasVariadic
-                            ? $"at least {requiredCount}"
-                            : $"{def.Parameters.Count}";
-                        diagnostics.Add(Diagnostic.Error(
-                            $"Source generator `{inv.Name}` expects {expectMsg} arguments, got {inv.Arguments.Count}",
-                            inv.Span, "E2071"));
-                        continue;
-                    }
-
-                    // Bind parameters
-                    var env = new Dictionary<string, object>();
-                    var bindingError = false;
-                    for (var p = 0; p < def.Parameters.Count; p++)
-                    {
-                        var param = def.Parameters[p];
-
-                        if (param.IsVariadic)
-                        {
-                            // Collect remaining args into a list
-                            var list = new List<object>();
-                            for (var a = p; a < inv.Arguments.Count; a++)
-                            {
-                                var varg = inv.Arguments[a];
-                                if (param.Kind == GeneratorParamKind.Ident)
-                                    list.Add(varg.Identifier ?? "");
-                                else if (varg.TypeExpr != null)
-                                    list.Add(varg.TypeExpr);
-                                else
-                                    list.Add(new NamedTypeNode(varg.Span, varg.Identifier ?? ""));
-                            }
-                            env[param.Name] = list;
-                            break;
-                        }
-
-                        var arg = inv.Arguments[p];
-
-                        if (param.Kind == GeneratorParamKind.Ident)
-                        {
-                            if (arg.Identifier == null)
-                            {
-                                diagnostics.Add(Diagnostic.Error(
-                                    $"Source generator `{inv.Name}` parameter `{param.Name}` expects an identifier, got a type expression",
-                                    arg.Span, "E2072"));
-                                bindingError = true;
-                                break;
-                            }
-                            env[param.Name] = arg.Identifier;
-                        }
-                        else
-                        {
-                            if (arg.TypeExpr != null)
-                                env[param.Name] = arg.TypeExpr;
-                            else if (arg.Identifier != null)
-                                env[param.Name] = new NamedTypeNode(arg.Span, arg.Identifier);
-                            else
-                                env[param.Name] = new NamedTypeNode(arg.Span, "");
-                        }
-                    }
-
-                    if (bindingError) continue;
-
-                    // Validate Type parameters refer to known types
-                    var typeArgError = false;
-                    for (var p = 0; p < def.Parameters.Count && p < inv.Arguments.Count; p++)
-                    {
-                        var param = def.Parameters[p];
-                        if (param.IsVariadic) break;
-                        if (param.Kind != GeneratorParamKind.Type) continue;
-
-                        var arg = inv.Arguments[p];
-                        if (arg.Identifier == null) continue; // struct/enum type expr — skip
-
-                        var typeName = arg.Identifier;
-                        var fqn = $"{modulePath}.{typeName}";
-                        if (typeProvider.LookupNominalType(fqn) == null &&
-                            typeProvider.LookupNominalTypeFrom(typeName, modulePath) == null)
-                        {
-                            // Type not found — allow retry on next round in case
-                            // another generator produces it
-                            expandedInvocations.Remove(invocationKey);
-                            failedInvocations[invocationKey] = Diagnostic.Error(
-                                $"Unknown type `{typeName}`", arg.Span, "E2003");
-                            typeArgError = true;
-                            break;
-                        }
-                    }
-                    if (typeArgError) continue;
-
-                    // Create lookups
-                    NominalType? TypeOfLookup(string name)
-                    {
-                        var fqn = $"{modulePath}.{name}";
-                        var result = typeProvider.LookupNominalType(fqn);
-                        if (result != null) return result;
-                        return typeProvider.LookupNominalTypeFrom(name, modulePath);
-                    }
-
-                    IReadOnlyList<(string, TypeNode)>? FieldNodeLookup(string fqn)
-                    {
-                        if (typeProvider.FieldTypeNodes.TryGetValue(fqn, out var fields))
-                            return fields;
-                        var qualified = $"{modulePath}.{fqn}";
-                        if (typeProvider.FieldTypeNodes.TryGetValue(qualified, out fields))
-                            return fields;
-                        foreach (var (key, val) in typeProvider.FieldTypeNodes)
-                        {
-                            if (key.EndsWith($".{fqn}"))
-                                return val;
-                        }
-                        return null;
-                    }
-
-                    string expandedSource;
-                    try
-                    {
-                        var engine = new TemplateEngine(env, TypeOfLookup, FieldNodeLookup);
-                        expandedSource = engine.Expand(def.Body);
-                    }
-                    catch (Exception ex)
-                    {
-                        expandedInvocations.Remove(invocationKey);
-                        failedInvocations[invocationKey] = Diagnostic.Error(
-                            $"Template expansion error in `#{inv.Name}`: {ex.Message}",
-                            inv.Span, "E2073");
-                        continue;
-                    }
-
-                    // Expansion succeeded — clear any previous failure
-                    failedInvocations.Remove(invocationKey);
-
-                    var originFile = ResolveOriginFile(kvp.Key, syntheticModulePaths);
-                    var genFilePath = Path.ChangeExtension(originFile, ".generated.f");
-
-                    if (!generatedSources.TryGetValue(genFilePath, out var genSb))
-                    {
-                        genSb = new StringBuilder();
-                        genSb.AppendLine($"// Generated from {Path.GetFileName(originFile)}");
-                        genSb.AppendLine();
-                        generatedSources[genFilePath] = genSb;
-                    }
-
-                    var argsStr = string.Join(", ", inv.Arguments.Select(a =>
-                        a.Identifier ?? (a.TypeExpr != null ? TemplateEngine.TypeNodeToString(a.TypeExpr) : "?")));
-                    genSb.AppendLine($"// #{inv.Name}({argsStr})");
-                    genSb.Append(expandedSource);
-                    if (!expandedSource.EndsWith('\n'))
-                        genSb.AppendLine();
-                    genSb.AppendLine();
-
-                    var syntheticKey = $"__gen_{kvp.Key}_{inv.Name}_{i}";
-                    var source = new Source(expandedSource, genFilePath);
-                    var fileId = compilation.AddSource(source);
-                    compilation.RegisterModule(syntheticKey, fileId);
-
-                    var lexer = new Lexer(source, fileId);
-                    var parser = new Parser(lexer);
-                    var syntheticModule = parser.ParseModule();
-
-                    foreach (var d in parser.Diagnostics)
-                        diagnostics.Add(d);
-
-                    syntheticModulePaths[syntheticKey] = modulePath;
-                    newModules.Add((syntheticKey, syntheticModule));
+                    diagnostics.Add(Diagnostic.Error(
+                        $"Template expansion depth exceeded ({MaxGenerations}) at `#{item.Inv.Name}`",
+                        item.Inv.Span, code: "E2119"));
+                    continue;
                 }
-            }
 
-            if (newModules.Count == 0) break;
+                var outcome = ExpandOne(item.Inv, allDefs, modulePaths[item.OriginKey], typeProvider, diagnostics, out var expanded);
+                if (outcome == Outcome.UnknownType) { parked.Add(item); continue; }
+                if (outcome == Outcome.Failed) continue;
 
-            foreach (var (key, module) in newModules)
-            {
-                parsedModules[key] = module;
-                var synModulePath = syntheticModulePaths[key];
-                typeProvider.CollectNominalTypes(module, synModulePath);
-            }
-
-            foreach (var (key, module) in newModules)
-            {
-                var synModulePath = syntheticModulePaths[key];
-                typeProvider.ResolveNominalTypes(module, synModulePath);
-            }
-
-            foreach (var (_, module) in newModules)
-            {
-                foreach (var def in module.GeneratorDefinitions)
+                progress = true;
+                var chunkModule = AppendChunk(state, item.Inv, expanded!, compilation, diagnostics);
+                typeProvider.CollectNominalTypes(chunkModule, modulePaths[item.OriginKey]);
+                foreach (var def in chunkModule.GeneratorDefinitions)
                     allDefs[def.Name] = def;
+                // Nested invocations run after every pending one of this pass.
+                foreach (var nested in chunkModule.GeneratorInvocations)
+                    parked.Add(new WorkItem(item.OriginKey, nested, item.Generation + 1));
             }
+
+            if (!progress)
+            {
+                foreach (var item in parked)
+                    ReportUnknownTypes(item.Inv, allDefs, modulePaths[item.OriginKey], typeProvider, diagnostics);
+                break;
+            }
+            work = parked;
         }
 
-        // Report errors for invocations that failed on every round
-        foreach (var (_, diag) in failedInvocations)
-            diagnostics.Add(diag);
-
-        foreach (var (path, sb) in generatedSources)
-            generatedFiles[path] = sb.ToString();
-
-        // Replace per-invocation synthetic modules with a single combined module
-        // per .generated.f file so that source spans are consistent with the file.
-        foreach (var (genFilePath, genContent) in generatedFiles)
+        foreach (var (key, state) in origins)
         {
-            // Find all per-invocation synthetic keys for this .generated.f
-            var keysForGen = new List<string>();
-            string? modulePath = null;
-            foreach (var kvp in syntheticModulePaths)
-            {
-                if (!parsedModules.ContainsKey(kvp.Key)) continue;
-                var originFile = ResolveOriginFile(kvp.Key, syntheticModulePaths);
-                var expectedGenPath = Path.ChangeExtension(originFile, ".generated.f");
-                if (expectedGenPath == genFilePath)
-                {
-                    keysForGen.Add(kvp.Key);
-                    modulePath ??= kvp.Value;
-                }
-            }
-
-            if (keysForGen.Count == 0 || modulePath == null) continue;
-
-            // Remove per-invocation modules
-            foreach (var key in keysForGen)
-            {
-                parsedModules.Remove(key);
-                syntheticModulePaths.Remove(key);
-            }
-
-            // Parse the combined .generated.f content as a single module
-            var combinedSource = new Source(genContent, genFilePath);
-            var combinedFileId = compilation.AddSource(combinedSource);
-            var combinedKey = $"__combined_{genFilePath}";
-            compilation.RegisterModule(combinedKey, combinedFileId);
-
-            var lexer = new Lexer(combinedSource, combinedFileId);
-            var parser = new Parser(lexer);
-            var combinedModule = parser.ParseModule();
-
-            foreach (var d in parser.Diagnostics)
-                diagnostics.Add(d);
-
-            parsedModules[combinedKey] = combinedModule;
-            syntheticModulePaths[combinedKey] = modulePath;
-
-            // Nominals were already collected from per-invocation modules during rounds.
-            // Don't re-collect — the type checker would flag them as duplicates.
-            // Downstream phases (CollectFunctionSignatures, CheckModuleBodies, Lowering)
-            // will use the combined module's AST nodes which have correct spans.
+            parsedModules[key] = state.Module;
+            generatedFiles[state.GenFilePath] = state.Text.ToString();
         }
 
-        return new TemplateExpansionResult(syntheticModulePaths, generatedFiles);
+        return new TemplateExpansionResult(generatedFiles);
     }
 
-    private static string ResolveOriginFile(string key, Dictionary<string, string> syntheticModulePaths)
+    private sealed record WorkItem(string OriginKey, SourceGeneratorInvocationNode Inv, int Generation);
+
+    private sealed class OriginState
     {
-        var originFile = key;
-        while (syntheticModulePaths.ContainsKey(originFile))
+        public ModuleNode Module;
+        public readonly StringBuilder Text = new();
+        public int Lines;
+        public readonly string GenFilePath;
+
+        public OriginState(string key, ModuleNode module)
         {
-            const string prefix = "__gen_";
-            if (!originFile.StartsWith(prefix)) break;
-            var rest = originFile[prefix.Length..];
-            var lastUnderscore = rest.LastIndexOf('_');
-            if (lastUnderscore <= 0) break;
-            var secondLast = rest.LastIndexOf('_', lastUnderscore - 1);
-            if (secondLast <= 0) break;
-            originFile = rest[..secondLast];
+            Module = module;
+            GenFilePath = Path.ChangeExtension(key, ".generated.f");
+            Text.AppendLine($"// Generated from {Path.GetFileName(key)}");
+            Text.AppendLine();
+            Lines = 2;
         }
-        return originFile;
+    }
+
+    /// <summary>
+    /// Parse one invocation's output and append its declarations to the origin.
+    /// The chunk is parsed against a Source padded with the lines already emitted
+    /// for this origin, so spans line up with the combined generated text
+    /// without re-parsing it.
+    /// </summary>
+    private static ModuleNode AppendChunk(
+        OriginState state,
+        SourceGeneratorInvocationNode inv,
+        string expanded,
+        Compilation compilation,
+        List<Diagnostic> diagnostics)
+    {
+        var argsStr = string.Join(", ", inv.Arguments.Select(a =>
+            a.Identifier ?? (a.TypeExpr != null ? TemplateEngine.TypeNodeToString(a.TypeExpr) : "?")));
+        var chunk = $"// #{inv.Name}({argsStr})\n" + expanded + (expanded.EndsWith('\n') ? "" : "\n") + "\n";
+
+        var source = new Source(new string('\n', state.Lines) + chunk, state.GenFilePath);
+        var fileId = compilation.AddSource(source);
+        var parser = new Parser(new Lexer(source, fileId));
+        var chunkModule = parser.ParseModule();
+        diagnostics.AddRange(parser.Diagnostics);
+        chunkModule = IfDirectiveDeclarations.Flatten(chunkModule, compilation.CompileTimeContext, diagnostics);
+
+        state.Text.Append(chunk);
+        state.Lines += chunk.Count(c => c == '\n');
+        state.Module = state.Module.Append(chunkModule);
+        return chunkModule;
+    }
+
+    private const int MaxGenerations = 8;
+
+    /// <summary>
+    /// Modules ordered so that every module comes after the modules it imports
+    /// (DFS post-order over <see cref="Compilation.ModuleImports"/>; cycles are
+    /// cut at the first revisit). Unrelated modules keep their input order.
+    /// </summary>
+    private static List<string> ImportTopologicalOrder(
+        IEnumerable<string> keys,
+        Dictionary<string, string> modulePaths,
+        Compilation compilation)
+    {
+        var keyByPath = modulePaths.ToDictionary(kv => kv.Value, kv => kv.Key);
+        var visited = new HashSet<string>();
+        var order = new List<string>();
+
+        void Visit(string key)
+        {
+            if (!visited.Add(key)) return;
+            if (compilation.ModuleImports.TryGetValue(modulePaths[key], out var imports))
+                foreach (var imported in imports)
+                    if (keyByPath.TryGetValue(imported, out var importedKey))
+                        Visit(importedKey);
+            order.Add(key);
+        }
+
+        foreach (var key in keys) Visit(key);
+        return order;
+    }
+
+    private enum Outcome { Expanded, UnknownType, Failed }
+
+    /// <summary>
+    /// Bind one invocation's arguments and evaluate its template.
+    /// <see cref="Outcome.UnknownType"/> means a `Type` argument is not collected
+    /// yet — the caller parks the invocation; nothing is reported here.
+    /// </summary>
+    private static Outcome ExpandOne(
+        SourceGeneratorInvocationNode inv,
+        Dictionary<string, SourceGeneratorDefinitionNode> allDefs,
+        string modulePath,
+        ITemplateTypeProvider typeProvider,
+        List<Diagnostic> diagnostics,
+        out string? expanded)
+    {
+        expanded = null;
+        if (!allDefs.TryGetValue(inv.Name, out var def))
+        {
+            diagnostics.Add(Diagnostic.Error($"Unknown source generator `{inv.Name}`", inv.Span, code: "E2070"));
+            return Outcome.Failed;
+        }
+
+        var hasVariadic = def.Parameters.Count > 0 && def.Parameters[^1].IsVariadic;
+        var requiredCount = hasVariadic ? def.Parameters.Count - 1 : def.Parameters.Count;
+        if (hasVariadic ? inv.Arguments.Count < requiredCount : inv.Arguments.Count != def.Parameters.Count)
+        {
+            var expectMsg = hasVariadic ? $"at least {requiredCount}" : $"{def.Parameters.Count}";
+            diagnostics.Add(Diagnostic.Error(
+                $"Source generator `{inv.Name}` expects {expectMsg} arguments, got {inv.Arguments.Count}",
+                inv.Span, code: "E2071"));
+            return Outcome.Failed;
+        }
+
+        var env = new Dictionary<string, object>();
+        for (var p = 0; p < def.Parameters.Count; p++)
+        {
+            var param = def.Parameters[p];
+            if (param.IsVariadic)
+            {
+                env[param.Name] = inv.Arguments.Skip(p).Select(a => BindArg(param, a)).ToList();
+                break;
+            }
+
+            var arg = inv.Arguments[p];
+            if (param.Kind == GeneratorParamKind.Ident && arg.Identifier == null)
+            {
+                diagnostics.Add(Diagnostic.Error(
+                    $"Source generator `{inv.Name}` parameter `{param.Name}` expects an identifier, got a type expression",
+                    arg.Span, code: "E2072"));
+                return Outcome.Failed;
+            }
+
+            if (param.Kind == GeneratorParamKind.Type && arg.Identifier != null
+                && !TypeIsCollected(arg.Identifier, modulePath, typeProvider))
+                return Outcome.UnknownType;
+
+            env[param.Name] = BindArg(param, arg);
+        }
+
+        NominalType? TypeOfLookup(string name) =>
+            typeProvider.LookupNominalType($"{modulePath}.{name}")
+            ?? typeProvider.LookupNominalTypeFrom(name, modulePath);
+
+        IReadOnlyList<(string, TypeNode)>? FieldNodeLookup(string fqn)
+        {
+            if (typeProvider.FieldTypeNodes.TryGetValue(fqn, out var fields)) return fields;
+            if (typeProvider.FieldTypeNodes.TryGetValue($"{modulePath}.{fqn}", out fields)) return fields;
+            foreach (var (key, val) in typeProvider.FieldTypeNodes)
+                if (key.EndsWith($".{fqn}")) return val;
+            return null;
+        }
+
+        try
+        {
+            expanded = new TemplateEngine(env, TypeOfLookup, FieldNodeLookup).Expand(def.Body);
+            return Outcome.Expanded;
+        }
+        catch (Exception ex)
+        {
+            diagnostics.Add(Diagnostic.Error(
+                $"Template expansion error in `#{inv.Name}`: {ex.Message}", inv.Span, code: "E2073"));
+            return Outcome.Failed;
+        }
+    }
+
+    private static bool TypeIsCollected(string name, string modulePath, ITemplateTypeProvider typeProvider) =>
+        typeProvider.LookupNominalType($"{modulePath}.{name}") != null
+        || typeProvider.LookupNominalTypeFrom(name, modulePath) != null;
+
+    /// <summary>E2003 for every `Type` argument of a parked invocation that never became available.</summary>
+    private static void ReportUnknownTypes(
+        SourceGeneratorInvocationNode inv,
+        Dictionary<string, SourceGeneratorDefinitionNode> allDefs,
+        string modulePath,
+        ITemplateTypeProvider typeProvider,
+        List<Diagnostic> diagnostics)
+    {
+        var def = allDefs[inv.Name];
+        for (var p = 0; p < def.Parameters.Count && p < inv.Arguments.Count; p++)
+        {
+            var param = def.Parameters[p];
+            if (param.IsVariadic) break;
+            var arg = inv.Arguments[p];
+            if (param.Kind == GeneratorParamKind.Type && arg.Identifier != null
+                && !TypeIsCollected(arg.Identifier, modulePath, typeProvider))
+                diagnostics.Add(Diagnostic.Error($"Unknown type `{arg.Identifier}`", arg.Span, code: "E2003"));
+        }
+    }
+
+    private static object BindArg(GeneratorParameter param, GeneratorArgument arg)
+    {
+        if (param.Kind == GeneratorParamKind.Ident) return arg.Identifier ?? "";
+        if (arg.TypeExpr != null) return arg.TypeExpr;
+        return new NamedTypeNode(arg.Span, arg.Identifier ?? "");
     }
 }

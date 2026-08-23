@@ -38,6 +38,7 @@ public static class FLangLanguageServer
                 .WithHandler<DocumentSymbolHandler>()
                 .WithHandler<InlayHintHandler>()
                 .WithHandler<SignatureHelpHandler>()
+                .WithHandler<GeneratedContentHandler>()
                 .OnInitialize((server, request, ct) =>
                 {
                     Log($"Initialize: rootPath={request.RootPath}, rootUri={request.RootUri}");

@@ -34,6 +34,7 @@ public record CompilerOptions(
     bool CheckOnly = false,
     string? EmitFir = null,
     bool DumpTemplates = false,
+    bool EmitGenerated = false,
     bool DebugLogging = false,
     string? WorkingDirectory = null,
     IReadOnlyList<string>? IncludePaths = null,
@@ -303,22 +304,24 @@ public class Compiler
         // Runs after CollectNominalTypes (so generators can look up types and field AST nodes)
         // but before ResolveNominalTypes (so generated types are available as struct fields).
         var expansion = TemplateExpander.ExpandAll(parsedModules, compilation, hmChecker, allDiagnostics);
-        var syntheticModulePaths = expansion.SyntheticModulePaths;
 
-        // Helper: resolve module path for real and synthetic modules
-        string ResolveModulePath(string key) =>
-            syntheticModulePaths.TryGetValue(key, out var path)
-                ? path
-                : TemplateExpander.DeriveModulePath(key, compilation);
+        string ResolveModulePath(string key) => TemplateExpander.DeriveModulePath(key, compilation);
 
         foreach (var kvp in parsedModules)
             hmChecker.ResolveNominalTypes(kvp.Value, ResolveModulePath(kvp.Key));
 
-        // Write .generated.f files so debuggers / error messages can reference real files
-        foreach (var (genPath, genContent) in expansion.GeneratedFiles)
+        // Expansion is in-memory; `--emit-generated` writes the text for debugging.
+        // Nothing reads these files back.
+        if (options.EmitGenerated)
         {
-            try { File.WriteAllText(genPath, genContent); }
-            catch { /* best-effort */ }
+            foreach (var (genPath, genContent) in expansion.GeneratedFiles)
+            {
+                try { File.WriteAllText(genPath, genContent); }
+                catch (Exception ex)
+                {
+                    allDiagnostics.Add(Diagnostic.Warning($"Could not write {genPath}: {ex.Message}", SourceSpan.None));
+                }
+            }
         }
 
         if (allDiagnostics.Any(d => d.Severity == DiagnosticSeverity.Error))

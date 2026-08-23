@@ -152,7 +152,9 @@ flang -I raylib.h -L libraylib.a main.f
 
 ## Source Generators
 
-`TemplateExpander` (referred to as "source generators") runs between type collection and resolution. Generates source-level expansions (e.g., operator overloads, protocol implementations) before type checking.
+`TemplateExpander` (referred to as "source generators") runs **once**, between nominal-type collection and resolution (RFC-021 §2). One global worklist holds every invocation in import-topological + source order; each expansion's text is parsed as a declaration chunk, its declarations are **appended to the origin `ModuleNode`** (`ModuleNode.Append`) and its nominals collected on the spot, so later invocations see them. There are no synthetic modules, no module-path aliasing and no rounds. An invocation whose `Type` argument is not collected yet is parked and retried only after another expansion made progress (stdlib import cycles rule out a pure ordering); with no progress left it fails E2003. Invocations found inside generated code re-enter the worklist with generation + 1; generation 8 is E2119.
+
+Expansion is entirely in memory. `--emit-generated` writes each origin's combined text to `<origin>.generated.f` for debugging — nothing reads it back. The LSP keeps the same text per analysis (`FileAnalysisResult.GeneratedFiles`): any span inside a generated source becomes a `flang-generated://<origin>.generated.f` location (`PositionUtil.SpanToLocation`), and the editor fetches the document through the custom `flang/generatedContent` request (`GeneratedContentHandler`; the VS Code extension registers a `TextDocumentContentProvider` for the scheme). Diagnostics inside generated code are not yet re-anchored to the invocation (RFC-021 §6). Each chunk is parsed against a `Source` padded with the lines already emitted for its origin, so spans and diagnostics line up with the emitted text without a second parse.
 
 ## Project Metadata (`project_info()` intrinsic)
 

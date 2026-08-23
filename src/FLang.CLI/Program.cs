@@ -35,6 +35,7 @@ var debugLogging = false;
 var runTests = false;
 var lspMode = false;
 var dumpTemplates = false;
+var emitGenerated = false;
 var emitC = false;
 var emitCfg = false;
 var linkFlags = new List<string>();
@@ -75,6 +76,8 @@ for (var i = 0; i < args.Length; i++)
         lspMode = true;
     else if (args[i] == "--dump-templates")
         dumpTemplates = true;
+    else if (args[i] == "--emit-generated")
+        emitGenerated = true;
     else if (args[i] == "--emit-c")
         emitC = true;
     else if (args[i] == "--emit-cfg")
@@ -180,6 +183,7 @@ var options = new CompilerOptions(
     TargetArch: targetArch,
     EmitFir: emitFir,
     DumpTemplates: dumpTemplates,
+    EmitGenerated: emitGenerated,
     DebugLogging: debugLogging,
     RunTests: runTests,
     EmitCfg: emitCfg,

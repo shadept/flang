@@ -2970,6 +2970,7 @@ Report the issue with sample code that reproduces the error.
 | **E2071** | Source Generators | Source generator argument count mismatch     |
 | **E2072** | Source Generators | Source generator argument kind mismatch      |
 | **E2073** | Source Generators | Template expansion error                     |
+| **E2119** | Source Generators | Template expansion depth exceeded            |
 | **E2076** | Type Checking     | Duplicate struct field name                   |
 | **E2074** | Type Checking     | If/else branches disagree                    |
 | **E2075** | Type Checking     | Match arms disagree                          |
@@ -3601,6 +3602,24 @@ Unwrap optionals before comparing: `#if((runtime.env["MODE"] ?? "") == "release"
 ---
 
 ## W1XXX: Code Quality Warnings
+
+### E2119: Template Expansion Depth Exceeded
+
+**Category**: Source Generators
+**Severity**: Error
+
+#### Description
+
+Generated code may itself contain generator invocations, which expand in turn. Each such nesting is one generation; an invocation at generation 8 is refused. Previously the expander stopped silently after 8 rounds and the missing symbols surfaced as unrelated errors later.
+
+#### Example
+
+```flang
+#define(again, N: Ident) {
+    #again(#(N))     // emits an invocation of itself, forever
+}
+#again(x)            // error[E2119]: Template expansion depth exceeded (8) at `#again`
+```
 
 ### W1001: Unused Variable
 

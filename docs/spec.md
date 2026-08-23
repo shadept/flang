@@ -796,7 +796,7 @@ Parameter kinds: `Ident` (bare identifier), `Type` (type expression). Last param
 | `#interface(Name, Spec)` | Define vtable-based interface |
 | `#implement(Impl, Iface)` | Implement interface for a type |
 
-Expansion runs up to 8 rounds, enabling generators that produce types or other generators. Output written to `<source>.generated.f`.
+Expansion runs once, after nominal types are collected and before they are resolved; generated declarations become part of the invoking module. Generated code may contain further definitions and invocations (nesting depth is limited to 8 — E2119). Expansion is in memory; `--emit-generated` writes each module's expansion to `<source>.generated.f` for inspection only.
 
 ### 7.9 FIR (Intermediate Representation)
 

@@ -62,7 +62,7 @@ public class TypeDefinitionHandler : TypeDefinitionHandlerBase
         if (targetSpan.FileId < 0)
             return null;
 
-        var location = SpanToLocation(targetSpan, analysis.Compilation);
+        var location = PositionUtil.SpanToLocation(targetSpan, analysis.Compilation);
         FLangLanguageServer.Log($"  [total] {sw.ElapsedMilliseconds}ms -> {typeName}");
         if (location == null) return null;
 
@@ -78,21 +78,6 @@ public class TypeDefinitionHandler : TypeDefinitionHandlerBase
         return null;
     }
 
-    private static Location? SpanToLocation(SourceSpan span, Compilation compilation)
-    {
-        if (span.FileId < 0 || span.FileId >= compilation.Sources.Count)
-            return null;
-
-        var source = compilation.Sources[span.FileId];
-        var range = PositionUtil.ToLspRange(span, compilation);
-        if (range == null) return null;
-
-        return new Location
-        {
-            Uri = DocumentUri.FromFileSystemPath(source.FileName),
-            Range = range
-        };
-    }
 
     protected override TypeDefinitionRegistrationOptions CreateRegistrationOptions(
         TypeDefinitionCapability capability,

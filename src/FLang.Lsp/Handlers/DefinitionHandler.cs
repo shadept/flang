@@ -76,7 +76,7 @@ public class DefinitionHandler : DefinitionHandlerBase
         if (targetSpan == null || targetSpan.Value.FileId < 0)
             return null;
 
-        var location = SpanToLocation(targetSpan.Value, analysis.Compilation);
+        var location = PositionUtil.SpanToLocation(targetSpan.Value, analysis.Compilation);
         FLangLanguageServer.Log($"  [total] {sw.ElapsedMilliseconds}ms");
         if (location == null) return null;
 
@@ -293,21 +293,6 @@ public class DefinitionHandler : DefinitionHandlerBase
         return null;
     }
 
-    private static Location? SpanToLocation(SourceSpan span, Compilation compilation)
-    {
-        if (span.FileId < 0 || span.FileId >= compilation.Sources.Count)
-            return null;
-
-        var source = compilation.Sources[span.FileId];
-        var range = PositionUtil.ToLspRange(span, compilation);
-        if (range == null) return null;
-
-        return new Location
-        {
-            Uri = DocumentUri.FromFileSystemPath(source.FileName),
-            Range = range
-        };
-    }
 
     protected override DefinitionRegistrationOptions CreateRegistrationOptions(
         DefinitionCapability capability,

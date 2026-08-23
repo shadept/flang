@@ -1,4 +1,5 @@
 using FLang.Core;
+using OmniSharp.Extensions.LanguageServer.Protocol;
 using OmniSharp.Extensions.LanguageServer.Protocol.Models;
 using Range = OmniSharp.Extensions.LanguageServer.Protocol.Models.Range;
 
@@ -22,6 +23,35 @@ public static class PositionUtil
         return new Range(
             new Position(startLine, startCol),
             new Position(endLine, endCol));
+    }
+
+    /// <summary>
+    /// URI scheme under which template-expansion output is served as a virtual
+    /// (read-only) document; the path is the origin's `.generated.f` path. The
+    /// editor fetches the text via the `flang/generatedContent` request.
+    /// </summary>
+    public const string GeneratedScheme = "flang-generated";
+
+    public static bool IsGeneratedPath(string path) =>
+        path.EndsWith(".generated.f", StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// Convert a FLang SourceSpan to an LSP Location. Spans inside generated
+    /// sources point at the <see cref="GeneratedScheme"/> virtual document.
+    /// </summary>
+    public static Location? SpanToLocation(SourceSpan span, Compilation compilation)
+    {
+        if (span.FileId < 0 || span.FileId >= compilation.Sources.Count)
+            return null;
+
+        var source = compilation.Sources[span.FileId];
+        var range = ToLspRange(span, compilation);
+        if (range == null) return null;
+
+        var uri = IsGeneratedPath(source.FileName)
+            ? DocumentUri.From($"{GeneratedScheme}://{source.FileName}")
+            : DocumentUri.FromFileSystemPath(source.FileName);
+        return new Location { Uri = uri, Range = range };
     }
 
     /// <summary>

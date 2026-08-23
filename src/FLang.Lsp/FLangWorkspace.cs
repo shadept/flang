@@ -23,7 +23,8 @@ public record FileAnalysisResult(
     IReadOnlyList<Diagnostic> Diagnostics,
     Compilation Compilation,
     Dictionary<string, ModuleNode> ParsedModules,
-    TypeCheckResult? TypeChecker);
+    TypeCheckResult? TypeChecker,
+    IReadOnlyDictionary<string, string> GeneratedFiles);
 
 /// <summary>
 /// Manages open documents and analysis results for the LSP.
@@ -118,6 +119,17 @@ public class FLangWorkspace
     /// find-references / workspace symbols; each entry already spans its
     /// root's whole module graph (project files, deps, reached stdlib).
     /// </summary>
+    /// <summary>Text of a generated virtual document, from whichever analysis produced it.</summary>
+    public string? GetGeneratedContent(string generatedPath)
+    {
+        var normalized = Path.GetFullPath(generatedPath);
+        foreach (var analysis in GetAllAnalyses())
+            foreach (var (path, text) in analysis.GeneratedFiles)
+                if (string.Equals(Path.GetFullPath(path), normalized, StringComparison.OrdinalIgnoreCase))
+                    return text;
+        return null;
+    }
+
     public IReadOnlyList<FileAnalysisResult> GetAllAnalyses()
     {
         lock (_lock)
@@ -275,7 +287,7 @@ public class FLangWorkspace
             try
             {
                 representative = EnumerateFlangFiles(root)
-                    .FirstOrDefault(f => !f.EndsWith(".generated.f", StringComparison.OrdinalIgnoreCase));
+                    .FirstOrDefault(f => !PositionUtil.IsGeneratedPath(f));
             }
             catch (Exception ex)
             {
@@ -531,7 +543,7 @@ public class FLangWorkspace
                         // Template-expansion sidecars are not standalone
                         // modules — analyzed as entries they only produce
                         // noise; they're pulled in through their origin.
-                        if (f.EndsWith(".generated.f", StringComparison.OrdinalIgnoreCase)) continue;
+                        if (PositionUtil.IsGeneratedPath(f)) continue;
                         var full = Path.GetFullPath(f);
                         if (seen.Add(full)) entries.Add(full);
                     }
@@ -588,6 +600,7 @@ public class FLangWorkspace
             TypeCheckResult? typeCheckResult = null;
             HmTypeChecker? hmChecker = null;
 
+            IReadOnlyDictionary<string, string> generatedFiles = new Dictionary<string, string>();
             // Best-effort type checking: proceed even with parse errors so the LSP
             // can provide hover/definition for the parts of the file that parsed correctly.
             // The type checker handles dummy AST nodes from error recovery gracefully.
@@ -634,14 +647,10 @@ public class FLangWorkspace
                 // so generated types are available as struct fields.
                 lap = sw.ElapsedMilliseconds;
                 var expansion = TemplateExpander.ExpandAll(parsedModules, compilation, hmChecker, allDiagnostics);
-                var syntheticModulePaths = expansion.SyntheticModulePaths;
-                FLangLanguageServer.Log($"  [templateExpand] {sw.ElapsedMilliseconds - lap}ms — {syntheticModulePaths.Count} synthetic modules");
+                generatedFiles = expansion.GeneratedFiles;
+                FLangLanguageServer.Log($"  [templateExpand] {sw.ElapsedMilliseconds - lap}ms — {expansion.GeneratedFiles.Count} origins expanded");
 
-                // Helper: resolve module path for real and synthetic modules
-                string ResolveModulePath(string key) =>
-                    syntheticModulePaths.TryGetValue(key, out var path)
-                        ? path
-                        : TemplateExpander.DeriveModulePath(key, compilation);
+                string ResolveModulePath(string key) => TemplateExpander.DeriveModulePath(key, compilation);
 
                 lap = sw.ElapsedMilliseconds;
                 foreach (var kvp in parsedModules)
@@ -697,7 +706,7 @@ public class FLangWorkspace
                 }
             }
 
-            var result = new FileAnalysisResult(allDiagnostics, compilation, parsedModules, typeCheckResult);
+            var result = new FileAnalysisResult(allDiagnostics, compilation, parsedModules, typeCheckResult, generatedFiles);
             lock (_lock)
             {
                 _projectAnalyses[key] = result;

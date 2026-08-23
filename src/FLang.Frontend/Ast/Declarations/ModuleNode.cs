@@ -31,4 +31,20 @@ public class ModuleNode(
     /// the active branches' declarations are merged into the lists above.
     /// </summary>
     public IReadOnlyList<IfDirectiveDeclarationNode> IfDirectives { get; } = ifDirectives ?? [];
+
+    /// <summary>
+    /// This module with <paramref name="other"/>'s declarations appended (imports,
+    /// span and pending #if directives stay this module's). Used to fold template
+    /// expansion output into its origin module.
+    /// </summary>
+    public ModuleNode Append(ModuleNode other) => new(Span, Imports,
+        [.. Structs, .. other.Structs],
+        [.. Enums, .. other.Enums],
+        [.. TypeAliases, .. other.TypeAliases],
+        [.. Functions, .. other.Functions],
+        [.. Tests, .. other.Tests],
+        [.. GlobalConstants, .. other.GlobalConstants],
+        [.. GeneratorDefinitions, .. other.GeneratorDefinitions],
+        GeneratorInvocations,
+        IfDirectives);
 }

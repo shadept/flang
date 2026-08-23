@@ -67,7 +67,7 @@ public class ReferencesHandler : ReferencesHandlerBase
             totalRaw += spans.Count;
             foreach (var span in spans)
             {
-                var loc = SpanToLocation(span, analysis.Compilation);
+                var loc = PositionUtil.SpanToLocation(span, analysis.Compilation);
                 if (loc == null) continue;
                 var key = (
                     loc.Uri.ToString(),
@@ -82,21 +82,6 @@ public class ReferencesHandler : ReferencesHandlerBase
         return new LocationContainer(locations);
     }
 
-    private static Location? SpanToLocation(SourceSpan span, Compilation compilation)
-    {
-        if (span.FileId < 0 || span.FileId >= compilation.Sources.Count)
-            return null;
-
-        var source = compilation.Sources[span.FileId];
-        var range = PositionUtil.ToLspRange(span, compilation);
-        if (range == null) return null;
-
-        return new Location
-        {
-            Uri = DocumentUri.FromFileSystemPath(source.FileName),
-            Range = range,
-        };
-    }
 
     protected override ReferenceRegistrationOptions CreateRegistrationOptions(
         ReferenceCapability capability,

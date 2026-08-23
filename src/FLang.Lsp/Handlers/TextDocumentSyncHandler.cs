@@ -83,8 +83,7 @@ public class TextDocumentSyncHandler : TextDocumentSyncHandlerBase
         return Unit.Task;
     }
 
-    private static bool IsGeneratedFile(string filePath) =>
-        filePath.EndsWith(".generated.f", StringComparison.OrdinalIgnoreCase);
+    private static bool IsGeneratedFile(string filePath) => PositionUtil.IsGeneratedPath(filePath);
 
     protected override TextDocumentSyncRegistrationOptions CreateRegistrationOptions(
         TextSynchronizationCapability capability,
