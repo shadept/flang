@@ -313,8 +313,7 @@ fn parse_to_module(src: String, file_id: i32, target: &ComptimeCtx, diags: &List
 }
 
 fn enqueue_imports(ctx: &ResolveCtx, m: &Module, queue: &List(OwnedString), seen: &Set(String), diags: &List(Diagnostic), alloc: &Allocator?) {
-    for j in 0..m.decls.len {
-        let d = &m.decls[j]
+    for &d in m.decls {
         d.* match {
             Import(id) => {
                 let r = resolve_import(ctx, &id.path, alloc)

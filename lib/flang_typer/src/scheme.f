@@ -56,27 +56,23 @@ pub fn free_vars(body: &Ty, cursor: Level, out: &Set(VarId)) {
         Ref(inner) => free_vars(inner, cursor, out),
         Array(arr) => free_vars(arr.elem, cursor, out),
         Func(fn_ty) => {
-            for i in 0..fn_ty.params.len {
-                let p = &fn_ty.params[i]
+            for &p in fn_ty.params {
                 free_vars(p, cursor, out)
             }
             free_vars(fn_ty.ret, cursor, out)
         },
         Tuple(elems) => {
-            for i in 0..elems.len {
-                let e = &elems[i]
+            for &e in elems {
                 free_vars(e, cursor, out)
             }
         },
         Record(fields) => {
-            for i in 0..fields.len {
-                let f = &fields[i]
+            for &f in fields {
                 free_vars(&f.ty, cursor, out)
             }
         },
         Nominal(nr) => {
-            for i in 0..nr.args.len {
-                let a = &nr.args[i]
+            for &a in nr.args {
                 free_vars(a, cursor, out)
             }
         },

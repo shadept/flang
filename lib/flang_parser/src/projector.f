@@ -899,12 +899,14 @@ fn project_for_stmt(self: &Projector, cst: CstNode) ForStmt {
         trailing = null,
     }
     let saw_for = false
+    let by_ref = false
     let body_seen = false
     let iterable_seen = false
     for i in 0..cst.children.len {
         cst.children[i] match {
             TokenChild(tok) => {
                 if tok.kind == TokenKind.For { saw_for = true; continue }
+                if saw_for and tok.kind == TokenKind.Ampersand and var_name.len == 0 { by_ref = true }
                 if saw_for and tok.kind == TokenKind.Identifier and var_name.len == 0 {
                     var_name = tok.text
                 }
@@ -924,6 +926,7 @@ fn project_for_stmt(self: &Projector, cst: CstNode) ForStmt {
     return .{
         span = self.span_from(cst),
         var_name = var_name,
+        by_ref = by_ref,
         iterable = box(a, iterable),
         body = body,
     }
@@ -2729,8 +2732,7 @@ type SuffixSplit = struct {
 fn split_numeric_suffix(text: String, is_float: bool) SuffixSplit {
     if is_float {
         const float_suffixes = ["f32", "f64"]
-        for i in 0..float_suffixes.len {
-            const s = float_suffixes[i]
+        for s in float_suffixes {
             if text.len >= s.len and tail_equals(text, s) {
                 return SuffixSplit {
                     body = slice_str(text, 0, text.len - s.len),
@@ -2741,8 +2743,7 @@ fn split_numeric_suffix(text: String, is_float: bool) SuffixSplit {
         return SuffixSplit { body = text, suffix = "" }
     }
     const int_suffixes = ["i8", "i16", "i32", "i64", "u8", "u16", "u32", "u64", "usize", "isize"]
-    for i in 0..int_suffixes.len {
-        const s = int_suffixes[i]
+    for s in int_suffixes {
         if text.len >= s.len and tail_equals(text, s) {
             return SuffixSplit {
                 body = slice_str(text, 0, text.len - s.len),

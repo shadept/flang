@@ -249,7 +249,7 @@ public partial class HmTypeChecker
         VariableDeclarationNode vd => new VariableDeclarationNode(vd.Span, vd.NameSpan, vd.Name, vd.Type,
             vd.Initializer != null ? CloneExpression(vd.Initializer) : null),
         ForLoopNode fl => new ForLoopNode(fl.Span, fl.IteratorVariable,
-            CloneExpression(fl.IterableExpression), CloneExpression(fl.Body)),
+            CloneExpression(fl.IterableExpression), CloneExpression(fl.Body), fl.ByRef),
         LoopNode loop => new LoopNode(loop.Span, CloneExpression(loop.Body)),
         WhileNode wh => new WhileNode(wh.Span, CloneExpression(wh.Condition), CloneExpression(wh.Body)),
         DeferStatementNode df => new DeferStatementNode(df.Span, CloneExpression(df.Expression)),

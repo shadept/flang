@@ -53,8 +53,7 @@ pub fn set_comptime(self: &ResolveCtx, c: ComptimeCtx) {
 pub fn deinit(self: &ResolveCtx) {
     self.project_name.deinit()
     self.project_source_root.deinit()
-    for i in 0..self.deps.len {
-        let d = &self.deps[i]
+    for &d in self.deps {
         d.name.deinit()
         d.root.deinit()
     }
@@ -75,8 +74,7 @@ pub fn resolve_import(ctx: &ResolveCtx, segs: &List(String), allocator: &Allocat
 
     // Dependency rule: first segment names a direct dependency.
     if segs.len > 1 {
-        for i in 0..ctx.deps.len {
-            let d = &ctx.deps[i]
+        for &d in ctx.deps {
             if segs[0] == d.name.as_view() {
                 let p = join_module_path(d.root.as_view(), segs, 1, allocator)
                 if exists(p.as_view()) { return Some(p) }
@@ -167,8 +165,7 @@ pub fn join_module_path(base: String, segs: &List(String), start: usize, allocat
 // from its own manifest, exactly as the C# compiler does.
 pub fn resolve_ctx(proj: &Project, stdlib_root: String, allocator: &Allocator? = null) ResolveCtx {
     let deps = list(0, allocator)
-    for i in 0..proj.deps.len {
-        let d = &proj.deps[i]
+    for &d in proj.deps {
         let root = normalized_owned(dep_source_root(d.path.as_view(), allocator), allocator)
         deps.push(DepRoot { name = from_view(d.name.as_view()), root = root })
     }
@@ -225,8 +222,7 @@ fn source_root(project_dir: String, source_glob: String, allocator: &Allocator?)
         sb.append(project_dir)
         wrote = true
     }
-    for i in 0..segs.len {
-        let s = segs[i]
+    for s in segs {
         if contains(s, "*") { break }
         if contains(s, "?") { break }
         if wrote { sb.append('/') }

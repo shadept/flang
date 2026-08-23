@@ -381,8 +381,7 @@ fn ensure_decoder_headers(self: &CsvDecoder) {
         // Now create String views into header_buf
         const buf_ptr = self.header_buf.ptr
         let offset: usize = 0
-        for i in 0..self.spans.len {
-            const span = self.spans[i]
+        for span in self.spans {
             const len = span.end - span.start
             const view = .{ ptr = buf_ptr + offset, len = len } as String
             self.headers.push(view)
@@ -951,21 +950,18 @@ pub fn select_columns(table: &CsvTable, names: String[]) CsvTable {
 
     // Copy selected headers
     let col_headers = list(indices.len)
-    for i in 0..indices.len {
-        const idx = indices[i]
+    for idx in indices {
         col_headers.push(table.headers[idx])
     }
     result.headers = col_headers
 
     // Copy rows with selected columns
     let col_rows = list(table.rows.len)
-    for r in 0..table.rows.len {
-        const src = table.rows[r]
+    for src in table.rows {
         let rec: CsvRecord
         rec.headers = Some(&result.headers)
         let rec_fields = list(indices.len)
-        for j in 0..indices.len {
-            const idx = indices[j]
+        for idx in indices {
             if idx < src.fields.len {
                 rec_fields.push(src.fields[idx])
             } else {

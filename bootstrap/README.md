@@ -28,8 +28,9 @@ what lowers, what refuses, and what's next. High level:
 - [x] Codegen library (`lib/flang_codegen`: FIR + C backend)
 - [x] Name resolution + symbol tables
 - [x] Hindley-Milner type inference (`lib/flang_typer`, 0 `-c` errors)
-- [ ] Lowering to FIR (see the matrix; scalars through aggregates done)
-- [ ] Self-host
+- [x] Lowering to FIR (see the matrix; 15 off-path refusals remain)
+- [x] Self-host (stage-2 = stage-3 byte-identical fixpoint, 2026-08-22;
+      template expansion still rides the `.generated.f` sidecars)
 
 ## Status
 
@@ -42,12 +43,11 @@ by `cst_explorer_web` for visualization.
 it with `flang_typer` — 0 `-c` errors across the compiler + stdlib
 (99 modules) — lowers to FIR via `flang_driver`, and emits native
 executables through `flang_codegen`, linking the stdlib's C runtime
-sidecars. As of M11 (2026-08-21) the full self-build LINKS: **stage-1
-exists** and compiles + runs single-file programs correctly. 15
-functions still refuse (all off `main`'s path — SIMD csv internals and
-a few IO helpers); refusal-over-miscompile still guards them. Stage-1
-segfaults on the full multi-module project build — that miscompile hunt
-is the stage-2 frontier (docs/known-issues.md). `-v` prints a
+sidecars. As of 2026-08-22 the **stage-2 = stage-3 byte-identical
+fixpoint is reached**: stage-1 builds the full project into stage-2,
+stage-2 builds stage-3, and the two emit identical C. 15 functions
+still refuse (all off `main`'s path — SIMD csv internals and a few IO
+helpers); refusal-over-miscompile still guards them. `-v` prints a
 per-function skip report with reasons.
 
 The C# reference compiler (`src/FLang.*`) is the source of truth for

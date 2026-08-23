@@ -150,6 +150,13 @@ pub type InferenceResults = struct {
     // set. Lowering appends them after the explicit arguments. A call
     // with no entry here that is short of the callee's arity refuses.
     default_args: Dict(NodeId, List(Expr))
+    // A UFCS call whose receiver resolved through `op_deref` hops
+    // (checker's `deref_retry`), keyed by the call node: the op_deref
+    // pick per hop, outermost first. Lowering calls each hop on the
+    // receiver's address and passes the last hop's result as the
+    // receiver argument. Generic hops are rewritten to their
+    // specializations by the M10 drain, like `resolved_targets`.
+    receiver_derefs: Dict(NodeId, List(ResolvedTarget))
     allocator: &Allocator?
 }
 
@@ -163,6 +170,7 @@ pub fn inference_results(allocator: &Allocator? = null) InferenceResults {
         desugars = dict(allocator),
         lambdas = dict(allocator),
         default_args = dict(allocator),
+        receiver_derefs = dict(allocator),
         allocator = allocator,
     }
 }
@@ -176,6 +184,7 @@ pub fn deinit(self: &InferenceResults) {
     self.desugars.deinit()
     self.lambdas.deinit()
     self.default_args.deinit()
+    self.receiver_derefs.deinit()
 }
 
 // Record (or overwrite) the inferred type for a node. The "overwrite"
@@ -223,6 +232,20 @@ pub fn record_default_args(self: &InferenceResults, id: NodeId, exprs: List(Expr
     self.default_args.set(id, exprs)
 }
 
+pub fn record_receiver_deref(self: &InferenceResults, id: NodeId, chain: List(ResolvedTarget)) {
+    self.receiver_derefs.set(id, chain)
+}
+
+// Rewrite one hop of a recorded deref chain to its specialization -
+// the M10 drain's counterpart of `record_target`'s rewrite.
+pub fn update_receiver_deref(self: &InferenceResults, id: NodeId, index: usize, target: ResolvedTarget) {
+    let l = self.receiver_derefs.get(id)
+    if l.is_none() { return }
+    let chain = l.unwrap()
+    if index >= chain.len { return }
+    chain[index] = target
+}
+
 // Replace the lambda table wholesale - the zonk passes rebuild it (the
 // field itself is module-private under scoped mutability).
 pub fn replace_lambdas(self: &InferenceResults, ls: Dict(NodeId, LambdaInfo)) {
@@ -265,4 +288,5 @@ pub fn reset_side_tables(self: &InferenceResults) {
     self.desugars = dict(self.allocator)
     self.lambdas = dict(self.allocator)
     self.default_args = dict(self.allocator)
+    self.receiver_derefs = dict(self.allocator)
 }

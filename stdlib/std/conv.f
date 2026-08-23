@@ -299,8 +299,10 @@ pub fn format_f64_hex(val: f64, buf: u8[]) Result(usize, ConvError) {
 // (sign + digit + '.' + precision + 'e' + sign + 3 exponent digits).
 pub fn format_f64_exp(val: f64, buf: u8[], precision: usize = 6, uppercase: bool = false) Result(usize, ConvError) {
     if val != val { return write_word(buf, "nan") }
-    if val > 1.7976931348623157e308 { return write_word(buf, "inf") }
-    if val < -1.7976931348623157e308 { return write_word(buf, "-inf") }
+    // Infinity test without a DBL_MAX literal: `v * 0.5 == v` holds only
+    // for 0 and the infinities (a DBL_MAX-magnitude literal is the one
+    // shape the self-host parse_float can round to inf - see lower.f).
+    if val * 0.5 == val and val != 0.0 { return write_word(buf, if val > 0.0 { "inf" } else { "-inf" }) }
 
     const negative = val < 0.0
     let d = if negative { 0.0 - val } else { val }

@@ -163,10 +163,12 @@ public partial class HmTypeChecker
     {
         var iterableType = InferExpression(forLoop.IterableExpression);
 
-        // Resolve iter(&T) -> IteratorType
+        // Resolve iter(&T) -> IteratorType; `for &x in xs` asks for iter_ref
+        // (the by-reference protocol entry) instead.
+        var iterName = forLoop.ByRef ? "iter_ref" : "iter";
         var iterRef = new ReferenceType(iterableType);
-        var iterResult = TryResolveOperator("iter", [iterRef], forLoop.Span, out var iterNode)
-                      ?? TryResolveOperator("iter", [iterableType], forLoop.Span, out iterNode);
+        var iterResult = TryResolveOperator(iterName, [iterRef], forLoop.Span, out var iterNode)
+                      ?? TryResolveOperator(iterName, [iterableType], forLoop.Span, out iterNode);
 
         Type elementType;
         if (iterResult != null)

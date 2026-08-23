@@ -442,8 +442,7 @@ pub fn name(op: ConvertOp) String {
 
 fn print_byte_literal(bytes: u8[], sb: &StringBuilder) {
     sb.append("\"")
-    for i in 0..bytes.len {
-        const b = bytes[i]
+    for b in bytes {
         if b == '\\' { sb.append("\\\\") }
         else if b == '"' { sb.append("\\\"") }
         else if b == '\n' { sb.append("\\n") }

@@ -616,6 +616,21 @@ loop {
 
 Make a type iterable by defining `fn iter(self: &T) Iterator` and `fn next(self: &Iterator) Element?`.
 
+`for x in xs` yields elements **by value** (a copy per iteration - a
+local temporary the C backend eliminates under `--release`; measured
+on 48-byte structs the by-value loop compiles to the same vectorized
+loop as manual indexing). To mutate in place, iterate by reference:
+`for &x in xs` binds `x: &T` into the collection's storage - it
+resolves `iter_ref(&xs)` instead of `iter(&xs)`, then `next` as usual,
+so any type joins by defining `fn iter_ref(self: &T) RefIterator` with
+`fn next(self: &RefIterator) &E?`. (`for x in xs.iter_ref()` is the
+same thing spelled out. Not a speed knob: the pointer stride can
+defeat vectorization; the point is aliasing the element.) (`List` and slices ship `iter_ref`; an
+iterator type is its own iterable, so combinators chain:
+`xs.iter().enumerate()`). A fixed array `[T; N]` iterates through
+`iter(&T[])` by decay; a `String` is not iterable (byte vs char is
+the caller's call - index it).
+
 ### 7.5 Match Expression
 
 Postfix syntax: `expr match { pattern [if guard] => result, ... }`. Postfix `match` is the lowest-precedence operator — `a + b match { ... }` parses as `(a + b) match { ... }`.

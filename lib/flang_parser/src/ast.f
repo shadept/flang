@@ -90,8 +90,7 @@ pub type DeclAttribute = enum {
 
 // Whether a declaration's directives mark it as a foreign import.
 pub fn is_foreign_directive(ds: &List(DeclAttribute)) bool {
-    for i in 0..ds.len {
-        let d = &ds[i]
+    for &d in ds {
         let f = d.* match { Foreign => true, _ => false }
         if f { return true }
     }
@@ -268,6 +267,8 @@ pub type ContinueStmt = struct {
 pub type ForStmt = struct {
     span: SourceSpan
     var_name: String
+    // `for &x in xs`: iterate through `iter_ref` (elements by reference).
+    by_ref: bool
     iterable: &Expr
     body: BlockExpr
 }

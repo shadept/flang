@@ -1688,32 +1688,41 @@ public class HmAstLowering
         // (`it.err()`, `it.done`). With the old copy-based lowering those
         // fields stayed frozen at their pre-loop values, silently swallowing
         // iterator errors.
-        Value iterableVal;
-        if (forLoop.IterableExpression is IdentifierExpressionNode idExpr
-            && _locals.TryGetValue(idExpr.Name, out var idLocal)
-            && !_parameters.Contains(idExpr.Name))
-        {
-            iterableVal = idLocal;
-        }
-        else
-        {
-            iterableVal = LowerExpression(forLoop.IterableExpression);
-
-            // Materialize iterable to alloca if not already a pointer (iter takes &T)
-            if (iterableVal.IrType is not IrPointer)
-            {
-                var iterableIrType = iterableVal.IrType ?? TypeLayoutService.IrVoidPrim;
-                var temp = _currentBlock.EmitAlloca(iterableIrType);
-                _currentBlock.EmitStorePtr(temp, iterableVal);
-                iterableVal = temp;
-            }
-        }
-
-        // 2. Call iter(&iterable) -> IteratorStruct
         var iterCalleeParamTypes = new List<IrType>();
         foreach (var p in forLoop.ResolvedIterFunction.Parameters)
             iterCalleeParamTypes.Add(GetIrType(p));
-        var iterResult = _currentBlock.EmitCall("iter", [iterableVal], iteratorIrType, iterCalleeParamTypes);
+
+        Value? idLocal = null;
+        var isPlainLocal = forLoop.IterableExpression is IdentifierExpressionNode idExpr
+            && _locals.TryGetValue(idExpr.Name, out idLocal)
+            && !_parameters.Contains(idExpr.Name);
+        var iterableVal = isPlainLocal ? idLocal! : LowerExpression(forLoop.IterableExpression);
+
+        // A fixed array iterates through `iter(&T[])`: the checker accepted
+        // the decay, so build the `{ptr, len}` view here - the array's
+        // storage pointer is not a Slice (same gap as index operators,
+        // see DecayIndexBase).
+        if (iterCalleeParamTypes.Count > 0
+            && iterCalleeParamTypes[0] is IrPointer { Pointee: IrStruct iterParamStruct })
+        {
+            if (TryDecayArrayBase(iterableVal, forLoop.IterableExpression, iterParamStruct) is { } view)
+            {
+                iterableVal = view;
+                isPlainLocal = false;
+            }
+        }
+
+        // Materialize iterable to alloca if not already a pointer (iter takes &T)
+        if (!isPlainLocal && iterableVal.IrType is not IrPointer)
+        {
+            var iterableIrType = iterableVal.IrType ?? TypeLayoutService.IrVoidPrim;
+            var temp = _currentBlock.EmitAlloca(iterableIrType);
+            _currentBlock.EmitStorePtr(temp, iterableVal);
+            iterableVal = temp;
+        }
+
+        // 2. Call iter(&iterable) -> IteratorStruct
+        var iterResult = _currentBlock.EmitCall(forLoop.ByRef ? "iter_ref" : "iter", [iterableVal], iteratorIrType, iterCalleeParamTypes);
 
         // 3. Set up the pointer we pass to next(). If iter returned a reference,
         //    the returned value IS the pointer — use it directly. Otherwise
@@ -3692,17 +3701,21 @@ public class HmAstLowering
     /// IR type; this one cannot.
     /// </remarks>
     private Value DecayIndexBase(Value baseVal, ExpressionNode baseNode, IrType paramType)
+        => TryDecayArrayBase(baseVal, baseNode, paramType) ?? baseVal;
+
+    /// <summary>The slice view for an array base, or null when no decay applies.</summary>
+    private Value? TryDecayArrayBase(Value baseVal, ExpressionNode baseNode, IrType paramType)
     {
         if (paramType is not IrStruct sliceStruct || sliceStruct.Name != WellKnown.Slice)
-            return baseVal;
+            return null;
 
         var semantic = _types.GetResolvedType(baseNode);
         if (semantic is Core.Types.ReferenceType semRef) semantic = semRef.InnerType;
-        if (semantic is not Core.Types.ArrayType arr) return baseVal;
+        if (semantic is not Core.Types.ArrayType arr) return null;
 
         var ptrField = sliceStruct.Fields.FirstOrDefault(f => f.Name == "ptr");
         var lenField = sliceStruct.Fields.FirstOrDefault(f => f.Name == "len");
-        if (ptrField.Type == null || lenField.Type == null) return baseVal;
+        if (ptrField.Type == null || lenField.Type == null) return null;
 
         var irArray = new IrArray(_layout.Lower(arr.ElementType), arr.Length);
         return CoerceArrayToSlice(baseVal, irArray, sliceStruct, ptrField, lenField);

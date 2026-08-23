@@ -167,8 +167,7 @@ fn find_recursive(m: &IrModule, foreigns: &Set(OwnedString), alloc: &Allocator?)
 
     let adj: List(List(usize)) = list(m.functions.len, alloc)
     defer {
-        for i in 0..adj.len {
-            let e = &adj[i]
+        for &e in adj {
             e.deinit()
         }
         adj.deinit()
@@ -176,8 +175,7 @@ fn find_recursive(m: &IrModule, foreigns: &Set(OwnedString), alloc: &Allocator?)
     for i in 0..m.functions.len {
         let edges: List(usize) = list(0, alloc)
         const f = &m.functions[i]
-        for bi in 0..f.blocks.len {
-            const b = &f.blocks[bi]
+        for &b in f.blocks {
             for ii in 0..b.instrs.len {
                 b.instrs[ii] match {
                     Call(c) => {
@@ -213,9 +211,7 @@ fn reaches_self(adj: &List(List(usize)), start: usize, alloc: &Allocator?) bool 
     let queue: List(usize) = list(0, alloc)
     defer queue.deinit()
 
-    const seeds = &adj[start]
-    for i in 0..seeds.len {
-        const c = seeds[i]
+    for c in adj[start] {
         if !visited.contains(c) {
             visited.add(c)
             queue.push(c)
@@ -227,9 +223,7 @@ fn reaches_self(adj: &List(List(usize)), start: usize, alloc: &Allocator?) bool 
         const n = queue[head]
         head = head + 1
         if n == start { return true }
-        const children = &adj[n]
-        for i in 0..children.len {
-            const c = children[i]
+        for c in adj[n] {
             if !visited.contains(c) {
                 visited.add(c)
                 queue.push(c)

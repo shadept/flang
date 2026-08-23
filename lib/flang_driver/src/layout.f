@@ -172,8 +172,7 @@ fn fields_layout(tys: &List(Ty), repr: Repr, reg: &NominalRegistry, alloc: &Allo
     let offsets: List(usize) = list(n, alloc)
     for i in 0..n { offsets.push(0) }
     let cursor: usize = 0
-    for k in 0..order.len {
-        let di = order[k]
+    for di in order {
         let fl = &fls[di]
         let off = align_up(cursor, fl.align)
         offsets[di] = off
@@ -327,8 +326,7 @@ fn enum_layout_impl(def: &EnumDef, args: &List(Ty), reg: &NominalRegistry, alloc
     let max_palign: usize = 1
     let any_payload: bool = false
 
-    for i in 0..def.variants.len {
-        let v = &def.variants[i]
+    for &v in def.variants {
         if v.payloads.len == 0 { continue }
         any_payload = true
         let ptys: List(Ty) = list(v.payloads.len, alloc)

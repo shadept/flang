@@ -2527,6 +2527,7 @@ public class Parser
 
         Token iterator;
         ExpressionNode iterable;
+        var byRef = false;
 
         if (_currentToken.Kind == TokenKind.OpenParenthesis)
         {
@@ -2545,7 +2546,12 @@ public class Parser
         }
         else
         {
-            // Bare: for i in expr { ... }
+            // Bare: for i in expr { ... } / for &i in expr { ... }
+            if (_currentToken.Kind == TokenKind.Ampersand)
+            {
+                Eat(TokenKind.Ampersand);
+                byRef = true;
+            }
             iterator = Eat(TokenKind.Identifier);
             Eat(TokenKind.In);
             _stopAtBrace = true;
@@ -2559,7 +2565,7 @@ public class Parser
         _loopDepth--;
 
         var span = SourceSpan.Combine(forKeyword.Span, body.Span);
-        return new ForLoopNode(span, iterator.Text, iterable, body);
+        return new ForLoopNode(span, iterator.Text, iterable, body, byRef);
     }
 
     /// <summary>

@@ -225,8 +225,7 @@ pub fn lookup_variant(self: &NominalRegistry, name: String, arity: usize, vis: &
         if ed.is_none() { continue }
         let e = ed.unwrap()
         if !vis.allows(e.module) { continue }
-        for j in 0..e.variants.len {
-            let v = &e.variants[j]
+        for &v in e.variants {
             if v.name == name and v.payloads.len == arity {
                 return Some(i as u32)
             }

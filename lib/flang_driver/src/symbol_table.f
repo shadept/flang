@@ -134,8 +134,7 @@ pub fn symbol_builder(result: &TypeCheckResult, allocator: &Allocator? = null) S
         // variables as unconstrained vars (protocol resolution is
         // post-M10), so `entry.value` needs the pin.
         let overloads: List(FunctionScheme) = entry.value
-        for i in 0..overloads.len {
-            let f = &overloads[i]
+        for &f in overloads {
             // Variadic functions are declared (the backend still emits
             // their extern) but not called - the variadic portion needs
             // per-argument types the call site doesn't carry yet.
@@ -153,8 +152,7 @@ pub fn symbol_builder(result: &TypeCheckResult, allocator: &Allocator? = null) S
     // gate only filters the shapes lowering cannot represent yet.
     let by_spec_id: Dict(u32, OwnedString) = dict(allocator)
     let by_spec_sig: Dict(u32, FnSig) = dict(allocator)
-    for i in 0..result.specializations.len {
-        let sp = &result.specializations[i]
+    for &sp in result.specializations {
         let s = FnSig { params = sp.concrete_params, ret = sp.concrete_return }
         if !sig_lowerable(&s, false, &result.nominals) { continue }
         let sym = mangle_spec_symbol(sp.module, sp.name, &s, &result.nominals, allocator)
@@ -274,8 +272,7 @@ fn record_concrete(fields: &List(Field)) bool {
 
 // Record a symbol for each of `ast_module`'s callable functions.
 pub fn add_module(self: &SymbolBuilder, ast_module: &Module, fqn: String) {
-    for i in 0..ast_module.decls.len {
-        let d = &ast_module.decls[i]
+    for &d in ast_module.decls {
         d.* match {
             Function(fd) => add_function_symbol(self, &fd, fqn),
             _ => {},

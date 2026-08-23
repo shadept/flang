@@ -77,8 +77,7 @@ pub fn deinit(self: &Project) {
     self.version.deinit()
     self.source.deinit()
     self.output.deinit()
-    for i in 0..self.deps.len {
-        let d = &self.deps[i]
+    for &d in self.deps {
         d.name.deinit()
         d.path.deinit()
     }
@@ -161,8 +160,7 @@ fn deinit_platform(self: &PlatformConfig) {
 }
 
 fn deinit_strings(list: &List(OwnedString)) {
-    for i in 0..list.len {
-        let s = &list[i]
+    for &s in list {
         s.deinit()
     }
 }

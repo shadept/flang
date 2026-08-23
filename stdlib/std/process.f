@@ -210,15 +210,13 @@ pub fn spawn(self: &Command) Result(Child, ProcessError) {
     // Pack argv pointers as a usize array - matches char** on the C side.
     let argv_ptrs: List(usize) = list(self.__args.len, self.__allocator)
     defer argv_ptrs.deinit()
-    for i in 0..self.__args.len {
-        const a = self.__args[i]
+    for a in self.__args {
         argv_ptrs.push(a.ptr as usize)
     }
 
     let envp_ptrs: List(usize) = list(self.__env_pairs.len, self.__allocator)
     defer envp_ptrs.deinit()
-    for i in 0..self.__env_pairs.len {
-        const e = self.__env_pairs[i]
+    for e in self.__env_pairs {
         envp_ptrs.push(e.ptr as usize)
     }
 

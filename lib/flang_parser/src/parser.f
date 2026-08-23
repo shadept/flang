@@ -929,6 +929,7 @@ fn parse_if_expr(self: &Parser) CstNode {
 fn parse_for_loop(self: &Parser) CstNode {
     let b = self.open(NodeKind.ForLoopExpr)
     self.eat_into(&b)                                                       // `for`
+    if self.current_kind() == TokenKind.Ampersand { self.eat_into(&b) }     // `for &x in` (iter_ref)
     if self.current_kind() == TokenKind.Identifier { self.eat_into(&b) }
     self.expect_into(&b, TokenKind.In, "E1002")
     const saved = self.stop_at_brace

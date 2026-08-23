@@ -37,6 +37,9 @@ pub type TypeCheckResult = struct {
     // M11: per call site, the callee's default expressions for omitted
     // parameters, in parameter order - see InferenceResults.default_args.
     default_args: Dict(NodeId, List(Expr))
+    // Per UFCS call site, the op_deref hops the receiver resolved
+    // through - see InferenceResults.receiver_derefs.
+    receiver_derefs: Dict(NodeId, List(ResolvedTarget))
     nominals: NominalRegistry
     functions: FunctionRegistry
     // RFC-014: checked lambda literals of the PROGRAM tables (a lambda in
@@ -63,6 +66,7 @@ pub fn empty_result(allocator: &Allocator? = null) TypeCheckResult {
         desugars = dict(allocator),
         synth_strings = list(0, allocator),
         default_args = dict(allocator),
+        receiver_derefs = dict(allocator),
         nominals = nominal_registry(allocator),
         functions = function_registry(allocator),
         lambdas = dict(allocator),
@@ -82,6 +86,7 @@ pub fn deinit(self: &TypeCheckResult) {
     self.desugars.deinit()
     self.synth_strings.deinit()
     self.default_args.deinit()
+    self.receiver_derefs.deinit()
     self.nominals.deinit()
     self.functions.deinit()
     self.lambdas.deinit()
@@ -110,6 +115,10 @@ pub fn get_lambda(self: &TypeCheckResult, id: NodeId) &LambdaInfo? {
 
 pub fn get_default_args(self: &TypeCheckResult, id: NodeId) &List(Expr)? {
     return self.default_args.get_ref(id)
+}
+
+pub fn get_receiver_deref(self: &TypeCheckResult, id: NodeId) &List(ResolvedTarget)? {
+    return self.receiver_derefs.get_ref(id)
 }
 
 pub fn get_closure(self: &TypeCheckResult, id: NominalId) &ClosureSig? {

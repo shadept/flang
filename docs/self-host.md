@@ -53,10 +53,10 @@ cheaper than implementing it.
 | AST projection | ✅ | `flang_parser.projector` |
 | Name resolution + imports | ✅ | project-wide; type names resolve program-wide (import-strict later) |
 | Type inference (HM) | ⚠️ | 0 errors self-checking compiler + stdlib (99 modules) *including every instantiated generic body* (M10); 1 expression form (`a?.b`) is still unvisited and rejection power lags the reference — see the type-checking section below |
-| AST → FIR lowering | ✅* | M11 landed 2026-08-21: everything `main`'s graph needs lowers — 3550 functions emit, 15 refusals remain, all off the entry path (SIMD-intrinsic csv internals, `read_all_inplace`, `readline`); refusal (never miscompile) still guards those |
+| AST → FIR lowering | ✅* | M11 landed 2026-08-21: everything `main`'s graph needs lowers — 3593 functions emit, 15 refusals remain, all off the entry path (SIMD-intrinsic csv internals, `read_all_inplace`, `readline`); refusal (never miscompile) still guards those |
 | C backend (FIR → C99 → exe) | ✅ | for all FIR the lowering emits; links stdlib C runtime sidecars |
-| Full self-build | ✅ | **STAGE-1 EXISTS** (2026-08-21): the self-build links and the resulting compiler builds and runs single-file programs correctly (string matching, slicing, iterators, heap allocation all verified end-to-end). `-v` prints the per-function skip report with reasons |
-| Stage-2 = stage-3 fixpoint | ❌ | stage-1 SEGFAULTS on the full multi-module project build (it handles single files) — a scale-triggered stage-1 miscompile is the new frontier; find it, then the byte-identical fixpoint |
+| Full self-build | ✅ | stage-1 (2026-08-21), then stage-2 and stage-3 (2026-08-22): every stage builds the full 99-module project. `-v` prints the per-function skip report with reasons |
+| Stage-2 = stage-3 fixpoint | ✅ | **REACHED 2026-08-22**: stage-2's and stage-3's emitted C are byte-identical (`cmp` clean; dict iteration order was already deterministic). Unlocked by fixing three stacked stage-1 miscompiles — the unrecorded UFCS op_deref peel, missing array-decay at call arguments, and `parse_float` rounding DBL_MAX literals to inf — see docs/known-issues.md §"Stage-1 Segfaults" |
 
 ## Type checking
 
@@ -133,7 +133,7 @@ current-state summary.
 | Lambdas / closures | ✅ | 23/5 | literal sites enqueue `PendingLambda` (with the active overlay) and emit after the main walk — non-capturing as a plain function, capturing as an `op_call` whose leading param is the env pointer and whose captured names bind to `gep`s into it (no copy; captures are read-only). The literal itself is a `FuncRef` or a stack-built env struct |
 | Global `const` declarations | ✅ | 101/17 | M11: each const becomes an aligned zeroed byte global plus a synthesized `__finit_*` function lowering its initializer (so vtables of fn pointers and cross-global addresses need no static-initializer support); `main` calls every SURVIVING init first, wired AFTER the drop pass, which also poisons any reader of a const whose init died (`reads … whose initializer was dropped`) — absent, never silently zero. Reads resolve through `RtConst(fqn)` targets the checker records on both the decl and every read |
 | `test` blocks (self-host `flang test`) | ❌ | dev workflow, not `main`'s graph | bootstrap CLI has no `test` subcommand |
-| UFCS receiver adaptation | ✅ | everywhere | M11: the receiver is adapted to the winner's first-parameter shape by MEMORY type (binding/field declared types — node types are rewritten by the checker's adaptation, so they cannot arbitrate): value→`&prim` passes the place's address, `&prim`→value loads through, same-representation prims (`usize` vs `u64` — declaration order arbitrates equal picks) interchange. Pushing the raw value against an adapted pick was a silent scalar miscompile |
+| UFCS receiver adaptation | ✅ | everywhere | M11: the receiver is adapted to the winner's first-parameter shape by MEMORY type (binding/field declared types — node types are rewritten by the checker's adaptation, so they cannot arbitrate): value→`&prim` passes the place's address, `&prim`→value loads through, same-representation prims (`usize` vs `u64` — declaration order arbitrates equal picks) interchange. Pushing the raw value against an adapted pick was a silent scalar miscompile. Stage-2 fixpoint (2026-08-22): a receiver that resolved through `op_deref` hops records the chain (`receiver_derefs`, per call node, hops drain-rewritten to specializations) and `lower_deref_receiver` calls each hop — the aggregate "value IS its address" shortcut passed `&Owned(StringBuilder)` as `&StringBuilder`, the stage-2 segfault. Call arguments (and value-form index receivers) also adapt array→slice decay now (`lower_arg_adapted`) |
 | Template directives (`#enum_utils`, `#derive`, `#interface`, …) | ⚠️ | every sidecar | not expanded; checked-in `.generated.f` sidecars stand in |
 | `#if` compile-time conditionals | ✅ | 27/10 | statement-level splices the active branch's statements at `lower_stmt`; decl-level is already flattened before lowering. The `comptime.f` evaluator itself joins the M11 emission frontier (`String ==` dispatch), like most of the checker |
 
@@ -147,7 +147,7 @@ current-state summary.
 | `if` / `else` (stmt + expr) | ✅ | everywhere | block-parameter joins |
 | `while`, `loop`, `break`, `continue` | ✅ | everywhere | |
 | `for` over integer ranges | ✅ | everywhere | induction var as block param |
-| `for` over iterators (iterator protocol) | ✅ | 25/19 | M11: `iter` called once, `next(&state)` per iteration with the Option's discriminant (or niche pointer) as the loop test; the payload copies into the loop variable's own slot per iteration (value semantics). Self-iterator states (`iter → &State`) pass unchanged; verified end-to-end (`for x in xs` sums correctly) |
+| `for` over iterators (iterator protocol) | ✅ | ~125/40 (99 index loops converted to `for x in xs` / `xs.iter_ref()` on 2026-08-22) | M11: `iter` called once, `next(&state)` per iteration with the Option's discriminant (or niche pointer) as the loop test; the payload copies into the loop variable's own slot per iteration (value semantics). Self-iterator states (`iter → &State`) pass unchanged; verified end-to-end (`for x in xs` sums correctly). A fixed-array iterable decays to the slice view `iter(&T[])` takes (`lower_arg_adapted`; the reference had the same gap - docs/known-issues.md) |
 | `defer` | ✅ | 190/20 | M9: per-function schedule + per-scope marks (the reference's model). Fires LIFO on scope exit; `return` / `break` / `continue` / `?` emit down to their target depth without popping; `return` evaluates its value first (spec 4.1). A block's trailing aggregate value is copied out before its own defers fire. Escapes from inside a deferred expression (`defer { return }`, `?` in defer - E2091) refuse |
 
 ## Lowering — expressions
@@ -165,7 +165,7 @@ current-state summary.
 | Struct literals (concrete, incl. explicit generic args) | ✅ | everywhere | `Pair { … }` without args is E2019 |
 | Anonymous `.{ … }` literals | ✅ | **192/50** | typed via nominal coercion; M10 adds the deferred field pass (`resolve_anon_literals`) so initializers actually unify against the nominal's field types — mismatches report, unsuffixed numeric fields pin |
 | Member access (nested paths, place + value) | ✅ | everywhere | generic fields load at substituted widths |
-| Address-of `&x`, dereference `p.*` | ✅ | everywhere | |
+| Address-of `&x`, dereference `p.*` | ✅ | everywhere | `x.*` on a nominal dispatches its `op_deref` (2026-08-22): the checker records the pick as an operator on the deref node and types it as `T`; lowering's `deref_address` calls it in every position - value, place (`&b.*`, assignment), and UFCS receiver (`b.*.m()`). Previously the node typed as a fresh var and free-call arguments silently picked the wrong overload (harness: `op_deref/op_deref_overload_positions.f`) |
 | Direct calls, UFCS, overloads | ✅ | everywhere | |
 | Enum variant construction (`Some(x)`, `Color.Red`, `None`) | ✅ | ~1550/60+ | M7: tagged form builds tag-then-payload into a fresh slot; niche `Option(&T)` is a retype (`None` = null ptr, `Some(p)` = its payload ptr). Multi-payload construction refuses (2 sites, matching the pattern side) |
 | Indexing: `op_index_ref` / `op_index` / built-in | ✅ | everywhere | |
@@ -292,14 +292,28 @@ docs/known-issues.md for the live instance of that failure).
    `Expr.Error`. Also: the `-v` build now prints a skip report with
    per-function refusal REASONS — the debugging loop for everything
    above.
-7. **Stage-2 correctness**: stage-1 builds and runs single-file
-   programs but segfaults on the full multi-module project build —
-   hunt the scale-triggered miscompile, then the stage-2 = stage-3
-   byte-identical fixpoint (dict-iteration emission order will need
-   determinizing). Then: template expansion, match exhaustiveness and
-   the other rejection-power gaps, `project_info()` interception, real
-   RTTI (name strings, fields). The "not needed" list above stays
-   refused until a real use appears.
+7. ~~**Stage-2 correctness**~~ ✅ landed 2026-08-22: **the stage-2 =
+   stage-3 byte-identical fixpoint is reached.** The "scale-triggered
+   stage-1 segfault" was three stacked miscompiles, none actually
+   scale-triggered (the nondeterminism was a stale binary): the UFCS
+   `op_deref` peel resolved by `deref_retry` but never recorded for
+   lowering (receivers through `Owned(T)` read every field 8 bytes
+   off), array→slice decay never firing for non-literal call arguments
+   (a let-bound `[u8; 4]` handed to `u8[]` as raw bytes), and
+   `parse_float` rounding the DBL_MAX infinity-guard literals in
+   `emit_float_const`/`format_f64_exp` over into `+inf` (stage-2 then
+   emitted a bare `inf` identifier into stage-3's C). Fixes: the
+   `receiver_derefs` table (checker records the hop chain per call
+   node, the M10 drain rewrites generic hops to specializations,
+   `lower_deref_receiver` calls them), `lower_arg_adapted` (decay views
+   at call arguments and value-form index receivers), infinity guards
+   rewritten to `v * 0.5 == v`, and chunked 10^22 scale application in
+   `parse_float`. Dict-iteration emission order was already
+   deterministic — no determinization needed.
+8. **Post-fixpoint**: template expansion (drop the `.generated.f`
+   sidecars), match exhaustiveness and the other rejection-power gaps,
+   `project_info()` interception, real RTTI (name strings, fields).
+   The "not needed" list above stays refused until a real use appears.
 
 ## Dogfooding as language design
 

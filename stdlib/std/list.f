@@ -291,6 +291,22 @@ pub fn next(it: &ListIterator($T)) T? {
     return elem
 }
 
+// `for &x in xs` - elements by reference, through the slice's iterator.
+pub fn iter_ref(l: &List($T)) SliceRefIterator(T) {
+    return l.as_slice().iter_ref()
+}
+
+test "for &x writes through to the list, directly and via as_slice" {
+    let xs: List(u32) = list(0)
+    defer xs.deinit()
+    xs.push(1u32)
+    xs.push(2u32)
+    for &x in xs { x.* = x.* * 10 }
+    for &x in xs.as_slice() { x.* = x.* + 1 }
+    assert_eq(xs[0], 11u32, "first element written through both refs")
+    assert_eq(xs[1], 21u32, "second element written through both refs")
+}
+
 test "push_all appends a slice in order" {
     let xs: List(u32) = list(0)
     defer xs.deinit()

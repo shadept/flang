@@ -354,6 +354,7 @@ fn emit_for_stmt(sb: &StringBuilder, fs: &ForStmt) {
     sb.append("{\"kind\":\"For\",")
     emit_span(sb, fs.span)
     emit_kv_string(sb, "var", fs.var_name)
+    emit_kv_bool(sb, "by_ref", fs.by_ref)
     sb.append(",\"iter\":")
     emit_expr(sb, fs.iterable)
     sb.append(",\"body\":")

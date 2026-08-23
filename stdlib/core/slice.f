@@ -274,6 +274,28 @@ pub fn next(iter: &SliceIterator($T)) T? {
     return Some(val)
 }
 
+// Reference iterator: `for x in xs.iter_ref()` yields `&T` into the
+// slice's storage instead of a copy.
+pub type SliceRefIterator = struct(T) {
+    slice: T[]
+    index: usize
+}
+
+pub fn iter_ref(slice: &$T[]) SliceRefIterator(T) {
+    return .{ slice = slice.*, index = 0 }
+}
+
+pub fn iter(it: &SliceRefIterator($T)) SliceRefIterator(T) {
+    return it.*
+}
+
+pub fn next(iter: &SliceRefIterator($T)) &T? {
+    if iter.index >= iter.slice.len { return null }
+    const p: &T = iter.slice.ptr + iter.index
+    iter.index = iter.index + 1
+    return Some(p)
+}
+
 // =============================================================================
 // Foreigns
 // =============================================================================

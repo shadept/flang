@@ -152,6 +152,7 @@ if a { foo } else if b { bar } else { baz }
 
 // for-in (only kind of for loop). Parens around the header are NOT permitted.
 for item in collection { process(item) }
+for &item in collection { item.* = ... }   // by reference: `item: &T`, via `iter_ref`
 for i in 0..5 { /* 0,1,2,3,4 */ }    // half-open: `..` only, no `..=`
 
 // loop (infinite, use break/continue)
@@ -199,7 +200,7 @@ defer close(handle)
 
 ### Iterator Protocol
 
-`for x in collection` desugars to calling `iter(&collection)` then `next(&iterator)` returning `T?`. Make a type iterable by defining `fn iter(self: &T) Iterator` and `fn next(self: &Iterator) Element?`.
+`for x in collection` desugars to calling `iter(&collection)` then `next(&iterator)` returning `T?`. Make a type iterable by defining `fn iter(self: &T) Iterator` and `fn next(self: &Iterator) Element?`. `for &x in collection` calls `iter_ref(&collection)` instead (then `next` returning `&T?`), binding `x` as a reference into the collection - `List` and slices provide it; `for x in xs.iter_ref()` is the explicit spelling.
 
 ## Operators
 

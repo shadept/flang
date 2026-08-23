@@ -120,6 +120,10 @@ type AnonFieldRec = struct {
 type PendingSpec = struct {
     span: SourceSpan
     is_operator: bool
+    // When set, the pick is an op_deref hop of a UFCS receiver chain
+    // (`deref_retry`): the drain rewrites `receiver_derefs[span][index]`
+    // instead of the call/operator tables.
+    deref_index: usize?
     function_id: u32
     tp_binds: Dict(VarId, Ty)     // template quantified id → call-site fresh var
     inst_params: List(Ty)
@@ -391,8 +395,7 @@ fn resolve_named(self: &Checker, n: &NamedType) Ty {
 
 fn resolve_generic_args(self: &Checker, n: &NamedType) List(Ty) {
     let out: List(Ty) = list(n.generic_args.len, self.allocator)
-    for i in 0..n.generic_args.len {
-        let arg = &n.generic_args[i]
+    for &arg in n.generic_args {
         out.push(resolve_type_expr(self, arg))
     }
     return out
@@ -445,8 +448,7 @@ fn resolve_slice(self: &Checker, s: &SliceType) Ty {
 
 fn resolve_tuple(self: &Checker, t: &TupleType) Ty {
     let elems: List(Ty) = list(t.elements.len, self.allocator)
-    for i in 0..t.elements.len {
-        let e = &t.elements[i]
+    for &e in t.elements {
         elems.push(resolve_type_expr(self, e))
     }
     return Ty.Tuple(elems)
@@ -454,8 +456,7 @@ fn resolve_tuple(self: &Checker, t: &TupleType) Ty {
 
 fn resolve_function(self: &Checker, f: &FunctionType) Ty {
     let params: List(Ty) = list(f.params.len, self.allocator)
-    for i in 0..f.params.len {
-        let p = &f.params[i]
+    for &p in f.params {
         params.push(resolve_type_expr(self, p))
     }
     let ret = f.return_type match {
@@ -546,8 +547,7 @@ fn fn_visibility(self: &Checker) Visibility {
             // Built locally before wrapping - growing a set through a
             // returned struct's field is the two-field-hop hazard.
             let fresh = base_visible_set(self, m)
-            for i in 0..self.spec_callers.len {
-                let c = self.spec_callers[i]
+            for c in self.spec_callers {
                 fresh.add(c)
                 self.visible_by_module.get(c) match {
                     Some(src) => copy_set_into(&fresh, &src),
@@ -611,8 +611,7 @@ fn build_visibility(self: &Checker, modules: &List(Module), paths: &List(String)
 // dotted path names no loaded module is silently dropped here; the
 // unresolved-import diagnostic is the loader's job.
 fn collect_edges(m: &Module, paths: &List(String), imps: &List(String), reexps: &List(String), alloc: &Allocator?) {
-    for j in 0..m.decls.len {
-        let d = &m.decls[j]
+    for &d in m.decls {
         d.* match {
             Import(id) => {
                 let dotted = dot_join(&id.path, alloc)
@@ -636,9 +635,7 @@ fn collect_edges(m: &Module, paths: &List(String), imps: &List(String), reexps: 
 fn compute_visible(idx: usize, paths: &List(String), imports: &List(List(String)), reexports: &List(List(String)), out: &Set(String), alloc: &Allocator?) {
     out.add(paths[idx])
     let work: List(String) = list(0, alloc)
-    let imps = &imports[idx]
-    for k in 0..imps.len {
-        let im = imps[k]
+    for im in imports[idx] {
         if !out.contains(im) {
             out.add(im)
             work.push(im)
@@ -650,9 +647,7 @@ fn compute_visible(idx: usize, paths: &List(String), imports: &List(List(String)
         head = head + 1
         let ni = find_index(paths, node)
         if ni.is_some() {
-            let re = &reexports[ni.unwrap()]
-            for k in 0..re.len {
-                let rv = re[k]
+            for rv in reexports[ni.unwrap()] {
                 if !out.contains(rv) {
                     out.add(rv)
                     work.push(rv)
@@ -709,8 +704,7 @@ fn contains_view(list: &List(String), v: String) bool {
 // variant payload can reference a type declared in any module, in any order.
 pub fn collect_nominal_names(self: &Checker, module: &Module, module_path: String) {
     self.current_module = Some(module_path)
-    for i in 0..module.decls.len {
-        let decl = &module.decls[i]
+    for &decl in module.decls {
         collect_one_name(self, decl, module_path)
     }
 }
@@ -720,8 +714,7 @@ pub fn collect_nominal_names(self: &Checker, module: &Module, module_path: Strin
 // body resolve regardless of module order.
 pub fn resolve_nominal_bodies(self: &Checker, module: &Module, module_path: String) {
     self.current_module = Some(module_path)
-    for i in 0..module.decls.len {
-        let decl = &module.decls[i]
+    for &decl in module.decls {
         resolve_one_body(self, decl, module_path)
     }
 }
@@ -831,8 +824,7 @@ fn resolve_struct_body(self: &Checker, td: &TypeDecl, module_path: String) {
     // Bind generics into a fresh scope so field type-exprs can see them.
     self.env.push_scope()
     let type_params: List(VarId) = list(anon.generics.len, self.allocator)
-    for i in 0..anon.generics.len {
-        let gp = &anon.generics[i]
+    for &gp in anon.generics {
         let fresh = self.engine.fresh_var()
         let id = fresh match { Var(v) => v.id, _ => 0u32 }
         type_params.push(id)
@@ -845,8 +837,7 @@ fn resolve_struct_body(self: &Checker, td: &TypeDecl, module_path: String) {
     }
 
     let fields: List(Field) = list(anon.fields.len, self.allocator)
-    for i in 0..anon.fields.len {
-        let f = &anon.fields[i]
+    for &f in anon.fields {
         let ty = resolve_type_expr(self, f.type_expr)
         fields.push(Field { name = f.name, ty = ty })
     }
@@ -889,8 +880,7 @@ fn resolve_enum_body(self: &Checker, td: &TypeDecl, module_path: String) {
 
     self.env.push_scope()
     let type_params: List(VarId) = list(anon.generics.len, self.allocator)
-    for i in 0..anon.generics.len {
-        let gp = &anon.generics[i]
+    for &gp in anon.generics {
         let fresh = self.engine.fresh_var()
         let vid = fresh match { Var(v) => v.id, _ => 0u32 }
         type_params.push(vid)
@@ -903,11 +893,9 @@ fn resolve_enum_body(self: &Checker, td: &TypeDecl, module_path: String) {
     }
 
     let variants: List(VariantDef) = list(anon.variants.len, self.allocator)
-    for i in 0..anon.variants.len {
-        let v = &anon.variants[i]
+    for &v in anon.variants {
         let payloads: List(Ty) = list(v.payloads.len, self.allocator)
-        for j in 0..v.payloads.len {
-            let p = &v.payloads[j]
+        for &p in v.payloads {
             payloads.push(resolve_type_expr(self, p))
         }
         variants.push(VariantDef { name = v.name, payloads = payloads })
@@ -947,8 +935,7 @@ pub fn collect_signatures(self: &Checker, module: &Module, module_path: String) 
     self.current_module = Some(module_path)
     self.engine.set_nominal_registry(&self.nominals)
 
-    for i in 0..module.decls.len {
-        let decl = &module.decls[i]
+    for &decl in module.decls {
         collect_one_signature(self, decl)
     }
 }
@@ -980,8 +967,7 @@ fn register_function_sig(self: &Checker, fd: &FunctionDecl) {
     self.engine.enter_level()
 
     let params: List(Ty) = list(fd.params.len, self.allocator)
-    for i in 0..fd.params.len {
-        let p = &fd.params[i]
+    for &p in fd.params {
         let ty = resolve_type_expr(self, &p.type_expr)
         params.push(ty)
     }
@@ -1058,8 +1044,7 @@ fn register_function_sig(self: &Checker, fd: &FunctionDecl) {
 pub fn check_module_bodies(self: &Checker, module: &Module, module_path: String) {
     self.current_module = Some(module_path)
 
-    for i in 0..module.decls.len {
-        let decl = &module.decls[i]
+    for &decl in module.decls {
         check_one_decl(self, decl)
     }
 }
@@ -1098,8 +1083,7 @@ fn check_function_body(self: &Checker, fd: &FunctionDecl) {
     self.engine.enter_level()
 
     let params: List(Ty) = list(fd.params.len, self.allocator)
-    for i in 0..fd.params.len {
-        let p = &fd.params[i]
+    for &p in fd.params {
         let ty = resolve_type_expr(self, &p.type_expr)
         self.env.bind(p.name, Binding {
             scheme = mono(ty, self.allocator),
@@ -1162,8 +1146,7 @@ const MAX_SPEC_DEPTH: usize = 64
 // nested instantiation's body check land on that frame's own
 // (swapped-in) list and drain there.
 fn drain_pending_specs(self: &Checker) {
-    for i in 0..self.pending_specs.len {
-        let p = self.pending_specs[i]
+    for p in self.pending_specs {
         process_pending(self, &p)
     }
     self.pending_specs.clear()
@@ -1208,7 +1191,10 @@ fn process_pending(self: &Checker, p: &PendingSpec) {
     // was recorded into - the program tables at top level, the owning
     // instantiation's overlay during a nested drain.
     let node = node_id_of(p.span)
-    if p.is_operator {
+    if p.deref_index.is_some() {
+        self.results.update_receiver_deref(node, p.deref_index.unwrap(),
+            ResolvedTarget.RtSpecialized(id.unwrap()))
+    } else if p.is_operator {
         let cur = self.results.resolved_ops.get(node)
         if cur.is_some() {
             let op = cur.unwrap()
@@ -1231,8 +1217,7 @@ fn resolve_anon_literals(self: &Checker) {
         i = i - 1
         let pa = &self.pending_anons[i]
         let z = self.engine.zonk(pa.ty)
-        for k in 0..pa.fields.len {
-            let rec = &pa.fields[k]
+        for &rec in pa.fields {
             let fty = struct_field_lookup(self, &z, rec.name)
             if fty.is_some() {
                 const o = self.engine.unify(rec.ty, fty.unwrap())
@@ -1249,8 +1234,7 @@ fn resolve_anon_literals(self: &Checker) {
 // resolved; the engine's bindings are global, so one sweep covers the
 // program tables and every overlay alike.
 fn validate_literals(self: &Checker) {
-    for i in 0..self.pending_literals.len {
-        let pl = &self.pending_literals[i]
+    for &pl in self.pending_literals {
         let z = self.engine.zonk(pl.ty)
         let unresolved = z match { Var(_) => true, _ => false }
         if unresolved {
@@ -1504,7 +1488,7 @@ fn parse_decimal(s: String) usize? {
     if s.len == 0 { return null }
     let n: usize = 0
     for i in 0..s.len {
-        let c = s[i]
+        const c = s[i]
         if c == '_' { continue }
         if c < '0' or c > '9' { return null }
         n = n * 10 + ((c as usize) - 48)
@@ -1803,8 +1787,7 @@ fn check_match(self: &Checker, m: &MatchExpr) Ty {
     // stays `Never`. That is the honest answer: such a match has no value
     // to consume, and `Never` unifies with whatever the context wants.
     let result = Ty.Never
-    for i in 0..m.arms.len {
-        let arm = &m.arms[i]
+    for &arm in m.arms {
         self.env.push_scope()
         check_pattern(self, &arm.pattern, scrutinee)
         arm.guard match {
@@ -1872,8 +1855,7 @@ fn check_or_pattern(self: &Checker, o: &OrPattern, expected: Ty) {
 }
 
 fn check_struct_pattern(self: &Checker, s: &StructPattern) {
-    for i in 0..s.fields.len {
-        let f = &s.fields[i]
+    for &f in s.fields {
         f.binding match {
             Some(p) => check_pattern(self, p, self.engine.fresh_var()),
             None => bind_pattern_var(self, f.name, self.engine.fresh_var(), f.span),
@@ -2142,14 +2124,37 @@ fn check_try(self: &Checker, t: &TryExpr) Ty {
     return n.args[0]
 }
 
-// `operand.*` - peels one reference. A non-reference operand defers to a
-// fresh var so an already-reported error does not cascade.
+// `operand.*` - peels one reference. A nominal operand dispatches to its
+// `op_deref(&X) &T` (the explicit form of the UFCS peel): the pick is
+// recorded as an operator on the deref node so lowering calls it, and
+// the expression types as `T`. Anything else defers to a fresh var so an
+// already-reported error does not cascade.
 fn check_deref(self: &Checker, d: &DereferenceExpr) Ty {
     let t = self.engine.resolve(check_expr(self, d.operand))
     return t match {
         Ref(inner) => inner.*,
+        Nominal(_) => user_deref(self, t, d.span),
         _ => self.engine.fresh_var(),
     }
+}
+
+fn user_deref(self: &Checker, t: Ty, span: SourceSpan) Ty {
+    let args: List(Ty) = list(1, self.allocator)
+    args.push(self.engine.mk_ref(t))
+    let pick = operator_pick(self, "op_deref", &args, span)
+    args.deinit()
+    if pick.is_none() { return self.engine.fresh_var() }
+    let p = pick.unwrap()
+    let inner = self.engine.resolve(p.ret) match {
+        Ref(i) => i.*,
+        _ => return self.engine.fresh_var(),
+    }
+    self.results.record_operator(node_id_of(span), ResolvedOperator {
+        function_id = p.id, negate_result = false,
+        cmp_derived_op = null, is_ref_form = true, spec_id = null,
+    })
+    note_pending(self, span, true, &p)
+    return inner
 }
 
 // `a..b` - a half-open `Range(T)`. Both bounds unify with each other, so
@@ -2417,8 +2422,7 @@ fn check_cast(self: &Checker, c: &CastExpr) Ty {
 fn check_tuple_lit(self: &Checker, t: &TupleLiteralExpr) Ty {
     if t.elements.len == 0 { return Ty.Void }
     let elems = list(t.elements.len, self.allocator)
-    for i in 0..t.elements.len {
-        let e = &t.elements[i]
+    for &e in t.elements {
         elems.push(check_expr(self, e))
     }
     return Ty.Tuple(elems)
@@ -2551,7 +2555,6 @@ fn nominal_with_fresh_args(self: &Checker, id: NominalId) Ty {
     return Ty.Nominal(NominalRef { id = id, args = args })
 }
 
-
 // ─────────────────────────────────────────────────────────────────────
 // Lambdas (RFC-014)
 //
@@ -2570,8 +2573,7 @@ fn note_capture(self: &Checker, name: String, binding: &Binding) {
     let d = self.env.lookup_depth(name)
     if d.is_none() { return }
     let found = d.unwrap()
-    for i in 0..self.lambda_frames.len {
-        let fr = &self.lambda_frames[i]
+    for &fr in self.lambda_frames {
         if found >= fr.boundary { continue }
         if captures_contain(fr, name) { continue }
         let ty = self.engine.specialize(&binding.scheme)
@@ -2602,8 +2604,7 @@ fn check_lambda(self: &Checker, lam: &LambdaExpr) Ty {
     // records its type as `TypeExpr.Error`) mints a fresh var the
     // surrounding context - or an instantiation's body re-check - pins.
     let params: List(Ty) = list(lam.params.len, self.allocator)
-    for i in 0..lam.params.len {
-        let p = &lam.params[i]
+    for &p in lam.params {
         let unannotated = p.type_expr match { Error(_) => true, _ => false }
         let ty = if unannotated { self.engine.fresh_var() }
                  else { resolve_type_expr(self, &p.type_expr) }
@@ -2645,8 +2646,7 @@ fn check_lambda(self: &Checker, lam: &LambdaExpr) Ty {
     if frame.captures.len > 0 and self.lambda_frames.len > 0 {
         for i in 0..frame.captures.len {
             let nm = frame.captures[i].name
-            for j in 0..self.lambda_frames.len {
-                let outer = &self.lambda_frames[j]
+            for &outer in self.lambda_frames {
                 if captures_contain(outer, nm) {
                     push_diag_e(self, lam.span, E_NESTED_CAPTURE,
                         $"nested capturing closures are not yet supported: `{nm}` is captured by both this closure and an enclosing closure")
@@ -2734,8 +2734,7 @@ fn check_block(self: &Checker, blk: &BlockExpr) Ty {
     // branch returns is not itself treated as diverging. Add that when a
     // case needs it - it is a strictly larger analysis, not a different one.
     let diverges = false
-    for i in 0..blk.stmts.len {
-        let stmt = &blk.stmts[i]
+    for &stmt in blk.stmts {
         if check_stmt(self, stmt) { diverges = true }
     }
     let final_ty = blk.trailing match {
@@ -2854,8 +2853,10 @@ fn resolve_for_protocol(self: &Checker, fs: &ForStmt, it_ty: Ty) Ty {
         Ref(_) => z,
         _ => self.engine.mk_ref(z),
     }
-    let ip = protocol_pick(self, "iter", recv, expr_span(fs.iterable))
-    if ip.is_none() { ip = protocol_pick(self, "iter", z, expr_span(fs.iterable)) }
+    // `for &x in xs` asks for the by-reference protocol entry, `iter_ref`.
+    const iter_name = if fs.by_ref { "iter_ref" } else { "iter" }
+    let ip = protocol_pick(self, iter_name, recv, expr_span(fs.iterable))
+    if ip.is_none() { ip = protocol_pick(self, iter_name, z, expr_span(fs.iterable)) }
     if ip.is_none() { return self.engine.fresh_var() }
     let p = ip.unwrap()
     self.results.record_operator(node_id_of(fs.body.span), ResolvedOperator {
@@ -3192,8 +3193,7 @@ fn arith_result(self: &Checker, lhs: Ty, rhs: Ty, span: SourceSpan) Ty {
 fn check_call(self: &Checker, call: &CallExpr) Ty {
     let pos_tys = list(call.args.len, self.allocator)
     let named_seen = false
-    for i in 0..call.args.len {
-        let a = &call.args[i]
+    for &a in call.args {
         a.* match {
             Positional(e) => pos_tys.push(check_expr(self, e)),
             Named(named) => { let _r = check_expr(self, named.value); named_seen = true },
@@ -3330,9 +3330,13 @@ fn receiver_overload(self: &Checker, candidates: &List(FunctionScheme), recv: Ty
 // Peel `op_deref` wrappers: a receiver whose type defines it retries the
 // method against the wrapped inner value, both by reference and by value
 // (mirrors the reference checker's UFCS deref chain, with the same depth
-// bound). The deref chain is not yet recorded for lowering. A dead-end
-// chain leaves its committed deref unifications behind - parity with the
-// reference checker, which also resolves each hop non-speculatively.
+// bound). A winning chain is recorded on the call node
+// (`receiver_derefs`, outermost hop first) so lowering calls each hop
+// instead of passing the wrapper's address as the receiver - dropping
+// the peel was a silent field-offset-shift miscompile (the stage-2
+// `Owned(StringBuilder).append` segfault). A dead-end chain leaves its
+// committed deref unifications behind - parity with the reference
+// checker, which also resolves each hop non-speculatively.
 fn deref_retry(self: &Checker, candidates: &List(FunctionScheme), recv_ty: Ty, arg_tys: &List(Ty), span: SourceSpan) OverloadPick? {
     let vis = fn_visibility(self)
     let dcands = self.functions.lookup("op_deref", &vis) match {
@@ -3342,6 +3346,9 @@ fn deref_retry(self: &Checker, candidates: &List(FunctionScheme), recv_ty: Ty, a
     if dcands.is_none() { return null }
     let dc = dcands.unwrap()
     defer dc.deinit()
+
+    let chain: List(OverloadPick) = list(1, self.allocator)
+    defer chain.deinit()
 
     let current = self.engine.resolve(recv_ty)
     let depth = 0usize
@@ -3361,6 +3368,7 @@ fn deref_retry(self: &Checker, candidates: &List(FunctionScheme), recv_ty: Ty, a
         let dpick = resolve_overload(self, &dc, &dargs, span)
         dargs.deinit()
         if dpick.is_none() { return null }
+        chain.push(dpick.unwrap())
 
         let dret = self.engine.resolve(dpick.unwrap().ret)
         let inner = dret match {
@@ -3369,23 +3377,39 @@ fn deref_retry(self: &Checker, candidates: &List(FunctionScheme), recv_ty: Ty, a
         }
 
         let pick = receiver_overload(self, candidates, dret, arg_tys, span, Some(inner))
-        if pick.is_some() { return pick }
+        if pick.is_some() {
+            commit_deref_chain(self, &chain, span)
+            return pick
+        }
 
         current = inner
     }
     return null
 }
 
+// Record a winning deref chain for lowering: one target per hop on the
+// call node, plus a pending specialization per generic hop (the drain
+// rewrites that hop's entry to `RtSpecialized`, keyed by `deref_index`).
+fn commit_deref_chain(self: &Checker, chain: &List(OverloadPick), span: SourceSpan) {
+    let targets: List(ResolvedTarget) = list(chain.len, self.allocator)
+    for i in 0..chain.len {
+        targets.push(ResolvedTarget.RtFunction(chain[i].id))
+        note_pending(self, span, false, &chain[i], Some(i))
+    }
+    self.results.record_receiver_deref(node_id_of(span), targets)
+}
+
 // A committed pick of a generic overload becomes a pending
 // specialization - drained once the enclosing body's inference has
 // settled (M10). `is_operator` selects which table the drain rewrites:
 // `resolved_ops` for operator nodes, `resolved_targets` for calls.
-fn note_pending(self: &Checker, span: SourceSpan, is_operator: bool, pick: &OverloadPick) {
+fn note_pending(self: &Checker, span: SourceSpan, is_operator: bool, pick: &OverloadPick, deref_index: usize? = null) {
     if pick.inst.is_none() { return }
     let inst = pick.inst.unwrap()
     self.pending_specs.push(PendingSpec {
         span = span,
         is_operator = is_operator,
+        deref_index = deref_index,
         function_id = pick.id,
         tp_binds = inst.tp_binds,
         inst_params = inst.params,
@@ -3905,8 +3929,7 @@ fn check_struct_lit(self: &Checker, lit: &StructLiteralExpr) Ty {
         // parked and `resolve_anon_literals` unifies them against the
         // nominal's field types once inference settles.
         let recs: List(AnonFieldRec) = list(lit.fields.len, self.allocator)
-        for i in 0..lit.fields.len {
-            let fi = &lit.fields[i]
+        for &fi in lit.fields {
             let v = check_field_value(self, fi)
             recs.push(AnonFieldRec { name = fi.name, ty = v, span = fi.span })
         }
@@ -3935,8 +3958,7 @@ fn check_struct_lit(self: &Checker, lit: &StructLiteralExpr) Ty {
         return Ty.Error
     }
 
-    for i in 0..lit.fields.len {
-        let fi = &lit.fields[i]
+    for &fi in lit.fields {
         let v = check_field_value(self, fi)
         let fty = struct_field_lookup(self, &ty, fi.name)
         if fty.is_some() {
@@ -4145,7 +4167,6 @@ fn struct_field_lookup(self: &Checker, recv: &Ty, name: String) Ty? {
 // Top-level driver
 // ─────────────────────────────────────────────────────────────────────
 
-
 // Zonk a lambda record's types once inference settled; a still-open
 // parameter or return type means nothing anywhere pinned the lambda -
 // the reference's "no-context lambda" error (E2001 here).
@@ -4253,8 +4274,7 @@ fn zonk_closures(self: &Checker) {
 fn resolve_fn_name_values(self: &Checker) {
     let pend = self.pending_fn_names
     self.pending_fn_names = list(0, self.allocator)
-    for i in 0..pend.len {
-        let pn = &pend[i]
+    for &pn in pend {
         let z = self.engine.resolve(pn.ty)
         let ft = z match {
             Func(f) => Some(f),
@@ -4341,6 +4361,7 @@ pub fn check_all(self: &Checker, modules: &List(Module), paths: &List(String)) T
     let out_desugars = self.results.desugars
     let out_synth_strings = self.results.synth_strings
     let out_default_args = self.results.default_args
+    let out_receiver_derefs = self.results.receiver_derefs
     let out_nominals = self.nominals
     let out_functions = self.functions
     let out_lambdas = self.results.lambdas
@@ -4363,6 +4384,7 @@ pub fn check_all(self: &Checker, modules: &List(Module), paths: &List(String)) T
         desugars = out_desugars,
         synth_strings = out_synth_strings,
         default_args = out_default_args,
+        receiver_derefs = out_receiver_derefs,
         nominals = out_nominals,
         functions = out_functions,
         lambdas = out_lambdas,
@@ -4403,8 +4425,7 @@ fn count_check_errors(srcs: String[], paths: String[]) usize {
     }
 
     chk.deinit()
-    for i in 0..mods.len {
-        let m = &mods[i]
+    for &m in mods {
         m.deinit()
     }
     mods.deinit()
@@ -4785,7 +4806,6 @@ test "a generic member call inside a partially-fixed generic instantiates" {
         ["m"])
     assert_true(errors == 0, "cap's K and V pin from set2's concrete receiver")
 }
-
 
 // ─────────────────────────────────────────────────────────────────────
 // Lambda / closure tests (RFC-014)

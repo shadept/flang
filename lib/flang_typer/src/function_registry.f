@@ -114,8 +114,7 @@ pub fn lookup(self: &FunctionRegistry, name: String, vis: &Visibility) FnLookup 
 
     let visible: List(FunctionScheme) = list(0, self.allocator)
     let hidden_module: String? = null
-    for i in 0..overloads.len {
-        let f = &overloads[i]
+    for &f in overloads {
         if visibility_for(f, vis) {
             visible.push(f.*)
         } else {

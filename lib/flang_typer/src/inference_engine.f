@@ -332,8 +332,7 @@ pub fn zonk(self: &Engine, t: Ty) Ty {
 
 fn zonk_func(self: &Engine, fn_ty: &FunctionTy) Ty {
     let new_params = list(fn_ty.params.len, self.allocator)
-    for i in 0..fn_ty.params.len {
-        let p = &fn_ty.params[i]
+    for &p in fn_ty.params {
         new_params.push(self.zonk(p.*))
     }
     return self.mk_func(new_params, self.zonk(fn_ty.ret.*))
@@ -341,8 +340,7 @@ fn zonk_func(self: &Engine, fn_ty: &FunctionTy) Ty {
 
 fn zonk_tuple(self: &Engine, elems: &List(Ty)) Ty {
     let new_elems = list(elems.len, self.allocator)
-    for i in 0..elems.len {
-        let e = &elems[i]
+    for &e in elems {
         new_elems.push(self.zonk(e.*))
     }
     return Ty.Tuple(new_elems)
@@ -350,8 +348,7 @@ fn zonk_tuple(self: &Engine, elems: &List(Ty)) Ty {
 
 fn zonk_record(self: &Engine, fields: &List(Field)) Ty {
     let new_fields = list(fields.len, self.allocator)
-    for i in 0..fields.len {
-        let f = &fields[i]
+    for &f in fields {
         new_fields.push(Field { name = f.name, ty = self.zonk(f.ty) })
     }
     return Ty.Record(new_fields)
@@ -362,8 +359,7 @@ fn zonk_nominal(self: &Engine, nr: &NominalRef) Ty {
         return Ty.Nominal(.{ id = nr.id, args = nr.args })
     }
     let new_args: List(Ty) = list(nr.args.len, self.allocator)
-    for i in 0..nr.args.len {
-        let a = &nr.args[i]
+    for &a in nr.args {
         new_args.push(self.zonk(a.*))
     }
     return Ty.Nominal(.{ id = nr.id, args = new_args })
@@ -388,24 +384,21 @@ pub fn occurs_in(self: &Engine, v: VarId, t: Ty) bool {
 }
 
 fn occurs_in_func(self: &Engine, v: VarId, fn_ty: &FunctionTy) bool {
-    for i in 0..fn_ty.params.len {
-        let p = &fn_ty.params[i]
+    for &p in fn_ty.params {
         if self.occurs_in(v, p.*) { return true }
     }
     return self.occurs_in(v, fn_ty.ret.*)
 }
 
 fn occurs_in_list(self: &Engine, v: VarId, items: &List(Ty)) bool {
-    for i in 0..items.len {
-        let it = &items[i]
+    for &it in items {
         if self.occurs_in(v, it.*) { return true }
     }
     return false
 }
 
 fn occurs_in_record(self: &Engine, v: VarId, fields: &List(Field)) bool {
-    for i in 0..fields.len {
-        let f = &fields[i]
+    for &f in fields {
         if self.occurs_in(v, f.ty) { return true }
     }
     return false
@@ -521,8 +514,7 @@ fn try_coercion(self: &Engine, raw_from: Ty, raw_to: Ty) Coercion? {
 // some derived side-unification failure.
 fn apply_coercion(self: &Engine, c: Coercion, fallback: UnifyOutcome) UnifyOutcome {
     self.push_checkpoint()
-    for i in 0..c.side_unifications.len {
-        let con = &c.side_unifications[i]
+    for &con in c.side_unifications {
         let out = self.unify(con.a, con.b)
         if !out.is_ok() {
             self.rollback()
@@ -610,8 +602,7 @@ fn check_prim_constraint(allowed: &List(PrimitiveKind), concrete: Ty) UnifyOutco
 }
 
 fn prim_set_contains(allowed: &List(PrimitiveKind), p: PrimitiveKind) bool {
-    for i in 0..allowed.len {
-        let k = allowed[i]
+    for k in allowed {
         if k == p { return true }
     }
     return false
@@ -943,10 +934,8 @@ fn intersect_prim_constraints(self: &Engine, ra: VarId, rb: VarId) List(Primitiv
     let xa = ca.unwrap()
     let xb = cb.unwrap()
     let out = list(0, self.allocator)
-    for i in 0..xa.len {
-        let k = xa[i]
-        for j in 0..xb.len {
-            let k2 = xb[j]
+    for k in xa {
+        for k2 in xb {
             if k == k2 { out.push(k); break }
         }
     }

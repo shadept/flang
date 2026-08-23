@@ -3830,7 +3830,7 @@ public partial class HmTypeChecker
             vd.Initializer != null ? RewriteCaptureRefsExpr(vd.Initializer, caps) : null),
         ForLoopNode fl => new ForLoopNode(fl.Span, fl.IteratorVariable,
             RewriteCaptureRefsExpr(fl.IterableExpression, caps),
-            RewriteCaptureRefsExpr(fl.Body, caps)),
+            RewriteCaptureRefsExpr(fl.Body, caps), fl.ByRef),
         LoopNode loop => new LoopNode(loop.Span, RewriteCaptureRefsExpr(loop.Body, caps)),
         WhileNode wh => new WhileNode(wh.Span,
             RewriteCaptureRefsExpr(wh.Condition, caps),

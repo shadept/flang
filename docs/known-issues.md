@@ -107,21 +107,61 @@ in the reference's receiver lowering.
 
 ---
 
-### Self-Host: Stage-1 Segfaults on the Full Project Build
+### Reference + Self-Host: `for x in <fixed array>` Passed the Array's Storage Pointer as a Slice — RESOLVED
 
-**Status:** Open (2026-08-21) — THE stage-2 frontier
-**Affected:** stage-1 (the self-compiled compiler)
+**Status:** Resolved 2026-08-22 (found converting index loops to iterators)
+**Affected (was):** reference `HmAstLowering.LowerForLoop`; self-host `lower_for_iter`
 
-Stage-1 links, and compiles + runs single-file programs correctly
-(verified: string matching, range slicing, for-over-iterators, heap
-allocation through the allocator vtable). Building the full 99-module
-bootstrap project, it crashes with SIGSEGV before emitting anything.
-One earlier run appeared to complete and produced a binary that itself
-compiled programs — so the failure may be nondeterministic (dict
-iteration order / uninitialized memory are prime suspects). Hunt with
-`lldb` on a stage-1 `-v build`; suspect list: memory bugs in the
-lowered stdlib containers at scale, arena/allocator identity, the
-zero-page from an uninitialized read.
+The checker accepts `for s in ["i8", "i16"]` through `iter(&T[])` by array decay, but both lowerings handed `iter` the array's raw storage pointer - a `T*` where a `{ptr, len}` view was expected. In a standalone program the C compiler rejected the pointer mismatch; inside the bootstrap build it was SILENT wrong code (the self-host's `split_numeric_suffix` matched no suffix, so every suffixed literal in stage-1 lost its type - 49 E2001s in untouched files). Fixed by routing the iterable through the existing decay (`DecayIndexBase` / `lower_arg_adapted`). Harness: `iterators/for_over_fixed_array.f`. Lesson recorded in docs/self-host.md: the self-host's miscompiles surface as *checker errors in unrelated modules* of the next stage - bisect by the previous stage's input, not the failing file.
+
+---
+
+### Self-Host: Stage-1 Segfaults on the Full Project Build — RESOLVED
+
+**Status:** Resolved 2026-08-22 — **stage-2 = stage-3 byte-identical
+fixpoint reached.** Three stacked stage-1 miscompiles, found by running
+the STAGE-2 binary under lldb (the crash was deterministic there; the
+"stage-1 segfaults" of the original report was a stale stage-1 built
+before the last M11 fixes):
+
+1. **UFCS op_deref peel dropped at lowering.** `deref_retry` resolved
+   `pat_buf.append(...)` through `Owned(StringBuilder)`'s `op_deref` but
+   recorded nothing; `lower_receiver`'s "an aggregate's value IS its
+   address" path then passed the Owned's address as `&StringBuilder`,
+   shifting every field read by 8 (`sb.allocator` landed on `cap` = 16
+   → `realloc` faulted at 0x18 inside `glob`). Now the chain records in
+   `receiver_derefs` (per call node, drain-rewritten to specializations
+   like every pick) and `lower_deref_receiver` calls each hop.
+2. **Array-to-slice decay skipped for non-literal arguments.** A
+   let-bound `[u8; 4]` passed to a `u8[]` parameter (`encode_char` in
+   `append(char)`) handed over the raw array bytes as a `{ptr, len}`
+   view — a wild pointer. `lower_arg_adapted` now builds the view at
+   call arguments and value-form index receivers, mirroring the cast
+   and literal decay sites.
+3. **`parse_float` tipped DBL_MAX literals into infinity.** The
+   digit-accumulation parser's 10^292 power loop rounded
+   `1.7976931348623157e308` (the infinity-guard constant in
+   `emit_float_const` and `format_f64_exp`) over into `+inf`, so
+   stage-2's guards were `v > inf` and it emitted a bare `inf`
+   identifier into stage-3's C. The guards are rewritten to
+   `v * 0.5 == v` (no huge literal needed), and the parser applies
+   scale in exact 10^22 chunks. Residual ceiling: a user literal
+   within a few ulp of DBL_MAX may still parse as inf (documented at
+   `parse_float`; upgrade to strtod-grade parsing to close).
+
+Follow-up (same day): the EXPLICIT form `b.*` on a nominal was typed as
+a fresh var by the self-host checker, so `pick(&b.*)` / `byval(b.*)`
+silently took the wrapper's overload and `b.*.pick()` refused to lower.
+`check_deref` now resolves `op_deref` (recorded as an operator on the
+deref node) and lowering's `deref_address` calls it in value, place,
+and receiver positions. Harness: `op_deref/op_deref_overload_positions.f`
+pins all five positions against competing overloads.
+
+Regression tests: `lower.f` "a UFCS receiver behind op_deref calls the
+hop", "a generic op_deref wrapper instantiates…", "a let-bound array
+argument decays…", "a DBL_MAX-magnitude literal parses finite".
+Dict-iteration emission order turned out deterministic as-is — no
+determinization was needed for the fixpoint.
 
 ---
 

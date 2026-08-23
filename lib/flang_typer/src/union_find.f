@@ -66,8 +66,7 @@ pub fn union_find(allocator: &Allocator? = null) UnionFind($K) {
 pub fn deinit(self: &UnionFind($K)) {
     self.nodes.deinit()
     let frames = self.undo_stack.as_slice()
-    for i in 0..frames.len {
-        let frame = &frames[i]
+    for &frame in frames {
         frame.deinit()
     }
     self.undo_stack.deinit()

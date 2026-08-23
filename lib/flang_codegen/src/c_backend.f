@@ -433,8 +433,12 @@ fn emit_operand(op: &Operand, sb: &StringBuilder) {
 // but an overflowing `parse_float` can) use math.h's macros.
 fn emit_float_const(v: f64, sb: &StringBuilder) {
     if v != v { sb.append("NAN"); return }
-    if v > 1.7976931348623157e308 { sb.append("INFINITY"); return }
-    if v < -1.7976931348623157e308 { sb.append("(-INFINITY)"); return }
+    // Infinity test without a DBL_MAX literal: `v * 0.5 == v` holds only
+    // for 0 and the infinities. A DBL_MAX literal here would itself be
+    // parsed by the self-host's parse_float, whose rounding at that
+    // magnitude tipped the guard constant to inf (stage-2 then emitted
+    // a bare `inf` identifier) - see lower.f's parse_float.
+    if v * 0.5 == v and v != 0.0 { sb.append(if v > 0.0 { "INFINITY" } else { "(-INFINITY)" }); return }
     sb.append(v, "a")
 }
 
