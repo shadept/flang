@@ -29,8 +29,15 @@ pub type TypeInfo = struct {
     type_params: String[]
     type_args: &TypeInfo[]
     fields: FieldInfo[]
+    variants: VariantInfo[]
     params: ParamInfo[]
     return_type: &TypeInfo
+}
+
+// One enum variant. Deliberately a struct, not a bare String: future
+// members (payload, value) land here without changing `variants`' type.
+pub type VariantInfo = struct {
+    name: String
 }
 
 pub type FieldInfo = struct {

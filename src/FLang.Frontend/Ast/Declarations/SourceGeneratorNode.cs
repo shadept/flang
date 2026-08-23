@@ -24,10 +24,14 @@ public class TemplateVerbatimNode(SourceSpan span, string text) : TemplateNode(s
     public string Text { get; } = text;
 }
 
-/// <summary>#(expr) — evaluate expression, stringify, paste into output.</summary>
-public class TemplateInterpolationNode(SourceSpan span, TemplateExpr expression) : TemplateNode(span)
+/// <summary>
+/// #(expr) — evaluate expression, stringify, paste into output. Inside a string
+/// literal (`"#(expr)"`) the value is pasted escaped, so the literal stays valid.
+/// </summary>
+public class TemplateInterpolationNode(SourceSpan span, TemplateExpr expression, bool insideStringLiteral = false) : TemplateNode(span)
 {
     public TemplateExpr Expression { get; } = expression;
+    public bool InsideStringLiteral { get; } = insideStringLiteral;
 }
 
 /// <summary>#for name in expr { body }</summary>

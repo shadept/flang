@@ -1,13 +1,13 @@
 //! TEST: define_else
 //! EXIT: 0
 
-// Test #else and #else #if (elif) chaining in source generators.
+// Test #else and #elif (elif) chaining in source generators.
 
 #define(make_classifier, Name: Ident, N: Ident) {
     fn #(Name)(x: i32) i32 {
-        #if N == "three" {
+        #if N.text == "three" {
             return 3
-        } #else #if N == "two" {
+        } #elif N.text == "two" {
             return 2
         } #else {
             return 1
@@ -21,7 +21,7 @@
 
 #define(make_sign, Name: Ident) {
     fn #(Name)(x: i32) i32 {
-        #if Name == "positive" {
+        #if Name.text == "positive" {
             return 1
         } #else {
             return 0

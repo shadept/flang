@@ -686,7 +686,7 @@ public partial class HmTypeChecker
             // A #if directive diverges exactly when its active branch diverges.
             if (stmt is IfDirectiveStatementNode directive)
             {
-                var result = DirectiveConditionEvaluator.Evaluate(directive.Condition, _compilation.CompileTimeContext);
+                var result = CompileTimeEvaluator.Evaluate(directive.Condition, _compilation.CompileTimeContext);
                 var branch = result.IsError ? null : result.Value ? directive.ThenBody : directive.ElseBody;
                 if (branch != null && HasReturnOrImplicitReturn(branch))
                     return true;

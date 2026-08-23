@@ -162,7 +162,7 @@ public static class TemplateExpander
                     continue;
                 }
 
-                var outcome = ExpandOne(item.Inv, allDefs, modulePaths[item.OriginKey], typeProvider, diagnostics, out var expanded);
+                var outcome = ExpandOne(item.Inv, allDefs, modulePaths[item.OriginKey], typeProvider, compilation.CompileTimeContext, diagnostics, out var expanded);
                 if (outcome == Outcome.UnknownType) { parked.Add(item); continue; }
                 if (outcome == Outcome.Failed) continue;
 
@@ -227,7 +227,7 @@ public static class TemplateExpander
         List<Diagnostic> diagnostics)
     {
         var argsStr = string.Join(", ", inv.Arguments.Select(a =>
-            a.Identifier ?? (a.TypeExpr != null ? TemplateEngine.TypeNodeToString(a.TypeExpr) : "?")));
+            a.Identifier ?? (a.TypeExpr != null ? CompileTimeEvaluator.TypeNodeToString(a.TypeExpr) : "?")));
         var chunk = $"// #{inv.Name}({argsStr})\n" + expanded + (expanded.EndsWith('\n') ? "" : "\n") + "\n";
 
         var source = new Source(new string('\n', state.Lines) + chunk, state.GenFilePath);
@@ -285,6 +285,7 @@ public static class TemplateExpander
         Dictionary<string, SourceGeneratorDefinitionNode> allDefs,
         string modulePath,
         ITemplateTypeProvider typeProvider,
+        IReadOnlyDictionary<string, object> compileTimeContext,
         List<Diagnostic> diagnostics,
         out string? expanded)
     {
@@ -306,15 +307,10 @@ public static class TemplateExpander
             return Outcome.Failed;
         }
 
-        var env = new Dictionary<string, object>();
         for (var p = 0; p < def.Parameters.Count; p++)
         {
             var param = def.Parameters[p];
-            if (param.IsVariadic)
-            {
-                env[param.Name] = inv.Arguments.Skip(p).Select(a => BindArg(param, a)).ToList();
-                break;
-            }
+            if (param.IsVariadic) break;
 
             var arg = inv.Arguments[p];
             if (param.Kind == GeneratorParamKind.Ident && arg.Identifier == null)
@@ -328,27 +324,33 @@ public static class TemplateExpander
             if (param.Kind == GeneratorParamKind.Type && arg.Identifier != null
                 && !TypeIsCollected(arg.Identifier, modulePath, typeProvider))
                 return Outcome.UnknownType;
-
-            env[param.Name] = BindArg(param, arg);
         }
 
-        NominalType? TypeOfLookup(string name) =>
-            typeProvider.LookupNominalType($"{modulePath}.{name}")
-            ?? typeProvider.LookupNominalTypeFrom(name, modulePath);
-
-        IReadOnlyList<(string, TypeNode)>? FieldNodeLookup(string fqn)
+        var lookup = DeclarationLookupFor(modulePath, typeProvider);
+        var env = new Dictionary<string, object>();
+        for (var p = 0; p < def.Parameters.Count; p++)
         {
-            if (typeProvider.FieldTypeNodes.TryGetValue(fqn, out var fields)) return fields;
-            if (typeProvider.FieldTypeNodes.TryGetValue($"{modulePath}.{fqn}", out fields)) return fields;
-            foreach (var (key, val) in typeProvider.FieldTypeNodes)
-                if (key.EndsWith($".{fqn}")) return val;
-            return null;
+            var param = def.Parameters[p];
+            if (param.IsVariadic)
+            {
+                env[param.Name] = inv.Arguments.Skip(p).Select(a => BindArg(param, a, lookup)).ToList();
+                break;
+            }
+            env[param.Name] = BindArg(param, inv.Arguments[p], lookup);
         }
 
         try
         {
-            expanded = new TemplateEngine(env, TypeOfLookup, FieldNodeLookup).Expand(def.Body);
+            var evaluator = new CompileTimeEvaluator(compileTimeContext, env, lookup);
+            expanded = new TemplateEngine(evaluator).Expand(def.Body);
             return Outcome.Expanded;
+        }
+        catch (CompileTimeError ex)
+        {
+            // Reported at the template expression; the invocation site is named in the message.
+            diagnostics.Add(Diagnostic.Error(
+                $"{ex.Message} (while expanding `#{inv.Name}`)", ex.Span, code: ex.Code));
+            return Outcome.Failed;
         }
         catch (Exception ex)
         {
@@ -359,7 +361,8 @@ public static class TemplateExpander
     }
 
     private static bool TypeIsCollected(string name, string modulePath, ITemplateTypeProvider typeProvider) =>
-        typeProvider.LookupNominalType($"{modulePath}.{name}") != null
+        TypeRegistry.GetTypeByName(name) != null
+        || typeProvider.LookupNominalType($"{modulePath}.{name}") != null
         || typeProvider.LookupNominalTypeFrom(name, modulePath) != null;
 
     /// <summary>E2003 for every `Type` argument of a parked invocation that never became available.</summary>
@@ -382,10 +385,24 @@ public static class TemplateExpander
         }
     }
 
-    private static object BindArg(GeneratorParameter param, GeneratorArgument arg)
+    private static TypeInfoBuilder.DeclarationLookup DeclarationLookupFor(string modulePath, ITemplateTypeProvider typeProvider)
     {
-        if (param.Kind == GeneratorParamKind.Ident) return arg.Identifier ?? "";
-        if (arg.TypeExpr != null) return arg.TypeExpr;
-        return new NamedTypeNode(arg.Span, arg.Identifier ?? "");
+        NominalType? Nominal(string name) =>
+            typeProvider.LookupNominalType($"{modulePath}.{name}")
+            ?? typeProvider.LookupNominalTypeFrom(name, modulePath)
+            ?? typeProvider.LookupNominalType(name);
+
+        IReadOnlyList<(string, TypeNode)>? FieldNodes(string fqn) =>
+            typeProvider.FieldTypeNodes.TryGetValue(fqn, out var fields) ? fields : null;
+
+        return new TypeInfoBuilder.DeclarationLookup(Nominal, FieldNodes);
+    }
+
+    /// <summary>`Ident` params bind an <see cref="CompileTimeEvaluator.Ident"/>; `Type` params bind the argument's `TypeInfo`.</summary>
+    private static object BindArg(GeneratorParameter param, GeneratorArgument arg, TypeInfoBuilder.DeclarationLookup lookup)
+    {
+        if (param.Kind == GeneratorParamKind.Ident) return new CompileTimeEvaluator.Ident(arg.Identifier ?? "");
+        TypeNode node = arg.TypeExpr ?? new NamedTypeNode(arg.Span, arg.Identifier ?? "");
+        return TypeInfoBuilder.FromTypeNode(node, lookup);
     }
 }

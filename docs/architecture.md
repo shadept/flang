@@ -168,7 +168,7 @@ This is how a library exposes its own version without hand-rolling a constant: `
 
 ## Compile-Time Context
 
-`Compilation.CompileTimeContext` provides platform/OS/arch/runtime values for `#if` directive evaluation during parsing.
+`Compilation.CompileTimeContext` is the closed compile-time context (`platform.*`, `runtime.*`, honoring `--target-os`/`--target-arch` and runtime overrides). There is exactly one evaluator over it — `CompileTimeEvaluator` (`FLang.Frontend`). Declaration-level `#if` (`IfDirectiveDeclarations`), statement-level `#if` (checker and lowering) and the template engine (`#if`, `#for`, `#(expr)`) all call it; templates layer their bindings (parameters, `#for` variables) over the context and pass `type_of`/field lookups. Semantics are FLang's: bool conditions (E2117), unknown names/members (E2116), optionals from dict lookups must be unwrapped with `??` (E2118), operators require matching operand types (E2118). `TemplateEngine` is only text assembly on top of it. Introspection values are `TypeInfoModel` (`FLang.Frontend/TypeInfoBuilder.cs`) — the compiler-side shape of `core.rtti.TypeInfo`. `TypeInfoBuilder` has two entry points that produce the same shape: `FromNominalDeclaration`/`FromTypeNode` over collected declarations (templates; layout unset, E2120 on access) and `FromResolved` over resolved types (the RTTI table in `HmAstLowering.EnsureTypeTableExists`, which adds size/align/offset and pointers). Adding a member to `TypeInfo` means adding it to the model and both builders — templates and the runtime see it together. A `CompileTimeError` raised inside a template is reported at the template expression's span with its own code, naming the invocation.
 
 ## Language Server (LSP)
 

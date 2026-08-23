@@ -9,15 +9,15 @@
 #define(enum_utils, E: Type) {
     pub fn to_string(self: #(E.name)) String {
         return self match {
-            #for v in type_of(E.name).fields {
-                #(E.name).#(v.name) => #("\"" + v.name + "\""),
+            #for v in E.variants {
+                #(E.name).#(v.name) => "#(v.name)",
             }
         }
     }
 
     pub fn from_string(s: String) #(E.name)? {
-        #for v in type_of(E.name).fields {
-            if s == #("\"" + v.name + "\"") { return Some(#(E.name).#(v.name)) }
+        #for v in E.variants {
+            if s == "#(v.name)" { return Some(#(E.name).#(v.name)) }
         }
         return null
     }

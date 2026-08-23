@@ -230,6 +230,8 @@ let a = align_of(Point)
 
 > `Type(T)` is the generic (phantom-`T`) view of the raw `TypeInfo`, à la Java `Class<T>` / `Class`; `Type(T)` -> `TypeInfo` is implicit phantom erasure. Descriptors are interned, so `&TypeInfo` pointer identity is type identity. See [ADR-0001](adr/0001-type-t-is-the-generic-view-of-typeinfo.md).
 
+`TypeInfo` (`core.rtti`) carries `name`, `size`, `align`, `kind: TypeKind`, `fields: FieldInfo[]` (structs), `variants: VariantInfo[]` (enums), `params: ParamInfo[]` and `return_type` (function types). It is also the introspection surface of source generators (§7.8): the same struct, the same members, so compile-time generation and runtime reflection never diverge. `TypeInfo` grows only for a demonstrated need — no convenience flags (`is_struct` is `kind == TypeKind.Struct`).
+
 **Project metadata**: `core.rtti` also exposes `ProjectInfo { name: String, version: String }` and `project_info() ProjectInfo`. The compiler substitutes each call with the metadata of the project that *lexically owns* the call site — sourced from that project's `flang.toml`. A library calling `project_info()` inside its own module sees its own name and version; the same call inside a consumer returns the consumer's. Call sites in stdlib modules fall back to `("stdlib", "")`. See `docs/architecture.md` for implementation details.
 
 ### 2.10 Char and Byte Literals
@@ -786,6 +788,12 @@ Compile-time code generation prefixed with `#`. Runs between type collection and
 ```
 
 Parameter kinds: `Ident` (bare identifier), `Type` (type expression). Last param can be variadic: `..Param: Kind`.
+
+**Template values.** An `Ident` parameter is an identifier (`Name.text` is its spelling; `#(Name)` pastes it). A `Type` parameter is the argument's `TypeInfo` (§2.9) — `T.name`, `T.kind` (compare with `TypeKind.Struct` etc.), `T.fields`, `T.variants`, `T.params`, `T.return_type`, with `field.name` / `field.type_info` and `variant.name` exactly as at run time. `size`, `align` and `offset` are not available at expansion time (layout is computed after expansion) — reading them is E2120. Any nominal, primitive or anonymous `struct { … }` may be passed as a `Type` argument. Builtin functions: `type_of(T)` (identity), `type_named("Name")` (look a type up by name, e.g. one generated earlier — E2003 if absent), `lower`, `snake_case`, `pascal_case`.
+
+**Template directives.** `#(expr)` pastes the value's text; inside a string literal (`"#(expr)"`) it pastes it escaped, so the literal stays valid. `#for x in list { … }`, `#if cond { … } #elif cond { … } #else { … }`. `##` escapes a literal `#`.
+
+Template `#if` **is** the `#if` directive of §7.7 — the same evaluator, the same closed context (`platform.*`, `runtime.*`, target overrides) and the same rules (bool conditions, unknown names are errors, `??` to unwrap `runtime.env[..]`), evaluated at expansion time with the template's parameters and `#for` variables in scope. `#(expr)` and `#for` iterables use that evaluator too. The one difference: a template `#if` never emits its inactive branch, so that branch is never parsed.
 
 **Built-in generators:**
 

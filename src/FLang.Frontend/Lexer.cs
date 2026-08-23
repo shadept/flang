@@ -11,13 +11,13 @@ namespace FLang.Frontend;
 /// </remarks>
 /// <param name="source">The source code to tokenize.</param>
 /// <param name="fileId">The unique identifier for the source file.</param>
-public class Lexer(Source source, int fileId)
+public class Lexer(Source source, int fileId, int startIndex = 0)
 {
     private readonly int _fileId = fileId;
     private readonly Source _source = source;
 
     public Source Source => _source;
-    private int _position;
+    private int _position = startIndex;
     private int _start;
     private int _line;
 

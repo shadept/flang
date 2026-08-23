@@ -299,14 +299,19 @@ harness expectations can be shared.
    (they were passed as hints). Harness 546/546 with the DSL untouched.
    LSP virtual document landed the same day (`flang-generated://` scheme,
    `flang/generatedContent` request, content provider in vscode-flang).
-2. **Reference, evaluator unification** (§3). One compile-time evaluator:
-   `TemplateEngine` and `DirectiveConditionEvaluator` collapse into it;
-   template `#if`/`#(expr)`/`#for` and directive `#if` all execute through
-   it, differing only in the bindings layered over the closed context.
-3. **Reference, DSL + RTTI** (§5). Extend `core.rtti` with `variants`/`VariantInfo`; one `TypeInfoBuilder`
-   feeding both the template evaluator and the runtime metadata table. Update
-   the five stdlib templates and the harness fixtures in
-   `tests/harness/source_generators/`.
+2. ~~**Reference, evaluator unification**~~ landed 2026-08-23:
+   `CompileTimeEvaluator` replaces `DirectiveConditionEvaluator` and the
+   template engine's loose evaluator (truthiness, bare names as strings,
+   `1`/`0` comparisons are gone); `TemplateEngine` is text assembly only.
+   Template errors carry their own code and span. Harness: two new tests
+   (`template_if_non_bool`, `template_sees_platform`).
+3. ~~**Reference, DSL + RTTI**~~ landed 2026-08-23: `core.rtti` has
+   `variants: VariantInfo[]`; `TypeInfoModel` + `TypeInfoBuilder` feed both
+   the evaluator and the RTTI table (dead C# `TypeInfoStruct` mirrors
+   deleted); `T: Type` binds `TypeInfo`, `Ident` values with `.text`,
+   `TypeKind.*`, `type_named`, `#elif`, `"#(x)"`, E2120; primitives accepted
+   as `Type` args. Stdlib templates and fixtures rewritten. Harness 550/550
+   with `rtti_enum_variants` and `define_elif_string_interp` added.
 4. **Self-host.** `flang_parser`: parse `#define` bodies into
    verbatim/interpolation/for/if nodes instead of `consume_balanced`. New
    `lib/flang_driver/src/expand.f` (or a `flang_template` lib) implementing §2

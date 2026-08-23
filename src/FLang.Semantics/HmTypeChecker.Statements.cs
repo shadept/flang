@@ -47,7 +47,7 @@ public partial class HmTypeChecker
                 break;
             case IfDirectiveStatementNode directive:
             {
-                var result = DirectiveConditionEvaluator.Evaluate(directive.Condition, _compilation.CompileTimeContext);
+                var result = CompileTimeEvaluator.Evaluate(directive.Condition, _compilation.CompileTimeContext);
                 if (result.IsError)
                 {
                     ReportError(result.ErrorMessage!, result.ErrorSpan, result.ErrorCode!);

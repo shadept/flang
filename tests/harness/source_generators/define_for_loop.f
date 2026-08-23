@@ -5,7 +5,7 @@
 
 #define(derive_eq, T: Type) {
     fn op_eq(a: #(T.name), b: #(T.name)) bool {
-        #for field in type_of(T.name).fields {
+        #for field in T.fields {
             if a.#(field.name) != b.#(field.name) { return false }
         }
         return true

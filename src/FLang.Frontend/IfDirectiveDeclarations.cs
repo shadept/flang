@@ -50,7 +50,7 @@ public static class IfDirectiveDeclarations
         List<TestDeclarationNode> tests,
         List<VariableDeclarationNode> globalConstants)
     {
-        var result = DirectiveConditionEvaluator.Evaluate(directive.Condition, context);
+        var result = CompileTimeEvaluator.Evaluate(directive.Condition, context);
         if (result.IsError)
         {
             diagnostics.Add(Diagnostic.Error(result.ErrorMessage!, result.ErrorSpan, code: result.ErrorCode!));

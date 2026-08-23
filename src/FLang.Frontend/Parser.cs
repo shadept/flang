@@ -492,6 +492,15 @@ public class Parser
                 }
             }
 
+            if (_currentToken.Kind == TokenKind.StringLiteral
+                && sourceText.AsSpan(_currentToken.Span.Index, _currentToken.Span.Length).Contains("#(", StringComparison.Ordinal))
+            {
+                FlushVerbatim(_currentToken.Span.Index);
+                cursor = ParseStringLiteralInterpolations(_currentToken.Span, nodes);
+                Advance();
+                continue;
+            }
+
             // Verbatim token — just advance; the cursor-based range will capture it.
             if (_currentToken.Kind == TokenKind.OpenBrace) braceDepth++;
             else if (_currentToken.Kind == TokenKind.CloseBrace) braceDepth--;
@@ -501,6 +510,40 @@ public class Parser
         // Flush trailing verbatim up to the closing brace
         FlushVerbatim(_currentToken.Span.Index);
         return nodes;
+    }
+
+    /// <summary>
+    /// Splits a string-literal token containing `#(expr)` holes into verbatim
+    /// runs and escaped interpolations. Each hole's expression is parsed by a
+    /// sub-parser positioned inside the same Source, so spans stay real.
+    /// Returns the source index right after the literal.
+    /// </summary>
+    private int ParseStringLiteralInterpolations(SourceSpan literal, List<TemplateNode> nodes)
+    {
+        var text = _lexer.Source.Text;
+        var end = literal.Index + literal.Length;
+        var cursor = literal.Index;
+        var fileId = literal.FileId;
+
+        while (cursor < end)
+        {
+            var hole = text.IndexOf("#(", cursor, end - cursor, StringComparison.Ordinal);
+            if (hole < 0) break;
+            if (hole > cursor)
+                nodes.Add(new TemplateVerbatimNode(new SourceSpan(fileId, cursor, hole - cursor), text[cursor..hole]));
+
+            var sub = new Parser(new Lexer(_lexer.Source, fileId, hole + 2));
+            var expr = sub.ParseTemplateExpression();
+            var close = sub.Eat(TokenKind.CloseParenthesis);
+            foreach (var d in sub.Diagnostics) _diagnostics.Add(d);
+            var holeEnd = close.Span.Index + close.Span.Length;
+            nodes.Add(new TemplateInterpolationNode(new SourceSpan(fileId, hole, holeEnd - hole), expr, insideStringLiteral: true));
+            cursor = holeEnd;
+        }
+
+        if (cursor < end)
+            nodes.Add(new TemplateVerbatimNode(new SourceSpan(fileId, cursor, end - cursor), text[cursor..end]));
+        return end;
     }
 
     /// <summary>Parses #(expr) interpolation.</summary>
@@ -529,44 +572,38 @@ public class Parser
             varToken.Text, iterable, body);
     }
 
-    /// <summary>Parses #if expr { body } [#else { body }] or #else #if chaining.</summary>
+    /// <summary>Parses #if expr { body } [#elif expr { body }]* [#else { body }].</summary>
     private TemplateIfNode ParseTemplateIf()
     {
         var hash = Eat(TokenKind.Hash);
-        Eat(TokenKind.If);
+        if (_currentToken.Kind == TokenKind.If) Advance();
+        else Eat(TokenKind.Identifier); // `elif`
         var condition = ParseTemplateExpression();
         var ifOpenBrace = Eat(TokenKind.OpenBrace);
         var body = ParseTemplateBody(ifOpenBrace.Span.Index + ifOpenBrace.Span.Length);
-        var endSpan = Eat(TokenKind.CloseBrace);
+        var endSpan = Eat(TokenKind.CloseBrace).Span;
 
         IReadOnlyList<TemplateNode>? elseBranch = null;
 
-        // Check for #else
-        if (_currentToken.Kind == TokenKind.Hash && PeekNextToken().Kind == TokenKind.Else)
+        if (_currentToken.Kind == TokenKind.Hash && IsTemplateElif(PeekNextToken()))
+        {
+            var elif = ParseTemplateIf();
+            elseBranch = [elif];
+            endSpan = elif.Span;
+        }
+        else if (_currentToken.Kind == TokenKind.Hash && PeekNextToken().Kind == TokenKind.Else)
         {
             Eat(TokenKind.Hash);
             Eat(TokenKind.Else);
-
-            if (_currentToken.Kind == TokenKind.Hash && PeekNextToken().Kind == TokenKind.If)
-            {
-                // #else #if — recursive parse, wrap in single-element list
-                var elseIf = ParseTemplateIf();
-                elseBranch = new List<TemplateNode> { elseIf };
-                endSpan = new Token(TokenKind.CloseBrace, elseIf.Span, "");
-            }
-            else
-            {
-                // #else { body }
-                var elseOpenBrace = Eat(TokenKind.OpenBrace);
-                elseBranch = ParseTemplateBody(elseOpenBrace.Span.Index + elseOpenBrace.Span.Length);
-                endSpan = Eat(TokenKind.CloseBrace);
-            }
+            var elseOpenBrace = Eat(TokenKind.OpenBrace);
+            elseBranch = ParseTemplateBody(elseOpenBrace.Span.Index + elseOpenBrace.Span.Length);
+            endSpan = Eat(TokenKind.CloseBrace).Span;
         }
 
-        return new TemplateIfNode(
-            SourceSpan.Combine(hash.Span, endSpan.Span),
-            condition, body, elseBranch);
+        return new TemplateIfNode(SourceSpan.Combine(hash.Span, endSpan), condition, body, elseBranch);
     }
+
+    private static bool IsTemplateElif(Token t) => t.Kind == TokenKind.Identifier && t.Text == "elif";
 
     // ─── Template expression parsing ─────────────────────────────────────────
 
@@ -721,7 +758,7 @@ public class Parser
         return new TemplateIndexExpr(SourceSpan.Combine(obj.Span, closeBracket.Span), obj, first);
     }
 
-    private static readonly HashSet<string> _templateBuiltins = ["type_of", "lower", "snake_case", "pascal_case"];
+    private static readonly HashSet<string> _templateBuiltins = ["type_of", "type_named", "lower", "snake_case", "pascal_case"];
 
     private TemplateExpr ParseTemplatePrimary()
     {

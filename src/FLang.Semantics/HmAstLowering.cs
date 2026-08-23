@@ -742,6 +742,10 @@ public class HmAstLowering
         var paramInfoNominal = _types.LookupNominal("core.rtti.ParamInfo");
         var paramInfoIr = paramInfoNominal != null ? _layout.Lower(paramInfoNominal) as IrStruct : null;
 
+        // Get the IrStruct for VariantInfo
+        var variantInfoNominal = _types.LookupNominal("core.rtti.VariantInfo");
+        var variantInfoIr = variantInfoNominal != null ? _layout.Lower(variantInfoNominal) as IrStruct : null;
+
         // Get the IrStruct for String
         var stringNominal = _types.LookupNominal(WellKnown.String);
         var stringIr = stringNominal != null ? _layout.Lower(stringNominal) as IrStruct : null;
@@ -751,9 +755,11 @@ public class HmAstLowering
         IrStruct? typeParamsSliceIr = null;
         IrStruct? typeArgsSliceIr = null;
         IrStruct? paramsSliceIr = null;
+        IrStruct? variantsSliceIr = null;
         foreach (var field in typeInfoIr.Fields)
         {
             if (field.Name == "fields" && field.Type is IrStruct fs) fieldsSliceIr = fs;
+            else if (field.Name == "variants" && field.Type is IrStruct vs) variantsSliceIr = vs;
             else if (field.Name == "type_params" && field.Type is IrStruct tps) typeParamsSliceIr = tps;
             else if (field.Name == "type_args" && field.Type is IrPointer { Pointee: IrStruct tas }) typeArgsSliceIr = tas;
             else if (field.Name == "params" && field.Type is IrStruct ps) paramsSliceIr = ps;
@@ -819,17 +825,6 @@ public class HmAstLowering
             });
         }
 
-        // Helper: get TypeKind integer
-        int GetTypeKind(Type t) => t switch
-        {
-            Core.Types.PrimitiveType => 0,
-            Core.Types.ArrayType => 1,
-            NominalType { Kind: NominalKind.Struct or NominalKind.Tuple } => 2,
-            NominalType { Kind: NominalKind.Enum } => 3,
-            Core.Types.FunctionType => 4,
-            _ => 0
-        };
-
         // Helper: make empty slice constant
         StructConstantValue MakeEmptySlice(IrStruct sliceIr)
         {
@@ -860,13 +855,8 @@ public class HmAstLowering
             if (!IsRttiConcrete(innerType)) continue;
 
             var innerIr = _layout.Lower(innerType);
-            var typeName = innerType switch
-            {
-                NominalType nt2 => nt2.Name,
-                FunctionType ft2 =>
-                    $"fn({string.Join(", ", ft2.ParameterTypes.Select(p => _types.Resolve(p).ToString()))}) {_types.Resolve(ft2.ReturnType)}",
-                _ => innerType.ToString() ?? "unknown"
-            };
+            // Same shape the template engine sees (RFC-021 §5); layout is added here.
+            var model = TypeInfoBuilder.FromResolved(innerType, _types);
             var globalName = $"__flang__typeinfo_{key}";
 
             // Build field values
@@ -874,12 +864,12 @@ public class HmAstLowering
             {
                 ["size"] = new IntConstantValue(innerIr.Size, TypeLayoutService.IrU8),
                 ["align"] = new IntConstantValue(innerIr.Alignment, TypeLayoutService.IrU8),
-                ["kind"] = new IntConstantValue(GetTypeKind(innerType), TypeLayoutService.IrI32),
+                ["kind"] = new IntConstantValue((int)(model.Kind ?? TypeInfoKind.Primitive), TypeLayoutService.IrI32),
             };
 
             // Name field
             if (stringIr != null)
-                fieldValues["name"] = MakeStringConstant(typeName);
+                fieldValues["name"] = MakeStringConstant(model.Name);
 
             // Empty slices for type_params, type_args
             if (typeParamsSliceIr != null)
@@ -889,38 +879,31 @@ public class HmAstLowering
 
             // Fields slice
             if (fieldsSliceIr != null && fieldInfoIr != null && stringIr != null
-                && innerType is NominalType { Kind: NominalKind.Struct or NominalKind.Tuple } structType
-                && structType.FieldsOrVariants.Count > 0
-                && !structType.Name.StartsWith(WellKnown.RttiPrefix))
+                && model.Kind == TypeInfoKind.Struct
+                && model.Fields.Count > 0
+                && !model.Name.StartsWith(WellKnown.RttiPrefix))
             {
                 // Build FieldInfo array for this struct's fields
                 var fieldElements = new List<Value>();
                 var structIr = innerIr as IrStruct;
 
-                foreach (var (fieldName, fieldType) in structType.FieldsOrVariants)
+                foreach (var field in model.Fields)
                 {
                     // Find field offset from IR
                     int offset = 0;
                     if (structIr != null)
                     {
-                        var irField = structIr.Fields.FirstOrDefault(f => f.Name == fieldName);
+                        var irField = structIr.Fields.FirstOrDefault(f => f.Name == field.Name);
                         if (irField.Type != null) offset = irField.ByteOffset;
                     }
 
                     var fieldInfoValues = new Dictionary<string, Value>
                     {
-                        ["name"] = MakeStringConstant(fieldName),
+                        ["name"] = MakeStringConstant(field.Name),
                         ["offset"] = new IntConstantValue(offset, TypeLayoutService.IrUSize),
                         ["type_info"] = new IntConstantValue(0, TypeLayoutService.IrUSize), // patched below
                     };
-
-                    // Resolve the field type for deferred patching
-                    var resolvedFieldType = _types.Resolve(fieldType);
-                    if (resolvedFieldType is Core.Types.ReferenceType refFT)
-                        resolvedFieldType = _types.Resolve(refFT.InnerType);
-                    if (resolvedFieldType is not Core.Types.TypeVar)
-                        patches.Add((fieldInfoValues, "type_info", resolvedFieldType));
-
+                    patches.Add((fieldInfoValues, "type_info", field.TypeInfo.Resolved!));
                     fieldElements.Add(new StructConstantValue(fieldInfoIr, fieldInfoValues));
                 }
 
@@ -944,26 +927,46 @@ public class HmAstLowering
                 fieldValues["fields"] = MakeEmptySlice(fieldsSliceIr);
             }
 
+            // Variants slice (for enums)
+            if (variantsSliceIr != null && variantInfoIr != null && stringIr != null && model.Variants.Count > 0)
+            {
+                var variantElements = model.Variants
+                    .Select(v => (Value)new StructConstantValue(variantInfoIr, new Dictionary<string, Value>
+                    {
+                        ["name"] = MakeStringConstant(v.Name),
+                    }))
+                    .ToArray();
+                var variantArrayGlobal = new GlobalValue(
+                    $"__flang__typeinfo_{key}_variants",
+                    new ArrayConstantValue(new IrArray(variantInfoIr, variantElements.Length), variantElements),
+                    new IrArray(variantInfoIr, variantElements.Length));
+                _module.GlobalValues.Add(variantArrayGlobal);
+
+                fieldValues["variants"] = new StructConstantValue(variantsSliceIr, new Dictionary<string, Value>
+                {
+                    ["ptr"] = variantArrayGlobal,
+                    ["len"] = new IntConstantValue(variantElements.Length, TypeLayoutService.IrUSize),
+                });
+            }
+            else if (variantsSliceIr != null)
+            {
+                fieldValues["variants"] = MakeEmptySlice(variantsSliceIr);
+            }
+
             // Params slice (for function types)
             if (paramsSliceIr != null && paramInfoIr != null && stringIr != null
-                && innerType is FunctionType fnType2)
+                && model.Kind == TypeInfoKind.Function)
             {
                 var paramElements = new List<Value>();
-                for (int i = 0; i < fnType2.ParameterTypes.Count; i++)
+                foreach (var param in model.Params)
                 {
                     var paramInfoValues = new Dictionary<string, Value>
                     {
-                        ["name"] = MakeStringConstant($"_{i}"),
+                        ["name"] = MakeStringConstant(param.Name),
                         ["type_info"] = new IntConstantValue(0, TypeLayoutService.IrUSize), // patched below
                     };
-
-                    // Resolve the param type for deferred patching
-                    var resolvedParamType = _types.Resolve(fnType2.ParameterTypes[i]);
-                    if (resolvedParamType is Core.Types.ReferenceType refPT)
-                        resolvedParamType = _types.Resolve(refPT.InnerType);
-                    if (resolvedParamType is not Core.Types.TypeVar)
-                        patches.Add((paramInfoValues, "type_info", resolvedParamType));
-
+                    if (param.TypeInfo.Resolved is not Core.Types.TypeVar)
+                        patches.Add((paramInfoValues, "type_info", param.TypeInfo.Resolved!));
                     paramElements.Add(new StructConstantValue(paramInfoIr, paramInfoValues));
                 }
 
@@ -990,11 +993,8 @@ public class HmAstLowering
 
                 // return_type pointer — patched below
                 fieldValues["return_type"] = new IntConstantValue(0, TypeLayoutService.IrUSize);
-                var resolvedRetType = _types.Resolve(fnType2.ReturnType);
-                if (resolvedRetType is Core.Types.ReferenceType refRT)
-                    resolvedRetType = _types.Resolve(refRT.InnerType);
-                if (resolvedRetType is not Core.Types.TypeVar)
-                    patches.Add((fieldValues, "return_type", resolvedRetType));
+                if (model.ReturnType?.Resolved is { } retType)
+                    patches.Add((fieldValues, "return_type", retType));
             }
             else
             {
@@ -1353,7 +1353,7 @@ public class HmAstLowering
             case IfDirectiveStatementNode directive:
             {
                 // The checker already validated the condition; evaluation cannot error here.
-                var active = DirectiveConditionEvaluator.Evaluate(directive.Condition, _types.CompileTimeContext).Value;
+                var active = CompileTimeEvaluator.Evaluate(directive.Condition, _types.CompileTimeContext).Value;
                 var branch = active ? directive.ThenBody : directive.ElseBody;
                 if (branch != null)
                     foreach (var s in branch)
@@ -5195,7 +5195,7 @@ public class HmAstLowering
             case IfDirectiveStatementNode directive:
             {
                 // The checker already validated the condition; evaluation cannot error here.
-                var active = DirectiveConditionEvaluator.Evaluate(directive.Condition, _types.CompileTimeContext).Value;
+                var active = CompileTimeEvaluator.Evaluate(directive.Condition, _types.CompileTimeContext).Value;
                 var branch = active ? directive.ThenBody : directive.ElseBody;
                 if (branch != null)
                     CollectMutatedParams(branch, mutated);

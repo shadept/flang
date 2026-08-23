@@ -1,32 +1,17 @@
 using System.Text;
-using FLang.Core.Types;
 using FLang.Frontend.Ast.Declarations;
-using FLang.Frontend.Ast.Types;
 
 namespace FLang.Frontend;
 
 /// <summary>
-/// Expands source generator templates by evaluating template expressions and producing source text.
-/// Template values are plain C# objects; member access dispatches via pattern matching.
+/// Assembles source text from a template body. Every expression — `#(expr)`,
+/// `#for` iterables, `#if` conditions — is evaluated by the one
+/// <see cref="CompileTimeEvaluator"/> the `#if` directive uses, with the
+/// template's bindings layered over the closed compile-time context.
 /// </summary>
-public class TemplateEngine
+public class TemplateEngine(CompileTimeEvaluator evaluator)
 {
-    public record TemplateFieldInfo(string Name, TypeNode TypeNode);
-    public record TemplateParamInfo(string Name, TypeNode TypeNode);
-
-    private readonly Dictionary<string, object> _env;
-    private readonly Func<string, NominalType?> _typeOfLookup;
-    private readonly Func<string, IReadOnlyList<(string Name, TypeNode TypeNode)>?> _fieldNodeLookup;
-
-    public TemplateEngine(
-        Dictionary<string, object> env,
-        Func<string, NominalType?> typeOfLookup,
-        Func<string, IReadOnlyList<(string Name, TypeNode TypeNode)>?> fieldNodeLookup)
-    {
-        _env = env;
-        _typeOfLookup = typeOfLookup;
-        _fieldNodeLookup = fieldNodeLookup;
-    }
+    private readonly Dictionary<string, object> _env = evaluator.Bindings;
 
     public string Expand(IReadOnlyList<TemplateNode> body)
     {
@@ -47,28 +32,27 @@ public class TemplateEngine
                 break;
 
             case TemplateInterpolationNode interp:
-                sb.Append(Stringify(EvalExpr(interp.Expression)));
+                var text = CompileTimeEvaluator.Stringify(evaluator.Eval(interp.Expression));
+                sb.Append(interp.InsideStringLiteral ? EscapeForStringLiteral(text) : text);
                 break;
 
             case TemplateForNode forNode:
-                var iterable = EvalExpr(forNode.Iterable);
-                if (iterable is List<object> list)
+                var iterable = evaluator.Eval(forNode.Iterable);
+                if (iterable is not List<object> list)
+                    throw new CompileTimeError("E2118", "`#for` requires a list to iterate", forNode.Iterable.Span);
+                var bodySb = new StringBuilder();
+                foreach (var item in list)
                 {
-                    var bodySb = new StringBuilder();
-                    foreach (var item in list)
-                    {
-                        _env[forNode.VariableName] = item;
-                        foreach (var child in forNode.Body)
-                            ExpandNode(bodySb, child);
-                    }
-                    _env.Remove(forNode.VariableName);
-                    AppendDedented(sb, bodySb.ToString());
+                    _env[forNode.VariableName] = item;
+                    foreach (var child in forNode.Body)
+                        ExpandNode(bodySb, child);
                 }
+                _env.Remove(forNode.VariableName);
+                AppendDedented(sb, bodySb.ToString());
                 break;
 
             case TemplateIfNode ifNode:
-                var cond = EvalExpr(ifNode.Condition);
-                if (IsTruthy(cond))
+                if (evaluator.EvalCondition(ifNode.Condition))
                 {
                     var ifSb = new StringBuilder();
                     foreach (var child in ifNode.Body)
@@ -86,340 +70,8 @@ public class TemplateEngine
         }
     }
 
-    private object EvalExpr(TemplateExpr expr)
-    {
-        switch (expr)
-        {
-            case TemplateStringLiteral str:
-                return str.Value;
-
-            case TemplateBoolLiteral boolean:
-                return boolean.Value;
-
-            case TemplateIntLiteral num:
-                return num.Value;
-
-            case TemplateUnaryExpr unary:
-                return !IsTruthy(EvalExpr(unary.Operand));
-
-            case TemplateNameExpr name:
-                if (_env.TryGetValue(name.Name, out var val))
-                    return val;
-                // Return as string identity (bare identifier)
-                return name.Name;
-
-            case TemplateMemberAccessExpr mem:
-                var obj = EvalExpr(mem.Object);
-                return GetMember(obj, mem.Member);
-
-            case TemplateBinaryExpr bin:
-                var left = EvalExpr(bin.Left);
-                var right = EvalExpr(bin.Right);
-                return EvalBinary(left, bin.Operator, right);
-
-            case TemplateIndexExpr idx:
-                var indexObj = EvalExpr(idx.Object);
-                var indexVal = EvalExpr(idx.Index);
-                if (indexObj is List<object> indexList && indexVal is long i)
-                    return indexList[(int)i];
-                if (indexObj is Dictionary<string, object> indexDict && indexVal is string key)
-                    return indexDict.TryGetValue(key, out var dv) ? dv : "";
-                throw new InvalidOperationException($"Cannot index {indexObj?.GetType().Name} with {indexVal}");
-
-            case TemplateSliceExpr slice:
-                var sliceObj = EvalExpr(slice.Object);
-                if (sliceObj is List<object> sliceList)
-                {
-                    var start = slice.Start != null ? (int)(long)EvalExpr(slice.Start) : 0;
-                    var end = slice.End != null ? (int)(long)EvalExpr(slice.End) : sliceList.Count;
-                    return sliceList.GetRange(start, end - start);
-                }
-                throw new InvalidOperationException($"Cannot slice {sliceObj?.GetType().Name}");
-
-            case TemplateCallExpr call:
-                return EvalCall(call);
-
-            default:
-                throw new InvalidOperationException($"Unknown template expression: {expr.GetType().Name}");
-        }
-    }
-
-    private object EvalCall(TemplateCallExpr call)
-    {
-        switch (call.FunctionName)
-        {
-            case "type_of":
-            {
-                var arg = EvalExpr(call.Arguments[0]);
-                var name = Stringify(arg);
-                var nominal = _typeOfLookup(name);
-                if (nominal == null)
-                    throw new InvalidOperationException($"type_of: type '{name}' not found");
-                return nominal;
-            }
-
-            case "lower":
-            {
-                var arg = EvalExpr(call.Arguments[0]);
-                return Stringify(arg).ToLowerInvariant();
-            }
-
-            case "snake_case":
-            {
-                var arg = EvalExpr(call.Arguments[0]);
-                var input = Stringify(arg);
-                var sb = new System.Text.StringBuilder(input.Length + 4);
-                for (var i = 0; i < input.Length; i++)
-                {
-                    var c = input[i];
-                    if (char.IsUpper(c) && i > 0)
-                        sb.Append('_');
-                    sb.Append(char.ToLowerInvariant(c));
-                }
-                return sb.ToString();
-            }
-
-            case "pascal_case":
-            {
-                var arg = EvalExpr(call.Arguments[0]);
-                var input = Stringify(arg);
-                var sb = new System.Text.StringBuilder(input.Length);
-                var capitalizeNext = true;
-                for (var i = 0; i < input.Length; i++)
-                {
-                    var c = input[i];
-                    if (c == '_')
-                    {
-                        capitalizeNext = true;
-                        continue;
-                    }
-                    sb.Append(capitalizeNext ? char.ToUpperInvariant(c) : c);
-                    capitalizeNext = false;
-                }
-                return sb.ToString();
-            }
-
-            default:
-                throw new InvalidOperationException($"Unknown template function: {call.FunctionName}");
-        }
-    }
-
-    private object GetMember(object value, string member)
-    {
-        switch (value)
-        {
-            // NamedTypeNode — T.name → the type name
-            case NamedTypeNode named when member == "name":
-                return named.Name;
-
-            // AnonymousStructTypeNode — Spec.fields → list of TemplateFieldInfo
-            case AnonymousStructTypeNode anon when member == "fields":
-                return anon.Fields.Select(f =>
-                    (object)new TemplateFieldInfo(f.FieldName, f.FieldType)).ToList();
-
-            // NominalType — type_of(...).fields → look up field TypeNodes from side-table
-            case NominalType nominal when member == "fields":
-            {
-                var fieldNodes = _fieldNodeLookup(nominal.Name);
-                if (fieldNodes != null && fieldNodes.Count > 0)
-                    return fieldNodes.Select(f =>
-                        (object)new TemplateFieldInfo(f.Name, f.TypeNode)).ToList();
-                // Fallback: build from NominalType's FieldsOrVariants (no TypeNode info)
-                return nominal.FieldsOrVariants.Select(f =>
-                    (object)new TemplateFieldInfo(f.Name, new NamedTypeNode(default, f.Type.ToString()!))).ToList();
-            }
-
-            // NominalType — .name
-            case NominalType nominal when member == "name":
-            {
-                // Return the short name (last segment after '.')
-                var name = nominal.Name;
-                var dot = name.LastIndexOf('.');
-                return dot >= 0 ? name[(dot + 1)..] : name;
-            }
-
-            // NominalType — .kind
-            case NominalType nominal when member == "kind":
-                return nominal.Kind switch
-                {
-                    NominalKind.Struct => "struct",
-                    NominalKind.Enum => "enum",
-                    NominalKind.Tuple => "tuple",
-                    _ => "unknown"
-                };
-
-            // TemplateFieldInfo — field.name, field.type_info
-            case TemplateFieldInfo field when member == "name":
-                return field.Name;
-            case TemplateFieldInfo field when member == "type_info":
-                return field.TypeNode;
-
-            // TemplateParamInfo — param.name, param.type_info
-            case TemplateParamInfo param when member == "name":
-                return param.Name;
-            case TemplateParamInfo param when member == "type_info":
-                return param.TypeNode;
-
-            // FunctionTypeNode — .params, .return_type
-            case FunctionTypeNode fn when member == "params":
-                return fn.ParameterTypes.Select((pt, i) =>
-                {
-                    var paramName = fn.ParameterNames.Count > i ? fn.ParameterNames[i] : null;
-                    return (object)new TemplateParamInfo(paramName ?? $"_{i}", pt);
-                }).ToList();
-            case FunctionTypeNode fn when member == "return_type":
-                return fn.ReturnType;
-            case FunctionTypeNode fn when member == "name":
-                return TypeNodeToString(fn);
-
-            // TypeNode — .name (generic fallback for any TypeNode)
-            case TypeNode typeNode when member == "name":
-                return TypeNodeToString(typeNode);
-
-            // string — .len
-            case string s when member == "len":
-                return (long)s.Length;
-
-            // List — .len
-            case List<object> list when member == "len":
-                return (long)list.Count;
-
-            // Dictionary — nested compile-time context (platform.os, runtime.testing, etc.)
-            case Dictionary<string, object> dict:
-                if (dict.TryGetValue(member, out var v))
-                    return v;
-                throw new InvalidOperationException(
-                    $"Unknown compile-time property '{member}'");
-
-            default:
-                throw new InvalidOperationException(
-                    $"Cannot access member '{member}' on {value?.GetType().Name ?? "null"} (value: {value})");
-        }
-    }
-
-    private object EvalBinary(object left, string op, object right)
-    {
-        // Logical operators (loose template semantics: truthiness-based)
-        if (op == "or") return IsTruthy(left) || IsTruthy(right);
-        if (op == "and") return IsTruthy(left) && IsTruthy(right);
-        if (op == "??") return left ?? right;
-
-        // String concatenation
-        if (op == "+")
-        {
-            if (left is string ls && right is string rs)
-                return ls + rs;
-            if (left is string || right is string)
-                return Stringify(left) + Stringify(right);
-        }
-
-        // Integer arithmetic
-        if (left is long li && right is long ri)
-        {
-            return op switch
-            {
-                "+" => li + ri,
-                "-" => li - ri,
-                "*" => li * ri,
-                "/" => li / ri,
-                "%" => li % ri,
-                "==" => li == ri ? 1L : 0L,
-                "!=" => li != ri ? 1L : 0L,
-                "<" => li < ri ? 1L : 0L,
-                ">" => li > ri ? 1L : 0L,
-                "<=" => li <= ri ? 1L : 0L,
-                ">=" => li >= ri ? 1L : 0L,
-                _ => throw new InvalidOperationException($"Unknown operator: {op}")
-            };
-        }
-
-        // String comparison
-        if (left is string lStr && right is string rStr)
-        {
-            return op switch
-            {
-                "==" => lStr == rStr ? 1L : 0L,
-                "!=" => lStr != rStr ? 1L : 0L,
-                _ => throw new InvalidOperationException($"Cannot apply '{op}' to strings")
-            };
-        }
-
-        // Bool comparison
-        if (left is bool lb && right is bool rb)
-        {
-            return op switch
-            {
-                "==" => lb == rb ? 1L : 0L,
-                "!=" => lb != rb ? 1L : 0L,
-                _ => throw new InvalidOperationException($"Cannot apply '{op}' to bools")
-            };
-        }
-
-        throw new InvalidOperationException($"Cannot apply '{op}' to {left?.GetType().Name} and {right?.GetType().Name}");
-    }
-
-    public string Stringify(object value)
-    {
-        return value switch
-        {
-            string s => s,
-            long l => l.ToString(),
-            NamedTypeNode named => named.Name,
-            TypeNode tn => TypeNodeToString(tn),
-            NominalType nominal => nominal.Name.Contains('.')
-                ? nominal.Name[(nominal.Name.LastIndexOf('.') + 1)..]
-                : nominal.Name,
-            TemplateFieldInfo f => f.Name,
-            TemplateParamInfo p => p.Name,
-            _ => value?.ToString() ?? ""
-        };
-    }
-
-    public static string TypeNodeToString(TypeNode node)
-    {
-        return node switch
-        {
-            NamedTypeNode named => named.Name,
-            ReferenceTypeNode refType => $"&{TypeNodeToString(refType.InnerType)}",
-            NullableTypeNode nullable => $"{TypeNodeToString(nullable.InnerType)}?",
-            ArrayTypeNode array => $"[{TypeNodeToString(array.ElementType)}; {array.Length}]",
-            SliceTypeNode slice => $"{TypeNodeToString(slice.ElementType)}[]",
-            GenericParameterTypeNode gp => $"${gp.Name}",
-            GenericTypeNode generic => $"{generic.Name}[{string.Join(", ", generic.TypeArguments.Select(TypeNodeToString))}]",
-            FunctionTypeNode fn =>
-                $"fn({string.Join(", ", fn.ParameterTypes.Select((pt, i) =>
-                {
-                    var name = fn.ParameterNames.Count > i ? fn.ParameterNames[i] : null;
-                    return name != null ? $"{name}: {TypeNodeToString(pt)}" : TypeNodeToString(pt);
-                }))}) {TypeNodeToString(fn.ReturnType)}",
-            AnonymousStructTypeNode anon =>
-                $"struct {{ {string.Join(", ", anon.Fields.Select(f => $"{f.FieldName}: {TypeNodeToString(f.FieldType)}"))} }}",
-            _ => node.GetType().Name
-        };
-    }
-
-    /// <summary>
-    /// Evaluates a TemplateExpr condition against a plain dictionary context.
-    /// Used by #if directive evaluation in the type checker and lowering.
-    /// </summary>
-    public static bool EvaluateCondition(TemplateExpr condition, Dictionary<string, object> context)
-    {
-        var engine = new TemplateEngine(context, _ => null, _ => null);
-        return IsTruthy(engine.EvalExpr(condition));
-    }
-
-    private static bool IsTruthy(object value)
-    {
-        return value switch
-        {
-            bool b => b,
-            long l => l != 0,
-            string s => s.Length > 0,
-            List<object> list => list.Count > 0,
-            null => false,
-            _ => true
-        };
-    }
+    private static string EscapeForStringLiteral(string text) =>
+        text.Replace("\\", "\\\\").Replace("\"", "\\\"").Replace("\n", "\\n");
 
     /// <summary>
     /// Dedent, clean, and re-indent a #for/#if body before appending to the output buffer.

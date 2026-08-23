@@ -12,15 +12,12 @@ public static class TypeRegistry
     private const string SliceFqn = "core.slice.Slice";
     private const string StringFqn = "core.string.String";
     private const string TypeFqn = "core.rtti.Type";
-    private const string TypeInfoFqn = "core.rtti.TypeInfo";
     private const string TypeKindFqn = "core.rtti.TypeKind";
-    private const string FieldInfoFqn = "core.rtti.FieldInfo";
 
     // Cache for well-known types to ensure reference equality
     private static readonly System.Collections.Concurrent.ConcurrentDictionary<TypeBase, StructType> _sliceStructCache = [];
     private static readonly System.Collections.Concurrent.ConcurrentDictionary<TypeBase, StructType> _optionStructCache = [];
     private static readonly System.Collections.Concurrent.ConcurrentDictionary<TypeBase, StructType> _rangeStructCache = [];
-    private static readonly System.Collections.Concurrent.ConcurrentDictionary<TypeBase, StructType> _typeStructCache = [];
 
     /// <summary>
     /// The never type (bottom type) - represents computations that never return.
@@ -129,43 +126,6 @@ public static class TypeRegistry
             ["Enum"] = 3,
         }
     };
-
-    /// <summary>
-    /// Non-generic TypeInfo struct for the type table.
-    /// This is the actual data layout emitted by the compiler.
-    /// Type(T) has the same layout but is generic (used for type literal syntax).
-    /// </summary>
-    public static readonly StructType TypeInfoStruct;
-
-    /// <summary>
-    /// FieldInfo struct for runtime type information - describes a single field of a struct.
-    /// Layout: name (String), offset (usize), type (&TypeInfo).
-    /// </summary>
-    public static readonly StructType FieldInfoStruct;
-
-    static TypeRegistry()
-    {
-        // Forward-declare both structs so they can reference each other
-        FieldInfoStruct = new StructType(FieldInfoFqn, [], []);
-        TypeInfoStruct = new StructType(TypeInfoFqn, [], []);
-
-        // Now set the actual fields with all cross-references resolved
-        TypeInfoStruct.SetFields([
-            ("name", StringStruct),
-            ("size", U8),
-            ("align", U8),
-            ("kind", TypeKindEnum),
-            ("type_params", MakeSlice(StringStruct)),
-            ("type_args", MakeSlice(MakeReference(TypeInfoStruct))),
-            ("fields", MakeSlice(FieldInfoStruct))
-        ]);
-
-        FieldInfoStruct.SetFields([
-            ("name", StringStruct),
-            ("offset", USize),
-            ("type", MakeReference(TypeInfoStruct))
-        ]);
-    }
 
     /// <summary>
     /// Looks up a type by name. Returns null if not found.
@@ -311,22 +271,6 @@ public static class TypeRegistry
     }
 
     /// <summary>
-    /// Gets or creates a Type(T) struct instance for the given type parameter.
-    /// All instances have the same layout as TypeInfo, differing only in the type parameter.
-    /// Results are cached to ensure reference equality.
-    /// </summary>
-    public static StructType MakeType(TypeBase innerType)
-    {
-        if (_typeStructCache.TryGetValue(innerType, out var cached))
-            return cached;
-
-        // Basically an alias to TypeInfoStruct with a generic parameter
-        var typeStruct = new StructType(TypeFqn, [innerType], TypeInfoStruct.Fields);
-        _typeStructCache[innerType] = typeStruct;
-        return typeStruct;
-    }
-
-    /// <summary>
     /// Checks if a TypeBase is Option(T) (convenience overload).
     /// </summary>
     public static bool IsOption(TypeBase type)
@@ -388,38 +332,6 @@ public static class TypeRegistry
     public static bool IsRange(StructType st)
     {
         return st.StructName == RangeFqn;
-    }
-
-    /// <summary>
-    /// Checks if a TypeBase is FieldInfo.
-    /// </summary>
-    public static bool IsFieldInfo(TypeBase type)
-    {
-        return type is StructType st && IsFieldInfo(st);
-    }
-
-    /// <summary>
-    /// Checks if a StructType is FieldInfo using fully qualified name.
-    /// </summary>
-    public static bool IsFieldInfo(StructType st)
-    {
-        return st.StructName == FieldInfoFqn;
-    }
-
-    /// <summary>
-    /// Checks if a TypeBase is TypeInfo.
-    /// </summary>
-    public static bool IsTypeInfo(TypeBase type)
-    {
-        return type is StructType st && IsTypeInfo(st);
-    }
-
-    /// <summary>
-    /// Checks if a StructType is TypeInfo using fully qualified name.
-    /// </summary>
-    public static bool IsTypeInfo(StructType st)
-    {
-        return st.StructName == TypeInfoFqn;
     }
 
     /// <summary>

@@ -36,7 +36,7 @@
 }
 
 #define(implement, Impl: Type, Iface: Type) {
-    #for field in type_of(Iface.name + "Vtable").fields {
+    #for field in type_named(Iface.name + "Vtable").fields {
         fn __#(Impl.name)_#(Iface.name)_#(field.name)(
             #for param in field.type_info.params {
                 #(param.name): #(param.type_info.name),
@@ -50,7 +50,7 @@
     }
 
     const __#(Impl.name)_#(Iface.name)_vtable = #(Iface.name)Vtable {
-        #for field in type_of(Iface.name + "Vtable").fields {
+        #for field in type_named(Iface.name + "Vtable").fields {
             #(field.name) = __#(Impl.name)_#(Iface.name)_#(field.name),
         }
     }
