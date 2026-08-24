@@ -10,10 +10,6 @@ import std.string
 // Types
 // ─────────────────────────────────────────────────────────────────────────
 
-// The seven FIR primitives. Aggregates (structs, enums, arrays, slices)
-// are not FIR types - they live in memory as opaque byte buffers,
-// addressed via `gep` + `load`/`store`. The lowering pass resolves all
-// aggregate layouts before FIR is emitted.
 // A by-value aggregate crossing a C call boundary. FIR models aggregates
 // as opaque bytes everywhere else - a native call passes their address, and
 // an aggregate return uses an sret slot. That breaks down at a FOREIGN
@@ -53,6 +49,12 @@ pub type AggDef = struct {
     fields: List(AggField)
 }
 
+// Seven scalars, plus `Agg` for the one case that needs more. Aggregates
+// (structs, enums, arrays, slices) are otherwise NOT FIR types - they live
+// in memory as opaque byte buffers, addressed via `gep` + `load`/`store`,
+// and the lowering pass resolves their layouts before FIR is emitted.
+// `Agg` is the exception a foreign boundary forces, where the C ABI needs a
+// named type rather than an address - see `AggType` above.
 pub type IrType = enum {
     I8
     I16
