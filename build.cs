@@ -6,19 +6,31 @@
 
 // ============================================================================
 // FLang Build Script - Cross-platform build using dotnet run
+//
+// Bootstraps the whole chain in one command:
+//   1. publish the C# reference compiler   -> dist/<rid>/flang-ref
+//   2. build the self-hosted compiler with it (stage 1)
+//   3. install that as dist/<rid>/flang    -- THE default compiler
+//
+// Everything downstream (test.cs, test-all.cs, the README) points at
+// dist/<rid>/flang, so the default is always the self-hosted binary and the
+// reference is one rename away.
+//
 // Usage:
 //   dotnet run build.cs                  # Build for current platform
 //   dotnet run build.cs <rid>            # Build for specific RID
-//   dotnet run build.cs -- --restore     # Restore packages before building
 //   dotnet run build.cs -- --help        # Show help
 // ============================================================================
 
 using System.Diagnostics;
 using System.Runtime.InteropServices;
 
+var wall = Stopwatch.StartNew();
+
 var scriptDir = Directory.GetCurrentDirectory();
 
 bool showHelp = args.Contains("--help") || args.Contains("-h");
+bool force = args.Contains("--force") || args.Contains("-f");
 string? rid = args.FirstOrDefault(a => !a.StartsWith('-'));
 
 if (showHelp)
@@ -26,9 +38,15 @@ if (showHelp)
     Console.WriteLine("""
         FLang Build Script - Cross-platform build
 
+        Publishes the C# reference compiler to dist/<rid>/flang-ref, builds the
+        self-hosted compiler with it, and installs that as dist/<rid>/flang --
+        the default compiler used by test.cs, test-all.cs and the docs.
+
         Usage:
           dotnet run build.cs                  Build for current platform
           dotnet run build.cs <rid>            Build for specific RID
+          dotnet run build.cs -- --force       Rebuild the self-hosted compiler even
+                                               if it is already up to date
           dotnet run build.cs -- --help        Show this help
 
         RID is auto-detected from OS and architecture, e.g.:
@@ -76,21 +94,30 @@ var dotnetRid = rid.StartsWith("darwin") ? rid.Replace("darwin", "osx") : rid;
 
 var exeExt = rid.StartsWith("win") ? ".exe" : "";
 var distDir = Path.GetFullPath(Path.Combine(scriptDir, "dist", rid));
-var finalExe = Path.Combine(distDir, $"flang{exeExt}");
+var finalExe = Path.Combine(distDir, $"flang{exeExt}");        // default: self-hosted
+var refExe = Path.Combine(distDir, $"flang-ref{exeExt}");      // C# reference
 var stdlibDir = Path.Combine(distDir, "stdlib");
 
 Console.ForegroundColor = ConsoleColor.Cyan;
-Console.WriteLine($"=== Building FLang.CLI (Release) for RID={rid} ===");
+Console.WriteLine($"=== Building the reference compiler (Release) for RID={rid} ===");
 Console.ResetColor();
 Console.WriteLine();
 
-// Publish
+// Publish. NuGet restore dominates a no-change publish (~15s vs ~1.3s), and it
+// is a no-op the overwhelming majority of the time, so try --no-restore first
+// and pay for a restore only when that fails (fresh clone, changed package
+// refs). A genuine compile error costs one wasted fast pass.
 var distRidProp = rid != dotnetRid ? $" -p:DistRid={rid}" : "";
-var publishArgs = $"publish src/FLang.CLI/FLang.CLI.csproj -c Release -r {dotnetRid}{distRidProp} -nologo -v minimal";
-if (Run("dotnet", publishArgs) != 0)
+var publishArgs = $"publish src/FLang.CLI/FLang.CLI.csproj -c Release -r {dotnetRid}{distRidProp} -p:DistExeName=flang-ref -nologo -v minimal";
+if (Run("dotnet", publishArgs + " --no-restore") != 0)
 {
-    Console.Error.WriteLine("Error: dotnet publish failed.");
-    return 1;
+    Console.WriteLine();
+    Console.WriteLine("Publish failed without a restore; retrying with one...");
+    if (Run("dotnet", publishArgs) != 0)
+    {
+        Console.Error.WriteLine("Error: dotnet publish failed.");
+        return 1;
+    }
 }
 if (Run("dotnet", "build test.cs") != 0)
 {
@@ -100,51 +127,88 @@ if (Run("dotnet", "build test.cs") != 0)
 
 Console.WriteLine();
 
-// Verify output
-if (!File.Exists(finalExe))
+// Verify output. `-p:DistExeName=flang-ref` keeps the publish off dist/<rid>/flang,
+// which belongs to the self-hosted compiler installed below.
+if (!File.Exists(refExe))
 {
     Console.ForegroundColor = ConsoleColor.Yellow;
-    Console.WriteLine($"Warning: Expected artifact not found at {finalExe}");
+    Console.WriteLine($"Warning: Expected artifact not found at {refExe}");
     Console.WriteLine("The publish may have succeeded, but the post-publish copy step might have been skipped.");
     Console.WriteLine("Check the publish logs and the MSBuild target in src/FLang.CLI/FLang.CLI.csproj.");
     Console.ResetColor();
     return 1;
 }
 
-var size = new FileInfo(finalExe).Length;
-Console.WriteLine($"Success: {finalExe} ({size} bytes)");
+Console.WriteLine($"Reference compiler: {refExe} ({new FileInfo(refExe).Length} bytes)");
 
 if (Directory.Exists(stdlibDir))
-    Console.WriteLine($"Stdlib copied to: {stdlibDir}");
+    Console.WriteLine($"Stdlib copied to:   {stdlibDir}");
 else
     Console.WriteLine($"Note: stdlib folder not found at {stdlibDir}");
 
-// Build the self-host bootstrap with the freshly published compiler and
-// deploy a stdlib copy next to its binary, so `bootstrap/build/flang.exe
-// build` resolves std.* without --stdlib-path (mirrors the dist stdlib
-// deploy). Best-effort: a self-host regression must not fail this build.
+// Stage 1: build the self-hosted compiler with the reference, deploy a stdlib
+// copy next to its binary so `bootstrap/build/flang build` resolves std.*
+// without --stdlib-path, then install it as the default compiler. Installing a
+// *copy* into dist/ is also what keeps a self-build from overwriting the very
+// binary running it.
 var bootstrapDir = Path.Combine(scriptDir, "bootstrap");
-if (File.Exists(Path.Combine(bootstrapDir, "flang.toml")))
+if (!File.Exists(Path.Combine(bootstrapDir, "flang.toml")))
+{
+    Console.Error.WriteLine("Error: bootstrap/flang.toml not found; cannot build the self-hosted compiler.");
+    return 1;
+}
+
+// `flang build` has no whole-project up-to-date check of its own, so it re-does
+// the full ~10s compile every time. Guard it with the sources it actually reads:
+// the bootstrap and library trees, the stdlib, and src/ (which stands in for
+// flang-ref -- the publish re-copies that binary unconditionally, so its own
+// timestamp says nothing about whether the reference actually changed).
+var sourceRoots = new[]
+{
+    bootstrapDir,
+    Path.Combine(scriptDir, "lib"),
+    Path.Combine(scriptDir, "stdlib"),
+    Path.Combine(scriptDir, "src"),
+};
+if (!force && File.Exists(finalExe) && NewestInput(sourceRoots) <= File.GetLastWriteTimeUtc(finalExe))
 {
     Console.WriteLine();
-    Console.WriteLine("=== Building bootstrap (self-host) ===");
-    if (Run(finalExe, "build", bootstrapDir) == 0)
-    {
-        var bootstrapStdlib = Path.Combine(bootstrapDir, "build", "stdlib");
-        CopyDir(Path.Combine(scriptDir, "stdlib"), bootstrapStdlib);
-        Console.WriteLine($"Bootstrap built; stdlib deployed to: {bootstrapStdlib}");
-    }
-    else
-    {
-        Console.ForegroundColor = ConsoleColor.Yellow;
-        Console.WriteLine("Note: bootstrap build did not succeed; skipping stdlib deploy (self-host is WIP).");
-        Console.ResetColor();
-    }
+    Console.WriteLine($"Self-hosted compiler up to date: {finalExe} (--force to rebuild)");
+    Console.WriteLine();
+    Console.ForegroundColor = ConsoleColor.Green;
+    Console.WriteLine($"Done in {wall.Elapsed.TotalSeconds:F1}s.");
+    Console.ResetColor();
+    return 0;
 }
 
 Console.WriteLine();
+Console.WriteLine("=== Building the self-hosted compiler (stage 1) ===");
+if (Run(refExe, "build", bootstrapDir) != 0)
+{
+    Console.Error.WriteLine($"Error: self-hosted build failed. {finalExe} was not updated; use flang-ref meanwhile.");
+    return 1;
+}
+
+var bootstrapExe = Path.Combine(bootstrapDir, "build", $"flang{exeExt}");
+if (!File.Exists(bootstrapExe))
+{
+    Console.Error.WriteLine($"Error: self-hosted build reported success but produced no binary under {Path.Combine(bootstrapDir, "build")}.");
+    return 1;
+}
+
+CopyDir(Path.Combine(scriptDir, "stdlib"), Path.Combine(bootstrapDir, "build", "stdlib"));
+File.Copy(bootstrapExe, finalExe, overwrite: true);
+if (!OperatingSystem.IsWindows())
+    File.SetUnixFileMode(finalExe,
+        UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute |
+        UnixFileMode.GroupRead | UnixFileMode.GroupExecute |
+        UnixFileMode.OtherRead | UnixFileMode.OtherExecute);
+
+Console.WriteLine($"Default compiler:   {finalExe} ({new FileInfo(finalExe).Length} bytes)");
+
+Console.WriteLine();
 Console.ForegroundColor = ConsoleColor.Green;
-Console.WriteLine("Done.");
+Console.WriteLine($"Done in {wall.Elapsed.TotalSeconds:F1}s.");
 Console.ResetColor();
 return 0;
 
@@ -164,6 +228,28 @@ int Run(string fileName, string arguments, string? workingDir = null)
     process.WaitForExit();
     return process.ExitCode;
 }
+
+// Newest write time across the given source trees, ignoring build output
+// directories -- their contents are always newer than the inputs that made them.
+DateTime NewestInput(IEnumerable<string> roots)
+{
+    var newest = DateTime.MinValue;
+    foreach (var root in roots)
+    {
+        if (!Directory.Exists(root)) return DateTime.MaxValue;  // can't prove freshness -> rebuild
+        foreach (var file in Directory.EnumerateFiles(root, "*", SearchOption.AllDirectories))
+        {
+            if (IsBuildOutput(Path.GetRelativePath(root, file))) continue;
+            var t = File.GetLastWriteTimeUtc(file);
+            if (t > newest) newest = t;
+        }
+    }
+    return newest;
+}
+
+static bool IsBuildOutput(string relativePath) =>
+    relativePath.Split(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)
+        .Any(seg => seg is "build" or "bin" or "obj");
 
 void CopyDir(string src, string dst)
 {

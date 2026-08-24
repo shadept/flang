@@ -94,7 +94,7 @@ for (var i = 0; i < args.Length; i++)
         linkFlags.Add(args[++i]);
     else if (args[i] == "--version" || args[i] == "-v")
     {
-        Console.WriteLine("flang " + FlangVersion.Current);
+        Console.WriteLine($"flang {FlangVersion.Current} (reference compiler, C#)");
         return;
     }
     else if (!args[i].StartsWith('-')) inputFilePath = args[i];
@@ -121,7 +121,8 @@ if (findCompilersOnly)
 
 if (inputFilePath == null)
 {
-    Console.WriteLine("FLang — an experimental language that transpiles to C");
+    Console.WriteLine($"flang {FlangVersion.Current} — the REFERENCE compiler (written in C#)");
+    Console.WriteLine("An experimental language that transpiles to C.");
     Console.WriteLine();
     Console.WriteLine("Usage: flang [options] <file>              Compile a single file");
     Console.WriteLine("       flang init <name>                   Create a new project");

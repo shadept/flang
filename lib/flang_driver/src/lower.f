@@ -135,6 +135,10 @@ type LowerCtx = struct {
     // First deep refusal reason for the current function, when a refusal
     // site recorded one - surfaces in the skip note. Same scaffold.
     blocked_note: String?
+    // The name the refusal is *about* (the unbound identifier, the callee
+    // that was not callable). A view into source, like `blocked_note`, so
+    // the skip report can say which symbol without allocating.
+    blocked_subject: String?
     // RFC-014: lambda bodies enqueued at their literal sites, emitted as
     // module-level functions after the main walk (a body can enqueue
     // nested lambdas, so the drain is index-based).
@@ -227,6 +231,13 @@ fn unlowerable(ctx: &LowerCtx) Operand {
 fn unlowerable_why(ctx: &LowerCtx, why: String) Operand {
     if !ctx.blocked { ctx.blocked_note = Some(why) }
     return unlowerable(ctx)
+}
+
+// `unlowerable_why` plus the name the refusal is about, so the skip report
+// points at a symbol instead of a category.
+fn unlowerable_about(ctx: &LowerCtx, why: String, subject: String) Operand {
+    if !ctx.blocked { ctx.blocked_subject = Some(subject) }
+    return unlowerable_why(ctx, why)
 }
 
 // Enclosing loops, innermost last, so `break` and `continue` can name the
@@ -345,6 +356,7 @@ fn ir_size(ty: IrType) u64 {
         F32 => 4u64,
         F64 => 8u64,
         Ptr => 8u64,
+        Agg(a) => a.size as u64,
     }
 }
 
@@ -375,6 +387,7 @@ pub fn lower_module(ast_module: &Module, result: &TypeCheckResult, allocator: &A
         flushing = false,
         blocked = false,
         blocked_note = null,
+        blocked_subject = null,
         pending_lambdas = list(0, allocator),
         comptime = host_ctx(),
         consts = dict(allocator),
@@ -416,7 +429,7 @@ pub fn lower_program(modules: &List(Module), fqns: &List(OwnedString), result: &
     // build (`--target-os`) must lower the same `#if` branch the checker
     // checked, or the emitted C is the host's branch of a program that
     // type-checked as the target's.
-    let ctx = LowerCtx { result = result, overlay = null, syms = &syms, allocator = allocator, loops = loop_stack, sret = null, ret_size = 0u64, strings = interner, str_globals = str_globals, defers = defer_stack, defer_marks = defer_marks, flushing = false, blocked = false, blocked_note = null, pending_lambdas = list(0, allocator), comptime = comptime_ctx, consts = dict(allocator), const_inits = list(0, allocator), owned_syms = list(0, allocator) }
+    let ctx = LowerCtx { result = result, overlay = null, syms = &syms, allocator = allocator, loops = loop_stack, sret = null, ret_size = 0u64, strings = interner, str_globals = str_globals, defers = defer_stack, defer_marks = defer_marks, flushing = false, blocked = false, blocked_note = null, blocked_subject = null, pending_lambdas = list(0, allocator), comptime = comptime_ctx, consts = dict(allocator), const_inits = list(0, allocator), owned_syms = list(0, allocator) }
     // Consts first: bodies in ANY module may read a const from any other,
     // and the readable gate is `ctx.consts` membership.
     for i in 0..modules.len {
@@ -680,6 +693,7 @@ fn lower_const_decl(m: &IrModule, ctx: &LowerCtx, cd: &ConstDecl) {
     let cur = fb.entry()
     ctx.blocked = false
     ctx.blocked_note = null
+    ctx.blocked_subject = null
     let v = lower_expr(ctx, &cur, &env, &cd.value)
     if is_by_ref(ctx, &t) {
         cur.memcpy(Operand.GlobalRef(gsym), v, Operand.IntConst(lay.size as i64))
@@ -768,11 +782,77 @@ fn read_const(ctx: &LowerCtx, bb: &BlockBuilder, fqn: String, want: &Ty) Operand
 // gated on the signature; `SymbolTable` membership mirrors that gate.
 fn lower_decl(m: &IrModule, ctx: &LowerCtx, decl: &FunctionDecl, fqn: String) {
     if decl.body.is_none() {
-        let fd = foreign_decl_of(decl, ctx.allocator)
-        if fd.is_some() { m.add_foreign(fd.unwrap()) }
+        // Prefer the REGISTERED signature: its types are resolved, so an
+        // aggregate parameter or return can be spelled as a C struct. Only
+        // variadic foreign declarations are unregistered (C varargs have no
+        // FLang signature to check against), and those are scalar-only, so
+        // the syntactic path still covers them.
+        let fd = foreign_from_sig(m, ctx, decl)
+        if fd.is_some() {
+            m.add_foreign(fd.unwrap())
+            return
+        }
+        let syn = foreign_decl_of(decl, ctx.allocator)
+        if syn.is_some() { m.add_foreign(syn.unwrap()) }
         return
     }
     lower_function(m, ctx, decl)
+}
+
+// A body-less declaration as an external symbol, built from the signature
+// the symbol table registered. Null when the declaration is not registered
+// (a variadic foreign fn) - the caller falls back to the syntactic form.
+fn foreign_from_sig(m: &IrModule, ctx: &LowerCtx, decl: &FunctionDecl) ForeignDecl? {
+    let id = ctx.syms.decl_fn_id(decl)
+    if id.is_none() { return null }
+    if !ctx.syms.is_foreign(id.unwrap()) { return null }
+    let sig_opt = ctx.syms.sig_of(id.unwrap())
+    if sig_opt.is_none() { return null }
+    let sig = sig_opt.unwrap()
+
+    // An aggregate the backend cannot spell must sink the WHOLE declaration.
+    // Degrading it to `ptr` would emit `extern double f(void*)` for a C
+    // function that takes a struct by value - it compiles, links, and
+    // passes the wrong thing. No extern means calls refuse instead.
+    for i in 0..sig.params.len {
+        if crosses_unspellable(ctx, &sig.params[i]) { return null }
+    }
+    if crosses_unspellable(ctx, &sig.ret) { return null }
+
+    let ptys: List(IrType) = list(sig.params.len, ctx.allocator)
+    for i in 0..sig.params.len {
+        ptys.push(foreign_ir_of(m, ctx, &sig.params[i]))
+    }
+    let ret: IrType? = sig.ret match {
+        Void => null,
+        Never => null,
+        _ => Some(foreign_ir_of(m, ctx, &sig.ret)),
+    }
+    return Some(ForeignDecl {
+        name = decl.name,
+        return_ty = ret,
+        param_types = ptys,
+        variadic = false,
+        cc = CallConv.C,
+    })
+}
+
+// An aggregate that would have to cross by value but has no C definition
+// this backend can write. References and niche options are not aggregates
+// by representation and cross fine.
+fn crosses_unspellable(ctx: &LowerCtx, ty: &Ty) bool {
+    if !is_aggregate(ty) { return false }
+    if niche_optional(ctx, ty) { return false }
+    return agg_type_of(ctx, ty).is_none()
+}
+
+// A type as it crosses a foreign boundary: an ABI-safe aggregate becomes a
+// by-value C struct (registered on the module so the backend defines it),
+// everything else keeps its ordinary FIR representation.
+fn foreign_ir_of(m: &IrModule, ctx: &LowerCtx, ty: &Ty) IrType {
+    let agg = register_agg(m, ctx, ty)
+    if agg.is_some() { return IrType.Agg(agg.unwrap()) }
+    return ir_of(ty)
 }
 
 // A body-less declaration as an external symbol. Null when a parameter or
@@ -960,6 +1040,7 @@ fn lower_function_body(m: &IrModule, ctx: &LowerCtx, decl: &FunctionDecl, sym: S
     let cur = fb.entry()
     ctx.blocked = false
     ctx.blocked_note = null
+    ctx.blocked_subject = null
     ctx.sret = sret_op
     ctx.ret_size = 0u64
     if ret_agg {
@@ -1039,7 +1120,10 @@ fn lower_function_body(m: &IrModule, ctx: &LowerCtx, decl: &FunctionDecl, sym: S
             Some(w) => w,
             None => "unsupported construct",
         }
-        m.skip_notes.push($"{sym}: body refused ({why})")
+        ctx.blocked_subject match {
+            Some(subj) => m.skip_notes.push($"{sym}: body refused ({why} `{subj}`)"),
+            None => m.skip_notes.push($"{sym}: body refused ({why})"),
+        }
         return
     }
     m.add_function(fb.finish())
@@ -1807,7 +1891,14 @@ fn lower_call(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, call: &CallExpr) Ope
     // lookups stay null.
     let callable: (String, FnSig)? = null
     let target = ctx_target(ctx, node_id_of(call.span))
-    if target.is_some() { callable = target_callable(ctx, &target.unwrap()) }
+    let is_foreign_call = false
+    if target.is_some() {
+        callable = target_callable(ctx, &target.unwrap())
+        is_foreign_call = target.unwrap() match {
+            RtFunction(fid) => ctx.syms.is_foreign(fid),
+            _ => false,
+        }
+    }
     if callable.is_none() {
         // `Type(T)` instantiation syntax is a reified-type VALUE, not a
         // call (minimal RTTI, M11).
@@ -1940,7 +2031,7 @@ fn lower_call(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, call: &CallExpr) Ope
         return unlowerable(ctx)
     }
 
-    return emit_call(ctx, bb, sym, &sig, args)
+    return emit_call(ctx, bb, sym, &sig, args, is_foreign_call)
 }
 
 // A value whose own type is a fixed array landing in a slice-typed slot
@@ -2708,7 +2799,8 @@ fn intercept_rtti_layout(ctx: &LowerCtx, sym: String, sig: &FnSig) Operand? {
 // argument, mirroring `lower_function`'s parameter layout. Takes
 // ownership of `args`. The result operand of an aggregate-returning call
 // is the buffer's address.
-fn emit_call(ctx: &LowerCtx, bb: &BlockBuilder, sym: String, sig: &FnSig, args: List(Operand)) Operand {
+fn emit_call(ctx: &LowerCtx, bb: &BlockBuilder, sym: String, sig: &FnSig, args: List(Operand), foreign: bool = false) Operand {
+    if foreign { return emit_foreign_call(ctx, bb, sym, sig, args) }
     if is_by_ref(ctx, &sig.ret) {
         let lay = layout_of(&sig.ret, &ctx.result.nominals, ctx.allocator)
         let tmp = bb.stack_slot(lay.size as u64, lay.align as u64)
@@ -2716,6 +2808,39 @@ fn emit_call(ctx: &LowerCtx, bb: &BlockBuilder, sym: String, sig: &FnSig, args: 
         bb.call_void(sym, args)
         return tmp
     }
+    let returns_value = sig.ret match { Void => false, Never => false, _ => true }
+    if !returns_value {
+        bb.call_void(sym, args)
+        return Operand.IntConst(0)
+    }
+    return bb.call(sym, ir_of(&sig.ret), args)
+}
+
+// A call across a C boundary. Aggregates travel BY VALUE here, not by
+// address as they do between FLang functions: an aggregate argument is
+// loaded from its slot and passed whole, and an aggregate result is stored
+// into a fresh slot so the rest of lowering keeps seeing an address. The
+// sret convention is deliberately NOT used - the C definition returns its
+// struct normally, and inventing a hidden pointer parameter would not match
+// the function this links against.
+fn emit_foreign_call(ctx: &LowerCtx, bb: &BlockBuilder, sym: String, sig: &FnSig, args: List(Operand)) Operand {
+    let n = if args.len < sig.params.len { args.len } else { sig.params.len }
+    for i in 0..n {
+        let pa = agg_type_of(ctx, &sig.params[i])
+        if pa.is_some() {
+            args[i] = bb.load(IrType.Agg(pa.unwrap()), args[i])
+        }
+    }
+
+    let ra = agg_type_of(ctx, &sig.ret)
+    if ra.is_some() {
+        let a = ra.unwrap()
+        let value = bb.call(sym, IrType.Agg(a), args)
+        let slot = bb.stack_slot(a.size as u64, a.align as u64)
+        bb.store(IrType.Agg(a), value, slot)
+        return slot
+    }
+
     let returns_value = sig.ret match { Void => false, Never => false, _ => true }
     if !returns_value {
         bb.call_void(sym, args)
@@ -2768,7 +2893,13 @@ fn lower_callee_value_call(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, call: &
         Func(f) => Some(f),
         _ => null,
     }
-    if ft.is_none() { return unlowerable_why(ctx, "callee is not a callable value") }
+    if ft.is_none() {
+        return call.callee.* match {
+            Identifier(id) => unlowerable_about(ctx, "callee is not a callable value", id.name),
+            MemberAccess(mem) => unlowerable_about(ctx, "callee is not a callable value", mem.member),
+            _ => unlowerable_why(ctx, "callee is not a callable value"),
+        }
+    }
     let f = ft.unwrap()
     let fn_ptr = lower_expr(ctx, bb, env, call.callee)
     let ptys: List(IrType) = list(f.params.len + 1, ctx.allocator)
@@ -3361,7 +3492,13 @@ fn bind_struct_pattern(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, sp: &Struct
 fn bind_tuple_pattern(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, tp: &TuplePattern, scrut: Operand, scrut_ty: &Ty) {
     for i in 0..tp.elements.len {
         let m = tuple_pattern_member(ctx, bb, i, scrut, scrut_ty)
-        if m.is_none() { continue }
+        // Skipping would leave the element's names unbound, and the body
+        // would fail far away with "unbound name read". Refuse here, where
+        // the reason is still visible.
+        if m.is_none() {
+            let _u = unlowerable_why(ctx, "tuple pattern element has no readable type")
+            return
+        }
         let e = m.unwrap()
         bind_pattern(ctx, bb, env, &tp.elements[i], e.0, &e.1)
     }
@@ -4562,6 +4699,146 @@ fn ir_of(ty: &Ty) IrType {
     return ty_to_ir(ty)
 }
 
+// The by-value C type for an aggregate crossing a FOREIGN boundary, or null
+// when `ty` is not one. Native calls never use this - they pass an
+// aggregate's address and return through an sret slot. `agg_abi_safe` is the
+// single authority on whether an aggregate may cross, so the call site and
+// the emitted definition can never disagree about it.
+fn agg_type_of(ctx: &LowerCtx, ty: &Ty) AggType? {
+    if !is_aggregate(ty) { return null }
+    // A pointer-niche `Option(&T)` is an aggregate by shape but a bare
+    // pointer by representation - it crosses as `ptr`, not as a struct.
+    if niche_optional(ctx, ty) { return null }
+    if !agg_abi_safe(ty, &ctx.result.nominals) { return null }
+    let fqn = ty.* match {
+        Nominal(n) => ctx.result.nominals.get(n.id).* match {
+            NomStruct(sd) => sd.fqn,
+            _ => return null,
+        },
+        _ => return null,
+    }
+    let lay = layout_of(ty, &ctx.result.nominals, ctx.allocator)
+    return Some(AggType {
+        name = agg_c_name(ctx, fqn),
+        size = lay.size,
+        align = lay.align,
+    })
+}
+
+// The struct's members as the backend should write them. Pure - registering
+// them on the module is `register_agg`'s job - so validation can call it.
+fn agg_fields_of(ctx: &LowerCtx, ty: &Ty) List(AggField)? {
+    let sd = ty.* match {
+        Nominal(n) => ctx.result.nominals.get(n.id).* match {
+            NomStruct(d) => d,
+            _ => return null,
+        },
+        _ => return null,
+    }
+    let fields: List(AggField) = list(sd.fields.len, ctx.allocator)
+    for i in 0..sd.fields.len {
+        const f = agg_field_of(ctx, &sd.fields[i].ty)
+        if f.is_none() {
+            fields.deinit()
+            return null
+        }
+        fields.push(f.unwrap())
+    }
+    return Some(fields)
+}
+
+// One struct member. An array keeps its element type and length; a nested
+// aggregate is referenced by name; everything else is its FIR scalar.
+fn agg_field_of(ctx: &LowerCtx, ty: &Ty) AggField? {
+    let elem = ty.* match {
+        Array(a) => a.elem,
+        _ => ty,
+    }
+    let count: usize = ty.* match {
+        Array(a) => a.length,
+        _ => 1,
+    }
+    if is_aggregate(elem) and !niche_optional(ctx, elem) {
+        const nested = agg_type_of(ctx, elem)
+        if nested.is_none() { return null }
+        return Some(AggField { ty = IrType.Agg(nested.unwrap()), count = count })
+    }
+    return Some(AggField { ty = ir_of(elem), count = count })
+}
+
+// Register `ty`'s C definition on the module, and every nested aggregate it
+// contains FIRST - so emitting `m.aggs` in order never names a struct that
+// is not defined yet.
+fn register_agg(m: &IrModule, ctx: &LowerCtx, ty: &Ty) AggType? {
+    const h = agg_type_of(ctx, ty)
+    if h.is_none() { return null }
+    let sd = ty.* match {
+        Nominal(n) => ctx.result.nominals.get(n.id).* match {
+            NomStruct(d) => d,
+            _ => return null,
+        },
+        _ => return null,
+    }
+
+    // One walk: build each member and register the nested aggregates as we
+    // meet them. `agg_type_of` already proved every member spellable.
+    let fields: List(AggField) = list(sd.fields.len, ctx.allocator)
+    for i in 0..sd.fields.len {
+        const f = agg_field_of(ctx, &sd.fields[i].ty)
+        if f.is_none() {
+            fields.deinit()
+            return null
+        }
+        const elem = sd.fields[i].ty match {
+            Array(a) => a.elem,
+            _ => &sd.fields[i].ty,
+        }
+        if is_aggregate(elem) and !niche_optional(ctx, elem) {
+            let _n = register_agg(m, ctx, elem)
+        }
+        fields.push(f.unwrap())
+    }
+
+    const a = h.unwrap()
+    m.add_agg(AggDef { name = a.name, size = a.size, align = a.align, fields = fields })
+    return h
+}
+
+// A nominal's FQN as a C identifier: `std.simd.Vec128` -> `std_simd_Vec128`,
+// which is also the name the companion C writes (see `stdlib/std/simd.c`).
+fn agg_c_name(ctx: &LowerCtx, fqn: String) String {
+    let sb = string_builder(fqn.len, ctx.allocator)
+    for i in 0..fqn.len {
+        // `.` -> `_` keeps the common case spelling the companion C already
+        // uses (`std.simd.Vec128` -> `std_simd_Vec128`, see stdlib/std/simd.c).
+        // `_` -> `_0` is what makes that INJECTIVE: without it `a.b` and
+        // `a_b` both produce `a_b`, and `add_agg` dedupes by name, so the
+        // second struct would silently reuse the first one's definition.
+        // Anything else is not a C identifier byte at all - a module path
+        // carries the project name, which no rule constrains - so it is
+        // escaped by value. Appending the byte itself emitted `_x-`, still
+        // invalid C; a literal `_` is already `_0`, so `_x` is unambiguous.
+        if fqn[i] == '.' {
+            sb.append("_")
+        } else {
+            if fqn[i] == '_' {
+                sb.append("_0")
+            } else {
+                if is_c_ident_byte(fqn[i]) {
+                    // The one-byte SLICE, not `fqn[i]`: indexing yields a
+                    // `u8`, which binds the integer overload and would
+                    // spell the byte's decimal value into the identifier.
+                    sb.append(fqn[i..(i + 1)])
+                } else {
+                    sb.append("_x")
+                    append_hex_byte(&sb, fqn[i])
+                }
+            }
+        }
+    }
+    return park_sym(ctx, sb.to_string())
+}
+
 // Whether a value produced with representation `src` can flow into a
 // context typed `dst` unchanged. The checker's coercions rewrite a node's
 // recorded type in place - lowering never sees the original - so each
@@ -4772,7 +5049,7 @@ fn lower_literal_value(ctx: &LowerCtx, v: &LiteralValue) Operand {
 // rather than pass the binding's bytes off as something they are not.
 fn read_binding(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, name: String, expect: &Ty) Operand {
     let found = env.get(name)
-    if found.is_none() { return unlowerable_why(ctx, "unbound name read") }
+    if found.is_none() { return unlowerable_about(ctx, "unbound name read", name) }
     let b = found.unwrap()
     if !repr_compatible(ctx, &b.src, expect) { return unlowerable(ctx) }
     if b.aggregate { return b.addr }

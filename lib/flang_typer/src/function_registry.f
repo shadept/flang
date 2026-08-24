@@ -147,9 +147,12 @@ fn visibility_for(f: &FunctionScheme, vis: &Visibility) bool {
                 Some(cur) => if cur == m { return true },
                 None => {},
             }
-            // A foreign fn names a global link-time symbol; an import of its
-            // module suffices - `pub` is not required.
-            if !f.is_pub and !f.is_foreign { return false }
+            // A foreign fn names a global link-time symbol, so it is not
+            // module-scoped at all: it resolves from anywhere in the program
+            // without an import. Mirrors the reference compiler
+            // (FunctionRegistry.cs, "extern C symbols are globally linkable").
+            if f.is_foreign { return true }
+            if !f.is_pub { return false }
             return vis.visible.contains(m)
         },
     }

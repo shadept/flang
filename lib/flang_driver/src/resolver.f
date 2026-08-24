@@ -39,6 +39,10 @@ pub type ResolveCtx = struct {
     deps: List(DepRoot)
     stdlib_root: OwnedString
     cwd: OwnedString
+    // `flang.toml`'s `[imports].global`: dotted module names every
+    // PROJECT-origin file imports implicitly. The stdlib and dependencies
+    // stay isolated from per-project config, so this never applies to them.
+    global_imports: List(OwnedString)
     // Compile-time context #if conditions evaluate against during this
     // build. Host by default; `--target-os`/`--target-arch` override it.
     comptime: ComptimeCtx
@@ -60,6 +64,8 @@ pub fn deinit(self: &ResolveCtx) {
     self.deps.deinit()
     self.stdlib_root.deinit()
     self.cwd.deinit()
+    for &g in self.global_imports { g.deinit() }
+    self.global_imports.deinit()
 }
 
 // Resolve a dotted import to an existing file path, or null when no rule
@@ -151,12 +157,17 @@ pub fn resolve_ctx(proj: &Project, stdlib_root: String, allocator: &Allocator? =
         let root = normalized_owned(dep_source_root(d.path.as_view(), allocator), allocator)
         deps.push(DepRoot { name = from_view(d.name.as_view()), root = root })
     }
+    let globals: List(OwnedString) = list(proj.global_imports.len, allocator)
+    for &g in proj.global_imports {
+        globals.push(from_view(g.as_view()))
+    }
     return ResolveCtx {
         project_name = from_view(proj.name.as_view()),
         project_source_root = normalized_owned(source_root(".", proj.source.as_view(), allocator), allocator),
         deps = deps,
         stdlib_root = normalize_sep(stdlib_root, allocator),
         cwd = from_view("."),
+        global_imports = globals,
         comptime = host_ctx(),
     }
 }
@@ -165,12 +176,14 @@ pub fn resolve_ctx(proj: &Project, stdlib_root: String, allocator: &Allocator? =
 // so only the stdlib and working-directory include rules apply.
 pub fn single_file_ctx(stdlib_root: String, allocator: &Allocator? = null) ResolveCtx {
     let deps: List(DepRoot) = list(0, allocator)
+    let globals: List(OwnedString) = list(0, allocator)
     return ResolveCtx {
         project_name = from_view(""),
         project_source_root = from_view(""),
         deps = deps,
         stdlib_root = normalize_sep(stdlib_root, allocator),
         cwd = from_view("."),
+        global_imports = globals,
         comptime = host_ctx(),
     }
 }
@@ -318,12 +331,14 @@ fn fixture_ctx() ResolveCtx {
         name = from_view("flang_parser"),
         root = from_view("lib/flang_parser/src"),
     })
+    let globals: List(OwnedString) = list(0)
     return ResolveCtx {
         project_name = from_view("flang_driver"),
         project_source_root = from_view("lib/flang_driver/src"),
         deps = deps,
         stdlib_root = from_view("stdlib"),
         cwd = from_view("."),
+        global_imports = globals,
         comptime = host_ctx(),
     }
 }

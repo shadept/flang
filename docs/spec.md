@@ -112,11 +112,28 @@ Structs are always declared as a `type` alias whose RHS is a `struct(...) { ... 
 
 - All fields public (readable from any file).
 - Field writes restricted to the defining file — see §8 *Scoped mutability* (E2114).
-- Layout optimized by compiler; declaration order ≠ memory order.
+- **Layout is the compiler's, not the declaration's** — see *Memory layout* below.
 - Construction: `Point { x = 10, y = 20 }` (uses `=`, not `:`).
 - Anonymous construction: `.{ x = 10, y = 20 }` (type from context).
 - Field shorthand: `.{ x, y = 20 }` equivalent to `.{ x = x, y = 20 }`.
 - **Strict construction**: every field must be assigned. `Point { x = 10 }` errors with E2050 ("struct literal missing field `<name>`") if `Point` has more fields. `Marker { }` is valid only when `Marker` has zero fields. Context-less `.{}` is invalid.
+
+#### Memory layout
+
+**A struct's memory layout is unspecified.** Declaration order is not memory order, and the compiler reserves the right to change how any struct is laid out, at any time, without notice. The only guarantees are the ones the language itself gives: every field is present, correctly aligned, and reachable by name.
+
+The compiler **reorders fields to minimise the type's memory footprint** — in practice by descending alignment, so padding falls at the end rather than between fields:
+
+```
+type Wasteful = struct { a: u8, big: u64, b: u8 }
+```
+
+In declaration order that is 24 bytes: `a`, seven bytes of padding, `big`, `b`, seven more. Reordered it is 16 — `big`, `a`, `b`, six bytes of tail padding. Nothing in the language lets a program observe the difference, which is exactly what makes the freedom safe to take.
+
+Two consequences follow, and both matter at an FFI boundary:
+
+1. **Field offsets are not stable across compilers or versions.** `size_of` and `offset_of` are answers about *this* build, not properties of the declaration.
+2. **A plain struct cannot be passed to or returned from a C function by value.** Its bytes are laid out to suit FLang, so they match no C declaration of the same members. Use `#foreign` (§10) — that is what it is for. A compiler that cannot honour the C layout of an aggregate crossing the boundary must reject the signature rather than pass bytes C will read differently.
 
 ### 2.5 Enums (Tagged Unions)
 
@@ -569,7 +586,11 @@ This keeps code generation *overload-independent*. Deciding how two functions wi
 3. **Consistent** — a definition and every call to it name the same symbol.
 4. **A valid target identifier** — for targets in the C family, matching `[A-Za-z_][A-Za-z0-9_]*`.
 
-**The encoding is unspecified.** Programs cannot observe it, and targets with different identifier rules may need different encodings. Any encoding satisfying the four properties conforms.
+**Property 4 is total, not conditional.** A symbol is derived from the function's *module path* as well as its name, and a module path is not a FLang identifier: it is built from the project name and the source file path, both of which may contain any character the host filesystem and manifest allow. `name = "chess-fen"` is a legal project name. An encoding must therefore map **every** input byte to something the target admits — a pass-through default that assumes identifier-safe input violates this property, and the resulting symbol is not merely ugly but unparseable (`chess-fen_main_f` is a subtraction in C).
+
+The escape must also be **injective over the whole input**, which follows from property 1: if two distinct source characters collapse to the same output, two distinct functions can collide. An encoding that maps several characters to `_` satisfies property 4 but weakens property 1, and is conforming only where the collapsed characters cannot both appear.
+
+**The encoding is unspecified.** Programs cannot observe it, and targets with different identifier rules may need different encodings. Any encoding satisfying the four properties conforms. The two in-tree backends differ, which is allowed: the self-hosted compiler escapes injectively (`.` → `__`, `_` → `_0`, anything else → `_x<hex>`), while the reference collapses every non-identifier character to `_`.
 
 Two names are exempt and keep their source spelling, because something outside the language already fixes them: the **entry point** (`main`) and **`#foreign` functions**, which name symbols defined elsewhere.
 
@@ -677,7 +698,11 @@ Unknown directives produce warning W2003.
 
 #### `#foreign` on structs
 
-`#foreign` on a struct declaration locks its memory layout to C ABI conventions. The compiler will never reorder fields or change padding. In generated C code, the struct typedef/definition is omitted — it is provided by the included C header.
+`#foreign` on a struct declaration means **do what C does**. It opts the type out of the layout freedom in §2.4: fields stay in declaration order, padding is inserted exactly where the C ABI puts it, alignment is the C alignment, and nothing is reordered — now or in any future version. In generated C code, the struct typedef/definition is omitted when the type comes from an included C header.
+
+This is the only way to give a struct a layout a C declaration can rely on, so it is a precondition for passing an aggregate across an FFI boundary by value. A plain struct's layout is chosen for FLang's benefit and matches no C declaration of the same members; `#foreign` is the marker that trades that optimisation for interoperability.
+
+The two rules are deliberately complementary: **plain structs are laid out for FLang, `#foreign` structs are laid out for C.** Neither is a default the other can be recovered from — a type is declared for one world or the other.
 
 ```
 pub type Color = #foreign struct {

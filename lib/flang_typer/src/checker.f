@@ -222,6 +222,14 @@ pub type Checker = struct {
     // plus the auto-imported core prelude.
     visible_by_module: Dict(OwnedString, Set(String))
 
+    // `flang.toml`'s `[imports].global`, and which modules it applies to.
+    // `project_origin[i]` marks module i as a project file; the stdlib and
+    // dependencies stay isolated from per-project config, so their entries
+    // are false and `build_visibility` skips them. Both empty unless the
+    // driver calls `set_project_globals`.
+    project_globals: List(OwnedString)
+    project_origin: List(bool)
+
     // Monotonic counter behind `synth_span`: gives every checker-
     // synthesized AST node (interpolation desugar) a node id no real
     // node can collide with. Also names the desugar's builder locals.
@@ -316,6 +324,8 @@ pub fn checker(allocator: &Allocator? = null) Checker {
         pending_anons = list(0, allocator),
         pending_fn_names = list(0, allocator),
         visible_by_module = dict(allocator),
+        project_globals = list(0, allocator),
+        project_origin = list(0, allocator),
         next_synth = 0u32,
         lambda_frames = list(0, allocator),
         closures = dict(allocator),
@@ -348,6 +358,9 @@ pub fn deinit(self: &Checker) {
     self.pending_anons.deinit()
     self.pending_fn_names.deinit()
     self.visible_by_module.deinit()
+    for &g in self.project_globals { g.deinit() }
+    self.project_globals.deinit()
+    self.project_origin.deinit()
     self.lambda_frames.deinit()
     self.closures.deinit()
 }
@@ -669,6 +682,19 @@ pub fn set_comptime_ctx(self: &Checker, ctx: ComptimeCtx) {
     self.comptime = ctx
 }
 
+// Install `flang.toml`'s `[imports].global` for this check. `origin` is
+// parallel to the module list `check_all` will be given: true for a project
+// file, false for stdlib/dependency modules. Copies both, so the caller's
+// lists need not outlive the call.
+pub fn set_project_globals(self: &Checker, names: &List(OwnedString), origin: &List(bool)) {
+    for &n in names {
+        self.project_globals.push(from_view(n.as_view()))
+    }
+    for i in 0..origin.len {
+        self.project_origin.push(origin[i])
+    }
+}
+
 pub fn push_diag_e(self: &Checker, span: SourceSpan, code: String, message: OwnedString) {
     let empty_hint: OwnedString
     self.diagnostics.push(Diagnostic {
@@ -777,6 +803,18 @@ fn build_visibility(self: &Checker, modules: &List(Module), paths: &List(String)
             if pre.is_some() {
                 let pv = pre.unwrap()
                 if !contains_view(&imps, pv) { imps.push(pv) }
+            }
+        }
+        // Project-level globals are implicit PRIVATE imports (they widen the
+        // file's own scope, they do not re-export), and only project files
+        // get them. Same rule as the reference compiler (Compiler.cs).
+        if i < self.project_origin.len and self.project_origin[i] {
+            for &g in self.project_globals {
+                let gv = find_fqn(paths, g.as_view())
+                if gv.is_some() {
+                    let v = gv.unwrap()
+                    if !contains_view(&imps, v) { imps.push(v) }
+                }
             }
         }
         imports.push(imps)
@@ -971,8 +1009,13 @@ fn register_struct_placeholder(self: &Checker, td: &TypeDecl, fqn: OwnedString) 
         fields = empty_fields,
         decl_span = td.span,
         deprecation = deprecation_of(&td.directives),
-        is_simd = false,
-        is_foreign = false,
+        // `#simd` over-aligns the type; `#foreign` locks its layout to the
+        // C ABI (spec 2.4 / 10). Dropping these left every struct on the
+        // `Repr.Auto` path, so a `#foreign struct` was reordered by
+        // descending alignment like any other - exactly the layout the
+        // marker exists to opt out of.
+        is_simd = is_simd_directive(&td.directives),
+        is_foreign = is_foreign_directive(&td.directives),
     }
     let _r = self.nominals.register(NominalDef.NomStruct(sd), fqn)
 }
@@ -1455,6 +1498,25 @@ fn register_function_sig(self: &Checker, fd: &FunctionDecl) {
 // only orchestrates.
 // ─────────────────────────────────────────────────────────────────────
 
+// Phase 2.5: pin every module-level constant's type from its initializer.
+// An unannotated `const` only gets a fresh variable in the signature pass,
+// so a function body checked BEFORE the initializer sees an open var - and
+// an open var unifies with every candidate in an overload probe at equal
+// cost, letting declaration order pick the winner. That is how
+// `stdin.reader()` resolved to `reader(&BufferedReader)`: `stdin` was still
+// unpinned when `main` was checked, and the mismatch surfaced later, blamed
+// on the const's own declaration.
+pub fn check_module_constants(self: &Checker, module: &Module, module_path: String) {
+    self.current_module = Some(module_path)
+
+    for &decl in module.decls {
+        decl.* match {
+            Const(cd) => check_constant_init(self, &cd),
+            _ => {},
+        }
+    }
+}
+
 pub fn check_module_bodies(self: &Checker, module: &Module, module_path: String) {
     self.current_module = Some(module_path)
 
@@ -1472,7 +1534,7 @@ fn check_one_decl(self: &Checker, decl: &Decl) {
             // An uninstantiated template is never checked at all.
             if !declares_generic(&fd) { check_function_body(self, &fd) }
         },
-        Const(cd) => check_constant_init(self, &cd),
+        // Consts were pinned in phase 2.5 (`check_module_constants`).
         _ => {},
     }
 }
@@ -2525,6 +2587,14 @@ fn match_names_variant(self: &Checker, m: &MatchExpr) bool {
 // be resolved, so a binding always exists - unconstrained beats absent,
 // which would surface later as a bogus `unknown identifier`.
 fn check_pattern(self: &Checker, pat: &Pattern, expected: Ty, is_sub: bool = false) {
+    // Lowering reads every sub-pattern's type off its own node
+    // (`bind_variant_payload` -> `node_ty(pattern_span(sub))`), so record it
+    // for ALL pattern forms, not just the variable ones `bind_pattern_var`
+    // covers. Without this a tuple sub-pattern (`Ok((v, n))`) fell back to
+    // lowering's `i32` default, `tuple_pattern_member` refused to see a
+    // tuple, and both bindings were silently dropped - surfacing much later
+    // as "unbound name read". Kind-specific code below may refine it.
+    self.results.record_type(node_id_of(pattern_span(pat)), expected)
     pat.* match {
         Wildcard(_) => {},
         Variable(v) => check_variable_pattern(self, &v, expected, is_sub),
@@ -6308,6 +6378,11 @@ pub fn check_all(self: &Checker, modules: &List(Module), paths: &List(String),
     // Phase 2: signatures.
     for i in 0..modules.len {
         collect_signatures(self, &modules[i], paths[i])
+    }
+    // Phase 2.5: constant initializers, before any body can observe an
+    // unpinned const (see `check_module_constants`).
+    for i in 0..modules.len {
+        check_module_constants(self, &modules[i], paths[i])
     }
     // Phase 3: bodies.
     for i in 0..modules.len {

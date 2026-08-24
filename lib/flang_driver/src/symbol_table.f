@@ -59,6 +59,9 @@ pub type SymbolTable = struct {
     // colliding with a same-signature monomorphic overload).
     by_spec_id: Dict(u32, OwnedString)
     by_spec_sig: Dict(u32, FnSig)
+    // Which function ids are `#foreign`. Only a foreign call passes
+    // aggregates by value, so lowering has to tell them apart.
+    by_fn_foreign: Dict(u32, bool)
 }
 
 // The declared signature lowering works from: the checker's parameter and
@@ -83,6 +86,15 @@ pub fn decl_fn_id(self: &SymbolTable, decl: &FunctionDecl) u32? {
 }
 
 // The declared signature of a registered lowerable function.
+// Whether `fn_id` is a `#foreign` declaration (a C symbol), not a body
+// this module lowers.
+pub fn is_foreign(self: &SymbolTable, fn_id: u32) bool {
+    return self.by_fn_foreign.get(fn_id) match {
+        Some(v) => v,
+        None => false,
+    }
+}
+
 pub fn sig_of(self: &SymbolTable, fn_id: u32) FnSig? {
     return self.by_fn_sig.get(fn_id)
 }
@@ -104,6 +116,7 @@ pub fn deinit(self: &SymbolTable) {
     self.by_fn_sig.deinit()
     self.by_spec_id.deinit()
     self.by_spec_sig.deinit()
+    self.by_fn_foreign.deinit()
 }
 
 // Assigns symbols across a whole program. `seen` carries the ordinal
@@ -115,6 +128,7 @@ pub type SymbolBuilder = struct {
     by_fn_id: Dict(u32, OwnedString)
     by_decl: Dict(NodeId, u32)
     by_fn_sig: Dict(u32, FnSig)
+    by_fn_foreign: Dict(u32, bool)
     by_spec_id: Dict(u32, OwnedString)
     by_spec_sig: Dict(u32, FnSig)
     nominals: &NominalRegistry
@@ -129,6 +143,7 @@ pub fn symbol_builder(result: &TypeCheckResult, allocator: &Allocator? = null) S
     let by_fn_id: Dict(u32, OwnedString) = dict(allocator)
     let by_decl: Dict(NodeId, u32) = dict(allocator)
     let by_fn_sig: Dict(u32, FnSig) = dict(allocator)
+    let by_fn_foreign: Dict(u32, bool) = dict(allocator)
     for entry in result.functions.by_name {
         // Annotated: the self-hosted checker types for-over-iterator
         // variables as unconstrained vars (protocol resolution is
@@ -147,6 +162,7 @@ pub fn symbol_builder(result: &TypeCheckResult, allocator: &Allocator? = null) S
             if !sig_lowerable(&s, f.is_foreign, &result.nominals) { continue }
             by_decl.set(node_id_of(f.decl_span), f.id)
             by_fn_sig.set(f.id, s)
+            by_fn_foreign.set(f.id, f.is_foreign)
         }
     }
 
@@ -166,6 +182,7 @@ pub fn symbol_builder(result: &TypeCheckResult, allocator: &Allocator? = null) S
         by_fn_id = by_fn_id,
         by_decl = by_decl,
         by_fn_sig = by_fn_sig,
+        by_fn_foreign = by_fn_foreign,
         by_spec_id = by_spec_id,
         by_spec_sig = by_spec_sig,
         nominals = &result.nominals,
@@ -200,7 +217,8 @@ fn sig_lowerable(sig: &FnSig, is_foreign: bool, reg: &NominalRegistry) bool {
 // Whether a value of this type can cross a lowered call boundary. Scalars
 // always can; aggregates only when concrete - a type variable inside one
 // would make `layout_of` guess a size, which is the M5 wrong-layout bug
-// class - and not foreign.
+// class.
+//
 fn ty_lowerable(ty: &Ty, is_foreign: bool, reg: &NominalRegistry) bool {
     if is_scalar_ty(ty) { return true }
     if !is_aggregate(ty) { return false }
@@ -208,8 +226,98 @@ fn ty_lowerable(ty: &Ty, is_foreign: bool, reg: &NominalRegistry) bool {
     // nullable-pointer C idiom, so foreign signatures may spell it
     // (`#foreign fn malloc(size: usize) &u8?`).
     if ty_is_niche_option(ty, reg) { return true }
-    if is_foreign { return false }
-    return ty_concrete(ty)
+    if !ty_concrete(ty) { return false }
+    // A foreign boundary passes aggregates BY VALUE (`IrType.Agg`), and the
+    // backend spells them as plain bytes - which the platform ABI
+    // classifies like the companion C definition only when every leaf is
+    // integer-class.
+    if is_foreign { return agg_abi_safe(ty, reg) }
+    return true
+}
+
+// Whether a by-value aggregate is one the backend can write a faithful C
+// definition for. `lower.f::register_agg` emits real member types - a `f32`
+// member becomes `float` - so the platform ABI classifies our declaration
+// the same way it classifies the companion C's. That is what makes floats
+// admissible: on x86-64 SysV a float member puts its eightbyte in class
+// SSE, and emitting it as bytes would have claimed GP registers instead.
+//
+// It must stay in step with `register_agg`, which mirrors these cases to
+// build the member list. Only NAMED structs qualify: a C struct needs a
+// name, and an enum's payload union has no faithful flat member list.
+pub fn agg_abi_safe(ty: &Ty, reg: &NominalRegistry) bool {
+    let sd = ty.* match {
+        Nominal(nr) => reg.get(nr.id).* match {
+            NomStruct(d) => d,
+            _ => return false,
+        },
+        _ => return false,
+    }
+    if !fields_abi_safe(&sd.fields, reg) { return false }
+    return c_layout_agrees(ty, &sd, reg)
+}
+
+// Whether laying the members out the way C will - declaration order, each
+// at its own alignment, the first carrying the struct's `_Alignas` -
+// reproduces the FLang layout exactly.
+//
+// It often does not. Only a `#foreign struct` is laid out `Repr.C`; every
+// other struct is `Repr.Auto`, which orders fields by DESCENDING ALIGNMENT
+// (layout.f), so `struct { tag: i32, val: f64 }` puts `val` at offset 0 and
+// its bytes match no C declaration of the same members. Padding stays
+// implicit deliberately: an explicit filler member would change the ABI
+// classification (a `char` in an eightbyte forces it to class INTEGER), so
+// a layout needing one is a layout this backend cannot spell.
+fn c_layout_agrees(ty: &Ty, sd: &StructDef, reg: &NominalRegistry) bool {
+    let args = ty.* match {
+        Nominal(nr) => nr.args,
+        _ => return false,
+    }
+    const whole = layout_of(ty, reg)
+    const sl = struct_layout(sd, &args, reg)
+    let ok = sd.fields.len == sl.offsets.len
+    if ok {
+        let off: usize = 0
+        for i in 0..sd.fields.len {
+            const ft = field_ty(sd, i, &args)
+            const fl = layout_of(&ft, reg)
+            let al = fl.align
+            if i == 0 and whole.align > al { al = whole.align }
+            off = align_to(off, al)
+            if off != sl.offsets[i] {
+                ok = false
+                break
+            }
+            off = off + fl.size
+        }
+        if ok and align_to(off, whole.align) != whole.size { ok = false }
+    }
+    sl.offsets.deinit()
+    return ok
+}
+
+fn align_to(off: usize, align: usize) usize {
+    if align <= 1 { return off }
+    return ((off + align - 1) / align) * align
+}
+
+// A member's type. Scalars and references are spellable directly, an array
+// keeps its element type, and a nested named struct recurses.
+fn member_spellable(ty: &Ty, reg: &NominalRegistry) bool {
+    return ty.* match {
+        Array(a) => member_spellable(a.elem, reg),
+        Nominal(_) => agg_abi_safe(ty, reg),
+        Prim(_) => true,
+        Ref(_) => true,
+        _ => false,
+    }
+}
+
+fn fields_abi_safe(fields: &List(Field), reg: &NominalRegistry) bool {
+    for i in 0..fields.len {
+        if !member_spellable(&fields[i].ty, reg) { return false }
+    }
+    return true
 }
 
 // Structural, layout-free (a generic scheme's args may still carry Vars,
@@ -298,6 +406,7 @@ pub fn finish(self: &SymbolBuilder) SymbolTable {
         by_fn_id = self.by_fn_id,
         by_decl = self.by_decl,
         by_fn_sig = self.by_fn_sig,
+        by_fn_foreign = self.by_fn_foreign,
         by_spec_id = self.by_spec_id,
         by_spec_sig = self.by_spec_sig,
     }
@@ -329,6 +438,15 @@ fn append_escaped(sb: &StringBuilder, s: String) {
 // Append a module path: `.` becomes the segment separator, and source
 // underscores inside each segment are escaped, in one pass. Public: the
 // const-global mangle in lower.f reuses it (M11 globals).
+// A module path as a C identifier fragment. The encoding is INJECTIVE, so
+// distinct paths never collide: `.` -> `__`, `_` -> `_0`, and any byte
+// outside `[A-Za-z0-9]` -> `_x<hex>`. Because a literal `_` always becomes
+// `_0`, the sequences `__` and `_x` can only come from an escape.
+//
+// The catch-all matters: a module path is derived from the project name and
+// file path, neither of which is a FLang identifier. `name = "chess-fen"`
+// used to emit `chess-fen_main_...`, which C parses as a subtraction (see
+// docs/spec.md 7.1.1, property 4).
 pub fn append_module_path(sb: &StringBuilder, fqn: String) {
     for i in 0..fqn.len {
         if fqn[i] == '.' {
@@ -337,10 +455,30 @@ pub fn append_module_path(sb: &StringBuilder, fqn: String) {
             if fqn[i] == '_' {
                 sb.append("_0")
             } else {
-                sb.append_byte(fqn[i])
+                if is_c_ident_byte(fqn[i]) {
+                    sb.append_byte(fqn[i])
+                } else {
+                    sb.append("_x")
+                    append_hex_byte(sb, fqn[i])
+                }
             }
         }
     }
+}
+
+// `[A-Za-z0-9]` - the bytes a C identifier admits, minus `_`, which every
+// caller escapes separately so the escape prefix stays unambiguous.
+pub fn is_c_ident_byte(b: u8) bool {
+    if b >= 'a' and b <= 'z' { return true }
+    if b >= 'A' and b <= 'Z' { return true }
+    if b >= '0' and b <= '9' { return true }
+    return false
+}
+
+pub fn append_hex_byte(sb: &StringBuilder, b: u8) {
+    const digits = "0123456789abcdef"
+    sb.append(digits[((b >> 4) & 0x0F) as usize .. (((b >> 4) & 0x0F) as usize + 1)])
+    sb.append(digits[(b & 0x0F) as usize .. ((b & 0x0F) as usize + 1)])
 }
 
 // One token per parameter type. Distinct types must produce distinct

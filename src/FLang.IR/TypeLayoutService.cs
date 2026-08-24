@@ -618,12 +618,14 @@ public class TypeLayoutService(ITypeResolver engine, INominalTypeRegistry nomina
             for (int i = 0; i < original.Length; i++)
             {
                 char c = original[i];
-                // Check all 5 conditions in one single pass through the string
-                span[i] = c switch
-                {
-                    '.' or '[' or ']' or ',' or ' ' or '|' or '&' or '(' or ')' or '{' or '}' or '?' => '_',
-                    _ => c
-                };
+                // Anything a C identifier does not admit becomes '_'. The
+                // catch-all is load-bearing, not defensive: a symbol's base
+                // name carries the module path, which is derived from the
+                // project name and file path rather than from a FLang
+                // identifier. `name = "chess-fen"` used to emit
+                // `chess-fen_main_...`, which C parses as a subtraction.
+                // See docs/spec.md 7.1.1, property 4.
+                span[i] = char.IsAsciiLetterOrDigit(c) || c == '_' ? c : '_';
             }
         });
     }

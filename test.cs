@@ -18,9 +18,20 @@ using FLang.CLI;
 //   dotnet run test.cs <filter>          # Run tests matching filter (name or path)
 //   dotnet run test.cs -- --list         # List all tests
 //   dotnet run test.cs -- --help         # Show help
+//
+// Compiles through the default compiler (the self-hosted dist/<rid>/flang that
+// `dotnet build.cs` installs). $FLANG overrides it; --reference falls back to
+// the in-process C# compiler.
 // ============================================================================
 
 var scriptDir = Directory.GetCurrentDirectory();
+
+// Compiler selection must happen before the first TestHarness touch: it reads
+// $FLANG in a static initializer, and a null/empty value means "in-process".
+if (args.Contains("--reference"))
+    Environment.SetEnvironmentVariable("FLANG", null);
+else if (Environment.GetEnvironmentVariable("FLANG") is not { Length: > 0 })
+    Environment.SetEnvironmentVariable("FLANG", FindDefaultCompiler(scriptDir));
 
 // Parse arguments (args is implicitly available in file-based apps)
 bool showHelp = args.Contains("--help") || args.Contains("-h");
@@ -48,6 +59,8 @@ if (showHelp)
           --verbose, -v     Show detailed output for each test
           --sequential, -s  Run tests sequentially (default is parallel)
           --no-progress     Disable progress bar
+          --reference       Compile in-process with the C# reference compiler
+                            instead of the default self-hosted binary
           --help, -h        Show this help message
 
         Filter:
@@ -275,6 +288,20 @@ Console.ResetColor();
 return 0;
 
 // Helper functions
+
+// The default compiler: dist/<rid>/flang, installed by `dotnet build.cs`.
+// Null when dist/ is empty, which leaves the harness on the in-process path.
+// test-all.cs deliberately resolves flang-ref instead - `flang test` is a
+// reference-only command.
+static string? FindDefaultCompiler(string root)
+{
+    var dist = Path.Combine(root, "dist");
+    return Directory.Exists(dist)
+        ? Directory.GetFiles(dist, "flang*", SearchOption.AllDirectories)
+            .FirstOrDefault(f => Path.GetFileName(f) is "flang" or "flang.exe")
+        : null;
+}
+
 int GetConsoleWidth()
 {
     try { return Console.WindowWidth; }

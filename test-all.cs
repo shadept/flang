@@ -12,27 +12,29 @@
 // Usage:
 //   dotnet test-all.cs                  # run everything
 //
-// The compiler used for step 2 is `$FLANG` if set, else dist/<rid>/flang.exe.
-// Point FLANG at the bootstrap compiler once it can self-host to test the
-// exact same suites through the new pipeline — no script change needed.
+// The compiler used for step 2 is `$FLANG` if set, else dist/<rid>/flang-ref.
+// NOT the default compiler: `test` is a reference-only command today — the
+// self-hosted CLI has build/fmt/lsp/cst/tokens and no test runner.
+// ponytail: switch to dist/<rid>/flang once the self-hosted CLI grows `test`.
 // ============================================================================
 
 using System.Diagnostics;
 
 var root = Directory.GetCurrentDirectory();
 
-// Resolve the compiler: $FLANG wins, else the single binary under dist/.
+// Resolve the compiler: $FLANG wins, else the reference binary under dist/.
+// The exact-name match keeps the bundled stdlib's flang.toml out of the running.
 var flang = Environment.GetEnvironmentVariable("FLANG");
 if (string.IsNullOrEmpty(flang))
 {
     var distDir = Path.Combine(root, "dist");
     flang = Directory.Exists(distDir)
-        ? Directory.GetFiles(distDir, "flang*", SearchOption.AllDirectories)
-            .FirstOrDefault(f => Path.GetFileNameWithoutExtension(f) == "flang")
+        ? Directory.GetFiles(distDir, "flang-ref*", SearchOption.AllDirectories)
+            .FirstOrDefault(f => Path.GetFileName(f) is "flang-ref" or "flang-ref.exe")
         : null;
     if (flang == null)
     {
-        Console.Error.WriteLine("error: no flang binary under dist/. Run `dotnet build.cs` first or set $FLANG.");
+        Console.Error.WriteLine("error: no flang-ref binary under dist/. Run `dotnet build.cs` first or set $FLANG.");
         return 1;
     }
 }

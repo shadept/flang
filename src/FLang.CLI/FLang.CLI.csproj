@@ -18,6 +18,13 @@
 
     <PropertyGroup>
         <OutputType>Exe</OutputType>
+        <!-- Keep the RID-specific target in obj/project.assets.json even when the
+             project is restored WITHOUT a RID, which is what `dotnet build test.cs`
+             and `dotnet run test.cs` do since they reference this project plainly.
+             Without it those restores strip the RID target, the next restore-less
+             `dotnet publish -r <rid>` fails NETSDK1047, and build.cs pays a full
+             ~15s restore on every single run. -->
+        <RuntimeIdentifiers>$(NETCoreSdkRuntimeIdentifier)</RuntimeIdentifiers>
     </PropertyGroup>
 
     <PropertyGroup Condition="'$(RuntimeIdentifier)' != ''">
@@ -42,7 +49,11 @@
             <DistRid Condition="'$(DistRid)' == ''">$(RuntimeIdentifier)</DistRid>
             <DistDir>$([System.IO.Path]::Combine('$(RepoRoot)', 'dist', '$(DistRid)'))\</DistDir>
             <ExeName>$(AssemblyName)$(ExeExt)</ExeName>
-            <FinalExeName>flang$(ExeExt)</FinalExeName>
+            <!-- build.cs publishes as `flang-ref`: `flang` is reserved for the
+                 self-hosted compiler it then installs. Overridable so the publish
+                 never clobbers that binary. -->
+            <DistExeName Condition="'$(DistExeName)' == ''">flang</DistExeName>
+            <FinalExeName>$(DistExeName)$(ExeExt)</FinalExeName>
             <!-- Stdlib source and destination -->
             <StdLibRoot>$([System.IO.Path]::Combine('$(RepoRoot)', 'stdlib'))\</StdLibRoot>
             <StdLibDestDir>$([System.IO.Path]::Combine('$(DistDir)', 'stdlib'))\</StdLibDestDir>
@@ -60,7 +71,7 @@
 
         <Copy SourceFiles="@(SourceExe)"
               DestinationFiles="@(DestExe)"
-              SkipUnchangedFiles="false"
+              SkipUnchangedFiles="true"
               OverwriteReadOnlyFiles="true"/>
 
         <Message Importance="High" Text="Copied single-file executable to: $(DistDir)$(FinalExeName)"/>

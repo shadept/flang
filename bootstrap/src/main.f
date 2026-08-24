@@ -110,14 +110,14 @@ fn parse_cli(argv: String[]) Cli {
                 break
             }
             Error(c) => {
-                const msg = $"bootstrap: unrecognized option `-{c}`"
+                const msg = $"flang: unrecognized option `-{c}`"
                 defer msg.deinit()
                 println(msg.as_view())
                 cli.show_help = true
                 break
             }
             MissingArg(c) => {
-                const msg = $"bootstrap: option `-{c}` requires an argument"
+                const msg = $"flang: option `-{c}` requires an argument"
                 defer msg.deinit()
                 println(msg.as_view())
                 cli.show_help = true
@@ -131,9 +131,13 @@ fn parse_cli(argv: String[]) Cli {
 }
 
 fn print_help() {
-    println("bootstrap - FLang compiler")
+    const me = project_info()
+    const banner = $"{me.name} {me.version} - the SELF-HOSTED compiler (written in FLang)"
+    defer banner.deinit()
+    println(banner.as_view())
+    println("Subset of the reference CLI: no `test`, `-o`, `--release` or bare-file form.")
     println("")
-    println("usage: bootstrap [options] <command> [args...]")
+    println("usage: flang [options] <command> [args...]")
     println("")
     println("commands:")
     println("  build  [file.f]      build the project (flang.toml), or a single file")
@@ -155,13 +159,13 @@ fn print_help() {
 
 fn print_version() {
     const me = project_info()
-    const banner = $"{me.name} {me.version} (flang_parser {parser_version()})"
+    const banner = $"{me.name} {me.version} (self-hosted compiler, FLang; flang_parser {parser_version()})"
     defer banner.deinit()
     println(banner.as_view())
 }
 
 fn unknown_subcommand(name: String) i32 {
-    const msg = $"bootstrap: unknown command `{name}`"
+    const msg = $"flang: unknown command `{name}`"
     defer msg.deinit()
     println(msg.as_view())
     print_help()
@@ -186,7 +190,7 @@ fn run_build(argv: String[], rest: usize, verbose: bool, stdlib_path: String, ch
             const out = output_path_for(path)
             return build_single_file(path, out, verbose, stdlib.as_view(), check_only, target, emit_generated)
         }
-        const msg = $"bootstrap: `build` takes a `.f` file or no argument (got `{path}`)"
+        const msg = $"flang: `build` takes a `.f` file or no argument (got `{path}`)"
         defer msg.deinit()
         println(msg.as_view())
         return 1
@@ -200,7 +204,7 @@ fn run_build(argv: String[], rest: usize, verbose: bool, stdlib_path: String, ch
 fn resolve_target(target_os: String, target_arch: String) ComptimeCtx? {
     if target_os.len > 0 {
         if target_os != "windows" and target_os != "linux" and target_os != "macos" {
-            const m = $"bootstrap: unknown --target-os `{target_os}` (expected windows, linux, or macos)"
+            const m = $"flang: unknown --target-os `{target_os}` (expected windows, linux, or macos)"
             defer m.deinit()
             println(m.as_view())
             return null
@@ -208,7 +212,7 @@ fn resolve_target(target_os: String, target_arch: String) ComptimeCtx? {
     }
     if target_arch.len > 0 {
         if target_arch != "x86_64" and target_arch != "arm64" {
-            const m = $"bootstrap: unknown --target-arch `{target_arch}` (expected x86_64 or arm64)"
+            const m = $"flang: unknown --target-arch `{target_arch}` (expected x86_64 or arm64)"
             defer m.deinit()
             println(m.as_view())
             return null
@@ -256,7 +260,7 @@ fn dir_of(path: String) String {
 // every module together, then lower the lot to one executable.
 fn build_project(verbose: bool, stdlib_path: String, check_only: bool, target: ComptimeCtx, emit_generated: bool) i32 {
     if !exists("flang.toml") {
-        println("bootstrap: no flang.toml in the current directory")
+        println("flang: no flang.toml in the current directory")
         return 1
     }
     const toml_res = read_source("flang.toml")
@@ -274,7 +278,7 @@ fn build_project(verbose: bool, stdlib_path: String, check_only: bool, target: C
     defer deinit_source_list(&sources)
 
     if sources.len == 0 {
-        const m = $"bootstrap: no sources match `{proj.source.as_view()}`"
+        const m = $"flang: no sources match `{proj.source.as_view()}`"
         defer m.deinit()
         println(m.as_view())
         return 1
@@ -287,9 +291,34 @@ fn build_project(verbose: bool, stdlib_path: String, check_only: bool, target: C
     let unit = analyze_project(&ctx, &sources)
     defer unit.deinit()
 
+    // `[build.<os>]` native inputs. `${VAR}` expansion reads the
+    // environment, so it happens here at the CLI edge rather than inside
+    // the driver; an undefined variable is an error, not an empty string
+    // silently dropped from the link line.
+    const plat = proj.current_platform()
+    let missing: List(OwnedString) = list(0)
+    defer deinit_source_list(&missing)
+    let libs = expand_all(&plat.libs, &missing)
+    defer deinit_source_list(&libs)
+    let ldflags = expand_all(&plat.ldflags, &missing)
+    defer deinit_source_list(&ldflags)
+    if missing.len > 0 {
+        let names = string_builder(64)
+        defer names.deinit()
+        for i in 0..missing.len {
+            if i > 0 { names.append(", ") }
+            names.append("$")
+            names.append(missing[i].as_view())
+        }
+        const m = $"flang: undefined environment variable(s): {names.as_view()}"
+        defer m.deinit()
+        println(m.as_view())
+        return 1
+    }
+
     const out = $"{proj.output.as_view()}/{proj.name.as_view()}"
     defer out.deinit()
-    return finish_build(&unit, proj.name.as_view(), out.as_view(), verbose, check_only, stdlib_path, target)
+    return finish_build(&unit, proj.name.as_view(), out.as_view(), verbose, check_only, stdlib_path, target, &libs, &ldflags)
 }
 
 // Single-file mode: the file is the sole entry of a project-less build, so
@@ -310,11 +339,53 @@ fn build_single_file(path: String, out: String, verbose: bool, stdlib_path: Stri
         const n = unit.write_generated()
         if verbose { const gm = $"  wrote {n} generated file(s)"; defer gm.deinit(); println(gm.as_view()) }
     }
-    return finish_build(&unit, path, out, verbose, check_only, stdlib_path, target)
+    // No manifest, so no `[build.<os>]` inputs.
+    let none: List(OwnedString) = list(0)
+    defer none.deinit()
+    return finish_build(&unit, path, out, verbose, check_only, stdlib_path, target, &none, &none)
+}
+
+// Expand `${VAR}` in each entry against the environment. An undefined
+// variable's name is collected in `missing` and the entry is dropped - the
+// caller reports them together, the way the reference compiler does.
+fn expand_all(items: &List(OwnedString), missing: &List(OwnedString)) List(OwnedString) {
+    let out: List(OwnedString) = list(items.len)
+    for &item in items {
+        const s = item.as_view()
+        let sb = string_builder(s.len)
+        let ok = true
+        let i: usize = 0
+        while i < s.len {
+            if i + 1 < s.len and s[i] == '$' and s[i + 1] == '{' {
+                let j = i + 2
+                while j < s.len and s[j] != '}' { j = j + 1 }
+                if j >= s.len {
+                    // No closing brace - not a reference, copy verbatim.
+                    sb.append(s[i..(i + 1)])
+                    i = i + 1
+                    continue
+                }
+                const key = s[(i + 2)..j]
+                env(key) match {
+                    Some(v) => sb.append(v),
+                    None => {
+                        ok = false
+                        missing.push(from_view(key))
+                    },
+                }
+                i = j + 1
+            } else {
+                sb.append(s[i..(i + 1)])
+                i = i + 1
+            }
+        }
+        if ok { out.push(sb.to_string()) } else { sb.deinit() }
+    }
+    return out
 }
 
 // Shared render -> gate -> lower -> link tail for both build modes.
-fn finish_build(unit: &AnalyzedProject, label: String, out: String, verbose: bool, check_only: bool, stdlib_path: String, target: ComptimeCtx) i32 {
+fn finish_build(unit: &AnalyzedProject, label: String, out: String, verbose: bool, check_only: bool, stdlib_path: String, target: ComptimeCtx, libs: &List(OwnedString), ldflags: &List(OwnedString)) i32 {
     render_project_diagnostics(&unit.diagnostics, &unit.file_paths, &unit.sources)
 
     const errs = project_error_count(unit)
@@ -334,7 +405,7 @@ fn finish_build(unit: &AnalyzedProject, label: String, out: String, verbose: boo
         return 0
     }
 
-    let result = build_program(&unit.modules, &unit.fqns, &unit.result, out, target, stdlib_path, verbose)
+    let result = build_program(&unit.modules, &unit.fqns, &unit.result, out, target, &unit.file_paths, libs, ldflags, verbose)
     if result.is_err() {
         report_build_error(&result.unwrap_err(), label)
         return 1
@@ -395,7 +466,7 @@ fn build_failed(path: String, errs: usize) i32 {
 // our environment so it sees the same workspace context.
 fn spawn_tool(tool: String, argv: String[], rest: usize, verbose: bool) i32 {
     if verbose {
-        const v = $"bootstrap: spawning `{tool}`"
+        const v = $"flang: spawning `{tool}`"
         defer v.deinit()
         println(v.as_view())
     }
@@ -409,7 +480,7 @@ fn spawn_tool(tool: String, argv: String[], rest: usize, verbose: bool) i32 {
 
     const spawn_result = cmd.spawn()
     if spawn_result.is_err() {
-        const msg = $"bootstrap: failed to spawn `{tool}` - is it on PATH?"
+        const msg = $"flang: failed to spawn `{tool}` - is it on PATH?"
         defer msg.deinit()
         println(msg.as_view())
         return 1
@@ -419,7 +490,7 @@ fn spawn_tool(tool: String, argv: String[], rest: usize, verbose: bool) i32 {
 
     const wait_result = child.wait()
     if wait_result.is_err() {
-        const msg = $"bootstrap: `{tool}` wait failed"
+        const msg = $"flang: `{tool}` wait failed"
         defer msg.deinit()
         println(msg.as_view())
         return 1

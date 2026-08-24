@@ -103,6 +103,15 @@ pub type DeclAttribute = enum {
     Deprecated(String?)
 }
 
+// Whether a declaration's directives mark it as a SIMD vector type.
+pub fn is_simd_directive(ds: &List(DeclAttribute)) bool {
+    for &d in ds {
+        let f = d.* match { Simd => true, _ => false }
+        if f { return true }
+    }
+    return false
+}
+
 // Whether a declaration's directives mark it as a foreign import.
 pub fn is_foreign_directive(ds: &List(DeclAttribute)) bool {
     for &d in ds {

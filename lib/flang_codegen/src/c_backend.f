@@ -37,6 +37,12 @@ import flang_codegen.fir
 // Lower the module to a C translation unit. Caller owns `sb`.
 pub fn translate(m: &IrModule, sb: &StringBuilder) {
     emit_preamble(sb)
+    // Before the externs that name them: one C struct per by-value
+    // aggregate a foreign signature mentions.
+    for i in 0..m.aggs.len {
+        emit_agg_type(&m.aggs[i], sb)
+    }
+    if m.aggs.len > 0 { sb.append("\n") }
     for i in 0..m.foreigns.len {
         // The runtime preamble already defines these - re-emitting them
         // as `extern` would conflict.
@@ -259,6 +265,37 @@ fn is_entry_point(f: &Function) bool {
     return f.name == "main"
 }
 
+// The C definition behind an `IrType.Agg`, with FAITHFUL member types: the
+// platform ABI classifies a struct by what its members are, so a `f32` has
+// to be emitted as `float` or the value travels in the wrong registers.
+// `_Alignas` on the first member carries the FLang layout's alignment to
+// the struct itself.
+fn emit_agg_type(a: &AggDef, sb: &StringBuilder) {
+    sb.append("typedef struct ")
+    sb.append(a.name)
+    sb.append(" {")
+    for i in 0..a.fields.len {
+        sb.append(" ")
+        if i == 0 {
+            sb.append("_Alignas(")
+            sb.append(a.align)
+            sb.append(") ")
+        }
+        emit_c_type(a.fields[i].ty, sb)
+        sb.append(" _f")
+        sb.append(i)
+        if a.fields[i].count != 1 as usize {
+            sb.append("[")
+            sb.append(a.fields[i].count)
+            sb.append("]")
+        }
+        sb.append(";")
+    }
+    sb.append(" } ")
+    sb.append(a.name)
+    sb.append(";\n")
+}
+
 fn emit_foreign(f: &ForeignDecl, sb: &StringBuilder) {
     sb.append("extern ")
     emit_ret_type(f.return_ty, sb)
@@ -412,6 +449,7 @@ fn c_type_name(ty: IrType) String {
         F32 => "float",
         F64 => "double",
         Ptr => "void*",
+        Agg(a) => a.name,
     }
 }
 
@@ -1422,7 +1460,7 @@ fn build_compiler_argv(info: &CompilerInfo, c_path: String, options: &BuildOptio
                 argv.push(from_view(options.libs[i], alloc))
             }
             for i in 0..options.ldflags.len {
-                argv.push(from_view(options.ldflags[i], alloc))
+                push_ldflag_words(&argv, options.ldflags[i], alloc)
             }
         }
         return argv
@@ -1468,9 +1506,24 @@ fn build_compiler_argv(info: &CompilerInfo, c_path: String, options: &BuildOptio
         }
     }
     for i in 0..options.ldflags.len {
-        argv.push(from_view(options.ldflags[i], alloc))
+        push_ldflag_words(&argv, options.ldflags[i], alloc)
     }
     return argv
+}
+
+// One manifest `ldflags` entry, split into separate argv words. A flag that
+// takes a value is written as one string in the manifest
+// (`"-framework CoreVideo"`) but has to reach the driver as two arguments -
+// clang rejects the joined form with `unknown argument`.
+//
+// ponytail: space-separated, so a path with a space in it cannot be spelled
+// here. Take a nested array in the manifest if one ever needs to be.
+fn push_ldflag_words(argv: &List(OwnedString), flag: String, alloc: &Allocator?) {
+    const words = split(flag, ' ')
+    defer words.deinit()
+    for w in words {
+        if w.len > 0 { argv.push(from_view(w, alloc)) }
+    }
 }
 
 test "emits each foreign symbol at most once" {

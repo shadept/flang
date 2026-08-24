@@ -184,12 +184,20 @@ pub fn analyze_project(ctx: &ResolveCtx, entries: &List(OwnedString), allocator:
     for i in 0..entries.len {
         enqueue_copy(&queue, &seen, entries[i].as_view())
     }
+    // Everything enqueued from here on is stdlib, a dependency or a
+    // transitive import - never a project file. `[imports].global` applies
+    // to project files only, so the boundary has to be recorded before the
+    // seeds run.
+    let project_count = queue.len
+    let project_origin: List(bool) = list(0, allocator)
+    seed_globals(ctx, &queue, &seen, &diagnostics, allocator)
     seed_prelude(ctx, &queue, &seen, allocator)
     seed_stdlib(ctx, &queue, &seen, allocator)
 
     let qi: usize = 0
     while qi < queue.len {
         let path = queue[qi].as_view()
+        let is_project = qi < project_count
         qi = qi + 1
         let src_opt = read_text(path)
         if src_opt.is_none() {
@@ -206,10 +214,12 @@ pub fn analyze_project(ctx: &ResolveCtx, entries: &List(OwnedString), allocator:
         file_paths.push(from_view(path))
         fqns.push(fqn)
         modules.push(module)
+        project_origin.push(is_project)
     }
 
     queue.deinit()
     seen.deinit()
+    defer project_origin.deinit()
 
     let checked = count_errors(&diagnostics) == 0
     let result = empty_result(allocator)
@@ -222,6 +232,7 @@ pub fn analyze_project(ctx: &ResolveCtx, entries: &List(OwnedString), allocator:
         let chk = checker(allocator)
         let gens = template_state(allocator)
         chk.set_comptime_ctx(ctx.comptime)
+        chk.set_project_globals(&ctx.global_imports, &project_origin)
         result = check_all(&chk, &modules, &path_views, &sources, &file_paths, &gens)
         drain_diagnostics(&diagnostics, &chk.diagnostics)
         generated = gens.take_output()
@@ -344,6 +355,24 @@ fn enqueue_imports(ctx: &ResolveCtx, m: &Module, queue: &List(OwnedString), seen
                 }
             },
             _ => {},
+        }
+    }
+}
+
+// `flang.toml`'s `[imports].global`. Loading the module is only half the
+// job - `build_visibility` is what actually puts it in each project file's
+// scope; this side just guarantees it is in the module set to be found.
+fn seed_globals(ctx: &ResolveCtx, queue: &List(OwnedString), seen: &Set(String), diags: &List(Diagnostic), alloc: &Allocator?) {
+    for &g in ctx.global_imports {
+        let segs = split(g.as_view(), '.')
+        let r = resolve_import(ctx, &segs, alloc)
+        segs.deinit()
+        r match {
+            Some(p) => enqueue_owned(queue, seen, p),
+            None => {
+                const msg = $"unresolved global import `{g.as_view()}` from flang.toml [imports].global"
+                diags.push(error("E0001", msg, none_span()))
+            },
         }
     }
 }

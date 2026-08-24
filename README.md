@@ -25,19 +25,37 @@ cd flang
 dotnet run build.cs
 ```
 
-This produces the compiler at `dist/<platform>/flang` (e.g. `dist/osx-x64/flang`, `dist/linux-x64/flang`, `dist/win-x64/flang.exe`).
+One command bootstraps the whole chain: it publishes the C# reference compiler,
+builds the self-hosted compiler with it, and installs that as the default. Two
+binaries land in `dist/<platform>/` (e.g. `dist/darwin-arm64`, `dist/linux-x64`,
+`dist/win-x64`):
+
+| Binary | What it is |
+|--------|------------|
+| `flang` | **The default compiler** — self-hosted, written in FLang |
+| `flang-ref` | The C# reference compiler, used to bootstrap `flang` |
+
+Each binary names itself in `--version` and `--help`, so there is no guessing
+which one you are holding.
+
+The self-hosted CLI is not yet at feature parity with the reference: it has
+`build`, `fmt`, `lsp`, `cst` and `tokens`, but no `test` runner, no `-o`, no
+`--release` and no bare-file form. Reach for `flang-ref` when you need those.
+
+Re-running `dotnet run build.cs` after no source changes takes about two
+seconds; it skips the self-hosted rebuild unless something under `bootstrap/`,
+`lib/`, `stdlib/` or `src/` is newer. Pass `--force` to rebuild regardless.
 
 ## Usage
 
 ```sh
-# Compile
-flang hello.f
+# Compile a project (flang.toml) or a single file
+flang build hello.f
 
-# Compile with optimizations
-flang --release hello.f -o hello
-
-# Run tests in a file
-flang test myfile.f
+# Reference-only, for now
+flang-ref hello.f                       # bare-file compile
+flang-ref --release hello.f -o hello    # optimizations and output path
+flang-ref test myfile.f                 # run `test {}` blocks in a file
 ```
 
 ## Documentation

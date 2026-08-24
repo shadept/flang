@@ -14,6 +14,45 @@ import std.string
 // are not FIR types - they live in memory as opaque byte buffers,
 // addressed via `gep` + `load`/`store`. The lowering pass resolves all
 // aggregate layouts before FIR is emitted.
+// A by-value aggregate crossing a C call boundary. FIR models aggregates
+// as opaque bytes everywhere else - a native call passes their address, and
+// an aggregate return uses an sret slot. That breaks down at a FOREIGN
+// boundary: the platform ABI classifies a struct argument by its own size
+// and alignment, so the declaration has to name a real C type or the call
+// disagrees with the C definition it links against.
+//
+// `name` is the struct the backend emits; `AggDef` below carries what it
+// contains. `symbol_table.f::agg_abi_safe` is the gate on which aggregates
+// may cross at all.
+pub type AggType = struct {
+    // Interned view (`lower.f` owns the storage): the emitted C struct
+    // name, the FLang FQN with dots replaced by underscores.
+    name: String
+    size: usize
+    align: usize
+}
+
+// One member of an emitted aggregate. `ty` may itself be an `Agg`, which
+// names a nested struct - the recursion stops there because `AggType`
+// carries only a name, so `IrType` stays a flat, freely-copyable value.
+pub type AggField = struct {
+    ty: IrType
+    // Array length; 1 for a plain scalar member.
+    count: usize
+}
+
+// The definition behind an `AggType`: what the backend writes out. Members
+// are FAITHFUL - a `f32` field is emitted as `float`, not as bytes - because
+// the platform ABI classifies a struct by its member types. On x86-64 SysV a
+// float member puts its eightbyte in class SSE, so a byte-blob stand-in
+// would be passed in the wrong registers.
+pub type AggDef = struct {
+    name: String
+    size: usize
+    align: usize
+    fields: List(AggField)
+}
+
 pub type IrType = enum {
     I8
     I16
@@ -22,6 +61,7 @@ pub type IrType = enum {
     F32
     F64
     Ptr
+    Agg(AggType)
 }
 
 // Calling convention attached to functions, foreign decls, and indirect
@@ -41,13 +81,17 @@ pub fn byte_size(ty: IrType) usize {
         F32 => 4,
         F64 => 8,
         Ptr => 8,
+        Agg(a) => a.size,
     }
 }
 
-// Natural alignment of a value of this type. Equal to `byte_size` for
-// the primitives FIR supports.
+// Natural alignment of a value of this type. Equal to `byte_size` for the
+// primitives FIR supports; an aggregate carries its own.
 pub fn byte_align(ty: IrType) usize {
-    return ty.byte_size()
+    return ty match {
+        Agg(a) => a.align,
+        _ => ty.byte_size(),
+    }
 }
 
 // Lower-case mnemonic used by the text format (`i8`, `i16`, ..., `ptr`).
@@ -60,7 +104,14 @@ pub fn name(ty: IrType) String {
         F32 => "f32",
         F64 => "f64",
         Ptr => "ptr",
+        Agg(a) => a.name,
     }
+}
+
+// Structural equality. Compared by text form, which is unique per type:
+// scalars have fixed mnemonics and an aggregate carries its mangled FQN.
+pub fn op_eq(a: IrType, b: IrType) bool {
+    return a.name() == b.name()
 }
 
 pub fn name(cc: CallConv) String {
@@ -384,6 +435,11 @@ pub type IrModule = struct {
     // "calls undefined `x`"). Same lifetime and removal condition as
     // `skipped`; the verbose CLI build prints it as the frontier report.
     skip_notes: List(OwnedString)
+    // Distinct by-value aggregate types any foreign declaration mentions.
+    // The backend emits one C struct definition per entry, before the
+    // externs that name them. Nested aggregates are registered before the
+    // structs that contain them, so emitting in order is already valid C.
+    aggs: List(AggDef)
 }
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -396,16 +452,19 @@ pub fn module(allocator: &Allocator? = null) IrModule {
     let functions: List(Function) = list(0, allocator)
     let skipped: List(String) = list(0, allocator)
     let skip_notes: List(OwnedString) = list(0, allocator)
+    let aggs: List(AggDef) = list(0, allocator)
     return IrModule {
         globals = globals,
         foreigns = foreigns,
         functions = functions,
         skipped = skipped,
         skip_notes = skip_notes,
+        aggs = aggs,
     }
 }
 
 pub fn deinit(self: &IrModule) {
+    self.aggs.deinit()
     self.functions.deinit()
     self.foreigns.deinit()
     self.globals.deinit()
@@ -518,6 +577,14 @@ pub fn add_function(self: &IrModule, f: Function) {
 
 pub fn add_foreign(self: &IrModule, f: ForeignDecl) {
     self.foreigns.push(f)
+}
+
+// Record an aggregate definition the backend must emit, once per name.
+pub fn add_agg(self: &IrModule, a: AggDef) {
+    for i in 0..self.aggs.len {
+        if self.aggs[i].name == a.name { return }
+    }
+    self.aggs.push(a)
 }
 
 pub fn add_global(self: &IrModule, g: Global) {
