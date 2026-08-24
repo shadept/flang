@@ -500,6 +500,8 @@ fn project_enum_variant(self: &Projector, cst: CstNode) EnumVariant {
     let explicit_tag: Expr? = null
     let in_payload = false
     let saw_equals = false
+    // `= -1`: the minus arrives as its own token before the integer.
+    let tag_negated = false
     for i in 0..cst.children.len {
         cst.children[i] match {
             TokenChild(tok) => {
@@ -510,8 +512,13 @@ fn project_enum_variant(self: &Projector, cst: CstNode) EnumVariant {
                 if tok.kind == TokenKind.OpenParenthesis { in_payload = true; continue }
                 if tok.kind == TokenKind.CloseParenthesis { in_payload = false; continue }
                 if tok.kind == TokenKind.Equals { saw_equals = true; continue }
-                // Explicit-tag integer (with optional leading minus) is captured
-                // best-effort as a literal expression.
+                if saw_equals and explicit_tag.is_none() and tok.kind == TokenKind.Minus {
+                    tag_negated = true
+                    continue
+                }
+                // Explicit-tag integer, wrapped in a unary negation when the
+                // tag was written `= -1` (dropping the minus silently made
+                // `Less = -1` read as tag 1 - see core.cmp.Ord).
                 if saw_equals and explicit_tag.is_none() and tok.kind == TokenKind.Integer {
                     const lit: Expr = Expr.Lit(LiteralExpr {
                         span = self.span_from_token(tok),
@@ -521,7 +528,15 @@ fn project_enum_variant(self: &Projector, cst: CstNode) EnumVariant {
                             suffix = "",
                         }),
                     })
-                    explicit_tag = Some(lit)
+                    if tag_negated {
+                        explicit_tag = Some(Expr.Unary(UnaryExpr {
+                            span = self.span_from_token(tok),
+                            op = UnaryOp.Neg,
+                            operand = box(self.alloc, lit),
+                        }))
+                    } else {
+                        explicit_tag = Some(lit)
+                    }
                 }
             }
             NodeChild(child) => {
@@ -2333,7 +2348,13 @@ fn project_interp_string(self: &Projector, cst: CstNode) InterpolatedStringExpr 
                     }))
                     continue
                 }
-                if after_paren and is_expr_kind(child.kind) {
+                // `$(64, allocator = &a)"…"` - a named builder argument
+                // contributes its VALUE; `builder_ctor_args` routes an
+                // `&expr` to the allocator slot and anything else to
+                // capacity, which is the same mapping the names spell.
+                if after_paren and child.kind == NodeKind.NamedArgumentExpr {
+                    target_args.push(self.project_named_argument(child).value.*)
+                } else if after_paren and is_expr_kind(child.kind) {
                     target_args.push(self.project_expr(child))
                 }
             }
@@ -2649,14 +2670,20 @@ fn project_pattern_from_tokens(self: &Projector, tokens: List(Token), start: usi
     }
 
     // `a..b` / `a..=b` / `..b` / `a..` - a top-level range token makes a
-    // range pattern with single-literal bounds.
+    // range pattern with single-literal bounds. Braces count toward the
+    // depth too: the `..` rest marker of `Named { id, .. }` is INSIDE the
+    // struct pattern and is not a range.
     let dd: usize = tokens.len
     let inclusive = false
     depth = 0
     for i in 0..tokens.len {
         const k3 = tokens[i].kind
-        if k3 == TokenKind.OpenParenthesis { depth = depth + 1 }
-        if k3 == TokenKind.CloseParenthesis { depth = depth - 1 }
+        if k3 == TokenKind.OpenParenthesis or k3 == TokenKind.OpenBrace or k3 == TokenKind.OpenBracket {
+            depth = depth + 1
+        }
+        if k3 == TokenKind.CloseParenthesis or k3 == TokenKind.CloseBrace or k3 == TokenKind.CloseBracket {
+            depth = depth - 1
+        }
         if depth == 0 and dd == tokens.len {
             if k3 == TokenKind.DotDot { dd = i }
             if k3 == TokenKind.DotDotEquals { dd = i; inclusive = true }
@@ -2666,8 +2693,121 @@ fn project_pattern_from_tokens(self: &Projector, tokens: List(Token), start: usi
         return self.range_pattern_from(tokens, dd, inclusive, span)
     }
 
+    // `(a, b)` - positional tuple destructure.
+    if tokens[0].kind == TokenKind.OpenParenthesis {
+        return self.tuple_pattern_from_tokens(tokens, span)
+    }
+    // `Name { f = p, g, .. }` - struct destructure.
+    if tokens[0].kind == TokenKind.Identifier and has_top_level_brace(tokens) {
+        return self.struct_pattern_from_tokens(tokens, span)
+    }
     // Multi-token: try `Qualifier.Name(...)` or `Name(...)` enum variant.
     return self.enum_variant_pattern_from_tokens(tokens, span)
+}
+
+fn has_top_level_brace(tokens: List(Token)) bool {
+    for i in 0..tokens.len {
+        if tokens[i].kind == TokenKind.OpenBrace { return true }
+    }
+    return false
+}
+
+// `(p0, p1, …)` - the parenthesised run split at top-level commas. An
+// unbalanced or trailing-garbage run degrades to `Error` (E2115 at check
+// time) rather than guess a shape.
+fn tuple_pattern_from_tokens(self: &Projector, tokens: List(Token), span: SourceSpan) Pattern {
+    let elements: List(Pattern) = list(2, Some(self.alloc))
+    let depth: i32 = 0
+    let seg = 1usize
+    let i = 0usize
+    let closed = false
+    while i < tokens.len {
+        const k = tokens[i].kind
+        if k == TokenKind.OpenParenthesis or k == TokenKind.OpenBracket or k == TokenKind.OpenBrace {
+            depth = depth + 1
+        } else if k == TokenKind.CloseParenthesis or k == TokenKind.CloseBracket or k == TokenKind.CloseBrace {
+            depth = depth - 1
+            if depth == 0 {
+                if i > seg { elements.push(self.payload_pattern_slice(tokens, seg, i)) }
+                closed = true
+                i = i + 1
+                break
+            }
+        } else if k == TokenKind.Comma and depth == 1 {
+            elements.push(self.payload_pattern_slice(tokens, seg, i))
+            seg = i + 1
+        }
+        i = i + 1
+    }
+    if !closed or i != tokens.len {
+        return Pattern.Error(ErrorPattern { span = span })
+    }
+    return Pattern.Tuple(TuplePattern { span = span, elements = elements })
+}
+
+// `Name { x = p, y, .. }`. A field with no `= pattern` is shorthand for
+// binding the field's own name; `..` marks the rest as ignored.
+fn struct_pattern_from_tokens(self: &Projector, tokens: List(Token), span: SourceSpan) Pattern {
+    const a = self.alloc
+    let name = tokens[0].text
+    let fields: List(StructPatternField) = list(2, Some(a))
+    let has_rest = false
+    let i = 1usize
+    if i >= tokens.len or tokens[i].kind != TokenKind.OpenBrace {
+        return Pattern.Error(ErrorPattern { span = span })
+    }
+    i = i + 1
+    let depth: i32 = 1
+    let seg = i
+    while i < tokens.len {
+        const k = tokens[i].kind
+        if k == TokenKind.OpenParenthesis or k == TokenKind.OpenBracket or k == TokenKind.OpenBrace {
+            depth = depth + 1
+        } else if k == TokenKind.CloseParenthesis or k == TokenKind.CloseBracket or k == TokenKind.CloseBrace {
+            depth = depth - 1
+            if depth == 0 {
+                if i > seg { self.push_struct_pattern_field(&fields, &has_rest, tokens, seg, i) }
+                break
+            }
+        } else if k == TokenKind.Comma and depth == 1 {
+            self.push_struct_pattern_field(&fields, &has_rest, tokens, seg, i)
+            seg = i + 1
+        }
+        i = i + 1
+    }
+    return Pattern.Struct(StructPattern {
+        span = span,
+        type_expr = box(a, TypeExpr.Named(NamedType {
+            span = self.span_from_token(tokens[0]),
+            name = name,
+            generic_args = list(0, Some(a)),
+        })),
+        fields = fields,
+        has_rest = has_rest,
+    })
+}
+
+fn push_struct_pattern_field(self: &Projector, fields: &List(StructPatternField), has_rest: &bool, tokens: List(Token), lo: usize, hi: usize) {
+    if hi <= lo { return }
+    const a = self.alloc
+    const fspan = self.span_from_token(tokens[lo])
+    if tokens[lo].kind == TokenKind.DotDot {
+        has_rest.* = true
+        return
+    }
+    if tokens[lo].kind != TokenKind.Identifier { return }
+    const fname = tokens[lo].text
+    // `x` alone binds `x`; `x = <pattern>` binds the sub-pattern.
+    if lo + 1 >= hi {
+        fields.push(StructPatternField { span = fspan, name = fname, binding = null })
+        return
+    }
+    if tokens[lo + 1].kind != TokenKind.Equals {
+        fields.push(StructPatternField { span = fspan, name = fname, binding = null })
+        return
+    }
+    const sub = self.payload_pattern_slice(tokens, lo + 2, hi)
+    fields.push(StructPatternField { span = fspan, name = fname, binding = Some(box(a, sub)) })
 }
 
 // `lo..hi` in pattern position: at most one literal token on either side

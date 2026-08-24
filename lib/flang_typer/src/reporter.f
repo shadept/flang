@@ -20,6 +20,7 @@ import flang_core.diagnostic
 import flang_core.span
 import flang_typer.type
 import flang_typer.inference_engine
+import flang_typer.nominal_registry
 import flang_typer.error_codes
 
 // Where the unification happened. The caller carries the span and
@@ -33,11 +34,15 @@ pub type ReportCtx = struct {
     // When set, used verbatim. When null, the reporter synthesises
     // a generic "expected X, got Y" message from the outcome.
     message_override: OwnedString?
+    // Optional: lets the reporter print a nominal by NAME instead of by
+    // registry index. Callers that have the registry should pass it -
+    // "expected `i32`, got `Foo`" is the reference's wording.
+    nominals: &NominalRegistry?
 }
 
-pub fn report_ctx(code: String, span: SourceSpan) ReportCtx {
+pub fn report_ctx(code: String, span: SourceSpan, nominals: &NominalRegistry? = null) ReportCtx {
     let empty: OwnedString? = null
-    return .{ code = code, span = span, message_override = empty }
+    return .{ code = code, span = span, message_override = empty, nominals = nominals }
 }
 
 // Emit zero or one diagnostic depending on the outcome. `Unified`
@@ -58,7 +63,7 @@ pub fn report(outcome: &UnifyOutcome, ctx: &ReportCtx, out: &List(Diagnostic), a
 fn report_mismatch(m: &Mismatch, ctx: &ReportCtx, out: &List(Diagnostic), alloc: &Allocator) {
     let message = ctx.message_override match {
         Some(msg) => msg,
-        None => format_mismatch(m, alloc),
+        None => format_mismatch(m, ctx, alloc),
     }
     let empty_hint: OwnedString
     let diag = Diagnostic {
@@ -96,9 +101,13 @@ fn report_arity(a: &ArityDetails, ctx: &ReportCtx, out: &List(Diagnostic), alloc
     sb.append(", got ")
     sb.append(a.actual)
     let empty_hint: OwnedString
+    // The CALLER's code, like every other outcome here: an array-length
+    // mismatch inside a `let` is that `let`'s type mismatch (E2002), a
+    // parameter-count mismatch in a return is E2071. `E_ARITY_MISMATCH`
+    // stays the code only when the caller asks for it.
     let diag = Diagnostic {
         severity = Severity.Error,
-        code = E_ARITY_MISMATCH,
+        code = ctx.code,
         message = sb.to_string(),
         hint = empty_hint,
         span = ctx.span,
@@ -127,14 +136,67 @@ fn report_prim_constraint(p: &PrimViolation, ctx: &ReportCtx, out: &List(Diagnos
     out.push(diag)
 }
 
-fn format_mismatch(m: &Mismatch, alloc: &Allocator) OwnedString {
+fn format_mismatch(m: &Mismatch, ctx: &ReportCtx, alloc: &Allocator) OwnedString {
     let sb = string_builder(64, Some(alloc))
     sb.append("type mismatch: expected `")
-    format(&m.expected, &sb, "")
+    format_with_names(&m.expected, &sb, ctx.nominals)
     sb.append("`, got `")
-    format(&m.actual, &sb, "")
+    format_with_names(&m.actual, &sb, ctx.nominals)
     sb.append("`")
     return sb.to_string()
+}
+
+// `Ty.format` has no registry, so it renders a nominal as `#<id>`. With
+// one in hand the SHORT name is what a reader wants ("expected `i32`,
+// got `Foo`"), and it is what the reference prints - the harness matches
+// on that text.
+fn format_with_names(t: &Ty, sb: &StringBuilder, reg: &NominalRegistry?) {
+    if reg.is_none() {
+        format(t, sb, "")
+        return
+    }
+    let r = reg.unwrap()
+    t.* match {
+        Nominal(nr) => {
+            sb.append(short_name(nominal_fqn(r, nr.id)))
+            if nr.args.len > 0 {
+                sb.append("(")
+                for i in 0..nr.args.len {
+                    if i > 0 { sb.append(", ") }
+                    format_with_names(&nr.args[i], sb, reg)
+                }
+                sb.append(")")
+            }
+        },
+        Ref(inner) => {
+            sb.append("&")
+            format_with_names(inner, sb, reg)
+        },
+        Array(a) => {
+            sb.append("[")
+            format_with_names(a.elem, sb, reg)
+            sb.append("; ")
+            sb.append(a.length)
+            sb.append("]")
+        },
+        _ => format(t, sb, ""),
+    }
+}
+
+fn nominal_fqn(reg: &NominalRegistry, id: NominalId) String {
+    return reg.get(id).* match {
+        NomStruct(sd) => sd.fqn,
+        NomEnum(ed) => ed.fqn,
+    }
+}
+
+// The last dot-separated segment of an FQN.
+fn short_name(fqn: String) String {
+    let cut = 0usize
+    for i in 0..fqn.len {
+        if fqn[i] == '.' { cut = i + 1 }
+    }
+    return fqn[cut..fqn.len]
 }
 
 fn arity_label(k: ArityKind) String {

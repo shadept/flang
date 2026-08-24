@@ -37,6 +37,10 @@ pub type TypeCheckResult = struct {
     // M11: per call site, the callee's default expressions for omitted
     // parameters, in parameter order - see InferenceResults.default_args.
     default_args: Dict(NodeId, List(Expr))
+    // M12: per call site, the complete parameter-ordered argument list
+    // for calls whose AST order is not their argument order (named
+    // arguments, variadic packing) - see InferenceResults.arg_lists.
+    arg_lists: Dict(NodeId, List(Expr))
     // Per UFCS call site, the op_deref hops the receiver resolved
     // through - see InferenceResults.receiver_derefs.
     receiver_derefs: Dict(NodeId, List(ResolvedTarget))
@@ -66,6 +70,7 @@ pub fn empty_result(allocator: &Allocator? = null) TypeCheckResult {
         desugars = dict(allocator),
         synth_strings = list(0, allocator),
         default_args = dict(allocator),
+        arg_lists = dict(allocator),
         receiver_derefs = dict(allocator),
         nominals = nominal_registry(allocator),
         functions = function_registry(allocator),
@@ -86,6 +91,7 @@ pub fn deinit(self: &TypeCheckResult) {
     self.desugars.deinit()
     self.synth_strings.deinit()
     self.default_args.deinit()
+    self.arg_lists.deinit()
     self.receiver_derefs.deinit()
     self.nominals.deinit()
     self.functions.deinit()
@@ -115,6 +121,10 @@ pub fn get_lambda(self: &TypeCheckResult, id: NodeId) &LambdaInfo? {
 
 pub fn get_default_args(self: &TypeCheckResult, id: NodeId) &List(Expr)? {
     return self.default_args.get_ref(id)
+}
+
+pub fn get_arg_list(self: &TypeCheckResult, id: NodeId) &List(Expr)? {
+    return self.arg_lists.get_ref(id)
 }
 
 pub fn get_receiver_deref(self: &TypeCheckResult, id: NodeId) &List(ResolvedTarget)? {

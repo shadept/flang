@@ -510,6 +510,15 @@ public class TestHarness
         };
         psi.ArgumentList.Add("--stdlib-path");
         psi.ArgumentList.Add(_stdlibPath);
+        // A `TARGET-OS:` directive selects the compile-time context the
+        // `#if` evaluator sees; the in-process path passes it through
+        // CompilerOptions, so the external one has to pass the flag or the
+        // same test would be compiled for a different target.
+        if (metadata.TargetOs != null)
+        {
+            psi.ArgumentList.Add("--target-os");
+            psi.ArgumentList.Add(metadata.TargetOs);
+        }
         psi.ArgumentList.Add("build");
         psi.ArgumentList.Add(absoluteTestFile);
 

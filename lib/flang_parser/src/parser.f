@@ -54,6 +54,9 @@ pub type Parser = struct {
     // parens - `{` then terminates the expression instead of starting a
     // struct construction or block literal.
     stop_at_brace: bool
+    // Enclosing loop bodies being parsed. `break` / `continue` outside
+    // every one of them is E1006 / E1007.
+    loop_depth: usize
 }
 
 // Construct a Parser over the given token list. The list is borrowed
@@ -69,6 +72,7 @@ pub fn parser(tokens: List(Token), allocator: &Allocator? = null) Parser {
         diagnostics = list(0, allocator),
         file_id = -1,
         stop_at_brace = false,
+        loop_depth = 0,
     }
 }
 
@@ -307,6 +311,9 @@ fn parse_top_level(self: &Parser) CstNode {
         const next = self.peek_kind(1)
         if next == TokenKind.Fn { return self.parse_function_with_directives(leading) }
         if next == TokenKind.Type { return self.parse_type_decl_with_directives(leading) }
+        if next == TokenKind.Struct or next == TokenKind.Enum {
+            return self.parse_legacy_type_decl(leading, next == TokenKind.Struct)
+        }
         if next == TokenKind.Const { return self.parse_variable_decl_with_directives(leading) }
         if next == TokenKind.Import {
             // `pub import` should have been consumed in parse_module's
@@ -323,6 +330,9 @@ fn parse_top_level(self: &Parser) CstNode {
 
     if k == TokenKind.Fn { return self.parse_function_with_directives(leading) }
     if k == TokenKind.Type { return self.parse_type_decl_with_directives(leading) }
+    if k == TokenKind.Struct or k == TokenKind.Enum {
+        return self.parse_legacy_type_decl(leading, k == TokenKind.Struct)
+    }
     if k == TokenKind.Test { return self.parse_test_with_directives(leading) }
     if k == TokenKind.Const or k == TokenKind.Let {
         return self.parse_variable_decl_with_directives(leading)
@@ -596,10 +606,50 @@ fn can_start_type(self: &Parser, k: TokenKind) bool {
 // Type declarations
 // ─────────────────────────────────────────────────────────────────────────
 
+// `struct Name { … }` / `enum Name { … }` - the pre-`type` declaration
+// syntax. Removed from the language; parsed anyway so the rest of the
+// file still reads, but rejected at its keyword (E1050 / E1051).
+fn parse_legacy_type_decl(self: &Parser, leading: List(CstNode), is_struct: bool) CstNode {
+    let b = self.open(if is_struct { NodeKind.StructDecl } else { NodeKind.EnumDecl })
+    for i in 0..leading.len { push_node_into(&b, leading[i]) }
+    leading.deinit()
+    if self.current_kind() == TokenKind.Pub { self.eat_into(&b) }
+    if is_struct {
+        self.record_error_here("E1050",
+            from_view("`struct Name { ... }` syntax has been removed, use `type Name = struct { ... }` instead"))
+    } else {
+        self.record_error_here("E1051",
+            from_view("`enum Name { ... }` syntax has been removed, use `type Name = enum { ... }` instead"))
+    }
+    self.eat_into(&b)                                                       // `struct` / `enum`
+    if self.current_kind() == TokenKind.Identifier {
+        self.eat_into(&b)
+    } else {
+        self.record_expected(TokenKind.Identifier, "E1002")
+    }
+    if is_struct {
+        self.parse_struct_body_into(&b)
+    } else {
+        self.parse_enum_body_into(&b)
+    }
+    return finish(b)
+}
+
 fn parse_type_decl_with_directives(self: &Parser, leading: List(CstNode)) CstNode {
     // We don't know yet whether the rhs is `struct` or `enum`, so open
     // with a placeholder kind and rewrite it once we see the `=` rhs.
     let b = self.open(NodeKind.TypeAliasDecl)
+    // `#simd` / `#foreign` describe the type EXPRESSION, so they belong
+    // after the `=`. Detached, they read as decl attributes and would be
+    // silently dropped (E1001).
+    for i in 0..leading.len {
+        const dn = directive_name_of(&leading[i])
+        if dn == "simd" or dn == "foreign" {
+            self.record_error_at("E1001",
+                $"`#{dn}` must appear after `=` in a type declaration - write `type Name = #{dn} struct {{ ... }}`",
+                leading[i].start, leading[i].end - leading[i].start)
+        }
+    }
     for i in 0..leading.len { push_node_into(&b, leading[i]) }
     leading.deinit()
     if self.current_kind() == TokenKind.Pub { self.eat_into(&b) }
@@ -630,6 +680,19 @@ fn parse_type_decl_with_directives(self: &Parser, leading: List(CstNode)) CstNod
         push_node_into(&b, t)
     }
     return finish(b)
+}
+
+// The identifier a `#name` directive node carries, or the empty string.
+fn directive_name_of(node: &CstNode) String {
+    for i in 0..node.children.len {
+        node.children[i] match {
+            TokenChild(tok) => {
+                if tok.kind == TokenKind.Identifier { return tok.text }
+            }
+            NodeChild(_) => {}
+        }
+    }
+    return ""
 }
 
 fn parse_struct_body_into(self: &Parser, b: &NodeBuilder) {
@@ -853,6 +916,16 @@ fn is_bare_return_terminator(self: &Parser) bool {
 
 fn parse_single_keyword_stmt(self: &Parser, kind: NodeKind) CstNode {
     let b = self.open(kind)
+    // `break` / `continue` need a loop to act on (E1006 / E1007).
+    if self.loop_depth == 0 {
+        if kind == NodeKind.BreakStmt {
+            self.record_error_here("E1006",
+                from_view("`break` outside of a loop"))
+        } else if kind == NodeKind.ContinueStmt {
+            self.record_error_here("E1007",
+                from_view("`continue` outside of a loop"))
+        }
+    }
     self.eat_into(&b)
     self.eat_optional_semicolon(&b)
     return finish(b)
@@ -893,18 +966,14 @@ fn parse_if_directive_stmt(self: &Parser) CstNode {
 // The shared condition grammar of both #if forms: parenthesized, or
 // bare with the struct-literal ambiguity suppressed (`stop_at_brace`).
 fn parse_if_directive_condition_into(self: &Parser, b: &NodeBuilder) {
-    if self.current_kind() == TokenKind.OpenParenthesis {
-        self.eat_into(b)                                                    // `(`
-        const cond = self.parse_expression()
-        push_node_into(b, cond)
-        self.expect_into(b, TokenKind.CloseParenthesis, "E1002")
-    } else if self.current_kind() != TokenKind.OpenBrace {
-        const saved = self.stop_at_brace
-        self.stop_at_brace = true
-        const cond = self.parse_expression()
-        self.stop_at_brace = saved
-        push_node_into(b, cond)
-    }
+    if self.current_kind() == TokenKind.OpenBrace { return }
+    // A leading `(` is a grouped sub-expression like anywhere else -
+    // `#if (runtime.env["X"] ?? "") == "y" {` continues past it.
+    const saved = self.stop_at_brace
+    self.stop_at_brace = true
+    const cond = self.parse_expression()
+    self.stop_at_brace = saved
+    push_node_into(b, cond)
 }
 
 // Decl-level `#if cond { decls… } [else { decls… }]`. Same node kind as
@@ -950,18 +1019,14 @@ fn parse_decl_block(self: &Parser) CstNode {
 fn parse_if_expr(self: &Parser) CstNode {
     let b = self.open(NodeKind.IfExpr)
     self.eat_into(&b)                                                       // `if`
-    if self.current_kind() == TokenKind.OpenParenthesis {
-        self.eat_into(&b)
-        const cond = self.parse_expression()
-        push_node_into(&b, cond)
-        self.expect_into(&b, TokenKind.CloseParenthesis, "E1002")
-    } else {
-        const saved = self.stop_at_brace
-        self.stop_at_brace = true
-        const cond = self.parse_expression()
-        self.stop_at_brace = saved
-        push_node_into(&b, cond)
-    }
+    // A leading `(` is an ordinary grouped expression, NOT a header
+    // wrapper: consuming it as one made `if (a) and b { … }` stop at the
+    // closing paren and report the operator as unexpected.
+    const saved = self.stop_at_brace
+    self.stop_at_brace = true
+    const cond = self.parse_expression()
+    self.stop_at_brace = saved
+    push_node_into(&b, cond)
     if self.current_kind() == TokenKind.OpenBrace {
         const then_block = self.parse_block_expr()
         push_node_into(&b, then_block)
@@ -982,6 +1047,14 @@ fn parse_if_expr(self: &Parser) CstNode {
 fn parse_for_loop(self: &Parser) CstNode {
     let b = self.open(NodeKind.ForLoopExpr)
     self.eat_into(&b)                                                       // `for`
+    // `for (i in 0..5) { … }` - the parenthesised header form was removed
+    // (RFC-006). Parsed defensively so the body still reads (E1010).
+    let parenthesised = self.current_kind() == TokenKind.OpenParenthesis
+    if parenthesised {
+        self.record_error_here("E1010",
+            from_view("parentheses around the `for` header are not allowed - write `for x in xs { ... }`"))
+        self.eat_into(&b)
+    }
     if self.current_kind() == TokenKind.Ampersand { self.eat_into(&b) }     // `for &x in` (iter_ref)
     if self.current_kind() == TokenKind.Identifier { self.eat_into(&b) }
     self.expect_into(&b, TokenKind.In, "E1002")
@@ -990,8 +1063,11 @@ fn parse_for_loop(self: &Parser) CstNode {
     const iterable = self.parse_expression()
     self.stop_at_brace = saved
     push_node_into(&b, iterable)
+    if parenthesised and self.current_kind() == TokenKind.CloseParenthesis { self.eat_into(&b) }
     if self.current_kind() == TokenKind.OpenBrace {
+        self.loop_depth = self.loop_depth + 1
         const body = self.parse_block_expr()
+        self.loop_depth = self.loop_depth - 1
         push_node_into(&b, body)
     }
     return finish(b)
@@ -1001,7 +1077,9 @@ fn parse_loop_expr(self: &Parser) CstNode {
     let b = self.open(NodeKind.LoopExpr)
     self.eat_into(&b)                                                       // `loop`
     if self.current_kind() == TokenKind.OpenBrace {
+        self.loop_depth = self.loop_depth + 1
         const body = self.parse_block_expr()
+        self.loop_depth = self.loop_depth - 1
         push_node_into(&b, body)
     }
     return finish(b)
@@ -1010,20 +1088,15 @@ fn parse_loop_expr(self: &Parser) CstNode {
 fn parse_while_loop(self: &Parser) CstNode {
     let b = self.open(NodeKind.WhileExpr)
     self.eat_into(&b)                                                       // `while`
-    if self.current_kind() == TokenKind.OpenParenthesis {
-        self.eat_into(&b)
-        const cond = self.parse_expression()
-        push_node_into(&b, cond)
-        self.expect_into(&b, TokenKind.CloseParenthesis, "E1002")
-    } else {
-        const saved = self.stop_at_brace
-        self.stop_at_brace = true
-        const cond = self.parse_expression()
-        self.stop_at_brace = saved
-        push_node_into(&b, cond)
-    }
+    const saved = self.stop_at_brace
+    self.stop_at_brace = true
+    const cond = self.parse_expression()
+    self.stop_at_brace = saved
+    push_node_into(&b, cond)
     if self.current_kind() == TokenKind.OpenBrace {
+        self.loop_depth = self.loop_depth + 1
         const body = self.parse_block_expr()
+        self.loop_depth = self.loop_depth - 1
         push_node_into(&b, body)
     }
     return finish(b)
@@ -1475,6 +1548,11 @@ fn parse_paren_expression(self: &Parser) CstNode {
     }
     let b = self.open(NodeKind.ParenExpr)
     self.eat_into(&b)                                                       // `(`
+    // Inside parentheses a `{` is an ordinary struct literal / block
+    // again - the `stop_at_brace` rule belongs to the UNPARENTHESISED
+    // header it was armed for.
+    const saved_brace = self.stop_at_brace
+    self.stop_at_brace = false
     let count = 0usize
     let saw_comma = false
     while !self.at_eof() and self.current_kind() != TokenKind.CloseParenthesis {
@@ -1489,6 +1567,7 @@ fn parse_paren_expression(self: &Parser) CstNode {
         break
     }
     self.expect_into(&b, TokenKind.CloseParenthesis, "E1002")
+    self.stop_at_brace = saved_brace
     // A single expression with no trailing comma is a grouped expression;
     // anything else (a comma, zero elements, or several) is a tuple.
     if saw_comma or count != 1 {
@@ -1545,15 +1624,15 @@ fn parse_lambda_expression(self: &Parser) CstNode {
     return finish(b)
 }
 
-// `$"…"` / `$(args)"…"` / `$ident"…"`. Forms 2 and 3 only resolve when
-// the parser drives the lexer one token at a time (see known-issues -
-// the bootstrap parser pre-tokenises, so 2 and 3 fall back to plain
-// string literals with a leading `$`/`$ident`/`$(args)` run).
+// `$"…"` / `$(args)"…"` / `$ident"…"`. The lexer resolves all three
+// forms on its own (`interp_prefix_quote`), so the builder arguments of
+// form 2 parse as a real argument list - the projector reads them as
+// expression children.
 fn parse_interpolated_string(self: &Parser) CstNode {
     let b = self.open(NodeKind.InterpolatedStringExpr)
     self.eat_into(&b)                                                       // `$`
     if self.current_kind() == TokenKind.OpenParenthesis {
-        self.consume_balanced(&b, TokenKind.OpenParenthesis, TokenKind.CloseParenthesis)
+        self.parse_call_args_into(&b)
     } else if self.current_kind() == TokenKind.Identifier {
         self.eat_into(&b)
     }
@@ -1561,6 +1640,11 @@ fn parse_interpolated_string(self: &Parser) CstNode {
         self.parse_interp_body_into(&b)
     } else if self.current_kind() == TokenKind.StringLiteral {
         self.eat_into(&b)
+    } else {
+        // `$123"…"` - only `"`, `(args)` and an identifier may follow a
+        // `$` that opens an interpolated string (E1020).
+        self.record_error_here("E1020",
+            from_view("expected `\"`, `(`, or an identifier after `$`"))
     }
     return finish(b)
 }
@@ -1601,7 +1685,14 @@ fn parse_interp_body_into(self: &Parser, b: &NodeBuilder) {
         // Unknown - eat it to keep position progressing.
         self.eat_into(b)
     }
-    if self.current_kind() == TokenKind.InterpStringEnd { self.eat_into(b) }
+    if self.current_kind() == TokenKind.InterpStringEnd {
+        self.eat_into(b)
+    } else {
+        // The scanner ran to end-of-source (or a bad token) with the
+        // string still open (E1024).
+        self.record_error_here("E1024",
+            from_view("unterminated interpolated string"))
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -1669,6 +1760,14 @@ fn parse_primary_type(self: &Parser) CstNode {
         push_node_into(&b, elem)
         if self.current_kind() == TokenKind.Semicolon {
             self.eat_into(&b)
+            // `[i32; "five"]` - a fixed array's length is a compile-time
+            // integer, not any expression (E1004). Identifiers are let
+            // through: a `const` length resolves later.
+            const lk = self.current_kind()
+            if lk != TokenKind.Integer and lk != TokenKind.Identifier {
+                self.record_error_here("E1004",
+                    from_view("invalid array length - the length must be an integer literal"))
+            }
             const size = self.parse_expression()
             push_node_into(&b, size)
         }

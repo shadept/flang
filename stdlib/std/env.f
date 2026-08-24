@@ -42,8 +42,24 @@ pub fn get_args() List(String) {
 
 // Returns the value of the environment variable with the given key,
 // or null if the variable is not set.
+//
+// `key` is any String, not necessarily null-terminated: a slice into a
+// larger buffer (a source file, a parsed line) would make `getenv` read
+// past its end, so the key is copied into a terminated buffer first.
+// String LITERALS are terminated already, but the contract cannot depend
+// on where the caller's view came from.
 pub fn env(key: String) String? {
-    const p = __flang_getenv(key.ptr)?
+    // The key is copied into a NUL-terminated stack buffer: `key` may be
+    // any String view - a slice into a source file, a parsed line - and
+    // `getenv` would read past its end. 255 bytes covers every real
+    // variable name; a longer key is simply reported unset.
+    let buf = [0u8; 256]
+    if key.len >= 256 { return null }
+    for i in 0..key.len {
+        buf[i] = key[i]
+    }
+    buf[key.len] = 0u8
+    const p = __flang_getenv(buf.ptr)?
     const len = strlen(p)
     return Some(slice_from_raw_parts(p, len) as String)
 }

@@ -1405,3 +1405,87 @@ debugged.
 ## Reference: file-private functions with identical signatures collide across modules
 
 **Fixed (2026-08-23).** Every non-foreign, non-`main` function's C symbol is now module-qualified: the checker stamps `FunctionDeclarationNode.ModulePath` at signature collection and codegen mangles `SymbolBaseName` (`module.path.name`) everywhere (decls, calls, fn-pointer refs, iterator-protocol and operator dispatch, specializations). Original report: Two `fn` (non-pub) functions in different modules with the same name and parameter types emit ONE C symbol (`append_escaped__ref_struct_std_string_builder_StringBuilder__struct_core_string_String__ret_void`) — the mangle does not qualify private functions with their module path, and emission dedupes by symbol name, so one module's body silently replaces the other's. Found when `flang_parser/template.f`'s private `append_escaped` (string-literal escaping) replaced `flang_driver/symbol_table.f`'s private `append_escaped` (mangle underscore escaping) in the bootstrap build: every self-host spec symbol lost its `_0` escapes and the `size_of` intercept went dead. Worked around by renaming. Fix: include the module path in the reference's C name mangling for non-pub functions (the self-host's `symbol_table.f` already does).
+
+## Self-host M12: return-only type parameters
+
+**Fixed (2026-08-24).** A generic whose type parameter appears only in
+the return type — `to_list(it: $I, …) List($T)`, `max(it: $I) $T?`,
+`map(self: Option($T), f: $F) Option($U)` — has nothing at the call site
+to pin it; the template BODY derives it. The self-host queues a
+`PendingSpec` and drains it once inference has settled, which used to
+break in two ways. Three changes closed them:
+
+- **Shallow readiness** (`pending_ready`), reference parity: only a type
+  that IS a bare var blocks instantiation. `List($T)` does not, so
+  `to_list` instantiates and its body derives `$T` from the iterator it
+  drives. The previous deep test refused and reported E2001
+  (`stdlib/dict_iter_chain.f`).
+- **`zonk_specializations`**, a final program-wide re-zonk of every
+  stored specialization signature. A nested instantiation can finish
+  before its CALLER's body pins a type argument it inherited
+  (`list(0, allocator)` inside `to_list`), so its own end-of-`instantiate`
+  re-key ran too early — and lowering mangles the C symbol from those
+  types while `sig_lowerable` gates on them. The reference gets this for
+  free by mangling at codegen.
+- **Parked calls** (`PendingCall` / `resolve_pending_calls`). Between a
+  return-only call and its drain, the still-open var could arbitrate an
+  UNRELATED overload: `const mapped = opt.map(extract)` left `$U` free,
+  and `println(mapped.unwrap())` then picked `println(u8)` by
+  declaration order, so `map`'s instantiation reported E2071
+  (`expected u8, got i32`) inside `stdlib/std/option.f`
+  (`generics/option_map_enum_repro.f`). Now an exact overload tie broken
+  by an argument that is a bare open var does not commit at all: the
+  call parks, and `resolve_pending_calls` redoes it after the
+  specialization drain, when the argument has its real type. A tie
+  broken by an unsuffixed LITERAL still reports E2011 — a literal has no
+  preferred type and nothing later settles it — and a parked call whose
+  argument never settles reports E2011 too.
+
+`drain_pending_specs` also runs to a fixpoint now: one pick's type
+arguments can be settled by a later pick's instantiation.
+
+Rejected on the way: **instantiating eagerly at the call**, which is
+what the reference does. Re-entering the checker mid-expression nests a
+generalisation level inside the caller's, and unrelated `xs.push(v)`
+arguments across the stdlib start typing as `Type(?)`. Masking the
+caller's scopes with an env barrier did not change that, so the cause is
+the level nesting, not name resolution. Parking the *consumer* instead
+of hurrying the *producer* reaches the same answer without touching
+inference order.
+
+## Self-host M12: `getenv` read past a non-terminated key
+
+**Fixed (2026-08-24).** `std.env.env(key)` passed `key.ptr` straight to
+`getenv`, which reads to the first NUL. That is correct only for string
+LITERALS (interned with a terminator); a `String` view into a larger
+buffer — a source file, a parsed line — made `getenv` read the rest of
+the buffer and return null. `#if runtime.env["PATH"]` took exactly that
+path (the key is a view into the source), so every compile-time
+environment lookup answered "unset". `env` now copies the key into a
+NUL-terminated stack buffer.
+
+## Self-host M12: `if (a) op b` stopped at the closing paren
+
+**Fixed (2026-08-24).** `parse_if_expr` / `parse_while_loop` /
+`parse_if_directive_condition_into` treated a leading `(` as a HEADER
+wrapper: they ate it, parsed one expression, and demanded `)` — so
+`if (a or b) and c { … }` reported "unexpected token `and`". The paren
+is an ordinary grouped sub-expression; all three now parse the
+condition with `stop_at_brace` and let `parse_paren_expression` handle
+it (which also restores `stop_at_brace` inside the parens, where `{` is
+a struct literal again).
+
+## Self-host M12: cross-target builds lowered the host's `#if` branch
+
+**Fixed (2026-08-24).** `lower_program` hard-coded `comptime = host_ctx()`,
+so a `--target-os linux` build type-CHECKED the linux branch of every
+statement-level `#if` and LOWERED the macos one. The build's
+`ComptimeCtx` is now threaded through `build_program` into `LowerCtx`.
+
+## Self-host M12: negative enum tags lost their sign
+
+**Fixed (2026-08-24).** `project_enum_variant` captured the integer
+token of `Less = -1` and dropped the `-`, so `core.cmp.Ord` projected as
+tags `1, 0, 1`. Nothing read `explicit_tag` before M12's duplicate-tag
+check (E2048), which is how it surfaced. The projector now wraps a
+negated tag in a `Unary(Neg)` expression.

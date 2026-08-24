@@ -707,6 +707,11 @@ fn unify_a_void(a: Ty, b: Ty) UnifyOutcome {
     }
 }
 
+// Function types match EXACTLY: no coercion inside a parameter or the
+// return. `fn(i32) i32` is not a `fn(i64) i64` - the callee would read
+// its argument at the wrong width, and widening is not sound under
+// contravariance anyway (reference parity, E2011 at the use site).
+// Variables still bind, so `fn($T) $T` unifies with a concrete signature.
 fn unify_func(self: &Engine, fa: &FunctionTy, fb: &FunctionTy, a: Ty, b: Ty) UnifyOutcome {
     if fa.params.len != fb.params.len {
         return UnifyOutcome.UniArityMismatch(.{
@@ -718,12 +723,32 @@ fn unify_func(self: &Engine, fa: &FunctionTy, fb: &FunctionTy, a: Ty, b: Ty) Uni
     for i in 0..fa.params.len {
         let pa = &fa.params[i]
         let pb = &fb.params[i]
-        let r = self.unify(pa.*, pb.*)
+        let r = unify_exact(self, pa.*, pb.*)
         if !r.is_ok() { return r }
     }
-    let rr = self.unify(fa.ret.*, fb.ret.*)
+    let rr = unify_exact(self, fa.ret.*, fb.ret.*)
     if rr.is_ok() { return make_ok(a) }
     return rr
+}
+
+// Unify without the coercion ladder: vars bind as usual, two concrete
+// types must be structurally identical.
+fn unify_exact(self: &Engine, actual: Ty, expected: Ty) UnifyOutcome {
+    let a = self.resolve(actual)
+    let b = self.resolve(expected)
+    if a.is_error() or b.is_error() { return UnifyOutcome.Unified(.{ ty = Ty.Error, cost = 0 }) }
+    if a.is_never() { return UnifyOutcome.Unified(.{ ty = b, cost = 0 }) }
+    if b.is_never() { return UnifyOutcome.Unified(.{ ty = a, cost = 0 }) }
+    return a match {
+        Var(va) => b match {
+            Var(vb) => unify_var_var(self, va, vb),
+            _ => bind_var(self, va, b),
+        },
+        _ => b match {
+            Var(vb) => bind_var(self, vb, a),
+            _ => unify_structural(self, a, b),
+        },
+    }
 }
 
 fn unify_lists(self: &Engine, ta: &List(Ty), tb: &List(Ty), a: Ty, b: Ty, what: ArityKind) UnifyOutcome {

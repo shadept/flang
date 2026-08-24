@@ -59,6 +59,12 @@ pub type Lexer = struct {
     // forms; consumed by next_token() to decide whether the next `"`
     // opens an interp string or a plain string literal.
     mark_next_string_interp: bool
+    // Source offset of a `"` that opens an interp string, found by
+    // looking past a `$(args)` / `$ident` prefix at the `$` itself.
+    // `tokenize()` has no parser feedback to call
+    // `mark_next_string_interp()` mid-stream, so the lexer resolves
+    // those two forms on its own (RFC-004 forms 2 and 3).
+    interp_at: usize?
     // Single-slot queue so a segment-boundary or format-spec terminator
     // can fan out into two tokens (e.g. InterpSegment + InterpHoleStart).
     has_pending: bool
@@ -85,6 +91,7 @@ pub fn lexer(source: String, allocator: &Allocator? = null, start: usize = 0) Le
         allocator = allocator,
         interp_stack = list(0, allocator),
         mark_next_string_interp = false,
+        interp_at = null,
         has_pending = false,
         pending_token = empty_token(allocator),
     }
@@ -172,6 +179,14 @@ pub fn next_token(self: &Lexer) Token {
         if self.position < self.source.len and self.source[self.position] == '"' {
             return begin_interp_string(self)
         }
+    }
+
+    // The quote a `$(args)` / `$ident` prefix run ends at (armed when the
+    // `$` was lexed). Adjacency is exact, so the cursor sits on it with
+    // no trivia in between.
+    if self.interp_at.is_some() and self.interp_at.unwrap() == self.position {
+        self.interp_at = null
+        return begin_interp_string(self)
     }
 
     const leading = lex_leading_trivia(self)
@@ -373,10 +388,76 @@ fn lex_token_text(self: &Lexer) TokenKind {
         // arm the interp scanner.
         if self.position < text.len and text[self.position] == '"' {
             self.mark_next_string_interp = true
+        } else {
+            // `$(args)"…"` / `$ident"…"`: no parser feedback in the batch
+            // tokenizer, so look past the prefix run for the quote.
+            self.interp_at = interp_prefix_quote(text, self.position)
         }
         return TokenKind.Dollar
     }
     return single_char_kind(ch)
+}
+
+// The offset of the `"` that a `$`-prefix run ends at, or null when the
+// run is not an interpolated-string prefix. `pos` is the byte right
+// after the `$`. Two shapes (RFC-004): a balanced `(...)` group, or a
+// bare identifier. In both, the quote must be immediately adjacent -
+// `$(x) "…"` is a `$`, a paren group, and a plain string.
+//
+// The paren scan skips string and char literals so a `"` or `)` inside
+// one (`$(sep=")")`) does not end the group early; it deliberately does
+// NOT skip comments, which cannot appear inside a call's argument list
+// on one line without also ending the adjacency.
+fn interp_prefix_quote(text: String, pos: usize) usize? {
+    if pos >= text.len { return null }
+    if text[pos] == '(' {
+        let i = pos + 1
+        let depth = 1usize
+        loop {
+            if i >= text.len { return null }
+            const c = text[i]
+            if c == '"' or c == '\'' {
+                i = skip_quoted(text, i)
+                continue
+            }
+            if c == '(' { depth = depth + 1 }
+            if c == ')' {
+                depth = depth - 1
+                if depth == 0 {
+                    const q = i + 1
+                    if q < text.len and text[q] == '"' { return Some(q) }
+                    return null
+                }
+            }
+            i = i + 1
+        }
+        return null
+    }
+    if !is_alpha(text[pos]) and text[pos] != '_' { return null }
+    let j = pos
+    while j < text.len and (is_alnum(text[j]) or text[j] == '_') {
+        j = j + 1
+    }
+    if j < text.len and text[j] == '"' { return Some(j) }
+    return null
+}
+
+// Index just past the string or char literal starting at `i` (which is
+// its opening quote), honouring backslash escapes. Stops at end of
+// source on an unterminated literal.
+fn skip_quoted(text: String, i: usize) usize {
+    const quote = text[i]
+    let k = i + 1
+    while k < text.len {
+        const c = text[k]
+        if c == '\\' {
+            k = k + 2
+            continue
+        }
+        if c == quote { return k + 1 }
+        k = k + 1
+    }
+    return k
 }
 
 fn match_two_char(a: u8, b: u8) TokenKind? {

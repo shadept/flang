@@ -49,6 +49,67 @@ pub const E_CLOSURE_TO_FN: String = "E2111"
 pub const E_ASSIGN_CAPTURE: String = "E2112"
 pub const E_NESTED_CAPTURE: String = "E2113"
 
+// Duplicate declarations the reference rejects at their declaration
+// site: a struct field name twice (E2076), an enum tag value twice
+// (E2048), a `let`/`const`/global re-declared in the same scope (E2005,
+// shared with the duplicate-type code).
+pub const E_DUP_FIELD: String = "E2076"
+pub const E_DUP_TAG: String = "E2048"
+// Assignment and initialization rules for `const` bindings.
+pub const E_CONST_ASSIGN: String = "E2038"
+pub const E_CONST_NO_INIT: String = "E2039"
+// A field of a struct declared in ANOTHER module is read-only: the
+// defining module owns its invariants (docs/spec.md scoped mutability).
+pub const E_SCOPED_MUTABILITY: String = "E2114"
+// A non-void function with no return on some path.
+pub const E_MISSING_RETURN: String = "E2049"
+// Match checking: scrutinee is not an enum (E2030), arms do not cover
+// every variant (E2031), a variant pattern's payload arity is wrong
+// (E2032).
+pub const E_MATCH_NON_ENUM: String = "E2030"
+pub const E_MATCH_NON_EXHAUSTIVE: String = "E2031"
+pub const E_MATCH_ARITY: String = "E2032"
+// Member access on a struct that has no such field.
+pub const E_FIELD_NOT_FOUND: String = "E2014"
+// `x.*` where `x` is neither a reference nor a type with `op_deref`.
+pub const E_CANNOT_DEREF: String = "E2012"
+// An explicit `as` cast between types with no defined conversion.
+pub const E_INVALID_CAST: String = "E2020"
+// Struct-literal syntax on a type that is not a struct.
+pub const E_NOT_A_STRUCT: String = "E2018"
+// A naked enum (explicit integer tags) may not carry payloads.
+pub const E_NAKED_ENUM_PAYLOAD: String = "E2047"
+// An integer / float literal outside its (resolved) type's range.
+pub const E_LITERAL_RANGE: String = "E2029"
+// An empty array literal with nothing to fix its element type.
+pub const E_EMPTY_ARRAY: String = "E2026"
+// `&<temporary>` - the reference would outlive the value.
+pub const E_ADDR_OF_TEMPORARY: String = "E2040"
+// A generic type named in expression position without its arguments.
+pub const E_BARE_GENERIC: String = "E2104"
+// A parameter's default value does not have the parameter's type.
+pub const E_DEFAULT_PARAM_TYPE: String = "E2070"
+// An operator applied to operands with no `op_*` implementation.
+pub const E_OP_NO_IMPL: String = "E2017"
+// `&fn(...)` - function types are already pointer-sized.
+pub const E_REF_TO_FN: String = "E2006"
+// Iterator protocol (spec 4.6): the iterable has no `iter` (E2021), the
+// state has no `next` (E2023), or `next` does not return `Option(T)`
+// (E2025).
+pub const E_NO_ITER: String = "E2021"
+pub const E_NO_NEXT: String = "E2023"
+pub const E_NEXT_RETURN: String = "E2025"
+// Both `op_index` and `op_index_ref` declared for one (Self, Idx) pair.
+pub const E_INDEX_AMBIGUOUS: String = "E2077"
+// `?` inside a `defer` body - there is no return path to take.
+pub const E_TRY_IN_DEFER: String = "E2091"
+
+// A `let`/`const` re-declared in the SAME scope. Cross-scope shadowing
+// stays silent; this only fires when the earlier binding becomes
+// unreachable in the same block (reference parity: a warning locally, an
+// error at module scope, where it is E2005).
+pub const W_SAME_SCOPE_SHADOW: String = "W1002"
+
 pub const W_DEPRECATED: String = "W2001"
 pub const W_DEPRECATED_FN: String = "W2002"
 pub const W_UNKNOWN_DIRECTIVE: String = "W2003"

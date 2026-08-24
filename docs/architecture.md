@@ -65,6 +65,26 @@ The bootstrap compiler reimplements the same machinery in FLang. `flang_driver/r
 - **`TypeLayoutService`** computes memory layouts (alignment, offsets) for struct types, used by lowering for implicit reference passing of large values.
 - **`op_deref` fallback:** When `ResolveFieldAccess()` can't find a field on a nominal type, or when UFCS call resolution fails, the compiler tries `TryResolveOperator("op_deref", [&Type])`. For field access, the resolved function is appended to `MemberAccessExpressionNode.OpDerefChain`. For UFCS calls, the chain is stored in `CallExpressionNode.UfcsOpDerefChain`. Lowering replays the chain as function calls before the field GEP or function call.
 
+**Self-host side tables.** The self-hosted checker has no mutable AST
+fields, so every semantic decision lands in `InferenceResults`, keyed by
+node id (a span fingerprint). Beyond node types, resolved targets and
+resolved operators, three tables carry call-shape decisions that
+lowering cannot re-derive:
+
+- `default_args` — the callee's default expressions for the parameters a
+  call omitted, checked at the call site and appended after the explicit
+  arguments.
+- `arg_lists` — the COMPLETE parameter-ordered argument list, recorded
+  when the AST's own order is not the call's order: a named-argument
+  call (names select parameters) or a variadic call (the surplus is
+  packed into one synthesized array literal). Lowering emits it in place
+  of `call.args`; a call that needs one and has none refuses.
+- `receiver_derefs` — the `op_deref` hops a receiver resolved through.
+  On a call whose callee is a member access it means "peel the receiver
+  through these"; on a call whose callee is NOT a member access it means
+  "the callee value IS the receiver" (RFC-014 `op_call`), with an empty
+  chain for the direct case.
+
 ## Intermediate Representation (FIR)
 
 Linear IR: `IrModule` → `IrFunction` → `BasicBlock` → `Instruction`. Merge points use phi-via-alloca (allocate slot, store from each branch).
@@ -169,6 +189,14 @@ This is how a library exposes its own version without hand-rolling a constant: `
 ## Compile-Time Context
 
 `Compilation.CompileTimeContext` is the closed compile-time context (`platform.*`, `runtime.*`, honoring `--target-os`/`--target-arch` and runtime overrides). There is exactly one evaluator over it — `CompileTimeEvaluator` (`FLang.Frontend`). Declaration-level `#if` (`IfDirectiveDeclarations`), statement-level `#if` (checker and lowering) and the template engine (`#if`, `#for`, `#(expr)`) all call it; templates layer their bindings (parameters, `#for` variables) over the context and pass `type_of`/field lookups. Semantics are FLang's: bool conditions (E2117), unknown names/members (E2116), optionals from dict lookups must be unwrapped with `??` (E2118), operators require matching operand types (E2118). `TemplateEngine` is only text assembly on top of it. Introspection values are `TypeInfoModel` (`FLang.Frontend/TypeInfoBuilder.cs`) — the compiler-side shape of `core.rtti.TypeInfo`. `TypeInfoBuilder` has two entry points that produce the same shape: `FromNominalDeclaration`/`FromTypeNode` over collected declarations (templates; layout unset, E2120 on access) and `FromResolved` over resolved types (the RTTI table in `HmAstLowering.EnsureTypeTableExists`, which adds size/align/offset and pointers). Adding a member to `TypeInfo` means adding it to the model and both builders — templates and the runtime see it together. A `CompileTimeError` raised inside a template is reported at the template expression's span with its own code, naming the invocation.
+
+The self-host mirrors this with `flang_parser/comptime.f` over its own
+`ComptimeCtx`. The context is a BUILD property, not a host property:
+`--target-os` / `--target-arch` install it on the `ResolveCtx`, which
+threads it into the checker AND into `LowerCtx` (`build_program` takes
+it explicitly). Lowering evaluating statement-level `#if` against the
+host while the checker used the target was a real cross-target
+miscompile — the checked branch and the emitted branch differed.
 
 ## Language Server (LSP)
 

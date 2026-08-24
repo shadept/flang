@@ -135,10 +135,12 @@ pub fn symbol_builder(result: &TypeCheckResult, allocator: &Allocator? = null) S
         // post-M10), so `entry.value` needs the pin.
         let overloads: List(FunctionScheme) = entry.value
         for &f in overloads {
-            // Variadic functions are declared (the backend still emits
-            // their extern) but not called - the variadic portion needs
-            // per-argument types the call site doesn't carry yet.
-            if f.has_variadic { continue }
+            // A FOREIGN variadic function is declared (the backend emits
+            // its extern) but never called through this table: C varargs
+            // have no FLang signature to check a call against. A native
+            // `..xs: T` is an ordinary call - its tail is a `Slice(T)`
+            // the call site packs (M12, `materialize_arg_list`).
+            if f.has_variadic and f.is_foreign { continue }
             let sig = scheme_sig(&f.signature)
             if sig.is_none() { continue }
             let s = sig.unwrap()

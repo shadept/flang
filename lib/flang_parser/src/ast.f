@@ -112,6 +112,19 @@ pub fn is_foreign_directive(ds: &List(DeclAttribute)) bool {
     return false
 }
 
+// The `#deprecated` reason attached to a declaration, or null when it
+// carries no such directive. A bare `#deprecated` yields the empty
+// string - present, but with nothing to say.
+pub fn deprecation_of(ds: &List(DeclAttribute)) String? {
+    for &d in ds {
+        d.* match {
+            Deprecated(msg) => return Some(msg.unwrap_or("")),
+            _ => {},
+        }
+    }
+    return null
+}
+
 // `[pub] import path.to.module`
 pub type ImportDecl = struct {
     span: SourceSpan

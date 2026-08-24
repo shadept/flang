@@ -150,6 +150,14 @@ pub type InferenceResults = struct {
     // set. Lowering appends them after the explicit arguments. A call
     // with no entry here that is short of the callee's arity refuses.
     default_args: Dict(NodeId, List(Expr))
+    // M12: per call site, the COMPLETE argument list in parameter order,
+    // excluding a UFCS receiver. Recorded when the AST's own argument
+    // order is not the call's argument order - a named-argument call
+    // (names select their parameters) or a variadic call (the surplus
+    // arguments are packed into one synthesized array literal). Lowering
+    // emits this list verbatim in place of `call.args`; a call that
+    // needs one and has no entry refuses.
+    arg_lists: Dict(NodeId, List(Expr))
     // A UFCS call whose receiver resolved through `op_deref` hops
     // (checker's `deref_retry`), keyed by the call node: the op_deref
     // pick per hop, outermost first. Lowering calls each hop on the
@@ -170,6 +178,7 @@ pub fn inference_results(allocator: &Allocator? = null) InferenceResults {
         desugars = dict(allocator),
         lambdas = dict(allocator),
         default_args = dict(allocator),
+        arg_lists = dict(allocator),
         receiver_derefs = dict(allocator),
         allocator = allocator,
     }
@@ -184,6 +193,7 @@ pub fn deinit(self: &InferenceResults) {
     self.desugars.deinit()
     self.lambdas.deinit()
     self.default_args.deinit()
+    self.arg_lists.deinit()
     self.receiver_derefs.deinit()
 }
 
@@ -230,6 +240,10 @@ pub fn record_lambda(self: &InferenceResults, id: NodeId, info: LambdaInfo) {
 
 pub fn record_default_args(self: &InferenceResults, id: NodeId, exprs: List(Expr)) {
     self.default_args.set(id, exprs)
+}
+
+pub fn record_arg_list(self: &InferenceResults, id: NodeId, exprs: List(Expr)) {
+    self.arg_lists.set(id, exprs)
 }
 
 pub fn record_receiver_deref(self: &InferenceResults, id: NodeId, chain: List(ResolvedTarget)) {
@@ -288,5 +302,6 @@ pub fn reset_side_tables(self: &InferenceResults) {
     self.desugars = dict(self.allocator)
     self.lambdas = dict(self.allocator)
     self.default_args = dict(self.allocator)
+    self.arg_lists = dict(self.allocator)
     self.receiver_derefs = dict(self.allocator)
 }

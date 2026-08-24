@@ -82,3 +82,7 @@ pub const FQN_STRING: String = "core.string.String"
 pub const FQN_TRY_RESULT: String = "core.try.TryResult"
 pub const FQN_TYPE: String = "core.rtti.Type"
 pub const FQN_TYPE_INFO: String = "core.rtti.TypeInfo"
+// The rest of the RTTI record shapes `TypeInfo` points at.
+pub const FQN_FIELD_INFO: String = "core.rtti.FieldInfo"
+pub const FQN_VARIANT_INFO: String = "core.rtti.VariantInfo"
+pub const FQN_PARAM_INFO: String = "core.rtti.ParamInfo"

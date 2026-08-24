@@ -289,7 +289,7 @@ fn build_project(verbose: bool, stdlib_path: String, check_only: bool, target: C
 
     const out = $"{proj.output.as_view()}/{proj.name.as_view()}"
     defer out.deinit()
-    return finish_build(&unit, proj.name.as_view(), out.as_view(), verbose, check_only, stdlib_path)
+    return finish_build(&unit, proj.name.as_view(), out.as_view(), verbose, check_only, stdlib_path, target)
 }
 
 // Single-file mode: the file is the sole entry of a project-less build, so
@@ -310,11 +310,11 @@ fn build_single_file(path: String, out: String, verbose: bool, stdlib_path: Stri
         const n = unit.write_generated()
         if verbose { const gm = $"  wrote {n} generated file(s)"; defer gm.deinit(); println(gm.as_view()) }
     }
-    return finish_build(&unit, path, out, verbose, check_only, stdlib_path)
+    return finish_build(&unit, path, out, verbose, check_only, stdlib_path, target)
 }
 
 // Shared render -> gate -> lower -> link tail for both build modes.
-fn finish_build(unit: &AnalyzedProject, label: String, out: String, verbose: bool, check_only: bool, stdlib_path: String) i32 {
+fn finish_build(unit: &AnalyzedProject, label: String, out: String, verbose: bool, check_only: bool, stdlib_path: String, target: ComptimeCtx) i32 {
     render_project_diagnostics(&unit.diagnostics, &unit.file_paths, &unit.sources)
 
     const errs = project_error_count(unit)
@@ -334,7 +334,7 @@ fn finish_build(unit: &AnalyzedProject, label: String, out: String, verbose: boo
         return 0
     }
 
-    let result = build_program(&unit.modules, &unit.fqns, &unit.result, out, stdlib_path, verbose)
+    let result = build_program(&unit.modules, &unit.fqns, &unit.result, out, target, stdlib_path, verbose)
     if result.is_err() {
         report_build_error(&result.unwrap_err(), label)
         return 1

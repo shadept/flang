@@ -8,6 +8,7 @@ import std.result
 import std.string
 import std.string_builder
 import flang_parser.ast
+import flang_parser.comptime
 import flang_typer.result
 import flang_codegen.fir
 import flang_codegen.backend
@@ -39,8 +40,8 @@ pub fn build_unit(unit: &AnalyzedUnit, output_path: String, allocator: &Allocato
 // refused (directly or transitively), with the reason. TEMPORARY
 // SCAFFOLD like `IrModule.skipped` itself: the frontier report for the
 // self-host milestones; delete together with the skip mechanism.
-pub fn build_program(modules: &List(Module), fqns: &List(OwnedString), result: &TypeCheckResult, output_path: String, stdlib_root: String = "", verbose: bool = false, allocator: &Allocator? = null) Result(BuildResult, BuildError) {
-    let m = lower_program(modules, fqns, result, allocator)
+pub fn build_program(modules: &List(Module), fqns: &List(OwnedString), result: &TypeCheckResult, output_path: String, comptime_ctx: ComptimeCtx, stdlib_root: String = "", verbose: bool = false, allocator: &Allocator? = null) Result(BuildResult, BuildError) {
+    let m = lower_program(modules, fqns, result, comptime_ctx, allocator)
     if verbose and m.skip_notes.len > 0 {
         const hdr = $"  {m.functions.len} function(s) emitted, {m.skip_notes.len} skipped:"
         defer hdr.deinit()
