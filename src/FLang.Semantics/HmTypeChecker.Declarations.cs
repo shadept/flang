@@ -383,6 +383,11 @@ public partial class HmTypeChecker
         var isForeign = fn.Modifiers.HasFlag(FunctionModifiers.Foreign);
         var isPublic = fn.Modifiers.HasFlag(FunctionModifiers.Public);
 
+        // Foreigns keep their bare (linker-fixed) names; everything else is
+        // symbol-qualified by its module so identical private signatures in
+        // different modules stay distinct C symbols.
+        if (!isForeign && fn.Name != "main")
+            fn.ModulePath = modulePath;
         RegisterFunction(new FunctionScheme(fn.Name, scheme, fn, isForeign, isPublic, modulePath));
 
         if (GetDeprecatedMessage(fn.Directives, out var depMsg))

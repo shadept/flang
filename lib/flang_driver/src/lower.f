@@ -2308,7 +2308,7 @@ fn intercept_rtti_layout(ctx: &LowerCtx, sym: String, sig: &FnSig) Operand? {
         _ => return null,
     }
     let is_type_nominal = ctx.result.nominals.get(nr.id).* match {
-        NomStruct(s) => s.fqn == "core.rtti.Type",
+        NomStruct(st) => st.fqn == "core.rtti.Type",
         _ => false,
     }
     if !is_type_nominal { return null }
@@ -3275,6 +3275,19 @@ fn lower_try(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, t: &TryExpr) Operand 
 // written somewhere arbitrary. Assignment is an expression that yields no
 // value, so the result is the unit placeholder.
 fn lower_assignment(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, a: &AssignmentExpr) Operand {
+    // `base[key] = value` resolved to a user `op_set_index` - an operator
+    // record on the ASSIGNMENT node (the lhs index node is not a place).
+    let setop = ctx_operator(ctx, node_id_of(a.span))
+    if setop.is_some() {
+        const ix_opt: IndexExpr? = a.lhs.* match {
+            Index(ix) => Some(ix),
+            _ => null,
+        }
+        ix_opt match {
+            Some(ix) => return set_index_operator_call(ctx, bb, env, &ix, a.rhs, &setop.unwrap()),
+            None => {},
+        }
+    }
     let dst = lower_place(ctx, bb, env, a.lhs)
     let v = lower_expr(ctx, bb, env, a.rhs)
     if dst.is_none() { return unlowerable_why(ctx, "assignment target is not a place") }
@@ -3614,6 +3627,29 @@ fn index_operator_call(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, ix: &IndexE
     args.push(recv)
     args.push(idx)
     return emit_call(ctx, bb, sym.unwrap(), &sig, args)
+}
+
+// `base[key] = value` through `op_set_index(&Self, K, V)` (or value-self):
+// an ordinary three-argument call; the assignment yields no value.
+fn set_index_operator_call(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, ix: &IndexExpr, rhs: &Expr, o: &ResolvedOperator) Operand {
+    let sym = op_symbol(ctx, o)
+    let sig_opt = op_sig(ctx, o)
+    if sym.is_none() { return unlowerable_why(ctx, "set-index operator without symbol") }
+    if sig_opt.is_none() { return unlowerable_why(ctx, "set-index operator without sig") }
+    let sig = sig_opt.unwrap()
+    if sig.params.len != 3 { return unlowerable(ctx) }
+    const self_is_ref = sig.params[0] match { Ref(_) => true, _ => false }
+    let recv = if self_is_ref {
+        lower_base_address(ctx, bb, env, ix.receiver)
+    } else {
+        lower_arg_adapted(ctx, bb, env, ix.receiver, &sig.params[0])
+    }
+    let args: List(Operand) = list(3, ctx.allocator)
+    args.push(recv)
+    args.push(lower_arg_adapted(ctx, bb, env, ix.index, &sig.params[1]))
+    args.push(lower_arg_adapted(ctx, bb, env, rhs, &sig.params[2]))
+    let _r = emit_call(ctx, bb, sym.unwrap(), &sig, args)
+    return Operand.IntConst(0)
 }
 
 // The index argument of an operator call. A PARTIAL range literal

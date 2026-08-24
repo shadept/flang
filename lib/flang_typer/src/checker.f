@@ -51,6 +51,7 @@ import flang_typer.nominal_registry
 import flang_typer.fqn_map
 import flang_typer.function_registry
 import flang_typer.specialization
+import flang_typer.template_expand
 import flang_typer.substitution
 import flang_typer.visibility
 import flang_typer.node_id
@@ -290,7 +291,6 @@ pub fn deinit(self: &Checker) {
     self.diagnostics.deinit()
     self.fn_stack.deinit()
     self.fn_defaults.deinit()
-    self.templates.deinit()
     self.sig_tps.deinit()
     self.pending_specs.deinit()
     self.spec_callers.deinit()
@@ -492,6 +492,11 @@ fn resolve_generic_bind(self: &Checker, g: &GenericBindType) Ty {
 
 // Scoped mutability: installs the target platform's compile-time context
 // (cross-target builds). Fields are writable only in the defining file.
+// Template expansion evaluates each invocation in its origin module's scope.
+pub fn set_current_module(self: &Checker, module_path: String) {
+    self.current_module = Some(module_path)
+}
+
 pub fn set_comptime_ctx(self: &Checker, ctx: ComptimeCtx) {
     self.comptime = ctx
 }
@@ -1992,10 +1997,81 @@ fn check_assignment(self: &Checker, a: &AssignmentExpr) Ty {
             }
         }
     }
+    // `base[key] = value` may dispatch to a user `op_set_index` (Dict
+    // sugar, RFC-021's expander uses it). Places win - builtin bases and
+    // `op_index_ref` picks keep the ordinary place-store path.
+    const set_dispatched = a.lhs.* match {
+        Index(ix) => try_set_index_assignment(self, a, &ix),
+        _ => false,
+    }
+    if set_dispatched { return Ty.Void }
+
     let lhs = check_expr(self, a.lhs)
     let rhs = check_expr(self, a.rhs)
     unify_expected(self, rhs, lhs, E_TYPE_MISMATCH, a.span)
     return Ty.Void
+}
+
+// Probe `op_set_index(&Self, K, V)` (then the value-self shape) for an
+// index-target assignment. Returns true when the assignment resolved and
+// was recorded as an operator on the ASSIGNMENT node; false falls back to
+// the place path (which re-checks the subtrees - the engine records are
+// idempotent). Never reports: the place path owns the diagnostics.
+fn is_slice_nominal(self: &Checker, id: NominalId) bool {
+    return self.nominals.get(id).* match {
+        NomStruct(st) => st.fqn == FQN_SLICE or st.fqn == FQN_STRING,
+        _ => false,
+    }
+}
+
+fn try_set_index_assignment(self: &Checker, a: &AssignmentExpr, ix: &IndexExpr) bool {
+    const base = check_expr(self, ix.receiver)
+    const rbase = self.engine.resolve(base)
+    // Slices are `Nominal(core.slice.Slice)`; user nominals are what
+    // op_set_index targets, so only non-Slice nominals proceed.
+    const builtin = rbase match {
+        Array(_) => true,
+        Prim(_) => true,
+        Var(_) => true,
+        Error => true,
+        Nominal(n0) => is_slice_nominal(self, n0.id),
+        Ref(inner) => inner.* match {
+            Array(_) => true,
+            Prim(_) => true,
+            Nominal(n1) => is_slice_nominal(self, n1.id),
+            _ => false,
+        },
+        _ => true,
+    }
+    if builtin { return false }
+    const key = check_expr(self, ix.index)
+    const already_ref = rbase match { Ref(_) => true, _ => false }
+    const ref_base = if already_ref { base } else { self.engine.mk_ref(base) }
+    // A declared ref-form place wins over op_set_index.
+    if index_operator(self, "op_index_ref", ref_base, key, ix.span).is_some() { return false }
+
+    const value = check_expr(self, a.rhs)
+    let args: List(Ty) = list(3, self.allocator)
+    args.push(ref_base)
+    args.push(key)
+    args.push(value)
+    let pick = operator_pick(self, "op_set_index", &args, a.span)
+    if pick.is_none() {
+        args.clear()
+        args.push(base)
+        args.push(key)
+        args.push(value)
+        pick = operator_pick(self, "op_set_index", &args, a.span)
+    }
+    args.deinit()
+    if pick.is_none() { return false }
+    const p = pick.unwrap()
+    self.results.record_operator(node_id_of(a.span), ResolvedOperator {
+        function_id = p.id, negate_result = false,
+        cmp_derived_op = null, is_ref_form = true, spec_id = null,
+    })
+    note_pending(self, a.span, true, &p)
+    return true
 }
 
 // `&operand` - a reference to whatever the operand is.
@@ -4309,7 +4385,8 @@ fn resolve_fn_name_values(self: &Checker) {
     pend.deinit()
 }
 
-pub fn check_all(self: &Checker, modules: &List(Module), paths: &List(String)) TypeCheckResult {
+pub fn check_all(self: &Checker, modules: &List(Module), paths: &List(String),
+        sources: &List(OwnedString), file_paths: &List(OwnedString), generators: &TemplateState) TypeCheckResult {
     // Wire the import graph before any name resolution runs.
     build_visibility(self, modules, paths)
 
@@ -4319,6 +4396,10 @@ pub fn check_all(self: &Checker, modules: &List(Module), paths: &List(String)) T
     for i in 0..modules.len {
         collect_nominal_names(self, &modules[i], paths[i])
     }
+    // Phase 1.5: source-generator expansion (RFC-021 §2) - generated
+    // declarations are appended to their origin modules and collected,
+    // before any body resolves.
+    expand_templates(self, generators, modules, paths, sources, file_paths)
     for i in 0..modules.len {
         resolve_nominal_bodies(self, &modules[i], paths[i])
     }
@@ -4418,7 +4499,10 @@ fn count_check_errors(srcs: String[], paths: String[]) usize {
     ps.push_all(paths)
 
     let chk = checker()
-    let _res = check_all(&chk, &mods, &ps)
+    let gen_srcs: List(OwnedString) = list(0, null)
+    let gen_fps: List(OwnedString) = list(0, null)
+    let gens = template_state(null)
+    let _res = check_all(&chk, &mods, &ps, &gen_srcs, &gen_fps, &gens)
     let errors = 0usize
     for i in 0..chk.diagnostics.len {
         if chk.diagnostics[i].severity == Severity.Error { errors = errors + 1 }
@@ -4738,7 +4822,10 @@ fn check_result_of(srcs: String[], paths: String[]) TypeCheckResult {
     let ps = list(paths.len)
     ps.push_all(paths)
     let chk = checker()
-    return check_all(&chk, &mods, &ps)
+    let gen_srcs: List(OwnedString) = list(0, null)
+    let gen_fps: List(OwnedString) = list(0, null)
+    let gens = template_state(null)
+    return check_all(&chk, &mods, &ps, &gen_srcs, &gen_fps, &gens)
 }
 
 test "a generic call instantiates once per concrete signature" {

@@ -129,10 +129,6 @@ fn ensure_capacity(self: &Dict($K, $V)) {
     }
 }
 
-pub fn op_set_index(self: Dict($K, $V), key: K, value: V) {
-    self.set(key, value)
-}
-
 // Insert or update a key-value pair.
 pub fn set(self: &Dict($K, $V), key: K, value: V) {
     self.ensure_capacity()
@@ -232,6 +228,10 @@ pub fn set(self: &Dict(OwnedString, $V), key: String, value: V) {
 
 pub fn op_index(self: Dict($K, $V), key: K) V? {
     return self.get(key)
+}
+
+pub fn op_set_index(self: &Dict($K, $V), key: K, value: V) {
+    self.set(key, value)
 }
 
 // Get the value associated with a key, or null if not found.

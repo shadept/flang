@@ -42,6 +42,21 @@ pub type Module = struct {
 // Scoped mutability: `decls` is writable only in this file. Installs the
 // resolved decl list after decl-level #if flattening (see comptime.f).
 // The old list's buffer stays in the arena; it is reclaimed with it.
+// Append declarations produced by template expansion (RFC-021 §2). The
+// Decl values are copied; whatever they point into must outlive the module.
+//
+// Rebuilds the list on the global allocator rather than growing in place:
+// `decls`' stored allocator points at a projection-time local (dead once
+// `project_module` returns), so a push that reallocs would go through a
+// dangling allocator. The old buffer stays behind in the module arena.
+// ponytail: the rebuilt buffer leaks at Module.deinit (arena-only free); fine, modules live to end of build.
+pub fn append_decls(self: &Module, decls: &List(Decl)) {
+    let merged: List(Decl) = list(self.decls.len + decls.len)
+    for &d in self.decls { merged.push(d.*) }
+    for &d in decls { merged.push(d.*) }
+    self.decls = merged
+}
+
 pub fn set_decls(self: &Module, decls: List(Decl)) {
     self.decls = decls
 }
@@ -172,18 +187,31 @@ pub type GenDef = struct {
 }
 
 // One parameter to a `#define`. `kind` is the parameter-kind keyword
-// (`Ident`, `Type`, `Expr`, ...) verbatim from source.
+// (`Ident`, `Type`) verbatim from source; `variadic` marks `..Name: Kind`
+// (only legal last).
 pub type GenParam = struct {
     span: SourceSpan
     name: String
     kind: String
+    variadic: bool
 }
 
 // `#name(arg1, arg2, ...)` at top level - invokes a source generator.
 pub type GenInvoke = struct {
     span: SourceSpan
     name: String
-    args: List(Expr)
+    args: List(GenArg)
+}
+
+// One generator argument: a bare identifier or a type expression.
+pub type GenArg = enum {
+    IdentArg(GenIdentArg)
+    TypeArg(TypeExpr)
+}
+
+pub type GenIdentArg = struct {
+    span: SourceSpan
+    name: String
 }
 
 // `#if cond { decls... } else { decls... }` at file/module level.
@@ -705,6 +733,22 @@ pub fn pattern_span(p: &Pattern) SourceSpan {
     }
 }
 
+pub fn type_expr_span(t: &TypeExpr) SourceSpan {
+    return t.* match {
+        Named(n) => n.span,
+        GenericBind(g) => g.span,
+        Reference(r) => r.span,
+        Optional(o) => o.span,
+        Array(a) => a.span,
+        Slice(s) => s.span,
+        Tuple(tu) => tu.span,
+        Function(f) => f.span,
+        AnonStruct(st) => st.span,
+        AnonEnum(en) => en.span,
+        Error(er) => er.span,
+    }
+}
+
 pub fn expr_span(e: &Expr) SourceSpan {
     return e.* match {
         Lit(x) => x.span,
@@ -902,9 +946,12 @@ pub type TupleType = struct {
 }
 
 // `fn(P1, P2) R` - function type. `return_type` is None for void.
+// `param_names[i]` is the optional `name:` before `params[i]` ("" when
+// unnamed); always the same length as `params`.
 pub type FunctionType = struct {
     span: SourceSpan
     params: List(TypeExpr)
+    param_names: List(String)
     return_type: &TypeExpr?
 }
 

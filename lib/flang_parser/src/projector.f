@@ -619,6 +619,7 @@ fn project_generator_def(self: &Projector, cst: CstNode) GenDef {
     let depth: i32 = 0
     let pending_param_name: String = ""
     let saw_colon = false
+    let saw_dotdot = false
     for i in 0..cst.children.len {
         cst.children[i] match {
             TokenChild(tok) => {
@@ -664,6 +665,10 @@ fn project_generator_def(self: &Projector, cst: CstNode) GenDef {
                         name = tok.text
                         continue
                     }
+                    if tok.kind == TokenKind.DotDot {
+                        saw_dotdot = true
+                        continue
+                    }
                     if tok.kind == TokenKind.Identifier {
                         if pending_param_name.len == 0 {
                             pending_param_name = tok.text
@@ -672,13 +677,17 @@ fn project_generator_def(self: &Projector, cst: CstNode) GenDef {
                                 span = self.span_from_token(tok),
                                 name = pending_param_name,
                                 kind = tok.text,
+                                variadic = saw_dotdot,
                             })
                             pending_param_name = ""
                             saw_colon = false
+                            saw_dotdot = false
                         }
                         continue
                     }
-                    if tok.kind == TokenKind.Colon { saw_colon = true }
+                    if tok.kind == TokenKind.Colon {
+                        saw_colon = true
+                    }
                 }
             }
             NodeChild(_) => {}
@@ -695,24 +704,23 @@ fn project_generator_def(self: &Projector, cst: CstNode) GenDef {
 
 fn project_generator_invocation(self: &Projector, cst: CstNode) GenInvoke {
     let name: String = ""
-    let args: List(Expr) = list(0, Some(self.alloc))
+    let args: List(GenArg) = list(0, self.alloc)
     let saw_hash = false
     for i in 0..cst.children.len {
         cst.children[i] match {
             TokenChild(tok) => {
                 if tok.kind == TokenKind.Hash { saw_hash = true; continue }
-                if saw_hash and name.len == 0 and tok.kind == TokenKind.Identifier {
+                if tok.kind != TokenKind.Identifier { continue }
+                if saw_hash and name.len == 0 {
                     name = tok.text
+                    continue
                 }
-                // Inner argument tokens are consumed loosely by the parser's
-                // `consume_balanced` - surfaced as a flat token stream
-                // without sub-expressions. Until the parser exposes
-                // structured generator args, we leave `args` empty rather
-                // than fabricate placeholder expressions.
+                // A bare identifier argument (see parse_generator_arg_into).
+                args.push(GenArg.IdentArg(GenIdentArg { span = self.span_from_token(tok), name = tok.text }))
             }
             NodeChild(child) => {
-                if is_expr_kind(child.kind) {
-                    args.push(self.project_expr(child))
+                if is_type_kind(child.kind) {
+                    args.push(GenArg.TypeArg(self.project_type_expr(child)))
                 }
             }
         }
@@ -1057,6 +1065,14 @@ fn is_expr_kind(kind: NodeKind) bool {
         or kind == NodeKind.ByteLiteralExpr
         or kind == NodeKind.BooleanLiteralExpr
         or kind == NodeKind.NullLiteralExpr
+}
+
+// Project one expression CST outside a module (template expressions).
+// `allocator` must outlive the returned Expr - callers pass the arena
+// that owns the rest of their template state.
+pub fn project_expression(cst: CstNode, file_id: i32, allocator: &Allocator) Expr {
+    const p: Projector = .{ alloc = allocator, file_id = file_id }
+    return p.project_expr(cst)
 }
 
 fn project_expr(self: &Projector, cst: CstNode) Expr {
@@ -2480,10 +2496,12 @@ fn project_tuple_type(self: &Projector, cst: CstNode) TypeExpr {
 
 fn project_function_type(self: &Projector, cst: CstNode) TypeExpr {
     let params: List(TypeExpr) = list(0, Some(self.alloc))
+    let param_names: List(String) = list(0, Some(self.alloc))
     let return_type: TypeExpr? = null
     let in_params = false
     let saw_close = false
     let depth: i32 = 0
+    let pending_name: String = ""
     for i in 0..cst.children.len {
         cst.children[i] match {
             TokenChild(tok) => {
@@ -2497,11 +2515,15 @@ fn project_function_type(self: &Projector, cst: CstNode) TypeExpr {
                     if depth == 0 { in_params = false; saw_close = true }
                     continue
                 }
+                // `name :` before a parameter type (the parser eats both as tokens).
+                if in_params and tok.kind == TokenKind.Identifier { pending_name = tok.text }
             }
             NodeChild(child) => {
                 if !is_type_kind(child.kind) { continue }
                 if in_params {
                     params.push(self.project_type_expr(child))
+                    param_names.push(pending_name)
+                    pending_name = ""
                 } else if saw_close and return_type.is_none() {
                     return_type = Some(self.project_type_expr(child))
                 }
@@ -2517,6 +2539,7 @@ fn project_function_type(self: &Projector, cst: CstNode) TypeExpr {
     return TypeExpr.Function(FunctionType {
         span = self.span_from(cst),
         params = params,
+        param_names = param_names,
         return_type = ret_ref,
     })
 }
@@ -2529,6 +2552,14 @@ fn project_anon_struct_type(self: &Projector, cst: CstNode) TypeExpr {
     let generics: List(GenericParam) = list(0, Some(self.alloc))
     self.collect_generic_params_from_balanced(cst, &generics)
     let fields: List(StructField) = list(0, Some(self.alloc))
+    for i in 0..cst.children.len {
+        cst.children[i] match {
+            NodeChild(child) => {
+                if child.kind == NodeKind.StructField { fields.push(self.project_struct_field(child)) }
+            }
+            TokenChild(_) => {}
+        }
+    }
     return TypeExpr.AnonStruct(AnonStructType {
         span = self.span_from(cst),
         generics = generics,
@@ -2540,6 +2571,14 @@ fn project_anon_enum_type(self: &Projector, cst: CstNode) TypeExpr {
     let generics: List(GenericParam) = list(0, Some(self.alloc))
     self.collect_generic_params_from_balanced(cst, &generics)
     let variants: List(EnumVariant) = list(0, Some(self.alloc))
+    for i in 0..cst.children.len {
+        cst.children[i] match {
+            NodeChild(child) => {
+                if child.kind == NodeKind.EnumVariant { variants.push(self.project_enum_variant(child)) }
+            }
+            TokenChild(_) => {}
+        }
+    }
     return TypeExpr.AnonEnum(AnonEnumType {
         span = self.span_from(cst),
         generics = generics,

@@ -20,6 +20,8 @@ import std.option
 import std.set
 import std.string
 import std.string_builder
+import std.io.file
+import std.result
 import flang_parser.lexer
 import flang_parser.parser
 import flang_parser.projector
@@ -28,6 +30,7 @@ import flang_parser.comptime
 import flang_core.diagnostic
 import flang_core.span
 import flang_typer.checker
+import flang_typer.template_expand
 import flang_typer.result
 import flang_driver.resolver
 import flang_driver.project
@@ -76,10 +79,22 @@ pub fn analyze(source: OwnedString, path: String, allocator: &Allocator? = null)
         let paths: List(String) = list(1, allocator)
         paths.push(path)
 
+        let srcs: List(OwnedString) = list(1, allocator)
+        srcs.push(from_view(src, allocator))
+        let fps: List(OwnedString) = list(1, allocator)
+        fps.push(from_view(path, allocator))
         let chk = checker(allocator)
-        result = check_all(&chk, &modules, &paths)
+        let gens = template_state(allocator)
+
+        result = check_all(&chk, &modules, &paths, &srcs, &fps, &gens)
         drain_diagnostics(&diagnostics, &chk.diagnostics)
+
+        // ponytail: single-unit analysis leaks the generated chunk modules
+        // (their decls were appended to `module`); AnalyzedUnit has no slot.
+        gens.forget()
         chk.deinit()
+        srcs.deinit()
+        fps.deinit()
 
         // `push` copied the struct; `module` still owns the arena. Forget
         // the alias before freeing the list so the arena isn't double-freed.
@@ -149,6 +164,11 @@ pub type AnalyzedProject = struct {
     result: TypeCheckResult
     checked: bool
     diagnostics: List(Diagnostic)
+    // Template expansion output: the chunk modules whose decls were
+    // appended into `modules` (kept alive here) and the per-origin
+    // generated text (`--emit-generated`). `sources`/`file_paths` also
+    // hold one padded entry per chunk, after the real files.
+    generated: TemplateOutput
 }
 
 pub fn analyze_project(ctx: &ResolveCtx, entries: &List(OwnedString), allocator: &Allocator? = null) AnalyzedProject {
@@ -177,11 +197,7 @@ pub fn analyze_project(ctx: &ResolveCtx, entries: &List(OwnedString), allocator:
             diagnostics.push(error("E0001", msg, none_span()))
             continue
         }
-        // Fold a template-expansion sidecar (`x.generated.f`) into the same
-        // module as its origin. The bootstrap can't expand templates, so the
-        // checked-in expansion stands in; merging into one module (rather than
-        // a second module under the same FQN) keeps a single import scope.
-        let src = combine_with_sidecar(path, src_opt.unwrap(), allocator)
+        let src = src_opt.unwrap()
         let fid = modules.len as i32
         let module = parse_to_module(src.as_view(), fid, &ctx.comptime, &diagnostics, allocator)
         let fqn = module_fqn(ctx, path, allocator)
@@ -197,15 +213,19 @@ pub fn analyze_project(ctx: &ResolveCtx, entries: &List(OwnedString), allocator:
 
     let checked = count_errors(&diagnostics) == 0
     let result = empty_result(allocator)
+    let generated = empty_template_output(allocator)
     if checked {
         let path_views: List(String) = list(modules.len, allocator)
         for i in 0..fqns.len {
             path_views.push(fqns[i].as_view())
         }
         let chk = checker(allocator)
+        let gens = template_state(allocator)
         chk.set_comptime_ctx(ctx.comptime)
-        result = check_all(&chk, &modules, &path_views)
+        result = check_all(&chk, &modules, &path_views, &sources, &file_paths, &gens)
         drain_diagnostics(&diagnostics, &chk.diagnostics)
+        generated = gens.take_output()
+        gens.deinit()
         chk.deinit()
         path_views.deinit()
     }
@@ -218,6 +238,7 @@ pub fn analyze_project(ctx: &ResolveCtx, entries: &List(OwnedString), allocator:
         result = result,
         checked = checked,
         diagnostics = diagnostics,
+        generated = generated,
     }
 }
 
@@ -240,10 +261,14 @@ pub fn analyze_source_set(srcs: List(OwnedString), fqns: &List(String), allocato
 
     let checked = count_errors(&diagnostics) == 0
     let result = empty_result(allocator)
+    let generated = empty_template_output(allocator)
     if checked {
         let chk = checker(allocator)
-        result = check_all(&chk, &modules, fqns)
+        let gens = template_state(allocator)
+        result = check_all(&chk, &modules, fqns, &srcs, &file_paths, &gens)
         drain_diagnostics(&diagnostics, &chk.diagnostics)
+        generated = gens.take_output()
+        gens.deinit()
         chk.deinit()
     }
 
@@ -255,11 +280,13 @@ pub fn analyze_source_set(srcs: List(OwnedString), fqns: &List(String), allocato
         result = result,
         checked = checked,
         diagnostics = diagnostics,
+        generated = generated,
     }
 }
 
 pub fn deinit(self: &AnalyzedProject) {
     self.diagnostics.deinit()
+    self.generated.deinit()
     self.modules.deinit()
     self.fqns.deinit()
     self.file_paths.deinit()
@@ -268,36 +295,30 @@ pub fn deinit(self: &AnalyzedProject) {
     // result.deinit() yet. Fine for one-shot build. See docs/known-issues.md.
 }
 
+// Write each origin's generated text to `<origin>.generated.f`
+// (`--emit-generated`). Debug output only - nothing ever reads it back
+// (RFC-021 §4). Returns how many files were written.
+pub fn write_generated(self: &AnalyzedProject) usize {
+    let written: usize = 0
+    for &e in self.generated.emitted {
+        const path = generated_path(e.origin_path)
+        defer path.deinit()
+        let f = open_file(path.as_view(), FileMode.Write) match {
+            Ok(f) => f,
+            Err(_) => continue,
+        }
+        const w = f.write(e.text.as_view())
+        const _c = close_file(&f)
+        if w.is_ok() { written = written + 1 }
+    }
+    return written
+}
+
 // Total error-severity diagnostics across every module.
 pub fn project_error_count(self: &AnalyzedProject) usize {
     return count_errors(&self.diagnostics)
 }
 
-// Append a `.generated.f` sidecar's text to its origin's source so the two
-// parse as one module under one import scope. Returns `src` untouched when
-// no sidecar exists or it can't be read; otherwise returns a fresh combined
-// buffer and frees `src`. Generated files carry no imports, so appending
-// keeps imports file-top. Every checked-in expansion merges - the types
-// (`#interface`) and the functions (`#implement`, `#enum_utils`, `#derive`)
-// both resolve now that calls check against the registry.
-fn combine_with_sidecar(path: String, src: OwnedString, alloc: &Allocator?) OwnedString {
-    let sc = generated_sidecar(path, alloc)
-    if sc.is_none() { return src }
-    let sp = sc.unwrap()
-    defer sp.deinit()
-    let gen = read_text(sp.as_view())
-    if gen.is_none() { return src }
-    let g = gen.unwrap()
-    defer g.deinit()
-
-    let sb = string_builder(0, alloc)
-    defer sb.deinit()
-    sb.append(src.as_view())
-    sb.append('\n')
-    sb.append(g.as_view())
-    src.deinit()
-    return sb.to_string()
-}
 
 fn parse_to_module(src: String, file_id: i32, target: &ComptimeCtx, diags: &List(Diagnostic), alloc: &Allocator?) Module {
     let lx = lexer(src, alloc)
@@ -342,8 +363,7 @@ fn seed_prelude(ctx: &ResolveCtx, queue: &List(OwnedString), seen: &Set(String),
 // The reference compiler compiles every program against the whole stdlib
 // regardless of imports, and lenient type resolution in the checker relies
 // on every stdlib nominal being registered - so the BFS seeds the full
-// stdlib tree. Generated sidecars are folded into their origin module
-// during the walk, never loaded standalone (`glob_sources` excludes them).
+// stdlib tree.
 // ponytail: typechecks all of std on every build; prune to the import
 // closure once stdlib type visibility turns strict.
 fn seed_stdlib(ctx: &ResolveCtx, queue: &List(OwnedString), seen: &Set(String), alloc: &Allocator?) {
@@ -379,5 +399,3 @@ fn push_unresolved(diags: &List(Diagnostic), id: &ImportDecl, alloc: &Allocator?
     dotted.deinit()
     diags.push(error("E0001", msg, id.span))
 }
-
-

@@ -399,6 +399,10 @@ pub type OwnedString = struct {
     allocator: &Allocator?
 }
 
+pub fn from_view(s: String, allocator: &Allocator) OwnedString {
+    return from_view(s, Some(allocator))
+}
+
 pub fn from_view(s: String, allocator: &Allocator? = null) OwnedString {
     // TODO optimize
     const sb = string_builder(s.len, allocator)

@@ -28,6 +28,20 @@ public class FunctionDeclarationNode : AstNode
     }
 
     public string Name { get; }
+
+    /// <summary>
+    /// Module path the checker registered this declaration under; null for
+    /// foreign declarations and for synthesized nodes whose <see cref="Name"/>
+    /// is already unique. Set by CollectFunctionSignatures.
+    /// </summary>
+    public string? ModulePath { get; set; }
+
+    /// <summary>
+    /// The base name codegen mangles: module-qualified, so two same-name
+    /// same-signature functions in different modules cannot collide into one
+    /// C symbol (they used to - the loser was silently dropped).
+    /// </summary>
+    public string SymbolBaseName => string.IsNullOrEmpty(ModulePath) ? Name : ModulePath + "." + Name;
     public SourceSpan NameSpan { get; }
     public IReadOnlyList<FunctionParameterNode> Parameters { get; }
     public TypeNode? ReturnType { get; }

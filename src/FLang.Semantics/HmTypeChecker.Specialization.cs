@@ -146,7 +146,12 @@ public partial class HmTypeChecker
 
         var newFn = new FunctionDeclarationNode(
             originalFn.Span, originalFn.NameSpan, originalFn.Name, newParams, newRetNode,
-            clonedBody, originalFn.Modifiers);
+            clonedBody, originalFn.Modifiers)
+        {
+            // The generic's defining module qualifies the specialization's
+            // symbol, like every other function (SymbolBaseName).
+            ModulePath = scheme.ModulePath,
+        };
 
         // Register BEFORE checking body to prevent infinite recursion for recursive generics
         _results.Specializations.Add(newFn);

@@ -129,7 +129,7 @@ build/
 
 ## C99 Backend
 
-- **Name mangling only in codegen.** IR preserves base function names. `HmCCodeGenerator` applies `IrNameMangling.MangleFunctionName()` when emitting C. `main` is never mangled.
+- **Name mangling only in codegen.** IR carries `SymbolBaseName` — the module-qualified base (`module.path.name`, stamped on `FunctionDeclarationNode.ModulePath` at signature collection) — and `HmCCodeGenerator` applies `IrNameMangling.MangleFunctionName()` (parameter/return tokens) when emitting C. Module qualification is load-bearing: two file-private functions with the same name and signature in different modules used to merge into one C symbol, with one body silently dropped. `main` and foreigns are never mangled.
 - **Foreign/intrinsic symbols are not mangled.** `#foreign` and `#intrinsic` calls use their declared names directly.
 - **Foreign structs skip codegen.** `IrStruct.IsForeign` structs have no typedef or definition emitted — the `#include` of the original C header provides them. Their `CName` is the original C name (e.g. `Color`), not mangled.
 - **Intrinsics declared in `stdlib/core`** with `#intrinsic` directive.

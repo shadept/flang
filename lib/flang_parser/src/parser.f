@@ -84,6 +84,32 @@ pub fn deinit(self: &Parser) {
 // Helpers
 // ─────────────────────────────────────────────────────────────────────────
 
+// Position control for callers that drive the parser over a token stream
+// they scan themselves (the template body parser, RFC-021): jump to a
+// token index, read where parsing stopped.
+pub fn set_file_id(self: &Parser, file_id: i32) {
+    self.file_id = file_id
+}
+
+pub fn seek(self: &Parser, index: usize) {
+    self.position = index
+}
+
+pub fn token_index(self: &Parser) usize {
+    return self.position
+}
+
+// Parse an expression that is followed by a `{` body (`#for x in EXPR {`,
+// `#if EXPR {`): the brace ends the expression instead of starting a
+// struct literal.
+pub fn parse_condition_expression(self: &Parser) CstNode {
+    const saved = self.stop_at_brace
+    self.stop_at_brace = true
+    const e = self.parse_expression()
+    self.stop_at_brace = saved
+    return e
+}
+
 fn current(self: &Parser) Token {
     if self.position < self.tokens.len {
         return self.tokens[self.position]
@@ -442,6 +468,27 @@ fn parse_generator_def(self: &Parser) CstNode {
     return finish(b)
 }
 
+// One generator argument: a bare identifier (`Point`, `eq`) is a token
+// child; something that starts a type (`struct { … }`, `List(i32)`, `&T`)
+// is a type node; anything else (`3`, `"x"`, `[…]`) is an expression node.
+fn parse_generator_arg_into(self: &Parser, b: &NodeBuilder) {
+    const k = self.current_kind()
+    if k == TokenKind.Identifier {
+        const next = self.peek_kind(1)
+        if next == TokenKind.Comma or next == TokenKind.CloseParenthesis {
+            self.eat_into(b)
+            return
+        }
+    }
+    if k == TokenKind.Identifier or self.can_start_type(k) {
+        const t = self.parse_type()
+        push_node_into(b, t)
+        return
+    }
+    const e = self.parse_expression()
+    push_node_into(b, e)
+}
+
 // `#name(args)` standalone at top level (not preceded by `#define`,
 // and `name` not in the known-directive set). Arguments captured
 // balanced - same shape as a directive call.
@@ -450,7 +497,13 @@ fn parse_generator_invocation(self: &Parser) CstNode {
     self.eat_into(&b)                                                       // `#`
     self.eat_into(&b)                                                       // identifier
     if self.current_kind() == TokenKind.OpenParenthesis {
-        self.consume_balanced(&b, TokenKind.OpenParenthesis, TokenKind.CloseParenthesis)
+        self.eat_into(&b)
+        while !self.at_eof() and self.current_kind() != TokenKind.CloseParenthesis {
+            self.parse_generator_arg_into(&b)
+            if self.current_kind() == TokenKind.Comma { self.eat_into(&b) }
+            else if self.current_kind() != TokenKind.CloseParenthesis { break }
+        }
+        self.expect_into(&b, TokenKind.CloseParenthesis, "E1002")
     }
     return finish(b)
 }
@@ -1664,17 +1717,13 @@ fn parse_primary_type(self: &Parser) CstNode {
     if k == TokenKind.Struct {
         let b = self.open(NodeKind.AnonymousStructType)
         self.eat_into(&b)
-        if self.current_kind() == TokenKind.OpenBrace {
-            self.consume_balanced(&b, TokenKind.OpenBrace, TokenKind.CloseBrace)
-        }
+        self.parse_struct_body_into(&b)
         return finish(b)
     }
     if k == TokenKind.Enum {
         let b = self.open(NodeKind.AnonymousEnumType)
         self.eat_into(&b)
-        if self.current_kind() == TokenKind.OpenBrace {
-            self.consume_balanced(&b, TokenKind.OpenBrace, TokenKind.CloseBrace)
-        }
+        self.parse_enum_body_into(&b)
         return finish(b)
     }
     // Fall through - wrap into Error so the formatter still has the bytes.

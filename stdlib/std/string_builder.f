@@ -130,7 +130,6 @@ pub fn commit(sb: &StringBuilder, n: usize) {
 // Enables the `let sb = string_builder(); defer sb.deinit(); ... sb.to_string()`
 // pattern - defer fires on panic before to_string, otherwise transfers cleanly.
 pub fn to_string(sb: &StringBuilder) OwnedString {
-
     // Ensure room for the null terminator. StringBuilder grows in powers of two,
     // so cap > len is the common case and reserve is a no-op.
     if (sb.cap == sb.len) {

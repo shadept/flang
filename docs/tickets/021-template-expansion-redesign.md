@@ -272,13 +272,12 @@ Mechanism — a minimal normalizer, not a full formatter:
 2. That text is lexed and parsed into the trivia-bearing CST
    (`lib/flang_parser/src/trivia.f`) — the same parse step §2 already
    requires, so no extra pass over the source.
-3. A CST printer emits it back with trivia **rewritten**: leading whitespace
-   of every line replaced by `2 × brace-depth` spaces; runs of blank lines
-   (the residue of `#for`/`#if` lines that emitted nothing) collapsed to
-   none inside a declaration and one between declarations; trailing
-   whitespace dropped. Tokens, comments and intra-line spacing are otherwise
-   printed as lexed. Each invocation's output is preceded by a single
-   `// #name(args)` comment line.
+3. A text normalizer re-emits it: leading whitespace of every line replaced
+   by `2 × brace-depth` spaces (braces counted outside strings/chars/line
+   comments); blank-line runs collapsed to one; trailing whitespace
+   dropped. Each invocation's output is preceded by a single
+   `// #name(args)` comment line. (Landed as a line-based normalizer
+   rather than a CST printer — a future formatter replaces it wholesale.)
 4. The printed text is what `--emit-generated` writes, what the LSP virtual
    document serves, and what diagnostic snippets (§6) quote. It is *also* the
    text whose spans generated nodes carry, so the three always agree.

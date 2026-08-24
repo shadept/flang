@@ -87,7 +87,7 @@ not mean it *rejects* what the reference rejects. Two axes:
 | Reified types (`Type(T)`, `size_of`) | ✅ (minimal) | 31 + 8 + 26 sites | M11: `Type(T)` values ARE TypeInfo — `struct_field_lookup` redirects `Type` field access to TypeInfo's definition, so `ty.size` types as usize instead of a fresh var |
 | `a?.b` | ❌ | 3/3 — rewritable-away | unvisited subtree |
 | Specialization (eager monomorphization of generic fns) | ✅ | everywhere (`List`/`Dict`) | M10, **no AST clone**: node ids are span fingerprints, so instantiations of one template share every node id — each instantiation re-checks the ORIGINAL body with `$T` names bound to concrete types, recording into a private `InferenceResults` overlay (`Specialization.overlay`). Committed generic picks (calls, operators, `op_try`, indexing) become `PendingSpec`s; each body scope drains its own pendings after inference settles (register-before-check breaks self-recursion; depth cap 64 diagnoses runaway chains; un-inferable type args are E2001 at the call site). Function lookups during a re-check see the template module's imports UNIONED with the caller chain's (`fn_visibility`) — the deliberate loaded-context rule that lets `hash()` resolve for `Dict`; nominal/variant lookups do NOT widen (a caller's `Decl.Type(...)` variant must not capture `Type(T)`). Generic template bodies are otherwise **never validated** — errors surface per instantiation |
-| Templates (`#interface`, `#derive`, …) expanded natively | ❌ | every `.generated.f` sidecar | relies on sidecars from a reference-compiler run |
+| Templates (`#interface`, `#derive`, …) expanded natively | ✅ | every stdlib generator | 2026-08-23 (RFC-021 phase 4): `flang_parser/template.f` parses bodies, `comptime.f` evaluates (one evaluator with `#if`), `flang_typer/template_expand.f` runs the worklist between collect and resolve; generated decls append to the origin module. No sidecars anywhere; `-g/--emit-generated` writes them for debugging only |
 | `#if` compile-time conditionals evaluated | ✅ | 27/10 (incl. `file.f::open_flags`, in `main`'s graph) | landed 2026-08-20: conditions parse as real FLang expressions (`parse_expression` + `stop_at_brace`, paren-free `#if cond {` canonical), evaluated strictly (`flang_parser.comptime`: E2116 unknown name, E2117 non-bool, E2118 operand misuse — reference parity); only the active branch is checked; divergence = active branch's. Decl-level flattens once post-projection (`flatten_module_decls`, active decls spliced via `Module.set_decls`). `--target-os`/`--target-arch` override the context (threaded `ResolveCtx.comptime` → `Checker.comptime`/`LowerCtx.comptime`) |
 
 An unvisited subtree (`a?.b`) types as an unconstrained
@@ -134,7 +134,7 @@ current-state summary.
 | Global `const` declarations | ✅ | 101/17 | M11: each const becomes an aligned zeroed byte global plus a synthesized `__finit_*` function lowering its initializer (so vtables of fn pointers and cross-global addresses need no static-initializer support); `main` calls every SURVIVING init first, wired AFTER the drop pass, which also poisons any reader of a const whose init died (`reads … whose initializer was dropped`) — absent, never silently zero. Reads resolve through `RtConst(fqn)` targets the checker records on both the decl and every read |
 | `test` blocks (self-host `flang test`) | ❌ | dev workflow, not `main`'s graph | bootstrap CLI has no `test` subcommand |
 | UFCS receiver adaptation | ✅ | everywhere | M11: the receiver is adapted to the winner's first-parameter shape by MEMORY type (binding/field declared types — node types are rewritten by the checker's adaptation, so they cannot arbitrate): value→`&prim` passes the place's address, `&prim`→value loads through, same-representation prims (`usize` vs `u64` — declaration order arbitrates equal picks) interchange. Pushing the raw value against an adapted pick was a silent scalar miscompile. Stage-2 fixpoint (2026-08-22): a receiver that resolved through `op_deref` hops records the chain (`receiver_derefs`, per call node, hops drain-rewritten to specializations) and `lower_deref_receiver` calls each hop — the aggregate "value IS its address" shortcut passed `&Owned(StringBuilder)` as `&StringBuilder`, the stage-2 segfault. Call arguments (and value-form index receivers) also adapt array→slice decay now (`lower_arg_adapted`) |
-| Template directives (`#enum_utils`, `#derive`, `#interface`, …) | ⚠️ | every sidecar | not expanded; checked-in `.generated.f` sidecars stand in |
+| Template directives (`#enum_utils`, `#derive`, `#interface`, …) | ✅ | every stdlib generator | expanded natively (RFC-021 phase 4, 2026-08-23) |
 | `#if` compile-time conditionals | ✅ | 27/10 | statement-level splices the active branch's statements at `lower_stmt`; decl-level is already flattened before lowering. The `comptime.f` evaluator itself joins the M11 emission frontier (`String ==` dispatch), like most of the checker |
 
 ## Lowering — statements
@@ -199,8 +199,7 @@ Measured near-zero in the self-host sources — implementing these buys
 no self-hosting progress; a handful of call-site rewrites removes the
 need entirely:
 
-- struct/tuple destructuring patterns (0), `op_set_index` (0 — every
-  indexed write in the sources is a place; dict sugar unused),
+- struct/tuple destructuring patterns (0),
   named arguments (2), `?.` null propagation (3),
   variadic *calls* (0 — declarations only), foreign aggregate
   signatures (0), `x as bool` (0).
@@ -310,8 +309,22 @@ docs/known-issues.md for the live instance of that failure).
    rewritten to `v * 0.5 == v`, and chunked 10^22 scale application in
    `parse_float`. Dict-iteration emission order was already
    deterministic — no determinization needed.
-8. **Post-fixpoint**: template expansion (drop the `.generated.f`
-   sidecars), match exhaustiveness and the other rejection-power gaps,
+8. ~~**Post-fixpoint: template expansion**~~ ✅ landed 2026-08-23
+   (RFC-021 phase 4). The self-host expands `#define` bodies natively:
+   structured generator args/params in the parser, the template body
+   parser + text engine in `flang_parser/template.f`, the unified
+   compile-time evaluator (`comptime.f` — `#if` directives and template
+   expressions share `ct_eval`, `CtValue` carries the `core.rtti`
+   introspection shapes), and the expansion worklist in
+   `flang_typer/template_expand.f` (parking for cross-module type deps,
+   §7 readable-output normalizer, E2119 depth cap). Sidecar loading is
+   deleted; a clean clone self-builds. `op_set_index` dispatch landed
+   with it (`d[k] = v` — the expander's own code uses it). The
+   stage-2 = stage-3 fixpoint was re-verified after the change, with the
+   reference's C mangling now module-qualifying every function (a
+   private-fn symbol collision was silently merging same-signature
+   functions across modules).
+9. **Next**: match exhaustiveness and the other rejection-power gaps,
    `project_info()` interception, real RTTI (name strings, fields).
    The "not needed" list above stays refused until a real use appears.
 

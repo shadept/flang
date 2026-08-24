@@ -95,24 +95,6 @@ pub fn resolve_import(ctx: &ResolveCtx, segs: &List(String), allocator: &Allocat
     return null
 }
 
-// The template-expansion sidecar of a source file: `foo.f` -> `foo.generated.f`
-// when that file exists on disk. Null when `file_path` is itself a generated
-// file, isn't a `.f` source, or has no sidecar. The bootstrap loads the
-// sidecar as an extra source of the same module, standing in for the template
-// expansion the C# compiler runs in memory (`#interface`, `#derive`, ...).
-pub fn generated_sidecar(file_path: String, allocator: &Allocator? = null) OwnedString? {
-    if ends_with(file_path, ".generated.f") { return null }
-    if !ends_with(file_path, ".f") { return null }
-    let sb = string_builder(0, allocator)
-    defer sb.deinit()
-    sb.append(file_path[0..(file_path.len - 2)])
-    sb.append(".generated.f")
-    let cand = sb.to_string()
-    if exists(cand.as_view()) { return Some(cand) }
-    cand.deinit()
-    return null
-}
-
 // Derive the dotted module name a source file's symbols register under.
 // Classifies the path under project / dependency / stdlib roots in the
 // same order `resolve_import` tries them; an unclassified path falls back
@@ -291,12 +273,8 @@ fn basename(path: String) String {
     return strip_source_ext(path[start..path.len])
 }
 
-// A source file's module stem: a trailing `.generated.f` (a template
-// expansion) or plain `.f` removed. The bootstrap treats `x.generated.f`
-// as another source of module `x`, mirroring how the C# compiler registers
-// generated content under its origin module path.
+// A source file's module stem: the `.f` extension removed.
 fn strip_source_ext(name: String) String {
-    if ends_with(name, ".generated.f") { return name[0..(name.len - 12)] }
     if ends_with(name, ".f") { return name[0..(name.len - 2)] }
     return name
 }
@@ -413,31 +391,9 @@ test "join_module_path: builds base/seg/seg.f from segments" {
     assert_true(p2.as_view() == "dep/src/io/file.f", "skips leading segment")
 }
 
-test "module_fqn: generated stdlib file registers under its origin module" {
-    let ctx = fixture_ctx()
-    defer ctx.deinit()
-    let f = module_fqn(&ctx, "stdlib/std/io/reader.generated.f")
-    defer f.deinit()
-    assert_true(f.as_view() == "std.io.reader", "strips .generated.f")
-}
 
-test "module_fqn: generated dependency file keeps its dep prefix" {
-    let ctx = fixture_ctx()
-    defer ctx.deinit()
-    let f = module_fqn(&ctx, "lib/flang_parser/src/token.generated.f")
-    defer f.deinit()
-    assert_true(f.as_view() == "flang_parser.token", "dep-prefixed, .generated.f stripped")
-}
 
-test "generated_sidecar: a generated file has no sidecar of its own" {
-    let s = generated_sidecar("stdlib/std/io/reader.generated.f")
-    assert_true(s.is_none(), "no sidecar-of-sidecar")
-}
 
-test "generated_sidecar: a non-source path has no sidecar" {
-    let s = generated_sidecar("stdlib/std/io/reader.txt")
-    assert_true(s.is_none(), "only .f sources have sidecars")
-}
 
 test "resolve_ctx normalises a backslash stdlib root" {
     // An absolute argv[0]-derived path on Windows arrives with `\` separators;

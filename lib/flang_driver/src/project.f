@@ -99,11 +99,9 @@ pub fn current_platform(self: &Project) &PlatformConfig {
 // Expand a source glob (e.g. `src/**/*.f`) into owned file paths, relative
 // to the current directory. Returns an empty list on a glob error.
 //
-// `x.generated.f` template-expansion sidecars are excluded: they are folded
-// into their origin module by `combine_with_sidecar` at load time, and
-// loading one as its own entry would create a second module under the same
-// FQN whose import-less visibility set clobbers the origin's (every std.*
-// call in the origin then reports E2004).
+// `x.generated.f` files are `--emit-generated` debug output, never input:
+// template expansion is in memory (RFC-021). They are skipped so a stale
+// emission next to its origin cannot become a second module.
 pub fn glob_sources(pattern: String, allocator: &Allocator? = null) List(OwnedString) {
     let out: List(OwnedString) = list(0, allocator)
     let r = glob(pattern, allocator)

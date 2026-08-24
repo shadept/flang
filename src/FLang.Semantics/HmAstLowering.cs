@@ -577,7 +577,7 @@ public class HmAstLowering
             // Check for function reference
             var idType = _types.GetResolvedType(id);
             if (idType is FunctionType)
-                return new FunctionReferenceValue(id.Name, _layout.Lower(idType));
+                return new FunctionReferenceValue(id.ResolvedFunctionTarget?.SymbolBaseName ?? id.Name, _layout.Lower(idType));
 
             // Check for another global constant
             if (_globalConstants.TryGetValue(id.Name, out var existing))
@@ -1226,7 +1226,7 @@ public class HmAstLowering
         var fnType = GetFunctionHmType(fn);
         var retIrType = _layout.Lower(fnType.ReturnType);
 
-        var irFn = new IrFunction(fn.Name, retIrType);
+        var irFn = new IrFunction(fn.SymbolBaseName, retIrType);
         _currentFunction = irFn;
         _ctx = new BlockBuildContext(irFn, _layout);
 
@@ -1722,7 +1722,8 @@ public class HmAstLowering
         }
 
         // 2. Call iter(&iterable) -> IteratorStruct
-        var iterResult = _currentBlock.EmitCall(forLoop.ByRef ? "iter_ref" : "iter", [iterableVal], iteratorIrType, iterCalleeParamTypes);
+        var iterName = forLoop.ResolvedIterFunction?.SymbolBaseName ?? (forLoop.ByRef ? "iter_ref" : "iter");
+        var iterResult = _currentBlock.EmitCall(iterName, [iterableVal], iteratorIrType, iterCalleeParamTypes);
 
         // 3. Set up the pointer we pass to next(). If iter returned a reference,
         //    the returned value IS the pointer — use it directly. Otherwise
@@ -1751,7 +1752,8 @@ public class HmAstLowering
         var nextCalleeParamTypes = new List<IrType>();
         foreach (var p in forLoop.ResolvedNextFunction.Parameters)
             nextCalleeParamTypes.Add(GetIrType(p));
-        var nextResult = _currentBlock.EmitCall("next", [iteratorPtr], optionIrType, nextCalleeParamTypes);
+        var nextName = forLoop.ResolvedNextFunction?.SymbolBaseName ?? "next";
+        var nextResult = _currentBlock.EmitCall(nextName, [iteratorPtr], optionIrType, nextCalleeParamTypes);
 
         if (IsNicheOption(optionIrType))
         {
@@ -2177,7 +2179,7 @@ public class HmAstLowering
 
         // Check for function reference
         if (inferredType is FunctionType)
-            return new FunctionReferenceValue(id.Name, GetIrType(id));
+            return new FunctionReferenceValue(id.ResolvedFunctionTarget?.SymbolBaseName ?? id.Name, GetIrType(id));
 
         // Check for global constant
         if (_globalConstants.TryGetValue(id.Name, out var globalVal))
@@ -2326,7 +2328,7 @@ public class HmAstLowering
                     var derefRetIrType = _layout.Lower(derefHmType.ReturnType);
 
                     var isForeignDeref = (derefFn.Modifiers & FunctionModifiers.Foreign) != 0;
-                    receiverVal = _currentBlock.EmitCall(derefFn.Name, [receiverVal], derefRetIrType, calleeParams,
+                    receiverVal = _currentBlock.EmitCall(derefFn.SymbolBaseName, [receiverVal], derefRetIrType, calleeParams,
                         isForeign: isForeignDeref);
                 }
 
@@ -2441,8 +2443,8 @@ public class HmAstLowering
         }
         AfterUfcsReceiver:
 
-        // Resolve target function name
-        var targetName = call.ResolvedTarget?.Name ?? call.FunctionName;
+        // Resolve target function name (module-qualified - see SymbolBaseName)
+        var targetName = call.ResolvedTarget?.SymbolBaseName ?? call.FunctionName;
         var isForeign = call.ResolvedTarget != null &&
                         (call.ResolvedTarget.Modifiers & FunctionModifiers.Foreign) != 0;
 
@@ -2834,7 +2836,7 @@ public class HmAstLowering
         var callRetIrType = _layout.Lower(fnHmType.ReturnType);
 
         var isForeignOp = (fn.Modifiers & FunctionModifiers.Foreign) != 0;
-        var callResult = _currentBlock.EmitCall(fn.Name, args, callRetIrType, calleeIrParamTypes,
+        var callResult = _currentBlock.EmitCall(fn.SymbolBaseName, args, callRetIrType, calleeIrParamTypes,
             isForeign: isForeignOp);
 
         // Auto-derived op_eq/op_ne: negate the complement's result
@@ -2962,7 +2964,7 @@ public class HmAstLowering
                 var retIrType = _layout.Lower(fnHmType.ReturnType);
 
                 var isForeign = (derefFn.Modifiers & FunctionModifiers.Foreign) != 0;
-                baseVal = _currentBlock.EmitCall(derefFn.Name, [baseVal], retIrType, calleeParams,
+                baseVal = _currentBlock.EmitCall(derefFn.SymbolBaseName, [baseVal], retIrType, calleeParams,
                     isForeign: isForeign);
                 baseIrType = retIrType;
 
@@ -3303,7 +3305,7 @@ public class HmAstLowering
                     var derefRetIrType = _layout.Lower(derefHmType.ReturnType);
 
                     var isForeignDeref = (derefFn.Modifiers & FunctionModifiers.Foreign) != 0;
-                    baseVal = _currentBlock.EmitCall(derefFn.Name, [baseVal], derefRetIrType, calleeParams,
+                    baseVal = _currentBlock.EmitCall(derefFn.SymbolBaseName, [baseVal], derefRetIrType, calleeParams,
                         isForeign: isForeignDeref);
                     baseIrType = derefRetIrType;
 
@@ -3387,7 +3389,7 @@ public class HmAstLowering
             var retIrType = _layout.Lower(fnHmType.ReturnType);
 
             var isForeign = (opDerefFn.Modifiers & FunctionModifiers.Foreign) != 0;
-            var callResult = _currentBlock.EmitCall(opDerefFn.Name, [targetVal], retIrType, calleeParams,
+            var callResult = _currentBlock.EmitCall(opDerefFn.SymbolBaseName, [targetVal], retIrType, calleeParams,
                 isForeign: isForeign);
 
             // op_deref returns &T, load to get T (the dereference)
@@ -3464,7 +3466,7 @@ public class HmAstLowering
         foreach (var param in resolved.Function.Parameters)
             calleeIrParamTypes.Add(GetIrType(param));
 
-        _currentBlock.EmitCall(resolved.Function.Name, [baseVal, indexVal, val], TypeLayoutService.IrVoidPrim, calleeIrParamTypes);
+        _currentBlock.EmitCall(resolved.Function.SymbolBaseName, [baseVal, indexVal, val], TypeLayoutService.IrVoidPrim, calleeIrParamTypes);
         return new IntConstantValue(0, TypeLayoutService.IrVoidPrim);
     }
 
@@ -3669,7 +3671,7 @@ public class HmAstLowering
         if (calleeParamTypes.Count > 0)
             baseLv = DecayIndexBase(baseLv, index.Base, calleeParamTypes[0]);
         var args = CoerceOperatorArgs([baseLv, idxV], calleeParamTypes);
-        return _currentBlock.EmitCall(resolved.Function.Name, args, retIrType, calleeParamTypes,
+        return _currentBlock.EmitCall(resolved.Function.SymbolBaseName, args, retIrType, calleeParamTypes,
             isForeign: isForeign);
     }
 
@@ -3761,7 +3763,7 @@ public class HmAstLowering
             if (calleeIrParamTypes.Count > 0)
                 baseVal = DecayIndexBase(baseVal, index.Base, calleeIrParamTypes[0]);
             var valueArgs = CoerceOperatorArgs([baseVal, indexVal], calleeIrParamTypes);
-            return _currentBlock.EmitCall(resolved.Function.Name, valueArgs, retIrTypeV, calleeIrParamTypes);
+            return _currentBlock.EmitCall(resolved.Function.SymbolBaseName, valueArgs, retIrTypeV, calleeIrParamTypes);
         }
 
         // Built-in array/slice indexing
@@ -4044,7 +4046,7 @@ public class HmAstLowering
             foreach (var param in resolved.Function.Parameters)
                 calleeIrParamTypes.Add(GetIrType(param));
 
-            return _currentBlock.EmitCall(resolved.Function.Name, [leftVal, rightVal], retIrType, calleeIrParamTypes);
+            return _currentBlock.EmitCall(resolved.Function.SymbolBaseName, [leftVal, rightVal], retIrType, calleeIrParamTypes);
         }
 
         // Inline Option(T) ?? T: if Some(v) then v else right
@@ -5052,7 +5054,7 @@ public class HmAstLowering
             var fnHmType = GetFunctionHmType(fn);
             var callRetIrType = _layout.Lower(fnHmType.ReturnType);
 
-            return _currentBlock.EmitCall(fn.Name, [actual, literal], callRetIrType, calleeIrParamTypes);
+            return _currentBlock.EmitCall(fn.SymbolBaseName, [actual, literal], callRetIrType, calleeIrParamTypes);
         }
 
         // Primitive type — use built-in equality

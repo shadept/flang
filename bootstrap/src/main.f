@@ -37,6 +37,7 @@ type Cli = struct {
     show_help: bool
     show_version: bool
     verbose: bool
+    emit_generated: bool
     check: bool
     subcommand: String
     rest_index: usize
@@ -66,7 +67,7 @@ pub fn main() i32 {
     }
 
     return cli.subcommand match {
-        "build" => run_build(argv, cli.rest_index, cli.verbose, cli.stdlib_path, cli.check, cli.target_os, cli.target_arch)
+        "build" => run_build(argv, cli.rest_index, cli.verbose, cli.stdlib_path, cli.check, cli.target_os, cli.target_arch, cli.emit_generated)
         "fmt" => spawn_tool("flang_fmt", argv, cli.rest_index, cli.verbose)
         "lsp" => spawn_tool("flang_lsp", argv, cli.rest_index, cli.verbose)
         "cst" => spawn_tool("cst_explorer", argv, cli.rest_index, cli.verbose)
@@ -81,7 +82,7 @@ pub fn main() i32 {
 // argument as the subcommand. Index 0 is the program name and is skipped.
 fn parse_cli(argv: String[]) Cli {
     let cli: Cli
-    let opts = getopts("h(help)V(version)v(verbose)c(check)s(stdlib-path):T(target-os):A(target-arch):", argv, 1)
+    let opts = getopts("h(help)V(version)v(verbose)c(check)g(emit-generated)s(stdlib-path):T(target-os):A(target-arch):", argv, 1)
 
     // Drive opts.next() manually rather than `for r in opts` - std.env's
     // `iter(&GetOpt)` returns a *copy* of the iterator state, so a
@@ -95,6 +96,7 @@ fn parse_cli(argv: String[]) Cli {
                 if c == 'h' { cli.show_help = true }
                 if c == 'V' { cli.show_version = true }
                 if c == 'v' { cli.verbose = true }
+                if c == 'g' { cli.emit_generated = true }
                 if c == 'c' { cli.check = true }
             }
             OptArg(c, val) => {
@@ -144,6 +146,7 @@ fn print_help() {
     println("  -h, --help          show this help")
     println("  -V, --version       show version")
     println("  -v, --verbose       verbose output")
+    println("  -g, --emit-generated  write template expansions to <origin>.generated.f (debug)")
     println("  -c, --check         type-check only (no codegen or link)")
     println("  -T, --target-os     target OS for #if evaluation (windows|linux|macos)")
     println("  -A, --target-arch   target arch for #if evaluation (x86_64|arm64|x86)")
@@ -171,7 +174,7 @@ fn unknown_subcommand(name: String) i32 {
 // multi-module pipeline as project mode, so its imports and the stdlib
 // resolve; with no argument, load `flang.toml` from the current directory
 // and build the project.
-fn run_build(argv: String[], rest: usize, verbose: bool, stdlib_path: String, check_only: bool, target_os: String, target_arch: String) i32 {
+fn run_build(argv: String[], rest: usize, verbose: bool, stdlib_path: String, check_only: bool, target_os: String, target_arch: String, emit_generated: bool) i32 {
     const target_opt = resolve_target(target_os, target_arch)
     if target_opt.is_none() { return 1 }
     const target = target_opt.unwrap()
@@ -181,14 +184,14 @@ fn run_build(argv: String[], rest: usize, verbose: bool, stdlib_path: String, ch
         const path = argv[rest]
         if ends_with(path, ".f") {
             const out = output_path_for(path)
-            return build_single_file(path, out, verbose, stdlib.as_view(), check_only, target)
+            return build_single_file(path, out, verbose, stdlib.as_view(), check_only, target, emit_generated)
         }
         const msg = $"bootstrap: `build` takes a `.f` file or no argument (got `{path}`)"
         defer msg.deinit()
         println(msg.as_view())
         return 1
     }
-    return build_project(verbose, stdlib.as_view(), check_only, target)
+    return build_project(verbose, stdlib.as_view(), check_only, target, emit_generated)
 }
 
 // The compile-time context for this build: host values, overridden by
@@ -251,7 +254,7 @@ fn dir_of(path: String) String {
 // Project mode: parse `flang.toml`, glob its sources, resolve imports
 // across the whole project (plus the auto-imported prelude), type-check
 // every module together, then lower the lot to one executable.
-fn build_project(verbose: bool, stdlib_path: String, check_only: bool, target: ComptimeCtx) i32 {
+fn build_project(verbose: bool, stdlib_path: String, check_only: bool, target: ComptimeCtx, emit_generated: bool) i32 {
     if !exists("flang.toml") {
         println("bootstrap: no flang.toml in the current directory")
         return 1
@@ -291,7 +294,7 @@ fn build_project(verbose: bool, stdlib_path: String, check_only: bool, target: C
 
 // Single-file mode: the file is the sole entry of a project-less build, so
 // its imports resolve against the stdlib and the working directory.
-fn build_single_file(path: String, out: String, verbose: bool, stdlib_path: String, check_only: bool, target: ComptimeCtx) i32 {
+fn build_single_file(path: String, out: String, verbose: bool, stdlib_path: String, check_only: bool, target: ComptimeCtx, emit_generated: bool) i32 {
     let ctx = single_file_ctx(stdlib_path)
     defer ctx.deinit()
     ctx.set_comptime(target)
@@ -303,6 +306,10 @@ fn build_single_file(path: String, out: String, verbose: bool, stdlib_path: Stri
     let unit = analyze_project(&ctx, &entries)
     defer unit.deinit()
 
+    if emit_generated {
+        const n = unit.write_generated()
+        if verbose { const gm = $"  wrote {n} generated file(s)"; defer gm.deinit(); println(gm.as_view()) }
+    }
     return finish_build(&unit, path, out, verbose, check_only, stdlib_path)
 }
 

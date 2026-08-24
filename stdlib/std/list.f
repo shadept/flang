@@ -19,6 +19,11 @@ pub type List = struct(T) {
 
 const DEFAULT_CAPACITY: usize = 16
 
+
+pub fn list(capacity: usize, allocator: &Allocator) List($T) {
+    return list(capacity, Some(allocator))
+}
+
 pub fn list(capacity: usize, allocator: &Allocator? = null) List($T) {
     if capacity == 0 {
         let empty: List(T)
@@ -64,9 +69,11 @@ pub fn list(source: List($T), allocator: &Allocator? = null) List(T) {
 pub fn deinit(self: &List($T)) {
     if self.cap > 0 {
         // Deinit all live elements
-        for i in 0..self.len as isize {
-            const elem: &T = self.ptr + (i as usize)
-            elem.deinit()
+        // TODO use #if to check if T supports deinit(&T)
+        for i in 0..self.len {
+            const elem = self.get_ref(i)
+            const elem2 = elem.unwrap()
+            elem2.deinit()
         }
         self.allocator.or_global().free(slice_from_raw_parts(self.ptr, self.cap))
     }

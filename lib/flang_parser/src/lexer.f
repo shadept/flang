@@ -74,10 +74,13 @@ pub type Lexer = struct {
 // arena / fixed-buffer allocator when you want all lex output to share
 // a single lifetime that can be dropped in one shot. Stored as-passed;
 // allocation leaves resolve it per use.
-pub fn lexer(source: String, allocator: &Allocator? = null) Lexer {
+// `start` lexes from a byte offset into `source` (offsets stay absolute)
+// - template expansion uses it to parse an expression inside a string
+// literal hole without re-slicing the text.
+pub fn lexer(source: String, allocator: &Allocator? = null, start: usize = 0) Lexer {
     return .{
         source = source,
-        position = 0,
+        position = start,
         line = 0,
         allocator = allocator,
         interp_stack = list(0, allocator),
