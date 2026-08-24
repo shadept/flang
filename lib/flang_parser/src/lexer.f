@@ -440,6 +440,10 @@ fn lex_number(self: &Lexer) TokenKind {
             and (is_hex_digit(text[self.position]) or text[self.position] == '_') {
             self.position = self.position + 1
         }
+        // A hex literal takes the same `u8`/`i32`/... suffixes as a
+        // decimal one (`0xffu8`) - returning before the suffix scan
+        // left the suffix behind as a stray identifier token.
+        self.scan_int_suffix()
         return TokenKind.Integer
     }
 
@@ -489,6 +493,15 @@ fn lex_number(self: &Lexer) TokenKind {
 
     if is_float { return TokenKind.Float }
 
+    self.scan_int_suffix()
+    return TokenKind.Integer
+}
+
+// Consume a trailing `i8`/`u64`/`usize`/... integer suffix, backtracking
+// when the identifier tail is not a valid suffix (`0xffuv` keeps `uv`
+// as its own token).
+fn scan_int_suffix(self: &Lexer) {
+    const text = self.source
     if self.position < text.len
         and (text[self.position] == 'i' or text[self.position] == 'u') {
         const suffix_start = self.position
@@ -500,7 +513,6 @@ fn lex_number(self: &Lexer) TokenKind {
             self.position = suffix_start
         }
     }
-    return TokenKind.Integer
 }
 
 fn is_valid_int_suffix(s: String) bool {

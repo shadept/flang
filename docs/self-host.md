@@ -52,7 +52,7 @@ cheaper than implementing it.
 | CST parsing | ✅ | round-trips every in-tree source byte-identical via `flang_fmt` |
 | AST projection | ✅ | `flang_parser.projector` |
 | Name resolution + imports | ✅ | project-wide; type names resolve program-wide (import-strict later) |
-| Type inference (HM) | ⚠️ | 0 errors self-checking compiler + stdlib (99 modules) *including every instantiated generic body* (M10); 1 expression form (`a?.b`) is still unvisited and rejection power lags the reference — see the type-checking section below |
+| Type inference (HM) | ⚠️ | 0 errors self-checking compiler + stdlib (99 modules) *including every instantiated generic body* (M10); every `Expr` form is now visited (`a?.b` closed 2026-08-24) but rejection power lags the reference — see the type-checking section below |
 | AST → FIR lowering | ✅* | M11 landed 2026-08-21: everything `main`'s graph needs lowers — 3593 functions emit, 15 refusals remain, all off the entry path (SIMD-intrinsic csv internals, `read_all_inplace`, `readline`); refusal (never miscompile) still guards those |
 | C backend (FIR → C99 → exe) | ✅ | for all FIR the lowering emits; links stdlib C runtime sidecars |
 | Full self-build | ✅ | stage-1 (2026-08-21), then stage-2 and stage-3 (2026-08-22): every stage builds the full 99-module project. `-v` prints the per-function skip report with reasons |
@@ -74,7 +74,7 @@ not mean it *rejects* what the reference rejects. Two axes:
 | Calls: overloads, defaults window, UFCS (+`op_deref` peel), fn-field + indirect | ✅ | everywhere | named-argument calls fall back to a fresh var |
 | Enum variant construction (incl. payloads) | ✅ | ~1550/60+ (`Some` 645, `Enum.Variant(...)` 475, `None` 243, `Ok`/`Err` 185) | recorded as `RtEnumVariant` for lowering |
 | Struct literals, member access (substituted generic fields) | ✅ | everywhere | named generic literal without args is E2019 |
-| `if`/`match` joins (order-independent, `Never` identity) | ✅ | everywhere | E2074/E2075 |
+| `if`/`match` joins (order-independent, `Never` identity) | ✅ | everywhere | E2074/E2075. 2026-08-24: a chained `else if` (a bare `&IfExpr`, not an `Expr`) now RECORDS its joined type — unrecorded, lowering's `node_ty` defaulted the nested join to i32 and truncated aggregate arm values through the block param (`Ord`-returning if-chains miscompiled) |
 | Assignment, address-of, deref, casts, tuples, ranges, indexing | ✅ | `as` casts: 845/75 | index operator pick recorded with `is_ref_form`. M10: a BARE numeric literal cast operand takes the target type (`0xFFFF_FFFF as u64` is a u64 constant); tuple projection `t.0` types as the element |
 | Unary ops (`-x`, `!x`, `~x`) | ✅ | `!` 191/28, `~` 35/12, neg ~5 | M7: `!` unifies with bool; `-`/`~` type as their operand. Numeric-ness of `-`/`~` not yet *enforced* (rejection-power gap); no `op_neg`/`op_not`/`op_bnot` dispatch to user types (M11, with binary — zero in-tree users today) |
 | Lambdas / closures (RFC-014) | ✅ | 23/5 | landed 2026-08-20, no-clone: `check_lambda` checks the literal's body in place (captured names resolve through their outer scopes; no `self.x` rewrite). Unannotated params mint fresh vars pinned by context — including *through* a `$F` slot: `process_pending` admits signatures whose vars sit inside `Func` types, the instantiation's body re-check pins them at the indirect call, and the spec re-keys under its settled signature (`rekey`; twins that settle identical dedup at emission by symbol). Non-capturing → `LambdaInfo` (overlay-scoped: one record per instantiation) typed as a bare `fn`; capturing → synthesized env-struct nominal + entry in the global `closures` dispatch table, typed as the anonymous nominal. E2111 (closure into bare-fn slot, as an overload-failure hint), E2112 (assign to capture), E2113 (transitive nested captures) all report |
@@ -85,16 +85,14 @@ not mean it *rejects* what the reference rejects. Two axes:
 | For-over-iterators (protocol) | ✅ | 25/19 | M11: `iter(&Iterable) → State` then `next(&State) → Option(T)` resolved like operators (self-iterators returning `&State` probe the unwrapped shapes second, reference parity); the `iter` pick records on the body-block node, `next` on the for node; the loop var is `T` |
 | Overloaded fn names as values | ✅ | `owned(v, deinit)`, `.map(deinit)` | M11, ticket 019 §4: a multi-candidate name in value position parks a fresh var; once context pins its Func shape, `resolve_fn_name_values` (drained per body scope, before the spec drain) picks the overload by those parameter types and records `RtFunction`/`RtSpecialized` |
 | Reified types (`Type(T)`, `size_of`) | ✅ (minimal) | 31 + 8 + 26 sites | M11: `Type(T)` values ARE TypeInfo — `struct_field_lookup` redirects `Type` field access to TypeInfo's definition, so `ty.size` types as usize instead of a fresh var |
-| `a?.b` | ❌ | 3/3 — rewritable-away | unvisited subtree |
+| `a?.b` | ✅ | 0 (rewritten away) — input programs use it | 2026-08-24: Option receiver, field lookup on the inner struct (substituted), types as `Option(field)` with RFC-010 flattening (an Option field passes through unwrapped) |
 | Specialization (eager monomorphization of generic fns) | ✅ | everywhere (`List`/`Dict`) | M10, **no AST clone**: node ids are span fingerprints, so instantiations of one template share every node id — each instantiation re-checks the ORIGINAL body with `$T` names bound to concrete types, recording into a private `InferenceResults` overlay (`Specialization.overlay`). Committed generic picks (calls, operators, `op_try`, indexing) become `PendingSpec`s; each body scope drains its own pendings after inference settles (register-before-check breaks self-recursion; depth cap 64 diagnoses runaway chains; un-inferable type args are E2001 at the call site). Function lookups during a re-check see the template module's imports UNIONED with the caller chain's (`fn_visibility`) — the deliberate loaded-context rule that lets `hash()` resolve for `Dict`; nominal/variant lookups do NOT widen (a caller's `Decl.Type(...)` variant must not capture `Type(T)`). Generic template bodies are otherwise **never validated** — errors surface per instantiation |
 | Templates (`#interface`, `#derive`, …) expanded natively | ✅ | every stdlib generator | 2026-08-23 (RFC-021 phase 4): `flang_parser/template.f` parses bodies, `comptime.f` evaluates (one evaluator with `#if`), `flang_typer/template_expand.f` runs the worklist between collect and resolve; generated decls append to the origin module. No sidecars anywhere; `-g/--emit-generated` writes them for debugging only |
 | `#if` compile-time conditionals evaluated | ✅ | 27/10 (incl. `file.f::open_flags`, in `main`'s graph) | landed 2026-08-20: conditions parse as real FLang expressions (`parse_expression` + `stop_at_brace`, paren-free `#if cond {` canonical), evaluated strictly (`flang_parser.comptime`: E2116 unknown name, E2117 non-bool, E2118 operand misuse — reference parity); only the active branch is checked; divergence = active branch's. Decl-level flattens once post-projection (`flatten_module_decls`, active decls spliced via `Module.set_decls`). `--target-os`/`--target-arch` override the context (threaded `ResolveCtx.comptime` → `Checker.comptime`/`LowerCtx.comptime`) |
 
-An unvisited subtree (`a?.b`) types as an unconstrained
-fresh var: the code around it may still check clean while errors
-inside it go unreported — the checker's biggest soundness caveat. The
-same applies to a generic template body that is never instantiated:
-per the M10 model it is never validated at all.
+Every `Expr` form is now visited. The remaining unvisited-subtree
+caveat is a generic template body that is never instantiated: per the
+M10 model it is never validated at all.
 
 ### Rejection power (does invalid code get diagnosed?)
 
@@ -103,6 +101,7 @@ per the M10 model it is never validated at all.
 | Type mismatches through unification (incl. coercion rules) | ✅ | |
 | Overload/arity failures (E2011/E2004) | ✅ | everywhere since M10 — instantiated bodies check with concrete types, so the old generic-body silencing is gone |
 | Unresolved unsuffixed literals (E2001) | ✅ | M10 post-inference sweep, reference parity |
+| Literal candidate sets in overload resolution | ✅ | 2026-08-24: an open literal var no longer unifies with ANY candidate param — `ikind(10)` against `{String, i64}` picked String by declaration order. `probe_candidate` rejects a pending-literal arg against a concrete non-primitive param (primitives, open vars, and Option-wrap stay legal) |
 | Un-inferable generic type arguments (E2001) | ✅ | M10 — at the call span; the reference silently skips and fails later at link |
 | Anonymous-literal field mismatches | ✅ | M10 — `resolve_anon_literals` unifies each `.{ f = v }` initializer against the nominal's declared field type once the literal's var settles |
 | Type parameters shadow nominals | ✅ | M10 — a project type named `E`/`T`/`K` no longer captures `$E` in stdlib signatures (`Binding.is_type_param`) |
@@ -133,7 +132,7 @@ current-state summary.
 | Lambdas / closures | ✅ | 23/5 | literal sites enqueue `PendingLambda` (with the active overlay) and emit after the main walk — non-capturing as a plain function, capturing as an `op_call` whose leading param is the env pointer and whose captured names bind to `gep`s into it (no copy; captures are read-only). The literal itself is a `FuncRef` or a stack-built env struct |
 | Global `const` declarations | ✅ | 101/17 | M11: each const becomes an aligned zeroed byte global plus a synthesized `__finit_*` function lowering its initializer (so vtables of fn pointers and cross-global addresses need no static-initializer support); `main` calls every SURVIVING init first, wired AFTER the drop pass, which also poisons any reader of a const whose init died (`reads … whose initializer was dropped`) — absent, never silently zero. Reads resolve through `RtConst(fqn)` targets the checker records on both the decl and every read |
 | `test` blocks (self-host `flang test`) | ❌ | dev workflow, not `main`'s graph | bootstrap CLI has no `test` subcommand |
-| UFCS receiver adaptation | ✅ | everywhere | M11: the receiver is adapted to the winner's first-parameter shape by MEMORY type (binding/field declared types — node types are rewritten by the checker's adaptation, so they cannot arbitrate): value→`&prim` passes the place's address, `&prim`→value loads through, same-representation prims (`usize` vs `u64` — declaration order arbitrates equal picks) interchange. Pushing the raw value against an adapted pick was a silent scalar miscompile. Stage-2 fixpoint (2026-08-22): a receiver that resolved through `op_deref` hops records the chain (`receiver_derefs`, per call node, hops drain-rewritten to specializations) and `lower_deref_receiver` calls each hop — the aggregate "value IS its address" shortcut passed `&Owned(StringBuilder)` as `&StringBuilder`, the stage-2 segfault. Call arguments (and value-form index receivers) also adapt array→slice decay now (`lower_arg_adapted`) |
+| UFCS receiver adaptation | ✅ | everywhere | M11: the receiver is adapted to the winner's first-parameter shape by MEMORY type (binding/field declared types — node types are rewritten by the checker's adaptation, so they cannot arbitrate): value→`&prim` passes the place's address, `&prim`→value loads through, same-representation prims (`usize` vs `u64` — declaration order arbitrates equal picks) interchange. Pushing the raw value against an adapted pick was a silent scalar miscompile. Stage-2 fixpoint (2026-08-22): a receiver that resolved through `op_deref` hops records the chain (`receiver_derefs`, per call node, hops drain-rewritten to specializations) and `lower_deref_receiver` calls each hop — the aggregate "value IS its address" shortcut passed `&Owned(StringBuilder)` as `&StringBuilder`, the stage-2 segfault. Call arguments (and value-form index receivers) also adapt array→slice decay now (`lower_arg_adapted`). 2026-08-24: a TEMPORARY receiver (`n.double().add_five()`) spills into a fresh slot and passes its address instead of refusing; `lower_arg_adapted` also decays `&[T; N]` (its value is already the elements' base); `let` initializers adapt too (`let xs: i32[] = [...]` bound raw array bytes as a slice — garbage length) |
 | Template directives (`#enum_utils`, `#derive`, `#interface`, …) | ✅ | every stdlib generator | expanded natively (RFC-021 phase 4, 2026-08-23) |
 | `#if` compile-time conditionals | ✅ | 27/10 | statement-level splices the active branch's statements at `lower_stmt`; decl-level is already flattened before lowering. The `comptime.f` evaluator itself joins the M11 emission frontier (`String ==` dispatch), like most of the checker |
 
@@ -164,7 +163,7 @@ current-state summary.
 | Operators dispatching to user `op_*` fns (aggregate operands) | ✅ (comparisons) | String `==` everywhere | M11: comparison dispatch lands (`lower_operator_binary`) with negation and `op_cmp`-derivation — the Ord tag test resolves Less/Equal/Greater INDICES from the definition, because this lowering stores declaration indices as tags (explicit variant values like `Less = -1` are not honored — docs/known-issues.md). Payload-less enum `==`/`!=` is a builtin tag compare. ARITHMETIC `op_add`-style dispatch stays unimplemented (zero in-tree users) |
 | Struct literals (concrete, incl. explicit generic args) | ✅ | everywhere | `Pair { … }` without args is E2019 |
 | Anonymous `.{ … }` literals | ✅ | **192/50** | typed via nominal coercion; M10 adds the deferred field pass (`resolve_anon_literals`) so initializers actually unify against the nominal's field types — mismatches report, unsuffixed numeric fields pin |
-| Member access (nested paths, place + value) | ✅ | everywhere | generic fields load at substituted widths |
+| Member access (nested paths, place + value) | ✅ | everywhere | generic fields load at substituted widths. 2026-08-24: auto-deref recurses — `(&&T).x` peels every reference hop in both checker and lowering (depth−1 loads through); `arr.len`/`arr.ptr` on fixed arrays now CHECK as usize/`&elem` (previously fresh vars — a cast operand var panicked `ty_to_ir`) |
 | Address-of `&x`, dereference `p.*` | ✅ | everywhere | `x.*` on a nominal dispatches its `op_deref` (2026-08-22): the checker records the pick as an operator on the deref node and types it as `T`; lowering's `deref_address` calls it in every position - value, place (`&b.*`, assignment), and UFCS receiver (`b.*.m()`). Previously the node typed as a fresh var and free-call arguments silently picked the wrong overload (harness: `op_deref/op_deref_overload_positions.f`) |
 | Direct calls, UFCS, overloads | ✅ | everywhere | |
 | Enum variant construction (`Some(x)`, `Color.Red`, `None`) | ✅ | ~1550/60+ | M7: tagged form builds tag-then-payload into a fresh slot; niche `Option(&T)` is a retype (`None` = null ptr, `Some(p)` = its payload ptr). Multi-payload construction refuses (2 sites, matching the pattern side) |
@@ -177,7 +176,7 @@ current-state summary.
 | Tuple literals `(a, b)` | ✅ | 9/6 (+ std.conv return tuples) | M11: element stores at the tuple layout's offsets; `t.0` projection geps through `member_field`; the empty tuple is unit. A unit `()` variant payload (`Ok(())`) stores and binds nothing |
 | `a?` (op_try early return) | ✅ | 28/13 | M8 machinery + M10 specialization: a generic `op_try` now instantiates and the caller lowers against its specialization (test: "postfix ? through a generic op_try lowers via its specialization") |
 | `a ?? b` (coalesce) | ✅ | 5/4 | M8: built-in Option branch, short-circuit right side; niche and tagged, unwrap and chain forms |
-| `a?.b` (null propagation) | ❌ | **3/3 — rewritable-away** | |
+| `a?.b` (null propagation) | ✅ | 0 (rewritten away) — input programs use it | 2026-08-24: tag branch, field projected out of the payload, wrapped in `Some` (or passed through when the checker flattened); niche results load/null the field pointer directly |
 | Bare ranges `a..b` as values | ✅ | index/slice args | M11 `lower_range_value`; bare PARTIAL ranges outside index position still refuse (no bound to default from) |
 
 ## Lowering — match patterns
@@ -186,10 +185,10 @@ current-state summary.
 |---|---|---|---|
 | Wildcard, variable bindings | ✅ | everywhere | aggregate bindings copy (value semantics) |
 | Int / bool / char / byte / float / `null` literals | ✅ | everywhere | float patterns compare with ordered fcmp (M9); string patterns refuse — comparing one is a `String ==` call, which operator dispatch does not record yet |
-| Ranges `lo..hi` | ✅ | used | |
-| Enum variants, single payload | ✅ | everywhere | tagged + niche |
+| Ranges `lo..hi` | ✅ | used | 2026-08-24: the PROJECTOR now actually produces `Pattern.Range` (`a..b`, `a..=b`, `..b`, `a..` with single-literal bounds) — before this every range pattern projected as `Error` and E2115'd; the checker/lowering support had no producer |
+| Enum variants, single payload | ✅ | everywhere | tagged + niche. 2026-08-24: refutable payload SUBPATTERNS (`Reading(0)`, `Ok(None)`) now actually test — `variant_test` ANDs each subpattern's test at the declared payload type; before, `Reading(0)` matched any `Reading` (tag-only test, subpattern silently treated as a binding). String subpatterns inside payloads refuse (`payload_test_safe`) — an `op_eq` call on wrong-tag bytes is not a masked load |
 | Enum variants, multi payload | ✅ | `OptArg(c, val)` in getopt + 2 | M11: `variant_payload_offsets` (shared payload offset + the variant's struct-like internal layout) drives both construction and pattern binding |
-| Or-patterns (non-binding) | ✅ | used | binding alternatives refuse |
+| Or-patterns (non-binding) | ✅ | used | 2026-08-24: projector produces `Pattern.Or` (top-level `\|` split); bare-variant alternatives (`Red \| Green`) no longer misclassify as bindings. Binding alternatives still refuse |
 | Struct / tuple destructuring patterns | ❌ | **0 sites — not needed** | keep refused until a use appears |
 | Guards | ✅ | used | |
 
@@ -200,9 +199,13 @@ no self-hosting progress; a handful of call-site rewrites removes the
 need entirely:
 
 - struct/tuple destructuring patterns (0),
-  named arguments (2), `?.` null propagation (3),
+  named arguments (0 — the 2 sites were rewritten),
   variadic *calls* (0 — declarations only), foreign aggregate
   signatures (0), `x as bool` (0).
+
+`?.` null propagation left this list on 2026-08-24: its 3 sites had
+been rewritten away, but a *working* compiler must accept input
+programs that use it — it is implemented, not avoided.
 
 The 15 remaining refusals (2026-08-21, all off `main`'s path): the
 csv SIMD internals (`v128_*` intrinsic calls), `read_all_inplace`,

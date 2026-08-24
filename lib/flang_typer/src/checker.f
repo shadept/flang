@@ -1445,6 +1445,7 @@ fn check_expr_kind(self: &Checker, expr: &Expr) Ty {
         Range(r) => check_range(self, &r),
         Unary(u) => check_unary(self, &u),
         Coalesce(co) => check_coalesce(self, &co),
+        NullPropagation(np) => check_null_prop(self, &np),
         Try(tr) => check_try(self, &tr),
         InterpolatedString(is) => check_interpolation(self, &is),
         ArrayLit(al) => check_array_literal(self, &al),
@@ -2143,6 +2144,39 @@ fn check_coalesce(self: &Checker, c: &CoalesceExpr) Ty {
     }
     unify_expected(self, rhs, t, E_TYPE_MISMATCH, c.span)
     return t
+}
+
+// `a?.b` (RFC-010) - the receiver must be `Option(T)` with `T` a struct
+// carrying field `b`. Types as `Option(field)` - unless the field is
+// already an Option, which passes through unwrapped (§"`?.` lifts and
+// flattens": no `Option(Option(U))`). Mirrors the reference's
+// `InferNullPropagation`; `struct_field_lookup` substitutes a generic
+// inner's type arguments like any field read.
+fn check_null_prop(self: &Checker, np: &NullPropagationExpr) Ty {
+    let recv = self.engine.resolve(check_expr(self, np.receiver))
+    // Poison absorbs: the receiver's error is already reported.
+    let is_err = recv match { Error => true, _ => false }
+    if is_err { return Ty.Error }
+    let inner = option_inner(self, &recv)
+    if inner.is_none() {
+        push_diag_e(self, np.span, E_TYPE_MISMATCH,
+            from_view("null propagation `?.` requires an Option receiver"))
+        return self.engine.fresh_var()
+    }
+    let t = inner.unwrap()
+    let fty = struct_field_lookup(self, &t, np.member)
+    if fty.is_none() {
+        push_diag_e(self, np.span, E_TYPE_MISMATCH,
+            from_view("`?.` names no field on the Option's inner type"))
+        return self.engine.fresh_var()
+    }
+    let f = self.engine.resolve(fty.unwrap())
+    if option_inner(self, &f).is_some() { return f }
+    let id = self.nominals.by_fqn.get(FQN_OPTION)
+    if id.is_none() { return Ty.Error }
+    let args: List(Ty) = list(1, self.allocator)
+    args.push(f)
+    return Ty.Nominal(NominalRef { id = id.unwrap(), args = args })
 }
 
 // `expr?` (RFC-009). The reference desugars into a synthesized
@@ -3886,9 +3920,18 @@ fn probe_candidate(self: &Checker, c: &FunctionScheme, arg_tys: &List(Ty)) u32? 
     let cost = 0u32
     let i = 0usize
     while ok and i < checked {
-        self.engine.unify(arg_tys[i], f.params[i]) match {
-            Unified(u) => cost = cost + u.cost,
-            _ => ok = false,
+        // The literal candidate-set constraint: a bare `10`'s open var
+        // would unify with ANY param - `String` included, and declaration
+        // order would commit it. A pending numeric literal may only meet
+        // a primitive, an open var (generics), or Option (wrap coercion).
+        if is_literal_var(self, &arg_tys[i]) and !literal_can_take(self, &f.params[i]) {
+            ok = false
+        }
+        if ok {
+            self.engine.unify(arg_tys[i], f.params[i]) match {
+                Unified(u) => cost = cost + u.cost,
+                _ => ok = false,
+            }
         }
         i = i + 1
     }
@@ -3898,6 +3941,42 @@ fn probe_candidate(self: &Checker, c: &FunctionScheme, arg_tys: &List(Ty)) u32? 
     let omitted = if arg_tys.len < f.params.len { f.params.len - arg_tys.len } else { 0usize }
     if c.has_variadic and omitted > 0 { omitted = omitted - 1 }
     return Some(cost + (omitted as u32) * 100u32)
+}
+
+// Whether `ty` resolves to the still-open var of a pending numeric
+// literal (`10`, `3.14` with no suffix and nothing pinning them yet).
+// ponytail: linear scan of the pending list per probe; index by root
+// var if overload probing ever shows up in a profile.
+fn is_literal_var(self: &Checker, ty: &Ty) bool {
+    let vid = self.engine.resolve(ty.*) match {
+        Var(v) => v,
+        _ => return false,
+    }
+    for i in 0..self.pending_literals.len {
+        let pv = self.engine.resolve(self.pending_literals[i].ty) match {
+            Var(v2) => Some(v2),
+            _ => null,
+        }
+        if pv.is_some() {
+            if pv.unwrap().id == vid.id { return true }
+        }
+    }
+    return false
+}
+
+// What a pending numeric literal's var is allowed to meet in an overload
+// probe: a primitive, an open var (a generic's `$T`), or the well-known
+// Option (the wrap coercion pins the literal at the payload).
+fn literal_can_take(self: &Checker, ty: &Ty) bool {
+    return self.engine.resolve(ty.*) match {
+        Prim(_) => true,
+        Var(_) => true,
+        Nominal(n) => {
+            let id = self.nominals.by_fqn.get(FQN_OPTION)
+            id.is_some() and id.unwrap() == n.id
+        },
+        _ => false,
+    }
 }
 
 // A candidate's signature specialized fresh and viewed as a function.
@@ -3988,7 +4067,15 @@ fn check_if(self: &Checker, if_expr: &IfExpr) Ty {
     let else_ty = if_expr.else_branch match {
         NoElse => return Ty.Void,
         Block(b) => check_block(self, &b),
-        If(nested) => check_if(self, nested),
+        If(nested) => {
+            // A chained `else if` is a bare `&IfExpr`, not an `Expr`, so
+            // `check_expr`'s record never sees it - record its type here
+            // or lowering's `node_ty` defaults the join to i32 and an
+            // aggregate arm value gets truncated through the block param.
+            let t = check_if(self, nested)
+            self.results.record_type(node_id_of(nested.span), t)
+            t
+        },
     }
     return join_types(self, then_ty, else_ty, E_BRANCH_MISMATCH, if_expr.span)
 }
@@ -4084,7 +4171,28 @@ fn check_member(self: &Checker, ma: &MemberAccessExpr) Ty {
     if fty.is_some() { return fty.unwrap() }
     let tp = tuple_projection(self, &recv, ma.member)
     if tp.is_some() { return tp.unwrap() }
+    let am = array_member(self, &recv, ma.member)
+    if am.is_some() { return am.unwrap() }
     return self.engine.fresh_var()
+}
+
+// `arr.len` / `arr.ptr` on a fixed array (one reference peeled): usize
+// and `&elem` - the checker-side mirror of lowering's constant fold;
+// left untyped the member's var reached `ty_to_ir` under a cast.
+fn array_member(self: &Checker, recv: &Ty, member: String) Ty? {
+    let r = self.engine.resolve(recv.*)
+    let peeled = r match {
+        Ref(inner) => self.engine.resolve(inner.*),
+        _ => r,
+    }
+    let arr = peeled match {
+        Array(a) => Some(a),
+        _ => null,
+    }
+    if arr.is_none() { return null }
+    if member == "len" { return Some(Ty.Prim(PrimitiveKind.USize)) }
+    if member == "ptr" { return Some(self.engine.mk_ref(arr.unwrap().elem.*)) }
+    return null
 }
 
 // `t.0` / `t.1` - positional projection on a tuple-typed receiver (one
@@ -4191,9 +4299,15 @@ fn construct_variant(self: &Checker, id: NominalId, vname: String, arg_tys: &Lis
 // one-reference-peeled) type is not a struct or has no such field.
 fn struct_field_lookup(self: &Checker, recv: &Ty, name: String) Ty? {
     let z = self.engine.zonk(recv.*)
-    let peeled = z match {
-        Ref(inner) => inner.*,
-        _ => z,
+    // Auto-deref recurses: `(&&Point).x` peels every reference hop.
+    let peeled = z
+    loop {
+        let inner = peeled match {
+            Ref(i) => Some(i.*),
+            _ => null,
+        }
+        if inner.is_none() { break }
+        peeled = inner.unwrap()
     }
     let nr_opt = peeled match {
         Nominal(n) => Some(n),

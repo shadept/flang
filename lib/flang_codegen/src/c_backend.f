@@ -161,6 +161,21 @@ fn emit_preamble(sb: &StringBuilder) {
     // NAN / INFINITY for non-finite float constants (finite ones emit as
     // C99 hex-float literals - see `emit_float_const`).
     sb.append("#include <math.h>\n")
+    // POSIX IO headers, mirroring the reference preamble. Load-bearing
+    // for `open` and `ioctl`: both are VARIADIC in libc, and a call
+    // compiled against a fixed-arity extern passes the trailing argument
+    // in a register where the callee's va_arg reads the stack (arm64) -
+    // `open`'s creat mode arrived as garbage bits. The suppressed decls
+    // in `is_runtime_provided_symbol` make call sites compile against
+    // these headers' true prototypes instead.
+    sb.append("#ifdef _WIN32\n")
+    sb.append("#include <io.h>\n")
+    sb.append("#include <fcntl.h>\n")
+    sb.append("#else\n")
+    sb.append("#include <unistd.h>\n")
+    sb.append("#include <fcntl.h>\n")
+    sb.append("#include <sys/ioctl.h>\n")
+    sb.append("#endif\n")
     sb.append("\n")
     // FIR-mandated invariant: arithmetic right shift on signed integers.
     // The standard left this implementation-defined until C23.
@@ -225,6 +240,15 @@ fn is_runtime_provided_symbol(name: String) bool {
     if name == "puts" { return true }
     if name == "putchar" { return true }
     if name == "fflush" { return true }
+    // <unistd.h> / <fcntl.h> / <sys/ioctl.h>. `open` and `ioctl` are
+    // variadic in libc - a fixed-arity redeclaration miscompiles the
+    // trailing argument (see the preamble note); the rest would clash
+    // with the headers' prototypes the way the <string.h> set does.
+    if name == "open" { return true }
+    if name == "close" { return true }
+    if name == "read" { return true }
+    if name == "write" { return true }
+    if name == "ioctl" { return true }
     return false
 }
 

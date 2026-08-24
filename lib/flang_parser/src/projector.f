@@ -2621,8 +2621,117 @@ fn project_pattern_from_tokens(self: &Projector, tokens: List(Token), start: usi
         }
         return self.literal_pattern_for(tok, span)
     }
+    // `A | B | C` - top-level alternatives split at `|` (depth-guarded:
+    // a `|` inside a variant's payload parens belongs to the payload).
+    let depth: i32 = 0
+    let has_pipe = false
+    for i in 0..tokens.len {
+        const k = tokens[i].kind
+        if k == TokenKind.OpenParenthesis { depth = depth + 1 }
+        if k == TokenKind.CloseParenthesis { depth = depth - 1 }
+        if k == TokenKind.Pipe and depth == 0 { has_pipe = true }
+    }
+    if has_pipe {
+        let alts: List(Pattern) = list(2, Some(self.alloc))
+        depth = 0
+        let seg: usize = 0
+        for i in 0..tokens.len {
+            const k2 = tokens[i].kind
+            if k2 == TokenKind.OpenParenthesis { depth = depth + 1 }
+            if k2 == TokenKind.CloseParenthesis { depth = depth - 1 }
+            if k2 == TokenKind.Pipe and depth == 0 {
+                alts.push(self.payload_pattern_slice(tokens, seg, i))
+                seg = i + 1
+            }
+        }
+        alts.push(self.payload_pattern_slice(tokens, seg, tokens.len))
+        return Pattern.Or(OrPattern { span = span, alternatives = alts })
+    }
+
+    // `a..b` / `a..=b` / `..b` / `a..` - a top-level range token makes a
+    // range pattern with single-literal bounds.
+    let dd: usize = tokens.len
+    let inclusive = false
+    depth = 0
+    for i in 0..tokens.len {
+        const k3 = tokens[i].kind
+        if k3 == TokenKind.OpenParenthesis { depth = depth + 1 }
+        if k3 == TokenKind.CloseParenthesis { depth = depth - 1 }
+        if depth == 0 and dd == tokens.len {
+            if k3 == TokenKind.DotDot { dd = i }
+            if k3 == TokenKind.DotDotEquals { dd = i; inclusive = true }
+        }
+    }
+    if dd < tokens.len {
+        return self.range_pattern_from(tokens, dd, inclusive, span)
+    }
+
     // Multi-token: try `Qualifier.Name(...)` or `Name(...)` enum variant.
     return self.enum_variant_pattern_from_tokens(tokens, span)
+}
+
+// `lo..hi` in pattern position: at most one literal token on either side
+// of the range token; anything fancier degrades to Error (E2115 at
+// check time) rather than guess.
+fn range_pattern_from(self: &Projector, tokens: List(Token), dd: usize, inclusive: bool, span: SourceSpan) Pattern {
+    const a = self.alloc
+    let start_ref: &Expr? = null
+    let end_ref: &Expr? = null
+    if dd > 0 {
+        if dd != 1 { return Pattern.Error(ErrorPattern { span = span }) }
+        const b = self.range_bound_expr(tokens[0])
+        if b.is_none() { return Pattern.Error(ErrorPattern { span = span }) }
+        start_ref = Some(box(a, b.unwrap()))
+    }
+    if dd + 1 < tokens.len {
+        if dd + 2 != tokens.len { return Pattern.Error(ErrorPattern { span = span }) }
+        const b2 = self.range_bound_expr(tokens[dd + 1])
+        if b2.is_none() { return Pattern.Error(ErrorPattern { span = span }) }
+        end_ref = Some(box(a, b2.unwrap()))
+    }
+    return Pattern.Range(RangePattern {
+        span = span,
+        start = start_ref,
+        end = end_ref,
+        inclusive = inclusive,
+    })
+}
+
+// A range-bound literal token as an expression (`1..10`, `b'0'..=b'9'`).
+// Null for tokens no bound supports.
+fn range_bound_expr(self: &Projector, tok: Token) Expr? {
+    const span = self.span_from_token(tok)
+    if tok.kind == TokenKind.Integer {
+        const split = split_numeric_suffix(tok.text, false)
+        return Some(Expr.Lit(LiteralExpr {
+            span = span,
+            value = LiteralValue.Int(IntLiteral { span = span, text = split.body, suffix = split.suffix }),
+        }))
+    }
+    if tok.kind == TokenKind.Float {
+        const split = split_numeric_suffix(tok.text, true)
+        return Some(Expr.Lit(LiteralExpr {
+            span = span,
+            value = LiteralValue.Float(FloatLiteral { span = span, text = split.body, suffix = split.suffix }),
+        }))
+    }
+    if tok.kind == TokenKind.CharLiteral {
+        return Some(Expr.Lit(LiteralExpr {
+            span = span,
+            value = LiteralValue.Char(CharLiteral { span = span, text = strip_quotes(tok.text) }),
+        }))
+    }
+    if tok.kind == TokenKind.ByteLiteral {
+        let text = tok.text
+        if text.len >= 3 and text[0] == b'b' and text[1] == b'\'' {
+            text = slice_str(text, 2, text.len - 1)
+        }
+        return Some(Expr.Lit(LiteralExpr {
+            span = span,
+            value = LiteralValue.Byte(ByteLiteral { span = span, text = text }),
+        }))
+    }
+    return null
 }
 
 fn literal_pattern_for(self: &Projector, tok: Token, span: SourceSpan) Pattern {
