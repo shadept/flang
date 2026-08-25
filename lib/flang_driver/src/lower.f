@@ -84,7 +84,7 @@ import flang_typer.specialization
 import flang_typer.well_known
 import flang_codegen.fir
 import flang_codegen.builder
-import flang_driver.driver
+import flang_analysis.analyze
 import flang_driver.layout
 import flang_driver.symbol_table
 

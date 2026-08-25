@@ -45,11 +45,44 @@ flang_parser = { path = "../lib/flang_parser" }
 
 The dep's `[project].name` IS its import namespace; library files live directly under the source root, never inside a redundant `<source_root>/<name>/` subfolder. This mirrors how the current project resolves its own imports. Resolution is flat (no transitive deps), path-only (no registry, semver, or lockfile). Per-dep `[build.<os>]` libs/cflags/headers carry through to the consuming project's link line.
 
-### Self-hosted import resolution (`flang_driver`)
+### Self-hosted library layout
 
-The bootstrap compiler reimplements the same machinery in FLang. `flang_driver/resolver.f` is the port: `resolve_import` mirrors `TryResolveImportPath` (project-name, dependency-name, then include-path rules — stdlib root via the `--stdlib-path` flag, then the working dir), and `module_fqn` mirrors `DeriveModulePath` (the inverse, classifying a file path under the project / dependency / stdlib roots). Dependency source roots are derived exactly as the C# does — read each dep's `flang.toml`, take the static prefix of its `source` glob.
+The self-hosted compiler is five libraries plus the `bootstrap` exe. Edges run one way; `flang_driver` is the only one that sees both halves of the pipeline:
 
-`flang_driver/driver.f::analyze_project` is the BFS loader: it seeds the queue with the project's globbed entry sources plus the auto-imported `core.prelude`, follows each module's imports, deduplicates by file path, and type-checks the whole set through a single `check_all`. The module FQNs (not file paths) are passed as the per-module paths so symbol registration and visibility agree. Visibility is built in `flang_typer/checker.f::build_visibility` from the modules' `ImportDecl`s — `{M} ∪ imports(M)` then the `pub import` re-export closure, matching `GetVisibleModules`. `compile.f::build_program` lowers every module into one FIR program for a single link. `examples/multimod` is the end-to-end witness. Each module's text comes from `driver.f::read_source`, which returns a supplied buffer when the caller named that path in `analyze_project`'s optional `overrides` map (an editor's unsaved text) and reads the file otherwise; keys are the forward-slash paths `resolver.normalize_sep` produces, so a key spelled any other way misses silently and compiles the stale file. `flang build` passes no overrides. (Known gap: structs crash the bootstrap typer — see [known-issues.md](known-issues.md).)
+```
+        flang_core        flang_codegen
+         ^      ^              ^
+         |      |              |
+  flang_parser  |              |
+         ^      |              |
+         |      |              |
+    flang_typer |              |
+         ^   ^  |              |
+         |   |  |              |
+         | flang_analysis      |
+         |   ^                 |
+         |   |                 |
+        flang_driver ----------+
+             ^
+          bootstrap
+```
+
+| library | holds | job |
+|---|---|---|
+| `flang_core` | spans, diagnostics | shared vocabulary |
+| `flang_parser` | lexer, parser, projector, comptime | text to AST |
+| `flang_typer` | checker, inference engine, registries | AST to `TypeCheckResult` |
+| `flang_analysis` | `analyze.f`, `resolver.f`, `project.f` | manifest and import resolution, the BFS loader, the front half end to end |
+| `flang_driver` | `lower.f`, `symbol_table.f`, `layout.f`, `compile.f` | checked program to FIR, then drives codegen, `cc` and the link |
+| `flang_codegen` | FIR types, C backend | FIR to C |
+
+`flang_driver` depends on `flang_analysis` rather than the reverse: lowering needs a checked program, and `compile.f` orchestrates both halves. Keeping `compile.f` on the lowering side is what stops the two libraries forming a cycle - the lowering `test {}` blocks build their fixtures through `analyze_source_set`.
+
+### Self-hosted import resolution (`flang_analysis`)
+
+The bootstrap compiler reimplements the same machinery in FLang. `flang_analysis/resolver.f` is the port: `resolve_import` mirrors `TryResolveImportPath` (project-name, dependency-name, then include-path rules — stdlib root via the `--stdlib-path` flag, then the working dir), and `module_fqn` mirrors `DeriveModulePath` (the inverse, classifying a file path under the project / dependency / stdlib roots). Dependency source roots are derived exactly as the C# does — read each dep's `flang.toml`, take the static prefix of its `source` glob.
+
+`flang_analysis/analyze.f::analyze_project` is the BFS loader: it seeds the queue with the project's globbed entry sources plus the auto-imported `core.prelude`, follows each module's imports, deduplicates by file path, and type-checks the whole set through a single `check_all`. The module FQNs (not file paths) are passed as the per-module paths so symbol registration and visibility agree. Visibility is built in `flang_typer/checker.f::build_visibility` from the modules' `ImportDecl`s — `{M} ∪ imports(M)` then the `pub import` re-export closure, matching `GetVisibleModules`. `compile.f::build_program` lowers every module into one FIR program for a single link. `examples/multimod` is the end-to-end witness. Each module's text comes from `analyze.f::read_source`, which returns a supplied buffer when the caller named that path in `analyze_project`'s optional `overrides` map (an editor's unsaved text) and reads the file otherwise; keys are the forward-slash paths `resolver.normalize_sep` produces, so a key spelled any other way misses silently and compiles the stale file. `flang build` passes no overrides. (Known gap: structs crash the bootstrap typer — see [known-issues.md](known-issues.md).)
 
 ## `std.io` layering
 

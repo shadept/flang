@@ -24,7 +24,7 @@ import flang_typer.function_registry
 import flang_typer.scheme
 import flang_typer.specialization
 import flang_typer.well_known
-import flang_driver.driver
+import flang_analysis.analyze
 import flang_driver.layout
 
 // Symbol table

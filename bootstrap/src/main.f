@@ -25,10 +25,10 @@ import std.time
 import flang_parser.comptime
 import flang_parser.lexer
 import flang_codegen.backend
-import flang_driver.driver
+import flang_analysis.analyze
 import flang_driver.compile
-import flang_driver.project
-import flang_driver.resolver
+import flang_analysis.project
+import flang_analysis.resolver
 import flang_typer.nominal_registry
 import flang_typer.specialization
 import flang_typer.result_diff

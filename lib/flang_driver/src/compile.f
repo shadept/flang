@@ -16,10 +16,10 @@ import flang_typer.result
 import flang_codegen.fir
 import flang_codegen.backend
 import flang_codegen.c_backend
-import flang_driver.driver
+import flang_analysis.analyze
 import flang_driver.lower
-import flang_driver.project
-import flang_driver.resolver
+import flang_analysis.project
+import flang_analysis.resolver
 
 // Lower `unit` to FIR and compile+link it to an executable at
 // `output_path` (the backend appends a platform extension if missing).

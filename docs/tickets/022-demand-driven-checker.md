@@ -362,8 +362,16 @@ at 16% is a second target, not a rounding error.
 - On-disk persistence of analysis. Deferred; RFC-023 builds the pointer-free
   index seam a later cache would store.
 - Threading the checker.
-- Splitting `flang_driver` into analysis and build halves. Verified acyclic and
-  mechanical (11 import lines, no reverse edges) but off the critical path.
+- ~~Splitting `flang_driver` into analysis and build halves.~~ **Done
+  2026-08-25**, as a prerequisite for 5a: the query cache and the module store
+  needed a coherent home, and a 10306-line `flang_driver` was not one. The
+  analysis half moved out to `flang_analysis` (`analyze.f` - renamed from
+  `driver.f` - plus `resolver.f` and `project.f`, 1291 lines); `flang_driver`
+  keeps lowering and the build (`lower.f`, `symbol_table.f`, `layout.f`,
+  `compile.f`) and now depends on `flang_analysis`. Exactly the 11 import lines
+  this entry predicted. `compile.f` had to move with lowering rather than stay
+  with analysis: the lowering `test {}` blocks build fixtures through
+  `analyze_source_set`, so leaving it behind would have closed a library cycle.
 - Frozen stdlib prefix as a distinct mechanism - subsumed by per-module
   invalidation.
 

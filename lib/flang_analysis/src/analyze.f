@@ -1,8 +1,9 @@
-// flang_driver - the compile pipeline as a library: source text in, a
-// checked `AnalyzedUnit` out (AST + type-check result + combined parse and
-// check diagnostics). This is the single analysis entry point shared by
-// every front-end exe - `flang build`, `flang test`, and the LSP - each of
-// which is a thin `main` over `analyze`.
+// flang_analysis - the front half of the pipeline as a library: source
+// text in, a checked `AnalyzedUnit` out (AST + type-check result +
+// combined parse and check diagnostics). This is the single analysis
+// entry point shared by every front-end exe - `flang build`, `flang test`,
+// and the LSP - each of which is a thin `main` over `analyze`.
+// Lowering and the build itself live one layer up, in `flang_driver`.
 //
 // The library owns the pipeline but not its edges: file reading and
 // diagnostic *rendering* are the caller's concern (the LSP reads buffers
@@ -35,8 +36,8 @@ import flang_core.span
 import flang_typer.checker
 import flang_typer.template_expand
 import flang_typer.result
-import flang_driver.resolver
-import flang_driver.project
+import flang_analysis.resolver
+import flang_analysis.project
 
 // A fully analysed compilation unit. `checked` is false when the source
 // failed to parse - `result` is then an empty placeholder.

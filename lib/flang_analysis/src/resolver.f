@@ -21,7 +21,7 @@ import std.string_builder
 import std.io.fs
 import std.io.file
 import std.test
-import flang_driver.project
+import flang_analysis.project
 import flang_parser.comptime
 
 // One direct dependency: its `[project].name` (its import namespace) and
@@ -333,8 +333,8 @@ fn fixture_ctx() ResolveCtx {
     })
     let globals: List(OwnedString) = list(0)
     return ResolveCtx {
-        project_name = from_view("flang_driver"),
-        project_source_root = from_view("lib/flang_driver/src"),
+        project_name = from_view("flang_analysis"),
+        project_source_root = from_view("lib/flang_analysis/src"),
         deps = deps,
         stdlib_root = from_view("stdlib"),
         cwd = from_view("."),
@@ -346,17 +346,17 @@ fn fixture_ctx() ResolveCtx {
 test "module_fqn: project file -> project-prefixed name" {
     let ctx = fixture_ctx()
     defer ctx.deinit()
-    let f = module_fqn(&ctx, "lib/flang_driver/src/driver.f")
+    let f = module_fqn(&ctx, "lib/flang_analysis/src/analyze.f")
     defer f.deinit()
-    assert_true(f.as_view() == "flang_driver.driver", "project root file")
+    assert_true(f.as_view() == "flang_analysis.analyze", "project root file")
 }
 
 test "module_fqn: nested project file dots the subpath" {
     let ctx = fixture_ctx()
     defer ctx.deinit()
-    let f = module_fqn(&ctx, "lib/flang_driver/src/sub/thing.f")
+    let f = module_fqn(&ctx, "lib/flang_analysis/src/sub/thing.f")
     defer f.deinit()
-    assert_true(f.as_view() == "flang_driver.sub.thing", "nested project file")
+    assert_true(f.as_view() == "flang_analysis.sub.thing", "nested project file")
 }
 
 test "module_fqn: dependency file -> dep-prefixed name" {
