@@ -1754,7 +1754,11 @@ public class Parser
             if (_currentToken.Kind == TokenKind.OpenBracket)
             {
                 var openBracket = Eat(TokenKind.OpenBracket);
-                var index = ParseExpression();
+                ExpressionNode index;
+                using (SuspendBraceStop())
+                {
+                    index = ParseExpression();
+                }
                 var closeBracket = Eat(TokenKind.CloseBracket);
                 var span = SourceSpan.Combine(expr.Span, closeBracket.Span);
                 expr = new IndexExpressionNode(span, expr, index);
@@ -2094,12 +2098,12 @@ public class Parser
             if (_currentToken.Kind == TokenKind.InterpHoleStart)
             {
                 var holeStartToken = Eat(TokenKind.InterpHoleStart);
-                // Holes are full expressions. Reset _stopAtBrace so nested
-                // block/struct expressions don't mis-terminate here.
-                var savedStop = _stopAtBrace;
-                _stopAtBrace = false;
-                var expr = ParseExpression();
-                _stopAtBrace = savedStop;
+                // Holes are full expressions, delimited by the hole markers.
+                ExpressionNode expr;
+                using (SuspendBraceStop())
+                {
+                    expr = ParseExpression();
+                }
 
                 string? spec = null;
                 if (_currentToken.Kind == TokenKind.InterpFormatSep)
@@ -2360,6 +2364,58 @@ public class Parser
     }
 
     /// <summary>
+    /// Parses the condition of an `if` / `while`, or the iterable of a `for`.
+    /// A condition is an ordinary expression that ends where the body's `{`
+    /// begins, so `{` terminates it. Parentheses around a condition are
+    /// therefore optional in the same sense any expression may be
+    /// parenthesized: a leading `(` is grouping, not a condition wrapper, and
+    /// the expression continues past its `)`.
+    ///
+    ///   if (a + b) * 4 > 6 { ... }
+    ///   if (p).x > 0 { ... }
+    ///
+    /// Special-casing a leading `(` as the whole condition rejected both.
+    /// </summary>
+    private ExpressionNode ParseCondition()
+    {
+        var saved = _stopAtBrace;
+        _stopAtBrace = true;
+        var condition = ParseExpression();
+        _stopAtBrace = saved;
+        return condition;
+    }
+
+    /// <summary>
+    /// Suspends the `{`-terminates-an-expression rule for a delimited
+    /// sub-parse, restoring it on dispose.
+    ///
+    /// `_stopAtBrace` exists so the body brace of `if` / `while` / `for` is not
+    /// mistaken for a struct literal or a block expression while the condition
+    /// is being parsed. That is only ambiguous at the condition's own nesting
+    /// level: inside `(...)`, `[...]` or `{...}` a brace cannot be the body
+    /// brace, because the delimiter has to close first. Every parse that
+    /// descends into one enters this scope, so a condition like
+    /// `if take(P { x = 1 }) > 0 { ... }` reads the struct literal and still
+    /// finds its body.
+    /// </summary>
+    private BraceStopSuspension SuspendBraceStop() => new(this);
+
+    private readonly ref struct BraceStopSuspension
+    {
+        private readonly Parser _parser;
+        private readonly bool _saved;
+
+        public BraceStopSuspension(Parser parser)
+        {
+            _parser = parser;
+            _saved = parser._stopAtBrace;
+            parser._stopAtBrace = false;
+        }
+
+        public void Dispose() => _parser._stopAtBrace = _saved;
+    }
+
+    /// <summary>
     /// Parses an if expression with condition, then-branch, and optional else-branch.
     /// </summary>
     /// <returns>An <see cref="IfExpressionNode"/> representing the if expression.</returns>
@@ -2367,22 +2423,7 @@ public class Parser
     {
         var ifKeyword = Eat(TokenKind.If);
 
-        // Parse condition: parens are optional, but body must be a block
-        ExpressionNode condition;
-        if (_currentToken.Kind == TokenKind.OpenParenthesis)
-        {
-            // Parenthesized condition: if (expr) { ... }
-            Eat(TokenKind.OpenParenthesis);
-            condition = ParseExpression();
-            Eat(TokenKind.CloseParenthesis);
-        }
-        else
-        {
-            // Bare condition: if expr { ... } — stop parsing at '{'
-            _stopAtBrace = true;
-            condition = ParseExpression();
-            _stopAtBrace = false;
-        }
+        var condition = ParseCondition();
 
         // Then branch must be a block
         var thenBranch = ParseBlockExpression();
@@ -2410,6 +2451,8 @@ public class Parser
     /// <returns>A <see cref="StructConstructionExpressionNode"/> representing the struct construction.</returns>
     private StructConstructionExpressionNode ParseStructConstruction(TypeNode typeName)
     {
+        using var braceStop = SuspendBraceStop();
+
         var openBrace = Eat(TokenKind.OpenBrace);
         var fields = new List<(string, ExpressionNode)>();
 
@@ -2458,6 +2501,8 @@ public class Parser
     /// <returns>An <see cref="AnonymousStructExpressionNode"/> representing the anonymous struct.</returns>
     private AnonymousStructExpressionNode ParseAnonymousStructConstruction(Token dotToken)
     {
+        using var braceStop = SuspendBraceStop();
+
         var openBrace = Eat(TokenKind.OpenBrace);
         var fields = new List<(string, ExpressionNode)>();
 
@@ -2503,6 +2548,8 @@ public class Parser
     /// <returns>A <see cref="BlockExpressionNode"/> representing the block.</returns>
     private BlockExpressionNode ParseBlockExpression()
     {
+        using var braceStop = SuspendBraceStop();
+
         var openBrace = Eat(TokenKind.OpenBrace);
         var statements = new List<StatementNode>();
         ExpressionNode? trailingExpression = null;
@@ -2591,9 +2638,7 @@ public class Parser
             }
             iterator = Eat(TokenKind.Identifier);
             Eat(TokenKind.In);
-            _stopAtBrace = true;
-            iterable = ParseExpression();
-            _stopAtBrace = false;
+            iterable = ParseCondition();
         }
 
         // Body must be a block
@@ -2626,21 +2671,7 @@ public class Parser
     {
         var whileKeyword = Eat(TokenKind.While);
 
-        ExpressionNode condition;
-        if (_currentToken.Kind == TokenKind.OpenParenthesis)
-        {
-            // Parenthesized: while (cond) { ... }
-            Eat(TokenKind.OpenParenthesis);
-            condition = ParseExpression();
-            Eat(TokenKind.CloseParenthesis);
-        }
-        else
-        {
-            // Bare: while cond { ... } — stop expression parsing at `{` so the body brace isn't consumed
-            _stopAtBrace = true;
-            condition = ParseExpression();
-            _stopAtBrace = false;
-        }
+        var condition = ParseCondition();
 
         _loopDepth++;
         var body = ParseBlockExpression();
@@ -2986,6 +3017,8 @@ public class Parser
             return new AnonymousStructExpressionNode(emptySpan, new List<(string, ExpressionNode)>());
         }
 
+        using var braceStop = SuspendBraceStop();
+
         var expressions = new List<ExpressionNode>();
         bool hasTrailingComma = false;
 
@@ -3033,6 +3066,8 @@ public class Parser
     /// </summary>
     private List<ExpressionNode> ParseCallArguments()
     {
+        using var braceStop = SuspendBraceStop();
+
         var arguments = new List<ExpressionNode>();
         while (_currentToken.Kind != TokenKind.CloseParenthesis &&
                _currentToken.Kind != TokenKind.EndOfFile)
@@ -3075,6 +3110,8 @@ public class Parser
     /// <returns>An <see cref="ExpressionNode"/> representing the array literal.</returns>
     private ArrayLiteralExpressionNode ParseArrayLiteral()
     {
+        using var braceStop = SuspendBraceStop();
+
         var openBracket = Eat(TokenKind.OpenBracket);
 
         // Empty array: []
@@ -3273,6 +3310,7 @@ public class Parser
     {
         var matchToken = Eat(TokenKind.Match);
         Eat(TokenKind.OpenBrace);
+        using var braceStop = SuspendBraceStop();
 
         var arms = new List<MatchArmNode>();
 

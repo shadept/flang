@@ -103,15 +103,40 @@ pub fn token_index(self: &Parser) usize {
     return self.position
 }
 
-// Parse an expression that is followed by a `{` body (`#for x in EXPR {`,
-// `#if EXPR {`): the brace ends the expression instead of starting a
-// struct literal.
+// Parse the expression in an `if` / `while` / `for` / `#if` / `#for` header:
+// an ordinary expression, except that the body's `{` ends it instead of
+// starting a struct literal or a block. A leading `(` is a grouped
+// sub-expression like anywhere else, so `if (a) and b { ... }` continues past
+// the closing paren.
 pub fn parse_condition_expression(self: &Parser) CstNode {
     const saved = self.stop_at_brace
     self.stop_at_brace = true
     const e = self.parse_expression()
     self.stop_at_brace = saved
     return e
+}
+
+// Suspend the `{`-terminates-an-expression rule for a delimited sub-parse,
+// returning the setting to restore.
+//
+// `stop_at_brace` exists so the body brace of `if` / `while` / `for` is not
+// mistaken for a struct literal or a block while the header is being parsed.
+// That is only ambiguous at the header's own nesting level: inside `(...)`,
+// `[...]` or `{...}` a brace cannot be the body brace, because the delimiter
+// has to close first. Every parse that descends into one suspends the rule,
+// so a header like `if take(P { x = 1 }) > 0 {` reads the struct literal and
+// still finds its body.
+//
+// Pair with `restore_brace_stop`, by `defer` where the sub-parse can return
+// early.
+fn suspend_brace_stop(self: &Parser) bool {
+    const saved = self.stop_at_brace
+    self.stop_at_brace = false
+    return saved
+}
+
+fn restore_brace_stop(self: &Parser, saved: bool) {
+    self.stop_at_brace = saved
 }
 
 fn current(self: &Parser) Token {
@@ -836,6 +861,8 @@ fn parse_variable_decl_into(self: &Parser, b: &NodeBuilder) {
 // `{ … }` block expression with a sequence of statements and an
 // optional trailing expression. Always returns a `BlockExpr` node.
 fn parse_block_expr(self: &Parser) CstNode {
+    const saved_brace = self.suspend_brace_stop()
+    defer self.restore_brace_stop(saved_brace)
     let b = self.open(NodeKind.BlockExpr)
     if !self.expect_into(&b, TokenKind.OpenBrace, "E1002") { return finish(b) }
     while !self.at_eof() and self.current_kind() != TokenKind.CloseBrace {
@@ -969,10 +996,7 @@ fn parse_if_directive_condition_into(self: &Parser, b: &NodeBuilder) {
     if self.current_kind() == TokenKind.OpenBrace { return }
     // A leading `(` is a grouped sub-expression like anywhere else -
     // `#if (runtime.env["X"] ?? "") == "y" {` continues past it.
-    const saved = self.stop_at_brace
-    self.stop_at_brace = true
-    const cond = self.parse_expression()
-    self.stop_at_brace = saved
+    const cond = self.parse_condition_expression()
     push_node_into(b, cond)
 }
 
@@ -1022,10 +1046,7 @@ fn parse_if_expr(self: &Parser) CstNode {
     // A leading `(` is an ordinary grouped expression, NOT a header
     // wrapper: consuming it as one made `if (a) and b { … }` stop at the
     // closing paren and report the operator as unexpected.
-    const saved = self.stop_at_brace
-    self.stop_at_brace = true
-    const cond = self.parse_expression()
-    self.stop_at_brace = saved
+    const cond = self.parse_condition_expression()
     push_node_into(&b, cond)
     if self.current_kind() == TokenKind.OpenBrace {
         const then_block = self.parse_block_expr()
@@ -1058,10 +1079,7 @@ fn parse_for_loop(self: &Parser) CstNode {
     if self.current_kind() == TokenKind.Ampersand { self.eat_into(&b) }     // `for &x in` (iter_ref)
     if self.current_kind() == TokenKind.Identifier { self.eat_into(&b) }
     self.expect_into(&b, TokenKind.In, "E1002")
-    const saved = self.stop_at_brace
-    self.stop_at_brace = true
-    const iterable = self.parse_expression()
-    self.stop_at_brace = saved
+    const iterable = self.parse_condition_expression()
     push_node_into(&b, iterable)
     if parenthesised and self.current_kind() == TokenKind.CloseParenthesis { self.eat_into(&b) }
     if self.current_kind() == TokenKind.OpenBrace {
@@ -1088,10 +1106,7 @@ fn parse_loop_expr(self: &Parser) CstNode {
 fn parse_while_loop(self: &Parser) CstNode {
     let b = self.open(NodeKind.WhileExpr)
     self.eat_into(&b)                                                       // `while`
-    const saved = self.stop_at_brace
-    self.stop_at_brace = true
-    const cond = self.parse_expression()
-    self.stop_at_brace = saved
+    const cond = self.parse_condition_expression()
     push_node_into(&b, cond)
     if self.current_kind() == TokenKind.OpenBrace {
         self.loop_depth = self.loop_depth + 1
@@ -1106,6 +1121,8 @@ fn parse_while_loop(self: &Parser) CstNode {
 // expression in parse_binary_expression. `scrutinee` is the left-hand
 // side; this method consumes the `match` keyword and arms.
 fn parse_match_tail(self: &Parser, scrutinee: CstNode) CstNode {
+    const saved_brace = self.suspend_brace_stop()
+    defer self.restore_brace_stop(saved_brace)
     let b = self.open(NodeKind.MatchExpr)
     // Re-anchor `start` to scrutinee since the open() above pointed at
     // `match`.
@@ -1308,7 +1325,9 @@ fn parse_postfix_chain(self: &Parser, expr: CstNode) CstNode {
             b.start = cur.start
             push_node_into(&b, cur)
             self.eat_into(&b)
+            const saved_brace = self.suspend_brace_stop()
             const idx = self.parse_expression()
+            self.restore_brace_stop(saved_brace)
             push_node_into(&b, idx)
             self.expect_into(&b, TokenKind.CloseBracket, "E1002")
             cur = finish(b)
@@ -1390,6 +1409,8 @@ fn parse_member_or_call_or_deref(self: &Parser, recv: CstNode) CstNode {
 }
 
 fn parse_call_args_into(self: &Parser, b: &NodeBuilder) {
+    const saved_brace = self.suspend_brace_stop()
+    defer self.restore_brace_stop(saved_brace)
     self.expect_into(b, TokenKind.OpenParenthesis, "E1002")
     while !self.at_eof() and self.current_kind() != TokenKind.CloseParenthesis {
         const arg = self.parse_call_arg()
@@ -1506,6 +1527,8 @@ fn parse_identifier_primary(self: &Parser) CstNode {
 }
 
 fn parse_struct_construction_body(self: &Parser, b: &NodeBuilder) {
+    const saved_brace = self.suspend_brace_stop()
+    defer self.restore_brace_stop(saved_brace)
     if !self.expect_into(b, TokenKind.OpenBrace, "E1002") { return }
     while !self.at_eof() and self.current_kind() != TokenKind.CloseBrace {
         if self.current_kind() == TokenKind.Identifier {
@@ -1548,11 +1571,7 @@ fn parse_paren_expression(self: &Parser) CstNode {
     }
     let b = self.open(NodeKind.ParenExpr)
     self.eat_into(&b)                                                       // `(`
-    // Inside parentheses a `{` is an ordinary struct literal / block
-    // again - the `stop_at_brace` rule belongs to the UNPARENTHESISED
-    // header it was armed for.
-    const saved_brace = self.stop_at_brace
-    self.stop_at_brace = false
+    const saved_brace = self.suspend_brace_stop()
     let count = 0usize
     let saw_comma = false
     while !self.at_eof() and self.current_kind() != TokenKind.CloseParenthesis {
@@ -1567,7 +1586,7 @@ fn parse_paren_expression(self: &Parser) CstNode {
         break
     }
     self.expect_into(&b, TokenKind.CloseParenthesis, "E1002")
-    self.stop_at_brace = saved_brace
+    self.restore_brace_stop(saved_brace)
     // A single expression with no trailing comma is a grouped expression;
     // anything else (a comma, zero elements, or several) is a tuple.
     if saw_comma or count != 1 {
@@ -1577,6 +1596,8 @@ fn parse_paren_expression(self: &Parser) CstNode {
 }
 
 fn parse_array_literal(self: &Parser) CstNode {
+    const saved_brace = self.suspend_brace_stop()
+    defer self.restore_brace_stop(saved_brace)
     let b = self.open(NodeKind.ArrayLiteralExpr)
     self.eat_into(&b)                                                       // `[`
     while !self.at_eof() and self.current_kind() != TokenKind.CloseBracket {
@@ -1670,10 +1691,9 @@ fn parse_interp_body_into(self: &Parser, b: &NodeBuilder) {
         }
         if k == TokenKind.InterpHoleStart {
             self.eat_into(b)
-            const saved = self.stop_at_brace
-            self.stop_at_brace = false
+            const saved_brace = self.suspend_brace_stop()
             const expr = self.parse_expression()
-            self.stop_at_brace = saved
+            self.restore_brace_stop(saved_brace)
             push_node_into(b, expr)
             if self.current_kind() == TokenKind.InterpFormatSep {
                 self.eat_into(b)
