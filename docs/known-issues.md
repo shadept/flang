@@ -89,6 +89,45 @@ in its fixtures so the assertions are no longer vacuous.
 
 ## Open Issues
 
+### A New Overload Can Silently Drop a Function From the Output
+
+**Status:** Open — reproduced, then avoided rather than fixed
+**Affected:** overload resolution (`lib/flang_typer/src/checker.f`), lowering
+
+Adding this to `stdlib/std/list.f` compiled clean and passed every unit test,
+then produced a compiler binary that would not link — `LNK1561: entry point
+must be defined`:
+
+```
+pub fn list(count: usize, value: $T, allocator: &Allocator? = null) List(T) {
+    let out: List(T) = list(count, allocator)   // <- also matches the new overload
+    ...
+}
+```
+
+The emitted C was missing `main` entirely: not misnamed, absent, while every
+other function of the same module was emitted normally. Nothing was reported
+at any stage.
+
+The hazard is that `list(capacity, allocator)` also matches
+`list(count, value)` with `value` bound to the allocator, because a bare type
+variable in the last parameter accepts anything. The annotated return type
+(`List(T)`) should decide it, and the wrong pick is not diagnosed as ambiguous.
+
+Two separate defects, either of which would have caught it:
+
+1. Resolution picks a candidate it should have rejected or reported as
+   ambiguous.
+2. Whatever went wrong downstream dropped a function silently. A function that
+   cannot be lowered must be reported, never omitted from the output - the
+   linker should not be what tells you.
+
+Avoided for now by naming the constructor `filled` instead of overloading
+`list`, which removes the second candidate. The underlying resolution bug is
+untouched, and any similarly-shaped overload will hit it again.
+
+---
+
 ### Library Import Cycles Are Unchecked
 
 **Status:** Open — the rule is specified and currently holds, but nothing enforces it

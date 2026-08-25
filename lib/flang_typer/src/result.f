@@ -137,9 +137,6 @@ pub fn deinit(self: &TypeCheckResult) {
     self.lambdas.deinit()
     self.closures.deinit()
     self.spans.deinit()
-    for &p in self.file_paths {
-        p.deinit()
-    }
     self.file_paths.deinit()
 }
 

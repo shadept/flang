@@ -63,6 +63,17 @@ pub fn list(source: List($T), allocator: &Allocator? = null) List(T) {
     }
 }
 
+// A list of `count` copies of `value`, with `len == count` from the start:
+// a table to index and assign into, where `list(capacity)` gives an empty
+// buffer to push onto.
+pub fn filled_list(count: usize, value: $T, allocator: &Allocator? = null) List(T) {
+    let out: List(T) = list(count, allocator)
+    for _i in 0..count {
+        out.push(value)
+    }
+    return out
+}
+
 // Free the backing storage. The list should not be used after this.
 // Calls deinit on all stored elements before freeing.
 pub fn deinit(self: &List($T)) {
@@ -967,4 +978,18 @@ test "join concatenates with separator" {
     let single = one.join(", ")
     defer single.deinit()
     assert_eq(single.as_view(), "solo", "no separator for one element")
+}
+
+test "filled_list gives a list of length count, ready to index" {
+    let xs: List(usize) = filled_list(3, 7)
+    defer xs.deinit()
+    assert_eq(xs.len, 3 as usize, "length is the count, not a reserved capacity")
+    assert_eq(xs[0], 7 as usize, "every slot holds the value")
+    assert_eq(xs[2], 7 as usize, "including the last")
+    xs[1] = 9
+    assert_eq(xs[1], 9 as usize, "and the slots are assignable")
+
+    let empty: List(bool) = filled_list(0, true)
+    defer empty.deinit()
+    assert_eq(empty.len, 0 as usize, "a count of zero is an empty list")
 }

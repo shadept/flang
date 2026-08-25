@@ -38,6 +38,7 @@ import flang_typer.template_expand
 import flang_typer.result
 import flang_analysis.resolver
 import flang_analysis.project
+import flang_analysis.demand
 
 // A fully analysed compilation unit. `checked` is false when the source
 // failed to parse - `result` is then an empty placeholder.
@@ -210,6 +211,13 @@ pub fn analyze_project(ctx: &ResolveCtx, entries: &List(OwnedString),
     seed_prelude(ctx, &queue, &seen, allocator)
     seed_stdlib(ctx, &queue, &seen, allocator)
 
+    // Import edges as they resolve. `edge_to` holds paths, not indices: the
+    // target module may not be parsed yet when the edge is seen.
+    let edge_from: List(usize) = list(0, allocator)
+    defer edge_from.deinit()
+    let edge_to: List(OwnedString) = list(0, allocator)
+    defer edge_to.deinit()
+
     let qi: usize = 0
     while qi < queue.len {
         let path = queue[qi].as_view()
@@ -225,7 +233,7 @@ pub fn analyze_project(ctx: &ResolveCtx, entries: &List(OwnedString),
         let fid = modules.len as i32
         let module = parse_to_module(src.as_view(), fid, &ctx.comptime, &diagnostics, allocator)
         let fqn = module_fqn(ctx, path, allocator)
-        enqueue_imports(ctx, &module, &queue, &seen, &diagnostics, allocator)
+        enqueue_imports(ctx, &module, modules.len, &queue, &seen, &edge_from, &edge_to, &diagnostics, allocator)
         sources.push(src)
         file_paths.push(from_view(path))
         fqns.push(fqn)
@@ -247,11 +255,13 @@ pub fn analyze_project(ctx: &ResolveCtx, entries: &List(OwnedString),
         for i in 0..fqns.len {
             path_views.push(fqns[i].as_view())
         }
+        let order = visit_order(&file_paths, &path_views, &edge_from, &edge_to, allocator)
+        defer order.deinit()
         let chk = checker(allocator)
         let gens = template_state(allocator)
         chk.set_comptime_ctx(ctx.comptime)
         chk.set_project_globals(&ctx.global_imports, &project_origin)
-        result = check_all(&chk, &modules, &path_views, &sources, &file_paths, &gens)
+        result = check_all(&chk, &modules, &path_views, &sources, &file_paths, &gens, Some(&order))
         drain_diagnostics(&diagnostics, &chk.diagnostics)
         generated = gens.take_output()
         gens.deinit()
@@ -366,13 +376,21 @@ fn parse_to_module(src: String, file_id: i32, target: &ComptimeCtx, diags: &List
     return module
 }
 
-fn enqueue_imports(ctx: &ResolveCtx, m: &Module, queue: &List(OwnedString), seen: &Set(String), diags: &List(Diagnostic), alloc: &Allocator?) {
-    for &d in m.decls {
-        d.* match {
+// Queue every module `m` imports, recording `from -> imported` so the checker
+// can be given a dependency-respecting visit order. `enqueue_owned` consumes
+// the resolved path, so the edge keeps its own copy.
+fn enqueue_imports(ctx: &ResolveCtx, m: &Module, from: usize, queue: &List(OwnedString), seen: &Set(String),
+        edge_from: &List(usize), edge_to: &List(OwnedString), diags: &List(Diagnostic), alloc: &Allocator?) {
+    for d in m.decls {
+        d match {
             Import(id) => {
                 let r = resolve_import(ctx, &id.path, alloc)
                 r match {
-                    Some(p) => enqueue_owned(queue, seen, p),
+                    Some(p) => {
+                        edge_from.push(from)
+                        edge_to.push(from_view(p.as_view()))
+                        enqueue_owned(queue, seen, p)
+                    },
                     None => push_unresolved(diags, &id, alloc),
                 }
             },
@@ -442,6 +460,26 @@ fn read_source(path: String, overrides: &Dict(String, String)?) OwnedString? {
         if hit.is_some() { return Some(from_view(hit.unwrap())) }
     }
     return read_text(path)
+}
+
+// Turn the path-keyed import edges into module indices, then order the set.
+// An edge naming a path that never became a module (an unreadable file) is
+// dropped; every module is still emitted exactly once.
+fn visit_order(file_paths: &List(OwnedString), fqns: &List(String), edge_from: &List(usize),
+        edge_to: &List(OwnedString), alloc: &Allocator?) List(usize) {
+    let index_of: Dict(String, usize) = dict(alloc)
+    defer index_of.deinit()
+    for i in 0..file_paths.len {
+        index_of.set(file_paths[i].as_view(), i)
+    }
+    let edges: List(ImportEdge) = list(edge_from.len, alloc)
+    defer edges.deinit()
+    for i in 0..edge_from.len {
+        const to = index_of.get(edge_to[i].as_view())
+        if to.is_none() { continue }
+        edges.push(ImportEdge { from = edge_from[i], to = to.unwrap() })
+    }
+    return demand_order(fqns.len, fqns, &edges, alloc)
 }
 
 fn enqueue_copy(queue: &List(OwnedString), seen: &Set(String), path: String) {

@@ -6372,8 +6372,15 @@ fn zonk_specializations(self: &Checker) {
     }
 }
 
+// `order` is the sequence to visit modules in - dependencies before
+// dependents (`flang_analysis.demand`). It decides the ids every phase hands
+// out, so it is what makes a run reproducible; `null` means source order,
+// which is what the unit tests and single-module callers want.
 pub fn check_all(self: &Checker, modules: &List(Module), paths: &List(String),
-        sources: &List(OwnedString), file_paths: &List(OwnedString), generators: &TemplateState) TypeCheckResult {
+        sources: &List(OwnedString), file_paths: &List(OwnedString), generators: &TemplateState,
+        order: &List(usize)? = null) TypeCheckResult {
+    let seq = visit_sequence(self, modules.len, order)
+    defer seq.deinit()
     // Wire the import graph before any name resolution runs.
     const collect_start = monotonic_ns()
     build_visibility(self, modules, paths)
@@ -6381,7 +6388,7 @@ pub fn check_all(self: &Checker, modules: &List(Module), paths: &List(String),
     // Phase 1: every module's type names are registered before any body
     // resolves, so a struct field or enum payload can name a type from
     // another module regardless of the order modules are checked in.
-    for i in 0..modules.len {
+    for i in seq {
         collect_nominal_names(self, &modules[i], paths[i])
     }
     const collect_ns = elapsed_ns(collect_start)
@@ -6392,24 +6399,24 @@ pub fn check_all(self: &Checker, modules: &List(Module), paths: &List(String),
     expand_templates(self, generators, modules, paths, sources, file_paths)
     const templates_ns = elapsed_ns(templates_start)
     const nominals_start = monotonic_ns()
-    for i in 0..modules.len {
+    for i in seq {
         resolve_nominal_bodies(self, &modules[i], paths[i])
     }
     // Phase 2: signatures.
-    for i in 0..modules.len {
+    for i in seq {
         collect_signatures(self, &modules[i], paths[i])
     }
     const nominals_ns = elapsed_ns(nominals_start)
     // Phase 2.5: constant initializers, before any body can observe an
     // unpinned const (see `check_module_constants`).
     const constants_start = monotonic_ns()
-    for i in 0..modules.len {
+    for i in seq {
         check_module_constants(self, &modules[i], paths[i])
     }
     const constants_ns = elapsed_ns(constants_start)
     // Phase 3: bodies.
     const bodies_start = monotonic_ns()
-    for i in 0..modules.len {
+    for i in seq {
         check_module_bodies(self, &modules[i], paths[i])
     }
     const bodies_ns = elapsed_ns(bodies_start)
@@ -6508,6 +6515,34 @@ pub fn check_all(self: &Checker, modules: &List(Module), paths: &List(String),
             zonk_ns = zonk_ns,
         },
     }
+}
+
+// The module indices to walk, in order. A caller that supplies none gets
+// source order; a supplied order is filtered to the modules that exist and
+// backfilled, so a stale or partial order can never drop a module from the
+// check.
+fn visit_sequence(self: &Checker, n: usize, order: &List(usize)?) List(usize) {
+    let seq: List(usize) = list(n, self.allocator)
+    if order.is_none() {
+        for i in 0..n {
+            seq.push(i)
+        }
+        return seq
+    }
+    let seen: List(bool) = list(n, self.allocator)
+    defer seen.deinit()
+    for _i in 0..n {
+        seen.push(false)
+    }
+    for i in order.unwrap() {
+        if i >= n or seen[i] { continue }
+        seen[i] = true
+        seq.push(i)
+    }
+    for i in 0..n {
+        if !seen[i] { seq.push(i) }
+    }
+    return seq
 }
 
 // ---------------------------------------------------------------------
