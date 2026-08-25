@@ -43,11 +43,11 @@ pub fn dict(allocator: &Allocator? = null) Dict($K, $V) {
 // Free the backing storage. The dict should not be used after this.
 // Calls deinit on all stored keys and values before freeing.
 pub fn deinit(self: &Dict($K, $V)) {
-    if (self.cap > 0) {
+    if self.cap > 0 {
         // Deinit all occupied keys and values
         for i in 0..self.cap as isize {
             const entry: &Entry(K, V) = self.entries + (i as usize)
-            if (entry.state == 1) {
+            if entry.state == 1 {
                 entry.key.deinit()
                 entry.value.deinit()
             }
@@ -61,6 +61,13 @@ pub fn deinit(self: &Dict($K, $V)) {
     self.length = 0
     self.dead = 0
     self.cap = 0
+}
+
+// Slot for the `i`th linear probe of hash `h`. Capacity is always a power
+// of two (`ensure_capacity` starts at 8 and only doubles), so the wrap is a
+// mask - a `%` here is a hardware divide on every probe of every lookup.
+fn probe_slot(h: usize, i: usize, cap: usize) usize {
+    return (h + i) & (cap - 1)
 }
 
 // Hash a key using the public hash() function.
@@ -80,36 +87,28 @@ pub fn is_empty(self: Dict($K, $V)) bool {
     return self.length == 0
 }
 
-// Ensure capacity and grow if load factor exceeds 75%.
+// Make room for one more entry: grow when the insert would push the table
+// past a 75% load factor, and on the first insert, when there is no table at
+// all. Tombstones count toward the load - see `Dict.dead`.
 fn ensure_capacity(self: &Dict($K, $V)) {
-    // First allocation or load factor > 75%
-    let needs_grow: bool = false
-    if (self.cap == 0) {
-        needs_grow = true
-    }
-    if (needs_grow == false) {
-        if ((self.length + self.dead + 1) * 4 > self.cap * 3) {
-            needs_grow = true
-        }
-    }
-
-    if (needs_grow == false) {
+    const slots_needed = self.length + self.dead + 1
+    if self.cap > 0 and slots_needed * 4 <= self.cap * 3 {
         return
     }
 
     const old_cap: usize = self.cap
     const old_entries: &Entry(K, V) = self.entries
     // A rehash that mostly clears tombstones keeps its capacity; only
-    // live-entry pressure grows the table.
+    // live-entry pressure grows the table. Every branch here must yield a
+    // power of two - `probe_slot` masks instead of dividing.
     let new_cap: usize = 8
-    if (old_cap > 0) {
-        new_cap = if (self.length * 2 <= old_cap) { old_cap } else { old_cap * 2 }
+    if old_cap > 0 {
+        new_cap = if self.length * 2 <= old_cap { old_cap } else { old_cap * 2 }
     }
 
     // Allocate new entry array, zero-initialized (all states = empty)
     const alloc_size: usize = new_cap * size_of(Entry(K, V))
-    const raw: u8[] = self.allocator.or_global().alloc(alloc_size, 8)
-        .expect("dict: allocation failed")
+    const raw: u8[] = self.allocator.or_global().alloc(alloc_size, 8).expect("dict: allocation failed")
     memset(raw.ptr, 0, alloc_size)
 
     self.entries = raw.ptr as &Entry(K, V)
@@ -118,10 +117,10 @@ fn ensure_capacity(self: &Dict($K, $V)) {
     self.dead = 0
 
     // Re-insert old entries
-    if (old_cap > 0) {
+    if old_cap > 0 {
         for i in 0..old_cap as isize {
             const old_entry: &Entry(K, V) = old_entries + (i as usize)
-            if (old_entry.state == 1) {
+            if old_entry.state == 1 {
                 self.set(old_entry.key, old_entry.value)
             }
         }
@@ -137,13 +136,13 @@ pub fn set(self: &Dict($K, $V), key: K, value: V) {
     let tombstone_idx: usize = self.cap  // sentinel: no tombstone found
 
     for i in 0..self.cap as isize {
-        const idx: usize = (h + (i as usize)) % self.cap
+        const idx: usize = probe_slot(h, i as usize, self.cap)
         const entry: &Entry(K, V) = self.entries + idx
 
-        if (entry.state == 0) {
+        if entry.state == 0 {
             // Empty slot: use tombstone slot if we passed one, otherwise this slot
-            const target_idx: usize = if (tombstone_idx < self.cap) { tombstone_idx } else { idx }
-            if (tombstone_idx < self.cap) {
+            const target_idx: usize = if tombstone_idx < self.cap { tombstone_idx } else { idx }
+            if tombstone_idx < self.cap {
                 self.dead = self.dead - 1
             }
             const target: &Entry(K, V) = self.entries + target_idx
@@ -155,17 +154,17 @@ pub fn set(self: &Dict($K, $V), key: K, value: V) {
             return
         }
 
-        if (entry.state == 2) {
+        if entry.state == 2 {
             // Tombstone: remember first one for potential reuse
-            if (tombstone_idx == self.cap) {
+            if tombstone_idx == self.cap {
                 tombstone_idx = idx
             }
             continue
         }
 
         // Occupied: check if same key
-        if (entry.hash == h) {
-            if (entry.key == key) {
+        if entry.hash == h {
+            if entry.key == key {
                 // Key already exists: deinit old value and unused new key
                 entry.value.deinit()
                 key.deinit()
@@ -188,13 +187,13 @@ pub fn set(self: &Dict(OwnedString, $V), key: String, value: V) {
     let tombstone_idx: usize = self.cap
 
     for i in 0..self.cap as isize {
-        const idx: usize = (h + (i as usize)) % self.cap
+        const idx: usize = probe_slot(h, i as usize, self.cap)
         const entry: &Entry(OwnedString, V) = self.entries + idx
 
-        if (entry.state == 0) {
+        if entry.state == 0 {
             // Empty slot: allocate owned key and insert
-            const target_idx: usize = if (tombstone_idx < self.cap) { tombstone_idx } else { idx }
-            if (tombstone_idx < self.cap) {
+            const target_idx: usize = if tombstone_idx < self.cap { tombstone_idx } else { idx }
+            if tombstone_idx < self.cap {
                 self.dead = self.dead - 1
             }
             const target: &Entry(OwnedString, V) = self.entries + target_idx
@@ -206,15 +205,15 @@ pub fn set(self: &Dict(OwnedString, $V), key: String, value: V) {
             return
         }
 
-        if (entry.state == 2) {
-            if (tombstone_idx == self.cap) {
+        if entry.state == 2 {
+            if tombstone_idx == self.cap {
                 tombstone_idx = idx
             }
             continue
         }
 
-        if (entry.hash == h) {
-            if (entry.key == fake) {
+        if entry.hash == h {
+            if entry.key == fake {
                 // Key exists: update value only, no key allocation
                 entry.value.deinit()
                 entry.value = value
@@ -241,23 +240,23 @@ pub fn get(self: Dict($K, $V), key: K) V? {
 
 // Get a reference to the value associated with a key, or null if not found.
 pub fn get_ref(self: Dict($K, $V), key: K) &V? {
-    if (self.cap == 0) {
+    if self.cap == 0 {
         return null
     }
 
     const h: usize = hash_key(key)
 
     for i in 0..self.cap as isize {
-        const idx: usize = (h + (i as usize)) % self.cap
+        const idx: usize = probe_slot(h, i as usize, self.cap)
         const entry: &Entry(K, V) = self.entries + idx
 
-        if (entry.state == 0) {
+        if entry.state == 0 {
             return null
         }
 
-        if (entry.state == 1) {
-            if (entry.hash == h) {
-                if (entry.key == key) {
+        if entry.state == 1 {
+            if entry.hash == h {
+                if entry.key == key {
                     return Some(&entry.value)
                 }
             }
@@ -279,23 +278,23 @@ pub fn get_ref(self: Dict(OwnedString, $V), key: String) &V? {
 
 // Check if a key exists in the dict.
 pub fn contains(self: Dict($K, $V), key: K) bool {
-    if (self.cap == 0) {
+    if self.cap == 0 {
         return false
     }
 
     const h: usize = hash_key(key)
 
     for i in 0..self.cap as isize {
-        const idx: usize = (h + (i as usize)) % self.cap
+        const idx: usize = probe_slot(h, i as usize, self.cap)
         const entry: &Entry(K, V) = self.entries + idx
 
-        if (entry.state == 0) {
+        if entry.state == 0 {
             return false
         }
 
-        if (entry.state == 1) {
-            if (entry.hash == h) {
-                if (entry.key == key) {
+        if entry.state == 1 {
+            if entry.hash == h {
+                if entry.key == key {
                     return true
                 }
             }
@@ -320,23 +319,23 @@ pub fn remove(self: &Dict(OwnedString, $V), key: String) V? {
 
 // Remove a key from the dict. Returns the removed value, or null if not found.
 pub fn remove(self: &Dict($K, $V), key: K) V? {
-    if (self.cap == 0) {
+    if self.cap == 0 {
         return null
     }
 
     const h: usize = hash_key(key)
 
     for i in 0..self.cap as isize {
-        const idx: usize = (h + (i as usize)) % self.cap
+        const idx: usize = probe_slot(h, i as usize, self.cap)
         const entry: &Entry(K, V) = self.entries + idx
 
-        if (entry.state == 0) {
+        if entry.state == 0 {
             return null
         }
 
-        if (entry.state == 1) {
-            if (entry.hash == h) {
-                if (entry.key == key) {
+        if entry.state == 1 {
+            if entry.hash == h {
+                if entry.key == key {
                     const val: V = entry.value
                     entry.key.deinit()
                     entry.state = 2
@@ -354,10 +353,10 @@ pub fn remove(self: &Dict($K, $V), key: K) V? {
 // Remove all entries from the dict without freeing backing storage.
 // Deinits all stored keys and values.
 pub fn clear(self: &Dict($K, $V)) {
-    if (self.cap > 0) {
+    if self.cap > 0 {
         for i in 0..self.cap as isize {
             const entry: &Entry(K, V) = self.entries + (i as usize)
-            if (entry.state == 1) {
+            if entry.state == 1 {
                 entry.key.deinit()
                 entry.value.deinit()
             }
@@ -393,7 +392,7 @@ pub fn iter(it: &DictIterator($K, $V)) DictIterator(K, V) {
 pub fn next(it: &DictIterator($K, $V)) Entry(K, V)? {
     for idx in it.current..it.dict.cap {
         const entry: &Entry(K, V) = it.dict.entries + idx
-        if (entry.state == 1) {
+        if entry.state == 1 {
             it.current = idx + 1
             // Wrapped explicitly - see the note in core/range.f::next.
             return Some(entry.*)
