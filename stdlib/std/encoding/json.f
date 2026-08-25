@@ -208,7 +208,6 @@ pub fn parse(input: String, allocator: &Allocator? = null) Result(JsonValue, Jso
     return parse(mr.reader(), allocator)
 }
 
-
 // =============================================================================
 // DOM Serialization
 // =============================================================================

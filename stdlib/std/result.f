@@ -42,6 +42,14 @@ pub fn ok(self: Result($T, $E)) T? {
     }
 }
 
+// The error as an optional, mirroring `ok`.
+pub fn err(self: Result($T, $E)) E? {
+    return self match {
+        Ok(_) => None
+        Err(e) => Some(e)
+    }
+}
+
 // Apply `f` to an Ok value, leaving `Err` untouched. Transforms what a
 // result holds without unwrapping and re-wrapping; `f` never runs on `Err`.
 // When `f` itself returns a Result, use `and_then` so the result does not nest.
@@ -75,14 +83,6 @@ pub fn and_then(self: Result($T, $E), f: $F) Result($U, E) {
     return self match {
         Ok(v) => f(v)
         Err(e) => Err(e)
-    }
-}
-
-// The error as an optional, mirroring `ok`.
-pub fn err(self: Result($T, $E)) E? {
-    return self match {
-        Ok(_) => None
-        Err(e) => Some(e)
     }
 }
 

@@ -6,7 +6,6 @@ import core.rtti
 import std.mem
 import std.option
 
-
 pub fn or_global(alloc: &Allocator?) &Allocator {
     #if runtime.testing {
         return alloc.unwrap_or(&test_allocator)

@@ -23,7 +23,6 @@ pub fn decode_char(bytes: u8[]) (char, usize) {
     return (codepoint as char, length)
 }
 
-
 pub fn encode_char(codepoint: char, dest: u8[]) usize {
     let length = 0usize
 

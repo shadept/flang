@@ -19,7 +19,6 @@ pub type List = struct(T) {
 
 const DEFAULT_CAPACITY: usize = 16
 
-
 pub fn list(capacity: usize, allocator: &Allocator) List($T) {
     return list(capacity, Some(allocator))
 }
