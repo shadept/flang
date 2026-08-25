@@ -112,6 +112,28 @@ and any other whole-program sweep live there.
 Demand order is deterministic: **module import-topological, then declaration
 source order**. Same rule RFC-021 fixes for the template worklist.
 
+**Amended 2026-08-25.** A plain import-topological order does not exist. Import
+cycles are a library-level rule (`docs/spec.md` §6): modules inside one library
+may import each other freely, and three such cycles are load bearing -
+`core.{rtti, slice, string}`, `std.{dict, list, string, string_builder,
+string_reader}`, and `flang_typer.{checker, template_expand}`. A 5-module
+strongly-connected component has no topological order.
+
+So the order is the topological sort of the **condensation** - the DAG of
+strongly-connected components - with components entered in FQN-lexicographic
+order and modules ordered the same way inside one. For the acyclic majority
+this *is* plain topological order; it only differs where the alternative was
+undefined. Nothing here changes if the cycles are ever broken: every component
+becomes a singleton and the rule degenerates.
+
+The barriers §2 replaces are also what makes those cycles work today -
+`collect_nominal_names` over every module before `resolve_nominal_bodies` over
+any is what lets `core.string` and `core.slice` name each other. A query that
+recursively demands its imports re-enters itself on any of the three cycles, so
+the graph needs in-progress marking, and a re-entrant demand has to see the
+placeholder the outer call already registered rather than recurse. That is the
+same two-phase split, expressed as a cycle rule instead of a global barrier.
+
 Emission order feeds the stage-2 = stage-3 byte-identical fixpoint. Lowering
 currently iterates `specializations` positionally; after §4 it iterates in id
 order, which preserves the fixpoint by construction.

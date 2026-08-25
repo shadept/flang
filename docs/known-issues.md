@@ -89,6 +89,44 @@ in its fixtures so the assertions are no longer vacuous.
 
 ## Open Issues
 
+### Library Import Cycles Are Unchecked
+
+**Status:** Open — the rule is specified and currently holds, but nothing enforces it
+**Affected:** `lib/flang_analysis/src/project.f` (manifest parsing), `lib/flang_analysis/src/analyze.f` (the BFS loader)
+
+`docs/spec.md` §6 makes import cycles a **library**-level rule: modules inside
+one library may import each other freely (a C# assembly / Java package), but
+the library graph must be a DAG. Nothing checks the second half.
+
+The check needs no source files at all - only the `[dependencies]` of each
+`flang.toml`, which `project.f` already parses. Resolve the dependency graph
+transitively and reject a back edge, naming both libraries.
+
+Today's graph is acyclic:
+
+```
+flang_core    <- flang_parser <- flang_typer <- flang_analysis <- flang_driver
+flang_codegen <- flang_driver
+std           (no dependencies)
+```
+
+For the record, module-level cycles *within* a library are legal and load
+bearing - removing them is not a goal. Three exist, each confined to one
+library: `core.{rtti, slice, string}` (the prelude bootstrap - a bounds check
+needs `panic`, `panic` needs formatting), `std.{dict, list, string,
+string_builder, string_reader}` (the string/collection knot), and
+`flang_typer.{checker, template_expand}`. A further seven `std` modules join
+that cycle only through colocated `test {}` blocks importing `std.test`, which
+in turn needs `list` and `string_builder`.
+
+Consequence for RFC-022: because intra-library module cycles are permanent,
+a plain import-topological demand order does not exist. The checker orders by
+the topological sort of the *condensation* (the DAG of strongly-connected
+components), FQN-lexicographic within a component - which degenerates to plain
+topological order for the acyclic majority.
+
+---
+
 ### Harness: Parallel Workers Share One C Build Directory
 
 **Status:** Open — one or two harness tests fail per full run, never the same ones

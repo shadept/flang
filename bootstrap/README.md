@@ -48,6 +48,26 @@ compiler living outside `dist/<rid>/` at the stdlib.
 src/main.f       — CLI entry point
 ```
 
+## Dependencies
+
+```
+        flang_core        flang_codegen
+         ^      ^              ^
+         |      |              |
+  flang_parser  |              |
+         ^      |              |
+         |      |              |
+    flang_typer |              |
+         ^   ^  |              |
+         |   |  |              |
+         | flang_analysis      |
+         |   ^                 |
+         |   |                 |
+        flang_driver ──────────┘
+             ^
+          bootstrap
+```
+
 ## Roadmap
 
 The detailed, per-feature coverage matrix lives in

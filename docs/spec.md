@@ -599,7 +599,7 @@ Implicit: `String` automatically accepted where `u8[]` expected. Reverse (`u8[]`
 - `pub` exposes declarations outside the file. Without `pub`: file-private.
 - Visibility is two-level only — there is no `pub` on individual fields, and there are no property declarations. External "mutation" of a struct happens by re-construction (return a new value, or have the defining file expose mutating functions).
 - Struct fields readable from any file, writable only in defining file (see scoped mutability in Section 8).
-- Cyclic imports (including `pub import` cycles) are compile errors.
+- **Import cycles are a library-level rule, not a module-level one.** Modules *within* one library may import each other freely, cycles included — the same model as a C# assembly or a Java package. Libraries may not: if library A depends on library B, no module of B may import a module of A. The library graph is a DAG, decided from the `[dependencies]` of each `flang.toml` before a single source file is read. (Not yet enforced — see `docs/known-issues.md`. The library graph is acyclic today; nothing checks that it stays so.)
 - A symbol is visible in module M iff it is defined in M, OR it is `pub` and defined in a module reachable from M via `import` plus the `pub import` transitive closure.
 - FQN-style references (e.g. `core.option.Option`) bypass visibility — an explicit dotted name is unambiguous and self-authorizing.
 
