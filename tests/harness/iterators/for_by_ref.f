@@ -1,9 +1,10 @@
 //! TEST: for_by_ref
-//! EXIT: 36
+//! EXIT: 636
 
 // `for &x in xs` iterates through `iter_ref`: `x` is `&T` into the
-// collection's storage, so writes land in place. Works on List and
-// slices; a custom type joins by defining `iter_ref`.
+// collection's storage, so writes land in place. Works on List, slices
+// and fixed arrays (which decay to a slice); a custom type joins by
+// defining `iter_ref`.
 
 import std.list
 
@@ -27,5 +28,9 @@ pub fn main() i32 {
     for x in xs { sum = sum + x }            // 63
     let c = Counter { n = 5 }
     for &n in c { n.* = n.* - 32 }           // -27
-    return sum + c.n
+    let arr: [i32; 3] = [1, 2, 3]
+    for &a in arr { a.* = a.* * 100 }        // 100, 200, 300 - in place
+    let asum = 0i32
+    for a in arr { asum = asum + a }         // 600
+    return sum + c.n + asum
 }

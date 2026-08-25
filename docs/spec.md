@@ -681,22 +681,23 @@ loop {
 }
 ```
 
-Make a type iterable by defining `fn iter(self: &T) Iterator` and `fn next(self: &Iterator) Element?`.
+A `for` loop comes in two forms. They differ in what the loop variable binds, and each resolves its own pair of protocol methods:
 
-`for x in xs` yields elements **by value** (a copy per iteration - a
-local temporary the C backend eliminates under `--release`; measured
-on 48-byte structs the by-value loop compiles to the same vectorized
-loop as manual indexing). To mutate in place, iterate by reference:
-`for &x in xs` binds `x: &T` into the collection's storage - it
-resolves `iter_ref(&xs)` instead of `iter(&xs)`, then `next` as usual,
-so any type joins by defining `fn iter_ref(self: &T) RefIterator` with
-`fn next(self: &RefIterator) &E?`. (`for x in xs.iter_ref()` is the
-same thing spelled out. Not a speed knob: the pointer stride can
-defeat vectorization; the point is aliasing the element.) (`List` and slices ship `iter_ref`; an
-iterator type is its own iterable, so combinators chain:
-`xs.iter().enumerate()`). A fixed array `[T; N]` iterates through
-`iter(&T[])` by decay; a `String` is not iterable (byte vs char is
-the caller's call - index it).
+| form | resolves | binds | a type joins by defining |
+|---|---|---|---|
+| `for x in xs` | `iter(&xs)` | `x: T` — a copy per iteration | `fn iter(self: &T) Iterator` and `fn next(self: &Iterator) E?` |
+| `for &x in xs` | `iter_ref(&xs)` | `x: &T` — aliased into the collection's storage | `fn iter_ref(self: &T) RefIterator` and `fn next(self: &RefIterator) &E?` |
+
+`for x in xs.iter_ref()` is the reference form spelled out.
+
+**Choose by aliasing, not by speed.** Take the reference form to mutate elements in place, or when the body must otherwise alias the collection's storage. It is not the faster one: the pointer stride can defeat vectorization, while the by-value copy is a local temporary the C backend eliminates under `--release` — measured on 48-byte structs, the by-value loop compiles to the same vectorized loop as manual indexing.
+
+Which types iterate, and how:
+
+- **`List` and slices** — both forms; they ship `iter_ref` alongside `iter`.
+- **Iterator types** — every iterator is itself iterable, so adapters chain: `xs.iter().enumerate()`.
+- **Fixed arrays `[T; N]`** — decay to a slice, so both forms work: `iter(&T[])` and `iter_ref(&T[])`. `for &el in arr { el.* = ... }` mutates the array in place.
+- **`String`** — **not** iterable by itself. Bytes or characters is a choice only the caller can make; index it instead.
 
 ### 7.5 Match Expression
 
