@@ -9,6 +9,7 @@ import std.string
 import std.string_builder
 import std.io.file
 import std.io.fs
+import std.time
 import flang_parser.ast
 import flang_parser.comptime
 import flang_typer.result
@@ -44,12 +45,17 @@ pub fn build_unit(unit: &AnalyzedUnit, output_path: String, allocator: &Allocato
 // `libs`/`ldflags` are the host platform's `[build.<os>]` entries, already
 // expanded and validated by the caller (env expansion touches the
 // environment, so it stays at the CLI edge).
+// `release` optimizes the generated C.
+// `keep_c` retains the generated C beside the executable instead of
+// deleting it after the link - the input the stage-N fixpoint compares.
 // `verbose` prints the skip report - one line per function lowering
 // refused (directly or transitively), with the reason. TEMPORARY
 // SCAFFOLD like `IrModule.skipped` itself: the frontier report for the
 // self-host milestones; delete together with the skip mechanism.
-pub fn build_program(modules: &List(Module), fqns: &List(OwnedString), result: &TypeCheckResult, output_path: String, comptime_ctx: ComptimeCtx, source_paths: &List(OwnedString), libs: &List(OwnedString), ldflags: &List(OwnedString), verbose: bool = false, allocator: &Allocator? = null) Result(BuildResult, BuildError) {
+pub fn build_program(modules: &List(Module), fqns: &List(OwnedString), result: &TypeCheckResult, output_path: String, comptime_ctx: ComptimeCtx, source_paths: &List(OwnedString), libs: &List(OwnedString), ldflags: &List(OwnedString), verbose: bool = false, keep_c: bool = false, release: bool = false, allocator: &Allocator? = null) Result(BuildResult, BuildError) {
+    const lower_start = monotonic_ns()
     let m = lower_program(modules, fqns, result, comptime_ctx, allocator)
+    const lower_ns = elapsed_ns(lower_start)
     if verbose and m.skip_notes.len > 0 {
         const hdr = $"  {m.functions.len} function(s) emitted, {m.skip_notes.len} skipped:"
         defer hdr.deinit()
@@ -61,6 +67,8 @@ pub fn build_program(modules: &List(Module), fqns: &List(OwnedString), result: &
         }
     }
     let opts = build_options(output_path, allocator)
+    let _k = opts.set_keep_temps(keep_c)
+    let _r = opts.set_release(release)
 
     let runtime_c = companion_c_files(source_paths, allocator)
     for i in 0..runtime_c.len {
@@ -79,7 +87,11 @@ pub fn build_program(modules: &List(Module), fqns: &List(OwnedString), result: &
     opts.deinit()
     m.deinit()
     deinit_source_list(&runtime_c)
-    return r
+    if r.is_err() { return r }
+    // The backend times its own phases but never sees the lowering.
+    let artifact = r.unwrap()
+    artifact.set_lower_ns(lower_ns)
+    return Ok(artifact)
 }
 
 // Every `<mod>.c` sitting beside a `<mod>.f` in the module set. A `.c` the

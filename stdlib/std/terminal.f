@@ -28,14 +28,20 @@ const TIOCGWINSZ: u64 = 0x40087468
 
 #foreign fn ioctl(fd: i32, request: u64, argp: &u8) i32
 
-// Query the terminal dimensions. Falls back to 80x24 on failure.
+// Query the terminal dimensions. Falls back to 80x24 on failure, and
+// always on Windows - the console size lives behind kernel32's
+// GetConsoleScreenBufferInfo, not `ioctl`, which the CRT does not provide.
 pub fn get_terminal_size() TerminalSize {
-    let ws = Winsize { ws_row = 0, ws_col = 0, ws_xpixel = 0, ws_ypixel = 0 }
-    const ret = ioctl(1, TIOCGWINSZ, &ws as &u8)
-    if ret == -1 {
+    #if platform.os == "windows" {
         return TerminalSize { rows = 24, cols = 80 }
+    } else {
+        let ws = Winsize { ws_row = 0, ws_col = 0, ws_xpixel = 0, ws_ypixel = 0 }
+        const ret = ioctl(1, TIOCGWINSZ, &ws as &u8)
+        if ret == -1 {
+            return TerminalSize { rows = 24, cols = 80 }
+        }
+        return TerminalSize { rows = ws.ws_row, cols = ws.ws_col }
     }
-    return TerminalSize { rows = ws.ws_row, cols = ws.ws_col }
 }
 
 // =============================================================================

@@ -21,6 +21,7 @@ import std.string
 import std.string_builder
 import std.io.file
 import std.io.fs
+import std.time
 import flang_parser.comptime
 import flang_parser.lexer
 import flang_codegen.backend
@@ -38,12 +39,30 @@ type Cli = struct {
     show_version: bool
     verbose: bool
     emit_generated: bool
+    keep_c: bool
+    timings: bool
+    release: bool
     check: bool
     subcommand: String
     rest_index: usize
     stdlib_path: String
     target_os: String
     target_arch: String
+}
+
+// Everything a build needs beyond the input path: the flags that shape it,
+// plus the values derived once from the CLI (stdlib root, compile-time
+// context) and the clock it started on.
+type BuildOpts = struct {
+    verbose: bool
+    check_only: bool
+    emit_generated: bool
+    keep_c: bool
+    timings: bool
+    release: bool
+    stdlib_path: String
+    target: ComptimeCtx
+    start_ns: u64
 }
 
 pub fn main() i32 {
@@ -67,7 +86,7 @@ pub fn main() i32 {
     }
 
     return cli.subcommand match {
-        "build" => run_build(argv, cli.rest_index, cli.verbose, cli.stdlib_path, cli.check, cli.target_os, cli.target_arch, cli.emit_generated)
+        "build" => run_build(argv, cli.rest_index, &cli)
         "fmt" => spawn_tool("flang_fmt", argv, cli.rest_index, cli.verbose)
         "lsp" => spawn_tool("flang_lsp", argv, cli.rest_index, cli.verbose)
         "cst" => spawn_tool("cst_explorer", argv, cli.rest_index, cli.verbose)
@@ -82,7 +101,7 @@ pub fn main() i32 {
 // argument as the subcommand. Index 0 is the program name and is skipped.
 fn parse_cli(argv: String[]) Cli {
     let cli: Cli
-    let opts = getopts("h(help)V(version)v(verbose)c(check)g(emit-generated)s(stdlib-path):T(target-os):A(target-arch):", argv, 1)
+    let opts = getopts("h(help)V(version)v(verbose)c(check)g(emit-generated)k(keep-c)t(timings)r(release)s(stdlib-path):T(target-os):A(target-arch):", argv, 1)
 
     // Drive opts.next() manually rather than `for r in opts` - std.env's
     // `iter(&GetOpt)` returns a *copy* of the iterator state, so a
@@ -97,6 +116,9 @@ fn parse_cli(argv: String[]) Cli {
                 if c == 'V' { cli.show_version = true }
                 if c == 'v' { cli.verbose = true }
                 if c == 'g' { cli.emit_generated = true }
+                if c == 'k' { cli.keep_c = true }
+                if c == 't' { cli.timings = true }
+                if c == 'r' { cli.release = true }
                 if c == 'c' { cli.check = true }
             }
             OptArg(c, val) => {
@@ -135,7 +157,7 @@ fn print_help() {
     const banner = $"{me.name} {me.version} - the SELF-HOSTED compiler (written in FLang)"
     defer banner.deinit()
     println(banner.as_view())
-    println("Subset of the reference CLI: no `test`, `-o`, `--release` or bare-file form.")
+    println("Subset of the reference CLI: no `test`, `-o` or bare-file form.")
     println("")
     println("usage: flang [options] <command> [args...]")
     println("")
@@ -152,6 +174,9 @@ fn print_help() {
     println("  -v, --verbose       verbose output")
     println("  -g, --emit-generated  write template expansions to <origin>.generated.f (debug)")
     println("  -c, --check         type-check only (no codegen or link)")
+    println("  -k, --keep-c        keep the generated C beside the executable")
+    println("  -t, --timings       print per-phase wall times")
+    println("  -r, --release       optimize the generated C (-O2 / /O2)")
     println("  -T, --target-os     target OS for #if evaluation (windows|linux|macos)")
     println("  -A, --target-arch   target arch for #if evaluation (x86_64|arm64|x86)")
     println("  -s, --stdlib-path <dir>  stdlib root (default: <exe dir>/stdlib)")
@@ -178,24 +203,34 @@ fn unknown_subcommand(name: String) i32 {
 // multi-module pipeline as project mode, so its imports and the stdlib
 // resolve; with no argument, load `flang.toml` from the current directory
 // and build the project.
-fn run_build(argv: String[], rest: usize, verbose: bool, stdlib_path: String, check_only: bool, target_os: String, target_arch: String, emit_generated: bool) i32 {
-    const target_opt = resolve_target(target_os, target_arch)
+fn run_build(argv: String[], rest: usize, cli: &Cli) i32 {
+    const target_opt = resolve_target(cli.target_os, cli.target_arch)
     if target_opt.is_none() { return 1 }
-    const target = target_opt.unwrap()
-    let stdlib = effective_stdlib(stdlib_path, argv)
+    let stdlib = effective_stdlib(cli.stdlib_path, argv)
     defer stdlib.deinit()
+    const opts = BuildOpts {
+        verbose = cli.verbose,
+        check_only = cli.check,
+        emit_generated = cli.emit_generated,
+        keep_c = cli.keep_c,
+        timings = cli.timings,
+        release = cli.release,
+        stdlib_path = stdlib.as_view(),
+        target = target_opt.unwrap(),
+        start_ns = monotonic_ns(),
+    }
     if rest < argv.len {
         const path = argv[rest]
         if ends_with(path, ".f") {
             const out = output_path_for(path)
-            return build_single_file(path, out, verbose, stdlib.as_view(), check_only, target, emit_generated)
+            return build_single_file(path, out, &opts)
         }
         const msg = $"flang: `build` takes a `.f` file or no argument (got `{path}`)"
         defer msg.deinit()
         println(msg.as_view())
         return 1
     }
-    return build_project(verbose, stdlib.as_view(), check_only, target, emit_generated)
+    return build_project(&opts)
 }
 
 // The compile-time context for this build: host values, overridden by
@@ -258,7 +293,7 @@ fn dir_of(path: String) String {
 // Project mode: parse `flang.toml`, glob its sources, resolve imports
 // across the whole project (plus the auto-imported prelude), type-check
 // every module together, then lower the lot to one executable.
-fn build_project(verbose: bool, stdlib_path: String, check_only: bool, target: ComptimeCtx, emit_generated: bool) i32 {
+fn build_project(opts: &BuildOpts) i32 {
     if !exists("flang.toml") {
         println("flang: no flang.toml in the current directory")
         return 1
@@ -284,9 +319,9 @@ fn build_project(verbose: bool, stdlib_path: String, check_only: bool, target: C
         return 1
     }
 
-    let ctx = resolve_ctx(&proj, stdlib_path)
+    let ctx = resolve_ctx(&proj, opts.stdlib_path)
     defer ctx.deinit()
-    ctx.set_comptime(target)
+    ctx.set_comptime(opts.target)
 
     let unit = analyze_project(&ctx, &sources)
     defer unit.deinit()
@@ -318,15 +353,15 @@ fn build_project(verbose: bool, stdlib_path: String, check_only: bool, target: C
 
     const out = $"{proj.output.as_view()}/{proj.name.as_view()}"
     defer out.deinit()
-    return finish_build(&unit, proj.name.as_view(), out.as_view(), verbose, check_only, stdlib_path, target, &libs, &ldflags)
+    return finish_build(&unit, proj.name.as_view(), out.as_view(), opts, &libs, &ldflags)
 }
 
 // Single-file mode: the file is the sole entry of a project-less build, so
 // its imports resolve against the stdlib and the working directory.
-fn build_single_file(path: String, out: String, verbose: bool, stdlib_path: String, check_only: bool, target: ComptimeCtx, emit_generated: bool) i32 {
-    let ctx = single_file_ctx(stdlib_path)
+fn build_single_file(path: String, out: String, opts: &BuildOpts) i32 {
+    let ctx = single_file_ctx(opts.stdlib_path)
     defer ctx.deinit()
-    ctx.set_comptime(target)
+    ctx.set_comptime(opts.target)
 
     let entries: List(OwnedString) = list(1)
     entries.push(from_view(path))
@@ -335,14 +370,14 @@ fn build_single_file(path: String, out: String, verbose: bool, stdlib_path: Stri
     let unit = analyze_project(&ctx, &entries)
     defer unit.deinit()
 
-    if emit_generated {
+    if opts.emit_generated {
         const n = unit.write_generated()
-        if verbose { const gm = $"  wrote {n} generated file(s)"; defer gm.deinit(); println(gm.as_view()) }
+        if opts.verbose { const gm = $"  wrote {n} generated file(s)"; defer gm.deinit(); println(gm.as_view()) }
     }
     // No manifest, so no `[build.<os>]` inputs.
     let none: List(OwnedString) = list(0)
     defer none.deinit()
-    return finish_build(&unit, path, out, verbose, check_only, stdlib_path, target, &none, &none)
+    return finish_build(&unit, path, out, opts, &none, &none)
 }
 
 // Expand `${VAR}` in each entry against the environment. An undefined
@@ -385,11 +420,11 @@ fn expand_all(items: &List(OwnedString), missing: &List(OwnedString)) List(Owned
 }
 
 // Shared render -> gate -> lower -> link tail for both build modes.
-fn finish_build(unit: &AnalyzedProject, label: String, out: String, verbose: bool, check_only: bool, stdlib_path: String, target: ComptimeCtx, libs: &List(OwnedString), ldflags: &List(OwnedString)) i32 {
+fn finish_build(unit: &AnalyzedProject, label: String, out: String, opts: &BuildOpts, libs: &List(OwnedString), ldflags: &List(OwnedString)) i32 {
     render_project_diagnostics(&unit.diagnostics, &unit.file_paths, &unit.sources)
 
     const errs = project_error_count(unit)
-    if verbose {
+    if opts.verbose {
         const v = $"  ({unit.modules.len} modules, {unit.result.node_types.len()} nodes typed)"
         defer v.deinit()
         println(v.as_view())
@@ -398,14 +433,15 @@ fn finish_build(unit: &AnalyzedProject, label: String, out: String, verbose: boo
         return build_failed(label, errs)
     }
 
-    if check_only {
+    if opts.check_only {
         const m = $"checked {label} ({unit.modules.len} modules)"
         defer m.deinit()
         println(m.as_view())
+        if opts.timings { print_timings(unit, 0, 0, 0, elapsed_ns(opts.start_ns)) }
         return 0
     }
 
-    let result = build_program(&unit.modules, &unit.fqns, &unit.result, out, target, &unit.file_paths, libs, ldflags, verbose)
+    let result = build_program(&unit.modules, &unit.fqns, &unit.result, out, opts.target, &unit.file_paths, libs, ldflags, opts.verbose, opts.keep_c, opts.release)
     if result.is_err() {
         report_build_error(&result.unwrap_err(), label)
         return 1
@@ -415,7 +451,46 @@ fn finish_build(unit: &AnalyzedProject, label: String, out: String, verbose: boo
     const msg = $"built {artifact.executable_path.as_view()}"
     defer msg.deinit()
     println(msg.as_view())
+    if opts.timings {
+        print_timings(unit, artifact.lower_ns, artifact.translate_ns, artifact.cc_ns, elapsed_ns(opts.start_ns))
+    }
     return 0
+}
+
+// `--timings`: where the wall time went, one line per phase, with the
+// typechecker broken into its own phases beneath it. "other" is the
+// remainder - project manifest, glob, diagnostics rendering, teardown - and
+// is the cue that a phase worth naming is still unaccounted for.
+fn print_timings(unit: &AnalyzedProject, lower_ns: u64, translate_ns: u64, cc_ns: u64, total_ns: u64) {
+    const p = unit.result.phases
+    println("timings:")
+    print_phase("read + parse", unit.parse_ns, total_ns, false)
+    print_phase("typecheck", unit.check_ns, total_ns, false)
+    print_phase("collect", p.collect_ns, total_ns, true)
+    print_phase("templates", p.templates_ns, total_ns, true)
+    print_phase("nominals + sigs", p.nominals_ns, total_ns, true)
+    print_phase("constants", p.constants_ns, total_ns, true)
+    print_phase("bodies", p.bodies_ns, total_ns, true)
+    print_phase("specialize", p.specialize_ns, total_ns, true)
+    print_phase("zonk", p.zonk_ns, total_ns, true)
+    print_phase("lower", lower_ns, total_ns, false)
+    print_phase("emit C", translate_ns, total_ns, false)
+    print_phase("cc + link", cc_ns, total_ns, false)
+    const named = unit.parse_ns + unit.check_ns + lower_ns + translate_ns + cc_ns
+    print_phase("other", if named < total_ns { total_ns - named } else { 0 as u64 }, total_ns, false)
+    print_phase("total", total_ns, total_ns, false)
+}
+
+fn print_phase(label: String, ns: u64, total_ns: u64, nested: bool) {
+    const pct = if total_ns > 0 { (ns * 100) / total_ns } else { 0 as u64 }
+    let pad = string_builder(24)
+    defer pad.deinit()
+    pad.append(if nested { "    " } else { "  " })
+    pad.append(label)
+    while pad.len < 20 { pad.append(" ") }
+    const line = $"{pad.as_view()} {ns / 1000000} ms ({pct}%)"
+    defer line.deinit()
+    println(line.as_view())
 }
 
 // Derive the output artifact path from the input: strip a trailing `.f`

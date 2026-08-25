@@ -166,6 +166,13 @@ pub fn set_keep_temps(self: &BuildOptions, k: bool) &BuildOptions {
     return self
 }
 
+// Optimize the generated C (`/O2`, `-O2`). Debug info is unaffected on
+// Windows - `/Z7` is passed in both modes.
+pub fn set_release(self: &BuildOptions, on: bool) &BuildOptions {
+    self.mode = if on { BuildMode.Release } else { BuildMode.Debug }
+    return self
+}
+
 // ─────────────────────────────────────────────────────────────────────────
 // Build results and errors
 // ─────────────────────────────────────────────────────────────────────────
@@ -176,6 +183,18 @@ pub type BuildResult = struct {
 
     // Generated C file, if `keep_temps` or `emit_c_path` was set.
     c_source_path: OwnedString?
+
+    // Wall time of each phase, for `--timings`. `lower_ns` is the caller's
+    // to fill - the backend is handed FIR, it does not produce it.
+    lower_ns: u64
+    translate_ns: u64
+    cc_ns: u64
+}
+
+// Record how long producing the FIR took. The backend cannot measure it -
+// it is handed a finished module - so the driver reports it back.
+pub fn set_lower_ns(self: &BuildResult, ns: u64) {
+    self.lower_ns = ns
 }
 
 pub fn deinit(self: &BuildResult) {

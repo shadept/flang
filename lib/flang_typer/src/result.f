@@ -52,6 +52,32 @@ pub type TypeCheckResult = struct {
     // table keyed by synthesized-nominal id.
     lambdas: Dict(NodeId, LambdaInfo)
     closures: Dict(NominalId, ClosureSig)
+    // Wall time of each `check_all` phase, for `--timings`.
+    phases: CheckPhases
+}
+
+// Per-phase wall time of one `check_all` run, in nanoseconds. Zero on an
+// empty result. Ordered as the phases run.
+pub type CheckPhases = struct {
+    collect_ns: u64      // visibility graph + nominal names
+    templates_ns: u64    // source-generator expansion
+    nominals_ns: u64     // nominal bodies + signatures
+    constants_ns: u64    // constant initializers
+    bodies_ns: u64       // function bodies
+    specialize_ns: u64   // generic instantiation drain + pending calls
+    zonk_ns: u64         // final substitution of every recorded type
+}
+
+pub fn no_phases() CheckPhases {
+    return .{
+        collect_ns = 0,
+        templates_ns = 0,
+        nominals_ns = 0,
+        constants_ns = 0,
+        bodies_ns = 0,
+        specialize_ns = 0,
+        zonk_ns = 0,
+    }
 }
 
 // Look up a node's resolved type. Returns `null` for nodes the checker
@@ -76,6 +102,7 @@ pub fn empty_result(allocator: &Allocator? = null) TypeCheckResult {
         functions = function_registry(allocator),
         lambdas = dict(allocator),
         closures = dict(allocator),
+        phases = no_phases(),
     }
 }
 

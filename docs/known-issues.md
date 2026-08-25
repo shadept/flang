@@ -411,10 +411,79 @@ The self-hosted compiler reaches harness parity on **compilation** (551/0/16 thr
 | `test` command | `flang test [path] [--name <substr>]` |
 | bare-file form | `flang hello.f` (self-host needs `flang build hello.f`) |
 | `-o <path>` | output path control |
-| `--release` | optimized build |
 | program name | identifies itself as `bootstrap`, not `flang` |
 
+`--release` landed 2026-08-25 as `-r/--release`; the self-host also has
+`-k/--keep-c` and `-t/--timings`, which the reference does not. Note that
+self-hosted flags must precede the subcommand — `getopts` stops at the first
+non-option argument.
+
 Consequences today: `dotnet test-all.cs` is pinned to `dist/<rid>/flang-ref` because `flang test` does not exist self-hosted, and the README documents the reference-only forms separately. The harness (`dotnet test.cs`) is unaffected — it only ever invokes `build`.
+
+---
+
+### POSIX-Only Test Expectations on Windows — `std.path` RESOLVED
+
+**Status:** `std.path` resolved 2026-08-25 (`dotnet test-all.cs` back to 5/6
+on Windows); one harness test still POSIX-only
+**Affected:** `tests/harness/directives/if_directive_divergence.f`
+
+Anything that joins path components writes the NATIVE separator (`sep()` is
+`\` on Windows), so an expectation spelled with `/` only holds on POSIX.
+Three `stdlib/std/path.f` test blocks (`to_relative walks up and back down`,
+`push appends a component and absolute input replaces`, `with_file_name
+replaces only the last component`) failed that way; they now assert through
+`assert_slash_eq`, which compares the `to_slash` form and so reads the same
+on every platform. The library code was correct throughout.
+
+`if_directive_divergence.f` has the same shape and still fails on Windows:
+its `pick()` returns 1 under `#if platform.os == "windows"` and `main`
+asserts 0. What the test is actually for is that an exhaustive `#if`/`else`
+whose branches both return satisfies the missing-return check, which holds
+whichever branch is live — the expectation just needs to stop naming one
+platform's branch.
+
+---
+
+### Self-Host: No Dead-Code Elimination — Unreachable POSIX Foreigns Reach the Linker
+
+**Status:** Open — one harness test fails on Windows (`directives/if_directive_cross_target.f`)
+**Affected:** `lib/flang_driver/src/lower.f` (lowers every function in the module set), `stdlib/std/readline.f`
+
+The reference compiler emits only what is reachable from `main`; the
+self-hosted lowering emits every function of every module in the program.
+Unreferenced code costs binary size, and any `#foreign` symbol in it must
+resolve at link time even when nothing calls it. On Windows the POSIX-only
+foreigns in `std.readline` (`tcgetattr`, `tcsetattr`) are therefore
+unresolved externals in every build whose compile-time context is not
+`windows`.
+
+`std.terminal.get_terminal_size` used to be a third one; it now branches on
+`#if platform.os == "windows"` and returns the 80x24 fallback there, which
+is the shape the rest of the POSIX foreigns need too — guard the call, not
+the declaration (an uncalled `extern` never reaches the linker).
+
+Host-targeted builds are unaffected: `#if` prunes the POSIX branch on a
+Windows host. Only a cross-target build (`--target-os linux` on Windows,
+which still links with the host toolchain) drags them in.
+
+Measured on the self-build (2026-08-25), with a demand-driven walk seeded
+at `main` and the const initializers, pulling declarations and `#foreign`
+externs in on reference: **874 of 4527 emitted functions (19%) are
+unreachable**, worth 11% of the emitted C, 10% of the binary, and 16% of
+harness wall time (123s -> 103s, every test compiles less stdlib). Lowering
+time itself did *not* move — the dead functions are small. The
+cross-target test passes with it, and the stage-2 = stage-3 fixpoint holds.
+
+Two traps that walk hit, for whoever lands it: (1) an unregistered
+declaration must not be indexed under its bare source name — a generic
+`free(...)` template shadowed the `#foreign free`, so every allocator user
+was dropped as a caller of an undefined symbol; only body-less
+(variadic-foreign) declarations may fall back to the source name. (2)
+`drop_callers_of_refused` only inspects `Call.callee` and `Store`d
+`FuncRef`s, so a function address passed as a call *argument* keeps a
+dangling reference alive. Deferred into the incremental/pull-based
+compilation model the LSP work is introducing.
 
 ---
 

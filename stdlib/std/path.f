@@ -705,6 +705,17 @@ pub fn with_file_name(self: &Path, name: String) Path {
 // Tests
 // =============================================================================
 
+// Assert against a `/`-spelled expectation on any platform. Everything that
+// joins components writes the NATIVE separator, so a literal expectation
+// would only hold on POSIX.
+fn assert_slash_eq(actual: String, expected: String, msg: String) {
+    let p = path(actual)
+    defer p.deinit()
+    const s = p.to_slash()
+    defer s.deinit()
+    assert_eq(s.as_view(), expected, msg)
+}
+
 test "path basics" {
     let p = path("src/foo.f")
     defer p.deinit()
@@ -905,15 +916,15 @@ test "to_relative walks up and back down" {
 
     let same = p.to_relative("src").unwrap()
     defer same.deinit()
-    assert_eq(same.as_view(), "a/b.f", "below the base")
+    assert_slash_eq(same.as_view(), "a/b.f", "below the base")
 
     let up = p.to_relative("src/a/c").unwrap()
     defer up.deinit()
-    assert_eq(up.as_view(), "../b.f", "one level up")
+    assert_slash_eq(up.as_view(), "../b.f", "one level up")
 
     let far = p.to_relative("lib/x").unwrap()
     defer far.deinit()
-    assert_eq(far.as_view(), "../../src/a/b.f", "no shared prefix")
+    assert_slash_eq(far.as_view(), "../../src/a/b.f", "no shared prefix")
 }
 
 test "to_relative on an identical path is dot" {
@@ -938,11 +949,11 @@ test "push appends a component and absolute input replaces" {
     let p = path("src")
     defer p.deinit()
     p.push("a")
-    assert_eq(p.as_view(), "src/a", "appended")
+    assert_slash_eq(p.as_view(), "src/a", "appended")
     p.push("b.f")
-    assert_eq(p.as_view(), "src/a/b.f", "appended again")
+    assert_slash_eq(p.as_view(), "src/a/b.f", "appended again")
     p.push("/tmp/x")
-    assert_eq(p.as_view(), "/tmp/x", "absolute replaces")
+    assert_slash_eq(p.as_view(), "/tmp/x", "absolute replaces")
 }
 
 test "pop drops the last component and reports when it cannot" {
@@ -960,7 +971,7 @@ test "with_file_name replaces only the last component" {
     defer p.deinit()
     let q = p.with_file_name("c.c")
     defer q.deinit()
-    assert_eq(q.as_view(), "src/a/c.c", "replaced")
+    assert_slash_eq(q.as_view(), "src/a/c.c", "replaced")
     assert_eq(p.as_view(), "src/a/b.f", "original untouched")
 }
 

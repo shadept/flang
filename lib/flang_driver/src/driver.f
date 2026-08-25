@@ -22,6 +22,7 @@ import std.string
 import std.string_builder
 import std.io.file
 import std.result
+import std.time
 import flang_parser.lexer
 import flang_parser.parser
 import flang_parser.projector
@@ -169,6 +170,12 @@ pub type AnalyzedProject = struct {
     // generated text (`--emit-generated`). `sources`/`file_paths` also
     // hold one padded entry per chunk, after the real files.
     generated: TemplateOutput
+
+    // Wall time of the front half, for `--timings`. `parse_ns` covers the
+    // import-graph walk (read + lex + parse); `check_ns` covers template
+    // expansion, resolution and inference.
+    parse_ns: u64
+    check_ns: u64
 }
 
 pub fn analyze_project(ctx: &ResolveCtx, entries: &List(OwnedString), allocator: &Allocator? = null) AnalyzedProject {
@@ -177,6 +184,7 @@ pub fn analyze_project(ctx: &ResolveCtx, entries: &List(OwnedString), allocator:
     let fqns: List(OwnedString) = list(0, allocator)
     let file_paths: List(OwnedString) = list(0, allocator)
     let modules: List(Module) = list(0, allocator)
+    const parse_start = monotonic_ns()
 
     // BFS over the import graph, deduplicated by file path.
     let queue: List(OwnedString) = list(0, allocator)
@@ -220,7 +228,9 @@ pub fn analyze_project(ctx: &ResolveCtx, entries: &List(OwnedString), allocator:
     queue.deinit()
     seen.deinit()
     defer project_origin.deinit()
+    const parse_ns = elapsed_ns(parse_start)
 
+    const check_start = monotonic_ns()
     let checked = count_errors(&diagnostics) == 0
     let result = empty_result(allocator)
     let generated = empty_template_output(allocator)
@@ -250,6 +260,8 @@ pub fn analyze_project(ctx: &ResolveCtx, entries: &List(OwnedString), allocator:
         checked = checked,
         diagnostics = diagnostics,
         generated = generated,
+        parse_ns = parse_ns,
+        check_ns = elapsed_ns(check_start),
     }
 }
 
@@ -292,6 +304,8 @@ pub fn analyze_source_set(srcs: List(OwnedString), fqns: &List(String), allocato
         checked = checked,
         diagnostics = diagnostics,
         generated = generated,
+        parse_ns = 0,
+        check_ns = 0,
     }
 }
 

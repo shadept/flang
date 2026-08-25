@@ -31,6 +31,9 @@ var scriptDir = Directory.GetCurrentDirectory();
 
 bool showHelp = args.Contains("--help") || args.Contains("-h");
 bool force = args.Contains("--force") || args.Contains("-f");
+// Stage 3 subsumes stage 2: it needs a stage-2 compiler to run.
+bool stage3 = args.Contains("--stage3") || args.Contains("--fixpoint");
+bool stage2 = stage3 || args.Contains("--stage2");
 string? rid = args.FirstOrDefault(a => !a.StartsWith('-'));
 
 if (showHelp)
@@ -47,7 +50,14 @@ if (showHelp)
           dotnet run build.cs <rid>            Build for specific RID
           dotnet run build.cs -- --force       Rebuild the self-hosted compiler even
                                                if it is already up to date
+          dotnet run build.cs -- --stage2      Also build stage 2 (stage 1 compiles
+                                               the compiler again)
+          dotnet run build.cs -- --stage3      Also build stage 3 and check the
+                                               stage-2 = stage-3 fixpoint (the
+                                               emitted C must be byte-identical)
           dotnet run build.cs -- --help        Show this help
+
+        Stage artifacts land in dist/<rid>/stages/ as stage{2,3}{.exe,.c}.
 
         RID is auto-detected from OS and architecture, e.g.:
           Windows x64   -> win-x64
@@ -170,41 +180,70 @@ var sourceRoots = new[]
     Path.Combine(scriptDir, "stdlib"),
     Path.Combine(scriptDir, "src"),
 };
+var bootstrapExe = Path.Combine(bootstrapDir, "build", $"flang{exeExt}");
+var stdlibSrc = Path.Combine(scriptDir, "stdlib");
+var stagesDir = Path.Combine(distDir, "stages");
+
 if (!force && File.Exists(finalExe) && NewestInput(sourceRoots) <= File.GetLastWriteTimeUtc(finalExe))
 {
     Console.WriteLine();
     Console.WriteLine($"Self-hosted compiler up to date: {finalExe} (--force to rebuild)");
+}
+else
+{
     Console.WriteLine();
-    Console.ForegroundColor = ConsoleColor.Green;
-    Console.WriteLine($"Done in {wall.Elapsed.TotalSeconds:F1}s.");
-    Console.ResetColor();
-    return 0;
+    Console.WriteLine("=== Building the self-hosted compiler (stage 1) ===");
+    // --release is what makes the compiler usable: an unoptimized stage-1
+    // takes ~4.8x longer to compile anything than the same code built /O2,
+    // and every downstream stage, test run and tool invocation pays it.
+    // Windows keeps debug info either way (/Z7 is passed in both modes).
+    if (Run(refExe, "build --release", bootstrapDir) != 0)
+    {
+        Console.Error.WriteLine($"Error: self-hosted build failed. {finalExe} was not updated; use flang-ref meanwhile.");
+        return 1;
+    }
+
+    if (!File.Exists(bootstrapExe))
+    {
+        Console.Error.WriteLine($"Error: self-hosted build reported success but produced no binary under {Path.Combine(bootstrapDir, "build")}.");
+        return 1;
+    }
+
+    CopyDir(stdlibSrc, Path.Combine(bootstrapDir, "build", "stdlib"));
+    File.Copy(bootstrapExe, finalExe, overwrite: true);
+    MakeExecutable(finalExe);
+
+    Console.WriteLine($"Default compiler:   {finalExe} ({new FileInfo(finalExe).Length} bytes)");
 }
 
-Console.WriteLine();
-Console.WriteLine("=== Building the self-hosted compiler (stage 1) ===");
-if (Run(refExe, "build", bootstrapDir) != 0)
+// Stages 2 and 3: the self-hosted compiler compiling itself, twice. The
+// milestone is the fixpoint -- stage 2 and stage 3 must emit byte-identical
+// C, which proves the compiler is a fixed point of its own translation.
+if (stage2)
 {
-    Console.Error.WriteLine($"Error: self-hosted build failed. {finalExe} was not updated; use flang-ref meanwhile.");
-    return 1;
+    Console.WriteLine();
+    Console.WriteLine("=== Building stage 2 (stage 1 compiles the compiler) ===");
+    var stage2C = RunStage(finalExe, "stage2");
+    if (stage2C == null) return 1;
+
+    if (stage3)
+    {
+        Console.WriteLine();
+        Console.WriteLine("=== Building stage 3 (stage 2 compiles the compiler) ===");
+        var stage3C = RunStage(Path.Combine(stagesDir, $"stage2{exeExt}"), "stage3");
+        if (stage3C == null) return 1;
+
+        Console.WriteLine();
+        if (!File.ReadAllBytes(stage2C).SequenceEqual(File.ReadAllBytes(stage3C)))
+        {
+            Console.ForegroundColor = ConsoleColor.Red;
+            Console.WriteLine($"Fixpoint BROKEN: {stage2C} and {stage3C} differ.");
+            Console.ResetColor();
+            return 1;
+        }
+        Console.WriteLine($"Fixpoint holds: stage 2 and stage 3 emit identical C ({new FileInfo(stage2C).Length} bytes).");
+    }
 }
-
-var bootstrapExe = Path.Combine(bootstrapDir, "build", $"flang{exeExt}");
-if (!File.Exists(bootstrapExe))
-{
-    Console.Error.WriteLine($"Error: self-hosted build reported success but produced no binary under {Path.Combine(bootstrapDir, "build")}.");
-    return 1;
-}
-
-CopyDir(Path.Combine(scriptDir, "stdlib"), Path.Combine(bootstrapDir, "build", "stdlib"));
-File.Copy(bootstrapExe, finalExe, overwrite: true);
-if (!OperatingSystem.IsWindows())
-    File.SetUnixFileMode(finalExe,
-        UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute |
-        UnixFileMode.GroupRead | UnixFileMode.GroupExecute |
-        UnixFileMode.OtherRead | UnixFileMode.OtherExecute);
-
-Console.WriteLine($"Default compiler:   {finalExe} ({new FileInfo(finalExe).Length} bytes)");
 
 Console.WriteLine();
 Console.ForegroundColor = ConsoleColor.Green;
@@ -213,6 +252,52 @@ Console.ResetColor();
 return 0;
 
 // --- Helpers ---
+
+// Compile the bootstrap project with `compiler` and park the results in
+// dist/<rid>/stages as <name>.exe / <name>.c. Returns the path of the kept C
+// file, or null if the build failed.
+//   -k  keeps the emitted C: the fixpoint compares C, not binaries -- PE and
+//       Mach-O headers carry timestamps and paths that never match.
+//   -r  optimizes, like stage 1. The fixpoint is unaffected either way (the
+//       flag reaches the C compiler, not the emitted C), but a debug stage 2
+//       would build stage 3 several times slower.
+//   -s  points at the repo stdlib: a stage compiler runs from dist/<rid>/stages,
+//       away from the stdlib copy deployed next to the default compiler.
+//   Flags precede the subcommand -- the CLI stops parsing options at it.
+string? RunStage(string compiler, string name)
+{
+    if (Run(compiler, $"-k -r -s \"{stdlibSrc}\" build", bootstrapDir) != 0)
+    {
+        Console.Error.WriteLine($"Error: {name} build failed.");
+        return null;
+    }
+
+    var emittedC = Path.Combine(bootstrapDir, "build", "flang.c");
+    if (!File.Exists(bootstrapExe) || !File.Exists(emittedC))
+    {
+        Console.Error.WriteLine($"Error: {name} reported success but left no binary or no C beside it.");
+        return null;
+    }
+
+    Directory.CreateDirectory(stagesDir);
+    var exe = Path.Combine(stagesDir, $"{name}{exeExt}");
+    var c = Path.Combine(stagesDir, $"{name}.c");
+    File.Copy(bootstrapExe, exe, overwrite: true);
+    File.Copy(emittedC, c, overwrite: true);
+    MakeExecutable(exe);
+
+    Console.WriteLine($"{name}: {exe} ({new FileInfo(exe).Length} bytes), C: {c} ({new FileInfo(c).Length} bytes)");
+    return c;
+}
+
+void MakeExecutable(string path)
+{
+    if (OperatingSystem.IsWindows()) return;
+    File.SetUnixFileMode(path,
+        UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute |
+        UnixFileMode.GroupRead | UnixFileMode.GroupExecute |
+        UnixFileMode.OtherRead | UnixFileMode.OtherExecute);
+}
 
 int Run(string fileName, string arguments, string? workingDir = null)
 {

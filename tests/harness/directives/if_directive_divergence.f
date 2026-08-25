@@ -4,9 +4,13 @@
 // An exhaustive #if/else whose branches both return satisfies the
 // missing-return check (E2049) — no dead trailing return required.
 
+// Both branches return the same value on purpose: what is under test is
+// that the #if/else diverges, not which branch is live (that is
+// if_directive_cross_target). A per-platform value would only assert on
+// one platform.
 fn pick() i32 {
     #if platform.os == "windows" {
-        return 1
+        return 0
     } else {
         return 0
     }

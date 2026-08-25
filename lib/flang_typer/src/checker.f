@@ -34,6 +34,7 @@ import std.set
 import std.string
 import std.string_builder
 import std.test
+import std.time
 import flang_core.diagnostic
 import flang_core.span
 import flang_parser.ast
@@ -6360,6 +6361,7 @@ fn zonk_specializations(self: &Checker) {
 pub fn check_all(self: &Checker, modules: &List(Module), paths: &List(String),
         sources: &List(OwnedString), file_paths: &List(OwnedString), generators: &TemplateState) TypeCheckResult {
     // Wire the import graph before any name resolution runs.
+    const collect_start = monotonic_ns()
     build_visibility(self, modules, paths)
 
     // Phase 1: every module's type names are registered before any body
@@ -6368,10 +6370,14 @@ pub fn check_all(self: &Checker, modules: &List(Module), paths: &List(String),
     for i in 0..modules.len {
         collect_nominal_names(self, &modules[i], paths[i])
     }
+    const collect_ns = elapsed_ns(collect_start)
     // Phase 1.5: source-generator expansion (RFC-021 §2) - generated
     // declarations are appended to their origin modules and collected,
     // before any body resolves.
+    const templates_start = monotonic_ns()
     expand_templates(self, generators, modules, paths, sources, file_paths)
+    const templates_ns = elapsed_ns(templates_start)
+    const nominals_start = monotonic_ns()
     for i in 0..modules.len {
         resolve_nominal_bodies(self, &modules[i], paths[i])
     }
@@ -6379,19 +6385,25 @@ pub fn check_all(self: &Checker, modules: &List(Module), paths: &List(String),
     for i in 0..modules.len {
         collect_signatures(self, &modules[i], paths[i])
     }
+    const nominals_ns = elapsed_ns(nominals_start)
     // Phase 2.5: constant initializers, before any body can observe an
     // unpinned const (see `check_module_constants`).
+    const constants_start = monotonic_ns()
     for i in 0..modules.len {
         check_module_constants(self, &modules[i], paths[i])
     }
+    const constants_ns = elapsed_ns(constants_start)
     // Phase 3: bodies.
+    const bodies_start = monotonic_ns()
     for i in 0..modules.len {
         check_module_bodies(self, &modules[i], paths[i])
     }
+    const bodies_ns = elapsed_ns(bodies_start)
     // Phase 3.5: settle anonymous literals (their field pins can be
     // what makes a generic pick concrete), then instantiate every
     // generic pick the body pass recorded, transitively - a
     // specialization's body enqueues its own picks.
+    const specialize_start = monotonic_ns()
     resolve_anon_literals(self)
     resolve_fn_name_values(self)
     drain_pending_specs(self)
@@ -6401,9 +6413,11 @@ pub fn check_all(self: &Checker, modules: &List(Module), paths: &List(String),
     drain_pending_specs(self)
     // Phase 3.6: any unsuffixed literal nothing ever pinned is E2001.
     validate_literals(self)
+    const specialize_ns = elapsed_ns(specialize_start)
 
     // RFC-014: settle the lambda/closure tables (the overlay-scoped
     // lambda tables of instantiations were zonked inside `instantiate`).
+    const zonk_start = monotonic_ns()
     zonk_lambda_table(self)
     zonk_closures(self)
     // A nested instantiation can finish before its CALLER's body pins a
@@ -6419,6 +6433,7 @@ pub fn check_all(self: &Checker, modules: &List(Module), paths: &List(String),
     for entry in self.results.node_types {
         zonked.set(entry.key, self.engine.zonk(entry.value))
     }
+    const zonk_ns = elapsed_ns(zonk_start)
 
     // Move the registries and result tables into the snapshot, then
     // replace each moved-from field with a fresh empty container so the
@@ -6460,6 +6475,15 @@ pub fn check_all(self: &Checker, modules: &List(Module), paths: &List(String),
         functions = out_functions,
         lambdas = out_lambdas,
         closures = out_closures,
+        phases = CheckPhases {
+            collect_ns = collect_ns,
+            templates_ns = templates_ns,
+            nominals_ns = nominals_ns,
+            constants_ns = constants_ns,
+            bodies_ns = bodies_ns,
+            specialize_ns = specialize_ns,
+            zonk_ns = zonk_ns,
+        },
     }
 }
 

@@ -27,6 +27,7 @@ import std.result
 import std.string
 import std.string_builder
 import std.test
+import std.time
 import flang_codegen.backend
 import flang_codegen.builder
 import flang_codegen.fir
@@ -93,6 +94,7 @@ pub fn compile(m: &IrModule, options: &BuildOptions) Result(BuildResult, BuildEr
     defer info.deinit()
 
     // 2. Lower FIR to C text.
+    const translate_start = monotonic_ns()
     let sb = string_builder(4096, alloc)
     defer sb.deinit()
     translate(m, &sb)
@@ -127,11 +129,13 @@ pub fn compile(m: &IrModule, options: &BuildOptions) Result(BuildResult, BuildEr
         c_path_owned.deinit()
         return Err(BuildError.IOError)
     }
+    const translate_ns = elapsed_ns(translate_start)
 
     // 5. Build the argv and spawn the compiler.
     let argv = build_compiler_argv(&info, c_path_owned.as_view(), options)
     defer argv.deinit()
 
+    const cc_start = monotonic_ns()
     let spawn_r = run_compiler(&info, &argv, alloc)
     if spawn_r.is_err() {
         if !keep_c { remove_file_quiet(c_path_owned.as_view()) }
@@ -144,6 +148,7 @@ pub fn compile(m: &IrModule, options: &BuildOptions) Result(BuildResult, BuildEr
         c_path_owned.deinit()
         return Err(BuildError.CompilerFailed(exit_code))
     }
+    const cc_ns = elapsed_ns(cc_start)
 
     // 6. Build the result. Retain the c_source_path if requested.
     let exe_path = from_view(options.output_path, alloc)
@@ -157,6 +162,9 @@ pub fn compile(m: &IrModule, options: &BuildOptions) Result(BuildResult, BuildEr
     return Ok(BuildResult {
         executable_path = exe_path,
         c_source_path = c_kept,
+        lower_ns = 0,
+        translate_ns = translate_ns,
+        cc_ns = cc_ns,
     })
 }
 
@@ -514,6 +522,18 @@ fn emit_float_const(v: f64, sb: &StringBuilder) {
 // Cast an operand to a given C type. Used pervasively so that integer
 // literals consumed in different slots get correctly typed.
 fn emit_operand_as(op: &Operand, ty: IrType, sb: &StringBuilder) {
+    // C casts only to scalar types: `(struct S)x` is a constraint
+    // violation (MSVC rejects it outright). An aggregate operand already
+    // has the destination type - FIR stores are typed - so it goes through
+    // unconverted.
+    const aggregate = ty match {
+        Agg(_) => true,
+        else => false,
+    }
+    if aggregate {
+        emit_operand(op, sb)
+        return
+    }
     sb.append("((")
     emit_c_type(ty, sb)
     sb.append(")")
@@ -773,12 +793,16 @@ fn emit_stack_slot(s: &StackSlotInstr, sb: &StringBuilder) {
     // C11 `_Alignas` works inside compound statements; we emit each slot
     // as a unique-named char array followed by a void* alias for the
     // SSA value.
+    // A zero-sized type (payload-less variant, empty struct) still needs a
+    // byte: `unsigned char x[0]` is a GNU extension that MSVC rejects, and
+    // every use of the slot is a `memcpy` of 0 bytes anyway.
+    const bytes = if s.size == 0 as u64 { 1 as u64 } else { s.size }
     sb.append("_Alignas(")
     sb.append(s.align)
     sb.append(") unsigned char __slot")
     sb.append(s.result)
     sb.append("[")
-    sb.append(s.size)
+    sb.append(bytes)
     sb.append("];\n")
     sb.append("    void* v")
     sb.append(s.result)
@@ -1448,7 +1472,11 @@ fn build_compiler_argv(info: &CompilerInfo, c_path: String, options: &BuildOptio
     if info.is_msvc() {
         argv.push(from_view("/nologo", alloc))
         argv.push(from_view("/W3", alloc))
+        // /std:c11 plus /experimental:c11atomics enable <stdatomic.h>,
+        // which stdlib/std/atomic.c includes; without the second flag MSVC's
+        // own header hard-errors with "C atomic support is not enabled".
         argv.push(from_view("/std:c11", alloc))
+        argv.push(from_view("/experimental:c11atomics", alloc))
         argv.push(from_view("/Z7", alloc))
         if release {
             argv.push(from_view("/O2", alloc))
