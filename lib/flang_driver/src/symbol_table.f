@@ -170,7 +170,10 @@ pub fn symbol_builder(result: &TypeCheckResult, allocator: &Allocator? = null) S
     // gate only filters the shapes lowering cannot represent yet.
     let by_spec_id: Dict(u32, OwnedString) = dict(allocator)
     let by_spec_sig: Dict(u32, FnSig) = dict(allocator)
-    for &sp in result.specializations {
+    for i in 0..(result.specializations.next_id as usize) {
+        let found = result.specializations.find(i as u32)
+        if found.is_none() { continue }
+        let sp = found.unwrap()
         let s = FnSig { params = sp.concrete_params, ret = sp.concrete_return }
         if !sig_lowerable(&s, false, &result.nominals) { continue }
         let sym = mangle_spec_symbol(sp.module, sp.name, &s, &result.nominals, allocator)

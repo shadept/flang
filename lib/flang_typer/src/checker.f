@@ -454,7 +454,7 @@ fn anon_struct_ty(self: &Checker, fields: List(Field), span: SourceSpan) Ty {
         deprecation = null,
         is_simd = false,
         is_foreign = false,
-    }), $"__anon_{self.nominals.defs.len}")
+    }), $"__anon_{self.nominals.next_id}")
     let idx = self.anon_keys.len
     self.anon_keys.push(key)
     self.anon_structs.set(self.anon_keys[idx].as_view(), nid)
@@ -1095,7 +1095,7 @@ fn resolve_struct_body(self: &Checker, td: &TypeDecl, module_path: String) {
                 is_simd = sd.is_simd,
                 is_foreign = sd.is_foreign,
             }
-            self.nominals.defs[id as usize] = NominalDef.NomStruct(updated)
+            self.nominals.put(id, NominalDef.NomStruct(updated))
         },
         _ => {},
     }
@@ -1314,7 +1314,7 @@ fn resolve_enum_body(self: &Checker, td: &TypeDecl, module_path: String) {
                 decl_span = ed.decl_span,
                 deprecation = ed.deprecation,
             }
-            self.nominals.defs[id as usize] = NominalDef.NomEnum(updated)
+            self.nominals.put(id, NominalDef.NomEnum(updated))
         },
         _ => {},
     }
@@ -6286,7 +6286,7 @@ fn zonk_closures(self: &Checker) {
                     is_simd = sd.is_simd,
                     is_foreign = sd.is_foreign,
                 }
-                self.nominals.defs[e.key as usize] = NominalDef.NomStruct(updated)
+                self.nominals.put(e.key, NominalDef.NomStruct(updated))
             },
             _ => {},
         }
@@ -6347,8 +6347,10 @@ fn resolve_fn_name_values(self: &Checker) {
 // a var left in one is the difference between an emitted function and a
 // silently dropped one.
 fn zonk_specializations(self: &Checker) {
-    for i in 0..self.specs.specs.len {
-        let sp = &self.specs.specs[i]
+    for i in 0..(self.specs.next_id as usize) {
+        let found = self.specs.find(i as u32)
+        if found.is_none() { continue }
+        let sp = found.unwrap()
         let ps: List(Ty) = list(sp.concrete_params.len, self.allocator)
         for k in 0..sp.concrete_params.len {
             ps.push(self.engine.zonk(sp.concrete_params[k]))
@@ -6441,7 +6443,7 @@ pub fn check_all(self: &Checker, modules: &List(Module), paths: &List(String),
     let out_resolved_ops = self.results.resolved_ops
     let out_resolved_targets = self.results.resolved_targets
     let out_instantiated_types = self.results.instantiated_types
-    let out_specializations = self.specs.specs
+    let out_specializations = self.specs
     let out_desugars = self.results.desugars
     let out_synth_strings = self.results.synth_strings
     let out_default_args = self.results.default_args
@@ -6456,8 +6458,6 @@ pub fn check_all(self: &Checker, modules: &List(Module), paths: &List(String),
     self.results.reset_side_tables()
     self.nominals = nominal_registry(self.allocator)
     self.functions = function_registry(self.allocator)
-    // The moved-out spec list gets a fresh registry; the old `by_key`
-    // dict is abandoned to the allocator like the other snapshots.
     self.specs = specialization_registry(self.allocator)
 
     return TypeCheckResult {
@@ -6847,8 +6847,8 @@ test "a generic call instantiates once per concrete signature" {
         ["pub fn id(x: $T) T { return x }\nfn main() i32 { let a = id(1) let b = id(2) let c = id(true) if c { return a } return b }\n"],
         ["m"])
     // Two i32 calls share one specialization; the bool call adds one.
-    assert_eq(res.specializations.len, 2 as usize, "two concrete signatures, two specializations")
-    let s0 = &res.specializations[0]
+    assert_eq(res.specializations.len(), 2 as usize, "two concrete signatures, two specializations")
+    let s0 = res.specializations.get(0 as u32)
     assert_eq(s0.concrete_params.len, 1 as usize, "id takes one param")
     assert_true(s0.name == "id", "specialization names the template")
     // The instantiated bodies were re-checked: their overlays carry
@@ -6888,14 +6888,14 @@ test "a nested generic call specializes transitively" {
         ["m"])
     // outer(i32) instantiates, and its body's inner(x) pick drains into
     // inner(i32).
-    assert_eq(res.specializations.len, 2 as usize, "outer and inner both specialize")
+    assert_eq(res.specializations.len(), 2 as usize, "outer and inner both specialize")
 }
 
 test "a self-recursive generic reuses its own specialization" {
     let res = check_result_of(
         ["pub fn rec(x: $T, n: i32) T { if n > 0 { return rec(x, n - 1) } return x }\nfn main() i32 { return rec(3, 2) }\n"],
         ["m"])
-    assert_eq(res.specializations.len, 1 as usize, "recursion hits the registered key, no second entry")
+    assert_eq(res.specializations.len(), 1 as usize, "recursion hits the registered key, no second entry")
 }
 test "a generic member call inside a partially-fixed generic instantiates" {
     // Regression: `set2(self: &D(Key, $V), ...)` is generic only through
@@ -6989,8 +6989,11 @@ test "a lambda inside a generic template records per instantiation" {
     // carries its own record; the program table has none.
     assert_eq(res.lambdas.len(), 0 as usize, "no program-table record")
     let seen: usize = 0
-    for i in 0..res.specializations.len {
-        seen = seen + res.specializations[i].overlay.lambdas.len()
+    for i in 0..(res.specializations.next_id as usize) {
+        let sp = res.specializations.find(i as u32)
+        if sp.is_none() { continue }
+        let sr = sp.unwrap()
+        seen = seen + sr.overlay.lambdas.len()
     }
     assert_eq(seen, 2 as usize, "one lambda record per instantiation")
     res.deinit()

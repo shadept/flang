@@ -24,6 +24,7 @@ import std.option
 import std.string
 import std.string_builder
 import std.test
+import flang_core.span
 import flang_parser.ast
 import flang_typer.type
 import flang_typer.node_id
@@ -59,14 +60,20 @@ pub fn deinit(self: &Specialization) {
 
 pub type SpecializationRegistry = struct {
     by_key: Dict(String, u32)
-    specs: List(Specialization)
+    // Keyed by id, not positional - same contract as NominalRegistry:
+    // ids come from `next_id`, are never reused, and an eviction leaves a
+    // hole so the ids `RtSpecialized` / `ResolvedOperator.spec_id` already
+    // carry keep pointing at the same entry.
+    specs: Dict(u32, Specialization)
+    next_id: u32
     allocator: &Allocator?
 }
 
 pub fn specialization_registry(allocator: &Allocator? = null) SpecializationRegistry {
     return .{
         by_key = dict(allocator),
-        specs = list(0, allocator),
+        specs = dict(allocator),
+        next_id = 0 as u32,
         allocator = allocator,
     }
 }
@@ -103,7 +110,8 @@ pub fn lookup(self: &SpecializationRegistry, key: String) u32? {
 // the resulting tables back via `set_overlay` - registration comes
 // first so a recursive instantiation finds its own key.
 pub fn register(self: &SpecializationRegistry, spec: Specialization) u32 {
-    let id: u32 = self.specs.len as u32
+    let id: u32 = self.next_id
+    self.next_id = id + 1
     let with_id = Specialization {
         id = id,
         function_id = spec.function_id,
@@ -116,21 +124,49 @@ pub fn register(self: &SpecializationRegistry, spec: Specialization) u32 {
         overlay = spec.overlay,
     }
     // `spec.key` was moved into `with_id.key` on construction; the
-    // OwnedString's heap buffer stays put across the later `specs.push`,
-    // so this view remains valid for the registry's life.
+    // OwnedString's heap buffer is separate from the entry that holds it,
+    // so a later rehash does not move it and this view remains valid for
+    // the registry's life.
     let stable_view = with_id.key.as_view()
     self.by_key.set(stable_view, id)
-    self.specs.push(with_id)
+    self.specs.set(id, with_id)
     return id
 }
 
 // Attach the completed instantiation's result tables to `id`.
 pub fn set_overlay(self: &SpecializationRegistry, id: u32, overlay: InferenceResults) {
-    self.specs[id as usize].overlay = overlay
+    let s = self.specs.get_ref(id).unwrap()
+    s.overlay = overlay
 }
 
+// The specialization at `id`. Panics on a hole; use `find` when the id
+// may be stale.
 pub fn get(self: &SpecializationRegistry, id: u32) &Specialization {
-    return &self.specs[id as usize]
+    return self.specs.get_ref(id).unwrap()
+}
+
+// The specialization at `id`, or null when the id names a hole.
+pub fn find(self: &SpecializationRegistry, id: u32) &Specialization? {
+    return self.specs.get_ref(id)
+}
+
+// Live specializations. Not an id bound - iterate `0..next_id` and skip
+// the holes for that.
+pub fn len(self: &SpecializationRegistry) usize {
+    return self.specs.len()
+}
+
+// Drop the specialization at `id`, its key mapping and everything it
+// owns. The id is retired, not recycled.
+pub fn evict(self: &SpecializationRegistry, id: u32) {
+    let found = self.specs.get_ref(id)
+    if found.is_none() { return }
+    let live = found.unwrap()
+    let _k = self.by_key.remove(live.key.as_view())
+    let dropped = self.specs.remove(id)
+    if dropped.is_none() { return }
+    let d = dropped.unwrap()
+    d.deinit()
 }
 
 test "specialization keys separate same-named types from different modules" {
@@ -180,11 +216,56 @@ test "specialization keys reuse one entry for the same type" {
     pb.deinit()
 }
 
+test "an evicted specialization leaves a hole and never recycles its id" {
+    let reg = specialization_registry()
+    defer reg.deinit()
+    let a = reg.register(probe_spec(1 as u32, "a"))
+    let b = reg.register(probe_spec(2 as u32, "b"))
+    let c = reg.register(probe_spec(3 as u32, "c"))
+    assert_eq(a, 0 as u32, "ids start at zero")
+    assert_eq(c, 2 as u32, "ids are handed out in registration order")
+
+    let probe_params: List(Ty) = list(0)
+    let bkey = key_for(2 as u32, &probe_params, Ty.Prim(PrimitiveKind.I32))
+    reg.evict(b)
+    assert_true(reg.find(b).is_none(), "the evicted id names a hole")
+    assert_true(reg.lookup(bkey.as_view()).is_none(), "the evicted key stops resolving")
+    bkey.deinit()
+    probe_params.deinit()
+    assert_eq(reg.get(c).function_id, 3 as u32, "the id past the hole still names its own spec")
+    assert_eq(reg.len(), 2 as usize, "a hole is not a live entry")
+
+    let d = reg.register(probe_spec(4 as u32, "d"))
+    assert_eq(d, 3 as u32, "a retired id is never handed out again")
+}
+
+fn probe_spec(function_id: u32, name: String) Specialization {
+    let no_dirs: List(DeclAttribute) = list(0)
+    let no_decl_params: List(FunctionParam) = list(0)
+    let decl = FunctionDecl {
+        span = none_span(), is_pub = false, directives = no_dirs,
+        name = name, params = no_decl_params, return_type = null, body = null,
+    }
+    let no_params: List(Ty) = list(0)
+    let ret = Ty.Prim(PrimitiveKind.I32)
+    return Specialization {
+        id = 0 as u32,
+        function_id = function_id,
+        key = key_for(function_id, &no_params, ret),
+        name = name,
+        module = "m",
+        decl = decl,
+        concrete_params = no_params,
+        concrete_return = ret,
+        overlay = inference_results(),
+    }
+}
+
 // Replace a specialization's concrete signature - used when a signature
 // that entered instantiation with callable-slot vars (RFC-014 lambdas
 // through `$F`) settled during the body re-check.
 pub fn set_signature(self: &SpecializationRegistry, id: u32, params: List(Ty), ret: Ty) {
-    let s = &self.specs[id as usize]
+    let s = self.specs.get_ref(id).unwrap()
     s.concrete_params.deinit()
     s.concrete_params = params
     s.concrete_return = ret
@@ -204,7 +285,7 @@ pub fn rekey(self: &SpecializationRegistry, id: u32, new_key: OwnedString) bool 
         new_key.deinit()
         return true
     }
-    let s = &self.specs[id as usize]
+    let s = self.specs.get_ref(id).unwrap()
     let _old = self.by_key.remove(s.key.as_view())
     s.key.deinit()
     s.key = new_key

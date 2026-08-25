@@ -17,6 +17,7 @@ import std.list
 import std.option
 import std.string
 import std.string_builder
+import std.test
 import flang_core.span
 import flang_typer.type
 import flang_typer.visibility
@@ -74,7 +75,12 @@ pub type NomLookup = enum {
 }
 
 pub type NominalRegistry = struct {
-    defs: List(NominalDef)              // indexed by NominalId
+    // Keyed by id, not positional. Ids come from `next_id` and are never
+    // reused, so evicting an entry leaves a hole instead of renumbering
+    // every id after it - `Ty.Nominal(NominalRef{id})` values already
+    // baked into other results stay valid.
+    defs: Dict(NominalId, NominalDef)
+    next_id: NominalId
     by_fqn: Dict(String, NominalId)
     // FQN strings live on the registry. `def.fqn` and `by_fqn` keys are
     // views into the heap buffers owned here. The buffers themselves
@@ -85,11 +91,12 @@ pub type NominalRegistry = struct {
 }
 
 pub fn nominal_registry(allocator: &Allocator? = null) NominalRegistry {
-    let defs: List(NominalDef) = list(0, allocator)
+    let defs: Dict(NominalId, NominalDef) = dict(allocator)
     let by_fqn: Dict(String, NominalId) = dict(allocator)
     let owned_fqns: List(OwnedString) = list(0, allocator)
     return .{
         defs = defs,
+        next_id = 0 as NominalId,
         by_fqn = by_fqn,
         owned_fqns = owned_fqns,
         allocator = allocator,
@@ -111,12 +118,13 @@ pub fn deinit(self: &NominalRegistry) {
 // Caller is responsible for checking duplicates first - registering an
 // FQN twice overwrites the index and leaks the previous definition.
 pub fn register(self: &NominalRegistry, def: NominalDef, fqn_owned: OwnedString) NominalId {
-    let id: NominalId = self.defs.len as u32
+    let id: NominalId = self.next_id
+    self.next_id = id + 1
     let idx = self.owned_fqns.len
     self.owned_fqns.push(fqn_owned)
     let stable: String = self.owned_fqns[idx].as_view()
     let fixed = with_fqn(def, stable)
-    self.defs.push(fixed)
+    self.defs.set(id, fixed)
     self.by_fqn.set(stable, id)
     return id
 }
@@ -154,8 +162,38 @@ pub fn contains(self: &NominalRegistry, fqn: String) bool {
     return self.by_fqn.contains(fqn)
 }
 
+// The definition at `id`. Panics on an id that was never registered or
+// has been evicted; callers holding a possibly-stale id use `find`.
 pub fn get(self: &NominalRegistry, id: NominalId) &NominalDef {
-    return &self.defs[id as usize]
+    return self.defs.get_ref(id).unwrap()
+}
+
+// The definition at `id`, or null when the id names a hole.
+pub fn find(self: &NominalRegistry, id: NominalId) &NominalDef? {
+    return self.defs.get_ref(id)
+}
+
+// Live definitions. Not an id bound - iterate `0..next_id` and skip the
+// holes for that.
+pub fn len(self: &NominalRegistry) usize {
+    return self.defs.len()
+}
+
+// Overwrite the definition at `id` in place. The replaced value is NOT
+// deinited: callers rebuild a def from the old one's field and type-param
+// lists and keep owning them.
+pub fn put(self: &NominalRegistry, id: NominalId, def: NominalDef) {
+    let slot = self.defs.get_ref(id).unwrap()
+    slot.* = def
+}
+
+// Drop the definition at `id` and its FQN mapping. The id is retired, not
+// recycled: `find` reports the hole rather than resolving to a neighbour.
+pub fn evict(self: &NominalRegistry, id: NominalId) {
+    let found = self.defs.get_ref(id)
+    if found.is_none() { return }
+    let _fqn = self.by_fqn.remove(nominal_fqn(found.unwrap()))
+    let _dropped = self.defs.remove(id)
 }
 
 // FQN-only lookup, no visibility scope. Used by template expansion and
@@ -216,8 +254,10 @@ pub fn lookup(self: &NominalRegistry, name: String, vis: &Visibility) NomLookup 
 // ponytail: linear scan over every def per call; index variant names if
 // checker profiles flag it.
 pub fn lookup_variant(self: &NominalRegistry, name: String, arity: usize, vis: &Visibility) NominalId? {
-    for i in 0..self.defs.len {
-        let d = &self.defs[i]
+    for i in 0..(self.next_id as usize) {
+        let found = self.defs.get_ref(i as NominalId)
+        if found.is_none() { continue }
+        let d = found.unwrap()
         let ed = d.* match {
             NomEnum(e) => Some(e),
             _ => null,
@@ -295,5 +335,35 @@ pub fn enum_payloadless(self: &NominalRegistry, id: NominalId) bool {
             true
         },
         _ => false,
+    }
+}
+
+test "an evicted nominal leaves a hole and never recycles its id" {
+    let reg = nominal_registry()
+    defer reg.deinit()
+    let a = reg.register(NominalDef.NomStruct(probe_struct()), $"m.A")
+    let b = reg.register(NominalDef.NomStruct(probe_struct()), $"m.B")
+    let c = reg.register(NominalDef.NomStruct(probe_struct()), $"m.C")
+    assert_eq(a, 0 as NominalId, "ids start at zero")
+    assert_eq(c, 2 as NominalId, "ids are handed out in registration order")
+
+    reg.evict(b)
+    assert_true(reg.find(b).is_none(), "the evicted id names a hole")
+    assert_true(reg.lookup_fqn("m.B").is_none(), "the evicted fqn stops resolving")
+    assert_eq(nominal_fqn(reg.get(c)), "m.C", "the id past the hole still names its own def")
+    assert_eq(reg.len(), 2 as usize, "a hole is not a live entry")
+
+    let d = reg.register(NominalDef.NomStruct(probe_struct()), $"m.D")
+    assert_eq(d, 3 as NominalId, "a retired id is never handed out again")
+}
+
+fn probe_struct() StructDef {
+    let no_params: List(VarId) = list(0)
+    let no_fields: List(Field) = list(0)
+    return StructDef {
+        fqn = "", module = "m", is_pub = true,
+        type_params = no_params, fields = no_fields,
+        decl_span = none_span(), deprecation = null,
+        is_simd = false, is_foreign = false,
     }
 }

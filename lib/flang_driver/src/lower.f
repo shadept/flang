@@ -932,7 +932,10 @@ fn lower_specializations(m: &IrModule, ctx: &LowerCtx) {
     // lambdas through `$F`) - their symbols then collide; emit the first
     // and skip the twins.
     let emitted: Set(String) = set(ctx.allocator)
-    for &s in ctx.result.specializations {
+    for i in 0..(ctx.result.specializations.next_id as usize) {
+        let found = ctx.result.specializations.find(i as u32)
+        if found.is_none() { continue }
+        let s = found.unwrap()
         if s.decl.body.is_none() { continue }
         let sym = ctx.syms.spec_symbol(s.id)
         let sig = ctx.syms.spec_sig(s.id)
@@ -6536,24 +6539,24 @@ test "a guard gets its own block and falls through to the next arm" {
     assert_true(ends_in_br_if(f, arm), "the guard is a conditional branch")
 }
 
-// `or_test` and `range_test` are exercised only through these once the
-// parser produces `Or`/`Range` pattern nodes. Today `parse_match_arm` keeps
-// the pattern as a flat token run and the projector cannot read either
-// shape, so both arrive as `Pattern.Error`. What is pinned here is the
-// safety property: the match refuses to lower rather than treating the
-// unreadable pattern as irrefutable and always taking its arm.
-test "an or-pattern the parser cannot represent refuses to lower" {
+// `Or` and `Range` tests are side-effect free, so they combine into one
+// operand with bitwise ops instead of branching - the arm still gets a
+// single `br_if`, and the alternatives/bounds share the arm's test block.
+test "an or-pattern tests every alternative and combines them with ior" {
     let unit = analyze(from_view("fn f(a: i32) i32 { return a match { 1 | 2 => 10, _ => 20 } }"), "test.f")
     let m = lower_module(&unit.module, &unit.result)
-    assert_true(find_fn(&m, "f__i32") == m.functions.len, "the function is not emitted")
-    assert_true(was_skipped(&m, "f__i32"), "and it is recorded as skipped")
+    let f = &m.functions[find_fn(&m, "f__i32")]
+    assert_eq(compare_count(f), 2 as usize, "one compare per alternative; the wildcard needs none")
+    assert_true(has_ior_in(f, 0), "the alternatives' tests are or-ed, not branched between")
+    assert_eq(block_count_starting(f, "m_arm"), 2 as usize, "the or-pattern is still one arm")
 }
 
-test "a range pattern the parser cannot represent refuses to lower" {
+test "a range pattern tests both bounds and combines them with iand" {
     let unit = analyze(from_view("fn f(a: i32) i32 { return a match { 1..5 => 10, _ => 20 } }"), "test.f")
     let m = lower_module(&unit.module, &unit.result)
-    assert_true(find_fn(&m, "f__i32") == m.functions.len, "the function is not emitted")
-    assert_true(was_skipped(&m, "f__i32"), "and it is recorded as skipped")
+    let f = &m.functions[find_fn(&m, "f__i32")]
+    assert_eq(compare_count(f), 2 as usize, "one compare per bound")
+    assert_true(has_iand_in(f, 0), "the bounds are and-ed into a single test")
 }
 
 test "an arm that returns keeps its return, with no branch over it" {
@@ -6578,20 +6581,21 @@ test "matching an enum variant tests the discriminant" {
 }
 
 test "an unsupported pattern gates the whole match, not just its arm" {
-    let unit = analyze(from_view("fn f(a: (i32, i32)) i32 { return a match { (0, 0) => 1, _ => 2 } }"), "test.f")
+    // Alternatives that bind are the gate: `or_test` combines subtests
+    // with `ior` and has nowhere to merge two binding sets, so a tuple
+    // alternative refuses. The wildcard arm beside it is supported, and
+    // the signature lowers on its own - only the pattern is out of
+    // subset, and it takes the whole function with it.
+    let unit = analyze(from_view("fn f(a: (i32, i32)) i32 { return a match { (0, 0) | (1, 1) => 1, _ => 2 } }"), "test.f")
     let m = lower_module(&unit.module, &unit.result)
-    // The signature itself is out of subset here, so nothing is emitted;
-    // the point is that lowering does not crash or half-emit.
-    assert_true(m.functions.len == 0 as usize, "an unlowerable signature skips the function entirely")
-}
+    assert_true(m.functions.len == 0 as usize, "no half-emitted function survives the refusal")
+    assert_true(was_skipped(&m, "f__tup_i32_i32"), "the whole function is recorded as skipped")
 
-test "a tuple pattern in a lowerable function degrades to a placeholder" {
-    let unit = analyze(from_view("type P = struct { x: i32 }\nfn f(a: i32) i32 { return a match { _ => 1 } }"), "test.f")
-    let m = lower_module(&unit.module, &unit.result)
-    let f = &m.functions[find_fn(&m, "f__i32")]
-    // A single wildcard arm still lowers - the gate is per-pattern, and a
-    // wildcard is supported.
-    assert_true(block_count_starting(f, "m_arm") == 1 as usize, "the supported match still lowers")
+    // The same signature and the same supported arm, minus the binding
+    // alternative, lowers - the refusal is the pattern's, not the shape's.
+    let ok = analyze(from_view("fn f(a: (i32, i32)) i32 { return a match { (0, 0) => 1, _ => 2 } }"), "test.f")
+    let m2 = lower_module(&ok.module, &ok.result)
+    assert_true(find_fn(&m2, "f__tup_i32_i32") < m2.functions.len, "a tuple pattern in a tuple parameter lowers")
 }
 
 // Indexing (M5).
@@ -6808,12 +6812,13 @@ test "a const vtable of function pointers lowers and dispatches" {
 }
 
 test "a const whose initializer cannot lower has no global, and its readers refuse" {
-    // A named-argument call stays unresolved (fresh-var fallback), so
-    // the initializer's type never settles - the const gets no global,
-    // and its reader must refuse, never read zeros.
-    let unit = analyze(from_view("fn mk(a: i32) i32 { return a }\nconst B2: i32 = mk(a = 1)\nfn main() i32 { let x = B2 return 0 }"), "test.f")
+    // A binding or-pattern is out of subset (see the match gate above),
+    // so the initializer refuses - the const gets no global, and its
+    // reader must refuse too, never read zeros.
+    let unit = analyze(from_view("const B2: i32 = (0, 0) match { (0, 0) | (1, 1) => 1, _ => 2 }\nfn main() i32 { let x = B2 return 0 }"), "test.f")
     let m = lower_module(&unit.module, &unit.result)
     assert_true(find_fn(&m, "__finit_test__f__B2") >= m.functions.len, "no init function for the unlowerable const")
+    assert_eq(m.globals.len, 0 as usize, "and no global to read zeros out of")
     assert_true(was_skipped(&m, "main"), "reading an unavailable const refuses the reader")
 }
 
@@ -7383,7 +7388,7 @@ test "an interpolated string lowers through its recorded desugar" {
     let unit = analyze_source_set(srcs, &fqns)
     assert_eq(project_error_count(&unit), 0 as usize, "the desugar checks clean")
 
-    let m = lower_program(&unit.modules, &unit.fqns, &unit.result)
+    let m = lower_program(&unit.modules, &unit.fqns, &unit.result, host_ctx())
     assert_true(!was_skipped(&m, "app__f__"), "the interpolating function is not refused")
     let fi = find_fn_starting(&m, "app__f__")
     assert_true(fi < m.functions.len, "the interpolating function is emitted")
@@ -7400,7 +7405,7 @@ test "an interpolated string lowers through its recorded desugar" {
 test "a generic call lowers against a per-signature specialization" {
     let unit = analyze(from_view("fn id(x: $T) T { return x }\nfn main() i32 { let a = id(1i32) let b = id(2i32) let w = id(9i64) return a + b }"), "test.f")
     // Three call sites, two concrete signatures.
-    assert_eq(unit.result.specializations.len, 2 as usize, "i32 twice dedups; i64 adds one")
+    assert_eq(unit.result.specializations.len(), 2 as usize, "i32 twice dedups; i64 adds one")
     let m = lower_module(&unit.module, &unit.result)
     let i32_spec = find_fn(&m, "test__f__id__i32__ret_i32")
     let i64_spec = find_fn(&m, "test__f__id__i64__ret_i64")
@@ -7583,7 +7588,7 @@ test "a let-bound array argument decays into a slice view at the call" {
     fqns.push("app")
     let unit = analyze_source_set(srcs, &fqns)
     assert_eq(project_error_count(&unit), 0 as usize, "the decay checks clean")
-    let m = lower_program(&unit.modules, &unit.fqns, &unit.result)
+    let m = lower_program(&unit.modules, &unit.fqns, &unit.result, host_ctx())
     assert_true(!was_skipped(&m, "app__f"), "the call lowers")
     let fi = find_fn_starting(&m, "app__f")
     assert_true(fi < m.functions.len, "f emitted")

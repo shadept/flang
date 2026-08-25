@@ -24,11 +24,11 @@ pub type TypeCheckResult = struct {
     resolved_ops: Dict(NodeId, ResolvedOperator)
     resolved_targets: Dict(NodeId, ResolvedTarget)
     instantiated_types: List(Ty)
-    // Every generic instantiation the checker emitted, in first-need
-    // order, each with its private overlay tables - indexed by
-    // `RtSpecialized.0` / `ResolvedOperator.spec_id`. Lowering emits one
-    // function per entry.
-    specializations: List(Specialization)
+    // Every generic instantiation the checker emitted, keyed by the id
+    // `RtSpecialized.0` / `ResolvedOperator.spec_id` carry, each with its
+    // private overlay tables. Lowering emits one function per entry and
+    // walks `0..next_id` so emission order is first-need order.
+    specializations: SpecializationRegistry
     // Checker-synthesized replacement AST (interpolation's StringBuilder
     // desugar) keyed by the replaced node - see InferenceResults.desugars.
     desugars: Dict(NodeId, &BlockExpr)
@@ -92,7 +92,7 @@ pub fn empty_result(allocator: &Allocator? = null) TypeCheckResult {
         resolved_ops = dict(allocator),
         resolved_targets = dict(allocator),
         instantiated_types = list(0, allocator),
-        specializations = list(0, allocator),
+        specializations = specialization_registry(allocator),
         desugars = dict(allocator),
         synth_strings = list(0, allocator),
         default_args = dict(allocator),
