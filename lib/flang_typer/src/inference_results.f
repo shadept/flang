@@ -165,6 +165,12 @@ pub type InferenceResults = struct {
     // receiver argument. Generic hops are rewritten to their
     // specializations by the M10 drain, like `resolved_targets`.
     receiver_derefs: Dict(NodeId, List(ResolvedTarget))
+    // Inverse of `node_id.node_id_of`: the span every id the checker
+    // minted was fingerprinted from. The fingerprint clamps a span
+    // longer than 64 KB or a file past 65535, so it cannot be decoded
+    // back; a consumer that has a `NodeId` (`RtLocal`, a `node_types`
+    // key) reads the span from here instead.
+    spans: Dict(NodeId, SourceSpan)
     allocator: &Allocator?
 }
 
@@ -180,6 +186,7 @@ pub fn inference_results(allocator: &Allocator? = null) InferenceResults {
         default_args = dict(allocator),
         arg_lists = dict(allocator),
         receiver_derefs = dict(allocator),
+        spans = dict(allocator),
         allocator = allocator,
     }
 }
@@ -195,6 +202,18 @@ pub fn deinit(self: &InferenceResults) {
     self.default_args.deinit()
     self.arg_lists.deinit()
     self.receiver_derefs.deinit()
+    self.spans.deinit()
+}
+
+// Note the span an id was minted from. Two spans only ever share an id
+// by clamping to the same bits, so a repeat write is the same span in
+// every case a consumer can observe.
+pub fn record_span(self: &InferenceResults, id: NodeId, span: SourceSpan) {
+    self.spans.set(id, span)
+}
+
+pub fn get_span(self: &InferenceResults, id: NodeId) SourceSpan? {
+    return self.spans.get(id)
 }
 
 // Record (or overwrite) the inferred type for a node. The "overwrite"
@@ -304,4 +323,5 @@ pub fn reset_side_tables(self: &InferenceResults) {
     self.default_args = dict(self.allocator)
     self.arg_lists = dict(self.allocator)
     self.receiver_derefs = dict(self.allocator)
+    self.spans = dict(self.allocator)
 }

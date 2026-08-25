@@ -23,9 +23,13 @@ import flang_typer.type
 import flang_typer.visibility
 
 // One enum variant. `payloads` is empty for nullary variants.
+// `decl_span` points at the variant's own declaration inside the enum
+// body, so a consumer can jump to it; `none_span()` for synthesized
+// variants.
 pub type VariantDef = struct {
     name: String
     payloads: List(Ty)
+    decl_span: SourceSpan
 }
 
 pub type StructDef = struct {

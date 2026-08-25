@@ -85,7 +85,7 @@ fn substitute_record(fields: &List(Field), subst: &Dict(VarId, Ty), alloc: &Allo
     let new_fields = list(fields.len, Some(alloc))
     for &f in fields {
         let new_ty = substitute_r(&f.ty, subst, alloc)
-        new_fields.push(.{ name = f.name, ty = new_ty })
+        new_fields.push(.{ name = f.name, ty = new_ty, decl_span = f.decl_span })
     }
     return Ty.Record(new_fields)
 }

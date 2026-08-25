@@ -15,11 +15,13 @@
 // `analyze` once the AST exists.
 
 import std.allocator
+import std.dict
 import std.list
 import std.option
 import std.set
 import std.string
 import std.string_builder
+import std.test
 import std.io.file
 import std.result
 import std.time
@@ -178,7 +180,12 @@ pub type AnalyzedProject = struct {
     check_ns: u64
 }
 
-pub fn analyze_project(ctx: &ResolveCtx, entries: &List(OwnedString), allocator: &Allocator? = null) AnalyzedProject {
+// `overrides` supplies a buffer to use in place of the file on disk, for
+// every path it names - an editor's unsaved text. `flang build` passes
+// none. See `read_source` for the key convention.
+pub fn analyze_project(ctx: &ResolveCtx, entries: &List(OwnedString),
+        overrides: &Dict(String, String)? = null,
+        allocator: &Allocator? = null) AnalyzedProject {
     let diagnostics: List(Diagnostic) = list(0, allocator)
     let sources: List(OwnedString) = list(0, allocator)
     let fqns: List(OwnedString) = list(0, allocator)
@@ -207,7 +214,7 @@ pub fn analyze_project(ctx: &ResolveCtx, entries: &List(OwnedString), allocator:
         let path = queue[qi].as_view()
         let is_project = qi < project_count
         qi = qi + 1
-        let src_opt = read_text(path)
+        let src_opt = read_source(path, overrides)
         if src_opt.is_none() {
             const msg = $"cannot read source `{path}`"
             diagnostics.push(error("E0001", msg, none_span()))
@@ -421,6 +428,21 @@ fn seed_stdlib(ctx: &ResolveCtx, queue: &List(OwnedString), seen: &Set(String), 
     deinit_source_list(&found)
 }
 
+// The text to compile for `path`: a supplied buffer when one stands in
+// for that file, the file on disk otherwise. Keys are the forward-slash
+// paths the resolver produces (`resolver.normalize_sep`) - a caller that
+// spells a key any other way misses silently and gets the stale file.
+//
+// The returned buffer is a copy: the AST views into whichever source the
+// project owns, and an override's storage belongs to the caller.
+fn read_source(path: String, overrides: &Dict(String, String)?) OwnedString? {
+    if overrides.is_some() {
+        let hit = overrides.unwrap().get(path)
+        if hit.is_some() { return Some(from_view(hit.unwrap())) }
+    }
+    return read_text(path)
+}
+
 fn enqueue_copy(queue: &List(OwnedString), seen: &Set(String), path: String) {
     if seen.contains(path) { return }
     queue.push(from_view(path))
@@ -441,4 +463,25 @@ fn push_unresolved(diags: &List(Diagnostic), id: &ImportDecl, alloc: &Allocator?
     const msg = $"unresolved import `{dotted.as_view()}`"
     dotted.deinit()
     diags.push(error("E0001", msg, id.span))
+}
+
+// Tests
+
+test "an override stands in for a file that is not on disk" {
+    let ov: Dict(String, String) = dict()
+    defer ov.deinit()
+    ov.set("no/such/file.f", "fn main() i32 { return 0 }\n")
+    let got = read_source("no/such/file.f", Some(&ov))
+    assert_true(got.is_some(), "the override supplied the text")
+    let text = got.unwrap()
+    defer text.deinit()
+    assert_true(text.as_view() == "fn main() i32 { return 0 }\n", "and it is the buffer verbatim")
+}
+
+test "a path no override names falls through to the file on disk" {
+    let ov: Dict(String, String) = dict()
+    defer ov.deinit()
+    ov.set("other.f", "fn other() i32 { return 1 }\n")
+    assert_true(read_source("no/such/file.f", Some(&ov)).is_none(), "an unnamed path reads from disk, and misses")
+    assert_true(read_source("no/such/file.f", null).is_none(), "so does no override map at all")
 }

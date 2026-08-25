@@ -25,6 +25,7 @@ import std.list
 import std.option
 import std.string
 import std.string_builder
+import flang_core.span
 
 // ─────────────────────────────────────────────────────────────────────
 // Handles - transparent aliases over plain integers so APIs read at a
@@ -99,9 +100,15 @@ pub type FunctionTy = struct {
 
 // A name → type pair used for `Record` (anonymous structs) and for
 // nominal struct fields when the registry materialises them.
+// `decl_span` points at the field's own declaration, so a consumer can
+// jump to it; `none_span()` for the fields the checker synthesizes, which
+// have no declaration (a closure's captured environment). It is metadata:
+// `equals` and `format` both ignore it, so two records that differ only
+// in where they were written are the same type.
 pub type Field = struct {
     name: String
     ty: Ty
+    decl_span: SourceSpan
 }
 
 // Reference into the `NominalRegistry` plus type arguments for the

@@ -349,7 +349,7 @@ fn zonk_tuple(self: &Engine, elems: &List(Ty)) Ty {
 fn zonk_record(self: &Engine, fields: &List(Field)) Ty {
     let new_fields = list(fields.len, self.allocator)
     for &f in fields {
-        new_fields.push(Field { name = f.name, ty = self.zonk(f.ty) })
+        new_fields.push(Field { name = f.name, ty = self.zonk(f.ty), decl_span = f.decl_span })
     }
     return Ty.Record(new_fields)
 }

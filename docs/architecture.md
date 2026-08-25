@@ -49,7 +49,7 @@ The dep's `[project].name` IS its import namespace; library files live directly 
 
 The bootstrap compiler reimplements the same machinery in FLang. `flang_driver/resolver.f` is the port: `resolve_import` mirrors `TryResolveImportPath` (project-name, dependency-name, then include-path rules — stdlib root via the `--stdlib-path` flag, then the working dir), and `module_fqn` mirrors `DeriveModulePath` (the inverse, classifying a file path under the project / dependency / stdlib roots). Dependency source roots are derived exactly as the C# does — read each dep's `flang.toml`, take the static prefix of its `source` glob.
 
-`flang_driver/driver.f::analyze_project` is the BFS loader: it seeds the queue with the project's globbed entry sources plus the auto-imported `core.prelude`, follows each module's imports, deduplicates by file path, and type-checks the whole set through a single `check_all`. The module FQNs (not file paths) are passed as the per-module paths so symbol registration and visibility agree. Visibility is built in `flang_typer/checker.f::build_visibility` from the modules' `ImportDecl`s — `{M} ∪ imports(M)` then the `pub import` re-export closure, matching `GetVisibleModules`. `compile.f::build_program` lowers every module into one FIR program for a single link. `examples/multimod` is the end-to-end witness. (Known gap: structs crash the bootstrap typer — see [known-issues.md](known-issues.md).)
+`flang_driver/driver.f::analyze_project` is the BFS loader: it seeds the queue with the project's globbed entry sources plus the auto-imported `core.prelude`, follows each module's imports, deduplicates by file path, and type-checks the whole set through a single `check_all`. The module FQNs (not file paths) are passed as the per-module paths so symbol registration and visibility agree. Visibility is built in `flang_typer/checker.f::build_visibility` from the modules' `ImportDecl`s — `{M} ∪ imports(M)` then the `pub import` re-export closure, matching `GetVisibleModules`. `compile.f::build_program` lowers every module into one FIR program for a single link. `examples/multimod` is the end-to-end witness. Each module's text comes from `driver.f::read_source`, which returns a supplied buffer when the caller named that path in `analyze_project`'s optional `overrides` map (an editor's unsaved text) and reads the file otherwise; keys are the forward-slash paths `resolver.normalize_sep` produces, so a key spelled any other way misses silently and compiles the stale file. `flang build` passes no overrides. (Known gap: structs crash the bootstrap typer — see [known-issues.md](known-issues.md).)
 
 ## `std.io` layering
 
@@ -118,6 +118,19 @@ lowering cannot re-derive:
   through these"; on a call whose callee is NOT a member access it means
   "the callee value IS the receiver" (RFC-014 `op_call`), with an empty
   chain for the direct case.
+
+**Self-describing results.** A node id packs `(file_id, start, length)`
+into a `u64` and clamps a span longer than 64 KB or a file past 65535, so
+it cannot be decoded back to the span it names. Every id the checker
+mints goes through `checker.node_of`, which records the span in
+`TypeCheckResult.spans`; `get_span` inverts an id, `path_of` maps a
+`file_id` to its source path from `TypeCheckResult.file_paths` (owned
+copies, so the snapshot names the file of any span it holds without the
+project that produced it). `Field.decl_span` and `VariantDef.decl_span`
+do the same for a struct field and an enum variant, whose declarations
+have no node of their own. Both spans are metadata: `Ty.equals` and
+`format` ignore them, so two records that differ only in where they were
+written are still one type.
 
 ## Intermediate Representation (FIR)
 
@@ -286,7 +299,7 @@ The harness compiles and runs each test, asserting exit code, stdout, and stderr
 
 **Telling the two apart.** Both binaries name themselves in `--version` and `--help`: `flang 0.1.0-alpha (reference compiler, C#)` versus `flang 0.1.0 (self-hosted compiler, FLang; flang_parser 0.3.0)`. Ordinary diagnostics carry a plain `flang:` prefix in both.
 
-**Gate A - analysis equivalence.** `flang --gate-a build` analyses the project twice and requires the two `TypeCheckResult`s to be identical entry by entry: nominal registry, specialization registry, `node_types`, `resolved_targets`, `resolved_ops`, `instantiated_types`, plus the diagnostic count and the size of every remaining table. The comparison lives in `lib/flang_typer/src/result_diff.f`; types compare by their canonical `format` rendering and ids compare by value, so a renumbered nominal is a difference even when both ids name the same declaration.
+**Gate A - analysis equivalence.** `flang --gate-a build` analyses the project twice and requires the two `TypeCheckResult`s to be identical entry by entry: nominal registry, specialization registry, `node_types`, `resolved_targets`, `resolved_ops`, `instantiated_types`, `spans`, `file_paths`, plus the diagnostic count and the size of every remaining table. The comparison lives in `lib/flang_typer/src/result_diff.f`; types compare by their canonical `format` rendering and ids compare by value, so a renumbered nominal is a difference even when both ids name the same declaration.
 
 It exists for RFC-022: the harness and the stage-2 = stage-3 fixpoint both run cold and single-pass, so neither can catch a stale cache entry surviving an invalidation once the checker becomes incremental. Until per-module invalidation lands the second pass is a full re-analysis, which makes it a determinism check — useful in its own right, since dict iteration order feeds emission order. Run it across `bootstrap/`, `lib/*` and `examples/*`; `examples/raylib` needs the raylib headers and reports "does not type-check" without them.
 

@@ -238,10 +238,51 @@ pull graph, which re-settles. Fixpoint preserved.
 Add `decl_span` to `Field` and `VariantDef`, a `NodeId -> SourceSpan` map to the
 result, and move `file_id -> path` into `TypeCheckResult`.
 
+**Landed 2026-08-25.** `Field` and `VariantDef` each carry a `decl_span`,
+taken from the AST declaration and `none_span()` for the fields the checker
+synthesizes (closure captures). Both are metadata: `equals` and `format`
+ignore them, so a record type still compares and keys the same way, and
+`specialization.key_for` is untouched.
+
+Every id the checker mints now goes through one helper, `checker.node_of`,
+which records `(id, span)` in `InferenceResults.spans` on the way through and
+lands as `TypeCheckResult.spans`. Inverting the fingerprint arithmetically
+was rejected: the encoding clamps a span past 64 KB or a file past 65535, so
+a decode is right for most nodes and silently wrong for the rest, and a
+consumer cannot tell which it got. `get_span` reads the table.
+
+`TypeCheckResult.file_paths` holds an owned copy of the per-file-id path
+list `check_all` already received, so a span in the snapshot names its file
+without the `AnalyzedProject` that produced it; `path_of` maps a `file_id`,
+reporting unknown for the negative synthetic ids (`none_span`'s -1, the
+checker's -2) and for a result checked without paths.
+
+Gate A compares both new tables - `spans` entry by entry, `file_paths`
+positionally, since file ids index it. Green across `bootstrap/`, every
+`lib/*` and every `examples/*` that type-checks.
+
+Cost: about +3.5% on a check. Two compilers - one recording spans, one with
+`record_span` stubbed out - checked `bootstrap/` interleaved, six rounds
+each. Medians 1019 ms and 985 ms. That is the price of one dict write per
+minted id, and it buys the only exact inverse of the fingerprint.
+
 ### 10. Source overrides
 
 `analyze_project` takes an override map (path -> buffer) instead of always
 calling `read_text`. The LSP passes open buffers; `flang build` passes none.
+
+**Landed 2026-08-25.** `analyze_project` gained an optional
+`overrides: &Dict(String, String)?` ahead of its allocator, and the BFS reads
+through `read_source(path, overrides)` rather than `read_text(path)`. A named
+path yields a copy of the supplied buffer - the project owns whatever the AST
+views into, and the override's storage stays the caller's. An unnamed path
+falls through to disk unchanged, so `flang build` behaves exactly as before.
+
+Keys are the forward-slash paths `resolver.normalize_sep` produces, which is
+what the BFS queue holds. A caller that spells a key any other way misses
+silently and gets the file on disk; there is no diagnostic for an override
+nothing matched, because the loader never learns which paths a caller
+expected to hit. Worth revisiting when the LSP is the one supplying them.
 
 ## Gates
 
@@ -298,8 +339,9 @@ byte-identical, 11/11 examples.
     numbers in Motivation above
  1  DONE 2026-08-25: stable ids + tombstones; lowering iterates by id
  2  DONE 2026-08-25: Gate A harness (cold vs dirty-and-redemand equivalence)
- 3  data gaps: decl_spans on Field/VariantDef, NodeId->span, file_id->path
- 4  source-override map on analyze_project
+ 3  DONE 2026-08-25: data gaps - decl_spans on Field/VariantDef,
+    NodeId->span, file_id->path
+ 4  DONE 2026-08-25: source-override map on analyze_project
  5  convert phase by phase, Gate A green after each:
       5a  module_ast / nominal_names
       5b  nominal_body

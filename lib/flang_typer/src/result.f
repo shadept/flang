@@ -11,6 +11,7 @@ import std.dict
 import std.list
 import std.option
 import std.string
+import flang_core.span
 import flang_parser.ast
 import flang_typer.type
 import flang_typer.node_id
@@ -52,6 +53,15 @@ pub type TypeCheckResult = struct {
     // table keyed by synthesized-nominal id.
     lambdas: Dict(NodeId, LambdaInfo)
     closures: Dict(NominalId, ClosureSig)
+    // Where every recorded `NodeId` came from. A node id is a lossy
+    // fingerprint of `(file_id, start, length)` and cannot be decoded
+    // back, so a consumer resolving `RtLocal` or walking `node_types`
+    // reads the span from here.
+    spans: Dict(NodeId, SourceSpan)
+    // Source path per file id: `file_paths[span.file_id]`. Owned copies,
+    // so the snapshot describes its own spans without the project that
+    // produced it. Empty when the checker ran without paths.
+    file_paths: List(OwnedString)
     // Wall time of each `check_all` phase, for `--timings`.
     phases: CheckPhases
 }
@@ -102,6 +112,8 @@ pub fn empty_result(allocator: &Allocator? = null) TypeCheckResult {
         functions = function_registry(allocator),
         lambdas = dict(allocator),
         closures = dict(allocator),
+        spans = dict(allocator),
+        file_paths = list(0, allocator),
         phases = no_phases(),
     }
 }
@@ -124,6 +136,11 @@ pub fn deinit(self: &TypeCheckResult) {
     self.functions.deinit()
     self.lambdas.deinit()
     self.closures.deinit()
+    self.spans.deinit()
+    for &p in self.file_paths {
+        p.deinit()
+    }
+    self.file_paths.deinit()
 }
 
 pub fn get_type(self: &TypeCheckResult, id: NodeId) Ty? {
@@ -160,4 +177,21 @@ pub fn get_receiver_deref(self: &TypeCheckResult, id: NodeId) &List(ResolvedTarg
 
 pub fn get_closure(self: &TypeCheckResult, id: NominalId) &ClosureSig? {
     return self.closures.get_ref(id)
+}
+
+// The source span a node id was minted from. `null` for an id the
+// checker never recorded - a hand-built id, or one from a different
+// compilation.
+pub fn get_span(self: &TypeCheckResult, id: NodeId) SourceSpan? {
+    return self.spans.get(id)
+}
+
+// The source path a span's `file_id` names. `null` for the synthetic
+// file ids (`none_span`'s -1, the checker's -2) and for a result checked
+// without paths.
+pub fn path_of(self: &TypeCheckResult, file_id: i32) String? {
+    if file_id < 0 { return null }
+    const i = file_id as usize
+    if i >= self.file_paths.len { return null }
+    return Some(self.file_paths[i].as_view())
 }

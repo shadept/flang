@@ -79,6 +79,8 @@ pub fn diff_results(a: &TypeCheckResult, b: &TypeCheckResult, allocator: &Alloca
     diff_targets(&d, a, b, allocator)
     diff_ops(&d, a, b, allocator)
     diff_instantiated(&d, a, b, allocator)
+    diff_spans(&d, a, b, allocator)
+    diff_paths(&d, a, b, allocator)
     diff_sizes(&d, a, b, allocator)
     return d
 }
@@ -276,6 +278,47 @@ fn diff_instantiated(d: &ResultDiff, a: &TypeCheckResult, b: &TypeCheckResult, a
         format(&rt, &rb, "")
         if lb.as_view() != rb.as_view() {
             note(d, $"instantiated_types[{i}]: {lb.as_view()} vs {rb.as_view()}")
+        }
+    }
+}
+
+// The inverse of the node-id fingerprint. A span that moved without its
+// id moving is a node whose source changed under a surviving cache entry
+// - the exact shape of staleness a fingerprint collision hides.
+fn diff_spans(d: &ResultDiff, a: &TypeCheckResult, b: &TypeCheckResult, alloc: &Allocator?) {
+    let al = a.spans.len()
+    let bl = b.spans.len()
+    if al != bl {
+        note(d, $"spans: {al} entries vs {bl}")
+    }
+    for e in a.spans {
+        let key = e.key
+        let other = b.spans.get(key)
+        if other.is_none() {
+            note(d, $"spans[{key}]: missing on the right")
+            continue
+        }
+        const l = e.value
+        const r = other.unwrap()
+        if l.file_id != r.file_id or l.start != r.start or l.length != r.length {
+            note(d, $"spans[{key}]: {l.file_id}:{l.start}+{l.length} vs {r.file_id}:{r.start}+{r.length}")
+        }
+    }
+}
+
+// File ids index this list, so order is the value.
+fn diff_paths(d: &ResultDiff, a: &TypeCheckResult, b: &TypeCheckResult, alloc: &Allocator?) {
+    const al = a.file_paths.len
+    const bl = b.file_paths.len
+    if al != bl {
+        note(d, $"file_paths: {al} entries vs {bl}")
+    }
+    const lo = if al < bl { al } else { bl }
+    for i in 0..lo {
+        const lp = a.file_paths[i].as_view()
+        const rp = b.file_paths[i].as_view()
+        if lp != rp {
+            note(d, $"file_paths[{i}]: {lp} vs {rp}")
         }
     }
 }

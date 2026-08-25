@@ -398,8 +398,12 @@ fn subst_list(tys: &List(Ty), params: &List(VarId), args: &List(Ty), alloc: &All
 
 fn subst_fields(fields: &List(Field), params: &List(VarId), args: &List(Ty), alloc: &Allocator?) List(Field) {
     let out: List(Field) = list(fields.len, alloc)
-    for i in 0..fields.len {
-        out.push(Field { name = fields[i].name, ty = subst(&fields[i].ty, params, args, alloc) })
+    for f in fields {
+        out.push(Field {
+            name = f.name,
+            ty = subst(&f.ty, params, args, alloc),
+            decl_span = f.decl_span,
+        })
     }
     return out
 }
@@ -474,9 +478,9 @@ test "references and arrays" {
 test "auto layout reorders fields by alignment to minimise padding" {
     let reg = nominal_registry()
     let fields: List(Field) = list(3)
-    fields.push(Field { name = "a", ty = Ty.Prim(PrimitiveKind.I8) })   // decl 0, align 1
-    fields.push(Field { name = "b", ty = Ty.Prim(PrimitiveKind.I64) })  // decl 1, align 8
-    fields.push(Field { name = "c", ty = Ty.Prim(PrimitiveKind.I16) })  // decl 2, align 2
+    fields.push(Field { name = "a", ty = Ty.Prim(PrimitiveKind.I8), decl_span = none_span() })   // decl 0, align 1
+    fields.push(Field { name = "b", ty = Ty.Prim(PrimitiveKind.I64), decl_span = none_span() })  // decl 1, align 8
+    fields.push(Field { name = "c", ty = Ty.Prim(PrimitiveKind.I16), decl_span = none_span() })  // decl 2, align 2
     let def = StructDef {
         fqn = "T", module = "", is_pub = true,
         type_params = list(0), fields = fields,
@@ -496,9 +500,9 @@ test "auto layout reorders fields by alignment to minimise padding" {
 test "C repr keeps declaration order and C padding" {
     let reg = nominal_registry()
     let fields: List(Field) = list(3)
-    fields.push(Field { name = "a", ty = Ty.Prim(PrimitiveKind.I8) })
-    fields.push(Field { name = "b", ty = Ty.Prim(PrimitiveKind.I64) })
-    fields.push(Field { name = "c", ty = Ty.Prim(PrimitiveKind.I16) })
+    fields.push(Field { name = "a", ty = Ty.Prim(PrimitiveKind.I8), decl_span = none_span() })
+    fields.push(Field { name = "b", ty = Ty.Prim(PrimitiveKind.I64), decl_span = none_span() })
+    fields.push(Field { name = "c", ty = Ty.Prim(PrimitiveKind.I16), decl_span = none_span() })
     let def = StructDef {
         fqn = "T", module = "", is_pub = true,
         type_params = list(0), fields = fields,
@@ -519,8 +523,8 @@ test "generic struct substitutes type parameters" {
     params.push(0u32)
     params.push(1u32)
     let fields: List(Field) = list(2)
-    fields.push(Field { name = "first", ty = Ty.Var(.{ id = 0u32, level = 0u32 }) })
-    fields.push(Field { name = "second", ty = Ty.Var(.{ id = 1u32, level = 0u32 }) })
+    fields.push(Field { name = "first", ty = Ty.Var(.{ id = 0u32, level = 0u32 }), decl_span = none_span() })
+    fields.push(Field { name = "second", ty = Ty.Var(.{ id = 1u32, level = 0u32 }), decl_span = none_span() })
     let def = StructDef {
         fqn = "Pair", module = "", is_pub = true,
         type_params = params, fields = fields,
@@ -541,10 +545,10 @@ test "tagged enum reserves a tag plus the largest payload" {
     let reg = nominal_registry()
     let variants: List(VariantDef) = list(3)
     let p_a: List(Ty) = list(1); p_a.push(Ty.Prim(PrimitiveKind.I32))
-    variants.push(VariantDef { name = "A", payloads = p_a })
+    variants.push(VariantDef { name = "A", payloads = p_a, decl_span = none_span() })
     let p_b: List(Ty) = list(1); p_b.push(Ty.Prim(PrimitiveKind.I64))
-    variants.push(VariantDef { name = "B", payloads = p_b })
-    variants.push(VariantDef { name = "C", payloads = list(0) })
+    variants.push(VariantDef { name = "B", payloads = p_b, decl_span = none_span() })
+    variants.push(VariantDef { name = "C", payloads = list(0), decl_span = none_span() })
     let def = EnumDef {
         fqn = "E", module = "", is_pub = true,
         type_params = list(0), variants = variants,
@@ -560,8 +564,8 @@ test "tagged enum reserves a tag plus the largest payload" {
 test "payloadless enum is just the tag" {
     let reg = nominal_registry()
     let variants: List(VariantDef) = list(2)
-    variants.push(VariantDef { name = "A", payloads = list(0) })
-    variants.push(VariantDef { name = "B", payloads = list(0) })
+    variants.push(VariantDef { name = "A", payloads = list(0), decl_span = none_span() })
+    variants.push(VariantDef { name = "B", payloads = list(0), decl_span = none_span() })
     let def = EnumDef {
         fqn = "Flag", module = "", is_pub = true,
         type_params = list(0), variants = variants,
@@ -579,8 +583,8 @@ test "Option of a reference uses the pointer niche" {
 
     let some: List(Ty) = list(1); some.push(Ty.Var(.{ id = 0, level = 0 }))
     let variants: List(VariantDef) = list(2)
-    variants.push(VariantDef { name = "Some", payloads = some })
-    variants.push(VariantDef { name = "None", payloads = list(0) })
+    variants.push(VariantDef { name = "Some", payloads = some, decl_span = none_span() })
+    variants.push(VariantDef { name = "None", payloads = list(0), decl_span = none_span() })
     let params: List(VarId) = list(1); params.push(0)
     let def = EnumDef {
         fqn = FQN_OPTION, module = "core.option", is_pub = true,
