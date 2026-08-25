@@ -29,6 +29,9 @@ import flang_driver.driver
 import flang_driver.compile
 import flang_driver.project
 import flang_driver.resolver
+import flang_typer.nominal_registry
+import flang_typer.specialization
+import flang_typer.result_diff
 import flang.frontend
 
 // Parsed CLI state. `subcommand` is the first positional argument; the
@@ -43,6 +46,7 @@ type Cli = struct {
     timings: bool
     release: bool
     check: bool
+    gate_a: bool
     subcommand: String
     rest_index: usize
     stdlib_path: String
@@ -60,6 +64,7 @@ type BuildOpts = struct {
     keep_c: bool
     timings: bool
     release: bool
+    gate_a: bool
     stdlib_path: String
     target: ComptimeCtx
     start_ns: u64
@@ -101,7 +106,7 @@ pub fn main() i32 {
 // argument as the subcommand. Index 0 is the program name and is skipped.
 fn parse_cli(argv: String[]) Cli {
     let cli: Cli
-    let opts = getopts("h(help)V(version)v(verbose)c(check)g(emit-generated)k(keep-c)t(timings)r(release)s(stdlib-path):T(target-os):A(target-arch):", argv, 1)
+    let opts = getopts("h(help)V(version)v(verbose)c(check)g(emit-generated)k(keep-c)t(timings)r(release)G(gate-a)s(stdlib-path):T(target-os):A(target-arch):", argv, 1)
 
     // Drive opts.next() manually rather than `for r in opts` - std.env's
     // `iter(&GetOpt)` returns a *copy* of the iterator state, so a
@@ -120,6 +125,7 @@ fn parse_cli(argv: String[]) Cli {
                 if c == 't' { cli.timings = true }
                 if c == 'r' { cli.release = true }
                 if c == 'c' { cli.check = true }
+                if c == 'G' { cli.gate_a = true }
             }
             OptArg(c, val) => {
                 if c == 's' { cli.stdlib_path = val }
@@ -177,6 +183,7 @@ fn print_help() {
     println("  -k, --keep-c        keep the generated C beside the executable")
     println("  -t, --timings       print per-phase wall times")
     println("  -r, --release       optimize the generated C (-O2 / /O2)")
+    println("  -G, --gate-a        check the analysis against a re-analysis (RFC-022 gate A)")
     println("  -T, --target-os     target OS for #if evaluation (windows|linux|macos)")
     println("  -A, --target-arch   target arch for #if evaluation (x86_64|arm64|x86)")
     println("  -s, --stdlib-path <dir>  stdlib root (default: <exe dir>/stdlib)")
@@ -215,6 +222,7 @@ fn run_build(argv: String[], rest: usize, cli: &Cli) i32 {
         keep_c = cli.keep_c,
         timings = cli.timings,
         release = cli.release,
+        gate_a = cli.gate_a,
         stdlib_path = stdlib.as_view(),
         target = target_opt.unwrap(),
         start_ns = monotonic_ns(),
@@ -326,6 +334,8 @@ fn build_project(opts: &BuildOpts) i32 {
     let unit = analyze_project(&ctx, &sources)
     defer unit.deinit()
 
+    if opts.gate_a { return run_gate_a(&ctx, &sources, &unit) }
+
     // `[build.<os>]` native inputs. `${VAR}` expansion reads the
     // environment, so it happens here at the CLI edge rather than inside
     // the driver; an undefined variable is an error, not an empty string
@@ -370,6 +380,8 @@ fn build_single_file(path: String, out: String, opts: &BuildOpts) i32 {
     let unit = analyze_project(&ctx, &entries)
     defer unit.deinit()
 
+    if opts.gate_a { return run_gate_a(&ctx, &entries, &unit) }
+
     if opts.emit_generated {
         const n = unit.write_generated()
         if opts.verbose { const gm = $"  wrote {n} generated file(s)"; defer gm.deinit(); println(gm.as_view()) }
@@ -378,6 +390,73 @@ fn build_single_file(path: String, out: String, opts: &BuildOpts) i32 {
     let none: List(OwnedString) = list(0)
     defer none.deinit()
     return finish_build(&unit, path, out, opts, &none, &none)
+}
+
+// Gate A (RFC-022): analyse the project a second time and require the two
+// results to be identical table by table - nominals, specializations, node
+// types, resolved targets, resolved operators.
+//
+// What that proves today is that a check is deterministic, which the
+// harness and the stage fixpoint do not: both run cold and single-pass.
+// Once per-module invalidation lands the second pass becomes
+// dirty-one-module-and-re-demand, and the same comparison is what catches
+// a stale cache entry surviving the invalidation.
+//
+// ponytail: the second pass is a full cold analysis until the query graph
+// exists; only this function changes when it does.
+fn run_gate_a(ctx: &ResolveCtx, entries: &List(OwnedString), cold: &AnalyzedProject) i32 {
+    if !cold.checked {
+        println("gate A: the project does not type-check - nothing to compare")
+        return 1
+    }
+    let again = analyze_project(ctx, entries)
+    defer again.deinit()
+
+    let d = diff_results(&cold.result, &again.result)
+    defer d.deinit()
+
+    const cold_diags = cold.diagnostics.len
+    const again_diags = again.diagnostics.len
+    if cold_diags != again_diags {
+        const m = $"gate A: {cold_diags} diagnostic(s) cold, {again_diags} on re-analysis"
+        defer m.deinit()
+        println(m.as_view())
+    }
+
+    if d.is_empty() and cold_diags == again_diags {
+        const types = &cold.result.node_types
+        const specs = &cold.result.specializations
+        const noms = &cold.result.nominals
+        const nt: usize = types.len()
+        const ns: usize = specs.len()
+        const nn: usize = noms.len()
+        const mods = cold.modules.len
+        if nt == 0 {
+            println("gate A: nothing was checked - the comparison proves nothing")
+            return 1
+        }
+        const ok = $"gate A: OK - {mods} modules, {nt} node types, {ns} specializations, {nn} nominals identical"
+        defer ok.deinit()
+        println(ok.as_view())
+        return 0
+    }
+
+    const head = $"gate A: FAILED - {d.total} difference(s)"
+    defer head.deinit()
+    println(head.as_view())
+    for &msg in d.messages {
+        const line = $"  {msg.as_view()}"
+        println(line.as_view())
+        line.deinit()
+    }
+    const shown = d.messages.len
+    if d.total > shown {
+        const hidden = d.total - shown
+        const rest = $"  ({hidden} more not shown)"
+        defer rest.deinit()
+        println(rest.as_view())
+    }
+    return 1
 }
 
 // Expand `${VAR}` in each entry against the environment. An undefined
