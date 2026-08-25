@@ -89,6 +89,29 @@ in its fixtures so the assertions are no longer vacuous.
 
 ## Open Issues
 
+### Harness: Parallel Workers Share One C Build Directory
+
+**Status:** Open — one or two harness tests fail per full run, never the same ones
+**Affected:** `test.cs` (16 parallel workers), the per-test C build under `tests/harness/`
+
+A full `dotnet test.cs` reports one or two failures that pass when re-run
+alone, and a different pair each time. The failure is always the C
+toolchain, not the compiler: `LNK1104: cannot open file 'process.obj'`, or
+an unresolved symbol from a stdlib `.obj` another worker was rewriting.
+Every worker compiles the same stdlib translation units into the same
+object files, so two tests building at once race on them.
+
+Fixes the failures do NOT need: the emitted C is byte-identical either way,
+and the gate that would catch a real miscompile (stage-2 = stage-3) is
+unaffected. Give each worker its own object directory, or build the stdlib
+objects once before the workers start.
+
+Not to be confused with `directives/if_directive_cross_target.f`, which
+fails deterministically on Windows for an unrelated reason (see its own
+entry).
+
+---
+
 ### Reference: Niche-Option Method Receiver Read From a Local Copy Passes the Alloca
 
 **Status:** Open (discovered 2026-08-21, twice, while building M11)
