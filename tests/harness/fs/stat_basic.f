@@ -6,6 +6,7 @@
 // "/" is a known directory on POSIX; the tests that need it skip on Windows.
 
 import std.io.fs
+import std.io.types
 import std.option
 import std.result
 

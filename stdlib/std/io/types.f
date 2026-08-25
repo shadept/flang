@@ -5,10 +5,13 @@
 // the lowest of them (std.io.internal.fs) cannot import the others without a
 // cycle. Putting the shared types below everything breaks the knot.
 //
-// It is also the module a *caller* imports when it needs qualified access:
-// FLang resolves a type name transitively through an import, but a qualified
-// variant (`FileKind.Dir`) only resolves when its declaring module is imported
-// directly. Matching (`kind match { Dir => ... }`) needs no import at all.
+// It is also the module a *caller* imports when it needs to NAME one of these
+// types - a signature, an annotation, a struct literal, or a qualified variant
+// (`FileKind.Dir`). Imports are flat, so naming a type means importing the
+// module that declares it; the io modules do not re-export it, because the
+// same argument would make every module returning `Result` re-export
+// std.result. Matching (`kind match { Dir => ... }`) needs no import at all,
+// and inference covers a value that only passes through.
 
 pub type FileKind = enum {
     File
