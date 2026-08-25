@@ -16,6 +16,8 @@
 //       --ascii       Use ASCII instead of Unicode box-drawing
 //       --help        Show this help and exit
 
+import std.io.dir
+import std.io.types
 import std.io.fs
 import std.conv
 import std.env
@@ -57,15 +59,6 @@ fn ends_with_sep(s: String) bool {
     if s.len == 0 { return false }
     const c = s[s.len - 1]
     return c == '/' or c == '\\'
-}
-
-// Null-terminate the builder's contents in-place (without bumping len) so the
-// buffer can be passed to read_dir/stat as a C string. Mirrors the idiom used
-// inside std.io.fs.walk_dir.
-fn ensure_nul_term(sb: &StringBuilder) {
-    sb.ensure_capacity(sb.len + 1)
-    const term = sb.ptr + sb.len
-    term.* = 0
 }
 
 // Append `base/name` into sb, skipping the separator when base already ends
@@ -111,8 +104,8 @@ fn free_entries(entries: &List(Entry)) {
 // Directory listing
 // -----------------------------------------------------------------------------
 
-fn collect_entries(path: String, state: &State) Result(List(Entry), FsError) {
-    let it = read_dir(path)?
+fn collect_entries(path: String, state: &State) Result(List(Entry), DirError) {
+    let it = open_dir(path)?
     defer it.deinit()
 
     let entries: List(Entry) = list(16)
@@ -179,7 +172,6 @@ fn render_line(prefix: String, is_last: bool, path: String, entry: &Entry, state
         let stat_sb = string_builder(path.len + entry.name.len + 2)
         defer stat_sb.deinit()
         append_join(&stat_sb, path, entry.name.as_view())
-        ensure_nul_term(&stat_sb)
 
         const info_r = stat(stat_sb.as_view())
         let size = 0
@@ -197,9 +189,8 @@ fn render_line(prefix: String, is_last: bool, path: String, entry: &Entry, state
     println(sb.as_view())
 }
 
-// Depth-first pre-order walk. `path` must be null-terminated - callers pass
-// either the original argv string (already NUL-terminated by the C runtime)
-// or a StringBuilder-built path run through `ensure_nul_term`.
+// Depth-first pre-order walk. `path` is an ordinary view - std.io copies it
+// before it reaches the OS, so no NUL termination is required here.
 fn walk(path: String, prefix: String, depth: usize, state: &State) {
     const entries_r = collect_entries(path, state)
     if entries_r.is_err() {
@@ -228,7 +219,6 @@ fn walk(path: String, prefix: String, depth: usize, state: &State) {
                 let child_path = string_builder(path.len + entry_ref.name.len + 2)
                 defer child_path.deinit()
                 append_join(&child_path, path, entry_ref.name.as_view())
-                ensure_nul_term(&child_path)
 
                 let child_prefix = string_builder(prefix.len + 8)
                 defer child_prefix.deinit()

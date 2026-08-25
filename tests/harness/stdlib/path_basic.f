@@ -4,6 +4,7 @@
 
 import std.option
 import std.path
+import std.io.fs
 import std.result
 
 pub fn main() i32 {
@@ -110,7 +111,7 @@ pub fn main() i32 {
     defer n2.deinit()
     if n2.as_view() != "." { return 62 }
 
-    // cwd returns an absolute, non-empty path
+    // cwd moved to std.io.fs: it reads the world, std.path does not
     const r = cwd()
     if r.is_err() { return 70 }
     let c = r.unwrap()

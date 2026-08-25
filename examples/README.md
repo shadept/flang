@@ -41,8 +41,9 @@ Command-line argument parsing, stdin piping, robust file I/O.
 
 | Example | Description | Stdlib modules |
 |---------|-------------|----------------|
-| `tree` | Recursive directory tree viewer (like `tree(1)`) | `std.io.fs`, `std.env`, `std.list`, `std.sort` |
+| `tree` | Recursive directory tree viewer (like `tree(1)`) | `std.io.dir`, `std.io.fs`, `std.env`, `std.list`, `std.sort` |
 | `hexdump` | Hex dump utility (like `xxd`) | `std.cli`, `std.io` |
+| `hangman` | Word game over the system dictionary, box-drawing gallows | `std.io.file`, `std.random`, `std.readline` |
 
 ### Phase 5: `fq`
 

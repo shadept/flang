@@ -6,12 +6,12 @@
 // iterates it, and verifies: iteration completes without error and
 // "." / ".." are filtered out.
 
-import std.io.fs
+import std.io.dir
 import std.option
 import std.result
 
 pub fn main() i32 {
-    let it = read_dir("/").unwrap()
+    let it = open_dir("/").unwrap()
     defer it.deinit()
 
     let count: i32 = 0

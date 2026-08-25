@@ -434,6 +434,9 @@ fn report_read_error(path: String, e: FileError) {
     const label = e match {
         NotFound => "not found",
         PermissionDenied => "permission denied",
+        NameTooLong => "path too long",
+        AlreadyExists => "already exists",
+        InvalidArgument => "invalid path",
         IOError => "read failed",
     }
     const m = $"flang: cannot read `{path}`: {label}"

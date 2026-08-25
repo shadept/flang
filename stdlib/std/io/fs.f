@@ -1,150 +1,34 @@
-// std.io.fs - portable filesystem operations.
+// std.io.fs - filesystem operations that do not hold anything open.
 //
-// Directory listing is iterator-based and zero-alloc per entry: the iterator
-// owns a 256-byte name buffer and yields `DirEntry` whose `name` is a String
-// view into that buffer. The view is invalidated on the next `next()` call.
-// Ownership is explicit - callers clone into an OwnedString if they need to
-// accumulate entries.
+// The three io modules split by what you hold:
 //
-//     let it = read_dir(".").unwrap()
-//     defer it.deinit()
-//     for entry in it {
-//         println(entry.name)  // valid only until next iteration
-//     }
-//     const e = it.err()
-//     if e.has_value { eprintln("read failed") }
+//   std.io.fs    a path        stat, exists, rename, walk_dir, glob, cwd
+//   std.io.file  an open File  open/read/write/close, remove_file
+//   std.io.dir   an open Dir   entries, create_dir, remove_dir
 //
-// "." and ".." are filtered at the syscall layer - callers never see them.
+// All three sit on std.io.internal.fs, which owns every syscall. This module
+// reports `FsError` because its operations are kind-agnostic: `exists` and
+// `rename` do not care whether the target is a file or a directory, so a
+// narrower error type would have to lie about one of them.
 //
-// Platform errors (POSIX errno, Win32 GetLastError) are translated into
-// FsError discriminants directly inside the C shim. Status and error values
-// are carried separately, so the i32 out_err parameter can be cast to
-// FsError with no translation table.
+// Paths are ordinary String views - nothing here requires NUL termination.
 
+import std.allocator
+import std.list
 import std.option
 import std.owned
+import std.path
 import std.result
+import std.stack
 import std.string
 import std.string_builder
-import std.list
-import std.stack
-import std.allocator
+import std.test
+import std.io.internal.fs
+import std.io.types
 
-// =============================================================================
-// Types
-// =============================================================================
-
-pub type FileKind = enum {
-    File
-    Dir
-    Symlink
-    Other
-}
-
-pub type DirEntry = struct {
-    name: String
-    kind: FileKind
-}
-
-pub type FileInfo = struct {
-    kind: FileKind
-    size: u64
-}
-
-// Order matters: these tag values are wired into fs.c (FS_* constants).
-// Changing the order or inserting a variant requires matching edits there.
-pub type FsError = enum {
-    NotFound
-    PermissionDenied
-    NotADirectory
-    NameTooLong
-    NotSupported
-    InvalidArgument
-    IOError
-}
-
-const NAME_BUF_CAP: usize = 256
-
-// Return-code conventions shared with fs.c.
-const R_OK: i32 = 0
-const R_EOF: i32 = 1
-const R_ERR: i32 = 2
-
-pub type DirIter = struct {
-    handle: usize
-    name_buf: [u8; 256]
-    current_name_len: usize
-    current_kind: i32
-    last_error: FsError?
-    done: bool
-}
-
-// =============================================================================
-// Foreigns (defined in fs.c)
-// =============================================================================
-
-#foreign fn __flang_fs_opendir(path: &u8, out_dir: &usize, out_err: &i32) i32
-#foreign fn __flang_fs_readdir(dir: usize, name_buf: &u8, cap: usize, out_len: &usize, out_kind: &i32, out_err: &i32) i32
-#foreign fn __flang_fs_closedir(dir: usize, out_err: &i32) i32
-#foreign fn __flang_fs_stat(path: &u8, out_kind: &i32, out_size: &u64, out_err: &i32) i32
-
-// =============================================================================
-// API
-// =============================================================================
-
-pub fn read_dir(path: String) Result(DirIter, FsError) {
-    let handle: usize = 0
-    let err: i32 = 0
-    const status = __flang_fs_opendir(path.ptr, &handle, &err)
-    if status != R_OK {
-        return Err(err as FsError)
-    }
-    let it: DirIter
-    it.handle = handle
-    return Ok(it)
-}
-
-pub fn iter(self: &DirIter) &DirIter {
-    // Returning `&self` (not a copy) means `for entry in it { ... }` mutates
-    // the original - so `it.err()` / `it.done` stay meaningful afterward.
-    return self
-}
-
-pub fn next(self: &DirIter) DirEntry? {
-    if self.done { return null }
-    let err: i32 = 0
-    const status = __flang_fs_readdir(
-        self.handle,
-        self.name_buf.ptr,
-        NAME_BUF_CAP,
-        &self.current_name_len,
-        &self.current_kind,
-        &err,
-    )
-    if status == R_OK {
-        return Some(DirEntry {
-            name = from_c_string(self.name_buf.ptr, Some(self.current_name_len)),
-            kind = self.current_kind as FileKind,
-        })
-    }
-    self.done = true
-    if status == R_ERR {
-        self.last_error = Some(err as FsError)
-    }
-    return null
-}
-
-pub fn err(self: &DirIter) FsError? {
-    return self.last_error
-}
-
-pub fn deinit(self: &DirIter) {
-    if self.handle != 0 {
-        let err: i32 = 0
-        __flang_fs_closedir(self.handle, &err)
-        self.handle = 0
-    }
-}
+// FileKind, FileInfo and FsError come from std.io.types, which sits below
+// every io module. Import it directly if you need qualified access such as
+// `FileKind.Dir`; matching on the variant needs no import.
 
 // =============================================================================
 // Stat + convenience queries
@@ -153,40 +37,27 @@ pub fn deinit(self: &DirIter) {
 // Fetches metadata for `path`. Follows symlinks - the reported kind is the
 // target's kind, not the link's.
 pub fn stat(path: String) Result(FileInfo, FsError) {
-    let kind: i32 = 0
-    let size: u64 = 0
-    let err: i32 = 0
-    const status = __flang_fs_stat(path.ptr, &kind, &size, &err)
-    if status != R_OK {
-        return Err(err as FsError)
-    }
-    return Ok(FileInfo {
-        kind = kind as FileKind,
-        size = size,
-    })
+    return raw_stat(path)
 }
 
 // Returns true iff `path` refers to an existing entry. Follows symlinks.
 pub fn exists(path: String) bool {
-    return stat(path).is_ok()
+    return raw_stat(path).is_ok()
 }
 
 // Returns true iff `path` exists and is a directory. Follows symlinks.
 pub fn is_dir(path: String) bool {
-    const r = stat(path)
-    r match {
-        Ok(info) => info.kind match {
-            Dir => true,
-            _ => false,
-        },
+    const r = raw_stat(path)
+    return r match {
+        Ok(info) => is_kind_dir(info.kind),
         Err(_) => false,
     }
 }
 
 // Returns true iff `path` exists and is a regular file. Follows symlinks.
 pub fn is_file(path: String) bool {
-    const r = stat(path)
-    r match {
+    const r = raw_stat(path)
+    return r match {
         Ok(info) => info.kind match {
             File => true,
             _ => false,
@@ -195,13 +66,68 @@ pub fn is_file(path: String) bool {
     }
 }
 
+// Moves `from` to `to`, replacing `to` if it exists - on every platform.
+// Both paths must be on the same filesystem; crossing devices is an OS-level
+// error here, not a silent copy. Works on files and directories alike, which
+// is why this is an fs operation rather than a file or dir one.
+pub fn rename(from: String, to: String) Result((), FsError) {
+    return raw_rename(from, to)
+}
+
+// =============================================================================
+// Process-relative paths
+// =============================================================================
+//
+// These live here rather than in std.path because they read the world through
+// something other than their arguments. std.path stays pure string algebra so
+// it can be used - and tested - without a filesystem.
+
+// The current working directory of the process.
+pub fn cwd(allocator: &Allocator? = null) Result(Path, FsError) {
+    const s = raw_getcwd(allocator)?
+    defer s.deinit()
+    return Ok(path(s.as_view(), allocator))
+}
+
+// The directory for temporary files: $TMPDIR (falling back to /tmp) on POSIX,
+// GetTempPath on Windows. Never has a trailing separator, so callers can
+// always join with one.
+pub fn temp_dir(allocator: &Allocator? = null) Result(Path, FsError) {
+    const s = raw_temp_dir(allocator)?
+    defer s.deinit()
+    return Ok(path(s.as_view(), allocator))
+}
+
+// An absolute, lexically-normalized form of `p`, joined against cwd() when
+// relative. Does NOT resolve symlinks and does not require the path to exist -
+// use `canonicalize` when you need either.
+pub fn to_absolute(p: &Path, allocator: &Allocator? = null) Result(Path, FsError) {
+    if p.is_absolute() {
+        return Ok(p.normalize())
+    }
+    let base = cwd(allocator)?
+    defer base.deinit()
+
+    let joined = base.join(p.as_view())
+    defer joined.deinit()
+    return Ok(joined.normalize())
+}
+
+// Resolves symlinks and `..` against the real filesystem. The target must
+// exist; NotFound if it does not.
+pub fn canonicalize(p: &Path, allocator: &Allocator? = null) Result(Path, FsError) {
+    const s = raw_realpath(p.as_view(), allocator)?
+    defer s.deinit()
+    return Ok(path(s.as_view(), allocator))
+}
+
 // =============================================================================
 // Recursive walk - WalkIter
 // =============================================================================
 //
-// DFS walk, built on top of DirIter. Yields each entry (including dirs) in
+// DFS walk, built on top of RawDir. Yields each entry (including dirs) in
 // pre-order. `path` is a String view into the iterator's path builder and is
-// invalidated on the next `next()` call, just like DirEntry.name.
+// invalidated on the next `next()` call, just like a directory entry's name.
 //
 // Symlinks are NOT followed (to avoid infinite loops on cyclic trees). They
 // are yielded as Symlink entries with no descent.
@@ -211,7 +137,7 @@ pub fn is_file(path: String) bool {
 //     for entry in w {
 //         println(entry.path)
 //     }
-//     if let e = w.err() { eprintln("walk failed") }
+//     if w.err().is_some() { eprintln("walk failed") }
 
 pub type WalkEntry = struct {
     path: String
@@ -220,7 +146,7 @@ pub type WalkEntry = struct {
 }
 
 type WalkFrame = struct {
-    dir: DirIter
+    dir: RawDir
     path_len_before: usize   // length of path_buf before this frame's segment
 }
 
@@ -232,10 +158,7 @@ pub type WalkIter = struct {
 }
 
 pub fn walk_dir(root: String, allocator: &Allocator? = null) Result(WalkIter, FsError) {
-    const root_iter_r = read_dir(root)
-    if root_iter_r.is_err() {
-        return Err(root_iter_r.unwrap_err())
-    }
+    const root_iter = raw_dir_open(root)?
 
     let sb = string_builder(root.len + 64, allocator)
     sb.append(root)
@@ -250,7 +173,7 @@ pub fn walk_dir(root: String, allocator: &Allocator? = null) Result(WalkIter, Fs
 
     let stack: Stack(WalkFrame) = stack(8, allocator)
     stack.push(WalkFrame {
-        dir = root_iter_r.unwrap(),
+        dir = root_iter,
         path_len_before = root_len,
     })
 
@@ -275,12 +198,12 @@ pub fn next(self: &WalkIter) WalkEntry? {
             return null
         }
 
-        // Borrow the top frame in place - we need to mutate its DirIter.
+        // Borrow the top frame in place - we need to mutate its RawDir.
         const top: &WalkFrame = self.stack.peek_ref().unwrap()
 
         const entry_opt = top.dir.next()
         if entry_opt.is_none() {
-            // DirIter exhausted (or errored). Capture its error if any.
+            // RawDir exhausted (or errored). Capture its error if any.
             if top.dir.last_error.is_some() and self.last_error.is_none() {
                 self.last_error = top.dir.last_error
             }
@@ -309,11 +232,7 @@ pub fn next(self: &WalkIter) WalkEntry? {
 
         // Descend into directories (not symlinks - avoid cycles).
         if is_kind_dir(entry.kind) {
-            // NUL-terminate the path for the syscall without bumping len.
-            self.path_buf.ensure_capacity(self.path_buf.len + 1)
-            const term: &u8 = self.path_buf.ptr + self.path_buf.len
-            term.* = 0
-            const child_r = read_dir(path_view)
+            const child_r = raw_dir_open(path_view)
             if child_r.is_ok() {
                 self.stack.push(WalkFrame {
                     dir = child_r.unwrap(),
@@ -344,13 +263,6 @@ pub fn deinit(self: &WalkIter) {
     self.path_buf.deinit()
 }
 
-fn is_kind_dir(k: FileKind) bool {
-    k match {
-        Dir => true,
-        _ => false,
-    }
-}
-
 // =============================================================================
 // Glob - built on top of walk_dir
 // =============================================================================
@@ -366,7 +278,7 @@ fn is_kind_dir(k: FileKind) bool {
 //     let it = glob("src/**/*.f").unwrap()
 //     defer it.deinit()
 //     for path in it { println(path) }
-//     if let e = it.err() { eprintln("glob failed") }
+//     if it.err().is_some() { eprintln("glob failed") }
 
 pub type GlobIter = struct {
     walk: WalkIter
@@ -389,15 +301,7 @@ pub fn glob(pattern: String, allocator: &Allocator? = null) Result(GlobIter, FsE
     defer pat_buf.deinit()
     pat_buf.append(pattern)
 
-    // Build a NUL-terminated root path for read_dir.
-    let root_buf = string_builder(root_str.len + 1, allocator)
-    defer root_buf.deinit()
-    root_buf.append(root_str)
-    root_buf.ensure_capacity(root_buf.len + 1)
-    const term: &u8 = root_buf.ptr + root_buf.len
-    term.* = 0
-
-    let walk = walk_dir(root_buf.as_view(), allocator)?
+    let walk = walk_dir(root_str, allocator)?
 
     return Ok(GlobIter {
         walk = walk,
@@ -523,4 +427,87 @@ fn match_rec(pattern: String, p: usize, path: String, t: usize) bool {
         t = t + 1
     }
     return false
+}
+
+// =============================================================================
+// Tests
+// =============================================================================
+
+test "exists and is_dir agree with the project layout" {
+    assert_true(exists("flang.toml"), "flang.toml exists")
+    assert_true(is_file("flang.toml"), "flang.toml is a file")
+    assert_true(!is_dir("flang.toml"), "flang.toml is not a directory")
+    assert_true(!exists("definitely_not_here.toml"), "missing path")
+}
+
+test "stat reports a regular file" {
+    const info = stat("flang.toml")
+    assert_true(info.is_ok(), "stat succeeds")
+    assert_true(!is_kind_dir(info.unwrap().kind), "not a directory")
+    assert_true(info.unwrap().size > 0, "non-empty")
+}
+
+test "stat on a missing path is NotFound" {
+    const r = stat("definitely_not_here.toml")
+    assert_true(r.is_err(), "fails")
+    assert_true(r.unwrap_err() match { NotFound => true, _ => false }, "NotFound")
+}
+
+test "cwd is absolute and exists" {
+    const c = cwd()
+    assert_true(c.is_ok(), "cwd succeeds")
+    let p = c.unwrap()
+    defer p.deinit()
+    assert_true(p.is_absolute(), "absolute")
+    assert_true(is_dir(p.as_view()), "names a real directory")
+}
+
+test "temp_dir exists and has no trailing separator" {
+    const t = temp_dir()
+    assert_true(t.is_ok(), "temp_dir succeeds")
+    let p = t.unwrap()
+    defer p.deinit()
+    assert_true(is_dir(p.as_view()), "names a real directory")
+    const v = p.as_view()
+    assert_true(v.len > 0 and !is_separator(v[v.len - 1]), "no trailing separator")
+}
+
+test "to_absolute leaves an absolute path alone and roots a relative one" {
+    let rel = path("flang.toml")
+    defer rel.deinit()
+    const abs_r = to_absolute(&rel)
+    assert_true(abs_r.is_ok(), "to_absolute succeeds")
+    let abs = abs_r.unwrap()
+    defer abs.deinit()
+    assert_true(abs.is_absolute(), "result is absolute")
+    assert_true(is_file(abs.as_view()), "still names the same file")
+
+    const again = to_absolute(&abs)
+    assert_true(again.is_ok(), "idempotent")
+    let abs2 = again.unwrap()
+    defer abs2.deinit()
+    assert_true(abs2.as_view() == abs.as_view(), "unchanged when already absolute")
+}
+
+test "canonicalize requires the target to exist" {
+    let missing = path("definitely_not_here.toml")
+    defer missing.deinit()
+    assert_true(canonicalize(&missing).is_err(), "missing path fails")
+
+    let real = path("flang.toml")
+    defer real.deinit()
+    const c = canonicalize(&real)
+    assert_true(c.is_ok(), "existing path succeeds")
+    let resolved = c.unwrap()
+    defer resolved.deinit()
+    assert_true(resolved.is_absolute(), "absolute")
+}
+
+test "match_glob handles star, question mark and double star" {
+    assert_true(match_glob("*.f", "main.f"), "star within a segment")
+    assert_true(!match_glob("*.f", "src/main.f"), "star does not cross a separator")
+    assert_true(match_glob("src/**/*.f", "src/a/b/main.f"), "double star crosses segments")
+    assert_true(match_glob("src/**/*.f", "src/main.f"), "double star matches zero segments")
+    assert_true(match_glob("m?in.f", "main.f"), "question mark")
+    assert_true(!match_glob("m?in.f", "man.f"), "question mark needs exactly one byte")
 }

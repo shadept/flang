@@ -1,9 +1,24 @@
+// std.io.file - an open file and the operations that need one.
+//
+// Sits on std.io.internal.fs, which owns every syscall. This module holds a
+// File and reports `FileError`: the set of things that can go wrong when the
+// thing you named is meant to be a file. Directory-shaped failures (NotEmpty,
+// NotADirectory) are not in it, by construction.
+//
+// Paths are ordinary String views. Nothing here requires NUL termination -
+// internal copies before it reaches the OS.
+
 import std.io.reader
 import std.io.writer
 import std.allocator
+import std.option
+import std.owned
 import std.result
 import std.string
 import std.string_builder
+import std.test
+import std.io.internal.fs
+import std.io.types
 
 pub type FileMode = enum {
     Read,
@@ -16,14 +31,18 @@ pub type FileEncoding = enum {
     Ascii,
 }
 
+// Order is load-bearing for existing callers: IOError stays tag 0.
 pub type FileError = enum {
     IOError,
     NotFound,
     PermissionDenied,
+    AlreadyExists,
+    NameTooLong,
+    InvalidArgument,
 }
 
 pub type FileHandle = struct {
-    fd: i32  // TODO system dependent
+    fd: i32
 }
 
 pub type File = struct {
@@ -33,67 +52,80 @@ pub type File = struct {
     handle: FileHandle
 }
 
+// =============================================================================
+// Error translation
+// =============================================================================
+
+// The OS speaks FsError; this module speaks FileError. This is the only place
+// the two meet, so a new errno mapping is added once, in fs.c, and lands here
+// automatically.
+//
+// NotADirectory and NotEmpty cannot describe a file operation - a caller that
+// hit one asked for something structurally impossible, which is IOError's job.
+fn to_file_error(e: FsError) FileError {
+    return e match {
+        NotFound => FileError.NotFound,
+        PermissionDenied => FileError.PermissionDenied,
+        AlreadyExists => FileError.AlreadyExists,
+        NameTooLong => FileError.NameTooLong,
+        InvalidArgument => FileError.InvalidArgument,
+        _ => FileError.IOError,
+    }
+}
+
+fn open_mode(mode: FileMode) i32 {
+    // The numeric O_* values differ between Linux, macOS and Windows; fs.c
+    // resolves them. This is a portable selector, not a flag set.
+    return mode match {
+        Read => FS_OPEN_READ,
+        Write => FS_OPEN_WRITE,
+        Append => FS_OPEN_APPEND,
+    }
+}
+
+// =============================================================================
+// Open / close
+// =============================================================================
+
 pub fn open_file(path: String, mode: FileMode) Result(File, FileError) {
     return open_file(path, mode, FileEncoding.Utf8)
 }
 
 pub fn open_file(path: String, mode: FileMode, encoding: FileEncoding) Result(File, FileError) {
-    const flags = open_flags(mode)
-    const fd = open(path.ptr, flags, 420)
-    if fd == -1 {
-        return Err(FileError.IOError)
-    }
-
-    let handle = FileHandle { fd = fd }
-    const file = File { path = path, mode = mode, encoding = encoding, handle = handle }
-    return Ok(file)
-}
-
-fn open_flags(mode: FileMode) i32 {
-    #if platform.os == "windows" {
-        return mode match {
-            FileMode.Read => 0 + 0x8000,
-            FileMode.Write => 1 + 0x100 + 0x200 + 0x8000,
-            FileMode.Append => 1 + 0x100 + 0x08 + 0x8000,
-        }
-    }
-    #if platform.os == "macos" {
-        // Darwin's fcntl values differ from Linux's: using the Linux
-        // constants here opened Write WITHOUT O_TRUNC (512 is O_CREAT on
-        // darwin), so rewrites of a shorter file left the old tail in
-        // place - and Append got O_TRUNC instead of O_APPEND.
-        return mode match {
-            FileMode.Read => 0,
-            FileMode.Write => 1 + 0x200 + 0x400,
-            FileMode.Append => 1 + 0x200 + 0x8,
-        }
-    }
-    return mode match {
-        FileMode.Read => O_RDONLY,
-        FileMode.Write => O_WRONLY + O_CREAT + O_TRUNC,
-        FileMode.Append => O_WRONLY + O_CREAT + O_APPEND,
-    }
+    const fd = raw_open(path, open_mode(mode)).map_err(to_file_error)?
+    return Ok(File {
+        path = path,
+        mode = mode,
+        encoding = encoding,
+        handle = FileHandle { fd = fd },
+    })
 }
 
 pub fn close_file(file: &File) Result((), FileError) {
-    if close(file.handle.fd) == -1 {
-        return Err(FileError.IOError)
-    }
-    return Ok(())
+    return raw_close(file.handle.fd).map_err(to_file_error)
 }
+
+// Deletes a file, or a symlink itself - never the symlink's target. A
+// directory is rejected by the OS; use `remove_dir` from std.io.dir.
+pub fn remove_file(path: String) Result((), FileError) {
+    return raw_unlink(path).map_err(to_file_error)
+}
+
+// =============================================================================
+// Bulk read / write
+// =============================================================================
 
 pub fn read_all(file: &File, allocator: &Allocator? = null) Result(OwnedString, FileError) {
     const PAGE_SIZE = 4096
-    let sb = string_builder(PAGE_SIZE, allocator)
+    // Owned so a mid-read failure frees the builder on the way out: `?` bails
+    // straight past the return, and the defer is what catches it.
+    let sb = owned(string_builder(PAGE_SIZE, allocator))
+    defer sb.deinit()
     loop {
         const tail = sb.unwritten_buf()
-        const n = read(file.handle.fd, tail.ptr, tail.len)
-        if n < 0 {
-            sb.deinit()
-            return Err(FileError.IOError)
-        }
-        sb.commit(n as usize)
-        if n as usize < tail.len {
+        const n = raw_read(file.handle.fd, tail).map_err(to_file_error)?
+        sb.commit(n)
+        if n < tail.len {
             break
         }
         // Grow capacity by one page. StringBuilder doubles capacity on each growth,
@@ -101,28 +133,23 @@ pub fn read_all(file: &File, allocator: &Allocator? = null) Result(OwnedString, 
         // with typical file size distributions (many small, few large).
         sb.ensure_capacity(sb.cap + PAGE_SIZE)
     }
-    return Ok(sb.to_string())
+    return Ok(sb.transfer().to_string())
 }
-
 
 pub fn read_all_inplace(file: &File, allocator: &Allocator) Result(OwnedString, FileError) {
     const PAGE_SIZE = 4096
-    let sb = string_builder(PAGE_SIZE, Some(allocator))
-    let buf = [0u8; PAGE_SIZE]
+    let sb = owned(string_builder(PAGE_SIZE, Some(allocator)))
+    defer sb.deinit()
+    let buf = [0u8; 4096]
     loop {
-        const read_n = read(file.handle.fd, buf.ptr, buf.len)
-        if read_n == -1 {
-            sb.deinit()
-            return Err(FileError.IOError)
-        }
         const buf_slice = buf as u8[]
-        const n = read_n as usize
+        const n = raw_read(file.handle.fd, buf_slice).map_err(to_file_error)?
         sb.append_bytes(buf_slice[..n])
         if n < PAGE_SIZE {
             break
         }
     }
-    return Ok(sb.to_string())
+    return Ok(sb.transfer().to_string())
 }
 
 pub fn write(file: &File, value: String) Result((), FileError) {
@@ -130,14 +157,12 @@ pub fn write(file: &File, value: String) Result((), FileError) {
     let bytes = value.as_raw_bytes()
     let total_written = 0usize
     loop {
-        const n = write(file.handle.fd, bytes[total_written..bytes.len].ptr, bytes.len - total_written)
-        if (n == -1) {
-            return Err(FileError.IOError)
-        }
-        total_written = total_written + n as usize
-        if (total_written >= bytes.len) {
-            break
-        }
+        if total_written >= bytes.len { break }
+        const n = raw_write(file.handle.fd, bytes[total_written..bytes.len])
+            .map_err(to_file_error)?
+        // A zero-length write with bytes still pending would spin forever.
+        if n == 0 { return Err(FileError.IOError) }
+        total_written = total_written + n
     }
     return Ok(())
 }
@@ -147,19 +172,11 @@ pub fn write(file: &File, value: String) Result((), FileError) {
 // =============================================================================
 
 fn read(self: &File, buf: u8[]) usize {
-    const bytes = read(self.handle.fd, buf.ptr, buf.len)
-    if bytes == -1 {
-        return 0
-    }
-    return bytes as usize
+    return raw_read(self.handle.fd, buf).unwrap_or(0)
 }
 
 fn write(self: &File, data: u8[]) usize {
-    const n = write(self.handle.fd, data.ptr, data.len)
-    if n == -1 {
-        return 0
-    }
-    return n as usize
+    return raw_write(self.handle.fd, data).unwrap_or(0)
 }
 
 #implement(File, Reader)
@@ -199,18 +216,73 @@ pub const stderr = File {
 }
 
 // =============================================================================
-// Foreigns
+// Tests
 // =============================================================================
 
-// linux specific
-const O_RDONLY: i32 = 0
-const O_WRONLY: i32 = 1
-const O_CREAT: i32 = 64
-const O_TRUNC: i32 = 512
-const O_APPEND: i32 = 1024
+test "open_file on a missing path reports NotFound, not IOError" {
+    const r = open_file("definitely_not_here.txt", FileMode.Read)
+    assert_true(r.is_err(), "open fails")
+    assert_true(r.unwrap_err() match { NotFound => true, _ => false },
+                "errno reaches the caller")
+}
 
-#foreign fn open(path: &u8, flags: i32, mode: i32) i32
-#foreign fn close(fd: i32) i32
+test "write, read back, and remove a file" {
+    const p = "build/file_test.tmp"
 
-#foreign fn read(fd: i32, buf: &u8, len: usize) isize
-#foreign fn write(fd: i32, buf: &u8, len: usize) isize
+    const opened = open_file(p, FileMode.Write)
+    assert_true(opened.is_ok(), "open for write")
+    let w = opened.unwrap()
+    assert_true(write(&w, "hello flang").is_ok(), "write")
+    assert_true(close_file(&w).is_ok(), "close after write")
+
+    const reopened = open_file(p, FileMode.Read)
+    assert_true(reopened.is_ok(), "open for read")
+    let r = reopened.unwrap()
+    const text = read_all(&r)
+    assert_true(text.is_ok(), "read_all")
+    let owned_text = text.unwrap()
+    assert_eq(owned_text.as_view(), "hello flang", "round-trip")
+    owned_text.deinit()
+    assert_true(close_file(&r).is_ok(), "close after read")
+
+    assert_true(remove_file(p).is_ok(), "remove")
+    assert_true(remove_file(p).is_err(), "second remove fails")
+}
+
+test "write truncates an existing file" {
+    const p = "build/file_test_trunc.tmp"
+
+    let a = open_file(p, FileMode.Write).unwrap()
+    assert_true(write(&a, "long original contents").is_ok(), "first write")
+    assert_true(close_file(&a).is_ok(), "close")
+
+    let b = open_file(p, FileMode.Write).unwrap()
+    assert_true(write(&b, "short").is_ok(), "second write")
+    assert_true(close_file(&b).is_ok(), "close")
+
+    let c = open_file(p, FileMode.Read).unwrap()
+    const text = read_all(&c).unwrap()
+    assert_eq(text.as_view(), "short", "old tail is gone")
+    text.deinit()
+    assert_true(close_file(&c).is_ok(), "close")
+    assert_true(remove_file(p).is_ok(), "cleanup")
+}
+
+test "append adds to the end instead of truncating" {
+    const p = "build/file_test_append.tmp"
+
+    let a = open_file(p, FileMode.Write).unwrap()
+    assert_true(write(&a, "one").is_ok(), "write")
+    assert_true(close_file(&a).is_ok(), "close")
+
+    let b = open_file(p, FileMode.Append).unwrap()
+    assert_true(write(&b, "-two").is_ok(), "append")
+    assert_true(close_file(&b).is_ok(), "close")
+
+    let c = open_file(p, FileMode.Read).unwrap()
+    const text = read_all(&c).unwrap()
+    assert_eq(text.as_view(), "one-two", "appended")
+    text.deinit()
+    assert_true(close_file(&c).is_ok(), "close")
+    assert_true(remove_file(p).is_ok(), "cleanup")
+}

@@ -16,6 +16,7 @@
 
 import std.allocator
 import std.env
+import std.io.dir
 import std.io.file
 import std.io.fs
 import std.list
@@ -114,7 +115,13 @@ pub fn compile(m: &IrModule, options: &BuildOptions) Result(BuildResult, BuildEr
         }
     }
 
-    // 4. Write the .c file.
+    // 4. Write the .c file. The output directory is usually `build/`, which
+    //    does not exist on a fresh checkout - create it rather than failing
+    //    the whole build with an opaque I/O error. Errors here are left to
+    //    the write below, which reports against a concrete path.
+    ensure_parent_dir(c_path_owned.as_view(), alloc)
+    ensure_parent_dir(options.output_path, alloc)
+
     const write_status = write_c_file(c_path_owned.as_view(), sb.as_view(), alloc)
     if write_status.is_err() {
         c_path_owned.deinit()
@@ -1357,7 +1364,7 @@ fn newest_subdir(parent: String, allocator: &Allocator?) OwnedString? {
     defer pbuf.deinit()
     pbuf.append(parent)
     nul_term(&pbuf)
-    let it_r = read_dir(pbuf.as_view())
+    let it_r = open_dir(pbuf.as_view())
     if it_r.is_err() { return null }
     let it = it_r.unwrap()
     defer it.deinit()
@@ -1389,6 +1396,20 @@ fn newest_subdir(parent: String, allocator: &Allocator?) OwnedString? {
 // Build orchestration
 // =============================================================================
 
+// Best-effort creation of the directory `file_path` will be written into.
+// Silent by design: the caller's write reports the real, path-bearing error
+// if this could not help.
+fn ensure_parent_dir(file_path: String, allocator: &Allocator?) {
+    let p = path(file_path, allocator)
+    defer p.deinit()
+    p.parent() match {
+        Some(dir) => {
+            if dir.len > 0 { create_dir_all(dir) }
+        }
+        None => {}
+    }
+}
+
 fn write_c_file(path: String, contents: String, allocator: &Allocator?) Result((), FileError) {
     // open() expects a NUL-terminated path; copy into a builder we control.
     let pbuf = string_builder(path.len + 1, allocator)
@@ -1406,9 +1427,10 @@ fn write_c_file(path: String, contents: String, allocator: &Allocator?) Result((
 }
 
 fn remove_file_quiet(path: String) {
-    // Best-effort: ignore errors. The next compile run will overwrite
-    // anyway, so a stale .c here is annoying but not fatal.
-    // (No std.fs.remove yet - leave the .c on disk silently.)
+    // Best-effort: ignore errors. The next compile run overwrites anyway, so
+    // a stale .c is annoying rather than fatal - and this runs on a path that
+    // already failed, where a second error would only bury the first.
+    remove_file(path)
 }
 
 // Build the argv passed to the compiler. Layout differs between MSVC

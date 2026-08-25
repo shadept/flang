@@ -456,6 +456,50 @@ All memory is zero-initialized by default. Variables declared without an initial
 - `!expr` logical NOT, `&expr` address-of (prefix unary).
 - `>>` arithmetic right shift (sign-preserving). `>>>` logical right shift (zero-fills).
 
+### 5.1.1 Evaluation order
+
+**Operands evaluate left to right, and each is fully evaluated before the next
+begins.** This holds for function-call arguments, binary operator operands,
+struct-literal field initializers, array- and tuple-literal elements, and index
+expressions. It is a guarantee, not an artifact: code may rely on it.
+
+```
+let n: i32 = 0
+f(tick(&n), tick(&n))       // f receives 1, then 2 - never 2, then 1
+check(syscall(&err), err)   // `err` is read after the call has written it
+```
+
+The call target itself is evaluated before its arguments. Short-circuiting
+operators (`and`, `or`, `??`) evaluate their right operand only when the left
+does not already decide the result; the left-to-right rule is what makes
+"already decide" meaningful.
+
+Assignment is left to right like everything else: the place is evaluated
+before the value stored into it, so in `dst[i()] = v()` the index call runs
+first.
+
+**This is deliberately stronger than C.** C99 §6.5.2.2p10 leaves the order of
+evaluation of function arguments *unspecified*, and C++17 sequenced arguments
+without ordering them. C# and Java both guarantee left to right, and so does
+FLang: targeting C99 means matching its capabilities and operator semantics,
+not adopting the places where it declined to decide.
+
+The guarantee is therefore enforced by the backend, which lowers every operand
+to its own temporary in source order:
+
+```c
+int32_t call_5 = __flang_fs_open(p, mode, &fd, &err);   /* argument 1 */
+int32_t load_6 = *(int32_t*)&err;                       /* argument 2 */
+result_t  call_7 = check(call_5, load_6);
+```
+
+Any future backend must preserve this. A backend that emitted arguments as C
+sub-expressions would inherit C's unspecified order and silently break code
+this spec says is correct - the guarantee is a compiler obligation, not a
+property of the target.
+
+Regression tests: `tests/harness/eval_order/`.
+
 ### 5.2 Operator Functions
 
 Operators on primitive types are compiler built-ins, resolved and emitted directly as arithmetic — no function call is involved. For user types, an operator resolves to the corresponding `op_*` function below (recorded on the node by the checker, emitted as an ordinary call by lowering); a user type enables an operator by defining that function.
@@ -850,6 +894,7 @@ Complex constructs (`for`, `if` expressions, `defer`, `match`) are desugared to 
 
 - **Memory initialization**: Zero-initialized by default (memset to 0).
 - **Integer overflow**: Wrapping arithmetic (two's complement), no overflow detection.
+- **Evaluation order**: Left to right for all operands, each fully evaluated before the next. See [5.1.1](#511-evaluation-order). Deliberately stronger than C (which leaves argument order unspecified), matching C# and Java.
 - **Bounds checking** (planned): Optional runtime bounds checking for array and slice indexing. Not yet implemented — out-of-bounds access is currently undefined behavior.
 - **Null safety**: `&T` is non-null by type. `&T?` requires explicit handling. The type system prevents accidental null dereference on non-optional references.
 - **Scoped mutability**: Struct fields are writable only in the file that defines the struct; reads are unrestricted. Enforced by the type checker (E2114). Tuples (structural / anonymous) are exempt — they have no defining module. The rule applies to direct assignment (`x.field = v`); indexed assignment through a field (`x.list[i] = v`) goes through `op_index_ref` and is not a field write. Mutation across modules must go through the defining type's own functions.

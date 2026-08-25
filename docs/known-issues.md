@@ -1483,8 +1483,10 @@ outright — sidecars are only ever folded into their origin module by
 Verified: `flang -c build` passes standalone in every lib project and
 the bootstrap self-check still reports 98 modules, 0 errors. No
 colocated unit test: `glob_sources` needs fixture files and the fs API
-has no mkdir/remove yet; the standalone lib-project checks are the
-regression surface.
+had no mkdir/remove at the time; the standalone lib-project checks are
+the regression surface. (`mkdir`/`mkdir_p` landed 2026-08-25 — see the
+entry below — so a fixture-based test is now possible; `remove` is still
+missing, so the fixtures would have to be left on disk.)
 
 ---
 
@@ -1656,3 +1658,154 @@ token of `Less = -1` and dropped the `-`, so `core.cmp.Ord` projected as
 tags `1, 0, 1`. Nothing read `explicit_tag` before M12's duplicate-tag
 check (E2048), which is how it surfaced. The projector now wraps a
 negated tag in a `Unary(Neg)` expression.
+
+## Self-hosted `flang build` failed if `build/` did not exist
+
+**Fixed (2026-08-25).** `flang build` in a project whose `build/` directory
+was absent stopped with `build failed: I/O error while writing build
+artifacts (<name>)`. Type checking and codegen both completed first — only
+the artifact write failed, and the message named no path, so it read like a
+disk error.
+
+Root cause was the gap noted under the `glob_sources` entry: `std.io.fs`
+had no `mkdir`, so the driver could not create its own output directory.
+`std.io.fs` now exposes `mkdir` (single level) and `mkdir_p` (recursive,
+idempotent), backed by `__flang_fs_mkdir` in `fs.c` (`mkdir(2)` on POSIX,
+`_mkdir` on Windows). `c_backend.compile` calls `ensure_parent_dir` for
+both the `.c` path and the executable path before writing.
+
+Two notes for anyone extending this:
+
+- `FsError` gained an `AlreadyExists` variant (tag 7). The tag order is
+  wired into `fs.c`; new variants must be appended, never inserted.
+- `mkdir_p` treats an existing *file* at any prefix as `NotADirectory`
+  rather than success, so a name collision cannot be mistaken for a
+  usable directory.
+
+## Self-host: `[v; N]` refuses a named-const length
+
+**Status:** Open (found 2026-08-25)
+**Affected:** self-hosted backend, any stdlib module with a sized scratch buffer
+
+`let buf = [0u8; 4096]` lowers. `const CAP: usize = 4096` followed by
+`let buf = [0u8; CAP]` refuses the entire enclosing body with
+`body refused (unsupported construct)`, and every caller of that function
+then fails to link with an undefined symbol.
+
+Found by tidying three literals in `std.io.fs` into `FS_PATH_BUF_CAP`, which
+silently dropped `mkdir_p`, `rename` and `with_c_path` from the build; the
+first symptom was a linker error about `main`, several layers away from the
+cause. The reference compiler accepts both forms, so `flang-ref` builds and
+the colocated stdlib tests pass — only the self-hosted stage fails.
+
+This had been costing coverage before anyone noticed: `read_all_inplace` in
+`std.io.file` wrote `let buf = [0u8; PAGE_SIZE]` and had been on the refused
+list for as long as the list has been printed. Spelling the length as a
+literal during the std.io reorganization cleared it, and the self-hosted
+compiler now refuses **no** bodies in the stdlib corpus (the `-v` skip list is
+empty).
+
+Workaround: spell the length as a literal. `std.io.fs` keeps the constant for
+its bounds check and repeats `4096` in the array literals, with a comment
+tying them together.
+
+Two things worth fixing beyond the lowering itself: the refusal should name
+the construct's source location, and a refused body whose symbol is
+referenced should be a build error at that point rather than a link failure.
+
+## `std.io.fs` return codes collided with `<unistd.h>`
+
+**Fixed (2026-08-25).** `fs.c` defined `R_OK`/`R_EOF`/`R_ERR` as 0/1/2.
+Adding `#include <unistd.h>` for `unlink`/`rmdir` pulled in POSIX's own
+`R_OK` — the `access(2)` read-permission bit, value **4** — which redefined
+the macro for every function below the include. Success was reported as
+failure, so `mkdir` created the directory and then returned `NotFound`
+(status 4 was not `FS_R_OK`, and the untouched `out_err` still read 0, which
+is the `NotFound` tag).
+
+The shim's own macros are now `FS_R_*`. The same rename was applied to the
+FLang-side constants, since module-scope `const` shares one global namespace
+across the whole program (`PATH_BUF_CAP` in `std.path` and `std.io.fs`
+collided the same way earlier in the session).
+
+Related: the `#ifndef ENAMETOOLONG` / `ENOSYS` / `ENOTEMPTY` fallbacks that
+invented numeric values were removed. Those numbers differ per platform
+(ENAMETOOLONG 36 on Linux, 63 on macOS; ENOSYS 38 vs 78; ENOTEMPTY 39 vs 66),
+so a guessed constant either maps the wrong error or duplicates a real case
+label. The switch now guards each label with `#ifdef` instead.
+
+## Qualified enum variants do not resolve through a transitive import
+
+**Status:** Open (found 2026-08-25)
+**Affected:** module resolution, both compilers
+
+A type declared in module `A` and re-exposed by importing `B` (which imports
+`A`) is usable transitively in annotations and in match patterns, but *not* in
+qualified variant position:
+
+```flang
+import b            // b imports a, which declares `Colour`
+const c: Colour = pick()          // ok
+c match { Red => ..., Blue => ... }   // ok
+if c == Colour.Red { ... }        // error[E2004]: unknown identifier `Colour`
+```
+
+The three forms should agree. Until they do, a module that declares an enum
+other modules re-expose has to be importable by callers, which is what forced
+`FileKind` / `FileInfo` / `FsError` out of `std.io.internal.fs` and into the
+public leaf module `std.io.types`: without that, using `FileKind.Dir` would
+require importing an internal module.
+
+Reproduced with a three-module fixture (`main -> mid -> leaf`); the annotation
+and the match both resolve, only the qualified access fails.
+
+## Lambdas: two capture-resolution bugs
+
+**Status:** Open (found 2026-08-25)
+**Affected:** closure construction, reference compiler (the self-hosted stage never gets that far)
+
+Both surfaced while routing every path-taking syscall in
+`std.io.internal.fs` through one `with_c_path` helper. Type checking passes in
+both cases (`flang build --check` is clean); the failures are at closure
+construction.
+
+**1. A module-level `const` named inside a lambda is treated as a captured
+local.**
+
+```
+error[E0000]: internal compiler error: Captured local `FS_PATH_BUF_CAP` not
+found at closure construction site
+```
+
+Module constants are not locals and should never enter the capture set.
+
+**2. A capture referenced inside a match ARM BODY does not resolve.** The same
+capture in the match *scrutinee* is fine, which is what makes this confusing.
+`?` lowers to a match, so `f(capture)?` fails the same way.
+
+```flang
+fn run(op: $F) $T { return op() }
+
+fn scrutinee(x: i32) i32 {          // ok
+    return run(fn() i32 {
+        const o: i32? = Some(x)
+        return o match { Some(v) => v, None => 0 }
+    })
+}
+
+fn arm(x: i32) i32 {                // error[E3002]: Unresolved identifier `x`
+    return run(fn() i32 {
+        const o: i32? = Some(1)
+        return o match { Some(v) => v + x, None => 0 }
+    })
+}
+```
+
+Neither depends on the lambda having parameters, on the generic returning
+`Result($T, E)` versus a bare `$T`, or on the capture being a parameter versus
+a local — all four combinations were tried.
+
+Workarounds, both used in `raw_open` and `raw_realpath`: reference a capture
+only from straight-line expressions and branch with `if ... { return Err(...) }`
+instead of `?`; and use `buf.len` instead of a module constant. Lambdas that
+capture nothing (`raw_opendir`, `raw_stat`, `raw_mkdir`, ...) use `?` freely.

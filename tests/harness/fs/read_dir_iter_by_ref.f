@@ -3,16 +3,16 @@
 //! STDOUT: done=true
 //! STDOUT: err=no
 
-// Pins that `for entry in it` over a `DirIter` mutates the original `it`
-// (iter-by-ref), so post-loop queries like `it.done` and `it.err()` reflect
-// what actually happened during iteration.
+// Pins that `for entry in it` over a `Dir` mutates the original `it`
+// (iter-by-ref), so post-loop queries like `it.is_done()` and `it.err()`
+// reflect what actually happened during iteration.
 
-import std.io.fs
+import std.io.dir
 import std.option
 import std.result
 
 pub fn main() i32 {
-    let it = read_dir("/").unwrap()
+    let it = open_dir("/").unwrap()
     defer it.deinit()
 
     let count: usize = 0
@@ -20,8 +20,8 @@ pub fn main() i32 {
         count = count + 1
     }
 
-    // After iterating to completion, `done` must be true and `err` must be empty.
-    if it.done { println("done=true") } else { println("FAIL: done=false") }
+    // After iterating to completion, `is_done` must be true and `err` empty.
+    if it.is_done() { println("done=true") } else { println("FAIL: done=false") }
 
     const e = it.err()
     if e.is_some() { println("FAIL: err=yes") } else { println("err=no") }

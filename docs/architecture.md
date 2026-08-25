@@ -51,6 +51,40 @@ The bootstrap compiler reimplements the same machinery in FLang. `flang_driver/r
 
 `flang_driver/driver.f::analyze_project` is the BFS loader: it seeds the queue with the project's globbed entry sources plus the auto-imported `core.prelude`, follows each module's imports, deduplicates by file path, and type-checks the whole set through a single `check_all`. The module FQNs (not file paths) are passed as the per-module paths so symbol registration and visibility agree. Visibility is built in `flang_typer/checker.f::build_visibility` from the modules' `ImportDecl`s — `{M} ∪ imports(M)` then the `pub import` re-export closure, matching `GetVisibleModules`. `compile.f::build_program` lowers every module into one FIR program for a single link. `examples/multimod` is the end-to-end witness. (Known gap: structs crash the bootstrap typer — see [known-issues.md](known-issues.md).)
 
+## `std.io` layering
+
+Four modules, split by what the caller holds, with every syscall in one place:
+
+```
+std.io.types         FileKind, FileInfo, FsError        no deps, no syscalls
+std.io.internal.fs   every #foreign + fs.c              raw_* over FsError
+std.io.fs            a path      stat, exists, rename, walk_dir, glob, cwd
+std.io.file          an open File   open/read/write/close, remove_file
+std.io.dir           an open Dir    entries, create_dir, remove_dir
+```
+
+`internal.fs` is the only module in the tree that declares `#foreign`, and
+`internal/fs.c` is the only place three per-platform disagreements are
+resolved: errno / Win32 codes (translated to `FsError`), `O_*` open flags
+(selected from a portable mode integer), and NUL-terminated C strings (copied
+from the caller's `String` view, so no caller can forget). `file` and `dir`
+translate `FsError` into `FileError` / `DirError` through one function each,
+so a new errno mapping is added once, in the shim, and lands everywhere.
+
+`std.io.types` exists because the lowest module cannot import the ones above
+it, and because a qualified variant (`FileKind.Dir`) only resolves when its
+declaring module is imported directly — see `docs/known-issues.md`.
+
+Traversal (`walk_dir`, `glob`) lives in `fs` rather than `dir`: it yields
+paths, and the directory handles it holds are an implementation detail. `Dir`
+re-exposes both as `d.walk()` / `d.glob(pattern)` rooted at itself.
+
+`std.path` is deliberately outside this tree. It is pure string algebra with
+no filesystem access, which is what lets the compiler use it for `#line`
+directives, module-path resolution, `flang.toml` globs and cache keys without
+touching a disk. The two functions that did read the world, `cwd` and
+`to_absolute`, moved to `std.io.fs`.
+
 ## AST Design
 
 - **Top-down only.** No parent pointers. Context is passed down during traversal, never looked up.
@@ -122,7 +156,7 @@ The following are redundancies in the generated IR that Clang eliminates at `-O2
 
 ## Build Cache
 
-Companion `.c` files that ship alongside `.f` sources (stdlib's `simd.c`, `bits.c`, `io/fs.c`, `atomic.c`, plus any project-local C) are pre-compiled to `.obj` via `BuildCache` before the final link. Warm builds skip the C compile and just link the cached objects.
+Companion `.c` files that ship alongside `.f` sources (stdlib's `simd.c`, `bits.c`, `io/internal/fs.c`, `atomic.c`, plus any project-local C) are pre-compiled to `.obj` via `BuildCache` before the final link. Warm builds skip the C compile and just link the cached objects.
 
 **Layout.** Colocated with build outputs at `<outputDir>/cache/`:
 

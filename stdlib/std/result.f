@@ -1,5 +1,6 @@
 // Result type for error handling
 
+import std.option
 import std.test
 
 // Result(T, E) - a type representing either success (Ok) or failure (Err)
@@ -38,6 +39,50 @@ pub fn ok(self: Result($T, $E)) T? {
     return self match {
         Ok(v) => Some(v)
         Err(_) => None
+    }
+}
+
+// Apply `f` to an Ok value, leaving `Err` untouched. Transforms what a
+// result holds without unwrapping and re-wrapping; `f` never runs on `Err`.
+// When `f` itself returns a Result, use `and_then` so the result does not nest.
+pub fn map(self: Result($T, $E), f: $F) Result($U, E) {
+    return self match {
+        Ok(v) => Ok(f(v))
+        Err(e) => Err(e)
+    }
+}
+
+// Apply `f` to an Err value, leaving `Ok` untouched. This is how a layer
+// translates a lower layer's error into its own:
+//
+//     const raw = raw_dir_open(path).map_err(to_dir_error)?
+//
+// which is the whole point - `?` requires the error types to match, and
+// without `map_err` every call site has to spell out an is_err / unwrap_err /
+// re-wrap dance instead.
+pub fn map_err(self: Result($T, $E), f: $F) Result(T, $U) {
+    return self match {
+        Ok(v) => Ok(v)
+        Err(e) => Err(f(e))
+    }
+}
+
+// `map` for a function that itself yields a Result, flattening the result.
+// Chains a fallible step onto a fallible one; passing such a function to
+// `map` would give `Result(Result(U, E), E)`. `Err` short-circuits and `f`
+// never runs.
+pub fn and_then(self: Result($T, $E), f: $F) Result($U, E) {
+    return self match {
+        Ok(v) => f(v)
+        Err(e) => Err(e)
+    }
+}
+
+// The error as an optional, mirroring `ok`.
+pub fn err(self: Result($T, $E)) E? {
+    return self match {
+        Ok(_) => None
+        Err(e) => Some(e)
     }
 }
 
@@ -135,4 +180,42 @@ test "unwrap_err returns error on Err" {
     let r: Result(i32, i32) = Result.Err(404)
     let err = unwrap_err(r)
     assert_eq(err, 404, "unwrap_err on Err should return the error")
+}
+
+test "map transforms an Ok and passes an Err through" {
+    const doubled: Result(i32, String) = Ok(21).map(fn(v: i32) i32 { return v * 2 })
+    assert_eq(doubled.unwrap(), 42, "Ok is mapped")
+
+    const failed: Result(i32, String) = Err("nope")
+    const still: Result(i32, String) = failed.map(fn(v: i32) i32 { return v * 2 })
+    assert_true(still.is_err(), "Err passes through")
+    assert_eq(still.unwrap_err(), "nope", "error is unchanged")
+}
+
+test "map_err translates an Err and leaves an Ok alone" {
+    const failed: Result(i32, i32) = Err(2)
+    const translated: Result(i32, String) = failed.map_err(fn(e: i32) String { return "code" })
+    assert_true(translated.is_err(), "still an error")
+    assert_eq(translated.unwrap_err(), "code", "error is translated")
+
+    const fine: Result(i32, i32) = Ok(7)
+    const untouched: Result(i32, String) = fine.map_err(fn(e: i32) String { return "code" })
+    assert_eq(untouched.unwrap(), 7, "Ok is untouched")
+}
+
+test "and_then chains a fallible step without nesting" {
+    const ok: Result(i32, String) = Ok(4)
+    const chained: Result(i32, String) = ok.and_then(fn(v: i32) Result(i32, String) { return Ok(v + 1) })
+    assert_eq(chained.unwrap(), 5, "chained through")
+
+    const bailed: Result(i32, String) = ok.and_then(fn(v: i32) Result(i32, String) { return Err("bail") })
+    assert_true(bailed.is_err(), "inner failure surfaces")
+}
+
+test "err mirrors ok" {
+    const good: Result(i32, String) = Ok(1)
+    const bad: Result(i32, String) = Err("x")
+    assert_true(good.err().is_none(), "Ok has no error")
+    assert_true(bad.err().is_some(), "Err has one")
+    assert_eq(bad.err().unwrap(), "x", "and it is the error")
 }

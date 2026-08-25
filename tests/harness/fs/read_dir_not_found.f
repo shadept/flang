@@ -2,10 +2,10 @@
 //! EXIT: 0
 //! STDOUT: not_found
 
-import std.io.fs
+import std.io.dir
 
 pub fn main() i32 {
-    const r = read_dir("/this/path/should/never/exist/flang_fs_test")
+    const r = open_dir("/this/path/should/never/exist/flang_fs_test")
     r match {
         Ok(it) => {
             it.deinit()
@@ -18,9 +18,10 @@ pub fn main() i32 {
                 PermissionDenied => { println("denied"); return 2 },
                 NotADirectory => { println("not_a_dir"); return 3 },
                 NameTooLong => { println("too_long"); return 4 },
-                NotSupported => { println("not_supported"); return 5 },
-                InvalidArgument => { println("invalid"); return 6 },
-                IOError => { println("io"); return 7 },
+                AlreadyExists => { println("exists"); return 5 },
+                NotEmpty => { println("not_empty"); return 6 },
+                InvalidArgument => { println("invalid"); return 7 },
+                IOError => { println("io"); return 8 },
             }
         },
     }
