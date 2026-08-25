@@ -1878,3 +1878,135 @@ Workarounds, both used in `raw_open` and `raw_realpath`: reference a capture
 only from straight-line expressions and branch with `if ... { return Err(...) }`
 instead of `?`; and use `buf.len` instead of a module constant. Lambdas that
 capture nothing (`raw_opendir`, `raw_stat`, `raw_mkdir`, ...) use `?` freely.
+
+---
+
+### `Dict` Probing Divided Instead of Masking — RESOLVED
+
+**Status:** Resolved 2026-08-25
+**Affected:** `stdlib/std/dict.f` (every probe loop), `stdlib/core/hash.f`
+
+`Dict` capacity is always a power of two, but every probe step computed
+`(h + i) % self.cap` - a 64-bit hardware divide per step, on every lookup,
+insert and removal. Integer keys also hashed through the generic FNV-1a byte
+loop in `core/hash.f`, which walks `size_of(T)` bytes with a multiply each.
+
+The checker is dict-bound: node types, resolved targets, resolved operators,
+the FQN and name indexes, and (since RFC-022 phase 1) both id registries.
+
+**Fix:** `probe_slot(h, i, cap)` masks with `cap - 1`; `ensure_capacity` carries
+the power-of-two invariant it depends on. `core/hash.f` gained `u32` / `u64` /
+`usize` / `i32` / `i64` overloads over SplitMix64's finalizer - one mix instead
+of four to eight FNV rounds, and a better spread for the counter-like keys the
+compiler actually uses (registry ids, `NodeId` span fingerprints, `VarId`).
+
+Both change which slot a key lands in, so every `for entry in dict` iteration
+order in the compiler shifted. Verified against the stage-2 = stage-3
+byte-identical fixpoint, the harness, and the colocated suites.
+
+**Measured:** three compilers - before RFC-022 phase 1, after it, and after this
+fix - each checking the same fixed source snapshot (the 104-module compiler plus
+stdlib), runs interleaved, six rounds. Medians: 911 ms, 913 ms, 823 ms. The
+registries moving to `Dict` was free; this fix is about 10% off the whole check.
+
+Interleave A/B compiler benchmarks on one input rather than measuring each tree
+in turn. Sequential measurement of the same three binaries drifted far enough
+(863 / 947 / 799) to invent a 10% regression that was not there.
+
+---
+
+### Conditions Were Not Parsed As Ordinary Expressions - RESOLVED
+
+**Status:** Resolved 2026-08-25
+**Affected:** `src/FLang.Frontend/Parser.cs` and `lib/flang_parser/src/parser.f`
+
+An `if` / `while` / `for` header is keyword, expression, block. Both parsers got
+that wrong in two different ways.
+
+The reference special-cased a leading `(` as a "parenthesized condition": it ate
+the parens, parsed the inside, then demanded the body brace. So a condition that
+merely *started* with a group was rejected:
+
+```flang
+if (a + b) * 4 > 6 { ... }        // was error[E1002]: expected `OpenBrace`
+while (a + 1) * 2 > 3 { ... }     // was error[E1002]: expected `OpenBrace`
+```
+
+Both parsers then mishandled the brace-suppression flag. `_stopAtBrace` /
+`stop_at_brace` exists so the body brace is not read as a struct literal or a
+block while the header is being parsed. That is ambiguous only at the header's
+own nesting level - inside `(...)`, `[...]` or `{...}` a brace cannot be the
+body brace, because the delimiter has to close first. Both parsers cleared the
+flag in one or two places rather than on every descent, so a struct literal
+anywhere else in a header failed:
+
+```flang
+if take(P { x = 1 }) > 0 { ... }        // was error: expected `CloseParenthesis`
+if xs[take(P { x = 1 })] > 15 { ... }   // same
+```
+
+**Fix:** one entry point per compiler parses a header expression
+(`ParseCondition` / `parse_condition_expression`) with no special case for a
+leading paren, saving and restoring the flag instead of clearing it. A scope
+guard suspends the flag for every delimited sub-parse - grouped and tuple
+expressions, call arguments, array literals, index subscripts, struct and
+anonymous-struct construction, block expressions, match arms, interpolation
+holes. C# uses a `ref struct` with `using`; FLang uses
+`suspend_brace_stop` / `restore_brace_stop` with `defer`.
+
+Regression test: `tests/harness/control_flow/condition_is_expression.f`, which
+also holds the line that a bare identifier iterable (`for v in xs {`) still does
+not swallow the body brace as a struct literal.
+
+---
+
+### Self-Host: Type Names Resolve Transitively Through a Plain Import
+
+**Status:** Open — self-host/reference divergence, self-host is wrong
+**Affected:** `lib/flang_typer/src/visibility.f` / `nominal_registry.f` lookup path
+
+`docs/spec.md` §6 is explicit: plain imports are non-transitive, and a symbol is
+visible in M only if it is defined in M or is `pub` in a module reachable from M
+via `import` plus the **`pub import`** transitive closure. The self-hosted typer
+resolves a *type name* one hop further than that: a module that plainly imports
+B can name a `pub type` that B itself plainly imported from C.
+
+Found via `tests/harness/fs/stat_basic.f`, which named `FileKind` while
+importing only `std.io.fs`. The reference rejected it (`Unknown type FileKind`,
+with the "exists but is not visible" hint); the self-hosted compiler accepted
+it. The stdlib was at fault too and is fixed — the io modules whose public API
+names the shared vocabulary now `pub import std.io.types` — but the typer is
+still more permissive than the spec, so a project can depend on visibility the
+reference will reject.
+
+Function lookups are not affected; this is the nominal/type path only. Enum
+variants already require the declaring module to be imported directly, which is
+why the divergence went unnoticed.
+
+---
+
+### Self-Host: Lowering Emits Every Function, Not Just Reachable Ones
+
+**Status:** Open — blocks cross-target builds on a host with a different libc
+**Affected:** `lib/flang_driver/src/lower.f`
+
+The self-hosted driver lowers every function of every seeded module. The
+reference emits only what `main` reaches. For a trivial program the gap is
+145 lines of C against 65,703.
+
+That is mostly a size and compile-time cost, but it is a hard failure for a
+cross-target build. `seed_stdlib` seeds the whole stdlib regardless of imports,
+so `flang --target-os linux build` on Windows lowers the POSIX branch of
+`std.terminal::get_terminal_size` and `std.readline::enable_raw`, and the host
+toolchain then cannot link `ioctl` / `tcgetattr` / `tcsetattr`. This is the only
+remaining self-host harness failure:
+`tests/harness/directives/if_directive_cross_target.f`.
+
+**Fix:** a reachability pass over the call graph before emission - mark from the
+roots (`main`, `#foreign`-exported functions, const init functions), sweep the
+rest. `drop_callers_of_refused` in the same file is the same shape of fixpoint
+over the call graph and is the place to model it on, but the marker has to
+follow every reference to a symbol, not just `Call.callee` and
+`Store(FuncRef)`: a missed reference drops a live function. RFC-022 §7 builds
+the same reachability query in the checker for W1003; the two want the same
+edges.

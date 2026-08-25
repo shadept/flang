@@ -1,0 +1,337 @@
+# RFC-022: Demand-driven checker - declaration-level queries, incremental invalidation
+
+**Type:** Compiler mechanism (typer)
+**Status:** Proposed
+**Depends on:** None
+**Blocks:** RFC-023 (language server)
+**Relates to:** ADR-0006 §4 (Jai message-loop shape - scoped to template
+reactions, NOT to checker scheduling; see Design §8)
+
+## Summary
+
+`check_all` becomes a demand-driven graph of memoized queries at declaration
+granularity, replacing six whole-program phases plus three global drains.
+
+1. **Pull, not push.** `type_of(decl)` computes its dependencies recursively and
+   caches. `flang build` demands everything; the LSP demands one module's closure.
+2. **Declaration-level work units.** Bodies are 64% of a check and are the
+   natural unit - a body is independently checkable once signatures exist.
+3. **Lazy bodies.** A body nothing demanded is never checked. This is what makes
+   editing this repo cheap; wholesale re-check is 8.8s.
+4. **Invalidation is a revision bump** on the changed module. O(1). Stale entries
+   recompute on next demand.
+5. **Diagnostics are owned by the query that produced them**, cached and
+   invalidated with it.
+6. **W1003 unused-function** makes total demand a checked invariant rather than a
+   trusted one.
+
+## Motivation
+
+Measured 2026-08-25, `flang -t --check build`, warm, median of three
+(`CheckPhases`, phase 0 of this ticket):
+
+| phase | `bootstrap/` (104 modules) | `examples/snake` / trivial file |
+|---|---|---|
+| read + parse | 611 ms (6%) | 185 ms (19%) |
+| collect (visibility + nominal names) | 10 ms (0%) | ~0 ms |
+| templates (generator expansion) | 61 ms (0%) | ~0 ms |
+| nominals + signatures | 534 ms (6%) | 86 ms (9%) |
+| constants | 6 ms (0%) | ~0 ms |
+| **bodies** | **5642 ms (64%)** | **425 ms (45%)** |
+| **specialize** (drains + pending calls) | **1494 ms (16%)** | **105 ms (11%)** |
+| zonk (global final substitution) | 426 ms (4%) | 93 ms (10%) |
+| **total** | **8797 ms** | **935 ms** |
+
+Peak RSS: 486 MB for `bootstrap/`, 123 MB stdlib-only.
+
+`examples/snake` and a trivial single file are indistinguishable - both are
+stdlib-bound, because `seed_stdlib` seeds the whole tree regardless of imports.
+
+Three readings that shape the design:
+
+- **Parsing is 6-8%. Checking is 93%.** Caching that stops at the parse tier is
+  worth 6-8%.
+- **Bodies plus specialization are 80%.** Bodies are the obvious target;
+  specialization at 16% is the harder one, because `drain_pending_specs` /
+  `resolve_pending_calls` are exactly the program-wide fixpoints §2 has to
+  decompose.
+- **The pre-body barrier is ~611 ms on `bootstrap/`, ~86 ms on a small project.**
+  That is the floor on "time until any type is available" under laziness, and it
+  is small enough that per-module collection laziness is not needed.
+
+Three structural facts make the current shape unusable for an editor:
+
+- `check_all` runs only when the whole module set has **zero** parse errors
+  (`checked = count_errors(&diagnostics) == 0`). One transient syntax error
+  anywhere kills type information workspace-wide.
+- `analyze_project` reads every module with `read_text(path)`. Open unsaved
+  buffers are invisible.
+- Results are all-or-nothing: registries are moved out and side tables reset on
+  return, so there is no mid-flight state to query.
+
+## Design
+
+### 1. Query taxonomy
+
+Coarse queries are per module, expensive ones per declaration.
+
+```
+  module_ast(module)              parse + project             -> Module
+  nominal_names(module)           declared type names         -> [NominalId]
+  nominal_body(decl)              fields / variants resolved  -> NominalDef
+  signature(decl)                 collected scheme            -> FunctionScheme
+  const_value(decl)               checked initializer         -> Ty + value
+  body(decl)                      HM inference over one body  -> node types + edges
+  specialization(template, args)  one instantiation           -> Specialization
+  validate(project)               quiescence-only sweeps      -> diagnostics
+```
+
+Every query returns `(result, diagnostics)`. Diagnostics live and die with the
+cache entry - see §5.
+
+### 2. Phase barriers become dependency edges
+
+Today's ordering is a correctness invariant, not incidental. Each barrier maps to
+an explicit edge. Getting one wrong does not fail loudly; it reintroduces the
+order-dependent bugs the phases exist to prevent.
+
+| today's barrier | becomes |
+|---|---|
+| all type names registered before any body resolves | `nominal_body(d)` depends on `nominal_names(m)` for every m in scope |
+| templates expanded before nominal resolution | `nominal_names(m)` depends on `expand(m)` |
+| all signatures before any body | `body(d)` depends on `signature(x)` for every x it resolves |
+| constants pinned before bodies observe them | `body(d)` depends on `const_value(c)` per const read |
+| `zonk_specializations` program-wide | `specialization` re-zonks on demand, not on a final sweep |
+| `validate_literals` (E2001) post-inference | `validate(project)` depends on the whole demanded set |
+
+`validate(project)` runs only at quiescence and invalidates on any change. E2001
+and any other whole-program sweep live there.
+
+### 3. Determinism
+
+Demand order is deterministic: **module import-topological, then declaration
+source order**. Same rule RFC-021 fixes for the template worklist.
+
+Emission order feeds the stage-2 = stage-3 byte-identical fixpoint. Lowering
+currently iterates `specializations` positionally; after §4 it iterates in id
+order, which preserves the fixpoint by construction.
+
+### 4. Stable ids (prerequisite)
+
+```
+  NominalId          = self.defs.len    dense index into List(NominalDef)
+  Specialization.id  = self.specs.len   dense index into List(Specialization)
+```
+
+Both are baked into other modules' results - every `Ty.Nominal(NominalRef{id})`
+in every `node_types` cites one. Evicting a module renumbers everything after it.
+
+Fix: monotone counters, dict-backed storage, tombstone on eviction. Consumers
+that iterate positionally (lowering's one-function-per-specialization emission,
+the `instantiated_types` RTTI table) iterate in id order instead.
+
+Nothing else in the track can be tested until this lands.
+
+**Landed 2026-08-25.** Both registries key their storage by id
+(`Dict(NominalId, NominalDef)` / `Dict(u32, Specialization)`) off a `next_id`
+counter, with `find` reporting a hole, `evict` retiring an id, and `len`
+counting live entries. `TypeCheckResult.specializations` is the registry itself
+rather than a moved-out `List`, so lowering and `symbol_builder` walk
+`0..next_id` and skip holes - emission order is still first-need order. Moving
+the whole registry also stops the old `by_key` dict being abandoned on the way
+out of `check_all`.
+
+Cost: none measurable. Three compilers - before this phase, after it, and after
+the `Dict` fix below - each checked the same fixed source snapshot (the
+104-module compiler plus stdlib), runs interleaved, six rounds. Medians: 911 ms,
+913 ms, 823 ms. Moving `nominals.get(id)` from a list index to a hash probe is
+free at this scale.
+
+Putting a dict on that path is what prompted a look at `Dict` itself, which
+probed with `%` on a power-of-two capacity and hashed integer keys through
+FNV-1a over their bytes. Masking instead of dividing, plus integer `hash`
+overloads, landed alongside this phase and took about 10% off the whole check -
+it speeds up every dict in the checker, not just the registries. See the `Dict`
+entry in `docs/known-issues.md`.
+
+A dense `List` with tombstones would also have kept ids stable, but it grows
+without bound in an editor session, where every re-check retires a module's
+worth of ids.
+
+### 5. Diagnostics ownership
+
+A diagnostic belongs to the query that produced it and is cached with it. A cache
+hit replays the cached diagnostics; invalidation drops result and diagnostics
+together.
+
+A global sink deduplicated by `(code, span)` was rejected: it survives cache hits
+but not invalidation - nothing tells the sink which entries came from the query
+being recomputed, so fixed errors never clear. Tagging sink entries by owner is
+this design with a different storage layout.
+
+Consequences:
+
+- **Diagnostics are partial by construction.** A module with nothing demanded has
+  *no* diagnostics, which is not the same as clean. Consumers must track the
+  distinction. A module's diagnostics publish only once its own total demand
+  settles.
+- **Demand order is not source order.** Sort by `(file_id, start)` before
+  publishing; the harness matches diagnostics textually.
+
+### 6. Laziness and demand roots
+
+| consumer | demand set |
+|---|---|
+| `flang build` / `flang test` | every declaration of every project module (total) |
+| LSP foreground | open module's closure |
+| LSP background | total project demand, at quiescence |
+
+`flang build` must demand unreachable project functions too - they are still code
+that must compile. Reachability is a separate graph query (§7), not a substitute
+for total demand.
+
+`checkTests`: the LSP checks `test {}` bodies, `flang build` does not - matching
+the reference (`HmTypeChecker.Declarations.cs:426`), so test specializations stay
+out of lowering.
+
+### 7. W1003 unused function
+
+New warning. Reachability over the resolution edges the checker already records -
+`resolved_targets` (`RtFunction` / `RtSpecialized`), `ResolvedOperator.function_id`,
+specializations. Because dispatch is recorded rather than name-matched, protocol
+calls (`op_eq` from `Dict`, `iter`/`next` from a for-loop, `deinit`, operator
+overloads) never false-positive.
+
+Scope: the current project's own modules only. `analyze_project` already computes
+`project_origin: List(bool)`.
+
+Roots:
+
+- always: `main`, `test {}` blocks, `#foreign`-exported functions
+- `kind = "lib"`: every `pub fn` is a root (it is the API)
+- `kind = "exe"`: `pub` is **not** a root - every function must be reachable from
+  `main`
+
+Rules: overloads are per-declaration, not per-name - one overload used does not
+excuse its siblings. A `_`-prefixed name suppresses, matching W1001.
+
+Needs a `docs/error-codes.md` entry and `NO-COMPILE-WARNING` harness tests from
+day one; unused-detection is the classic source of false positives and the repo
+has that metadata precisely as a regression guard.
+
+### 8. What stays push
+
+ADR-0006 §4's Jai message-loop shape is scoped to **template reactions over
+checked declarations**, not to checker scheduling. The two compose: reactions
+stay push and fire at quiescence, emit declarations additively, which dirty the
+pull graph, which re-settles. Fixpoint preserved.
+
+### 9. Data gaps closed here, not worked around downstream
+
+| gap | consequence today |
+|---|---|
+| `Field` is `{name, ty}` - no `decl_span` | cannot jump to a field declaration |
+| `VariantDef` is `{name, payloads}` - no `decl_span` | cannot jump to an enum variant |
+| `NodeId` is a lossy fingerprint (start 32b, length 16b, file 16b, clamped) | cannot invert to a span; `RtLocal(NodeId)` is unresolvable without a map |
+| `file_id -> path` lives in `AnalyzedProject`, not `TypeCheckResult` | result is not self-describing |
+
+Add `decl_span` to `Field` and `VariantDef`, a `NodeId -> SourceSpan` map to the
+result, and move `file_id -> path` into `TypeCheckResult`.
+
+### 10. Source overrides
+
+`analyze_project` takes an override map (path -> buffer) instead of always
+calling `read_text`. The LSP passes open buffers; `flang build` passes none.
+
+## Gates
+
+The existing gates do not test any of this. The 551 harness tests and the
+stage-2/stage-3 fixpoint both run **cold** - a graph that never reuses a cache
+entry passes all of them.
+
+**Gate A - equivalence.** For each module M in a project: dirty M, re-demand,
+assert the resulting `TypeCheckResult` is identical to a cold `analyze_project`.
+Compare `node_types`, `resolved_targets`, `resolved_ops`, specializations entry
+by entry. Run across the 104-module compiler and the examples. This is the
+incremental analogue of the stage fixpoint and the only thing that catches a
+stale entry surviving an invalidation.
+
+Written **before** the conversion starts, so each phase is verified as it moves.
+
+**Landed 2026-08-25.** `lib/flang_typer/src/result_diff.f` holds the comparison
+(`diff_results` -> `ResultDiff`); `flang --gate-a build` runs it. Types compare
+by their canonical `format` rendering - the identity `key_for` already hashes on
+- and ids compare by value, so a renumbered nominal is a difference even when
+both ids name the same declaration. Dict tables need only equal sizes plus
+one-directional containment.
+
+Covered entry by entry: `nominals`, `specializations`, `node_types`,
+`resolved_targets`, `resolved_ops`, `instantiated_types`. Covered by size only:
+`functions`, `lambdas`, `closures`, `desugars`, `default_args`, `arg_lists`,
+`receiver_derefs` - their values are AST pointers or nested lists, and a
+renderer for each belongs with the phase that makes one of them incremental. A
+size mismatch is still a hard failure; an entry that goes stale in place is what
+those seven cannot see yet.
+
+Until 5a the second pass is a full re-analysis, so what the gate proves today is
+determinism, which nothing else did: the harness and the fixpoint both run cold
+and single-pass, and dict iteration order feeds emission order. When the query
+graph exists, only `run_gate_a` in `bootstrap/src/main.f` changes - it dirties a
+module and re-demands instead of re-analysing.
+
+Green across `bootstrap/` (105 modules, 93145 node types, 2153 specializations,
+409 nominals), every `lib/*`, and every `examples/*` that type-checks
+(`examples/raylib` needs the raylib headers). 1.8 s on the compiler.
+
+**Gate B - laziness.** Run the harness with lazy demand enabled and assert zero
+diff in reported diagnostics against eager demand. Guards the M12 rejection
+parity against silent regression. Nearly free once W1003 exists, since that
+warning already forces total project demand.
+
+**Existing gates stay green throughout:** 551/0/16 harness, stage-2 = stage-3
+byte-identical, 11/11 examples.
+
+## Implementation phases
+
+```
+ 0  DONE 2026-08-25: CheckPhases on TypeCheckResult, -t/--timings on the CLI;
+    numbers in Motivation above
+ 1  DONE 2026-08-25: stable ids + tombstones; lowering iterates by id
+ 2  DONE 2026-08-25: Gate A harness (cold vs dirty-and-redemand equivalence)
+ 3  data gaps: decl_spans on Field/VariantDef, NodeId->span, file_id->path
+ 4  source-override map on analyze_project
+ 5  convert phase by phase, Gate A green after each:
+      5a  module_ast / nominal_names
+      5b  nominal_body
+      5c  signature / const_value
+      5d  body  (64%)
+      5e  specialization; retire drain_pending_specs / resolve_pending_calls
+      5f  validate(project); retire validate_literals / zonk_specializations
+ 6  lazy demand + W1003 + Gate B
+```
+
+Phase 0 landed first for a reason: the body/collection split was inferred, not
+measured, and it decides how long a consumer waits before any type is available.
+It corrected two assumptions - bodies are 64% rather than 93%, and specialization
+at 16% is a second target, not a rounding error.
+
+## Out of scope
+
+- On-disk persistence of analysis. Deferred; RFC-023 builds the pointer-free
+  index seam a later cache would store.
+- Threading the checker.
+- Splitting `flang_driver` into analysis and build halves. Verified acyclic and
+  mechanical (11 import lines, no reverse edges) but off the critical path.
+- Frozen stdlib prefix as a distinct mechanism - subsumed by per-module
+  invalidation.
+
+## Open questions
+
+1. Specialization is 16% and lives entirely in the two program-wide drains.
+   Whether `specialization(template, args)` can be a pure query, or needs a
+   bounded fixpoint of its own inside the graph, is the biggest unknown in 5e.
+2. Specializations have no owning module. One spec can be forced by several
+   modules, so eviction needs an owner-set or refcount. Shape TBD at 5e.
+3. Whether generic template bodies gain any validation. Today they are never
+   checked except per instantiation; a pull graph does not change that, but it
+   makes "never demanded" and "demanded and clean" newly distinguishable.
