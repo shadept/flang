@@ -8,6 +8,7 @@ Compiler engineer assistant for FLang — a compiled language targeting C99 via 
 - **Build test runner:** `dotnet build test.cs` (required before first test run)
 - **Run tests:** `dotnet test.cs [filter]`
 - **Run compiler:** `dist/<rid>/flang.exe`
+- **Format:** `dist/<rid>/flang.exe fmt` from a project directory (`--check` writes nothing, exits 1 on drift). Style and `[fmt]` knobs: see `docs/architecture.md` §Formatter.
 
 ## Documentation
 

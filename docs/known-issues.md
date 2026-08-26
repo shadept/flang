@@ -1652,6 +1652,24 @@ The parser only accepts `import` statements (including `pub import`) before any 
 
 ---
 
+### Formatter: `always` separator mode does not force multiline
+
+**Status:** Open (lib/flang_fmt)
+
+`[fmt] trailing-comma = "always"` and `separators = "always"` are accepted and keep every separator, but do not yet rewrite a single-line construct into one element per line. They currently behave as `multiline`.
+
+**Workaround:** Break the construct across lines by hand; the separator then appears.
+
+---
+
+### Formatter: wrap and join cover commas and and/or only
+
+**Status:** Intentional first cut (lib/flang_fmt)
+
+A line over `max-width` breaks after its last fitting list comma or before `and`/`or`; joining re-flows the same positions. Other continuation styles (`.`-method chains, arithmetic chains without commas) keep their authored breaks and can leave a long line long. Extending either side needs a guarantee that a newline at the new position cannot end a statement; the verify gate catches a bad break, but by refusing the whole file.
+
+---
+
 ## Future Architectural Changes
 
 ### Generic Instantiation: AST Cloning vs Side Table

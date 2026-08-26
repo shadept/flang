@@ -86,7 +86,7 @@ pub fn build_program(modules: &List(Module), fqns: &List(OwnedString), result: &
     let r = compile(&m, &opts)
     opts.deinit()
     m.deinit()
-    deinit_source_list(&runtime_c)
+    runtime_c.deinit()
     if r.is_err() { return r }
     // The backend times its own phases but never sees the lowering.
     let artifact = r.unwrap()

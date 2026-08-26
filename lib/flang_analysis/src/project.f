@@ -24,12 +24,29 @@ pub type DependencySpec = struct {
     path: OwnedString
 }
 
+pub fn deinit(self: &DependencySpec) {
+    self.name.deinit()
+    self.path.deinit()
+}
+
 // A `[build.<os>]` table - native toolchain inputs for one platform.
 pub type PlatformConfig = struct {
     headers: List(OwnedString)
     libs: List(OwnedString)
     cflags: List(OwnedString)
     ldflags: List(OwnedString)
+}
+
+// One `[fmt]` table entry, kept verbatim (value unquoted). The manifest
+// model stays formatter-agnostic: flang_fmt interprets the keys.
+pub type FmtEntry = struct {
+    key: OwnedString
+    value: OwnedString
+}
+
+pub fn deinit(self: &FmtEntry) {
+    self.key.deinit()
+    self.value.deinit()
 }
 
 // A parsed manifest. Owns every string; call `deinit()` when done.
@@ -44,6 +61,7 @@ pub type Project = struct {
     linux: PlatformConfig
     macos: PlatformConfig
     global_imports: List(OwnedString)
+    fmt: List(FmtEntry)
 }
 
 // Public API
@@ -77,16 +95,12 @@ pub fn deinit(self: &Project) {
     self.version.deinit()
     self.source.deinit()
     self.output.deinit()
-    for &d in self.deps {
-        d.name.deinit()
-        d.path.deinit()
-    }
     self.deps.deinit()
     deinit_platform(&self.windows)
     deinit_platform(&self.linux)
     deinit_platform(&self.macos)
-    deinit_strings(&self.global_imports)
     self.global_imports.deinit()
+    self.fmt.deinit()
 }
 
 // The `[build.<os>]` config for the host platform.
@@ -115,11 +129,6 @@ pub fn glob_sources(pattern: String, allocator: &Allocator? = null) List(OwnedSt
     return out
 }
 
-pub fn deinit_source_list(self: &List(OwnedString)) {
-    deinit_strings(self)
-    self.deinit()
-}
-
 // Construction / teardown helpers
 
 fn new_project(alloc: &Allocator?) Project {
@@ -134,6 +143,7 @@ fn new_project(alloc: &Allocator?) Project {
         linux = new_platform(alloc),
         macos = new_platform(alloc),
         global_imports = list(0, alloc),
+        fmt = list(0, alloc),
     }
 }
 
@@ -147,20 +157,10 @@ fn new_platform(alloc: &Allocator?) PlatformConfig {
 }
 
 fn deinit_platform(self: &PlatformConfig) {
-    deinit_strings(&self.headers)
-    deinit_strings(&self.libs)
-    deinit_strings(&self.cflags)
-    deinit_strings(&self.ldflags)
     self.headers.deinit()
     self.libs.deinit()
     self.cflags.deinit()
     self.ldflags.deinit()
-}
-
-fn deinit_strings(list: &List(OwnedString)) {
-    for &s in list {
-        s.deinit()
-    }
 }
 
 // Dispatch
@@ -175,6 +175,14 @@ fn apply_kv(proj: &Project, section: String, key: String, val: String, alloc: &A
         deps.push(DependencySpec {
             name = from_view(key),
             path = from_view(parse_inline_path(val)),
+        })
+        return
+    }
+    if section == "fmt" {
+        let entries = &proj.fmt
+        entries.push(FmtEntry {
+            key = from_view(key),
+            value = from_view(unquote(val)),
         })
         return
     }
@@ -358,6 +366,16 @@ test "parses project metadata, deps, build config and imports" {
 
     assert_eq(p.global_imports.len, 1 as usize, "one global import")
     assert_true(p.global_imports[0].as_view() == "std.prelude", "global import value")
+}
+
+test "collects [fmt] entries verbatim with values unquoted" {
+    let p = parse_project("[project]\nname = \"x\"\n\n[fmt]\nindent = 2\ntrailing-comma = \"always\"\n")
+    defer p.deinit()
+    assert_eq(p.fmt.len, 2 as usize, "two fmt entries")
+    assert_true(p.fmt[0].key.as_view() == "indent", "key 0")
+    assert_true(p.fmt[0].value.as_view() == "2", "value 0")
+    assert_true(p.fmt[1].key.as_view() == "trailing-comma", "key 1")
+    assert_true(p.fmt[1].value.as_view() == "always", "value 1 unquoted")
 }
 
 test "applies defaults for kind, source and output" {

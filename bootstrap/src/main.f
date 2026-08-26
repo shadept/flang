@@ -4,12 +4,12 @@
 //
 //   commands:
 //     build <file.f>        compile a source file
-//     fmt   <file.f>...     format files via tools/flang_fmt
+//     fmt   [<file.f>...]   format the project (or the given files) in place
 //     lsp                   start the language server via tools/flang_lsp
 //
-// The fmt/lsp subcommands shell out to sibling tool binaries via
-// std.process - they're separate projects that also depend on
-// flang_parser + flang_core.
+// fmt runs in-process on lib/flang_fmt. The lsp subcommand shells out to a
+// sibling tool binary via std.process - a separate project that also
+// depends on flang_parser + flang_core.
 
 import std.allocator
 import std.dict
@@ -26,6 +26,7 @@ import std.io.fs
 import std.time
 import flang_parser.comptime
 import flang_parser.lexer
+import flang_fmt.fmt
 import flang_codegen.backend
 import flang_analysis.analyze
 import flang_driver.compile
@@ -101,7 +102,7 @@ pub fn main() i32 {
 
     return cli.subcommand match {
         "build" => run_build(argv, cli.rest_index, &cli)
-        "fmt" => spawn_tool("flang_fmt", argv, cli.rest_index, cli.verbose)
+        "fmt" => run_fmt(argv, cli.rest_index)
         "lsp" => spawn_tool("flang_lsp", argv, cli.rest_index, cli.verbose)
         "cst" => spawn_tool("cst_explorer", argv, cli.rest_index, cli.verbose)
         "tokens" => spawn_tool("dump_tokens", argv, cli.rest_index, cli.verbose)
@@ -179,7 +180,8 @@ fn print_help() {
     println("")
     println("commands:")
     println("  build  [file.f]      build the project (flang.toml), or a single file")
-    println("  fmt    <file.f>...   format source files (spawns flang_fmt)")
+    println("  fmt    [file.f...]   format the project (flang.toml), or the given files")
+    println("                       --check: write nothing, exit 1 if anything would change")
     println("  lsp                  start the language server (spawns flang_lsp)")
     println("  cst    <file.f>      print the CST tree (spawns cst_explorer)")
     println("  tokens <file.f>      print the token stream (spawns dump_tokens)")
@@ -330,7 +332,7 @@ fn build_project(opts: &BuildOpts) i32 {
     defer proj.deinit()
 
     let sources = glob_sources(proj.source.as_view())
-    defer deinit_source_list(&sources)
+    defer sources.deinit()
 
     if sources.len == 0 {
         const m = $"flang: no sources match `{proj.source.as_view()}`"
@@ -371,11 +373,11 @@ fn build_project(opts: &BuildOpts) i32 {
     // silently dropped from the link line.
     const plat = proj.current_platform()
     let missing: List(OwnedString) = list(0)
-    defer deinit_source_list(&missing)
+    defer missing.deinit()
     let libs = expand_all(&plat.libs, &missing)
-    defer deinit_source_list(&libs)
+    defer libs.deinit()
     let ldflags = expand_all(&plat.ldflags, &missing)
-    defer deinit_source_list(&ldflags)
+    defer ldflags.deinit()
     if missing.len > 0 {
         let names = string_builder(64)
         defer names.deinit()
@@ -404,7 +406,7 @@ fn build_single_file(path: String, out: String, opts: &BuildOpts) i32 {
 
     let entries: List(OwnedString) = list(1)
     entries.push(from_view(path))
-    defer deinit_source_list(&entries)
+    defer entries.deinit()
 
     let unit = analyze_project(&ctx, &entries)
     defer unit.deinit()
@@ -739,6 +741,143 @@ fn build_failed(path: String, errs: usize) i32 {
     defer m.deinit()
     println(m.as_view())
     return 1
+}
+
+// fmt subcommand
+
+type FmtStatus = enum {
+    Unchanged
+    Changed
+    Failed
+}
+
+// fmt: format the given files in place, or with no arguments every source
+// matched by the project's `flang.toml` glob. A `[fmt]` table in the
+// manifest tunes the style. `--check` writes nothing and exits 1 when any
+// file would change.
+fn run_fmt(argv: String[], rest: usize) i32 {
+    let check = false
+    let files: List(String) = list(0)
+    defer files.deinit()
+    for i in rest..argv.len {
+        if argv[i] == "--check" { check = true } else { files.push(argv[i]) }
+    }
+
+    let cfg = default_config()
+    let sources: List(OwnedString) = list(0)
+    defer sources.deinit()
+
+    const have_manifest = exists("flang.toml")
+    if !have_manifest and files.len == 0 {
+        println("flang: fmt needs file arguments or a flang.toml project")
+        return 1
+    }
+    if have_manifest {
+        const toml_res = read_source("flang.toml")
+        if toml_res.is_err() {
+            report_read_error("flang.toml", toml_res.unwrap_err())
+            return 1
+        }
+        let toml = toml_res.unwrap()
+        defer toml.deinit()
+        let proj = parse_project(toml.as_view())
+        defer proj.deinit()
+        for &e in proj.fmt {
+            if !set_option(&cfg, e.key.as_view(), e.value.as_view()) {
+                const w = $"flang: ignoring unknown [fmt] entry `{e.key.as_view()} = {e.value.as_view()}`"
+                defer w.deinit()
+                println(w.as_view())
+            }
+        }
+        if files.len == 0 {
+            sources = glob_sources(proj.source.as_view())
+        }
+    }
+    for f in files {
+        sources.push(from_view(f))
+    }
+
+    if sources.len == 0 {
+        println("flang: nothing to format")
+        return 1
+    }
+
+    let changed: usize = 0
+    let failed: usize = 0
+    for &s in sources {
+        fmt_file(s.as_view(), &cfg, check) match {
+            Unchanged => {}
+            Changed => { changed = changed + 1 }
+            Failed => { failed = failed + 1 }
+        }
+    }
+
+    if check and changed > 0 {
+        const m = $"flang: {changed} file(s) would be reformatted"
+        defer m.deinit()
+        println(m.as_view())
+    }
+    if !check and changed > 0 {
+        const m = $"formatted {changed} of {sources.len} file(s)"
+        defer m.deinit()
+        println(m.as_view())
+    }
+    if failed > 0 { return 1 }
+    if check and changed > 0 { return 1 }
+    return 0
+}
+
+// Format one file in place. In check mode nothing is written; a file that
+// would change reports itself.
+fn fmt_file(path: String, cfg: &FmtConfig, check: bool) FmtStatus {
+    const read_res = read_source(path)
+    if read_res.is_err() {
+        report_read_error(path, read_res.unwrap_err())
+        return FmtStatus.Failed
+    }
+    let source = read_res.unwrap()
+    defer source.deinit()
+
+    const fmt_res = format_source(source.as_view(), cfg)
+    if fmt_res.is_err() {
+        report_fmt_error(path, fmt_res.unwrap_err())
+        return FmtStatus.Failed
+    }
+    let formatted = fmt_res.unwrap()
+    defer formatted.deinit()
+
+    if formatted.as_view() == source.as_view() {
+        return FmtStatus.Unchanged
+    }
+    if check {
+        const m = $"would reformat {path}"
+        defer m.deinit()
+        println(m.as_view())
+        return FmtStatus.Changed
+    }
+    const wr = open_file(path, FileMode.Write)
+    let wrote = false
+    if !wr.is_err() {
+        let handle = wr.unwrap()
+        wrote = !write(&handle, formatted.as_view()).is_err()
+        close_file(&handle)
+    }
+    if !wrote {
+        const m = $"flang: cannot write `{path}`"
+        defer m.deinit()
+        println(m.as_view())
+        return FmtStatus.Failed
+    }
+    return FmtStatus.Changed
+}
+
+fn report_fmt_error(path: String, e: FmtError) {
+    const msg = e match {
+        ParseFailed(n) => $"flang: `{path}` has {n} parse error(s) - not formatted",
+        VerifyFailed => $"flang: formatter verification failed on `{path}` (formatter bug) - file left untouched",
+    }
+    defer msg.deinit()
+    println(msg.as_view())
 }
 
 // Spawn the sibling tool with our trailing argv. Tool binaries are

@@ -47,7 +47,7 @@ The dep's `[project].name` IS its import namespace; library files live directly 
 
 ### Self-hosted library layout
 
-The self-hosted compiler is five libraries plus the `bootstrap` exe. Edges run one way; `flang_driver` is the only one that sees both halves of the pipeline:
+The self-hosted compiler is six libraries plus the `bootstrap` exe. Edges run one way; `flang_driver` is the only one that sees both halves of the pipeline. `flang_fmt` (the formatter) sits outside the pipeline chain: it depends only on `flang_parser` + `flang_core` and is consumed by `bootstrap` for `flang fmt`:
 
 ```
         flang_core        flang_codegen
@@ -75,6 +75,7 @@ The self-hosted compiler is five libraries plus the `bootstrap` exe. Edges run o
 | `flang_analysis` | `analyze.f`, `resolver.f`, `project.f` | manifest and import resolution, the BFS loader, the front half end to end |
 | `flang_driver` | `lower.f`, `symbol_table.f`, `layout.f`, `compile.f` | checked program to FIR, then drives codegen, `cc` and the link |
 | `flang_codegen` | FIR types, C backend | FIR to C |
+| `flang_fmt` | `fmt.f` | CST-trivia rewriting formatter behind `flang fmt` |
 
 `flang_driver` depends on `flang_analysis` rather than the reverse: lowering needs a checked program, and `compile.f` orchestrates both halves. Keeping `compile.f` on the lowering side is what stops the two libraries forming a cycle - the lowering `test {}` blocks build their fixtures through `analyze_source_set`.
 
@@ -301,6 +302,61 @@ threads it into the checker AND into `LowerCtx` (`build_program` takes
 it explicitly). Lowering evaluating statement-level `#if` against the
 host while the checker used the target was a real cross-target
 miscompile — the checked branch and the emitted branch differed.
+
+## Formatter (`lib/flang_fmt`)
+
+`flang fmt` formats the project's `flang.toml` source glob (or explicit file
+arguments) in place; `--check` writes nothing and exits 1 when a file would
+change. The work happens in `lib/flang_fmt`'s `format_source(source, &cfg)`,
+a pure text-to-text function; file IO stays in `bootstrap/src/main.f`.
+
+Design:
+
+- **CST trivia rewriting.** The input is lexed and parsed to the lossless
+  CST; style passes rewrite whitespace trivia and re-emit. Token text is
+  never touched.
+- **Verify gate.** Before returning, the output is re-lexed and re-parsed:
+  it must parse cleanly, its token stream must match the input's with
+  commas set aside (the one token separator policy may add or drop), and
+  the two parse trees must have the same shape. A mismatch discards the
+  output (`VerifyFailed`). Files with parse errors are refused, not
+  formatted.
+- **Structure is authored, layout is width-driven.** A newline can end a
+  statement, so breaks between statements and inside brace bodies always
+  stand, as do blank lines and comment placement. Breaks inside `(`/`[`
+  groups and before `and`/`or` are layout: with `join-lines` on they
+  re-flow, and `max-width` decides where lines break (after list commas,
+  before `and`/`or`). A too-long line with no such break point stays long.
+- **Comment reflow.** Runs of own-line `//` prose re-fill to `max-width`.
+  Structure is left alone: lists, rulers, tables, indented example blocks,
+  aligned columns, and any line with a non-ASCII byte (box drawing,
+  arrows) pass through verbatim, and only a line filled past half of
+  `max-width` joins with its successor, so deliberate short lines stay
+  put. Comments trailing code are never reflowed.
+- **Line endings.** The file's prevailing ending (first newline: LF or CRLF)
+  is detected and preserved, so a checkout's eol convention is never a
+  formatting change.
+
+Configuration lives in a `[fmt]` table in `flang.toml`, parsed by
+`flang_analysis/project.f` into verbatim key/value entries and applied via
+`set_option` (unknown keys warn and are ignored):
+
+| key | default | meaning |
+|---|---|---|
+| `indent` | `4` | spaces per indentation level |
+| `max-width` | `100` | layout width in columns; `0` disables wrapping, joining, and reflow |
+| `max-blank-lines` | `1` | maximum consecutive blank lines |
+| `trailing-comma` | `"multiline"` | `no` / `multiline` / `always` - trailing comma in comma lists (call args, arrays, struct construction) |
+| `separators` | `"no"` | same values - separators the grammar makes optional (struct fields, enum variants, match arms) |
+| `join-lines` | `true` | re-flow layout breaks (groups, `and`/`or`) to `max-width` |
+| `reflow-comments` | `true` | re-fill own-line comment prose to `max-width` |
+
+`always` is accepted but its multiline forcing is not implemented yet; it
+currently behaves as `multiline`.
+
+Formatting runs to an internal fixpoint (a wrap inserted by one pass is an
+authored break to the next, which can move a separator), capped at four
+passes; an output still changing then is refused as a formatter bug.
 
 ## Language Server (LSP)
 
