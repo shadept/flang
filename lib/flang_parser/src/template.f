@@ -1,13 +1,13 @@
-// Source-generator template bodies (RFC-021): the body parser and the
-// text engine. A `#define` body is a run of verbatim source text with
+// Source-generator template bodies (RFC-021): the body parser and the text engine. A `#define` body
+// is a run of verbatim source text with
 // `#(expr)` interpolations, `#for x in list { … }` loops and
 // `#if cond { … } #elif … #else { … }` conditionals. Every expression is
-// evaluated by the one compile-time evaluator (comptime.f) with the
-// template's bindings layered over the closed context.
+// evaluated by the one compile-time evaluator (comptime.f) with the template's bindings layered
+// over the closed context.
 //
-// Offsets: the body is lexed once; every token offset and Expr span is
-// relative to the BODY text. `base` (the body's start in its file) is
-// added when a diagnostic is reported, so spans reach the real source.
+// Offsets: the body is lexed once; every token offset and Expr span is relative to the BODY text.
+// `base` (the body's start in its file) is added when a diagnostic is reported, so spans reach the
+// real source.
 
 import std.allocator
 import std.dict
@@ -34,8 +34,8 @@ pub type TemplateNode = enum {
     Cond(TemplateIf)
 }
 
-// `#(expr)`; `in_string` marks a hole inside a string literal, whose
-// value is pasted escaped so the literal stays valid.
+// `#(expr)`; `in_string` marks a hole inside a string literal, whose value is pasted escaped so the
+// literal stays valid.
 pub type TemplateInterp = struct {
     expr: Expr
     in_string: bool
@@ -47,8 +47,7 @@ pub type TemplateFor = struct {
     body: List(TemplateNode)
 }
 
-// `else_body` is empty when there is no `#else`; an `#elif` chain nests a
-// single `Cond` node there.
+// `else_body` is empty when there is no `#else`; an `#elif` chain nests a single `Cond` node there.
 pub type TemplateIf = struct {
     cond: Expr
     body: List(TemplateNode)
@@ -70,11 +69,11 @@ type TemplateParser = struct {
     cursor: usize
 }
 
-// Parse a template body. `body` is the text between the `#define`'s
-// braces, starting at byte `base` of file `file_id`. Everything produced
-// borrows `body` and is allocated from `alloc`, which must outlive the
-// nodes. Parse errors are pushed to `diags` with file-absolute spans.
-pub fn parse_template_body(body: String, base: usize, file_id: i32, alloc: &Allocator, diags: &List(Diagnostic)) List(TemplateNode) {
+// Parse a template body. `body` is the text between the `#define`'s braces, starting at byte `base`
+// of file `file_id`. Everything produced borrows `body` and is allocated from `alloc`, which must
+// outlive the nodes. Parse errors are pushed to `diags` with file-absolute spans.
+pub fn parse_template_body(body: String, base: usize, file_id: i32, alloc: &Allocator,
+    diags: &List(Diagnostic)) List(TemplateNode) {
     let lx = lexer(body, Some(alloc))
     const tokens = lx.tokenize()
     let p = parser(tokens, Some(alloc))
@@ -106,26 +105,32 @@ fn error_at(self: &TemplateParser, index: usize, code: String, message: OwnedStr
         start = self.tokens[index].offset
         length = self.tokens[index].text.len
     }
-    self.diags.push(error(code, message, .{ file_id = self.file_id, start = self.base + start, length = length }))
+    self.diags.push(error(code, message, .{ file_id = self.file_id, start = self.base + start,
+        length = length }))
 }
 
 // Move body-relative parser diagnostics out, shifted to file offsets.
 fn shift_diags(self: &TemplateParser, from: &List(Diagnostic)) {
     for &d in from {
-        const sp: SourceSpan = .{ file_id = self.file_id, start = self.base + d.span.start, length = d.span.length }
+        const sp: SourceSpan = .{ file_id = self.file_id, start = self.base + d.span.start,
+            length = d.span.length }
         self.diags.push(error(d.code, d.message, sp))
     }
     from.clear()
 }
 
 fn flush_verbatim(self: &TemplateParser, end: usize, out: &List(TemplateNode)) {
-    if self.cursor >= end { return }
+    if self.cursor >= end {
+        return
+    }
     out.push(TemplateNode.Verbatim(self.body[self.cursor..end]))
     self.cursor = end
 }
 
 fn kind_at(self: &TemplateParser, index: usize) TokenKind {
-    if index < self.tokens.len { return self.tokens[index].kind }
+    if index < self.tokens.len {
+        return self.tokens[index].kind
+    }
     return TokenKind.Eof
 }
 
@@ -133,14 +138,16 @@ fn is_elif(self: &TemplateParser, index: usize) bool {
     return self.kind_at(index) == TokenKind.Identifier and self.tokens[index].text == "elif"
 }
 
-// Walks tokens from `start`, appending nodes; returns the index of the
-// `}` that closes the enclosing body (depth 0), or of Eof.
+// Walks tokens from `start`, appending nodes; returns the index of the `}` that closes the
+// enclosing body (depth 0), or of Eof.
 fn parse_nodes(self: &TemplateParser, start: usize, out: &List(TemplateNode)) usize {
     let i = start
     let depth: usize = 0
     loop {
         const k = self.kind_at(i)
-        if k == TokenKind.Eof { return i }
+        if k == TokenKind.Eof {
+            return i
+        }
         if k == TokenKind.Hash {
             const next = self.kind_at(i + 1)
             if next == TokenKind.OpenParenthesis {
@@ -162,9 +169,13 @@ fn parse_nodes(self: &TemplateParser, start: usize, out: &List(TemplateNode)) us
             i = i + 1
             continue
         }
-        if k == TokenKind.OpenBrace { depth = depth + 1 }
+        if k == TokenKind.OpenBrace {
+            depth = depth + 1
+        }
         if k == TokenKind.CloseBrace {
-            if depth == 0 { return i }
+            if depth == 0 {
+                return i
+            }
             depth = depth - 1
         }
         i = i + 1
@@ -206,7 +217,8 @@ fn parse_for(self: &TemplateParser, i: usize, out: &List(TemplateNode)) usize {
     const iterable = project_expression(cst, self.file_id, self.alloc)
     let body: List(TemplateNode) = list(0, Some(self.alloc))
     const after = self.parse_braced_body(self.parser.token_index(), &body)
-    out.push(TemplateNode.Loop(TemplateFor { var_name = var_name, iterable = iterable, body = body }))
+    out.push(TemplateNode.Loop(TemplateFor { var_name = var_name, iterable = iterable,
+        body = body }))
     return after
 }
 
@@ -248,17 +260,17 @@ fn parse_braced_body(self: &TemplateParser, open: usize, body: &List(TemplateNod
     return close + 1
 }
 
-// A string literal token containing `#(expr)` holes: split it into
-// verbatim runs and escaped interpolations. Each hole's expression is
-// lexed from its absolute offset in the body, so spans stay real.
+// A string literal token containing `#(expr)` holes: split it into verbatim runs and escaped
+// interpolations. Each hole's expression is lexed from its absolute offset in the body, so spans
+// stay real.
 fn parse_string_holes(self: &TemplateParser, tok: Token, out: &List(TemplateNode)) {
     const text = tok.text
     let local: usize = 0
     loop {
         const rel = text[local..text.len].find("#(")
         const hole: usize = rel match {
-            Some(r) => local + r,
-            None => break,
+            Some(r) => local + r
+            None => break
         }
         if hole > local {
             out.push(TemplateNode.Verbatim(text[local..hole]))
@@ -274,7 +286,7 @@ fn parse_string_holes(self: &TemplateParser, tok: Token, out: &List(TemplateNode
             close_end = toks[p.token_index()].offset + 1
         } else {
             self.diags.push(error("E1002", $"expected `)` to close `#(` inside a string literal",
-                .{ file_id = self.file_id, start = self.base + cst.end, length = 0 }))
+                    .{ file_id = self.file_id, start = self.base + cst.end, length = 0 }))
         }
         self.shift_diags(&p.diagnostics)
         out.push(TemplateNode.Interp(TemplateInterp { expr = e, in_string = true }))
@@ -290,9 +302,10 @@ fn parse_string_holes(self: &TemplateParser, tok: Token, out: &List(TemplateNode
 // Text engine
 // ─────────────────────────────────────────────────────────────────────────
 
-// Expand `nodes` into `sb`. The first evaluation error stops expansion
-// and is returned (its span is body-relative; the caller adds `base`).
-pub fn expand_template(env: &CtEnv, nodes: &List(TemplateNode), sb: &StringBuilder) Result((), CtError) {
+// Expand `nodes` into `sb`. The first evaluation error stops expansion and is returned (its span is
+// body-relative; the caller adds `base`).
+pub fn expand_template(env: &CtEnv, nodes: &List(TemplateNode), sb: &StringBuilder) Result((),
+    CtError) {
     for &node in nodes {
         expand_node(env, node, sb)?
     }
@@ -301,7 +314,7 @@ pub fn expand_template(env: &CtEnv, nodes: &List(TemplateNode), sb: &StringBuild
 
 fn expand_node(env: &CtEnv, node: &TemplateNode, sb: &StringBuilder) Result((), CtError) {
     node.* match {
-        Verbatim(text) => { sb.append(text) },
+        Verbatim(text) => { sb.append(text) }
         Interp(it) => {
             const v = ct_eval(env, &it.expr)?
             if it.in_string {
@@ -311,16 +324,16 @@ fn expand_node(env: &CtEnv, node: &TemplateNode, sb: &StringBuilder) Result((), 
             } else {
                 ct_stringify(&v, sb)
             }
-        },
+        }
         Loop(lp) => {
             const iterable = ct_eval(env, &lp.iterable)?
             const items: List(CtValue) = iterable match {
-                List(l) => l,
+                List(l) => l
                 _ => return Err(CtError {
                     code = "E2118",
                     message = $"`#for` requires a list to iterate",
                     span = expr_span(&lp.iterable),
-                }),
+                })
             }
             const shadowed = env.bindings[lp.var_name]
             for item in items {
@@ -328,17 +341,17 @@ fn expand_node(env: &CtEnv, node: &TemplateNode, sb: &StringBuilder) Result((), 
                 expand_template(env, &lp.body, sb)?
             }
             shadowed match {
-                Some(prev) => { env.bindings[lp.var_name] = prev },
-                None => { let _dropped = env.bindings.remove(lp.var_name) },
+                Some(prev) => { env.bindings[lp.var_name] = prev }
+                None => { let _dropped = env.bindings.remove(lp.var_name) }
             }
-        },
+        }
         Cond(cd) => {
             if ct_eval_condition(env, &cd.cond)? {
                 expand_template(env, &cd.body, sb)?
             } else {
                 expand_template(env, &cd.else_body, sb)?
             }
-        },
+        }
     }
     return Ok(())
 }
@@ -346,10 +359,18 @@ fn expand_node(env: &CtEnv, node: &TemplateNode, sb: &StringBuilder) Result((), 
 // Escape a value pasted inside a string literal.
 fn append_string_escaped(sb: &StringBuilder, text: String) {
     for c in text.as_raw_bytes() {
-        if c == '"' as u8 { sb.append("\\\"") }
-        else if c == '\\' as u8 { sb.append("\\\\") }
-        else if c == '\n' as u8 { sb.append("\\n") }
-        else { sb.append_byte(c) }
+        if c == '"' as u8 {
+            sb.append("\\\"")
+        }
+        else if c == '\\' as u8 {
+            sb.append("\\\\")
+        }
+        else if c == '\n' as u8 {
+            sb.append("\\n")
+        }
+        else {
+            sb.append_byte(c)
+        }
     }
 }
 
@@ -375,8 +396,8 @@ fn expand_for_test(body: String, env: &CtEnv, alloc: &Allocator) OwnedString {
     assert_true(diags.len == 0, "template parse error")
     let sb = string_builder(64, Some(alloc))
     expand_template(env, &nodes, &sb) match {
-        Ok(_) => {},
-        Err(e) => assert_true(false, e.code),
+        Ok(_) => {}
+        Err(e) => assert_true(false, e.code)
     }
     return sb.to_string()
 }
@@ -391,9 +412,11 @@ test "template: #for over a bound list with #(x) and \"#(x)\"" {
     names.push(CtValue.S("z"))
     env.bindings["names"] = CtValue.List(names)
     env.bindings["fType"] = CtValue.Ident("f32")
-    const out = expand_for_test("type P = struct {\n#for f in names {\n  #(f): #(fType), \"#(f)\"\n}\n}", &env, &a)
+    const out = expand_for_test("type P = struct {\n#for f in names {\n  #(f): #(fType), \"#(f)\"\n}\n}",
+        &env, &a)
     defer out.deinit()
-    assert_true(out.as_view() == "type P = struct {\n\n  x: f32, \"x\"\n\n  y: f32, \"y\"\n\n  z: f32, \"z\"\n\n}", "expansion text")
+    assert_true(out.as_view() == "type P = struct {\n\n  x: f32, \"x\"\n\n  y: f32, \"y\"\n\n  z: f32, \"z\"\n\n}",
+        "expansion text")
 }
 
 test "template: #if / #elif / #else on the closed context and bindings" {
@@ -401,7 +424,8 @@ test "template: #if / #elif / #else on the closed context and bindings" {
     let a = backing.allocator()
     let env = test_env(&a)
     env.bindings["n"] = CtValue.I(2)
-    const out = expand_for_test("#if platform.os == \"windows\" {A} #elif n == 2 {B} #else {C}", &env, &a)
+    const out = expand_for_test("#if platform.os == \"windows\" {A} #elif n == 2 {B} #else {C}",
+        &env, &a)
     defer out.deinit()
     assert_true(out.as_view() == "B", "expansion text")
 }

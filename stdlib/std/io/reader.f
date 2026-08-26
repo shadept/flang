@@ -1,28 +1,26 @@
 // Reader interface and BufferedReader.
 //
-// Reader is a vtable interface for raw byte input (read: fn(buf: u8[]) usize).
-// BufferedReader wraps a Reader with a caller-provided linear buffer.
-// The buffer auto-refills when exhausted. Explicit compact shifts remaining
-// data via memmove.
+// Reader is a vtable interface for raw byte input (read: fn(buf: u8[]) usize). BufferedReader wraps
+// a Reader with a caller-provided linear buffer. The buffer auto-refills when exhausted. Explicit
+// compact shifts remaining data via memmove.
 //
-// Building block for File, stdin, network streams, etc.
-// The caller owns the backing storage; BufferedReader is a borrowed view.
+// Building block for File, stdin, network streams, etc. The caller owns the backing storage;
+// BufferedReader is a borrowed view.
 
 import std.mem
 import std.interface
 
 // Reader: raw read interface.
-// Returns the number of bytes actually read. 0 means EOF.
-// Implement on concrete types via #implement(MyType, Reader).
+// Returns the number of bytes actually read. 0 means EOF. Implement on concrete types via
+// #implement(MyType, Reader).
 #interface(Reader, struct {
     read: fn(buf: u8[]) usize
 })
 
 // Buffered reader over caller-provided storage.
-// Data is read from the OS into buf[0..end] in chunks. The consumer
-// reads from buf[pos..end]. When pos == end (all consumed), the buffer
-// refills from the OS. If pos > 0 on refill, remaining data is compacted
-// to the front via memmove.
+// Data is read from the OS into buf[0..end] in chunks. The consumer reads from buf[pos..end]. When
+// pos == end (all consumed), the buffer refills from the OS. If pos > 0 on refill, remaining data
+// is compacted to the front via memmove.
 pub type BufferedReader = struct {
     inner: Reader
     buf: u8[]
@@ -32,8 +30,8 @@ pub type BufferedReader = struct {
 
 #implement(BufferedReader, Reader)
 
-// Create a BufferedReader over the given storage slice.
-// If storage is empty, reads pass through directly (unbuffered).
+// Create a BufferedReader over the given storage slice. If storage is empty, reads pass through
+// directly (unbuffered).
 pub fn buffered_reader(r: Reader, storage: u8[]) BufferedReader {
     return .{
         inner = r,
@@ -89,8 +87,8 @@ pub fn read(r: &BufferedReader, dst: u8[]) usize {
         return n
     }
 
-    // Buffer is empty. If dst is larger than internal storage,
-    // bypass the buffer and read directly into dst.
+    // Buffer is empty. If dst is larger than internal storage, bypass the buffer and read directly
+    // into dst.
     if dst.len >= r.buf.len {
         return r.inner.read(dst)
     }
@@ -108,8 +106,8 @@ pub fn read(r: &BufferedReader, dst: u8[]) usize {
     return n
 }
 
-// Internal: refill the buffer from the underlying reader.
-// Compacts unconsumed data to the front, then fills the rest.
+// Internal: refill the buffer from the underlying reader. Compacts unconsumed data to the front,
+// then fills the rest.
 fn fill(r: &BufferedReader) {
     // Compact: move unconsumed data to the front
     if r.pos > 0 {

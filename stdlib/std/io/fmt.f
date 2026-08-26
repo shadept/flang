@@ -1,5 +1,5 @@
-// Extended print/println overloads for types requiring std imports
-// Primitive overloads (i32, u8, u32, isize, usize, String) remain in core/io.f
+// Extended print/println overloads for types requiring std imports Primitive overloads (i32, u8,
+// u32, isize, usize, String) remain in core/io.f
 
 import std.encoding.utf8
 import std.io.file

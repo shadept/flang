@@ -1,27 +1,22 @@
-// TypeInterner - the type table (RFC-024). One `TyNode` per distinct
-// type; a `Ty` is an index into it. Identity is the canonical rendering:
-// two structurally equal types (`decl_span` metadata ignored) intern to
-// the same id, so `a == b` on handles is type equality. `Void`, `Never`,
-// `Error` and the 14 primitives hold the fixed ids `type.f` declares, so
-// the common leaves never hash.
+// TypeInterner - the type table (RFC-024). One `TyNode` per distinct type; a `Ty` is an index into
+// it. Identity is the canonical rendering: two structurally equal types (`decl_span` metadata
+// ignored) intern to the same id, so `a == b` on handles is type equality. `Void`, `Never`, `Error`
+// and the 14 primitives hold the fixed ids `type.f` declares, so the common leaves never hash.
 //
-// A node's children are `Ty` handles sliced out of one flat `children`
-// array. The table owns two lists' worth of storage and the key buffers;
-// nothing else owns any part of a type.
+// A node's children are `Ty` handles sliced out of one flat `children` array. The table owns two
+// lists' worth of storage and the key buffers; nothing else owns any part of a type.
 //
-// The empty tuple and `Void` keep distinct ids: unification treats them
-// as the same type by convention, but consumers match them as different
-// shapes.
+// The empty tuple and `Void` keep distinct ids: unification treats them as the same type by
+// convention, but consumers match them as different shapes.
 //
-// A `Record`'s key includes its field names, which are `String` views into
-// module sources - the table must not outlive the sources of the types it
-// interned. `Var` nodes key on (id, level): `generalize`'s free-variable
-// walk reads the level off the node, so a var whose partition level moved
-// interns as a fresh node rather than surfacing a stale level.
+// A `Record`'s key includes its field names, which are `String` views into module sources - the
+// table must not outlive the sources of the types it interned. `Var` nodes key on (id, level):
+// `generalize`'s free-variable walk reads the level off the node, so a var whose partition level
+// moved interns as a fresh node rather than surfacing a stale level.
 //
-// Rendering: `key_of` is the identity string (vars carry their level as
-// `?id@level`); `format` appends the diagnostic rendering (vars print as
-// `?id`), the same text the tree representation used to print.
+// Rendering: `key_of` is the identity string (vars carry their level as `?id@level`); `format`
+// appends the diagnostic rendering (vars print as `?id`), the same text the tree representation
+// used to print.
 
 import std.allocator
 import std.dict
@@ -49,8 +44,8 @@ pub type NFuncNode = struct {
     ret: Ty
 }
 
-// `tys` windows `children`; `names_start` windows `rec_names` /
-// `rec_spans`, with the same length as `tys`.
+// `tys` windows `children`; `names_start` windows `rec_names` / `rec_spans`, with the same length
+// as `tys`.
 pub type NRecordNode = struct {
     tys: ChildSpan
     names_start: usize
@@ -61,8 +56,8 @@ pub type NNominalNode = struct {
     args: ChildSpan
 }
 
-// The shape behind a handle. Variant names carry the `N` prefix to stay
-// out of the global variant namespace.
+// The shape behind a handle. Variant names carry the `N` prefix to stay out of the global variant
+// namespace.
 pub type TyNode = enum {
     NVar(TyVar)
     NPrim(PrimitiveKind)
@@ -80,24 +75,23 @@ pub type TyNode = enum {
 pub type TypeInterner = struct {
     nodes: List(TyNode)
     children: List(Ty)
-    // Whether the node's whole subtree is variable-free. `zonk` is the
-    // identity on ground types, which is the common case by far.
+    // Whether the node's whole subtree is variable-free. `zonk` is the identity on ground types,
+    // which is the common case by far.
     ground: List(bool)
     // Record field names and declaration spans, windowed by `NRecordNode`.
     rec_names: List(String)
     rec_spans: List(SourceSpan)
-    // Canonical rendering -> id. `keys` owns the buffers the dict's views
-    // point into; `keys[id]` is id's rendering, used to compose parents.
+    // Canonical rendering -> id. `keys` owns the buffers the dict's views point into; `keys[id]` is
+    // id's rendering, used to compose parents.
     by_key: Dict(String, Ty)
     keys: List(OwnedString)
     allocator: &Allocator?
 }
 
-// Default capacity of the per-node arrays, from measured checks: a
-// stdlib-bound check of a trivial project interns ~26k nodes (every
-// check seeds the whole stdlib, so that is the floor), the 106-module
-// compiler ~205k. Covering the floor skips the first nine doublings of
-// four parallel arrays; a big check grows a few times from here.
+// Default capacity of the per-node arrays, from measured checks: a stdlib-bound check of a trivial
+// project interns ~26k nodes (every check seeds the whole stdlib, so that is the floor), the
+// 106-module compiler ~205k. Covering the floor skips the first nine doublings of four parallel
+// arrays; a big check grows a few times from here.
 const SEED_CAPACITY: usize = 32768
 
 // The fixed leaves `type_interner` seeds: void, never, <error>, 14 prims.
@@ -107,9 +101,9 @@ pub fn type_interner(allocator: &Allocator? = null) TypeInterner {
     return type_interner(allocator, SEED_CAPACITY)
 }
 
-// `capacity` sizes the per-node arrays. The one-argument form uses a
-// default that fits a real check; pass 0 for a table that only stands in
-// for one (an empty result, an engine that has handed its table away).
+// `capacity` sizes the per-node arrays. The one-argument form uses a default that fits a real
+// check; pass 0 for a table that only stands in for one (an empty result, an engine that has handed
+// its table away).
 pub fn type_interner(allocator: &Allocator?, capacity: usize) TypeInterner {
     let self = TypeInterner {
         nodes = list(capacity, allocator),
@@ -125,14 +119,10 @@ pub fn type_interner(allocator: &Allocator?, capacity: usize) TypeInterner {
     seed_leaf(&self, TyNode.NNever, "never")
     seed_leaf(&self, TyNode.NError, "<error>")
     // `prim_of` (type.f) fixes the id order; this is that order.
-    const prims: [PrimitiveKind; 14] = [
-        PrimitiveKind.Bool,
-        PrimitiveKind.I8, PrimitiveKind.I16, PrimitiveKind.I32,
-        PrimitiveKind.I64, PrimitiveKind.ISize,
-        PrimitiveKind.U8, PrimitiveKind.U16, PrimitiveKind.U32,
-        PrimitiveKind.U64, PrimitiveKind.USize,
-        PrimitiveKind.F32, PrimitiveKind.F64, PrimitiveKind.Char,
-    ]
+    const prims: [PrimitiveKind; 14] = [PrimitiveKind.Bool, PrimitiveKind.I8, PrimitiveKind.I16,
+        PrimitiveKind.I32, PrimitiveKind.I64, PrimitiveKind.ISize, PrimitiveKind.U8,
+        PrimitiveKind.U16, PrimitiveKind.U32, PrimitiveKind.U64, PrimitiveKind.USize,
+        PrimitiveKind.F32, PrimitiveKind.F64, PrimitiveKind.Char]
     for p in prims {
         seed_leaf(&self, TyNode.NPrim(p), prim_name(p))
     }
@@ -159,8 +149,8 @@ pub fn len(self: &TypeInterner) usize {
     return self.nodes.len
 }
 
-// Whether the table holds nothing beyond the seeded leaves - a stand-in
-// no check has interned into, carrying no type worth adopting.
+// Whether the table holds nothing beyond the seeded leaves - a stand-in no check has interned into,
+// carrying no type worth adopting.
 pub fn is_pristine(self: &TypeInterner) bool {
     return self.nodes.len == SEED_LEN
 }
@@ -191,16 +181,15 @@ pub fn key_of(self: &TypeInterner, id: Ty) String {
     return self.keys[id].as_view()
 }
 
-// The window's handles as a slice of the flat child array. The slice
-// aliases the array's current buffer: interning anything may grow the
-// array and move it, so never hold one across an interning call - loop
-// with `child_at` instead.
+// The window's handles as a slice of the flat child array. The slice aliases the array's current
+// buffer: interning anything may grow the array and move it, so never hold one across an interning
+// call - loop with `child_at` instead.
 pub fn child_ids(self: &TypeInterner, span: ChildSpan) Ty[] {
     return self.children[span.start..span.start + span.len]
 }
 
-// One handle out of a window, read through the array's current buffer -
-// safe to interleave with interning.
+// One handle out of a window, read through the array's current buffer - safe to interleave with
+// interning.
 pub fn child_at(self: &TypeInterner, span: ChildSpan, i: usize) Ty {
     return self.children[span.start + i]
 }
@@ -225,7 +214,10 @@ pub fn var_of(self: &TypeInterner, v: TyVar) Ty {
     sb.append("@")
     sb.append(v.level)
     const hit = self.by_key.get(sb.as_view())
-    if hit.is_some() { sb.deinit(); return hit.unwrap() }
+    if hit.is_some() {
+        sb.deinit()
+        return hit.unwrap()
+    }
     return add(self, &sb, TyNode.NVar(v), false)
 }
 
@@ -234,7 +226,10 @@ pub fn ref_of(self: &TypeInterner, elem: Ty) Ty {
     sb.append("&")
     sb.append(self.key_of(elem))
     const hit = self.by_key.get(sb.as_view())
-    if hit.is_some() { sb.deinit(); return hit.unwrap() }
+    if hit.is_some() {
+        sb.deinit()
+        return hit.unwrap()
+    }
     return add(self, &sb, TyNode.NRef(elem), self.is_ground(elem))
 }
 
@@ -246,7 +241,10 @@ pub fn array_of(self: &TypeInterner, elem: Ty, length: usize) Ty {
     sb.append(length)
     sb.append("]")
     const hit = self.by_key.get(sb.as_view())
-    if hit.is_some() { sb.deinit(); return hit.unwrap() }
+    if hit.is_some() {
+        sb.deinit()
+        return hit.unwrap()
+    }
     const node = TyNode.NArray(.{ elem = elem, length = length })
     return add(self, &sb, node, self.is_ground(elem))
 }
@@ -255,13 +253,18 @@ pub fn func_of(self: &TypeInterner, params: &List(Ty), ret: Ty) Ty {
     let sb = string_builder(32, self.allocator)
     sb.append("fn(")
     for i in 0..params.len {
-        if i > 0 { sb.append(", ") }
+        if i > 0 {
+            sb.append(", ")
+        }
         sb.append(self.key_of(params[i]))
     }
     sb.append(") ")
     sb.append(self.key_of(ret))
     const hit = self.by_key.get(sb.as_view())
-    if hit.is_some() { sb.deinit(); return hit.unwrap() }
+    if hit.is_some() {
+        sb.deinit()
+        return hit.unwrap()
+    }
 
     const g = all_ground(self, params) and self.is_ground(ret)
     const span = push_children(self, params)
@@ -273,34 +276,46 @@ pub fn tuple_of(self: &TypeInterner, elems: &List(Ty)) Ty {
     let sb = string_builder(32, self.allocator)
     sb.append("(")
     for i in 0..elems.len {
-        if i > 0 { sb.append(", ") }
+        if i > 0 {
+            sb.append(", ")
+        }
         sb.append(self.key_of(elems[i]))
     }
-    if elems.len == 1 { sb.append(",") }
+    if elems.len == 1 {
+        sb.append(",")
+    }
     sb.append(")")
     const hit = self.by_key.get(sb.as_view())
-    if hit.is_some() { sb.deinit(); return hit.unwrap() }
+    if hit.is_some() {
+        sb.deinit()
+        return hit.unwrap()
+    }
 
     const g = all_ground(self, elems)
     const span = push_children(self, elems)
     return add(self, &sb, TyNode.NTuple(span), g)
 }
 
-// The fields carry the names, the declaration spans AND the field types
-// (`Field.ty` is a handle). The first interning of a shape decides the
-// spans the table stores - they are metadata, outside the identity.
+// The fields carry the names, the declaration spans AND the field types (`Field.ty` is a handle).
+// The first interning of a shape decides the spans the table stores - they are metadata, outside
+// the identity.
 pub fn record_of(self: &TypeInterner, fields: &List(Field)) Ty {
     let sb = string_builder(48, self.allocator)
     sb.append("{ ")
     for i in 0..fields.len {
-        if i > 0 { sb.append(", ") }
+        if i > 0 {
+            sb.append(", ")
+        }
         sb.append(fields[i].name)
         sb.append(": ")
         sb.append(self.key_of(fields[i].ty))
     }
     sb.append(" }")
     const hit = self.by_key.get(sb.as_view())
-    if hit.is_some() { sb.deinit(); return hit.unwrap() }
+    if hit.is_some() {
+        sb.deinit()
+        return hit.unwrap()
+    }
 
     let g = true
     const start = self.children.len
@@ -309,7 +324,9 @@ pub fn record_of(self: &TypeInterner, fields: &List(Field)) Ty {
         self.children.push(fields[i].ty)
         self.rec_names.push(fields[i].name)
         self.rec_spans.push(fields[i].decl_span)
-        if !self.is_ground(fields[i].ty) { g = false }
+        if !self.is_ground(fields[i].ty) {
+            g = false
+        }
     }
     const span = ChildSpan { start = start, len = fields.len }
     const node = TyNode.NRecord(.{ tys = span, names_start = names_start })
@@ -323,13 +340,18 @@ pub fn nominal_of(self: &TypeInterner, id: NominalId, args: &List(Ty)) Ty {
     if args.len > 0 {
         sb.append("(")
         for i in 0..args.len {
-            if i > 0 { sb.append(", ") }
+            if i > 0 {
+                sb.append(", ")
+            }
             sb.append(self.key_of(args[i]))
         }
         sb.append(")")
     }
     const hit = self.by_key.get(sb.as_view())
-    if hit.is_some() { sb.deinit(); return hit.unwrap() }
+    if hit.is_some() {
+        sb.deinit()
+        return hit.unwrap()
+    }
 
     const g = all_ground(self, args)
     const span = push_children(self, args)
@@ -339,7 +361,9 @@ pub fn nominal_of(self: &TypeInterner, id: NominalId, args: &List(Ty)) Ty {
 
 fn all_ground(self: &TypeInterner, ids: &List(Ty)) bool {
     for id in ids {
-        if !self.is_ground(id) { return false }
+        if !self.is_ground(id) {
+            return false
+        }
     }
     return true
 }
@@ -362,8 +386,8 @@ fn add(self: &TypeInterner, sb: &StringBuilder, node: TyNode, g: bool) Ty {
 }
 
 // ─────────────────────────────────────────────────────────────────────
-// Rendering for diagnostics - the tree representation's `format`, off
-// the node graph. Differs from `key_of` only on vars: `?id`, no level.
+// Rendering for diagnostics - the tree representation's `format`, off the node graph. Differs from
+// `key_of` only on vars: `?id`, no level.
 // ─────────────────────────────────────────────────────────────────────
 
 pub fn format(self: &TypeInterner, id: Ty, sb: &StringBuilder) {
@@ -371,49 +395,57 @@ pub fn format(self: &TypeInterner, id: Ty, sb: &StringBuilder) {
         NVar(v) => {
             sb.append("?")
             sb.append(v.id)
-        },
-        NPrim(p) => sb.append(prim_name(p)),
+        }
+        NPrim(p) => sb.append(prim_name(p))
         NRef(inner) => {
             sb.append("&")
             self.format(inner, sb)
-        },
+        }
         NArray(arr) => {
             sb.append("[")
             self.format(arr.elem, sb)
             sb.append("; ")
             sb.append(arr.length)
             sb.append("]")
-        },
+        }
         NFunc(f) => {
             sb.append("fn(")
             const ps = self.child_ids(f.params)
             for i in 0..ps.len {
-                if i > 0 { sb.append(", ") }
+                if i > 0 {
+                    sb.append(", ")
+                }
                 self.format(ps[i], sb)
             }
             sb.append(") ")
             self.format(f.ret, sb)
-        },
+        }
         NTuple(span) => {
             sb.append("(")
             const es = self.child_ids(span)
             for i in 0..es.len {
-                if i > 0 { sb.append(", ") }
+                if i > 0 {
+                    sb.append(", ")
+                }
                 self.format(es[i], sb)
             }
-            if es.len == 1 { sb.append(",") }
+            if es.len == 1 {
+                sb.append(",")
+            }
             sb.append(")")
-        },
+        }
         NRecord(rec) => {
             sb.append("{ ")
             for i in 0..rec.tys.len {
-                if i > 0 { sb.append(", ") }
+                if i > 0 {
+                    sb.append(", ")
+                }
                 sb.append(self.rec_name(&rec, i))
                 sb.append(": ")
                 self.format(self.rec_ty(&rec, i), sb)
             }
             sb.append(" }")
-        },
+        }
         NNominal(nn) => {
             sb.append("#")
             sb.append(nn.id)
@@ -421,15 +453,17 @@ pub fn format(self: &TypeInterner, id: Ty, sb: &StringBuilder) {
             if as_.len > 0 {
                 sb.append("(")
                 for i in 0..as_.len {
-                    if i > 0 { sb.append(", ") }
+                    if i > 0 {
+                        sb.append(", ")
+                    }
                     self.format(as_[i], sb)
                 }
                 sb.append(")")
             }
-        },
-        NNever => sb.append("never"),
-        NVoid => sb.append("void"),
-        NError => sb.append("<error>"),
+        }
+        NNever => sb.append("never")
+        NVoid => sb.append("void")
+        NError => sb.append("<error>")
     }
 }
 
@@ -464,8 +498,8 @@ test "leaves hold their fixed ids without touching the table" {
     assert_eq(it.len(), 17 as usize, "three leaves plus fourteen prims")
     const p = prim_of(PrimitiveKind.I32)
     const shape_ok = it.node(p) match {
-        NPrim(k) => k == PrimitiveKind.I32,
-        _ => false,
+        NPrim(k) => k == PrimitiveKind.I32
+        _ => false
     }
     assert_true(shape_ok, "the fixed prim id names its kind")
     assert_true(it.key_of(TY_VOID) == "void", "void renders at id 0")
@@ -478,10 +512,11 @@ test "a var keys on id and level together" {
     const a = it.var_of(TyVar { id = 4u32, level = 1u32 })
     const b = it.var_of(TyVar { id = 4u32, level = 1u32 })
     assert_eq(a, b, "same id and level, same node")
-    // `free_vars` reads the level off the node, so a moved level must
-    // surface as a fresh node rather than a stale cached one.
+    // `free_vars` reads the level off the node, so a moved level must surface as a fresh node
+    // rather than a stale cached one.
     assert_true(it.var_of(TyVar { id = 4u32, level = 9u32 }) != a, "a moved level is a fresh node")
-    assert_true(it.var_of(TyVar { id = 5u32, level = 1u32 }) != a, "a different var is a different node")
+    assert_true(it.var_of(TyVar { id = 5u32, level = 1u32 }) != a,
+        "a different var is a different node")
 }
 
 test "empty tuple and void stay distinct shapes" {

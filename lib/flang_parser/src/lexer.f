@@ -8,8 +8,8 @@
 //     text. Everything past that newline belongs to the next token's
 //     leading trivia.
 //
-// Invariant: concatenating `leading + text + trailing` across every token
-// in order reproduces the source file byte-for-byte.
+// Invariant: concatenating `leading + text + trailing` across every token in order reproduces the
+// source file byte-for-byte.
 
 import std.allocator
 import std.char
@@ -21,23 +21,21 @@ import std.string_builder
 import flang_parser.token
 import flang_parser.trivia
 
-// Version string of the flang_parser library, sourced from its
-// flang.toml. Useful for tools (LSP, dump_tokens, formatter) that
-// surface "compiled against parser X" diagnostics.
+// Version string of the flang_parser library, sourced from its flang.toml. Useful for tools (LSP,
+// dump_tokens, formatter) that surface "compiled against parser X" diagnostics.
 pub fn parser_version() String {
     return project_info().version
 }
 
-// One level of an active `$"..."`. Nested interp pushes another frame.
-// Exactly one of in_segment / in_format_spec is true, or both are false
-// (hole mode - the lexer runs as a normal token scanner with the bracket
-// counters tracking which `}` closes the hole).
+// One level of an active `$"..."`. Nested interp pushes another frame. Exactly one of in_segment /
+// in_format_spec is true, or both are false (hole mode - the lexer runs as a normal token scanner
+// with the bracket counters tracking which `}` closes the hole).
 type InterpFrame = struct {
     in_segment: bool
     in_format_spec: bool
-    // Bracket depths *inside* the current hole. The hole-closing `}` is
-    // the first un-matched `}`; matched `}` (paired with a `{` inside
-    // the hole) decrements the depth and stays inside the hole.
+    // Bracket depths *inside* the current hole. The hole-closing `}` is the first un-matched `}`;
+    // matched `}` (paired with a `{` inside the hole) decrements the depth and stays inside the
+    // hole.
     brace_depth: usize
     paren_depth: usize
     bracket_depth: usize
@@ -47,42 +45,36 @@ pub type Lexer = struct {
     source: String
     position: usize
     line: usize
-    // Backs every list the lexer allocates - interp_stack, per-token
-    // trivia lists, and the result of `tokenize()`. Stored as-passed
-    // (`null` = global allocator) and forwarded to the optional
-    // allocator slots of lists and Tokens; only a leaf that actually
-    // allocates resolves it via `or_global()`.
+    // Backs every list the lexer allocates - interp_stack, per-token trivia lists, and the result
+    // of `tokenize()`. Stored as-passed (`null` = global allocator) and forwarded to the optional
+    // allocator slots of lists and Tokens; only a leaf that actually allocates resolves it via
+    // `or_global()`.
     allocator: &Allocator?
     interp_stack: List(InterpFrame)
-    // Set inline on `$"` (Dollar adjacent to quote) and by the parser
-    // before eating the prefix for the `$(args)"..."` / `$ident"..."`
-    // forms; consumed by next_token() to decide whether the next `"`
-    // opens an interp string or a plain string literal.
+    // Set inline on `$"` (Dollar adjacent to quote) and by the parser before eating the prefix for
+    // the `$(args)"..."` / `$ident"..."` forms; consumed by next_token() to decide whether the next
+    // `"` opens an interp string or a plain string literal.
     mark_next_string_interp: bool
-    // Source offset of a `"` that opens an interp string, found by
-    // looking past a `$(args)` / `$ident` prefix at the `$` itself.
-    // `tokenize()` has no parser feedback to call
-    // `mark_next_string_interp()` mid-stream, so the lexer resolves
-    // those two forms on its own (RFC-004 forms 2 and 3).
+    // Source offset of a `"` that opens an interp string, found by looking past a `$(args)` /
+    // `$ident` prefix at the `$` itself. `tokenize()` has no parser feedback to call
+    // `mark_next_string_interp()` mid-stream, so the lexer resolves those two forms on its own
+    // (RFC-004 forms 2 and 3).
     interp_at: usize?
-    // Single-slot queue so a segment-boundary or format-spec terminator
-    // can fan out into two tokens (e.g. InterpSegment + InterpHoleStart).
+    // Single-slot queue so a segment-boundary or format-spec terminator can fan out into two tokens
+    // (e.g. InterpSegment + InterpHoleStart).
     has_pending: bool
     pending_token: Token
 }
 
-// Construct a Lexer over `source`. The source is borrowed: every
-// Token's `text`, `leading`, and `trailing` will point into it, so
-// `source` must outlive the produced tokens.
+// Construct a Lexer over `source`. The source is borrowed: every Token's `text`, `leading`, and
+// `trailing` will point into it, so `source` must outlive the produced tokens.
 //
-// `allocator` backs every list the lexer (and the tokens it produces)
-// allocates. Pass `null` to default to the global allocator; pass an
-// arena / fixed-buffer allocator when you want all lex output to share
-// a single lifetime that can be dropped in one shot. Stored as-passed;
-// allocation leaves resolve it per use.
-// `start` lexes from a byte offset into `source` (offsets stay absolute)
-// - template expansion uses it to parse an expression inside a string
-// literal hole without re-slicing the text.
+// `allocator` backs every list the lexer (and the tokens it produces) allocates. Pass `null` to
+// default to the global allocator; pass an arena / fixed-buffer allocator when you want all lex
+// output to share a single lifetime that can be dropped in one shot. Stored as-passed; allocation
+// leaves resolve it per use.
+// `start` lexes from a byte offset into `source` (offsets stay absolute) - template expansion uses
+// it to parse an expression inside a string literal hole without re-slicing the text.
 pub fn lexer(source: String, allocator: &Allocator? = null, start: usize = 0) Lexer {
     return .{
         source = source,
@@ -97,11 +89,10 @@ pub fn lexer(source: String, allocator: &Allocator? = null, start: usize = 0) Le
     }
 }
 
-// Release the lexer's own bookkeeping: the interp frame stack and any
-// token queued ahead (only relevant if the caller abandons the lexer
-// between `next_token()` calls - `tokenize()` always drains the queue
-// before returning). Tokens already handed to the caller are
-// independent; deinit the returned `List(Token)` to free them.
+// Release the lexer's own bookkeeping: the interp frame stack and any token queued ahead (only
+// relevant if the caller abandons the lexer between `next_token()` calls - `tokenize()` always
+// drains the queue before returning). Tokens already handed to the caller are independent; deinit
+// the returned `List(Token)` to free them.
 pub fn deinit(self: &Lexer) {
     self.interp_stack.deinit()
     if self.has_pending {
@@ -110,27 +101,24 @@ pub fn deinit(self: &Lexer) {
     }
 }
 
-// Mark the next `"` as the opener of an interpolated string. The flag
-// is consumed by the next `next_token()` call: if the lexer's cursor
-// sits on `"` (no intervening trivia), it enters interp mode and emits
-// `InterpStringStart`; otherwise the flag is silently dropped and a
-// normal token is produced.
+// Mark the next `"` as the opener of an interpolated string. The flag is consumed by the next
+// `next_token()` call: if the lexer's cursor sits on `"` (no intervening trivia), it enters interp
+// mode and emits `InterpStringStart`; otherwise the flag is silently dropped and a normal token is
+// produced.
 //
-// Drives the `$(args)"..."` and `$ident"..."` interp forms - the
-// parser calls this immediately before eating the closing `)` or the
-// prefix identifier. The `$"..."` form is recognised inline by the
-// lexer (Dollar adjacent to `"`) and does not need this hook.
+// Drives the `$(args)"..."` and `$ident"..."` interp forms - the parser calls this immediately
+// before eating the closing `)` or the prefix identifier. The `$"..."` form is recognised inline by
+// the lexer (Dollar adjacent to `"`) and does not need this hook.
 pub fn mark_next_string_interp(self: &Lexer) {
     self.mark_next_string_interp = true
 }
 
-// Drive `next_token()` to completion and collect every token -
-// including the terminating `Eof` - into a list. The returned list
-// owns its storage; callers must `deinit()` it. The lexer's position
+// Drive `next_token()` to completion and collect every token - including the terminating `Eof` -
+// into a list. The returned list owns its storage; callers must `deinit()` it. The lexer's position
 // is at end-of-source on return.
 //
-// `mark_next_string_interp()` cannot be called between tokens when
-// using this entry point, so the `$(args)"..."` and `$ident"..."`
+// `mark_next_string_interp()` cannot be called between tokens when using this entry point, so the
+// `$(args)"..."` and `$ident"..."`
 // interp forms degrade to `Dollar + … + StringLiteral`. Use
 // `next_token()` directly when you need full RFC-004 coverage.
 pub fn tokenize(self: &Lexer) List(Token) {
@@ -139,14 +127,15 @@ pub fn tokenize(self: &Lexer) List(Token) {
         const tok = self.next_token()
         const is_eof = tok.kind == TokenKind.Eof
         tokens.push(tok)
-        if is_eof { break }
+        if is_eof {
+            break
+        }
     }
     return tokens
 }
 
-// Produce the next token from the source, advancing the lexer's
-// position. Always returns a token - once the source is exhausted,
-// every call returns `Eof` (the formatter / parser are expected to
+// Produce the next token from the source, advancing the lexer's position. Always returns a token -
+// once the source is exhausted, every call returns `Eof` (the formatter / parser are expected to
 // stop at the first `Eof`).
 //
 // Dispatch order:
@@ -181,9 +170,8 @@ pub fn next_token(self: &Lexer) Token {
         }
     }
 
-    // The quote a `$(args)` / `$ident` prefix run ends at (armed when the
-    // `$` was lexed). Adjacency is exact, so the cursor sits on it with
-    // no trivia in between.
+    // The quote a `$(args)` / `$ident` prefix run ends at (armed when the `$` was lexed). Adjacency
+    // is exact, so the cursor sits on it with no trivia in between.
     if self.interp_at.is_some() and self.interp_at.unwrap() == self.position {
         self.interp_at = null
         return begin_interp_string(self)
@@ -198,10 +186,9 @@ pub fn next_token(self: &Lexer) Token {
     }
     const text = self.source[token_start..self.position]
 
-    // Hole-mode intercept: a `}` that doesn't match anything inside the
-    // hole becomes InterpHoleEnd; an unbracketed `:` becomes
-    // InterpFormatSep. These intercepted tokens border raw segment / spec
-    // bytes, so they get no trailing trivia.
+    // Hole-mode intercept: a `}` that doesn't match anything inside the hole becomes InterpHoleEnd;
+    // an unbracketed `:` becomes InterpFormatSep. These intercepted tokens border raw segment /
+    // spec bytes, so they get no trailing trivia.
     if self.interp_stack.len > 0 {
         const top_idx = self.interp_stack.len - 1
         const frame = self.interp_stack[top_idx]
@@ -238,9 +225,8 @@ pub fn next_token(self: &Lexer) Token {
 // Trivia
 // ─────────────────────────────────────────────────────────────────────────
 
-// Empty `Trivia[]` - no allocation, ptr=null, len=0. Used everywhere a
-// token is known to have no leading or trailing trivia (interp
-// boundaries, BadToken recovery exits, the EOF placeholder).
+// Empty `Trivia[]` - no allocation, ptr=null, len=0. Used everywhere a token is known to have no
+// leading or trailing trivia (interp boundaries, BadToken recovery exits, the EOF placeholder).
 fn empty_trivia() Trivia[] {
     let zero: usize = 0
     return slice_from_raw_parts(zero as &Trivia, 0)
@@ -250,12 +236,16 @@ fn lex_leading_trivia(self: &Lexer) Trivia[] {
     let trivia: List(Trivia) = list(0, self.allocator)
     const text = self.source
     loop {
-        if self.position >= text.len { break }
+        if self.position >= text.len {
+            break
+        }
         const ch = text[self.position]
         if is_whitespace_byte(ch) {
             const start = self.position
             while self.position < text.len and is_whitespace_byte(text[self.position]) {
-                if text[self.position] == '\n' { self.line = self.line + 1 }
+                if text[self.position] == '\n' {
+                    self.line = self.line + 1
+                }
                 self.position = self.position + 1
             }
             trivia.push(Trivia {
@@ -296,7 +286,8 @@ fn lex_trailing_trivia(self: &Lexer) Trivia[] {
         })
     }
 
-    if self.position + 1 < text.len and text[self.position] == '/' and text[self.position + 1] == '/' {
+    if self.position + 1 < text.len and text[self.position] == '/'
+        and text[self.position + 1] == '/' {
         const cstart = self.position
         self.position = self.position + 2
         while self.position < text.len and text[self.position] != '\n' {
@@ -384,8 +375,7 @@ fn lex_token_text(self: &Lexer) TokenKind {
 
     self.position = start + 1
     if ch == '$' {
-        // Strict adjacency only - a stray `$` next to whitespace must not
-        // arm the interp scanner.
+        // Strict adjacency only - a stray `$` next to whitespace must not arm the interp scanner.
         if self.position < text.len and text[self.position] == '"' {
             self.mark_next_string_interp = true
         } else {
@@ -398,34 +388,40 @@ fn lex_token_text(self: &Lexer) TokenKind {
     return single_char_kind(ch)
 }
 
-// The offset of the `"` that a `$`-prefix run ends at, or null when the
-// run is not an interpolated-string prefix. `pos` is the byte right
-// after the `$`. Two shapes (RFC-004): a balanced `(...)` group, or a
-// bare identifier. In both, the quote must be immediately adjacent -
+// The offset of the `"` that a `$`-prefix run ends at, or null when the run is not an
+// interpolated-string prefix. `pos` is the byte right after the `$`. Two shapes (RFC-004): a
+// balanced `(...)` group, or a bare identifier. In both, the quote must be immediately adjacent -
 // `$(x) "…"` is a `$`, a paren group, and a plain string.
 //
-// The paren scan skips string and char literals so a `"` or `)` inside
-// one (`$(sep=")")`) does not end the group early; it deliberately does
-// NOT skip comments, which cannot appear inside a call's argument list
-// on one line without also ending the adjacency.
+// The paren scan skips string and char literals so a `"` or `)` inside one (`$(sep=")")`) does not
+// end the group early; it deliberately does NOT skip comments, which cannot appear inside a call's
+// argument list on one line without also ending the adjacency.
 fn interp_prefix_quote(text: String, pos: usize) usize? {
-    if pos >= text.len { return null }
+    if pos >= text.len {
+        return null
+    }
     if text[pos] == '(' {
         let i = pos + 1
         let depth = 1usize
         loop {
-            if i >= text.len { return null }
+            if i >= text.len {
+                return null
+            }
             const c = text[i]
             if c == '"' or c == '\'' {
                 i = skip_quoted(text, i)
                 continue
             }
-            if c == '(' { depth = depth + 1 }
+            if c == '(' {
+                depth = depth + 1
+            }
             if c == ')' {
                 depth = depth - 1
                 if depth == 0 {
                     const q = i + 1
-                    if q < text.len and text[q] == '"' { return Some(q) }
+                    if q < text.len and text[q] == '"' {
+                        return Some(q)
+                    }
                     return null
                 }
             }
@@ -433,18 +429,21 @@ fn interp_prefix_quote(text: String, pos: usize) usize? {
         }
         return null
     }
-    if !is_alpha(text[pos]) and text[pos] != '_' { return null }
+    if !is_alpha(text[pos]) and text[pos] != '_' {
+        return null
+    }
     let j = pos
     while j < text.len and (is_alnum(text[j]) or text[j] == '_') {
         j = j + 1
     }
-    if j < text.len and text[j] == '"' { return Some(j) }
+    if j < text.len and text[j] == '"' {
+        return Some(j)
+    }
     return null
 }
 
-// Index just past the string or char literal starting at `i` (which is
-// its opening quote), honouring backslash escapes. Stops at end of
-// source on an unterminated literal.
+// Index just past the string or char literal starting at `i` (which is its opening quote),
+// honouring backslash escapes. Stops at end of source on an unterminated literal.
 fn skip_quoted(text: String, i: usize) usize {
     const quote = text[i]
     let k = i + 1
@@ -454,54 +453,76 @@ fn skip_quoted(text: String, i: usize) usize {
             k = k + 2
             continue
         }
-        if c == quote { return k + 1 }
+        if c == quote {
+            return k + 1
+        }
         k = k + 1
     }
     return k
 }
 
 fn match_two_char(a: u8, b: u8) TokenKind? {
-    if a == '.' and b == '.' { return Some(TokenKind.DotDot) }
-    if a == '=' and b == '=' { return Some(TokenKind.EqualsEquals) }
-    if a == '=' and b == '>' { return Some(TokenKind.FatArrow) }
-    if a == '!' and b == '=' { return Some(TokenKind.NotEquals) }
-    if a == '<' and b == '<' { return Some(TokenKind.ShiftLeft) }
-    if a == '<' and b == '=' { return Some(TokenKind.LessThanOrEqual) }
-    if a == '>' and b == '>' { return Some(TokenKind.ShiftRight) }
-    if a == '>' and b == '=' { return Some(TokenKind.GreaterThanOrEqual) }
-    if a == '?' and b == '?' { return Some(TokenKind.QuestionQuestion) }
-    if a == '?' and b == '.' { return Some(TokenKind.QuestionDot) }
+    if a == '.' and b == '.' {
+        return Some(TokenKind.DotDot)
+    }
+    if a == '=' and b == '=' {
+        return Some(TokenKind.EqualsEquals)
+    }
+    if a == '=' and b == '>' {
+        return Some(TokenKind.FatArrow)
+    }
+    if a == '!' and b == '=' {
+        return Some(TokenKind.NotEquals)
+    }
+    if a == '<' and b == '<' {
+        return Some(TokenKind.ShiftLeft)
+    }
+    if a == '<' and b == '=' {
+        return Some(TokenKind.LessThanOrEqual)
+    }
+    if a == '>' and b == '>' {
+        return Some(TokenKind.ShiftRight)
+    }
+    if a == '>' and b == '=' {
+        return Some(TokenKind.GreaterThanOrEqual)
+    }
+    if a == '?' and b == '?' {
+        return Some(TokenKind.QuestionQuestion)
+    }
+    if a == '?' and b == '.' {
+        return Some(TokenKind.QuestionDot)
+    }
     return null
 }
 
 fn single_char_kind(ch: u8) TokenKind {
     return ch match {
-        '(' => TokenKind.OpenParenthesis,
-        ')' => TokenKind.CloseParenthesis,
-        '{' => TokenKind.OpenBrace,
-        '}' => TokenKind.CloseBrace,
-        '[' => TokenKind.OpenBracket,
-        ']' => TokenKind.CloseBracket,
-        ':' => TokenKind.Colon,
-        '=' => TokenKind.Equals,
-        ';' => TokenKind.Semicolon,
-        ',' => TokenKind.Comma,
-        '&' => TokenKind.Ampersand,
-        '|' => TokenKind.Pipe,
-        '^' => TokenKind.Caret,
-        '?' => TokenKind.Question,
-        '+' => TokenKind.Plus,
-        '-' => TokenKind.Minus,
-        '*' => TokenKind.Star,
-        '/' => TokenKind.Slash,
-        '%' => TokenKind.Percent,
-        '<' => TokenKind.LessThan,
-        '>' => TokenKind.GreaterThan,
-        '.' => TokenKind.Dot,
-        '#' => TokenKind.Hash,
-        '!' => TokenKind.Bang,
-        '~' => TokenKind.Tilde,
-        else => TokenKind.BadToken,
+        '(' => TokenKind.OpenParenthesis
+        ')' => TokenKind.CloseParenthesis
+        '{' => TokenKind.OpenBrace
+        '}' => TokenKind.CloseBrace
+        '[' => TokenKind.OpenBracket
+        ']' => TokenKind.CloseBracket
+        ':' => TokenKind.Colon
+        '=' => TokenKind.Equals
+        ';' => TokenKind.Semicolon
+        ',' => TokenKind.Comma
+        '&' => TokenKind.Ampersand
+        '|' => TokenKind.Pipe
+        '^' => TokenKind.Caret
+        '?' => TokenKind.Question
+        '+' => TokenKind.Plus
+        '-' => TokenKind.Minus
+        '*' => TokenKind.Star
+        '/' => TokenKind.Slash
+        '%' => TokenKind.Percent
+        '<' => TokenKind.LessThan
+        '>' => TokenKind.GreaterThan
+        '.' => TokenKind.Dot
+        '#' => TokenKind.Hash
+        '!' => TokenKind.Bang
+        '~' => TokenKind.Tilde
+        else => TokenKind.BadToken
     }
 }
 
@@ -514,31 +535,30 @@ fn lex_number(self: &Lexer) TokenKind {
     const start = self.position
     let is_float = false
 
-    if text[start] == '0' and start + 1 < text.len
-        and (text[start + 1] == 'x' or text[start + 1] == 'X') {
+    if text[start] == '0' and start + 1 < text.len and (text[start + 1] == 'x'
+        or text[start + 1] == 'X') {
         self.position = start + 2
-        while self.position < text.len
-            and (is_hex_digit(text[self.position]) or text[self.position] == '_') {
+        while self.position < text.len and (is_hex_digit(text[self.position])
+            or text[self.position] == '_') {
             self.position = self.position + 1
         }
-        // A hex literal takes the same `u8`/`i32`/... suffixes as a
-        // decimal one (`0xffu8`) - returning before the suffix scan
-        // left the suffix behind as a stray identifier token.
+        // A hex literal takes the same `u8`/`i32`/... suffixes as a decimal one (`0xffu8`) -
+        // returning before the suffix scan left the suffix behind as a stray identifier token.
         self.scan_int_suffix()
         return TokenKind.Integer
     }
 
-    while self.position < text.len
-        and (is_digit(text[self.position]) or text[self.position] == '_') {
+    while self.position < text.len and (is_digit(text[self.position])
+        or text[self.position] == '_') {
         self.position = self.position + 1
     }
 
-    if self.position < text.len and text[self.position] == '.'
-        and self.position + 1 < text.len and is_digit(text[self.position + 1]) {
+    if self.position < text.len and text[self.position] == '.' and self.position + 1 < text.len
+        and is_digit(text[self.position + 1]) {
         is_float = true
         self.position = self.position + 1
-        while self.position < text.len
-            and (is_digit(text[self.position]) or text[self.position] == '_') {
+        while self.position < text.len and (is_digit(text[self.position])
+            or text[self.position] == '_') {
             self.position = self.position + 1
         }
     }
@@ -546,18 +566,16 @@ fn lex_number(self: &Lexer) TokenKind {
     if self.position < text.len and (text[self.position] == 'e' or text[self.position] == 'E') {
         is_float = true
         self.position = self.position + 1
-        if self.position < text.len
-            and (text[self.position] == '+' or text[self.position] == '-') {
+        if self.position < text.len and (text[self.position] == '+' or text[self.position] == '-') {
             self.position = self.position + 1
         }
-        while self.position < text.len
-            and (is_digit(text[self.position]) or text[self.position] == '_') {
+        while self.position < text.len and (is_digit(text[self.position])
+            or text[self.position] == '_') {
             self.position = self.position + 1
         }
     }
 
-    if self.position < text.len and text[self.position] == 'f'
-        and self.position + 1 < text.len
+    if self.position < text.len and text[self.position] == 'f' and self.position + 1 < text.len
         and (text[self.position + 1] == '3' or text[self.position + 1] == '6') {
         const suffix_start = self.position
         self.position = self.position + 2
@@ -572,19 +590,19 @@ fn lex_number(self: &Lexer) TokenKind {
         }
     }
 
-    if is_float { return TokenKind.Float }
+    if is_float {
+        return TokenKind.Float
+    }
 
     self.scan_int_suffix()
     return TokenKind.Integer
 }
 
-// Consume a trailing `i8`/`u64`/`usize`/... integer suffix, backtracking
-// when the identifier tail is not a valid suffix (`0xffuv` keeps `uv`
-// as its own token).
+// Consume a trailing `i8`/`u64`/`usize`/... integer suffix, backtracking when the identifier tail
+// is not a valid suffix (`0xffuv` keeps `uv` as its own token).
 fn scan_int_suffix(self: &Lexer) {
     const text = self.source
-    if self.position < text.len
-        and (text[self.position] == 'i' or text[self.position] == 'u') {
+    if self.position < text.len and (text[self.position] == 'i' or text[self.position] == 'u') {
         const suffix_start = self.position
         while self.position < text.len and is_ident_continuation(text[self.position]) {
             self.position = self.position + 1
@@ -597,23 +615,49 @@ fn scan_int_suffix(self: &Lexer) {
 }
 
 fn is_valid_int_suffix(s: String) bool {
-    if s == "i8" { return true }
-    if s == "i16" { return true }
-    if s == "i32" { return true }
-    if s == "i64" { return true }
-    if s == "isize" { return true }
-    if s == "u8" { return true }
-    if s == "u16" { return true }
-    if s == "u32" { return true }
-    if s == "u64" { return true }
-    if s == "usize" { return true }
+    if s == "i8" {
+        return true
+    }
+    if s == "i16" {
+        return true
+    }
+    if s == "i32" {
+        return true
+    }
+    if s == "i64" {
+        return true
+    }
+    if s == "isize" {
+        return true
+    }
+    if s == "u8" {
+        return true
+    }
+    if s == "u16" {
+        return true
+    }
+    if s == "u32" {
+        return true
+    }
+    if s == "u64" {
+        return true
+    }
+    if s == "usize" {
+        return true
+    }
     return false
 }
 
 fn is_hex_digit(c: u8) bool {
-    if is_digit(c) { return true }
-    if c >= 'a' and c <= 'f' { return true }
-    if c >= 'A' and c <= 'F' { return true }
+    if is_digit(c) {
+        return true
+    }
+    if c >= 'a' and c <= 'f' {
+        return true
+    }
+    if c >= 'A' and c <= 'F' {
+        return true
+    }
     return false
 }
 
@@ -642,20 +686,28 @@ fn lex_string(self: &Lexer) TokenKind {
                 self.position = self.position + 1
             }
         } else {
-            if text[self.position] == '\n' { self.line = self.line + 1 }
+            if text[self.position] == '\n' {
+                self.line = self.line + 1
+            }
             self.position = self.position + 1
         }
     }
-    if self.position >= text.len { return TokenKind.BadToken }
+    if self.position >= text.len {
+        return TokenKind.BadToken
+    }
     self.position = self.position + 1
-    if bad { return TokenKind.BadToken }
+    if bad {
+        return TokenKind.BadToken
+    }
     return TokenKind.StringLiteral
 }
 
 fn lex_char_literal(self: &Lexer, kind: TokenKind) TokenKind {
     const text = self.source
     self.position = self.position + 1
-    if self.position >= text.len { return TokenKind.BadToken }
+    if self.position >= text.len {
+        return TokenKind.BadToken
+    }
     if text[self.position] == '\'' {
         // Empty literal - eat the closing quote so recovery doesn't loop.
         self.position = self.position + 1
@@ -695,11 +747,17 @@ fn lex_char_literal(self: &Lexer, kind: TokenKind) TokenKind {
         }
         let i = 0usize
         loop {
-            if i >= extra { break }
-            if self.position >= text.len { break }
+            if i >= extra {
+                break
+            }
+            if self.position >= text.len {
+                break
+            }
             const cont = text[self.position]
             const masked = cont & 0xC0
-            if masked != 0x80 { break }
+            if masked != 0x80 {
+                break
+            }
             self.position = self.position + 1
             i = i + 1
         }
@@ -708,15 +766,22 @@ fn lex_char_literal(self: &Lexer, kind: TokenKind) TokenKind {
     if self.position < text.len and text[self.position] != '\'' {
         bad = true
         // Stop at newline - single-quoted literals never span lines.
-        while self.position < text.len and text[self.position] != '\'' and text[self.position] != '\n' {
+        while self.position < text.len and text[self.position] != '\''
+            and text[self.position] != '\n' {
             self.position = self.position + 1
         }
     }
-    if self.position >= text.len { return TokenKind.BadToken }
-    if text[self.position] != '\'' { return TokenKind.BadToken }
+    if self.position >= text.len {
+        return TokenKind.BadToken
+    }
+    if text[self.position] != '\'' {
+        return TokenKind.BadToken
+    }
     self.position = self.position + 1
 
-    if bad { return TokenKind.BadToken }
+    if bad {
+        return TokenKind.BadToken
+    }
     if kind == TokenKind.ByteLiteral and codepoint > 255 {
         return TokenKind.BadToken
     }
@@ -736,28 +801,38 @@ fn consume_unicode_escape_value(self: &Lexer) u32? {
         self.position = self.position + 1
         count = count + 1
     }
-    if count == 0 { return null }
-    if value > 0x10FFFF { return null }
+    if count == 0 {
+        return null
+    }
+    if value > 0x10FFFF {
+        return null
+    }
     return Some(value)
 }
 
 fn hex_digit_value(c: u8) u8 {
-    if c >= '0' and c <= '9' { return c - '0' }
-    if c >= 'a' and c <= 'f' { return c - 'a' + 10 }
-    if c >= 'A' and c <= 'F' { return c - 'A' + 10 }
+    if c >= '0' and c <= '9' {
+        return c - '0'
+    }
+    if c >= 'a' and c <= 'f' {
+        return c - 'a' + 10
+    }
+    if c >= 'A' and c <= 'F' {
+        return c - 'A' + 10
+    }
     return 0
 }
 
 fn decode_simple_escape(c: u8) u8 {
     return c match {
-        'n' => '\n' as u8,
-        't' => '\t' as u8,
-        'r' => '\r' as u8,
-        '\\' => '\\' as u8,
-        '"' => '"' as u8,
-        '\'' => '\'' as u8,
-        '0' => 0u8,
-        else => c,
+        'n' => '\n' as u8
+        't' => '\t' as u8
+        'r' => '\r' as u8
+        '\\' => '\\' as u8
+        '"' => '"' as u8
+        '\'' => '\'' as u8
+        '0' => 0u8
+        else => c
     }
 }
 
@@ -775,41 +850,95 @@ fn lex_identifier_or_keyword(self: &Lexer) TokenKind {
 }
 
 fn keyword_or_identifier(word: String) TokenKind {
-    if word == "pub" { return TokenKind.Pub }
-    if word == "fn" { return TokenKind.Fn }
-    if word == "return" { return TokenKind.Return }
-    if word == "let" { return TokenKind.Let }
-    if word == "const" { return TokenKind.Const }
-    if word == "if" { return TokenKind.If }
-    if word == "else" { return TokenKind.Else }
-    if word == "for" { return TokenKind.For }
-    if word == "loop" { return TokenKind.Loop }
-    if word == "while" { return TokenKind.While }
-    if word == "in" { return TokenKind.In }
-    if word == "break" { return TokenKind.Break }
-    if word == "continue" { return TokenKind.Continue }
-    if word == "defer" { return TokenKind.Defer }
-    if word == "import" { return TokenKind.Import }
-    if word == "struct" { return TokenKind.Struct }
-    if word == "enum" { return TokenKind.Enum }
-    if word == "match" { return TokenKind.Match }
-    if word == "as" { return TokenKind.As }
-    if word == "test" { return TokenKind.Test }
-    if word == "type" { return TokenKind.Type }
-    if word == "and" { return TokenKind.And }
-    if word == "or" { return TokenKind.Or }
-    if word == "true" { return TokenKind.True }
-    if word == "false" { return TokenKind.False }
-    if word == "null" { return TokenKind.Null }
-    if word == "_" { return TokenKind.Underscore }
+    if word == "pub" {
+        return TokenKind.Pub
+    }
+    if word == "fn" {
+        return TokenKind.Fn
+    }
+    if word == "return" {
+        return TokenKind.Return
+    }
+    if word == "let" {
+        return TokenKind.Let
+    }
+    if word == "const" {
+        return TokenKind.Const
+    }
+    if word == "if" {
+        return TokenKind.If
+    }
+    if word == "else" {
+        return TokenKind.Else
+    }
+    if word == "for" {
+        return TokenKind.For
+    }
+    if word == "loop" {
+        return TokenKind.Loop
+    }
+    if word == "while" {
+        return TokenKind.While
+    }
+    if word == "in" {
+        return TokenKind.In
+    }
+    if word == "break" {
+        return TokenKind.Break
+    }
+    if word == "continue" {
+        return TokenKind.Continue
+    }
+    if word == "defer" {
+        return TokenKind.Defer
+    }
+    if word == "import" {
+        return TokenKind.Import
+    }
+    if word == "struct" {
+        return TokenKind.Struct
+    }
+    if word == "enum" {
+        return TokenKind.Enum
+    }
+    if word == "match" {
+        return TokenKind.Match
+    }
+    if word == "as" {
+        return TokenKind.As
+    }
+    if word == "test" {
+        return TokenKind.Test
+    }
+    if word == "type" {
+        return TokenKind.Type
+    }
+    if word == "and" {
+        return TokenKind.And
+    }
+    if word == "or" {
+        return TokenKind.Or
+    }
+    if word == "true" {
+        return TokenKind.True
+    }
+    if word == "false" {
+        return TokenKind.False
+    }
+    if word == "null" {
+        return TokenKind.Null
+    }
+    if word == "_" {
+        return TokenKind.Underscore
+    }
     return TokenKind.Identifier
 }
 
 // ─────────────────────────────────────────────────────────────────────────
 // Interpolated strings (RFC-004)
 //
-// State machine over a stack of InterpFrames. The lexer alternates between
-// three modes per active interp:
+// State machine over a stack of InterpFrames. The lexer alternates between three modes per active
+// interp:
 //   - segment    : raw bytes between `"` / `}` and the next `{` / `"`
 //   - hole       : normal token scanning; bracket counters track which `}`
 //                  closes the hole
@@ -845,10 +974,9 @@ fn begin_interp_string(self: &Lexer) Token {
     }
 }
 
-// Scan raw segment bytes. `{` queues InterpHoleStart and switches to
-// hole mode; `"` queues InterpStringEnd and pops the frame. `{{` / `}}`
-// are doubling escapes (consumed here as raw bytes - the segment keeps
-// its raw shape; decode_interp_segment expands them).
+// Scan raw segment bytes. `{` queues InterpHoleStart and switches to hole mode; `"` queues
+// InterpStringEnd and pops the frame. `{{` / `}}` are doubling escapes (consumed here as raw bytes
+// - the segment keeps its raw shape; decode_interp_segment expands them).
 fn lex_segment(self: &Lexer) Token {
     const text = self.source
     const seg_start = self.position
@@ -856,7 +984,9 @@ fn lex_segment(self: &Lexer) Token {
     const frame_idx = self.interp_stack.len - 1
 
     loop {
-        if self.position >= text.len { break }
+        if self.position >= text.len {
+            break
+        }
         const c = text[self.position]
 
         if c == '"' {
@@ -965,7 +1095,9 @@ fn lex_segment(self: &Lexer) Token {
             continue
         }
 
-        if c == '\n' { self.line = self.line + 1 }
+        if c == '\n' {
+            self.line = self.line + 1
+        }
         self.position = self.position + 1
     }
 
@@ -982,15 +1114,17 @@ fn lex_segment(self: &Lexer) Token {
     }
 }
 
-// Scan raw format-spec bytes between `:` and `}`. No escape handling -
-// `{x:.2}` yields spec text `.2`. Closes the hole; queues InterpHoleEnd.
+// Scan raw format-spec bytes between `:` and `}`. No escape handling - `{x:.2}` yields spec text
+// `.2`. Closes the hole; queues InterpHoleEnd.
 fn lex_format_spec(self: &Lexer) Token {
     const text = self.source
     const spec_start = self.position
     const spec_line = self.line
     const frame_idx = self.interp_stack.len - 1
     while self.position < text.len and text[self.position] != '}' and text[self.position] != '"' {
-        if text[self.position] == '\n' { self.line = self.line + 1 }
+        if text[self.position] == '\n' {
+            self.line = self.line + 1
+        }
         self.position = self.position + 1
     }
     if self.position >= text.len or text[self.position] == '"' {
@@ -1100,40 +1234,40 @@ fn empty_token(allocator: &Allocator?) Token {
 }
 
 // ─────────────────────────────────────────────────────────────────────────
-// Literal decoders - CST holds raw source slices; AST projection calls
-// these to materialise the runtime value of a literal.
+// Literal decoders - CST holds raw source slices; AST projection calls these to materialise the
+// runtime value of a literal.
 // ─────────────────────────────────────────────────────────────────────────
 
-// Materialise a `"..."` literal's runtime byte value: strip the quotes
-// and expand every escape (`\n`, `\t`, `\r`, `\\`, `\"`, `\'`, `\0`,
-// and `\uXXXX` UTF-8-encoded). `raw` must be the full lexed slice
-// including both quote characters; pass `Token.text` directly.
+// Materialise a `"..."` literal's runtime byte value: strip the quotes and expand every escape
+// (`\n`, `\t`, `\r`, `\\`, `\"`, `\'`, `\0`, and `\uXXXX` UTF-8-encoded). `raw` must be the full
+// lexed slice including both quote characters; pass `Token.text` directly.
 //
 // Returns `null` on:
 //   - missing or mismatched outer quotes
 //   - `\u` with no hex digits, more than 6 digits, or codepoint > 0x10FFFF
-// The same conditions cause the lexer to mark the token `BadToken`,
-// so well-formed `StringLiteral` tokens always decode to `Some`.
+// The same conditions cause the lexer to mark the token `BadToken`, so well-formed `StringLiteral`
+// tokens always decode to `Some`.
 //
-// The returned `OwnedString` owns its buffer - caller must `.deinit()`.
-// `allocator` backs that buffer; pass `null` to default to the global
-// allocator (or the test allocator under test).
+// The returned `OwnedString` owns its buffer - caller must `.deinit()`. `allocator` backs that
+// buffer; pass `null` to default to the global allocator (or the test allocator under test).
 pub fn decode_string_literal(raw: String, allocator: &Allocator? = null) OwnedString? {
-    if raw.len < 2 { return null }
-    if raw[0] != '"' or raw[raw.len - 1] != '"' { return null }
+    if raw.len < 2 {
+        return null
+    }
+    if raw[0] != '"' or raw[raw.len - 1] != '"' {
+        return null
+    }
     return decode_quoted_run(raw, 1, raw.len - 1, allocator)
 }
 
-// Same decode for text already stripped of its quotes - the form the AST
-// stores (`StringLiteral.text`). Escape vocabulary and failure conditions
-// match `decode_string_literal`.
+// Same decode for text already stripped of its quotes - the form the AST stores
+// (`StringLiteral.text`). Escape vocabulary and failure conditions match `decode_string_literal`.
 pub fn decode_string_text(raw: String, allocator: &Allocator? = null) OwnedString? {
     return decode_quoted_run(raw, 0, raw.len, allocator)
 }
 
-// Materialise a `'c'` or `b'c'` literal to its codepoint (char) or
-// byte value. `raw` must be the full lexed slice including the
-// quotes (and the leading `b` for byte literals); pass `Token.text`
+// Materialise a `'c'` or `b'c'` literal to its codepoint (char) or byte value. `raw` must be the
+// full lexed slice including the quotes (and the leading `b` for byte literals); pass `Token.text`
 // directly.
 //
 // Returns `null` on:
@@ -1143,29 +1277,41 @@ pub fn decode_string_text(raw: String, allocator: &Allocator? = null) OwnedStrin
 //   - `\u` inside a byte literal (always rejected)
 //   - byte-literal value > 255
 //   - malformed UTF-8 in the payload
-// These match the lexer's BadToken conditions, so well-formed
-// `CharLiteral` / `ByteLiteral` tokens always decode to `Some`.
+// These match the lexer's BadToken conditions, so well-formed `CharLiteral` / `ByteLiteral` tokens
+// always decode to `Some`.
 pub fn decode_char_literal(raw: String) u32? {
-    if raw.len < 3 { return null }
+    if raw.len < 3 {
+        return null
+    }
     let inner_start = 1usize
     let kind_is_byte = false
     if raw[0] == 'b' {
         kind_is_byte = true
-        if raw[1] != '\'' { return null }
+        if raw[1] != '\'' {
+            return null
+        }
         inner_start = 2
     } else if raw[0] != '\'' {
         return null
     }
-    if raw[raw.len - 1] != '\'' { return null }
-    if inner_start >= raw.len - 1 { return null }
+    if raw[raw.len - 1] != '\'' {
+        return null
+    }
+    if inner_start >= raw.len - 1 {
+        return null
+    }
 
     let i = inner_start
     let cp: u32 = 0
     if raw[i] == '\\' {
-        if i + 1 >= raw.len - 1 { return null }
+        if i + 1 >= raw.len - 1 {
+            return null
+        }
         const esc = raw[i + 1]
         if esc == 'u' {
-            if kind_is_byte { return null }
+            if kind_is_byte {
+                return null
+            }
             let j = i + 2
             let value: u32 = 0
             let count = 0usize
@@ -1174,26 +1320,42 @@ pub fn decode_char_literal(raw: String) u32? {
                 j = j + 1
                 count = count + 1
             }
-            if count == 0 or value > 0x10FFFF { return null }
-            if j != raw.len - 1 { return null }
+            if count == 0 or value > 0x10FFFF {
+                return null
+            }
+            if j != raw.len - 1 {
+                return null
+            }
             cp = value
         } else {
             cp = decode_simple_escape(esc) as u32
-            if i + 2 != raw.len - 1 { return null }
+            if i + 2 != raw.len - 1 {
+                return null
+            }
         }
     } else {
         const first = raw[i]
         let extra = 0usize
-        if first >= 0xF0 { extra = 3 }
-        else if first >= 0xE0 { extra = 2 }
-        else if first >= 0xC0 { extra = 1 }
-        if i + 1 + extra != raw.len - 1 { return null }
+        if first >= 0xF0 {
+            extra = 3
+        }
+        else if first >= 0xE0 {
+            extra = 2
+        }
+        else if first >= 0xC0 {
+            extra = 1
+        }
+        if i + 1 + extra != raw.len - 1 {
+            return null
+        }
         cp = first as u32
         let k = 0usize
         while k < extra {
             const cont = raw[i + 1 + k]
             const masked = cont & 0xC0
-            if masked != 0x80 { return null }
+            if masked != 0x80 {
+                return null
+            }
             const lower = (cont & 0x3F) as u32
             cp = (cp << 6) | lower
             k = k + 1
@@ -1207,20 +1369,22 @@ pub fn decode_char_literal(raw: String) u32? {
         }
     }
 
-    if kind_is_byte and cp > 255 { return null }
-    if cp > 0x10FFFF { return null }
+    if kind_is_byte and cp > 255 {
+        return null
+    }
+    if cp > 0x10FFFF {
+        return null
+    }
     return Some(cp)
 }
 
-// Materialise an `InterpSegment` token's runtime bytes. Same escape
-// vocabulary as `decode_string_literal`, plus segment-only `{{` and
-// `}}` doubling that decode to a single `{` / `}`. `raw` is the
-// segment text exactly as the lexer captured it (no quotes - segments
-// have no surrounding delimiters).
+// Materialise an `InterpSegment` token's runtime bytes. Same escape vocabulary as
+// `decode_string_literal`, plus segment-only `{{` and `}}` doubling that decode to a single `{` /
+// `}`. `raw` is the segment text exactly as the lexer captured it (no quotes - segments have no
+// surrounding delimiters).
 //
-// Returns `null` on a malformed `\uXXXX` escape; otherwise the
-// caller-owned decoded buffer. `allocator` backs that buffer; pass
-// `null` to default to the global allocator.
+// Returns `null` on a malformed `\uXXXX` escape; otherwise the caller-owned decoded buffer.
+// `allocator` backs that buffer; pass `null` to default to the global allocator.
 pub fn decode_interp_segment(raw: String, allocator: &Allocator? = null) OwnedString? {
     let sb = string_builder(raw.len, allocator)
     defer sb.deinit()
@@ -1286,7 +1450,9 @@ fn append_unicode_escape(sb: &StringBuilder, raw: String, lo: usize, hi: usize) 
         j = j + 1
         count = count + 1
     }
-    if count == 0 or value > 0x10FFFF { return false }
+    if count == 0 or value > 0x10FFFF {
+        return false
+    }
     let buf = [0u8; 4]
     const n = encode_char(value as char, buf as u8[])
     let k = 0usize

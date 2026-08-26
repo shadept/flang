@@ -34,8 +34,8 @@ const I64_MIN_ABS: u64 = 0x8000_0000_0000_0000
 //   base 16:  16 bytes
 //   base 8:   22 bytes
 //   base 2:   64 bytes
-// When unsure, a 64-byte buffer fits any supported base. Returns
-// `Err(BufferTooSmall)` if `buf` is too short.
+// When unsure, a 64-byte buffer fits any supported base. Returns `Err(BufferTooSmall)` if `buf` is
+// too short.
 pub fn format_u64(val: u64, buf: u8[], base: u8 = 10) Result(usize, ConvError) {
     if base < 2 or base > 16 {
         return Err(ConvError.InvalidBase)
@@ -80,16 +80,15 @@ pub fn format_u64(val: u64, buf: u8[], base: u8 = 10) Result(usize, ConvError) {
 
 // Format a signed 64-bit integer into `buf`. Returns bytes written.
 // Supports bases 2–16. Lowercase a–f for hex. A leading '-' is emitted for
-// negative values in every base (the absolute magnitude is rendered in the
-// requested base - no two's-complement bit pattern).
+// negative values in every base (the absolute magnitude is rendered in the requested base - no
+// two's-complement bit pattern).
 //
 // Required buffer capacity (upper bounds, includes room for the sign):
 //   base 10:  21 bytes
 //   base 16:  17 bytes
 //   base 8:   23 bytes
 //   base 2:   65 bytes
-// A 65-byte buffer fits any supported base. Returns `Err(BufferTooSmall)` if
-// `buf` is too short.
+// A 65-byte buffer fits any supported base. Returns `Err(BufferTooSmall)` if `buf` is too short.
 pub fn format_i64(val: i64, buf: u8[], base: u8 = 10) Result(usize, ConvError) {
     if base < 2 or base > 16 {
         return Err(ConvError.InvalidBase)
@@ -109,26 +108,25 @@ pub fn format_i64(val: i64, buf: u8[], base: u8 = 10) Result(usize, ConvError) {
 
     const result = format_u64(abs_val, buf[offset..], base)
     return result match {
-        Ok(written) => Ok(offset + written),
+        Ok(written) => Ok(offset + written)
         Err(e) => Err(e)
     }
 }
 
 // Format an f64 into `buf` as `[-]int[.frac]`. Returns bytes written.
 //
-// `precision` caps the fractional digits (default 6). When `trim_zeros` is
-// true, trailing zeros are removed and the decimal point is omitted if the
-// fractional part collapses to empty.
+// `precision` caps the fractional digits (default 6). When `trim_zeros` is true, trailing zeros are
+// removed and the decimal point is omitted if the fractional part collapses to empty.
 //
-// Required buffer capacity: `23 + precision` bytes in the worst case
-// (1 sign + 21 integer digits + '.' + precision fractional digits). The
-// default precision of 6 fits in 29 bytes; 48 bytes is a safe default for
-// any precision up to ~25. Returns `Err(BufferTooSmall)` if `buf` is short.
+// Required buffer capacity: `23 + precision` bytes in the worst case (1 sign + 21 integer digits +
+// '.' + precision fractional digits). The default precision of 6 fits in 29 bytes; 48 bytes is a
+// safe default for any precision up to ~25. Returns `Err(BufferTooSmall)` if `buf` is short.
 //
-// Caveat: the integer portion is extracted via `as u64`, so values whose
-// magnitude exceeds 2^64 aren't representable and will truncate. Non-finite
-// inputs (NaN, infinity) aren't handled specially.
-pub fn format_f64(val: f64, buf: u8[], precision: usize = 6, trim_zeros: bool = true) Result(usize, ConvError) {
+// Caveat: the integer portion is extracted via `as u64`, so values whose magnitude exceeds 2^64
+// aren't representable and will truncate. Non-finite inputs (NaN, infinity) aren't handled
+// specially.
+pub fn format_f64(val: f64, buf: u8[], precision: usize = 6, trim_zeros: bool = true) Result(usize,
+    ConvError) {
     let abs_val = val
     let negative = false
     if val < 0.0 {
@@ -166,8 +164,12 @@ pub fn format_f64(val: f64, buf: u8[], precision: usize = 6, trim_zeros: bool = 
     }
 
     let needed: usize = int_len + frac_len
-    if negative { needed = needed + 1 }
-    if frac_len > 0 { needed = needed + 1 } // '.'
+    if negative {
+        needed = needed + 1
+    }
+    if frac_len > 0 {
+        needed = needed + 1
+    } // '.'
     if buf.len < needed {
         return Err(ConvError.BufferTooSmall)
     }
@@ -214,11 +216,10 @@ fn write_word(buf: u8[], w: String) Result(usize, ConvError) {
 // `[-]0x1.<mant>p<±exp>` (normal), `[-]0x0.<mant>p-1022` (denormal),
 // `[-]0x0p+0` (zero); non-finite values write `nan` / `inf` / `-inf`.
 //
-// This is the EXACT representation: the text encodes the bit pattern
-// directly (no decimal rounding anywhere), so parsing it - by a C99
-// compiler or `%a`-aware reader - recovers the identical value. Use it
-// wherever a double must round-trip; `format_f64` and `format_f64_exp`
-// are decimal renderings with finite precision.
+// This is the EXACT representation: the text encodes the bit pattern directly (no decimal rounding
+// anywhere), so parsing it - by a C99 compiler or `%a`-aware reader - recovers the identical value.
+// Use it wherever a double must round-trip; `format_f64` and `format_f64_exp` are decimal
+// renderings with finite precision.
 //
 // Required buffer capacity: 25 bytes worst case
 // (sign + "0x1." + 13 mantissa nibbles + "p-1022").
@@ -229,26 +230,39 @@ pub fn format_f64_hex(val: f64, buf: u8[]) Result(usize, ConvError) {
     let mant = bits & 0xF_FFFF_FFFF_FFFF
 
     if biased == 0x7FF {
-        if mant != 0 { return write_word(buf, "nan") }
-        if negative { return write_word(buf, "-inf") }
+        if mant != 0 {
+            return write_word(buf, "nan")
+        }
+        if negative {
+            return write_word(buf, "-inf")
+        }
         return write_word(buf, "inf")
     }
 
     let tmp = [0u8; 32]
     let pos: usize = 0
-    if negative { tmp[pos] = '-'; pos = pos + 1 }
-    tmp[pos] = '0'; pos = pos + 1
-    tmp[pos] = 'x'; pos = pos + 1
+    if negative {
+        tmp[pos] = '-'
+        pos = pos + 1
+    }
+    tmp[pos] = '0'
+    pos = pos + 1
+    tmp[pos] = 'x'
+    pos = pos + 1
 
-    // Leading digit and unbiased exponent: normals are 1.<mant> * 2^(b-1023),
-    // denormals 0.<mant> * 2^-1022, zero is all-zero bits.
+    // Leading digit and unbiased exponent: normals are 1.<mant> * 2^(b-1023), denormals 0.<mant> *
+    // 2^-1022, zero is all-zero bits.
     let exp: i64 = 0
     if biased == 0 {
-        tmp[pos] = '0'; pos = pos + 1
+        tmp[pos] = '0'
+        pos = pos + 1
         exp = 0 - 1022
-        if mant == 0 { exp = 0 }
+        if mant == 0 {
+            exp = 0
+        }
     } else {
-        tmp[pos] = '1'; pos = pos + 1
+        tmp[pos] = '1'
+        pos = pos + 1
         exp = biased - 1023
     }
 
@@ -259,7 +273,8 @@ pub fn format_f64_hex(val: f64, buf: u8[]) Result(usize, ConvError) {
             mant = mant >> 4
             nibbles = nibbles - 1
         }
-        tmp[pos] = '.'; pos = pos + 1
+        tmp[pos] = '.'
+        pos = pos + 1
         let shift = (nibbles - 1) * 4
         for i in 0..nibbles {
             const n = ((mant >> ((shift - i * 4) as u64)) & 0xF) as u8
@@ -268,12 +283,15 @@ pub fn format_f64_hex(val: f64, buf: u8[]) Result(usize, ConvError) {
         }
     }
 
-    tmp[pos] = 'p'; pos = pos + 1
+    tmp[pos] = 'p'
+    pos = pos + 1
     if exp < 0 {
-        tmp[pos] = '-'; pos = pos + 1
+        tmp[pos] = '-'
+        pos = pos + 1
         exp = 0 - exp
     } else {
-        tmp[pos] = '+'; pos = pos + 1
+        tmp[pos] = '+'
+        pos = pos + 1
     }
     const elen = format_u64(exp as u64, tmp[pos..]).unwrap()
     pos = pos + elen
@@ -286,44 +304,84 @@ pub fn format_f64_hex(val: f64, buf: u8[]) Result(usize, ConvError) {
 }
 
 // Format an f64 in scientific notation: `[-]d.<precision digits>e±XX`
-// (two exponent digits minimum, more when needed); non-finite values
-// write `nan` / `inf` / `-inf`. `uppercase` selects `E`.
+// (two exponent digits minimum, more when needed); non-finite values write `nan` / `inf` / `-inf`.
+// `uppercase` selects `E`.
 //
-// Decimal, not exact: the value is scaled by powers of ten in binary
-// floating point, so the 16th-17th significant digit can be off by an
-// ulp or two at extreme magnitudes. 17 significant digits are the most
-// the scaling supports; a larger `precision` pads zeros. For a
-// guaranteed round-trip use `format_f64_hex`.
+// Decimal, not exact: the value is scaled by powers of ten in binary floating point, so the
+// 16th-17th significant digit can be off by an ulp or two at extreme magnitudes. 17 significant
+// digits are the most the scaling supports; a larger `precision` pads zeros. For a guaranteed
+// round-trip use `format_f64_hex`.
 //
 // Required buffer capacity: `precision + 9` bytes
 // (sign + digit + '.' + precision + 'e' + sign + 3 exponent digits).
-pub fn format_f64_exp(val: f64, buf: u8[], precision: usize = 6, uppercase: bool = false) Result(usize, ConvError) {
-    if val != val { return write_word(buf, "nan") }
-    // Infinity test without a DBL_MAX literal: `v * 0.5 == v` holds only
-    // for 0 and the infinities (a DBL_MAX-magnitude literal is the one
-    // shape the self-host parse_float can round to inf - see lower.f).
-    if val * 0.5 == val and val != 0.0 { return write_word(buf, if val > 0.0 { "inf" } else { "-inf" }) }
+pub fn format_f64_exp(val: f64, buf: u8[], precision: usize = 6,
+    uppercase: bool = false) Result(usize, ConvError) {
+    if val != val {
+        return write_word(buf, "nan")
+    }
+    // Infinity test without a DBL_MAX literal: `v * 0.5 == v` holds only for 0 and the infinities
+    // (a DBL_MAX-magnitude literal is the one shape the self-host parse_float can round to inf -
+    // see lower.f).
+    if val * 0.5 == val and val != 0.0 {
+        return write_word(buf, if val > 0.0 { "inf" } else { "-inf" })
+    }
 
     const negative = val < 0.0
     let d = if negative { 0.0 - val } else { val }
 
-    // Scale into [1, 10). Big steps first so the whole walk is a handful
-    // of roundings (308 = 256 + 32 + 16 + 4), plus single-step loops for
-    // the remainder and for values the big steps overshoot.
+    // Scale into [1, 10). Big steps first so the whole walk is a handful of roundings (308 = 256 +
+    // 32 + 16 + 4), plus single-step loops for the remainder and for values the big steps
+    // overshoot.
     let exp: i64 = 0
     if d != 0.0 {
-        if d >= 1e256 { d = d / 1e256; exp = exp + 256 }
-        if d >= 1e128 { d = d / 1e128; exp = exp + 128 }
-        if d >= 1e64 { d = d / 1e64; exp = exp + 64 }
-        if d >= 1e32 { d = d / 1e32; exp = exp + 32 }
-        if d >= 1e16 { d = d / 1e16; exp = exp + 16 }
-        if d < 1e-255 { d = d * 1e256; exp = exp - 256 }
-        if d < 1e-127 { d = d * 1e128; exp = exp - 128 }
-        if d < 1e-63 { d = d * 1e64; exp = exp - 64 }
-        if d < 1e-31 { d = d * 1e32; exp = exp - 32 }
-        if d < 1e-15 { d = d * 1e16; exp = exp - 16 }
-        while d >= 10.0 { d = d / 10.0; exp = exp + 1 }
-        while d < 1.0 { d = d * 10.0; exp = exp - 1 }
+        if d >= 1e256 {
+            d = d / 1e256
+            exp = exp + 256
+        }
+        if d >= 1e128 {
+            d = d / 1e128
+            exp = exp + 128
+        }
+        if d >= 1e64 {
+            d = d / 1e64
+            exp = exp + 64
+        }
+        if d >= 1e32 {
+            d = d / 1e32
+            exp = exp + 32
+        }
+        if d >= 1e16 {
+            d = d / 1e16
+            exp = exp + 16
+        }
+        if d < 1e-255 {
+            d = d * 1e256
+            exp = exp - 256
+        }
+        if d < 1e-127 {
+            d = d * 1e128
+            exp = exp - 128
+        }
+        if d < 1e-63 {
+            d = d * 1e64
+            exp = exp - 64
+        }
+        if d < 1e-31 {
+            d = d * 1e32
+            exp = exp - 32
+        }
+        if d < 1e-15 {
+            d = d * 1e16
+            exp = exp - 16
+        }
+        while d >= 10.0 {
+            d = d / 10.0
+            exp = exp + 1
+        }
+        while d < 1.0 {
+            d = d * 10.0
+            exp = exp - 1
+        }
     }
 
     // Half-ulp-of-last-digit rounding, then re-normalize the carry
@@ -335,17 +393,25 @@ pub fn format_f64_exp(val: f64, buf: u8[], precision: usize = 6, uppercase: bool
     }
     if d != 0.0 {
         d = d + round
-        if d >= 10.0 { d = d / 10.0; exp = exp + 1 }
+        if d >= 10.0 {
+            d = d / 10.0
+            exp = exp + 1
+        }
     }
 
     let tmp = [0u8; 64]
     let pos: usize = 0
-    if negative { tmp[pos] = '-'; pos = pos + 1 }
+    if negative {
+        tmp[pos] = '-'
+        pos = pos + 1
+    }
     let lead = d as u64
-    tmp[pos] = '0' + (lead as u8); pos = pos + 1
+    tmp[pos] = '0' + (lead as u8)
+    pos = pos + 1
     d = d - (lead as f64)
     if precision > 0 {
-        tmp[pos] = '.'; pos = pos + 1
+        tmp[pos] = '.'
+        pos = pos + 1
         for i in 0..precision {
             if i < emit_digits {
                 d = d * 10.0
@@ -362,13 +428,16 @@ pub fn format_f64_exp(val: f64, buf: u8[], precision: usize = 6, uppercase: bool
     tmp[pos] = if uppercase { 'E' } else { 'e' }
     pos = pos + 1
     if exp < 0 {
-        tmp[pos] = '-'; pos = pos + 1
+        tmp[pos] = '-'
+        pos = pos + 1
         exp = 0 - exp
     } else {
-        tmp[pos] = '+'; pos = pos + 1
+        tmp[pos] = '+'
+        pos = pos + 1
     }
     if exp < 10 {
-        tmp[pos] = '0'; pos = pos + 1
+        tmp[pos] = '0'
+        pos = pos + 1
     }
     const elen = format_u64(exp as u64, tmp[pos..]).unwrap()
     pos = pos + elen
@@ -384,8 +453,7 @@ pub fn format_f64_exp(val: f64, buf: u8[], precision: usize = 6, uppercase: bool
 // Buffer → Integer
 // =============================================================================
 
-// Parse an unsigned 64-bit integer from a byte buffer.
-// Returns (value, bytes_consumed).
+// Parse an unsigned 64-bit integer from a byte buffer. Returns (value, bytes_consumed).
 pub fn parse_u64(s: u8[], base: u8 = 10) Result((u64, usize), ConvError) {
     if base < 2 or base > 16 {
         return Err(ConvError.InvalidBase)
@@ -416,7 +484,9 @@ pub fn parse_u64(s: u8[], base: u8 = 10) Result((u64, usize), ConvError) {
             valid = digit_val < base_u64
         }
 
-        if valid == false { break }
+        if valid == false {
+            break
+        }
 
         // Overflow check: value * base + digit > U64_MAX
         if value > max_before_mul {
@@ -437,8 +507,7 @@ pub fn parse_u64(s: u8[], base: u8 = 10) Result((u64, usize), ConvError) {
     return Ok((value, consumed))
 }
 
-// Parse a signed 64-bit integer from a byte buffer.
-// Returns (value, bytes_consumed).
+// Parse a signed 64-bit integer from a byte buffer. Returns (value, bytes_consumed).
 pub fn parse_i64(s: u8[], base: u8 = 10) Result((i64, usize), ConvError) {
     if base < 2 or base > 16 {
         return Err(ConvError.InvalidBase)
@@ -493,7 +562,7 @@ pub fn parse_i64(s: u8[], base: u8 = 10) Result((i64, usize), ConvError) {
 // Parse a u8. Returns (value, bytes_consumed) with value guaranteed <= 0xFF.
 pub fn parse_u8(s: u8[], base: u8 = 10) Result((u64, usize), ConvError) {
     return parse_u64(s, base) match {
-        Ok(p) => if p.0 > 0xFF { Err(ConvError.Overflow) } else { Ok(p) },
+        Ok(p) => if p.0 > 0xFF { Err(ConvError.Overflow) } else { Ok(p) }
         Err(e) => Err(e)
     }
 }
@@ -501,7 +570,7 @@ pub fn parse_u8(s: u8[], base: u8 = 10) Result((u64, usize), ConvError) {
 // Parse a u16. Returns (value, bytes_consumed) with value guaranteed <= 0xFFFF.
 pub fn parse_u16(s: u8[], base: u8 = 10) Result((u64, usize), ConvError) {
     return parse_u64(s, base) match {
-        Ok(p) => if p.0 > 0xFFFF { Err(ConvError.Overflow) } else { Ok(p) },
+        Ok(p) => if p.0 > 0xFFFF { Err(ConvError.Overflow) } else { Ok(p) }
         Err(e) => Err(e)
     }
 }
@@ -509,7 +578,7 @@ pub fn parse_u16(s: u8[], base: u8 = 10) Result((u64, usize), ConvError) {
 // Parse a u32. Returns (value, bytes_consumed) with value guaranteed <= 0xFFFF_FFFF.
 pub fn parse_u32(s: u8[], base: u8 = 10) Result((u64, usize), ConvError) {
     return parse_u64(s, base) match {
-        Ok(p) => if p.0 > 0xFFFF_FFFF { Err(ConvError.Overflow) } else { Ok(p) },
+        Ok(p) => if p.0 > 0xFFFF_FFFF { Err(ConvError.Overflow) } else { Ok(p) }
         Err(e) => Err(e)
     }
 }
@@ -522,7 +591,7 @@ pub fn parse_usize(s: u8[], base: u8 = 10) Result((u64, usize), ConvError) {
 // Parse an i8. Returns (value, bytes_consumed) with value guaranteed in [-128, 127].
 pub fn parse_i8(s: u8[], base: u8 = 10) Result((i64, usize), ConvError) {
     return parse_i64(s, base) match {
-        Ok(p) => if p.0 < -128i64 or p.0 > 127i64 { Err(ConvError.Overflow) } else { Ok(p) },
+        Ok(p) => if p.0 < -128i64 or p.0 > 127i64 { Err(ConvError.Overflow) } else { Ok(p) }
         Err(e) => Err(e)
     }
 }
@@ -530,7 +599,7 @@ pub fn parse_i8(s: u8[], base: u8 = 10) Result((i64, usize), ConvError) {
 // Parse an i16. Returns (value, bytes_consumed) with value guaranteed in [-32768, 32767].
 pub fn parse_i16(s: u8[], base: u8 = 10) Result((i64, usize), ConvError) {
     return parse_i64(s, base) match {
-        Ok(p) => if p.0 < -32768 or p.0 > 32767 { Err(ConvError.Overflow) } else { Ok(p) },
+        Ok(p) => if p.0 < -32768 or p.0 > 32767 { Err(ConvError.Overflow) } else { Ok(p) }
         Err(e) => Err(e)
     }
 }
@@ -538,7 +607,7 @@ pub fn parse_i16(s: u8[], base: u8 = 10) Result((i64, usize), ConvError) {
 // Parse an i32. Returns (value, bytes_consumed) with value guaranteed in [-2147483648, 2147483647].
 pub fn parse_i32(s: u8[], base: u8 = 10) Result((i64, usize), ConvError) {
     return parse_i64(s, base) match {
-        Ok(p) => if p.0 < -2147483648 or p.0 > 2147483647 { Err(ConvError.Overflow) } else { Ok(p) },
+        Ok(p) => if p.0 < -2147483648 or p.0 > 2147483647 { Err(ConvError.Overflow) } else { Ok(p) }
         Err(e) => Err(e)
     }
 }
@@ -553,8 +622,8 @@ pub fn parse_isize(s: u8[], base: u8 = 10) Result((i64, usize), ConvError) {
 // =============================================================================
 
 // Parse a 64-bit float from a byte buffer.
-// Handles: optional sign, integer digits, fractional part, exponent (e/E).
-// Returns (value, bytes_consumed).
+// Handles: optional sign, integer digits, fractional part, exponent (e/E). Returns (value,
+// bytes_consumed).
 pub fn parse_f64(s: u8[]) Result((f64, usize), ConvError) {
     if s.len == 0 {
         return Err(ConvError.InvalidInput)
@@ -621,7 +690,9 @@ pub fn parse_f64(s: u8[]) Result((f64, usize), ConvError) {
             if has_exp_digits == false {
                 return Err(ConvError.InvalidInput)
             }
-            if exp_negative { exp = 0 - exp }
+            if exp_negative {
+                exp = 0 - exp
+            }
             // Apply 10^exp
             let abs_exp = if exp < 0 { 0 - exp } else { exp }
             let mul = 1.0
@@ -650,14 +721,18 @@ pub fn parse_f64(s: u8[]) Result((f64, usize), ConvError) {
 // Format a boolean into buf ("true" or "false"). Returns bytes written.
 pub fn format_bool(val: bool, buf: u8[]) Result(usize, ConvError) {
     if val {
-        if buf.len < 4 { return Err(ConvError.BufferTooSmall) }
+        if buf.len < 4 {
+            return Err(ConvError.BufferTooSmall)
+        }
         buf[0] = 't'
         buf[1] = 'r'
         buf[2] = 'u'
         buf[3] = 'e'
         return Ok(4usize)
     }
-    if buf.len < 5 { return Err(ConvError.BufferTooSmall) }
+    if buf.len < 5 {
+        return Err(ConvError.BufferTooSmall)
+    }
     buf[0] = 'f'
     buf[1] = 'a'
     buf[2] = 'l'

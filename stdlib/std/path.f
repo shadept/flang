@@ -1,9 +1,8 @@
 // std.path - cross-platform path manipulation.
 //
-// `Path` is an owning newtype wrapping a byte buffer. Queries (parent,
-// file_name, file_stem, extension, components) return zero-alloc String
-// views into the path's own storage - they remain valid until the Path
-// is mutated or deinitialized. Operations that produce a new path (join,
+// `Path` is an owning newtype wrapping a byte buffer. Queries (parent, file_name, file_stem,
+// extension, components) return zero-alloc String views into the path's own storage - they remain
+// valid until the Path is mutated or deinitialized. Operations that produce a new path (join,
 // with_extension, normalize, to_absolute, cwd) may allocate.
 //
 // Separator handling:
@@ -70,10 +69,9 @@ pub fn path(s: String, allocator: &Allocator? = null) Path {
     return .{ __sb = sb }
 }
 
-// Takes ownership of `s` - the OwnedString is deinitialized on return.
-// OwnedString and StringBuilder have different shapes (no cap field on
-// OwnedString), so the bytes are copied rather than re-attached. Callers
-// that care about avoiding the copy should build into a StringBuilder
+// Takes ownership of `s` - the OwnedString is deinitialized on return. OwnedString and
+// StringBuilder have different shapes (no cap field on OwnedString), so the bytes are copied rather
+// than re-attached. Callers that care about avoiding the copy should build into a StringBuilder
 // directly and skip the OwnedString entirely.
 pub fn path_from_owned(s: &OwnedString) Path {
     const alloc = s.allocator
@@ -121,11 +119,15 @@ pub fn is_empty(self: &Path) bool {
 
 pub fn is_absolute(self: &Path) bool {
     const v = self.as_view()
-    if v.len == 0 { return false }
-    if is_separator(v[0]) { return true }
+    if v.len == 0 {
+        return false
+    }
+    if is_separator(v[0]) {
+        return true
+    }
     #if platform.os == "windows" {
-        // Drive-letter path: "C:\foo" or "C:/foo". A bare "C:" is treated as
-        // drive-relative, not absolute.
+        // Drive-letter path: "C:\foo" or "C:/foo". A bare "C:" is treated as drive-relative, not
+        // absolute.
         if v.len >= 3 and is_drive_letter(v[0]) and v[1] == ':' and is_separator(v[2]) {
             return true
         }
@@ -137,15 +139,17 @@ pub fn is_relative(self: &Path) bool {
     return !self.is_absolute()
 }
 
-// Returns the parent of this path, or null if there is no parent component.
-// Trailing separators are ignored. The root keeps its leading separator:
+// Returns the parent of this path, or null if there is no parent component. Trailing separators are
+// ignored. The root keeps its leading separator:
 //   "/foo/bar" -> "/foo"
 //   "/foo"     -> "/"
 //   "foo"      -> null
 //   "/"        -> null
 pub fn parent(self: &Path) String? {
     const v = self.as_view()
-    if v.len == 0 { return null }
+    if v.len == 0 {
+        return null
+    }
 
     // Trim trailing separators before searching.
     let end = v.len
@@ -172,12 +176,16 @@ pub fn parent(self: &Path) String? {
     return null
 }
 
-// Returns the final component as a String view, or null if the path ends in
-// a separator or is empty.
+// Returns the final component as a String view, or null if the path ends in a separator or is
+// empty.
 pub fn file_name(self: &Path) String? {
     const v = self.as_view()
-    if v.len == 0 { return null }
-    if is_separator(v[v.len - 1]) { return null }
+    if v.len == 0 {
+        return null
+    }
+    if is_separator(v[v.len - 1]) {
+        return null
+    }
 
     let i: usize = v.len
     while i > 0 {
@@ -186,8 +194,8 @@ pub fn file_name(self: &Path) String? {
             return Some(v[i + 1..])
         }
     }
-    // No separator: whole path is the file name. Skip a leading drive letter
-    // ("C:foo" -> "foo") on Windows.
+    // No separator: whole path is the file name. Skip a leading drive letter ("C:foo" -> "foo") on
+    // Windows.
     #if platform.os == "windows" {
         if v.len >= 2 and is_drive_letter(v[0]) and v[1] == ':' {
             return Some(v[2..])
@@ -196,14 +204,17 @@ pub fn file_name(self: &Path) String? {
     return Some(v)
 }
 
-// Returns the file name without its trailing extension.
-// Dotfiles ("/.bashrc") are considered to have no extension - the stem is
-// the whole file name.
+// Returns the file name without its trailing extension. Dotfiles ("/.bashrc") are considered to
+// have no extension - the stem is the whole file name.
 pub fn file_stem(self: &Path) String? {
     const fname_opt = self.file_name()
-    if fname_opt.is_none() { return null }
+    if fname_opt.is_none() {
+        return null
+    }
     const fname = fname_opt.unwrap()
-    if fname.len == 0 { return null }
+    if fname.len == 0 {
+        return null
+    }
 
     let i: usize = fname.len
     while i > 0 {
@@ -226,15 +237,21 @@ pub fn file_stem(self: &Path) String? {
 //   "a.tar.gz"  -> "gz"
 pub fn extension(self: &Path) String? {
     const fname_opt = self.file_name()
-    if fname_opt.is_none() { return null }
+    if fname_opt.is_none() {
+        return null
+    }
     const fname = fname_opt.unwrap()
-    if fname.len == 0 { return null }
+    if fname.len == 0 {
+        return null
+    }
 
     let i: usize = fname.len
     while i > 0 {
         i = i - 1
         if fname[i] == '.' {
-            if i == 0 { return null }
+            if i == 0 {
+                return null
+            }
             return Some(fname[i + 1..])
         }
     }
@@ -245,9 +262,9 @@ pub fn extension(self: &Path) String? {
 // Components iterator
 // =============================================================================
 //
-// Yields each non-empty path segment as a String view into the path's
-// storage. Consecutive separators (and any leading root) are skipped - use
-// is_absolute() if you need to distinguish "/foo/bar" from "foo/bar".
+// Yields each non-empty path segment as a String view into the path's storage. Consecutive
+// separators (and any leading root) are skipped - use is_absolute() if you need to distinguish
+// "/foo/bar" from "foo/bar".
 //
 //   for c in p.components() { ... }
 
@@ -271,7 +288,9 @@ pub fn next(self: &PathComponents) String? {
     while self.pos < self.bytes.len and is_separator(self.bytes[self.pos]) {
         self.pos = self.pos + 1
     }
-    if self.pos >= self.bytes.len { return null }
+    if self.pos >= self.bytes.len {
+        return null
+    }
 
     const start = self.pos
     while self.pos < self.bytes.len and !is_separator(self.bytes[self.pos]) {
@@ -284,8 +303,8 @@ pub fn next(self: &PathComponents) String? {
 // Allocating operations
 // =============================================================================
 
-// Append `other` as a new component. If `other` is absolute, the result is
-// just `other`. Uses self's allocator for the new path.
+// Append `other` as a new component. If `other` is absolute, the result is just `other`. Uses
+// self's allocator for the new path.
 pub fn join(self: &Path, other: String) Path {
     const alloc = self.__sb.allocator
 
@@ -317,18 +336,17 @@ pub fn join(self: &Path, other: String) Path {
 // Slash conversion
 // =============================================================================
 //
-// Paths that outlive the machine that produced them - flang.toml globs,
-// `#line` directives in generated C, build-cache keys, test expectations -
-// must read the same everywhere, so they are written with `/` on every
-// platform. Paths handed back to the OS keep the native form, because the
-// `\\?\` long-path prefix disables Win32 separator normalization and
-// spawned processes read `/` as a switch.
+// Paths that outlive the machine that produced them - flang.toml globs, `#line` directives in
+// generated C, build-cache keys, test expectations - must read the same everywhere, so they are
+// written with `/` on every platform. Paths handed back to the OS keep the native form, because the
+// `\\?\` long-path prefix disables Win32 separator normalization and spawned processes read `/` as
+// a switch.
 //
 // Conversion is therefore explicit at those boundaries, not baked into Path.
 
-// Returns the path with every native separator rewritten as `/`. On POSIX
-// this is a plain copy - `\` is a legal filename character there, not a
-// separator, and rewriting it would corrupt the name.
+// Returns the path with every native separator rewritten as `/`. On POSIX this is a plain copy -
+// `\` is a legal filename character there, not a separator, and rewriting it would corrupt the
+// name.
 pub fn to_slash(self: &Path, allocator: &Allocator? = null) OwnedString {
     const v = self.as_view()
     #if platform.os == "windows" {
@@ -346,8 +364,8 @@ pub fn to_slash(self: &Path, allocator: &Allocator? = null) OwnedString {
     }
 }
 
-// Builds a Path from a `/`-separated string, rewriting to the native
-// separator. The inverse of `to_slash`; a plain copy on POSIX.
+// Builds a Path from a `/`-separated string, rewriting to the native separator. The inverse of
+// `to_slash`; a plain copy on POSIX.
 pub fn from_slash(s: String, allocator: &Allocator? = null) Path {
     #if platform.os == "windows" {
         let sb = string_builder(s.len + 1, allocator)
@@ -404,9 +422,9 @@ pub fn with_extension(self: &Path, ext: String) Path {
     return .{ __sb = sb }
 }
 
-// Pure lexical normalization. Collapses "./" and resolves "../" against the
-// preceding component without touching the filesystem. Symlinks are not
-// resolved - use to_absolute for that level of canonicalization.
+// Pure lexical normalization. Collapses "./" and resolves "../" against the preceding component
+// without touching the filesystem. Symlinks are not resolved - use to_absolute for that level of
+// canonicalization.
 //
 //   "a/./b/../c" -> "a/c"
 //   "/../a"      -> "/a"
@@ -421,7 +439,7 @@ pub fn normalize(self: &Path) Path {
     defer comps.deinit()
 
     let has_root: bool = false
-    let drive_end: usize = 0   // bytes consumed by Windows drive prefix
+    let drive_end: usize = 0 // bytes consumed by Windows drive prefix
 
     #if platform.os == "windows" {
         if v.len >= 2 and is_drive_letter(v[0]) and v[1] == ':' {
@@ -443,7 +461,9 @@ pub fn normalize(self: &Path) Path {
         while p < v.len and is_separator(v[p]) {
             p = p + 1
         }
-        if p >= v.len { break }
+        if p >= v.len {
+            break
+        }
         const start = p
         while p < v.len and !is_separator(v[p]) {
             p = p + 1
@@ -457,7 +477,7 @@ pub fn normalize(self: &Path) Path {
         if seg_len == 2 and v[start] == '.' and v[start + 1] == '.' {
             // ".." - pop unless top is also ".." (relative-only stack).
             const top_is_dotdot = comps.peek() match {
-                Some(top) => top.len == 2 and top[0] == '.' and top[1] == '.',
+                Some(top) => top.len == 2 and top[0] == '.' and top[1] == '.'
                 None => false
             }
             if !comps.is_empty() and !top_is_dotdot {
@@ -502,8 +522,12 @@ pub fn normalize(self: &Path) Path {
 
 // Returns true if `s` (without constructing a Path) is an absolute path.
 fn string_is_absolute(s: String) bool {
-    if s.len == 0 { return false }
-    if is_separator(s[0]) { return true }
+    if s.len == 0 {
+        return false
+    }
+    if is_separator(s[0]) {
+        return true
+    }
     #if platform.os == "windows" {
         if s.len >= 3 and is_drive_letter(s[0]) and s[1] == ':' and is_separator(s[2]) {
             return true
@@ -516,17 +540,23 @@ fn string_is_absolute(s: String) bool {
 // Comparison + relative paths
 // =============================================================================
 
-// Component-wise prefix test. Unlike a string prefix, `/foo` does not match
-// `/foobar` - a path prefix has to land on a separator boundary.
+// Component-wise prefix test. Unlike a string prefix, `/foo` does not match `/foobar` - a path
+// prefix has to land on a separator boundary.
 pub fn starts_with(self: &Path, prefix: String) bool {
     return view_starts_with(self.as_view(), prefix)
 }
 
 fn view_starts_with(v: String, prefix: String) bool {
     const p = trim_trailing_separators(prefix)
-    if p.len == 0 { return true }
-    if v.len < p.len { return false }
-    if !bytes_eq_path(v[..p.len], p) { return false }
+    if p.len == 0 {
+        return true
+    }
+    if v.len < p.len {
+        return false
+    }
+    if !bytes_eq_path(v[..p.len], p) {
+        return false
+    }
     return v.len == p.len or is_separator(v[p.len])
 }
 
@@ -534,39 +564,51 @@ fn view_starts_with(v: String, prefix: String) bool {
 pub fn ends_with(self: &Path, suffix: String) bool {
     const v = self.as_view()
     const sfx = trim_trailing_separators(suffix)
-    if sfx.len == 0 { return true }
-    if v.len < sfx.len { return false }
+    if sfx.len == 0 {
+        return true
+    }
+    if v.len < sfx.len {
+        return false
+    }
     const at = v.len - sfx.len
-    if !bytes_eq_path(v[at..], sfx) { return false }
+    if !bytes_eq_path(v[at..], sfx) {
+        return false
+    }
     return at == 0 or is_separator(v[at - 1])
 }
 
-// `self` with `base` removed from the front, or none when `base` is not a
-// component-wise prefix. The result is a view into `self`, valid for as long
-// as it is.
+// `self` with `base` removed from the front, or none when `base` is not a component-wise prefix.
+// The result is a view into `self`, valid for as long as it is.
 pub fn strip_prefix(self: &Path, base: String) String? {
     const v = self.as_view()
-    if !view_starts_with(v, base) { return null }
+    if !view_starts_with(v, base) {
+        return null
+    }
     const b = trim_trailing_separators(base)
-    if b.len == 0 { return Some(v) }
-    if v.len == b.len { return Some("") }
+    if b.len == 0 {
+        return Some(v)
+    }
+    if v.len == b.len {
+        return Some("")
+    }
     // Skip the boundary separator, plus any repeats.
     let i = b.len
     while i < v.len and is_separator(v[i]) { i = i + 1 }
     return Some(v[i..])
 }
 
-// A path from `base` to `self`, using `..` to climb out of `base` where
-// needed. Purely lexical: no filesystem access, no symlink resolution. Both
-// paths must be of the same kind - two relative or two absolute - since there
-// is no lexical route from one to the other.
+// A path from `base` to `self`, using `..` to climb out of `base` where needed. Purely lexical: no
+// filesystem access, no symlink resolution. Both paths must be of the same kind - two relative or
+// two absolute - since there is no lexical route from one to the other.
 //
 //     path("src/a/b.f").to_relative("src")        -> "a/b.f"
 //     path("src/a/b.f").to_relative("src/a/c")    -> "../b.f"
 //     path("src").to_relative("src")              -> "."
 pub fn to_relative(self: &Path, base: String, allocator: &Allocator? = null) Path? {
     const target = self.as_view()
-    if string_is_absolute(target) != string_is_absolute(base) { return null }
+    if string_is_absolute(target) != string_is_absolute(base) {
+        return null
+    }
 
     // Walk off the shared leading components.
     let t_rest = target
@@ -574,8 +616,12 @@ pub fn to_relative(self: &Path, base: String, allocator: &Allocator? = null) Pat
     loop {
         const t_next = first_component(t_rest)
         const b_next = first_component(b_rest)
-        if t_next.len == 0 or b_next.len == 0 { break }
-        if !bytes_eq_path(t_next, b_next) { break }
+        if t_next.len == 0 or b_next.len == 0 {
+            break
+        }
+        if !bytes_eq_path(t_next, b_next) {
+            break
+        }
         t_rest = rest_after_component(t_rest)
         b_rest = rest_after_component(b_rest)
     }
@@ -585,34 +631,48 @@ pub fn to_relative(self: &Path, base: String, allocator: &Allocator? = null) Pat
     let climb = b_rest
     loop {
         const c = first_component(climb)
-        if c.len == 0 { break }
-        if sb.len > 0 { sb.append_byte(sep()) }
+        if c.len == 0 {
+            break
+        }
+        if sb.len > 0 {
+            sb.append_byte(sep())
+        }
         sb.append("..")
         climb = rest_after_component(climb)
     }
     let tail = t_rest
     loop {
         const c = first_component(tail)
-        if c.len == 0 { break }
-        if sb.len > 0 { sb.append_byte(sep()) }
+        if c.len == 0 {
+            break
+        }
+        if sb.len > 0 {
+            sb.append_byte(sep())
+        }
         sb.append(c)
         tail = rest_after_component(tail)
     }
-    if sb.len == 0 { sb.append(".") }
+    if sb.len == 0 {
+        sb.append(".")
+    }
     return Some(.{ __sb = sb })
 }
 
-// Platform-aware path equality: case-insensitive and separator-agnostic on
-// Windows, exact on POSIX where both distinctions are real.
+// Platform-aware path equality: case-insensitive and separator-agnostic on Windows, exact on POSIX
+// where both distinctions are real.
 pub fn eq(self: &Path, other: &Path) bool {
     return bytes_eq_path(self.as_view(), other.as_view())
 }
 
 fn bytes_eq_path(a: String, b: String) bool {
-    if a.len != b.len { return false }
+    if a.len != b.len {
+        return false
+    }
     let i: usize = 0
     while i < a.len {
-        if !byte_eq_path(a[i], b[i]) { return false }
+        if !byte_eq_path(a[i], b[i]) {
+            return false
+        }
         i = i + 1
     }
     return true
@@ -621,7 +681,9 @@ fn bytes_eq_path(a: String, b: String) bool {
 fn byte_eq_path(x: u8, y: u8) bool {
     #if platform.os == "windows" {
         // Separators are interchangeable and names are case-insensitive.
-        if is_separator(x) and is_separator(y) { return true }
+        if is_separator(x) and is_separator(y) {
+            return true
+        }
         return lower(x as char) == lower(y as char)
     } else {
         return x == y
@@ -631,12 +693,13 @@ fn byte_eq_path(x: u8, y: u8) bool {
 fn trim_trailing_separators(v: String) String {
     let n = v.len
     while n > 1 and is_separator(v[n - 1]) { n = n - 1 }
-    if n == 1 and is_separator(v[0]) { return v }
+    if n == 1 and is_separator(v[0]) {
+        return v
+    }
     return v[..n]
 }
 
-// The first component of `v`, skipping any leading separators. Empty when `v`
-// holds no components.
+// The first component of `v`, skipping any leading separators. Empty when `v` holds no components.
 fn first_component(v: String) String {
     let i: usize = 0
     while i < v.len and is_separator(v[i]) { i = i + 1 }
@@ -656,11 +719,11 @@ fn rest_after_component(v: String) String {
 // In-place editing
 // =============================================================================
 //
-// `push` / `pop` mutate one Path instead of allocating a new one per step,
-// which is what a traversal loop wants.
+// `push` / `pop` mutate one Path instead of allocating a new one per step, which is what a
+// traversal loop wants.
 
-// Appends `other` as a component, or replaces the whole path when `other` is
-// absolute - the same rule as `join`.
+// Appends `other` as a component, or replaces the whole path when `other` is absolute - the same
+// rule as `join`.
 pub fn push(self: &Path, other: String) {
     if string_is_absolute(other) {
         self.__sb.clear()
@@ -669,18 +732,22 @@ pub fn push(self: &Path, other: String) {
     }
     if self.__sb.len > 0 {
         const last: &u8 = self.__sb.ptr + (self.__sb.len - 1)
-        if !is_separator(last.*) { self.__sb.append_byte(sep()) }
+        if !is_separator(last.*) {
+            self.__sb.append_byte(sep())
+        }
     }
     let start: usize = 0
     while start < other.len and is_separator(other[start]) { start = start + 1 }
     self.__sb.append(other[start..])
 }
 
-// Drops the final component. False when there was nothing left to drop, which
-// is the natural loop condition for climbing to the root.
+// Drops the final component. False when there was nothing left to drop, which is the natural loop
+// condition for climbing to the root.
 pub fn pop(self: &Path) bool {
     const p = self.parent()
-    if p.is_none() { return false }
+    if p.is_none() {
+        return false
+    }
     self.__sb.truncate(p.unwrap().len)
     return true
 }
@@ -689,13 +756,17 @@ pub fn pop(self: &Path) bool {
 pub fn with_file_name(self: &Path, name: String) Path {
     const alloc = self.__sb.allocator
     const dir = self.parent()
-    if dir.is_none() { return path(name, alloc) }
+    if dir.is_none() {
+        return path(name, alloc)
+    }
 
     let sb = string_builder(dir.unwrap().len + name.len + 1, alloc)
     sb.append(dir.unwrap())
     if sb.len > 0 {
         const last: &u8 = sb.ptr + (sb.len - 1)
-        if !is_separator(last.*) { sb.append_byte(sep()) }
+        if !is_separator(last.*) {
+            sb.append_byte(sep())
+        }
     }
     sb.append(name)
     return .{ __sb = sb }
@@ -705,9 +776,8 @@ pub fn with_file_name(self: &Path, name: String) Path {
 // Tests
 // =============================================================================
 
-// Assert against a `/`-spelled expectation on any platform. Everything that
-// joins components writes the NATIVE separator, so a literal expectation
-// would only hold on POSIX.
+// Assert against a `/`-spelled expectation on any platform. Everything that joins components writes
+// the NATIVE separator, so a literal expectation would only hold on POSIX.
 fn assert_slash_eq(actual: String, expected: String, msg: String) {
     let p = path(actual)
     defer p.deinit()

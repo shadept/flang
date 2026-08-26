@@ -22,12 +22,16 @@ const MAX_LEN: usize = 9
 // Word selection
 // =============================================================================
 
-// A dictionary line is playable only if it is a plain lowercase a-z word of a
-// guessable length: no proper nouns, no apostrophes, no accents.
+// A dictionary line is playable only if it is a plain lowercase a-z word of a guessable length: no
+// proper nouns, no apostrophes, no accents.
 fn is_playable(w: String) bool {
-    if w.len < MIN_LEN or w.len > MAX_LEN { return false }
+    if w.len < MIN_LEN or w.len > MAX_LEN {
+        return false
+    }
     for b in w.bytes() {
-        if b < 97 or b > 122 { return false }
+        if b < 97 or b > 122 {
+            return false
+        }
     }
     return true
 }
@@ -35,7 +39,9 @@ fn is_playable(w: String) bool {
 fn count_playable(text: String) usize {
     let n: usize = 0
     for line in text.lines() {
-        if is_playable(line) { n = n + 1 }
+        if is_playable(line) {
+            n = n + 1
+        }
     }
     return n
 }
@@ -44,7 +50,9 @@ fn nth_playable(text: String, n: usize) String {
     let i: usize = 0
     for line in text.lines() {
         if is_playable(line) {
-            if i == n { return line }
+            if i == n {
+                return line
+            }
             i = i + 1
         }
     }
@@ -53,7 +61,9 @@ fn nth_playable(text: String, n: usize) String {
 
 fn pick_word(text: String, rng: &Random) String {
     const total = count_playable(text)
-    if total == 0 { return FALLBACK_WORD }
+    if total == 0 {
+        return FALLBACK_WORD
+    }
     return nth_playable(text, rng.next_urange(0, total - 1) as usize)
 }
 
@@ -63,7 +73,9 @@ fn pick_word(text: String, rng: &Random) String {
 
 fn is_revealed(word: String, tried: String) bool {
     for b in word.bytes() {
-        if tried.find(b as char).is_none() { return false }
+        if tried.find(b as char).is_none() {
+            return false
+        }
     }
     return true
 }
@@ -96,6 +108,7 @@ fn draw_word(sb: &StringBuilder, word: String, tried: String) {
             sb.append(b as char)
         } else {
             $sb"·"
+
         }
         $sb" "
     }
@@ -104,7 +117,13 @@ fn draw_word(sb: &StringBuilder, word: String, tried: String) {
 fn draw_pips(sb: &StringBuilder, misses: usize) {
     let i: usize = 0
     while i < MAX_MISSES {
-        if i < misses { $sb"●" } else { $sb"○" }
+        if i < misses {
+            $sb"●"
+
+        } else {
+            $sb"○"
+
+        }
         i = i + 1
     }
 }
@@ -119,7 +138,12 @@ fn draw_screen(word: String, tried: String, misses: usize, dead: bool, reveal: b
     $sb"  ╰──────────────────────────────╯\n\n"
     draw_gallows(&sb, misses, dead)
     $sb"\n     "
-    if reveal { $sb"{word}" } else { draw_word(&sb, word, tried) }
+    if reveal {
+        $sb"{word}"
+
+    } else {
+        draw_word(&sb, word, tried)
+    }
     $sb"\n\n     "
     draw_pips(&sb, misses)
     $sb"   tried: {tried}\n\n"
@@ -133,8 +157,12 @@ fn draw_screen(word: String, tried: String, misses: usize, dead: bool, reveal: b
 // The first a-z letter of the line, lowercased; none if the line has none.
 fn first_letter(line: String) char? {
     for b in line.bytes() {
-        if b >= 65 and b <= 90 { return Some((b + 32) as char) }
-        if b >= 97 and b <= 122 { return Some(b as char) }
+        if b >= 65 and b <= 90 {
+            return Some((b + 32) as char)
+        }
+        if b >= 97 and b <= 122 {
+            return Some(b as char)
+        }
     }
     return null
 }
@@ -170,21 +198,38 @@ pub fn main() i32 {
         const lost = misses >= MAX_MISSES
         draw_screen(word, tried.as_view(), misses, lost, won or lost)
 
-        if won { println("  you win."); break }
-        if lost { println($"  dead. the word was: {word}"); break }
+        if won {
+            println("  you win.")
+            break
+        }
+        if lost {
+            println($"  dead. the word was: {word}")
+            break
+        }
 
         const line = rl.read_line()
-        if line.is_none() { println(""); break }
+        if line.is_none() {
+            println("")
+            break
+        }
 
         const guess = first_letter(line.unwrap())
-        if guess.is_none() { continue }
+        if guess.is_none() {
+            continue
+        }
         const c = guess.unwrap()
 
-        if tried.as_view().find(c).is_some() { continue }
+        if tried.as_view().find(c).is_some() {
+            continue
+        }
         tried.append(c)
-        if word.find(c).is_none() { misses = misses + 1 }
+        if word.find(c).is_none() {
+            misses = misses + 1
+        }
     }
 
-    if dict.is_some() { dict.unwrap().deinit() }
+    if dict.is_some() {
+        dict.unwrap().deinit()
+    }
     return 0
 }

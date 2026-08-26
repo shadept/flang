@@ -1,20 +1,18 @@
-// Concrete Syntax Tree - the lossless tree built directly from the token
-// stream. Every byte of the source is reachable through some Token in the
-// CST; reconstructing source is a depth-first walk emitting each token's
-// leading + text + trailing trivia in order.
+// Concrete Syntax Tree - the lossless tree built directly from the token stream. Every byte of the
+// source is reachable through some Token in the CST; reconstructing source is a depth-first walk
+// emitting each token's leading + text + trailing trivia in order.
 //
-// The CST is the substrate for the formatter, refactorings, and syntax-aware
-// tooling. The semantic AST (see ast.f) is a typed view computed on demand
-// from the CST and is what the type checker consumes.
+// The CST is the substrate for the formatter, refactorings, and syntax-aware tooling. The semantic
+// AST (see ast.f) is a typed view computed on demand from the CST and is what the type checker
+// consumes.
 
 import std.enum
 import std.list
 import flang_parser.token
 
-// Every syntactic form gets a NodeKind. One kind per syntactic shape the
-// parser can produce; semantic groupings (where two shapes mean the same
-// thing) live on the AST view in ast.f. Adding a new syntactic form means
-// adding a kind here AND wiring it through every CST consumer (formatter,
+// Every syntactic form gets a NodeKind. One kind per syntactic shape the parser can produce;
+// semantic groupings (where two shapes mean the same thing) live on the AST view in ast.f. Adding a
+// new syntactic form means adding a kind here AND wiring it through every CST consumer (formatter,
 // navigator, refactor passes).
 pub type NodeKind = enum {
     // ─────────────────────────────────────────────────────────────────────
@@ -109,10 +107,9 @@ pub type NodeKind = enum {
     StructConstructionExpr
     // `{ ... }` - block expression with optional trailing value.
     BlockExpr
-    // `( expr )` - a parenthesised group. Kept as its own node so the CST
-    // retains the parens, but it carries no semantics of its own: it
-    // projects to the inner expression, not to a block (which would add a
-    // scope the source never asked for).
+    // `( expr )` - a parenthesised group. Kept as its own node so the CST retains the parens, but
+    // it carries no semantics of its own: it projects to the inner expression, not to a block
+    // (which would add a scope the source never asked for).
     ParenExpr
     // `if cond { ... } else { ... }` - also valid in expression position.
     IfExpr
@@ -193,27 +190,24 @@ pub type NodeKind = enum {
     // Error recovery
     // ─────────────────────────────────────────────────────────────────────
 
-    // Parser produced this where the grammar rejected input. Preserves
-    // child tokens so the formatter can still re-emit source on broken
-    // syntax - partial trees stay editable.
+    // Parser produced this where the grammar rejected input. Preserves child tokens so the
+    // formatter can still re-emit source on broken syntax - partial trees stay editable.
     Error
 }
 
 #enum_utils(NodeKind)
 
-// Child of a CST node: either a sub-node or a leaf token. CST nodes
-// alternate between these freely; a `CallExpr` for example has a child
-// token for `(`, a list of argument node children separated by `,` tokens,
-// and a closing `)` token - every byte accounted for.
+// Child of a CST node: either a sub-node or a leaf token. CST nodes alternate between these freely;
+// a `CallExpr` for example has a child token for `(`, a list of argument node children separated by
+// `,` tokens, and a closing `)` token - every byte accounted for.
 pub type CstChild = enum {
     NodeChild(CstNode)
     TokenChild(Token)
 }
 
-// A node in the CST. `start` and `end` cover every child token's byte
-// range (including the trivia attached to the first and last tokens).
-// Children are stored in source order - iterating them and concatenating
-// their bytes yields a substring of the original source.
+// A node in the CST. `start` and `end` cover every child token's byte range (including the trivia
+// attached to the first and last tokens). Children are stored in source order - iterating them and
+// concatenating their bytes yields a substring of the original source.
 pub type CstNode = struct {
     kind: NodeKind
     start: usize

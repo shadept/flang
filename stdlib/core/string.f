@@ -1,7 +1,7 @@
 // String - Non-owning UTF-8 string view
 //
-// A lightweight, non-owning view into UTF-8 encoded text. Binary-compatible
-// with u8[] slice (same layout: ptr + len). String literals produce this type.
+// A lightweight, non-owning view into UTF-8 encoded text. Binary-compatible with u8[] slice (same
+// layout: ptr + len). String literals produce this type.
 //
 // For owned strings that manage their own memory, see [std.string.OwnedString].
 //
@@ -16,7 +16,7 @@ import core.slice
 #foreign fn __flang_strlen(ptr: &u8) usize
 
 pub type String = struct {
-    ptr: &u8,
+    ptr: &u8
     len: usize
 }
 
@@ -50,15 +50,21 @@ pub fn op_index(s: String, idx: usize) u8 {
     return ptr.*
 }
 
-// Returns a substring for the given range. Out-of-bounds ranges are clamped
-// to string boundaries; inverted ranges (start > end) return empty string.
+// Returns a substring for the given range. Out-of-bounds ranges are clamped to string boundaries;
+// inverted ranges (start > end) return empty string.
 pub fn op_index(s: String, range: Range(usize)) String {
     let start = range.start
     let end = range.end
 
-    if start > s.len { start = s.len }
-    if end > s.len { end = s.len }
-    if start > end { end = start }
+    if start > s.len {
+        start = s.len
+    }
+    if end > s.len {
+        end = s.len
+    }
+    if start > end {
+        end = start
+    }
 
     return .{ ptr = s.ptr + start, len = end - start }
 }
@@ -83,8 +89,8 @@ pub fn op_eq(a: String, b: String) bool {
     return true
 }
 
-// Lexicographic byte-wise comparison. Shorter strings compare less than
-// longer strings with the shorter as a prefix (standard lexicographic order).
+// Lexicographic byte-wise comparison. Shorter strings compare less than longer strings with the
+// shorter as a prefix (standard lexicographic order).
 pub fn op_cmp(a: String, b: String) Ord {
     if a.ptr == b.ptr and a.len == b.len {
         return Ord.Equal
@@ -94,12 +100,20 @@ pub fn op_cmp(a: String, b: String) Ord {
     for idx in 0..min_len {
         const ab = a[idx]
         const bb = b[idx]
-        if ab < bb { return Ord.Less }
-        if ab > bb { return Ord.Greater }
+        if ab < bb {
+            return Ord.Less
+        }
+        if ab > bb {
+            return Ord.Greater
+        }
     }
 
-    if a.len < b.len { return Ord.Less }
-    if a.len > b.len { return Ord.Greater }
+    if a.len < b.len {
+        return Ord.Less
+    }
+    if a.len > b.len {
+        return Ord.Greater
+    }
     return Ord.Equal
 }
 

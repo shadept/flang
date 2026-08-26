@@ -1,12 +1,11 @@
 // Growable bit vector. One bit per element, packed into 64-bit words.
 //
-// Use for dense integer-indexed sets: liveness, reachability,
-// optimization-pass change tracking, variant-tag presence. The API
-// mirrors `Set(usize)` - `add` / `remove` / `contains` / `iter` - so a
-// caller can switch between the two when density assumptions change.
+// Use for dense integer-indexed sets: liveness, reachability, optimization-pass change tracking,
+// variant-tag presence. The API mirrors `Set(usize)` - `add` / `remove` / `contains` / `iter` - so
+// a caller can switch between the two when density assumptions change.
 //
-// `union` / `intersect` are O(words/64) per call, the killer feature
-// over `Set(usize)` for tight optimisation loops.
+// `union` / `intersect` are O(words/64) per call, the killer feature over `Set(usize)` for tight
+// optimisation loops.
 
 import core.bits
 import std.allocator
@@ -19,9 +18,8 @@ pub type Bitset = struct {
 
 const BITS_PER_WORD: usize = 64
 
-// Construct an empty bitset. `initial_bits` reserves storage for that
-// many bits (rounded up to the next word boundary). Pass 0 to defer
-// allocation to the first `add`.
+// Construct an empty bitset. `initial_bits` reserves storage for that many bits (rounded up to the
+// next word boundary). Pass 0 to defer allocation to the first `add`.
 pub fn bitset(initial_bits: usize, allocator: &Allocator? = null) Bitset {
     const word_cap = (initial_bits + BITS_PER_WORD - 1) / BITS_PER_WORD
     return .{ words = list(word_cap, allocator) }
@@ -41,17 +39,17 @@ pub fn len(self: Bitset) usize {
     return total
 }
 
-// True when no bits are set. O(words) in the worst case (must walk the
-// whole list to confirm).
+// True when no bits are set. O(words) in the worst case (must walk the whole list to confirm).
 pub fn is_empty(self: Bitset) bool {
     for w in self.words {
-        if w != 0u64 { return false }
+        if w != 0u64 {
+            return false
+        }
     }
     return true
 }
 
-// Grow the underlying word list to cover `word_count` words. New words
-// are zero-initialised.
+// Grow the underlying word list to cover `word_count` words. New words are zero-initialised.
 fn ensure_words(self: &Bitset, word_count: usize) {
     while self.words.len < word_count {
         self.words.push(0u64)
@@ -70,7 +68,9 @@ pub fn add(self: &Bitset, i: usize) {
 // Test bit `i`. Indices past the current storage are treated as unset.
 pub fn contains(self: Bitset, i: usize) bool {
     const word_idx = i / BITS_PER_WORD
-    if word_idx >= self.words.len { return false }
+    if word_idx >= self.words.len {
+        return false
+    }
     const bit_idx = i % BITS_PER_WORD
     const mask: u64 = 1u64 << (bit_idx as u64)
     return (self.words[word_idx] & mask) != 0u64
@@ -79,7 +79,9 @@ pub fn contains(self: Bitset, i: usize) bool {
 // Clear bit `i`. Returns `true` iff the bit was set. Never grows.
 pub fn remove(self: &Bitset, i: usize) bool {
     const word_idx = i / BITS_PER_WORD
-    if word_idx >= self.words.len { return false }
+    if word_idx >= self.words.len {
+        return false
+    }
     const bit_idx = i % BITS_PER_WORD
     const mask: u64 = 1u64 << (bit_idx as u64)
     const was_set = (self.words[word_idx] & mask) != 0u64
@@ -102,8 +104,8 @@ pub fn union(self: &Bitset, other: Bitset) {
     }
 }
 
-// In-place intersection: self &= other. Words beyond `other`'s length
-// become zero (since `other` has no bits there). Storage is retained.
+// In-place intersection: self &= other. Words beyond `other`'s length become zero (since `other`
+// has no bits there). Storage is retained.
 pub fn intersect(self: &Bitset, other: Bitset) {
     const common = if self.words.len < other.words.len { self.words.len } else { other.words.len }
     for i in 0..common {
@@ -114,8 +116,7 @@ pub fn intersect(self: &Bitset, other: Bitset) {
     }
 }
 
-// In-place difference: self &= ~other. Bits set in `other` are cleared
-// from `self`. Never grows.
+// In-place difference: self &= ~other. Bits set in `other` are cleared from `self`. Never grows.
 pub fn difference(self: &Bitset, other: Bitset) {
     const common = if self.words.len < other.words.len { self.words.len } else { other.words.len }
     for i in 0..common {
@@ -124,15 +125,14 @@ pub fn difference(self: &Bitset, other: Bitset) {
 }
 
 // =============================================================================
-// Iterator - yields indices of set bits in ascending order.
-// Skips entire zero words via `trailing_zeros_u64` so sparse bitsets are
-// O(set bits) rather than O(capacity).
+// Iterator - yields indices of set bits in ascending order. Skips entire zero words via
+// `trailing_zeros_u64` so sparse bitsets are O(set bits) rather than O(capacity).
 // =============================================================================
 
 pub type BitsetIterator = struct {
     bitset: &Bitset
     word_idx: usize
-    word_residual: u64   // current word with already-yielded bits cleared
+    word_residual: u64 // current word with already-yielded bits cleared
 }
 
 pub fn iter(self: &Bitset) BitsetIterator {
@@ -141,7 +141,9 @@ pub fn iter(self: &Bitset) BitsetIterator {
 
 pub fn next(it: &BitsetIterator) usize? {
     while it.word_residual == 0u64 {
-        if it.word_idx >= it.bitset.words.len { return null }
+        if it.word_idx >= it.bitset.words.len {
+            return null
+        }
         it.word_residual = it.bitset.words[it.word_idx]
         if it.word_residual == 0u64 {
             it.word_idx = it.word_idx + 1

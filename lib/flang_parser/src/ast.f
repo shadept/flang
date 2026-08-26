@@ -1,23 +1,20 @@
 // Abstract Syntax Tree - semantic view computed on demand over the CST.
 //
-// AST nodes wrap meaning; CST nodes wrap source bytes. The type checker
-// and every downstream phase consume the AST. The formatter and refactor
-// tools consume the CST. Both views share node identity through the
-// `SourceSpan` byte range each AST node carries.
+// AST nodes wrap meaning; CST nodes wrap source bytes. The type checker and every downstream phase
+// consume the AST. The formatter and refactor tools consume the CST. Both views share node identity
+// through the `SourceSpan` byte range each AST node carries.
 //
-// Category-split enums (Decl / Stmt / Expr / Pattern / TypeExpr) encode
-// the grammar in the type system: an `Expr` can never hold a `Stmt`, a
-// `Stmt` can never hold a `Decl`. Recursive children store as `&T`
-// references into `Module.arena`; non-recursive children store by value.
+// Category-split enums (Decl / Stmt / Expr / Pattern / TypeExpr) encode the grammar in the type
+// system: an `Expr` can never hold a `Stmt`, a `Stmt` can never hold a `Decl`. Recursive children
+// store as `&T` references into `Module.arena`; non-recursive children store by value.
 //
-// Strings (names, literal texts) are non-owning `String` views into the
-// original source buffer. The source must outlive the Module.
+// Strings (names, literal texts) are non-owning `String` views into the original source buffer. The
+// source must outlive the Module.
 //
-// "Only representable states" is the standing rule. A handful of
-// concessions (`Break`/`Continue` valid in any Stmt position regardless
-// of enclosing scope; `GenericBind` valid in any TypeExpr position
-// instead of param-types only) keep the projector tractable - those are
-// the responsibility of later validation passes, not the type system.
+// "Only representable states" is the standing rule. A handful of concessions (`Break`/`Continue`
+// valid in any Stmt position regardless of enclosing scope; `GenericBind` valid in any TypeExpr
+// position instead of param-types only) keep the projector tractable - those are the responsibility
+// of later validation passes, not the type system.
 
 import std.allocator
 import std.list
@@ -29,27 +26,25 @@ import flang_core.span
 // Module - top-level container
 // ─────────────────────────────────────────────────────────────────────────
 
-// One parsed source file. Owns an `ArenaAllocator` that backs every
-// recursive child reference (`&Expr`, `&TypeExpr`, `&Pattern`, `&IfExpr`)
-// in the tree. Calling `deinit()` releases the entire AST in a single
-// bulk free.
+// One parsed source file. Owns an `ArenaAllocator` that backs every recursive child reference
+// (`&Expr`, `&TypeExpr`, `&Pattern`, `&IfExpr`) in the tree. Calling `deinit()` releases the entire
+// AST in a single bulk free.
 pub type Module = struct {
     span: SourceSpan
     decls: List(Decl)
     arena: ArenaAllocator
 }
 
-// Scoped mutability: `decls` is writable only in this file. Installs the
-// resolved decl list after decl-level #if flattening (see comptime.f).
-// The old list's buffer stays in the arena; it is reclaimed with it.
+// Scoped mutability: `decls` is writable only in this file. Installs the resolved decl list after
+// decl-level #if flattening (see comptime.f). The old list's buffer stays in the arena; it is
+// reclaimed with it.
 // Append declarations produced by template expansion (RFC-021 §2). The
 // Decl values are copied; whatever they point into must outlive the module.
 //
-// Rebuilds the list on the global allocator rather than growing in place:
-// `decls`' stored allocator points at a projection-time local (dead once
-// `project_module` returns), so a push that reallocs would go through a
-// dangling allocator. The old buffer stays behind in the module arena.
-// ponytail: the rebuilt buffer leaks at Module.deinit (arena-only free); fine, modules live to end of build.
+// Rebuilds the list on the global allocator rather than growing in place: `decls`' stored allocator
+// points at a projection-time local (dead once `project_module` returns), so a push that reallocs
+// would go through a dangling allocator. The old buffer stays behind in the module arena. ponytail:
+// the rebuilt buffer leaks at Module.deinit (arena-only free); fine, modules live to end of build.
 pub fn append_decls(self: &Module, decls: &List(Decl)) {
     let merged: List(Decl) = list(self.decls.len + decls.len)
     for &d in self.decls { merged.push(d.*) }
@@ -62,12 +57,10 @@ pub fn set_decls(self: &Module, decls: List(Decl)) {
 }
 
 pub fn deinit(self: &Module) {
-    // Every AST allocation - the decls list's buffer and every nested
-    // list in the tree - lives in the arena, so ONE bulk free reclaims
-    // it all. Do not walk the tree element-wise: the nested lists carry
-    // allocator pointers into the (stack-local) arena view they were
-    // built with, which does not survive the Module being moved (see
-    // docs/known-issues.md on allocator identity).
+    // Every AST allocation - the decls list's buffer and every nested list in the tree - lives in
+    // the arena, so ONE bulk free reclaims it all. Do not walk the tree element-wise: the nested
+    // lists carry allocator pointers into the (stack-local) arena view they were built with, which
+    // does not survive the Module being moved (see docs/known-issues.md on allocator identity).
     self.arena.deinit()
 }
 
@@ -75,10 +68,9 @@ pub fn deinit(self: &Module) {
 // Declarations - top-level constructs in a module
 // ─────────────────────────────────────────────────────────────────────────
 
-// One top-level form. Most variants are declarations in the strict sense
-// (function, type, const); `Test`, `GenDef`, `GenInvoke`, `IfDirective`
-// are declaration-like constructs that share the same module-level
-// position. `Error` is a recovery placeholder.
+// One top-level form. Most variants are declarations in the strict sense (function, type, const);
+// `Test`, `GenDef`, `GenInvoke`, `IfDirective` are declaration-like constructs that share the same
+// module-level position. `Error` is a recovery placeholder.
 pub type Decl = enum {
     Import(ImportDecl)
     Function(FunctionDecl)
@@ -91,10 +83,9 @@ pub type Decl = enum {
     Error(DeclError)
 }
 
-// Decl-level attributes. `Foreign`, `Inline`, `Intrinsic`, `Simd` are
-// flag-shaped; `Deprecated(msg?)` carries an optional reason string.
-// Several directives may attach to the same declaration; order is
-// source order.
+// Decl-level attributes. `Foreign`, `Inline`, `Intrinsic`, `Simd` are flag-shaped;
+// `Deprecated(msg?)` carries an optional reason string. Several directives may attach to the same
+// declaration; order is source order.
 pub type DeclAttribute = enum {
     Foreign
     Inline
@@ -107,7 +98,9 @@ pub type DeclAttribute = enum {
 pub fn is_simd_directive(ds: &List(DeclAttribute)) bool {
     for &d in ds {
         let f = d.* match { Simd => true, _ => false }
-        if f { return true }
+        if f {
+            return true
+        }
     }
     return false
 }
@@ -116,19 +109,20 @@ pub fn is_simd_directive(ds: &List(DeclAttribute)) bool {
 pub fn is_foreign_directive(ds: &List(DeclAttribute)) bool {
     for &d in ds {
         let f = d.* match { Foreign => true, _ => false }
-        if f { return true }
+        if f {
+            return true
+        }
     }
     return false
 }
 
-// The `#deprecated` reason attached to a declaration, or null when it
-// carries no such directive. A bare `#deprecated` yields the empty
-// string - present, but with nothing to say.
+// The `#deprecated` reason attached to a declaration, or null when it carries no such directive. A
+// bare `#deprecated` yields the empty string - present, but with nothing to say.
 pub fn deprecation_of(ds: &List(DeclAttribute)) String? {
     for &d in ds {
         d.* match {
-            Deprecated(msg) => return Some(msg.unwrap_or("")),
-            _ => {},
+            Deprecated(msg) => return Some(msg.unwrap_or(""))
+            _ => {}
         }
     }
     return null
@@ -141,9 +135,8 @@ pub type ImportDecl = struct {
     path: List(String)
 }
 
-// `[pub] [directives] fn name(params) ret? { body }`
-// `body` is None for `#foreign fn` declarations (no `{ ... }`).
-// `return_type` is None for void-returning functions (no type after `)`).
+// `[pub] [directives] fn name(params) ret? { body }` `body` is None for `#foreign fn` declarations
+// (no `{ ... }`). `return_type` is None for void-returning functions (no type after `)`).
 pub type FunctionDecl = struct {
     span: SourceSpan
     is_pub: bool
@@ -154,25 +147,23 @@ pub type FunctionDecl = struct {
     body: BlockExpr?
 }
 
-// One parameter slot. `is_variadic` is true for the trailing `..xs: T`
-// form. `default_value` carries the post-`=` expression when a default
-// is given. Only the last parameter may legally be variadic; not
-// enforced at the type level.
+// One parameter slot. `is_variadic` is true for the trailing `..xs: T` form. `default_value`
+// carries the post-`=` expression when a default is given. Only the last parameter may legally be
+// variadic; not enforced at the type level.
 pub type FunctionParam = struct {
     span: SourceSpan
     name: String
     type_expr: TypeExpr
-    // The field name avoids `default`, which is a C reserved word and
-    // collides at C codegen time after name mangling.
+    // The field name avoids `default`, which is a C reserved word and collides at C codegen time
+    // after name mangling.
     default_value: Expr?
     is_variadic: bool
 }
 
 // `[pub] [directives] type Name = TypeExpr`
-// FLang has exactly one declaration form for types. Generics live on
-// the RHS TypeExpr (`struct(T) { ... }`, `enum(T, E) { ... }`); a plain
-// alias such as `type Index = usize` reuses the same shape with a
-// `Named` body.
+// FLang has exactly one declaration form for types. Generics live on the RHS TypeExpr (`struct(T) {
+// ... }`, `enum(T, E) { ... }`); a plain alias such as `type Index = usize` reuses the same shape
+// with a `Named` body.
 pub type TypeDecl = struct {
     span: SourceSpan
     is_pub: bool
@@ -197,9 +188,8 @@ pub type TestDecl = struct {
     body: BlockExpr
 }
 
-// `#define(name, P1: K1, P2: K2, ...) { template body }`
-// The template body is preserved as a CST byte range for v1; expansion
-// reads back from the CST when the source-generator pass runs.
+// `#define(name, P1: K1, P2: K2, ...) { template body }` The template body is preserved as a CST
+// byte range for v1; expansion reads back from the CST when the source-generator pass runs.
 pub type GenDef = struct {
     span: SourceSpan
     name: String
@@ -208,9 +198,8 @@ pub type GenDef = struct {
     body_end: usize
 }
 
-// One parameter to a `#define`. `kind` is the parameter-kind keyword
-// (`Ident`, `Type`) verbatim from source; `variadic` marks `..Name: Kind`
-// (only legal last).
+// One parameter to a `#define`. `kind` is the parameter-kind keyword (`Ident`, `Type`) verbatim
+// from source; `variadic` marks `..Name: Kind` (only legal last).
 pub type GenParam = struct {
     span: SourceSpan
     name: String
@@ -244,9 +233,9 @@ pub type IfDirectiveDecl = struct {
     else_decls: List(Decl)
 }
 
-// Recovery placeholder. The parser produced unrecognised tokens at
-// top level; the CST keeps the bytes verbatim, the AST records the
-// span so downstream phases can skip without losing the whole file.
+// Recovery placeholder. The parser produced unrecognised tokens at top level; the CST keeps the
+// bytes verbatim, the AST records the span so downstream phases can skip without losing the whole
+// file.
 pub type DeclError = struct {
     span: SourceSpan
 }
@@ -268,11 +257,9 @@ pub type Stmt = enum {
     IfDirective(IfDirectiveStmt)
 }
 
-// `let|const name(: T)? (= init)?` - LHS is an identifier only. There
-// is no destructuring `let` in FLang (destructure via `match`). At
-// least one of `type_annotation` and `init` is set; both omitted is
-// `let x` alone, rejected by the parser upstream. Uninit `let x: T`
-// zero-initializes.
+// `let|const name(: T)? (= init)?` - LHS is an identifier only. There is no destructuring `let` in
+// FLang (destructure via `match`). At least one of `type_annotation` and `init` is set; both
+// omitted is `let x` alone, rejected by the parser upstream. Uninit `let x: T` zero-initializes.
 pub type LetStmt = struct {
     span: SourceSpan
     is_const: bool
@@ -281,9 +268,8 @@ pub type LetStmt = struct {
     init: Expr?
 }
 
-// A bare expression terminated as a statement; the result is discarded.
-// Includes UFCS calls, assignments, and any other expression used for
-// its side effect.
+// A bare expression terminated as a statement; the result is discarded. Includes UFCS calls,
+// assignments, and any other expression used for its side effect.
 pub type ExpressionStmt = struct {
     span: SourceSpan
     expr: Expr
@@ -295,8 +281,8 @@ pub type ReturnStmt = struct {
     value: Expr?
 }
 
-// `defer expr` - `expr` is evaluated at the end of the enclosing scope
-// in LIFO order with sibling defers.
+// `defer expr` - `expr` is evaluated at the end of the enclosing scope in LIFO order with sibling
+// defers.
 pub type DeferStmt = struct {
     span: SourceSpan
     expr: Expr
@@ -311,9 +297,9 @@ pub type ContinueStmt = struct {
     span: SourceSpan
 }
 
-// `for name in iterable { body }` - loop variable is a single identifier.
-// FLang has no tuple-destructuring `for (k, v) in iter` form. Loops do
-// not yield a value; they are statements, not expressions.
+// `for name in iterable { body }` - loop variable is a single identifier. FLang has no
+// tuple-destructuring `for (k, v) in iter` form. Loops do not yield a value; they are statements,
+// not expressions.
 pub type ForStmt = struct {
     span: SourceSpan
     var_name: String
@@ -330,8 +316,7 @@ pub type WhileStmt = struct {
     body: BlockExpr
 }
 
-// `loop { body }` - unconditional, statement form. Exit via `break` or
-// `return`.
+// `loop { body }` - unconditional, statement form. Exit via `break` or `return`.
 pub type LoopStmt = struct {
     span: SourceSpan
     body: BlockExpr
@@ -377,8 +362,8 @@ pub type Expr = enum {
     Try(TryExpr)
     Assignment(AssignmentExpr)
 
-    // Control flow as expression - Block, If, Match yield a value.
-    // For / While / Loop are statements (see Stmt).
+    // Control flow as expression - Block, If, Match yield a value. For / While / Loop are
+    // statements (see Stmt).
     Block(BlockExpr)
     If(IfExpr)
     Match(MatchExpr)
@@ -390,16 +375,16 @@ pub type Expr = enum {
     Error(ErrorExpr)
 }
 
-// A literal expression. The seven literal kinds are shared with patterns
-// (see `LiteralPattern.value`) - same payload structs, narrower outer
-// enum where the grammar is narrower.
+// A literal expression. The seven literal kinds are shared with patterns (see
+// `LiteralPattern.value`) - same payload structs, narrower outer enum where the grammar is
+// narrower.
 pub type LiteralExpr = struct {
     span: SourceSpan
     value: LiteralValue
 }
 
-// Shared literal payload between expressions and patterns. `Null` has
-// no payload - there is only one null literal value.
+// Shared literal payload between expressions and patterns. `Null` has no payload - there is only
+// one null literal value.
 pub type LiteralValue = enum {
     Int(IntLiteral)
     Float(FloatLiteral)
@@ -410,34 +395,32 @@ pub type LiteralValue = enum {
     Null
 }
 
-// Integer literal - value preserved as the source text; suffix and base
-// are separate so downstream phases don't re-parse. `text` includes
-// `0x`, `0b`, `_` digit separators if any. Empty `suffix` means
-// unsuffixed (subject to constrain-then-resolve at type-check time).
+// Integer literal - value preserved as the source text; suffix and base are separate so downstream
+// phases don't re-parse. `text` includes `0x`, `0b`, `_` digit separators if any. Empty `suffix`
+// means unsuffixed (subject to constrain-then-resolve at type-check time).
 pub type IntLiteral = struct {
     span: SourceSpan
     text: String
     suffix: String
 }
 
-// Float literal. `text` is the raw source (`1.5e10`, `3.14`, `1_000.5`);
-// `suffix` is `"f32"` / `"f64"` / `""` (unsuffixed).
+// Float literal. `text` is the raw source (`1.5e10`, `3.14`, `1_000.5`); `suffix` is `"f32"` /
+// `"f64"` / `""` (unsuffixed).
 pub type FloatLiteral = struct {
     span: SourceSpan
     text: String
     suffix: String
 }
 
-// String literal - raw source slice excluding the surrounding quotes.
-// Escape sequences are NOT expanded at parse time; that is a later
-// concern when the literal becomes a runtime value.
+// String literal - raw source slice excluding the surrounding quotes. Escape sequences are NOT
+// expanded at parse time; that is a later concern when the literal becomes a runtime value.
 pub type StringLiteral = struct {
     span: SourceSpan
     text: String
 }
 
-// `'A'`, `'\n'` - single-character literal. `text` excludes the
-// surrounding single quotes; escapes are not yet expanded.
+// `'A'`, `'\n'` - single-character literal. `text` excludes the surrounding single quotes; escapes
+// are not yet expanded.
 pub type CharLiteral = struct {
     span: SourceSpan
     text: String
@@ -457,9 +440,8 @@ pub type BoolLiteral = struct {
 
 // `$"text {expr} text"`, `$(cap)"…"`, `$(&alloc)"…"`, `$(cap, &alloc)"…"`,
 // and `$sb"…"` (write-into-builder). `target` disambiguates the four
-// new-string forms (a call to `string_builder(args...)` with 0-2 args)
-// from the into-builder form; `parts` is the alternating text/hole
-// sequence between the quotes.
+// new-string forms (a call to `string_builder(args...)` with 0-2 args) from the into-builder form;
+// `parts` is the alternating text/hole sequence between the quotes.
 pub type InterpolatedStringExpr = struct {
     span: SourceSpan
     target: InterpolationTarget
@@ -468,16 +450,15 @@ pub type InterpolatedStringExpr = struct {
 
 // `NewString(args)` covers `$"…"`, `$(cap)"…"`, `$(&alloc)"…"`,
 // `$(cap, &alloc)"…"` uniformly as a call to `string_builder` with 0,
-// 1, or 2 arguments - overload resolution at type-check time picks the
-// right `string_builder` signature. `IntoBuilder(builder)` is the
+// 1, or 2 arguments - overload resolution at type-check time picks the right `string_builder`
+// signature. `IntoBuilder(builder)` is the
 // distinct write-into form `$sb"…"`.
 pub type InterpolationTarget = enum {
     NewString(List(Expr))
     IntoBuilder(&Expr)
 }
 
-// One segment of an interpolated string: either raw text between holes
-// or a `{expr}` hole.
+// One segment of an interpolated string: either raw text between holes or a `{expr}` hole.
 pub type InterpolationPart = enum {
     Text(String)
     Hole(InterpolationHole)
@@ -486,13 +467,12 @@ pub type InterpolationPart = enum {
 pub type InterpolationHole = struct {
     span: SourceSpan
     expr: &Expr
-    // None when the user wrote `{x}` with no format spec; carries the
-    // post-colon text verbatim for `{x:04}` style format directives.
+    // None when the user wrote `{x}` with no format spec; carries the post-colon text verbatim for
+    // `{x:04}` style format directives.
     format: String?
 }
 
-// `[1, 2, 3]` or `[v; n]` - array literal. The two shapes share the
-// outer node and split on `kind`.
+// `[1, 2, 3]` or `[v; n]` - array literal. The two shapes share the outer node and split on `kind`.
 pub type ArrayLiteralExpr = struct {
     span: SourceSpan
     kind: ArrayLiteralKind
@@ -511,26 +491,24 @@ pub type RepeatLiteral = struct {
     count: &Expr
 }
 
-// `(a, b, ...)` - tuple literal. The empty tuple `()` is the unit value.
-// A single-element tuple is written `(x,)` with a trailing comma.
+// `(a, b, ...)` - tuple literal. The empty tuple `()` is the unit value. A single-element tuple is
+// written `(x,)` with a trailing comma.
 pub type TupleLiteralExpr = struct {
     span: SourceSpan
     elements: List(Expr)
 }
 
-// `Point { x = 10, y = 20 }` and `.{ x = 10, y }` collapse into one
-// node - the only difference is whether a target type is named.
-// `type_expr` is None for anonymous form (target inferred from context);
-// Some for nominal construction.
+// `Point { x = 10, y = 20 }` and `.{ x = 10, y }` collapse into one node - the only difference is
+// whether a target type is named. `type_expr` is None for anonymous form (target inferred from
+// context); Some for nominal construction.
 pub type StructLiteralExpr = struct {
     span: SourceSpan
     type_expr: &TypeExpr?
     fields: List(StructFieldInit)
 }
 
-// Field initializer inside a struct literal. `value` is None when the
-// user wrote shorthand (`Point { x, y }`) - the identifier `x` is
-// reused as the value at type-check time.
+// Field initializer inside a struct literal. `value` is None when the user wrote shorthand (`Point
+// { x, y }`) - the identifier `x` is reused as the value at type-check time.
 pub type StructFieldInit = struct {
     span: SourceSpan
     name: String
@@ -543,9 +521,8 @@ pub type IdentifierExpr = struct {
     name: String
 }
 
-// `receiver.member` - direct field access AND UFCS dispatch base; the
-// resolution choice happens at type-check time. Wrapping a MemberAccess
-// in a Call (`a.b()`) becomes a UFCS call.
+// `receiver.member` - direct field access AND UFCS dispatch base; the resolution choice happens at
+// type-check time. Wrapping a MemberAccess in a Call (`a.b()`) becomes a UFCS call.
 pub type MemberAccessExpr = struct {
     span: SourceSpan
     receiver: &Expr
@@ -571,29 +548,26 @@ pub type NullPropagationExpr = struct {
     member: String
 }
 
-// `receiver[index]` - `index` is any expression. The slice forms
-// (`a[..]`, `a[i..]`, `a[..j]`, `a[i..j]`, `a[i..=j]`) appear as
-// `IndexExpr` with `index` being a `RangeExpr`; user-defined indexing
-// like `dict["key"]` carries an arbitrary `index` expression. Resolution
-// of value-form vs ref-form indexing happens at type-check time.
+// `receiver[index]` - `index` is any expression. The slice forms (`a[..]`, `a[i..]`, `a[..j]`,
+// `a[i..j]`, `a[i..=j]`) appear as `IndexExpr` with `index` being a `RangeExpr`; user-defined
+// indexing like `dict["key"]` carries an arbitrary `index` expression. Resolution of value-form vs
+// ref-form indexing happens at type-check time.
 pub type IndexExpr = struct {
     span: SourceSpan
     receiver: &Expr
     index: &Expr
 }
 
-// `callee(args)` - covers regular calls, UFCS dispatch (when `callee`
-// is a `MemberAccess`), and `op_call` invocation. Resolution happens at
-// type-check time.
+// `callee(args)` - covers regular calls, UFCS dispatch (when `callee` is a `MemberAccess`), and
+// `op_call` invocation. Resolution happens at type-check time.
 pub type CallExpr = struct {
     span: SourceSpan
     callee: &Expr
     args: List(CallArgument)
 }
 
-// One slot in a call's argument list - either positional or named.
-// Named arguments may appear interleaved with positional ones; ordering
-// rules are enforced later.
+// One slot in a call's argument list - either positional or named. Named arguments may appear
+// interleaved with positional ones; ordering rules are enforced later.
 pub type CallArgument = enum {
     Positional(&Expr)
     Named(NamedCallArgument)
@@ -612,8 +586,8 @@ pub type CastExpr = struct {
     target: &TypeExpr
 }
 
-// `lhs op rhs` for every infix operator. Operator desugarings to the
-// underlying `op_*` calls happen during lowering, not here.
+// `lhs op rhs` for every infix operator. Operator desugarings to the underlying `op_*` calls happen
+// during lowering, not here.
 pub type BinaryExpr = struct {
     span: SourceSpan
     op: BinaryOp
@@ -638,14 +612,13 @@ pub type UnaryExpr = struct {
 }
 
 pub type UnaryOp = enum {
-    Neg     // `-`
-    Not     // `!`
-    BitNot  // `~`
+    Neg // `-`
+    Not // `!`
+    BitNot // `~`
 }
 
-// `start..end`, `start..=end`, `..end`, `start..`, `..` - every bound is
-// optional, inclusivity is a flag. Distinct from `RangePattern` because
-// the grammar accepts ranges only in select positions.
+// `start..end`, `start..=end`, `..end`, `start..`, `..` - every bound is optional, inclusivity is a
+// flag. Distinct from `RangePattern` because the grammar accepts ranges only in select positions.
 pub type RangeExpr = struct {
     span: SourceSpan
     start: &Expr?
@@ -660,8 +633,7 @@ pub type CoalesceExpr = struct {
     rhs: &Expr
 }
 
-// `operand?` postfix try - desugars to a match against the implementing
-// `op_try` at lowering time.
+// `operand?` postfix try - desugars to a match against the implementing `op_try` at lowering time.
 pub type TryExpr = struct {
     span: SourceSpan
     operand: &Expr
@@ -674,9 +646,8 @@ pub type AssignmentExpr = struct {
     rhs: &Expr
 }
 
-// `{ stmts...; trailing? }` - the last statement without a terminator
-// becomes the trailing expression. `trailing` is None when the block
-// evaluates to unit.
+// `{ stmts...; trailing? }` - the last statement without a terminator becomes the trailing
+// expression. `trailing` is None when the block evaluates to unit.
 pub type BlockExpr = struct {
     span: SourceSpan
     stmts: List(Stmt)
@@ -684,8 +655,7 @@ pub type BlockExpr = struct {
 }
 
 // `if cond { then } else { else }` and `if cond { then } else if … { … }`.
-// Else-if is encoded as `else_branch` being another `If` - there is no
-// separate "else-if" node.
+// Else-if is encoded as `else_branch` being another `If` - there is no separate "else-if" node.
 pub type IfExpr = struct {
     span: SourceSpan
     condition: &Expr
@@ -693,9 +663,8 @@ pub type IfExpr = struct {
     else_branch: ElseBranch
 }
 
-// Tail of an `if`: missing, a block, or another chained if-else.
-// `NoElse` rather than `None` to avoid the unqualified-variant clash
-// against `Option.None` (see docs/known-issues.md).
+// Tail of an `if`: missing, a block, or another chained if-else. `NoElse` rather than `None` to
+// avoid the unqualified-variant clash against `Option.None` (see docs/known-issues.md).
 pub type ElseBranch = enum {
     NoElse
     Block(BlockExpr)
@@ -709,8 +678,8 @@ pub type MatchExpr = struct {
     arms: List(MatchArm)
 }
 
-// One arm of a match. `guard` carries the post-`if` condition when the
-// arm is `pat if cond => body`.
+// One arm of a match. `guard` carries the post-`if` condition when the arm is `pat if cond =>
+// body`.
 pub type MatchArm = struct {
     span: SourceSpan
     pattern: Pattern
@@ -718,10 +687,9 @@ pub type MatchArm = struct {
     body: &Expr
 }
 
-// `fn(params) ret? { body }` - anonymous function. May capture
-// surrounding locals (RFC-014 Phase 2 by-value capture). Same shape as
-// `FunctionDecl` minus name, directives, and visibility - none of which
-// apply to lambdas.
+// `fn(params) ret? { body }` - anonymous function. May capture surrounding locals (RFC-014 Phase 2
+// by-value capture). Same shape as `FunctionDecl` minus name, directives, and visibility - none of
+// which apply to lambdas.
 pub type LambdaExpr = struct {
     span: SourceSpan
     params: List(FunctionParam)
@@ -729,74 +697,71 @@ pub type LambdaExpr = struct {
     body: BlockExpr
 }
 
-// Recovery placeholder. The parser produced unrecognised tokens where
-// an expression was expected; the span lets downstream phases skip
-// without losing surrounding structure.
+// Recovery placeholder. The parser produced unrecognised tokens where an expression was expected;
+// the span lets downstream phases skip without losing surrounding structure.
 pub type ErrorExpr = struct {
     span: SourceSpan
 }
 
-// The source span of any expression. Used as node identity for type-check
-// results and lowering.
-// The source span of a pattern, mirroring `expr_span`. Consumers key
-// per-node results (types, resolved variants) by span fingerprint, so a
-// pattern needs the same accessor an expression has.
+// The source span of any expression. Used as node identity for type-check results and lowering. The
+// source span of a pattern, mirroring `expr_span`. Consumers key per-node results (types, resolved
+// variants) by span fingerprint, so a pattern needs the same accessor an expression has.
 pub fn pattern_span(p: &Pattern) SourceSpan {
     return p.* match {
-        Wildcard(x) => x.span,
-        Variable(x) => x.span,
-        Literal(x) => x.span,
-        EnumVariant(x) => x.span,
-        Or(x) => x.span,
-        Range(x) => x.span,
-        Struct(x) => x.span,
-        Tuple(x) => x.span,
-        Error(x) => x.span,
+        Wildcard(x) => x.span
+        Variable(x) => x.span
+        Literal(x) => x.span
+        EnumVariant(x) => x.span
+        Or(x) => x.span
+        Range(x) => x.span
+        Struct(x) => x.span
+        Tuple(x) => x.span
+        Error(x) => x.span
     }
 }
 
 pub fn type_expr_span(t: &TypeExpr) SourceSpan {
     return t.* match {
-        Named(n) => n.span,
-        GenericBind(g) => g.span,
-        Reference(r) => r.span,
-        Optional(o) => o.span,
-        Array(a) => a.span,
-        Slice(s) => s.span,
-        Tuple(tu) => tu.span,
-        Function(f) => f.span,
-        AnonStruct(st) => st.span,
-        AnonEnum(en) => en.span,
-        Error(er) => er.span,
+        Named(n) => n.span
+        GenericBind(g) => g.span
+        Reference(r) => r.span
+        Optional(o) => o.span
+        Array(a) => a.span
+        Slice(s) => s.span
+        Tuple(tu) => tu.span
+        Function(f) => f.span
+        AnonStruct(st) => st.span
+        AnonEnum(en) => en.span
+        Error(er) => er.span
     }
 }
 
 pub fn expr_span(e: &Expr) SourceSpan {
     return e.* match {
-        Lit(x) => x.span,
-        InterpolatedString(x) => x.span,
-        ArrayLit(x) => x.span,
-        TupleLit(x) => x.span,
-        StructLit(x) => x.span,
-        Identifier(x) => x.span,
-        MemberAccess(x) => x.span,
-        AddressOf(x) => x.span,
-        Dereference(x) => x.span,
-        NullPropagation(x) => x.span,
-        Index(x) => x.span,
-        Call(x) => x.span,
-        Cast(x) => x.span,
-        Binary(x) => x.span,
-        Unary(x) => x.span,
-        Range(x) => x.span,
-        Coalesce(x) => x.span,
-        Try(x) => x.span,
-        Assignment(x) => x.span,
-        Block(x) => x.span,
-        If(x) => x.span,
-        Match(x) => x.span,
-        Lambda(x) => x.span,
-        Error(x) => x.span,
+        Lit(x) => x.span
+        InterpolatedString(x) => x.span
+        ArrayLit(x) => x.span
+        TupleLit(x) => x.span
+        StructLit(x) => x.span
+        Identifier(x) => x.span
+        MemberAccess(x) => x.span
+        AddressOf(x) => x.span
+        Dereference(x) => x.span
+        NullPropagation(x) => x.span
+        Index(x) => x.span
+        Call(x) => x.span
+        Cast(x) => x.span
+        Binary(x) => x.span
+        Unary(x) => x.span
+        Range(x) => x.span
+        Coalesce(x) => x.span
+        Try(x) => x.span
+        Assignment(x) => x.span
+        Block(x) => x.span
+        If(x) => x.span
+        Match(x) => x.span
+        Lambda(x) => x.span
+        Error(x) => x.span
     }
 }
 
@@ -813,10 +778,9 @@ pub type Pattern = enum {
     Range(RangePattern)
     Struct(StructPattern)
     Tuple(TuplePattern)
-    // A pattern the front end could not represent. Distinct from
-    // `Wildcard`: a wildcard matches everything *by intent*, whereas this
-    // records that the source said something else and it was lost. Consumers
-    // must refuse to lower a match containing one rather than treat it as
+    // A pattern the front end could not represent. Distinct from `Wildcard`: a wildcard matches
+    // everything *by intent*, whereas this records that the source said something else and it was
+    // lost. Consumers must refuse to lower a match containing one rather than treat it as
     // irrefutable and silently take the arm.
     Error(ErrorPattern)
 }
@@ -825,31 +789,30 @@ pub type ErrorPattern = struct {
     span: SourceSpan
 }
 
-// `_` and the `else` arm catch-all collapse into Wildcard. The CST
-// preserves the keyword distinction; the AST does not.
+// `_` and the `else` arm catch-all collapse into Wildcard. The CST preserves the keyword
+// distinction; the AST does not.
 pub type WildcardPattern = struct {
     span: SourceSpan
 }
 
-// A bare identifier in pattern position - binds the matched value to
-// `name`. Distinct from a literal pattern that happens to be an
-// identifier-looking enum variant; the projector decides which based
-// on scope.
+// A bare identifier in pattern position - binds the matched value to `name`. Distinct from a
+// literal pattern that happens to be an identifier-looking enum variant; the projector decides
+// which based on scope.
 pub type VariablePattern = struct {
     span: SourceSpan
     name: String
 }
 
-// `42`, `'A'`, `"hi"`, `b'0'`, `true`, `null` - restricted to the
-// seven literal forms via the `Literal` enum (same as `LiteralExpr`).
+// `42`, `'A'`, `"hi"`, `b'0'`, `true`, `null` - restricted to the seven literal forms via the
+// `Literal` enum (same as `LiteralExpr`).
 pub type LiteralPattern = struct {
     span: SourceSpan
     value: LiteralValue
 }
 
-// `Some(x)`, `Move(x, y)`, `Color.Red`, `Red`. `qualifier` is the
-// optional `EnumName.` prefix; `name` is the variant. `payloads` is
-// the parenthesised destructure list, empty for nullary variants.
+// `Some(x)`, `Move(x, y)`, `Color.Red`, `Red`. `qualifier` is the optional `EnumName.` prefix;
+// `name` is the variant. `payloads` is the parenthesised destructure list, empty for nullary
+// variants.
 pub type EnumVariantPattern = struct {
     span: SourceSpan
     qualifier: String?
@@ -857,15 +820,15 @@ pub type EnumVariantPattern = struct {
     payloads: List(Pattern)
 }
 
-// `A | B | C` - matches if any alternative matches. Alternatives must
-// bind the same set of variable names; checked at type-check time.
+// `A | B | C` - matches if any alternative matches. Alternatives must bind the same set of variable
+// names; checked at type-check time.
 pub type OrPattern = struct {
     span: SourceSpan
     alternatives: List(Pattern)
 }
 
-// `0..10`, `0..=9`, `..n`, `n..` - same shape as `RangeExpr` but
-// distinct type so the grammar's position restriction is type-encoded.
+// `0..10`, `0..=9`, `..n`, `n..` - same shape as `RangeExpr` but distinct type so the grammar's
+// position restriction is type-encoded.
 pub type RangePattern = struct {
     span: SourceSpan
     start: &Expr?
@@ -873,8 +836,8 @@ pub type RangePattern = struct {
     inclusive: bool
 }
 
-// `Point { x, y = pat, .. }`. `has_rest` records the trailing `..`
-// placeholder; without it, every field must be listed.
+// `Point { x, y = pat, .. }`. `has_rest` records the trailing `..` placeholder; without it, every
+// field must be listed.
 pub type StructPattern = struct {
     span: SourceSpan
     type_expr: &TypeExpr
@@ -882,9 +845,8 @@ pub type StructPattern = struct {
     has_rest: bool
 }
 
-// One field slot inside a struct pattern. `binding` is None for
-// shorthand (`{ x, y }`) - semantically equivalent to a VariablePattern
-// of the same name.
+// One field slot inside a struct pattern. `binding` is None for shorthand (`{ x, y }`) -
+// semantically equivalent to a VariablePattern of the same name.
 pub type StructPatternField = struct {
     span: SourceSpan
     name: String
@@ -922,10 +884,9 @@ pub type NamedType = struct {
     generic_args: List(TypeExpr)
 }
 
-// `$T` - introduces a generic parameter at first appearance in a function
-// parameter type. Semantically valid only in `FunctionDecl.params` /
-// `LambdaExpr.params`; the AST accepts it everywhere and a later pass
-// flags misuse.
+// `$T` - introduces a generic parameter at first appearance in a function parameter type.
+// Semantically valid only in `FunctionDecl.params` / `LambdaExpr.params`; the AST accepts it
+// everywhere and a later pass flags misuse.
 pub type GenericBindType = struct {
     span: SourceSpan
     name: String
@@ -937,39 +898,37 @@ pub type ReferenceType = struct {
     inner: &TypeExpr
 }
 
-// `T?` - sugar for `Option(T)`. `&T?` is `Option(&T)`, encoded as
-// `Optional(inner = Reference(...))`.
+// `T?` - sugar for `Option(T)`. `&T?` is `Option(&T)`, encoded as `Optional(inner =
+// Reference(...))`.
 pub type OptionalType = struct {
     span: SourceSpan
     inner: &TypeExpr
 }
 
-// `[T; N]` - fixed-size array. `length` is an expression because it
-// may reference a constant (e.g. `[u8; BUFFER_SIZE]`).
+// `[T; N]` - fixed-size array. `length` is an expression because it may reference a constant (e.g.
+// `[u8; BUFFER_SIZE]`).
 pub type ArrayType = struct {
     span: SourceSpan
     element: &TypeExpr
     length: &Expr
 }
 
-// `T[]` - slice. `&T[]` is a reference to a slice; the AST nests
-// `Reference(inner = Slice(...))`.
+// `T[]` - slice. `&T[]` is a reference to a slice; the AST nests `Reference(inner = Slice(...))`.
 pub type SliceType = struct {
     span: SourceSpan
     element: &TypeExpr
 }
 
-// `(A, B, ...)` - tuple type. The empty tuple `()` is the unit type.
-// A single-element tuple is `(A,)` (with trailing comma); whether the
-// trailing comma is present is a CST concern, not an AST one.
+// `(A, B, ...)` - tuple type. The empty tuple `()` is the unit type. A single-element tuple is
+// `(A,)` (with trailing comma); whether the trailing comma is present is a CST concern, not an AST
+// one.
 pub type TupleType = struct {
     span: SourceSpan
     elements: List(TypeExpr)
 }
 
-// `fn(P1, P2) R` - function type. `return_type` is None for void.
-// `param_names[i]` is the optional `name:` before `params[i]` ("" when
-// unnamed); always the same length as `params`.
+// `fn(P1, P2) R` - function type. `return_type` is None for void. `param_names[i]` is the optional
+// `name:` before `params[i]` ("" when unnamed); always the same length as `params`.
 pub type FunctionType = struct {
     span: SourceSpan
     params: List(TypeExpr)
@@ -977,34 +936,33 @@ pub type FunctionType = struct {
     return_type: &TypeExpr?
 }
 
-// `struct(T1, T2) { field: T, ... }` - generics are optional and live
-// on the type expression itself. Same node whether named (RHS of a
-// `TypeDecl`) or anonymous in argument position.
+// `struct(T1, T2) { field: T, ... }` - generics are optional and live on the type expression
+// itself. Same node whether named (RHS of a `TypeDecl`) or anonymous in argument position.
 pub type AnonStructType = struct {
     span: SourceSpan
     generics: List(GenericParam)
     fields: List(StructField)
 }
 
-// One field declaration inside a struct type. FLang struct fields have
-// no default initializer - `name: T` is the only shape.
+// One field declaration inside a struct type. FLang struct fields have no default initializer -
+// `name: T` is the only shape.
 pub type StructField = struct {
     span: SourceSpan
     name: String
     type_expr: &TypeExpr
 }
 
-// `enum(T) { Variant, Variant(T) }` - generics optional. Same node
-// whether named (RHS of TypeDecl) or anonymous in type position.
+// `enum(T) { Variant, Variant(T) }` - generics optional. Same node whether named (RHS of TypeDecl)
+// or anonymous in type position.
 pub type AnonEnumType = struct {
     span: SourceSpan
     generics: List(GenericParam)
     variants: List(EnumVariant)
 }
 
-// One variant inside an enum type. `payloads` is empty for nullary
-// variants (`Red`); non-empty for tuple-style payloads (`Move(i32, i32)`).
-// `explicit_tag` carries `= N` for naked enums (`Less = -1`).
+// One variant inside an enum type. `payloads` is empty for nullary variants (`Red`); non-empty for
+// tuple-style payloads (`Move(i32, i32)`). `explicit_tag` carries `= N` for naked enums (`Less =
+// -1`).
 pub type EnumVariant = struct {
     span: SourceSpan
     name: String
@@ -1012,8 +970,8 @@ pub type EnumVariant = struct {
     explicit_tag: &Expr?
 }
 
-// One generic parameter binding inside a struct or enum type expression.
-// FLang has no bounds / constraints on generic parameters yet.
+// One generic parameter binding inside a struct or enum type expression. FLang has no bounds /
+// constraints on generic parameters yet.
 pub type GenericParam = struct {
     span: SourceSpan
     name: String
@@ -1028,42 +986,45 @@ pub type ErrorType = struct {
 // Signature predicates
 // ─────────────────────────────────────────────────────────────────────────
 
-// Whether the declaration introduces a generic parameter (`$T`) anywhere
-// in its signature. `$T` binds at its first appearance in a parameter
-// type, so this is the whole test - a use of an already-bound `T` reads
-// as a plain `Named("T")`. Shared by the checker (generic templates are
+// Whether the declaration introduces a generic parameter (`$T`) anywhere in its signature. `$T`
+// binds at its first appearance in a parameter type, so this is the whole test - a use of an
+// already-bound `T` reads as a plain `Named("T")`. Shared by the checker (generic templates are
 // only validated per instantiation) and lowering (templates never emit).
 pub fn declares_generic(decl: &FunctionDecl) bool {
     for i in 0..decl.params.len {
-        if mentions_generic(&decl.params[i].type_expr) { return true }
+        if mentions_generic(&decl.params[i].type_expr) {
+            return true
+        }
     }
     return decl.return_type match {
-        Some(rt) => mentions_generic(&rt),
-        None => false,
+        Some(rt) => mentions_generic(&rt)
+        None => false
     }
 }
 
 pub fn mentions_generic(te: &TypeExpr) bool {
     return te.* match {
-        GenericBind(_) => true,
-        Named(n) => any_generic(&n.generic_args),
-        Reference(r) => mentions_generic(r.inner),
-        Optional(o) => mentions_generic(o.inner),
-        Array(a) => mentions_generic(a.element),
-        Slice(sl) => mentions_generic(sl.element),
-        Tuple(t) => any_generic(&t.elements),
-        Function(f) => function_mentions_generic(&f),
-        AnonStruct(_) => false,
-        AnonEnum(_) => false,
-        Error(_) => false,
+        GenericBind(_) => true
+        Named(n) => any_generic(&n.generic_args)
+        Reference(r) => mentions_generic(r.inner)
+        Optional(o) => mentions_generic(o.inner)
+        Array(a) => mentions_generic(a.element)
+        Slice(sl) => mentions_generic(sl.element)
+        Tuple(t) => any_generic(&t.elements)
+        Function(f) => function_mentions_generic(&f)
+        AnonStruct(_) => false
+        AnonEnum(_) => false
+        Error(_) => false
     }
 }
 
 fn function_mentions_generic(f: &FunctionType) bool {
-    if any_generic(&f.params) { return true }
+    if any_generic(&f.params) {
+        return true
+    }
     return f.return_type match {
-        Some(rt) => mentions_generic(rt),
-        None => false,
+        Some(rt) => mentions_generic(rt)
+        None => false
     }
 }
 

@@ -28,7 +28,7 @@ pub fn parse(self: &Parser) &Expr {
     const expr = parse_additive(self)
 
     self.current match {
-        End => {},
+        End => {}
         else => panic("unexpected token after expression")
     }
 
@@ -45,12 +45,12 @@ fn parse_additive(self: &Parser) &Expr {
                 advance(self)
                 const right = parse_multiplicative(self)
                 left = alloc_expr(self, Expr.Add(left, right))
-            },
+            }
             Minus => {
                 advance(self)
                 const right = parse_multiplicative(self)
                 left = alloc_expr(self, Expr.Sub(left, right))
-            },
+            }
             else => { return left }
         }
     }
@@ -68,17 +68,17 @@ fn parse_multiplicative(self: &Parser) &Expr {
                 advance(self)
                 const right = parse_unary(self)
                 left = alloc_expr(self, Expr.Mul(left, right))
-            },
+            }
             Slash => {
                 advance(self)
                 const right = parse_unary(self)
                 left = alloc_expr(self, Expr.Div(left, right))
-            },
+            }
             Percent => {
                 advance(self)
                 const right = parse_unary(self)
                 left = alloc_expr(self, Expr.Mod(left, right))
-            },
+            }
             else => { return left }
         }
     }
@@ -90,7 +90,7 @@ fn parse_multiplicative(self: &Parser) &Expr {
 fn parse_unary(self: &Parser) &Expr {
     let is_neg = false
     self.current match {
-        Minus => { is_neg = true },
+        Minus => { is_neg = true }
         else => {}
     }
 
@@ -110,8 +110,11 @@ fn parse_primary(self: &Parser) &Expr {
     let is_paren = false
 
     self.current match {
-        Number(n) => { is_num = true; num_val = n },
-        LParen => { is_paren = true },
+        Number(n) => {
+            is_num = true
+            num_val = n
+        }
+        LParen => { is_paren = true }
         else => panic("unexpected token in expression")
     }
 
@@ -124,7 +127,7 @@ fn parse_primary(self: &Parser) &Expr {
     advance(self)
     const expr = parse_additive(self)
     self.current match {
-        RParen => { advance(self) },
+        RParen => { advance(self) }
         else => panic("expected closing parenthesis")
     }
     return expr

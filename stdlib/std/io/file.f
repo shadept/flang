@@ -1,12 +1,11 @@
 // std.io.file - an open file and the operations that need one.
 //
-// Sits on std.io.internal.fs, which owns every syscall. This module holds a
-// File and reports `FileError`: the set of things that can go wrong when the
-// thing you named is meant to be a file. Directory-shaped failures (NotEmpty,
-// NotADirectory) are not in it, by construction.
+// Sits on std.io.internal.fs, which owns every syscall. This module holds a File and reports
+// `FileError`: the set of things that can go wrong when the thing you named is meant to be a file.
+// Directory-shaped failures (NotEmpty, NotADirectory) are not in it, by construction.
 //
-// Paths are ordinary String views. Nothing here requires NUL termination -
-// internal copies before it reaches the OS.
+// Paths are ordinary String views. Nothing here requires NUL termination - internal copies before
+// it reaches the OS.
 
 import std.io.reader
 import std.io.writer
@@ -21,24 +20,24 @@ import std.io.internal.fs
 import std.io.types
 
 pub type FileMode = enum {
-    Read,
-    Write,
-    Append,
+    Read
+    Write
+    Append
 }
 
 pub type FileEncoding = enum {
-    Utf8,
-    Ascii,
+    Utf8
+    Ascii
 }
 
 // Order is load-bearing for existing callers: IOError stays tag 0.
 pub type FileError = enum {
-    IOError,
-    NotFound,
-    PermissionDenied,
-    AlreadyExists,
-    NameTooLong,
-    InvalidArgument,
+    IOError
+    NotFound
+    PermissionDenied
+    AlreadyExists
+    NameTooLong
+    InvalidArgument
 }
 
 pub type FileHandle = struct {
@@ -56,30 +55,29 @@ pub type File = struct {
 // Error translation
 // =============================================================================
 
-// The OS speaks FsError; this module speaks FileError. This is the only place
-// the two meet, so a new errno mapping is added once, in fs.c, and lands here
-// automatically.
+// The OS speaks FsError; this module speaks FileError. This is the only place the two meet, so a
+// new errno mapping is added once, in fs.c, and lands here automatically.
 //
-// NotADirectory and NotEmpty cannot describe a file operation - a caller that
-// hit one asked for something structurally impossible, which is IOError's job.
+// NotADirectory and NotEmpty cannot describe a file operation - a caller that hit one asked for
+// something structurally impossible, which is IOError's job.
 fn to_file_error(e: FsError) FileError {
     return e match {
-        NotFound => FileError.NotFound,
-        PermissionDenied => FileError.PermissionDenied,
-        AlreadyExists => FileError.AlreadyExists,
-        NameTooLong => FileError.NameTooLong,
-        InvalidArgument => FileError.InvalidArgument,
-        _ => FileError.IOError,
+        NotFound => FileError.NotFound
+        PermissionDenied => FileError.PermissionDenied
+        AlreadyExists => FileError.AlreadyExists
+        NameTooLong => FileError.NameTooLong
+        InvalidArgument => FileError.InvalidArgument
+        _ => FileError.IOError
     }
 }
 
 fn open_mode(mode: FileMode) i32 {
-    // The numeric O_* values differ between Linux, macOS and Windows; fs.c
-    // resolves them. This is a portable selector, not a flag set.
+    // The numeric O_* values differ between Linux, macOS and Windows; fs.c resolves them. This is a
+    // portable selector, not a flag set.
     return mode match {
-        Read => FS_OPEN_READ,
-        Write => FS_OPEN_WRITE,
-        Append => FS_OPEN_APPEND,
+        Read => FS_OPEN_READ
+        Write => FS_OPEN_WRITE
+        Append => FS_OPEN_APPEND
     }
 }
 
@@ -105,8 +103,8 @@ pub fn close_file(file: &File) Result((), FileError) {
     return raw_close(file.handle.fd).map_err(to_file_error)
 }
 
-// Deletes a file, or a symlink itself - never the symlink's target. A
-// directory is rejected by the OS; use `remove_dir` from std.io.dir.
+// Deletes a file, or a symlink itself - never the symlink's target. A directory is rejected by the
+// OS; use `remove_dir` from std.io.dir.
 pub fn remove_file(path: String) Result((), FileError) {
     return raw_unlink(path).map_err(to_file_error)
 }
@@ -117,8 +115,8 @@ pub fn remove_file(path: String) Result((), FileError) {
 
 pub fn read_all(file: &File, allocator: &Allocator? = null) Result(OwnedString, FileError) {
     const PAGE_SIZE = 4096
-    // Owned so a mid-read failure frees the builder on the way out: `?` bails
-    // straight past the return, and the defer is what catches it.
+    // Owned so a mid-read failure frees the builder on the way out: `?` bails straight past the
+    // return, and the defer is what catches it.
     let sb = owned(string_builder(PAGE_SIZE, allocator))
     defer sb.deinit()
     loop {
@@ -128,9 +126,9 @@ pub fn read_all(file: &File, allocator: &Allocator? = null) Result(OwnedString, 
         if n < tail.len {
             break
         }
-        // Grow capacity by one page. StringBuilder doubles capacity on each growth,
-        // so subsequent calls over-allocate. This amortizes allocation cost and aligns
-        // with typical file size distributions (many small, few large).
+        // Grow capacity by one page. StringBuilder doubles capacity on each growth, so subsequent
+        // calls over-allocate. This amortizes allocation cost and aligns with typical file size
+        // distributions (many small, few large).
         sb.ensure_capacity(sb.cap + PAGE_SIZE)
     }
     return Ok(sb.transfer().to_string())
@@ -157,11 +155,15 @@ pub fn write(file: &File, value: String) Result((), FileError) {
     let bytes = value.as_raw_bytes()
     let total_written = 0usize
     loop {
-        if total_written >= bytes.len { break }
+        if total_written >= bytes.len {
+            break
+        }
         const n = raw_write(file.handle.fd, bytes[total_written..bytes.len])
             .map_err(to_file_error)?
         // A zero-length write with bytes still pending would spin forever.
-        if n == 0 { return Err(FileError.IOError) }
+        if n == 0 {
+            return Err(FileError.IOError)
+        }
         total_written = total_written + n
     }
     return Ok(())
@@ -222,8 +224,7 @@ pub const stderr = File {
 test "open_file on a missing path reports NotFound, not IOError" {
     const r = open_file("definitely_not_here.txt", FileMode.Read)
     assert_true(r.is_err(), "open fails")
-    assert_true(r.unwrap_err() match { NotFound => true, _ => false },
-                "errno reaches the caller")
+    assert_true(r.unwrap_err() match { NotFound => true, _ => false }, "errno reaches the caller")
 }
 
 test "write, read back, and remove a file" {

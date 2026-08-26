@@ -1,7 +1,7 @@
 // Snake game - demonstrates terminal control, raw input, and game loops.
 //
-// Controls: WASD or arrow keys to move, Q to quit.
-// If interrupted with Ctrl+C, run `reset` to restore terminal settings.
+// Controls: WASD or arrow keys to move, Q to quit. If interrupted with Ctrl+C, run `reset` to
+// restore terminal settings.
 
 import std.string_builder
 import std.io.writer
@@ -82,41 +82,69 @@ pub fn main() i32 {
 
     // === Game loop ===
     loop {
-        if game_over { break }
+        if game_over {
+            break
+        }
 
         // --- Input (non-blocking) ---
         let input = [0u8; 3]
         let n = snake_read_key(input.ptr, 3) as isize
 
         if n == 1 {
-            if input[0] == 'q' or input[0] == 'Q' { break }
+            if input[0] == 'q' or input[0] == 'Q' {
+                break
+            }
             if input[0] == 'w' or input[0] == 'W' {
-                if dir != DIR_DOWN { dir = DIR_UP }
+                if dir != DIR_DOWN {
+                    dir = DIR_UP
+                }
             }
             if input[0] == 's' or input[0] == 'S' {
-                if dir != DIR_UP { dir = DIR_DOWN }
+                if dir != DIR_UP {
+                    dir = DIR_DOWN
+                }
             }
             if input[0] == 'a' or input[0] == 'A' {
-                if dir != DIR_RIGHT { dir = DIR_LEFT }
+                if dir != DIR_RIGHT {
+                    dir = DIR_LEFT
+                }
             }
             if input[0] == 'd' or input[0] == 'D' {
-                if dir != DIR_LEFT { dir = DIR_RIGHT }
+                if dir != DIR_LEFT {
+                    dir = DIR_RIGHT
+                }
             }
         }
         if n == 3 and input[0] == 27 and input[1] == '[' {
-            if input[2] == 'A' and dir != DIR_DOWN { dir = DIR_UP }
-            if input[2] == 'B' and dir != DIR_UP { dir = DIR_DOWN }
-            if input[2] == 'D' and dir != DIR_RIGHT { dir = DIR_LEFT }
-            if input[2] == 'C' and dir != DIR_LEFT { dir = DIR_RIGHT }
+            if input[2] == 'A' and dir != DIR_DOWN {
+                dir = DIR_UP
+            }
+            if input[2] == 'B' and dir != DIR_UP {
+                dir = DIR_DOWN
+            }
+            if input[2] == 'D' and dir != DIR_RIGHT {
+                dir = DIR_LEFT
+            }
+            if input[2] == 'C' and dir != DIR_LEFT {
+                dir = DIR_RIGHT
+            }
         }
 
         // --- Move ---
         let hx = sx[0]
         let hy = sy[0]
-        if dir == DIR_UP { hy = hy - 1 }
-        else if dir == DIR_DOWN { hy = hy + 1 }
-        else if dir == DIR_LEFT { hx = hx - 1 }
-        else { hx = hx + 1 }
+        if dir == DIR_UP {
+            hy = hy - 1
+        }
+        else if dir == DIR_DOWN {
+            hy = hy + 1
+        }
+        else if dir == DIR_LEFT {
+            hx = hx - 1
+        }
+        else {
+            hx = hx + 1
+        }
 
         // Wall collision
         if hx < 0 or hx >= BOARD_W or hy < 0 or hy >= BOARD_H {
@@ -130,7 +158,9 @@ pub fn main() i32 {
                 game_over = true
             }
         }
-        if game_over { break }
+        if game_over {
+            break
+        }
 
         // Eat food?
         let ate = hx == food_x and hy == food_y
@@ -158,7 +188,9 @@ pub fn main() i32 {
                         ok = false
                     }
                 }
-                if ok { break }
+                if ok {
+                    break
+                }
             }
         }
 

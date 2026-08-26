@@ -17,17 +17,25 @@ const SCREEN_WIDTH: i32 = 800
 const SCREEN_HEIGHT: i32 = 450
 
 type State = struct {
-    ball_x: f32,
-    ball_y: f32,
+    ball_x: f32
+    ball_y: f32
 }
 
 fn update(s: &State) {
     let dt = GetFrameTime()
     let speed: f32 = 200.0
-    if IsKeyDown(KEY_RIGHT) { s.ball_x = s.ball_x + speed * dt }
-    if IsKeyDown(KEY_LEFT)  { s.ball_x = s.ball_x - speed * dt }
-    if IsKeyDown(KEY_DOWN)  { s.ball_y = s.ball_y + speed * dt }
-    if IsKeyDown(KEY_UP)    { s.ball_y = s.ball_y - speed * dt }
+    if IsKeyDown(KEY_RIGHT) {
+        s.ball_x = s.ball_x + speed * dt
+    }
+    if IsKeyDown(KEY_LEFT) {
+        s.ball_x = s.ball_x - speed * dt
+    }
+    if IsKeyDown(KEY_DOWN) {
+        s.ball_y = s.ball_y + speed * dt
+    }
+    if IsKeyDown(KEY_UP) {
+        s.ball_y = s.ball_y - speed * dt
+    }
 }
 
 fn draw(s: &State, bg: Color, ball_color: Color, rect_color: Color, text_color: Color) {
@@ -53,7 +61,9 @@ pub fn main() i32 {
     let text_color = Color { r = 100, g = 100, b = 100, a = 255 }
 
     loop {
-        if WindowShouldClose() { break }
+        if WindowShouldClose() {
+            break
+        }
         update(&state)
         draw(&state, bg, ball_color, rect_color, text_color)
     }

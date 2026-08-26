@@ -1,22 +1,19 @@
-// Phase 3 of the FIR optimization pipeline (RFC-015): inline small,
-// non-recursive, single-block callees into their callers. The point
-// isn't general perf - at -O2 the C compiler unwraps shim wrappers
-// itself. The point is collapsing FLang's scoped-mutability mutator
-// pattern (`pub fn add_function(self, f) { self.functions.push(f) }`)
-// so:
+// Phase 3 of the FIR optimization pipeline (RFC-015): inline small, non-recursive, single-block
+// callees into their callers. The point isn't general perf - at -O2 the C compiler unwraps shim
+// wrappers itself. The point is collapsing FLang's scoped-mutability mutator pattern (`pub fn
+// add_function(self, f) { self.functions.push(f) }`) so:
 //   1. Debug builds emit readable C.
 //   2. Stack-local structs stop having their addresses escape into
 //      opaque calls - making mem2reg's escape analysis tractable in
 //      the later pipeline phases.
 //
-// Phase 3 handles single-block callees only. Multi-block (`Result`-
-// style early-return) callees come in Phase 4. The inliner is meant
-// to run on every build; it does not key off debug/release mode.
+// Phase 3 handles single-block callees only. Multi-block (`Result`- style early-return) callees
+// come in Phase 4. The inliner is meant to run on every build; it does not key off debug/release
+// mode.
 //
 // TODO(rfc-015 §8 Q6): once we emit `#line` directives the splice
-// needs to preserve the callee's source spans rather than reusing
-// the call site's. Flag-only for now - there are no line directives
-// to corrupt yet.
+// needs to preserve the callee's source spans rather than reusing the call site's. Flag-only for
+// now - there are no line directives to corrupt yet.
 
 import std.allocator
 import std.bitset
@@ -29,18 +26,18 @@ import std.test
 import flang_codegen.builder
 import flang_codegen.fir
 
-// Empirical lower bound on the FLang corpus - matches the C# pre-
-// decessor (`InliningPass.MaxInlineInstructions = 15`). Tune from
-// `InlineStats.bail_size` data when it accumulates.
+// Empirical lower bound on the FLang corpus - matches the C# pre- decessor
+// (`InliningPass.MaxInlineInstructions = 15`). Tune from `InlineStats.bail_size` data when it
+// accumulates.
 pub const MAX_INLINE_INSTRS: usize = 15
 
-// Hard cap on the fixed-point loop. Each successful pass shrinks the
-// inlinable set as leaves disappear, so this is just a safety net.
+// Hard cap on the fixed-point loop. Each successful pass shrinks the inlinable set as leaves
+// disappear, so this is just a safety net.
 pub const MAX_PASSES: i32 = 10
 
-// Telemetry returned to the caller. Bail counters are recorded on the
-// first pass only - later passes operate on whatever the first pass
-// didn't already absorb and double-counting would be misleading.
+// Telemetry returned to the caller. Bail counters are recorded on the first pass only - later
+// passes operate on whatever the first pass didn't already absorb and double-counting would be
+// misleading.
 pub type InlineStats = struct {
     passes: i32
     inlined: usize
@@ -51,8 +48,8 @@ pub type InlineStats = struct {
     bail_non_ret: usize
 }
 
-// Run the inliner over `m` to fixed point. The module is mutated in
-// place; functions that became uncalled by inlining stay in the
+// Run the inliner over `m` to fixed point. The module is mutated in place; functions that became
+// uncalled by inlining stay in the
 // module (dead-function elimination is a separate pass - RFC-015 §4).
 pub fn inline_shims(m: &IrModule, allocator: &Allocator? = null) InlineStats {
     let stats = InlineStats {
@@ -77,44 +74,62 @@ pub fn inline_shims(m: &IrModule, allocator: &Allocator? = null) InlineStats {
         let any_eligible = false
         for i in 0..m.functions.len {
             const f = &m.functions[i]
-            if f.name == "main" { continue }
+            if f.name == "main" {
+                continue
+            }
             if recursive.contains(f.name) {
-                if pass == 0 { stats.bail_recursive = stats.bail_recursive + 1 }
+                if pass == 0 {
+                    stats.bail_recursive = stats.bail_recursive + 1
+                }
                 continue
             }
             if f.blocks.len != 1 {
-                if pass == 0 { stats.bail_multi_block = stats.bail_multi_block + 1 }
+                if pass == 0 {
+                    stats.bail_multi_block = stats.bail_multi_block + 1
+                }
                 continue
             }
             const body_len = f.blocks[0].instrs.len
             if body_len > MAX_INLINE_INSTRS {
-                if pass == 0 { stats.bail_size = stats.bail_size + 1 }
+                if pass == 0 {
+                    stats.bail_size = stats.bail_size + 1
+                }
                 continue
             }
             if !is_ret_terminator(&f.blocks[0].terminator) {
-                if pass == 0 { stats.bail_non_ret = stats.bail_non_ret + 1 }
+                if pass == 0 {
+                    stats.bail_non_ret = stats.bail_non_ret + 1
+                }
                 continue
             }
             if contains_indirect_or_foreign(&f.blocks[0].instrs, &foreigns) {
-                if pass == 0 { stats.bail_indirect = stats.bail_indirect + 1 }
+                if pass == 0 {
+                    stats.bail_indirect = stats.bail_indirect + 1
+                }
                 continue
             }
             inlinable_idx.set(f.name, i)
             any_eligible = true
         }
         stats.passes = pass + 1
-        if !any_eligible { break }
+        if !any_eligible {
+            break
+        }
 
         let any_inlined = false
         for j in 0..m.functions.len {
-            if m.functions[j].name == "main" { continue }
+            if m.functions[j].name == "main" {
+                continue
+            }
             const did = inline_calls_in(m, j, &inlinable_idx, allocator)
             if did > 0 {
                 any_inlined = true
                 stats.inlined = stats.inlined + did
             }
         }
-        if !any_inlined { break }
+        if !any_inlined {
+            break
+        }
     }
     return stats
 }
@@ -125,8 +140,8 @@ pub fn inline_shims(m: &IrModule, allocator: &Allocator? = null) InlineStats {
 
 fn is_ret_terminator(t: &Terminator) bool {
     return t.* match {
-        Ret(_) => true,
-        _ => false,
+        Ret(_) => true
+        _ => false
     }
 }
 
@@ -134,10 +149,12 @@ fn contains_indirect_or_foreign(instrs: &List(Instr), foreigns: &Set(OwnedString
     for i in 0..instrs.len {
         instrs[i] match {
             Call(c) => {
-                if foreigns.contains(c.callee) { return true }
-            },
-            CallIndirect(_) => return true,
-            _ => {},
+                if foreigns.contains(c.callee) {
+                    return true
+                }
+            }
+            CallIndirect(_) => return true
+            _ => {}
         }
     }
     return false
@@ -152,8 +169,8 @@ fn collect_foreign_names(m: &IrModule, alloc: &Allocator?) Set(OwnedString) {
 }
 
 // ─────────────────────────────────────────────────────────────────────
-// Call-graph reachability - a function is recursive iff its own direct
-// callees can reach it transitively. Covers self-loops and mutual
+// Call-graph reachability - a function is recursive iff its own direct callees can reach it
+// transitively. Covers self-loops and mutual
 // recursion (A → B → A) uniformly without a stack-based SCC pass.
 // O(V * (V + E)) on the call graph; V is hundreds even on big modules.
 // ─────────────────────────────────────────────────────────────────────
@@ -179,14 +196,16 @@ fn find_recursive(m: &IrModule, foreigns: &Set(OwnedString), alloc: &Allocator?)
             for ii in 0..b.instrs.len {
                 b.instrs[ii] match {
                     Call(c) => {
-                        if foreigns.contains(c.callee) { continue }
+                        if foreigns.contains(c.callee) {
+                            continue
+                        }
                         const idx_opt = name_to_idx.get(c.callee)
                         idx_opt match {
-                            Some(idx) => edges.push(idx),
-                            None => {},
+                            Some(idx) => edges.push(idx)
+                            None => {}
                         }
-                    },
-                    _ => {},
+                    }
+                    _ => {}
                 }
             }
         }
@@ -203,9 +222,8 @@ fn find_recursive(m: &IrModule, foreigns: &Set(OwnedString), alloc: &Allocator?)
 }
 
 fn reaches_self(adj: &List(List(usize)), start: usize, alloc: &Allocator?) bool {
-    // Dense integer membership - Bitset is one bit per element vs
-    // Set(usize)'s ~32 bytes/entry hash table. set.f's preamble
-    // explicitly points at Bitset for this case.
+    // Dense integer membership - Bitset is one bit per element vs Set(usize)'s ~32 bytes/entry hash
+    // table. set.f's preamble explicitly points at Bitset for this case.
     let visited = bitset(adj.len, alloc)
     defer visited.deinit()
     let queue: List(usize) = list(0, alloc)
@@ -222,7 +240,9 @@ fn reaches_self(adj: &List(List(usize)), start: usize, alloc: &Allocator?) bool 
     while head < queue.len {
         const n = queue[head]
         head = head + 1
-        if n == start { return true }
+        if n == start {
+            return true
+        }
         for c in adj[n] {
             if !visited.contains(c) {
                 visited.add(c)
@@ -234,8 +254,8 @@ fn reaches_self(adj: &List(List(usize)), start: usize, alloc: &Allocator?) bool 
 }
 
 // ─────────────────────────────────────────────────────────────────────
-// Per-caller pass - rebuild every block with inlinable calls spliced
-// in place. Uses two substitution maps:
+// Per-caller pass - rebuild every block with inlinable calls spliced in place. Uses two
+// substitution maps:
 //
 //   result_subst : Dict(u32, Operand)
 //     Function-scoped. Maps the SSA id of an already-inlined call's
@@ -249,14 +269,15 @@ fn reaches_self(adj: &List(List(usize)), start: usize, alloc: &Allocator?) bool 
 //     to the operand to substitute in the cloned instruction.
 // ─────────────────────────────────────────────────────────────────────
 
-fn inline_calls_in(m: &IrModule, caller_idx: usize, inlinable: &Dict(OwnedString, usize), alloc: &Allocator?) usize {
+fn inline_calls_in(m: &IrModule, caller_idx: usize, inlinable: &Dict(OwnedString, usize),
+    alloc: &Allocator?) usize {
     let inlined_count: usize = 0
     let result_subst: Dict(u32, Operand) = dict(alloc)
     defer result_subst.deinit()
 
     // Chained access (m.functions[i].blocks[j].something = …) writes to
-    // a temp copy in flang's lowering today - bind the caller once and
-    // use that ref for all reads/writes inside the loop.
+    // a temp copy in flang's lowering today - bind the caller once and use that ref for all
+    // reads/writes inside the loop.
     let caller = &m.functions[caller_idx]
     const block_count = caller.blocks.len
     for bi in 0..block_count {
@@ -273,52 +294,50 @@ fn inline_calls_in(m: &IrModule, caller_idx: usize, inlinable: &Dict(OwnedString
                     const idx_opt = inlinable.get(c.callee)
                     idx_opt match {
                         Some(idx) => {
-                            // SCC analysis already excludes self-recursion,
-                            // but the guard is cheap and protects against any
-                            // future caller that bypasses eligibility.
+                            // SCC analysis already excludes self-recursion, but the guard is cheap
+                            // and protects against any future caller that bypasses eligibility.
                             if idx != caller_idx {
                                 do_splice = true
                                 callee_idx = idx
                             }
-                        },
-                        None => {},
+                        }
+                        None => {}
                     }
 
                     if do_splice {
-                        // Re-route the call's args through any prior splice's
-                        // result substitutions before binding to callee params.
+                        // Re-route the call's args through any prior splice's result substitutions
+                        // before binding to callee params.
                         let effective_args: List(Operand) = list(c.args.len, alloc)
                         defer effective_args.deinit()
                         for ai in 0..c.args.len {
                             effective_args.push(remap_operand(c.args[ai], &result_subst))
                         }
 
-                        const ret_op = splice_callee(
-                            m, callee_idx, caller, &effective_args, &new_instrs, alloc,
-                        )
+                        const ret_op = splice_callee(m, callee_idx, caller, &effective_args,
+                            &new_instrs, alloc)
 
                         c.result match {
                             Some(old_id) => {
                                 ret_op match {
-                                    Some(rop) => result_subst.set(old_id, rop),
-                                    None => {},
+                                    Some(rop) => result_subst.set(old_id, rop)
+                                    None => {}
                                 }
-                            },
-                            None => {},
+                            }
+                            None => {}
                         }
                         inlined_count = inlined_count + 1
                     } else {
                         new_instrs.push(rewrite_instr(inst_ref, &result_subst, alloc))
                     }
-                },
-                _ => new_instrs.push(rewrite_instr(inst_ref, &result_subst, alloc)),
+                }
+                _ => new_instrs.push(rewrite_instr(inst_ref, &result_subst, alloc))
             }
         }
 
         const new_term = rewrite_terminator(&block_ref.terminator, &result_subst, alloc)
-        // Swap in the freshly-built lists; deinit the previous storage.
-        // Direct field assignment is blocked by scoped mutability (Block
-        // is defined in fir), so we route through `replace_*` helpers.
+        // Swap in the freshly-built lists; deinit the previous storage. Direct field assignment is
+        // blocked by scoped mutability (Block is defined in fir), so we route through `replace_*`
+        // helpers.
         let old_instrs = block_ref.replace_instrs(new_instrs)
         old_instrs.deinit()
         let old_term = block_ref.replace_terminator(new_term)
@@ -327,25 +346,20 @@ fn inline_calls_in(m: &IrModule, caller_idx: usize, inlinable: &Dict(OwnedString
     return inlined_count
 }
 
-// Splice a single inlinable call. Reads from `m.functions[callee_idx]`,
-// allocates fresh SSA ids on `caller`, appends the cloned instructions
-// to `out`, and returns the operand replacing the call's result (or
-// `None` for void).
-fn splice_callee(
-    m: &IrModule,
-    callee_idx: usize,
-    caller: &Function,
-    args: &List(Operand),
-    out: &List(Instr),
-    alloc: &Allocator?,
-) Operand? {
+// Splice a single inlinable call. Reads from `m.functions[callee_idx]`, allocates fresh SSA ids on
+// `caller`, appends the cloned instructions to `out`, and returns the operand replacing the call's
+// result (or `None` for void).
+fn splice_callee(m: &IrModule, callee_idx: usize, caller: &Function, args: &List(Operand),
+    out: &List(Instr), alloc: &Allocator?) Operand? {
     let local_subst: Dict(u32, Operand) = dict(alloc)
     defer local_subst.deinit()
 
     let callee = &m.functions[callee_idx]
     const callee_param_count = callee.params.len
     for i in 0..callee_param_count {
-        if i >= args.len { break }
+        if i >= args.len {
+            break
+        }
         const pid = callee.params[i].id
         local_subst.set(pid, args[i])
     }
@@ -362,18 +376,17 @@ fn splice_callee(
     cb.terminator match {
         Ret(v) => {
             v match {
-                Some(op) => result = Some(remap_operand(op, &local_subst)),
-                None => {},
+                Some(op) => result = Some(remap_operand(op, &local_subst))
+                None => {}
             }
-        },
-        _ => {},
+        }
+        _ => {}
     }
     return result
 }
 
 // ─────────────────────────────────────────────────────────────────────
-// Operand / instruction / terminator cloning. Each instruction variant
-// has two cloning paths:
+// Operand / instruction / terminator cloning. Each instruction variant has two cloning paths:
 //
 //   clone_callee_instr - used while splicing a callee body. Mints a
 //     fresh result id via `caller.fresh_value_id()` for every value-
@@ -385,10 +398,9 @@ fn splice_callee(
 //     inlined. Preserves result ids; only remaps operands through the
 //     function-scoped result substitution.
 //
-// Both paths always allocate fresh inner lists (call args, variadic
-// type lists, branch-target args). The old block's instruction list
-// gets deinit'd wholesale after the rewrite, so reusing list buffers
-// across new/old would dangle.
+// Both paths always allocate fresh inner lists (call args, variadic type lists, branch-target
+// args). The old block's instruction list gets deinit'd wholesale after the rewrite, so reusing
+// list buffers across new/old would dangle.
 // ─────────────────────────────────────────────────────────────────────
 
 fn remap_operand(op: Operand, subst: &Dict(u32, Operand)) Operand {
@@ -396,15 +408,16 @@ fn remap_operand(op: Operand, subst: &Dict(u32, Operand)) Operand {
         Local(id) => {
             const found = subst.get(id)
             found match {
-                Some(o) => o,
-                None => op,
+                Some(o) => o
+                None => op
             }
-        },
-        _ => op,
+        }
+        _ => op
     }
 }
 
-fn clone_operand_list(args: &List(Operand), subst: &Dict(u32, Operand), alloc: &Allocator?) List(Operand) {
+fn clone_operand_list(args: &List(Operand), subst: &Dict(u32, Operand),
+    alloc: &Allocator?) List(Operand) {
     let out: List(Operand) = list(args.len, alloc)
     for i in 0..args.len {
         out.push(remap_operand(args[i], subst))
@@ -425,12 +438,8 @@ fn clone_block_target(t: &BlockTarget, subst: &Dict(u32, Operand), alloc: &Alloc
     }
 }
 
-fn clone_callee_instr(
-    inst: &Instr,
-    subst: &Dict(u32, Operand),
-    caller: &Function,
-    alloc: &Allocator?,
-) Instr {
+fn clone_callee_instr(inst: &Instr, subst: &Dict(u32, Operand), caller: &Function,
+    alloc: &Allocator?) Instr {
     return inst.* match {
         Binary(b) => {
             const lhs = remap_operand(b.lhs, subst)
@@ -440,7 +449,7 @@ fn clone_callee_instr(
             Instr.Binary(BinaryInstr {
                 result = new_id, op = b.op, ty = b.ty, lhs = lhs, rhs = rhs,
             })
-        },
+        }
         Unary(u) => {
             const operand = remap_operand(u.operand, subst)
             const new_id = caller.fresh_value_id()
@@ -448,7 +457,7 @@ fn clone_callee_instr(
             Instr.Unary(UnaryInstr {
                 result = new_id, op = u.op, ty = u.ty, operand = operand,
             })
-        },
+        }
         Compare(c) => {
             const lhs = remap_operand(c.lhs, subst)
             const rhs = remap_operand(c.rhs, subst)
@@ -458,7 +467,7 @@ fn clone_callee_instr(
                 result = new_id, op = c.op, operand_ty = c.operand_ty,
                 lhs = lhs, rhs = rhs,
             })
-        },
+        }
         Convert(c) => {
             const operand = remap_operand(c.operand, subst)
             const new_id = caller.fresh_value_id()
@@ -468,14 +477,14 @@ fn clone_callee_instr(
                 source_ty = c.source_ty, result_ty = c.result_ty,
                 operand = operand,
             })
-        },
+        }
         StackSlot(s) => {
             const new_id = caller.fresh_value_id()
             subst.set(s.result, Operand.Local(new_id))
             Instr.StackSlot(StackSlotInstr {
                 result = new_id, size = s.size, align = s.align,
             })
-        },
+        }
         Load(l) => {
             const ptr = remap_operand(l.ptr, subst)
             const new_id = caller.fresh_value_id()
@@ -483,14 +492,14 @@ fn clone_callee_instr(
             Instr.Load(LoadInstr {
                 result = new_id, ty = l.ty, ptr = ptr, align = l.align,
             })
-        },
+        }
         Store(s) => {
             const value = remap_operand(s.value, subst)
             const ptr = remap_operand(s.ptr, subst)
             Instr.Store(StoreInstr {
                 ty = s.ty, value = value, ptr = ptr, align = s.align,
             })
-        },
+        }
         Gep(g) => {
             const ptr = remap_operand(g.ptr, subst)
             const offset = remap_operand(g.offset, subst)
@@ -499,7 +508,7 @@ fn clone_callee_instr(
             Instr.Gep(GepInstr {
                 result = new_id, ptr = ptr, offset = offset,
             })
-        },
+        }
         Memcpy(mc) => {
             const dst = remap_operand(mc.dst, subst)
             const src = remap_operand(mc.src, subst)
@@ -507,7 +516,7 @@ fn clone_callee_instr(
             Instr.Memcpy(MemcpyInstr {
                 dst = dst, src = src, size = size,
             })
-        },
+        }
         Memset(ms) => {
             const dst = remap_operand(ms.dst, subst)
             const byte = remap_operand(ms.byte, subst)
@@ -515,7 +524,7 @@ fn clone_callee_instr(
             Instr.Memset(MemsetInstr {
                 dst = dst, byte = byte, size = size,
             })
-        },
+        }
         Call(c) => {
             const args = clone_operand_list(&c.args, subst, alloc)
             const var_types = clone_ir_type_list(&c.variadic_arg_types, alloc)
@@ -527,11 +536,11 @@ fn clone_callee_instr(
                     new_result = Some(fresh_id)
                     subst.set(old_id, Operand.Local(fresh_id))
                     c.result_ty match {
-                        Some(ty) => new_result_ty = Some(ty),
-                        None => {},
+                        Some(ty) => new_result_ty = Some(ty)
+                        None => {}
                     }
-                },
-                None => {},
+                }
+                None => {}
             }
             Instr.Call(CallInstr {
                 result = new_result,
@@ -540,7 +549,7 @@ fn clone_callee_instr(
                 args = args,
                 variadic_arg_types = var_types,
             })
-        },
+        }
         CallIndirect(c) => {
             const fn_ptr = remap_operand(c.fn_ptr, subst)
             const args = clone_operand_list(&c.args, subst, alloc)
@@ -554,11 +563,11 @@ fn clone_callee_instr(
                     new_result = Some(fresh_id)
                     subst.set(old_id, Operand.Local(fresh_id))
                     c.result_ty match {
-                        Some(ty) => new_result_ty = Some(ty),
-                        None => {},
+                        Some(ty) => new_result_ty = Some(ty)
+                        None => {}
                     }
-                },
-                None => {},
+                }
+                None => {}
             }
             Instr.CallIndirect(CallIndirectInstr {
                 result = new_result,
@@ -569,7 +578,7 @@ fn clone_callee_instr(
                 variadic_arg_types = var_types,
                 cc = c.cc,
             })
-        },
+        }
     }
 }
 
@@ -579,55 +588,55 @@ fn rewrite_instr(inst: &Instr, subst: &Dict(u32, Operand), alloc: &Allocator?) I
             result = b.result, op = b.op, ty = b.ty,
             lhs = remap_operand(b.lhs, subst),
             rhs = remap_operand(b.rhs, subst),
-        }),
+        })
         Unary(u) => Instr.Unary(UnaryInstr {
             result = u.result, op = u.op, ty = u.ty,
             operand = remap_operand(u.operand, subst),
-        }),
+        })
         Compare(c) => Instr.Compare(CompareInstr {
             result = c.result, op = c.op, operand_ty = c.operand_ty,
             lhs = remap_operand(c.lhs, subst),
             rhs = remap_operand(c.rhs, subst),
-        }),
+        })
         Convert(c) => Instr.Convert(ConvertInstr {
             result = c.result, op = c.op,
             source_ty = c.source_ty, result_ty = c.result_ty,
             operand = remap_operand(c.operand, subst),
-        }),
+        })
         StackSlot(s) => Instr.StackSlot(StackSlotInstr {
             result = s.result, size = s.size, align = s.align,
-        }),
+        })
         Load(l) => Instr.Load(LoadInstr {
             result = l.result, ty = l.ty,
             ptr = remap_operand(l.ptr, subst), align = l.align,
-        }),
+        })
         Store(s) => Instr.Store(StoreInstr {
             ty = s.ty,
             value = remap_operand(s.value, subst),
             ptr = remap_operand(s.ptr, subst),
             align = s.align,
-        }),
+        })
         Gep(g) => Instr.Gep(GepInstr {
             result = g.result,
             ptr = remap_operand(g.ptr, subst),
             offset = remap_operand(g.offset, subst),
-        }),
+        })
         Memcpy(mc) => Instr.Memcpy(MemcpyInstr {
             dst = remap_operand(mc.dst, subst),
             src = remap_operand(mc.src, subst),
             size = remap_operand(mc.size, subst),
-        }),
+        })
         Memset(ms) => Instr.Memset(MemsetInstr {
             dst = remap_operand(ms.dst, subst),
             byte = remap_operand(ms.byte, subst),
             size = remap_operand(ms.size, subst),
-        }),
+        })
         Call(c) => Instr.Call(CallInstr {
             result = c.result, result_ty = c.result_ty,
             callee = c.callee,
             args = clone_operand_list(&c.args, subst, alloc),
             variadic_arg_types = clone_ir_type_list(&c.variadic_arg_types, alloc),
-        }),
+        })
         CallIndirect(c) => Instr.CallIndirect(CallIndirectInstr {
             result = c.result, result_ty = c.result_ty,
             fn_ptr = remap_operand(c.fn_ptr, subst),
@@ -635,27 +644,27 @@ fn rewrite_instr(inst: &Instr, subst: &Dict(u32, Operand), alloc: &Allocator?) I
             args = clone_operand_list(&c.args, subst, alloc),
             variadic_arg_types = clone_ir_type_list(&c.variadic_arg_types, alloc),
             cc = c.cc,
-        }),
+        })
     }
 }
 
 fn rewrite_terminator(t: &Terminator, subst: &Dict(u32, Operand), alloc: &Allocator?) Terminator {
     return t.* match {
-        Br(target) => Terminator.Br(clone_block_target(&target, subst, alloc)),
+        Br(target) => Terminator.Br(clone_block_target(&target, subst, alloc))
         BrIf(b) => Terminator.BrIf(BrIfTerm {
             cond = remap_operand(b.cond, subst),
             then_target = clone_block_target(&b.then_target, subst, alloc),
             else_target = clone_block_target(&b.else_target, subst, alloc),
-        }),
+        })
         Ret(v) => {
             let new_v: Operand? = null
             v match {
-                Some(op) => new_v = Some(remap_operand(op, subst)),
-                None => {},
+                Some(op) => new_v = Some(remap_operand(op, subst))
+                None => {}
             }
             Terminator.Ret(new_v)
-        },
-        Unreachable => Terminator.Unreachable,
+        }
+        Unreachable => Terminator.Unreachable
     }
 }
 
@@ -663,7 +672,9 @@ fn rewrite_terminator(t: &Terminator, subst: &Dict(u32, Operand), alloc: &Alloca
 
 fn find_by_name(m: &IrModule, name: String) usize {
     for i in 0..m.functions.len {
-        if m.functions[i].name == name { return i }
+        if m.functions[i].name == name {
+            return i
+        }
     }
     return m.functions.len
 }
@@ -674,8 +685,8 @@ fn call_count(f: &Function) usize {
         const instrs = &f.blocks[b].instrs
         for i in 0..instrs.len {
             instrs[i] match {
-                Call(_) => { n = n + 1 },
-                _ => {},
+                Call(_) => { n = n + 1 }
+                _ => {}
             }
         }
     }
@@ -688,8 +699,8 @@ fn slot_count(f: &Function) usize {
         const instrs = &f.blocks[b].instrs
         for i in 0..instrs.len {
             instrs[i] match {
-                StackSlot(_) => { n = n + 1 },
-                _ => {},
+                StackSlot(_) => { n = n + 1 }
+                _ => {}
             }
         }
     }
@@ -704,25 +715,25 @@ fn stores_to(f: &Function, slot_id: u32) usize {
         for i in 0..instrs.len {
             const hit = instrs[i] match {
                 Store(s) => s.ptr match {
-                    Local(id) => id == slot_id,
-                    _ => false,
-                },
-                _ => false,
+                    Local(id) => id == slot_id
+                    _ => false
+                }
+                _ => false
             }
-            if hit { n = n + 1 }
+            if hit {
+                n = n + 1
+            }
         }
     }
     return n
 }
 
 test "splicing a body that writes through its spilled parameter keeps value semantics" {
-    // The address-of-parameter shape, exactly as lowering emits it:
-    // every parameter spills to a stack slot at entry, so `&v` is the
-    // slot's address and a write through it mutates the callee's copy
-    // only. Splicing must clone that spill slot with fresh ids - wiring
-    // the pointer to the caller's own storage instead would let the
-    // callee's writes corrupt the caller's variable (the aliasing bug
-    // the reference inliner had; docs/known-issues.md "Inlined
+    // The address-of-parameter shape, exactly as lowering emits it: every parameter spills to a
+    // stack slot at entry, so `&v` is the slot's address and a write through it mutates the
+    // callee's copy only. Splicing must clone that spill slot with fresh ids - wiring the pointer
+    // to the caller's own storage instead would let the callee's writes corrupt the caller's
+    // variable (the aliasing bug the reference inliner had; docs/known-issues.md "Inlined
     // Address-of-Parameter Codegen").
     let m = module()
     defer m.deinit()
@@ -740,8 +751,8 @@ test "splicing a body that writes through its spilled parameter keeps value sema
     bb.ret(t2)
     m.add_function(bump.finish())
 
-    // run(x: i64) i64 { let r = bump(x); return r + x } - x spills to
-    // its own slot, the call reads it back out.
+    // run(x: i64) i64 { let r = bump(x); return r + x } - x spills to its own slot, the call reads
+    // it back out.
     let run = function("run", Some(IrType.I64))
     const x = run.param(IrType.I64)
     let rb = run.entry()
@@ -761,7 +772,8 @@ test "splicing a body that writes through its spilled parameter keeps value sema
     assert_true(ri < m.functions.len, "run is still in the module")
     const f = &m.functions[ri]
     assert_eq(call_count(f), 0 as usize, "no residual call to bump")
-    assert_eq(slot_count(f), 2 as usize, "the callee's spill slot was cloned alongside the caller's")
+    assert_eq(slot_count(f), 2 as usize,
+        "the callee's spill slot was cloned alongside the caller's")
 
     const xslot_id = xslot match { Local(id) => id, _ => 0u32 }
     assert_eq(stores_to(f, xslot_id), 1 as usize,

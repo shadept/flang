@@ -37,7 +37,7 @@ fn entry_cmp(a: Entry, b: Entry) Ord {
 }
 
 type State = struct {
-    max_depth: usize        // 0 = unlimited
+    max_depth: usize // 0 = unlimited
     show_hidden: bool
     dirs_only: bool
     full_path: bool
@@ -56,13 +56,15 @@ type State = struct {
 // -----------------------------------------------------------------------------
 
 fn ends_with_sep(s: String) bool {
-    if s.len == 0 { return false }
+    if s.len == 0 {
+        return false
+    }
     const c = s[s.len - 1]
     return c == '/' or c == '\\'
 }
 
-// Append `base/name` into sb, skipping the separator when base already ends
-// with one (so root paths like "C:\" or "/" stay intact).
+// Append `base/name` into sb, skipping the separator when base already ends with one (so root paths
+// like "C:\" or "/" stay intact).
 fn append_join(sb: &StringBuilder, base: String, name: String) {
     sb.append(base)
     if base.len > 0 and !ends_with_sep(base) {
@@ -85,12 +87,24 @@ fn append_human_size(sb: &StringBuilder, n: u64) {
         unit_idx = unit_idx + 1
     }
     sb.append(value, ".1")
-    if unit_idx == 0 { sb.append("K") }
-    else if unit_idx == 1 { sb.append("M") }
-    else if unit_idx == 2 { sb.append("G") }
-    else if unit_idx == 3 { sb.append("T") }
-    else if unit_idx == 4 { sb.append("P") }
-    else { sb.append("E") }
+    if unit_idx == 0 {
+        sb.append("K")
+    }
+    else if unit_idx == 1 {
+        sb.append("M")
+    }
+    else if unit_idx == 2 {
+        sb.append("G")
+    }
+    else if unit_idx == 3 {
+        sb.append("T")
+    }
+    else if unit_idx == 4 {
+        sb.append("P")
+    }
+    else {
+        sb.append("E")
+    }
 }
 
 fn free_entries(entries: &List(Entry)) {
@@ -122,8 +136,8 @@ fn collect_entries(path: String, state: &State) Result(List(Entry), DirError) {
             continue
         }
 
-        // `e.name` is a view into the iterator's internal buffer - invalidated
-        // on the next next() call, so take an owning copy.
+        // `e.name` is a view into the iterator's internal buffer - invalidated on the next next()
+        // call, so take an owning copy.
         const owned = from_view(e.name)
         entries.push(Entry { name = owned, kind = e.kind })
     }
@@ -132,7 +146,7 @@ fn collect_entries(path: String, state: &State) Result(List(Entry), DirError) {
         Some(e) => {
             free_entries(&entries)
             return Err(e)
-        },
+        }
         None => {}
     }
 
@@ -150,16 +164,26 @@ fn render_line(prefix: String, is_last: bool, path: String, entry: &Entry, state
 
     sb.append(prefix)
     if state.ascii {
-        if is_last { sb.append("`-- ") }
-        else { sb.append("|-- ") }
+        if is_last {
+            sb.append("`-- ")
+        }
+        else {
+            sb.append("|-- ")
+        }
     } else {
-        if is_last { sb.append("└── ") }
-        else { sb.append("├── ") }
+        if is_last {
+            sb.append("└── ")
+        }
+        else {
+            sb.append("├── ")
+        }
     }
 
     if state.full_path {
         sb.append(path)
-        if path.len > 0 and !ends_with_sep(path) { sb.append("/") }
+        if path.len > 0 and !ends_with_sep(path) {
+            sb.append("/")
+        }
     }
 
     sb.append(entry.name.as_view())
@@ -181,16 +205,20 @@ fn render_line(prefix: String, is_last: bool, path: String, entry: &Entry, state
         }
 
         sb.append(" [")
-        if state.human_size { append_human_size(&sb, size) }
-        else { sb.append(size) }
+        if state.human_size {
+            append_human_size(&sb, size)
+        }
+        else {
+            sb.append(size)
+        }
         sb.append("]")
     }
 
     println(sb.as_view())
 }
 
-// Depth-first pre-order walk. `path` is an ordinary view - std.io copies it
-// before it reaches the OS, so no NUL termination is required here.
+// Depth-first pre-order walk. `path` is an ordinary view - std.io copies it before it reaches the
+// OS, so no NUL termination is required here.
 fn walk(path: String, prefix: String, depth: usize, state: &State) {
     const entries_r = collect_entries(path, state)
     if entries_r.is_err() {
@@ -224,9 +252,17 @@ fn walk(path: String, prefix: String, depth: usize, state: &State) {
                 defer child_prefix.deinit()
                 child_prefix.append(prefix)
                 if state.ascii {
-                    if is_last { child_prefix.append("    ") } else { child_prefix.append("|   ") }
+                    if is_last {
+                        child_prefix.append("    ")
+                    } else {
+                        child_prefix.append("|   ")
+                    }
                 } else {
-                    if is_last { child_prefix.append("    ") } else { child_prefix.append("│   ") }
+                    if is_last {
+                        child_prefix.append("    ")
+                    } else {
+                        child_prefix.append("│   ")
+                    }
                 }
 
                 walk(child_path.as_view(), child_prefix.as_view(), depth + 1, state)
@@ -262,9 +298,17 @@ fn print_summary(state: &State) {
     let sb = string_builder(64)
     defer sb.deinit()
     sb.append(state.dir_count)
-    if state.dir_count == 1 { sb.append(" directory, ") } else { sb.append(" directories, ") }
+    if state.dir_count == 1 {
+        sb.append(" directory, ")
+    } else {
+        sb.append(" directories, ")
+    }
     sb.append(state.file_count)
-    if state.file_count == 1 { sb.append(" file") } else { sb.append(" files") }
+    if state.file_count == 1 {
+        sb.append(" file")
+    } else {
+        sb.append(" files")
+    }
     println("")
     println(sb.as_view())
 }
@@ -291,10 +335,9 @@ pub fn main() i32 {
     let roots: List(String) = list(0)
     defer roots.deinit()
 
-    // getopts doesn't support long-only flags directly, so --help / --ascii /
-    // --noreport are dispatched through internal short chars ('?', 'A', 'N')
-    // that aren't advertised in the usage text. Users who type `-?`/`-A`/`-N`
-    // still work - harmless, and conventional in many CLIs.
+    // getopts doesn't support long-only flags directly, so --help / --ascii / --noreport are
+    // dispatched through internal short chars ('?', 'A', 'N') that aren't advertised in the usage
+    // text. Users who type `-?`/`-A`/`-N` still work - harmless, and conventional in many CLIs.
     const opts_fmt = "a(all)d(dirs-only)f(full-path)F(classify)s(size)h(human)I(ignore):L(level):?(help)A(ascii)N(noreport)"
     let opts = getopts(opts_fmt, argv[1..])
 
@@ -305,10 +348,16 @@ pub fn main() i32 {
             Opt('f') => { state.full_path = true }
             Opt('F') => { state.classify = true }
             Opt('s') => { state.show_size = true }
-            Opt('h') => { state.show_size = true; state.human_size = true }
+            Opt('h') => {
+                state.show_size = true
+                state.human_size = true
+            }
             Opt('A') => { state.ascii = true }
             Opt('N') => { state.no_report = true }
-            Opt('?') => { print_usage(); return 0 }
+            Opt('?') => {
+                print_usage()
+                return 0
+            }
             OptArg('I', pat) => { state.ignore_pattern = pat }
             OptArg('L', val) => {
                 const parsed = parse_usize(val)
@@ -332,7 +381,9 @@ pub fn main() i32 {
                 println("ftree: unknown option; use --help for usage")
                 return 2
             }
-            NonOpt(s) => { if s.len > 0 { roots.push(s) } }
+            NonOpt(s) => { if s.len > 0 {
+                    roots.push(s)
+                } }
             _ => {}
         }
     }
@@ -342,7 +393,9 @@ pub fn main() i32 {
     }
 
     for ri in 0..roots.len {
-        if ri > 0 { println("") }
+        if ri > 0 {
+            println("")
+        }
         const root = roots[ri]
         println(root)
         walk(root, "", 0, &state)

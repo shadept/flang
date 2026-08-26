@@ -1,5 +1,4 @@
-// Text-format printer for FIR. Output matches the canonical form in
-// `docs/fir.md`.
+// Text-format printer for FIR. Output matches the canonical form in `docs/fir.md`.
 
 import std.list
 import std.option
@@ -17,13 +16,17 @@ pub fn print(m: &IrModule, sb: &StringBuilder) {
         need_blank = true
     }
     for i in 0..m.foreigns.len {
-        if need_blank and i == 0 { sb.append("\n") }
+        if need_blank and i == 0 {
+            sb.append("\n")
+        }
         print_foreign(&m.foreigns[i], sb)
         sb.append("\n")
         need_blank = true
     }
     for i in 0..m.functions.len {
-        if need_blank { sb.append("\n") }
+        if need_blank {
+            sb.append("\n")
+        }
         print_function(&m.functions[i], sb)
         need_blank = true
     }
@@ -54,16 +57,23 @@ fn print_foreign(f: &ForeignDecl, sb: &StringBuilder) {
     sb.append(f.name)
     sb.append("(")
     for i in 0..f.param_types.len {
-        if i > 0 { sb.append(", ") }
+        if i > 0 {
+            sb.append(", ")
+        }
         sb.append(f.param_types[i].name())
     }
     if f.variadic {
-        if f.param_types.len > 0 { sb.append(", ") }
+        if f.param_types.len > 0 {
+            sb.append(", ")
+        }
         sb.append("...")
     }
     sb.append(")")
     f.return_ty match {
-        Some(ty) => { sb.append(" -> "); sb.append(ty.name()) }
+        Some(ty) => {
+            sb.append(" -> ")
+            sb.append(ty.name())
+        }
         None => {}
     }
     if f.cc != CallConv.C {
@@ -78,16 +88,23 @@ fn print_function(f: &Function, sb: &StringBuilder) {
     sb.append(f.name)
     sb.append("(")
     for i in 0..f.params.len {
-        if i > 0 { sb.append(", ") }
+        if i > 0 {
+            sb.append(", ")
+        }
         print_value_def(f.params[i].id, f.params[i].ty, sb)
     }
     if f.variadic {
-        if f.params.len > 0 { sb.append(", ") }
+        if f.params.len > 0 {
+            sb.append(", ")
+        }
         sb.append("...")
     }
     sb.append(")")
     f.return_ty match {
-        Some(ty) => { sb.append(" -> "); sb.append(ty.name()) }
+        Some(ty) => {
+            sb.append(" -> ")
+            sb.append(ty.name())
+        }
         None => {}
     }
     if f.cc != CallConv.C {
@@ -97,7 +114,9 @@ fn print_function(f: &Function, sb: &StringBuilder) {
     }
     sb.append(" {\n")
     for i in 0..f.blocks.len {
-        if i > 0 { sb.append("\n") }
+        if i > 0 {
+            sb.append("\n")
+        }
         print_block(&f.blocks[i], sb)
     }
     sb.append("}\n")
@@ -112,7 +131,9 @@ fn print_block(b: &Block, sb: &StringBuilder) {
     if b.params.len > 0 {
         sb.append("(")
         for i in 0..b.params.len {
-            if i > 0 { sb.append(", ") }
+            if i > 0 {
+                sb.append(", ")
+            }
             print_value_def(b.params[i].id, b.params[i].ty, sb)
         }
         sb.append(")")
@@ -134,18 +155,18 @@ fn print_block(b: &Block, sb: &StringBuilder) {
 
 fn print_instr(i: &Instr, sb: &StringBuilder) {
     i.* match {
-        Binary(b) => print_binary(&b, sb),
-        Unary(u) => print_unary(&u, sb),
-        Compare(c) => print_compare(&c, sb),
-        Convert(c) => print_convert(&c, sb),
-        StackSlot(s) => print_stack_slot(&s, sb),
-        Load(l) => print_load(&l, sb),
-        Store(s) => print_store(&s, sb),
-        Gep(g) => print_gep(&g, sb),
-        Memcpy(m) => print_memcpy(&m, sb),
-        Memset(m) => print_memset(&m, sb),
-        Call(c) => print_call(&c, sb),
-        CallIndirect(c) => print_call_indirect(&c, sb),
+        Binary(b) => print_binary(&b, sb)
+        Unary(u) => print_unary(&u, sb)
+        Compare(c) => print_compare(&c, sb)
+        Convert(c) => print_convert(&c, sb)
+        StackSlot(s) => print_stack_slot(&s, sb)
+        Load(l) => print_load(&l, sb)
+        Store(s) => print_store(&s, sb)
+        Gep(g) => print_gep(&g, sb)
+        Memcpy(m) => print_memcpy(&m, sb)
+        Memset(m) => print_memset(&m, sb)
+        Call(c) => print_call(&c, sb)
+        CallIndirect(c) => print_call_indirect(&c, sb)
     }
 }
 
@@ -250,11 +271,14 @@ fn print_call(c: &CallInstr, sb: &StringBuilder) {
     c.result match {
         Some(id) => {
             c.result_ty match {
-                Some(ty) => { print_value_def(id, ty, sb); sb.append(" = ") },
-                None => {},
+                Some(ty) => {
+                    print_value_def(id, ty, sb)
+                    sb.append(" = ")
+                }
+                None => {}
             }
-        },
-        None => {},
+        }
+        None => {}
     }
     sb.append("call @")
     sb.append(c.callee)
@@ -267,21 +291,30 @@ fn print_call_indirect(c: &CallIndirectInstr, sb: &StringBuilder) {
     c.result match {
         Some(id) => {
             c.result_ty match {
-                Some(ty) => { print_value_def(id, ty, sb); sb.append(" = ") },
-                None => {},
+                Some(ty) => {
+                    print_value_def(id, ty, sb)
+                    sb.append(" = ")
+                }
+                None => {}
             }
-        },
-        None => {},
+        }
+        None => {}
     }
     sb.append("call_indirect (")
     for i in 0..c.param_types.len {
-        if i > 0 { sb.append(", ") }
+        if i > 0 {
+            sb.append(", ")
+        }
         sb.append(c.param_types[i].name())
     }
     sb.append(") ")
     c.result_ty match {
-        Some(ty) => { sb.append("-> "); sb.append(ty.name()); sb.append(" ") },
-        None => {},
+        Some(ty) => {
+            sb.append("-> ")
+            sb.append(ty.name())
+            sb.append(" ")
+        }
+        None => {}
     }
     print_operand(&c.fn_ptr, sb)
     sb.append("(")
@@ -292,11 +325,15 @@ fn print_call_indirect(c: &CallIndirectInstr, sb: &StringBuilder) {
 fn print_call_args(args: &List(Operand), variadic_types: &List(IrType), sb: &StringBuilder) {
     const fixed_count = args.len - variadic_types.len
     for i in 0..fixed_count {
-        if i > 0 { sb.append(", ") }
+        if i > 0 {
+            sb.append(", ")
+        }
         print_operand(&args[i], sb)
     }
     if variadic_types.len > 0 {
-        if fixed_count > 0 { sb.append(", ") }
+        if fixed_count > 0 {
+            sb.append(", ")
+        }
         sb.append("...")
         for i in 0..variadic_types.len {
             sb.append(", ")
@@ -313,7 +350,10 @@ fn print_call_args(args: &List(Operand), variadic_types: &List(IrType), sb: &Str
 
 fn print_terminator(t: &Terminator, sb: &StringBuilder) {
     t.* match {
-        Br(tgt) => { sb.append("br "); print_block_target(&tgt, sb) },
+        Br(tgt) => {
+            sb.append("br ")
+            print_block_target(&tgt, sb)
+        }
         BrIf(b) => {
             sb.append("br_if ")
             print_operand(&b.cond, sb)
@@ -321,15 +361,18 @@ fn print_terminator(t: &Terminator, sb: &StringBuilder) {
             print_block_target(&b.then_target, sb)
             sb.append(", ")
             print_block_target(&b.else_target, sb)
-        },
+        }
         Ret(v) => {
             sb.append("ret")
             v match {
-                Some(op) => { sb.append(" "); print_operand(&op, sb) },
-                None => {},
+                Some(op) => {
+                    sb.append(" ")
+                    print_operand(&op, sb)
+                }
+                None => {}
             }
-        },
-        Unreachable => sb.append("unreachable"),
+        }
+        Unreachable => sb.append("unreachable")
     }
 }
 
@@ -338,7 +381,9 @@ fn print_block_target(t: &BlockTarget, sb: &StringBuilder) {
     if t.args.len > 0 {
         sb.append("(")
         for i in 0..t.args.len {
-            if i > 0 { sb.append(", ") }
+            if i > 0 {
+                sb.append(", ")
+            }
             print_operand(&t.args[i], sb)
         }
         sb.append(")")
@@ -358,14 +403,23 @@ fn print_value_def(id: u32, ty: IrType, sb: &StringBuilder) {
 
 fn print_operand(op: &Operand, sb: &StringBuilder) {
     op.* match {
-        Local(id) => { sb.append("%v"); sb.append(id) },
-        IntConst(n) => sb.append(n),
-        // Exact hex-float form ("0x1.8p+0") so the text format
-        // round-trips the bits; `nan` / `inf` for non-finite.
-        FloatConst(f) => sb.append(f, "a"),
-        NullPtr => sb.append("null"),
-        GlobalRef(name) => { sb.append("@"); sb.append(name) },
-        FuncRef(name) => { sb.append("@"); sb.append(name) },
+        Local(id) => {
+            sb.append("%v")
+            sb.append(id)
+        }
+        IntConst(n) => sb.append(n)
+        // Exact hex-float form ("0x1.8p+0") so the text format round-trips the bits; `nan` / `inf`
+        // for non-finite.
+        FloatConst(f) => sb.append(f, "a")
+        NullPtr => sb.append("null")
+        GlobalRef(name) => {
+            sb.append("@")
+            sb.append(name)
+        }
+        FuncRef(name) => {
+            sb.append("@")
+            sb.append(name)
+        }
     }
 }
 
@@ -375,81 +429,95 @@ fn print_operand(op: &Operand, sb: &StringBuilder) {
 
 pub fn name(op: BinaryOp) String {
     return op match {
-        IAdd => "iadd",
-        ISub => "isub",
-        IMul => "imul",
-        SDiv => "sdiv",
-        UDiv => "udiv",
-        SRem => "srem",
-        URem => "urem",
-        IAnd => "iand",
-        IOr => "ior",
-        IXor => "ixor",
-        IShl => "ishl",
-        UShr => "ushr",
-        SShr => "sshr",
-        FAdd => "fadd",
-        FSub => "fsub",
-        FMul => "fmul",
-        FDiv => "fdiv",
+        IAdd => "iadd"
+        ISub => "isub"
+        IMul => "imul"
+        SDiv => "sdiv"
+        UDiv => "udiv"
+        SRem => "srem"
+        URem => "urem"
+        IAnd => "iand"
+        IOr => "ior"
+        IXor => "ixor"
+        IShl => "ishl"
+        UShr => "ushr"
+        SShr => "sshr"
+        FAdd => "fadd"
+        FSub => "fsub"
+        FMul => "fmul"
+        FDiv => "fdiv"
     }
 }
 
 pub fn name(op: UnaryOp) String {
     return op match {
-        INeg => "ineg",
-        FNeg => "fneg",
+        INeg => "ineg"
+        FNeg => "fneg"
     }
 }
 
 pub fn name(op: CompareOp) String {
     return op match {
-        IcmpEq => "icmp.eq",
-        IcmpNe => "icmp.ne",
-        IcmpSlt => "icmp.slt",
-        IcmpSle => "icmp.sle",
-        IcmpSgt => "icmp.sgt",
-        IcmpSge => "icmp.sge",
-        IcmpUlt => "icmp.ult",
-        IcmpUle => "icmp.ule",
-        IcmpUgt => "icmp.ugt",
-        IcmpUge => "icmp.uge",
-        FcmpEq => "fcmp.eq",
-        FcmpNe => "fcmp.ne",
-        FcmpLt => "fcmp.lt",
-        FcmpLe => "fcmp.le",
-        FcmpGt => "fcmp.gt",
-        FcmpGe => "fcmp.ge",
+        IcmpEq => "icmp.eq"
+        IcmpNe => "icmp.ne"
+        IcmpSlt => "icmp.slt"
+        IcmpSle => "icmp.sle"
+        IcmpSgt => "icmp.sgt"
+        IcmpSge => "icmp.sge"
+        IcmpUlt => "icmp.ult"
+        IcmpUle => "icmp.ule"
+        IcmpUgt => "icmp.ugt"
+        IcmpUge => "icmp.uge"
+        FcmpEq => "fcmp.eq"
+        FcmpNe => "fcmp.ne"
+        FcmpLt => "fcmp.lt"
+        FcmpLe => "fcmp.le"
+        FcmpGt => "fcmp.gt"
+        FcmpGe => "fcmp.ge"
     }
 }
 
 pub fn name(op: ConvertOp) String {
     return op match {
-        Trunc => "trunc",
-        ZExt => "zext",
-        SExt => "sext",
-        FpToSi => "fptosi",
-        FpToUi => "fptoui",
-        SiToFp => "sitofp",
-        UiToFp => "uitofp",
-        FpExt => "fpext",
-        FpTrunc => "fptrunc",
-        Bitcast => "bitcast",
-        PtrToInt => "ptrtoint",
-        IntToPtr => "inttoptr",
+        Trunc => "trunc"
+        ZExt => "zext"
+        SExt => "sext"
+        FpToSi => "fptosi"
+        FpToUi => "fptoui"
+        SiToFp => "sitofp"
+        UiToFp => "uitofp"
+        FpExt => "fpext"
+        FpTrunc => "fptrunc"
+        Bitcast => "bitcast"
+        PtrToInt => "ptrtoint"
+        IntToPtr => "inttoptr"
     }
 }
 
 fn print_byte_literal(bytes: u8[], sb: &StringBuilder) {
     sb.append("\"")
     for b in bytes {
-        if b == '\\' { sb.append("\\\\") }
-        else if b == '"' { sb.append("\\\"") }
-        else if b == '\n' { sb.append("\\n") }
-        else if b == '\r' { sb.append("\\r") }
-        else if b == '\t' { sb.append("\\t") }
-        else if b == 0 { sb.append("\\0") }
-        else if b >= 0x20 and b < 0x7F { sb.append_byte(b) }
+        if b == '\\' {
+            sb.append("\\\\")
+        }
+        else if b == '"' {
+            sb.append("\\\"")
+        }
+        else if b == '\n' {
+            sb.append("\\n")
+        }
+        else if b == '\r' {
+            sb.append("\\r")
+        }
+        else if b == '\t' {
+            sb.append("\\t")
+        }
+        else if b == 0 {
+            sb.append("\\0")
+        }
+        else if b >= 0x20 and b < 0x7F {
+            sb.append_byte(b)
+        }
         else {
             sb.append("\\x")
             sb.append_byte(hex_nibble(b >> 4))
@@ -460,7 +528,8 @@ fn print_byte_literal(bytes: u8[], sb: &StringBuilder) {
 }
 
 fn hex_nibble(n: u8) u8 {
-    if n < 10 { return '0' + n }
+    if n < 10 {
+        return '0' + n
+    }
     return 'a' + (n - 10)
 }
-

@@ -1,7 +1,7 @@
 // std.simd - portable 128-bit SIMD operations.
 //
-// Vec128 is a 16-byte value type passed in XMM (x86) or NEON (aarch64) registers.
-// Operations map to single instructions on both architectures.
+// Vec128 is a 16-byte value type passed in XMM (x86) or NEON (aarch64) registers. Operations map to
+// single instructions on both architectures.
 
 import std.test
 
@@ -27,12 +27,11 @@ pub type Vec128 = #simd struct {
 // Bitwise AND-NOT: result = ~a & b
 #foreign pub fn v128_andnot(a: Vec128, b: Vec128) Vec128
 
-// Count the number of lanes set to 0xFF (non-zero bytes).
-// Each 0xFF lane contributes 1 to the count.
+// Count the number of lanes set to 0xFF (non-zero bytes). Each 0xFF lane contributes 1 to the
+// count.
 #foreign pub fn v128_count_true(a: Vec128) u32
 
-// Extract a bitmask: bit i = 1 if lane i has its high bit set.
-// Returns a 16-bit mask as u32.
+// Extract a bitmask: bit i = 1 if lane i has its high bit set. Returns a 16-bit mask as u32.
 #foreign pub fn v128_movemask(a: Vec128) u32
 
 // Vector of all zeros.
@@ -44,8 +43,8 @@ pub type Vec128 = #simd struct {
 // Build a Vec128 from four u32 values: [a, b, c, d].
 #foreign pub fn v128_from_u32x4(a: u32, b: u32, c: u32, d: u32) Vec128
 
-// Build a Vec128 with a single u64 in the low 64 bits (high 64 bits zeroed).
-// Useful for constructing clmul operands.
+// Build a Vec128 with a single u64 in the low 64 bits (high 64 bits zeroed). Useful for
+// constructing clmul operands.
 #foreign pub fn v128_from_u64(v: u64) Vec128
 
 // Store 16 bytes from a vector to a pointer (unaligned).
@@ -54,19 +53,18 @@ pub type Vec128 = #simd struct {
 // Bitwise NOT: result[i] = ~a[i]
 #foreign pub fn v128_not(a: Vec128) Vec128
 
-// Byte shuffle / table lookup: result[i] = a[idx[i] & 0x0F].
-// If idx[i] has the high bit set, result[i] = 0 (matches PSHUFB / TBL behavior).
-// Used for nibble-based classification: build a 16-entry lookup table as a Vec128,
-// then use each byte's nibble value as an index to classify 16 bytes in parallel.
+// Byte shuffle / table lookup: result[i] = a[idx[i] & 0x0F]. If idx[i] has the high bit set,
+// result[i] = 0 (matches PSHUFB / TBL behavior). Used for nibble-based classification: build a
+// 16-entry lookup table as a Vec128, then use each byte's nibble value as an index to classify 16
+// bytes in parallel.
 #foreign pub fn v128_shuffle(a: Vec128, idx: Vec128) Vec128
 
-// Right-shift each u8 lane by an immediate value: result[i] = a[i] >> imm.
-// Used to extract high nibbles (shift by 4) for nibble classification.
+// Right-shift each u8 lane by an immediate value: result[i] = a[i] >> imm. Used to extract high
+// nibbles (shift by 4) for nibble classification.
 #foreign pub fn v128_shr_u8(a: Vec128, imm: u8) Vec128
 
-// Carryless multiplication of the low 64 bits of each vector.
-// Produces a 128-bit result. On x86 this is PCLMULQDQ (imm=0x00),
-// on ARM this is PMULL. Used to compute prefix XOR in a single
+// Carryless multiplication of the low 64 bits of each vector. Produces a 128-bit result. On x86
+// this is PCLMULQDQ (imm=0x00), on ARM this is PMULL. Used to compute prefix XOR in a single
 // instruction for quote-parity tracking in SIMD parsers.
 #foreign pub fn v128_clmul(a: Vec128, b: Vec128) Vec128
 
@@ -149,7 +147,8 @@ test "v128_from_u64x2 packs correctly" {
 }
 
 test "v128_from_u32x4 packs correctly" {
-    const v = v128_from_u32x4(0x0102_0304 as u32, 0x0506_0708 as u32, 0x090A_0B0C as u32, 0x0D0E_0F10 as u32)
+    const v = v128_from_u32x4(0x0102_0304 as u32, 0x0506_0708 as u32, 0x090A_0B0C as u32,
+        0x0D0E_0F10 as u32)
     let out: [u8; 16] = [0; 16]
     v128_store(&out[0], v)
     assert_eq(out[0] as u32, 4u32, "low byte of first u32")

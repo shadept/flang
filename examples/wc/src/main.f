@@ -13,7 +13,7 @@ fn count(r: Reader, lines: &usize, words: &usize, bytes_count: &usize) {
 
     loop {
         let b = br.read_byte() match {
-            Some(v) => v,
+            Some(v) => v
             None => break
         }
 
@@ -35,11 +35,17 @@ fn count(r: Reader, lines: &usize, words: &usize, bytes_count: &usize) {
 }
 
 fn print_counts(sb: &StringBuilder, lines: usize, words: usize, bytes_count: usize,
-                show_lines: bool, show_words: bool, show_bytes: bool, name: String) {
+    show_lines: bool, show_words: bool, show_bytes: bool, name: String) {
     sb.clear()
-    if show_lines { sb.append(lines, "8") }
-    if show_words { sb.append(words, "8") }
-    if show_bytes { sb.append(bytes_count, "8") }
+    if show_lines {
+        sb.append(lines, "8")
+    }
+    if show_words {
+        sb.append(words, "8")
+    }
+    if show_bytes {
+        sb.append(bytes_count, "8")
+    }
     if name.len > 0 {
         sb.append(" ")
         sb.append(name)
@@ -63,7 +69,9 @@ pub fn main() i32 {
             Opt('l') => { show_lines = true }
             Opt('w') => { show_words = true }
             Opt('c') => { show_bytes = true }
-            NonOpt(s) => { if s.len > 0 { files.push(s) } }
+            NonOpt(s) => { if s.len > 0 {
+                    files.push(s)
+                } }
             _ => {}
         }
     }
@@ -111,7 +119,8 @@ pub fn main() i32 {
             total_bytes = total_bytes + bytes_count
         }
         if files.len > 1 {
-            print_counts(&sb, total_lines, total_words, total_bytes, show_lines, show_words, show_bytes, "total")
+            print_counts(&sb, total_lines, total_words, total_bytes, show_lines, show_words,
+                show_bytes, "total")
         }
     }
 

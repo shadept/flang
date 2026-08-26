@@ -13,8 +13,8 @@
 //   CsvRecord        - single row with String views into a backing buffer
 //   CsvTable         - materialized table owning its buffer, with select_columns/select_rows
 //
-// The parser handles RFC 4180 with lenient line endings (LF, CR, CRLF).
-// Quoting and delimiter characters are configurable via CsvOptions.
+// The parser handles RFC 4180 with lenient line endings (LF, CR, CRLF). Quoting and delimiter
+// characters are configurable via CsvOptions.
 
 import std.encoding.codec
 import std.io.reader
@@ -70,7 +70,9 @@ pub type CsvRecord = struct {
 }
 
 pub fn get(record: &CsvRecord, index: usize) String? {
-    if index >= record.fields.len { return null }
+    if index >= record.fields.len {
+        return null
+    }
     return Some(record.fields[index])
 }
 
@@ -108,7 +110,7 @@ fn classify_chunk(chunk_ptr: &u8, delimiter: u8, quote: u8) ChunkMasks {
     return .{
         delimiters = delim_mask,
         quotes = quote_mask,
-        newlines = lf_mask | cr_mask
+        newlines = lf_mask | cr_mask,
     }
 }
 
@@ -137,7 +139,7 @@ fn filter_by_quotes(masks: ChunkMasks, inside_quotes: u32) ChunkMasks {
     return .{
         delimiters = masks.delimiters & outside,
         quotes = masks.quotes,
-        newlines = masks.newlines & outside
+        newlines = masks.newlines & outside,
     }
 }
 
@@ -158,16 +160,12 @@ type ParseState = struct {
     in_quotes: bool
 }
 
-// Process a chunk of data, appending field content to field_buf and
-// completed fields to spans. Returns the number of bytes consumed.
-// Sets row_complete to true if a newline was found (end of row).
-fn process_chunk(
-    data: u8[], data_len: usize,
-    options: &CsvOptions, state: &ParseState,
-    field_buf: &StringBuilder, spans: &List(FieldSpan),
-    field_start_offset: usize,
-    row_complete: &bool
-) usize {
+// Process a chunk of data, appending field content to field_buf and completed fields to spans.
+// Returns the number of bytes consumed. Sets row_complete to true if a newline was found (end of
+// row).
+fn process_chunk(data: u8[], data_len: usize, options: &CsvOptions, state: &ParseState,
+    field_buf: &StringBuilder, spans: &List(FieldSpan), field_start_offset: usize,
+    row_complete: &bool) usize {
     // Pad to 16 bytes for SIMD if needed
     let chunk_buf: [u8; 16] = [0; 16]
     let chunk_ptr = data.ptr
@@ -206,7 +204,9 @@ fn process_chunk(
         const is_quote = quote_bits & bit
 
         if is_newline != 0 {
-            if byte == 0x0D { state.prev_cr = true }
+            if byte == 0x0D {
+                state.prev_cr = true
+            }
             // End current field and row
             let span: FieldSpan
             span.start = field_start_offset
@@ -281,7 +281,8 @@ pub type CsvDecoder = struct {
     state: ParseState
 }
 
-pub fn csv_decoder_init(self: &CsvDecoder, r: Reader, options: CsvOptions = csv_options(), allocator: &Allocator? = null) {
+pub fn csv_decoder_init(self: &CsvDecoder, r: Reader, options: CsvOptions = csv_options(),
+    allocator: &Allocator? = null) {
     self.reader = r
     self.options = options
     self.headers = list(16, allocator)
@@ -294,7 +295,9 @@ fn fill_decoder_chunk(self: &CsvDecoder) {
     let dst = slice_from_raw_parts(&self.chunk[0], 16)
     const n = self.reader.read(dst)
     self.chunk_len = n
-    if n == 0 { self.eof = true }
+    if n == 0 {
+        self.eof = true
+    }
 }
 
 // Parse one row into field_buf + spans.
@@ -318,19 +321,13 @@ fn parse_decoder_row(self: &CsvDecoder) bool {
         }
 
         let row_complete = false
-        // field_start_offset: where the current field's data starts in field_buf
-        // For spans, we track relative to field_buf. But since process_chunk
-        // clears field_buf between fields, we need a different approach.
-        // Instead: accumulate ALL field data into field_buf with a separator,
-        // and track spans as absolute offsets into field_buf.
+        // field_start_offset: where the current field's data starts in field_buf For spans, we
+        // track relative to field_buf. But since process_chunk clears field_buf between fields, we
+        // need a different approach. Instead: accumulate ALL field data into field_buf with a
+        // separator, and track spans as absolute offsets into field_buf.
         const chunk_slice = slice_from_raw_parts(&self.chunk[0], self.chunk_len)
-        const consumed = process_chunk(
-            chunk_slice, self.chunk_len,
-            &self.options, &self.state,
-            &self.field_buf, &self.spans,
-            self.field_buf.len,
-            &row_complete
-        )
+        const consumed = process_chunk(chunk_slice, self.chunk_len, &self.options, &self.state,
+            &self.field_buf, &self.spans, self.field_buf.len, &row_complete)
 
         if row_complete {
             // Shift remaining bytes
@@ -360,7 +357,9 @@ fn get_decoder_field(self: &CsvDecoder, index: usize) String {
         return ""
     }
     const span = self.spans[index]
-    if span.end <= span.start { return "" }
+    if span.end <= span.start {
+        return ""
+    }
     const len = span.end - span.start
     const ptr = self.field_buf.ptr + span.start
     return .{ ptr = ptr, len = len } as String
@@ -368,8 +367,12 @@ fn get_decoder_field(self: &CsvDecoder, index: usize) String {
 
 // Parse headers on first call
 fn ensure_decoder_headers(self: &CsvDecoder) {
-    if self.headers.len > 0 { return }
-    if self.options.has_headers == false { return }
+    if self.headers.len > 0 {
+        return
+    }
+    if self.options.has_headers == false {
+        return
+    }
 
     if self.parse_decoder_row() {
         // Copy header values into header_buf so they persist
@@ -395,46 +398,72 @@ fn ensure_decoder_headers(self: &CsvDecoder) {
 pub fn decode_null(self: &CsvDecoder) bool { return true }
 
 pub fn decode_bool(self: &CsvDecoder) bool {
-    if self.current_field >= self.spans.len { return false }
+    if self.current_field >= self.spans.len {
+        return false
+    }
     const val = self.get_decoder_field(self.current_field)
     self.current_field = self.current_field + 1
-    if val == "true" { return true }
-    if val == "1" { return true }
+    if val == "true" {
+        return true
+    }
+    if val == "1" {
+        return true
+    }
     return false
 }
 
 pub fn decode_int(self: &CsvDecoder, width: u8) i64 {
-    if self.current_field >= self.spans.len { return 0 }
+    if self.current_field >= self.spans.len {
+        return 0
+    }
     const val = self.get_decoder_field(self.current_field)
     self.current_field = self.current_field + 1
-    if val.len == 0 { return 0 }
+    if val.len == 0 {
+        return 0
+    }
     const parsed = parse_i64(val)
-    if parsed.is_ok() { return parsed.unwrap().0 }
+    if parsed.is_ok() {
+        return parsed.unwrap().0
+    }
     return 0
 }
 
 pub fn decode_uint(self: &CsvDecoder, width: u8) u64 {
-    if self.current_field >= self.spans.len { return 0 }
+    if self.current_field >= self.spans.len {
+        return 0
+    }
     const val = self.get_decoder_field(self.current_field)
     self.current_field = self.current_field + 1
-    if val.len == 0 { return 0 }
+    if val.len == 0 {
+        return 0
+    }
     const parsed = parse_u64(val)
-    if parsed.is_ok() { return parsed.unwrap().0 }
+    if parsed.is_ok() {
+        return parsed.unwrap().0
+    }
     return 0
 }
 
 pub fn decode_float(self: &CsvDecoder, width: u8) f64 {
-    if self.current_field >= self.spans.len { return 0.0 }
+    if self.current_field >= self.spans.len {
+        return 0.0
+    }
     const val = self.get_decoder_field(self.current_field)
     self.current_field = self.current_field + 1
-    if val.len == 0 { return 0.0 }
+    if val.len == 0 {
+        return 0.0
+    }
     const parsed = parse_f64(val)
-    if parsed.is_ok() { return parsed.unwrap().0 }
+    if parsed.is_ok() {
+        return parsed.unwrap().0
+    }
     return 0.0
 }
 
 pub fn decode_str(self: &CsvDecoder, w: Writer) bool {
-    if self.current_field >= self.spans.len { return false }
+    if self.current_field >= self.spans.len {
+        return false
+    }
     const val = self.get_decoder_field(self.current_field)
     self.current_field = self.current_field + 1
     w.write_str(val)
@@ -464,7 +493,9 @@ pub fn end_map(self: &CsvDecoder) bool {
 }
 
 pub fn next_key(self: &CsvDecoder, sb: &StringBuilder) bool {
-    if self.current_field >= self.headers.len { return false }
+    if self.current_field >= self.headers.len {
+        return false
+    }
     sb.append(self.headers[self.current_field])
     return true
 }
@@ -511,10 +542,18 @@ pub fn csv_encoder(w: Writer, options: CsvOptions = csv_options()) CsvEncoder {
 fn needs_quoting(self: &CsvEncoder, s: String) bool {
     for i in 0..s.len {
         const c = s[i]
-        if c == self.options.delimiter { return true }
-        if c == self.options.quote { return true }
-        if c == 0x0A { return true }
-        if c == 0x0D { return true }
+        if c == self.options.delimiter {
+            return true
+        }
+        if c == self.options.quote {
+            return true
+        }
+        if c == 0x0A {
+            return true
+        }
+        if c == 0x0D {
+            return true
+        }
     }
     return false
 }
@@ -545,8 +584,12 @@ pub fn encode_null(self: &CsvEncoder) usize {
 }
 
 pub fn encode_bool(self: &CsvEncoder, v: bool) usize {
-    if v { self.write_enc_value("true") }
-    else { self.write_enc_value("false") }
+    if v {
+        self.write_enc_value("true")
+    }
+    else {
+        self.write_enc_value("false")
+    }
     return 0
 }
 
@@ -606,12 +649,16 @@ pub fn end_map(self: &CsvEncoder) usize {
     if self.header_written == false {
         self.header_written = true
         for i in 0..self.current_keys.len {
-            if i > 0 { self.w.write_byte(self.options.delimiter) }
+            if i > 0 {
+                self.w.write_byte(self.options.delimiter)
+            }
             self.w.write_str(self.current_keys[i].as_view())
         }
         self.w.write_byte(0x0A)
         for i in 0..self.first_row_values.len {
-            if i > 0 { self.w.write_byte(self.options.delimiter) }
+            if i > 0 {
+                self.w.write_byte(self.options.delimiter)
+            }
             const val = self.first_row_values[i].as_view()
             self.field_index = i
             self.write_csv_field(val)
@@ -654,7 +701,8 @@ pub type CsvReader = struct {
     parsed: bool
 }
 
-pub fn csv_reader_init(self: &CsvReader, r: Reader, options: CsvOptions = csv_options(), allocator: &Allocator? = null) {
+pub fn csv_reader_init(self: &CsvReader, r: Reader, options: CsvOptions = csv_options(),
+    allocator: &Allocator? = null) {
     self.options = options
     self.buffer = string_builder(4096, allocator)
     self.headers = list(16, allocator)
@@ -664,17 +712,21 @@ pub fn csv_reader_init(self: &CsvReader, r: Reader, options: CsvOptions = csv_op
     loop {
         let dst = slice_from_raw_parts(&chunk[0], 4096)
         const n = r.read(dst)
-        if n == 0 { break }
+        if n == 0 {
+            break
+        }
         const data = slice_from_raw_parts(&chunk[0], n)
         self.buffer.append_bytes(data)
     }
 }
 
 // SIMD-accelerated parser for in-memory buffer.
-// Uses classify_chunk to find delimiters in 16-byte batches,
-// then extracts field boundaries as String views into self.buffer.
+// Uses classify_chunk to find delimiters in 16-byte batches, then extracts field boundaries as
+// String views into self.buffer.
 fn parse_all(self: &CsvReader) {
-    if self.parsed { return }
+    if self.parsed {
+        return
+    }
     self.parsed = true
 
     const data = self.buffer.as_view()
@@ -708,7 +760,9 @@ fn parse_all(self: &CsvReader) {
             let structural = (filtered.delimiters | filtered.newlines) & valid
             let header_done = false
             loop {
-                if structural == 0 { break }
+                if structural == 0 {
+                    break
+                }
                 const bit_pos = trailing_zeros_u32(structural) as usize
                 const abs_pos = pos + bit_pos
                 const byte = data[abs_pos]
@@ -718,7 +772,9 @@ fn parse_all(self: &CsvReader) {
                     let next = abs_pos + 1
                     if byte == 0x0D {
                         if next < data_len {
-                            if data[next] == 0x0A { next = next + 1 }
+                            if data[next] == 0x0A {
+                                next = next + 1
+                            }
                         }
                     }
                     pos = next
@@ -733,7 +789,9 @@ fn parse_all(self: &CsvReader) {
                 }
                 structural = structural & (structural - 1)
             }
-            if header_done { break }
+            if header_done {
+                break
+            }
             if structural == 0 {
                 pos = pos + chunk_size
             }
@@ -811,7 +869,9 @@ fn parse_all(self: &CsvReader) {
                 field_start = abs_pos + 1
                 if byte == 0x0D {
                     if field_start < data_len {
-                        if data[field_start] == 0x0A { field_start = field_start + 1 }
+                        if data[field_start] == 0x0A {
+                            field_start = field_start + 1
+                        }
                     }
                 }
             } else {
@@ -827,10 +887,12 @@ fn parse_all(self: &CsvReader) {
     self.rows = rows
 }
 
-// Extract a field value from the buffer between start and end.
-// Strips surrounding quotes and unescapes doubled quotes.
+// Extract a field value from the buffer between start and end. Strips surrounding quotes and
+// unescapes doubled quotes.
 fn extract_field(self: &CsvReader, data: String, start: usize, end: usize) String {
-    if start >= end { return "" }
+    if start >= end {
+        return ""
+    }
     // Fast path: unquoted field - just a pointer+length view (vast majority of fields)
     if data[start] != self.options.quote {
         return .{ ptr = data.ptr + start, len = end - start } as String
@@ -840,7 +902,9 @@ fn extract_field(self: &CsvReader, data: String, start: usize, end: usize) Strin
     if end > start + 1 {
         if data[end - 1] == quote {
             const len = end - start - 2
-            if len == 0 { return "" }
+            if len == 0 {
+                return ""
+            }
             // TODO: unescape doubled quotes into a separate buffer
             return .{ ptr = data.ptr + start + 1usize, len = len } as String
         }
@@ -878,7 +942,8 @@ pub type CsvTable = struct {
     buffer: StringBuilder
 }
 
-pub fn csv_table(r: Reader, options: CsvOptions = csv_options(), allocator: &Allocator? = null) Result(CsvTable, CsvError) {
+pub fn csv_table(r: Reader, options: CsvOptions = csv_options(),
+    allocator: &Allocator? = null) Result(CsvTable, CsvError) {
     let reader: CsvReader
     csv_reader_init(&reader, r, options, allocator)
     reader.parse_all()

@@ -1,15 +1,14 @@
-// Generic hash map (dictionary) backed by manually managed heap storage.
-// Uses open addressing with linear probing for collision resolution.
+// Generic hash map (dictionary) backed by manually managed heap storage. Uses open addressing with
+// linear probing for collision resolution.
 //
-// Probing uses bounded for-in loops over 0..capacity with break,
-// which avoids the need for while loops.
+// Probing uses bounded for-in loops over 0..capacity with break, which avoids the need for while
+// loops.
 //
-// The stored hash doubles as the slot state (the combined-hash trick):
-// 0 is EMPTY, 1 is a tombstone, and >= 2 is an occupied slot holding the
-// key's hash. `hash_key` remaps the two reserved values (`h < 2` becomes
-// `h + 2`), a negligible dent in a 64-bit hash space, and the state byte
-// - and its alignment padding - disappears from every entry. A zeroed
-// table is all-empty, so `alloc_table` and `clear` stay a plain memset.
+// The stored hash doubles as the slot state (the combined-hash trick): 0 is EMPTY, 1 is a
+// tombstone, and >= 2 is an occupied slot holding the key's hash. `hash_key` remaps the two
+// reserved values (`h < 2` becomes `h + 2`), a negligible dent in a 64-bit hash space, and the
+// state byte - and its alignment padding - disappears from every entry. A zeroed table is
+// all-empty, so `alloc_table` and `clear` stay a plain memset.
 
 import std.allocator
 import std.mem
@@ -20,9 +19,8 @@ import std.test
 const HASH_EMPTY: usize = 0
 const HASH_DEAD: usize = 1
 
-// A single entry in the hash map. `hash` is also the slot state - see
-// the header comment; `key` and `value` are meaningful only when it is
-// at least 2.
+// A single entry in the hash map. `hash` is also the slot state - see the header comment; `key` and
+// `value` are meaningful only when it is at least 2.
 pub type Entry = struct(K, V) {
     hash: usize
     key: K
@@ -32,17 +30,15 @@ pub type Entry = struct(K, V) {
 pub type Dict = struct(K, V) {
     entries: &Entry(K, V)
     length: usize
-    // Tombstones left by removals. They occupy probe slots until the next
-    // rehash, so the load factor must count them or a delete-heavy dict
-    // fills up while `length` stays low.
+    // Tombstones left by removals. They occupy probe slots until the next rehash, so the load
+    // factor must count them or a delete-heavy dict fills up while `length` stays low.
     dead: usize
     cap: usize
     allocator: &Allocator?
 }
 
-// Construct an empty Dict. Storage is allocated lazily on the first
-// `set` / `op_set_index`. `K` and `V` are inferred from the call's
-// expected type (e.g. `let d: Dict(String, i32) = dict()`).
+// Construct an empty Dict. Storage is allocated lazily on the first `set` / `op_set_index`. `K` and
+// `V` are inferred from the call's expected type (e.g. `let d: Dict(String, i32) = dict()`).
 pub fn dict(allocator: &Allocator? = null) Dict($K, $V) {
     let result: Dict(K, V)
     result.allocator = allocator
@@ -53,10 +49,9 @@ pub fn dict(capacity: usize, allocator: &Allocator) Dict($K, $V) {
     return dict(capacity, Some(allocator))
 }
 
-// Construct a Dict whose table starts at `capacity` slots, rounded up to
-// a power of two (`probe_slot` masks instead of dividing; minimum 8).
-// Growth still triggers at the 75% load factor, so the table holds about
-// three quarters of `capacity` entries before its first rehash.
+// Construct a Dict whose table starts at `capacity` slots, rounded up to a power of two
+// (`probe_slot` masks instead of dividing; minimum 8). Growth still triggers at the 75% load
+// factor, so the table holds about three quarters of `capacity` entries before its first rehash.
 // `dict(0)` is the lazy empty form.
 pub fn dict(capacity: usize, allocator: &Allocator? = null) Dict($K, $V) {
     let result: Dict(K, V)
@@ -67,33 +62,32 @@ pub fn dict(capacity: usize, allocator: &Allocator? = null) Dict($K, $V) {
     return result
 }
 
-// The smallest power of two at or above `v`, floored at 8 - every
-// capacity branch must yield one, or `probe_slot`'s mask breaks.
+// The smallest power of two at or above `v`, floored at 8 - every capacity branch must yield one,
+// or `probe_slot`'s mask breaks.
 fn next_pow2_min8(v: usize) usize {
     let n: usize = 8
     while n < v { n = n * 2 }
     return n
 }
 
-// Install a zeroed table of `cap` slots (all states empty). `cap` must
-// be a power of two.
+// Install a zeroed table of `cap` slots (all states empty). `cap` must be a power of two.
 fn alloc_table(self: &Dict($K, $V), cap: usize) {
     const alloc_size: usize = cap * size_of(Entry(K, V))
-    const raw: u8[] = self.allocator.or_global().alloc(alloc_size, 8).expect("dict: allocation failed")
+    const raw: u8[] = self.allocator.or_global().alloc(alloc_size,
+        8).expect("dict: allocation failed")
     memset(raw.ptr, 0, alloc_size)
     self.entries = raw.ptr as &Entry(K, V)
     self.cap = cap
 }
 
-// Bytes the bucket array occupies. Counts every slot, live or not: a dict
-// holds `cap` slots and `len` of them carry an entry. What a key or value
-// owns on the heap of its own is not in here.
+// Bytes the bucket array occupies. Counts every slot, live or not: a dict holds `cap` slots and
+// `len` of them carry an entry. What a key or value owns on the heap of its own is not in here.
 pub fn capacity_bytes(self: &Dict($K, $V)) usize {
     return self.cap * size_of(Entry(K, V))
 }
 
-// Free the backing storage. The dict should not be used after this.
-// Calls deinit on all stored keys and values before freeing.
+// Free the backing storage. The dict should not be used after this. Calls deinit on all stored keys
+// and values before freeing.
 pub fn deinit(self: &Dict($K, $V)) {
     if self.cap > 0 {
         // Deinit all occupied keys and values
@@ -115,20 +109,21 @@ pub fn deinit(self: &Dict($K, $V)) {
     self.cap = 0
 }
 
-// Slot for the `i`th linear probe of hash `h`. Capacity is always a power
-// of two (`ensure_capacity` starts at 8 and only doubles), so the wrap is a
-// mask - a `%` here is a hardware divide on every probe of every lookup.
+// Slot for the `i`th linear probe of hash `h`. Capacity is always a power of two (`ensure_capacity`
+// starts at 8 and only doubles), so the wrap is a mask - a `%` here is a hardware divide on every
+// probe of every lookup.
 fn probe_slot(h: usize, i: usize, cap: usize) usize {
     return (h + i) & (cap - 1)
 }
 
-// Hash a key using the public hash() function, remapped off the two
-// reserved slot states. Types with custom hash semantics (e.g. String,
-// OwnedString) provide their own hash() overload, so Dict automatically
-// uses content-aware hashing.
+// Hash a key using the public hash() function, remapped off the two reserved slot states. Types
+// with custom hash semantics (e.g. String, OwnedString) provide their own hash() overload, so Dict
+// automatically uses content-aware hashing.
 fn hash_key(key: $K) usize {
     const h = hash(key)
-    if h < 2 { return h + 2 }
+    if h < 2 {
+        return h + 2
+    }
     return h
 }
 
@@ -142,9 +137,9 @@ pub fn is_empty(self: Dict($K, $V)) bool {
     return self.length == 0
 }
 
-// Make room for one more entry: grow when the insert would push the table
-// past a 75% load factor, and on the first insert, when there is no table at
-// all. Tombstones count toward the load - see `Dict.dead`.
+// Make room for one more entry: grow when the insert would push the table past a 75% load factor,
+// and on the first insert, when there is no table at all. Tombstones count toward the load - see
+// `Dict.dead`.
 fn ensure_capacity(self: &Dict($K, $V)) {
     const slots_needed = self.length + self.dead + 1
     if self.cap > 0 and slots_needed * 4 <= self.cap * 3 {
@@ -153,9 +148,8 @@ fn ensure_capacity(self: &Dict($K, $V)) {
 
     const old_cap: usize = self.cap
     const old_entries: &Entry(K, V) = self.entries
-    // A rehash that mostly clears tombstones keeps its capacity; only
-    // live-entry pressure grows the table. Every branch here must yield a
-    // power of two - `probe_slot` masks instead of dividing.
+    // A rehash that mostly clears tombstones keeps its capacity; only live-entry pressure grows the
+    // table. Every branch here must yield a power of two - `probe_slot` masks instead of dividing.
     let new_cap: usize = 8
     if old_cap > 0 {
         new_cap = if self.length * 2 <= old_cap { old_cap } else { old_cap * 2 }
@@ -182,7 +176,7 @@ pub fn set(self: &Dict($K, $V), key: K, value: V) {
     self.ensure_capacity()
 
     const h: usize = hash_key(key)
-    let tombstone_idx: usize = self.cap  // sentinel: no tombstone found
+    let tombstone_idx: usize = self.cap // sentinel: no tombstone found
 
     for i in 0..self.cap as isize {
         const idx: usize = probe_slot(h, i as usize, self.cap)
@@ -210,8 +204,8 @@ pub fn set(self: &Dict($K, $V), key: K, value: V) {
             continue
         }
 
-        // Occupied: check if same key. A stored hash is >= 2, so it can
-        // never collide with the reserved states.
+        // Occupied: check if same key. A stored hash is >= 2, so it can never collide with the
+        // reserved states.
         if entry.hash == h {
             if entry.key == key {
                 // Key already exists: deinit old value and unused new key
@@ -231,7 +225,7 @@ pub fn set(self: &Dict(OwnedString, $V), key: String, value: V) {
     self.ensure_capacity()
 
     // Fake OwnedString for comparison - no allocation for lookups.
-    const fake = OwnedString{ptr=key.ptr, len=key.len, allocator=null}
+    const fake = OwnedString { ptr = key.ptr, len = key.len, allocator = null }
     const h: usize = hash_key(fake)
     let tombstone_idx: usize = self.cap
 
@@ -302,8 +296,8 @@ pub fn get_ref(self: Dict($K, $V), key: K) &V? {
             return null
         }
 
-        // A stored hash is >= 2, so a hash match implies an occupied
-        // slot; tombstones (1) fall through and keep probing.
+        // A stored hash is >= 2, so a hash match implies an occupied slot; tombstones (1) fall
+        // through and keep probing.
         if entry.hash == h {
             if entry.key == key {
                 return Some(&entry.value)
@@ -319,7 +313,7 @@ pub fn get(self: Dict(OwnedString, $V), key: String) V? {
 }
 
 pub fn get_ref(self: Dict(OwnedString, $V), key: String) &V? {
-    const fake = OwnedString{ptr=key.ptr, len=key.len, allocator=null}
+    const fake = OwnedString { ptr = key.ptr, len = key.len, allocator = null }
     return get_ref(self, fake)
 }
 
@@ -350,15 +344,14 @@ pub fn contains(self: Dict($K, $V), key: K) bool {
 }
 
 pub fn contains(self: Dict(OwnedString, $V), key: String) bool {
-    const fake = OwnedString{ptr=key.ptr, len=key.len, allocator=null}
+    const fake = OwnedString { ptr = key.ptr, len = key.len, allocator = null }
     return contains(self, fake)
 }
 
-// String-key removal for `Dict(OwnedString, V)`: take a `String` view,
-// fabricate a non-owning OwnedString just for the hash/compare, and
-// delegate. Mirrors the `set`/`contains` overload above.
+// String-key removal for `Dict(OwnedString, V)`: take a `String` view, fabricate a non-owning
+// OwnedString just for the hash/compare, and delegate. Mirrors the `set`/`contains` overload above.
 pub fn remove(self: &Dict(OwnedString, $V), key: String) V? {
-    const fake = OwnedString{ptr=key.ptr, len=key.len, allocator=null}
+    const fake = OwnedString { ptr = key.ptr, len = key.len, allocator = null }
     return remove(self, fake)
 }
 
@@ -393,8 +386,8 @@ pub fn remove(self: &Dict($K, $V), key: K) V? {
     return null
 }
 
-// Remove all entries from the dict without freeing backing storage.
-// Deinits all stored keys and values.
+// Remove all entries from the dict without freeing backing storage. Deinits all stored keys and
+// values.
 pub fn clear(self: &Dict($K, $V)) {
     if self.cap > 0 {
         for i in 0..self.cap as isize {
@@ -425,8 +418,8 @@ pub fn iter(dict: &Dict($K, $V)) DictIterator(K, V) {
     return .{ dict = dict, current = 0 }
 }
 
-// An iterator is its own iterable, so `for e in d.iter()` and the
-// std.iter combinators can consume it.
+// An iterator is its own iterable, so `for e in d.iter()` and the std.iter combinators can consume
+// it.
 pub fn iter(it: &DictIterator($K, $V)) DictIterator(K, V) {
     return it.*
 }
@@ -465,8 +458,8 @@ test "a capacity constructor preallocates a power-of-two table" {
 }
 
 test "a key whose hash is a reserved state still round-trips" {
-    // mix64(0) is 0, so the key 0u32 naturally hashes to EMPTY's reserved
-    // value - `hash_key` must remap it or the entry reads as a hole.
+    // mix64(0) is 0, so the key 0u32 naturally hashes to EMPTY's reserved value - `hash_key` must
+    // remap it or the entry reads as a hole.
     let d: Dict(u32, i32) = dict()
     defer d.deinit()
     d.set(0u32, 7i32)
@@ -496,8 +489,8 @@ test "delete-heavy churn never fills the table" {
 // =============================================================================
 // Keys / values iterators
 //
-// Lightweight projections of DictIterator. Materialize with std.iter's
-// `to_list()`: `d.keys().to_list()`.
+// Lightweight projections of DictIterator. Materialize with std.iter's `to_list()`:
+// `d.keys().to_list()`.
 // =============================================================================
 
 pub type KeysIter = struct(K, V) {
@@ -510,7 +503,9 @@ pub fn iter(self: &KeysIter($K, $V)) KeysIter(K, V) {
 
 pub fn next(self: &KeysIter($K, $V)) K? {
     let e = self.it.next()
-    if e.is_none() { return null }
+    if e.is_none() {
+        return null
+    }
     return Some(e.unwrap().key)
 }
 
@@ -528,7 +523,9 @@ pub fn iter(self: &ValuesIter($K, $V)) ValuesIter(K, V) {
 
 pub fn next(self: &ValuesIter($K, $V)) V? {
     let e = self.it.next()
-    if e.is_none() { return null }
+    if e.is_none() {
+        return null
+    }
     return Some(e.unwrap().value)
 }
 
@@ -547,7 +544,9 @@ pub fn values(self: &Dict($K, $V)) ValuesIter(K, V) {
 // The allocator a derived dict should use: the caller's if given, otherwise
 // the receiver's. Kept optional — resolution happens at the allocating leaf.
 fn dict_derived_allocator(own: &Allocator?, override: &Allocator?) &Allocator? {
-    if override.is_some() { return override }
+    if override.is_some() {
+        return override
+    }
     return own
 }
 
@@ -564,7 +563,9 @@ pub fn map_values(self: &Dict($K, $V), f: $F, allocator: &Allocator? = null) Dic
 pub fn filter(self: &Dict($K, $V), pred: $F, allocator: &Allocator? = null) Dict(K, V) {
     let out: Dict(K, V) = dict(dict_derived_allocator(self.allocator, allocator))
     for e in self.iter() {
-        if pred(e.key, e.value) { out.set(e.key, e.value) }
+        if pred(e.key, e.value) {
+            out.set(e.key, e.value)
+        }
     }
     return out
 }
@@ -579,7 +580,9 @@ pub fn each(self: &Dict($K, $V), f: $F) {
 // Whether any entry satisfies `pred(key, value)`. False for an empty dict.
 pub fn any(self: &Dict($K, $V), pred: $F) bool {
     for e in self.iter() {
-        if pred(e.key, e.value) { return true }
+        if pred(e.key, e.value) {
+            return true
+        }
     }
     return false
 }
@@ -588,7 +591,9 @@ pub fn any(self: &Dict($K, $V), pred: $F) bool {
 pub fn all(self: &Dict($K, $V), pred: $F) bool {
     for e in self.iter() {
         let ok: bool = pred(e.key, e.value)
-        if !ok { return false }
+        if !ok {
+            return false
+        }
     }
     return true
 }
@@ -597,7 +602,9 @@ pub fn all(self: &Dict($K, $V), pred: $F) bool {
 pub fn count(self: &Dict($K, $V), pred: $F) usize {
     let n: usize = 0
     for e in self.iter() {
-        if pred(e.key, e.value) { n = n + 1 }
+        if pred(e.key, e.value) {
+            n = n + 1
+        }
     }
     return n
 }
@@ -605,30 +612,36 @@ pub fn count(self: &Dict($K, $V), pred: $F) usize {
 // The value for `key`, or `fallback` when absent.
 pub fn get_or(self: Dict($K, $V), key: K, fallback: V) V {
     let v = self.get(key)
-    if v.is_some() { return v.unwrap() }
+    if v.is_some() {
+        return v.unwrap()
+    }
     return fallback
 }
 
-// The value for `key`, or `make()` when absent - the lazy counterpart of
-// `get_or`, for fallbacks that are expensive (or effectful) to build.
+// The value for `key`, or `make()` when absent - the lazy counterpart of `get_or`, for fallbacks
+// that are expensive (or effectful) to build.
 pub fn get_or_else(self: Dict($K, $V), key: K, make: $F) V {
     let v = self.get(key)
-    if v.is_some() { return v.unwrap() }
+    if v.is_some() {
+        return v.unwrap()
+    }
     return make()
 }
 
-// Mutate the value for `key` in place via `f(&value)`. Returns whether the
-// key was present. In-place mutation (not get-modify-set) is the only sound
-// shape for owned values: `set` deinits the value it overwrites.
+// Mutate the value for `key` in place via `f(&value)`. Returns whether the key was present.
+// In-place mutation (not get-modify-set) is the only sound shape for owned values: `set` deinits
+// the value it overwrites.
 pub fn update(self: &Dict($K, $V), key: K, f: $F) bool {
     let r = self.get_ref(key)
-    if r.is_none() { return false }
+    if r.is_none() {
+        return false
+    }
     f(r.unwrap())
     return true
 }
 
-// Copy every entry of `other` into `self`, overwriting on key collisions.
-// Entries are copied shallowly: with owned keys or values, both dicts end
+// Copy every entry of `other` into `self`, overwriting on key collisions. Entries are copied
+// shallowly: with owned keys or values, both dicts end
 // up referencing the same buffers — deinit only one of them.
 pub fn merge(self: &Dict($K, $V), other: &Dict(K, V)) {
     for e in other.iter() {

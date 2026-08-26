@@ -1,18 +1,21 @@
 import std.test
 
-// ASCII classification. Written as explicit bound checks rather than range
-// and or patterns: those are the only two uses of either form in the whole
-// self-host corpus, and the self-hosted front end does not parse them yet
-// (docs/known-issues.md). The comparisons are exactly equivalent and read
+// ASCII classification. Written as explicit bound checks rather than range and or patterns: those
+// are the only two uses of either form in the whole self-host corpus, and the self-hosted front end
+// does not parse them yet (docs/known-issues.md). The comparisons are exactly equivalent and read
 // no worse for predicates like these.
 
 pub fn lower(c: char) char {
-    if c >= 'A' and c <= 'Z' { return c + ('a' - 'A') }
+    if c >= 'A' and c <= 'Z' {
+        return c + ('a' - 'A')
+    }
     return c
 }
 
 pub fn upper(c: char) char {
-    if c >= 'a' and c <= 'z' { return c - ('a' - 'A') }
+    if c >= 'a' and c <= 'z' {
+        return c - ('a' - 'A')
+    }
     return c
 }
 

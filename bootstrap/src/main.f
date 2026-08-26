@@ -7,9 +7,8 @@
 //     fmt   [<file.f>...]   format the project (or the given files) in place
 //     lsp                   start the language server via tools/flang_lsp
 //
-// fmt runs in-process on lib/flang_fmt. The lsp subcommand shells out to a
-// sibling tool binary via std.process - a separate project that also
-// depends on flang_parser + flang_core.
+// fmt runs in-process on lib/flang_fmt. The lsp subcommand shells out to a sibling tool binary via
+// std.process - a separate project that also depends on flang_parser + flang_core.
 
 import std.allocator
 import std.dict
@@ -42,9 +41,8 @@ import flang_typer.specialization
 import flang_typer.result_diff
 import flang.frontend
 
-// Parsed CLI state. `subcommand` is the first positional argument; the
-// remainder of argv after the subcommand is passed through to whatever
-// handler we dispatch to.
+// Parsed CLI state. `subcommand` is the first positional argument; the remainder of argv after the
+// subcommand is passed through to whatever handler we dispatch to.
 type Cli = struct {
     show_help: bool
     show_version: bool
@@ -63,9 +61,8 @@ type Cli = struct {
     target_arch: String
 }
 
-// Everything a build needs beyond the input path: the flags that shape it,
-// plus the values derived once from the CLI (stdlib root, compile-time
-// context) and the clock it started on.
+// Everything a build needs beyond the input path: the flags that shape it, plus the values derived
+// once from the CLI (stdlib root, compile-time context) and the clock it started on.
 type BuildOpts = struct {
     verbose: bool
     check_only: bool
@@ -112,36 +109,64 @@ pub fn main() i32 {
 
 // CLI parsing
 
-// Drive std.env.getopts over `argv[1..]`, then pick the first non-option
-// argument as the subcommand. Index 0 is the program name and is skipped.
+// Drive std.env.getopts over `argv[1..]`, then pick the first non-option argument as the
+// subcommand. Index 0 is the program name and is skipped.
 fn parse_cli(argv: String[]) Cli {
     let cli: Cli
-    let opts = getopts("h(help)V(version)v(verbose)c(check)g(emit-generated)k(keep-c)t(timings)r(release)G(gate-a)M(mem)s(stdlib-path):T(target-os):A(target-arch):", argv, 1)
+    let opts = getopts("h(help)V(version)v(verbose)c(check)g(emit-generated)k(keep-c)t(timings)r(release)G(gate-a)M(mem)s(stdlib-path):T(target-os):A(target-arch):",
+        argv, 1)
 
-    // Drive opts.next() manually rather than `for r in opts` - std.env's
-    // `iter(&GetOpt)` returns a *copy* of the iterator state, so a
-    // for-loop's mutations don't flow back into `opts` and we lose
-    // `rest_index()` after the subcommand is consumed.
+    // Drive opts.next() manually rather than `for r in opts` - std.env's `iter(&GetOpt)` returns a
+    // *copy* of the iterator state, so a for-loop's mutations don't flow back into `opts` and we
+    // lose `rest_index()` after the subcommand is consumed.
     loop {
         const item = opts.next()
-        if item.is_none() { break }
+        if item.is_none() {
+            break
+        }
         item.unwrap() match {
             Opt(c) => {
-                if c == 'h' { cli.show_help = true }
-                if c == 'V' { cli.show_version = true }
-                if c == 'v' { cli.verbose = true }
-                if c == 'g' { cli.emit_generated = true }
-                if c == 'k' { cli.keep_c = true }
-                if c == 't' { cli.timings = true }
-                if c == 'r' { cli.release = true }
-                if c == 'c' { cli.check = true }
-                if c == 'G' { cli.gate_a = true }
-                if c == 'M' { cli.mem = true }
+                if c == 'h' {
+                    cli.show_help = true
+                }
+                if c == 'V' {
+                    cli.show_version = true
+                }
+                if c == 'v' {
+                    cli.verbose = true
+                }
+                if c == 'g' {
+                    cli.emit_generated = true
+                }
+                if c == 'k' {
+                    cli.keep_c = true
+                }
+                if c == 't' {
+                    cli.timings = true
+                }
+                if c == 'r' {
+                    cli.release = true
+                }
+                if c == 'c' {
+                    cli.check = true
+                }
+                if c == 'G' {
+                    cli.gate_a = true
+                }
+                if c == 'M' {
+                    cli.mem = true
+                }
             }
             OptArg(c, val) => {
-                if c == 's' { cli.stdlib_path = val }
-                if c == 'T' { cli.target_os = val }
-                if c == 'A' { cli.target_arch = val }
+                if c == 's' {
+                    cli.stdlib_path = val
+                }
+                if c == 'T' {
+                    cli.target_os = val
+                }
+                if c == 'A' {
+                    cli.target_arch = val
+                }
             }
             NonOpt(s) => {
                 cli.subcommand = s
@@ -219,13 +244,14 @@ fn unknown_subcommand(name: String) i32 {
 
 // Subcommand handlers
 
-// build: a `<file>.f` argument compiles that single file through the same
-// multi-module pipeline as project mode, so its imports and the stdlib
-// resolve; with no argument, load `flang.toml` from the current directory
-// and build the project.
+// build: a `<file>.f` argument compiles that single file through the same multi-module pipeline as
+// project mode, so its imports and the stdlib resolve; with no argument, load `flang.toml` from the
+// current directory and build the project.
 fn run_build(argv: String[], rest: usize, cli: &Cli) i32 {
     const target_opt = resolve_target(cli.target_os, cli.target_arch)
-    if target_opt.is_none() { return 1 }
+    if target_opt.is_none() {
+        return 1
+    }
     let stdlib = effective_stdlib(cli.stdlib_path, argv)
     defer stdlib.deinit()
     const opts = BuildOpts {
@@ -255,9 +281,9 @@ fn run_build(argv: String[], rest: usize, cli: &Cli) i32 {
     return build_project(&opts)
 }
 
-// The compile-time context for this build: host values, overridden by
-// `--target-os` / `--target-arch`. Unknown values are hard errors - a
-// typo'd target must never silently select wrong #if branches.
+// The compile-time context for this build: host values, overridden by `--target-os` /
+// `--target-arch`. Unknown values are hard errors - a typo'd target must never silently select
+// wrong #if branches.
 fn resolve_target(target_os: String, target_arch: String) ComptimeCtx? {
     if target_os.len > 0 {
         if target_os != "windows" and target_os != "linux" and target_os != "macos" {
@@ -275,8 +301,8 @@ fn resolve_target(target_os: String, target_arch: String) ComptimeCtx? {
             return null
         }
     }
-    // Scoped mutability: ComptimeCtx fields are writable only in
-    // comptime.f, so build the override by construction.
+    // Scoped mutability: ComptimeCtx fields are writable only in comptime.f, so build the override
+    // by construction.
     const host = host_ctx()
     return Some(ComptimeCtx {
         os = if target_os.len > 0 { target_os } else { host.os },
@@ -286,35 +312,42 @@ fn resolve_target(target_os: String, target_arch: String) ComptimeCtx? {
     })
 }
 
-// The stdlib include root: the explicit `--stdlib-path` when given, else
-// `<dir of argv[0]>/stdlib`, mirroring the reference compiler's
-// `AppContext.BaseDirectory/stdlib` so `build` works without the flag (the
-// build deploys a `stdlib` copy next to the compiler binary).
+// The stdlib include root: the explicit `--stdlib-path` when given, else `<dir of argv[0]>/stdlib`,
+// mirroring the reference compiler's `AppContext.BaseDirectory/stdlib` so `build` works without the
+// flag (the build deploys a `stdlib` copy next to the compiler binary).
 fn effective_stdlib(given: String, argv: String[]) OwnedString {
-    if given.len > 0 { return from_view(given) }
+    if given.len > 0 {
+        return from_view(given)
+    }
     let exe = if argv.len > 0 { argv[0] } else { "" }
     let dir = dir_of(exe)
-    if dir.len == 0 { return from_view("stdlib") }
+    if dir.len == 0 {
+        return from_view("stdlib")
+    }
     return $"{dir}/stdlib"
 }
 
-// Directory portion of a path, or "" when it has no separator. Handles both
-// `/` and `\` since argv[0] carries the OS-native form.
+// Directory portion of a path, or "" when it has no separator. Handles both `/` and `\` since
+// argv[0] carries the OS-native form.
 fn dir_of(path: String) String {
     let cut: usize? = null
     let fwd = rfind(path, '/')
-    if fwd.is_some() { cut = fwd }
+    if fwd.is_some() {
+        cut = fwd
+    }
     let back = rfind(path, '\\')
-    if back.is_some() and (cut.is_none() or back.unwrap() > cut.unwrap()) { cut = back }
+    if back.is_some() and (cut.is_none() or back.unwrap() > cut.unwrap()) {
+        cut = back
+    }
     return cut match {
-        Some(i) => path[0..i],
-        None => "",
+        Some(i) => path[0..i]
+        None => ""
     }
 }
 
-// Project mode: parse `flang.toml`, glob its sources, resolve imports
-// across the whole project (plus the auto-imported prelude), type-check
-// every module together, then lower the lot to one executable.
+// Project mode: parse `flang.toml`, glob its sources, resolve imports across the whole project
+// (plus the auto-imported prelude), type-check every module together, then lower the lot to one
+// executable.
 fn build_project(opts: &BuildOpts) i32 {
     if !exists("flang.toml") {
         println("flang: no flang.toml in the current directory")
@@ -345,32 +378,44 @@ fn build_project(opts: &BuildOpts) i32 {
     defer ctx.deinit()
     ctx.set_comptime(opts.target)
 
-    // `--mem` routes the analysis through a counting decorator; the report
-    // at the end covers the heap it was handed, not the whole process.
+    // `--mem` routes the analysis through a counting decorator; the report at the end covers the
+    // heap it was handed, not the whole process.
     let counted = counting_allocator(&global_allocator)
     let counting = counted.allocator()
     let alloc: &Allocator? = null
-    if opts.mem { alloc = Some(&counting) }
+    if opts.mem {
+        alloc = Some(&counting)
+    }
 
     let unit = analyze_project(&ctx, &sources, null, alloc)
     defer unit.deinit()
 
-
     if opts.gate_a {
         const code = run_gate_a(&ctx, &unit, alloc)
-        if opts.mem { report_tables(&unit) }
-        if opts.mem { report_mem(&counted) }
+        if opts.mem {
+            report_tables(&unit)
+        }
+        if opts.mem {
+            report_mem(&counted)
+        }
         return code
     }
-    if opts.mem { report_tables(&unit) }
-    if opts.mem { report_engine(&unit) }
-    if opts.mem { report_type_sharing(&unit) }
-    if opts.mem { report_mem(&counted) }
+    if opts.mem {
+        report_tables(&unit)
+    }
+    if opts.mem {
+        report_engine(&unit)
+    }
+    if opts.mem {
+        report_type_sharing(&unit)
+    }
+    if opts.mem {
+        report_mem(&counted)
+    }
 
-    // `[build.<os>]` native inputs. `${VAR}` expansion reads the
-    // environment, so it happens here at the CLI edge rather than inside
-    // the driver; an undefined variable is an error, not an empty string
-    // silently dropped from the link line.
+    // `[build.<os>]` native inputs. `${VAR}` expansion reads the environment, so it happens here at
+    // the CLI edge rather than inside the driver; an undefined variable is an error, not an empty
+    // string silently dropped from the link line.
     const plat = proj.current_platform()
     let missing: List(OwnedString) = list(0)
     defer missing.deinit()
@@ -382,7 +427,9 @@ fn build_project(opts: &BuildOpts) i32 {
         let names = string_builder(64)
         defer names.deinit()
         for i in 0..missing.len {
-            if i > 0 { names.append(", ") }
+            if i > 0 {
+                names.append(", ")
+            }
             names.append("$")
             names.append(missing[i].as_view())
         }
@@ -397,8 +444,8 @@ fn build_project(opts: &BuildOpts) i32 {
     return finish_build(&unit, proj.name.as_view(), out.as_view(), opts, &libs, &ldflags)
 }
 
-// Single-file mode: the file is the sole entry of a project-less build, so
-// its imports resolve against the stdlib and the working directory.
+// Single-file mode: the file is the sole entry of a project-less build, so its imports resolve
+// against the stdlib and the working directory.
 fn build_single_file(path: String, out: String, opts: &BuildOpts) i32 {
     let ctx = single_file_ctx(opts.stdlib_path)
     defer ctx.deinit()
@@ -411,11 +458,17 @@ fn build_single_file(path: String, out: String, opts: &BuildOpts) i32 {
     let unit = analyze_project(&ctx, &entries)
     defer unit.deinit()
 
-    if opts.gate_a { return run_gate_a(&ctx, &unit, null) }
+    if opts.gate_a {
+        return run_gate_a(&ctx, &unit, null)
+    }
 
     if opts.emit_generated {
         const n = unit.write_generated()
-        if opts.verbose { const gm = $"  wrote {n} generated file(s)"; defer gm.deinit(); println(gm.as_view()) }
+        if opts.verbose {
+            const gm = $"  wrote {n} generated file(s)"
+            defer gm.deinit()
+            println(gm.as_view())
+        }
     }
     // No manifest, so no `[build.<os>]` inputs.
     let none: List(OwnedString) = list(0)
@@ -423,27 +476,26 @@ fn build_single_file(path: String, out: String, opts: &BuildOpts) i32 {
     return finish_build(&unit, path, out, opts, &none, &none)
 }
 
-// Gate A (RFC-022): analyse the project a second time and require the two
-// results to be identical table by table - nominals, specializations, node
-// types, resolved targets, resolved operators.
+// Gate A (RFC-022): analyse the project a second time and require the two results to be identical
+// table by table - nominals, specializations, node types, resolved targets, resolved operators.
 //
-// What that proves today is that a check is deterministic, which the
-// harness and the stage fixpoint do not: both run cold and single-pass.
-// Once per-module invalidation lands the second pass becomes
-// dirty-one-module-and-re-demand, and the same comparison is what catches
-// a stale cache entry surviving the invalidation.
+// What that proves today is that a check is deterministic, which the harness and the stage fixpoint
+// do not: both run cold and single-pass. Once per-module invalidation lands the second pass becomes
+// dirty-one-module-and-re-demand, and the same comparison is what catches a stale cache entry
+// surviving the invalidation.
 //
-// ponytail: the second pass is a full cold analysis until the query graph
-// exists; only this function changes when it does.
-// The result's own tables, largest first. Bytes are the backing arrays; the
-// gap against the allocator's total is what those arrays' entries own.
+// ponytail: the second pass is a full cold analysis until the query graph exists; only this
+// function changes when it does. The result's own tables, largest first. Bytes are the backing
+// arrays; the gap against the allocator's total is what those arrays' entries own.
 fn report_tables(unit: &AnalyzedProject) {
     const rows = unit.result.table_sizes()
     defer rows.deinit()
     let counted: usize = 0
     for &r in rows {
         counted = counted + r.bytes
-        if r.bytes < 1048576usize { continue }
+        if r.bytes < 1048576usize {
+            continue
+        }
         const line = $"mem:   {r.name} - {r.entries} entries, {r.bytes / 1048576usize} MB"
         defer line.deinit()
         println(line.as_view())
@@ -453,8 +505,8 @@ fn report_tables(unit: &AnalyzedProject) {
     println(tail.as_view())
 }
 
-// The inference engine's own tables. Every type variable inference minted has
-// a row in each of these, and `prim_constraints` holds a list per row.
+// The inference engine's own tables. Every type variable inference minted has a row in each of
+// these, and `prim_constraints` holds a list per row.
 fn report_engine(unit: &AnalyzedProject) {
     const e = &unit.checker.engine
     let constraint_bytes: usize = 0
@@ -466,9 +518,8 @@ fn report_engine(unit: &AnalyzedProject) {
     println(line.as_view())
 }
 
-// Node types held against node types that differ. Each entry is a type tree of
-// its own, so the two numbers separate how many trees are stored from how many
-// shapes they are drawn from.
+// Node types held against node types that differ. Each entry is a type tree of its own, so the two
+// numbers separate how many trees are stored from how many shapes they are drawn from.
 fn report_type_sharing(unit: &AnalyzedProject) {
     let seen: Set(String) = set()
     defer seen.deinit()
@@ -497,10 +548,9 @@ fn run_gate_a(ctx: &ResolveCtx, cold: &AnalyzedProject, alloc: &Allocator?) i32 
         println("gate A: the project does not type-check - nothing to compare")
         return 1
     }
-    // Dirty a few modules and demand the project again: the reused entries
-    // have to reproduce the cold result exactly. Three positions in demand
-    // order - first, middle, last - so a recycled declaration is compared
-    // from below, among and above the ids of the modules that were kept.
+    // Dirty a few modules and demand the project again: the reused entries have to reproduce the
+    // cold result exactly. Three positions in demand order - first, middle, last - so a recycled
+    // declaration is compared from below, among and above the ids of the modules that were kept.
     const before_diags = cold.diagnostics.len
     const cold_parse_ns = cold.parse_ns
     const cold_collect_ns = cold.result.phases.collect_ns
@@ -543,10 +593,9 @@ fn run_gate_a(ctx: &ResolveCtx, cold: &AnalyzedProject, alloc: &Allocator?) i32 
         const ok = $"gate A: OK - {mods} modules, {nt} node types, {ns} specializations, {nn} nominals identical"
         defer ok.deinit()
         println(ok.as_view())
-        // The rest of the check runs in full either way, so these are what
-        // distinguish a reused entry from one computed again: the first pair
-        // for the module ASTs, the second for the type names collected from
-        // them.
+        // The rest of the check runs in full either way, so these are what distinguish a reused
+        // entry from one computed again: the first pair for the module ASTs, the second for the
+        // type names collected from them.
         const cold_ms = cold_parse_ns / 1000000u64
         const warm_ms = cold.parse_ns / 1000000u64
         const p = $"gate A: parse {cold_ms} ms cold, {warm_ms} ms re-demanded"
@@ -588,9 +637,9 @@ fn run_gate_a(ctx: &ResolveCtx, cold: &AnalyzedProject, alloc: &Allocator?) i32 
     return 1
 }
 
-// Expand `${VAR}` in each entry against the environment. An undefined
-// variable's name is collected in `missing` and the entry is dropped - the
-// caller reports them together, the way the reference compiler does.
+// Expand `${VAR}` in each entry against the environment. An undefined variable's name is collected
+// in `missing` and the entry is dropped - the caller reports them together, the way the reference
+// compiler does.
 fn expand_all(items: &List(OwnedString), missing: &List(OwnedString)) List(OwnedString) {
     let out: List(OwnedString) = list(items.len)
     for &item in items {
@@ -610,11 +659,11 @@ fn expand_all(items: &List(OwnedString), missing: &List(OwnedString)) List(Owned
                 }
                 const key = s[(i + 2)..j]
                 env(key) match {
-                    Some(v) => sb.append(v),
+                    Some(v) => sb.append(v)
                     None => {
                         ok = false
                         missing.push(from_view(key))
-                    },
+                    }
                 }
                 i = j + 1
             } else {
@@ -622,13 +671,18 @@ fn expand_all(items: &List(OwnedString), missing: &List(OwnedString)) List(Owned
                 i = i + 1
             }
         }
-        if ok { out.push(sb.to_string()) } else { sb.deinit() }
+        if ok {
+            out.push(sb.to_string())
+        } else {
+            sb.deinit()
+        }
     }
     return out
 }
 
 // Shared render -> gate -> lower -> link tail for both build modes.
-fn finish_build(unit: &AnalyzedProject, label: String, out: String, opts: &BuildOpts, libs: &List(OwnedString), ldflags: &List(OwnedString)) i32 {
+fn finish_build(unit: &AnalyzedProject, label: String, out: String, opts: &BuildOpts,
+    libs: &List(OwnedString), ldflags: &List(OwnedString)) i32 {
     render_project_diagnostics(&unit.diagnostics, &unit.file_paths, &unit.sources)
 
     const errs = project_error_count(unit)
@@ -645,11 +699,14 @@ fn finish_build(unit: &AnalyzedProject, label: String, out: String, opts: &Build
         const m = $"checked {label} ({unit.modules.len} modules)"
         defer m.deinit()
         println(m.as_view())
-        if opts.timings { print_timings(unit, 0, 0, 0, elapsed_ns(opts.start_ns)) }
+        if opts.timings {
+            print_timings(unit, 0, 0, 0, elapsed_ns(opts.start_ns))
+        }
         return 0
     }
 
-    let result = build_program(&unit.modules, &unit.fqns, &unit.result, out, opts.target, &unit.file_paths, libs, ldflags, opts.verbose, opts.keep_c, opts.release)
+    let result = build_program(&unit.modules, &unit.fqns, &unit.result, out, opts.target,
+        &unit.file_paths, libs, ldflags, opts.verbose, opts.keep_c, opts.release)
     if result.is_err() {
         report_build_error(&result.unwrap_err(), label)
         return 1
@@ -660,16 +717,17 @@ fn finish_build(unit: &AnalyzedProject, label: String, out: String, opts: &Build
     defer msg.deinit()
     println(msg.as_view())
     if opts.timings {
-        print_timings(unit, artifact.lower_ns, artifact.translate_ns, artifact.cc_ns, elapsed_ns(opts.start_ns))
+        print_timings(unit, artifact.lower_ns, artifact.translate_ns, artifact.cc_ns,
+            elapsed_ns(opts.start_ns))
     }
     return 0
 }
 
-// `--timings`: where the wall time went, one line per phase, with the
-// typechecker broken into its own phases beneath it. "other" is the
-// remainder - project manifest, glob, diagnostics rendering, teardown - and
-// is the cue that a phase worth naming is still unaccounted for.
-fn print_timings(unit: &AnalyzedProject, lower_ns: u64, translate_ns: u64, cc_ns: u64, total_ns: u64) {
+// `--timings`: where the wall time went, one line per phase, with the typechecker broken into its
+// own phases beneath it. "other" is the remainder - project manifest, glob, diagnostics rendering,
+// teardown - and is the cue that a phase worth naming is still unaccounted for.
+fn print_timings(unit: &AnalyzedProject, lower_ns: u64, translate_ns: u64, cc_ns: u64,
+    total_ns: u64) {
     const p = unit.result.phases
     println("timings:")
     print_phase("read + parse", unit.parse_ns, total_ns, false)
@@ -687,7 +745,8 @@ fn print_timings(unit: &AnalyzedProject, lower_ns: u64, translate_ns: u64, cc_ns
     print_phase("emit C", translate_ns, total_ns, false)
     print_phase("cc + link", cc_ns, total_ns, false)
     const named = unit.parse_ns + unit.check_ns + lower_ns + translate_ns + cc_ns
-    print_phase("other", if named < total_ns { total_ns - named } else { 0 as u64 }, total_ns, false)
+    print_phase("other", if named < total_ns { total_ns - named } else { 0 as u64 }, total_ns,
+        false)
     print_phase("total", total_ns, total_ns, false)
 }
 
@@ -703,8 +762,8 @@ fn print_phase(label: String, ns: u64, total_ns: u64, nested: bool) {
     println(line.as_view())
 }
 
-// Derive the output artifact path from the input: strip a trailing `.f`
-// so `hello.f` builds to `hello` (the backend adds any platform suffix).
+// Derive the output artifact path from the input: strip a trailing `.f` so `hello.f` builds to
+// `hello` (the backend adds any platform suffix).
 fn output_path_for(path: String) String {
     if path.len >= 2 {
         if path[path.len - 2] == '.' and path[path.len - 1] == 'f' {
@@ -717,12 +776,12 @@ fn output_path_for(path: String) String {
 // The CLI edge renders IO failures; `read_source` itself stays pure.
 fn report_read_error(path: String, e: FileError) {
     const label = e match {
-        NotFound => "not found",
-        PermissionDenied => "permission denied",
-        NameTooLong => "path too long",
-        AlreadyExists => "already exists",
-        InvalidArgument => "invalid path",
-        IOError => "read failed",
+        NotFound => "not found"
+        PermissionDenied => "permission denied"
+        NameTooLong => "path too long"
+        AlreadyExists => "already exists"
+        InvalidArgument => "invalid path"
+        IOError => "read failed"
     }
     const m = $"flang: cannot read `{path}`: {label}"
     defer m.deinit()
@@ -731,11 +790,11 @@ fn report_read_error(path: String, e: FileError) {
 
 fn report_build_error(e: &BuildError, path: String) {
     const label = e.* match {
-        NoCompilerFound => "no C compiler found",
-        CompilerFailed(_) => "the C compiler returned an error",
-        SpawnFailed => "could not spawn the C compiler",
-        IOError => "I/O error while writing build artifacts",
-        LowerFailed => "IR lowering rejected the module",
+        NoCompilerFound => "no C compiler found"
+        CompilerFailed(_) => "the C compiler returned an error"
+        SpawnFailed => "could not spawn the C compiler"
+        IOError => "I/O error while writing build artifacts"
+        LowerFailed => "IR lowering rejected the module"
     }
     const m = $"build failed: {label} ({path})"
     defer m.deinit()
@@ -757,16 +816,19 @@ type FmtStatus = enum {
     Failed
 }
 
-// fmt: format the given files in place, or with no arguments every source
-// matched by the project's `flang.toml` glob. A `[fmt]` table in the
-// manifest tunes the style. `--check` writes nothing and exits 1 when any
-// file would change.
+// fmt: format the given files in place, or with no arguments every source matched by the project's
+// `flang.toml` glob. A `[fmt]` table in the manifest tunes the style. `--check` writes nothing and
+// exits 1 when any file would change.
 fn run_fmt(argv: String[], rest: usize) i32 {
     let check = false
     let files: List(String) = list(0)
     defer files.deinit()
     for i in rest..argv.len {
-        if argv[i] == "--check" { check = true } else { files.push(argv[i]) }
+        if argv[i] == "--check" {
+            check = true
+        } else {
+            files.push(argv[i])
+        }
     }
 
     let cfg = default_config()
@@ -828,13 +890,17 @@ fn run_fmt(argv: String[], rest: usize) i32 {
         defer m.deinit()
         println(m.as_view())
     }
-    if failed > 0 { return 1 }
-    if check and changed > 0 { return 1 }
+    if failed > 0 {
+        return 1
+    }
+    if check and changed > 0 {
+        return 1
+    }
     return 0
 }
 
-// Format one file in place. In check mode nothing is written; a file that
-// would change reports itself.
+// Format one file in place. In check mode nothing is written; a file that would change reports
+// itself.
 fn fmt_file(path: String, cfg: &FmtConfig, check: bool) FmtStatus {
     const read_res = read_source(path)
     if read_res.is_err() {
@@ -879,16 +945,15 @@ fn fmt_file(path: String, cfg: &FmtConfig, check: bool) FmtStatus {
 
 fn report_fmt_error(path: String, e: FmtError) {
     const msg = e match {
-        ParseFailed(n) => $"flang: `{path}` has {n} parse error(s) - not formatted",
-        VerifyFailed => $"flang: formatter verification failed on `{path}` (formatter bug) - file left untouched",
+        ParseFailed(n) => $"flang: `{path}` has {n} parse error(s) - not formatted"
+        VerifyFailed => $"flang: formatter verification failed on `{path}` (formatter bug) - file left untouched"
     }
     defer msg.deinit()
     println(msg.as_view())
 }
 
-// Spawn the sibling tool with our trailing argv. Tool binaries are
-// expected on PATH (or addressable by relative name); the child inherits
-// our environment so it sees the same workspace context.
+// Spawn the sibling tool with our trailing argv. Tool binaries are expected on PATH (or addressable
+// by relative name); the child inherits our environment so it sees the same workspace context.
 fn spawn_tool(tool: String, argv: String[], rest: usize, verbose: bool) i32 {
     if verbose {
         const v = $"flang: spawning `{tool}`"

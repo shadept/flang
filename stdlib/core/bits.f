@@ -66,5 +66,6 @@ test "count_ones_u32 basic cases" {
 
 test "count_ones_u64 basic cases" {
     assert_eq(count_ones_u64(0 as u64) as u32, 0u32, "zero has 0 bits set")
-    assert_eq(count_ones_u64(0xFFFF_FFFF_FFFF_FFFF as u64) as u32, 64u32, "all ones has 64 bits set")
+    assert_eq(count_ones_u64(0xFFFF_FFFF_FFFF_FFFF as u64) as u32, 64u32,
+        "all ones has 64 bits set")
 }

@@ -29,7 +29,8 @@ import std.mem
 #foreign fn GetStdHandle(nStdHandle: u32) usize
 #foreign fn GetConsoleMode(hConsole: usize, lpMode: &u32) i32
 #foreign fn SetConsoleMode(hConsole: usize, dwMode: u32) i32
-#foreign fn ReadFile(hFile: usize, lpBuffer: &u8, nBytes: u32, lpBytesRead: &u32, lpOverlapped: usize) i32
+#foreign fn ReadFile(hFile: usize, lpBuffer: &u8, nBytes: u32, lpBytesRead: &u32,
+    lpOverlapped: usize) i32
 
 const TCSAFLUSH: i32 = 2
 
@@ -90,7 +91,7 @@ type Key = enum {
 const MAX_HISTORY: usize = 128
 
 type History = struct {
-    entries: [u8; 16384]  // flat buffer: length-prefixed strings packed together
+    entries: [u8; 16384] // flat buffer: length-prefixed strings packed together
     offsets: [usize; 128] // offset of each entry in the buffer
     count: usize
     buf_used: usize
@@ -101,13 +102,15 @@ fn history() History {
         entries = [0u8; 16384],
         offsets = [0usize; 128],
         count = 0,
-        buf_used = 0
+        buf_used = 0,
     }
     return h
 }
 
 fn history_add(h: &History, line: String) {
-    if line.len == 0 { return }
+    if line.len == 0 {
+        return
+    }
 
     // Don't add duplicates of the most recent entry
     if h.count > 0 {
@@ -121,13 +124,17 @@ fn history_add(h: &History, line: String) {
                     break
                 }
             }
-            if same { return }
+            if same {
+                return
+            }
         }
     }
 
     // Need 1 byte for length + line.len bytes
     const needed = 1 + line.len
-    if h.buf_used + needed > 16384 { return } // buffer full, skip
+    if h.buf_used + needed > 16384 {
+        return
+    } // buffer full, skip
 
     if h.count >= MAX_HISTORY {
         // Shift everything down by removing the oldest entry
@@ -153,7 +160,9 @@ fn history_add(h: &History, line: String) {
 }
 
 fn history_get(h: &History, index: usize) String {
-    if index >= h.count { return "" }
+    if index >= h.count {
+        return ""
+    }
     const off = h.offsets[index]
     const len = h.entries[off] as usize
     return slice_from_raw_parts(&h.entries[off + 1], len) as String
@@ -166,8 +175,8 @@ fn history_get(h: &History, index: usize) String {
 pub type Readline = struct {
     prompt: String
     hist: History
-    raw_buf: [u8; 72]        // saved original termios
-    line_buf: [u8; 1024]     // persistent buffer for returned line data
+    raw_buf: [u8; 72] // saved original termios
+    line_buf: [u8; 1024] // persistent buffer for returned line data
     is_raw: bool
 }
 
@@ -177,7 +186,7 @@ pub fn readline(prompt: String) Readline {
         hist = history(),
         raw_buf = [0u8; 72],
         line_buf = [0u8; 1024],
-        is_raw = false
+        is_raw = false,
     }
     return rl
 }
@@ -193,8 +202,12 @@ pub fn deinit(self: &Readline) {
 // =============================================================================
 
 fn enable_raw(rl: &Readline) {
-    if rl.is_raw { return }
-    if isatty(0) == 0 { return }
+    if rl.is_raw {
+        return
+    }
+    if isatty(0) == 0 {
+        return
+    }
 
     #if platform.os == "windows" {
         // Save original console modes (stdin in bytes 0..3, stdout in bytes 4..7)
@@ -240,7 +253,9 @@ fn enable_raw(rl: &Readline) {
 }
 
 fn disable_raw(rl: &Readline) {
-    if !rl.is_raw { return }
+    if !rl.is_raw {
+        return
+    }
 
     #if platform.os == "windows" {
         const hIn = GetStdHandle(WIN_STD_INPUT_HANDLE)
@@ -278,50 +293,76 @@ fn read_byte() u8? {
         const hIn = GetStdHandle(WIN_STD_INPUT_HANDLE)
         let bytes_read: u32 = 0
         const ok = ReadFile(hIn, &c, 1, &bytes_read, 0)
-        if ok == 0 or bytes_read == 0 { return null }
+        if ok == 0 or bytes_read == 0 {
+            return null
+        }
     } else {
         const n = read(0, &c, 1)
-        if n <= 0 { return null }
+        if n <= 0 {
+            return null
+        }
     }
     return Some(c)
 }
 
 fn read_key() Key {
     const b = read_byte() match {
-        Some(v) => v,
+        Some(v) => v
         None => return Key.Eof
     }
 
-    if b == 13 or b == 10 { return Key.Enter }
-    if b == 127 or b == 8 { return Key.Backspace }
-    if b == 4 { return Key.Eof }   // Ctrl-D
+    if b == 13 or b == 10 {
+        return Key.Enter
+    }
+    if b == 127 or b == 8 {
+        return Key.Backspace
+    }
+    if b == 4 {
+        return Key.Eof
+    } // Ctrl-D
 
     // Escape sequences
     if b == 27 {
         const b2 = read_byte() match {
-            Some(v) => v,
+            Some(v) => v
             None => return Key.Unknown
         }
         // TODO prime example for if conf guard in pattern matching
-        if b2 != '[' { return Key.Unknown }
+        if b2 != '[' {
+            return Key.Unknown
+        }
 
         const b3 = read_byte() match {
-            Some(v) => v,
+            Some(v) => v
             None => return Key.Unknown
         }
 
-        if b3 == 'A' { return Key.Up }
-        if b3 == 'B' { return Key.Down }
-        if b3 == 'C' { return Key.Right }
-        if b3 == 'D' { return Key.Left }
-        if b3 == 'H' { return Key.Home }
-        if b3 == 'F' { return Key.End }
+        if b3 == 'A' {
+            return Key.Up
+        }
+        if b3 == 'B' {
+            return Key.Down
+        }
+        if b3 == 'C' {
+            return Key.Right
+        }
+        if b3 == 'D' {
+            return Key.Left
+        }
+        if b3 == 'H' {
+            return Key.Home
+        }
+        if b3 == 'F' {
+            return Key.End
+        }
 
         // ESC [ 3 ~ = Delete
         if b3 == '3' {
             const c4 = read_byte()
             c4 match {
-                Some(v) => { if v == '~' { return Key.Delete } },
+                Some(v) => { if v == '~' {
+                        return Key.Delete
+                    } }
                 None => {}
             }
         }
@@ -330,7 +371,9 @@ fn read_key() Key {
     }
 
     // Regular printable character
-    if b >= 32 and b < 127 { return Key.Char(b) }
+    if b >= 32 and b < 127 {
+        return Key.Char(b)
+    }
 
     return Key.Unknown
 }
@@ -352,7 +395,7 @@ pub fn read_line(rl: &Readline) String? {
     let buf = [0u8; 1024]
     let len: usize = 0
     let cursor: usize = 0
-    let hist_index: isize = -1  // -1 = current input, 0..n = history
+    let hist_index: isize = -1 // -1 = current input, 0..n = history
     let saved_buf = [0u8; 1024] // saved current input when browsing history
     let saved_len: usize = 0
 
@@ -364,9 +407,11 @@ pub fn read_line(rl: &Readline) String? {
                 // Copy into persistent buffer so the returned String outlives this call
                 memcpy(&rl.line_buf[0], &buf[0], len)
                 const line = slice_from_raw_parts(&rl.line_buf[0], len) as String
-                if len > 0 { history_add(&rl.hist, line) }
+                if len > 0 {
+                    history_add(&rl.hist, line)
+                }
                 return Some(line)
-            },
+            }
 
             Eof => {
                 if len == 0 {
@@ -374,7 +419,7 @@ pub fn read_line(rl: &Readline) String? {
                     disable_raw(rl)
                     return null
                 }
-            },
+            }
 
             Char(c) => {
                 if len < 1023 {
@@ -392,7 +437,7 @@ pub fn read_line(rl: &Readline) String? {
                     cursor = cursor + 1
                     refresh_line(rl, buf, len, cursor)
                 }
-            },
+            }
 
             Backspace => {
                 if cursor > 0 {
@@ -404,7 +449,7 @@ pub fn read_line(rl: &Readline) String? {
                     cursor = cursor - 1
                     refresh_line(rl, buf, len, cursor)
                 }
-            },
+            }
 
             Delete => {
                 if cursor < len {
@@ -414,31 +459,31 @@ pub fn read_line(rl: &Readline) String? {
                     len = len - 1
                     refresh_line(rl, buf, len, cursor)
                 }
-            },
+            }
 
             Left => {
                 if cursor > 0 {
                     cursor = cursor - 1
                     refresh_line(rl, buf, len, cursor)
                 }
-            },
+            }
 
             Right => {
                 if cursor < len {
                     cursor = cursor + 1
                     refresh_line(rl, buf, len, cursor)
                 }
-            },
+            }
 
             Home => {
                 cursor = 0
                 refresh_line(rl, buf, len, cursor)
-            },
+            }
 
             End => {
                 cursor = len
                 refresh_line(rl, buf, len, cursor)
-            },
+            }
 
             Up => {
                 if rl.hist.count > 0 {
@@ -458,7 +503,7 @@ pub fn read_line(rl: &Readline) String? {
                     cursor = len
                     refresh_line(rl, buf, len, cursor)
                 }
-            },
+            }
 
             Down => {
                 if hist_index >= 0 {
@@ -477,7 +522,7 @@ pub fn read_line(rl: &Readline) String? {
                     }
                     refresh_line(rl, buf, len, cursor)
                 }
-            },
+            }
 
             Unknown => {}
         }
@@ -493,32 +538,42 @@ fn refresh_line(rl: &Readline, buf: [u8; 1024], len: usize, cursor: usize) {
     let pos: usize = 0
 
     // \r - carriage return
-    out[pos] = 13; pos = pos + 1
+    out[pos] = 13
+    pos = pos + 1
 
     // Write prompt
     for i in 0..rl.prompt.len {
-        out[pos] = rl.prompt[i]; pos = pos + 1
+        out[pos] = rl.prompt[i]
+        pos = pos + 1
     }
 
     // Write buffer content
     for i in 0..len {
-        out[pos] = buf[i]; pos = pos + 1
+        out[pos] = buf[i]
+        pos = pos + 1
     }
 
     // Clear to end of line: ESC [ K
-    out[pos] = 27; pos = pos + 1
-    out[pos] = '['; pos = pos + 1
-    out[pos] = 'K'; pos = pos + 1
+    out[pos] = 27
+    pos = pos + 1
+    out[pos] = '['
+    pos = pos + 1
+    out[pos] = 'K'
+    pos = pos + 1
 
     // Move cursor to correct position: \r then ESC [ {n} C
-    out[pos] = 13; pos = pos + 1
+    out[pos] = 13
+    pos = pos + 1
     const target = rl.prompt.len + cursor
     if target > 0 {
-        out[pos] = 27; pos = pos + 1
-        out[pos] = '['; pos = pos + 1
+        out[pos] = 27
+        pos = pos + 1
+        out[pos] = '['
+        pos = pos + 1
         // Write target as decimal digits
         pos = write_uint_to_buf(out, pos, target as u32)
-        out[pos] = 'C'; pos = pos + 1
+        out[pos] = 'C'
+        pos = pos + 1
     }
 
     write(1, &out[0], pos)
@@ -559,10 +614,14 @@ fn read_line_simple(rl: &Readline) String? {
         let c: u8 = 0
         const n = read(0, &c, 1)
         if n <= 0 {
-            if len == 0 { return null }
+            if len == 0 {
+                return null
+            }
             break
         }
-        if c == '\n' { break }
+        if c == '\n' {
+            break
+        }
         if len < 1023 {
             rl.line_buf[len] = c
             len = len + 1

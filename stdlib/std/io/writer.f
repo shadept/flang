@@ -1,11 +1,11 @@
 // Writer interface and BufferedWriter.
 //
-// Writer is a vtable interface for raw byte output (write: fn(data: u8[]) usize).
-// BufferedWriter wraps a Writer with a caller-provided linear buffer.
-// The buffer auto-flushes when full. Explicit flush() drains any remaining bytes.
+// Writer is a vtable interface for raw byte output (write: fn(data: u8[]) usize). BufferedWriter
+// wraps a Writer with a caller-provided linear buffer. The buffer auto-flushes when full. Explicit
+// flush() drains any remaining bytes.
 //
-// Building block for File, stdout, network streams, etc.
-// The caller owns the backing storage; BufferedWriter is a borrowed view.
+// Building block for File, stdout, network streams, etc. The caller owns the backing storage;
+// BufferedWriter is a borrowed view.
 
 import std.mem
 import std.interface
@@ -50,21 +50,19 @@ pub fn write_int(self: Writer, value: i64) {
 pub fn write_int(self: Writer, value: i32) { self.write_int(value as i64) }
 pub fn write_int(self: Writer, value: isize) { self.write_int(value as i64) }
 
-// Write an f64 as decimal digits with up to 6 fractional digits, trailing
-// zeros trimmed. For control over width, precision, or alignment, format
-// through a StringBuilder instead.
+// Write an f64 as decimal digits with up to 6 fractional digits, trailing zeros trimmed. For
+// control over width, precision, or alignment, format through a StringBuilder instead.
 pub fn write_f64(self: Writer, value: f64) {
-    // 48 bytes covers `format_f64` at the default precision of 6 (needs 29)
-    // with slack for any reasonable precision bump.
+    // 48 bytes covers `format_f64` at the default precision of 6 (needs 29) with slack for any
+    // reasonable precision bump.
     let buf = [0u8; 48]
     const n = format_f64(value, buf).unwrap()
     self.write(buf[0..n])
 }
 
 // Buffered writer over caller-provided storage.
-// Writes accumulate in buf[0..pos]. When pos reaches buf.len, the buffer
-// auto-flushes via the underlying Writer. Explicit flush() drains
-// any remaining bytes.
+// Writes accumulate in buf[0..pos]. When pos reaches buf.len, the buffer auto-flushes via the
+// underlying Writer. Explicit flush() drains any remaining bytes.
 pub type BufferedWriter = struct {
     inner: Writer
     buf: u8[]
@@ -73,8 +71,8 @@ pub type BufferedWriter = struct {
 
 #implement(BufferedWriter, Writer)
 
-// Create a BufferedWriter over the given storage slice.
-// If storage is empty, writes flush immediately (unbuffered).
+// Create a BufferedWriter over the given storage slice. If storage is empty, writes flush
+// immediately (unbuffered).
 pub fn buffered_writer(w: Writer, storage: u8[]) BufferedWriter {
     return .{
         inner = w,
@@ -100,8 +98,8 @@ pub fn write(w: &BufferedWriter, b: u8) {
 }
 
 // Write data through the buffer.
-// Small writes accumulate; the buffer auto-flushes when full.
-// Returns the number of bytes written (always data.len on success).
+// Small writes accumulate; the buffer auto-flushes when full. Returns the number of bytes written
+// (always data.len on success).
 pub fn write(w: &BufferedWriter, data: u8[]) usize {
     if data.len == 0 {
         return 0
@@ -141,16 +139,15 @@ pub fn write(w: &BufferedWriter, data: u8[]) usize {
     return written
 }
 
-// Flush all buffered data to the underlying writer.
-// Resets the buffer position to 0.
+// Flush all buffered data to the underlying writer. Resets the buffer position to 0.
 pub fn flush(w: &BufferedWriter) {
     if w.pos > 0 {
         w.flush_all()
     }
 }
 
-// Internal: flush the entire buffer contents to the underlying writer.
-// Handles partial writes by looping until all bytes are written.
+// Internal: flush the entire buffer contents to the underlying writer. Handles partial writes by
+// looping until all bytes are written.
 fn flush_all(w: &BufferedWriter) {
     let flushed: usize = 0
     while flushed < w.pos {

@@ -2,33 +2,65 @@ import std.io.writer
 import std.terminal
 
 fn append_piece(sb: &StringBuilder, piece: u8) {
-    if piece == 'K' { sb.append("♔") }
-    else if piece == 'Q' { sb.append("♕") }
-    else if piece == 'R' { sb.append("♖") }
-    else if piece == 'B' { sb.append("♗") }
-    else if piece == 'N' { sb.append("♘") }
-    else if piece == 'P' { sb.append("♙") }
-    else if piece == 'k' { sb.append("♚") }
-    else if piece == 'q' { sb.append("♛") }
-    else if piece == 'r' { sb.append("♜") }
-    else if piece == 'b' { sb.append("♝") }
-    else if piece == 'n' { sb.append("♞") }
-    else if piece == 'p' { sb.append("♟") }
+    if piece == 'K' {
+        sb.append("♔")
+    }
+    else if piece == 'Q' {
+        sb.append("♕")
+    }
+    else if piece == 'R' {
+        sb.append("♖")
+    }
+    else if piece == 'B' {
+        sb.append("♗")
+    }
+    else if piece == 'N' {
+        sb.append("♘")
+    }
+    else if piece == 'P' {
+        sb.append("♙")
+    }
+    else if piece == 'k' {
+        sb.append("♚")
+    }
+    else if piece == 'q' {
+        sb.append("♛")
+    }
+    else if piece == 'r' {
+        sb.append("♜")
+    }
+    else if piece == 'b' {
+        sb.append("♝")
+    }
+    else if piece == 'n' {
+        sb.append("♞")
+    }
+    else if piece == 'p' {
+        sb.append("♟")
+    }
 }
 
 // Set BACKGROUND to the square's color at (rank, col).
 fn set_square_bg(w: Writer, rank: i32, col: i32) {
     const is_light = (rank + col) % 2 == 0
-    if is_light { set_bg(w, Color.White) }
-    else { set_bg(w, Color.Green) }
+    if is_light {
+        set_bg(w, Color.White)
+    }
+    else {
+        set_bg(w, Color.Green)
+    }
 }
 
-// Set FOREGROUND to the square's color at (rank, col).
-// Used for half-block characters where fg paints the visible half.
+// Set FOREGROUND to the square's color at (rank, col). Used for half-block characters where fg
+// paints the visible half.
 fn set_square_fg(w: Writer, rank: i32, col: i32) {
     const is_light = (rank + col) % 2 == 0
-    if is_light { set_fg(w, Color.White) }
-    else { set_fg(w, Color.Green) }
+    if is_light {
+        set_fg(w, Color.White)
+    }
+    else {
+        set_fg(w, Color.Green)
+    }
 }
 
 // Emit a half-block border/transition line.
@@ -75,7 +107,9 @@ fn display_board(fen: String) {
 
     let pos: usize = 0
     loop {
-        if pos >= fen.len { break }
+        if pos >= fen.len {
+            break
+        }
 
         const ch = fen[pos]
 

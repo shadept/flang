@@ -11,8 +11,8 @@
 //      Translates, writes the .c file to disk, invokes the discovered
 //      compiler, returns a `BuildResult`.
 //
-// All three layers stay independent: callers that only need the .c
-// text can call `translate` directly without ever touching discovery.
+// All three layers stay independent: callers that only need the .c text can call `translate`
+// directly without ever touching discovery.
 
 import std.allocator
 import std.env
@@ -39,17 +39,22 @@ import flang_codegen.fir
 // Lower the module to a C translation unit. Caller owns `sb`.
 pub fn translate(m: &IrModule, sb: &StringBuilder) {
     emit_preamble(sb)
-    // Before the externs that name them: one C struct per by-value
-    // aggregate a foreign signature mentions.
+    // Before the externs that name them: one C struct per by-value aggregate a foreign signature
+    // mentions.
     for i in 0..m.aggs.len {
         emit_agg_type(&m.aggs[i], sb)
     }
-    if m.aggs.len > 0 { sb.append("\n") }
+    if m.aggs.len > 0 {
+        sb.append("\n")
+    }
     for i in 0..m.foreigns.len {
-        // The runtime preamble already defines these - re-emitting them
-        // as `extern` would conflict.
-        if is_runtime_provided_symbol(m.foreigns[i].name) { continue }
-        if repeats_earlier_foreign(m, i) { continue }
+        // The runtime preamble already defines these - re-emitting them as `extern` would conflict.
+        if is_runtime_provided_symbol(m.foreigns[i].name) {
+            continue
+        }
+        if repeats_earlier_foreign(m, i) {
+            continue
+        }
         emit_foreign(&m.foreigns[i], sb)
         sb.append("\n")
     }
@@ -72,14 +77,15 @@ pub fn translate(m: &IrModule, sb: &StringBuilder) {
         sb.append("\n")
     }
     for i in 0..m.functions.len {
-        if i > 0 { sb.append("\n") }
+        if i > 0 {
+            sb.append("\n")
+        }
         emit_function(&m.functions[i], sb)
     }
 }
 
-// End-to-end: FIR -> .c -> executable. The .c file is written next to
-// the output executable (or to `options.emit_c_path` when set) and is
-// cleaned up unless `keep_temps` is true.
+// End-to-end: FIR -> .c -> executable. The .c file is written next to the output executable (or to
+// `options.emit_c_path` when set) and is cleaned up unless `keep_temps` is true.
 pub fn compile(m: &IrModule, options: &BuildOptions) Result(BuildResult, BuildError) {
     const alloc = options.allocator
 
@@ -138,13 +144,17 @@ pub fn compile(m: &IrModule, options: &BuildOptions) Result(BuildResult, BuildEr
     const cc_start = monotonic_ns()
     let spawn_r = run_compiler(&info, &argv, alloc)
     if spawn_r.is_err() {
-        if !keep_c { remove_file_quiet(c_path_owned.as_view()) }
+        if !keep_c {
+            remove_file_quiet(c_path_owned.as_view())
+        }
         c_path_owned.deinit()
         return Err(spawn_r.unwrap_err())
     }
     const exit_code = spawn_r.unwrap()
     if exit_code != 0 {
-        if !keep_c { remove_file_quiet(c_path_owned.as_view()) }
+        if !keep_c {
+            remove_file_quiet(c_path_owned.as_view())
+        }
         c_path_owned.deinit()
         return Err(BuildError.CompilerFailed(exit_code))
     }
@@ -179,16 +189,14 @@ fn emit_preamble(sb: &StringBuilder) {
     sb.append("#include <string.h>\n")
     sb.append("#include <stdlib.h>\n")
     sb.append("#include <stdio.h>\n")
-    // NAN / INFINITY for non-finite float constants (finite ones emit as
-    // C99 hex-float literals - see `emit_float_const`).
+    // NAN / INFINITY for non-finite float constants (finite ones emit as C99 hex-float literals -
+    // see `emit_float_const`).
     sb.append("#include <math.h>\n")
-    // POSIX IO headers, mirroring the reference preamble. Load-bearing
-    // for `open` and `ioctl`: both are VARIADIC in libc, and a call
-    // compiled against a fixed-arity extern passes the trailing argument
-    // in a register where the callee's va_arg reads the stack (arm64) -
-    // `open`'s creat mode arrived as garbage bits. The suppressed decls
-    // in `is_runtime_provided_symbol` make call sites compile against
-    // these headers' true prototypes instead.
+    // POSIX IO headers, mirroring the reference preamble. Load-bearing for `open` and `ioctl`: both
+    // are VARIADIC in libc, and a call compiled against a fixed-arity extern passes the trailing
+    // argument in a register where the callee's va_arg reads the stack (arm64) - `open`'s creat
+    // mode arrived as garbage bits. The suppressed decls in `is_runtime_provided_symbol` make call
+    // sites compile against these headers' true prototypes instead.
     sb.append("#ifdef _WIN32\n")
     sb.append("#include <io.h>\n")
     sb.append("#include <fcntl.h>\n")
@@ -198,13 +206,13 @@ fn emit_preamble(sb: &StringBuilder) {
     sb.append("#include <sys/ioctl.h>\n")
     sb.append("#endif\n")
     sb.append("\n")
-    // FIR-mandated invariant: arithmetic right shift on signed integers.
-    // The standard left this implementation-defined until C23.
+    // FIR-mandated invariant: arithmetic right shift on signed integers. The standard left this
+    // implementation-defined until C23.
     sb.append("_Static_assert((-1 >> 1) == -1, \"FIR backend requires arithmetic right shift\");\n")
     sb.append("\n")
-    // Runtime support: capture argc/argv at process entry so std.env
-    // (`__flang_get_argc`, `__flang_get_arg`) can read them. Defined
-    // unconditionally - the linker drops them if no main wraps them.
+    // Runtime support: capture argc/argv at process entry so std.env (`__flang_get_argc`,
+    // `__flang_get_arg`) can read them. Defined unconditionally - the linker drops them if no main
+    // wraps them.
     sb.append("/* flang runtime: argv / env access for std.env */\n")
     sb.append("static int __flang_argc = 0;\n")
     sb.append("static char** __flang_argv = 0;\n")
@@ -219,72 +227,117 @@ fn emit_preamble(sb: &StringBuilder) {
     sb.append("\n")
 }
 
-// Merged modules re-declare the same external symbol, and overload sets
-// map many declarations onto one; only the first declaration survives.
-// ponytail: O(n^2) scan; switch to a set if foreign counts grow.
+// Merged modules re-declare the same external symbol, and overload sets map many declarations onto
+// one; only the first declaration survives. ponytail: O(n^2) scan; switch to a set if foreign
+// counts grow.
 fn repeats_earlier_foreign(m: &IrModule, i: usize) bool {
     for j in 0..i {
-        if m.foreigns[j].name == m.foreigns[i].name { return true }
+        if m.foreigns[j].name == m.foreigns[i].name {
+            return true
+        }
     }
     return false
 }
 
-// Names of foreign decls that the runtime preamble or an included header
-// (<string.h>, <stdlib.h>) already provides. Emitting `extern` decls for
-// these conflicts with those definitions - the FIR-flavoured signature
-// (`void memset(void*, int8_t, int64_t)`) clashes with the header's
-// prototype and its fortify macros - so we skip them; call sites then
-// compile against the header's own prototype, whose C conversions cover
-// the width differences.
+// Names of foreign decls that the runtime preamble or an included header (<string.h>, <stdlib.h>)
+// already provides. Emitting `extern` decls for these conflicts with those definitions - the
+// FIR-flavoured signature (`void memset(void*, int8_t, int64_t)`) clashes with the header's
+// prototype and its fortify macros - so we skip them; call sites then compile against the header's
+// own prototype, whose C conversions cover the width differences.
 fn is_runtime_provided_symbol(name: String) bool {
-    if name == "__flang_get_argc" { return true }
-    if name == "__flang_get_arg" { return true }
-    if name == "__flang_getenv" { return true }
+    if name == "__flang_get_argc" {
+        return true
+    }
+    if name == "__flang_get_arg" {
+        return true
+    }
+    if name == "__flang_getenv" {
+        return true
+    }
     // <string.h>
-    if name == "memset" { return true }
-    if name == "memmove" { return true }
-    if name == "memcpy" { return true }
-    if name == "memcmp" { return true }
-    if name == "strlen" { return true }
+    if name == "memset" {
+        return true
+    }
+    if name == "memmove" {
+        return true
+    }
+    if name == "memcpy" {
+        return true
+    }
+    if name == "memcmp" {
+        return true
+    }
+    if name == "strlen" {
+        return true
+    }
     // <stdlib.h>
-    if name == "malloc" { return true }
-    if name == "free" { return true }
-    if name == "realloc" { return true }
-    if name == "calloc" { return true }
-    if name == "exit" { return true }
-    if name == "abort" { return true }
-    if name == "getenv" { return true }
-    // <stdio.h>. The stdlib declares printf as several fixed-arity
-    // overloads that all keep the bare C name; the real prototype is
-    // variadic, and clang rejects any redeclaration of it.
-    if name == "printf" { return true }
-    if name == "puts" { return true }
-    if name == "putchar" { return true }
-    if name == "fflush" { return true }
-    // <unistd.h> / <fcntl.h> / <sys/ioctl.h>. `open` and `ioctl` are
-    // variadic in libc - a fixed-arity redeclaration miscompiles the
-    // trailing argument (see the preamble note); the rest would clash
-    // with the headers' prototypes the way the <string.h> set does.
-    if name == "open" { return true }
-    if name == "close" { return true }
-    if name == "read" { return true }
-    if name == "write" { return true }
-    if name == "ioctl" { return true }
+    if name == "malloc" {
+        return true
+    }
+    if name == "free" {
+        return true
+    }
+    if name == "realloc" {
+        return true
+    }
+    if name == "calloc" {
+        return true
+    }
+    if name == "exit" {
+        return true
+    }
+    if name == "abort" {
+        return true
+    }
+    if name == "getenv" {
+        return true
+    }
+    // <stdio.h>. The stdlib declares printf as several fixed-arity overloads that all keep the bare
+    // C name; the real prototype is variadic, and clang rejects any redeclaration of it.
+    if name == "printf" {
+        return true
+    }
+    if name == "puts" {
+        return true
+    }
+    if name == "putchar" {
+        return true
+    }
+    if name == "fflush" {
+        return true
+    }
+    // <unistd.h> / <fcntl.h> / <sys/ioctl.h>. `open` and `ioctl` are variadic in libc - a
+    // fixed-arity redeclaration miscompiles the trailing argument (see the preamble note); the rest
+    // would clash with the headers' prototypes the way the <string.h> set does.
+    if name == "open" {
+        return true
+    }
+    if name == "close" {
+        return true
+    }
+    if name == "read" {
+        return true
+    }
+    if name == "write" {
+        return true
+    }
+    if name == "ioctl" {
+        return true
+    }
     return false
 }
 
-// A FIR function named "main" is the program entry point. We emit it
-// with the C-conventional `int main(int argc, char** argv)` signature
-// and capture argv into the runtime globals before any user code runs.
+// A FIR function named "main" is the program entry point. We emit it with the C-conventional `int
+// main(int argc, char** argv)` signature and capture argv into the runtime globals before any user
+// code runs.
 fn is_entry_point(f: &Function) bool {
     return f.name == "main"
 }
 
-// The C definition behind an `IrType.Agg`, with FAITHFUL member types: the
-// platform ABI classifies a struct by what its members are, so a `f32` has
-// to be emitted as `float` or the value travels in the wrong registers.
-// `_Alignas` on the first member carries the FLang layout's alignment to
-// the struct itself.
+// The C definition behind an `IrType.Agg`, with FAITHFUL member types: the platform ABI classifies
+// a struct by what its members are, so a `f32` has to be emitted as `float` or the value travels in
+// the wrong registers. `_Alignas` on the first member carries the FLang layout's alignment to the
+// struct itself.
 fn emit_agg_type(a: &AggDef, sb: &StringBuilder) {
     sb.append("typedef struct ")
     sb.append(a.name)
@@ -321,11 +374,15 @@ fn emit_foreign(f: &ForeignDecl, sb: &StringBuilder) {
         sb.append("void")
     } else {
         for i in 0..f.param_types.len {
-            if i > 0 { sb.append(", ") }
+            if i > 0 {
+                sb.append(", ")
+            }
             emit_c_type(f.param_types[i], sb)
         }
         if f.variadic {
-            if f.param_types.len > 0 { sb.append(", ") }
+            if f.param_types.len > 0 {
+                sb.append(", ")
+            }
             sb.append("...")
         }
     }
@@ -333,12 +390,11 @@ fn emit_foreign(f: &ForeignDecl, sb: &StringBuilder) {
 }
 
 fn emit_global(g: &Global, sb: &StringBuilder) {
-    // Always emit at file scope as `static` so it's not exported across
-    // translation units. If FIR grows visibility flags, switch on them.
+    // Always emit at file scope as `static` so it's not exported across translation units. If FIR
+    // grows visibility flags, switch on them.
     //
-    // `_Alignas(align)` is required for any global whose aggregate
-    // contains a wider-than-byte field (a struct with `u64` / `f64` /
-    // `ptr` would otherwise float to any byte boundary). For align=1
+    // `_Alignas(align)` is required for any global whose aggregate contains a wider-than-byte field
+    // (a struct with `u64` / `f64` / `ptr` would otherwise float to any byte boundary). For align=1
     // strings the directive is redundant but harmless.
     sb.append("static _Alignas(")
     sb.append(g.align)
@@ -351,7 +407,9 @@ fn emit_global(g: &Global, sb: &StringBuilder) {
         Some(bytes) => {
             sb.append(" = {")
             for i in 0..bytes.len {
-                if i > 0 { sb.append(", ") }
+                if i > 0 {
+                    sb.append(", ")
+                }
                 sb.append("0x")
                 emit_hex_byte(bytes[i], sb)
             }
@@ -364,8 +422,8 @@ fn emit_global(g: &Global, sb: &StringBuilder) {
 
 fn emit_fn_decl(f: &Function, sb: &StringBuilder) {
     if is_entry_point(f) {
-        // C entry point: int main(int argc, char** argv). FIR's main()
-        // takes no formal params; argv is captured into runtime globals.
+        // C entry point: int main(int argc, char** argv). FIR's main() takes no formal params; argv
+        // is captured into runtime globals.
         sb.append("int main(int __flang_argc_, char** __flang_argv_)")
         return
     }
@@ -377,7 +435,9 @@ fn emit_fn_decl(f: &Function, sb: &StringBuilder) {
         sb.append("void")
     } else {
         for i in 0..f.params.len {
-            if i > 0 { sb.append(", ") }
+            if i > 0 {
+                sb.append(", ")
+            }
             emit_c_type(f.params[i].ty, sb)
             sb.append(" v")
             sb.append(f.params[i].id)
@@ -390,18 +450,17 @@ fn emit_function(f: &Function, sb: &StringBuilder) {
     emit_fn_decl(f, sb)
     sb.append(" {\n")
 
-    // Capture argc/argv into the runtime globals before any user code
-    // runs so std.env (`__flang_get_argc`, `__flang_get_arg`) works.
+    // Capture argc/argv into the runtime globals before any user code runs so std.env
+    // (`__flang_get_argc`, `__flang_get_arg`) works.
     if is_entry_point(f) {
         sb.append("    __flang_argc = __flang_argc_;\n")
         sb.append("    __flang_argv = __flang_argv_;\n")
     }
 
-    // Hoist every non-entry block parameter to a function-scope local -
-    // this is what gives us the parallel-move semantics for `br
-    // target(args)` (we always assign through temporaries at the branch
-    // site). The entry block's params are the function's params, so we
-    // skip its (empty) params list.
+    // Hoist every non-entry block parameter to a function-scope local - this is what gives us the
+    // parallel-move semantics for `br target(args)` (we always assign through temporaries at the
+    // branch site). The entry block's params are the function's params, so we skip its (empty)
+    // params list.
     for bi in 1..f.blocks.len {
         const blk = &f.blocks[bi]
         for pi in 0..blk.params.len {
@@ -415,7 +474,9 @@ fn emit_function(f: &Function, sb: &StringBuilder) {
 
     for bi in 0..f.blocks.len {
         const blk = &f.blocks[bi]
-        if bi > 0 { sb.append("\n") }
+        if bi > 0 {
+            sb.append("\n")
+        }
         if bi > 0 {
             sb.append(blk.label)
             sb.append(":;\n")
@@ -430,12 +491,13 @@ fn emit_function(f: &Function, sb: &StringBuilder) {
     sb.append("}\n")
 }
 
-// Locate a block by label so branch-arg moves can resolve target
-// parameter ids. Linear scan; functions are small enough that an
-// auxiliary map isn't worth the bookkeeping.
+// Locate a block by label so branch-arg moves can resolve target parameter ids. Linear scan;
+// functions are small enough that an auxiliary map isn't worth the bookkeeping.
 fn find_block_idx(f: &Function, label: String) usize {
     for i in 0..f.blocks.len {
-        if f.blocks[i].label == label { return i }
+        if f.blocks[i].label == label {
+            return i
+        }
     }
     return 0
 }
@@ -450,31 +512,31 @@ fn emit_c_type(ty: IrType, sb: &StringBuilder) {
 
 fn emit_ret_type(ty: IrType?, sb: &StringBuilder) {
     ty match {
-        Some(t) => emit_c_type(t, sb),
-        None => sb.append("void"),
+        Some(t) => emit_c_type(t, sb)
+        None => sb.append("void")
     }
 }
 
 fn c_type_name(ty: IrType) String {
     return ty match {
-        I8 => "int8_t",
-        I16 => "int16_t",
-        I32 => "int32_t",
-        I64 => "int64_t",
-        F32 => "float",
-        F64 => "double",
-        Ptr => "void*",
-        Agg(a) => a.name,
+        I8 => "int8_t"
+        I16 => "int16_t"
+        I32 => "int32_t"
+        I64 => "int64_t"
+        F32 => "float"
+        F64 => "double"
+        Ptr => "void*"
+        Agg(a) => a.name
     }
 }
 
 fn c_unsigned_type_name(ty: IrType) String {
     return ty match {
-        I8 => "uint8_t",
-        I16 => "uint16_t",
-        I32 => "uint32_t",
-        I64 => "uint64_t",
-        _ => "uint64_t",
+        I8 => "uint8_t"
+        I16 => "uint16_t"
+        I32 => "uint32_t"
+        I64 => "uint64_t"
+        _ => "uint64_t"
     }
 }
 
@@ -484,51 +546,64 @@ fn c_unsigned_type_name(ty: IrType) String {
 
 fn emit_operand(op: &Operand, sb: &StringBuilder) {
     op.* match {
-        Local(id) => { sb.append("v"); sb.append(id) },
-        // i64::MIN cannot be spelled as one C literal: `-9223372036854775808`
-        // parses as negation OF a literal that overflows int64_t. The
-        // standard spelling subtracts one from MIN+1.
+        Local(id) => {
+            sb.append("v")
+            sb.append(id)
+        }
+        // i64::MIN cannot be spelled as one C literal: `-9223372036854775808` parses as negation OF
+        // a literal that overflows int64_t. The standard spelling subtracts one from MIN+1.
         IntConst(n) => {
             if n == -9223372036854775807 - 1 {
                 sb.append("(-9223372036854775807LL - 1)")
             } else {
                 sb.append(n)
             }
-        },
-        FloatConst(f) => emit_float_const(f, sb),
-        NullPtr => sb.append("((void*)0)"),
-        GlobalRef(name) => { sb.append("((void*)g_"); sb.append(name); sb.append(")") },
-        FuncRef(name) => { sb.append("((void*)&"); sb.append(name); sb.append(")") },
+        }
+        FloatConst(f) => emit_float_const(f, sb)
+        NullPtr => sb.append("((void*)0)")
+        GlobalRef(name) => {
+            sb.append("((void*)g_")
+            sb.append(name)
+            sb.append(")")
+        }
+        FuncRef(name) => {
+            sb.append("((void*)&")
+            sb.append(name)
+            sb.append(")")
+        }
     }
 }
 
-// A float constant as C source text. Finite values emit as C99
-// hexadecimal floating literals (`0x1.921fb54442d18p+1`) via the `a`
-// format spec - the exact bit pattern, no decimal rounding anywhere; the
-// generated C already requires C11 (`_Alignas`, `_Static_assert`), so
-// hex floats are free. Non-finite values (a literal can't produce them,
-// but an overflowing `parse_float` can) use math.h's macros.
+// A float constant as C source text. Finite values emit as C99 hexadecimal floating literals
+// (`0x1.921fb54442d18p+1`) via the `a` format spec - the exact bit pattern, no decimal rounding
+// anywhere; the generated C already requires C11 (`_Alignas`, `_Static_assert`), so hex floats are
+// free. Non-finite values (a literal can't produce them, but an overflowing `parse_float` can) use
+// math.h's macros.
 fn emit_float_const(v: f64, sb: &StringBuilder) {
-    if v != v { sb.append("NAN"); return }
-    // Infinity test without a DBL_MAX literal: `v * 0.5 == v` holds only
-    // for 0 and the infinities. A DBL_MAX literal here would itself be
-    // parsed by the self-host's parse_float, whose rounding at that
-    // magnitude tipped the guard constant to inf (stage-2 then emitted
-    // a bare `inf` identifier) - see lower.f's parse_float.
-    if v * 0.5 == v and v != 0.0 { sb.append(if v > 0.0 { "INFINITY" } else { "(-INFINITY)" }); return }
+    if v != v {
+        sb.append("NAN")
+        return
+    }
+    // Infinity test without a DBL_MAX literal: `v * 0.5 == v` holds only for 0 and the infinities.
+    // A DBL_MAX literal here would itself be parsed by the self-host's parse_float, whose rounding
+    // at that magnitude tipped the guard constant to inf (stage-2 then emitted a bare `inf`
+    // identifier) - see lower.f's parse_float.
+    if v * 0.5 == v and v != 0.0 {
+        sb.append(if v > 0.0 { "INFINITY" } else { "(-INFINITY)" })
+        return
+    }
     sb.append(v, "a")
 }
 
-// Cast an operand to a given C type. Used pervasively so that integer
-// literals consumed in different slots get correctly typed.
+// Cast an operand to a given C type. Used pervasively so that integer literals consumed in
+// different slots get correctly typed.
 fn emit_operand_as(op: &Operand, ty: IrType, sb: &StringBuilder) {
-    // C casts only to scalar types: `(struct S)x` is a constraint
-    // violation (MSVC rejects it outright). An aggregate operand already
-    // has the destination type - FIR stores are typed - so it goes through
-    // unconverted.
+    // C casts only to scalar types: `(struct S)x` is a constraint violation (MSVC rejects it
+    // outright). An aggregate operand already has the destination type - FIR stores are typed - so
+    // it goes through unconverted.
     const aggregate = ty match {
-        Agg(_) => true,
-        else => false,
+        Agg(_) => true
+        else => false
     }
     if aggregate {
         emit_operand(op, sb)
@@ -555,18 +630,18 @@ fn emit_operand_as_unsigned(op: &Operand, ty: IrType, sb: &StringBuilder) {
 
 fn emit_instr(i: &Instr, sb: &StringBuilder) {
     i.* match {
-        Binary(b) => emit_binary(&b, sb),
-        Unary(u) => emit_unary(&u, sb),
-        Compare(c) => emit_compare(&c, sb),
-        Convert(c) => emit_convert(&c, sb),
-        StackSlot(s) => emit_stack_slot(&s, sb),
-        Load(l) => emit_load(&l, sb),
-        Store(s) => emit_store(&s, sb),
-        Gep(g) => emit_gep(&g, sb),
-        Memcpy(m) => emit_memcpy(&m, sb),
-        Memset(m) => emit_memset(&m, sb),
-        Call(c) => emit_call(&c, sb),
-        CallIndirect(c) => emit_call_indirect(&c, sb),
+        Binary(b) => emit_binary(&b, sb)
+        Unary(u) => emit_unary(&u, sb)
+        Compare(c) => emit_compare(&c, sb)
+        Convert(c) => emit_convert(&c, sb)
+        StackSlot(s) => emit_stack_slot(&s, sb)
+        Load(l) => emit_load(&l, sb)
+        Store(s) => emit_store(&s, sb)
+        Gep(g) => emit_gep(&g, sb)
+        Memcpy(m) => emit_memcpy(&m, sb)
+        Memset(m) => emit_memset(&m, sb)
+        Call(c) => emit_call(&c, sb)
+        CallIndirect(c) => emit_call_indirect(&c, sb)
     }
 }
 
@@ -581,23 +656,59 @@ fn emit_binary(b: &BinaryInstr, sb: &StringBuilder) {
     emit_result_decl(b.result, b.ty, sb)
     // The signed/unsigned mapping table from docs/fir.md is encoded here.
     b.op match {
-        IAdd => emit_wrap_binop(&b.lhs, &b.rhs, b.ty, "+", sb),
-        ISub => emit_wrap_binop(&b.lhs, &b.rhs, b.ty, "-", sb),
-        IMul => emit_wrap_binop(&b.lhs, &b.rhs, b.ty, "*", sb),
-        SDiv => { emit_operand(&b.lhs, sb); sb.append(" / "); emit_operand(&b.rhs, sb) },
-        UDiv => emit_uns_binop(&b.lhs, &b.rhs, b.ty, "/", sb),
-        SRem => { emit_operand(&b.lhs, sb); sb.append(" % "); emit_operand(&b.rhs, sb) },
-        URem => emit_uns_binop(&b.lhs, &b.rhs, b.ty, "%", sb),
-        IAnd => { emit_operand(&b.lhs, sb); sb.append(" & "); emit_operand(&b.rhs, sb) },
-        IOr  => { emit_operand(&b.lhs, sb); sb.append(" | "); emit_operand(&b.rhs, sb) },
-        IXor => { emit_operand(&b.lhs, sb); sb.append(" ^ "); emit_operand(&b.rhs, sb) },
-        IShl => emit_shift(&b.lhs, &b.rhs, b.ty, "<<", true, sb),
-        UShr => emit_shift(&b.lhs, &b.rhs, b.ty, ">>", true, sb),
-        SShr => emit_shift(&b.lhs, &b.rhs, b.ty, ">>", false, sb),
-        FAdd => { emit_operand(&b.lhs, sb); sb.append(" + "); emit_operand(&b.rhs, sb) },
-        FSub => { emit_operand(&b.lhs, sb); sb.append(" - "); emit_operand(&b.rhs, sb) },
-        FMul => { emit_operand(&b.lhs, sb); sb.append(" * "); emit_operand(&b.rhs, sb) },
-        FDiv => { emit_operand(&b.lhs, sb); sb.append(" / "); emit_operand(&b.rhs, sb) },
+        IAdd => emit_wrap_binop(&b.lhs, &b.rhs, b.ty, "+", sb)
+        ISub => emit_wrap_binop(&b.lhs, &b.rhs, b.ty, "-", sb)
+        IMul => emit_wrap_binop(&b.lhs, &b.rhs, b.ty, "*", sb)
+        SDiv => {
+            emit_operand(&b.lhs, sb)
+            sb.append(" / ")
+            emit_operand(&b.rhs, sb)
+        }
+        UDiv => emit_uns_binop(&b.lhs, &b.rhs, b.ty, "/", sb)
+        SRem => {
+            emit_operand(&b.lhs, sb)
+            sb.append(" % ")
+            emit_operand(&b.rhs, sb)
+        }
+        URem => emit_uns_binop(&b.lhs, &b.rhs, b.ty, "%", sb)
+        IAnd => {
+            emit_operand(&b.lhs, sb)
+            sb.append(" & ")
+            emit_operand(&b.rhs, sb)
+        }
+        IOr => {
+            emit_operand(&b.lhs, sb)
+            sb.append(" | ")
+            emit_operand(&b.rhs, sb)
+        }
+        IXor => {
+            emit_operand(&b.lhs, sb)
+            sb.append(" ^ ")
+            emit_operand(&b.rhs, sb)
+        }
+        IShl => emit_shift(&b.lhs, &b.rhs, b.ty, "<<", true, sb)
+        UShr => emit_shift(&b.lhs, &b.rhs, b.ty, ">>", true, sb)
+        SShr => emit_shift(&b.lhs, &b.rhs, b.ty, ">>", false, sb)
+        FAdd => {
+            emit_operand(&b.lhs, sb)
+            sb.append(" + ")
+            emit_operand(&b.rhs, sb)
+        }
+        FSub => {
+            emit_operand(&b.lhs, sb)
+            sb.append(" - ")
+            emit_operand(&b.rhs, sb)
+        }
+        FMul => {
+            emit_operand(&b.lhs, sb)
+            sb.append(" * ")
+            emit_operand(&b.rhs, sb)
+        }
+        FDiv => {
+            emit_operand(&b.lhs, sb)
+            sb.append(" / ")
+            emit_operand(&b.rhs, sb)
+        }
     }
     sb.append(";\n")
 }
@@ -628,7 +739,8 @@ fn emit_uns_binop(a: &Operand, b: &Operand, ty: IrType, op: String, sb: &StringB
     sb.append(")")
 }
 
-fn emit_shift(a: &Operand, b: &Operand, ty: IrType, op: String, unsigned_lhs: bool, sb: &StringBuilder) {
+fn emit_shift(a: &Operand, b: &Operand, ty: IrType, op: String, unsigned_lhs: bool,
+    sb: &StringBuilder) {
     sb.append("(")
     emit_c_type(ty, sb)
     sb.append(")(")
@@ -653,8 +765,11 @@ fn emit_unary(u: &UnaryInstr, sb: &StringBuilder) {
             sb.append(")(0u - ")
             emit_operand_as_unsigned(&u.operand, u.ty, sb)
             sb.append(")")
-        },
-        FNeg => { sb.append("-"); emit_operand(&u.operand, sb) },
+        }
+        FNeg => {
+            sb.append("-")
+            emit_operand(&u.operand, sb)
+        }
     }
     sb.append(";\n")
 }
@@ -663,22 +778,22 @@ fn emit_compare(c: &CompareInstr, sb: &StringBuilder) {
     emit_result_decl(c.result, IrType.I8, sb)
     sb.append("(int8_t)(")
     c.op match {
-        IcmpEq => emit_cmp_signed(&c.lhs, &c.rhs, c.operand_ty, "==", sb),
-        IcmpNe => emit_cmp_signed(&c.lhs, &c.rhs, c.operand_ty, "!=", sb),
-        IcmpSlt => emit_cmp_signed(&c.lhs, &c.rhs, c.operand_ty, "<", sb),
-        IcmpSle => emit_cmp_signed(&c.lhs, &c.rhs, c.operand_ty, "<=", sb),
-        IcmpSgt => emit_cmp_signed(&c.lhs, &c.rhs, c.operand_ty, ">", sb),
-        IcmpSge => emit_cmp_signed(&c.lhs, &c.rhs, c.operand_ty, ">=", sb),
-        IcmpUlt => emit_cmp_unsigned(&c.lhs, &c.rhs, c.operand_ty, "<", sb),
-        IcmpUle => emit_cmp_unsigned(&c.lhs, &c.rhs, c.operand_ty, "<=", sb),
-        IcmpUgt => emit_cmp_unsigned(&c.lhs, &c.rhs, c.operand_ty, ">", sb),
-        IcmpUge => emit_cmp_unsigned(&c.lhs, &c.rhs, c.operand_ty, ">=", sb),
-        FcmpEq => emit_cmp_float(&c.lhs, &c.rhs, "==", sb),
-        FcmpNe => emit_cmp_float(&c.lhs, &c.rhs, "!=", sb),
-        FcmpLt => emit_cmp_float(&c.lhs, &c.rhs, "<", sb),
-        FcmpLe => emit_cmp_float(&c.lhs, &c.rhs, "<=", sb),
-        FcmpGt => emit_cmp_float(&c.lhs, &c.rhs, ">", sb),
-        FcmpGe => emit_cmp_float(&c.lhs, &c.rhs, ">=", sb),
+        IcmpEq => emit_cmp_signed(&c.lhs, &c.rhs, c.operand_ty, "==", sb)
+        IcmpNe => emit_cmp_signed(&c.lhs, &c.rhs, c.operand_ty, "!=", sb)
+        IcmpSlt => emit_cmp_signed(&c.lhs, &c.rhs, c.operand_ty, "<", sb)
+        IcmpSle => emit_cmp_signed(&c.lhs, &c.rhs, c.operand_ty, "<=", sb)
+        IcmpSgt => emit_cmp_signed(&c.lhs, &c.rhs, c.operand_ty, ">", sb)
+        IcmpSge => emit_cmp_signed(&c.lhs, &c.rhs, c.operand_ty, ">=", sb)
+        IcmpUlt => emit_cmp_unsigned(&c.lhs, &c.rhs, c.operand_ty, "<", sb)
+        IcmpUle => emit_cmp_unsigned(&c.lhs, &c.rhs, c.operand_ty, "<=", sb)
+        IcmpUgt => emit_cmp_unsigned(&c.lhs, &c.rhs, c.operand_ty, ">", sb)
+        IcmpUge => emit_cmp_unsigned(&c.lhs, &c.rhs, c.operand_ty, ">=", sb)
+        FcmpEq => emit_cmp_float(&c.lhs, &c.rhs, "==", sb)
+        FcmpNe => emit_cmp_float(&c.lhs, &c.rhs, "!=", sb)
+        FcmpLt => emit_cmp_float(&c.lhs, &c.rhs, "<", sb)
+        FcmpLe => emit_cmp_float(&c.lhs, &c.rhs, "<=", sb)
+        FcmpGt => emit_cmp_float(&c.lhs, &c.rhs, ">", sb)
+        FcmpGe => emit_cmp_float(&c.lhs, &c.rhs, ">=", sb)
     }
     sb.append(");\n")
 }
@@ -715,25 +830,25 @@ fn emit_convert(c: &ConvertInstr, sb: &StringBuilder) {
             emit_c_type(c.result_ty, sb)
             sb.append(")")
             emit_operand(&c.operand, sb)
-        },
+        }
         ZExt => {
             sb.append("(")
             emit_c_type(c.result_ty, sb)
             sb.append(")")
             emit_operand_as_unsigned(&c.operand, c.source_ty, sb)
-        },
+        }
         SExt => {
             sb.append("(")
             emit_c_type(c.result_ty, sb)
             sb.append(")")
             emit_operand_as(&c.operand, c.source_ty, sb)
-        },
+        }
         FpToSi => {
             sb.append("(")
             emit_c_type(c.result_ty, sb)
             sb.append(")")
             emit_operand(&c.operand, sb)
-        },
+        }
         FpToUi => {
             sb.append("(")
             emit_c_type(c.result_ty, sb)
@@ -741,27 +856,27 @@ fn emit_convert(c: &ConvertInstr, sb: &StringBuilder) {
             sb.append(c_unsigned_type_name(c.result_ty))
             sb.append(")")
             emit_operand(&c.operand, sb)
-        },
+        }
         SiToFp => {
             sb.append("(")
             emit_c_type(c.result_ty, sb)
             sb.append(")")
             emit_operand_as(&c.operand, c.source_ty, sb)
-        },
+        }
         UiToFp => {
             sb.append("(")
             emit_c_type(c.result_ty, sb)
             sb.append(")")
             emit_operand_as_unsigned(&c.operand, c.source_ty, sb)
-        },
+        }
         FpExt => {
             sb.append("(double)")
             emit_operand(&c.operand, sb)
-        },
+        }
         FpTrunc => {
             sb.append("(float)")
             emit_operand(&c.operand, sb)
-        },
+        }
         Bitcast => {
             // Same-size reinterpret via memcpy to dodge strict-aliasing UB.
             sb.append("0;\n")
@@ -774,28 +889,26 @@ fn emit_convert(c: &ConvertInstr, sb: &StringBuilder) {
             sb.append("}, sizeof(v")
             sb.append(c.result)
             sb.append("))")
-        },
+        }
         PtrToInt => {
             sb.append("(")
             emit_c_type(c.result_ty, sb)
             sb.append(")(uintptr_t)")
             emit_operand(&c.operand, sb)
-        },
+        }
         IntToPtr => {
             sb.append("(void*)(uintptr_t)")
             emit_operand(&c.operand, sb)
-        },
+        }
     }
     sb.append(";\n")
 }
 
 fn emit_stack_slot(s: &StackSlotInstr, sb: &StringBuilder) {
-    // C11 `_Alignas` works inside compound statements; we emit each slot
-    // as a unique-named char array followed by a void* alias for the
-    // SSA value.
-    // A zero-sized type (payload-less variant, empty struct) still needs a
-    // byte: `unsigned char x[0]` is a GNU extension that MSVC rejects, and
-    // every use of the slot is a `memcpy` of 0 bytes anyway.
+    // C11 `_Alignas` works inside compound statements; we emit each slot as a unique-named char
+    // array followed by a void* alias for the SSA value. A zero-sized type (payload-less variant,
+    // empty struct) still needs a byte: `unsigned char x[0]` is a GNU extension that MSVC rejects,
+    // and every use of the slot is a `memcpy` of 0 bytes anyway.
     const bytes = if s.size == 0 as u64 { 1 as u64 } else { s.size }
     sb.append("_Alignas(")
     sb.append(s.align)
@@ -885,7 +998,9 @@ fn emit_call(c: &CallInstr, sb: &StringBuilder) {
     sb.append(c.callee)
     sb.append("(")
     for i in 0..c.args.len {
-        if i > 0 { sb.append(", ") }
+        if i > 0 {
+            sb.append(", ")
+        }
         emit_operand(&c.args[i], sb)
     }
     sb.append(");\n")
@@ -906,9 +1021,9 @@ fn emit_call_indirect(c: &CallIndirectInstr, sb: &StringBuilder) {
         }
         None => {}
     }
-    // Cast the ptr operand through a function-pointer type built from
-    // the inline signature. Variadic indirect calls would need a trailing
-    // `, ...` here; we leave them out for now (CallIndirect is rare).
+    // Cast the ptr operand through a function-pointer type built from the inline signature.
+    // Variadic indirect calls would need a trailing `, ...` here; we leave them out for now
+    // (CallIndirect is rare).
     sb.append("((")
     emit_ret_type(c.result_ty, sb)
     sb.append(" (*)(")
@@ -916,7 +1031,9 @@ fn emit_call_indirect(c: &CallIndirectInstr, sb: &StringBuilder) {
         sb.append("void")
     } else {
         for i in 0..c.param_types.len {
-            if i > 0 { sb.append(", ") }
+            if i > 0 {
+                sb.append(", ")
+            }
             emit_c_type(c.param_types[i], sb)
         }
     }
@@ -924,7 +1041,9 @@ fn emit_call_indirect(c: &CallIndirectInstr, sb: &StringBuilder) {
     emit_operand(&c.fn_ptr, sb)
     sb.append(")(")
     for i in 0..c.args.len {
-        if i > 0 { sb.append(", ") }
+        if i > 0 {
+            sb.append(", ")
+        }
         emit_operand(&c.args[i], sb)
     }
     sb.append(");\n")
@@ -936,15 +1055,13 @@ fn emit_call_indirect(c: &CallIndirectInstr, sb: &StringBuilder) {
 
 fn emit_terminator(t: &Terminator, f: &Function, sb: &StringBuilder) {
     t.* match {
-        Br(tgt) => emit_br(&tgt, f, sb),
-        BrIf(b) => emit_br_if(&b, f, sb),
-        Ret(v) => emit_ret(v, f, sb),
-        // `abort()` keeps the C honest: falling off the end of a value-
-        // returning function is undefined behaviour (and an error under
-        // -Werror=return-type), and FIR `unreachable` promises the path
-        // is never taken - trapping if it somehow is beats returning
-        // garbage.
-        Unreachable => sb.append("    abort(); /* unreachable */\n"),
+        Br(tgt) => emit_br(&tgt, f, sb)
+        BrIf(b) => emit_br_if(&b, f, sb)
+        Ret(v) => emit_ret(v, f, sb)
+        // `abort()` keeps the C honest: falling off the end of a value- returning function is
+        // undefined behaviour (and an error under -Werror=return-type), and FIR `unreachable`
+        // promises the path is never taken - trapping if it somehow is beats returning garbage.
+        Unreachable => sb.append("    abort(); /* unreachable */\n")
     }
 }
 
@@ -969,16 +1086,17 @@ fn emit_br_if(b: &BrIfTerm, f: &Function, sb: &StringBuilder) {
     sb.append(";\n    }\n")
 }
 
-// Parallel-move semantics: stash every arg in a temp before writing the
-// target block's parameter locals. This handles the case where a branch
-// passes the *current* value of one block param into another (loop
-// rotations are the common case).
+// Parallel-move semantics: stash every arg in a temp before writing the target block's parameter
+// locals. This handles the case where a branch passes the *current* value of one block param into
+// another (loop rotations are the common case).
 fn emit_branch_arg_moves(t: &BlockTarget, f: &Function, indent: String, sb: &StringBuilder) {
-    if t.args.len == 0 { return }
+    if t.args.len == 0 {
+        return
+    }
     const tgt_idx = find_block_idx(f, t.label)
     const tgt = &f.blocks[tgt_idx]
-    // Two-phase write: temps first, then assignments. Wrap in a block so
-    // the temps don't leak into the enclosing scope.
+    // Two-phase write: temps first, then assignments. Wrap in a block so the temps don't leak into
+    // the enclosing scope.
     sb.append(indent)
     sb.append("{\n")
     for i in 0..t.args.len {
@@ -1006,15 +1124,18 @@ fn emit_branch_arg_moves(t: &BlockTarget, f: &Function, indent: String, sb: &Str
 fn emit_ret(v: Operand?, f: &Function, sb: &StringBuilder) {
     sb.append("    return")
     v match {
-        Some(op) => { sb.append(" "); emit_operand(&op, sb) },
+        Some(op) => {
+            sb.append(" ")
+            emit_operand(&op, sb)
+        }
         None => {
-            // FIR void return in the user's main maps to `return 0;`
-            // because the C entry point has `int` return type.
+            // FIR void return in the user's main maps to `return 0;` because the C entry point has
+            // `int` return type.
             const void_ret = f.return_ty match { None => true, _ => false }
             if is_entry_point(f) and void_ret {
                 sb.append(" 0")
             }
-        },
+        }
     }
     sb.append(";\n")
 }
@@ -1029,7 +1150,9 @@ fn emit_hex_byte(b: u8, sb: &StringBuilder) {
 }
 
 fn c_hex_nibble(n: u8) u8 {
-    if n < 10 { return '0' + n }
+    if n < 10 {
+        return '0' + n
+    }
     return 'a' + (n - 10)
 }
 
@@ -1037,9 +1160,10 @@ fn c_hex_nibble(n: u8) u8 {
 // Compiler discovery
 // =============================================================================
 
-// Try discovery unless the caller overrode the compiler. Override skips
-// env synthesis (caller is responsible).
-fn discover_or_override(options: &BuildOptions, allocator: &Allocator?) Result(CompilerInfo, BuildError) {
+// Try discovery unless the caller overrode the compiler. Override skips env synthesis (caller is
+// responsible).
+fn discover_or_override(options: &BuildOptions, allocator: &Allocator?) Result(CompilerInfo,
+    BuildError) {
     options.compiler_override match {
         Some(p) => {
             let env_keys: List(OwnedString) = list(0, allocator)
@@ -1054,15 +1178,21 @@ fn discover_or_override(options: &BuildOptions, allocator: &Allocator?) Result(C
                 allocator = allocator,
             })
         }
-        None => {},
+        None => {}
     }
     return discover_compiler(allocator)
 }
 
 fn guess_kind_from_name(name: String) CompilerKind {
-    if name.contains("cl.exe") { return CompilerKind.Msvc }
-    if name.contains("clang") { return CompilerKind.Clang }
-    if name.contains("gcc") { return CompilerKind.Gcc }
+    if name.contains("cl.exe") {
+        return CompilerKind.Msvc
+    }
+    if name.contains("clang") {
+        return CompilerKind.Clang
+    }
+    if name.contains("gcc") {
+        return CompilerKind.Gcc
+    }
     return CompilerKind.Clang
 }
 
@@ -1138,8 +1268,8 @@ fn make_simple_info(kind: CompilerKind, name: String, allocator: &Allocator?) Co
     }
 }
 
-// Spawn `prog --version`, redirect stdio to Null, wait. exit==0 means
-// the binary is on PATH and runnable.
+// Spawn `prog --version`, redirect stdio to Null, wait. exit==0 means the binary is on PATH and
+// runnable.
 fn can_spawn(prog: String, allocator: &Allocator?) bool {
     let cmd = command(prog, allocator)
     defer cmd.deinit()
@@ -1149,11 +1279,15 @@ fn can_spawn(prog: String, allocator: &Allocator?) bool {
     cmd.stderr_mode(Stdio.Null)
     cmd.inherit_env()
     let r = cmd.spawn()
-    if r.is_err() { return false }
+    if r.is_err() {
+        return false
+    }
     let child = r.unwrap()
     defer child.deinit()
     const w = child.wait()
-    if w.is_err() { return false }
+    if w.is_err() {
+        return false
+    }
     return true
 }
 
@@ -1161,22 +1295,20 @@ fn can_spawn(prog: String, allocator: &Allocator?) bool {
 // MSVC discovery via vswhere
 // =============================================================================
 //
-// Mirrors src/FLang.CLI/CompilerDiscovery.cs::FindClExeWithEnvironment.
-// vswhere.exe lives at "%ProgramFiles(x86)%\Microsoft Visual Studio\
-// Installer\vswhere.exe" on every supported VS install (2017+). We use
-// it to locate the active VS install dir, then walk the toolset layout
-// to find cl.exe + matching INCLUDE / LIB directories.
+// Mirrors src/FLang.CLI/CompilerDiscovery.cs::FindClExeWithEnvironment. vswhere.exe lives at
+// "%ProgramFiles(x86)%\Microsoft Visual Studio\ Installer\vswhere.exe" on every supported VS
+// install (2017+). We use it to locate the active VS install dir, then walk the toolset layout to
+// find cl.exe + matching INCLUDE / LIB directories.
 
 fn discover_msvc(allocator: &Allocator?) CompilerInfo? {
-    // ProgramFiles(x86) is the conventional location; fall back to the
-    // hard-coded path when the env var is missing (some CI shells don't
-    // forward it).
+    // ProgramFiles(x86) is the conventional location; fall back to the hard-coded path when the env
+    // var is missing (some CI shells don't forward it).
     let pf86_buf = string_builder(64, allocator)
     defer pf86_buf.deinit()
     const pf86_env = env("ProgramFiles(x86)")
     pf86_env match {
-        Some(s) => pf86_buf.append(s),
-        None => pf86_buf.append("C:\\Program Files (x86)"),
+        Some(s) => pf86_buf.append(s)
+        None => pf86_buf.append("C:\\Program Files (x86)")
     }
 
     let vswhere_sb = string_builder(pf86_buf.len + 80, allocator)
@@ -1187,11 +1319,15 @@ fn discover_msvc(allocator: &Allocator?) CompilerInfo? {
     nul_term(&vswhere_sb)
     const vswhere = vswhere_sb.as_view()
 
-    if !file_exists(vswhere) { return null }
+    if !file_exists(vswhere) {
+        return null
+    }
 
     // Capture vswhere output to find the latest VS install dir.
     let install_opt = run_vswhere(vswhere, allocator)
-    if install_opt.is_none() { return null }
+    if install_opt.is_none() {
+        return null
+    }
     let install = install_opt.unwrap()
     defer install.deinit()
 
@@ -1200,11 +1336,15 @@ fn discover_msvc(allocator: &Allocator?) CompilerInfo? {
     tools.append(install.as_view())
     tools.append("\\VC\\Tools\\MSVC")
     nul_term(&tools)
-    if !dir_exists(tools.as_view()) { return null }
+    if !dir_exists(tools.as_view()) {
+        return null
+    }
 
     // Latest toolset version = dir name with the largest lexicographic value.
     let toolset_opt = newest_subdir(tools.as_view(), allocator)
-    if toolset_opt.is_none() { return null }
+    if toolset_opt.is_none() {
+        return null
+    }
     let toolset = toolset_opt.unwrap()
     defer toolset.deinit()
 
@@ -1219,7 +1359,9 @@ fn discover_msvc(allocator: &Allocator?) CompilerInfo? {
     cl.append(toolset_dir.as_view())
     cl.append("\\bin\\Hostx64\\x64\\cl.exe")
     nul_term(&cl)
-    if !file_exists(cl.as_view()) { return null }
+    if !file_exists(cl.as_view()) {
+        return null
+    }
 
     let include_dir = string_builder(toolset_dir.len + 16, allocator)
     defer include_dir.deinit()
@@ -1231,8 +1373,8 @@ fn discover_msvc(allocator: &Allocator?) CompilerInfo? {
     lib_dir.append(toolset_dir.as_view())
     lib_dir.append("\\lib\\x64")
 
-    // Windows SDK paths: pick the latest sub-version under
-    // "C:\Program Files (x86)\Windows Kits\10\Include".
+    // Windows SDK paths: pick the latest sub-version under "C:\Program Files (x86)\Windows
+    // Kits\10\Include".
     let sdk_root = "C:\\Program Files (x86)\\Windows Kits\\10"
     let sdk_include_root = string_builder(64, allocator)
     defer sdk_include_root.deinit()
@@ -1285,16 +1427,19 @@ fn discover_msvc(allocator: &Allocator?) CompilerInfo? {
         None => {}
     }
 
-    // cl.exe relies on linker tools in its own bin dir - prepend it to
-    // PATH so the spawned child finds link.exe / mspdbcore.dll.
+    // cl.exe relies on linker tools in its own bin dir - prepend it to PATH so the spawned child
+    // finds link.exe / mspdbcore.dll.
     let path_with_bin = string_builder(256, allocator)
     defer path_with_bin.deinit()
     path_with_bin.append(toolset_dir.as_view())
     path_with_bin.append("\\bin\\Hostx64\\x64")
     const cur_path_opt = env("PATH")
     cur_path_opt match {
-        Some(p) => { path_with_bin.append(";"); path_with_bin.append(p) }
-        None => {},
+        Some(p) => {
+            path_with_bin.append(";")
+            path_with_bin.append(p)
+        }
+        None => {}
     }
 
     let env_keys: List(OwnedString) = list(3, allocator)
@@ -1307,8 +1452,11 @@ fn discover_msvc(allocator: &Allocator?) CompilerInfo? {
     env_vals.push(from_view(path_with_bin.as_view(), allocator))
 
     sdk_ver_opt match {
-        Some(v) => { let vv = v; vv.deinit() },
-        None => {},
+        Some(v) => {
+            let vv = v
+            vv.deinit()
+        }
+        None => {}
     }
 
     return Some(CompilerInfo {
@@ -1321,8 +1469,7 @@ fn discover_msvc(allocator: &Allocator?) CompilerInfo? {
     })
 }
 
-// Spawn `vswhere -latest ... -property installationPath` and capture
-// the first line of stdout.
+// Spawn `vswhere -latest ... -property installationPath` and capture the first line of stdout.
 fn run_vswhere(vswhere_path: String, allocator: &Allocator?) OwnedString? {
     let cmd = command(vswhere_path, allocator)
     defer cmd.deinit()
@@ -1338,11 +1485,15 @@ fn run_vswhere(vswhere_path: String, allocator: &Allocator?) OwnedString? {
     cmd.stderr_mode(Stdio.Null)
     cmd.inherit_env()
     let r = cmd.spawn()
-    if r.is_err() { return null }
+    if r.is_err() {
+        return null
+    }
     let child = r.unwrap()
     defer child.deinit()
     let stdout_opt = child.stdout()
-    if stdout_opt.is_none() { return null }
+    if stdout_opt.is_none() {
+        return null
+    }
     let s = stdout_opt.unwrap()
     let raw = s.read_to_end(allocator)
     const w = child.wait()
@@ -1361,9 +1512,9 @@ fn run_vswhere(vswhere_path: String, allocator: &Allocator?) OwnedString? {
     return Some(result)
 }
 
-// Write a trailing 0 byte without bumping the StringBuilder's logical
-// length. Used to hand a NUL-terminated C string to libc routines that
-// take `&u8` (which flang stdlib does not auto-terminate).
+// Write a trailing 0 byte without bumping the StringBuilder's logical length. Used to hand a
+// NUL-terminated C string to libc routines that take `&u8` (which flang stdlib does not
+// auto-terminate).
 fn nul_term(sb: &StringBuilder) {
     sb.ensure_capacity(sb.len + 1)
     const term: &u8 = sb.ptr + sb.len
@@ -1378,28 +1529,33 @@ fn dir_exists(p: String) bool {
     return is_dir(p)
 }
 
-// Returns the lexicographically largest subdirectory name, which for
-// MSVC toolset versions and Windows SDK versions corresponds to the
-// most recent install.
+// Returns the lexicographically largest subdirectory name, which for MSVC toolset versions and
+// Windows SDK versions corresponds to the most recent install.
 fn newest_subdir(parent: String, allocator: &Allocator?) OwnedString? {
-    // read_dir's C shim wants a NUL-terminated path. Copy into a builder
-    // we control so callers can pass plain views.
+    // read_dir's C shim wants a NUL-terminated path. Copy into a builder we control so callers can
+    // pass plain views.
     let pbuf = string_builder(parent.len + 1, allocator)
     defer pbuf.deinit()
     pbuf.append(parent)
     nul_term(&pbuf)
     let it_r = open_dir(pbuf.as_view())
-    if it_r.is_err() { return null }
+    if it_r.is_err() {
+        return null
+    }
     let it = it_r.unwrap()
     defer it.deinit()
 
     let best: OwnedString? = null
     loop {
         const e_opt = it.next()
-        if e_opt.is_none() { break }
+        if e_opt.is_none() {
+            break
+        }
         const e = e_opt.unwrap()
         const is_dir_entry = e.kind match { Dir => true, _ => false }
-        if !is_dir_entry { continue }
+        if !is_dir_entry {
+            continue
+        }
         best match {
             Some(b) => {
                 if e.name > b.as_view() {
@@ -1420,15 +1576,16 @@ fn newest_subdir(parent: String, allocator: &Allocator?) OwnedString? {
 // Build orchestration
 // =============================================================================
 
-// Best-effort creation of the directory `file_path` will be written into.
-// Silent by design: the caller's write reports the real, path-bearing error
-// if this could not help.
+// Best-effort creation of the directory `file_path` will be written into. Silent by design: the
+// caller's write reports the real, path-bearing error if this could not help.
 fn ensure_parent_dir(file_path: String, allocator: &Allocator?) {
     let p = path(file_path, allocator)
     defer p.deinit()
     p.parent() match {
         Some(dir) => {
-            if dir.len > 0 { create_dir_all(dir) }
+            if dir.len > 0 {
+                create_dir_all(dir)
+            }
         }
         None => {}
     }
@@ -1441,25 +1598,32 @@ fn write_c_file(path: String, contents: String, allocator: &Allocator?) Result((
     pbuf.append(path)
     nul_term(&pbuf)
     let f_r = open_file(pbuf.as_view(), FileMode.Write)
-    if f_r.is_err() { return Err(f_r.unwrap_err()) }
+    if f_r.is_err() {
+        return Err(f_r.unwrap_err())
+    }
     let f = f_r.unwrap()
     const w = write(&f, contents)
     const c = close_file(&f)
-    if w.is_err() { return Err(w.unwrap_err()) }
-    if c.is_err() { return Err(c.unwrap_err()) }
+    if w.is_err() {
+        return Err(w.unwrap_err())
+    }
+    if c.is_err() {
+        return Err(c.unwrap_err())
+    }
     return Ok(())
 }
 
 fn remove_file_quiet(path: String) {
-    // Best-effort: ignore errors. The next compile run overwrites anyway, so
-    // a stale .c is annoying rather than fatal - and this runs on a path that
-    // already failed, where a second error would only bury the first.
+    // Best-effort: ignore errors. The next compile run overwrites anyway, so a stale .c is annoying
+    // rather than fatal - and this runs on a path that already failed, where a second error would
+    // only bury the first.
     remove_file(path)
 }
 
-// Build the argv passed to the compiler. Layout differs between MSVC
-// and Unix-style; both layouts compile-and-link in one shot.
-fn build_compiler_argv(info: &CompilerInfo, c_path: String, options: &BuildOptions) List(OwnedString) {
+// Build the argv passed to the compiler. Layout differs between MSVC and Unix-style; both layouts
+// compile-and-link in one shot.
+fn build_compiler_argv(info: &CompilerInfo, c_path: String,
+    options: &BuildOptions) List(OwnedString) {
     let alloc = options.allocator
     let argv: List(OwnedString) = list(16, alloc)
 
@@ -1473,8 +1637,8 @@ fn build_compiler_argv(info: &CompilerInfo, c_path: String, options: &BuildOptio
         argv.push(from_view("/nologo", alloc))
         argv.push(from_view("/W3", alloc))
         // /std:c11 plus /experimental:c11atomics enable <stdatomic.h>,
-        // which stdlib/std/atomic.c includes; without the second flag MSVC's
-        // own header hard-errors with "C atomic support is not enabled".
+        // which stdlib/std/atomic.c includes; without the second flag MSVC's own header hard-errors
+        // with "C atomic support is not enabled".
         argv.push(from_view("/std:c11", alloc))
         argv.push(from_view("/experimental:c11atomics", alloc))
         argv.push(from_view("/Z7", alloc))
@@ -1546,7 +1710,8 @@ fn build_compiler_argv(info: &CompilerInfo, c_path: String, options: &BuildOptio
     for i in 0..options.libs.len {
         // Absolute path -> verbatim; bare name -> "-lNAME".
         const lib = options.libs[i]
-        if lib.len > 0 and (lib[0] == '/' or lib.starts_with("./") or lib.contains(".a") or lib.contains(".so")) {
+        if lib.len > 0 and (lib[0] == '/' or lib.starts_with("./") or lib.contains(".a")
+            or lib.contains(".so")) {
             argv.push(from_view(lib, alloc))
         } else {
             let sb = string_builder(3 + lib.len, alloc)
@@ -1561,18 +1726,19 @@ fn build_compiler_argv(info: &CompilerInfo, c_path: String, options: &BuildOptio
     return argv
 }
 
-// One manifest `ldflags` entry, split into separate argv words. A flag that
-// takes a value is written as one string in the manifest
-// (`"-framework CoreVideo"`) but has to reach the driver as two arguments -
-// clang rejects the joined form with `unknown argument`.
+// One manifest `ldflags` entry, split into separate argv words. A flag that takes a value is
+// written as one string in the manifest (`"-framework CoreVideo"`) but has to reach the driver as
+// two arguments - clang rejects the joined form with `unknown argument`.
 //
-// ponytail: space-separated, so a path with a space in it cannot be spelled
-// here. Take a nested array in the manifest if one ever needs to be.
+// ponytail: space-separated, so a path with a space in it cannot be spelled here. Take a nested
+// array in the manifest if one ever needs to be.
 fn push_ldflag_words(argv: &List(OwnedString), flag: String, alloc: &Allocator?) {
     const words = split(flag, ' ')
     defer words.deinit()
     for w in words {
-        if w.len > 0 { argv.push(from_view(w, alloc)) }
+        if w.len > 0 {
+            argv.push(from_view(w, alloc))
+        }
     }
 }
 
@@ -1581,11 +1747,13 @@ test "emits each foreign symbol at most once" {
     defer m.deinit()
     let p1 = list(1)
     p1.push(IrType.I32)
-    m.add_foreign(ForeignDecl { name = "isatty", return_ty = Some(IrType.I32), param_types = p1, variadic = false, cc = CallConv.C })
+    m.add_foreign(ForeignDecl { name = "isatty", return_ty = Some(IrType.I32), param_types = p1,
+        variadic = false, cc = CallConv.C })
     let p2 = list(2)
     p2.push(IrType.I32)
     p2.push(IrType.I32)
-    m.add_foreign(ForeignDecl { name = "isatty", return_ty = Some(IrType.I32), param_types = p2, variadic = false, cc = CallConv.C })
+    m.add_foreign(ForeignDecl { name = "isatty", return_ty = Some(IrType.I32), param_types = p2,
+        variadic = false, cc = CallConv.C })
 
     let sb = string_builder(256)
     defer sb.deinit()
@@ -1605,11 +1773,13 @@ test "a float constant is emitted as an exact C99 hex-float literal" {
     let sb = string_builder(1024)
     defer sb.deinit()
     translate(&m, &sb)
-    assert_true(contains(sb.as_view(), "0x1.8p+0"), "1.5 travels as its exact bits, not a truncated decimal")
+    assert_true(contains(sb.as_view(), "0x1.8p+0"),
+        "1.5 travels as its exact bits, not a truncated decimal")
 }
 
 // Spawn the compiler with the prepared argv + env. Returns the exit code.
-fn run_compiler(info: &CompilerInfo, argv: &List(OwnedString), allocator: &Allocator?) Result(i32, BuildError) {
+fn run_compiler(info: &CompilerInfo, argv: &List(OwnedString), allocator: &Allocator?) Result(i32,
+    BuildError) {
     let cmd = command(info.path.as_view(), allocator)
     defer cmd.deinit()
     for i in 0..argv.len {

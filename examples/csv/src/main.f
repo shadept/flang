@@ -28,8 +28,8 @@ fn print_usage() {
 
 const MAX_ROWS: usize = 0xFFFF_FFFF_FFFF_FFFF
 
-// SIMD-accelerated count of `target` bytes in `data`.
-// Processes 16 bytes per iteration via 128-bit vectors, then a scalar tail.
+// SIMD-accelerated count of `target` bytes in `data`. Processes 16 bytes per iteration via 128-bit
+// vectors, then a scalar tail.
 fn simd_count_byte(data: String, target: u8) usize {
     let count = 0
     let i = 0
@@ -41,7 +41,9 @@ fn simd_count_byte(data: String, target: u8) usize {
         i = i + 16
     }
     while i < data.len {
-        if data[i] == target { count = count + 1 }
+        if data[i] == target {
+            count = count + 1
+        }
         i = i + 1
     }
     return count
@@ -57,13 +59,17 @@ fn parse_range(s: String) (usize, usize)? {
 
     if start_str.len > 0 {
         const parsed = parse_usize(start_str)
-        if parsed.is_err() { return null }
+        if parsed.is_err() {
+            return null
+        }
         start_val = parsed.unwrap().0 as usize
     }
 
     if end_str.len > 0 {
         const parsed = parse_usize(end_str)
-        if parsed.is_err() { return null }
+        if parsed.is_err() {
+            return null
+        }
         end_val = parsed.unwrap().0 as usize
     }
 
@@ -71,11 +77,17 @@ fn parse_range(s: String) (usize, usize)? {
 }
 
 fn parse_tail(s: String) usize? {
-    if s.len < 2 { return null }
-    if s[0] != '-' { return null }
+    if s.len < 2 {
+        return null
+    }
+    if s[0] != '-' {
+        return null
+    }
     const num_str = s[1..s.len]
     const parsed = parse_usize(num_str)
-    if parsed.is_err() { return null }
+    if parsed.is_err() {
+        return null
+    }
     return Some(parsed.unwrap().0 as usize)
 }
 
@@ -94,21 +106,26 @@ fn split_columns(s: String, cols: &List(String)) {
     }
 }
 
-fn print_record(sb: &StringBuilder, record: &CsvRecord, indices: &List(usize), has_columns: bool, delimiter: u8) {
+fn print_record(sb: &StringBuilder, record: &CsvRecord, indices: &List(usize), has_columns: bool,
+    delimiter: u8) {
     sb.clear()
     if has_columns {
         for i in 0..indices.len {
-            if i > 0 { sb.append_byte(delimiter) }
+            if i > 0 {
+                sb.append_byte(delimiter)
+            }
             record.get(indices[i]) match {
-                Some(f) => sb.append(f),
+                Some(f) => sb.append(f)
                 None => {}
             }
         }
     } else {
         for i in 0..record.field_count() {
-            if i > 0 { sb.append_byte(delimiter) }
+            if i > 0 {
+                sb.append_byte(delimiter)
+            }
             record.get(i) match {
-                Some(f) => sb.append(f),
+                Some(f) => sb.append(f)
                 None => {}
             }
         }
@@ -116,10 +133,13 @@ fn print_record(sb: &StringBuilder, record: &CsvRecord, indices: &List(usize), h
     println(sb.as_view())
 }
 
-fn run(reader: &CsvReader, columns_arg: String, range_start: usize, range_end: usize, has_range: bool, tail_count: usize, has_tail: bool) i32 {
+fn run(reader: &CsvReader, columns_arg: String, range_start: usize, range_end: usize,
+    has_range: bool, tail_count: usize, has_tail: bool) i32 {
     const hdrs = reader.get_headers()
     const rows = reader.get_rows()
-    if rows.len == 0 { return 0 }
+    if rows.len == 0 {
+        return 0
+    }
 
     // Resolve column indices
     let col_indices = list(16)
@@ -157,12 +177,16 @@ fn run(reader: &CsvReader, columns_arg: String, range_start: usize, range_end: u
     sb.clear()
     if has_columns {
         for i in 0..col_indices.len {
-            if i > 0 { sb.append_byte(delimiter) }
+            if i > 0 {
+                sb.append_byte(delimiter)
+            }
             sb.append(hdrs[col_indices[i]])
         }
     } else {
         for i in 0..hdrs.len {
-            if i > 0 { sb.append_byte(delimiter) }
+            if i > 0 {
+                sb.append_byte(delimiter)
+            }
             sb.append(hdrs[i])
         }
     }
@@ -225,7 +249,7 @@ pub fn main() i32 {
 
     for i in 1..argc {
         const argv = arg(i) match {
-            Some(v) => v,
+            Some(v) => v
             None => continue
         }
 
@@ -244,7 +268,7 @@ pub fn main() i32 {
                 tail_count = t
                 has_tail = true
                 continue
-            },
+            }
             None => {}
         }
 
@@ -254,7 +278,7 @@ pub fn main() i32 {
                 range_end = r.1
                 has_range = true
                 continue
-            },
+            }
             None => {}
         }
 
@@ -290,14 +314,16 @@ pub fn main() i32 {
         let file = result.unwrap()
         let reader: CsvReader
         csv_reader_init(&reader, file.reader())
-        const code = run(&reader, columns_arg, range_start, range_end, has_range, tail_count, has_tail)
+        const code = run(&reader, columns_arg, range_start, range_end, has_range, tail_count,
+            has_tail)
         reader.deinit()
         close_file(&file)
         return code
     } else {
         let reader: CsvReader
         csv_reader_init(&reader, stdin.reader())
-        const code = run(&reader, columns_arg, range_start, range_end, has_range, tail_count, has_tail)
+        const code = run(&reader, columns_arg, range_start, range_end, has_range, tail_count,
+            has_tail)
         reader.deinit()
         return code
     }

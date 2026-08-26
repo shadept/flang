@@ -1,13 +1,12 @@
 // Function registry - overload sets indexed by name.
 //
-// `FunctionScheme` carries the polymorphic signature plus the
-// metadata the resolver needs (origin module, public visibility,
-// deprecation, foreign flag). The signature itself is a `Scheme`
-// whose body is a `Func(FunctionTy)` so quantifier handling reuses
-// the same generalise / specialise machinery as let-generalisation.
+// `FunctionScheme` carries the polymorphic signature plus the metadata the resolver needs (origin
+// module, public visibility, deprecation, foreign flag). The signature itself is a `Scheme` whose
+// body is a `Func(FunctionTy)` so quantifier handling reuses the same generalise / specialise
+// machinery as let-generalisation.
 //
-// Lookups mirror `nominal_registry`: same `RegLookup`-style result,
-// same `Visibility`-driven short-name filtering, FQN bypass.
+// Lookups mirror `nominal_registry`: same `RegLookup`-style result, same `Visibility`-driven
+// short-name filtering, FQN bypass.
 
 import std.allocator
 import std.dict
@@ -24,32 +23,28 @@ import flang_typer.visibility
 pub type FunctionScheme = struct {
     name: String
     signature: Scheme
-    module: String?           // null for synthesised (lambda host) fns
+    module: String? // null for synthesised (lambda host) fns
     is_pub: bool
     is_foreign: bool
-    // Call-site arity window: params beyond `required_params` are
-    // defaulted (or the variadic tail) and may be omitted.
+    // Call-site arity window: params beyond `required_params` are defaulted (or the variadic tail)
+    // and may be omitted.
     required_params: usize
     has_variadic: bool
     decl_span: SourceSpan
     deprecation: String?
-    // The id consumers cite when resolving a call. Stable across a
-    // single compilation.
+    // The id consumers cite when resolving a call. Stable across a single compilation.
     id: u32
-    // A retired entry keeps its slot and id but stops resolving: its
-    // module's signature pass is running again, and a matching
-    // re-registration reclaims the slot in place so overload order and
-    // ids match a registry built from cold. Entries that stay retired
-    // once the pass is over name removed declarations - `purge_retired`
-    // drops them.
+    // A retired entry keeps its slot and id but stops resolving: its module's signature pass is
+    // running again, and a matching re-registration reclaims the slot in place so overload order
+    // and ids match a registry built from cold. Entries that stay retired once the pass is over
+    // name removed declarations - `purge_retired` drops them.
     retired: bool
 }
 
-// Multi-payload variants where one payload is a generic-typed value
-// (`List(FunctionScheme)`) confuse the FLang parser - the comma inside
-// the generic argument list is ambiguous with the variant-payload
-// separator. Wrapping the multi-payload case in its own struct keeps
-// the variant payload list unambiguous.
+// Multi-payload variants where one payload is a generic-typed value (`List(FunctionScheme)`)
+// confuse the FLang parser - the comma inside the generic argument list is ambiguous with the
+// variant-payload separator. Wrapping the multi-payload case in its own struct keeps the variant
+// payload list unambiguous.
 pub type FnLookHiddenInfo = struct {
     candidates: List(FunctionScheme)
     module: String
@@ -78,23 +73,20 @@ pub fn deinit(self: &FunctionRegistry) {
     self.by_name.deinit()
 }
 
-// Register `scheme` under `scheme.name`. Returns the assigned id.
-// Duplicate-signature detection is the caller's responsibility - the
-// registry stores whatever is pushed.
+// Register `scheme` under `scheme.name`. Returns the assigned id. Duplicate-signature detection is
+// the caller's responsibility - the registry stores whatever is pushed.
 //
-// A retired slot under the same name and module is reclaimed in place -
-// same list position, same id - so a module whose declarations register
-// again after `retire_module` rebuilds exactly the entries it had.
-// Registration order within one module and name is source order both
-// times, which is what pairs each declaration with its own slot.
+// A retired slot under the same name and module is reclaimed in place - same list position, same id
+// - so a module whose declarations register again after `retire_module` rebuilds exactly the
+// entries it had. Registration order within one module and name is source order both times, which
+// is what pairs each declaration with its own slot.
 pub fn register(self: &FunctionRegistry, scheme: FunctionScheme) u32 {
     if self.by_name.get_ref(scheme.name).is_none() {
         let fresh: List(FunctionScheme) = list(1, self.allocator)
         self.by_name.set(scheme.name, fresh)
     }
-    // In place through the stored list: the get-copy-push-set dance
-    // both leaked and double-freed once `Dict.set` started deiniting
-    // overwritten values (the copy shares the stored buffer).
+    // In place through the stored list: the get-copy-push-set dance both leaked and double-freed
+    // once `Dict.set` started deiniting overwritten values (the copy shares the stored buffer).
     let lst = self.by_name.get_ref(scheme.name).unwrap()
     for j in 0..lst.len {
         if lst[j].retired and same_module(lst[j].module, scheme.module) {
@@ -128,15 +120,14 @@ fn with_id(scheme: &FunctionScheme, id: u32) FunctionScheme {
 fn same_module(a: String?, b: String?) bool {
     return a match {
         Some(am) => b match {
-            Some(bm) => am == bm,
-            None => false,
-        },
-        None => b.is_none(),
+            Some(bm) => am == bm
+            None => false
+        }
+        None => b.is_none()
     }
 }
 
-// The registered names, snapshotted so a caller can mutate the lists
-// behind them while it walks.
+// The registered names, snapshotted so a caller can mutate the lists behind them while it walks.
 fn key_list(self: &FunctionRegistry) List(String) {
     let names: List(String) = list(self.by_name.len(), self.allocator)
     for entry in self.by_name {
@@ -145,17 +136,20 @@ fn key_list(self: &FunctionRegistry) List(String) {
     return names
 }
 
-// Take module `module`'s entries out of resolution so its signature pass
-// can register them again. Slots and ids stay in place for `register` to
-// reclaim.
+// Take module `module`'s entries out of resolution so its signature pass can register them again.
+// Slots and ids stay in place for `register` to reclaim.
 pub fn retire_module(self: &FunctionRegistry, module: String) {
     let names = key_list(self)
     defer names.deinit()
     for name in names {
         let lst = self.by_name.get_ref(name).unwrap()
         for j in 0..lst.len {
-            if lst[j].retired { continue }
-            if !same_module(lst[j].module, Some(module)) { continue }
+            if lst[j].retired {
+                continue
+            }
+            if !same_module(lst[j].module, Some(module)) {
+                continue
+            }
             let dead = lst[j]
             dead.retired = true
             lst[j] = dead
@@ -163,9 +157,9 @@ pub fn retire_module(self: &FunctionRegistry, module: String) {
     }
 }
 
-// Drop every entry still retired - declarations whose sources no longer
-// register them. Returns the dropped ids so the caller can clear its own
-// id-keyed side tables. Live entries keep their positions.
+// Drop every entry still retired - declarations whose sources no longer register them. Returns the
+// dropped ids so the caller can clear its own id-keyed side tables. Live entries keep their
+// positions.
 pub fn purge_retired(self: &FunctionRegistry) List(u32) {
     let dropped: List(u32) = list(0, self.allocator)
     let names = key_list(self)
@@ -193,12 +187,10 @@ pub fn purge_retired(self: &FunctionRegistry) List(u32) {
     return dropped
 }
 
-// A copy of every live entry at the id and list position it holds, for
-// the checker to carry into the next demand while the snapshot keeps the
-// original. Entry structs are copied by value: names, modules and
-// deprecations are views into buffers that outlive both registries, and
-// the quantifier sets are shared read-only (nothing ever frees a
-// scheme's set).
+// A copy of every live entry at the id and list position it holds, for the checker to carry into
+// the next demand while the snapshot keeps the original. Entry structs are copied by value: names,
+// modules and deprecations are views into buffers that outlive both registries, and the quantifier
+// sets are shared read-only (nothing ever frees a scheme's set).
 pub fn carried_copy(self: &FunctionRegistry, allocator: &Allocator? = null) FunctionRegistry {
     let out = function_registry(allocator)
     fill_fn_carried(&out, self, allocator)
@@ -217,13 +209,14 @@ fn fill_fn_carried(out: &FunctionRegistry, src: &FunctionRegistry, allocator: &A
     out.next_id = src.next_id
 }
 
-// Resolve `name` in the caller's visibility scope. Returns the
-// candidates that are reachable; if nothing is reachable but some
-// hidden overloads exist, returns one of them along with its module
+// Resolve `name` in the caller's visibility scope. Returns the candidates that are reachable; if
+// nothing is reachable but some hidden overloads exist, returns one of them along with its module
 // for the diagnostic hint.
 pub fn lookup(self: &FunctionRegistry, name: String, vis: &Visibility) FnLookup {
     let overloads_opt = self.by_name.get(name)
-    if overloads_opt.is_none() { return FnLookup.FnLookMissing }
+    if overloads_opt.is_none() {
+        return FnLookup.FnLookMissing
+    }
     let overloads = overloads_opt.unwrap()
 
     let visible: List(FunctionScheme) = list(0, self.allocator)
@@ -231,9 +224,10 @@ pub fn lookup(self: &FunctionRegistry, name: String, vis: &Visibility) FnLookup 
     let hidden_at: usize = 0
     for j in 0..overloads.len {
         let f = &overloads[j]
-        // A retired entry is mid-re-registration (or removed) - it does
-        // not resolve.
-        if f.retired { continue }
+        // A retired entry is mid-re-registration (or removed) - it does not resolve.
+        if f.retired {
+            continue
+        }
         if visibility_for(f, vis) {
             visible.push(f.*)
         } else {
@@ -242,13 +236,15 @@ pub fn lookup(self: &FunctionRegistry, name: String, vis: &Visibility) FnLookup 
                     Some(m) => {
                         hidden_module = Some(m)
                         hidden_at = j
-                    },
-                    None => {},
+                    }
+                    None => {}
                 }
             }
         }
     }
-    if visible.len > 0 { return FnLookup.FnLookFound(visible) }
+    if visible.len > 0 {
+        return FnLookup.FnLookFound(visible)
+    }
     if hidden_module.is_some() {
         let one: List(FunctionScheme) = list(1, self.allocator)
         one.push(overloads[hidden_at])
@@ -263,20 +259,23 @@ pub fn lookup(self: &FunctionRegistry, name: String, vis: &Visibility) FnLookup 
 fn visibility_for(f: &FunctionScheme, vis: &Visibility) bool {
     // Synthesised functions (no module) are always visible.
     f.module match {
-        None => return true,
+        None => return true
         Some(m) => {
             vis.current_module match {
-                Some(cur) => if cur == m { return true },
-                None => {},
+                Some(cur) => if cur == m { return true }
+                None => {}
             }
-            // A foreign fn names a global link-time symbol, so it is not
-            // module-scoped at all: it resolves from anywhere in the program
-            // without an import. Mirrors the reference compiler
-            // (FunctionRegistry.cs, "extern C symbols are globally linkable").
-            if f.is_foreign { return true }
-            if !f.is_pub { return false }
+            // A foreign fn names a global link-time symbol, so it is not module-scoped at all: it
+            // resolves from anywhere in the program without an import. Mirrors the reference
+            // compiler (FunctionRegistry.cs, "extern C symbols are globally linkable").
+            if f.is_foreign {
+                return true
+            }
+            if !f.is_pub {
+                return false
+            }
             return vis.visible.contains(m)
-        },
+        }
     }
 }
 
@@ -307,8 +306,8 @@ test "a retired entry stops resolving until it is registered again" {
     let vis = visibility(Some("m"), scope)
     defer vis.visible.deinit()
     let missing = reg.lookup("f", &vis) match {
-        FnLookMissing => true,
-        _ => false,
+        FnLookMissing => true
+        _ => false
     }
     assert_true(missing, "a retired entry is invisible to lookup")
 
@@ -319,8 +318,8 @@ test "a retired entry stops resolving until it is registered again" {
             const n = c.len
             c.deinit()
             n
-        },
-        _ => 0 as usize,
+        }
+        _ => 0 as usize
     }
     assert_eq(found, 1 as usize, "and the entry resolves again")
 }
@@ -357,8 +356,8 @@ test "purge drops what stayed retired and reports the ids" {
     let vis = open()
     defer vis.visible.deinit()
     let gone = reg.lookup("g", &vis) match {
-        FnLookMissing => true,
-        _ => false,
+        FnLookMissing => true
+        _ => false
     }
     assert_true(gone, "the removed declaration stops resolving")
     const d = reg.register(probe_scheme("h", "m"))

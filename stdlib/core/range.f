@@ -7,15 +7,17 @@
 //   fn iter(r: &Range($T)) RangeIterator(T) - Creates iterator state
 //   fn next(iter: &RangeIterator($T)) T? - Returns next value or null
 
-// A (half-open) range bounded inclusively below and exclusively above (start..end).
-// The range start..end contains all values with start <= x < end. It is empty if start >= end.
+// A (half-open) range bounded inclusively below and exclusively above (start..end). The range
+// start..end contains all values with start <= x < end. It is empty if start >= end.
 pub type Range = struct(T) {
     start: T
     end: T
 }
 
 pub fn op_index(r: &Range($T), index: usize) T? {
-    if index < 0 or index >= r.end - r.start { return null }
+    if index < 0 or index >= r.end - r.start {
+        return null
+    }
     return Some(r.start + index)
 }
 
@@ -36,7 +38,9 @@ pub fn iter(r: &Range($T)) RangeIterator(T) {
 
 // Advance iterator and return next value
 pub fn next(it: &RangeIterator($T)) T? {
-    if it.current >= it.end { return null }
+    if it.current >= it.end {
+        return null
+    }
     let val = it.current
     it.current = it.current + 1
     return Some(val)

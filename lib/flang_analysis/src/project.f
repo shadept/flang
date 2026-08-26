@@ -1,9 +1,7 @@
-// flang.toml manifest model and parser - a small TOML *subset*, only what
-// manifests contain:
+// flang.toml manifest model and parser - a small TOML *subset*, only what manifests contain:
 //   [section] / [dotted.section]
 //   key = "string"  |  key = ["string", ...]  |  key = { path = "string" }
-// Parsed strings are copied into `OwnedString`s so a `Project` outlives
-// the source text.
+// Parsed strings are copied into `OwnedString`s so a `Project` outlives the source text.
 
 import std.allocator
 import std.list
@@ -37,8 +35,8 @@ pub type PlatformConfig = struct {
     ldflags: List(OwnedString)
 }
 
-// One `[fmt]` table entry, kept verbatim (value unquoted). The manifest
-// model stays formatter-agnostic: flang_fmt interprets the keys.
+// One `[fmt]` table entry, kept verbatim (value unquoted). The manifest model stays
+// formatter-agnostic: flang_fmt interprets the keys.
 pub type FmtEntry = struct {
     key: OwnedString
     value: OwnedString
@@ -66,9 +64,9 @@ pub type Project = struct {
 
 // Public API
 
-// Parse a flang.toml manifest. Missing `[project]` fields fall back to
-// defaults (`kind = exe`, `source = "src/**/*.f"`, `output = "build"`);
-// callers that require a field validate it themselves.
+// Parse a flang.toml manifest. Missing `[project]` fields fall back to defaults (`kind = exe`,
+// `source = "src/**/*.f"`, `output = "build"`); callers that require a field validate it
+// themselves.
 pub fn parse_project(text: String, allocator: &Allocator? = null) Project {
     let proj = new_project(allocator)
     let section: String = ""
@@ -77,7 +75,9 @@ pub fn parse_project(text: String, allocator: &Allocator? = null) Project {
         let nl = next_line(text, pos)
         pos = nl.1
         let line = trim(strip_comment(nl.0))
-        if line.len == 0 { continue }
+        if line.len == 0 {
+            continue
+        }
         if line[0] == '[' {
             section = section_name(line)
             continue
@@ -110,20 +110,24 @@ pub fn current_platform(self: &Project) &PlatformConfig {
     return &self.linux
 }
 
-// Expand a source glob (e.g. `src/**/*.f`) into owned file paths, relative
-// to the current directory. Returns an empty list on a glob error.
+// Expand a source glob (e.g. `src/**/*.f`) into owned file paths, relative to the current
+// directory. Returns an empty list on a glob error.
 //
-// `x.generated.f` files are `--emit-generated` debug output, never input:
-// template expansion is in memory (RFC-021). They are skipped so a stale
-// emission next to its origin cannot become a second module.
+// `x.generated.f` files are `--emit-generated` debug output, never input: template expansion is in
+// memory (RFC-021). They are skipped so a stale emission next to its origin cannot become a second
+// module.
 pub fn glob_sources(pattern: String, allocator: &Allocator? = null) List(OwnedString) {
     let out: List(OwnedString) = list(0, allocator)
     let r = glob(pattern, allocator)
-    if r.is_err() { return out }
+    if r.is_err() {
+        return out
+    }
     let it = r.unwrap()
     defer it.deinit()
     for path in it {
-        if ends_with(path, ".generated.f") { continue }
+        if ends_with(path, ".generated.f") {
+            continue
+        }
         out.push(from_view(path))
     }
     return out
@@ -194,40 +198,67 @@ fn apply_kv(proj: &Project, section: String, key: String, val: String, alloc: &A
     }
     if starts_with(section, "build.") {
         let os = section[6..section.len]
-        if os == "windows" { set_platform_field(&proj.windows, key, val, alloc) }
-        if os == "linux" { set_platform_field(&proj.linux, key, val, alloc) }
-        if os == "macos" { set_platform_field(&proj.macos, key, val, alloc) }
+        if os == "windows" {
+            set_platform_field(&proj.windows, key, val, alloc)
+        }
+        if os == "linux" {
+            set_platform_field(&proj.linux, key, val, alloc)
+        }
+        if os == "macos" {
+            set_platform_field(&proj.macos, key, val, alloc)
+        }
     }
 }
 
 fn set_project_field(proj: &Project, key: String, val: String) {
-    if key == "name" { proj.name = from_view(unquote(val)) }
-    if key == "version" { proj.version = from_view(unquote(val)) }
-    if key == "kind" { proj.kind = parse_kind(unquote(val)) }
-    if key == "source" { proj.source = from_view(unquote(val)) }
-    if key == "output" { proj.output = from_view(unquote(val)) }
+    if key == "name" {
+        proj.name = from_view(unquote(val))
+    }
+    if key == "version" {
+        proj.version = from_view(unquote(val))
+    }
+    if key == "kind" {
+        proj.kind = parse_kind(unquote(val))
+    }
+    if key == "source" {
+        proj.source = from_view(unquote(val))
+    }
+    if key == "output" {
+        proj.output = from_view(unquote(val))
+    }
 }
 
 fn set_platform_field(pc: &PlatformConfig, key: String, val: String, alloc: &Allocator?) {
-    if key == "headers" { pc.headers = parse_array(val, alloc) }
-    if key == "libs" { pc.libs = parse_array(val, alloc) }
-    if key == "cflags" { pc.cflags = parse_array(val, alloc) }
-    if key == "ldflags" { pc.ldflags = parse_array(val, alloc) }
+    if key == "headers" {
+        pc.headers = parse_array(val, alloc)
+    }
+    if key == "libs" {
+        pc.libs = parse_array(val, alloc)
+    }
+    if key == "cflags" {
+        pc.cflags = parse_array(val, alloc)
+    }
+    if key == "ldflags" {
+        pc.ldflags = parse_array(val, alloc)
+    }
 }
 
 fn parse_kind(s: String) ProjectKind {
-    if s == "lib" { return ProjectKind.Lib }
+    if s == "lib" {
+        return ProjectKind.Lib
+    }
     return ProjectKind.Exe
 }
 
 // Lexical helpers - index-based scans, no reliance on `and` short-circuit
 
-// The next physical line starting at `pos` (excluding the newline) plus
-// the offset just past it.
+// The next physical line starting at `pos` (excluding the newline) plus the offset just past it.
 fn next_line(text: String, pos: usize) (String, usize) {
     let i = pos
     while i < text.len {
-        if text[i] == '\n' { break }
+        if text[i] == '\n' {
+            break
+        }
         i = i + 1
     }
     return (text[pos..i], i + 1)
@@ -239,9 +270,13 @@ fn strip_comment(line: String) String {
     let i: usize = 0
     while i < line.len {
         let c = line[i]
-        if c == '"' { in_str = !in_str }
+        if c == '"' {
+            in_str = !in_str
+        }
         if c == '#' {
-            if !in_str { return line[0..i] }
+            if !in_str {
+                return line[0..i]
+            }
         }
         i = i + 1
     }
@@ -254,20 +289,25 @@ fn section_name(line: String) String {
     let a: usize = 0
     let b: usize = t.len
     if b > a {
-        if t[a] == '[' { a = a + 1 }
+        if t[a] == '[' {
+            a = a + 1
+        }
     }
     if b > a {
-        if t[b - 1] == ']' { b = b - 1 }
+        if t[b - 1] == ']' {
+            b = b - 1
+        }
     }
     return trim(t[a..b])
 }
 
-// Split `key = value` at the first `=`. Third tuple element is false when
-// the line has no `=`.
+// Split `key = value` at the first `=`. Third tuple element is false when the line has no `=`.
 fn split_kv(line: String) (String, String, bool) {
     let i: usize = 0
     while i < line.len {
-        if line[i] == '=' { break }
+        if line[i] == '=' {
+            break
+        }
         i = i + 1
     }
     if i >= line.len {
@@ -280,14 +320,20 @@ fn split_kv(line: String) (String, String, bool) {
 fn parse_inline_path(val: String) String {
     let i: usize = 0
     while i < val.len {
-        if val[i] == '"' { break }
+        if val[i] == '"' {
+            break
+        }
         i = i + 1
     }
-    if i >= val.len { return "" }
+    if i >= val.len {
+        return ""
+    }
     let start = i + 1
     let j = start
     while j < val.len {
-        if val[j] == '"' { break }
+        if val[j] == '"' {
+            break
+        }
         j = j + 1
     }
     return val[start..j]
@@ -321,10 +367,14 @@ fn strip_brackets(s: String) String {
     let a: usize = 0
     let b: usize = s.len
     if b > a {
-        if s[a] == '[' { a = a + 1 }
+        if s[a] == '[' {
+            a = a + 1
+        }
     }
     if b > a {
-        if s[b - 1] == ']' { b = b - 1 }
+        if s[b - 1] == ']' {
+            b = b - 1
+        }
     }
     return s[a..b]
 }
@@ -340,7 +390,6 @@ fn unquote(s: String) String {
     }
     return t
 }
-
 
 // Tests
 

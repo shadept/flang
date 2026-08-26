@@ -1,12 +1,11 @@
-// Symbols and callable signatures: which functions lowering can emit and
-// call, and the C symbol each one gets.
+// Symbols and callable signatures: which functions lowering can emit and call, and the C symbol
+// each one gets.
 //
-// `SymbolBuilder` walks every registered function scheme once, up front,
-// and admits only the lowerable ones - membership in the finished
-// `SymbolTable` IS the "is this callable?" gate `lower.f` reads. Symbol
-// names are a pure function of the declaration (module path + name +
-// parameter types; docs/spec.md 7.1.1, docs/adr/0004), so inserting a
-// function cannot rename another.
+// `SymbolBuilder` walks every registered function scheme once, up front, and admits only the
+// lowerable ones - membership in the finished `SymbolTable` IS the "is this callable?" gate
+// `lower.f` reads. Symbol names are a pure function of the declaration (module path + name +
+// parameter types; docs/spec.md 7.1.1, docs/adr/0004), so inserting a function cannot rename
+// another.
 
 import std.allocator
 import std.dict
@@ -30,45 +29,40 @@ import flang_driver.layout
 
 // Symbol table
 //
-// Definitions and call sites have to agree on every emitted C symbol. The
-// merged program puts all modules in one translation unit, so a name is
-// unique only after module-path mangling plus an ordinal for same-name
-// overloads - and an ordinal handed out while walking definitions is not
-// something a call site can re-derive. So symbols are assigned once, up
-// front, and both sides read the same table.
+// Definitions and call sites have to agree on every emitted C symbol. The merged program puts all
+// modules in one translation unit, so a name is unique only after module-path mangling plus an
+// ordinal for same-name overloads - and an ordinal handed out while walking definitions is not
+// something a call site can re-derive. So symbols are assigned once, up front, and both sides read
+// the same table.
 //
-// Call sites key by `FunctionScheme.id` - the id the checker records on
-// each resolved call node as `RtFunction`. Definitions key by the decl's
-// span fingerprint, which is how a `FunctionDecl` finds its own id.
+// Call sites key by `FunctionScheme.id` - the id the checker records on each resolved call node as
+// `RtFunction`. Definitions key by the decl's span fingerprint, which is how a `FunctionDecl` finds
+// its own id.
 //
-// Membership is also the "is this callable?" gate: a function whose
-// signature this milestone cannot lower is left out, so a call to it
-// falls back to a placeholder rather than naming a symbol the module
-// never defines - which would fail to link.
+// Membership is also the "is this callable?" gate: a function whose signature this milestone cannot
+// lower is left out, so a call to it falls back to a placeholder rather than naming a symbol the
+// module never defines - which would fail to link.
 pub type SymbolTable = struct {
-    // Symbol strings are OWNED by the table - lookups hand out views.
-    // The IrModule's function names borrow them, so the table must
-    // outlive the module (see the note in lower_program).
+    // Symbol strings are OWNED by the table - lookups hand out views. The IrModule's function names
+    // borrow them, so the table must outlive the module (see the note in lower_program).
     by_fn_id: Dict(u32, OwnedString)
     by_decl: Dict(NodeId, u32)
     by_fn_sig: Dict(u32, FnSig)
-    // Specializations (M10), keyed by `Specialization.id` - the id
-    // `RtSpecialized` / `ResolvedOperator.spec_id` carry. Symbols are
-    // mangled from the CONCRETE parameter types plus a return suffix
-    // (a return-only-polymorphic template's instantiations share every
-    // parameter token, and the suffix also keeps a specialization from
-    // colliding with a same-signature monomorphic overload).
+    // Specializations (M10), keyed by `Specialization.id` - the id `RtSpecialized` /
+    // `ResolvedOperator.spec_id` carry. Symbols are mangled from the CONCRETE parameter types plus
+    // a return suffix (a return-only-polymorphic template's instantiations share every parameter
+    // token, and the suffix also keeps a specialization from colliding with a same-signature
+    // monomorphic overload).
     by_spec_id: Dict(u32, OwnedString)
     by_spec_sig: Dict(u32, FnSig)
-    // Which function ids are `#foreign`. Only a foreign call passes
-    // aggregates by value, so lowering has to tell them apart.
+    // Which function ids are `#foreign`. Only a foreign call passes aggregates by value, so
+    // lowering has to tell them apart.
     by_fn_foreign: Dict(u32, bool)
 }
 
-// The declared signature lowering works from: the checker's parameter and
-// return types for one registered function. Both alias the scheme's
-// storage inside `TypeCheckResult`, which outlives lowering - nothing
-// here is owned.
+// The declared signature lowering works from: the checker's parameter and return types for one
+// registered function. Both alias the scheme's storage inside `TypeCheckResult`, which outlives
+// lowering - nothing here is owned.
 pub type FnSig = struct {
     params: List(Ty)
     ret: Ty
@@ -76,8 +70,8 @@ pub type FnSig = struct {
 
 pub fn lookup_symbol(self: &SymbolTable, fn_id: u32) String? {
     return self.by_fn_id.get(fn_id) match {
-        Some(s) => Some(s.as_view()),
-        None => null,
+        Some(s) => Some(s.as_view())
+        None => null
     }
 }
 
@@ -86,13 +80,12 @@ pub fn decl_fn_id(self: &SymbolTable, decl: &FunctionDecl) u32? {
     return self.by_decl.get(node_id_of(decl.span))
 }
 
-// The declared signature of a registered lowerable function.
-// Whether `fn_id` is a `#foreign` declaration (a C symbol), not a body
-// this module lowers.
+// The declared signature of a registered lowerable function. Whether `fn_id` is a `#foreign`
+// declaration (a C symbol), not a body this module lowers.
 pub fn is_foreign(self: &SymbolTable, fn_id: u32) bool {
     return self.by_fn_foreign.get(fn_id) match {
-        Some(v) => v,
-        None => false,
+        Some(v) => v
+        None => false
     }
 }
 
@@ -102,8 +95,8 @@ pub fn sig_of(self: &SymbolTable, fn_id: u32) FnSig? {
 
 pub fn spec_symbol(self: &SymbolTable, spec_id: u32) String? {
     return self.by_spec_id.get(spec_id) match {
-        Some(s) => Some(s.as_view()),
-        None => null,
+        Some(s) => Some(s.as_view())
+        None => null
     }
 }
 
@@ -120,11 +113,10 @@ pub fn deinit(self: &SymbolTable) {
     self.by_fn_foreign.deinit()
 }
 
-// Assigns symbols across a whole program. `seen` carries the ordinal
-// counter across modules, so the walk order fixes the ordinals - which is
-// why symbols are assigned before any body lowers, not during.
-// The tables are held flat rather than as a nested `SymbolTable`:
-// mutating a dict two field-hops deep through a reference does not stick.
+// Assigns symbols across a whole program. `seen` carries the ordinal counter across modules, so the
+// walk order fixes the ordinals - which is why symbols are assigned before any body lowers, not
+// during. The tables are held flat rather than as a nested `SymbolTable`: mutating a dict two
+// field-hops deep through a reference does not stick.
 pub type SymbolBuilder = struct {
     by_fn_id: Dict(u32, OwnedString)
     by_decl: Dict(NodeId, u32)
@@ -137,48 +129,56 @@ pub type SymbolBuilder = struct {
     allocator: &Allocator?
 }
 
-// Index every lowerable scheme by its declaration span and registry id up
-// front; the per-module walk then maps each decl to its symbol with one
-// lookup. A scheme outside the lowerable subset is left out entirely -
-// membership in these tables IS the "is this callable?" gate.
+// Index every lowerable scheme by its declaration span and registry id up front; the per-module
+// walk then maps each decl to its symbol with one lookup. A scheme outside the lowerable subset is
+// left out entirely - membership in these tables IS the "is this callable?" gate.
 pub fn symbol_builder(result: &TypeCheckResult, allocator: &Allocator? = null) SymbolBuilder {
     let by_fn_id: Dict(u32, OwnedString) = dict(allocator)
     let by_decl: Dict(NodeId, u32) = dict(allocator)
     let by_fn_sig: Dict(u32, FnSig) = dict(allocator)
     let by_fn_foreign: Dict(u32, bool) = dict(allocator)
     for entry in result.functions.by_name {
-        // Annotated: the self-hosted checker types for-over-iterator
-        // variables as unconstrained vars (protocol resolution is
-        // post-M10), so `entry.value` needs the pin.
+        // Annotated: the self-hosted checker types for-over-iterator variables as unconstrained
+        // vars (protocol resolution is post-M10), so `entry.value` needs the pin.
         let overloads: List(FunctionScheme) = entry.value
         for &f in overloads {
-            // A FOREIGN variadic function is declared (the backend emits
-            // its extern) but never called through this table: C varargs
-            // have no FLang signature to check a call against. A native
-            // `..xs: T` is an ordinary call - its tail is a `Slice(T)`
-            // the call site packs (M12, `materialize_arg_list`).
-            if f.has_variadic and f.is_foreign { continue }
+            // A FOREIGN variadic function is declared (the backend emits its extern) but never
+            // called through this table: C varargs have no FLang signature to check a call against.
+            // A native `..xs: T` is an ordinary call - its tail is a `Slice(T)` the call site packs
+            // (M12, `materialize_arg_list`).
+            if f.has_variadic and f.is_foreign {
+                continue
+            }
             let sig = scheme_sig(&result.interner, &f.signature)
-            if sig.is_none() { continue }
+            if sig.is_none() {
+                continue
+            }
             let s = sig.unwrap()
-            if !sig_lowerable(&result.interner, &s, f.is_foreign, &result.nominals) { continue }
+            if !sig_lowerable(&result.interner, &s, f.is_foreign, &result.nominals) {
+                continue
+            }
             by_decl.set(node_id_of(f.decl_span), f.id)
             by_fn_sig.set(f.id, s)
             by_fn_foreign.set(f.id, f.is_foreign)
         }
     }
 
-    // Specializations (M10): concrete by construction, so the callable
-    // gate only filters the shapes lowering cannot represent yet.
+    // Specializations (M10): concrete by construction, so the callable gate only filters the shapes
+    // lowering cannot represent yet.
     let by_spec_id: Dict(u32, OwnedString) = dict(allocator)
     let by_spec_sig: Dict(u32, FnSig) = dict(allocator)
     for i in 0..(result.specializations.next_id as usize) {
         let found = result.specializations.find(i as u32)
-        if found.is_none() { continue }
+        if found.is_none() {
+            continue
+        }
         let sp = found.unwrap()
         let s = FnSig { params = sp.concrete_params, ret = sp.concrete_return }
-        if !sig_lowerable(&result.interner, &s, false, &result.nominals) { continue }
-        let sym = mangle_spec_symbol(&result.interner, sp.module, sp.name, &s, &result.nominals, allocator)
+        if !sig_lowerable(&result.interner, &s, false, &result.nominals) {
+            continue
+        }
+        let sym = mangle_spec_symbol(&result.interner, sp.module, sp.name, &s, &result.nominals,
+            allocator)
         by_spec_id.set(sp.id, sym)
         by_spec_sig.set(sp.id, s)
     }
@@ -196,10 +196,9 @@ pub fn symbol_builder(result: &TypeCheckResult, allocator: &Allocator? = null) S
     }
 }
 
-// The declared signature of a function scheme. Null when the scheme's
-// body isn't a function type (nothing callable to encode).
-// ponytail: the params list is a fresh copy of the node's child window and
-// is never freed - it lives to the end of the build like the table itself.
+// The declared signature of a function scheme. Null when the scheme's body isn't a function type
+// (nothing callable to encode). ponytail: the params list is a fresh copy of the node's child
+// window and is never freed - it lives to the end of the build like the table itself.
 fn scheme_sig(it: &TypeInterner, s: &Scheme) FnSig? {
     return it.node(s.body) match {
         NFunc(ft) => {
@@ -208,81 +207,90 @@ fn scheme_sig(it: &TypeInterner, s: &Scheme) FnSig? {
                 ps.push(it.child_at(ft.params, i))
             }
             Some(FnSig { params = ps, ret = ft.ret })
-        },
-        _ => null,
+        }
+        _ => null
     }
 }
 
-// Whether a call to a function with this signature can be lowered: every
-// parameter and the return type must be a FIR scalar or a concrete
-// aggregate. Foreign signatures stay scalar-only - a byte-buffer
-// aggregate has no C ABI spelling the backend could give an extern.
+// Whether a call to a function with this signature can be lowered: every parameter and the return
+// type must be a FIR scalar or a concrete aggregate. Foreign signatures stay scalar-only - a
+// byte-buffer aggregate has no C ABI spelling the backend could give an extern.
 fn sig_lowerable(it: &TypeInterner, sig: &FnSig, is_foreign: bool, reg: &NominalRegistry) bool {
     for i in 0..sig.params.len {
-        if !ty_lowerable(it, sig.params[i], is_foreign, reg) { return false }
+        if !ty_lowerable(it, sig.params[i], is_foreign, reg) {
+            return false
+        }
     }
-    if sig.ret == TY_VOID or sig.ret == TY_NEVER { return true }
+    if sig.ret == TY_VOID or sig.ret == TY_NEVER {
+        return true
+    }
     return ty_lowerable(it, sig.ret, is_foreign, reg)
 }
 
-// Whether a value of this type can cross a lowered call boundary. Scalars
-// always can; aggregates only when concrete - a type variable inside one
-// would make `layout_of` guess a size, which is the M5 wrong-layout bug
-// class.
+// Whether a value of this type can cross a lowered call boundary. Scalars always can; aggregates
+// only when concrete - a type variable inside one would make `layout_of` guess a size, which is the
+// M5 wrong-layout bug class.
 //
 fn ty_lowerable(it: &TypeInterner, ty: Ty, is_foreign: bool, reg: &NominalRegistry) bool {
-    if is_scalar_ty(it, ty) { return true }
-    if !is_aggregate(it, ty) { return false }
-    // The pointer-niche `Option(&T)` IS a FIR scalar (`ptr`) - and the
-    // nullable-pointer C idiom, so foreign signatures may spell it
-    // (`#foreign fn malloc(size: usize) &u8?`).
-    if ty_is_niche_option(it, ty, reg) { return true }
-    if !ty_concrete(it, ty) { return false }
-    // A foreign boundary passes aggregates BY VALUE (`IrType.Agg`), and the
-    // backend spells them as plain bytes - which the platform ABI
-    // classifies like the companion C definition only when every leaf is
-    // integer-class.
-    if is_foreign { return agg_abi_safe(it, ty, reg) }
+    if is_scalar_ty(it, ty) {
+        return true
+    }
+    if !is_aggregate(it, ty) {
+        return false
+    }
+    // The pointer-niche `Option(&T)` IS a FIR scalar (`ptr`) - and the nullable-pointer C idiom, so
+    // foreign signatures may spell it (`#foreign fn malloc(size: usize) &u8?`).
+    if ty_is_niche_option(it, ty, reg) {
+        return true
+    }
+    if !ty_concrete(it, ty) {
+        return false
+    }
+    // A foreign boundary passes aggregates BY VALUE (`IrType.Agg`), and the backend spells them as
+    // plain bytes - which the platform ABI classifies like the companion C definition only when
+    // every leaf is integer-class.
+    if is_foreign {
+        return agg_abi_safe(it, ty, reg)
+    }
     return true
 }
 
-// Whether a by-value aggregate is one the backend can write a faithful C
-// definition for. `lower.f::register_agg` emits real member types - a `f32`
-// member becomes `float` - so the platform ABI classifies our declaration
-// the same way it classifies the companion C's. That is what makes floats
-// admissible: on x86-64 SysV a float member puts its eightbyte in class
-// SSE, and emitting it as bytes would have claimed GP registers instead.
+// Whether a by-value aggregate is one the backend can write a faithful C definition for.
+// `lower.f::register_agg` emits real member types - a `f32` member becomes `float` - so the
+// platform ABI classifies our declaration the same way it classifies the companion C's. That is
+// what makes floats admissible: on x86-64 SysV a float member puts its eightbyte in class SSE, and
+// emitting it as bytes would have claimed GP registers instead.
 //
-// It must stay in step with `register_agg`, which mirrors these cases to
-// build the member list. Only NAMED structs qualify: a C struct needs a
-// name, and an enum's payload union has no faithful flat member list.
+// It must stay in step with `register_agg`, which mirrors these cases to build the member list.
+// Only NAMED structs qualify: a C struct needs a name, and an enum's payload union has no faithful
+// flat member list.
 pub fn agg_abi_safe(it: &TypeInterner, ty: Ty, reg: &NominalRegistry) bool {
     let sd = it.node(ty) match {
         NNominal(nn) => reg.get(nn.id).* match {
-            NomStruct(d) => d,
-            _ => return false,
-        },
-        _ => return false,
+            NomStruct(d) => d
+            _ => return false
+        }
+        _ => return false
     }
-    if !fields_abi_safe(it, &sd.fields, reg) { return false }
+    if !fields_abi_safe(it, &sd.fields, reg) {
+        return false
+    }
     return c_layout_agrees(it, ty, &sd, reg)
 }
 
-// Whether laying the members out the way C will - declaration order, each
-// at its own alignment, the first carrying the struct's `_Alignas` -
-// reproduces the FLang layout exactly.
+// Whether laying the members out the way C will - declaration order, each at its own alignment, the
+// first carrying the struct's `_Alignas` - reproduces the FLang layout exactly.
 //
-// It often does not. Only a `#foreign struct` is laid out `Repr.C`; every
-// other struct is `Repr.Auto`, which orders fields by DESCENDING ALIGNMENT
-// (layout.f), so `struct { tag: i32, val: f64 }` puts `val` at offset 0 and
-// its bytes match no C declaration of the same members. Padding stays
-// implicit deliberately: an explicit filler member would change the ABI
-// classification (a `char` in an eightbyte forces it to class INTEGER), so
-// a layout needing one is a layout this backend cannot spell.
+// It often does not. Only a `#foreign struct` is laid out `Repr.C`; every other struct is
+// `Repr.Auto`, which orders fields by DESCENDING ALIGNMENT (layout.f), so `struct { tag: i32, val:
+// f64 }` puts `val` at offset 0 and its bytes match no C declaration of the same members. Padding
+// stays implicit deliberately: an explicit filler member would change the ABI classification (a
+// `char` in an eightbyte forces it to class INTEGER), so a layout needing one is a layout this
+// backend cannot spell.
 fn c_layout_agrees(it: &TypeInterner, ty: Ty, sd: &StructDef, reg: &NominalRegistry) bool {
     let span = it.node(ty) match {
-        NNominal(nn) => nn.args,
-        _ => return false,
+        NNominal(nn) => nn.args
+        _ => return false
     }
     let args: List(Ty) = list(span.len)
     defer args.deinit()
@@ -296,7 +304,9 @@ fn c_layout_agrees(it: &TypeInterner, ty: Ty, sd: &StructDef, reg: &NominalRegis
             const ft = field_ty(it, sd, i, &args)
             const fl = layout_of(it, ft, reg)
             let al = fl.align
-            if i == 0 and whole.align > al { al = whole.align }
+            if i == 0 and whole.align > al {
+                al = whole.align
+            }
             off = align_to(off, al)
             if off != sl.offsets[i] {
                 ok = false
@@ -304,86 +314,100 @@ fn c_layout_agrees(it: &TypeInterner, ty: Ty, sd: &StructDef, reg: &NominalRegis
             }
             off = off + fl.size
         }
-        if ok and align_to(off, whole.align) != whole.size { ok = false }
+        if ok and align_to(off, whole.align) != whole.size {
+            ok = false
+        }
     }
     sl.offsets.deinit()
     return ok
 }
 
 fn align_to(off: usize, align: usize) usize {
-    if align <= 1 { return off }
+    if align <= 1 {
+        return off
+    }
     return ((off + align - 1) / align) * align
 }
 
-// A member's type. Scalars and references are spellable directly, an array
-// keeps its element type, and a nested named struct recurses.
+// A member's type. Scalars and references are spellable directly, an array keeps its element type,
+// and a nested named struct recurses.
 fn member_spellable(it: &TypeInterner, ty: Ty, reg: &NominalRegistry) bool {
     return it.node(ty) match {
-        NArray(a) => member_spellable(it, a.elem, reg),
-        NNominal(_) => agg_abi_safe(it, ty, reg),
-        NPrim(_) => true,
-        NRef(_) => true,
-        _ => false,
+        NArray(a) => member_spellable(it, a.elem, reg)
+        NNominal(_) => agg_abi_safe(it, ty, reg)
+        NPrim(_) => true
+        NRef(_) => true
+        _ => false
     }
 }
 
 fn fields_abi_safe(it: &TypeInterner, fields: &List(Field), reg: &NominalRegistry) bool {
     for i in 0..fields.len {
-        if !member_spellable(it, fields[i].ty, reg) { return false }
+        if !member_spellable(it, fields[i].ty, reg) {
+            return false
+        }
     }
     return true
 }
 
-// Structural, layout-free (a generic scheme's args may still carry Vars,
-// and `enum_layout` hard-fails on those by design): `Option(&T)` exactly,
-// mirroring layout.f's `is_option_niche`.
+// Structural, layout-free (a generic scheme's args may still carry Vars, and `enum_layout`
+// hard-fails on those by design): `Option(&T)` exactly, mirroring layout.f's `is_option_niche`.
 fn ty_is_niche_option(it: &TypeInterner, ty: Ty, reg: &NominalRegistry) bool {
     let nn = it.node(ty) match {
-        NNominal(n) => n,
-        _ => return false,
+        NNominal(n) => n
+        _ => return false
     }
     let ed = reg.get(nn.id).* match {
-        NomEnum(e) => Some(e),
-        _ => null,
+        NomEnum(e) => Some(e)
+        _ => null
     }
-    if ed.is_none() { return false }
-    if ed.unwrap().fqn != FQN_OPTION { return false }
-    if nn.args.len != 1 { return false }
+    if ed.is_none() {
+        return false
+    }
+    if ed.unwrap().fqn != FQN_OPTION {
+        return false
+    }
+    if nn.args.len != 1 {
+        return false
+    }
     return it.node(it.child_at(nn.args, 0)) match {
-        NRef(_) => true,
-        _ => false,
+        NRef(_) => true
+        _ => false
     }
 }
 
 fn is_scalar_ty(it: &TypeInterner, ty: Ty) bool {
     return it.node(ty) match {
-        NPrim(_) => true,
-        NRef(_) => true,
-        NFunc(_) => true,
-        _ => false,
+        NPrim(_) => true
+        NRef(_) => true
+        NFunc(_) => true
+        _ => false
     }
 }
 
-// No unresolved type variable reachable by value. Recursion stops at
-// `Ref` and `Func` (pointers are opaque - `&List($T)` is 8 bytes whatever
-// `T` is), mirroring `layout_rec`. Public: the const-global pre-pass in
-// lower.f gates layout on it (M11 globals).
+// No unresolved type variable reachable by value. Recursion stops at `Ref` and `Func` (pointers are
+// opaque - `&List($T)` is 8 bytes whatever `T` is), mirroring `layout_rec`. Public: the
+// const-global pre-pass in lower.f gates layout on it (M11 globals).
 pub fn ty_concrete(it: &TypeInterner, ty: Ty) bool {
-    if it.is_ground(ty) { return ty != TY_ERROR }
+    if it.is_ground(ty) {
+        return ty != TY_ERROR
+    }
     return it.node(ty) match {
-        NVar(_) => false,
-        NError => false,
-        NArray(a) => ty_concrete(it, a.elem),
-        NTuple(span) => span_concrete(it, span),
-        NRecord(rec) => span_concrete(it, rec.tys),
-        NNominal(nn) => span_concrete(it, nn.args),
-        _ => true,
+        NVar(_) => false
+        NError => false
+        NArray(a) => ty_concrete(it, a.elem)
+        NTuple(span) => span_concrete(it, span)
+        NRecord(rec) => span_concrete(it, rec.tys)
+        NNominal(nn) => span_concrete(it, nn.args)
+        _ => true
     }
 }
 
 fn span_concrete(it: &TypeInterner, span: ChildSpan) bool {
     for i in 0..span.len {
-        if !ty_concrete(it, it.child_at(span, i)) { return false }
+        if !ty_concrete(it, it.child_at(span, i)) {
+            return false
+        }
     }
     return true
 }
@@ -392,17 +416,21 @@ fn span_concrete(it: &TypeInterner, span: ChildSpan) bool {
 pub fn add_module(self: &SymbolBuilder, ast_module: &Module, fqn: String) {
     for &d in ast_module.decls {
         d.* match {
-            Function(fd) => add_function_symbol(self, &fd, fqn),
-            _ => {},
+            Function(fd) => add_function_symbol(self, &fd, fqn)
+            _ => {}
         }
     }
 }
 
 fn add_function_symbol(self: &SymbolBuilder, decl: &FunctionDecl, fqn: String) {
     let fid = self.by_decl.get(node_id_of(decl.span))
-    if fid.is_none() { return }
+    if fid.is_none() {
+        return
+    }
     let sig = self.by_fn_sig.get(fid.unwrap())
-    if sig.is_none() { return }
+    if sig.is_none() {
+        return
+    }
     let s = sig.unwrap()
     let sym = mangle_symbol(self.interner, fqn, decl.name, is_foreign_directive(&decl.directives),
         &s.params, self.nominals, self.allocator)
@@ -422,15 +450,14 @@ pub fn finish(self: &SymbolBuilder) SymbolTable {
 
 // Symbol mangling (docs/spec.md 7.1.1, docs/adr/0004)
 //
-// A symbol is a `_`-joined sequence of escaped segments: the module path,
-// the function name, then one token per parameter type. Parameter types are
-// what separate overloads, so no counter is involved and a symbol is a pure
-// function of the declaration - inserting a function cannot rename another.
+// A symbol is a `_`-joined sequence of escaped segments: the module path, the function name, then
+// one token per parameter type. Parameter types are what separate overloads, so no counter is
+// involved and a symbol is a pure function of the declaration - inserting a function cannot rename
+// another.
 //
-// Escaping: a literal `_` in a source identifier is written `_0`, so a lone
-// `_` never occurs inside a segment and the `__` from joining is
-// unambiguously a separator. Without this, module `a.b` fn `c` and module
-// `a` fn `b__c` both produced `a__b__c`.
+// Escaping: a literal `_` in a source identifier is written `_0`, so a lone `_` never occurs inside
+// a segment and the `__` from joining is unambiguously a separator. Without this, module `a.b` fn
+// `c` and module `a` fn `b__c` both produced `a__b__c`.
 
 // Append `s` with source underscores escaped as `_0`.
 fn append_escaped(sb: &StringBuilder, s: String) {
@@ -443,18 +470,15 @@ fn append_escaped(sb: &StringBuilder, s: String) {
     }
 }
 
-// Append a module path: `.` becomes the segment separator, and source
-// underscores inside each segment are escaped, in one pass. Public: the
-// const-global mangle in lower.f reuses it (M11 globals).
-// A module path as a C identifier fragment. The encoding is INJECTIVE, so
-// distinct paths never collide: `.` -> `__`, `_` -> `_0`, and any byte
-// outside `[A-Za-z0-9]` -> `_x<hex>`. Because a literal `_` always becomes
-// `_0`, the sequences `__` and `_x` can only come from an escape.
+// Append a module path: `.` becomes the segment separator, and source underscores inside each
+// segment are escaped, in one pass. Public: the const-global mangle in lower.f reuses it (M11
+// globals). A module path as a C identifier fragment. The encoding is INJECTIVE, so distinct paths
+// never collide: `.` -> `__`, `_` -> `_0`, and any byte outside `[A-Za-z0-9]` -> `_x<hex>`. Because
+// a literal `_` always becomes `_0`, the sequences `__` and `_x` can only come from an escape.
 //
-// The catch-all matters: a module path is derived from the project name and
-// file path, neither of which is a FLang identifier. `name = "chess-fen"`
-// used to emit `chess-fen_main_...`, which C parses as a subtraction (see
-// docs/spec.md 7.1.1, property 4).
+// The catch-all matters: a module path is derived from the project name and file path, neither of
+// which is a FLang identifier. `name = "chess-fen"` used to emit `chess-fen_main_...`, which C
+// parses as a subtraction (see docs/spec.md 7.1.1, property 4).
 pub fn append_module_path(sb: &StringBuilder, fqn: String) {
     for i in 0..fqn.len {
         if fqn[i] == '.' {
@@ -474,90 +498,95 @@ pub fn append_module_path(sb: &StringBuilder, fqn: String) {
     }
 }
 
-// `[A-Za-z0-9]` - the bytes a C identifier admits, minus `_`, which every
-// caller escapes separately so the escape prefix stays unambiguous.
+// `[A-Za-z0-9]` - the bytes a C identifier admits, minus `_`, which every caller escapes separately
+// so the escape prefix stays unambiguous.
 pub fn is_c_ident_byte(b: u8) bool {
-    if b >= 'a' and b <= 'z' { return true }
-    if b >= 'A' and b <= 'Z' { return true }
-    if b >= '0' and b <= '9' { return true }
+    if b >= 'a' and b <= 'z' {
+        return true
+    }
+    if b >= 'A' and b <= 'Z' {
+        return true
+    }
+    if b >= '0' and b <= '9' {
+        return true
+    }
     return false
 }
 
 pub fn append_hex_byte(sb: &StringBuilder, b: u8) {
     const digits = "0123456789abcdef"
-    sb.append(digits[((b >> 4) & 0x0F) as usize .. (((b >> 4) & 0x0F) as usize + 1)])
-    sb.append(digits[(b & 0x0F) as usize .. ((b & 0x0F) as usize + 1)])
+    sb.append(digits[((b >> 4) & 0x0F) as usize..(((b >> 4) & 0x0F) as usize + 1)])
+    sb.append(digits[(b & 0x0F) as usize..((b & 0x0F) as usize + 1)])
 }
 
-// One token per parameter type. Distinct types must produce distinct
-// tokens; unresolved and inference types collapse to `t` because they
-// cannot appear in a lowered signature (the callable gate rejects them).
+// One token per parameter type. Distinct types must produce distinct tokens; unresolved and
+// inference types collapse to `t` because they cannot appear in a lowered signature (the callable
+// gate rejects them).
 fn append_type_token(it: &TypeInterner, sb: &StringBuilder, ty: Ty, reg: &NominalRegistry) {
     it.node(ty) match {
-        NPrim(p) => sb.append(prim_token(p)),
+        NPrim(p) => sb.append(prim_token(p))
         NRef(inner) => {
             sb.append("ref_")
             append_type_token(it, sb, inner, reg)
-        },
+        }
         NArray(arr) => {
             sb.append("arr")
             sb.append(arr.length as u64)
             sb.append("_")
             append_type_token(it, sb, arr.elem, reg)
-        },
+        }
         NTuple(span) => {
             sb.append("tup")
             for i in 0..span.len {
                 sb.append("_")
                 append_type_token(it, sb, it.child_at(span, i), reg)
             }
-        },
+        }
         NNominal(nn) => {
-            // The name is an FQN, so it carries dots - route it through the
-            // same escaping as a module path or the token is not a valid C
-            // identifier.
+            // The name is an FQN, so it carries dots - route it through the same escaping as a
+            // module path or the token is not a valid C identifier.
             append_module_path(sb, nominal_name(reg, nn.id))
             for i in 0..nn.args.len {
                 sb.append("_")
                 append_type_token(it, sb, it.child_at(nn.args, i), reg)
             }
-        },
-        NVoid => sb.append("void"),
-        NNever => sb.append("never"),
-        _ => sb.append("t"),
+        }
+        NVoid => sb.append("void")
+        NNever => sb.append("never")
+        _ => sb.append("t")
     }
 }
 
-// The declaring FQN, so two same-named types from different modules do
-// not produce the same token.
+// The declaring FQN, so two same-named types from different modules do not produce the same token.
 fn nominal_name(reg: &NominalRegistry, id: NominalId) String {
     return reg.get(id).* match {
-        NomStruct(s) => s.fqn,
-        NomEnum(e) => e.fqn,
+        NomStruct(s) => s.fqn
+        NomEnum(e) => e.fqn
     }
 }
 
 fn prim_token(p: PrimitiveKind) String {
     return p match {
-        Bool => "bool",
-        I8 => "i8",
-        U8 => "u8",
-        I16 => "i16",
-        U16 => "u16",
-        I32 => "i32",
-        U32 => "u32",
-        Char => "char",
-        I64 => "i64",
-        U64 => "u64",
-        ISize => "isize",
-        USize => "usize",
-        F32 => "f32",
-        F64 => "f64",
+        Bool => "bool"
+        I8 => "i8"
+        U8 => "u8"
+        I16 => "i16"
+        U16 => "u16"
+        I32 => "i32"
+        U32 => "u32"
+        Char => "char"
+        I64 => "i64"
+        U64 => "u64"
+        ISize => "isize"
+        USize => "usize"
+        F32 => "f32"
+        F64 => "f64"
     }
 }
 
 // Shared mangling core: `module__name__param__param` into `sb`.
-fn append_mangled(it: &TypeInterner, sb: &StringBuilder, fqn: String, name: String, params: &List(Ty), reg: &NominalRegistry) {
+fn append_mangled(it: &TypeInterner, sb: &StringBuilder, fqn: String, name: String,
+    params: &List(Ty), reg: &NominalRegistry) {
     if fqn.len > 0 {
         append_module_path(sb, fqn)
         sb.append("__")
@@ -569,12 +598,14 @@ fn append_mangled(it: &TypeInterner, sb: &StringBuilder, fqn: String, name: Stri
     }
 }
 
-// The C symbol a function lowers to. The entry point and foreign functions
-// keep their declared names - both name symbols fixed outside the compiler
-// (the backend's entry wiring, and the C linker). Everything else is
-// qualified by module path and separated by parameter types.
-fn mangle_symbol(it: &TypeInterner, fqn: String, name: String, is_foreign: bool, params: &List(Ty), reg: &NominalRegistry, allocator: &Allocator? = null) OwnedString {
-    if is_foreign or name == "main" { return from_view(name, allocator) }
+// The C symbol a function lowers to. The entry point and foreign functions keep their declared
+// names - both name symbols fixed outside the compiler (the backend's entry wiring, and the C
+// linker). Everything else is qualified by module path and separated by parameter types.
+fn mangle_symbol(it: &TypeInterner, fqn: String, name: String, is_foreign: bool, params: &List(Ty),
+    reg: &NominalRegistry, allocator: &Allocator? = null) OwnedString {
+    if is_foreign or name == "main" {
+        return from_view(name, allocator)
+    }
 
     let sb = string_builder(fqn.len + name.len + 16, allocator)
     defer sb.deinit()
@@ -582,12 +613,12 @@ fn mangle_symbol(it: &TypeInterner, fqn: String, name: String, is_foreign: bool,
     return sb.to_string()
 }
 
-// A specialization's C symbol: the ordinary mangle plus a `__ret_` token.
-// The return participates in the specialization key, so it has to
-// participate in the symbol too - a return-only-polymorphic template's
-// instantiations differ in nothing else - and the suffix keeps every
-// specialization distinct from same-parameter monomorphic overloads.
-fn mangle_spec_symbol(it: &TypeInterner, fqn: String, name: String, sig: &FnSig, reg: &NominalRegistry, allocator: &Allocator? = null) OwnedString {
+// A specialization's C symbol: the ordinary mangle plus a `__ret_` token. The return participates
+// in the specialization key, so it has to participate in the symbol too - a return-only-polymorphic
+// template's instantiations differ in nothing else - and the suffix keeps every specialization
+// distinct from same-parameter monomorphic overloads.
+fn mangle_spec_symbol(it: &TypeInterner, fqn: String, name: String, sig: &FnSig,
+    reg: &NominalRegistry, allocator: &Allocator? = null) OwnedString {
     let sb = string_builder(fqn.len + name.len + 24, allocator)
     defer sb.deinit()
     append_mangled(it, &sb, fqn, name, &sig.params, reg)
@@ -612,8 +643,8 @@ test "mangles symbols by module fqn, keeping main and foreigns bare" {
     let none: List(Ty) = list(0)
     defer none.deinit()
 
-    // Source underscores escape to `_0`, so a lone `_` never appears inside a
-    // segment and `__` is unambiguously the separator.
+    // Source underscores escape to `_0`, so a lone `_` never appears inside a segment and `__` is
+    // unambiguously the separator.
     let it = type_interner()
     defer it.deinit()
     let a = mangle_symbol(&it, "flang_typer.checker", "deinit", false, &none, &reg)
@@ -624,16 +655,17 @@ test "mangles symbols by module fqn, keeping main and foreigns bare" {
     defer c.deinit()
     let d = mangle_symbol(&it, "", "add", false, &none, &reg)
     defer d.deinit()
-    assert_true(a.as_view() == "flang_0typer__checker__deinit", "dotted fqn separates, underscores escape")
+    assert_true(a.as_view() == "flang_0typer__checker__deinit",
+        "dotted fqn separates, underscores escape")
     assert_true(b.as_view() == "printf", "foreign names pass through")
     assert_true(c.as_view() == "main", "main stays bare")
     assert_true(d.as_view() == "add", "no fqn, bare name")
 }
 
 test "escaping keeps a dotted path distinct from an underscored name" {
-    // The previous encoding mapped `.` to `__` and left source underscores
-    // alone, so module `a.b` fn `c` and module `a` fn `b__c` both produced
-    // `a__b__c` - two different functions, one symbol.
+    // The previous encoding mapped `.` to `__` and left source underscores alone, so module `a.b`
+    // fn `c` and module `a` fn `b__c` both produced `a__b__c` - two different functions, one
+    // symbol.
     let reg = nominal_registry()
     defer reg.deinit()
     let none: List(Ty) = list(0)
@@ -651,9 +683,8 @@ test "escaping keeps a dotted path distinct from an underscored name" {
 }
 
 test "overloads separate by parameter type, with no counter" {
-    // Symbols are a pure function of the declaration: same name, different
-    // parameters, different symbol - regardless of declaration order or of
-    // how many overloads the walk has already seen.
+    // Symbols are a pure function of the declaration: same name, different parameters, different
+    // symbol - regardless of declaration order or of how many overloads the walk has already seen.
     let reg = nominal_registry()
     defer reg.deinit()
 
@@ -676,8 +707,8 @@ test "overloads separate by parameter type, with no counter" {
     assert_true(b.as_view() == "m__f__i32__i32", "two i32 parameters")
     assert_true(!(a.as_view() == b.as_view()), "arities separate")
 
-    // Re-mangling the same declaration yields the same symbol - the property
-    // the ordinal scheme could not provide.
+    // Re-mangling the same declaration yields the same symbol - the property the ordinal scheme
+    // could not provide.
     let again = mangle_symbol(&it, "m", "f", false, &one, &reg)
     defer again.deinit()
     assert_true(again.as_view() == a.as_view(), "deterministic across calls")

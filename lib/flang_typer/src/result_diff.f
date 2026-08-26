@@ -1,12 +1,10 @@
 // Gate A - structural comparison of two `TypeCheckResult`s.
 //
-// RFC-022 turns the checker incremental: a module is dirtied and
-// re-demanded instead of the whole program being re-checked. Nothing in
-// the existing gates catches a stale cache entry surviving an
-// invalidation - the 551 harness tests and the stage-2 = stage-3 fixpoint
-// both run cold, so a graph that never reuses an entry passes all of
-// them. Comparing an incremental result against a cold one entry by entry
-// is the incremental analogue of that fixpoint.
+// RFC-022 turns the checker incremental: a module is dirtied and re-demanded instead of the whole
+// program being re-checked. Nothing in the existing gates catches a stale cache entry surviving an
+// invalidation - the 551 harness tests and the stage-2 = stage-3 fixpoint both run cold, so a graph
+// that never reuses an entry passes all of them. Comparing an incremental result against a cold one
+// entry by entry is the incremental analogue of that fixpoint.
 //
 // Two rules shape what "identical" means here:
 //
@@ -19,16 +17,14 @@
 //     against `Ty.Nominal(8)` is a difference even when both name the
 //     same declaration.
 //
-// A dict pair needs only one-directional containment plus equal sizes:
-// if every key of A is in B with an equal value and |A| = |B|, the two
-// are the same map.
+// A dict pair needs only one-directional containment plus equal sizes: if every key of A is in B
+// with an equal value and |A| = |B|, the two are the same map.
 //
-// Both sides render their types through B's table. The type table is one
-// per project: a re-demand adopts the previous result's table and appends
-// to it, which leaves the earlier snapshot's own `interner` field a
-// stand-in while its handles stay valid in the table B now holds. Two
-// independently-checked results also compare correctly this way only for
-// the fixed leaf ids; the gate never compares two of those.
+// Both sides render their types through B's table. The type table is one per project: a re-demand
+// adopts the previous result's table and appends to it, which leaves the earlier snapshot's own
+// `interner` field a stand-in while its handles stay valid in the table B now holds. Two
+// independently-checked results also compare correctly this way only for the fixed leaf ids; the
+// gate never compares two of those.
 
 import std.allocator
 import std.dict
@@ -48,14 +44,12 @@ import flang_typer.function_registry
 import flang_typer.specialization
 import flang_typer.result
 
-// How many differences a report spells out before it starts counting
-// only. A stale entry usually breaks thousands of nodes at once; the
-// first handful say where, the total says how bad.
+// How many differences a report spells out before it starts counting only. A stale entry usually
+// breaks thousands of nodes at once; the first handful say where, the total says how bad.
 const MAX_MESSAGES: usize = 20
 
-// The outcome of one comparison. `messages` holds the first
-// `MAX_MESSAGES` differences in the order they were found; `total` counts
-// every one, so a truncated report still says how much it hid.
+// The outcome of one comparison. `messages` holds the first `MAX_MESSAGES` differences in the order
+// they were found; `total` counts every one, so a truncated report still says how much it hid.
 pub type ResultDiff = struct {
     messages: List(OwnedString)
     total: usize
@@ -73,13 +67,13 @@ pub fn is_empty(self: &ResultDiff) bool {
     return self.total == 0
 }
 
-// Compare every table whose entries other modules' results cite: the two
-// registries whose ids are baked into `Ty` and `ResolvedTarget`, the three
-// node-keyed tables lowering reads, and the RTTI list lowering indexes
-// positionally.
+// Compare every table whose entries other modules' results cite: the two registries whose ids are
+// baked into `Ty` and `ResolvedTarget`, the three node-keyed tables lowering reads, and the RTTI
+// list lowering indexes positionally.
 //
 // The remaining tables are compared by size only - see `diff_sizes`.
-pub fn diff_results(a: &TypeCheckResult, b: &TypeCheckResult, allocator: &Allocator? = null) ResultDiff {
+pub fn diff_results(a: &TypeCheckResult, b: &TypeCheckResult,
+    allocator: &Allocator? = null) ResultDiff {
     let messages: List(OwnedString) = list(0, allocator)
     let d = ResultDiff { messages = messages, total = 0 }
     diff_nominals(&d, a, b, allocator)
@@ -95,8 +89,8 @@ pub fn diff_results(a: &TypeCheckResult, b: &TypeCheckResult, allocator: &Alloca
     return d
 }
 
-// Record one difference. Past the cap the message is dropped rather than
-// stored - the count is what still has to be right.
+// Record one difference. Past the cap the message is dropped rather than stored - the count is what
+// still has to be right.
 fn note(d: &ResultDiff, msg: OwnedString) {
     d.total = d.total + 1
     if d.messages.len < MAX_MESSAGES {
@@ -125,7 +119,9 @@ fn diff_nominals(d: &ResultDiff, a: &TypeCheckResult, b: &TypeCheckResult, alloc
         let id = i as NominalId
         let left = a.nominals.find(id)
         let right = b.nominals.find(id)
-        if left.is_none() and right.is_none() { continue }
+        if left.is_none() and right.is_none() {
+            continue
+        }
         if left.is_none() {
             note(d, $"nominals[{id}]: a hole on the left, present on the right")
             continue
@@ -144,9 +140,8 @@ fn diff_nominals(d: &ResultDiff, a: &TypeCheckResult, b: &TypeCheckResult, alloc
     }
 }
 
-// The function registry: overload lists compare positionally per name -
-// resolution order is part of the value - and each scheme's id, flags
-// and rendered signature must match.
+// The function registry: overload lists compare positionally per name - resolution order is part of
+// the value - and each scheme's id, flags and rendered signature must match.
 fn diff_functions(d: &ResultDiff, a: &TypeCheckResult, b: &TypeCheckResult, alloc: &Allocator?) {
     if a.functions.next_id != b.functions.next_id {
         note(d, $"functions: next_id {a.functions.next_id} vs {b.functions.next_id}")
@@ -183,7 +178,8 @@ fn diff_functions(d: &ResultDiff, a: &TypeCheckResult, b: &TypeCheckResult, allo
     }
 }
 
-fn diff_specializations(d: &ResultDiff, a: &TypeCheckResult, b: &TypeCheckResult, alloc: &Allocator?) {
+fn diff_specializations(d: &ResultDiff, a: &TypeCheckResult, b: &TypeCheckResult,
+    alloc: &Allocator?) {
     let an = a.specializations.next_id
     let bn = b.specializations.next_id
     if an != bn {
@@ -198,7 +194,9 @@ fn diff_specializations(d: &ResultDiff, a: &TypeCheckResult, b: &TypeCheckResult
         let id = i as u32
         let left = a.specializations.find(id)
         let right = b.specializations.find(id)
-        if left.is_none() and right.is_none() { continue }
+        if left.is_none() and right.is_none() {
+            continue
+        }
         if left.is_none() {
             note(d, $"specializations[{id}]: a hole on the left, present on the right")
             continue
@@ -234,8 +232,8 @@ fn diff_node_types(d: &ResultDiff, a: &TypeCheckResult, b: &TypeCheckResult, all
             note(d, $"node_types[{key}]: missing on the right")
             continue
         }
-        // Both sides render through B's table (see the module header), so
-        // ids stay free to differ while the types they name must not.
+        // Both sides render through B's table (see the module header), so ids stay free to differ
+        // while the types they name must not.
         const lk = b.interner.key_of(e.value)
         const rk = b.interner.key_of(other.unwrap())
         if lk != rk {
@@ -300,8 +298,7 @@ fn diff_ops(d: &ResultDiff, a: &TypeCheckResult, b: &TypeCheckResult, alloc: &Al
     }
 }
 
-// The RTTI table. Lowering indexes it positionally, so order is part of
-// the value.
+// The RTTI table. Lowering indexes it positionally, so order is part of the value.
 fn diff_instantiated(d: &ResultDiff, a: &TypeCheckResult, b: &TypeCheckResult, alloc: &Allocator?) {
     const al = a.instantiated_types.len
     const bl = b.instantiated_types.len
@@ -324,9 +321,8 @@ fn diff_instantiated(d: &ResultDiff, a: &TypeCheckResult, b: &TypeCheckResult, a
     }
 }
 
-// The inverse of the node-id fingerprint. Two entries sharing a key must
-// name the same span; one that does not is a node whose source moved while
-// its id did not.
+// The inverse of the node-id fingerprint. Two entries sharing a key must name the same span; one
+// that does not is a node whose source moved while its id did not.
 fn diff_spans(d: &ResultDiff, a: &TypeCheckResult, b: &TypeCheckResult, alloc: &Allocator?) {
     let al = a.spans.len()
     let bl = b.spans.len()
@@ -343,7 +339,8 @@ fn diff_spans(d: &ResultDiff, a: &TypeCheckResult, b: &TypeCheckResult, alloc: &
         const l = e.value
         const r = other.unwrap()
         if l.file_id != r.file_id or l.start != r.start or l.length != r.length {
-            note(d, $"spans[{key}]: {l.file_id}:{l.start}+{l.length} vs {r.file_id}:{r.start}+{r.length}")
+            note(d,
+                $"spans[{key}]: {l.file_id}:{l.start}+{l.length} vs {r.file_id}:{r.start}+{r.length}")
         }
     }
 }
@@ -365,13 +362,11 @@ fn diff_paths(d: &ResultDiff, a: &TypeCheckResult, b: &TypeCheckResult, alloc: &
     }
 }
 
-// Tables this gate does not render entry by entry: the lambda and closure
-// records, the interpolation desugars, and the three per-call-site
-// argument tables. Their values are AST pointers or nested lists, and a
-// renderer for each is work that belongs with the phase that makes one of
-// them incremental. A size mismatch is still a hard failure - it catches
-// an entry that leaked or vanished across an invalidation, just not one
-// whose contents went stale in place.
+// Tables this gate does not render entry by entry: the lambda and closure records, the
+// interpolation desugars, and the three per-call-site argument tables. Their values are AST
+// pointers or nested lists, and a renderer for each is work that belongs with the phase that makes
+// one of them incremental. A size mismatch is still a hard failure - it catches an entry that
+// leaked or vanished across an invalidation, just not one whose contents went stale in place.
 fn diff_sizes(d: &ResultDiff, a: &TypeCheckResult, b: &TypeCheckResult, alloc: &Allocator?) {
     size_note(d, "lambdas", a.lambdas.len(), b.lambdas.len())
     size_note(d, "closures", a.closures.len(), b.closures.len())
@@ -382,15 +377,17 @@ fn diff_sizes(d: &ResultDiff, a: &TypeCheckResult, b: &TypeCheckResult, alloc: &
 }
 
 fn size_note(d: &ResultDiff, name: String, al: usize, bl: usize) {
-    if al == bl { return }
+    if al == bl {
+        return
+    }
     note(d, $"{name}: {al} entries vs {bl}")
 }
 
 // ─────────────────────────────────────────────────────────────────────
 // Renderings
 //
-// Every field a consumer can observe goes into the text; anything left
-// out is a difference this gate cannot see.
+// Every field a consumer can observe goes into the text; anything left out is a difference this
+// gate cannot see.
 // ─────────────────────────────────────────────────────────────────────
 
 fn append_nominal(sb: &StringBuilder, def: &NominalDef, it: &TypeInterner) {
@@ -410,13 +407,15 @@ fn append_nominal(sb: &StringBuilder, def: &NominalDef, it: &TypeInterner) {
             sb.append(s.is_foreign)
             sb.append(" {")
             for i in 0..s.fields.len {
-                if i > 0 { sb.append(",") }
+                if i > 0 {
+                    sb.append(",")
+                }
                 sb.append(s.fields[i].name)
                 sb.append(":")
                 it.format(s.fields[i].ty, sb)
             }
             sb.append("}")
-        },
+        }
         NomEnum(e) => {
             sb.append("enum ")
             sb.append(e.fqn)
@@ -428,18 +427,22 @@ fn append_nominal(sb: &StringBuilder, def: &NominalDef, it: &TypeInterner) {
             sb.append(e.is_pub)
             sb.append(" {")
             for i in 0..e.variants.len {
-                if i > 0 { sb.append(",") }
+                if i > 0 {
+                    sb.append(",")
+                }
                 sb.append(e.variants[i].name)
                 sb.append("(")
                 let payloads = &e.variants[i].payloads
                 for k in 0..payloads.len {
-                    if k > 0 { sb.append(",") }
+                    if k > 0 {
+                        sb.append(",")
+                    }
                     it.format(payloads[k], sb)
                 }
                 sb.append(")")
             }
             sb.append("}")
-        },
+        }
     }
 }
 
@@ -450,8 +453,8 @@ fn append_scheme(sb: &StringBuilder, f: &FunctionScheme, it: &TypeInterner) {
     sb.append(f.name)
     sb.append("@")
     f.module match {
-        Some(m) => sb.append(m),
-        None => sb.append("-"),
+        Some(m) => sb.append(m)
+        None => sb.append("-")
     }
     sb.append(" pub=")
     sb.append(f.is_pub)
@@ -477,7 +480,9 @@ fn append_spec(sb: &StringBuilder, sp: &Specialization, it: &TypeInterner) {
     sb.append(sp.key.as_view())
     sb.append(" (")
     for i in 0..sp.concrete_params.len {
-        if i > 0 { sb.append(",") }
+        if i > 0 {
+            sb.append(",")
+        }
         it.format(sp.concrete_params[i], sb)
     }
     sb.append(")->")
@@ -488,22 +493,34 @@ fn append_spec(sb: &StringBuilder, sp: &Specialization, it: &TypeInterner) {
 
 fn append_target(sb: &StringBuilder, t: &ResolvedTarget) {
     t.* match {
-        RtFunction(id) => { sb.append("fn#"); sb.append(id) },
-        RtLocal(n) => { sb.append("local#"); sb.append(n) },
+        RtFunction(id) => {
+            sb.append("fn#")
+            sb.append(id)
+        }
+        RtLocal(n) => {
+            sb.append("local#")
+            sb.append(n)
+        }
         RtStructField(nid, idx) => {
             sb.append("field#")
             sb.append(nid)
             sb.append(".")
             sb.append(idx)
-        },
+        }
         RtEnumVariant(nid, idx) => {
             sb.append("variant#")
             sb.append(nid)
             sb.append(".")
             sb.append(idx)
-        },
-        RtSpecialized(id) => { sb.append("spec#"); sb.append(id) },
-        RtConst(name) => { sb.append("const:"); sb.append(name) },
+        }
+        RtSpecialized(id) => {
+            sb.append("spec#")
+            sb.append(id)
+        }
+        RtConst(name) => {
+            sb.append("const:")
+            sb.append(name)
+        }
     }
 }
 
@@ -516,24 +533,24 @@ fn append_op(sb: &StringBuilder, o: &ResolvedOperator) {
     sb.append(o.is_ref_form)
     sb.append(" cmp=")
     o.cmp_derived_op match {
-        Some(dv) => sb.append(derived_name(dv)),
-        None => sb.append("-"),
+        Some(dv) => sb.append(derived_name(dv))
+        None => sb.append("-")
     }
     sb.append(" spec=")
     o.spec_id match {
-        Some(s) => sb.append(s),
-        None => sb.append("-"),
+        Some(s) => sb.append(s)
+        None => sb.append("-")
     }
 }
 
 fn derived_name(d: BinaryOpDerived) String {
     return d match {
-        BodEq => "eq",
-        BodNe => "ne",
-        BodLt => "lt",
-        BodLe => "le",
-        BodGt => "gt",
-        BodGe => "ge",
+        BodEq => "eq"
+        BodNe => "ne"
+        BodLt => "lt"
+        BodLe => "le"
+        BodGt => "gt"
+        BodGe => "ge"
     }
 }
 

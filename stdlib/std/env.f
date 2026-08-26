@@ -1,7 +1,7 @@
 // std.env - runtime access to command-line arguments and environment variables.
 //
-// Arguments are views into the process's argv strings (no allocation).
-// Environment variable lookups return views into the C runtime's storage.
+// Arguments are views into the process's argv strings (no allocation). Environment variable lookups
+// return views into the C runtime's storage.
 
 import std.list
 import std.option
@@ -18,43 +18,42 @@ pub fn args_count() usize {
     return __flang_get_argc() as usize
 }
 
-// Returns the command-line argument at the given index, or null if out of bounds.
-// Index 0 is the program name.
+// Returns the command-line argument at the given index, or null if out of bounds. Index 0 is the
+// program name.
 pub fn arg(index: usize) String? {
     const p = __flang_get_arg(index as i32)?
     const len = strlen(p)
     return Some(slice_from_raw_parts(p, len) as String)
 }
 
-// Returns all command-line arguments as a List(String).
-// Caller must call deinit() when done.
+// Returns all command-line arguments as a List(String). Caller must call deinit() when done.
 pub fn get_args() List(String) {
     const count = args_count()
     let result: List(String) = list(count)
     for i in 0..count {
         arg(i) match {
-            Some(a) => result.push(a),
+            Some(a) => result.push(a)
             None => {}
         }
     }
     return result
 }
 
-// Returns the value of the environment variable with the given key,
-// or null if the variable is not set.
+// Returns the value of the environment variable with the given key, or null if the variable is not
+// set.
 //
-// `key` is any String, not necessarily null-terminated: a slice into a
-// larger buffer (a source file, a parsed line) would make `getenv` read
-// past its end, so the key is copied into a terminated buffer first.
-// String LITERALS are terminated already, but the contract cannot depend
+// `key` is any String, not necessarily null-terminated: a slice into a larger buffer (a source
+// file, a parsed line) would make `getenv` read past its end, so the key is copied into a
+// terminated buffer first. String LITERALS are terminated already, but the contract cannot depend
 // on where the caller's view came from.
 pub fn env(key: String) String? {
-    // The key is copied into a NUL-terminated stack buffer: `key` may be
-    // any String view - a slice into a source file, a parsed line - and
-    // `getenv` would read past its end. 255 bytes covers every real
-    // variable name; a longer key is simply reported unset.
+    // The key is copied into a NUL-terminated stack buffer: `key` may be any String view - a slice
+    // into a source file, a parsed line - and `getenv` would read past its end. 255 bytes covers
+    // every real variable name; a longer key is simply reported unset.
     let buf = [0u8; 256]
-    if key.len >= 256 { return null }
+    if key.len >= 256 {
+        return null
+    }
     for i in 0..key.len {
         buf[i] = key[i]
     }
@@ -99,8 +98,8 @@ pub fn getopts(format: String, args: String[]) GetOpt {
     return getopts(format, args, 0)
 }
 
-// Start parsing from `start_index` instead of 0. Use this to skip the
-// program name when passing a full `argv` (start_index = 1).
+// Start parsing from `start_index` instead of 0. Use this to skip the program name when passing a
+// full `argv` (start_index = 1).
 pub fn getopts(format: String, args: String[], start_index: usize) GetOpt {
     let result: GetOpt
     result.format = format
@@ -121,7 +120,9 @@ fn lookup_short(format: String, ch: u8) u8 {
             while i < format.len and format[i] != ')' {
                 i = i + 1
             }
-            if i < format.len { i = i + 1 }
+            if i < format.len {
+                i = i + 1
+            }
             continue
         }
         if c == ':' {
@@ -136,10 +137,14 @@ fn lookup_short(format: String, ch: u8) u8 {
                 while j < format.len and format[j] != ')' {
                     j = j + 1
                 }
-                if j >= format.len { return 1 }
+                if j >= format.len {
+                    return 1
+                }
                 j = j + 1
             }
-            if j < format.len and format[j] == ':' { return 2 }
+            if j < format.len and format[j] == ':' {
+                return 2
+            }
             return 1
         }
         i = i + 1
@@ -159,10 +164,14 @@ fn lookup_long(format: String, name: String) u8 {
             while i < format.len and format[i] != ')' {
                 i = i + 1
             }
-            if i >= format.len { return 0 }
+            if i >= format.len {
+                return 0
+            }
             const long = slice_from_raw_parts(format.ptr + start, i - start) as String
             i = i + 1
-            if long == name { return last_opt }
+            if long == name {
+                return last_opt
+            }
             continue
         }
         if c == ':' {
@@ -204,7 +213,9 @@ pub fn next(self: &GetOpt) OptResult? {
                     return Some(OptResult.OptArg(ch, val))
                 }
                 // Next arg is the value
-                if self.index >= self.args.len { return Some(OptResult.MissingArg(ch)) }
+                if self.index >= self.args.len {
+                    return Some(OptResult.MissingArg(ch))
+                }
                 const val = self.args[self.index]
                 self.index = self.index + 1
                 return Some(OptResult.OptArg(ch, val))
@@ -244,7 +255,9 @@ pub fn next(self: &GetOpt) OptResult? {
                     const val = a[eq_pos + 1..]
                     return Some(OptResult.OptArg(ch, val))
                 }
-                if self.index >= self.args.len { return Some(OptResult.MissingArg(ch)) }
+                if self.index >= self.args.len {
+                    return Some(OptResult.MissingArg(ch))
+                }
                 const val = self.args[self.index]
                 self.index = self.index + 1
                 return Some(OptResult.OptArg(ch, val))
@@ -265,8 +278,8 @@ pub fn next(self: &GetOpt) OptResult? {
     return null
 }
 
-// After parsing, returns the index of the first non-option argument
-// remaining (useful when done processing flags).
+// After parsing, returns the index of the first non-option argument remaining (useful when done
+// processing flags).
 pub fn rest_index(self: &GetOpt) usize {
     return self.index
 }

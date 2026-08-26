@@ -1,6 +1,6 @@
-// frontend - bootstrap's terminal-side helpers: read a source file and
-// render diagnostics over `flang_core.Diagnostic`. The analysis pipeline
-// itself is `flang_driver`; this is just the CLI's I/O and rendering edge.
+// frontend - bootstrap's terminal-side helpers: read a source file and render diagnostics over
+// `flang_core.Diagnostic`. The analysis pipeline itself is `flang_driver`; this is just the CLI's
+// I/O and rendering edge.
 
 import std.io.file
 import std.list
@@ -25,10 +25,10 @@ pub fn render_diagnostics(diags: &List(Diagnostic), path: String, source: String
     }
 }
 
-// Render diagnostics across a multi-module project, selecting each one's
-// source and path by its span's file id. Spanless diagnostics fall back to
-// the first source.
-pub fn render_project_diagnostics(diags: &List(Diagnostic), paths: &List(OwnedString), sources: &List(OwnedString)) {
+// Render diagnostics across a multi-module project, selecting each one's source and path by its
+// span's file id. Spanless diagnostics fall back to the first source.
+pub fn render_project_diagnostics(diags: &List(Diagnostic), paths: &List(OwnedString),
+    sources: &List(OwnedString)) {
     for &d in diags {
         let fid = d.span.file_id
         if fid >= 0i32 and (fid as usize) < sources.len {
@@ -54,10 +54,10 @@ pub fn print_diagnostic(path: String, source: String, d: &Diagnostic) {
 
 fn severity_label(s: Severity) String {
     return s match {
-        Severity.Error => "error",
-        Severity.Warning => "warning",
-        Severity.Info => "info",
-        Severity.Hint => "hint",
+        Severity.Error => "error"
+        Severity.Warning => "warning"
+        Severity.Info => "info"
+        Severity.Hint => "hint"
     }
 }
 
@@ -66,9 +66,16 @@ fn line_col(source: String, offset: usize) (usize, usize) {
     let line = 1
     let col = 1
     for i in 0..offset {
-        if i >= source.len { break }
-        if source[i] == '\n' { line = line + 1; col = 1 }
-        else { col = col + 1 }
+        if i >= source.len {
+            break
+        }
+        if source[i] == '\n' {
+            line = line + 1
+            col = 1
+        }
+        else {
+            col = col + 1
+        }
     }
     return (line, col)
 }

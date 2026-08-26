@@ -1,7 +1,7 @@
 // Core math functions and integer type limits.
 //
-// Provides generic arithmetic utilities (abs, min, max, clamp, pow, gcd, lcm)
-// and compile-time constants for the min/max values of all integer types.
+// Provides generic arithmetic utilities (abs, min, max, clamp, pow, gcd, lcm) and compile-time
+// constants for the min/max values of all integer types.
 
 // =============================================================================
 // Unsigned Integer Limits
@@ -124,8 +124,8 @@ pub fn log2(x: $T) u32 {
 // Number Theory
 // =============================================================================
 
-// Returns the greatest common divisor of a and b using the Euclidean algorithm.
-// Works with signed types by taking absolute values first.
+// Returns the greatest common divisor of a and b using the Euclidean algorithm. Works with signed
+// types by taking absolute values first.
 pub fn gcd(a: $T, b: T) T {
     let x = abs(a)
     let y = abs(b)

@@ -8,12 +8,12 @@ import std.option
 // =============================================================================
 // Iterator combinators.
 //
-// Anything with a `next(&Self) T?` (and an `iter(&Self) Self` so `for` can
-// consume it) is an iterator. Adapters below wrap an iterator and are
-// themselves iterators, so they chain: `xs.iter().filter(f).map(g).to_list()`.
+// Anything with a `next(&Self) T?` (and an `iter(&Self) Self` so `for` can consume it) is an
+// iterator. Adapters below wrap an iterator and are themselves iterators, so they chain:
+// `xs.iter().filter(f).map(g).to_list()`.
 //
-// Callables are duck-typed `$F` parameters (RFC-014): bare functions,
-// non-capturing lambdas, and capturing closures all work, and lambda
+// Callables are duck-typed `$F` parameters (RFC-014): bare functions, non-capturing lambdas, and
+// capturing closures all work, and lambda
 // parameter/return annotations are optional — types flow from the element
 // type at instantiation.
 // =============================================================================
@@ -34,9 +34,13 @@ pub fn iter(self: &FilterIter($I, $F)) FilterIter(I, F) {
 pub fn next(self: &FilterIter($I, $F)) $T? {
     loop {
         let v = self.it.next()
-        if v.is_none() { return null }
+        if v.is_none() {
+            return null
+        }
         let x = v.unwrap()
-        if self.f(x) { return Some(x) }
+        if self.f(x) {
+            return Some(x)
+        }
     }
 }
 
@@ -59,7 +63,9 @@ pub fn iter(self: &MapIter($I, $F)) MapIter(I, F) {
 
 pub fn next(self: &MapIter($I, $F)) $U? {
     let v = self.it.next()
-    if v.is_none() { return null }
+    if v.is_none() {
+        return null
+    }
     return Some(self.f(v.unwrap()))
 }
 
@@ -82,7 +88,9 @@ pub fn iter(self: &EnumerateIter($I)) EnumerateIter(I) {
 
 pub fn next(self: &EnumerateIter($I)) (usize, $T)? {
     let v = self.it.next()
-    if v.is_none() { return null }
+    if v.is_none() {
+        return null
+    }
     let i = self.idx
     self.idx = i + 1
     return Some((i, v.unwrap()))
@@ -106,7 +114,9 @@ pub fn iter(self: &TakeIter($I)) TakeIter(I) {
 }
 
 pub fn next(self: &TakeIter($I)) $T? {
-    if self.left == 0 { return null }
+    if self.left == 0 {
+        return null
+    }
     self.left = self.left - 1
     return self.it.next()
 }
@@ -156,7 +166,9 @@ pub fn iter(self: &TakeWhileIter($I, $F)) TakeWhileIter(I, F) {
 }
 
 pub fn next(self: &TakeWhileIter($I, $F)) $T? {
-    if self.done { return null }
+    if self.done {
+        return null
+    }
     let v = self.it.next()
     if v.is_none() {
         self.done = true
@@ -191,17 +203,20 @@ pub fn next(self: &SkipWhileIter($I, $F)) $T? {
         self.skipping = false
         loop {
             let v = self.it.next()
-            if v.is_none() { return null }
+            if v.is_none() {
+                return null
+            }
             let x = v.unwrap()
             let skip_it: bool = self.f(x)
-            if !skip_it { return Some(x) }
+            if !skip_it {
+                return Some(x)
+            }
         }
     }
     return self.it.next()
 }
 
-// Drops the leading run `f` accepts; yields everything from the first
-// rejected element on.
+// Drops the leading run `f` accepts; yields everything from the first rejected element on.
 pub fn skip_while(it: $I, f: $F) SkipWhileIter(I, F) {
     return .{ it = it, f = f, skipping = true }
 }
@@ -223,9 +238,13 @@ pub fn iter(self: &ZipIter($I, $J)) ZipIter(I, J) {
 // element of `a` is consumed and lost — don't reuse `a` afterwards.
 pub fn next(self: &ZipIter($I, $J)) ($A, $B)? {
     let a = self.a.next()
-    if a.is_none() { return null }
+    if a.is_none() {
+        return null
+    }
     let b = self.b.next()
-    if b.is_none() { return null }
+    if b.is_none() {
+        return null
+    }
     return Some((a.unwrap(), b.unwrap()))
 }
 
@@ -246,14 +265,16 @@ pub fn iter(self: &ChainIter($I, $J)) ChainIter(I, J) {
 pub fn next(self: &ChainIter($I, $J)) $T? {
     if !self.on_b {
         let v = self.a.next()
-        if v.is_some() { return v }
+        if v.is_some() {
+            return v
+        }
         self.on_b = true
     }
     return self.b.next()
 }
 
-// All of `a`, then all of `b`. The iterator TYPES may differ (chain a
-// FilterIter with a plain ListIterator); only the element type they yield
+// All of `a`, then all of `b`. The iterator TYPES may differ (chain a FilterIter with a plain
+// ListIterator); only the element type they yield
 // must agree — `next` unifies the two.
 pub fn chain(a: $I, b: $J) ChainIter(I, J) {
     return .{ a = a, b = b, on_b = false }
@@ -274,7 +295,9 @@ pub fn next(self: &ZipLongestIter($I, $J, $A, $B)) (A, B)? {
     let a = self.a.next()
     let b = self.b.next()
     if a.is_none() {
-        if b.is_none() { return null }
+        if b.is_none() {
+            return null
+        }
         return Some((self.fill_a, b.unwrap()))
     }
     if b.is_none() {
@@ -283,8 +306,8 @@ pub fn next(self: &ZipLongestIter($I, $J, $A, $B)) (A, B)? {
     return Some((a.unwrap(), b.unwrap()))
 }
 
-// Like `zip`, but runs to the LONGER side, substituting `fill_a` / `fill_b`
-// for the exhausted iterator's elements.
+// Like `zip`, but runs to the LONGER side, substituting `fill_a` / `fill_b` for the exhausted
+// iterator's elements.
 pub fn zip_longest(a: $I, b: $J, fill_a: $A, fill_b: $B) ZipLongestIter(I, J, A, B) {
     return .{ a = a, b = b, fill_a = fill_a, fill_b = fill_b }
 }
@@ -330,26 +353,31 @@ pub fn count(it: $I) usize {
 pub fn count(it: $I, pred: $F) usize {
     let n: usize = 0
     for item in it {
-        if pred(item) { n = n + 1 }
+        if pred(item) {
+            n = n + 1
+        }
     }
     return n
 }
 
-// Whether any element satisfies `pred`. False for an empty iterator.
-// Stops at the first match.
+// Whether any element satisfies `pred`. False for an empty iterator. Stops at the first match.
 pub fn any(it: $I, pred: $F) bool {
     for item in it {
-        if pred(item) { return true }
+        if pred(item) {
+            return true
+        }
     }
     return false
 }
 
-// Whether every element satisfies `pred`. True for an empty iterator.
-// Stops at the first counterexample.
+// Whether every element satisfies `pred`. True for an empty iterator. Stops at the first
+// counterexample.
 pub fn all(it: $I, pred: $F) bool {
     for item in it {
         let ok: bool = pred(item)
-        if !ok { return false }
+        if !ok {
+            return false
+        }
     }
     return true
 }
@@ -357,7 +385,9 @@ pub fn all(it: $I, pred: $F) bool {
 // First element satisfying `pred`, or null.
 pub fn find(it: $I, pred: $F) $T? {
     for item in it {
-        if pred(item) { return Some(item) }
+        if pred(item) {
+            return Some(item)
+        }
     }
     return null
 }
@@ -366,7 +396,9 @@ pub fn find(it: $I, pred: $F) $T? {
 pub fn position(it: $I, pred: $F) usize? {
     let i: usize = 0
     for item in it {
-        if pred(item) { return Some(i) }
+        if pred(item) {
+            return Some(i)
+        }
         i = i + 1
     }
     return null
@@ -375,7 +407,9 @@ pub fn position(it: $I, pred: $F) usize? {
 // Final element, or null when empty.
 pub fn last(it: $I) $T? {
     let result = it.next()
-    if result.is_none() { return null }
+    if result.is_none() {
+        return null
+    }
     let v = result.unwrap()
     for item in it {
         v = item
@@ -383,14 +417,18 @@ pub fn last(it: $I) $T? {
     return Some(v)
 }
 
-// Smallest element by `<`, or null when empty. Requires an ordered element
-// type (primitive or `op_cmp`).
+// Smallest element by `<`, or null when empty. Requires an ordered element type (primitive or
+// `op_cmp`).
 pub fn min(it: $I) $T? {
     let first = it.next()
-    if first.is_none() { return null }
+    if first.is_none() {
+        return null
+    }
     let best = first.unwrap()
     for item in it {
-        if item < best { best = item }
+        if item < best {
+            best = item
+        }
     }
     return Some(best)
 }
@@ -398,19 +436,24 @@ pub fn min(it: $I) $T? {
 // Largest element by `<`, or null when empty.
 pub fn max(it: $I) $T? {
     let first = it.next()
-    if first.is_none() { return null }
+    if first.is_none() {
+        return null
+    }
     let best = first.unwrap()
     for item in it {
-        if best < item { best = item }
+        if best < item {
+            best = item
+        }
     }
     return Some(best)
 }
 
-// Element with the smallest `key(x)`, or null when empty. Ties keep the
-// earliest.
+// Element with the smallest `key(x)`, or null when empty. Ties keep the earliest.
 pub fn min_by(it: $I, key: $F) $T? {
     let first = it.next()
-    if first.is_none() { return null }
+    if first.is_none() {
+        return null
+    }
     let best = first.unwrap()
     let best_key = key(best)
     for item in it {
@@ -423,11 +466,12 @@ pub fn min_by(it: $I, key: $F) $T? {
     return Some(best)
 }
 
-// Element with the largest `key(x)`, or null when empty. Ties keep the
-// earliest.
+// Element with the largest `key(x)`, or null when empty. Ties keep the earliest.
 pub fn max_by(it: $I, key: $F) $T? {
     let first = it.next()
-    if first.is_none() { return null }
+    if first.is_none() {
+        return null
+    }
     let best = first.unwrap()
     let best_key = key(best)
     for item in it {
@@ -449,8 +493,7 @@ pub fn to_list(it: $I, allocator: &Allocator? = null) List($T) {
     return out
 }
 
-// Collect into a fresh Set (duplicates collapse; requires a hashable
-// element type).
+// Collect into a fresh Set (duplicates collapse; requires a hashable element type).
 pub fn to_set(it: $I, allocator: &Allocator? = null) Set($T) {
     let out: Set(T) = set(allocator)
     for item in it {
@@ -459,8 +502,8 @@ pub fn to_set(it: $I, allocator: &Allocator? = null) Set($T) {
     return out
 }
 
-// Collect into a fresh Dict keyed by `key(item)`. A later item with the
-// same key overwrites the earlier one.
+// Collect into a fresh Dict keyed by `key(item)`. A later item with the same key overwrites the
+// earlier one.
 pub fn to_dict(it: $I, key: $F, allocator: &Allocator? = null) Dict($K, $T) {
     let out: Dict(K, T) = dict(allocator)
     for item in it {
@@ -484,8 +527,8 @@ fn list123() List(i32) {
 }
 
 test "filter advances past non-matching elements" {
-    // The non-matching head is the interesting case: `next` must skip
-    // it and keep pulling, not report the iterator empty.
+    // The non-matching head is the interesting case: `next` must skip it and keep pulling, not
+    // report the iterator empty.
     let xs = list123()
     defer xs.deinit()
 
@@ -613,8 +656,8 @@ test "consumers: fold each count any all find position last" {
     assert_eq(xs.iter().fold(0i32, fn(a, x) { a + x }), 6i32, "fold sums")
     assert_eq(xs.iter().reduce(fn(a, x) { a + x }).unwrap(), 6i32, "seeded reduce agrees")
 
-    // Captures are by value and read-only (RFC-014): to mutate outer state
-    // from `each`, capture a reference and write through it.
+    // Captures are by value and read-only (RFC-014): to mutate outer state from `each`, capture a
+    // reference and write through it.
     let sum = 0i32
     let sum_ref = &sum
     xs.iter().each(fn(x) { sum_ref.* = sum_ref.* + x })

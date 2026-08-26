@@ -1,7 +1,7 @@
 // Slice types, operations, and iterator implementation.
 //
-// Slices are fat-pointer views into contiguous memory: `struct { ptr: &T, len: usize }`.
-// They do NOT own the underlying data. Use `T[]` syntax as shorthand for `Slice(T)`.
+// Slices are fat-pointer views into contiguous memory: `struct { ptr: &T, len: usize }`. They do
+// NOT own the underlying data. Use `T[]` syntax as shorthand for `Slice(T)`.
 //
 // Indexing:
 //   s[i]       - returns element at index i, panics if out of bounds
@@ -18,8 +18,7 @@ import core.panic
 import core.range
 import core.rtti
 
-// A view into a contiguous sequence of elements of type T.
-// A Slice does not own ptr.
+// A view into a contiguous sequence of elements of type T. A Slice does not own ptr.
 pub type Slice = struct(T) {
     ptr: &T
     len: usize
@@ -37,7 +36,9 @@ pub fn slice_from_raw_parts(ptr: &$T, len: usize) T[] {
 
 // Returns the element at `idx`, or null if `idx` is out of bounds.
 pub fn get(s: $T[], idx: usize) T? {
-    if idx >= s.len { return null }
+    if idx >= s.len {
+        return null
+    }
     const ptr = s.ptr + idx
     return Some(ptr.*)
 }
@@ -59,9 +60,15 @@ pub fn op_index(s: $T[], range: Range(usize)) T[] {
     let end = range.end
 
     // Clamp to valid bounds, return empty slice for invalid ranges
-    if start > s.len { start = s.len }
-    if end > s.len { end = s.len }
-    if start > end { end = start }
+    if start > s.len {
+        start = s.len
+    }
+    if end > s.len {
+        end = s.len
+    }
+    if start > end {
+        end = start
+    }
 
     return slice_from_raw_parts(s.ptr + start, end - start)
 }
@@ -122,9 +129,8 @@ pub fn count(s: $T[], value: T) usize {
     return n
 }
 
-// Searches a sorted slice for `value` using binary search.
-// Returns the index if found, or null if not present.
-// The slice MUST be sorted in ascending order; results are undefined otherwise.
+// Searches a sorted slice for `value` using binary search. Returns the index if found, or null if
+// not present. The slice MUST be sorted in ascending order; results are undefined otherwise.
 pub fn binary_search(s: $T[], value: T) usize? {
     let lo: usize = 0
     let hi: usize = s.len
@@ -196,8 +202,7 @@ pub fn fill(s: $T[], value: T) {
     }
 }
 
-// Replaces all occurrences of `old` with `new` in-place.
-// Returns the number of replacements made.
+// Replaces all occurrences of `old` with `new` in-place. Returns the number of replacements made.
 pub fn replace(s: $T[], old: T, new: T) usize {
     let n: usize = 0
     for i in 0..s.len {
@@ -224,8 +229,8 @@ pub fn reverse(s: $T[]) {
     }
 }
 
-// `sort` now lives in `std.sort` - see that module for insertion_sort,
-// quicksort, powersort, and the stable default `sort`.
+// `sort` now lives in `std.sort` - see that module for insertion_sort, quicksort, powersort, and
+// the stable default `sort`.
 
 // =============================================================================
 // Copy
@@ -247,15 +252,15 @@ pub fn reinterpret(src: $T[]) $U[] {
     if total_bytes % size_of(U) != 0 {
         panic("Alignment/Size mismatch")
     }
-    return .{ ptr=src.ptr as &U, len=total_bytes / size_of_u }
+    return .{ ptr = src.ptr as &U, len = total_bytes / size_of_u }
 }
 
 // =============================================================================
 // Slice Iterator
 // =============================================================================
 
-// Iterator state for slices. Created by `iter(&slice)`.
-// Stores a copy of the slice and tracks the current position.
+// Iterator state for slices. Created by `iter(&slice)`. Stores a copy of the slice and tracks the
+// current position.
 pub type SliceIterator = struct(T) {
     slice: T[]
     index: usize
@@ -263,19 +268,21 @@ pub type SliceIterator = struct(T) {
 
 // Creates an iterator over the elements of a slice.
 pub fn iter(slice: &$T[]) SliceIterator(T) {
-    return .{ slice = slice.*, index = 0}
+    return .{ slice = slice.*, index = 0 }
 }
 
 // Advances the iterator and returns the next element, or null if exhausted.
 pub fn next(iter: &SliceIterator($T)) T? {
-    if iter.index >= iter.slice.len { return null }
+    if iter.index >= iter.slice.len {
+        return null
+    }
     let val: T = iter.slice[iter.index]
     iter.index = iter.index + 1
     return Some(val)
 }
 
-// Reference iterator: `for x in xs.iter_ref()` yields `&T` into the
-// slice's storage instead of a copy.
+// Reference iterator: `for x in xs.iter_ref()` yields `&T` into the slice's storage instead of a
+// copy.
 pub type SliceRefIterator = struct(T) {
     slice: T[]
     index: usize
@@ -290,7 +297,9 @@ pub fn iter(it: &SliceRefIterator($T)) SliceRefIterator(T) {
 }
 
 pub fn next(iter: &SliceRefIterator($T)) &T? {
-    if iter.index >= iter.slice.len { return null }
+    if iter.index >= iter.slice.len {
+        return null
+    }
     const p: &T = iter.slice.ptr + iter.index
     iter.index = iter.index + 1
     return Some(p)

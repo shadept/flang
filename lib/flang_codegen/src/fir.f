@@ -1,5 +1,4 @@
-// FIR - typed, SSA, block-based IR. See `docs/fir.md` for the design
-// and canonical text format.
+// FIR - typed, SSA, block-based IR. See `docs/fir.md` for the design and canonical text format.
 
 import std.allocator
 import std.list
@@ -10,38 +9,35 @@ import std.string
 // Types
 // ─────────────────────────────────────────────────────────────────────────
 
-// A by-value aggregate crossing a C call boundary. FIR models aggregates
-// as opaque bytes everywhere else - a native call passes their address, and
-// an aggregate return uses an sret slot. That breaks down at a FOREIGN
-// boundary: the platform ABI classifies a struct argument by its own size
-// and alignment, so the declaration has to name a real C type or the call
-// disagrees with the C definition it links against.
+// A by-value aggregate crossing a C call boundary. FIR models aggregates as opaque bytes everywhere
+// else - a native call passes their address, and an aggregate return uses an sret slot. That breaks
+// down at a FOREIGN boundary: the platform ABI classifies a struct argument by its own size and
+// alignment, so the declaration has to name a real C type or the call disagrees with the C
+// definition it links against.
 //
-// `name` is the struct the backend emits; `AggDef` below carries what it
-// contains. `symbol_table.f::agg_abi_safe` is the gate on which aggregates
-// may cross at all.
+// `name` is the struct the backend emits; `AggDef` below carries what it contains.
+// `symbol_table.f::agg_abi_safe` is the gate on which aggregates may cross at all.
 pub type AggType = struct {
-    // Interned view (`lower.f` owns the storage): the emitted C struct
-    // name, the FLang FQN with dots replaced by underscores.
+    // Interned view (`lower.f` owns the storage): the emitted C struct name, the FLang FQN with
+    // dots replaced by underscores.
     name: String
     size: usize
     align: usize
 }
 
-// One member of an emitted aggregate. `ty` may itself be an `Agg`, which
-// names a nested struct - the recursion stops there because `AggType`
-// carries only a name, so `IrType` stays a flat, freely-copyable value.
+// One member of an emitted aggregate. `ty` may itself be an `Agg`, which names a nested struct -
+// the recursion stops there because `AggType` carries only a name, so `IrType` stays a flat,
+// freely-copyable value.
 pub type AggField = struct {
     ty: IrType
     // Array length; 1 for a plain scalar member.
     count: usize
 }
 
-// The definition behind an `AggType`: what the backend writes out. Members
-// are FAITHFUL - a `f32` field is emitted as `float`, not as bytes - because
-// the platform ABI classifies a struct by its member types. On x86-64 SysV a
-// float member puts its eightbyte in class SSE, so a byte-blob stand-in
-// would be passed in the wrong registers.
+// The definition behind an `AggType`: what the backend writes out. Members are FAITHFUL - a `f32`
+// field is emitted as `float`, not as bytes - because the platform ABI classifies a struct by its
+// member types. On x86-64 SysV a float member puts its eightbyte in class SSE, so a byte-blob
+// stand-in would be passed in the wrong registers.
 pub type AggDef = struct {
     name: String
     size: usize
@@ -49,12 +45,11 @@ pub type AggDef = struct {
     fields: List(AggField)
 }
 
-// Seven scalars, plus `Agg` for the one case that needs more. Aggregates
-// (structs, enums, arrays, slices) are otherwise NOT FIR types - they live
-// in memory as opaque byte buffers, addressed via `gep` + `load`/`store`,
-// and the lowering pass resolves their layouts before FIR is emitted.
-// `Agg` is the exception a foreign boundary forces, where the C ABI needs a
-// named type rather than an address - see `AggType` above.
+// Seven scalars, plus `Agg` for the one case that needs more. Aggregates (structs, enums, arrays,
+// slices) are otherwise NOT FIR types - they live in memory as opaque byte buffers, addressed via
+// `gep` + `load`/`store`, and the lowering pass resolves their layouts before FIR is emitted. `Agg`
+// is the exception a foreign boundary forces, where the C ABI needs a named type rather than an
+// address - see `AggType` above.
 pub type IrType = enum {
     I8
     I16
@@ -66,59 +61,57 @@ pub type IrType = enum {
     Agg(AggType)
 }
 
-// Calling convention attached to functions, foreign decls, and indirect
-// call signatures.
+// Calling convention attached to functions, foreign decls, and indirect call signatures.
 pub type CallConv = enum {
     C
 }
 
-// Bytes of storage occupied by a value of this type. `Ptr` assumes a
-// 64-bit target.
+// Bytes of storage occupied by a value of this type. `Ptr` assumes a 64-bit target.
 pub fn byte_size(ty: IrType) usize {
     return ty match {
-        I8 => 1,
-        I16 => 2,
-        I32 => 4,
-        I64 => 8,
-        F32 => 4,
-        F64 => 8,
-        Ptr => 8,
-        Agg(a) => a.size,
+        I8 => 1
+        I16 => 2
+        I32 => 4
+        I64 => 8
+        F32 => 4
+        F64 => 8
+        Ptr => 8
+        Agg(a) => a.size
     }
 }
 
-// Natural alignment of a value of this type. Equal to `byte_size` for the
-// primitives FIR supports; an aggregate carries its own.
+// Natural alignment of a value of this type. Equal to `byte_size` for the primitives FIR supports;
+// an aggregate carries its own.
 pub fn byte_align(ty: IrType) usize {
     return ty match {
-        Agg(a) => a.align,
-        _ => ty.byte_size(),
+        Agg(a) => a.align
+        _ => ty.byte_size()
     }
 }
 
 // Lower-case mnemonic used by the text format (`i8`, `i16`, ..., `ptr`).
 pub fn name(ty: IrType) String {
     return ty match {
-        I8 => "i8",
-        I16 => "i16",
-        I32 => "i32",
-        I64 => "i64",
-        F32 => "f32",
-        F64 => "f64",
-        Ptr => "ptr",
-        Agg(a) => a.name,
+        I8 => "i8"
+        I16 => "i16"
+        I32 => "i32"
+        I64 => "i64"
+        F32 => "f32"
+        F64 => "f64"
+        Ptr => "ptr"
+        Agg(a) => a.name
     }
 }
 
-// Structural equality. Compared by text form, which is unique per type:
-// scalars have fixed mnemonics and an aggregate carries its mangled FQN.
+// Structural equality. Compared by text form, which is unique per type: scalars have fixed
+// mnemonics and an aggregate carries its mangled FQN.
 pub fn op_eq(a: IrType, b: IrType) bool {
     return a.name() == b.name()
 }
 
 pub fn name(cc: CallConv) String {
     return cc match {
-        C => "C",
+        C => "C"
     }
 }
 
@@ -126,12 +119,11 @@ pub fn name(cc: CallConv) String {
 // Values and operands
 // ─────────────────────────────────────────────────────────────────────────
 
-// SSA value identifier. Unique within a function; block parameters and
-// instruction results share the namespace. Allocated from
-// `Function.next_value_id`.
+// SSA value identifier. Unique within a function; block parameters and instruction results share
+// the namespace. Allocated from `Function.next_value_id`.
 
-// An operand: SSA reference or untyped constant. The consuming
-// instruction's slot determines the type for constants.
+// An operand: SSA reference or untyped constant. The consuming instruction's slot determines the
+// type for constants.
 pub type Operand = enum {
     Local(u32)
     IntConst(i64)
@@ -145,8 +137,7 @@ pub type Operand = enum {
 // Instructions
 // ─────────────────────────────────────────────────────────────────────────
 
-// Non-terminator instructions. Result types are explicit on every
-// value-producing variant.
+// Non-terminator instructions. Result types are explicit on every value-producing variant.
 pub type Instr = enum {
     Binary(BinaryInstr)
     Unary(UnaryInstr)
@@ -204,8 +195,7 @@ pub type UnaryOp = enum {
     FNeg
 }
 
-// Comparison. Result is i8 (0 or 1). Float compares are ordered:
-// any NaN operand yields false.
+// Comparison. Result is i8 (0 or 1). Float compares are ordered: any NaN operand yields false.
 pub type CompareInstr = struct {
     result: u32
     op: CompareOp
@@ -233,8 +223,8 @@ pub type CompareOp = enum {
     FcmpGe
 }
 
-// Numeric conversion between `source_ty` and `result_ty`. `Bitcast`
-// requires both to have the same byte size.
+// Numeric conversion between `source_ty` and `result_ty`. `Bitcast` requires both to have the same
+// byte size.
 pub type ConvertInstr = struct {
     result: u32
     op: ConvertOp
@@ -258,8 +248,8 @@ pub type ConvertOp = enum {
     IntToPtr
 }
 
-// Stack allocation. Result points at the start of the slot; the slot
-// lives until the function returns.
+// Stack allocation. Result points at the start of the slot; the slot lives until the function
+// returns.
 pub type StackSlotInstr = struct {
     result: u32
     size: u64
@@ -304,9 +294,8 @@ pub type MemsetInstr = struct {
     size: Operand
 }
 
-// Direct call. `result`/`result_ty` are null for void calls. When
-// `variadic_arg_types` is non-empty, the last `variadic_arg_types.len`
-// entries of `args` are the variadic portion.
+// Direct call. `result`/`result_ty` are null for void calls. When `variadic_arg_types` is
+// non-empty, the last `variadic_arg_types.len` entries of `args` are the variadic portion.
 pub type CallInstr = struct {
     result: u32?
     result_ty: IrType?
@@ -315,8 +304,8 @@ pub type CallInstr = struct {
     variadic_arg_types: List(IrType)
 }
 
-// Indirect call through a `ptr` value. The signature is inlined since
-// FIR doesn't carry function-pointer types.
+// Indirect call through a `ptr` value. The signature is inlined since FIR doesn't carry
+// function-pointer types.
 pub type CallIndirectInstr = struct {
     result: u32?
     result_ty: IrType?
@@ -331,8 +320,7 @@ pub type CallIndirectInstr = struct {
 // Terminators
 // ─────────────────────────────────────────────────────────────────────────
 
-// Branch target. `args` count and types must match the target block's
-// `params`.
+// Branch target. `args` count and types must match the target block's `params`.
 pub type BlockTarget = struct {
     label: String
     args: List(Operand)
@@ -362,8 +350,8 @@ pub type BlockParam = struct {
     ty: IrType
 }
 
-// Basic block. The first block of a function is the entry block; its
-// `params` are the function's parameters.
+// Basic block. The first block of a function is the entry block; its `params` are the function's
+// parameters.
 pub type Block = struct {
     label: String
     params: List(BlockParam)
@@ -371,18 +359,17 @@ pub type Block = struct {
     terminator: Terminator
 }
 
-// Replace a block's instruction list wholesale (scoped mutability keeps
-// the field module-private). Used by the const-init wiring in lower.f,
-// which prepends calls to `main`'s entry block after it is built.
+// Replace a block's instruction list wholesale (scoped mutability keeps the field module-private).
+// Used by the const-init wiring in lower.f, which prepends calls to `main`'s entry block after it
+// is built.
 pub fn set_instrs(self: &Block, instrs: List(Instr)) {
     self.instrs = instrs
 }
 
-// FIR function. `params` carries the SSA-named function parameters;
-// they're in scope across every block via dominance. `return_ty = null`
-// is void return. `variadic = true` is reserved for foreign decls; the
-// validator rejects it on defined functions. `next_value_id` is the
-// monotonic counter builders consume for fresh SSA ids.
+// FIR function. `params` carries the SSA-named function parameters; they're in scope across every
+// block via dominance. `return_ty = null` is void return. `variadic = true` is reserved for foreign
+// decls; the validator rejects it on defined functions. `next_value_id` is the monotonic counter
+// builders consume for fresh SSA ids.
 pub type Function = struct {
     name: String
     params: List(BlockParam)
@@ -391,8 +378,8 @@ pub type Function = struct {
     variadic: bool
     cc: CallConv
     next_value_id: u32
-    // Owned backing buffers for builder-minted block labels; every
-    // `Block.label` and branch target is a view into one of these.
+    // Owned backing buffers for builder-minted block labels; every `Block.label` and branch target
+    // is a view into one of these.
     label_storage: List(OwnedString)
 }
 
@@ -400,8 +387,7 @@ pub type Function = struct {
 // IrModule-level declarations
 // ─────────────────────────────────────────────────────────────────────────
 
-// Named static buffer in the data segment. `init_bytes = null` is BSS
-// (zero-filled).
+// Named static buffer in the data segment. `init_bytes = null` is BSS (zero-filled).
 pub type Global = struct {
     name: String
     size: u64
@@ -409,8 +395,7 @@ pub type Global = struct {
     init_bytes: u8[]?
 }
 
-// External symbol declaration. Typically C stdlib or a sibling `.c`
-// file.
+// External symbol declaration. Typically C stdlib or a sibling `.c` file.
 pub type ForeignDecl = struct {
     name: String
     return_ty: IrType?
@@ -424,23 +409,21 @@ pub type IrModule = struct {
     globals: List(Global)
     foreigns: List(ForeignDecl)
     functions: List(Function)
-    // TEMPORARY SCAFFOLD - symbols the front end declined to emit because
-    // their bodies used a construct it cannot yet represent. Recorded rather
-    // than dropped silently: a program missing a function fails loudly at
-    // link time, whereas one built from placeholder values does not fail at
-    // all. Exists only while lowering covers a subset of the language;
-    // remove together with `lower.f::unlowerable` once lowering is total.
+    // TEMPORARY SCAFFOLD - symbols the front end declined to emit because their bodies used a
+    // construct it cannot yet represent. Recorded rather than dropped silently: a program missing a
+    // function fails loudly at link time, whereas one built from placeholder values does not fail
+    // at all. Exists only while lowering covers a subset of the language; remove together with
+    // `lower.f::unlowerable` once lowering is total.
     //
     // ponytail: milestone-period crutch; delete once lowering is total.
     skipped: List(String)
-    // Human-readable reason per skip, in push order ("body refused" vs
-    // "calls undefined `x`"). Same lifetime and removal condition as
-    // `skipped`; the verbose CLI build prints it as the frontier report.
+    // Human-readable reason per skip, in push order ("body refused" vs "calls undefined `x`"). Same
+    // lifetime and removal condition as `skipped`; the verbose CLI build prints it as the frontier
+    // report.
     skip_notes: List(OwnedString)
-    // Distinct by-value aggregate types any foreign declaration mentions.
-    // The backend emits one C struct definition per entry, before the
-    // externs that name them. Nested aggregates are registered before the
-    // structs that contain them, so emitting in order is already valid C.
+    // Distinct by-value aggregate types any foreign declaration mentions. The backend emits one C
+    // struct definition per entry, before the externs that name them. Nested aggregates are
+    // registered before the structs that contain them, so emitting in order is already valid C.
     aggs: List(AggDef)
 }
 
@@ -487,21 +470,27 @@ pub fn deinit(self: &Block) {
 
 pub fn deinit(self: &Instr) {
     self.* match {
-        Call(c) => { c.args.deinit(); c.variadic_arg_types.deinit() },
+        Call(c) => {
+            c.args.deinit()
+            c.variadic_arg_types.deinit()
+        }
         CallIndirect(c) => {
             c.args.deinit()
             c.param_types.deinit()
             c.variadic_arg_types.deinit()
-        },
-        _ => {},
+        }
+        _ => {}
     }
 }
 
 pub fn deinit(self: &Terminator) {
     self.* match {
-        Br(t) => t.args.deinit(),
-        BrIf(b) => { b.then_target.args.deinit(); b.else_target.args.deinit() },
-        _ => {},
+        Br(t) => t.args.deinit()
+        BrIf(b) => {
+            b.then_target.args.deinit()
+            b.else_target.args.deinit()
+        }
+        _ => {}
     }
 }
 
@@ -517,17 +506,16 @@ pub fn deinit(self: &Global) {
 // Mutators
 // ─────────────────────────────────────────────────────────────────────────
 
-// Hand this instance's buffers to a copy the caller took: the list
-// fields are re-pointed at fresh zero-cap lists, so a later `deinit`
-// here frees nothing.
+// Hand this instance's buffers to a copy the caller took: the list fields are re-pointed at fresh
+// zero-cap lists, so a later `deinit` here frees nothing.
 pub fn release_buffers(self: &Function, allocator: &Allocator?) {
     self.params = list(0, allocator)
     self.blocks = list(0, allocator)
     self.label_storage = list(0, allocator)
 }
 
-// Take ownership of a minted label buffer; returns the stable view the
-// caller stores in blocks and branch targets.
+// Take ownership of a minted label buffer; returns the stable view the caller stores in blocks and
+// branch targets.
 pub fn add_label(self: &Function, owned: OwnedString) String {
     let view = owned.as_view()
     self.label_storage.push(owned)
@@ -541,30 +529,27 @@ pub fn fresh_value_id(self: &Function) u32 {
     return id
 }
 
-// Replace the block's terminator. Overwrites whatever was there -
-// callers building a block from scratch start with `Unreachable` and
-// call this once, so the discarded value owns no heap. Pair with
-// `replace_terminator` (below) when the previous terminator may own
-// `BlockTarget` args that need freeing.
+// Replace the block's terminator. Overwrites whatever was there - callers building a block from
+// scratch start with `Unreachable` and call this once, so the discarded value owns no heap. Pair
+// with `replace_terminator` (below) when the previous terminator may own `BlockTarget` args that
+// need freeing.
 pub fn set_terminator(self: &Block, t: Terminator) {
     self.terminator = t
 }
 
-// Replace the block's instruction list, returning the prior list so
-// the caller can free its embedded storage. Used by IR transforms
-// (e.g. the shim inliner) that rebuild blocks instruction-by-
-// instruction; using direct field assignment is blocked by scoped
-// mutability outside this module.
+// Replace the block's instruction list, returning the prior list so the caller can free its
+// embedded storage. Used by IR transforms (e.g. the shim inliner) that rebuild blocks
+// instruction-by- instruction; using direct field assignment is blocked by scoped mutability
+// outside this module.
 pub fn replace_instrs(self: &Block, instrs: List(Instr)) List(Instr) {
     let old = self.instrs
     self.instrs = instrs
     return old
 }
 
-// Replace the block's terminator, returning the previous one. Mirrors
-// `replace_instrs`: lets external transforms swap terminators while
-// keeping ownership of the discarded value so they can deinit its
-// `BlockTarget` args.
+// Replace the block's terminator, returning the previous one. Mirrors `replace_instrs`: lets
+// external transforms swap terminators while keeping ownership of the discarded value so they can
+// deinit its `BlockTarget` args.
 pub fn replace_terminator(self: &Block, t: Terminator) Terminator {
     let old = self.terminator
     self.terminator = t
@@ -593,7 +578,9 @@ pub fn add_foreign(self: &IrModule, f: ForeignDecl) {
 // Record an aggregate definition the backend must emit, once per name.
 pub fn add_agg(self: &IrModule, a: AggDef) {
     for i in 0..self.aggs.len {
-        if self.aggs[i].name == a.name { return }
+        if self.aggs[i].name == a.name {
+            return
+        }
     }
     self.aggs.push(a)
 }

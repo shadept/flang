@@ -6,10 +6,9 @@
 //   std.io.file  an open File  open/read/write/close, remove_file
 //   std.io.dir   an open Dir   entries, create_dir, remove_dir
 //
-// All three sit on std.io.internal.fs, which owns every syscall. This module
-// reports `FsError` because its operations are kind-agnostic: `exists` and
-// `rename` do not care whether the target is a file or a directory, so a
-// narrower error type would have to lie about one of them.
+// All three sit on std.io.internal.fs, which owns every syscall. This module reports `FsError`
+// because its operations are kind-agnostic: `exists` and `rename` do not care whether the target is
+// a file or a directory, so a narrower error type would have to lie about one of them.
 //
 // Paths are ordinary String views - nothing here requires NUL termination.
 
@@ -26,16 +25,16 @@ import std.test
 import std.io.internal.fs
 import std.io.types
 
-// FileKind, FileInfo and FsError come from std.io.types, which sits below
-// every io module. Import it directly if you need qualified access such as
-// `FileKind.Dir`; matching on the variant needs no import.
+// FileKind, FileInfo and FsError come from std.io.types, which sits below every io module. Import
+// it directly if you need qualified access such as `FileKind.Dir`; matching on the variant needs no
+// import.
 
 // =============================================================================
 // Stat + convenience queries
 // =============================================================================
 
-// Fetches metadata for `path`. Follows symlinks - the reported kind is the
-// target's kind, not the link's.
+// Fetches metadata for `path`. Follows symlinks - the reported kind is the target's kind, not the
+// link's.
 pub fn stat(path: String) Result(FileInfo, FsError) {
     return raw_stat(path)
 }
@@ -49,8 +48,8 @@ pub fn exists(path: String) bool {
 pub fn is_dir(path: String) bool {
     const r = raw_stat(path)
     return r match {
-        Ok(info) => is_kind_dir(info.kind),
-        Err(_) => false,
+        Ok(info) => is_kind_dir(info.kind)
+        Err(_) => false
     }
 }
 
@@ -59,17 +58,16 @@ pub fn is_file(path: String) bool {
     const r = raw_stat(path)
     return r match {
         Ok(info) => info.kind match {
-            File => true,
-            _ => false,
-        },
-        Err(_) => false,
+            File => true
+            _ => false
+        }
+        Err(_) => false
     }
 }
 
-// Moves `from` to `to`, replacing `to` if it exists - on every platform.
-// Both paths must be on the same filesystem; crossing devices is an OS-level
-// error here, not a silent copy. Works on files and directories alike, which
-// is why this is an fs operation rather than a file or dir one.
+// Moves `from` to `to`, replacing `to` if it exists - on every platform. Both paths must be on the
+// same filesystem; crossing devices is an OS-level error here, not a silent copy. Works on files
+// and directories alike, which is why this is an fs operation rather than a file or dir one.
 pub fn rename(from: String, to: String) Result((), FsError) {
     return raw_rename(from, to)
 }
@@ -78,9 +76,9 @@ pub fn rename(from: String, to: String) Result((), FsError) {
 // Process-relative paths
 // =============================================================================
 //
-// These live here rather than in std.path because they read the world through
-// something other than their arguments. std.path stays pure string algebra so
-// it can be used - and tested - without a filesystem.
+// These live here rather than in std.path because they read the world through something other than
+// their arguments. std.path stays pure string algebra so it can be used - and tested - without a
+// filesystem.
 
 // The current working directory of the process.
 pub fn cwd(allocator: &Allocator? = null) Result(Path, FsError) {
@@ -89,18 +87,17 @@ pub fn cwd(allocator: &Allocator? = null) Result(Path, FsError) {
     return Ok(path(s.as_view(), allocator))
 }
 
-// The directory for temporary files: $TMPDIR (falling back to /tmp) on POSIX,
-// GetTempPath on Windows. Never has a trailing separator, so callers can
-// always join with one.
+// The directory for temporary files: $TMPDIR (falling back to /tmp) on POSIX, GetTempPath on
+// Windows. Never has a trailing separator, so callers can always join with one.
 pub fn temp_dir(allocator: &Allocator? = null) Result(Path, FsError) {
     const s = raw_temp_dir(allocator)?
     defer s.deinit()
     return Ok(path(s.as_view(), allocator))
 }
 
-// An absolute, lexically-normalized form of `p`, joined against cwd() when
-// relative. Does NOT resolve symlinks and does not require the path to exist -
-// use `canonicalize` when you need either.
+// An absolute, lexically-normalized form of `p`, joined against cwd() when relative. Does NOT
+// resolve symlinks and does not require the path to exist - use `canonicalize` when you need
+// either.
 pub fn to_absolute(p: &Path, allocator: &Allocator? = null) Result(Path, FsError) {
     if p.is_absolute() {
         return Ok(p.normalize())
@@ -113,8 +110,8 @@ pub fn to_absolute(p: &Path, allocator: &Allocator? = null) Result(Path, FsError
     return Ok(joined.normalize())
 }
 
-// Resolves symlinks and `..` against the real filesystem. The target must
-// exist; NotFound if it does not.
+// Resolves symlinks and `..` against the real filesystem. The target must exist; NotFound if it
+// does not.
 pub fn canonicalize(p: &Path, allocator: &Allocator? = null) Result(Path, FsError) {
     const s = raw_realpath(p.as_view(), allocator)?
     defer s.deinit()
@@ -125,12 +122,12 @@ pub fn canonicalize(p: &Path, allocator: &Allocator? = null) Result(Path, FsErro
 // Recursive walk - WalkIter
 // =============================================================================
 //
-// DFS walk, built on top of RawDir. Yields each entry (including dirs) in
-// pre-order. `path` is a String view into the iterator's path builder and is
-// invalidated on the next `next()` call, just like a directory entry's name.
+// DFS walk, built on top of RawDir. Yields each entry (including dirs) in pre-order. `path` is a
+// String view into the iterator's path builder and is invalidated on the next `next()` call, just
+// like a directory entry's name.
 //
-// Symlinks are NOT followed (to avoid infinite loops on cyclic trees). They
-// are yielded as Symlink entries with no descent.
+// Symlinks are NOT followed (to avoid infinite loops on cyclic trees). They are yielded as Symlink
+// entries with no descent.
 //
 //     let w = walk_dir("src").unwrap()
 //     defer w.deinit()
@@ -147,7 +144,7 @@ pub type WalkEntry = struct {
 
 type WalkFrame = struct {
     dir: RawDir
-    path_len_before: usize   // length of path_buf before this frame's segment
+    path_len_before: usize // length of path_buf before this frame's segment
 }
 
 pub type WalkIter = struct {
@@ -190,7 +187,9 @@ pub fn iter(self: &WalkIter) &WalkIter {
 }
 
 pub fn next(self: &WalkIter) WalkEntry? {
-    if self.done { return null }
+    if self.done {
+        return null
+    }
 
     loop {
         if self.stack.is_empty() {
@@ -282,7 +281,7 @@ pub fn deinit(self: &WalkIter) {
 
 pub type GlobIter = struct {
     walk: WalkIter
-    pattern: StringBuilder   // owns pattern bytes; view into this for matching
+    pattern: StringBuilder // owns pattern bytes; view into this for matching
     done: bool
 }
 
@@ -295,8 +294,8 @@ pub fn glob(pattern: String, allocator: &Allocator? = null) Result(GlobIter, FsE
         root_str = pattern[..prefix_end]
     }
 
-    // Wrap pat_buf in Owned so cleanup-on-error / transfer-on-success is
-    // symmetric with the `?` exit below.
+    // Wrap pat_buf in Owned so cleanup-on-error / transfer-on-success is symmetric with the `?`
+    // exit below.
     let pat_buf = owned(string_builder(pattern.len + 1, allocator))
     defer pat_buf.deinit()
     pat_buf.append(pattern)
@@ -315,7 +314,9 @@ pub fn iter(self: &GlobIter) &GlobIter {
 }
 
 pub fn next(self: &GlobIter) String? {
-    if self.done { return null }
+    if self.done {
+        return null
+    }
     const pat_full = self.pattern.as_view()
     loop {
         const opt = self.walk.next()
@@ -340,10 +341,9 @@ pub fn deinit(self: &GlobIter) {
     self.pattern.deinit()
 }
 
-// Returns the index of the first glob metacharacter, backed up to the last
-// preceding '/'. Used to split a pattern into a literal walk root and a
-// glob-matched tail. Returns the full pattern length when there are no
-// metacharacters.
+// Returns the index of the first glob metacharacter, backed up to the last preceding '/'. Used to
+// split a pattern into a literal walk root and a glob-matched tail. Returns the full pattern length
+// when there are no metacharacters.
 fn find_glob_prefix_end(pattern: String) usize {
     let first_meta: usize = pattern.len
     for i in 0..pattern.len {
@@ -366,9 +366,8 @@ fn find_glob_prefix_end(pattern: String) usize {
     return end
 }
 
-// Matches `path` against `pattern` with glob semantics. Both arguments are
-// treated as '/'-separated. `**` crosses segment boundaries; `*` and `?` do
-// not.
+// Matches `path` against `pattern` with glob semantics. Both arguments are treated as
+// '/'-separated. `**` crosses segment boundaries; `*` and `?` do not.
 pub fn match_glob(pattern: String, path: String) bool {
     return match_rec(pattern, 0, path, 0)
 }
@@ -389,15 +388,25 @@ fn match_rec(pattern: String, p: usize, path: String, t: usize) bool {
             // '**' matches zero or more segments. Try each cut point in path.
             let i: usize = t
             loop {
-                if match_rec(pattern, rest_p, path, i) { return true }
-                if i >= path.len { return false }
+                if match_rec(pattern, rest_p, path, i) {
+                    return true
+                }
+                if i >= path.len {
+                    return false
+                }
                 // Advance to end of current segment, then past the slash.
                 loop {
-                    if i >= path.len { break }
-                    if path[i] == '/' { break }
+                    if i >= path.len {
+                        break
+                    }
+                    if path[i] == '/' {
+                        break
+                    }
                     i = i + 1
                 }
-                if i < path.len { i = i + 1 }
+                if i < path.len {
+                    i = i + 1
+                }
             }
         }
 
@@ -405,24 +414,36 @@ fn match_rec(pattern: String, p: usize, path: String, t: usize) bool {
             // '*' matches zero or more non-separator bytes in the current segment.
             let i: usize = t
             loop {
-                if match_rec(pattern, p + 1, path, i) { return true }
-                if i >= path.len { return false }
-                if path[i] == '/' { return false }
+                if match_rec(pattern, p + 1, path, i) {
+                    return true
+                }
+                if i >= path.len {
+                    return false
+                }
+                if path[i] == '/' {
+                    return false
+                }
                 i = i + 1
             }
         }
 
-        if t >= path.len { return false }
+        if t >= path.len {
+            return false
+        }
         const tc = path[t]
 
         if pc == '?' {
-            if tc == '/' { return false }
+            if tc == '/' {
+                return false
+            }
             p = p + 1
             t = t + 1
             continue
         }
 
-        if pc != tc { return false }
+        if pc != tc {
+            return false
+        }
         p = p + 1
         t = t + 1
     }

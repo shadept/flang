@@ -1,5 +1,5 @@
-// Generic dynamic array backed by manually managed heap storage.
-// Uses raw malloc/free for simplicity (allocator support to be added later).
+// Generic dynamic array backed by manually managed heap storage. Uses raw malloc/free for
+// simplicity (allocator support to be added later).
 
 import std.allocator
 import std.dict
@@ -63,9 +63,8 @@ pub fn list(source: List($T), allocator: &Allocator? = null) List(T) {
     }
 }
 
-// A list of `count` copies of `value`, with `len == count` from the start:
-// a table to index and assign into, where `list(capacity)` gives an empty
-// buffer to push onto.
+// A list of `count` copies of `value`, with `len == count` from the start: a table to index and
+// assign into, where `list(capacity)` gives an empty buffer to push onto.
 pub fn filled_list(count: usize, value: $T, allocator: &Allocator? = null) List(T) {
     let out: List(T) = list(count, allocator)
     for _i in 0..count {
@@ -74,15 +73,14 @@ pub fn filled_list(count: usize, value: $T, allocator: &Allocator? = null) List(
     return out
 }
 
-// Bytes the backing storage occupies. Counts the whole capacity, not just the
-// `len` elements in use. What an element owns on the heap of its own is not
-// in here.
+// Bytes the backing storage occupies. Counts the whole capacity, not just the `len` elements in
+// use. What an element owns on the heap of its own is not in here.
 pub fn capacity_bytes(self: &List($T)) usize {
     return self.cap * size_of(T)
 }
 
-// Free the backing storage. The list should not be used after this.
-// Calls deinit on all stored elements before freeing.
+// Free the backing storage. The list should not be used after this. Calls deinit on all stored
+// elements before freeing.
 pub fn deinit(self: &List($T)) {
     if self.cap > 0 {
         // Deinit all live elements
@@ -104,18 +102,16 @@ pub fn as_slice(self: List($T)) T[] {
     return slice_from_raw_parts(self.ptr, self.len)
 }
 
-// Transfer ownership of the list's buffer as a `(T[], &Allocator)` pair.
-// The slice is shrunk-to-fit (`cap == len` after the call) so no excess
-// capacity is leaked. The list is reset to empty (ptr=null, cap=0) so a
-// subsequent `deinit()` is a no-op - pair this with the
-// `let l = list(...); defer l.deinit(); ...; l.to_owned_slice()` pattern.
+// Transfer ownership of the list's buffer as a `(T[], &Allocator)` pair. The slice is shrunk-to-fit
+// (`cap == len` after the call) so no excess capacity is leaked. The list is reset to empty
+// (ptr=null, cap=0) so a subsequent `deinit()` is a no-op - pair this with the `let l = list(...);
+// defer l.deinit(); ...; l.to_owned_slice()` pattern.
 //
-// The returned `&Allocator` is the resolved allocator (global by default)
-// - the caller frees the slice via
-// `alloc.dealloc(slice_from_raw_parts(s.ptr as &u8, s.len * size_of(T)))`
-// when done. Element `deinit()` is *not* called here; callers that own
-// non-trivial elements must walk the slice and deinit each element
-// before freeing the buffer.
+// The returned `&Allocator` is the resolved allocator (global by default) - the caller frees the
+// slice via
+// `alloc.dealloc(slice_from_raw_parts(s.ptr as &u8, s.len * size_of(T)))` when done. Element
+// `deinit()` is *not* called here; callers that own non-trivial elements must walk the slice and
+// deinit each element before freeing the buffer.
 pub fn to_owned_slice(self: &List($T)) (T[], &Allocator) {
     const alloc = self.allocator.or_global()
     const elem_size: usize = size_of(T)
@@ -192,24 +188,24 @@ pub fn push(self: &List($T), value: T) {
     self.len = self.len + 1
     let data = self.as_slice()
     data[self.len - 1] = value
-    // let dest: &u8 = (self.ptr + self.len) as &u8
-    // memcpy(dest, &value as &u8, type.size as usize)
+    // let dest: &u8 = (self.ptr + self.len) as &u8 memcpy(dest, &value as &u8, type.size as usize)
 }
 
-// Append every element of `xs` to the end of the list, in order. Both
-// buffers are contiguous, so the copy is a single memcpy; `xs` must not
-// alias the list's own storage - growth may reallocate (and free) that
-// storage before the copy, so no copy primitive makes self-append safe.
+// Append every element of `xs` to the end of the list, in order. Both buffers are contiguous, so
+// the copy is a single memcpy; `xs` must not alias the list's own storage - growth may reallocate
+// (and free) that storage before the copy, so no copy primitive makes self-append safe.
 pub fn push_all(self: &List($T), xs: T[]) {
-    if xs.len == 0 { return }
+    if xs.len == 0 {
+        return
+    }
     self.reserve(self.len + xs.len)
     memcpy((self.ptr + self.len) as &u8, xs.ptr as &u8, xs.len * size_of(T))
     self.len = self.len + xs.len
 }
 
-// Remove and return the last element, or null if empty. Prefer `Stack(T)`
-// in new code when the access pattern is LIFO - this primitive exists so
-// `Stack.pop` can mutate the underlying length without breaching scoped
+// Remove and return the last element, or null if empty. Prefer `Stack(T)` in new code when the
+// access pattern is LIFO - this primitive exists so `Stack.pop` can mutate the underlying length
+// without breaching scoped
 // mutability (planned, see spec.md §8).
 pub fn pop(list: &List($T)) T? {
     if list.len == 0 {
@@ -223,21 +219,25 @@ pub fn pop(list: &List($T)) T? {
 
 // Get the element at the given index.
 pub fn get(list: List($T), index: usize) T? {
-    if index >= list.len { return null }
+    if index >= list.len {
+        return null
+    }
     let elem: &T = list.ptr + index
     return Some(elem.*)
 }
 
 // Get the element at the given index.
 pub fn get_ref(list: List($T), index: usize) &T? {
-    if index >= list.len { return null }
+    if index >= list.len {
+        return null
+    }
     let elem: &T = list.ptr + index
     return Some(elem)
 }
 
 // Set the element at the given index.
 // Panics if index is out of bounds.
-#deprecated("Prefer index syntax: list[idx] = value")
+#deprecated ("Prefer index syntax: list[idx] = value")
 pub fn set(list: &List($T), index: usize, value: T) {
     if index >= list.len {
         panic("List: index out of bounds")
@@ -248,9 +248,8 @@ pub fn set(list: &List($T), index: usize, value: T) {
     memcpy(dest, &value as &u8, size_of(T))
 }
 
-// Scalar indexing - ref-form. One function covers reads, writes, and
-// address-of; the compiler desugars `list[i]`, `list[i] = v`, and `&list[i]`
-// all through this. Panics on out-of-bounds.
+// Scalar indexing - ref-form. One function covers reads, writes, and address-of; the compiler
+// desugars `list[i]`, `list[i] = v`, and `&list[i]` all through this. Panics on out-of-bounds.
 pub fn op_index_ref(list: &List($T), index: usize) &T {
     if index >= list.len {
         panic("List: index out of bounds")
@@ -258,16 +257,21 @@ pub fn op_index_ref(list: &List($T), index: usize) &T {
     return list.ptr + index
 }
 
-// Range indexing: returns a sub-slice of the list's live elements.
-// Out-of-bounds indices are clamped; an invalid range yields an empty slice.
-// Value-form overload (returns a new slice); distinct idx type from the
-// scalar ref-form below, so the two coexist without ambiguity.
+// Range indexing: returns a sub-slice of the list's live elements. Out-of-bounds indices are
+// clamped; an invalid range yields an empty slice. Value-form overload (returns a new slice);
+// distinct idx type from the scalar ref-form below, so the two coexist without ambiguity.
 pub fn op_index(list: List($T), range: Range(usize)) T[] {
     let start = range.start
     let end = range.end
-    if start > list.len { start = list.len }
-    if end > list.len { end = list.len }
-    if start > end { end = start }
+    if start > list.len {
+        start = list.len
+    }
+    if end > list.len {
+        end = list.len
+    }
+    if start > end {
+        end = start
+    }
     return slice_from_raw_parts(list.ptr + start, end - start)
 }
 
@@ -298,8 +302,8 @@ pub fn iter(l: &List($T)) ListIterator(T) {
     return .{ list = l, current = 0 }
 }
 
-// An iterator is its own iterable, so `for x in xs.iter().filter(f)`-style
-// chains (and the iter combinators' `for item in it`) can consume it.
+// An iterator is its own iterable, so `for x in xs.iter().filter(f)`-style chains (and the iter
+// combinators' `for item in it`) can consume it.
 pub fn iter(it: &ListIterator($T)) ListIterator(T) {
     return it.*
 }
@@ -353,15 +357,16 @@ test "push_all appends a slice in order" {
 // ─────────────────────────────────────────────────────────────────────────
 // Transformations
 //
-// Each of these returns a fresh `List` and leaves the receiver untouched.
-// The result inherits the receiver's allocator unless one is passed, so a
-// derived list is freed by the same arena as the list it came from.
+// Each of these returns a fresh `List` and leaves the receiver untouched. The result inherits the
+// receiver's allocator unless one is passed, so a derived list is freed by the same arena as the
+// list it came from.
 // ─────────────────────────────────────────────────────────────────────────
 
-// The allocator a derived list should use: the caller's if given, otherwise
-// the receiver's.
+// The allocator a derived list should use: the caller's if given, otherwise the receiver's.
 fn derived_allocator(own: &Allocator?, override: &Allocator?) &Allocator {
-    if override.is_some() { return override.unwrap() }
+    if override.is_some() {
+        return override.unwrap()
+    }
     return own.or_global()
 }
 
@@ -374,17 +379,15 @@ pub fn map(self: &List($T), f: $F, allocator: &Allocator? = null) List($U) {
     return out
 }
 
-// Apply `f` to every element and concatenate the results. Each intermediate
-// list is consumed: `f` hands over ownership, and this frees it.
+// Apply `f` to every element and concatenate the results. Each intermediate list is consumed: `f`
+// hands over ownership, and this frees it.
 //
-// ponytail: one allocation and one free per element, plus a copy into `out`.
-// The intermediates are pure scratch - nothing outlives the loop iteration
-// that made it - so the allocator traffic is the whole cost of the call for
-// small results. Upgrade path: thread an allocator into `f` and hand it a
-// temporary arena created once per call, so the intermediates are bump
-// allocations reclaimed in one shot; better still, let `f` append directly
-// into `out` and drop the intermediates entirely. Both need an API decision
-// about the callback's shape, not just an implementation change - see
+// ponytail: one allocation and one free per element, plus a copy into `out`. The intermediates are
+// pure scratch - nothing outlives the loop iteration that made it - so the allocator traffic is the
+// whole cost of the call for small results. Upgrade path: thread an allocator into `f` and hand it
+// a temporary arena created once per call, so the intermediates are bump allocations reclaimed in
+// one shot; better still, let `f` append directly into `out` and drop the intermediates entirely.
+// Both need an API decision about the callback's shape, not just an implementation change - see
 // docs/known-issues.md.
 pub fn flat_map(self: &List($T), f: $F, allocator: &Allocator? = null) List($U) {
     let out: List(U) = list(self.len, Some(derived_allocator(self.allocator, allocator)))
@@ -400,18 +403,22 @@ pub fn flat_map(self: &List($T), f: $F, allocator: &Allocator? = null) List($U) 
 pub fn filter(self: &List($T), keep: $F, allocator: &Allocator? = null) List(T) {
     let out: List(T) = list(self.len, Some(derived_allocator(self.allocator, allocator)))
     for i in 0..self.len {
-        if keep(self[i]) { out.push(self[i]) }
+        if keep(self[i]) {
+            out.push(self[i])
+        }
     }
     return out
 }
 
-// The elements `drop` rejects - `filter` with the predicate negated, spelled
-// the way the intent usually reads.
+// The elements `drop` rejects - `filter` with the predicate negated, spelled the way the intent
+// usually reads.
 pub fn remove(self: &List($T), drop: $F, allocator: &Allocator? = null) List(T) {
     let out: List(T) = list(self.len, Some(derived_allocator(self.allocator, allocator)))
     for i in 0..self.len {
         let dropped: bool = drop(self[i])
-        if !dropped { out.push(self[i]) }
+        if !dropped {
+            out.push(self[i])
+        }
     }
     return out
 }
@@ -425,8 +432,8 @@ pub fn fold(self: &List($T), init: $A, f: $F) A {
     return acc
 }
 
-// Combine right to left: `f(x0, f(x1, f(x2, init)))`. The accumulator is the
-// second argument, mirroring the direction of travel.
+// Combine right to left: `f(x0, f(x1, f(x2, init)))`. The accumulator is the second argument,
+// mirroring the direction of travel.
 pub fn fold_right(self: &List($T), init: $A, f: $F) A {
     let acc = init
     let i = self.len
@@ -441,18 +448,22 @@ pub fn fold_right(self: &List($T), init: $A, f: $F) A {
 //
 // Predicate-taking forms (`find`, `find_index`, `any`, `all`) take any
 // callable `$F` usable as `fn(T) bool` — bare functions and capturing
-// closures alike (RFC-014). Value-taking forms (`contains`, `index_of`)
-// compare with `==`, so they require an element type that supports it.
+// closures alike (RFC-014). Value-taking forms (`contains`, `index_of`) compare with `==`, so they
+// require an element type that supports it.
 
 // First element, or null when empty.
 pub fn first(self: List($T)) T? {
-    if self.len == 0 { return null }
+    if self.len == 0 {
+        return null
+    }
     return Some(self[0])
 }
 
 // Last element, or null when empty.
 pub fn last(self: List($T)) T? {
-    if self.len == 0 { return null }
+    if self.len == 0 {
+        return null
+    }
     return Some(self[self.len - 1])
 }
 
@@ -464,7 +475,9 @@ pub fn contains(self: List($T), value: T) bool {
 // Index of the first element equal to `value`, or null.
 pub fn index_of(self: List($T), value: T) usize? {
     for i in 0..self.len {
-        if self[i] == value { return Some(i) }
+        if self[i] == value {
+            return Some(i)
+        }
     }
     return null
 }
@@ -472,7 +485,9 @@ pub fn index_of(self: List($T), value: T) usize? {
 // First element satisfying `pred`, or null.
 pub fn find(self: &List($T), pred: $F) T? {
     for i in 0..self.len {
-        if pred(self[i]) { return Some(self[i]) }
+        if pred(self[i]) {
+            return Some(self[i])
+        }
     }
     return null
 }
@@ -480,7 +495,9 @@ pub fn find(self: &List($T), pred: $F) T? {
 // Index of the first element satisfying `pred`, or null.
 pub fn find_index(self: &List($T), pred: $F) usize? {
     for i in 0..self.len {
-        if pred(self[i]) { return Some(i) }
+        if pred(self[i]) {
+            return Some(i)
+        }
     }
     return null
 }
@@ -494,13 +511,15 @@ pub fn any(self: &List($T), pred: $F) bool {
 pub fn all(self: &List($T), pred: $F) bool {
     for i in 0..self.len {
         let ok: bool = pred(self[i])
-        if !ok { return false }
+        if !ok {
+            return false
+        }
     }
     return true
 }
 
-// Everything after the first `n` elements. Fewer than `n` elements yields an
-// empty list rather than an error.
+// Everything after the first `n` elements. Fewer than `n` elements yields an empty list rather than
+// an error.
 pub fn drop_first(self: &List($T), n: usize, allocator: &Allocator? = null) List(T) {
     let out: List(T) = list(self.len, Some(derived_allocator(self.allocator, allocator)))
     let start = if n > self.len { self.len } else { n }
@@ -515,8 +534,8 @@ pub fn drop_first(self: &List($T), n: usize, allocator: &Allocator? = null) List
 // These duplicate `std.iter` on purpose: no adapter structs, no generic
 // nesting — guaranteed straight loops for hot paths.
 
-// Run `f` on every element, in order. To accumulate, use `fold`; to mutate
-// outer state from a closure, capture a reference and write through it.
+// Run `f` on every element, in order. To accumulate, use `fold`; to mutate outer state from a
+// closure, capture a reference and write through it.
 pub fn each(self: &List($T), f: $F) {
     for i in 0..self.len {
         f(self[i])
@@ -527,36 +546,47 @@ pub fn each(self: &List($T), f: $F) {
 pub fn count(self: &List($T), pred: $F) usize {
     let n: usize = 0
     for i in 0..self.len {
-        if pred(self[i]) { n = n + 1 }
+        if pred(self[i]) {
+            n = n + 1
+        }
     }
     return n
 }
 
-// Smallest element by `<`, or null when empty. Requires an ordered element
-// type (primitive or `op_cmp`).
+// Smallest element by `<`, or null when empty. Requires an ordered element type (primitive or
+// `op_cmp`).
 pub fn min(self: &List($T)) T? {
-    if self.len == 0 { return null }
+    if self.len == 0 {
+        return null
+    }
     let best = self[0]
     for i in 1..self.len {
-        if self[i] < best { best = self[i] }
+        if self[i] < best {
+            best = self[i]
+        }
     }
     return Some(best)
 }
 
 // Largest element by `<`, or null when empty.
 pub fn max(self: &List($T)) T? {
-    if self.len == 0 { return null }
+    if self.len == 0 {
+        return null
+    }
     let best = self[0]
     for i in 1..self.len {
-        if best < self[i] { best = self[i] }
+        if best < self[i] {
+            best = self[i]
+        }
     }
     return Some(best)
 }
 
-// Element with the smallest `key(x)`, or null when empty. Ties keep the
-// earliest.
+// Element with the smallest `key(x)`, or null when empty. Ties keep the earliest.
 pub fn min_by(self: &List($T), key: $F) T? {
-    if self.len == 0 { return null }
+    if self.len == 0 {
+        return null
+    }
     let best = self[0]
     let best_key = key(best)
     for i in 1..self.len {
@@ -569,10 +599,11 @@ pub fn min_by(self: &List($T), key: $F) T? {
     return Some(best)
 }
 
-// Element with the largest `key(x)`, or null when empty. Ties keep the
-// earliest.
+// Element with the largest `key(x)`, or null when empty. Ties keep the earliest.
 pub fn max_by(self: &List($T), key: $F) T? {
-    if self.len == 0 { return null }
+    if self.len == 0 {
+        return null
+    }
     let best = self[0]
     let best_key = key(best)
     for i in 1..self.len {
@@ -585,20 +616,27 @@ pub fn max_by(self: &List($T), key: $F) T? {
     return Some(best)
 }
 
-// Sort in place, ordering elements by `key(x)` ascending.
-// `<` rather than `op_cmp` in the comparator: the overloaded `op_cmp`
-// name cannot resolve while the key type is still generic.
+// Sort in place, ordering elements by `key(x)` ascending. `<` rather than `op_cmp` in the
+// comparator: the overloaded `op_cmp` name cannot resolve while the key type is still generic.
 pub fn sort_by(self: &List($T), key: $F) {
     sort(self.as_slice(), fn(a, b) {
         let ka = key(a)
         let kb = key(b)
-        if ka < kb { Ord.Less } else if kb < ka { Ord.Greater } else { Ord.Equal }
+        if ka < kb {
+            Ord.Less
+        } else if kb < ka {
+            Ord.Greater
+        } else {
+            Ord.Equal
+        }
     })
 }
 
 // Reverse in place.
 pub fn reverse(self: &List($T)) {
-    if self.len < 2 { return }
+    if self.len < 2 {
+        return
+    }
     let i: usize = 0
     let j = self.len - 1
     while i < j {
@@ -655,8 +693,8 @@ pub fn partition(self: &List($T), pred: $F, allocator: &Allocator? = null) (List
     return (yes, no)
 }
 
-// Copy with runs of consecutive `==` duplicates collapsed to one element
-// (Rust-style dedup). Fully unique across the whole list needs a Set.
+// Copy with runs of consecutive `==` duplicates collapsed to one element (Rust-style dedup). Fully
+// unique across the whole list needs a Set.
 pub fn dedup(self: &List($T), allocator: &Allocator? = null) List(T) {
     let out: List(T) = list(0, Some(derived_allocator(self.allocator, allocator)))
     for i in 0..self.len {
@@ -664,7 +702,9 @@ pub fn dedup(self: &List($T), allocator: &Allocator? = null) List(T) {
             out.push(self[i])
         } else {
             let same: bool = self[i] == self[i - 1]
-            if !same { out.push(self[i]) }
+            if !same {
+                out.push(self[i])
+            }
         }
     }
     return out
@@ -674,7 +714,9 @@ pub fn dedup(self: &List($T), allocator: &Allocator? = null) List(T) {
 pub fn join(self: &List(String), sep: String, allocator: &Allocator? = null) OwnedString {
     let sb = string_builder(0, allocator)
     for i in 0..self.len {
-        if i > 0 { sb.append(sep) }
+        if i > 0 {
+            sb.append(sep)
+        }
         sb.append(self[i])
     }
     return sb.to_string()
@@ -683,7 +725,9 @@ pub fn join(self: &List(String), sep: String, allocator: &Allocator? = null) Own
 test "map applies f in order and leaves the receiver alone" {
     let xs: List(i32) = list(0)
     defer xs.deinit()
-    xs.push(1); xs.push(2); xs.push(3)
+    xs.push(1)
+    xs.push(2)
+    xs.push(3)
 
     let doubled = xs.map(fn(v: i32) i32 { v * 2 })
     defer doubled.deinit()
@@ -696,7 +740,8 @@ test "map applies f in order and leaves the receiver alone" {
 test "flat_map concatenates and frees the intermediates" {
     let xs: List(i32) = list(0)
     defer xs.deinit()
-    xs.push(1); xs.push(2)
+    xs.push(1)
+    xs.push(2)
 
     let out = xs.flat_map(fn(v: i32) List(i32) {
         let part: List(i32) = list(2)
@@ -730,13 +775,15 @@ test "filter keeps matches, remove keeps the rest" {
 test "fold and fold_right differ in association" {
     let xs: List(i32) = list(0)
     defer xs.deinit()
-    xs.push(1); xs.push(2); xs.push(3)
+    xs.push(1)
+    xs.push(2)
+    xs.push(3)
 
     // Subtraction is not associative, so the two directions disagree:
     // left  ((0-1)-2)-3 = -6
     // right 1-(2-(3-0)) = 2
-    // The seed pins the accumulator type ($A): a bare `0` won't default,
-    // because `f` is duck-typed ($F) and only constrains A at instantiation.
+    // The seed pins the accumulator type ($A): a bare `0` won't default, because `f` is duck-typed
+    // ($F) and only constrains A at instantiation.
     let l = xs.fold(0i32, fn(acc, v) { acc - v })
     let r = xs.fold_right(0i32, fn(v, acc) { v - acc })
     assert_eq(l, -6i32, "left-associated")
@@ -805,8 +852,8 @@ test "search utilities: find, find_index, any, all" {
 }
 
 test "deinit is idempotent on every core container" {
-    // Any deinit may run twice: state nulls on the first call, so the
-    // second is a no-op, not a double free.
+    // Any deinit may run twice: state nulls on the first call, so the second is a no-op, not a
+    // double free.
     let xs: List(OwnedString) = list(2)
     xs.push(from_view("alpha"))
     xs.push(from_view("beta"))
@@ -837,7 +884,9 @@ test "deinit is idempotent on every core container" {
 test "combinators accept capturing closures with unannotated params" {
     let xs: List(i32) = list(3)
     defer xs.deinit()
-    xs.push(1i32); xs.push(2i32); xs.push(3i32)
+    xs.push(1i32)
+    xs.push(2i32)
+    xs.push(3i32)
 
     let floor = 1
     let scale = 10
@@ -852,7 +901,9 @@ test "combinators accept capturing closures with unannotated params" {
 test "each and count" {
     let xs: List(i32) = list(3)
     defer xs.deinit()
-    xs.push(1i32); xs.push(2i32); xs.push(3i32)
+    xs.push(1i32)
+    xs.push(2i32)
+    xs.push(3i32)
 
     // Captures are by value and read-only: mutate through a captured reference.
     let sum = 0i32
@@ -866,7 +917,9 @@ test "each and count" {
 test "min max min_by max_by on lists" {
     let xs: List(i32) = list(3)
     defer xs.deinit()
-    xs.push(4i32); xs.push(1i32); xs.push(3i32)
+    xs.push(4i32)
+    xs.push(1i32)
+    xs.push(3i32)
 
     assert_eq(xs.min().unwrap(), 1i32, "smallest")
     assert_eq(xs.max().unwrap(), 4i32, "largest")
@@ -882,7 +935,9 @@ test "min max min_by max_by on lists" {
 test "sort_by orders by key" {
     let xs: List(i32) = list(3)
     defer xs.deinit()
-    xs.push(1i32); xs.push(3i32); xs.push(2i32)
+    xs.push(1i32)
+    xs.push(3i32)
+    xs.push(2i32)
 
     xs.sort_by(fn(v) { 0 - v })
     assert_eq(xs[0], 3i32, "descending by negated key")
@@ -892,7 +947,9 @@ test "sort_by orders by key" {
 test "reverse in place and reversed copy" {
     let xs: List(i32) = list(3)
     defer xs.deinit()
-    xs.push(1i32); xs.push(2i32); xs.push(3i32)
+    xs.push(1i32)
+    xs.push(2i32)
+    xs.push(3i32)
 
     let back = xs.reversed()
     defer back.deinit()
@@ -905,7 +962,8 @@ test "reverse in place and reversed copy" {
 
     let two: List(i32) = list(2)
     defer two.deinit()
-    two.push(7i32); two.push(9i32)
+    two.push(7i32)
+    two.push(9i32)
     two.reverse()
     assert_eq(two[0], 9i32, "even length reverses fully")
 }
@@ -928,10 +986,13 @@ test "take_last clamps like drop_first" {
 test "zip pairs positionally and stops at the shorter list" {
     let xs: List(i32) = list(3)
     defer xs.deinit()
-    xs.push(1i32); xs.push(2i32); xs.push(3i32)
+    xs.push(1i32)
+    xs.push(2i32)
+    xs.push(3i32)
     let ys: List(i32) = list(2)
     defer ys.deinit()
-    ys.push(10i32); ys.push(20i32)
+    ys.push(10i32)
+    ys.push(20i32)
 
     let pairs = xs.zip(&ys)
     defer pairs.deinit()
@@ -958,7 +1019,12 @@ test "partition splits by predicate preserving order" {
 test "dedup collapses consecutive runs only" {
     let xs: List(i32) = list(6)
     defer xs.deinit()
-    xs.push(1i32); xs.push(1i32); xs.push(2i32); xs.push(2i32); xs.push(2i32); xs.push(1i32)
+    xs.push(1i32)
+    xs.push(1i32)
+    xs.push(2i32)
+    xs.push(2i32)
+    xs.push(2i32)
+    xs.push(1i32)
 
     let out = xs.dedup()
     defer out.deinit()

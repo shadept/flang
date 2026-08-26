@@ -48,10 +48,10 @@ pub type Stdio = enum {
 }
 
 pub type Command = struct {
-    // argv[0] is the program path/name. The C side passes it as both `prog`
-    // and `argv[0]` so PATH-based lookup works without losing argv[0].
+    // argv[0] is the program path/name. The C side passes it as both `prog` and `argv[0]` so
+    // PATH-based lookup works without losing argv[0].
     __args: List(OwnedString)
-    __env_pairs: List(OwnedString)        // each entry pre-joined "KEY=VALUE"
+    __env_pairs: List(OwnedString) // each entry pre-joined "KEY=VALUE"
     __cwd: OwnedString?
     __has_cwd: bool
     __stdin: i32
@@ -61,8 +61,8 @@ pub type Command = struct {
 }
 
 pub type Child = struct {
-    __handle: usize         // OS-specific (PID on POSIX, HANDLE bits on Windows)
-    __stdin_fd: i32         // -1 when not piped or already taken
+    __handle: usize // OS-specific (PID on POSIX, HANDLE bits on Windows)
+    __stdin_fd: i32 // -1 when not piped or already taken
     __stdout_fd: i32
     __stderr_fd: i32
     __finished: bool
@@ -77,16 +77,10 @@ pub type ChildStdin = struct { __fd: i32 }
 // Foreign ABI
 // =============================================================================
 
-#foreign fn __flang_proc_spawn(
-    prog: &u8,
-    argv: &usize, argc: usize,
-    envp: &usize, envc: usize,
-    cwd: &u8?, has_cwd: i32,
-    stdin_mode: i32, stdout_mode: i32, stderr_mode: i32,
-    out_handle: &usize,
-    out_stdin_fd: &i32, out_stdout_fd: &i32, out_stderr_fd: &i32,
-    out_err: &i32,
-) i32
+#foreign fn __flang_proc_spawn(prog: &u8, argv: &usize, argc: usize, envp: &usize, envc: usize,
+    cwd: &u8?, has_cwd: i32, stdin_mode: i32, stdout_mode: i32, stderr_mode: i32,
+    out_handle: &usize, out_stdin_fd: &i32, out_stdout_fd: &i32, out_stderr_fd: &i32, out_err: &i32,
+    ) i32
 
 #foreign fn __flang_proc_wait(handle: usize, out_exit: &i32, out_err: &i32) i32
 #foreign fn __flang_proc_kill(handle: usize, out_err: &i32) i32
@@ -103,8 +97,8 @@ pub type ChildStdin = struct { __fd: i32 }
 // Command builder
 // =============================================================================
 
-// Create a new Command for `prog`. By default no env vars are passed to the
-// child - call `inherit_env()` if your child needs PATH and friends.
+// Create a new Command for `prog`. By default no env vars are passed to the child - call
+// `inherit_env()` if your child needs PATH and friends.
 pub fn command(prog: String, allocator: &Allocator? = null) Command {
     let argv: List(OwnedString) = list(4, allocator)
     argv.push(from_view(prog, allocator))
@@ -147,8 +141,8 @@ pub fn cwd(self: &Command, dir: String) &Command {
             Some(c) => {
                 let cc = c
                 cc.deinit()
-            },
-            None => {},
+            }
+            None => {}
         }
     }
     self.__cwd = Some(from_view(dir, self.__allocator))
@@ -166,9 +160,8 @@ pub fn env(self: &Command, key: String, val: String) &Command {
     return self
 }
 
-// Snapshot the current process environment into the command. Call this
-// before adding explicit env() overrides to start from the parent env
-// rather than the empty default.
+// Snapshot the current process environment into the command. Call this before adding explicit env()
+// overrides to start from the parent env rather than the empty default.
 pub fn inherit_env(self: &Command) &Command {
     const n = __flang_proc_env_count()
     for i in 0..n {
@@ -176,8 +169,8 @@ pub fn inherit_env(self: &Command) &Command {
         p_opt match {
             Some(p) => {
                 self.__env_pairs.push(from_view(from_c_string(p), self.__allocator))
-            },
-            None => {},
+            }
+            None => {}
         }
     }
     return self
@@ -229,8 +222,8 @@ pub fn spawn(self: &Command) Result(Child, ProcessError) {
             Some(c) => {
                 cwd_ptr = Some(c.ptr)
                 has_cwd = 1
-            },
-            None => {},
+            }
+            None => {}
         }
     }
 
@@ -240,16 +233,9 @@ pub fn spawn(self: &Command) Result(Child, ProcessError) {
     let err_fd: i32 = -1
     let err_code: i32 = 0
 
-    const status = __flang_proc_spawn(
-        prog,
-        argv_ptrs.ptr, argv_ptrs.len,
-        envp_ptrs.ptr, envp_ptrs.len,
-        cwd_ptr, has_cwd,
-        self.__stdin, self.__stdout, self.__stderr,
-        &handle,
-        &in_fd, &out_fd, &err_fd,
-        &err_code,
-    )
+    const status = __flang_proc_spawn(prog, argv_ptrs.ptr, argv_ptrs.len, envp_ptrs.ptr,
+        envp_ptrs.len, cwd_ptr, has_cwd, self.__stdin, self.__stdout, self.__stderr, &handle,
+        &in_fd, &out_fd, &err_fd, &err_code)
     if status != 0 {
         return Err(err_code as ProcessError)
     }
@@ -321,25 +307,30 @@ pub fn deinit(self: &Child) {
     __flang_proc_release(self.__handle)
 }
 
-// Returns the child's stdout stream if it was configured with Stdio.Pipe,
-// otherwise null. Reading transfers ownership of the fd to the returned
-// handle; subsequent calls return null.
+// Returns the child's stdout stream if it was configured with Stdio.Pipe, otherwise null. Reading
+// transfers ownership of the fd to the returned handle; subsequent calls return null.
 pub fn stdout(self: &Child) ChildStdout? {
-    if self.__stdout_fd < 0 { return null }
+    if self.__stdout_fd < 0 {
+        return null
+    }
     const s = ChildStdout { __fd = self.__stdout_fd }
     self.__stdout_fd = -1
     return Some(s)
 }
 
 pub fn stderr(self: &Child) ChildStderr? {
-    if self.__stderr_fd < 0 { return null }
+    if self.__stderr_fd < 0 {
+        return null
+    }
     const s = ChildStderr { __fd = self.__stderr_fd }
     self.__stderr_fd = -1
     return Some(s)
 }
 
 pub fn stdin(self: &Child) ChildStdin? {
-    if self.__stdin_fd < 0 { return null }
+    if self.__stdin_fd < 0 {
+        return null
+    }
     const s = ChildStdin { __fd = self.__stdin_fd }
     self.__stdin_fd = -1
     return Some(s)
@@ -350,23 +341,35 @@ pub fn stdin(self: &Child) ChildStdin? {
 // =============================================================================
 
 fn read(self: &ChildStdout, buf: u8[]) usize {
-    if self.__fd < 0 { return 0 }
+    if self.__fd < 0 {
+        return 0
+    }
     const n = __flang_proc_read(self.__fd, buf.ptr, buf.len)
-    if n < 0 { return 0 }
+    if n < 0 {
+        return 0
+    }
     return n as usize
 }
 
 fn read(self: &ChildStderr, buf: u8[]) usize {
-    if self.__fd < 0 { return 0 }
+    if self.__fd < 0 {
+        return 0
+    }
     const n = __flang_proc_read(self.__fd, buf.ptr, buf.len)
-    if n < 0 { return 0 }
+    if n < 0 {
+        return 0
+    }
     return n as usize
 }
 
 fn write(self: &ChildStdin, data: u8[]) usize {
-    if self.__fd < 0 { return 0 }
+    if self.__fd < 0 {
+        return 0
+    }
     const n = __flang_proc_write(self.__fd, data.ptr, data.len)
-    if n < 0 { return 0 }
+    if n < 0 {
+        return 0
+    }
     return n as usize
 }
 
@@ -401,7 +404,9 @@ pub fn read_to_end(self: &ChildStdout, allocator: &Allocator? = null) OwnedStrin
     let buf = [0u8; 4096]
     loop {
         const n = self.read(buf as u8[])
-        if n == 0 { break }
+        if n == 0 {
+            break
+        }
         sb.append_bytes(buf[0..n])
     }
     return sb.to_string()
@@ -412,7 +417,9 @@ pub fn read_to_end(self: &ChildStderr, allocator: &Allocator? = null) OwnedStrin
     let buf = [0u8; 4096]
     loop {
         const n = self.read(buf as u8[])
-        if n == 0 { break }
+        if n == 0 {
+            break
+        }
         sb.append_bytes(buf[0..n])
     }
     return sb.to_string()

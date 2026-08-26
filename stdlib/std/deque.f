@@ -1,7 +1,6 @@
-// Generic double-ended queue backed by a power-of-two-amortised ring
-// buffer. Push/pop at either end run in amortised O(1). Use as a queue
-// (push_back/pop_front), stack (push_back/pop_back), or worklist that
-// flips ordering mid-algorithm.
+// Generic double-ended queue backed by a power-of-two-amortised ring buffer. Push/pop at either end
+// run in amortised O(1). Use as a queue (push_back/pop_front), stack (push_back/pop_back), or
+// worklist that flips ordering mid-algorithm.
 
 import std.allocator
 import std.mem
@@ -9,17 +8,17 @@ import std.option
 
 pub type Deque = struct(T) {
     ptr: &T
-    cap: usize         // backing buffer capacity (in elements)
-    head: usize        // index of the front element when len > 0
+    cap: usize // backing buffer capacity (in elements)
+    head: usize // index of the front element when len > 0
     len: usize
     allocator: &Allocator?
 }
 
 const DEQUE_DEFAULT_CAPACITY: usize = 8
 
-// Construct an empty deque. The capacity hint pre-allocates storage to
-// avoid early growth churn; pass 0 to defer allocation to the first push.
-// `T` is inferred from context (e.g. `let dq: Deque(i32) = deque(0)`).
+// Construct an empty deque. The capacity hint pre-allocates storage to avoid early growth churn;
+// pass 0 to defer allocation to the first push. `T` is inferred from context (e.g. `let dq:
+// Deque(i32) = deque(0)`).
 pub fn deque(capacity: usize, allocator: &Allocator? = null) Deque($T) {
     let result: Deque(T)
     result.allocator = allocator
@@ -29,8 +28,8 @@ pub fn deque(capacity: usize, allocator: &Allocator? = null) Deque($T) {
     return result
 }
 
-// Free the backing storage. Each live element's `deinit()` runs first,
-// in logical (front-to-back) order.
+// Free the backing storage. Each live element's `deinit()` runs first, in logical (front-to-back)
+// order.
 pub fn deinit(self: &Deque($T)) {
     if self.cap > 0 {
         for i in 0..self.len as isize {
@@ -51,14 +50,17 @@ pub fn is_empty(self: Deque($T)) bool {
     return self.len == 0
 }
 
-// Grow the backing buffer to at least `required` slots. When the live
-// window wraps around the buffer end, growth flattens it back to head=0
-// so subsequent indexing stays simple.
+// Grow the backing buffer to at least `required` slots. When the live window wraps around the
+// buffer end, growth flattens it back to head=0 so subsequent indexing stays simple.
 fn reserve(self: &Deque($T), required: usize) {
-    if self.cap >= required { return }
+    if self.cap >= required {
+        return
+    }
 
     let new_cap = if self.cap == 0 { DEQUE_DEFAULT_CAPACITY } else { self.cap * 2 }
-    if new_cap < required { new_cap = required }
+    if new_cap < required {
+        new_cap = required
+    }
 
     const elem_size = size_of(T)
     const bytes = new_cap * elem_size
@@ -104,7 +106,9 @@ pub fn push_front(self: &Deque($T), value: T) {
 
 // Remove and return the front element, or `null` when empty (queue dequeue).
 pub fn pop_front(self: &Deque($T)) T? {
-    if self.len == 0 { return null }
+    if self.len == 0 {
+        return null
+    }
     const slot: &T = self.ptr + self.head
     const v = slot.*
     self.head = (self.head + 1) % self.cap
@@ -114,7 +118,9 @@ pub fn pop_front(self: &Deque($T)) T? {
 
 // Remove and return the back element, or `null` when empty (stack pop).
 pub fn pop_back(self: &Deque($T)) T? {
-    if self.len == 0 { return null }
+    if self.len == 0 {
+        return null
+    }
     self.len = self.len - 1
     const tail = (self.head + self.len) % self.cap
     const slot: &T = self.ptr + tail
@@ -123,21 +129,25 @@ pub fn pop_back(self: &Deque($T)) T? {
 
 // Read the front element without removing it.
 pub fn peek_front(self: Deque($T)) T? {
-    if self.len == 0 { return null }
+    if self.len == 0 {
+        return null
+    }
     const slot: &T = self.ptr + self.head
     return Some(slot.*)
 }
 
 // Read the back element without removing it.
 pub fn peek_back(self: Deque($T)) T? {
-    if self.len == 0 { return null }
+    if self.len == 0 {
+        return null
+    }
     const tail = (self.head + self.len - 1) % self.cap
     const slot: &T = self.ptr + tail
     return Some(slot.*)
 }
 
-// Drop every element. Backing storage is retained for reuse. Element
-// `deinit()` is NOT called - use `deinit()` for a full release.
+// Drop every element. Backing storage is retained for reuse. Element `deinit()` is NOT called - use
+// `deinit()` for a full release.
 pub fn clear(self: &Deque($T)) {
     self.head = 0
     self.len = 0
@@ -149,7 +159,7 @@ pub fn clear(self: &Deque($T)) {
 
 pub type DequeIterator = struct(T) {
     deque: &Deque(T)
-    current: usize     // logical offset from head, 0 .. len
+    current: usize // logical offset from head, 0 .. len
 }
 
 pub fn iter(self: &Deque($T)) DequeIterator(T) {
@@ -157,7 +167,9 @@ pub fn iter(self: &Deque($T)) DequeIterator(T) {
 }
 
 pub fn next(it: &DequeIterator($T)) T? {
-    if it.current >= it.deque.len { return null }
+    if it.current >= it.deque.len {
+        return null
+    }
     const idx = (it.deque.head + it.current) % it.deque.cap
     const slot: &T = it.deque.ptr + idx
     it.current = it.current + 1

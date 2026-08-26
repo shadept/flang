@@ -1,16 +1,13 @@
-// Backend interface - shared types and contract that every codegen
-// backend implements. The C backend lives in `c_backend.f`. Future
-// backends (LLVM, QBE, Cranelift) plug in the same shape.
+// Backend interface - shared types and contract that every codegen backend implements. The C
+// backend lives in `c_backend.f`. Future backends (LLVM, QBE, Cranelift) plug in the same shape.
 //
 // The contract is a single function:
 //
 //   compile(module: &IrModule, options: &BuildOptions) -> Result(BuildResult, BuildError)
 //
-// It performs FIR -> target lowering, invokes the platform toolchain,
-// and produces an executable at `options.output_path`. Extra .c files,
-// libraries, include paths and link flags are passed through the
-// `BuildOptions` struct (the compilation model is shared across
-// backends).
+// It performs FIR -> target lowering, invokes the platform toolchain, and produces an executable at
+// `options.output_path`. Extra .c files, libraries, include paths and link flags are passed through
+// the `BuildOptions` struct (the compilation model is shared across backends).
 //
 // Each backend module re-exports `compile()` so callers stay agnostic:
 //
@@ -31,28 +28,25 @@ pub type BuildMode = enum {
     Release
 }
 
-// Knobs threaded through every backend. Backends are free to ignore
-// fields that don't apply to them (e.g. an LLVM backend that handles
-// linkage internally may still produce a stand-alone object). The C
-// backend honours every field.
+// Knobs threaded through every backend. Backends are free to ignore fields that don't apply to them
+// (e.g. an LLVM backend that handles linkage internally may still produce a stand-alone object).
+// The C backend honours every field.
 //
-// Lifetime: `BuildOptions` owns the inner lists; call `deinit()` when
-// done. String fields are *borrowed* views - the caller keeps backing
-// storage alive for the duration of `compile()`.
+// Lifetime: `BuildOptions` owns the inner lists; call `deinit()` when done. String fields are
+// *borrowed* views - the caller keeps backing storage alive for the duration of `compile()`.
 pub type BuildOptions = struct {
-    // Final artifact path (executable). On Windows, the backend appends
-    // ".exe" if missing.
+    // Final artifact path (executable). On Windows, the backend appends ".exe" if missing.
     output_path: String
 
     // Debug or Release affects `-O` flags and debug-info emission.
     mode: BuildMode
 
-    // Additional .c sources compiled and linked alongside the generated
-    // file (used for FFI shims like stdlib/std/process.c).
+    // Additional .c sources compiled and linked alongside the generated file (used for FFI shims
+    // like stdlib/std/process.c).
     extra_c_files: List(String)
 
-    // Pre-compiled object files linked as-is. Useful with a future build
-    // cache where companion .c files compile once and stay cached.
+    // Pre-compiled object files linked as-is. Useful with a future build cache where companion .c
+    // files compile once and stay cached.
     extra_obj_files: List(String)
 
     // Directories appended to the compiler's include search path (-I).
@@ -68,17 +62,15 @@ pub type BuildOptions = struct {
     cflags: List(String)
     ldflags: List(String)
 
-    // When set, the backend writes the generated translation unit to
-    // this path before invoking the compiler. The .c file otherwise
-    // lives in a temporary location next to the executable.
+    // When set, the backend writes the generated translation unit to this path before invoking the
+    // compiler. The .c file otherwise lives in a temporary location next to the executable.
     emit_c_path: String?
 
     // Skip cleanup of intermediate .c / .obj files.
     keep_temps: bool
 
-    // Force a specific compiler binary instead of running discovery.
-    // The path is taken verbatim; required env vars (e.g. MSVC
-    // INCLUDE/LIB) are *not* synthesised - caller is responsible.
+    // Force a specific compiler binary instead of running discovery. The path is taken verbatim;
+    // required env vars (e.g. MSVC INCLUDE/LIB) are *not* synthesised - caller is responsible.
     compiler_override: String?
 
     // Allocator used for everything the backend allocates on behalf of
@@ -119,8 +111,7 @@ pub fn deinit(self: &BuildOptions) {
     self.ldflags.deinit()
 }
 
-// Fluent helpers - let callers chain configuration without juggling the
-// inner lists.
+// Fluent helpers - let callers chain configuration without juggling the inner lists.
 pub fn add_c_file(self: &BuildOptions, p: String) &BuildOptions {
     self.extra_c_files.push(p)
     return self
@@ -166,8 +157,8 @@ pub fn set_keep_temps(self: &BuildOptions, k: bool) &BuildOptions {
     return self
 }
 
-// Optimize the generated C (`/O2`, `-O2`). Debug info is unaffected on
-// Windows - `/Z7` is passed in both modes.
+// Optimize the generated C (`/O2`, `-O2`). Debug info is unaffected on Windows - `/Z7` is passed in
+// both modes.
 pub fn set_release(self: &BuildOptions, on: bool) &BuildOptions {
     self.mode = if on { BuildMode.Release } else { BuildMode.Debug }
     return self
@@ -184,15 +175,15 @@ pub type BuildResult = struct {
     // Generated C file, if `keep_temps` or `emit_c_path` was set.
     c_source_path: OwnedString?
 
-    // Wall time of each phase, for `--timings`. `lower_ns` is the caller's
-    // to fill - the backend is handed FIR, it does not produce it.
+    // Wall time of each phase, for `--timings`. `lower_ns` is the caller's to fill - the backend is
+    // handed FIR, it does not produce it.
     lower_ns: u64
     translate_ns: u64
     cc_ns: u64
 }
 
-// Record how long producing the FIR took. The backend cannot measure it -
-// it is handed a finished module - so the driver reports it back.
+// Record how long producing the FIR took. The backend cannot measure it - it is handed a finished
+// module - so the driver reports it back.
 pub fn set_lower_ns(self: &BuildResult, ns: u64) {
     self.lower_ns = ns
 }
@@ -200,8 +191,11 @@ pub fn set_lower_ns(self: &BuildResult, ns: u64) {
 pub fn deinit(self: &BuildResult) {
     self.executable_path.deinit()
     self.c_source_path match {
-        Some(p) => { let pp = p; pp.deinit() },
-        None => {},
+        Some(p) => {
+            let pp = p
+            pp.deinit()
+        }
+        None => {}
     }
 }
 
@@ -223,24 +217,24 @@ pub type BuildError = enum {
 // ─────────────────────────────────────────────────────────────────────────
 
 pub type CompilerKind = enum {
-    Msvc          // cl.exe
-    Gcc           // gcc
-    Clang         // clang
-    XcrunClang    // macOS: xcrun clang
+    Msvc // cl.exe
+    Gcc // gcc
+    Clang // clang
+    XcrunClang // macOS: xcrun clang
 }
 
-// Result of compiler discovery. `extra_env_keys[i]` / `extra_env_vals[i]`
-// are environment overrides that must be applied to the child process
-// before invocation (cl.exe on Windows needs INCLUDE / LIB / PATH).
+// Result of compiler discovery. `extra_env_keys[i]` / `extra_env_vals[i]` are environment overrides
+// that must be applied to the child process before invocation (cl.exe on Windows needs INCLUDE /
+// LIB / PATH).
 //
 // Owns its strings. Call `deinit()` when done.
 pub type CompilerInfo = struct {
     kind: CompilerKind
-    // Human-readable name ("cl.exe", "gcc", "clang", "xcrun clang"). Used
-    // in error messages and `--find-compilers` style output.
+    // Human-readable name ("cl.exe", "gcc", "clang", "xcrun clang"). Used in error messages and
+    // `--find-compilers` style output.
     name: OwnedString
-    // Absolute path to the binary to spawn. For `XcrunClang` this is the
-    // path to `xcrun`; the backend prepends `clang` as the first arg.
+    // Absolute path to the binary to spawn. For `XcrunClang` this is the path to `xcrun`; the
+    // backend prepends `clang` as the first arg.
     path: OwnedString
     extra_env_keys: List(OwnedString)
     extra_env_vals: List(OwnedString)

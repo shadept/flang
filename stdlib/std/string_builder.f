@@ -1,6 +1,5 @@
-// Mutable string builder for efficient string construction.
-// Uses a growable byte buffer backed by the allocator pattern.
-// Designed to support future string interpolation.
+// Mutable string builder for efficient string construction. Uses a growable byte buffer backed by
+// the allocator pattern. Designed to support future string interpolation.
 
 import std.io.writer
 import std.allocator
@@ -20,8 +19,8 @@ pub type StringBuilder = struct {
 }
 
 // Return the current contents as a String.
-// The returned String points into the builder's buffer and is only
-// valid while the builder is alive and not modified.
+// The returned String points into the builder's buffer and is only valid while the builder is alive
+// and not modified.
 pub fn as_view(sb: &StringBuilder) String {
     return .{ ptr = sb.ptr, len = sb.len }
 }
@@ -41,20 +40,21 @@ pub fn string_builder(capacity: usize = 0, allocator: &Allocator? = null) String
 }
 
 // Create a new empty StringBuilder with the given initial capacity.
-#deprecated("use string_builder(capacity)")
+#deprecated ("use string_builder(capacity)")
 pub fn string_builder_with_capacity(capacity: usize) StringBuilder {
     return string_builder(capacity, null)
 }
 
 // Create a new empty StringBuilder with default capacity.
-#deprecated("use string_builder(allocator=allocator)")
+#deprecated ("use string_builder(allocator=allocator)")
 pub fn string_builder_with_allocator(allocator: &Allocator) StringBuilder {
     return string_builder(0, Some(allocator))
 }
 
 // Create a new empty StringBuilder with the given initial capacity.
-#deprecated("use string_builder(capacity, allocator)")
-pub fn string_builder_with_capacity_and_allocator(capacity: usize, allocator: &Allocator?) StringBuilder {
+#deprecated ("use string_builder(capacity, allocator)")
+pub fn string_builder_with_capacity_and_allocator(capacity: usize,
+    allocator: &Allocator?) StringBuilder {
     return string_builder(capacity, allocator)
 }
 
@@ -98,25 +98,22 @@ pub fn ensure_capacity(sb: &StringBuilder, capacity: usize) {
     sb.reserve(capacity - sb.len)
 }
 
-// Shrink the builder's logical length, discarding any trailing bytes.
-// `new_len` is clamped to the current length, so this never grows. Backing
-// storage is retained for reuse.
+// Shrink the builder's logical length, discarding any trailing bytes. `new_len` is clamped to the
+// current length, so this never grows. Backing storage is retained for reuse.
 pub fn truncate(sb: &StringBuilder, new_len: usize) {
     if new_len < sb.len {
         sb.len = new_len
     }
 }
 
-// Slice over the unused tail of the backing buffer - bytes from `sb.len`
-// to `sb.cap`. Use with `commit(n)` to fill the buffer in place (e.g.
-// from a syscall) without going through `append`.
+// Slice over the unused tail of the backing buffer - bytes from `sb.len` to `sb.cap`. Use with
+// `commit(n)` to fill the buffer in place (e.g. from a syscall) without going through `append`.
 pub fn unwritten_buf(sb: &StringBuilder) u8[] {
     return slice_from_raw_parts(sb.ptr + sb.len, sb.cap - sb.len)
 }
 
-// Extend the logical length by `n` bytes, claiming bytes already written
-// into the tail of the buffer (typically via `unwritten_buf()`). Panics
-// if `n` exceeds the unwritten capacity.
+// Extend the logical length by `n` bytes, claiming bytes already written into the tail of the
+// buffer (typically via `unwritten_buf()`). Panics if `n` exceeds the unwritten capacity.
 pub fn commit(sb: &StringBuilder, n: usize) {
     if sb.len + n > sb.cap {
         panic("StringBuilder.commit: n exceeds unwritten capacity")
@@ -124,14 +121,14 @@ pub fn commit(sb: &StringBuilder, n: usize) {
     sb.len = sb.len + n
 }
 
-// Transfer ownership of the current buffer as a null-terminated OwnedString.
-// No allocation, no copy: the builder's buffer becomes the OwnedString's buffer
-// and the builder is reset to empty (cap=0) so a subsequent deinit() is a no-op.
-// Enables the `let sb = string_builder(); defer sb.deinit(); ... sb.to_string()`
-// pattern - defer fires on panic before to_string, otherwise transfers cleanly.
+// Transfer ownership of the current buffer as a null-terminated OwnedString. No allocation, no
+// copy: the builder's buffer becomes the OwnedString's buffer and the builder is reset to empty
+// (cap=0) so a subsequent deinit() is a no-op. Enables the `let sb = string_builder(); defer
+// sb.deinit(); ... sb.to_string()` pattern - defer fires on panic before to_string, otherwise
+// transfers cleanly.
 pub fn to_string(sb: &StringBuilder) OwnedString {
-    // Ensure room for the null terminator. StringBuilder grows in powers of two,
-    // so cap > len is the common case and reserve is a no-op.
+    // Ensure room for the null terminator. StringBuilder grows in powers of two, so cap > len is
+    // the common case and reserve is a no-op.
     if (sb.cap == sb.len) {
         sb.reserve(1)
     }
@@ -148,8 +145,8 @@ pub fn to_string(sb: &StringBuilder) OwnedString {
     return result
 }
 
-// Return a copy of the current contents as a null-terminated OwnedString.
-// Allocates from the given allocator.
+// Return a copy of the current contents as a null-terminated OwnedString. Allocates from the given
+// allocator.
 pub fn to_string(sb: &StringBuilder, allocator: &Allocator) OwnedString {
     const buf = allocator.alloc(sb.len + 1, align_of(u8))
         .expect("StringBuilder.to_string: allocation failed")
@@ -207,8 +204,8 @@ type FormatSpec = struct {
     base: u64
     uppercase: bool
     width: usize
-    fill: u8       // pad character (default space)
-    align: u8      // '<' left, '>' right, '^' center (default '>')
+    fill: u8 // pad character (default space)
+    align: u8 // '<' left, '>' right, '^' center (default '>')
     pad_zero: bool // '0' flag: zero-pad after sign
 }
 
@@ -220,14 +217,16 @@ fn is_base_char(c: u8) bool {
     return c == 'x' or c == 'X' or c == 'b' or c == 'o'
 }
 
-// Parse format spec: [fill][align][0][width][type]
-// Examples: "8", ">8", "<8x", "^10", "-<8", "08x", "08X"
+// Parse format spec: [fill][align][0][width][type] Examples: "8", ">8", "<8x", "^10", "-<8", "08x",
+// "08X"
 fn parse_int_spec(spec: String) FormatSpec {
     let result = FormatSpec {
         base = 10, uppercase = false,
-        width = 0, fill = ' ', align = '>', pad_zero = false
+        width = 0, fill = ' ', align = '>', pad_zero = false,
     }
-    if spec.len == 0 { return result }
+    if spec.len == 0 {
+        return result
+    }
 
     let pos = 0usize
 
@@ -283,8 +282,8 @@ fn repeat_fill(sb: &StringBuilder, fill_char: u8, pad_count: usize) {
     }
 }
 
-// Emit content (in tmp[0..len]) with alignment/padding per fmt.
-// For zero-pad with sign, sign_len is 1 if tmp starts with '-'.
+// Emit content (in tmp[0..len]) with alignment/padding per fmt. For zero-pad with sign, sign_len is
+// 1 if tmp starts with '-'.
 fn apply_int_padding(sb: &StringBuilder, tmp: u8[], len: usize, fmt: &FormatSpec) {
     if fmt.width <= len {
         sb.append_bytes(tmp[0..len])
@@ -343,10 +342,18 @@ fn append_unsigned_impl(sb: &StringBuilder, value: u64, spec: String) {
 }
 
 fn mask_for_bits(bits: u64) u64 {
-    if bits >= 64 { return 0xFFFF_FFFF_FFFF_FFFF }
-    if bits == 32 { return 0xFFFF_FFFF }
-    if bits == 16 { return 0xFFFF }
-    if bits == 8 { return 0xFF }
+    if bits >= 64 {
+        return 0xFFFF_FFFF_FFFF_FFFF
+    }
+    if bits == 32 {
+        return 0xFFFF_FFFF
+    }
+    if bits == 16 {
+        return 0xFFFF
+    }
+    if bits == 8 {
+        return 0xFF
+    }
     return 0xFFFF_FFFF_FFFF_FFFF
 }
 
@@ -369,12 +376,12 @@ fn append_signed_impl(sb: &StringBuilder, value: i64, spec: String, bits: u64) {
 }
 
 type FloatFormatSpec = struct {
-    precision: usize   // decimal digits (default 6)
+    precision: usize // decimal digits (default 6)
     has_precision: bool // whether user specified precision
-    width: usize       // minimum total width (0 = no padding)
-    pad_zero: bool     // pad with '0' instead of ' '
-    fill: u8           // pad character (default space)
-    align: u8          // '<' left, '>' right, '^' center (default '>')
+    width: usize // minimum total width (0 = no padding)
+    pad_zero: bool // pad with '0' instead of ' '
+    fill: u8 // pad character (default space)
+    align: u8 // '<' left, '>' right, '^' center (default '>')
 }
 
 // Parse float format spec: [fill][align][0][width][.precision]
@@ -382,9 +389,11 @@ fn parse_float_spec(spec: String) FloatFormatSpec {
     let result = FloatFormatSpec {
         precision = 6, has_precision = false,
         width = 0, pad_zero = false,
-        fill = ' ', align = '>'
+        fill = ' ', align = '>',
     }
-    if spec.len == 0 { return result }
+    if spec.len == 0 {
+        return result
+    }
 
     let pos = 0usize
 
@@ -428,8 +437,8 @@ fn parse_float_spec(spec: String) FloatFormatSpec {
     return result
 }
 
-// Emit content (in tmp[0..len]) with alignment/padding per fmt. Mirrors
-// `apply_int_padding` - the sign-aware zero-pad branch handles "-003.14".
+// Emit content (in tmp[0..len]) with alignment/padding per fmt. Mirrors `apply_int_padding` - the
+// sign-aware zero-pad branch handles "-003.14".
 fn apply_float_padding(sb: &StringBuilder, tmp: u8[], len: usize, fmt: &FloatFormatSpec) {
     if fmt.width <= len {
         sb.append_bytes(tmp[0..len])
@@ -466,10 +475,9 @@ fn apply_float_padding(sb: &StringBuilder, tmp: u8[], len: usize, fmt: &FloatFor
     }
 }
 
-// Float spec grammar: [fill][align][0][width][.precision][type], where
-// `type` is `e` / `E` (scientific, `format_f64_exp`) or `a` (exact C99
-// hex-float, `format_f64_hex` - the round-trip representation; width and
-// alignment apply, precision is inherent to the bits). No type char is
+// Float spec grammar: [fill][align][0][width][.precision][type], where `type` is `e` / `E`
+// (scientific, `format_f64_exp`) or `a` (exact C99 hex-float, `format_f64_hex` - the round-trip
+// representation; width and alignment apply, precision is inherent to the bits). No type char is
 // plain fixed-point (`format_f64`).
 fn append_float_impl(sb: &StringBuilder, val: f64, spec: String) {
     let kind: u8 = 'f'
@@ -647,17 +655,17 @@ pub fn append(sb: &StringBuilder, val: $T, spec: String) {
 // String-transforming appenders
 // =============================================================================
 //
-// Each of these reads from `s` (and friends) and writes the transformed result
-// onto `sb`. They never allocate beyond growing `sb`. Compose with `to_string()`
-// when an OwnedString result is wanted:
+// Each of these reads from `s` (and friends) and writes the transformed result onto `sb`. They
+// never allocate beyond growing `sb`. Compose with `to_string()` when an OwnedString result is
+// wanted:
 //
 //   let sb = string_builder()
 //   defer sb.deinit()
 //   sb.append_replaced("hello world", "world", "FLang")
 //   let owned = sb.to_string()
 
-// Append `s` with every occurrence of `from` replaced by `to`. An empty `from`
-// is a no-op (just appends `s` unchanged).
+// Append `s` with every occurrence of `from` replaced by `to`. An empty `from` is a no-op (just
+// appends `s` unchanged).
 pub fn append_replaced(sb: &StringBuilder, s: String, from: String, to: String) {
     if from.len == 0 or s.len == 0 {
         sb.append(s)
@@ -666,10 +674,15 @@ pub fn append_replaced(sb: &StringBuilder, s: String, from: String, to: String) 
     let i: usize = 0
     let start: usize = 0
     loop {
-        if i + from.len > s.len { break }
+        if i + from.len > s.len {
+            break
+        }
         let matched: bool = true
         for k in 0..from.len {
-            if s[i + k] != from[k] { matched = false; break }
+            if s[i + k] != from[k] {
+                matched = false
+                break
+            }
         }
         if matched {
             sb.append(s[start..i])
@@ -687,25 +700,31 @@ pub fn append_replaced(sb: &StringBuilder, s: String, from: String, to: String) 
 //   append_joined(sb, ["a", "b", "c"], ", ") -> "a, b, c"
 pub fn append_joined(sb: &StringBuilder, parts: String[], sep: String) {
     for i in 0..parts.len {
-        if i > 0 { sb.append(sep) }
+        if i > 0 {
+            sb.append(sep)
+        }
         sb.append(parts[i])
     }
 }
 
 // Append `s` repeated `n` times.
 pub fn append_repeated(sb: &StringBuilder, s: String, n: usize) {
-    if s.len == 0 or n == 0 { return }
+    if s.len == 0 or n == 0 {
+        return
+    }
     sb.reserve(s.len * n)
     for _i in 0..n {
         sb.append(s)
     }
 }
 
-// Append the bytes of `s` in reverse order. Note: byte-reversal of multi-byte
-// UTF-8 sequences produces invalid UTF-8 - use this only for ASCII content or
-// when reversing arbitrary bytes is the intent.
+// Append the bytes of `s` in reverse order. Note: byte-reversal of multi-byte UTF-8 sequences
+// produces invalid UTF-8 - use this only for ASCII content or when reversing arbitrary bytes is the
+// intent.
 pub fn append_reversed(sb: &StringBuilder, s: String) {
-    if s.len == 0 { return }
+    if s.len == 0 {
+        return
+    }
     sb.reserve(s.len)
     let i: usize = s.len
     while i > 0 {
@@ -714,11 +733,10 @@ pub fn append_reversed(sb: &StringBuilder, s: String) {
     }
 }
 
-// Append `s` padded to at least `width` characters using `fill`. `align` is
-// one of '<' (left-justify, pad on right), '>' (right-justify, pad on left),
-// or '^' (center). When `s` is already at least `width` bytes wide, it is
-// appended unchanged. Width is measured in bytes, matching the format-spec
-// behavior for primitives.
+// Append `s` padded to at least `width` characters using `fill`. `align` is one of '<'
+// (left-justify, pad on right), '>' (right-justify, pad on left), or '^' (center). When `s` is
+// already at least `width` bytes wide, it is appended unchanged. Width is measured in bytes,
+// matching the format-spec behavior for primitives.
 pub fn append_padded(sb: &StringBuilder, s: String, width: usize, align: char, fill: char) {
     if s.len >= width {
         sb.append(s)
@@ -741,8 +759,8 @@ pub fn append_padded(sb: &StringBuilder, s: String, width: usize, align: char, f
     }
 }
 
-// Append `s` with ASCII upper-case letters converted to lower-case. Non-ASCII
-// bytes are copied through unchanged.
+// Append `s` with ASCII upper-case letters converted to lower-case. Non-ASCII bytes are copied
+// through unchanged.
 pub fn append_lower_ascii(sb: &StringBuilder, s: String) {
     sb.reserve(s.len)
     for i in 0..s.len {
@@ -799,7 +817,7 @@ test "append integers" {
     let buf = [0u8; 256]
     let fba = fixed_buffer_allocator(buf)
     let alloc = fba.allocator()
-    let sb = string_builder(allocator=Some(&alloc))
+    let sb = string_builder(allocator = Some(&alloc))
 
     sb.append(0i32)
     expect_view(&sb, "0", "zero")
@@ -837,7 +855,7 @@ test "append bool and string" {
     let buf = [0u8; 256]
     let fba = fixed_buffer_allocator(buf)
     let alloc = fba.allocator()
-    let sb = string_builder(allocator=Some(&alloc))
+    let sb = string_builder(allocator = Some(&alloc))
 
     sb.append(true)
     expect_view(&sb, "true", "bool true")
@@ -861,7 +879,7 @@ test "append all int sizes" {
     let buf = [0u8; 512]
     let fba = fixed_buffer_allocator(buf)
     let alloc = fba.allocator()
-    let sb = string_builder(allocator=Some(&alloc))
+    let sb = string_builder(allocator = Some(&alloc))
 
     sb.append("u8: ")
     sb.append(0u8)
@@ -921,7 +939,7 @@ test "append format hex" {
     let buf = [0u8; 256]
     let fba = fixed_buffer_allocator(buf)
     let alloc = fba.allocator()
-    let sb = string_builder(allocator=Some(&alloc))
+    let sb = string_builder(allocator = Some(&alloc))
 
     sb.append(255u8, "x")
     expect_view(&sb, "ff", "u8 hex lower")
@@ -951,7 +969,7 @@ test "append format octal binary" {
     let buf = [0u8; 256]
     let fba = fixed_buffer_allocator(buf)
     let alloc = fba.allocator()
-    let sb = string_builder(allocator=Some(&alloc))
+    let sb = string_builder(allocator = Some(&alloc))
 
     sb.append(255u8, "o")
     expect_view(&sb, "377", "u8 octal")
@@ -981,7 +999,7 @@ test "append signed hex" {
     let buf = [0u8; 256]
     let fba = fixed_buffer_allocator(buf)
     let alloc = fba.allocator()
-    let sb = string_builder(allocator=Some(&alloc))
+    let sb = string_builder(allocator = Some(&alloc))
 
     sb.append(-1i32, "x")
     expect_view(&sb, "ffffffff", "i32 -1 hex")
@@ -999,7 +1017,7 @@ test "append signed hex all sizes" {
     let buf = [0u8; 512]
     let fba = fixed_buffer_allocator(buf)
     let alloc = fba.allocator()
-    let sb = string_builder(allocator=Some(&alloc))
+    let sb = string_builder(allocator = Some(&alloc))
 
     sb.append(-1i8, "x")
     expect_view(&sb, "ff", "i8 -1 hex")
@@ -1037,7 +1055,7 @@ test "append unsigned hex all sizes" {
     let buf = [0u8; 512]
     let fba = fixed_buffer_allocator(buf)
     let alloc = fba.allocator()
-    let sb = string_builder(allocator=Some(&alloc))
+    let sb = string_builder(allocator = Some(&alloc))
 
     sb.append(255u8, "x")
     expect_view(&sb, "ff", "u8 max hex")
@@ -1071,7 +1089,7 @@ test "append floats" {
     let buf = [0u8; 256]
     let fba = fixed_buffer_allocator(buf)
     let alloc = fba.allocator()
-    let sb = string_builder(allocator=Some(&alloc))
+    let sb = string_builder(allocator = Some(&alloc))
 
     sb.append(3.14f64)
     expect_view(&sb, "3.14", "f64 3.14")
@@ -1101,7 +1119,7 @@ test "append floats with precision" {
     let buf = [0u8; 256]
     let fba = fixed_buffer_allocator(buf)
     let alloc = fba.allocator()
-    let sb = string_builder(allocator=Some(&alloc))
+    let sb = string_builder(allocator = Some(&alloc))
 
     sb.append(3.14f64, ".2")
     expect_view(&sb, "3.14", "f64 .2 precision")
@@ -1124,7 +1142,7 @@ test "append floats scientific" {
     let buf = [0u8; 256]
     let fba = fixed_buffer_allocator(buf)
     let alloc = fba.allocator()
-    let sb = string_builder(allocator=Some(&alloc))
+    let sb = string_builder(allocator = Some(&alloc))
 
     sb.append(1.5f64, "e")
     expect_view(&sb, "1.500000e+00", "default six digits")
@@ -1151,7 +1169,7 @@ test "append floats exact hex" {
     let buf = [0u8; 256]
     let fba = fixed_buffer_allocator(buf)
     let alloc = fba.allocator()
-    let sb = string_builder(allocator=Some(&alloc))
+    let sb = string_builder(allocator = Some(&alloc))
 
     sb.append(1.5f64, "a")
     expect_view(&sb, "0x1.8p+0", "1.5 is 0x1.8p+0")
@@ -1182,7 +1200,7 @@ test "append floats with width" {
     let buf = [0u8; 256]
     let fba = fixed_buffer_allocator(buf)
     let alloc = fba.allocator()
-    let sb = string_builder(allocator=Some(&alloc))
+    let sb = string_builder(allocator = Some(&alloc))
 
     sb.append(3.14f64, "8.2")
     expect_view(&sb, "    3.14", "f64 width 8")
@@ -1201,7 +1219,7 @@ test "append binary octal all sizes" {
     let buf = [0u8; 512]
     let fba = fixed_buffer_allocator(buf)
     let alloc = fba.allocator()
-    let sb = string_builder(allocator=Some(&alloc))
+    let sb = string_builder(allocator = Some(&alloc))
 
     sb.append(255u8, "b")
     expect_view(&sb, "11111111", "u8 max binary")
@@ -1239,7 +1257,7 @@ test "int width right align" {
     let buf = [0u8; 256]
     let fba = fixed_buffer_allocator(buf)
     let alloc = fba.allocator()
-    let sb = string_builder(allocator=Some(&alloc))
+    let sb = string_builder(allocator = Some(&alloc))
 
     sb.append(42usize, "8")
     expect_view(&sb, "      42", "usize width 8")
@@ -1266,7 +1284,7 @@ test "int width left align" {
     let buf = [0u8; 256]
     let fba = fixed_buffer_allocator(buf)
     let alloc = fba.allocator()
-    let sb = string_builder(allocator=Some(&alloc))
+    let sb = string_builder(allocator = Some(&alloc))
 
     sb.append(42usize, "<8")
     expect_view(&sb, "42      ", "usize left 8")
@@ -1281,7 +1299,7 @@ test "int width center align" {
     let buf = [0u8; 256]
     let fba = fixed_buffer_allocator(buf)
     let alloc = fba.allocator()
-    let sb = string_builder(allocator=Some(&alloc))
+    let sb = string_builder(allocator = Some(&alloc))
 
     sb.append(42usize, "^8")
     expect_view(&sb, "   42   ", "usize center 8")
@@ -1300,7 +1318,7 @@ test "int zero pad" {
     let buf = [0u8; 256]
     let fba = fixed_buffer_allocator(buf)
     let alloc = fba.allocator()
-    let sb = string_builder(allocator=Some(&alloc))
+    let sb = string_builder(allocator = Some(&alloc))
 
     sb.append(42usize, "08")
     expect_view(&sb, "00000042", "usize zero-pad 8")
@@ -1323,7 +1341,7 @@ test "int custom fill" {
     let buf = [0u8; 256]
     let fba = fixed_buffer_allocator(buf)
     let alloc = fba.allocator()
-    let sb = string_builder(allocator=Some(&alloc))
+    let sb = string_builder(allocator = Some(&alloc))
 
     sb.append(42usize, "-<8")
     expect_view(&sb, "42------", "dash left-fill")
@@ -1342,7 +1360,7 @@ test "int width with base" {
     let buf = [0u8; 256]
     let fba = fixed_buffer_allocator(buf)
     let alloc = fba.allocator()
-    let sb = string_builder(allocator=Some(&alloc))
+    let sb = string_builder(allocator = Some(&alloc))
 
     sb.append(255u8, ">8x")
     expect_view(&sb, "      ff", "hex right width 8")
@@ -1361,7 +1379,7 @@ test "float alignment" {
     let buf = [0u8; 256]
     let fba = fixed_buffer_allocator(buf)
     let alloc = fba.allocator()
-    let sb = string_builder(allocator=Some(&alloc))
+    let sb = string_builder(allocator = Some(&alloc))
 
     sb.append(3.14f64, "<10.2")
     expect_view(&sb, "3.14      ", "f64 left 10")

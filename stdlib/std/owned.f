@@ -1,18 +1,16 @@
 // Owned(T) - value-by-value ownership with explicit transfer tracking.
 //
-// Pair with `defer buf.deinit()` to clean up on error and `buf.transfer()`
-// to hand off on success - the transfer disarms the defer so the caller
-// owns the value cleanly.
+// Pair with `defer buf.deinit()` to clean up on error and `buf.transfer()` to hand off on success -
+// the transfer disarms the defer so the caller owns the value cleanly.
 //
-// Works for any T with `deinit(&T)` in scope: header-types like
-// `StringBuilder` / `List` / `Dict` (cleanup is the type's own deinit), or
-// raw heap pointers (cleanup is `mem.free` adapted to `fn(&&u8)`).
+// Works for any T with `deinit(&T)` in scope: header-types like `StringBuilder` / `List` / `Dict`
+// (cleanup is the type's own deinit), or raw heap pointers (cleanup is `mem.free` adapted to
+// `fn(&&u8)`).
 
 import std.option
 import std.test
 
-// `__value: T?` carries the ownership state inline:
-// Some(_) = owned, None = transferred.
+// `__value: T?` carries the ownership state inline: Some(_) = owned, None = transferred.
 pub type Owned = struct(T) {
     __value: T?
     __cleanup: fn(&T) void
@@ -31,7 +29,7 @@ pub fn owned(value: $T, cleanup: fn(&T) void) Owned(T) {
 // Take the value out. Subsequent deinit is a no-op. Panics if already transferred.
 pub fn transfer(self: &Owned($T)) T {
     let v = self.__value match {
-        Some(v) => v,
+        Some(v) => v
         None => panic("Owned.transfer: value already transferred")
     }
     self.__value = None
@@ -44,7 +42,7 @@ pub fn deinit(self: &Owned($T)) {
         Some(v) => {
             self.__cleanup(&v)
             self.__value = None
-        },
+        }
         None => {}
     }
 }
@@ -53,13 +51,13 @@ pub fn is_owned(self: &Owned($T)) bool {
     return self.__value.is_some()
 }
 
-// Field/method access through the wrapper: `pat_buf.append(...)` dispatches
-// to StringBuilder.append. Returns a stable pointer into the inline payload -
-// mutations through it persist (unlike a match-bound copy of the Some value).
+// Field/method access through the wrapper: `pat_buf.append(...)` dispatches to
+// StringBuilder.append. Returns a stable pointer into the inline payload - mutations through it
+// persist (unlike a match-bound copy of the Some value).
 //
-// The pointer is computed by stepping past `Option`'s 4-byte tag plus padding
-// for T's alignment. `__value` is the first field of `Owned`, so its offset
-// is 0; the absolute offset reduces to the in-Option payload offset.
+// The pointer is computed by stepping past `Option`'s 4-byte tag plus padding for T's alignment.
+// `__value` is the first field of `Owned`, so its offset is 0; the absolute offset reduces to the
+// in-Option payload offset.
 pub fn op_deref(self: &Owned($T)) &T {
     if self.__value.is_none() {
         panic("Owned.op_deref: value already transferred")

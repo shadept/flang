@@ -3,15 +3,15 @@
 import std.option
 import std.test
 
-// Result(T, E) - a type representing either success (Ok) or failure (Err)
-// T is the success value type, E is the error value type
+// Result(T, E) - a type representing either success (Ok) or failure (Err) T is the success value
+// type, E is the error value type
 pub type Result = enum(T, E) {
     Ok(T)
     Err(E)
 }
 
-// `?` on Result(T, E) works inside any fn returning Result(U, E): success type
-// can differ, error type must match.
+// `?` on Result(T, E) works inside any fn returning Result(U, E): success type can differ, error
+// type must match.
 pub fn op_try(self: Result($T, $E)) TryResult(T, Result($U, E)) {
     return self match {
         Ok(v) => TryResult.Continue(v)
@@ -50,9 +50,9 @@ pub fn err(self: Result($T, $E)) E? {
     }
 }
 
-// Apply `f` to an Ok value, leaving `Err` untouched. Transforms what a
-// result holds without unwrapping and re-wrapping; `f` never runs on `Err`.
-// When `f` itself returns a Result, use `and_then` so the result does not nest.
+// Apply `f` to an Ok value, leaving `Err` untouched. Transforms what a result holds without
+// unwrapping and re-wrapping; `f` never runs on `Err`. When `f` itself returns a Result, use
+// `and_then` so the result does not nest.
 pub fn map(self: Result($T, $E), f: $F) Result($U, E) {
     return self match {
         Ok(v) => Ok(f(v))
@@ -60,14 +60,13 @@ pub fn map(self: Result($T, $E), f: $F) Result($U, E) {
     }
 }
 
-// Apply `f` to an Err value, leaving `Ok` untouched. This is how a layer
-// translates a lower layer's error into its own:
+// Apply `f` to an Err value, leaving `Ok` untouched. This is how a layer translates a lower layer's
+// error into its own:
 //
 //     const raw = raw_dir_open(path).map_err(to_dir_error)?
 //
-// which is the whole point - `?` requires the error types to match, and
-// without `map_err` every call site has to spell out an is_err / unwrap_err /
-// re-wrap dance instead.
+// which is the whole point - `?` requires the error types to match, and without `map_err` every
+// call site has to spell out an is_err / unwrap_err / re-wrap dance instead.
 pub fn map_err(self: Result($T, $E), f: $F) Result(T, $U) {
     return self match {
         Ok(v) => Ok(v)
@@ -75,10 +74,9 @@ pub fn map_err(self: Result($T, $E), f: $F) Result(T, $U) {
     }
 }
 
-// `map` for a function that itself yields a Result, flattening the result.
-// Chains a fallible step onto a fallible one; passing such a function to
-// `map` would give `Result(Result(U, E), E)`. `Err` short-circuits and `f`
-// never runs.
+// `map` for a function that itself yields a Result, flattening the result. Chains a fallible step
+// onto a fallible one; passing such a function to `map` would give `Result(Result(U, E), E)`. `Err`
+// short-circuits and `f` never runs.
 pub fn and_then(self: Result($T, $E), f: $F) Result($U, E) {
     return self match {
         Ok(v) => f(v)
@@ -205,10 +203,12 @@ test "map_err translates an Err and leaves an Ok alone" {
 
 test "and_then chains a fallible step without nesting" {
     const ok: Result(i32, String) = Ok(4)
-    const chained: Result(i32, String) = ok.and_then(fn(v: i32) Result(i32, String) { return Ok(v + 1) })
+    const chained: Result(i32, String) = ok.and_then(fn(v: i32) Result(i32,
+            String) { return Ok(v + 1) })
     assert_eq(chained.unwrap(), 5, "chained through")
 
-    const bailed: Result(i32, String) = ok.and_then(fn(v: i32) Result(i32, String) { return Err("bail") })
+    const bailed: Result(i32, String) = ok.and_then(fn(v: i32) Result(i32,
+            String) { return Err("bail") })
     assert_true(bailed.is_err(), "inner failure surfaces")
 }
 

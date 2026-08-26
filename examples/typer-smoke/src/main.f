@@ -1,15 +1,13 @@
 // Smoke test for the flang_typer data + engine layers.
 
-// Smoke covers the data layer + engine + coercion. The higher layers
-// (env, nominal_registry, function_registry, inference_results,
-// specialization, checker, result) compile cleanly as a library but
-// cannot yet be imported into a consuming project - the C# compiler's
-// RTTI emission walks generic structs declared as struct fields
-// (e.g. `Stack(Scope)` with `Scope.bindings: Dict(String, Binding)`)
-// and emits typeinfo entries for the *un-instantiated* templates,
-// producing C identifiers like `__flang__typeinfo_std_dict_Entry_$K_$V`
-// and `__flang__typeinfo_std_dict_Dict_?25_u8` that don't compile.
-// Tracked as a follow-up; the typer lib itself is feature-complete.
+// Smoke covers the data layer + engine + coercion. The higher layers (env, nominal_registry,
+// function_registry, inference_results, specialization, checker, result) compile cleanly as a
+// library but cannot yet be imported into a consuming project - the C# compiler's RTTI emission
+// walks generic structs declared as struct fields (e.g. `Stack(Scope)` with `Scope.bindings:
+// Dict(String, Binding)`) and emits typeinfo entries for the *un-instantiated* templates, producing
+// C identifiers like `__flang__typeinfo_std_dict_Entry_$K_$V` and
+// `__flang__typeinfo_std_dict_Dict_?25_u8` that don't compile. Tracked as a follow-up; the typer
+// lib itself is feature-complete.
 
 import std.set
 import flang_typer.type
@@ -97,8 +95,8 @@ pub fn main() i32 {
     let widen_ok = eng.unify(ty_i8(), ty_i32())
     check(widen_ok.is_ok(), "i8_widens_to_i32", &failures)
     let widen_cost = widen_ok match {
-        Unified(uo) => uo.cost,
-        _ => 0u32,
+        Unified(uo) => uo.cost
+        _ => 0u32
     }
     check(widen_cost == 1u32, "widening_costs_one", &failures)
 
@@ -124,8 +122,13 @@ pub fn main() i32 {
     let is_occurs = occurs_outcome match { UniOccursCheck(_) => true, _ => false }
     check(is_occurs, "occurs_check", &failures)
 
-    let t2: List(Ty) = list(2); t2.push(ty_i32()); t2.push(ty_bool())
-    let t3: List(Ty) = list(3); t3.push(ty_i32()); t3.push(ty_bool()); t3.push(ty_i64())
+    let t2: List(Ty) = list(2)
+    t2.push(ty_i32())
+    t2.push(ty_bool())
+    let t3: List(Ty) = list(3)
+    t3.push(ty_i32())
+    t3.push(ty_bool())
+    t3.push(ty_i64())
     let arity_outcome = eng.unify(Ty.Tuple(t2), Ty.Tuple(t3))
     let is_arity = arity_outcome match { UniArityMismatch(_) => true, _ => false }
     check(is_arity, "tuple_arity_mismatch", &failures)
@@ -137,10 +140,9 @@ pub fn main() i32 {
     let still_unbound = after_rollback match { Var(_) => true, _ => false }
     check(still_unbound, "try_unify_rolls_back", &failures)
 
-    // Standard HM pattern: enter the deeper level, allocate inference-only
-    // vars inside, exit, then generalise. After exit_level the engine's
-    // cursor is back to the outer level, so vars at the inner level are
-    // strictly deeper than the cursor and become quantified.
+    // Standard HM pattern: enter the deeper level, allocate inference-only vars inside, exit, then
+    // generalise. After exit_level the engine's cursor is back to the outer level, so vars at the
+    // inner level are strictly deeper than the cursor and become quantified.
     eng.enter_level()
     let inner_var = eng.fresh_var()
     eng.exit_level()

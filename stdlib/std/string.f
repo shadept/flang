@@ -26,7 +26,9 @@ pub fn find(s: String, c: char) usize? {
     const n = encode_char(c, buf as u8[])
     if n == 1 {
         for i in 0..s.len {
-            if s[i] == buf[0] { return Some(i) }
+            if s[i] == buf[0] {
+                return Some(i)
+            }
         }
         return null
     }
@@ -104,7 +106,9 @@ pub fn rfind(s: String, c: char) usize? {
         let i: usize = s.len
         while i > 0 {
             i = i - 1
-            if s[i] == buf[0] { return Some(i) }
+            if s[i] == buf[0] {
+                return Some(i)
+            }
         }
         return null
     }
@@ -192,9 +196,9 @@ pub fn trim(s: String) String {
 // Split
 // =============================================================================
 //
-// Byte- and String-delimiter overloads. Byte form is declared first for the
-// same overload-resolution reason documented above (char literals bind to an
-// unconstrained type variable and tie with the String overload - first wins).
+// Byte- and String-delimiter overloads. Byte form is declared first for the same
+// overload-resolution reason documented above (char literals bind to an unconstrained type variable
+// and tie with the String overload - first wins).
 
 // Split a string by a byte delimiter. Returns a List of non-owning views.
 //   split("a,b,c", ',')    → ["a", "b", "c"]
@@ -214,8 +218,8 @@ pub fn split(s: String, delimiter: u8, max: i32 = -1) List(String) {
     return result
 }
 
-// Split a string by a String delimiter. Returns a List of non-owning views.
-// An empty delimiter is treated as "no split" - the result is one element.
+// Split a string by a String delimiter. Returns a List of non-owning views. An empty delimiter is
+// treated as "no split" - the result is one element.
 //   split("a::b::c", "::")    → ["a", "b", "c"]
 //   split("a::b::c", "::", 1) → ["a", "b::c"]
 pub fn split(s: String, sep: String, max: i32 = -1) List(String) {
@@ -228,11 +232,18 @@ pub fn split(s: String, sep: String, max: i32 = -1) List(String) {
     let i: usize = 0
     let splits: i32 = 0
     loop {
-        if i + sep.len > s.len { break }
-        if max >= 0 and splits >= max { break }
+        if i + sep.len > s.len {
+            break
+        }
+        if max >= 0 and splits >= max {
+            break
+        }
         let matched: bool = true
         for k in 0..sep.len {
-            if s[i + k] != sep[k] { matched = false; break }
+            if s[i + k] != sep[k] {
+                matched = false
+                break
+            }
         }
         if matched {
             result.push(s[start..i])
@@ -257,7 +268,9 @@ pub fn count(s: String, c: char) usize {
     if n == 1 {
         let total: usize = 0
         for i in 0..s.len {
-            if s[i] == buf[0] { total = total + 1 }
+            if s[i] == buf[0] {
+                total = total + 1
+            }
         }
         return total
     }
@@ -265,19 +278,23 @@ pub fn count(s: String, c: char) usize {
 }
 
 pub fn count(s: String, needle: String) usize {
-    if needle.len == 0 { return 0 }
+    if needle.len == 0 {
+        return 0
+    }
     let total: usize = 0
     let i: usize = 0
     loop {
-        if i + needle.len > s.len { break }
+        if i + needle.len > s.len {
+            break
+        }
         const tail = s[i..s.len]
         const f = find(tail, needle)
         f match {
             Some(off) => {
                 total = total + 1
                 i = i + off + needle.len
-            },
-            None => break,
+            }
+            None => break
         }
     }
     return total
@@ -291,12 +308,16 @@ pub fn count(s: String, needle: String) usize {
 //   "core.option".strip_prefix("core.") -> Some("option")
 //   "std.io".strip_prefix("core.")      -> None
 pub fn strip_prefix(s: String, prefix: String) String? {
-    if !s.starts_with(prefix) { return null }
+    if !s.starts_with(prefix) {
+        return null
+    }
     return Some(s[prefix.len..s.len])
 }
 
 pub fn strip_suffix(s: String, suffix: String) String? {
-    if !s.ends_with(suffix) { return null }
+    if !s.ends_with(suffix) {
+        return null
+    }
     return Some(s[0..s.len - suffix.len])
 }
 
@@ -307,26 +328,36 @@ pub fn strip_suffix(s: String, suffix: String) String? {
 // Splits `s` into (left, right) at byte index `i`. `i` is clamped to s.len.
 pub fn split_at(s: String, i: usize) (String, String) {
     let cut: usize = i
-    if cut > s.len { cut = s.len }
+    if cut > s.len {
+        cut = s.len
+    }
     return (s[0..cut], s[cut..s.len])
 }
 
 pub fn is_ascii(s: String) bool {
     for i in 0..s.len {
-        if s[i] >= 0x80 { return false }
+        if s[i] >= 0x80 {
+            return false
+        }
     }
     return true
 }
 
 fn ascii_lower(b: u8) u8 {
-    if b >= 'A' and b <= 'Z' { return b + 32 }
+    if b >= 'A' and b <= 'Z' {
+        return b + 32
+    }
     return b
 }
 
 pub fn eq_ignore_ascii_case(a: String, b: String) bool {
-    if a.len != b.len { return false }
+    if a.len != b.len {
+        return false
+    }
     for i in 0..a.len {
-        if ascii_lower(a[i]) != ascii_lower(b[i]) { return false }
+        if ascii_lower(a[i]) != ascii_lower(b[i]) {
+            return false
+        }
     }
     return true
 }
@@ -335,9 +366,9 @@ pub fn eq_ignore_ascii_case(a: String, b: String) bool {
 // Lines iterator
 // =============================================================================
 //
-// Yields each line of `s` as a non-owning String view. The trailing newline is
-// stripped - both `\n` and `\r\n` produce the same line content. A final line
-// without a trailing newline is still yielded.
+// Yields each line of `s` as a non-owning String view. The trailing newline is stripped - both `\n`
+// and `\r\n` produce the same line content. A final line without a trailing newline is still
+// yielded.
 //
 //   for line in s.lines() { ... }
 
@@ -360,8 +391,12 @@ pub fn iter(self: &Lines) &Lines {
 }
 
 pub fn next(self: &Lines) String? {
-    if self.done { return null }
-    if self.pos > self.buf.len { return null }
+    if self.done {
+        return null
+    }
+    if self.pos > self.buf.len {
+        return null
+    }
 
     const start = self.pos
     let i: usize = start
@@ -377,10 +412,12 @@ pub fn next(self: &Lines) String? {
     const line = from_c_string(self.buf.ptr + start, Some(line_end - start))
 
     if i >= self.buf.len {
-        // Final segment without trailing \n. Yield once more only if non-empty;
-        // otherwise yield empty and stop (so "a\n" yields just "a", "a" yields "a").
+        // Final segment without trailing \n. Yield once more only if non-empty; otherwise yield
+        // empty and stop (so "a\n" yields just "a", "a" yields "a").
         self.done = true
-        if start == self.buf.len { return null }
+        if start == self.buf.len {
+            return null
+        }
         return Some(line)
     }
 
@@ -411,7 +448,9 @@ pub fn from_view(s: String, allocator: &Allocator? = null) OwnedString {
 
 pub fn deinit(self: &OwnedString) {
     // Idempotent: a second call sees the nulled pointer and no-ops.
-    if self.ptr as usize == 0 { return }
+    if self.ptr as usize == 0 {
+        return
+    }
     self.allocator.or_global().free(slice_from_raw_parts(self.ptr, self.len))
     self.ptr = 0usize as &u8
     self.len = 0
@@ -421,17 +460,15 @@ pub fn as_view(self: OwnedString) String {
     return .{ ptr = self.ptr, len = self.len }
 }
 
-// Prints the OwnedString and TAKES OWNERSHIP (frees it), so the
-// `print($"...")` pattern needs no temporary + deinit dance. Lives here
-// rather than core.io because core cannot name OwnedString.
+// Prints the OwnedString and TAKES OWNERSHIP (frees it), so the `print($"...")` pattern needs no
+// temporary + deinit dance. Lives here rather than core.io because core cannot name OwnedString.
 pub fn print(value: OwnedString) i32 {
     defer value.deinit()
     return print(value.as_view())
 }
 
-// Prints the OwnedString and TAKES OWNERSHIP (frees it), so the
-// `println($"...")` pattern needs no temporary + deinit dance. Lives here
-// rather than core.io because core cannot name OwnedString.
+// Prints the OwnedString and TAKES OWNERSHIP (frees it), so the `println($"...")` pattern needs no
+// temporary + deinit dance. Lives here rather than core.io because core cannot name OwnedString.
 pub fn println(value: OwnedString) i32 {
     defer value.deinit()
     return println(value.as_view())
@@ -522,8 +559,8 @@ pub fn next(it: &Chars) char? {
 // Partition
 // =============================================================================
 
-// Split at the first occurrence of delimiter. Returns (before, after) as a tuple.
-// No heap allocation. If delimiter not found, returns (s, "").
+// Split at the first occurrence of delimiter. Returns (before, after) as a tuple. No heap
+// allocation. If delimiter not found, returns (s, "").
 pub fn partition(s: String, delimiter: u8) (String, String) {
     for i in 0..s.len {
         if s[i] == delimiter {

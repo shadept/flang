@@ -1,5 +1,5 @@
-// Import resolution: the two symmetric halves of the C# compiler's module
-// machinery, ported for the self-host driver.
+// Import resolution: the two symmetric halves of the C# compiler's module machinery, ported for the
+// self-host driver.
 //
 //   - `resolve_import` maps a dotted import (`flang_parser.lexer`) to an
 //     existing source file, trying project-name, dependency-name and
@@ -9,8 +9,8 @@
 //     module name its symbols register under, so the import side and the
 //     symbol side agree (mirrors `TemplateExpander.DeriveModulePath`).
 //
-// Resolution is flat and path-only: no transitive deps, no lockfile. Paths
-// are normalised to forward slashes before any prefix comparison.
+// Resolution is flat and path-only: no transitive deps, no lockfile. Paths are normalised to
+// forward slashes before any prefix comparison.
 
 import std.allocator
 import std.list
@@ -24,32 +24,31 @@ import std.test
 import flang_analysis.project
 import flang_parser.comptime
 
-// One direct dependency: its `[project].name` (its import namespace) and
-// its resolved source root.
+// One direct dependency: its `[project].name` (its import namespace) and its resolved source root.
 pub type DepRoot = struct {
     name: OwnedString
     root: OwnedString
 }
 
-// Everything import resolution needs about the project under build. All
-// roots are stored normalised (forward slashes, no trailing separator).
+// Everything import resolution needs about the project under build. All roots are stored normalised
+// (forward slashes, no trailing separator).
 pub type ResolveCtx = struct {
     project_name: OwnedString
     project_source_root: OwnedString
     deps: List(DepRoot)
     stdlib_root: OwnedString
     cwd: OwnedString
-    // `flang.toml`'s `[imports].global`: dotted module names every
-    // PROJECT-origin file imports implicitly. The stdlib and dependencies
-    // stay isolated from per-project config, so this never applies to them.
+    // `flang.toml`'s `[imports].global`: dotted module names every PROJECT-origin file imports
+    // implicitly. The stdlib and dependencies stay isolated from per-project config, so this never
+    // applies to them.
     global_imports: List(OwnedString)
-    // Compile-time context #if conditions evaluate against during this
-    // build. Host by default; `--target-os`/`--target-arch` override it.
+    // Compile-time context #if conditions evaluate against during this build. Host by default;
+    // `--target-os`/`--target-arch` override it.
     comptime: ComptimeCtx
 }
 
-// Scoped mutability: installs the build's compile-time context (a
-// `--target-os`/`--target-arch` override). Fields are writable only here.
+// Scoped mutability: installs the build's compile-time context (a `--target-os`/`--target-arch`
+// override). Fields are writable only here.
 pub fn set_comptime(self: &ResolveCtx, c: ComptimeCtx) {
     self.comptime = c
 }
@@ -68,13 +67,16 @@ pub fn deinit(self: &ResolveCtx) {
     self.global_imports.deinit()
 }
 
-// Resolve a dotted import to an existing file path, or null when no rule
-// matches an existing file. The returned string is owned by the caller.
-pub fn resolve_import(ctx: &ResolveCtx, segs: &List(String), allocator: &Allocator? = null) OwnedString? {
+// Resolve a dotted import to an existing file path, or null when no rule matches an existing file.
+// The returned string is owned by the caller.
+pub fn resolve_import(ctx: &ResolveCtx, segs: &List(String),
+    allocator: &Allocator? = null) OwnedString? {
     // Project rule: first segment is the project name.
     if segs.len > 1 and segs[0] == ctx.project_name.as_view() {
         let p = join_module_path(ctx.project_source_root.as_view(), segs, 1, allocator)
-        if exists(p.as_view()) { return Some(p) }
+        if exists(p.as_view()) {
+            return Some(p)
+        }
         p.deinit()
     }
 
@@ -83,7 +85,9 @@ pub fn resolve_import(ctx: &ResolveCtx, segs: &List(String), allocator: &Allocat
         for &d in ctx.deps {
             if segs[0] == d.name.as_view() {
                 let p = join_module_path(d.root.as_view(), segs, 1, allocator)
-                if exists(p.as_view()) { return Some(p) }
+                if exists(p.as_view()) {
+                    return Some(p)
+                }
                 p.deinit()
             }
         }
@@ -91,20 +95,23 @@ pub fn resolve_import(ctx: &ResolveCtx, segs: &List(String), allocator: &Allocat
 
     // Include rule: stdlib first, then the working directory.
     let p1 = join_module_path(ctx.stdlib_root.as_view(), segs, 0, allocator)
-    if exists(p1.as_view()) { return Some(p1) }
+    if exists(p1.as_view()) {
+        return Some(p1)
+    }
     p1.deinit()
 
     let p2 = join_module_path(ctx.cwd.as_view(), segs, 0, allocator)
-    if exists(p2.as_view()) { return Some(p2) }
+    if exists(p2.as_view()) {
+        return Some(p2)
+    }
     p2.deinit()
 
     return null
 }
 
-// Derive the dotted module name a source file's symbols register under.
-// Classifies the path under project / dependency / stdlib roots in the
-// same order `resolve_import` tries them; an unclassified path falls back
-// to its bare file stem.
+// Derive the dotted module name a source file's symbols register under. Classifies the path under
+// project / dependency / stdlib roots in the same order `resolve_import` tries them; an
+// unclassified path falls back to its bare file stem.
 pub fn module_fqn(ctx: &ResolveCtx, path: String, allocator: &Allocator? = null) OwnedString {
     let norm = normalize_sep(path, allocator)
     defer norm.deinit()
@@ -135,7 +142,8 @@ pub fn module_fqn(ctx: &ResolveCtx, path: String, allocator: &Allocator? = null)
 }
 
 // `base/seg.../tail.f` from import segments, joining with forward slashes.
-pub fn join_module_path(base: String, segs: &List(String), start: usize, allocator: &Allocator? = null) OwnedString {
+pub fn join_module_path(base: String, segs: &List(String), start: usize,
+    allocator: &Allocator? = null) OwnedString {
     let sb = string_builder(0, allocator)
     defer sb.deinit()
     sb.append(base)
@@ -147,10 +155,9 @@ pub fn join_module_path(base: String, segs: &List(String), start: usize, allocat
     return sb.to_string()
 }
 
-// Build a resolution context for `proj` under the current directory.
-// `stdlib_root` is the include root for `std.*` / `core.*` (the value of
-// the build's `--stdlib-path`). Each dependency's source root is derived
-// from its own manifest, exactly as the C# compiler does.
+// Build a resolution context for `proj` under the current directory. `stdlib_root` is the include
+// root for `std.*` / `core.*` (the value of the build's `--stdlib-path`). Each dependency's source
+// root is derived from its own manifest, exactly as the C# compiler does.
 pub fn resolve_ctx(proj: &Project, stdlib_root: String, allocator: &Allocator? = null) ResolveCtx {
     let deps = list(0, allocator)
     for &d in proj.deps {
@@ -163,7 +170,8 @@ pub fn resolve_ctx(proj: &Project, stdlib_root: String, allocator: &Allocator? =
     }
     return ResolveCtx {
         project_name = from_view(proj.name.as_view()),
-        project_source_root = normalized_owned(source_root(".", proj.source.as_view(), allocator), allocator),
+        project_source_root = normalized_owned(source_root(".", proj.source.as_view(), allocator),
+            allocator),
         deps = deps,
         stdlib_root = normalize_sep(stdlib_root, allocator),
         cwd = from_view("."),
@@ -172,8 +180,8 @@ pub fn resolve_ctx(proj: &Project, stdlib_root: String, allocator: &Allocator? =
     }
 }
 
-// A resolution context for a single-file build: no project name or deps,
-// so only the stdlib and working-directory include rules apply.
+// A resolution context for a single-file build: no project name or deps, so only the stdlib and
+// working-directory include rules apply.
 pub fn single_file_ctx(stdlib_root: String, allocator: &Allocator? = null) ResolveCtx {
     let deps: List(DepRoot) = list(0, allocator)
     let globals: List(OwnedString) = list(0, allocator)
@@ -188,8 +196,8 @@ pub fn single_file_ctx(stdlib_root: String, allocator: &Allocator? = null) Resol
     }
 }
 
-// A dependency's source root: read its manifest and take the static
-// prefix of its `source` glob; fall back to `<dep>/src` when unreadable.
+// A dependency's source root: read its manifest and take the static prefix of its `source` glob;
+// fall back to `<dep>/src` when unreadable.
 fn dep_source_root(dep_dir: String, allocator: &Allocator?) OwnedString {
     let manifest = $"{dep_dir}/flang.toml"
     defer manifest.deinit()
@@ -204,9 +212,9 @@ fn dep_source_root(dep_dir: String, allocator: &Allocator?) OwnedString {
     return source_root(dep_dir, dp.source.as_view(), allocator)
 }
 
-// The static (glob-free) prefix of `source_glob` under `project_dir`.
-// `.` as the directory means "relative to here", so it is not prefixed;
-// a glob with no static prefix resolves to the directory itself.
+// The static (glob-free) prefix of `source_glob` under `project_dir`. `.` as the directory means
+// "relative to here", so it is not prefixed; a glob with no static prefix resolves to the directory
+// itself.
 fn source_root(project_dir: String, source_glob: String, allocator: &Allocator?) OwnedString {
     let segs = split(source_glob, '/')
     defer segs.deinit()
@@ -218,9 +226,15 @@ fn source_root(project_dir: String, source_glob: String, allocator: &Allocator?)
         wrote = true
     }
     for s in segs {
-        if contains(s, "*") { break }
-        if contains(s, "?") { break }
-        if wrote { sb.append('/') }
+        if contains(s, "*") {
+            break
+        }
+        if contains(s, "?") {
+            break
+        }
+        if wrote {
+            sb.append('/')
+        }
         sb.append(s)
         wrote = true
     }
@@ -235,18 +249,21 @@ fn source_root(project_dir: String, source_glob: String, allocator: &Allocator?)
 // Read a whole file as text, or null when it cannot be opened or read.
 pub fn read_text(path: String) OwnedString? {
     let r = open_file(path, FileMode.Read)
-    if r.is_err() { return null }
+    if r.is_err() {
+        return null
+    }
     let f = r.unwrap()
     let rd = read_all(&f)
     close_file(&f)
-    if rd.is_err() { return null }
+    if rd.is_err() {
+        return null
+    }
     return Some(rd.unwrap())
 }
 
 // Internal helpers
 
-// Normalise a path to the forward-slash convention every `ResolveCtx`
-// comparison assumes.
+// Normalise a path to the forward-slash convention every `ResolveCtx` comparison assumes.
 pub fn normalize_sep(path: String, allocator: &Allocator? = null) OwnedString {
     let sb = string_builder(0, allocator)
     defer sb.deinit()
@@ -254,24 +271,30 @@ pub fn normalize_sep(path: String, allocator: &Allocator? = null) OwnedString {
     return sb.to_string()
 }
 
-// Normalise an owned path to forward slashes, freeing the input. Keeps the
-// `ResolveCtx` roots in the single separator convention `strip_root` compares
-// against, so an absolute or backslashed root (e.g. an argv[0]-derived stdlib
-// path on Windows) classifies the same as a forward-slash one.
+// Normalise an owned path to forward slashes, freeing the input. Keeps the `ResolveCtx` roots in
+// the single separator convention `strip_root` compares against, so an absolute or backslashed root
+// (e.g. an argv[0]-derived stdlib path on Windows) classifies the same as a forward-slash one.
 fn normalized_owned(s: OwnedString, allocator: &Allocator?) OwnedString {
     let n = normalize_sep(s.as_view(), allocator)
     s.deinit()
     return n
 }
 
-// The part of `path` beneath `root`, or null when `path` is not strictly
-// inside `root`. A separator boundary is required so `src` never matches
-// `src2/x.f`.
+// The part of `path` beneath `root`, or null when `path` is not strictly inside `root`. A separator
+// boundary is required so `src` never matches `src2/x.f`.
 fn strip_root(path: String, root: String) String? {
-    if root.len == 0 { return null }
-    if !starts_with(path, root) { return null }
-    if path.len <= root.len { return null }
-    if path[root.len] != '/' { return null }
+    if root.len == 0 {
+        return null
+    }
+    if !starts_with(path, root) {
+        return null
+    }
+    if path.len <= root.len {
+        return null
+    }
+    if path[root.len] != '/' {
+        return null
+    }
     return Some(path[(root.len + 1)..path.len])
 }
 
@@ -280,7 +303,9 @@ fn basename(path: String) String {
     let start: usize = 0
     let i: usize = 0
     while i < path.len {
-        if path[i] == '/' { start = i + 1 }
+        if path[i] == '/' {
+            start = i + 1
+        }
         i = i + 1
     }
     return strip_source_ext(path[start..path.len])
@@ -288,7 +313,9 @@ fn basename(path: String) String {
 
 // A source file's module stem: the `.f` extension removed.
 fn strip_source_ext(name: String) String {
-    if ends_with(name, ".f") { return name[0..(name.len - 2)] }
+    if ends_with(name, ".f") {
+        return name[0..(name.len - 2)]
+    }
     return name
 }
 
@@ -406,14 +433,10 @@ test "join_module_path: builds base/seg/seg.f from segments" {
     assert_true(p2.as_view() == "dep/src/io/file.f", "skips leading segment")
 }
 
-
-
-
-
 test "resolve_ctx normalises a backslash stdlib root" {
-    // An absolute argv[0]-derived path on Windows arrives with `\` separators;
-    // roots must be stored forward-slashed so strip_root classifies stdlib
-    // files instead of falling back to their bare stem.
+    // An absolute argv[0]-derived path on Windows arrives with `\` separators; roots must be stored
+    // forward-slashed so strip_root classifies stdlib files instead of falling back to their bare
+    // stem.
     let proj = parse_project("[project]\nname = \"p\"\nkind = \"exe\"\nsource = \"src/**/*.f\"\n")
     defer proj.deinit()
     let ctx = resolve_ctx(&proj, "C:\\x\\build\\stdlib")

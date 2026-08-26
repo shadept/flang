@@ -20,8 +20,7 @@ pub fn assert_eq(a: $T, b: T, msg: String) {
     }
 }
 
-// Assert that two lists have the same elements in the same order.
-// Uses == on each element pair.
+// Assert that two lists have the same elements in the same order. Uses == on each element pair.
 pub fn assert_seq_eq(a: List($T), b: List(T), msg: String) {
     if a.len != b.len {
         let sb = string_builder(64)
@@ -45,8 +44,8 @@ pub fn assert_seq_eq(a: List($T), b: List(T), msg: String) {
     }
 }
 
-// Assert that two lists have the same elements regardless of order.
-// Uses == on elements. O(n^2) - intended for small test collections.
+// Assert that two lists have the same elements regardless of order. Uses == on elements. O(n^2) -
+// intended for small test collections.
 pub fn assert_set_eq(a: List($T), b: List(T), msg: String) {
     if a.len != b.len {
         let sb = string_builder(64)
@@ -82,7 +81,7 @@ pub fn assert_set_eq(a: List($T), b: List(T), msg: String) {
     for i in ..b.len {
         let found = false
         for j in ..a.len {
-            if  b[i] == a[j] {
+            if b[i] == a[j] {
                 found = true
                 break
             }

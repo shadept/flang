@@ -1,5 +1,5 @@
-// Core I/O primitives - printf wrappers for primitive types
-// Extended overloads (char, Option, OwnedString) live in std/io/fmt.f
+// Core I/O primitives - printf wrappers for primitive types Extended overloads (char, Option,
+// OwnedString) live in std/io/fmt.f
 
 import core.string
 

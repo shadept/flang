@@ -1,14 +1,12 @@
 // Builder API for constructing FIR programs.
 //
-// `function()` starts a `FunctionBuilder`. Add blocks via `.entry()` /
-// `.block()`. Each returns a `BlockBuilder` that emits instructions and
-// terminators. `.finish()` hands back the underlying `Function` for
-// inclusion in a `IrModule`.
+// `function()` starts a `FunctionBuilder`. Add blocks via `.entry()` / `.block()`. Each returns a
+// `BlockBuilder` that emits instructions and terminators. `.finish()` hands back the underlying
+// `Function` for inclusion in a `IrModule`.
 //
-// Instruction emitters return `Operand` (the just-produced SSA value)
-// so results chain directly into the next call. Terminators (`ret`,
-// `br`, `br_if`, `unreachable`) return nothing; calling one twice on
-// the same block overwrites the previous terminator.
+// Instruction emitters return `Operand` (the just-produced SSA value) so results chain directly
+// into the next call. Terminators (`ret`, `br`, `br_if`, `unreachable`) return nothing; calling one
+// twice on the same block overwrites the previous terminator.
 
 import std.allocator
 import std.list
@@ -36,8 +34,8 @@ pub type FunctionBuilder = struct {
     allocator: &Allocator?
 }
 
-// Start a new function. `return_ty = null` is void return. Add params
-// via `.param(ty)` before calling `.entry()`.
+// Start a new function. `return_ty = null` is void return. Add params via `.param(ty)` before
+// calling `.entry()`.
 pub fn function(name: String, return_ty: IrType?, allocator: &Allocator? = null) FunctionBuilder {
     let params: List(BlockParam) = list(0, allocator)
     let blocks: List(Block) = list(0, allocator)
@@ -57,10 +55,9 @@ pub fn function(name: String, return_ty: IrType?, allocator: &Allocator? = null)
     }
 }
 
-// Mint a function-unique block label: `prefix` + a fresh SSA id. The
-// buffer transfers into the function's `label_storage`, so the returned
-// view stays valid for the function's life (an OwnedString's heap bytes
-// do not move when the list grows).
+// Mint a function-unique block label: `prefix` + a fresh SSA id. The buffer transfers into the
+// function's `label_storage`, so the returned view stays valid for the function's life (an
+// OwnedString's heap bytes do not move when the list grows).
 pub fn fresh_label(self: &FunctionBuilder, prefix: String) String {
     let sb = string_builder(prefix.len + 8, self.allocator)
     defer sb.deinit()
@@ -74,24 +71,22 @@ pub fn fresh(self: &FunctionBuilder) u32 {
     return self.func.fresh_value_id()
 }
 
-// Declare a function parameter and return its SSA operand. Call before
-// `.entry()` - order determines argument order at call sites.
+// Declare a function parameter and return its SSA operand. Call before `.entry()` - order
+// determines argument order at call sites.
 pub fn param(self: &FunctionBuilder, ty: IrType) Operand {
     const id = self.fresh()
     self.func.add_param(BlockParam { id = id, ty = ty })
     return Operand.Local(id)
 }
 
-// Create the entry block. The function's parameters (declared via
-// `.param()`) are already in scope.
+// Create the entry block. The function's parameters (declared via `.param()`) are already in scope.
 pub fn entry(self: &FunctionBuilder) BlockBuilder {
     let none: List(IrType) = list(0, self.allocator)
     return self.block_internal("entry", none)
 }
 
-// Add a non-entry block with `label`. `param_types` is the list of types
-// for the block's parameters (commonly empty; non-empty for loop heads
-// receiving values via `br`).
+// Add a non-entry block with `label`. `param_types` is the list of types for the block's parameters
+// (commonly empty; non-empty for loop heads receiving values via `br`).
 pub fn block(self: &FunctionBuilder, label: String, param_types: List(IrType)) BlockBuilder {
     return self.block_internal(label, param_types)
 }
@@ -132,17 +127,16 @@ fn block_internal(self: &FunctionBuilder, label: String, param_types: List(IrTyp
     return BlockBuilder { fb = self, block_idx = idx }
 }
 
-// Move the built function out. The builder is left holding empty lists,
-// so a `deinit` after `finish` frees nothing - callers may pair every
-// builder with a `deinit` unconditionally.
+// Move the built function out. The builder is left holding empty lists, so a `deinit` after
+// `finish` frees nothing - callers may pair every builder with a `deinit` unconditionally.
 pub fn finish(self: &FunctionBuilder) Function {
     let f = self.func
     self.func.release_buffers(self.allocator)
     return f
 }
 
-// Free a builder abandoned before `finish` (a refused body). Safe after
-// `finish` too: the move left empty lists behind.
+// Free a builder abandoned before `finish` (a refused body). Safe after `finish` too: the move left
+// empty lists behind.
 pub fn deinit(self: &FunctionBuilder) {
     self.func.deinit()
 }
@@ -167,10 +161,9 @@ pub fn label(self: &BlockBuilder) String {
     return self.fb.func.blocks[self.block_idx].label
 }
 
-// Re-point this builder at another block of the same function. A
-// `BlockBuilder` is (function, block index), so a consumer can hold one as
-// a cursor: emitting control flow moves the cursor, and every frame holding
-// a reference to it keeps emitting into the live block without threading a
+// Re-point this builder at another block of the same function. A `BlockBuilder` is (function, block
+// index), so a consumer can hold one as a cursor: emitting control flow moves the cursor, and every
+// frame holding a reference to it keeps emitting into the live block without threading a
 // continuation back up.
 pub fn move_to(self: &BlockBuilder, target: &BlockBuilder) {
     self.block_idx = target.block_idx
@@ -236,7 +229,7 @@ fn binary(self: &BlockBuilder, op: BinaryOp, ty: IrType, lhs: Operand, rhs: Oper
     const id = self.fb.fresh()
     let block = &self.fb.func.blocks[self.block_idx]
     block.instrs.push(Instr.Binary(BinaryInstr {
-        result = id, op = op, ty = ty, lhs = lhs, rhs = rhs
+        result = id, op = op, ty = ty, lhs = lhs, rhs = rhs,
     }))
     return Operand.Local(id)
 }
@@ -256,7 +249,7 @@ fn unary(self: &BlockBuilder, op: UnaryOp, ty: IrType, v: Operand) Operand {
     const id = self.fb.fresh()
     let block = &self.fb.func.blocks[self.block_idx]
     block.instrs.push(Instr.Unary(UnaryInstr {
-        result = id, op = op, ty = ty, operand = v
+        result = id, op = op, ty = ty, operand = v,
     }))
     return Operand.Local(id)
 }
@@ -314,11 +307,12 @@ pub fn fcmp_ge(self: &BlockBuilder, ty: IrType, lhs: Operand, rhs: Operand) Oper
     return self.compare(CompareOp.FcmpGe, ty, lhs, rhs)
 }
 
-fn compare(self: &BlockBuilder, op: CompareOp, operand_ty: IrType, lhs: Operand, rhs: Operand) Operand {
+fn compare(self: &BlockBuilder, op: CompareOp, operand_ty: IrType, lhs: Operand,
+    rhs: Operand) Operand {
     const id = self.fb.fresh()
     let block = &self.fb.func.blocks[self.block_idx]
     block.instrs.push(Instr.Compare(CompareInstr {
-        result = id, op = op, operand_ty = operand_ty, lhs = lhs, rhs = rhs
+        result = id, op = op, operand_ty = operand_ty, lhs = lhs, rhs = rhs,
     }))
     return Operand.Local(id)
 }
@@ -368,7 +362,7 @@ fn convert(self: &BlockBuilder, op: ConvertOp, src: IrType, dst: IrType, v: Oper
     const id = self.fb.fresh()
     let block = &self.fb.func.blocks[self.block_idx]
     block.instrs.push(Instr.Convert(ConvertInstr {
-        result = id, op = op, source_ty = src, result_ty = dst, operand = v
+        result = id, op = op, source_ty = src, result_ty = dst, operand = v,
     }))
     return Operand.Local(id)
 }
@@ -381,7 +375,7 @@ pub fn stack_slot(self: &BlockBuilder, size: u64, align: u64) Operand {
     const id = self.fb.fresh()
     let block = &self.fb.func.blocks[self.block_idx]
     block.instrs.push(Instr.StackSlot(StackSlotInstr {
-        result = id, size = size, align = align
+        result = id, size = size, align = align,
     }))
     return Operand.Local(id)
 }
@@ -394,7 +388,7 @@ pub fn load_aligned(self: &BlockBuilder, ty: IrType, ptr: Operand, align: u64) O
     const id = self.fb.fresh()
     let block = &self.fb.func.blocks[self.block_idx]
     block.instrs.push(Instr.Load(LoadInstr {
-        result = id, ty = ty, ptr = ptr, align = align
+        result = id, ty = ty, ptr = ptr, align = align,
     }))
     return Operand.Local(id)
 }
@@ -406,7 +400,7 @@ pub fn store(self: &BlockBuilder, ty: IrType, value: Operand, ptr: Operand) {
 pub fn store_aligned(self: &BlockBuilder, ty: IrType, value: Operand, ptr: Operand, align: u64) {
     let block = &self.fb.func.blocks[self.block_idx]
     block.instrs.push(Instr.Store(StoreInstr {
-        ty = ty, value = value, ptr = ptr, align = align
+        ty = ty, value = value, ptr = ptr, align = align,
     }))
 }
 
@@ -414,7 +408,7 @@ pub fn gep(self: &BlockBuilder, ptr: Operand, offset: Operand) Operand {
     const id = self.fb.fresh()
     let block = &self.fb.func.blocks[self.block_idx]
     block.instrs.push(Instr.Gep(GepInstr {
-        result = id, ptr = ptr, offset = offset
+        result = id, ptr = ptr, offset = offset,
     }))
     return Operand.Local(id)
 }
@@ -422,14 +416,14 @@ pub fn gep(self: &BlockBuilder, ptr: Operand, offset: Operand) Operand {
 pub fn memcpy(self: &BlockBuilder, dst: Operand, src: Operand, size: Operand) {
     let block = &self.fb.func.blocks[self.block_idx]
     block.instrs.push(Instr.Memcpy(MemcpyInstr {
-        dst = dst, src = src, size = size
+        dst = dst, src = src, size = size,
     }))
 }
 
 pub fn memset(self: &BlockBuilder, dst: Operand, byte: Operand, size: Operand) {
     let block = &self.fb.func.blocks[self.block_idx]
     block.instrs.push(Instr.Memset(MemsetInstr {
-        dst = dst, byte = byte, size = size
+        dst = dst, byte = byte, size = size,
     }))
 }
 
@@ -469,10 +463,10 @@ pub fn call_void(self: &BlockBuilder, callee: String, args: List(Operand)) {
     }))
 }
 
-// Indirect call through a fn-pointer value. The inline signature is the
-// C cast the backend spells; aggregate params/returns already travel as
-// `ptr` operands, mirroring direct calls.
-pub fn call_indirect(self: &BlockBuilder, fn_ptr: Operand, param_types: List(IrType), return_ty: IrType, args: List(Operand)) Operand {
+// Indirect call through a fn-pointer value. The inline signature is the C cast the backend spells;
+// aggregate params/returns already travel as `ptr` operands, mirroring direct calls.
+pub fn call_indirect(self: &BlockBuilder, fn_ptr: Operand, param_types: List(IrType),
+    return_ty: IrType, args: List(Operand)) Operand {
     const id = self.fb.fresh()
     let block = &self.fb.func.blocks[self.block_idx]
     let var_types: List(IrType) = list(0, self.fb.allocator)
@@ -490,7 +484,8 @@ pub fn call_indirect(self: &BlockBuilder, fn_ptr: Operand, param_types: List(IrT
     return Operand.Local(id)
 }
 
-pub fn call_indirect_void(self: &BlockBuilder, fn_ptr: Operand, param_types: List(IrType), args: List(Operand)) {
+pub fn call_indirect_void(self: &BlockBuilder, fn_ptr: Operand, param_types: List(IrType),
+    args: List(Operand)) {
     let block = &self.fb.func.blocks[self.block_idx]
     let var_types: List(IrType) = list(0, self.fb.allocator)
     let result: u32? = null
@@ -513,16 +508,18 @@ pub fn call_one(self: &BlockBuilder, callee: String, return_ty: IrType, a0: Oper
     return self.call(callee, return_ty, args)
 }
 
-pub fn call_two(self: &BlockBuilder, callee: String, return_ty: IrType, a0: Operand, a1: Operand) Operand {
+pub fn call_two(self: &BlockBuilder, callee: String, return_ty: IrType, a0: Operand,
+    a1: Operand) Operand {
     let args: List(Operand) = list(2, self.fb.allocator)
     args.push(a0)
     args.push(a1)
     return self.call(callee, return_ty, args)
 }
 
-// Variadic foreign call. `fixed_args` are the named parameters of the
-// foreign decl; `extras` are the variadic portion with explicit types.
-pub fn call_variadic(self: &BlockBuilder, callee: String, return_ty: IrType, fixed_args: List(Operand), extras: List((IrType, Operand))) Operand {
+// Variadic foreign call. `fixed_args` are the named parameters of the foreign decl; `extras` are
+// the variadic portion with explicit types.
+pub fn call_variadic(self: &BlockBuilder, callee: String, return_ty: IrType,
+    fixed_args: List(Operand), extras: List((IrType, Operand))) Operand {
     const id = self.fb.fresh()
     let block = &self.fb.func.blocks[self.block_idx]
     let var_types: List(IrType) = list(extras.len, self.fb.allocator)
@@ -567,9 +564,9 @@ pub fn br(self: &BlockBuilder, label: String) {
     self.br_args(label, args)
 }
 
-// Unconditional branch passing one block argument - the dominant shape
-// (an induction variable, a join value). The list is minted here and
-// owned by the terminator, like every `BlockTarget`'s args.
+// Unconditional branch passing one block argument - the dominant shape (an induction variable, a
+// join value). The list is minted here and owned by the terminator, like every `BlockTarget`'s
+// args.
 pub fn br_arg(self: &BlockBuilder, label: String, arg: Operand) {
     let args: List(Operand) = list(1, self.fb.allocator)
     args.push(arg)
@@ -590,7 +587,8 @@ pub fn br_if(self: &BlockBuilder, cond: Operand, then_label: String, else_label:
 }
 
 // Conditional branch with block arguments on each edge.
-pub fn br_if_args(self: &BlockBuilder, cond: Operand, then_label: String, then_args: List(Operand), else_label: String, else_args: List(Operand)) {
+pub fn br_if_args(self: &BlockBuilder, cond: Operand, then_label: String, then_args: List(Operand),
+    else_label: String, else_args: List(Operand)) {
     let block = &self.fb.func.blocks[self.block_idx]
     block.set_terminator(Terminator.BrIf(BrIfTerm {
         cond = cond,

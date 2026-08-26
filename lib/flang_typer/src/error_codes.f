@@ -1,8 +1,8 @@
 // Canonical error and warning codes the typer emits.
 //
-// The reporter formats every `Diagnostic` with one of these as the
-// `code` field. Keeping them centralised here makes it cheap to audit
-// the catalogue and update `docs/error-codes.md` in lock-step.
+// The reporter formats every `Diagnostic` with one of these as the `code` field. Keeping them
+// centralised here makes it cheap to audit the catalogue and update `docs/error-codes.md` in
+// lock-step.
 
 pub const E_TYPE_MISMATCH: String = "E2002"
 pub const E_UNKNOWN_TYPE: String = "E2003"
@@ -19,53 +19,46 @@ pub const E_CYCLIC_ALIAS: String = "E2036"
 pub const E_UNKNOWN_VARIANT: String = "E2037"
 pub const E_UNINFERRED: String = "E2001"
 pub const E_DUP_SIGNATURE: String = "E2103"
-// A pattern form the front end cannot yet represent. Reported rather than
-// ignored: an unrepresented pattern would otherwise be indistinguishable
-// from a wildcard and silently match everything.
+// A pattern form the front end cannot yet represent. Reported rather than ignored: an unrepresented
+// pattern would otherwise be indistinguishable from a wildcard and silently match everything.
 pub const E_UNSUPPORTED_PATTERN: String = "E2115"
-// A generic struct constructed by name without its type arguments
-// (`Pair { ... }` where `Pair` is `struct(T)`). Same code the reference
-// checker uses for this shape.
+// A generic struct constructed by name without its type arguments (`Pair { ... }` where `Pair` is
+// `struct(T)`). Same code the reference checker uses for this shape.
 pub const E_GENERIC_NEEDS_ARGS: String = "E2019"
-// Indexing. `bool` is never a valid index; a type with neither
-// `op_index_ref` nor `op_index` cannot be indexed at all.
-// Branch joins: if/else branches, and match arms, that cannot agree on
-// one type.
+// Indexing. `bool` is never a valid index; a type with neither `op_index_ref` nor `op_index` cannot
+// be indexed at all. Branch joins: if/else branches, and match arms, that cannot agree on one type.
 pub const E_BRANCH_MISMATCH: String = "E2074"
 pub const E_ARM_MISMATCH: String = "E2075"
 pub const E_BAD_INDEX_TYPE: String = "E2027"
 pub const E_NOT_INDEXABLE: String = "E2028"
-// RFC-009 postfix `?`: outside a function there is no return slot to
-// early-return through; without a viable `op_try` the operand type does
-// not participate in `?` at all. Same codes as the reference.
+// RFC-009 postfix `?`: outside a function there is no return slot to early-return through; without
+// a viable `op_try` the operand type does not participate in `?` at all. Same codes as the
+// reference.
 pub const E_TRY_OUTSIDE_FN: String = "E2090"
 pub const E_NO_OP_TRY: String = "E2092"
 
-// RFC-014 closures. Same codes as the reference: a capturing closure has
-// an anonymous nominal type and cannot decay to a bare `fn` pointer
-// (E2111); captures are by value and read-only (E2112); transitive
-// captures across nested closures are not supported yet (E2113).
+// RFC-014 closures. Same codes as the reference: a capturing closure has an anonymous nominal type
+// and cannot decay to a bare `fn` pointer (E2111); captures are by value and read-only (E2112);
+// transitive captures across nested closures are not supported yet (E2113).
 pub const E_CLOSURE_TO_FN: String = "E2111"
 pub const E_ASSIGN_CAPTURE: String = "E2112"
 pub const E_NESTED_CAPTURE: String = "E2113"
 
-// Duplicate declarations the reference rejects at their declaration
-// site: a struct field name twice (E2076), an enum tag value twice
-// (E2048), a `let`/`const`/global re-declared in the same scope (E2005,
-// shared with the duplicate-type code).
+// Duplicate declarations the reference rejects at their declaration site: a struct field name twice
+// (E2076), an enum tag value twice (E2048), a `let`/`const`/global re-declared in the same scope
+// (E2005, shared with the duplicate-type code).
 pub const E_DUP_FIELD: String = "E2076"
 pub const E_DUP_TAG: String = "E2048"
 // Assignment and initialization rules for `const` bindings.
 pub const E_CONST_ASSIGN: String = "E2038"
 pub const E_CONST_NO_INIT: String = "E2039"
-// A field of a struct declared in ANOTHER module is read-only: the
-// defining module owns its invariants (docs/spec.md scoped mutability).
+// A field of a struct declared in ANOTHER module is read-only: the defining module owns its
+// invariants (docs/spec.md scoped mutability).
 pub const E_SCOPED_MUTABILITY: String = "E2114"
 // A non-void function with no return on some path.
 pub const E_MISSING_RETURN: String = "E2049"
-// Match checking: scrutinee is not an enum (E2030), arms do not cover
-// every variant (E2031), a variant pattern's payload arity is wrong
-// (E2032).
+// Match checking: scrutinee is not an enum (E2030), arms do not cover every variant (E2031), a
+// variant pattern's payload arity is wrong (E2032).
 pub const E_MATCH_NON_ENUM: String = "E2030"
 pub const E_MATCH_NON_EXHAUSTIVE: String = "E2031"
 pub const E_MATCH_ARITY: String = "E2032"
@@ -93,9 +86,8 @@ pub const E_DEFAULT_PARAM_TYPE: String = "E2070"
 pub const E_OP_NO_IMPL: String = "E2017"
 // `&fn(...)` - function types are already pointer-sized.
 pub const E_REF_TO_FN: String = "E2006"
-// Iterator protocol (spec 4.6): the iterable has no `iter` (E2021), the
-// state has no `next` (E2023), or `next` does not return `Option(T)`
-// (E2025).
+// Iterator protocol (spec 4.6): the iterable has no `iter` (E2021), the state has no `next`
+// (E2023), or `next` does not return `Option(T)` (E2025).
 pub const E_NO_ITER: String = "E2021"
 pub const E_NO_NEXT: String = "E2023"
 pub const E_NEXT_RETURN: String = "E2025"
@@ -104,10 +96,9 @@ pub const E_INDEX_AMBIGUOUS: String = "E2077"
 // `?` inside a `defer` body - there is no return path to take.
 pub const E_TRY_IN_DEFER: String = "E2091"
 
-// A `let`/`const` re-declared in the SAME scope. Cross-scope shadowing
-// stays silent; this only fires when the earlier binding becomes
-// unreachable in the same block (reference parity: a warning locally, an
-// error at module scope, where it is E2005).
+// A `let`/`const` re-declared in the SAME scope. Cross-scope shadowing stays silent; this only
+// fires when the earlier binding becomes unreachable in the same block (reference parity: a warning
+// locally, an error at module scope, where it is E2005).
 pub const W_SAME_SCOPE_SHADOW: String = "W1002"
 
 pub const W_DEPRECATED: String = "W2001"

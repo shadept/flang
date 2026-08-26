@@ -26,10 +26,10 @@ pub type AllocatorVTable = struct {
 }
 
 // Type-erased allocator interface.
-// impl: pointer to allocator-specific state (cast to &u8 for type erasure)
-// vtable: pointer to function table
+// impl: pointer to allocator-specific state (cast to &u8 for type erasure) vtable: pointer to
+// function table
 pub type Allocator = struct {
-    impl: &u8,
+    impl: &u8
     vtable: &AllocatorVTable
 }
 
@@ -39,15 +39,14 @@ pub fn alloc(allocator: &Allocator, size: usize, alignment: usize) u8[]? {
     return allocator.vtable.alloc(allocator.impl, size, alignment)
 }
 
-// Reallocate an existing allocation to a new size.
-// Returns new pointer or null on failure.
-// Some allocators may not support realloc and return null.
+// Reallocate an existing allocation to a new size. Returns new pointer or null on failure. Some
+// allocators may not support realloc and return null.
 pub fn realloc(allocator: &Allocator, memory: u8[], new_size: usize) u8[]? {
     return allocator.vtable.realloc(allocator.impl, memory, new_size)
 }
 
-// Free memory previously allocated by this allocator.
-// Some allocators (like FixedBufferAllocator) may do nothing.
+// Free memory previously allocated by this allocator. Some allocators (like FixedBufferAllocator)
+// may do nothing.
 pub fn dealloc(allocator: &Allocator, memory: u8[]) {
     allocator.vtable.dealloc(allocator.impl, memory)
 }
@@ -60,8 +59,8 @@ pub fn new(allocator: &Allocator, ty: Type($T)) &T {
     return buffer.unwrap().ptr as &T
 }
 
-// Allocate a slot for `T` and copy `value` into it. Returns a reference
-// to the heap-allocated value.
+// Allocate a slot for `T` and copy `value` into it. Returns a reference to the heap-allocated
+// value.
 #inline pub fn box(allocator: &Allocator, value: $T) &T {
     const ptr = allocator.new(Type(T))
     ptr.* = value
@@ -73,12 +72,13 @@ pub fn free(allocator: &Allocator, value: &$T) {
     allocator.dealloc(slice)
 }
 
-// Free a typed slice. The slice's `len` is taken as the count of T
-// elements to release (use the slice's full backing extent - for a
-// `List`/`Dict` buffer that means slicing over `cap`, not `len`).
-// No-op on empty slices so callers don't need a guard.
+// Free a typed slice. The slice's `len` is taken as the count of T elements to release (use the
+// slice's full backing extent - for a `List`/`Dict` buffer that means slicing over `cap`, not
+// `len`). No-op on empty slices so callers don't need a guard.
 pub fn free(allocator: &Allocator, items: $T[]) {
-    if items.len == 0 { return }
+    if items.len == 0 {
+        return
+    }
     const bytes = slice_from_raw_parts(items.ptr as &u8, items.len * size_of(T))
     allocator.dealloc(bytes)
 }
@@ -93,8 +93,8 @@ pub type GlobalAllocatorState = struct {
 }
 
 fn global_alloc(impl: &u8, size: usize, alignment: usize) u8[]? {
-    // malloc typically returns suitably aligned memory for any type.
-    // For now we ignore alignment and rely on malloc's default alignment.
+    // malloc typically returns suitably aligned memory for any type. For now we ignore alignment
+    // and rely on malloc's default alignment.
     return Some(slice_from_raw_parts(malloc(size)?, size))
 }
 
@@ -110,26 +110,26 @@ fn global_dealloc(impl: &u8, memory: u8[]) {
 const global_allocator_vtable = AllocatorVTable {
     alloc = global_alloc,
     realloc = global_realloc,
-    dealloc = global_dealloc
+    dealloc = global_dealloc,
 }
 
 // Singleton state for GlobalAllocator (no actual state needed)
 const global_allocator_state = GlobalAllocatorState { _unused = 0 }
 pub const global_allocator = Allocator {
     impl = &global_allocator_state as &u8,
-    vtable = &global_allocator_vtable
+    vtable = &global_allocator_vtable,
 }
 
 // =============================================================================
 // TestAllocator - tracking allocator for leak detection in tests
 // =============================================================================
-// Wraps malloc/free but records every live allocation in an intrusive linked
-// list (itself allocated via raw malloc so it never recurses through or_global).
-// At the end of a test, call check_leaks() to print any un-freed allocations,
-// then deinit() to tear down the tracker and free all remaining memory.
+// Wraps malloc/free but records every live allocation in an intrusive linked list (itself allocated
+// via raw malloc so it never recurses through or_global). At the end of a test, call check_leaks()
+// to print any un-freed allocations, then deinit() to tear down the tracker and free all remaining
+// memory.
 
-// Linked-list node tracking a single live allocation.
-// Allocated via raw malloc - never goes through the Allocator interface.
+// Linked-list node tracking a single live allocation. Allocated via raw malloc - never goes through
+// the Allocator interface.
 type TestAllocEntry = struct {
     ptr: &u8
     size: usize
@@ -205,7 +205,7 @@ fn test_dealloc(impl: &u8, memory: u8[]) {
         if e.ptr as usize == target {
             // Unlink
             prev match {
-                Some(p) => { p.next = e.next },
+                Some(p) => { p.next = e.next }
                 None => { state.head = e.next }
             }
             state.total_bytes = state.total_bytes - e.size
@@ -263,35 +263,34 @@ pub fn deinit(state: &TestAllocatorState) {
 const test_allocator_vtable = AllocatorVTable {
     alloc = test_alloc,
     realloc = test_realloc,
-    dealloc = test_dealloc
+    dealloc = test_dealloc,
 }
 
 pub const test_allocator_state = TestAllocatorState {
     head = null,
     alloc_count = 0,
     dealloc_count = 0,
-    total_bytes = 0
+    total_bytes = 0,
 }
 
 pub const test_allocator = Allocator {
     impl = &test_allocator_state as &u8,
-    vtable = &test_allocator_vtable
+    vtable = &test_allocator_vtable,
 }
 
 // =============================================================================
 // CountingAllocator - a decorator that measures what passes through it
 // =============================================================================
 
-// Wraps any allocator, forwards every call to it, and keeps a running total of
-// the bytes currently out and the high-water mark they reached.
+// Wraps any allocator, forwards every call to it, and keeps a running total of the bytes currently
+// out and the high-water mark they reached.
 //
-// The bookkeeping is O(1) per call and holds no per-allocation state. The
-// counters say how large a pool grew and whether it went back to zero; they
-// name no individual allocation.
+// The bookkeeping is O(1) per call and holds no per-allocation state. The counters say how large a
+// pool grew and whether it went back to zero; they name no individual allocation.
 //
-// `live_bytes` is exact where every free goes back through this same
-// decorator. An arena frees its pages through its BACKING allocator, so a
-// decorator wrapping the backing is the one that sees an arena's footprint.
+// `live_bytes` is exact where every free goes back through this same decorator. An arena frees its
+// pages through its BACKING allocator, so a decorator wrapping the backing is the one that sees an
+// arena's footprint.
 pub type CountingAllocator = struct {
     backing: &Allocator
     // Bytes handed out and not yet given back.
@@ -320,13 +319,17 @@ pub fn counting_allocator(backing: &Allocator) CountingAllocator {
 fn counting_note_growth(state: &CountingAllocator, bytes: usize) {
     state.live_bytes = state.live_bytes + bytes
     state.total_bytes = state.total_bytes + bytes
-    if state.live_bytes > state.peak_bytes { state.peak_bytes = state.live_bytes }
+    if state.live_bytes > state.peak_bytes {
+        state.peak_bytes = state.live_bytes
+    }
 }
 
 fn counting_alloc(impl: &u8, size: usize, alignment: usize) u8[]? {
     let state = impl as &CountingAllocator
     const got = state.backing.alloc(size, alignment)
-    if got.is_none() { return null }
+    if got.is_none() {
+        return null
+    }
     state.allocs = state.allocs + 1
     counting_note_growth(state, size)
     return got
@@ -336,7 +339,9 @@ fn counting_realloc(impl: &u8, memory: u8[], new_size: usize) u8[]? {
     let state = impl as &CountingAllocator
     const old_size = memory.len
     const got = state.backing.realloc(memory, new_size)
-    if got.is_none() { return null }
+    if got.is_none() {
+        return null
+    }
     state.reallocs = state.reallocs + 1
     if new_size >= old_size {
         counting_note_growth(state, new_size - old_size)
@@ -349,8 +354,8 @@ fn counting_realloc(impl: &u8, memory: u8[], new_size: usize) u8[]? {
 fn counting_dealloc(impl: &u8, memory: u8[]) {
     let state = impl as &CountingAllocator
     state.deallocs = state.deallocs + 1
-    // A free of memory this decorator never handed out clamps the running
-    // total at zero; the alloc and free counts are where it shows.
+    // A free of memory this decorator never handed out clamps the running total at zero; the alloc
+    // and free counts are where it shows.
     if memory.len > state.live_bytes {
         state.live_bytes = 0
     } else {
@@ -362,18 +367,18 @@ fn counting_dealloc(impl: &u8, memory: u8[]) {
 const counting_allocator_vtable = AllocatorVTable {
     alloc = counting_alloc,
     realloc = counting_realloc,
-    dealloc = counting_dealloc
+    dealloc = counting_dealloc,
 }
 
 pub fn allocator(state: &CountingAllocator) Allocator {
     return Allocator {
         impl = state as &u8,
-        vtable = &counting_allocator_vtable
+        vtable = &counting_allocator_vtable,
     }
 }
 
-// Start counting again from here, with whatever is currently live as the new
-// baseline. Measures one phase of a long-running program.
+// Start counting again from here, with whatever is currently live as the new baseline. Measures one
+// phase of a long-running program.
 pub fn reset_counts(state: &CountingAllocator) {
     state.peak_bytes = state.live_bytes
     state.total_bytes = 0
@@ -403,8 +408,8 @@ test "a counting decorator tracks live bytes back to zero" {
 }
 
 test "a decorator sees an arena's pages through its backing" {
-    // An arena frees its pages through its BACKING allocator, so that is
-    // where a decorator has to sit to see the arena's footprint go to zero.
+    // An arena frees its pages through its BACKING allocator, so that is where a decorator has to
+    // sit to see the arena's footprint go to zero.
     let c = counting_allocator(&global_allocator)
     let backing = c.allocator()
     let arena = arena_allocator(&backing, 4096)
@@ -429,7 +434,7 @@ test "a decorator sees an arena's pages through its backing" {
 // State for the fixed buffer allocator.
 // Tracks the buffer, its size, and current allocation offset.
 pub type FixedBufferAllocatorState = struct {
-    buffer: u8[],
+    buffer: u8[]
     offset: usize
 }
 
@@ -496,30 +501,30 @@ fn fixed_realloc(impl: &u8, memory: u8[], new_size: usize) u8[]? {
 }
 
 fn fixed_dealloc(impl: &u8, memory: u8[]) {
-    // FixedBufferAllocator does not support individual frees.
-    // Memory is reclaimed by resetting the allocator.
+    // FixedBufferAllocator does not support individual frees. Memory is reclaimed by resetting the
+    // allocator.
 }
 
 // VTable instance for FixedBufferAllocator
 const fixed_buffer_allocator_vtable = AllocatorVTable {
     alloc = fixed_alloc,
     realloc = fixed_realloc,
-    dealloc = fixed_dealloc
+    dealloc = fixed_dealloc,
 }
 
-// Initialize a FixedBufferAllocator from a pre-allocated buffer.
-// This allocator should not outlive the provided buffer.
+// Initialize a FixedBufferAllocator from a pre-allocated buffer. This allocator should not outlive
+// the provided buffer.
 pub fn fixed_buffer_allocator(buffer: u8[]) FixedBufferAllocatorState {
     return .{
         buffer = buffer,
-        offset = 0
+        offset = 0,
     }
 }
 
 pub fn allocator(state: &FixedBufferAllocatorState) Allocator {
     return Allocator {
         impl = state as &u8,
-        vtable = &fixed_buffer_allocator_vtable
+        vtable = &fixed_buffer_allocator_vtable,
     }
 }
 
@@ -531,21 +536,21 @@ pub fn reset(state: &FixedBufferAllocatorState) {
 // =============================================================================
 // ArenaAllocator - page-based bump allocator with bulk teardown
 // =============================================================================
-// Arena semantics: bump-allocate within pages, no individual free,
-// bulk teardown via reset()/deinit(). Composable with any backing allocator.
+// Arena semantics: bump-allocate within pages, no individual free, bulk teardown via
+// reset()/deinit(). Composable with any backing allocator.
 
-// Intrusive linked list header at the start of each page.
-// Page layout in memory: [ArenaPage header | usable bytes...]
+// Intrusive linked list header at the start of each page. Page layout in memory: [ArenaPage header
+// | usable bytes...]
 type ArenaPage = struct {
-    next: &ArenaPage?,
-    size: usize,
+    next: &ArenaPage?
+    size: usize
     offset: usize
 }
 
 pub type ArenaAllocator = struct {
-    backing: &Allocator,
-    page_size: usize,
-    first_page: &ArenaPage?,
+    backing: &Allocator
+    page_size: usize
+    first_page: &ArenaPage?
     current_page: &ArenaPage?
 }
 
@@ -564,7 +569,7 @@ fn arena_new_page(state: &ArenaAllocator, min_size: usize) &ArenaPage? {
 
     // Link into chain
     state.current_page match {
-        Some(cp) => { cp.next = Some(page) },
+        Some(cp) => { cp.next = Some(page) }
         None => {}
     }
     if state.first_page.is_none() {
@@ -628,7 +633,7 @@ fn arena_dealloc(impl: &u8, memory: u8[]) {
 const arena_allocator_vtable = AllocatorVTable {
     alloc = arena_alloc,
     realloc = arena_realloc,
-    dealloc = arena_dealloc
+    dealloc = arena_dealloc,
 }
 
 // Create an arena allocator backed by the given allocator.
@@ -637,7 +642,7 @@ pub fn arena_allocator(backing: &Allocator, page_size: usize = 4096) ArenaAlloca
         backing = backing,
         page_size = page_size,
         first_page = null,
-        current_page = null
+        current_page = null,
     }
 }
 
@@ -671,6 +676,6 @@ pub fn reset(state: &ArenaAllocator) {
 pub fn allocator(state: &ArenaAllocator) Allocator {
     return Allocator {
         impl = state as &u8,
-        vtable = &arena_allocator_vtable
+        vtable = &arena_allocator_vtable,
     }
 }

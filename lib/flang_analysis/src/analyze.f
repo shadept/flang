@@ -1,19 +1,16 @@
-// flang_analysis - the front half of the pipeline as a library: source
-// text in, a checked `AnalyzedUnit` out (AST + type-check result +
-// combined parse and check diagnostics). This is the single analysis
-// entry point shared by every front-end exe - `flang build`, `flang test`,
-// and the LSP - each of which is a thin `main` over `analyze`.
-// Lowering and the build itself live one layer up, in `flang_driver`.
+// flang_analysis - the front half of the pipeline as a library: source text in, a checked
+// `AnalyzedUnit` out (AST + type-check result + combined parse and check diagnostics). This is the
+// single analysis entry point shared by every front-end exe - `flang build`, `flang test`, and the
+// LSP - each of which is a thin `main` over `analyze`. Lowering and the build itself live one layer
+// up, in `flang_driver`.
 //
-// The library owns the pipeline but not its edges: file reading and
-// diagnostic *rendering* are the caller's concern (the LSP reads buffers
-// and emits protocol diagnostics; the CLI reads files and prints to a
-// terminal).
+// The library owns the pipeline but not its edges: file reading and diagnostic *rendering* are the
+// caller's concern (the LSP reads buffers and emits protocol diagnostics; the CLI reads files and
+// prints to a terminal).
 //
-// Ownership: an `AnalyzedUnit` owns its `source`. The projected AST stores
-// string views into the source buffer (flang_parser/projector.f), so the
-// source must outlive the `Module`. Tokens and the CST are dropped inside
-// `analyze` once the AST exists.
+// Ownership: an `AnalyzedUnit` owns its `source`. The projected AST stores string views into the
+// source buffer (flang_parser/projector.f), so the source must outlive the `Module`. Tokens and the
+// CST are dropped inside `analyze` once the AST exists.
 
 import std.allocator
 import std.dict
@@ -41,8 +38,8 @@ import flang_analysis.resolver
 import flang_analysis.project
 import flang_analysis.demand
 
-// A fully analysed compilation unit. `checked` is false when the source
-// failed to parse - `result` is then an empty placeholder.
+// A fully analysed compilation unit. `checked` is false when the source failed to parse - `result`
+// is then an empty placeholder.
 pub type AnalyzedUnit = struct {
     source: OwnedString
     module: Module
@@ -52,8 +49,8 @@ pub type AnalyzedUnit = struct {
 }
 
 // Analyse source text: lex → parse → project → type-check. Consumes
-// `source` (the unit owns it). `path` labels the module for FQN
-// construction and diagnostics; it need not name a real file.
+// `source` (the unit owns it). `path` labels the module for FQN construction and diagnostics; it
+// need not name a real file.
 pub fn analyze(source: OwnedString, path: String, allocator: &Allocator? = null) AnalyzedUnit {
     let diagnostics: List(Diagnostic) = list(0, allocator)
     const src = source.as_view()
@@ -64,14 +61,13 @@ pub fn analyze(source: OwnedString, path: String, allocator: &Allocator? = null)
     const cst = p.parse_module()
     let module = project_module(cst, 0i32, allocator)
 
-    // Decl-level #if resolves once, before anything walks the decls:
-    // only the active branch's declarations survive into collection.
+    // Decl-level #if resolves once, before anything walks the decls: only the active branch's
+    // declarations survive into collection.
     const cctx = host_ctx()
     flatten_module_decls(&module, &cctx, &diagnostics, allocator)
 
-    // The AST views `source`, not the token structs - tokens and the parser
-    // are dead once the Module exists. Drain parse diagnostics first so they
-    // survive `p.deinit()`.
+    // The AST views `source`, not the token structs - tokens and the parser are dead once the
+    // Module exists. Drain parse diagnostics first so they survive `p.deinit()`.
     drain_diagnostics(&diagnostics, &p.diagnostics)
     p.deinit()
     tokens.deinit()
@@ -95,15 +91,15 @@ pub fn analyze(source: OwnedString, path: String, allocator: &Allocator? = null)
         result = check_all(&chk, &modules, &paths, &srcs, &fps, &gens)
         drain_diagnostics(&diagnostics, &chk.diagnostics)
 
-        // ponytail: single-unit analysis leaks the generated chunk modules
-        // (their decls were appended to `module`); AnalyzedUnit has no slot.
+        // ponytail: single-unit analysis leaks the generated chunk modules (their decls were
+        // appended to `module`); AnalyzedUnit has no slot.
         gens.forget()
         chk.deinit()
         srcs.deinit()
         fps.deinit()
 
-        // `push` copied the struct; `module` still owns the arena. Forget
-        // the alias before freeing the list so the arena isn't double-freed.
+        // `push` copied the struct; `module` still owns the arena. Forget the alias before freeing
+        // the list so the arena isn't double-freed.
         modules.clear()
         modules.deinit()
         paths.deinit()
@@ -130,9 +126,8 @@ pub fn error_count(self: &AnalyzedUnit) usize {
     return count_errors(&self.diagnostics)
 }
 
-// Move every diagnostic from `src` into `dst`. `src.clear()` resets the
-// length without deiniting elements, so the moved OwnedString messages are
-// owned once (by `dst`) and never double-freed.
+// Move every diagnostic from `src` into `dst`. `src.clear()` resets the length without deiniting
+// elements, so the moved OwnedString messages are owned once (by `dst`) and never double-freed.
 fn drain_diagnostics(dst: &List(Diagnostic), src: &List(Diagnostic)) {
     dst.push_all(src.as_slice())
     src.clear()
@@ -141,7 +136,9 @@ fn drain_diagnostics(dst: &List(Diagnostic), src: &List(Diagnostic)) {
 fn count_errors(diags: &List(Diagnostic)) usize {
     let n: usize = 0
     for i in 0..diags.len {
-        if diags[i].severity == Severity.Error { n = n + 1 }
+        if diags[i].severity == Severity.Error {
+            n = n + 1
+        }
     }
     return n
 }
@@ -149,70 +146,60 @@ fn count_errors(diags: &List(Diagnostic)) usize {
 // ─────────────────────────────────────────────────────────────────────
 // Multi-module project analysis
 //
-// `analyze_project` discovers the full module set by following imports
-// from the entry sources (plus the auto-imported core prelude), resolving
-// each against `ctx`, then type-checks every module together via one
-// `check_all`. Each module's source is owned by the returned unit; the
-// AST views into it (flang_parser/projector.f), so the sources outlive
-// the modules.
+// `analyze_project` discovers the full module set by following imports from the entry sources (plus
+// the auto-imported core prelude), resolving each against `ctx`, then type-checks every module
+// together via one `check_all`. Each module's source is owned by the returned unit; the AST views
+// into it (flang_parser/projector.f), so the sources outlive the modules.
 // ─────────────────────────────────────────────────────────────────────
 
-// A type-checked multi-module project. Parallel lists are keyed by file
-// id (a module's index): `sources[i]` / `file_paths[i]` back `modules[i]`,
-// whose registered FQN is `fqns[i]`.
+// A type-checked multi-module project. Parallel lists are keyed by file id (a module's index):
+// `sources[i]` / `file_paths[i]` back `modules[i]`, whose registered FQN is `fqns[i]`.
 pub type AnalyzedProject = struct {
     sources: List(OwnedString)
     fqns: List(OwnedString)
     file_paths: List(OwnedString)
     modules: List(Module)
-    // Per module: was it one of the project's own files, as opposed to the
-    // stdlib or a dependency. Kept because a re-check has to rebuild the
-    // checker with the same project boundary the first one used.
+    // Per module: was it one of the project's own files, as opposed to the stdlib or a dependency.
+    // Kept because a re-check has to rebuild the checker with the same project boundary the first
+    // one used.
     project_origin: List(bool)
-    // Sources and ASTs that a re-parse replaced, held until the unit is
-    // dropped. A `TypeCheckResult` holds string views into the source it was
-    // checked from (nominal FQNs, field names) and AST pointers into the
-    // module, so a result outlives the buffers it was built over.
+    // Sources and ASTs that a re-parse replaced, held until the unit is dropped. A
+    // `TypeCheckResult` holds string views into the source it was checked from (nominal FQNs, field
+    // names) and AST pointers into the module, so a result outlives the buffers it was built over.
     retired_sources: List(OwnedString)
     retired_modules: List(Module)
-    // Results a later demand replaced, held the same way: a caller that
-    // copied `result` before re-demanding (gate A) still reads the copy's
-    // tables, so the storage is released at unit teardown, not per demand.
-    // Each is pushed after its type table was adopted by the next demand.
+    // Results a later demand replaced, held the same way: a caller that copied `result` before
+    // re-demanding (gate A) still reads the copy's tables, so the storage is released at unit
+    // teardown, not per demand. Each is pushed after its type table was adopted by the next demand.
     retired_results: List(TypeCheckResult)
     result: TypeCheckResult
     checked: bool
-    // Everything the parse tier produced: a module's own parse errors, plus
-    // the load failures that have no module (an unreadable file, an
-    // unresolved global import). Held apart because `diagnostics` is rebuilt
-    // on every check and the parse tier outlives the check that replays it.
+    // Everything the parse tier produced: a module's own parse errors, plus the load failures that
+    // have no module (an unreadable file, an unresolved global import). Held apart because
+    // `diagnostics` is rebuilt on every check and the parse tier outlives the check that replays
+    // it.
     parse_diags: List(Diagnostic)
     // The published list: `parse_diags` replayed, then the current check's.
     diagnostics: List(Diagnostic)
-    // The checker every demand on this project runs through. It outlives one
-    // check so the declared type names can: `begin_demand` keeps them and
-    // drops the rest, and `check_project` collects only the modules that were
-    // re-parsed.
+    // The checker every demand on this project runs through. It outlives one check so the declared
+    // type names can: `begin_demand` keeps them and drops the rest, and `check_project` collects
+    // only the modules that were re-parsed.
     checker: Checker
-    // Template expansion output: the chunk modules whose decls were
-    // appended into `modules` (kept alive here) and the per-origin
-    // generated text (`--emit-generated`). `sources`/`file_paths` also
-    // hold one padded entry per chunk, after the real files.
+    // Template expansion output: the chunk modules whose decls were appended into `modules` (kept
+    // alive here) and the per-origin generated text (`--emit-generated`). `sources`/`file_paths`
+    // also hold one padded entry per chunk, after the real files.
     generated: TemplateOutput
 
-    // Wall time of the front half, for `--timings`. `parse_ns` covers the
-    // import-graph walk (read + lex + parse); `check_ns` covers template
-    // expansion, resolution and inference.
+    // Wall time of the front half, for `--timings`. `parse_ns` covers the import-graph walk (read +
+    // lex + parse); `check_ns` covers template expansion, resolution and inference.
     parse_ns: u64
     check_ns: u64
 }
 
-// `overrides` supplies a buffer to use in place of the file on disk, for
-// every path it names - an editor's unsaved text. `flang build` passes
-// none. See `read_source` for the key convention.
-pub fn analyze_project(ctx: &ResolveCtx, entries: &List(OwnedString),
-        overrides: &Dict(String, String)? = null,
-        allocator: &Allocator? = null) AnalyzedProject {
+// `overrides` supplies a buffer to use in place of the file on disk, for every path it names - an
+// editor's unsaved text. `flang build` passes none. See `read_source` for the key convention.
+pub fn analyze_project(ctx: &ResolveCtx, entries: &List(OwnedString), overrides: &Dict(String,
+        String)? = null, allocator: &Allocator? = null) AnalyzedProject {
     let parse_diags: List(Diagnostic) = list(0, allocator)
     let sources: List(OwnedString) = list(0, allocator)
     let fqns: List(OwnedString) = list(0, allocator)
@@ -226,18 +213,17 @@ pub fn analyze_project(ctx: &ResolveCtx, entries: &List(OwnedString),
     for i in 0..entries.len {
         enqueue_copy(&queue, &seen, entries[i].as_view())
     }
-    // Everything enqueued from here on is stdlib, a dependency or a
-    // transitive import - never a project file. `[imports].global` applies
-    // to project files only, so the boundary has to be recorded before the
-    // seeds run.
+    // Everything enqueued from here on is stdlib, a dependency or a transitive import - never a
+    // project file. `[imports].global` applies to project files only, so the boundary has to be
+    // recorded before the seeds run.
     let project_count = queue.len
     let project_origin: List(bool) = list(0, allocator)
     seed_globals(ctx, &queue, &seen, &parse_diags, allocator)
     seed_prelude(ctx, &queue, &seen, allocator)
     seed_stdlib(ctx, &queue, &seen, allocator)
 
-    // Import edges as they resolve. `edge_to` holds paths, not indices: the
-    // target module may not be parsed yet when the edge is seen.
+    // Import edges as they resolve. `edge_to` holds paths, not indices: the target module may not
+    // be parsed yet when the edge is seen.
     let edge_from = list(0, allocator)
     defer edge_from.deinit()
     let edge_to = list(0, allocator)
@@ -258,7 +244,8 @@ pub fn analyze_project(ctx: &ResolveCtx, entries: &List(OwnedString),
         let fid = modules.len as i32
         let module = parse_to_module(src.as_view(), fid, &ctx.comptime, &parse_diags, allocator)
         let fqn = module_fqn(ctx, path, allocator)
-        enqueue_imports(ctx, &module, modules.len, &queue, &seen, &edge_from, &edge_to, &parse_diags, allocator)
+        enqueue_imports(ctx, &module, modules.len, &queue, &seen, &edge_from, &edge_to,
+            &parse_diags, allocator)
         sources.push(src)
         file_paths.push(from_view(path))
         fqns.push(fqn)
@@ -294,32 +281,34 @@ pub fn analyze_project(ctx: &ResolveCtx, entries: &List(OwnedString),
     return unit
 }
 
-// Run the checker over the module set `self` already holds and install the
-// result. `edge_from`/`edge_to` are the import graph, used to order the walk.
+// Run the checker over the module set `self` already holds and install the result.
+// `edge_from`/`edge_to` are the import graph, used to order the walk.
 //
-// Safe to call more than once on the same unit: expansion leaves one padded
-// `sources`/`file_paths` entry per generated chunk, and those are trimmed off
-// first so a second run starts from the state the first one saw, and the
-// published diagnostics are rebuilt from `parse_diags` up.
+// Safe to call more than once on the same unit: expansion leaves one padded `sources`/`file_paths`
+// entry per generated chunk, and those are trimmed off first so a second run starts from the state
+// the first one saw, and the published diagnostics are rebuilt from `parse_diags` up.
 fn check_project(self: &AnalyzedProject, ctx: &ResolveCtx, edge_from: &List(usize),
-        edge_to: &List(OwnedString), recollect: &List(bool)?, allocator: &Allocator?) {
-    // Expansion appends one source per generated chunk. Those buffers are
-    // retired, since a result from a previous check holds string views into
-    // them; the matching `file_paths` entries are freed, because
-    // `TypeCheckResult` keeps its own copies of paths.
+    edge_to: &List(OwnedString), recollect: &List(bool)?, allocator: &Allocator?) {
+    // Expansion appends one source per generated chunk. Those buffers are retired, since a result
+    // from a previous check holds string views into them; the matching `file_paths` entries are
+    // freed, because `TypeCheckResult` keeps its own copies of paths.
     while self.sources.len > self.modules.len {
         const gone = self.sources.pop()
-        if gone.is_some() { self.retired_sources.push(gone.unwrap()) }
+        if gone.is_some() {
+            self.retired_sources.push(gone.unwrap())
+        }
     }
     trim_owned(&self.file_paths, self.modules.len)
 
-    // The check tier is regenerated whole on every demand, so the previous
-    // run's copy goes and the parse tier is replayed underneath it.
+    // The check tier is regenerated whole on every demand, so the previous run's copy goes and the
+    // parse tier is replayed underneath it.
     self.diagnostics.deinit()
     self.diagnostics = self.parse_diags.map(fn(d: Diagnostic) { clone_diag(&d) }, allocator)
 
     self.checked = count_errors(&self.diagnostics) == 0
-    if !self.checked { return }
+    if !self.checked {
+        return
+    }
 
     let path_views = self.fqns.map(fn(s: OwnedString) { s.as_view() })
     defer path_views.deinit()
@@ -328,17 +317,16 @@ fn check_project(self: &AnalyzedProject, ctx: &ResolveCtx, edge_from: &List(usiz
 
     let chk = &self.checker
     chk.begin_demand()
-    // The type table is one per project: adopt it out of the previous
-    // result so the carried nominal bodies' handles stay resolvable, and
-    // retire what is left of that result - a caller-held copy (gate A) may
-    // still read its tables, so the storage lives until unit teardown.
+    // The type table is one per project: adopt it out of the previous result so the carried nominal
+    // bodies' handles stay resolvable, and retire what is left of that result - a caller-held copy
+    // (gate A) may still read its tables, so the storage lives until unit teardown.
     chk.adopt_interner(take_interner(&self.result))
     self.retired_results.push(self.result)
     let gens = template_state(allocator)
     chk.set_comptime_ctx(ctx.comptime)
     chk.set_project_globals(&ctx.global_imports, &self.project_origin)
-    self.result = check_all(chk, &self.modules, &path_views, &self.sources, &self.file_paths,
-        &gens, Some(&order), recollect)
+    self.result = check_all(chk, &self.modules, &path_views, &self.sources, &self.file_paths, &gens,
+        Some(&order), recollect)
     drain_diagnostics(&self.diagnostics, &chk.diagnostics)
     self.generated = gens.take_output()
     gens.deinit()
@@ -348,25 +336,25 @@ fn check_project(self: &AnalyzedProject, ctx: &ResolveCtx, edge_from: &List(usiz
 fn trim_owned(xs: &List(OwnedString), n: usize) {
     while xs.len > n {
         const gone = xs.pop()
-        if gone.is_some() { gone.unwrap().deinit() }
+        if gone.is_some() {
+            gone.unwrap().deinit()
+        }
     }
 }
 
-// Check the project again, re-parsing only what is stale and reusing every
-// other module's AST.
+// Check the project again, re-parsing only what is stale and reusing every other module's AST.
 //
-// A module is stale when the caller names it in `dirty`, or when template
-// expansion appended generated declarations to it - those declarations live
-// in the AST, so reusing one would stack a second copy on the next expansion.
-// If the parse tier reported anything at all, everything is stale: its
-// diagnostics are one flat list, so the ones belonging to modules that are
-// still good cannot be told apart from the rest and all must be reproduced.
+// A module is stale when the caller names it in `dirty`, or when template expansion appended
+// generated declarations to it - those declarations live in the AST, so reusing one would stack a
+// second copy on the next expansion. If the parse tier reported anything at all, everything is
+// stale: its diagnostics are one flat list, so the ones belonging to modules that are still good
+// cannot be told apart from the rest and all must be reproduced.
 //
-// The module SET is assumed unchanged - same files, same imports. Editing a
-// module's imports is what would break that, and re-running `analyze_project`
-// is the answer until the loader itself becomes incremental.
+// The module SET is assumed unchanged - same files, same imports. Editing a module's imports is
+// what would break that, and re-running `analyze_project` is the answer until the loader itself
+// becomes incremental.
 pub fn reanalyze(self: &AnalyzedProject, ctx: &ResolveCtx, dirty: &Set(String),
-        overrides: &Dict(String, String)? = null, allocator: &Allocator? = null) {
+    overrides: &Dict(String, String)? = null, allocator: &Allocator? = null) {
     const reparse_all = self.parse_diags.len > 0
     if reparse_all {
         self.parse_diags.deinit()
@@ -379,16 +367,17 @@ pub fn reanalyze(self: &AnalyzedProject, ctx: &ResolveCtx, dirty: &Set(String),
     }
 
     const parse_start = monotonic_ns()
-    // Per module: was it re-parsed. A reused AST is the same declarations the
-    // checker already has names for, so only the re-parsed ones are collected
-    // again. A module whose read failed keeps the AST it had, and is left out
-    // for the same reason.
+    // Per module: was it re-parsed. A reused AST is the same declarations the checker already has
+    // names for, so only the re-parsed ones are collected again. A module whose read failed keeps
+    // the AST it had, and is left out for the same reason.
     let recollect = filled_list(self.modules.len, false, allocator)
     let srcs = &self.sources
     let mods = &self.modules
     for i in 0..self.modules.len {
         const path = self.file_paths[i].as_view()
-        if !reparse_all and !dirty.contains(path) and !stale.contains(path) { continue }
+        if !reparse_all and !dirty.contains(path) and !stale.contains(path) {
+            continue
+        }
         const fresh = read_source(path, overrides)
         if fresh.is_none() {
             const msg = $"cannot read source `{path}`"
@@ -398,14 +387,14 @@ pub fn reanalyze(self: &AnalyzedProject, ctx: &ResolveCtx, dirty: &Set(String),
         self.retired_sources.push(srcs[i])
         self.retired_modules.push(mods[i])
         srcs[i] = fresh.unwrap()
-        mods[i] = parse_to_module(srcs[i].as_view(), i as i32, &ctx.comptime,
-            &self.parse_diags, allocator)
+        mods[i] = parse_to_module(srcs[i].as_view(), i as i32, &ctx.comptime, &self.parse_diags,
+            allocator)
         recollect[i] = true
     }
     self.parse_ns = elapsed_ns(parse_start)
 
-    // ponytail: re-walks the whole import graph, one `resolve_import` per
-    // import. Cache the edges on the unit if a profile shows it.
+    // ponytail: re-walks the whole import graph, one `resolve_import` per import. Cache the edges
+    // on the unit if a profile shows it.
     let edge_from = list(0, allocator)
     defer edge_from.deinit()
     let edge_to = list(0, allocator)
@@ -421,10 +410,10 @@ pub fn reanalyze(self: &AnalyzedProject, ctx: &ResolveCtx, dirty: &Set(String),
     recollect.deinit()
 }
 
-// Resolve every module's imports into `from -> to` edges. The BFS records
-// these for free on a first analysis; a re-check has to ask again.
+// Resolve every module's imports into `from -> to` edges. The BFS records these for free on a first
+// analysis; a re-check has to ask again.
 fn collect_edges(ctx: &ResolveCtx, modules: &List(Module), edge_from: &List(usize),
-        edge_to: &List(OwnedString), alloc: &Allocator?) {
+    edge_to: &List(OwnedString), alloc: &Allocator?) {
     for i in 0..modules.len {
         for d in modules[i].decls {
             d match {
@@ -434,19 +423,19 @@ fn collect_edges(ctx: &ResolveCtx, modules: &List(Module), edge_from: &List(usiz
                         edge_from.push(i)
                         edge_to.push(r.unwrap())
                     }
-                },
-                _ => {},
+                }
+                _ => {}
             }
         }
     }
 }
 
-// The multi-module analogue of `analyze` for in-memory sources: the given
-// sources ARE the module set - no import discovery, no file IO. `fqns[i]`
-// is both `srcs[i]`'s module FQN and its diagnostic label. Test support:
-// lowering suites use it to place well-known modules (core.option,
+// The multi-module analogue of `analyze` for in-memory sources: the given sources ARE the module
+// set - no import discovery, no file IO. `fqns[i]` is both `srcs[i]`'s module FQN and its
+// diagnostic label. Test support: lowering suites use it to place well-known modules (core.option,
 // core.string) next to the module under test. Consumes `srcs`.
-pub fn analyze_source_set(srcs: List(OwnedString), fqns: &List(String), allocator: &Allocator? = null) AnalyzedProject {
+pub fn analyze_source_set(srcs: List(OwnedString), fqns: &List(String),
+    allocator: &Allocator? = null) AnalyzedProject {
     let parse_diags: List(Diagnostic) = list(0, allocator)
     let owned_fqns: List(OwnedString) = list(fqns.len, allocator)
     let file_paths: List(OwnedString) = list(fqns.len, allocator)
@@ -509,8 +498,8 @@ pub fn deinit(self: &AnalyzedProject) {
     self.result.deinit()
 }
 
-// Write each origin's generated text to `<origin>.generated.f`
-// (`--emit-generated`). Debug output only - nothing ever reads it back
+// Write each origin's generated text to `<origin>.generated.f` (`--emit-generated`). Debug output
+// only - nothing ever reads it back
 // (RFC-021 §4). Returns how many files were written.
 pub fn write_generated(self: &AnalyzedProject) usize {
     let written: usize = 0
@@ -518,12 +507,14 @@ pub fn write_generated(self: &AnalyzedProject) usize {
         const path = generated_path(e.origin_path)
         defer path.deinit()
         let f = open_file(path.as_view(), FileMode.Write) match {
-            Ok(f) => f,
-            Err(_) => continue,
+            Ok(f) => f
+            Err(_) => continue
         }
         const w = f.write(e.text.as_view())
         const _c = close_file(&f)
-        if w.is_ok() { written = written + 1 }
+        if w.is_ok() {
+            written = written + 1
+        }
     }
     return written
 }
@@ -533,8 +524,8 @@ pub fn project_error_count(self: &AnalyzedProject) usize {
     return count_errors(&self.diagnostics)
 }
 
-
-fn parse_to_module(src: String, file_id: i32, target: &ComptimeCtx, diags: &List(Diagnostic), alloc: &Allocator?) Module {
+fn parse_to_module(src: String, file_id: i32, target: &ComptimeCtx, diags: &List(Diagnostic),
+    alloc: &Allocator?) Module {
     let lx = lexer(src, alloc)
     let tokens = lx.tokenize()
     let p = parser(tokens, alloc)
@@ -547,11 +538,12 @@ fn parse_to_module(src: String, file_id: i32, target: &ComptimeCtx, diags: &List
     return module
 }
 
-// Queue every module `m` imports, recording `from -> imported` so the checker
-// can be given a dependency-respecting visit order. `enqueue_owned` consumes
-// the resolved path, so the edge keeps its own copy.
-fn enqueue_imports(ctx: &ResolveCtx, m: &Module, from: usize, queue: &List(OwnedString), seen: &Set(String),
-        edge_from: &List(usize), edge_to: &List(OwnedString), diags: &List(Diagnostic), alloc: &Allocator?) {
+// Queue every module `m` imports, recording `from -> imported` so the checker can be given a
+// dependency-respecting visit order. `enqueue_owned` consumes the resolved path, so the edge keeps
+// its own copy.
+fn enqueue_imports(ctx: &ResolveCtx, m: &Module, from: usize, queue: &List(OwnedString),
+    seen: &Set(String), edge_from: &List(usize), edge_to: &List(OwnedString),
+    diags: &List(Diagnostic), alloc: &Allocator?) {
     for d in m.decls {
         d match {
             Import(id) => {
@@ -561,53 +553,57 @@ fn enqueue_imports(ctx: &ResolveCtx, m: &Module, from: usize, queue: &List(Owned
                         edge_from.push(from)
                         edge_to.push(from_view(p.as_view()))
                         enqueue_owned(queue, seen, p)
-                    },
-                    None => push_unresolved(diags, &id, alloc),
+                    }
+                    None => push_unresolved(diags, &id, alloc)
                 }
-            },
-            _ => {},
+            }
+            _ => {}
         }
     }
 }
 
-// `flang.toml`'s `[imports].global`. Loading the module is only half the
-// job - `build_visibility` is what actually puts it in each project file's
-// scope; this side just guarantees it is in the module set to be found.
-fn seed_globals(ctx: &ResolveCtx, queue: &List(OwnedString), seen: &Set(String), diags: &List(Diagnostic), alloc: &Allocator?) {
+// `flang.toml`'s `[imports].global`. Loading the module is only half the job - `build_visibility`
+// is what actually puts it in each project file's scope; this side just guarantees it is in the
+// module set to be found.
+fn seed_globals(ctx: &ResolveCtx, queue: &List(OwnedString), seen: &Set(String),
+    diags: &List(Diagnostic), alloc: &Allocator?) {
     for &g in ctx.global_imports {
         let segs = split(g.as_view(), '.')
         let r = resolve_import(ctx, &segs, alloc)
         segs.deinit()
         r match {
-            Some(p) => enqueue_owned(queue, seen, p),
+            Some(p) => enqueue_owned(queue, seen, p)
             None => {
                 const msg = $"unresolved global import `{g.as_view()}` from flang.toml [imports].global"
                 diags.push(error("E0001", msg, none_span()))
-            },
+            }
         }
     }
 }
 
-fn seed_prelude(ctx: &ResolveCtx, queue: &List(OwnedString), seen: &Set(String), alloc: &Allocator?) {
+fn seed_prelude(ctx: &ResolveCtx, queue: &List(OwnedString), seen: &Set(String),
+    alloc: &Allocator?) {
     let segs: List(String) = list(2, alloc)
     segs.push("core")
     segs.push("prelude")
     let r = resolve_import(ctx, &segs, alloc)
     segs.deinit()
     r match {
-        Some(p) => enqueue_owned(queue, seen, p),
-        None => {},
+        Some(p) => enqueue_owned(queue, seen, p)
+        None => {}
     }
 }
 
-// The reference compiler compiles every program against the whole stdlib
-// regardless of imports, and lenient type resolution in the checker relies
-// on every stdlib nominal being registered - so the BFS seeds the full
-// stdlib tree.
-// ponytail: typechecks all of std on every build; prune to the import
-// closure once stdlib type visibility turns strict.
-fn seed_stdlib(ctx: &ResolveCtx, queue: &List(OwnedString), seen: &Set(String), alloc: &Allocator?) {
-    if ctx.stdlib_root.as_view().len == 0 { return }
+// The reference compiler compiles every program against the whole stdlib regardless of imports, and
+// lenient type resolution in the checker relies on every stdlib nominal being registered - so the
+// BFS seeds the full stdlib tree.
+// ponytail: typechecks all of std on every build; prune to the import closure once stdlib type
+// visibility turns strict.
+fn seed_stdlib(ctx: &ResolveCtx, queue: &List(OwnedString), seen: &Set(String),
+    alloc: &Allocator?) {
+    if ctx.stdlib_root.as_view().len == 0 {
+        return
+    }
     let pattern = $"{ctx.stdlib_root.as_view()}/**/*.f"
     let found = glob_sources(pattern.as_view(), alloc)
     pattern.deinit()
@@ -618,26 +614,27 @@ fn seed_stdlib(ctx: &ResolveCtx, queue: &List(OwnedString), seen: &Set(String), 
     found.deinit()
 }
 
-// The text to compile for `path`: a supplied buffer when one stands in
-// for that file, the file on disk otherwise. Keys are the forward-slash
-// paths the resolver produces (`resolver.normalize_sep`) - a caller that
-// spells a key any other way misses silently and gets the stale file.
+// The text to compile for `path`: a supplied buffer when one stands in for that file, the file on
+// disk otherwise. Keys are the forward-slash paths the resolver produces (`resolver.normalize_sep`)
+// - a caller that spells a key any other way misses silently and gets the stale file.
 //
-// The returned buffer is a copy: the AST views into whichever source the
-// project owns, and an override's storage belongs to the caller.
+// The returned buffer is a copy: the AST views into whichever source the project owns, and an
+// override's storage belongs to the caller.
 fn read_source(path: String, overrides: &Dict(String, String)?) OwnedString? {
     if overrides.is_some() {
         let hit = overrides.unwrap().get(path)
-        if hit.is_some() { return Some(from_view(hit.unwrap())) }
+        if hit.is_some() {
+            return Some(from_view(hit.unwrap()))
+        }
     }
     return read_text(path)
 }
 
-// Turn the path-keyed import edges into module indices, then order the set.
-// An edge naming a path that never became a module (an unreadable file) is
-// dropped; every module is still emitted exactly once.
+// Turn the path-keyed import edges into module indices, then order the set. An edge naming a path
+// that never became a module (an unreadable file) is dropped; every module is still emitted exactly
+// once.
 fn visit_order(file_paths: &List(OwnedString), fqns: &List(String), edge_from: &List(usize),
-        edge_to: &List(OwnedString), alloc: &Allocator?) List(usize) {
+    edge_to: &List(OwnedString), alloc: &Allocator?) List(usize) {
     let index_of: Dict(String, usize) = dict(alloc)
     defer index_of.deinit()
     for i in 0..file_paths.len {
@@ -647,14 +644,18 @@ fn visit_order(file_paths: &List(OwnedString), fqns: &List(String), edge_from: &
     defer edges.deinit()
     for i in 0..edge_from.len {
         const to = index_of.get(edge_to[i].as_view())
-        if to.is_none() { continue }
+        if to.is_none() {
+            continue
+        }
         edges.push(ImportEdge { from = edge_from[i], to = to.unwrap() })
     }
     return demand_order(fqns.len, fqns, &edges, alloc)
 }
 
 fn enqueue_copy(queue: &List(OwnedString), seen: &Set(String), path: String) {
-    if seen.contains(path) { return }
+    if seen.contains(path) {
+        return
+    }
     queue.push(from_view(path))
     seen.add(queue[queue.len - 1].as_view())
 }
@@ -689,9 +690,9 @@ test "an override stands in for a file that is not on disk" {
 }
 
 test "re-analysis republishes diagnostics rather than appending to them" {
-    // One warning stays one warning across a re-demand of the same sources.
-    // An empty stdlib root leaves `core.prelude` unresolved and `seed_stdlib`
-    // a no-op, so the module set is exactly what the override supplies.
+    // One warning stays one warning across a re-demand of the same sources. An empty stdlib root
+    // leaves `core.prelude` unresolved and `seed_stdlib` a no-op, so the module set is exactly what
+    // the override supplies.
     let proj = parse_project("[project]\nname = \"p\"\nkind = \"exe\"\nsource = \"src/**/*.f\"\n")
     defer proj.deinit()
     let ctx = resolve_ctx(&proj, "")
@@ -701,7 +702,8 @@ test "re-analysis republishes diagnostics rather than appending to them" {
     entries.push(from_view("src/main.f"))
     let ov: Dict(String, String) = dict()
     defer ov.deinit()
-    ov.set("src/main.f", "fn main() i32 {\n    const v: i32 = 1\n    const v: i32 = 2\n    return v\n}\n")
+    ov.set("src/main.f",
+        "fn main() i32 {\n    const v: i32 = 1\n    const v: i32 = 2\n    return v\n}\n")
 
     let unit = analyze_project(&ctx, &entries, Some(&ov))
     defer unit.deinit()
@@ -716,9 +718,8 @@ test "re-analysis republishes diagnostics rather than appending to them" {
 }
 
 test "an edit adds, removes and leaves declarations alone" {
-    // A declaration the edit does not touch answers to the id it already had,
-    // across an insertion above it, a removal beside it, and a use of the
-    // removed name.
+    // A declaration the edit does not touch answers to the id it already had, across an insertion
+    // above it, a removal beside it, and a use of the removed name.
     let proj = parse_project("[project]\nname = \"p\"\nkind = \"exe\"\nsource = \"src/**/*.f\"\n")
     defer proj.deinit()
     let ctx = resolve_ctx(&proj, "")
@@ -742,24 +743,28 @@ test "an edit adds, removes and leaves declarations alone" {
     dirty.add("src/main.f")
 
     // Insert a declaration between the two existing ones.
-    ov.set("src/main.f", "type A = struct { x: i32 }\ntype C = struct { z: i32 }\ntype B = struct { y: i32 }\nfn main() i32 { return 0 }\n")
+    ov.set("src/main.f",
+        "type A = struct { x: i32 }\ntype C = struct { z: i32 }\ntype B = struct { y: i32 }\nfn main() i32 { return 0 }\n")
     reanalyze(&unit, &ctx, &dirty, Some(&ov))
     assert_eq(unit.diagnostics.len, 0 as usize, "the added struct type-checks")
     const noms1 = &unit.result.nominals
-    assert_eq(noms1.lookup_fqn("p.main.A").unwrap(), a0, "the declaration above the insertion keeps its id")
+    assert_eq(noms1.lookup_fqn("p.main.A").unwrap(), a0,
+        "the declaration above the insertion keeps its id")
     assert_eq(noms1.lookup_fqn("p.main.B").unwrap(), b0, "and so does the one below it")
     const c1 = noms1.lookup_fqn("p.main.C")
     assert_true(c1.is_some(), "the added declaration is registered")
     assert_true(c1.unwrap() != a0 and c1.unwrap() != b0, "under an id of its own")
 
     // Remove one, keeping the other two.
-    ov.set("src/main.f", "type A = struct { x: i32 }\ntype C = struct { z: i32 }\nfn main() i32 { return 0 }\n")
+    ov.set("src/main.f",
+        "type A = struct { x: i32 }\ntype C = struct { z: i32 }\nfn main() i32 { return 0 }\n")
     reanalyze(&unit, &ctx, &dirty, Some(&ov))
     assert_eq(unit.diagnostics.len, 0 as usize, "removing an unused struct type-checks")
     const noms2 = &unit.result.nominals
     assert_true(noms2.lookup_fqn("p.main.B").is_none(), "the removed declaration stops resolving")
     assert_eq(noms2.lookup_fqn("p.main.A").unwrap(), a0, "the survivors keep the ids they had")
-    assert_eq(noms2.lookup_fqn("p.main.C").unwrap(), c1.unwrap(), "including the one added a demand ago")
+    assert_eq(noms2.lookup_fqn("p.main.C").unwrap(), c1.unwrap(),
+        "including the one added a demand ago")
 
     // And a use of the removed declaration is an error, not a stale hit.
     ov.set("src/main.f", "type A = struct { x: i32 }\nfn main() B { return 0 }\n")
@@ -771,6 +776,7 @@ test "a path no override names falls through to the file on disk" {
     let ov: Dict(String, String) = dict()
     defer ov.deinit()
     ov.set("other.f", "fn other() i32 { return 1 }\n")
-    assert_true(read_source("no/such/file.f", Some(&ov)).is_none(), "an unnamed path reads from disk, and misses")
+    assert_true(read_source("no/such/file.f", Some(&ov)).is_none(),
+        "an unnamed path reads from disk, and misses")
     assert_true(read_source("no/such/file.f", null).is_none(), "so does no override map at all")
 }

@@ -1,9 +1,8 @@
 // Token - the lexer's output unit, carrying its own trivia.
 //
-// Every byte of the source belongs to exactly one Token's leading trivia,
-// text, or trailing trivia. The lexer never drops whitespace or comments -
-// they're attached to the nearest token so the CST can round-trip to source
-// byte-for-byte. See trivia.f for the trivia model.
+// Every byte of the source belongs to exactly one Token's leading trivia, text, or trailing trivia.
+// The lexer never drops whitespace or comments - they're attached to the nearest token so the CST
+// can round-trip to source byte-for-byte. See trivia.f for the trivia model.
 
 import std.allocator
 import std.enum
@@ -124,10 +123,9 @@ pub type TokenKind = enum {
     // ─────────────────────────────────────────────────────────────────────
     // Interpolated string tokens (RFC-004).
     //
-    // Interpolation produces a structured token stream: `$"a{b}c"` lexes as
-    // InterpStringStart, InterpSegment("a"), InterpHoleStart, Identifier("b"),
-    // InterpHoleEnd, InterpSegment("c"), InterpStringEnd. Format specs use
-    // InterpFormatSep + InterpFormatSpec inside the hole.
+    // Interpolation produces a structured token stream: `$"a{b}c"` lexes as InterpStringStart,
+    // InterpSegment("a"), InterpHoleStart, Identifier("b"), InterpHoleEnd, InterpSegment("c"),
+    // InterpStringEnd. Format specs use InterpFormatSep + InterpFormatSpec inside the hole.
     // ─────────────────────────────────────────────────────────────────────
 
     InterpStringStart
@@ -141,24 +139,19 @@ pub type TokenKind = enum {
 
 #enum_utils(TokenKind)
 
-// A lexer-produced token. `text` is a view into the source buffer covering
-// exactly the token's bytes - no leading/trailing trivia. `leading` and
-// `trailing` carry the whitespace and comments that border this token; the
-// invariant is that concatenating `t.leading + t.text + t.trailing` across
-// every token in order reproduces the source file exactly.
+// A lexer-produced token. `text` is a view into the source buffer covering exactly the token's
+// bytes - no leading/trailing trivia. `leading` and `trailing` carry the whitespace and comments
+// that border this token; the invariant is that concatenating `t.leading + t.text + t.trailing`
+// across every token in order reproduces the source file exactly.
 //
-// `offset` is the byte offset of `text` from the start of the source.
-// `line` is the 0-based line of `text`'s first byte - newlines inside
-// the token's own bytes advance the lexer's cursor but do not change
-// this token's `line`. Column is derived on demand from a line-endings
-// table on the source.
+// `offset` is the byte offset of `text` from the start of the source. `line` is the 0-based line of
+// `text`'s first byte - newlines inside the token's own bytes advance the lexer's cursor but do not
+// change this token's `line`. Column is derived on demand from a line-endings table on the source.
 //
-// `leading` and `trailing` are owned, shrunk-to-fit slices produced by
-// `List.to_owned_slice` at lex time - there is no excess capacity per
-// token. Both slices share `allocator` (every trivia list a Token
-// produces comes from the same Lexer), so it lives once on the Token.
-// `null` means the global allocator, resolved at the free site - the
-// same convention the stdlib containers use.
+// `leading` and `trailing` are owned, shrunk-to-fit slices produced by `List.to_owned_slice` at lex
+// time - there is no excess capacity per token. Both slices share `allocator` (every trivia list a
+// Token produces comes from the same Lexer), so it lives once on the Token. `null` means the global
+// allocator, resolved at the free site - the same convention the stdlib containers use.
 pub type Token = struct {
     kind: TokenKind
     text: String
@@ -169,20 +162,18 @@ pub type Token = struct {
     allocator: &Allocator?
 }
 
-// Free the trivia slices owned by this token. Called automatically when
-// the enclosing `List(Token)` is deinit'd (List walks its elements and
-// invokes `.deinit()` on each). The `text` field is a borrow from the
-// source buffer and is not freed; Trivia entries are themselves
-// non-owning (their `text` is a borrow), so no per-element deinit is
-// needed.
+// Free the trivia slices owned by this token. Called automatically when the enclosing `List(Token)`
+// is deinit'd (List walks its elements and invokes `.deinit()` on each). The `text` field is a
+// borrow from the source buffer and is not freed; Trivia entries are themselves non-owning (their
+// `text` is a borrow), so no per-element deinit is needed.
 pub fn deinit(self: &Token) {
     const a = self.allocator.or_global()
     a.free(self.leading)
     a.free(self.trailing)
 }
 
-// True for any keyword token - useful for syntax highlighting and the
-// formatter's word-spacing rules.
+// True for any keyword token - useful for syntax highlighting and the formatter's word-spacing
+// rules.
 pub fn is_keyword(kind: TokenKind) bool {
     kind match {
         TokenKind.Pub => return true

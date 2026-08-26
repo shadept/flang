@@ -5,7 +5,9 @@ import std.env
 import std.readline
 
 fn eval_line(input: String) {
-    if input.len == 0 { return }
+    if input.len == 0 {
+        return
+    }
 
     let arena_state = arena_allocator(&global_allocator)
     let arena = arena_state.allocator()
@@ -23,7 +25,7 @@ fn run_repl() {
 
     loop {
         const l = rl.read_line() match {
-            Some(v) => v,
+            Some(v) => v
             None => break
         }
         eval_line(l)
@@ -37,9 +39,11 @@ fn run_args() {
 
     const count = args_count()
     for i in 1..count {
-        if i > 1 { sb.append(" ") }
+        if i > 1 {
+            sb.append(" ")
+        }
         arg(i) match {
-            Some(s) => sb.append(s),
+            Some(s) => sb.append(s)
             None => {}
         }
     }

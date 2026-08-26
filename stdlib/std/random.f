@@ -1,5 +1,4 @@
-// Pseudo-random number generation using xorshift64.
-// Period: 2^64 - 1. State must be non-zero.
+// Pseudo-random number generation using xorshift64. Period: 2^64 - 1. State must be non-zero.
 
 import std.test
 
@@ -111,7 +110,7 @@ pub fn fill_bytes(r: &Random, buf: u8[]) {
     // Fill 8 bytes at a time from a single u64
     while i + 8 <= buf.len {
         let val = r.next_u64()
-        buf[i]     = val as u8
+        buf[i] = val as u8
         buf[i + 1] = (val >> 8) as u8
         buf[i + 2] = (val >> 16) as u8
         buf[i + 3] = (val >> 24) as u8

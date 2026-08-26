@@ -1,7 +1,7 @@
 // Terminal management: ANSI escape codes, cursor control, colors, styles.
 //
-// All output functions write escape sequences to a Writer, so they work with
-// any output target (stdout, file, StringBuilder, BufferedWriter, etc.).
+// All output functions write escape sequences to a Writer, so they work with any output target
+// (stdout, file, StringBuilder, BufferedWriter, etc.).
 
 import std.io.writer
 import std.string_builder
@@ -28,9 +28,9 @@ const TIOCGWINSZ: u64 = 0x40087468
 
 #foreign fn ioctl(fd: i32, request: u64, argp: &u8) i32
 
-// Query the terminal dimensions. Falls back to 80x24 on failure, and
-// always on Windows - the console size lives behind kernel32's
-// GetConsoleScreenBufferInfo, not `ioctl`, which the CRT does not provide.
+// Query the terminal dimensions. Falls back to 80x24 on failure, and always on Windows - the
+// console size lives behind kernel32's GetConsoleScreenBufferInfo, not `ioctl`, which the CRT does
+// not provide.
 pub fn get_terminal_size() TerminalSize {
     #if platform.os == "windows" {
         return TerminalSize { rows = 24, cols = 80 }
@@ -127,15 +127,15 @@ pub type Color = enum {
 
 fn write_color_code(w: Writer, color: Color) {
     const code: u32 = color match {
-        Black => 0,
-        Red => 1,
-        Green => 2,
-        Yellow => 3,
-        Blue => 4,
-        Magenta => 5,
-        Cyan => 6,
-        White => 7,
-        Default => 9,
+        Black => 0
+        Red => 1
+        Green => 2
+        Yellow => 3
+        Blue => 4
+        Magenta => 5
+        Cyan => 6
+        White => 7
+        Default => 9
     }
     write_uint(w, code)
 }
@@ -190,14 +190,14 @@ pub type Style = enum {
 // Enable a text style.  ESC [ {code} m
 pub fn set_style(w: Writer, style: Style) {
     const code: u32 = style match {
-        Bold => 1,
-        Dim => 2,
-        Italic => 3,
-        Underline => 4,
-        Blink => 5,
-        Reverse => 7,
-        Hidden => 8,
-        Strikethrough => 9,
+        Bold => 1
+        Dim => 2
+        Italic => 3
+        Underline => 4
+        Blink => 5
+        Reverse => 7
+        Hidden => 8
+        Strikethrough => 9
     }
     write_csi(w)
     write_uint(w, code)
