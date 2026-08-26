@@ -411,9 +411,8 @@ fn run_gate_a(ctx: &ResolveCtx, cold: &AnalyzedProject) i32 {
         return 1
     }
     // Dirty one module and demand the project again: the reused entries have
-    // to reproduce the cold result exactly. Picking the LAST module makes the
-    // invalidation touch something the demand order reaches late, where a
-    // stale entry has the most chances to survive.
+    // to reproduce the cold result exactly. The last module is the one the
+    // demand order reaches latest, so it has the most entries behind it.
     const before_diags = cold.diagnostics.len
     const cold_parse_ns = cold.parse_ns
     const dirty: Set(String) = set()
@@ -450,8 +449,8 @@ fn run_gate_a(ctx: &ResolveCtx, cold: &AnalyzedProject) i32 {
         const ok = $"gate A: OK - {mods} modules, {nt} node types, {ns} specializations, {nn} nominals identical"
         defer ok.deinit()
         println(ok.as_view())
-        // Reuse is otherwise invisible: the check half still runs in full, so
-        // a cache that silently re-parsed everything would look the same.
+        // The check half runs in full either way, so these two numbers are
+        // what distinguishes a reused AST from a re-parsed one.
         const cold_ms = cold_parse_ns / 1000000u64
         const warm_ms = cold.parse_ns / 1000000u64
         const p = $"gate A: parse {cold_ms} ms cold, {warm_ms} ms re-demanded"

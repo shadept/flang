@@ -1,36 +1,31 @@
 // Demand order - the sequence the checker visits a module set in.
 //
-// Two properties are required of it. Dependencies come before dependents, so
-// a module's imports are already registered when it is checked. And one
-// module set always yields one order, because every id the checker hands out
-// (nominal, function, specialization) is assigned in visit order and those
-// ids are baked into the emitted output.
+// The order guarantees two things. A module's dependencies are visited before
+// it, so its imports are registered by the time it is checked. And one module
+// set always yields one order, whatever order the modules were discovered in:
+// every id the checker hands out (nominal, function, specialization) is
+// assigned in visit order, and those ids reach the emitted output.
 //
-// A plain topological sort cannot provide the first property, because the
-// module graph is not a DAG: modules within a single library may import each
-// other freely, cycles included, and the standard library relies on this (a
-// string type and the slice it is built on can name each other). Only the
-// LIBRARY graph is required to be acyclic.
-//
-// So the order is the topological sort of the CONDENSATION - the DAG whose
+// The module graph is not a DAG. Modules within one library may import each
+// other in a cycle (docs/spec.md section 6 makes the acyclic rule a
+// library-level one), and the standard library contains such cycles. The
+// order is therefore the topological sort of the CONDENSATION: the DAG whose
 // nodes are the graph's strongly-connected components. A component is visited
-// only after every component it depends on. Inside a component there is no
-// dependency order to respect, so members are visited in FQN order, which is
-// stable across runs and independent of how the modules were discovered.
-// A module in no cycle forms a singleton component, so for an acyclic graph
-// this reduces exactly to a plain topological sort.
-//
-// Tarjan's algorithm is used because its output order is already what is
-// wanted: it emits a component only once every component reachable from it
-// has been emitted. With edges pointing dependent -> dependency, that is
-// dependencies-first, so the condensation never has to be built or sorted
-// separately.
+// only once every component it depends on has been. Members of one component
+// have no dependency order between them and go in FQN order; roots are
+// entered in FQN order too. A module in no cycle is a singleton component, so
+// an acyclic graph gets a plain topological order.
 //
 //     a -> b -> c        a -> [d <-> e]
 //     visit: c, b, a     visit: d, e, a      (d before e by name)
 //
-// Cycles are legal input here, not an error to report. A caller that wants to
-// reject them inspects the components; this module only has to order them.
+// Tarjan's algorithm supplies that order directly: it emits a component only
+// after every component reachable from it, which with edges pointing
+// dependent -> dependency is dependencies-first. The condensation is never
+// materialised.
+//
+// Cycles are ordinary input. Reporting them is a caller's job, over the
+// components it can recover from the result.
 
 import std.allocator
 import std.list
@@ -148,7 +143,7 @@ fn visit(t: &Tarjan, v: usize, fqns: &List(String), allocator: &Allocator?) {
     }
 
     if t.low[v] != t.index[v] { return }
-    let comp: List(usize) = list(4, allocator)
+    let comp = list(4, allocator)
     loop {
         let w = t.stack.pop().unwrap()
         t.on_stack[w] = false
@@ -163,7 +158,7 @@ fn visit(t: &Tarjan, v: usize, fqns: &List(String), allocator: &Allocator?) {
 }
 
 fn by_fqn(count: usize, fqns: &List(String), allocator: &Allocator?) List(usize) {
-    let all: List(usize) = list(count, allocator)
+    let all = list(count, allocator)
     for i in 0..count {
         all.push(i)
     }
@@ -196,7 +191,7 @@ fn name_of(fqns: &List(String), i: usize) String {
 // Tests
 
 fn names(xs: String[]) List(String) {
-    let l: List(String) = list(xs.len)
+    let l = list(xs.len)
     l.push_all(xs)
     return l
 }
@@ -216,7 +211,7 @@ test "a dependency is visited before its dependent" {
     // c <- b <- a  (a imports b imports c)
     let fqns = names(["a", "b", "c"])
     defer fqns.deinit()
-    let es: List(ImportEdge) = list(2)
+    let es = list(2)
     defer es.deinit()
     es.push(edge(0, 1))
     es.push(edge(1, 2))
@@ -232,7 +227,7 @@ test "a cycle is one component, ordered by fqn inside it" {
     // the cycle, so the tie-break is the name.
     let fqns = names(["a", "c", "b"])
     defer fqns.deinit()
-    let es: List(ImportEdge) = list(3)
+    let es = list(3)
     defer es.deinit()
     es.push(edge(0, 1))
     es.push(edge(1, 2))
@@ -248,7 +243,7 @@ test "a cycle is one component, ordered by fqn inside it" {
 test "a self-import is not a cycle" {
     let fqns = names(["a", "b"])
     defer fqns.deinit()
-    let es: List(ImportEdge) = list(2)
+    let es = list(2)
     defer es.deinit()
     es.push(edge(0, 0))
     es.push(edge(0, 1))
@@ -261,12 +256,12 @@ test "a self-import is not a cycle" {
 test "order does not depend on the order edges were discovered" {
     let fqns = names(["a", "b", "c", "d"])
     defer fqns.deinit()
-    let forward: List(ImportEdge) = list(3)
+    let forward = list(3)
     defer forward.deinit()
     forward.push(edge(0, 1))
     forward.push(edge(1, 2))
     forward.push(edge(0, 3))
-    let backward: List(ImportEdge) = list(3)
+    let backward = list(3)
     defer backward.deinit()
     backward.push(edge(0, 3))
     backward.push(edge(1, 2))
@@ -284,7 +279,7 @@ test "order does not depend on the order edges were discovered" {
 test "an unresolved import is dropped, not fatal" {
     let fqns = names(["a", "b"])
     defer fqns.deinit()
-    let es: List(ImportEdge) = list(2)
+    let es = list(2)
     defer es.deinit()
     es.push(edge(0, 7))
     es.push(edge(0, 1))
@@ -297,7 +292,7 @@ test "an unresolved import is dropped, not fatal" {
 test "a module nothing imports still appears exactly once" {
     let fqns = names(["z", "y"])
     defer fqns.deinit()
-    let es: List(ImportEdge) = list(0)
+    let es = list(0)
     defer es.deinit()
     let order = demand_order(2, &fqns, &es)
     defer order.deinit()

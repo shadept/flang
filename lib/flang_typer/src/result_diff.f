@@ -282,9 +282,9 @@ fn diff_instantiated(d: &ResultDiff, a: &TypeCheckResult, b: &TypeCheckResult, a
     }
 }
 
-// The inverse of the node-id fingerprint. A span that moved without its
-// id moving is a node whose source changed under a surviving cache entry
-// - the exact shape of staleness a fingerprint collision hides.
+// The inverse of the node-id fingerprint. Two entries sharing a key must
+// name the same span; one that does not is a node whose source moved while
+// its id did not.
 fn diff_spans(d: &ResultDiff, a: &TypeCheckResult, b: &TypeCheckResult, alloc: &Allocator?) {
     let al = a.spans.len()
     let bl = b.spans.len()

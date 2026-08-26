@@ -53,14 +53,13 @@ pub type TypeCheckResult = struct {
     // table keyed by synthesized-nominal id.
     lambdas: Dict(NodeId, LambdaInfo)
     closures: Dict(NominalId, ClosureSig)
-    // Where every recorded `NodeId` came from. A node id is a lossy
-    // fingerprint of `(file_id, start, length)` and cannot be decoded
-    // back, so a consumer resolving `RtLocal` or walking `node_types`
-    // reads the span from here.
+    // The span every recorded `NodeId` was minted from. A node id is a
+    // lossy fingerprint of `(file_id, start, length)`; this table is what
+    // maps one back, for `RtLocal` and for walking `node_types`.
     spans: Dict(NodeId, SourceSpan)
-    // Source path per file id: `file_paths[span.file_id]`. Owned copies,
-    // so the snapshot describes its own spans without the project that
-    // produced it. Empty when the checker ran without paths.
+    // Source path per file id: `file_paths[span.file_id]`. Owned copies, so
+    // the snapshot describes its own spans on its own. Empty when the
+    // checker ran without paths.
     file_paths: List(OwnedString)
     // Wall time of each `check_all` phase, for `--timings`.
     phases: CheckPhases

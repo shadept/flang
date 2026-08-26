@@ -170,11 +170,10 @@ pub type AnalyzedProject = struct {
     // stdlib or a dependency. Kept because a re-check has to rebuild the
     // checker with the same project boundary the first one used.
     project_origin: List(bool)
-    // Sources and ASTs that a re-parse replaced. A `TypeCheckResult` produced
-    // before that re-parse still holds string views into them - nominal FQNs,
-    // field names - and AST pointers into them, so freeing one on the spot
-    // would leave the older result reading freed memory. They are held until
-    // the whole unit goes away instead.
+    // Sources and ASTs that a re-parse replaced, held until the unit is
+    // dropped. A `TypeCheckResult` holds string views into the source it was
+    // checked from (nominal FQNs, field names) and AST pointers into the
+    // module, so a result outlives the buffers it was built over.
     retired_sources: List(OwnedString)
     retired_modules: List(Module)
     result: TypeCheckResult
@@ -224,9 +223,9 @@ pub fn analyze_project(ctx: &ResolveCtx, entries: &List(OwnedString),
 
     // Import edges as they resolve. `edge_to` holds paths, not indices: the
     // target module may not be parsed yet when the edge is seen.
-    let edge_from: List(usize) = list(0, allocator)
+    let edge_from = list(0, allocator)
     defer edge_from.deinit()
-    let edge_to: List(OwnedString) = list(0, allocator)
+    let edge_to = list(0, allocator)
     defer edge_to.deinit()
 
     let qi: usize = 0
@@ -286,9 +285,9 @@ pub fn analyze_project(ctx: &ResolveCtx, entries: &List(OwnedString),
 fn check_project(self: &AnalyzedProject, ctx: &ResolveCtx, edge_from: &List(usize),
         edge_to: &List(OwnedString), allocator: &Allocator?) {
     // Expansion appends one source per generated chunk. Those buffers are
-    // retired rather than freed: a result from the previous check holds
-    // string views into them. The matching `file_paths` entries can go, since
-    // `TypeCheckResult` keeps its own copies of those.
+    // retired, since a result from a previous check holds string views into
+    // them; the matching `file_paths` entries are freed, because
+    // `TypeCheckResult` keeps its own copies of paths.
     while self.sources.len > self.modules.len {
         const gone = self.sources.pop()
         if gone.is_some() { self.retired_sources.push(gone.unwrap()) }
@@ -298,11 +297,8 @@ fn check_project(self: &AnalyzedProject, ctx: &ResolveCtx, edge_from: &List(usiz
     self.checked = count_errors(&self.diagnostics) == 0
     if !self.checked { return }
 
-    let path_views: List(String) = list(self.modules.len, allocator)
+    let path_views = self.fqns.map(fn(s: OwnedString) { s.as_view() })
     defer path_views.deinit()
-    for i in 0..self.fqns.len {
-        path_views.push(self.fqns[i].as_view())
-    }
     let order = visit_order(&self.file_paths, &path_views, edge_from, edge_to, allocator)
     defer order.deinit()
 
@@ -368,12 +364,11 @@ pub fn reanalyze(self: &AnalyzedProject, ctx: &ResolveCtx, dirty: &Set(String),
     }
     self.parse_ns = elapsed_ns(parse_start)
 
-    // ponytail: the import graph is walked again rather than remembered from
-    // the first analysis. Cache the edges on the unit if this shows up in a
-    // profile - it costs one `resolve_import` per import.
-    let edge_from: List(usize) = list(0, allocator)
+    // ponytail: re-walks the whole import graph, one `resolve_import` per
+    // import. Cache the edges on the unit if a profile shows it.
+    let edge_from = list(0, allocator)
     defer edge_from.deinit()
-    let edge_to: List(OwnedString) = list(0, allocator)
+    let edge_to = list(0, allocator)
     defer edge_to.deinit()
     collect_edges(ctx, &self.modules, &edge_from, &edge_to, allocator)
 
@@ -601,7 +596,7 @@ fn visit_order(file_paths: &List(OwnedString), fqns: &List(String), edge_from: &
     for i in 0..file_paths.len {
         index_of.set(file_paths[i].as_view(), i)
     }
-    let edges: List(ImportEdge) = list(edge_from.len, alloc)
+    let edges = list(edge_from.len, alloc)
     defer edges.deinit()
     for i in 0..edge_from.len {
         const to = index_of.get(edge_to[i].as_view())

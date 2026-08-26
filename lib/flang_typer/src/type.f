@@ -100,11 +100,10 @@ pub type FunctionTy = struct {
 
 // A name → type pair used for `Record` (anonymous structs) and for
 // nominal struct fields when the registry materialises them.
-// `decl_span` points at the field's own declaration, so a consumer can
-// jump to it; `none_span()` for the fields the checker synthesizes, which
-// have no declaration (a closure's captured environment). It is metadata:
-// `equals` and `format` both ignore it, so two records that differ only
-// in where they were written are the same type.
+// `decl_span` locates the field's own declaration, and is `none_span()` for
+// synthesized fields that have none (a closure's captured environment). It
+// is metadata: `equals` and `format` ignore it, so two records differing
+// only in where they were written are the same type.
 pub type Field = struct {
     name: String
     ty: Ty

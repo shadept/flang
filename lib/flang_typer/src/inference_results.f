@@ -165,11 +165,9 @@ pub type InferenceResults = struct {
     // receiver argument. Generic hops are rewritten to their
     // specializations by the M10 drain, like `resolved_targets`.
     receiver_derefs: Dict(NodeId, List(ResolvedTarget))
-    // Inverse of `node_id.node_id_of`: the span every id the checker
-    // minted was fingerprinted from. The fingerprint clamps a span
-    // longer than 64 KB or a file past 65535, so it cannot be decoded
-    // back; a consumer that has a `NodeId` (`RtLocal`, a `node_types`
-    // key) reads the span from here instead.
+    // Inverse of `node_id.node_id_of`: the span every minted id was
+    // fingerprinted from. The fingerprint clamps a span longer than 64 KB
+    // or a file past 65535, so this table is the only exact mapping back.
     spans: Dict(NodeId, SourceSpan)
     allocator: &Allocator?
 }
@@ -205,9 +203,8 @@ pub fn deinit(self: &InferenceResults) {
     self.spans.deinit()
 }
 
-// Note the span an id was minted from. Two spans only ever share an id
-// by clamping to the same bits, so a repeat write is the same span in
-// every case a consumer can observe.
+// Note the span an id was minted from. Two spans share an id only by
+// clamping to the same bits, so a repeat write carries the same span.
 pub fn record_span(self: &InferenceResults, id: NodeId, span: SourceSpan) {
     self.spans.set(id, span)
 }
