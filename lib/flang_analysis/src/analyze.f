@@ -120,11 +120,9 @@ pub fn analyze(source: OwnedString, path: String, allocator: &Allocator? = null)
 
 pub fn deinit(self: &AnalyzedUnit) {
     self.diagnostics.deinit()
+    self.result.deinit()
     self.module.deinit()
     self.source.deinit()
-    // ponytail: the TypeCheckResult is leaked - flang_typer has no
-    // result.deinit() yet. Fine for one-shot build/test; add result.deinit()
-    // before the LSP re-analyses on every keystroke. See docs/known-issues.md.
 }
 
 // Error-severity diagnostics only - warnings and hints don't fail a build.
@@ -138,18 +136,6 @@ pub fn error_count(self: &AnalyzedUnit) usize {
 fn drain_diagnostics(dst: &List(Diagnostic), src: &List(Diagnostic)) {
     dst.push_all(src.as_slice())
     src.clear()
-}
-
-// A copy owning its own message and hint, so one diagnostic can be replayed
-// into a list that frees what it holds without consuming the original.
-fn clone_diag(d: Diagnostic) Diagnostic {
-    return .{
-        severity = d.severity,
-        code = d.code,
-        message = from_view(d.message.as_view()),
-        hint = from_view(d.hint.as_view()),
-        span = d.span,
-    }
 }
 
 fn count_errors(diags: &List(Diagnostic)) usize {
@@ -189,6 +175,11 @@ pub type AnalyzedProject = struct {
     // module, so a result outlives the buffers it was built over.
     retired_sources: List(OwnedString)
     retired_modules: List(Module)
+    // Results a later demand replaced, held the same way: a caller that
+    // copied `result` before re-demanding (gate A) still reads the copy's
+    // tables, so the storage is released at unit teardown, not per demand.
+    // Each is pushed after its type table was adopted by the next demand.
+    retired_results: List(TypeCheckResult)
     result: TypeCheckResult
     checked: bool
     // Everything the parse tier produced: a module's own parse errors, plus
@@ -287,6 +278,7 @@ pub fn analyze_project(ctx: &ResolveCtx, entries: &List(OwnedString),
         project_origin = project_origin,
         retired_sources = list(0, allocator),
         retired_modules = list(0, allocator),
+        retired_results = list(0, allocator),
         result = empty_result(allocator),
         checked = false,
         parse_diags = parse_diags,
@@ -324,7 +316,7 @@ fn check_project(self: &AnalyzedProject, ctx: &ResolveCtx, edge_from: &List(usiz
     // The check tier is regenerated whole on every demand, so the previous
     // run's copy goes and the parse tier is replayed underneath it.
     self.diagnostics.deinit()
-    self.diagnostics = self.parse_diags.map(clone_diag, allocator)
+    self.diagnostics = self.parse_diags.map(fn(d: Diagnostic) { clone_diag(&d) }, allocator)
 
     self.checked = count_errors(&self.diagnostics) == 0
     if !self.checked { return }
@@ -336,6 +328,12 @@ fn check_project(self: &AnalyzedProject, ctx: &ResolveCtx, edge_from: &List(usiz
 
     let chk = &self.checker
     chk.begin_demand()
+    // The type table is one per project: adopt it out of the previous
+    // result so the carried nominal bodies' handles stay resolvable, and
+    // retire what is left of that result - a caller-held copy (gate A) may
+    // still read its tables, so the storage lives until unit teardown.
+    chk.adopt_interner(take_interner(&self.result))
+    self.retired_results.push(self.result)
     let gens = template_state(allocator)
     chk.set_comptime_ctx(ctx.comptime)
     chk.set_project_globals(&ctx.global_imports, &self.project_origin)
@@ -460,7 +458,7 @@ pub fn analyze_source_set(srcs: List(OwnedString), fqns: &List(String), allocato
         file_paths.push(from_view(fqns[i]))
     }
 
-    let diagnostics = parse_diags.map(clone_diag, allocator)
+    let diagnostics = parse_diags.map(fn(d: Diagnostic) { clone_diag(&d) }, allocator)
     let checked = count_errors(&diagnostics) == 0
     let result = empty_result(allocator)
     let generated = empty_template_output(allocator)
@@ -483,6 +481,7 @@ pub fn analyze_source_set(srcs: List(OwnedString), fqns: &List(String), allocato
         project_origin = no_origin,
         retired_sources = list(0, allocator),
         retired_modules = list(0, allocator),
+        retired_results = list(0, allocator),
         result = result,
         checked = checked,
         parse_diags = parse_diags,
@@ -495,6 +494,7 @@ pub fn analyze_source_set(srcs: List(OwnedString), fqns: &List(String), allocato
 }
 
 pub fn deinit(self: &AnalyzedProject) {
+    self.retired_results.deinit()
     self.retired_modules.deinit()
     self.retired_sources.deinit()
     self.project_origin.deinit()

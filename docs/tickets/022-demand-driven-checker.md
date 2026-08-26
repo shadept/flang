@@ -456,6 +456,84 @@ half; the two are timed apart now (`visibility_ns`), or the reuse would have
 read as 777 us against 567 us. Total analysis time is unchanged, as expected -
 collection is 0.03% of a check.
 
+**5b landed 2026-08-26 (`nominal_body`).** Resolved nominal bodies carry
+across demands: a module the demand did not re-parse skips
+`resolve_nominal_bodies` entirely, and its cached collect/resolve
+diagnostics are replayed in the loop positions the passes would have
+emitted them (the first piece of section 5's per-query diagnostic
+ownership - it also fixes 5a's silent loss of a carried module's
+collection diagnostics).
+
+The two questions RFC-024 transferred here are answered:
+
+- **(i) The table outlives a demand.** A carried body's `Ty` handles index
+  the interner, so the table becomes one per project. Ownership stays
+  linear rather than shared - FLang has no way to share a mutable struct
+  across the moves `AnalyzedProject` makes - by threading the table
+  forward: `check_all` ships it inside the `TypeCheckResult` exactly as
+  before, and the next demand adopts it back out of that result
+  (`take_interner` / `adopt_interner`), appends, and ships it with its own
+  result. The table only grows, so an earlier snapshot's handles stay
+  valid; `result_diff` renders both sides through the right-hand result's
+  table for the same reason. Variable ids are reused across demands (the
+  engine restarts at zero), so re-demands intern almost nothing new -
+  var-citing nodes land on the nodes the previous demand made.
+- **(ii) Record keys stay source views**, safe under the retirement rule
+  the registry already relies on: `analyze.f` retires replaced sources
+  rather than freeing them, and now retires each replaced
+  `TypeCheckResult` the same way (`retired_results`, freed at unit
+  teardown - which also ends the old behaviour of leaking the previous
+  result on every re-demand).
+
+What carrying a body requires is that every id it cites stays valid, so
+the id-stability machinery phase 1 and 5a built extends to every
+population the registry holds. The registry carries WHOLE
+(`carried_copy`, a deep copy with bodies), `next_id` never rewinds, and
+`recycled` becomes the single reclamation ledger: declared names (5a,
+unchanged), generated chunk declarations (their origins are always
+re-collected, so retirement already covers them), anonymous records
+(their intern map and key buffers carry, so a re-encountered shape reuses
+its id without touching `recycled`), and closure environments (rebuilt by
+every body pass - `check_all` retires their ids on the way out,
+remembered against their synthesized FQNs, and the next pass's
+identically-ordered lambdas reclaim them). `declared_mark` is gone; the
+mark-and-drop scheme it anchored is subsumed by retire-and-reclaim.
+
+A carried body is valid only while the name set it resolved against holds
+still. Three invalidation triggers fall back to resolving every body from
+source, exactly a cold check: a name added (`register_collected` had no
+retired id to reclaim), a name removed (a module retirement nothing
+claimed), an alias changed. Alias change compares canonical spellings of
+the retiring modules' alias bodies across re-collection
+(`render_alias_body`); a body with no canonical spelling - an array
+length that is neither a literal nor a named constant - conservatively
+counts as changed. Verified by a checker test that edits an alias in one
+module and asserts the dependent module's carried body re-resolves and
+errors.
+
+Two stand-ins keep a skipping demand observably identical to a cold one,
+both found by Gate A rather than by reasoning: a skipped module still
+mints its type parameters' fresh variables (anonymous-record keys render
+variable ids, so anything downstream keyed by one depends on the engine's
+variable stream) and their span nodes (the result's span table holds one
+entry per minted id, and the gate compares it entry by entry).
+
+Measured on the compiler with three modules dirtied of 106: **nominal
+bodies 14.6 ms cold, 1.1 ms re-demanded**; the gate prints the pair.
+Collection and parse reuse carry over from 5a unchanged. Signatures are
+timed apart now (`signatures_ns`) so the bodies number is the phase this
+step made incremental, not the pair.
+
+Memory, same corpus (`--mem`): the interner holds **213,001 nodes after a
+re-demand - exactly the cold count** - variable ids restart per engine, so
+a re-demand's var-citing shapes land on the nodes the previous demand
+made, and the "table does not grow across a re-demand" property RFC-024
+had to defer now holds. A gate run (one re-demand) retains 668 MB against
+458 MB cold: +210 MB per re-demand, down from the +292 MB RFC-024
+measured, with the shared table and the retired-result bookkeeping
+accounting for the difference. The bulk of the remaining retention is the
+replaced result's body-tier tables, which is 5d's territory.
+
 **Gate B - laziness.** Run the harness with lazy demand enabled and assert zero
 diff in reported diagnostics against eager demand. Guards the M12 rejection
 parity against silent regression. Nearly free once W1003 exists, since that
@@ -479,14 +557,8 @@ object contention on top), stage-2 = stage-3 byte-identical, 11/11 examples.
  5  convert phase by phase, Gate A green after each:
       5a  DONE 2026-08-26: module_ast, then nominal_names on a Checker that
           outlives one check
-      5b  nominal_body - RFC-024 landed 2026-08-26 and hands this phase two
-          settled facts and two inherited questions: types are interned
-          handles (a zonked body names no engine variables, so it CAN
-          carry), and the table currently lives on the engine and moves
-          into the result per check. 5b decides (i) whether the table
-          outlives a demand and (ii) what that does to record keys, whose
-          field names are views into module sources (RFC-024 open
-          questions 2 and 3, transferred here).
+      5b  DONE 2026-08-26: nominal_body carries; the type table outlives a
+          demand (RFC-024 open questions 2 and 3 answered below)
       5c  signature / const_value
       5d  body  (64%)
       5e  specialization; retire drain_pending_specs / resolve_pending_calls

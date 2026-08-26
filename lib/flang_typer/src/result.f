@@ -26,6 +26,10 @@ pub type TypeCheckResult = struct {
     // The type table (RFC-024): one node per distinct type. Every `Ty`
     // this snapshot's tables hold is a canonical copy sharing its heap,
     // so the interner owns the type storage and travels with the result.
+    // It is one table per PROJECT, not per check: the next demand adopts
+    // it back (`take_interner`), appends, and ships it with its own
+    // result. The table only grows, so an earlier snapshot's handles stay
+    // valid in whichever result holds it now.
     interner: TypeInterner
     resolved_ops: Dict(NodeId, ResolvedOperator)
     resolved_targets: Dict(NodeId, ResolvedTarget)
@@ -76,7 +80,8 @@ pub type CheckPhases = struct {
     visibility_ns: u64   // import graph -> per-module visible set
     collect_ns: u64      // nominal names
     templates_ns: u64    // source-generator expansion
-    nominals_ns: u64     // nominal bodies + signatures
+    nominals_ns: u64     // nominal bodies
+    signatures_ns: u64   // function signatures + constant types
     constants_ns: u64    // constant initializers
     bodies_ns: u64       // function bodies
     specialize_ns: u64   // generic instantiation drain + pending calls
@@ -89,6 +94,7 @@ pub fn no_phases() CheckPhases {
         collect_ns = 0,
         templates_ns = 0,
         nominals_ns = 0,
+        signatures_ns = 0,
         constants_ns = 0,
         bodies_ns = 0,
         specialize_ns = 0,
@@ -101,11 +107,12 @@ pub fn no_phases() CheckPhases {
 // that expect every node to have a type should treat `null` as a bug,
 // not silently fall back to a fresh var.
 // An empty result - every table empty, registries fresh. Handed back when
-// a source failed to parse and was never type-checked.
+// a source failed to parse and was never type-checked. The interner is a
+// zero-capacity stand-in: nothing resolves through an empty result.
 pub fn empty_result(allocator: &Allocator? = null) TypeCheckResult {
     return .{
         node_types = dict(allocator),
-        interner = type_interner(allocator),
+        interner = type_interner(allocator, 0),
         resolved_ops = dict(allocator),
         resolved_targets = dict(allocator),
         instantiated_types = list(0, allocator),
@@ -227,6 +234,17 @@ fn sort_by_bytes(xs: &List(TableSize)) {
         }
         xs[j] = v
     }
+}
+
+// Move the type table out of the snapshot, leaving a zero-capacity
+// stand-in. The next demand adopts the table so the handles its carried
+// registry holds stay resolvable; this snapshot's own handles remain
+// valid in the table wherever it now lives, but no longer resolve
+// through this struct.
+pub fn take_interner(self: &TypeCheckResult) TypeInterner {
+    let out = self.interner
+    self.interner = type_interner(out.allocator, 0)
+    return out
 }
 
 pub fn get_type(self: &TypeCheckResult, id: NodeId) Ty? {

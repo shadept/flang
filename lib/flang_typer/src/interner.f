@@ -93,22 +93,32 @@ pub type TypeInterner = struct {
     allocator: &Allocator?
 }
 
-// Initial capacity of the per-node arrays, from measured checks: a
+// Default capacity of the per-node arrays, from measured checks: a
 // stdlib-bound check of a trivial project interns ~26k nodes (every
 // check seeds the whole stdlib, so that is the floor), the 106-module
 // compiler ~205k. Covering the floor skips the first nine doublings of
 // four parallel arrays; a big check grows a few times from here.
 const SEED_CAPACITY: usize = 32768
 
+// The fixed leaves `type_interner` seeds: void, never, <error>, 14 prims.
+const SEED_LEN: usize = 17
+
 pub fn type_interner(allocator: &Allocator? = null) TypeInterner {
+    return type_interner(allocator, SEED_CAPACITY)
+}
+
+// `capacity` sizes the per-node arrays. The one-argument form uses a
+// default that fits a real check; pass 0 for a table that only stands in
+// for one (an empty result, an engine that has handed its table away).
+pub fn type_interner(allocator: &Allocator?, capacity: usize) TypeInterner {
     let self = TypeInterner {
-        nodes = list(SEED_CAPACITY, allocator),
-        children = list(SEED_CAPACITY, allocator),
-        ground = list(SEED_CAPACITY, allocator),
+        nodes = list(capacity, allocator),
+        children = list(capacity, allocator),
+        ground = list(capacity, allocator),
         rec_names = list(0, allocator),
         rec_spans = list(0, allocator),
-        by_key = dict(SEED_CAPACITY, allocator),
-        keys = list(SEED_CAPACITY, allocator),
+        by_key = dict(capacity, allocator),
+        keys = list(capacity, allocator),
         allocator = allocator,
     }
     seed_leaf(&self, TyNode.NVoid, "void")
@@ -147,6 +157,12 @@ pub fn deinit(self: &TypeInterner) {
 
 pub fn len(self: &TypeInterner) usize {
     return self.nodes.len
+}
+
+// Whether the table holds nothing beyond the seeded leaves - a stand-in
+// no check has interned into, carrying no type worth adopting.
+pub fn is_pristine(self: &TypeInterner) bool {
+    return self.nodes.len == SEED_LEN
 }
 
 // Backing arrays only, like every `capacity_bytes`.

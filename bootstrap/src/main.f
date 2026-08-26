@@ -502,6 +502,7 @@ fn run_gate_a(ctx: &ResolveCtx, cold: &AnalyzedProject, alloc: &Allocator?) i32 
     const before_diags = cold.diagnostics.len
     const cold_parse_ns = cold.parse_ns
     const cold_collect_ns = cold.result.phases.collect_ns
+    const cold_nominals_ns = cold.result.phases.nominals_ns
     const dirty: Set(String) = set()
     defer dirty.deinit()
     const n = cold.file_paths.len
@@ -553,6 +554,11 @@ fn run_gate_a(ctx: &ResolveCtx, cold: &AnalyzedProject, alloc: &Allocator?) i32 
         const c = $"gate A: collect {cold_us} us cold, {warm_collect_us} us re-demanded"
         defer c.deinit()
         println(c.as_view())
+        const cold_nom_us = cold_nominals_ns / 1000u64
+        const warm_nom_us = cold.result.phases.nominals_ns / 1000u64
+        const b = $"gate A: nominal bodies {cold_nom_us} us cold, {warm_nom_us} us re-demanded"
+        defer b.deinit()
+        println(b.as_view())
         return 0
     }
 
@@ -663,7 +669,8 @@ fn print_timings(unit: &AnalyzedProject, lower_ns: u64, translate_ns: u64, cc_ns
     print_phase("visibility", p.visibility_ns, total_ns, true)
     print_phase("collect", p.collect_ns, total_ns, true)
     print_phase("templates", p.templates_ns, total_ns, true)
-    print_phase("nominals + sigs", p.nominals_ns, total_ns, true)
+    print_phase("nominals", p.nominals_ns, total_ns, true)
+    print_phase("signatures", p.signatures_ns, total_ns, true)
     print_phase("constants", p.constants_ns, total_ns, true)
     print_phase("bodies", p.bodies_ns, total_ns, true)
     print_phase("specialize", p.specialize_ns, total_ns, true)

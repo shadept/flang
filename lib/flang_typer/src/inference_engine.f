@@ -219,13 +219,22 @@ pub fn deinit(self: &Engine) {
     self.level_undo.deinit()
 }
 
-// Hand the filled type table to the caller and start an empty one. The
+// Hand the filled type table to the caller and leave a stand-in. The
 // bindings still name handles of the moved table, so nothing may resolve
 // through this engine afterwards - the next demand readies a fresh one.
 pub fn take_interner(self: &Engine) TypeInterner {
     let out = self.interner
-    self.interner = type_interner(self.allocator)
+    self.interner = type_interner(self.allocator, 0)
     return out
+}
+
+// Replace the engine's table with one carried from an earlier demand, so
+// the handles already minted into it (carried nominal bodies) stay valid
+// and equal shapes intern to the ids they already hold. Only sound on an
+// engine that has not interned anything of its own yet.
+pub fn set_interner(self: &Engine, it: TypeInterner) {
+    self.interner.deinit()
+    self.interner = it
 }
 
 // The shape behind a handle - engine-side shorthand.

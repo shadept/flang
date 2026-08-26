@@ -45,3 +45,16 @@ pub fn error(code: String, message: OwnedString, span: SourceSpan) Diagnostic {
         span = span,
     }
 }
+
+// A copy owning its own message and hint, so one diagnostic can be
+// replayed into a list that frees what it holds without consuming the
+// original. `code` is a static view and copies as-is.
+pub fn clone_diag(d: &Diagnostic) Diagnostic {
+    return .{
+        severity = d.severity,
+        code = d.code,
+        message = from_view(d.message.as_view()),
+        hint = from_view(d.hint.as_view()),
+        span = d.span,
+    }
+}
