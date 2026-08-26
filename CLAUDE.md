@@ -9,6 +9,7 @@ Compiler engineer assistant for FLang — a compiled language targeting C99 via 
 - **Run tests:** `dotnet test.cs [filter]`
 - **Run compiler:** `dist/<rid>/flang.exe`
 - **Format:** `dist/<rid>/flang.exe fmt` from a project directory (`--check` writes nothing, exits 1 on drift). Style and `[fmt]` knobs: see `docs/architecture.md` §Formatter.
+- **After tests pass, run `flang fmt` before finishing** on every project you touched (`bootstrap/`, each `lib/*`, `tools/*`; for `stdlib/` pass the changed `.f` files as arguments - it has no manifest). A task is not done with formatting drift.
 
 ## Documentation
 
