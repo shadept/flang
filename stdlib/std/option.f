@@ -45,10 +45,21 @@ pub fn unwrap(self: Option($T)) T {
     return self.expect("called `unwrap` on a `None` value")
 }
 
+// The payload, or `fallback`. The argument is evaluated whether or not the
+// option is empty; `unwrap_or_else` defers it to the empty case.
 pub fn unwrap_or(self: Option($T), fallback: T) T {
     return self match {
         Some(v) => v
         None => fallback
+    }
+}
+
+// The payload, or the result of calling `make`. `make` runs only when the
+// option is empty.
+pub fn unwrap_or_else(self: Option($T), make: $F) T {
+    return self match {
+        Some(v) => v
+        None => make()
     }
 }
 
