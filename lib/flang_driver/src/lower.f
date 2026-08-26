@@ -1881,7 +1881,10 @@ fn lower_lambda(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, lam: &LambdaExpr) 
     let target = resolve_struct(ctx, &cty, &ctx.result.nominals, ctx.allocator)
     if target.is_none() { return unlowerable(ctx) }
     let st = target.unwrap()
+    // Zero-fill so field padding reads deterministically - see
+    // `lower_variant_call`.
     let slot = bb.stack_slot(st.layout.size as u64, st.layout.align as u64)
+    bb.memset(slot, Operand.IntConst(0), Operand.IntConst(st.layout.size as i64))
     for i in 0..info.captures.len {
         let cap = &info.captures[i]
         let v = read_binding(ctx, bb, env, cap.name, &cap.ty)
@@ -2223,7 +2226,10 @@ fn lower_tuple_lit(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, tl: &TupleLiter
     if tys.len != tl.elements.len { return unlowerable(ctx) }
     if !ty_concrete(tyit(ctx), want) { return unlowerable(ctx) }
     let sl = tuple_layout(tyit(ctx), &tys, &ctx.result.nominals, ctx.allocator)
+    // Zero-fill so element padding reads deterministically - see
+    // `lower_variant_call`.
     let slot = bb.stack_slot(sl.size as u64, sl.align as u64)
+    bb.memset(slot, Operand.IntConst(0), Operand.IntConst(sl.size as i64))
     for i in 0..tl.elements.len {
         let v = lower_expr(ctx, bb, env, &tl.elements[i])
         let ep = bb.gep(slot, Operand.IntConst(sl.offsets[i] as i64))
@@ -3660,17 +3666,21 @@ fn lower_variant_call(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, call: &CallE
         return lower_expr(ctx, bb, env, payload0)
     }
 
-    // Tag first, then each payload at the variant's per-payload offset
-    // (M11 multi-payload). Each slot stores by the variant's DECLARED
-    // payload type (substituted through the instantiation) - the
-    // memory's truth; a coercion that rewrote an argument node's
-    // representation refuses - see `repr_compatible`.
+    // Zero-fill, tag, then each payload at the variant's per-payload
+    // offset (M11 multi-payload). The zero-fill gives the tag-to-payload
+    // padding and any unused variant space a deterministic value -
+    // byte-wise consumers (the generic hash) read the whole slot. Each
+    // slot stores by the variant's DECLARED payload type (substituted
+    // through the instantiation) - the memory's truth; a coercion that
+    // rewrote an argument node's representation refuses - see
+    // `repr_compatible`.
     let offs = variant_payload_offsets(tyit(ctx), &et.def, vnum as usize, &et.args, &ctx.result.nominals, ctx.allocator)
     if offs.len != call.args.len {
         offs.deinit()
         return unlowerable(ctx)
     }
     let slot = bb.stack_slot(el.size as u64, el.align as u64)
+    bb.memset(slot, Operand.IntConst(0), Operand.IntConst(el.size as i64))
     bb.store(IrType.I32, Operand.IntConst(vnum as i64), slot)
     for j in 0..call.args.len {
         // Named arguments never resolve to a variant - the checker

@@ -408,6 +408,8 @@ This enables arena-based bulk deallocation: allocate many objects into an arena,
 
 All memory is zero-initialized by default. Variables declared without an initializer are memset to zero. The compiler may optimize this away when provably written before read.
 
+Zero initialization covers the whole allocation, not just the named fields: aggregate construction (struct literals, enum variants, tuples, closures) zero-fills its storage before storing fields, so padding bytes, the tag-to-payload gap in tagged enums, and the unused space of smaller variants all read as zero. Byte-wise consumers rely on this — the generic `hash` in `core.hash` folds every byte of a value, and equal values must produce equal hashes.
+
 ### 4.3 Reference Counting (Rc and Arc)
 
 `Rc(T)` provides shared ownership of a heap-allocated value. `Arc(T)` is the thread-safe variant using atomic operations on the reference count. Both live in `std.rc`.

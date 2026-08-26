@@ -131,7 +131,7 @@ public class HmAstLowering
         if (optionIrType is IrEnum optionEnum)
         {
             var someVariant = FindVariant(optionEnum, "Some");
-            var enumPtr = _currentBlock.EmitAlloca(optionEnum);
+            var enumPtr = EmitZeroedAlloca(optionEnum);
             EmitStoreToOffset(enumPtr, 0,
                 new IntConstantValue(someVariant.TagValue, TypeLayoutService.IrI32),
                 TypeLayoutService.IrI32);
@@ -154,7 +154,7 @@ public class HmAstLowering
         if (optionIrType is IrEnum optionEnum)
         {
             var noneVariant = FindVariant(optionEnum, "None");
-            var enumPtr = _currentBlock.EmitAlloca(optionEnum);
+            var enumPtr = EmitZeroedAlloca(optionEnum);
             EmitStoreToOffset(enumPtr, 0,
                 new IntConstantValue(noneVariant.TagValue, TypeLayoutService.IrI32),
                 TypeLayoutService.IrI32);
@@ -2249,7 +2249,7 @@ public class HmAstLowering
         var variant = foundVariant.Value;
 
         // Alloca + store tag + load
-        var enumPtr = _currentBlock.EmitAlloca(irEnum);
+        var enumPtr = EmitZeroedAlloca(irEnum);
 
         EmitStoreToOffset(enumPtr, 0, new IntConstantValue(variant.TagValue, TypeLayoutService.IrI32), TypeLayoutService.IrI32);
 
@@ -2577,7 +2577,7 @@ public class HmAstLowering
             var nullVal = new IntConstantValue(0, result.IrType!);
             var isNonNull = _currentBlock.EmitBinary(BinaryOp.NotEqual, result, nullVal, TypeLayoutService.IrBool);
 
-            var slot = _currentBlock.EmitAlloca(foreignOptionEnum);
+            var slot = EmitZeroedAlloca(foreignOptionEnum);
             var thenBlock = CreateBlock("foreign_opt_some");
             var elseBlock = CreateBlock("foreign_opt_none");
             var contBlock = CreateBlock("foreign_opt_cont");
@@ -3508,17 +3508,29 @@ public class HmAstLowering
     }
 
     /// <summary>
+    /// Alloca for an aggregate built by partial writes (field, tag, or
+    /// payload stores). Zeroes the whole allocation first so omitted
+    /// fields, padding bytes, and unused variant space all read as zero:
+    /// byte-wise consumers (the generic hash, memcmp-style equality)
+    /// require every constructed aggregate to have a deterministic full
+    /// representation.
+    /// </summary>
+    private LocalValue EmitZeroedAlloca(IrType type)
+    {
+        var ptr = _currentBlock.EmitAlloca(type);
+        _currentBlock.EmitCall("memset",
+            [ptr, new IntConstantValue(0, TypeLayoutService.IrI32), new IntConstantValue(type.Size, TypeLayoutService.IrUSize)],
+            TypeLayoutService.IrVoidPrim, calleeParamTypes: null, isForeign: true);
+        return ptr;
+    }
+
+    /// <summary>
     /// Shared helper for struct construction: alloca + GEP/store per field + load result.
     /// </summary>
     private LocalValue EmitStructConstruction(IrStruct structIrType,
         IReadOnlyList<(string FieldName, ExpressionNode Value)> fields, SourceSpan span)
     {
-        var resultPtr = _currentBlock.EmitAlloca(structIrType);
-
-        // Zero-initialize the struct so unspecified fields get default values
-        _currentBlock.EmitCall("memset",
-            [resultPtr, new IntConstantValue(0, TypeLayoutService.IrI32), new IntConstantValue(structIrType.Size, TypeLayoutService.IrUSize)],
-            TypeLayoutService.IrVoidPrim, calleeParamTypes: null, isForeign: true);
+        var resultPtr = EmitZeroedAlloca(structIrType);
 
         foreach (var (fieldName, fieldExpr) in fields)
         {
@@ -3536,12 +3548,7 @@ public class HmAstLowering
     /// </summary>
     private LocalValue BuildStruct(IrStruct structType, Dictionary<string, Value> fieldValues)
     {
-        var resultPtr = _currentBlock.EmitAlloca(structType);
-
-        // Zero-initialize the struct so unspecified fields get default values
-        _currentBlock.EmitCall("memset",
-            [resultPtr, new IntConstantValue(0, TypeLayoutService.IrI32), new IntConstantValue(structType.Size, TypeLayoutService.IrUSize)],
-            TypeLayoutService.IrVoidPrim, calleeParamTypes: null, isForeign: true);
+        var resultPtr = EmitZeroedAlloca(structType);
 
         foreach (var field in structType.Fields)
         {
@@ -4338,8 +4345,8 @@ public class HmAstLowering
 
         var variant = foundVariant.Value;
 
-        // 1. Alloca enum-sized storage
-        var enumPtr = _currentBlock.EmitAlloca(irEnum);
+        // 1. Alloca enum-sized storage, zeroed
+        var enumPtr = EmitZeroedAlloca(irEnum);
 
         // 2. Store tag value (offset 0) as i32
         EmitStoreToOffset(enumPtr, 0, new IntConstantValue(variant.TagValue, TypeLayoutService.IrI32), TypeLayoutService.IrI32);
@@ -5086,10 +5093,7 @@ public class HmAstLowering
             throw new InternalCompilerError(
                 $"Capturing lambda lowered to non-struct IR type `{closureIrType}`", lambda.Span);
 
-        var resultPtr = _currentBlock.EmitAlloca(closureStruct);
-        _currentBlock.EmitCall("memset",
-            [resultPtr, new IntConstantValue(0, TypeLayoutService.IrI32), new IntConstantValue(closureStruct.Size, TypeLayoutService.IrUSize)],
-            TypeLayoutService.IrVoidPrim, calleeParamTypes: null, isForeign: true);
+        var resultPtr = EmitZeroedAlloca(closureStruct);
 
         foreach (var capture in lambda.Captures)
         {

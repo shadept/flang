@@ -2363,3 +2363,42 @@ A receiver that is a value-field chain rooted at a single reference
 (`self.engine.interner...` from `self: &Checker`) works. Fix the lowering
 of member-path receivers (the reference compiler's fix is the model), then
 drop the `LowerCtx.it` field.
+
+## Self-hosted: repeat array literal over 64 elements silently drops the module
+
+`let buf: [u8; 65] = [0; 65]` (any repeat literal with more than 64
+elements) makes the self-hosted compiler emit a C file containing the
+stdlib but none of the module's own functions, including `main` - the
+build then fails at link with "entry point must be defined" and no
+diagnostic pointing at the source. 64 elements and below work. The
+reference compiler handles any length. Workaround: declare the array
+uninitialized (zero-filled by default) and fill with a loop, or stay at
+64 or fewer elements.
+
+Bisected with `[u8; N] = [fill; N]` at N = 64 (ok) / 65 (fails); the
+threshold suggests a fixed 64-slot buffer in lowering or codegen.
+
+## Enum construction left padding bytes uninitialized - RESOLVED
+
+**Status:** Resolved - zero-fill at every aggregate construction site
+**Affected:** `FLang.Semantics/HmAstLowering` (reference) and
+`lib/flang_driver/src/lower.f` (self-hosted)
+
+Struct construction zero-filled its alloca before the field stores, but
+enum construction did not: both compilers alloca'd the slot and stored
+only the tag and payload. The 4 padding bytes between the i32 tag and an
+8-aligned payload, and the unused tail of smaller variants, kept stack
+garbage. The generic byte-wise `hash` in `core.hash` folds every byte of
+the value, so equal Option/enum values could hash differently depending
+on what the stack held - a Dict keyed on such values could miss existing
+keys and store duplicates. Field-wise consumers (match, `==` via
+`op_eq`, `#derive(T, hash)`) never read the bytes and were unaffected.
+
+In the reference compiler the closure-capture struct was already
+zeroed; in the self-hosted compiler the nullary-variant and None paths
+were zeroed but the payload-variant path, closure captures, and tuple
+literals were not. All construction sites now go through a shared
+zero-filling helper (`EmitZeroedAlloca` in the reference; explicit
+memsets in `lower.f`). Spec 4.2 now states the guarantee. Regression
+test: `tests/harness/enums/enum_padding_hash.f` (hashes an Option, a
+payload variant, and a naked variant under two different stack fills).
