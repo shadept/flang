@@ -74,6 +74,13 @@ pub fn filled_list(count: usize, value: $T, allocator: &Allocator? = null) List(
     return out
 }
 
+// Bytes the backing storage occupies. Counts the whole capacity, not just the
+// `len` elements in use. What an element owns on the heap of its own is not
+// in here.
+pub fn capacity_bytes(self: &List($T)) usize {
+    return self.cap * size_of(T)
+}
+
 // Free the backing storage. The list should not be used after this.
 // Calls deinit on all stored elements before freeing.
 pub fn deinit(self: &List($T)) {

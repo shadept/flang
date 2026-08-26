@@ -5,6 +5,7 @@ import core.rtti
 
 import std.mem
 import std.option
+import std.test
 
 pub fn or_global(alloc: &Allocator?) &Allocator {
     #if runtime.testing {
@@ -275,6 +276,150 @@ pub const test_allocator_state = TestAllocatorState {
 pub const test_allocator = Allocator {
     impl = &test_allocator_state as &u8,
     vtable = &test_allocator_vtable
+}
+
+// =============================================================================
+// CountingAllocator - a decorator that measures what passes through it
+// =============================================================================
+
+// Wraps any allocator, forwards every call to it, and keeps a running total of
+// the bytes currently out and the high-water mark they reached.
+//
+// The bookkeeping is O(1) per call and holds no per-allocation state. The
+// counters say how large a pool grew and whether it went back to zero; they
+// name no individual allocation.
+//
+// `live_bytes` is exact where every free goes back through this same
+// decorator. An arena frees its pages through its BACKING allocator, so a
+// decorator wrapping the backing is the one that sees an arena's footprint.
+pub type CountingAllocator = struct {
+    backing: &Allocator
+    // Bytes handed out and not yet given back.
+    live_bytes: usize
+    // The largest `live_bytes` ever reached.
+    peak_bytes: usize
+    // Bytes handed out over the decorator's whole life, growth included.
+    total_bytes: usize
+    allocs: usize
+    reallocs: usize
+    deallocs: usize
+}
+
+pub fn counting_allocator(backing: &Allocator) CountingAllocator {
+    return .{
+        backing = backing,
+        live_bytes = 0,
+        peak_bytes = 0,
+        total_bytes = 0,
+        allocs = 0,
+        reallocs = 0,
+        deallocs = 0,
+    }
+}
+
+fn counting_note_growth(state: &CountingAllocator, bytes: usize) {
+    state.live_bytes = state.live_bytes + bytes
+    state.total_bytes = state.total_bytes + bytes
+    if state.live_bytes > state.peak_bytes { state.peak_bytes = state.live_bytes }
+}
+
+fn counting_alloc(impl: &u8, size: usize, alignment: usize) u8[]? {
+    let state = impl as &CountingAllocator
+    const got = state.backing.alloc(size, alignment)
+    if got.is_none() { return null }
+    state.allocs = state.allocs + 1
+    counting_note_growth(state, size)
+    return got
+}
+
+fn counting_realloc(impl: &u8, memory: u8[], new_size: usize) u8[]? {
+    let state = impl as &CountingAllocator
+    const old_size = memory.len
+    const got = state.backing.realloc(memory, new_size)
+    if got.is_none() { return null }
+    state.reallocs = state.reallocs + 1
+    if new_size >= old_size {
+        counting_note_growth(state, new_size - old_size)
+        return got
+    }
+    state.live_bytes = state.live_bytes - (old_size - new_size)
+    return got
+}
+
+fn counting_dealloc(impl: &u8, memory: u8[]) {
+    let state = impl as &CountingAllocator
+    state.deallocs = state.deallocs + 1
+    // A free of memory this decorator never handed out clamps the running
+    // total at zero; the alloc and free counts are where it shows.
+    if memory.len > state.live_bytes {
+        state.live_bytes = 0
+    } else {
+        state.live_bytes = state.live_bytes - memory.len
+    }
+    state.backing.dealloc(memory)
+}
+
+const counting_allocator_vtable = AllocatorVTable {
+    alloc = counting_alloc,
+    realloc = counting_realloc,
+    dealloc = counting_dealloc
+}
+
+pub fn allocator(state: &CountingAllocator) Allocator {
+    return Allocator {
+        impl = state as &u8,
+        vtable = &counting_allocator_vtable
+    }
+}
+
+// Start counting again from here, with whatever is currently live as the new
+// baseline. Measures one phase of a long-running program.
+pub fn reset_counts(state: &CountingAllocator) {
+    state.peak_bytes = state.live_bytes
+    state.total_bytes = 0
+    state.allocs = 0
+    state.reallocs = 0
+    state.deallocs = 0
+}
+
+test "a counting decorator tracks live bytes back to zero" {
+    let c = counting_allocator(&global_allocator)
+    let a = c.allocator()
+
+    const one = a.alloc(100, 8).unwrap()
+    const two = a.alloc(40, 8).unwrap()
+    assert_eq(c.live_bytes, 140 as usize, "both allocations are out")
+    assert_eq(c.peak_bytes, 140 as usize, "the high-water mark saw both")
+
+    a.dealloc(two)
+    assert_eq(c.live_bytes, 100 as usize, "a free gives its bytes back")
+    assert_eq(c.peak_bytes, 140 as usize, "the high-water mark does not fall")
+
+    a.dealloc(one)
+    assert_eq(c.live_bytes, 0 as usize, "nothing is left out")
+    assert_eq(c.allocs, 2 as usize, "two allocations")
+    assert_eq(c.deallocs, 2 as usize, "two frees")
+    assert_eq(c.total_bytes, 140 as usize, "the lifetime total counts growth, not the peak")
+}
+
+test "a decorator sees an arena's pages through its backing" {
+    // An arena frees its pages through its BACKING allocator, so that is
+    // where a decorator has to sit to see the arena's footprint go to zero.
+    let c = counting_allocator(&global_allocator)
+    let backing = c.allocator()
+    let arena = arena_allocator(&backing, 4096)
+    let a = arena.allocator()
+
+    const _x = a.alloc(64, 8).unwrap()
+    assert_true(c.live_bytes > 0, "the arena took a page from the backing")
+    const with_page = c.live_bytes
+
+    // A second small allocation fits the same page: the backing sees nothing.
+    const _y = a.alloc(64, 8).unwrap()
+    assert_eq(c.live_bytes, with_page, "the arena served it without another page")
+
+    arena.deinit()
+    assert_eq(c.live_bytes, 0 as usize, "deinit hands every page back")
 }
 
 // =============================================================================

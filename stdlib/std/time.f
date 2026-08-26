@@ -18,7 +18,9 @@
 //   const t0 = monotonic_ns()
 //   do_work()
 //   const elapsed = elapsed_ns(t0)
-//   println($"work took {ns_to_millis(elapsed)} ms".as_view())
+//   const msg = $"work took {ns_to_millis(elapsed)} ms"
+//   defer msg.deinit()
+//   println(msg.as_view())
 //
 // Or with the lighter `Stopwatch` wrapper:
 //

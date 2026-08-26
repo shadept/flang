@@ -40,6 +40,13 @@ pub fn dict(allocator: &Allocator? = null) Dict($K, $V) {
     return result
 }
 
+// Bytes the bucket array occupies. Counts every slot, live or not: a dict
+// holds `cap` slots and `len` of them carry an entry. What a key or value
+// owns on the heap of its own is not in here.
+pub fn capacity_bytes(self: &Dict($K, $V)) usize {
+    return self.cap * size_of(Entry(K, V))
+}
+
 // Free the backing storage. The dict should not be used after this.
 // Calls deinit on all stored keys and values before freeing.
 pub fn deinit(self: &Dict($K, $V)) {
