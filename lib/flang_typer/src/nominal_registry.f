@@ -170,43 +170,40 @@ pub fn register_at(self: &NominalRegistry, id: NominalId, def: NominalDef, fqn_s
     self.by_fqn.set(fqn_stable, id)
 }
 
-// The definitions below `mark`, stripped back to what a name-collection pass
-// produces: identity, visibility, span and directive flags, with the resolved
-// body dropped. Ids, FQNs and `next_id` carry over, so a check starting from
-// the copy hands out exactly the ids it would have from an empty registry.
-//
-// A body references type variables of the engine that resolved it, and the
-// engine does not outlive its check, so the body stays behind.
-pub fn placeholders_below(self: &NominalRegistry, mark: NominalId,
-        allocator: &Allocator? = null) NominalRegistry {
+// A deep copy of every live definition, body included, at the id it holds.
+// `next_id` carries, so ids stay monotone across the copy. Field and variant
+// lists are cloned; the `Ty` handles inside them stay valid as long as the
+// type table they index does. Used to hand a demand's registry to the next
+// one while the previous demand's snapshot keeps its own.
+pub fn carried_copy(self: &NominalRegistry, allocator: &Allocator? = null) NominalRegistry {
     let out = nominal_registry(allocator)
-    fill_placeholders(&out, self, mark, allocator)
+    // Through a reference: a mutating call on a field of a local value
+    // struct mutates a copy (see docs/known-issues.md, mutation through a
+    // field chain).
+    fill_carried(&out, self, allocator)
     return out
 }
 
-fn fill_placeholders(out: &NominalRegistry, src: &NominalRegistry, mark: NominalId,
-        allocator: &Allocator?) {
-    for i in 0..(mark as usize) {
+fn fill_carried(out: &NominalRegistry, src: &NominalRegistry, allocator: &Allocator?) {
+    for i in 0..(src.next_id as usize) {
         const id = i as NominalId
         const found = src.defs.get_ref(id)
         if found.is_none() { continue }
         const idx = out.owned_fqns.len
         out.owned_fqns.push(from_view(nominal_fqn(found.unwrap()), allocator))
-        out.register_at(id, placeholder_of(found.unwrap(), allocator), out.owned_fqns[idx].as_view())
+        out.register_at(id, clone_def(found.unwrap(), allocator), out.owned_fqns[idx].as_view())
     }
-    out.next_id = mark
+    out.next_id = src.next_id
 }
 
-// One definition with its body emptied. The field and variant lists are fresh
-// and empty; the source they were resolved from is what fills them again.
-fn placeholder_of(def: &NominalDef, allocator: &Allocator?) NominalDef {
+fn clone_def(def: &NominalDef, allocator: &Allocator?) NominalDef {
     return def.* match {
         NomStruct(s) => NominalDef.NomStruct(StructDef {
             fqn = s.fqn,
             module = s.module,
             is_pub = s.is_pub,
-            type_params = list(0, allocator),
-            fields = list(0, allocator),
+            type_params = clone_list(&s.type_params, allocator),
+            fields = clone_list(&s.fields, allocator),
             decl_span = s.decl_span,
             deprecation = s.deprecation,
             is_simd = s.is_simd,
@@ -216,12 +213,62 @@ fn placeholder_of(def: &NominalDef, allocator: &Allocator?) NominalDef {
             fqn = e.fqn,
             module = e.module,
             is_pub = e.is_pub,
-            type_params = list(0, allocator),
-            variants = list(0, allocator),
-            tag_values = null,
+            type_params = clone_list(&e.type_params, allocator),
+            variants = clone_variants(&e.variants, allocator),
+            tag_values = clone_tags(e.tag_values, allocator),
             decl_span = e.decl_span,
             deprecation = e.deprecation,
         }),
+    }
+}
+
+fn clone_list(xs: &List($T), allocator: &Allocator?) List(T) {
+    let out: List(T) = list(xs.len, allocator)
+    out.push_all(xs.as_slice())
+    return out
+}
+
+fn clone_variants(xs: &List(VariantDef), allocator: &Allocator?) List(VariantDef) {
+    let out: List(VariantDef) = list(xs.len, allocator)
+    for &v in xs {
+        out.push(VariantDef {
+            name = v.name,
+            payloads = clone_list(&v.payloads, allocator),
+            decl_span = v.decl_span,
+        })
+    }
+    return out
+}
+
+fn clone_tags(tags: Dict(String, i64)?, allocator: &Allocator?) Dict(String, i64)? {
+    if tags.is_none() { return null }
+    let out: Dict(String, i64) = dict(allocator)
+    for e in tags.unwrap() {
+        out.set(e.key, e.value)
+    }
+    return Some(out)
+}
+
+// Free the lists a resolved body owns: type params, fields, variant
+// payloads, tag values. The definition struct itself stays in place with
+// dangling list buffers - callers overwrite or evict it right after.
+pub fn free_body(def: &NominalDef) {
+    def.* match {
+        NomStruct(s) => {
+            s.type_params.deinit()
+            s.fields.deinit()
+        },
+        NomEnum(e) => {
+            e.type_params.deinit()
+            for i in 0..e.variants.len {
+                e.variants[i].payloads.deinit()
+            }
+            e.variants.deinit()
+            e.tag_values match {
+                Some(t) => t.deinit(),
+                None => {},
+            }
+        },
     }
 }
 
@@ -424,15 +471,12 @@ test "an evicted nominal leaves a hole and never recycles its id" {
     assert_eq(d, 3 as NominalId, "a retired id is never handed out again")
 }
 
-test "placeholders keep their ids and drop their bodies" {
+test "a carried copy keeps ids, holes and bodies" {
     let reg = nominal_registry()
     defer reg.deinit()
     const a = reg.register(NominalDef.NomStruct(probe_struct()), $"m.A")
     const b = reg.register(NominalDef.NomStruct(probe_struct()), $"m.B")
     reg.evict(a)
-    // Past the mark: what a check mints as it runs, and must mint again.
-    const anon = reg.register(NominalDef.NomStruct(probe_struct()), $"__anon_2")
-    assert_eq(anon, 2 as NominalId, "the anonymous record sits above the declarations")
 
     // Give `m.B` a body, as `resolve_nominal_bodies` would.
     let fields: List(Field) = list(1)
@@ -441,13 +485,15 @@ test "placeholders keep their ids and drop their bodies" {
     bd.fields = fields
     reg.put(b, NominalDef.NomStruct(bd))
 
-    let next = reg.placeholders_below(2 as NominalId)
+    let next = reg.carried_copy()
     defer next.deinit()
-    assert_eq(next.len(), 1 as usize, "the evicted id stays a hole, the anonymous one is left behind")
+    assert_eq(next.len(), 1 as usize, "the evicted id stays a hole")
     assert_eq(next.lookup_fqn("m.B").unwrap(), b, "a surviving declaration keeps its id")
-    assert_eq(next.next_id, 2 as NominalId, "ids resume at the mark, so the next check mints the same ones")
+    assert_eq(next.next_id, 2 as NominalId, "the id counter carries, never rewinding over a hole")
     const body = next.get(b).* match { NomStruct(s) => s.fields.len, _ => 99 as usize }
-    assert_eq(body, 0 as usize, "the resolved body does not come across")
+    assert_eq(body, 1 as usize, "the resolved body comes across")
+    const fname = next.get(b).* match { NomStruct(s) => s.fields[0].name, _ => "" }
+    assert_true(fname == "x", "with its field list cloned intact")
 }
 
 test "a retired id goes back where it was" {

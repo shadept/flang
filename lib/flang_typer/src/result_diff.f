@@ -22,6 +22,13 @@
 // A dict pair needs only one-directional containment plus equal sizes:
 // if every key of A is in B with an equal value and |A| = |B|, the two
 // are the same map.
+//
+// Both sides render their types through B's table. The type table is one
+// per project: a re-demand adopts the previous result's table and appends
+// to it, which leaves the earlier snapshot's own `interner` field a
+// stand-in while its handles stay valid in the table B now holds. Two
+// independently-checked results also compare correctly this way only for
+// the fixed leaf ids; the gate never compares two of those.
 
 import std.allocator
 import std.dict
@@ -127,7 +134,7 @@ fn diff_nominals(d: &ResultDiff, a: &TypeCheckResult, b: &TypeCheckResult, alloc
         }
         lb.clear()
         rb.clear()
-        append_nominal(&lb, left.unwrap(), &a.interner)
+        append_nominal(&lb, left.unwrap(), &b.interner)
         append_nominal(&rb, right.unwrap(), &b.interner)
         if lb.as_view() != rb.as_view() {
             note(d, $"nominals[{id}]: {lb.as_view()} vs {rb.as_view()}")
@@ -161,7 +168,7 @@ fn diff_specializations(d: &ResultDiff, a: &TypeCheckResult, b: &TypeCheckResult
         }
         lb.clear()
         rb.clear()
-        append_spec(&lb, left.unwrap(), &a.interner)
+        append_spec(&lb, left.unwrap(), &b.interner)
         append_spec(&rb, right.unwrap(), &b.interner)
         if lb.as_view() != rb.as_view() {
             note(d, $"specializations[{id}]: {lb.as_view()} vs {rb.as_view()}")
@@ -186,9 +193,9 @@ fn diff_node_types(d: &ResultDiff, a: &TypeCheckResult, b: &TypeCheckResult, all
             note(d, $"node_types[{key}]: missing on the right")
             continue
         }
-        // Each side renders through its own interner, so ids stay free to
-        // differ while the types they name must not.
-        const lk = a.interner.key_of(e.value)
+        // Both sides render through B's table (see the module header), so
+        // ids stay free to differ while the types they name must not.
+        const lk = b.interner.key_of(e.value)
         const rk = b.interner.key_of(other.unwrap())
         if lk != rk {
             note(d, $"node_types[{key}]: {lk} vs {rk}")
@@ -268,7 +275,7 @@ fn diff_instantiated(d: &ResultDiff, a: &TypeCheckResult, b: &TypeCheckResult, a
     for i in 0..lo {
         lb.clear()
         rb.clear()
-        a.interner.format(a.instantiated_types[i], &lb)
+        b.interner.format(a.instantiated_types[i], &lb)
         b.interner.format(b.instantiated_types[i], &rb)
         if lb.as_view() != rb.as_view() {
             note(d, $"instantiated_types[{i}]: {lb.as_view()} vs {rb.as_view()}")

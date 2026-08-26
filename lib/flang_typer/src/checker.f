@@ -248,18 +248,48 @@ pub type Checker = struct {
     // so a template body's lambda mints a fresh symbol per instantiation.
     next_lambda: u32
 
-    // Where the declared type names end and the ids a check mints as it runs
-    // begin - anonymous records, closure environments. Set once the name
-    // collection pass has been over every module. Only the ids below it carry
-    // from one demand to the next; see `begin_demand`.
-    declared_mark: NominalId
-    // FQN -> the id its declaration held before `retire_names` took it out,
-    // for the modules being collected again this demand. A declaration
-    // that comes back keeps its id, so the ids in a re-check are the ids in a
-    // check from cold.
+    // FQN -> the id a definition held before it was taken out of the registry
+    // for this demand: the declared names of modules being collected again,
+    // and every closure environment (rebuilt by the body pass each demand).
+    // A definition that comes back keeps its id, so the ids in a re-check are
+    // the ids in a check from cold. Cleared at the end of `check_all`; an
+    // unclaimed `from_module` entry is a declaration the edit removed.
     recycled: Dict(String, RetiredName)
+    // Set by `register_collected` when a registration had no retired id to
+    // reclaim - a name this demand added. Read once per `check_all` to decide
+    // whether carried nominal bodies are still valid.
+    saw_new_name: bool
+
+    // Module path -> the diagnostics its name-collection and body-resolution
+    // passes produced, replayed verbatim on a demand that reuses the module
+    // (RFC-022 section 5: a cache hit replays its cached diagnostics).
+    // `nominal_diag_keys` owns the path buffers the dict's keys view.
+    nominal_diags: Dict(String, ModuleNomDiags)
+    nominal_diag_keys: List(OwnedString)
 
     allocator: &Allocator?
+}
+
+// One module's cached diagnostics from the two carried tiers.
+pub type ModuleNomDiags = struct {
+    collect: List(Diagnostic)
+    resolve: List(Diagnostic)
+}
+
+pub fn deinit(self: &ModuleNomDiags) {
+    free_diag_list(&self.collect)
+    free_diag_list(&self.resolve)
+}
+
+// Free the messages a diagnostic list owns, then the list itself.
+// `Diagnostic` has no deinit of its own, so a bare list deinit would strand
+// the message buffers.
+fn free_diag_list(diags: &List(Diagnostic)) {
+    for &d in diags {
+        d.message.deinit()
+        d.hint.deinit()
+    }
+    diags.deinit()
 }
 
 // A declaration's parameter list, shared with the AST (M11 defaults).
@@ -342,46 +372,79 @@ pub fn checker(allocator: &Allocator? = null) Checker {
         lambda_frames = list(0, allocator),
         closures = dict(allocator),
         next_lambda = 0u32,
-        declared_mark = 0 as NominalId,
         recycled = dict(allocator),
+        saw_new_name = false,
+        nominal_diags = dict(allocator),
+        nominal_diag_keys = list(0, allocator),
         allocator = allocator,
     }
 }
 
 // Ready this checker for another demand over the same module set.
 //
-// The declared type names survive - the previous `check_all` left them as the
-// placeholders `collect_nominal_names` produces - along with the alias bodies
-// keyed beside them. A module whose source has not changed is therefore never
-// walked for names again. Everything a check computes is dropped: a body's
-// types name variables of the engine that inferred them, and that engine goes.
+// What survives is what the previous check registered by stable key: the
+// nominal registry - declared names WITH their resolved bodies, the
+// anonymous-record definitions and the map that interns them - plus the
+// alias bodies, the retired closure-environment ids awaiting reclamation
+// (`recycled`, see the end of `check_all`), and the per-module diagnostics
+// of the carried tiers. The bodies' `Ty` handles index the type table,
+// which the caller adopts back out of the previous result
+// (`adopt_interner`) so they stay resolvable.
 //
-// The carry list is the fields moved onto the replacement below; `checker` and
-// `deinit` enumerate the rest.
+// Everything else a check computes is dropped: it names variables of the
+// engine that inferred it, and that engine goes.
+//
+// The carry list is the fields moved onto the replacement below; `checker`
+// and `deinit` enumerate the rest.
 pub fn begin_demand(self: &Checker) {
     let noms = self.nominals
     let aliases = self.aliases
-    const mark = self.declared_mark
+    let anons = self.anon_structs
+    let anon_keys = self.anon_keys
+    let recycled = self.recycled
+    let nom_diags = self.nominal_diags
+    let nom_diag_keys = self.nominal_diag_keys
     const ct = self.comptime
     // Hand the carried tables over before the teardown, which frees whatever
     // the checker still owns.
     self.nominals = nominal_registry(self.allocator)
     self.aliases = fqn_map(self.allocator)
+    self.anon_structs = dict(self.allocator)
+    self.anon_keys = list(0, self.allocator)
+    self.recycled = dict(self.allocator)
+    self.nominal_diags = dict(self.allocator)
+    self.nominal_diag_keys = list(0, self.allocator)
     self.deinit()
 
     let next = checker(self.allocator)
     next.nominals = noms
     next.aliases = aliases
-    next.declared_mark = mark
+    next.anon_structs = anons
+    next.anon_keys = anon_keys
+    next.recycled = recycled
+    next.nominal_diags = nom_diags
+    next.nominal_diag_keys = nom_diag_keys
     next.comptime = ct
     self.* = next
 }
 
-// Retire the declared type names of every module in `retiring`, so their
+// Install a type table carried from the previous demand's result, so the
+// handles baked into the carried registry stay valid. A pristine table (an
+// empty result's stand-in) carries nothing and is dropped in favour of the
+// engine's own seeded one.
+pub fn adopt_interner(self: &Checker, it: TypeInterner) {
+    if it.is_pristine() {
+        it.deinit()
+        return
+    }
+    self.engine.set_interner(it)
+}
+
+// Retire the definitions of every module in `retiring` - declared type names
+// and the generated declarations expansion appended to them - so their
 // sources can register them again. Each id is remembered against its FQN in
-// `recycled`: a declaration that survives the edit is re-registered at the id
-// it had, one that is gone leaves a hole, and a new one mints an id past the
-// mark.
+// `recycled`: a definition that survives the edit is re-registered at the id
+// it had, one that is gone leaves a hole, and a new one mints a fresh id.
 //
 // One pass over the registry covers the whole set: it is keyed by id and by
 // FQN, with no index by module.
@@ -396,19 +459,23 @@ fn retire_names(self: &Checker, retiring: &Set(String)) {
         doomed.push(id)
     }
     for id in doomed {
-        const fqn = nominal_fqn(self.nominals.get(id))
-        self.recycled.set(fqn, RetiredName { id = id, fqn = fqn })
+        let def = self.nominals.get(id)
+        const fqn = nominal_fqn(def)
+        self.recycled.set(fqn, RetiredName { id = id, fqn = fqn, from_module = true })
+        free_body(def)
         self.nominals.evict(id)
     }
 }
 
-// Register a freshly collected declaration, at the id it held before this
-// module was retired when it had one.
-fn register_collected(self: &Checker, def: NominalDef, fqn_owned: OwnedString) {
-    const previous = self.recycled.get(fqn_owned.as_view())
+// Register a definition under a stable key, at the id it held before it was
+// retired when it had one. A registration with no retired id to reclaim is a
+// name this demand added - noted, because carried bodies stay valid only
+// while the name set they resolved against holds still.
+fn register_collected(self: &Checker, def: NominalDef, fqn_owned: OwnedString) NominalId {
+    const previous = self.recycled.remove(fqn_owned.as_view())
     if previous.is_none() {
-        const _fresh = self.nominals.register(def, fqn_owned)
-        return
+        self.saw_new_name = true
+        return self.nominals.register(def, fqn_owned)
     }
     const prev = previous.unwrap()
     // The remembered view is the registry's own FQN buffer, which `evict`
@@ -416,13 +483,18 @@ fn register_collected(self: &Checker, def: NominalDef, fqn_owned: OwnedString) {
     // and the caller's copy is dropped.
     fqn_owned.deinit()
     self.nominals.register_at(prev.id, def, prev.fqn)
+    return prev.id
 }
 
-// A declared type name taken out of the registry so its module can be
-// collected again: the id it held, and the registry's own FQN buffer.
+// A definition taken out of the registry so its source can register it
+// again: the id it held, the registry's own FQN buffer, and whether it came
+// from a module retirement (a declared or generated name) as opposed to a
+// closure environment. Only the former count as removed declarations when
+// they go unclaimed.
 type RetiredName = struct {
     id: NominalId
     fqn: String
+    from_module: bool
 }
 
 pub fn deinit(self: &Checker) {
@@ -455,6 +527,8 @@ pub fn deinit(self: &Checker) {
     self.lambda_frames.deinit()
     self.closures.deinit()
     self.recycled.deinit()
+    self.nominal_diags.deinit()
+    self.nominal_diag_keys.deinit()
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -1110,7 +1184,7 @@ fn register_struct_placeholder(self: &Checker, td: &TypeDecl, fqn: OwnedString) 
         is_simd = is_simd_directive(&td.directives),
         is_foreign = is_foreign_directive(&td.directives),
     }
-    register_collected(self, NominalDef.NomStruct(sd), fqn)
+    const _id = register_collected(self, NominalDef.NomStruct(sd), fqn)
 }
 
 fn register_enum_placeholder(self: &Checker, td: &TypeDecl, fqn: OwnedString) {
@@ -1126,7 +1200,7 @@ fn register_enum_placeholder(self: &Checker, td: &TypeDecl, fqn: OwnedString) {
         decl_span = td.span,
         deprecation = deprecation_of(&td.directives),
     }
-    register_collected(self, NominalDef.NomEnum(ed), fqn)
+    const _id = register_collected(self, NominalDef.NomEnum(ed), fqn)
 }
 
 fn resolve_struct_body(self: &Checker, td: &TypeDecl, module_path: String) {
@@ -1172,7 +1246,9 @@ fn resolve_struct_body(self: &Checker, td: &TypeDecl, module_path: String) {
     }
     self.env.pop_scope()
 
-    // Re-write the registry entry with the resolved body.
+    // Re-write the registry entry with the resolved body, freeing whatever
+    // body it held - the empty placeholder lists, or a carried body being
+    // resolved over.
     let existing = self.nominals.get(id)
     existing.* match {
         NomStruct(sd) => {
@@ -1187,6 +1263,7 @@ fn resolve_struct_body(self: &Checker, td: &TypeDecl, module_path: String) {
                 is_simd = sd.is_simd,
                 is_foreign = sd.is_foreign,
             }
+            free_body(existing)
             self.nominals.put(id, NominalDef.NomStruct(updated))
         },
         _ => {},
@@ -1406,6 +1483,7 @@ fn resolve_enum_body(self: &Checker, td: &TypeDecl, module_path: String) {
                 decl_span = ed.decl_span,
                 deprecation = ed.deprecation,
             }
+            free_body(existing)
             self.nominals.put(id, NominalDef.NomEnum(updated))
         },
         _ => {},
@@ -3958,7 +4036,9 @@ fn check_lambda(self: &Checker, lam: &LambdaExpr) Ty {
         is_simd = false,
         is_foreign = false,
     }
-    let nid = self.nominals.register(NominalDef.NomStruct(sd), $"{module_name}.__Closure_{lid}")
+    // Registered by stable key: a re-demand's body pass reclaims the id the
+    // previous demand's identically-ordered lambda held (see `begin_demand`).
+    let nid = register_collected(self, NominalDef.NomStruct(sd), $"{module_name}.__Closure_{lid}")
 
     let sym = $"__flang_closure_call_{lid}"
     let sig_params: List(Ty) = list(params.len, self.allocator)
@@ -6513,6 +6593,7 @@ pub fn check_all(self: &Checker, modules: &List(Module), paths: &List(String),
     build_visibility(self, modules, paths)
     const visibility_ns = elapsed_ns(visibility_start)
     const collect_start = monotonic_ns()
+    self.saw_new_name = false
 
     // Phase 1: every module's type names are registered before any body
     // resolves, so a struct field or enum payload can name a type from
@@ -6526,34 +6607,61 @@ pub fn check_all(self: &Checker, modules: &List(Module), paths: &List(String),
     for i in seq {
         if !needs_collect(recollect, i) { continue }
         retiring.add(paths[i])
-        self.aliases.evict_module(paths[i])
+    }
+    // What the retiring modules' aliases said before eviction - compared
+    // after collection to tell an edit that touched an alias from one that
+    // did not, since a carried body baked its aliases in expanded form.
+    let old_aliases = snapshot_aliases(self, &retiring)
+    for i in seq {
+        if needs_collect(recollect, i) { self.aliases.evict_module(paths[i]) }
     }
     retire_names(self, &retiring)
-    retiring.deinit()
     for i in seq {
-        if needs_collect(recollect, i) { collect_nominal_names(self, &modules[i], paths[i]) }
+        if !needs_collect(recollect, i) {
+            replay_nominal_diags(self, paths[i], true)
+            continue
+        }
+        const diags_from = self.diagnostics.len
+        collect_nominal_names(self, &modules[i], paths[i])
+        stash_nominal_diags(self, paths[i], diags_from, true)
     }
-    self.recycled.clear()
-    // Everything registered from here on - the generated chunks' declarations,
-    // anonymous records, closure environments - is minted by this demand and
-    // gone by the next one.
-    self.declared_mark = self.nominals.next_id
+    const aliases_changed = aliases_differ(self, &old_aliases, &retiring)
+    old_aliases.deinit()
+    retiring.deinit()
     const collect_ns = elapsed_ns(collect_start)
     // Phase 1.5: source-generator expansion (RFC-021 §2) - generated
     // declarations are appended to their origin modules and collected,
-    // before any body resolves.
+    // before any body resolves. Their registrations reclaim the ids the
+    // previous expansion held, through the same `recycled` map as declared
+    // names - origins with generated declarations are always re-collected.
     const templates_start = monotonic_ns()
     expand_templates(self, generators, modules, paths, sources, file_paths)
     const templates_ns = elapsed_ns(templates_start)
+    // Whether the carried nominal bodies still say what this demand's
+    // sources would resolve: no declared or generated name added
+    // (`saw_new_name`), none removed (an unclaimed retirement), and no
+    // alias changed underneath a field that expanded it. Any of those and
+    // every body resolves from source, as a cold check would.
+    const bodies_carry = recollect.is_some() and !self.saw_new_name
+        and !aliases_changed and !removed_names(self)
     const nominals_start = monotonic_ns()
     for i in seq {
+        if bodies_carry and !needs_collect(recollect, i) {
+            replay_nominal_diags(self, paths[i], false)
+            burn_type_param_vars(self, &modules[i])
+            continue
+        }
+        const diags_from = self.diagnostics.len
         resolve_nominal_bodies(self, &modules[i], paths[i])
+        stash_nominal_diags(self, paths[i], diags_from, false)
     }
+    const nominals_ns = elapsed_ns(nominals_start)
     // Phase 2: signatures.
+    const signatures_start = monotonic_ns()
     for i in seq {
         collect_signatures(self, &modules[i], paths[i])
     }
-    const nominals_ns = elapsed_ns(nominals_start)
+    const signatures_ns = elapsed_ns(signatures_start)
     // Phase 2.5: constant initializers, before any body can observe an
     // unpinned const (see `check_module_constants`).
     const constants_start = monotonic_ns()
@@ -6635,11 +6743,22 @@ pub fn check_all(self: &Checker, modules: &List(Module), paths: &List(String),
     }
 
     self.results.reset_side_tables()
-    // What the next demand starts from: the declared names, without the bodies
-    // this check resolved for them.
-    self.nominals = out_nominals.placeholders_below(self.declared_mark, self.allocator)
+    // What the next demand starts from: every definition at the id it holds,
+    // bodies included - the declared and generated names, the anonymous
+    // records the intern map still cites, the closure environments the next
+    // `begin_demand` retires. The snapshot keeps the original; the checker
+    // keeps a deep copy whose handles the carried type table resolves.
+    self.nominals = out_nominals.carried_copy(self.allocator)
     self.functions = function_registry(self.allocator)
     self.specs = specialization_registry(self.allocator)
+    // Whatever retirement went unclaimed names a definition this demand's
+    // sources no longer declare; the next demand starts its own ledger -
+    // seeded with the closure environments, which every body pass rebuilds:
+    // their carried definitions are retired now, remembered against their
+    // synthesized FQNs, so the next demand's identically-ordered lambdas
+    // reclaim these ids and mint what a cold check would.
+    self.recycled.clear()
+    retire_closures(self, &out_closures)
 
     return TypeCheckResult {
         node_types = zonked,
@@ -6664,6 +6783,7 @@ pub fn check_all(self: &Checker, modules: &List(Module), paths: &List(String),
             collect_ns = collect_ns,
             templates_ns = templates_ns,
             nominals_ns = nominals_ns,
+            signatures_ns = signatures_ns,
             constants_ns = constants_ns,
             bodies_ns = bodies_ns,
             specialize_ns = specialize_ns,
@@ -6679,6 +6799,261 @@ fn needs_collect(recollect: &List(bool)?, i: usize) bool {
     const flags = recollect.unwrap()
     if i >= flags.len { return true }
     return flags[i]
+}
+
+// Take the closure-environment definitions out of the carried registry,
+// each remembered against its synthesized FQN so the next demand's body
+// pass re-registers it at the id it holds. The FQN views point into the
+// carried registry's buffers, which eviction leaves in place.
+fn retire_closures(self: &Checker, closures: &Dict(NominalId, ClosureSig)) {
+    for e in closures {
+        const found = self.nominals.find(e.key)
+        if found.is_none() { continue }
+        const fqn = nominal_fqn(found.unwrap())
+        self.recycled.set(fqn, RetiredName { id = e.key, fqn = fqn, from_module = false })
+        free_body(found.unwrap())
+        self.nominals.evict(e.key)
+    }
+}
+
+// Whether any retirement went unclaimed for a module's own definitions - a
+// declared or generated name this demand's sources no longer register.
+// Closure retirements (`from_module` false) are rebuilt by the body pass and
+// do not count.
+fn removed_names(self: &Checker) bool {
+    for e in self.recycled {
+        if e.value.from_module { return true }
+    }
+    return false
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// Carried-tier diagnostics (RFC-022 section 5): the collect and resolve
+// passes cache what they emit per module, and a demand that reuses the
+// module replays the cache instead of re-running the pass.
+// ─────────────────────────────────────────────────────────────────────
+
+// Remember the diagnostics `self.diagnostics[from..]` as module `path`'s
+// collect (or resolve) output, replacing whatever the module had cached.
+fn stash_nominal_diags(self: &Checker, path: String, from: usize, is_collect: bool) {
+    if self.nominal_diags.get_ref(path).is_none() {
+        if from == self.diagnostics.len { return }
+        const idx = self.nominal_diag_keys.len
+        self.nominal_diag_keys.push(from_view(path, self.allocator))
+        self.nominal_diags.set(self.nominal_diag_keys[idx].as_view(), ModuleNomDiags {
+            collect = list(0, self.allocator),
+            resolve = list(0, self.allocator),
+        })
+    }
+    let entry = self.nominal_diags.get_ref(path).unwrap()
+    if is_collect {
+        refill_diags(self, &entry.collect, from)
+    } else {
+        refill_diags(self, &entry.resolve, from)
+    }
+}
+
+fn refill_diags(self: &Checker, dst: &List(Diagnostic), from: usize) {
+    for &d in dst {
+        d.message.deinit()
+        d.hint.deinit()
+    }
+    dst.clear()
+    for k in from..self.diagnostics.len {
+        dst.push(clone_diag(&self.diagnostics[k]))
+    }
+}
+
+// Replay module `path`'s cached collect (or resolve) diagnostics into the
+// published list, in the loop position the pass itself would have emitted
+// them.
+fn replay_nominal_diags(self: &Checker, path: String, is_collect: bool) {
+    const found = self.nominal_diags.get_ref(path)
+    if found.is_none() { return }
+    let entry = found.unwrap()
+    if is_collect {
+        for &d in entry.collect {
+            self.diagnostics.push(clone_diag(d))
+        }
+        return
+    }
+    for &d in entry.resolve {
+        self.diagnostics.push(clone_diag(d))
+    }
+}
+
+// Mint what a skipped body resolution would have per type parameter: the
+// fresh variable, so the engine's variable stream matches a cold check's
+// (anything keyed by a variable id downstream - an anonymous record whose
+// key renders one - depends on that stream), and the parameter's span
+// node, so the result's span table holds the same entries. The carried
+// bodies keep the variable ids of the demand that resolved them; these
+// stand-ins are never read.
+fn burn_type_param_vars(self: &Checker, module: &Module) {
+    for &decl in module.decls {
+        decl.* match {
+            Type(td) => {
+                td.body match {
+                    AnonStruct(a) => {
+                        for &g in a.generics {
+                            const _v = self.engine.fresh_var()
+                            const _n = self.node_of(g.span)
+                        }
+                    },
+                    AnonEnum(e) => {
+                        for &g in e.generics {
+                            const _v = self.engine.fresh_var()
+                            const _n = self.node_of(g.span)
+                        }
+                    },
+                    _ => {},
+                }
+            },
+            _ => {},
+        }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// Alias change detection. A carried body baked its aliases in expanded
+// form, so a changed alias invalidates every carried body - detected by
+// comparing canonical spellings of the retiring modules' alias bodies
+// across the eviction.
+// ─────────────────────────────────────────────────────────────────────
+
+// The retiring modules' alias bodies, FQN -> canonical spelling. Keys are
+// the alias registry's stable FQN views, which eviction leaves in place.
+// A body with no canonical spelling is left out; `aliases_differ` then
+// counts its re-registration as a change, which is the safe direction.
+fn snapshot_aliases(self: &Checker, retiring: &Set(String)) Dict(String, OwnedString) {
+    let out: Dict(String, OwnedString) = dict(self.allocator)
+    for entry in self.aliases.entries {
+        const dot = last_dot(entry.key)
+        if !retiring.contains(module_of(entry.key, dot)) { continue }
+        let sb = string_builder(32, self.allocator)
+        const body = entry.value
+        if !render_alias_body(&body, &sb) {
+            sb.deinit()
+            continue
+        }
+        out.set(entry.key, sb.to_string())
+    }
+    return out
+}
+
+// Whether the retiring modules' aliases changed across re-collection: one
+// added, one removed, one whose body spells differently, or one whose body
+// cannot be spelled at all.
+fn aliases_differ(self: &Checker, old: &Dict(String, OwnedString), retiring: &Set(String)) bool {
+    let current: usize = 0
+    for entry in self.aliases.entries {
+        const dot = last_dot(entry.key)
+        if !retiring.contains(module_of(entry.key, dot)) { continue }
+        current = current + 1
+        const prev = old.get_ref(entry.key)
+        if prev.is_none() { return true }
+        let sb = string_builder(32, self.allocator)
+        defer sb.deinit()
+        const body = entry.value
+        if !render_alias_body(&body, &sb) { return true }
+        if sb.as_view() != prev.unwrap().as_view() { return true }
+    }
+    return current != old.len()
+}
+
+// A canonical spelling of an alias body, for comparison across demands
+// only. False for a shape it cannot spell out - the caller treats that as
+// a change.
+fn render_alias_body(t: &TypeExpr, sb: &StringBuilder) bool {
+    return t.* match {
+        Named(n) => {
+            sb.append(n.name)
+            let ok = true
+            if n.generic_args.len > 0 {
+                sb.append("(")
+                for i in 0..n.generic_args.len {
+                    if i > 0 { sb.append(", ") }
+                    if !render_alias_body(&n.generic_args[i], sb) { ok = false }
+                }
+                sb.append(")")
+            }
+            ok
+        },
+        GenericBind(g) => {
+            sb.append("$")
+            sb.append(g.name)
+            true
+        },
+        Reference(r) => {
+            sb.append("&")
+            render_alias_body(r.inner, sb)
+        },
+        Optional(o) => {
+            const ok = render_alias_body(o.inner, sb)
+            sb.append("?")
+            ok
+        },
+        Array(a) => {
+            sb.append("[")
+            const eok = render_alias_body(a.element, sb)
+            sb.append("; ")
+            const lok = render_array_len(a.length, sb)
+            sb.append("]")
+            eok and lok
+        },
+        Slice(s) => {
+            const ok = render_alias_body(s.element, sb)
+            sb.append("[]")
+            ok
+        },
+        Tuple(tu) => {
+            sb.append("(")
+            let ok = true
+            for i in 0..tu.elements.len {
+                if i > 0 { sb.append(", ") }
+                if !render_alias_body(&tu.elements[i], sb) { ok = false }
+            }
+            sb.append(")")
+            ok
+        },
+        Function(f) => {
+            sb.append("fn(")
+            let ok = true
+            for i in 0..f.params.len {
+                if i > 0 { sb.append(", ") }
+                if !render_alias_body(&f.params[i], sb) { ok = false }
+            }
+            sb.append(")")
+            f.return_type match {
+                Some(rt) => {
+                    sb.append(" ")
+                    if !render_alias_body(rt, sb) { ok = false }
+                },
+                None => {},
+            }
+            ok
+        },
+        _ => false,
+    }
+}
+
+// An array length spells out as its literal text or the constant name it
+// cites; any other expression has no canonical spelling.
+fn render_array_len(e: &Expr, sb: &StringBuilder) bool {
+    return e.* match {
+        Lit(l) => l.value match {
+            Int(i) => {
+                sb.append(i.text)
+                true
+            },
+            _ => false,
+        },
+        Identifier(id) => {
+            sb.append(id.name)
+            true
+        },
+        _ => false,
+    }
 }
 
 // The module indices to walk, in order. A caller that supplies none gets
@@ -6724,6 +7099,87 @@ fn parse_src(src: String, fid: i32) Module {
     return m
 }
 
+// Error counts of two demands on one checker over modules `b` then `a`:
+// a first check of {b_first, a_src}, then a re-demand with only `b`
+// re-parsed as `b_again` - the analyze-layer choreography (begin_demand,
+// interner adoption, recollect flags) spelled out at the check_all level.
+type RedemandErrors = struct {
+    first: usize
+    second: usize
+}
+
+fn redemand_errors(b_first: String, b_again: String, a_src: String) RedemandErrors {
+    let mods = list(2)
+    mods.push(parse_src(b_first, 0i32))
+    mods.push(parse_src(a_src, 1i32))
+    let ps: List(String) = list(2)
+    ps.push("b")
+    ps.push("a")
+
+    let chk = checker()
+    let gen_srcs: List(OwnedString) = list(0, null)
+    let gen_fps: List(OwnedString) = list(0, null)
+    let gens = template_state(null)
+    let res1 = check_all(&chk, &mods, &ps, &gen_srcs, &gen_fps, &gens)
+    const first = count_error_diags(&chk.diagnostics)
+
+    chk.begin_demand()
+    chk.adopt_interner(take_interner(&res1))
+    let old_b = mods[0]
+    mods[0] = parse_src(b_again, 0i32)
+    let recollect: List(bool) = list(2)
+    recollect.push(true)
+    recollect.push(false)
+    let gens2 = template_state(null)
+    let res2 = check_all(&chk, &mods, &ps, &gen_srcs, &gen_fps, &gens2, null, Some(&recollect))
+    const second = count_error_diags(&chk.diagnostics)
+
+    res1.deinit()
+    res2.deinit()
+    chk.deinit()
+    old_b.deinit()
+    for &m in mods {
+        m.deinit()
+    }
+    mods.deinit()
+    ps.deinit()
+    recollect.deinit()
+    return .{ first = first, second = second }
+}
+
+fn count_error_diags(diags: &List(Diagnostic)) usize {
+    let errors = 0usize
+    for i in 0..diags.len {
+        if diags[i].severity == Severity.Error { errors = errors + 1 }
+    }
+    return errors
+}
+
+test "a changed alias invalidates a carried body" {
+    // Module a's struct field baked `Size` in expanded form; editing the
+    // alias in module b must re-resolve a's body, surfacing the f64-vs-i32
+    // return mismatch. A carried body left stale would keep i32 and stay
+    // silent.
+    let r = redemand_errors(
+        "pub type Size = i32\n",
+        "pub type Size = f64\n",
+        "import b\ntype H = struct { s: Size }\nfn f(h: H) i32 { return h.s }\n")
+    assert_eq(r.first, 0 as usize, "the i32 alias type-checks")
+    assert_true(r.second > 0, "the f64 alias re-resolves the carried body and errors")
+}
+
+test "a carried body replays its cached diagnostics" {
+    // The duplicate-field error lives in module a's body resolution.
+    // Re-demanding with only b dirty skips that pass for a, so the error
+    // must come from the per-module cache, not from re-running it.
+    let r = redemand_errors(
+        "pub fn helper() i32 { return 1 }\n",
+        "pub fn helper() i32 { return 2 }\n",
+        "type H = struct { x: i32\nx: i32 }\nfn main() i32 { return 0 }\n")
+    assert_eq(r.first, 1 as usize, "the duplicate field is reported cold")
+    assert_eq(r.second, 1 as usize, "and exactly once again on the re-demand")
+}
+
 // Parse each source as its own module, run check_all over them, and count
 // error diagnostics.
 fn count_check_errors(srcs: String[], paths: String[]) usize {
@@ -6739,10 +7195,7 @@ fn count_check_errors(srcs: String[], paths: String[]) usize {
     let gen_fps: List(OwnedString) = list(0, null)
     let gens = template_state(null)
     let _res = check_all(&chk, &mods, &ps, &gen_srcs, &gen_fps, &gens)
-    let errors = 0usize
-    for i in 0..chk.diagnostics.len {
-        if chk.diagnostics[i].severity == Severity.Error { errors = errors + 1 }
-    }
+    let errors = count_error_diags(&chk.diagnostics)
 
     chk.deinit()
     for &m in mods {
