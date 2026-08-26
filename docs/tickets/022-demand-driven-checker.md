@@ -336,15 +336,43 @@ renderer for each belongs with the phase that makes one of them incremental. A
 size mismatch is still a hard failure; an entry that goes stale in place is what
 those seven cannot see yet.
 
-Until 5a the second pass is a full re-analysis, so what the gate proves today is
+Before 5a the second pass was a full re-analysis, so what the gate proved was
 determinism, which nothing else did: the harness and the fixpoint both run cold
-and single-pass, and dict iteration order feeds emission order. When the query
-graph exists, only `run_gate_a` in `bootstrap/src/main.f` changes - it dirties a
-module and re-demands instead of re-analysing.
+and single-pass, and dict iteration order feeds emission order. Since 5a it
+dirties a module and re-demands, so it tests invalidation as intended.
 
 Green across `bootstrap/` (105 modules, 93145 node types, 2153 specializations,
 409 nominals), every `lib/*`, and every `examples/*` that type-checks
 (`examples/raylib` needs the raylib headers). 1.8 s on the compiler.
+
+**5a landed 2026-08-26 (`module_ast` half).** `analyze_project` builds an
+`AnalyzedProject` that can be re-checked in place: `reanalyze(unit, ctx, dirty)`
+re-reads and re-parses only the modules named in `dirty`, reusing every other
+module's AST, then re-runs the checker. `flang --gate-a build` now dirties a
+module and re-demands instead of analysing twice, which is what makes the gate
+test invalidation at all.
+
+On the compiler: **parse 127 ms cold, 11 ms re-demanded** - 11 modules of 106.
+The gate prints both numbers, because reuse is otherwise invisible: the check
+half still runs in full, so a cache that silently re-parsed everything would
+produce an identical result and pass. Total analysis time is unchanged, as
+expected - parsing is 6-8% of a check, and `nominal_names` onwards are still
+eager. Memoizing those needs the `Checker` to survive between demands, which is
+5b.
+
+Two constraints the conversion turned up, both found by the gate rather than by
+reasoning:
+
+- **A module that received generated declarations cannot be reused.** Expansion
+  appends the chunk's decls into the origin module's AST, so a reused AST would
+  stack a second copy on the next expansion. Those origins are always re-parsed
+  (10 of the 11 above).
+- **A result holds string views into the sources it was checked from** -
+  nominal FQNs, field names - so a re-parse cannot free the buffer it replaces
+  while an older result is still alive. Replaced sources are retired, not
+  freed. The first version freed them and the gate reported nominals whose
+  field names had decayed into fragments of unrelated text, which is exactly
+  the failure mode it exists to catch.
 
 **Gate B - laziness.** Run the harness with lazy demand enabled and assert zero
 diff in reported diagnostics against eager demand. Guards the M12 rejection
@@ -365,7 +393,8 @@ byte-identical, 11/11 examples.
     NodeId->span, file_id->path
  4  DONE 2026-08-25: source-override map on analyze_project
  5  convert phase by phase, Gate A green after each:
-      5a  module_ast / nominal_names
+      5a  module_ast DONE 2026-08-26; nominal_names still eager (needs 5b's
+          persistent checker)
       5b  nominal_body
       5c  signature / const_value
       5d  body  (64%)

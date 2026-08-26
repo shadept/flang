@@ -17,6 +17,7 @@ import std.list
 import std.option
 import std.process
 import std.result
+import std.set
 import std.string
 import std.string_builder
 import std.io.file
@@ -334,7 +335,7 @@ fn build_project(opts: &BuildOpts) i32 {
     let unit = analyze_project(&ctx, &sources)
     defer unit.deinit()
 
-    if opts.gate_a { return run_gate_a(&ctx, &sources, &unit) }
+    if opts.gate_a { return run_gate_a(&ctx, &unit) }
 
     // `[build.<os>]` native inputs. `${VAR}` expansion reads the
     // environment, so it happens here at the CLI edge rather than inside
@@ -380,7 +381,7 @@ fn build_single_file(path: String, out: String, opts: &BuildOpts) i32 {
     let unit = analyze_project(&ctx, &entries)
     defer unit.deinit()
 
-    if opts.gate_a { return run_gate_a(&ctx, &entries, &unit) }
+    if opts.gate_a { return run_gate_a(&ctx, &unit) }
 
     if opts.emit_generated {
         const n = unit.write_generated()
@@ -404,19 +405,30 @@ fn build_single_file(path: String, out: String, opts: &BuildOpts) i32 {
 //
 // ponytail: the second pass is a full cold analysis until the query graph
 // exists; only this function changes when it does.
-fn run_gate_a(ctx: &ResolveCtx, entries: &List(OwnedString), cold: &AnalyzedProject) i32 {
+fn run_gate_a(ctx: &ResolveCtx, cold: &AnalyzedProject) i32 {
     if !cold.checked {
         println("gate A: the project does not type-check - nothing to compare")
         return 1
     }
-    let again = analyze_project(ctx, entries)
-    defer again.deinit()
+    // Dirty one module and demand the project again: the reused entries have
+    // to reproduce the cold result exactly. Picking the LAST module makes the
+    // invalidation touch something the demand order reaches late, where a
+    // stale entry has the most chances to survive.
+    const before_diags = cold.diagnostics.len
+    const cold_parse_ns = cold.parse_ns
+    const dirty: Set(String) = set()
+    defer dirty.deinit()
+    if cold.modules.len > 0 {
+        dirty.add(cold.file_paths[cold.file_paths.len - 1].as_view())
+    }
+    const before = cold.result
+    reanalyze(cold, ctx, &dirty)
 
-    let d = diff_results(&cold.result, &again.result)
+    let d = diff_results(&before, &cold.result)
     defer d.deinit()
 
-    const cold_diags = cold.diagnostics.len
-    const again_diags = again.diagnostics.len
+    const cold_diags = before_diags
+    const again_diags = cold.diagnostics.len
     if cold_diags != again_diags {
         const m = $"gate A: {cold_diags} diagnostic(s) cold, {again_diags} on re-analysis"
         defer m.deinit()
@@ -438,6 +450,13 @@ fn run_gate_a(ctx: &ResolveCtx, entries: &List(OwnedString), cold: &AnalyzedProj
         const ok = $"gate A: OK - {mods} modules, {nt} node types, {ns} specializations, {nn} nominals identical"
         defer ok.deinit()
         println(ok.as_view())
+        // Reuse is otherwise invisible: the check half still runs in full, so
+        // a cache that silently re-parsed everything would look the same.
+        const cold_ms = cold_parse_ns / 1000000u64
+        const warm_ms = cold.parse_ns / 1000000u64
+        const p = $"gate A: parse {cold_ms} ms cold, {warm_ms} ms re-demanded"
+        defer p.deinit()
+        println(p.as_view())
         return 0
     }
 

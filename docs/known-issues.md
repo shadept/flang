@@ -89,6 +89,29 @@ in its fixtures so the assertions are no longer vacuous.
 
 ## Open Issues
 
+### Re-Analysis Retires Sources Instead of Freeing Them
+
+**Status:** Open — deliberate, but unbounded over a long session
+**Affected:** `lib/flang_analysis/src/analyze.f` (`reanalyze`, `AnalyzedProject.retired_sources`)
+
+A `TypeCheckResult` holds string views into the sources it was checked from -
+nominal FQNs and struct field names point into the module text, not into copies.
+So re-parsing a module cannot free the buffer it replaces while any older result
+is still alive; the older result would read freed memory. `reanalyze` therefore
+moves replaced sources and ASTs to `retired_sources` / `retired_modules`, freed
+only when the whole unit is dropped.
+
+Correct, and invisible for a one-shot `flang --gate-a build`. Over an editor
+session it is a leak proportional to the number of edits: every keystroke-driven
+re-parse retires one more copy of the file.
+
+The real fix is for a result to own its strings rather than borrow them, the
+same move `TypeCheckResult.file_paths` already makes for paths (RFC-022 §9).
+Until then, a caller that drops the previous result could retire nothing - but
+nothing tracks that dependency today.
+
+---
+
 ### A New Overload Can Silently Drop a Function From the Output
 
 **Status:** Open — reproduced, then avoided rather than fixed

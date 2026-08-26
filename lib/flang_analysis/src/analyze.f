@@ -166,6 +166,17 @@ pub type AnalyzedProject = struct {
     fqns: List(OwnedString)
     file_paths: List(OwnedString)
     modules: List(Module)
+    // Per module: was it one of the project's own files, as opposed to the
+    // stdlib or a dependency. Kept because a re-check has to rebuild the
+    // checker with the same project boundary the first one used.
+    project_origin: List(bool)
+    // Sources and ASTs that a re-parse replaced. A `TypeCheckResult` produced
+    // before that re-parse still holds string views into them - nominal FQNs,
+    // field names - and AST pointers into them, so freeing one on the spot
+    // would leave the older result reading freed memory. They are held until
+    // the whole unit goes away instead.
+    retired_sources: List(OwnedString)
+    retired_modules: List(Module)
     result: TypeCheckResult
     checked: bool
     diagnostics: List(Diagnostic)
@@ -243,43 +254,154 @@ pub fn analyze_project(ctx: &ResolveCtx, entries: &List(OwnedString),
 
     queue.deinit()
     seen.deinit()
-    defer project_origin.deinit()
     const parse_ns = elapsed_ns(parse_start)
 
-    const check_start = monotonic_ns()
-    let checked = count_errors(&diagnostics) == 0
-    let result = empty_result(allocator)
-    let generated = empty_template_output(allocator)
-    if checked {
-        let path_views: List(String) = list(modules.len, allocator)
-        for i in 0..fqns.len {
-            path_views.push(fqns[i].as_view())
-        }
-        let order = visit_order(&file_paths, &path_views, &edge_from, &edge_to, allocator)
-        defer order.deinit()
-        let chk = checker(allocator)
-        let gens = template_state(allocator)
-        chk.set_comptime_ctx(ctx.comptime)
-        chk.set_project_globals(&ctx.global_imports, &project_origin)
-        result = check_all(&chk, &modules, &path_views, &sources, &file_paths, &gens, Some(&order))
-        drain_diagnostics(&diagnostics, &chk.diagnostics)
-        generated = gens.take_output()
-        gens.deinit()
-        chk.deinit()
-        path_views.deinit()
-    }
-
-    return AnalyzedProject {
+    let unit = AnalyzedProject {
         sources = sources,
         fqns = fqns,
         file_paths = file_paths,
         modules = modules,
-        result = result,
-        checked = checked,
+        project_origin = project_origin,
+        retired_sources = list(0, allocator),
+        retired_modules = list(0, allocator),
+        result = empty_result(allocator),
+        checked = false,
         diagnostics = diagnostics,
-        generated = generated,
+        generated = empty_template_output(allocator),
         parse_ns = parse_ns,
-        check_ns = elapsed_ns(check_start),
+        check_ns = 0,
+    }
+    const check_start = monotonic_ns()
+    check_project(&unit, ctx, &edge_from, &edge_to, allocator)
+    unit.check_ns = elapsed_ns(check_start)
+    return unit
+}
+
+// Run the checker over the module set `self` already holds and install the
+// result. `edge_from`/`edge_to` are the import graph, used to order the walk.
+//
+// Safe to call more than once on the same unit: expansion leaves one padded
+// `sources`/`file_paths` entry per generated chunk, and those are trimmed off
+// first so a second run starts from the state the first one saw.
+fn check_project(self: &AnalyzedProject, ctx: &ResolveCtx, edge_from: &List(usize),
+        edge_to: &List(OwnedString), allocator: &Allocator?) {
+    // Expansion appends one source per generated chunk. Those buffers are
+    // retired rather than freed: a result from the previous check holds
+    // string views into them. The matching `file_paths` entries can go, since
+    // `TypeCheckResult` keeps its own copies of those.
+    while self.sources.len > self.modules.len {
+        const gone = self.sources.pop()
+        if gone.is_some() { self.retired_sources.push(gone.unwrap()) }
+    }
+    trim_owned(&self.file_paths, self.modules.len)
+
+    self.checked = count_errors(&self.diagnostics) == 0
+    if !self.checked { return }
+
+    let path_views: List(String) = list(self.modules.len, allocator)
+    defer path_views.deinit()
+    for i in 0..self.fqns.len {
+        path_views.push(self.fqns[i].as_view())
+    }
+    let order = visit_order(&self.file_paths, &path_views, edge_from, edge_to, allocator)
+    defer order.deinit()
+
+    let chk = checker(allocator)
+    let gens = template_state(allocator)
+    chk.set_comptime_ctx(ctx.comptime)
+    chk.set_project_globals(&ctx.global_imports, &self.project_origin)
+    self.result = check_all(&chk, &self.modules, &path_views, &self.sources, &self.file_paths,
+        &gens, Some(&order))
+    drain_diagnostics(&self.diagnostics, &chk.diagnostics)
+    self.generated = gens.take_output()
+    gens.deinit()
+    chk.deinit()
+}
+
+// Drop trailing entries until `xs` holds `n`, freeing each one.
+fn trim_owned(xs: &List(OwnedString), n: usize) {
+    while xs.len > n {
+        const gone = xs.pop()
+        if gone.is_some() { gone.unwrap().deinit() }
+    }
+}
+
+// Check the project again, re-parsing only what is stale and reusing every
+// other module's AST.
+//
+// A module is stale when the caller names it in `dirty`, or when template
+// expansion appended generated declarations to it - those declarations live
+// in the AST, so reusing one would stack a second copy on the next expansion.
+// If the first parse produced any diagnostic at all, everything is stale:
+// diagnostics are not tracked per module, so the ones belonging to modules
+// that are still good cannot be told apart from the rest.
+//
+// The module SET is assumed unchanged - same files, same imports. Editing a
+// module's imports is what would break that, and re-running `analyze_project`
+// is the answer until the loader itself becomes incremental.
+pub fn reanalyze(self: &AnalyzedProject, ctx: &ResolveCtx, dirty: &Set(String),
+        overrides: &Dict(String, String)? = null, allocator: &Allocator? = null) {
+    const reparse_all = self.diagnostics.len > 0
+    let stale: Set(String) = set(allocator)
+    defer stale.deinit()
+    for &e in self.generated.emitted {
+        stale.add(e.origin_path)
+    }
+
+    const parse_start = monotonic_ns()
+    let srcs = &self.sources
+    let mods = &self.modules
+    for i in 0..self.modules.len {
+        const path = self.file_paths[i].as_view()
+        if !reparse_all and !dirty.contains(path) and !stale.contains(path) { continue }
+        const fresh = read_source(path, overrides)
+        if fresh.is_none() {
+            const msg = $"cannot read source `{path}`"
+            self.diagnostics.push(error("E0001", msg, none_span()))
+            continue
+        }
+        self.retired_sources.push(srcs[i])
+        self.retired_modules.push(mods[i])
+        srcs[i] = fresh.unwrap()
+        mods[i] = parse_to_module(srcs[i].as_view(), i as i32, &ctx.comptime,
+            &self.diagnostics, allocator)
+    }
+    self.parse_ns = elapsed_ns(parse_start)
+
+    // ponytail: the import graph is walked again rather than remembered from
+    // the first analysis. Cache the edges on the unit if this shows up in a
+    // profile - it costs one `resolve_import` per import.
+    let edge_from: List(usize) = list(0, allocator)
+    defer edge_from.deinit()
+    let edge_to: List(OwnedString) = list(0, allocator)
+    defer edge_to.deinit()
+    collect_edges(ctx, &self.modules, &edge_from, &edge_to, allocator)
+
+    self.generated.deinit()
+    self.generated = empty_template_output(allocator)
+
+    const check_start = monotonic_ns()
+    check_project(self, ctx, &edge_from, &edge_to, allocator)
+    self.check_ns = elapsed_ns(check_start)
+}
+
+// Resolve every module's imports into `from -> to` edges. The BFS records
+// these for free on a first analysis; a re-check has to ask again.
+fn collect_edges(ctx: &ResolveCtx, modules: &List(Module), edge_from: &List(usize),
+        edge_to: &List(OwnedString), alloc: &Allocator?) {
+    for i in 0..modules.len {
+        for d in modules[i].decls {
+            d match {
+                Import(id) => {
+                    const r = resolve_import(ctx, &id.path, alloc)
+                    if r.is_some() {
+                        edge_from.push(i)
+                        edge_to.push(r.unwrap())
+                    }
+                },
+                _ => {},
+            }
+        }
     }
 }
 
@@ -313,11 +435,15 @@ pub fn analyze_source_set(srcs: List(OwnedString), fqns: &List(String), allocato
         chk.deinit()
     }
 
+    let no_origin: List(bool) = list(0, allocator)
     return AnalyzedProject {
         sources = srcs,
         fqns = owned_fqns,
         file_paths = file_paths,
         modules = modules,
+        project_origin = no_origin,
+        retired_sources = list(0, allocator),
+        retired_modules = list(0, allocator),
         result = result,
         checked = checked,
         diagnostics = diagnostics,
@@ -328,6 +454,9 @@ pub fn analyze_source_set(srcs: List(OwnedString), fqns: &List(String), allocato
 }
 
 pub fn deinit(self: &AnalyzedProject) {
+    self.retired_modules.deinit()
+    self.retired_sources.deinit()
+    self.project_origin.deinit()
     self.diagnostics.deinit()
     self.generated.deinit()
     self.modules.deinit()
