@@ -615,7 +615,7 @@ fn seed_stdlib(ctx: &ResolveCtx, queue: &List(OwnedString), seen: &Set(String), 
         let norm = normalize_sep(found[i].as_view(), alloc)
         enqueue_owned(queue, seen, norm)
     }
-    deinit_source_list(&found)
+    found.deinit()
 }
 
 // The text to compile for `path`: a supplied buffer when one stands in

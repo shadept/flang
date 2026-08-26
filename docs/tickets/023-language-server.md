@@ -249,7 +249,7 @@ watcher-driven invalidation, and diagnostics clearing when an error is fixed
   a later `Reader`/`Writer` implementation.
 - On-disk analysis cache (the index seam is built, the persistence is not).
 - rename, codeAction, callHierarchy, semanticTokens, formatting - all post-v1.
-  Formatting needs `flang_fmt` split into lib + exe first; it is exe-only today.
+  Formatting can import `lib/flang_fmt` (`format_source`) directly.
 - Moving the extension into this repo.
 
 ## Open questions

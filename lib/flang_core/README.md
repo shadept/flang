@@ -24,5 +24,5 @@ src/
 ## Consumers
 
 - `bootstrap/`        — emits diagnostics from lexer/parser/type-checker/lowering
-- `tools/flang_fmt/`  — surfaces parse-error diagnostics when input doesn't lex
+- `lib/flang_fmt/`    — surfaces parse-error diagnostics when input does not lex
 - `tools/flang_lsp/`  — pushes diagnostics live to the editor

@@ -55,7 +55,7 @@ cheaper than implementing it.
 | Stage | Status | Notes |
 |---|---|---|
 | Lexing (trivia-attached) | ✅ | `flang_parser.lexer` |
-| CST parsing | ✅ | round-trips every in-tree source byte-identical via `flang_fmt` |
+| CST parsing | ✅ | round-trips every in-tree source byte-identical via `lib/flang_fmt` |
 | AST projection | ✅ | `flang_parser.projector` |
 | Name resolution + imports | ✅ | project-wide; type names resolve program-wide (import-strict later) |
 | Type inference (HM) | ⚠️ | 0 errors self-checking compiler + stdlib (99 modules) *including every instantiated generic body* (M10); every `Expr` form is now visited (`a?.b` closed 2026-08-24) but rejection power lags the reference — see the type-checking section below |
