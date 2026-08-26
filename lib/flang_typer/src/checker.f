@@ -2346,10 +2346,9 @@ fn wrap_some(self: &Checker, e: Expr) Expr {
 
 // ── desugar synthesis helpers ────────────────────────────────────────
 
-// The id for `span`, noting the span in the result's inverse table on
-// the way through. Every id the checker mints goes through here, so a
-// consumer holding a `NodeId` can always recover where it came from -
-// the fingerprint itself clamps and cannot be decoded back.
+// The id for `span`, recording the span in the result's inverse table on
+// the way through. Every id the checker mints comes from here, so
+// `TypeCheckResult.spans` maps each one back to the span it names.
 fn node_of(self: &Checker, span: SourceSpan) NodeId {
     const id = node_id_of(span)
     self.results.record_span(id, span)
@@ -3627,7 +3626,13 @@ fn check_identifier(self: &Checker, id: &IdentifierExpr) Ty {
         if self.lambda_frames.len > 0 and !binding.is_type_param {
             note_capture(self, id.name, &binding)
         }
-        return self.engine.specialize(&binding.scheme)
+        const bound = self.engine.specialize(&binding.scheme)
+        // A type parameter in VALUE position is a reified type, exactly as a
+        // bare concrete type name is (`size_of(i32)`). Handing back the raw
+        // parameter var instead lets a `Type($X)` parameter unify with it
+        // while it is still free, binding the type parameter to `Type($X)`.
+        if binding.is_type_param { return reified_type_of(self, bound) }
+        return bound
     }
 
     // Try function registry.
@@ -6372,10 +6377,9 @@ fn zonk_specializations(self: &Checker) {
     }
 }
 
-// `order` is the sequence to visit modules in - dependencies before
-// dependents (`flang_analysis.demand`). It decides the ids every phase hands
-// out, so it is what makes a run reproducible; `null` means source order,
-// which is what the unit tests and single-module callers want.
+// `order` is the sequence to visit modules in, dependencies before
+// dependents. It decides the ids every phase hands out, so the same module
+// set and the same order give the same result. `null` means source order.
 pub fn check_all(self: &Checker, modules: &List(Module), paths: &List(String),
         sources: &List(OwnedString), file_paths: &List(OwnedString), generators: &TemplateState,
         order: &List(usize)? = null) TypeCheckResult {
@@ -6475,9 +6479,9 @@ pub fn check_all(self: &Checker, modules: &List(Module), paths: &List(String),
     let out_closures = self.closures
     self.closures = dict(self.allocator)
 
-    // Owned copies, so the snapshot can name the file of any span it
-    // holds without the caller's path list. `file_paths` is empty in the
-    // unit tests; `path_of` then reports every file as unknown.
+    // Owned copies, so the snapshot names the file of any span it holds
+    // without the caller's path list. An empty `file_paths` leaves
+    // `path_of` reporting every file as unknown.
     let out_paths: List(OwnedString) = list(file_paths.len, self.allocator)
     for &fp in file_paths {
         out_paths.push(from_view(fp.as_view()))
@@ -6522,14 +6526,14 @@ pub fn check_all(self: &Checker, modules: &List(Module), paths: &List(String),
 // backfilled, so a stale or partial order can never drop a module from the
 // check.
 fn visit_sequence(self: &Checker, n: usize, order: &List(usize)?) List(usize) {
-    let seq: List(usize) = list(n, self.allocator)
+    let seq = list(n, self.allocator)
     if order.is_none() {
         for i in 0..n {
             seq.push(i)
         }
         return seq
     }
-    let seen: List(bool) = list(n, self.allocator)
+    let seen = list(n, self.allocator)
     defer seen.deinit()
     for _i in 0..n {
         seen.push(false)
