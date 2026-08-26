@@ -27,6 +27,7 @@ import std.test
 import flang_core.span
 import flang_parser.ast
 import flang_typer.type
+import flang_typer.interner
 import flang_typer.node_id
 import flang_typer.inference_results
 
@@ -85,18 +86,17 @@ pub fn deinit(self: &SpecializationRegistry) {
 
 // Canonical key for `(function_id, concrete_params)`. Two
 // specialisations with identical signatures share an id.
-pub fn key_for(function_id: u32, params: &List(Ty), ret: Ty, allocator: &Allocator? = null) OwnedString {
+pub fn key_for(it: &TypeInterner, function_id: u32, params: &List(Ty), ret: Ty, allocator: &Allocator? = null) OwnedString {
     let sb = string_builder(64, allocator)
     defer sb.deinit()
     sb.append(function_id)
     sb.append("@")
     for i in 0..params.len {
         if i > 0 { sb.append(",") }
-        let p = &params[i]
-        format(p, &sb, "")
+        it.format(params[i], &sb)
     }
     sb.append("->")
-    format(&ret, &sb, "")
+    it.format(ret, &sb)
     return sb.to_string()
 }
 
@@ -175,18 +175,20 @@ test "specialization keys separate same-named types from different modules" {
     // unique per declaration - keying by a type's short name is what made
     // the reference compiler fuse two specializations into one and emit a
     // call to a symbol nothing defined (docs/known-issues.md).
-    let a_args: List(Ty) = list(0)
-    let b_args: List(Ty) = list(0)
-    let a = Ty.Nominal(NominalRef { id = 7 as NominalId, args = a_args })
-    let b = Ty.Nominal(NominalRef { id = 9 as NominalId, args = b_args })
+    let it = type_interner()
+    defer it.deinit()
+    let no_args: List(Ty) = list(0)
+    defer no_args.deinit()
+    let a = it.nominal_of(7 as NominalId, &no_args)
+    let b = it.nominal_of(9 as NominalId, &no_args)
 
     let pa: List(Ty) = list(1)
     pa.push(a)
     let pb: List(Ty) = list(1)
     pb.push(b)
 
-    let ka = key_for(3 as u32, &pa, a)
-    let kb = key_for(3 as u32, &pb, b)
+    let ka = key_for(&it, 3 as u32, &pa, a)
+    let kb = key_for(&it, 3 as u32, &pb, b)
     assert_true(ka.as_view() != kb.as_view(), "distinct nominal ids give distinct keys")
 
     ka.deinit()
@@ -196,18 +198,21 @@ test "specialization keys separate same-named types from different modules" {
 }
 
 test "specialization keys reuse one entry for the same type" {
-    let a_args: List(Ty) = list(0)
-    let b_args: List(Ty) = list(0)
-    let a = Ty.Nominal(NominalRef { id = 7 as NominalId, args = a_args })
-    let b = Ty.Nominal(NominalRef { id = 7 as NominalId, args = b_args })
+    let it = type_interner()
+    defer it.deinit()
+    let no_args: List(Ty) = list(0)
+    defer no_args.deinit()
+    let a = it.nominal_of(7 as NominalId, &no_args)
+    let b = it.nominal_of(7 as NominalId, &no_args)
+    assert_eq(a, b, "one shape, one handle")
 
     let pa: List(Ty) = list(1)
     pa.push(a)
     let pb: List(Ty) = list(1)
     pb.push(b)
 
-    let ka = key_for(3 as u32, &pa, a)
-    let kb = key_for(3 as u32, &pb, b)
+    let ka = key_for(&it, 3 as u32, &pa, a)
+    let kb = key_for(&it, 3 as u32, &pb, b)
     assert_true(ka.as_view() == kb.as_view(), "the same type keys to the same specialization")
 
     ka.deinit()
@@ -225,8 +230,10 @@ test "an evicted specialization leaves a hole and never recycles its id" {
     assert_eq(a, 0 as u32, "ids start at zero")
     assert_eq(c, 2 as u32, "ids are handed out in registration order")
 
+    let it = type_interner()
+    defer it.deinit()
     let probe_params: List(Ty) = list(0)
-    let bkey = key_for(2 as u32, &probe_params, Ty.Prim(PrimitiveKind.I32))
+    let bkey = key_for(&it, 2 as u32, &probe_params, prim_of(PrimitiveKind.I32))
     reg.evict(b)
     assert_true(reg.find(b).is_none(), "the evicted id names a hole")
     assert_true(reg.lookup(bkey.as_view()).is_none(), "the evicted key stops resolving")
@@ -246,12 +253,14 @@ fn probe_spec(function_id: u32, name: String) Specialization {
         span = none_span(), is_pub = false, directives = no_dirs,
         name = name, params = no_decl_params, return_type = null, body = null,
     }
+    let it = type_interner()
+    defer it.deinit()
     let no_params: List(Ty) = list(0)
-    let ret = Ty.Prim(PrimitiveKind.I32)
+    let ret = prim_of(PrimitiveKind.I32)
     return Specialization {
         id = 0 as u32,
         function_id = function_id,
-        key = key_for(function_id, &no_params, ret),
+        key = key_for(&it, function_id, &no_params, ret),
         name = name,
         module = "m",
         decl = decl,

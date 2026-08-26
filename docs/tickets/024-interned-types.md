@@ -1,7 +1,7 @@
 # RFC-024: Interned types - `Ty` becomes a handle
 
 **Type:** Compiler mechanism (typer)
-**Status:** Proposed
+**Status:** Implemented 2026-08-26
 **Depends on:** None
 **Relates to:** RFC-022 (demand-driven checker) - 5b inherits what this settles
 
@@ -144,24 +144,81 @@ under.
 
 ```
  0  DONE: baseline measured - the Motivation table above
- 1  TypeInterner + TyId, alongside the tree. Construct-and-intern, resolve on
-    read. Nothing else changes shape. Gate A green, fixpoint green.
- 2  InferenceResults.node_types and the overlay tables hold TyId. Biggest
-    memory win, smallest blast radius.
- 3  Engine internals over TyId - unify, resolve, zonk, substitute.
- 4  Checker signatures (128 mention Ty).
- 5  Driver - lower.f (78), layout.f (21), symbol_table.f (11).
- 6  Delete the tree representation.
+ 1  DONE 2026-08-26: TypeInterner + TyId, alongside the tree
+ 2  DONE 2026-08-26: node_types and the overlay tables hold TyId
+ 3  DONE 2026-08-26: engine internals over the interner
+ 4  DONE 2026-08-26: checker over TyNode
+ 5  DONE 2026-08-26: driver - lower.f, layout.f, symbol_table.f
+ 6  DONE 2026-08-26: tree representation deleted
 ```
 
-Phase 2 sits before phase 3 deliberately: it banks most of the 461 MB while the
-engine still speaks trees, so the win is measurable before the invasive part
-starts. RFC-022 phase 0 is the precedent - the body/collection split was
-inferred rather than measured, and was wrong on both counts.
+**Landed 2026-08-26, all phases.** `Ty` IS the handle: `pub type Ty = u32`
+in type.f, so the 320 signatures kept their spelling and only construction
+sites, match arms and payload reads changed. The engine owns the
+`TypeInterner` and `check_all` moves it into the `TypeCheckResult` whose
+tables share it; consumers match on `TyNode` through the table.
+`substitution.f` and the tree `Ty` enum (with `equals` and the tree
+`format`) are deleted - `a == b` on handles is type equality, and rendering
+is `interner.format` off the node graph.
 
-Surface, counted 2026-08-26: 320 signatures mention `Ty`, 316 match arms bind
-its variants, 173 sites construct one. Four files carry most of it, and
-`checker.f` alone is 128 signatures.
+Three deviations from the design above, found by implementation:
+
+- **A `Var` node keys on (id, level), not id alone.** Section 3's premise
+  that the engine's `levels` table is the only level reader is false:
+  `generalize`'s free-variable walk reads levels off the zonked tree. A var
+  whose partition level moved must intern as a fresh node or `free_vars`
+  quantifies against a stale level. The identity key renders as
+  `?id@level`; the diagnostic rendering stays `?id`.
+- **The empty tuple and `Void` keep distinct ids.** `equals` treated them
+  as one type by convention, but consumers match them as different shapes;
+  unification keeps the convention explicitly.
+- **A `ground` bit per node.** `zonk` is the identity on a subtree citing
+  no vars, which is the common case by far; without the bit every zonk
+  walks its whole shape.
+
+## Measured outcome
+
+Same setup as the Motivation table (`bootstrap/`, 106 modules,
+`flang --mem --check build`):
+
+| | before | after |
+|---|---|---|
+| live at exit | 536 MB | 490 MB |
+| handed out in total | - | 970 MB |
+| allocations made | 1,557,778 | 1,145,357 |
+| node_types backing | 9 MB | 4 MB |
+| interner | - | 205,333 nodes |
+| typecheck (`-t`, 3 runs) | ~823 ms (RFC-022 phase-1 median) | ~641 ms |
+
+Two corrections to the Motivation:
+
+- **The 461 MB was not primarily the stored type trees.** Interning every
+  final-zonk product (phase 1) moved live-at-exit by ~3 MB; the full
+  conversion, which also stops the engine's transient trees (zonk inside
+  coercion probes, `substitute` per instantiation, `mk_*` per signature),
+  reclaimed ~46 MB. The remaining ~420 MB of the "everything else" row is
+  outside the type representation - ASTs, sources, and per-check tables -
+  and needs its own attribution pass before another memory RFC.
+- **The interner holds live shapes, not just final ones.** Inference
+  interns as it works, so var-citing shapes (one node per distinct
+  (id, level), plus every compound citing one) dominate the node count:
+  205k nodes against 1,091 distinct final shapes. That is the working set
+  the trees used to be, now owned and freed by the table.
+
+The memory gate as specified (interner nodes == distinct stored count)
+does not hold under live interning and was not added; `--mem` prints the
+node count next to the stored/distinct counts instead. The per-demand
+table also makes "does not grow across a re-demand" moot until open
+question 2 lands.
+
+Verification: Gate A green (106 modules, 96,991 node types identical),
+`test-all` 7/7, harness sequential 563/1/16 (the documented cross-target
+link failure), stage-2 = stage-3 byte-identical (16,231,433 bytes of C).
+
+One compiler bug surfaced and is worked around: mutation through a field
+chain that crosses a reference (or starts at a local value struct) does
+not stick - see docs/known-issues.md, "Self-hosted: mutation through a
+field chain".
 
 ## Out of scope
 
@@ -172,17 +229,15 @@ its variants, 173 sites construct one. Four files carry most of it, and
 
 ## Open questions
 
-1. **Does interning pay for itself in time?** Construction becomes a hash plus
-   a lookup instead of a `malloc`. Almost certainly a win at 98.9% duplication,
-   and `equals` gets much cheaper, but RFC-022 phase 0 is the precedent for
-   measuring before believing. Phase 1 reports both.
-2. **Per-check, or persistent across demands?** RFC-022 5a strips nominal
-   bodies when it carries declarations to the next demand, because a body names
-   engine variables and the engine does not survive. A zonked body names no
-   bound variables, so an interned zonked body could carry, which is what would
-   make 5b (`nominal_body`) tractable. Whether the table can outlive the engine
-   that filled it is the question 5b turns on.
-3. **`Record` field names.** A record's key includes its field names, which are
-   `String` views into module sources. The table then inherits the lifetime
-   constraint on sources that RFC-022 5a documents for nominal FQNs. Interning
-   the names alongside would remove it.
+1. ~~Does interning pay for itself in time?~~ **Answered: yes.** ~641 ms
+   against the ~823 ms RFC-022 phase-1 median on the same corpus - handle
+   equality, the ground-bit zonk shortcut, and no per-probe tree
+   allocation outweigh the key hashing.
+2. ~~Per-check, or persistent across demands?~~ **Transferred to RFC-022
+   5b** - it is that phase's question, not this ticket's: the mechanism
+   (an interned zonked body carries, because it names no engine
+   variables) exists; whether the table outlives the engine is 5b's
+   design decision.
+3. ~~`Record` field names.~~ **Transferred to RFC-022 5b** with question
+   2 - the source-lifetime constraint on record keys only starts to bite
+   when the table is made to outlive a demand.

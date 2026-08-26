@@ -1,7 +1,7 @@
 // Scheme - `forall {vars}. body`. Polymorphism is a property of
 // bindings (function signatures, let-generalised locals), not of the
 // `Ty` itself, so this lives in its own module and `Ty` stays a
-// monotype.
+// monotype handle.
 //
 // Quantifier sets are `Set(VarId)` - `VarId` is a `u32` alias so the
 // default `hash` works without any custom overload.
@@ -16,6 +16,7 @@ import std.list
 import std.option
 import std.set
 import flang_typer.type
+import flang_typer.interner
 
 // `forall {quantified}. body`. A scheme with empty `quantified` is
 // monomorphic - `specialize` short-circuits.
@@ -38,46 +39,44 @@ pub fn is_monomorphic(self: &Scheme) bool {
     return self.quantified.len() == 0
 }
 
-// Walk `body` collecting the ids of every free `TyVar` whose `level`
-// is strictly greater than `cursor`. Variables at-or-shallower than the
-// cursor were bound in an enclosing scope and must not be quantified.
+// Walk `body`'s node graph collecting the ids of every free `TyVar`
+// whose `level` is strictly greater than `cursor`. Variables
+// at-or-shallower than the cursor were bound in an enclosing scope and
+// must not be quantified. A ground subtree cites no vars - skipped.
 //
-// Resolution is the caller's job: pass an already-resolved `body`
-// (`engine.resolve(body)`) so chains of bound vars don't show up as
-// free here.
-pub fn free_vars(body: &Ty, cursor: Level, out: &Set(VarId)) {
-    body.* match {
-        Var(v) => {
+// Resolution is the caller's job: pass an already-zonked `body` so
+// chains of bound vars don't show up as free here.
+pub fn free_vars(it: &TypeInterner, body: Ty, cursor: Level, out: &Set(VarId)) {
+    if it.is_ground(body) { return }
+    it.node(body) match {
+        NVar(v) => {
             if v.level > cursor {
                 out.add(v.id)
             }
         },
-        Prim(_) => {},
-        Ref(inner) => free_vars(inner, cursor, out),
-        Array(arr) => free_vars(arr.elem, cursor, out),
-        Func(fn_ty) => {
-            for &p in fn_ty.params {
-                free_vars(p, cursor, out)
+        NRef(inner) => free_vars(it, inner, cursor, out),
+        NArray(arr) => free_vars(it, arr.elem, cursor, out),
+        NFunc(f) => {
+            for p in it.child_ids(f.params) {
+                free_vars(it, p, cursor, out)
             }
-            free_vars(fn_ty.ret, cursor, out)
+            free_vars(it, f.ret, cursor, out)
         },
-        Tuple(elems) => {
-            for &e in elems {
-                free_vars(e, cursor, out)
-            }
-        },
-        Record(fields) => {
-            for &f in fields {
-                free_vars(&f.ty, cursor, out)
+        NTuple(span) => {
+            for e in it.child_ids(span) {
+                free_vars(it, e, cursor, out)
             }
         },
-        Nominal(nr) => {
-            for &a in nr.args {
-                free_vars(a, cursor, out)
+        NRecord(rec) => {
+            for t in it.child_ids(rec.tys) {
+                free_vars(it, t, cursor, out)
             }
         },
-        Never => {},
-        Void => {},
-        Error => {},
+        NNominal(nn) => {
+            for a in it.child_ids(nn.args) {
+                free_vars(it, a, cursor, out)
+            }
+        },
+        _ => {},
     }
 }

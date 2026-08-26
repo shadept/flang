@@ -36,6 +36,7 @@ import flang_typer.result
 import flang_typer.type
 import flang_typer.checker
 import flang_typer.inference_engine
+import flang_typer.interner
 import flang_typer.specialization
 import flang_typer.result_diff
 import flang.frontend
@@ -469,23 +470,12 @@ fn report_engine(unit: &AnalyzedProject) {
 fn report_type_sharing(unit: &AnalyzedProject) {
     let seen: Set(String) = set()
     defer seen.deinit()
-    let keys: List(OwnedString) = list(1024)
-    defer keys.deinit()
     let total: usize = 0
     for entry in unit.result.node_types {
         total = total + 1
-        let sb = string_builder(32)
-        format(&entry.value, &sb, "")
-        const k = sb.to_string()
-        sb.deinit()
-        if seen.contains(k.as_view()) {
-            k.deinit()
-            continue
-        }
-        keys.push(k)
-        seen.add(keys[keys.len - 1].as_view())
+        seen.add(unit.result.interner.key_of(entry.value))
     }
-    const line = $"mem:   node types: {total} stored, {keys.len} distinct"
+    const line = $"mem:   node types: {total} stored, {seen.len()} distinct, {unit.result.interner.len()} interned nodes"
     defer line.deinit()
     println(line.as_view())
 }

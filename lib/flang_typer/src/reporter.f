@@ -19,6 +19,7 @@ import std.string_builder
 import flang_core.diagnostic
 import flang_core.span
 import flang_typer.type
+import flang_typer.interner
 import flang_typer.inference_engine
 import flang_typer.nominal_registry
 import flang_typer.error_codes
@@ -49,21 +50,21 @@ pub fn report_ctx(code: String, span: SourceSpan, nominals: &NominalRegistry? = 
 // produces nothing. Every other variant produces exactly one
 // diagnostic on `out`. Caller owns the message strings appended to
 // the diagnostic - they aren't reclaimed by anything in this file.
-pub fn report(outcome: &UnifyOutcome, ctx: &ReportCtx, out: &List(Diagnostic), allocator: &Allocator? = null) {
+pub fn report(outcome: &UnifyOutcome, ctx: &ReportCtx, it: &TypeInterner, out: &List(Diagnostic), allocator: &Allocator? = null) {
     let alloc = allocator.or_global()
     outcome.* match {
         Unified(_) => {},
-        UniMismatch(m) => report_mismatch(&m, ctx, out, alloc),
-        UniOccursCheck(o) => report_occurs(&o, ctx, out, alloc),
+        UniMismatch(m) => report_mismatch(&m, ctx, it, out, alloc),
+        UniOccursCheck(o) => report_occurs(&o, ctx, it, out, alloc),
         UniArityMismatch(a) => report_arity(&a, ctx, out, alloc),
-        UniPrimConstraint(p) => report_prim_constraint(&p, ctx, out, alloc),
+        UniPrimConstraint(p) => report_prim_constraint(&p, ctx, it, out, alloc),
     }
 }
 
-fn report_mismatch(m: &Mismatch, ctx: &ReportCtx, out: &List(Diagnostic), alloc: &Allocator) {
+fn report_mismatch(m: &Mismatch, ctx: &ReportCtx, it: &TypeInterner, out: &List(Diagnostic), alloc: &Allocator) {
     let message = ctx.message_override match {
         Some(msg) => msg,
-        None => format_mismatch(m, ctx, alloc),
+        None => format_mismatch(m, ctx, it, alloc),
     }
     let empty_hint: OwnedString
     let diag = Diagnostic {
@@ -76,12 +77,12 @@ fn report_mismatch(m: &Mismatch, ctx: &ReportCtx, out: &List(Diagnostic), alloc:
     out.push(diag)
 }
 
-fn report_occurs(o: &OccursDetails, ctx: &ReportCtx, out: &List(Diagnostic), alloc: &Allocator) {
+fn report_occurs(o: &OccursDetails, ctx: &ReportCtx, it: &TypeInterner, out: &List(Diagnostic), alloc: &Allocator) {
     let sb = string_builder(64, Some(alloc))
     sb.append("recursive type: variable ?")
     sb.append(o.var_id)
     sb.append(" occurs inside ")
-    format(&o.ty, &sb, "")
+    it.format(o.ty, &sb)
     let empty_hint: OwnedString
     let diag = Diagnostic {
         severity = Severity.Error,
@@ -115,7 +116,7 @@ fn report_arity(a: &ArityDetails, ctx: &ReportCtx, out: &List(Diagnostic), alloc
     out.push(diag)
 }
 
-fn report_prim_constraint(p: &PrimViolation, ctx: &ReportCtx, out: &List(Diagnostic), alloc: &Allocator) {
+fn report_prim_constraint(p: &PrimViolation, ctx: &ReportCtx, it: &TypeInterner, out: &List(Diagnostic), alloc: &Allocator) {
     let sb = string_builder(64, Some(alloc))
     sb.append("type mismatch: expected one of ")
     for i in 0..p.allowed.len {
@@ -124,7 +125,7 @@ fn report_prim_constraint(p: &PrimViolation, ctx: &ReportCtx, out: &List(Diagnos
         sb.append(prim_name(k))
     }
     sb.append(", got ")
-    format(&p.got, &sb, "")
+    it.format(p.got, &sb)
     let empty_hint: OwnedString
     let diag = Diagnostic {
         severity = Severity.Error,
@@ -136,50 +137,50 @@ fn report_prim_constraint(p: &PrimViolation, ctx: &ReportCtx, out: &List(Diagnos
     out.push(diag)
 }
 
-fn format_mismatch(m: &Mismatch, ctx: &ReportCtx, alloc: &Allocator) OwnedString {
+fn format_mismatch(m: &Mismatch, ctx: &ReportCtx, it: &TypeInterner, alloc: &Allocator) OwnedString {
     let sb = string_builder(64, Some(alloc))
     sb.append("type mismatch: expected `")
-    format_with_names(&m.expected, &sb, ctx.nominals)
+    format_with_names(it, m.expected, &sb, ctx.nominals)
     sb.append("`, got `")
-    format_with_names(&m.actual, &sb, ctx.nominals)
+    format_with_names(it, m.actual, &sb, ctx.nominals)
     sb.append("`")
     return sb.to_string()
 }
 
-// `Ty.format` has no registry, so it renders a nominal as `#<id>`. With
-// one in hand the SHORT name is what a reader wants ("expected `i32`,
-// got `Foo`"), and it is what the reference prints - the harness matches
-// on that text.
-fn format_with_names(t: &Ty, sb: &StringBuilder, reg: &NominalRegistry?) {
+// The interner's `format` has no registry, so it renders a nominal as
+// `#<id>`. With one in hand the SHORT name is what a reader wants
+// ("expected `i32`, got `Foo`"), and it is what the reference prints -
+// the harness matches on that text.
+fn format_with_names(it: &TypeInterner, t: Ty, sb: &StringBuilder, reg: &NominalRegistry?) {
     if reg.is_none() {
-        format(t, sb, "")
+        it.format(t, sb)
         return
     }
     let r = reg.unwrap()
-    t.* match {
-        Nominal(nr) => {
-            sb.append(short_name(nominal_fqn(r, nr.id)))
-            if nr.args.len > 0 {
+    it.node(t) match {
+        NNominal(nn) => {
+            sb.append(short_name(nominal_fqn(r, nn.id)))
+            if nn.args.len > 0 {
                 sb.append("(")
-                for i in 0..nr.args.len {
+                for i in 0..nn.args.len {
                     if i > 0 { sb.append(", ") }
-                    format_with_names(&nr.args[i], sb, reg)
+                    format_with_names(it, it.child_at(nn.args, i), sb, reg)
                 }
                 sb.append(")")
             }
         },
-        Ref(inner) => {
+        NRef(inner) => {
             sb.append("&")
-            format_with_names(inner, sb, reg)
+            format_with_names(it, inner, sb, reg)
         },
-        Array(a) => {
+        NArray(a) => {
             sb.append("[")
-            format_with_names(a.elem, sb, reg)
+            format_with_names(it, a.elem, sb, reg)
             sb.append("; ")
             sb.append(a.length)
             sb.append("]")
         },
-        _ => format(t, sb, ""),
+        _ => it.format(t, sb),
     }
 }
 

@@ -28,6 +28,7 @@ import std.string
 import flang_core.span
 import flang_parser.ast
 import flang_typer.type
+import flang_typer.interner
 import flang_typer.node_id
 
 // Where a name reference points to. Distinguishing variants drives
@@ -122,6 +123,9 @@ pub fn deinit(self: &ClosureSig) {
 }
 
 pub type InferenceResults = struct {
+    // Values are interned handles (RFC-024): the checker's interner maps
+    // one back to a tree. A live entry may cite variables; the final
+    // zonk re-interns every entry with the variables resolved.
     node_types: Dict(NodeId, Ty)
     resolved_ops: Dict(NodeId, ResolvedOperator)
     resolved_targets: Dict(NodeId, ResolvedTarget)

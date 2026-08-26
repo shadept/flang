@@ -74,6 +74,7 @@ import flang_parser.ast
 import flang_parser.comptime
 import flang_parser.lexer
 import flang_typer.type
+import flang_typer.interner
 import flang_typer.node_id
 import flang_typer.result
 import flang_typer.nominal_registry
@@ -95,6 +96,12 @@ import flang_driver.symbol_table
 // without touching every signature again.
 type LowerCtx = struct {
     result: &TypeCheckResult
+    // A DIRECT reference to the result's type table. Interning during
+    // lowering (RTTI shapes, slice views) mutates the table, and a
+    // mutation reached as `ctx.result.interner` crosses a reference
+    // field two hops deep, which does not stick
+    // (docs/known-issues.md). One hop through this field does.
+    it: &TypeInterner
     // The active specialization's private result tables, consulted
     // before `result` (M10). Node ids are span fingerprints shared by
     // every instantiation of a template body; the overlay is what keys
@@ -374,6 +381,7 @@ pub fn lower_module(ast_module: &Module, result: &TypeCheckResult, allocator: &A
     let defer_marks: List(usize) = list(0, allocator)
     let ctx = LowerCtx {
         result = result,
+        it = &result.interner,
         overlay = null,
         syms = &syms,
         allocator = allocator,
@@ -429,7 +437,7 @@ pub fn lower_program(modules: &List(Module), fqns: &List(OwnedString), result: &
     // build (`--target-os`) must lower the same `#if` branch the checker
     // checked, or the emitted C is the host's branch of a program that
     // type-checked as the target's.
-    let ctx = LowerCtx { result = result, overlay = null, syms = &syms, allocator = allocator, loops = loop_stack, sret = null, ret_size = 0u64, strings = interner, str_globals = str_globals, defers = defer_stack, defer_marks = defer_marks, flushing = false, blocked = false, blocked_note = null, blocked_subject = null, pending_lambdas = list(0, allocator), comptime = comptime_ctx, consts = dict(allocator), const_inits = list(0, allocator), owned_syms = list(0, allocator) }
+    let ctx = LowerCtx { result = result, it = &result.interner, overlay = null, syms = &syms, allocator = allocator, loops = loop_stack, sret = null, ret_size = 0u64, strings = interner, str_globals = str_globals, defers = defer_stack, defer_marks = defer_marks, flushing = false, blocked = false, blocked_note = null, blocked_subject = null, pending_lambdas = list(0, allocator), comptime = comptime_ctx, consts = dict(allocator), const_inits = list(0, allocator), owned_syms = list(0, allocator) }
     // Consts first: bodies in ANY module may read a const from any other,
     // and the readable gate is `ctx.consts` membership.
     for i in 0..modules.len {
@@ -661,6 +669,15 @@ fn lower_consts(m: &IrModule, ctx: &LowerCtx, ast_module: &Module) {
     }
 }
 
+// The shape behind a handle - lowering-side shorthand.
+fn tn(ctx: &LowerCtx, t: Ty) TyNode {
+    return ctx.it.node(t)
+}
+
+fn tyit(ctx: &LowerCtx) &TypeInterner {
+    return ctx.it
+}
+
 fn lower_const_decl(m: &IrModule, ctx: &LowerCtx, cd: &ConstDecl) {
     // The decl's own RtConst target names its FQN (recorded by
     // check_constant_init) - the key every read site cites.
@@ -680,11 +697,11 @@ fn lower_const_decl(m: &IrModule, ctx: &LowerCtx, cd: &ConstDecl) {
         return
     }
     let t = tyo.unwrap()
-    if !ty_concrete(&t) {
+    if !ty_concrete(tyit(ctx), t) {
         m.skip_notes.push($"{fqn}: const type not concrete")
         return
     }
-    let lay = layout_of(&t, &ctx.result.nominals, ctx.allocator)
+    let lay = layout_of(tyit(ctx), t, &ctx.result.nominals, ctx.allocator)
     let gsym = park_sym(ctx, const_symbol("__fconst_", fqn, ctx.allocator))
     let isym = park_sym(ctx, const_symbol("__finit_", fqn, ctx.allocator))
 
@@ -698,7 +715,7 @@ fn lower_const_decl(m: &IrModule, ctx: &LowerCtx, cd: &ConstDecl) {
     if is_by_ref(ctx, &t) {
         cur.memcpy(Operand.GlobalRef(gsym), v, Operand.IntConst(lay.size as i64))
     } else {
-        cur.store(ir_of(&t), v, Operand.GlobalRef(gsym))
+        cur.store(ir_of(ctx, t), v, Operand.GlobalRef(gsym))
     }
     cur.ret_void()
     env.deinit()
@@ -774,7 +791,7 @@ fn read_const(ctx: &LowerCtx, bb: &BlockBuilder, fqn: String, want: &Ty) Operand
     let c = ci.unwrap()
     if !repr_compatible(ctx, &c.ty, want) { return unlowerable_why(ctx, "const read repr mismatch") }
     if is_by_ref(ctx, &c.ty) { return Operand.GlobalRef(c.sym) }
-    return bb.load(ir_of(&c.ty), Operand.GlobalRef(c.sym))
+    return bb.load(ir_of(ctx, c.ty), Operand.GlobalRef(c.sym))
 }
 
 // A function declaration becomes a defined FIR function, or - when it has
@@ -823,10 +840,10 @@ fn foreign_from_sig(m: &IrModule, ctx: &LowerCtx, decl: &FunctionDecl) ForeignDe
     for i in 0..sig.params.len {
         ptys.push(foreign_ir_of(m, ctx, &sig.params[i]))
     }
-    let ret: IrType? = sig.ret match {
-        Void => null,
-        Never => null,
-        _ => Some(foreign_ir_of(m, ctx, &sig.ret)),
+    let ret: IrType? = if sig.ret == TY_VOID or sig.ret == TY_NEVER {
+        null
+    } else {
+        Some(foreign_ir_of(m, ctx, &sig.ret))
     }
     return Some(ForeignDecl {
         name = decl.name,
@@ -841,7 +858,7 @@ fn foreign_from_sig(m: &IrModule, ctx: &LowerCtx, decl: &FunctionDecl) ForeignDe
 // this backend can write. References and niche options are not aggregates
 // by representation and cross fine.
 fn crosses_unspellable(ctx: &LowerCtx, ty: &Ty) bool {
-    if !is_aggregate(ty) { return false }
+    if !is_aggregate(tyit(ctx), ty.*) { return false }
     if niche_optional(ctx, ty) { return false }
     return agg_type_of(ctx, ty).is_none()
 }
@@ -852,7 +869,7 @@ fn crosses_unspellable(ctx: &LowerCtx, ty: &Ty) bool {
 fn foreign_ir_of(m: &IrModule, ctx: &LowerCtx, ty: &Ty) IrType {
     let agg = register_agg(m, ctx, ty)
     if agg.is_some() { return IrType.Agg(agg.unwrap()) }
-    return ir_of(ty)
+    return ir_of(ctx, ty.*)
 }
 
 // A body-less declaration as an external symbol. Null when a parameter or
@@ -986,13 +1003,14 @@ fn emit_lambda_fn(m: &IrModule, ctx: &LowerCtx, pl: &PendingLambda) {
     }
     let cid = pl.info.closure_id.unwrap()
     let no_args: List(Ty) = list(0, ctx.allocator)
-    let cty = Ty.Nominal(NominalRef { id = cid, args = no_args })
+    let cty = ctx.it.nominal_of(cid, &no_args)
+    no_args.deinit()
     lower_function_body(m, ctx, &decl, pl.info.symbol.as_view(), &sig,
         Some(LoweredClosure { ty = cty, captures = &pl.info.captures }))
 }
 
 fn bind_closure_captures(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, c: &LoweredClosure, self_val: Operand) {
-    let target = resolve_struct(&c.ty, &ctx.result.nominals, ctx.allocator)
+    let target = resolve_struct(ctx, &c.ty, &ctx.result.nominals, ctx.allocator)
     if target.is_none() {
         ctx.blocked = true
         return
@@ -1004,7 +1022,7 @@ fn bind_closure_captures(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, c: &Lower
         if is_by_ref(ctx, &cap.ty) {
             env.bind_aggregate(cap.name, addr, cap.ty)
         } else {
-            env.bind_slot(cap.name, addr, ir_of(&cap.ty), cap.ty)
+            env.bind_slot(cap.name, addr, ir_of(ctx, cap.ty), cap.ty)
         }
     }
 }
@@ -1019,9 +1037,9 @@ fn lower_function_body(m: &IrModule, ctx: &LowerCtx, decl: &FunctionDecl, sym: S
     // and the function copies into it before each `ret` - see
     // `emit_call`, which is the other half of the convention.
     let ret_agg = is_by_ref(ctx, &sig.ret)
-    let returns_value = sig.ret match { Void => false, Never => false, _ => true }
+    let returns_value = !(sig.ret == TY_VOID or sig.ret == TY_NEVER)
     let return_ir: IrType? = null
-    if returns_value and !ret_agg { return_ir = Some(ir_of(&sig.ret)) }
+    if returns_value and !ret_agg { return_ir = Some(ir_of(ctx, sig.ret)) }
 
     let fb = function(sym, return_ir, ctx.allocator)
     let env = new_env(ctx.allocator)
@@ -1033,7 +1051,7 @@ fn lower_function_body(m: &IrModule, ctx: &LowerCtx, decl: &FunctionDecl, sym: S
     if closure.is_some() { self_op = Some(fb.param(IrType.Ptr)) }
     let param_ops: List(Operand) = list(decl.params.len + 1, ctx.allocator)
     for i in 0..sig.params.len {
-        param_ops.push(fb.param(ir_of(&sig.params[i])))
+        param_ops.push(fb.param(ir_of(ctx, sig.params[i])))
     }
     let sret_op: Operand? = null
     if ret_agg { sret_op = Some(fb.param(IrType.Ptr)) }
@@ -1047,7 +1065,7 @@ fn lower_function_body(m: &IrModule, ctx: &LowerCtx, decl: &FunctionDecl, sym: S
     ctx.sret = sret_op
     ctx.ret_size = 0u64
     if ret_agg {
-        ctx.ret_size = layout_of(&sig.ret, &ctx.result.nominals, ctx.allocator).size as u64
+        ctx.ret_size = layout_of(tyit(ctx), sig.ret, &ctx.result.nominals, ctx.allocator).size as u64
     }
 
     // Parameters spill to slots like any other local, so assigning one - or
@@ -1063,12 +1081,12 @@ fn lower_function_body(m: &IrModule, ctx: &LowerCtx, decl: &FunctionDecl, sym: S
     for i in 0..decl.params.len {
         let pty = &sig.params[i]
         if is_by_ref(ctx, pty) {
-            let lay = layout_of(pty, &ctx.result.nominals, ctx.allocator)
+            let lay = layout_of(tyit(ctx), pty.*, &ctx.result.nominals, ctx.allocator)
             let slot = cur.stack_slot(lay.size as u64, lay.align as u64)
             cur.memcpy(slot, param_ops[i], Operand.IntConst(lay.size as i64))
             env.bind_aggregate(decl.params[i].name, slot, pty.*)
         } else {
-            let ir = ir_of(pty)
+            let ir = ir_of(ctx, pty.*)
             let slot = alloc_slot(&cur, ir)
             cur.store(ir, param_ops[i], slot)
             env.bind_slot(decl.params[i].name, slot, ir, pty.*)
@@ -1209,7 +1227,7 @@ fn lower_block(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, block: &BlockExpr, 
         if ctx.defers.len > mark {
             let ty = node_ty(ctx, expr_span(e))
             if is_by_ref(ctx, &ty) {
-                let lay = layout_of(&ty, &ctx.result.nominals, ctx.allocator)
+                let lay = layout_of(tyit(ctx), ty, &ctx.result.nominals, ctx.allocator)
                 let slot = bb.stack_slot(lay.size as u64, lay.align as u64)
                 bb.memcpy(slot, v, Operand.IntConst(lay.size as i64))
                 v = slot
@@ -1370,7 +1388,7 @@ fn lower_let(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, l: &LetStmt) {
     // repeat count, `[0u8; PAGE_SIZE]`) - refuse the function rather
     // than let the Var reach `ir_of`'s hard failure. This is the subset
     // gate, not a fallback width.
-    let unresolved = ty match { Var(_) => true, _ => false }
+    let unresolved = tyit(ctx).is_var(ty)
     if unresolved {
         let _r = unlowerable(ctx)
         return
@@ -1388,13 +1406,13 @@ fn lower_let(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, l: &LetStmt) {
             // Zero bytes are the zero-initialized value of every aggregate;
             // for `Option` specifically, tag 0 is `None` by declaration
             // order (a documented invariant in core.option).
-            let lay = layout_of(&ty, &ctx.result.nominals, ctx.allocator)
+            let lay = layout_of(tyit(ctx), ty, &ctx.result.nominals, ctx.allocator)
             let slot = bb.stack_slot(lay.size as u64, lay.align as u64)
             bb.memset(slot, Operand.IntConst(0), Operand.IntConst(lay.size as i64))
             env.bind_aggregate(l.name, slot, ty)
             return
         }
-        let zero_ir = ir_of(&ty)
+        let zero_ir = ir_of(ctx, ty)
         let zero_slot = alloc_slot(bb, zero_ir)
         bb.store(zero_ir, Operand.IntConst(0), zero_slot)
         env.bind_slot(l.name, zero_slot, zero_ir, ty)
@@ -1415,7 +1433,7 @@ fn lower_let(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, l: &LetStmt) {
         // call's sret buffer) has no other name, so the binding takes it
         // over and the copy is elided.
         if !init_is_fresh(&e) {
-            let lay = layout_of(&ty, &ctx.result.nominals, ctx.allocator)
+            let lay = layout_of(tyit(ctx), ty, &ctx.result.nominals, ctx.allocator)
             let slot = bb.stack_slot(lay.size as u64, lay.align as u64)
             bb.memcpy(slot, v, Operand.IntConst(lay.size as i64))
             env.bind_aggregate(l.name, slot, ty)
@@ -1424,7 +1442,7 @@ fn lower_let(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, l: &LetStmt) {
         env.bind_aggregate(l.name, v, ty)
         return
     }
-    let ir = ir_of(&ty)
+    let ir = ir_of(ctx, ty)
     let slot = alloc_slot(bb, ir)
     bb.store(ir, v, slot)
     env.bind_slot(l.name, slot, ir, ty)
@@ -1528,13 +1546,13 @@ fn lower_if(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, ife: &IfExpr, want: Ty
     // return type, for a body's implicit-return `if`). A statement-
     // position `if` is recorded as Void, so without it the join would
     // carry no value.
-    if want.is_some() and !yields_value(&ty) { ty = want.unwrap() }
-    let yields = yields_value(&ty) and !is_no_else(&ife.else_branch)
+    if want.is_some() and !yields_value(ctx, ty) { ty = want.unwrap() }
+    let yields = yields_value(ctx, ty) and !is_no_else(&ife.else_branch)
     // An aggregate-valued `if` joins the arms' ADDRESSES; the consumer
     // copies (a `let` binding, a store, a callee) so the arm slots'
     // lifetimes - function-long, like all stack slots - are never a
     // problem.
-    let ir = ir_of(&ty)
+    let ir = ir_of(ctx, ty)
 
     let cond = lower_expr(ctx, bb, env, ife.condition)
 
@@ -1595,14 +1613,9 @@ fn is_no_else(eb: &ElseBranch) bool {
 // still-free node type means NOTHING consumed the value (a statement-
 // position match whose arms all diverge, say) - there is no read to
 // feed, and allocating a slot for it would need a guessed width.
-fn yields_value(ty: &Ty) bool {
-    return ty.* match {
-        Void => false,
-        Never => false,
-        Error => false,
-        Var(_) => false,
-        _ => true,
-    }
+fn yields_value(ctx: &LowerCtx, ty: Ty) bool {
+    if ty == TY_VOID or ty == TY_NEVER or ty == TY_ERROR { return false }
+    return !tyit(ctx).is_var(ty)
 }
 
 // `while cond { body }` - the head re-evaluates the condition, so it is
@@ -1693,18 +1706,19 @@ fn lower_for_iter(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, f: &ForStmt) {
     if ng.params.len != 1 { let _u = unlowerable(ctx); return }
 
     // The Option geometry of `next`'s return, and the element type.
-    let t = resolve_enum(&ng.ret, &ctx.result.nominals)
+    let t = resolve_enum(ctx, &ng.ret, &ctx.result.nominals)
     if t.is_none() { let _u = unlowerable_why(ctx, "for-iter next() not an Option"); return }
     let et = t.unwrap()
     if et.args.len != 1 { let _u = unlowerable(ctx); return }
     let ety = et.args[0]
-    let ol = enum_layout(&et.def, &et.args, &ctx.result.nominals, ctx.allocator)
+    let ol = enum_layout(tyit(ctx), &et.def, &et.args, &ctx.result.nominals, ctx.allocator)
 
     // `iter(&xs)`: an aggregate iterable's value IS its address; a
     // reference value is already the pointer the parameter wants. A
     // fixed array decays into the `{ptr, len}` view `iter(&T[])` takes
     // (`lower_adapted` against the parameter's pointee).
-    let recv = lower_adapted(ctx, bb, env, f.iterable, peel_ref(&ig.params[0]))
+    let iter_recv_ty = peel_ref(ctx, ig.params[0])
+    let recv = lower_adapted(ctx, bb, env, f.iterable, &iter_recv_ty)
     let iargs: List(Operand) = list(2, ctx.allocator)
     iargs.push(recv)
     let state = emit_call(ctx, bb, isym.unwrap(), &ig, iargs)
@@ -1714,7 +1728,7 @@ fn lower_for_iter(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, f: &ForStmt) {
     let state_addr = state
     if !repr_compatible(ctx, &ig.ret, &ng.params[0]) {
         if !is_by_ref(ctx, &ig.ret) {
-            let sir = ir_of(&ig.ret)
+            let sir = ir_of(ctx, ig.ret)
             let slot = alloc_slot(bb, sir)
             bb.store(sir, state, slot)
             state_addr = slot
@@ -1748,12 +1762,12 @@ fn lower_for_iter(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, f: &ForStmt) {
     } else {
         let pa = bb.gep(nxt, Operand.IntConst(ol.payload_offset as i64))
         if is_by_ref(ctx, &ety) {
-            let elay = layout_of(&ety, &ctx.result.nominals, ctx.allocator)
+            let elay = layout_of(tyit(ctx), ety, &ctx.result.nominals, ctx.allocator)
             let slot = bb.stack_slot(elay.size as u64, elay.align as u64)
             bb.memcpy(slot, pa, Operand.IntConst(elay.size as i64))
             env.bind_aggregate(f.var_name, slot, ety)
         } else {
-            let ir = ir_of(&ety)
+            let ir = ir_of(ctx, ety)
             let v = bb.load(ir, pa)
             let slot = alloc_slot(bb, ir)
             bb.store(ir, v, slot)
@@ -1776,9 +1790,9 @@ fn lower_for_range(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, f: &ForStmt, rn
     let end_e = rng.end.unwrap()
 
     let ity = node_ty(ctx, expr_span(start_e))
-    let p = prim_of(&ity)
+    let p = prim_kind_of_ty(ctx, ity)
     if is_float(p) { let _u = unlowerable(ctx); return }
-    let ir = ty_to_ir(&ity)
+    let ir = ty_to_ir(ctx, ity)
     let sg = is_signed_integer(p)
 
     let start = lower_expr(ctx, bb, env, start_e)
@@ -1862,8 +1876,9 @@ fn lower_lambda(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, lam: &LambdaExpr) 
     }
     let cid = info.closure_id.unwrap()
     let no_args: List(Ty) = list(0, ctx.allocator)
-    let cty = Ty.Nominal(NominalRef { id = cid, args = no_args })
-    let target = resolve_struct(&cty, &ctx.result.nominals, ctx.allocator)
+    let cty = ctx.it.nominal_of(cid, &no_args)
+    no_args.deinit()
+    let target = resolve_struct(ctx, &cty, &ctx.result.nominals, ctx.allocator)
     if target.is_none() { return unlowerable(ctx) }
     let st = target.unwrap()
     let slot = bb.stack_slot(st.layout.size as u64, st.layout.align as u64)
@@ -1872,9 +1887,9 @@ fn lower_lambda(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, lam: &LambdaExpr) 
         let v = read_binding(ctx, bb, env, cap.name, &cap.ty)
         let fp = bb.gep(slot, Operand.IntConst(st.layout.offsets[i] as i64))
         if is_by_ref(ctx, &cap.ty) {
-            bb.memcpy(fp, v, Operand.IntConst(layout_of(&cap.ty, &ctx.result.nominals, ctx.allocator).size as i64))
+            bb.memcpy(fp, v, Operand.IntConst(layout_of(tyit(ctx), cap.ty, &ctx.result.nominals, ctx.allocator).size as i64))
         } else {
-            bb.store(ir_of(&cap.ty), v, fp)
+            bb.store(ir_of(ctx, cap.ty), v, fp)
         }
     }
     return slot
@@ -2049,21 +2064,21 @@ fn lower_adapted(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, e: &Expr, want: &
     // `[T; N]` or `&[T; N]` - either way `lower_expr` yields the
     // elements' base address (an aggregate IS its address; a reference's
     // value is the pointee's).
-    let a = src match {
-        Array(a0) => Some(a0),
-        Ref(i) => i.* match {
-            Array(a1) => Some(a1),
+    let a = tn(ctx, src) match {
+        NArray(a0) => Some(a0),
+        NRef(i) => tn(ctx, i) match {
+            NArray(a1) => Some(a1),
             _ => null,
         },
         _ => null,
     }
     if a.is_none() { return lower_expr(ctx, bb, env, e) }
     let arr = a.unwrap()
-    let de = want.* match {
-        Nominal(nr) => slice_elem_of(ctx, &nr),
+    let de = tn(ctx, want.*) match {
+        NNominal(nn) => slice_elem_of(ctx, &nn),
         _ => null,
     }
-    if de.is_some() and repr_compatible(ctx, arr.elem, &de.unwrap()) {
+    if de.is_some() and repr_compatible(ctx, &arr.elem, &de.unwrap()) {
         return build_slice_view(ctx, bb, want, lower_expr(ctx, bb, env, e), arr.length)
     }
     return lower_expr(ctx, bb, env, e)
@@ -2095,7 +2110,7 @@ fn call_hop(ctx: &LowerCtx, bb: &BlockBuilder, sym: String, sig: &FnSig, addr: O
 // shape both `[T; N]` decay and array literals coerced to slices need.
 // `want` must be the Slice (or String) nominal the node is typed as.
 fn build_slice_view(ctx: &LowerCtx, bb: &BlockBuilder, want: &Ty, ptr_op: Operand, len: usize) Operand {
-    let st_opt = resolve_struct(want, &ctx.result.nominals, ctx.allocator)
+    let st_opt = resolve_struct(ctx, want, &ctx.result.nominals, ctx.allocator)
     if st_opt.is_none() { return unlowerable(ctx) }
     let st = st_opt.unwrap()
     let pi = field_index(&st.def, "ptr")
@@ -2115,12 +2130,12 @@ fn build_slice_view(ctx: &LowerCtx, bb: &BlockBuilder, want: &Ty, ptr_op: Operan
 // a Slice wraps the fresh array in a `{ptr, len}` view over it.
 fn lower_array_lit(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, al: &ArrayLiteralExpr) Operand {
     let want = node_ty(ctx, al.span)
-    let arr = want match {
-        Array(a) => Some(a),
+    let arr = tn(ctx, want) match {
+        NArray(a) => Some(a),
         _ => null,
     }
-    let slice_elem = want match {
-        Nominal(nr) => slice_elem_of(ctx, &nr),
+    let slice_elem = tn(ctx, want) match {
+        NNominal(nn) => slice_elem_of(ctx, &nn),
         _ => null,
     }
 
@@ -2138,14 +2153,14 @@ fn lower_array_lit(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, al: &ArrayLiter
         },
     }
     let elem = arr match {
-        Some(a) => a.elem.*,
+        Some(a) => a.elem,
         None => slice_elem match {
             Some(e) => e,
             None => return unlowerable(ctx),
         },
     }
-    if !ty_concrete(&elem) { return unlowerable(ctx) }
-    let el = layout_of(&elem, &ctx.result.nominals, ctx.allocator)
+    if !ty_concrete(tyit(ctx), elem) { return unlowerable(ctx) }
+    let el = layout_of(tyit(ctx), elem, &ctx.result.nominals, ctx.allocator)
     let esize = el.size
     let total = if count == 0 { 1 as usize } else { count * esize }
     let slot = bb.stack_slot(total as u64, el.align as u64)
@@ -2158,7 +2173,7 @@ fn lower_array_lit(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, al: &ArrayLiter
                 if is_by_ref(ctx, &elem) {
                     bb.memcpy(ep, v, Operand.IntConst(esize as i64))
                 } else {
-                    bb.store(ir_of(&elem), v, ep)
+                    bb.store(ir_of(ctx, elem), v, ep)
                 }
             }
         },
@@ -2178,7 +2193,7 @@ fn lower_array_lit(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, al: &ArrayLiter
                 if is_by_ref(ctx, &elem) { return unlowerable(ctx) }
                 for i in 0..count {
                     let ep = bb.gep(slot, Operand.IntConst((i * esize) as i64))
-                    bb.store(ir_of(&elem), v, ep)
+                    bb.store(ir_of(ctx, elem), v, ep)
                 }
             }
         },
@@ -2195,39 +2210,43 @@ fn lower_tuple_lit(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, tl: &TupleLiter
     // `()` is unit - no value to build.
     if tl.elements.len == 0 { return Operand.IntConst(0) }
     let want = node_ty(ctx, tl.span)
-    let elems = want match {
-        Tuple(es) => Some(es),
+    let espan = tn(ctx, want) match {
+        NTuple(es) => Some(es),
         _ => null,
     }
-    if elems.is_none() { return unlowerable(ctx) }
-    let tys = elems.unwrap()
+    if espan.is_none() { return unlowerable(ctx) }
+    let tys: List(Ty) = list(espan.unwrap().len, ctx.allocator)
+    defer tys.deinit()
+    for i in 0..espan.unwrap().len {
+        tys.push(tyit(ctx).child_at(espan.unwrap(), i))
+    }
     if tys.len != tl.elements.len { return unlowerable(ctx) }
-    if !ty_concrete(&want) { return unlowerable(ctx) }
-    let sl = tuple_layout(&tys, &ctx.result.nominals, ctx.allocator)
+    if !ty_concrete(tyit(ctx), want) { return unlowerable(ctx) }
+    let sl = tuple_layout(tyit(ctx), &tys, &ctx.result.nominals, ctx.allocator)
     let slot = bb.stack_slot(sl.size as u64, sl.align as u64)
     for i in 0..tl.elements.len {
         let v = lower_expr(ctx, bb, env, &tl.elements[i])
         let ep = bb.gep(slot, Operand.IntConst(sl.offsets[i] as i64))
-        let ety = &tys[i]
-        if is_by_ref(ctx, ety) {
-            let esz = layout_of(ety, &ctx.result.nominals, ctx.allocator).size
+        let ety = tys[i]
+        if is_by_ref(ctx, &ety) {
+            let esz = layout_of(tyit(ctx), ety, &ctx.result.nominals, ctx.allocator).size
             bb.memcpy(ep, v, Operand.IntConst(esz as i64))
         } else {
-            bb.store(ir_of(ety), v, ep)
+            bb.store(ir_of(ctx, ety), v, ep)
         }
     }
     return slot
 }
 
 // The element type when `nr` is the well-known Slice; null otherwise.
-fn slice_elem_of(ctx: &LowerCtx, nr: &NominalRef) Ty? {
+fn slice_elem_of(ctx: &LowerCtx, nr: &NNominalNode) Ty? {
     let is_slice = ctx.result.nominals.get(nr.id).* match {
         NomStruct(s) => s.fqn == FQN_SLICE,
         _ => false,
     }
     if !is_slice { return null }
     if nr.args.len != 1 { return null }
-    return Some(nr.args[0])
+    return Some(tyit(ctx).child_at(nr.args, 0))
 }
 
 // `a..b` in value position: build the checker-typed `Range(T)` struct
@@ -2249,7 +2268,7 @@ fn lower_range_value(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, r: &RangeExpr
 
 // The `Range(T)` struct built from already-lowered bounds.
 fn build_range_slot(ctx: &LowerCtx, bb: &BlockBuilder, ty: &Ty, sv: Operand, ev: Operand) Operand {
-    let st_opt = resolve_struct(ty, &ctx.result.nominals, ctx.allocator)
+    let st_opt = resolve_struct(ctx, ty, &ctx.result.nominals, ctx.allocator)
     if st_opt.is_none() { return unlowerable(ctx) }
     let st = st_opt.unwrap()
     let si = field_index(&st.def, "start")
@@ -2257,16 +2276,16 @@ fn build_range_slot(ctx: &LowerCtx, bb: &BlockBuilder, ty: &Ty, sv: Operand, ev:
     if si < 0 or ei < 0 { return unlowerable(ctx) }
     // The element type is the instantiation's single argument; the
     // bounds are scalars (an aggregate-element range has no meaning).
-    let nr = ty.* match {
-        Nominal(n) => Some(n),
+    let nr = tn(ctx, ty.*) match {
+        NNominal(n) => Some(n),
         _ => null,
     }
     if nr.is_none() { return unlowerable(ctx) }
     let n = nr.unwrap()
     if n.args.len != 1 { return unlowerable(ctx) }
-    let elem = n.args[0]
+    let elem = tyit(ctx).child_at(n.args, 0)
     if is_by_ref(ctx, &elem) { return unlowerable(ctx) }
-    let ir = ir_of(&elem)
+    let ir = ir_of(ctx, elem)
 
     let slot = bb.stack_slot(st.layout.size as u64, st.layout.align as u64)
     let sp = bb.gep(slot, Operand.IntConst(st.layout.offsets[si as usize] as i64))
@@ -2293,11 +2312,11 @@ fn build_range_slot(ctx: &LowerCtx, bb: &BlockBuilder, ty: &Ty, sv: Operand, ev:
 // through an op_deref chain never reach here - `lower_call` routes
 // them to `lower_deref_receiver` via `receiver_derefs`.
 fn lower_receiver(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, recv: &Expr, want: &Ty) Operand {
-    let want_inner = want.* match {
-        Ref(i) => Some(i.*),
+    let want_inner = tn(ctx, want.*) match {
+        NRef(i) => Some(i),
         _ => null,
     }
-    let want_ref_prim = want_inner.is_some() and is_prim(&want_inner.unwrap())
+    let want_ref_prim = want_inner.is_some() and is_prim(ctx, want_inner.unwrap())
 
     if want_ref_prim {
         let inner = want_inner.unwrap()
@@ -2307,35 +2326,35 @@ fn lower_receiver(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, recv: &Expr, wan
             // value into a fresh slot and pass its address - the same
             // `&temporary` rule call arguments already have.
             let rty = node_ty(ctx, expr_span(recv))
-            if !prim_rep_eq(&rty, &inner) {
+            if !prim_rep_eq(ctx, rty, inner) {
                 return unlowerable_why(ctx, "scalar &prim receiver with no place")
             }
             let v = lower_expr(ctx, bb, env, recv)
-            let slot = alloc_slot(bb, ir_of(&rty))
-            bb.store(ir_of(&rty), v, slot)
+            let slot = alloc_slot(bb, ir_of(ctx, rty))
+            bb.store(ir_of(ctx, rty), v, slot)
             return slot
         }
         let m = mem.unwrap()
-        if ref_prim_rep_eq(&m.ty, want) {
+        if ref_prim_rep_eq(ctx, m.ty, want.*) {
             // The memory already holds the &prim - its value is the arg.
             return bb.load(IrType.Ptr, m.addr)
         }
-        if prim_rep_eq(&m.ty, &inner) { return m.addr }
+        if prim_rep_eq(ctx, m.ty, inner) { return m.addr }
         return unlowerable_why(ctx, "scalar receiver adaptation mismatch")
     }
 
-    if is_prim(want) {
+    if is_prim(ctx, want.*) {
         let mem = receiver_place_mem(ctx, bb, env, recv)
         if mem.is_some() {
             let m = mem.unwrap()
-            let m_inner = m.ty match {
-                Ref(i) => Some(i.*),
+            let m_inner = tn(ctx, m.ty) match {
+                NRef(i) => Some(i),
                 _ => null,
             }
-            if m_inner.is_some() and prim_rep_eq(&m_inner.unwrap(), want) {
+            if m_inner.is_some() and prim_rep_eq(ctx, m_inner.unwrap(), want.*) {
                 // `&prim` memory adapted to a by-value prim: load through.
                 let p = bb.load(IrType.Ptr, m.addr)
-                return bb.load(ir_of(want), p)
+                return bb.load(ir_of(ctx, want.*), p)
             }
         }
     }
@@ -2363,7 +2382,7 @@ fn lower_deref_receiver(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, recv: &Exp
         }
         cur = call_hop(ctx, bb, c.0, &c.1, cur)
     }
-    if is_prim(want) { return bb.load(ir_of(want), cur) }
+    if is_prim(ctx, want.*) { return bb.load(ir_of(ctx, want.*), cur) }
     return cur
 }
 
@@ -2372,33 +2391,33 @@ fn lower_deref_receiver(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, recv: &Exp
 // `&usize` receiver on a `deinit(&u64)` winner - equal specificity,
 // zero-cost coercion, declaration order arbitrates). The bytes are the
 // same; the call is sound.
-fn prim_rep_eq(a: &Ty, b: &Ty) bool {
-    let pa = a.* match {
-        Prim(p) => p,
+fn prim_rep_eq(ctx: &LowerCtx, a: Ty, b: Ty) bool {
+    let pa = tn(ctx, a) match {
+        NPrim(p) => p,
         _ => return false,
     }
-    let pb = b.* match {
-        Prim(p) => p,
+    let pb = tn(ctx, b) match {
+        NPrim(p) => p,
         _ => return false,
     }
     return prim_ir(pa) == prim_ir(pb)
 }
 
-fn ref_prim_rep_eq(a: &Ty, b: &Ty) bool {
-    let ia = a.* match {
-        Ref(i) => i,
+fn ref_prim_rep_eq(ctx: &LowerCtx, a: Ty, b: Ty) bool {
+    let ia = tn(ctx, a) match {
+        NRef(i) => i,
         _ => return false,
     }
-    let ib = b.* match {
-        Ref(i) => i,
+    let ib = tn(ctx, b) match {
+        NRef(i) => i,
         _ => return false,
     }
-    return prim_rep_eq(ia, ib)
+    return prim_rep_eq(ctx, ia, ib)
 }
 
-fn is_prim(ty: &Ty) bool {
-    return ty.* match {
-        Prim(_) => true,
+fn is_prim(ctx: &LowerCtx, ty: Ty) bool {
+    return tn(ctx, ty) match {
+        NPrim(_) => true,
         _ => false,
     }
 }
@@ -2455,13 +2474,13 @@ fn receiver_place_mem(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, recv: &Expr)
 // field zeroed (name is the empty string - populate when a consumer
 // needs it). `ty` is the node's `core.rtti.Type(T)` nominal.
 fn build_typeinfo_value(ctx: &LowerCtx, bb: &BlockBuilder, ty: &Ty) Operand {
-    let nr = ty.* match {
-        Nominal(n) => n,
+    let nr = tn(ctx, ty.*) match {
+        NNominal(n) => n,
         _ => return unlowerable(ctx),
     }
     if nr.args.len != 1 { return unlowerable(ctx) }
-    let t = nr.args[0]
-    if !ty_concrete(&t) { return unlowerable_why(ctx, "Type(T) of a non-concrete T") }
+    let t = tyit(ctx).child_at(nr.args, 0)
+    if !ty_concrete(tyit(ctx), t) { return unlowerable_why(ctx, "Type(T) of a non-concrete T") }
     return build_typeinfo(ctx, bb, &t, 0usize)
 }
 
@@ -2484,11 +2503,11 @@ fn build_typeinfo(ctx: &LowerCtx, bb: &BlockBuilder, t: &Ty, depth: usize) Opera
     let ti_ty = well_known_ty(ctx, FQN_TYPE_INFO)
     if ti_ty.is_none() { return unlowerable_why(ctx, "core.rtti.TypeInfo is not in scope") }
     let ti = ti_ty.unwrap()
-    let st_opt = resolve_struct(&ti, reg, ctx.allocator)
+    let st_opt = resolve_struct(ctx, &ti, reg, ctx.allocator)
     if st_opt.is_none() { return unlowerable(ctx) }
     let st = st_opt.unwrap()
 
-    let lay = layout_of(t, reg, ctx.allocator)
+    let lay = layout_of(tyit(ctx), t.*, reg, ctx.allocator)
     let slot = bb.stack_slot(st.layout.size as u64, st.layout.align as u64)
     bb.memset(slot, Operand.IntConst(0), Operand.IntConst(st.layout.size as i64))
 
@@ -2517,13 +2536,13 @@ fn store_ti_field(ctx: &LowerCtx, bb: &BlockBuilder, st: &StructTarget, slot: Op
     let fi = field_index(&st.def, name)
     if fi < 0 { return }
     let idx = fi as usize
-    let fty = field_ty(&st.def, idx, &st.args, ctx.allocator)
+    let fty = field_ty(tyit(ctx), &st.def, idx, &st.args)
     let dst = bb.gep(slot, Operand.IntConst(st.layout.offsets[idx] as i64))
     if is_by_ref(ctx, &fty) {
-        let flay = layout_of(&fty, &ctx.result.nominals, ctx.allocator)
+        let flay = layout_of(tyit(ctx), fty, &ctx.result.nominals, ctx.allocator)
         bb.memcpy(dst, value, Operand.IntConst(flay.size as i64))
     } else {
-        bb.store(ir_of(&fty), value, dst)
+        bb.store(ir_of(ctx, fty), value, dst)
     }
 }
 
@@ -2533,8 +2552,8 @@ fn store_ti_field(ctx: &LowerCtx, bb: &BlockBuilder, st: &StructTarget, slot: Op
 // of the instantiation.
 fn build_ti_type_params(ctx: &LowerCtx, bb: &BlockBuilder, st: &StructTarget, slot: Operand, t: &Ty, depth: usize) {
     let reg = &ctx.result.nominals
-    let nr = t.* match {
-        Nominal(n) => Some(n),
+    let nr = tn(ctx, t.*) match {
+        NNominal(n) => Some(n),
         _ => null,
     }
     if nr.is_none() {
@@ -2567,7 +2586,8 @@ fn build_ti_type_params(ctx: &LowerCtx, bb: &BlockBuilder, st: &StructTarget, sl
     let ptrs: List(Operand) = list(n.args.len, ctx.allocator)
     if depth < RTTI_MAX_DEPTH {
         for i in 0..n.args.len {
-            ptrs.push(build_typeinfo(ctx, bb, &n.args[i], depth + 1))
+            let arg_ti = tyit(ctx).child_at(n.args, i)
+            ptrs.push(build_typeinfo(ctx, bb, &arg_ti, depth + 1))
         }
     }
     store_ti_field(ctx, bb, st, slot, "type_args", pack_ptr_slice(ctx, bb, &ptrs))
@@ -2576,13 +2596,13 @@ fn build_ti_type_params(ctx: &LowerCtx, bb: &BlockBuilder, st: &StructTarget, sl
 
 fn build_ti_fields(ctx: &LowerCtx, bb: &BlockBuilder, st: &StructTarget, slot: Operand, t: &Ty, depth: usize) {
     let reg = &ctx.result.nominals
-    let target = resolve_struct(t, reg, ctx.allocator)
+    let target = resolve_struct(ctx, t, reg, ctx.allocator)
     if target.is_none() { return }
     let ts = target.unwrap()
     if ts.def.fields.len == 0 { return }
     let fi_ty = well_known_ty(ctx, FQN_FIELD_INFO)
     if fi_ty.is_none() { return }
-    let fst = resolve_struct(&fi_ty.unwrap(), reg, ctx.allocator)
+    let fst = resolve_struct(ctx, &fi_ty.unwrap(), reg, ctx.allocator)
     if fst.is_none() { return }
     let fs = fst.unwrap()
 
@@ -2593,7 +2613,7 @@ fn build_ti_fields(ctx: &LowerCtx, bb: &BlockBuilder, st: &StructTarget, slot: O
         store_ti_field(ctx, bb, &fs, rec, "name", build_string_value(ctx, bb, ts.def.fields[i].name))
         store_ti_field(ctx, bb, &fs, rec, "offset", Operand.IntConst(ts.layout.offsets[i] as i64))
         if depth < RTTI_MAX_DEPTH {
-            let fty = field_ty(&ts.def, i, &ts.args, ctx.allocator)
+            let fty = field_ty(tyit(ctx), &ts.def, i, &ts.args)
             store_ti_field(ctx, bb, &fs, rec, "type_info", build_typeinfo(ctx, bb, &fty, depth + 1))
         }
         items.push(rec)
@@ -2605,13 +2625,13 @@ fn build_ti_fields(ctx: &LowerCtx, bb: &BlockBuilder, st: &StructTarget, slot: O
 
 fn build_ti_variants(ctx: &LowerCtx, bb: &BlockBuilder, st: &StructTarget, slot: Operand, t: &Ty) {
     let reg = &ctx.result.nominals
-    let target = resolve_enum(t, reg)
+    let target = resolve_enum(ctx, t, reg)
     if target.is_none() { return }
     let te = target.unwrap()
     if te.def.variants.len == 0 { return }
     let vi_ty = well_known_ty(ctx, FQN_VARIANT_INFO)
     if vi_ty.is_none() { return }
-    let vst = resolve_struct(&vi_ty.unwrap(), reg, ctx.allocator)
+    let vst = resolve_struct(ctx, &vi_ty.unwrap(), reg, ctx.allocator)
     if vst.is_none() { return }
     let vs = vst.unwrap()
 
@@ -2632,8 +2652,8 @@ fn build_ti_variants(ctx: &LowerCtx, bb: &BlockBuilder, st: &StructTarget, slot:
 // null pointer), which is what `rtti_params_empty` / `rtti_return_type_null`
 // read.
 fn build_ti_function(ctx: &LowerCtx, bb: &BlockBuilder, st: &StructTarget, slot: Operand, t: &Ty, depth: usize) {
-    let ft = t.* match {
-        Func(f) => Some(f),
+    let ft = tn(ctx, t.*) match {
+        NFunc(f) => Some(f),
         _ => null,
     }
     if ft.is_none() { return }
@@ -2644,7 +2664,7 @@ fn build_ti_function(ctx: &LowerCtx, bb: &BlockBuilder, st: &StructTarget, slot:
     if f.params.len > 0 {
         let pi_ty = well_known_ty(ctx, FQN_PARAM_INFO)
         if pi_ty.is_some() {
-            let pst = resolve_struct(&pi_ty.unwrap(), reg, ctx.allocator)
+            let pst = resolve_struct(ctx, &pi_ty.unwrap(), reg, ctx.allocator)
             if pst.is_some() {
                 let ps = pst.unwrap()
                 let items: List(Operand) = list(f.params.len, ctx.allocator)
@@ -2653,8 +2673,9 @@ fn build_ti_function(ctx: &LowerCtx, bb: &BlockBuilder, st: &StructTarget, slot:
                     bb.memset(rec, Operand.IntConst(0), Operand.IntConst(ps.layout.size as i64))
                     // A function TYPE has no parameter names.
                     store_ti_field(ctx, bb, &ps, rec, "name", build_string_value(ctx, bb, ""))
+                    let pti = tyit(ctx).child_at(f.params, i)
                     store_ti_field(ctx, bb, &ps, rec, "type_info",
-                        build_typeinfo(ctx, bb, &f.params[i], depth + 1))
+                        build_typeinfo(ctx, bb, &pti, depth + 1))
                     items.push(rec)
                 }
                 store_ti_field(ctx, bb, st, slot, "params",
@@ -2663,17 +2684,16 @@ fn build_ti_function(ctx: &LowerCtx, bb: &BlockBuilder, st: &StructTarget, slot:
             }
         }
     }
-    let is_void = f.ret.* match { Void => true, _ => false }
-    if !is_void {
+    if f.ret != TY_VOID {
         store_ti_field(ctx, bb, st, slot, "return_type",
-            build_typeinfo(ctx, bb, f.ret, depth + 1))
+            build_typeinfo(ctx, bb, &f.ret, depth + 1))
     }
 }
 
 // Copy `items` (each an aggregate ADDRESS) into one contiguous array and
 // return a `Slice(elem)` view over it.
 fn pack_slice(ctx: &LowerCtx, bb: &BlockBuilder, elem: &Ty, items: &List(Operand)) Operand {
-    let lay = layout_of(elem, &ctx.result.nominals, ctx.allocator)
+    let lay = layout_of(tyit(ctx), elem.*, &ctx.result.nominals, ctx.allocator)
     let buf = bb.stack_slot((lay.size * items.len) as u64, lay.align as u64)
     for i in 0..items.len {
         bb.memcpy(bb.gep(buf, Operand.IntConst((lay.size * i) as i64)), items[i],
@@ -2692,7 +2712,7 @@ fn pack_ptr_slice(ctx: &LowerCtx, bb: &BlockBuilder, ptrs: &List(Operand)) Opera
     }
     let ti = well_known_ty(ctx, FQN_TYPE_INFO)
     if ti.is_none() { return unlowerable(ctx) }
-    let sty = slice_ty_of(ctx, mk_ref_ty(ti.unwrap(), ctx.allocator))
+    let sty = slice_ty_of(ctx, mk_ref_ty(ctx, ti.unwrap()))
     if sty.is_none() { return unlowerable(ctx) }
     return build_slice_view(ctx, bb, &sty.unwrap(), buf, ptrs.len)
 }
@@ -2713,34 +2733,36 @@ fn well_known_ty(ctx: &LowerCtx, fqn: String) Ty? {
     let id = ctx.result.nominals.by_fqn.get(fqn)
     if id.is_none() { return null }
     let no_args: List(Ty) = list(0, ctx.allocator)
-    return Some(Ty.Nominal(NominalRef { id = id.unwrap(), args = no_args }))
+    defer no_args.deinit()
+    return Some(ctx.it.nominal_of(id.unwrap(), &no_args))
 }
 
 fn slice_ty_of(ctx: &LowerCtx, elem: Ty) Ty? {
     let id = ctx.result.nominals.by_fqn.get(FQN_SLICE)
     if id.is_none() { return null }
     let args: List(Ty) = list(1, ctx.allocator)
+    defer args.deinit()
     args.push(elem)
-    return Some(Ty.Nominal(NominalRef { id = id.unwrap(), args = args }))
+    return Some(ctx.it.nominal_of(id.unwrap(), &args))
 }
 
-fn mk_ref_ty(inner: Ty, allocator: &Allocator?) Ty {
-    return Ty.Ref(box(or_global(allocator), inner))
+fn mk_ref_ty(ctx: &LowerCtx, inner: Ty) Ty {
+    return ctx.it.ref_of(inner)
 }
 
 // The name `TypeInfo.name` reports: a primitive's spelling, a nominal's
 // SHORT name, and a structural rendering for the rest. Leaked with the
 // rest of the lowering's synthesized strings.
 fn rtti_type_name(ctx: &LowerCtx, t: &Ty) String {
-    return t.* match {
-        Prim(p) => prim_name(p),
-        Void => "void",
-        Never => "never",
-        Nominal(nr) => rtti_nominal_name(ctx, nr.id),
-        Ref(_) => "reference",
-        Array(_) => "array",
-        Func(_) => "function",
-        Tuple(_) => "tuple",
+    return tn(ctx, t.*) match {
+        NPrim(p) => prim_name(p),
+        NVoid => "void",
+        NNever => "never",
+        NNominal(nn) => rtti_nominal_name(ctx, nn.id),
+        NRef(_) => "reference",
+        NArray(_) => "array",
+        NFunc(_) => "function",
+        NTuple(_) => "tuple",
         _ => "",
     }
 }
@@ -2760,10 +2782,10 @@ fn rtti_nominal_name(ctx: &LowerCtx, id: NominalId) String {
 // TypeKind's declaration indices (Primitive, Array, Struct, Enum,
 // Function - the declared values coincide with the indices).
 fn rtti_kind_tag(ctx: &LowerCtx, t: &Ty) i64 {
-    return t.* match {
-        Array(_) => 1,
-        Func(_) => 4,
-        Nominal(nr) => ctx.result.nominals.get(nr.id).* match {
+    return tn(ctx, t.*) match {
+        NArray(_) => 1,
+        NFunc(_) => 4,
+        NNominal(nn) => ctx.result.nominals.get(nn.id).* match {
             NomStruct(_) => 2,
             NomEnum(_) => 3,
         },
@@ -2779,8 +2801,8 @@ fn intercept_rtti_layout(ctx: &LowerCtx, sym: String, sig: &FnSig) Operand? {
     let is_align = starts_with(sym, "core__rtti__align_0of__")
     if !is_size and !is_align { return null }
     if sig.params.len != 1 { return null }
-    let nr = sig.params[0] match {
-        Nominal(n) => n,
+    let nr = tn(ctx, sig.params[0]) match {
+        NNominal(n) => n,
         _ => return null,
     }
     let is_type_nominal = ctx.result.nominals.get(nr.id).* match {
@@ -2789,9 +2811,9 @@ fn intercept_rtti_layout(ctx: &LowerCtx, sym: String, sig: &FnSig) Operand? {
     }
     if !is_type_nominal { return null }
     if nr.args.len != 1 { return null }
-    let t = nr.args[0]
-    if !ty_concrete(&t) { return null }
-    let lay = layout_of(&t, &ctx.result.nominals, ctx.allocator)
+    let t = tyit(ctx).child_at(nr.args, 0)
+    if !ty_concrete(tyit(ctx), t) { return null }
+    let lay = layout_of(tyit(ctx), t, &ctx.result.nominals, ctx.allocator)
     if is_size { return Some(Operand.IntConst(lay.size as i64)) }
     return Some(Operand.IntConst(lay.align as i64))
 }
@@ -2805,18 +2827,18 @@ fn intercept_rtti_layout(ctx: &LowerCtx, sym: String, sig: &FnSig) Operand? {
 fn emit_call(ctx: &LowerCtx, bb: &BlockBuilder, sym: String, sig: &FnSig, args: List(Operand), foreign: bool = false) Operand {
     if foreign { return emit_foreign_call(ctx, bb, sym, sig, args) }
     if is_by_ref(ctx, &sig.ret) {
-        let lay = layout_of(&sig.ret, &ctx.result.nominals, ctx.allocator)
+        let lay = layout_of(tyit(ctx), sig.ret, &ctx.result.nominals, ctx.allocator)
         let tmp = bb.stack_slot(lay.size as u64, lay.align as u64)
         args.push(tmp)
         bb.call_void(sym, args)
         return tmp
     }
-    let returns_value = sig.ret match { Void => false, Never => false, _ => true }
+    let returns_value = !(sig.ret == TY_VOID or sig.ret == TY_NEVER)
     if !returns_value {
         bb.call_void(sym, args)
         return Operand.IntConst(0)
     }
-    return bb.call(sym, ir_of(&sig.ret), args)
+    return bb.call(sym, ir_of(ctx, sig.ret), args)
 }
 
 // A call across a C boundary. Aggregates travel BY VALUE here, not by
@@ -2844,12 +2866,12 @@ fn emit_foreign_call(ctx: &LowerCtx, bb: &BlockBuilder, sym: String, sig: &FnSig
         return slot
     }
 
-    let returns_value = sig.ret match { Void => false, Never => false, _ => true }
+    let returns_value = !(sig.ret == TY_VOID or sig.ret == TY_NEVER)
     if !returns_value {
         bb.call_void(sym, args)
         return Operand.IntConst(0)
     }
-    return bb.call(sym, ir_of(&sig.ret), args)
+    return bb.call(sym, ir_of(ctx, sig.ret), args)
 }
 
 // A call whose callee is a value rather than a resolved symbol. A
@@ -2860,8 +2882,8 @@ fn emit_foreign_call(ctx: &LowerCtx, bb: &BlockBuilder, sym: String, sig: &FnSig
 fn lower_callee_value_call(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, call: &CallExpr) Operand {
     let callee_ty = node_ty(ctx, expr_span(call.callee))
 
-    let nid = callee_ty match {
-        Nominal(nr) => Some(nr.id),
+    let nid = tn(ctx, callee_ty) match {
+        NNominal(nn) => Some(nn.id),
         _ => null,
     }
     if nid.is_some() {
@@ -2892,8 +2914,8 @@ fn lower_callee_value_call(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, call: &
         return emit_call(ctx, bb, c.symbol.as_view(), &sig, args)
     }
 
-    let ft = callee_ty match {
-        Func(f) => Some(f),
+    let ft = tn(ctx, callee_ty) match {
+        NFunc(f) => Some(f),
         _ => null,
     }
     if ft.is_none() {
@@ -2905,9 +2927,10 @@ fn lower_callee_value_call(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, call: &
     }
     let f = ft.unwrap()
     let fn_ptr = lower_expr(ctx, bb, env, call.callee)
-    let ptys: List(IrType) = list(f.params.len + 1, ctx.allocator)
-    for i in 0..f.params.len {
-        ptys.push(ir_of(&f.params[i]))
+    let n_fparams = f.params.len
+    let ptys: List(IrType) = list(n_fparams + 1, ctx.allocator)
+    for i in 0..n_fparams {
+        ptys.push(ir_of(ctx, tyit(ctx).child_at(f.params, i)))
     }
     let args: List(Operand) = list(call.args.len + 1, ctx.allocator)
     for i in 0..call.args.len {
@@ -2916,35 +2939,31 @@ fn lower_callee_value_call(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, call: &
             Named(_) => {},
         }
     }
-    if args.len != f.params.len {
+    if args.len != n_fparams {
         args.deinit()
         ptys.deinit()
         return unlowerable(ctx)
     }
     let want = node_ty(ctx, call.span)
-    if !repr_compatible(ctx, f.ret, &want) {
+    if !repr_compatible(ctx, &f.ret, &want) {
         args.deinit()
         ptys.deinit()
         return unlowerable(ctx)
     }
-    if is_by_ref(ctx, f.ret) {
-        let lay = layout_of(f.ret, &ctx.result.nominals, ctx.allocator)
+    if is_by_ref(ctx, &f.ret) {
+        let lay = layout_of(tyit(ctx), f.ret, &ctx.result.nominals, ctx.allocator)
         let tmp = bb.stack_slot(lay.size as u64, lay.align as u64)
         args.push(tmp)
         ptys.push(IrType.Ptr)
         bb.call_indirect_void(fn_ptr, ptys, args)
         return tmp
     }
-    let returns_value = f.ret.* match {
-        Void => false,
-        Never => false,
-        _ => true,
-    }
+    let returns_value = !(f.ret == TY_VOID or f.ret == TY_NEVER)
     if !returns_value {
         bb.call_indirect_void(fn_ptr, ptys, args)
         return Operand.IntConst(0)
     }
-    return bb.call_indirect(fn_ptr, ptys, ir_of(f.ret), args)
+    return bb.call_indirect(fn_ptr, ptys, ir_of(ctx, f.ret), args)
 }
 
 // Structs and member access (M4, minimal)
@@ -2972,7 +2991,7 @@ type StructTarget = struct {
 fn lower_struct_lit(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, lit: &StructLiteralExpr) Operand {
     let reg = &ctx.result.nominals
     let ty = node_ty(ctx, lit.span)
-    let target = resolve_struct(&ty, reg, ctx.allocator)
+    let target = resolve_struct(ctx, &ty, reg, ctx.allocator)
     if target.is_none() { return unlowerable(ctx) }
     let st = target.unwrap()
 
@@ -2991,13 +3010,13 @@ fn lower_struct_lit(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, lit: &StructLi
         // definition stores a generic field against the type parameter,
         // and storing by the parameter's placeholder width corrupts the
         // neighbouring fields.
-        let fty = field_ty(&st.def, didx, &st.args, ctx.allocator)
+        let fty = field_ty(tyit(ctx), &st.def, didx, &st.args)
         let v = lower_field_init(ctx, bb, env, fi, &fty)
         let fp = bb.gep(slot, Operand.IntConst(off as i64))
         if is_by_ref(ctx, &fty) {
-            bb.memcpy(fp, v, Operand.IntConst(layout_of(&fty, reg, ctx.allocator).size as i64))
+            bb.memcpy(fp, v, Operand.IntConst(layout_of(tyit(ctx), fty, reg, ctx.allocator).size as i64))
         } else {
-            bb.store(ir_of(&fty), v, fp)
+            bb.store(ir_of(ctx, fty), v, fp)
         }
     }
     return slot
@@ -3051,7 +3070,7 @@ fn lower_match(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, m: &MatchExpr) Oper
     }
 
     let ty = node_ty(ctx, m.span)
-    let yields = yields_value(&ty)
+    let yields = yields_value(ctx, ty)
 
     let scrut_ty = node_ty(ctx, expr_span(m.scrutinee))
     let scrut = lower_expr(ctx, bb, env, m.scrutinee)
@@ -3061,7 +3080,7 @@ fn lower_match(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, m: &MatchExpr) Oper
     // may be Void or a never-consumed Var, neither of which has an IR
     // scalar to name.
     let join = if yields {
-        fb.block(fb.fresh_label("m_join"), ir_of(&ty))
+        fb.block(fb.fresh_label("m_join"), ir_of(ctx, ty))
     } else {
         fb.block(fb.fresh_label("m_join"))
     }
@@ -3268,16 +3287,16 @@ fn struct_pattern_test(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, sp: &Struct
 // aggregate field yields its address, a scalar its loaded value - the
 // same shape `pattern_test` expects of a scrutinee.
 fn struct_pattern_member(ctx: &LowerCtx, bb: &BlockBuilder, name: String, scrut: Operand, scrut_ty: &Ty) (Operand, Ty)? {
-    let st = resolve_struct(scrut_ty, &ctx.result.nominals, ctx.allocator)
+    let st = resolve_struct(ctx, scrut_ty, &ctx.result.nominals, ctx.allocator)
     if st.is_none() { return null }
     let t = st.unwrap()
     let di = field_index(&t.def, name)
     if di < 0 { return null }
     let idx = di as usize
-    let fty = field_ty(&t.def, idx, &t.args, ctx.allocator)
+    let fty = field_ty(tyit(ctx), &t.def, idx, &t.args)
     let addr = bb.gep(scrut, Operand.IntConst(t.layout.offsets[idx] as i64))
     if is_by_ref(ctx, &fty) { return Some((addr, fty)) }
-    return Some((bb.load(ir_of(&fty), addr), fty))
+    return Some((bb.load(ir_of(ctx, fty), addr), fty))
 }
 
 fn tuple_pattern_test(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, tp: &TuplePattern, scrut: Operand, scrut_ty: &Ty) Operand {
@@ -3295,18 +3314,21 @@ fn tuple_pattern_test(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, tp: &TuplePa
 }
 
 fn tuple_pattern_member(ctx: &LowerCtx, bb: &BlockBuilder, i: usize, scrut: Operand, scrut_ty: &Ty) (Operand, Ty)? {
-    let elems = peel_ref(scrut_ty).* match {
-        Tuple(es) => Some(es),
+    let elems = tn(ctx, peel_ref(ctx, scrut_ty.*)) match {
+        NTuple(es) => Some(es),
         _ => null,
     }
     if elems.is_none() { return null }
-    let es = elems.unwrap()
-    if i >= es.len { return null }
-    let sl = tuple_layout(&es, &ctx.result.nominals, ctx.allocator)
+    let espan = elems.unwrap()
+    if i >= espan.len { return null }
+    let es: List(Ty) = list(espan.len, ctx.allocator)
+    defer es.deinit()
+    for k in 0..espan.len { es.push(tyit(ctx).child_at(espan, k)) }
+    let sl = tuple_layout(tyit(ctx), &es, &ctx.result.nominals, ctx.allocator)
     let addr = bb.gep(scrut, Operand.IntConst(sl.offsets[i] as i64))
     let ety = es[i]
     if is_by_ref(ctx, &ety) { return Some((addr, ety)) }
-    return Some((bb.load(ir_of(&ety), addr), ety))
+    return Some((bb.load(ir_of(ctx, ety), addr), ety))
 }
 
 fn variable_test(ctx: &LowerCtx, bb: &BlockBuilder, v: &VariablePattern, scrut: Operand, scrut_ty: &Ty) Operand {
@@ -3327,8 +3349,8 @@ fn or_test(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, o: &OrPattern, scrut: O
 // `lo..hi` - inclusive on the left, exclusive on the right unless the
 // pattern says otherwise. A missing bound is unbounded on that side.
 fn range_test(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, r: &RangePattern, scrut: Operand, scrut_ty: &Ty) Operand {
-    let ir = ty_to_ir(scrut_ty)
-    let p = prim_of(scrut_ty)
+    let ir = ty_to_ir(ctx, scrut_ty.*)
+    let p = prim_kind_of_ty(ctx, scrut_ty.*)
     let fl = is_float(p)
     let sg = is_signed_integer(p)
 
@@ -3362,7 +3384,7 @@ fn literal_test(ctx: &LowerCtx, bb: &BlockBuilder, l: &LiteralPattern, scrut: Op
     // (0 by declaration order) - `discriminant_test` handles both.
     let is_null = v.* match { Null => true, _ => false }
     if is_null {
-        if resolve_enum(scrut_ty, &ctx.result.nominals).is_some() {
+        if resolve_enum(ctx, scrut_ty, &ctx.result.nominals).is_some() {
             return discriminant_test(ctx, bb, 0u32, scrut, scrut_ty)
         }
         return unlowerable(ctx)
@@ -3393,8 +3415,8 @@ fn literal_test(ctx: &LowerCtx, bb: &BlockBuilder, l: &LiteralPattern, scrut: Op
     }
 
     let lit = lower_literal_value(ctx, v)
-    let ir = ty_to_ir(scrut_ty)
-    if is_float(prim_of(scrut_ty)) { return bb.fcmp_eq(ir, scrut, lit) }
+    let ir = ty_to_ir(ctx, scrut_ty.*)
+    if is_float(prim_kind_of_ty(ctx, scrut_ty.*)) { return bb.fcmp_eq(ir, scrut, lit) }
     return bb.icmp_eq(ir, scrut, lit)
 }
 
@@ -3422,10 +3444,10 @@ fn variant_test(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, ev: &EnumVariantPa
         return bb.iand(IrType.I8, acc, t0)
     }
 
-    let t = resolve_enum(scrut_ty, &ctx.result.nominals)
+    let t = resolve_enum(ctx, scrut_ty, &ctx.result.nominals)
     if t.is_none() { return unlowerable(ctx) }
     let et = t.unwrap()
-    let offs = variant_payload_offsets(&et.def, vnum.unwrap() as usize, &et.args, &ctx.result.nominals, ctx.allocator)
+    let offs = variant_payload_offsets(tyit(ctx), &et.def, vnum.unwrap() as usize, &et.args, &ctx.result.nominals, ctx.allocator)
     if offs.len != ev.payloads.len {
         offs.deinit()
         return unlowerable(ctx)
@@ -3439,11 +3461,10 @@ fn variant_test(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, ev: &EnumVariantPa
             _ => true,
         }
         if !refutable { continue }
-        let dty = variant_payload_ty(&et.def, vnum.unwrap() as usize, j, &et.args, ctx.allocator)
-        let dvoid = dty match { Void => true, _ => false }
-        if dvoid { continue }
+        let dty = variant_payload_ty(tyit(ctx), &et.def, vnum.unwrap() as usize, j, &et.args)
+        if dty == TY_VOID { continue }
         let addr = bb.gep(scrut, Operand.IntConst(offs[j] as i64))
-        let value = if is_by_ref(ctx, &dty) { addr } else { bb.load(ir_of(&dty), addr) }
+        let value = if is_by_ref(ctx, &dty) { addr } else { bb.load(ir_of(ctx, dty), addr) }
         let tj = pattern_test(ctx, bb, env, sub, value, &dty)
         acc = bb.iand(IrType.I8, acc, tj)
     }
@@ -3513,13 +3534,13 @@ fn bind_tuple_pattern(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, tp: &TuplePa
 // local, so the arm body may assign to it.
 fn bind_matched(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, name: String, value: Operand, ty: &Ty) {
     if is_by_ref(ctx, ty) {
-        let lay = layout_of(ty, &ctx.result.nominals, ctx.allocator)
+        let lay = layout_of(tyit(ctx), ty.*, &ctx.result.nominals, ctx.allocator)
         let slot = bb.stack_slot(lay.size as u64, lay.align as u64)
         bb.memcpy(slot, value, Operand.IntConst(lay.size as i64))
         env.bind_aggregate(name, slot, ty.*)
         return
     }
-    let ir = ir_of(ty)
+    let ir = ir_of(ctx, ty.*)
     let slot = alloc_slot(bb, ir)
     bb.store(ir, value, slot)
     env.bind_slot(name, slot, ir, ty.*)
@@ -3539,13 +3560,13 @@ fn bind_variant_payload(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, ev: &EnumV
 
     // Each payload binds at its per-payload offset (M11 multi-payload).
     let vnum = resolved_variant(ctx, ev.span)
-    let t = resolve_enum(scrut_ty, &ctx.result.nominals)
+    let t = resolve_enum(ctx, scrut_ty, &ctx.result.nominals)
     if vnum.is_none() or t.is_none() {
         let _u = unlowerable(ctx)
         return
     }
     let et = t.unwrap()
-    let offs = variant_payload_offsets(&et.def, vnum.unwrap() as usize, &et.args, &ctx.result.nominals, ctx.allocator)
+    let offs = variant_payload_offsets(tyit(ctx), &et.def, vnum.unwrap() as usize, &et.args, &ctx.result.nominals, ctx.allocator)
     if offs.len != ev.payloads.len {
         offs.deinit()
         let _u = unlowerable(ctx)
@@ -3554,12 +3575,11 @@ fn bind_variant_payload(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, ev: &EnumV
     for j in 0..ev.payloads.len {
         let sub = &ev.payloads[j]
         // A unit payload (`Ok(())`) has no bytes to read or bind.
-        let dty = variant_payload_ty(&et.def, vnum.unwrap() as usize, j, &et.args, ctx.allocator)
-        let dvoid = dty match { Void => true, _ => false }
-        if dvoid { continue }
+        let dty = variant_payload_ty(tyit(ctx), &et.def, vnum.unwrap() as usize, j, &et.args)
+        if dty == TY_VOID { continue }
         let pty = node_ty(ctx, pattern_span(sub))
         let addr = bb.gep(scrut, Operand.IntConst(offs[j] as i64))
-        let value = if is_by_ref(ctx, &pty) { addr } else { bb.load(ir_of(&pty), addr) }
+        let value = if is_by_ref(ctx, &pty) { addr } else { bb.load(ir_of(ctx, pty), addr) }
         bind_pattern(ctx, bb, env, sub, value, &pty)
     }
     offs.deinit()
@@ -3575,14 +3595,18 @@ fn resolved_variant(ctx: &LowerCtx, span: SourceSpan) u32? {
     }
 }
 
-// The enum a scrutinee type names, peeling one reference.
-fn resolve_enum(ty: &Ty, reg: &NominalRegistry) EnumTarget? {
-    let nr = peel_ref(ty).* match {
-        Nominal(n) => n,
+// The enum a scrutinee type names, peeling one reference. The args list
+// is a fresh copy of the instantiation's child window; lowering-lifetime
+// scratch, like the rest of the pass.
+fn resolve_enum(ctx: &LowerCtx, ty: &Ty, reg: &NominalRegistry) EnumTarget? {
+    let nr = tn(ctx, peel_ref(ctx, ty.*)) match {
+        NNominal(n) => n,
         _ => return null,
     }
+    let args: List(Ty) = list(nr.args.len, ctx.allocator)
+    for i in 0..nr.args.len { args.push(tyit(ctx).child_at(nr.args, i)) }
     return reg.get(nr.id).* match {
-        NomEnum(e) => Some(EnumTarget { def = e, args = nr.args }),
+        NomEnum(e) => Some(EnumTarget { def = e, args = args }),
         _ => null,
     }
 }
@@ -3593,17 +3617,17 @@ type EnumTarget = struct {
 }
 
 fn niche_optional(ctx: &LowerCtx, ty: &Ty) bool {
-    let t = resolve_enum(ty, &ctx.result.nominals)
+    let t = resolve_enum(ctx, ty, &ctx.result.nominals)
     if t.is_none() { return false }
     let et = t.unwrap()
-    return enum_layout(&et.def, &et.args, &ctx.result.nominals, ctx.allocator).is_niche
+    return enum_layout(tyit(ctx), &et.def, &et.args, &ctx.result.nominals, ctx.allocator).is_niche
 }
 
 fn payload_offset(ctx: &LowerCtx, ty: &Ty) usize {
-    let t = resolve_enum(ty, &ctx.result.nominals)
+    let t = resolve_enum(ctx, ty, &ctx.result.nominals)
     if t.is_none() { return 4 as usize }
     let et = t.unwrap()
-    return enum_layout(&et.def, &et.args, &ctx.result.nominals, ctx.allocator).payload_offset
+    return enum_layout(tyit(ctx), &et.def, &et.args, &ctx.result.nominals, ctx.allocator).payload_offset
 }
 
 // Enum variant construction (M7)
@@ -3622,10 +3646,10 @@ fn lower_variant_call(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, call: &CallE
     if call.args.len == 0 { return lower_variant_nullary(ctx, bb, call.span, vnum) }
 
     let ty = node_ty(ctx, call.span)
-    let t = resolve_enum(&ty, &ctx.result.nominals)
+    let t = resolve_enum(ctx, &ty, &ctx.result.nominals)
     if t.is_none() { return unlowerable(ctx) }
     let et = t.unwrap()
-    let el = enum_layout(&et.def, &et.args, &ctx.result.nominals, ctx.allocator)
+    let el = enum_layout(tyit(ctx), &et.def, &et.args, &ctx.result.nominals, ctx.allocator)
 
     // Niche `Some(p)`: the payload pointer is the whole value.
     if el.is_niche {
@@ -3641,7 +3665,7 @@ fn lower_variant_call(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, call: &CallE
     // payload type (substituted through the instantiation) - the
     // memory's truth; a coercion that rewrote an argument node's
     // representation refuses - see `repr_compatible`.
-    let offs = variant_payload_offsets(&et.def, vnum as usize, &et.args, &ctx.result.nominals, ctx.allocator)
+    let offs = variant_payload_offsets(tyit(ctx), &et.def, vnum as usize, &et.args, &ctx.result.nominals, ctx.allocator)
     if offs.len != call.args.len {
         offs.deinit()
         return unlowerable(ctx)
@@ -3656,10 +3680,9 @@ fn lower_variant_call(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, call: &CallE
             Positional(e) => e,
             Named(_) => return unlowerable(ctx),
         }
-        let pty = variant_payload_ty(&et.def, vnum as usize, j, &et.args, ctx.allocator)
+        let pty = variant_payload_ty(tyit(ctx), &et.def, vnum as usize, j, &et.args)
         // A unit payload (`Ok(())`) stores nothing - the tag is the value.
-        let pty_void = pty match { Void => true, _ => false }
-        if pty_void { continue }
+        if pty == TY_VOID { continue }
         let aty = node_ty(ctx, expr_span(pj))
         if !repr_compatible(ctx, &aty, &pty) {
             offs.deinit()
@@ -3668,10 +3691,10 @@ fn lower_variant_call(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, call: &CallE
         let v = lower_expr(ctx, bb, env, pj)
         let fp = bb.gep(slot, Operand.IntConst(offs[j] as i64))
         if is_by_ref(ctx, &pty) {
-            let psize = layout_of(&pty, &ctx.result.nominals, ctx.allocator).size
+            let psize = layout_of(tyit(ctx), pty, &ctx.result.nominals, ctx.allocator).size
             bb.memcpy(fp, v, Operand.IntConst(psize as i64))
         } else {
-            bb.store(ir_of(&pty), v, fp)
+            bb.store(ir_of(ctx, pty), v, fp)
         }
     }
     offs.deinit()
@@ -3684,11 +3707,11 @@ fn lower_variant_call(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, call: &CallE
 // zeroed-buffer form `lower_null` emits.
 fn lower_variant_nullary(ctx: &LowerCtx, bb: &BlockBuilder, span: SourceSpan, vnum: u32) Operand {
     let ty = node_ty(ctx, span)
-    let t = resolve_enum(&ty, &ctx.result.nominals)
+    let t = resolve_enum(ctx, &ty, &ctx.result.nominals)
     if t.is_none() { return unlowerable(ctx) }
 
     let et = t.unwrap()
-    let el = enum_layout(&et.def, &et.args, &ctx.result.nominals, ctx.allocator)
+    let el = enum_layout(tyit(ctx), &et.def, &et.args, &ctx.result.nominals, ctx.allocator)
 
     // The only nullary variant of the niche form is `None` - the null
     // pointer by definition.
@@ -3726,7 +3749,7 @@ fn lower_cast(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, c: &CastExpr) Operan
 
 fn lower_cast_impl(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, c: &CastExpr, src: Ty, dst: Ty) Operand {
     let v = lower_expr(ctx, bb, env, c.operand)
-    if equals(&src, &dst) { return v }
+    if src == dst { return v }
 
     let s_ag = is_by_ref(ctx, &src)
     let d_ag = is_by_ref(ctx, &dst)
@@ -3735,18 +3758,18 @@ fn lower_cast_impl(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, c: &CastExpr, s
         // `{ptr, len}` view (`buf as u8[]`); anything else changes
         // representation and refuses.
         if repr_compatible(ctx, &src, &dst) { return v }
-        let arr = src match {
-            Array(a) => Some(a),
+        let arr = tn(ctx, src) match {
+            NArray(a) => Some(a),
             _ => null,
         }
         if arr.is_some() {
             let a = arr.unwrap()
-            let de = dst match {
-                Nominal(nr) => slice_elem_of(ctx, &nr),
+            let de = tn(ctx, dst) match {
+                NNominal(nn) => slice_elem_of(ctx, &nn),
                 _ => null,
             }
             if de.is_some() {
-                if repr_compatible(ctx, a.elem, &de.unwrap()) {
+                if repr_compatible(ctx, &a.elem, &de.unwrap()) {
                     return build_slice_view(ctx, bb, &dst, v, a.length)
                 }
             }
@@ -3755,22 +3778,22 @@ fn lower_cast_impl(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, c: &CastExpr, s
     }
     if s_ag {
         // Tagged enum -> integer: the discriminant is the value.
-        if !is_int_prim(&dst) { return unlowerable(ctx) }
-        let t = resolve_enum(&src, &ctx.result.nominals)
+        if !is_int_prim(ctx, dst) { return unlowerable(ctx) }
+        let t = resolve_enum(ctx, &src, &ctx.result.nominals)
         if t.is_none() { return unlowerable(ctx) }
         let tag = bb.load(IrType.I32, v)
-        return prim_cast(bb, PrimitiveKind.U32, prim_of(&dst), tag)
+        return prim_cast(bb, PrimitiveKind.U32, prim_kind_of_ty(ctx, dst), tag)
     }
     if d_ag {
         // Integer -> tagged enum: a zeroed slot with the converted
         // discriminant stored over it (payload variants read as zeroed).
-        if !is_int_prim(&src) { return unlowerable(ctx) }
-        let t = resolve_enum(&dst, &ctx.result.nominals)
+        if !is_int_prim(ctx, src) { return unlowerable(ctx) }
+        let t = resolve_enum(ctx, &dst, &ctx.result.nominals)
         if t.is_none() { return unlowerable(ctx) }
         let et = t.unwrap()
-        let el = enum_layout(&et.def, &et.args, &ctx.result.nominals, ctx.allocator)
+        let el = enum_layout(tyit(ctx), &et.def, &et.args, &ctx.result.nominals, ctx.allocator)
         if el.is_niche { return unlowerable(ctx) }
-        let tag = prim_cast(bb, prim_of(&src), PrimitiveKind.U32, v)
+        let tag = prim_cast(bb, prim_kind_of_ty(ctx, src), PrimitiveKind.U32, v)
         let slot = bb.stack_slot(el.size as u64, el.align as u64)
         bb.memset(slot, Operand.IntConst(0), Operand.IntConst(el.size as i64))
         bb.store(IrType.I32, tag, slot)
@@ -3779,19 +3802,19 @@ fn lower_cast_impl(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, c: &CastExpr, s
 
     // Scalar to scalar. Pointer-shaped scalars (refs, fn values, niche
     // optionals) are all FIR `ptr`.
-    let s_ptr = ir_of(&src) match { Ptr => true, _ => false }
-    let d_ptr = ir_of(&dst) match { Ptr => true, _ => false }
+    let s_ptr = ir_of(ctx, src) match { Ptr => true, _ => false }
+    let d_ptr = ir_of(ctx, dst) match { Ptr => true, _ => false }
     if s_ptr and d_ptr { return v }
     if s_ptr {
-        if !is_int_prim(&dst) { return unlowerable(ctx) }
-        return bb.ptrtoint(IrType.Ptr, prim_ir(prim_of(&dst)), v)
+        if !is_int_prim(ctx, dst) { return unlowerable(ctx) }
+        return bb.ptrtoint(IrType.Ptr, prim_ir(prim_kind_of_ty(ctx, dst)), v)
     }
     if d_ptr {
-        if !is_int_prim(&src) { return unlowerable(ctx) }
-        return bb.inttoptr(prim_ir(prim_of(&src)), IrType.Ptr, v)
+        if !is_int_prim(ctx, src) { return unlowerable(ctx) }
+        return bb.inttoptr(prim_ir(prim_kind_of_ty(ctx, src)), IrType.Ptr, v)
     }
-    let sp = src match { Prim(p) => Some(p), _ => null }
-    let dp = dst match { Prim(p) => Some(p), _ => null }
+    let sp = tn(ctx, src) match { NPrim(p) => Some(p), _ => null }
+    let dp = tn(ctx, dst) match { NPrim(p) => Some(p), _ => null }
     if sp.is_none() or dp.is_none() { return unlowerable(ctx) }
     // `x as bool` would need C's `!= 0` semantics, not a truncation;
     // zero in-tree sites - refuse rather than mis-lower.
@@ -3801,9 +3824,9 @@ fn lower_cast_impl(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, c: &CastExpr, s
     return prim_cast(bb, sp.unwrap(), dp.unwrap(), v)
 }
 
-fn is_int_prim(ty: &Ty) bool {
-    return ty.* match {
-        Prim(p) => p match {
+fn is_int_prim(ctx: &LowerCtx, ty: Ty) bool {
+    return tn(ctx, ty) match {
+        NPrim(p) => p match {
             F32 => false,
             F64 => false,
             _ => true,
@@ -3855,14 +3878,14 @@ fn prim_cast(bb: &BlockBuilder, s: PrimitiveKind, d: PrimitiveKind, v: Operand) 
 // result is the same pointer either way.
 fn lower_coalesce(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, c: &CoalesceExpr) Operand {
     let lty = node_ty(ctx, expr_span(c.lhs))
-    let t = resolve_enum(&lty, &ctx.result.nominals)
+    let t = resolve_enum(ctx, &lty, &ctx.result.nominals)
     if t.is_none() { return unlowerable(ctx) }
     let et = t.unwrap()
-    let el = enum_layout(&et.def, &et.args, &ctx.result.nominals, ctx.allocator)
+    let el = enum_layout(tyit(ctx), &et.def, &et.args, &ctx.result.nominals, ctx.allocator)
 
     let result_ty = node_ty(ctx, c.span)
-    let ir = ir_of(&result_ty)
-    let chains = equals(&result_ty, &lty)
+    let ir = ir_of(ctx, result_ty)
+    let chains = result_ty == lty
 
     let lhs = lower_expr(ctx, bb, env, c.lhs)
     let present = if el.is_niche {
@@ -3884,7 +3907,7 @@ fn lower_coalesce(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, c: &CoalesceExpr
     let kept = lhs
     if !chains and !el.is_niche {
         let addr = bb.gep(lhs, Operand.IntConst(el.payload_offset as i64))
-        if is_by_ref(ctx, &result_ty) { kept = addr } else { kept = bb.load(ir_of(&result_ty), addr) }
+        if is_by_ref(ctx, &result_ty) { kept = addr } else { kept = bb.load(ir_of(ctx, result_ty), addr) }
     }
     let some_args: List(Operand) = list(1, ctx.allocator)
     some_args.push(kept)
@@ -3911,29 +3934,29 @@ fn lower_coalesce(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, c: &CoalesceExpr
 fn lower_null_propagation(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, np: &NullPropagationExpr) Operand {
     let reg = &ctx.result.nominals
     let rty = node_ty(ctx, expr_span(np.receiver))
-    let t = resolve_enum(&rty, reg)
+    let t = resolve_enum(ctx, &rty, reg)
     if t.is_none() { return unlowerable_why(ctx, "`?.` receiver shape") }
     let et = t.unwrap()
     if et.args.len != 1 { return unlowerable_why(ctx, "`?.` receiver shape") }
-    let el = enum_layout(&et.def, &et.args, reg, ctx.allocator)
+    let el = enum_layout(tyit(ctx), &et.def, &et.args, reg, ctx.allocator)
     if el.is_niche { return unlowerable_why(ctx, "`?.` niche receiver") }
 
     // The projected field's offset and type inside the payload struct.
     let inner = et.args[0]
-    let target = resolve_struct(&inner, reg, ctx.allocator)
+    let target = resolve_struct(ctx, &inner, reg, ctx.allocator)
     if target.is_none() { return unlowerable_why(ctx, "`?.` payload shape") }
     let st = target.unwrap()
     let di = field_index(&st.def, np.member)
     if di < 0 { return unlowerable_why(ctx, "`?.` member unresolved") }
     let off = st.layout.offsets[di as usize]
-    let fty = field_ty(&st.def, di as usize, &st.args, ctx.allocator)
+    let fty = field_ty(tyit(ctx), &st.def, di as usize, &st.args)
 
     let res_ty = node_ty(ctx, np.span)
-    let rt = resolve_enum(&res_ty, reg)
+    let rt = resolve_enum(ctx, &res_ty, reg)
     if rt.is_none() { return unlowerable_why(ctx, "`?.` result shape") }
     let ret2 = rt.unwrap()
-    let rel = enum_layout(&ret2.def, &ret2.args, reg, ctx.allocator)
-    let flattens = equals(&fty, &res_ty)
+    let rel = enum_layout(tyit(ctx), &ret2.def, &ret2.args, reg, ctx.allocator)
+    let flattens = fty == res_ty
 
     let recv = lower_expr(ctx, bb, env, np.receiver)
     let tag = bb.load(IrType.I32, recv)
@@ -3942,7 +3965,7 @@ fn lower_null_propagation(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, np: &Nul
     let fb = bb.fb
     let some_bb = fb.block(fb.fresh_label("np_some"))
     let none_bb = fb.block(fb.fresh_label("np_none"))
-    let join = fb.block(fb.fresh_label("np_join"), ir_of(&res_ty))
+    let join = fb.block(fb.fresh_label("np_join"), ir_of(ctx, res_ty))
     bb.br_if(present, some_bb.label(), none_bb.label())
 
     bb.move_to(&some_bb)
@@ -3960,10 +3983,10 @@ fn lower_null_propagation(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, np: &Nul
         bb.store(IrType.I32, Operand.IntConst(1), slot)
         let pp = bb.gep(slot, Operand.IntConst(rel.payload_offset as i64))
         if is_by_ref(ctx, &fty) {
-            let fsize = layout_of(&fty, reg, ctx.allocator).size
+            let fsize = layout_of(tyit(ctx), fty, reg, ctx.allocator).size
             bb.memcpy(pp, faddr, Operand.IntConst(fsize as i64))
         } else {
-            bb.store(ir_of(&fty), bb.load(ir_of(&fty), faddr), pp)
+            bb.store(ir_of(ctx, fty), bb.load(ir_of(ctx, fty), faddr), pp)
         }
         kept = slot
     }
@@ -4013,12 +4036,12 @@ fn lower_try(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, t: &TryExpr) Operand 
     // The TryResult instantiation comes from the callee's declared return
     // - the memory's truth for the tag test and payload access. TryResult
     // is never niche, so the tagged layout always applies.
-    let tr = resolve_enum(&sig.ret, &ctx.result.nominals)
+    let tr = resolve_enum(ctx, &sig.ret, &ctx.result.nominals)
     if tr.is_none() { return unlowerable(ctx) }
     let et = tr.unwrap()
     if et.def.fqn != FQN_TRY_RESULT { return unlowerable(ctx) }
     if et.args.len != 2 { return unlowerable(ctx) }
-    let el = enum_layout(&et.def, &et.args, &ctx.result.nominals, ctx.allocator)
+    let el = enum_layout(tyit(ctx), &et.def, &et.args, &ctx.result.nominals, ctx.allocator)
 
     let cont_ty = et.args[0]
     let ret_ty = et.args[1]
@@ -4051,7 +4074,7 @@ fn lower_try(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, t: &TryExpr) Operand 
         emit_defers_down_to(ctx, bb, env, 0)
         bb.ret_void()
     } else {
-        let rv = bb.load(ir_of(&ret_ty), raddr)
+        let rv = bb.load(ir_of(ctx, ret_ty), raddr)
         emit_defers_down_to(ctx, bb, env, 0)
         bb.ret(rv)
     }
@@ -4059,7 +4082,7 @@ fn lower_try(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, t: &TryExpr) Operand 
     bb.move_to(&cont_bb)
     let paddr = bb.gep(res, Operand.IntConst(el.payload_offset as i64))
     if is_by_ref(ctx, &cont_ty) { return paddr }
-    return bb.load(ir_of(&cont_ty), paddr)
+    return bb.load(ir_of(ctx, cont_ty), paddr)
 }
 
 // Assignment and address-of
@@ -4095,10 +4118,10 @@ fn lower_assignment(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, a: &Assignment
     if is_by_ref(ctx, &ty) {
         // Aggregates are addressed by pointer, so `v` is the source address
         // and the assignment is a byte copy.
-        let lay = layout_of(&ty, &ctx.result.nominals, ctx.allocator)
+        let lay = layout_of(tyit(ctx), ty, &ctx.result.nominals, ctx.allocator)
         bb.memcpy(dst.unwrap(), v, Operand.IntConst(lay.size as i64))
     } else {
-        bb.store(ir_of(&ty), v, dst.unwrap())
+        bb.store(ir_of(ctx, ty), v, dst.unwrap())
     }
     return Operand.IntConst(0)
 }
@@ -4114,7 +4137,7 @@ fn lower_address_of(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, a: &AddressOfE
     let ty = node_ty(ctx, expr_span(a.operand))
     let v = lower_expr(ctx, bb, env, a.operand)
     if is_by_ref(ctx, &ty) { return v }
-    let ir = ir_of(&ty)
+    let ir = ir_of(ctx, ty)
     let slot = alloc_slot(bb, ir)
     bb.store(ir, v, slot)
     return slot
@@ -4134,7 +4157,7 @@ fn lower_deref(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, d: &DereferenceExpr
     let ty = node_ty(ctx, d.span)
     if !repr_compatible(ctx, &src, &ty) { return unlowerable(ctx) }
     if is_by_ref(ctx, &src) { return t.1 }
-    return bb.load(ir_of(&src), t.1)
+    return bb.load(ir_of(ctx, src), t.1)
 }
 
 // What `d.operand.*` names: (the pointee's type, its address). A
@@ -4148,7 +4171,7 @@ fn deref_target(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, d: &DereferenceExp
     let op = ctx_operator(ctx, node_id_of(d.span))
     if op.is_none() {
         let oty = node_ty(ctx, expr_span(d.operand))
-        return Some((peel_ref(&oty).*, lower_expr(ctx, bb, env, d.operand)))
+        return Some((peel_ref(ctx, oty), lower_expr(ctx, bb, env, d.operand)))
     }
     let o = op.unwrap()
     let sym = op_symbol(ctx, &o)
@@ -4160,7 +4183,7 @@ fn deref_target(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, d: &DereferenceExp
         Some(a) => a,
         None => lower_expr(ctx, bb, env, d.operand),
     }
-    return Some((peel_ref(&g.ret).*, call_hop(ctx, bb, sym.unwrap(), &g, self_addr)))
+    return Some((peel_ref(ctx, g.ret), call_hop(ctx, bb, sym.unwrap(), &g, self_addr)))
 }
 
 fn lower_place(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, expr: &Expr) Operand? {
@@ -4201,7 +4224,7 @@ fn lower_base_address(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, base: &Expr)
             // `a.vtable.alloc` must gep into the vtable, not into the
             // field that stores its address.
             let bty = node_ty(ctx, expr_span(base))
-            let is_ref = bty match { Ref(_) => true, _ => false }
+            let is_ref = tn(ctx, bty) match { NRef(_) => true, _ => false }
             if is_ref { return bb.load(IrType.Ptr, p.unwrap()) }
             return p.unwrap()
         }
@@ -4242,21 +4265,24 @@ fn member_field(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, ma: &MemberAccessE
     let recv_ty = node_ty(ctx, expr_span(ma.receiver))
     // Tuple projection `t.0` (M11): the "field" is an element index into
     // the tuple layout. Reference-peeled like struct receivers are.
-    let telems = recv_ty match {
-        Tuple(es) => Some(es),
-        Ref(inner) => inner.* match {
-            Tuple(es2) => Some(es2),
+    let telems = tn(ctx, recv_ty) match {
+        NTuple(es) => Some(es),
+        NRef(inner) => tn(ctx, inner) match {
+            NTuple(es2) => Some(es2),
             _ => null,
         },
         _ => null,
     }
     if telems.is_some() {
-        let tys = telems.unwrap()
+        let espan = telems.unwrap()
         let idx = digits_index(ma.member)
         if idx.is_none() { return null }
         let i = idx.unwrap()
-        if i >= tys.len { return null }
-        let sl = tuple_layout(&tys, reg, ctx.allocator)
+        if i >= espan.len { return null }
+        let tys: List(Ty) = list(espan.len, ctx.allocator)
+        defer tys.deinit()
+        for k in 0..espan.len { tys.push(tyit(ctx).child_at(espan, k)) }
+        let sl = tuple_layout(tyit(ctx), &tys, reg, ctx.allocator)
         let base = lower_base_address(ctx, bb, env, ma.receiver)
         return Some(MemberField {
             addr = bb.gep(base, Operand.IntConst(sl.offsets[i] as i64)),
@@ -4269,8 +4295,8 @@ fn member_field(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, ma: &MemberAccessE
     let depth: usize = 0
     let peeled = recv_ty
     loop {
-        let inner = peeled match {
-            Ref(i) => Some(i.*),
+        let inner = tn(ctx, peeled) match {
+            NRef(i) => Some(i),
             _ => null,
         }
         if inner.is_none() { break }
@@ -4283,13 +4309,13 @@ fn member_field(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, ma: &MemberAccessE
     let hops = ctx_receiver_deref(ctx, node_id_of(ma.span))
     if hops.is_some() { return deref_member_field(ctx, bb, env, ma, hops.unwrap()) }
 
-    let target = resolve_struct(&peeled, reg, ctx.allocator)
+    let target = resolve_struct(ctx, &peeled, reg, ctx.allocator)
     if target.is_none() { return null }
     let st = target.unwrap()
     let di = field_index(&st.def, ma.member)
     if di < 0 { return null }
     let off = st.layout.offsets[di as usize]
-    let fty = field_ty(&st.def, di as usize, &st.args, ctx.allocator)
+    let fty = field_ty(tyit(ctx), &st.def, di as usize, &st.args)
 
     let base = lower_base_address(ctx, bb, env, ma.receiver)
     for _k in 1..depth {
@@ -4315,14 +4341,14 @@ fn deref_member_field(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, ma: &MemberA
             None => return null,
         }
         cur = call_hop(ctx, bb, c.0, &c.1, cur)
-        inner = c.1.ret match {
-            Ref(t) => Some(t.*),
+        inner = tn(ctx, c.1.ret) match {
+            NRef(t) => Some(t),
             _ => null,
         }
     }
     if inner.is_none() { return null }
     let it = inner.unwrap()
-    let st = resolve_struct(&it, &ctx.result.nominals, ctx.allocator) match {
+    let st = resolve_struct(ctx, &it, &ctx.result.nominals, ctx.allocator) match {
         Some(s) => s,
         None => return null,
     }
@@ -4331,7 +4357,7 @@ fn deref_member_field(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, ma: &MemberA
     let off = st.layout.offsets[di as usize]
     return Some(MemberField {
         addr = bb.gep(cur, Operand.IntConst(off as i64)),
-        fty = field_ty(&st.def, di as usize, &st.args, ctx.allocator),
+        fty = field_ty(tyit(ctx), &st.def, di as usize, &st.args),
     })
 }
 
@@ -4369,14 +4395,14 @@ fn lower_member(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, ma: &MemberAccessE
     // is the array's address - which its value already is (M11).
     if ma.member == "len" {
         let rt = node_ty(ctx, expr_span(ma.receiver))
-        rt match {
-            Array(a) => return Operand.IntConst(a.length as i64),
+        tn(ctx, rt) match {
+            NArray(a) => return Operand.IntConst(a.length as i64),
             _ => {},
         }
     }
     if ma.member == "ptr" {
         let rt2 = node_ty(ctx, expr_span(ma.receiver))
-        let is_arr = rt2 match { Array(_) => true, _ => false }
+        let is_arr = tn(ctx, rt2) match { NArray(_) => true, _ => false }
         if is_arr { return lower_expr(ctx, bb, env, ma.receiver) }
     }
     let f = member_field(ctx, bb, env, ma)
@@ -4385,7 +4411,7 @@ fn lower_member(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, ma: &MemberAccessE
     let mty = node_ty(ctx, ma.span)
     if !repr_compatible(ctx, &mf.fty, &mty) { return unlowerable_why(ctx, "member repr mismatch") }
     if is_by_ref(ctx, &mf.fty) { return mf.addr }
-    return bb.load(ir_of(&mf.fty), mf.addr)
+    return bb.load(ir_of(ctx, mf.fty), mf.addr)
 }
 
 // Indexing (M5)
@@ -4424,7 +4450,7 @@ fn lower_index(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, ix: &IndexExpr) Ope
         // FIR addresses aggregates by pointer, so an aggregate element is
         // its own address - `xs[i].f` geps on without an intermediate copy.
         if is_by_ref(ctx, &ty) { return addr }
-        return bb.load(ir_of(&ty), addr)
+        return bb.load(ir_of(ctx, ty), addr)
     }
 
     // Built-in indexing: the memory's type is the base's element type, so
@@ -4440,7 +4466,7 @@ fn lower_index(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, ix: &IndexExpr) Ope
     let addr = builtin_element_address(ctx, bb, env, ix)
     if addr.is_none() { return unlowerable(ctx) }
     if is_by_ref(ctx, &ety) { return addr.unwrap() }
-    return bb.load(ir_of(&ety), addr.unwrap())
+    return bb.load(ir_of(ctx, ety), addr.unwrap())
 }
 
 // The element's address, when it has one. Null for a value-form operator
@@ -4497,7 +4523,7 @@ fn set_index_operator_call(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, ix: &In
     if sig_opt.is_none() { return unlowerable_why(ctx, "set-index operator without sig") }
     let sig = sig_opt.unwrap()
     if sig.params.len != 3 { return unlowerable(ctx) }
-    const self_is_ref = sig.params[0] match { Ref(_) => true, _ => false }
+    const self_is_ref = tn(ctx, sig.params[0]) match { NRef(_) => true, _ => false }
     let recv = if self_is_ref {
         lower_base_address(ctx, bb, env, ix.receiver)
     } else {
@@ -4550,11 +4576,11 @@ fn lower_partial_range_arg(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, ix: &In
 // a slice-shaped nominal (Slice, String) loads its `len` field through
 // the receiver's address.
 fn receiver_len(ctx: &LowerCtx, bb: &BlockBuilder, base_ty: &Ty, recv: Operand) Operand? {
-    base_ty.* match {
-        Array(a) => return Some(Operand.IntConst(a.length as i64)),
+    tn(ctx, base_ty.*) match {
+        NArray(a) => return Some(Operand.IntConst(a.length as i64)),
         _ => {},
     }
-    let st_opt = resolve_struct(base_ty, &ctx.result.nominals, ctx.allocator)
+    let st_opt = resolve_struct(ctx, base_ty, &ctx.result.nominals, ctx.allocator)
     if st_opt.is_none() { return null }
     let st = st_opt.unwrap()
     let li = field_index(&st.def, "len")
@@ -4577,7 +4603,7 @@ fn builtin_element_address(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, ix: &In
     let base = builtin_base_pointer(ctx, bb, env, ix.receiver, &base_ty)
     if base.is_none() { return null }
 
-    let stride = layout_of(&elem.unwrap(), &ctx.result.nominals, ctx.allocator).size
+    let stride = layout_of(tyit(ctx), elem.unwrap(), &ctx.result.nominals, ctx.allocator).size
     let i = lower_expr(ctx, bb, env, ix.index)
     let off = bb.imul(IrType.I64, i, Operand.IntConst(stride as i64))
     return Some(bb.gep(base.unwrap(), off))
@@ -4587,12 +4613,12 @@ fn builtin_element_address(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, ix: &In
 // slice is a `{ptr, len}` view, so the pointer is loaded out of its field.
 fn builtin_base_pointer(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, recv: &Expr, base_ty: &Ty) Operand? {
     let addr = lower_base_address(ctx, bb, env, recv)
-    let is_array = peel_ref(base_ty).* match { Array(_) => true, _ => false }
+    let is_array = tn(ctx, peel_ref(ctx, base_ty.*)) match { NArray(_) => true, _ => false }
     if is_array { return Some(addr) }
 
     // Field offsets come from the layout rather than being assumed zero:
     // `auto` repr is free to reorder a struct'''s fields.
-    let st = resolve_struct(base_ty, &ctx.result.nominals, ctx.allocator)
+    let st = resolve_struct(ctx, base_ty, &ctx.result.nominals, ctx.allocator)
     if st.is_none() { return null }
     let s = st.unwrap()
     let fi = field_index(&s.def, "ptr")
@@ -4605,19 +4631,19 @@ fn builtin_base_pointer(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, recv: &Exp
 // well-known `Slice`. Null for everything else, which means the checker
 // either resolved an operator or reported the type as non-indexable.
 fn builtin_elem_ty(ctx: &LowerCtx, ty: &Ty) Ty? {
-    return peel_ref(ty).* match {
-        Array(a) => Some(a.elem.*),
-        Nominal(n) => slice_element_ty(ctx, &n),
+    return tn(ctx, peel_ref(ctx, ty.*)) match {
+        NArray(a) => Some(a.elem),
+        NNominal(n) => slice_element_ty(ctx, &n),
         _ => null,
     }
 }
 
-fn slice_element_ty(ctx: &LowerCtx, n: &NominalRef) Ty? {
+fn slice_element_ty(ctx: &LowerCtx, n: &NNominalNode) Ty? {
     let id = ctx.result.nominals.by_fqn.get(FQN_SLICE)
     if id.is_none() { return null }
     if id.unwrap() != n.id { return null }
     if n.args.len != 1 { return null }
-    return Some(n.args[0])
+    return Some(tyit(ctx).child_at(n.args, 0))
 }
 
 // True when the index selects a sub-range rather than one element. Both
@@ -4625,8 +4651,8 @@ fn slice_element_ty(ctx: &LowerCtx, n: &NominalRef) Ty? {
 fn is_range_index(ctx: &LowerCtx, ix: &IndexExpr) bool {
     let syntactic = ix.index.* match { Range(_) => true, _ => false }
     if syntactic { return true }
-    let n = node_ty(ctx, expr_span(ix.index)) match {
-        Nominal(nr) => nr,
+    let n = tn(ctx, node_ty(ctx, expr_span(ix.index))) match {
+        NNominal(nn) => nn,
         _ => return false,
     }
     let id = ctx.result.nominals.by_fqn.get(FQN_RANGE)
@@ -4634,13 +4660,10 @@ fn is_range_index(ctx: &LowerCtx, ix: &IndexExpr) bool {
     return id.unwrap() == n.id
 }
 
-// One reference peeled off, as a borrow. The payload of `Ref` is already
-// a `&Ty` into the same arena as `ty`, so both arms outlive the call - and
-// returning by value would copy a `Nominal`'s argument list on every
-// layout query.
-fn peel_ref(ty: &Ty) &Ty {
-    return ty.* match {
-        Ref(inner) => inner,
+// One reference peeled off. A handle copy either way.
+fn peel_ref(ctx: &LowerCtx, ty: Ty) Ty {
+    return tn(ctx, ty) match {
+        NRef(inner) => inner,
         _ => ty,
     }
 }
@@ -4648,11 +4671,13 @@ fn peel_ref(ty: &Ty) &Ty {
 // Resolve a value's static type to the struct it names, peeling one
 // reference. Null for enums, scalars, and unresolved types - the caller
 // emits its placeholder rather than crash.
-fn resolve_struct(ty: &Ty, reg: &NominalRegistry, allocator: &Allocator?) StructTarget? {
-    let nr = peel_ref(ty).* match {
-        Nominal(n) => n,
+fn resolve_struct(ctx: &LowerCtx, ty: &Ty, reg: &NominalRegistry, allocator: &Allocator?) StructTarget? {
+    let nr = tn(ctx, peel_ref(ctx, ty.*)) match {
+        NNominal(n) => n,
         _ => return null,
     }
+    let args: List(Ty) = list(nr.args.len, allocator)
+    for i in 0..nr.args.len { args.push(tyit(ctx).child_at(nr.args, i)) }
     return reg.get(nr.id).* match {
         NomStruct(s) => {
             // `Type(T)` values ARE TypeInfo (minimal RTTI, M11): field
@@ -4662,14 +4687,14 @@ fn resolve_struct(ty: &Ty, reg: &NominalRegistry, allocator: &Allocator?) Struct
                 if ti.is_some() {
                     reg.get(ti.unwrap()).* match {
                         NomStruct(ts) => {
-                            let no_args: List(Ty) = list(0, allocator)
-                            return Some(StructTarget { def = ts, layout = struct_layout(&ts, &no_args, reg, allocator), args = no_args })
+                            args.clear()
+                            return Some(StructTarget { def = ts, layout = struct_layout(tyit(ctx), &ts, &args, reg, allocator), args = args })
                         },
                         _ => {},
                     }
                 }
             }
-            Some(StructTarget { def = s, layout = struct_layout(&s, &nr.args, reg, allocator), args = nr.args })
+            Some(StructTarget { def = s, layout = struct_layout(tyit(ctx), &s, &args, reg, allocator), args = args })
         },
         _ => null,
     }
@@ -4691,15 +4716,15 @@ fn field_index(def: &StructDef, name: String) i64 {
 // pointer-niche `Option(&T)` is not - its value IS the payload pointer,
 // held, stored, and passed like any scalar.
 fn is_by_ref(ctx: &LowerCtx, ty: &Ty) bool {
-    if !is_aggregate(ty) { return false }
+    if !is_aggregate(tyit(ctx), ty.*) { return false }
     return !niche_optional(ctx, ty)
 }
 
 // FIR type of a value of `ty`. Aggregates - including the niche optional,
 // whose value is a pointer - are `ptr`; scalars map through `ty_to_ir`.
-fn ir_of(ty: &Ty) IrType {
-    if is_aggregate(ty) { return IrType.Ptr }
-    return ty_to_ir(ty)
+fn ir_of(ctx: &LowerCtx, ty: Ty) IrType {
+    if is_aggregate(tyit(ctx), ty) { return IrType.Ptr }
+    return ty_to_ir(ctx, ty)
 }
 
 // The by-value C type for an aggregate crossing a FOREIGN boundary, or null
@@ -4708,19 +4733,19 @@ fn ir_of(ty: &Ty) IrType {
 // single authority on whether an aggregate may cross, so the call site and
 // the emitted definition can never disagree about it.
 fn agg_type_of(ctx: &LowerCtx, ty: &Ty) AggType? {
-    if !is_aggregate(ty) { return null }
+    if !is_aggregate(tyit(ctx), ty.*) { return null }
     // A pointer-niche `Option(&T)` is an aggregate by shape but a bare
     // pointer by representation - it crosses as `ptr`, not as a struct.
     if niche_optional(ctx, ty) { return null }
-    if !agg_abi_safe(ty, &ctx.result.nominals) { return null }
-    let fqn = ty.* match {
-        Nominal(n) => ctx.result.nominals.get(n.id).* match {
+    if !agg_abi_safe(tyit(ctx), ty.*, &ctx.result.nominals) { return null }
+    let fqn = tn(ctx, ty.*) match {
+        NNominal(n) => ctx.result.nominals.get(n.id).* match {
             NomStruct(sd) => sd.fqn,
             _ => return null,
         },
         _ => return null,
     }
-    let lay = layout_of(ty, &ctx.result.nominals, ctx.allocator)
+    let lay = layout_of(tyit(ctx), ty.*, &ctx.result.nominals, ctx.allocator)
     return Some(AggType {
         name = agg_c_name(ctx, fqn),
         size = lay.size,
@@ -4731,8 +4756,8 @@ fn agg_type_of(ctx: &LowerCtx, ty: &Ty) AggType? {
 // The struct's members as the backend should write them. Pure - registering
 // them on the module is `register_agg`'s job - so validation can call it.
 fn agg_fields_of(ctx: &LowerCtx, ty: &Ty) List(AggField)? {
-    let sd = ty.* match {
-        Nominal(n) => ctx.result.nominals.get(n.id).* match {
+    let sd = tn(ctx, ty.*) match {
+        NNominal(n) => ctx.result.nominals.get(n.id).* match {
             NomStruct(d) => d,
             _ => return null,
         },
@@ -4753,20 +4778,20 @@ fn agg_fields_of(ctx: &LowerCtx, ty: &Ty) List(AggField)? {
 // One struct member. An array keeps its element type and length; a nested
 // aggregate is referenced by name; everything else is its FIR scalar.
 fn agg_field_of(ctx: &LowerCtx, ty: &Ty) AggField? {
-    let elem = ty.* match {
-        Array(a) => a.elem,
-        _ => ty,
+    let elem: Ty = tn(ctx, ty.*) match {
+        NArray(a) => a.elem,
+        _ => ty.*,
     }
-    let count: usize = ty.* match {
-        Array(a) => a.length,
+    let count: usize = tn(ctx, ty.*) match {
+        NArray(a) => a.length,
         _ => 1,
     }
-    if is_aggregate(elem) and !niche_optional(ctx, elem) {
-        const nested = agg_type_of(ctx, elem)
+    if is_aggregate(tyit(ctx), elem) and !niche_optional(ctx, &elem) {
+        const nested = agg_type_of(ctx, &elem)
         if nested.is_none() { return null }
         return Some(AggField { ty = IrType.Agg(nested.unwrap()), count = count })
     }
-    return Some(AggField { ty = ir_of(elem), count = count })
+    return Some(AggField { ty = ir_of(ctx, elem), count = count })
 }
 
 // Register `ty`'s C definition on the module, and every nested aggregate it
@@ -4775,8 +4800,8 @@ fn agg_field_of(ctx: &LowerCtx, ty: &Ty) AggField? {
 fn register_agg(m: &IrModule, ctx: &LowerCtx, ty: &Ty) AggType? {
     const h = agg_type_of(ctx, ty)
     if h.is_none() { return null }
-    let sd = ty.* match {
-        Nominal(n) => ctx.result.nominals.get(n.id).* match {
+    let sd = tn(ctx, ty.*) match {
+        NNominal(n) => ctx.result.nominals.get(n.id).* match {
             NomStruct(d) => d,
             _ => return null,
         },
@@ -4792,12 +4817,12 @@ fn register_agg(m: &IrModule, ctx: &LowerCtx, ty: &Ty) AggType? {
             fields.deinit()
             return null
         }
-        const elem = sd.fields[i].ty match {
-            Array(a) => a.elem,
-            _ => &sd.fields[i].ty,
+        const elem: Ty = tn(ctx, sd.fields[i].ty) match {
+            NArray(a) => a.elem,
+            _ => sd.fields[i].ty,
         }
-        if is_aggregate(elem) and !niche_optional(ctx, elem) {
-            let _n = register_agg(m, ctx, elem)
+        if is_aggregate(tyit(ctx), elem) and !niche_optional(ctx, &elem) {
+            let _n = register_agg(m, ctx, &elem)
         }
         fields.push(f.unwrap())
     }
@@ -4859,7 +4884,7 @@ fn agg_c_name(ctx: &LowerCtx, fqn: String) String {
 //     its data pointer) changes representation. Emitting the bytes as-is
 //     would be silently wrong, so the caller refuses.
 fn repr_compatible(ctx: &LowerCtx, src: &Ty, dst: &Ty) bool {
-    if equals(src, dst) { return true }
+    if src.* == dst.* { return true }
     let sa = is_by_ref(ctx, src)
     let da = is_by_ref(ctx, dst)
     if sa != da { return false }
@@ -4876,8 +4901,8 @@ fn type_typeinfo_pair(ctx: &LowerCtx, a: &Ty, b: &Ty) bool {
 }
 
 fn nominal_fqn_is(ctx: &LowerCtx, ty: &Ty, fqn: String) bool {
-    let nr = ty.* match {
-        Nominal(n) => n,
+    let nr = tn(ctx, ty.*) match {
+        NNominal(n) => n,
         _ => return false,
     }
     return ctx.result.nominals.get(nr.id).* match {
@@ -4893,8 +4918,8 @@ fn string_byte_slice_pair(ctx: &LowerCtx, a: &Ty, b: &Ty) bool {
 }
 
 fn is_string_ty(ctx: &LowerCtx, ty: &Ty) bool {
-    let nr = ty.* match {
-        Nominal(n) => n,
+    let nr = tn(ctx, ty.*) match {
+        NNominal(n) => n,
         _ => return false,
     }
     let id = ctx.result.nominals.by_fqn.get(FQN_STRING)
@@ -4903,18 +4928,15 @@ fn is_string_ty(ctx: &LowerCtx, ty: &Ty) bool {
 }
 
 fn is_byte_slice_ty(ctx: &LowerCtx, ty: &Ty) bool {
-    let nr = ty.* match {
-        Nominal(n) => n,
+    let nr = tn(ctx, ty.*) match {
+        NNominal(n) => n,
         _ => return false,
     }
     let id = ctx.result.nominals.by_fqn.get(FQN_SLICE)
     if id.is_none() { return false }
     if id.unwrap() != nr.id { return false }
     if nr.args.len != 1 { return false }
-    return nr.args[0] match {
-        Prim(p) => p match { U8 => true, _ => false },
-        _ => false,
-    }
+    return tyit(ctx).child_at(nr.args, 0) == prim_of(PrimitiveKind.U8)
 }
 
 fn lower_literal(ctx: &LowerCtx, bb: &BlockBuilder, l: &LiteralExpr) Operand {
@@ -4930,7 +4952,7 @@ fn lower_literal(ctx: &LowerCtx, bb: &BlockBuilder, l: &LiteralExpr) Operand {
             // would wrap the double in integer arithmetic - silently wrong
             // bytes, so refuse instead.
             let ty = node_ty(ctx, l.span)
-            if !is_float(prim_of(&ty)) { return unlowerable(ctx) }
+            if !is_float(prim_kind_of_ty(ctx, ty)) { return unlowerable(ctx) }
         },
         _ => {},
     }
@@ -5020,7 +5042,7 @@ fn flush_strings(m: &IrModule, ctx: &LowerCtx) {
 fn lower_null(ctx: &LowerCtx, bb: &BlockBuilder, ty: &Ty) Operand {
     if niche_optional(ctx, ty) { return Operand.NullPtr }
     if is_by_ref(ctx, ty) {
-        let lay = layout_of(ty, &ctx.result.nominals, ctx.allocator)
+        let lay = layout_of(tyit(ctx), ty.*, &ctx.result.nominals, ctx.allocator)
         let slot = bb.stack_slot(lay.size as u64, lay.align as u64)
         bb.memset(slot, Operand.IntConst(0), Operand.IntConst(lay.size as i64))
         return slot
@@ -5122,7 +5144,7 @@ fn lower_operator_binary(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, b: &Binar
         // this lowering stores declaration indices as tags (explicit
         // variant values like `Less = -1` are not honored yet; see
         // docs/known-issues.md), so the test must use the same scheme.
-        let t = resolve_enum(&g.ret, &ctx.result.nominals)
+        let t = resolve_enum(ctx, &g.ret, &ctx.result.nominals)
         if t.is_none() { return unlowerable(ctx) }
         let et = t.unwrap()
         let less = variant_index_of(&et.def, "Less")
@@ -5157,8 +5179,8 @@ fn variant_index_of(def: &EnumDef, name: String) u32? {
 }
 
 fn payloadless_enum_ty(ctx: &LowerCtx, ty: &Ty) bool {
-    return ty.* match {
-        Nominal(nr) => enum_payloadless(&ctx.result.nominals, nr.id),
+    return tn(ctx, ty.*) match {
+        NNominal(nn) => enum_payloadless(&ctx.result.nominals, nn.id),
         _ => false,
     }
 }
@@ -5203,15 +5225,15 @@ fn lower_binary(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, b: &BinaryExpr) Op
     // does char* math, so the scaling the reference gets from typed C
     // pointers must be explicit here. Emitting an unscaled add was a
     // silent miscompile for any pointee wider than a byte.
-    let l_inner = lty match {
-        Ref(i) => Some(i),
+    let l_inner = tn(ctx, lty) match {
+        NRef(i) => Some(i),
         _ => null,
     }
     if l_inner.is_some() {
         let is_addsub = b.op match { Add => true, Sub => true, _ => false }
-        let rhs_int = is_int_prim(&rty)
+        let rhs_int = is_int_prim(ctx, rty)
         if is_addsub and rhs_int {
-            let esize = layout_of(l_inner.unwrap(), &ctx.result.nominals, ctx.allocator).size
+            let esize = layout_of(tyit(ctx), l_inner.unwrap(), &ctx.result.nominals, ctx.allocator).size
             let base = lower_expr(ctx, bb, env, b.lhs)
             let count = lower_expr(ctx, bb, env, b.rhs)
             let off = bb.imul(IrType.I64, count, Operand.IntConst(esize as i64))
@@ -5224,14 +5246,14 @@ fn lower_binary(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, b: &BinaryExpr) Op
     let lhs = lower_expr(ctx, bb, env, b.lhs)
     let rhs = lower_expr(ctx, bb, env, b.rhs)
     let ty = node_ty(ctx, b.span)
-    let ir = ty_to_ir(&ty)
-    let p = prim_of(&ty)
+    let ir = ty_to_ir(ctx, ty)
+    let p = prim_kind_of_ty(ctx, ty)
     let fl = is_float(p)
     let sg = is_signed_integer(p)
     // A comparison is typed by its operands, not by its `bool` result.
     let oty = node_ty(ctx, expr_span(b.lhs))
-    let op_ir = ty_to_ir(&oty)
-    let op_p = prim_of(&oty)
+    let op_ir = ty_to_ir(ctx, oty)
+    let op_p = prim_kind_of_ty(ctx, oty)
     let ofl = is_float(op_p)
     let osg = is_signed_integer(op_p)
     return b.op match {
@@ -5361,8 +5383,8 @@ fn lower_unary(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, u: &UnaryExpr) Oper
     if is_by_ref(ctx, &oty) { return unlowerable(ctx) }
     let v = lower_expr(ctx, bb, env, u.operand)
     let ty = node_ty(ctx, u.span)
-    let ir = ty_to_ir(&ty)
-    let p = prim_of(&ty)
+    let ir = ty_to_ir(ctx, ty)
+    let p = prim_kind_of_ty(ctx, ty)
     return u.op match {
         Neg => bb.neg_op(ir, is_float(p), v),
         BitNot => bb.ixor(ir, v, Operand.IntConst(-1)),
@@ -5515,7 +5537,7 @@ fn ctx_desugar(ctx: &LowerCtx, id: NodeId) &BlockExpr? {
 fn node_ty(ctx: &LowerCtx, span: SourceSpan) Ty {
     let t = ctx_type(ctx, node_id_of(span))
     if t.is_some() { return t.unwrap() }
-    return Ty.Prim(PrimitiveKind.I32)
+    return prim_of(PrimitiveKind.I32)
 }
 
 // A resolved `Ty` to its FIR scalar type. References and function values
@@ -5524,12 +5546,12 @@ fn node_ty(ctx: &LowerCtx, span: SourceSpan) Ty {
 // unresolved type variable is different: since M10 every lowered body is
 // concrete, so a `Var` here is a checker bug, not a subset gap - fail
 // loudly rather than bake a guessed width into real code.
-fn ty_to_ir(ty: &Ty) IrType {
-    return ty.* match {
-        Prim(p) => prim_ir(p),
-        Ref(_) => IrType.Ptr,
-        Func(_) => IrType.Ptr,
-        Var(_) => panic("unresolved type variable reached lowering - checker bug"),
+fn ty_to_ir(ctx: &LowerCtx, ty: Ty) IrType {
+    return tn(ctx, ty) match {
+        NPrim(p) => prim_ir(p),
+        NRef(_) => IrType.Ptr,
+        NFunc(_) => IrType.Ptr,
+        NVar(_) => panic("unresolved type variable reached lowering - checker bug"),
         _ => IrType.I64,
     }
 }
@@ -5598,9 +5620,11 @@ fn named_to_ir(name: String) IrType? {
     return null
 }
 
-fn prim_of(ty: &Ty) PrimitiveKind {
-    return ty.* match {
-        Prim(p) => p,
+// The primitive kind behind a handle, defaulting to i32 for the
+// placeholder paths - the lowering-local sibling of type.f's `prim_of`.
+fn prim_kind_of_ty(ctx: &LowerCtx, ty: Ty) PrimitiveKind {
+    return tn(ctx, ty) match {
+        NPrim(p) => p,
         _ => PrimitiveKind.I32,
     }
 }

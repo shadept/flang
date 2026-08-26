@@ -1,5 +1,5 @@
 // Hindley-Milner unification, fresh-var allocation, level tracking,
-// generalisation, specialisation.
+// generalisation, specialisation - over interned type handles (RFC-024).
 //
 // The engine returns `UnifyOutcome` values - never diagnostics. Callers
 // translate outcomes via `reporter.f` and attach their own context
@@ -7,12 +7,15 @@
 //
 // State:
 //   - `uf`               equivalence partitions over `VarId`
-//   - `bindings`         each (rep) var → its bound `Ty` (another var or concrete)
+//   - `interner`         the type table: every type the engine stores or
+//                        hands back is a handle into it, one node per
+//                        distinct shape, the table the single owner
+//   - `bindings`         each (rep) var -> its bound type handle
 //   - `prim_constraints` narrowed vars: rep → allowed `PrimitiveKind` set
 //   - `binding_undo` / `prim_undo` parallel undo stacks for speculative regions
 //   - `level`            cursor for let-generalisation (`enter_level` / `exit_level`)
 //   - `var_counter`      next `VarId` (engine-owned; not a global)
-//   - `allocator`        used to box `Ref` / `Array.elem` / `Func.ret` payloads
+//   - `allocator`        backing for the table and scratch lists
 //
 // A speculative region (`push_checkpoint` … `rollback` / `commit`) snapshots
 // every piece of mutable state so `try_unify` can abandon a unification
@@ -26,8 +29,8 @@ import std.option
 import std.set
 import std.stack
 import flang_typer.type
+import flang_typer.interner
 import flang_typer.scheme
-import flang_typer.substitution
 import flang_typer.union_find
 import flang_typer.coercion
 import flang_typer.nominal_registry
@@ -129,6 +132,7 @@ type LevelUndo = struct {
 
 pub type Engine = struct {
     uf: UnionFind(VarId)
+    interner: TypeInterner
     bindings: Dict(VarId, Ty)
     prim_constraints: Dict(VarId, List(PrimitiveKind))
     // Level per partition, keyed by representative `VarId`. The rep's
@@ -163,6 +167,7 @@ pub fn engine(allocator: &Allocator? = null) Engine {
     let lu: Stack(List(LevelUndo)) = stack(0, allocator)
     return .{
         uf = uf,
+        interner = type_interner(allocator),
         bindings = bindings,
         prim_constraints = prim_constraints,
         levels = levels,
@@ -186,6 +191,7 @@ pub fn set_nominal_registry(self: &Engine, reg: &NominalRegistry) {
 
 pub fn deinit(self: &Engine) {
     self.uf.deinit()
+    self.interner.deinit()
     self.bindings.deinit()
     self.prim_constraints.deinit()
     self.levels.deinit()
@@ -213,6 +219,24 @@ pub fn deinit(self: &Engine) {
     self.level_undo.deinit()
 }
 
+// Hand the filled type table to the caller and start an empty one. The
+// bindings still name handles of the moved table, so nothing may resolve
+// through this engine afterwards - the next demand readies a fresh one.
+pub fn take_interner(self: &Engine) TypeInterner {
+    let out = self.interner
+    self.interner = type_interner(self.allocator)
+    return out
+}
+
+// The shape behind a handle - engine-side shorthand.
+pub fn ty_node(self: &Engine, t: Ty) TyNode {
+    return self.interner.node(t)
+}
+
+pub fn is_var(self: &Engine, t: Ty) bool {
+    return self.interner.is_var(t)
+}
+
 // ─────────────────────────────────────────────────────────────────────
 // Level management - let-generalisation cursor
 // ─────────────────────────────────────────────────────────────────────
@@ -234,7 +258,7 @@ pub fn fresh_var(self: &Engine) Ty {
     let id = self.var_counter
     self.var_counter = id + 1u32
     set_level(self, id, self.level)
-    return Ty.Var(TyVar { id = id, level = self.level })
+    return self.interner.var_of(TyVar { id = id, level = self.level })
 }
 
 // Allocate a fresh variable whose eventual binding must be one of the
@@ -243,48 +267,45 @@ pub fn fresh_var(self: &Engine) Ty {
 // resolution.
 pub fn fresh_constrained_var(self: &Engine, allowed: List(PrimitiveKind)) Ty {
     let t = self.fresh_var()
-    let v = t match {
-        Var(tv) => tv,
-        _ => panic("fresh_var didn't return Var"),
+    let v = self.ty_node(t) match {
+        NVar(tv) => tv,
+        _ => panic("fresh_var didn't return a var"),
     }
     set_prim_constraint(self, v.id, allowed)
     return t
 }
 
 // ─────────────────────────────────────────────────────────────────────
-// Boxed-payload constructors
-//
-// `Ref`, `Array.elem`, and `Func.ret` carry their inner `Ty` behind a
-// `&Ty` because each holds exactly one. The engine owns the allocator,
-// so these helpers belong here and not in `type.f`.
+// Compound constructors - thin veneers over the interner's builders.
+// `mk_func` takes ownership of `params` (the list is scratch; the table
+// keeps the shape) and frees it.
 // ─────────────────────────────────────────────────────────────────────
 
 pub fn mk_ref(self: &Engine, inner: Ty) Ty {
-    let boxed = box(self.allocator.or_global(), inner)
-    return Ty.Ref(boxed)
+    return self.interner.ref_of(inner)
 }
 
 pub fn mk_array(self: &Engine, elem: Ty, length: usize) Ty {
-    let boxed = box(self.allocator.or_global(), elem)
-    return Ty.Array(.{ elem = boxed, length = length })
+    return self.interner.array_of(elem, length)
 }
 
 pub fn mk_func(self: &Engine, params: List(Ty), ret: Ty) Ty {
-    let boxed_ret = box(self.allocator.or_global(), ret)
-    return Ty.Func(.{ params = params, ret = boxed_ret })
+    const t = self.interner.func_of(&params, ret)
+    params.deinit()
+    return t
 }
 
 // ─────────────────────────────────────────────────────────────────────
 // Resolution
 //
 // `resolve` walks the binding chain for a `Var`; deeper sub-types are
-// untouched. `zonk` recursively resolves the entire tree, returning a
-// `Ty` with no remaining bound vars (unbound vars stay as `Var`).
+// untouched. `zonk` recursively resolves the entire shape, returning a
+// handle with no remaining bound vars (unbound vars stay as `Var`).
 // ─────────────────────────────────────────────────────────────────────
 
 pub fn resolve(self: &Engine, t: Ty) Ty {
-    return t match {
-        Var(v) => resolve_var(self, v),
+    return self.ty_node(t) match {
+        NVar(v) => resolve_var(self, v),
         _ => t,
     }
 }
@@ -303,66 +324,128 @@ fn resolve_var(self: &Engine, v: TyVar) Ty {
                 Some(l) => l,
                 None => v.level,
             }
-            Ty.Var(.{ id = rep, level = lvl })
+            self.interner.var_of(.{ id = rep, level = lvl })
         },
     }
 }
 
-// ponytail: zonk memoizes nothing - every call re-resolves and re-allocates
-// the whole tree (the C# engine does the same). If profiling flags it, write
-// fully-ground results back into the var's binding (binding writes are
-// undo-logged, so checkpoints roll them back); a result that still contains
-// unbound vars must never be cached - they can bind later.
+// Fully resolve `t`: every bound var inside is replaced by its binding,
+// transitively. Ground shapes short-circuit - `zonk` is the identity on
+// a type citing no vars, which is the common case.
 pub fn zonk(self: &Engine, t: Ty) Ty {
+    if self.interner.is_ground(t) { return t }
     let r = self.resolve(t)
-    return r match {
-        Var(_) => r,
-        Prim(_) => r,
-        Ref(inner) => self.mk_ref(self.zonk(inner.*)),
-        Array(arr) => self.mk_array(self.zonk(arr.elem.*), arr.length),
-        Func(fn_ty) => zonk_func(self, &fn_ty),
-        Tuple(elems) => zonk_tuple(self, &elems),
-        Record(fields) => zonk_record(self, &fields),
-        Nominal(nr) => zonk_nominal(self, &nr),
-        Never => r,
-        Void => r,
-        Error => r,
+    if self.interner.is_ground(r) { return r }
+    return self.ty_node(r) match {
+        NVar(_) => r,
+        NRef(inner) => self.interner.ref_of(self.zonk(inner)),
+        NArray(arr) => self.interner.array_of(self.zonk(arr.elem), arr.length),
+        NFunc(f) => zonk_func(self, &f),
+        NTuple(span) => zonk_tuple(self, span),
+        NRecord(rec) => zonk_record(self, &rec),
+        NNominal(nn) => zonk_nominal(self, &nn),
+        _ => r,
     }
 }
 
-fn zonk_func(self: &Engine, fn_ty: &FunctionTy) Ty {
-    let new_params = list(fn_ty.params.len, self.allocator)
-    for &p in fn_ty.params {
-        new_params.push(self.zonk(p.*))
+fn zonk_span(self: &Engine, span: ChildSpan) List(Ty) {
+    let out: List(Ty) = list(span.len, self.allocator)
+    for i in 0..span.len {
+        out.push(self.zonk(self.interner.child_at(span, i)))
     }
-    return self.mk_func(new_params, self.zonk(fn_ty.ret.*))
+    return out
 }
 
-fn zonk_tuple(self: &Engine, elems: &List(Ty)) Ty {
-    let new_elems = list(elems.len, self.allocator)
-    for &e in elems {
-        new_elems.push(self.zonk(e.*))
-    }
-    return Ty.Tuple(new_elems)
+fn zonk_func(self: &Engine, f: &NFuncNode) Ty {
+    let ps = zonk_span(self, f.params)
+    defer ps.deinit()
+    return self.interner.func_of(&ps, self.zonk(f.ret))
 }
 
-fn zonk_record(self: &Engine, fields: &List(Field)) Ty {
-    let new_fields = list(fields.len, self.allocator)
-    for &f in fields {
-        new_fields.push(Field { name = f.name, ty = self.zonk(f.ty), decl_span = f.decl_span })
-    }
-    return Ty.Record(new_fields)
+fn zonk_tuple(self: &Engine, span: ChildSpan) Ty {
+    let es = zonk_span(self, span)
+    defer es.deinit()
+    return self.interner.tuple_of(&es)
 }
 
-fn zonk_nominal(self: &Engine, nr: &NominalRef) Ty {
-    if nr.args.len == 0 {
-        return Ty.Nominal(.{ id = nr.id, args = nr.args })
+fn zonk_nominal(self: &Engine, nn: &NNominalNode) Ty {
+    let as_ = zonk_span(self, nn.args)
+    defer as_.deinit()
+    return self.interner.nominal_of(nn.id, &as_)
+}
+
+fn zonk_record(self: &Engine, rec: &NRecordNode) Ty {
+    let fs: List(Field) = list(rec.tys.len, self.allocator)
+    defer fs.deinit()
+    for i in 0..rec.tys.len {
+        fs.push(Field {
+            name = self.interner.rec_name(rec, i),
+            ty = self.zonk(self.interner.rec_ty(rec, i)),
+            decl_span = self.interner.rec_span(rec, i),
+        })
     }
-    let new_args: List(Ty) = list(nr.args.len, self.allocator)
-    for &a in nr.args {
-        new_args.push(self.zonk(a.*))
+    return self.interner.record_of(&fs)
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// Substitution - pure `Var(id)` replacement, used by `specialize` and
+// generic instantiation. No engine resolution: collapsing bound chains
+// stays the caller's business.
+// ─────────────────────────────────────────────────────────────────────
+
+pub fn substitute_shared(self: &Engine, ty: Ty, subst: &Dict(VarId, Ty)) Ty {
+    return self.ty_node(ty) match {
+        NVar(v) => subst.get(v.id) match {
+            Some(rep) => rep,
+            None => ty,
+        },
+        NRef(inner) => self.interner.ref_of(self.substitute_shared(inner, subst)),
+        NArray(arr) => self.interner.array_of(self.substitute_shared(arr.elem, subst), arr.length),
+        NFunc(f) => substitute_func(self, &f, subst),
+        NTuple(span) => substitute_tuple(self, span, subst),
+        NRecord(rec) => substitute_record(self, &rec, subst),
+        NNominal(nn) => substitute_nominal(self, &nn, subst),
+        _ => ty,
     }
-    return Ty.Nominal(.{ id = nr.id, args = new_args })
+}
+
+fn substitute_span(self: &Engine, span: ChildSpan, subst: &Dict(VarId, Ty)) List(Ty) {
+    let out: List(Ty) = list(span.len, self.allocator)
+    for i in 0..span.len {
+        out.push(self.substitute_shared(self.interner.child_at(span, i), subst))
+    }
+    return out
+}
+
+fn substitute_func(self: &Engine, f: &NFuncNode, subst: &Dict(VarId, Ty)) Ty {
+    let ps = substitute_span(self, f.params, subst)
+    defer ps.deinit()
+    return self.interner.func_of(&ps, self.substitute_shared(f.ret, subst))
+}
+
+fn substitute_tuple(self: &Engine, span: ChildSpan, subst: &Dict(VarId, Ty)) Ty {
+    let es = substitute_span(self, span, subst)
+    defer es.deinit()
+    return self.interner.tuple_of(&es)
+}
+
+fn substitute_record(self: &Engine, rec: &NRecordNode, subst: &Dict(VarId, Ty)) Ty {
+    let fs: List(Field) = list(rec.tys.len, self.allocator)
+    defer fs.deinit()
+    for i in 0..rec.tys.len {
+        fs.push(Field {
+            name = self.interner.rec_name(rec, i),
+            ty = self.substitute_shared(self.interner.rec_ty(rec, i), subst),
+            decl_span = self.interner.rec_span(rec, i),
+        })
+    }
+    return self.interner.record_of(&fs)
+}
+
+fn substitute_nominal(self: &Engine, nn: &NNominalNode, subst: &Dict(VarId, Ty)) Ty {
+    let as_ = substitute_span(self, nn.args, subst)
+    defer as_.deinit()
+    return self.interner.nominal_of(nn.id, &as_)
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -371,35 +454,26 @@ fn zonk_nominal(self: &Engine, nr: &NominalRef) Ty {
 
 pub fn occurs_in(self: &Engine, v: VarId, t: Ty) bool {
     let r = self.resolve(t)
-    return r match {
-        Var(other) => self.uf.find(other.id) == self.uf.find(v),
-        Ref(inner) => self.occurs_in(v, inner.*),
-        Array(arr) => self.occurs_in(v, arr.elem.*),
-        Func(fn_ty) => occurs_in_func(self, v, &fn_ty),
-        Tuple(elems) => occurs_in_list(self, v, &elems),
-        Record(fields) => occurs_in_record(self, v, &fields),
-        Nominal(nr) => occurs_in_list(self, v, &nr.args),
+    return self.ty_node(r) match {
+        NVar(other) => self.uf.find(other.id) == self.uf.find(v),
+        NRef(inner) => self.occurs_in(v, inner),
+        NArray(arr) => self.occurs_in(v, arr.elem),
+        NFunc(f) => occurs_in_func(self, v, &f),
+        NTuple(span) => occurs_in_span(self, v, span),
+        NRecord(rec) => occurs_in_span(self, v, rec.tys),
+        NNominal(nn) => occurs_in_span(self, v, nn.args),
         _ => false,
     }
 }
 
-fn occurs_in_func(self: &Engine, v: VarId, fn_ty: &FunctionTy) bool {
-    for &p in fn_ty.params {
-        if self.occurs_in(v, p.*) { return true }
-    }
-    return self.occurs_in(v, fn_ty.ret.*)
+fn occurs_in_func(self: &Engine, v: VarId, f: &NFuncNode) bool {
+    if occurs_in_span(self, v, f.params) { return true }
+    return self.occurs_in(v, f.ret)
 }
 
-fn occurs_in_list(self: &Engine, v: VarId, items: &List(Ty)) bool {
-    for &it in items {
-        if self.occurs_in(v, it.*) { return true }
-    }
-    return false
-}
-
-fn occurs_in_record(self: &Engine, v: VarId, fields: &List(Field)) bool {
-    for &f in fields {
-        if self.occurs_in(v, f.ty) { return true }
+fn occurs_in_span(self: &Engine, v: VarId, span: ChildSpan) bool {
+    for i in 0..span.len {
+        if self.occurs_in(v, self.interner.child_at(span, i)) { return true }
     }
     return false
 }
@@ -410,12 +484,11 @@ fn occurs_in_record(self: &Engine, v: VarId, fields: &List(Field)) bool {
 
 // Unify `actual` into `expected`. Returns `Ok(UnifyOk { ty, cost })`
 // on success - `ty` is the unified type and `cost` counts applied
-// coercions (always 0 in this pure-structural pass; coercion rules
-// land in a follow-up). Any failure short-circuits and returns a
-// structured outcome without mutating engine state.
+// coercions. Any failure short-circuits and returns a structured
+// outcome without mutating engine state.
 //
-// `actual` flowing into `expected` is the direction coercion rules
-// will eventually respect (integer widening, `T → Option(T)`, etc.).
+// `actual` flowing into `expected` is the direction the coercion
+// ladder respects (integer widening, `T → Option(T)`, etc.).
 // Structural unification is direction-insensitive.
 pub fn unify(self: &Engine, actual: Ty, expected: Ty) UnifyOutcome {
     let a = self.resolve(actual)
@@ -425,7 +498,7 @@ pub fn unify(self: &Engine, actual: Ty, expected: Ty) UnifyOutcome {
 
 fn unify_resolved(self: &Engine, a: Ty, b: Ty) UnifyOutcome {
     // Error is poison - absorbs anything silently.
-    if a.is_error() or b.is_error() { return UnifyOutcome.Unified(.{ ty = Ty.Error, cost = 0 }) }
+    if a.is_error() or b.is_error() { return UnifyOutcome.Unified(.{ ty = TY_ERROR, cost = 0 }) }
     // Never is bottom - unifies with everything, taking the other type.
     if a.is_never() { return UnifyOutcome.Unified(.{ ty = b, cost = 0 }) }
     if b.is_never() { return UnifyOutcome.Unified(.{ ty = a, cost = 0 }) }
@@ -433,13 +506,13 @@ fn unify_resolved(self: &Engine, a: Ty, b: Ty) UnifyOutcome {
     // Both vars - merge their partitions. The first arg's rep wins
     // (matches the union-find contract) so concrete types accumulated
     // by earlier unifications stay reachable.
-    return a match {
-        Var(va) => b match {
-            Var(vb) => unify_var_var(self, va, vb),
+    return self.ty_node(a) match {
+        NVar(va) => self.ty_node(b) match {
+            NVar(vb) => unify_var_var(self, va, vb),
             _ => bind_var(self, va, b),
         },
-        _ => b match {
-            Var(vb) => bind_var(self, vb, a),
+        _ => self.ty_node(b) match {
+            NVar(vb) => bind_var(self, vb, a),
             _ => unify_concrete(self, a, b),
         },
     }
@@ -449,6 +522,8 @@ fn unify_resolved(self: &Engine, a: Ty, b: Ty) UnifyOutcome {
 // unification first; on mismatch, fall through to the directional
 // coercion ladder. `actual = a` flows into `expected = b`.
 fn unify_concrete(self: &Engine, a: Ty, b: Ty) UnifyOutcome {
+    // One node per distinct type: identical handles ARE the same type.
+    if a == b { return make_ok(a) }
     let structural = unify_structural(self, a, b)
     if structural.is_ok() { return structural }
 
@@ -469,33 +544,32 @@ fn unify_concrete(self: &Engine, a: Ty, b: Ty) UnifyOutcome {
 // (string→byte-slice first, then array decay and slice-to-ref, then
 // the `Type(T)` lift).
 fn try_coercion(self: &Engine, raw_from: Ty, raw_to: Ty) Coercion? {
+    const it = &self.interner
     // Prim rules match on the (already top-resolved) raw shapes, so the
     // common failed probe pays no allocation.
-    let r1 = try_integer_widening(raw_from, raw_to, self.allocator)
+    let r1 = try_integer_widening(it, raw_from, raw_to, self.allocator)
     if r1.is_some() { return r1 }
-    let r2 = try_float_widening(raw_from, raw_to, self.allocator)
+    let r2 = try_float_widening(it, raw_from, raw_to, self.allocator)
     if r2.is_some() { return r2 }
-    let r8 = try_char_to_u8(raw_from, raw_to, self.allocator)
+    let r8 = try_char_to_u8(it, raw_from, raw_to, self.allocator)
     if r8.is_some() { return r8 }
     self.nominals match {
         Some(reg) => {
             // Nominal-aware rules are engine-free and match structurally,
             // so bound vars inside the types must be collapsed first.
-            // ponytail: zonk deep-copies both trees per attempt; resolve
-            // rule inputs in place if coercion shows up in a profile.
             let from = self.zonk(raw_from)
             let to = self.zonk(raw_to)
-            let r4 = try_string_to_byte_slice(from, to, reg, self.allocator)
+            let r4 = try_string_to_byte_slice(it, from, to, reg, self.allocator)
             if r4.is_some() { return r4 }
-            let r10 = try_byte_slice_to_string(from, to, reg, self.allocator)
+            let r10 = try_byte_slice_to_string(it, from, to, reg, self.allocator)
             if r10.is_some() { return r10 }
-            let r5 = try_array_decay(from, to, reg, self.allocator)
+            let r5 = try_array_decay(it, from, to, reg, self.allocator)
             if r5.is_some() { return r5 }
-            let r6 = try_slice_to_reference(from, to, reg, self.allocator)
+            let r6 = try_slice_to_reference(it, from, to, reg, self.allocator)
             if r6.is_some() { return r6 }
-            let r7 = try_nominal_to_type(from, to, reg, self.allocator)
+            let r7 = try_nominal_to_type(it, from, to, reg, self.allocator)
             if r7.is_some() { return r7 }
-            let r9 = try_type_to_typeinfo(from, to, reg, self.allocator)
+            let r9 = try_type_to_typeinfo(it, from, to, reg, self.allocator)
             if r9.is_some() { return r9 }
         },
         None => {},
@@ -528,14 +602,14 @@ fn apply_coercion(self: &Engine, c: Coercion, fallback: UnifyOutcome) UnifyOutco
 fn unify_var_var(self: &Engine, va: TyVar, vb: TyVar) UnifyOutcome {
     let ra = self.uf.find(va.id)
     let rb = self.uf.find(vb.id)
-    if ra == rb { return UnifyOutcome.Unified(.{ ty = Ty.Var(va), cost = 0 }) }
+    if ra == rb { return UnifyOutcome.Unified(.{ ty = self.interner.var_of(va), cost = 0 }) }
 
     // Intersect prim constraints, if any. An empty intersection means
     // the two narrow sets are disjoint and the partitions can't merge.
     let merged_constraint = intersect_prim_constraints(self, ra, rb)
     if merged_constraint.is_some() and merged_constraint.unwrap().len == 0 {
         return UnifyOutcome.UniPrimConstraint(.{
-            got = Ty.Var(va),
+            got = self.interner.var_of(va),
             allowed = list(0, self.allocator),
         })
     }
@@ -559,7 +633,7 @@ fn unify_var_var(self: &Engine, va: TyVar, vb: TyVar) UnifyOutcome {
     // Stamp the merged level onto the rep and drop the loser's slot.
     set_level(self, new_rep, merged_level)
     clear_level(self, loser)
-    return UnifyOutcome.Unified(.{ ty = Ty.Var(va), cost = 0 })
+    return UnifyOutcome.Unified(.{ ty = self.interner.var_of(va), cost = 0 })
 }
 
 fn bind_var(self: &Engine, v: TyVar, concrete: Ty) UnifyOutcome {
@@ -573,7 +647,7 @@ fn bind_var(self: &Engine, v: TyVar, concrete: Ty) UnifyOutcome {
     let constraint = self.prim_constraints.get(rep)
     constraint match {
         Some(allowed) => {
-            let violation = check_prim_constraint(&allowed, concrete)
+            let violation = check_prim_constraint(self, &allowed, concrete)
             if violation.is_some() { return violation.unwrap() }
             clear_prim_constraint(self, rep)
         },
@@ -589,9 +663,9 @@ fn bind_var(self: &Engine, v: TyVar, concrete: Ty) UnifyOutcome {
 // `None` otherwise. `allowed` is owned by the caller; the violation
 // payload aliases its buffer (the engine never mutates allowed-lists
 // after they're set on a var).
-fn check_prim_constraint(allowed: &List(PrimitiveKind), concrete: Ty) UnifyOutcome? {
-    let satisfied = concrete match {
-        Prim(p) => prim_set_contains(allowed, p),
+fn check_prim_constraint(self: &Engine, allowed: &List(PrimitiveKind), concrete: Ty) UnifyOutcome? {
+    let satisfied = self.ty_node(concrete) match {
+        NPrim(p) => prim_set_contains(allowed, p),
         _ => false,
     }
     if satisfied { return null }
@@ -617,47 +691,45 @@ fn make_ok(ty: Ty) UnifyOutcome {
 }
 
 fn unify_structural(self: &Engine, a: Ty, b: Ty) UnifyOutcome {
-    return a match {
-        Prim(pa) => unify_a_prim(pa, a, b),
-        Ref(ia) => unify_a_ref(self, ia, a, b),
-        Array(aa) => unify_a_array(self, &aa, a, b),
-        Func(fa) => unify_a_func(self, &fa, a, b),
-        Tuple(ta) => unify_a_tuple(self, &ta, a, b),
-        Record(ra) => unify_a_record(self, &ra, a, b),
-        Nominal(na) => unify_a_nominal(self, &na, a, b),
-        Void => unify_a_void(a, b),
+    return self.ty_node(a) match {
+        NPrim(pa) => unify_a_prim(self, pa, a, b),
+        NRef(ia) => unify_a_ref(self, ia, a, b),
+        NArray(aa) => unify_a_array(self, &aa, a, b),
+        NFunc(fa) => unify_a_func(self, &fa, a, b),
+        NTuple(ta) => unify_a_tuple(self, ta, a, b),
+        NRecord(ra) => unify_a_record(self, &ra, a, b),
+        NNominal(na) => unify_a_nominal(self, &na, a, b),
+        NVoid => unify_a_void(self, a, b),
         _ => make_mismatch(a, b),
     }
 }
 
-fn unify_a_prim(pa: PrimitiveKind, a: Ty, b: Ty) UnifyOutcome {
-    return b match {
-        Prim(pb) => if pa == pb { make_ok(a) } else { make_mismatch(a, b) },
+fn unify_a_prim(self: &Engine, pa: PrimitiveKind, a: Ty, b: Ty) UnifyOutcome {
+    return self.ty_node(b) match {
+        NPrim(pb) => if pa == pb { make_ok(a) } else { make_mismatch(a, b) },
         _ => make_mismatch(a, b),
     }
 }
 
-fn unify_a_ref(self: &Engine, ia: &Ty, a: Ty, b: Ty) UnifyOutcome {
-    return b match {
-        Ref(ib) => unify_refs(self, ia, ib, a),
+fn unify_a_ref(self: &Engine, ia: Ty, a: Ty, b: Ty) UnifyOutcome {
+    return self.ty_node(b) match {
+        NRef(ib) => {
+            let r = self.unify(ia, ib)
+            if r.is_ok() { return make_ok(a) }
+            r
+        },
         _ => make_mismatch(a, b),
     }
 }
 
-fn unify_refs(self: &Engine, ia: &Ty, ib: &Ty, a: Ty) UnifyOutcome {
-    let r = self.unify(ia.*, ib.*)
-    if r.is_ok() { return make_ok(a) }
-    return r
-}
-
-fn unify_a_array(self: &Engine, aa: &ArrayTy, a: Ty, b: Ty) UnifyOutcome {
-    return b match {
-        Array(ab) => unify_arrays(self, aa, &ab, a),
+fn unify_a_array(self: &Engine, aa: &NArrayNode, a: Ty, b: Ty) UnifyOutcome {
+    return self.ty_node(b) match {
+        NArray(ab) => unify_arrays(self, aa, &ab, a),
         _ => make_mismatch(a, b),
     }
 }
 
-fn unify_arrays(self: &Engine, aa: &ArrayTy, ab: &ArrayTy, a: Ty) UnifyOutcome {
+fn unify_arrays(self: &Engine, aa: &NArrayNode, ab: &NArrayNode, a: Ty) UnifyOutcome {
     if aa.length != ab.length {
         return UnifyOutcome.UniArityMismatch(.{
             what = ArityKind.ArrayLength,
@@ -665,44 +737,44 @@ fn unify_arrays(self: &Engine, aa: &ArrayTy, ab: &ArrayTy, a: Ty) UnifyOutcome {
             actual = aa.length,
         })
     }
-    let r = self.unify(aa.elem.*, ab.elem.*)
+    let r = self.unify(aa.elem, ab.elem)
     if r.is_ok() { return make_ok(a) }
     return r
 }
 
-fn unify_a_func(self: &Engine, fa: &FunctionTy, a: Ty, b: Ty) UnifyOutcome {
-    return b match {
-        Func(fb) => unify_func(self, fa, &fb, a, b),
+fn unify_a_func(self: &Engine, fa: &NFuncNode, a: Ty, b: Ty) UnifyOutcome {
+    return self.ty_node(b) match {
+        NFunc(fb) => unify_func(self, fa, &fb, a, b),
         _ => make_mismatch(a, b),
     }
 }
 
-fn unify_a_tuple(self: &Engine, ta: &List(Ty), a: Ty, b: Ty) UnifyOutcome {
-    return b match {
-        Tuple(tb) => unify_lists(self, ta, &tb, a, b, ArityKind.TupleLength),
-        Void => if ta.len == 0 { make_ok(b) } else { make_mismatch(a, b) },
+fn unify_a_tuple(self: &Engine, ta: ChildSpan, a: Ty, b: Ty) UnifyOutcome {
+    return self.ty_node(b) match {
+        NTuple(tb) => unify_spans(self, ta, tb, a, ArityKind.TupleLength),
+        NVoid => if ta.len == 0 { make_ok(b) } else { make_mismatch(a, b) },
         _ => make_mismatch(a, b),
     }
 }
 
-fn unify_a_record(self: &Engine, ra: &List(Field), a: Ty, b: Ty) UnifyOutcome {
-    return b match {
-        Record(rb) => unify_record(self, ra, &rb, a, b),
+fn unify_a_record(self: &Engine, ra: &NRecordNode, a: Ty, b: Ty) UnifyOutcome {
+    return self.ty_node(b) match {
+        NRecord(rb) => unify_record(self, ra, &rb, a, b),
         _ => make_mismatch(a, b),
     }
 }
 
-fn unify_a_nominal(self: &Engine, na: &NominalRef, a: Ty, b: Ty) UnifyOutcome {
-    return b match {
-        Nominal(nb) => unify_nominal(self, na, &nb, a, b),
+fn unify_a_nominal(self: &Engine, na: &NNominalNode, a: Ty, b: Ty) UnifyOutcome {
+    return self.ty_node(b) match {
+        NNominal(nb) => unify_nominal(self, na, &nb, a, b),
         _ => make_mismatch(a, b),
     }
 }
 
-fn unify_a_void(a: Ty, b: Ty) UnifyOutcome {
-    return b match {
-        Void => make_ok(a),
-        Tuple(tb) => if tb.len == 0 { make_ok(a) } else { make_mismatch(a, b) },
+fn unify_a_void(self: &Engine, a: Ty, b: Ty) UnifyOutcome {
+    return self.ty_node(b) match {
+        NVoid => make_ok(a),
+        NTuple(tb) => if tb.len == 0 { make_ok(a) } else { make_mismatch(a, b) },
         _ => make_mismatch(a, b),
     }
 }
@@ -712,7 +784,7 @@ fn unify_a_void(a: Ty, b: Ty) UnifyOutcome {
 // its argument at the wrong width, and widening is not sound under
 // contravariance anyway (reference parity, E2011 at the use site).
 // Variables still bind, so `fn($T) $T` unifies with a concrete signature.
-fn unify_func(self: &Engine, fa: &FunctionTy, fb: &FunctionTy, a: Ty, b: Ty) UnifyOutcome {
+fn unify_func(self: &Engine, fa: &NFuncNode, fb: &NFuncNode, a: Ty, b: Ty) UnifyOutcome {
     if fa.params.len != fb.params.len {
         return UnifyOutcome.UniArityMismatch(.{
             what = ArityKind.FuncParams,
@@ -721,12 +793,12 @@ fn unify_func(self: &Engine, fa: &FunctionTy, fb: &FunctionTy, a: Ty, b: Ty) Uni
         })
     }
     for i in 0..fa.params.len {
-        let pa = &fa.params[i]
-        let pb = &fb.params[i]
-        let r = unify_exact(self, pa.*, pb.*)
+        let pa = self.interner.child_at(fa.params, i)
+        let pb = self.interner.child_at(fb.params, i)
+        let r = unify_exact(self, pa, pb)
         if !r.is_ok() { return r }
     }
-    let rr = unify_exact(self, fa.ret.*, fb.ret.*)
+    let rr = unify_exact(self, fa.ret, fb.ret)
     if rr.is_ok() { return make_ok(a) }
     return rr
 }
@@ -736,22 +808,22 @@ fn unify_func(self: &Engine, fa: &FunctionTy, fb: &FunctionTy, a: Ty, b: Ty) Uni
 fn unify_exact(self: &Engine, actual: Ty, expected: Ty) UnifyOutcome {
     let a = self.resolve(actual)
     let b = self.resolve(expected)
-    if a.is_error() or b.is_error() { return UnifyOutcome.Unified(.{ ty = Ty.Error, cost = 0 }) }
+    if a.is_error() or b.is_error() { return UnifyOutcome.Unified(.{ ty = TY_ERROR, cost = 0 }) }
     if a.is_never() { return UnifyOutcome.Unified(.{ ty = b, cost = 0 }) }
     if b.is_never() { return UnifyOutcome.Unified(.{ ty = a, cost = 0 }) }
-    return a match {
-        Var(va) => b match {
-            Var(vb) => unify_var_var(self, va, vb),
+    return self.ty_node(a) match {
+        NVar(va) => self.ty_node(b) match {
+            NVar(vb) => unify_var_var(self, va, vb),
             _ => bind_var(self, va, b),
         },
-        _ => b match {
-            Var(vb) => bind_var(self, vb, a),
+        _ => self.ty_node(b) match {
+            NVar(vb) => bind_var(self, vb, a),
             _ => unify_structural(self, a, b),
         },
     }
 }
 
-fn unify_lists(self: &Engine, ta: &List(Ty), tb: &List(Ty), a: Ty, b: Ty, what: ArityKind) UnifyOutcome {
+fn unify_spans(self: &Engine, ta: ChildSpan, tb: ChildSpan, a: Ty, what: ArityKind) UnifyOutcome {
     if ta.len != tb.len {
         return UnifyOutcome.UniArityMismatch(.{
             what = what,
@@ -760,48 +832,33 @@ fn unify_lists(self: &Engine, ta: &List(Ty), tb: &List(Ty), a: Ty, b: Ty, what: 
         })
     }
     for i in 0..ta.len {
-        let ea = &ta[i]
-        let eb = &tb[i]
-        let r = self.unify(ea.*, eb.*)
+        let ea = self.interner.child_at(ta, i)
+        let eb = self.interner.child_at(tb, i)
+        let r = self.unify(ea, eb)
         if !r.is_ok() { return r }
     }
     return make_ok(a)
 }
 
-fn unify_record(self: &Engine, ra: &List(Field), rb: &List(Field), a: Ty, b: Ty) UnifyOutcome {
-    if ra.len != rb.len {
+fn unify_record(self: &Engine, ra: &NRecordNode, rb: &NRecordNode, a: Ty, b: Ty) UnifyOutcome {
+    if ra.tys.len != rb.tys.len {
         return UnifyOutcome.UniArityMismatch(.{
             what = ArityKind.RecordFields,
-            expected = rb.len,
-            actual = ra.len,
+            expected = rb.tys.len,
+            actual = ra.tys.len,
         })
     }
-    for i in 0..ra.len {
-        let fa = &ra[i]
-        let fb = &rb[i]
-        if fa.name != fb.name { return make_mismatch(a, b) }
-        let r = self.unify(fa.ty, fb.ty)
+    for i in 0..ra.tys.len {
+        if self.interner.rec_name(ra, i) != self.interner.rec_name(rb, i) { return make_mismatch(a, b) }
+        let r = self.unify(self.interner.rec_ty(ra, i), self.interner.rec_ty(rb, i))
         if !r.is_ok() { return r }
     }
     return make_ok(a)
 }
 
-fn unify_nominal(self: &Engine, na: &NominalRef, nb: &NominalRef, a: Ty, b: Ty) UnifyOutcome {
+fn unify_nominal(self: &Engine, na: &NNominalNode, nb: &NNominalNode, a: Ty, b: Ty) UnifyOutcome {
     if na.id != nb.id { return make_mismatch(a, b) }
-    if na.args.len != nb.args.len {
-        return UnifyOutcome.UniArityMismatch(.{
-            what = ArityKind.NominalArgs,
-            expected = nb.args.len,
-            actual = na.args.len,
-        })
-    }
-    for i in 0..na.args.len {
-        let aa = &na.args[i]
-        let bb = &nb.args[i]
-        let r = self.unify(aa.*, bb.*)
-        if !r.is_ok() { return r }
-    }
-    return make_ok(a)
+    return unify_spans(self, na.args, nb.args, a, ArityKind.NominalArgs)
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -898,7 +955,7 @@ pub fn rollback(self: &Engine) {
 pub fn generalize(self: &Engine, t: Ty) Scheme {
     let z = self.zonk(t)
     let quantified: Set(VarId) = set(self.allocator)
-    free_vars(&z, self.level, &quantified)
+    free_vars(&self.interner, z, self.level, &quantified)
     return .{ quantified = quantified, body = z }
 }
 
@@ -924,7 +981,7 @@ pub fn specialize_capture(self: &Engine, s: &Scheme, out: &Dict(VarId, Ty)) Ty {
         let fresh = self.fresh_var()
         out.set(old_id, fresh)
     }
-    return substitute(&s.body, out, self.allocator)
+    return self.substitute_shared(s.body, out)
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -1014,20 +1071,19 @@ fn record_level_undo(self: &Engine, var_id: VarId) {
 
 test "fresh vars are unique and bind to concrete types" {
     let eng = engine()
+    defer eng.deinit()
     let fv1 = eng.fresh_var()
     let fv2 = eng.fresh_var()
-    let id1 = fv1 match { Var(tv) => tv.id, _ => 999u32 }
-    let id2 = fv2 match { Var(tv) => tv.id, _ => 999u32 }
-    assert_true(id1 != id2, "fresh vars have distinct ids")
+    assert_true(fv1 != fv2, "fresh vars have distinct nodes")
 
     let out = eng.unify(fv1, ty_i32())
     assert_true(out.is_ok(), "var unifies with i32")
-    let resolved = eng.resolve(fv1)
-    assert_true(equals(&resolved, &ty_i32()), "var resolves to i32 after bind")
+    assert_eq(eng.resolve(fv1), ty_i32(), "var resolves to i32 after bind")
 }
 
 test "integer widening succeeds, narrowing fails" {
     let eng = engine()
+    defer eng.deinit()
     let widen = eng.unify(ty_i8(), ty_i32())
     assert_true(widen.is_ok(), "i8 widens to i32")
     let cost = widen match { Unified(uo) => uo.cost, _ => 0u32 }
@@ -1038,18 +1094,21 @@ test "integer widening succeeds, narrowing fails" {
 
 test "float widening is one-directional" {
     let eng = engine()
+    defer eng.deinit()
     assert_true(eng.unify(ty_f32(), ty_f64()).is_ok(), "f32 widens to f64")
     assert_true(!eng.unify(ty_f64(), ty_f32()).is_ok(), "f64 does not narrow to f32")
 }
 
 test "cross-signedness widens only to a strictly larger signed rank" {
     let eng = engine()
+    defer eng.deinit()
     assert_true(eng.unify(ty_u8(), ty_i32()).is_ok(), "u8 widens to i32")
     assert_true(!eng.unify(ty_u32(), ty_i32()).is_ok(), "u32 does not widen to i32 at equal rank")
 }
 
 test "occurs check rejects infinite types" {
     let eng = engine()
+    defer eng.deinit()
     let fv = eng.fresh_var()
     let wrapping = eng.mk_ref(fv)
     let outcome = eng.unify(fv, wrapping)
@@ -1059,31 +1118,48 @@ test "occurs check rejects infinite types" {
 
 test "tuple arity mismatch is reported" {
     let eng = engine()
+    defer eng.deinit()
     let t2: List(Ty) = list(2); t2.push(ty_i32()); t2.push(ty_bool())
+    defer t2.deinit()
     let t3: List(Ty) = list(3); t3.push(ty_i32()); t3.push(ty_bool()); t3.push(ty_i64())
-    let outcome = eng.unify(Ty.Tuple(t2), Ty.Tuple(t3))
+    defer t3.deinit()
+    // Through a reference: builder mutations two field-hops deep on a
+    // LOCAL value struct do not stick (docs/known-issues.md).
+    let it = &eng.interner
+    let outcome = eng.unify(it.tuple_of(&t2), it.tuple_of(&t3))
     let is_arity = outcome match { UniArityMismatch(_) => true, _ => false }
     assert_true(is_arity, "2-tuple vs 3-tuple is an arity mismatch")
 }
 
 test "try_unify rolls back on success" {
     let eng = engine()
+    defer eng.deinit()
     let fv = eng.fresh_var()
     assert_true(eng.try_unify(fv, ty_i32()).is_ok(), "speculative unify succeeds")
-    let after = eng.resolve(fv)
-    let still_unbound = after match { Var(_) => true, _ => false }
-    assert_true(still_unbound, "var stays unbound after try_unify")
+    assert_true(eng.is_var(eng.resolve(fv)), "var stays unbound after try_unify")
 }
 
 test "generalize then specialize yields a fresh quantified var" {
     let eng = engine()
+    defer eng.deinit()
     eng.enter_level()
     let inner = eng.fresh_var()
     eng.exit_level()
     let scheme = eng.generalize(inner)
     assert_true(scheme.quantified.len() == 1, "one quantified var")
     let inst = eng.specialize(&scheme)
-    let inst_id = inst match { Var(tv) => tv.id, _ => 999u32 }
-    let orig_id = inner match { Var(tv) => tv.id, _ => 998u32 }
-    assert_true(inst_id != orig_id, "specialised var is fresh")
+    assert_true(eng.is_var(inst), "the instantiation is a var")
+    assert_true(inst != inner, "specialised var is fresh")
+}
+
+test "zonk is the identity on ground types and collapses bound vars" {
+    let eng = engine()
+    defer eng.deinit()
+    let fv = eng.fresh_var()
+    let r = eng.mk_ref(fv)
+    assert_true(!eng.interner.is_ground(r), "&?v is not ground")
+    let _o = eng.unify(fv, ty_i32())
+    const z = eng.zonk(r)
+    assert_eq(z, eng.mk_ref(ty_i32()), "zonk collapses the bound var to one canonical node")
+    assert_eq(eng.zonk(z), z, "zonk of a ground shape is the identity")
 }

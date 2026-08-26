@@ -2331,3 +2331,35 @@ follow every reference to a symbol, not just `Call.callee` and
 `Store(FuncRef)`: a missed reference drops a live function. RFC-022 §7 builds
 the same reachability query in the checker for W1003; the two want the same
 edges.
+
+## Module-level `const` arrays never register
+
+A file-scope `const XS: [i32; 3] = [1, 2, 3]` is accepted by the parser but
+the constant never reaches the environment: every use site reports E3002
+`Unresolved identifier`. Function-scope `const` arrays work, including
+`for x in xs` iteration through the array's decay to a slice. Workaround:
+declare the array inside the function that uses it.
+
+## Self-hosted: mutation through a field chain that crosses a reference does not stick
+
+The reference compiler's two-hop receiver bug (above) has a self-hosted
+sibling. A mutating UFCS call whose receiver is a field path that either
+starts at a LOCAL value struct (`eng.interner.tuple_of(...)`) or crosses a
+reference-typed field (`ctx.result.interner.nominal_of(...)` where
+`result: &TypeCheckResult`) receives a copy of the receiver struct, so
+header mutations (a `List` len bump, a `Dict` rehash) land in the copy and
+are lost. Reads work, which is what makes it silent: an interner reached
+this way hands out node ids past the table it never grew, and the next
+`node(id)` read panics `List: index out of bounds` far from the cause.
+
+Two shapes hit during RFC-024 and both are worked around at the call site:
+
+- `Engine` tests bind `let it = &eng.interner` and call through the
+  reference (one hop).
+- `LowerCtx` carries `it: &TypeInterner`, a DIRECT reference to
+  `result.interner`, and every interning call in lowering goes through it.
+
+A receiver that is a value-field chain rooted at a single reference
+(`self.engine.interner...` from `self: &Checker`) works. Fix the lowering
+of member-path receivers (the reference compiler's fix is the model), then
+drop the `LowerCtx.it` field.

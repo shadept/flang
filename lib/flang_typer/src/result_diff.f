@@ -32,6 +32,7 @@ import std.string_builder
 import std.test
 import flang_core.span
 import flang_typer.type
+import flang_typer.interner
 import flang_typer.node_id
 import flang_typer.inference_results
 import flang_typer.nominal_registry
@@ -126,8 +127,8 @@ fn diff_nominals(d: &ResultDiff, a: &TypeCheckResult, b: &TypeCheckResult, alloc
         }
         lb.clear()
         rb.clear()
-        append_nominal(&lb, left.unwrap())
-        append_nominal(&rb, right.unwrap())
+        append_nominal(&lb, left.unwrap(), &a.interner)
+        append_nominal(&rb, right.unwrap(), &b.interner)
         if lb.as_view() != rb.as_view() {
             note(d, $"nominals[{id}]: {lb.as_view()} vs {rb.as_view()}")
         }
@@ -160,8 +161,8 @@ fn diff_specializations(d: &ResultDiff, a: &TypeCheckResult, b: &TypeCheckResult
         }
         lb.clear()
         rb.clear()
-        append_spec(&lb, left.unwrap())
-        append_spec(&rb, right.unwrap())
+        append_spec(&lb, left.unwrap(), &a.interner)
+        append_spec(&rb, right.unwrap(), &b.interner)
         if lb.as_view() != rb.as_view() {
             note(d, $"specializations[{id}]: {lb.as_view()} vs {rb.as_view()}")
         }
@@ -178,24 +179,19 @@ fn diff_node_types(d: &ResultDiff, a: &TypeCheckResult, b: &TypeCheckResult, all
     if al != bl {
         note(d, $"node_types: {al} entries vs {bl}")
     }
-    let lb = string_builder(64, alloc)
-    defer lb.deinit()
-    let rb = string_builder(64, alloc)
-    defer rb.deinit()
     for e in a.node_types {
         let key = e.key
-        let other = b.node_types.get_ref(key)
+        let other = b.node_types.get(key)
         if other.is_none() {
             note(d, $"node_types[{key}]: missing on the right")
             continue
         }
-        lb.clear()
-        rb.clear()
-        let lv = e.value
-        format(&lv, &lb, "")
-        format(other.unwrap(), &rb, "")
-        if lb.as_view() != rb.as_view() {
-            note(d, $"node_types[{key}]: {lb.as_view()} vs {rb.as_view()}")
+        // Each side renders through its own interner, so ids stay free to
+        // differ while the types they name must not.
+        const lk = a.interner.key_of(e.value)
+        const rk = b.interner.key_of(other.unwrap())
+        if lk != rk {
+            note(d, $"node_types[{key}]: {lk} vs {rk}")
         }
     }
 }
@@ -272,10 +268,8 @@ fn diff_instantiated(d: &ResultDiff, a: &TypeCheckResult, b: &TypeCheckResult, a
     for i in 0..lo {
         lb.clear()
         rb.clear()
-        const lt = a.instantiated_types[i]
-        const rt = b.instantiated_types[i]
-        format(&lt, &lb, "")
-        format(&rt, &rb, "")
+        a.interner.format(a.instantiated_types[i], &lb)
+        b.interner.format(b.instantiated_types[i], &rb)
         if lb.as_view() != rb.as_view() {
             note(d, $"instantiated_types[{i}]: {lb.as_view()} vs {rb.as_view()}")
         }
@@ -353,7 +347,7 @@ fn size_note(d: &ResultDiff, name: String, al: usize, bl: usize) {
 // out is a difference this gate cannot see.
 // ─────────────────────────────────────────────────────────────────────
 
-fn append_nominal(sb: &StringBuilder, def: &NominalDef) {
+fn append_nominal(sb: &StringBuilder, def: &NominalDef, it: &TypeInterner) {
     def.* match {
         NomStruct(s) => {
             sb.append("struct ")
@@ -373,8 +367,7 @@ fn append_nominal(sb: &StringBuilder, def: &NominalDef) {
                 if i > 0 { sb.append(",") }
                 sb.append(s.fields[i].name)
                 sb.append(":")
-                let ft = s.fields[i].ty
-                format(&ft, sb, "")
+                it.format(s.fields[i].ty, sb)
             }
             sb.append("}")
         },
@@ -395,8 +388,7 @@ fn append_nominal(sb: &StringBuilder, def: &NominalDef) {
                 let payloads = &e.variants[i].payloads
                 for k in 0..payloads.len {
                     if k > 0 { sb.append(",") }
-                    let pt = payloads[k]
-                    format(&pt, sb, "")
+                    it.format(payloads[k], sb)
                 }
                 sb.append(")")
             }
@@ -405,7 +397,7 @@ fn append_nominal(sb: &StringBuilder, def: &NominalDef) {
     }
 }
 
-fn append_spec(sb: &StringBuilder, sp: &Specialization) {
+fn append_spec(sb: &StringBuilder, sp: &Specialization, it: &TypeInterner) {
     sb.append(sp.module)
     sb.append(".")
     sb.append(sp.name)
@@ -416,12 +408,10 @@ fn append_spec(sb: &StringBuilder, sp: &Specialization) {
     sb.append(" (")
     for i in 0..sp.concrete_params.len {
         if i > 0 { sb.append(",") }
-        let pt = sp.concrete_params[i]
-        format(&pt, sb, "")
+        it.format(sp.concrete_params[i], sb)
     }
     sb.append(")->")
-    let ret = sp.concrete_return
-    format(&ret, sb, "")
+    it.format(sp.concrete_return, sb)
     sb.append(" overlay=")
     sb.append(sp.overlay.node_types.len())
 }
@@ -511,8 +501,8 @@ test "an equal-sized table with one changed entry is caught" {
     defer b.deinit()
     let at = &a.node_types
     let bt = &b.node_types
-    at.set(7 as NodeId, Ty.Prim(PrimitiveKind.I32))
-    bt.set(7 as NodeId, Ty.Prim(PrimitiveKind.I64))
+    at.set(7 as NodeId, prim_of(PrimitiveKind.I32))
+    bt.set(7 as NodeId, prim_of(PrimitiveKind.I64))
 
     let d = diff_results(&a, &b)
     defer d.deinit()
@@ -527,9 +517,9 @@ test "an entry present on only one side is caught" {
     defer b.deinit()
     let at = &a.node_types
     let bt = &b.node_types
-    at.set(7 as NodeId, Ty.Prim(PrimitiveKind.I32))
-    bt.set(7 as NodeId, Ty.Prim(PrimitiveKind.I32))
-    bt.set(9 as NodeId, Ty.Prim(PrimitiveKind.I32))
+    at.set(7 as NodeId, prim_of(PrimitiveKind.I32))
+    bt.set(7 as NodeId, prim_of(PrimitiveKind.I32))
+    bt.set(9 as NodeId, prim_of(PrimitiveKind.I32))
 
     let d = diff_results(&a, &b)
     defer d.deinit()

@@ -16,12 +16,17 @@ import flang_parser.ast
 import flang_typer.type
 import flang_typer.node_id
 import flang_typer.inference_results
+import flang_typer.interner
 import flang_typer.nominal_registry
 import flang_typer.function_registry
 import flang_typer.specialization
 
 pub type TypeCheckResult = struct {
-    node_types: Dict(NodeId, Ty)             // every entry zonked
+    node_types: Dict(NodeId, Ty)           // every entry zonked
+    // The type table (RFC-024): one node per distinct type. Every `Ty`
+    // this snapshot's tables hold is a canonical copy sharing its heap,
+    // so the interner owns the type storage and travels with the result.
+    interner: TypeInterner
     resolved_ops: Dict(NodeId, ResolvedOperator)
     resolved_targets: Dict(NodeId, ResolvedTarget)
     instantiated_types: List(Ty)
@@ -100,6 +105,7 @@ pub fn no_phases() CheckPhases {
 pub fn empty_result(allocator: &Allocator? = null) TypeCheckResult {
     return .{
         node_types = dict(allocator),
+        interner = type_interner(allocator),
         resolved_ops = dict(allocator),
         resolved_targets = dict(allocator),
         instantiated_types = list(0, allocator),
@@ -124,6 +130,7 @@ pub fn empty_result(allocator: &Allocator? = null) TypeCheckResult {
 // helpers).
 pub fn deinit(self: &TypeCheckResult) {
     self.node_types.deinit()
+    self.interner.deinit()
     self.resolved_ops.deinit()
     self.resolved_targets.deinit()
     self.instantiated_types.deinit()
@@ -176,6 +183,11 @@ pub fn table_sizes(self: &TypeCheckResult, allocator: &Allocator? = null) List(T
     out.push(list_size("instantiated_types", &self.instantiated_types))
     out.push(list_size("synth_strings", &self.synth_strings))
     out.push(list_size("file_paths", &self.file_paths))
+    out.push(.{
+        name = "type interner",
+        entries = self.interner.len(),
+        bytes = self.interner.capacity_bytes(),
+    })
     out.push(overlay_size(&self.specializations))
     sort_by_bytes(&out)
     return out

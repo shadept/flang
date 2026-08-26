@@ -479,7 +479,14 @@ object contention on top), stage-2 = stage-3 byte-identical, 11/11 examples.
  5  convert phase by phase, Gate A green after each:
       5a  DONE 2026-08-26: module_ast, then nominal_names on a Checker that
           outlives one check
-      5b  nominal_body
+      5b  nominal_body - RFC-024 landed 2026-08-26 and hands this phase two
+          settled facts and two inherited questions: types are interned
+          handles (a zonked body names no engine variables, so it CAN
+          carry), and the table currently lives on the engine and moves
+          into the result per check. 5b decides (i) whether the table
+          outlives a demand and (ii) what that does to record keys, whose
+          field names are views into module sources (RFC-024 open
+          questions 2 and 3, transferred here).
       5c  signature / const_value
       5d  body  (64%)
       5e  specialization; retire drain_pending_specs / resolve_pending_calls

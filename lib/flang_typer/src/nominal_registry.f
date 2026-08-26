@@ -80,8 +80,8 @@ pub type NomLookup = enum {
 pub type NominalRegistry = struct {
     // Keyed by id, not positional. Ids come from `next_id` and are never
     // reused, so evicting an entry leaves a hole instead of renumbering
-    // every id after it - `Ty.Nominal(NominalRef{id})` values already
-    // baked into other results stay valid.
+    // every id after it - the nominal type nodes already baked into
+    // other results stay valid.
     defs: Dict(NominalId, NominalDef)
     next_id: NominalId
     by_fqn: Dict(String, NominalId)
@@ -436,7 +436,7 @@ test "placeholders keep their ids and drop their bodies" {
 
     // Give `m.B` a body, as `resolve_nominal_bodies` would.
     let fields: List(Field) = list(1)
-    fields.push(Field { name = "x", ty = Ty.Prim(PrimitiveKind.I32), decl_span = none_span() })
+    fields.push(Field { name = "x", ty = prim_of(PrimitiveKind.I32), decl_span = none_span() })
     let bd = reg.get(b).* match { NomStruct(s) => s, _ => probe_struct() }
     bd.fields = fields
     reg.put(b, NominalDef.NomStruct(bd))

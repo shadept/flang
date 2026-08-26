@@ -161,9 +161,31 @@ mints goes through `checker.node_of`, which records the span in
 copies, so the snapshot names the file of any span it holds without the
 project that produced it). `Field.decl_span` and `VariantDef.decl_span`
 do the same for a struct field and an enum variant, whose declarations
-have no node of their own. Both spans are metadata: `Ty.equals` and
-`format` ignore them, so two records that differ only in where they were
+have no node of their own. Both spans are metadata, outside a type
+node's identity, so two records that differ only in where they were
 written are still one type.
+
+**Interned types (RFC-024).** In the self-hosted checker `Ty` is a
+4-byte handle (`pub type Ty = u32`) into a `TypeInterner` - one `TyNode`
+per distinct type, children as handles sliced out of one flat array,
+identity by canonical rendering. `Void`, `Never`, `Error` and the 14
+primitives hold fixed ids (`type.f`), so the common leaves never hash.
+Consequences:
+
+- `a == b` on handles IS type equality; there is no structural `equals`.
+- Consumers match shapes via `interner.node(t)`; diagnostics render via
+  `interner.format`. A `Var` node keys on (id, level) because
+  `generalize`'s free-variable walk reads levels off the node.
+- The engine owns the table and interns as inference works (`fresh_var`,
+  `unify` bindings, `zonk`, `substitute` all produce handles); a per-node
+  ground bit makes `zonk` the identity on var-free subtrees.
+- `check_all` moves the table into the `TypeCheckResult`, which is the
+  single owner of every type's storage; the result's tables hold
+  handles. Lowering resolves through `result.interner` (via
+  `LowerCtx.it` - see the known-issues entry on reference-crossing
+  mutation).
+- The table must not outlive the module sources: record keys embed field
+  names, which are views into them.
 
 ## Intermediate Representation (FIR)
 

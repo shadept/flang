@@ -48,12 +48,12 @@ import flang_typer.scheme
 import flang_typer.env
 import flang_typer.inference_engine
 import flang_typer.inference_results
+import flang_typer.interner
 import flang_typer.nominal_registry
 import flang_typer.fqn_map
 import flang_typer.function_registry
 import flang_typer.specialization
 import flang_typer.template_expand
-import flang_typer.substitution
 import flang_typer.visibility
 import flang_typer.node_id
 import flang_typer.error_codes
@@ -483,7 +483,7 @@ pub fn resolve_type_expr(self: &Checker, te: &TypeExpr) Ty {
         Function(f) => resolve_function(self, &f),
         GenericBind(g) => resolve_generic_bind(self, &g),
         AnonStruct(a) => resolve_anon_struct_type(self, &a),
-        _ => Ty.Error,
+        _ => TY_ERROR,
     }
 }
 
@@ -492,7 +492,7 @@ pub fn resolve_type_expr(self: &Checker, te: &TypeExpr) Ty {
 // parameterised one falls back to `Error` rather than silently dropping
 // the parameters.
 fn resolve_anon_struct_type(self: &Checker, a: &AnonStructType) Ty {
-    if a.generics.len > 0 { return Ty.Error }
+    if a.generics.len > 0 { return TY_ERROR }
     let fields: List(Field) = list(a.fields.len, self.allocator)
     for i in 0..a.fields.len {
         fields.push(Field {
@@ -518,7 +518,7 @@ fn anon_struct_ty(self: &Checker, fields: List(Field), span: SourceSpan) Ty {
         if i > 0 { sb.append(",") }
         sb.append(fields[i].name)
         sb.append(":")
-        format(&fields[i].ty, &sb, "")
+        sb.append(self.engine.interner.key_of(fields[i].ty))
     }
     sb.append("}")
     const key = sb.to_string()
@@ -529,7 +529,7 @@ fn anon_struct_ty(self: &Checker, fields: List(Field), span: SourceSpan) Ty {
         const id = found.unwrap()
         key.deinit()
         fields.deinit()
-        return Ty.Nominal(NominalRef { id = id, args = no_args })
+        return mk_nominal(self, id, no_args)
     }
 
     // The registry FQN is a bare counter, NOT the structural key: the key
@@ -550,17 +550,17 @@ fn anon_struct_ty(self: &Checker, fields: List(Field), span: SourceSpan) Ty {
     let idx = self.anon_keys.len
     self.anon_keys.push(key)
     self.anon_structs.set(self.anon_keys[idx].as_view(), nid)
-    return Ty.Nominal(NominalRef { id = nid, args = no_args })
+    return mk_nominal(self, nid, no_args)
 }
 
 fn resolve_named(self: &Checker, n: &NamedType) Ty {
     // Primitive?
     let prim = prim_from_name(n.name)
-    if prim.is_some() { return Ty.Prim(prim.unwrap()) }
+    if prim.is_some() { return prim_of(prim.unwrap()) }
 
     // Builtin non-primitive types.
-    if n.name == "void" { return Ty.Void }
-    if n.name == "never" { return Ty.Never }
+    if n.name == "void" { return TY_VOID }
+    if n.name == "never" { return TY_NEVER }
 
     // A type parameter in scope shadows every nominal - it is the
     // innermost binding. Without this, a project type named `E`
@@ -584,7 +584,7 @@ fn resolve_named(self: &Checker, n: &NamedType) Ty {
     if found_id.is_some() {
         warn_deprecated_type(self, found_id.unwrap(), n.name, n.span)
         let args = resolve_generic_args(self, n)
-        return Ty.Nominal(NominalRef { id = found_id.unwrap(), args = args })
+        return mk_nominal(self, found_id.unwrap(), args)
     }
 
     // Alias? Expand its stored body lazily. Resolving the body here (rather
@@ -600,7 +600,7 @@ fn resolve_named(self: &Checker, n: &NamedType) Ty {
         if contains_view(&self.alias_stack, n.name) {
             push_diag_e(self, n.span, E_CYCLIC_ALIAS,
                 $"type alias `{n.name}` is cyclic - it expands to itself")
-            return Ty.Error
+            return TY_ERROR
         }
         let body = alias_body.unwrap()
         self.alias_stack.push(n.name)
@@ -620,11 +620,11 @@ fn resolve_named(self: &Checker, n: &NamedType) Ty {
     if hidden_info.is_some() {
         let info = hidden_info.unwrap()
         let args = resolve_generic_args(self, n)
-        return Ty.Nominal(NominalRef { id = info.id, args = args })
+        return mk_nominal(self, info.id, args)
     }
 
     push_diag_e(self, n.span, E_UNKNOWN_TYPE, $"unknown type `{n.name}`")
-    return Ty.Error
+    return TY_ERROR
 }
 
 // W2001: naming a `#deprecated` struct or enum. Fires at every use site,
@@ -656,11 +656,11 @@ fn resolve_reference(self: &Checker, r: &ReferenceType) Ty {
     let inner = resolve_type_expr(self, r.inner)
     // A function type is already pointer-sized; `&fn(...)` would be a
     // pointer to a pointer nothing can produce (E2006).
-    let is_fn = inner match { Func(_) => true, _ => false }
+    let is_fn = ty_node(self, inner) match { NFunc(_) => true, _ => false }
     if is_fn {
         push_diag_e(self, r.span, E_REF_TO_FN,
             from_view("cannot take a reference to a function type - function types are already pointer-sized"))
-        return Ty.Error
+        return TY_ERROR
     }
     return self.engine.mk_ref(inner)
 }
@@ -668,10 +668,10 @@ fn resolve_reference(self: &Checker, r: &ReferenceType) Ty {
 fn resolve_optional(self: &Checker, o: &OptionalType) Ty {
     let inner = resolve_type_expr(self, o.inner)
     let opt_id = self.nominals.by_fqn.get(FQN_OPTION)
-    if opt_id.is_none() { return Ty.Error }
+    if opt_id.is_none() { return TY_ERROR }
     let args: List(Ty) = list(1, self.allocator)
     args.push(inner)
-    return Ty.Nominal(NominalRef { id = opt_id.unwrap(), args = args })
+    return mk_nominal(self, opt_id.unwrap(), args)
 }
 
 fn resolve_array(self: &Checker, a: &ArrayType) Ty {
@@ -704,10 +704,10 @@ fn resolve_slice(self: &Checker, s: &SliceType) Ty {
 // stdlib's slice type is not registered (a source set without `core`).
 fn slice_of(self: &Checker, elem: Ty) Ty {
     let slice_id = self.nominals.by_fqn.get(FQN_SLICE)
-    if slice_id.is_none() { return Ty.Error }
+    if slice_id.is_none() { return TY_ERROR }
     let args: List(Ty) = list(1, self.allocator)
     args.push(elem)
-    return Ty.Nominal(NominalRef { id = slice_id.unwrap(), args = args })
+    return mk_nominal(self, slice_id.unwrap(), args)
 }
 
 // A declared parameter's type. A variadic `..xs: T` is a `Slice(T)`
@@ -725,7 +725,7 @@ fn resolve_tuple(self: &Checker, t: &TupleType) Ty {
     for &e in t.elements {
         elems.push(resolve_type_expr(self, e))
     }
-    return Ty.Tuple(elems)
+    return mk_tuple(self, elems)
 }
 
 fn resolve_function(self: &Checker, f: &FunctionType) Ty {
@@ -735,7 +735,7 @@ fn resolve_function(self: &Checker, f: &FunctionType) Ty {
     }
     let ret = f.return_type match {
         Some(rt) => resolve_type_expr(self, rt),
-        None => Ty.Void,
+        None => TY_VOID,
     }
     return self.engine.mk_func(params, ret)
 }
@@ -749,7 +749,7 @@ fn resolve_generic_bind(self: &Checker, g: &GenericBindType) Ty {
     let existing = self.env.lookup(g.name)
     if existing.is_some() { return self.engine.specialize(&existing.unwrap().scheme) }
     let fresh = self.engine.fresh_var()
-    let vid = fresh match { Var(v) => v.id, _ => 0u32 }
+    let vid = ty_node(self, fresh) match { NVar(v) => v.id, _ => 0u32 }
     self.sig_tps.push(SigTypeParam { name = g.name, var_id = vid })
     self.env.bind(g.name, Binding {
         scheme = mono(fresh, self.allocator),
@@ -817,7 +817,7 @@ pub fn push_diag_w(self: &Checker, span: SourceSpan, code: String, message: Owne
 // diagnostic on the checker's list.
 fn report_unify(self: &Checker, outcome: &UnifyOutcome, code: String, span: SourceSpan) {
     let ctx = report_ctx(code, span, Some(&self.nominals))
-    report(outcome, &ctx, &self.diagnostics, self.allocator)
+    report(outcome, &ctx, &self.engine.interner, &self.diagnostics, self.allocator)
 }
 
 pub fn current_visibility(self: &Checker) Visibility {
@@ -1148,7 +1148,7 @@ fn resolve_struct_body(self: &Checker, td: &TypeDecl, module_path: String) {
     let type_params: List(VarId) = list(anon.generics.len, self.allocator)
     for &gp in anon.generics {
         let fresh = self.engine.fresh_var()
-        let id = fresh match { Var(v) => v.id, _ => 0u32 }
+        let id = ty_node(self, fresh) match { NVar(v) => v.id, _ => 0u32 }
         type_params.push(id)
         self.env.bind(gp.name, Binding {
             scheme = mono(fresh, self.allocator),
@@ -1216,14 +1216,14 @@ fn nominal_contains(self: &Checker, current: NominalId, target: NominalId, seen:
     def.* match {
         NomStruct(sd) => {
             for i in 0..sd.fields.len {
-                if !hit and ty_contains_nominal(self, &sd.fields[i].ty, target, seen) { hit = true }
+                if !hit and ty_contains_nominal(self, sd.fields[i].ty, target, seen) { hit = true }
             }
         },
         NomEnum(ed) => {
             for i in 0..ed.variants.len {
                 let vd = &ed.variants[i]
                 for k in 0..vd.payloads.len {
-                    if !hit and ty_contains_nominal(self, &vd.payloads[k], target, seen) { hit = true }
+                    if !hit and ty_contains_nominal(self, vd.payloads[k], target, seen) { hit = true }
                 }
             }
         },
@@ -1232,10 +1232,10 @@ fn nominal_contains(self: &Checker, current: NominalId, target: NominalId, seen:
 }
 
 // A `Ref` is where the walk stops - that is the whole point of the rule.
-fn ty_contains_nominal(self: &Checker, t: &Ty, target: NominalId, seen: &Set(NominalId)) bool {
-    return t.* match {
-        Nominal(nr) => {
-            if nr.id == target { return true }
+fn ty_contains_nominal(self: &Checker, t: Ty, target: NominalId, seen: &Set(NominalId)) bool {
+    return ty_node(self, t) match {
+        NNominal(nn) => {
+            if nn.id == target { return true }
             // NOT the type arguments: `List(JsonValue)` is a fixed-size
             // handle whose elements live behind `ptr: &T`, and the walk
             // into `List`'s own fields stops at that reference. The cost
@@ -1244,17 +1244,17 @@ fn ty_contains_nominal(self: &Checker, t: &Ty, target: NominalId, seen: &Set(Nom
             // hides a cycle from this check, because the walk sees the
             // unsubstituted `T`. Substituting per instantiation belongs
             // with the interning work docs/self-host.md tracks.
-            nominal_contains(self, nr.id, target, seen)
+            nominal_contains(self, nn.id, target, seen)
         },
-        Array(a) => ty_contains_nominal(self, a.elem, target, seen),
-        Tuple(es) => tys_contain_nominal(self, &es, target, seen),
+        NArray(a) => ty_contains_nominal(self, a.elem, target, seen),
+        NTuple(span) => span_contains_nominal(self, span, target, seen),
         _ => false,
     }
 }
 
-fn tys_contain_nominal(self: &Checker, tys: &List(Ty), target: NominalId, seen: &Set(NominalId)) bool {
-    for i in 0..tys.len {
-        if ty_contains_nominal(self, &tys[i], target, seen) { return true }
+fn span_contains_nominal(self: &Checker, span: ChildSpan, target: NominalId, seen: &Set(NominalId)) bool {
+    for i in 0..span.len {
+        if ty_contains_nominal(self, self.engine.interner.child_at(span, i), target, seen) { return true }
     }
     return false
 }
@@ -1265,8 +1265,8 @@ fn tys_contain_nominal(self: &Checker, tys: &List(Ty), target: NominalId, seen: 
 fn peel_refs(self: &Checker, ty: Ty) Ty {
     let peeled = self.engine.resolve(ty)
     loop {
-        let inner = peeled match {
-            Ref(i) => Some(self.engine.resolve(i.*)),
+        let inner = ty_node(self, peeled) match {
+            NRef(i) => Some(self.engine.resolve(i)),
             _ => null,
         }
         if inner.is_none() { break }
@@ -1343,7 +1343,7 @@ fn resolve_enum_body(self: &Checker, td: &TypeDecl, module_path: String) {
     let type_params: List(VarId) = list(anon.generics.len, self.allocator)
     for &gp in anon.generics {
         let fresh = self.engine.fresh_var()
-        let vid = fresh match { Var(v) => v.id, _ => 0u32 }
+        let vid = ty_node(self, fresh) match { NVar(v) => v.id, _ => 0u32 }
         type_params.push(vid)
         self.env.bind(gp.name, Binding {
             scheme = mono(fresh, self.allocator),
@@ -1468,7 +1468,7 @@ fn duplicate_overload(self: &Checker, name: String, sig: &Scheme) bool {
             Some(m) => m == here,
             None => false,
         }
-        if same_module and equals(&c.signature.body, &sig.body) { return true }
+        if same_module and c.signature.body == sig.body { return true }
     }
     return false
 }
@@ -1514,7 +1514,7 @@ fn register_function_sig(self: &Checker, fd: &FunctionDecl) {
     }
     let ret = fd.return_type match {
         Some(rt) => resolve_type_expr(self, &rt),
-        None => Ty.Void,
+        None => TY_VOID,
     }
     let fn_ty = self.engine.mk_func(params, ret)
 
@@ -1664,7 +1664,7 @@ fn check_function_body(self: &Checker, fd: &FunctionDecl) {
     }
     let ret = fd.return_type match {
         Some(rt) => resolve_type_expr(self, &rt),
-        None => Ty.Void,
+        None => TY_VOID,
     }
 
     let frame = FnFrame { name = fd.name, return_ty = ret, decl_span = fd.span }
@@ -1676,20 +1676,15 @@ fn check_function_body(self: &Checker, fd: &FunctionDecl) {
     // `return` yields Void and is covered by `check_return`, so Void is
     // skipped to avoid a spurious "expected T, got void". A void function
     // discards its trailing expression's value entirely.
-    let ret_is_void = ret match { Void => true, _ => false }
-    body_ty match {
-        Void => {},
-        _ => {
-            if !ret_is_void {
-                unify_expected(self, body_ty, ret, E_RETURN_MISMATCH, fd.span)
-            }
-        },
+    let ret_is_void = ret == TY_VOID
+    if body_ty != TY_VOID and !ret_is_void {
+        unify_expected(self, body_ty, ret, E_RETURN_MISMATCH, fd.span)
     }
 
     // E2049: a value-returning function whose body can fall off the end.
     // `never` returns diverge by definition, and a body whose last
     // statement is an expression is the implicit-return form.
-    let ret_is_never = ret match { Never => true, _ => false }
+    let ret_is_never = ret == TY_NEVER
     if !ret_is_void and !ret_is_never and !block_returns(self, &body) {
         push_diag_e(self, fd.span, E_MISSING_RETURN,
             $"function `{fd.name}` must return a value")
@@ -1809,9 +1804,9 @@ const MAX_SPEC_DEPTH: usize = 64
 // the genuinely un-inferable call site (E2001).
 fn pending_ready(self: &Checker, p: &PendingSpec) bool {
     for i in 0..p.inst_params.len {
-        if self.engine.zonk(p.inst_params[i]).is_var() { return false }
+        if self.engine.is_var(self.engine.zonk(p.inst_params[i])) { return false }
     }
-    return !self.engine.zonk(p.inst_ret).is_var()
+    return !self.engine.is_var(self.engine.zonk(p.inst_ret))
 }
 
 // Drain the pending picks of the body scope that just finished, to a
@@ -1870,7 +1865,7 @@ fn process_pending(self: &Checker, p: &PendingSpec) {
     // Readiness is the drain's business (`pending_ready`); by here the
     // only free vars left sit inside callable slots, which the body pins.
 
-    let key = key_for(p.function_id, &params, ret, self.allocator)
+    let key = key_for(&self.engine.interner, p.function_id, &params, ret, self.allocator)
     let existing = self.specs.lookup(key.as_view())
     let id = existing match {
         Some(sid) => {
@@ -1919,7 +1914,7 @@ fn resolve_anon_literals(self: &Checker) {
         // until inference settles so a literal that DOES have a context
         // (a `let` annotation, a parameter, a return type) still unifies
         // with the declared nominal instead of minting a twin.
-        let unpinned = z match { Var(_) => true, _ => false }
+        let unpinned = self.engine.is_var(z)
         if unpinned {
             let fields: List(Field) = list(pa.fields.len, self.allocator)
             for &rec in pa.fields {
@@ -1931,7 +1926,7 @@ fn resolve_anon_literals(self: &Checker) {
             continue
         }
         for &rec in pa.fields {
-            let fty = struct_field_lookup(self, &z, rec.name)
+            let fty = struct_field_lookup(self, z, rec.name)
             if fty.is_some() {
                 const o = self.engine.unify(rec.ty, fty.unwrap())
                 report_unify(self, &o, E_TYPE_MISMATCH, rec.span)
@@ -1949,7 +1944,7 @@ fn resolve_anon_literals(self: &Checker) {
 fn validate_literals(self: &Checker) {
     for &pl in self.pending_literals {
         let z = self.engine.zonk(pl.ty)
-        let unresolved = z match { Var(_) => true, _ => false }
+        let unresolved = self.engine.is_var(z)
         if unresolved {
             let kind = if pl.is_float { "float" } else { "integer" }
             push_diag_e(self, pl.span, E_UNINFERRED,
@@ -1958,8 +1953,8 @@ fn validate_literals(self: &Checker) {
         }
         // The literal settled on a type - it has to be one a numeric
         // literal can BE (E2102), and the value has to fit it (E2029).
-        z match {
-            Prim(p) => {
+        ty_node(self, z) match {
+            NPrim(p) => {
                 if !literal_prim_ok(p, pl.is_float) {
                     push_diag_e(self, pl.span, E_PRIM_CONSTRAINT,
                         $"type mismatch: expected one of the numeric types, got `{prim_name(p)}` for literal `{pl.text}`")
@@ -2046,12 +2041,12 @@ fn parse_int_magnitude(text: String) u64? {
 }
 
 // No free type variable anywhere in the instantiated signature.
-fn sig_concrete(self: &Checker, params: &List(Ty), ret: &Ty) bool {
+fn sig_concrete(self: &Checker, params: &List(Ty), ret: Ty) bool {
     let q: Set(VarId) = set(self.allocator)
     for i in 0..params.len {
-        free_vars(&params[i], 0u32, &q)
+        free_vars(&self.engine.interner, params[i], 0u32, &q)
     }
-    free_vars(ret, 0u32, &q)
+    free_vars(&self.engine.interner, ret, 0u32, &q)
     let n = q.len()
     q.deinit()
     return n == 0
@@ -2111,7 +2106,7 @@ fn instantiate(self: &Checker, p: &PendingSpec, key: OwnedString, params: List(T
         let bound = p.tp_binds.get(template.tps[i].var_id)
         let conc = bound match {
             Some(b) => self.engine.zonk(b),
-            None => Ty.Error,
+            None => TY_ERROR,
         }
         self.env.bind(template.tps[i].name, Binding {
             scheme = mono(conc, self.allocator),
@@ -2161,7 +2156,7 @@ fn instantiate(self: &Checker, p: &PendingSpec, key: OwnedString, params: List(T
         fparams.push(self.engine.zonk(sp.concrete_params[i]))
     }
     let fret = self.engine.zonk(sp.concrete_return)
-    let fkey = key_for(p.function_id, &fparams, fret, self.allocator)
+    let fkey = key_for(&self.engine.interner, p.function_id, &fparams, fret, self.allocator)
     self.specs.set_signature(sid, fparams, fret)
     let _rk = self.specs.rekey(sid, fkey)
 
@@ -2350,7 +2345,7 @@ fn check_interp_into(self: &Checker, interp: &InterpolatedStringExpr, target: &E
                 Text(_) => {},
             }
         }
-        return Ty.Void
+        return TY_VOID
     }
 
     let stmts: List(Stmt) = list(interp.parts.len, self.allocator)
@@ -2565,7 +2560,7 @@ fn check_match(self: &Checker, m: &MatchExpr) Ty {
     // so the first arm sets the type and a match whose every arm diverges
     // stays `Never`. That is the honest answer: such a match has no value
     // to consume, and `Never` unifies with whatever the context wants.
-    let result = Ty.Never
+    let result = TY_NEVER
     for &arm in m.arms {
         self.env.push_scope()
         check_pattern(self, &arm.pattern, scrutinee)
@@ -2587,8 +2582,8 @@ fn check_match(self: &Checker, m: &MatchExpr) Ty {
 // fail. Mirrors the reference's ad-hoc exhaustiveness pass.
 fn check_match_coverage(self: &Checker, m: &MatchExpr, scrutinee: Ty) {
     let peeled = peel_refs(self, scrutinee)
-    let nid = peeled match {
-        Nominal(nr) => Some(nr.id),
+    let nid = ty_node(self, peeled) match {
+        NNominal(nn) => Some(nn.id),
         _ => null,
     }
     let ed: EnumDef? = null
@@ -2601,7 +2596,7 @@ fn check_match_coverage(self: &Checker, m: &MatchExpr, scrutinee: Ty) {
     if ed.is_none() {
         // A still-open scrutinee may yet become an enum; anything else
         // concrete never will (E2030).
-        let open = peeled match { Var(_) => true, Error => true, _ => false }
+        let open = self.engine.is_var(peeled) or peeled.is_error()
         if !open and match_names_variant(self, m) {
             push_diag_e(self, m.span, E_MATCH_NON_ENUM,
                 from_view("cannot match variant patterns on a non-enum type"))
@@ -2752,7 +2747,7 @@ fn check_struct_pattern(self: &Checker, s: &StructPattern, expected: Ty) {
     const declared = resolve_type_expr(self, s.type_expr)
     unify_expected(self, declared, expected, E_TYPE_MISMATCH, s.span)
     for &f in s.fields {
-        let fty = struct_field_lookup(self, &expected, f.name)
+        let fty = struct_field_lookup(self, expected, f.name)
         if fty.is_none() {
             push_diag_e(self, f.span, E_FIELD_NOT_FOUND,
                 $"no field `{f.name}` on this type")
@@ -2770,8 +2765,8 @@ fn check_struct_pattern(self: &Checker, s: &StructPattern, expected: Ty) {
 
 // `(a, b)` - each element against the scrutinee tuple's element type.
 fn check_tuple_pattern(self: &Checker, t: &TuplePattern, expected: Ty) {
-    let elems = self.engine.resolve(expected) match {
-        Tuple(es) => Some(es),
+    let elems = ty_node(self, self.engine.resolve(expected)) match {
+        NTuple(es) => Some(es),
         _ => null,
     }
     if elems.is_none() {
@@ -2786,7 +2781,7 @@ fn check_tuple_pattern(self: &Checker, t: &TuplePattern, expected: Ty) {
         return
     }
     for i in 0..t.elements.len {
-        check_pattern(self, &t.elements[i], es[i], true)
+        check_pattern(self, &t.elements[i], self.engine.interner.child_at(es, i), true)
     }
 }
 
@@ -2807,8 +2802,8 @@ fn check_variant_pattern(self: &Checker, ev: &EnumVariantPattern, expected: Ty) 
     // without this the payload bindings fall back to free vars and any
     // generic call on them becomes un-inferable.
     let peeled = peel_refs(self, expected)
-    let nr = peeled match {
-        Nominal(n) => Some(n),
+    let nr = ty_node(self, peeled) match {
+        NNominal(n) => Some(n),
         _ => null,
     }
     if nr.is_none() { bind_unconstrained(self, &ev.payloads); return }
@@ -2849,10 +2844,12 @@ fn check_variant_pattern(self: &Checker, ev: &EnumVariantPattern, expected: Ty) 
     // scrutinee's type arguments give them concrete meaning.
     let sub = dict(self.allocator)
     for k in 0..e.type_params.len {
-        if k < n.args.len { sub.set(e.type_params[k], n.args[k]) }
+        if k < n.args.len {
+            sub.set(e.type_params[k], self.engine.interner.child_at(n.args, k))
+        }
     }
     for i in 0..payloads.len {
-        let pty = substitute(&payloads[i], &sub, self.allocator)
+        let pty = self.engine.substitute_shared(payloads[i], &sub)
         check_pattern(self, &ev.payloads[i], pty, true)
     }
     sub.deinit()
@@ -2869,8 +2866,8 @@ fn check_variant_pattern(self: &Checker, ev: &EnumVariantPattern, expected: Ty) 
 // `RtEnumVariant`, so it never has to re-derive it.
 fn check_variable_pattern(self: &Checker, v: &VariablePattern, expected: Ty, is_sub: bool = false) {
     let peeled = peel_refs(self, expected)
-    let nr = peeled match {
-        Nominal(n) => Some(n),
+    let nr = ty_node(self, peeled) match {
+        NNominal(n) => Some(n),
         _ => null,
     }
     if nr.is_some() {
@@ -2957,7 +2954,7 @@ fn check_assignment(self: &Checker, a: &AssignmentExpr) Ty {
         Index(ix) => try_set_index_assignment(self, a, &ix),
         _ => false,
     }
-    if set_dispatched { return Ty.Void }
+    if set_dispatched { return TY_VOID }
 
     // `const x = 10; x = 20` - a const binding is write-once (E2038).
     a.lhs.* match {
@@ -2987,7 +2984,7 @@ fn check_assignment(self: &Checker, a: &AssignmentExpr) Ty {
         MemberAccess(ma) => check_scoped_mutability(self, &ma, a.span),
         _ => {},
     }
-    return Ty.Void
+    return TY_VOID
 }
 
 fn check_scoped_mutability(self: &Checker, ma: &MemberAccessExpr, span: SourceSpan) {
@@ -2996,8 +2993,8 @@ fn check_scoped_mutability(self: &Checker, ma: &MemberAccessExpr, span: SourceSp
     let recv = self.results.get_type(self.node_of(expr_span(ma.receiver)))
     if recv.is_none() { return }
     let peeled = peel_refs(self, recv.unwrap())
-    let nid_opt = peeled match {
-        Nominal(nr) => Some(nr.id),
+    let nid_opt = ty_node(self, peeled) match {
+        NNominal(nn) => Some(nn.id),
         _ => null,
     }
     if nid_opt.is_none() { return }
@@ -3032,23 +3029,23 @@ fn try_set_index_assignment(self: &Checker, a: &AssignmentExpr, ix: &IndexExpr) 
     const rbase = self.engine.resolve(base)
     // Slices are `Nominal(core.slice.Slice)`; user nominals are what
     // op_set_index targets, so only non-Slice nominals proceed.
-    const builtin = rbase match {
-        Array(_) => true,
-        Prim(_) => true,
-        Var(_) => true,
-        Error => true,
-        Nominal(n0) => is_slice_nominal(self, n0.id),
-        Ref(inner) => inner.* match {
-            Array(_) => true,
-            Prim(_) => true,
-            Nominal(n1) => is_slice_nominal(self, n1.id),
+    const builtin = ty_node(self, rbase) match {
+        NArray(_) => true,
+        NPrim(_) => true,
+        NVar(_) => true,
+        NError => true,
+        NNominal(n0) => is_slice_nominal(self, n0.id),
+        NRef(inner) => ty_node(self, inner) match {
+            NArray(_) => true,
+            NPrim(_) => true,
+            NNominal(n1) => is_slice_nominal(self, n1.id),
             _ => false,
         },
         _ => true,
     }
     if builtin { return false }
     const key = check_expr(self, ix.index)
-    const already_ref = rbase match { Ref(_) => true, _ => false }
+    const already_ref = ty_node(self, rbase) match { NRef(_) => true, _ => false }
     const ref_base = if already_ref { base } else { self.engine.mk_ref(base) }
     // A declared ref-form place wins over op_set_index.
     if index_operator(self, "op_index_ref", ref_base, key, ix.span).is_some() { return false }
@@ -3113,17 +3110,17 @@ fn check_unary(self: &Checker, u: &UnaryExpr) Ty {
     let inner = check_expr(self, u.operand)
     return u.op match {
         Not => {
-            unify_expected(self, inner, Ty.Prim(PrimitiveKind.Bool), E_TYPE_MISMATCH, u.span)
-            Ty.Prim(PrimitiveKind.Bool)
+            unify_expected(self, inner, prim_of(PrimitiveKind.Bool), E_TYPE_MISMATCH, u.span)
+            prim_of(PrimitiveKind.Bool)
         },
         Neg => inner,
         BitNot => {
             // `~` is a bit pattern operation: bools have no bits to flip
             // in FLang's model, and floats have no meaningful ones.
             let z = self.engine.resolve(inner)
-            let bad = z match {
-                Prim(p) => p == PrimitiveKind.Bool or is_float(p),
-                Nominal(_) => true,
+            let bad = ty_node(self, z) match {
+                NPrim(p) => p == PrimitiveKind.Bool or is_float(p),
+                NNominal(_) => true,
                 _ => false,
             }
             if bad {
@@ -3137,16 +3134,16 @@ fn check_unary(self: &Checker, u: &UnaryExpr) Ty {
 
 // The `T` of an `Option(T)`, or null when `ty` is not the well-known
 // Option nominal.
-fn option_inner(self: &Checker, ty: &Ty) Ty? {
-    let nr = ty.* match {
-        Nominal(n) => n,
+fn option_inner(self: &Checker, ty: Ty) Ty? {
+    let nn = ty_node(self, ty) match {
+        NNominal(n) => n,
         _ => return null,
     }
     let id = self.nominals.by_fqn.get(FQN_OPTION)
     if id.is_none() { return null }
-    if id.unwrap() != nr.id { return null }
-    if nr.args.len != 1 { return null }
-    return Some(nr.args[0])
+    if id.unwrap() != nn.id { return null }
+    if nn.args.len != 1 { return null }
+    return Some(self.engine.interner.child_at(nn.args, 0))
 }
 
 // `a ?? b` - `a` must be `Option(T)`. Two result shapes, matching the
@@ -3158,12 +3155,11 @@ fn option_inner(self: &Checker, ty: &Ty) Ty? {
 fn check_coalesce(self: &Checker, c: &CoalesceExpr) Ty {
     let lhs = self.engine.resolve(check_expr(self, c.lhs))
     // Poison absorbs: the operand's error is already reported.
-    let is_err = lhs match { Error => true, _ => false }
-    if is_err {
+    if lhs.is_error() {
         let _r = check_expr(self, c.rhs)
-        return Ty.Error
+        return TY_ERROR
     }
-    let inner = option_inner(self, &lhs)
+    let inner = option_inner(self, lhs)
     if inner.is_none() {
         let _r = check_expr(self, c.rhs)
         push_diag_e(self, c.span, E_TYPE_MISMATCH,
@@ -3173,7 +3169,7 @@ fn check_coalesce(self: &Checker, c: &CoalesceExpr) Ty {
     let t = inner.unwrap()
     let rhs = check_expr(self, c.rhs)
     let rres = self.engine.resolve(rhs)
-    let rinner = option_inner(self, &rres)
+    let rinner = option_inner(self, rres)
     if rinner.is_some() {
         unify_expected(self, rinner.unwrap(), t, E_TYPE_MISMATCH, c.span)
         return lhs
@@ -3191,28 +3187,27 @@ fn check_coalesce(self: &Checker, c: &CoalesceExpr) Ty {
 fn check_null_prop(self: &Checker, np: &NullPropagationExpr) Ty {
     let recv = self.engine.resolve(check_expr(self, np.receiver))
     // Poison absorbs: the receiver's error is already reported.
-    let is_err = recv match { Error => true, _ => false }
-    if is_err { return Ty.Error }
-    let inner = option_inner(self, &recv)
+    if recv.is_error() { return TY_ERROR }
+    let inner = option_inner(self, recv)
     if inner.is_none() {
         push_diag_e(self, np.span, E_TYPE_MISMATCH,
             from_view("null propagation `?.` requires an Option receiver"))
         return self.engine.fresh_var()
     }
     let t = inner.unwrap()
-    let fty = struct_field_lookup(self, &t, np.member)
+    let fty = struct_field_lookup(self, t, np.member)
     if fty.is_none() {
         push_diag_e(self, np.span, E_TYPE_MISMATCH,
             from_view("`?.` names no field on the Option's inner type"))
         return self.engine.fresh_var()
     }
     let f = self.engine.resolve(fty.unwrap())
-    if option_inner(self, &f).is_some() { return f }
+    if option_inner(self, f).is_some() { return f }
     let id = self.nominals.by_fqn.get(FQN_OPTION)
-    if id.is_none() { return Ty.Error }
+    if id.is_none() { return TY_ERROR }
     let args: List(Ty) = list(1, self.allocator)
     args.push(f)
-    return Ty.Nominal(NominalRef { id = id.unwrap(), args = args })
+    return mk_nominal(self, id.unwrap(), args)
 }
 
 // `expr?` (RFC-009). The reference desugars into a synthesized
@@ -3250,8 +3245,8 @@ fn check_try(self: &Checker, t: &TryExpr) Ty {
     }
     let p = pick.unwrap()
 
-    let nr = self.engine.resolve(p.ret) match {
-        Nominal(n) => Some(n),
+    let nr = ty_node(self, self.engine.resolve(p.ret)) match {
+        NNominal(n) => Some(n),
         _ => null,
     }
     let tr_id = self.nominals.by_fqn.get(FQN_TRY_RESULT)
@@ -3267,14 +3262,14 @@ fn check_try(self: &Checker, t: &TryExpr) Ty {
     // The early-returned `R` must fit the enclosing function's declared
     // return type - the constraint the desugar's `return r` arm imposes.
     let frame = &self.fn_stack[self.fn_stack.len - 1]
-    unify_expected(self, n.args[1], frame.return_ty, E_RETURN_MISMATCH, t.span)
+    unify_expected(self, self.engine.interner.child_at(n.args, 1), frame.return_ty, E_RETURN_MISMATCH, t.span)
 
     self.results.record_operator(self.node_of(t.span), ResolvedOperator {
         function_id = p.id, negate_result = false,
         cmp_derived_op = null, is_ref_form = false, spec_id = null,
     })
     note_pending(self, t.span, true, &p)
-    return n.args[0]
+    return self.engine.interner.child_at(n.args, 0)
 }
 
 // `operand.*` - peels one reference. A nominal operand dispatches to its
@@ -3286,18 +3281,18 @@ fn check_deref(self: &Checker, d: &DereferenceExpr) Ty {
     let t = self.engine.resolve(check_expr(self, d.operand))
     // An unresolved operand may still become a reference; anything else
     // concrete never will (E2012).
-    let open = t match { Var(_) => true, Error => true, _ => false }
+    let open = self.engine.is_var(t) or t.is_error()
     if !open {
-        let derefable = t match { Ref(_) => true, Nominal(_) => true, _ => false }
+        let derefable = ty_node(self, t) match { NRef(_) => true, NNominal(_) => true, _ => false }
         if !derefable {
             push_diag_e(self, d.span, E_CANNOT_DEREF,
                 from_view("cannot dereference a value that is not a reference"))
-            return Ty.Error
+            return TY_ERROR
         }
     }
-    return t match {
-        Ref(inner) => inner.*,
-        Nominal(_) => user_deref(self, t, d.span),
+    return ty_node(self, t) match {
+        NRef(inner) => inner,
+        NNominal(_) => user_deref(self, t, d.span),
         _ => self.engine.fresh_var(),
     }
 }
@@ -3309,8 +3304,8 @@ fn user_deref(self: &Checker, t: Ty, span: SourceSpan) Ty {
     args.deinit()
     if pick.is_none() { return self.engine.fresh_var() }
     let p = pick.unwrap()
-    let inner = self.engine.resolve(p.ret) match {
-        Ref(i) => i.*,
+    let inner = ty_node(self, self.engine.resolve(p.ret)) match {
+        NRef(i) => i,
         _ => return self.engine.fresh_var(),
     }
     self.results.record_operator(self.node_of(span), ResolvedOperator {
@@ -3347,24 +3342,24 @@ fn check_range(self: &Checker, r: &RangeExpr) Ty {
 
 fn mk_range(self: &Checker, elem: Ty) Ty {
     let id = self.nominals.by_fqn.get(FQN_RANGE)
-    if id.is_none() { return Ty.Error }
+    if id.is_none() { return TY_ERROR }
     let args: List(Ty) = list(1, self.allocator)
     args.push(elem)
-    return Ty.Nominal(NominalRef { id = id.unwrap(), args = args })
+    return mk_nominal(self, id.unwrap(), args)
 }
 
 fn mk_slice_ty(self: &Checker, elem: Ty) Ty {
     let id = self.nominals.by_fqn.get(FQN_SLICE)
-    if id.is_none() { return Ty.Error }
+    if id.is_none() { return TY_ERROR }
     let args: List(Ty) = list(1, self.allocator)
     args.push(elem)
-    return Ty.Nominal(NominalRef { id = id.unwrap(), args = args })
+    return mk_nominal(self, id.unwrap(), args)
 }
 
 // True when `t` is the well-known `Range` nominal. An index of range type
 // selects the slicing form of indexing rather than element access.
-fn is_range_ty(self: &Checker, t: &Ty) bool {
-    let n = t.* match { Nominal(nr) => nr, _ => return false }
+fn is_range_ty(self: &Checker, t: Ty) bool {
+    let n = ty_node(self, t) match { NNominal(nn) => nn, _ => return false }
     let id = self.nominals.by_fqn.get(FQN_RANGE)
     if id.is_none() { return false }
     return id.unwrap() == n.id
@@ -3373,20 +3368,20 @@ fn is_range_ty(self: &Checker, t: &Ty) bool {
 // The element of a built-in indexable base: a fixed array, or the
 // well-known `Slice` nominal. Null for everything else, which routes the
 // index through the user-defined operators.
-fn builtin_element(self: &Checker, t: &Ty) Ty? {
-    return t.* match {
-        Array(a) => Some(a.elem.*),
-        Nominal(n) => slice_element(self, &n),
+fn builtin_element(self: &Checker, t: Ty) Ty? {
+    return ty_node(self, t) match {
+        NArray(a) => Some(a.elem),
+        NNominal(n) => slice_element(self, &n),
         _ => null,
     }
 }
 
-fn slice_element(self: &Checker, n: &NominalRef) Ty? {
+fn slice_element(self: &Checker, n: &NNominalNode) Ty? {
     let id = self.nominals.by_fqn.get(FQN_SLICE)
     if id.is_none() { return null }
     if id.unwrap() != n.id { return null }
     if n.args.len != 1 { return null }
-    return Some(n.args[0])
+    return Some(self.engine.interner.child_at(n.args, 0))
 }
 
 // `base[index]`.
@@ -3407,10 +3402,10 @@ fn check_index(self: &Checker, idx: &IndexExpr) Ty {
 
     let rbase = self.engine.resolve(base_ty)
     let rindex = self.engine.resolve(index_ty)
-    let ranged = is_range_ty(self, &rindex)
+    let ranged = is_range_ty(self, rindex)
 
     if !ranged {
-        let is_bool = rindex match { Prim(p) => p == PrimitiveKind.Bool, _ => false }
+        let is_bool = rindex == prim_of(PrimitiveKind.Bool)
         if is_bool {
             push_diag_e(self, expr_span(idx.index), E_BAD_INDEX_TYPE,
                 from_view("cannot use `bool` as an index type"))
@@ -3418,12 +3413,12 @@ fn check_index(self: &Checker, idx: &IndexExpr) Ty {
         }
     }
 
-    let elem = builtin_element(self, &rbase)
+    let elem = builtin_element(self, rbase)
     if elem.is_some() {
         // `xs[a..b]` yields a view of the same element type; the bounds
         // are `usize`. `xs[i]` yields the element.
         if ranged {
-            constrain_range_usize(self, &rindex, idx.span)
+            constrain_range_usize(self, rindex, idx.span)
             // Route through the stdlib's clamping `op_index($T[], Range)`
             // so lowering has a callable pick (M11). The base is already
             // a built-in slice/array here, so the String overload cannot
@@ -3446,27 +3441,26 @@ fn check_index(self: &Checker, idx: &IndexExpr) Ty {
         return elem.unwrap()
     }
 
-    return user_index(self, idx, base_ty, &rbase, index_ty)
+    return user_index(self, idx, base_ty, rbase, index_ty)
 }
 
 // A range used as an index counts in elements, so its bounds are `usize`.
-fn constrain_range_usize(self: &Checker, rindex: &Ty, span: SourceSpan) {
-    let n = rindex.* match { Nominal(nr) => nr, _ => return }
+fn constrain_range_usize(self: &Checker, rindex: Ty, span: SourceSpan) {
+    let n = ty_node(self, rindex) match { NNominal(nn) => nn, _ => return }
     if n.args.len != 1 { return }
-    unify_expected(self, n.args[0], ty_usize(), E_TYPE_MISMATCH, span)
+    unify_expected(self, self.engine.interner.child_at(n.args, 0), ty_usize(), E_TYPE_MISMATCH, span)
 }
 
 // User-defined indexing. Ref-form wins when it resolves; the reference
 // checker additionally reports E2077 when a type declares both forms,
 // which needs a non-committing probe of the loser and is not done here -
 // the pick is the same either way, only the diagnostic is missing.
-fn user_index(self: &Checker, idx: &IndexExpr, base_ty: Ty, rbase: &Ty, index_ty: Ty) Ty {
+fn user_index(self: &Checker, idx: &IndexExpr, base_ty: Ty, rbase: Ty, index_ty: Ty) Ty {
     // An unresolved base cannot arbitrate an overload set; committing the
     // first match would bind it arbitrarily.
-    let base_unbound = rbase.* match { Var(_) => true, _ => false }
-    if base_unbound { return self.engine.fresh_var() }
+    if self.engine.is_var(rbase) { return self.engine.fresh_var() }
 
-    let already_ref = rbase.* match { Ref(_) => true, _ => false }
+    let already_ref = ty_node(self, rbase) match { NRef(_) => true, _ => false }
     let ref_base = if already_ref { base_ty } else { self.engine.mk_ref(base_ty) }
 
     let ref_pick = index_operator(self, "op_index_ref", ref_base, index_ty, idx.span)
@@ -3481,8 +3475,8 @@ fn user_index(self: &Checker, idx: &IndexExpr, base_ty: Ty, rbase: &Ty, index_ty
         }
         let p = ref_pick.unwrap()
         // The declared return is `&T`; the expression's type is `T`.
-        let inner = self.engine.resolve(p.ret) match {
-            Ref(i) => i.*,
+        let inner = ty_node(self, self.engine.resolve(p.ret)) match {
+            NRef(i) => i,
             _ => self.engine.fresh_var(),
         }
         self.results.record_operator(self.node_of(idx.span), ResolvedOperator {
@@ -3500,7 +3494,7 @@ fn user_index(self: &Checker, idx: &IndexExpr, base_ty: Ty, rbase: &Ty, index_ty
         value_pick = index_operator(self, "op_index", self.engine.mk_ref(base_ty), index_ty, idx.span)
     }
     if value_pick.is_none() and already_ref {
-        let inner = rbase.* match { Ref(i) => i.*, _ => base_ty }
+        let inner = ty_node(self, rbase) match { NRef(i) => i, _ => base_ty }
         value_pick = index_operator(self, "op_index", inner, index_ty, idx.span)
     }
     if value_pick.is_some() {
@@ -3589,8 +3583,8 @@ fn check_cast(self: &Checker, c: &CastExpr) Ty {
     }
     let from = self.engine.resolve(v)
     let to = self.engine.resolve(target)
-    let open = from.is_var() or to.is_var() or from.is_error() or to.is_error()
-    if !open and !cast_valid(self, &from, &to) {
+    let open = self.engine.is_var(from) or self.engine.is_var(to) or from.is_error() or to.is_error()
+    if !open and !cast_valid(self, from, to) {
         push_diag_e(self, c.span, E_INVALID_CAST,
             from_view("invalid cast between these types"))
     }
@@ -3601,26 +3595,26 @@ fn check_cast(self: &Checker, c: &CastExpr) Ty {
 // Mirrors the reference's `IsCastValid`, including its one refusal:
 // an integer to a PAYLOAD-carrying enum would leave the payload bytes
 // uninitialized, so only bare enums accept a tag.
-fn cast_valid(self: &Checker, from: &Ty, to: &Ty) bool {
-    if equals(from, to) { return true }
-    let fp = from.* match { Prim(p) => Some(p), _ => null }
-    let tp = to.* match { Prim(p) => Some(p), _ => null }
+fn cast_valid(self: &Checker, from: Ty, to: Ty) bool {
+    if from == to { return true }
+    let fp = ty_node(self, from) match { NPrim(p) => Some(p), _ => null }
+    let tp = ty_node(self, to) match { NPrim(p) => Some(p), _ => null }
     if fp.is_some() and tp.is_some() {
         return cast_prim(fp.unwrap()) and cast_prim(tp.unwrap())
     }
-    let f_ref = from.* match { Ref(_) => true, _ => false }
-    let t_ref = to.* match { Ref(_) => true, _ => false }
+    let f_ref = ty_node(self, from) match { NRef(_) => true, _ => false }
+    let t_ref = ty_node(self, to) match { NRef(_) => true, _ => false }
     if f_ref and t_ref { return true }
     if f_ref and tp.is_some() { return is_pointer_sized(tp.unwrap()) }
     if fp.is_some() and t_ref { return is_pointer_sized(fp.unwrap()) }
 
-    let f_nom = from.* match { Nominal(_) => true, _ => false }
-    let t_nom_id = to.* match { Nominal(nr) => Some(nr.id), _ => null }
-    let f_arr = from.* match { Array(_) => true, _ => false }
+    let f_nom = ty_node(self, from) match { NNominal(_) => true, _ => false }
+    let t_nom_id = ty_node(self, to) match { NNominal(nn) => Some(nn.id), _ => null }
+    let f_arr = ty_node(self, from) match { NArray(_) => true, _ => false }
     let f_aggregate = f_nom or f_arr
     if f_aggregate and t_nom_id.is_some() { return true }
-    let f_enum = from.* match {
-        Nominal(nr) => is_enum_id(self, nr.id),
+    let f_enum = ty_node(self, from) match {
+        NNominal(nn) => is_enum_id(self, nn.id),
         _ => false,
     }
     if f_enum and tp.is_some() { return true }
@@ -3649,12 +3643,12 @@ fn is_pointer_sized(p: PrimitiveKind) bool {
 
 // `()` is unit - the empty tuple and `void` are the same type.
 fn check_tuple_lit(self: &Checker, t: &TupleLiteralExpr) Ty {
-    if t.elements.len == 0 { return Ty.Void }
+    if t.elements.len == 0 { return TY_VOID }
     let elems = list(t.elements.len, self.allocator)
     for &e in t.elements {
         elems.push(check_expr(self, e))
     }
-    return Ty.Tuple(elems)
+    return mk_tuple(self, elems)
 }
 
 fn check_literal(self: &Checker, lit: &LiteralExpr) Ty {
@@ -3667,10 +3661,10 @@ fn literal_value_ty(self: &Checker, value: LiteralValue) Ty {
     return value match {
         Int(il) => numeric_literal_ty(self, il.span, il.suffix, il.text, false),
         Float(fl) => numeric_literal_ty(self, fl.span, fl.suffix, fl.text, true),
-        Bool(_) => Ty.Prim(PrimitiveKind.Bool),
+        Bool(_) => prim_of(PrimitiveKind.Bool),
         String(_) => string_type(self),
-        Char(_) => Ty.Prim(PrimitiveKind.Char),
-        Byte(_) => Ty.Prim(PrimitiveKind.U8),
+        Char(_) => prim_of(PrimitiveKind.Char),
+        Byte(_) => prim_of(PrimitiveKind.U8),
         Null => option_of_fresh(self),
     }
 }
@@ -3686,7 +3680,7 @@ fn numeric_literal_ty(self: &Checker, span: SourceSpan, suffix: String, text: St
             // A suffixed literal never becomes a pending literal, so its
             // range check happens here rather than in `validate_literals`.
             if !is_float { check_int_range(self, text, p.unwrap(), span) }
-            return Ty.Prim(p.unwrap())
+            return prim_of(p.unwrap())
         }
     }
     let v = self.engine.fresh_var()
@@ -3696,17 +3690,17 @@ fn numeric_literal_ty(self: &Checker, span: SourceSpan, suffix: String, text: St
 
 fn string_type(self: &Checker) Ty {
     let id = self.nominals.by_fqn.get(FQN_STRING)
-    if id.is_none() { return Ty.Error }
+    if id.is_none() { return TY_ERROR }
     let empty: List(Ty) = list(0, self.allocator)
-    return Ty.Nominal(NominalRef { id = id.unwrap(), args = empty })
+    return mk_nominal(self, id.unwrap(), empty)
 }
 
 fn option_of_fresh(self: &Checker) Ty {
     let id = self.nominals.by_fqn.get(FQN_OPTION)
-    if id.is_none() { return Ty.Error }
+    if id.is_none() { return TY_ERROR }
     let args: List(Ty) = list(1, self.allocator)
     args.push(self.engine.fresh_var())
-    return Ty.Nominal(NominalRef { id = id.unwrap(), args = args })
+    return mk_nominal(self, id.unwrap(), args)
 }
 
 fn check_identifier(self: &Checker, id: &IdentifierExpr) Ty {
@@ -3775,7 +3769,7 @@ fn check_identifier(self: &Checker, id: &IdentifierExpr) Ty {
     // lowering knows to build a TypeInfo rather than read a binding. (The
     // `T -> Type(T)` coercion stays for values that are not type names.)
     let prim = prim_from_name(id.name)
-    if prim.is_some() { return reified_type_of(self, Ty.Prim(prim.unwrap())) }
+    if prim.is_some() { return reified_type_of(self, prim_of(prim.unwrap())) }
     let tn = self.nominals.lookup(id.name, &vis) match {
         NomLookFound(n) => Some(n),
         _ => null,
@@ -3786,14 +3780,14 @@ fn check_identifier(self: &Checker, id: &IdentifierExpr) Ty {
         if nominal_arity(self, tn.unwrap()) > 0 {
             push_diag_e(self, id.span, E_BARE_GENERIC,
                 $"generic type `{id.name}` needs its type arguments here")
-            return Ty.Error
+            return TY_ERROR
         }
         return reified_type_of(self, nominal_with_fresh_args(self, tn.unwrap()))
     }
 
     push_diag_e(self, id.span, E_UNKNOWN_IDENT,
         $"unknown identifier `{id.name}`")
-    return Ty.Error
+    return TY_ERROR
 }
 
 // `core.rtti.Type(t)` - the reified handle for a type used as a value.
@@ -3804,7 +3798,7 @@ fn reified_type_of(self: &Checker, t: Ty) Ty {
     if id.is_none() { return t }
     let args: List(Ty) = list(1, self.allocator)
     args.push(t)
-    return Ty.Nominal(NominalRef { id = id.unwrap(), args = args })
+    return mk_nominal(self, id.unwrap(), args)
 }
 
 fn nominal_arity(self: &Checker, id: NominalId) usize {
@@ -3821,7 +3815,7 @@ fn nominal_with_fresh_args(self: &Checker, id: NominalId) Ty {
     }
     let args = list(n, self.allocator)
     for k in 0..n { args.push(self.engine.fresh_var()) }
-    return Ty.Nominal(NominalRef { id = id, args = args })
+    return mk_nominal(self, id, args)
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -3894,17 +3888,13 @@ fn check_lambda(self: &Checker, lam: &LambdaExpr) Ty {
     let body_ty = check_block(self, &lam.body)
     // The implicit-return rule of `check_function_body`, plus: an
     // unannotated return type with a valueless body settles to void.
-    body_ty match {
-        Void => {
-            let unresolved = self.engine.resolve(ret) match { Var(_) => true, _ => false }
-            if unresolved { let _o = self.engine.unify(ret, Ty.Void) }
-        },
-        _ => {
-            let ret_is_void = self.engine.resolve(ret) match { Void => true, _ => false }
-            if !ret_is_void {
-                unify_expected(self, body_ty, ret, E_RETURN_MISMATCH, lam.span)
-            }
-        },
+    if body_ty == TY_VOID {
+        if self.engine.is_var(self.engine.resolve(ret)) { let _o = self.engine.unify(ret, TY_VOID) }
+    } else {
+        let ret_is_void = self.engine.resolve(ret) == TY_VOID
+        if !ret_is_void {
+            unify_expected(self, body_ty, ret, E_RETURN_MISMATCH, lam.span)
+        }
     }
     let _f = self.fn_stack.pop()
     self.env.pop_scope()
@@ -3988,7 +3978,7 @@ fn check_lambda(self: &Checker, lam: &LambdaExpr) Ty {
         symbol = sym,
     })
     let no_args: List(Ty) = list(0, self.allocator)
-    return Ty.Nominal(NominalRef { id = nid, args = no_args })
+    return mk_nominal(self, nid, no_args)
 }
 
 fn check_block(self: &Checker, blk: &BlockExpr) Ty {
@@ -4008,10 +3998,10 @@ fn check_block(self: &Checker, blk: &BlockExpr) Ty {
     }
     let final_ty = blk.trailing match {
         Some(e) => check_expr(self, e),
-        None => Ty.Void,
+        None => TY_VOID,
     }
     self.env.pop_scope()
-    if diverges { return Ty.Never }
+    if diverges { return TY_NEVER }
     return final_ty
 }
 
@@ -4028,7 +4018,7 @@ fn check_stmt(self: &Checker, stmt: &Stmt) bool {
             let handled = es.expr match {
                 If(ife) => {
                     check_if_stmt(self, &ife)
-                    self.results.record_type(self.node_of(expr_span(&es.expr)), Ty.Void)
+                    self.results.record_type(self.node_of(expr_span(&es.expr)), TY_VOID)
                     true
                 },
                 _ => false,
@@ -4122,8 +4112,8 @@ fn protocol_pick(self: &Checker, name: String, arg: Ty, span: SourceSpan) Overlo
 
 fn resolve_for_protocol(self: &Checker, fs: &ForStmt, it_ty: Ty) Ty {
     let z = self.engine.resolve(it_ty)
-    let recv = z match {
-        Ref(_) => z,
+    let recv = ty_node(self, z) match {
+        NRef(_) => z,
         _ => self.engine.mk_ref(z),
     }
     // `for &x in xs` asks for the by-reference protocol entry, `iter_ref`.
@@ -4133,7 +4123,7 @@ fn resolve_for_protocol(self: &Checker, fs: &ForStmt, it_ty: Ty) Ty {
     if ip.is_none() {
         // An unresolved iterable may still become something iterable;
         // a concrete one without `iter` never will (E2021).
-        if !z.is_var() and !z.is_error() {
+        if !self.engine.is_var(z) and !z.is_error() {
             push_diag_e(self, expr_span(fs.iterable), E_NO_ITER,
                 $"type is not iterable: no `{iter_name}` function takes it")
         }
@@ -4153,7 +4143,7 @@ fn resolve_for_protocol(self: &Checker, fs: &ForStmt, it_ty: Ty) Ty {
     let np = protocol_pick(self, "next", self.engine.mk_ref(state), fs.span)
     if np.is_none() { np = protocol_pick(self, "next", state, fs.span) }
     if np.is_none() {
-        if !state.is_var() and !state.is_error() {
+        if !self.engine.is_var(state) and !state.is_error() {
             push_diag_e(self, fs.span, E_NO_NEXT,
                 from_view("iterator state has no `next` function"))
         }
@@ -4167,8 +4157,8 @@ fn resolve_for_protocol(self: &Checker, fs: &ForStmt, it_ty: Ty) Ty {
     note_pending(self, fs.span, true, &n)
 
     let nret = self.engine.resolve(n.ret)
-    let inner = option_inner(self, &nret)
-    if inner.is_none() and !nret.is_var() and !nret.is_error() {
+    let inner = option_inner(self, nret)
+    if inner.is_none() and !self.engine.is_var(nret) and !nret.is_error() {
         push_diag_e(self, fs.span, E_NEXT_RETURN,
             from_view("`next` must return `Option(T)` - the loop ends when it yields `null`"))
     }
@@ -4321,7 +4311,7 @@ fn join_types(self: &Checker, a: Ty, b: Ty, code: String, span: SourceSpan) Ty {
         // silently, so the one diagnostic does not cascade into every later
         // use of the result. Returning one of the operands instead would
         // carry a type the program does not actually have.
-        _ => Ty.Error,
+        _ => TY_ERROR,
     }
 }
 
@@ -4335,7 +4325,7 @@ fn check_return(self: &Checker, rs: &ReturnStmt) {
             unify_expected(self, v, frame.return_ty, E_RETURN_MISMATCH, rs.span)
         },
         None => {
-            const o = self.engine.unify(Ty.Void, frame.return_ty)
+            const o = self.engine.unify(TY_VOID, frame.return_ty)
             report_unify(self, &o, E_RETURN_MISMATCH, rs.span)
         },
     }
@@ -4383,8 +4373,8 @@ fn check_binary(self: &Checker, bin: &BinaryExpr) Ty {
 fn arithmetic(self: &Checker, bin: &BinaryExpr, lhs: Ty, rhs: Ty) Ty {
     let l = self.engine.resolve(lhs)
     let r = self.engine.resolve(rhs)
-    let l_nom = l match { Nominal(_) => true, _ => false }
-    let r_nom = r match { Nominal(_) => true, _ => false }
+    let l_nom = ty_node(self, l) match { NNominal(_) => true, _ => false }
+    let r_nom = ty_node(self, r) match { NNominal(_) => true, _ => false }
     if !l_nom or !r_nom { return arith_result(self, lhs, rhs, bin.span) }
 
     let name = arith_op_name(bin.op)
@@ -4426,7 +4416,7 @@ fn arith_op_name(op: BinaryOp) String {
 
 fn compare_result(self: &Checker, lhs: Ty, rhs: Ty, span: SourceSpan) Ty {
     unify_either(self, lhs, rhs, span)
-    return Ty.Prim(PrimitiveKind.Bool)
+    return prim_of(PrimitiveKind.Bool)
 }
 
 // A comparison over nominal operands dispatches to a user operator
@@ -4447,12 +4437,12 @@ fn compare_result(self: &Checker, lhs: Ty, rhs: Ty, span: SourceSpan) Ty {
 fn comparison(self: &Checker, bin: &BinaryExpr, lhs: Ty, rhs: Ty) Ty {
     let l = self.engine.resolve(lhs)
     let r = self.engine.resolve(rhs)
-    let l_nom = l match { Nominal(_) => true, _ => false }
-    let r_nom = r match { Nominal(_) => true, _ => false }
+    let l_nom = ty_node(self, l) match { NNominal(_) => true, _ => false }
+    let r_nom = ty_node(self, r) match { NNominal(_) => true, _ => false }
     if !l_nom or !r_nom { return compare_result(self, lhs, rhs, bin.span) }
 
     let is_eq_shape = bin.op match { Eq => true, Ne => true, _ => false }
-    if is_eq_shape and payloadless_enum(self, &l) and payloadless_enum(self, &r) {
+    if is_eq_shape and payloadless_enum(self, l) and payloadless_enum(self, r) {
         return compare_result(self, lhs, rhs, bin.span)
     }
 
@@ -4489,14 +4479,14 @@ fn comparison(self: &Checker, bin: &BinaryExpr, lhs: Ty, rhs: Ty) Ty {
             cmp_derived_op = Some(bod_of(bin.op)), is_ref_form = false, spec_id = null,
         })
         note_pending(self, bin.span, true, &p)
-        return Ty.Prim(PrimitiveKind.Bool)
+        return prim_of(PrimitiveKind.Bool)
     }
 
     // Both operands are nominals and nothing in the ladder matched -
     // comparing them would be a bitwise compare of addresses. E2017.
     push_diag_e(self, bin.span, E_OP_NO_IMPL,
         $"no `{direct_op_name(bin.op)}` (or `op_cmp`) implementation for these operand types")
-    return Ty.Prim(PrimitiveKind.Bool)
+    return prim_of(PrimitiveKind.Bool)
 }
 
 fn direct_op_name(op: BinaryOp) String {
@@ -4530,9 +4520,9 @@ fn operator_pick_2(self: &Checker, name: String, l: Ty, r: Ty, span: SourceSpan)
     return pick
 }
 
-fn payloadless_enum(self: &Checker, ty: &Ty) bool {
-    return ty.* match {
-        Nominal(nr) => enum_payloadless(&self.nominals, nr.id),
+fn payloadless_enum(self: &Checker, ty: Ty) bool {
+    return ty_node(self, ty) match {
+        NNominal(nn) => enum_payloadless(&self.nominals, nn.id),
         _ => false,
     }
 }
@@ -4552,7 +4542,7 @@ fn unify_either(self: &Checker, a: Ty, b: Ty, span: SourceSpan) {
 }
 
 fn logical_result(self: &Checker, lhs: Ty, rhs: Ty, span: SourceSpan) Ty {
-    let b = Ty.Prim(PrimitiveKind.Bool)
+    let b = prim_of(PrimitiveKind.Bool)
     const o1 = self.engine.unify(lhs, b)
     report_unify(self, &o1, E_TYPE_MISMATCH, span)
     const o2 = self.engine.unify(rhs, b)
@@ -4569,7 +4559,7 @@ fn logical_result(self: &Checker, lhs: Ty, rhs: Ty, span: SourceSpan) Ty {
 // distance, not a pointer. It currently yields the pointer type. Nothing in
 // the corpus does it; fix when something does.
 fn arith_result(self: &Checker, lhs: Ty, rhs: Ty, span: SourceSpan) Ty {
-    let lhs_is_ref = self.engine.resolve(lhs) match { Ref(_) => true, _ => false }
+    let lhs_is_ref = ty_node(self, self.engine.resolve(lhs)) match { NRef(_) => true, _ => false }
     if lhs_is_ref { return lhs }
     unify_either(self, lhs, rhs, span)
     return lhs
@@ -4730,7 +4720,7 @@ fn resolve_method_call(self: &Checker, call: &CallExpr, ma: &MemberAccessExpr, a
     // named-argument call never dispatches through it (reference parity:
     // "named arguments are not supported for indirect/field calls").
     if named.is_none() {
-        let fc = field_call(self, &recv_ty, ma.member, arg_tys, call.span, self.node_of(ma.span))
+        let fc = field_call(self, recv_ty, ma.member, arg_tys, call.span, self.node_of(ma.span))
         if fc.is_some() { return fc }
     }
 
@@ -4743,7 +4733,7 @@ fn resolve_method_call(self: &Checker, call: &CallExpr, ma: &MemberAccessExpr, a
         // `fba.allocator()` where `allocator` is a plain field: the name
         // exists on the receiver, it is just not callable (E2011). Only a
         // name that is nowhere at all is "unresolved" (E2004).
-        if struct_field_lookup(self, &recv_ty, ma.member).is_some() {
+        if struct_field_lookup(self, recv_ty, ma.member).is_some() {
             push_diag_e(self, call.span, E_NO_OVERLOAD,
                 $"`{ma.member}` is a field of this type, not a callable method")
         } else {
@@ -4757,7 +4747,7 @@ fn resolve_method_call(self: &Checker, call: &CallExpr, ma: &MemberAccessExpr, a
     // cannot arbitrate an overload set - committing the first match would
     // bind it arbitrarily. Leave the call untyped until the receiver is
     // known.
-    let recv_unbound = self.engine.resolve(recv_ty) match { Var(_) => true, _ => false }
+    let recv_unbound = self.engine.is_var(self.engine.resolve(recv_ty))
     if recv_unbound and candidates.len > 1 {
         candidates.deinit()
         return Some(self.engine.fresh_var())
@@ -4768,8 +4758,8 @@ fn resolve_method_call(self: &Checker, call: &CallExpr, ma: &MemberAccessExpr, a
     // competes inside the same resolution (see resolve_overload) rather than
     // as a fallback pass.
     let r = self.engine.resolve(recv_ty)
-    let adapted = r match {
-        Ref(inner) => inner.*,
+    let adapted = ty_node(self, r) match {
+        NRef(inner) => inner,
         _ => self.engine.mk_ref(r),
     }
     self.overload_deferred = false
@@ -5077,15 +5067,15 @@ fn synth_variadic_pack(self: &Checker, pos_exprs: &List(Expr), from: usize, para
     // `T` so the arguments settle (an empty pack leaves `T` to the
     // declaration, which already fixed it).
     let want = self.engine.resolve(param_ty)
-    let elem = want match {
-        Nominal(nr) => if nr.args.len == 1 { Some(nr.args[0]) } else { null },
+    let elem = ty_node(self, want) match {
+        NNominal(nn) => if nn.args.len == 1 { Some(self.engine.interner.child_at(nn.args, 0)) } else { null },
         _ => null,
     }
     if elem.is_some() {
         let az = self.engine.resolve(at)
-        az match {
-            Array(a) => {
-                const o = self.engine.unify(a.elem.*, elem.unwrap())
+        ty_node(self, az) match {
+            NArray(a) => {
+                const o = self.engine.unify(a.elem, elem.unwrap())
                 report_unify(self, &o, E_TYPE_MISMATCH, span)
             },
             _ => {},
@@ -5157,7 +5147,7 @@ fn materialize_default_args(self: &Checker, p: &OverloadPick, supplied: usize, s
 fn closure_arg_hint(self: &Checker, arg_tys: &List(Ty), span: SourceSpan) bool {
     for i in 0..arg_tys.len {
         let z = self.engine.resolve(arg_tys[i])
-        let cls = closure_of(self, &z)
+        let cls = closure_of(self, z)
         if cls.is_some() {
             push_diag_e(self, span, E_CLOSURE_TO_FN,
                 from_view("a capturing closure cannot coerce to a bare `fn` parameter (it has no environment slot); pass it through a generic `$F` parameter instead"))
@@ -5170,7 +5160,7 @@ fn closure_arg_hint(self: &Checker, arg_tys: &List(Ty), span: SourceSpan) bool {
 // `recv.field(args)` where `field` is a Func-typed struct field - the
 // vtable-dispatch pattern. Null when the receiver is not a struct or has
 // no Func field by that name - the UFCS path takes over.
-fn field_call(self: &Checker, recv_ty: &Ty, name: String, arg_tys: &List(Ty), span: SourceSpan, callee_id: NodeId) Ty? {
+fn field_call(self: &Checker, recv_ty: Ty, name: String, arg_tys: &List(Ty), span: SourceSpan, callee_id: NodeId) Ty? {
     let fty = struct_field_lookup(self, recv_ty, name)
     if fty.is_none() { return null }
     let zf = self.engine.resolve(fty.unwrap())
@@ -5180,12 +5170,12 @@ fn field_call(self: &Checker, recv_ty: &Ty, name: String, arg_tys: &List(Ty), sp
     self.results.record_type(callee_id, zf)
     // A field holding a capturing closure dispatches like any closure
     // value - `self.f(x)` inside an adapter struct.
-    let cls = closure_of(self, &zf)
+    let cls = closure_of(self, zf)
     if cls.is_some() {
         return Some(indirect_call(self, zf, arg_tys, span))
     }
-    let f = zf match {
-        Func(ft) => ft,
+    let f = ty_node(self, zf) match {
+        NFunc(ft) => ft,
         _ => return null,
     }
     if f.params.len != arg_tys.len {
@@ -5194,17 +5184,17 @@ fn field_call(self: &Checker, recv_ty: &Ty, name: String, arg_tys: &List(Ty), sp
         return Some(self.engine.fresh_var())
     }
     for i in 0..arg_tys.len {
-        const o = self.engine.unify(arg_tys[i], f.params[i])
+        const o = self.engine.unify(arg_tys[i], self.engine.interner.child_at(f.params, i))
         report_unify(self, &o, E_TYPE_MISMATCH, span)
     }
-    return Some(f.ret.*)
+    return Some(f.ret)
 }
 
 // The closure-call signature for a value of synthesized-closure type,
 // or null when the type is not a closure nominal.
-fn closure_of(self: &Checker, ty: &Ty) &ClosureSig? {
-    let nid = ty.* match {
-        Nominal(nr) => Some(nr.id),
+fn closure_of(self: &Checker, ty: Ty) &ClosureSig? {
+    let nid = ty_node(self, ty) match {
+        NNominal(nn) => Some(nn.id),
         _ => null,
     }
     if nid.is_none() { return null }
@@ -5219,7 +5209,7 @@ fn indirect_call(self: &Checker, callee_ty: Ty, arg_tys: &List(Ty), span: Source
     // A capturing closure (RFC-014) dispatches through its synthesized
     // op_call - the value's nominal id keys the global closure table, so
     // this works in any body a closure reached through a `$F` slot.
-    let cls = closure_of(self, &z)
+    let cls = closure_of(self, z)
     if cls.is_some() {
         let c = cls.unwrap()
         if c.params.len != arg_tys.len {
@@ -5233,8 +5223,8 @@ fn indirect_call(self: &Checker, callee_ty: Ty, arg_tys: &List(Ty), span: Source
         }
         return c.ret
     }
-    let ft = z match {
-        Func(f) => Some(f),
+    let ft = ty_node(self, z) match {
+        NFunc(f) => Some(f),
         _ => null,
     }
     if ft.is_some() {
@@ -5245,10 +5235,10 @@ fn indirect_call(self: &Checker, callee_ty: Ty, arg_tys: &List(Ty), span: Source
             return self.engine.fresh_var()
         }
         for i in 0..arg_tys.len {
-            const o = self.engine.unify(arg_tys[i], f.params[i])
+            const o = self.engine.unify(arg_tys[i], self.engine.interner.child_at(f.params, i))
             report_unify(self, &o, E_TYPE_MISMATCH, span)
         }
-        return f.ret.*
+        return f.ret
     }
     // RFC-014 Phase 1: any value whose type declares `op_call` is
     // callable. Resolved like a UFCS method call with the value as the
@@ -5256,9 +5246,8 @@ fn indirect_call(self: &Checker, callee_ty: Ty, arg_tys: &List(Ty), span: Source
     let oc = op_call_dispatch(self, z, arg_tys, span)
     if oc.is_some() { return oc.unwrap() }
 
-    if z.is_error() { return Ty.Error }
-    let is_var = z match { Var(_) => true, _ => false }
-    if is_var {
+    if z.is_error() { return TY_ERROR }
+    if self.engine.is_var(z) {
         let ps = list(arg_tys.len, self.allocator)
         ps.push_all(arg_tys.as_slice())
         let ret = self.engine.fresh_var()
@@ -5282,7 +5271,7 @@ fn indirect_call(self: &Checker, callee_ty: Ty, arg_tys: &List(Ty), span: Source
 // (empty when no peeling was needed) is recorded there too - its
 // presence is what tells lowering the CALLEE is the receiver.
 fn op_call_dispatch(self: &Checker, recv: Ty, arg_tys: &List(Ty), span: SourceSpan) Ty? {
-    let is_nominal = recv match { Nominal(_) => true, _ => false }
+    let is_nominal = ty_node(self, recv) match { NNominal(_) => true, _ => false }
     if !is_nominal { return null }
     let vis = fn_visibility(self)
     let cands = self.functions.lookup("op_call", &vis) match {
@@ -5330,11 +5319,11 @@ fn peel_op_deref(self: &Checker, candidates: &List(FunctionScheme), recv: Ty, ar
         if depth >= 10 { return null }
         depth = depth + 1
 
-        let peeled = current match {
-            Ref(inner) => self.engine.resolve(inner.*),
+        let peeled = ty_node(self, current) match {
+            NRef(inner) => self.engine.resolve(inner),
             _ => current,
         }
-        let is_nominal = peeled match { Nominal(_) => true, _ => false }
+        let is_nominal = ty_node(self, peeled) match { NNominal(_) => true, _ => false }
         if !is_nominal { return null }
 
         let dargs = list(1, self.allocator)
@@ -5345,8 +5334,8 @@ fn peel_op_deref(self: &Checker, candidates: &List(FunctionScheme), recv: Ty, ar
         chain.push(dpick.unwrap())
 
         let dret = self.engine.resolve(dpick.unwrap().ret)
-        let inner = dret match {
-            Ref(i) => self.engine.resolve(i.*),
+        let inner = ty_node(self, dret) match {
+            NRef(i) => self.engine.resolve(i),
             _ => return null,
         }
 
@@ -5477,8 +5466,8 @@ fn resolve_overload(self: &Checker, candidates: &List(FunctionScheme), arg_tys: 
     let w = &candidates[best.unwrap()]
     let binds: Dict(VarId, Ty) = dict(self.allocator)
     let inst_ty = self.engine.resolve(self.engine.specialize_capture(&w.signature, &binds))
-    let ft = inst_ty match {
-        Func(x) => Some(x),
+    let ft = ty_node(self, inst_ty) match {
+        NFunc(x) => Some(x),
         _ => null,
     }
     if ft.is_none() {
@@ -5486,17 +5475,23 @@ fn resolve_overload(self: &Checker, candidates: &List(FunctionScheme), arg_tys: 
         return null
     }
     let f = ft.unwrap()
-    let checked = non_variadic_arg_count(w, &f, arg_tys.len)
+    // A scratch copy of the instantiated parameter window: it rides on
+    // the pick for default-argument unification and the pending spec.
+    let fparams: List(Ty) = list(f.params.len, self.allocator)
+    for i in 0..f.params.len {
+        fparams.push(self.engine.interner.child_at(f.params, i))
+    }
+    let checked = non_variadic_arg_count(w, fparams.len, arg_tys.len)
     for i in 0..checked {
         // Commit with the receiver shape the winner actually matched.
         let arg = if i == 0 and best_used_alt { alt_args[0] } else { arg_tys[i] }
-        const o = self.engine.unify(arg, f.params[i])
+        const o = self.engine.unify(arg, fparams[i])
         report_unify(self, &o, E_TYPE_MISMATCH, span)
     }
     // The variadic tail's surplus arguments commit against its element
     // type - without this an unsuffixed literal in the tail never pins.
-    if w.has_variadic and f.params.len > 0 {
-        let ve = variadic_elem(self, f.params[f.params.len - 1])
+    if w.has_variadic and fparams.len > 0 {
+        let ve = variadic_elem(self, fparams[fparams.len - 1])
         if ve.is_some() {
             for k in checked..arg_tys.len {
                 const ov = self.engine.unify(arg_tys[k], ve.unwrap())
@@ -5511,8 +5506,8 @@ fn resolve_overload(self: &Checker, candidates: &List(FunctionScheme), arg_tys: 
         if slots.is_some() {
             let sl = slots.unwrap()
             for i in 0..sl.len {
-                if sl[i] < f.params.len {
-                    const on = self.engine.unify(na.tys[i], f.params[sl[i]])
+                if sl[i] < fparams.len {
+                    const on = self.engine.unify(na.tys[i], fparams[sl[i]])
                     report_unify(self, &on, E_TYPE_MISMATCH, span)
                 }
             }
@@ -5521,11 +5516,11 @@ fn resolve_overload(self: &Checker, candidates: &List(FunctionScheme), arg_tys: 
     }
     let inst: PickInst? = null
     if w.signature.quantified.len() > 0 {
-        inst = Some(PickInst { tp_binds = binds, params = f.params, ret = f.ret.* })
+        inst = Some(PickInst { tp_binds = binds, params = fparams, ret = f.ret })
     } else {
         binds.deinit()
     }
-    return Some(OverloadPick { id = w.id, ret = f.ret.*, params = f.params, inst = inst })
+    return Some(OverloadPick { id = w.id, ret = f.ret, params = fparams, inst = inst })
 }
 
 // Whether the tie between two equally-ranked candidates turns on an
@@ -5550,13 +5545,13 @@ fn tie_breaker(self: &Checker, candidates: &List(FunctionScheme), a: usize, b: u
     let out = TieBreaker.TieByShape
     for i in 0..arg_tys.len {
         if i >= pa.len or i >= pb.len { continue }
-        if !self.engine.resolve(arg_tys[i]).is_var() { continue }
-        let ta = self.engine.resolve(pa[i])
-        let tb = self.engine.resolve(pb[i])
-        if ta.is_var() or tb.is_var() { continue }
-        if equals(&ta, &tb) { continue }
+        if !self.engine.is_var(self.engine.resolve(arg_tys[i])) { continue }
+        let ta = self.engine.resolve(self.engine.interner.child_at(pa, i))
+        let tb = self.engine.resolve(self.engine.interner.child_at(pb, i))
+        if self.engine.is_var(ta) or self.engine.is_var(tb) { continue }
+        if ta == tb { continue }
         // A literal wins the report: it is the one nothing can settle.
-        if is_literal_var(self, &arg_tys[i]) { return TieBreaker.TieByLiteral }
+        if is_literal_var(self, arg_tys[i]) { return TieBreaker.TieByLiteral }
         out = TieBreaker.TieByOpenVar
     }
     return out
@@ -5578,8 +5573,8 @@ fn tie_breaker(self: &Checker, candidates: &List(FunctionScheme), a: usize, b: u
 // `op_index(String, usize)` (spec 2). Skipped positions fall back to
 // the cost/quantifier keys - the pre-specificity behavior.
 fn scheme_specificity(self: &Checker, s: &Scheme, arg_tys: &List(Ty)) u32 {
-    let ft = s.body match {
-        Func(f) => Some(f),
+    let ft = ty_node(self, s.body) match {
+        NFunc(f) => Some(f),
         _ => null,
     }
     if ft.is_none() { return 0 }
@@ -5588,7 +5583,7 @@ fn scheme_specificity(self: &Checker, s: &Scheme, arg_tys: &List(Ty)) u32 {
     let total = 0u32
     for i in 0..n {
         if !ty_has_free_var(self, self.engine.resolve(arg_tys[i])) {
-            total = total + ty_specificity(f.params[i])
+            total = total + ty_specificity(self, self.engine.interner.child_at(f.params, i))
         }
     }
     return total
@@ -5597,40 +5592,41 @@ fn scheme_specificity(self: &Checker, s: &Scheme, arg_tys: &List(Ty)) u32 {
 // Whether a (resolved) type still contains an unbound inference var
 // anywhere in its structure.
 fn ty_has_free_var(self: &Checker, t: Ty) bool {
-    return t match {
-        Var(_) => true,
-        Ref(inner) => ty_has_free_var(self, self.engine.resolve(inner.*)),
-        Array(a) => ty_has_free_var(self, self.engine.resolve(a.elem.*)),
-        Func(f) => ty_has_free_var(self, self.engine.resolve(f.ret.*))
-            or tys_have_free_var(self, &f.params),
-        Tuple(elems) => tys_have_free_var(self, &elems),
-        Nominal(nr) => tys_have_free_var(self, &nr.args),
+    if self.engine.interner.is_ground(t) { return false }
+    return ty_node(self, t) match {
+        NVar(_) => true,
+        NRef(inner) => ty_has_free_var(self, self.engine.resolve(inner)),
+        NArray(a) => ty_has_free_var(self, self.engine.resolve(a.elem)),
+        NFunc(f) => ty_has_free_var(self, self.engine.resolve(f.ret))
+            or span_has_free_var(self, f.params),
+        NTuple(span) => span_has_free_var(self, span),
+        NNominal(nn) => span_has_free_var(self, nn.args),
         _ => false,
     }
 }
 
-fn tys_have_free_var(self: &Checker, tys: &List(Ty)) bool {
-    for i in 0..tys.len {
-        if ty_has_free_var(self, self.engine.resolve(tys[i])) { return true }
+fn span_has_free_var(self: &Checker, span: ChildSpan) bool {
+    for i in 0..span.len {
+        if ty_has_free_var(self, self.engine.resolve(self.engine.interner.child_at(span, i))) { return true }
     }
     return false
 }
 
-fn ty_specificity(t: Ty) u32 {
-    return t match {
-        Var(_) => 0u32,
-        Ref(inner) => 1u32 + ty_specificity(inner.*),
-        Array(a) => 1u32 + ty_specificity(a.elem.*),
-        Func(f) => 1u32 + ty_specificity(f.ret.*) + tys_specificity(&f.params),
-        Nominal(nr) => 1u32 + tys_specificity(&nr.args),
+fn ty_specificity(self: &Checker, t: Ty) u32 {
+    return ty_node(self, t) match {
+        NVar(_) => 0u32,
+        NRef(inner) => 1u32 + ty_specificity(self, inner),
+        NArray(a) => 1u32 + ty_specificity(self, a.elem),
+        NFunc(f) => 1u32 + ty_specificity(self, f.ret) + span_specificity(self, f.params),
+        NNominal(nn) => 1u32 + span_specificity(self, nn.args),
         _ => 1u32,
     }
 }
 
-fn tys_specificity(tys: &List(Ty)) u32 {
+fn span_specificity(self: &Checker, span: ChildSpan) u32 {
     let sum = 0u32
-    for i in 0..tys.len {
-        sum = sum + ty_specificity(tys[i])
+    for i in 0..span.len {
+        sum = sum + ty_specificity(self, self.engine.interner.child_at(span, i))
     }
     return sum
 }
@@ -5643,6 +5639,7 @@ fn probe_candidate(self: &Checker, c: &FunctionScheme, arg_tys: &List(Ty), named
         Some(ft) => ft,
         None => return null,
     }
+    let n_params = f.params.len
     // Named arguments count toward the arity window and each must name a
     // parameter of THIS candidate; a name it does not declare rules it out.
     let n_named = 0usize
@@ -5655,7 +5652,7 @@ fn probe_candidate(self: &Checker, c: &FunctionScheme, arg_tys: &List(Ty), named
     }
     let supplied = arg_tys.len + n_named
     let arity_ok = supplied >= c.required_params
-        and (c.has_variadic or supplied <= f.params.len)
+        and (c.has_variadic or supplied <= n_params)
     if !arity_ok {
         if slots.is_some() {
             let dead = slots.unwrap()
@@ -5664,12 +5661,12 @@ fn probe_candidate(self: &Checker, c: &FunctionScheme, arg_tys: &List(Ty), named
         return null
     }
 
-    let checked = non_variadic_arg_count(c, &f, arg_tys.len)
+    let checked = non_variadic_arg_count(c, n_params, arg_tys.len)
     // The element type the variadic tail's surplus arguments land in
     // (the declared parameter is `Slice(T)`).
     let vtail: Ty? = null
-    if c.has_variadic and f.params.len > 0 {
-        vtail = variadic_elem(self, f.params[f.params.len - 1])
+    if c.has_variadic and n_params > 0 {
+        vtail = variadic_elem(self, self.engine.interner.child_at(f.params, n_params - 1))
     }
     self.engine.push_checkpoint()
     let ok = true
@@ -5680,11 +5677,11 @@ fn probe_candidate(self: &Checker, c: &FunctionScheme, arg_tys: &List(Ty), named
         // would unify with ANY param - `String` included, and declaration
         // order would commit it. A pending numeric literal may only meet
         // a primitive, an open var (generics), or Option (wrap coercion).
-        if is_literal_var(self, &arg_tys[i]) and !literal_can_take(self, &f.params[i]) {
+        if is_literal_var(self, arg_tys[i]) and !literal_can_take(self, self.engine.interner.child_at(f.params, i)) {
             ok = false
         }
         if ok {
-            self.engine.unify(arg_tys[i], f.params[i]) match {
+            self.engine.unify(arg_tys[i], self.engine.interner.child_at(f.params, i)) match {
                 Unified(u) => cost = cost + u.cost,
                 _ => ok = false,
             }
@@ -5707,10 +5704,10 @@ fn probe_candidate(self: &Checker, c: &FunctionScheme, arg_tys: &List(Ty), named
         let na = named.unwrap()
         let j = 0usize
         while ok and j < sl.len {
-            if sl[j] >= f.params.len {
+            if sl[j] >= n_params {
                 ok = false
             } else {
-                self.engine.unify(na.tys[j], f.params[sl[j]]) match {
+                self.engine.unify(na.tys[j], self.engine.interner.child_at(f.params, sl[j])) match {
                     Unified(u) => cost = cost + u.cost,
                     _ => ok = false,
                 }
@@ -5722,7 +5719,7 @@ fn probe_candidate(self: &Checker, c: &FunctionScheme, arg_tys: &List(Ty), named
     self.engine.rollback()
     if !ok { return null }
 
-    let omitted = if supplied < f.params.len { f.params.len - supplied } else { 0usize }
+    let omitted = if supplied < n_params { n_params - supplied } else { 0usize }
     if c.has_variadic and omitted > 0 { omitted = omitted - 1 }
     return Some(cost + (omitted as u32) * 100u32)
 }
@@ -5731,14 +5728,14 @@ fn probe_candidate(self: &Checker, c: &FunctionScheme, arg_tys: &List(Ty), named
 // literal (`10`, `3.14` with no suffix and nothing pinning them yet).
 // ponytail: linear scan of the pending list per probe; index by root
 // var if overload probing ever shows up in a profile.
-fn is_literal_var(self: &Checker, ty: &Ty) bool {
-    let vid = self.engine.resolve(ty.*) match {
-        Var(v) => v,
+fn is_literal_var(self: &Checker, ty: Ty) bool {
+    let vid = ty_node(self, self.engine.resolve(ty)) match {
+        NVar(v) => v,
         _ => return false,
     }
     for i in 0..self.pending_literals.len {
-        let pv = self.engine.resolve(self.pending_literals[i].ty) match {
-            Var(v2) => Some(v2),
+        let pv = ty_node(self, self.engine.resolve(self.pending_literals[i].ty)) match {
+            NVar(v2) => Some(v2),
             _ => null,
         }
         if pv.is_some() {
@@ -5751,11 +5748,11 @@ fn is_literal_var(self: &Checker, ty: &Ty) bool {
 // What a pending numeric literal's var is allowed to meet in an overload
 // probe: a primitive, an open var (a generic's `$T`), or the well-known
 // Option (the wrap coercion pins the literal at the payload).
-fn literal_can_take(self: &Checker, ty: &Ty) bool {
-    return self.engine.resolve(ty.*) match {
-        Prim(_) => true,
-        Var(_) => true,
-        Nominal(n) => {
+fn literal_can_take(self: &Checker, ty: Ty) bool {
+    return ty_node(self, self.engine.resolve(ty)) match {
+        NPrim(_) => true,
+        NVar(_) => true,
+        NNominal(n) => {
             let id = self.nominals.by_fqn.get(FQN_OPTION)
             id.is_some() and id.unwrap() == n.id
         },
@@ -5764,9 +5761,9 @@ fn literal_can_take(self: &Checker, ty: &Ty) bool {
 }
 
 // A candidate's signature specialized fresh and viewed as a function.
-fn scheme_fn_ty(self: &Checker, s: &Scheme) FunctionTy? {
-    return self.engine.resolve(self.engine.specialize(s)) match {
-        Func(ft) => Some(ft),
+fn scheme_fn_ty(self: &Checker, s: &Scheme) NFuncNode? {
+    return ty_node(self, self.engine.resolve(self.engine.specialize(s))) match {
+        NFunc(ft) => Some(ft),
         _ => null,
     }
 }
@@ -5778,14 +5775,14 @@ fn scheme_fn_ty(self: &Checker, s: &Scheme) FunctionTy? {
 // lands as `Slice(T)`, so the surplus arguments unify with its single
 // type argument. Null when the parameter is not a one-argument nominal.
 fn variadic_elem(self: &Checker, param: Ty) Ty? {
-    return self.engine.resolve(param) match {
-        Nominal(nr) => if nr.args.len == 1 { Some(nr.args[0]) } else { null },
+    return ty_node(self, self.engine.resolve(param)) match {
+        NNominal(nn) => if nn.args.len == 1 { Some(self.engine.interner.child_at(nn.args, 0)) } else { null },
         _ => null,
     }
 }
 
-fn non_variadic_arg_count(c: &FunctionScheme, f: &FunctionTy, n_args: usize) usize {
-    let non_variadic = if c.has_variadic { f.params.len - 1 } else { f.params.len }
+fn non_variadic_arg_count(c: &FunctionScheme, n_params: usize, n_args: usize) usize {
+    let non_variadic = if c.has_variadic { n_params - 1 } else { n_params }
     return if n_args < non_variadic { n_args } else { non_variadic }
 }
 
@@ -5855,7 +5852,7 @@ fn type_instantiation_call(self: &Checker, ide: &IdentifierExpr, arg_tys: &List(
     for i in 0..arg_tys.len {
         args.push(unreify_type(self, arg_tys[i]))
     }
-    let inst = Ty.Nominal(NominalRef { id = id, args = args })
+    let inst = mk_nominal(self, id, args)
     // `Type(T)` written out IS the reified form - wrapping it again would
     // make `Type(Type(T))`.
     let type_id = self.nominals.by_fqn.get(FQN_TYPE)
@@ -5871,13 +5868,15 @@ fn type_instantiation_call(self: &Checker, ide: &IdentifierExpr, arg_tys: &List(
 fn unreify_type(self: &Checker, t: Ty) Ty {
     let type_id = self.nominals.by_fqn.get(FQN_TYPE)
     if type_id.is_none() { return t }
-    let nr_opt = self.engine.resolve(t) match {
-        Nominal(nr) => Some(nr),
+    let nr_opt = ty_node(self, self.engine.resolve(t)) match {
+        NNominal(nn) => Some(nn),
         _ => null,
     }
     if nr_opt.is_none() { return t }
     let nr = nr_opt.unwrap()
-    if nr.id == type_id.unwrap() and nr.args.len == 1 { return nr.args[0] }
+    if nr.id == type_id.unwrap() and nr.args.len == 1 {
+        return self.engine.interner.child_at(nr.args, 0)
+    }
     return t
 }
 
@@ -5887,7 +5886,7 @@ fn check_if(self: &Checker, if_expr: &IfExpr) Ty {
     let _r = check_expr(self, if_expr.condition)
     let then_ty = check_block(self, &if_expr.then_branch)
     let else_ty = if_expr.else_branch match {
-        NoElse => return Ty.Void,
+        NoElse => return TY_VOID,
         Block(b) => check_block(self, &b),
         If(nested) => {
             // A chained `else if` is a bare `&IfExpr`, not an `Expr`, so
@@ -5923,10 +5922,10 @@ fn check_struct_lit(self: &Checker, lit: &StructLiteralExpr) Ty {
         return anon_var
     }
     let ty = resolve_type_expr(self, lit.type_expr.unwrap())
-    let is_structish = ty match {
-        Nominal(nr) => !is_enum_id(self, nr.id),
-        Var(_) => true,
-        Error => true,
+    let is_structish = ty_node(self, ty) match {
+        NNominal(nn) => !is_enum_id(self, nn.id),
+        NVar(_) => true,
+        NError => true,
         _ => false,
     }
     if !is_structish {
@@ -5935,7 +5934,7 @@ fn check_struct_lit(self: &Checker, lit: &StructLiteralExpr) Ty {
         for &fi0 in lit.fields {
             let _v0 = check_field_value(self, fi0)
         }
-        return Ty.Error
+        return TY_ERROR
     }
 
     // A generic struct constructed by NAME must spell its type arguments:
@@ -5944,7 +5943,7 @@ fn check_struct_lit(self: &Checker, lit: &StructLiteralExpr) Ty {
     // under-instantiated nominal (`Pair` with no arguments), which no
     // downstream layout query can size - the reference checker rejects
     // the same shape with E2019.
-    let missing = generic_struct_missing_args(self, &ty)
+    let missing = generic_struct_missing_args(self, ty)
     if missing.is_some() {
         let n = missing.unwrap()
         const msg = $"generic struct `{n}` requires type arguments, use `{n}(...)` or `.{{ ... }}`"
@@ -5954,12 +5953,12 @@ fn check_struct_lit(self: &Checker, lit: &StructLiteralExpr) Ty {
         for i in 0..lit.fields.len {
             let _v = check_field_value(self, &lit.fields[i])
         }
-        return Ty.Error
+        return TY_ERROR
     }
 
     for &fi in lit.fields {
         let v = check_field_value(self, fi)
-        let fty = struct_field_lookup(self, &ty, fi.name)
+        let fty = struct_field_lookup(self, ty, fi.name)
         if fty.is_some() {
             const o = self.engine.unify(v, fty.unwrap())
             report_unify(self, &o, E_TYPE_MISMATCH, fi.span)
@@ -5971,16 +5970,16 @@ fn check_struct_lit(self: &Checker, lit: &StructLiteralExpr) Ty {
 // The struct's display name when `ty` is a nominal struct instantiated
 // with fewer (or more) type arguments than its declaration has parameters;
 // null when the instantiation is well-formed or `ty` isn't a struct.
-fn generic_struct_missing_args(self: &Checker, ty: &Ty) String? {
-    let nr = ty.* match {
-        Nominal(n) => n,
+fn generic_struct_missing_args(self: &Checker, ty: Ty) String? {
+    let nn = ty_node(self, ty) match {
+        NNominal(n) => n,
         _ => return null,
     }
-    let sd = self.nominals.get(nr.id).* match {
+    let sd = self.nominals.get(nn.id).* match {
         NomStruct(s) => s,
         _ => return null,
     }
-    if nr.args.len == sd.type_params.len { return null }
+    if nn.args.len == sd.type_params.len { return null }
     return Some(short_name_of(sd.fqn, last_dot(sd.fqn)))
 }
 
@@ -6003,40 +6002,40 @@ fn check_member(self: &Checker, ma: &MemberAccessExpr) Ty {
     if ev.is_some() { return ev.unwrap() }
 
     let recv = check_expr(self, ma.receiver)
-    let fty = struct_field_lookup(self, &recv, ma.member)
+    let fty = struct_field_lookup(self, recv, ma.member)
     if fty.is_some() { return fty.unwrap() }
     // `let a = .{ x, y }` - nothing has pinned the literal's var yet
     // (`resolve_anon_literals` settles it after the body), but the record
     // it describes already knows its fields, so the access types now.
-    let pf = pending_anon_field(self, &recv, ma.member)
+    let pf = pending_anon_field(self, recv, ma.member)
     if pf.is_some() { return pf.unwrap() }
-    let tp = tuple_projection(self, &recv, ma.member)
+    let tp = tuple_projection(self, recv, ma.member)
     if tp.is_some() { return tp.unwrap() }
-    let am = array_member(self, &recv, ma.member)
+    let am = array_member(self, recv, ma.member)
     if am.is_some() { return am.unwrap() }
-    let dm = member_deref_retry(self, ma, &recv)
+    let dm = member_deref_retry(self, ma, recv)
     if dm.is_some() { return dm.unwrap() }
     // A concrete struct receiver with no such field is E2014. An
     // unresolved receiver, an enum, or a primitive is left alone: member
     // syntax over those is UFCS, resolved elsewhere.
-    if struct_without_field(self, &recv, ma.member) {
+    if struct_without_field(self, recv, ma.member) {
         push_diag_e(self, ma.span, E_FIELD_NOT_FOUND,
             $"no field `{ma.member}` on this type")
-        return Ty.Error
+        return TY_ERROR
     }
     return self.engine.fresh_var()
 }
 
 // The field type an as-yet-unpinned anonymous literal records for
 // `name`. Null when `recv` is not one of the parked literals' vars.
-fn pending_anon_field(self: &Checker, recv: &Ty, name: String) Ty? {
-    let vid = self.engine.resolve(recv.*) match {
-        Var(v) => v,
+fn pending_anon_field(self: &Checker, recv: Ty, name: String) Ty? {
+    let vid = ty_node(self, self.engine.resolve(recv)) match {
+        NVar(v) => v,
         _ => return null,
     }
     for i in 0..self.pending_anons.len {
-        let pv = self.engine.resolve(self.pending_anons[i].ty) match {
-            Var(v2) => Some(v2),
+        let pv = ty_node(self, self.engine.resolve(self.pending_anons[i].ty)) match {
+            NVar(v2) => Some(v2),
             _ => null,
         }
         if pv.is_none() { continue }
@@ -6050,10 +6049,10 @@ fn pending_anon_field(self: &Checker, recv: &Ty, name: String) Ty? {
 
 // True when `recv` peels to a struct nominal that declares no field of
 // this name - the shape E2014 describes.
-fn struct_without_field(self: &Checker, recv: &Ty, name: String) bool {
-    let peeled = peel_refs(self, recv.*)
-    let nid = peeled match {
-        Nominal(nr) => Some(nr.id),
+fn struct_without_field(self: &Checker, recv: Ty, name: String) bool {
+    let peeled = peel_refs(self, recv)
+    let nid = ty_node(self, peeled) match {
+        NNominal(nn) => Some(nn.id),
         _ => null,
     }
     if nid.is_none() { return false }
@@ -6071,7 +6070,7 @@ fn struct_without_field(self: &Checker, recv: &Ty, name: String) bool {
 // method syntax. The winning chain is recorded on the MEMBER node -
 // lowering calls each hop instead of geping into the wrapper's own
 // layout, which would read at the wrong offset.
-fn member_deref_retry(self: &Checker, ma: &MemberAccessExpr, recv_ty: &Ty) Ty? {
+fn member_deref_retry(self: &Checker, ma: &MemberAccessExpr, recv_ty: Ty) Ty? {
     let vis = fn_visibility(self)
     let dcands = self.functions.lookup("op_deref", &vis) match {
         FnLookFound(c) => Some(c),
@@ -6084,17 +6083,17 @@ fn member_deref_retry(self: &Checker, ma: &MemberAccessExpr, recv_ty: &Ty) Ty? {
     let chain: List(OverloadPick) = list(1, self.allocator)
     defer chain.deinit()
 
-    let current = self.engine.resolve(recv_ty.*)
+    let current = self.engine.resolve(recv_ty)
     let depth = 0usize
     loop {
         if depth >= 10 { return null }
         depth = depth + 1
 
-        let peeled = current match {
-            Ref(inner) => self.engine.resolve(inner.*),
+        let peeled = ty_node(self, current) match {
+            NRef(inner) => self.engine.resolve(inner),
             _ => current,
         }
-        let is_nominal = peeled match { Nominal(_) => true, _ => false }
+        let is_nominal = ty_node(self, peeled) match { NNominal(_) => true, _ => false }
         if !is_nominal { return null }
 
         let dargs = list(1, self.allocator)
@@ -6105,12 +6104,12 @@ fn member_deref_retry(self: &Checker, ma: &MemberAccessExpr, recv_ty: &Ty) Ty? {
         chain.push(dpick.unwrap())
 
         let dret = self.engine.resolve(dpick.unwrap().ret)
-        let inner = dret match {
-            Ref(i) => self.engine.resolve(i.*),
+        let inner = ty_node(self, dret) match {
+            NRef(i) => self.engine.resolve(i),
             _ => return null,
         }
 
-        let fty = struct_field_lookup(self, &inner, ma.member)
+        let fty = struct_field_lookup(self, inner, ma.member)
         if fty.is_some() {
             commit_deref_chain(self, &chain, ma.span)
             return fty
@@ -6124,39 +6123,39 @@ fn member_deref_retry(self: &Checker, ma: &MemberAccessExpr, recv_ty: &Ty) Ty? {
 // `arr.len` / `arr.ptr` on a fixed array (one reference peeled): usize
 // and `&elem` - the checker-side mirror of lowering's constant fold;
 // left untyped the member's var reached `ty_to_ir` under a cast.
-fn array_member(self: &Checker, recv: &Ty, member: String) Ty? {
-    let r = self.engine.resolve(recv.*)
-    let peeled = r match {
-        Ref(inner) => self.engine.resolve(inner.*),
+fn array_member(self: &Checker, recv: Ty, member: String) Ty? {
+    let r = self.engine.resolve(recv)
+    let peeled = ty_node(self, r) match {
+        NRef(inner) => self.engine.resolve(inner),
         _ => r,
     }
-    let arr = peeled match {
-        Array(a) => Some(a),
+    let arr = ty_node(self, peeled) match {
+        NArray(a) => Some(a),
         _ => null,
     }
     if arr.is_none() { return null }
-    if member == "len" { return Some(Ty.Prim(PrimitiveKind.USize)) }
-    if member == "ptr" { return Some(self.engine.mk_ref(arr.unwrap().elem.*)) }
+    if member == "len" { return Some(prim_of(PrimitiveKind.USize)) }
+    if member == "ptr" { return Some(self.engine.mk_ref(arr.unwrap().elem)) }
     return null
 }
 
 // `t.0` / `t.1` - positional projection on a tuple-typed receiver (one
 // reference peeled). Null for non-tuples, non-numeric members, and
 // out-of-range indices - those fall through to UFCS resolution.
-fn tuple_projection(self: &Checker, recv: &Ty, member: String) Ty? {
-    let r = self.engine.resolve(recv.*)
-    let peeled = r match {
-        Ref(inner) => self.engine.resolve(inner.*),
+fn tuple_projection(self: &Checker, recv: Ty, member: String) Ty? {
+    let r = self.engine.resolve(recv)
+    let peeled = ty_node(self, r) match {
+        NRef(inner) => self.engine.resolve(inner),
         _ => r,
     }
-    let elems = peeled match {
-        Tuple(es) => es,
+    let elems = ty_node(self, peeled) match {
+        NTuple(es) => es,
         _ => return null,
     }
     let idx = parse_decimal(member)
     if idx.is_none() { return null }
     if idx.unwrap() >= elems.len { return null }
-    return Some(elems[idx.unwrap()])
+    return Some(self.engine.interner.child_at(elems, idx.unwrap()))
 }
 
 // Qualified enum-variant access `EnumName.Variant`: a bare receiver naming an
@@ -6229,33 +6228,24 @@ fn construct_variant(self: &Checker, id: NominalId, vname: String, arg_tys: &Lis
         args.push(fresh)
     }
     for i in 0..payloads.len {
-        let pty = substitute(&payloads[i], &subst, self.allocator)
+        let pty = self.engine.substitute_shared(payloads[i], &subst)
         const o = self.engine.unify(arg_tys[i], pty)
         report_unify(self, &o, E_TYPE_MISMATCH, span)
     }
     subst.deinit()
     self.results.record_target(node, ResolvedTarget.RtEnumVariant(id, vnum))
-    return Some(Ty.Nominal(NominalRef { id = id, args = args }))
+    return Some(mk_nominal(self, id, args))
 }
 
 // A struct field's declared type by name, substituted against the
 // receiver instance's type arguments - a read must never bind the
 // definition's shared type-param vars. Null when the (zonked,
 // one-reference-peeled) type is not a struct or has no such field.
-fn struct_field_lookup(self: &Checker, recv: &Ty, name: String) Ty? {
-    let z = self.engine.zonk(recv.*)
-    // Auto-deref recurses: `(&&Point).x` peels every reference hop.
-    let peeled = z
-    loop {
-        let inner = peeled match {
-            Ref(i) => Some(i.*),
-            _ => null,
-        }
-        if inner.is_none() { break }
-        peeled = inner.unwrap()
-    }
-    let nr_opt = peeled match {
-        Nominal(n) => Some(n),
+fn struct_field_lookup(self: &Checker, recv: Ty, name: String) Ty? {
+    let z = self.engine.zonk(recv)
+    let peeled = peel_refs(self, z)
+    let nr_opt = ty_node(self, peeled) match {
+        NNominal(n) => Some(n),
         _ => null,
     }
     if nr_opt.is_none() { return null }
@@ -6270,8 +6260,7 @@ fn struct_field_lookup(self: &Checker, recv: &Ty, name: String) Ty? {
         let ti = self.nominals.by_fqn.get(FQN_TYPE_INFO)
         ti match {
             Some(tid) => {
-                let no_args: List(Ty) = list(0, self.allocator)
-                nr = NominalRef { id = tid, args = no_args }
+                nr = NNominalNode { id = tid, args = ChildSpan { start = 0u32, len = 0u32 } }
             },
             None => {},
         }
@@ -6289,8 +6278,10 @@ fn struct_field_lookup(self: &Checker, recv: &Ty, name: String) Ty? {
                 return Some(sd.fields[i].ty)
             }
             let subst = dict(self.allocator)
-            for k in 0..sd.type_params.len { subst.set(sd.type_params[k], nr.args[k]) }
-            let out = substitute(&sd.fields[i].ty, &subst, self.allocator)
+            for k in 0..sd.type_params.len {
+                subst.set(sd.type_params[k], self.engine.interner.child_at(nr.args, k))
+            }
+            let out = self.engine.substitute_shared(sd.fields[i].ty, &subst)
             subst.deinit()
             return Some(out)
         }
@@ -6301,6 +6292,38 @@ fn struct_field_lookup(self: &Checker, recv: &Ty, name: String) Ty? {
 // ─────────────────────────────────────────────────────────────────────
 // Top-level driver
 // ─────────────────────────────────────────────────────────────────────
+
+// Nominal type from a scratch argument list - the list is freed here,
+// the table keeps the shape (same ownership contract as `mk_func`).
+fn mk_nominal(self: &Checker, id: NominalId, args: List(Ty)) Ty {
+    const t = self.engine.interner.nominal_of(id, &args)
+    args.deinit()
+    return t
+}
+
+// Tuple type from a scratch element list - the list is freed here.
+fn mk_tuple(self: &Checker, elems: List(Ty)) Ty {
+    const t = self.engine.interner.tuple_of(&elems)
+    elems.deinit()
+    return t
+}
+
+// Record type from a scratch field list - the list is freed here.
+fn mk_record(self: &Checker, fields: List(Field)) Ty {
+    const t = self.engine.interner.record_of(&fields)
+    fields.deinit()
+    return t
+}
+
+// The shape behind a handle - checker-side shorthand.
+fn ty_node(self: &Checker, t: Ty) TyNode {
+    return self.engine.interner.node(t)
+}
+
+// The engine's type table - checker-side shorthand.
+fn tyi(self: &Checker) &TypeInterner {
+    return &self.engine.interner
+}
 
 // Zonk a lambda record's types once inference settled; a still-open
 // parameter or return type means nothing anywhere pinned the lambda -
@@ -6318,7 +6341,7 @@ fn zonk_lambda_info(self: &Checker, info: &LambdaInfo) LambdaInfo {
             ty = self.engine.zonk(info.captures[i].ty),
         })
     }
-    if !sig_concrete(self, &ps, &ret) {
+    if !sig_concrete(self, &ps, ret) {
         push_diag_e(self, info.span, E_UNINFERRED,
             from_view("cannot infer the lambda's parameter or return types; annotate them or use the lambda where the types are pinned"))
     }
@@ -6412,12 +6435,17 @@ fn resolve_fn_name_values(self: &Checker) {
     self.pending_fn_names = list(0, self.allocator)
     for &pn in pend {
         let z = self.engine.resolve(pn.ty)
-        let ft = z match {
-            Func(f) => Some(f),
+        let ft = ty_node(self, z) match {
+            NFunc(f) => Some(f),
             _ => null,
         }
         if ft.is_none() { continue }
         let f = ft.unwrap()
+        let fparams: List(Ty) = list(f.params.len, self.allocator)
+        for i in 0..f.params.len {
+            fparams.push(self.engine.interner.child_at(f.params, i))
+        }
+        defer fparams.deinit()
 
         let saved = self.current_module
         self.current_module = pn.module
@@ -6428,13 +6456,13 @@ fn resolve_fn_name_values(self: &Checker) {
         }
         if cands.is_some() {
             let cl = cands.unwrap()
-            let pick = resolve_overload(self, &cl, &f.params, pn.span)
+            let pick = resolve_overload(self, &cl, &fparams, pn.span)
             cl.deinit()
             pick match {
                 Some(w) => {
                     self.results.record_target(self.node_of(pn.span), ResolvedTarget.RtFunction(w.id))
                     note_pending(self, pn.span, false, &w)
-                    const o = self.engine.unify(f.ret.*, w.ret)
+                    const o = self.engine.unify(f.ret, w.ret)
                     report_unify(self, &o, E_TYPE_MISMATCH, pn.span)
                 },
                 // Function types match EXACTLY - there is no coercion
@@ -6568,7 +6596,8 @@ pub fn check_all(self: &Checker, modules: &List(Module), paths: &List(String),
     // this is what the reference gets for free by mangling at codegen.
     zonk_specializations(self)
 
-    // Zonk every node-type entry so the result is final.
+    // Zonk every node-type entry so the result is final. Interned on the
+    // way (RFC-024): equal shapes share one canonical tree.
     let zonked: Dict(NodeId, Ty) = dict(self.allocator)
     for entry in self.results.node_types {
         zonked.set(entry.key, self.engine.zonk(entry.value))
@@ -6593,6 +6622,9 @@ pub fn check_all(self: &Checker, modules: &List(Module), paths: &List(String),
     let out_spans = self.results.spans
     let out_closures = self.closures
     self.closures = dict(self.allocator)
+    // The snapshot's tables share the interner's canonical storage, so
+    // the interner travels with them; the next demand starts one afresh.
+    let out_interner = self.engine.take_interner()
 
     // Owned copies, so the snapshot names the file of any span it holds
     // without the caller's path list. An empty `file_paths` leaves
@@ -6611,6 +6643,7 @@ pub fn check_all(self: &Checker, modules: &List(Module), paths: &List(String),
 
     return TypeCheckResult {
         node_types = zonked,
+        interner = out_interner,
         resolved_ops = out_resolved_ops,
         resolved_targets = out_resolved_targets,
         instantiated_types = out_instantiated_types,
@@ -6876,7 +6909,7 @@ test "a bool index is rejected before any operator lookup" {
 // There is no implicit `T -> Option(T)` wrap: a value arm joining a
 // `null` arm must say `Some(v)` explicitly, in either arm order. A real
 // `core.option` module is part of each test program — without it the
-// registry has no Option, `null` types as `Ty.Error`, and every outcome
+// registry has no Option, `null` types as `TY_ERROR`, and every outcome
 // passes vacuously.
 const OPTION_SRC: String = "pub type Option = enum(T) {\n    None,\n    Some(T),\n}\n"
 
@@ -7204,11 +7237,7 @@ test "unannotated lambda params pin through a generic callable slot" {
     for e in res.lambdas {
         // The instantiation's body re-check unified the fresh param var
         // with i32; the zonked record must be concrete.
-        let is_i32 = e.value.params[0] match {
-            Prim(pk) => pk match { I32 => true, _ => false },
-            _ => false,
-        }
-        assert_true(is_i32, "param pinned to i32 through the instantiation")
+        assert_eq(e.value.params[0], prim_of(PrimitiveKind.I32), "param pinned to i32 through the instantiation")
     }
     res.deinit()
 }

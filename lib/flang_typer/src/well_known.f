@@ -12,30 +12,26 @@ import std.string
 import flang_typer.type
 
 // ─────────────────────────────────────────────────────────────────────
-// Primitive `Ty` constructors
-//
-// Returning by value is cheap - `Ty` is a tagged union with all
-// fixed-size payloads, so each call boils down to one struct return.
-// No allocation, no engine state.
+// Primitive `Ty` constructors - the fixed handles, no table involved.
 // ─────────────────────────────────────────────────────────────────────
 
-#inline pub fn ty_error() Ty { return Ty.Error }
-#inline pub fn ty_never() Ty { return Ty.Never }
-#inline pub fn ty_void() Ty { return Ty.Void }
-#inline pub fn ty_bool() Ty { return Ty.Prim(PrimitiveKind.Bool) }
-#inline pub fn ty_i8() Ty { return Ty.Prim(PrimitiveKind.I8) }
-#inline pub fn ty_i16() Ty { return Ty.Prim(PrimitiveKind.I16) }
-#inline pub fn ty_i32() Ty { return Ty.Prim(PrimitiveKind.I32) }
-#inline pub fn ty_i64() Ty { return Ty.Prim(PrimitiveKind.I64) }
-#inline pub fn ty_isize() Ty { return Ty.Prim(PrimitiveKind.ISize) }
-#inline pub fn ty_u8() Ty { return Ty.Prim(PrimitiveKind.U8) }
-#inline pub fn ty_u16() Ty { return Ty.Prim(PrimitiveKind.U16) }
-#inline pub fn ty_u32() Ty { return Ty.Prim(PrimitiveKind.U32) }
-#inline pub fn ty_u64() Ty { return Ty.Prim(PrimitiveKind.U64) }
-#inline pub fn ty_usize() Ty { return Ty.Prim(PrimitiveKind.USize) }
-#inline pub fn ty_f32() Ty { return Ty.Prim(PrimitiveKind.F32) }
-#inline pub fn ty_f64() Ty { return Ty.Prim(PrimitiveKind.F64) }
-#inline pub fn ty_char() Ty { return Ty.Prim(PrimitiveKind.Char) }
+#inline pub fn ty_error() Ty { return TY_ERROR }
+#inline pub fn ty_never() Ty { return TY_NEVER }
+#inline pub fn ty_void() Ty { return TY_VOID }
+#inline pub fn ty_bool() Ty { return prim_of(PrimitiveKind.Bool) }
+#inline pub fn ty_i8() Ty { return prim_of(PrimitiveKind.I8) }
+#inline pub fn ty_i16() Ty { return prim_of(PrimitiveKind.I16) }
+#inline pub fn ty_i32() Ty { return prim_of(PrimitiveKind.I32) }
+#inline pub fn ty_i64() Ty { return prim_of(PrimitiveKind.I64) }
+#inline pub fn ty_isize() Ty { return prim_of(PrimitiveKind.ISize) }
+#inline pub fn ty_u8() Ty { return prim_of(PrimitiveKind.U8) }
+#inline pub fn ty_u16() Ty { return prim_of(PrimitiveKind.U16) }
+#inline pub fn ty_u32() Ty { return prim_of(PrimitiveKind.U32) }
+#inline pub fn ty_u64() Ty { return prim_of(PrimitiveKind.U64) }
+#inline pub fn ty_usize() Ty { return prim_of(PrimitiveKind.USize) }
+#inline pub fn ty_f32() Ty { return prim_of(PrimitiveKind.F32) }
+#inline pub fn ty_f64() Ty { return prim_of(PrimitiveKind.F64) }
+#inline pub fn ty_char() Ty { return prim_of(PrimitiveKind.Char) }
 
 // Map a primitive lexical name (as it appears in source: "i32", "bool",
 // …) to its `PrimitiveKind`. Returns `None` for any other identifier.
