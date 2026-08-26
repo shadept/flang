@@ -26,6 +26,7 @@ You own and maintain these docs. They are the source of truth for the project. W
 - `docs/architecture.md` constraints are non-negotiable without explicit approval.
 - Language feature tests go in `tests/harness/` using lit-style `.flang` files. Stdlib tests are colocated in the `.f` source file using `test "name" { ... }` blocks.
 - **Default to inference.** Omit any type annotation the checker can work out, in FLang code and in the stdlib alike. A free type variable in a return position is a working feature, not a gap: `let l = list(3)` followed by `l.push(3i32)` resolves to `List(i32)`, and an unsuffixed literal pushed first resolves the same way. Annotate only where inference has no source to draw from.
+- **Library layout.** `flang.toml [project].name` is the import namespace; files under `src/` sit directly in it. `lib/flang_parser/src/ast.f` is `import flang_parser.ast`. Never nest a `src/<name>/` folder.
 - **Harness tests are the exception: annotate.** A test should pin the types it means, so a failure reports the behaviour under test rather than an inference change somewhere upstream. Tests whose subject IS inference are written the other way round, leaving the types to be worked out.
 
 ## Core Priorities

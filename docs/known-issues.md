@@ -1298,6 +1298,36 @@ m.add_function(some_function())
 
 ---
 
+### Reference: Mutation Through an Indexed Receiver Chain Writes to a Temp Copy
+
+**Status:** Open in the C# reference. The self-hosted compiler gets it right.
+**Affected:** C# `HmAstLowering` UFCS receiver lowering when the receiver path contains an `[i]` hop; silent data loss
+
+A `&Self` method called through a receiver path with one or more index hops mutates a temporary copy of the element, not the element in the list buffer. The call compiles and runs clean; the write is lost. Field-only hops are handled (see the resolved multi-hop UFCS entry); an index hop in the path reintroduces the spill.
+
+```flang
+type Block = struct { x: i32 }
+fn set_x(self: &Block, v: i32) { self.x = v }
+type Func = struct { blocks: List(Block) }
+type Mod = struct { functions: List(Func) }
+
+// m: Mod with one function holding one block, x == 0
+m.functions[0].blocks[0].set_x(5)
+let a = m.functions[0].blocks[0].x      // reference: 0, self-hosted: 5
+
+let r = &m.functions[0].blocks[0]
+r.set_x(7)
+let b = m.functions[0].blocks[0].x      // 7 on both
+```
+
+Reads through the same chain are fine; only mutation is affected.
+
+**Workaround:** bind the deepest element once with `&` and mutate through that reference.
+
+**Fix direction:** lower an index expression in a receiver path as a place, the same way member access already is. A harness test pinning this fails the reference today, so it waits for the fix or for the reference's retirement.
+
+---
+
 ### `match` on Value-Type Optional Doesn't Yield Ref Bindings
 
 **Status:** Open (low priority — workarounds exist for current consumers)
