@@ -666,6 +666,19 @@ A no-context lambda is an error — diagnostic recommends adding annotations to 
 
 **Stdlib callback convention.** Standard-library combinators (`List`/`Dict`/`Set` utilities, the `std.iter` adapters and consumers, `sort`'s comparator) type their callbacks as duck-typed generic parameters (`f: $F`), never as concrete `fn(...)` types: any callable fits — bare functions, non-capturing lambdas, and capturing closures — and monomorphization makes the dispatch direct. Callbacks are **value-mode**: combinators invoke `f(element)` with values, and §3.2's implicit-reference copy-on-write ABI makes that copy-free for read-only callbacks. Ref-mode callbacks (`fn(&T)`) do not adapt to value invocation (and vice versa); argument-adaptation rules are a deliberate open design point (docs/tickets/019).
 
+**Lazy-fallback convention.** A function whose parameter is a fallback - a value used only when the primary one is absent - comes in two forms under two names: the plain name takes the value, an `_else` suffix takes something that produces it.
+
+```
+pub fn unwrap_or(self: Option($T), fallback: T) T      // used as-is
+pub fn unwrap_or_else(self: Option($T), make: $F) T    // called only when empty
+pub fn get_or(self: Dict($K, $V), key: K, fallback: V) V
+pub fn get_or_else(self: Dict($K, $V), key: K, make: $F) V
+```
+
+Arguments are evaluated before the call, so the plain form computes its fallback whether or not it is needed; the `_else` form defers that to the absent branch.
+
+Two names rather than two overloads, because a single argument can satisfy both shapes at once. When `T` is itself callable - a type with an `op_call` returning its own type, say - one value is both a valid fallback and a valid fallback-producer, and no rule in the type system says which the caller meant. Overload ranking would still pick one, silently. The name is what carries the intent.
+
 ### 7.4 Iterator Protocol
 
 `for x in collection` desugars to (conceptually — the compiler emits IR directly):

@@ -89,6 +89,174 @@ in its fixtures so the assertions are no longer vacuous.
 
 ## Open Issues
 
+### A Type Parameter in Value Position Bound Itself to `Type($X)` - RESOLVED
+
+**Status:** Resolved - type parameters reify in value position
+**Affected (was):** `lib/flang_typer/src/checker.f` (`check_identifier`), every generic body calling `size_of`/`align_of`
+
+A bare type name used as a value is a reified type: `size_of(i32)` passes
+`Type(i32)`. A type PARAMETER used the same way returned the raw parameter var
+instead, because the environment binding was consulted before the reifying
+path:
+
+```
+return self.engine.specialize(&binding.scheme)   // T -> the parameter var
+```
+
+`size_of(t: Type($T)) usize` then unified that var against `Type($X)`. With `T`
+already concrete the unification fails and the documented `T -> Type(T)`
+coercion fires, which is why this was invisible for most calls. With `T` still
+free, unification succeeds first and binds the type parameter itself to
+`Type($X)`.
+
+`std.list`'s constructor is the carrier, since its body reads
+`capacity * size_of(T)`:
+
+```
+pub fn list(capacity: usize, allocator: &Allocator? = null) List($T)
+```
+
+Any generic whose `T` was still open when it called `list` therefore came away
+with `T = Type(X)`. `core.rtti.Type` is `struct(T) {}`, a struct with no
+fields, so the resulting container sized its storage by zero and stored real
+values into 0-byte slots. `std.iter`'s adapter chains hit this whenever their
+element type was pinned only by what flowed through them:
+
+```
+to_0list__...FilterIter_...__ret_std__list__List_core__rtti__Type_u32   before
+to_0list__...FilterIter_...__ret_std__list__List_u32                    after
+```
+
+Symptom was `tests/harness/stdlib/dict_iter_chain.f` corrupting the heap: one
+unchanged binary exited 0, exited non-zero, segfaulted or hung across repeated
+runs. Compilation was deterministic throughout - which of the two
+specializations got built depended on the whole program, so adding an unrelated
+function anywhere in the stdlib changed the odds, and any single-run bisection
+blamed whatever had changed last.
+
+**Fix:** `check_identifier` reifies a binding marked `is_type_param`, matching
+what a bare concrete type name already did. `dict_iter_chain` went from 2 of 8
+passing to 10 of 10. Regression test:
+`tests/harness/generics/type_param_in_value_position.f`.
+
+---
+
+### `defer` Binds by Name, Not to the Value Live at the Statement
+
+**Status:** Open — silently frees the wrong object, or silently drops the function
+**Affected:** `lib/flang_driver/src/lower.f` (defer lowering, local slots by name)
+
+A deferred call is resolved by NAME when the scope exits, against whatever the
+name means at that point. Redeclaring the name in the same scope after the
+`defer` therefore changes what the `defer` operates on:
+
+```
+pub type Tracked = struct { id: i32 }
+pub fn deinit(self: &Tracked) { note("deinit", self.id) }
+
+pub fn main() i32 {
+    let x = Tracked { id = 1i32 }
+    defer x.deinit()             // registered against id = 1
+    let x = Tracked { id = 2i32 }
+    note("body sees", x.id)
+    return 0
+}
+```
+
+```
+body sees 2
+deinit 2      <- must be `deinit 1`
+```
+
+The object live at the `defer` is never destroyed, and one that was never
+registered is destroyed instead. On an owning type that is a leak plus a
+double-free waiting for the second object's real cleanup. Nothing is reported.
+
+When the redeclared type has no matching method the failure changes shape:
+lowering cannot emit the deferred call and drops the ENTIRE function, so a
+`main` written this way vanishes from the emitted C and only the linker
+complains (`LNK1561: entry point must be defined`).
+
+```
+import std.string
+pub type Rec = struct { tag: i32 }
+pub fn main() i32 {
+    let x = from_view("a")
+    defer x.deinit()             // OwnedString has deinit
+    let x = Rec { tag = 1i32 }   // Rec does not
+    return x.tag - 1i32
+}
+```
+
+Both need fixing, and they are separable:
+
+1. **`defer` must capture the binding, not the name.** Bind the deferred
+   receiver to the slot live at the `defer` statement. Shadowing across NESTED
+   scopes already works (`tests/harness/scoping/scope_shadowing_allowed.f`); it
+   is same-scope redeclaration after a `defer` that breaks.
+2. **A function that cannot be lowered must be reported.** Silently omitting it
+   and leaving the linker to notice is the same defect as the overload entry
+   below - a build should never fail with the compiler having said nothing.
+
+Also unspecified: whether same-scope `let x` twice is legal at all. `docs/spec.md`
+covers shadowing only across nested scopes. Rejecting the redeclaration would
+close the first defect without touching defer lowering.
+
+---
+
+### A `$F` Callback Parameter Is Pinned by Luck, Not by the Signature
+
+**Status:** Open — needs a constraint on type signatures
+**Affected:** `lib/flang_typer/src/checker.f` (overload resolution), every `$F` stdlib combinator
+
+Combinators used to type their callback as `fn(T) $U`, which unified the
+lambda's parameter with the container's element type straight from the
+signature. RFC-014 changed them to a duck-typed `$F` so a callback could take
+either a value or a reference:
+
+```
+-pub fn map(self: &List($T), f: fn(T) $U, allocator: &Allocator? = null) List(U)
++pub fn map(self: &List($T), f: $F, allocator: &Allocator? = null) List($U)
+```
+
+`$F` says nothing about `T`. Nothing constrains the lambda's parameter until
+the instantiation's body re-check reaches `f(self[i])`, which is after the
+lambda body has been checked. It usually works anyway, because resolving a
+single-candidate call inside the body unifies the parameter as a side effect.
+It stops working as soon as the body needs the parameter's type to choose:
+
+```
+import std.list
+import std.string
+import std.path            // as_view(&Path)
+import std.string_builder  // as_view(&StringBuilder)
+
+let vs = xs.map(fn(s) { s.as_view() })
+// error[E2001]: cannot infer the lambda's parameter or return types
+```
+
+Remove either of the last two imports and the same line compiles - three
+`as_view` overloads are visible instead of one, so no candidate can be picked
+and the parameter is never pinned. Whether a lambda infers therefore depends on
+what else is imported, which is not a property a caller can reason about.
+
+Workaround: annotate the parameter (`fn(s: OwnedString) { ... }`).
+
+The fix is a way for a signature to constrain `$F` - "F is callable with T" -
+so the pin comes from the declaration rather than from resolution order, while
+still admitting closures. Designed in `docs/tickets/019` §2; the property that
+decides this bug is that a contract must PIN the lambda's parameter, not merely
+check the callable after the fact. `scheme_specificity` already carries a
+comment calling the specificity heuristic "a stand-in for a real constraint
+system"; this is the same gap seen from the callback side.
+
+Related: `docs/spec.md` §7.3 already records a weaker form of this - a value
+pinned only through the instantiation cannot resolve a bare numeric literal
+(`xs.fold(0i32, ...)` rather than `fold(0, ...)`). Overload choice is the
+sharper case, because it fails on what is in scope rather than on the literal.
+
+---
+
 ### Re-Analysis Retires Sources Instead of Freeing Them
 
 **Status:** Open — deliberate, but unbounded over a long session
