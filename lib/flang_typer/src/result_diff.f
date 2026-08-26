@@ -34,6 +34,7 @@ import std.allocator
 import std.dict
 import std.list
 import std.option
+import std.set
 import std.string
 import std.string_builder
 import std.test
@@ -82,6 +83,7 @@ pub fn diff_results(a: &TypeCheckResult, b: &TypeCheckResult, allocator: &Alloca
     let messages: List(OwnedString) = list(0, allocator)
     let d = ResultDiff { messages = messages, total = 0 }
     diff_nominals(&d, a, b, allocator)
+    diff_functions(&d, a, b, allocator)
     diff_specializations(&d, a, b, allocator)
     diff_node_types(&d, a, b, allocator)
     diff_targets(&d, a, b, allocator)
@@ -138,6 +140,45 @@ fn diff_nominals(d: &ResultDiff, a: &TypeCheckResult, b: &TypeCheckResult, alloc
         append_nominal(&rb, right.unwrap(), &b.interner)
         if lb.as_view() != rb.as_view() {
             note(d, $"nominals[{id}]: {lb.as_view()} vs {rb.as_view()}")
+        }
+    }
+}
+
+// The function registry: overload lists compare positionally per name -
+// resolution order is part of the value - and each scheme's id, flags
+// and rendered signature must match.
+fn diff_functions(d: &ResultDiff, a: &TypeCheckResult, b: &TypeCheckResult, alloc: &Allocator?) {
+    if a.functions.next_id != b.functions.next_id {
+        note(d, $"functions: next_id {a.functions.next_id} vs {b.functions.next_id}")
+    }
+    if a.functions.by_name.len() != b.functions.by_name.len() {
+        note(d, $"functions: {a.functions.by_name.len()} names vs {b.functions.by_name.len()}")
+    }
+    let lb = string_builder(64, alloc)
+    defer lb.deinit()
+    let rb = string_builder(64, alloc)
+    defer rb.deinit()
+    for entry in a.functions.by_name {
+        const name = entry.key
+        const other = b.functions.by_name.get_ref(name)
+        if other.is_none() {
+            note(d, $"functions[{name}]: missing on the right")
+            continue
+        }
+        let left: List(FunctionScheme) = entry.value
+        let right = other.unwrap()
+        if left.len != right.len {
+            note(d, $"functions[{name}]: {left.len} overloads vs {right.len}")
+            continue
+        }
+        for j in 0..left.len {
+            lb.clear()
+            rb.clear()
+            append_scheme(&lb, &left[j], &b.interner)
+            append_scheme(&rb, &right[j], &b.interner)
+            if lb.as_view() != rb.as_view() {
+                note(d, $"functions[{name}][{j}]: {lb.as_view()} vs {rb.as_view()}")
+            }
         }
     }
 }
@@ -332,8 +373,6 @@ fn diff_paths(d: &ResultDiff, a: &TypeCheckResult, b: &TypeCheckResult, alloc: &
 // an entry that leaked or vanished across an invalidation, just not one
 // whose contents went stale in place.
 fn diff_sizes(d: &ResultDiff, a: &TypeCheckResult, b: &TypeCheckResult, alloc: &Allocator?) {
-    size_note(d, "functions.next_id", a.functions.next_id as usize, b.functions.next_id as usize)
-    size_note(d, "functions", a.functions.by_name.len(), b.functions.by_name.len())
     size_note(d, "lambdas", a.lambdas.len(), b.lambdas.len())
     size_note(d, "closures", a.closures.len(), b.closures.len())
     size_note(d, "desugars", a.desugars.len(), b.desugars.len())
@@ -402,6 +441,30 @@ fn append_nominal(sb: &StringBuilder, def: &NominalDef, it: &TypeInterner) {
             sb.append("}")
         },
     }
+}
+
+fn append_scheme(sb: &StringBuilder, f: &FunctionScheme, it: &TypeInterner) {
+    sb.append("fn#")
+    sb.append(f.id)
+    sb.append(" ")
+    sb.append(f.name)
+    sb.append("@")
+    f.module match {
+        Some(m) => sb.append(m),
+        None => sb.append("-"),
+    }
+    sb.append(" pub=")
+    sb.append(f.is_pub)
+    sb.append(" foreign=")
+    sb.append(f.is_foreign)
+    sb.append(" req=")
+    sb.append(f.required_params)
+    sb.append(" variadic=")
+    sb.append(f.has_variadic)
+    sb.append(" forall{")
+    sb.append(f.signature.quantified.len() as u64)
+    sb.append("} ")
+    it.format(f.signature.body, sb)
 }
 
 fn append_spec(sb: &StringBuilder, sp: &Specialization, it: &TypeInterner) {

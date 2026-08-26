@@ -503,6 +503,7 @@ fn run_gate_a(ctx: &ResolveCtx, cold: &AnalyzedProject, alloc: &Allocator?) i32 
     const cold_parse_ns = cold.parse_ns
     const cold_collect_ns = cold.result.phases.collect_ns
     const cold_nominals_ns = cold.result.phases.nominals_ns
+    const cold_signatures_ns = cold.result.phases.signatures_ns
     const dirty: Set(String) = set()
     defer dirty.deinit()
     const n = cold.file_paths.len
@@ -559,6 +560,11 @@ fn run_gate_a(ctx: &ResolveCtx, cold: &AnalyzedProject, alloc: &Allocator?) i32 
         const b = $"gate A: nominal bodies {cold_nom_us} us cold, {warm_nom_us} us re-demanded"
         defer b.deinit()
         println(b.as_view())
+        const cold_sig_us = cold_signatures_ns / 1000u64
+        const warm_sig_us = cold.result.phases.signatures_ns / 1000u64
+        const s = $"gate A: signatures {cold_sig_us} us cold, {warm_sig_us} us re-demanded"
+        defer s.deinit()
+        println(s.as_view())
         return 0
     }
 

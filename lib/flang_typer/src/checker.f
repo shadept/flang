@@ -260,25 +260,77 @@ pub type Checker = struct {
     // whether carried nominal bodies are still valid.
     saw_new_name: bool
 
-    // Module path -> the diagnostics its name-collection and body-resolution
-    // passes produced, replayed verbatim on a demand that reuses the module
-    // (RFC-022 section 5: a cache hit replays its cached diagnostics).
-    // `nominal_diag_keys` owns the path buffers the dict's keys view.
+    // Module path -> the diagnostics its name-collection, body-resolution
+    // and signature passes produced, replayed verbatim on a demand that
+    // reuses the module (RFC-022 section 5: a cache hit replays its cached
+    // diagnostics). `nominal_diag_keys` owns the path buffers the dict's
+    // keys view.
     nominal_diags: Dict(String, ModuleNomDiags)
     nominal_diag_keys: List(OwnedString)
+
+    // Module path -> what its signature pass produced beyond the carried
+    // registries, for demands that skip the pass (RFC-022 5c).
+    // `sig_cache_keys` owns the path buffers. `sig_capture` is on while a
+    // module's signature pass runs; `node_of` then records each minted id
+    // into `sig_nodes`, which `finish_sig_capture` moves into the cache.
+    sig_caches: Dict(String, ModuleSigCache)
+    sig_cache_keys: List(OwnedString)
+    sig_capture: bool
+    sig_nodes: List(SigNodeFact)
 
     allocator: &Allocator?
 }
 
-// One module's cached diagnostics from the two carried tiers.
+// One module's cached diagnostics from the carried tiers.
 pub type ModuleNomDiags = struct {
     collect: List(Diagnostic)
     resolve: List(Diagnostic)
+    signatures: List(Diagnostic)
 }
 
 pub fn deinit(self: &ModuleNomDiags) {
     free_diag_list(&self.collect)
     free_diag_list(&self.resolve)
+    free_diag_list(&self.signatures)
+}
+
+// One captured node from a module's signature pass: the id, the span it
+// was minted from, and - filled in at harvest, once the demand's final
+// zonk has run - the type recorded for it, if any. Replaying the facts
+// reproduces the pass's span and node-type entries without running it.
+pub type SigNodeFact = struct {
+    node: NodeId
+    span: SourceSpan
+    ty: Ty?
+}
+
+// What one module's signature pass produced, cached for demands that
+// skip the pass. `var_burn` is how many engine variables the pass
+// minted - a skipping demand mints the same count so every later
+// phase's variable stream matches a cold check's. `lit_tys` holds the
+// pass's unsuffixed-literal variables between capture and harvest;
+// one still unresolved at harvest would need its E2001 replayed, so
+// the module is marked uncacheable instead. `cacheable` is false
+// whenever the pass recorded anything beyond node types and spans (a
+// call in a default value, a lambda, an anonymous literal) - such a
+// module re-runs its pass every demand.
+pub type ModuleSigCache = struct {
+    facts: List(SigNodeFact)
+    var_burn: usize
+    // The engine's variable counter when the pass started. The burned and
+    // carried variable ids are absolute, so the cache replays only from
+    // this exact position - an upstream edit that shifts it forces a
+    // re-run, which re-anchors the cache.
+    vars_at_start: u32
+    lit_tys: List(Ty)
+    cacheable: bool
+    // True between capture and this demand's harvest.
+    fresh: bool
+}
+
+pub fn deinit(self: &ModuleSigCache) {
+    self.facts.deinit()
+    self.lit_tys.deinit()
 }
 
 // Free the messages a diagnostic list owns, then the list itself.
@@ -376,6 +428,10 @@ pub fn checker(allocator: &Allocator? = null) Checker {
         saw_new_name = false,
         nominal_diags = dict(allocator),
         nominal_diag_keys = list(0, allocator),
+        sig_caches = dict(allocator),
+        sig_cache_keys = list(0, allocator),
+        sig_capture = false,
+        sig_nodes = list(0, allocator),
         allocator = allocator,
     }
 }
@@ -384,12 +440,14 @@ pub fn checker(allocator: &Allocator? = null) Checker {
 //
 // What survives is what the previous check registered by stable key: the
 // nominal registry - declared names WITH their resolved bodies, the
-// anonymous-record definitions and the map that interns them - plus the
-// alias bodies, the retired closure-environment ids awaiting reclamation
-// (`recycled`, see the end of `check_all`), and the per-module diagnostics
-// of the carried tiers. The bodies' `Ty` handles index the type table,
-// which the caller adopts back out of the previous result
-// (`adopt_interner`) so they stay resolvable.
+// anonymous-record definitions and the map that interns them - the
+// function registry with its schemes, templates, declared parameter
+// lists and deprecations, the constant types, the alias bodies, the
+// retired closure-environment ids awaiting reclamation (`recycled`, see
+// the end of `check_all`), and the per-module caches of the carried
+// tiers (diagnostics and signature facts). The carried `Ty` handles
+// index the type table, which the caller adopts back out of the previous
+// result (`adopt_interner`) so they stay resolvable.
 //
 // Everything else a check computes is dropped: it names variables of the
 // engine that inferred it, and that engine goes.
@@ -399,31 +457,52 @@ pub fn checker(allocator: &Allocator? = null) Checker {
 pub fn begin_demand(self: &Checker) {
     let noms = self.nominals
     let aliases = self.aliases
+    let consts = self.constants
+    let fns = self.functions
+    let tmpls = self.templates
+    let decl_params = self.fn_decl_params
+    let deprecations = self.fn_deprecations
     let anons = self.anon_structs
     let anon_keys = self.anon_keys
     let recycled = self.recycled
     let nom_diags = self.nominal_diags
     let nom_diag_keys = self.nominal_diag_keys
+    let sig_caches = self.sig_caches
+    let sig_cache_keys = self.sig_cache_keys
     const ct = self.comptime
     // Hand the carried tables over before the teardown, which frees whatever
     // the checker still owns.
     self.nominals = nominal_registry(self.allocator)
     self.aliases = fqn_map(self.allocator)
+    self.constants = fqn_map(self.allocator)
+    self.functions = function_registry(self.allocator)
+    self.templates = dict(self.allocator)
+    self.fn_decl_params = dict(self.allocator)
+    self.fn_deprecations = dict(self.allocator)
     self.anon_structs = dict(self.allocator)
     self.anon_keys = list(0, self.allocator)
     self.recycled = dict(self.allocator)
     self.nominal_diags = dict(self.allocator)
     self.nominal_diag_keys = list(0, self.allocator)
+    self.sig_caches = dict(self.allocator)
+    self.sig_cache_keys = list(0, self.allocator)
     self.deinit()
 
     let next = checker(self.allocator)
     next.nominals = noms
     next.aliases = aliases
+    next.constants = consts
+    next.functions = fns
+    next.templates = tmpls
+    next.fn_decl_params = decl_params
+    next.fn_deprecations = deprecations
     next.anon_structs = anons
     next.anon_keys = anon_keys
     next.recycled = recycled
     next.nominal_diags = nom_diags
     next.nominal_diag_keys = nom_diag_keys
+    next.sig_caches = sig_caches
+    next.sig_cache_keys = sig_cache_keys
     next.comptime = ct
     self.* = next
 }
@@ -529,6 +608,9 @@ pub fn deinit(self: &Checker) {
     self.recycled.deinit()
     self.nominal_diags.deinit()
     self.nominal_diag_keys.deinit()
+    self.sig_caches.deinit()
+    self.sig_cache_keys.deinit()
+    self.sig_nodes.deinit()
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -1621,6 +1703,7 @@ fn register_function_sig(self: &Checker, fd: &FunctionDecl) {
         decl_span = fd.span,
         deprecation = deprecation_of(&fd.directives),
         id = 0u32,           // filled in by registry.register
+        retired = false,
     }
     // E2103: two declarations of the same name in one module with the
     // same parameter types. The registry would keep both and overload
@@ -1647,7 +1730,12 @@ fn register_function_sig(self: &Checker, fd: &FunctionDecl) {
     // A generic signature also records its instantiation template: the
     // declaration plus the `$T` bindings `resolve_generic_bind` just
     // collected, in declaration order (M10). The list moves in; the
-    // checker keeps a fresh one for the next signature.
+    // checker keeps a fresh one for the next signature. A reclaimed id's
+    // previous template goes first - `Dict.set` would strand its list.
+    self.templates.remove(id) match {
+        Some(old) => old.tps.deinit(),
+        None => {},
+    }
     if scheme.quantified.len() > 0 {
         self.templates.set(id, GenericTemplate {
             decl = fd.*,
@@ -2516,6 +2604,9 @@ fn wrap_some(self: &Checker, e: Expr) Expr {
 fn node_of(self: &Checker, span: SourceSpan) NodeId {
     const id = node_id_of(span)
     self.results.record_span(id, span)
+    if self.sig_capture {
+        self.sig_nodes.push(SigNodeFact { node = id, span = span, ty = null })
+    }
     return id
 }
 
@@ -6656,11 +6747,51 @@ pub fn check_all(self: &Checker, modules: &List(Module), paths: &List(String),
         stash_nominal_diags(self, paths[i], diags_from, false)
     }
     const nominals_ns = elapsed_ns(nominals_start)
-    // Phase 2: signatures.
+    // Phase 2: signatures. Carried like nominal bodies (5c): a module the
+    // demand did not re-parse skips the pass - its schemes, templates and
+    // constant types already sit in the carried registries, and the rest
+    // of what the pass records replays from its cache. A module that
+    // re-runs has its registry entries retired first, so its declarations
+    // reclaim their slots and ids; retirements left unclaimed afterwards
+    // are removed declarations and are purged. Retirement is per module
+    // and inline: a module's registrations only ever collide with its own
+    // old entries (constants are FQN-scoped, E2103 is same-module), so
+    // nothing needs the whole set retired up front.
+    //
+    // The skip decision is made at the module's turn because it reads the
+    // variable counter: a carried handle (an unannotated constant's
+    // variable, a cached fact's leftover) is an ABSOLUTE id, so it is only
+    // right while the module's burn starts where its pass once started.
+    // An edit that changes an earlier module's signature-tier variable
+    // count shifts every later position; the affected modules re-run once
+    // and their caches re-anchor.
     const signatures_start = monotonic_ns()
+    self.engine.set_nominal_registry(&self.nominals)
     for i in seq {
-        collect_signatures(self, &modules[i], paths[i])
+        const skip = bodies_carry and !needs_collect(recollect, i)
+            and sig_cache_ok(self, paths[i], self.engine.var_counter)
+        if skip {
+            replay_signature_cache(self, paths[i])
+            continue
+        }
+        // A first demand has nothing carried to retire, and the scans are
+        // per module - skip them wholesale on a cold check.
+        if recollect.is_some() {
+            self.functions.retire_module(paths[i])
+            self.constants.evict_module(paths[i])
+        }
+        run_signature_pass(self, &modules[i], paths[i])
     }
+    let dead_fns = self.functions.purge_retired()
+    for id in dead_fns {
+        self.templates.remove(id) match {
+            Some(t) => t.tps.deinit(),
+            None => {},
+        }
+        const _p = self.fn_decl_params.remove(id)
+        const _d = self.fn_deprecations.remove(id)
+    }
+    dead_fns.deinit()
     const signatures_ns = elapsed_ns(signatures_start)
     // Phase 2.5: constant initializers, before any body can observe an
     // unpinned const (see `check_module_constants`).
@@ -6712,6 +6843,11 @@ pub fn check_all(self: &Checker, modules: &List(Module), paths: &List(String),
     }
     const zonk_ns = elapsed_ns(zonk_start)
 
+    // Now that every type is final, fill this demand's signature captures
+    // (RFC-022 5c) - the cached facts must hold the zonked types a skipped
+    // pass replays.
+    harvest_sig_caches(self, &zonked)
+
     // Move the registries and result tables into the snapshot, then
     // replace each moved-from field with a fresh empty container so the
     // caller's later `checker.deinit()` doesn't double-free them.
@@ -6749,7 +6885,7 @@ pub fn check_all(self: &Checker, modules: &List(Module), paths: &List(String),
     // `begin_demand` retires. The snapshot keeps the original; the checker
     // keeps a deep copy whose handles the carried type table resolves.
     self.nominals = out_nominals.carried_copy(self.allocator)
-    self.functions = function_registry(self.allocator)
+    self.functions = out_functions.carried_copy(self.allocator)
     self.specs = specialization_registry(self.allocator)
     // Whatever retirement went unclaimed names a definition this demand's
     // sources no longer declare; the next demand starts its own ledger -
@@ -6836,21 +6972,38 @@ fn removed_names(self: &Checker) bool {
 // Remember the diagnostics `self.diagnostics[from..]` as module `path`'s
 // collect (or resolve) output, replacing whatever the module had cached.
 fn stash_nominal_diags(self: &Checker, path: String, from: usize, is_collect: bool) {
-    if self.nominal_diags.get_ref(path).is_none() {
-        if from == self.diagnostics.len { return }
-        const idx = self.nominal_diag_keys.len
-        self.nominal_diag_keys.push(from_view(path, self.allocator))
-        self.nominal_diags.set(self.nominal_diag_keys[idx].as_view(), ModuleNomDiags {
-            collect = list(0, self.allocator),
-            resolve = list(0, self.allocator),
-        })
-    }
-    let entry = self.nominal_diags.get_ref(path).unwrap()
+    let found = module_diags_entry(self, path, from)
+    if found.is_none() { return }
+    let entry = found.unwrap()
     if is_collect {
         refill_diags(self, &entry.collect, from)
     } else {
         refill_diags(self, &entry.resolve, from)
     }
+}
+
+// Same, for the signature pass's tier.
+fn stash_sig_diags(self: &Checker, path: String, from: usize) {
+    let found = module_diags_entry(self, path, from)
+    if found.is_none() { return }
+    refill_diags(self, &found.unwrap().signatures, from)
+}
+
+// The module's diag-cache entry, created on first use. Null when there is
+// no entry yet and nothing to stash either - an all-clean module never
+// allocates one.
+fn module_diags_entry(self: &Checker, path: String, from: usize) &ModuleNomDiags? {
+    if self.nominal_diags.get_ref(path).is_none() {
+        if from == self.diagnostics.len { return null }
+        const idx = self.nominal_diag_keys.len
+        self.nominal_diag_keys.push(from_view(path, self.allocator))
+        self.nominal_diags.set(self.nominal_diag_keys[idx].as_view(), ModuleNomDiags {
+            collect = list(0, self.allocator),
+            resolve = list(0, self.allocator),
+            signatures = list(0, self.allocator),
+        })
+    }
+    return self.nominal_diags.get_ref(path)
 }
 
 fn refill_diags(self: &Checker, dst: &List(Diagnostic), from: usize) {
@@ -6879,6 +7032,189 @@ fn replay_nominal_diags(self: &Checker, path: String, is_collect: bool) {
     }
     for &d in entry.resolve {
         self.diagnostics.push(clone_diag(d))
+    }
+}
+
+fn replay_sig_diags(self: &Checker, path: String) {
+    const found = self.nominal_diags.get_ref(path)
+    if found.is_none() { return }
+    for &d in found.unwrap().signatures {
+        self.diagnostics.push(clone_diag(d))
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// Carried signatures (RFC-022 5c). A module's schemes, templates and
+// constant types carry in the registries; what its signature pass
+// records besides those - node types and spans for default-value
+// expressions, engine variables for `$T` binds and unannotated
+// constants - is captured per module and replayed on a demand that
+// skips the pass.
+// ─────────────────────────────────────────────────────────────────────
+
+// Sizes of everything a signature pass can touch, taken before a
+// module's turn. `finish_sig_capture` compares them after: a pass whose
+// only recordings are node types, spans and resolved literals is fully
+// described by the cache; anything else (a resolved call or operator in
+// a default value, a lambda, an anonymous literal, an interpolation)
+// makes the module re-run its pass every demand. `lambda` alone covers
+// the lambda and closure tables - every record of either happens inside
+// one `next_lambda` mint.
+type SigWatermark = struct {
+    vars: u32
+    synth: u32
+    lambda: u32
+    lits: usize
+    targets: usize
+    ops: usize
+    desugars: usize
+    default_args: usize
+    arg_lists: usize
+    receiver_derefs: usize
+    synth_strings: usize
+    instantiated: usize
+    pending_specs: usize
+    pending_calls: usize
+    pending_fn_names: usize
+    pending_anons: usize
+}
+
+fn sig_watermark(self: &Checker) SigWatermark {
+    return .{
+        vars = self.engine.var_counter,
+        synth = self.next_synth,
+        lambda = self.next_lambda,
+        lits = self.pending_literals.len,
+        targets = self.results.resolved_targets.len(),
+        ops = self.results.resolved_ops.len(),
+        desugars = self.results.desugars.len(),
+        default_args = self.results.default_args.len(),
+        arg_lists = self.results.arg_lists.len(),
+        receiver_derefs = self.results.receiver_derefs.len(),
+        synth_strings = self.results.synth_strings.len,
+        instantiated = self.results.instantiated_types.len,
+        pending_specs = self.pending_specs.len,
+        pending_calls = self.pending_calls.len,
+        pending_fn_names = self.pending_fn_names.len,
+        pending_anons = self.pending_anons.len,
+    }
+}
+
+// Run one module's signature pass with capture on, stash its
+// diagnostics, and store the cache entry for the next demand.
+fn run_signature_pass(self: &Checker, module: &Module, path: String) {
+    const w = sig_watermark(self)
+    self.sig_nodes.clear()
+    self.sig_capture = true
+    const diags_from = self.diagnostics.len
+    collect_signatures(self, module, path)
+    self.sig_capture = false
+    stash_sig_diags(self, path, diags_from)
+    finish_sig_capture(self, path, &w)
+}
+
+fn finish_sig_capture(self: &Checker, path: String, w: &SigWatermark) {
+    const clean = self.next_synth == w.synth
+        and self.next_lambda == w.lambda
+        and self.results.resolved_targets.len() == w.targets
+        and self.results.resolved_ops.len() == w.ops
+        and self.results.desugars.len() == w.desugars
+        and self.results.default_args.len() == w.default_args
+        and self.results.arg_lists.len() == w.arg_lists
+        and self.results.receiver_derefs.len() == w.receiver_derefs
+        and self.results.synth_strings.len == w.synth_strings
+        and self.results.instantiated_types.len == w.instantiated
+        and self.pending_specs.len == w.pending_specs
+        and self.pending_calls.len == w.pending_calls
+        and self.pending_fn_names.len == w.pending_fn_names
+        and self.pending_anons.len == w.pending_anons
+
+    let facts = self.sig_nodes
+    self.sig_nodes = list(0, self.allocator)
+    let lit_tys: List(Ty) = list(0, self.allocator)
+    for k in w.lits..self.pending_literals.len {
+        lit_tys.push(self.pending_literals[k].ty)
+    }
+    let cache = ModuleSigCache {
+        facts = facts,
+        var_burn = (self.engine.var_counter - w.vars) as usize,
+        vars_at_start = w.vars,
+        lit_tys = lit_tys,
+        cacheable = clean,
+        fresh = true,
+    }
+
+    const found = self.sig_caches.get_ref(path)
+    if found.is_none() {
+        const idx = self.sig_cache_keys.len
+        self.sig_cache_keys.push(from_view(path, self.allocator))
+        self.sig_caches.set(self.sig_cache_keys[idx].as_view(), cache)
+        return
+    }
+    let slot = found.unwrap()
+    slot.deinit()
+    slot.* = cache
+}
+
+// Whether module `path`'s signature pass can be skipped this demand: a
+// cache exists, nothing it cannot replay was recorded, and the variable
+// stream stands exactly where it stood when the pass ran - the carried
+// handles are absolute ids, so any offset makes them someone else's.
+fn sig_cache_ok(self: &Checker, path: String, vars_now: u32) bool {
+    const found = self.sig_caches.get_ref(path)
+    if found.is_none() { return false }
+    const c = found.unwrap()
+    return c.cacheable and c.vars_at_start == vars_now
+}
+
+// Reproduce what a skipped signature pass would have left behind: the
+// cached diagnostics, the span and node-type entries, and the engine
+// variables it would have minted - burned so every later phase's
+// variable stream matches a cold check's. The carried registries
+// already hold the pass's registrations; the burned variables are what
+// keeps an unannotated constant's carried variable naming the slot the
+// constants phase then binds.
+fn replay_signature_cache(self: &Checker, path: String) {
+    replay_sig_diags(self, path)
+    const found = self.sig_caches.get_ref(path)
+    if found.is_none() { return }
+    let c = found.unwrap()
+    for &f in c.facts {
+        self.results.record_span(f.node, f.span)
+        f.ty match {
+            Some(t) => self.results.record_type(f.node, t),
+            None => {},
+        }
+    }
+    for _k in 0..c.var_burn {
+        self.engine.burn_var()
+    }
+}
+
+// Fill this demand's fresh captures with their final types, once the
+// demand's zonk has run: each captured node's entry in the zonked table,
+// and a cacheability check on the pass's literals - one still unresolved
+// would owe an E2001 per demand, so its module stays uncached and
+// re-runs.
+fn harvest_sig_caches(self: &Checker, zonked: &Dict(NodeId, Ty)) {
+    for k in 0..self.sig_cache_keys.len {
+        const path = self.sig_cache_keys[k].as_view()
+        let entry = self.sig_caches.get_ref(path).unwrap()
+        if !entry.fresh { continue }
+        entry.fresh = false
+        for j in 0..entry.facts.len {
+            const f = entry.facts[j]
+            entry.facts[j] = SigNodeFact {
+                node = f.node,
+                span = f.span,
+                ty = zonked.get(f.node),
+            }
+        }
+        for t in entry.lit_tys {
+            const z = self.engine.zonk(t)
+            if self.engine.is_var(z) { entry.cacheable = false }
+        }
+        entry.lit_tys.clear()
     }
 }
 
@@ -7178,6 +7514,69 @@ test "a carried body replays its cached diagnostics" {
         "type H = struct { x: i32\nx: i32 }\nfn main() i32 { return 0 }\n")
     assert_eq(r.first, 1 as usize, "the duplicate field is reported cold")
     assert_eq(r.second, 1 as usize, "and exactly once again on the re-demand")
+}
+
+test "a carried signature replays its cached diagnostics" {
+    // The duplicate-signature error (E2103) lives in module a's signature
+    // pass. Re-demanding with only b dirty skips that pass for a, so the
+    // error must come from the signature tier's cache.
+    let r = redemand_errors(
+        "pub fn helper() i32 { return 1 }\n",
+        "pub fn helper() i32 { return 2 }\n",
+        "fn dup(x: i32) i32 { return x }\nfn dup(x: i32) i32 { return x }\nfn main() i32 { return 0 }\n")
+    assert_eq(r.first, 1 as usize, "the duplicate signature is reported cold")
+    assert_eq(r.second, 1 as usize, "and exactly once again on the re-demand")
+}
+
+test "an edited signature re-resolves its callers" {
+    // Module a's call re-checks against the registry, so b's re-collected
+    // signature must have replaced the carried one - a stale scheme would
+    // keep the zero-argument call resolving.
+    let r = redemand_errors(
+        "pub fn helper() i32 { return 1 }\n",
+        "pub fn helper(x: i32) i32 { return x }\n",
+        "import b\nfn main() i32 { return helper() }\n")
+    assert_eq(r.first, 0 as usize, "the zero-argument call resolves cold")
+    assert_true(r.second > 0, "the new arity makes the old call an error")
+}
+
+test "a removed function stops resolving" {
+    // The unclaimed retirement must be purged, not left resolving at its
+    // old id.
+    let r = redemand_errors(
+        "pub fn helper() i32 { return 1 }\n",
+        "pub fn other() i32 { return 2 }\n",
+        "import b\nfn main() i32 { return helper() }\n")
+    assert_eq(r.first, 0 as usize, "the call resolves while the function exists")
+    assert_true(r.second > 0, "naming the removed function is reported")
+}
+
+test "an upstream shift in the variable stream re-anchors a carried constant" {
+    // Demand 1: module b's signature pass mints no variables, so module
+    // a's unannotated constant holds the stream's first id. Demand 2:
+    // the edited b now mints one (the default literal, pinned i32), so
+    // a's carried handle names b's variable. Replaying a's cache would
+    // bind the float initializer against that i32 and error; the
+    // position check forces a's pass to re-run and re-anchor instead.
+    let r = redemand_errors(
+        "pub fn helper() i32 { return 1 }\n",
+        "pub fn helper(pad: i32 = 7) i32 { return pad }\n",
+        "const F = 1.5\nfn main() f64 { return F }\n")
+    assert_eq(r.first, 0 as usize, "the float constant type-checks cold")
+    assert_eq(r.second, 0 as usize, "and still does once b mints a variable before it")
+}
+
+test "carried constants and default values survive a re-demand" {
+    // Module a is skipped whole in the signature tier: `scaled`'s scheme
+    // and default carry, and LOCAL's variable is re-minted by the burn and
+    // re-bound by the constants pass. Any of those going stale surfaces as
+    // a spurious error on the re-demand.
+    let r = redemand_errors(
+        "pub fn helper() i32 { return 1 }\n",
+        "pub fn helper() i32 { return 2 }\n",
+        "fn scaled(x: i32, k: i32 = 2) i32 { return x }\nconst LOCAL = 3\nfn main() i32 { return scaled(LOCAL) }\n")
+    assert_eq(r.first, 0 as usize, "the program type-checks cold")
+    assert_eq(r.second, 0 as usize, "and identically on the re-demand")
 }
 
 // Parse each source as its own module, run check_all over them, and count

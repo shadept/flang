@@ -534,6 +534,98 @@ measured, with the shared table and the retired-result bookkeeping
 accounting for the difference. The bulk of the remaining retention is the
 replaced result's body-tier tables, which is 5d's territory.
 
+**5c landed 2026-08-26 (`signature` / `const_value`).** Function schemes
+and constant types carry across demands: a module the demand did not
+re-parse skips `collect_signatures` entirely, under the same validity
+conditions as the carried nominal bodies (no name added or removed, no
+alias changed - the pass resolves types against the same registries).
+
+The function registry joins the carried set whole
+(`function_registry.carried_copy`), and with it the id-keyed side tables
+a scheme drags along: instantiation templates, declared parameter lists
+(both AST views into kept modules), and deprecations. Id stability takes
+a different mechanism than the nominals' FQN ledger, because overloads
+make names non-unique and candidate ORDER inside one name is part of
+resolution (scoring ties break by position): a re-running module's
+entries are retired in place (`retire_module` - same slot, same id,
+invisible to lookup), and its re-registrations reclaim the first retired
+slot with a matching name and module, which pairs declarations by source
+order. Retirements still unclaimed after the pass are removed
+declarations; `purge_retired` drops them and their side-table entries,
+and their ids are never reused.
+
+What the pass records BESIDES its registrations is cached per module and
+replayed on a skip (`ModuleSigCache`): the cached diagnostics (E2103,
+E2070, deprecation warnings), the spans and node types of default-value
+expressions (harvested from the demand's final zonked table, so the
+facts are concrete), and the count of engine variables the pass minted -
+burned on replay (`Engine.burn_var`, counter only: the carried table
+already holds the nodes those variables named, and the pass minted them
+at its own level, so interning again at the replay's level would grow
+the table with orphan nodes). The burn is what keeps an unannotated
+constant's carried variable naming the slot the constants pass binds,
+and every later phase's variable stream identical to a cold check's.
+
+A module whose pass produced anything beyond node types, spans and
+resolved literals is not cacheable and re-runs every demand: a call or
+operator in a default value (its resolved targets and possible generic
+pick would need replaying into tables rebuilt per demand), a lambda, an
+anonymous literal, an interpolation, or a literal still unresolved at
+harvest (its E2001 re-emits per demand). Detected by watermarking every
+such table around the module's pass. In this corpus the only defaults
+beyond literals are `std.csv`'s `csv_options()` calls, so the fallback
+is per-module and nearly never taken.
+
+The cache is also anchored to its position in the variable stream
+(`vars_at_start`): the carried handles are absolute ids, so a skip is
+valid only while the module's burn starts where its pass once started.
+An edit that changes an earlier module's signature-tier variable count
+(a default literal added, a `$T` removed, an unannotated constant)
+shifts every later position; without the check, a later module's
+carried constant variable lands on whatever now owns its old id - an
+earlier module's pinned default literal, say - and the constants pass
+binds the wrong slot: a spurious mismatch when the types differ, a
+silently borrowed pin when they happen to agree. The affected modules
+re-run once and their caches re-anchor; modules before the edit skip
+as usual. The skip decision therefore happens at each module's turn in
+demand order, where the counter's value IS the module's start
+position, and retirement moved inline with it - sound because a
+module's registrations only ever collide with its own old entries
+(constants are FQN-scoped, E2103 is same-module). Pinned by the
+checker test "an upstream shift in the variable stream re-anchors a
+carried constant", which fails without the check.
+
+`const_value` needed no cache: registration carries with the signature
+tier (the constants `FqnMap` is evicted per re-running module, like the
+aliases), but phase 2.5 - checking every initializer - stays eager. It
+is ~0.1% of a check, and re-running it is what keeps every exotic
+initializer (a call, a generic pick, an anonymous literal) observably
+cold-identical, including the binding of carried constant variables.
+
+Gate A grew the oracle for it: the function registry is now compared
+entry by entry (id, flags, rendered signature, overload order), where
+before it was two size rows. One behavioural note: a re-running module's
+default-value calls resolve against the full carried registry, where a
+cold check's phase 2 sees only the modules before it in demand order.
+Gate A found no divergence across the corpus - a default whose overload
+choice depends on a later module's registrations is the pathological
+case, and arguably the cold order-dependence is the bug.
+
+Measured on the compiler with three modules dirtied of 106:
+**signatures 108.3 ms cold, 16.2 ms re-demanded** (medians of five; the
+gate prints the pair). Parse, collect and nominal-body reuse carry over
+unchanged. Memory: the interner holds the cold count after a re-demand -
+`burn_var` is what keeps the "table does not grow across a re-demand"
+property 5b established, where interning burned variables at the
+replay's level cost ~700 orphan nodes per re-demand in the first cut.
+
+The conversion also surfaced a reference-compiler bug - `for &x` over a
+local bound to `&List(T)` passes the local's own address to `iter_ref` -
+which segfaulted the stage-1 compiler until the loop was indexed. Entry
+in `docs/known-issues.md`; regression pinned at
+`tests/harness/iterators/iter_ref_through_reference_local.f` (the
+self-hosted compiler lowers it correctly).
+
 **Gate B - laziness.** Run the harness with lazy demand enabled and assert zero
 diff in reported diagnostics against eager demand. Guards the M12 rejection
 parity against silent regression. Nearly free once W1003 exists, since that
@@ -559,7 +651,8 @@ object contention on top), stage-2 = stage-3 byte-identical, 11/11 examples.
           outlives one check
       5b  DONE 2026-08-26: nominal_body carries; the type table outlives a
           demand (RFC-024 open questions 2 and 3 answered below)
-      5c  signature / const_value
+      5c  DONE 2026-08-26: signature carries (function registry, templates,
+          constant types); constants phase stays eager by design
       5d  body  (64%)
       5e  specialization; retire drain_pending_specs / resolve_pending_calls
       5f  validate(project); retire validate_literals / zonk_specializations

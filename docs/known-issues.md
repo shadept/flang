@@ -2340,6 +2340,28 @@ the constant never reaches the environment: every use site reports E3002
 `for x in xs` iteration through the array's decay to a slice. Workaround:
 declare the array inside the function that uses it.
 
+## Reference: `for &x` over a local bound to `&List(T)` borrows the local, not the list
+
+**Affected:** C# reference compiler only - the self-hosted compiler
+lowers the same program correctly.
+
+A by-reference for-loop whose iterable is a LOCAL holding a reference to
+a list (`let lst = d.get_ref(k).unwrap()` then `for &x in lst`) lowers
+the `iter_ref` call with the local's own address, so the callee receives
+`List**` where it expects `List*` and iterates garbage. Depending on the
+C compiler's warning flags this is either a C4047 compile failure
+(levels of indirection) or, in the compiler's own stage-1 build, a clean
+compile that segfaults at runtime.
+
+A `&List` PARAMETER iterates correctly (`for &d in dst` where
+`dst: &List(Diagnostic)`), as does a field expression rooted at a
+reference (`for &d in entry.collect`). Only the plain local binding
+mis-lowers. Until the reference compiler is fixed, compiler sources
+avoid the shape: index (`for j in 0..lst.len`) or iterate by value.
+
+Regression test (green under the self-hosted compiler; the reference
+compiler trips it): `tests/harness/iterators/iter_ref_through_reference_local.f`.
+
 ## Self-hosted: mutation through a field chain that crosses a reference does not stick
 
 The reference compiler's two-hop receiver bug (above) has a self-hosted

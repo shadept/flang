@@ -270,6 +270,18 @@ pub fn fresh_var(self: &Engine) Ty {
     return self.interner.var_of(TyVar { id = id, level = self.level })
 }
 
+// Advance the variable counter without interning a node. Replaying a
+// skipped pass burns the variables the pass would have minted so later
+// phases' id streams match a cold check's; the carried table already
+// holds whatever nodes those variables named, so interning again would
+// only grow it (the pass minted at its own level, the replay runs at
+// the top one, and a var node is identified by id AND level).
+pub fn burn_var(self: &Engine) {
+    let id = self.var_counter
+    self.var_counter = id + 1u32
+    set_level(self, id, self.level)
+}
+
 // Allocate a fresh variable whose eventual binding must be one of the
 // given primitive kinds. Used to narrow char/byte literals to `{u8, char}`
 // so they can't accidentally bind to `String` etc. during overload
