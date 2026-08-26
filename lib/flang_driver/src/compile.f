@@ -66,6 +66,40 @@ pub fn build_program(modules: &List(Module), fqns: &List(OwnedString), result: &
             println(line.as_view())
         }
     }
+
+    // A skipped `main` can never link - the executable would have no
+    // entry point. Reject the module here, naming the refusal chain,
+    // instead of handing the linker a program that fails with an opaque
+    // "entry point must be defined". TEMPORARY SCAFFOLD like the skip
+    // mechanism itself (see lower.f `unlowerable`).
+    if is_skipped(&m, "main") {
+        println("error: `main` was not emitted - lowering refused it:")
+        print_refusal_chain(&m, "main")
+        if !verbose {
+            println("  (build with -v for the full skip report)")
+        }
+        m.deinit()
+        return Err(BuildError.LowerFailed)
+    }
+
+    // Refused USER code always reports, `-v` or not: a function the
+    // programmer wrote must never vanish from the binary in silence.
+    // Stdlib skips are the known lowering frontier and stay behind `-v`
+    // (the report above).
+    if !verbose {
+        let announced = false
+        for i in 0..m.skip_notes.len {
+            const n = m.skip_notes[i].as_view()
+            if is_stdlib_note(n) { continue }
+            if !announced {
+                println("warning: lowering refused project function(s) - they are NOT in the binary:")
+                announced = true
+            }
+            const line = $"    {n}"
+            defer line.deinit()
+            println(line.as_view())
+        }
+    }
     let opts = build_options(output_path, allocator)
     let _k = opts.set_keep_temps(keep_c)
     let _r = opts.set_release(release)
@@ -92,6 +126,58 @@ pub fn build_program(modules: &List(Module), fqns: &List(OwnedString), result: &
     let artifact = r.unwrap()
     artifact.set_lower_ns(lower_ns)
     return Ok(artifact)
+}
+
+// Presentation only: stdlib symbols mangle from `std.*` / `core.*`
+// fqns. A misclassification changes verbosity, never correctness.
+fn is_stdlib_note(note: String) bool {
+    return starts_with(note, "std__") or starts_with(note, "core__")
+}
+
+// TEMPORARY SCAFFOLD (see lower.f `unlowerable`): exact-match lookup in
+// the module's skipped list.
+fn is_skipped(m: &IrModule, sym: String) bool {
+    for n in m.skipped {
+        if n == sym { return true }
+    }
+    return false
+}
+
+// The skip note recorded for `sym` ("{sym}: ..."), if any.
+fn skip_note_for(m: &IrModule, sym: String) String? {
+    for i in 0..m.skip_notes.len {
+        const n = m.skip_notes[i].as_view()
+        if n.len > sym.len and n[0..sym.len] == sym and n[sym.len] == ':' {
+            return Some(n)
+        }
+    }
+    return null
+}
+
+// The symbol between a note's trailing backticks - the shape
+// "calls undefined `X`" carries the callee whose refusal cascaded.
+fn trailing_quoted(note: String) String? {
+    if note.len < 3 or note[note.len - 1] != '`' { return null }
+    return last_index_of(as_raw_bytes(note[0..(note.len - 1)]), '`' as u8) match {
+        Some(i) => Some(note[(i + 1)..(note.len - 1)]),
+        None => null,
+    }
+}
+
+// Print `sym`'s skip note, then follow "calls undefined `X`" links so
+// the report ends at the leaf refusal, not the entry point.
+fn print_refusal_chain(m: &IrModule, sym: String) {
+    let cur = sym
+    for _hop in 0..(64 as usize) {
+        let note = skip_note_for(m, cur)
+        if note.is_none() { return }
+        const line = $"    {note.unwrap()}"
+        defer line.deinit()
+        println(line.as_view())
+        let nxt = trailing_quoted(note.unwrap())
+        if nxt.is_none() { return }
+        cur = nxt.unwrap()
+    }
 }
 
 // Every `<mod>.c` sitting beside a `<mod>.f` in the module set. A `.c` the

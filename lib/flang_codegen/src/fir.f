@@ -517,6 +517,15 @@ pub fn deinit(self: &Global) {
 // Mutators
 // ─────────────────────────────────────────────────────────────────────────
 
+// Hand this instance's buffers to a copy the caller took: the list
+// fields are re-pointed at fresh zero-cap lists, so a later `deinit`
+// here frees nothing.
+pub fn release_buffers(self: &Function, allocator: &Allocator?) {
+    self.params = list(0, allocator)
+    self.blocks = list(0, allocator)
+    self.label_storage = list(0, allocator)
+}
+
 // Take ownership of a minted label buffer; returns the stable view the
 // caller stores in blocks and branch targets.
 pub fn add_label(self: &Function, owned: OwnedString) String {

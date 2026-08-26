@@ -132,9 +132,19 @@ fn block_internal(self: &FunctionBuilder, label: String, param_types: List(IrTyp
     return BlockBuilder { fb = self, block_idx = idx }
 }
 
-// Move the built function out. The builder must not be used afterwards.
+// Move the built function out. The builder is left holding empty lists,
+// so a `deinit` after `finish` frees nothing - callers may pair every
+// builder with a `deinit` unconditionally.
 pub fn finish(self: &FunctionBuilder) Function {
-    return self.func
+    let f = self.func
+    self.func.release_buffers(self.allocator)
+    return f
+}
+
+// Free a builder abandoned before `finish` (a refused body). Safe after
+// `finish` too: the move left empty lists behind.
+pub fn deinit(self: &FunctionBuilder) {
+    self.func.deinit()
 }
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -554,6 +564,15 @@ pub fn ret_void(self: &BlockBuilder) {
 // Unconditional branch to `label` with no block args.
 pub fn br(self: &BlockBuilder, label: String) {
     let args: List(Operand) = list(0, self.fb.allocator)
+    self.br_args(label, args)
+}
+
+// Unconditional branch passing one block argument - the dominant shape
+// (an induction variable, a join value). The list is minted here and
+// owned by the terminator, like every `BlockTarget`'s args.
+pub fn br_arg(self: &BlockBuilder, label: String, arg: Operand) {
+    let args: List(Operand) = list(1, self.fb.allocator)
+    args.push(arg)
     self.br_args(label, args)
 }
 

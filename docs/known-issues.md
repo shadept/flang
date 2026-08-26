@@ -2364,19 +2364,37 @@ A receiver that is a value-field chain rooted at a single reference
 of member-path receivers (the reference compiler's fix is the model), then
 drop the `LowerCtx.it` field.
 
-## Self-hosted: repeat array literal over 64 elements silently drops the module
+## Self-hosted: repeat array literal over 64 elements silently dropped the module - RESOLVED
 
-`let buf: [u8; 65] = [0; 65]` (any repeat literal with more than 64
-elements) makes the self-hosted compiler emit a C file containing the
-stdlib but none of the module's own functions, including `main` - the
-build then fails at link with "entry point must be defined" and no
-diagnostic pointing at the source. 64 elements and below work. The
-reference compiler handles any length. Workaround: declare the array
-uninitialized (zero-filled by default) and fill with a loop, or stay at
-64 or fewer elements.
+**Status:** Resolved - fill loop instead of a count cap; a skipped
+`main` is now a build error
+**Affected:** `lib/flang_driver/src/lower.f` (array literal lowering)
+and `lib/flang_driver/src/compile.f` (build driver)
 
-Bisected with `[u8; N] = [fill; N]` at N = 64 (ok) / 65 (fails); the
-threshold suggests a fixed 64-slot buffer in lowering or codegen.
+A non-zero repeat literal (`[7; N]`, `[fill; N]` - the zero form was
+always one memset) lowered as N unrolled stores and deliberately
+refused above 64 elements through the subset gate, which skipped the
+enclosing function and, transitively, every caller including `main`.
+The build then failed at link with "entry point must be defined" and no
+diagnostic. The reference compiler handled any length.
+
+Two fixes:
+
+- `lower_array_lit` emits one fill loop for any non-zero repeat (the
+  induction variable rides a block parameter, the same shape
+  `for i in a..b` lowers to), so the cap is gone; aggregate repeat
+  values fill via memcpy in the same loop.
+- `build_program` rejects a module whose `main` was skipped, printing
+  the refusal chain (each skip note, following "calls undefined" links
+  to the leaf) before the linker ever runs. Skipped functions from the
+  project's own modules print a warning on every build, `-v` or not;
+  only stdlib-frontier skips (symbols mangled from `std.*` / `core.*`)
+  stay behind `-v`. Unreached skipped functions still link fine, which
+  is the milestone design.
+
+Regression test: `tests/harness/arrays/array_repeat_large.f` (constant
+fill past the old cap, runtime fill at 4096, non-byte elements, zero
+form).
 
 ## Enum construction left padding bytes uninitialized - RESOLVED
 

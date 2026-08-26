@@ -513,10 +513,13 @@ fn drop_callers_of_refused(m: &IrModule, ctx: &LowerCtx, alloc: &Allocator?) {
         }
     }
 
-    // Compact once the set has settled.
+    // Compact once the set has settled. A kept function MOVES into
+    // `keep` (its buffers now owned by the copy; `clear` below discards
+    // the stale headers without touching elements); a dropped one frees
+    // its tree here.
     let keep: List(Function) = list(m.functions.len, alloc)
     for &f in m.functions {
-        if defined.get(f.name).is_some() { keep.push(f.*) }
+        if defined.get(f.name).is_some() { keep.push(f.*) } else { f.deinit() }
     }
     m.functions.clear()
     m.functions.push_all(keep.as_slice())
@@ -722,6 +725,7 @@ fn lower_const_decl(m: &IrModule, ctx: &LowerCtx, cd: &ConstDecl) {
     if ctx.blocked {
         m.skipped.push(isym)
         m.skip_notes.push($"{fqn}: const initializer refused")
+        fb.deinit()
         return
     }
     m.add_function(fb.finish())
@@ -1145,6 +1149,7 @@ fn lower_function_body(m: &IrModule, ctx: &LowerCtx, decl: &FunctionDecl, sym: S
             Some(subj) => m.skip_notes.push($"{sym}: body refused ({why} `{subj}`)"),
             None => m.skip_notes.push($"{sym}: body refused ({why})"),
         }
+        fb.deinit()
         return
     }
     m.add_function(fb.finish())
@@ -1587,9 +1592,7 @@ fn join_from(ctx: &LowerCtx, bb: &BlockBuilder, label: String, yields: bool, r: 
         bb.br(label)
         return
     }
-    let args: List(Operand) = list(1, ctx.allocator)
-    if r.value.is_some() { args.push(r.value.unwrap()) } else { args.push(Operand.IntConst(0)) }
-    bb.br_args(label, args)
+    bb.br_arg(label, unwrap_or(r.value, Operand.IntConst(0)))
 }
 
 fn lower_else(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, eb: &ElseBranch) BlockResult {
@@ -1804,9 +1807,7 @@ fn lower_for_range(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, f: &ForStmt, rn
     let latch = fb.block(fb.fresh_label("for_latch"))
     let exit = fb.block(fb.fresh_label("for_exit"))
 
-    let init: List(Operand) = list(1, ctx.allocator)
-    init.push(start)
-    bb.br_args(head.label(), init)
+    bb.br_arg(head.label(), start)
 
     bb.move_to(&head)
     let iv = head.param(0)
@@ -1828,9 +1829,7 @@ fn lower_for_range(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, f: &ForStmt, rn
 
     bb.move_to(&latch)
     let next = bb.iadd(ir, iv, Operand.IntConst(1))
-    let step: List(Operand) = list(1, ctx.allocator)
-    step.push(next)
-    bb.br_args(head.label(), step)
+    bb.br_arg(head.label(), next)
 
     bb.move_to(&exit)
 }
@@ -2189,15 +2188,40 @@ fn lower_array_lit(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, al: &ArrayLiter
             }
             if is_zero {
                 bb.memset(slot, Operand.IntConst(0), Operand.IntConst((count * esize) as i64))
+            } else if esize == 1 and !is_by_ref(ctx, &elem) {
+                // memset fills bytes with any value, not just zero - the
+                // `[fill; N]` byte-buffer shape is one call, no loop.
+                bb.memset(slot, v, Operand.IntConst(count as i64))
             } else {
-                // Unrolled stores; a large non-zero repeat has no in-tree
-                // user - refuse rather than emit a thousand stores.
-                if count > 64 { return unlowerable(ctx) }
-                if is_by_ref(ctx, &elem) { return unlowerable(ctx) }
-                for i in 0..count {
-                    let ep = bb.gep(slot, Operand.IntConst((i * esize) as i64))
+                // One fill loop whatever the count - the C compiler
+                // unrolls small ones. The repeat value is evaluated once,
+                // before the loop; the induction variable rides the head
+                // block's parameter, the same shape `for i in a..b`
+                // lowers to.
+                let fb = bb.fb
+                let head = fb.block(fb.fresh_label("repfill_head"), IrType.I64)
+                let fill = fb.block(fb.fresh_label("repfill_body"))
+                let exit = fb.block(fb.fresh_label("repfill_exit"))
+
+                bb.br_arg(head.label(), Operand.IntConst(0))
+
+                bb.move_to(&head)
+                let iv = head.param(0)
+                let cond = bb.icmp_ult(IrType.I64, iv, Operand.IntConst(count as i64))
+                bb.br_if(cond, fill.label(), exit.label())
+
+                bb.move_to(&fill)
+                let off = bb.imul(IrType.I64, iv, Operand.IntConst(esize as i64))
+                let ep = bb.gep(slot, off)
+                if is_by_ref(ctx, &elem) {
+                    bb.memcpy(ep, v, Operand.IntConst(esize as i64))
+                } else {
                     bb.store(ir_of(ctx, elem), v, ep)
                 }
+                let next = bb.iadd(IrType.I64, iv, Operand.IntConst(1))
+                bb.br_arg(head.label(), next)
+
+                bb.move_to(&exit)
             }
         },
     }
@@ -3919,15 +3943,11 @@ fn lower_coalesce(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, c: &CoalesceExpr
         let addr = bb.gep(lhs, Operand.IntConst(el.payload_offset as i64))
         if is_by_ref(ctx, &result_ty) { kept = addr } else { kept = bb.load(ir_of(ctx, result_ty), addr) }
     }
-    let some_args: List(Operand) = list(1, ctx.allocator)
-    some_args.push(kept)
-    bb.br_args(join.label(), some_args)
+    bb.br_arg(join.label(), kept)
 
     bb.move_to(&else_bb)
     let rhs = lower_expr(ctx, bb, env, c.rhs)
-    let else_args: List(Operand) = list(1, ctx.allocator)
-    else_args.push(rhs)
-    bb.br_args(join.label(), else_args)
+    bb.br_arg(join.label(), rhs)
 
     bb.move_to(&join)
     return join.param(0)
@@ -4000,9 +4020,7 @@ fn lower_null_propagation(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, np: &Nul
         }
         kept = slot
     }
-    let some_args: List(Operand) = list(1, ctx.allocator)
-    some_args.push(kept)
-    bb.br_args(join.label(), some_args)
+    bb.br_arg(join.label(), kept)
 
     bb.move_to(&none_bb)
     let none_v = if rel.is_niche {
@@ -4012,9 +4030,7 @@ fn lower_null_propagation(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, np: &Nul
         bb.memset(nslot, Operand.IntConst(0), Operand.IntConst(rel.size as i64))
         nslot
     }
-    let none_args: List(Operand) = list(1, ctx.allocator)
-    none_args.push(none_v)
-    bb.br_args(join.label(), none_args)
+    bb.br_arg(join.label(), none_v)
 
     bb.move_to(&join)
     return join.param(0)
@@ -5311,9 +5327,7 @@ fn lower_short_circuit(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, b: &BinaryE
 
     bb.move_to(&rhs_bb)
     let rhs = lower_expr(ctx, bb, env, b.rhs)
-    let carried: List(Operand) = list(1, ctx.allocator)
-    carried.push(rhs)
-    bb.br_args(join.label(), carried)
+    bb.br_arg(join.label(), rhs)
 
     bb.move_to(&join)
     return join.param(0)
