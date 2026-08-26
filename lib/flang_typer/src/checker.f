@@ -248,6 +248,17 @@ pub type Checker = struct {
     // so a template body's lambda mints a fresh symbol per instantiation.
     next_lambda: u32
 
+    // Where the declared type names end and the ids a check mints as it runs
+    // begin - anonymous records, closure environments. Set once the name
+    // collection pass has been over every module. Only the ids below it carry
+    // from one demand to the next; see `begin_demand`.
+    declared_mark: NominalId
+    // FQN -> the id its declaration held before `retire_names` took it out,
+    // for the modules being collected again this demand. A declaration
+    // that comes back keeps its id, so the ids in a re-check are the ids in a
+    // check from cold.
+    recycled: Dict(String, RetiredName)
+
     allocator: &Allocator?
 }
 
@@ -331,8 +342,87 @@ pub fn checker(allocator: &Allocator? = null) Checker {
         lambda_frames = list(0, allocator),
         closures = dict(allocator),
         next_lambda = 0u32,
+        declared_mark = 0 as NominalId,
+        recycled = dict(allocator),
         allocator = allocator,
     }
+}
+
+// Ready this checker for another demand over the same module set.
+//
+// The declared type names survive - the previous `check_all` left them as the
+// placeholders `collect_nominal_names` produces - along with the alias bodies
+// keyed beside them. A module whose source has not changed is therefore never
+// walked for names again. Everything a check computes is dropped: a body's
+// types name variables of the engine that inferred them, and that engine goes.
+//
+// The carry list is the fields moved onto the replacement below; `checker` and
+// `deinit` enumerate the rest.
+pub fn begin_demand(self: &Checker) {
+    let noms = self.nominals
+    let aliases = self.aliases
+    const mark = self.declared_mark
+    const ct = self.comptime
+    // Hand the carried tables over before the teardown, which frees whatever
+    // the checker still owns.
+    self.nominals = nominal_registry(self.allocator)
+    self.aliases = fqn_map(self.allocator)
+    self.deinit()
+
+    let next = checker(self.allocator)
+    next.nominals = noms
+    next.aliases = aliases
+    next.declared_mark = mark
+    next.comptime = ct
+    self.* = next
+}
+
+// Retire the declared type names of every module in `retiring`, so their
+// sources can register them again. Each id is remembered against its FQN in
+// `recycled`: a declaration that survives the edit is re-registered at the id
+// it had, one that is gone leaves a hole, and a new one mints an id past the
+// mark.
+//
+// One pass over the registry covers the whole set: it is keyed by id and by
+// FQN, with no index by module.
+fn retire_names(self: &Checker, retiring: &Set(String)) {
+    let doomed: List(NominalId) = list(0, self.allocator)
+    defer doomed.deinit()
+    for i in 0..(self.nominals.next_id as usize) {
+        const id = i as NominalId
+        const found = self.nominals.find(id)
+        if found.is_none() { continue }
+        if !retiring.contains(nominal_module(found.unwrap())) { continue }
+        doomed.push(id)
+    }
+    for id in doomed {
+        const fqn = nominal_fqn(self.nominals.get(id))
+        self.recycled.set(fqn, RetiredName { id = id, fqn = fqn })
+        self.nominals.evict(id)
+    }
+}
+
+// Register a freshly collected declaration, at the id it held before this
+// module was retired when it had one.
+fn register_collected(self: &Checker, def: NominalDef, fqn_owned: OwnedString) {
+    const previous = self.recycled.get(fqn_owned.as_view())
+    if previous.is_none() {
+        const _fresh = self.nominals.register(def, fqn_owned)
+        return
+    }
+    const prev = previous.unwrap()
+    // The remembered view is the registry's own FQN buffer, which `evict`
+    // leaves in place - so the id goes back under the string already owned
+    // and the caller's copy is dropped.
+    fqn_owned.deinit()
+    self.nominals.register_at(prev.id, def, prev.fqn)
+}
+
+// A declared type name taken out of the registry so its module can be
+// collected again: the id it held, and the registry's own FQN buffer.
+type RetiredName = struct {
+    id: NominalId
+    fqn: String
 }
 
 pub fn deinit(self: &Checker) {
@@ -364,6 +454,7 @@ pub fn deinit(self: &Checker) {
     self.project_origin.deinit()
     self.lambda_frames.deinit()
     self.closures.deinit()
+    self.recycled.deinit()
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -1019,7 +1110,7 @@ fn register_struct_placeholder(self: &Checker, td: &TypeDecl, fqn: OwnedString) 
         is_simd = is_simd_directive(&td.directives),
         is_foreign = is_foreign_directive(&td.directives),
     }
-    let _r = self.nominals.register(NominalDef.NomStruct(sd), fqn)
+    register_collected(self, NominalDef.NomStruct(sd), fqn)
 }
 
 fn register_enum_placeholder(self: &Checker, td: &TypeDecl, fqn: OwnedString) {
@@ -1035,7 +1126,7 @@ fn register_enum_placeholder(self: &Checker, td: &TypeDecl, fqn: OwnedString) {
         decl_span = td.span,
         deprecation = deprecation_of(&td.directives),
     }
-    let _r = self.nominals.register(NominalDef.NomEnum(ed), fqn)
+    register_collected(self, NominalDef.NomEnum(ed), fqn)
 }
 
 fn resolve_struct_body(self: &Checker, td: &TypeDecl, module_path: String) {
@@ -6380,21 +6471,45 @@ fn zonk_specializations(self: &Checker) {
 // `order` is the sequence to visit modules in, dependencies before
 // dependents. It decides the ids every phase hands out, so the same module
 // set and the same order give the same result. `null` means source order.
+// `recollect[i]` asks for module i's type names to be gathered from its source
+// again; a false entry keeps the names a previous demand on this checker left
+// behind. No list at all collects every module, which is what a checker that
+// has never run a demand needs.
 pub fn check_all(self: &Checker, modules: &List(Module), paths: &List(String),
         sources: &List(OwnedString), file_paths: &List(OwnedString), generators: &TemplateState,
-        order: &List(usize)? = null) TypeCheckResult {
+        order: &List(usize)? = null, recollect: &List(bool)? = null) TypeCheckResult {
     let seq = visit_sequence(self, modules.len, order)
     defer seq.deinit()
     // Wire the import graph before any name resolution runs.
-    const collect_start = monotonic_ns()
+    const visibility_start = monotonic_ns()
     build_visibility(self, modules, paths)
+    const visibility_ns = elapsed_ns(visibility_start)
+    const collect_start = monotonic_ns()
 
     // Phase 1: every module's type names are registered before any body
     // resolves, so a struct field or enum payload can name a type from
     // another module regardless of the order modules are checked in.
+    //
+    // A module the caller kept is already registered from the demand that last
+    // collected it. The rest are retired before any of them registers, so a
+    // name on its way out is gone from the registry by the time the module
+    // declaring it again reaches the duplicate check.
+    let retiring: Set(String) = set(self.allocator)
     for i in seq {
-        collect_nominal_names(self, &modules[i], paths[i])
+        if !needs_collect(recollect, i) { continue }
+        retiring.add(paths[i])
+        self.aliases.evict_module(paths[i])
     }
+    retire_names(self, &retiring)
+    retiring.deinit()
+    for i in seq {
+        if needs_collect(recollect, i) { collect_nominal_names(self, &modules[i], paths[i]) }
+    }
+    self.recycled.clear()
+    // Everything registered from here on - the generated chunks' declarations,
+    // anonymous records, closure environments - is minted by this demand and
+    // gone by the next one.
+    self.declared_mark = self.nominals.next_id
     const collect_ns = elapsed_ns(collect_start)
     // Phase 1.5: source-generator expansion (RFC-021 §2) - generated
     // declarations are appended to their origin modules and collected,
@@ -6488,7 +6603,9 @@ pub fn check_all(self: &Checker, modules: &List(Module), paths: &List(String),
     }
 
     self.results.reset_side_tables()
-    self.nominals = nominal_registry(self.allocator)
+    // What the next demand starts from: the declared names, without the bodies
+    // this check resolved for them.
+    self.nominals = out_nominals.placeholders_below(self.declared_mark, self.allocator)
     self.functions = function_registry(self.allocator)
     self.specs = specialization_registry(self.allocator)
 
@@ -6510,6 +6627,7 @@ pub fn check_all(self: &Checker, modules: &List(Module), paths: &List(String),
         spans = out_spans,
         file_paths = out_paths,
         phases = CheckPhases {
+            visibility_ns = visibility_ns,
             collect_ns = collect_ns,
             templates_ns = templates_ns,
             nominals_ns = nominals_ns,
@@ -6519,6 +6637,15 @@ pub fn check_all(self: &Checker, modules: &List(Module), paths: &List(String),
             zonk_ns = zonk_ns,
         },
     }
+}
+
+// Whether module `i`'s names come from its source this demand. No list means
+// every module, so a first check collects everything.
+fn needs_collect(recollect: &List(bool)?, i: usize) bool {
+    if recollect.is_none() { return true }
+    const flags = recollect.unwrap()
+    if i >= flags.len { return true }
+    return flags[i]
 }
 
 // The module indices to walk, in order. A caller that supplies none gets

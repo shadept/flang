@@ -68,7 +68,8 @@ pub type TypeCheckResult = struct {
 // Per-phase wall time of one `check_all` run, in nanoseconds. Zero on an
 // empty result. Ordered as the phases run.
 pub type CheckPhases = struct {
-    collect_ns: u64      // visibility graph + nominal names
+    visibility_ns: u64   // import graph -> per-module visible set
+    collect_ns: u64      // nominal names
     templates_ns: u64    // source-generator expansion
     nominals_ns: u64     // nominal bodies + signatures
     constants_ns: u64    // constant initializers
@@ -79,6 +80,7 @@ pub type CheckPhases = struct {
 
 pub fn no_phases() CheckPhases {
     return .{
+        visibility_ns = 0,
         collect_ns = 0,
         templates_ns = 0,
         nominals_ns = 0,
@@ -137,6 +139,82 @@ pub fn deinit(self: &TypeCheckResult) {
     self.closures.deinit()
     self.spans.deinit()
     self.file_paths.deinit()
+}
+
+// One table's footprint. `bytes` is the backing array only: what an entry's
+// value owns on the heap of its own (a `Ty`'s argument list, an `OwnedString`'s
+// buffer) belongs to whatever measures that heap.
+pub type TableSize = struct {
+    name: String
+    entries: usize
+    bytes: usize
+}
+
+fn dict_size(name: String, d: &Dict($K, $V)) TableSize {
+    return .{ name = name, entries = d.length, bytes = d.capacity_bytes() }
+}
+
+fn list_size(name: String, l: &List($T)) TableSize {
+    return .{ name = name, entries = l.len, bytes = l.capacity_bytes() }
+}
+
+// Every table the snapshot holds, largest first. The specialization row folds
+// in the per-instantiation overlay tables, which are `specializations.len()`
+// separate `InferenceResults` and are counted nowhere else.
+pub fn table_sizes(self: &TypeCheckResult, allocator: &Allocator? = null) List(TableSize) {
+    let out: List(TableSize) = list(16, allocator)
+    out.push(dict_size("node_types", &self.node_types))
+    out.push(dict_size("spans", &self.spans))
+    out.push(dict_size("resolved_targets", &self.resolved_targets))
+    out.push(dict_size("resolved_ops", &self.resolved_ops))
+    out.push(dict_size("desugars", &self.desugars))
+    out.push(dict_size("default_args", &self.default_args))
+    out.push(dict_size("arg_lists", &self.arg_lists))
+    out.push(dict_size("receiver_derefs", &self.receiver_derefs))
+    out.push(dict_size("lambdas", &self.lambdas))
+    out.push(dict_size("closures", &self.closures))
+    out.push(list_size("instantiated_types", &self.instantiated_types))
+    out.push(list_size("synth_strings", &self.synth_strings))
+    out.push(list_size("file_paths", &self.file_paths))
+    out.push(overlay_size(&self.specializations))
+    sort_by_bytes(&out)
+    return out
+}
+
+// The specialization registry plus every overlay hanging off it.
+fn overlay_size(specs: &SpecializationRegistry) TableSize {
+    let bytes = specs.specs.capacity_bytes() + specs.by_key.capacity_bytes()
+    let entries: usize = 0
+    for i in 0..(specs.next_id as usize) {
+        const found = specs.specs.get_ref(i as u32)
+        if found.is_none() { continue }
+        const o = &found.unwrap().overlay
+        bytes = bytes + o.node_types.capacity_bytes()
+        bytes = bytes + o.resolved_ops.capacity_bytes()
+        bytes = bytes + o.resolved_targets.capacity_bytes()
+        bytes = bytes + o.desugars.capacity_bytes()
+        bytes = bytes + o.lambdas.capacity_bytes()
+        bytes = bytes + o.default_args.capacity_bytes()
+        bytes = bytes + o.arg_lists.capacity_bytes()
+        bytes = bytes + o.receiver_derefs.capacity_bytes()
+        bytes = bytes + o.spans.capacity_bytes()
+        bytes = bytes + o.instantiated_types.capacity_bytes()
+        bytes = bytes + o.synth_strings.capacity_bytes()
+        entries = entries + o.node_types.length
+    }
+    return .{ name = "specializations + overlays", entries = entries, bytes = bytes }
+}
+
+fn sort_by_bytes(xs: &List(TableSize)) {
+    for i in 1..xs.len {
+        const v = xs[i]
+        let j = i
+        while j > 0 and xs[j - 1].bytes < v.bytes {
+            xs[j] = xs[j - 1]
+            j = j - 1
+        }
+        xs[j] = v
+    }
 }
 
 pub fn get_type(self: &TypeCheckResult, id: NodeId) Ty? {

@@ -51,6 +51,21 @@ pub fn register(self: &FqnMap($V), fqn_owned: OwnedString, value: V) {
     self.entries.set(stable, value)
 }
 
+// Drop every entry whose FQN sits directly in `module`. The key buffers stay
+// in `owned_fqns`: nothing else views them, and a re-registration brings its
+// own.
+pub fn evict_module(self: &FqnMap($V), module: String) {
+    let doomed: List(String) = list(0, self.allocator)
+    defer doomed.deinit()
+    for entry in self.entries {
+        const dot = last_dot(entry.key)
+        if module_of(entry.key, dot) == module { doomed.push(entry.key) }
+    }
+    for k in doomed {
+        const _gone = self.entries.remove(k)
+    }
+}
+
 // Direct FQN read, no visibility scope.
 pub fn get_fqn(self: &FqnMap($V), fqn: String) V? {
     return self.entries.get(fqn)

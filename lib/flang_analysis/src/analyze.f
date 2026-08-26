@@ -36,6 +36,7 @@ import flang_core.span
 import flang_typer.checker
 import flang_typer.template_expand
 import flang_typer.result
+import flang_typer.nominal_registry
 import flang_analysis.resolver
 import flang_analysis.project
 import flang_analysis.demand
@@ -139,6 +140,18 @@ fn drain_diagnostics(dst: &List(Diagnostic), src: &List(Diagnostic)) {
     src.clear()
 }
 
+// A copy owning its own message and hint, so one diagnostic can be replayed
+// into a list that frees what it holds without consuming the original.
+fn clone_diag(d: Diagnostic) Diagnostic {
+    return .{
+        severity = d.severity,
+        code = d.code,
+        message = from_view(d.message.as_view()),
+        hint = from_view(d.hint.as_view()),
+        span = d.span,
+    }
+}
+
 fn count_errors(diags: &List(Diagnostic)) usize {
     let n: usize = 0
     for i in 0..diags.len {
@@ -178,7 +191,18 @@ pub type AnalyzedProject = struct {
     retired_modules: List(Module)
     result: TypeCheckResult
     checked: bool
+    // Everything the parse tier produced: a module's own parse errors, plus
+    // the load failures that have no module (an unreadable file, an
+    // unresolved global import). Held apart because `diagnostics` is rebuilt
+    // on every check and the parse tier outlives the check that replays it.
+    parse_diags: List(Diagnostic)
+    // The published list: `parse_diags` replayed, then the current check's.
     diagnostics: List(Diagnostic)
+    // The checker every demand on this project runs through. It outlives one
+    // check so the declared type names can: `begin_demand` keeps them and
+    // drops the rest, and `check_project` collects only the modules that were
+    // re-parsed.
+    checker: Checker
     // Template expansion output: the chunk modules whose decls were
     // appended into `modules` (kept alive here) and the per-origin
     // generated text (`--emit-generated`). `sources`/`file_paths` also
@@ -198,7 +222,7 @@ pub type AnalyzedProject = struct {
 pub fn analyze_project(ctx: &ResolveCtx, entries: &List(OwnedString),
         overrides: &Dict(String, String)? = null,
         allocator: &Allocator? = null) AnalyzedProject {
-    let diagnostics: List(Diagnostic) = list(0, allocator)
+    let parse_diags: List(Diagnostic) = list(0, allocator)
     let sources: List(OwnedString) = list(0, allocator)
     let fqns: List(OwnedString) = list(0, allocator)
     let file_paths: List(OwnedString) = list(0, allocator)
@@ -217,7 +241,7 @@ pub fn analyze_project(ctx: &ResolveCtx, entries: &List(OwnedString),
     // seeds run.
     let project_count = queue.len
     let project_origin: List(bool) = list(0, allocator)
-    seed_globals(ctx, &queue, &seen, &diagnostics, allocator)
+    seed_globals(ctx, &queue, &seen, &parse_diags, allocator)
     seed_prelude(ctx, &queue, &seen, allocator)
     seed_stdlib(ctx, &queue, &seen, allocator)
 
@@ -236,14 +260,14 @@ pub fn analyze_project(ctx: &ResolveCtx, entries: &List(OwnedString),
         let src_opt = read_source(path, overrides)
         if src_opt.is_none() {
             const msg = $"cannot read source `{path}`"
-            diagnostics.push(error("E0001", msg, none_span()))
+            parse_diags.push(error("E0001", msg, none_span()))
             continue
         }
         let src = src_opt.unwrap()
         let fid = modules.len as i32
-        let module = parse_to_module(src.as_view(), fid, &ctx.comptime, &diagnostics, allocator)
+        let module = parse_to_module(src.as_view(), fid, &ctx.comptime, &parse_diags, allocator)
         let fqn = module_fqn(ctx, path, allocator)
-        enqueue_imports(ctx, &module, modules.len, &queue, &seen, &edge_from, &edge_to, &diagnostics, allocator)
+        enqueue_imports(ctx, &module, modules.len, &queue, &seen, &edge_from, &edge_to, &parse_diags, allocator)
         sources.push(src)
         file_paths.push(from_view(path))
         fqns.push(fqn)
@@ -265,13 +289,15 @@ pub fn analyze_project(ctx: &ResolveCtx, entries: &List(OwnedString),
         retired_modules = list(0, allocator),
         result = empty_result(allocator),
         checked = false,
-        diagnostics = diagnostics,
+        parse_diags = parse_diags,
+        diagnostics = list(0, allocator),
+        checker = checker(allocator),
         generated = empty_template_output(allocator),
         parse_ns = parse_ns,
         check_ns = 0,
     }
     const check_start = monotonic_ns()
-    check_project(&unit, ctx, &edge_from, &edge_to, allocator)
+    check_project(&unit, ctx, &edge_from, &edge_to, null, allocator)
     unit.check_ns = elapsed_ns(check_start)
     return unit
 }
@@ -281,9 +307,10 @@ pub fn analyze_project(ctx: &ResolveCtx, entries: &List(OwnedString),
 //
 // Safe to call more than once on the same unit: expansion leaves one padded
 // `sources`/`file_paths` entry per generated chunk, and those are trimmed off
-// first so a second run starts from the state the first one saw.
+// first so a second run starts from the state the first one saw, and the
+// published diagnostics are rebuilt from `parse_diags` up.
 fn check_project(self: &AnalyzedProject, ctx: &ResolveCtx, edge_from: &List(usize),
-        edge_to: &List(OwnedString), allocator: &Allocator?) {
+        edge_to: &List(OwnedString), recollect: &List(bool)?, allocator: &Allocator?) {
     // Expansion appends one source per generated chunk. Those buffers are
     // retired, since a result from a previous check holds string views into
     // them; the matching `file_paths` entries are freed, because
@@ -294,6 +321,11 @@ fn check_project(self: &AnalyzedProject, ctx: &ResolveCtx, edge_from: &List(usiz
     }
     trim_owned(&self.file_paths, self.modules.len)
 
+    // The check tier is regenerated whole on every demand, so the previous
+    // run's copy goes and the parse tier is replayed underneath it.
+    self.diagnostics.deinit()
+    self.diagnostics = self.parse_diags.map(clone_diag, allocator)
+
     self.checked = count_errors(&self.diagnostics) == 0
     if !self.checked { return }
 
@@ -302,16 +334,16 @@ fn check_project(self: &AnalyzedProject, ctx: &ResolveCtx, edge_from: &List(usiz
     let order = visit_order(&self.file_paths, &path_views, edge_from, edge_to, allocator)
     defer order.deinit()
 
-    let chk = checker(allocator)
+    let chk = &self.checker
+    chk.begin_demand()
     let gens = template_state(allocator)
     chk.set_comptime_ctx(ctx.comptime)
     chk.set_project_globals(&ctx.global_imports, &self.project_origin)
-    self.result = check_all(&chk, &self.modules, &path_views, &self.sources, &self.file_paths,
-        &gens, Some(&order))
+    self.result = check_all(chk, &self.modules, &path_views, &self.sources, &self.file_paths,
+        &gens, Some(&order), recollect)
     drain_diagnostics(&self.diagnostics, &chk.diagnostics)
     self.generated = gens.take_output()
     gens.deinit()
-    chk.deinit()
 }
 
 // Drop trailing entries until `xs` holds `n`, freeing each one.
@@ -328,16 +360,20 @@ fn trim_owned(xs: &List(OwnedString), n: usize) {
 // A module is stale when the caller names it in `dirty`, or when template
 // expansion appended generated declarations to it - those declarations live
 // in the AST, so reusing one would stack a second copy on the next expansion.
-// If the first parse produced any diagnostic at all, everything is stale:
-// diagnostics are not tracked per module, so the ones belonging to modules
-// that are still good cannot be told apart from the rest.
+// If the parse tier reported anything at all, everything is stale: its
+// diagnostics are one flat list, so the ones belonging to modules that are
+// still good cannot be told apart from the rest and all must be reproduced.
 //
 // The module SET is assumed unchanged - same files, same imports. Editing a
 // module's imports is what would break that, and re-running `analyze_project`
 // is the answer until the loader itself becomes incremental.
 pub fn reanalyze(self: &AnalyzedProject, ctx: &ResolveCtx, dirty: &Set(String),
         overrides: &Dict(String, String)? = null, allocator: &Allocator? = null) {
-    const reparse_all = self.diagnostics.len > 0
+    const reparse_all = self.parse_diags.len > 0
+    if reparse_all {
+        self.parse_diags.deinit()
+        self.parse_diags = list(0, allocator)
+    }
     let stale: Set(String) = set(allocator)
     defer stale.deinit()
     for &e in self.generated.emitted {
@@ -345,6 +381,11 @@ pub fn reanalyze(self: &AnalyzedProject, ctx: &ResolveCtx, dirty: &Set(String),
     }
 
     const parse_start = monotonic_ns()
+    // Per module: was it re-parsed. A reused AST is the same declarations the
+    // checker already has names for, so only the re-parsed ones are collected
+    // again. A module whose read failed keeps the AST it had, and is left out
+    // for the same reason.
+    let recollect = filled_list(self.modules.len, false, allocator)
     let srcs = &self.sources
     let mods = &self.modules
     for i in 0..self.modules.len {
@@ -353,14 +394,15 @@ pub fn reanalyze(self: &AnalyzedProject, ctx: &ResolveCtx, dirty: &Set(String),
         const fresh = read_source(path, overrides)
         if fresh.is_none() {
             const msg = $"cannot read source `{path}`"
-            self.diagnostics.push(error("E0001", msg, none_span()))
+            self.parse_diags.push(error("E0001", msg, none_span()))
             continue
         }
         self.retired_sources.push(srcs[i])
         self.retired_modules.push(mods[i])
         srcs[i] = fresh.unwrap()
         mods[i] = parse_to_module(srcs[i].as_view(), i as i32, &ctx.comptime,
-            &self.diagnostics, allocator)
+            &self.parse_diags, allocator)
+        recollect[i] = true
     }
     self.parse_ns = elapsed_ns(parse_start)
 
@@ -376,8 +418,9 @@ pub fn reanalyze(self: &AnalyzedProject, ctx: &ResolveCtx, dirty: &Set(String),
     self.generated = empty_template_output(allocator)
 
     const check_start = monotonic_ns()
-    check_project(self, ctx, &edge_from, &edge_to, allocator)
+    check_project(self, ctx, &edge_from, &edge_to, Some(&recollect), allocator)
     self.check_ns = elapsed_ns(check_start)
+    recollect.deinit()
 }
 
 // Resolve every module's imports into `from -> to` edges. The BFS records
@@ -406,17 +449,18 @@ fn collect_edges(ctx: &ResolveCtx, modules: &List(Module), edge_from: &List(usiz
 // lowering suites use it to place well-known modules (core.option,
 // core.string) next to the module under test. Consumes `srcs`.
 pub fn analyze_source_set(srcs: List(OwnedString), fqns: &List(String), allocator: &Allocator? = null) AnalyzedProject {
-    let diagnostics: List(Diagnostic) = list(0, allocator)
+    let parse_diags: List(Diagnostic) = list(0, allocator)
     let owned_fqns: List(OwnedString) = list(fqns.len, allocator)
     let file_paths: List(OwnedString) = list(fqns.len, allocator)
     let modules: List(Module) = list(srcs.len, allocator)
     const host = host_ctx()
     for i in 0..srcs.len {
-        modules.push(parse_to_module(srcs[i].as_view(), i as i32, &host, &diagnostics, allocator))
+        modules.push(parse_to_module(srcs[i].as_view(), i as i32, &host, &parse_diags, allocator))
         owned_fqns.push(from_view(fqns[i]))
         file_paths.push(from_view(fqns[i]))
     }
 
+    let diagnostics = parse_diags.map(clone_diag, allocator)
     let checked = count_errors(&diagnostics) == 0
     let result = empty_result(allocator)
     let generated = empty_template_output(allocator)
@@ -441,7 +485,9 @@ pub fn analyze_source_set(srcs: List(OwnedString), fqns: &List(String), allocato
         retired_modules = list(0, allocator),
         result = result,
         checked = checked,
+        parse_diags = parse_diags,
         diagnostics = diagnostics,
+        checker = checker(allocator),
         generated = generated,
         parse_ns = 0,
         check_ns = 0,
@@ -453,13 +499,14 @@ pub fn deinit(self: &AnalyzedProject) {
     self.retired_sources.deinit()
     self.project_origin.deinit()
     self.diagnostics.deinit()
+    self.parse_diags.deinit()
+    self.checker.deinit()
     self.generated.deinit()
     self.modules.deinit()
     self.fqns.deinit()
     self.file_paths.deinit()
     self.sources.deinit()
-    // ponytail: the TypeCheckResult is leaked - same as AnalyzedUnit, no
-    // result.deinit() yet. Fine for one-shot build. See docs/known-issues.md.
+    self.result.deinit()
 }
 
 // Write each origin's generated text to `<origin>.generated.f`
@@ -639,6 +686,85 @@ test "an override stands in for a file that is not on disk" {
     let text = got.unwrap()
     defer text.deinit()
     assert_true(text.as_view() == "fn main() i32 { return 0 }\n", "and it is the buffer verbatim")
+}
+
+test "re-analysis republishes diagnostics rather than appending to them" {
+    // One warning stays one warning across a re-demand of the same sources.
+    // An empty stdlib root leaves `core.prelude` unresolved and `seed_stdlib`
+    // a no-op, so the module set is exactly what the override supplies.
+    let proj = parse_project("[project]\nname = \"p\"\nkind = \"exe\"\nsource = \"src/**/*.f\"\n")
+    defer proj.deinit()
+    let ctx = resolve_ctx(&proj, "")
+    defer ctx.deinit()
+    let entries: List(OwnedString) = list(1)
+    defer entries.deinit()
+    entries.push(from_view("src/main.f"))
+    let ov: Dict(String, String) = dict()
+    defer ov.deinit()
+    ov.set("src/main.f", "fn main() i32 {\n    const v: i32 = 1\n    const v: i32 = 2\n    return v\n}\n")
+
+    let unit = analyze_project(&ctx, &entries, Some(&ov))
+    defer unit.deinit()
+    assert_true(unit.checked, "the module type-checks")
+    const cold = unit.diagnostics.len
+    assert_eq(cold, 1 as usize, "one shadowing warning")
+
+    let dirty: Set(String) = set()
+    defer dirty.deinit()
+    reanalyze(&unit, &ctx, &dirty, Some(&ov))
+    assert_eq(unit.diagnostics.len, cold, "the same one warning, not two")
+}
+
+test "an edit adds, removes and leaves declarations alone" {
+    // A declaration the edit does not touch answers to the id it already had,
+    // across an insertion above it, a removal beside it, and a use of the
+    // removed name.
+    let proj = parse_project("[project]\nname = \"p\"\nkind = \"exe\"\nsource = \"src/**/*.f\"\n")
+    defer proj.deinit()
+    let ctx = resolve_ctx(&proj, "")
+    defer ctx.deinit()
+    let entries: List(OwnedString) = list(1)
+    defer entries.deinit()
+    entries.push(from_view("src/main.f"))
+    let ov: Dict(String, String) = dict()
+    defer ov.deinit()
+    const with_ab = "type A = struct { x: i32 }\ntype B = struct { y: i32 }\nfn main() i32 { return 0 }\n"
+    ov.set("src/main.f", with_ab)
+
+    let unit = analyze_project(&ctx, &entries, Some(&ov))
+    defer unit.deinit()
+    assert_eq(unit.diagnostics.len, 0 as usize, "two structs and a main type-check")
+    const a0 = unit.result.nominals.lookup_fqn("p.main.A").unwrap()
+    const b0 = unit.result.nominals.lookup_fqn("p.main.B").unwrap()
+
+    let dirty: Set(String) = set()
+    defer dirty.deinit()
+    dirty.add("src/main.f")
+
+    // Insert a declaration between the two existing ones.
+    ov.set("src/main.f", "type A = struct { x: i32 }\ntype C = struct { z: i32 }\ntype B = struct { y: i32 }\nfn main() i32 { return 0 }\n")
+    reanalyze(&unit, &ctx, &dirty, Some(&ov))
+    assert_eq(unit.diagnostics.len, 0 as usize, "the added struct type-checks")
+    const noms1 = &unit.result.nominals
+    assert_eq(noms1.lookup_fqn("p.main.A").unwrap(), a0, "the declaration above the insertion keeps its id")
+    assert_eq(noms1.lookup_fqn("p.main.B").unwrap(), b0, "and so does the one below it")
+    const c1 = noms1.lookup_fqn("p.main.C")
+    assert_true(c1.is_some(), "the added declaration is registered")
+    assert_true(c1.unwrap() != a0 and c1.unwrap() != b0, "under an id of its own")
+
+    // Remove one, keeping the other two.
+    ov.set("src/main.f", "type A = struct { x: i32 }\ntype C = struct { z: i32 }\nfn main() i32 { return 0 }\n")
+    reanalyze(&unit, &ctx, &dirty, Some(&ov))
+    assert_eq(unit.diagnostics.len, 0 as usize, "removing an unused struct type-checks")
+    const noms2 = &unit.result.nominals
+    assert_true(noms2.lookup_fqn("p.main.B").is_none(), "the removed declaration stops resolving")
+    assert_eq(noms2.lookup_fqn("p.main.A").unwrap(), a0, "the survivors keep the ids they had")
+    assert_eq(noms2.lookup_fqn("p.main.C").unwrap(), c1.unwrap(), "including the one added a demand ago")
+
+    // And a use of the removed declaration is an error, not a stale hit.
+    ov.set("src/main.f", "type A = struct { x: i32 }\nfn main() B { return 0 }\n")
+    reanalyze(&unit, &ctx, &dirty, Some(&ov))
+    assert_true(unit.diagnostics.len > 0, "naming a removed type is reported")
 }
 
 test "a path no override names falls through to the file on disk" {

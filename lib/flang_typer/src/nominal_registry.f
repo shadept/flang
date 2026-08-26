@@ -161,6 +161,70 @@ fn with_fqn(def: NominalDef, new_fqn: String) NominalDef {
     }
 }
 
+// Re-register a definition under an id the registry handed out before, using
+// the FQN view it already owns. `next_id` is untouched, so an id retired by
+// `evict` and put back here keeps naming the same declaration.
+pub fn register_at(self: &NominalRegistry, id: NominalId, def: NominalDef, fqn_stable: String) {
+    let fixed = with_fqn(def, fqn_stable)
+    self.defs.set(id, fixed)
+    self.by_fqn.set(fqn_stable, id)
+}
+
+// The definitions below `mark`, stripped back to what a name-collection pass
+// produces: identity, visibility, span and directive flags, with the resolved
+// body dropped. Ids, FQNs and `next_id` carry over, so a check starting from
+// the copy hands out exactly the ids it would have from an empty registry.
+//
+// A body references type variables of the engine that resolved it, and the
+// engine does not outlive its check, so the body stays behind.
+pub fn placeholders_below(self: &NominalRegistry, mark: NominalId,
+        allocator: &Allocator? = null) NominalRegistry {
+    let out = nominal_registry(allocator)
+    fill_placeholders(&out, self, mark, allocator)
+    return out
+}
+
+fn fill_placeholders(out: &NominalRegistry, src: &NominalRegistry, mark: NominalId,
+        allocator: &Allocator?) {
+    for i in 0..(mark as usize) {
+        const id = i as NominalId
+        const found = src.defs.get_ref(id)
+        if found.is_none() { continue }
+        const idx = out.owned_fqns.len
+        out.owned_fqns.push(from_view(nominal_fqn(found.unwrap()), allocator))
+        out.register_at(id, placeholder_of(found.unwrap(), allocator), out.owned_fqns[idx].as_view())
+    }
+    out.next_id = mark
+}
+
+// One definition with its body emptied. The field and variant lists are fresh
+// and empty; the source they were resolved from is what fills them again.
+fn placeholder_of(def: &NominalDef, allocator: &Allocator?) NominalDef {
+    return def.* match {
+        NomStruct(s) => NominalDef.NomStruct(StructDef {
+            fqn = s.fqn,
+            module = s.module,
+            is_pub = s.is_pub,
+            type_params = list(0, allocator),
+            fields = list(0, allocator),
+            decl_span = s.decl_span,
+            deprecation = s.deprecation,
+            is_simd = s.is_simd,
+            is_foreign = s.is_foreign,
+        }),
+        NomEnum(e) => NominalDef.NomEnum(EnumDef {
+            fqn = e.fqn,
+            module = e.module,
+            is_pub = e.is_pub,
+            type_params = list(0, allocator),
+            variants = list(0, allocator),
+            tag_values = null,
+            decl_span = e.decl_span,
+            deprecation = e.deprecation,
+        }),
+    }
+}
+
 pub fn contains(self: &NominalRegistry, fqn: String) bool {
     return self.by_fqn.contains(fqn)
 }
@@ -358,6 +422,44 @@ test "an evicted nominal leaves a hole and never recycles its id" {
 
     let d = reg.register(NominalDef.NomStruct(probe_struct()), $"m.D")
     assert_eq(d, 3 as NominalId, "a retired id is never handed out again")
+}
+
+test "placeholders keep their ids and drop their bodies" {
+    let reg = nominal_registry()
+    defer reg.deinit()
+    const a = reg.register(NominalDef.NomStruct(probe_struct()), $"m.A")
+    const b = reg.register(NominalDef.NomStruct(probe_struct()), $"m.B")
+    reg.evict(a)
+    // Past the mark: what a check mints as it runs, and must mint again.
+    const anon = reg.register(NominalDef.NomStruct(probe_struct()), $"__anon_2")
+    assert_eq(anon, 2 as NominalId, "the anonymous record sits above the declarations")
+
+    // Give `m.B` a body, as `resolve_nominal_bodies` would.
+    let fields: List(Field) = list(1)
+    fields.push(Field { name = "x", ty = Ty.Prim(PrimitiveKind.I32), decl_span = none_span() })
+    let bd = reg.get(b).* match { NomStruct(s) => s, _ => probe_struct() }
+    bd.fields = fields
+    reg.put(b, NominalDef.NomStruct(bd))
+
+    let next = reg.placeholders_below(2 as NominalId)
+    defer next.deinit()
+    assert_eq(next.len(), 1 as usize, "the evicted id stays a hole, the anonymous one is left behind")
+    assert_eq(next.lookup_fqn("m.B").unwrap(), b, "a surviving declaration keeps its id")
+    assert_eq(next.next_id, 2 as NominalId, "ids resume at the mark, so the next check mints the same ones")
+    const body = next.get(b).* match { NomStruct(s) => s.fields.len, _ => 99 as usize }
+    assert_eq(body, 0 as usize, "the resolved body does not come across")
+}
+
+test "a retired id goes back where it was" {
+    let reg = nominal_registry()
+    defer reg.deinit()
+    const a = reg.register(NominalDef.NomStruct(probe_struct()), $"m.A")
+    const b = reg.register(NominalDef.NomStruct(probe_struct()), $"m.B")
+    const fqn = nominal_fqn(reg.get(a))
+    reg.evict(a)
+    reg.register_at(a, NominalDef.NomStruct(probe_struct()), fqn)
+    assert_eq(reg.lookup_fqn("m.A").unwrap(), a, "the declaration resolves to the id it had")
+    assert_eq(reg.next_id, b + 1, "putting one back does not hand out a new id")
 }
 
 fn probe_struct() StructDef {

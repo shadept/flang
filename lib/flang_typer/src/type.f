@@ -21,10 +21,13 @@
 // to `Error` and emits no diagnostic, so a single upstream failure does
 // not cascade.
 
+import std.allocator
+import std.dict
 import std.list
 import std.option
 import std.string
 import std.string_builder
+import std.test
 import flang_core.span
 
 // ─────────────────────────────────────────────────────────────────────
@@ -399,4 +402,26 @@ pub fn is_float(p: PrimitiveKind) bool {
         F32 => true, F64 => true,
         _ => false,
     }
+}
+
+test "a table of types gives back its own storage, not the types'" {
+    // `Tuple`, `Record`, `Func` and a `Nominal` with arguments each own a
+    // list, and `Ty` has no deinit, so the per-value call `Dict.deinit` makes
+    // is a no-op fallback: freeing the table is the last reference to every
+    // list its entries were holding. See docs/known-issues.md.
+    let c = counting_allocator(&global_allocator)
+    let a = c.allocator()
+    let d: Dict(u32, Ty) = dict(Some(&a))
+    for i in 0u32..100u32 {
+        let args: List(Ty) = list(2, &a)
+        args.push(Ty.Prim(PrimitiveKind.I32))
+        args.push(Ty.Prim(PrimitiveKind.Bool))
+        d.set(i, Ty.Tuple(args))
+    }
+    const before = c.live_bytes
+    assert_true(before > 0, "the table and the argument lists are on the heap")
+
+    d.deinit()
+    assert_true(c.live_bytes > 0, "the argument lists outlive the table")
+    assert_true(c.live_bytes < before, "the table's own bucket array did come back")
 }

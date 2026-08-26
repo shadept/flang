@@ -44,6 +44,12 @@ Measured 2026-08-25, `flang -t --check build`, warm, median of three
 
 Peak RSS: 486 MB for `bootstrap/`, 123 MB stdlib-only.
 
+The collect row is two phases; 5a split them, so `CheckPhases` reports
+`visibility_ns` and `collect_ns` separately and `-t` prints both. Visibility is
+the larger half and still runs in full on every demand.
+
+
+
 `examples/snake` and a trivial single file are indistinguishable - both are
 stdlib-bound, because `seed_stdlib` seeds the whole tree regardless of imports.
 
@@ -339,26 +345,35 @@ those seven cannot see yet.
 Before 5a the second pass was a full re-analysis, so what the gate proved was
 determinism, which nothing else did: the harness and the fixpoint both run cold
 and single-pass, and dict iteration order feeds emission order. Since 5a it
-dirties a module and re-demands, so it tests invalidation as intended.
+dirties modules and re-demands, so it tests invalidation as intended.
 
-Green across `bootstrap/` (105 modules, 93145 node types, 2153 specializations,
-409 nominals), every `lib/*`, and every `examples/*` that type-checks
+Green across `bootstrap/` (106 modules, 94478 node types, 2228 specializations,
+411 nominals), every `lib/*`, and every `examples/*` that type-checks
 (`examples/raylib` needs the raylib headers). 1.8 s on the compiler.
+
+Three modules are dirtied per run - first, middle and last in demand order -
+not each module in turn: a pass per module is one check each, and a check is
+the whole 8.8 s. The middle and first entries are what put a recycled
+declaration below other modules' ids instead of above them all, which is where
+a re-registration that renumbered would show. The per-module sweep becomes
+affordable once bodies are memoized (5d) and a dirtied module re-checks in a
+fraction of a cold pass; run by hand at 5a it reported zero divergence over
+every module of `bootstrap/` (106), `lib/flang_typer` (92) and
+`examples/snake` (62).
 
 **5a landed 2026-08-26 (`module_ast` half).** `analyze_project` builds an
 `AnalyzedProject` that can be re-checked in place: `reanalyze(unit, ctx, dirty)`
 re-reads and re-parses only the modules named in `dirty`, reusing every other
-module's AST, then re-runs the checker. `flang --gate-a build` now dirties a
-module and re-demands instead of analysing twice, which is what makes the gate
+module's AST, then re-runs the checker. `flang --gate-a build` now dirties
+modules and re-demands instead of analysing twice, which is what makes the gate
 test invalidation at all.
 
 On the compiler: **parse 127 ms cold, 11 ms re-demanded** - 11 modules of 106.
 The gate prints both numbers, because reuse is otherwise invisible: the check
 half still runs in full, so a cache that silently re-parsed everything would
 produce an identical result and pass. Total analysis time is unchanged, as
-expected - parsing is 6-8% of a check, and `nominal_names` onwards are still
-eager. Memoizing those needs the `Checker` to survive between demands, which is
-5b.
+expected - parsing is 6-8% of a check, and `nominal_body` onwards are still
+eager.
 
 Two constraints the conversion turned up, both found by the gate rather than by
 reasoning:
@@ -373,14 +388,83 @@ reasoning:
   freed. The first version freed them and the gate reported nominals whose
   field names had decayed into fragments of unrelated text, which is exactly
   the failure mode it exists to catch.
+- **Diagnostics split by tier.** `AnalyzedProject.parse_diags` holds what the
+  parse tier produced - a module's parse errors, plus the load failures that
+  have no module; `diagnostics` is that list replayed plus the current check's,
+  rebuilt on every demand rather than appended to. The check half is still
+  whole-program, so its diagnostics have no owner finer than the project and
+  are regenerated entire. Neither tier has a per-module owner yet, which is why
+  a project the parse tier reported anything about re-parses in full. §5's
+  per-query ownership is what narrows that, at 5b and after.
+
+  Until the split, `reanalyze` read the published list to decide staleness, so
+  one warning anywhere re-parsed every module *and* published every diagnostic
+  twice. Gate A caught the second half of that the moment it was pointed at a
+  project with a warning in it - the count comparison is not decoration.
+
+**5a completed 2026-08-26 (`nominal_names`).** `AnalyzedProject` owns the
+`Checker`, and `begin_demand` readies it for the next demand instead of a
+fresh one being built per check. Carried across: the declared type names and
+the alias bodies keyed beside them. Dropped: everything a check computes.
+
+What can carry is bounded by the engine. A resolved body names type variables
+of the engine that inferred it, and that engine does not outlive its check -
+so `placeholders_below` hands the next demand the declarations stripped back
+to what collection produces (identity, visibility, span, directive flags) and
+`resolve_nominal_bodies` fills them in again. Making bodies carry too is 5b,
+and it is the engine's lifetime that phase has to solve, not the registry's.
+
+Two mechanisms the conversion needed, both of them what phase 1's stable ids
+were for:
+
+- **A mark between the declared ids and the minted ones.** Generated
+  declarations, anonymous record types and closure environments are all
+  registered as nominals, by phases that still run in full - and their
+  contents name engine variables. `Checker.declared_mark` is where the
+  collection pass ended; only ids below it carry, and the ids above are minted
+  again in the same order, so they land on the same definitions.
+- **Retire, then re-register at the same id.** A module being collected again
+  has its declarations taken out of the registry first, each id remembered
+  against its FQN, and a declaration that survives goes back at the id it had.
+  Without it a re-collected module's types would be renumbered above every
+  other module's and Gate A would report a difference for each. Retirement is
+  one pass over the registry for the whole set, not one per module: it is
+  keyed by id and by FQN, and nothing indexes it by module.
+
+An added declaration mints its id past the mark rather than in its module's
+place, so the id sequence after a structural edit is not the one a cold check
+produces. That is the wanted behaviour: numbering the new declaration where a
+cold check would puts it ahead of every declaration below it in the file and
+renumbers all of them, and an id-keyed table cannot survive that. The two runs
+agree on every declaration; they disagree only on the numbering of what the
+edit added.
+
+What it costs is the oracle. Gate A asserts equality with a cold result, ids by
+value, so it can only ever run over unchanged text - which is what it does.
+Testing a real edit needs a comparison that reads through the ids, and the
+demand-order rule alone will not supply one. Covered instead by
+`analyze.f`'s `an edit adds, removes and leaves declarations alone`: it inserts
+a declaration between two others, removes one, and names a removed type,
+asserting each time that the declarations the edit did not touch answer to the
+ids they already had. That is the property an id-keyed cache needs, and it is
+the one a cold check does not have.
+
+Measured on the compiler with three modules dirtied of 106: **collect 252 us
+cold, 58 us re-demanded**. `CheckPhases.collect_ns` used to cover
+`build_visibility` as well, which runs in full every demand and is the larger
+half; the two are timed apart now (`visibility_ns`), or the reuse would have
+read as 777 us against 567 us. Total analysis time is unchanged, as expected -
+collection is 0.03% of a check.
 
 **Gate B - laziness.** Run the harness with lazy demand enabled and assert zero
 diff in reported diagnostics against eager demand. Guards the M12 rejection
 parity against silent regression. Nearly free once W1003 exists, since that
 warning already forces total project demand.
 
-**Existing gates stay green throughout:** 551/0/16 harness, stage-2 = stage-3
-byte-identical, 11/11 examples.
+**Existing gates stay green throughout:** 563/1/16 harness run sequentially
+(the one failure is the documented Windows cross-target link,
+`directives/if_directive_cross_target.f`; a parallel run adds flaky C-compiler
+object contention on top), stage-2 = stage-3 byte-identical, 11/11 examples.
 
 ## Implementation phases
 
@@ -393,8 +477,8 @@ byte-identical, 11/11 examples.
     NodeId->span, file_id->path
  4  DONE 2026-08-25: source-override map on analyze_project
  5  convert phase by phase, Gate A green after each:
-      5a  module_ast DONE 2026-08-26; nominal_names still eager (needs 5b's
-          persistent checker)
+      5a  DONE 2026-08-26: module_ast, then nominal_names on a Checker that
+          outlives one check
       5b  nominal_body
       5c  signature / const_value
       5d  body  (64%)

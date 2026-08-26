@@ -11,6 +11,7 @@
 // std.process - they're separate projects that also depend on
 // flang_parser + flang_core.
 
+import std.allocator
 import std.dict
 import std.env
 import std.list
@@ -31,6 +32,10 @@ import flang_driver.compile
 import flang_analysis.project
 import flang_analysis.resolver
 import flang_typer.nominal_registry
+import flang_typer.result
+import flang_typer.type
+import flang_typer.checker
+import flang_typer.inference_engine
 import flang_typer.specialization
 import flang_typer.result_diff
 import flang.frontend
@@ -48,6 +53,7 @@ type Cli = struct {
     release: bool
     check: bool
     gate_a: bool
+    mem: bool
     subcommand: String
     rest_index: usize
     stdlib_path: String
@@ -66,6 +72,7 @@ type BuildOpts = struct {
     timings: bool
     release: bool
     gate_a: bool
+    mem: bool
     stdlib_path: String
     target: ComptimeCtx
     start_ns: u64
@@ -107,7 +114,7 @@ pub fn main() i32 {
 // argument as the subcommand. Index 0 is the program name and is skipped.
 fn parse_cli(argv: String[]) Cli {
     let cli: Cli
-    let opts = getopts("h(help)V(version)v(verbose)c(check)g(emit-generated)k(keep-c)t(timings)r(release)G(gate-a)s(stdlib-path):T(target-os):A(target-arch):", argv, 1)
+    let opts = getopts("h(help)V(version)v(verbose)c(check)g(emit-generated)k(keep-c)t(timings)r(release)G(gate-a)M(mem)s(stdlib-path):T(target-os):A(target-arch):", argv, 1)
 
     // Drive opts.next() manually rather than `for r in opts` - std.env's
     // `iter(&GetOpt)` returns a *copy* of the iterator state, so a
@@ -127,6 +134,7 @@ fn parse_cli(argv: String[]) Cli {
                 if c == 'r' { cli.release = true }
                 if c == 'c' { cli.check = true }
                 if c == 'G' { cli.gate_a = true }
+                if c == 'M' { cli.mem = true }
             }
             OptArg(c, val) => {
                 if c == 's' { cli.stdlib_path = val }
@@ -185,6 +193,7 @@ fn print_help() {
     println("  -t, --timings       print per-phase wall times")
     println("  -r, --release       optimize the generated C (-O2 / /O2)")
     println("  -G, --gate-a        check the analysis against a re-analysis (RFC-022 gate A)")
+    println("  -M, --mem           report heap bytes still out when the build ends")
     println("  -T, --target-os     target OS for #if evaluation (windows|linux|macos)")
     println("  -A, --target-arch   target arch for #if evaluation (x86_64|arm64|x86)")
     println("  -s, --stdlib-path <dir>  stdlib root (default: <exe dir>/stdlib)")
@@ -224,6 +233,7 @@ fn run_build(argv: String[], rest: usize, cli: &Cli) i32 {
         timings = cli.timings,
         release = cli.release,
         gate_a = cli.gate_a,
+        mem = cli.mem,
         stdlib_path = stdlib.as_view(),
         target = target_opt.unwrap(),
         start_ns = monotonic_ns(),
@@ -332,10 +342,27 @@ fn build_project(opts: &BuildOpts) i32 {
     defer ctx.deinit()
     ctx.set_comptime(opts.target)
 
-    let unit = analyze_project(&ctx, &sources)
+    // `--mem` routes the analysis through a counting decorator; the report
+    // at the end covers the heap it was handed, not the whole process.
+    let counted = counting_allocator(&global_allocator)
+    let counting = counted.allocator()
+    let alloc: &Allocator? = null
+    if opts.mem { alloc = Some(&counting) }
+
+    let unit = analyze_project(&ctx, &sources, null, alloc)
     defer unit.deinit()
 
-    if opts.gate_a { return run_gate_a(&ctx, &unit) }
+
+    if opts.gate_a {
+        const code = run_gate_a(&ctx, &unit, alloc)
+        if opts.mem { report_tables(&unit) }
+        if opts.mem { report_mem(&counted) }
+        return code
+    }
+    if opts.mem { report_tables(&unit) }
+    if opts.mem { report_engine(&unit) }
+    if opts.mem { report_type_sharing(&unit) }
+    if opts.mem { report_mem(&counted) }
 
     // `[build.<os>]` native inputs. `${VAR}` expansion reads the
     // environment, so it happens here at the CLI edge rather than inside
@@ -381,7 +408,7 @@ fn build_single_file(path: String, out: String, opts: &BuildOpts) i32 {
     let unit = analyze_project(&ctx, &entries)
     defer unit.deinit()
 
-    if opts.gate_a { return run_gate_a(&ctx, &unit) }
+    if opts.gate_a { return run_gate_a(&ctx, &unit, null) }
 
     if opts.emit_generated {
         const n = unit.write_generated()
@@ -405,23 +432,96 @@ fn build_single_file(path: String, out: String, opts: &BuildOpts) i32 {
 //
 // ponytail: the second pass is a full cold analysis until the query graph
 // exists; only this function changes when it does.
-fn run_gate_a(ctx: &ResolveCtx, cold: &AnalyzedProject) i32 {
+// The result's own tables, largest first. Bytes are the backing arrays; the
+// gap against the allocator's total is what those arrays' entries own.
+fn report_tables(unit: &AnalyzedProject) {
+    const rows = unit.result.table_sizes()
+    defer rows.deinit()
+    let counted: usize = 0
+    for &r in rows {
+        counted = counted + r.bytes
+        if r.bytes < 1048576usize { continue }
+        const line = $"mem:   {r.name} - {r.entries} entries, {r.bytes / 1048576usize} MB"
+        defer line.deinit()
+        println(line.as_view())
+    }
+    const tail = $"mem:   tables total {counted / 1048576usize} MB"
+    defer tail.deinit()
+    println(tail.as_view())
+}
+
+// The inference engine's own tables. Every type variable inference minted has
+// a row in each of these, and `prim_constraints` holds a list per row.
+fn report_engine(unit: &AnalyzedProject) {
+    const e = &unit.checker.engine
+    let constraint_bytes: usize = 0
+    for entry in e.prim_constraints {
+        constraint_bytes = constraint_bytes + entry.value.capacity_bytes()
+    }
+    const line = $"mem:   engine: {e.var_counter} type vars, {e.bindings.length} bindings ({e.bindings.capacity_bytes() / 1048576usize} MB), {e.prim_constraints.length} prim-constrained ({constraint_bytes / 1048576usize} MB in their lists), {e.levels.length} levels ({e.levels.capacity_bytes() / 1048576usize} MB)"
+    defer line.deinit()
+    println(line.as_view())
+}
+
+// Node types held against node types that differ. Each entry is a type tree of
+// its own, so the two numbers separate how many trees are stored from how many
+// shapes they are drawn from.
+fn report_type_sharing(unit: &AnalyzedProject) {
+    let seen: Set(String) = set()
+    defer seen.deinit()
+    let keys: List(OwnedString) = list(1024)
+    defer keys.deinit()
+    let total: usize = 0
+    for entry in unit.result.node_types {
+        total = total + 1
+        let sb = string_builder(32)
+        format(&entry.value, &sb, "")
+        const k = sb.to_string()
+        sb.deinit()
+        if seen.contains(k.as_view()) {
+            k.deinit()
+            continue
+        }
+        keys.push(k)
+        seen.add(keys[keys.len - 1].as_view())
+    }
+    const line = $"mem:   node types: {total} stored, {keys.len} distinct"
+    defer line.deinit()
+    println(line.as_view())
+}
+
+// Heap the analysis has out, and what it went through to get there.
+fn report_mem(c: &CountingAllocator) {
+    const live = $"mem: {c.live_bytes / 1048576usize} MB live at exit, {c.peak_bytes / 1048576usize} MB peak, {c.total_bytes / 1048576usize} MB handed out in total"
+    defer live.deinit()
+    println(live.as_view())
+    const ops = $"mem: {c.allocs} allocs, {c.reallocs} reallocs, {c.deallocs} frees"
+    defer ops.deinit()
+    println(ops.as_view())
+}
+
+fn run_gate_a(ctx: &ResolveCtx, cold: &AnalyzedProject, alloc: &Allocator?) i32 {
     if !cold.checked {
         println("gate A: the project does not type-check - nothing to compare")
         return 1
     }
-    // Dirty one module and demand the project again: the reused entries have
-    // to reproduce the cold result exactly. The last module is the one the
-    // demand order reaches latest, so it has the most entries behind it.
+    // Dirty a few modules and demand the project again: the reused entries
+    // have to reproduce the cold result exactly. Three positions in demand
+    // order - first, middle, last - so a recycled declaration is compared
+    // from below, among and above the ids of the modules that were kept.
     const before_diags = cold.diagnostics.len
     const cold_parse_ns = cold.parse_ns
+    const cold_collect_ns = cold.result.phases.collect_ns
     const dirty: Set(String) = set()
     defer dirty.deinit()
-    if cold.modules.len > 0 {
-        dirty.add(cold.file_paths[cold.file_paths.len - 1].as_view())
+    const n = cold.file_paths.len
+    if n > 0 {
+        dirty.add(cold.file_paths[0].as_view())
+        dirty.add(cold.file_paths[n / 2].as_view())
+        dirty.add(cold.file_paths[n - 1].as_view())
     }
     const before = cold.result
-    reanalyze(cold, ctx, &dirty)
+    reanalyze(cold, ctx, &dirty, null, alloc)
 
     let d = diff_results(&before, &cold.result)
     defer d.deinit()
@@ -449,13 +549,20 @@ fn run_gate_a(ctx: &ResolveCtx, cold: &AnalyzedProject) i32 {
         const ok = $"gate A: OK - {mods} modules, {nt} node types, {ns} specializations, {nn} nominals identical"
         defer ok.deinit()
         println(ok.as_view())
-        // The check half runs in full either way, so these two numbers are
-        // what distinguishes a reused AST from a re-parsed one.
+        // The rest of the check runs in full either way, so these are what
+        // distinguish a reused entry from one computed again: the first pair
+        // for the module ASTs, the second for the type names collected from
+        // them.
         const cold_ms = cold_parse_ns / 1000000u64
         const warm_ms = cold.parse_ns / 1000000u64
         const p = $"gate A: parse {cold_ms} ms cold, {warm_ms} ms re-demanded"
         defer p.deinit()
         println(p.as_view())
+        const cold_us = cold_collect_ns / 1000u64
+        const warm_collect_us = cold.result.phases.collect_ns / 1000u64
+        const c = $"gate A: collect {cold_us} us cold, {warm_collect_us} us re-demanded"
+        defer c.deinit()
+        println(c.as_view())
         return 0
     }
 
@@ -563,6 +670,7 @@ fn print_timings(unit: &AnalyzedProject, lower_ns: u64, translate_ns: u64, cc_ns
     println("timings:")
     print_phase("read + parse", unit.parse_ns, total_ns, false)
     print_phase("typecheck", unit.check_ns, total_ns, false)
+    print_phase("visibility", p.visibility_ns, total_ns, true)
     print_phase("collect", p.collect_ns, total_ns, true)
     print_phase("templates", p.templates_ns, total_ns, true)
     print_phase("nominals + sigs", p.nominals_ns, total_ns, true)
