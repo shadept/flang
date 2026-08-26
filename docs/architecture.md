@@ -350,6 +350,10 @@ Configuration lives in a `[fmt]` table in `flang.toml`, parsed by
 | `separators` | `"no"` | same values - separators the grammar makes optional (struct fields, enum variants, match arms) |
 | `join-lines` | `true` | re-flow layout breaks (groups, `and`/`or`) to `max-width` |
 | `reflow-comments` | `true` | re-fill own-line comment prose to `max-width` |
+| `semicolons` | `"remove"` | `remove` / `keep` - `a(); b()` becomes one statement per line |
+| `if-stmt` | `"multiline"` | `multiline` / `keep` - single-line statement `if x { ... }` (guards included) |
+| `if-else-stmt` | `"multiline"` | same values - statement `if/else` |
+| `if-expr` | `"keep"` | same values - `if` in expression position |
 
 `always` is accepted but its multiline forcing is not implemented yet; it
 currently behaves as `multiline`.

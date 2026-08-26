@@ -1,16 +1,14 @@
 // flang_fmt - the FLang source formatter.
 //
-// Lossless by construction: the input is lexed and parsed to the CST (every
-// source byte lives in some token's leading trivia, text, or trailing
-// trivia), the trivia is rewritten under the style policy in FmtConfig, and
-// the tree is re-emitted. Token text is never touched.
+// Lossless by construction: the input is lexed and parsed to the CST (every source byte lives in
+// some token's leading trivia, text, or trailing trivia), the trivia is rewritten under the style
+// policy in FmtConfig, and the tree is re-emitted. Token text is never touched.
 //
-// Safety gate: before an output is returned it is re-lexed and re-parsed.
-// It must parse cleanly, its token stream must match the input's with
-// commas set aside (the one token separator policy may add or drop), and
-// the two parse trees must have the same shape. Any mismatch returns
-// VerifyFailed instead of the output - a formatter must never change what
-// the code means.
+// Safety gate: before an output is returned it is re-lexed and re-parsed. It must parse cleanly,
+// its token stream must match the input's with commas and statement semicolons set aside (the
+// tokens separator policy may add or drop), and the two parse trees must have the same shape. Any
+// mismatch returns VerifyFailed instead of the output - a formatter must never change what the code
+// means.
 //
 // Style policy (see the Rendering section for the mechanics):
 //   - spacing and indentation are recomputed on every line
@@ -19,12 +17,10 @@
 //   - the file's prevailing line ending (LF or CRLF) is detected and kept,
 //     so a checkout's eol convention never counts as a formatting change
 //
-// Line breaks: a newline can end a statement in FLang, so structural
-// breaks (between statements, inside brace bodies) are always the
-// author's. Breaks inside `(`/`[` groups and before `and`/`or` are layout,
-// not structure: with `join_lines` on they re-flow, and `max_width`
-// decides where the line breaks. Blank lines and comment placement always
-// survive.
+// Line breaks: a newline can end a statement in FLang, so structural breaks (between statements,
+// inside brace bodies) are always the author's. Breaks inside `(`/`[` groups and before `and`/`or`
+// are layout, not structure: with `join_lines` on they re-flow, and `max_width` decides where the
+// line breaks. Blank lines and comment placement always survive.
 
 import std.conv
 import std.list
@@ -53,8 +49,8 @@ pub type SeparatorMode = enum {
     Always
 }
 
-// Style policy. Loaded from a manifest's `[fmt]` table via `set_option`;
-// `default_config()` is the house style.
+// Style policy. Loaded from a manifest's `[fmt]` table via `set_option`; `default_config()` is the
+// house style.
 pub type FmtConfig = struct {
     // Spaces per indentation level.
     indent: usize
@@ -62,17 +58,23 @@ pub type FmtConfig = struct {
     max_width: usize
     // Maximum consecutive blank lines.
     max_blank_lines: usize
-    // Trailing comma in comma-separated lists (call args, array literals,
-    // struct construction).
+    // Trailing comma in comma-separated lists (call args, array literals, struct construction).
     trailing_comma: SeparatorMode
-    // Optional separators where a newline already separates (struct
-    // fields, enum variants, match arms).
+    // Optional separators where a newline already separates (struct fields, enum variants, match
+    // arms).
     separators: SeparatorMode
-    // Re-flow line breaks inside groups and before and/or, letting
-    // max_width decide the layout. Off, authored breaks all stand.
+    // Re-flow line breaks inside groups and before and/or, letting max_width decide the layout.
+    // Off, authored breaks all stand.
     join_lines: bool
     // Re-fill own-line comment prose to max_width.
     reflow_comments: bool
+    // Statement separators: `a(); b()` becomes one statement per line and the enclosing block goes
+    // multiline.
+    remove_semicolons: bool
+    // Force a multiline body on single-line `if`s, by form and position.
+    ml_if_stmt: bool
+    ml_if_else_stmt: bool
+    ml_if_expr: bool
 }
 
 pub fn default_config() FmtConfig {
@@ -84,11 +86,15 @@ pub fn default_config() FmtConfig {
         separators = SeparatorMode.No,
         join_lines = true,
         reflow_comments = true,
+        remove_semicolons = true,
+        ml_if_stmt = true,
+        ml_if_else_stmt = true,
+        ml_if_expr = false,
     }
 }
 
-// Apply one `[fmt]` manifest entry. Returns false for an unknown key or an
-// unparsable value; the config is left unchanged in that case.
+// Apply one `[fmt]` manifest entry. Returns false for an unknown key or an unparsable value; the
+// config is left unchanged in that case.
 pub fn set_option(self: &FmtConfig, key: String, val: String) bool {
     if key == "indent" {
         return set_usize(&self.indent, val)
@@ -111,6 +117,30 @@ pub fn set_option(self: &FmtConfig, key: String, val: String) bool {
     if key == "reflow-comments" {
         return set_bool(&self.reflow_comments, val)
     }
+    if key == "semicolons" {
+        if val == "remove" or val == "keep" {
+            self.remove_semicolons = val == "remove"
+            return true
+        }
+        return false
+    }
+    if key == "if-stmt" {
+        return set_layout(&self.ml_if_stmt, val)
+    }
+    if key == "if-else-stmt" {
+        return set_layout(&self.ml_if_else_stmt, val)
+    }
+    if key == "if-expr" {
+        return set_layout(&self.ml_if_expr, val)
+    }
+    return false
+}
+
+fn set_layout(slot: &bool, val: String) bool {
+    if val == "multiline" or val == "keep" {
+        slot.* = val == "multiline"
+        return true
+    }
     return false
 }
 
@@ -128,9 +158,13 @@ fn set_bool(slot: &bool, val: String) bool {
 
 fn set_usize(slot: &usize, val: String) bool {
     const r = parse_usize(val)
-    if r.is_err() { return false }
+    if r.is_err() {
+        return false
+    }
     const parsed = r.unwrap()
-    if parsed.1 != val.len { return false }
+    if parsed.1 != val.len {
+        return false
+    }
     slot.* = parsed.0 as usize
     return true
 }
@@ -156,20 +190,19 @@ fn set_mode(slot: &SeparatorMode, val: String) bool {
 // ─────────────────────────────────────────────────────────────────────────
 
 pub type FmtError = enum {
-    // The input does not parse; the count is the number of parse
-    // diagnostics. Nothing is formatted - broken code stays untouched.
+    // The input does not parse; the count is the number of parse diagnostics. Nothing is formatted
+    // - broken code stays untouched.
     ParseFailed(usize)
-    // The formatted output's token stream differs from the input's. This
-    // is a formatter bug; the output is discarded.
+    // The formatted output's token stream differs from the input's. This is a formatter bug; the
+    // output is discarded.
     VerifyFailed
 }
 
 // Format FLang source text. Pure: no IO, the caller owns both strings.
 //
-// Formatting runs to a fixpoint: a wrap inserted by one pass is an authored
-// line break to the next, which can in turn move a separator. Real inputs
-// settle in one or two passes; an output still changing after four is a
-// formatter bug and is refused rather than left oscillating.
+// Formatting runs to a fixpoint: a wrap inserted by one pass is an authored line break to the next,
+// which can in turn move a separator. Real inputs settle in one or two passes; an output still
+// changing after four is a formatter bug and is refused rather than left oscillating.
 pub fn format_source(source: String, cfg: &FmtConfig) Result(OwnedString, FmtError) {
     let current = from_view(source)
     let passes = 0usize
@@ -220,10 +253,9 @@ fn format_once(source: String, cfg: &FmtConfig) Result(OwnedString, FmtError) {
 // ─────────────────────────────────────────────────────────────────────────
 // Rendering
 //
-// One depth-first walk over the CST re-emits every token with recomputed
-// trivia. Structural line breaks are kept (a newline in FLang can end a
-// statement); layout breaks re-flow under `join_lines`; the rest is
-// policy:
+// One depth-first walk over the CST re-emits every token with recomputed trivia. Structural line
+// breaks are kept (a newline in FLang can end a statement); layout breaks re-flow under
+// `join_lines`; the rest is policy:
 //
 //   - horizontal space between two tokens on a line comes from the pair's
 //     kinds plus the CST node each belongs to (so `-` in `a - b` spaces
@@ -236,21 +268,20 @@ fn format_once(source: String, cfg: &FmtConfig) Result(OwnedString, FmtError) {
 //   - a comment on its own line is indented like the code around it; a
 //     comment trailing code gets exactly one space before `//`
 //
-// Inside an interpolated string ($"..."), authored spacing is preserved
-// verbatim: segment text is token text, and hole spacing is the author's.
+// Inside an interpolated string ($"..."), authored spacing is preserved verbatim: segment text is
+// token text, and hole spacing is the author's.
 // ─────────────────────────────────────────────────────────────────────────
 
-// A place the current line may legally break: just after a list comma.
-// `offset` indexes into the line buffer; `indent` is the continuation
-// indentation (in spaces) the split-off remainder gets.
+// A place the current line may legally break: just after a list comma. `offset` indexes into the
+// line buffer; `indent` is the continuation indentation (in spaces) the split-off remainder gets.
 type WrapPoint = struct {
     offset: usize
     indent: usize
 }
 
 type Renderer = struct {
-    // Completed lines. The line being built lives in `line` so it can
-    // still be split at a wrap point; it flushes at every line break.
+    // Completed lines. The line being built lives in `line` so it can still be split at a wrap
+    // point; it flushes at every line break.
     out: StringBuilder
     line: StringBuilder
     cfg: &FmtConfig
@@ -260,21 +291,23 @@ type Renderer = struct {
     brace_depth: usize
     group_depth: usize
     interp_depth: usize
-    // group_depth as it was when each currently-open brace opened. A brace
-    // resets continuation indent: groups opened before it stop counting.
+    // group_depth as it was when each currently-open brace opened. A brace resets continuation
+    // indent: groups opened before it stop counting.
     group_marks: List(usize)
     // Newlines seen in trivia since the last emitted token or comment.
     pending_newlines: usize
-    // Horizontal whitespace seen since then (drives authored-spacing
-    // fallbacks, e.g. inside interpolated strings).
+    // Horizontal whitespace seen since then (drives authored-spacing fallbacks, e.g. inside
+    // interpolated strings).
     gap_had_space: bool
-    // True once a comment lands on the current line; nothing may be
-    // appended to the line after it.
+    // True once a comment lands on the current line; nothing may be appended to the line after it.
     line_has_comment: bool
-    // False until the first token or comment is emitted; leading blank
-    // lines of the file are dropped while false.
+    // False until the first token or comment is emitted; leading blank lines of the file are
+    // dropped while false.
     started: bool
     prev_kind: TokenKind
+    // The last token was a prefix `-` / `!` / `~`: nothing may separate it from its operand (`Less
+    // = -1`).
+    prev_prefix: bool
     prev_parent: NodeKind
 }
 
@@ -293,9 +326,10 @@ fn render_module(cst: &CstNode, cfg: &FmtConfig) OwnedString {
         line_has_comment = false,
         started = false,
         prev_kind = TokenKind.Eof,
+        prev_prefix = false,
         prev_parent = NodeKind.Module,
     }
-    render_node(&r, cst)
+    render_node(&r, cst, NodeKind.Module)
     flush_line(&r)
     r.line.deinit()
     r.wrap_points.deinit()
@@ -311,16 +345,33 @@ fn flush_line(r: &Renderer) {
     r.wrap_points.clear()
 }
 
-fn render_node(r: &Renderer, node: &CstNode) {
+fn render_node(r: &Renderer, node: &CstNode, parent: NodeKind) {
+    if node.kind == NodeKind.IfExpr {
+        // An `if` directly under a block (or at top level) is a statement; anywhere else it is an
+        // expression.
+        render_if(r, node, parent == NodeKind.BlockExpr or parent == NodeKind.Module)
+        return
+    }
+    if node.kind == NodeKind.BlockExpr {
+        render_block(r, node, false)
+        return
+    }
     for i in 0..node.children.len {
         const child = node.children[i]
         child match {
             NodeChild(inner) => {
-                render_node(r, &inner)
+                render_node(r, &inner, node.kind)
                 maybe_insert_separator(r, node, i)
             }
             TokenChild(tok) => {
-                if tok.kind == TokenKind.Comma and skip_comma(r, node, i) {
+                if tok.kind == TokenKind.Semicolon and r.cfg.remove_semicolons
+                    and is_statement_kind(node.kind) {
+                    // A statement separator becomes the line break it stood in for.
+                    skip_token_keep_trivia(r, &tok)
+                    if r.pending_newlines == 0 {
+                        r.pending_newlines = 1
+                    }
+                } else if tok.kind == TokenKind.Comma and skip_comma(r, node, i) {
                     skip_token_keep_trivia(r, &tok)
                 } else {
                     maybe_insert_trailing_comma(r, node, &tok)
@@ -329,6 +380,102 @@ fn render_node(r: &Renderer, node: &CstNode) {
             }
         }
     }
+}
+
+fn is_statement_kind(kind: NodeKind) bool {
+    return kind == NodeKind.ExpressionStmt or kind == NodeKind.ReturnStmt
+        or kind == NodeKind.VariableDecl or kind == NodeKind.BreakStmt
+        or kind == NodeKind.ContinueStmt or kind == NodeKind.DeferStmt
+}
+
+// An `if` in statement position defaults to a multiline body; in expression position a single-line
+// `if c { a } else { b }` may stay. Chained `else if`s inherit the chain head's position.
+fn render_if(r: &Renderer, node: &CstNode, stmt_pos: bool) {
+    let has_else = false
+    for i in 0..node.children.len {
+        node.children[i] match {
+            TokenChild(t) => { if t.kind == TokenKind.Else {
+                    has_else = true
+                } }
+            NodeChild(_) => {}
+        }
+    }
+    let force = r.cfg.ml_if_expr
+    if stmt_pos {
+        force = if has_else { r.cfg.ml_if_else_stmt } else { r.cfg.ml_if_stmt }
+    }
+
+    for i in 0..node.children.len {
+        const child = node.children[i]
+        child match {
+            NodeChild(inner) => {
+                if inner.kind == NodeKind.BlockExpr {
+                    render_block(r, &inner, force)
+                } else if inner.kind == NodeKind.IfExpr {
+                    render_if(r, &inner, stmt_pos)
+                } else {
+                    render_node(r, &inner, node.kind)
+                }
+            }
+            TokenChild(tok) => render_token(r, &tok, node.kind)
+        }
+    }
+}
+
+// A block body. `force` puts the braces on their own lines; a block whose statements carry
+// semicolons the config removes forces itself.
+fn render_block(r: &Renderer, node: &CstNode, force: bool) {
+    let f = force or (r.cfg.remove_semicolons and block_has_semicolon(node))
+    if element_count(node) == 0 {
+        f = false
+    }
+
+    for i in 0..node.children.len {
+        const child = node.children[i]
+        child match {
+            NodeChild(inner) => render_node(r, &inner, node.kind)
+            TokenChild(tok) => {
+                if tok.kind == TokenKind.CloseBrace and f and r.pending_newlines == 0 {
+                    r.pending_newlines = 1
+                }
+                render_token(r, &tok, node.kind)
+                if tok.kind == TokenKind.OpenBrace and f and r.pending_newlines == 0 {
+                    r.pending_newlines = 1
+                }
+            }
+        }
+    }
+}
+
+// True when any direct statement of the block ends in a `;` token.
+fn block_has_semicolon(node: &CstNode) bool {
+    for i in 0..node.children.len {
+        const child = node.children[i]
+        const has = child match {
+            NodeChild(stmt) => stmt_has_semicolon(&stmt)
+            TokenChild(_) => false
+        }
+        if has {
+            return true
+        }
+    }
+    return false
+}
+
+fn stmt_has_semicolon(stmt: &CstNode) bool {
+    if !is_statement_kind(stmt.kind) {
+        return false
+    }
+    for i in 0..stmt.children.len {
+        const is_semi = stmt.children[i] match {
+            TokenChild(t) => t.kind == TokenKind.Semicolon
+            NodeChild(_) => false
+        }
+        if is_semi {
+            return true
+        }
+    }
+    return false
 }
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -345,10 +492,9 @@ fn render_node(r: &Renderer, node: &CstNode) {
 //   comma itself is optional: struct/enum declaration bodies and match
 //   arms.
 //
-// Both are decided while streaming: a comma is dropped by skipping its
-// token (its trivia still flows), and inserted by appending "," at the
-// end of the current line. A line that already carries a comment accepts
-// no insertion - the comma would land inside the comment.
+// Both are decided while streaming: a comma is dropped by skipping its token (its trivia still
+// flows), and inserted by appending "," at the end of the current line. A line that already carries
+// a comment accepts no insertion - the comma would land inside the comment.
 // ─────────────────────────────────────────────────────────────────────────
 
 // Whether this comma child of `node` should not be emitted.
@@ -357,17 +503,21 @@ fn skip_comma(r: &Renderer, node: &CstNode, i: usize) bool {
 
     // A trailing comma: the next child is this list's closing token.
     if is_comma_list(parent) and next_child_is(node, i, list_closer(parent)) {
+        // `(T,)` is a one-element tuple and `(T)` is not: that comma is grammar, not style.
+        if is_tuple_kind(parent) and element_count(node) < 2 {
+            return false
+        }
         return r.cfg.trailing_comma match {
-            No => true,
+            No => true
             // Kept when the list is multiline, dropped on one line.
-            Multiline => !newline_after_child(node, i),
-            Always => false,
+            Multiline => !newline_after_child(node, i)
+            Always => false
         }
     }
 
     if is_separator_body(parent) {
-        // Only commas a newline makes redundant; single-line bodies keep
-        // theirs (the grammar needs them there).
+        // Only commas a newline makes redundant; single-line bodies keep theirs (the grammar needs
+        // them there).
         return !mode_on(r.cfg.separators) and newline_after_child(node, i)
     }
 
@@ -377,12 +527,28 @@ fn skip_comma(r: &Renderer, node: &CstNode, i: usize) bool {
 // Append a trailing comma before a closer that starts its own line.
 fn maybe_insert_trailing_comma(r: &Renderer, node: &CstNode, tok: &Token) {
     const parent = node.kind
-    if !is_comma_list(parent) { return }
-    if tok.kind != list_closer(parent) { return }
-    if !mode_on(r.cfg.trailing_comma) { return }
-    if !r.started or r.line_has_comment { return }
-    if r.pending_newlines == 0 and !trivia_have_newline(tok.leading) { return }
-    if r.prev_kind == TokenKind.Comma { return }
+    if !is_comma_list(parent) {
+        return
+    }
+    if tok.kind != list_closer(parent) {
+        return
+    }
+    if !mode_on(r.cfg.trailing_comma) {
+        return
+    }
+    // Adding the comma to a one-element tuple form would turn `(T)` into the tuple `(T,)`.
+    if is_tuple_kind(parent) and element_count(node) < 2 {
+        return
+    }
+    if !r.started or r.line_has_comment {
+        return
+    }
+    if r.pending_newlines == 0 and !trivia_have_newline(tok.leading) {
+        return
+    }
+    if r.prev_kind == TokenKind.Comma {
+        return
+    }
     // An empty list has its opener as the previous token.
     if r.prev_kind == TokenKind.OpenParenthesis or r.prev_kind == TokenKind.OpenBracket
         or r.prev_kind == TokenKind.OpenBrace {
@@ -391,22 +557,33 @@ fn maybe_insert_trailing_comma(r: &Renderer, node: &CstNode, tok: &Token) {
     r.line.append(",")
 }
 
-// Under `separators = multiline|always`, every newline-separated field,
-// variant, or arm gets its comma.
+// Under `separators = multiline|always`, every newline-separated field, variant, or arm gets its
+// comma.
 fn maybe_insert_separator(r: &Renderer, node: &CstNode, i: usize) {
-    if !mode_on(r.cfg.separators) { return }
-    if !is_separator_body(node.kind) { return }
+    if !mode_on(r.cfg.separators) {
+        return
+    }
+    if !is_separator_body(node.kind) {
+        return
+    }
     const child = node.children[i]
     const elem = child match {
-        NodeChild(n) => n.kind == NodeKind.StructField
-            or n.kind == NodeKind.EnumVariant
-            or n.kind == NodeKind.MatchArm,
-        TokenChild(_) => false,
+        NodeChild(n) => n.kind == NodeKind.StructField or n.kind == NodeKind.EnumVariant
+            or n.kind == NodeKind.MatchArm
+        TokenChild(_) => false
     }
-    if !elem { return }
-    if next_child_is(node, i, TokenKind.Comma) { return }
-    if r.line_has_comment { return }
-    if !newline_after_child(node, i) { return }
+    if !elem {
+        return
+    }
+    if next_child_is(node, i, TokenKind.Comma) {
+        return
+    }
+    if r.line_has_comment {
+        return
+    }
+    if !newline_after_child(node, i) {
+        return
+    }
     r.line.append(",")
 }
 
@@ -420,29 +597,37 @@ fn skip_token_keep_trivia(r: &Renderer, tok: &Token) {
     }
 }
 
+fn is_tuple_kind(kind: NodeKind) bool {
+    return kind == NodeKind.TupleType or kind == NodeKind.TuplePattern
+}
+
+fn element_count(node: &CstNode) usize {
+    let n: usize = 0
+    for i in 0..node.children.len {
+        node.children[i] match {
+            NodeChild(_) => { n = n + 1 }
+            TokenChild(_) => {}
+        }
+    }
+    return n
+}
+
 // Whether a separator knob asks for commas at all.
 fn mode_on(m: SeparatorMode) bool {
     return m match {
-        No => false,
-        Multiline => true,
-        Always => true,
+        No => false
+        Multiline => true
+        Always => true
     }
 }
 
 fn is_comma_list(kind: NodeKind) bool {
-    return kind == NodeKind.CallExpr
-        or kind == NodeKind.FunctionDecl
-        or kind == NodeKind.GeneratorInvocation
-        or kind == NodeKind.GeneratorDef
-        or kind == NodeKind.NamedType
-        or kind == NodeKind.FunctionType
-        or kind == NodeKind.LambdaExpr
-        or kind == NodeKind.EnumVariant
-        or kind == NodeKind.EnumVariantPattern
-        or kind == NodeKind.TupleType
-        or kind == NodeKind.TuplePattern
-        or kind == NodeKind.ArrayLiteralExpr
-        or kind == NodeKind.StructConstructionExpr
+    return kind == NodeKind.CallExpr or kind == NodeKind.FunctionDecl
+        or kind == NodeKind.GeneratorInvocation or kind == NodeKind.NamedType
+        or kind == NodeKind.FunctionType or kind == NodeKind.LambdaExpr
+        or kind == NodeKind.EnumVariant or kind == NodeKind.EnumVariantPattern
+        or kind == NodeKind.TupleType or kind == NodeKind.TuplePattern
+        or kind == NodeKind.ArrayLiteralExpr or kind == NodeKind.StructConstructionExpr
         or kind == NodeKind.AnonymousStructExpr
 }
 
@@ -456,21 +641,20 @@ fn list_closer(kind: NodeKind) TokenKind {
     return TokenKind.CloseParenthesis
 }
 
-// Bodies where a newline already separates elements: the `separators`
-// knob governs their commas.
+// Bodies where a newline already separates elements: the `separators` knob governs their commas.
 fn is_separator_body(kind: NodeKind) bool {
-    return kind == NodeKind.StructDecl
-        or kind == NodeKind.EnumDecl
-        or kind == NodeKind.AnonymousStructType
-        or kind == NodeKind.AnonymousEnumType
+    return kind == NodeKind.StructDecl or kind == NodeKind.EnumDecl
+        or kind == NodeKind.AnonymousStructType or kind == NodeKind.AnonymousEnumType
         or kind == NodeKind.MatchExpr
 }
 
 fn next_child_is(node: &CstNode, i: usize, kind: TokenKind) bool {
-    if i + 1 >= node.children.len { return false }
+    if i + 1 >= node.children.len {
+        return false
+    }
     return node.children[i + 1] match {
-        TokenChild(t) => t.kind == kind,
-        NodeChild(_) => false,
+        TokenChild(t) => t.kind == kind
+        NodeChild(_) => false
     }
 }
 
@@ -478,12 +662,16 @@ fn next_child_is(node: &CstNode, i: usize, kind: TokenKind) bool {
 fn newline_after_child(node: &CstNode, i: usize) bool {
     const last = last_token_of(&node.children[i])
     if last.is_some() {
-        if trivia_have_newline(last.unwrap().trailing) { return true }
+        if trivia_have_newline(last.unwrap().trailing) {
+            return true
+        }
     }
     if i + 1 < node.children.len {
         const next = first_token_of(&node.children[i + 1])
         if next.is_some() {
-            if trivia_have_newline(next.unwrap().leading) { return true }
+            if trivia_have_newline(next.unwrap().leading) {
+                return true
+            }
         }
     }
     return false
@@ -493,12 +681,16 @@ fn trivia_have_newline(pieces: Trivia[]) bool {
     for i in 0..pieces.len {
         const t = pieces[i]
         const is_ws = t.kind match {
-            Whitespace => true,
-            LineComment => false,
+            Whitespace => true
+            LineComment => false
         }
-        if !is_ws { continue }
+        if !is_ws {
+            continue
+        }
         for j in 0..t.text.len {
-            if t.text[j] == '\n' { return true }
+            if t.text[j] == '\n' {
+                return true
+            }
         }
     }
     return false
@@ -510,7 +702,9 @@ fn first_token_of(child: &CstChild) Token? {
         NodeChild(n) => {
             for i in 0..n.children.len {
                 const found = first_token_of(&n.children[i])
-                if found.is_some() { return found }
+                if found.is_some() {
+                    return found
+                }
             }
         }
     }
@@ -525,7 +719,9 @@ fn last_token_of(child: &CstChild) Token? {
             while i > 0 {
                 i = i - 1
                 const found = last_token_of(&n.children[i])
-                if found.is_some() { return found }
+                if found.is_some() {
+                    return found
+                }
             }
         }
     }
@@ -540,18 +736,21 @@ fn render_token(r: &Renderer, tok: &Token, parent: NodeKind) {
         return
     }
 
-    if r.pending_newlines > 0 and r.started and !joinable(r, tok.kind) {
+    if r.pending_newlines > 0 and r.started and !joinable(r, tok.kind, parent) {
         emit_line_break(r, tok.kind)
     } else if r.started {
         r.pending_newlines = 0
-        // A break may land right before `and` / `or`, so the opportunity
-        // is recorded before the operator (and its leading space) lands.
-        if (tok.kind == TokenKind.And or tok.kind == TokenKind.Or) and r.interp_depth == 0 {
+        // A break may land right before `and` / `or`, so the opportunity is recorded before the
+        // operator (and its leading space) lands.
+        if (tok.kind == TokenKind.And or tok.kind == TokenKind.Or) and r.interp_depth == 0
+            and parent != NodeKind.GeneratorDef {
             record_wrap_point(r, 1)
         }
         let space = needs_space(r, tok.kind, parent)
         const fresh = maybe_wrap(r, tok.text.len + if space { 1usize } else { 0usize })
-        if fresh { space = false }
+        if fresh {
+            space = false
+        }
         if space {
             r.line.append(" ")
         }
@@ -564,6 +763,11 @@ fn render_token(r: &Renderer, tok: &Token, parent: NodeKind) {
     if tok.kind == TokenKind.Comma and r.interp_depth == 0 and is_comma_list(parent) {
         record_wrap_point(r, 0)
     }
+    // Prefix when the CST says so, or when what precedes cannot end an expression (an enum
+    // discriminant's `-1` sits outside any UnaryExpr).
+    r.prev_prefix = (tok.kind == TokenKind.Minus or tok.kind == TokenKind.Bang
+        or tok.kind == TokenKind.Tilde) and (parent == NodeKind.UnaryExpr
+        or !ends_expression(r.prev_kind))
     r.prev_kind = tok.kind
     r.prev_parent = parent
     r.started = true
@@ -573,37 +777,56 @@ fn render_token(r: &Renderer, tok: &Token, parent: NodeKind) {
     }
 }
 
-// Whether the pending line break may be re-flowed into a space, leaving
-// `max_width` to decide the layout. Only a lone newline qualifies (blank
-// lines and comment-carrying breaks are the author's), and only where the
-// wrap pass could put a break back:
+// Whether the pending line break may be re-flowed into a space, leaving `max_width` to decide the
+// layout. Only a lone newline qualifies (blank lines and comment-carrying breaks are the author's),
+// and only where the wrap pass could put a break back:
 //   - inside an open `(` / `[` group (commas and operators re-break), or
 //   - before `and` / `or`, whose continuation style wrap reproduces.
-// A brace body resets the group count, so statements inside a lambda or
-// block passed as an argument are never merged.
-fn joinable(r: &Renderer, next: TokenKind) bool {
-    if !r.cfg.join_lines or r.cfg.max_width == 0 { return false }
-    if r.pending_newlines != 1 { return false }
-    if r.line_has_comment { return false }
-    if r.interp_depth > 0 { return false }
+// A brace body resets the group count, so statements inside a lambda or block passed as an argument
+// are never merged.
+fn joinable(r: &Renderer, next: TokenKind, parent: NodeKind) bool {
+    if !r.cfg.join_lines or r.cfg.max_width == 0 {
+        return false
+    }
+    if parent == NodeKind.GeneratorDef {
+        return false
+    }
+    if r.pending_newlines != 1 {
+        return false
+    }
+    if r.line_has_comment {
+        return false
+    }
+    if r.interp_depth > 0 {
+        return false
+    }
     const eff = r.group_depth - open_groups_at_brace(r)
-    if eff > 0 { return true }
+    if eff > 0 {
+        return true
+    }
     return next == TokenKind.And or next == TokenKind.Or
 }
 
-// If appending `incoming` more bytes would push the line past max_width,
-// split it at the last recorded wrap point. Returns true when the split
-// left the incoming token to start the new line (so no space precedes it).
+// If appending `incoming` more bytes would push the line past max_width, split it at the last
+// recorded wrap point. Returns true when the split left the incoming token to start the new line
+// (so no space precedes it).
 fn maybe_wrap(r: &Renderer, incoming: usize) bool {
-    if r.cfg.max_width == 0 { return false }
-    if r.wrap_points.len == 0 { return false }
-    if r.line.len + incoming <= r.cfg.max_width { return false }
+    if r.cfg.max_width == 0 {
+        return false
+    }
+    if r.wrap_points.len == 0 {
+        return false
+    }
+    if r.line.len + incoming <= r.cfg.max_width {
+        return false
+    }
 
-    // The last point that still fits the width; the earliest one when even
-    // that is too far out.
+    // The last point that still fits the width; the earliest one when even that is too far out.
     let pick = 0usize
     for i in 0..r.wrap_points.len {
-        if r.wrap_points[i].offset <= r.cfg.max_width { pick = i }
+        if r.wrap_points[i].offset <= r.cfg.max_width {
+            pick = i
+        }
     }
     const wp = r.wrap_points[pick]
 
@@ -623,8 +846,8 @@ fn maybe_wrap(r: &Renderer, incoming: usize) bool {
     const fresh = rest.len == 0
     rest.deinit()
 
-    // Points that moved to the new line keep working, re-based onto it -
-    // a long joined list may need several breaks.
+    // Points that moved to the new line keep working, re-based onto it - a long joined list may
+    // need several breaks.
     let kept: List(WrapPoint) = list(0)
     for i in 0..r.wrap_points.len {
         const p = r.wrap_points[i]
@@ -640,11 +863,13 @@ fn maybe_wrap(r: &Renderer, incoming: usize) bool {
     return fresh
 }
 
-// `min_extra` is 1 for a break before `and` / `or`: the operator starts
-// the next line and indents as a continuation even with no group open.
+// `min_extra` is 1 for a break before `and` / `or`: the operator starts the next line and indents
+// as a continuation even with no group open.
 fn record_wrap_point(r: &Renderer, min_extra: usize) {
     let eff = r.group_depth - open_groups_at_brace(r)
-    if eff < min_extra { eff = min_extra }
+    if eff < min_extra {
+        eff = min_extra
+    }
     r.wrap_points.push(WrapPoint {
         offset = r.line.len,
         indent = (r.brace_depth + eff) * r.cfg.indent,
@@ -663,13 +888,12 @@ fn handle_trivia(r: &Renderer, t: &Trivia) {
                 }
             }
         }
-        LineComment => emit_comment(r, t.text),
+        LineComment => emit_comment(r, t.text)
     }
 }
 
-// A comment either trails code on the current line (one space before it)
-// or opens a line of its own (indented like code). Trailing whitespace
-// inside the comment is stripped.
+// A comment either trails code on the current line (one space before it) or opens a line of its own
+// (indented like code). Trailing whitespace inside the comment is stripped.
 fn emit_comment(r: &Renderer, text: String) {
     let end = text.len
     while end > 0 and (text[end - 1] == ' ' or text[end - 1] == '\t' or text[end - 1] == '\r') {
@@ -712,8 +936,8 @@ fn emit_line_break(r: &Renderer, next: TokenKind) {
     if next == TokenKind.CloseBrace and depth > 0 {
         depth = depth - 1
     }
-    // Groups opened before the innermost open brace stop contributing:
-    // inside `f(x, .{ <here> })` the block's brace governs, not f's paren.
+    // Groups opened before the innermost open brace stop contributing: inside `f(x, .{ <here> })`
+    // the block's brace governs, not f's paren.
     let groups = r.group_depth - open_groups_at_brace(r)
     if (next == TokenKind.CloseParenthesis or next == TokenKind.CloseBracket) and groups > 0 {
         groups = groups - 1
@@ -729,7 +953,9 @@ fn emit_line_break(r: &Renderer, next: TokenKind) {
 }
 
 fn open_groups_at_brace(r: &Renderer) usize {
-    if r.group_marks.len == 0 { return 0 }
+    if r.group_marks.len == 0 {
+        return 0
+    }
     const at = r.group_marks[r.group_marks.len - 1]
     return if at < r.group_depth { at } else { r.group_depth }
 }
@@ -748,7 +974,8 @@ fn update_depths(r: &Renderer, kind: TokenKind) {
     if kind == TokenKind.OpenParenthesis or kind == TokenKind.OpenBracket {
         r.group_depth = r.group_depth + 1
     }
-    if (kind == TokenKind.CloseParenthesis or kind == TokenKind.CloseBracket) and r.group_depth > 0 {
+    if (kind == TokenKind.CloseParenthesis or kind == TokenKind.CloseBracket)
+        and r.group_depth > 0 {
         r.group_depth = r.group_depth - 1
     }
     if kind == TokenKind.InterpStringStart {
@@ -759,48 +986,46 @@ fn update_depths(r: &Renderer, kind: TokenKind) {
     }
 }
 
-// A line starting with one of these continues the previous line's
-// expression and indents one extra step.
+// A line starting with one of these continues the previous line's expression and indents one extra
+// step.
 fn is_continuation_start(kind: TokenKind) bool {
-    return kind == TokenKind.Dot
-        or kind == TokenKind.QuestionDot
-        or kind == TokenKind.QuestionQuestion
-        or kind == TokenKind.And
-        or kind == TokenKind.Or
-        or kind == TokenKind.Pipe
-        or kind == TokenKind.Plus
-        or kind == TokenKind.Minus
-        or kind == TokenKind.Star
-        or kind == TokenKind.Slash
-        or kind == TokenKind.Percent
-        or kind == TokenKind.Caret
-        or kind == TokenKind.EqualsEquals
-        or kind == TokenKind.NotEquals
-        or kind == TokenKind.LessThan
-        or kind == TokenKind.GreaterThan
-        or kind == TokenKind.LessThanOrEqual
-        or kind == TokenKind.GreaterThanOrEqual
-        or kind == TokenKind.ShiftLeft
-        or kind == TokenKind.ShiftRight
-        or kind == TokenKind.UnsignedShiftRight
-        or kind == TokenKind.FatArrow
-        or kind == TokenKind.Equals
-        or kind == TokenKind.As
+    return kind == TokenKind.Dot or kind == TokenKind.QuestionDot
+        or kind == TokenKind.QuestionQuestion or kind == TokenKind.And or kind == TokenKind.Or
+        or kind == TokenKind.Pipe or kind == TokenKind.Plus or kind == TokenKind.Minus
+        or kind == TokenKind.Star or kind == TokenKind.Slash or kind == TokenKind.Percent
+        or kind == TokenKind.Caret or kind == TokenKind.EqualsEquals or kind == TokenKind.NotEquals
+        or kind == TokenKind.LessThan or kind == TokenKind.GreaterThan
+        or kind == TokenKind.LessThanOrEqual or kind == TokenKind.GreaterThanOrEqual
+        or kind == TokenKind.ShiftLeft or kind == TokenKind.ShiftRight
+        or kind == TokenKind.UnsignedShiftRight or kind == TokenKind.FatArrow
+        or kind == TokenKind.Equals or kind == TokenKind.As
 }
 
 // ─────────────────────────────────────────────────────────────────────────
 // Spacing policy
 // ─────────────────────────────────────────────────────────────────────────
 
-// Whether one space separates the previous token from `cur` when both sit
-// on the same line. Default is a single space; the rules below carve out
-// the pairs that glue.
+// Whether one space separates the previous token from `cur` when both sit on the same line. Default
+// is a single space; the rules below carve out the pairs that glue.
 fn needs_space(r: &Renderer, cur: TokenKind, parent: NodeKind) bool {
     const prev = r.prev_kind
 
     // Interpolated strings keep authored spacing.
     if r.interp_depth > 0 {
         return r.gap_had_space
+    }
+    // So do generator definitions: their body is a template where token adjacency around `#(...)`
+    // splices is pasting (`#(Name)Vtable` expands to one identifier), which no spacing rule may
+    // disturb.
+    if parent == NodeKind.GeneratorDef or r.prev_parent == NodeKind.GeneratorDef {
+        return r.gap_had_space
+    }
+    if r.prev_prefix {
+        return false
+    }
+    // `$sb"..."` appends into a builder: the target identifier glues to the opening quote.
+    if cur == TokenKind.InterpStringStart and prev == TokenKind.Identifier {
+        return false
     }
 
     if prev == TokenKind.OpenBrace {
@@ -814,22 +1039,26 @@ fn needs_space(r: &Renderer, cur: TokenKind, parent: NodeKind) bool {
         return true
     }
 
-    // `+=`, `-=`, ... lex as two tokens inside an AssignmentExpr. The
-    // operator's own parent distinguishes them from `x.* = v`, where the
-    // `*` belongs to the deref on the left-hand side.
-    if cur == TokenKind.Equals and parent == NodeKind.AssignmentExpr
-        and is_binary_op(prev) and r.prev_parent == NodeKind.AssignmentExpr {
+    // `+=`, `-=`, ... lex as two tokens inside an AssignmentExpr. The operator's own parent
+    // distinguishes them from `x.* = v`, where the `*` belongs to the deref on the left-hand side.
+    if cur == TokenKind.Equals and parent == NodeKind.AssignmentExpr and is_binary_op(prev)
+        and r.prev_parent == NodeKind.AssignmentExpr {
         return false
     }
 
-    // Match-arm patterns are a flat token run under MatchArm, so a payload
-    // paren (`Some(x)`) is recognized by what precedes it.
+    // Match-arm patterns are a flat token run under MatchArm, so a payload paren (`Some(x)`) is
+    // recognized by what precedes it.
     if cur == TokenKind.OpenParenthesis and parent == NodeKind.MatchArm {
         return prev != TokenKind.Identifier
     }
 
     if glue_after(prev, r.prev_parent) {
         return false
+    }
+    // An open-started range (`for i in ..a.len`) has nothing to glue its `..` to: it spaces off
+    // like any prefix. With a left operand present the range glues (`0..n`).
+    if (cur == TokenKind.DotDot or cur == TokenKind.DotDotEquals) and !ends_expression(prev) {
+        return true
     }
     if glue_before(cur, parent) {
         return false
@@ -849,11 +1078,7 @@ fn glue_after(kind: TokenKind, parent: NodeKind) bool {
         return true
     }
     // Prefix operators glue to their operand.
-    if kind == TokenKind.Bang or kind == TokenKind.Tilde or kind == TokenKind.Minus {
-        return parent == NodeKind.UnaryExpr
-    }
-    // `&` glues in `&expr`, `&T`, and `for &x in ...` bindings; it spaces
-    // as a binary operator.
+    // `&` glues in `&expr`, `&T`, and `for &x in ...` bindings; it spaces as a binary operator.
     if kind == TokenKind.Ampersand {
         return parent != NodeKind.BinaryExpr
     }
@@ -875,62 +1100,55 @@ fn glue_before(kind: TokenKind, parent: NodeKind) bool {
         // The leading dot of `.{ ... }` stands off from what precedes it.
         return parent != NodeKind.AnonymousStructExpr
     }
-    // `(` glues to a callee, a declared name, or a generic parameter list
-    // (`struct(K)`); a tuple or grouping paren stands off.
+    // `(` glues to a callee, a declared name, or a generic parameter list (`struct(K)`); a tuple or
+    // grouping paren stands off.
     if kind == TokenKind.OpenParenthesis {
-        return parent == NodeKind.CallExpr
-            or parent == NodeKind.FunctionDecl
-            or parent == NodeKind.NamedType
-            or parent == NodeKind.FunctionType
-            or parent == NodeKind.LambdaExpr
-            or parent == NodeKind.GeneratorDef
-            or parent == NodeKind.GeneratorInvocation
-            or parent == NodeKind.EnumVariant
-            or parent == NodeKind.EnumVariantPattern
-            or parent == NodeKind.StructDecl
-            or parent == NodeKind.EnumDecl
-            or parent == NodeKind.TypeAliasDecl
-            or parent == NodeKind.AnonymousStructType
-            or parent == NodeKind.AnonymousEnumType
+        return parent == NodeKind.CallExpr or parent == NodeKind.FunctionDecl
+            or parent == NodeKind.NamedType or parent == NodeKind.FunctionType
+            or parent == NodeKind.LambdaExpr or parent == NodeKind.GeneratorDef
+            or parent == NodeKind.GeneratorInvocation or parent == NodeKind.EnumVariant
+            or parent == NodeKind.EnumVariantPattern or parent == NodeKind.StructDecl
+            or parent == NodeKind.EnumDecl or parent == NodeKind.TypeAliasDecl
+            or parent == NodeKind.AnonymousStructType or parent == NodeKind.AnonymousEnumType
     }
-    // `[` glues in `a[i]` and `T[]`; an array literal or `[T; N]` type
-    // stands off.
+    // `[` glues in `a[i]` and `T[]`; an array literal or `[T; N]` type stands off.
     if kind == TokenKind.OpenBracket {
         return parent == NodeKind.IndexExpr or parent == NodeKind.SliceType
     }
     return false
 }
 
+// Tokens that can end an expression, i.e. that a postfix `..` glues to.
+fn ends_expression(kind: TokenKind) bool {
+    return kind == TokenKind.Identifier or kind == TokenKind.Integer or kind == TokenKind.Float
+        or kind == TokenKind.StringLiteral or kind == TokenKind.CharLiteral
+        or kind == TokenKind.ByteLiteral or kind == TokenKind.True or kind == TokenKind.False
+        or kind == TokenKind.Null or kind == TokenKind.Underscore
+        or kind == TokenKind.CloseParenthesis or kind == TokenKind.CloseBracket
+        or kind == TokenKind.CloseBrace or kind == TokenKind.InterpStringEnd
+        or kind == TokenKind.Question
+}
+
 fn is_dot_like(kind: TokenKind) bool {
-    return kind == TokenKind.Dot
-        or kind == TokenKind.DotDot
-        or kind == TokenKind.DotDotEquals
+    return kind == TokenKind.Dot or kind == TokenKind.DotDot or kind == TokenKind.DotDotEquals
         or kind == TokenKind.QuestionDot
 }
 
 fn is_binary_op(kind: TokenKind) bool {
-    return kind == TokenKind.Plus
-        or kind == TokenKind.Minus
-        or kind == TokenKind.Star
-        or kind == TokenKind.Slash
-        or kind == TokenKind.Percent
-        or kind == TokenKind.Ampersand
-        or kind == TokenKind.Pipe
-        or kind == TokenKind.Caret
-        or kind == TokenKind.ShiftLeft
-        or kind == TokenKind.ShiftRight
-        or kind == TokenKind.UnsignedShiftRight
+    return kind == TokenKind.Plus or kind == TokenKind.Minus or kind == TokenKind.Star
+        or kind == TokenKind.Slash or kind == TokenKind.Percent or kind == TokenKind.Ampersand
+        or kind == TokenKind.Pipe or kind == TokenKind.Caret or kind == TokenKind.ShiftLeft
+        or kind == TokenKind.ShiftRight or kind == TokenKind.UnsignedShiftRight
 }
 
 // ─────────────────────────────────────────────────────────────────────────
 // Verification
 // ─────────────────────────────────────────────────────────────────────────
 
-// Re-lex and re-parse the output and require that (1) it parses cleanly,
-// (2) its token stream matches the input's with commas set aside (commas
-// are the one token the separator policy may add or drop), and (3) the
-// parse trees have the same shape - so a comma edit that would change
-// what the code means can never survive.
+// Re-lex and re-parse the output and require that (1) it parses cleanly, (2) its token stream
+// matches the input's with commas and semicolons set aside (the tokens the separator policy may add
+// or drop), and (3) the parse trees have the same shape - so a comma edit that would change what
+// the code means can never survive.
 fn verify_output(tokens: &List(Token), cst: &CstNode, output: String) bool {
     let lx = lexer(output)
     let out_tokens = lx.tokenize()
@@ -938,47 +1156,68 @@ fn verify_output(tokens: &List(Token), cst: &CstNode, output: String) bool {
     let p = parser(out_tokens)
     defer p.deinit()
     const out_cst = p.parse_module()
-    if p.diagnostics.len > 0 { return false }
+    if p.diagnostics.len > 0 {
+        return false
+    }
 
-    if !same_tokens_modulo_commas(tokens, &out_tokens) { return false }
+    if !same_tokens_modulo_separators(tokens, &out_tokens) {
+        return false
+    }
     return same_shape(cst, &out_cst)
 }
 
-fn same_tokens_modulo_commas(a: &List(Token), b: &List(Token)) bool {
+fn same_tokens_modulo_separators(a: &List(Token), b: &List(Token)) bool {
     let i = 0usize
     let j = 0usize
     loop {
-        while i < a.len and a[i].kind == TokenKind.Comma { i = i + 1 }
-        while j < b.len and b[j].kind == TokenKind.Comma { j = j + 1 }
-        if i >= a.len or j >= b.len { break }
-        if a[i].kind != b[j].kind { return false }
-        if a[i].text != b[j].text { return false }
+        while i < a.len and is_separator_kind(a[i].kind) { i = i + 1 }
+        while j < b.len and is_separator_kind(b[j].kind) { j = j + 1 }
+        if i >= a.len or j >= b.len {
+            break
+        }
+        if a[i].kind != b[j].kind {
+            return false
+        }
+        if a[i].text != b[j].text {
+            return false
+        }
         i = i + 1
         j = j + 1
     }
     return i >= a.len and j >= b.len
 }
 
-// Structural equality of two CSTs, ignoring comma tokens.
+fn is_separator_kind(kind: TokenKind) bool {
+    return kind == TokenKind.Comma or kind == TokenKind.Semicolon
+}
+
+// Structural equality of two CSTs, ignoring the separator tokens the formatter may add or drop
+// (commas and statement semicolons).
 fn same_shape(a: &CstNode, b: &CstNode) bool {
-    if a.kind != b.kind { return false }
+    if a.kind != b.kind {
+        return false
+    }
     let i = 0usize
     let j = 0usize
     loop {
         while i < a.children.len and is_comma_child(&a.children[i]) { i = i + 1 }
         while j < b.children.len and is_comma_child(&b.children[j]) { j = j + 1 }
-        if i >= a.children.len or j >= b.children.len { break }
+        if i >= a.children.len or j >= b.children.len {
+            break
+        }
         const ok = a.children[i] match {
             NodeChild(xn) => b.children[j] match {
-                NodeChild(yn) => same_shape(&xn, &yn),
-                TokenChild(_) => false,
-            },
+                NodeChild(yn) => same_shape(&xn, &yn)
+                TokenChild(_) => false
+            }
             TokenChild(xt) => b.children[j] match {
-                NodeChild(_) => false,
-                TokenChild(yt) => xt.kind == yt.kind and xt.text == yt.text,
-            },
+                NodeChild(_) => false
+                TokenChild(yt) => xt.kind == yt.kind and xt.text == yt.text
+            }
         }
-        if !ok { return false }
+        if !ok {
+            return false
+        }
         i = i + 1
         j = j + 1
     }
@@ -987,8 +1226,8 @@ fn same_shape(a: &CstNode, b: &CstNode) bool {
 
 fn is_comma_child(child: &CstChild) bool {
     return child.* match {
-        TokenChild(t) => t.kind == TokenKind.Comma,
-        NodeChild(_) => false,
+        TokenChild(t) => is_separator_kind(t.kind)
+        NodeChild(_) => false
     }
 }
 
@@ -996,15 +1235,16 @@ fn is_comma_child(child: &CstChild) bool {
 // Line hygiene + blank lines
 // ─────────────────────────────────────────────────────────────────────────
 
-// The renderer emits LF-only text with no final newline guarantee; this
-// reflows comment prose, adds the single trailing newline, and re-expands
-// to CRLF when the original file used it.
+// The renderer emits LF-only text with no final newline guarantee; this reflows comment prose, adds
+// the single trailing newline, and re-expands to CRLF when the original file used it.
 fn normalize(rendered: String, original: String, cfg: &FmtConfig) OwnedString {
     const reflow_width = if cfg.reflow_comments { cfg.max_width } else { 0usize }
     const reflowed = reflow_comments(rendered, reflow_width)
     const unix = ensure_single_trailing_newline(reflowed.as_view())
     reflowed.deinit()
-    if !uses_crlf(original) { return unix }
+    if !uses_crlf(original) {
+        return unix
+    }
     const final = expand_crlf(unix.as_view())
     unix.deinit()
     return final
@@ -1013,10 +1253,9 @@ fn normalize(rendered: String, original: String, cfg: &FmtConfig) OwnedString {
 // ─────────────────────────────────────────────────────────────────────────
 // Comment reflow
 //
-// Consecutive own-line `//` comments that read as plain prose re-fill to
-// `width` columns, so narrow historical wrapping widens and over-long
-// prose breaks. Structure is left alone; a line ends its paragraph (and is
-// emitted verbatim) when any of these hold:
+// Consecutive own-line `//` comments that read as plain prose re-fill to `width` columns, so narrow
+// historical wrapping widens and over-long prose breaks. Structure is left alone; a line ends its
+// paragraph (and is emitted verbatim) when any of these hold:
 //
 //   - it is not an own-line comment (code, blank line, trailing comment)
 //   - its text starts with a list/table/ruler character (* + | > # = ~
@@ -1029,15 +1268,16 @@ fn normalize(rendered: String, original: String, cfg: &FmtConfig) OwnedString {
 //   - it contains a non-ASCII byte (box drawing, arrows)
 //   - it is an empty `//` (a paragraph separator)
 //
-// A short line also ends its paragraph: only a line filled past half of
-// `width` joins with its successor, so deliberate short lines ("Build:
-// ...", one-line notes) stay put while historical 70-80 column fills
-// join. The fill itself never breaks a line before it passes that same
-// halfway mark, which keeps refilled output stable under a second reflow.
+// A short line also ends its paragraph: only a line filled past half of `width` joins with its
+// successor, so deliberate short lines ("Build: ...", one-line notes) stay put while historical
+// 70-80 column fills join. The fill itself never breaks a line before it passes that same halfway
+// mark, which keeps refilled output stable under a second reflow.
 // ─────────────────────────────────────────────────────────────────────────
 
 fn reflow_comments(text: String, width: usize) OwnedString {
-    if width == 0 { return from_view(text) }
+    if width == 0 {
+        return from_view(text)
+    }
     const threshold = width / 2
     let sb = string_builder(text.len + 64)
     let words: List(String) = list(0)
@@ -1056,11 +1296,10 @@ fn reflow_comments(text: String, width: usize) OwnedString {
         const has_nl = nl < text.len
 
         const parsed = parse_comment_line(line)
-        // Mid-paragraph: the previous line was full prose at this indent
-        // and did not introduce a list. Decides whether a leading `- ` is
-        // a wrapped aside (joins) or a bullet (verbatim).
-        const mid = words.len > 0 and parsed.0 == para_indent
-            and last_len > threshold and !last_colon
+        // Mid-paragraph: the previous line was full prose at this indent and did not introduce a
+        // list. Decides whether a leading `- ` is a wrapped aside (joins) or a bullet (verbatim).
+        const mid = words.len > 0 and parsed.0 == para_indent and last_len > threshold
+            and !last_colon
         if parsed.2 and is_comment_prose(parsed.1, mid) {
             if words.len > 0 and (parsed.0 != para_indent or last_len <= threshold) {
                 flush_paragraph(&sb, &words, para_indent, width, threshold)
@@ -1089,8 +1328,12 @@ fn parse_comment_line(line: String) (usize, String, bool) {
     while i < line.len and line[i] == ' ' {
         i = i + 1
     }
-    if i + 1 >= line.len { return (0, "", false) }
-    if line[i] != '/' or line[i + 1] != '/' { return (0, "", false) }
+    if i + 1 >= line.len {
+        return (0, "", false)
+    }
+    if line[i] != '/' or line[i + 1] != '/' {
+        return (0, "", false)
+    }
     let content = line[(i + 2)..line.len]
     if content.len > 0 and content[0] == ' ' {
         content = content[1..content.len]
@@ -1099,10 +1342,12 @@ fn parse_comment_line(line: String) (usize, String, bool) {
 }
 
 fn is_comment_prose(content: String, mid_paragraph: bool) bool {
-    if content.len == 0 { return false }
+    if content.len == 0 {
+        return false
+    }
     const c0 = content[0]
-    if c0 == ' ' or c0 == '*' or c0 == '+' or c0 == '|' or c0 == '>'
-        or c0 == '#' or c0 == '=' or c0 == '~' or c0 == '/' {
+    if c0 == ' ' or c0 == '*' or c0 == '+' or c0 == '|' or c0 == '>' or c0 == '#' or c0 == '='
+        or c0 == '~' or c0 == '/' {
         return false
     }
     // A leading dash mid-paragraph is a wrapped aside ("... the state byte
@@ -1110,10 +1355,12 @@ fn is_comment_prose(content: String, mid_paragraph: bool) bool {
     if c0 == '-' {
         return mid_paragraph
     }
-    // A leading backtick is a code fence only when tripled; a single one
-    // opens inline code, which is prose.
+    // A leading backtick is a code fence only when tripled; a single one opens inline code, which
+    // is prose.
     if c0 == '`' {
-        if content.len >= 3 and content[1] == '`' and content[2] == '`' { return false }
+        if content.len >= 3 and content[1] == '`' and content[2] == '`' {
+            return false
+        }
     }
     // Numbered-list head: digits, a dot, then a space or the end.
     let d: usize = 0
@@ -1121,12 +1368,18 @@ fn is_comment_prose(content: String, mid_paragraph: bool) bool {
         d = d + 1
     }
     if d > 0 and d < content.len and content[d] == '.' {
-        if d + 1 >= content.len or content[d + 1] == ' ' { return false }
+        if d + 1 >= content.len or content[d + 1] == ' ' {
+            return false
+        }
     }
     let i: usize = 0
     while i < content.len {
-        if content[i] >= 0x80 as u8 { return false }
-        if content[i] == ' ' and i + 1 < content.len and content[i + 1] == ' ' { return false }
+        if content[i] >= 0x80 as u8 {
+            return false
+        }
+        if content[i] == ' ' and i + 1 < content.len and content[i + 1] == ' ' {
+            return false
+        }
         i = i + 1
     }
     return true
@@ -1147,11 +1400,14 @@ fn push_words(words: &List(String), content: String) {
     }
 }
 
-// Greedy fill: a line takes words until the next would pass `width`, but
-// never breaks before passing `threshold` - a huge word may push a line
-// over `width` instead of leaving a short line behind.
-fn flush_paragraph(sb: &StringBuilder, words: &List(String), indent: usize, width: usize, threshold: usize) {
-    if words.len == 0 { return }
+// Greedy fill: a line takes words until the next would pass `width`, but never breaks before
+// passing `threshold` - a huge word may push a line over `width` instead of leaving a short line
+// behind.
+fn flush_paragraph(sb: &StringBuilder, words: &List(String), indent: usize, width: usize,
+    threshold: usize) {
+    if words.len == 0 {
+        return
+    }
     let col: usize = 0
     for i in 0..words.len {
         const w = words[i]
@@ -1178,8 +1434,8 @@ fn open_comment_line(sb: &StringBuilder, indent: usize) {
     sb.append("//")
 }
 
-// The file's prevailing line ending, decided by its first newline. A file
-// with no newline defaults to LF.
+// The file's prevailing line ending, decided by its first newline. A file with no newline defaults
+// to LF.
 fn uses_crlf(source: String) bool {
     let i = 0usize
     while i < source.len {
@@ -1204,11 +1460,10 @@ fn expand_crlf(source: String) OwnedString {
     return sb.to_string()
 }
 
-
-
 fn ensure_single_trailing_newline(source: String) OwnedString {
     let end = source.len
-    while end > 0 and (source[end - 1] == ' ' or source[end - 1] == '\t' or source[end - 1] == '\n') {
+    while end > 0 and (source[end - 1] == ' ' or source[end - 1] == '\t'
+        or source[end - 1] == '\n') {
         end = end - 1
     }
     let sb = string_builder(end + 1)
@@ -1218,7 +1473,6 @@ fn ensure_single_trailing_newline(source: String) OwnedString {
     }
     return sb.to_string()
 }
-
 
 // ─────────────────────────────────────────────────────────────────────────
 // Tests
@@ -1280,10 +1534,12 @@ test "unary and call positions glue" {
 
 test "indentation recomputed from nesting" {
     const cfg = default_config()
-    const r = format_source("fn f() {\nlet x = 1\n        if x > 0 {\n   return\n      }\n}\n", &cfg)
+    const r = format_source("fn f() {\nlet x = 1\n        if x > 0 {\n   return\n      }\n}\n",
+        &cfg)
     let out = r.unwrap()
     defer out.deinit()
-    assert_true(out.as_view() == "fn f() {\n    let x = 1\n    if x > 0 {\n        return\n    }\n}\n", "reindented")
+    assert_true(out.as_view() == "fn f() {\n    let x = 1\n    if x > 0 {\n        return\n    }\n}\n",
+        "reindented")
 }
 
 test "operator continuation lines join when they fit" {
@@ -1300,7 +1556,8 @@ test "group newlines join and re-wrap at width" {
     const r = format_source("fn f() {\n    ggg(aaaaaaaa,\n    bbbbbbbb,\n    cccccccc)\n}\n", &cfg)
     let out = r.unwrap()
     defer out.deinit()
-    assert_true(out.as_view() == "fn f() {\n    ggg(aaaaaaaa,\n        bbbbbbbb,\n        cccccccc)\n}\n", "rewrapped")
+    assert_true(out.as_view() == "fn f() {\n    ggg(aaaaaaaa,\n        bbbbbbbb,\n        cccccccc)\n}\n",
+        "rewrapped")
 }
 
 test "join-lines false keeps authored breaks" {
@@ -1309,7 +1566,8 @@ test "join-lines false keeps authored breaks" {
     const r = format_source("fn f(a: bool, b: bool) bool {\n    return a\n        or b\n}\n", &cfg)
     let out = r.unwrap()
     defer out.deinit()
-    assert_true(out.as_view() == "fn f(a: bool, b: bool) bool {\n    return a\n        or b\n}\n", "kept split")
+    assert_true(out.as_view() == "fn f(a: bool, b: bool) bool {\n    return a\n        or b\n}\n",
+        "kept split")
 }
 
 test "blank lines and comments block joining" {
@@ -1332,10 +1590,12 @@ test "statements inside a lambda argument never join" {
 
 test "trailing comment gets one space, own-line comment indents" {
     const cfg = default_config()
-    const r = format_source("fn f() {\n    let x = 1      // note\n        // next\n    return\n}\n", &cfg)
+    const r = format_source("fn f() {\n    let x = 1      // note\n        // next\n    return\n}\n",
+        &cfg)
     let out = r.unwrap()
     defer out.deinit()
-    assert_true(out.as_view() == "fn f() {\n    let x = 1 // note\n    // next\n    return\n}\n", "comments placed")
+    assert_true(out.as_view() == "fn f() {\n    let x = 1 // note\n    // next\n    return\n}\n",
+        "comments placed")
 }
 
 test "interpolated strings keep authored spacing" {
@@ -1350,10 +1610,12 @@ test "interpolated strings keep authored spacing" {
 test "multiline lists gain a trailing comma, single-line lists lose it" {
     let cfg = default_config()
     assert_true(set_option(&cfg, "join-lines", "false"), "keep layout")
-    const r = format_source("fn f(a: i32, b: i32,) i32 {\n    return g(\n        a,\n        b\n    )\n}\n", &cfg)
+    const r = format_source("fn f(a: i32, b: i32,) i32 {\n    return g(\n        a,\n        b\n    )\n}\n",
+        &cfg)
     let out = r.unwrap()
     defer out.deinit()
-    assert_true(out.as_view() == "fn f(a: i32, b: i32) i32 {\n    return g(\n        a,\n        b,\n    )\n}\n", "trailing commas normalized")
+    assert_true(out.as_view() == "fn f(a: i32, b: i32) i32 {\n    return g(\n        a,\n        b,\n    )\n}\n",
+        "trailing commas normalized")
 }
 
 test "trailing-comma no strips multiline trailing commas" {
@@ -1363,7 +1625,8 @@ test "trailing-comma no strips multiline trailing commas" {
     const r = format_source("fn f(a: i32) i32 {\n    return g(\n        a,\n    )\n}\n", &cfg)
     let out = r.unwrap()
     defer out.deinit()
-    assert_true(out.as_view() == "fn f(a: i32) i32 {\n    return g(\n        a\n    )\n}\n", "stripped")
+    assert_true(out.as_view() == "fn f(a: i32) i32 {\n    return g(\n        a\n    )\n}\n",
+        "stripped")
 }
 
 test "narrow comment prose refills to width" {
@@ -1372,7 +1635,8 @@ test "narrow comment prose refills to width" {
     const r = format_source(src, &cfg)
     let out = r.unwrap()
     defer out.deinit()
-    assert_true(out.as_view() == "// aaa bbb ccc ddd eee fff ggg hhh iii jjj kkk lll mmm nnn ooo ppp qqq rrr sss ttt uuu vvv www xxx\n// yyy zzz aab aac aad aae aaf aag aah aai aaj aak aal aam aan aao\nfn f() {}\n", "refilled")
+    assert_true(out.as_view() == "// aaa bbb ccc ddd eee fff ggg hhh iii jjj kkk lll mmm nnn ooo ppp qqq rrr sss ttt uuu vvv www xxx\n// yyy zzz aab aac aad aae aaf aag aah aai aaj aak aal aam aan aao\nfn f() {}\n",
+        "refilled")
 }
 
 test "list and ruler comments are not reflowed" {
@@ -1396,10 +1660,12 @@ test "reflow-comments false keeps narrow prose" {
 
 test "newline-separated match arm commas are stripped" {
     const cfg = default_config()
-    const r = format_source("fn f(a: i32) i32 {\n    return a match {\n        1 => 2,\n        else => 3,\n    }\n}\n", &cfg)
+    const r = format_source("fn f(a: i32) i32 {\n    return a match {\n        1 => 2,\n        else => 3,\n    }\n}\n",
+        &cfg)
     let out = r.unwrap()
     defer out.deinit()
-    assert_true(out.as_view() == "fn f(a: i32) i32 {\n    return a match {\n        1 => 2\n        else => 3\n    }\n}\n", "arm commas dropped")
+    assert_true(out.as_view() == "fn f(a: i32) i32 {\n    return a match {\n        1 => 2\n        else => 3\n    }\n}\n",
+        "arm commas dropped")
 }
 
 test "single-line bodies keep their commas" {
@@ -1414,10 +1680,12 @@ test "single-line bodies keep their commas" {
 test "over-long call wraps at its last fitting comma" {
     let cfg = default_config()
     assert_true(set_option(&cfg, "max-width", "40"), "width set")
-    const r = format_source("fn f(aaaaaaaa: i32, bbbbbbbb: i32, cccccccc: i32, dddddddd: i32) i32 {\n    return 0\n}\n", &cfg)
+    const r = format_source("fn f(aaaaaaaa: i32, bbbbbbbb: i32, cccccccc: i32, dddddddd: i32) i32 {\n    return 0\n}\n",
+        &cfg)
     let out = r.unwrap()
     defer out.deinit()
-    assert_true(out.as_view() == "fn f(aaaaaaaa: i32, bbbbbbbb: i32,\n    cccccccc: i32, dddddddd: i32) i32 {\n    return 0\n}\n", "wrapped at comma")
+    assert_true(out.as_view() == "fn f(aaaaaaaa: i32, bbbbbbbb: i32,\n    cccccccc: i32, dddddddd: i32) i32 {\n    return 0\n}\n",
+        "wrapped at comma")
 }
 
 test "max-width 0 disables wrapping" {
@@ -1428,6 +1696,176 @@ test "max-width 0 disables wrapping" {
     let out = r.unwrap()
     defer out.deinit()
     assert_true(out.as_view() == src, "long line kept")
+}
+
+test "builder-targeted interpolation glues to its identifier" {
+    const cfg = default_config()
+    const src = "fn f(sb: &StringBuilder, x: i32) {
+    $sb\"got {x}\"
+}
+"
+    const r = format_source(src, &cfg)
+    let out = r.unwrap()
+    defer out.deinit()
+    assert_true(out.as_view() == src, "target form unchanged")
+}
+
+test "open-started ranges keep their space" {
+    const cfg = default_config()
+    const src = "fn f(a: u8[]) {
+    for i in ..a.len {
+        g(a[0..i], a[i..])
+    }
+}
+"
+    const r = format_source(src, &cfg)
+    let out = r.unwrap()
+    defer out.deinit()
+    assert_true(out.as_view() == src, "prefix .. spaced, infix .. glued")
+}
+
+test "generator template bodies are verbatim" {
+    const cfg = default_config()
+    const src = "#define(iface, Name: Ident) {
+    type #(Name)Vtable = struct {
+        f: fn(ctx: &u8,
+            x: i32) i32
+    }
+}
+"
+    const r = format_source(src, &cfg)
+    let out = r.unwrap()
+    defer out.deinit()
+    assert_true(out.as_view() == src, "splice adjacency and breaks kept")
+}
+
+test "enum discriminants keep negative literals glued" {
+    const cfg = default_config()
+    const src = "type Ord = enum {
+    Less = -1
+    Equal = 0
+}
+"
+    const r = format_source(src, &cfg)
+    let out = r.unwrap()
+    defer out.deinit()
+    assert_true(out.as_view() == src, "-1 stays one unit")
+}
+
+test "one-element tuple commas are grammar, not style" {
+    const cfg = default_config()
+    const src = "fn f(x: (i32,)) (i32,) {
+    return x
+}
+"
+    const r = format_source(src, &cfg)
+    let out = r.unwrap()
+    defer out.deinit()
+    assert_true(out.as_view() == src, "(T,) comma kept")
+}
+
+test "semicolon chains break into one statement per line" {
+    const cfg = default_config()
+    const r = format_source("fn f(sb: &StringBuilder) {
+    g() match {
+        1 => { sb.append(\"a\"); sb.append(\"b\"); sb.append(\"c\") }
+        else => {}
+    }
+}
+",
+        &cfg)
+    let out = r.unwrap()
+    defer out.deinit()
+    assert_true(out.as_view() == "fn f(sb: &StringBuilder) {
+    g() match {
+        1 => {
+            sb.append(\"a\")
+            sb.append(\"b\")
+            sb.append(\"c\")
+        }
+        else => {}
+    }
+}
+",
+        "arm body reflowed")
+}
+
+test "semicolons keep leaves them alone" {
+    let cfg = default_config()
+    assert_true(set_option(&cfg, "semicolons", "keep"), "knob set")
+    const src = "fn f() {
+    a(); b()
+}
+"
+    const r = format_source(src, &cfg)
+    let out = r.unwrap()
+    defer out.deinit()
+    assert_true(out.as_view() == src, "kept")
+}
+
+test "statement ifs go multiline, guards included" {
+    const cfg = default_config()
+    const r = format_source("fn f(x: bool) i32 {
+    if x { return 1 }
+    if x { g() } else { h() }
+    return 0
+}
+",
+        &cfg)
+    let out = r.unwrap()
+    defer out.deinit()
+    assert_true(out.as_view() == "fn f(x: bool) i32 {
+    if x {
+        return 1
+    }
+    if x {
+        g()
+    } else {
+        h()
+    }
+    return 0
+}
+",
+        "stmt ifs broken")
+}
+
+test "expression ifs may stay single-line" {
+    const cfg = default_config()
+    const src = "fn f(c: bool) i32 {
+    const x = if c { 1 } else { 2 }
+    return if c { x } else { 0 }
+}
+"
+    const r = format_source(src, &cfg)
+    let out = r.unwrap()
+    defer out.deinit()
+    assert_true(out.as_view() == src, "expr ifs untouched")
+}
+
+test "if-stmt keep preserves one-line guards" {
+    let cfg = default_config()
+    assert_true(set_option(&cfg, "if-stmt", "keep"), "knob set")
+    const src = "fn f(x: bool) i32 {
+    if x { return 1 }
+    return 0
+}
+"
+    const r = format_source(src, &cfg)
+    let out = r.unwrap()
+    defer out.deinit()
+    assert_true(out.as_view() == src, "guard kept")
+}
+
+test "array types keep their semicolon" {
+    const cfg = default_config()
+    const src = "fn f() {
+    let buf = [0u8; 256]
+}
+"
+    const r = format_source(src, &cfg)
+    let out = r.unwrap()
+    defer out.deinit()
+    assert_true(out.as_view() == src, "[T; N] untouched")
 }
 
 test "parse errors refuse to format" {

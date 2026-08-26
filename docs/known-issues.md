@@ -1670,6 +1670,16 @@ A line over `max-width` breaks after its last fitting list comma or before `and`
 
 ---
 
+### Self-host: single-file builds load the whole stdlib, breaking cross-target links on Windows
+
+**Status:** Open (pre-existing, exposed 2026-08-27)
+
+The self-hosted compiler's single-file mode compiles every std module (61 modules for a bare `main`), not just the prelude's import closure; the reference loads imports only. Consequence: `tests/harness/directives/if_directive_cross_target.f` (`TARGET-OS: linux`) emits `std.readline`/`std.terminal` POSIX branches and fails to link on a Windows host (`tcgetattr`, `ioctl` unresolved). The reference compiler passes the same test. Unrelated to formatting: reproduced with fully unformatted sources.
+
+**Fix direction:** restrict single-file module loading to the transitive import closure, or skip emission of functions in modules nothing imports.
+
+---
+
 ## Future Architectural Changes
 
 ### Generic Instantiation: AST Cloning vs Side Table

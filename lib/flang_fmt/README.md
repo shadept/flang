@@ -50,6 +50,10 @@ A `[fmt]` table in the project's `flang.toml`; every key optional.
 | `separators` | `"no"` | same values; optional commas in struct/enum bodies and match arms |
 | `join-lines` | `true` | re-flow layout breaks to `max-width` |
 | `reflow-comments` | `true` | re-fill comment prose to `max-width` |
+| `semicolons` | `"remove"` | `remove` / `keep` - `a(); b()` becomes one statement per line |
+| `if-stmt` | `"multiline"` | `multiline` / `keep` - single-line statement `if x { ... }` (guards included) |
+| `if-else-stmt` | `"multiline"` | same values - statement `if/else` |
+| `if-expr` | `"keep"` | same values - `if` in expression position |
 
 Full style semantics: `docs/architecture.md`, section "Formatter".
 
