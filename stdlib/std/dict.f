@@ -3,6 +3,13 @@
 //
 // Probing uses bounded for-in loops over 0..capacity with break,
 // which avoids the need for while loops.
+//
+// The stored hash doubles as the slot state (the combined-hash trick):
+// 0 is EMPTY, 1 is a tombstone, and >= 2 is an occupied slot holding the
+// key's hash. `hash_key` remaps the two reserved values (`h < 2` becomes
+// `h + 2`), a negligible dent in a 64-bit hash space, and the state byte
+// - and its alignment padding - disappears from every entry. A zeroed
+// table is all-empty, so `alloc_table` and `clear` stay a plain memset.
 
 import std.allocator
 import std.mem
@@ -10,11 +17,13 @@ import std.option
 import std.string
 import std.test
 
-// Entry states: 0 = empty, 1 = occupied, 2 = tombstone
+const HASH_EMPTY: usize = 0
+const HASH_DEAD: usize = 1
 
-// A single entry in the hash map.
+// A single entry in the hash map. `hash` is also the slot state - see
+// the header comment; `key` and `value` are meaningful only when it is
+// at least 2.
 pub type Entry = struct(K, V) {
-    state: u8
     hash: usize
     key: K
     value: V
@@ -40,6 +49,42 @@ pub fn dict(allocator: &Allocator? = null) Dict($K, $V) {
     return result
 }
 
+pub fn dict(capacity: usize, allocator: &Allocator) Dict($K, $V) {
+    return dict(capacity, Some(allocator))
+}
+
+// Construct a Dict whose table starts at `capacity` slots, rounded up to
+// a power of two (`probe_slot` masks instead of dividing; minimum 8).
+// Growth still triggers at the 75% load factor, so the table holds about
+// three quarters of `capacity` entries before its first rehash.
+// `dict(0)` is the lazy empty form.
+pub fn dict(capacity: usize, allocator: &Allocator? = null) Dict($K, $V) {
+    let result: Dict(K, V)
+    result.allocator = allocator
+    if capacity > 0 {
+        alloc_table(&result, next_pow2_min8(capacity))
+    }
+    return result
+}
+
+// The smallest power of two at or above `v`, floored at 8 - every
+// capacity branch must yield one, or `probe_slot`'s mask breaks.
+fn next_pow2_min8(v: usize) usize {
+    let n: usize = 8
+    while n < v { n = n * 2 }
+    return n
+}
+
+// Install a zeroed table of `cap` slots (all states empty). `cap` must
+// be a power of two.
+fn alloc_table(self: &Dict($K, $V), cap: usize) {
+    const alloc_size: usize = cap * size_of(Entry(K, V))
+    const raw: u8[] = self.allocator.or_global().alloc(alloc_size, 8).expect("dict: allocation failed")
+    memset(raw.ptr, 0, alloc_size)
+    self.entries = raw.ptr as &Entry(K, V)
+    self.cap = cap
+}
+
 // Bytes the bucket array occupies. Counts every slot, live or not: a dict
 // holds `cap` slots and `len` of them carry an entry. What a key or value
 // owns on the heap of its own is not in here.
@@ -54,7 +99,7 @@ pub fn deinit(self: &Dict($K, $V)) {
         // Deinit all occupied keys and values
         for i in 0..self.cap as isize {
             const entry: &Entry(K, V) = self.entries + (i as usize)
-            if entry.state == 1 {
+            if entry.hash >= 2 {
                 entry.key.deinit()
                 entry.value.deinit()
             }
@@ -77,11 +122,14 @@ fn probe_slot(h: usize, i: usize, cap: usize) usize {
     return (h + i) & (cap - 1)
 }
 
-// Hash a key using the public hash() function.
-// Types with custom hash semantics (e.g. String, OwnedString) provide their
-// own hash() overload, so Dict automatically uses content-aware hashing.
+// Hash a key using the public hash() function, remapped off the two
+// reserved slot states. Types with custom hash semantics (e.g. String,
+// OwnedString) provide their own hash() overload, so Dict automatically
+// uses content-aware hashing.
 fn hash_key(key: $K) usize {
-    return hash(key)
+    const h = hash(key)
+    if h < 2 { return h + 2 }
+    return h
 }
 
 // Returns the number of key-value pairs in the dict.
@@ -113,13 +161,7 @@ fn ensure_capacity(self: &Dict($K, $V)) {
         new_cap = if self.length * 2 <= old_cap { old_cap } else { old_cap * 2 }
     }
 
-    // Allocate new entry array, zero-initialized (all states = empty)
-    const alloc_size: usize = new_cap * size_of(Entry(K, V))
-    const raw: u8[] = self.allocator.or_global().alloc(alloc_size, 8).expect("dict: allocation failed")
-    memset(raw.ptr, 0, alloc_size)
-
-    self.entries = raw.ptr as &Entry(K, V)
-    self.cap = new_cap
+    alloc_table(self, new_cap)
     self.length = 0
     self.dead = 0
 
@@ -127,7 +169,7 @@ fn ensure_capacity(self: &Dict($K, $V)) {
     if old_cap > 0 {
         for i in 0..old_cap as isize {
             const old_entry: &Entry(K, V) = old_entries + (i as usize)
-            if old_entry.state == 1 {
+            if old_entry.hash >= 2 {
                 self.set(old_entry.key, old_entry.value)
             }
         }
@@ -146,14 +188,13 @@ pub fn set(self: &Dict($K, $V), key: K, value: V) {
         const idx: usize = probe_slot(h, i as usize, self.cap)
         const entry: &Entry(K, V) = self.entries + idx
 
-        if entry.state == 0 {
+        if entry.hash == HASH_EMPTY {
             // Empty slot: use tombstone slot if we passed one, otherwise this slot
             const target_idx: usize = if tombstone_idx < self.cap { tombstone_idx } else { idx }
             if tombstone_idx < self.cap {
                 self.dead = self.dead - 1
             }
             const target: &Entry(K, V) = self.entries + target_idx
-            target.state = 1
             target.hash = h
             target.key = key
             target.value = value
@@ -161,7 +202,7 @@ pub fn set(self: &Dict($K, $V), key: K, value: V) {
             return
         }
 
-        if entry.state == 2 {
+        if entry.hash == HASH_DEAD {
             // Tombstone: remember first one for potential reuse
             if tombstone_idx == self.cap {
                 tombstone_idx = idx
@@ -169,7 +210,8 @@ pub fn set(self: &Dict($K, $V), key: K, value: V) {
             continue
         }
 
-        // Occupied: check if same key
+        // Occupied: check if same key. A stored hash is >= 2, so it can
+        // never collide with the reserved states.
         if entry.hash == h {
             if entry.key == key {
                 // Key already exists: deinit old value and unused new key
@@ -197,14 +239,13 @@ pub fn set(self: &Dict(OwnedString, $V), key: String, value: V) {
         const idx: usize = probe_slot(h, i as usize, self.cap)
         const entry: &Entry(OwnedString, V) = self.entries + idx
 
-        if entry.state == 0 {
+        if entry.hash == HASH_EMPTY {
             // Empty slot: allocate owned key and insert
             const target_idx: usize = if tombstone_idx < self.cap { tombstone_idx } else { idx }
             if tombstone_idx < self.cap {
                 self.dead = self.dead - 1
             }
             const target: &Entry(OwnedString, V) = self.entries + target_idx
-            target.state = 1
             target.hash = h
             target.key = from_view(key, self.allocator)
             target.value = value
@@ -212,7 +253,7 @@ pub fn set(self: &Dict(OwnedString, $V), key: String, value: V) {
             return
         }
 
-        if entry.state == 2 {
+        if entry.hash == HASH_DEAD {
             if tombstone_idx == self.cap {
                 tombstone_idx = idx
             }
@@ -257,18 +298,17 @@ pub fn get_ref(self: Dict($K, $V), key: K) &V? {
         const idx: usize = probe_slot(h, i as usize, self.cap)
         const entry: &Entry(K, V) = self.entries + idx
 
-        if entry.state == 0 {
+        if entry.hash == HASH_EMPTY {
             return null
         }
 
-        if entry.state == 1 {
-            if entry.hash == h {
-                if entry.key == key {
-                    return Some(&entry.value)
-                }
+        // A stored hash is >= 2, so a hash match implies an occupied
+        // slot; tombstones (1) fall through and keep probing.
+        if entry.hash == h {
+            if entry.key == key {
+                return Some(&entry.value)
             }
         }
-        // Tombstone (2): continue probing
     }
 
     return null
@@ -295,15 +335,13 @@ pub fn contains(self: Dict($K, $V), key: K) bool {
         const idx: usize = probe_slot(h, i as usize, self.cap)
         const entry: &Entry(K, V) = self.entries + idx
 
-        if entry.state == 0 {
+        if entry.hash == HASH_EMPTY {
             return false
         }
 
-        if entry.state == 1 {
-            if entry.hash == h {
-                if entry.key == key {
-                    return true
-                }
+        if entry.hash == h {
+            if entry.key == key {
+                return true
             }
         }
     }
@@ -336,20 +374,18 @@ pub fn remove(self: &Dict($K, $V), key: K) V? {
         const idx: usize = probe_slot(h, i as usize, self.cap)
         const entry: &Entry(K, V) = self.entries + idx
 
-        if entry.state == 0 {
+        if entry.hash == HASH_EMPTY {
             return null
         }
 
-        if entry.state == 1 {
-            if entry.hash == h {
-                if entry.key == key {
-                    const val: V = entry.value
-                    entry.key.deinit()
-                    entry.state = 2
-                    self.length = self.length - 1
-                    self.dead = self.dead + 1
-                    return Some(val)
-                }
+        if entry.hash == h {
+            if entry.key == key {
+                const val: V = entry.value
+                entry.key.deinit()
+                entry.hash = HASH_DEAD
+                self.length = self.length - 1
+                self.dead = self.dead + 1
+                return Some(val)
             }
         }
     }
@@ -363,7 +399,7 @@ pub fn clear(self: &Dict($K, $V)) {
     if self.cap > 0 {
         for i in 0..self.cap as isize {
             const entry: &Entry(K, V) = self.entries + (i as usize)
-            if entry.state == 1 {
+            if entry.hash >= 2 {
                 entry.key.deinit()
                 entry.value.deinit()
             }
@@ -399,7 +435,7 @@ pub fn iter(it: &DictIterator($K, $V)) DictIterator(K, V) {
 pub fn next(it: &DictIterator($K, $V)) Entry(K, V)? {
     for idx in it.current..it.dict.cap {
         const entry: &Entry(K, V) = it.dict.entries + idx
-        if entry.state == 1 {
+        if entry.hash >= 2 {
             it.current = idx + 1
             // Wrapped explicitly - see the note in core/range.f::next.
             return Some(entry.*)
@@ -407,6 +443,41 @@ pub fn next(it: &DictIterator($K, $V)) Entry(K, V)? {
     }
     it.current = it.dict.cap
     return null
+}
+
+test "a capacity constructor preallocates a power-of-two table" {
+    let d: Dict(u32, u32) = dict(100)
+    defer d.deinit()
+    assert_eq(d.cap, 128 as usize, "rounded up to the next power of two")
+    for i in 0..64 {
+        d.set(i as u32, i as u32)
+    }
+    assert_eq(d.cap, 128 as usize, "no growth below the load factor")
+    assert_eq(d.len(), 64 as usize, "every entry present")
+
+    let e: Dict(u32, u32) = dict(32768)
+    defer e.deinit()
+    assert_eq(e.cap, 32768 as usize, "an exact power of two is kept")
+
+    let z: Dict(u32, u32) = dict(0)
+    defer z.deinit()
+    assert_eq(z.cap, 0 as usize, "zero stays the lazy empty form")
+}
+
+test "a key whose hash is a reserved state still round-trips" {
+    // mix64(0) is 0, so the key 0u32 naturally hashes to EMPTY's reserved
+    // value - `hash_key` must remap it or the entry reads as a hole.
+    let d: Dict(u32, i32) = dict()
+    defer d.deinit()
+    d.set(0u32, 7i32)
+    d.set(9u32, 9i32)
+    assert_eq(d.get(0u32).unwrap(), 7i32, "the remapped key reads back")
+    assert_true(d.contains(0u32), "and is visible to contains")
+    assert_eq(d.remove(0u32).unwrap(), 7i32, "and removes")
+    assert_true(!d.contains(0u32), "gone after removal")
+    d.set(0u32, 8i32)
+    assert_eq(d.get(0u32).unwrap(), 8i32, "reinserts through the tombstone")
+    assert_eq(d.len(), 2 as usize, "the other entry is untouched")
 }
 
 test "delete-heavy churn never fills the table" {
