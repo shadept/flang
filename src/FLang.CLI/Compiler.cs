@@ -214,17 +214,13 @@ public class Compiler
         // (and stdlib's) blocks are that project's concern, run from its directory —
         // otherwise every consumer re-runs the whole transitive suite. The project's
         // own sources are exactly the compilation's entry inputs; deps arrive via
-        // module resolution, not this list.
-        var testModules = new HashSet<ModuleNode>();
+        // module resolution, not this list. Membership is by source path: template
+        // expansion replaces a module's ModuleNode, so the node set is built later,
+        // after expansion.
+        var ownTestSources = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         if (options.RunTests)
-        {
-            var ownSources = new HashSet<string>(
-                (options.InputFilePaths ?? []).Select(Path.GetFullPath),
-                StringComparer.OrdinalIgnoreCase);
-            foreach (var kvp in parsedModules)
-                if (ownSources.Contains(Path.GetFullPath(kvp.Key)))
-                    testModules.Add(kvp.Value);
-        }
+            foreach (var path in options.InputFilePaths ?? [])
+                ownTestSources.Add(Path.GetFullPath(path));
 
         if (options.DumpTemplates)
         {
@@ -328,6 +324,12 @@ public class Compiler
         {
             return new CompilationResult(false, null, allDiagnostics, compilation);
         }
+
+        // Post-expansion module nodes are final; resolve the own-source paths to them.
+        var testModules = new HashSet<ModuleNode>();
+        foreach (var kvp in parsedModules)
+            if (ownTestSources.Contains(Path.GetFullPath(kvp.Key)))
+                testModules.Add(kvp.Value);
 
         foreach (var kvp in parsedModules)
             hmChecker.CollectFunctionSignatures(kvp.Value, ResolveModulePath(kvp.Key));
