@@ -1,7 +1,7 @@
 # RFC-023: Language server - in-process, self-hosted, retires FLang.Lsp
 
 **Type:** Compiler tool + stdlib addition
-**Status:** Proposed
+**Status:** In progress - phases 1-2 landed (`std.rpc.jsonrpc`; `lib/flang_lsp` skeleton: lifecycle, encoding negotiation, full sync, line index; in-process `flang lsp`)
 **Depends on:** RFC-022 (demand-driven checker)
 **Retires:** `src/FLang.Lsp` (3,729 lines, C#, OmniSharp)
 
@@ -14,8 +14,11 @@ checker from RFC-022.
    `bootstrap/src/main.f`. No spawned sibling binary - `spawn_tool` requires the
    tool on PATH and `build.cs` never installs one, so `flang lsp` is broken by
    construction today.
-2. **`std.jsonrpc`** - Content-Length framing plus JSON-RPC 2.0 envelope over a
-   `Reader`/`Writer` pair. Transport-agnostic; stdio is the only transport.
+2. **`std.rpc.jsonrpc`** - Content-Length framing plus JSON-RPC 2.0 envelope over
+   a `Reader`/`Writer` pair. Transport-agnostic; stdio is the only transport.
+   Namespaced under `std.rpc` rather than the stdlib root: protocols sit above
+   formats (`std.encoding`) and transports (`std.io`), and the root stays for
+   fundamentals.
 3. **Single-threaded.** Analysis never runs inside a request handler.
 4. **v1 = C# parity + completion.**
 
@@ -72,7 +75,7 @@ Answers grow as demand settles, per module. Two rules:
 `$/progress` percentage is derived from demand-set size; the ETA widget is queue
 depth.
 
-### 4. `std.jsonrpc`
+### 4. `std.rpc.jsonrpc`
 
 Three layers, only the third of which exists today:
 
@@ -91,15 +94,17 @@ implementation, not a change here.
 message data` - all single lowercase words, identical under snake_case. **No
 conflict with FLang conventions.** LSP *payloads* are camelCase throughout
 (`textDocument`, `contentChanges`, `rootUri`, `workDoneToken`), which is the
-serialization library's problem, not `std.jsonrpc`'s. This is why `std.jsonrpc`
+serialization library's problem, not `std.rpc.jsonrpc`'s. This is why the module
 can land and be proven before the schema library exists.
 
 **Unions.** `id` is `integer | string`, and a response is `result` XOR `error`.
-`#derive` is structs-only, so v1 hand-writes the six-field envelope codec. For
-`id` specifically the lazy correct answer is to **store the raw JSON token and
-echo it verbatim** - the server never needs to interpret it, only return it
-unchanged. Once the schema library supports per-field transforms and transparent
-union detection, the envelope migrates to derive.
+`#derive` is structs-only, so v1 hand-writes the envelope codec. For `id`
+specifically the server never interprets it: `RpcMessage` owns the parsed
+document, the id stays a `JsonValue` borrowed from it, and write_response /
+write_error re-serialize it as-is (integer ids re-emit without a fractional
+part; JSON integers are exact in f64 through 2^53). Once the schema library
+supports per-field transforms and transparent union detection, the envelope
+migrates to derive.
 
 ### 5. Serialization dependency
 
@@ -230,18 +235,16 @@ watcher-driven invalidation, and diagnostics clearing when an error is fixed
 
 ## Implementation phases
 
-```
- 1  std.jsonrpc: framing + envelope over Reader/Writer, with transcript tests
- 2  lib/flang_lsp skeleton: initialize, shutdown, sync, line index, position codec
- 3  publishDiagnostics + $/progress (workspace open -> full demand -> publish)
- 4  tier 1: documentSymbol, foldingRange, syntax diagnostics on keystroke
- 5  ModuleIndex + workspace/symbol
- 6  hover, definition, typeDefinition, references
- 7  inlayHint, signatureHelp
- 8  completion
- 9  flang/generatedContent
-10  extension switched to `flang lsp`; delete src/FLang.Lsp
-```
+- [x] 1. std.rpc.jsonrpc: framing + envelope over Reader/Writer, with transcript tests
+- [x] 2. lib/flang_lsp skeleton: initialize, shutdown, sync, line index, position codec
+- [ ] 3. publishDiagnostics + $/progress (workspace open -> full demand -> publish)
+- [ ] 4. tier 1: documentSymbol, foldingRange, syntax diagnostics on keystroke
+- [ ] 5. ModuleIndex + workspace/symbol
+- [ ] 6. hover, definition, typeDefinition, references
+- [ ] 7. inlayHint, signatureHelp
+- [ ] 8. completion
+- [ ] 9. flang/generatedContent
+- [ ] 10. extension switched to `flang lsp`
 
 ## Out of scope
 

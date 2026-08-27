@@ -374,7 +374,13 @@ passes; an output still changing then is refused as a formatter bug.
 
 ## Language Server (LSP)
 
-The compiler includes an in-process LSP server (`FLang.Lsp`) invoked via `--lsp`. It reuses the same compilation pipeline — parser, source generators, type checker — so editor diagnostics match compiler output exactly. Features: hover, go-to-definition, type definition, find-references, document symbols, workspace symbols (Ctrl-T / `#` search), inlay hints (inferred types), signature help, and live diagnostics.
+Two servers exist during the transition (RFC-023):
+
+**Self-hosted (`flang lsp`, `lib/flang_lsp`)** — the successor, in-process in the bootstrap compiler. Speaks LSP over stdio through `std.rpc.jsonrpc` (Content-Length framing + JSON-RPC 2.0 envelope over `Reader`/`Writer`, so transcripts are testable in-process with `MemReader`). Single-threaded; handlers never run analysis. Implemented so far: initialize/shutdown/exit lifecycle, position-encoding negotiation (utf-8 preferred, utf-16 fallback), full-sync document store (`didOpen`/`didChange`/`didClose`), and the per-document line index / position codec. Feature requests answer MethodNotFound until their phase lands; the roadmap is RFC-023 §Implementation phases.
+
+**Reference (`FLang.Lsp`, C#)** — the current feature-complete-ish server, invoked via `flang-ref --lsp`, retired at the end of RFC-023.
+
+The reference server reuses the same compilation pipeline — parser, source generators, type checker — so editor diagnostics match compiler output exactly. It reuses the same compilation pipeline — parser, source generators, type checker — so editor diagnostics match compiler output exactly. Features: hover, go-to-definition, type definition, find-references, document symbols, workspace symbols (Ctrl-T / `#` search), inlay hints (inferred types), signature help, and live diagnostics.
 
 `FLangWorkspace` keeps exactly **one shared whole-program analysis per analysis root** (a project's root, or the workspace directory for project-less files), replaced wholesale when any file of that root changes; every file of the root maps into the same result, and per-file diagnostics are extracted from it (`.generated.f` sidecars are never entry points — they are pulled in through their origin modules). This bounds memory by the number of projects and makes workspace indexing one whole-program check per root. The previous per-file model (one full compilation + inference tables retained per file, cascade re-analysis of dependents) grew to gigabytes on non-trivial workspaces and did O(files) whole-program checks at startup.
 

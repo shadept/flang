@@ -5,10 +5,9 @@
 //   commands:
 //     build <file.f>        compile a source file
 //     fmt   [<file.f>...]   format the project (or the given files) in place
-//     lsp                   start the language server via tools/flang_lsp
+//     lsp                   speak LSP over stdio until the client exits
 //
-// fmt runs in-process on lib/flang_fmt. The lsp subcommand shells out to a sibling tool binary via
-// std.process - a separate project that also depends on flang_parser + flang_core.
+// fmt runs in-process on lib/flang_fmt; lsp runs in-process on lib/flang_lsp.
 
 import std.allocator
 import std.dict
@@ -40,6 +39,7 @@ import flang_typer.inference_engine
 import flang_typer.interner
 import flang_typer.specialization
 import flang_typer.result_diff
+import flang_lsp.server
 import flang.frontend
 
 // Parsed CLI state. `subcommand` is the first positional argument; the remainder of argv after the
@@ -111,7 +111,7 @@ pub fn main() i32 {
     return cli.subcommand match {
         "build" => run_build(argv, cli.rest_index, &cli)
         "fmt" => run_fmt(argv, cli.rest_index)
-        "lsp" => spawn_tool("flang_lsp", argv, cli.rest_index, cli.verbose)
+        "lsp" => run_lsp()
         "cst" => spawn_tool("cst_explorer", argv, cli.rest_index, cli.verbose)
         "tokens" => spawn_tool("dump_tokens", argv, cli.rest_index, cli.verbose)
         else => unknown_subcommand(cli.subcommand)
@@ -1032,6 +1032,13 @@ fn build_failed(path: String, errs: usize) i32 {
 }
 
 // fmt subcommand
+
+// lsp: serve the language server over stdio until the client sends `exit`.
+fn run_lsp() i32 {
+    let srv = lsp_server(stdin.reader(), stdout.writer())
+    defer srv.deinit()
+    return srv.run()
+}
 
 type FmtStatus = enum {
     Unchanged

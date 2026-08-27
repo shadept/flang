@@ -116,6 +116,20 @@ _Avoid_: object cache, build artifacts
 The SHA-256 in `cache.json` over compiler path/name, profile, cflags, target triple, and `FlangVersion.Current`. Mismatch wipes the cache; this is the only bulk-invalidation trigger.
 _Avoid_: cache key, fingerprint
 
+### Language server
+
+**Module (LSP)**:
+One `.f` file, one compilation unit.
+_Avoid_: document, source file (when the compilation unit is meant)
+
+**Project (LSP)**:
+The modules under one root `flang.toml`.
+_Avoid_: package, crate
+
+**Workspace**:
+The set of projects open in the LSP.
+_Avoid_: solution, monorepo
+
 ### Test harness
 
 **Lit-style harness**:

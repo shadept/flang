@@ -13,3 +13,4 @@ flang_typer = { path = "../lib/flang_typer" }
 flang_codegen = { path = "../lib/flang_codegen" }
 flang_analysis = { path = "../lib/flang_analysis" }
 flang_driver = { path = "../lib/flang_driver" }
+flang_lsp = { path = "../lib/flang_lsp" }
