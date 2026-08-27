@@ -15,6 +15,7 @@
 // directly without ever touching discovery.
 
 import std.allocator
+import std.dict
 import std.env
 import std.io.dir
 import std.io.file
@@ -77,11 +78,13 @@ pub fn translate(m: &IrModule, sb: &StringBuilder) {
     if m.functions.len > 0 {
         sb.append("\n")
     }
+    let sigs = build_sig_index(m)
+    defer sigs.by_name.deinit()
     for i in 0..m.functions.len {
         if i > 0 {
             sb.append("\n")
         }
-        emit_function(&m.functions[i], sb)
+        emit_function(&m.functions[i], &sigs, sb)
     }
 }
 
@@ -465,7 +468,7 @@ fn emit_fn_decl(f: &Function, sb: &StringBuilder) {
     sb.append(")")
 }
 
-fn emit_function(f: &Function, sb: &StringBuilder) {
+fn emit_function(f: &Function, sigs: &SigIndex, sb: &StringBuilder) {
     emit_fn_decl(f, sb)
     sb.append(" {\n")
 
@@ -502,7 +505,7 @@ fn emit_function(f: &Function, sb: &StringBuilder) {
         }
         for ii in 0..blk.instrs.len {
             sb.append("    ")
-            emit_instr(&blk.instrs[ii], sb)
+            emit_instr(&blk.instrs[ii], sigs, sb)
         }
         emit_terminator(&blk.terminator, f, sb)
     }
@@ -644,10 +647,56 @@ fn emit_operand_as_unsigned(op: &Operand, ty: IrType, sb: &StringBuilder) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────
+// Callee signatures
+// ─────────────────────────────────────────────────────────────────────────
+
+// Callee name -> declared parameter types, so direct-call arguments can be spelled with the
+// parameter's C type. One index over both decl spaces: `idx < funcs.len` is `funcs[idx]`, anything
+// above is `foreigns[idx - funcs.len]`.
+type SigIndex = struct {
+    funcs: &List(Function)
+    foreigns: &List(ForeignDecl)
+    by_name: Dict(OwnedString, usize)
+}
+
+fn build_sig_index(m: &IrModule) SigIndex {
+    let by_name: Dict(OwnedString, usize) = dict(m.functions.len + m.foreigns.len)
+    for i in 0..m.functions.len {
+        by_name.set(m.functions[i].name, i)
+    }
+    for i in 0..m.foreigns.len {
+        by_name.set(m.foreigns[i].name, m.functions.len + i)
+    }
+    return SigIndex { funcs = &m.functions, foreigns = &m.foreigns, by_name = by_name }
+}
+
+// Declared type of `callee`'s parameter `i`; null for an unknown callee or a position past the
+// fixed parameters (the variadic tail).
+fn param_ty_of(sigs: &SigIndex, callee: String, i: usize) IrType? {
+    const found = sigs.by_name.get(callee)
+    if found.is_none() {
+        return null
+    }
+    const idx = found.unwrap()
+    if idx < sigs.funcs.len {
+        const f = &sigs.funcs[idx]
+        if i < f.params.len {
+            return Some(f.params[i].ty)
+        }
+        return null
+    }
+    const fo = &sigs.foreigns[idx - sigs.funcs.len]
+    if i < fo.param_types.len {
+        return Some(fo.param_types[i])
+    }
+    return null
+}
+
+// ─────────────────────────────────────────────────────────────────────────
 // Instructions
 // ─────────────────────────────────────────────────────────────────────────
 
-fn emit_instr(i: &Instr, sb: &StringBuilder) {
+fn emit_instr(i: &Instr, sigs: &SigIndex, sb: &StringBuilder) {
     i.* match {
         Binary(b) => emit_binary(&b, sb)
         Unary(u) => emit_unary(&u, sb)
@@ -659,7 +708,7 @@ fn emit_instr(i: &Instr, sb: &StringBuilder) {
         Gep(g) => emit_gep(&g, sb)
         Memcpy(m) => emit_memcpy(&m, sb)
         Memset(m) => emit_memset(&m, sb)
-        Call(c) => emit_call(&c, sb)
+        Call(c) => emit_call(&c, sigs, sb)
         CallIndirect(c) => emit_call_indirect(&c, sb)
     }
 }
@@ -999,7 +1048,7 @@ fn emit_memset(m: &MemsetInstr, sb: &StringBuilder) {
     sb.append(");\n")
 }
 
-fn emit_call(c: &CallInstr, sb: &StringBuilder) {
+fn emit_call(c: &CallInstr, sigs: &SigIndex, sb: &StringBuilder) {
     c.result match {
         Some(id) => {
             c.result_ty match {
@@ -1020,9 +1069,30 @@ fn emit_call(c: &CallInstr, sb: &StringBuilder) {
         if i > 0 {
             sb.append(", ")
         }
-        emit_operand(&c.args[i], sb)
+        emit_typed_arg(&c.args[i], param_ty_of(sigs, c.callee, i), sb)
     }
     sb.append(");\n")
+}
+
+// A call argument, cast to the parameter type when it is an integer constant. A C integer literal
+// is `int` (or wider), and letting it narrow implicitly into an `int8_t`/`int16_t` slot is a
+// constant-conversion error under -Werror when the value only fits the unsigned reading (u8 255).
+// Non-constant operands already carry their exact C type and pass through unconverted.
+fn emit_typed_arg(op: &Operand, param_ty: IrType?, sb: &StringBuilder) {
+    const is_int_const = op.* match {
+        IntConst(_) => true
+        _ => false
+    }
+    if is_int_const {
+        param_ty match {
+            Some(ty) => {
+                emit_operand_as(op, ty, sb)
+                return
+            }
+            None => {}
+        }
+    }
+    emit_operand(op, sb)
 }
 
 fn emit_call_indirect(c: &CallIndirectInstr, sb: &StringBuilder) {
@@ -1063,7 +1133,8 @@ fn emit_call_indirect(c: &CallIndirectInstr, sb: &StringBuilder) {
         if i > 0 {
             sb.append(", ")
         }
-        emit_operand(&c.args[i], sb)
+        const pt: IrType? = if i < c.param_types.len { Some(c.param_types[i]) } else { null }
+        emit_typed_arg(&c.args[i], pt, sb)
     }
     sb.append(");\n")
 }
@@ -1145,7 +1216,9 @@ fn emit_ret(v: Operand?, f: &Function, sb: &StringBuilder) {
     v match {
         Some(op) => {
             sb.append(" ")
-            emit_operand(&op, sb)
+            // Same narrowing rule as call arguments: a constant return is spelled with the
+            // function's return type.
+            emit_typed_arg(&op, f.return_ty, sb)
         }
         None => {
             // FIR void return in the user's main maps to `return 0;` because the C entry point has

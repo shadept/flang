@@ -13,6 +13,10 @@
  * Pipe I/O follows POSIX conventions: returns byte count, 0 = EOF, -1 = error.
  */
 
+/* glibc declares execvpe only under _GNU_SOURCE, and the define must
+ * precede every libc include. Harmless on other libcs. */
+#define _GNU_SOURCE
+
 #include <stddef.h>
 #include <stdint.h>
 #include <string.h>

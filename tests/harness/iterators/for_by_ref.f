@@ -1,5 +1,5 @@
 //! TEST: for_by_ref
-//! EXIT: 636
+//! EXIT: 216
 
 // `for &x in xs` iterates through `iter_ref`: `x` is `&T` into the
 // collection's storage, so writes land in place. Works on List, slices
@@ -29,8 +29,9 @@ pub fn main() i32 {
     let c = Counter { n = 5 }
     for &n in c { n.* = n.* - 32 }           // -27
     let arr: [i32; 3] = [1, 2, 3]
-    for &a in arr { a.* = a.* * 100 }        // 100, 200, 300 - in place
+    // POSIX exit codes are 8-bit, so the total stays under 256.
+    for &a in arr { a.* = a.* * 30 }         // 30, 60, 90 - in place
     let asum = 0i32
-    for a in arr { asum = asum + a }         // 600
+    for a in arr { asum = asum + a }         // 180
     return sum + c.n + asum
 }
