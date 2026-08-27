@@ -138,6 +138,15 @@ pub fn compile(m: &IrModule, options: &BuildOptions) Result(BuildResult, BuildEr
     }
     const translate_ns = elapsed_ns(translate_start)
 
+    // MSVC writes one .obj per translation unit into the per-target objs directory (see
+    // `objs_dir_for`); the compiler does not create it. Unix-style compile-and-link leaves no
+    // objects, so the directory stays empty and the cleanup below removes it either way.
+    let objs_dir = objs_dir_for(options.output_path, alloc)
+    defer objs_dir.deinit()
+    if info.is_msvc() {
+        let _c = create_dir_all(objs_dir.as_view())
+    }
+
     // 5. Build the argv and spawn the compiler.
     let argv = build_compiler_argv(&info, c_path_owned.as_view(), options)
     defer argv.deinit()
@@ -149,6 +158,7 @@ pub fn compile(m: &IrModule, options: &BuildOptions) Result(BuildResult, BuildEr
     if spawn_r.is_err() {
         if !keep_c {
             remove_file_quiet(c_path_owned.as_view())
+            let _r = remove_dir_all(objs_dir.as_view(), alloc)
         }
         c_path_owned.deinit()
         return Err(spawn_r.unwrap_err())
@@ -159,11 +169,15 @@ pub fn compile(m: &IrModule, options: &BuildOptions) Result(BuildResult, BuildEr
         println(cc_out.as_view())
         if !keep_c {
             remove_file_quiet(c_path_owned.as_view())
+            let _r = remove_dir_all(objs_dir.as_view(), alloc)
         }
         c_path_owned.deinit()
         return Err(BuildError.CompilerFailed(exit_code))
     }
     const cc_ns = elapsed_ns(cc_start)
+    if !keep_c {
+        let _r = remove_dir_all(objs_dir.as_view(), alloc)
+    }
 
     // 6. Build the result. Retain the c_source_path if requested.
     let exe_path = from_view(options.output_path, alloc)
@@ -1625,6 +1639,19 @@ fn remove_file_quiet(path: String) {
     remove_file(path)
 }
 
+// The per-target object directory: `<output>.objs/`, beside the executable. Objects need a home
+// that is UNIQUE per link - a shared directory (the process cwd, or even the output directory)
+// makes two concurrent builds of different targets overwrite each other's `time.obj` mid-compile,
+// which is exactly how parallel harness runs used to fail. Created before the compiler runs and
+// removed after a successful link unless `keep_temps`.
+fn objs_dir_for(output_path: String, allocator: &Allocator?) OwnedString {
+    let p = path(output_path, allocator)
+    defer p.deinit()
+    let q = p.with_extension("objs")
+    defer q.deinit()
+    return from_view(q.as_view(), allocator)
+}
+
 // Build the argv passed to the compiler. Layout differs between MSVC and Unix-style; both layouts
 // compile-and-link in one shot.
 fn build_compiler_argv(info: &CompilerInfo, c_path: String,
@@ -1659,12 +1686,24 @@ fn build_compiler_argv(info: &CompilerInfo, c_path: String,
             sb.append(options.include_paths[i])
             argv.push(sb.to_string())
         }
-        // /Fe: places the .exe; /Fo places .obj output. Keep both
-        // alongside the .c file to make cleanup easy.
+        // /Fe: places the .exe; /Fo routes every .obj into the same directory (the trailing
+        // backslash makes it a directory form). Without /Fo, cl drops one .obj per translation unit
+        // into the process working directory - littering the source tree and colliding when two
+        // builds share a cwd.
         let fe = string_builder(4 + options.output_path.len, alloc)
         fe.append("/Fe:")
         fe.append(options.output_path)
         argv.push(fe.to_string())
+        let objs = objs_dir_for(options.output_path, alloc)
+        defer objs.deinit()
+        const od = objs.as_view()
+        let fo = string_builder(4 + od.len, alloc)
+        fo.append("/Fo")
+        for i in 0..od.len {
+            fo.append_byte(if od[i] == '/' { '\\' as u8 } else { od[i] })
+        }
+        fo.append('\\')
+        argv.push(fo.to_string())
         argv.push(from_view(c_path, alloc))
         for i in 0..options.extra_c_files.len {
             argv.push(from_view(options.extra_c_files[i], alloc))
@@ -1672,15 +1711,16 @@ fn build_compiler_argv(info: &CompilerInfo, c_path: String,
         for i in 0..options.extra_obj_files.len {
             argv.push(from_view(options.extra_obj_files[i], alloc))
         }
-        // MSVC linker libs are positional after a `/link` separator.
-        if options.libs.len > 0 or options.ldflags.len > 0 {
-            argv.push(from_view("/link", alloc))
-            for i in 0..options.libs.len {
-                argv.push(from_view(options.libs[i], alloc))
-            }
-            for i in 0..options.ldflags.len {
-                push_ldflag_words(&argv, options.ldflags[i], alloc)
-            }
+        // MSVC linker options are positional after a `/link` separator. Incremental linking is off:
+        // a one-shot compile-and-link never reuses the state, and the `.ilk` it would write next to
+        // the executable is several MB per link.
+        argv.push(from_view("/link", alloc))
+        argv.push(from_view("/INCREMENTAL:NO", alloc))
+        for i in 0..options.libs.len {
+            argv.push(from_view(options.libs[i], alloc))
+        }
+        for i in 0..options.ldflags.len {
+            push_ldflag_words(&argv, options.ldflags[i], alloc)
         }
         return argv
     }

@@ -1,6 +1,7 @@
 // FIR - typed, SSA, block-based IR. See `docs/fir.md` for the design and canonical text format.
 
 import std.allocator
+import std.dict
 import std.list
 import std.string
 
@@ -424,6 +425,11 @@ pub type IrModule = struct {
     // struct definition per entry, before the externs that name them. Nested aggregates are
     // registered before the structs that contain them, so emitting in order is already valid C.
     aggs: List(AggDef)
+    // Human-readable name per mangled function symbol (`module.path.name(&Type,u32)`), for
+    // consumers that show names to people - the profiler's name table today, debug info tomorrow.
+    // Keys are views into storage that outlives the module; values are owned here. Symbols without
+    // an entry (`main`, foreigns, generated helpers) display as themselves.
+    displays: Dict(String, OwnedString)
 }
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -437,6 +443,7 @@ pub fn module(allocator: &Allocator? = null) IrModule {
     let skipped: List(String) = list(0, allocator)
     let skip_notes: List(OwnedString) = list(0, allocator)
     let aggs: List(AggDef) = list(0, allocator)
+    let displays: Dict(String, OwnedString) = dict(allocator)
     return IrModule {
         globals = globals,
         foreigns = foreigns,
@@ -444,6 +451,7 @@ pub fn module(allocator: &Allocator? = null) IrModule {
         skipped = skipped,
         skip_notes = skip_notes,
         aggs = aggs,
+        displays = displays,
     }
 }
 
@@ -453,6 +461,16 @@ pub fn deinit(self: &IrModule) {
     self.foreigns.deinit()
     self.globals.deinit()
     self.skip_notes.deinit()
+    self.displays.deinit()
+}
+
+// Replace the display-name map wholesale (scoped mutability keeps the field module-private).
+// Returns the previous map so the caller can free it.
+pub fn set_displays(self: &IrModule, displays: Dict(String, OwnedString)) Dict(String,
+    OwnedString) {
+    let old = self.displays
+    self.displays = displays
+    return old
 }
 
 pub fn deinit(self: &Function) {

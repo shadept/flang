@@ -203,6 +203,24 @@ pub fn push_all(self: &List($T), xs: T[]) {
     self.len = self.len + xs.len
 }
 
+// Insert an element at `index`, shifting everything at and after it one slot toward the end. `index
+// == len` appends. Elements move bitwise, the same discipline `push` and `reserve` use, so
+// ownership stays with the list. O(len - index).
+pub fn insert(self: &List($T), index: usize, value: T) {
+    if index > self.len {
+        panic("insert(List(T), index): index out of bounds")
+    }
+    self.reserve(self.len + 1)
+    self.len = self.len + 1
+    let data = self.as_slice()
+    let i = self.len - 1
+    while i > index {
+        data[i] = data[i - 1]
+        i = i - 1
+    }
+    data[index] = value
+}
+
 // Remove and return the last element, or null if empty. Prefer `Stack(T)` in new code when the
 // access pattern is LIFO - this primitive exists so `Stack.pop` can mutate the underlying length
 // without breaching scoped

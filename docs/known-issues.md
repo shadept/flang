@@ -406,20 +406,23 @@ topological order for the acyclic majority.
 
 ### Harness: Parallel Workers Share One C Build Directory
 
-**Status:** Open — one or two harness tests fail per full run, never the same ones
+**Status:** Resolved — the self-hosted backend gives every link its own object directory
 **Affected:** `test.cs` (16 parallel workers), the per-test C build under `tests/harness/`
 
-A full `dotnet test.cs` reports one or two failures that pass when re-run
-alone, and a different pair each time. The failure is always the C
+A full `dotnet test.cs` reported one or two failures that passed when re-run
+alone, and a different pair each time. The failure was always the C
 toolchain, not the compiler: `LNK1104: cannot open file 'process.obj'`, or
 an unresolved symbol from a stdlib `.obj` another worker was rewriting.
-Every worker compiles the same stdlib translation units into the same
-object files, so two tests building at once race on them.
+Every worker compiled the same stdlib translation units into the same
+object files (MSVC's default is the process working directory), so two
+tests building at once raced on them.
 
-Fixes the failures do NOT need: the emitted C is byte-identical either way,
-and the gate that would catch a real miscompile (stage-2 = stage-3) is
-unaffected. Give each worker its own object directory, or build the stdlib
-objects once before the workers start.
+Resolution (`c_backend.f::objs_dir_for`): MSVC objects go to a per-target
+`<output>.objs\` directory via `/Fo`, created before the compiler runs and
+removed after the link unless `keep_temps`; incremental linking is off
+(`/INCREMENTAL:NO`), so no `.ilk` is written either. Concurrent builds of
+different targets no longer share any intermediate paths, and a build
+leaves nothing next to the executable.
 
 Not to be confused with `directives/if_directive_cross_target.f`, which
 fails deterministically on Windows for an unrelated reason (see its own
@@ -2032,6 +2035,15 @@ its own cascading `deinit`. `flang test` keeps its temp artifacts when
 the test runner exits on a signal, which is how the fallout was
 debugged.
 
+## Self-host: `#inline` does not inline
+
+The self-hosted pipeline parses and accepts the `#inline` directive but no pass expands or splices
+the annotated function: it is emitted and called like any other. (The FIR shim inliner exists -
+RFC-015, `shim_inliner.f` - but is not wired into `build_program`, and it selects by size, not by
+the directive.) Observed 2026-08-27 via the profiler acceptance suite (`tools/profiler_check`): an
+`#inline` function still appears in a `-p` profile with its own call counts. Cost today is
+per-call overhead on functions the author asked to disappear; behavior is otherwise correct.
+
 ## Self-host: indexing a reference-typed struct field
 
 **Open (2026-08-23).** `ctx.modules[i]` where `modules: &List(Module)` is a struct field lowers to a gep from the *field's address* with the element stride (`(uint8_t*)&ctx->modules + i * sizeof(Module)`): the `&List` pointer is never loaded and `op_index_ref` is never called. Indexing the same list through a local (`const mods = ctx.modules; mods[i]`) lowers correctly. Found in `template_expand.f:resolve_type_decl`; worked around there. Likely the value-form index receiver path in `lower_index_arg` treating a `&`-typed field step as the place itself (the sibling of the "`&`-typed path step geped into the field" fix of M11).
@@ -2529,3 +2541,12 @@ per-cold-check leak (~129 MB, see the retirement/leak entry above) explains the 
 way. Matters for RFC-023: an LSP process runs many analyses over its lifetime. Observed 2026-08-27
 while writing the W1004 tests in `lib/flang_analysis/src/unused.f`; those tests now analyse a
 two-file fixture (`fixtures/leaf.f`) instead of the stdlib, which sidesteps it in the suite.
+
+Prime suspect, from reading the code: under `runtime.testing`, `or_global` routes every allocation
+through the test allocator, whose `dealloc` (`stdlib/std/allocator.f::test_dealloc`) walks an
+intrusive linked list of ALL live allocations to find the entry to unlink - O(live) per free,
+O(n^2) per teardown. With ~129 MB retained per prior round, by round four every free scans millions
+of entries, which is exactly a >100x in-process slowdown that a fresh process does not show.
+Unverified by measurement; `flang -p build` (the RFC-025 profiler) on a loop of
+analyze+deinit rounds would confirm it in one run. Fix candidates: key live entries by pointer in a
+`Dict`, or drop per-allocation tracking for size classes that dominate.

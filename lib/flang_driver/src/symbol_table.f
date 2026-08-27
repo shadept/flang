@@ -58,6 +58,11 @@ pub type SymbolTable = struct {
     // Which function ids are `#foreign`. Only a foreign call passes aggregates by value, so
     // lowering has to tell them apart.
     by_fn_foreign: Dict(u32, bool)
+    // Human-readable name per mangled symbol: `module.path.name(&Type,u32)`. Keys view the
+    // OwnedStrings in `by_fn_id`/`by_spec_id`, so they are valid as long as the table's strings
+    // are. Consumed by the profiler's name table (RFC-025); `main` and foreigns keep their bare
+    // symbol and have no entry.
+    displays: Dict(String, OwnedString)
 }
 
 // The declared signature lowering works from: the checker's parameter and return types for one
@@ -111,6 +116,17 @@ pub fn deinit(self: &SymbolTable) {
     self.by_spec_id.deinit()
     self.by_spec_sig.deinit()
     self.by_fn_foreign.deinit()
+    self.displays.deinit()
+}
+
+// Move the display map out, leaving the table with an empty one. The IrModule takes it so display
+// names survive lowering (the table's symbol strings outlive the module, so the viewed keys stay
+// valid).
+pub fn take_displays(self: &SymbolTable) Dict(String, OwnedString) {
+    let out = self.displays
+    let empty: Dict(String, OwnedString) = dict()
+    self.displays = empty
+    return out
 }
 
 // Assigns symbols across a whole program. `seen` carries the ordinal counter across modules, so the
@@ -124,6 +140,7 @@ pub type SymbolBuilder = struct {
     by_fn_foreign: Dict(u32, bool)
     by_spec_id: Dict(u32, OwnedString)
     by_spec_sig: Dict(u32, FnSig)
+    displays: Dict(String, OwnedString)
     nominals: &NominalRegistry
     interner: &TypeInterner
     allocator: &Allocator?
@@ -167,6 +184,7 @@ pub fn symbol_builder(result: &TypeCheckResult, allocator: &Allocator? = null) S
     // lowering cannot represent yet.
     let by_spec_id: Dict(u32, OwnedString) = dict(allocator)
     let by_spec_sig: Dict(u32, FnSig) = dict(allocator)
+    let displays: Dict(String, OwnedString) = dict(allocator)
     for i in 0..(result.specializations.next_id as usize) {
         let found = result.specializations.find(i as u32)
         if found.is_none() {
@@ -179,7 +197,10 @@ pub fn symbol_builder(result: &TypeCheckResult, allocator: &Allocator? = null) S
         }
         let sym = mangle_spec_symbol(&result.interner, sp.module, sp.name, &s, &result.nominals,
             allocator)
+        const sym_view = sym.as_view()
         by_spec_id.set(sp.id, sym)
+        displays.set(sym_view, pretty_symbol(&result.interner, sp.module, sp.name, &s.params,
+                &result.nominals, allocator))
         by_spec_sig.set(sp.id, s)
     }
 
@@ -190,6 +211,7 @@ pub fn symbol_builder(result: &TypeCheckResult, allocator: &Allocator? = null) S
         by_fn_foreign = by_fn_foreign,
         by_spec_id = by_spec_id,
         by_spec_sig = by_spec_sig,
+        displays = displays,
         nominals = &result.nominals,
         interner = &result.interner,
         allocator = allocator,
@@ -432,9 +454,16 @@ fn add_function_symbol(self: &SymbolBuilder, decl: &FunctionDecl, fqn: String) {
         return
     }
     let s = sig.unwrap()
-    let sym = mangle_symbol(self.interner, fqn, decl.name, is_foreign_directive(&decl.directives),
-        &s.params, self.nominals, self.allocator)
+    const foreign = is_foreign_directive(&decl.directives)
+    let sym = mangle_symbol(self.interner, fqn, decl.name, foreign, &s.params, self.nominals,
+        self.allocator)
+    const sym_view = sym.as_view()
     self.by_fn_id.set(fid.unwrap(), sym)
+    // `main` and foreigns keep their bare, already-readable symbol.
+    if !foreign and decl.name != "main" {
+        self.displays.set(sym_view, pretty_symbol(self.interner, fqn, decl.name, &s.params,
+                self.nominals, self.allocator))
+    }
 }
 
 pub fn finish(self: &SymbolBuilder) SymbolTable {
@@ -445,6 +474,7 @@ pub fn finish(self: &SymbolBuilder) SymbolTable {
         by_fn_foreign = self.by_fn_foreign,
         by_spec_id = self.by_spec_id,
         by_spec_sig = self.by_spec_sig,
+        displays = self.displays,
     }
 }
 
@@ -582,6 +612,83 @@ fn prim_token(p: PrimitiveKind) String {
         F32 => "f32"
         F64 => "f64"
     }
+}
+
+// Human-readable form of one parameter type, mirroring `append_type_token`'s cases. Nominals show
+// their SHORT name (`List(u32)`, not `std.list.List(u32)`) - the function's own fqn already places
+// the frame, and short parameters keep profiler output an order of magnitude smaller. Two
+// same-named types from different modules therefore render alike; the mangled symbol stays the
+// identity, the display only labels it.
+fn append_type_pretty(it: &TypeInterner, sb: &StringBuilder, ty: Ty, reg: &NominalRegistry) {
+    it.node(ty) match {
+        NPrim(p) => sb.append(prim_token(p))
+        NRef(inner) => {
+            sb.append("&")
+            append_type_pretty(it, sb, inner, reg)
+        }
+        NArray(arr) => {
+            append_type_pretty(it, sb, arr.elem, reg)
+            sb.append("[")
+            sb.append(arr.length as u64)
+            sb.append("]")
+        }
+        NTuple(span) => {
+            sb.append("(")
+            for i in 0..span.len {
+                if i > 0 {
+                    sb.append(",")
+                }
+                append_type_pretty(it, sb, it.child_at(span, i), reg)
+            }
+            sb.append(")")
+        }
+        NNominal(nn) => {
+            sb.append(short_name(nominal_name(reg, nn.id)))
+            if nn.args.len > 0 {
+                sb.append("(")
+                for i in 0..nn.args.len {
+                    if i > 0 {
+                        sb.append(",")
+                    }
+                    append_type_pretty(it, sb, it.child_at(nn.args, i), reg)
+                }
+                sb.append(")")
+            }
+        }
+        NVoid => sb.append("void")
+        NNever => sb.append("never")
+        _ => sb.append("?")
+    }
+}
+
+// The last dotted segment of an FQN.
+fn short_name(fqn: String) String {
+    return rfind(fqn, '.') match {
+        Some(i) => fqn[(i + 1)..fqn.len]
+        None => fqn
+    }
+}
+
+// The display name behind a mangled symbol: `module.path.name(&Type,u32)`. Commas carry no space so
+// folded-stack tooling that splits frames naively stays happy.
+fn pretty_symbol(it: &TypeInterner, fqn: String, name: String, params: &List(Ty),
+    reg: &NominalRegistry, allocator: &Allocator? = null) OwnedString {
+    let sb = string_builder(fqn.len + name.len + 16, allocator)
+    defer sb.deinit()
+    if fqn.len > 0 {
+        sb.append(fqn)
+        sb.append(".")
+    }
+    sb.append(name)
+    sb.append("(")
+    for i in 0..params.len {
+        if i > 0 {
+            sb.append(",")
+        }
+        append_type_pretty(it, &sb, params[i], reg)
+    }
+    sb.append(")")
+    return sb.to_string()
 }
 
 // Shared mangling core: `module__name__param__param` into `sb`.

@@ -146,6 +146,9 @@ type LowerCtx = struct {
     // Owned backing for const global/init symbol names; the IrModule and `consts` reference them as
     // views. Leaks with the ctx, like `syms`.
     owned_syms: List(OwnedString)
+    // Per-run layout memo (layout.f `LayoutCache`): valid for the life of `it`, which this ctx
+    // never outlives.
+    lay_cache: LayoutCache
 }
 
 // One lowered module-level constant: its global's symbol, its init function's symbol, and its
@@ -375,6 +378,7 @@ pub fn lower_module(ast_module: &Module, result: &TypeCheckResult,
         consts = dict(allocator),
         const_inits = list(0, allocator),
         owned_syms = list(0, allocator),
+        lay_cache = layout_cache(allocator),
     }
     lower_consts(&m, &ctx, ast_module)
     lower_into(&m, &ctx, ast_module, "")
@@ -414,7 +418,8 @@ pub fn lower_program(modules: &List(Module), fqns: &List(OwnedString), result: &
         str_globals = str_globals, defers = defer_stack, defer_marks = defer_marks,
         flushing = false, blocked = false, blocked_note = null, blocked_subject = null,
         pending_lambdas = list(0, allocator), comptime = comptime_ctx, consts = dict(allocator),
-        const_inits = list(0, allocator), owned_syms = list(0, allocator) }
+        const_inits = list(0, allocator), owned_syms = list(0, allocator),
+        lay_cache = layout_cache(allocator) }
     // A module outside the demand set (RFC-022 §6) was never body-checked: it has no node types to
     // lower, and nothing demanded can reach its functions or constants - identifier, operator and
     // constant resolution are import-scoped. Its foreign declarations still lower: a `#foreign`
@@ -456,6 +461,8 @@ pub fn lower_program(modules: &List(Module), fqns: &List(OwnedString), result: &
     // some unrelated module's const could not initialize.
     drop_callers_of_refused(&m, &ctx, allocator)
     wire_const_inits(&m, &ctx)
+    let no_displays = m.set_displays(syms.take_displays())
+    no_displays.deinit()
     return m
 }
 
@@ -728,6 +735,31 @@ fn tyit(ctx: &LowerCtx) &TypeInterner {
     return ctx.it
 }
 
+// Layout queries route through these so every call in the run shares `lay_cache`.
+
+fn lay_of(ctx: &LowerCtx, ty: Ty) Layout {
+    return layout_of(tyit(ctx), ty, &ctx.result.nominals, Some(&ctx.lay_cache), ctx.allocator)
+}
+
+fn st_layout(ctx: &LowerCtx, def: &StructDef, args: &List(Ty)) StructLayout {
+    return struct_layout(tyit(ctx), def, args, &ctx.result.nominals, Some(&ctx.lay_cache),
+        ctx.allocator)
+}
+
+fn en_layout(ctx: &LowerCtx, def: &EnumDef, args: &List(Ty)) EnumLayout {
+    return enum_layout(tyit(ctx), def, args, &ctx.result.nominals, Some(&ctx.lay_cache),
+        ctx.allocator)
+}
+
+fn tup_layout(ctx: &LowerCtx, tys: &List(Ty)) StructLayout {
+    return tuple_layout(tyit(ctx), tys, &ctx.result.nominals, Some(&ctx.lay_cache), ctx.allocator)
+}
+
+fn vp_offsets(ctx: &LowerCtx, def: &EnumDef, vnum: usize, args: &List(Ty)) List(usize) {
+    return variant_payload_offsets(tyit(ctx), def, vnum, args, &ctx.result.nominals,
+        Some(&ctx.lay_cache), ctx.allocator)
+}
+
 fn lower_const_decl(m: &IrModule, ctx: &LowerCtx, cd: &ConstDecl) {
     // The decl's own RtConst target names its FQN (recorded by check_constant_init) - the key every
     // read site cites.
@@ -753,7 +785,7 @@ fn lower_const_decl(m: &IrModule, ctx: &LowerCtx, cd: &ConstDecl) {
         m.skip_notes.push($"{fqn}: const type not concrete")
         return
     }
-    let lay = layout_of(tyit(ctx), t, &ctx.result.nominals, ctx.allocator)
+    let lay = lay_of(ctx, t)
     let gsym = park_sym(ctx, const_symbol("__fconst_", fqn, ctx.allocator))
     let isym = park_sym(ctx, const_symbol("__finit_", fqn, ctx.allocator))
 
@@ -1169,8 +1201,7 @@ fn lower_function_body(m: &IrModule, ctx: &LowerCtx, decl: &FunctionDecl, sym: S
     ctx.sret = sret_op
     ctx.ret_size = 0u64
     if ret_agg {
-        ctx.ret_size = layout_of(tyit(ctx), sig.ret, &ctx.result.nominals,
-            ctx.allocator).size as u64
+        ctx.ret_size = lay_of(ctx, sig.ret).size as u64
     }
 
     // Parameters spill to slots like any other local, so assigning one - or taking its address -
@@ -1184,7 +1215,7 @@ fn lower_function_body(m: &IrModule, ctx: &LowerCtx, decl: &FunctionDecl, sym: S
     for i in 0..decl.params.len {
         let pty = &sig.params[i]
         if is_by_ref(ctx, pty) {
-            let lay = layout_of(tyit(ctx), pty.*, &ctx.result.nominals, ctx.allocator)
+            let lay = lay_of(ctx, pty.*)
             let slot = cur.stack_slot(lay.size as u64, lay.align as u64)
             cur.memcpy(slot, param_ops[i], Operand.IntConst(lay.size as i64))
             env.bind_aggregate(decl.params[i].name, slot, pty.*)
@@ -1323,7 +1354,7 @@ fn lower_block(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, block: &BlockExpr,
         if ctx.defers.len > mark {
             let ty = node_ty(ctx, expr_span(e))
             if is_by_ref(ctx, &ty) {
-                let lay = layout_of(tyit(ctx), ty, &ctx.result.nominals, ctx.allocator)
+                let lay = lay_of(ctx, ty)
                 let slot = bb.stack_slot(lay.size as u64, lay.align as u64)
                 bb.memcpy(slot, v, Operand.IntConst(lay.size as i64))
                 v = slot
@@ -1505,7 +1536,7 @@ fn lower_let(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, l: &LetStmt) {
             // Zero bytes are the zero-initialized value of every aggregate; for `Option`
             // specifically, tag 0 is `None` by declaration order (a documented invariant in
             // core.option).
-            let lay = layout_of(tyit(ctx), ty, &ctx.result.nominals, ctx.allocator)
+            let lay = lay_of(ctx, ty)
             let slot = bb.stack_slot(lay.size as u64, lay.align as u64)
             bb.memset(slot, Operand.IntConst(0), Operand.IntConst(lay.size as i64))
             env.bind_aggregate(l.name, slot, ty)
@@ -1530,7 +1561,7 @@ fn lower_let(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, l: &LetStmt) {
         // FRESH temporary (a struct literal's slot, a call's sret buffer) has no other name, so the
         // binding takes it over and the copy is elided.
         if !init_is_fresh(&e) {
-            let lay = layout_of(tyit(ctx), ty, &ctx.result.nominals, ctx.allocator)
+            let lay = lay_of(ctx, ty)
             let slot = bb.stack_slot(lay.size as u64, lay.align as u64)
             bb.memcpy(slot, v, Operand.IntConst(lay.size as i64))
             env.bind_aggregate(l.name, slot, ty)
@@ -1824,7 +1855,7 @@ fn lower_for_iter(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, f: &ForStmt) {
         return
     }
     let ety = et.args[0]
-    let ol = enum_layout(tyit(ctx), &et.def, &et.args, &ctx.result.nominals, ctx.allocator)
+    let ol = en_layout(ctx, &et.def, &et.args)
 
     // `iter(&xs)`: an aggregate iterable's value IS its address; a reference value is already the
     // pointer the parameter wants. A fixed array decays into the `{ptr, len}` view `iter(&T[])`
@@ -1874,7 +1905,7 @@ fn lower_for_iter(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, f: &ForStmt) {
     } else {
         let pa = bb.gep(nxt, Operand.IntConst(ol.payload_offset as i64))
         if is_by_ref(ctx, &ety) {
-            let elay = layout_of(tyit(ctx), ety, &ctx.result.nominals, ctx.allocator)
+            let elay = lay_of(ctx, ety)
             let slot = bb.stack_slot(elay.size as u64, elay.align as u64)
             bb.memcpy(slot, pa, Operand.IntConst(elay.size as i64))
             env.bind_aggregate(f.var_name, slot, ety)
@@ -2018,8 +2049,7 @@ fn lower_lambda(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, lam: &LambdaExpr) 
         let v = read_binding(ctx, bb, env, cap.name, &cap.ty)
         let fp = bb.gep(slot, Operand.IntConst(st.layout.offsets[i] as i64))
         if is_by_ref(ctx, &cap.ty) {
-            bb.memcpy(fp, v, Operand.IntConst(layout_of(tyit(ctx), cap.ty, &ctx.result.nominals,
-                        ctx.allocator).size as i64))
+            bb.memcpy(fp, v, Operand.IntConst(lay_of(ctx, cap.ty).size as i64))
         } else {
             bb.store(ir_of(ctx, cap.ty), v, fp)
         }
@@ -2301,7 +2331,7 @@ fn lower_array_lit(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, al: &ArrayLiter
     if !ty_concrete(tyit(ctx), elem) {
         return unlowerable(ctx)
     }
-    let el = layout_of(tyit(ctx), elem, &ctx.result.nominals, ctx.allocator)
+    let el = lay_of(ctx, elem)
     let esize = el.size
     let total = if count == 0 { 1 as usize } else { count * esize }
     let slot = bb.stack_slot(total as u64, el.align as u64)
@@ -2395,7 +2425,7 @@ fn lower_tuple_lit(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, tl: &TupleLiter
     if !ty_concrete(tyit(ctx), want) {
         return unlowerable(ctx)
     }
-    let sl = tuple_layout(tyit(ctx), &tys, &ctx.result.nominals, ctx.allocator)
+    let sl = tup_layout(ctx, &tys)
     // Zero-fill so element padding reads deterministically - see `lower_variant_call`.
     let slot = bb.stack_slot(sl.size as u64, sl.align as u64)
     bb.memset(slot, Operand.IntConst(0), Operand.IntConst(sl.size as i64))
@@ -2404,7 +2434,7 @@ fn lower_tuple_lit(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, tl: &TupleLiter
         let ep = bb.gep(slot, Operand.IntConst(sl.offsets[i] as i64))
         let ety = tys[i]
         if is_by_ref(ctx, &ety) {
-            let esz = layout_of(tyit(ctx), ety, &ctx.result.nominals, ctx.allocator).size
+            let esz = lay_of(ctx, ety).size
             bb.memcpy(ep, v, Operand.IntConst(esz as i64))
         } else {
             bb.store(ir_of(ctx, ety), v, ep)
@@ -2699,7 +2729,7 @@ fn build_typeinfo(ctx: &LowerCtx, bb: &BlockBuilder, t: &Ty, depth: usize) Opera
     }
     let st = st_opt.unwrap()
 
-    let lay = layout_of(tyit(ctx), t.*, reg, ctx.allocator)
+    let lay = lay_of(ctx, t.*)
     let slot = bb.stack_slot(st.layout.size as u64, st.layout.align as u64)
     bb.memset(slot, Operand.IntConst(0), Operand.IntConst(st.layout.size as i64))
 
@@ -2734,7 +2764,7 @@ fn store_ti_field(ctx: &LowerCtx, bb: &BlockBuilder, st: &StructTarget, slot: Op
     let fty = field_ty(tyit(ctx), &st.def, idx, &st.args)
     let dst = bb.gep(slot, Operand.IntConst(st.layout.offsets[idx] as i64))
     if is_by_ref(ctx, &fty) {
-        let flay = layout_of(tyit(ctx), fty, &ctx.result.nominals, ctx.allocator)
+        let flay = lay_of(ctx, fty)
         bb.memcpy(dst, value, Operand.IntConst(flay.size as i64))
     } else {
         bb.store(ir_of(ctx, fty), value, dst)
@@ -2907,7 +2937,7 @@ fn build_ti_function(ctx: &LowerCtx, bb: &BlockBuilder, st: &StructTarget, slot:
 // Copy `items` (each an aggregate ADDRESS) into one contiguous array and return a `Slice(elem)`
 // view over it.
 fn pack_slice(ctx: &LowerCtx, bb: &BlockBuilder, elem: &Ty, items: &List(Operand)) Operand {
-    let lay = layout_of(tyit(ctx), elem.*, &ctx.result.nominals, ctx.allocator)
+    let lay = lay_of(ctx, elem.*)
     let buf = bb.stack_slot((lay.size * items.len) as u64, lay.align as u64)
     for i in 0..items.len {
         bb.memcpy(bb.gep(buf, Operand.IntConst((lay.size * i) as i64)), items[i],
@@ -3051,7 +3081,7 @@ fn intercept_rtti_layout(ctx: &LowerCtx, sym: String, sig: &FnSig) Operand? {
     if !ty_concrete(tyit(ctx), t) {
         return null
     }
-    let lay = layout_of(tyit(ctx), t, &ctx.result.nominals, ctx.allocator)
+    let lay = lay_of(ctx, t)
     if is_size {
         return Some(Operand.IntConst(lay.size as i64))
     }
@@ -3068,7 +3098,7 @@ fn emit_call(ctx: &LowerCtx, bb: &BlockBuilder, sym: String, sig: &FnSig, args: 
         return emit_foreign_call(ctx, bb, sym, sig, args)
     }
     if is_by_ref(ctx, &sig.ret) {
-        let lay = layout_of(tyit(ctx), sig.ret, &ctx.result.nominals, ctx.allocator)
+        let lay = lay_of(ctx, sig.ret)
         let tmp = bb.stack_slot(lay.size as u64, lay.align as u64)
         args.push(tmp)
         bb.call_void(sym, args)
@@ -3192,7 +3222,7 @@ fn lower_callee_value_call(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, call: &
         return unlowerable(ctx)
     }
     if is_by_ref(ctx, &f.ret) {
-        let lay = layout_of(tyit(ctx), f.ret, &ctx.result.nominals, ctx.allocator)
+        let lay = lay_of(ctx, f.ret)
         let tmp = bb.stack_slot(lay.size as u64, lay.align as u64)
         args.push(tmp)
         ptys.push(IrType.Ptr)
@@ -3255,8 +3285,7 @@ fn lower_struct_lit(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, lit: &StructLi
         let v = lower_field_init(ctx, bb, env, fi, &fty)
         let fp = bb.gep(slot, Operand.IntConst(off as i64))
         if is_by_ref(ctx, &fty) {
-            bb.memcpy(fp, v, Operand.IntConst(layout_of(tyit(ctx), fty, reg,
-                        ctx.allocator).size as i64))
+            bb.memcpy(fp, v, Operand.IntConst(lay_of(ctx, fty).size as i64))
         } else {
             bb.store(ir_of(ctx, fty), v, fp)
         }
@@ -3605,7 +3634,7 @@ fn tuple_pattern_member(ctx: &LowerCtx, bb: &BlockBuilder, i: usize, scrut: Oper
     let es: List(Ty) = list(espan.len, ctx.allocator)
     defer es.deinit()
     for k in 0..espan.len { es.push(tyit(ctx).child_at(espan, k)) }
-    let sl = tuple_layout(tyit(ctx), &es, &ctx.result.nominals, ctx.allocator)
+    let sl = tup_layout(ctx, &es)
     let addr = bb.gep(scrut, Operand.IntConst(sl.offsets[i] as i64))
     let ety = es[i]
     if is_by_ref(ctx, &ety) {
@@ -3762,8 +3791,7 @@ fn variant_test(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, ev: &EnumVariantPa
         return unlowerable(ctx)
     }
     let et = t.unwrap()
-    let offs = variant_payload_offsets(tyit(ctx), &et.def, vnum.unwrap() as usize, &et.args,
-        &ctx.result.nominals, ctx.allocator)
+    let offs = vp_offsets(ctx, &et.def, vnum.unwrap() as usize, &et.args)
     if offs.len != ev.payloads.len {
         offs.deinit()
         return unlowerable(ctx)
@@ -3859,7 +3887,7 @@ fn bind_tuple_pattern(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, tp: &TuplePa
 fn bind_matched(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, name: String, value: Operand,
     ty: &Ty) {
     if is_by_ref(ctx, ty) {
-        let lay = layout_of(tyit(ctx), ty.*, &ctx.result.nominals, ctx.allocator)
+        let lay = lay_of(ctx, ty.*)
         let slot = bb.stack_slot(lay.size as u64, lay.align as u64)
         bb.memcpy(slot, value, Operand.IntConst(lay.size as i64))
         env.bind_aggregate(name, slot, ty.*)
@@ -3894,8 +3922,7 @@ fn bind_variant_payload(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, ev: &EnumV
         return
     }
     let et = t.unwrap()
-    let offs = variant_payload_offsets(tyit(ctx), &et.def, vnum.unwrap() as usize, &et.args,
-        &ctx.result.nominals, ctx.allocator)
+    let offs = vp_offsets(ctx, &et.def, vnum.unwrap() as usize, &et.args)
     if offs.len != ev.payloads.len {
         offs.deinit()
         let _u = unlowerable(ctx)
@@ -3954,7 +3981,7 @@ fn niche_optional(ctx: &LowerCtx, ty: &Ty) bool {
         return false
     }
     let et = t.unwrap()
-    return enum_layout(tyit(ctx), &et.def, &et.args, &ctx.result.nominals, ctx.allocator).is_niche
+    return en_layout(ctx, &et.def, &et.args).is_niche
 }
 
 fn payload_offset(ctx: &LowerCtx, ty: &Ty) usize {
@@ -3963,8 +3990,7 @@ fn payload_offset(ctx: &LowerCtx, ty: &Ty) usize {
         return 4 as usize
     }
     let et = t.unwrap()
-    return enum_layout(tyit(ctx), &et.def, &et.args, &ctx.result.nominals,
-        ctx.allocator).payload_offset
+    return en_layout(ctx, &et.def, &et.args).payload_offset
 }
 
 // Enum variant construction (M7)
@@ -3989,7 +4015,7 @@ fn lower_variant_call(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, call: &CallE
         return unlowerable(ctx)
     }
     let et = t.unwrap()
-    let el = enum_layout(tyit(ctx), &et.def, &et.args, &ctx.result.nominals, ctx.allocator)
+    let el = en_layout(ctx, &et.def, &et.args)
 
     // Niche `Some(p)`: the payload pointer is the whole value.
     if el.is_niche {
@@ -4005,8 +4031,7 @@ fn lower_variant_call(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, call: &CallE
     // value - byte-wise consumers (the generic hash) read the whole slot. Each slot stores by the
     // variant's DECLARED payload type (substituted through the instantiation) - the memory's truth;
     // a coercion that rewrote an argument node's representation refuses - see `repr_compatible`.
-    let offs = variant_payload_offsets(tyit(ctx), &et.def, vnum as usize, &et.args,
-        &ctx.result.nominals, ctx.allocator)
+    let offs = vp_offsets(ctx, &et.def, vnum as usize, &et.args)
     if offs.len != call.args.len {
         offs.deinit()
         return unlowerable(ctx)
@@ -4034,7 +4059,7 @@ fn lower_variant_call(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, call: &CallE
         let v = lower_expr(ctx, bb, env, pj)
         let fp = bb.gep(slot, Operand.IntConst(offs[j] as i64))
         if is_by_ref(ctx, &pty) {
-            let psize = layout_of(tyit(ctx), pty, &ctx.result.nominals, ctx.allocator).size
+            let psize = lay_of(ctx, pty).size
             bb.memcpy(fp, v, Operand.IntConst(psize as i64))
         } else {
             bb.store(ir_of(ctx, pty), v, fp)
@@ -4055,7 +4080,7 @@ fn lower_variant_nullary(ctx: &LowerCtx, bb: &BlockBuilder, span: SourceSpan, vn
     }
 
     let et = t.unwrap()
-    let el = enum_layout(tyit(ctx), &et.def, &et.args, &ctx.result.nominals, ctx.allocator)
+    let el = en_layout(ctx, &et.def, &et.args)
 
     // The only nullary variant of the niche form is `None` - the null pointer by definition.
     if el.is_niche {
@@ -4146,7 +4171,7 @@ fn lower_cast_impl(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, c: &CastExpr, s
             return unlowerable(ctx)
         }
         let et = t.unwrap()
-        let el = enum_layout(tyit(ctx), &et.def, &et.args, &ctx.result.nominals, ctx.allocator)
+        let el = en_layout(ctx, &et.def, &et.args)
         if el.is_niche {
             return unlowerable(ctx)
         }
@@ -4260,7 +4285,7 @@ fn lower_coalesce(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, c: &CoalesceExpr
         return unlowerable(ctx)
     }
     let et = t.unwrap()
-    let el = enum_layout(tyit(ctx), &et.def, &et.args, &ctx.result.nominals, ctx.allocator)
+    let el = en_layout(ctx, &et.def, &et.args)
 
     let result_ty = node_ty(ctx, c.span)
     let ir = ir_of(ctx, result_ty)
@@ -4320,7 +4345,7 @@ fn lower_null_propagation(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env,
     if et.args.len != 1 {
         return unlowerable_why(ctx, "`?.` receiver shape")
     }
-    let el = enum_layout(tyit(ctx), &et.def, &et.args, reg, ctx.allocator)
+    let el = en_layout(ctx, &et.def, &et.args)
     if el.is_niche {
         return unlowerable_why(ctx, "`?.` niche receiver")
     }
@@ -4345,7 +4370,7 @@ fn lower_null_propagation(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env,
         return unlowerable_why(ctx, "`?.` result shape")
     }
     let ret2 = rt.unwrap()
-    let rel = enum_layout(tyit(ctx), &ret2.def, &ret2.args, reg, ctx.allocator)
+    let rel = en_layout(ctx, &ret2.def, &ret2.args)
     let flattens = fty == res_ty
 
     let recv = lower_expr(ctx, bb, env, np.receiver)
@@ -4372,7 +4397,7 @@ fn lower_null_propagation(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env,
         bb.store(IrType.I32, Operand.IntConst(1), slot)
         let pp = bb.gep(slot, Operand.IntConst(rel.payload_offset as i64))
         if is_by_ref(ctx, &fty) {
-            let fsize = layout_of(tyit(ctx), fty, reg, ctx.allocator).size
+            let fsize = lay_of(ctx, fty).size
             bb.memcpy(pp, faddr, Operand.IntConst(fsize as i64))
         } else {
             bb.store(ir_of(ctx, fty), bb.load(ir_of(ctx, fty), faddr), pp)
@@ -4440,7 +4465,7 @@ fn lower_try(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, t: &TryExpr) Operand 
     if et.args.len != 2 {
         return unlowerable(ctx)
     }
-    let el = enum_layout(tyit(ctx), &et.def, &et.args, &ctx.result.nominals, ctx.allocator)
+    let el = en_layout(ctx, &et.def, &et.args)
 
     let cont_ty = et.args[0]
     let ret_ty = et.args[1]
@@ -4522,7 +4547,7 @@ fn lower_assignment(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, a: &Assignment
     if is_by_ref(ctx, &ty) {
         // Aggregates are addressed by pointer, so `v` is the source address and the assignment is a
         // byte copy.
-        let lay = layout_of(tyit(ctx), ty, &ctx.result.nominals, ctx.allocator)
+        let lay = lay_of(ctx, ty)
         bb.memcpy(dst.unwrap(), v, Operand.IntConst(lay.size as i64))
     } else {
         bb.store(ir_of(ctx, ty), v, dst.unwrap())
@@ -4702,7 +4727,7 @@ fn member_field(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, ma: &MemberAccessE
         let tys: List(Ty) = list(espan.len, ctx.allocator)
         defer tys.deinit()
         for k in 0..espan.len { tys.push(tyit(ctx).child_at(espan, k)) }
-        let sl = tuple_layout(tyit(ctx), &tys, reg, ctx.allocator)
+        let sl = tup_layout(ctx, &tys)
         let base = lower_base_address(ctx, bb, env, ma.receiver)
         return Some(MemberField {
             addr = bb.gep(base, Operand.IntConst(sl.offsets[i] as i64)),
@@ -5086,7 +5111,7 @@ fn builtin_element_address(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, ix: &In
         return null
     }
 
-    let stride = layout_of(tyit(ctx), elem.unwrap(), &ctx.result.nominals, ctx.allocator).size
+    let stride = lay_of(ctx, elem.unwrap()).size
     let i = lower_expr(ctx, bb, env, ix.index)
     let off = bb.imul(IrType.I64, i, Operand.IntConst(stride as i64))
     return Some(bb.gep(base.unwrap(), off))
@@ -5188,15 +5213,14 @@ fn resolve_struct(ctx: &LowerCtx, ty: &Ty, reg: &NominalRegistry,
                     reg.get(ti.unwrap()).* match {
                         NomStruct(ts) => {
                             args.clear()
-                            return Some(StructTarget { def = ts, layout = struct_layout(tyit(ctx),
-                                    &ts, &args, reg, allocator), args = args })
+                            return Some(StructTarget { def = ts,
+                                layout = st_layout(ctx, &ts, &args), args = args })
                         }
                         _ => {}
                     }
                 }
             }
-            Some(StructTarget { def = s, layout = struct_layout(tyit(ctx), &s, &args, reg,
-                    allocator), args = args })
+            Some(StructTarget { def = s, layout = st_layout(ctx, &s, &args), args = args })
         }
         _ => null
     }
@@ -5255,7 +5279,7 @@ fn agg_type_of(ctx: &LowerCtx, ty: &Ty) AggType? {
         }
         _ => return null
     }
-    let lay = layout_of(tyit(ctx), ty.*, &ctx.result.nominals, ctx.allocator)
+    let lay = lay_of(ctx, ty.*)
     return Some(AggType {
         name = agg_c_name(ctx, fqn),
         size = lay.size,
@@ -5583,7 +5607,7 @@ fn lower_null(ctx: &LowerCtx, bb: &BlockBuilder, ty: &Ty) Operand {
         return Operand.NullPtr
     }
     if is_by_ref(ctx, ty) {
-        let lay = layout_of(tyit(ctx), ty.*, &ctx.result.nominals, ctx.allocator)
+        let lay = lay_of(ctx, ty.*)
         let slot = bb.stack_slot(lay.size as u64, lay.align as u64)
         bb.memset(slot, Operand.IntConst(0), Operand.IntConst(lay.size as i64))
         return slot
@@ -5800,8 +5824,7 @@ fn lower_binary(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, b: &BinaryExpr) Op
         let is_addsub = b.op match { Add => true, Sub => true, _ => false }
         let rhs_int = is_int_prim(ctx, rty)
         if is_addsub and rhs_int {
-            let esize = layout_of(tyit(ctx), l_inner.unwrap(), &ctx.result.nominals,
-                ctx.allocator).size
+            let esize = lay_of(ctx, l_inner.unwrap()).size
             let base = lower_expr(ctx, bb, env, b.lhs)
             let count = lower_expr(ctx, bb, env, b.rhs)
             let off = bb.imul(IrType.I64, count, Operand.IntConst(esize as i64))

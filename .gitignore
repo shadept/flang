@@ -153,3 +153,6 @@ examples/**/*.generated.f
 !examples/**/*.toml
 !examples/**/*.md
 !examples/**/.gitignore
+
+# Profiler output (RFC-025)
+*.folded

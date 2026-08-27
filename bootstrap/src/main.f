@@ -52,6 +52,8 @@ type Cli = struct {
     keep_c: bool
     timings: bool
     release: bool
+    profile: bool
+    profile_all: bool
     check: bool
     gate_a: bool
     gate_b: bool
@@ -74,6 +76,8 @@ type BuildOpts = struct {
     keep_c: bool
     timings: bool
     release: bool
+    profile: bool
+    profile_all: bool
     gate_a: bool
     gate_b: bool
     eager: bool
@@ -120,7 +124,7 @@ pub fn main() i32 {
 // subcommand. Index 0 is the program name and is skipped.
 fn parse_cli(argv: String[]) Cli {
     let cli: Cli
-    let opts = getopts("h(help)V(version)v(verbose)c(check)g(emit-generated)k(keep-c)t(timings)r(release)G(gate-a)B(gate-b)e(eager)W(warn-unused)M(mem)s(stdlib-path):T(target-os):A(target-arch):",
+    let opts = getopts("h(help)V(version)v(verbose)c(check)g(emit-generated)k(keep-c)t(timings)r(release)p(profile)P(profile-all)G(gate-a)B(gate-b)e(eager)W(warn-unused)M(mem)s(stdlib-path):T(target-os):A(target-arch):",
         argv, 1)
 
     // Drive opts.next() manually rather than `for r in opts` - std.env's `iter(&GetOpt)` returns a
@@ -153,6 +157,12 @@ fn parse_cli(argv: String[]) Cli {
                 }
                 if c == 'r' {
                     cli.release = true
+                }
+                if c == 'p' {
+                    cli.profile = true
+                }
+                if c == 'P' {
+                    cli.profile_all = true
                 }
                 if c == 'c' {
                     cli.check = true
@@ -236,6 +246,9 @@ fn print_help() {
     println("  -k, --keep-c        keep the generated C beside the executable")
     println("  -t, --timings       print per-phase wall times")
     println("  -r, --release       optimize the generated C (-O2 / /O2)")
+    println("  -p, --profile       instrument the project's functions for profiling (implies")
+    println("                      --release); the binary prints a profile on exit, see std.profile")
+    println("  -P, --profile-all   like --profile, but instrument the stdlib too")
     println("  -G, --gate-a        check the analysis against a re-analysis (RFC-022 gate A)")
     println("  -B, --gate-b        check lazy demand against total demand (RFC-022 gate B)")
     println("  -e, --eager         type-check every loaded module's bodies, not just the")
@@ -280,7 +293,11 @@ fn run_build(argv: String[], rest: usize, cli: &Cli) i32 {
         emit_generated = cli.emit_generated,
         keep_c = cli.keep_c,
         timings = cli.timings,
-        release = cli.release,
+        // Profiling a build the C compiler didn't optimize measures the debug codegen, not the
+        // program - `--profile` implies `--release`.
+        release = cli.release or cli.profile or cli.profile_all,
+        profile = cli.profile or cli.profile_all,
+        profile_all = cli.profile_all,
         gate_a = cli.gate_a,
         gate_b = cli.gate_b,
         eager = cli.eager,
@@ -904,8 +921,15 @@ fn finish_build(unit: &AnalyzedProject, label: String, out: String, opts: &Build
     if unit.demanded.len > 0 {
         dm = Some(&unit.demanded)
     }
+    const prof_c = if opts.profile { $"{opts.stdlib_path}/std/profile.c" } else { from_view("") }
+    defer prof_c.deinit()
+    let prof_rt: String? = null
+    if opts.profile {
+        prof_rt = Some(prof_c.as_view())
+    }
     let result = build_program(&unit.modules, &unit.fqns, &unit.result, out, opts.target,
-        &unit.file_paths, libs, ldflags, opts.verbose, opts.keep_c, opts.release, dm)
+        &unit.file_paths, libs, ldflags, opts.verbose, opts.keep_c, opts.release, dm, prof_rt,
+        opts.profile_all)
     if result.is_err() {
         report_build_error(&result.unwrap_err(), label)
         return 1
