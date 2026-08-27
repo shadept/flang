@@ -635,8 +635,11 @@ pub fn append(sb: &StringBuilder, s: String) {
     sb.append_bytes(slice_from_raw_parts(s.ptr, s.len))
 }
 
+// Consumes `s`: the bytes are copied in and the buffer freed, so a temporary - an interpolation, a
+// `to_string()` result - passes straight in without leaking. Append `x.as_view()` to keep `x`.
 pub fn append(sb: &StringBuilder, s: OwnedString) {
     sb.append(s.as_view())
+    s.deinit()
 }
 
 pub fn append(sb: &StringBuilder, s: StringBuilder) {
@@ -1396,4 +1399,12 @@ test "float alignment" {
     sb.append(3.14f64, "-<10.2")
     expect_view(&sb, "3.14------", "f64 dash left 10")
     sb.clear()
+}
+
+test "append consumes an owned string" {
+    let sb = string_builder(8)
+    defer sb.deinit()
+    sb.append($"a{1i32}b")
+    sb.append(from_view("!"))
+    assert_true(sb.as_view() == "a1b!", "the bytes land; the temporaries are freed by append")
 }

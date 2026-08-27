@@ -397,30 +397,3 @@ pub fn close(self: &ChildStdin) {
         self.__fd = -1
     }
 }
-
-// Read everything from `s` until EOF into a fresh OwnedString.
-pub fn read_to_end(self: &ChildStdout, allocator: &Allocator? = null) OwnedString {
-    let sb = string_builder(4096, allocator)
-    let buf = [0u8; 4096]
-    loop {
-        const n = self.read(buf as u8[])
-        if n == 0 {
-            break
-        }
-        sb.append_bytes(buf[0..n])
-    }
-    return sb.to_string()
-}
-
-pub fn read_to_end(self: &ChildStderr, allocator: &Allocator? = null) OwnedString {
-    let sb = string_builder(4096, allocator)
-    let buf = [0u8; 4096]
-    loop {
-        const n = self.read(buf as u8[])
-        if n == 0 {
-            break
-        }
-        sb.append_bytes(buf[0..n])
-    }
-    return sb.to_string()
-}

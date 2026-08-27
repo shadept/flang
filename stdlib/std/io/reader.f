@@ -7,8 +7,13 @@
 // Building block for File, stdin, network streams, etc. The caller owns the backing storage;
 // BufferedReader is a borrowed view.
 
+import std.allocator
 import std.mem
 import std.interface
+import std.string
+import std.string_builder
+import std.string_reader
+import std.test
 
 // Reader: raw read interface.
 // Returns the number of bytes actually read. 0 means EOF. Implement on concrete types via
@@ -106,6 +111,20 @@ pub fn read(r: &BufferedReader, dst: u8[]) usize {
     return n
 }
 
+// Read `r` to EOF into a fresh OwnedString. Bytes are taken as-is - no encoding checks.
+pub fn read_all(r: Reader, allocator: &Allocator? = null) OwnedString {
+    let sb = string_builder(4096, allocator)
+    let buf = [0u8; 4096]
+    loop {
+        const n = r.read(buf as u8[])
+        if n == 0 {
+            break
+        }
+        sb.append_bytes(buf[0..n])
+    }
+    return sb.to_string()
+}
+
 // Internal: refill the buffer from the underlying reader. Compacts unconsumed data to the front,
 // then fills the rest.
 fn fill(r: &BufferedReader) {
@@ -130,4 +149,25 @@ fn fill(r: &BufferedReader) {
     const dst = r.buf[r.end..]
     const n = r.inner.read(dst)
     r.end = r.end + n
+}
+
+// Tests
+
+test "read_all drains a reader to EOF" {
+    let r = mem_reader("hello, reader")
+    let out = read_all(r.reader())
+    defer out.deinit()
+    assert_true(out.as_view() == "hello, reader", "everything arrives, nothing extra")
+}
+
+test "read_all crosses the internal chunk size" {
+    let sb = string_builder(9600)
+    sb.append_repeated("abcdefgh", 1200)
+    let src = sb.to_string()
+    defer src.deinit()
+    let r = mem_reader(src.as_view())
+    let out = read_all(r.reader())
+    defer out.deinit()
+    assert_eq(out.len, src.len, "a payload larger than one chunk arrives whole")
+    assert_true(out.as_view() == src.as_view(), "byte for byte")
 }
