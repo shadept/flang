@@ -269,7 +269,7 @@ public static class HmCCodeGenerator
                 sb.AppendLine($"FLANG_ALIGN_PRE({s.Alignment}) struct FLANG_ALIGN_POST({s.Alignment}) {s.CName} {{");
                 foreach (var f in s.Fields)
                 {
-                    sb.AppendLine($"    {EmitFieldDecl(f.Type, f.Name)};");
+                    sb.AppendLine($"    {EmitFieldDecl(f.Type, CFieldName(f.Name))};");
                 }
                 if (s.Fields.Length == 0)
                 {
@@ -340,9 +340,9 @@ public static class HmCCodeGenerator
                 foreach (var field in irStruct.Fields)
                 {
                     if (scv.FieldValues.TryGetValue(field.Name, out var fv))
-                        parts.Add($".{field.Name} = {EmitGlobalFieldValue(fv, field.Type, stringTable)}");
+                        parts.Add($".{CFieldName(field.Name)} = {EmitGlobalFieldValue(fv, field.Type, stringTable)}");
                     else
-                        parts.Add($".{field.Name} = {ZeroInitForType(field.Type)}");
+                        parts.Add($".{CFieldName(field.Name)} = {ZeroInitForType(field.Type)}");
                 }
                 sb.Append(string.Join(", ", parts));
             }
@@ -414,9 +414,9 @@ public static class HmCCodeGenerator
         foreach (var field in irStruct.Fields)
         {
             if (scv.FieldValues.TryGetValue(field.Name, out var fv))
-                parts.Add($".{field.Name} = {EmitGlobalFieldValue(fv, field.Type, stringTable)}");
+                parts.Add($".{CFieldName(field.Name)} = {EmitGlobalFieldValue(fv, field.Type, stringTable)}");
             else
-                parts.Add($".{field.Name} = {ZeroInitForType(field.Type)}");
+                parts.Add($".{CFieldName(field.Name)} = {ZeroInitForType(field.Type)}");
         }
         return $"{{ {string.Join(", ", parts)} }}";
     }
@@ -935,6 +935,26 @@ public static class HmCCodeGenerator
             abiParams.Add(TypeLayoutService.IsLargeValue(p) && !TypeLayoutService.UsesCCallingConvention(p) ? new IrPointer(p) : p);
         return ([.. abiParams], usesRetSlot ? TypeLayoutService.IrVoidPrim : fp.Return);
     }
+
+    // Struct members are the one place a FLang identifier reaches C unmangled,
+    // and C reserves keywords plus, in GNU/MSVC modes, bare predefined macros
+    // (`linux`, `unix`) that a legal FLang field name can collide with. Field
+    // access in emitted code is offset-based, so the member name only has to be
+    // consistent between the struct declaration and designated initializers -
+    // both go through this escape.
+    private static readonly HashSet<string> CReservedFieldNames = new()
+    {
+        "auto", "break", "case", "char", "const", "continue", "default", "do",
+        "double", "else", "enum", "extern", "float", "for", "goto", "if",
+        "inline", "int", "long", "register", "restrict", "return", "short",
+        "signed", "sizeof", "static", "struct", "switch", "typedef", "union",
+        "unsigned", "void", "volatile", "while",
+        // GNU / MSVC predefined macros and extension keywords
+        "linux", "unix", "i386", "near", "far", "pascal", "cdecl",
+    };
+
+    private static string CFieldName(string name)
+        => CReservedFieldNames.Contains(name) ? name + "_" : name;
 
     /// <summary>
     /// Emit a C field/variable declaration. Handles function pointer syntax:
