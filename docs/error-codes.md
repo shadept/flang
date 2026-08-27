@@ -3639,6 +3639,25 @@ Templates read the same `TypeInfo` the runtime exposes, but they expand before t
 }
 ```
 
+### E2121: Shift Count Out of Range
+
+**Category**: Type Checking
+**Severity**: Error
+
+#### Description
+
+A shift's result has the left operand's type, so a literal count at or beyond that type's bit width leaves nothing of the value (and the shift is out of range in the emitted C before the truncation). The count must be in `0..width-1` of the left operand's integer type; `isize`/`usize` are checked against their widest (64-bit) layout. Only counts written as integer literals are checked - a runtime count is not.
+
+Widen the operand before shifting when the shifted-out bits are the point.
+
+#### Example
+
+```flang
+let b: u8 = 0xF0
+let x = (b & 0x07) << 18            // error[E2121]: Shift amount `18` is out of range for `u8` (0..7)
+let y: u32 = (b as u32 & 0x07) << 18  // ok: the operand is u32 before the shift
+```
+
 ### W1001: Unused Variable
 
 **Category**: Code Quality

@@ -74,6 +74,8 @@ pub const E_NOT_A_STRUCT: String = "E2018"
 pub const E_NAKED_ENUM_PAYLOAD: String = "E2047"
 // An integer / float literal outside its (resolved) type's range.
 pub const E_LITERAL_RANGE: String = "E2029"
+// A literal shift count at or beyond the shifted operand's bit width.
+pub const E_SHIFT_RANGE: String = "E2121"
 // An empty array literal with nothing to fix its element type.
 pub const E_EMPTY_ARRAY: String = "E2026"
 // `&<temporary>` - the reference would outlive the value.

@@ -5132,7 +5132,53 @@ fn check_binary(self: &Checker, bin: &BinaryExpr) Ty {
         Or => logical_result(self, lhs, rhs, bin.span)
         // Shifts land on the arith rule too: the count unifies with the shifted value's type,
         // matching the reference's unified result for Shl/Shr/UShr - and pinning a literal count.
+        Shl => shift(self, bin, lhs, rhs)
+        Shr => shift(self, bin, lhs, rhs)
+        UShr => shift(self, bin, lhs, rhs)
         _ => arithmetic(self, bin, lhs, rhs)
+    }
+}
+
+// A shift whose count is a literal must keep the count inside the shifted operand's width: the
+// result has the left operand's type, so a wider count leaves nothing of the value (E2121). Checked
+// when inference has already pinned the left operand to an integer primitive; a shift whose left
+// operand is still open here (a bare literal, a generic) goes unchecked - the reference compiler
+// sweeps those post-inference (see known-issues, checker parity).
+fn shift(self: &Checker, bin: &BinaryExpr, lhs: Ty, rhs: Ty) Ty {
+    const lit = bin.rhs.* match {
+        Lit(le) => le.value match {
+            Int(il) => Some(il)
+            _ => null
+        }
+        _ => null
+    }
+    if lit.is_none() {
+        return arithmetic(self, bin, lhs, rhs)
+    }
+
+    const p = ty_node(self, self.engine.resolve(lhs)) match {
+        NPrim(pk) => pk
+        _ => return arithmetic(self, bin, lhs, rhs)
+    }
+    if !is_integer(p) {
+        return arithmetic(self, bin, lhs, rhs)
+    }
+
+    const width = prim_bit_width(p)
+    const amount = parse_int_magnitude(lit.unwrap().text)
+    if amount.is_some() and amount.unwrap() >= width as u64 {
+        push_diag_e(self, lit.unwrap().span, E_SHIFT_RANGE,
+            $"Shift amount `{lit.unwrap().text}` is out of range for `{prim_name(p)}` (0..{width - 1})")
+    }
+    return arithmetic(self, bin, lhs, rhs)
+}
+
+fn prim_bit_width(p: PrimitiveKind) u32 {
+    return p match {
+        I8 => 8u32, U8 => 8u32
+        I16 => 16u32, U16 => 16u32
+        I32 => 32u32, U32 => 32u32
+        _ => 64u32
     }
 }
 
@@ -6205,9 +6251,12 @@ type PickInst = struct {
 // Pick the best candidate for the argument types and commit its unification. Each candidate is
 // probed inside an engine checkpoint that is rolled back, so losing candidates leave no bindings.
 // Arity accepts [required, total]: trailing defaulted params may be omitted and a variadic tail
-// takes any surplus. Preference: higher structural specificity (each concrete type constructor is a
-// constraint the arguments satisfied - `Dict($K,$V)` beats the catch-all `$T`), then lower coercion
-// cost, then fewer quantified vars, then registration order.
+// takes any surplus. Preference: fewer implicit conversions first - an argument matching its
+// parameter type as-is always beats one that had to be coerced (a String literal IS a String and
+// decays to u8[] only when no String parameter takes it) - then higher structural specificity (each
+// concrete type constructor is a constraint the arguments satisfied - `Dict($K,$V)` beats the
+// catch-all `$T`), then lower total cost (receiver adaptation, omitted defaults), then fewer
+// quantified vars, then registration order.
 fn resolve_overload(self: &Checker, candidates: &List(FunctionScheme), arg_tys: &List(Ty),
     span: SourceSpan, alt_recv: Ty? = null, named: &NamedArgs? = null, ufcs_offset: usize = 0usize,
     report_ambiguity: bool = false) OverloadPick? {
@@ -6226,6 +6275,7 @@ fn resolve_overload(self: &Checker, candidates: &List(FunctionScheme), arg_tys: 
     }
 
     let best: usize? = null
+    let best_coercions = 0u32
     let best_cost = 0u32
     let best_generics = 0usize
     let best_spec = 0u32
@@ -6241,18 +6291,24 @@ fn resolve_overload(self: &Checker, candidates: &List(FunctionScheme), arg_tys: 
             let alt_probed = probe_candidate(self, c, &alt_args, named, ufcs_offset)
             if alt_probed.is_some() {
                 used_alt = true
-                probed = Some(alt_probed.unwrap() + 1u32)
+                let ap = alt_probed.unwrap()
+                probed = Some(ProbeCost { coercions = ap.coercions, penalty = ap.penalty + 1u32 })
             }
         }
         if probed.is_some() {
-            let cost = probed.unwrap()
+            const p = probed.unwrap()
+            let coercions = p.coercions
+            let cost = p.total()
             let generics = c.signature.quantified.len()
             let spec = scheme_specificity(self, &c.signature, arg_tys)
-            let better = best.is_none() or spec > best_spec or (spec == best_spec
-                and cost < best_cost) or (spec == best_spec and cost == best_cost
+            let better = best.is_none() or coercions < best_coercions
+                or (coercions == best_coercions and spec > best_spec)
+                or (coercions == best_coercions and spec == best_spec and cost < best_cost)
+                or (coercions == best_coercions and spec == best_spec and cost == best_cost
                 and generics < best_generics)
             if better {
                 best = Some(ci)
+                best_coercions = coercions
                 best_cost = cost
                 best_generics = generics
                 best_spec = spec
@@ -6265,7 +6321,8 @@ fn resolve_overload(self: &Checker, candidates: &List(FunctionScheme), arg_tys: 
                 // VARIABLE is a different story: something later in the program may yet settle it
                 // (a generic whose return type its own body derives), so the call is parked and
                 // re-resolved once inference has finished.
-                let tied = spec == best_spec and cost == best_cost and generics == best_generics
+                let tied = coercions == best_coercions and spec == best_spec and cost == best_cost
+                    and generics == best_generics
                 if tied {
                     tie_breaker(self, candidates, best.unwrap(), ci, arg_tys) match {
                         TieByLiteral => ambiguous = true
@@ -6474,11 +6531,22 @@ fn span_specificity(self: &Checker, span: ChildSpan) u32 {
     return sum
 }
 
-// Speculatively check one candidate: null when it cannot take these arguments, else the total
-// coercion cost plus a penalty per omitted defaulted param (fuller matches win, as in the reference
-// checker).
+// A candidate's probe outcome, split so the ranking can weigh the parts differently: `coercions`
+// counts implicit conversions the arguments needed; `penalty` carries everything that is not a
+// conversion (omitted defaulted params, the UFCS receiver adaptation).
+pub type ProbeCost = struct {
+    coercions: u32
+    penalty: u32
+}
+
+pub fn total(self: ProbeCost) u32 {
+    return self.coercions + self.penalty
+}
+
+// Speculatively check one candidate: null when it cannot take these arguments, else its ProbeCost
+// (fuller matches win via the omitted-defaults penalty, as in the reference checker).
 fn probe_candidate(self: &Checker, c: &FunctionScheme, arg_tys: &List(Ty),
-    named: &NamedArgs? = null, ufcs_offset: usize = 0usize) u32? {
+    named: &NamedArgs? = null, ufcs_offset: usize = 0usize) ProbeCost? {
     let f = scheme_fn_ty(self, &c.signature) match {
         Some(ft) => ft
         None => return null
@@ -6570,7 +6638,7 @@ fn probe_candidate(self: &Checker, c: &FunctionScheme, arg_tys: &List(Ty),
     if c.has_variadic and omitted > 0 {
         omitted = omitted - 1
     }
-    return Some(cost + (omitted as u32) * 100u32)
+    return Some(ProbeCost { coercions = cost, penalty = (omitted as u32) * 100u32 })
 }
 
 // Whether `ty` resolves to the still-open var of a pending numeric literal (`10`, `3.14` with no

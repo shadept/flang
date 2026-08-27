@@ -65,6 +65,15 @@ public partial class HmTypeChecker : INominalTypeRegistry, ITemplateTypeProvider
     private readonly List<(FloatingPointLiteralNode Node, Type TypeVar)> _unsuffixedFloatLiterals = [];
 
     /// <summary>
+    /// Shift expressions whose count is a literal, with the left operand's type.
+    /// Validated post-inference: a literal count must be within 0..width-1 of the
+    /// left operand's integer type (E2121). Same collect-then-resolve shape as
+    /// `_unsuffixedLiterals` — the left type may still be a TypeVar when the
+    /// shift is inferred.
+    /// </summary>
+    private readonly List<(BinaryExpressionNode Node, Type LeftType)> _shiftChecks = [];
+
+    /// <summary>
     /// Specializations deferred because concreteParams contained unresolved TypeVars.
     /// Resolved after all module bodies are checked, when TypeVars should be concrete.
     /// </summary>
@@ -529,6 +538,27 @@ public partial class HmTypeChecker : INominalTypeRegistry, ITemplateTypeProvider
             }
             // Non-primitive resolved types (e.g., NominalType) are allowed —
             // they might be valid through coercion rules
+        }
+
+        // Validate literal shift counts against the left operand's width. The
+        // result of a shift has the left operand's type, so a count >= width
+        // leaves nothing (and the emitted C shifts out of range first) — never
+        // what the code meant.
+        foreach (var (node, leftType) in _shiftChecks)
+        {
+            var resolved = _ctx.Engine.Resolve(leftType);
+            if (resolved is not Core.Types.PrimitiveType prim || !_integerTypeNames.Contains(prim.Name))
+                continue;
+            var width = IntegerBitWidth(prim.Name);
+            if (width == 0)
+                continue;
+            var amount = ((IntegerLiteralNode)node.Right).Value;
+            if (amount >= width)
+            {
+                ReportError(
+                    $"Shift amount `{amount}` is out of range for `{prim.Name}` (0..{width - 1})",
+                    node.Right.Span, "E2121");
+            }
         }
 
         // Validate unsuffixed float literals

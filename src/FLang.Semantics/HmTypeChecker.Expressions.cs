@@ -210,6 +210,19 @@ public partial class HmTypeChecker
         _ => false
     };
 
+    /// <summary>
+    /// Bit width of a primitive integer type name; 0 when not an integer.
+    /// isize/usize use their widest (64-bit) layout, matching FitsInType.
+    /// </summary>
+    internal static int IntegerBitWidth(string typeName) => typeName switch
+    {
+        "u8" or "i8" => 8,
+        "u16" or "i16" => 16,
+        "u32" or "i32" or "char" => 32,
+        "u64" or "i64" or "usize" or "isize" => 64,
+        _ => 0
+    };
+
     private NominalType InferStringLiteral()
     {
         return LookupNominalType(WellKnown.String)
@@ -352,6 +365,15 @@ public partial class HmTypeChecker
     {
         var left = InferExpression(bin.Left);
         var right = InferExpression(bin.Right);
+
+        // A literal shift count is validated against the left operand's final
+        // width once inference settles (ValidatePostInference, E2121).
+        if (bin.Operator is BinaryOperatorKind.ShiftLeft or BinaryOperatorKind.ShiftRight
+                or BinaryOperatorKind.UnsignedShiftRight
+            && bin.Right is IntegerLiteralNode)
+        {
+            _shiftChecks.Add((bin, left));
+        }
 
         // Logical operators are always bool -> bool -> bool
         if (bin.Operator is BinaryOperatorKind.And or BinaryOperatorKind.Or)
@@ -760,6 +782,7 @@ public partial class HmTypeChecker
                         bool reportAmbiguity, out bool reportedAmbiguity, Type? altReceiver = null)
     {
         FunctionScheme? bestCandidate = null;
+        int bestCoercions = int.MaxValue;
         int bestCost = int.MaxValue;
         int bestGenericCount = int.MaxValue;
         int bestSpecificity = -1;
@@ -795,19 +818,17 @@ public partial class HmTypeChecker
 
             if (!success) continue;
 
+            // Unification cost minus the receiver adaptation's +1: the pure
+            // implicit-conversion count, the primary ranking key.
+            int coercions = totalCost - (usedAltReceiver ? 1 : 0);
             int genericCount = candidate.Signature.QuantifiedVarIds.Count;
             int specificity = SignatureSpecificity(candidate.Signature, argTypes);
 
-            // Prefer the structurally more specific declaration (each concrete
-            // type constructor is a constraint the arguments satisfied —
-            // `Dict($K,$V)` beats `$T`), then lower coercion cost, then fewer
-            // quantified type vars.
-            if (specificity > bestSpecificity
-                || (specificity == bestSpecificity && totalCost < bestCost)
-                || (specificity == bestSpecificity && totalCost == bestCost
-                    && genericCount < bestGenericCount))
+            if (RanksBetter(coercions, specificity, totalCost, genericCount,
+                    bestCoercions, bestSpecificity, bestCost, bestGenericCount))
             {
                 bestCandidate = candidate;
+                bestCoercions = coercions;
                 bestCost = totalCost;
                 bestGenericCount = genericCount;
                 bestSpecificity = specificity;
@@ -815,7 +836,8 @@ public partial class HmTypeChecker
                 bestFnType = fnType;
                 ambiguousOnUndetermined = false;
             }
-            else if (bestCandidate != null && genericCount == bestGenericCount && totalCost == bestCost
+            else if (bestCandidate != null && coercions == bestCoercions
+                     && genericCount == bestGenericCount && totalCost == bestCost
                      && specificity == bestSpecificity)
             {
                 var verdict = TieVerdict(argTypes, bestFnType, fnType);
@@ -960,6 +982,25 @@ public partial class HmTypeChecker
         _ => false,
     };
 
+    /// <summary>
+    /// Overload candidate ranking. Coercion count is the primary key: an
+    /// argument matching its parameter type as-is always beats one that had to
+    /// be implicitly converted (a String literal IS a String and decays to
+    /// u8[] only when no String parameter takes it). Structural specificity
+    /// ranks candidates that matched equally cleanly (`deinit(&amp;List($T))`
+    /// beats the catch-all `deinit(&amp;$T)`); total cost (receiver adaptation,
+    /// defaulted params) and quantifier count break the remaining ties.
+    /// </summary>
+    private static bool RanksBetter(
+        int coercions, int specificity, int totalCost, int genericCount,
+        int bestCoercions, int bestSpecificity, int bestCost, int bestGenericCount)
+    {
+        if (coercions != bestCoercions) return coercions < bestCoercions;
+        if (specificity != bestSpecificity) return specificity > bestSpecificity;
+        if (totalCost != bestCost) return totalCost < bestCost;
+        return genericCount < bestGenericCount;
+    }
+
     private static int TypeSpecificity(Core.Types.Type t) => t switch
     {
         TypeVar => 0,
@@ -1045,6 +1086,7 @@ public partial class HmTypeChecker
             Type? altReceiver = null)
     {
         FunctionScheme? bestCandidate = null;
+        int bestCoercions = int.MaxValue;
         int bestCost = int.MaxValue;
         int bestGenericCount = int.MaxValue;
         int bestSpecificity = -1;
@@ -1137,6 +1179,12 @@ public partial class HmTypeChecker
             }
             if (!success) continue;
 
+            // Unification cost so far minus the receiver adaptation's +1: the
+            // pure implicit-conversion count, the primary ranking key. The
+            // defaulted-param penalty below is not a conversion, so it lands
+            // only in totalCost.
+            int coercions = totalCost - (usedAltReceiver ? 1 : 0);
+
             // Cost penalty for each defaulted param (prefer overloads that use fewer defaults)
             int suppliedParamIndices = fullPositionalTypes.Length + namedArgs.Count;
             int defaultsUsed = paramCount - suppliedParamIndices;
@@ -1149,16 +1197,11 @@ public partial class HmTypeChecker
             // call never passed must not out-rank an exact shorter overload.
             int specificity = SignatureSpecificity(candidate.Signature, fullPositionalTypes);
 
-            // Prefer the structurally more specific declaration (each concrete
-            // type constructor is a constraint the arguments satisfied —
-            // `Dict($K,$V)` beats `$T`), then lower coercion cost, then fewer
-            // quantified type vars.
-            if (specificity > bestSpecificity
-                || (specificity == bestSpecificity && totalCost < bestCost)
-                || (specificity == bestSpecificity && totalCost == bestCost
-                    && genericCount < bestGenericCount))
+            if (RanksBetter(coercions, specificity, totalCost, genericCount,
+                    bestCoercions, bestSpecificity, bestCost, bestGenericCount))
             {
                 bestCandidate = candidate;
+                bestCoercions = coercions;
                 bestCost = totalCost;
                 bestGenericCount = genericCount;
                 bestSpecificity = specificity;
@@ -1166,7 +1209,8 @@ public partial class HmTypeChecker
                 bestFnType = fnType;
                 ambiguousOnUndetermined = false;
             }
-            else if (bestCandidate != null && genericCount == bestGenericCount && totalCost == bestCost
+            else if (bestCandidate != null && coercions == bestCoercions
+                     && genericCount == bestGenericCount && totalCost == bestCost
                      && specificity == bestSpecificity)
             {
                 var verdict = TieVerdict(fullPositionalTypes, bestFnType, fnType);

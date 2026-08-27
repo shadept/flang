@@ -2550,3 +2550,85 @@ of entries, which is exactly a >100x in-process slowdown that a fresh process do
 Unverified by measurement; `flang -p build` (the RFC-025 profiler) on a loop of
 analyze+deinit rounds would confirm it in one run. Fix candidates: key live entries by pointer in a
 `Dict`, or drop per-allocation tracking for size classes that dominate.
+
+## Exact `String` overload lost to an implicit `String -> u8[]` coercion - RESOLVED
+
+**Status:** Resolved - implicit-conversion count is now the primary overload ranking key (both checkers)
+**Affected:** `FLang.Semantics/HmTypeChecker` and `lib/flang_typer/src/checker.f` overload scoring
+
+With `fn write(file: &File, value: String) Result((), FileError)` beside the
+Writer vtable shim `fn write(self: &File, data: u8[]) usize` (both in
+`stdlib/std/io/file.f`), the call `write(&f, "text")` resolved to the `u8[]`
+shim and silently returned `usize` instead of `Result`. Root cause: ranking
+put structural specificity above coercion cost, and specificity is a node
+count of the parameter type - `Slice(u8)` (2) outranked the bare nominal
+`String` (1) - so the exact match lost before cost was consulted. Conversion
+count now ranks first; specificity only orders candidates that matched
+equally cleanly, which preserves the catch-all cases specificity exists for
+(`deinit(&List($T))` vs `deinit(&$T)`, adapted-receiver overloads). The UFCS
+receiver adaptation and omitted-default penalties are not conversions and
+stay out of the primary key. Regression test:
+`tests/harness/ufcs/overload_exact_over_coercion.f`; `file.f`'s tests are
+back to positional calls.
+
+## `flang test` dropped `test {}` blocks from any module with a generator invocation — RESOLVED
+
+**Status:** Resolved — `testModules` built after template expansion
+**Affected:** `FLang.CLI/Compiler.cs` (`flang test` block discovery)
+
+`TemplateExpander.ExpandAll` replaces the `ModuleNode` of every module that
+contains a `#generator(...)` invocation, but the set of test-eligible modules
+was collected by node identity before expansion, so those modules' `test {}`
+blocks were silently skipped - no error, just "fewer tests". In the stdlib
+suite this had muted 66 tests (every module using `#interface`, `#implement`,
+`#enum_utils`, or `#derive`, e.g. `encoding/json.f`, `io/reader.f`,
+`io/file.f`). Membership is now recorded as entry-input source paths and
+resolved to module nodes after expansion. The unmuting surfaced the rotted
+`file.f` write-overload calls fixed via the named-argument workaround above.
+
+## Reference: `as` cast fails when the operand's type is still an inference variable
+
+**Status:** Open
+**Affected:** `FLang.Semantics/HmTypeChecker` cast typing
+
+`const f = v.unwrap()` (with `v: f64?`) followed by `f as i64` reports
+E2002 "expected i64, got f64" on the cast expression itself, in both let and
+argument position. The same cast on a local whose type was written out
+(`const f: f64 = v.unwrap()` and then `f as i64`) compiles. The cast appears
+to be typed against the operand's unresolved variable rather than its solved
+type, so a cast whose operand comes straight out of a generic call mis-checks.
+Workaround: pin the operand with an annotated binding before casting -
+`lib/flang_lsp/src/server.f::get_i64` does this. Repro shape:
+
+    fn take(v: f64?) i64? {
+        const f = v.unwrap()
+        const whole: i64 = f as i64   // E2002 until f is annotated
+        return Some(whole)
+    }
+
+## `decode_char` truncated codepoints above U+00FF - RESOLVED
+
+**Status:** Resolved - continuation bytes widened to u32 before shifting
+**Affected:** `stdlib/std/encoding/utf8.f`
+
+The multi-byte branches shifted `u8` operands (`(s[0] & 0x1F) << 6`), so the
+shift happened in 8-bit arithmetic: every 3-byte codepoint and most 2-byte
+codepoints decoded wrong, and 4-byte sequences decoded to 0 (widths were
+right, values were not). The module had no tests; it does now, covering all
+four widths, an encode/decode round-trip, and invalid-lead-byte recovery.
+
+## Self-hosted: E2121 literal shift counts are checked only when the operand type is already pinned
+
+**Status:** Open (parity gap, narrow)
+**Affected:** `lib/flang_typer/src/checker.f` (`shift`)
+
+The reference validates literal shift counts post-inference
+(`ValidatePostInference`), so `let x = 1 << 40` caught later as `u8` still
+reports E2121. The self-hosted checker validates at the shift node and skips
+when the left operand is still an open variable there, because threading a
+new pending list through the per-slot literal sweep and its replay bookkeeping
+(`lit_tys`, `literal_flagged`) was judged not worth it for that shape. The
+divergence: a shift whose left operand is itself an unsuffixed literal (or an
+unpinned generic) that later resolves to a too-narrow type errors under
+`flang-ref` and passes under `flang build`. Shifts on typed operands - the
+class that produced the `decode_char` truncation - are caught by both.

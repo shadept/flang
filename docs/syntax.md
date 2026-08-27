@@ -224,6 +224,7 @@ defer close(handle)
 - `as` binds tighter than every binary operator: `a + b as i32` is `a + (b as i32)`.
 - `match` binds looser than every binary operator: `a + b match { ... }` is `(a + b) match { ... }`.
 - `>>` is arithmetic shift (sign-preserving); `>>>` is logical shift (zero-fills).
+- A literal shift count must be within the left operand's bit width (E2121): `u8_val << 18` is an error, `(u8_val as u32) << 18` is not.
 - `and`/`or` are keywords, short-circuit, bool only
 - `!expr` logical NOT, `~expr` bitwise NOT, `&expr` address-of (all prefix unary)
 - `~` is integer-only (error on `bool` and floats); `!` is `bool`-only
@@ -293,7 +294,7 @@ pub type Token = struct { ... }
 A blank line between the comment block and the declaration breaks the attachment — that comment becomes a free-floating note. Trailing comments after the same-line declaration are not doc comments.
 
 Surfaced by:
-- The self-hosted LSP (`tools/lsp`) on hover, completion items, and signature help.
+- The self-hosted LSP (`lib/flang_lsp`, `flang lsp`) on hover, completion items, and signature help.
 - The doc generator (planned `tools/doc`).
 - The formatter, which preserves doc-comment formatting verbatim.
 

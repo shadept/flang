@@ -565,6 +565,7 @@ public partial class HmTypeChecker
         var savedEmittedSpecs = new Dictionary<string, FunctionDeclarationNode>(_results.EmittedSpecs);
         var savedLiteralsCount = _unsuffixedLiterals.Count;
         var savedFloatLiteralsCount = _unsuffixedFloatLiterals.Count;
+        var savedShiftChecksCount = _shiftChecks.Count;
 
         Record(fn, fnType);
         _ctx.FunctionStack.Push(new FunctionContext(fn, returnType));
@@ -605,6 +606,8 @@ public partial class HmTypeChecker
             _unsuffixedLiterals.RemoveRange(savedLiteralsCount, _unsuffixedLiterals.Count - savedLiteralsCount);
         if (_unsuffixedFloatLiterals.Count > savedFloatLiteralsCount)
             _unsuffixedFloatLiterals.RemoveRange(savedFloatLiteralsCount, _unsuffixedFloatLiterals.Count - savedFloatLiteralsCount);
+        if (_shiftChecks.Count > savedShiftChecksCount)
+            _shiftChecks.RemoveRange(savedShiftChecksCount, _shiftChecks.Count - savedShiftChecksCount);
 
         // Filter diagnostics: remove errors that involve placeholder types or
         // missing functions (overload resolution requires concrete types).
