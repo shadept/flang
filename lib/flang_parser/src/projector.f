@@ -16,7 +16,6 @@
 import std.allocator
 import std.list
 import std.option
-import std.string
 import flang_parser.token
 import flang_parser.cst
 import flang_parser.ast
@@ -107,19 +106,6 @@ fn nth_node(cst: CstNode, n: usize) CstNode? {
                 }
                 seen = seen + 1
             }
-            TokenChild(_) => {}
-        }
-    }
-    return null
-}
-
-// First sub-node child whose kind matches `kind`, or null.
-fn find_node(cst: CstNode, kind: NodeKind) CstNode? {
-    for i in 0..cst.children.len {
-        cst.children[i] match {
-            NodeChild(child) => { if child.kind == kind {
-                    return Some(child)
-                } }
             TokenChild(_) => {}
         }
     }

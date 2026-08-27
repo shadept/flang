@@ -7431,7 +7431,8 @@ fn zonk_specializations(self: &Checker) {
 // all collects every module, which is what a checker that has never run a demand needs.
 pub fn check_all(self: &Checker, modules: &List(Module), paths: &List(String),
     sources: &List(OwnedString), file_paths: &List(OwnedString), generators: &TemplateState,
-    order: &List(usize)? = null, recollect: &List(bool)? = null) TypeCheckResult {
+    order: &List(usize)? = null, recollect: &List(bool)? = null,
+    demanded: &List(bool)? = null) TypeCheckResult {
     let seq = visit_sequence(self, modules.len, order)
     defer seq.deinit()
     // A new demand generation for the carried specialization registry: entries this demand never
@@ -7606,6 +7607,13 @@ pub fn check_all(self: &Checker, modules: &List(Module), paths: &List(String),
     let bodies_ns = 0u64
     let specialize_ns = 0u64
     for i in seq {
+        // Lazy demand (RFC-022 §6): a module outside the demand set has no body slot at all - its
+        // bodies are never checked, produce no node types and no diagnostics. Everything before
+        // phase 3 still ran for it: type names resolve program-wide, and its signatures and
+        // constants are what a demanded body resolves calls against.
+        if !is_demanded(demanded, i) {
+            continue
+        }
         const replay = slots_carry and !needs_collect(recollect, i) and body_cache_ok(self,
             paths[i])
         const t = if replay {
@@ -7731,6 +7739,12 @@ pub fn check_all(self: &Checker, modules: &List(Module), paths: &List(String),
             zonk_ns = zonk_ns,
         },
     }
+}
+
+// Whether module `i`'s bodies are in this demand's set. Same no-list-means-every-module rule as
+// `needs_collect`, so a total demand and a first check behave alike.
+fn is_demanded(demanded: &List(bool)?, i: usize) bool {
+    return needs_collect(demanded, i)
 }
 
 // Whether module `i`'s names come from its source this demand. No list means every module, so a

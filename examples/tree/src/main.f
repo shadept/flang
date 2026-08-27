@@ -21,7 +21,6 @@ import std.io.types
 import std.io.fs
 import std.conv
 import std.env
-import std.sort
 
 // -----------------------------------------------------------------------------
 // Types

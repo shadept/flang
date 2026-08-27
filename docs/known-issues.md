@@ -2517,3 +2517,15 @@ zero-filling helper (`EmitZeroedAlloca` in the reference; explicit
 memsets in `lower.f`). Spec 4.2 now states the guarantee. Regression
 test: `tests/harness/enums/enum_padding_hash.f` (hashes an Option, a
 payload variant, and a naked variant under two different stack fills).
+
+## Self-hosted: repeated full analyses in one process degrade far beyond the leaked bytes
+
+Running several `analyze_project` calls in one process - a fresh `AnalyzedProject` each time, full
+stdlib module set, unit deinited between runs - slows down sharply per round: inside a `flang test`
+runner process the fourth such analysis took minutes where a fresh process takes ~1-2 s. The known
+per-cold-check leak (~129 MB, see the retirement/leak entry above) explains the retention but not a
+>100x slowdown; candidate mechanisms are allocator behavior over a very large live heap and paging.
+`FLANG_REDEMAND` is a different path (it reuses one `AnalyzedProject`) and does not degrade this
+way. Matters for RFC-023: an LSP process runs many analyses over its lifetime. Observed 2026-08-27
+while writing the W1004 tests in `lib/flang_analysis/src/unused.f`; those tests now analyse a
+two-file fixture (`fixtures/leaf.f`) instead of the stdlib, which sidesteps it in the suite.

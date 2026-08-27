@@ -4,7 +4,6 @@
 
 import std.io.file
 import std.list
-import std.option
 import std.result
 import std.string
 import std.string_builder
@@ -18,12 +17,6 @@ pub fn read_source(path: String) Result(OwnedString, FileError) {
 }
 
 // ── diagnostic rendering (terminal) ────────────────────────────────────
-
-pub fn render_diagnostics(diags: &List(Diagnostic), path: String, source: String) {
-    for i in 0..diags.len {
-        print_diagnostic(path, source, &diags[i])
-    }
-}
 
 // Render diagnostics across a multi-module project, selecting each one's source and path by its
 // span's file id. Spanless diagnostics fall back to the first source.

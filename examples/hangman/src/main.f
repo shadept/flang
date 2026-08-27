@@ -9,7 +9,6 @@ import std.string_builder
 import std.random
 import std.time
 import std.readline
-import std.io.fmt
 import std.io.file
 
 const DICT_PATH = "/usr/share/dict/words"

@@ -19,7 +19,6 @@
 import std.allocator
 import std.list
 import std.option
-import std.string
 import flang_core.span
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -43,8 +42,9 @@ pub type Module = struct {
 //
 // Rebuilds the list on the global allocator rather than growing in place: `decls`' stored allocator
 // points at a projection-time local (dead once `project_module` returns), so a push that reallocs
-// would go through a dangling allocator. The old buffer stays behind in the module arena. ponytail:
-// the rebuilt buffer leaks at Module.deinit (arena-only free); fine, modules live to end of build.
+// would go through a dangling allocator. The old buffer stays behind in the module arena.
+// 
+// ponytail: the rebuilt buffer leaks at Module.deinit (arena-only free); fine, modules live to end of build.
 pub fn append_decls(self: &Module, decls: &List(Decl)) {
     let merged: List(Decl) = list(self.decls.len + decls.len)
     for &d in self.decls { merged.push(d.*) }

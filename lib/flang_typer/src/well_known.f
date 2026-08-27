@@ -6,7 +6,6 @@
 // literal, every annotation). FQN strings are `pub const` so the resolver can compare against them
 // by `String` value-equality without allocating.
 
-import std.string
 import flang_typer.type
 
 // ─────────────────────────────────────────────────────────────────────

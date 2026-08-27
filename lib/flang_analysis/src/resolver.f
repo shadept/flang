@@ -45,6 +45,28 @@ pub type ResolveCtx = struct {
     // Compile-time context #if conditions evaluate against during this build. Host by default;
     // `--target-os`/`--target-arch` override it.
     comptime: ComptimeCtx
+    // `flang.toml [project].kind = "lib"`. Decides the unused-function roots (W1003): a library's
+    // `pub fn`s are its API and count as used; an executable's functions must be reachable from
+    // `main`, `pub` or not.
+    lib_kind: bool
+    // Lazy body demand (RFC-022 §6): body slots run only for the demand set - the project's own
+    // modules plus everything transitively imported from them - instead of every loaded module. Off
+    // by default; the CLI turns it on for builds.
+    lazy_bodies: bool
+    // W1003 unused-function analysis. Off by default: a build does not check `test {}` bodies, so
+    // its reachability is blind to test-only use and the warning is opt-in there (`--warn-unused`).
+    // The LSP checks test bodies and turns it on with full edges.
+    warn_unused: bool
+}
+
+// Scoped mutability: turns lazy body demand on or off for every analysis run through this context.
+pub fn set_lazy(self: &ResolveCtx, on: bool) {
+    self.lazy_bodies = on
+}
+
+// Scoped mutability: turns the W1003 unused-function analysis on or off.
+pub fn set_warn_unused(self: &ResolveCtx, on: bool) {
+    self.warn_unused = on
 }
 
 // Scoped mutability: installs the build's compile-time context (a `--target-os`/`--target-arch`
@@ -177,6 +199,12 @@ pub fn resolve_ctx(proj: &Project, stdlib_root: String, allocator: &Allocator? =
         cwd = from_view("."),
         global_imports = globals,
         comptime = host_ctx(),
+        lib_kind = proj.kind match {
+            Lib => true
+            _ => false
+        },
+        lazy_bodies = false,
+        warn_unused = false,
     }
 }
 
@@ -193,6 +221,9 @@ pub fn single_file_ctx(stdlib_root: String, allocator: &Allocator? = null) Resol
         cwd = from_view("."),
         global_imports = globals,
         comptime = host_ctx(),
+        lib_kind = false,
+        lazy_bodies = false,
+        warn_unused = false,
     }
 }
 
@@ -367,6 +398,9 @@ fn fixture_ctx() ResolveCtx {
         cwd = from_view("."),
         global_imports = globals,
         comptime = host_ctx(),
+        lib_kind = false,
+        lazy_bodies = false,
+        warn_unused = false,
     }
 }
 

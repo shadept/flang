@@ -3695,6 +3695,66 @@ Rename one of the bindings. If the shadow is intentional (e.g., narrowing an opt
 
 ---
 
+### W1003: Unused Function
+
+**Category**: Code Quality
+**Severity**: Warning
+
+#### Description
+
+A function in one of the project's own modules is not reachable from any root through the recorded resolution edges (resolved call targets, operator picks, specializations and their overlay tables). Dispatch is recorded rather than name-matched, so protocol calls (`iter`/`next` from a for-loop, `op_eq` from `==`, defaulted-argument expressions, functions passed as values) always count as uses.
+
+Roots: `main`; every `pub fn` when `flang.toml` says `kind = "lib"` (they are the library's API); any use outside a function body (a constant initializer). In an executable, `pub` is **not** a root - every function must be reachable from `main`.
+
+The analysis is off by default in `flang build` and enabled with `-W`/`--warn-unused`. A build does not check `test {}` bodies, so when the warning is enabled there, every non-`pub` function of a module that contains test blocks is treated as a root - it may exist only for its tests. The LSP checks test bodies and runs the analysis with those edges included, so no such allowance applies there.
+
+#### Example
+
+```flang
+fn orphan() i32 { return 1 }   // warning[W1003]: unused function `orphan`
+
+pub fn main() i32 { return 0 }
+```
+
+#### Solution
+
+Remove the function, or prefix its name with `_` to keep it intentionally:
+
+```flang
+fn _orphan() i32 { return 1 }  // no warning
+```
+
+---
+
+### W1004: Unused Import
+
+**Category**: Code Quality
+**Severity**: Warning
+
+#### Description
+
+An `import` no recorded resolution edge lands in: nothing the importing file uses - calls, operators, field accesses, constants, or type citations in its declarations - comes from the imported module or from anything that module re-exports through `pub import`. Enabled together with W1003 (`-W`/`--warn-unused` on a build; the LSP's home turf).
+
+Conservative skips, because a build's edges are incomplete exactly there: a module with `test {}` blocks keeps all its imports (test bodies are unchecked and may be the only use); a module that declares or invokes source generators keeps its imports (generated code records against chunk files); an import of a module that exports type aliases is kept (an alias expanding to a non-nominal leaves no trace). `pub import` never warns - re-export is its purpose.
+
+#### Example
+
+```flang
+import std.deque   // warning[W1004]: unused import `std.deque`
+import std.list
+
+pub fn main() i32 {
+    let xs: List(i32) = list(1)
+    return xs.len as i32
+}
+```
+
+#### Solution
+
+Remove the import.
+
+---
+
 ## W2XXX: Semantic Analysis Warnings
 
 ### W2001: Deprecated Type Usage

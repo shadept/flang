@@ -37,6 +37,7 @@ import flang_typer.nominal_registry
 import flang_analysis.resolver
 import flang_analysis.project
 import flang_analysis.demand
+import flang_analysis.unused
 
 // A fully analysed compilation unit. `checked` is false when the source failed to parse - `result`
 // is then an empty placeholder.
@@ -163,6 +164,11 @@ pub type AnalyzedProject = struct {
     // Kept because a re-check has to rebuild the checker with the same project boundary the first
     // one used.
     project_origin: List(bool)
+    // Per module: whether this demand checked its bodies (RFC-022 §6 lazy demand). Empty when the
+    // demand was total - every consumer may then treat every module as demanded. Lowering skips the
+    // modules this leaves out: their bodies have no node types to lower, and nothing demanded can
+    // reach them (identifier and operator resolution are import-scoped).
+    demanded: List(bool)
     // Sources and ASTs that a re-parse replaced, held until the unit is dropped. A
     // `TypeCheckResult` holds string views into the source it was checked from (nominal FQNs, field
     // names) and AST pointers into the module, so a result outlives the buffers it was built over.
@@ -266,6 +272,7 @@ pub fn analyze_project(ctx: &ResolveCtx, entries: &List(OwnedString), overrides:
         file_paths = file_paths,
         modules = modules,
         project_origin = project_origin,
+        demanded = list(0, allocator),
         retired_sources = list(0, allocator),
         retired_modules = list(0, allocator),
         retired_results = list(0, allocator),
@@ -316,8 +323,23 @@ fn check_project(self: &AnalyzedProject, ctx: &ResolveCtx, edge_from: &List(usiz
 
     let path_views = self.fqns.map(fn(s: OwnedString) { s.as_view() })
     defer path_views.deinit()
-    let order = visit_order(&self.file_paths, &path_views, edge_from, edge_to, allocator)
+    let edges = index_edges(&self.file_paths, edge_from, edge_to, allocator)
+    defer edges.deinit()
+    let order = demand_order(path_views.len, &path_views, &edges, allocator)
     defer order.deinit()
+
+    // Lazy demand: which modules' bodies this demand checks. Total (an empty mask) unless the
+    // context asks for laziness - the LSP and the analysis tests want every body.
+    self.demanded.deinit()
+    self.demanded = if ctx.lazy_bodies {
+        demand_mask(&path_views, &self.project_origin, &ctx.global_imports, &edges, allocator)
+    } else {
+        list(0, allocator)
+    }
+    let dm: &List(bool)? = null
+    if self.demanded.len > 0 {
+        dm = Some(&self.demanded)
+    }
 
     let chk = &self.checker
     chk.begin_demand()
@@ -342,10 +364,84 @@ fn check_project(self: &AnalyzedProject, ctx: &ResolveCtx, edge_from: &List(usiz
     chk.set_comptime_ctx(ctx.comptime)
     chk.set_project_globals(&ctx.global_imports, &self.project_origin)
     self.result = check_all(chk, &self.modules, &path_views, &self.sources, &self.file_paths, &gens,
-        Some(&order), recollect)
+        Some(&order), recollect, dm)
     drain_diagnostics(&self.diagnostics, &chk.diagnostics)
     self.generated = gens.take_output()
     gens.deinit()
+
+    // W1003 unused functions, over the resolution edges the check just recorded. Opt-in per
+    // context: a build's demand never checks `test {}` bodies, so `tests_checked` is false and
+    // test-bearing modules are rooted conservatively. Only on a clean check: with errors present
+    // the tables are partial and reachability would be noise on top of the real problem.
+    if ctx.warn_unused and self.project_origin.len > 0 and count_errors(&self.diagnostics) == 0 {
+        let w = unused_functions(&self.result, &self.modules, &path_views, &self.project_origin,
+            ctx.lib_kind, false, allocator)
+        drain_diagnostics(&self.diagnostics, &w)
+        w.deinit()
+        let wi = unused_imports(&self.result, &self.modules, &path_views, &self.project_origin,
+            false, allocator)
+        drain_diagnostics(&self.diagnostics, &wi)
+        wi.deinit()
+    }
+}
+
+// The demand set for a lazy check (RFC-022 §6): the project's own modules, the auto-imported
+// prelude, the `[imports].global` modules, and everything transitively imported from any of them. A
+// module outside the set can contribute nothing to a demanded body - identifiers, operators and
+// constants resolve only through imports - so its bodies are never checked.
+fn demand_mask(fqns: &List(String), project_origin: &List(bool), globals: &List(OwnedString),
+    edges: &List(ImportEdge), alloc: &Allocator?) List(bool) {
+    let mask = filled_list(fqns.len, false, alloc)
+    let work: List(usize) = list(fqns.len, alloc)
+    defer work.deinit()
+    for i in 0..fqns.len {
+        if !demand_root(fqns[i], i, project_origin, globals) {
+            continue
+        }
+        mask[i] = true
+        work.push(i)
+    }
+
+    let adj: List(List(usize)) = list(fqns.len, alloc)
+    defer adj.deinit()
+    for _i in 0..fqns.len {
+        adj.push(list(0, alloc))
+    }
+    for &e in edges {
+        if e.from < fqns.len and e.to < fqns.len {
+            let row = &adj[e.from]
+            row.push(e.to)
+        }
+    }
+
+    let head: usize = 0
+    while head < work.len {
+        const m = work[head]
+        head = head + 1
+        for t in adj[m] {
+            if !mask[t] {
+                mask[t] = true
+                work.push(t)
+            }
+        }
+    }
+    return mask
+}
+
+fn demand_root(fqn: String, i: usize, project_origin: &List(bool),
+    globals: &List(OwnedString)) bool {
+    if i < project_origin.len and project_origin[i] {
+        return true
+    }
+    if fqn == "core.prelude" {
+        return true
+    }
+    for &g in globals {
+        if fqn == g.as_view() {
+            return true
+        }
+    }
+    return false
 }
 
 // Drop trailing entries until `xs` holds `n`, freeing each one.
@@ -484,6 +580,7 @@ pub fn analyze_source_set(srcs: List(OwnedString), fqns: &List(String),
         file_paths = file_paths,
         modules = modules,
         project_origin = no_origin,
+        demanded = list(0, allocator),
         retired_sources = list(0, allocator),
         retired_modules = list(0, allocator),
         retired_results = list(0, allocator),
@@ -503,6 +600,7 @@ pub fn deinit(self: &AnalyzedProject) {
     self.retired_results.deinit()
     self.retired_modules.deinit()
     self.retired_sources.deinit()
+    self.demanded.deinit()
     self.project_origin.deinit()
     self.diagnostics.deinit()
     self.parse_diags.deinit()
@@ -653,18 +751,16 @@ fn read_source(path: String, overrides: &Dict(String, String)?) OwnedString? {
     return read_text(path)
 }
 
-// Turn the path-keyed import edges into module indices, then order the set. An edge naming a path
-// that never became a module (an unreadable file) is dropped; every module is still emitted exactly
-// once.
-fn visit_order(file_paths: &List(OwnedString), fqns: &List(String), edge_from: &List(usize),
-    edge_to: &List(OwnedString), alloc: &Allocator?) List(usize) {
+// Turn the path-keyed import edges into module-index pairs. An edge naming a path that never became
+// a module (an unreadable file) is dropped. Feeds both the visit order and the lazy demand mask.
+fn index_edges(file_paths: &List(OwnedString), edge_from: &List(usize), edge_to: &List(OwnedString),
+    alloc: &Allocator?) List(ImportEdge) {
     let index_of: Dict(String, usize) = dict(alloc)
     defer index_of.deinit()
     for i in 0..file_paths.len {
         index_of.set(file_paths[i].as_view(), i)
     }
     let edges = list(edge_from.len, alloc)
-    defer edges.deinit()
     for i in 0..edge_from.len {
         const to = index_of.get(edge_to[i].as_view())
         if to.is_none() {
@@ -672,7 +768,7 @@ fn visit_order(file_paths: &List(OwnedString), fqns: &List(String), edge_from: &
         }
         edges.push(ImportEdge { from = edge_from[i], to = to.unwrap() })
     }
-    return demand_order(fqns.len, fqns, &edges, alloc)
+    return edges
 }
 
 fn enqueue_copy(queue: &List(OwnedString), seen: &Set(String), path: String) {
@@ -793,6 +889,42 @@ test "an edit adds, removes and leaves declarations alone" {
     ov.set("src/main.f", "type A = struct { x: i32 }\nfn main() B { return 0 }\n")
     reanalyze(&unit, &ctx, &dirty, Some(&ov))
     assert_true(unit.diagnostics.len > 0, "naming a removed type is reported")
+}
+
+test "the demand mask is the project's import closure plus prelude and globals" {
+    // 0 = the project file, 1 = its import, 2 = 1's import, 3 = an unimported stdlib module that
+    // itself imports 1, 4 = the auto-imported prelude, 5 = a [imports].global module.
+    let fqns: List(String) = list(6)
+    defer fqns.deinit()
+    fqns.push("p.main")
+    fqns.push("std.a")
+    fqns.push("std.b")
+    fqns.push("std.c")
+    fqns.push("core.prelude")
+    fqns.push("std.g")
+    let origin: List(bool) = list(6)
+    defer origin.deinit()
+    origin.push(true)
+    for _i in 0usize..5usize {
+        origin.push(false)
+    }
+    let globals: List(OwnedString) = list(1)
+    defer globals.deinit()
+    globals.push(from_view("std.g"))
+    let edges: List(ImportEdge) = list(3)
+    defer edges.deinit()
+    edges.push(ImportEdge { from = 0, to = 1 })
+    edges.push(ImportEdge { from = 1, to = 2 })
+    edges.push(ImportEdge { from = 3, to = 1 })
+
+    let mask = demand_mask(&fqns, &origin, &globals, &edges, null)
+    defer mask.deinit()
+    assert_true(mask[0], "the project file is a root")
+    assert_true(mask[1], "its import is demanded")
+    assert_true(mask[2], "transitively")
+    assert_true(!mask[3], "importing a demanded module does not make the importer demanded")
+    assert_true(mask[4], "the prelude is auto-imported everywhere")
+    assert_true(mask[5], "a global import is in every project file's scope")
 }
 
 test "a path no override names falls through to the file on disk" {

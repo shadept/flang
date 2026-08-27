@@ -17,9 +17,7 @@
 // bypass visibility entirely - an explicit dotted name is unambiguous and self-authorising.
 
 import std.allocator
-import std.option
 import std.set
-import std.string
 
 pub type Visibility = struct {
     current_module: String?

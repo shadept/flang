@@ -891,6 +891,55 @@ diff in reported diagnostics against eager demand. Guards the M12 rejection
 parity against silent regression. Nearly free once W1003 exists, since that
 warning already forces total project demand.
 
+**Landed 2026-08-27 (phase 6).** Lazy demand is per-module and default-on in
+the CLI. `check_all` takes a `demanded` mask; a module outside it has no body
+slot at all - no node types, no diagnostics, no specializations of its own.
+Everything before phase 3 still runs for it: nominal registration must stay
+program-wide (type names resolve leniently across imports), and its signatures
+and constants are what a demanded body resolves against. The mask
+(`analyze.f::demand_mask`) is the project's own modules, `core.prelude` and the
+`[imports].global` modules, closed transitively over import edges - the
+visibility rules guarantee nothing outside that closure can be named from
+inside it. Constants (phase 2.5) stay eager for every module, so preamble
+literal verdicts are demand-independent.
+
+Lowering skips undemanded modules - except their `#foreign` declarations,
+which name globally-linkable symbols any body may call without an import - and
+skips specializations whose template lives in an undemanded module (they exist
+only on behalf of undemanded preamble work; emitting one would reference
+unlowered functions). `--eager` restores total demand; `flang --gate-b build`
+analyses both ways and requires the published diagnostic lists identical.
+
+Measured: `examples/snake` check drops 935 -> ~105 ms total (bodies 425 -> 20
+ms; 29 of 62 slots skipped). `bootstrap/` skips 16 of 108 slots - its closure
+is nearly the whole tree, so bodies only drop 923 -> 895 ms. The stage-2 =
+stage-3 fixpoint holds under lazy demand (both stages skip identically), and
+the full harness is green through it.
+
+**W1003 landed 2026-08-27** (`flang_analysis/src/unused.f`), opt-in:
+`-W`/`--warn-unused` on a build, and meant to be on by default in the LSP
+(RFC-023), where `test {}` bodies are checked and their edges are real. A
+build's demand never checks test bodies, so under `-W` every non-`pub`
+function of a test-bearing module is rooted conservatively
+(`tests_checked = false`) - a helper whose sole purpose is its tests must
+never warn. Reachability runs over `resolved_targets`, `resolved_ops`,
+receiver-deref chains and each specialization's overlay, with sites attributed
+to their enclosing function by span containment (per-file binary search over
+declaration spans); a site with no such home - a constant initializer, a
+synthesized node - roots its target instead. Registry-driven: the function
+nodes come from the carried function registry (name, module, `pub`, foreign
+flag, decl span), so generated declarations (chunk file ids) and synthesized
+lambda hosts fall out naturally. First run over the tree found two genuinely
+dead functions (`bootstrap/src/frontend.f::render_diagnostics`,
+`flang_parser/src/projector.f::find_node`), both deleted; every `lib/*` and
+example is otherwise clean under `-W`.
+
+W1004 (unused import) landed beside it under the same flag and the same
+conservative skips, aggregating the identical evidence per importing file - an
+`import M` warns when no recorded edge from the file lands in M or its
+`pub import` closure. Its first sweep removed 26 dead imports tree-wide. See
+`docs/error-codes.md` and architecture.md; not itself an RFC-022 deliverable.
+
 **Existing gates stay green throughout:** 563/1/16 harness run sequentially
 (the one failure is the documented Windows cross-target link,
 `directives/if_directive_cross_target.f`; a parallel run adds flaky C-compiler
@@ -925,7 +974,9 @@ object contention on top), stage-2 = stage-3 byte-identical, 11/11 examples.
           phase); zonk_specializations scoped to the demand's fresh entries.
           The remaining warm floor is the per-demand table rebuild - RFC-023's
           keyed tables, not a sweep
- 6  lazy demand + W1003 + Gate B
+ 6  DONE 2026-08-27: lazy demand (default-on in the CLI, --eager opts out),
+    W1003 unused-function (opt-in via --warn-unused; LSP is the primary
+    consumer), gate B (--gate-b: lazy vs eager diagnostic parity)
 ```
 
 Phase 0 landed first for a reason: the body/collection split was inferred, not

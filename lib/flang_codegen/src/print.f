@@ -1,8 +1,6 @@
 // Text-format printer for FIR. Output matches the canonical form in `docs/fir.md`.
 
 import std.list
-import std.option
-import std.string
 import std.string_builder
 import flang_codegen.fir
 

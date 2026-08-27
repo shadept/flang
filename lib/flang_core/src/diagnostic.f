@@ -2,7 +2,6 @@
 // consumed by the CLI, the LSP, the formatter, and `flang fix`. Code actions ship attached to the
 // diagnostic so the same fix surfaces in both the CLI and the LSP from a single source.
 
-import std.list
 import std.string
 import flang_core.span
 

@@ -23,6 +23,7 @@ import std.string_builder
 import std.io.file
 import std.io.fs
 import std.time
+import flang_core.diagnostic
 import flang_parser.comptime
 import flang_parser.lexer
 import flang_fmt.fmt
@@ -53,6 +54,9 @@ type Cli = struct {
     release: bool
     check: bool
     gate_a: bool
+    gate_b: bool
+    eager: bool
+    warn_unused: bool
     mem: bool
     subcommand: String
     rest_index: usize
@@ -71,6 +75,9 @@ type BuildOpts = struct {
     timings: bool
     release: bool
     gate_a: bool
+    gate_b: bool
+    eager: bool
+    warn_unused: bool
     mem: bool
     stdlib_path: String
     target: ComptimeCtx
@@ -113,7 +120,7 @@ pub fn main() i32 {
 // subcommand. Index 0 is the program name and is skipped.
 fn parse_cli(argv: String[]) Cli {
     let cli: Cli
-    let opts = getopts("h(help)V(version)v(verbose)c(check)g(emit-generated)k(keep-c)t(timings)r(release)G(gate-a)M(mem)s(stdlib-path):T(target-os):A(target-arch):",
+    let opts = getopts("h(help)V(version)v(verbose)c(check)g(emit-generated)k(keep-c)t(timings)r(release)G(gate-a)B(gate-b)e(eager)W(warn-unused)M(mem)s(stdlib-path):T(target-os):A(target-arch):",
         argv, 1)
 
     // Drive opts.next() manually rather than `for r in opts` - std.env's `iter(&GetOpt)` returns a
@@ -152,6 +159,15 @@ fn parse_cli(argv: String[]) Cli {
                 }
                 if c == 'G' {
                     cli.gate_a = true
+                }
+                if c == 'B' {
+                    cli.gate_b = true
+                }
+                if c == 'e' {
+                    cli.eager = true
+                }
+                if c == 'W' {
+                    cli.warn_unused = true
                 }
                 if c == 'M' {
                     cli.mem = true
@@ -221,6 +237,10 @@ fn print_help() {
     println("  -t, --timings       print per-phase wall times")
     println("  -r, --release       optimize the generated C (-O2 / /O2)")
     println("  -G, --gate-a        check the analysis against a re-analysis (RFC-022 gate A)")
+    println("  -B, --gate-b        check lazy demand against total demand (RFC-022 gate B)")
+    println("  -e, --eager         type-check every loaded module's bodies, not just the")
+    println("                      project's import closure")
+    println("  -W, --warn-unused   report unreachable project functions (W1003)")
     println("  -M, --mem           report heap bytes still out when the build ends")
     println("  -T, --target-os     target OS for #if evaluation (windows|linux|macos)")
     println("  -A, --target-arch   target arch for #if evaluation (x86_64|arm64|x86)")
@@ -262,6 +282,9 @@ fn run_build(argv: String[], rest: usize, cli: &Cli) i32 {
         timings = cli.timings,
         release = cli.release,
         gate_a = cli.gate_a,
+        gate_b = cli.gate_b,
+        eager = cli.eager,
+        warn_unused = cli.warn_unused,
         mem = cli.mem,
         stdlib_path = stdlib.as_view(),
         target = target_opt.unwrap(),
@@ -377,6 +400,14 @@ fn build_project(opts: &BuildOpts) i32 {
     let ctx = resolve_ctx(&proj, opts.stdlib_path)
     defer ctx.deinit()
     ctx.set_comptime(opts.target)
+    // Lazy body demand is the default (RFC-022 §6): only the project's import closure is
+    // body-checked. `--eager` restores the total demand.
+    ctx.set_lazy(!opts.eager)
+    ctx.set_warn_unused(opts.warn_unused)
+
+    if opts.gate_b {
+        return run_gate_b(&ctx, &sources, null)
+    }
 
     // `--mem` routes the analysis through a counting decorator; the report at the end covers the
     // heap it was handed, not the whole process.
@@ -483,10 +514,16 @@ fn build_single_file(path: String, out: String, opts: &BuildOpts) i32 {
     let ctx = single_file_ctx(opts.stdlib_path)
     defer ctx.deinit()
     ctx.set_comptime(opts.target)
+    ctx.set_lazy(!opts.eager)
+    ctx.set_warn_unused(opts.warn_unused)
 
     let entries: List(OwnedString) = list(1)
     entries.push(from_view(path))
     defer entries.deinit()
+
+    if opts.gate_b {
+        return run_gate_b(&ctx, &entries, null)
+    }
 
     let unit = analyze_project(&ctx, &entries)
     defer unit.deinit()
@@ -715,6 +752,86 @@ fn run_gate_a(ctx: &ResolveCtx, cold: &AnalyzedProject, alloc: &Allocator?) i32 
     return 1
 }
 
+// Gate B (RFC-022): analyse the project twice - total demand, then lazy demand - and require the
+// two published diagnostic lists to be identical. Laziness may only ever skip work whose absence is
+// invisible: a module outside the demand set has no diagnostics either way, because the whole tree
+// is expected to be clean.
+fn run_gate_b(ctx: &ResolveCtx, entries: &List(OwnedString), alloc: &Allocator?) i32 {
+    ctx.set_lazy(false)
+    let eager = analyze_project(ctx, entries, null, alloc)
+    defer eager.deinit()
+    ctx.set_lazy(true)
+    let lazy = analyze_project(ctx, entries, null, alloc)
+    defer lazy.deinit()
+
+    if !eager.checked or !lazy.checked {
+        println("gate B: the project does not type-check - nothing to compare")
+        return 1
+    }
+
+    let a = diag_keys(&eager.diagnostics)
+    defer a.deinit()
+    let b = diag_keys(&lazy.diagnostics)
+    defer b.deinit()
+    let diffs: usize = 0
+    if a.len != b.len {
+        const m = $"gate B: {a.len} diagnostic(s) eager, {b.len} lazy"
+        defer m.deinit()
+        println(m.as_view())
+        diffs = 1
+    } else {
+        for i in 0..a.len {
+            if a[i].as_view() == b[i].as_view() {
+                continue
+            }
+            diffs = diffs + 1
+            if diffs <= 10 {
+                const m = $"  eager: {a[i].as_view()}\n  lazy:  {b[i].as_view()}"
+                defer m.deinit()
+                println(m.as_view())
+            }
+        }
+    }
+    if diffs > 0 {
+        const m = $"gate B: FAILED - {diffs} difference(s)"
+        defer m.deinit()
+        println(m.as_view())
+        return 1
+    }
+
+    let skipped: usize = 0
+    for f in lazy.demanded {
+        if !f {
+            skipped = skipped + 1
+        }
+    }
+    const ok = $"gate B: OK - {a.len} diagnostic(s) identical, {skipped} of {lazy.modules.len} module slots skipped"
+    defer ok.deinit()
+    println(ok.as_view())
+    const eb = eager.result.phases.bodies_ns / 1000000u64
+    const lb = lazy.result.phases.bodies_ns / 1000000u64
+    const bd = $"gate B: bodies {eb} ms eager, {lb} ms lazy"
+    defer bd.deinit()
+    println(bd.as_view())
+    return 0
+}
+
+// One diagnostic as a comparable line, the list sorted - publication order may differ between the
+// two demands, identity must not.
+fn diag_keys(diags: &List(Diagnostic)) List(OwnedString) {
+    let out: List(OwnedString) = list(diags.len)
+    for i in 0..diags.len {
+        const d = &diags[i]
+        out.push($"{d.code}|{d.span.file_id}|{d.span.start}|{d.message.as_view()}")
+    }
+    out.sort(cmp_owned)
+    return out
+}
+
+fn cmp_owned(a: OwnedString, b: OwnedString) Ord {
+    return op_cmp(a.as_view(), b.as_view())
+}
+
 // Expand `${VAR}` in each entry against the environment. An undefined variable's name is collected
 // in `missing` and the entry is dropped - the caller reports them together, the way the reference
 // compiler does.
@@ -783,8 +900,12 @@ fn finish_build(unit: &AnalyzedProject, label: String, out: String, opts: &Build
         return 0
     }
 
+    let dm: &List(bool)? = null
+    if unit.demanded.len > 0 {
+        dm = Some(&unit.demanded)
+    }
     let result = build_program(&unit.modules, &unit.fqns, &unit.result, out, opts.target,
-        &unit.file_paths, libs, ldflags, opts.verbose, opts.keep_c, opts.release)
+        &unit.file_paths, libs, ldflags, opts.verbose, opts.keep_c, opts.release, dm)
     if result.is_err() {
         report_build_error(&result.unwrap_err(), label)
         return 1

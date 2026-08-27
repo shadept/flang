@@ -101,6 +101,16 @@ pub const E_TRY_IN_DEFER: String = "E2091"
 // locally, an error at module scope, where it is E2005).
 pub const W_SAME_SCOPE_SHADOW: String = "W1002"
 
+// A project function no root reaches through the recorded resolution edges (resolved targets,
+// operator picks, specializations). Roots: `main`, and every `pub fn` when the project is a
+// library. `_`-prefixed names opt out, like W1001.
+pub const W_UNUSED_FUNCTION: String = "W1003"
+
+// An `import` no recorded resolution edge lands in: nothing from the imported module (or anything
+// it re-exports through `pub import`) is used by the importing file. `pub import` never warns - the
+// re-export is its purpose.
+pub const W_UNUSED_IMPORT: String = "W1004"
+
 pub const W_DEPRECATED: String = "W2001"
 pub const W_DEPRECATED_FN: String = "W2002"
 pub const W_UNKNOWN_DIRECTIVE: String = "W2003"

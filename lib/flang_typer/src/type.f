@@ -10,8 +10,6 @@
 // `Error` is poison. Unification with `Error` on either side resolves to `Error` and emits no
 // diagnostic, so a single upstream failure does not cascade.
 
-import std.option
-import std.string
 import flang_core.span
 
 // The type handle. Handed out by the `TypeInterner` in first-intern order; the leaf ids below are

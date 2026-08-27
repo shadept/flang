@@ -10,10 +10,8 @@
 
 import std.allocator
 import std.dict
-import std.list
 import std.option
 import std.stack
-import std.string
 import flang_typer.scheme
 import flang_typer.node_id
 

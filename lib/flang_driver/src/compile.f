@@ -7,7 +7,6 @@ import std.option
 import std.result
 import std.string
 import std.string_builder
-import std.io.file
 import std.io.fs
 import std.time
 import flang_parser.ast
@@ -18,7 +17,6 @@ import flang_codegen.backend
 import flang_codegen.c_backend
 import flang_analysis.analyze
 import flang_driver.lower
-import flang_analysis.project
 import flang_analysis.resolver
 
 // Lower `unit` to FIR and compile+link it to an executable at `output_path` (the backend appends a
@@ -50,10 +48,10 @@ pub fn build_unit(unit: &AnalyzedUnit, output_path: String,
 pub fn build_program(modules: &List(Module), fqns: &List(OwnedString), result: &TypeCheckResult,
     output_path: String, comptime_ctx: ComptimeCtx, source_paths: &List(OwnedString),
     libs: &List(OwnedString), ldflags: &List(OwnedString), verbose: bool = false,
-    keep_c: bool = false, release: bool = false, allocator: &Allocator? = null) Result(BuildResult,
-    BuildError) {
+    keep_c: bool = false, release: bool = false, demanded: &List(bool)? = null,
+    allocator: &Allocator? = null) Result(BuildResult, BuildError) {
     const lower_start = monotonic_ns()
-    let m = lower_program(modules, fqns, result, comptime_ctx, allocator)
+    let m = lower_program(modules, fqns, result, comptime_ctx, demanded, allocator)
     const lower_ns = elapsed_ns(lower_start)
     if verbose and m.skip_notes.len > 0 {
         const hdr = $"  {m.functions.len} function(s) emitted, {m.skip_notes.len} skipped:"

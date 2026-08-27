@@ -393,7 +393,8 @@ pub fn lower_module(ast_module: &Module, result: &TypeCheckResult,
 // one program so the backend links it in a single pass. `fqns` is parallel to `modules`; each
 // function's symbol is namespaced by its module so merged same-named functions cannot collide.
 pub fn lower_program(modules: &List(Module), fqns: &List(OwnedString), result: &TypeCheckResult,
-    comptime_ctx: ComptimeCtx, allocator: &Allocator? = null) IrModule {
+    comptime_ctx: ComptimeCtx, demanded: &List(bool)? = null,
+    allocator: &Allocator? = null) IrModule {
     let m = module(allocator)
     let sb = symbol_builder(result, allocator)
     for i in 0..modules.len {
@@ -414,15 +415,36 @@ pub fn lower_program(modules: &List(Module), fqns: &List(OwnedString), result: &
         flushing = false, blocked = false, blocked_note = null, blocked_subject = null,
         pending_lambdas = list(0, allocator), comptime = comptime_ctx, consts = dict(allocator),
         const_inits = list(0, allocator), owned_syms = list(0, allocator) }
-    // Consts first: bodies in ANY module may read a const from any other, and the readable gate is
-    // `ctx.consts` membership.
+    // A module outside the demand set (RFC-022 §6) was never body-checked: it has no node types to
+    // lower, and nothing demanded can reach its functions or constants - identifier, operator and
+    // constant resolution are import-scoped. Its foreign declarations still lower: a `#foreign`
+    // symbol resolves program-wide without an import. Consts first: bodies in ANY module may read a
+    // const from any other, and the readable gate is `ctx.consts` membership.
     for i in 0..modules.len {
-        lower_consts(&m, &ctx, &modules[i])
+        if module_demanded(demanded, i) {
+            lower_consts(&m, &ctx, &modules[i])
+        }
     }
     for i in 0..modules.len {
-        lower_into(&m, &ctx, &modules[i], fqns[i].as_view())
+        if module_demanded(demanded, i) {
+            lower_into(&m, &ctx, &modules[i], fqns[i].as_view())
+        } else {
+            lower_foreign_decls(&m, &ctx, &modules[i], fqns[i].as_view())
+        }
     }
-    lower_specializations(&m, &ctx)
+    // A specialization of an undemanded module's template exists only on behalf of undemanded code
+    // (an eager constant initializer, a default value) - emitting it would reference that module's
+    // unlowered functions.
+    let skip_specs: Set(String) = set(allocator)
+    defer skip_specs.deinit()
+    if demanded.is_some() {
+        for i in 0..modules.len {
+            if !module_demanded(demanded, i) {
+                skip_specs.add(fqns[i].as_view())
+            }
+        }
+    }
+    lower_specializations(&m, &ctx, Some(&skip_specs))
     lower_pending_lambdas(&m, &ctx)
     flush_strings(&m, &ctx)
     // ponytail: the symbol table leaks - the IrModule's names borrow its strings (see
@@ -646,6 +668,33 @@ fn lower_into(m: &IrModule, ctx: &LowerCtx, ast_module: &Module, fqn: String) {
     for &d in ast_module.decls {
         d.* match {
             Function(fd) => lower_decl(m, ctx, &fd, fqn)
+            _ => {}
+        }
+    }
+}
+
+// Whether module `i` is in the demand set. No list means a total demand - every module lowers.
+fn module_demanded(demanded: &List(bool)?, i: usize) bool {
+    if demanded.is_none() {
+        return true
+    }
+    const flags = demanded.unwrap()
+    if i >= flags.len {
+        return true
+    }
+    return flags[i]
+}
+
+// Only the body-less `#foreign` declarations of an undemanded module: they name global link-time
+// symbols any demanded body may call without an import.
+fn lower_foreign_decls(m: &IrModule, ctx: &LowerCtx, ast_module: &Module, fqn: String) {
+    for &d in ast_module.decls {
+        d.* match {
+            Function(fd) => {
+                if fd.body.is_none() {
+                    lower_decl(m, ctx, &fd, fqn)
+                }
+            }
             _ => {}
         }
     }
@@ -978,7 +1027,7 @@ fn lower_function(m: &IrModule, ctx: &LowerCtx, decl: &FunctionDecl) {
 // once per concrete signature, reading node types / targets / operators through the instantiation's
 // overlay, under a symbol mangled from the concrete parameter AND return types (return included
 // because a return-only-polymorphic template's instantiations share every parameter token).
-fn lower_specializations(m: &IrModule, ctx: &LowerCtx) {
+fn lower_specializations(m: &IrModule, ctx: &LowerCtx, skip_modules: &Set(String)? = null) {
     // Two specs can settle to the SAME final signature when their signatures entered instantiation
     // with callable-slot vars (RFC-014 lambdas through `$F`) - their symbols then collide; emit the
     // first and skip the twins.
@@ -990,6 +1039,9 @@ fn lower_specializations(m: &IrModule, ctx: &LowerCtx) {
         }
         let s = found.unwrap()
         if s.decl.body.is_none() {
+            continue
+        }
+        if skip_modules.is_some() and skip_modules.unwrap().contains(s.module) {
             continue
         }
         let sym = ctx.syms.spec_symbol(s.id)

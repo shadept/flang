@@ -10,8 +10,6 @@
 // quantified id has been replaced by an engine-fresh `Var`.
 
 import std.allocator
-import std.list
-import std.option
 import std.set
 import flang_typer.type
 import flang_typer.interner
