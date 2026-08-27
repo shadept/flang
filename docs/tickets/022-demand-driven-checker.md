@@ -1,7 +1,8 @@
 # RFC-022: Demand-driven checker - declaration-level queries, incremental invalidation
 
 **Type:** Compiler mechanism (typer)
-**Status:** Proposed
+**Status:** Landed - phases 0-6 all shipped (2026-08-25 .. 2026-08-27). Open questions 3 and 4
+carry to RFC-023, as does the remaining warm floor (the per-demand table rebuild).
 **Depends on:** None
 **Blocks:** RFC-023 (language server)
 **Relates to:** ADR-0006 §4 (Jai message-loop shape - scoped to template
