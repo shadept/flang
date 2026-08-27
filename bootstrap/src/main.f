@@ -891,7 +891,7 @@ fn finish_build(unit: &AnalyzedProject, label: String, out: String, opts: &Build
     }
 
     if opts.check_only {
-        const m = $"checked {label} ({unit.modules.len} modules)"
+        const m = $"checked {label} ({unit.modules.len} modules) in {elapsed_ns(opts.start_ns) / 1000000}ms"
         defer m.deinit()
         println(m.as_view())
         if opts.timings {
@@ -912,7 +912,7 @@ fn finish_build(unit: &AnalyzedProject, label: String, out: String, opts: &Build
     }
     let artifact = result.unwrap()
     defer artifact.deinit()
-    const msg = $"built {artifact.executable_path.as_view()}"
+    const msg = $"built {artifact.executable_path.as_view()} in {elapsed_ns(opts.start_ns) / 1000000}ms"
     defer msg.deinit()
     println(msg.as_view())
     if opts.timings {

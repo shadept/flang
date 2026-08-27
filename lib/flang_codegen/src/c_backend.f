@@ -19,6 +19,7 @@ import std.env
 import std.io.dir
 import std.io.file
 import std.io.fs
+import std.io.reader
 import std.list
 import std.option
 import std.path
@@ -142,7 +143,9 @@ pub fn compile(m: &IrModule, options: &BuildOptions) Result(BuildResult, BuildEr
     defer argv.deinit()
 
     const cc_start = monotonic_ns()
-    let spawn_r = run_compiler(&info, &argv, alloc)
+    let cc_out = string_builder(0, alloc)
+    defer cc_out.deinit()
+    let spawn_r = run_compiler(&info, &argv, &cc_out, alloc)
     if spawn_r.is_err() {
         if !keep_c {
             remove_file_quiet(c_path_owned.as_view())
@@ -152,6 +155,8 @@ pub fn compile(m: &IrModule, options: &BuildOptions) Result(BuildResult, BuildEr
     }
     const exit_code = spawn_r.unwrap()
     if exit_code != 0 {
+        // The captured compiler output surfaces only on failure.
+        println(cc_out.as_view())
         if !keep_c {
             remove_file_quiet(c_path_owned.as_view())
         }
@@ -1495,7 +1500,7 @@ fn run_vswhere(vswhere_path: String, allocator: &Allocator?) OwnedString? {
         return null
     }
     let s = stdout_opt.unwrap()
-    let raw = s.read_to_end(allocator)
+    let raw = read_all(s.reader(), allocator)
     const w = child.wait()
     if w.is_err() {
         raw.deinit()
@@ -1777,9 +1782,13 @@ test "a float constant is emitted as an exact C99 hex-float literal" {
         "1.5 travels as its exact bits, not a truncated decimal")
 }
 
-// Spawn the compiler with the prepared argv + env. Returns the exit code.
-fn run_compiler(info: &CompilerInfo, argv: &List(OwnedString), allocator: &Allocator?) Result(i32,
-    BuildError) {
+// Spawn the compiler with the prepared argv + env. Returns the exit code. Run the C compiler with
+// its output captured into `out`. A successful compile prints nothing - MSVC narrates every
+// translation unit and deprecation on a clean build, and the caller only wants the noise when the
+// exit code says something went wrong. Matches the reference compiler (Compiler.cs), which captures
+// both streams and reports them inside the failure diagnostic.
+fn run_compiler(info: &CompilerInfo, argv: &List(OwnedString), out: &StringBuilder,
+    allocator: &Allocator?) Result(i32, BuildError) {
     let cmd = command(info.path.as_view(), allocator)
     defer cmd.deinit()
     for i in 0..argv.len {
@@ -1789,13 +1798,30 @@ fn run_compiler(info: &CompilerInfo, argv: &List(OwnedString), allocator: &Alloc
     for i in 0..info.extra_env_keys.len {
         cmd.env(info.extra_env_keys[i].as_view(), info.extra_env_vals[i].as_view())
     }
-    // stdout/stderr inherit - let the user see compiler output.
+    cmd.stdin_mode(Stdio.Null)
+    cmd.stdout_mode(Stdio.Pipe)
+    cmd.stderr_mode(Stdio.Pipe)
     let r = cmd.spawn()
     if r.is_err() {
         return Err(BuildError.SpawnFailed)
     }
     let child = r.unwrap()
     defer child.deinit()
+    // Drain both pipes BEFORE waiting - a child blocked on a full pipe never exits. Sequential
+    // reads carry a theoretical stdout-vs-stderr deadlock the reference accepts too; cc stderr
+    // stays far below the pipe buffer in practice.
+    let so = child.stdout()
+    if so.is_some() {
+        let s = so.unwrap()
+        out.append(read_all(s.reader(), allocator))
+        s.close()
+    }
+    let se = child.stderr()
+    if se.is_some() {
+        let s = se.unwrap()
+        out.append(read_all(s.reader(), allocator))
+        s.close()
+    }
     const w = child.wait()
     if w.is_err() {
         return Err(BuildError.SpawnFailed)
