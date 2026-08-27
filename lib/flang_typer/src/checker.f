@@ -137,6 +137,33 @@ type PendingSpec = struct {
     caller_module: String
 }
 
+// One instantiation frame's reuse bookkeeping (RFC-022 5e), pushed alongside `spec_callers`. The
+// counters at frame start plus what nested work minted give the frame's OWN burns; `deps` collects
+// the specializations its drain resolves, in process order; `hints` are the previous incarnation's
+// deps when the frame is an in-place re-instantiation, matched by call site for nested picks whose
+// provisional key cannot hit the registry. The diagnostics and parked-call watermarks decide
+// whether the frame stays replayable.
+type SpecFrame = struct {
+    vars0: u32
+    synth0: u32
+    lambda0: u32
+    child_vars: u32
+    child_synth: u32
+    child_lambda: u32
+    deps: List(SpecDep)
+    hints: List(SpecDep)
+    diags0: usize
+    calls0: usize
+}
+
+// A stream position: where the variable, synthetic-node and lambda counters stand. A carried
+// specialization replays only from the exact position its frame once ran at.
+type StreamPos = struct {
+    v: u32
+    s: u32
+    l: u32
+}
+
 pub type Checker = struct {
     engine: Engine
     env: TypeEnv
@@ -280,6 +307,17 @@ pub type Checker = struct {
     slot_uninferable: usize
     defaults_changed: bool
 
+    // Specialization reuse state (RFC-022 5e). `spec_frames` mirrors the instantiation stack.
+    // `slot_hints` are the running slot's carried site hints; `slot_sites` collects the slot's own
+    // resolutions for its cache, while `site_log_on` (a running slot's whole settlement, off during
+    // a replay). `slot_new_specs` are the entries instantiated during the current slot, marked
+    // non-reusable when the slot's literal sweep flags anything they minted.
+    spec_frames: List(SpecFrame)
+    slot_hints: List(SpecDep)
+    slot_sites: List(SpecDep)
+    slot_new_specs: List(SpecId)
+    site_log_on: bool
+
     allocator: &Allocator?
 }
 
@@ -404,24 +442,6 @@ pub fn deinit(self: &NodeDerefsFact) {
     self.chain.deinit()
 }
 
-// A closure environment the slot registered: enough to register it again at the id it held. Field
-// name views point into the module's kept source; the fqn is a cache-owned copy of the synthesized
-// name whose retirement `recycled` remembers.
-pub type ClosureFact = struct {
-    id: NominalId
-    fqn: OwnedString
-    module: String
-    fields: List(Field)
-    decl_span: SourceSpan
-    sig: ClosureSig
-}
-
-pub fn deinit(self: &ClosureFact) {
-    self.fqn.deinit()
-    self.fields.deinit()
-    self.sig.deinit()
-}
-
 // One top-level generic pick as the drain processed it, types zonked at process time. A replay
 // re-runs these in process order: a handle that was already concrete stays so, and one that still
 // cited an open variable re-resolves through the bindings the replayed instantiations before it
@@ -466,11 +486,16 @@ pub type ModuleBodyCache = struct {
     derefs: List(NodeDerefsFact)
     picks: List(CapturedPick)
     calls: List(PendingCall)
+    // Every top-level pick the slot's settlement resolved, in process order, with the
+    // specialization it landed on - the replay's reuse hints (RFC-022 5e): a pick whose provisional
+    // key cannot match a carried entry's stored final key re-lands on its id by call site.
+    spec_sites: List(SpecDep)
     cacheable: bool
     fresh: bool
 }
 
 pub fn deinit(self: &ModuleBodyCache) {
+    self.spec_sites.deinit()
     self.keys.deinit()
     self.types.deinit()
     self.spans.deinit()
@@ -592,6 +617,11 @@ pub fn checker(allocator: &Allocator? = null) Checker {
         slot_picks = list(0, allocator),
         slot_uninferable = 0usize,
         defaults_changed = false,
+        spec_frames = list(0, allocator),
+        slot_hints = list(0, allocator),
+        slot_sites = list(0, allocator),
+        slot_new_specs = list(0, allocator),
+        site_log_on = false,
         allocator = allocator,
     }
 }
@@ -675,6 +705,14 @@ pub fn begin_demand(self: &Checker) {
 // path. Call between `begin_demand` and `check_all`.
 pub fn presize_results(self: &Checker, sizes: &TableCaps) {
     self.results.presize_tables(sizes)
+}
+
+// Install the specialization registry carried from the previous demand's result (RFC-022 5e).
+// Entries whose validity the demand confirms are reused in place of their body re-check; the rest
+// re-instantiate at the ids they hold, and whatever the demand never touches is swept.
+pub fn adopt_specs(self: &Checker, reg: SpecializationRegistry) {
+    self.specs.deinit()
+    self.specs = reg
 }
 
 // Install a type table carried from the previous demand's result, so the handles baked into the
@@ -783,6 +821,10 @@ pub fn deinit(self: &Checker) {
     self.body_caches.deinit()
     self.body_cache_keys.deinit()
     self.slot_picks.deinit()
+    self.spec_frames.deinit()
+    self.slot_hints.deinit()
+    self.slot_sites.deinit()
+    self.slot_new_specs.deinit()
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -2269,15 +2311,40 @@ fn process_pending(self: &Checker, p: &PendingSpec) {
     // Readiness is the drain's business (`pending_ready`); by here the only free vars left sit
     // inside callable slots, which the body pins.
 
+    const v0 = self.engine.var_counter
+    const s0 = self.next_synth
+    const l0 = self.next_lambda
+
     let key = key_for(&self.engine.interner, p.function_id, &params, ret, self.allocator)
     let existing = self.specs.lookup(key.as_view())
-    let id = existing match {
-        Some(sid) => {
-            key.deinit()
-            params.deinit()
-            Some(sid)
+    if existing.is_none() {
+        // A provisional key that misses can still name a carried entry - one whose stored key was
+        // re-keyed to its settled signature, or renders variables. The call site is the stable
+        // identity then.
+        existing = find_spec_hint(self, p.span, p.function_id)
+        if existing.is_some() and self.specs.find(existing.unwrap()).is_none() {
+            existing = null
         }
+    }
+    let id = existing match {
+        Some(sid) => resolve_against(self, p, key, params, ret, sid)
         None => instantiate(self, p, key, params, ret)
+    }
+
+    // Whatever the resolution minted - an instantiation's frame, a reuse's burns - is nested work
+    // from the enclosing frame's point of view: its own burns subtract it out.
+    if self.spec_frames.len > 0 {
+        const last = self.spec_frames.len - 1
+        let fr = &self.spec_frames[last]
+        fr.child_vars = fr.child_vars + (self.engine.var_counter - v0)
+        fr.child_synth = fr.child_synth + (self.next_synth - s0)
+        fr.child_lambda = fr.child_lambda + (self.next_lambda - l0)
+        if id.is_some() {
+            fr.deps.push(SpecDep { span = p.span, function_id = p.function_id, id = id.unwrap() })
+        }
+    } else if self.site_log_on and id.is_some() {
+        self.slot_sites.push(SpecDep { span = p.span, function_id = p.function_id,
+            id = id.unwrap() })
     }
     if id.is_none() {
         return
@@ -2299,6 +2366,127 @@ fn process_pending(self: &Checker, p: &PendingSpec) {
     } else {
         self.results.record_target(node, ResolvedTarget.RtSpecialized(id.unwrap()))
     }
+}
+
+// A pick that landed on an existing entry. Alive this demand means plain reuse, exactly the old
+// keyed-lookup hit. Carried from an earlier demand means either a replay - counters burned, closure
+// environments re-registered, deps touched - or, when the entry or anything under it cannot be
+// replayed from here, an in-place re-instantiation at the id it holds.
+fn resolve_against(self: &Checker, p: &PendingSpec, key: OwnedString, params: List(Ty), ret: Ty,
+    sid: SpecId) SpecId? {
+    const alive = self.specs.get(sid).touched_gen == self.specs.gen
+    if !alive {
+        let ok = pick_concrete(self, p, &params, ret)
+        if ok {
+            let trial: Set(SpecId) = set(self.allocator)
+            const pos = StreamPos { v = self.engine.var_counter, s = self.next_synth,
+                l = self.next_lambda }
+            ok = spec_probe(self, sid, pos, &trial).is_some()
+            trial.deinit()
+        }
+        if !ok {
+            return instantiate(self, p, key, params, ret, Some(sid))
+        }
+        touch_spec(self, sid)
+    }
+    key.deinit()
+    params.deinit()
+    return Some(sid)
+}
+
+// Whether the pick's whole instantiated signature - parameters, return and every type-parameter
+// bind - is free of engine variables. A non-concrete pick's body re-check pins caller variables,
+// which a reuse cannot replay.
+fn pick_concrete(self: &Checker, p: &PendingSpec, params: &List(Ty), ret: Ty) bool {
+    if !sig_concrete(self, params, ret) {
+        return false
+    }
+    let q: Set(VarId) = set(self.allocator)
+    for e in p.tp_binds {
+        free_vars(&self.engine.interner, self.engine.zonk(e.value), 0u32, &q)
+    }
+    let n = q.len()
+    q.deinit()
+    return n == 0
+}
+
+// Whether the carried entry at `sid` - and, transitively, everything its frame's drain resolved -
+// can be replayed starting from `pos`. Simulates the burns without committing anything; `trial`
+// holds the entries the simulation has already accounted for (a self-recursive generic cites its
+// own key). Returns the position after the subtree, or null when anything blocks: a stale template,
+// a non-replayable frame, an evicted dep, or a stream anchor that no longer matches - the cached
+// closure symbols bake counter values, so a shifted stream would collide with live mints.
+fn spec_probe(self: &Checker, sid: SpecId, pos: StreamPos, trial: &Set(SpecId)) StreamPos? {
+    const found = self.specs.find(sid)
+    if found.is_none() {
+        return null
+    }
+    const sp = found.unwrap()
+    if sp.touched_gen == self.specs.gen or trial.contains(sid) {
+        return Some(pos)
+    }
+    if sp.stale or !sp.reusable {
+        return null
+    }
+    if sp.vars_at != pos.v or sp.synth_at != pos.s or sp.lambda_at != pos.l {
+        return null
+    }
+    trial.add(sid)
+    let cur = StreamPos {
+        v = pos.v + sp.own_var_burn,
+        s = pos.s + sp.own_synth_burn,
+        l = pos.l + sp.own_lambda_burn,
+    }
+    for d in sp.deps {
+        const r = spec_probe(self, d.id, cur, trial)
+        if r.is_none() {
+            return null
+        }
+        cur = r.unwrap()
+    }
+    return Some(cur)
+}
+
+// Replay a carried entry: stamp it live, burn the counters its frame minted, re-register its
+// closure environments, then touch what its drain resolved - a dep first touched here burns at the
+// position the cold drain minted it.
+fn touch_spec(self: &Checker, sid: SpecId) {
+    const sp = self.specs.find(sid).unwrap()
+    if sp.touched_gen == self.specs.gen {
+        return
+    }
+    self.specs.stamp_touched(sid)
+    for _k in 0..(sp.own_var_burn as usize) {
+        self.engine.burn_var()
+    }
+    self.next_synth = self.next_synth + sp.own_synth_burn
+    self.next_lambda = self.next_lambda + sp.own_lambda_burn
+    for &f in sp.closures {
+        replay_closure(self, f)
+    }
+    for d in sp.deps {
+        touch_spec(self, d.id)
+    }
+}
+
+// The reuse hint for a call site whose provisional key missed the registry: an in-place
+// re-instantiation matches its nested picks against the previous incarnation's deps; a slot's
+// top-level picks match against the previous demand's site list.
+fn find_spec_hint(self: &Checker, span: SourceSpan, function_id: u32) SpecId? {
+    if self.spec_frames.len > 0 {
+        return hint_in(&self.spec_frames[self.spec_frames.len - 1].hints, span, function_id)
+    }
+    return hint_in(&self.slot_hints, span, function_id)
+}
+
+fn hint_in(hints: &List(SpecDep), span: SourceSpan, function_id: u32) SpecId? {
+    for &h in hints {
+        if h.function_id == function_id and h.span.file_id == span.file_id
+            and h.span.start == span.start and h.span.length == span.length {
+            return Some(h.id)
+        }
+    }
+    return null
 }
 
 // Unify every parked anonymous literal's field initializers against its now-known nominal's
@@ -2511,8 +2699,11 @@ fn sig_concrete(self: &Checker, params: &List(Ty), ret: Ty) bool {
 
 // Register and check one new specialization. Registration happens BEFORE the body re-check so a
 // self-recursive generic resolves to its own key instead of recursing forever. Returns null (with a
-// diagnostic) when the instantiation chain is implausibly deep.
-fn instantiate(self: &Checker, p: &PendingSpec, key: OwnedString, params: List(Ty), ret: Ty) u32? {
+// diagnostic) when the instantiation chain is implausibly deep. `at` re-registers a carried entry
+// in place - same id, fresh overlay - handing its previous dep list to the frame as nested reuse
+// hints.
+fn instantiate(self: &Checker, p: &PendingSpec, key: OwnedString, params: List(Ty), ret: Ty,
+    at: SpecId? = null) SpecId? {
     if self.spec_depth >= MAX_SPEC_DEPTH {
         push_diag_e(self, p.span, E_UNINFERRED,
             from_view("generic instantiation exceeds the depth limit - infinitely recursive polymorphism?"))
@@ -2524,16 +2715,33 @@ fn instantiate(self: &Checker, p: &PendingSpec, key: OwnedString, params: List(T
     // compiler bug, not an input error.
     let template = self.templates.get(p.function_id).unwrap()
 
-    let sid = self.specs.register(Specialization {
-        id = 0u32, // assigned by register
-        function_id = p.function_id,
-        key = key,
-        name = template.decl.name,
-        module = template.module,
-        decl = template.decl,
-        concrete_params = params,
-        concrete_return = ret,
-        overlay = inference_results(self.allocator),
+    let fresh = new_specialization(p.function_id, key, template.decl.name, template.module,
+        template.decl, params, ret, inference_results(self.allocator), self.allocator)
+    let sid = 0 as SpecId
+    let hints: List(SpecDep) = list(0, self.allocator)
+    at match {
+        Some(existing) => {
+            hints.deinit()
+            hints = self.specs.take_deps(existing)
+            self.specs.replace_at(existing, fresh)
+            sid = existing
+        }
+        None => {
+            sid = self.specs.register(fresh)
+        }
+    }
+    self.slot_new_specs.push(sid)
+    self.spec_frames.push(SpecFrame {
+        vars0 = self.engine.var_counter,
+        synth0 = self.next_synth,
+        lambda0 = self.next_lambda,
+        child_vars = 0u32,
+        child_synth = 0u32,
+        child_lambda = 0u32,
+        deps = list(0, self.allocator),
+        hints = hints,
+        diags0 = self.diagnostics.len,
+        calls0 = self.pending_calls.len,
     })
 
     // The re-check runs in the template's own context: its module for name resolution (unioned with
@@ -2578,6 +2786,18 @@ fn instantiate(self: &Checker, p: &PendingSpec, key: OwnedString, params: List(T
     self.env.pop_scope()
     self.spec_depth = self.spec_depth - 1
     let _c = self.spec_callers.pop()
+
+    // Frame bookkeeping for a later reuse: the stream anchors, the frame's OWN burns (nested work
+    // subtracted - it burns its own), the deps its drain resolved, and whether it stayed replayable
+    // (a diagnostic or a parked call must be regenerated live, so either keeps the entry
+    // re-checking every demand).
+    let frame = self.spec_frames.pop().unwrap()
+    frame.hints.deinit()
+    const clean = self.diagnostics.len == frame.diags0 and self.pending_calls.len == frame.calls0
+    self.specs.set_cache_info(sid, frame.vars0, frame.synth0, frame.lambda0,
+        self.engine.var_counter - frame.vars0 - frame.child_vars,
+        self.next_synth - frame.synth0 - frame.child_synth,
+        self.next_lambda - frame.lambda0 - frame.child_lambda, frame.deps, clean)
 
     // The shared final zonk only walks the program tables; the overlay zonks here, while the engine
     // is live. Lambda records checked inside this instantiation zonk with it (the global closure
@@ -7179,16 +7399,22 @@ fn resolve_fn_name_values(self: &Checker) {
     pend.deinit()
 }
 
-// Re-zonk every specialization's stored signature. Lowering mangles the spec's C symbol from these
-// types and `sig_lowerable` gates on them, so a var left in one is the difference between an
-// emitted function and a silently dropped one.
+// Re-zonk the stored signature of every specialization THIS demand instantiated. Lowering mangles
+// the spec's C symbol from these types and `sig_lowerable` gates on them, so a var left in one is
+// the difference between an emitted function and a silently dropped one. Carried entries are
+// skipped (RFC-022 5f): the demand that instantiated one ran this pass over it, and a reuse
+// requires a concrete final signature, so there is nothing left to resolve - the sweep is scoped to
+// the fresh entries instead of the whole program.
 fn zonk_specializations(self: &Checker) {
     for i in 0..(self.specs.next_id as usize) {
-        let found = self.specs.find(i as u32)
+        let found = self.specs.find(i as SpecId)
         if found.is_none() {
             continue
         }
         let sp = found.unwrap()
+        if sp.harvested {
+            continue
+        }
         let ps: List(Ty) = list(sp.concrete_params.len, self.allocator)
         for k in 0..sp.concrete_params.len {
             ps.push(self.engine.zonk(sp.concrete_params[k]))
@@ -7208,6 +7434,9 @@ pub fn check_all(self: &Checker, modules: &List(Module), paths: &List(String),
     order: &List(usize)? = null, recollect: &List(bool)? = null) TypeCheckResult {
     let seq = visit_sequence(self, modules.len, order)
     defer seq.deinit()
+    // A new demand generation for the carried specialization registry: entries this demand never
+    // touches are swept at the end (RFC-022 5e).
+    self.specs.begin_gen()
     // Wire the import graph before any name resolution runs.
     const visibility_start = monotonic_ns()
     build_visibility(self, modules, paths)
@@ -7337,6 +7566,10 @@ pub fn check_all(self: &Checker, modules: &List(Module), paths: &List(String),
     const sigs_changed = self.functions.changed or self.functions.next_id != fns_before
         or removed_fns or constants_differ(self, &old_consts, &retiring) or self.defaults_changed
     old_consts.deinit()
+    // A carried specialization of a re-parsed module's template holds a stale declaration AST, and
+    // the body may have changed without the scheme changing - a demand for it re-instantiates in
+    // place instead of replaying.
+    mark_stale_specs(self, &retiring)
     retiring.deinit()
     // Phase 2.5: constant initializers, before any body can observe an unpinned const (see
     // `check_module_constants`).
@@ -7363,6 +7596,12 @@ pub fn check_all(self: &Checker, modules: &List(Module), paths: &List(String),
     // carried-tier validity conditions plus the signature-tier fingerprints.
     const slots_carry = bodies_carry and !sigs_changed and !noms_changed
         and !any_open_constant(self)
+    // A global trigger invalidates every carried specialization at once - they resolved against
+    // registries that no longer say the same thing. Numbering restarts at zero, exactly a cold
+    // check's.
+    if !slots_carry {
+        self.specs.reset()
+    }
     const preamble_lits = self.pending_literals.len
     let bodies_ns = 0u64
     let specialize_ns = 0u64
@@ -7379,10 +7618,15 @@ pub fn check_all(self: &Checker, modules: &List(Module), paths: &List(String),
     }
     // Phase 3.6: the literals minted before any slot - signature defaults and constant
     // initializers. Validated after every slot because a body can be what pins an unannotated
-    // constant's variable.
+    // constant's variable. This is all that remains of the program-wide literal sweep: every other
+    // literal is swept and retired by its own slot, and the preamble re-parks per demand because
+    // the constants phase is eager.
     const validate_start = monotonic_ns()
     validate_literals(self, 0, preamble_lits)
     specialize_ns = specialize_ns + elapsed_ns(validate_start)
+    // Carried specializations nothing demanded this time are gone - a call site an edit removed
+    // keeps no entry alive.
+    self.specs.sweep()
 
     // RFC-014: settle the lambda/closure tables (the overlay-scoped lambda tables of instantiations
     // were zonked inside `instantiate`).
@@ -7391,9 +7635,10 @@ pub fn check_all(self: &Checker, modules: &List(Module), paths: &List(String),
     zonk_closures(self)
     // A nested instantiation can finish before its CALLER's body pins a type argument it inherited
     // (`list(0, allocator)` inside `to_list`, whose `$T` the enclosing `for item in it` settles
-    // afterwards). Its own end-of-`instantiate` re-key ran too early, so every stored signature is
+    // afterwards). Its own end-of-`instantiate` re-key ran too early, so each stored signature is
     // zonked once more here, now that inference is over - this is what the reference gets for free
-    // by mangling at codegen.
+    // by mangling at codegen. Scoped to the entries this demand instantiated; carried ones are
+    // final already.
     zonk_specializations(self)
 
     // Zonk every node-type entry so the result is final. Interned on the way (RFC-024): equal
@@ -7409,6 +7654,7 @@ pub fn check_all(self: &Checker, modules: &List(Module), paths: &List(String),
     // captures (5d) - the cached facts must hold the zonked types a skipped pass replays.
     harvest_sig_caches(self, &zonked)
     harvest_body_caches(self, &zonked)
+    harvest_spec_caches(self)
 
     // Move the registries and result tables into the snapshot, then replace each moved-from field
     // with a fresh empty container so the caller's later `checker.deinit()` doesn't double-free
@@ -7845,8 +8091,10 @@ fn burn_type_param_vars(self: &Checker, module: &Module) {
 // Carried bodies (RFC-022 5d). A module the demand did not re-parse replays its body slot from
 // `body_caches`: the capture window's facts write back with their harvested final values, the
 // counters burn, and the slot's settlement re-runs live from the captured picks and parked calls -
-// which recreates the demand's specializations at the ids and in the order a cold check assigns,
-// and re-pins the module's burned variables the way the cold drain did.
+// at the ids and in the order a cold check assigns, re-pinning the module's burned variables the
+// way the cold drain did. With the specialization registry carried too (5e), a replayed pick whose
+// entry can itself be replayed skips the template body re-check entirely; the rest re-instantiate
+// live, in place.
 // ─────────────────────────────────────────────────────────────────────
 
 // What a running slot's two timed halves cost, for `CheckPhases`.
@@ -7857,6 +8105,7 @@ type SlotTiming = struct {
 
 // Run one module's slot with capture on and store its cache for the next demand.
 fn run_body_slot(self: &Checker, module: &Module, path: String) SlotTiming {
+    begin_slot_specs(self, path)
     const vars0 = self.engine.var_counter
     const synth0 = self.next_synth
     const lambda0 = self.next_lambda
@@ -7881,6 +8130,7 @@ fn run_body_slot(self: &Checker, module: &Module, path: String) SlotTiming {
 
     clear_pick_log(self)
     self.slot_log_on = true
+    self.site_log_on = true
     self.slot_uninferable = 0
     drain_pending_specs(self)
     self.slot_log_on = false
@@ -7889,6 +8139,7 @@ fn run_body_slot(self: &Checker, module: &Module, path: String) SlotTiming {
 
     resolve_pending_calls(self)
     drain_pending_specs(self)
+    self.site_log_on = false
     validate_literals(self, lit0, self.pending_literals.len)
     // The window's literal verdicts cannot be replayed - a flagged one keeps the module running.
     // Decided here, where the verdicts are final (nothing after the slot can pin its literals), so
@@ -7899,7 +8150,10 @@ fn run_body_slot(self: &Checker, module: &Module, path: String) SlotTiming {
             lits_clean = false
         }
     }
+    mark_flagged_slot_specs(self, lit_window)
     seal_slot(self, lit0)
+    let sites = self.slot_sites
+    self.slot_sites = list(0, self.allocator)
 
     let cache = ModuleBodyCache {
         vars_at_start = vars0,
@@ -7921,6 +8175,7 @@ fn run_body_slot(self: &Checker, module: &Module, path: String) SlotTiming {
         derefs = list(0, self.allocator),
         picks = picks,
         calls = calls,
+        spec_sites = sites,
         cacheable = self.slot_uninferable == 0 and lits_clean,
         fresh = true,
     }
@@ -7945,6 +8200,7 @@ fn body_cache_ok(self: &Checker, path: String) bool {
 // their resolution commits. The literal sweep covers only what the live re-run minted; the window's
 // literals were proven clean when the slot last ran.
 fn replay_body_slot(self: &Checker, path: String) SlotTiming {
+    begin_slot_specs(self, path)
     const bodies_start = monotonic_ns()
     self.current_module = Some(path)
     replay_body_diags(self, path)
@@ -7968,7 +8224,7 @@ fn replay_body_slot(self: &Checker, path: String) SlotTiming {
         replay_closure(self, f)
     }
     for &f in c.lambdas {
-        self.results.record_lambda(f.node, copy_lambda_info(self, &f.info))
+        self.results.record_lambda(f.node, copy_lambda(&f.info, self.allocator))
     }
     for &f in c.default_args {
         let exprs: List(Expr) = list(f.exprs.len, self.allocator)
@@ -8013,8 +8269,41 @@ fn replay_body_slot(self: &Checker, path: String) SlotTiming {
     resolve_pending_calls(self)
     drain_pending_specs(self)
     validate_literals(self, lit_mark, self.pending_literals.len)
+    mark_flagged_slot_specs(self, lit_mark)
     seal_slot(self, lit_mark)
     return .{ bodies_ns = bodies_ns, settle_ns = elapsed_ns(settle_start) }
+}
+
+// Ready the per-slot specialization state (RFC-022 5e): the previous demand's site hints for this
+// module, an empty site log, and an empty list of the entries this slot instantiates.
+fn begin_slot_specs(self: &Checker, path: String) {
+    self.slot_hints.clear()
+    const found = self.body_caches.get_ref(path)
+    if found.is_some() {
+        self.slot_hints.push_all(found.unwrap().spec_sites.as_slice())
+    }
+    self.slot_sites.clear()
+    self.slot_new_specs.clear()
+}
+
+// A literal minted during the slot's drains that the sweep flagged belongs to some instantiation's
+// body; its diagnostic is regenerated by re-running that body, which a reuse skips - so every entry
+// this slot instantiated goes non-reusable.
+// ponytail: coarse on purpose - the case is rare and per-frame literal ranges are not tracked; mark
+// per frame if a profile ever blames it.
+fn mark_flagged_slot_specs(self: &Checker, from: usize) {
+    let any = false
+    for j in from..self.pending_literals.len {
+        if literal_flagged(self, &self.pending_literals[j]) {
+            any = true
+        }
+    }
+    if !any {
+        return
+    }
+    for id in self.slot_new_specs {
+        self.specs.mark_unreusable(id)
+    }
 }
 
 // A slot leaves no parked work behind: what its settlement could not resolve is abandoned, as the
@@ -8115,33 +8404,7 @@ fn replay_closure(self: &Checker, f: &ClosureFact) {
         is_foreign = false,
     }
     const nid = register_collected(self, NominalDef.NomStruct(sd), from_view(f.fqn.as_view()))
-    self.closures.set(nid, copy_closure_sig(self, &f.sig))
-}
-
-fn copy_lambda_info(self: &Checker, info: &LambdaInfo) LambdaInfo {
-    let ps: List(Ty) = list(info.params.len, self.allocator)
-    ps.push_all(info.params.as_slice())
-    let caps: List(CaptureRec) = list(info.captures.len, self.allocator)
-    caps.push_all(info.captures.as_slice())
-    return LambdaInfo {
-        span = info.span,
-        params = ps,
-        ret = info.ret,
-        captures = caps,
-        closure_id = info.closure_id,
-        symbol = from_view(info.symbol.as_view()),
-    }
-}
-
-fn copy_closure_sig(self: &Checker, sig: &ClosureSig) ClosureSig {
-    let ps: List(Ty) = list(sig.params.len, self.allocator)
-    ps.push_all(sig.params.as_slice())
-    return ClosureSig {
-        params = ps,
-        ret = sig.ret,
-        symbol = from_view(sig.symbol.as_view()),
-        lambda_node = sig.lambda_node,
-    }
+    self.closures.set(nid, copy_sig(&f.sig, self.allocator))
 }
 
 fn store_body_cache(self: &Checker, path: String, cache: ModuleBodyCache) {
@@ -8237,7 +8500,7 @@ fn fill_body_cache(self: &Checker, c: &ModuleBodyCache, zonked: &Dict(NodeId, Ty
             continue
         }
         let info = found.unwrap()
-        c.lambdas.push(NodeLambdaFact { node = n, info = copy_lambda_info(self, info) })
+        c.lambdas.push(NodeLambdaFact { node = n, info = copy_lambda(info, self.allocator) })
         info.closure_id match {
             Some(nid) => harvest_closure(self, c, nid)
             None => {}
@@ -8291,29 +8554,84 @@ fn fill_body_cache(self: &Checker, c: &ModuleBodyCache, zonked: &Dict(NodeId, Ty
 // One closure environment's registry definition and dispatch record, copied for the cache. Runs
 // after `zonk_closures`, so both hold final types.
 fn harvest_closure(self: &Checker, c: &ModuleBodyCache, nid: NominalId) {
+    const f = closure_fact_of(self, nid)
+    if f.is_some() {
+        c.closures.push(f.unwrap())
+    }
+}
+
+// A registered closure environment as a replayable fact: the definition from the nominal registry,
+// the dispatch record from the global closure table. Null when either half is missing.
+fn closure_fact_of(self: &Checker, nid: NominalId) ClosureFact? {
     const sig = self.closures.get_ref(nid)
     if sig.is_none() {
-        return
+        return null
     }
     const found = self.nominals.find(nid)
     if found.is_none() {
-        return
+        return null
     }
     let def = found.unwrap()
     const sd = def.* match {
         NomStruct(s) => s
-        _ => return
+        _ => return null
     }
     let fields: List(Field) = list(sd.fields.len, self.allocator)
     fields.push_all(sd.fields.as_slice())
-    c.closures.push(ClosureFact {
+    return Some(ClosureFact {
         id = nid,
         fqn = from_view(nominal_fqn(def), self.allocator),
         module = sd.module,
         fields = fields,
         decl_span = sd.decl_span,
-        sig = copy_closure_sig(self, sig.unwrap()),
+        sig = copy_sig(sig.unwrap(), self.allocator),
     })
+}
+
+// Mark every carried specialization whose template module is being re-collected (RFC-022 5e).
+fn mark_stale_specs(self: &Checker, retiring: &Set(String)) {
+    if retiring.len() == 0 {
+        return
+    }
+    for i in 0..(self.specs.next_id as usize) {
+        const found = self.specs.find(i as SpecId)
+        if found.is_none() {
+            continue
+        }
+        if retiring.contains(found.unwrap().module) {
+            self.specs.mark_stale(i as SpecId)
+        }
+    }
+}
+
+// Fill this demand's fresh specialization caches once the closure tables have zonked: the closure
+// facts a reuse replays (recovered through each overlay's lambda records), and the
+// signature-concreteness half of `reusable`. Reused entries keep the caches they carried.
+fn harvest_spec_caches(self: &Checker) {
+    for i in 0..(self.specs.next_id as usize) {
+        const found = self.specs.find(i as SpecId)
+        if found.is_none() {
+            continue
+        }
+        const sp = found.unwrap()
+        if sp.harvested {
+            continue
+        }
+        let facts: List(ClosureFact) = list(0, self.allocator)
+        for e in sp.overlay.lambdas {
+            e.value.closure_id match {
+                Some(nid) => {
+                    const f = closure_fact_of(self, nid)
+                    if f.is_some() {
+                        facts.push(f.unwrap())
+                    }
+                }
+                None => {}
+            }
+        }
+        self.specs.finish_harvest(i as SpecId, facts, sig_concrete(self, &sp.concrete_params,
+                sp.concrete_return))
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -8747,6 +9065,7 @@ fn redemand_errors(b_first: String, b_again: String, a_src: String) RedemandErro
 
     chk.begin_demand()
     chk.adopt_interner(take_interner(&res1))
+    chk.adopt_specs(take_specs(&res1))
     let old_b = mods[0]
     mods[0] = parse_src(b_again, 0i32)
     let recollect: List(bool) = list(2)
@@ -8921,6 +9240,7 @@ test "a changed default value invalidates the carried slots" {
 
     chk.begin_demand()
     chk.adopt_interner(take_interner(&res1))
+    chk.adopt_specs(take_specs(&res1))
     let old_b = mods[0]
     mods[0] = parse_src(b2, 0i32)
     let old_src = srcs[0]
@@ -8945,6 +9265,138 @@ test "a changed default value invalidates the carried slots" {
     ps.deinit()
     srcs.deinit()
     fps.deinit()
+    recollect.deinit()
+}
+
+test "an edited template body re-instantiates carried specializations" {
+    // Module b's generic body changes without its scheme changing, so no global invalidation fires;
+    // the stale marking on the carried specialization is what forces the re-check that reports the
+    // f64-vs-i32 mismatch.
+    let r = redemand_errors("pub fn pick(x: $T) $T { return x }\n",
+        "pub fn pick(x: $T) $T { const bad: i32 = 1.5\nreturn x }\n",
+        "import b\nfn main() i32 { return pick(5) }\n")
+    assert_eq(r.first, 0 as usize, "the original template type-checks")
+    assert_true(r.second > 0, "the edited body re-instantiates and reports")
+}
+
+test "a specialization diagnostic re-emits on every demand" {
+    // The error lives inside the template body, so it surfaces per instantiation. The frame that
+    // emitted it is non-reusable; the replayed slot's pick re-instantiates it in place, and the
+    // diagnostic count stays stable instead of dropping to zero or doubling.
+    let r = redemand_errors("pub fn helper() i32 { return 1 }\n",
+        "pub fn helper() i32 { return 2 }\n",
+        "fn bad(x: $T) i32 { const oops: i32 = 1.5\nreturn 0 }\nfn main() i32 { return bad(5i32) }\n")
+    assert_eq(r.first, 1 as usize, "the template-body error is reported cold")
+    assert_eq(r.second, 1 as usize, "and exactly once again on the replay")
+}
+
+test "an uninferable literal in a template body reports on every demand" {
+    // The E2001 fires in the slot's drain range, outside the capture window, so the module's own
+    // cache stays valid and only the flagged-literal marking keeps the specialization from being
+    // reused with its diagnostic silently dropped.
+    let r = redemand_errors("pub fn helper() i32 { return 1 }\n",
+        "pub fn helper() i32 { return 2 }\n",
+        "fn f(x: $T) i32 { let v = 1\nreturn 0 }\nfn main() i32 { return f(2i32) }\n")
+    assert_eq(r.first, 1 as usize, "the unpinned literal is reported cold")
+    assert_eq(r.second, 1 as usize, "and exactly once again on the replay")
+}
+
+test "a reused specialization replays its closure environment" {
+    // The capturing closure lives inside the template body, so its environment registers per
+    // instantiation - a reused entry must re-register it at the id it held, or the re-demand
+    // diverges.
+    let r = redemand_errors("pub fn helper() i32 { return 1 }\n",
+        "pub fn helper() i32 { return 2 }\n",
+        "fn wrap(x: $T) i32 {\n    const k = 1i32\n    let f = fn(y: i32) i32 { y + k }\n    return 0\n}\nfn main() i32 { return wrap(4i32) }\n")
+    assert_eq(r.first, 0 as usize, "the program type-checks cold")
+    assert_eq(r.second, 0 as usize, "and identically when the entry is reused")
+}
+
+test "a carried specialization keeps its id across a clean re-demand" {
+    const b_src = "pub fn helper() i32 { return 1 }\n"
+    const a_src = "import b\nfn id(x: $T) $T { return x }\nfn main() i32 { return id(5) }\n"
+    let mods = list(2)
+    mods.push(parse_src(b_src, 0i32))
+    mods.push(parse_src(a_src, 1i32))
+    let ps: List(String) = list(2)
+    ps.push("b")
+    ps.push("a")
+
+    let chk = checker()
+    let gen_srcs: List(OwnedString) = list(0, null)
+    let gen_fps: List(OwnedString) = list(0, null)
+    let gens = template_state(null)
+    let res1 = check_all(&chk, &mods, &ps, &gen_srcs, &gen_fps, &gens)
+    assert_eq(res1.specializations.len(), 1 as usize, "the call forces one specialization")
+    const next1 = res1.specializations.next_id
+
+    chk.begin_demand()
+    chk.adopt_interner(take_interner(&res1))
+    chk.adopt_specs(take_specs(&res1))
+    let old_b = mods[0]
+    mods[0] = parse_src(b_src, 0i32)
+    let recollect: List(bool) = list(2)
+    recollect.push(true)
+    recollect.push(false)
+    let gens2 = template_state(null)
+    let res2 = check_all(&chk, &mods, &ps, &gen_srcs, &gen_fps, &gens2, null, Some(&recollect))
+    assert_eq(count_error_diags(&chk.diagnostics), 0 as usize, "the re-demand stays clean")
+    assert_eq(res2.specializations.len(), 1 as usize, "still exactly one specialization")
+    assert_eq(res2.specializations.next_id, next1, "and no id was minted past it")
+
+    res1.deinit()
+    res2.deinit()
+    chk.deinit()
+    old_b.deinit()
+    for &m in mods {
+        m.deinit()
+    }
+    mods.deinit()
+    ps.deinit()
+    recollect.deinit()
+}
+
+test "a removed call site sweeps its specialization" {
+    const b_src = "pub fn pick(x: $T) $T { return x }\n"
+    const a1 = "import b\nfn main() i32 { return pick(5) }\n"
+    const a2 = "import b\nfn main() i32 { return 5 }\n"
+    let mods = list(2)
+    mods.push(parse_src(b_src, 0i32))
+    mods.push(parse_src(a1, 1i32))
+    let ps: List(String) = list(2)
+    ps.push("b")
+    ps.push("a")
+
+    let chk = checker()
+    let gen_srcs: List(OwnedString) = list(0, null)
+    let gen_fps: List(OwnedString) = list(0, null)
+    let gens = template_state(null)
+    let res1 = check_all(&chk, &mods, &ps, &gen_srcs, &gen_fps, &gens)
+    assert_eq(res1.specializations.len(), 1 as usize, "the call forces one specialization")
+
+    chk.begin_demand()
+    chk.adopt_interner(take_interner(&res1))
+    chk.adopt_specs(take_specs(&res1))
+    let old_a = mods[1]
+    mods[1] = parse_src(a2, 1i32)
+    let recollect: List(bool) = list(2)
+    recollect.push(false)
+    recollect.push(true)
+    let gens2 = template_state(null)
+    let res2 = check_all(&chk, &mods, &ps, &gen_srcs, &gen_fps, &gens2, null, Some(&recollect))
+    assert_eq(count_error_diags(&chk.diagnostics), 0 as usize, "the edited caller type-checks")
+    assert_eq(res2.specializations.len(), 0 as usize,
+        "the entry nothing demanded any more is swept")
+
+    res1.deinit()
+    res2.deinit()
+    chk.deinit()
+    old_a.deinit()
+    for &m in mods {
+        m.deinit()
+    }
+    mods.deinit()
+    ps.deinit()
     recollect.deinit()
 }
 

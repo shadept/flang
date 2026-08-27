@@ -38,7 +38,7 @@ pub type ResolvedTarget = enum {
     RtLocal(NodeId) // declaration node
     RtStructField(NominalId, u32) // nominal + field index
     RtEnumVariant(NominalId, u32) // nominal + variant index
-    RtSpecialized(u32) // SpecializationRegistry id
+    RtSpecialized(SpecId) // SpecializationRegistry id
     // Module-level constant, by FQN (M11 globals). The view is interned into the result's
     // `synth_strings`, so it outlives the checker. Recorded on every const READ node and on the
     // ConstDecl node itself (lowering's pre-pass reads the decl's own entry to name its global).
@@ -56,7 +56,7 @@ pub type ResolvedOperator = struct {
     is_ref_form: bool
     // When the picked operator function is generic, the specialization the call site instantiated
     // (M10). Lowering calls the specialization's symbol; `function_id` then names the template.
-    spec_id: u32?
+    spec_id: SpecId?
 }
 
 pub type BinaryOpDerived = enum {
@@ -459,7 +459,7 @@ pub fn merge_instantiated(self: &InferenceResults, other: &InferenceResults) {
 
 // `op` with its specialization set - `ResolvedOperator` fields are module-private under scoped
 // mutability.
-pub fn with_spec(op: &ResolvedOperator, spec_id: u32) ResolvedOperator {
+pub fn with_spec(op: &ResolvedOperator, spec_id: SpecId) ResolvedOperator {
     return .{
         function_id = op.function_id,
         negate_result = op.negate_result,
@@ -467,6 +467,111 @@ pub fn with_spec(op: &ResolvedOperator, spec_id: u32) ResolvedOperator {
         is_ref_form = op.is_ref_form,
         spec_id = Some(spec_id),
     }
+}
+
+// An owning copy of one lambda record - handles and views shared, lists and the symbol duplicated.
+pub fn copy_lambda(info: &LambdaInfo, allocator: &Allocator? = null) LambdaInfo {
+    let ps: List(Ty) = list(info.params.len, allocator)
+    ps.push_all(info.params.as_slice())
+    let caps: List(CaptureRec) = list(info.captures.len, allocator)
+    caps.push_all(info.captures.as_slice())
+    return LambdaInfo {
+        span = info.span,
+        params = ps,
+        ret = info.ret,
+        captures = caps,
+        closure_id = info.closure_id,
+        symbol = from_view(info.symbol.as_view(), allocator),
+    }
+}
+
+// An owning copy of one closure dispatch record - handles shared, the params list and symbol
+// duplicated.
+pub fn copy_sig(sig: &ClosureSig, allocator: &Allocator? = null) ClosureSig {
+    let ps: List(Ty) = list(sig.params.len, allocator)
+    ps.push_all(sig.params.as_slice())
+    return ClosureSig {
+        params = ps,
+        ret = sig.ret,
+        symbol = from_view(sig.symbol.as_view(), allocator),
+        lambda_node = sig.lambda_node,
+    }
+}
+
+// A deep copy of a finished result set: every table an entry-by-entry copy, lambda records
+// duplicated. Desugar blocks stay shared pointers (they are leaked global boxes) and the copy's
+// tables keep viewing the ORIGINAL set's string buffers - `synth_strings` is left empty rather than
+// copied into orphan buffers nothing views - so the copy lives only as long as its source's
+// storage. Capture state starts clean.
+pub fn deep_copy(self: &InferenceResults, allocator: &Allocator? = null) InferenceResults {
+    // Every container fills as a local and wraps at the end - growing one through a local struct's
+    // field is the two-field-hop hazard.
+    let node_types: Dict(NodeId, Ty) = dict(self.node_types.len(), allocator)
+    for e in self.node_types {
+        node_types.set(e.key, e.value)
+    }
+    let resolved_ops: Dict(NodeId, ResolvedOperator) = dict(allocator)
+    for e in self.resolved_ops {
+        resolved_ops.set(e.key, e.value)
+    }
+    let resolved_targets: Dict(NodeId, ResolvedTarget) = dict(allocator)
+    for e in self.resolved_targets {
+        resolved_targets.set(e.key, e.value)
+    }
+    let instantiated: List(Ty) = list(self.instantiated_types.len, allocator)
+    instantiated.push_all(self.instantiated_types.as_slice())
+    let desugars: Dict(NodeId, &BlockExpr) = dict(allocator)
+    for e in self.desugars {
+        desugars.set(e.key, e.value)
+    }
+    let lambdas: Dict(NodeId, LambdaInfo) = dict(allocator)
+    for e in self.lambdas {
+        lambdas.set(e.key, copy_lambda(&e.value, allocator))
+    }
+    let default_args: Dict(NodeId, List(Expr)) = dict(allocator)
+    for e in self.default_args {
+        let xs: List(Expr) = list(e.value.len, allocator)
+        xs.push_all(e.value.as_slice())
+        default_args.set(e.key, xs)
+    }
+    let arg_lists: Dict(NodeId, List(Expr)) = dict(allocator)
+    for e in self.arg_lists {
+        let xs: List(Expr) = list(e.value.len, allocator)
+        xs.push_all(e.value.as_slice())
+        arg_lists.set(e.key, xs)
+    }
+    let derefs: Dict(NodeId, List(ResolvedTarget)) = dict(allocator)
+    for e in self.receiver_derefs {
+        let chain: List(ResolvedTarget) = list(e.value.len, allocator)
+        chain.push_all(e.value.as_slice())
+        derefs.set(e.key, chain)
+    }
+    let spans: Dict(NodeId, SourceSpan) = dict(self.spans.len(), allocator)
+    for e in self.spans {
+        spans.set(e.key, e.value)
+    }
+    let out = inference_results(allocator)
+    out.node_types.deinit()
+    out.node_types = node_types
+    out.resolved_ops.deinit()
+    out.resolved_ops = resolved_ops
+    out.resolved_targets.deinit()
+    out.resolved_targets = resolved_targets
+    out.instantiated_types.deinit()
+    out.instantiated_types = instantiated
+    out.desugars.deinit()
+    out.desugars = desugars
+    out.lambdas.deinit()
+    out.lambdas = lambdas
+    out.default_args.deinit()
+    out.default_args = default_args
+    out.arg_lists.deinit()
+    out.arg_lists = arg_lists
+    out.receiver_derefs.deinit()
+    out.receiver_derefs = derefs
+    out.spans.deinit()
+    out.spans = spans
+    return out
 }
 
 // Reset the transferred side tables to empty so a later `deinit()` can't double-free; `node_types`

@@ -787,6 +787,105 @@ check from harvest to slot end. Measured: **bodies 1500 -> 920 ms cold,
 5-10% first estimated (each step is a union-find resolve plus an
 interner node fetch).
 
+**5e landed 2026-08-27 (`specialization`).** The specialization registry
+carries across demands the way the type table does: `check_all` ships it inside
+the result, and the next demand adopts it back (`result.f::take_specs` into
+`checker.f::adopt_specs`; a gate-A caller that still reads the previous result
+gets a deep copy via `carried_copy` and the original stays). Ids gained a
+nominal type (`SpecId`) and a demand generation stamps every entry a demand
+registers, replaces or reuses. As landed:
+
+- **A carried entry is REUSED - the template body never re-checked - when its
+  pick lands on it** (by final key, or by call site through the hint lists
+  below) **and a probe passes.** Reuse replays what the frame once did to
+  global state: burns the counters the frame minted itself
+  (`own_var_burn`/`own_synth_burn`/`own_lambda_burn` - nested instantiations
+  subtract out and burn their own), re-registers its closure environments from
+  cached `ClosureFact`s (their symbols bake counter values, which is why the
+  entry also anchors at `vars_at`/`synth_at`/`lambda_at` like the module
+  caches), and touches its deps transitively. The probe (`spec_probe`)
+  simulates exactly that walk without
+  committing: entry reusable, template not stale, anchors match at every
+  position the walk would reach, every dep transitively so - a trial set
+  handles self-recursive generics. Its answer to open question 1:
+  `specialization(template, args)` is a pure cached query for the picks whose
+  instantiated signature (params, return, every tp bind) is CONCRETE at
+  process time, and those are nearly all of them once the slot has settled;
+  the rest stay a live per-slot fixpoint.
+- **A pick that lands on an entry it cannot reuse re-instantiates IN PLACE** -
+  same id, fresh overlay (`replace_at`), previous dep list handed to the frame
+  as hints - so the ids other modules' caches bake stay pointing at the right
+  entry. Non-reusable means: the frame emitted a diagnostic or parked a call
+  (both must regenerate live per demand), its drain minted a literal the sweep
+  flagged (marked coarsely per slot at seal time), its final signature never
+  settled concrete, or its template's module was re-parsed this demand
+  (`mark_stale_specs` - the body can change without the scheme changing).
+- **Hints bridge the provisional-key gap.** A non-concrete pick's provisional
+  key renders variable ids and can never match a carried entry's re-keyed
+  final key, so resolution falls back to the call site: each module's cache
+  stores its slot's `(span, function_id, id)` resolutions (`spec_sites`), and
+  an in-place re-instantiation's frame carries its previous incarnation's dep
+  list for the nested picks. Aligned streams make the span the stable
+  identity.
+- **Eviction is mark-and-sweep, answering open question 2**: no owner-set or
+  refcount. Every resolution stamps the demand generation; `sweep` (end of
+  phase 3) evicts what the demand never touched. A touched entry's deps are
+  touched with it, so eviction only removes whole undemanded subgraphs and no
+  live dep list cites a hole. A global invalidation (`!slots_carry`) resets
+  the registry whole and numbering restarts at zero, exactly a cold check.
+- The conversion surfaced a self-host bug worth naming: growing a container
+  through a LOCAL struct's field (`out.by_key.set(...)` on a local `out`
+  before returning it) silently mutates a copy - the two-field-hop hazard the
+  checker's visibility code already documents. `carried_copy` and `deep_copy`
+  fill locals and wrap at the end.
+
+Measured on the compiler with three modules dirtied of 107 (idle machine,
+medians of three): **settle 299 ms cold, 8 ms re-demanded** - down from 5d's
+307 ms warm, which was almost entirely re-instantiation. Bodies stay at ~85 ms
+warm (the replay floor); warm bodies+settle together drop from ~440 ms to
+~95 ms. Memory (`FLANG_REDEMAND` probe, compiler corpus): **+26 MB retained
+per re-demand, down from 5d's +38 MB** - retired results no longer hold a
+spec registry each (the one registry moves forward), which more than pays for
+the per-entry cache facts. Verified: fixpoint (stage 2 = stage 3
+byte-identical), full harness, typer 99/99 (seven new 5e regressions: an
+edited template body re-instantiates, a template-body diagnostic and an
+uninferable template literal re-emit per demand, a reused entry replays its
+closure environment, id stability across a clean re-demand, a removed call
+site sweeps its entry, and the registry deep copy holds every entry under its
+key), analysis 22/22, gate A across `bootstrap/`, `lib/flang_typer` and every
+`examples/*` that type-checks, plus the per-module sweep over `bootstrap/`
+(each of the 107 modules dirtied in turn, one process per module - zero
+divergence).
+
+**5f landed 2026-08-27 (`validate(project)`).** Smaller than its billing,
+because 5d step 0 and 5e already absorbed the sweeps it was named for:
+
+- `validate_literals` needed no code change - it has been per-slot since 5d
+  step 0, each slot's literals swept and retired at its seal. What remains
+  program-wide is phase 3.6 over the preamble range (signature defaults and
+  constant initializers), and that re-runs per demand BY DESIGN: the constants
+  phase is eager (5c) and re-parks them, and a body can be what pins an
+  unannotated constant's variable, so the preamble sweep after the last slot
+  IS `validate(project)` - the quiescence-only remnant of section 2's table.
+- `zonk_specializations` is now scoped to the entries the demand instantiated
+  (`harvested` is false exactly for those): a carried entry was zonked by the
+  demand that made it, and a reuse requires a concrete final signature, so
+  there is nothing left to resolve. The whole-program pass over 2708 carried
+  signatures - and its per-entry list churn - drops to the fresh few.
+
+Warm phase profile after 5e+5f (compiler corpus, `FLANG_REDEMAND=1 -t`):
+typecheck **126 ms** warm - bodies 71 (the replay floor), signatures 15, zonk
+9, specialize 8, templates 8, parse 14. The remaining floor is the per-demand
+table rebuild (replay writes plus the final node-type re-intern), which is
+RFC-023's keyed-tables-with-per-module-eviction work, not a sweep to retire.
+Open question 4 (positional id streams, `docs/notes/positional-id-streams.md`)
+rides with it.
+
+Verified: fixpoint (a cold check takes no new path - every entry is fresh, so
+the skip never fires), typer 99/99, analysis 22/22, gate A on `bootstrap/`
+(three runs) and `lib/flang_typer`, plus the per-module sweep over
+`bootstrap/`.
+
 **Gate B - laziness.** Run the harness with lazy demand enabled and assert zero
 diff in reported diagnostics against eager demand. Guards the M12 rejection
 parity against silent regression. Nearly free once W1003 exists, since that
@@ -816,8 +915,16 @@ object contention on top), stage-2 = stage-3 byte-identical, 11/11 examples.
           constant types); constants phase stays eager by design
       5d  DONE 2026-08-27: per-module settlement slots, then the body cache -
           a kept module's slot replays instead of running
-      5e  specialization; retire drain_pending_specs / resolve_pending_calls
-      5f  validate(project); retire validate_literals / zonk_specializations
+      5e  DONE 2026-08-27: the specialization registry carries; a validated
+          entry is reused without its body re-check, the rest re-instantiate
+          in place; mark-and-sweep eviction (the drains survive, but scoped
+          per slot since 5d step 0 and mostly skipped on a warm demand)
+      5f  DONE 2026-08-27: validate(project) - the literal sweep was already
+          per-slot since 5d step 0 (the preamble range at 3.6 is the
+          quiescence remnant, re-parked per demand by the eager constants
+          phase); zonk_specializations scoped to the demand's fresh entries.
+          The remaining warm floor is the per-demand table rebuild - RFC-023's
+          keyed tables, not a sweep
  6  lazy demand + W1003 + Gate B
 ```
 
@@ -846,11 +953,26 @@ at 16% is a second target, not a rounding error.
 
 ## Open questions
 
-1. Specialization is 16% and lives entirely in the two program-wide drains.
-   Whether `specialization(template, args)` can be a pure query, or needs a
-   bounded fixpoint of its own inside the graph, is the biggest unknown in 5e.
-2. Specializations have no owning module. One spec can be forced by several
-   modules, so eviction needs an owner-set or refcount. Shape TBD at 5e.
+1. ~~Whether `specialization(template, args)` can be a pure query, or needs a
+   bounded fixpoint of its own inside the graph.~~ **Answered at 5e:** both,
+   split by concreteness at process time. A pick whose instantiated signature
+   is concrete is a pure cached query (reused across demands with counter
+   burns and closure replay); a pick still citing open variables pins caller
+   state through the body re-check and stays a live per-slot fixpoint. The
+   concrete case is nearly all of them once a slot has settled.
+2. ~~Specializations have no owning module, so eviction needs an owner-set or
+   refcount.~~ **Answered at 5e:** neither - mark-and-sweep per demand. Every
+   resolution stamps the demand generation and `sweep` evicts the untouched;
+   touched entries touch their deps transitively, so only whole undemanded
+   subgraphs ever go.
 3. Whether generic template bodies gain any validation. Today they are never
    checked except per instantiation; a pull graph does not change that, but it
    makes "never demanded" and "demanded and clean" newly distinguishable.
+4. The positional counter streams (engine variables, synthesized nodes,
+   lambda/closure ordinals) make an edit's blast radius the demand-order
+   suffix: a module whose mint count changes shifts every later module's
+   stream anchors, and those slots re-run once to re-anchor. Gate A never sees
+   it - unchanged text mints identical counts. Candidate fix: per-module id
+   namespaces, which would also dissolve most of 5e's burn/anchor machinery.
+   Same shape of change as 5f/RFC-023's keyed tables; measure in a real editor
+   session first. Analysis: `docs/notes/positional-id-streams.md`.

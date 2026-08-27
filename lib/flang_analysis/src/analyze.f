@@ -327,6 +327,11 @@ fn check_project(self: &AnalyzedProject, ctx: &ResolveCtx, edge_from: &List(usiz
     // result's table sizes presize the demand's fresh tables, since a re-demand rewrites nearly
     // every entry.
     chk.adopt_interner(take_interner(&self.result))
+    // The specialization registry carries the same way (RFC-022 5e): entries the demand can
+    // validate are reused instead of re-checked, the rest re-instantiate at the ids they hold. A
+    // gate-A caller still reads the previous result's tables after the re-demand, so it gets a deep
+    // copy and the original stays.
+    chk.adopt_specs(take_specs(&self.result, self.keep_retired))
     const sizes = table_caps(&self.result)
     chk.presize_results(&sizes)
     if !self.keep_retired {

@@ -41,6 +41,10 @@ pub type Level = u32
 // Handle into the `NominalRegistry`. Stable across a single compilation.
 pub type NominalId = u32
 
+// Handle into the `SpecializationRegistry`. Stable for a project's life: ids are minted monotone,
+// never reused, and a carried entry keeps its id across demands.
+pub type SpecId = u32
+
 // ─────────────────────────────────────────────────────────────────────
 // Inference variables
 // ─────────────────────────────────────────────────────────────────────

@@ -276,6 +276,19 @@ pub fn take_interner(self: &TypeCheckResult) TypeInterner {
     return out
 }
 
+// Move the specialization registry out of the snapshot so the next demand carries it forward -
+// reused entries skip their body re-check entirely (RFC-022 5e). The snapshot is left with an empty
+// stand-in. `keep` instead returns a deep copy and leaves the original readable, for a caller that
+// still compares this snapshot's tables after the re-demand (gate A).
+pub fn take_specs(self: &TypeCheckResult, keep: bool = false) SpecializationRegistry {
+    if keep {
+        return self.specializations.carried_copy(self.specializations.allocator)
+    }
+    let out = self.specializations
+    self.specializations = specialization_registry(out.allocator)
+    return out
+}
+
 pub fn get_type(self: &TypeCheckResult, id: NodeId) Ty? {
     return self.node_types.get(id)
 }
