@@ -98,9 +98,9 @@ pub fn analyze(source: OwnedString, path: String, allocator: &Allocator? = null)
         srcs.deinit()
         fps.deinit()
 
-        // `push` copied the struct; `module` still owns the arena. Forget the alias before freeing
-        // the list so the arena isn't double-freed.
-        modules.clear()
+        // `push` copied the struct; `module` still owns the arena. `pop` moves the alias out before
+        // the list is freed.
+        const _alias = modules.pop()
         modules.deinit()
         paths.deinit()
     }
@@ -126,8 +126,8 @@ pub fn error_count(self: &AnalyzedUnit) usize {
     return count_errors(&self.diagnostics)
 }
 
-// Move every diagnostic from `src` into `dst`. `src.clear()` resets the length without deiniting
-// elements, so the moved OwnedString messages are owned once (by `dst`) and never double-freed.
+// Move every diagnostic from `src` into `dst`. `Diagnostic` has no deinit of its own, so the
+// clear's element deinits are no-ops and the moved message buffers stay owned once, by `dst`.
 fn drain_diagnostics(dst: &List(Diagnostic), src: &List(Diagnostic)) {
     dst.push_all(src.as_slice())
     src.clear()
@@ -168,10 +168,13 @@ pub type AnalyzedProject = struct {
     // names) and AST pointers into the module, so a result outlives the buffers it was built over.
     retired_sources: List(OwnedString)
     retired_modules: List(Module)
-    // Results a later demand replaced, held the same way: a caller that copied `result` before
-    // re-demanding (gate A) still reads the copy's tables, so the storage is released at unit
-    // teardown, not per demand. Each is pushed after its type table was adopted by the next demand.
+    // Results a later demand replaced. A replayed body slot (RFC-022 5d) views an earlier result's
+    // `synth_strings` buffers, so a retired result is slimmed (`slim_retire`) rather than freed:
+    // the tables go, the viewed buffers stay until unit teardown. `keep_retired` keeps the tables
+    // too, for a caller that copied `result` before re-demanding and reads the copy after (gate A).
+    // Each entry is pushed after its type table was adopted by the next demand.
     retired_results: List(TypeCheckResult)
+    keep_retired: bool
     result: TypeCheckResult
     checked: bool
     // Everything the parse tier produced: a module's own parse errors, plus the load failures that
@@ -266,6 +269,7 @@ pub fn analyze_project(ctx: &ResolveCtx, entries: &List(OwnedString), overrides:
         retired_sources = list(0, allocator),
         retired_modules = list(0, allocator),
         retired_results = list(0, allocator),
+        keep_retired = false,
         result = empty_result(allocator),
         checked = false,
         parse_diags = parse_diags,
@@ -319,8 +323,15 @@ fn check_project(self: &AnalyzedProject, ctx: &ResolveCtx, edge_from: &List(usiz
     chk.begin_demand()
     // The type table is one per project: adopt it out of the previous result so the carried nominal
     // bodies' handles stay resolvable, and retire what is left of that result - a caller-held copy
-    // (gate A) may still read its tables, so the storage lives until unit teardown.
+    // (gate A) may still read its tables, so the storage lives until unit teardown. The previous
+    // result's table sizes presize the demand's fresh tables, since a re-demand rewrites nearly
+    // every entry.
     chk.adopt_interner(take_interner(&self.result))
+    const sizes = table_caps(&self.result)
+    chk.presize_results(&sizes)
+    if !self.keep_retired {
+        slim_retire(&self.result)
+    }
     self.retired_results.push(self.result)
     let gens = template_state(allocator)
     chk.set_comptime_ctx(ctx.comptime)
@@ -471,6 +482,7 @@ pub fn analyze_source_set(srcs: List(OwnedString), fqns: &List(String),
         retired_sources = list(0, allocator),
         retired_modules = list(0, allocator),
         retired_results = list(0, allocator),
+        keep_retired = false,
         result = result,
         checked = checked,
         parse_diags = parse_diags,
@@ -522,6 +534,12 @@ pub fn write_generated(self: &AnalyzedProject) usize {
 // Total error-severity diagnostics across every module.
 pub fn project_error_count(self: &AnalyzedProject) usize {
     return count_errors(&self.diagnostics)
+}
+
+// Keep retired results whole instead of slimming them - for a caller that copies `result` before a
+// re-demand and reads the copy's tables after (gate A).
+pub fn keep_retired_results(self: &AnalyzedProject) {
+    self.keep_retired = true
 }
 
 fn parse_to_module(src: String, file_id: i32, target: &ComptimeCtx, diags: &List(Diagnostic),

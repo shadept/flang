@@ -157,7 +157,62 @@ pub type InferenceResults = struct {
     // fingerprint clamps a span longer than 64 KB or a file past 65535, so this table is the only
     // exact mapping back.
     spans: Dict(NodeId, SourceSpan)
+
+    // Key capture (RFC-022 5d). While `cap_on`, every record_* call appends its key to the matching
+    // list, so a module's slot can note WHICH entries it wrote and harvest their final values once
+    // the demand has settled. Keys only - values are read back from the finished tables, where
+    // coercion overwrites and drain rewrites have already landed. An overlay result set never
+    // captures: instantiations swap in a fresh `InferenceResults`, whose flag is off.
+    cap_on: bool
+    cap_spans: List(NodeId)
+    cap_types: List(NodeId)
+    cap_targets: List(NodeId)
+    cap_ops: List(NodeId)
+    cap_desugars: List(NodeId)
+    cap_lambdas: List(NodeId)
+    cap_default_args: List(NodeId)
+    cap_arg_lists: List(NodeId)
+    cap_derefs: List(NodeId)
     allocator: &Allocator?
+}
+
+// The keys one capture window collected, moved out by `end_capture`.
+pub type CapturedKeys = struct {
+    spans: List(NodeId)
+    types: List(NodeId)
+    targets: List(NodeId)
+    ops: List(NodeId)
+    desugars: List(NodeId)
+    lambdas: List(NodeId)
+    default_args: List(NodeId)
+    arg_lists: List(NodeId)
+    derefs: List(NodeId)
+}
+
+pub fn captured_keys(allocator: &Allocator? = null) CapturedKeys {
+    return .{
+        spans = list(0, allocator),
+        types = list(0, allocator),
+        targets = list(0, allocator),
+        ops = list(0, allocator),
+        desugars = list(0, allocator),
+        lambdas = list(0, allocator),
+        default_args = list(0, allocator),
+        arg_lists = list(0, allocator),
+        derefs = list(0, allocator),
+    }
+}
+
+pub fn deinit(self: &CapturedKeys) {
+    self.spans.deinit()
+    self.types.deinit()
+    self.targets.deinit()
+    self.ops.deinit()
+    self.desugars.deinit()
+    self.lambdas.deinit()
+    self.default_args.deinit()
+    self.arg_lists.deinit()
+    self.derefs.deinit()
 }
 
 pub fn inference_results(allocator: &Allocator? = null) InferenceResults {
@@ -173,8 +228,87 @@ pub fn inference_results(allocator: &Allocator? = null) InferenceResults {
         arg_lists = dict(allocator),
         receiver_derefs = dict(allocator),
         spans = dict(allocator),
+        cap_on = false,
+        cap_spans = list(0, allocator),
+        cap_types = list(0, allocator),
+        cap_targets = list(0, allocator),
+        cap_ops = list(0, allocator),
+        cap_desugars = list(0, allocator),
+        cap_lambdas = list(0, allocator),
+        cap_default_args = list(0, allocator),
+        cap_arg_lists = list(0, allocator),
+        cap_derefs = list(0, allocator),
         allocator = allocator,
     }
+}
+
+// Final table sizes of a finished result. A re-demand rewrites nearly every entry - replayed facts
+// plus the re-run modules - so starting the next demand's tables at these sizes skips every
+// doubling rehash on the replay path.
+pub type TableCaps = struct {
+    node_types: usize
+    spans: usize
+    targets: usize
+    ops: usize
+    desugars: usize
+    lambdas: usize
+    default_args: usize
+    arg_lists: usize
+    derefs: usize
+}
+
+// Rebuild the node-keyed tables at the given capacities. Only meaningful on a fresh, empty result
+// set - existing entries are dropped, not migrated.
+pub fn presize_tables(self: &InferenceResults, s: &TableCaps) {
+    self.node_types.deinit()
+    self.node_types = dict(s.node_types, self.allocator)
+    self.spans.deinit()
+    self.spans = dict(s.spans, self.allocator)
+    self.resolved_targets.deinit()
+    self.resolved_targets = dict(s.targets, self.allocator)
+    self.resolved_ops.deinit()
+    self.resolved_ops = dict(s.ops, self.allocator)
+    self.desugars.deinit()
+    self.desugars = dict(s.desugars, self.allocator)
+    self.lambdas.deinit()
+    self.lambdas = dict(s.lambdas, self.allocator)
+    self.default_args.deinit()
+    self.default_args = dict(s.default_args, self.allocator)
+    self.arg_lists.deinit()
+    self.arg_lists = dict(s.arg_lists, self.allocator)
+    self.receiver_derefs.deinit()
+    self.receiver_derefs = dict(s.derefs, self.allocator)
+}
+
+// Start collecting the keys of every entry recorded from here on.
+pub fn begin_capture(self: &InferenceResults) {
+    self.cap_on = true
+}
+
+// Stop collecting and hand the window's keys over, leaving the lists empty for the next window.
+pub fn end_capture(self: &InferenceResults) CapturedKeys {
+    self.cap_on = false
+    let out = CapturedKeys {
+        spans = self.cap_spans,
+        types = self.cap_types,
+        targets = self.cap_targets,
+        ops = self.cap_ops,
+        desugars = self.cap_desugars,
+        lambdas = self.cap_lambdas,
+        default_args = self.cap_default_args,
+        arg_lists = self.cap_arg_lists,
+        derefs = self.cap_derefs,
+    }
+    self.cap_spans = list(0, self.allocator)
+    self.cap_types = list(0, self.allocator)
+    self.cap_targets = list(0, self.allocator)
+    self.cap_ops = list(0, self.allocator)
+    self.cap_desugars = list(0, self.allocator)
+    self.cap_lambdas = list(0, self.allocator)
+    self.cap_default_args = list(0, self.allocator)
+    self.cap_arg_lists = list(0, self.allocator)
+    self.cap_derefs = list(0, self.allocator)
+    return out
 }
 
 pub fn deinit(self: &InferenceResults) {
@@ -189,12 +323,24 @@ pub fn deinit(self: &InferenceResults) {
     self.arg_lists.deinit()
     self.receiver_derefs.deinit()
     self.spans.deinit()
+    self.cap_spans.deinit()
+    self.cap_types.deinit()
+    self.cap_targets.deinit()
+    self.cap_ops.deinit()
+    self.cap_desugars.deinit()
+    self.cap_lambdas.deinit()
+    self.cap_default_args.deinit()
+    self.cap_arg_lists.deinit()
+    self.cap_derefs.deinit()
 }
 
 // Note the span an id was minted from. Two spans share an id only by clamping to the same bits, so
 // a repeat write carries the same span.
 pub fn record_span(self: &InferenceResults, id: NodeId, span: SourceSpan) {
     self.spans.set(id, span)
+    if self.cap_on {
+        self.cap_spans.push(id)
+    }
 }
 
 pub fn get_span(self: &InferenceResults, id: NodeId) SourceSpan? {
@@ -206,6 +352,9 @@ pub fn get_span(self: &InferenceResults, id: NodeId) SourceSpan? {
 // lowering sees the final shape.
 pub fn record_type(self: &InferenceResults, id: NodeId, ty: Ty) {
     self.node_types.set(id, ty)
+    if self.cap_on {
+        self.cap_types.push(id)
+    }
 }
 
 pub fn get_type(self: &InferenceResults, id: NodeId) Ty? {
@@ -214,10 +363,16 @@ pub fn get_type(self: &InferenceResults, id: NodeId) Ty? {
 
 pub fn record_operator(self: &InferenceResults, id: NodeId, op: ResolvedOperator) {
     self.resolved_ops.set(id, op)
+    if self.cap_on {
+        self.cap_ops.push(id)
+    }
 }
 
 pub fn record_target(self: &InferenceResults, id: NodeId, target: ResolvedTarget) {
     self.resolved_targets.set(id, target)
+    if self.cap_on {
+        self.cap_targets.push(id)
+    }
 }
 
 pub fn record_instantiated(self: &InferenceResults, ty: Ty) {
@@ -234,22 +389,37 @@ pub fn add_synth_string(self: &InferenceResults, owned: OwnedString) String {
 
 pub fn record_desugar(self: &InferenceResults, id: NodeId, block: &BlockExpr) {
     self.desugars.set(id, block)
+    if self.cap_on {
+        self.cap_desugars.push(id)
+    }
 }
 
 pub fn record_lambda(self: &InferenceResults, id: NodeId, info: LambdaInfo) {
     self.lambdas.set(id, info)
+    if self.cap_on {
+        self.cap_lambdas.push(id)
+    }
 }
 
 pub fn record_default_args(self: &InferenceResults, id: NodeId, exprs: List(Expr)) {
     self.default_args.set(id, exprs)
+    if self.cap_on {
+        self.cap_default_args.push(id)
+    }
 }
 
 pub fn record_arg_list(self: &InferenceResults, id: NodeId, exprs: List(Expr)) {
     self.arg_lists.set(id, exprs)
+    if self.cap_on {
+        self.cap_arg_lists.push(id)
+    }
 }
 
 pub fn record_receiver_deref(self: &InferenceResults, id: NodeId, chain: List(ResolvedTarget)) {
     self.receiver_derefs.set(id, chain)
+    if self.cap_on {
+        self.cap_derefs.push(id)
+    }
 }
 
 // Rewrite one hop of a recorded deref chain to its specialization - the M10 drain's counterpart of

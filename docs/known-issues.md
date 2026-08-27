@@ -89,6 +89,53 @@ in its fixtures so the assertions are no longer vacuous.
 
 ## Open Issues
 
+### Checker leaks ~129 MB per cold check, ~24 MB per re-demand
+
+**Status:** Open - reduced from 250 MB / 60 MB, residual unattributed
+**Affected:** `lib/flang_typer/src/checker.f` and the demand path generally
+
+Measured with the `FLANG_REDEMAND` probe (bootstrap/src/main.f):
+`FLANG_REDEMAND=<n>` re-demands the analyzed project n times;
+`FLANG_REDEMAND_EXIT` tears the unit down and reports `--mem` before
+exiting, so live-at-exit is memory nothing owns. On the compiler corpus a
+cold check leaves 129 MB unreachable and each re-demand adds ~24 MB. The
+big one is fixed - the per-lookup visibility-set copies
+(`current_visibility` / `fn_visibility`) were ~120 MB cold - along with
+processed drain picks, resolved parked calls and overwritten generic
+templates. The residual is spread across many small per-work-unit
+allocations; attribution wants a counting-allocator variant that tags
+allocations by call site. Irrelevant to one-shot builds (the process
+exits); relevant to the LSP, where the per-re-demand share accumulates.
+
+### Self-hosted: a call the reference rejects as ambiguous (E2011) resolves silently
+
+**Status:** Open
+**Affected:** `lib/flang_typer/src/checker.f` (overload scoring)
+
+Two overloads differing only by a defaulted trailing parameter -
+`fn f(self: &T) R` beside `fn f(self: &T, a: A? = null) S` - called as
+`x.f()`: the reference reports E2011 (several overloads match equally
+well); the self-hosted checker resolves without a diagnostic. Observed
+when a `TypeCheckResult` method briefly had that shape: `flang-ref`
+refused the tree, `flang build` checked it. In the observed case the
+call's member accesses were left typed as open variables, and a
+`--gate-a` run over that (error-state) tree reported cold-vs-warm
+differences in those variables' levels - so checker parity here also
+guards the incremental oracle's precondition that a comparable project
+type-checks. Reproduce by adding such an overload pair and calling at
+the shorter arity; the two compilers must agree on E2011.
+
+### `tools/cst_explorer` no longer type-checks against the current parser AST
+
+**Status:** Open
+**Affected:** `tools/cst_explorer/src/ast_json.f`
+
+The JSON emitter's `Expr`/`Stmt` matches lag the parser's AST: a
+non-exhaustive match (missing the `Error` variant) and an `emit_expr`
+call whose overload no longer exists. The tool is debug-only and nothing
+in the build depends on it; regenerate the emitter's match arms against
+`flang_parser.ast` when the tool is next needed.
+
 ### A Type Parameter in Value Position Bound Itself to `Type($X)` - RESOLVED
 
 **Status:** Resolved - type parameters reify in value position

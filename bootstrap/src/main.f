@@ -390,6 +390,39 @@ fn build_project(opts: &BuildOpts) i32 {
     let unit = analyze_project(&ctx, &sources, null, alloc)
     defer unit.deinit()
 
+    // Memory probe: FLANG_REDEMAND=<n> re-demands the project n times after analysis, printing
+    // retention per round under --mem. FLANG_REDEMAND_CLEAN keeps the dirty set empty (only the
+    // always-stale generator origins re-parse); FLANG_REDEMAND_EXIT tears the unit down and reports
+    // before exiting, so live-at-exit is memory nothing owns - the leak, apart from the unit's
+    // retention. See the leak entry in docs/known-issues.md.
+    const probe = env("FLANG_REDEMAND")
+    if probe.is_some() {
+        const n = gate_index_of(probe.unwrap())
+        let pd: Set(String) = set()
+        defer pd.deinit()
+        if env("FLANG_REDEMAND_CLEAN").is_none() and unit.file_paths.len > 0 {
+            pd.add(unit.file_paths[0].as_view())
+        }
+        for _k in 0..n.unwrap_or(0usize) {
+            reanalyze(&unit, &ctx, &pd, null, alloc)
+            let rs: usize = 0
+            for &s in unit.retired_sources {
+                rs = rs + s.as_view().len
+            }
+            const dbg = $"DBG retired: {unit.retired_sources.len} sources ({rs / 1024} KB), {unit.retired_modules.len} modules, {unit.retired_results.len} results"
+            println(dbg.as_view())
+            dbg.deinit()
+            if opts.mem {
+                report_mem(&counted)
+            }
+        }
+        if env("FLANG_REDEMAND_EXIT").is_some() {
+            unit.deinit()
+            report_mem(&counted)
+            exit(0)
+        }
+    }
+
     if opts.gate_a {
         const code = run_gate_a(&ctx, &unit, alloc)
         if opts.mem {
@@ -543,6 +576,22 @@ fn report_mem(c: &CountingAllocator) {
     println(ops.as_view())
 }
 
+// Plain decimal digits to a usize; null for anything else.
+fn gate_index_of(s: String) usize? {
+    if s.len == 0 {
+        return null
+    }
+    let n: usize = 0
+    for i in 0..s.len {
+        const c = s[i]
+        if c < '0' or c > '9' {
+            return null
+        }
+        n = n * 10 + ((c as usize) - 48)
+    }
+    return Some(n)
+}
+
 fn run_gate_a(ctx: &ResolveCtx, cold: &AnalyzedProject, alloc: &Allocator?) i32 {
     if !cold.checked {
         println("gate A: the project does not type-check - nothing to compare")
@@ -556,15 +605,34 @@ fn run_gate_a(ctx: &ResolveCtx, cold: &AnalyzedProject, alloc: &Allocator?) i32 
     const cold_collect_ns = cold.result.phases.collect_ns
     const cold_nominals_ns = cold.result.phases.nominals_ns
     const cold_signatures_ns = cold.result.phases.signatures_ns
+    const cold_bodies_ns = cold.result.phases.bodies_ns
+    const cold_specialize_ns = cold.result.phases.specialize_ns
     const dirty: Set(String) = set()
     defer dirty.deinit()
-    const n = cold.file_paths.len
-    if n > 0 {
-        dirty.add(cold.file_paths[0].as_view())
-        dirty.add(cold.file_paths[n / 2].as_view())
-        dirty.add(cold.file_paths[n - 1].as_view())
+    // FLANG_GATE_DIRTY names one module to dirty - by demand-order index or by path - instead of
+    // the default three. The per-module sweep runs the gate once per module, one process each (each
+    // demand retires the result it replaces, so one process cannot afford a hundred re-demands).
+    const forced = env("FLANG_GATE_DIRTY")
+    if forced.is_some() {
+        const key = forced.unwrap()
+        const idx = gate_index_of(key)
+        if idx.is_some() and idx.unwrap() < cold.file_paths.len {
+            dirty.add(cold.file_paths[idx.unwrap()].as_view())
+        } else {
+            dirty.add(key)
+        }
+    } else {
+        const n = cold.file_paths.len
+        if n > 0 {
+            dirty.add(cold.file_paths[0].as_view())
+            dirty.add(cold.file_paths[n / 2].as_view())
+            dirty.add(cold.file_paths[n - 1].as_view())
+        }
     }
     const before = cold.result
+    // The diff below reads `before`'s tables after the re-demand, so its retirement must not slim
+    // them.
+    keep_retired_results(cold)
     reanalyze(cold, ctx, &dirty, null, alloc)
 
     let d = diff_results(&before, &cold.result)
@@ -616,6 +684,16 @@ fn run_gate_a(ctx: &ResolveCtx, cold: &AnalyzedProject, alloc: &Allocator?) i32 
         const s = $"gate A: signatures {cold_sig_us} us cold, {warm_sig_us} us re-demanded"
         defer s.deinit()
         println(s.as_view())
+        const cold_body_ms = cold_bodies_ns / 1000000u64
+        const warm_body_ms = cold.result.phases.bodies_ns / 1000000u64
+        const bd = $"gate A: bodies {cold_body_ms} ms cold, {warm_body_ms} ms re-demanded"
+        defer bd.deinit()
+        println(bd.as_view())
+        const cold_spec_ms = cold_specialize_ns / 1000000u64
+        const warm_spec_ms = cold.result.phases.specialize_ns / 1000000u64
+        const sp = $"gate A: settle {cold_spec_ms} ms cold, {warm_spec_ms} ms re-demanded"
+        defer sp.deinit()
+        println(sp.as_view())
         return 0
     }
 

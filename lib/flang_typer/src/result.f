@@ -146,6 +146,44 @@ pub fn deinit(self: &TypeCheckResult) {
     self.file_paths.deinit()
 }
 
+// Free the tables a retired snapshot's readers no longer need, keeping the struct valid for a later
+// `deinit`. What survives is `synth_strings`: `RtConst` targets and desugared AST in later results
+// and module caches view those buffers. The interner is a stand-in by retirement time
+// (`take_interner`), the desugar blocks are leaked global boxes, and `phases` is plain data, so
+// none are touched.
+pub fn slim_retire(self: &TypeCheckResult) {
+    self.node_types.deinit()
+    self.resolved_ops.deinit()
+    self.resolved_targets.deinit()
+    self.instantiated_types.deinit()
+    self.specializations.deinit()
+    self.desugars.deinit()
+    self.default_args.deinit()
+    self.arg_lists.deinit()
+    self.receiver_derefs.deinit()
+    self.nominals.deinit()
+    self.functions.deinit()
+    self.lambdas.deinit()
+    self.closures.deinit()
+    self.spans.deinit()
+    self.file_paths.deinit()
+    self.node_types = dict()
+    self.resolved_ops = dict()
+    self.resolved_targets = dict()
+    self.instantiated_types = list(0)
+    self.specializations = specialization_registry()
+    self.desugars = dict()
+    self.default_args = dict()
+    self.arg_lists = dict()
+    self.receiver_derefs = dict()
+    self.nominals = nominal_registry()
+    self.functions = function_registry()
+    self.lambdas = dict()
+    self.closures = dict()
+    self.spans = dict()
+    self.file_paths = list(0)
+}
+
 // One table's footprint. `bytes` is the backing array only: what an entry's value owns on the heap
 // of its own (a `Ty`'s argument list, an `OwnedString`'s buffer) belongs to whatever measures that
 // heap.
@@ -240,6 +278,22 @@ pub fn take_interner(self: &TypeCheckResult) TypeInterner {
 
 pub fn get_type(self: &TypeCheckResult, id: NodeId) Ty? {
     return self.node_types.get(id)
+}
+
+// This result's final table sizes, for presizing the next demand's tables (see
+// `inference_results.presize_tables`).
+pub fn table_caps(self: &TypeCheckResult) TableCaps {
+    return .{
+        node_types = self.node_types.len(),
+        spans = self.spans.len(),
+        targets = self.resolved_targets.len(),
+        ops = self.resolved_ops.len(),
+        desugars = self.desugars.len(),
+        lambdas = self.lambdas.len(),
+        default_args = self.default_args.len(),
+        arg_lists = self.arg_lists.len(),
+        derefs = self.receiver_derefs.len(),
+    }
 }
 
 pub fn get_target(self: &TypeCheckResult, id: NodeId) ResolvedTarget? {

@@ -107,10 +107,10 @@ pub fn deinit(self: &TemplateOutput) {
 }
 
 // Deliberately leak the output (single-unit analysis has no slot to keep it alive; the appended
-// decls reference the chunk arenas).
+// decls reference the chunk arenas). The modules are popped out before the list is freed.
 pub fn forget(self: &TemplateState) {
     let out = self.take_output()
-    out.chunk_modules.clear()
+    while out.chunk_modules.pop().is_some() {}
     out.chunk_modules.deinit()
     self.defs.deinit()
     self.syntax.deinit()
@@ -275,6 +275,7 @@ fn expand_one(chk: &Checker, state: &TemplateState, modules: &List(Module), path
     chk.set_current_module(paths[item.module])
     let ectx: ExpandCtx = .{ chk = chk, state = state, modules = modules,
         vis = current_visibility(chk), alloc = &a }
+    defer ectx.vis.visible.deinit()
     const lookup: CtLookup = .{ ctx = &ectx as &u8, resolve = resolve_type_decl }
     let env = ct_env(&chk.comptime, &a, lookup)
 
@@ -411,6 +412,7 @@ fn type_is_collected(chk: &Checker, name: String) bool {
         return true
     }
     const vis = current_visibility(chk)
+    defer vis.visible.deinit()
     return chk.nominals.lookup(name, &vis) match {
         NomLookFound(_) => true
         _ => false

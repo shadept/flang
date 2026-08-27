@@ -9,70 +9,68 @@ import std.option
 import std.test
 
 pub type Stack = struct(T) {
-    inner: List(T)
+    __inner: List(T)
 }
 
 // Construct an empty stack. The capacity hint pre-reserves storage to avoid early growth churn;
 // pass 0 to defer allocation to the first `push`. `T` is inferred from the call's expected type
 // (e.g. `let s: Stack(i32) = stack(0)` or `let s = stack(0); s.push(1i32)`).
 pub fn stack(capacity: usize, allocator: &Allocator? = null) Stack($T) {
-    return .{ inner = list(capacity, allocator) }
+    return .{ __inner = list(capacity, allocator) }
 }
 
 // Free the backing storage. Each live element's `deinit()` runs first. The stack should not be used
 // after this.
 pub fn deinit(self: &Stack($T)) {
-    self.inner.deinit()
+    self.__inner.deinit()
 }
 
 // Number of elements currently on the stack.
 pub fn len(self: Stack($T)) usize {
-    return self.inner.len
+    return self.__inner.len
 }
 
 // True when the stack holds no elements.
 pub fn is_empty(self: Stack($T)) bool {
-    return self.inner.len == 0
+    return self.__inner.len == 0
 }
 
 // Push a value onto the top of the stack. Grows the backing storage when capacity is exhausted.
 pub fn push(self: &Stack($T), value: T) {
-    self.inner.push(value)
+    self.__inner.push(value)
 }
 
 // Remove and return the top element, or `null` when the stack is empty.
 pub fn pop(self: &Stack($T)) T? {
-    return self.inner.pop()
+    return self.__inner.pop()
 }
 
 // Return the top element without removing it, or `null` when empty.
 pub fn peek(self: Stack($T)) T? {
-    if self.inner.len == 0 {
+    if self.__inner.len == 0 {
         return null
     }
-    return self.inner.get(self.inner.len - 1)
+    return self.__inner.get(self.__inner.len - 1)
 }
 
 // Return a pointer to the top element without removing it, or `null` when empty. Mutations through
 // the pointer persist in the stack.
 pub fn peek_ref(self: &Stack($T)) &T? {
-    if self.inner.len == 0 {
+    if self.__inner.len == 0 {
         return null
     }
-    return self.inner.get_ref(self.inner.len - 1)
+    return self.__inner.get_ref(self.__inner.len - 1)
 }
 
-// Drop every element. Backing storage is retained so subsequent pushes reuse it. Element `deinit()`
-// is NOT called - clear is a fast reset, not a full release. Use `deinit()` followed by a fresh
-// `stack(...)` when elements own heap.
+// Drop every element, deiniting each. Backing storage is kept for reuse.
 pub fn clear(self: &Stack($T)) {
-    self.inner.clear()
+    self.__inner.clear()
 }
 
 // View the stack's storage as a slice in bottom-to-top order. Iterating the slice in reverse visits
 // elements top-down.
 pub fn as_slice(self: Stack($T)) T[] {
-    return self.inner.as_slice()
+    return self.__inner.as_slice()
 }
 
 // =============================================================================
@@ -119,7 +117,7 @@ test "stack peek_ref mutates in place" {
     assert_eq(s.pop().unwrap_or(0i32), 42i32, "mutation through peek_ref persists")
 }
 
-test "stack clear empties without deinit" {
+test "stack clear empties and the storage is reusable" {
     let s: Stack(i32) = stack(8)
     defer s.deinit()
     s.push(1i32)

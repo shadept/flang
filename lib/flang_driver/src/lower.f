@@ -489,8 +489,8 @@ fn drop_callers_of_refused(m: &IrModule, ctx: &LowerCtx, alloc: &Allocator?) {
     }
 
     // Compact once the set has settled. A kept function MOVES into `keep` (its buffers now owned by
-    // the copy; `clear` below discards the stale headers without touching elements); a dropped one
-    // frees its tree here.
+    // the copy); a dropped one frees its tree here. The stale headers are popped out of both lists,
+    // so each function tree is deinited exactly once.
     let keep: List(Function) = list(m.functions.len, alloc)
     for &f in m.functions {
         if defined.get(f.name).is_some() {
@@ -499,9 +499,9 @@ fn drop_callers_of_refused(m: &IrModule, ctx: &LowerCtx, alloc: &Allocator?) {
             f.deinit()
         }
     }
-    m.functions.clear()
+    while m.functions.pop().is_some() {}
     m.functions.push_all(keep.as_slice())
-    keep.clear()
+    while keep.pop().is_some() {}
     keep.deinit()
     defined.deinit()
 }

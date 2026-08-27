@@ -76,6 +76,11 @@ type GenericTemplate = struct {
     tps: List(SigTypeParam) // signature type params, declaration order
 }
 
+// A re-registered signature's `Dict.set` overwrite frees the replaced template through this.
+fn deinit(self: &GenericTemplate) {
+    self.tps.deinit()
+}
+
 // One `$T` binding created while resolving the current signature - collected by
 // `resolve_generic_bind`, drained by `register_function_sig`.
 type SigTypeParam = struct {
@@ -100,6 +105,10 @@ type PendingLit = struct {
 type PendingAnon = struct {
     ty: Ty
     fields: List(AnonFieldRec)
+}
+
+fn deinit(self: &PendingAnon) {
+    self.fields.deinit()
 }
 
 type AnonFieldRec = struct {
@@ -258,20 +267,37 @@ pub type Checker = struct {
     sig_capture: bool
     sig_nodes: List(SigNodeFact)
 
+    // Module path -> what its body slot produced, for demands that replay the slot (RFC-022 5d).
+    // `body_cache_keys` owns the path buffers. `slot_log_on` is set while a running slot's first
+    // drain executes; top-level `process_pending` then logs each pick into `slot_picks`.
+    // `slot_uninferable` counts the slot's E2001 uninferable picks - any makes the slot
+    // uncacheable, since an unprocessed pick leaves no log entry to replay. `defaults_changed` is
+    // set when a re-run signature pass's default-value texts differ from the previous demand's.
+    body_caches: Dict(String, ModuleBodyCache)
+    body_cache_keys: List(OwnedString)
+    slot_log_on: bool
+    slot_picks: List(CapturedPick)
+    slot_uninferable: usize
+    defaults_changed: bool
+
     allocator: &Allocator?
 }
 
-// One module's cached diagnostics from the carried tiers.
+// One module's cached diagnostics from the carried tiers. `bodies` covers the slot's capture window
+// (the body pass through the fn-name resolution); what the slot's drains and parked-call resolution
+// emit is regenerated live by a replay and is not cached.
 pub type ModuleNomDiags = struct {
     collect: List(Diagnostic)
     resolve: List(Diagnostic)
     signatures: List(Diagnostic)
+    bodies: List(Diagnostic)
 }
 
 pub fn deinit(self: &ModuleNomDiags) {
     free_diag_list(&self.collect)
     free_diag_list(&self.resolve)
     free_diag_list(&self.signatures)
+    free_diag_list(&self.bodies)
 }
 
 // One captured node from a module's signature pass: the id, the span it was minted from, and -
@@ -298,6 +324,11 @@ pub type ModuleSigCache = struct {
     // it forces a re-run, which re-anchors the cache.
     vars_at_start: u32
     lit_tys: List(Ty)
+    // The source text of each default-value expression, in declaration order. A re-run whose texts
+    // differ from the previous run's invalidates every carried body: callers cached the callee's
+    // default AST, and a scheme compare cannot see a default's value change. Empty when the caller
+    // supplied no sources (test fixtures), which skips the comparison.
+    default_texts: List(OwnedString)
     cacheable: bool
     // True between capture and this demand's harvest.
     fresh: bool
@@ -306,6 +337,157 @@ pub type ModuleSigCache = struct {
 pub fn deinit(self: &ModuleSigCache) {
     self.facts.deinit()
     self.lit_tys.deinit()
+    for &t in self.default_texts {
+        t.deinit()
+    }
+    self.default_texts.deinit()
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// Carried bodies (RFC-022 5d) - the per-module body cache. One entry per module, holding everything
+// the module's slot wrote, so a demand can replay the slot instead of running it. Facts are
+// harvested with FINAL values (the raw recordings cite engine bindings that die with the demand
+// that made them); the slot's drains and parked-call resolution are replayed LIVE from the captured
+// picks and calls, which is what recreates the demand's specializations and re-pins the module's
+// burned variables in the order the cold drain pinned them.
+// ─────────────────────────────────────────────────────────────────────
+
+pub type NodeTyFact = struct {
+    node: NodeId
+    ty: Ty
+}
+
+pub type NodeSpanFact = struct {
+    node: NodeId
+    span: SourceSpan
+}
+
+pub type NodeTargetFact = struct {
+    node: NodeId
+    target: ResolvedTarget
+}
+
+pub type NodeOpFact = struct {
+    node: NodeId
+    op: ResolvedOperator
+}
+
+pub type NodeBlockFact = struct {
+    node: NodeId
+    block: &BlockExpr
+}
+
+pub type NodeLambdaFact = struct {
+    node: NodeId
+    info: LambdaInfo
+}
+
+pub fn deinit(self: &NodeLambdaFact) {
+    self.info.deinit()
+}
+
+pub type NodeExprsFact = struct {
+    node: NodeId
+    exprs: List(Expr)
+}
+
+pub fn deinit(self: &NodeExprsFact) {
+    self.exprs.deinit()
+}
+
+pub type NodeDerefsFact = struct {
+    node: NodeId
+    chain: List(ResolvedTarget)
+}
+
+pub fn deinit(self: &NodeDerefsFact) {
+    self.chain.deinit()
+}
+
+// A closure environment the slot registered: enough to register it again at the id it held. Field
+// name views point into the module's kept source; the fqn is a cache-owned copy of the synthesized
+// name whose retirement `recycled` remembers.
+pub type ClosureFact = struct {
+    id: NominalId
+    fqn: OwnedString
+    module: String
+    fields: List(Field)
+    decl_span: SourceSpan
+    sig: ClosureSig
+}
+
+pub fn deinit(self: &ClosureFact) {
+    self.fqn.deinit()
+    self.fields.deinit()
+    self.sig.deinit()
+}
+
+// One top-level generic pick as the drain processed it, types zonked at process time. A replay
+// re-runs these in process order: a handle that was already concrete stays so, and one that still
+// cited an open variable re-resolves through the bindings the replayed instantiations before it
+// re-made - the same state the cold drain walked through.
+pub type CapturedPick = struct {
+    span: SourceSpan
+    is_operator: bool
+    deref_index: usize?
+    function_id: u32
+    tp_binds: Dict(VarId, Ty)
+    inst_params: List(Ty)
+    inst_ret: Ty
+    caller_module: String
+}
+
+pub fn deinit(self: &CapturedPick) {
+    self.tp_binds.deinit()
+    self.inst_params.deinit()
+}
+
+// One module's cached body slot. `keys` holds the capture window's table keys between capture and
+// harvest; harvest turns them into the fact lists and leaves `keys` empty. The counters anchor the
+// cache to its position in the variable, synthetic-node and lambda streams, exactly like the
+// signature cache's `vars_at_start`.
+pub type ModuleBodyCache = struct {
+    vars_at_start: u32
+    var_burn: usize
+    synth_at_start: u32
+    synth_burn: u32
+    lambda_at_start: u32
+    lambda_burn: u32
+    keys: CapturedKeys
+    types: List(NodeTyFact)
+    spans: List(NodeSpanFact)
+    targets: List(NodeTargetFact)
+    ops: List(NodeOpFact)
+    desugars: List(NodeBlockFact)
+    lambdas: List(NodeLambdaFact)
+    closures: List(ClosureFact)
+    default_args: List(NodeExprsFact)
+    arg_lists: List(NodeExprsFact)
+    derefs: List(NodeDerefsFact)
+    picks: List(CapturedPick)
+    calls: List(PendingCall)
+    cacheable: bool
+    fresh: bool
+}
+
+pub fn deinit(self: &ModuleBodyCache) {
+    self.keys.deinit()
+    self.types.deinit()
+    self.spans.deinit()
+    self.targets.deinit()
+    self.ops.deinit()
+    self.desugars.deinit()
+    self.lambdas.deinit()
+    self.closures.deinit()
+    self.default_args.deinit()
+    self.arg_lists.deinit()
+    self.derefs.deinit()
+    self.picks.deinit()
+    for &pc in self.calls {
+        pc.arg_tys.deinit()
+        pc.pos_exprs.deinit()
+    }
+    self.calls.deinit()
 }
 
 // Free the messages a diagnostic list owns, then the list itself. `Diagnostic` has no deinit of its
@@ -404,6 +586,12 @@ pub fn checker(allocator: &Allocator? = null) Checker {
         sig_cache_keys = list(0, allocator),
         sig_capture = false,
         sig_nodes = list(0, allocator),
+        body_caches = dict(allocator),
+        body_cache_keys = list(0, allocator),
+        slot_log_on = false,
+        slot_picks = list(0, allocator),
+        slot_uninferable = 0usize,
+        defaults_changed = false,
         allocator = allocator,
     }
 }
@@ -438,6 +626,8 @@ pub fn begin_demand(self: &Checker) {
     let nom_diag_keys = self.nominal_diag_keys
     let sig_caches = self.sig_caches
     let sig_cache_keys = self.sig_cache_keys
+    let body_caches = self.body_caches
+    let body_cache_keys = self.body_cache_keys
     const ct = self.comptime
     // Hand the carried tables over before the teardown, which frees whatever the checker still
     // owns.
@@ -455,6 +645,8 @@ pub fn begin_demand(self: &Checker) {
     self.nominal_diag_keys = list(0, self.allocator)
     self.sig_caches = dict(self.allocator)
     self.sig_cache_keys = list(0, self.allocator)
+    self.body_caches = dict(self.allocator)
+    self.body_cache_keys = list(0, self.allocator)
     self.deinit()
 
     let next = checker(self.allocator)
@@ -472,8 +664,17 @@ pub fn begin_demand(self: &Checker) {
     next.nominal_diag_keys = nom_diag_keys
     next.sig_caches = sig_caches
     next.sig_cache_keys = sig_cache_keys
+    next.body_caches = body_caches
+    next.body_cache_keys = body_cache_keys
     next.comptime = ct
     self.* = next
+}
+
+// Start this demand's result tables at the previous demand's final sizes - a re-demand rewrites
+// nearly every entry, and beginning at the target size skips the doubling rehashes on the replay
+// path. Call between `begin_demand` and `check_all`.
+pub fn presize_results(self: &Checker, sizes: &TableCaps) {
+    self.results.presize_tables(sizes)
 }
 
 // Install a type table carried from the previous demand's result, so the handles baked into the
@@ -579,6 +780,9 @@ pub fn deinit(self: &Checker) {
     self.sig_caches.deinit()
     self.sig_cache_keys.deinit()
     self.sig_nodes.deinit()
+    self.body_caches.deinit()
+    self.body_cache_keys.deinit()
+    self.slot_picks.deinit()
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -702,6 +906,7 @@ fn resolve_named(self: &Checker, n: &NamedType) Ty {
 
     // Nominal?
     let vis = current_visibility(self)
+    defer vis.visible.deinit()
     let look = self.nominals.lookup(n.name, &vis)
 
     let found_id: NominalId? = look match {
@@ -1630,6 +1835,7 @@ fn collect_one_signature(self: &Checker, decl: &Decl) {
 // collisions count: two modules may each declare `deinit(&Foo)` for their own `Foo`.
 fn duplicate_overload(self: &Checker, name: String, sig: &Scheme) bool {
     let vis = current_visibility(self)
+    defer vis.visible.deinit()
     let found = self.functions.lookup(name, &vis) match {
         FnLookFound(c) => Some(c)
         _ => null
@@ -2010,6 +2216,10 @@ fn drain_pending_specs(self: &Checker) {
         for p in queue {
             if pending_ready(self, &p) {
                 process_pending(self, &p)
+                // A processed pick's collections are done; a deferred one keeps its storage into
+                // the next pass, so the queue itself is never element-deinited.
+                p.tp_binds.deinit()
+                p.inst_params.deinit()
                 progressed = true
             } else {
                 deferred.push(p)
@@ -2032,11 +2242,14 @@ fn drain_pending_specs(self: &Checker) {
     }
     for p in queue {
         report_uninferable_spec(self, &p)
+        p.tp_binds.deinit()
+        p.inst_params.deinit()
     }
     queue.deinit()
 }
 
 fn report_uninferable_spec(self: &Checker, p: &PendingSpec) {
+    self.slot_uninferable = self.slot_uninferable + 1
     let name = self.templates.get(p.function_id).unwrap().decl.name
     push_diag_e(self, p.span, E_UNINFERRED,
         $"cannot infer the type arguments of generic function `{name}` at this call site")
@@ -2050,6 +2263,9 @@ fn process_pending(self: &Checker, p: &PendingSpec) {
         params.push(self.engine.zonk(p.inst_params[i]))
     }
     let ret = self.engine.zonk(p.inst_ret)
+    if self.slot_log_on and self.spec_depth == 0 {
+        log_pick(self, p, &params, ret)
+    }
     // Readiness is the drain's business (`pending_ready`); by here the only free vars left sit
     // inside callable slots, which the body pins.
 
@@ -2124,12 +2340,15 @@ fn resolve_anon_literals(self: &Checker) {
     self.pending_anons.clear()
 }
 
-// Report every unsuffixed numeric literal whose var never resolved. Runs after the specialization
-// drain so literals inside instantiated template bodies (whose vars bound during the re-check)
-// count as resolved; the engine's bindings are global, so one sweep covers the program tables and
-// every overlay alike.
-fn validate_literals(self: &Checker) {
-    for &pl in self.pending_literals {
+// Report every unsuffixed numeric literal in `pending_literals[from..to]` whose var never resolved.
+// A slot sweeps its own range after its drains, so literals inside the template bodies it
+// instantiated (whose vars bound during the re-check) count as resolved; the engine's bindings are
+// global, so the sweep covers the program tables and every overlay alike. Nothing after a module's
+// slot can pin the slot's literals - a later slot reuses a specialization by key without
+// re-checking its body - so the per-slot verdict is the program-wide one.
+fn validate_literals(self: &Checker, from: usize, to: usize) {
+    for k in from..to {
+        const pl = self.pending_literals[k]
         let z = self.engine.zonk(pl.ty)
         let unresolved = self.engine.is_var(z)
         if unresolved {
@@ -2154,6 +2373,27 @@ fn validate_literals(self: &Checker) {
     }
 }
 
+// Whether `validate_literals` would report this literal, given the engine's bindings. Pure read - a
+// slot uses it after its sweep to decide whether its literal verdicts can be skipped on a replay (a
+// flagged literal keeps its module running, since the window's sweep is not replayed).
+fn literal_flagged(self: &Checker, pl: &PendingLit) bool {
+    let z = self.engine.zonk(pl.ty)
+    if self.engine.is_var(z) {
+        return true
+    }
+    let p = ty_node(self, z) match {
+        NPrim(pk) => pk
+        _ => return false
+    }
+    if !literal_prim_ok(p, pl.is_float) {
+        return true
+    }
+    if pl.is_float {
+        return false
+    }
+    return int_out_of_range(pl.text, p)
+}
+
 // What a numeric literal may settle on: any numeric primitive, plus `char` for an integer literal
 // (a code point). `bool` is never one - that is the shape E2102 catches when a `$T` picks up
 // conflicting bindings (`same(1, true)`).
@@ -2169,19 +2409,21 @@ fn literal_prim_ok(p: PrimitiveKind, is_float: bool) bool {
 // checked is the type's largest magnitude: `MAX` for unsigned, `MAX + 1` for signed so `-128i8` and
 // `128i8` are told apart by the negation, exactly as the reference does.
 fn check_int_range(self: &Checker, text: String, p: PrimitiveKind, span: SourceSpan) {
-    if !is_integer(p) {
-        return
-    }
-    let v = parse_int_magnitude(text)
-    if v.is_none() {
-        return
-    }
-    let n = v.unwrap()
-    let limit = int_magnitude_limit(p)
-    if n > limit {
+    if int_out_of_range(text, p) {
         push_diag_e(self, span, E_LITERAL_RANGE,
             $"integer literal `{text}` is out of range for `{prim_name(p)}`")
     }
+}
+
+fn int_out_of_range(text: String, p: PrimitiveKind) bool {
+    if !is_integer(p) {
+        return false
+    }
+    let v = parse_int_magnitude(text)
+    if v.is_none() {
+        return false
+    }
+    return v.unwrap() > int_magnitude_limit(p)
 }
 
 // The largest magnitude a literal of this primitive may spell.
@@ -2340,7 +2582,7 @@ fn instantiate(self: &Checker, p: &PendingSpec, key: OwnedString, params: List(T
     // The shared final zonk only walks the program tables; the overlay zonks here, while the engine
     // is live. Lambda records checked inside this instantiation zonk with it (the global closure
     // table waits for `check_all`'s final sweep - the engine outlives every overlay).
-    let zonked: Dict(NodeId, Ty) = dict(self.allocator)
+    let zonked: Dict(NodeId, Ty) = dict(self.results.node_types.len(), self.allocator)
     for entry in self.results.node_types {
         zonked.set(entry.key, self.engine.zonk(entry.value))
     }
@@ -2892,6 +3134,7 @@ fn collect_covered(self: &Checker, pat: &Pattern, e: &EnumDef, out: &List(String
 // tell that from a binding, so the name decides).
 fn match_names_variant(self: &Checker, m: &MatchExpr) bool {
     let vis = fn_visibility(self)
+    defer vis.visible.deinit()
     for &arm in m.arms {
         arm.pattern match {
             EnumVariant(_) => return true
@@ -3796,6 +4039,7 @@ fn index_operator(self: &Checker, name: String, self_ty: Ty, index_ty: Ty,
 // supply their own diagnostic, and report once at the end.
 fn operator_pick(self: &Checker, name: String, args: &List(Ty), span: SourceSpan) OverloadPick? {
     let vis = fn_visibility(self)
+    defer vis.visible.deinit()
     let cands = self.functions.lookup(name, &vis) match {
         FnLookFound(c) => Some(c)
         _ => null
@@ -4010,6 +4254,7 @@ fn check_identifier(self: &Checker, id: &IdentifierExpr) Ty {
 
     // Try function registry.
     let vis = fn_visibility(self)
+    defer vis.visible.deinit()
     let look = self.functions.lookup(id.name, &vis)
     let found: List(FunctionScheme)? = look match {
         FnLookFound(candidates) => Some(candidates)
@@ -4017,6 +4262,7 @@ fn check_identifier(self: &Checker, id: &IdentifierExpr) Ty {
     }
     if found.is_some() {
         let candidates = found.unwrap()
+        defer candidates.deinit()
         if candidates.len == 1 {
             let c = &candidates[0]
             self.results.record_target(self.node_of(id.span), ResolvedTarget.RtFunction(c.id))
@@ -4996,6 +5242,7 @@ fn resolve_call(self: &Checker, call: &CallExpr, arg_tys: &List(Ty), pos_exprs: 
 fn resolve_direct_call(self: &Checker, call: &CallExpr, ide: &IdentifierExpr, arg_tys: &List(Ty),
     pos_exprs: &List(Expr), named: &NamedArgs? = null) Ty? {
     let vis = fn_visibility(self)
+    defer vis.visible.deinit()
     let cands = self.functions.lookup(ide.name, &vis) match {
         FnLookFound(c) => Some(c)
         _ => null
@@ -5044,6 +5291,7 @@ fn resolve_method_call(self: &Checker, call: &CallExpr, ma: &MemberAccessExpr, a
     }
 
     let vis = fn_visibility(self)
+    defer vis.visible.deinit()
     let cands = self.functions.lookup(ma.member, &vis) match {
         FnLookFound(c) => Some(c)
         _ => null
@@ -5234,6 +5482,7 @@ fn resolve_pending_calls(self: &Checker) {
         let saved = self.current_module
         self.current_module = pc.module
         let vis = fn_visibility(self)
+        defer vis.visible.deinit()
         let cands = self.functions.lookup(pc.name, &vis) match {
             FnLookFound(c) => Some(c)
             _ => null
@@ -5256,6 +5505,8 @@ fn resolve_pending_calls(self: &Checker) {
             }
         }
         self.current_module = saved
+        pc.arg_tys.deinit()
+        pc.pos_exprs.deinit()
     }
     parked.deinit()
 }
@@ -5621,6 +5872,7 @@ fn op_call_dispatch(self: &Checker, recv: Ty, arg_tys: &List(Ty), span: SourceSp
         return null
     }
     let vis = fn_visibility(self)
+    defer vis.visible.deinit()
     let cands = self.functions.lookup("op_call", &vis) match {
         FnLookFound(c) => Some(c)
         _ => null
@@ -5656,6 +5908,7 @@ fn op_call_dispatch(self: &Checker, recv: Ty, arg_tys: &List(Ty), span: SourceSp
 fn peel_op_deref(self: &Checker, candidates: &List(FunctionScheme), recv: Ty, arg_tys: &List(Ty),
     span: SourceSpan, chain: &List(OverloadPick), named: &NamedArgs? = null) OverloadPick? {
     let vis = fn_visibility(self)
+    defer vis.visible.deinit()
     let dcands = self.functions.lookup("op_deref", &vis) match {
         FnLookFound(c) => Some(c)
         _ => null
@@ -6101,8 +6354,9 @@ fn probe_candidate(self: &Checker, c: &FunctionScheme, arg_tys: &List(Ty),
 }
 
 // Whether `ty` resolves to the still-open var of a pending numeric literal (`10`, `3.14` with no
-// suffix and nothing pinning them yet). ponytail: linear scan of the pending list per probe; index
-// by root var if overload probing ever shows up in a profile.
+// suffix and nothing pinning them yet). Linear scan, bounded: `seal_slot` retires a slot's literals
+// once their sweep has run, so the list holds only the preamble entries plus the running slot's
+// own.
 fn is_literal_var(self: &Checker, ty: Ty) bool {
     let vid = ty_node(self, self.engine.resolve(ty)) match {
         NVar(v) => v
@@ -6191,6 +6445,7 @@ fn unqualified_variant_call(self: &Checker, ide: &IdentifierExpr, arg_tys: &List
         return null
     }
     let vis = current_visibility(self)
+    defer vis.visible.deinit()
     let nid = self.nominals.lookup_variant(ide.name, arg_tys.len, &vis)
     if nid.is_none() {
         return null
@@ -6205,6 +6460,7 @@ fn name_is_value_bound(self: &Checker, name: String) bool {
         return true
     }
     let vis = fn_visibility(self)
+    defer vis.visible.deinit()
     return self.functions.lookup(name, &vis) match {
         FnLookFound(_) => true
         _ => false
@@ -6218,6 +6474,7 @@ fn type_instantiation_call(self: &Checker, ide: &IdentifierExpr, arg_tys: &List(
         return null
     }
     let vis = current_visibility(self)
+    defer vis.visible.deinit()
     let nid = self.nominals.lookup(ide.name, &vis) match {
         NomLookFound(n) => Some(n)
         _ => null
@@ -6482,6 +6739,7 @@ fn struct_without_field(self: &Checker, recv: Ty, name: String) bool {
 // instead of geping into the wrapper's own layout, which would read at the wrong offset.
 fn member_deref_retry(self: &Checker, ma: &MemberAccessExpr, recv_ty: Ty) Ty? {
     let vis = fn_visibility(self)
+    defer vis.visible.deinit()
     let dcands = self.functions.lookup("op_deref", &vis) match {
         FnLookFound(c) => Some(c)
         _ => null
@@ -6613,6 +6871,7 @@ fn enum_receiver(self: &Checker, recv: &Expr) NominalId? {
     }
 
     let vis = current_visibility(self)
+    defer vis.visible.deinit()
     return self.nominals.lookup(name.unwrap(), &vis) match {
         NomLookFound(id) => Some(id)
         _ => null
@@ -6891,6 +7150,7 @@ fn resolve_fn_name_values(self: &Checker) {
         let saved = self.current_module
         self.current_module = pn.module
         let vis = fn_visibility(self)
+        defer vis.visible.deinit()
         let cands = self.functions.lookup(pn.name, &vis) match {
             FnLookFound(c) => Some(c)
             _ => null
@@ -6954,6 +7214,8 @@ pub fn check_all(self: &Checker, modules: &List(Module), paths: &List(String),
     const visibility_ns = elapsed_ns(visibility_start)
     const collect_start = monotonic_ns()
     self.saw_new_name = false
+    self.defaults_changed = false
+    self.functions.reset_changed()
 
     // Phase 1: every module's type names are registered before any body resolves, so a struct field
     // or enum payload can name a type from another module regardless of the order modules are
@@ -6971,8 +7233,12 @@ pub fn check_all(self: &Checker, modules: &List(Module), paths: &List(String),
     }
     // What the retiring modules' aliases said before eviction - compared after collection to tell
     // an edit that touched an alias from one that did not, since a carried body baked its aliases
-    // in expanded form.
+    // in expanded form. The nominal-definition and constant fingerprints serve the body caches the
+    // same way (5d): taken before retirement frees the bodies, compared once the re-run passes have
+    // re-registered.
     let old_aliases = snapshot_aliases(self, &retiring)
+    let old_defs = snapshot_nominal_defs(self, &retiring)
+    let old_consts = snapshot_constants(self, &retiring)
     for i in seq {
         if needs_collect(recollect, i) {
             self.aliases.evict_module(paths[i])
@@ -6990,7 +7256,6 @@ pub fn check_all(self: &Checker, modules: &List(Module), paths: &List(String),
     }
     const aliases_changed = aliases_differ(self, &old_aliases, &retiring)
     old_aliases.deinit()
-    retiring.deinit()
     const collect_ns = elapsed_ns(collect_start)
     // Phase 1.5: source-generator expansion (RFC-021 §2) - generated
     // declarations are appended to their origin modules and collected, before any body resolves.
@@ -7017,6 +7282,10 @@ pub fn check_all(self: &Checker, modules: &List(Module), paths: &List(String),
         stash_nominal_diags(self, paths[i], diags_from, false)
     }
     const nominals_ns = elapsed_ns(nominals_start)
+    // Whether re-resolution changed what any retiring nominal says. Added and removed names are
+    // already covered by `bodies_carry`; this catches a definition edited in place.
+    const noms_changed = nominal_defs_differ(self, &old_defs)
+    old_defs.deinit()
     // Phase 2: signatures. Carried like nominal bodies (5c): a module the demand did not re-parse
     // skips the pass - its schemes, templates and constant types already sit in the carried
     // registries, and the rest of what the pass records replays from its cache. A module that
@@ -7032,6 +7301,7 @@ pub fn check_all(self: &Checker, modules: &List(Module), paths: &List(String),
     // that changes an earlier module's signature-tier variable count shifts every later position;
     // the affected modules re-run once and their caches re-anchor.
     const signatures_start = monotonic_ns()
+    const fns_before = self.functions.next_id
     self.engine.set_nominal_registry(&self.nominals)
     for i in seq {
         const skip = bodies_carry and !needs_collect(recollect, i) and sig_cache_ok(self, paths[i],
@@ -7046,7 +7316,7 @@ pub fn check_all(self: &Checker, modules: &List(Module), paths: &List(String),
             self.functions.retire_module(paths[i])
             self.constants.evict_module(paths[i])
         }
-        run_signature_pass(self, &modules[i], paths[i])
+        run_signature_pass(self, &modules[i], paths[i], sources)
     }
     let dead_fns = self.functions.purge_retired()
     for id in dead_fns {
@@ -7057,8 +7327,17 @@ pub fn check_all(self: &Checker, modules: &List(Module), paths: &List(String),
         const _p = self.fn_decl_params.remove(id)
         const _d = self.fn_deprecations.remove(id)
     }
+    const removed_fns = dead_fns.len > 0
     dead_fns.deinit()
     const signatures_ns = elapsed_ns(signatures_start)
+    // Whether the signature phase re-registered anything differently: a reclaim that overwrote a
+    // scheme, a function added (a fresh id) or removed (a purge), a constant added, removed or
+    // re-typed, or a default value whose source text changed. Any of them and the carried body
+    // slots are stale - resolution against the registries can now answer differently.
+    const sigs_changed = self.functions.changed or self.functions.next_id != fns_before
+        or removed_fns or constants_differ(self, &old_consts, &retiring) or self.defaults_changed
+    old_consts.deinit()
+    retiring.deinit()
     // Phase 2.5: constant initializers, before any body can observe an unpinned const (see
     // `check_module_constants`).
     const constants_start = monotonic_ns()
@@ -7066,26 +7345,44 @@ pub fn check_all(self: &Checker, modules: &List(Module), paths: &List(String),
         check_module_constants(self, &modules[i], paths[i])
     }
     const constants_ns = elapsed_ns(constants_start)
-    // Phase 3: bodies.
-    const bodies_start = monotonic_ns()
+    // Phase 3: bodies, one module slot at a time. A slot is the module's bodies followed by the
+    // settlement passes over what those bodies parked: anonymous literals (their field pins can be
+    // what makes a generic pick concrete), overloaded names in value position, the specialization
+    // drain, the calls whose overload an open type would have decided, a second drain for what
+    // their resolution committed, and the literal sweep over what the slot minted. A slot ends
+    // sealed - parked work its settlement could not resolve is abandoned, not handed to the next
+    // module's slot.
+    //
+    // Settlement per slot is sound because bodies never share inference variables: a body's
+    // variables entangle only with its own parked work and the instantiations its own picks force.
+    // Module-level constants are the one cross-body channel, and phase 2.5 pins them before any
+    // slot runs - `any_open_constant` guards the one case it cannot. The slot order is demand
+    // order, so everything settlement assigns in encounter order - specialization ids, closure
+    // environments, synthesized nodes - is decided per module, in module order. That is what lets a
+    // module the demand did not re-parse REPLAY its slot from the body cache (5d), under the
+    // carried-tier validity conditions plus the signature-tier fingerprints.
+    const slots_carry = bodies_carry and !sigs_changed and !noms_changed
+        and !any_open_constant(self)
+    const preamble_lits = self.pending_literals.len
+    let bodies_ns = 0u64
+    let specialize_ns = 0u64
     for i in seq {
-        check_module_bodies(self, &modules[i], paths[i])
+        const replay = slots_carry and !needs_collect(recollect, i) and body_cache_ok(self,
+            paths[i])
+        const t = if replay {
+            replay_body_slot(self, paths[i])
+        } else {
+            run_body_slot(self, &modules[i], paths[i])
+        }
+        bodies_ns = bodies_ns + t.bodies_ns
+        specialize_ns = specialize_ns + t.settle_ns
     }
-    const bodies_ns = elapsed_ns(bodies_start)
-    // Phase 3.5: settle anonymous literals (their field pins can be what makes a generic pick
-    // concrete), then instantiate every generic pick the body pass recorded, transitively - a
-    // specialization's body enqueues its own picks.
-    const specialize_start = monotonic_ns()
-    resolve_anon_literals(self)
-    resolve_fn_name_values(self)
-    drain_pending_specs(self)
-    // Calls parked because an open type would have decided their overload: redo them now, then
-    // drain whatever they instantiated.
-    resolve_pending_calls(self)
-    drain_pending_specs(self)
-    // Phase 3.6: any unsuffixed literal nothing ever pinned is E2001.
-    validate_literals(self)
-    const specialize_ns = elapsed_ns(specialize_start)
+    // Phase 3.6: the literals minted before any slot - signature defaults and constant
+    // initializers. Validated after every slot because a body can be what pins an unannotated
+    // constant's variable.
+    const validate_start = monotonic_ns()
+    validate_literals(self, 0, preamble_lits)
+    specialize_ns = specialize_ns + elapsed_ns(validate_start)
 
     // RFC-014: settle the lambda/closure tables (the overlay-scoped lambda tables of instantiations
     // were zonked inside `instantiate`).
@@ -7100,16 +7397,18 @@ pub fn check_all(self: &Checker, modules: &List(Module), paths: &List(String),
     zonk_specializations(self)
 
     // Zonk every node-type entry so the result is final. Interned on the way (RFC-024): equal
-    // shapes share one canonical tree.
-    let zonked: Dict(NodeId, Ty) = dict(self.allocator)
+    // shapes share one canonical tree. Presized: the zonked table holds exactly one entry per
+    // source entry.
+    let zonked: Dict(NodeId, Ty) = dict(self.results.node_types.len(), self.allocator)
     for entry in self.results.node_types {
         zonked.set(entry.key, self.engine.zonk(entry.value))
     }
     const zonk_ns = elapsed_ns(zonk_start)
 
-    // Now that every type is final, fill this demand's signature captures (RFC-022 5c) - the cached
-    // facts must hold the zonked types a skipped pass replays.
+    // Now that every type is final, fill this demand's signature captures (RFC-022 5c) and body
+    // captures (5d) - the cached facts must hold the zonked types a skipped pass replays.
     harvest_sig_caches(self, &zonked)
+    harvest_body_caches(self, &zonked)
 
     // Move the registries and result tables into the snapshot, then replace each moved-from field
     // with a fresh empty container so the caller's later `checker.deinit()` doesn't double-free
@@ -7258,6 +7557,25 @@ fn stash_sig_diags(self: &Checker, path: String, from: usize) {
     refill_diags(self, &found.unwrap().signatures, from)
 }
 
+// Same, for the body slot's capture window.
+fn stash_body_diags(self: &Checker, path: String, from: usize) {
+    let found = module_diags_entry(self, path, from)
+    if found.is_none() {
+        return
+    }
+    refill_diags(self, &found.unwrap().bodies, from)
+}
+
+fn replay_body_diags(self: &Checker, path: String) {
+    const found = self.nominal_diags.get_ref(path)
+    if found.is_none() {
+        return
+    }
+    for &d in found.unwrap().bodies {
+        self.diagnostics.push(clone_diag(d))
+    }
+}
+
 // The module's diag-cache entry, created on first use. Null when there is no entry yet and nothing
 // to stash either - an all-clean module never allocates one.
 fn module_diags_entry(self: &Checker, path: String, from: usize) &ModuleNomDiags? {
@@ -7271,6 +7589,7 @@ fn module_diags_entry(self: &Checker, path: String, from: usize) &ModuleNomDiags
             collect = list(0, self.allocator),
             resolve = list(0, self.allocator),
             signatures = list(0, self.allocator),
+            bodies = list(0, self.allocator),
         })
     }
     return self.nominal_diags.get_ref(path)
@@ -7371,7 +7690,7 @@ fn sig_watermark(self: &Checker) SigWatermark {
 
 // Run one module's signature pass with capture on, stash its diagnostics, and store the cache entry
 // for the next demand.
-fn run_signature_pass(self: &Checker, module: &Module, path: String) {
+fn run_signature_pass(self: &Checker, module: &Module, path: String, sources: &List(OwnedString)) {
     const w = sig_watermark(self)
     self.sig_nodes.clear()
     self.sig_capture = true
@@ -7379,10 +7698,11 @@ fn run_signature_pass(self: &Checker, module: &Module, path: String) {
     collect_signatures(self, module, path)
     self.sig_capture = false
     stash_sig_diags(self, path, diags_from)
-    finish_sig_capture(self, path, &w)
+    finish_sig_capture(self, path, &w, collect_default_texts(self, module, sources))
 }
 
-fn finish_sig_capture(self: &Checker, path: String, w: &SigWatermark) {
+fn finish_sig_capture(self: &Checker, path: String, w: &SigWatermark,
+    default_texts: List(OwnedString)) {
     const clean = self.next_synth == w.synth and self.next_lambda == w.lambda
         and self.results.resolved_targets.len() == w.targets
         and self.results.resolved_ops.len() == w.ops and self.results.desugars.len() == w.desugars
@@ -7406,6 +7726,7 @@ fn finish_sig_capture(self: &Checker, path: String, w: &SigWatermark) {
         var_burn = (self.engine.var_counter - w.vars) as usize,
         vars_at_start = w.vars,
         lit_tys = lit_tys,
+        default_texts = default_texts,
         cacheable = clean,
         fresh = true,
     }
@@ -7418,6 +7739,9 @@ fn finish_sig_capture(self: &Checker, path: String, w: &SigWatermark) {
         return
     }
     let slot = found.unwrap()
+    if default_texts_differ(&slot.default_texts, &cache.default_texts) {
+        self.defaults_changed = true
+    }
     slot.deinit()
     slot.* = cache
 }
@@ -7515,6 +7839,679 @@ fn burn_type_param_vars(self: &Checker, module: &Module) {
             _ => {}
         }
     }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// Carried bodies (RFC-022 5d). A module the demand did not re-parse replays its body slot from
+// `body_caches`: the capture window's facts write back with their harvested final values, the
+// counters burn, and the slot's settlement re-runs live from the captured picks and parked calls -
+// which recreates the demand's specializations at the ids and in the order a cold check assigns,
+// and re-pins the module's burned variables the way the cold drain did.
+// ─────────────────────────────────────────────────────────────────────
+
+// What a running slot's two timed halves cost, for `CheckPhases`.
+type SlotTiming = struct {
+    bodies_ns: u64
+    settle_ns: u64
+}
+
+// Run one module's slot with capture on and store its cache for the next demand.
+fn run_body_slot(self: &Checker, module: &Module, path: String) SlotTiming {
+    const vars0 = self.engine.var_counter
+    const synth0 = self.next_synth
+    const lambda0 = self.next_lambda
+    const lit0 = self.pending_literals.len
+    const calls0 = self.pending_calls.len
+    const diags_from = self.diagnostics.len
+
+    const bodies_start = monotonic_ns()
+    self.results.begin_capture()
+    check_module_bodies(self, module, path)
+    const bodies_ns = elapsed_ns(bodies_start)
+    const settle_start = monotonic_ns()
+    resolve_anon_literals(self)
+    resolve_fn_name_values(self)
+    let keys = self.results.end_capture()
+    const var_burn = (self.engine.var_counter - vars0) as usize
+    const synth_burn = self.next_synth - synth0
+    const lambda_burn = self.next_lambda - lambda0
+    const lit_window = self.pending_literals.len
+    stash_body_diags(self, path, diags_from)
+    let calls = copy_parked_calls(self, calls0)
+
+    clear_pick_log(self)
+    self.slot_log_on = true
+    self.slot_uninferable = 0
+    drain_pending_specs(self)
+    self.slot_log_on = false
+    let picks = self.slot_picks
+    self.slot_picks = list(0, self.allocator)
+
+    resolve_pending_calls(self)
+    drain_pending_specs(self)
+    validate_literals(self, lit0, self.pending_literals.len)
+    // The window's literal verdicts cannot be replayed - a flagged one keeps the module running.
+    // Decided here, where the verdicts are final (nothing after the slot can pin its literals), so
+    // `seal_slot` can retire the slot's entries.
+    let lits_clean = true
+    for j in lit0..lit_window {
+        if literal_flagged(self, &self.pending_literals[j]) {
+            lits_clean = false
+        }
+    }
+    seal_slot(self, lit0)
+
+    let cache = ModuleBodyCache {
+        vars_at_start = vars0,
+        var_burn = var_burn,
+        synth_at_start = synth0,
+        synth_burn = synth_burn,
+        lambda_at_start = lambda0,
+        lambda_burn = lambda_burn,
+        keys = keys,
+        types = list(0, self.allocator),
+        spans = list(0, self.allocator),
+        targets = list(0, self.allocator),
+        ops = list(0, self.allocator),
+        desugars = list(0, self.allocator),
+        lambdas = list(0, self.allocator),
+        closures = list(0, self.allocator),
+        default_args = list(0, self.allocator),
+        arg_lists = list(0, self.allocator),
+        derefs = list(0, self.allocator),
+        picks = picks,
+        calls = calls,
+        cacheable = self.slot_uninferable == 0 and lits_clean,
+        fresh = true,
+    }
+    store_body_cache(self, path, cache)
+    return .{ bodies_ns = bodies_ns, settle_ns = elapsed_ns(settle_start) }
+}
+
+// Whether module `path`'s slot can be replayed this demand: a harvested cache exists, nothing
+// unreplayable was recorded, and every stream stands exactly where it stood when the slot ran.
+fn body_cache_ok(self: &Checker, path: String) bool {
+    const found = self.body_caches.get_ref(path)
+    if found.is_none() {
+        return false
+    }
+    const c = found.unwrap()
+    return c.cacheable and !c.fresh and c.vars_at_start == self.engine.var_counter
+        and c.synth_at_start == self.next_synth and c.lambda_at_start == self.next_lambda
+}
+
+// Replay module `path`'s slot: cached diagnostics and facts, counter burns, then the settlement
+// re-run - the logged picks in their cold process order, the parked calls, and a drain for what
+// their resolution commits. The literal sweep covers only what the live re-run minted; the window's
+// literals were proven clean when the slot last ran.
+fn replay_body_slot(self: &Checker, path: String) SlotTiming {
+    const bodies_start = monotonic_ns()
+    self.current_module = Some(path)
+    replay_body_diags(self, path)
+    let c = self.body_caches.get_ref(path).unwrap()
+    for &f in c.spans {
+        self.results.record_span(f.node, f.span)
+    }
+    for &f in c.types {
+        self.results.record_type(f.node, f.ty)
+    }
+    for &f in c.targets {
+        self.results.record_target(f.node, f.target)
+    }
+    for &f in c.ops {
+        self.results.record_operator(f.node, f.op)
+    }
+    for &f in c.desugars {
+        self.results.record_desugar(f.node, f.block)
+    }
+    for &f in c.closures {
+        replay_closure(self, f)
+    }
+    for &f in c.lambdas {
+        self.results.record_lambda(f.node, copy_lambda_info(self, &f.info))
+    }
+    for &f in c.default_args {
+        let exprs: List(Expr) = list(f.exprs.len, self.allocator)
+        exprs.push_all(f.exprs.as_slice())
+        self.results.record_default_args(f.node, exprs)
+    }
+    for &f in c.arg_lists {
+        let exprs: List(Expr) = list(f.exprs.len, self.allocator)
+        exprs.push_all(f.exprs.as_slice())
+        self.results.record_arg_list(f.node, exprs)
+    }
+    for &f in c.derefs {
+        let chain: List(ResolvedTarget) = list(f.chain.len, self.allocator)
+        chain.push_all(f.chain.as_slice())
+        self.results.record_receiver_deref(f.node, chain)
+    }
+    for _k in 0..c.var_burn {
+        self.engine.burn_var()
+    }
+    self.next_synth = self.next_synth + c.synth_burn
+    self.next_lambda = self.next_lambda + c.lambda_burn
+    const bodies_ns = elapsed_ns(bodies_start)
+
+    const settle_start = monotonic_ns()
+    const lit_mark = self.pending_literals.len
+    for &cp in c.picks {
+        const p = PendingSpec {
+            span = cp.span,
+            is_operator = cp.is_operator,
+            deref_index = cp.deref_index,
+            function_id = cp.function_id,
+            tp_binds = cp.tp_binds,
+            inst_params = cp.inst_params,
+            inst_ret = cp.inst_ret,
+            caller_module = cp.caller_module,
+        }
+        process_pending(self, &p)
+    }
+    for k in 0..c.calls.len {
+        self.pending_calls.push(copy_pending_call(self, &c.calls[k], false))
+    }
+    resolve_pending_calls(self)
+    drain_pending_specs(self)
+    validate_literals(self, lit_mark, self.pending_literals.len)
+    seal_slot(self, lit_mark)
+    return .{ bodies_ns = bodies_ns, settle_ns = elapsed_ns(settle_start) }
+}
+
+// A slot leaves no parked work behind: what its settlement could not resolve is abandoned, as the
+// single program-wide settlement pass abandoned it before slots existed. Leaking it forward would
+// hand one module's leftovers to the next module's slot. The slot's literals retire too - their
+// verdicts are final once the slot's sweep has run, so from here on `pending_literals` holds only
+// what is genuinely pending: the preamble entries below `lit_floor` (signature defaults and
+// constant initializers, swept at phase 3.6) and, mid-slot, the running slot's own. That bound is
+// also what keeps `is_literal_var`'s scan short.
+fn seal_slot(self: &Checker, lit_floor: usize) {
+    self.pending_anons.clear()
+    let names = self.pending_fn_names
+    self.pending_fn_names = list(0, self.allocator)
+    names.deinit()
+    let calls = self.pending_calls
+    self.pending_calls = list(0, self.allocator)
+    for &pc in calls {
+        pc.arg_tys.deinit()
+        pc.pos_exprs.deinit()
+    }
+    calls.deinit()
+    self.pending_literals.truncate(lit_floor)
+}
+
+fn clear_pick_log(self: &Checker) {
+    self.slot_picks.clear()
+}
+
+// Log one processed top-level pick for the module's cache, its types zonked to this moment.
+fn log_pick(self: &Checker, p: &PendingSpec, params: &List(Ty), ret: Ty) {
+    let binds: Dict(VarId, Ty) = dict(self.allocator)
+    for e in p.tp_binds {
+        binds.set(e.key, self.engine.zonk(e.value))
+    }
+    let ps: List(Ty) = list(params.len, self.allocator)
+    ps.push_all(params.as_slice())
+    self.slot_picks.push(CapturedPick {
+        span = p.span,
+        is_operator = p.is_operator,
+        deref_index = p.deref_index,
+        function_id = p.function_id,
+        tp_binds = binds,
+        inst_params = ps,
+        inst_ret = ret,
+        caller_module = p.caller_module,
+    })
+}
+
+// The slot's parked calls, copied for the cache with their argument types zonked to the window's
+// end - the state resolution starts from. A type still open here re-pins during the replayed drains
+// exactly as it did cold, over the same burned variable ids.
+fn copy_parked_calls(self: &Checker, from: usize) List(PendingCall) {
+    let out: List(PendingCall) = list(self.pending_calls.len - from, self.allocator)
+    for k in from..self.pending_calls.len {
+        out.push(copy_pending_call(self, &self.pending_calls[k], true))
+    }
+    return out
+}
+
+fn copy_pending_call(self: &Checker, pc: &PendingCall, zonk_args: bool) PendingCall {
+    let ats: List(Ty) = list(pc.arg_tys.len, self.allocator)
+    for t in pc.arg_tys {
+        ats.push(if zonk_args { self.engine.zonk(t) } else { t })
+    }
+    let pes: List(Expr) = list(pc.pos_exprs.len, self.allocator)
+    pes.push_all(pc.pos_exprs.as_slice())
+    const recv = pc.alt_recv match {
+        Some(a) => Some(if zonk_args { self.engine.zonk(a) } else { a })
+        None => null
+    }
+    return PendingCall {
+        span = pc.span,
+        name = pc.name,
+        call = pc.call,
+        arg_tys = ats,
+        pos_exprs = pes,
+        recv_extra = pc.recv_extra,
+        alt_recv = recv,
+        module = pc.module,
+    }
+}
+
+// Register a cached closure environment again at the id it held (its retirement is in `recycled`,
+// keyed by the synthesized FQN) and restore its dispatch record.
+fn replay_closure(self: &Checker, f: &ClosureFact) {
+    let fields: List(Field) = list(f.fields.len, self.allocator)
+    fields.push_all(f.fields.as_slice())
+    let empty_tps: List(VarId) = list(0, self.allocator)
+    let sd = StructDef {
+        fqn = "",
+        module = f.module,
+        is_pub = true,
+        type_params = empty_tps,
+        fields = fields,
+        decl_span = f.decl_span,
+        deprecation = null,
+        is_simd = false,
+        is_foreign = false,
+    }
+    const nid = register_collected(self, NominalDef.NomStruct(sd), from_view(f.fqn.as_view()))
+    self.closures.set(nid, copy_closure_sig(self, &f.sig))
+}
+
+fn copy_lambda_info(self: &Checker, info: &LambdaInfo) LambdaInfo {
+    let ps: List(Ty) = list(info.params.len, self.allocator)
+    ps.push_all(info.params.as_slice())
+    let caps: List(CaptureRec) = list(info.captures.len, self.allocator)
+    caps.push_all(info.captures.as_slice())
+    return LambdaInfo {
+        span = info.span,
+        params = ps,
+        ret = info.ret,
+        captures = caps,
+        closure_id = info.closure_id,
+        symbol = from_view(info.symbol.as_view()),
+    }
+}
+
+fn copy_closure_sig(self: &Checker, sig: &ClosureSig) ClosureSig {
+    let ps: List(Ty) = list(sig.params.len, self.allocator)
+    ps.push_all(sig.params.as_slice())
+    return ClosureSig {
+        params = ps,
+        ret = sig.ret,
+        symbol = from_view(sig.symbol.as_view()),
+        lambda_node = sig.lambda_node,
+    }
+}
+
+fn store_body_cache(self: &Checker, path: String, cache: ModuleBodyCache) {
+    const found = self.body_caches.get_ref(path)
+    if found.is_none() {
+        const idx = self.body_cache_keys.len
+        self.body_cache_keys.push(from_view(path, self.allocator))
+        self.body_caches.set(self.body_cache_keys[idx].as_view(), cache)
+        return
+    }
+    let slot = found.unwrap()
+    slot.deinit()
+    slot.* = cache
+}
+
+// Fill this demand's fresh body caches from the finished tables, once the final zonk has run.
+fn harvest_body_caches(self: &Checker, zonked: &Dict(NodeId, Ty)) {
+    for k in 0..self.body_cache_keys.len {
+        const path = self.body_cache_keys[k].as_view()
+        let entry = self.body_caches.get_ref(path).unwrap()
+        if !entry.fresh {
+            continue
+        }
+        entry.fresh = false
+        fill_body_cache(self, entry, zonked)
+    }
+}
+
+fn fill_body_cache(self: &Checker, c: &ModuleBodyCache, zonked: &Dict(NodeId, Ty)) {
+    let seen: Set(NodeId) = set(self.allocator)
+    for n in c.keys.spans {
+        if seen.contains(n) {
+            continue
+        }
+        seen.add(n)
+        const sp = self.results.get_span(n)
+        if sp.is_some() {
+            c.spans.push(NodeSpanFact { node = n, span = sp.unwrap() })
+        }
+    }
+    seen.clear()
+    for n in c.keys.types {
+        if seen.contains(n) {
+            continue
+        }
+        seen.add(n)
+        const t = zonked.get(n)
+        if t.is_some() {
+            c.types.push(NodeTyFact { node = n, ty = t.unwrap() })
+        }
+    }
+    seen.clear()
+    for n in c.keys.targets {
+        if seen.contains(n) {
+            continue
+        }
+        seen.add(n)
+        const t = self.results.resolved_targets.get(n)
+        if t.is_some() {
+            c.targets.push(NodeTargetFact { node = n, target = t.unwrap() })
+        }
+    }
+    seen.clear()
+    for n in c.keys.ops {
+        if seen.contains(n) {
+            continue
+        }
+        seen.add(n)
+        const o = self.results.resolved_ops.get(n)
+        if o.is_some() {
+            c.ops.push(NodeOpFact { node = n, op = o.unwrap() })
+        }
+    }
+    seen.clear()
+    for n in c.keys.desugars {
+        if seen.contains(n) {
+            continue
+        }
+        seen.add(n)
+        const b = self.results.desugars.get(n)
+        if b.is_some() {
+            c.desugars.push(NodeBlockFact { node = n, block = b.unwrap() })
+        }
+    }
+    seen.clear()
+    for n in c.keys.lambdas {
+        if seen.contains(n) {
+            continue
+        }
+        seen.add(n)
+        const found = self.results.lambdas.get_ref(n)
+        if found.is_none() {
+            continue
+        }
+        let info = found.unwrap()
+        c.lambdas.push(NodeLambdaFact { node = n, info = copy_lambda_info(self, info) })
+        info.closure_id match {
+            Some(nid) => harvest_closure(self, c, nid)
+            None => {}
+        }
+    }
+    seen.clear()
+    for n in c.keys.default_args {
+        if seen.contains(n) {
+            continue
+        }
+        seen.add(n)
+        const found = self.results.default_args.get_ref(n)
+        if found.is_some() {
+            let exprs: List(Expr) = list(found.unwrap().len, self.allocator)
+            exprs.push_all(found.unwrap().as_slice())
+            c.default_args.push(NodeExprsFact { node = n, exprs = exprs })
+        }
+    }
+    seen.clear()
+    for n in c.keys.arg_lists {
+        if seen.contains(n) {
+            continue
+        }
+        seen.add(n)
+        const found = self.results.arg_lists.get_ref(n)
+        if found.is_some() {
+            let exprs: List(Expr) = list(found.unwrap().len, self.allocator)
+            exprs.push_all(found.unwrap().as_slice())
+            c.arg_lists.push(NodeExprsFact { node = n, exprs = exprs })
+        }
+    }
+    seen.clear()
+    for n in c.keys.derefs {
+        if seen.contains(n) {
+            continue
+        }
+        seen.add(n)
+        const found = self.results.receiver_derefs.get_ref(n)
+        if found.is_some() {
+            let chain: List(ResolvedTarget) = list(found.unwrap().len, self.allocator)
+            chain.push_all(found.unwrap().as_slice())
+            c.derefs.push(NodeDerefsFact { node = n, chain = chain })
+        }
+    }
+    seen.deinit()
+
+    c.keys.deinit()
+    c.keys = captured_keys(self.allocator)
+}
+
+// One closure environment's registry definition and dispatch record, copied for the cache. Runs
+// after `zonk_closures`, so both hold final types.
+fn harvest_closure(self: &Checker, c: &ModuleBodyCache, nid: NominalId) {
+    const sig = self.closures.get_ref(nid)
+    if sig.is_none() {
+        return
+    }
+    const found = self.nominals.find(nid)
+    if found.is_none() {
+        return
+    }
+    let def = found.unwrap()
+    const sd = def.* match {
+        NomStruct(s) => s
+        _ => return
+    }
+    let fields: List(Field) = list(sd.fields.len, self.allocator)
+    fields.push_all(sd.fields.as_slice())
+    c.closures.push(ClosureFact {
+        id = nid,
+        fqn = from_view(nominal_fqn(def), self.allocator),
+        module = sd.module,
+        fields = fields,
+        decl_span = sd.decl_span,
+        sig = copy_closure_sig(self, sig.unwrap()),
+    })
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// Signature-tier fingerprints. A carried body baked resolution outcomes - overload picks, field
+// indices, constant types, default materializations - so it stays valid only while every registry a
+// body resolves against says what it said. Each comparison covers only the re-run modules; a
+// skipped pass cannot have changed anything.
+// ─────────────────────────────────────────────────────────────────────
+
+// The retiring modules' constant types, FQN -> handle. An unannotated constant's handle is its
+// variable, which the aligned stream re-mints at the same id, so handle equality holds exactly when
+// the constant re-registers the same.
+fn snapshot_constants(self: &Checker, retiring: &Set(String)) Dict(String, Ty) {
+    let out: Dict(String, Ty) = dict(self.allocator)
+    for entry in self.constants.entries {
+        const dot = last_dot(entry.key)
+        if !retiring.contains(module_of(entry.key, dot)) {
+            continue
+        }
+        out.set(entry.key, entry.value)
+    }
+    return out
+}
+
+// Whether the retiring modules' constants changed across the signature phase: one added, removed,
+// or re-registered at a different type.
+fn constants_differ(self: &Checker, old: &Dict(String, Ty), retiring: &Set(String)) bool {
+    let count: usize = 0
+    for entry in self.constants.entries {
+        const dot = last_dot(entry.key)
+        if !retiring.contains(module_of(entry.key, dot)) {
+            continue
+        }
+        count = count + 1
+        const prev = old.get(entry.key)
+        if prev.is_none() {
+            return true
+        }
+        if prev.unwrap() != entry.value {
+            return true
+        }
+    }
+    return count != old.len()
+}
+
+// Whether any module-level constant's variable is still open once the initializers are checked. A
+// body can be what pins such a variable, and a skipped body's pinning unification is lost - so an
+// open constant sends every body back to source.
+fn any_open_constant(self: &Checker) bool {
+    for entry in self.constants.entries {
+        if self.engine.is_var(self.engine.zonk(entry.value)) {
+            return true
+        }
+    }
+    return false
+}
+
+// The retiring modules' resolved nominal definitions, FQN -> fingerprint, taken before retirement
+// frees the bodies. Compared after re-resolution: a changed field or variant re-types every body
+// that touches the nominal (member access bakes field indices, patterns bake variant shapes).
+fn snapshot_nominal_defs(self: &Checker, retiring: &Set(String)) Dict(String, OwnedString) {
+    let out: Dict(String, OwnedString) = dict(self.allocator)
+    for i in 0..(self.nominals.next_id as usize) {
+        const found = self.nominals.find(i as NominalId)
+        if found.is_none() {
+            continue
+        }
+        const def = found.unwrap()
+        if !retiring.contains(nominal_module(def)) {
+            continue
+        }
+        let sb = string_builder(64, self.allocator)
+        render_def_fingerprint(def, &sb)
+        out.set(nominal_fqn(def), sb.to_string())
+    }
+    return out
+}
+
+fn nominal_defs_differ(self: &Checker, old: &Dict(String, OwnedString)) bool {
+    let sb = string_builder(64, self.allocator)
+    defer sb.deinit()
+    for entry in old {
+        const id = self.nominals.lookup_fqn(entry.key)
+        if id.is_none() {
+            return true
+        }
+        sb.clear()
+        render_def_fingerprint(self.nominals.find(id.unwrap()).unwrap(), &sb)
+        if sb.as_view() != entry.value.as_view() {
+            return true
+        }
+    }
+    return false
+}
+
+// A stable spelling of everything a body's resolution can observe of one nominal: flags, arity,
+// field and variant names, and their types as interned handles. Handle equality is type equality
+// within one carried table, and the variable stream is position-stable across demands; a spurious
+// inequality from an upstream stream shift only over-invalidates.
+fn render_def_fingerprint(def: &NominalDef, sb: &StringBuilder) {
+    def.* match {
+        NomStruct(s) => {
+            sb.append("s|")
+            sb.append(s.is_pub)
+            sb.append(s.is_simd)
+            sb.append(s.is_foreign)
+            sb.append("|")
+            sb.append(s.type_params.len as u64)
+            s.deprecation match {
+                Some(d) => {
+                    sb.append("!")
+                    sb.append(d)
+                }
+                None => {}
+            }
+            for &fl in s.fields {
+                sb.append("|")
+                sb.append(fl.name)
+                sb.append(":")
+                sb.append(fl.ty as u64)
+            }
+        }
+        NomEnum(en) => {
+            sb.append("e|")
+            sb.append(en.is_pub)
+            sb.append("|")
+            sb.append(en.type_params.len as u64)
+            en.deprecation match {
+                Some(d) => {
+                    sb.append("!")
+                    sb.append(d)
+                }
+                None => {}
+            }
+            for &v in en.variants {
+                sb.append("|")
+                sb.append(v.name)
+                for pt in v.payloads {
+                    sb.append(":")
+                    sb.append(pt as u64)
+                }
+            }
+        }
+    }
+}
+
+// The source text of each default-value expression a module declares, in declaration order. A
+// caller's cached slot holds the callee's default AST and the node types its materializations
+// produced, so a value change with an unchanged scheme must still invalidate. Empty when the caller
+// supplied no sources (test fixtures), which skips the comparison.
+fn collect_default_texts(self: &Checker, module: &Module,
+    sources: &List(OwnedString)) List(OwnedString) {
+    let out: List(OwnedString) = list(0, self.allocator)
+    if sources.len == 0 {
+        return out
+    }
+    for &decl in module.decls {
+        decl.* match {
+            Function(fd) => {
+                for &p in fd.params {
+                    p.default_value match {
+                        Some(d) => out.push(from_view(default_text_of(sources, expr_span(&d)),
+                                self.allocator))
+                        None => {}
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    return out
+}
+
+fn default_text_of(sources: &List(OwnedString), sp: SourceSpan) String {
+    if sp.file_id < 0 {
+        return ""
+    }
+    const f = sp.file_id as usize
+    if f >= sources.len {
+        return ""
+    }
+    const src = sources[f].as_view()
+    if sp.start + sp.length > src.len {
+        return ""
+    }
+    return src[sp.start..sp.start + sp.length]
+}
+
+fn default_texts_differ(old: &List(OwnedString), new: &List(OwnedString)) bool {
+    if old.len != new.len {
+        return true
+    }
+    for i in 0..old.len {
+        if old[i].as_view() != new[i].as_view() {
+            return true
+        }
+    }
+    return false
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -7852,6 +8849,103 @@ test "carried constants and default values survive a re-demand" {
         "fn scaled(x: i32, k: i32 = 2) i32 { return x }\nconst LOCAL = 3\nfn main() i32 { return scaled(LOCAL) }\n")
     assert_eq(r.first, 0 as usize, "the program type-checks cold")
     assert_eq(r.second, 0 as usize, "and identically on the re-demand")
+}
+
+test "a carried slot restores its closures and specializations" {
+    // Module a's slot forces a specialization and registers a capturing closure. Re-demanding with
+    // only b dirty replays the slot: the pick log re-instantiates `id` and the closure environment
+    // re-registers at the id its retirement remembers. Any of that going stale surfaces as a
+    // spurious error.
+    let r = redemand_errors("pub fn helper() i32 { return 1 }\n",
+        "pub fn helper() i32 { return 2 }\n",
+        "fn id(x: $T) $T { return x }\nfn main() i32 {\n    const k = 2\n    let f = fn(x: i32) i32 { x + k }\n    return id(5)\n}\n")
+    assert_eq(r.first, 0 as usize, "the program type-checks cold")
+    assert_eq(r.second, 0 as usize, "and identically when the slot replays")
+}
+
+test "a body-tier diagnostic replays from the slot cache" {
+    // The mismatch lives in module a's body window. Re-demanding with only b dirty replays a's
+    // slot, so the error must come from the slot's cached diagnostics, not from re-running it.
+    let r = redemand_errors("pub fn helper() i32 { return 1 }\n",
+        "pub fn helper() i32 { return 2 }\n",
+        "fn wrong() i32 { let t = (1i32, 2i32)\nreturn t }\nfn main() i32 { return 0 }\n")
+    assert_eq(r.first, 1 as usize, "the mismatch is reported cold")
+    assert_eq(r.second, 1 as usize, "and exactly once again on the replay")
+}
+
+test "a changed field type re-runs carried bodies" {
+    // Module a's member access baked P.v as i32. The re-collected P reclaims its id, so name-set
+    // checks see nothing; the definition fingerprint is what must notice and send a's body back to
+    // source, where the f64 field breaks the i32 return.
+    let r = redemand_errors("pub type P = struct { v: i32 }\n", "pub type P = struct { v: f64 }\n",
+        "import b\nfn f(p: P) i32 { return p.v }\nfn main() i32 { return 0 }\n")
+    assert_eq(r.first, 0 as usize, "the i32 field type-checks")
+    assert_true(r.second > 0, "the f64 field re-resolves the carried body and errors")
+}
+
+test "an upstream body edit re-anchors the carried slots" {
+    // Demand 2's b mints a different number of body-tier variables, which shifts every later slot's
+    // stream position; the anchors force those slots to re-run rather than replay handles that now
+    // name someone else's variables.
+    let r = redemand_errors("pub fn helper() i32 { return 1 }\n",
+        "pub fn helper() i32 { let z = 2\nreturn z }\n",
+        "fn id(x: $T) $T { return x }\nfn main() i32 { return id(5) }\n")
+    assert_eq(r.first, 0 as usize, "the program type-checks cold")
+    assert_eq(r.second, 0 as usize, "and identically once the stream shifts")
+}
+
+test "a changed default value invalidates the carried slots" {
+    // The scheme compare cannot see a default's VALUE change - same name, same types, same arity -
+    // so the signature pass compares the defaults' source text and flags the demand.
+    const b1 = "pub fn helper(k: i32 = 1) i32 { return k }\n"
+    const b2 = "pub fn helper(k: i32 = 2) i32 { return k }\n"
+    const a_src = "import b\nfn main() i32 { return helper() }\n"
+    let mods = list(2)
+    mods.push(parse_src(b1, 0i32))
+    mods.push(parse_src(a_src, 1i32))
+    let ps: List(String) = list(2)
+    ps.push("b")
+    ps.push("a")
+    let srcs: List(OwnedString) = list(2)
+    srcs.push(from_view(b1))
+    srcs.push(from_view(a_src))
+    let fps: List(OwnedString) = list(2)
+    fps.push(from_view("b"))
+    fps.push(from_view("a"))
+
+    let chk = checker()
+    let gens = template_state(null)
+    let res1 = check_all(&chk, &mods, &ps, &srcs, &fps, &gens)
+    assert_eq(count_error_diags(&chk.diagnostics), 0 as usize, "the defaulted call type-checks")
+    assert_true(!chk.defaults_changed, "a first demand flags nothing")
+
+    chk.begin_demand()
+    chk.adopt_interner(take_interner(&res1))
+    let old_b = mods[0]
+    mods[0] = parse_src(b2, 0i32)
+    let old_src = srcs[0]
+    srcs[0] = from_view(b2)
+    let recollect: List(bool) = list(2)
+    recollect.push(true)
+    recollect.push(false)
+    let gens2 = template_state(null)
+    let res2 = check_all(&chk, &mods, &ps, &srcs, &fps, &gens2, null, Some(&recollect))
+    assert_eq(count_error_diags(&chk.diagnostics), 0 as usize, "the new value type-checks")
+    assert_true(chk.defaults_changed, "the text comparison flags the changed default")
+
+    res1.deinit()
+    res2.deinit()
+    chk.deinit()
+    old_b.deinit()
+    old_src.deinit()
+    for &m in mods {
+        m.deinit()
+    }
+    mods.deinit()
+    ps.deinit()
+    srcs.deinit()
+    fps.deinit()
+    recollect.deinit()
 }
 
 // Parse each source as its own module, run check_all over them, and count error diagnostics.

@@ -61,12 +61,18 @@ pub type FunctionRegistry = struct {
     // preserved so overload resolution scoring is deterministic.
     by_name: Dict(String, List(FunctionScheme))
     next_id: u32
+    // Set when a reclaim overwrote a slot with a scheme that differs from what the slot held -
+    // resolution against the registry can now pick differently, so results that baked earlier
+    // resolutions (RFC-022 5d carried bodies) are stale. Signature bodies are interned handles, and
+    // the variable stream is position-stable across demands, so handle equality is scheme equality;
+    // a spurious inequality from an upstream stream shift only over-invalidates.
+    changed: bool
     allocator: &Allocator?
 }
 
 pub fn function_registry(allocator: &Allocator? = null) FunctionRegistry {
     let by_name: Dict(String, List(FunctionScheme)) = dict(allocator)
-    return .{ by_name = by_name, next_id = 0u32, allocator = allocator }
+    return .{ by_name = by_name, next_id = 0u32, changed = false, allocator = allocator }
 }
 
 pub fn deinit(self: &FunctionRegistry) {
@@ -91,6 +97,9 @@ pub fn register(self: &FunctionRegistry, scheme: FunctionScheme) u32 {
     for j in 0..lst.len {
         if lst[j].retired and same_module(lst[j].module, scheme.module) {
             const id = lst[j].id
+            if !reclaim_equal(&lst[j], &scheme) {
+                self.changed = true
+            }
             lst[j] = with_id(&scheme, id)
             return id
         }
@@ -117,6 +126,27 @@ fn with_id(scheme: &FunctionScheme, id: u32) FunctionScheme {
     }
 }
 
+// Whether a re-registration says the same thing the retired slot said, on every field resolution or
+// a caller's cached diagnostics can observe. `decl_span` is deliberately left out - a declaration
+// that only moved resolves identically.
+fn reclaim_equal(old: &FunctionScheme, new: &FunctionScheme) bool {
+    return old.signature.body == new.signature.body
+        and old.signature.quantified.len() == new.signature.quantified.len()
+        and old.is_pub == new.is_pub and old.is_foreign == new.is_foreign
+        and old.required_params == new.required_params and old.has_variadic == new.has_variadic
+        and same_deprecation(old.deprecation, new.deprecation)
+}
+
+fn same_deprecation(a: String?, b: String?) bool {
+    return a match {
+        Some(am) => b match {
+            Some(bm) => am == bm
+            None => false
+        }
+        None => b.is_none()
+    }
+}
+
 fn same_module(a: String?, b: String?) bool {
     return a match {
         Some(am) => b match {
@@ -125,6 +155,11 @@ fn same_module(a: String?, b: String?) bool {
         }
         None => b.is_none()
     }
+}
+
+// Arm the change flag for a fresh demand's signature phase.
+pub fn reset_changed(self: &FunctionRegistry) {
+    self.changed = false
 }
 
 // The registered names, snapshotted so a caller can mutate the lists behind them while it walks.

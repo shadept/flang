@@ -12,50 +12,49 @@ import std.option
 import std.string
 
 pub type Set = struct(T) {
-    inner: Dict(T, u8)
+    __inner: Dict(T, u8)
 }
 
 // Construct an empty set. `T` is inferred from context.
 pub fn set(allocator: &Allocator? = null) Set($T) {
-    return .{ inner = dict(allocator) }
+    return .{ __inner = dict(allocator) }
 }
 
 // Free the backing storage. Each live key's `deinit()` runs first.
 pub fn deinit(self: &Set($T)) {
-    self.inner.deinit()
+    self.__inner.deinit()
 }
 
 // Number of distinct elements currently in the set.
 pub fn len(self: Set($T)) usize {
-    return self.inner.len()
+    return self.__inner.len()
 }
 
 // True when the set holds no elements.
 pub fn is_empty(self: Set($T)) bool {
-    return self.inner.is_empty()
+    return self.__inner.is_empty()
 }
 
 // Insert a value. No-op when the value is already present (no allocation or replacement). Returns
 // nothing - the value-add idempotence is the expected behavior; callers that want to know whether
 // it was new should `contains()` first.
 pub fn add(self: &Set($T), value: T) {
-    self.inner.set(value, 1u8)
+    self.__inner.set(value, 1u8)
 }
 
 // Test membership.
 pub fn contains(self: Set($T), value: T) bool {
-    return self.inner.contains(value)
+    return self.__inner.contains(value)
 }
 
 // Remove a value. Returns `true` iff the value was present.
 pub fn remove(self: &Set($T), value: T) bool {
-    return self.inner.remove(value).is_some()
+    return self.__inner.remove(value).is_some()
 }
 
-// Drop every element. Element `deinit()` is NOT called - clear is a fast reset, not a full release.
-// Use `deinit()` followed by a fresh `set(...)` when elements own heap.
+// Drop every element, deiniting each. Backing storage is kept for reuse.
 pub fn clear(self: &Set($T)) {
-    self.inner.clear()
+    self.__inner.clear()
 }
 
 // =============================================================================
@@ -66,15 +65,15 @@ pub fn clear(self: &Set($T)) {
 // =============================================================================
 
 pub fn add(self: &Set(OwnedString), value: String) {
-    self.inner.set(value, 1u8)
+    self.__inner.set(value, 1u8)
 }
 
 pub fn contains(self: Set(OwnedString), value: String) bool {
-    return self.inner.contains(value)
+    return self.__inner.contains(value)
 }
 
 pub fn remove(self: &Set(OwnedString), value: String) bool {
-    return self.inner.remove(value).is_some()
+    return self.__inner.remove(value).is_some()
 }
 
 // =============================================================================
@@ -82,11 +81,11 @@ pub fn remove(self: &Set(OwnedString), value: String) bool {
 // =============================================================================
 
 pub type SetIterator = struct(T) {
-    inner: DictIterator(T, u8)
+    __inner: DictIterator(T, u8)
 }
 
 pub fn iter(self: &Set($T)) SetIterator(T) {
-    return .{ inner = self.inner.iter() }
+    return .{ __inner = self.__inner.iter() }
 }
 
 // An iterator is its own iterable, so `for x in s.iter()` and the std.iter combinators can consume
@@ -96,7 +95,7 @@ pub fn iter(it: &SetIterator($T)) SetIterator(T) {
 }
 
 pub fn next(it: &SetIterator($T)) T? {
-    return it.inner.next() match {
+    return it.__inner.next() match {
         Some(entry) => Some(entry.key)
         None => None
     }

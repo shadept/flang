@@ -626,6 +626,167 @@ in `docs/known-issues.md`; regression pinned at
 `tests/harness/iterators/iter_ref_through_reference_local.f` (the
 self-hosted compiler lowers it correctly).
 
+**5d step 0 landed 2026-08-27 (per-module settlement slots).** Phase 3.5's
+program-wide passes moved inside the phase 3 loop: a module's slot is its
+bodies, then - over what those bodies parked - anonymous literals, overloaded
+names in value position, the specialization drain, the parked calls, a second
+drain, and the E2001/E2102/E2029 sweep of the literals the slot minted. The
+literals minted before any slot (signature defaults, constant initializers)
+sweep after every slot, because a body can be what pins an unannotated
+constant's variable.
+
+This is the enabler for the body cache, and the insight that makes 5d
+tractable. Everything settlement assigns in encounter order - specialization
+ids, closure-environment nominals and symbols (`next_lambda`), synthesized
+nodes (`next_synth`), the RTTI list, engine variables minted inside
+instantiations - was assigned in the order of one program-wide fixpoint over
+every module's picks at once. A skipped module's replayed picks are concrete
+(their engine bindings died with the demand that made them), so they are ready
+in the fixpoint's first pass where a cold check's defer, and every
+encounter-ordered assignment downstream of the reordering diverges from cold:
+renumbered closure nominals, shifted RTTI positions, different spec ids. Gate A
+compares all of those by value. Scoping settlement to one module at a time
+removes the interleaving instead of trying to reproduce it: slot order is
+demand order, so each assignment is decided per module, and a skipped module
+can replay its whole slot in place.
+
+Per-slot settlement is sound because bodies never share inference variables: a
+body's variables entangle only with its own parked work and the instantiations
+its own picks force. A later slot reuses an earlier slot's specialization by
+key without re-checking its body, so no later activity can pin an earlier
+slot's variables. Module-level constants are the one cross-body channel, and
+phase 2.5 pins them before any slot runs - the exception is an unannotated
+constant whose initializer leaves its variable open for a body to pin, which
+5d must detect (an open constant variable after phase 2.5) and answer with the
+global fallback, since a skipped body's pinning unification would be lost.
+
+Observable changes, both deterministic: specialization ids and RTTI positions
+now follow module order rather than global-fixpoint order (a pick that
+deferred behind another module's instantiation no longer does), and E2001-tier
+diagnostics interleave per slot with the pre-body ones last. Fixpoint,
+harness, lib tests and Gate A (bootstrap, flang_typer, snake) all green.
+
+**5d landed 2026-08-27 (`body`).** A per-module body cache
+(`ModuleBodyCache`), replayed at the module's slot. Measured on the compiler
+with three modules dirtied of 107: **bodies 1580 ms cold, 138 ms re-demanded**
+(medians of three; the gate prints the pair, plus a `settle` pair for the
+drains - 357 ms cold, 307 ms re-demanded, mostly re-instantiation, which is
+5e's target). As landed:
+
+- The capture window covers the slot through `resolve_fn_name_values`: every
+  result-table recording (`InferenceResults` collects the KEYS while capture
+  is on; values are harvested from the finished tables once the demand's final
+  zonk has run, because the raw recordings cite engine bindings that die with
+  the demand), the closure-environment registrations (recovered through the
+  lambda table at harvest), the slot's diagnostics (a fourth tier in
+  `ModuleNomDiags`), and the vars/synth/lambda counters at slot start plus
+  their burns. An instantiation's overlay never captures - it is a different
+  `InferenceResults` whose flag is off.
+- The drains are NOT captured as facts: top-level `process_pending` logs each
+  pick at process time - process-time zonks, in process order - and a replayed
+  slot re-runs them in that order. Re-instantiation re-checks template bodies
+  live, which re-pins the module's burned variables exactly as the cold drain
+  did, so a pick whose binds were still open at its cold process time re-runs
+  with the same openness (the openness decides resolution paths inside the
+  template body, and with it what lands in the overlay versus the program
+  tables). A slot whose drain reported an uninferable pick (E2001) is
+  uncacheable - an unprocessed pick leaves no log entry to replay.
+- Parked calls replay from copies zonked to the window's end;
+  `resolve_pending_calls` and the second drain run live, regenerating their
+  recordings, materializations and diagnostics. Slots end SEALED either way:
+  parked work settlement could not resolve is abandoned, not handed to the
+  next module's slot, which is what keeps a slot's cache self-contained.
+- Pending literals never replay: the harvest re-runs the window's
+  E2001/E2102/E2029 verdicts against the final types (`literal_flagged`, pure
+  in text and type) and any that would diagnose marks the module uncacheable.
+  Pending anons and fn-names do not replay either - their unifications bound
+  dead variables, and their observable output (interned anon nominals,
+  resolved targets) is carried registry state plus captured facts.
+- Validity: the 5b `bodies_carry` conditions, plus a signature-tier
+  fingerprint over the re-run modules - no scheme changed (compared at
+  reclaim in the function registry, interned handles making it a field
+  compare), no function added or purged, no constant added, removed or
+  re-typed, no default value's source text changed (texts cached per module
+  in `ModuleSigCache`; a scheme compare cannot see a value change), no
+  resolved nominal definition changed (fingerprints snapshotted before
+  retirement) - plus the per-module stream anchors (vars/synth/lambda at slot
+  start), plus no module-level constant variable still open after phase 2.5
+  (a body can be what pins one, and a skipped body's pinning is lost). Any
+  global trigger re-runs every body, exactly a cold check.
+- Retention: replayed desugar blocks, synth strings and default/argument
+  expression lists live in earlier demands' results, which `analyze.f`
+  retires instead of freeing - the body caches extend that dependence.
+
+Verified: fixpoint, full harness (566/1/16 - the one is the documented
+Windows cross-target link), typer 92/92 (five new 5d regressions: slot
+replay of closures and specializations, body-tier diagnostic replay from the
+cache, a changed field type re-running carried bodies, an upstream variable-
+stream shift re-anchoring, a changed default value flagging the demand),
+analysis 22/22, Gate A across `bootstrap/`, `lib/flang_typer` and every
+`examples/*` that type-checks, plus the per-module sweep over `bootstrap/`
+(each of the 107 modules dirtied in turn, one process per module -
+`FLANG_GATE_DIRTY` selects the module by demand-order index or path).
+
+Memory (`--mem`, compiler corpus): 503 MB cold (up ~45 MB - the caches), and
+a gate run (one re-demand) initially retained +117 MB per re-demand, down
+from 5b's +210 MB. Attacked further on 2026-08-27 (see the retirement note
+below): now +38 MB per re-demand, and cold peak dropped 505 -> 384 MB.
+
+**Retired results slim down (landed 2026-08-27).** What a replayed slot
+actually cites from an earlier demand's result is its `synth_strings`
+buffers (RtConst FQNs, desugared-AST name views) - the desugar blocks are
+leaked global boxes, the carried registries own their FQN storage
+(`register_at` re-fixes each def onto it), and the caches copy everything
+else. So `slim_retire` frees a retired result's tables at retirement and
+keeps the husk; `keep_retired_results` opts back into whole retention for a
+caller that reads a pre-copy after the re-demand (gate A sets it).
+Generation-stamping was rejected: a never-edited module's cache cites the
+FIRST demand's result forever, so nothing would ever age out - slimming
+works because the forever-cited part is kilobytes.
+
+The probe that measured it stays: `FLANG_REDEMAND=<n>` re-demands the
+project n times after analysis (`FLANG_REDEMAND_CLEAN` with an empty dirty
+set, `FLANG_REDEMAND_EXIT` tears the unit down and reports before exit, so
+live-at-exit is pure leakage). It split the +117 into ~43 MB of husk tables
+(freed by slimming), ~14 MB of legitimate retention (retired sources and
+ASTs of the always-re-parsed generator origins, husks), and ~60 MB of plain
+leaks - and found the same leaks cold: 250 MB of a cold check's 503 was
+unreachable after teardown. The dominant leak was the visibility set:
+`current_visibility`/`fn_visibility` copy the module's visible-module set
+per lookup - every named type, identifier, call and operator resolution -
+and no checker call site freed it (the registry tests always did). Eighteen
+`defer vis.visible.deinit()` later, plus freeing processed drain picks,
+resolved parked calls and overwritten generic templates: cold leak 250 ->
+129 MB, per-demand leak 60 -> ~24 MB. The residual is many small
+per-work-unit drops; hunting it further wants an allocation-site-tagging
+counting allocator, not more guesswork - see docs/known-issues.md.
+
+**Where the remaining warm cost sits (measured 2026-08-27).** Dirtying a
+single small module instead of the default three leaves warm bodies at
+~110 ms - the replay floor, not re-inference: every demand builds a fresh
+result, so replay is ~300k dict writes (plus fact copies) at near-dict
+speed. Presizing the demand's tables to the previous result's sizes
+(`table_caps` / `presize_tables`, landed) bought roughly nothing
+(reallocs 1042k before, 1044k after) - rehash growth was never the cost.
+Getting the replay floor under ~50 ms means not rebuilding the tables
+per demand: keyed tables with per-module eviction, which is where
+5f/RFC-023 head anyway.
+
+**Pending literals retire with their slot (landed 2026-08-27).**
+`pending_literals` used to keep every unsuffixed literal for the whole
+check, resolved or not - 7291 entries on the compiler - and
+`is_literal_var` linear-scans the list per open-var argument per
+overload candidate: 2114 scans, 8.0M resolve steps, quadratic in program
+size. A literal's verdict is final once its slot's sweep has run
+(nothing after a slot can pin its literals), so `seal_slot` now
+truncates the slot's entries, leaving only the preamble (signature
+defaults and constant initializers, swept at 3.6) plus the running
+slot's own - which is also what moved the flagged-literal cacheability
+check from harvest to slot end. Measured: **bodies 1500 -> 920 ms cold,
+138 -> ~100 ms re-demanded** - the scan was ~40% of cold bodies, not the
+5-10% first estimated (each step is a union-find resolve plus an
+interner node fetch).
+
 **Gate B - laziness.** Run the harness with lazy demand enabled and assert zero
 diff in reported diagnostics against eager demand. Guards the M12 rejection
 parity against silent regression. Nearly free once W1003 exists, since that
@@ -653,7 +814,8 @@ object contention on top), stage-2 = stage-3 byte-identical, 11/11 examples.
           demand (RFC-024 open questions 2 and 3 answered below)
       5c  DONE 2026-08-26: signature carries (function registry, templates,
           constant types); constants phase stays eager by design
-      5d  body  (64%)
+      5d  DONE 2026-08-27: per-module settlement slots, then the body cache -
+          a kept module's slot replays instead of running
       5e  specialization; retire drain_pending_specs / resolve_pending_calls
       5f  validate(project); retire validate_literals / zonk_specializations
  6  lazy demand + W1003 + Gate B

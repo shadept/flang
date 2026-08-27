@@ -275,9 +275,23 @@ pub fn op_index(list: List($T), range: Range(usize)) T[] {
     return slice_from_raw_parts(list.ptr + start, end - start)
 }
 
-// Remove all elements from the list without freeing memory.
+// Drop every element, deiniting each. Backing storage is kept for reuse.
 pub fn clear(list: &List($T)) {
+    for i in 0..list.len {
+        const elem: &T = list.ptr + i
+        elem.deinit()
+    }
     list.len = 0
+}
+
+// Drop every element past the first `n`, deiniting each. Backing storage is kept; a length at or
+// below `n` is left alone.
+pub fn truncate(list: &List($T), n: usize) {
+    while list.len > n {
+        list.len = list.len - 1
+        const elem: &T = list.ptr + list.len
+        elem.deinit()
+    }
 }
 
 pub fn sort(list: &List($T)) {
@@ -333,6 +347,19 @@ test "for &x writes through to the list, directly and via as_slice" {
     for &x in xs.as_slice() { x.* = x.* + 1 }
     assert_eq(xs[0], 11u32, "first element written through both refs")
     assert_eq(xs[1], 21u32, "second element written through both refs")
+}
+
+test "truncate drops the tail and clamps at the length" {
+    let xs: List(u32) = list(0)
+    defer xs.deinit()
+    xs.push(1u32)
+    xs.push(2u32)
+    xs.push(3u32)
+    xs.truncate(2)
+    assert_eq(xs.len, 2 as usize, "the tail past n is dropped")
+    assert_eq(xs[1], 2u32, "the kept prefix is untouched")
+    xs.truncate(5)
+    assert_eq(xs.len, 2 as usize, "a length at or below n is left alone")
 }
 
 test "push_all appends a slice in order" {
