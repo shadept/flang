@@ -1029,6 +1029,17 @@ fn emit_gep(g: &GepInstr, sb: &StringBuilder) {
 }
 
 fn emit_memcpy(m: &MemcpyInstr, sb: &StringBuilder) {
+    // A zero-size copy has no storage behind it, so its source can be a null placeholder (an empty
+    // tuple). glibc annotates memcpy's pointers _Nonnull and clang rejects the call under -Werror
+    // even at size 0 - elide the copy instead.
+    const zero_size = m.size match {
+        IntConst(k) => k == 0
+        _ => false
+    }
+    if zero_size {
+        sb.append("/* zero-size copy elided */\n")
+        return
+    }
     sb.append("memcpy(")
     emit_operand(&m.dst, sb)
     sb.append(", ")

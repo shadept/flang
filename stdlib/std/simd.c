@@ -32,6 +32,16 @@ typedef struct std_simd_Vec128 std_simd_Vec128;
 #define FLANG_POPCOUNT32(x) ((uint32_t)__builtin_popcount((unsigned)(x)))
 #endif
 
+/* gcc/clang refuse intrinsics above the translation unit's feature baseline
+ * (plain SSE2 here) unless the function opts in per-feature. MSVC compiles
+ * them unconditionally, so the runtime CPU requirement is the same either
+ * way: SSSE3 for shuffle, PCLMUL for clmul. */
+#ifdef _MSC_VER
+#define FLANG_TARGET(feat)
+#else
+#define FLANG_TARGET(feat) __attribute__((target(feat)))
+#endif
+
 std_simd_Vec128 v128_load(const void* p) {
     std_simd_Vec128 v;
     _mm_storeu_si128((__m128i*)&v, _mm_loadu_si128((const __m128i*)p));
@@ -102,6 +112,7 @@ std_simd_Vec128 v128_not(std_simd_Vec128 a) {
     return r;
 }
 
+FLANG_TARGET("ssse3")
 std_simd_Vec128 v128_shuffle(std_simd_Vec128 a, std_simd_Vec128 idx) {
     std_simd_Vec128 r;
     _mm_storeu_si128((__m128i*)&r,
@@ -120,6 +131,7 @@ std_simd_Vec128 v128_shr_u8(std_simd_Vec128 a, uint8_t imm) {
     return r;
 }
 
+FLANG_TARGET("pclmul")
 std_simd_Vec128 v128_clmul(std_simd_Vec128 a, std_simd_Vec128 b) {
     std_simd_Vec128 r;
     _mm_storeu_si128((__m128i*)&r,
