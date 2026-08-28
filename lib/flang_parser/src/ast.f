@@ -43,8 +43,9 @@ pub type Module = struct {
 // Rebuilds the list on the global allocator rather than growing in place: `decls`' stored allocator
 // points at a projection-time local (dead once `project_module` returns), so a push that reallocs
 // would go through a dangling allocator. The old buffer stays behind in the module arena.
-// 
-// ponytail: the rebuilt buffer leaks at Module.deinit (arena-only free); fine, modules live to end of build.
+//
+// ponytail: the rebuilt buffer leaks at Module.deinit (arena-only free); fine, modules live to end
+// of build.
 pub fn append_decls(self: &Module, decls: &List(Decl)) {
     let merged: List(Decl) = list(self.decls.len + decls.len)
     for &d in self.decls { merged.push(d.*) }
@@ -264,6 +265,8 @@ pub type LetStmt = struct {
     span: SourceSpan
     is_const: bool
     name: String
+    // The name token's own span; equals `span` when error recovery produced no name.
+    name_span: SourceSpan
     type_annotation: TypeExpr?
     init: Expr?
 }
@@ -303,6 +306,8 @@ pub type ContinueStmt = struct {
 pub type ForStmt = struct {
     span: SourceSpan
     var_name: String
+    // The loop variable token's own span; equals `span` when error recovery produced no name.
+    var_span: SourceSpan
     // `for &x in xs`: iterate through `iter_ref` (elements by reference).
     by_ref: bool
     iterable: &Expr

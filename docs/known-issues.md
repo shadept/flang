@@ -137,6 +137,34 @@ allocations; attribution wants a counting-allocator variant that tags
 allocations by call site. Irrelevant to one-shot builds (the process
 exits); relevant to the LSP, where the per-re-demand share accumulates.
 
+### CST ownership is copy-with-shared-children; no `deinit` can be correct for it
+
+**Status:** Open - worked around, proper fix is arena-backing the parser
+**Affected:** `lib/flang_parser/src/cst.f`, `parser.f`, every CST consumer
+
+`CstNode` holds `children: List(CstChild)` and nodes are COPIED into parent
+builders during parsing (`push_node_into`, the `leading` directive lists),
+so several `CstNode` values can reference the same child-list buffer.
+Giving `CstNode`/`CstChild` a `deinit` therefore corrupts the tree:
+`List` teardown deinits elements, and any list of CST pieces dropped
+mid-parse frees children the kept copies still reference. Trying exactly
+that broke stage 1's self-compile with phantom resolution errors
+(`unknown identifier exit`) - the checker was reading freed CST memory.
+
+Current state: `free_cst` is an explicitly-named recursive free, called
+exactly once on the ROOT of a finished tree after projection
+(`parse_to_module`, the LSP's `parse_doc`), where each buffer appears once.
+Before it existed the CST simply leaked - harmless in a one-shot build,
+~MBs per keystroke in the LSP.
+
+The honest fix is making the ownership real instead of conventional:
+either `Rc(CstNode)` (std.rc exists; per-node refcount overhead, correct
+under any sharing) or - better fit - backing the parser's child lists with
+an `ArenaAllocator` the way the AST already does (`Module.arena`), making
+teardown one bulk free and `free_cst` unnecessary. The parser already
+threads an allocator, so the arena variant is mostly plumbing at the two
+parse entry points plus every `list(...)` in the parser honoring it.
+
 ### Self-hosted: a call the reference rejects as ambiguous (E2011) resolves silently
 
 **Status:** Open
@@ -513,7 +541,7 @@ file reached under two spellings loads once".
 
 **Status:** Open (discovered 2026-08-28 building the LSP outline)
 **Affected:** reference compiler UFCS receiver lowering
-**Workaround in tree:** `flang_lsp/src/handlers/document_symbol.f` `type_symbol` builds the list first and assigns the field whole
+**Workaround in tree:** `flang_lsp/src/handlers/document_symbol.f` `type_symbol` builds the list first and assigns the field whole; `flang_lsp/src/server.f` workspace/symbol test pushes `project_origin` through an explicit reference
 
 A mutating method call on a **field of a local that was initialized from a
 function return** passes a copy of the field, so the mutation is silently lost.

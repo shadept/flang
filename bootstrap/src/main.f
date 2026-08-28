@@ -1075,7 +1075,7 @@ fn run_lsp(argv: String[], rest: usize, cli: &Cli) i32 {
     const _ob = set_binary_mode(&stdout)
 
     const me = project_info()
-    let srv = lsp_server(stdin.reader(), stdout.writer(), stdlib.as_view(), me.version)
+    let srv = lsp_server(stdin.reader(), stdout.writer(), stdlib.as_view(), me.version, true)
     defer srv.deinit()
     return srv.run()
 }

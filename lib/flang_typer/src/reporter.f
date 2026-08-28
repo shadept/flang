@@ -9,6 +9,7 @@
 // caller picks a `ReportCtx` and the reporter formats accordingly.
 
 import std.allocator
+import std.dict
 import std.list
 import std.option
 import std.string
@@ -149,8 +150,11 @@ fn format_mismatch(m: &Mismatch, ctx: &ReportCtx, it: &TypeInterner,
 
 // The interner's `format` has no registry, so it renders a nominal as `#<id>`. With one in hand the
 // SHORT name is what a reader wants ("expected `i32`, got `Foo`"), and it is what the reference
-// prints - the harness matches on that text.
-fn format_with_names(it: &TypeInterner, t: Ty, sb: &StringBuilder, reg: &NominalRegistry?) {
+// prints - the harness matches on that text. Public: the LSP renders hover and inlay-hint types
+// through the same formatting diagnostics use. `vars` optionally names free variables (a generic
+// signature's `$T` bindings, see `checker.type_param_names`); an unnamed var falls back to `?N`.
+pub fn format_with_names(it: &TypeInterner, t: Ty, sb: &StringBuilder, reg: &NominalRegistry?,
+    vars: &Dict(VarId, String)? = null) {
     if reg.is_none() {
         it.format(t, sb)
         return
@@ -165,21 +169,55 @@ fn format_with_names(it: &TypeInterner, t: Ty, sb: &StringBuilder, reg: &Nominal
                     if i > 0 {
                         sb.append(", ")
                     }
-                    format_with_names(it, it.child_at(nn.args, i), sb, reg)
+                    format_with_names(it, it.child_at(nn.args, i), sb, reg, vars)
                 }
                 sb.append(")")
             }
         }
         NRef(inner) => {
             sb.append("&")
-            format_with_names(it, inner, sb, reg)
+            format_with_names(it, inner, sb, reg, vars)
         }
         NArray(a) => {
             sb.append("[")
-            format_with_names(it, a.elem, sb, reg)
+            format_with_names(it, a.elem, sb, reg, vars)
             sb.append("; ")
             sb.append(a.length)
             sb.append("]")
+        }
+        NFunc(f) => {
+            sb.append("fn(")
+            for i in 0..f.params.len {
+                if i > 0 {
+                    sb.append(", ")
+                }
+                format_with_names(it, it.child_at(f.params, i), sb, reg, vars)
+            }
+            sb.append(") ")
+            format_with_names(it, f.ret, sb, reg, vars)
+        }
+        NTuple(span) => {
+            sb.append("(")
+            for i in 0..span.len {
+                if i > 0 {
+                    sb.append(", ")
+                }
+                format_with_names(it, it.child_at(span, i), sb, reg, vars)
+            }
+            if span.len == 1 {
+                sb.append(",")
+            }
+            sb.append(")")
+        }
+        NVar(v) => {
+            const named = vars match {
+                Some(m) => m.get(v.id)
+                None => null
+            }
+            named match {
+                Some(n) => sb.append(n)
+                None => it.format(t, sb)
+            }
         }
         _ => it.format(t, sb)
     }
@@ -192,8 +230,9 @@ fn nominal_fqn(reg: &NominalRegistry, id: NominalId) String {
     }
 }
 
-// The last dot-separated segment of an FQN.
-fn short_name(fqn: String) String {
+// The last dot-separated segment of an FQN. Public: the LSP matches a cursor's bare identifier
+// against registry FQNs through it.
+pub fn short_name(fqn: String) String {
     let cut = 0usize
     for i in 0..fqn.len {
         if fqn[i] == '.' {

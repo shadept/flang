@@ -214,3 +214,19 @@ pub type CstNode = struct {
     end: usize
     children: List(CstChild)
 }
+
+// Free the tree: every child list, recursively. Deliberately NOT named `deinit`: CST nodes are
+// copied into parent builders during parsing, so a `deinit` hooked into `List` teardown would free
+// children still referenced by the copies. Only the ROOT of a finished tree may be freed, exactly
+// once, after projection - each child list buffer appears once in the final tree. Token children
+// are not touched: a token's trivia slices belong to the lexer's token list, which frees them on
+// its own teardown.
+pub fn free_cst(self: &CstNode) {
+    for i in 0..self.children.len {
+        self.children[i] match {
+            NodeChild(n) => n.free_cst()
+            TokenChild(_) => {}
+        }
+    }
+    self.children.deinit()
+}

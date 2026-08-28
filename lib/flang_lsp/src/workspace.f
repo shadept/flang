@@ -23,6 +23,7 @@ import flang_analysis.analyze
 import flang_analysis.project
 import flang_analysis.resolver
 import flang_lsp.documents
+import flang_lsp.index
 import flang_lsp.uri
 
 pub type OpenProject = struct {
@@ -30,14 +31,23 @@ pub type OpenProject = struct {
     name: OwnedString
     ctx: ResolveCtx
     unit: AnalyzedProject
+    // Per-module symbol indexes, parallel to `unit.modules` by file id. Rebuilt after every
+    // analysis; dependency and stdlib slots stay empty so workspace/symbol reports project code
+    // only.
+    index: List(ModuleIndex)
 }
 
 pub fn deinit(self: &OpenProject) {
+    self.index.deinit()
     self.unit.deinit()
     self.ctx.deinit()
     self.name.deinit()
     self.dir.deinit()
 }
+
+// Index into `Workspace.projects`. Stable for an entry's lifetime - projects are only appended or
+// replaced in place, never removed or reordered.
+pub type ProjectId = usize
 
 pub type Workspace = struct {
     stdlib_path: OwnedString
@@ -115,7 +125,7 @@ pub fn project_dir_for(path: String, allocator: &Allocator? = null) OwnedString?
 }
 
 // Index of the open project rooted exactly at `dir`.
-pub fn find_project(self: &Workspace, dir: String) usize? {
+pub fn find_project(self: &Workspace, dir: String) ProjectId? {
     for i in 0..self.projects.len {
         if self.projects[i].dir.as_view() == dir {
             return Some(i)
@@ -126,8 +136,8 @@ pub fn find_project(self: &Workspace, dir: String) usize? {
 
 // Index of the open project whose directory contains `path`. The longest match wins, so a nested
 // project claims its own files over an enclosing one.
-pub fn project_of_path(self: &Workspace, path: String) usize? {
-    let best: usize? = null
+pub fn project_of_path(self: &Workspace, path: String) ProjectId? {
+    let best: ProjectId? = null
     let best_len: usize = 0
     for i in 0..self.projects.len {
         const dir = self.projects[i].dir.as_view()
@@ -162,7 +172,7 @@ fn overrides_from(docs: &DocumentStore, allocator: &Allocator?) Dict(String, Str
 // Analyze the project rooted at `dir` and add it to the workspace. Null when the manifest is
 // unreadable or its source glob matches nothing.
 pub fn open_project(self: &Workspace, dir: String, docs: &DocumentStore,
-    allocator: &Allocator? = null) usize? {
+    allocator: &Allocator? = null) ProjectId? {
     const loaded = self.load_project(dir, docs, allocator)
     if loaded.is_none() {
         return null
@@ -173,17 +183,19 @@ pub fn open_project(self: &Workspace, dir: String, docs: &DocumentStore,
 
 // Re-check an open project, re-parsing only `dirty` paths. The module set is assumed unchanged; a
 // changed set (created/deleted file, edited manifest) needs `reopen_project`.
-pub fn reanalyze_project(self: &Workspace, idx: usize, dirty: &Set(String), docs: &DocumentStore,
-    allocator: &Allocator? = null) {
+pub fn reanalyze_project(self: &Workspace, idx: ProjectId, dirty: &Set(String),
+    docs: &DocumentStore, allocator: &Allocator? = null) {
     let p = &self.projects[idx]
     let ov = overrides_from(docs, allocator)
     reanalyze(&p.unit, &p.ctx, dirty, Some(&ov), allocator)
     ov.deinit()
+    p.index.deinit()
+    p.index = build_indexes(&p.unit, allocator)
 }
 
 // Rebuild an open project from scratch: fresh manifest, fresh module set. Keeps the old analysis
 // when the rebuild fails (manifest gone mid-edit).
-pub fn reopen_project(self: &Workspace, idx: usize, docs: &DocumentStore,
+pub fn reopen_project(self: &Workspace, idx: ProjectId, docs: &DocumentStore,
     allocator: &Allocator? = null) bool {
     let dir = from_view(self.projects[idx].dir.as_view(), allocator)
     const fresh = self.load_project(dir.as_view(), docs, allocator)
@@ -232,13 +244,29 @@ fn load_project(self: &Workspace, dir: String, docs: &DocumentStore,
     let unit = analyze_project(&ctx, &entries, Some(&ov), allocator)
     ov.deinit()
     entries.deinit()
+    let index = build_indexes(&unit, allocator)
 
     return Some(OpenProject {
         dir = from_view(dir, allocator),
         name = from_view(proj.name.as_view(), allocator),
         ctx = ctx,
         unit = unit,
+        index = index,
     })
+}
+
+// One ModuleIndex per module, parallel to `unit.modules`. Only project-origin modules are indexed;
+// every other slot (stdlib, dependencies, generated chunks past the real files) stays empty.
+pub fn build_indexes(unit: &AnalyzedProject, allocator: &Allocator? = null) List(ModuleIndex) {
+    let out: List(ModuleIndex) = list(unit.modules.len, allocator)
+    for fid in 0..unit.modules.len {
+        if fid < unit.project_origin.len and unit.project_origin[fid] {
+            out.push(module_index(&unit.modules[fid], allocator))
+        } else {
+            out.push(ModuleIndex { symbols = list(0, allocator) })
+        }
+    }
+    return out
 }
 
 // Tests

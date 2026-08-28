@@ -882,6 +882,7 @@ fn project_expr_as_stmt(self: &Projector, cst: CstNode) Stmt? {
 
 fn project_let_stmt(self: &Projector, cst: CstNode) LetStmt {
     let name: String = ""
+    let name_span = self.span_from(cst)
     let is_const = false
     let type_annotation: TypeExpr? = null
     let init: Expr? = null
@@ -901,6 +902,7 @@ fn project_let_stmt(self: &Projector, cst: CstNode) LetStmt {
                 }
                 if saw_keyword and tok.kind == TokenKind.Identifier and name.len == 0 {
                     name = tok.text
+                    name_span = self.span_from_token(tok)
                 }
                 if tok.kind == TokenKind.Equals {
                     saw_equals = true
@@ -919,6 +921,7 @@ fn project_let_stmt(self: &Projector, cst: CstNode) LetStmt {
         span = self.span_from(cst),
         is_const = is_const,
         name = name,
+        name_span = name_span,
         type_annotation = type_annotation,
         init = init,
     }
@@ -973,6 +976,7 @@ fn project_defer_stmt(self: &Projector, cst: CstNode) DeferStmt {
 
 fn project_for_stmt(self: &Projector, cst: CstNode) ForStmt {
     let var_name: String = ""
+    let var_span = self.span_from(cst)
     let iterable: Expr = Expr.Error(ErrorExpr { span = self.span_from(cst) })
     let body: BlockExpr = .{
         span = self.span_from(cst),
@@ -995,6 +999,7 @@ fn project_for_stmt(self: &Projector, cst: CstNode) ForStmt {
                 }
                 if saw_for and tok.kind == TokenKind.Identifier and var_name.len == 0 {
                     var_name = tok.text
+                    var_span = self.span_from_token(tok)
                 }
             }
             NodeChild(child) => {
@@ -1012,6 +1017,7 @@ fn project_for_stmt(self: &Projector, cst: CstNode) ForStmt {
     return .{
         span = self.span_from(cst),
         var_name = var_name,
+        var_span = var_span,
         by_ref = by_ref,
         iterable = box(a, iterable),
         body = body,

@@ -81,6 +81,14 @@ fn deinit(self: &GenericTemplate) {
     self.tps.deinit()
 }
 
+// var_id -> declared `$T` name for every type parameter the checker has minted - signature and body
+// phases, function and nominal generics alike. For consumers that render types still holding
+// type-parameter vars: the LSP's hover and inlay hints inside a generic body. Name views point into
+// the module ASTs' source buffers and live as long as the checker's unit.
+pub fn type_param_names(self: &Checker) &Dict(VarId, String) {
+    return &self.tp_names
+}
+
 // One `$T` binding created while resolving the current signature - collected by
 // `resolve_generic_bind`, drained by `register_function_sig`.
 type SigTypeParam = struct {
@@ -217,6 +225,9 @@ pub type Checker = struct {
     // M10 - specialization state.
     // fn_id → what instantiation needs (generic functions only).
     templates: Dict(u32, GenericTemplate)
+    // Every type-parameter var ever minted, by id, with its declared `$T` name - see
+    // `type_param_names`. Grows monotonically; ids from retired demands linger harmlessly.
+    tp_names: Dict(VarId, String)
     // `$T` bindings of the signature currently being registered, in declaration order.
     sig_tps: List(SigTypeParam)
     // Generic picks recorded while checking the current body scope; drained after phase 3 (and,
@@ -589,6 +600,7 @@ pub fn checker(allocator: &Allocator? = null) Checker {
         pending_calls = list(0, allocator),
         fn_deprecations = dict(allocator),
         templates = dict(allocator),
+        tp_names = dict(allocator),
         sig_tps = list(0, allocator),
         pending_specs = list(0, allocator),
         spec_callers = list(0, allocator),
@@ -801,6 +813,7 @@ pub fn deinit(self: &Checker) {
     self.anon_structs.deinit()
     self.anon_keys.deinit()
     self.sig_tps.deinit()
+    self.tp_names.deinit()
     self.pending_specs.deinit()
     self.spec_callers.deinit()
     self.pending_literals.deinit()
@@ -1127,6 +1140,7 @@ fn resolve_generic_bind(self: &Checker, g: &GenericBindType) Ty {
     let fresh = self.engine.fresh_var()
     let vid = ty_node(self, fresh) match { NVar(v) => v.id, _ => 0u32 }
     self.sig_tps.push(SigTypeParam { name = g.name, var_id = vid })
+    self.tp_names.set(vid, g.name)
     self.env.bind(g.name, Binding {
         scheme = mono(fresh, self.allocator),
         decl = self.node_of(g.span),
@@ -1544,6 +1558,7 @@ fn resolve_struct_body(self: &Checker, td: &TypeDecl, module_path: String) {
         let fresh = self.engine.fresh_var()
         let id = ty_node(self, fresh) match { NVar(v) => v.id, _ => 0u32 }
         type_params.push(id)
+        self.tp_names.set(id, gp.name)
         self.env.bind(gp.name, Binding {
             scheme = mono(fresh, self.allocator),
             decl = self.node_of(gp.span),
@@ -1766,6 +1781,7 @@ fn resolve_enum_body(self: &Checker, td: &TypeDecl, module_path: String) {
         let fresh = self.engine.fresh_var()
         let vid = ty_node(self, fresh) match { NVar(v) => v.id, _ => 0u32 }
         type_params.push(vid)
+        self.tp_names.set(vid, gp.name)
         self.env.bind(gp.name, Binding {
             scheme = mono(fresh, self.allocator),
             decl = self.node_of(gp.span),
@@ -2083,9 +2099,12 @@ fn check_function_body(self: &Checker, fd: &FunctionDecl) {
     let params: List(Ty) = list(fd.params.len, self.allocator)
     for &p in fd.params {
         let ty = param_ty(self, p)
+        // The parameter's type on its own node: a cursor on the signature resolves (hover).
+        const p_node = self.node_of(p.span)
+        self.results.record_type(p_node, ty)
         self.env.bind(p.name, Binding {
             scheme = mono(ty, self.allocator),
-            decl = self.node_of(p.span),
+            decl = p_node,
             is_const = false,
             is_type_param = false,
         })
@@ -2975,10 +2994,12 @@ fn check_interp_owned(self: &Checker, interp: &InterpolatedStringExpr, given: &L
     let stmts: List(Stmt) = list(interp.parts.len + 1, self.allocator)
 
     const ctor = synth_free_call(self, "string_builder", builder_ctor_args(self, given))
+    const let_span = synth_span(self)
     stmts.push(Stmt.Let(LetStmt {
-        span = synth_span(self),
+        span = let_span,
         is_const = false,
         name = name,
+        name_span = let_span,
         type_annotation = null,
         init = Some(ctor),
     }))
@@ -4637,9 +4658,11 @@ fn check_lambda(self: &Checker, lam: &LambdaExpr) Ty {
         let unannotated = p.type_expr match { Error(_) => true, _ => false }
         let ty = if unannotated { self.engine.fresh_var() }
         else { resolve_type_expr(self, &p.type_expr) }
+        const p_node = self.node_of(p.span)
+        self.results.record_type(p_node, ty)
         self.env.bind(p.name, Binding {
             scheme = mono(ty, self.allocator),
-            decl = self.node_of(p.span),
+            decl = p_node,
             is_const = false,
             is_type_param = false,
         })
@@ -4851,9 +4874,13 @@ fn check_if_directive_stmt(self: &Checker, ifd: &IfDirectiveStmt) bool {
 fn check_for(self: &Checker, fs: &ForStmt) {
     let elem = check_iterable_element(self, fs)
     self.env.push_scope()
+    // The loop variable's type lives on its own name node, so a cursor on it resolves and
+    // goto-definition on a read inside the body lands on the name.
+    const var_node = self.node_of(fs.var_span)
+    self.results.record_type(var_node, elem)
     self.env.bind(fs.var_name, Binding {
         scheme = mono(elem, self.allocator),
-        decl = self.node_of(fs.span),
+        decl = var_node,
         is_const = true,
         is_type_param = false,
     })
@@ -5034,13 +5061,15 @@ fn check_let(self: &Checker, ls: &LetStmt) {
             None => self.engine.fresh_var()
         }
     }
-    // Lowering reads the binding's type off this node. `let x` with neither annotation nor
-    // initializer is legal - the type comes from later use - so the annotation is not the source of
-    // truth and lowering must not re-derive one from it.
+    // Lowering reads the binding's type off the statement node. The name token's node carries the
+    // same type so a cursor on the name resolves (hover, inlay hints), and it is the binding's
+    // `decl` so goto-definition on a read lands on the name, not the whole statement.
     self.results.record_type(self.node_of(ls.span), bound_ty)
+    const name_node = self.node_of(ls.name_span)
+    self.results.record_type(name_node, bound_ty)
     self.env.bind(ls.name, Binding {
         scheme = mono(bound_ty, self.allocator),
-        decl = self.node_of(ls.span),
+        decl = name_node,
         is_const = ls.is_const,
         is_type_param = false,
     })

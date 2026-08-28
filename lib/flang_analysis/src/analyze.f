@@ -28,6 +28,7 @@ import flang_parser.parser
 import flang_parser.projector
 import flang_parser.ast
 import flang_parser.comptime
+import flang_parser.cst
 import flang_core.diagnostic
 import flang_core.span
 import flang_typer.checker
@@ -565,14 +566,15 @@ pub fn analyze_source_set(srcs: List(OwnedString), fqns: &List(String),
     let checked = count_errors(&diagnostics) == 0
     let result = empty_result(allocator)
     let generated = empty_template_output(allocator)
+    // The checker rides on the returned unit like `analyze_project`'s does - consumers (the LSP)
+    // read its registries and type-parameter names.
+    let chk = checker(allocator)
     if checked {
-        let chk = checker(allocator)
         let gens = template_state(allocator)
         result = check_all(&chk, &modules, fqns, &srcs, &file_paths, &gens)
         drain_diagnostics(&diagnostics, &chk.diagnostics)
         generated = gens.take_output()
         gens.deinit()
-        chk.deinit()
     }
 
     let no_origin: List(bool) = list(0, allocator)
@@ -591,7 +593,7 @@ pub fn analyze_source_set(srcs: List(OwnedString), fqns: &List(String),
         checked = checked,
         parse_diags = parse_diags,
         diagnostics = diagnostics,
-        checker = checker(allocator),
+        checker = chk,
         generated = generated,
         parse_ns = 0,
         check_ns = 0,
@@ -652,12 +654,13 @@ fn parse_to_module(src: String, file_id: i32, target: &ComptimeCtx, diags: &List
     let lx = lexer(src, alloc)
     let tokens = lx.tokenize()
     let p = parser(tokens, alloc)
-    const cst = p.parse_module()
+    let cst = p.parse_module()
     let module = project_module(cst, file_id, alloc)
     flatten_module_decls(&module, target, diags, alloc)
     drain_diagnostics(diags, &p.diagnostics)
     p.deinit()
     tokens.deinit()
+    cst.free_cst()
     return module
 }
 

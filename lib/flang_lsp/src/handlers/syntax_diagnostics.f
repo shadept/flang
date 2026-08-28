@@ -11,6 +11,7 @@ import std.test
 import flang_core.diagnostic
 import flang_parser.ast
 import flang_parser.comptime
+import flang_parser.cst
 import flang_parser.lexer
 import flang_parser.parser
 import flang_parser.projector
@@ -32,7 +33,7 @@ pub fn parse_doc(text: String, allocator: &Allocator? = null) ParsedDoc {
     let lx = lexer(text, allocator)
     let tokens = lx.tokenize()
     let p = parser(tokens, allocator)
-    const cst = p.parse_module()
+    let cst = p.parse_module()
     let module = project_module(cst, 0i32, allocator)
     const cctx = host_ctx()
     flatten_module_decls(&module, &cctx, &diagnostics, allocator)
@@ -40,6 +41,7 @@ pub fn parse_doc(text: String, allocator: &Allocator? = null) ParsedDoc {
     p.diagnostics.clear()
     p.deinit()
     tokens.deinit()
+    cst.free_cst()
     return .{ module = module, diagnostics = diagnostics }
 }
 

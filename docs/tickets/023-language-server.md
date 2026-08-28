@@ -1,7 +1,7 @@
 # RFC-023: Language server - in-process, self-hosted, retires FLang.Lsp
 
 **Type:** Compiler tool + stdlib addition
-**Status:** In progress - phases 1-4 landed (`std.rpc.jsonrpc`; `lib/flang_lsp` skeleton: lifecycle, encoding negotiation, full sync, line index; in-process `flang lsp -s <stdlib>`; publishDiagnostics + `$/progress` over lazily-opened projects with buffer overrides; tier 1: documentSymbol, foldingRange, syntax diagnostics per keystroke; `flang/serverStatus` + extension status bar + `flang.serverFlavor` switch)
+**Status:** In progress - phases 1-7 landed (`std.rpc.jsonrpc`; `lib/flang_lsp` skeleton: lifecycle, encoding negotiation, full sync, line index; in-process `flang lsp -s <stdlib>`; publishDiagnostics + `$/progress` over lazily-opened projects with buffer overrides; tier 1: documentSymbol, foldingRange, syntax diagnostics per keystroke; `flang/serverStatus` + extension status bar + `flang.serverFlavor` switch; ModuleIndex + workspace/symbol)
 **Depends on:** RFC-022 (demand-driven checker)
 **Retires:** `src/FLang.Lsp` (3,729 lines, C#, OmniSharp)
 
@@ -263,9 +263,97 @@ debounce of §7 are not implementable yet.
   the server's custom `flang/serverStatus` notification (compiler version,
   workspace folders, open projects with error counts). Phase 10 remains: flip
   the default flavor and retire the reference server.
-- [ ] 5. ModuleIndex + workspace/symbol
-- [ ] 6. hover, definition, typeDefinition, references
-- [ ] 7. inlayHint, signatureHelp
+- [x] 5. ModuleIndex + workspace/symbol
+
+Phase 5 scope notes. `ModuleIndex` (`lib/flang_lsp/src/index.f`) holds what its
+one consumer needs: name, kind, `decl_span`, container name - the
+documentSymbol outline flattened. The §8 fields without a consumer yet
+(rendered signature, doc comment, import edges, content-hash keying) arrive
+with theirs - hover (phase 6) and the on-disk cache (out of scope). Indexes
+live on `OpenProject` parallel to `unit.modules`, rebuilt whole after every
+analysis (an AST walk, microseconds per module); only project-origin modules
+are indexed, so workspace/symbol reports the user's own code, not the
+stdlib's. Matching is ASCII case-insensitive substring - the client fuzzy-ranks
+on top.
+- [x] 6. hover, definition, typeDefinition, references
+- [x] 7. inlayHint, signatureHelp
+
+Phase 6-7 notes. Cursor-to-node is a linear scan over the span tables for
+the innermost recorded span containing the offset
+(`lib/flang_lsp/src/query.f`) - no AST-finder analogue needed. The base
+tables are scanned first, then the specialization overlays: a generic
+template's body is only checked per instantiation (into the overlay), so
+inside a generic body answers carry one concrete instantiation's types, and
+an uninstantiated template answers nothing.
+
+Hover coverage beats the reference server by design: `let`/`for` binder
+names and function/lambda parameters carry their own typed nodes (the
+parser grew `LetStmt.name_span` / `ForStmt.var_span`; the checker records
+the bound type there and points `RtLocal` at it, so goto on a read lands on
+the name), and patterns, sub-patterns and match guards were already typed
+per node. Hover is word-anchored: it answers only with a node that STARTS
+at the identifier under the cursor and reports the identifier's range -
+never a whole statement's - so annotations, keywords and `void`-typed
+statement nodes answer null. Closed types only per §3, with one relaxation:
+a free var carrying a declared type-parameter name (`checker.tp_names`,
+threaded through the diagnostics renderer `format_with_names`) renders as
+that name.
+
+Variable hovers carry what brings the binding into scope: `let a: i32`,
+`const n: usize`, `param q: i32`, `for v: i32`, `field x: i32` - the intro
+comes off the module's binder list (matched by the declaration node's
+span) and from the receiver-typed field lookup; type/function hovers stay
+declaration slices.
+
+Hover falls back to the same registry tier definition uses (stacked overload
+labels, capped), so hover answers wherever goto does - a callee inside an
+uninstantiated generic body included. Words that are binders in the
+enclosing function suppress that fallback (and hover with their declared
+annotation) so a param shadowing a global's name never shows the global.
+Member position (`recv.word`) resolves through the receiver's type - the
+typed node ending at the dot, looked up in the nominal registry - since the
+checker records no target for field access; a member word only reaches the
+registry fallback when call-shaped (UFCS methods are free functions).
+`Enum.Variant` records one variant target spanning the whole reference, so
+a cursor on the qualifier (the word a `.` follows) resolves the ENUM's
+declaration, the member the variant's - in hover and definition both.
+
+The server writes an access log to stderr when launched via `flang lsp`
+(method + id per message in, plus handling time - never payloads), and the
+per-parse CST is freed after projection (`free_cst`; it used to leak on
+every keystroke - see known-issues on CST ownership).
+
+§7's watcher-driven re-check is PARKED: `workspace/didChangeWatchedFiles`
+events are dropped at the top of the handler (the code stays behind the
+early return). Every agent write burst re-analyzed whole projects, and the
+checker's per-re-demand leak (known-issues) balloons a long-lived server.
+didSave still refreshes; disk-only edits stay stale until then. Un-park
+together with the re-demand memory fix, adding §7's ~300 ms debounce in
+the same pass.
+
+Definition resolves in three tiers: resolved target at the cursor (locals,
+params, functions, fields, variants, consts, specialized generics); then
+the identifier under the cursor against the project's registries (nominal
+FQN tails and function overload sets - stdlib and dependencies included);
+then the ModuleIndex across the workspace for what registries don't hold -
+template `#name`s, tests, consts. references inverts `resolved_targets`
+(overlays included, deduped across instantiations), project-scoped; a
+cursor on a function declaration falls back to the name's overload set.
+signatureHelp works off the LIVE buffer (backward paren scan, registry
+overload set by name, labels sliced from each declaration's own source up
+to the body brace) since the analysis is stale exactly when it fires.
+inlayHint walks the module AST for annotation-less `let`/`for` binders.
+Types come from the last analysis; positions from the buffer the client
+displays: when the live text has drifted, sites are re-derived from a
+fresh parse of it and paired by name/order with the analyzed binders
+(`live_hint_sites`), so ordinary edits keep every hint at its live offset
+and only an added/removed/renamed binder drops the hints below it until
+the next analysis. Every completed analysis sends
+`workspace/inlayHint/refresh` so the client re-requests (a save changes no
+buffer, so the client would otherwise keep stale hints).
+Deferred: doc comments in hover (needs ModuleIndex doc-comment capture),
+operator references (`resolved_ops` not inverted), cross-project
+references.
 - [ ] 8. completion
 - [ ] 9. flang/generatedContent
 - [ ] 10. extension switched to `flang lsp`
@@ -283,6 +371,8 @@ debounce of §7 are not implementable yet.
 
 1. Does go-to-generated resolve `flang-generated://` or a real file path? Decides
    whether phase 9 is a server feature or already working via `file://`.
-2. Formatting is in the C# server's absence-list and stays post-v1, but
-   `flang fmt` already exists as a binary. Whether the LSP shells out to it or
-   waits for a library split is unresolved.
+2. RESOLVED: `textDocument/formatting` imports `lib/flang_fmt` directly
+   (`format_source` over the live buffer, the project's `[fmt]` table
+   applied when a manifest is reachable) - no shell-out, one
+   whole-document TextEdit. The editor's default format shortcut works
+   through the standard capability.

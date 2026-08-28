@@ -244,6 +244,19 @@ fn fill_fn_carried(out: &FunctionRegistry, src: &FunctionRegistry, allocator: &A
     out.next_id = src.next_id
 }
 
+// The live scheme registered under `id`, or null. Linear over the overload sets; fine for
+// per-request consumers (the LSP), cache if ever on a hot path.
+pub fn find_by_id(self: &FunctionRegistry, id: u32) &FunctionScheme? {
+    for e in self.by_name {
+        for i in 0..e.value.len {
+            if e.value[i].id == id and !e.value[i].retired {
+                return e.value.get_ref(i)
+            }
+        }
+    }
+    return null
+}
+
 // Resolve `name` in the caller's visibility scope. Returns the candidates that are reachable; if
 // nothing is reachable but some hidden overloads exist, returns one of them along with its module
 // for the diagnostic hint.
