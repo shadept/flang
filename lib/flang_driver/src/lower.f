@@ -4060,15 +4060,13 @@ fn bind_tuple_pattern(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, tp: &TuplePa
 }
 
 // A pattern variable names the matched value. An aggregate's operand is an address into the
-// scrutinee, so the binding copies into its own slot, same as `let` (value semantics); a scalar
-// gets a slot like any other local, so the arm body may assign to it.
+// scrutinee and the name binds to it directly, so the arm sees the matched value itself: reading a
+// payload through `&binding` yields a pointer into the scrutinee, and writing through the binding
+// reaches it. A scalar gets a slot like any other local, so the arm body may assign to it.
 fn bind_matched(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, name: String, value: Operand,
     ty: &Ty) {
     if is_by_ref(ctx, ty) {
-        let lay = lay_of(ctx, ty.*)
-        let slot = bb.stack_slot(lay.size as u64, lay.align as u64)
-        bb.memcpy(slot, value, Operand.IntConst(lay.size as i64))
-        env.bind_aggregate(name, slot, ty.*)
+        env.bind_aggregate(name, value, ty.*)
         return
     }
     let ir = ir_of(ctx, ty.*)

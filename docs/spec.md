@@ -746,6 +746,16 @@ Postfix syntax: `expr match { pattern [if guard] => result, ... }`. Postfix `mat
 
 Match is an expression — all arms unify to a common type. Enum references auto-deref during matching.
 
+**Binding mode**: a pattern variable bound to an *aggregate* (struct, enum payload, tuple element, array) names the scrutinee's own storage — `&binding` is a pointer into the scrutinee, and writing through the binding is visible to the matched value. This is what lets an accessor hand out a handle into a payload:
+
+```
+pub fn as_object(self: &JsonValue) &Dict(OwnedString, JsonValue)? {
+    return self.* match { Object(obj) => Some(&obj), else => null }
+}
+```
+
+A binding bound to a *scalar* is a copy in its own slot, so an arm body may assign to it without touching the scrutinee.
+
 ### 7.6 Directives
 
 Prefixed with `#`, precede declarations:

@@ -89,6 +89,41 @@ in its fixtures so the assertions are no longer vacuous.
 
 ## Open Issues
 
+### Self-hosted: an aggregate pattern binding copied the payload instead of naming it - RESOLVED
+
+**Status:** Resolved 2026-08-28
+**Affected:** `lib/flang_driver/src/lower.f` (`bind_matched`)
+
+`bind_matched` gave an aggregate pattern variable a fresh stack slot and
+memcpy'd the payload into it. `bind_variant_payload` had already computed
+the payload's address correctly; the copy discarded it. Two consequences:
+
+- `&binding` yielded a pointer to that slot, so an accessor returning it
+  handed the caller a pointer into a dead frame. `std.encoding.json`'s
+  `as_object` emitted a 40-byte copy and returned its address; the caller
+  wrote through it.
+- Writing through the binding hit the copy, so
+  `v match { Object(o) => o.set(k, x) }` dropped the write silently.
+
+`as_array` had the identical shape and appeared to work: its payload is
+32 bytes rather than 40, and the caller's frame happened not to clobber
+that region. Undefined behavior that lands differently by size, not a
+different code path.
+
+This was one defect behind two of the self-host blockers: the
+`flang_lsp` "initialize negotiates utf-8 when offered" segfault (via
+`initialize_result`, which builds a nested JSON object) and the
+`std.encoding.json` failures at tests 65-68. Both cleared with the one
+fix - `flang_lsp` went from a crash at test 24 to 67/69, `stdlib/std`
+from a crash at 68 to 299/300.
+
+An aggregate binding now names the scrutinee's storage, matching the
+reference and `docs/spec.md` §7.5 "Binding mode". Scalars still get their
+own slot, so an arm body may assign to one. Regression test:
+`tests/harness/patterns/aggregate_payload_binds_by_reference.f`.
+
+---
+
 ### Self-hosted: a bare `return` swallowed the next line, emitting `return 0` in a `void` function - RESOLVED
 
 **Status:** Resolved 2026-08-28
@@ -2881,9 +2916,11 @@ around it is gone.
 
 ---
 
-### Self-Host: `std.encoding.json` Fails and Crashes Under the Self-Hosted Compiler
+### Self-Host: `std.encoding.json` Fails and Crashes Under the Self-Hosted Compiler — RESOLVED
 
-**Status:** Open
+**Status:** Resolved 2026-08-28 — the cause was the aggregate pattern binding
+copying its payload, recorded above; `stdlib/std` is 299/300, the one
+remaining failure (dict capacity rounding, test 49) unrelated and open
 **Affected:** `stdlib/std/encoding/json.f` built by `bootstrap/` (the reference compiler passes)
 
 `flang test` in `stdlib/std` reaches test 68 and reports four failures before
@@ -2906,9 +2943,11 @@ the header line before invoking the block.
 
 ---
 
-### Self-Host: `flang_lsp` "initialize negotiates utf-8 when offered" Segfaults
+### Self-Host: `flang_lsp` "initialize negotiates utf-8 when offered" Segfaults — RESOLVED
 
-**Status:** Open
+**Status:** Resolved 2026-08-28 — the cause was the aggregate pattern binding
+copying its payload, recorded above; `lib/flang_lsp` is 67/69, the two
+remaining failures (`documentSymbol`, `workspace/symbol`) unrelated and open
 **Affected:** `lib/flang_lsp/src/server.f` built by `bootstrap/` (the reference compiler passes)
 
 `flang test` in `lib/flang_lsp` segfaults on test 24. The same test passes
