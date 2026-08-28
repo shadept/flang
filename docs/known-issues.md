@@ -89,6 +89,39 @@ in its fixtures so the assertions are no longer vacuous.
 
 ## Open Issues
 
+### Self-hosted: a bare `return` swallowed the next line, emitting `return 0` in a `void` function - RESOLVED
+
+**Status:** Resolved 2026-08-28
+**Affected:** `lib/flang_parser/src/parser.f` (`is_bare_return_terminator`), `lib/flang_driver/src/lower.f` (`lower_return`)
+
+Statements end at newline, but `return`'s operand test was a keyword
+whitelist (`}`, EOF, `;`, `let`, `const`, `return`, `break`,
+`continue`, `defer`) with no line check. Anything else opening the next
+line became the return's operand: `return` followed by `println(x)` on
+the line below parsed as `return println(x)`.
+
+A type mismatch caught most instances (E2071 "expected `void`, got
+`i32`"). A swallowed `if` did not: it is void-typed, so `return <void
+if>` checks clean against a void function, and lowering then emitted
+`Ret(Some(placeholder))` - `return 0;` in a `void` C function. MSVC
+warns and continues; clang and gcc reject it. That asymmetry is why it
+only surfaced on the Linux and macOS cold-start jobs, where the
+seed-emitted C meets clang: `build-and-test` builds stage 1 with the
+reference, whose C is correct, and win-x64 compiled the bad C anyway.
+
+`lib/flang_lsp/src/server.f::on_watched_files` was the live instance -
+a parked early `return` followed by a blank line and an `if`.
+
+Two fixes, each independently necessary. The parser treats a `return`
+whose next token opens a later line as bare (`at_line_start`), which
+subsumes the keyword list. Lowering emits `ret_void` for any function
+whose FIR return type is void even when the `return` carried an
+operand, because `return g()` for a void `g` is legal FLang and must
+still not put a value in a `void` C return. Regression test:
+`tests/harness/control_flow/bare_return_is_newline_terminated.f`.
+
+---
+
 ### Self-hosted: identifier in value position preferred a function over a module const - RESOLVED
 
 **Status:** Resolved 2026-08-28

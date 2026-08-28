@@ -1664,6 +1664,13 @@ fn lower_return(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, r: &ReturnStmt) {
             return
         }
         emit_defers_down_to(ctx, bb, env, 0)
+        // A void function returns void even when the `return` carried an operand: `return g()` for
+        // a void `g` is legal, and the expression above already emitted its effects. C forbids a
+        // value in a `void` return, so the operand is dropped here rather than at the backend.
+        if bb.fb.func.return_ty.is_none() {
+            bb.ret_void()
+            return
+        }
         bb.ret(v)
     } else {
         emit_defers_down_to(ctx, bb, env, 0)

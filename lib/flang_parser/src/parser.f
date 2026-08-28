@@ -982,11 +982,25 @@ fn parse_return_stmt(self: &Parser) CstNode {
     return finish(b)
 }
 
+// A `return` takes an operand only from its own line. Statements are newline-terminated, so an
+// expression opening a later line is the next statement; `return` alone on a line is bare. The
+// keyword set covers same-line forms, where no expression can start.
 fn is_bare_return_terminator(self: &Parser) bool {
+    if self.at_line_start() {
+        return true
+    }
     const k = self.current_kind()
     return k == TokenKind.CloseBrace or k == TokenKind.Eof or k == TokenKind.Semicolon
         or k == TokenKind.Let or k == TokenKind.Const or k == TokenKind.Return
         or k == TokenKind.Break or k == TokenKind.Continue or k == TokenKind.Defer
+}
+
+// Whether the current token opens a line the previous token did not sit on.
+fn at_line_start(self: &Parser) bool {
+    if self.position == 0 or self.position >= self.tokens.len {
+        return false
+    }
+    return self.tokens[self.position].line > self.tokens[self.position - 1].line
 }
 
 fn parse_single_keyword_stmt(self: &Parser, kind: NodeKind) CstNode {
