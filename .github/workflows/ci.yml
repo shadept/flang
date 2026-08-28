@@ -99,12 +99,7 @@ jobs:
           cd bootstrap
           # Each stage runs from a copy: `flang build` writes build/flang,
           # which must not be the binary currently executing.
-          #
-          # Stage 1 runs the seed, whose CLI takes options BEFORE the command.
-          # Stages 2 and 3 run HEAD-built binaries, which take them after it.
-          # The orders converge once a promote cuts a seed from a HEAD that
-          # parses options per command.
-          "$SEED" -r -s ../stdlib build
+          "$SEED" build -r -s ../stdlib
           EXE=build/flang; [ -f build/flang.exe ] && EXE=build/flang.exe
           cp "$EXE" ../.coldstart/stage1
           ../.coldstart/stage1 build -k -r -s ../stdlib
