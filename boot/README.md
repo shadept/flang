@@ -15,8 +15,8 @@ That produces `flang-seed`, a full FLang compiler. It then builds the current
 sources (stage 1), which build themselves again (stage 2):
 
     cd ../../bootstrap
-    ../boot/<target>/flang-seed -r -s ../stdlib build     # stage 1
-    build/flang -r -s ../stdlib build                     # stage 2
+    ../boot/<target>/flang-seed build -r -s ../stdlib     # stage 1
+    build/flang build -r -s ../stdlib                     # stage 2
 
 `boot/SEED` records the compiler version, commit, and date the seed was
 emitted from.

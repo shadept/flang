@@ -187,6 +187,10 @@ pub type Checker = struct {
     // Compile-time context for #if condition evaluation. Host by default; a cross-target build
     // installs the target's via `set_comptime_ctx`.
     comptime: ComptimeCtx
+    // Whether this demand checks `test {}` bodies, and so records the calls, overload picks and
+    // instantiations they reach. Only the project's own modules are visited: a dependency's tests
+    // are that project's concern. Off for a build, on for `flang test` and `flang check`.
+    check_tests: bool
 
     // Working state - reset between modules.
     current_module: String?
@@ -588,6 +592,7 @@ pub fn checker(allocator: &Allocator? = null) Checker {
         results = inference_results(allocator),
         diagnostics = list(0, allocator),
         comptime = host_ctx(),
+        check_tests = false,
         current_module = null,
         fn_stack = list(0, allocator),
         fn_decl_params = dict(allocator),
@@ -1163,6 +1168,11 @@ pub fn set_current_module(self: &Checker, module_path: String) {
 
 pub fn set_comptime_ctx(self: &Checker, ctx: ComptimeCtx) {
     self.comptime = ctx
+}
+
+// Turn `test {}` body checking on or off for every demand run through this checker.
+pub fn set_check_tests(self: &Checker, on: bool) {
+    self.check_tests = on
 }
 
 // Install `flang.toml`'s `[imports].global` for this check. `origin` is parallel to the module list
@@ -2054,13 +2064,29 @@ pub fn check_module_constants(self: &Checker, module: &Module, module_path: Stri
 
 pub fn check_module_bodies(self: &Checker, module: &Module, module_path: String) {
     self.current_module = Some(module_path)
+    const tests = wants_test_bodies(self, module)
 
     for &decl in module.decls {
-        check_one_decl(self, decl)
+        check_one_decl(self, decl, tests)
     }
 }
 
-fn check_one_decl(self: &Checker, decl: &Decl) {
+// Whether this module's `test {}` bodies are part of the demand. Both halves have to hold: the
+// demand asked for tests, and the module is one of the project's own - a dependency's tests belong
+// to a run launched from that dependency's directory.
+fn wants_test_bodies(self: &Checker, module: &Module) bool {
+    if !self.check_tests {
+        return false
+    }
+    const i = module.span.file_id
+    if i < 0 {
+        return false
+    }
+    const idx = i as usize
+    return idx < self.project_origin.len and self.project_origin[idx]
+}
+
+fn check_one_decl(self: &Checker, decl: &Decl, tests: bool) {
     decl.* match {
         Function(fd) => {
             // A generic template's body is only validated per instantiation (M10) - with unbound
@@ -2070,9 +2096,31 @@ fn check_one_decl(self: &Checker, decl: &Decl) {
                 check_function_body(self, &fd)
             }
         }
+        Test(td) => {
+            if tests {
+                check_test_body(self, &td)
+            }
+        }
         // Consts were pinned in phase 2.5 (`check_module_constants`).
         _ => {}
     }
+}
+
+// A `test {}` block is a void body with no parameters and no name to return through. It gets a
+// frame all the same, so a `return` inside one is checked against void rather than reaching for an
+// enclosing function that does not exist.
+fn check_test_body(self: &Checker, td: &TestDecl) {
+    self.env.push_scope()
+    self.engine.enter_level()
+
+    let frame = FnFrame { name = td.label, return_ty = TY_VOID, decl_span = td.span }
+    self.fn_stack.push(frame)
+
+    const _body_ty = check_block(self, &td.body)
+
+    let _r = self.fn_stack.pop()
+    self.engine.exit_level()
+    self.env.pop_scope()
 }
 
 fn check_constant_init(self: &Checker, cd: &ConstDecl) {

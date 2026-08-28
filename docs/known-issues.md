@@ -124,10 +124,12 @@ still prefer registry overloads. Regression test:
 **Status:** Open - reduced from 250 MB / 60 MB, residual unattributed
 **Affected:** `lib/flang_typer/src/checker.f` and the demand path generally
 
-Measured with the `FLANG_REDEMAND` probe (bootstrap/src/main.f):
-`FLANG_REDEMAND=<n>` re-demands the analyzed project n times;
-`FLANG_REDEMAND_EXIT` tears the unit down and reports `--mem` before
-exiting, so live-at-exit is memory nothing owns. On the compiler corpus a
+Measured with the `FLANG_REDEMAND` probe and `--mem`, both since removed
+from the CLI along with the RFC-022 gates (2026-08-28): `FLANG_REDEMAND=<n>`
+re-demanded the analyzed project n times and `FLANG_REDEMAND_EXIT` tore the
+unit down and reported before exiting, so live-at-exit was memory nothing
+owns. The numbers below are from that instrumentation; reproducing them
+means re-adding it. On the compiler corpus a
 cold check leaves 129 MB unreachable and each re-demand adds ~24 MB. The
 big one is fixed - the per-lookup visibility-set copies
 (`current_visibility` / `fn_visibility`) were ~120 MB cold - along with
@@ -177,7 +179,7 @@ well); the self-hosted checker resolves without a diagnostic. Observed
 when a `TypeCheckResult` method briefly had that shape: `flang-ref`
 refused the tree, `flang build` checked it. In the observed case the
 call's member accesses were left typed as open variables, and a
-`--gate-a` run over that (error-state) tree reported cold-vs-warm
+A re-analysis over that (error-state) tree reported cold-vs-warm
 differences in those variables' levels - so checker parity here also
 guards the incremental oracle's precondition that a comparable project
 type-checks. Reproduce by adding such an overload pair and calling at
@@ -374,7 +376,7 @@ is still alive; the older result would read freed memory. `reanalyze` therefore
 moves replaced sources and ASTs to `retired_sources` / `retired_modules`, freed
 only when the whole unit is dropped.
 
-Correct, and invisible for a one-shot `flang --gate-a build`. Over an editor
+Correct, and invisible for a one-shot build. Over an editor
 session it is a leak proportional to the number of edits: every keystroke-driven
 re-parse retires one more copy of the file.
 
@@ -1337,7 +1339,7 @@ The failure mode is asymmetric and bites on a clean tree: the reference compiler
 
 **Fix directions:** either drop `*.generated.f` from `.gitignore` for `stdlib/` and commit them (makes the bootstrap's input reproducible, at the cost of generated files in review), or make sidecar generation an explicit build step that walks the whole stdlib rather than a side effect of whatever happened to be imported. The durable answer is teaching the bootstrap to expand templates itself, which removes the dependency entirely.
 
-**Update 2026-08-23 (RFC-021 phase 1):** the reference compiler no longer writes sidecars as a side effect — expansion is in memory and `.generated.f` appears only with `--emit-generated`. All sidecars were deleted from the tree the same day. **Closed later the same day by phase 4:** the self-host expands templates natively (`flang -g build` emits the files for debugging); a clean clone self-builds and the stage-2 = stage-3 fixpoint holds.
+**Update 2026-08-23 (RFC-021 phase 1):** the reference compiler no longer writes sidecars as a side effect — expansion is in memory and `.generated.f` appears only with `--emit-generated`. All sidecars were deleted from the tree the same day. **Closed later the same day by phase 4:** the self-host expands templates natively (`flang build -g` emits the files for debugging); a clean clone self-builds and the stage-2 = stage-3 fixpoint holds.
 
 **Resolved in this pass — non-generic type aliases.** `type VarId = u32`, `NodeId`, `NominalId`, `Level` and friends were registered as neither struct nor enum, so `resolve_named` could not find them (~130 `unknown type`). A new alias registry (since folded into the generic `lib/flang_typer/src/fqn_map.f`) is populated during the name-registration pass (`collect_one_name`) and expanded lazily in `resolve_named` — after the primitive and nominal lookups, reusing nominal-lookup visibility — so alias chains and cross-module targets resolve regardless of declaration order. Self-host `unknown type` dropped 156 -> 24 and the total error count 1205 -> 1073 (the residual 24 are all the `Writer`/`Reader` `*.generated.f` issue above). Covered by a cross-module `test {}` in `checker.f` plus the existing `flang_typer` / `flang_driver` suites. Generic aliases (`type Result(T, E) = ...`) and alias-cycle detection remain follow-ups.
 
@@ -2050,7 +2052,7 @@ for-over-iterator lowering.
 **Status:** Resolved (2026-08-20)
 **Affected:** `flang_driver` project loading (`analyze_project` + project glob), any `kind = "lib"` project containing a template-expansion sidecar (e.g. `lib/flang_parser` with `token.generated.f`)
 
-In lib-mode (`flang -c build` on a project whose sources are globbed as
+In lib-mode (`flang build -c` on a project whose sources are globbed as
 entries), a `x.generated.f` sidecar was loaded **twice**: merged into
 `x.f`'s module by `combine_with_sidecar`, and *also* as its own entry
 from the source glob. Both parses map to the same module FQN
@@ -2060,7 +2062,7 @@ two entries under one key and the sidecar's import-less set won —
 prelude, and every `std.*` call in token.f reported E2004
 ("unresolved function `or_global`/`free`"). Build-mode (BFS from an
 entry point) never loads the sidecar as its own module, which is why
-`bootstrap` self-checked clean while `flang -c build` inside
+`bootstrap` self-checked clean while `flang build -c` inside
 `lib/flang_parser` failed — even a comment-only sidecar triggered it.
 
 **Fix:** `glob_sources` (project.f) now excludes `*.generated.f`
@@ -2068,7 +2070,7 @@ outright — sidecars are only ever folded into their origin module by
 `combine_with_sidecar`. The equivalent local skip in `seed_stdlib`
 (driver.f) became redundant and was removed; every source enumeration
 (project entries, stdlib seeding) routes through the one filter.
-Verified: `flang -c build` passes standalone in every lib project and
+Verified: `flang build -c` passes standalone in every lib project and
 the bootstrap self-check still reports 98 modules, 0 errors. No
 colocated unit test: `glob_sources` needs fixture files and the fs API
 had no mkdir/remove at the time; the standalone lib-project checks are
@@ -2657,8 +2659,8 @@ stdlib module set, unit deinited between runs - slows down sharply per round: in
 runner process the fourth such analysis took minutes where a fresh process takes ~1-2 s. The known
 per-cold-check leak (~129 MB, see the retirement/leak entry above) explains the retention but not a
 >100x slowdown; candidate mechanisms are allocator behavior over a very large live heap and paging.
-`FLANG_REDEMAND` is a different path (it reuses one `AnalyzedProject`) and does not degrade this
-way. Matters for RFC-023: an LSP process runs many analyses over its lifetime. Observed 2026-08-27
+The `FLANG_REDEMAND` probe (since removed) was a different path - it reused one `AnalyzedProject` -
+and did not degrade this way. Matters for RFC-023: an LSP process runs many analyses over its lifetime. Observed 2026-08-27
 while writing the W1004 tests in `lib/flang_analysis/src/unused.f`; those tests now analyse a
 two-file fixture (`fixtures/leaf.f`) instead of the stdlib, which sidesteps it in the suite.
 
@@ -2667,7 +2669,7 @@ through the test allocator, whose `dealloc` (`stdlib/std/allocator.f::test_deall
 intrusive linked list of ALL live allocations to find the entry to unlink - O(live) per free,
 O(n^2) per teardown. With ~129 MB retained per prior round, by round four every free scans millions
 of entries, which is exactly a >100x in-process slowdown that a fresh process does not show.
-Unverified by measurement; `flang -p build` (the RFC-025 profiler) on a loop of
+Unverified by measurement; `flang build -p` (the RFC-025 profiler) on a loop of
 analyze+deinit rounds would confirm it in one run. Fix candidates: key live entries by pointer in a
 `Dict`, or drop per-allocation tracking for size classes that dominate.
 
@@ -2752,3 +2754,135 @@ divergence: a shift whose left operand is itself an unsuffixed literal (or an
 unpinned generic) that later resolves to a too-narrow type errors under
 `flang-ref` and passes under `flang build`. Shifts on typed operands - the
 class that produced the `decode_char` truncation - are caught by both.
+
+---
+
+### A Return-Type-Less Declaration Swallows a Following `fn`
+
+**Status:** Open - workaround is to spell the `void` return
+**Affected:** `flang_parser/src/parser.f` and `FLang.Frontend/Parser.cs` (both compilers)
+
+A function declaration may omit its return type to mean `void`, and `fn(...)
+T` is also the syntax for a function *type*. Where a return-type-less
+declaration is followed immediately by another `fn` declaration, the parser
+takes that `fn` as the first declaration's return type and then demands the
+`(` of a parameter list:
+
+```
+#foreign fn track(ptr: &u8)
+fn caller() { }              // E1002: expected `OpenParenthesis`, found 'caller'
+```
+
+Only the adjacency matters, not `#foreign`: any declaration with no return
+type followed by a `fn` declaration hits it. A blank line does not help, and
+neither does a comment. Every existing occurrence in the tree is followed by
+another `#foreign` or by a non-`fn` declaration, which is why it went
+unnoticed.
+
+**Workaround:** write the return type. `#foreign fn track(ptr: &u8) void`
+parses unambiguously, and `stdlib/std/test.f` does exactly that.
+
+**Fix:** the return-type position should not accept a bare `fn` when the
+token after the declaration's `)` begins a new declaration. Cleanest is to
+require a function-type return to be parenthesised, or to look ahead past the
+`fn`'s parameter list for the `{` that a declaration would have.
+
+---
+
+### Self-Host: A Trailing `if` Was Not the Block's Value - RESOLVED
+
+**Status:** Resolved - `project_block_node` promotes a trailing `if`/`else`
+**Affected:** `flang_parser/src/projector.f`
+
+`if` is an expression, but in statement position the parser returns it from
+`parse_if_expr()` directly rather than wrapping it in an `ExpressionStmt`
+(the same is true of `loop`, `while`, `for` and a bare block).
+`project_block_node` promoted a block's last child to `BlockExpr.trailing`
+only when that child *was* an `ExpressionStmt`, so a trailing `if` never
+became the block's value: it landed in `stmts`, and `check_stmt` typed it
+`void`. Postfix `match` was unaffected - it parses through
+`parse_expression`, so it arrives wrapped and was promoted normally.
+
+Most callers never noticed. A function declaration's body only unifies when
+`body_ty != void`, and `block_returns` plus lowering's implicit-return path
+carry the value separately, so
+`fn pick(a: i32, b: i32) Ord3 { if a < b { Ord3.Lo } else { Ord3.Hi } }`
+compiled and ran correctly all along. `check_lambda` is the one caller that
+reads `body_ty` as authoritative: an unannotated lambda return is a fresh
+variable, and a `void` body bound it.
+
+```
+fn uses(cmp: $F) bool {
+    return cmp(1i32, 2i32) == Ord3.Lo    // E2002: expected `void`, got `Ord3`
+}
+const r = uses(fn(a, b) { if a < b { Ord3.Lo } else { Ord3.Hi } })
+```
+
+**Fix:** `project_block_node` now promotes a trailing `IfExpr` that carries an
+`else`. An `if` with no `else` is not an expression (docs/syntax.md), so it is
+left a statement and its branches stay unconstrained.
+
+**Semantics this tightens.** A trailing `if`/`else` is now an expression
+wherever it appears, so its branches must join (E2074) even where the value is
+discarded. Previously `check_stmt` routed it to `check_if_stmt`, which probes
+with `try_unify` and tolerates a mismatch. Exactly two sites in the tree relied
+on that, both the same shape - an `if`/`else` used as a statement where one
+branch's last call returns a value nobody reads:
+
+- `flang_typer/src/union_find.f::rollback` - `nodes.remove` yields `Option(V)`,
+  the `else` branch is an assignment
+- `std/encoding/json.f::consume_separator` - `expect_char` yields `bool`, the
+  `else` branch is an assignment
+
+Both were fixed by binding the discarded result (`let _removed = ...`), which
+is what the rest of the tree already does everywhere else. The reference
+compiler still accepts the looser form, so this is one more place the
+self-hosted compiler is the stricter of the two.
+
+**Where it bit:** `std.list.sort_by` built its comparator as an unannotated
+lambda ending in an `if`. Nothing instantiated it until `flang test` began
+checking `test {}` bodies, at which point five `_insertion_sort_range` /
+`_next_run` / `_merge_runs` sites reported `expected void, got Ord` - all of
+them in the template body, none at the cause. The annotation that worked
+around it is gone.
+
+---
+
+### Self-Host: `std.encoding.json` Fails and Crashes Under the Self-Hosted Compiler
+
+**Status:** Open
+**Affected:** `stdlib/std/encoding/json.f` built by `bootstrap/` (the reference compiler passes)
+
+`flang test` in `stdlib/std` reaches test 68 and reports four failures before
+segfaulting:
+
+```
+test 65/300: parse empty array ... FAILED
+test 66/300: parse empty object ... should be empty
+test 67/300: parse nested object ... should have 2 entries
+test 68/300: stringify compact ... <segfault>
+```
+
+Every one of these passes under the reference compiler, so the defect is in
+the self-hosted pipeline, not in json.f. It had no way to surface before:
+the self-hosted compiler could not run colocated `test {}` blocks until
+`flang test` landed.
+
+Not yet diagnosed. The crash names its own test because the runner flushes
+the header line before invoking the block.
+
+---
+
+### Self-Host: `flang_lsp` "initialize negotiates utf-8 when offered" Segfaults
+
+**Status:** Open
+**Affected:** `lib/flang_lsp/src/server.f` built by `bootstrap/` (the reference compiler passes)
+
+`flang test` in `lib/flang_lsp` segfaults on test 24. The same test passes
+under the reference compiler, and passes in isolation there too.
+
+Ruled out: the tracking allocator (the crash reproduces with
+`install_test_allocator` disabled) and cross-test interference (it reproduces
+with `--name "initialize negotiates"` alone).
+
+Not yet diagnosed.

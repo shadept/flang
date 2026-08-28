@@ -1,8 +1,74 @@
-// Testing utilities for FLang
-// Part of Milestone 16: Test Framework
+// Testing utilities for FLang: the assertions a `test {}` block calls, and the tracking allocator
+// the generated test runner installs for the duration of a run.
 
+import std.allocator
 import std.list
+import std.mem
 import std.string_builder
+
+// =============================================================================
+// TestAllocator - tracking allocator for leak detection in tests
+// =============================================================================
+//
+// Forwards to malloc/realloc/free and reports every block to the ledger in the companion `test.c`,
+// which is what knows how to report a leak and how to reset between tests. The split is where
+// layout knowledge is: returning a `u8[]?` needs the FLang side, walking a list of live blocks does
+// not.
+//
+// The runner installs this as the global allocator once, before the first test, so every
+// `or_global()` in the code under test resolves to it without the test having to pass anything.
+
+// The `void` returns are spelled out: a declaration with no return type followed by a `fn`
+// declaration parses that `fn` as a function-type return (docs/known-issues.md).
+#foreign fn __flang_test_track_alloc(ptr: &u8, size: usize) void
+#foreign fn __flang_test_track_realloc(old_ptr: &u8, new_ptr: &u8, new_size: usize) void
+#foreign fn __flang_test_track_free(ptr: &u8) void
+
+fn test_alloc(impl: &u8, size: usize, alignment: usize) u8[]? {
+    const ptr = malloc(size)?
+    __flang_test_track_alloc(ptr, size)
+    // Wrapped explicitly - see the note in core/range.f::next.
+    return Some(slice_from_raw_parts(ptr, size))
+}
+
+fn test_realloc(impl: &u8, memory: u8[], new_size: usize) u8[]? {
+    const old_ptr = memory.ptr
+    const ptr = realloc(Some(old_ptr), new_size)?
+    __flang_test_track_realloc(old_ptr, ptr, new_size)
+    return Some(slice_from_raw_parts(ptr, new_size))
+}
+
+fn test_dealloc(impl: &u8, memory: u8[]) {
+    __flang_test_track_free(memory.ptr)
+    free(Some(memory.ptr))
+}
+
+// The ledger is in C and needs no per-instance state; the impl pointer addresses this and is never
+// read.
+type TestAllocatorState = struct {
+    _unused: u8
+}
+
+const test_allocator_state = TestAllocatorState { _unused = 0 }
+
+const test_allocator_vtable = AllocatorVTable {
+    alloc = test_alloc,
+    realloc = test_realloc,
+    dealloc = test_dealloc,
+}
+
+const test_allocator = Allocator {
+    impl = &test_allocator_state as &u8,
+    vtable = &test_allocator_vtable,
+}
+
+// Called once by the generated test runner, after the constant initializers and before the first
+// test. Not `pub`: lowering resolves it by name for the runner it emits, and there is no reason to
+// call it by hand - a program that installs the tracking allocator outside a test run has no runner
+// to report what it finds.
+fn install_test_allocator() {
+    const _prev = set_global_allocator(&test_allocator)
+}
 
 // Assert that a condition is true, panic with message if false
 pub fn assert_true(condition: bool, msg: String) {

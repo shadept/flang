@@ -223,8 +223,11 @@ fn load_project(self: &Workspace, dir: String, docs: &DocumentStore,
     defer proj.deinit()
 
     let ctx = resolve_ctx_at(&proj, dir, self.stdlib_path.as_view(), allocator)
-    // The LSP checks every body (no lazy demand) and reports unused functions.
+    // The LSP checks every body (no lazy demand) and reports unused functions. Test bodies are in
+    // that set: an editor has to diagnose a `test {}` block like any other code, and their calls
+    // are what lets W1003 see a function that exists only for its tests.
     ctx.set_warn_unused(true)
+    ctx.set_check_tests(true)
 
     const pattern = $"{dir}/{proj.source.as_view()}"
     let raw = glob_sources(pattern.as_view(), allocator)

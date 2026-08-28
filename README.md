@@ -54,7 +54,7 @@ C99 — a bootstrap seed that needs no .NET and no prior FLang binary:
 ```sh
 cd boot/linux-x64 && make        # build.bat on Windows (VS dev prompt)
 cd ../../bootstrap
-../boot/linux-x64/flang-seed -r -s ../stdlib build
+../boot/linux-x64/flang-seed build -r -s ../stdlib
 ```
 
 That is the whole chain: the seed builds the current compiler from source.

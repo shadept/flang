@@ -1,4 +1,4 @@
-// Ground-truth workload for validating the RFC-025 profiler (`flang -p build`). Every function here
+// Ground-truth workload for validating the RFC-025 profiler (`flang build -p`). Every function here
 // has a call count and a self-time budget the caller can predict, so `check.ps1` can compare the
 // profiler's flat table and folded output against known values:
 //

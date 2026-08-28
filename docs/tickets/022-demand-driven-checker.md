@@ -329,7 +329,7 @@ stale entry surviving an invalidation.
 Written **before** the conversion starts, so each phase is verified as it moves.
 
 **Landed 2026-08-25.** `lib/flang_typer/src/result_diff.f` holds the comparison
-(`diff_results` -> `ResultDiff`); `flang --gate-a build` runs it. Types compare
+(`diff_results` -> `ResultDiff`); `flang build --gate-a` runs it. Types compare
 by their canonical `format` rendering - the identity `key_for` already hashes on
 - and ids compare by value, so a renumbered nominal is a difference even when
 both ids name the same declaration. Dict tables need only equal sizes plus
@@ -365,7 +365,7 @@ every module of `bootstrap/` (106), `lib/flang_typer` (92) and
 **5a landed 2026-08-26 (`module_ast` half).** `analyze_project` builds an
 `AnalyzedProject` that can be re-checked in place: `reanalyze(unit, ctx, dirty)`
 re-reads and re-parses only the modules named in `dirty`, reusing every other
-module's AST, then re-runs the checker. `flang --gate-a build` now dirties
+module's AST, then re-runs the checker. `flang build --gate-a` now dirties
 modules and re-demands instead of analysing twice, which is what makes the gate
 test invalidation at all.
 
@@ -908,7 +908,7 @@ Lowering skips undemanded modules - except their `#foreign` declarations,
 which name globally-linkable symbols any body may call without an import - and
 skips specializations whose template lives in an undemanded module (they exist
 only on behalf of undemanded preamble work; emitting one would reference
-unlowered functions). `--eager` restores total demand; `flang --gate-b build`
+unlowered functions). `--eager` restores total demand; `flang build --gate-b`
 analyses both ways and requires the published diagnostic lists identical.
 
 Measured: `examples/snake` check drops 935 -> ~105 ms total (bodies 425 -> 20

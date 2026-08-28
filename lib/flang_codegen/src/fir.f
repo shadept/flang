@@ -3,6 +3,7 @@
 import std.allocator
 import std.dict
 import std.list
+import std.set
 import std.string
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -404,6 +405,18 @@ pub type ForeignDecl = struct {
     cc: CallConv
 }
 
+// The nullary function holding the constant-initializer calls in a test binary. Fixed rather than
+// carried on the module: lowering always emits it in test mode and the generated runner always
+// calls it, so there is nothing to communicate.
+pub const CONST_INIT_SYM: String = "__flang_const_init"
+
+// One `test {}` block that lowered, in the order the runner should run them. `label` is the block's
+// name as written; `symbol` is the nullary void function it lowered to.
+pub type TestCase = struct {
+    label: OwnedString
+    symbol: OwnedString
+}
+
 // Unit of compilation.
 pub type IrModule = struct {
     globals: List(Global)
@@ -430,6 +443,17 @@ pub type IrModule = struct {
     // Keys are views into storage that outlives the module; values are owned here. Symbols without
     // an entry (`main`, foreigns, generated helpers) display as themselves.
     displays: Dict(String, OwnedString)
+    // Test mode: the backend emits the test runner as the C entry point instead of wrapping a FIR
+    // `main`. Tracked apart from `tests` because a run whose filters matched nothing still needs a
+    // binary that starts, reports that it found no tests, and exits successfully.
+    testing: bool
+    // The `test {}` blocks this module lowered, in run order. Empty for an ordinary build, and also
+    // for a test build whose filters selected nothing.
+    tests: List(TestCase)
+    // Symbol of `std.test.install_test_allocator`, when the module set had it and it lowered. The
+    // runner calls it once, after the constant initializers and before the first test. Null when
+    // std.test is not in the module set, in which case the run has no leak tracking.
+    install_tests: OwnedString?
 }
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -444,6 +468,7 @@ pub fn module(allocator: &Allocator? = null) IrModule {
     let skip_notes: List(OwnedString) = list(0, allocator)
     let aggs: List(AggDef) = list(0, allocator)
     let displays: Dict(String, OwnedString) = dict(allocator)
+    let tests: List(TestCase) = list(0, allocator)
     return IrModule {
         globals = globals,
         foreigns = foreigns,
@@ -452,10 +477,22 @@ pub fn module(allocator: &Allocator? = null) IrModule {
         skip_notes = skip_notes,
         aggs = aggs,
         displays = displays,
+        testing = false,
+        tests = tests,
+        install_tests = null,
     }
 }
 
 pub fn deinit(self: &IrModule) {
+    for &t in self.tests {
+        t.label.deinit()
+        t.symbol.deinit()
+    }
+    self.tests.deinit()
+    self.install_tests match {
+        Some(s) => s.deinit()
+        None => {}
+    }
     self.aggs.deinit()
     self.functions.deinit()
     self.foreigns.deinit()
@@ -471,6 +508,37 @@ pub fn set_displays(self: &IrModule, displays: Dict(String, OwnedString)) Dict(S
     let old = self.displays
     self.displays = displays
     return old
+}
+
+// Scoped mutability: lowering declares the module a test binary before recording any block.
+pub fn set_testing(self: &IrModule, on: bool) {
+    self.testing = on
+}
+
+// Record a lowered `test {}` block. Order is run order.
+pub fn add_test(self: &IrModule, label: OwnedString, symbol: OwnedString) {
+    self.tests.push(TestCase { label = label, symbol = symbol })
+}
+
+// Keep only the tests whose symbol is still defined. Lowering calls this once, after the refusal
+// fixpoint: a block whose function was dropped must leave the runner's table with it.
+pub fn retain_defined_tests(self: &IrModule, dropped: &Set(String)) {
+    let kept: List(TestCase) = list(self.tests.len, self.tests.allocator)
+    for &t in self.tests {
+        if dropped.contains(t.symbol.as_view()) {
+            t.label.deinit()
+            t.symbol.deinit()
+            continue
+        }
+        kept.push(t.*)
+    }
+    self.tests.deinit()
+    self.tests = kept
+}
+
+// Scoped mutability: named once by lowering, when the symbol is known to have been emitted.
+pub fn set_install_tests(self: &IrModule, symbol: OwnedString) {
+    self.install_tests = Some(symbol)
 }
 
 pub fn deinit(self: &Function) {

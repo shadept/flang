@@ -1,0 +1,8 @@
+# Fixture for the `flang test` runner itself, driven by test-all.cs. It is EXPECTED TO FAIL: one of
+# its blocks asserts something untrue on purpose, and what is under test is that the runner says so
+# and keeps going.
+[project]
+name = "runner_fixture"
+version = "0.1.0"
+kind = "exe"
+source = "src/**/*.f"

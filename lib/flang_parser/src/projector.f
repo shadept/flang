@@ -637,7 +637,7 @@ fn project_test_decl(self: &Projector, cst: CstNode) TestDecl {
         cst.children[i] match {
             TokenChild(tok) => {
                 if tok.kind == TokenKind.StringLiteral and label.len == 0 {
-                    label = tok.text
+                    label = strip_quotes(tok.text)
                 }
             }
             NodeChild(child) => {
@@ -1114,6 +1114,21 @@ fn collect_block_stmts(self: &Projector, block: CstNode, out: &List(Stmt)) {
 // ─────────────────────────────────────────────────────────────────────────
 // Expressions
 // ─────────────────────────────────────────────────────────────────────────
+
+// Whether an `if` CST node carries an `else`. Only the node's own children are scanned, so an
+// `else` belonging to a nested `if` inside a branch block cannot be mistaken for this one's.
+fn has_else_token(cst: CstNode) bool {
+    for i in 0..cst.children.len {
+        const hit = cst.children[i] match {
+            TokenChild(tok) => tok.kind == TokenKind.Else
+            NodeChild(_) => false
+        }
+        if hit {
+            return true
+        }
+    }
+    return false
+}
 
 fn is_expr_kind(kind: NodeKind) bool {
     return kind == NodeKind.ParenExpr or kind == NodeKind.BinaryExpr or kind == NodeKind.UnaryExpr
@@ -2128,6 +2143,15 @@ fn project_block_node(self: &Projector, cst: CstNode) BlockExpr? {
                             continue
                         }
                     }
+                }
+                // A statement-position `if` is returned by its own parser, never wrapped in an
+                // `ExpressionStmt`, so the promotion above cannot see it. An `if`/`else` in
+                // trailing position is still the block's value; an `if` with no `else` is not an
+                // expression.
+                if have_last and i == last_child_idx and child.kind == NodeKind.IfExpr
+                    and has_else_token(child) {
+                    trailing = Some(self.project_expr(child))
+                    continue
                 }
                 const projected = self.project_stmt(child)
                 projected match {

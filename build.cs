@@ -266,7 +266,7 @@ return 0;
 //   Flags precede the subcommand -- the CLI stops parsing options at it.
 string? RunStage(string compiler, string name)
 {
-    if (Run(compiler, $"-k -r -s \"{stdlibSrc}\" build", bootstrapDir) != 0)
+    if (Run(compiler, $"build -k -r -s \"{stdlibSrc}\"", bootstrapDir) != 0)
     {
         Console.Error.WriteLine($"Error: {name} build failed.");
         return null;

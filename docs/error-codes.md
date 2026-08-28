@@ -1954,6 +1954,8 @@ fn bad(c: bool) i32 {
 
 A branch that diverges (`return`, `break`, `continue`) has type `never` and stays out of the join entirely.
 
+An `if` with no `else` is not an expression and yields no value, so it is never subject to this rule. An `if`/`else` is, wherever it appears — including as a block's trailing form in a `void` function, where the value is discarded. Bind a branch's unused result (`let _r = f()`) when the two branches would otherwise disagree.
+
 ### E2075: Match Arms Disagree
 
 Every arm of a `match` used as an expression must join to one type, under the same both-directions rule as E2074.

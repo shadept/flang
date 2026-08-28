@@ -149,6 +149,11 @@ type LowerCtx = struct {
     // Per-run layout memo (layout.f `LayoutCache`): valid for the life of `it`, which this ctx
     // never outlives.
     lay_cache: LayoutCache
+    // Test mode: `test {}` blocks lower to nullary functions the generated runner drives, and the
+    // project's `main` is left out - the runner is the entry point. Counts the blocks emitted so
+    // far, which is what names them.
+    testing: bool
+    next_test: usize
 }
 
 // One lowered module-level constant: its global's symbol, its init function's symbol, and its
@@ -379,6 +384,8 @@ pub fn lower_module(ast_module: &Module, result: &TypeCheckResult,
         const_inits = list(0, allocator),
         owned_syms = list(0, allocator),
         lay_cache = layout_cache(allocator),
+        testing = false,
+        next_test = 0,
     }
     lower_consts(&m, &ctx, ast_module)
     lower_into(&m, &ctx, ast_module, "")
@@ -396,9 +403,16 @@ pub fn lower_module(ast_module: &Module, result: &TypeCheckResult,
 // `TypeCheckResult`. Cross-module references resolve through that result; every function lands in
 // one program so the backend links it in a single pass. `fqns` is parallel to `modules`; each
 // function's symbol is namespaced by its module so merged same-named functions cannot collide.
+//
+// `tests` selects test mode and, within it, which modules contribute blocks: null builds an
+// ordinary program, and a list parallel to `modules` lowers the `test {}` blocks of every module it
+// marks. Test mode leaves the project's `main` out, because the backend's generated runner is the
+// entry point instead, and it emits the constant initializers as their own function for that runner
+// to call. Both filters (`--name`, the path argument) are already applied in `tests` and
+// `test_labels` by the caller, so what lowers is exactly what will run.
 pub fn lower_program(modules: &List(Module), fqns: &List(OwnedString), result: &TypeCheckResult,
-    comptime_ctx: ComptimeCtx, demanded: &List(bool)? = null,
-    allocator: &Allocator? = null) IrModule {
+    comptime_ctx: ComptimeCtx, demanded: &List(bool)? = null, tests: &List(bool)? = null,
+    name_filter: String? = null, allocator: &Allocator? = null) IrModule {
     let m = module(allocator)
     let sb = symbol_builder(result, allocator)
     for i in 0..modules.len {
@@ -419,7 +433,7 @@ pub fn lower_program(modules: &List(Module), fqns: &List(OwnedString), result: &
         flushing = false, blocked = false, blocked_note = null, blocked_subject = null,
         pending_lambdas = list(0, allocator), comptime = comptime_ctx, consts = dict(allocator),
         const_inits = list(0, allocator), owned_syms = list(0, allocator),
-        lay_cache = layout_cache(allocator) }
+        lay_cache = layout_cache(allocator), testing = tests.is_some(), next_test = 0 }
     // A module outside the demand set (RFC-022 §6) was never body-checked: it has no node types to
     // lower, and nothing demanded can reach its functions or constants - identifier, operator and
     // constant resolution are import-scoped. Its foreign declarations still lower: a `#foreign`
@@ -435,6 +449,17 @@ pub fn lower_program(modules: &List(Module), fqns: &List(OwnedString), result: &
             lower_into(&m, &ctx, &modules[i], fqns[i].as_view())
         } else {
             lower_foreign_decls(&m, &ctx, &modules[i], fqns[i].as_view())
+        }
+    }
+    // Test blocks after every ordinary declaration, so a block's calls resolve against symbols that
+    // are already registered, and in module order so a run's numbering is stable.
+    if tests.is_some() {
+        m.set_testing(true)
+        const want = tests.unwrap()
+        for i in 0..modules.len {
+            if i < want.len and want[i] {
+                lower_tests(&m, &ctx, &modules[i], fqns[i].as_view(), name_filter)
+            }
         }
     }
     // A specialization of an undemanded module's template exists only on behalf of undemanded code
@@ -460,7 +485,16 @@ pub fn lower_program(modules: &List(Module), fqns: &List(OwnedString), result: &
     // `reads_dead_global`) - so `main` only ever calls inits that exist, instead of dying because
     // some unrelated module's const could not initialize.
     drop_callers_of_refused(&m, &ctx, allocator)
+    if m.tests.len > 0 {
+        let dropped: Set(String) = set(allocator)
+        for n in m.skipped { dropped.add(n) }
+        m.retain_defined_tests(&dropped)
+        dropped.deinit()
+    }
     wire_const_inits(&m, &ctx)
+    if ctx.testing {
+        name_install_tests(&m, &ctx)
+    }
     let no_displays = m.set_displays(syms.take_displays())
     no_displays.deinit()
     return m
@@ -674,10 +708,119 @@ fn first_undefined_callee(f: &Function, defined: &Dict(String, bool)) String? {
 fn lower_into(m: &IrModule, ctx: &LowerCtx, ast_module: &Module, fqn: String) {
     for &d in ast_module.decls {
         d.* match {
-            Function(fd) => lower_decl(m, ctx, &fd, fqn)
+            Function(fd) => {
+                // The runner is the entry point of a test binary, so the project's own `main` has
+                // no place in one. Leaving it out is what keeps the two from colliding on the C
+                // symbol; nothing in a test run can reach it.
+                if !(ctx.testing and fd.name == "main") {
+                    lower_decl(m, ctx, &fd, fqn)
+                }
+            }
             _ => {}
         }
     }
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// Test blocks
+//
+// A `test {}` block is a nullary void function with no parameters and nothing to return. It lowers
+// through the ordinary block path, so a block gets defers, loops and early returns for free; what
+// is special is only that the runner - not any FLang code - is what calls it.
+// ─────────────────────────────────────────────────────────────────────────
+
+fn lower_tests(m: &IrModule, ctx: &LowerCtx, ast_module: &Module, fqn: String,
+    name_filter: String?) {
+    for &d in ast_module.decls {
+        d.* match {
+            Test(td) => {
+                // `--name` is a case-sensitive substring match on the label; no filter takes all.
+                const wanted = name_filter match {
+                    Some(f) => contains(td.label, f)
+                    None => true
+                }
+                if wanted {
+                    lower_test_block(m, ctx, &td, fqn)
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+fn lower_test_block(m: &IrModule, ctx: &LowerCtx, td: &TestDecl, fqn: String) {
+    const index = ctx.next_test
+    ctx.next_test = index + 1
+    let sym = park_sym(ctx, $"__ftest_{index}__")
+
+    let fb = function(sym, null, ctx.allocator)
+    let env = new_env(ctx.allocator)
+    let cur = fb.entry()
+    ctx.blocked = false
+    ctx.blocked_note = null
+    ctx.blocked_subject = null
+    ctx.sret = null
+    ctx.ret_size = 0u64
+
+    const r = lower_block(ctx, &cur, &env, &td.body, null)
+    if !r.terminated {
+        cur.ret_void()
+    }
+    env.deinit()
+
+    if ctx.blocked {
+        // A refused block is reported like any other refused body. It is NOT recorded as a test:
+        // the runner would name a function the binary does not have.
+        m.skipped.push(sym)
+        const why = ctx.blocked_note match {
+            Some(w) => w
+            None => "unsupported construct"
+        }
+        ctx.blocked_subject match {
+            Some(subj) => m.skip_notes.push($"{fqn} test `{td.label}`: body refused ({why} `{subj}`)")
+            None => m.skip_notes.push($"{fqn} test `{td.label}`: body refused ({why})")
+        }
+        fb.deinit()
+        return
+    }
+    m.add_function(fb.finish())
+    m.add_test(from_view(td.label, ctx.allocator), from_view(sym, ctx.allocator))
+}
+
+// Find `std.test.install_test_allocator` among the functions that actually lowered and record its
+// symbol for the runner. Absent when std.test is not in the module set (a project with test blocks
+// but no assertions), which costs the run its leak tracking and nothing else.
+fn name_install_tests(m: &IrModule, ctx: &LowerCtx) {
+    const overloads = ctx.result.functions.by_name.get("install_test_allocator")
+    if overloads.is_none() {
+        return
+    }
+    for &f in overloads.unwrap() {
+        if f.retired or f.module.is_none() {
+            continue
+        }
+        if f.module.unwrap() != "std.test" {
+            continue
+        }
+        const sym = ctx.syms.lookup_symbol(f.id)
+        if sym.is_none() {
+            continue
+        }
+        if !defines_function(m, sym.unwrap()) {
+            continue
+        }
+        m.set_install_tests(from_view(sym.unwrap(), ctx.allocator))
+        return
+    }
+}
+
+fn defines_function(m: &IrModule, sym: String) bool {
+    for i in 0..m.functions.len {
+        if m.functions[i].name == sym {
+            return true
+        }
+    }
+    return false
 }
 
 // Whether module `i` is in the demand set. No list means a total demand - every module lowers.
@@ -835,43 +978,71 @@ fn park_sym(ctx: &LowerCtx, s: OwnedString) String {
     return v
 }
 
-// Call every SURVIVING const init at the top of `main`, in registration order, before any user
-// instruction. Runs after the drop pass: an init that died there already took every reader of its
-// const with it, so skipping its call cannot leave a live read of zeroed memory.
+// Call every SURVIVING const init before any user instruction, in registration order. Runs after
+// the drop pass: an init that died there already took every reader of its const with it, so
+// skipping its call cannot leave a live read of zeroed memory.
+//
+// An ordinary build splices the calls into `main`'s entry block. A test build has no FIR `main` to
+// splice into - the runner the backend generates is the entry point - so the same calls become a
+// nullary function of their own, and the runner calls it first.
 fn wire_const_inits(m: &IrModule, ctx: &LowerCtx) {
-    if ctx.const_inits.len == 0 {
-        return
-    }
     let live: Set(String) = set(ctx.allocator)
     for i in 0..m.functions.len { live.add(m.functions[i].name) }
+    // Test mode gets the function whether or not there is anything to put in it: the runner calls
+    // `__flang_const_init` unconditionally, and a definition that is only sometimes there would
+    // fail that link for no reason visible in the source.
+    if ctx.testing {
+        let fb = function(CONST_INIT_SYM, null, ctx.allocator)
+        let cur = fb.entry()
+        for k in 0..ctx.const_inits.len {
+            if live.contains(ctx.const_inits[k]) {
+                cur.call_void(ctx.const_inits[k], list(0, ctx.allocator))
+            }
+        }
+        cur.ret_void()
+        m.add_function(fb.finish())
+        live.deinit()
+        return
+    }
+    if ctx.const_inits.len == 0 {
+        live.deinit()
+        return
+    }
+    let calls = const_init_calls(ctx, &live)
     for i in 0..m.functions.len {
         if !(m.functions[i].name == "main") {
             continue
         }
         let old = m.functions[i].blocks[0].instrs
-        let merged: List(Instr) = list(old.len + ctx.const_inits.len, ctx.allocator)
-        for k in 0..ctx.const_inits.len {
-            if !live.contains(ctx.const_inits[k]) {
-                continue
-            }
-            let args: List(Operand) = list(0, ctx.allocator)
-            let var_types: List(IrType) = list(0, ctx.allocator)
-            let no_result: u32? = null
-            let no_ty: IrType? = null
-            merged.push(Instr.Call(CallInstr {
-                result = no_result,
-                result_ty = no_ty,
-                callee = ctx.const_inits[k],
-                args = args,
-                variadic_arg_types = var_types,
-            }))
-        }
-        merged.push_all(old.as_slice())
-        set_instrs(&m.functions[i].blocks[0], merged)
+        calls.push_all(old.as_slice())
+        set_instrs(&m.functions[i].blocks[0], calls)
         live.deinit()
         return
     }
+    calls.deinit()
     live.deinit()
+}
+
+// One nullary call per surviving init, in registration order.
+fn const_init_calls(ctx: &LowerCtx, live: &Set(String)) List(Instr) {
+    let out: List(Instr) = list(ctx.const_inits.len, ctx.allocator)
+    for k in 0..ctx.const_inits.len {
+        if !live.contains(ctx.const_inits[k]) {
+            continue
+        }
+        let args: List(Operand) = list(0, ctx.allocator)
+        let var_types: List(IrType) = list(0, ctx.allocator)
+        let no_result: u32? = null
+        let no_ty: IrType? = null
+        out.push(Instr.Call(CallInstr {
+            result = no_result,
+            result_ty = no_ty,
+            callee = ctx.const_inits[k],
+            args = args,
+            variadic_arg_types = var_types,
+        }))
+    }
+    return out
 }
 
 // The lowered global for a const read, loaded per its declared type. An aggregate's value is the
@@ -6713,7 +6884,7 @@ test "binds an immutable let and reuses it" {
     assert_eq(m.functions.len, 1 as usize, "one function lowered")
     let f = &m.functions[0]
 
-    let adds = 0
+    let adds: usize = 0
     let instrs = &f.blocks[0].instrs
     for i in 0..instrs.len {
         instrs[i] match {
@@ -6721,7 +6892,7 @@ test "binds an immutable let and reuses it" {
             _ => {}
         }
     }
-    assert_eq(adds as usize, 2 as usize, "let init and the return each add")
+    assert_eq(adds, 2 as usize, "let init and the return each add")
 }
 
 test "skips a function with an unsupported signature type" {

@@ -136,7 +136,7 @@ pub fn rollback(self: &UnionFind($K)) {
         i = i - 1
         let entry = &frame[i]
         if entry.was_new {
-            self.nodes.remove(entry.key)
+            let _removed = self.nodes.remove(entry.key)
         } else {
             self.nodes.set(entry.key, .{
                 parent = entry.old_parent,

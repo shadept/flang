@@ -803,7 +803,7 @@ test "flat_map concatenates and frees the intermediates" {
 test "filter keeps matches, remove keeps the rest" {
     let xs: List(i32) = list(0)
     defer xs.deinit()
-    for i in 0..6 { xs.push(i as i32) }
+    for i in 0..6usize { xs.push(i as i32) }
 
     let evens = xs.filter(fn(v: i32) bool { v % 2 == 0 })
     defer evens.deinit()
@@ -838,7 +838,7 @@ test "fold and fold_right differ in association" {
 test "drop_first skips a prefix and clamps past the end" {
     let xs: List(i32) = list(0)
     defer xs.deinit()
-    for i in 0..4 { xs.push(i as i32) }
+    for i in 0..4usize { xs.push(i as i32) }
 
     let tail = xs.drop_first(2 as usize)
     defer tail.deinit()
@@ -1016,7 +1016,7 @@ test "reverse in place and reversed copy" {
 test "take_last clamps like drop_first" {
     let xs: List(i32) = list(4)
     defer xs.deinit()
-    for i in 0..4 { xs.push(i as i32) }
+    for i in 0..4usize { xs.push(i as i32) }
 
     let tail = xs.take_last(2 as usize)
     defer tail.deinit()
@@ -1049,7 +1049,7 @@ test "zip pairs positionally and stops at the shorter list" {
 test "partition splits by predicate preserving order" {
     let xs: List(i32) = list(4)
     defer xs.deinit()
-    for i in 0..4 { xs.push(i as i32) }
+    for i in 0..4usize { xs.push(i as i32) }
 
     let parts = xs.partition(test_is_even)
     let evens = parts.0

@@ -196,7 +196,7 @@ let bucket = n match {
 defer close(handle)
 ```
 
-`if` without `else` as expression yields `Option` of the body type. Parentheses around conditions optional: a header is keyword, expression, block. The expression is ordinary except that the body's `{` ends it rather than starting a struct literal or block - and only at the header's own nesting level, so `if take(P { x = 1 }) > 0 { ... }` and `if (a + b) * 4 > 6 { ... }` both parse.
+An `if` without an `else` is not an expression and yields no value; only `if`/`else` produces one. Parentheses around conditions optional: a header is keyword, expression, block. The expression is ordinary except that the body's `{` ends it rather than starting a struct literal or block - and only at the header's own nesting level, so `if take(P { x = 1 }) > 0 { ... }` and `if (a + b) * 4 > 6 { ... }` both parse.
 
 ### Iterator Protocol
 

@@ -25,21 +25,13 @@ compiler takes ~4.8x longer to compile anything (13.4s vs 2.8s for this
 project), and the whole chain plus both self-build stages runs in ~23s.
 Windows keeps debug info either way (`/Z7` is passed in both modes).
 
-`flang -t build` prints where the wall time went, one line per phase, with
-the typechecker broken down beneath it. Flags precede the subcommand.
-
-`flang --gate-a build` analyses the project twice and requires the two
-`TypeCheckResult`s to be identical - nominals, specializations, node types,
-resolved targets, resolved operators. It is RFC-022's gate A: the harness
-and the fixpoint both run cold and single-pass, so nothing else catches a
-stale entry surviving an invalidation once the checker goes incremental.
-Today the second pass is a full re-analysis, which makes it a determinism
-check.
+`flang build -t` prints where the wall time went, one line per phase, with
+the typechecker broken down beneath it. Options follow the command.
 
 Stage artifacts land in `dist/<rid>/stages/` as `stage{2,3}{.exe,.c}`. The
 fixpoint check byte-compares the two `.c` files — binaries carry timestamps
 and paths, the emitted C does not. Each stage runs
-`flang -k -s <repo>/stdlib build`: `-k` keeps the generated C, `-s` points a
+`flang build -k -s <repo>/stdlib`: `-k` keeps the generated C, `-s` points a
 compiler living outside `dist/<rid>/` at the stdlib.
 
 ## Structure

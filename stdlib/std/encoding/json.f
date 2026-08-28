@@ -903,7 +903,7 @@ fn consume_separator(self: &JsonDecoder) {
     if self.stack_len > 0 {
         if self.stack[self.stack_len - 1] == 1 {
             self.skip_whitespace()
-            self.expect_char(',')
+            let _sep = self.expect_char(',')
         } else {
             self.stack[self.stack_len - 1] = 1
         }

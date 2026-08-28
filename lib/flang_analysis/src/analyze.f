@@ -177,11 +177,9 @@ pub type AnalyzedProject = struct {
     retired_modules: List(Module)
     // Results a later demand replaced. A replayed body slot (RFC-022 5d) views an earlier result's
     // `synth_strings` buffers, so a retired result is slimmed (`slim_retire`) rather than freed:
-    // the tables go, the viewed buffers stay until unit teardown. `keep_retired` keeps the tables
-    // too, for a caller that copied `result` before re-demanding and reads the copy after (gate A).
-    // Each entry is pushed after its type table was adopted by the next demand.
+    // the tables go, the viewed buffers stay until unit teardown. Each entry is pushed after its
+    // type table was adopted by the next demand.
     retired_results: List(TypeCheckResult)
-    keep_retired: bool
     result: TypeCheckResult
     checked: bool
     // Everything the parse tier produced: a module's own parse errors, plus the load failures that
@@ -279,7 +277,6 @@ pub fn analyze_project(ctx: &ResolveCtx, entries: &List(OwnedString), overrides:
         retired_sources = list(0, allocator),
         retired_modules = list(0, allocator),
         retired_results = list(0, allocator),
-        keep_retired = false,
         result = empty_result(allocator),
         checked = false,
         parse_diags = parse_diags,
@@ -353,18 +350,18 @@ fn check_project(self: &AnalyzedProject, ctx: &ResolveCtx, edge_from: &List(usiz
     // every entry.
     chk.adopt_interner(take_interner(&self.result))
     // The specialization registry carries the same way (RFC-022 5e): entries the demand can
-    // validate are reused instead of re-checked, the rest re-instantiate at the ids they hold. A
-    // gate-A caller still reads the previous result's tables after the re-demand, so it gets a deep
-    // copy and the original stays.
-    chk.adopt_specs(take_specs(&self.result, self.keep_retired))
+    // validate are reused instead of re-checked, the rest re-instantiate at the ids they hold.
+    chk.adopt_specs(take_specs(&self.result))
     const sizes = table_caps(&self.result)
     chk.presize_results(&sizes)
-    if !self.keep_retired {
-        slim_retire(&self.result)
-    }
+    slim_retire(&self.result)
     self.retired_results.push(self.result)
     let gens = template_state(allocator)
     chk.set_comptime_ctx(ctx.comptime)
+    // Set once per context, not per demand: a carried body slot (RFC-022 5d) replays what the
+    // demand that captured it checked, so flipping this between demands on one unit would leave the
+    // reused slots disagreeing with the fresh ones.
+    chk.set_check_tests(ctx.check_tests)
     chk.set_project_globals(&ctx.global_imports, &self.project_origin)
     self.result = check_all(chk, &self.modules, &path_views, &self.sources, &self.file_paths, &gens,
         Some(&order), recollect, dm)
@@ -373,16 +370,17 @@ fn check_project(self: &AnalyzedProject, ctx: &ResolveCtx, edge_from: &List(usiz
     gens.deinit()
 
     // W1003 unused functions, over the resolution edges the check just recorded. Opt-in per
-    // context: a build's demand never checks `test {}` bodies, so `tests_checked` is false and
-    // test-bearing modules are rooted conservatively. Only on a clean check: with errors present
-    // the tables are partial and reachability would be noise on top of the real problem.
+    // context. `tests_checked` mirrors the demand: when test bodies were checked their calls are in
+    // the edges and need no allowance, and when they were not, every non-`pub` function of a
+    // test-bearing module is rooted conservatively. Only on a clean check: with errors present the
+    // tables are partial and reachability would be noise on top of the real problem.
     if ctx.warn_unused and self.project_origin.len > 0 and count_errors(&self.diagnostics) == 0 {
         let w = unused_functions(&self.result, &self.modules, &path_views, &self.project_origin,
-            ctx.lib_kind, false, allocator)
+            ctx.lib_kind, ctx.check_tests, allocator)
         drain_diagnostics(&self.diagnostics, &w)
         w.deinit()
         let wi = unused_imports(&self.result, &self.modules, &path_views, &self.project_origin,
-            false, allocator)
+            ctx.check_tests, allocator)
         drain_diagnostics(&self.diagnostics, &wi)
         wi.deinit()
     }
@@ -588,7 +586,6 @@ pub fn analyze_source_set(srcs: List(OwnedString), fqns: &List(String),
         retired_sources = list(0, allocator),
         retired_modules = list(0, allocator),
         retired_results = list(0, allocator),
-        keep_retired = false,
         result = result,
         checked = checked,
         parse_diags = parse_diags,
@@ -641,12 +638,6 @@ pub fn write_generated(self: &AnalyzedProject) usize {
 // Total error-severity diagnostics across every module.
 pub fn project_error_count(self: &AnalyzedProject) usize {
     return count_errors(&self.diagnostics)
-}
-
-// Keep retired results whole instead of slimming them - for a caller that copies `result` before a
-// re-demand and reads the copy's tables after (gate A).
-pub fn keep_retired_results(self: &AnalyzedProject) {
-    self.keep_retired = true
 }
 
 fn parse_to_module(src: String, file_id: i32, target: &ComptimeCtx, diags: &List(Diagnostic),
@@ -869,6 +860,57 @@ test "an override stands in for a file that is not on disk" {
     let text = got.unwrap()
     defer text.deinit()
     assert_true(text.as_view() == "fn main() i32 { return 0 }\n", "and it is the buffer verbatim")
+}
+
+// A one-module project built from `source`, with `test {}` body checking as `tests` asks. An empty
+// stdlib root leaves the prelude unresolved and `seed_stdlib` a no-op, so the module set is exactly
+// the override.
+fn tested_unit(source: String, tests: bool) AnalyzedProject {
+    let proj = parse_project("[project]
+name = \"p\"
+kind = \"exe\"
+source = \"src/**/*.f\"
+")
+    defer proj.deinit()
+    let ctx = resolve_ctx(&proj, "")
+    defer ctx.deinit()
+    ctx.set_check_tests(tests)
+    let entries: List(OwnedString) = list(1)
+    defer entries.deinit()
+    entries.push(from_view("src/main.f"))
+    let ov: Dict(String, String) = dict()
+    defer ov.deinit()
+    ov.set("src/main.f", source)
+    return analyze_project(&ctx, &entries, Some(&ov))
+}
+
+test "a test block's body is checked only when the demand asks for it" {
+    // The block's body is a type error; whether it is reported is the whole question.
+    const src = "fn main() i32 { return 0 }
+test \"t\" { let x: i32 = main }
+"
+
+    let off = tested_unit(src, false)
+    defer off.deinit()
+    assert_eq(project_error_count(&off), 0 as usize, "a build never looks inside a test block")
+
+    let on = tested_unit(src, true)
+    defer on.deinit()
+    assert_true(project_error_count(&on) > 0, "and `flang test` does")
+}
+
+test "a test block's calls are recorded as resolution edges" {
+    // `helper` is reachable only from the test block, so it is the demand that decides whether the
+    // call is in the recorded edges at all.
+    const src = "fn helper() i32 { return 1 }
+fn main() i32 { return 0 }
+test \"t\" { let _v = helper() }
+"
+
+    let on = tested_unit(src, true)
+    defer on.deinit()
+    assert_eq(project_error_count(&on), 0 as usize, "the block checks clean")
+    assert_true(on.checked, "and the project is checked")
 }
 
 test "one file reached under two spellings loads once" {

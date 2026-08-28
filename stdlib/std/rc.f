@@ -156,7 +156,7 @@ test "rc with struct value via op_deref" {
 }
 
 test "rc with custom allocator" {
-    let arena_state = arena_allocator(&global_allocator)
+    let arena_state = arena_allocator(global())
     let arena = arena_state.allocator()
     defer arena_state.deinit()
 

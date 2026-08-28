@@ -10,6 +10,18 @@ stage-2 = stage-3 fixpoint holds and the reference suite is unchanged
 at 551 / 0 / 16.
 The "milestone" names (M1–M6) used in commit messages were invented as
 the work went along; this document supersedes them as the roadmap.
+
+**Colocated tests (2026-08-28).** `flang test` landed in the self-hosted
+CLI, so `dotnet test-all.cs` now runs every project's `test {}` blocks
+through `dist/<rid>/flang` rather than the reference. 7 of 9 projects are
+green. Running those blocks for the first time surfaced three defects that
+no build could reach. A trailing `if` never became a block's value, so an
+unannotated lambda ending in one inferred `void` — fixed, and it tightens
+`if`/`else` branch joining to apply in statement position too. Still open:
+`std.encoding.json` failing and crashing, and a segfault in one `flang_lsp`
+test. All three are recorded in docs/known-issues.md. The reference
+compiler is 9/9 on the same suites, so each is a self-hosted gap and each
+blocks decommissioning the reference.
 Update it in the same commit as any coverage change.
 
 The 2026-08-28 self-build regression (identifier-in-value-position
@@ -161,7 +173,7 @@ current-state summary.
 | Function values / indirect calls / fn-typed fields | ✅ | fn-typed fields in checker/backend dispatch | landed with lambdas: a function NAME in value position decays to `Operand.FuncRef`; a fn-typed callee value emits `CallIndirect` (params/sret mirror direct calls); a closure-typed callee (local, param, or struct field — the checker records the callee member-access node's type for the classification) dispatches directly to its `op_call` symbol with the value's address prepended |
 | Lambdas / closures | ✅ | 23/5 | literal sites enqueue `PendingLambda` (with the active overlay) and emit after the main walk — non-capturing as a plain function, capturing as an `op_call` whose leading param is the env pointer and whose captured names bind to `gep`s into it (no copy; captures are read-only). The literal itself is a `FuncRef` or a stack-built env struct |
 | Global `const` declarations | ✅ | 101/17 | M11: each const becomes an aligned zeroed byte global plus a synthesized `__finit_*` function lowering its initializer (so vtables of fn pointers and cross-global addresses need no static-initializer support); `main` calls every SURVIVING init first, wired AFTER the drop pass, which also poisons any reader of a const whose init died (`reads … whose initializer was dropped`) — absent, never silently zero. Reads resolve through `RtConst(fqn)` targets the checker records on both the decl and every read |
-| `test` blocks (self-host `flang test`) | ❌ | dev workflow, not `main`'s graph | bootstrap CLI has no `test` subcommand |
+| `test` blocks (self-host `flang test`) | ✅ | 7/9 projects green | `flang test` checks the project's own `test {}` bodies (`ResolveCtx.check_tests`), lowers each to a nullary `__ftest_<n>__` recorded on `IrModule.tests`, and the backend generates a table-driven C runner as the entry point in place of `main`. Path and `--name` filters apply at lowering. A panic reaches the runner through `__flang_test_abort` (`#if runtime.testing` in `core.panic`), so a failing test ends and the run continues. `flang check` is the same check without codegen. Two projects still fail on pre-existing self-hosted defects the feature exposed — see docs/known-issues.md |
 | UFCS receiver adaptation | ✅ | everywhere | M11: the receiver is adapted to the winner's first-parameter shape by MEMORY type (binding/field declared types — node types are rewritten by the checker's adaptation, so they cannot arbitrate): value→`&prim` passes the place's address, `&prim`→value loads through, same-representation prims (`usize` vs `u64` — declaration order arbitrates equal picks) interchange. Pushing the raw value against an adapted pick was a silent scalar miscompile. Stage-2 fixpoint (2026-08-22): a receiver that resolved through `op_deref` hops records the chain (`receiver_derefs`, per call node, hops drain-rewritten to specializations) and `lower_deref_receiver` calls each hop — the aggregate "value IS its address" shortcut passed `&Owned(StringBuilder)` as `&StringBuilder`, the stage-2 segfault. Call arguments (and value-form index receivers) also adapt array→slice decay now (`lower_arg_adapted`). 2026-08-24: a TEMPORARY receiver (`n.double().add_five()`) spills into a fresh slot and passes its address instead of refusing; `lower_arg_adapted` also decays `&[T; N]` (its value is already the elements' base); `let` initializers adapt too (`let xs: i32[] = [...]` bound raw array bytes as a slice — garbage length) |
 | Template directives (`#enum_utils`, `#derive`, `#interface`, …) | ✅ | every stdlib generator | expanded natively (RFC-021 phase 4, 2026-08-23) |
 | `#if` compile-time conditionals | ✅ | 27/10 | statement-level splices the active branch's statements at `lower_stmt`; decl-level is already flattened before lowering. M12: lowering uses the BUILD's compile-time context, not the host's — a `--target-os` build was checking the target's branch and lowering the host's. The `comptime.f` evaluator itself joins the M11 emission frontier (`String ==` dispatch), like most of the checker |

@@ -442,7 +442,7 @@ test "a capacity constructor preallocates a power-of-two table" {
     let d: Dict(u32, u32) = dict(100)
     defer d.deinit()
     assert_eq(d.cap, 128 as usize, "rounded up to the next power of two")
-    for i in 0..64 {
+    for i in 0..64usize {
         d.set(i as u32, i as u32)
     }
     assert_eq(d.cap, 128 as usize, "no growth below the load factor")
@@ -476,7 +476,7 @@ test "a key whose hash is a reserved state still round-trips" {
 test "delete-heavy churn never fills the table" {
     let d: Dict(u32, u32) = dict()
     defer d.deinit()
-    for i in 0..64 {
+    for i in 0..64usize {
         d.set(i as u32, 1u32)
         let _r = d.remove(i as u32)
     }
@@ -709,7 +709,7 @@ test "get_or update merge" {
     let expensive = 42i32
     assert_eq(d.get_or_else(9u32, fn() { expensive }), 42i32, "absent key computes it")
 
-    assert_true(d.update(1u32, fn(v) { v.* = v.* + 1 }), "update hits the key")
+    assert_true(d.update(1u32, fn(v) { v.* = v.* + 1i32 }), "update hits the key")
     assert_eq(d.get(1u32).unwrap(), 6i32, "mutated in place")
     assert_true(!d.update(9u32, fn(v) { v.* = 0i32 }), "absent key reports false")
 

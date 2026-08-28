@@ -178,11 +178,14 @@ fn _powersort_impl(s: $T[], cmp: $F) {
         return
     }
 
+    // Read the default once and free through that same instance: an allocator installed while the
+    // sort is running must not receive a block it never handed out.
+    const alloc = global()
     const byte_len = n * size_of(T)
-    const scratch_bytes = global_allocator.alloc(byte_len, align_of(T))
+    const scratch_bytes = alloc.alloc(byte_len, align_of(T))
         .expect("powersort: scratch allocation failed")
     const scratch: T[] = .{ ptr = scratch_bytes.ptr as &T, len = n }
-    defer global_allocator.dealloc(scratch_bytes)
+    defer alloc.dealloc(scratch_bytes)
 
     // Run stack. Bounded by the number of distinct powers, which for any practical n fits in ~40
     // slots. 64 covers n up to ~2^64.

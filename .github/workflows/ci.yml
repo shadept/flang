@@ -99,13 +99,13 @@ jobs:
           cd bootstrap
           # Each stage runs from a copy: `flang build` writes build/flang,
           # which must not be the binary currently executing.
-          "$SEED" -r -s ../stdlib build
+          "$SEED" build -r -s ../stdlib
           EXE=build/flang; [ -f build/flang.exe ] && EXE=build/flang.exe
           cp "$EXE" ../.coldstart/stage1
-          ../.coldstart/stage1 -k -r -s ../stdlib build
+          ../.coldstart/stage1 build -k -r -s ../stdlib
           cp build/flang.c ../.coldstart/stage2.c
           cp "$EXE" ../.coldstart/stage2
-          ../.coldstart/stage2 -k -r -s ../stdlib build
+          ../.coldstart/stage2 build -k -r -s ../stdlib
           cp build/flang.c ../.coldstart/stage3.c
           cmp ../.coldstart/stage2.c ../.coldstart/stage3.c
           echo "Fixpoint holds: seed-rooted stage 2 and stage 3 emit identical C."

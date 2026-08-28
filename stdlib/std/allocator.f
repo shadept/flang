@@ -5,13 +5,48 @@ import core.rtti
 
 import std.mem
 import std.option
+// For the colocated test blocks' assertions only - no shipped code here depends on std.test.
 import std.test
 
+// The allocator an omitted `&Allocator?` argument resolves to. `set_global_allocator` is the only
+// writer; `global()` and `or_global` are the readers. Null means "nobody has installed one", which
+// is also the state the global's zeroed storage is in before any initializer runs. That matters:
+// constant initializers allocate, they run in module registration order, and one ordered ahead of
+// this module would otherwise read an uninitialized pointer out of the slot.
+type GlobalSlot = struct {
+    current: &Allocator?
+}
+
+const global_slot = GlobalSlot { current = null }
+
+// Install `a` as the process-wide default and return the allocator it replaced, so a caller can
+// scope the change:
+//
+//     const prev = set_global_allocator(&mine)
+//     defer { let _ = set_global_allocator(prev) }
+//
+// There is no way to unset: the default is always some allocator, and restoring means holding the
+// instance this returned.
+//
+// ponytail: one process-wide slot, no synchronization. FLang has no threads yet; when it does this
+// wants to become thread-local, with the process-wide value as the initial value of each thread's.
+pub fn set_global_allocator(a: &Allocator) &Allocator {
+    // A `const` binding cannot be assigned through, but a reference to one addresses the global's
+    // storage directly, and that storage is writable. Same mechanism the tracking allocators use to
+    // keep their state.
+    let slot = &global_slot
+    const prev = slot.current.unwrap_or(&global_allocator)
+    slot.current = Some(a)
+    return prev
+}
+
+// The allocator currently installed as the default.
+pub fn global() &Allocator {
+    return global_slot.current.unwrap_or(&global_allocator)
+}
+
 pub fn or_global(alloc: &Allocator?) &Allocator {
-    #if runtime.testing {
-        return alloc.unwrap_or(&test_allocator)
-    }
-    return alloc.unwrap_or(&global_allocator)
+    return alloc.unwrap_or(global())
 }
 
 // =============================================================================
@@ -115,167 +150,13 @@ const global_allocator_vtable = AllocatorVTable {
 
 // Singleton state for GlobalAllocator (no actual state needed)
 const global_allocator_state = GlobalAllocatorState { _unused = 0 }
-pub const global_allocator = Allocator {
+
+// The malloc/free allocator every process starts out defaulting to. Private on purpose: code that
+// wants "the default" asks `global()`, which honours whatever is installed, so a decorator wrapping
+// the default (a leak tracker, a counting allocator) is not bypassed by a direct reference here.
+const global_allocator = Allocator {
     impl = &global_allocator_state as &u8,
     vtable = &global_allocator_vtable,
-}
-
-// =============================================================================
-// TestAllocator - tracking allocator for leak detection in tests
-// =============================================================================
-// Wraps malloc/free but records every live allocation in an intrusive linked list (itself allocated
-// via raw malloc so it never recurses through or_global). At the end of a test, call check_leaks()
-// to print any un-freed allocations, then deinit() to tear down the tracker and free all remaining
-// memory.
-
-// Linked-list node tracking a single live allocation. Allocated via raw malloc - never goes through
-// the Allocator interface.
-type TestAllocEntry = struct {
-    ptr: &u8
-    size: usize
-    next: &TestAllocEntry?
-}
-
-pub type TestAllocatorState = struct {
-    head: &TestAllocEntry?
-    alloc_count: usize
-    dealloc_count: usize
-    total_bytes: usize
-}
-
-fn test_alloc(impl: &u8, size: usize, alignment: usize) u8[]? {
-    let state = impl as &TestAllocatorState
-    const ptr = malloc(size)
-    if ptr.is_none() {
-        return null
-    }
-
-    // Record this allocation in the tracking list
-    const entry_raw = malloc(size_of(TestAllocEntry))
-    if entry_raw.is_some() {
-        const entry = entry_raw.unwrap() as &TestAllocEntry
-        entry.ptr = ptr.unwrap()
-        entry.size = size
-        entry.next = state.head
-        state.head = Some(entry)
-    }
-
-    state.alloc_count = state.alloc_count + 1
-    state.total_bytes = state.total_bytes + size
-
-    // Wrapped explicitly - see the note in core/range.f::next.
-    return Some(slice_from_raw_parts(ptr.unwrap(), size))
-}
-
-fn test_realloc(impl: &u8, memory: u8[], new_size: usize) u8[]? {
-    let state = impl as &TestAllocatorState
-    const old_ptr = memory.ptr
-    const old_size = memory.len
-    const ptr = realloc(Some(old_ptr), new_size)
-    if ptr.is_none() {
-        return null
-    }
-
-    // Update the tracking entry for this pointer
-    let entry = state.head
-    while entry.is_some() {
-        let e = entry.unwrap()
-        if e.ptr as usize == old_ptr as usize {
-            e.ptr = ptr.unwrap()
-            e.size = new_size
-            break
-        }
-        entry = e.next
-    }
-
-    state.total_bytes = state.total_bytes - old_size + new_size
-
-    return Some(slice_from_raw_parts(ptr.unwrap(), new_size))
-}
-
-fn test_dealloc(impl: &u8, memory: u8[]) {
-    let state = impl as &TestAllocatorState
-    const target = memory.ptr as usize
-
-    // Remove from tracking list
-    let prev: &TestAllocEntry? = null
-    let entry = state.head
-    while entry.is_some() {
-        let e = entry.unwrap()
-        if e.ptr as usize == target {
-            // Unlink
-            prev match {
-                Some(p) => { p.next = e.next }
-                None => { state.head = e.next }
-            }
-            state.total_bytes = state.total_bytes - e.size
-            free(Some(e as &u8))
-            break
-        }
-        prev = entry
-        entry = e.next
-    }
-
-    state.dealloc_count = state.dealloc_count + 1
-    free(Some(memory.ptr))
-}
-
-// Returns the number of live (leaked) allocations.
-pub fn check_leaks(state: &TestAllocatorState) usize {
-    let count: usize = 0
-    let leaked_bytes: usize = 0
-    let entry = state.head
-    while entry.is_some() {
-        let e = entry.unwrap()
-        count = count + 1
-        leaked_bytes = leaked_bytes + e.size
-        print("  leak: address=")
-        println(e.ptr as usize)
-        print(" size=")
-        println(e.size)
-        entry = e.next
-    }
-    if count > 0 {
-        print("test allocator: leaked allocations=")
-        println(count)
-        print(" bytes=")
-        println(leaked_bytes)
-    }
-    return count
-}
-
-// Free all remaining tracked allocations and the tracking nodes themselves.
-pub fn deinit(state: &TestAllocatorState) {
-    let entry = state.head
-    while entry.is_some() {
-        let e = entry.unwrap()
-        let next = e.next
-        free(Some(e.ptr))
-        free(Some(e as &u8))
-        entry = next
-    }
-    state.head = null
-    state.alloc_count = 0
-    state.dealloc_count = 0
-    state.total_bytes = 0
-}
-
-const test_allocator_vtable = AllocatorVTable {
-    alloc = test_alloc,
-    realloc = test_realloc,
-    dealloc = test_dealloc,
-}
-
-pub const test_allocator_state = TestAllocatorState {
-    head = null,
-    alloc_count = 0,
-    dealloc_count = 0,
-    total_bytes = 0,
-}
-
-pub const test_allocator = Allocator {
-    impl = &test_allocator_state as &u8,
-    vtable = &test_allocator_vtable,
 }
 
 // =============================================================================
@@ -387,8 +268,24 @@ pub fn reset_counts(state: &CountingAllocator) {
     state.deallocs = 0
 }
 
+test "an installed global allocator is what or_global resolves to" {
+    let c = counting_allocator(global())
+    let a = c.allocator()
+
+    const prev = set_global_allocator(&a)
+    const mine: &Allocator? = null
+    const resolved = mine.or_global()
+    const _block = resolved.alloc(64, 8).unwrap()
+    assert_eq(c.allocs, 1 as usize, "an omitted allocator reached the installed one")
+    resolved.dealloc(_block)
+
+    const restored = set_global_allocator(prev)
+    assert_true(restored.impl as usize == (&a).impl as usize, "the swap returns what it replaced")
+    assert_true(global().impl as usize == prev.impl as usize, "and the previous one is back")
+}
+
 test "a counting decorator tracks live bytes back to zero" {
-    let c = counting_allocator(&global_allocator)
+    let c = counting_allocator(global())
     let a = c.allocator()
 
     const one = a.alloc(100, 8).unwrap()
@@ -410,7 +307,7 @@ test "a counting decorator tracks live bytes back to zero" {
 test "a decorator sees an arena's pages through its backing" {
     // An arena frees its pages through its BACKING allocator, so that is where a decorator has to
     // sit to see the arena's footprint go to zero.
-    let c = counting_allocator(&global_allocator)
+    let c = counting_allocator(global())
     let backing = c.allocator()
     let arena = arena_allocator(&backing, 4096)
     let a = arena.allocator()

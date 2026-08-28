@@ -43,8 +43,9 @@ pub fn document_symbols(m: &Module, allocator: &Allocator? = null) List(DocSymbo
             Const(c) => out.push(leaf(c.name, SymbolKind.Constant, c.span, allocator))
             Type(t) => out.push(type_symbol(&t, allocator))
             Test(t) => {
-                // `label` is the raw string-literal token, quotes included.
-                const label = $"test {t.label}"
+                // Quoted for display, mirroring the declaration: `label` is the literal's value,
+                // and a label with spaces in it needs the delimiters to read as one name.
+                const label = $"test \"{t.label}\""
                 defer label.deinit()
                 out.push(leaf(label.as_view(), SymbolKind.Function, t.span, allocator))
             }

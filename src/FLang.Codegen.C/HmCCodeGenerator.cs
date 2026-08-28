@@ -35,8 +35,8 @@ public static class HmCCodeGenerator
         sb.AppendLine("#include <stdint.h>");
         sb.AppendLine("#include <string.h>");
         sb.AppendLine("#include <math.h>");
-        if (isTestMode)
-            sb.AppendLine("#include <setjmp.h>");
+        // Unconditional: __flang_test_abort is defined in every translation unit.
+        sb.AppendLine("#include <setjmp.h>");
         sb.AppendLine("#ifdef _WIN32");
         sb.AppendLine("#include <io.h>");
         sb.AppendLine("#include <fcntl.h>");
@@ -83,6 +83,21 @@ public static class HmCCodeGenerator
             sb.AppendLine("static const char* __flang_current_test = \"\";");
             sb.AppendLine();
         }
+
+        // Where core.panic.panic goes under `#if runtime.testing`. Under a runner it ends the
+        // current test; anywhere else the flag is never set and this is exit(1). Emitted
+        // unconditionally so a `runtime.testing` build links whether or not it has test blocks.
+        sb.AppendLine("/* Runtime: panic recovery for the test runner */");
+        if (!isTestMode)
+        {
+            sb.AppendLine("static volatile int __flang_test_active = 0;");
+            sb.AppendLine("static jmp_buf __flang_test_jmpbuf;");
+        }
+        sb.AppendLine("void __flang_test_abort(void) {");
+        sb.AppendLine("    if (__flang_test_active) { longjmp(__flang_test_jmpbuf, 1); }");
+        sb.AppendLine("    exit(1);");
+        sb.AppendLine("}");
+        sb.AppendLine();
 
         // Topological sort: structs/enums used by value must be defined before their users
         var sortedTypes = TopologicalSortTypes(module.TypeDefs);
@@ -456,7 +471,8 @@ public static class HmCCodeGenerator
         "printf", "fprintf", "snprintf", "sprintf", "puts", "putchar",
         "strlen", "strcmp", "strncmp", "strcpy", "strncpy",
         "open", "close", "read", "write", "ioctl", "exit", "abort",
-        "__flang_get_argc", "__flang_get_arg", "__flang_getenv"
+        "__flang_get_argc", "__flang_get_arg", "__flang_getenv",
+        "__flang_test_abort"
     ];
 
     private static void EmitForeignDecl(StringBuilder sb, IrForeignDecl decl)
@@ -518,16 +534,9 @@ public static class HmCCodeGenerator
             {
                 EmitLineDirective(sb, inst.Span, module.SourceFiles, ref lineState);
 
-                // panic is often inlined, so intercept the exit call, not the function.
-                if (isTestMode && inst is CallInstruction { IsForeignCall: true, FunctionName: "exit" })
-                {
-                    sb.AppendLine("    if (__flang_test_active) { longjmp(__flang_test_jmpbuf, 1); }");
-                    EmitInstruction(sb, inst, fn.IsEntryPoint);
-                }
-                else
-                {
-                    EmitInstruction(sb, inst, fn.IsEntryPoint);
-                }
+                // A panic reaches the runner through `__flang_test_abort`, which core.panic.panic
+                // calls under `#if runtime.testing`. A deliberate `exit` stays a process exit.
+                EmitInstruction(sb, inst, fn.IsEntryPoint);
             }
         }
 

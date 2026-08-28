@@ -508,6 +508,10 @@ public class TestHarness
             UseShellExecute = false,
             CreateNoWindow = true
         };
+        // Command first: the self-hosted CLI parses options against the command
+        // they follow, so an option ahead of it belongs to no command and is
+        // refused. The reference CLI accepts either order.
+        psi.ArgumentList.Add("build");
         psi.ArgumentList.Add("--stdlib-path");
         psi.ArgumentList.Add(_stdlibPath);
         // A `TARGET-OS:` directive selects the compile-time context the
@@ -519,7 +523,6 @@ public class TestHarness
             psi.ArgumentList.Add("--target-os");
             psi.ArgumentList.Add(metadata.TargetOs);
         }
-        psi.ArgumentList.Add("build");
         psi.ArgumentList.Add(absoluteTestFile);
 
         int exitCode;

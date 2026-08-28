@@ -552,7 +552,7 @@ test "format renders through the node graph" {
 }
 
 test "a duplicate allocates nothing lasting; teardown returns the storage" {
-    let c = counting_allocator(&global_allocator)
+    let c = counting_allocator(global())
     let a = c.allocator()
     let it = type_interner(Some(&a))
 

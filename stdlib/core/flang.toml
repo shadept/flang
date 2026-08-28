@@ -1,0 +1,8 @@
+# `core` is the prelude layer: every FLang program gets it whether or not it asks. The manifest
+# exists so `flang test` has a project to run its colocated `test {}` blocks from; nothing links
+# against it as a dependency.
+[project]
+name = "core"
+version = "0.1.0"
+kind = "lib"
+source = "**/*.f"

@@ -49,15 +49,20 @@ pub fn build_unit(unit: &AnalyzedUnit, output_path: String,
 // is instrumented for profiling (RFC-025) and that file is linked in as the probe runtime.
 // `profile_all` widens instrumentation from the application's functions to the whole program,
 // stdlib included. `emit_only` stops after writing the generated C - no toolchain runs, so the
-// build may target an OS the host cannot link for.
+// build may target an OS the host cannot link for. `tests`, when given, builds a test binary
+// instead of the program: it is parallel to `modules` and marks the ones whose `test {}` blocks to
+// run, `name_filter` narrows those by label, and the entry point becomes the generated runner
+// rather than the project's `main`.
 pub fn build_program(modules: &List(Module), fqns: &List(OwnedString), result: &TypeCheckResult,
     output_path: String, comptime_ctx: ComptimeCtx, source_paths: &List(OwnedString),
     libs: &List(OwnedString), ldflags: &List(OwnedString), verbose: bool = false,
     keep_c: bool = false, release: bool = false, demanded: &List(bool)? = null,
     profile_runtime: String? = null, profile_all: bool = false, emit_only: bool = false,
+    tests: &List(bool)? = null, name_filter: String? = null,
     allocator: &Allocator? = null) Result(BuildResult, BuildError) {
     const lower_start = monotonic_ns()
-    let m = lower_program(modules, fqns, result, comptime_ctx, demanded, allocator)
+    let m = lower_program(modules, fqns, result, comptime_ctx, demanded, tests, name_filter,
+        allocator)
     const lower_ns = elapsed_ns(lower_start)
     if verbose and m.skip_notes.len > 0 {
         const hdr = $"  {m.functions.len} function(s) emitted, {m.skip_notes.len} skipped:"
@@ -73,8 +78,9 @@ pub fn build_program(modules: &List(Module), fqns: &List(OwnedString), result: &
     // A skipped `main` can never link - the executable would have no entry point. Reject the module
     // here, naming the refusal chain, instead of handing the linker a program that fails with an
     // opaque "entry point must be defined". TEMPORARY SCAFFOLD like the skip mechanism itself (see
-    // lower.f `unlowerable`).
-    if is_skipped(&m, "main") {
+    // lower.f `unlowerable`). A test binary has no FIR `main` at all: the backend's runner is the
+    // entry point, and lowering left the project's own `main` out on purpose.
+    if tests.is_none() and is_skipped(&m, "main") {
         println("error: `main` was not emitted - lowering refused it:")
         print_refusal_chain(&m, "main")
         if !verbose {

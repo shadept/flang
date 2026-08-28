@@ -86,6 +86,124 @@ pub fn translate(m: &IrModule, sb: &StringBuilder) {
         }
         emit_function(&m.functions[i], &sigs, sb)
     }
+    if m.testing {
+        emit_test_runner(m, sb)
+    }
+}
+
+// The C entry point of a test binary: run each block, report, and exit non-zero if any failed.
+//
+// Driven by a table rather than an unrolled block per test - one `setjmp` site instead of hundreds,
+// which is what keeps the generated C compiling quickly for a suite of any size.
+//
+// Everything the loop mutates lives at file scope. A local modified between `setjmp` and `longjmp`
+// is indeterminate afterwards (C99 7.13.2.1p3), so counters kept in `main` would be free for an
+// optimizer to mangle on exactly the failure path they are meant to count.
+fn emit_test_runner(m: &IrModule, sb: &StringBuilder) {
+    sb.append("\n/* flang test runner */\n")
+    sb.append("typedef void (*__flang_test_fn)(void);\n")
+
+    // Both tables carry a trailing null the count leaves out. It costs a pointer and spares the
+    // zero-test case: an empty initializer list is not a C array, and a run whose filters matched
+    // nothing still has to produce a binary that starts and reports that.
+    sb.append("static const char* const __flang_test_names[] = {\n")
+    for &t in m.tests {
+        sb.append("    \"")
+        emit_c_string_body(t.label.as_view(), sb)
+        sb.append("\",\n")
+    }
+    sb.append("    0\n")
+    sb.append("};\n")
+
+    sb.append("static const __flang_test_fn __flang_test_fns[] = {\n")
+    for &t in m.tests {
+        sb.append("    ")
+        sb.append(t.symbol.as_view())
+        sb.append(",\n")
+    }
+    sb.append("    0\n")
+    sb.append("};\n")
+
+    sb.append("static const int __flang_test_total = ")
+    sb.append(m.tests.len)
+    sb.append(";\n")
+    sb.append("static int __flang_test_i = 0;\n")
+    sb.append("static int __flang_test_passed = 0;\n")
+    sb.append("static int __flang_test_failed = 0;\n")
+    sb.append("static int __flang_test_leaked = 0;\n")
+    sb.append("\n")
+
+    // The ledger in stdlib/std/test.c. Declared here rather than reached through a FLang foreign:
+    // only this runner calls them, and only when the tracking allocator was installed.
+    const tracked = m.install_tests.is_some()
+    if tracked {
+        sb.append("extern size_t __flang_test_epilogue(size_t*);\n")
+        sb.append("extern void __flang_test_reset(void);\n")
+        sb.append("static size_t __flang_test_leak_bytes = 0;\n")
+        sb.append("static size_t __flang_test_leak_blocks = 0;\n")
+    }
+
+    sb.append("int main(int __flang_argc_, char** __flang_argv_) {\n")
+    sb.append("    __flang_argc = __flang_argc_;\n")
+    sb.append("    __flang_argv = __flang_argv_;\n")
+    // Constant initializers first, then the tracking allocator: anything the initializers allocate
+    // belongs to the program, not to the first test, and must not be reported as its leak.
+    sb.append("    ")
+    sb.append(CONST_INIT_SYM)
+    sb.append("();\n")
+    m.install_tests match {
+        Some(sym) => {
+            sb.append("    ")
+            sb.append(sym.as_view())
+            sb.append("();\n")
+        }
+        None => {}
+    }
+    sb.append("    printf(\"found %d test(s)\\n\", __flang_test_total);\n")
+    sb.append("    for (__flang_test_i = 0; __flang_test_i < __flang_test_total;")
+    sb.append(" __flang_test_i++) {\n")
+    sb.append("        printf(\"test %d/%d: %s ... \", __flang_test_i + 1, __flang_test_total,")
+    sb.append(" __flang_test_names[__flang_test_i]);\n")
+    // Flushed BEFORE the call, not after: a test that crashes the process takes the buffer with it,
+    // and the line naming it is the one piece of information that matters then.
+    sb.append("        fflush(stdout);\n")
+    sb.append("        __flang_test_active = 1;\n")
+    sb.append("        if (setjmp(__flang_test_jmp) == 0) {\n")
+    sb.append("            __flang_test_fns[__flang_test_i]();\n")
+    sb.append("            __flang_test_active = 0;\n")
+    sb.append("            printf(\"ok\\n\");\n")
+    sb.append("            __flang_test_passed++;\n")
+    if tracked {
+        sb.append("            __flang_test_leak_blocks =")
+        sb.append(" __flang_test_epilogue(&__flang_test_leak_bytes);\n")
+        sb.append("            if (__flang_test_leak_blocks > 0) {\n")
+        sb.append("                printf(\"  leaked %zu block(s), %zu byte(s)\\n\",")
+        sb.append(" __flang_test_leak_blocks, __flang_test_leak_bytes);\n")
+        sb.append("                __flang_test_leaked++;\n")
+        sb.append("            }\n")
+    }
+    sb.append("        } else {\n")
+    sb.append("            __flang_test_active = 0;\n")
+    sb.append("            printf(\"FAILED\\n\");\n")
+    sb.append("            __flang_test_failed++;\n")
+    // A panic unwinds by longjmp, which skips every `defer` on the way out. What the test still has
+    // allocated says nothing about the code under test, so the ledger is reset without a word.
+    if tracked {
+        sb.append("            __flang_test_reset();\n")
+    }
+    sb.append("        }\n")
+    sb.append("        fflush(stdout);\n")
+    sb.append("    }\n")
+    sb.append("    printf(\"\\n%d passed, %d failed, %d total\\n\", __flang_test_passed,")
+    sb.append(" __flang_test_failed, __flang_test_total);\n")
+    if tracked {
+        sb.append("    if (__flang_test_leaked > 0) {\n")
+        sb.append("        printf(\"%d test(s) leaked\\n\", __flang_test_leaked);\n")
+        sb.append("    }\n")
+    }
+    sb.append("    fflush(stdout);\n")
+    sb.append("    return __flang_test_failed > 0 ? 1 : 0;\n")
+    sb.append("}\n")
 }
 
 // End-to-end: FIR -> .c -> executable. The .c file is written next to the output executable (or to
@@ -198,7 +316,7 @@ pub fn compile(m: &IrModule, options: &BuildOptions) Result(BuildResult, BuildEr
     }
 
     // 6. Build the result. Retain the c_source_path if requested.
-    let exe_path = from_view(options.output_path, alloc)
+    let exe_path = linked_artifact_path(options.output_path, alloc)
     let c_kept: OwnedString? = null
     if keep_c {
         c_kept = Some(c_path_owned)
@@ -226,6 +344,8 @@ fn emit_preamble(sb: &StringBuilder) {
     sb.append("#include <string.h>\n")
     sb.append("#include <stdlib.h>\n")
     sb.append("#include <stdio.h>\n")
+    // The test runner's per-test recovery point (`__flang_test_abort`).
+    sb.append("#include <setjmp.h>\n")
     // NAN / INFINITY for non-finite float constants (finite ones emit as C99 hex-float literals -
     // see `emit_float_const`).
     sb.append("#include <math.h>\n")
@@ -262,6 +382,28 @@ fn emit_preamble(sb: &StringBuilder) {
     sb.append("    return (unsigned char*)getenv((const char*)name);\n")
     sb.append("}\n")
     sb.append("\n")
+    emit_test_abort(sb)
+}
+
+// Where `core.panic.panic` goes under `#if runtime.testing`. Inside a test binary the runner arms
+// the recovery point around each test, so a panic ends that test and the run carries on; anywhere
+// else the flag is never set and this is a plain `exit(1)`.
+//
+// Only panics take this route, which is what leaves a deliberate `exit` a real process exit even
+// under a runner.
+//
+// Emitted unconditionally: a test build that filtered every block away still compiles a stdlib
+// whose `panic` names this symbol, and a definition that were only sometimes present would fail
+// that link for no reason visible in the source.
+fn emit_test_abort(sb: &StringBuilder) {
+    sb.append("/* flang runtime: panic recovery for the test runner */\n")
+    sb.append("static jmp_buf __flang_test_jmp;\n")
+    sb.append("static volatile int __flang_test_active = 0;\n")
+    sb.append("void __flang_test_abort(void) {\n")
+    sb.append("    if (__flang_test_active) { longjmp(__flang_test_jmp, 1); }\n")
+    sb.append("    exit(1);\n")
+    sb.append("}\n")
+    sb.append("\n")
 }
 
 // Merged modules re-declare the same external symbol, and overload sets map many declarations onto
@@ -289,6 +431,9 @@ fn is_runtime_provided_symbol(name: String) bool {
         return true
     }
     if name == "__flang_getenv" {
+        return true
+    }
+    if name == "__flang_test_abort" {
         return true
     }
     // <string.h>
@@ -1262,6 +1407,35 @@ fn emit_ret(v: Operand?, f: &Function, sb: &StringBuilder) {
 // Hex helpers
 // ─────────────────────────────────────────────────────────────────────────
 
+// The body of a C string literal, without the surrounding quotes. Bytes outside ASCII pass through:
+// a C string literal carries them verbatim, and a test label is UTF-8 source text.
+fn emit_c_string_body(s: String, sb: &StringBuilder) {
+    for i in 0..s.len {
+        const c = s[i]
+        if c == '\\' {
+            sb.append("\\\\")
+            continue
+        }
+        if c == '"' {
+            sb.append("\\\"")
+            continue
+        }
+        if c == '\n' {
+            sb.append("\\n")
+            continue
+        }
+        if c == '\r' {
+            sb.append("\\r")
+            continue
+        }
+        if c == '\t' {
+            sb.append("\\t")
+            continue
+        }
+        sb.append_byte(c)
+    }
+}
+
 fn emit_hex_byte(b: u8, sb: &StringBuilder) {
     sb.append_byte(c_hex_nibble(b >> 4))
     sb.append_byte(c_hex_nibble(b & 0x0F))
@@ -1742,7 +1916,20 @@ fn remove_file_quiet(path: String) {
 // that is UNIQUE per link - a shared directory (the process cwd, or even the output directory)
 // makes two concurrent builds of different targets overwrite each other's `time.obj` mid-compile,
 // which is exactly how parallel harness runs used to fail. Created before the compiler runs and
-// removed after a successful link unless `keep_temps`.
+// removed after a successful link unless `keep_temps`. The file the linker actually produced, given
+// the output path it was handed. On Windows `/Fe:` appends `.exe` when the name has no extension,
+// so the reported path has to as well - a caller that runs what it just built (`flang test`) needs
+// a path that exists, not the one requested.
+fn linked_artifact_path(output_path: String, allocator: &Allocator?) OwnedString {
+    #if platform.os == "windows" {
+        if !ends_with(output_path, ".exe") {
+            return $"{output_path}.exe"
+
+        }
+    }
+    return from_view(output_path, allocator)
+}
+
 fn objs_dir_for(output_path: String, allocator: &Allocator?) OwnedString {
     let p = path(output_path, allocator)
     defer p.deinit()

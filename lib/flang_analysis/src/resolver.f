@@ -58,6 +58,10 @@ pub type ResolveCtx = struct {
     // its reachability is blind to test-only use and the warning is opt-in there (`--warn-unused`).
     // The LSP checks test bodies and turns it on with full edges.
     warn_unused: bool
+    // Check the project's own `test {}` bodies. Off by default; `flang test`, `flang check` and the
+    // LSP turn it on. It widens the check rather than the module set: the same modules load either
+    // way, but test-only calls, overload picks and instantiations are recorded only when it is on.
+    check_tests: bool
 }
 
 // Scoped mutability: turns lazy body demand on or off for every analysis run through this context.
@@ -68,6 +72,11 @@ pub fn set_lazy(self: &ResolveCtx, on: bool) {
 // Scoped mutability: turns the W1003 unused-function analysis on or off.
 pub fn set_warn_unused(self: &ResolveCtx, on: bool) {
     self.warn_unused = on
+}
+
+// Scoped mutability: turns `test {}` body checking on or off.
+pub fn set_check_tests(self: &ResolveCtx, on: bool) {
+    self.check_tests = on
 }
 
 // Scoped mutability: installs the build's compile-time context (a `--target-os`/`--target-arch`
@@ -217,6 +226,7 @@ pub fn resolve_ctx_at(proj: &Project, project_dir: String, stdlib_root: String,
         },
         lazy_bodies = false,
         warn_unused = false,
+        check_tests = false,
     }
 }
 
@@ -257,6 +267,7 @@ pub fn single_file_ctx(stdlib_root: String, allocator: &Allocator? = null) Resol
         lib_kind = false,
         lazy_bodies = false,
         warn_unused = false,
+        check_tests = false,
     }
 }
 
@@ -498,6 +509,7 @@ fn fixture_ctx() ResolveCtx {
         lib_kind = false,
         lazy_bodies = false,
         warn_unused = false,
+        check_tests = false,
     }
 }
 
