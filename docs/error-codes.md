@@ -3856,7 +3856,8 @@ Check the directive name for typos. Known directives: `#foreign`, `#deprecated`,
 
 ## See Also
 
-- `src/FLang.Core/Diagnostic.cs` - Diagnostic infrastructure code
-- `src/FLang.Core/DiagnosticPrinter.cs` - Error message formatting
-- `src/FLang.Semantics/TypeSolver.cs` - Type checking implementation
-- `src/FLang.Semantics/AstLowering.cs` - FIR lowering implementation
+- `lib/flang_core/src/diagnostic.f` - Diagnostic infrastructure and rendering
+- `lib/flang_typer/src/error_codes.f` - Error code definitions
+- `lib/flang_typer/src/reporter.f` - Diagnostic construction from the checker
+- `lib/flang_typer/src/checker.f` - Type checking implementation
+- `lib/flang_driver/src/lower.f` - FIR lowering implementation

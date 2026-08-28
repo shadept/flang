@@ -505,9 +505,7 @@ Compiler discovery (`discover_compiler`):
 - **macOS** — `$CC` → `xcrun --find clang` → `clang` / `cc` / `gcc`.
 - **Linux** — `$CC` → `clang` → `cc` → `gcc`.
 
-The C# implementation in `src/FLang.CLI/CompilerDiscovery.cs` follows the
-same algorithm; the self-hosted port is the new source of truth as we
-migrate.
+`lib/flang_codegen/src/c_backend.f` implements this.
 
 ## Optimization pipeline
 

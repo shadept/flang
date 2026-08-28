@@ -1,6 +1,6 @@
 # FLang
 
-A statically-typed compiled language targeting C99 via a C# compiler. This glossary names the concepts the codebase, docs, and commit history use — not general programming terms.
+A statically-typed compiled language targeting C99, compiled by a self-hosted compiler written in FLang. This glossary names the concepts the codebase, docs, and commit history use — not general programming terms.
 
 ## Language
 
@@ -133,7 +133,7 @@ _Avoid_: solution, monorepo
 ### Test harness
 
 **Lit-style harness**:
-The data-driven `.f` test format consumed by `dotnet test.cs`. Tests live in `tests/harness/` and embed `//! TEST:`, `//! EXIT:`, `//! STDOUT:`, `//! STDERR:`, `//! COMPILE-ERROR:`, `//! COMPILE-WARNING:`, `//! SKIP:` directives. Setting the `FLANG` environment variable to a compiler binary runs the same corpus through that compiler instead of the in-process C# one.
+The data-driven `.f` test format consumed by `dotnet test.cs`. Tests live in `tests/harness/` and embed `//! TEST:`, `//! EXIT:`, `//! STDOUT:`, `//! STDERR:`, `//! COMPILE-ERROR:`, `//! COMPILE-WARNING:`, `//! SKIP:` directives. Each test is compiled by subprocessing a compiler binary: `dist/<rid>/flang` by default, or whatever `FLANG` names.
 _Avoid_: integration tests, end-to-end tests
 
 **Test block**:

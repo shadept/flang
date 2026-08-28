@@ -6,7 +6,7 @@ single source of truth.
 
 ## Why a separate library
 
-`bootstrap`, `flang_fmt`, `flang_lsp`, and any future tool need to
+`compiler`, `flang_fmt`, `flang_lsp`, and any future tool need to
 produce and render diagnostics, and they all need to agree on what a
 source location looks like. Putting these here means one definition;
 adding a new severity, a new code-action shape, or changing rendering
@@ -23,6 +23,6 @@ src/
 
 ## Consumers
 
-- `bootstrap/`        — emits diagnostics from lexer/parser/type-checker/lowering
+- `compiler/`         — emits diagnostics from lexer/parser/type-checker/lowering
 - `lib/flang_fmt/`    — surfaces parse-error diagnostics when input does not lex
 - `tools/flang_lsp/`  — pushes diagnostics live to the editor

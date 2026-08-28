@@ -1,6 +1,6 @@
 # flang_fmt
 
-The FLang source formatter, as a library. `bootstrap` runs it in-process
+The FLang source formatter, as a library. `compiler` runs it in-process
 for `flang fmt`; anything else that needs formatting (the LSP's
 format-on-save, tooling) imports the same implementation.
 

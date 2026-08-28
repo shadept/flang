@@ -560,7 +560,7 @@ entry).
 
 ### Reference: Niche-Option Method Receiver Read From a Local Copy Passes the Alloca
 
-**Status:** Open (discovered 2026-08-21, twice, while building M11)
+**Status:** MOOT — the C# reference was retired 2026-08-28. Kept as a record of a defect class the self-hosted compiler was checked against.
 **Affected:** reference compiler C lowering
 **Workaround in tree:** restructure the call site
 
@@ -609,7 +609,7 @@ file reached under two spellings loads once".
 
 ### Reference: Method Mutation Through a One-Hop Field of a By-Value Local Is Dropped
 
-**Status:** Open (discovered 2026-08-28 building the LSP outline)
+**Status:** MOOT — the C# reference was retired 2026-08-28. Kept as a record of a defect class the self-hosted compiler was checked against.
 **Affected:** reference compiler UFCS receiver lowering
 **Workaround in tree:** `flang_lsp/src/handlers/document_symbol.f` `type_symbol` builds the list first and assigns the field whole; `flang_lsp/src/server.f` workspace/symbol test pushes `project_origin` through an explicit reference
 
@@ -726,15 +726,34 @@ pattern) are order-independent by construction.
 
 ### Self-Host: Minimal RTTI — TypeInfo Name/Fields Are Zeroed; `project_info` Unintercepted
 
-**Status:** Open (M11 scoped this deliberately)
+**Status:** Open — widened 2026-08-28 to every binary the project produces
 
 `size_of(T)` / `align_of(T)` fold to layout constants at call sites;
 `Type(T)` values materialize a TypeInfo with size, align, and kind
 filled and everything else zeroed (name is an empty/null String —
-printing it would crash). `project_info()` is not intercepted, so
-stage-1's `--version` prints garbage-adjacent output. Fill name (an
-interned string) when a consumer needs it; intercept `project_info`
-like the reference does.
+printing it would crash).
+
+`project_info()` is not intercepted. Its stdlib body returns
+`.{ name = "", version = "" }` and the compiler that *lowers* a call is
+supposed to substitute the enclosing project's manifest values. While the
+reference existed it did that for stage 1, so `dist/<rid>/flang --version`
+read `flang 0.1.0 (self-hosted compiler, FLang; flang_parser 0.3.0)` and
+only stage 2 and later printed blanks. With the reference retired every
+stage is self-built, so **every** binary now prints:
+
+```
+  (self-hosted compiler, FLang; flang_parser )
+```
+
+The seed prints it too, so a cold-started clone shows it from the first
+build. Nothing depends on the string yet, but it is the compiler unable to
+state its own version, and `flang lsp`'s `flang/serverStatus` sends the
+same empty value to the editor.
+
+Fix: intercept `project_info` at lowering the way `intercept_rtti_layout`
+already handles `size_of`/`align_of` — the manifest values are on the
+`AnalyzedProject` the lowering already holds. Fill TypeInfo's name (an
+interned string) when a consumer needs it.
 
 ---
 
@@ -772,7 +791,7 @@ A module whose one struct holds both a `Dict(u32, Ty)` and a `Dict(u32, List(Ty)
 
 ### Reference: Dict Field of a By-Value Local Loses Writes
 
-**Status:** Open — silent wrong code
+**Status:** MOOT — the C# reference was retired 2026-08-28. Kept as a record of a defect class the self-hosted compiler was checked against.
 **Affected:** reference compiler place lowering (ADR-0003 family)
 
 ```flang
@@ -851,8 +870,8 @@ Fixed by reading the declaration's directives (`is_simd_directive` / `is_foreign
 
 ### Reference: Plain Structs Are Not Reordered (spec §2.4 unimplemented)
 
-**Status:** Won't fix — the reference is slated for decommissioning once the self-hosted compiler is the implementation of record. Recorded so the divergence is not mistaken for a self-host bug.
-**Affected:** `src/FLang.IR/TypeLayoutService.cs`
+**Status:** MOOT — the C# reference was retired 2026-08-28, and with it the divergence. `layout.f` implements §2.4; what the entry describes as "self-hosted" is now simply the behavior.
+**Affected:** the retired reference's type layout
 
 `docs/spec.md` §2.4 says a plain struct's layout is the compiler's to choose and that fields are reordered to minimise footprint. The self-hosted compiler implements this (`layout.f::repr_of` → `Repr.Auto`, descending alignment); the reference lays every struct out in declaration order.
 
@@ -930,9 +949,9 @@ Two details the reference already handled:
 
 ---
 
-### Self-Hosted CLI Is Not At Feature Parity With the Reference
+### Self-Hosted CLI Is Not At Feature Parity With the Reference — RESOLVED
 
-**Status:** Open — blocks `dist/<rid>/flang` from replacing `flang-ref` outright
+**Status:** Resolved 2026-08-28. `test` and `check` landed in `e9d7e11`; the reference was retired the same day, so the parity question closed with it. `init`, `-o` and the bare-file form (`flang hello.f`) were reference-only and are simply gone — `flang build hello.f` is the spelling.
 **Affected:** `bootstrap/src/main.f` (argument parsing / command dispatch)
 
 The self-hosted compiler reaches harness parity on **compilation** (551/0/16 through `build`, identical to the reference) but its CLI is a strict subset:
@@ -949,7 +968,7 @@ The self-hosted compiler reaches harness parity on **compilation** (551/0/16 thr
 self-hosted flags must precede the subcommand — `getopts` stops at the first
 non-option argument.
 
-Consequences today: `dotnet test-all.cs` is pinned to `dist/<rid>/flang-ref` because `flang test` does not exist self-hosted, and the README documents the reference-only forms separately. The harness (`dotnet test.cs`) is unaffected — it only ever invokes `build`.
+Both `dotnet test.cs` and `dotnet test-all.cs` now drive `dist/<rid>/flang`.
 
 ---
 
@@ -1286,9 +1305,9 @@ Returning a bare `T` from a function declared `T?` makes the checker unify `?X` 
 
 The C# harness (`dotnet test.cs`, 517 passed / 0 failed / 14 skipped of 531) does not cover this — it is only reachable through the colocated stdlib `test {}` blocks. Confirmed pre-existing by rebuilding from the committed `HmAstLowering.cs` and reproducing.
 
-### `std.process` Spawn Fails For Every Program — Blocks The Bootstrap's C Backend
+### `std.process` Spawn Fails For Every Program — Blocks The Bootstrap's C Backend — RESOLVED
 
-**Status:** Open — blocks all end-to-end measurement through the bootstrap
+**Status:** Resolved (stale by 2026-08-28). `c_backend.f`'s probe finds and spawns the C toolchain on every supported platform — the self-hosted compiler builds itself, the harness and every example. The diagnosis below (an out-parameter lost across a 15-argument foreign call) was never confirmed as the cause. The `ProcessError.NotFound = 0` hazard it names is real and unfixed: `spawn` still cannot distinguish "unset" from a genuine `NotFound`, so give `ProcessError` a non-zero first variant or initialise `*out_err` at entry before trusting a spawn failure.
 **Affected:** `stdlib/std/process.f::spawn` / `stdlib/std/process.c::__flang_proc_spawn`, and through them `lib/flang_codegen/src/c_backend.f`'s compiler probe
 
 Any `Command.spawn()` returns `Err(ProcessError.NotFound)`, including for an absolute path to a binary that exists (`/usr/bin/clang`). Reproduced with a *reference-compiled* binary, so this is not a bootstrap-codegen issue. It is also not the sandbox: it reproduces with sandboxing disabled.
@@ -1401,11 +1420,15 @@ What that leaves: lambdas, array literals and `?.` are the remaining unvisited s
 
 Diagnostic coverage on *invalid* code is its own gap, distinct from the clean self-host typecheck: only a fraction of the `COMPILE-ERROR` tests see their expected code — e.g. `tests/harness/errors/error_char_literal_rejects_string.f` expects E2011, but the bootstrap type-checks the file clean and proceeds to codegen.
 
-**Template sidecars are build artifacts, not checked-in files.** Earlier notes in this document describe `reader.generated.f` / `writer.generated.f` and friends as "checked-in". They are not: `.gitignore:130` ignores `*.generated.f` globally, and `git ls-files 'stdlib/**/*.generated.f'` returns nothing. They exist only because a previous reference-compiler build wrote them (`src/FLang.CLI/Compiler.cs:299`, best-effort). This is load-bearing for the bootstrap, which cannot expand `#interface` / `#implement` itself.
-
-The failure mode is asymmetric and bites on a clean tree: the reference compiler expands only the modules an entry point actually imports, while the bootstrap's driver BFS seeds **every** stdlib source. So any stdlib module that nothing imports never gets a sidecar written, yet the bootstrap still loads it and fails on its unexpanded types. `stdlib/std/encoding/codec.f` (`#interface(Encoder, …)`, `#interface(Decoder, …)`) hit exactly this — 72 of the 92 errors — as did `std/io/file.f` (`#implement(File, Reader)`), with no `file.generated.f` on disk. Regenerating them all requires compiling a file that imports every stdlib module. **A fresh clone has zero sidecars and the bootstrap fails on everything.**
-
-**Fix directions:** either drop `*.generated.f` from `.gitignore` for `stdlib/` and commit them (makes the bootstrap's input reproducible, at the cost of generated files in review), or make sidecar generation an explicit build step that walks the whole stdlib rather than a side effect of whatever happened to be imported. The durable answer is teaching the bootstrap to expand templates itself, which removes the dependency entirely.
+**Template sidecars — RESOLVED, and the note that stood here was wrong by the
+time it was read.** It said `.generated.f` sidecars were load-bearing input
+written as a side effect of reference-compiler builds, so a fresh clone
+"fails on everything". That has not been true since the compiler grew its own
+template expansion: `flang_analysis/project.f` expands `#interface` /
+`#implement` **in memory** and explicitly skips `*.generated.f` when globbing
+sources — they are `--emit-generated` debug output, never input. A clean tree
+has zero sidecars (`find . -name '*.generated.f'` is empty) and builds fine,
+which the CI cold start exercises on every push.
 
 **Update 2026-08-23 (RFC-021 phase 1):** the reference compiler no longer writes sidecars as a side effect — expansion is in memory and `.generated.f` appears only with `--emit-generated`. All sidecars were deleted from the tree the same day. **Closed later the same day by phase 4:** the self-host expands templates natively (`flang build -g` emits the files for debugging); a clean clone self-builds and the stage-2 = stage-3 fixpoint holds.
 
@@ -1540,7 +1563,7 @@ m.add_function(some_function())
 
 ### Reference: Mutation Through an Indexed Receiver Chain Writes to a Temp Copy
 
-**Status:** Open in the C# reference. The self-hosted compiler gets it right.
+**Status:** MOOT — the C# reference was retired 2026-08-28. Kept as a record of a defect class the self-hosted compiler was checked against.
 **Affected:** C# `HmAstLowering` UFCS receiver lowering when the receiver path contains an `[i]` hop; silent data loss
 
 A `&Self` method called through a receiver path with one or more index hops mutates a temporary copy of the element, not the element in the list buffer. The call compiles and runs clean; the write is lost. Field-only hops are handled (see the resolved multi-hop UFCS entry); an index hop in the path reintroduces the spill.
