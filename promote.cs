@@ -126,7 +126,8 @@ Console.WriteLine("""
     boot/ updated. Nothing was committed. Next:
       1. Review the diff:  git diff --stat boot/
       2. Commit boot/ (and only boot/) as its own commit.
-      3. Tag it:           git tag seed/<date-or-version>
+      3. Tag it:           git tag -a seed/<YYYYMMDD>
+                           One tag per date - add -f to move an existing one.
     """);
 return 0;
 
