@@ -18,7 +18,7 @@ public record CompilerConfig(
 
 public static class FlangVersion
 {
-    public const string Current = "0.1.0-alpha";
+    public const string Current = "0.1.6-alpha";
 }
 
 public record CompilerOptions(
