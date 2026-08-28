@@ -1,7 +1,7 @@
 # RFC-023: Language server - in-process, self-hosted, retires FLang.Lsp
 
 **Type:** Compiler tool + stdlib addition
-**Status:** In progress - phases 1-2 landed (`std.rpc.jsonrpc`; `lib/flang_lsp` skeleton: lifecycle, encoding negotiation, full sync, line index; in-process `flang lsp`)
+**Status:** In progress - phases 1-4 landed (`std.rpc.jsonrpc`; `lib/flang_lsp` skeleton: lifecycle, encoding negotiation, full sync, line index; in-process `flang lsp -s <stdlib>`; publishDiagnostics + `$/progress` over lazily-opened projects with buffer overrides; tier 1: documentSymbol, foldingRange, syntax diagnostics per keystroke; `flang/serverStatus` + extension status bar + `flang.serverFlavor` switch)
 **Depends on:** RFC-022 (demand-driven checker)
 **Retires:** `src/FLang.Lsp` (3,729 lines, C#, OmniSharp)
 
@@ -237,8 +237,32 @@ watcher-driven invalidation, and diagnostics clearing when an error is fixed
 
 - [x] 1. std.rpc.jsonrpc: framing + envelope over Reader/Writer, with transcript tests
 - [x] 2. lib/flang_lsp skeleton: initialize, shutdown, sync, line index, position codec
-- [ ] 3. publishDiagnostics + $/progress (workspace open -> full demand -> publish)
-- [ ] 4. tier 1: documentSymbol, foldingRange, syntax diagnostics on keystroke
+- [x] 3. publishDiagnostics + $/progress (workspace open -> full demand -> publish)
+- [x] 4. tier 1: documentSymbol, foldingRange, syntax diagnostics on keystroke
+
+Phase 3-4 deviations from the design above, all downstream of one fact: stdio
+`Reader` cannot poll, so the idle-path demand driving of §2 and the ~300 ms
+debounce of §7 are not implementable yet.
+
+- Analysis runs synchronously between messages, behind `$/progress`
+  begin/end (no percentage - there is no loop to yield from). A request
+  arriving mid-analysis waits; the spec sanctions this (§2).
+- Projects open lazily (first didOpen under a `flang.toml`), not eagerly on
+  workspace open - analyzing every project of a monorepo up front would block
+  the first didOpen for many seconds each.
+- Keystrokes get tier-1 parse-only diagnostics; the type tier catches up on
+  didSave and on watcher events (changed file -> re-check with that file
+  dirty; created/deleted file or manifest edit -> project rebuilt whole).
+- foldingRange is token-based (delimiter nesting over the lexer stream), not
+  AST-based: survives parse errors, covers every nesting level, ~40 lines.
+- `test {}` bodies are still unchecked - the self-host checker skips Test
+  decls entirely today, so `checkTests` (§9) waits on that.
+- Extension work scheduled for phase 10 landed early (v0.3.0): a
+  `flang.serverFlavor` setting switches between `flang-ref --lsp
+  --stdlib-path <p>` and `flang lsp -s <p>`, and a status-bar item renders
+  the server's custom `flang/serverStatus` notification (compiler version,
+  workspace folders, open projects with error counts). Phase 10 remains: flip
+  the default flavor and retire the reference server.
 - [ ] 5. ModuleIndex + workspace/symbol
 - [ ] 6. hover, definition, typeDefinition, references
 - [ ] 7. inlayHint, signatureHelp

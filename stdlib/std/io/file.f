@@ -192,6 +192,15 @@ pub fn buffered_writer(file: &File, storage: u8[]) BufferedWriter {
     return buffered_writer(file.writer(), storage)
 }
 
+// Put the file's descriptor into binary mode. Files opened by `open_file` already are; the standard
+// streams inherit the platform default, which on Windows is text mode - reads collapse CRLF and
+// stop at ^Z, writes expand \n to \r\n. A byte-exact protocol over stdin/stdout (the LSP's
+// Content-Length framing) must switch them first. No-op on POSIX. Returns false when the OS
+// refuses.
+pub fn set_binary_mode(file: &File) bool {
+    return raw_set_binary(file.handle.fd)
+}
+
 // =============================================================================
 // Standard streams (stdin/stdout/stderr as Files)
 // =============================================================================

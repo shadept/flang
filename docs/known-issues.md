@@ -478,6 +478,68 @@ in the reference's receiver lowering.
 
 ---
 
+### Self-Host: Building a Project That Overlaps the Stdlib Root Double-Loaded Every Module — RESOLVED
+
+**Status:** Resolved 2026-08-28 (discovered via the LSP status bar reporting 1035 errors for `std`)
+**Affected (was):** `flang_analysis` module loading; visible through `flang build` and the LSP
+
+Module dedup during import discovery was by **path string** (`analyze.f`'s
+`seen` set). A file reachable under two spellings loaded twice, and every
+duplicated declaration then produced ambiguity errors - `flang -c -e build`
+inside `stdlib/std` (which has its own manifest) reported ~1035 errors because
+project entries arrived as `io/file.f` while `seed_stdlib` enqueued the same
+file as `../std/io/file.f`. Building the working `std` against a *different*
+stdlib checkout (`-s dist/<rid>/stdlib`) hit the same wall as a genuine
+two-directory collision on the `std.*` names.
+
+Two loader fixes in `flang_analysis`:
+
+- **Identity dedup** - the `seen` set keys on `resolver.f::canon_path`
+  (absolute, forward slashes, `.`/`..` folded, lowercase drive), and
+  `index_edges` matches edges the same way, so one file under any spelling is
+  one module.
+- **Project shadowing** - `seed_stdlib` skips a stdlib file whose dotted name
+  `resolve_import` maps to a project or dependency file, matching the
+  precedence resolution already has. The stdlib's own `std` project analyzes
+  against any `--stdlib-path`: its files win for `std.*`, `core.*` comes from
+  the configured root.
+
+Regression tests: `resolver.f` "canon_path folds dots...", `analyze.f` "one
+file reached under two spellings loads once".
+
+---
+
+### Reference: Method Mutation Through a One-Hop Field of a By-Value Local Is Dropped
+
+**Status:** Open (discovered 2026-08-28 building the LSP outline)
+**Affected:** reference compiler UFCS receiver lowering
+**Workaround in tree:** `flang_lsp/src/handlers/document_symbol.f` `type_symbol` builds the list first and assigns the field whole
+
+A mutating method call on a **field of a local that was initialized from a
+function return** passes a copy of the field, so the mutation is silently lost.
+Depth one is enough:
+
+```
+let s = make()      // make() S { return .{ xs = list(0) } }
+s.xs.push(1)
+s.xs.push(2)
+s.xs.len            // reference: 0, self-host: 2
+```
+
+The self-hosted compiler lowers this correctly; the reference does not, so the
+same source diverges between the two - the "silently-wrong code" failure mode,
+and a stage-0/stage-1 behavior split. The resolved multi-hop entry below
+("Mutation Through a Multi-Hop UFCS Receiver") assumed depth one always works
+because the target is a plain identifier held as a pointer; a local bound to a
+call result is apparently not, and its member access spills a copy before the
+receiver GEP.
+
+Workaround: build the collection in its own local and assign the field
+(`let xs = ...; s.xs = xs`), or take an explicit reference first
+(`let r = &s.xs; r.push(...)`).
+
+---
+
 ### Reference + Self-Host: `for x in <fixed array>` Passed the Array's Storage Pointer as a Slice — RESOLVED
 
 **Status:** Resolved 2026-08-22 (found converting index loops to iterators)

@@ -15,6 +15,7 @@
 import std.allocator
 import std.list
 import std.option
+import std.path
 import std.result
 import std.string
 import std.string_builder
@@ -181,9 +182,20 @@ pub fn join_module_path(base: String, segs: &List(String), start: usize,
 // root for `std.*` / `core.*` (the value of the build's `--stdlib-path`). Each dependency's source
 // root is derived from its own manifest, exactly as the C# compiler does.
 pub fn resolve_ctx(proj: &Project, stdlib_root: String, allocator: &Allocator? = null) ResolveCtx {
+    return resolve_ctx_at(proj, ".", stdlib_root, allocator)
+}
+
+// Build a resolution context for `proj` rooted at `project_dir` instead of the current directory.
+// Dependency paths in the manifest are relative to the manifest's own directory, so they are joined
+// under `project_dir` before their source roots are derived. The LSP analyzes projects anywhere in
+// the workspace this way; a build passes `"."`.
+pub fn resolve_ctx_at(proj: &Project, project_dir: String, stdlib_root: String,
+    allocator: &Allocator? = null) ResolveCtx {
     let deps = list(0, allocator)
     for &d in proj.deps {
-        let root = normalized_owned(dep_source_root(d.path.as_view(), allocator), allocator)
+        let dep_dir = join_under(project_dir, d.path.as_view(), allocator)
+        let root = normalized_owned(dep_source_root(dep_dir.as_view(), allocator), allocator)
+        dep_dir.deinit()
         deps.push(DepRoot { name = from_view(d.name.as_view()), root = root })
     }
     let globals: List(OwnedString) = list(proj.global_imports.len, allocator)
@@ -192,11 +204,11 @@ pub fn resolve_ctx(proj: &Project, stdlib_root: String, allocator: &Allocator? =
     }
     return ResolveCtx {
         project_name = from_view(proj.name.as_view()),
-        project_source_root = normalized_owned(source_root(".", proj.source.as_view(), allocator),
-            allocator),
+        project_source_root = normalized_owned(source_root(project_dir, proj.source.as_view(),
+                allocator), allocator),
         deps = deps,
         stdlib_root = normalize_sep(stdlib_root, allocator),
-        cwd = from_view("."),
+        cwd = normalize_sep(project_dir, allocator),
         global_imports = globals,
         comptime = host_ctx(),
         lib_kind = proj.kind match {
@@ -206,6 +218,27 @@ pub fn resolve_ctx(proj: &Project, stdlib_root: String, allocator: &Allocator? =
         lazy_bodies = false,
         warn_unused = false,
     }
+}
+
+// `rel` joined under `dir`, unless `rel` is already absolute (`/x` or `c:/x`) or `dir` is the
+// current directory.
+fn join_under(dir: String, rel: String, allocator: &Allocator?) OwnedString {
+    if dir == "." or dir.len == 0 or is_absolute(rel) {
+        return from_view(rel, allocator)
+    }
+    let sb = string_builder(dir.len + rel.len + 1, allocator)
+    defer sb.deinit()
+    sb.append(dir)
+    sb.append('/')
+    sb.append(rel)
+    return sb.to_string()
+}
+
+fn is_absolute(path: String) bool {
+    if path.len > 0 and (path[0] == '/' or path[0] == '\\') {
+        return true
+    }
+    return path.len > 1 and path[1] == ':'
 }
 
 // A resolution context for a single-file build: no project name or deps, so only the stdlib and
@@ -309,6 +342,70 @@ fn normalized_owned(s: OwnedString, allocator: &Allocator?) OwnedString {
     let n = normalize_sep(s.as_view(), allocator)
     s.deinit()
     return n
+}
+
+// One spelling for one file: forward slashes, absolute (joined under the current directory when
+// relative), `.` and `..` segments folded lexically, and a lowercased drive letter. Symlinks are
+// not resolved. Module identity during loading compares this spelling, so the same file reached
+// through differently written roots (`io/file.f`, `./io/file.f`, `../std/io/file.f`, a drive-cased
+// absolute) counts as one module.
+pub fn canon_path(p: String, allocator: &Allocator? = null) OwnedString {
+    let norm = normalize_sep(p, allocator)
+    if !is_absolute(norm.as_view()) {
+        const wd = cwd(allocator)
+        if wd.is_ok() {
+            let base = wd.unwrap()
+            const joined = $"{base.as_view()}/{norm.as_view()}"
+            base.deinit()
+            norm.deinit()
+            norm = normalize_sep(joined.as_view(), allocator)
+            joined.deinit()
+        }
+    }
+    return fold_dots(norm, allocator)
+}
+
+// Resolve `.` and `..` segments of a forward-slash path; consumes the input. A `..` that would
+// climb past the root is dropped.
+fn fold_dots(p: OwnedString, alloc: &Allocator?) OwnedString {
+    const v = p.as_view()
+    let segs = split(v, '/')
+    defer segs.deinit()
+    let kept: List(String) = list(segs.len, alloc)
+    defer kept.deinit()
+    for s in segs {
+        if s == "" or s == "." {
+            continue
+        }
+        if s == ".." {
+            const _x = kept.pop()
+            continue
+        }
+        kept.push(s)
+    }
+    if kept.len == 0 {
+        return p
+    }
+
+    let sb = string_builder(v.len, alloc)
+    defer sb.deinit()
+    if v.len > 0 and v[0] == '/' {
+        sb.append('/')
+    }
+    for i in 0..kept.len {
+        if i > 0 {
+            sb.append('/')
+        }
+        const s = kept[i]
+        if i == 0 and s.len > 1 and s[1] == ':' and s[0] >= 'A' and s[0] <= 'Z' {
+            sb.append_byte(s[0] + 32)
+            sb.append(s[1..s.len])
+        } else {
+            sb.append(s)
+        }
+    }
+    p.deinit()
+    return sb.to_string()
 }
 
 // The part of `path` beneath `root`, or null when `path` is not strictly inside `root`. A separator
@@ -465,6 +562,40 @@ test "join_module_path: builds base/seg/seg.f from segments" {
     let p2 = join_module_path("dep/src", &segs, 1)
     defer p2.deinit()
     assert_true(p2.as_view() == "dep/src/io/file.f", "skips leading segment")
+}
+
+test "canon_path folds dots, absolutizes, and lowercases the drive" {
+    let a = canon_path("C:\\w\\proj\\..\\core\\src\\a.f")
+    defer a.deinit()
+    assert_true(a.as_view() == "c:/w/core/src/a.f", "dots folded, drive lowered, slashes forward")
+
+    let b = canon_path("c:/w/./x/a.f")
+    defer b.deinit()
+    assert_true(b.as_view() == "c:/w/x/a.f", "single dots vanish")
+
+    let r = canon_path("src/main.f")
+    defer r.deinit()
+    assert_true(r.as_view() != "src/main.f", "relative paths absolutize")
+    assert_true(ends_with(r.as_view(), "/src/main.f"), "under the current directory")
+
+    let dot = canon_path("./src/main.f")
+    defer dot.deinit()
+    assert_true(dot.as_view() == r.as_view(), "`./` spelling canonicalizes to the same path")
+}
+
+test "resolve_ctx_at roots the project and its deps under the given directory" {
+    let proj = parse_project("[project]\nname = \"p\"\nkind = \"lib\"\nsource = \"src/**/*.f\"\n\n[dependencies]\ncore = { path = \"../core\" }\n")
+    defer proj.deinit()
+    let ctx = resolve_ctx_at(&proj, "w/proj", "stdlib")
+    defer ctx.deinit()
+    assert_true(ctx.project_source_root.as_view() == "w/proj/src", "source root under the dir")
+    assert_true(ctx.cwd.as_view() == "w/proj", "cwd is the project dir")
+    assert_true(ctx.deps[0].root.as_view() == "w/proj/../core/src",
+        "relative dep path joins under the dir")
+
+    let abs = resolve_ctx_at(&proj, "c:/w", "stdlib")
+    defer abs.deinit()
+    assert_true(abs.project_source_root.as_view() == "c:/w/src", "absolute dir kept")
 }
 
 test "resolve_ctx normalises a backslash stdlib root" {

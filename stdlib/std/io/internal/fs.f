@@ -68,6 +68,7 @@ const FS_R_ERR: i32 = 2
 #foreign fn __flang_fs_close(fd: i32, out_err: &i32) i32
 #foreign fn __flang_fs_read(fd: i32, buf: &u8, len: usize, out_n: &usize, out_err: &i32) i32
 #foreign fn __flang_fs_write(fd: i32, buf: &u8, len: usize, out_n: &usize, out_err: &i32) i32
+#foreign fn __flang_fs_set_binary(fd: i32) i32
 #foreign fn __flang_fs_getcwd(buf: &u8, cap: usize, out_len: &usize, out_err: &i32) i32
 #foreign fn __flang_fs_realpath(path: &u8, buf: &u8, cap: usize, out_len: &usize, out_err: &i32) i32
 #foreign fn __flang_fs_temp_dir(buf: &u8, cap: usize, out_len: &usize, out_err: &i32) i32
@@ -153,6 +154,13 @@ pub fn raw_read(fd: i32, buf: u8[]) Result(usize, FsError) {
     let err: i32 = 0
     check(__flang_fs_read(fd, buf.ptr, buf.len, &n, &err), err)?
     return Ok(n)
+}
+
+// Put an fd into binary mode. Windows CRT opens the standard streams in text mode (reads collapse
+// CRLF and stop at ^Z, writes expand \n to \r\n); byte-exact protocols over them need this. On
+// POSIX every fd is already binary and this is a no-op. Returns false when the OS refuses.
+pub fn raw_set_binary(fd: i32) bool {
+    return __flang_fs_set_binary(fd) == 0
 }
 
 // A short write is reported honestly; looping is the caller's job.

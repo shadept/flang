@@ -113,7 +113,7 @@ pub fn main() i32 {
     return cli.subcommand match {
         "build" => run_build(argv, cli.rest_index, &cli)
         "fmt" => run_fmt(argv, cli.rest_index)
-        "lsp" => run_lsp()
+        "lsp" => run_lsp(argv, cli.rest_index, &cli)
         "cst" => spawn_tool("cst_explorer", argv, cli.rest_index, cli.verbose)
         "tokens" => spawn_tool("dump_tokens", argv, cli.rest_index, cli.verbose)
         else => unknown_subcommand(cli.subcommand)
@@ -238,7 +238,7 @@ fn print_help() {
     println("  build  [file.f]      build the project (flang.toml), or a single file")
     println("  fmt    [file.f...]   format the project (flang.toml), or the given files")
     println("                       --check: write nothing, exit 1 if anything would change")
-    println("  lsp                  start the language server (spawns flang_lsp)")
+    println("  lsp [-s dir]         start the language server over stdio (in-process)")
     println("  cst    <file.f>      print the CST tree (spawns cst_explorer)")
     println("  tokens <file.f>      print the token stream (spawns dump_tokens)")
     println("")
@@ -1047,9 +1047,35 @@ fn build_failed(path: String, errs: usize) i32 {
 
 // fmt subcommand
 
-// lsp: serve the language server over stdio until the client sends `exit`.
-fn run_lsp() i32 {
-    let srv = lsp_server(stdin.reader(), stdout.writer())
+// lsp: serve the language server over stdio until the client sends `exit`. The stdlib root comes
+// from `-s` in either position (`flang -s <p> lsp` or `flang lsp -s <p>`), defaulting to the `<exe
+// dir>/stdlib` convention like `build`.
+fn run_lsp(argv: String[], rest: usize, cli: &Cli) i32 {
+    let stdlib = effective_stdlib(cli.stdlib_path, argv)
+    let opts = getopts("s(stdlib-path):", argv, rest)
+    loop {
+        const item = opts.next()
+        if item.is_none() {
+            break
+        }
+        item.unwrap() match {
+            OptArg(c, val) => {
+                if c == 's' {
+                    stdlib.deinit()
+                    stdlib = from_view(val)
+                }
+            }
+            else => {}
+        }
+    }
+    defer stdlib.deinit()
+
+    // Content-Length framing is byte-exact; Windows text-mode stdio would corrupt it.
+    const _ib = set_binary_mode(&stdin)
+    const _ob = set_binary_mode(&stdout)
+
+    const me = project_info()
+    let srv = lsp_server(stdin.reader(), stdout.writer(), stdlib.as_view(), me.version)
     defer srv.deinit()
     return srv.run()
 }

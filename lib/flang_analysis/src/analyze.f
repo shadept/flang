@@ -216,9 +216,11 @@ pub fn analyze_project(ctx: &ResolveCtx, entries: &List(OwnedString), overrides:
     let modules: List(Module) = list(0, allocator)
     const parse_start = monotonic_ns()
 
-    // BFS over the import graph, deduplicated by file path.
+    // BFS over the import graph, deduplicated by canonical file identity (`canon_path`) - the same
+    // file reached under two spellings (relative vs absolute, `./`, drive-letter case) is one
+    // module. The queue keeps each path as first spelled; the canonical form is only the identity.
     let queue: List(OwnedString) = list(0, allocator)
-    let seen: Set(String) = set(allocator)
+    let seen: Set(OwnedString) = set(allocator)
     for i in 0..entries.len {
         enqueue_copy(&queue, &seen, entries[i].as_view())
     }
@@ -663,7 +665,7 @@ fn parse_to_module(src: String, file_id: i32, target: &ComptimeCtx, diags: &List
 // dependency-respecting visit order. `enqueue_owned` consumes the resolved path, so the edge keeps
 // its own copy.
 fn enqueue_imports(ctx: &ResolveCtx, m: &Module, from: usize, queue: &List(OwnedString),
-    seen: &Set(String), edge_from: &List(usize), edge_to: &List(OwnedString),
+    seen: &Set(OwnedString), edge_from: &List(usize), edge_to: &List(OwnedString),
     diags: &List(Diagnostic), alloc: &Allocator?) {
     for d in m.decls {
         d match {
@@ -686,7 +688,7 @@ fn enqueue_imports(ctx: &ResolveCtx, m: &Module, from: usize, queue: &List(Owned
 // `flang.toml`'s `[imports].global`. Loading the module is only half the job - `build_visibility`
 // is what actually puts it in each project file's scope; this side just guarantees it is in the
 // module set to be found.
-fn seed_globals(ctx: &ResolveCtx, queue: &List(OwnedString), seen: &Set(String),
+fn seed_globals(ctx: &ResolveCtx, queue: &List(OwnedString), seen: &Set(OwnedString),
     diags: &List(Diagnostic), alloc: &Allocator?) {
     for &g in ctx.global_imports {
         let segs = split(g.as_view(), '.')
@@ -702,7 +704,7 @@ fn seed_globals(ctx: &ResolveCtx, queue: &List(OwnedString), seen: &Set(String),
     }
 }
 
-fn seed_prelude(ctx: &ResolveCtx, queue: &List(OwnedString), seen: &Set(String),
+fn seed_prelude(ctx: &ResolveCtx, queue: &List(OwnedString), seen: &Set(OwnedString),
     alloc: &Allocator?) {
     let segs: List(String) = list(2, alloc)
     segs.push("core")
@@ -718,9 +720,14 @@ fn seed_prelude(ctx: &ResolveCtx, queue: &List(OwnedString), seen: &Set(String),
 // The reference compiler compiles every program against the whole stdlib regardless of imports, and
 // lenient type resolution in the checker relies on every stdlib nominal being registered - so the
 // BFS seeds the full stdlib tree.
-// ponytail: typechecks all of std on every build; prune to the import closure once stdlib type
-// visibility turns strict.
-fn seed_stdlib(ctx: &ResolveCtx, queue: &List(OwnedString), seen: &Set(String),
+//
+// A stdlib file whose dotted name the project or a dependency provides itself is NOT seeded: the
+// project rule outranks the include rule in `resolve_import`, so those modules load from the
+// project and the stdlib's copy would be a duplicate. This is what makes the stdlib's own `std`
+// project analyzable against any `--stdlib-path`, including a different stdlib checkout. ponytail:
+// typechecks all of std on every build; prune to the import closure once stdlib type visibility
+// turns strict.
+fn seed_stdlib(ctx: &ResolveCtx, queue: &List(OwnedString), seen: &Set(OwnedString),
     alloc: &Allocator?) {
     if ctx.stdlib_root.as_view().len == 0 {
         return
@@ -730,9 +737,47 @@ fn seed_stdlib(ctx: &ResolveCtx, queue: &List(OwnedString), seen: &Set(String),
     pattern.deinit()
     for i in 0..found.len {
         let norm = normalize_sep(found[i].as_view(), alloc)
+        if shadowed_by_project(ctx, norm.as_view(), alloc) {
+            norm.deinit()
+            continue
+        }
         enqueue_owned(queue, seen, norm)
     }
     found.deinit()
+}
+
+// Whether the project or a dependency provides its own module for this stdlib file's dotted name -
+// resolution would never pick the stdlib copy, so the loader must not either.
+fn shadowed_by_project(ctx: &ResolveCtx, stdlib_file: String, alloc: &Allocator?) bool {
+    const rel = module_rel(stdlib_file, ctx.stdlib_root.as_view())
+    if rel.is_none() {
+        return false
+    }
+    let segs = split(rel.unwrap(), '/')
+    defer segs.deinit()
+    const r = resolve_import(ctx, &segs, alloc)
+    if r.is_none() {
+        return false
+    }
+    const p = r.unwrap()
+    const shadowed = p.as_view() != stdlib_file
+    p.deinit()
+    return shadowed
+}
+
+// `<root>/std/io/file.f` -> `std/io/file`, or null when the path is not under the root.
+fn module_rel(path: String, root: String) String? {
+    if root.len == 0 or !starts_with(path, root) or path.len <= root.len {
+        return null
+    }
+    if path[root.len] != '/' {
+        return null
+    }
+    const rel = path[(root.len + 1)..path.len]
+    if !ends_with(rel, ".f") {
+        return null
+    }
+    return Some(rel[0..(rel.len - 2)])
 }
 
 // The text to compile for `path`: a supplied buffer when one stands in for that file, the file on
@@ -751,18 +796,24 @@ fn read_source(path: String, overrides: &Dict(String, String)?) OwnedString? {
     return read_text(path)
 }
 
-// Turn the path-keyed import edges into module-index pairs. An edge naming a path that never became
-// a module (an unreadable file) is dropped. Feeds both the visit order and the lazy demand mask.
+// Turn the path-keyed import edges into module-index pairs, matching by canonical identity - an
+// import can resolve to a spelling other than the one the module loaded under. An edge naming a
+// path that never became a module (an unreadable file) is dropped. Feeds both the visit order and
+// the lazy demand mask.
 fn index_edges(file_paths: &List(OwnedString), edge_from: &List(usize), edge_to: &List(OwnedString),
     alloc: &Allocator?) List(ImportEdge) {
-    let index_of: Dict(String, usize) = dict(alloc)
+    let index_of: Dict(OwnedString, usize) = dict(alloc)
     defer index_of.deinit()
     for i in 0..file_paths.len {
-        index_of.set(file_paths[i].as_view(), i)
+        const key = canon_path(file_paths[i].as_view(), alloc)
+        index_of.set(key.as_view(), i)
+        key.deinit()
     }
     let edges = list(edge_from.len, alloc)
     for i in 0..edge_from.len {
-        const to = index_of.get(edge_to[i].as_view())
+        const key = canon_path(edge_to[i].as_view(), alloc)
+        const to = index_of.get(key.as_view())
+        key.deinit()
         if to.is_none() {
             continue
         }
@@ -771,21 +822,30 @@ fn index_edges(file_paths: &List(OwnedString), edge_from: &List(usize), edge_to:
     return edges
 }
 
-fn enqueue_copy(queue: &List(OwnedString), seen: &Set(String), path: String) {
-    if seen.contains(path) {
+fn enqueue_copy(queue: &List(OwnedString), seen: &Set(OwnedString), path: String) {
+    if !mark_seen(seen, path) {
         return
     }
     queue.push(from_view(path))
-    seen.add(queue[queue.len - 1].as_view())
 }
 
-fn enqueue_owned(queue: &List(OwnedString), seen: &Set(String), owned: OwnedString) {
-    if seen.contains(owned.as_view()) {
+fn enqueue_owned(queue: &List(OwnedString), seen: &Set(OwnedString), owned: OwnedString) {
+    if !mark_seen(seen, owned.as_view()) {
         owned.deinit()
         return
     }
     queue.push(owned)
-    seen.add(queue[queue.len - 1].as_view())
+}
+
+// Record `path`'s canonical identity; false when that file was already enqueued under any spelling.
+fn mark_seen(seen: &Set(OwnedString), path: String) bool {
+    const key = canon_path(path)
+    defer key.deinit()
+    if seen.contains(key.as_view()) {
+        return false
+    }
+    seen.add(key.as_view())
+    return true
 }
 
 fn push_unresolved(diags: &List(Diagnostic), id: &ImportDecl, alloc: &Allocator?) {
@@ -806,6 +866,25 @@ test "an override stands in for a file that is not on disk" {
     let text = got.unwrap()
     defer text.deinit()
     assert_true(text.as_view() == "fn main() i32 { return 0 }\n", "and it is the buffer verbatim")
+}
+
+test "one file reached under two spellings loads once" {
+    let proj = parse_project("[project]\nname = \"p\"\nkind = \"exe\"\nsource = \"src/**/*.f\"\n")
+    defer proj.deinit()
+    let ctx = resolve_ctx(&proj, "")
+    defer ctx.deinit()
+    let entries: List(OwnedString) = list(2)
+    defer entries.deinit()
+    entries.push(from_view("src/main.f"))
+    entries.push(from_view("./src/main.f"))
+    let ov: Dict(String, String) = dict()
+    defer ov.deinit()
+    ov.set("src/main.f", "fn main() i32 { return 0 }\n")
+
+    let unit = analyze_project(&ctx, &entries, Some(&ov))
+    defer unit.deinit()
+    assert_eq(unit.modules.len, 1 as usize, "the spellings dedup to one module")
+    assert_eq(unit.diagnostics.len, 0 as usize, "and nothing is declared twice")
 }
 
 test "re-analysis republishes diagnostics rather than appending to them" {

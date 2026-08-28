@@ -8,15 +8,22 @@ import std.option
 import std.string
 import std.test
 import flang_lsp.line_index
+import flang_lsp.uri
 
 pub type Document = struct {
     text: OwnedString
+    // The filesystem spelling of the entry's URI (uri.f's convention), empty for non-file URIs. The
+    // URI is the protocol's name for the buffer and is echoed back verbatim; the path is what
+    // analysis, manifest discovery and watcher events compare against, converted once here rather
+    // than on every use.
+    path: OwnedString
     version: i64
     index: LineIndex
 }
 
 pub fn deinit(self: &Document) {
     self.text.deinit()
+    self.path.deinit()
     self.index.deinit()
 }
 
@@ -39,8 +46,10 @@ pub fn len(self: &DocumentStore) usize {
 // didOpen: (re)create the entry. An already-open URI is replaced.
 pub fn open(self: &DocumentStore, uri: String, version: i64, text: String) {
     self.close(uri)
+    const p = uri_to_path(uri)
     const doc = Document {
         text = from_view(text),
+        path = p ?? from_view(""),
         version = version,
         index = line_index(text),
     }

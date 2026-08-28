@@ -35,6 +35,7 @@
  *   __flang_fs_getcwd   : 0 = OK, 1 = error (code in *out_err)
  *   __flang_fs_realpath : 0 = OK, 1 = error (code in *out_err)
  *   __flang_fs_temp_dir : 0 = OK, 1 = error (code in *out_err)
+ *   __flang_fs_set_binary : 0 = OK, 1 = error
  *
  * "." and ".." are filtered inside the shim — callers never see them.
  */
@@ -339,6 +340,12 @@ int __flang_fs_write(int32_t fd, const uint8_t* buf, size_t len, size_t* out_n, 
     return FS_R_OK;
 }
 
+/* The CRT opens fds 0/1/2 in text mode: reads collapse CRLF and stop at ^Z, writes expand
+ * \n to \r\n. Byte-exact protocols over the standard streams must switch them to binary. */
+int __flang_fs_set_binary(int32_t fd) {
+    return _setmode((int)fd, _O_BINARY) < 0 ? FS_R_ERR : FS_R_OK;
+}
+
 /* Copies `src` into `buf`, reporting FS_NAME_TOO_LONG rather than truncating.
  * Shared by the three "OS hands us a path" entry points below. */
 static int fs_emit_path(const char* src, uint8_t* buf, size_t cap,
@@ -540,6 +547,12 @@ int __flang_fs_write(int32_t fd, const uint8_t* buf, size_t len, size_t* out_n, 
         return FS_R_ERR;
     }
     *out_n = (size_t)n;
+    return FS_R_OK;
+}
+
+/* POSIX fds have no text mode; nothing to switch. */
+int __flang_fs_set_binary(int32_t fd) {
+    (void)fd;
     return FS_R_OK;
 }
 
