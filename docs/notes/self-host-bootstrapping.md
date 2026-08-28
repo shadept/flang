@@ -229,12 +229,22 @@ Rejected alternatives, for the record:
   blob and a decompression dependency into cold start. Zig needed compression at 80 MiB; 18 MB
   does not force it.
 
-Open questions to settle when implementing:
+Implementation (2026-08-28) - decisions taken:
 
-- Which OS families get a committed seed (win + linux + mac, or fewer)? Does `--target-arch` also
-  change emitted C today, i.e. is the seed per-OS or per-OS-arch?
-- Whether `promote` lives in build.cs, a script, or `flang` itself.
-- Whether the harness gate for promotion is the full suite or the reference-parity subset.
+- Seeds match the CI matrix: `boot/win-x64`, `boot/linux-x64`, `boot/darwin-arm64`.
+  `platform.arch` reaches emitted C only through comptime `#if` (one use in the tree,
+  `host_arch()`), and both supported arches are 64-bit, so the seed is effectively per-OS;
+  directories carry the arch name for honesty about what was tested.
+- `promote` is its own dotnet script, `promote.cs` (build.cs stays a build). The compiler gained
+  `-E/--emit-c-only` (stop after writing the generated C, no toolchain runs) so one host emits
+  every target's seed.
+- The promote gate is the full harness under stage 2 (`FLANG=stage2 dotnet run test.cs`) plus the
+  stage-2 = stage-3 byte-identical fixpoint.
+- The CI `bootstrap` job runs the cold start per push and, while the C# reference exists, the
+  continuous DDC check: reference-rooted stage-2 C == seed-rooted stage-2 C.
+- Current state: infrastructure landed; the typer regression that blocked the first promote is
+  fixed (docs/known-issues.md, "identifier in value position preferred a function over a module
+  const") and the stage-2 = stage-3 fixpoint holds again.
 
 ## Sources
 

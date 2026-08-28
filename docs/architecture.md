@@ -259,6 +259,16 @@ build/
 - **Foreign structs skip codegen.** `IrStruct.IsForeign` structs have no typedef or definition emitted — the `#include` of the original C header provides them. Their `CName` is the original C name (e.g. `Color`), not mangled.
 - **Intrinsics declared in `stdlib/core`** with `#intrinsic` directive.
 
+## Bootstrap Seed (`boot/`)
+
+The committed artifact a clean clone can rebuild the compiler from with only a C99 compiler — the self-host analog of the C# reference. One directory per target (`boot/win-x64`, `boot/linux-x64`, `boot/darwin-arm64`), each holding `flang.c` — the whole compiler as stage-2-emitted C for that target's `#if` context — plus the stdlib's hand-written runtime sidecar `.c` files, copied so the seed is a closed set even when HEAD's stdlib drifts. `boot/SEED` records version, commit, and date. Cold start: `make` (or `build.bat` on Windows) in the seed directory produces `flang-seed`, which builds the current sources.
+
+- **The only writer is `dotnet run promote.cs`.** It refuses unless stage-2 = stage-3 emitted C is byte-identical and the full harness is green under stage 2, then emits every target's seed via `flang -E -T <os> -A <arch> build` (`-E` stops after writing the generated C — no toolchain runs, so one host emits all targets). Each promote is its own commit, tagged `seed/<date-or-version>`.
+- **Seed rule.** Compiler, `lib/*`, and `stdlib` sources may only use language features the current seed supports. New feature order: implement, harness-test, promote, then use. Promotion is deliberate (feature about to be used in compiler source, runtime/ABI change, periodic refresh), not per-commit.
+- **CI `bootstrap` job** (skips until a seed exists): cc the seed, seed builds stage 1, stage 1 builds stage 2, stage 2 builds stage 3, assert stage-2 C == stage-3 C; then, while the C# reference exists, assert the reference-rooted stage-2 C is byte-identical to the seed-rooted one (diverse double-compiling — two independent roots must converge).
+
+Survey of how other self-hosted compilers bootstrap, and the rationale for this shape: `docs/notes/self-host-bootstrapping.md`.
+
 ## Profiler (`--profile`)
 
 Self-hosted compiler only (RFC-025). `flang -p build` instruments the target program for profiling; the flag implies `--release` so the profile measures optimized codegen. `-p` instruments the application's functions only — stdlib time bills to the calling application function's self time, the way a foreign call's does — and `-P`/`--profile-all` widens to the whole program. At process exit the binary writes a flat table (calls, self ms, inclusive ms, ns/call, sorted by self time) to stderr; with `FLANG_PROFILE_OUT=<path>` it also writes folded stacks (`a;b;c <self_ns>` per call path), the input format of speedscope / inferno / flamegraph.pl.

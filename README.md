@@ -46,6 +46,21 @@ Re-running `dotnet run build.cs` after no source changes takes about two
 seconds; it skips the self-hosted rebuild unless something under `bootstrap/`,
 `lib/`, `stdlib/` or `src/` is newer. Pass `--force` to rebuild regardless.
 
+### Building from the seed (C compiler only)
+
+`boot/<platform>/` carries the self-hosted compiler as committed, generated
+C99 — a bootstrap seed that needs no .NET and no prior FLang binary:
+
+```sh
+cd boot/linux-x64 && make        # build.bat on Windows (VS dev prompt)
+cd ../../bootstrap
+../boot/linux-x64/flang-seed -r -s ../stdlib build
+```
+
+That is the whole chain: the seed builds the current compiler from source.
+The seed only changes through `dotnet run promote.cs`, which gates on the
+stage-2 = stage-3 fixpoint and a green test suite — see `boot/README.md`.
+
 ## Usage
 
 ```sh

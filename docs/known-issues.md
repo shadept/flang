@@ -89,6 +89,36 @@ in its fixtures so the assertions are no longer vacuous.
 
 ## Open Issues
 
+### Self-hosted: identifier in value position preferred a function over a module const - RESOLVED
+
+**Status:** Resolved 2026-08-28
+**Affected:** `lib/flang_typer/src/checker.f` (`check_identifier`)
+
+`check_identifier` tried the function registry before the constant
+registry, so a bare identifier in value position resolved to a visible
+FUNCTION of that name even when a visible module CONST also carried it.
+The reference resolves consts first (they live in its scope
+environment), so this was a false rejection unique to the self-hosted
+checker - and invisible until some module imported both providers of a
+colliding name.
+
+The LSP skeleton (cad8e37) created exactly that collision in the
+compiler's own `main.f`: `stdin.reader()` with both `std.io.file`
+(`pub const stdin: File`) and `std.process` (`pub fn stdin(self:
+&Child) ChildStdin?`) imported resolved `stdin` to the std.process
+function value, and every `reader` overload then failed against a
+receiver of function type - E2011 "no matching overload for `reader`
+with 0 argument(s)". That broke the entire self-build (stage 2/3, seed
+promotion) while the reference kept accepting the tree; small repros
+passed because they never imported both modules. Diagnosed by dumping
+the resolved receiver type at the failing call: the candidates were all
+correct, the receiver was `fn(&Child) ChildStdin?`.
+
+Fix: consts resolve before function-as-value in `check_identifier`
+(reference parity). Locals still shadow consts; direct calls `f(...)`
+still prefer registry overloads. Regression test:
+`tests/harness/imports/const_shadows_fn_value.f`.
+
 ### Checker leaks ~129 MB per cold check, ~24 MB per re-demand
 
 **Status:** Open - reduced from 250 MB / 60 MB, residual unattributed

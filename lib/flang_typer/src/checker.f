@@ -4472,9 +4472,23 @@ fn check_identifier(self: &Checker, id: &IdentifierExpr) Ty {
         return bound
     }
 
-    // Try function registry.
     let vis = fn_visibility(self)
     defer vis.visible.deinit()
+
+    // Module-level constant? Consts resolve BEFORE function-as-value, matching the reference
+    // checker, where module consts live in the scope environment: `stdin` (a const File in
+    // std.io.file) must not turn into the function value `std.process.stdin` when both modules are
+    // imported. Record which one won (M11 globals): the FQN is interned into the result's
+    // synth_strings so the view outlives the checker (lowering reads targets after `deinit`).
+    let chit = self.constants.lookup_entry(id.name, &vis)
+    if chit.is_some() {
+        let h = chit.unwrap()
+        let stable = self.results.add_synth_string(from_view(h.fqn, self.allocator))
+        self.results.record_target(self.node_of(id.span), ResolvedTarget.RtConst(stable))
+        return h.value
+    }
+
+    // Try function registry.
     let look = self.functions.lookup(id.name, &vis)
     let found: List(FunctionScheme)? = look match {
         FnLookFound(candidates) => Some(candidates)
@@ -4496,17 +4510,6 @@ fn check_identifier(self: &Checker, id: &IdentifierExpr) Ty {
             span = id.span, ty = slot, name = id.name, module = self.current_module,
         })
         return slot
-    }
-
-    // Module-level constant? Record which one won (M11 globals): the FQN is interned into the
-    // result's synth_strings so the view outlives the checker (lowering reads targets after
-    // `deinit`).
-    let chit = self.constants.lookup_entry(id.name, &vis)
-    if chit.is_some() {
-        let h = chit.unwrap()
-        let stable = self.results.add_synth_string(from_view(h.fqn, self.allocator))
-        self.results.record_target(self.node_of(id.span), ResolvedTarget.RtConst(stable))
-        return h.value
     }
 
     // Bare payload-less variant (`None`) - locals and functions win first.

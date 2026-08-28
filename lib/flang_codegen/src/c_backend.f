@@ -89,27 +89,19 @@ pub fn translate(m: &IrModule, sb: &StringBuilder) {
 }
 
 // End-to-end: FIR -> .c -> executable. The .c file is written next to the output executable (or to
-// `options.emit_c_path` when set) and is cleaned up unless `keep_temps` is true.
+// `options.emit_c_path` when set) and is cleaned up unless `keep_temps` is true. With `emit_only`
+// the pipeline stops after the write: no toolchain is discovered or run, and the result carries the
+// .c path but no produced executable.
 pub fn compile(m: &IrModule, options: &BuildOptions) Result(BuildResult, BuildError) {
     const alloc = options.allocator
 
-    // 1. Discover (or accept override of) the compiler. Fail fast before
-    //    doing the FIR -> C work and the .c-file write - no point lowering
-    //    anything if there's no toolchain to consume it.
-    let info_r = discover_or_override(options, alloc)
-    if info_r.is_err() {
-        return Err(info_r.unwrap_err())
-    }
-    let info = info_r.unwrap()
-    defer info.deinit()
-
-    // 2. Lower FIR to C text.
+    // 1. Lower FIR to C text.
     const translate_start = monotonic_ns()
     let sb = string_builder(4096, alloc)
     defer sb.deinit()
     translate(m, &sb)
 
-    // 3. Pick a place for the .c file. emit_c_path wins if set; otherwise
+    // 2. Pick a place for the .c file. emit_c_path wins if set; otherwise
     //    we drop it next to the output executable with a ".c" extension.
     let c_path_owned: OwnedString
     let keep_c = options.keep_temps
@@ -127,7 +119,7 @@ pub fn compile(m: &IrModule, options: &BuildOptions) Result(BuildResult, BuildEr
         }
     }
 
-    // 4. Write the .c file. The output directory is usually `build/`, which
+    // 3. Write the .c file. The output directory is usually `build/`, which
     //    does not exist on a fresh checkout - create it rather than failing
     //    the whole build with an opaque I/O error. Errors here are left to
     //    the write below, which reports against a concrete path.
@@ -140,6 +132,29 @@ pub fn compile(m: &IrModule, options: &BuildOptions) Result(BuildResult, BuildEr
         return Err(BuildError.IOError)
     }
     const translate_ns = elapsed_ns(translate_start)
+
+    if options.emit_only {
+        return Ok(BuildResult {
+            executable_path = from_view(options.output_path, alloc),
+            c_source_path = Some(c_path_owned),
+            lower_ns = 0,
+            translate_ns = translate_ns,
+            cc_ns = 0,
+        })
+    }
+
+    // 4. Discover (or accept override of) the compiler. A missing toolchain costs one wasted
+    //    translate; failing before it would cost every emit-only caller a pointless discovery.
+    let info_r = discover_or_override(options, alloc)
+    if info_r.is_err() {
+        if !keep_c {
+            remove_file_quiet(c_path_owned.as_view())
+        }
+        c_path_owned.deinit()
+        return Err(info_r.unwrap_err())
+    }
+    let info = info_r.unwrap()
+    defer info.deinit()
 
     // MSVC writes one .obj per translation unit into the per-target objs directory (see
     // `objs_dir_for`); the compiler does not create it. Unix-style compile-and-link leaves no

@@ -48,12 +48,13 @@ pub fn build_unit(unit: &AnalyzedUnit, output_path: String,
 // the skip mechanism. `profile_runtime`, when set, is the path to stdlib/std/profile.c: the module
 // is instrumented for profiling (RFC-025) and that file is linked in as the probe runtime.
 // `profile_all` widens instrumentation from the application's functions to the whole program,
-// stdlib included.
+// stdlib included. `emit_only` stops after writing the generated C - no toolchain runs, so the
+// build may target an OS the host cannot link for.
 pub fn build_program(modules: &List(Module), fqns: &List(OwnedString), result: &TypeCheckResult,
     output_path: String, comptime_ctx: ComptimeCtx, source_paths: &List(OwnedString),
     libs: &List(OwnedString), ldflags: &List(OwnedString), verbose: bool = false,
     keep_c: bool = false, release: bool = false, demanded: &List(bool)? = null,
-    profile_runtime: String? = null, profile_all: bool = false,
+    profile_runtime: String? = null, profile_all: bool = false, emit_only: bool = false,
     allocator: &Allocator? = null) Result(BuildResult, BuildError) {
     const lower_start = monotonic_ns()
     let m = lower_program(modules, fqns, result, comptime_ctx, demanded, allocator)
@@ -105,6 +106,7 @@ pub fn build_program(modules: &List(Module), fqns: &List(OwnedString), result: &
     let opts = build_options(output_path, allocator)
     let _k = opts.set_keep_temps(keep_c)
     let _r = opts.set_release(release)
+    let _e = opts.set_emit_only(emit_only)
 
     let runtime_c = companion_c_files(source_paths, allocator)
     for i in 0..runtime_c.len {

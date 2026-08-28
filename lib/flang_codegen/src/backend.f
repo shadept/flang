@@ -68,6 +68,12 @@ pub type BuildOptions = struct {
     // Skip cleanup of intermediate .c / .obj files.
     keep_temps: bool
 
+    // Stop after writing the generated .c file: no compiler discovery, no compile, no link. The
+    // result's `c_source_path` is always set and `executable_path` names a file that was not
+    // produced. Lets a build target another OS than the host (`--target-os`), where the emitted C
+    // references runtime symbols the host toolchain cannot link.
+    emit_only: bool
+
     // Force a specific compiler binary instead of running discovery. The path is taken verbatim;
     // required env vars (e.g. MSVC INCLUDE/LIB) are *not* synthesised - caller is responsible.
     compiler_override: String?
@@ -96,6 +102,7 @@ pub fn build_options(output_path: String, allocator: &Allocator? = null) BuildOp
         ldflags = ldflags,
         emit_c_path = null,
         keep_temps = false,
+        emit_only = false,
         compiler_override = null,
         allocator = allocator,
     }
@@ -153,6 +160,11 @@ pub fn set_emit_c_path(self: &BuildOptions, p: String) &BuildOptions {
 
 pub fn set_keep_temps(self: &BuildOptions, k: bool) &BuildOptions {
     self.keep_temps = k
+    return self
+}
+
+pub fn set_emit_only(self: &BuildOptions, on: bool) &BuildOptions {
+    self.emit_only = on
     return self
 }
 

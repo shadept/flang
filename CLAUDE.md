@@ -24,6 +24,8 @@ You own and maintain these docs. They are the source of truth for the project. W
 
 ## Rules
 
+- **Seed rule.** Compiler (`bootstrap/`), `lib/*`, and `stdlib/` sources may only use language features the committed seed in `boot/` supports. New feature order: implement, harness-test, promote (`dotnet run promote.cs`), then use. Never edit `boot/` by hand; promote is the only writer, and each promote is its own commit tagged `seed/<date-or-version>`. See `docs/architecture.md` §Bootstrap Seed.
+
 - `docs/spec.md` is authoritative. If a request conflicts with it, flag the conflict — don't silently deviate.
 - `docs/architecture.md` constraints are non-negotiable without explicit approval.
 - Language feature tests go in `tests/harness/` using lit-style `.flang` files. Stdlib tests are colocated in the `.f` source file using `test "name" { ... }` blocks.

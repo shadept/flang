@@ -156,3 +156,7 @@ examples/**/*.generated.f
 
 # Profiler output (RFC-025)
 *.folded
+
+# Bootstrap-seed cold-start artifacts (the seed .c files ARE committed)
+boot/*/flang-seed
+

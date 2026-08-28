@@ -40,3 +40,84 @@ jobs:
 
       - name: Run test harness
         run: dotnet run test.cs
+
+  # Cold start from the committed seed (boot/<rid>/flang.c): the seed builds
+  # HEAD, HEAD builds itself twice, and the results must agree. Catches seed
+  # rot (HEAD outgrew the seed), fixpoint drift (self-miscompile or
+  # nondeterminism), and seed-rule violations (compiler source using a
+  # feature the seed lacks) in one job. Skips until the first promote
+  # commits a seed. See boot/README.md and promote.cs.
+  bootstrap:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            rid: win-x64
+          - os: ubuntu-latest
+            rid: linux-x64
+          - os: macos-latest
+            rid: darwin-arm64
+
+    runs-on: ${{ matrix.os }}
+
+    env:
+      NUGET_PACKAGES: ${{ github.workspace }}/.nuget/packages
+      RID: ${{ matrix.rid }}
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Setup .NET 10
+        uses: actions/setup-dotnet@v5
+        with:
+          global-json-file: global.json
+
+      - name: Setup MSVC
+        if: matrix.rid == 'win-x64'
+        uses: ilammy/msvc-dev-cmd@v1
+
+      - name: Build the seed compiler
+        shell: bash
+        run: |
+          if [ ! -f "boot/$RID/flang.c" ]; then
+            echo "seed=absent" >> "$GITHUB_ENV"
+            echo "No committed seed for $RID yet - skipping cold start."
+            exit 0
+          fi
+          echo "seed=present" >> "$GITHUB_ENV"
+          cd "boot/$RID"
+          if [ "$RID" = "win-x64" ]; then cmd //c build.bat; else make; fi
+
+      - name: "Cold start: seed -> stage 1 -> stage 2 -> stage 3"
+        if: env.seed == 'present'
+        shell: bash
+        run: |
+          SEED="$PWD/boot/$RID/flang-seed"
+          [ -f "$SEED.exe" ] && SEED="$SEED.exe"
+          mkdir -p .coldstart
+          cd bootstrap
+          # Each stage runs from a copy: `flang build` writes build/flang,
+          # which must not be the binary currently executing.
+          "$SEED" -r -s ../stdlib build
+          EXE=build/flang; [ -f build/flang.exe ] && EXE=build/flang.exe
+          cp "$EXE" ../.coldstart/stage1
+          ../.coldstart/stage1 -k -r -s ../stdlib build
+          cp build/flang.c ../.coldstart/stage2.c
+          cp "$EXE" ../.coldstart/stage2
+          ../.coldstart/stage2 -k -r -s ../stdlib build
+          cp build/flang.c ../.coldstart/stage3.c
+          cmp ../.coldstart/stage2.c ../.coldstart/stage3.c
+          echo "Fixpoint holds: seed-rooted stage 2 and stage 3 emit identical C."
+
+      # Diverse double-compiling while the C# reference still exists: the
+      # seed-rooted and reference-rooted chains must converge on identical
+      # stage-2 C. Delete this step when flang-ref is retired; the fixpoint
+      # check above stays.
+      - name: "DDC: reference-rooted stage 2 matches seed-rooted stage 2"
+        if: env.seed == 'present'
+        shell: bash
+        run: |
+          dotnet run build.cs -- --stage2 "$RID"
+          cmp "dist/$RID/stages/stage2.c" .coldstart/stage2.c
+          echo "Roots converge: reference-rooted and seed-rooted stage 2 are byte-identical."

@@ -12,6 +12,12 @@ The "milestone" names (M1–M6) used in commit messages were invented as
 the work went along; this document supersedes them as the roadmap.
 Update it in the same commit as any coverage change.
 
+The 2026-08-28 self-build regression (identifier-in-value-position
+resolving to a function over a module const, surfaced by the LSP
+skeleton's `stdin.reader()`) is fixed and the fixpoint holds again -
+see docs/known-issues.md §"identifier in value position preferred a
+function over a module const".
+
 Status legend: ✅ done · ⚠️ partial (details in Notes) · ❌ missing
 (lowering *refuses* the enclosing function rather than miscompile —
 see `lower.f`'s `unlowerable`).

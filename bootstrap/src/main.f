@@ -50,6 +50,7 @@ type Cli = struct {
     verbose: bool
     emit_generated: bool
     keep_c: bool
+    emit_c_only: bool
     timings: bool
     release: bool
     profile: bool
@@ -74,6 +75,7 @@ type BuildOpts = struct {
     check_only: bool
     emit_generated: bool
     keep_c: bool
+    emit_c_only: bool
     timings: bool
     release: bool
     profile: bool
@@ -124,7 +126,7 @@ pub fn main() i32 {
 // subcommand. Index 0 is the program name and is skipped.
 fn parse_cli(argv: String[]) Cli {
     let cli: Cli
-    let opts = getopts("h(help)V(version)v(verbose)c(check)g(emit-generated)k(keep-c)t(timings)r(release)p(profile)P(profile-all)G(gate-a)B(gate-b)e(eager)W(warn-unused)M(mem)s(stdlib-path):T(target-os):A(target-arch):",
+    let opts = getopts("h(help)V(version)v(verbose)c(check)g(emit-generated)k(keep-c)E(emit-c-only)t(timings)r(release)p(profile)P(profile-all)G(gate-a)B(gate-b)e(eager)W(warn-unused)M(mem)s(stdlib-path):T(target-os):A(target-arch):",
         argv, 1)
 
     // Drive opts.next() manually rather than `for r in opts` - std.env's `iter(&GetOpt)` returns a
@@ -151,6 +153,9 @@ fn parse_cli(argv: String[]) Cli {
                 }
                 if c == 'k' {
                     cli.keep_c = true
+                }
+                if c == 'E' {
+                    cli.emit_c_only = true
                 }
                 if c == 't' {
                     cli.timings = true
@@ -244,6 +249,8 @@ fn print_help() {
     println("  -g, --emit-generated  write template expansions to <origin>.generated.f (debug)")
     println("  -c, --check         type-check only (no codegen or link)")
     println("  -k, --keep-c        keep the generated C beside the executable")
+    println("  -E, --emit-c-only   write the generated C and stop (no compile or link);")
+    println("                      with -T/-A this emits C for an OS the host cannot link")
     println("  -t, --timings       print per-phase wall times")
     println("  -r, --release       optimize the generated C (-O2 / /O2)")
     println("  -p, --profile       instrument the project's functions for profiling (implies")
@@ -292,6 +299,7 @@ fn run_build(argv: String[], rest: usize, cli: &Cli) i32 {
         check_only = cli.check,
         emit_generated = cli.emit_generated,
         keep_c = cli.keep_c,
+        emit_c_only = cli.emit_c_only,
         timings = cli.timings,
         // Profiling a build the C compiler didn't optimize measures the debug codegen, not the
         // program - `--profile` implies `--release`.
@@ -929,14 +937,20 @@ fn finish_build(unit: &AnalyzedProject, label: String, out: String, opts: &Build
     }
     let result = build_program(&unit.modules, &unit.fqns, &unit.result, out, opts.target,
         &unit.file_paths, libs, ldflags, opts.verbose, opts.keep_c, opts.release, dm, prof_rt,
-        opts.profile_all)
+        opts.profile_all, opts.emit_c_only)
     if result.is_err() {
         report_build_error(&result.unwrap_err(), label)
         return 1
     }
     let artifact = result.unwrap()
     defer artifact.deinit()
-    const msg = $"built {artifact.executable_path.as_view()} in {elapsed_ns(opts.start_ns) / 1000000}ms"
+    const built = if opts.emit_c_only {
+        (artifact.c_source_path ?? artifact.executable_path).as_view()
+    } else {
+        artifact.executable_path.as_view()
+    }
+    const verb = if opts.emit_c_only { "emitted" } else { "built" }
+    const msg = $"{verb} {built} in {elapsed_ns(opts.start_ns) / 1000000}ms"
     defer msg.deinit()
     println(msg.as_view())
     if opts.timings {
