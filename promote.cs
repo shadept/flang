@@ -56,6 +56,11 @@ var bootstrapDir = Path.Combine(scriptDir, "bootstrap");
 var stdlibDir = Path.Combine(scriptDir, "stdlib");
 var bootDir = Path.Combine(scriptDir, "boot");
 
+// Whether the tree describes the seed is decided BEFORE anything is written:
+// the emission below dirties boot/ itself, so a check after it always reports
+// dirty and never says anything about the sources.
+var dirty = !string.IsNullOrWhiteSpace(Capture("git", "status --porcelain --untracked-files=no"));
+
 // --- Gate 1: stage-2 = stage-3 fixpoint ---
 Banner("Gate 1: build stage 3 and check the stage-2 = stage-3 fixpoint");
 if (Run("dotnet", "run build.cs -- --stage3") != 0)
@@ -106,7 +111,6 @@ var vm = System.Text.RegularExpressions.Regex.Match(
     File.ReadAllText(Path.Combine(bootstrapDir, "flang.toml")), "version\\s*=\\s*\"([^\"]+)\"");
 var version = vm.Success ? vm.Groups[1].Value : "unknown";
 var commit = Capture("git", "rev-parse HEAD")?.Trim() ?? "unknown";
-var dirty = !string.IsNullOrWhiteSpace(Capture("git", "status --porcelain --untracked-files=no"));
 File.WriteAllText(Path.Combine(bootDir, "SEED"),
     $"flang {version}\ncommit {commit}{(dirty ? " (dirty tree)" : "")}\ndate {DateTime.UtcNow:yyyy-MM-dd}\n");
 if (dirty)
