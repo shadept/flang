@@ -2004,36 +2004,46 @@ type Vector2 = struct {
 
 ---
 
-### E2102: Conflicting Generic Type Bindings
+### E2102: Primitive Constraint Violated
 
-**Category**: Generics
+**Category**: Types
 **Severity**: Error
 
 #### Description
 
-During generic function call resolution, a type parameter was inferred to have conflicting concrete types from different
-arguments.
+A type variable carrying a primitive constraint was asked to become something
+outside it. An unsuffixed numeric literal is the common carrier: it takes its
+type from context, but the context has to supply a numeric primitive (or `char`
+for an integer literal), never a nominal, a reference, or a tuple.
 
 #### Example
 
 ```flang
-pub fn same(a: $T, b: T) T {
-    return a
-}
-
-pub fn main() i32 {
-    let v: i32 = same(1, true)  // ERROR: T mapped to `i32` and `bool`
-    return v
-}
+let v: i32? = 42   // ERROR: expected one of i8 | ... | char, got `Option(i32)`
 ```
 
 #### Solution
 
-Ensure all arguments that bind to the same type parameter have compatible types:
+Wrap the value explicitly; there is no implicit `T -> Option(T)` (spec section
+3.3, ADR-0005):
 
 ```flang
-let v: i32 = same(1, 2)  // OK: both arguments are integers
+let v: i32? = Some(42)
 ```
+
+The constraint is enforced during unification, so it also decides overload
+resolution: a candidate whose parameter no numeric literal can inhabit fails to
+unify and drops out of the running rather than winning on declaration order.
+`dict(100)` picks `dict(capacity: usize, ...)` over `dict(allocator:
+&Allocator?)` for this reason.
+
+#### Not this code: conflicting generic bindings
+
+A type parameter bound to two different concrete types used to surface here.
+It no longer does, and the narrower reading is not currently reachable at all —
+see the entry in `docs/known-issues.md`. A call like `same(1, true)` against
+`fn same(a: $T, b: T) T` is rejected as E2011 (no matching overload), because
+the literal's constraint is what eliminates the candidate.
 
 ---
 
@@ -2978,7 +2988,7 @@ Report the issue with sample code that reproduces the error.
 | **E2074** | Type Checking     | If/else branches disagree                    |
 | **E2075** | Type Checking     | Match arms disagree                          |
 | **E2077** | Operators         | Ambiguous index operator                       |
-| **E2102** | Generics          | Conflicting generic type bindings            |
+| **E2102** | Types             | Primitive constraint violated                |
 | **E2115** | Pattern Matching  | Unsupported pattern form                     |
 | **E2116** | Directives        | Unknown compile-time name in #if condition   |
 | **E2117** | Directives        | #if condition is not a bool                  |

@@ -77,7 +77,7 @@ pub type ArityDetails = struct {
 
 pub type PrimViolation = struct {
     got: Ty
-    allowed: List(PrimitiveKind)
+    allowed: PrimSet
 }
 
 // Variant prefix `Uni` keeps these out of the global variant namespace where stdlib's `Result.Ok` /
@@ -113,7 +113,7 @@ type BindingUndo = struct {
 
 type PrimConstraintUndo = struct {
     var_id: VarId
-    prev: List(PrimitiveKind)? // null = the entry was new (rollback deletes)
+    prev: PrimSet? // null = the entry was new (rollback deletes)
 }
 
 // One mutation of `levels`. Mirrors `BindingUndo`: `prev` distinguishes overwrite (restore) from
@@ -131,7 +131,7 @@ pub type Engine = struct {
     uf: UnionFind(VarId)
     interner: TypeInterner
     bindings: Dict(VarId, Ty)
-    prim_constraints: Dict(VarId, List(PrimitiveKind))
+    prim_constraints: Dict(VarId, PrimSet)
     // Level per partition, keyed by representative `VarId`. The rep's level is the *minimum* of
     // every member's original level so that `generalize` doesn't accidentally quantify a var that
     // was unified with a shallower-scope var. Without this, `resolve_var` would return whatever
@@ -154,7 +154,7 @@ pub type Engine = struct {
 pub fn engine(allocator: &Allocator? = null) Engine {
     let uf: UnionFind(VarId) = union_find(allocator)
     let bindings: Dict(VarId, Ty) = dict(allocator)
-    let prim_constraints: Dict(VarId, List(PrimitiveKind)) = dict(allocator)
+    let prim_constraints: Dict(VarId, PrimSet) = dict(allocator)
     let levels: Dict(VarId, Level) = dict(allocator)
     let bu: Stack(List(BindingUndo)) = stack(0, allocator)
     let pu: Stack(List(PrimConstraintUndo)) = stack(0, allocator)
@@ -284,10 +284,10 @@ pub fn burn_var(self: &Engine) {
     set_level(self, id, self.level)
 }
 
-// Allocate a fresh variable whose eventual binding must be one of the given primitive kinds. Used
-// to narrow char/byte literals to `{u8, char}` so they can't accidentally bind to `String` etc.
-// during overload resolution.
-pub fn fresh_constrained_var(self: &Engine, allowed: List(PrimitiveKind)) Ty {
+// Allocate a fresh variable whose eventual binding must be one of the given primitive kinds. This
+// is what keeps a numeric literal from binding to a nominal during overload resolution, where a
+// candidate is accepted or rejected by whether unification succeeds.
+pub fn fresh_constrained_var(self: &Engine, allowed: PrimSet) Ty {
     let t = self.fresh_var()
     let v = self.ty_node(t) match {
         NVar(tv) => tv
@@ -657,11 +657,11 @@ fn unify_var_var(self: &Engine, va: TyVar, vb: TyVar) UnifyOutcome {
     // Intersect prim constraints, if any. An empty intersection means the two narrow sets are
     // disjoint and the partitions can't merge.
     let merged_constraint = intersect_prim_constraints(self, ra, rb)
-    if merged_constraint.is_some() and merged_constraint.unwrap().len == 0 {
-        return UnifyOutcome.UniPrimConstraint(.{
+    if merged_constraint.is_some() and merged_constraint.unwrap().is_empty() {
+        return poisoned(self, ra, UnifyOutcome.UniPrimConstraint(.{
             got = self.interner.var_of(va),
-            allowed = list(0, self.allocator),
-        })
+            allowed = 0u32,
+        }))
     }
 
     // Compute the merged level *before* the merge - both reps still have their own slots at this
@@ -694,12 +694,11 @@ fn bind_var(self: &Engine, v: TyVar, concrete: Ty) UnifyOutcome {
     }
 
     // Honour prim constraint, if any.
-    let constraint = self.prim_constraints.get(rep)
-    constraint match {
+    self.prim_constraints.get(rep) match {
         Some(allowed) => {
-            let violation = check_prim_constraint(self, &allowed, concrete)
+            let violation = check_prim_constraint(self, allowed, concrete)
             if violation.is_some() {
-                return violation.unwrap()
+                return poisoned(self, rep, violation.unwrap())
             }
             clear_prim_constraint(self, rep)
         }
@@ -711,12 +710,21 @@ fn bind_var(self: &Engine, v: TyVar, concrete: Ty) UnifyOutcome {
     return UnifyOutcome.Unified(.{ ty = concrete, cost = 0 })
 }
 
-// Returns `Some(PrimConstraint(...))` if `concrete` violates `allowed`, `None` otherwise. `allowed`
-// is owned by the caller; the violation payload aliases its buffer (the engine never mutates
-// allowed-lists after they're set on a var).
-fn check_prim_constraint(self: &Engine, allowed: &List(PrimitiveKind), concrete: Ty) UnifyOutcome? {
+// Bind `rep` to the poison type and hand back the outcome that rejected it. A var whose constraint
+// was violated has no type it could still take, and leaving it unbound makes every later reader of
+// it report as well - the literal sweep's "cannot determine concrete type" on top of the error that
+// already said why. `Error` absorbs into anything, so the one diagnostic stands alone. Recorded for
+// undo like any binding, so a speculative overload trial rolls it back with everything else.
+fn poisoned(self: &Engine, rep: VarId, outcome: UnifyOutcome) UnifyOutcome {
+    record_binding_undo(self, rep)
+    self.bindings.set(rep, TY_ERROR)
+    return outcome
+}
+
+// `Some(PrimConstraint(...))` if `concrete` violates `allowed`, `None` otherwise.
+fn check_prim_constraint(self: &Engine, allowed: PrimSet, concrete: Ty) UnifyOutcome? {
     let satisfied = self.ty_node(concrete) match {
-        NPrim(p) => prim_set_contains(allowed, p)
+        NPrim(p) => allowed.contains(p)
         _ => false
     }
     if satisfied {
@@ -724,17 +732,8 @@ fn check_prim_constraint(self: &Engine, allowed: &List(PrimitiveKind), concrete:
     }
     return Some(UnifyOutcome.UniPrimConstraint(PrimViolation {
         got = concrete,
-        allowed = allowed.*,
+        allowed = allowed,
     }))
-}
-
-fn prim_set_contains(allowed: &List(PrimitiveKind), p: PrimitiveKind) bool {
-    for k in allowed {
-        if k == p {
-            return true
-        }
-    }
-    return false
 }
 
 fn make_mismatch(a: Ty, b: Ty) UnifyOutcome {
@@ -1070,12 +1069,8 @@ pub fn specialize_capture(self: &Engine, s: &Scheme, out: &Dict(VarId, Ty)) Ty {
 // Internal - prim-constraint bookkeeping
 // ─────────────────────────────────────────────────────────────────────
 
-fn set_prim_constraint(self: &Engine, var_id: VarId, allowed: List(PrimitiveKind)) {
+fn set_prim_constraint(self: &Engine, var_id: VarId, allowed: PrimSet) {
     record_prim_undo(self, var_id)
-    // Remove first: `Dict.set` deinits an overwritten value, but the undo frame just recorded a
-    // copy of that value's header - the old list must stay alive for rollback, so move it out
-    // instead.
-    let _old = self.prim_constraints.remove(var_id)
     self.prim_constraints.set(var_id, allowed)
 }
 
@@ -1084,13 +1079,13 @@ fn clear_prim_constraint(self: &Engine, var_id: VarId) {
         return
     }
     record_prim_undo(self, var_id)
-    self.prim_constraints.remove(var_id)
+    let _removed = self.prim_constraints.remove(var_id)
 }
 
-// Intersect the prim-constraint sets attached to two rep vars. Returns `None` when neither var is
-// constrained (so the merge places no further restriction on the partition), `Some(intersection)`
-// otherwise - the intersection may be empty, signalling an incompatible merge.
-fn intersect_prim_constraints(self: &Engine, ra: VarId, rb: VarId) List(PrimitiveKind)? {
+// Intersect the prim-constraint sets attached to two rep vars. `None` when neither var is
+// constrained (the merge places no further restriction on the partition); otherwise the
+// intersection, which may be empty - that signals an incompatible merge.
+fn intersect_prim_constraints(self: &Engine, ra: VarId, rb: VarId) PrimSet? {
     let ca = self.prim_constraints.get(ra)
     let cb = self.prim_constraints.get(rb)
     if ca.is_none() and cb.is_none() {
@@ -1102,18 +1097,7 @@ fn intersect_prim_constraints(self: &Engine, ra: VarId, rb: VarId) List(Primitiv
     if cb.is_none() {
         return ca
     }
-    let xa = ca.unwrap()
-    let xb = cb.unwrap()
-    let out = list(0, self.allocator)
-    for k in xa {
-        for k2 in xb {
-            if k == k2 {
-                out.push(k)
-                break
-            }
-        }
-    }
-    return Some(out)
+    return Some(ca.unwrap() & cb.unwrap())
 }
 
 fn record_binding_undo(self: &Engine, var_id: VarId) {

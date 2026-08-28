@@ -89,6 +89,44 @@ pub fn prim_of(p: PrimitiveKind) Ty {
     return TY_PRIM0 + offset
 }
 
+// A set of primitive kinds, one bit per kind at `prim_of`'s offset. Value semantics: copying one
+// into an undo frame or a diagnostic costs nothing and creates no second owner, which is what a set
+// threaded through a dict, a rollback stack, and a unification outcome needs.
+pub type PrimSet = u32
+
+pub fn prim_bit(p: PrimitiveKind) PrimSet {
+    return 1u32 << (prim_of(p) - TY_PRIM0)
+}
+
+pub fn contains(self: PrimSet, p: PrimitiveKind) bool {
+    return (self & prim_bit(p)) != 0u32
+}
+
+pub fn is_empty(self: PrimSet) bool {
+    return self == 0u32
+}
+
+// The kind at `prim_of`'s offset - the inverse of `prim_of`, and the order a `PrimSet` renders in.
+pub fn prim_kind_at(index: u32) PrimitiveKind? {
+    return index match {
+        0u32 => Some(PrimitiveKind.Bool)
+        1u32 => Some(PrimitiveKind.I8)
+        2u32 => Some(PrimitiveKind.I16)
+        3u32 => Some(PrimitiveKind.I32)
+        4u32 => Some(PrimitiveKind.I64)
+        5u32 => Some(PrimitiveKind.ISize)
+        6u32 => Some(PrimitiveKind.U8)
+        7u32 => Some(PrimitiveKind.U16)
+        8u32 => Some(PrimitiveKind.U32)
+        9u32 => Some(PrimitiveKind.U64)
+        10u32 => Some(PrimitiveKind.USize)
+        11u32 => Some(PrimitiveKind.F32)
+        12u32 => Some(PrimitiveKind.F64)
+        13u32 => Some(PrimitiveKind.Char)
+        _ => null
+    }
+}
+
 // A name -> type pair used for `Record` (anonymous structs) and for nominal struct fields when the
 // registry materialises them. `decl_span` locates the field's own declaration, and is `none_span()`
 // for synthesized fields that have none (a closure's captured environment). It is metadata: node

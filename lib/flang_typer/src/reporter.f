@@ -117,15 +117,24 @@ fn report_prim_constraint(p: &PrimViolation, ctx: &ReportCtx, it: &TypeInterner,
     out: &List(Diagnostic), alloc: &Allocator) {
     let sb = string_builder(64, Some(alloc))
     sb.append("type mismatch: expected one of ")
-    for i in 0..p.allowed.len {
-        if i > 0 {
-            sb.append(" | ")
+    let written = 0usize
+    for i in 0..14u32 {
+        prim_kind_at(i) match {
+            Some(k) => {
+                if p.allowed.contains(k) {
+                    if written > 0usize {
+                        sb.append(" | ")
+                    }
+                    sb.append(prim_name(k))
+                    written = written + 1usize
+                }
+            }
+            None => {}
         }
-        let k = p.allowed[i]
-        sb.append(prim_name(k))
     }
-    sb.append(", got ")
-    it.format(p.got, &sb)
+    sb.append(", got `")
+    format_with_names(it, p.got, &sb, ctx.nominals)
+    sb.append("`")
     let empty_hint: OwnedString
     let diag = Diagnostic {
         severity = Severity.Error,

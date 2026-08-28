@@ -1,11 +1,12 @@
 //! TEST: index_with_option_range
-//! COMPILE-ERROR: E2028
+//! COMPILE-ERROR: E2102
 //! EXIT: 1
 
 // Indexing a String with `Range(Option(usize))` (built from `0..find(...)`
 // where `find` returns `Option(usize)`) must surface an error at the
-// indexing site. Previously the bidirectional T <-> Option(T) coercion
-// silently widened `0` into `Option(usize)`, hiding the real problem.
+// indexing site rather than widening `0` into `Option(usize)`. The literal
+// carries a constraint to the numeric kinds, so building the range rejects
+// it and the message names the type the literal was asked to become.
 
 import std.string
 

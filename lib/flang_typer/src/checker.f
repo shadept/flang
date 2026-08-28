@@ -2623,7 +2623,21 @@ fn validate_literals(self: &Checker, from: usize, to: usize) {
                     check_int_range(self, pl.text, p, pl.span)
                 }
             }
-            _ => {}
+            // Anything that is not a primitive: a numeric literal cannot BE it. Unification rejects
+            // that binding in the first place (every literal var carries a `PrimSet`), so this is
+            // the backstop for a var that reached a non-primitive some other way - without it such
+            // a literal reaches lowering and is emitted as whatever its bytes happen to mean. The
+            // engine's poison and a diverging context are not mismatches: `Error` already carries a
+            // diagnostic, and `never` absorbs any type by definition.
+            _ => {
+                if z != TY_ERROR and z != TY_NEVER {
+                    let sb = string_builder(64, self.allocator)
+                    sb.append("type mismatch: expected one of the numeric types, got `")
+                    format_with_names(&self.engine.interner, z, &sb, Some(&self.nominals))
+                    sb.append($"` for literal `{pl.text}`")
+                    push_diag_e(self, pl.span, E_PRIM_CONSTRAINT, sb.to_string())
+                }
+            }
         }
     }
 }
@@ -2638,7 +2652,7 @@ fn literal_flagged(self: &Checker, pl: &PendingLit) bool {
     }
     let p = ty_node(self, z) match {
         NPrim(pk) => pk
-        _ => return false
+        _ => return z != TY_ERROR and z != TY_NEVER
     }
     if !literal_prim_ok(p, pl.is_float) {
         return true
@@ -4499,9 +4513,29 @@ fn numeric_literal_ty(self: &Checker, span: SourceSpan, suffix: String, text: St
             return prim_of(p.unwrap())
         }
     }
-    let v = self.engine.fresh_var()
+    let v = self.engine.fresh_constrained_var(literal_prim_set(is_float))
     self.pending_literals.push(PendingLit { span = span, ty = v, text = text, is_float = is_float })
     return v
+}
+
+// The kinds an unsuffixed literal may settle on, as the engine's constraint set. The constraint is
+// what makes unification reject a candidate whose parameter no numeric literal can inhabit, so
+// overload resolution ranks `dict(100)` on the capacity overload rather than the allocator one.
+// `validate_literals` still reports the literal that never resolved (E2001) or resolved out of
+// range (E2029); this only decides what unification will accept.
+fn literal_prim_set(is_float: bool) PrimSet {
+    let out: PrimSet = 0u32
+    for i in 0..14u32 {
+        prim_kind_at(i) match {
+            Some(k) => {
+                if literal_prim_ok(k, is_float) {
+                    out = out | prim_bit(k)
+                }
+            }
+            None => {}
+        }
+    }
+    return out
 }
 
 fn string_type(self: &Checker) Ty {
