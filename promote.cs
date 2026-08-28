@@ -79,7 +79,9 @@ if (Run("dotnet", "run test.cs", env: ("FLANG", stage2Exe)) != 0)
 foreach (var (dir, os, arch) in targets)
 {
     Banner($"Seed: {dir} (-T {os} -A {arch})");
-    if (Run(stage2Exe, $"-E -s \"{stdlibDir}\" -T {os} -A {arch} build", bootstrapDir) != 0)
+    // Options follow the command: the self-hosted CLI parses each option
+    // against the command it comes after, and refuses one that precedes it.
+    if (Run(stage2Exe, $"build -E -s \"{stdlibDir}\" -T {os} -A {arch}", bootstrapDir) != 0)
     {
         Console.Error.WriteLine($"promote: seed emission failed for {dir} - boot/ may be partially updated, review before committing.");
         return 1;
