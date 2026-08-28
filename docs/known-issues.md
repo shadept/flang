@@ -712,6 +712,42 @@ reason.
 
 ---
 
+### A Generic Parameter Accepts Conflicting Concrete Bindings
+
+**Status:** Open
+
+A type parameter bound to two different concrete types from two arguments is
+not reported. Given
+
+```flang
+pub fn same(a: $T, b: T) T { return a }
+```
+
+all of these type-check clean:
+
+```flang
+same(1i32, true)
+let x: i32 = 5i32
+let y: bool = true
+same(x, y)            // T is i32 and bool at once
+```
+
+E2102 was documented as covering exactly this and its worked example was
+`same(1, true)`. That call did error, but only by accident: the unsuffixed
+literal had no constraint, so it bound to `bool`, and the sweep over pending
+literals noticed a numeric literal sitting at a non-numeric type. Constraining
+literal vars closed that path — `same(1, true)` is now E2011, the candidate
+having failed to unify — and with it went the only route by which a conflicting
+binding was ever reported. The suffixed and literal-free forms were never
+caught.
+
+The fix belongs where a type parameter is bound a second time within one call:
+the second binding has to unify against the first rather than overwrite it.
+`tests/harness/errors/error_e2011_generic_binding_conflict.f` pins the current
+behaviour so a change here is visible.
+
+---
+
 ### Self-Host: Const Init Order Is Declaration Order, Not Dependency Order
 
 **Status:** Open ceiling (M11 globals design note)
@@ -721,6 +757,11 @@ whose initializer reads another const's **value** (not address) may see
 zeros if declared first. No such const exists in tree; topo-sort the
 init calls when one appears. Address-of cross-references (the vtable
 pattern) are order-independent by construction.
+
+Only runtime-dependent consts are in reach of this: one whose value is
+encoded into its global has no init call to order. Nothing in tree is in
+that set any more — the self-compile emits no `__finit_*` at all — so
+this needs a const whose initializer holds a call before it can bite.
 
 ---
 

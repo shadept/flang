@@ -104,10 +104,21 @@ type LowerCtx = struct {
     ret_size: u64
     // Data segment (M9). `strings` interns literals program-wide by their raw source text - two
     // spellings of the same bytes ("A" vs "A") mint two globals, which is harmless duplication for
-    // zero decode work on repeat literals. `str_globals` collects the minted globals;
-    // `flush_strings` moves them into the IrModule after the walk.
+    // zero decode work on repeat literals.
+    //
+    // `globals` collects every global the walk mints - a string literal's bytes and a module
+    // const's storage alike - and `flush_globals` moves them into the IrModule afterwards. Creation
+    // order is load-bearing: a const's initializer interns its strings before the const itself is
+    // pushed, so a global always precedes any global that holds its address, which is what C
+    // requires of a static initializer naming another object.
     strings: Dict(String, StrData)
-    str_globals: List(Global)
+    globals: List(Global)
+    // Backing storage for the encoded bytes of statically-initialized constants, and for the
+    // relocations inside them. A `Global` borrows both as slices, so the buffers have to outlive
+    // the walk; parking the lists here keeps them alive without moving their heap bytes when the
+    // outer list grows.
+    const_blobs: List(List(u8))
+    const_relocs: List(List(Reloc))
     // Defer schedule, mirroring the reference's per-function stack + per-scope marks: `defers`
     // holds every pending deferred expression (copies of the AST nodes - their children stay in the
     // module's arena), `defer_marks` the stack depth at each open block scope. Normal scope exit
@@ -158,9 +169,13 @@ type LowerCtx = struct {
 
 // One lowered module-level constant: its global's symbol, its init function's symbol, and its
 // declared (initializer) type. The symbol views point into `LowerCtx.owned_syms`.
+//
+// `init_sym` is null for a constant whose value was encoded into the global's bytes: there is no
+// init function, so there is none to lose, and the drop pass must not treat its readers as reading
+// uninitialized storage.
 type ConstInfo = struct {
     sym: String
-    init_sym: String
+    init_sym: String?
     ty: Ty
 }
 
@@ -358,7 +373,9 @@ pub fn lower_module(ast_module: &Module, result: &TypeCheckResult,
     let syms = sb.finish()
     let loop_stack: List(LoopFrame) = list(0, allocator)
     let interner: Dict(String, StrData) = dict(allocator)
-    let str_globals: List(Global) = list(0, allocator)
+    let globals: List(Global) = list(0, allocator)
+    let const_blobs: List(List(u8)) = list(0, allocator)
+    let const_relocs: List(List(Reloc)) = list(0, allocator)
     let defer_stack: List(Expr) = list(0, allocator)
     let defer_marks: List(usize) = list(0, allocator)
     let ctx = LowerCtx {
@@ -371,7 +388,9 @@ pub fn lower_module(ast_module: &Module, result: &TypeCheckResult,
         sret = null,
         ret_size = 0u64,
         strings = interner,
-        str_globals = str_globals,
+        globals = globals,
+        const_blobs = const_blobs,
+        const_relocs = const_relocs,
         defers = defer_stack,
         defer_marks = defer_marks,
         flushing = false,
@@ -391,7 +410,7 @@ pub fn lower_module(ast_module: &Module, result: &TypeCheckResult,
     lower_into(&m, &ctx, ast_module, "")
     lower_specializations(&m, &ctx)
     lower_pending_lambdas(&m, &ctx)
-    flush_strings(&m, &ctx)
+    flush_globals(&m, &ctx)
     wire_const_inits(&m, &ctx)
     // ponytail: the symbol table leaks - the IrModule's function names are views into its owned
     // strings, so freeing it here would dangle every name the backend is about to print. Upgrade
@@ -421,7 +440,9 @@ pub fn lower_program(modules: &List(Module), fqns: &List(OwnedString), result: &
     let syms = sb.finish()
     let loop_stack: List(LoopFrame) = list(0, allocator)
     let interner: Dict(String, StrData) = dict(allocator)
-    let str_globals: List(Global) = list(0, allocator)
+    let globals: List(Global) = list(0, allocator)
+    let const_blobs: List(List(u8)) = list(0, allocator)
+    let const_relocs: List(List(Reloc)) = list(0, allocator)
     let defer_stack: List(Expr) = list(0, allocator)
     let defer_marks: List(usize) = list(0, allocator)
     // The BUILD's compile-time context, not the host's: a cross-target build (`--target-os`) must
@@ -429,7 +450,8 @@ pub fn lower_program(modules: &List(Module), fqns: &List(OwnedString), result: &
     // program that type-checked as the target's.
     let ctx = LowerCtx { result = result, it = &result.interner, overlay = null, syms = &syms,
         allocator = allocator, loops = loop_stack, sret = null, ret_size = 0u64, strings = interner,
-        str_globals = str_globals, defers = defer_stack, defer_marks = defer_marks,
+        globals = globals, const_blobs = const_blobs, const_relocs = const_relocs,
+        defers = defer_stack, defer_marks = defer_marks,
         flushing = false, blocked = false, blocked_note = null, blocked_subject = null,
         pending_lambdas = list(0, allocator), comptime = comptime_ctx, consts = dict(allocator),
         const_inits = list(0, allocator), owned_syms = list(0, allocator),
@@ -476,7 +498,7 @@ pub fn lower_program(modules: &List(Module), fqns: &List(OwnedString), result: &
     }
     lower_specializations(&m, &ctx, Some(&skip_specs))
     lower_pending_lambdas(&m, &ctx)
-    flush_strings(&m, &ctx)
+    flush_globals(&m, &ctx)
     // ponytail: the symbol table leaks - the IrModule's names borrow its strings (see
     // lower_module).
     //
@@ -521,7 +543,10 @@ fn drop_callers_of_refused(m: &IrModule, ctx: &LowerCtx, alloc: &Allocator?) {
     let init_of: Dict(String, String) = dict(alloc)
     for entry in ctx.consts {
         let ci: ConstInfo = entry.value
-        init_of.set(ci.sym, ci.init_sym)
+        ci.init_sym match {
+            Some(isym) => init_of.set(ci.sym, isym)
+            None => {}
+        }
     }
 
     // Fixpoint over names only - dropping a function strands its own callers, and they have to go
@@ -930,6 +955,24 @@ fn lower_const_decl(m: &IrModule, ctx: &LowerCtx, cd: &ConstDecl) {
     }
     let lay = lay_of(ctx, t)
     let gsym = park_sym(ctx, const_symbol("__fconst_", fqn, ctx.allocator))
+
+    // A constant whose value is fully known during compilation goes into the data segment as bytes.
+    // It needs no init function and no call from `main`.
+    let blob: List(u8) = filled_list(lay.size, 0u8, ctx.allocator)
+    let rel: List(Reloc) = list(0, ctx.allocator)
+    if const_bytes(ctx, &t, &cd.value, &blob, &rel, 0) {
+        let bytes = blob.as_slice()
+        let rs = rel.as_slice()
+        ctx.const_blobs.push(blob)
+        ctx.const_relocs.push(rel)
+        ctx.globals.push(Global { name = gsym, size = lay.size as u64, align = lay.align as u64,
+            init_bytes = Some(bytes), relocs = Some(rs) })
+        ctx.consts.set(fqn, ConstInfo { sym = gsym, init_sym = null, ty = t })
+        return
+    }
+    blob.deinit()
+    rel.deinit()
+
     let isym = park_sym(ctx, const_symbol("__finit_", fqn, ctx.allocator))
 
     let fb = function(isym, null, ctx.allocator)
@@ -953,10 +996,249 @@ fn lower_const_decl(m: &IrModule, ctx: &LowerCtx, cd: &ConstDecl) {
         return
     }
     m.add_function(fb.finish())
-    m.add_global(Global { name = gsym, size = lay.size as u64, align = lay.align as u64,
+    ctx.globals.push(Global { name = gsym, size = lay.size as u64, align = lay.align as u64,
         init_bytes = null })
-    ctx.consts.set(fqn, ConstInfo { sym = gsym, init_sym = isym, ty = t })
+    ctx.consts.set(fqn, ConstInfo { sym = gsym, init_sym = Some(isym), ty = t })
     ctx.const_inits.push(isym)
+}
+
+// The compile-time bytes of a constant initializer, written into `buf` at `at`. False means the
+// initializer is runtime-dependent - it names something whose value exists only once the program is
+// running - and the caller keeps the init-function path.
+//
+// `buf` is pre-zeroed and sized to the constant's layout, so padding and any field this leaves
+// alone read as zero, matching what the init-function path memsets.
+//
+// Refusal is the default: an expression form this does not recognise is runtime-dependent, which is
+// the safe verdict for anything added to the grammar later.
+fn const_bytes(ctx: &LowerCtx, ty: &Ty, e: &Expr, buf: &List(u8), rel: &List(Reloc),
+    at: usize) bool {
+    return e.* match {
+        Lit(l) => l.value match {
+            String(sl) => const_string(ctx, ty, &sl, buf, rel, at)
+            // `None` is a zeroed buffer in the tagged form (None is variant 0 by construction) and
+            // the null pointer in the niche form. The buffer already holds zeros either way.
+            Null => niche_optional(ctx, ty) or is_by_ref(ctx, ty)
+            _ => const_scalar_into(ctx, ty, e, buf, at)
+        }
+        StructLit(lit) => const_struct(ctx, &lit, buf, rel, at)
+        Identifier(id) => const_ident(ctx, ty, &id, buf, rel, at)
+        MemberAccess(ma) => const_member(ctx, ty, &ma, buf, at)
+        AddressOf(a) => const_addr_of(ctx, a.operand, rel, at)
+        Cast(c) => const_cast(ctx, &c, buf, rel, at)
+        _ => const_scalar_into(ctx, ty, e, buf, at)
+    }
+}
+
+// A name in value position: a function decays to its address (RFC-014), a payload-less enum variant
+// is its tag. Both are what `lower_identifier` does before it reaches a binding read.
+fn const_ident(ctx: &LowerCtx, ty: &Ty, id: &IdentifierExpr, buf: &List(u8), rel: &List(Reloc),
+    at: usize) bool {
+    let vnum = resolved_variant(ctx, id.span)
+    if vnum.is_some() {
+        return const_variant(ctx, ty, vnum.unwrap(), buf, at)
+    }
+    return const_fn_ref(ctx, ty, id, rel, at)
+}
+
+// `FileMode.Read` - a qualified payload-less variant is construction, not field access, exactly as
+// `lower_member` reads it. Field access on a const receiver is not folded: the receiver's own bytes
+// would have to be resolved here, and that is what the init function already does.
+fn const_member(ctx: &LowerCtx, ty: &Ty, ma: &MemberAccessExpr, buf: &List(u8), at: usize) bool {
+    let vnum = resolved_variant(ctx, ma.span)
+    if vnum.is_none() {
+        return false
+    }
+    return const_variant(ctx, ty, vnum.unwrap(), buf, at)
+}
+
+// A nullary enum variant: the tag, with the payload area left zeroed. The niche form has no tag -
+// its only nullary variant is `None`, the null pointer, and the buffer already reads as that.
+// Mirrors `lower_variant_nullary`.
+fn const_variant(ctx: &LowerCtx, ty: &Ty, vnum: u32, buf: &List(u8), at: usize) bool {
+    let t = resolve_enum(ctx, ty, &ctx.result.nominals)
+    if t.is_none() {
+        return false
+    }
+    let et = t.unwrap()
+    let el = en_layout(ctx, &et.def, &et.args)
+    if el.is_niche {
+        return true
+    }
+    write_le(buf, at, vnum as i64, el.tag_size)
+    return true
+}
+
+// `&NAME` where NAME is a module const: the address of that const's global, which the linker
+// supplies. Mirrors `place_of_identifier`, which addresses a const's storage directly.
+fn const_addr_of(ctx: &LowerCtx, operand: &Expr, rel: &List(Reloc), at: usize) bool {
+    let id = operand.* match {
+        Identifier(x) => x
+        _ => return false
+    }
+    let tgt = ctx_target(ctx, node_id_of(id.span))
+    if tgt.is_none() {
+        return false
+    }
+    let sym = tgt.unwrap() match {
+        RtConst(fqn) => ctx.consts.get(fqn) match {
+            Some(ci) => Some(ci.sym)
+            None => null
+        }
+        _ => null
+    }
+    if sym.is_none() {
+        return false
+    }
+    return add_reloc(rel, at, Operand.GlobalRef(sym.unwrap()))
+}
+
+// A cast between two pointer-shaped types (`&State as &u8`) keeps the bytes it was given, so the
+// operand encodes straight through. Every other cast computes, and computing is what an init
+// function is for.
+fn const_cast(ctx: &LowerCtx, c: &CastExpr, buf: &List(u8), rel: &List(Reloc), at: usize) bool {
+    let src = node_ty(ctx, expr_span(c.operand))
+    let dst = node_ty(ctx, c.span)
+    if !ir_of(ctx, src).op_eq(IrType.Ptr) or !ir_of(ctx, dst).op_eq(IrType.Ptr) {
+        return false
+    }
+    return const_bytes(ctx, &src, c.operand, buf, rel, at)
+}
+
+// A scalar constant, encoded at its layout width.
+fn const_scalar_into(ctx: &LowerCtx, ty: &Ty, e: &Expr, buf: &List(u8), at: usize) bool {
+    if is_by_ref(ctx, ty) {
+        return false
+    }
+    let v = const_scalar(ctx, e)
+    if v.is_none() {
+        return false
+    }
+    write_le(buf, at, v.unwrap(), lay_of(ctx, ty.*).size)
+    return true
+}
+
+// A string literal is a `String { ptr, len }` view: the decoded bytes become their own global (the
+// same one every other use of that literal shares) and the view's `ptr` field is a relocation
+// naming it. Mirrors `build_string_view`, writing bytes where that writes stores.
+fn const_string(ctx: &LowerCtx, ty: &Ty, sl: &StringLiteral, buf: &List(u8), rel: &List(Reloc),
+    at: usize) bool {
+    if !is_string_ty(ctx, ty) {
+        return false
+    }
+    let st_opt = resolve_struct(ctx, ty, &ctx.result.nominals, ctx.allocator)
+    if st_opt.is_none() {
+        return false
+    }
+    let st = st_opt.unwrap()
+    let pi = field_index(&st.def, "ptr")
+    let li = field_index(&st.def, "len")
+    if pi < 0 or li < 0 {
+        return false
+    }
+    let interned = intern_string(ctx, sl.text)
+    if interned.is_none() {
+        return false
+    }
+    let e = interned.unwrap()
+    if !add_reloc(rel, at + st.layout.offsets[pi as usize], Operand.GlobalRef(e.name)) {
+        return false
+    }
+    write_le(buf, at + st.layout.offsets[li as usize], e.len as i64, 8)
+    return true
+}
+
+// A struct literal: every field encoded at its layout offset. Fields the literal omits keep the
+// buffer's zeros, which is what `lower_struct_lit`'s memset leaves them as.
+fn const_struct(ctx: &LowerCtx, lit: &StructLiteralExpr, buf: &List(u8), rel: &List(Reloc),
+    at: usize) bool {
+    let ty = node_ty(ctx, lit.span)
+    let st_opt = resolve_struct(ctx, &ty, &ctx.result.nominals, ctx.allocator)
+    if st_opt.is_none() {
+        return false
+    }
+    let st = st_opt.unwrap()
+    for &fi in lit.fields {
+        let di = field_index(&st.def, fi.name)
+        if di < 0 {
+            continue
+        }
+        if fi.value.is_none() {
+            return false
+        }
+        let didx = di as usize
+        let fty = field_ty(tyit(ctx), &st.def, didx, &st.args)
+        if !const_bytes(ctx, &fty, fi.value.unwrap(), buf, rel, at + st.layout.offsets[didx]) {
+            return false
+        }
+    }
+    return true
+}
+
+// A function name in value position decays to its address (RFC-014), which is a relocation. Only
+// names the checker resolved to a function qualify - a local shadows one, and a const read names
+// storage rather than code.
+fn const_fn_ref(ctx: &LowerCtx, ty: &Ty, id: &IdentifierExpr, rel: &List(Reloc), at: usize) bool {
+    if is_by_ref(ctx, ty) {
+        return false
+    }
+    let tgt = ctx_target(ctx, node_id_of(id.span))
+    if tgt.is_none() {
+        return false
+    }
+    let sym = tgt.unwrap() match {
+        RtFunction(f) => ctx.syms.lookup_symbol(f)
+        _ => null
+    }
+    if sym.is_none() {
+        return false
+    }
+    return add_reloc(rel, at, Operand.FuncRef(sym.unwrap()))
+}
+
+// Record an address slot, refusing one the backend cannot spell. A relocation has to land on an
+// 8-aligned offset for the emitted C struct's fields to sit where the byte offsets say they do.
+fn add_reloc(rel: &List(Reloc), offset: usize, value: Operand) bool {
+    if offset % 8 != 0 {
+        return false
+    }
+    rel.push(Reloc { offset = offset as u64, value = value })
+    return true
+}
+
+// The integer value of a scalar constant expression, or null when it is not one.
+//
+// ponytail: floats are not folded - a float constant keeps its init function. Adding them needs a
+// bit-level reinterpret of the double, which nothing here has yet.
+fn const_scalar(ctx: &LowerCtx, e: &Expr) i64? {
+    return e.* match {
+        Lit(l) => l.value match {
+            Int(i) => Some(parse_int(i.text))
+            Bool(b) => Some(if b.value { 1i64 } else { 0i64 })
+            Char(c) => decode_char(c.text)
+            Byte(by) => decode_char(by.text)
+            _ => null
+        }
+        Unary(u) => u.op match {
+            Neg => const_scalar(ctx, u.operand) match {
+                Some(n) => Some(0i64 - n)
+                None => null
+            }
+            _ => null
+        }
+        _ => null
+    }
+}
+
+// Store the low `n` bytes of `v`, least significant first.
+//
+// ponytail: little-endian, which every target the backend emits for is. A big-endian target needs
+// the byte order threaded down from the target triple.
+fn write_le(buf: &List(u8), at: usize, v: i64, n: usize) {
+    let bits = v as u64
+    for i in 0..n {
+        buf[at + i] = ((bits >> (i * 8)) & 0xFF) as u8
+    }
 }
 
 // `prefix` + the escaped FQN. The prefix keeps const globals and their init functions out of the
@@ -5753,11 +6035,12 @@ fn intern_string(ctx: &LowerCtx, raw: String) StrData? {
     let name = nb.to_string()
     nb.deinit()
 
-    ctx.str_globals.push(Global {
+    ctx.globals.push(Global {
         name = name.as_view(),
         size = (d.len + 1) as u64,
         align = 1u64,
         init_bytes = Some(bytes.as_view().as_raw_bytes()),
+        relocs = null,
     })
     let entry = StrData { name = name.as_view(), len = d.len }
     ctx.strings.set(raw, entry)
@@ -5765,13 +6048,13 @@ fn intern_string(ctx: &LowerCtx, raw: String) StrData? {
     return Some(entry)
 }
 
-// Move the interned string globals into the module once the walk is done. Part of `lower_module` /
-// `lower_program`, split out so both share it.
-fn flush_strings(m: &IrModule, ctx: &LowerCtx) {
-    for i in 0..ctx.str_globals.len {
-        m.add_global(ctx.str_globals[i])
+// Move every minted global into the module once the walk is done, preserving creation order. Part
+// of `lower_module` / `lower_program`, split out so both share it.
+fn flush_globals(m: &IrModule, ctx: &LowerCtx) {
+    for i in 0..ctx.globals.len {
+        m.add_global(ctx.globals[i])
     }
-    ctx.str_globals.deinit()
+    ctx.globals.deinit()
     ctx.strings.deinit()
 }
 
@@ -7803,38 +8086,57 @@ test "a specialized generic call omitting a defaulted argument lowers" {
     assert_eq(call_count(&m.functions[mi]), 1 as usize, "one call emitted")
 }
 
-test "a scalar module const reads through its global, initialized before main" {
+test "a scalar module const encodes into its global, with no init function" {
     let unit = analyze(from_view("const K: i32 = 7\nfn main() i32 { return K }"), "test.f")
     let m = lower_module(&unit.module, &unit.result)
     let mi = find_fn(&m, "main")
     assert_true(mi < m.functions.len, "the const-reading main lowers")
-    assert_true(find_fn(&m, "__finit_test__f__K") < m.functions.len, "the init function emits")
+    assert_true(find_fn(&m, "__finit_test__f__K") >= m.functions.len,
+        "a known value needs no init function")
     assert_eq(m.globals.len, 1 as usize, "one global backs the const")
-    // The init call is wired before any user instruction.
+    let bytes = m.globals[0].init_bytes.unwrap()
+    assert_eq(bytes.len, 4 as usize, "sized to the i32 layout")
+    assert_eq(bytes[0], 7 as u8, "little-endian 7")
+    assert_eq(bytes[3], 0 as u8, "and zero in the high byte")
+    // Nothing is wired ahead of the user's first instruction.
     let first_is_init = m.functions[mi].blocks[0].instrs[0] match {
         Call(c) => c.callee == "__finit_test__f__K"
         _ => false
     }
-    assert_true(first_is_init, "main's first instruction initializes the const")
+    assert_true(!first_is_init, "main runs no const initializer")
 }
 
-test "an aggregate const supports member reads and address-of" {
+test "an aggregate const encodes at its field offsets and supports member reads" {
     let unit = analyze(from_view("type Pt = struct { x: i32, y: i32 }\nconst P = Pt { x = 3, y = 4 }\nfn main() i32 { let a = &P let b = P.x return b }"),
         "test.f")
     let m = lower_module(&unit.module, &unit.result)
     assert_true(find_fn(&m, "main") < m.functions.len,
         "member read + address-of on a const global lower")
-    assert_true(find_fn(&m, "__finit_test__f__P") < m.functions.len, "the struct initializer emits")
+    assert_true(find_fn(&m, "__finit_test__f__P") >= m.functions.len,
+        "the struct needs no initializer function")
+    let bytes = m.globals[0].init_bytes.unwrap()
+    assert_eq(bytes.len, 8 as usize, "both fields sized")
+    assert_eq(bytes[0], 3 as u8, "x at offset 0")
+    assert_eq(bytes[4], 4 as u8, "y at offset 4")
 }
 
-test "a const vtable of function pointers lowers and dispatches" {
+test "a const vtable of function pointers becomes a relocation" {
     let unit = analyze(from_view("type V = struct { f: fn(i32) i32 }\nfn double(x: i32) i32 { return x + x }\nconst T = V { f = double }\nfn main() i32 { let g = T.f return g(2) }"),
         "test.f")
     let m = lower_module(&unit.module, &unit.result)
     assert_true(find_fn(&m, "main") < m.functions.len,
         "reading a fn field from a const global lowers")
-    assert_true(find_fn(&m, "__finit_test__f__T") < m.functions.len,
-        "the vtable init emits with a FuncRef store")
+    assert_true(find_fn(&m, "__finit_test__f__T") >= m.functions.len,
+        "the vtable needs no initializer function")
+    // The address is the linker's to fill in, so the field is a reloc rather than bytes.
+    let rs = m.globals[0].relocs.unwrap()
+    assert_eq(rs.len, 1 as usize, "one address slot")
+    assert_eq(rs[0].offset, 0 as u64, "at the fn field's offset")
+    let names_fn = rs[0].value match {
+        FuncRef(_) => true
+        _ => false
+    }
+    assert_true(names_fn, "and it names a function")
 }
 
 test "a const whose initializer cannot lower has no global, and its readers refuse" {

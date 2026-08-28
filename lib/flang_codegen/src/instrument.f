@@ -64,6 +64,7 @@ pub fn instrument_profile(m: &IrModule, all: bool = false,
         size = blob.as_view().len as u64,
         align = 1,
         init_bytes = Some(as_raw_bytes(blob.as_view())),
+        relocs = null,
     })
     add_runtime_foreigns(m, allocator)
     return blob

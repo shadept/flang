@@ -63,19 +63,20 @@ pub fn translate(m: &IrModule, sb: &StringBuilder) {
     if m.foreigns.len > 0 and (m.globals.len > 0 or m.functions.len > 0) {
         sb.append("\n")
     }
-    for i in 0..m.globals.len {
-        emit_global(&m.globals[i], sb)
-        sb.append("\n")
-    }
-    if m.globals.len > 0 and m.functions.len > 0 {
-        sb.append("\n")
-    }
-    // Forward declarations so call order is irrelevant.
+    // Forward declarations so call order is irrelevant - and ahead of the globals, since a global
+    // holding a function's address names it in a static initializer.
     for i in 0..m.functions.len {
         emit_fn_decl(&m.functions[i], sb)
         sb.append(";\n")
     }
-    if m.functions.len > 0 {
+    if m.functions.len > 0 and m.globals.len > 0 {
+        sb.append("\n")
+    }
+    for i in 0..m.globals.len {
+        emit_global(&m.globals[i], sb)
+        sb.append("\n")
+    }
+    if m.globals.len > 0 or m.functions.len > 0 {
         sb.append("\n")
     }
     let sigs = build_sig_index(m)
@@ -572,6 +573,15 @@ fn emit_foreign(f: &ForeignDecl, sb: &StringBuilder) {
 }
 
 fn emit_global(g: &Global, sb: &StringBuilder) {
+    let relocated = g.relocs match {
+        Some(rs) => rs.len > 0
+        None => false
+    }
+    if relocated {
+        emit_relocated_global(g, sb)
+        return
+    }
+
     // Always emit at file scope as `static` so it's not exported across translation units. If FIR
     // grows visibility flags, switch on them.
     //
@@ -587,19 +597,110 @@ fn emit_global(g: &Global, sb: &StringBuilder) {
     sb.append("]")
     g.init_bytes match {
         Some(bytes) => {
-            sb.append(" = {")
-            for i in 0..bytes.len {
-                if i > 0 {
-                    sb.append(", ")
-                }
-                sb.append("0x")
-                emit_hex_byte(bytes[i], sb)
-            }
-            sb.append("}")
+            sb.append(" = ")
+            emit_byte_block(bytes, 0, bytes.len, sb)
         }
         None => {}
     }
     sb.append(";")
+}
+
+// A global whose initial bytes contain the address of another symbol. C cannot put an address in a
+// `unsigned char[]` initializer, so the storage is spelled as a struct alternating byte runs with
+// `void*` fields, and a macro gives the rest of the file the plain `g_<name>` it addresses
+// everywhere else:
+//
+//     static _Alignas(8) struct { void* f0; unsigned char f1[8]; } g_x_r =
+//         { (void*)g_str_0, {0x02, ...} };
+//     #define g_x (&g_x_r)
+//
+// Every reloc offset is 8-aligned (`fir.Reloc`), so each byte run ends exactly where its following
+// pointer belongs and C inserts no padding of its own - the struct's bytes are the blob's bytes.
+//
+// The initializer names other globals, so a relocated global must be emitted after them; lowering
+// mints globals in creation order to guarantee that.
+fn emit_relocated_global(g: &Global, sb: &StringBuilder) {
+    let rs = g.relocs.unwrap()
+    let bytes = g.init_bytes match {
+        Some(b) => b
+        None => return
+    }
+
+    sb.append("static _Alignas(")
+    sb.append(g.align)
+    sb.append(") struct { ")
+    let field = 0
+    let at: usize = 0
+    for i in 0..rs.len {
+        let off = rs[i].offset as usize
+        if off > at {
+            emit_run_field(field, off - at, sb)
+            field = field + 1
+        }
+        sb.append("void* f")
+        sb.append(field)
+        sb.append("; ")
+        field = field + 1
+        at = off + 8
+    }
+    if g.size as usize > at {
+        emit_run_field(field, (g.size as usize) - at, sb)
+    }
+    sb.append("} g_")
+    sb.append(g.name)
+    sb.append("_r = { ")
+
+    field = 0
+    at = 0
+    for i in 0..rs.len {
+        let off = rs[i].offset as usize
+        if off > at {
+            if field > 0 {
+                sb.append(", ")
+            }
+            emit_byte_block(bytes, at, off, sb)
+            field = field + 1
+        }
+        if field > 0 {
+            sb.append(", ")
+        }
+        let rv = rs[i].value
+        emit_operand(&rv, sb)
+        field = field + 1
+        at = off + 8
+    }
+    if g.size as usize > at {
+        if field > 0 {
+            sb.append(", ")
+        }
+        emit_byte_block(bytes, at, g.size as usize, sb)
+    }
+    sb.append(" };\n#define g_")
+    sb.append(g.name)
+    sb.append(" (&g_")
+    sb.append(g.name)
+    sb.append("_r)")
+}
+
+fn emit_run_field(index: usize, len: usize, sb: &StringBuilder) {
+    sb.append("unsigned char f")
+    sb.append(index)
+    sb.append("[")
+    sb.append(len)
+    sb.append("]; ")
+}
+
+// `bytes[from..to]` as a braced C initializer.
+fn emit_byte_block(bytes: u8[], from: usize, to: usize, sb: &StringBuilder) {
+    sb.append("{")
+    for i in from..to {
+        if i > from {
+            sb.append(", ")
+        }
+        sb.append("0x")
+        emit_hex_byte(bytes[i], sb)
+    }
+    sb.append("}")
 }
 
 fn emit_fn_decl(f: &Function, sb: &StringBuilder) {

@@ -388,12 +388,26 @@ pub type Function = struct {
 // IrModule-level declarations
 // ─────────────────────────────────────────────────────────────────────────
 
-// Named static buffer in the data segment. `init_bytes = null` is BSS (zero-filled).
+// The address of another symbol, stored inside a global's initial bytes. The linker supplies the
+// value, so `init_bytes` holds eight placeholder zeros at `offset` and the backend writes the
+// symbol there instead. `value` is a `GlobalRef` or a `FuncRef`.
+//
+// `offset` must be 8-aligned within the global: the backend spells a relocated global as a C struct
+// of byte runs and pointers, and that layout only agrees with the byte offsets when every pointer
+// already sits where C would put it.
+pub type Reloc = struct {
+    offset: u64
+    value: Operand
+}
+
+// Named static buffer in the data segment. `init_bytes = null` is BSS (zero-filled); `relocs =
+// null` is a blob of plain bytes.
 pub type Global = struct {
     name: String
     size: u64
     align: u64
     init_bytes: u8[]?
+    relocs: Reloc[]?
 }
 
 // External symbol declaration. Typically C stdlib or a sibling `.c` file.
@@ -584,7 +598,7 @@ pub fn deinit(self: &ForeignDecl) {
 }
 
 pub fn deinit(self: &Global) {
-    // init_bytes is borrowed (caller owns); nothing to free here.
+    // init_bytes and relocs are borrowed (caller owns); nothing to free here.
 }
 
 // ─────────────────────────────────────────────────────────────────────────

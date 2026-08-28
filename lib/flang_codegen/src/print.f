@@ -48,6 +48,20 @@ fn print_global(g: &Global, sb: &StringBuilder) {
         }
         None => {}
     }
+    // `reloc <offset> = @sym` per address the linker fills in, appended so a global with no
+    // relocations prints exactly as before.
+    g.relocs match {
+        Some(rs) => {
+            for i in 0..rs.len {
+                sb.append(" reloc ")
+                sb.append(rs[i].offset)
+                sb.append(" = ")
+                let rv = rs[i].value
+                print_operand(&rv, sb)
+            }
+        }
+        None => {}
+    }
 }
 
 fn print_foreign(f: &ForeignDecl, sb: &StringBuilder) {

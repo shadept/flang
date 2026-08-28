@@ -363,6 +363,28 @@ entry:
 }
 ```
 
+A global is printed by its storage rather than a source type: `global
+@name size=<bytes> align=<bytes>`, followed by ` = ` and a byte literal
+when it has initial contents. Omitting the bytes is BSS (zero-filled).
+
+Bytes alone cannot hold the address of another symbol — the linker
+chooses it — so an initializer that contains one records a *relocation*:
+eight placeholder zeros in the bytes plus a `reloc` clause naming the
+offset and the symbol. Relocation offsets are 8-aligned.
+
+```
+global @str_0 size=3 align=1 = [0x68, 0x69, 0x00]
+global @greeting size=16 align=8 = [0x00, ...] reloc 0 = @str_0
+global @vtable size=8 align=8 = [0x00, ...] reloc 0 = @double
+```
+
+The C backend emits a relocated global as a struct alternating byte runs
+with `void*` fields, behind `#define g_<name> (&g_<name>_r)` so that
+every reference site keeps spelling it `g_<name>`. Because such an
+initializer names other symbols, globals are emitted in creation order
+(a global always precedes any global holding its address) and function
+forward declarations are emitted ahead of the globals.
+
 ## Text format
 
 The syntax shown throughout this document **is** the canonical text
