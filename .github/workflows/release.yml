@@ -40,6 +40,16 @@ jobs:
         with:
           global-json-file: global.json
 
+      - name: Setup MSVC
+        if: matrix.rid == 'win-x64'
+        uses: ilammy/msvc-dev-cmd@v1
+
+      - name: Build the seed compiler
+        shell: bash
+        run: |
+          cd "boot/${{ matrix.rid }}"
+          if [ "${{ matrix.rid }}" = "win-x64" ]; then cmd //c build.bat; else make; fi
+
       - name: Build compiler
         run: dotnet run build.cs ${{ matrix.rid }}
 

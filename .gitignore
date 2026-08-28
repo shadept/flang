@@ -1,118 +1,17 @@
-# Created by https://www.toptal.com/developers/gitignore/api/dotnetcore,rider
-# Edit at https://www.toptal.com/developers/gitignore?templates=dotnetcore,rider
-
-### DotnetCore ###
-# .NET Core build folders
-bin/
-obj/
-packages.lock.json
-
-# Roslyn/MSBuild language-service cache (emitted next to each .csproj by .NET 10 SDK)
-*.csproj.lscache
-
-# FLang harness build artifacts (BuildCache lives in build/cache/)
-tests/FLang.Tests/build/
-
-# FLang project build outputs — bootstrap, tools, and libraries each emit to
-# their own build/ via `flang build`.
-bootstrap/build/
-tools/*/build/
+# Compiler output: `flang build` emits into each project's own build/.
+compiler/build/
 lib/*/build/
-stdlib/std/build/
+tools/*/build/
+stdlib/*/build/
+tests/runner/build/
 
-# Common node modules locations
-/node_modules
-/wwwroot/node_modules
-
-### Rider ###
-# Covers JetBrains IDEs: IntelliJ, RubyMine, PhpStorm, AppCode, PyCharm, CLion, Android Studio, WebStorm and Rider
-# Reference: https://intellij-support.jetbrains.com/hc/en-us/articles/206544839
-
-# User-specific stuff
-.idea/**/workspace.xml
-.idea/**/tasks.xml
-.idea/**/usage.statistics.xml
-.idea/**/dictionaries
-.idea/**/shelf
-
-# AWS User-specific
-.idea/**/aws.xml
-
-# Generated files
-.idea/**/contentModel.xml
-
-# Sensitive or high-churn files
-.idea/**/dataSources/
-.idea/**/dataSources.ids
-.idea/**/dataSources.local.xml
-.idea/**/sqlDataSources.xml
-.idea/**/dynamic.xml
-.idea/**/uiDesigner.xml
-.idea/**/dbnavigator.xml
-
-# Gradle
-.idea/**/gradle.xml
-.idea/**/libraries
-
-# Gradle and Maven with auto-import
-# When using Gradle or Maven with auto-import, you should exclude module files,
-# since they will be recreated, and may cause churn.  Uncomment if using
-# auto-import.
-# .idea/artifacts
-# .idea/compiler.xml
-# .idea/jarRepositories.xml
-# .idea/modules.xml
-# .idea/*.iml
-# .idea/modules
-# *.iml
-# *.ipr
-
-# CMake
-cmake-build-*/
-
-# Mongo Explorer plugin
-.idea/**/mongoSettings.xml
-
-# File-based project format
-*.iws
-
-# IntelliJ
-out/
-
-# mpeltonen/sbt-idea plugin
-.idea_modules/
-
-# JIRA plugin
-atlassian-ide-plugin.xml
-
-# Cursive Clojure plugin
-.idea/replstate.xml
-
-# SonarLint plugin
-.idea/sonarlint/
-
-# Crashlytics plugin (for Android Studio and IntelliJ)
-com_crashlytics_export_strings.xml
-crashlytics.properties
-crashlytics-build.properties
-fabric.properties
-
-# Editor-based Rest Client
-.idea/httpRequests
-
-# Android studio 3.1+ serialized cache file
-.idea/caches/build_file_checksums.ser
-
-# End of https://www.toptal.com/developers/gitignore/api/dotnetcore,rider
-
+# Installed compilers and stage artifacts (dotnet run build.cs).
 dist/
-.test-artifacts/
 
-# Claude Code session state
-.claude/
+# Cold-start binary built from the committed seed C, which IS tracked.
+boot/*/flang-seed
 
-# cst_explorer ad-hoc diagnostic dumps
-tools/cst_explorer/out.json
+# Toolchain intermediates and binaries.
 *.obj
 *.exe
 *.fir
@@ -120,31 +19,32 @@ tools/cst_explorer/out.json
 *.pdb
 *.ilk
 *.dSYM/
-*.DotSettings.user
-.vscode/
-.idea/
 /test
 
-# Generated C and FLang files (compiler output)
+# Generated C and FLang files (compiler output).
 *.generated.c
 *.generated.f
 
-# Generated FFI vendor bindings
+# Generated FFI vendor bindings.
 vendor/
 
-# Intermediate C files from compilation (but not hand-written stdlib .c files)
+# Profiler output (RFC-025).
+*.folded
+
+# cst_explorer ad-hoc diagnostic dumps.
+tools/cst_explorer/out.json
+
+# Intermediate C from compilation, but not hand-written stdlib/example sidecars.
 examples/**/*.c
 tests/**/*.c
 
-!src/FLang.Codegen.C/
-
-# Ignore all files in test harness except source files (.f, not .generated.f)
+# Test harness: source files only.
 tests/harness/**
 !tests/harness/**/
 !tests/harness/**/*.f
 tests/harness/**/*.generated.f
 
-# Build artifacts in examples — ignore everything except source and project files
+# Examples: source and project files only.
 examples/**
 !examples/**/
 !examples/**/*.f
@@ -154,9 +54,7 @@ examples/**/*.generated.f
 !examples/**/*.md
 !examples/**/.gitignore
 
-# Profiler output (RFC-025)
-*.folded
-
-# Bootstrap-seed cold-start artifacts (the seed .c files ARE committed)
-boot/*/flang-seed
-
+# Editor and agent state.
+.vscode/
+.idea/
+.claude/

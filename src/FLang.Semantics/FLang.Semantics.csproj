@@ -1,9 +1,0 @@
-﻿<Project Sdk="Microsoft.NET.Sdk">
-
-    <ItemGroup>
-        <ProjectReference Include="..\FLang.Frontend\FLang.Frontend.csproj"/>
-        <ProjectReference Include="..\FLang.Core\FLang.Core.csproj"/>
-        <ProjectReference Include="..\FLang.IR\FLang.IR.csproj"/>
-    </ItemGroup>
-
-</Project>

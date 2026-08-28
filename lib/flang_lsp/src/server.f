@@ -1,7 +1,7 @@
 // The LSP server core: a single-threaded message loop over a Reader/Writer pair speaking
 // std.rpc.jsonrpc, plus the lifecycle, document-sync, diagnostics and tier-1 feature handlers.
-// Transport-agnostic - the bootstrap `lsp` subcommand hands it stdin/stdout, tests hand it a
-// MemReader and a StringBuilder.
+// Transport-agnostic - the `flang lsp` subcommand hands it stdin/stdout, tests hand it a MemReader
+// and a StringBuilder.
 //
 // Analysis runs synchronously between messages: a didOpen of the first file under a `flang.toml`
 // analyzes that whole project behind a `$/progress` spinner, a didSave re-checks it, and a

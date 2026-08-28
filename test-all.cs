@@ -50,7 +50,7 @@ if (string.IsNullOrEmpty(flang))
     ("lib/flang_analysis", []),
     ("lib/flang_driver", []),
     ("lib/flang_lsp", []),
-    ("bootstrap", []),
+    ("compiler", []),
     ("stdlib/std", ["--stdlib-path", Path.Combine(root, "stdlib")]),
 ];
 

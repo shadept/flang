@@ -5,16 +5,15 @@
 #:property ImplicitUsings=enable
 
 // ============================================================================
-// FLang Build Script - Cross-platform build using dotnet run
+// FLang Build Script - build the compiler with itself
 //
-// Bootstraps the whole chain in one command:
-//   1. publish the C# reference compiler   -> dist/<rid>/flang-ref
-//   2. build the self-hosted compiler with it (stage 1)
-//   3. install that as dist/<rid>/flang    -- THE default compiler
+//   1. find a compiler: dist/<rid>/flang, else the cold-start seed
+//      boot/<rid>/flang-seed
+//   2. build compiler/ with it (stage 1)
+//   3. install that as dist/<rid>/flang -- THE compiler
 //
-// Everything downstream (test.cs, test-all.cs, the README) points at
-// dist/<rid>/flang, so the default is always the self-hosted binary and the
-// reference is one rename away.
+// A clean clone has neither, and the seed is the way in: `make` (or
+// build.bat) in boot/<rid> needs nothing but a C compiler. See boot/README.md.
 //
 // Usage:
 //   dotnet run build.cs                  # Build for current platform
@@ -39,17 +38,17 @@ string? rid = args.FirstOrDefault(a => !a.StartsWith('-'));
 if (showHelp)
 {
     Console.WriteLine("""
-        FLang Build Script - Cross-platform build
+        FLang Build Script - build the compiler with itself
 
-        Publishes the C# reference compiler to dist/<rid>/flang-ref, builds the
-        self-hosted compiler with it, and installs that as dist/<rid>/flang --
-        the default compiler used by test.cs, test-all.cs and the docs.
+        Builds compiler/ with an existing compiler and installs the result as
+        dist/<rid>/flang, the compiler test.cs, test-all.cs and the docs use.
+        The builder is dist/<rid>/flang when present, otherwise the cold-start
+        seed at boot/<rid>/flang-seed.
 
         Usage:
           dotnet run build.cs                  Build for current platform
           dotnet run build.cs <rid>            Build for specific RID
-          dotnet run build.cs -- --force       Rebuild the self-hosted compiler even
-                                               if it is already up to date
+          dotnet run build.cs -- --force       Rebuild even if already up to date
           dotnet run build.cs -- --stage2      Also build stage 2 (stage 1 compiles
                                                the compiler again)
           dotnet run build.cs -- --stage3      Also build stage 3 and check the
@@ -99,126 +98,105 @@ if (rid == null)
     rid = $"{os}-{arch}";
 }
 
-// Map FLang RID to .NET RID (dotnet uses "osx" not "darwin")
-var dotnetRid = rid.StartsWith("darwin") ? rid.Replace("darwin", "osx") : rid;
-
 var exeExt = rid.StartsWith("win") ? ".exe" : "";
 var distDir = Path.GetFullPath(Path.Combine(scriptDir, "dist", rid));
-var finalExe = Path.Combine(distDir, $"flang{exeExt}");        // default: self-hosted
-var refExe = Path.Combine(distDir, $"flang-ref{exeExt}");      // C# reference
-var stdlibDir = Path.Combine(distDir, "stdlib");
+var finalExe = Path.Combine(distDir, $"flang{exeExt}");
+var stagesDir = Path.Combine(distDir, "stages");
+var compilerDir = Path.Combine(scriptDir, "compiler");
+var stdlibSrc = Path.Combine(scriptDir, "stdlib");
+var compilerExe = Path.Combine(compilerDir, "build", $"flang{exeExt}");
+
+if (!File.Exists(Path.Combine(compilerDir, "flang.toml")))
+{
+    Console.Error.WriteLine("Error: compiler/flang.toml not found; cannot build the compiler.");
+    return 1;
+}
+
+// The builder for stage 1. An installed compiler is preferred over the seed:
+// it is at least as new, and the seed's whole job is the cold start.
+var seedExe = Path.Combine(scriptDir, "boot", rid, $"flang-seed{exeExt}");
+var builder = File.Exists(finalExe) ? finalExe : File.Exists(seedExe) ? seedExe : null;
+
+if (builder == null)
+{
+    Console.Error.WriteLine($"""
+        Error: no compiler to build with.
+
+        Cold-start from the committed seed, which needs only a C compiler:
+
+          cd boot/{rid}
+          make                  # build.bat on Windows, from a VS developer prompt
+
+        then re-run this script. See boot/README.md.
+        """);
+    return 1;
+}
 
 Console.ForegroundColor = ConsoleColor.Cyan;
-Console.WriteLine($"=== Building the reference compiler (Release) for RID={rid} ===");
+Console.WriteLine($"=== Building the compiler for RID={rid} ===");
 Console.ResetColor();
+Console.WriteLine($"Builder: {builder}");
 Console.WriteLine();
-
-// Publish. NuGet restore dominates a no-change publish (~15s vs ~1.3s), and it
-// is a no-op the overwhelming majority of the time, so try --no-restore first
-// and pay for a restore only when that fails (fresh clone, changed package
-// refs). A genuine compile error costs one wasted fast pass.
-var distRidProp = rid != dotnetRid ? $" -p:DistRid={rid}" : "";
-var publishArgs = $"publish src/FLang.CLI/FLang.CLI.csproj -c Release -r {dotnetRid}{distRidProp} -p:DistExeName=flang-ref -nologo -v minimal";
-if (Run("dotnet", publishArgs + " --no-restore") != 0)
-{
-    Console.WriteLine();
-    Console.WriteLine("Publish failed without a restore; retrying with one...");
-    if (Run("dotnet", publishArgs) != 0)
-    {
-        Console.Error.WriteLine("Error: dotnet publish failed.");
-        return 1;
-    }
-}
-if (Run("dotnet", "build test.cs") != 0)
-{
-    Console.Error.WriteLine("Error: dotnet build test.cs failed.");
-    return 1;
-}
-
-Console.WriteLine();
-
-// Verify output. `-p:DistExeName=flang-ref` keeps the publish off dist/<rid>/flang,
-// which belongs to the self-hosted compiler installed below.
-if (!File.Exists(refExe))
-{
-    Console.ForegroundColor = ConsoleColor.Yellow;
-    Console.WriteLine($"Warning: Expected artifact not found at {refExe}");
-    Console.WriteLine("The publish may have succeeded, but the post-publish copy step might have been skipped.");
-    Console.WriteLine("Check the publish logs and the MSBuild target in src/FLang.CLI/FLang.CLI.csproj.");
-    Console.ResetColor();
-    return 1;
-}
-
-Console.WriteLine($"Reference compiler: {refExe} ({new FileInfo(refExe).Length} bytes)");
-
-if (Directory.Exists(stdlibDir))
-    Console.WriteLine($"Stdlib copied to:   {stdlibDir}");
-else
-    Console.WriteLine($"Note: stdlib folder not found at {stdlibDir}");
-
-// Stage 1: build the self-hosted compiler with the reference, deploy a stdlib
-// copy next to its binary so `bootstrap/build/flang build` resolves std.*
-// without --stdlib-path, then install it as the default compiler. Installing a
-// *copy* into dist/ is also what keeps a self-build from overwriting the very
-// binary running it.
-var bootstrapDir = Path.Combine(scriptDir, "bootstrap");
-if (!File.Exists(Path.Combine(bootstrapDir, "flang.toml")))
-{
-    Console.Error.WriteLine("Error: bootstrap/flang.toml not found; cannot build the self-hosted compiler.");
-    return 1;
-}
 
 // `flang build` has no whole-project up-to-date check of its own, so it re-does
-// the full ~10s compile every time. Guard it with the sources it actually reads:
-// the bootstrap and library trees, the stdlib, and src/ (which stands in for
-// flang-ref -- the publish re-copies that binary unconditionally, so its own
-// timestamp says nothing about whether the reference actually changed).
+// the full ~10s compile every time. Guard it with the sources it actually reads.
 var sourceRoots = new[]
 {
-    bootstrapDir,
+    compilerDir,
     Path.Combine(scriptDir, "lib"),
-    Path.Combine(scriptDir, "stdlib"),
-    Path.Combine(scriptDir, "src"),
+    stdlibSrc,
 };
-var bootstrapExe = Path.Combine(bootstrapDir, "build", $"flang{exeExt}");
-var stdlibSrc = Path.Combine(scriptDir, "stdlib");
-var stagesDir = Path.Combine(distDir, "stages");
 
 if (!force && File.Exists(finalExe) && NewestInput(sourceRoots) <= File.GetLastWriteTimeUtc(finalExe))
 {
-    Console.WriteLine();
-    Console.WriteLine($"Self-hosted compiler up to date: {finalExe} (--force to rebuild)");
+    Console.WriteLine($"Compiler up to date: {finalExe} (--force to rebuild)");
 }
 else
 {
-    Console.WriteLine();
-    Console.WriteLine("=== Building the self-hosted compiler (stage 1) ===");
+    Console.WriteLine("=== Stage 1 ===");
+
+    // Stage 1 runs from a copy whenever the builder is the file this script
+    // installs over. Windows holds an executable's image open for a moment
+    // after the process exits, so copying onto it races that release.
+    var stage1Builder = builder;
+    if (string.Equals(builder, finalExe, StringComparison.OrdinalIgnoreCase))
+    {
+        stage1Builder = Path.Combine(distDir, $"flang-builder{exeExt}");
+        File.Copy(builder, stage1Builder, overwrite: true);
+        MakeExecutable(stage1Builder);
+    }
+
     // --release is what makes the compiler usable: an unoptimized stage-1
     // takes ~4.8x longer to compile anything than the same code built /O2,
     // and every downstream stage, test run and tool invocation pays it.
     // Windows keeps debug info either way (/Z7 is passed in both modes).
-    if (Run(refExe, "build --release", bootstrapDir) != 0)
+    if (Run(stage1Builder, $"build --release --stdlib-path \"{stdlibSrc}\"", compilerDir) != 0)
     {
-        Console.Error.WriteLine($"Error: self-hosted build failed. {finalExe} was not updated; use flang-ref meanwhile.");
+        Console.Error.WriteLine($"Error: stage-1 build failed. {finalExe} was not updated.");
         return 1;
     }
 
-    if (!File.Exists(bootstrapExe))
+    if (!File.Exists(compilerExe))
     {
-        Console.Error.WriteLine($"Error: self-hosted build reported success but produced no binary under {Path.Combine(bootstrapDir, "build")}.");
+        Console.Error.WriteLine($"Error: stage-1 build reported success but produced no binary under {Path.Combine(compilerDir, "build")}.");
         return 1;
     }
 
-    CopyDir(stdlibSrc, Path.Combine(bootstrapDir, "build", "stdlib"));
-    File.Copy(bootstrapExe, finalExe, overwrite: true);
+    // Deploy a stdlib copy beside the binary so `compiler/build/flang build`
+    // resolves std.* without --stdlib-path. Installing a *copy* into dist/ is
+    // also what keeps a self-build from overwriting the binary running it.
+    Directory.CreateDirectory(distDir);
+    CopyDir(stdlibSrc, Path.Combine(compilerDir, "build", "stdlib"));
+    CopyDir(stdlibSrc, Path.Combine(distDir, "stdlib"));
+    File.Copy(compilerExe, finalExe, overwrite: true);
     MakeExecutable(finalExe);
 
-    Console.WriteLine($"Default compiler:   {finalExe} ({new FileInfo(finalExe).Length} bytes)");
+    Console.WriteLine($"Compiler: {finalExe} ({new FileInfo(finalExe).Length} bytes)");
 }
 
-// Stages 2 and 3: the self-hosted compiler compiling itself, twice. The
-// milestone is the fixpoint -- stage 2 and stage 3 must emit byte-identical
-// C, which proves the compiler is a fixed point of its own translation.
+// Stages 2 and 3: the compiler compiling itself, twice. The milestone is the
+// fixpoint -- stage 2 and stage 3 must emit byte-identical C, which proves the
+// compiler is a fixed point of its own translation.
 if (stage2)
 {
     Console.WriteLine();
@@ -253,7 +231,7 @@ return 0;
 
 // --- Helpers ---
 
-// Compile the bootstrap project with `compiler` and park the results in
+// Compile the compiler project with `builder` and park the results in
 // dist/<rid>/stages as <name>.exe / <name>.c. Returns the path of the kept C
 // file, or null if the build failed.
 //   -k  keeps the emitted C: the fixpoint compares C, not binaries -- PE and
@@ -262,18 +240,19 @@ return 0;
 //       flag reaches the C compiler, not the emitted C), but a debug stage 2
 //       would build stage 3 several times slower.
 //   -s  points at the repo stdlib: a stage compiler runs from dist/<rid>/stages,
-//       away from the stdlib copy deployed next to the default compiler.
-//   Flags precede the subcommand -- the CLI stops parsing options at it.
-string? RunStage(string compiler, string name)
+//       away from the stdlib copy deployed next to the installed compiler.
+//   Options follow the subcommand -- the CLI parses each against the command
+//   it comes after.
+string? RunStage(string builder, string name)
 {
-    if (Run(compiler, $"build -k -r -s \"{stdlibSrc}\"", bootstrapDir) != 0)
+    if (Run(builder, $"build -k -r -s \"{stdlibSrc}\"", compilerDir) != 0)
     {
         Console.Error.WriteLine($"Error: {name} build failed.");
         return null;
     }
 
-    var emittedC = Path.Combine(bootstrapDir, "build", "flang.c");
-    if (!File.Exists(bootstrapExe) || !File.Exists(emittedC))
+    var emittedC = Path.Combine(compilerDir, "build", "flang.c");
+    if (!File.Exists(compilerExe) || !File.Exists(emittedC))
     {
         Console.Error.WriteLine($"Error: {name} reported success but left no binary or no C beside it.");
         return null;
@@ -282,7 +261,7 @@ string? RunStage(string compiler, string name)
     Directory.CreateDirectory(stagesDir);
     var exe = Path.Combine(stagesDir, $"{name}{exeExt}");
     var c = Path.Combine(stagesDir, $"{name}.c");
-    File.Copy(bootstrapExe, exe, overwrite: true);
+    File.Copy(compilerExe, exe, overwrite: true);
     File.Copy(emittedC, c, overwrite: true);
     MakeExecutable(exe);
 

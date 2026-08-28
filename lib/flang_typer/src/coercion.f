@@ -125,8 +125,8 @@ pub fn try_integer_widening(it: &TypeInterner, from: Ty, to: Ty,
 
 // ─────────────────────────────────────────────────────────────────────
 // Char narrowing: char → u8.
-// ponytail: fires for every char value; the reference checker restricts this to literals, so the
-// bootstrap accepts strictly more programs.
+// ponytail: fires for every char value, not just literals. Narrowing a non-literal char silently
+// truncates above U+00FF; restricting it to literals is the tighter rule.
 // ─────────────────────────────────────────────────────────────────────
 
 pub fn try_char_to_u8(it: &TypeInterner, from: Ty, to: Ty,
