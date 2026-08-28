@@ -3,10 +3,18 @@
 ## Compilation Pipeline
 
 ```
-Source → Lexer → Parser → Source Generators → HmTypeChecker → HmAstLowering (FIR) → Optimizations → HmCCodeGenerator → C99 → GCC/Clang → Native
+Source → Lexer → CST → AST → Source Generators → Checker → Lowering (FIR) → Optimizations → C Backend → C99 → cc → Native
 ```
 
-All phases communicate through a central `Compilation` context object — phases never reference each other directly. `Compilation` owns source files, type registries (structs, enums, specializations), module metadata, and global constants.
+| phase | lives in |
+|---|---|
+| Lexer, CST, AST projection, comptime | `lib/flang_parser` |
+| Manifest/import resolution, the module loader | `lib/flang_analysis` |
+| Type inference, registries | `lib/flang_typer` |
+| AST → FIR lowering, symbols, layout, the build driver | `lib/flang_driver` |
+| FIR, optimization passes, C backend | `lib/flang_codegen` |
+
+`AnalyzedProject` carries a load's module set, its `TypeCheckResult`, and the registries the next demand reuses; phases hand it along rather than referencing each other.
 
 ### Imports and visibility
 
@@ -47,7 +55,7 @@ The dep's `[project].name` IS its import namespace; library files live directly 
 
 ### Self-hosted library layout
 
-The self-hosted compiler is six libraries plus the `bootstrap` exe. Edges run one way; `flang_driver` is the only one that sees both halves of the pipeline. `flang_fmt` (the formatter) sits outside the pipeline chain: it depends only on `flang_parser` + `flang_core` and is consumed by `bootstrap` for `flang fmt`:
+The self-hosted compiler is six libraries plus the `compiler` exe. Edges run one way; `flang_driver` is the only one that sees both halves of the pipeline. `flang_fmt` (the formatter) sits outside the pipeline chain: it depends only on `flang_parser` + `flang_core` and is consumed by `compiler` for `flang fmt`:
 
 ```
         flang_core        flang_codegen
@@ -64,7 +72,7 @@ The self-hosted compiler is six libraries plus the `bootstrap` exe. Edges run on
          |   |                 |
         flang_driver ----------+
              ^
-          bootstrap
+          compiler
 ```
 
 | library | holds | job |
@@ -81,9 +89,9 @@ The self-hosted compiler is six libraries plus the `bootstrap` exe. Edges run on
 
 ### Self-hosted import resolution (`flang_analysis`)
 
-The bootstrap compiler reimplements the same machinery in FLang. `flang_analysis/resolver.f` is the port: `resolve_import` mirrors `TryResolveImportPath` (project-name, dependency-name, then include-path rules — stdlib root via the `--stdlib-path` flag, then the working dir), and `module_fqn` mirrors `DeriveModulePath` (the inverse, classifying a file path under the project / dependency / stdlib roots). Dependency source roots are derived exactly as the C# does — read each dep's `flang.toml`, take the static prefix of its `source` glob.
+`flang_analysis/resolver.f` owns import resolution: `resolve_import` applies the project-name, dependency-name, then include-path rules (stdlib root via the `--stdlib-path` flag, then the working dir), and `module_fqn` is its inverse, classifying a file path under the project / dependency / stdlib roots. Dependency source roots come from reading each dep's `flang.toml` and taking the static prefix of its `source` glob.
 
-`flang_analysis/analyze.f::analyze_project` is the BFS loader: it seeds the queue with the project's globbed entry sources plus the auto-imported `core.prelude`, follows each module's imports, deduplicates by file path, and type-checks the whole set through a single `check_all`. The module FQNs (not file paths) are passed as the per-module paths so symbol registration and visibility agree. Visibility is built in `flang_typer/checker.f::build_visibility` from the modules' `ImportDecl`s — `{M} ∪ imports(M)` then the `pub import` re-export closure, matching `GetVisibleModules`. `compile.f::build_program` lowers every module into one FIR program for a single link. `examples/multimod` is the end-to-end witness. Each module's text comes from `analyze.f::read_source`, which returns a supplied buffer when the caller named that path in `analyze_project`'s optional `overrides` map (an editor's unsaved text) and reads the file otherwise; keys are the forward-slash paths `resolver.normalize_sep` produces, so a key spelled any other way misses silently and compiles the stale file. `flang build` passes no overrides. (Known gap: structs crash the bootstrap typer — see [known-issues.md](known-issues.md).)
+`flang_analysis/analyze.f::analyze_project` is the BFS loader: it seeds the queue with the project's globbed entry sources plus the auto-imported `core.prelude`, follows each module's imports, deduplicates by file path, and type-checks the whole set through a single `check_all`. The module FQNs (not file paths) are passed as the per-module paths so symbol registration and visibility agree. Visibility is built in `flang_typer/checker.f::build_visibility` from the modules' `ImportDecl`s — `{M} ∪ imports(M)` then the `pub import` re-export closure, matching `GetVisibleModules`. `compile.f::build_program` lowers every module into one FIR program for a single link. `examples/multimod` is the end-to-end witness. Each module's text comes from `analyze.f::read_source`, which returns a supplied buffer when the caller named that path in `analyze_project`'s optional `overrides` map (an editor's unsaved text) and reads the file otherwise; keys are the forward-slash paths `resolver.normalize_sep` produces, so a key spelled any other way misses silently and compiles the stale file. `flang build` passes no overrides. (Known gap: structs crash the typer — see [known-issues.md](known-issues.md).)
 
 ## `std.io` layering
 
@@ -223,9 +231,11 @@ The following are redundancies in the generated IR that Clang eliminates at `-O2
 - **Dead block elimination:** `break`/`continue`/`return` in expression position emit a `dead` basic block for subsequent unreachable code; these could be pruned.
 - ~~**Dead stores / unused allocas**~~ — Implemented. See `DeadStoreElimination`. Limitations: (a) large allocas that go through a `memset`-zero-init call are kept alive because the call is treated as a generic escape; recognising `memset`/`memcpy` as writes-only-to-arg would unlock these. (b) Partial dead stores (one field read, another written and never read) conservatively keep the whole alloca live.
 
-## Build Cache
+## Build Cache — NOT IMPLEMENTED
 
-Companion `.c` files that ship alongside `.f` sources (stdlib's `simd.c`, `bits.c`, `io/internal/fs.c`, `atomic.c`, plus any project-local C) are pre-compiled to `.obj` via `BuildCache` before the final link. Warm builds skip the C compile and just link the cached objects.
+Companion `.c` files (stdlib's `simd.c`, `bits.c`, `io/internal/fs.c`, `atomic.c`, plus any project-local C) are recompiled on every build. `flang_codegen/src/backend.f` reserves the seam — `IrModule` carries pre-compiled objects to link as-is — but nothing populates it, so a warm build pays the same C compile as a cold one.
+
+The design below is the shape to build against, kept because it was implemented once and the constraints still hold. A `build/cache/` directory in a working tree is a leftover, not a live cache.
 
 **Layout.** Colocated with build outputs at `<outputDir>/cache/`:
 
@@ -253,7 +263,7 @@ build/
 ## C99 Backend
 
 - **Name mangling only in codegen.** IR carries `SymbolBaseName` — the module-qualified base (`module.path.name`, stamped on `FunctionDeclarationNode.ModulePath` at signature collection) — and `HmCCodeGenerator` applies `IrNameMangling.MangleFunctionName()` (parameter/return tokens) when emitting C. Module qualification is load-bearing: two file-private functions with the same name and signature in different modules used to merge into one C symbol, with one body silently dropped. `main` and foreigns are never mangled.
-- **Mangling is total over the module path.** The path comes from the project name and file path, not from a FLang identifier, so both manglers escape rather than pass bytes through — see `docs/spec.md` §7.1.1, property 4. Self-hosted (`symbol_table.f::append_module_path`): `.` → `__`, `_` → `_0`, any byte outside `[A-Za-z0-9]` → `_x<hex>`; injective, because a literal `_` always becomes `_0`, so `__` and `_x` can only come from an escape. Reference (`TypeLayoutService.SanitizeCName`): every character outside `[A-Za-z0-9_]` → `_`, which is total but lossy. `#foreign` structs keep their original C name and are exempt.
+- **Mangling is total over the module path.** The path comes from the project name and file path, not from a FLang identifier, so both manglers escape rather than pass bytes through — see `docs/spec.md` §7.1.1, property 4. `symbol_table.f::append_module_path`: `.` → `__`, `_` → `_0`, any byte outside `[A-Za-z0-9]` → `_x<hex>`; injective, because a literal `_` always becomes `_0`, so `__` and `_x` can only come from an escape. `#foreign` structs keep their original C name and are exempt.
 - **Foreign/intrinsic symbols are not mangled.** `#foreign` and `#intrinsic` calls use their declared names directly.
 - **By-value aggregates cross C boundaries as real structs.** `IrType.Agg` carries `{name, size, align}`; the matching `AggDef` on `IrModule.aggs` carries the member list the backend emits as a `typedef struct`, nested types first. Members are faithful (a `f32` emits as `float`) because the platform ABI classifies a struct by its member types. Only foreign calls use this — native calls still pass addresses and return through sret. `symbol_table.f::agg_abi_safe` is the single gate, and it tests **layout agreement**: an aggregate may cross only if C's natural layout of its members reproduces the FLang layout, which rules out every `Repr.Auto` struct whose fields got reordered by descending alignment.
 - **Foreign structs skip codegen.** `IrStruct.IsForeign` structs have no typedef or definition emitted — the `#include` of the original C header provides them. Their `CName` is the original C name (e.g. `Color`), not mangled.
@@ -261,11 +271,11 @@ build/
 
 ## Bootstrap Seed (`boot/`)
 
-The committed artifact a clean clone can rebuild the compiler from with only a C99 compiler — the self-host analog of the C# reference. One directory per target (`boot/win-x64`, `boot/linux-x64`, `boot/darwin-arm64`), each holding `flang.c` — the whole compiler as stage-2-emitted C for that target's `#if` context — plus the stdlib's hand-written runtime sidecar `.c` files, copied so the seed is a closed set even when HEAD's stdlib drifts. `boot/SEED` records version, commit, and date. Cold start: `make` (or `build.bat` on Windows) in the seed directory produces `flang-seed`, which builds the current sources.
+The committed artifact a clean clone can rebuild the compiler from with only a C99 compiler, and since the reference compiler's retirement the only way in. One directory per target (`boot/win-x64`, `boot/linux-x64`, `boot/darwin-arm64`), each holding `flang.c` — the whole compiler as stage-2-emitted C for that target's `#if` context — plus the stdlib's hand-written runtime sidecar `.c` files, copied so the seed is a closed set even when HEAD's stdlib drifts. `boot/SEED` records version, commit, and date. Cold start: `make` (or `build.bat` on Windows) in the seed directory produces `flang-seed`, which builds the current sources.
 
 - **The only writer is `dotnet run promote.cs`.** It refuses unless stage-2 = stage-3 emitted C is byte-identical and the full harness is green under stage 2, then emits every target's seed via `flang -E -T <os> -A <arch> build` (`-E` stops after writing the generated C — no toolchain runs, so one host emits all targets). Each promote is its own commit, tagged `seed/<YYYYMMDD>`. One tag per date, naming that date's current seed: a second promote on the same date moves it (`git tag -f`, force-pushed), and the superseded promote stays reachable on `main`.
 - **Seed rule.** Compiler, `lib/*`, and `stdlib` sources may only use language features the current seed supports. New feature order: implement, harness-test, promote, then use. Promotion is deliberate (feature about to be used in compiler source, runtime/ABI change, periodic refresh), not per-commit.
-- **CI `bootstrap` job** (skips until a seed exists): cc the seed, seed builds stage 1, stage 1 builds stage 2, stage 2 builds stage 3, assert stage-2 C == stage-3 C; then, while the C# reference exists, assert the reference-rooted stage-2 C is byte-identical to the seed-rooted one (diverse double-compiling — two independent roots must converge).
+- **CI `bootstrap` job** (skips until a seed exists): cc the seed, seed builds stage 1, stage 1 builds stage 2, stage 2 builds stage 3, assert stage-2 C == stage-3 C. The diverse-double-compiling check that ran beside it needed a second, independently-rooted compiler; the seed is the only root left, so a compiler that miscompiles itself consistently would satisfy the fixpoint. Restoring root diversity (a second C compiler, an archived binary) is open.
 
 Survey of how other self-hosted compilers bootstrap, and the rationale for this shape: `docs/notes/self-host-bootstrapping.md`.
 
@@ -279,21 +289,14 @@ Self-hosted compiler only (RFC-025). `flang build -p` instruments the target pro
 
 **Runtime side** (`stdlib/std/profile.c`): probes maintain a call tree — one node per distinct call path, `{func_id, first_child, next_sibling, parent, calls, total_ticks}` in a preallocated pool with move-to-front sibling lists — plus a shadow stack of `{node, t_enter}`. The hot path is two raw cycle-counter reads (`rdtsc` / `cntvct_el0`; OS clock fallback), a usually-one-compare child lookup, and a few stores; ticks-to-ns conversion, name lookup, per-function aggregation, and sorting all happen at dump. Self time is interval-accounted at runtime: every probe event closes an interval billed to the node that was executing. (Deriving self as "span minus child spans" at dump would mis-attribute under recursion collapse — a re-entry's subtree hangs under the outer node, so the frames temporally in between would absorb its whole cost.) Enter reads the clock after its lookup and exit reads it first, so probe bookkeeping bills to the caller, where a startup calibration (timed enter/exit pairs against the empty tree) subtracts it from self times at dump. **Recursion is collapsed at runtime**: re-entering a function whose span is already open reuses the open node (call counted, time covered by the outer span, deeper distinct calls attach under the same node) — without this a recursive checker mints one path per recursion level and any pool drowns; a side effect is that no node ever has a same-function ancestor, so inclusive sums are correct by construction. Pool/stack overrun (`FLANG_PROFILE_NODES`, default 1Mi / `FLANG_PROFILE_DEPTH`, default 8Ki) never corrupts pairing and is reported in the dump header. The folded file is cut at a byte budget (`FLANG_PROFILE_MAX_MB`, default 32) that keeps the heaviest paths — folded lines are order-independent, so the cut drops only the lightest tail, and the dump says how much; the kept lines are written in first-entry order, so a viewer's time-ordered layout shows the program's phases left to right (true aggregates live in the left-heavy view — folded data carries no timestamps). `std.profile` exposes `dump()` / `reset()` for phase-scoped profiling; both are no-ops in uninstrumented builds. Single-threaded, like the FLang runtime.
 
-## C FFI Binding Generation
+## C FFI Binding Generation — NOT IMPLEMENTED
 
-The compiler can parse C headers and generate FLang bindings via the `-I` flag:
+Generating FLang bindings from a C header (`flang -I raylib.h`) was a reference-compiler feature built on CppAst; the self-hosted CLI has no `-I` and no header parser. Bindings are hand-written today: `examples/raylib` carries a checked-in `vendor/` module.
 
-```
-flang -I raylib.h -L libraylib.a main.f
-```
+Writing bindings by hand, the conventions to follow are the ones the generator used, and the ones the C backend still expects:
 
-**Pipeline:** CLI receives `-I <header>` → `ICHeaderParser` (CppAst implementation) parses the header → `FLangBindingGenerator` produces FLang source → written to `vendor/<name>.f` → module compiler discovers it via `import vendor.<name>`.
-
-**Architecture:**
-- `ICHeaderParser` (`src/FLang.CLI/FFI/`) is an abstraction interface returning intermediate model types (`CFunction`, `CStruct`, `CEnumConstant`). The CppAst implementation can be swapped.
-- `FLangBindingGenerator` converts the intermediate model to FLang source text.
 - C pointers map to `Option(&T)`. C enums map to `pub const: i32`. C structs map to `#foreign struct`.
-- Foreign header paths propagate through `IrModule.ForeignIncludes` and are emitted as `#include` directives in the generated C code.
+- Foreign header paths travel on `IrModule.foreign_includes` and are emitted as `#include` directives in the generated C.
 
 ## Source Generators
 
@@ -328,7 +331,7 @@ miscompile — the checked branch and the emitted branch differed.
 `flang fmt` formats the project's `flang.toml` source glob (or explicit file
 arguments) in place; `--check` writes nothing and exits 1 when a file would
 change. The work happens in `lib/flang_fmt`'s `format_source(source, &cfg)`,
-a pure text-to-text function; file IO stays in `bootstrap/src/main.f`.
+a pure text-to-text function; file IO stays in `compiler/src/main.f`.
 
 Design:
 
@@ -384,27 +387,13 @@ passes; an output still changing then is refused as a formatter bug.
 
 ## Language Server (LSP)
 
-Two servers exist during the transition (RFC-023):
-
-**Self-hosted (`flang lsp [-s <stdlib>]`, `lib/flang_lsp`)** — the successor, in-process in the bootstrap compiler. Speaks LSP over stdio through `std.rpc.jsonrpc` (Content-Length framing + JSON-RPC 2.0 envelope over `Reader`/`Writer`, so transcripts are testable in-process with `MemReader`). Single-threaded. Implemented so far: initialize/shutdown/exit lifecycle, position-encoding negotiation (utf-8 preferred, utf-16 fallback), full-sync document store (`didOpen`/`didChange`/`didClose`/`didSave`), per-document line index / position codec, `publishDiagnostics` with `$/progress`, the tier-1 features (`documentSymbol`, `foldingRange`, syntax diagnostics per keystroke), one file per feature under `src/handlers/`, and `workspace/symbol` over a per-module symbol index (`src/index.f`: the documentSymbol outline flattened to name/kind/span/container, kept on each open project parallel to its modules, rebuilt after every analysis; project-origin modules only; ASCII case-insensitive substring match, client fuzzy-ranks on top). Feature requests answer MethodNotFound until their phase lands; the roadmap is RFC-023 §Implementation phases.
+**Self-hosted (`flang lsp [-s <stdlib>]`, `lib/flang_lsp`)** — the successor, in-process in the compiler. Speaks LSP over stdio through `std.rpc.jsonrpc` (Content-Length framing + JSON-RPC 2.0 envelope over `Reader`/`Writer`, so transcripts are testable in-process with `MemReader`). Single-threaded. Implemented so far: initialize/shutdown/exit lifecycle, position-encoding negotiation (utf-8 preferred, utf-16 fallback), full-sync document store (`didOpen`/`didChange`/`didClose`/`didSave`), per-document line index / position codec, `publishDiagnostics` with `$/progress`, the tier-1 features (`documentSymbol`, `foldingRange`, syntax diagnostics per keystroke), one file per feature under `src/handlers/`, and `workspace/symbol` over a per-module symbol index (`src/index.f`: the documentSymbol outline flattened to name/kind/span/container, kept on each open project parallel to its modules, rebuilt after every analysis; project-origin modules only; ASCII case-insensitive substring match, client fuzzy-ranks on top). Feature requests answer MethodNotFound until their phase lands; the roadmap is RFC-023 §Implementation phases.
 
 Cursor-level features (`hover`, `definition`, `typeDefinition`, `references`, `inlayHint`, `signatureHelp`) answer from the last analysis through `src/query.f`: the checker records the span of every node it touched (`TypeCheckResult.spans`), so cursor-to-node is a linear scan for the innermost recorded span at the offset - no AST-finder. Base tables are scanned first, then the specialization overlays (a generic body is checked only per instantiation, so its answers carry one concrete instantiation's types; an uninstantiated template answers nothing). Hover is word-anchored - it answers only with a node starting at the identifier under the cursor and reports the identifier's range, so keywords, annotations and void statement nodes answer null - and renders the node's checked type (or a function target's declaration slice); binder names and parameters have their own typed nodes (`LetStmt.name_span`, `ForStmt.var_span`, param slots; pattern variables and match guards were already per-node). A free variable renders by its declared `$T` name (`checker.type_param_names`); any other open type is never shown. Definition tiers: resolved target at the cursor; then the identifier against the registries (nominal FQN tails, function overload sets - stdlib included); then the ModuleIndex workspace-wide (template `#name`s, tests, consts). References inverts `resolved_targets` (overlays included, deduped), project-scoped, with a declaration-cursor fallback to the name's overload set. signatureHelp works off the live buffer - backward paren scan for the callee and argument index, registry overload set by name, signature labels sliced from each declaration's source up to the body brace. inlayHint walks the module AST for annotation-less `let`/`for` binders and renders their checked types. `textDocument/formatting` runs `lib/flang_fmt`'s `format_source` over the live buffer with the governing manifest's `[fmt]` table applied, answering one whole-document TextEdit.
 
 Analysis model (`src/workspace.f`): projects open lazily — the first `didOpen` of a file under a `flang.toml` runs `analyze_project` over that project (rooted anywhere via `resolver.f::resolve_ctx_at`), synchronously between messages and behind a `$/progress` spinner. A keystroke gets parse-only diagnostics (`src/handlers/syntax_diagnostics.f`, milliseconds); the type tier catches up on `didSave` (`reanalyze`, dirty = the saved file) and on `workspace/didChangeWatchedFiles` (a changed `.f` re-checks; a created/deleted `.f` or any `flang.toml` event rebuilds the project whole). Open buffers always win over disk: every analysis passes the document store's buffers as overrides. Every project-origin file's diagnostics are (re)published after each analysis, empty lists included — that is what clears fixed errors. URIs convert to resolver-convention paths in `src/uri.f` (forward slashes, lowercase drive). The RFC's idle-path demand driving and ~300 ms debounce await stdin polling, which stdio `Reader` cannot do yet; until then a request arriving mid-analysis waits (LSP clients tolerate this — no request timeouts).
 
-The server also emits a custom `flang/serverStatus` notification (after `initialized` and after every analysis): compiler version, workspace folder names, and each open project with its error count. The VS Code extension renders it as a status-bar item. The extension (v0.3.0) supports both servers via `flang.serverFlavor`: `"reference"` launches `flang --lsp --stdlib-path <p>`, `"self-hosted"` launches `flang lsp -s <p>`.
-
-**Reference (`FLang.Lsp`, C#)** — the current feature-complete-ish server, invoked via `flang-ref --lsp`, retired at the end of RFC-023.
-
-The reference server reuses the same compilation pipeline — parser, source generators, type checker — so editor diagnostics match compiler output exactly. It reuses the same compilation pipeline — parser, source generators, type checker — so editor diagnostics match compiler output exactly. Features: hover, go-to-definition, type definition, find-references, document symbols, workspace symbols (Ctrl-T / `#` search), inlay hints (inferred types), signature help, and live diagnostics.
-
-`FLangWorkspace` keeps exactly **one shared whole-program analysis per analysis root** (a project's root, or the workspace directory for project-less files), replaced wholesale when any file of that root changes; every file of the root maps into the same result, and per-file diagnostics are extracted from it (`.generated.f` sidecars are never entry points — they are pulled in through their origin modules). This bounds memory by the number of projects and makes workspace indexing one whole-program check per root. The previous per-file model (one full compilation + inference tables retained per file, cascade re-analysis of dependents) grew to gigabytes on non-trivial workspaces and did O(files) whole-program checks at startup.
-
-Edits made **outside the editor** (agents writing files, git operations, external tools) reach the server through `workspace/didChangeWatchedFiles`: the server registers client-side watchers for `**/*.f` and `**/flang.toml`, and incoming events are debounced per root (~400 ms) so a burst of file writes coalesces into a single re-analysis. Open-document buffers always win over disk during analysis, so watcher events for open files are harmless.
-
-On `initialize`, `FLangWorkspace.IndexWorkspace` runs project-scoped eager indexing on a background task. It discovers every `flang.toml` reachable from the workspace root (both walk-up to find an enclosing project and walk-down to find nested projects in a monorepo), resolves each project's source root via `ProjectLoader.ResolveSourceRoot`, and analyzes every `.f` file under those roots. Stdlib is deliberately *not* scanned directly — modules from `StdlibPath` are pulled in only when a project transitively imports them (via auto-imported prelude or explicit `import std.…`), so a project that doesn't use stdlib doesn't pay for it. When no `flang.toml` is reachable, indexing falls back to scanning `WorkingDirectory` directly. Build/IDE directories (`bin/`, `obj/`, `dist/`, `node_modules/`, `.git/`, `.vs/`, anything starting with `.`) are pruned during traversal.
-
-Find-references inverts the resolved-target edges the type checker stores on each usage node (e.g. `IdentifierExpressionNode.ResolvedVariableDeclaration`, `CallExpressionNode.ResolvedTarget`, `TypeCheckResult.ResolvedOperators`). `ReferenceFinder` resolves the cursor to a `ReferenceTarget` (function / local-decl / struct-field / nominal-type), then walks every parsed module via `AstNodeFinder.Walk` looking for nodes that point back at that target. Functions / types / fields are searched across **every open file's analysis** (`FLangWorkspace.GetAllAnalyses`) — downstream callers only exist in their own analysis's `ParsedModules`, not in the defining file's analysis. Functions are identified by `(file-path, char-offset, length)` (*not* `SourceSpan`, whose `FileId` is per-`Compilation`) so the same logical decl matches across analyses; generic specializations preserve the original `NameSpan` so they fold into the same identity. Result locations are dedup'd across analyses by `(uri, range)`. Local variables and parameters stay scoped to a single analysis because identity is by AST node reference.
+The server also emits a custom `flang/serverStatus` notification (after `initialized` and after every analysis): compiler version, workspace folder names, and each open project with its error count. The VS Code extension renders it as a status-bar item, launching the server as `flang lsp -s <p>`.
 
 ## Diagnostics
 
@@ -427,7 +416,7 @@ Data-driven lit-style tests. Self-contained `.f` files with embedded metadata:
 
 The harness compiles and runs each test, asserting exit code, stdout, and stderr match metadata. `COMPILE-ERROR`/`COMPILE-WARNING` tests assert compilation fails or warns with the specified error code; `NO-COMPILE-WARNING` asserts the given warning code is *not* emitted (regression guard for false-positive warnings).
 
-**Execution mode.** By default the harness compiles in-process with the C# compiler. When the `FLANG` environment variable names a compiler binary, each test instead compiles by subprocessing `$FLANG --stdlib-path <repo>/stdlib build <test.f>` and running the produced executable against the same expectations — this is how the self-hosted bootstrap is scored against the corpus. Compile-diagnostic expectations match textually against the external compiler's rendered `severity[CODE]` output; a failing test's message includes the compiler's full stdout/stderr. With `FLANG` unset, behavior is unchanged.
+**Execution mode.** Every test compiles by subprocessing `$FLANG build --stdlib-path <repo>/stdlib <test.f>` and running the produced executable against its expectations; `$FLANG` defaults to `dist/<rid>/flang`. Compile-diagnostic expectations match textually against the compiler's rendered `severity[CODE]` output; a failing test's message includes the compiler's full stdout/stderr. The harness therefore holds no compiler code of its own — it is a process driver, which is what lets it score any binary, including a stage-2 built minutes ago.
 
 **Test placement:** Language feature tests go in `tests/harness/`. Stdlib and self-hosted library tests (flang_core, flang_parser, flang_typer) are colocated in `.f` source files using `test "name" { ... }` blocks, run by `flang test` from the project directory. `flang test` resolves `[dependencies]` the same way `flang build` does, so a library's blocks can import its sibling libs.
 
@@ -445,18 +434,17 @@ The runner is table-driven: one `setjmp` site over an array of function pointers
 
 **Leak tracking.** `flang test` installs `std.test`'s tracking allocator as the process-wide default (`std.allocator.set_global_allocator`) before the first test, so every `or_global()` in the code under test resolves to it without a test passing anything. The ledger itself is C (`stdlib/std/test.c`): FLang keeps the vtable, which needs the `u8[]?` layout, and C keeps the list of live blocks, which does not. After a passing test the runner reports the blocks still out; after a failing one it only resets, because a `longjmp` unwind skips every `defer` and what is still allocated says nothing. Resetting forgets the ledger entries but never frees the memory — a lazily-initialized global built by one test is still live for the next, and reclaiming it would hand that test a dangling pointer. Leaks are reported, not failed.
 
-**Driver model.** `dotnet test-all.cs` runs every project's blocks through `dist/<rid>/flang`, the self-hosted compiler. The reference compiler has its own `flang test`; `FLANG=<binary>` selects it. The two CLIs are reimplementations of one idea rather than ports of one another, so their option sets and spellings are allowed to differ.
+**Driver model.** `dotnet test-all.cs` runs every project's blocks through `dist/<rid>/flang`, or `$FLANG` when set.
 
 **Option placement.** The self-hosted CLI is `flang <command> [options] [args]`. The command comes first and every option is parsed against it, from a format built as the shared set (`-h -V -v -s -T -A`) plus that command's own — `test` has `-n/--name`, `build` has `-p/--profile`, `fmt` has `--check`. An option ahead of the command belongs to no command and is refused, `--help` and `--version` excepted. This is what lets two commands use the same letter for different things, and it means one `getopts` pass handles long forms, `--name=value`, clustering and `--` uniformly instead of each handler re-parsing `argv` by hand. The reference CLI accepts either order.
 
-**Compiler layout.** `dotnet build.cs` publishes the C# reference compiler to `dist/<rid>/flang-ref`, builds the self-hosted compiler with it, and installs that as `dist/<rid>/flang` — the default compiler. Installing a *copy* into `dist/` is also what stops a self-build from overwriting the binary running it: `flang build` in `bootstrap/` writes `bootstrap/build/flang`, never the one in `dist/`.
+**Compiler layout.** `dotnet run build.cs` builds `compiler/` and installs the result as `dist/<rid>/flang`. The builder is that same installed compiler when it exists, else the cold-start seed at `boot/<rid>/flang-seed`. Installing a *copy* into `dist/` is what stops a self-build from overwriting the binary running it: `flang build` in `compiler/` writes `compiler/build/flang`, never the one in `dist/`.
 
-**Build incrementality.** A no-change `dotnet build.cs` costs ~2s, down from ~27s. Two things get it there:
+Stage 1 additionally runs from a copy of the builder (`dist/<rid>/flang-builder`) whenever the builder and the install target are the same file. Windows keeps an executable's image open for a moment after the process exits, so copying onto it races that release — intermittently, which is the worst way to find out.
 
-- The publish runs `--no-restore` first and only pays for a restore when that fails. It used to fail *every* run: `dotnet build test.cs` restores `FLang.CLI` without a RID, which strips the RID-specific target from `obj/project.assets.json` and makes the next `dotnet publish -r <rid>` fail NETSDK1047. `<RuntimeIdentifiers>$(NETCoreSdkRuntimeIdentifier)</RuntimeIdentifiers>` in `FLang.CLI.csproj` keeps that target present no matter which entry point restores.
-- `flang build` has no whole-project up-to-date check, so build.cs guards the ~10s stage-1 compile with a timestamp comparison against `bootstrap/`, `lib/`, `stdlib/` and `src/` (ignoring `build`/`bin`/`obj` directories). `src/` stands in for the reference binary, whose own timestamp says nothing — the publish re-copies it regardless. `--force` rebuilds anyway.
+**Build incrementality.** A no-change `dotnet run build.cs` costs ~2s. `flang build` has no whole-project up-to-date check, so build.cs guards the ~7s stage-1 compile with a timestamp comparison against `compiler/`, `lib/` and `stdlib/` (ignoring `build`/`bin`/`obj` directories). `--force` rebuilds anyway.
 
-**Telling the two apart.** Both binaries name themselves in `--version` and `--help`: `flang 0.1.0-alpha (reference compiler, C#)` versus `flang 0.1.0 (self-hosted compiler, FLang; flang_parser 0.3.0)`. Ordinary diagnostics carry a plain `flang:` prefix in both.
+**Version.** `--version` and `--help` render `<name> <version> (self-hosted compiler, FLang; flang_parser <version>)` from `project_info()`. Both names and both versions come out empty today — `project_info` is not intercepted at lowering, so the call returns its stdlib body's zero value (docs/known-issues.md §"Minimal RTTI"). Ordinary diagnostics carry a plain `flang:` prefix.
 
 **Lazy demand.** `flang build` checks bodies only for the demand set (RFC-022 §6): the project's own modules, `core.prelude`, the `[imports].global` modules, and everything transitively imported from any of them (`analyze.f::demand_mask` over the loader's import edges). A module outside the set gets no phase-3 slot at all - no node types, no diagnostics, no specializations - which is safe because identifier, operator and constant resolution are import-scoped, so nothing demanded can name it. Everything before phase 3 still runs for every module: type names resolve program-wide (leniently), and phase 2.5 stays eager so preamble literal verdicts are demand-independent. Lowering skips undemanded modules except their `#foreign` declarations (globally-linkable symbols, callable without an import) and skips specializations whose template lives in an undemanded module. `--eager` restores total demand; the LSP and the in-process analysis entry points run eager by default (`ResolveCtx.lazy_bodies`).
 
@@ -478,4 +466,4 @@ The runner is table-driven: one `setjmp` site over an array of function pointers
 
 `check_all`'s `recollect` list says which modules gather their names from source again; `reanalyze` sets it for exactly the modules it re-parsed. Those modules' declarations are retired from the registry first, each id remembered against its FQN, and a declaration that comes back is re-registered at the id it had, so a re-check hands out the ids a check from cold would. A declaration the edit removed leaves a hole; one the edit added mints a fresh id past every existing one rather than in its module's place. Numbering it where a cold check would puts it ahead of every declaration below it in the file and renumbers all of them, which is the one thing an id-keyed table cannot survive, so appending is the wanted behaviour and not an approximation of cold. What it costs is the oracle: an incremental result and a cold one over the same edited source agree on every declaration but not on the id sequence, so Gate A's by-value comparison only holds over unchanged text.
 
-**Run everything:** `dotnet test.cs` runs the lit-style harness through the default compiler (`dist/<rid>/flang`); `--reference` switches to the in-process C# path, and `$FLANG` overrides both. `dotnet test-all.cs` runs `flang test` in each self-hosted project — it uses `$FLANG` if set, else `dist/<rid>/flang-ref`, because `test` is a reference-only command until the self-hosted CLI grows a test runner.
+**Run everything:** `dotnet test.cs` runs the lit-style harness and `dotnet test-all.cs` runs `flang test` in each project. Both compile through `dist/<rid>/flang`, or `$FLANG` when set — which is how a stage-2 compiler is scored before a promote.

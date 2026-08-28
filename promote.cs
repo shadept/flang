@@ -52,7 +52,7 @@ else
 var exeExt = hostRid.StartsWith("win") ? ".exe" : "";
 var stagesDir = Path.Combine(scriptDir, "dist", hostRid, "stages");
 var stage2Exe = Path.Combine(stagesDir, $"stage2{exeExt}");
-var bootstrapDir = Path.Combine(scriptDir, "bootstrap");
+var compilerDir = Path.Combine(scriptDir, "compiler");
 var stdlibDir = Path.Combine(scriptDir, "stdlib");
 var bootDir = Path.Combine(scriptDir, "boot");
 
@@ -86,13 +86,13 @@ foreach (var (dir, os, arch) in targets)
     Banner($"Seed: {dir} (-T {os} -A {arch})");
     // Options follow the command: the self-hosted CLI parses each option
     // against the command it comes after, and refuses one that precedes it.
-    if (Run(stage2Exe, $"build -E -s \"{stdlibDir}\" -T {os} -A {arch}", bootstrapDir) != 0)
+    if (Run(stage2Exe, $"build -E -s \"{stdlibDir}\" -T {os} -A {arch}", compilerDir) != 0)
     {
         Console.Error.WriteLine($"promote: seed emission failed for {dir} - boot/ may be partially updated, review before committing.");
         return 1;
     }
 
-    var emitted = Path.Combine(bootstrapDir, "build", "flang.c");
+    var emitted = Path.Combine(compilerDir, "build", "flang.c");
     var seedDir = Path.Combine(bootDir, dir);
     Directory.CreateDirectory(seedDir);
     File.Copy(emitted, Path.Combine(seedDir, "flang.c"), overwrite: true);
@@ -108,7 +108,7 @@ foreach (var (dir, os, arch) in targets)
 
 // --- Stamp ---
 var vm = System.Text.RegularExpressions.Regex.Match(
-    File.ReadAllText(Path.Combine(bootstrapDir, "flang.toml")), "version\\s*=\\s*\"([^\"]+)\"");
+    File.ReadAllText(Path.Combine(compilerDir, "flang.toml")), "version\\s*=\\s*\"([^\"]+)\"");
 var version = vm.Success ? vm.Groups[1].Value : "unknown";
 var commit = Capture("git", "rev-parse HEAD")?.Trim() ?? "unknown";
 File.WriteAllText(Path.Combine(bootDir, "SEED"),

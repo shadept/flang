@@ -15,72 +15,110 @@ pub fn main() i32 {
 }
 ```
 
-## Build from source
+## Getting started
 
-Requires [.NET 10+](https://dotnet.microsoft.com/download) and a C compiler (GCC, Clang, or MSVC).
+### Just want to use it?
+
+Grab the latest [release](https://github.com/shadept/flang/releases) —
+`flang-<platform>.zip` carries the compiler and the stdlib it needs. Unzip it,
+put the directory on your `PATH`, and skip to [Usage](#usage). You still need a
+C compiler installed (GCC, Clang, or MSVC): FLang emits C99 and hands it to
+your toolchain to produce the binary.
+
+### Building from source
+
+FLang is self-hosted — the compiler is written in FLang and compiles itself —
+so a clean clone bootstraps from `boot/<platform>/`, which carries the compiler
+as committed, generated C99 (the **bootstrap seed**). No prior FLang binary is
+needed, and nothing outside the repo is downloaded.
+
+**You need:** a C compiler (GCC, Clang, or MSVC) and
+[.NET 10+](https://dotnet.microsoft.com/download). The C compiler builds the
+seed and every binary after it; .NET runs only this repo's own scripts
+(`build.cs`, `test.cs`, `test-all.cs`, `promote.cs`), never the compiler itself.
+
+### 1. Clone
 
 ```sh
 git clone https://github.com/shadept/flang.git
 cd flang
+```
+
+### 2. Cold-start the seed
+
+This compiles ~20 MB of generated C and takes a minute or two. You do this
+**once per clone** — pick the line for your platform:
+
+```sh
+# run ONE of these, then return to the repo root
+cd boot/linux-x64    && make       # Linux x64
+cd boot/darwin-arm64 && make       # macOS ARM64
+cd boot/win-x64      && build.bat  # Windows x64 - from a VS developer prompt
+
+cd ../..
+```
+
+That produces `flang-seed`, a working compiler.
+
+### 3. Build the compiler with itself
+
+```sh
 dotnet run build.cs
 ```
 
-One command bootstraps the whole chain: it publishes the C# reference compiler,
-builds the self-hosted compiler with it, and installs that as the default. Two
-binaries land in `dist/<platform>/` (e.g. `dist/darwin-arm64`, `dist/linux-x64`,
-`dist/win-x64`):
+The seed builds the current sources and the result installs as
+`dist/<platform>/flang` (e.g. `dist/linux-x64/flang`). From here on `build.cs`
+builds with that installed compiler; the seed is only needed for another cold
+start.
 
-| Binary | What it is |
-|--------|------------|
-| `flang` | **The default compiler** — self-hosted, written in FLang |
-| `flang-ref` | The C# reference compiler, used to bootstrap `flang` |
-
-Each binary names itself in `--version` and `--help`, so there is no guessing
-which one you are holding.
-
-The self-hosted CLI is not yet at feature parity with the reference: it has
-`build`, `fmt`, `lsp`, `cst` and `tokens`, but no `test` runner, no `-o`, no
-`--release` and no bare-file form. Reach for `flang-ref` when you need those.
-
-Re-running `dotnet run build.cs` after no source changes takes about two
-seconds; it skips the self-hosted rebuild unless something under `bootstrap/`,
-`lib/`, `stdlib/` or `src/` is newer. Pass `--force` to rebuild regardless.
-
-### Building from the seed (C compiler only)
-
-`boot/<platform>/` carries the self-hosted compiler as committed, generated
-C99 — a bootstrap seed that needs no .NET and no prior FLang binary:
+### 4. Check it works
 
 ```sh
-cd boot/linux-x64 && make        # build.bat on Windows (VS dev prompt)
-cd ../../bootstrap
-../boot/linux-x64/flang-seed build -r -s ../stdlib
+cd examples/hello-world
+../../dist/linux-x64/flang build   # ..\..\dist\win-x64\flang.exe on Windows
+./build/hello-world
 ```
 
-That is the whole chain: the seed builds the current compiler from source.
-The seed only changes through `dotnet run promote.cs`, which gates on the
-stage-2 = stage-3 fixpoint and a green test suite — see `boot/README.md`.
+`dotnet run test.cs` runs the full language test suite if you want more
+assurance.
+
+Add `dist/<platform>/` to your `PATH` to use `flang` directly, as the examples
+below do.
+
+### Notes
+
+- Re-running `dotnet run build.cs` with no source changes takes about two
+  seconds; it skips the rebuild unless something under `compiler/`, `lib/` or
+  `stdlib/` is newer. Pass `--force` to rebuild regardless.
+- A `git worktree` gets tracked files only, so it has no `dist/` and no
+  `flang-seed` — cold-start the seed again inside it, or point it at a compiler
+  you already built.
+- The seed changes only through `dotnet run promote.cs`, which gates on the
+  stage-2 = stage-3 fixpoint and a green test suite. See `boot/README.md`.
 
 ## Usage
 
 ```sh
-# Compile a project (flang.toml) or a single file
-flang build hello.f
-
-# Reference-only, for now
-flang-ref hello.f                       # bare-file compile
-flang-ref --release hello.f -o hello    # optimizations and output path
-flang-ref test myfile.f                 # run `test {}` blocks in a file
+flang build hello.f              # compile a single file
+flang build                      # compile a project (flang.toml) from its root
+flang check                      # type-check only, including `test {}` bodies
+flang test                       # run the project's `test {}` blocks
+flang fmt                        # format the project (--check writes nothing)
+flang lsp                        # language server over stdio
 ```
+
+The CLI is `flang <command> [options]` — options are parsed against the command
+they follow, so they come after it (`flang build -r`, not `flang -r build`).
 
 ## Documentation
 
 - [Language specification](docs/spec.md)
 - [Syntax quick reference](docs/syntax.md)
 - [Architecture](docs/architecture.md)
-- [Roadmap](docs/roadmap.md)
+- [Self-host status](docs/self-host.md)
 - [Examples](examples/)
 - [Error codes](docs/error-codes.md)
+- [Known issues](docs/known-issues.md)
 
 ## Platform support
 

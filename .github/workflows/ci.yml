@@ -35,6 +35,18 @@ jobs:
         with:
           global-json-file: global.json
 
+      - name: Setup MSVC
+        if: matrix.rid == 'win-x64'
+        uses: ilammy/msvc-dev-cmd@v1
+
+      # A fresh checkout has no compiler, so build.cs builds stage 1 with the
+      # committed seed.
+      - name: Build the seed compiler
+        shell: bash
+        run: |
+          cd "boot/${{ matrix.rid }}"
+          if [ "${{ matrix.rid }}" = "win-x64" ]; then cmd //c build.bat; else make; fi
+
       - name: Build compiler
         run: dotnet run build.cs ${{ matrix.rid }}
 
@@ -96,7 +108,7 @@ jobs:
           SEED="$PWD/boot/$RID/flang-seed"
           [ -f "$SEED.exe" ] && SEED="$SEED.exe"
           mkdir -p .coldstart
-          cd bootstrap
+          cd compiler
           # Each stage runs from a copy: `flang build` writes build/flang,
           # which must not be the binary currently executing.
           "$SEED" build -r -s ../stdlib
@@ -109,15 +121,3 @@ jobs:
           cp build/flang.c ../.coldstart/stage3.c
           cmp ../.coldstart/stage2.c ../.coldstart/stage3.c
           echo "Fixpoint holds: seed-rooted stage 2 and stage 3 emit identical C."
-
-      # Diverse double-compiling while the C# reference still exists: the
-      # seed-rooted and reference-rooted chains must converge on identical
-      # stage-2 C. Delete this step when flang-ref is retired; the fixpoint
-      # check above stays.
-      - name: "DDC: reference-rooted stage 2 matches seed-rooted stage 2"
-        if: env.seed == 'present'
-        shell: bash
-        run: |
-          dotnet run build.cs -- --stage2 "$RID"
-          cmp "dist/$RID/stages/stage2.c" .coldstart/stage2.c
-          echo "Roots converge: reference-rooted and seed-rooted stage 2 are byte-identical."

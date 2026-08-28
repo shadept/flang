@@ -1,34 +1,34 @@
 # Self-Host Status — Feature Coverage
 
 The single source of truth for what the self-hosted compiler
-(`bootstrap` + `lib/flang_*`) can and cannot do, per pipeline stage.
+(`compiler` + `lib/flang_*`) can and cannot do, per pipeline stage.
 
-**Harness parity (2026-08-24, M12): REACHED.** The stage-2 self-hosted
-compiler passes **551 / 567** — every test the reference passes, with
-the same 16 skips — up from 435 at the start of the M12 push. The
-stage-2 = stage-3 fixpoint holds and the reference suite is unchanged
-at 551 / 0 / 16.
+**The C# reference compiler was retired 2026-08-28.** FLang now builds
+only with itself, rooted in the committed `boot/` seed. Rows below that
+cite "the reference" or "reference parity" are a historical record of how
+a behavior was specified while the two compilers coexisted; the reference
+is no longer present to compare against, and the last release carrying it
+is tagged `v0.1.6-alpha`.
+
+**Current state.** The lit-style harness is **573 / 0 / 18 skipped of
+591**, the stage-2 = stage-3 fixpoint holds on all three targets, and the
+cold start from seed is green in CI. `dotnet test-all.cs` (colocated
+`test {}` blocks) is **8 of 10** projects.
+
+Three known failures remain, all recorded in docs/known-issues.md:
+`stdlib/std` test 49 (dict capacity constructor), and `flang_lsp` tests
+31 and 35 (`documentSymbol` outline, `workspace/symbol` containers).
+
 The "milestone" names (M1–M6) used in commit messages were invented as
 the work went along; this document supersedes them as the roadmap.
-
-**Colocated tests (2026-08-28).** `flang test` landed in the self-hosted
-CLI, so `dotnet test-all.cs` now runs every project's `test {}` blocks
-through `dist/<rid>/flang` rather than the reference. 7 of 9 projects are
-green. Running those blocks for the first time surfaced three defects that
-no build could reach. A trailing `if` never became a block's value, so an
-unannotated lambda ending in one inferred `void` — fixed, and it tightens
-`if`/`else` branch joining to apply in statement position too. Still open:
-`std.encoding.json` failing and crashing, and a segfault in one `flang_lsp`
-test. All three are recorded in docs/known-issues.md. The reference
-compiler is 9/9 on the same suites, so each is a self-hosted gap and each
-blocks decommissioning the reference.
 Update it in the same commit as any coverage change.
 
-The 2026-08-28 self-build regression (identifier-in-value-position
-resolving to a function over a module const, surfaced by the LSP
-skeleton's `stdin.reader()`) is fixed and the fixpoint holds again -
-see docs/known-issues.md §"identifier in value position preferred a
-function over a module const".
+**Losing the oracle.** Every defect this document records as
+"self-hosted, the reference passes" was found by disagreement between two
+implementations. That instrument is gone: the fixpoint proves the
+compiler is stable under its own translation, not that the translation is
+*correct*, so a consistent self-miscompile now satisfies it. Restoring
+root diversity is open — see docs/architecture.md §Bootstrap Seed.
 
 Status legend: ✅ done · ⚠️ partial (details in Notes) · ❌ missing
 (lowering *refuses* the enclosing function rather than miscompile —
@@ -61,7 +61,7 @@ substitution for nominal instantiations; interning pre-substituted
 nominals (layout as pure lookup) remains open.
 
 **Self-host need** is measured, not guessed: occurrence counts across
-the 98 modules the self-build compiles (`bootstrap/src`, `lib/*/src`,
+the 98 modules the self-build compiles (`compiler/src`, `lib/*/src`,
 `stdlib`, sidecars excluded), formatted `uses/files`. Counts are from
 2026-08-19; re-measure when they matter. Anything the compiler's own
 `main` transitively reaches must eventually lower; a near-zero count

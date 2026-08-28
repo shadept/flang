@@ -1,7 +1,7 @@
 # flang_parser
 
 The FLang lexer, parser, CST, and AST — extracted as a reusable library
-so the bootstrap compiler, the formatter, the language server, and every
+so the compiler, the formatter, the language server, and every
 other tool consume the same implementation.
 
 ## Layout
@@ -18,7 +18,7 @@ src/
 
 ## Consumers
 
-- `bootstrap/`            — the self-hosted FLang compiler
+- `compiler/`             — the self-hosted FLang compiler
 - `lib/flang_fmt/`        — source formatter
 - `tools/flang_lsp/`      — language server
 - `tools/dump_tokens/`    — debug tool: prints the lexer's token stream
