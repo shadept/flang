@@ -311,7 +311,11 @@ This is transparent to the programmer — `return expr` works uniformly.
 
 ### 3.4.1 Place Expressions
 
-A **place expression** (lvalue) denotes a storage location. A **value expression** (rvalue) denotes a value with no location of its own. Every expression is lowered in exactly one of these two modes, and which mode applies is a property of the *context*, not of the expression.
+A **place expression**, or **lvalue**, denotes a storage location: it names memory that exists independently of the expression, and can be read from, written to, and addressed. A **value expression**, or **rvalue**, denotes a value with no location of its own; it exists only as the result of evaluating the expression.
+
+Both names are used throughout this spec and in diagnostics. *Place* and *lvalue* are the same thing, as are *value expression* and *rvalue*.
+
+Every expression is lowered in exactly one of these two modes, and which mode applies is a property of the *context*, not of the expression.
 
 **The place forms.** These, and only these, denote places:
 
@@ -322,7 +326,7 @@ A **place expression** (lvalue) denotes a storage location. A **value expression
 | `base.field` | `base` is a place, or is a reference |
 | `base[i]` | `base` is a place, or is a reference or slice |
 
-Everything else — call results, literals, arithmetic, struct literals, `match` results — is a value expression. A place is also usable as a value (by loading it); a value is not usable as a place.
+Everything else — call results, literals, arithmetic, struct literals, `match` results — is an rvalue. An lvalue is also usable as a value, by loading it; an rvalue is not usable as a place.
 
 **Place contexts.** An expression must be lowered as a place when it appears as:
 
