@@ -141,6 +141,7 @@ test "rc deinit frees when last ref dropped" {
 
 // Test helper type for struct tests
 type RcTestPoint = struct { x: i32, y: i32 }
+pub fn deinit(self: &RcTestPoint) {}
 
 test "rc with struct value via op_deref" {
     let r = rc(RcTestPoint { x = 3, y = 4 })

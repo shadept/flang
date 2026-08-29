@@ -149,6 +149,9 @@ type FieldSpan = struct {
     end: usize
 }
 
+// Two offsets into a caller-owned buffer.
+pub fn deinit(self: &FieldSpan) {}
+
 // =============================================================================
 // Shared row parsing - extracts field spans from a buffer
 // =============================================================================

@@ -279,6 +279,8 @@ type WrapPoint = struct {
     indent: usize
 }
 
+pub fn deinit(self: &WrapPoint) {}
+
 type Renderer = struct {
     // Completed lines. The line being built lives in `line` so it can still be split at a wrap
     // point; it flushes at every line break.

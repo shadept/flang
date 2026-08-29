@@ -451,6 +451,15 @@ pub fn is_pub(def: &NominalDef) bool {
     }
 }
 
+// The wire value of variant `index`: the tag a naked enum spells out, else the declaration index.
+// Construction, discriminant tests, and `e as i32` all read the same value through here.
+pub fn variant_tag(def: &EnumDef, index: usize) i64 {
+    return def.tag_values match {
+        Some(t) => t.get(def.variants[index].name).unwrap_or(index as i64)
+        None => index as i64
+    }
+}
+
 // Whether every variant of the enum at `id` is payload-less - the shape that gets builtin
 // tag-compare `==`/`!=` (checker) and tag-compare lowering (driver). False for structs.
 pub fn enum_payloadless(self: &NominalRegistry, id: NominalId) bool {

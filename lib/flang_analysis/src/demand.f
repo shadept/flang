@@ -51,7 +51,7 @@ type Tarjan = struct {
     out: List(usize)
 }
 
-fn deinit(self: &Tarjan) {
+pub fn deinit(self: &Tarjan) {
     self.adj.deinit()
     self.index.deinit()
     self.low.deinit()

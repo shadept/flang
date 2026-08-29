@@ -41,6 +41,12 @@ pub type FunctionScheme = struct {
     retired: bool
 }
 
+// Does NOT free `signature.quantified`, the entry's one piece of heap, and so leaks it. `FnLookup`
+// hands a caller a COPY of the candidate list, every overload resolution drops that copy, and a
+// scheme that freed on drop would take the registry's set with it. Freeing here means making lookup
+// hand back a borrow first. See docs/known-issues.md on scheme ownership.
+pub fn deinit(self: &FunctionScheme) {}
+
 // Multi-payload variants where one payload is a generic-typed value (`List(FunctionScheme)`)
 // confuse the FLang parser - the comma inside the generic argument list is ambiguous with the
 // variant-payload separator. Wrapping the multi-payload case in its own struct keeps the variant

@@ -128,11 +128,12 @@ pub fn error_count(self: &AnalyzedUnit) usize {
     return count_errors(&self.diagnostics)
 }
 
-// Move every diagnostic from `src` into `dst`. `Diagnostic` has no deinit of its own, so the
-// clear's element deinits are no-ops and the moved message buffers stay owned once, by `dst`.
+// Move every diagnostic from `src` into `dst`, which owns their message buffers afterwards. The
+// elements travel out of `src` in its backing buffer, leaving it empty; only that buffer is freed.
 fn drain_diagnostics(dst: &List(Diagnostic), src: &List(Diagnostic)) {
-    dst.push_all(src.as_slice())
-    src.clear()
+    const taken = src.to_owned_slice()
+    dst.push_all(taken.0)
+    taken.1.free(taken.0)
 }
 
 fn count_errors(diags: &List(Diagnostic)) usize {

@@ -77,7 +77,7 @@ type GenericTemplate = struct {
 }
 
 // A re-registered signature's `Dict.set` overwrite frees the replaced template through this.
-fn deinit(self: &GenericTemplate) {
+pub fn deinit(self: &GenericTemplate) {
     self.tps.deinit()
 }
 
@@ -96,6 +96,8 @@ type SigTypeParam = struct {
     var_id: VarId
 }
 
+pub fn deinit(self: &SigTypeParam) {}
+
 // An unsuffixed numeric literal's fresh var, held for the post-inference sweep: still unresolved
 // once everything has settled means no context ever pinned the literal - E2001, matching the
 // reference.
@@ -106,6 +108,8 @@ type PendingLit = struct {
     is_float: bool
 }
 
+pub fn deinit(self: &PendingLit) {}
+
 // An anonymous `.{ ... }` literal awaiting its nominal. The literal types as a fresh var the
 // surrounding context binds; once inference settles, each field initializer unifies against the
 // nominal's declared (substituted) field type - which is what pins unsuffixed numeric fields and
@@ -115,7 +119,7 @@ type PendingAnon = struct {
     fields: List(AnonFieldRec)
 }
 
-fn deinit(self: &PendingAnon) {
+pub fn deinit(self: &PendingAnon) {
     self.fields.deinit()
 }
 
@@ -144,6 +148,10 @@ type PendingSpec = struct {
     // `hash()`-for-`Dict` contract).
     caller_module: String
 }
+
+// The drain owns `tp_binds` and `inst_params`: it frees them when a pick is processed and carries
+// them into the next pass when one is deferred, so dropping the queue must not touch them.
+pub fn deinit(self: &PendingSpec) {}
 
 // One instantiation frame's reuse bookkeeping (RFC-022 5e), pushed alongside `spec_callers`. The
 // counters at frame start plus what nested work minted give the frame's OWN burns; `deps` collects
@@ -347,10 +355,10 @@ pub type ModuleNomDiags = struct {
 }
 
 pub fn deinit(self: &ModuleNomDiags) {
-    free_diag_list(&self.collect)
-    free_diag_list(&self.resolve)
-    free_diag_list(&self.signatures)
-    free_diag_list(&self.bodies)
+    self.collect.deinit()
+    self.resolve.deinit()
+    self.signatures.deinit()
+    self.bodies.deinit()
 }
 
 // One captured node from a module's signature pass: the id, the span it was minted from, and -
@@ -361,6 +369,8 @@ pub type SigNodeFact = struct {
     span: SourceSpan
     ty: Ty?
 }
+
+pub fn deinit(self: &SigNodeFact) {}
 
 // What one module's signature pass produced, cached for demands that skip the pass. `var_burn` is
 // how many engine variables the pass minted - a skipping demand mints the same count so every later
@@ -528,16 +538,6 @@ pub fn deinit(self: &ModuleBodyCache) {
         pc.pos_exprs.deinit()
     }
     self.calls.deinit()
-}
-
-// Free the messages a diagnostic list owns, then the list itself. `Diagnostic` has no deinit of its
-// own, so a bare list deinit would strand the message buffers.
-fn free_diag_list(diags: &List(Diagnostic)) {
-    for &d in diags {
-        d.message.deinit()
-        d.hint.deinit()
-    }
-    diags.deinit()
 }
 
 // A declaration's parameter list, shared with the AST (M11 defaults). Deliberately no deinit: the
@@ -1807,6 +1807,9 @@ fn resolve_enum_body(self: &Checker, td: &TypeDecl, module_path: String) {
     // the enum's tag→variant mapping ambiguous (E2048).
     let tags: List(i64) = list(anon.variants.len, self.allocator)
     defer tags.deinit()
+    // Variant name -> wire tag, kept only when the enum spells its tags out; a standard enum's tag
+    // is its declaration index and needs no table.
+    let tag_by_name: Dict(String, i64) = dict(self.allocator)
     let next_tag = 0i64
     let has_explicit_tag = false
     let has_payload = false
@@ -1833,6 +1836,7 @@ fn resolve_enum_body(self: &Checker, td: &TypeDecl, module_path: String) {
                 $"duplicate tag value {next_tag} for variant `{v.name}` in enum `{td.name}`")
         }
         tags.push(next_tag)
+        tag_by_name.set(v.name, next_tag)
         next_tag = next_tag + 1i64
         if variant_named(&variants, v.name) {
             push_diag_e(self, v.span, E_DUP_VARIANT,
@@ -1841,6 +1845,12 @@ fn resolve_enum_body(self: &Checker, td: &TypeDecl, module_path: String) {
             continue
         }
         variants.push(VariantDef { name = v.name, payloads = payloads, decl_span = v.span })
+    }
+    let tag_values: Dict(String, i64)? = null
+    if has_explicit_tag {
+        tag_values = Some(tag_by_name)
+    } else {
+        tag_by_name.deinit()
     }
     self.env.pop_scope()
 
@@ -1853,7 +1863,7 @@ fn resolve_enum_body(self: &Checker, td: &TypeDecl, module_path: String) {
                 is_pub = ed.is_pub,
                 type_params = type_params,
                 variants = variants,
-                tag_values = null,
+                tag_values = tag_values,
                 decl_span = ed.decl_span,
                 deprecation = ed.deprecation,
             }
@@ -5571,7 +5581,7 @@ type NamedArgs = struct {
     values: List(Expr)
 }
 
-fn deinit(self: &NamedArgs) {
+pub fn deinit(self: &NamedArgs) {
     self.names.deinit()
     self.tys.deinit()
     self.values.deinit()
@@ -5723,8 +5733,8 @@ fn resolve_method_call(self: &Checker, call: &CallExpr, ma: &MemberAccessExpr, a
     if pick.is_none() and closure_arg_hint(self, arg_tys, call.span) {
         return Some(self.engine.fresh_var())
     }
-    return Some(commit_pick(self, pick, ma.member, arg_tys.len, call.span, 1usize, pos_exprs,
-            named))
+    return Some(commit_pick(self, pick, ma.member, arg_tys.len, call.span, 1usize, pos_exprs, named,
+            Some(recv_ty)))
 }
 
 // One overload-resolution attempt with `recv` prepended as the first argument. `alt_recv` is its
@@ -5805,9 +5815,10 @@ fn note_pending(self: &Checker, span: SourceSpan, is_operator: bool, pick: &Over
 // Record the winner on the call node and return its instantiated return type; report when no
 // overload matched. `recv_extra` is 1 when a UFCS receiver was prepended to the argument list (it
 // counts toward the winner's parameter arity but not toward `n_args`, which feeds the user-facing
-// diagnostic).
+// diagnostic). `recv` is that receiver's type, and names it in the failure - which method is
+// missing matters far less than which type is missing it.
 fn commit_pick(self: &Checker, pick: OverloadPick?, name: String, n_args: usize, span: SourceSpan,
-    recv_extra: usize, pos_exprs: &List(Expr), named: &NamedArgs?) Ty {
+    recv_extra: usize, pos_exprs: &List(Expr), named: &NamedArgs?, recv: Ty? = null) Ty {
     return pick match {
         Some(p) => {
             self.results.record_target(self.node_of(span), ResolvedTarget.RtFunction(p.id))
@@ -5823,8 +5834,18 @@ fn commit_pick(self: &Checker, pick: OverloadPick?, name: String, n_args: usize,
             p.ret
         }
         None => {
-            push_diag_e(self, span, E_NO_OVERLOAD,
-                $"no matching overload for `{name}` with {n_args} argument(s)")
+            let sb = string_builder(96, self.allocator)
+            sb.append($"no matching overload for `{name}` with {n_args} argument(s)")
+            recv match {
+                Some(r) => {
+                    sb.append(" on `")
+                    format_with_names(&self.engine.interner, self.engine.resolve(r), &sb,
+                        Some(&self.nominals))
+                    sb.append("`")
+                }
+                None => {}
+            }
+            push_diag_e(self, span, E_NO_OVERLOAD, sb.to_string())
             self.engine.fresh_var()
         }
     }
@@ -5879,8 +5900,9 @@ fn resolve_pending_calls(self: &Checker) {
                     $"ambiguous call to `{pc.name}`: several overloads match and the argument type never settled - annotate it")
             } else {
                 const n_args = if pc.recv_extra > 0 { pc.arg_tys.len - 1 } else { pc.arg_tys.len }
+                const pc_recv: Ty? = if pc.recv_extra > 0 { Some(pc.arg_tys[0]) } else { null }
                 let t = commit_pick(self, pick, pc.name, n_args, pc.span, pc.recv_extra,
-                    &pc.pos_exprs, null)
+                    &pc.pos_exprs, null, pc_recv)
                 self.results.record_type(self.node_of(pc.span), t)
             }
         }
@@ -8038,10 +8060,6 @@ fn module_diags_entry(self: &Checker, path: String, from: usize) &ModuleNomDiags
 }
 
 fn refill_diags(self: &Checker, dst: &List(Diagnostic), from: usize) {
-    for &d in dst {
-        d.message.deinit()
-        d.hint.deinit()
-    }
     dst.clear()
     for k in from..self.diagnostics.len {
         dst.push(clone_diag(&self.diagnostics[k]))

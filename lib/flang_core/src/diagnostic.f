@@ -31,6 +31,15 @@ pub type Diagnostic = struct {
     span: SourceSpan
 }
 
+// `message` and `hint` are owned by the diagnostic that holds them; `code` is a borrow of a static
+// literal. Copying a diagnostic into a second container copies the OWNERSHIP with it, so a copy
+// that outlives its source is made with `clone_diag`, and a bulk move leaves the source with
+// `List.release` rather than `clear`.
+pub fn deinit(self: &Diagnostic) {
+    self.message.deinit()
+    self.hint.deinit()
+}
+
 pub fn error(code: String, message: OwnedString, span: SourceSpan) Diagnostic {
     let empty_hint: OwnedString
     return .{

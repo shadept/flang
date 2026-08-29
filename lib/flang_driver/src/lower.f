@@ -339,7 +339,7 @@ fn get(self: &Env, name: String) LocalSlot? {
     return null
 }
 
-fn deinit(self: &Env) {
+pub fn deinit(self: &Env) {
     self.names.deinit()
     self.bindings.deinit()
 }
@@ -1065,7 +1065,7 @@ fn const_variant(ctx: &LowerCtx, ty: &Ty, vnum: u32, buf: &List(u8), at: usize) 
     if el.is_niche {
         return true
     }
-    write_le(buf, at, vnum as i64, el.tag_size)
+    write_le(buf, at, variant_tag(&et.def, vnum as usize), el.tag_size)
     return true
 }
 
@@ -4291,9 +4291,12 @@ fn discriminant_test(ctx: &LowerCtx, bb: &BlockBuilder, idx: u32, scrut: Operand
         return bb.icmp_ne(IrType.Ptr, scrut, Operand.NullPtr)
     }
 
-    // A tagged enum is addressed by pointer, with the discriminant first.
+    // A tagged enum is addressed by pointer, with the discriminant first. No enum behind the
+    // scrutinee leaves the index standing in; the caller's own refusal path reports the shape.
     let tag = bb.load(IrType.I32, scrut)
-    return bb.icmp_eq(IrType.I32, tag, Operand.IntConst(idx as i64))
+    let t = resolve_enum(ctx, scrut_ty, &ctx.result.nominals)
+    const want = if t.is_some() { variant_tag(&t.unwrap().def, idx as usize) } else { idx as i64 }
+    return bb.icmp_eq(IrType.I32, tag, Operand.IntConst(want))
 }
 
 // Bind the variables `pat` introduces. Runs in the arm's block, after its test succeeded, so every
@@ -4496,7 +4499,7 @@ fn lower_variant_call(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, call: &CallE
     }
     let slot = bb.stack_slot(el.size as u64, el.align as u64)
     bb.memset(slot, Operand.IntConst(0), Operand.IntConst(el.size as i64))
-    bb.store(IrType.I32, Operand.IntConst(vnum as i64), slot)
+    bb.store(IrType.I32, Operand.IntConst(variant_tag(&et.def, vnum as usize)), slot)
     for j in 0..call.args.len {
         // Named arguments never resolve to a variant - the checker leaves those calls unresolved.
         // (The refusal path leaks `offs` - allocator-lifetime scratch, like the rest of lowering.)
@@ -4547,8 +4550,9 @@ fn lower_variant_nullary(ctx: &LowerCtx, bb: &BlockBuilder, span: SourceSpan, vn
 
     let slot = bb.stack_slot(el.size as u64, el.align as u64)
     bb.memset(slot, Operand.IntConst(0), Operand.IntConst(el.size as i64))
-    if vnum != 0u32 {
-        bb.store(IrType.I32, Operand.IntConst(vnum as i64), slot)
+    const tag = variant_tag(&et.def, vnum as usize)
+    if tag != 0i64 {
+        bb.store(IrType.I32, Operand.IntConst(tag), slot)
     }
     return slot
 }
@@ -6182,10 +6186,8 @@ fn lower_operator_binary(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, b: &Binar
 
     if op.cmp_derived_op.is_some() {
         // `op_cmp` returns Ord - an aggregate; its address came back from the sret path. The
-        // derived comparison reads the tag and tests it against the variant INDICES resolved from
-        // Ord's definition - this lowering stores declaration indices as tags (explicit variant
-        // values like `Less = -1` are not honored yet; see docs/known-issues.md), so the test must
-        // use the same scheme.
+        // derived comparison reads the tag and tests it against the wire values of Ord's three
+        // variants, the same values construction stores.
         let t = resolve_enum(ctx, &g.ret, &ctx.result.nominals)
         if t.is_none() {
             return unlowerable(ctx)
@@ -6197,9 +6199,9 @@ fn lower_operator_binary(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, b: &Binar
         if less.is_none() or equal.is_none() or greater.is_none() {
             return unlowerable(ctx)
         }
-        let lo = Operand.IntConst(less.unwrap() as i64)
-        let eq = Operand.IntConst(equal.unwrap() as i64)
-        let hi = Operand.IntConst(greater.unwrap() as i64)
+        let lo = Operand.IntConst(variant_tag(&et.def, less.unwrap()))
+        let eq = Operand.IntConst(variant_tag(&et.def, equal.unwrap()))
+        let hi = Operand.IntConst(variant_tag(&et.def, greater.unwrap()))
         let tag = bb.load(IrType.I32, res)
         return op.cmp_derived_op.unwrap() match {
             BodEq => bb.icmp_eq(IrType.I32, tag, eq)
@@ -6217,10 +6219,10 @@ fn lower_operator_binary(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, b: &Binar
     return res
 }
 
-fn variant_index_of(def: &EnumDef, name: String) u32? {
+fn variant_index_of(def: &EnumDef, name: String) usize? {
     for i in 0..def.variants.len {
         if def.variants[i].name == name {
-            return Some(i as u32)
+            return Some(i)
         }
     }
     return null

@@ -14,6 +14,67 @@ When you discover a bug or limitation:
 
 ---
 
+### `FunctionScheme` Leaks Its Quantified Set
+
+**Status:** Open
+**Affected:** `lib/flang_typer/src/function_registry.f`
+
+`FunctionScheme.signature.quantified` is a `Set(VarId)` the entry owns, and `deinit` does not free
+it: one set leaks per registered function, per check. In the LSP that repeats on every
+re-analysis.
+
+It cannot simply free. `FnLookup.FnLookFound` carries a `List(FunctionScheme)` BY VALUE, so every
+name lookup copies the registry's entries and every overload resolution then drops that copy - a
+scheme that freed on drop would free the registry's set thousands of times over. Making it free
+means `lookup` handing back a borrow of the stored list (or candidate ids) instead of a copy, which
+changes `FnLookup` and its seven call sites.
+
+The general shape: a copy of a record that owns heap is a copy of the ownership. `Diagnostic` had
+the same flaw and was fixed by routing its bulk moves through `List.to_owned_slice`, which hands the
+elements out in the backing buffer and leaves the source list empty, so exactly one list owns each
+message.
+
+---
+
+### The Blanket `deinit(&$T)` Silently Wins Over an Element's Own
+
+**Status:** Open
+**Affected:** `stdlib/core/deinit.f`, `stdlib/std/list.f`, any element type that owns memory
+
+`List(T).deinit` calls `.deinit()` on each element. `core.deinit`'s blanket
+`pub fn deinit(self: &$T) {}` is in scope everywhere through the prelude, so that call always
+resolves - and a specialization that binds the blanket rather than the element's own `deinit` is
+neither an error nor a warning. The buffer is freed and everything the elements own is not.
+
+The same generic resolves differently per binary. Lexing and freeing a token list calls
+`flang_0parser__token__deinit` in the `flang_parser` test binary and
+`core__deinit__deinit__ref_flang_0parser__token__Token` in the `flang_lsp` one, where every token's
+trivia slices then leak - per keystroke, since `publish_syntax_diags` re-lexes on every
+`didChange`. Read the pick out of the emitted C with `flang test -k`, or reproduce with
+`FLANG_LEAK_TRACE=1 flang test` from `lib/flang_lsp`. Importing `flang_parser.token` at the leaking
+call site does not change it, nor does importing it in `flang_analysis`'s `analyze.f`, so the
+deciding site is unidentified and plain visibility does not explain it.
+
+The blanket cannot simply be deleted: `List(T).deinit` resolves `elem.deinit()` while `T` is still
+a free variable, when the TEMPLATE body is checked and no instantiation exists, so the blanket is
+load-bearing for template checking. Every concrete type in the tree now carries its own `deinit`,
+and with the blanket removed the whole residual is calls whose receiver is an unresolved variable
+(`on &?7086`) - each one a generic container or a wrapper forwarding to one, `Stack($T).deinit`
+calling `self.__inner.deinit()` on a `List(T)` being the smallest. The fix is to resolve the
+element call per specialization instead of in the template: skip it while `T` is open, and at
+instantiation either bind the element's own `deinit` or emit nothing when the type has none.
+
+---
+
+### `parse_doc` Leaks the Flattened Declaration List
+
+**Status:** Open
+**Affected:** `lib/flang_lsp/src/handlers/syntax_diagnostics.f`, `lib/flang_parser/src/comptime.f`
+
+`flatten_module_decls` builds a replacement `List(Decl)` from the caller's allocator and stores it on the `Module`. `Module.deinit` frees only the arena, on the rule that the AST's own allocations all live there - so the flattened list, which does not, is never released. Every `parse_doc` leaks it: ~400 bytes for a small buffer, once per keystroke in the LSP.
+
+---
+
 ### Bootstrap Segfaulted Type-Checking a `struct` Declaration — RESOLVED
 
 **Status:** Resolved — `HmAstLowering` lexical-scope fix

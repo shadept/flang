@@ -304,8 +304,9 @@ fn expand_one(chk: &Checker, state: &TemplateState, modules: &List(Module), path
     let parse_diags: List(Diagnostic) = list(0, Some(&a))
     const nodes = parse_template_body(def.body, def.base, def.file_id, &a, &parse_diags)
     if parse_diags.len > 0 {
-        for &d in parse_diags { chk.diagnostics.push(error(d.code, d.message, d.span)) }
-        parse_diags.clear()
+        const taken = parse_diags.to_owned_slice()
+        for &d in taken.0 { chk.diagnostics.push(error(d.code, d.message, d.span)) }
+        taken.1.free(taken.0)
         return Outcome.Failed
     }
     let raw = string_builder(def.body.len, Some(&a))
@@ -457,8 +458,9 @@ fn parse_chunk(chk: &Checker, text: String, file_id: i32) Module {
     const cst = p.parse_module()
     let module = project_module(cst, file_id, chk.allocator)
     flatten_module_decls(&module, &chk.comptime, &chk.diagnostics, chk.allocator)
-    for &d in p.diagnostics { chk.diagnostics.push(error(d.code, d.message, d.span)) }
-    p.diagnostics.clear()
+    const taken = p.diagnostics.to_owned_slice()
+    for &d in taken.0 { chk.diagnostics.push(error(d.code, d.message, d.span)) }
+    taken.1.free(taken.0)
     p.deinit()
     tokens.deinit()
     return module

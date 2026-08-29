@@ -68,6 +68,8 @@ pub type SpecDep = struct {
     id: SpecId
 }
 
+pub fn deinit(self: &SpecDep) {}
+
 // One instantiated generic function. `key` is the unique signature the registry hashed on; `decl`
 // is a shallow copy of the template's declaration (children stay in the module's arena, which
 // outlives the check). `overlay` holds the instantiation's private result tables - empty at

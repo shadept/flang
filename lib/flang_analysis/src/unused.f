@@ -609,7 +609,7 @@ type ImportSite = struct {
     span: SourceSpan
 }
 
-fn deinit(self: &ImportSite) {
+pub fn deinit(self: &ImportSite) {
     self.name.deinit()
 }
 
