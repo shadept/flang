@@ -183,6 +183,9 @@ fn command_opts(cmd: String) String {
         "test" => "n(name):r(release)k(keep-c)t(timings)e(eager)W(warn-unused)"
         "check" => "e(eager)W(warn-unused)t(timings)"
         "fmt" => "c(check)"
+        // LSP clients append `--stdio` to name the transport. The server speaks stdio and nothing
+        // else, so the flag parses and is ignored.
+        "lsp" => "S(stdio)"
         else => ""
     }
 }
