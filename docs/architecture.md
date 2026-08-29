@@ -434,6 +434,18 @@ The runner is table-driven: one `setjmp` site over an array of function pointers
 
 **Leak tracking.** `flang test` installs `std.test`'s tracking allocator as the process-wide default (`std.allocator.set_global_allocator`) before the first test, so every `or_global()` in the code under test resolves to it without a test passing anything. The ledger itself is C (`stdlib/std/test.c`): FLang keeps the vtable, which needs the `u8[]?` layout, and C keeps the list of live blocks, which does not. After a passing test the runner reports the blocks still out; after a failing one it only resets, because a `longjmp` unwind skips every `defer` and what is still allocated says nothing. Resetting forgets the ledger entries but never frees the memory — a lazily-initialized global built by one test is still live for the next, and reclaiming it would hand that test a dangling pointer. Leaks are reported, not failed.
 
+**Leak attribution.** Setting `FLANG_LEAK_TRACE` in the environment makes the ledger record a native stack for every block, and makes the runner print the allocation stacks behind a test's leaked blocks, grouped so identical stacks report once with their block and byte totals. Generated functions carry external linkage and mangled FLang FQNs, so the frames read as the FLang call chain that allocated:
+
+```
+  leaked 1 block(s), 16 byte(s)
+    1 block(s), 16 byte(s) allocated at:
+      std__string_0builder__to_0string__ref_std__string_0builder__StringBuilder +0x11d
+      std__string__from_0view__core__string__String__... +0xf8
+      flang_0lsp__workspace__canonical_0root__... +0x1a1
+```
+
+Symbols come from dbghelp on MSVC and `backtrace_symbols` on glibc/macOS; elsewhere the frames print as bare addresses. Off by default — a stack per allocation costs both the capture and the memory to hold it.
+
 **Driver model.** `dotnet test-all.cs` runs every project's blocks through `dist/<rid>/flang`, or `$FLANG` when set.
 
 **Option placement.** The self-hosted CLI is `flang <command> [options] [args]`. The command comes first and every option is parsed against it, from a format built as the shared set (`-h -V -v -s -T -A`) plus that command's own — `test` has `-n/--name`, `build` has `-p/--profile`, `fmt` has `--check`. An option ahead of the command belongs to no command and is refused, `--help` and `--version` excepted. This is what lets two commands use the same letter for different things, and it means one `getopts` pass handles long forms, `--name=value`, clustering and `--` uniformly instead of each handler re-parsing `argv` by hand. The reference CLI accepts either order.

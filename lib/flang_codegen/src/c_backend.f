@@ -139,6 +139,7 @@ fn emit_test_runner(m: &IrModule, sb: &StringBuilder) {
     const tracked = m.install_tests.is_some()
     if tracked {
         sb.append("extern size_t __flang_test_epilogue(size_t*);\n")
+        sb.append("extern void __flang_test_leak_sites(void);\n")
         sb.append("extern void __flang_test_reset(void);\n")
         sb.append("static size_t __flang_test_leak_bytes = 0;\n")
         sb.append("static size_t __flang_test_leak_blocks = 0;\n")
@@ -180,8 +181,12 @@ fn emit_test_runner(m: &IrModule, sb: &StringBuilder) {
         sb.append("            if (__flang_test_leak_blocks > 0) {\n")
         sb.append("                printf(\"  leaked %zu block(s), %zu byte(s)\\n\",")
         sb.append(" __flang_test_leak_blocks, __flang_test_leak_bytes);\n")
+        // Silent unless FLANG_LEAK_TRACE is set, in which case it walks the ledger the epilogue
+        // left standing and prints the allocation stack behind each group of leaked blocks.
+        sb.append("                __flang_test_leak_sites();\n")
         sb.append("                __flang_test_leaked++;\n")
         sb.append("            }\n")
+        sb.append("            __flang_test_reset();\n")
     }
     sb.append("        } else {\n")
     sb.append("            __flang_test_active = 0;\n")
