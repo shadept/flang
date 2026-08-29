@@ -259,6 +259,10 @@ string? RunStage(string builder, string name)
     }
 
     Directory.CreateDirectory(stagesDir);
+    // A stage compiler resolves std.* from the copy beside it, the same way the
+    // installed one does. Refreshed every stage build: a copy left to go stale
+    // shadows the source tree with no sign that it did.
+    CopyDir(stdlibSrc, Path.Combine(stagesDir, "stdlib"));
     var exe = Path.Combine(stagesDir, $"{name}{exeExt}");
     var c = Path.Combine(stagesDir, $"{name}.c");
     File.Copy(compilerExe, exe, overwrite: true);
