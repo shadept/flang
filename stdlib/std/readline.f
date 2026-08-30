@@ -17,9 +17,8 @@ import std.terminal
 // FFI
 // =============================================================================
 
-// Cross-platform. `isatty` lives in `std.terminal` - a caller that is not a line editor needs it
-// too. The console-mode calls below stay here: raw mode saves and restores the original modes and
-// clears echo and line input, which is more than making escape sequences work.
+// Cross-platform. `isatty` lives in `std.terminal`; the console-mode calls stay here, because raw
+// mode saves and restores the original modes and clears echo and line input.
 #foreign fn read(fd: i32, buf: &u8, len: usize) isize
 #foreign fn write(fd: i32, buf: &u8, len: usize) isize
 

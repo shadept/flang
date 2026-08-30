@@ -10,13 +10,11 @@
 //     17 | }
 //        |
 //
-// Pure: the path, the text, the index and the style all arrive through the signature and a string
-// comes back. Deciding whether the destination wants color, and writing the result, belong to the
-// caller - which is what lets the whole layout be covered by ordinary test blocks.
+// Pure: the path, the text, the index and the style arrive through the signature and a string comes
+// back. Deciding whether the destination wants color, and writing the result, are the caller's.
 //
-// Caret columns are DISPLAY columns, not byte offsets: tabs expand and a multi-byte codepoint
-// counts once, so a line carrying either still gets carets under the right characters. Character
-// width beyond that (east Asian width, combining marks) is not modelled.
+// Caret columns are display columns, not byte offsets: tabs expand and a multi-byte codepoint
+// counts once. East Asian width and combining marks are not modelled.
 
 import std.allocator
 import std.encoding.utf8
@@ -95,8 +93,7 @@ pub fn render_diagnostic(path: String, source: String, idx: &LineIndex, d: &Diag
 
 // ── pieces ─────────────────────────────────────────────────────────────
 
-// Escape sequences go through `std.terminal` rather than being spelled here, and only when the
-// caller asked for them - `paint`/`unpaint` are no-ops under a colorless style.
+// Escape sequences come from `std.terminal`; `paint`/`unpaint` are no-ops under a colorless style.
 fn paint(sb: &StringBuilder, style: &RenderStyle, color: Color, bold: bool) {
     if !style.color {
         return
@@ -144,7 +141,7 @@ fn write_location(sb: &StringBuilder, path: String, line: usize, col: usize, sty
 }
 
 // ` NN |` in the frame's color, or ` <spaces> |` when `number` is empty. Content that follows adds
-// its own separating space, so a frame line with nothing after it carries no trailing whitespace.
+// its own separating space, so an empty frame line carries no trailing whitespace.
 fn write_gutter(sb: &StringBuilder, number: String, width: usize, style: &RenderStyle) {
     paint(sb, style, Color.Blue, true)
     sb.append(" ")
@@ -246,8 +243,7 @@ fn display_width(text: String, tab_width: usize) usize {
     return cols
 }
 
-// The line as it is shown: tabs become the spaces that advance to the next stop, so the carets
-// below line up with what the reader sees.
+// The line as shown: tabs become the spaces that advance to the next stop.
 fn append_expanded(sb: &StringBuilder, text: String, tab_width: usize) {
     let cols: usize = 0
     for i in 0..text.len {

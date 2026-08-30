@@ -1,8 +1,7 @@
-// Token - the lexer's output unit, carrying its own trivia.
+// Token - the lexer's output unit.
 //
-// Every byte of the source belongs to exactly one Token's leading trivia, text, or trailing trivia.
-// The lexer never drops whitespace or comments - they're attached to the nearest token so the CST
-// can round-trip to source byte-for-byte. See trivia.f for the trivia model.
+// Every byte of the source belongs to exactly one token's leading trivia, text, or trailing trivia,
+// so the CST round-trips to source byte-for-byte. See trivia.f for the trivia model.
 
 import std.allocator
 import std.enum
@@ -139,30 +138,18 @@ pub type TokenKind = enum {
 
 #enum_utils(TokenKind)
 
-// A lexer-produced token - 32 bytes, owning nothing.
+// A lexer-produced token, owning nothing.
 //
-// `text` is a view into the source buffer covering exactly the token's bytes; `offset` is where
-// those bytes start. That pair is the whole token: everything else a token could say about itself
-// is a function of the source and the offsets, so it is derived rather than stored.
-//
-// Trivia (the whitespace and comments bordering the token) used to live here as two owned slices
-// plus the allocator to free them - 40 of the token's 80 bytes, and a heap allocation per token,
-// for views into a buffer that is kept alive anyway. Every byte between one token's text and the
-// next IS trivia by construction, so `trivia.f` walks it on demand: `trivia_in`, bounded by
-// `leading_end` / `trailing_end`. The losslessness invariant is unchanged - concatenating leading +
-// text + trailing across every token in order still reproduces the source exactly - it is just no
-// longer materialised.
-//
-// `line` is gone the same way. Callers that need a line number either count newlines as they walk
-// (the formatter, folding ranges) or ask a `LineIndex`, which the diagnostic path builds anyway.
+// `text` is a view into the source buffer covering exactly the token's bytes and `offset` is where
+// those bytes start. Everything else about a token is a function of the source and those offsets,
+// so trivia is walked on demand (`trivia.f`) and line numbers come from a `LineIndex`.
 pub type Token = struct {
     kind: TokenKind
     text: String
     offset: usize
 }
 
-// True for any keyword token - useful for syntax highlighting and the formatter's word-spacing
-// rules.
+// True for any keyword token.
 pub fn is_keyword(kind: TokenKind) bool {
     kind match {
         TokenKind.Pub => return true

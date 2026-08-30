@@ -212,8 +212,7 @@ pub type Checker = struct {
     // GenericTemplate).
     fn_decl_params: Dict(u32, DeclParams)
     // Anonymous record types (`struct { … }` in type position, an unpinned `.{ … }` literal), one
-    // registry entry per shape. Keyed by the record `Ty` the interner already canonicalises for
-    // that shape, so field names and field types both count and nothing has to be rendered.
+    // registry entry per shape, keyed by the record `Ty` the interner canonicalises for it.
     anon_structs: Dict(Ty, NominalId)
     // Re-entrancy depth of default materialization: a default expression whose own call omits
     // defaults recurses through `check_expr`; a self-referential default would recurse forever, so
@@ -888,9 +887,8 @@ fn resolve_anon_struct_type(self: &Checker, a: &AnonStructType) Ty {
 // of the same record are ONE registry entry, so layout, member access and lowering all take the
 // ordinary nominal path.
 //
-// The key is the record `Ty` the interner canonicalises for those fields, which already counts
-// field types as well as names - without the types `struct { v: i32 }` and `struct { v: String }`
-// would collide on one definition.
+// The key is the record `Ty` the interner canonicalises for those fields, which counts field types
+// as well as names, so `struct { v: i32 }` and `struct { v: String }` stay distinct.
 fn anon_struct_ty(self: &Checker, fields: List(Field), span: SourceSpan) Ty {
     const key = self.engine.interner.record_of(&fields)
 
@@ -902,8 +900,8 @@ fn anon_struct_ty(self: &Checker, fields: List(Field), span: SourceSpan) Ty {
         return mk_nominal(self, id, no_args)
     }
 
-    // The registry FQN is a bare counter, not the structure: no rendering of a record shape
-    // survives C identifier mangling. Interning happens through `anon_structs` instead.
+    // The registry FQN is a bare counter: no rendering of a record shape survives C identifier
+    // mangling. Interning happens through `anon_structs`.
     let empty_tps: List(VarId) = list(0, self.allocator)
     let nid = self.nominals.register(NominalDef.NomStruct(StructDef {
         fqn = "",
@@ -4400,11 +4398,9 @@ fn check_cast(self: &Checker, c: &CastExpr) Ty {
     return target
 }
 
-// The two directions between a reference and an integer (RFC-026, spec §5.4). Copy-on-write
-// parameters rest on an escape analysis that follows addresses, and an address that becomes an
-// integer leaves it. Reading one out is allowed and warns; building a reference from one is not
-// allowed at all, which is what makes the outbound direction safe: an address can leave, it just
-// cannot come back and be written through.
+// The two directions between a reference and an integer (spec §5.4). Reading an address out as an
+// integer is allowed and warns; building a reference from an integer is not allowed at all, so an
+// address can leave the escape analysis but cannot come back and be written through.
 fn report_ref_int_cast(self: &Checker, c: &CastExpr, from: Ty, to: Ty) {
     const f_ref = ty_node(self, from) match { NRef(_) => true, _ => false }
     const t_ref = ty_node(self, to) match { NRef(_) => true, _ => false }
@@ -4424,10 +4420,9 @@ fn report_ref_int_cast(self: &Checker, c: &CastExpr, from: Ty, to: Ty) {
     }
 }
 
-// `0 as &T` is how a null reference is spelled while the language has no null primitive. It is
-// exempt from E2122 because a zero can never be a laundered address: the escape analysis only cares
-// about integers that could carry the address of a live value. Matched on the literal's source
-// text, which is what the AST preserves; a suffix does not change the value.
+// `0 as &T` spells a null reference while the language has no null primitive, and is exempt from
+// E2122: a zero carries no address. Matched on the literal's source text, which the AST preserves;
+// a suffix does not change the value.
 fn is_zero_literal(e: &Expr) bool {
     return e.* match {
         Lit(l) => l.value match {

@@ -172,9 +172,7 @@ fn parse_args(argv: String[], opts: &Options) bool {
 // foo.f --time | …` without polluting downstream consumers.
 // ─────────────────────────────────────────────────────────────────────────
 
-// Owns the source read so the OwnedString lives for the duration of the measured loop. Passing the
-// view from main's frame produced an empty view at the call boundary - keeping the OwnedString
-// local to this frame dodges the issue.
+// Owns the source read, so the OwnedString outlives the measured loop.
 fn run_timing(path: String, iterations: usize) i32 {
     const source_opt = read_source(path)
     if source_opt.is_none() {
@@ -288,8 +286,7 @@ fn print_timing_row(label: String, min_ns: u64, max_ns: u64, sum_ns: u64, iterat
 // ─────────────────────────────────────────────────────────────────────────
 // JSON emitter. Schema:
 //   { file, source, tokens[], tree (CST), ast, diagnostics[] }
-// Tokens are an indexed array; the CST `tree` references them by integer to avoid duplicating
-// `text`/`leading`/`trailing` blobs at every leaf.
+// Tokens are an indexed array; the CST `tree` references them by integer.
 // ─────────────────────────────────────────────────────────────────────────
 
 fn print_json(path: String, source: String, tokens: &List(Token), cst: &CstNode, ast: &Module,

@@ -64,16 +64,13 @@ pub const STDIN_FD: i32 = 0
 pub const STDOUT_FD: i32 = 1
 pub const STDERR_FD: i32 = 2
 
-// Whether the given descriptor is attached to a terminal. A redirected stream is not, which is the
-// question a caller deciding whether to emit escape sequences is actually asking.
+// Whether the given descriptor is attached to a terminal. A redirected stream is not.
 pub fn is_tty(fd: i32) bool {
     return isatty(fd) != 0
 }
 
-// Make the console interpret escape sequences. A no-op wherever it already does; on Windows the
-// console starts in a mode that prints them literally, and the flag has to be set per output
-// handle. Safe to call more than once, and safe to call on a redirected stream - a failed
-// `GetConsoleMode` leaves the mode alone.
+// Make the console interpret escape sequences, per output handle. A no-op wherever it already does,
+// and on a redirected stream: a failed `GetConsoleMode` leaves the mode alone.
 pub fn enable_ansi() {
     #if platform.os == "windows" {
         enable_vt(WIN_STD_OUTPUT_HANDLE)

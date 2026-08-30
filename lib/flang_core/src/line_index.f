@@ -1,12 +1,10 @@
 // Line index: the byte offset of every line start in a text, plus the lookups that turn a byte
 // offset into a line and a line into its content bounds.
 //
-// Built once per text and queried many times. The alternative - scanning from byte 0 per query - is
-// quadratic over a file's worth of diagnostics, which is the whole reason this exists.
+// Built once per text and queried many times, so a file's worth of diagnostics costs one scan.
 //
-// Encoding-independent by construction: it stores byte offsets and nothing else. `all_ascii` is
-// recorded because callers that convert to a character-counted position (the LSP's UTF-16
-// coordinates, a caret column) can take an arithmetic path when it holds.
+// It stores byte offsets and nothing else. `all_ascii` lets a caller converting to a
+// character-counted position (LSP UTF-16 coordinates, a caret column) take an arithmetic path.
 //
 // Out-of-range input is clamped, never rejected.
 

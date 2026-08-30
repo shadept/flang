@@ -15,8 +15,7 @@ import std.list
 import std.option
 import std.string
 import std.test
-// Re-exported: a consumer that wants LSP positions wants the index they are measured against, and
-// importing one module for both is the shape every caller already has.
+// Re-exported: a consumer that wants LSP positions wants the index they are measured against.
 pub import flang_core.line_index
 
 pub type PositionEncoding = enum {

@@ -18,15 +18,14 @@ pub type List = struct(T) {
     allocator: &Allocator?
 }
 
-// Budget for a list's first allocation, in bytes, and the ceiling on how many elements it buys. The
-// first allocation is sized in BYTES rather than in elements: a fixed element count makes it scale
-// with `size_of(T)`, so a list of 440-byte elements would grab 7 KB to hold one. Rust's
-// `RawVec::MIN_NON_ZERO_CAP` splits its minimum the same way and for the same reason.
+// Budget for a list's first allocation, in bytes, and the ceiling on how many elements it buys.
+// Sizing in bytes keeps the first allocation flat across element types; a fixed element count would
+// scale it with `size_of(T)`.
 const DEFAULT_CAPACITY_BUDGET: usize = 1024
 const DEFAULT_CAPACITY_MAX: usize = 8
 
-// Elements the first allocation holds, for an element type of `elem_size` bytes: the byte budget's
-// worth, clamped to at least one element and at most `DEFAULT_CAPACITY_MAX`.
+// Elements the first allocation holds for an element type of `elem_size` bytes: the byte budget's
+// worth, clamped to `[1, DEFAULT_CAPACITY_MAX]`.
 fn default_capacity(elem_size: usize) usize {
     // A payload-less enum variant is zero-sized; the budget buys as many as the ceiling allows.
     if elem_size == 0 {
@@ -174,9 +173,8 @@ pub fn reserve(self: &List($T), capacity: usize) {
     }
     const new_bytes: usize = new_cap * elem_size
 
-    // Grow through `realloc`, not alloc-copy-free: an allocator that can extend the block where it
-    // stands does no copy at all, and one that cannot still gets told the old block is dead. The
-    // alloc-copy-free path below is the fallback for allocators whose `realloc` declines.
+    // Grow through `realloc`, so an allocator that can extend the block in place does no copy. The
+    // alloc-copy-free path below is the fallback for a `realloc` that declines.
     if self.cap > 0 {
         const old_bytes = slice_from_raw_parts(self.ptr as &u8, self.cap * elem_size)
         const grown = self.allocator.or_global().realloc(old_bytes, new_bytes)

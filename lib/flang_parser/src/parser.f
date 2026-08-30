@@ -35,9 +35,9 @@ type NodeBuilder = struct {
 pub type Parser = struct {
     // The tree under construction; owns the token list moved in from the lexer.
     tree: Cst
-    // Children of the nodes currently open, innermost last. `open` records the height, `finish`
-    // moves everything above that mark into `tree.children` as one contiguous block and pops it.
-    // Nodes close innermost-first, so a stack is all the bookkeeping a contiguous window needs.
+    // Children of the nodes currently open, innermost last. `open` records the height and `finish`
+    // moves everything above that mark into `tree.children` as one contiguous block. Nodes close
+    // innermost-first, so a stack is enough bookkeeping.
     scratch: List(CstChildSlot)
     position: usize
     // Backs every CST node's child list. Stored as-passed (`null` = global allocator) and forwarded

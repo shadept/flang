@@ -1666,9 +1666,8 @@ fn lower_function_body(m: &IrModule, ctx: &LowerCtx, decl: &FunctionDecl, sym: S
     // keeps value semantics with no name resolution involved (the reference inliner's
     // address-of-parameter bug cannot exist here).
     //
-    // The shadow is emitted only where the body earns it (RFC-026): `param_escape` reads the
-    // checked body first, so a parameter the body only reads is bound to the CALLER'S pointer and
-    // no copy exists at any point. spec §3.2 promises exactly that.
+    // The shadow is emitted only where the body earns it (spec §3.2): `param_escape` reads the
+    // checked body first, and a parameter the body only reads keeps the caller's pointer.
     const shadow = shadowed_params(decl, ctx.result, ctx.overlay, ctx.allocator)
     defer shadow.deinit()
     for i in 0..decl.params.len {
@@ -8074,8 +8073,8 @@ test "the shadow is emitted once, however many times the parameter escapes (RFC-
         "test.f")
     let m = lower_module(&unit.module, &unit.result)
     let f = &m.functions[find_fn_starting(&m, "outer__")]
-    // Two escapes and a write, but the parameter has one storage location for the whole body, so
-    // the prologue copy covers all of them. `&p` is not a copy per occurrence.
+    // Two escapes and a write, all covered by the one prologue copy: the parameter has a single
+    // storage location for the whole body.
     assert_eq(memcpy_count(f), 1 as usize, "one shadow, however many escapes")
 }
 
@@ -8093,8 +8092,7 @@ test "returning an aggregate parameter copies out, not in (RFC-026)" {
         "test.f")
     let m = lower_module(&unit.module, &unit.result)
     let f = &m.functions[find_fn_starting(&m, "f__")]
-    // One copy, into the caller's sret buffer. Reading the parameter's bytes out of it is not an
-    // escape of its address.
+    // One copy, into the caller's sret buffer. Reading the parameter's bytes is not an escape.
     assert_eq(memcpy_count(f), 1 as usize, "the sret copy, and no prologue spill")
 }
 

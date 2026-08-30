@@ -25,8 +25,7 @@ pub fn read_source(path: String) Result(OwnedString, FileError) {
 // ── diagnostic rendering (terminal) ────────────────────────────────────
 
 // Whether escape sequences reach the destination. `auto` asks the destination: a terminal gets
-// them, a redirected stream does not, and `NO_COLOR` or a dumb `TERM` opt out however the stream is
-// attached.
+// them, a redirected stream does not, and `NO_COLOR` or a dumb `TERM` opt out either way.
 pub type ColorChoice = enum {
     Auto
     Always
@@ -46,9 +45,8 @@ pub fn color_choice(name: String) ColorChoice? {
     return null
 }
 
-// Resolve the choice against the environment, once per run. Enables the Windows console's escape
-// handling as a side effect when the answer is yes, since a console that has not been told to
-// interpret them prints them literally.
+// Resolve the choice against the environment, once per run. Turns on the Windows console's escape
+// handling when the answer is yes; without it the console prints the sequences literally.
 pub fn resolve_style(choice: ColorChoice) RenderStyle {
     const on = choice match {
         Always => true
@@ -73,10 +71,8 @@ fn auto_color() bool {
 }
 
 // Render diagnostics across a multi-module project, selecting each one's source and path by its
-// span's file id. Spanless diagnostics fall back to the first source.
-//
-// The line index of each file is built once and reused, so a file with many diagnostics costs one
-// scan rather than one per diagnostic.
+// span's file id. Spanless diagnostics fall back to the first source. Each file's line index is
+// built once and reused.
 pub fn render_project_diagnostics(diags: &List(Diagnostic), paths: &List(OwnedString),
     sources: &List(OwnedString), style: &RenderStyle) {
     let indexes: Dict(usize, LineIndex) = dict()
@@ -110,8 +106,7 @@ pub fn print_diagnostic(path: String, source: String, d: &Diagnostic, style: &Re
     write_err(text.as_view())
 }
 
-// Diagnostics go to stderr: build progress goes to stdout, and a caller redirecting one should not
-// have to take the other with it.
+// Diagnostics go to stderr, build progress to stdout, so either can be redirected alone.
 fn write_err(text: String) {
     const _r = write(&stderr, text)
 }

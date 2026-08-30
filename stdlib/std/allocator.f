@@ -365,9 +365,8 @@ fn fixed_alloc(impl: &u8, size: usize, alignment: usize) u8[]? {
 fn fixed_realloc(impl: &u8, memory: u8[], new_size: usize) u8[]? {
     let state = impl as &FixedBufferAllocatorState
 
-    // If memory is empty, treat as fresh allocation. `realloc` carries no alignment argument, so
-    // the block takes the strictest alignment `alloc` can be asked for rather than guessing the
-    // caller's - the same choice `arena_realloc` makes.
+    // An empty block is a fresh allocation. `realloc` carries no alignment argument, so the block
+    // takes the strictest alignment `alloc` can be asked for.
     if memory.len == 0 {
         return fixed_alloc(impl, new_size, 16)
     }
@@ -445,10 +444,9 @@ type ArenaPage = struct {
     offset: usize
 }
 
-// Pages grow geometrically: `page_size` is the FIRST page's size and each subsequent page doubles,
-// up to `ARENA_MAX_PAGE_SIZE`. A short-lived arena that allocates once costs one small page, while
-// a long one stops paying end-of-page slack after a handful of pages. A fixed page size cannot have
-// both - small pages waste a fraction of every page, large pages waste most of the only page.
+// Pages grow geometrically: `page_size` is the first page's size and each page after it doubles, up
+// to `ARENA_MAX_PAGE_SIZE`. An arena that allocates once costs one small page; a long-lived one
+// stops paying end-of-page slack after a handful of pages.
 pub type ArenaAllocator = struct {
     backing: &Allocator
     page_size: usize
@@ -524,8 +522,8 @@ fn arena_alloc(impl: &u8, size: usize, alignment: usize) u8[]? {
 fn arena_realloc(impl: &u8, memory: u8[], new_size: usize) u8[]? {
     let state = impl as &ArenaAllocator
 
-    // The most recent allocation - the one whose end meets the bump cursor - is the single case an
-    // arena can resize without moving anything, because the bytes after it are still unclaimed.
+    // The most recent allocation, the one whose end meets the bump cursor, resizes in place: the
+    // bytes after it are still unclaimed.
     if state.current_page.is_some() {
         const page = state.current_page.unwrap()
         const data = (page as &u8) + size_of(ArenaPage)
@@ -538,8 +536,8 @@ fn arena_realloc(impl: &u8, memory: u8[], new_size: usize) u8[]? {
         }
     }
 
-    // Anything else has to move. `realloc` carries no alignment argument, so the replacement takes
-    // the strictest alignment `alloc` can be asked for rather than guessing the caller's.
+    // Anything else moves. `realloc` carries no alignment argument, so the replacement takes the
+    // strictest alignment `alloc` can be asked for.
     let new_mem = arena_alloc(impl, new_size, 16)
     if new_mem.is_none() {
         return null
@@ -553,9 +551,7 @@ fn arena_realloc(impl: &u8, memory: u8[], new_size: usize) u8[]? {
 }
 
 fn arena_dealloc(impl: &u8, memory: u8[]) {
-    // Arena does not support individual frees - no-op. Rolling the cursor back over the most recent
-    // allocation is possible but makes a free-then-read a live use-after-free, for no measured
-    // gain.
+    // An arena frees everything at once; an individual free is a no-op.
 }
 
 const arena_allocator_vtable = AllocatorVTable {
@@ -591,7 +587,7 @@ pub fn deinit(state: &ArenaAllocator) {
     state.current_page = null
 }
 
-// Bytes held across every page, headers included - what the arena took from its backing allocator,
+// Bytes held across every page, headers included: what the arena took from its backing allocator,
 // not what callers asked for.
 pub fn capacity_bytes(state: &ArenaAllocator) usize {
     const header_size = size_of(ArenaPage)
@@ -605,8 +601,7 @@ pub fn capacity_bytes(state: &ArenaAllocator) usize {
     return total
 }
 
-// Bytes actually handed out, headers and end-of-page slack excluded. Against `capacity_bytes` this
-// is the arena's packing efficiency.
+// Bytes handed out, headers and end-of-page slack excluded.
 pub fn used_bytes(state: &ArenaAllocator) usize {
     let total: usize = 0
     let page = state.first_page

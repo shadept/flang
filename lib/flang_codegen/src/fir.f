@@ -695,9 +695,8 @@ pub fn add_global(self: &IrModule, g: Global) {
 // Rebuild an instruction or terminator with every `Local` operand it names looked up in `subst`.
 // Ids absent from the map pass through, so a partial map rewrites only what it mentions.
 //
-// A rewrite always allocates FRESH inner lists (call args, variadic type lists, branch-target
-// args): the caller swaps the result in and deinits the previous storage wholesale, so sharing a
-// list buffer between the old value and the new one would dangle.
+// Inner lists (call args, variadic type lists, branch-target args) are always freshly allocated:
+// the caller swaps the result in and deinits the previous storage wholesale.
 
 pub fn remap_operand(op: Operand, subst: &Dict(u32, Operand)) Operand {
     return op match {

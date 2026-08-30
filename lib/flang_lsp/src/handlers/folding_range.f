@@ -27,9 +27,8 @@ pub fn folding_ranges(text: String, allocator: &Allocator? = null) List(FoldRang
     let open_lines: List(usize) = list(16, allocator)
     defer open_lines.deinit()
 
-    // Tokens no longer carry a line number - it was a stored answer to a question only this kind of
-    // ordered walk asks. Counting newlines as we advance costs one pass over the source in total,
-    // against a binary search per token.
+    // Tokens carry no line number. Counting newlines while advancing costs one pass over the
+    // source, against a binary search per token.
     let line: usize = 0
     let scanned: usize = 0
 

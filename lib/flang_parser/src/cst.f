@@ -205,39 +205,31 @@ pub type NodeKind = enum {
 //
 // The tree is stored struct-of-arrays: one `Cst` owns every node, every token and one flat child
 // array, and a node names its children as a window into that array rather than owning a list.
-//
-// This is what makes the tree cheap. The previous shape gave each node its own `List(CstChild)` -
-// one heap allocation per node - and stored children BY VALUE, so parsing copied every token out of
-// the lexer's array and every finished node into its parent's list. Indices copy nothing, and the
-// whole tree is three allocations.
-//
-// It also settles ownership. Nodes used to be copied into parent builders, so several nodes could
-// share one child buffer and no `deinit` could be correct (hence the old hand-called `free_cst`). A
-// node now exists exactly once, in `Cst.nodes`, and teardown is three list frees.
+// Children are indices, so nothing is copied, the whole tree is three allocations, and a node
+// exists exactly once - teardown is three list frees.
 
-// Index into `Cst.nodes`. Transparent alias - the compiler will not stop you passing a token id
-// where a node id belongs (spec.md §2.3.1); the name is for the reader.
+// Index into `Cst.nodes`. A transparent alias (spec.md §2.3.1): the name is for the reader, not
+// something the compiler checks.
 pub type CstNodeId = u32
 
 // Index into `Cst.tokens`.
 pub type CstTokenId = u32
 
-// A node's children as a window into `Cst.children`. Children are contiguous: the parser buffers a
-// node's children on a scratch stack and moves them across in one block when the node closes.
+// A node's children as a window into `Cst.children`. Children are contiguous: the parser buffers
+// them on a scratch stack and moves them across in one block when the node closes.
 pub type ChildSpan = struct {
     start: u32
     len: u32
 }
 
-// A stored child - 8 bytes, an index plus which array it indexes.
+// A stored child: an index plus which array it indexes.
 pub type CstChildSlot = enum {
     NodeSlot(CstNodeId)
     TokenSlot(CstTokenId)
 }
 
-// One stored node - 20 bytes. `start` and `end` cover every child token's byte range (including the
-// trivia attached to the first and last tokens). Children are in source order, so walking them and
-// concatenating their bytes yields a substring of the original source.
+// One stored node. `start` and `end` cover every child token's byte range, trivia included, and
+// children are in source order, so concatenating their bytes yields a substring of the source.
 pub type CstNodeData = struct {
     kind: NodeKind
     start: u32
@@ -247,10 +239,9 @@ pub type CstNodeData = struct {
 
 // The tree. Owns the token list, which is moved in from the lexer rather than copied.
 //
-// `source` is borrowed and must outlive the tree. It is held because a node is a byte RANGE and a
-// token is an offset: the text they name, and the trivia between them, live in the buffer, not in
-// the tree. Consumers that need either (the formatter) read it from here instead of being handed
-// the source separately and trusted to pass the matching one.
+// `source` is borrowed and must outlive the tree. A node is a byte range and a token is an offset,
+// so the text they name and the trivia between them live in the buffer; consumers that need either
+// read it from here rather than being handed the source separately.
 pub type Cst = struct {
     source: String
     nodes: List(CstNodeData)
@@ -287,9 +278,8 @@ pub fn deinit(self: &Cst) {
 // Traversal
 // ─────────────────────────────────────────────────────────────────────
 
-// A cursor at one node: the stored record plus the tree it came from. This is what consumers pass
-// around and match on - `kind`, `start` and `end` read exactly as they did when a node owned its
-// children, so a walk looks the same. It is a stack value, never stored in the tree.
+// A cursor at one node: the stored record plus the tree it came from. A stack value, never stored
+// in the tree.
 pub type CstNode = struct {
     cst: &Cst
     kind: NodeKind
@@ -321,12 +311,9 @@ pub fn child_count(self: CstNode) usize {
     return self.children.len as usize
 }
 
-// How many of the children are sub-nodes rather than tokens. Reads the child slots directly instead
-// of going through `child`, which would materialise a `CstNode` per slot only to throw it away.
-//
-// This is an exact upper bound on what projecting those children yields, which is what sizes the
-// projector's lists: they are built in the module arena, where a list that outgrows its buffer
-// abandons it for the arena's lifetime.
+// How many of the children are sub-nodes rather than tokens. Reads the child slots directly, so no
+// `CstNode` is materialised per slot. An exact upper bound on what projecting those children
+// yields, which is what sizes the projector's lists.
 pub fn node_child_count(self: CstNode) usize {
     let n: usize = 0
     for i in 0..(self.children.len as usize) {
@@ -338,8 +325,7 @@ pub fn node_child_count(self: CstNode) usize {
     return n
 }
 
-// The `i`th child. Out of range is a programming error, not a recoverable one - it panics the same
-// way indexing past a list does.
+// The `i`th child. Out of range panics, the same way indexing past a list does.
 pub fn child(self: CstNode, i: usize) CstChild {
     const slot = self.cst.children[self.children.start as usize + i]
     return slot match {

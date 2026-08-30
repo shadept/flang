@@ -4,8 +4,8 @@
 //       leading:  <n piece(s)>  <text>
 //       trailing: <n piece(s)>  <text>
 //
-// Each piece is one whitespace run or one line comment; the printed text is the full preserved
-// trivia content (escaped). Omitted when there is no trivia on that side.
+// Each piece is one whitespace run or one line comment, printed escaped. Omitted when that side has
+// no trivia.
 
 import std.env
 import std.io.file
@@ -72,8 +72,7 @@ pub fn main() i32 {
     return 0
 }
 
-// Trivia and line are derived from the source now; a debug dumper is exactly the caller that should
-// pay for them rather than every token storing them.
+// Trivia and line are derived from the source, which this dumper pays for on demand.
 fn print_token(tok: &Token, source: String, prev_end: usize, next_off: usize, idx: &LineIndex) {
     let line = string_builder(96)
     defer line.deinit()

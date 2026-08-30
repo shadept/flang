@@ -166,16 +166,14 @@ fn project_decl(self: &Projector, cst: CstNode) Decl {
 }
 
 // Move a projected child into the module arena and keep only the reference. Recursive AST children
-// are stored as `&T` so an enum variant costs a pointer rather than the largest node it can hold:
-// `Stmt` is 104 bytes instead of 440 because `LetStmt` no longer carries an `Expr` inline. The
-// arena owns every boxed child and `Module.deinit` releases the lot in one free - boxing moves
-// bytes within the arena, it does not introduce a lifetime.
+// are stored as `&T`, so an enum variant costs a pointer rather than the largest node it can hold.
+// The arena owns every boxed child and `Module.deinit` releases the lot in one free.
 fn boxed(self: &Projector, value: $T) &T {
     return box(self.alloc, value)
 }
 
 // `boxed` for an optional child: absent stays absent, present is moved into the arena. `&T?` is one
-// pointer - null is the niche - so an absent child costs nothing beyond it.
+// pointer, null being the niche.
 fn boxed_opt(self: &Projector, value: $T?) &T? {
     return value match {
         Some(v) => Some(box(self.alloc, v))

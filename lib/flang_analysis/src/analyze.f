@@ -120,14 +120,10 @@ pub fn analyze(source: OwnedString, path: String, allocator: &Allocator? = null)
 // ── `#allow(CODE, …)` ──────────────────────────────────────────────────
 
 // Drop the diagnostics a declaration asked to be spared. A code named by `#allow` on a declaration
-// is silent for every diagnostic whose span falls within that declaration, whichever phase raised
-// it - the filter runs over the assembled list rather than inside any one of them.
+// is silent for every diagnostic whose span falls within it, whichever phase raised it, because the
+// filter runs over the assembled list. Allowance is declaration-level only.
 //
-// Only declaration-level allowance exists. A single site inside a long function is suppressed by
-// naming the code on the enclosing declaration, which is the granularity every current caller
-// wants; a statement-level form arrives when one does not. The survivors, in order. `diags` is left
-// empty: every diagnostic either moved into the result or was freed here, and the old backing
-// buffer is released the way `drain_diagnostics` releases one.
+// Returns the survivors in order and leaves `diags` empty, its backing buffer released.
 pub fn filter_allowed(diags: &List(Diagnostic), module: &Module,
     alloc: &Allocator? = null) List(Diagnostic) {
     const taken = diags.to_owned_slice()
@@ -143,8 +139,8 @@ pub fn filter_allowed(diags: &List(Diagnostic), module: &Module,
     return kept
 }
 
-// The project-wide form: a diagnostic is matched against the declarations of whichever module its
-// span belongs to, which the file id already selects.
+// The project-wide form: a diagnostic is matched against the declarations of the module its span's
+// file id selects.
 pub fn filter_allowed_project(diags: &List(Diagnostic), modules: &List(Module),
     alloc: &Allocator? = null) List(Diagnostic) {
     const taken = diags.to_owned_slice()
@@ -497,7 +493,7 @@ fn check_project(self: &AnalyzedProject, ctx: &ResolveCtx, edge_from: &List(usiz
         wi.deinit()
     }
 
-    // Last, so a code is silenced whichever phase raised it - including the unused warnings above.
+    // Last, so a code is silenced whichever phase raised it, the unused warnings included.
     self.diagnostics = filter_allowed_project(&self.diagnostics, &self.modules, allocator)
 }
 

@@ -3,8 +3,8 @@
 // intern to the same id, so `a == b` on handles is type equality. `Void`, `Never`, `Error` and the
 // 14 primitives hold the fixed ids `type.f` declares, so the common leaves never hash.
 //
-// The identity a lookup hashes is `TyKey`, a fixed-size struct with derived `hash`/`op_eq`, so
-// `Dict` settles collisions itself. Interning allocates nothing on a hit.
+// A lookup hashes `TyKey`, a fixed-size struct with derived `hash`/`op_eq`, so `Dict` settles
+// collisions itself and interning allocates nothing on a hit.
 //
 // A node's children are `Ty` handles sliced out of one flat `children` array. The table owns two
 // lists' worth of storage; nothing else owns any part of a type.
@@ -17,8 +17,7 @@
 // `generalize`'s free-variable walk reads the level off the node, so a var whose partition level
 // moved interns as a fresh node rather than surfacing a stale level.
 //
-// Rendering is `format`, which walks the node graph and appends the diagnostic text (vars print as
-// `?id`, dropping the level their identity carries).
+// Rendering is `format`, which walks the node graph and appends the diagnostic text.
 
 import std.allocator
 import std.derive
@@ -77,9 +76,8 @@ pub type TyNode = enum {
 
 // Structural identity of one node, as a fixed-size value `Dict` can hash and compare itself.
 //
-// Variable-arity children do not fit in a fixed struct, so a child sequence is interned separately
-// (see `KidsKey`) and enters the key as the single id `kids`. `a`/`b` are the two scalar slots the
-// variants use differently - no variant needs more than two values beside its children:
+// A variable-arity child sequence is interned separately (see `KidsKey`) and enters the key as the
+// single id `kids`. `a` and `b` are the two scalar slots, used differently per variant:
 //
 //   TAG_VAR      a = var id            b = level
 //   TAG_REF      a = elem
@@ -89,8 +87,8 @@ pub type TyNode = enum {
 //   TAG_RECORD                                       kids = (name, type) fields
 //   TAG_NOMINAL  a = NominalId                       kids = type arguments
 //
-// The seeded leaves (void, never, error, the prims) hold fixed ids and are reached through
-// `prim_of` and the `TY_*` constants, so they are never looked up by shape and need no key.
+// The seeded leaves (void, never, error, the prims) hold fixed ids and are never looked up by
+// shape, so they need no key.
 pub type TyKey = struct {
     tag: u32
     a: u32
@@ -101,12 +99,10 @@ pub type TyKey = struct {
 #derive(TyKey, eq, hash)
 
 // One cell of an interned child sequence, built right to left and terminated by `KIDS_NIL`. Equal
-// sequences reach the same id because each cell is a fixed struct the dict compares exactly;
-// sequences sharing a suffix share its cells.
+// sequences reach the same id, and sequences sharing a suffix share its cells.
 //
-// Record fields need a name in the cell and everything else does not, so they get their own cell
-// type and their own dict rather than making every cell carry an unused 16-byte `String`. Ids come
-// from one counter, and a key's tag says which dict its `kids` came from.
+// Record fields carry a name in the cell, so they have their own cell type and dict. Ids come from
+// one counter, and a key's tag says which dict its `kids` came from.
 pub type KidsKey = struct {
     head: Ty
     tail: u32
@@ -143,8 +139,7 @@ pub type TypeInterner = struct {
     rec_spans: List(SourceSpan)
     // Structural key -> id.
     by_key: Dict(TyKey, Ty)
-    // Interned child sequences: cons cell -> list id. Ids live in their own space, never mixing
-    // with `Ty`, so nothing outside this file can mistake one for a type.
+    // Interned child sequences: cons cell -> list id. Ids live in their own space, never `Ty`.
     kids: Dict(KidsKey, u32)
     field_kids: Dict(FieldKidsKey, u32)
     kids_next: u32
@@ -449,8 +444,7 @@ fn add(self: &TypeInterner, key: TyKey, node: TyNode, g: bool) Ty {
 }
 
 // ─────────────────────────────────────────────────────────────────────
-// Rendering for diagnostics - the tree representation's `format`, off the node graph. Vars print as
-// `?id`; the level that is part of their identity is not shown.
+// Rendering for diagnostics, off the node graph. Vars print as `?id`, without their level.
 // ─────────────────────────────────────────────────────────────────────
 
 pub fn format(self: &TypeInterner, id: Ty, sb: &StringBuilder) {

@@ -313,15 +313,14 @@ type Renderer = struct {
     prev_parent: NodeKind
     // Trivia is not stored on tokens; it is the source between them.
     //
-    // `prev_end` is where the last emitted token's TRAILING trivia stopped, so a token's leading
-    // trivia is [prev_end, tok.offset). Emitting leading before the token's text and trailing after
-    // it is not cosmetic: guards like the `OpenBrace` one in the forced-children walk read
-    // `pending_newlines` immediately after `render_token` and expect the newline that follows the
-    // token to have been counted already.
+    // `prev_end` is where the last emitted token's trailing trivia stopped, so a token's leading
+    // trivia is [prev_end, tok.offset). Leading is emitted before the token's text and trailing
+    // after it, because guards such as the `OpenBrace` one in the forced-children walk read
+    // `pending_newlines` straight after `render_token`.
     //
-    // `tokens` and `tok_index` exist only to find where the NEXT token starts, which bounds the
-    // trailing scan. That bound is load-bearing: inside an interpolated string the bytes after a
-    // hole's `}` belong to the segment token, and an unbounded scan would emit them as trivia too.
+    // `tokens` and `tok_index` find where the next token starts, which bounds the trailing scan.
+    // The bound is load-bearing: inside an interpolated string the bytes after a hole's `}` belong
+    // to the segment token, and an unbounded scan would emit them as trivia too.
     source: String
     tokens: &List(Token)
     tok_index: usize
@@ -685,8 +684,8 @@ fn newline_after_child(node: &CstNode, i: usize) bool {
     if next.is_none() {
         return false
     }
-    // Whatever sits between the two tokens is trivia by construction, so the question is only
-    // whether a newline is in there - which side of the split it fell on does not matter.
+    // Everything between the two tokens is trivia, so the only question is whether a newline is in
+    // there.
     const l = last.unwrap()
     return spans_newline(node.cst.source, l.offset + l.text.len, next.unwrap().offset)
 }
@@ -694,9 +693,8 @@ fn newline_after_child(node: &CstNode, i: usize) bool {
 // Emit every piece of trivia between the last token and this one, in order.
 //
 // The leading/trailing split is not reconstructed: `handle_trivia` counts newlines and spaces
-// inside a run and never looks at run boundaries, so one bounded walk of the whole gap produces
-// exactly the output the two separate slices did. The split survives only where it changes an
-// answer - see `leading_has_newline`.
+// inside a run and never looks at run boundaries, so one bounded walk of the gap is enough. The
+// split matters only where it changes an answer - see `leading_has_newline`.
 fn walk_trivia(r: &Renderer, from: usize, to: usize) {
     let it = trivia_in(r.source, from, to)
     loop {
@@ -710,7 +708,7 @@ fn walk_trivia(r: &Renderer, from: usize, to: usize) {
 }
 
 // Where the token after `tok` starts, bounding how far its trailing trivia may reach. Tokens are
-// visited in source order, so the cursor steps forward rather than searching.
+// visited in source order, so the cursor steps forward.
 fn next_token_start(r: &Renderer, tok: &Token) usize {
     while r.tok_index < r.tokens.len and r.tokens[r.tok_index].offset < tok.offset {
         r.tok_index = r.tok_index + 1
@@ -732,8 +730,8 @@ fn emit_trailing(r: &Renderer, tok: &Token) {
     r.prev_end = split
 }
 
-// Whether a newline sits in `tok`'s LEADING trivia - after the newline that ended the previous
-// token's line, not counting it. This is the one place the split still matters.
+// Whether a newline sits in `tok`'s leading trivia, not counting the one that ended the previous
+// token's line.
 fn leading_has_newline(r: &Renderer, tok: &Token) bool {
     return spans_newline(r.source, r.prev_end, tok.offset)
 }
@@ -1189,7 +1187,7 @@ fn is_binary_op(kind: TokenKind) bool {
 // the code means can never survive.
 fn verify_output(tokens: &List(Token), cst: &CstNode, output: String) bool {
     let lx = lexer(output)
-    // `parser` takes the list into its `Cst`; read it back from there and let `p.deinit()` free it.
+    // `parser` takes the list into its `Cst`; `p.deinit()` frees it.
     let p = parser(lx.tokenize(), output)
     defer p.deinit()
     const out_cst = p.tree.node_at(p.parse_module())

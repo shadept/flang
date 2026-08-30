@@ -388,11 +388,9 @@ fn splice_callee(m: &IrModule, callee_idx: usize, caller: &Function, args: &List
 // ────────────────────────────────────────────────────────────────────
 // Callee-body cloning. `clone_callee_instr` mints a fresh result id via `caller.fresh_value_id()`
 // for every value-producing instruction and records `old_id -> Local(new_id)` in the splice-local
-// substitution map. Operands are remapped first, since SSA forbids forward-references to one's own
-// result.
-//
-// Caller instructions that are NOT being inlined go through `fir.rewrite_instr` instead, which
-// preserves result ids and only remaps operands.
+// substitution map. Operands are remapped first: SSA forbids a forward reference to one's own
+// result. Caller instructions that are not being inlined go through `fir.rewrite_instr`, which
+// preserves result ids and remaps operands only.
 // ────────────────────────────────────────────────────────────────────
 
 fn clone_callee_instr(inst: &Instr, subst: &Dict(u32, Operand), caller: &Function,

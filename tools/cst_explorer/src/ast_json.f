@@ -592,9 +592,8 @@ fn emit_literal_expr(sb: &StringBuilder, lit: &LiteralExpr) {
     sb.append("}")
 }
 
-// Inline the LiteralValue as scalars on the parent. The inner value has no own span (same range as
-// the enclosing literal); nesting it gave consumers a `[0..0]` phantom child that trapped
-// source-click.
+// Inline the LiteralValue as scalars on the parent: it has no span of its own, and nesting it
+// leaves consumers a `[0..0]` phantom child.
 fn emit_literal_payload(sb: &StringBuilder, v: LiteralValue) {
     v match {
         Int(i) => {
@@ -754,8 +753,8 @@ fn emit_call_expr(sb: &StringBuilder, c: &CallExpr) {
             sb.append(",")
         }
         c.args[i] match {
-            // No `Positional` wrapper: it would have no own span and trap source-click descent.
-            // Named args still wrap (they carry a name).
+            // No `Positional` wrapper: it would have no span of its own. Named args wrap, since
+            // they carry a name.
             Positional(e) => emit_expr(sb, e)
             Named(n) => {
                 sb.append("{\"kind\":\"Named\",")

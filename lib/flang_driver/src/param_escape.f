@@ -1,38 +1,21 @@
-// Copy-on-write parameters (RFC-026): decide, before a single instruction is emitted, whether a
-// by-value aggregate parameter needs its shadow copy.
+// Copy-on-write parameters: whether a by-value aggregate parameter needs its shadow copy.
 //
-// Every aggregate crosses a call boundary by pointer, so a parameter is really a borrow of the
-// caller's value. spec §3.2 says the copy that turns it back into a value appears on first write,
-// not on entry. This answers "does this body ever write to it, or let its address outlive the
-// expression it appears in" from the checked AST, and `lower_function_body` binds the parameter to
-// the caller's pointer when the answer is no.
+// An aggregate crosses a call boundary by pointer, so a parameter is a borrow of the caller's
+// value, and the copy that turns it back into a value appears on first write (spec RFC-026). This
+// answers, from the checked AST, whether a body writes through the parameter or lets its address
+// outlive the expression it appears in; `lower_function_body` binds the parameter to the caller's
+// pointer when the answer is no.
 //
-// Deciding here rather than deleting the copy afterwards is what makes the by-pointer parameter a
-// real borrow rather than an optimized-away copy: there is no point in the pipeline where a
-// read-only parameter has bytes of its own. RFC-028's `move` lands on the same seam - a moved
-// argument is one more reason not to emit the copy, not a second mechanism.
-//
-// ── the rule ───────────────────────────────────────────────────────────
-//
-// ALLOWED, the parameter keeps the caller's pointer:
+// The forms that keep the caller's pointer:
 //
 //   p                     read the whole value
-//   p.field               read a field (only when the checker recorded no `op_deref` hops - a hop
-//                         is a call taking `&p`)
-//   f(p)                  hand the whole value to a callee. The callee is a by-value aggregate
-//                         parameter in its own right, so it ran this same analysis and made its own
-//                         copy if it needed one. Nothing is assumed about its body.
-//   p match { ... }       every arm; a pattern binding out of `p` ALIASES `p`, so the bound names
-//                         join the set and are held to the same rule
+//   p.field               field read, when the checker recorded no `op_deref` hop
+//   f(p)                  the whole value to a by-value parameter, which runs this same analysis
+//   p match { ... }       every arm; a pattern binding out of `p` aliases `p` and joins the set
 //   return p              copies out through the caller's sret buffer
 //
-// Anything else that so much as mentions the parameter forces the copy. The classification is a
-// whitelist on purpose: an AST form nobody considered, and every implicit `&` the checker records
-// (user operators, `op_index`, `op_try`, the iterator protocol, UFCS receivers), lands in the
-// default and copies. Missing a case costs a memcpy, never correctness. The matches over `Expr`,
-// `Stmt` and `Pattern` are total, so a new variant is a build error here rather than a silent
-// miscompile.
-
+// Anything else that mentions the parameter copies. The matches over `Expr`, `Stmt` and `Pattern`
+// are total, so a new variant is a build error here.
 import std.allocator
 import std.dict
 import std.list
@@ -46,7 +29,7 @@ import flang_typer.result
 import flang_typer.inference_results
 
 // Whether each of `decl`'s parameters needs a shadow copy, parallel to `decl.params`. A parameter
-// that is not a by-value aggregate is irrelevant here and answers `true`, which its caller ignores.
+// that is not a by-value aggregate answers `true`, which its caller ignores.
 pub fn shadowed_params(decl: &FunctionDecl, result: &TypeCheckResult, overlay: &InferenceResults?,
     allocator: &Allocator? = null) List(bool) {
     let out: List(bool) = list(decl.params.len, allocator)
@@ -65,9 +48,7 @@ pub fn shadowed_params(decl: &FunctionDecl, result: &TypeCheckResult, overlay: &
 pub fn needs_shadow(name: String, body: &BlockExpr, result: &TypeCheckResult,
     overlay: &InferenceResults?, allocator: &Allocator? = null) bool {
     // The names that alias the parameter's storage: the parameter, plus whatever a pattern bound
-    // out of it. Scope is ignored - a name kept live past its arm only ever costs an extra copy. A
-    // `_`-named parameter is unreachable from the body by convention, but the name is still a name;
-    // nothing special is done for it.
+    // out of it. Scope is ignored; a name kept live past its arm costs an extra copy.
     let aliases: List(String) = list(4, allocator)
     defer aliases.deinit()
     aliases.push(name)
@@ -100,7 +81,7 @@ fn stmts_escape(xs: &List(Stmt), al: &List(String), r: &TypeCheckResult,
 
 fn stmt_escapes(s: &Stmt, al: &List(String), r: &TypeCheckResult, ov: &InferenceResults?) bool {
     return s.* match {
-        // Re-binding a name we track loses the thread; from here on `name` could be either value.
+        // Re-binding a tracked name loses the thread: from here on it could be either value.
         Let(l) => {
             if contains_name(al, l.name) {
                 true
@@ -112,7 +93,7 @@ fn stmt_escapes(s: &Stmt, al: &List(String), r: &TypeCheckResult, ov: &Inference
             }
         }
         Expression(e) => expr_escapes(e.expr, al, r, ov)
-        // The value is copied into the caller's buffer, so the address does not travel with it.
+        // The value is copied into the caller's buffer; the address does not travel with it.
         Return(rt) => rt.value match {
             Some(e) => expr_escapes(e, al, r, ov)
             None => false
@@ -129,8 +110,7 @@ fn stmt_escapes(s: &Stmt, al: &List(String), r: &TypeCheckResult, ov: &Inference
         }
         While(w) => expr_escapes(w.condition, al, r, ov) or block_escapes(w.body, al, r, ov)
         Loop(l) => block_escapes(l.body, al, r, ov)
-        // Both arms are projected away before lowering; whichever survives is walked as itself.
-        // They are bare statement lists, not blocks - `#if` introduces no scope.
+        // Bare statement lists, not blocks: `#if` introduces no scope.
         IfDirective(d) => stmts_escape(&d.then_stmts, al, r, ov) or stmts_escape(&d.else_stmts, al,
             r, ov)
     }
@@ -142,7 +122,7 @@ fn expr_escapes(e: &Expr, al: &List(String), r: &TypeCheckResult, ov: &Inference
         Identifier(_) => false
         Lit(_) => false
 
-        // A field read is a gep into the parameter - unless the checker resolved the receiver
+        // A field read is a gep into the parameter, unless the checker resolved the receiver
         // through `op_deref`, which is a call taking its address.
         MemberAccess(ma) => {
             if roots_in(ma.receiver, al, r, ov) and has_deref_hops(ma.span, r, ov) {
@@ -159,21 +139,17 @@ fn expr_escapes(e: &Expr, al: &List(String), r: &TypeCheckResult, ov: &Inference
         Assignment(a) => roots_in(a.lhs, al, r, ov) or expr_escapes(a.lhs, al, r, ov)
             or expr_escapes(a.rhs, al, r, ov)
 
-        // `p.f(x)` hands `&p` to the callee. A plain `f(p)` does not, and is walked as ordinary
-        // arguments below.
+        // `p.f(x)` hands `&p` to the callee; a plain `f(p)` does not.
         Call(c) => call_escapes(&c, al, r, ov)
 
-        // Arms bind INTO the scrutinee, so their names join the alias set.
+        // Arms bind into the scrutinee, so their names join the alias set.
         Match(m) => match_escapes(&m, al, r, ov)
 
         // Structure.
         Block(b) => block_escapes(&b, al, r, ov)
         If(f) => if_escapes(&f, al, r, ov)
 
-        // Everything below either takes an address the checker recorded rather than the source
-        // showing it, or is a form this analysis has not been taught. Mentioning an alias is enough
-        // to keep the copy, so each one defers to `mentions` on the same node rather than restating
-        // how to reach that node's children.
+        // Forms the walk does not classify: mentioning an alias anywhere is enough to copy.
         InterpolatedString(_) => mentions(e, al)
         ArrayLit(_) => mentions(e, al)
         TupleLit(_) => mentions(e, al)
@@ -194,7 +170,7 @@ fn expr_escapes(e: &Expr, al: &List(String), r: &TypeCheckResult, ov: &Inference
 
 fn call_escapes(c: &CallExpr, al: &List(String), r: &TypeCheckResult, ov: &InferenceResults?) bool {
     // A member-access callee is a UFCS call: the receiver crosses as the first argument, adapted to
-    // `&T` when that is what the winner declared, and the source never spells the `&`.
+    // `&T` when the winner declared that, without the source spelling the `&`.
     const ufcs = c.callee.* match {
         MemberAccess(ma) => roots_in(ma.receiver, al, r, ov)
         _ => false
@@ -210,8 +186,7 @@ fn call_escapes(c: &CallExpr, al: &List(String), r: &TypeCheckResult, ov: &Infer
             Positional(e) => e
             Named(n) => n.value
         }
-        // A whole-value argument lands in a by-value parameter, which protects itself. Anything
-        // else about the argument is judged on its own.
+        // A whole-value argument lands in a by-value parameter, which protects itself.
         if expr_escapes(arg, al, r, ov) {
             return true
         }
@@ -259,7 +234,7 @@ fn if_escapes(f: &IfExpr, al: &List(String), r: &TypeCheckResult, ov: &Inference
 }
 
 // Every name a pattern introduces, added to the alias set: a payload binding names the scrutinee's
-// storage rather than a copy of it.
+// storage, not a copy of it.
 fn collect_bindings(p: &Pattern, al: &List(String)) {
     p.* match {
         Variable(v) => al.push(v.name)
@@ -297,8 +272,7 @@ fn collect_bindings(p: &Pattern, al: &List(String)) {
 // ── place roots ────────────────────────────────────────────────────────
 
 // Whether `e` is a place rooted at a tracked name: `p`, `p.x`, `p[i]`, `p.*`, `p?.x`. A member hop
-// the checker resolved through `op_deref` is NOT part of the same storage - it is a call - so the
-// chain stops there and the answer is false.
+// resolved through `op_deref` is a call, not the same storage, and stops the chain.
 fn roots_in(e: &Expr, al: &List(String), r: &TypeCheckResult, ov: &InferenceResults?) bool {
     return e.* match {
         Identifier(id) => contains_name(al, id.name)
@@ -310,8 +284,7 @@ fn roots_in(e: &Expr, al: &List(String), r: &TypeCheckResult, ov: &InferenceResu
     }
 }
 
-// Whether the checker recorded `op_deref` hops for the node at `span`. Read through the active
-// overlay first, the way every table read in lowering is.
+// Whether the checker recorded `op_deref` hops for the node at `span`, overlay first.
 fn has_deref_hops(span: SourceSpan, r: &TypeCheckResult, ov: &InferenceResults?) bool {
     const id = node_id_of(span)
     ov match {
@@ -336,8 +309,7 @@ fn contains_name(al: &List(String), name: String) bool {
 
 // ── the conservative fallback ──────────────────────────────────────────
 
-// Whether any tracked name appears anywhere inside. Used by the forms the walk does not classify:
-// if the parameter is in there at all, keep the copy.
+// Whether any tracked name appears anywhere inside.
 fn mentions(e: &Expr, al: &List(String)) bool {
     return e.* match {
         Identifier(id) => contains_name(al, id.name)
@@ -448,8 +420,8 @@ fn mentions_if(f: &IfExpr, al: &List(String)) bool {
     }
 }
 
-// The holes of an interpolated string, plus the target: `$(cap, &alloc)"..."` and `$sb"..."` both
-// carry expressions of their own.
+// The holes of an interpolated string, plus the target: `$(cap, &alloc)"..."` and `$sb"..."` carry
+// expressions of their own.
 fn mentions_interpolation(s: &InterpolatedStringExpr, al: &List(String)) bool {
     const in_target = s.target match {
         NewString(args) => mentions_any_expr_list(&args, al)
@@ -470,8 +442,8 @@ fn mentions_interpolation(s: &InterpolatedStringExpr, al: &List(String)) bool {
     return false
 }
 
-// Struct literal fields. Shorthand (`.{ x }`) has no value expression - the field name IS the
-// identifier being read, so it counts as a mention of that name.
+// Struct literal fields. Shorthand (`.{ x }`) has no value expression: the field name is the
+// identifier being read.
 fn mentions_struct_fields(fs: &List(StructFieldInit), al: &List(String)) bool {
     for &f in fs {
         const hit = f.value match {
